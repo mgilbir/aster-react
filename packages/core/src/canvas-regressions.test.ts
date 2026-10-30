@@ -209,16 +209,15 @@ describe('line and area canvas paths use full-precision coordinates (vega canvas
   })
 })
 
-describe('shape generators: .digits() works on line and area (d3-shape withPath)', () => {
-  it('digits(null) keeps full precision, digits(1) rounds, and no argument reads it back', async () => {
-    const { line, area } = await import('./shape.js')
-    const data = [{ x: 1.23456, y: 2.34567 }, { x: 3.45678, y: 4.56789 }]
-    const l = line().x((d) => (d as { x: number }).x).y((d) => (d as { y: number }).y)
-    expect(l.digits(null).digits()).toBe(null)
-    expect(l(data)).toBe('M1.23456,2.34567L3.45678,4.56789')
-    expect(l.digits(1)(data)).toBe('M1.2,2.3L3.5,4.6')
-    const a = area().x((d) => (d as { x: number }).x).y0(() => 0).y1((d) => (d as { y: number }).y)
-    expect(a.digits(null)(data)).toContain('1.23456')
+describe('shape generators: the digits of a path', () => {
+  it('null keeps full precision, 1 rounds to one decimal', async () => {
+    const { areaPath, linePath, resolveCurve } = await import('./shape.js')
+    const x = Float64Array.of(1.23456, 3.45678)
+    const y = Float64Array.of(2.34567, 4.56789)
+    const linear = resolveCurve('linear', undefined, undefined)
+    expect(linePath(linear, x, y, null, null)).toBe('M1.23456,2.34567L3.45678,4.56789')
+    expect(linePath(linear, x, y, null, 1)).toBe('M1.2,2.3L3.5,4.6')
+    expect(areaPath(linear, x, y, x, new Float64Array(2), null, null)).toContain('1.23456')
   })
 })
 

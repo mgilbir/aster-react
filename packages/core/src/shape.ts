@@ -1,1386 +1,672 @@
 /**
- * Line/area shape generation — a faithful port of the d3-shape (3.2.0)
- * surface the renderer uses (line, area, and the 19 curve families Vega's
- * `interpolate` channel names) on top of a faithful port of d3-path's Path
- * serializer. Pinned by a live differential against d3-shape
- * (`conformance/scripts/differential-d3-shape.test.mts`).
+ * Line and area path geometry: the curve families named by the `interpolate` channel, run over columns of
+ * points, and the path writer they draw into.
  *
- * Not ported here: arc, pie, symbols, radial shapes, stack. The renderer
- * draws rects, rules and symbols with its own path builders; those shapes
- * join when the canvas renderer needs them.
+ * Design. A curve is one pure function (a `Run`) that draws a single run of consecutive defined points,
+ * `[lo, hi)` of two coordinate columns, into a `PathSink`. Runs are found by `traceLine` / `traceArea` from a
+ * liveness column; there is no per-point state machine, no object per curve and no accessor protocol. An
+ * area is its top boundary drawn forward and its bottom boundary drawn backwards, which `traceArea` obtains
+ * by reversing the bottom columns once, so every curve only ever runs forwards.
  *
- * Quirks that are upstream's and therefore ours: `digits` defaults to 3
- * (every coordinate is rounded to 3 decimals in the string), `area().y0()`
- * defaults to a constant 0, monotone ignores coincident points, and an empty
- * or all-undefined line renders as `null` rather than a string.
+ * What the output pins (and therefore what is deliberately not free):
+ *  - the sequence of path commands, including which runs close with `Z`, which do not, and the degenerate
+ *    runs of 1 or 2 points that several curves treat specially;
+ *  - the floating point expressions of every control point, operation for operation (the SVG text and the
+ *    canvas coordinates show the last bit), and the three-decimal rounding of the SVG text;
+ *  - how an area joins its two passes: the open curves continue the top subpath into the bottom one, the
+ *    closed ones and the bundle curve close each pass on its own.
+ * Everything else here is Aster's: columns instead of objects, one function per curve family, closed forms
+ * for the point indexing, the sink interface shared by the SVG writer and the tests' recorders.
+ *
+ * Provenance. The curve arithmetic (B-spline, cardinal, Catmull-Rom, Steffen monotone, natural-spline control
+ * points, step) and the path text follow the algorithms of d3-shape 3.2.0 and d3-path 3.1.0 (ISC, Mike Bostock),
+ * which Vega's renderers use; their notices are in THIRD_PARTY_NOTICES.md. The code is an independent
+ * implementation checked against those libraries by the differentials in
+ * `conformance/scripts/differential-d3-shape*.test.mts`.
  */
 
-// --- d3-path: the Path serializer --------------------------------------------
+// --- the sink and its SVG writer ----------------------------------------------------------------
 
-const pi = Math.PI
-const tau = 2 * pi
-const epsilon = 1e-6
-const tauEpsilon = tau - epsilon
-
-function append(this: { _: string }, strings: TemplateStringsArray, ...values: unknown[]): void {
-  this._ += strings[0]
-  for (let i = 1, n = strings.length; i < n; ++i) {
-    this._ += String(values[i - 1]) + strings[i]
-  }
-}
-
-function appendRound(digits: number): typeof append {
-  const d = Math.floor(digits)
-  if (!(d >= 0)) throw new Error(`invalid digits: ${digits}`)
-  if (d > 15) return append
-  const k = 10 ** d
-  return function (this: { _: string }, strings: TemplateStringsArray, ...values: unknown[]): void {
-    this._ += strings[0]
-    for (let i = 1, n = strings.length; i < n; ++i) {
-      this._ += String(Math.round((values[i - 1] as number) * k) / k) + strings[i]
-    }
-  } as typeof append
-}
-
-export class Path {
-  private _x0: number | null
-  private _y0: number | null
-  private _x1: number | null
-  private _y1: number | null
-  private _: string
-  private _append: (strings: TemplateStringsArray, ...values: unknown[]) => void
-
-  /** The rounding factor (10 ** digits) of the hot commands, or 0 for full precision; same output as `_append`. */
-  private _k: number
-
-  constructor(digits?: number) {
-    this._x0 = this._y0 = // start of current subpath
-    this._x1 = this._y1 = null as unknown as number // end of current subpath
-    this._ = ''
-    this._append = digits == null ? append : appendRound(digits)
-    this._k = digits == null ? 0 : (Math.floor(digits) <= 15 ? 10 ** Math.floor(digits) : 0)
-  }
-
-  moveTo(x: number, y: number): void {
-    this._x0 = this._x1 = +x
-    this._y0 = this._y1 = +y
-    const k = this._k
-    this._ += k ? 'M' + Math.round(this._x0 * k) / k + ',' + Math.round(this._y0 * k) / k : 'M' + this._x0 + ',' + this._y0
-  }
-
-  closePath(): void {
-    if (this._x1 !== null) {
-      this._x1 = this._x0, this._y1 = this._y0
-      this._append`Z`
-    }
-  }
-
-  lineTo(x: number, y: number): void {
-    this._x1 = +x
-    this._y1 = +y
-    const k = this._k
-    this._ += k ? 'L' + Math.round(this._x1 * k) / k + ',' + Math.round(this._y1 * k) / k : 'L' + this._x1 + ',' + this._y1
-  }
-
-  quadraticCurveTo(x1: number, y1: number, x: number, y: number): void {
-    this._append`Q${+x1},${+y1},${this._x1 = +x},${this._y1 = +y}`
-  }
-
-  bezierCurveTo(x1: number, y1: number, x2: number, y2: number, x: number, y: number): void {
-    this._append`C${+x1},${+y1},${+x2},${+y2},${this._x1 = +x},${this._y1 = +y}`
-  }
-
-  arcTo(x1: number, y1: number, x2: number, y2: number, r: number): void {
-    x1 = +x1, y1 = +y1, x2 = +x2, y2 = +y2, r = +r
-    // Is the radius negative? Error.
-    if (r < 0) throw new Error(`negative radius: ${r}`)
-    const x0 = this._x1 as number
-    const y0 = this._y1 as number
-    const x21 = x2 - x1
-    const y21 = y2 - y1
-    const x01 = x0 - x1
-    const y01 = y0 - y1
-    const l01_2 = x01 * x01 + y01 * y01
-    // Is this path empty? Move to (x1,y1).
-    if (this._x1 === null) {
-      this._append`M${this._x1 = x1},${this._y1 = y1}`
-    }
-    // Or, is (x1,y1) coincident with (x0,y0)? Do nothing.
-    else if (!(l01_2 > epsilon)) {
-      // do nothing
-    }
-    // Or, are (x0,y0), (x1,y1) and (x2,y2) collinear?
-    // Equivalently, is (x1,y1) coincident with (x2,y2)?
-    // Or, is the radius zero? Line to (x1,y1).
-    else if (!(Math.abs(y01 * x21 - y21 * x01) > epsilon) || !r) {
-      this._append`L${this._x1 = x1},${this._y1 = y1}`
-    }
-    // Otherwise, draw an arc!
-    else {
-      const x20 = x2 - x0
-      const y20 = y2 - y0
-      const l21_2 = x21 * x21 + y21 * y21
-      const l20_2 = x20 * x20 + y20 * y20
-      const l21 = Math.sqrt(l21_2)
-      const l01 = Math.sqrt(l01_2)
-      const l = r * Math.tan((pi - Math.acos((l21_2 + l01_2 - l20_2) / (2 * l21 * l01))) / 2)
-      const t01 = l / l01
-      const t21 = l / l21
-      // If the start tangent is not coincident with (x0,y0), line to.
-      if (Math.abs(t01 - 1) > epsilon) {
-        this._append`L${x1 + t01 * x01},${y1 + t01 * y01}`
-      }
-      this._append`A${r},${r},0,0,${+(y01 * x20 > x01 * y20)},${this._x1 = x1 + t21 * x21},${this._y1 = y1 + t21 * y21}`
-    }
-  }
-
-  arc(x: number, y: number, r: number, a0: number, a1: number, ccw?: boolean): void {
-    x = +x, y = +y, r = +r, ccw = !!ccw
-    // Is the radius negative? Error.
-    if (r < 0) throw new Error(`negative radius: ${r}`)
-    const dx = r * Math.cos(a0)
-    const dy = r * Math.sin(a0)
-    const x0 = x + dx
-    const y0 = y + dy
-    const cw = 1 ^ (ccw ? 1 : 0)
-    let da = ccw ? a0 - a1 : a1 - a0
-    // Is this path empty? Move to (x0,y0).
-    if (this._x1 === null) {
-      this._append`M${x0},${y0}`
-    }
-    // Or, is (x0,y0) not coincident with the previous point? Line to (x0,y0).
-    else if (Math.abs((this._x1 as number) - x0) > epsilon || Math.abs((this._y1 as number) - y0) > epsilon) {
-      this._append`L${x0},${y0}`
-    }
-    // Is this arc empty? We're done.
-    if (!r) return
-    // Does the angle go the wrong way? Flip the direction.
-    if (da < 0) da = da % tau + tau
-    // Is this a complete circle? Draw two arcs to complete the circle.
-    if (da > tauEpsilon) {
-      this._append`A${r},${r},0,1,${cw},${x - dx},${y - dy}A${r},${r},0,1,${cw},${this._x1 = x0},${this._y1 = y0}`
-    }
-    // Is this arc non-empty? Draw an arc!
-    else if (da > epsilon) {
-      this._append`A${r},${r},0,${+(da >= pi)},${cw},${this._x1 = x + r * Math.cos(a1)},${this._y1 = y + r * Math.sin(a1)}`
-    }
-  }
-
-  rect(x: number, y: number, w: number, h: number): void {
-    this._append`M${this._x0 = this._x1 = +x},${this._y0 = this._y1 = +y}h${w = +w}v${+h}h${-w}Z`
-  }
-
-  toString(): string {
-    return this._
-  }
-}
-
-// --- small helpers (d3-shape's constant/point/array/noop) --------------------
-
-function constant(x: unknown): (...args: never[]) => unknown {
-  return function () {
-    return x
-  }
-}
-
-function pointX(p: unknown): unknown {
-  return (p as unknown[])[0]
-}
-function pointY(p: unknown): unknown {
-  return (p as unknown[])[1]
-}
-
-function array(x: unknown): unknown[] {
-  return typeof x === 'object' && x !== null && 'length' in (x as object)
-    ? (x as unknown[])
-    : Array.from(x as Iterable<unknown>)
-}
-
-// eslint-disable-next-line @typescript-eslint/no-empty-function
-function noop(): void {}
-
-// --- curve context contract ---------------------------------------------------
-
-export interface CurveContext {
+/** Where a curve draws: the four calls a canvas 2D context and the SVG writer share. */
+export interface PathSink {
   moveTo(x: number, y: number): void
   lineTo(x: number, y: number): void
   bezierCurveTo(x1: number, y1: number, x2: number, y2: number, x: number, y: number): void
   closePath(): void
 }
 
-export interface Curve {
-  areaStart(): void
-  areaEnd(): void
-  lineStart(): void
-  lineEnd(): void
-  point(x: number, y: number): void
+const TAU = 2 * Math.PI
+const ARC_EPSILON = 1e-6
+
+/**
+ * SVG path text. `digits` rounds every coordinate to that many decimals (`Math.round(v * 10 ** digits) / 10 **
+ * digits`); `null` writes the number as JavaScript prints it. `closePath` writes `Z` once something is drawn.
+ */
+export class PathWriter implements PathSink {
+  /** The path text so far. */
+  d = ''
+  private readonly scale: number
+
+  constructor(digits: number | null) {
+    this.scale = digits === null ? 0 : 10 ** digits
+  }
+
+  moveTo(x: number, y: number): void {
+    const k = this.scale
+    this.d += k ? 'M' + Math.round(x * k) / k + ',' + Math.round(y * k) / k : 'M' + x + ',' + y
+  }
+
+  lineTo(x: number, y: number): void {
+    const k = this.scale
+    this.d += k ? 'L' + Math.round(x * k) / k + ',' + Math.round(y * k) / k : 'L' + x + ',' + y
+  }
+
+  bezierCurveTo(x1: number, y1: number, x2: number, y2: number, x: number, y: number): void {
+    const k = this.scale
+    // appended piece by piece: one long concatenation builds a deeper rope that costs ~10% more to flatten
+    if (k) {
+      this.d += 'C'
+      this.d += String(Math.round(x1 * k) / k) + ','
+      this.d += String(Math.round(y1 * k) / k) + ','
+      this.d += String(Math.round(x2 * k) / k) + ','
+      this.d += String(Math.round(y2 * k) / k) + ','
+      this.d += String(Math.round(x * k) / k) + ','
+      this.d += String(Math.round(y * k) / k)
+    } else this.d += 'C' + x1 + ',' + y1 + ',' + x2 + ',' + y2 + ',' + x + ',' + y
+  }
+
+  closePath(): void {
+    if (this.d !== '') this.d += 'Z'
+  }
+
+  toString(): string {
+    return this.d
+  }
 }
 
-export type CurveFactory = ((context: CurveContext) => Curve) & {
-  beta?(beta: number): CurveFactory
-  tension?(tension: number): CurveFactory
-  alpha?(alpha: number): CurveFactory
-}
+/**
+ * A full-precision {@link PathWriter} that also follows the current point, for the trail builder, which draws
+ * circular arcs. The current point is what an arc joins to, and `closePath` returns to the start of the subpath.
+ */
+export class ArcPathWriter extends PathWriter {
+  constructor() {
+    super(null)
+  }
 
-// --- curve/linear -------------------------------------------------------------
+  private sx = 0
+  private sy = 0
+  private cx = 0
+  private cy = 0
+  /** A subpath was started with `moveTo`: `closePath` returns to a defined point. */
+  private hasStart = false
+  /** There is a current point. */
+  private hasPoint = false
 
-class Linear implements Curve {
-  _context: CurveContext
-  _line!: number
-  _point: number
-  constructor(context: CurveContext) {
-    this._context = context
-    this._point = 0
+  override moveTo(x: number, y: number): void {
+    this.sx = this.cx = x
+    this.sy = this.cy = y
+    this.hasStart = this.hasPoint = true
+    super.moveTo(x, y)
   }
-  areaStart(): void {
-    this._line = 0
+
+  override lineTo(x: number, y: number): void {
+    this.cx = x
+    this.cy = y
+    this.hasPoint = true
+    super.lineTo(x, y)
   }
-  areaEnd(): void {
-    this._line = NaN
+
+  override bezierCurveTo(x1: number, y1: number, x2: number, y2: number, x: number, y: number): void {
+    this.cx = x
+    this.cy = y
+    this.hasPoint = true
+    super.bezierCurveTo(x1, y1, x2, y2, x, y)
   }
-  lineStart(): void {
-    this._point = 0
+
+  override closePath(): void {
+    if (!this.hasPoint) return
+    this.cx = this.sx
+    this.cy = this.sy
+    this.hasPoint = this.hasStart
+    this.d += 'Z'
   }
-  lineEnd(): void {
-    if (this._line || (this._line !== 0 && this._point === 1)) this._context.closePath()
-    this._line = 1 - this._line
-  }
-  point(x: number, y: number): void {
-    x = +x, y = +y
-    switch (this._point) {
-      case 0: this._point = 1; this._line ? this._context.lineTo(x, y) : this._context.moveTo(x, y); break
-      case 1: this._point = 2 // falls through
-      default: this._context.lineTo(x, y); break
+
+  /**
+   * A clockwise circular arc about (x, y) from angle a0 to a1 (a1 at or after a0), joined to the current point by
+   * a line when it does not start there. A sweep of a full turn is drawn as two half arcs. A negative radius is
+   * an error.
+   */
+  arc(x: number, y: number, radius: number, a0: number, a1: number): void {
+    if (radius < 0) throw new Error(`negative radius: ${radius}`)
+    const dx = radius * Math.cos(a0)
+    const dy = radius * Math.sin(a0)
+    const x0 = x + dx
+    const y0 = y + dy
+    const sweep = a1 - a0
+    if (!this.hasPoint) this.d += 'M' + x0 + ',' + y0
+    else if (Math.abs(this.cx - x0) > ARC_EPSILON || Math.abs(this.cy - y0) > ARC_EPSILON) this.d += 'L' + x0 + ',' + y0
+    if (!radius) return
+    const head = 'A' + radius + ',' + radius + ',0,'
+    if (sweep > TAU - ARC_EPSILON) {
+      this.d += head + '1,1,' + (x - dx) + ',' + (y - dy) + head + '1,1,' + x0 + ',' + y0
+      this.cx = x0
+      this.cy = y0
+      this.hasPoint = true
+    } else if (sweep > ARC_EPSILON) {
+      const ex = x + radius * Math.cos(a1)
+      const ey = y + radius * Math.sin(a1)
+      this.d += head + (sweep >= Math.PI ? '1' : '0') + ',1,' + ex + ',' + ey
+      this.cx = ex
+      this.cy = ey
+      this.hasPoint = true
     }
   }
 }
 
-export function curveLinear(context: CurveContext): Curve {
-  return new Linear(context)
+// --- runs ----------------------------------------------------------------------------------------
+
+/**
+ * Which pass of a shape a run is. The curves that can continue a subpath (everything but the closed families and
+ * the bundle) draw a LINE run as its own subpath and close it only when it is a single point; the TOP pass of
+ * an area opens a subpath and leaves it open; the BOTTOM pass continues it with a line, then closes it.
+ */
+const LINE = 0
+const TOP = 1
+const BOTTOM = 2
+
+type Run = (s: PathSink, x: Float64Array, y: Float64Array, lo: number, hi: number, join: number, p: number) => void
+
+function open(s: PathSink, join: number, x: number, y: number): void {
+  if (join === BOTTOM) s.lineTo(x, y)
+  else s.moveTo(x, y)
 }
 
-// --- curve/linearClosed -------------------------------------------------------
-
-class LinearClosed implements Curve {
-  _context: CurveContext
-  _point: number
-  constructor(context: CurveContext) {
-    this._context = context
-    this._point = 0
-  }
-  areaStart(): void {
-    noop()
-  }
-  areaEnd(): void {
-    noop()
-  }
-  lineStart(): void {
-    this._point = 0
-  }
-  lineEnd(): void {
-    if (this._point) this._context.closePath()
-  }
-  point(x: number, y: number): void {
-    x = +x, y = +y
-    if (this._point) this._context.lineTo(x, y)
-    else this._point = 1, this._context.moveTo(x, y)
-  }
+function end(s: PathSink, join: number, lone: boolean): void {
+  if (join === BOTTOM || (join === LINE && lone)) s.closePath()
 }
 
-export function curveLinearClosed(context: CurveContext): Curve {
-  return new LinearClosed(context)
+// --- linear --------------------------------------------------------------------------------------
+
+const linear: Run = (s, x, y, lo, hi, join) => {
+  open(s, join, x[lo]!, y[lo]!)
+  for (let i = lo + 1; i < hi; i++) s.lineTo(x[i]!, y[i]!)
+  end(s, join, hi - lo === 1)
 }
 
-// --- curve/basis --------------------------------------------------------------
-
-function basisPoint(that: Basis, x: number, y: number): void {
-  that._context.bezierCurveTo(
-    (2 * that._x0 + that._x1) / 3,
-    (2 * that._y0 + that._y1) / 3,
-    (that._x0 + 2 * that._x1) / 3,
-    (that._y0 + 2 * that._y1) / 3,
-    (that._x0 + 4 * that._x1 + x) / 6,
-    (that._y0 + 4 * that._y1 + y) / 6,
-  )
+const linearClosed: Run = (s, x, y, lo, hi) => {
+  s.moveTo(x[lo]!, y[lo]!)
+  for (let i = lo + 1; i < hi; i++) s.lineTo(x[i]!, y[i]!)
+  s.closePath()
 }
 
-class Basis implements Curve {
-  _context: CurveContext
-  _line!: number
-  _point: number
-  _x0 = NaN
-  _x1 = NaN
-  _y0 = NaN
-  _y1 = NaN
-  constructor(context: CurveContext) {
-    this._context = context
-    this._point = 0
-  }
-  areaStart(): void {
-    this._line = 0
-  }
-  areaEnd(): void {
-    this._line = NaN
-  }
-  lineStart(): void {
-    this._x0 = this._x1 =
-    this._y0 = this._y1 = NaN
-    this._point = 0
-  }
-  lineEnd(): void {
-    switch (this._point) {
-      case 3: basisPoint(this, this._x1, this._y1) // falls through
-      case 2: this._context.lineTo(this._x1, this._y1); break
-    }
-    if (this._line || (this._line !== 0 && this._point === 1)) this._context.closePath()
-    this._line = 1 - this._line
-  }
-  point(x: number, y: number): void {
-    x = +x, y = +y
-    switch (this._point) {
-      case 0: this._point = 1; this._line ? this._context.lineTo(x, y) : this._context.moveTo(x, y); break
-      case 1: this._point = 2; break
-      case 2: this._point = 3; this._context.lineTo((5 * this._x0 + this._x1) / 6, (5 * this._y0 + this._y1) / 6) // falls through
-      default: basisPoint(this, x, y); break
-    }
-    this._x0 = this._x1, this._x1 = x
-    this._y0 = this._y1, this._y1 = y
-  }
+// --- B-splines: basis, basis-closed, basis-open, bundle -------------------------------------------
+
+/** The cubic piece of a uniform B-spline that ends at the average of the three points a, b, c. */
+function bSpline(s: PathSink, xa: number, ya: number, xb: number, yb: number, xc: number, yc: number): void {
+  s.bezierCurveTo((2 * xa + xb) / 3, (2 * ya + yb) / 3, (xa + 2 * xb) / 3, (ya + 2 * yb) / 3, (xa + 4 * xb + xc) / 6, (ya + 4 * yb + yc) / 6)
 }
 
-export function curveBasis(context: CurveContext): Curve {
-  return new Basis(context)
+const basis: Run = (s, x, y, lo, hi, join) => {
+  const n = hi - lo
+  open(s, join, x[lo]!, y[lo]!)
+  if (n >= 3) {
+    s.lineTo((5 * x[lo]! + x[lo + 1]!) / 6, (5 * y[lo]! + y[lo + 1]!) / 6)
+    for (let i = lo + 2; i < hi; i++) bSpline(s, x[i - 2]!, y[i - 2]!, x[i - 1]!, y[i - 1]!, x[i]!, y[i]!)
+    // the last piece ends on the final point, repeated
+    bSpline(s, x[hi - 2]!, y[hi - 2]!, x[hi - 1]!, y[hi - 1]!, x[hi - 1]!, y[hi - 1]!)
+  }
+  if (n >= 2) s.lineTo(x[hi - 1]!, y[hi - 1]!)
+  end(s, join, n === 1)
 }
 
-// --- curve/basisClosed --------------------------------------------------------
-
-class BasisClosed implements Curve {
-  _context: CurveContext
-  _point: number
-  _x0 = NaN; _x1 = NaN; _x2 = NaN; _x3 = NaN; _x4 = NaN
-  _y0 = NaN; _y1 = NaN; _y2 = NaN; _y3 = NaN; _y4 = NaN
-  constructor(context: CurveContext) {
-    this._context = context
-    this._point = 0
-  }
-  areaStart(): void {
-    noop()
-  }
-  areaEnd(): void {
-    noop()
-  }
-  lineStart(): void {
-    this._x0 = this._x1 = this._x2 = this._x3 = this._x4 =
-    this._y0 = this._y1 = this._y2 = this._y3 = this._y4 = NaN
-    this._point = 0
-  }
-  lineEnd(): void {
-    switch (this._point) {
-      case 1: {
-        this._context.moveTo(this._x2, this._y2)
-        this._context.closePath()
-        break
-      }
-      case 2: {
-        this._context.moveTo((this._x2 + 2 * this._x3) / 3, (this._y2 + 2 * this._y3) / 3)
-        this._context.lineTo((this._x3 + 2 * this._x2) / 3, (this._y3 + 2 * this._y2) / 3)
-        this._context.closePath()
-        break
-      }
-      case 3: {
-        this.point(this._x2, this._y2)
-        this.point(this._x3, this._y3)
-        this.point(this._x4, this._y4)
-        break
-      }
+const basisClosed: Run = (s, x, y, lo, hi) => {
+  const n = hi - lo
+  if (n === 1) {
+    s.moveTo(x[lo]!, y[lo]!)
+    s.closePath()
+  } else if (n === 2) {
+    const xa = x[lo]!, ya = y[lo]!, xb = x[lo + 1]!, yb = y[lo + 1]!
+    s.moveTo((xa + 2 * xb) / 3, (ya + 2 * yb) / 3)
+    s.lineTo((xb + 2 * xa) / 3, (yb + 2 * ya) / 3)
+    s.closePath()
+  } else {
+    s.moveTo((x[lo]! + 4 * x[lo + 1]! + x[lo + 2]!) / 6, (y[lo]! + 4 * y[lo + 1]! + y[lo + 2]!) / 6)
+    // the pieces ending at points 3 .. n+2, indexing the run as a cycle; the outline is left unclosed
+    for (let k = 3; k <= n + 2; k++) {
+      const a = lo + (k - 2 >= n ? k - 2 - n : k - 2)
+      const b = lo + (k - 1 >= n ? k - 1 - n : k - 1)
+      const c = lo + (k >= n ? k - n : k)
+      bSpline(s, x[a]!, y[a]!, x[b]!, y[b]!, x[c]!, y[c]!)
     }
   }
-  point(x: number, y: number): void {
-    x = +x, y = +y
-    switch (this._point) {
-      case 0: this._point = 1; this._x2 = x, this._y2 = y; break
-      case 1: this._point = 2; this._x3 = x, this._y3 = y; break
-      case 2: this._point = 3; this._x4 = x, this._y4 = y; this._context.moveTo((this._x0 + 4 * this._x1 + x) / 6, (this._y0 + 4 * this._y1 + y) / 6); break
-      default: basisPoint(this as unknown as Basis, x, y); break
-    }
-    this._x0 = this._x1, this._x1 = x
-    this._y0 = this._y1, this._y1 = y
-  }
 }
 
-export function curveBasisClosed(context: CurveContext): Curve {
-  return new BasisClosed(context)
+const basisOpen: Run = (s, x, y, lo, hi, join) => {
+  const n = hi - lo
+  if (n >= 3) {
+    open(s, join, (x[lo]! + 4 * x[lo + 1]! + x[lo + 2]!) / 6, (y[lo]! + 4 * y[lo + 1]! + y[lo + 2]!) / 6)
+    for (let i = lo + 3; i < hi; i++) bSpline(s, x[i - 2]!, y[i - 2]!, x[i - 1]!, y[i - 1]!, x[i]!, y[i]!)
+  }
+  end(s, join, n === 3)
 }
 
-// --- curve/basisOpen ----------------------------------------------------------
-
-class BasisOpen implements Curve {
-  _context: CurveContext
-  _line!: number
-  _point: number
-  _x0 = NaN; _x1 = NaN
-  _y0 = NaN; _y1 = NaN
-  constructor(context: CurveContext) {
-    this._context = context
-    this._point = 0
+/** A basis spline through the run bent toward its chord: point i moves to beta * p + (1 - beta) * chord(i / last). */
+const bundle: Run = (s, x, y, lo, hi, join, beta) => {
+  if (beta === 1) return basis(s, x, y, lo, hi, join, 0)
+  const n = hi - lo
+  // a lone point draws nothing; in an area both passes are independent bundle lines
+  if (n < 2) return
+  const last = n - 1
+  const x0 = x[lo]!
+  const y0 = y[lo]!
+  const dx = x[hi - 1]! - x0
+  const dy = y[hi - 1]! - y0
+  const bx = new Float64Array(n)
+  const by = new Float64Array(n)
+  for (let i = 0; i <= last; i++) {
+    const t = i / last
+    bx[i] = beta * x[lo + i]! + (1 - beta) * (x0 + t * dx)
+    by[i] = beta * y[lo + i]! + (1 - beta) * (y0 + t * dy)
   }
-  areaStart(): void {
-    this._line = 0
-  }
-  areaEnd(): void {
-    this._line = NaN
-  }
-  lineStart(): void {
-    this._x0 = this._x1 =
-    this._y0 = this._y1 = NaN
-    this._point = 0
-  }
-  lineEnd(): void {
-    if (this._line || (this._line !== 0 && this._point === 3)) this._context.closePath()
-    this._line = 1 - this._line
-  }
-  point(x: number, y: number): void {
-    x = +x, y = +y
-    switch (this._point) {
-      case 0: this._point = 1; break
-      case 1: this._point = 2; break
-      case 2: this._point = 3; {
-        const x0 = (this._x0 + 4 * this._x1 + x) / 6
-        const y0 = (this._y0 + 4 * this._y1 + y) / 6
-        this._line ? this._context.lineTo(x0, y0) : this._context.moveTo(x0, y0)
-        break
-      }
-      case 3: this._point = 4 // falls through
-      default: basisPoint(this as unknown as Basis, x, y); break
-    }
-    this._x0 = this._x1, this._x1 = x
-    this._y0 = this._y1, this._y1 = y
-  }
+  basis(s, bx, by, 0, n, LINE, 0)
 }
 
-export function curveBasisOpen(context: CurveContext): Curve {
-  return new BasisOpen(context)
+// --- cardinal splines -----------------------------------------------------------------------------
+
+/**
+ * The cubic piece from b to c of a cardinal spline, a before b and d after c; `k` is (1 - tension) / 6.
+ * At the ends the missing neighbour is replaced by the run's own point (see `cardinal`).
+ */
+function cardinalPiece(s: PathSink, k: number, x: Float64Array, y: Float64Array, a: number, b: number, c: number, d: number): void {
+  s.bezierCurveTo(x[b]! + k * (x[c]! - x[a]!), y[b]! + k * (y[c]! - y[a]!), x[c]! + k * (x[b]! - x[d]!), y[c]! + k * (y[b]! - y[d]!), x[c]!, y[c]!)
 }
 
-// --- curve/bundle -------------------------------------------------------------
-
-class Bundle implements Curve {
-  _basis: Basis
-  _beta: number
-  _x: number[] = []
-  _y: number[] = []
-  constructor(context: CurveContext, beta: number) {
-    this._basis = new Basis(context)
-    this._beta = beta
+const cardinal: Run = (s, x, y, lo, hi, join, tension) => {
+  const k = (1 - tension) / 6
+  const n = hi - lo
+  open(s, join, x[lo]!, y[lo]!)
+  if (n === 2) s.lineTo(x[hi - 1]!, y[hi - 1]!)
+  else if (n >= 3) {
+    // the run's first segment has no predecessor and its last no successor: each borrows the other end of itself
+    for (let b = lo; b < hi - 1; b++) cardinalPiece(s, k, x, y, b > lo ? b - 1 : b + 1, b, b + 1, b + 2 < hi ? b + 2 : b)
   }
-  // upstream's Bundle prototype has no area hooks (it is a line-only curve)
-  areaStart(): void {
-    noop()
-  }
-  areaEnd(): void {
-    noop()
-  }
-  lineStart(): void {
-    this._x = []
-    this._y = []
-    this._basis.lineStart()
-  }
-  lineEnd(): void {
-    const x = this._x
-    const y = this._y
-    const j = x.length - 1
-    if (j > 0) {
-      const x0 = x[0] as number
-      const y0 = y[0] as number
-      const dx = (x[j] as number) - x0
-      const dy = (y[j] as number) - y0
-      let i = -1
-      let t: number
-      while (++i <= j) {
-        t = i / j
-        this._basis.point(
-          this._beta * (x[i] as number) + (1 - this._beta) * (x0 + t * dx),
-          this._beta * (y[i] as number) + (1 - this._beta) * (y0 + t * dy),
-        )
-      }
-    }
-    this._x = this._y = []
-    this._basis.lineEnd()
-  }
-  point(x: number, y: number): void {
-    this._x.push(+x)
-    this._y.push(+y)
-  }
+  end(s, join, n === 1)
 }
 
-export function curveBundleCustom(beta: number): CurveFactory {
-  function bundle(context: CurveContext): Curve {
-    return beta === 1 ? new Basis(context) : new Bundle(context, beta)
-  }
-  const factory = bundle as CurveFactory
-  factory.beta = function (b: number) {
-    return curveBundleCustom(+b)
-  }
-  return factory
-}
-
-export const curveBundle = curveBundleCustom(0.85)
-
-// --- curve/cardinal -----------------------------------------------------------
-
-function cardinalPoint(that: Cardinal, x: number, y: number): void {
-  that._context.bezierCurveTo(
-    that._x1 + that._k * (that._x2 - that._x0),
-    that._y1 + that._k * (that._y2 - that._y0),
-    that._x2 + that._k * (that._x1 - x),
-    that._y2 + that._k * (that._y1 - y),
-    that._x2,
-    that._y2,
-  )
-}
-
-class Cardinal implements Curve {
-  _context: CurveContext
-  _k: number
-  _line!: number
-  _point: number
-  _x0 = NaN; _x1 = NaN; _x2 = NaN
-  _y0 = NaN; _y1 = NaN; _y2 = NaN
-  constructor(context: CurveContext, tension: number) {
-    this._context = context
-    this._k = (1 - tension) / 6
-    this._point = 0
-  }
-  areaStart(): void {
-    this._line = 0
-  }
-  areaEnd(): void {
-    this._line = NaN
-  }
-  lineStart(): void {
-    this._x0 = this._x1 = this._x2 =
-    this._y0 = this._y1 = this._y2 = NaN
-    this._point = 0
-  }
-  lineEnd(): void {
-    switch (this._point) {
-      case 2: this._context.lineTo(this._x2, this._y2); break
-      case 3: cardinalPoint(this, this._x1, this._y1); break
-    }
-    if (this._line || (this._line !== 0 && this._point === 1)) this._context.closePath()
-    this._line = 1 - this._line
-  }
-  point(x: number, y: number): void {
-    x = +x, y = +y
-    switch (this._point) {
-      case 0: this._point = 1; this._line ? this._context.lineTo(x, y) : this._context.moveTo(x, y); break
-      case 1: this._point = 2; this._x1 = x, this._y1 = y; break
-      case 2: this._point = 3 // falls through
-      default: cardinalPoint(this, x, y); break
-    }
-    this._x0 = this._x1, this._x1 = this._x2, this._x2 = x
-    this._y0 = this._y1, this._y1 = this._y2, this._y2 = y
-  }
-}
-
-export function curveCardinalCustom(tension: number): CurveFactory {
-  function cardinal(context: CurveContext): Curve {
-    return new Cardinal(context, tension)
-  }
-  const factory = cardinal as CurveFactory
-  factory.tension = function (t: number) {
-    return curveCardinalCustom(+t)
-  }
-  return factory
-}
-
-export const curveCardinal = curveCardinalCustom(0)
-
-// --- curve/cardinalClosed -----------------------------------------------------
-
-class CardinalClosed implements Curve {
-  _context: CurveContext
-  _k: number
-  _point: number
-  _x0 = NaN; _x1 = NaN; _x2 = NaN; _x3 = NaN; _x4 = NaN; _x5 = NaN
-  _y0 = NaN; _y1 = NaN; _y2 = NaN; _y3 = NaN; _y4 = NaN; _y5 = NaN
-  constructor(context: CurveContext, tension: number) {
-    this._context = context
-    this._k = (1 - tension) / 6
-    this._point = 0
-  }
-  areaStart(): void {
-    noop()
-  }
-  areaEnd(): void {
-    noop()
-  }
-  lineStart(): void {
-    this._x0 = this._x1 = this._x2 = this._x3 = this._x4 = this._x5 =
-    this._y0 = this._y1 = this._y2 = this._y3 = this._y4 = this._y5 = NaN
-    this._point = 0
-  }
-  lineEnd(): void {
-    switch (this._point) {
-      case 1: {
-        this._context.moveTo(this._x3, this._y3)
-        this._context.closePath()
-        break
-      }
-      case 2: {
-        this._context.lineTo(this._x3, this._y3)
-        this._context.closePath()
-        break
-      }
-      case 3: {
-        this.point(this._x3, this._y3)
-        this.point(this._x4, this._y4)
-        this.point(this._x5, this._y5)
-        break
-      }
+const cardinalClosed: Run = (s, x, y, lo, hi, _join, tension) => {
+  const k = (1 - tension) / 6
+  const n = hi - lo
+  if (n === 1) {
+    s.moveTo(x[lo]!, y[lo]!)
+    s.closePath()
+  } else if (n === 2) {
+    s.moveTo(x[lo + 1]!, y[lo + 1]!)
+    s.lineTo(x[lo]!, y[lo]!)
+    s.closePath()
+  } else {
+    s.moveTo(x[lo + 1]!, y[lo + 1]!)
+    // one piece per point of the cycle starting at the second; the outline is left unclosed
+    for (let j = 1; j <= n; j++) {
+      const a = lo + j - 1
+      const b = lo + (j >= n ? j - n : j)
+      const c = lo + (j + 1 >= n ? j + 1 - n : j + 1)
+      const d = lo + (j + 2 >= n ? j + 2 - n : j + 2)
+      cardinalPiece(s, k, x, y, a, b, c, d)
     }
   }
-  point(x: number, y: number): void {
-    x = +x, y = +y
-    switch (this._point) {
-      case 0: this._point = 1; this._x3 = x, this._y3 = y; break
-      case 1: this._point = 2; this._context.moveTo(this._x4 = x, this._y4 = y); break
-      case 2: this._point = 3; this._x5 = x, this._y5 = y; break
-      default: cardinalPoint(this as unknown as Cardinal, x, y); break
-    }
-    this._x0 = this._x1, this._x1 = this._x2, this._x2 = x
-    this._y0 = this._y1, this._y1 = this._y2, this._y2 = y
-  }
 }
 
-export function curveCardinalClosedCustom(tension: number): CurveFactory {
-  function cardinal(context: CurveContext): Curve {
-    return new CardinalClosed(context, tension)
+const cardinalOpen: Run = (s, x, y, lo, hi, join, tension) => {
+  const k = (1 - tension) / 6
+  const n = hi - lo
+  if (n >= 3) {
+    open(s, join, x[lo + 1]!, y[lo + 1]!)
+    for (let b = lo + 1; b + 2 < hi; b++) cardinalPiece(s, k, x, y, b - 1, b, b + 1, b + 2)
   }
-  const factory = cardinal as CurveFactory
-  factory.tension = function (t: number) {
-    return curveCardinalClosedCustom(+t)
-  }
-  return factory
+  end(s, join, n === 3)
 }
 
-export const curveCardinalClosed = curveCardinalClosedCustom(0)
+// --- Catmull-Rom splines --------------------------------------------------------------------------
 
-// --- curve/cardinalOpen -------------------------------------------------------
+const CATMULL_EPSILON = 1e-12
 
-class CardinalOpen implements Curve {
-  _context: CurveContext
-  _k: number
-  _line!: number
-  _point: number
-  _x0 = NaN; _x1 = NaN; _x2 = NaN
-  _y0 = NaN; _y1 = NaN; _y2 = NaN
-  constructor(context: CurveContext, tension: number) {
-    this._context = context
-    this._k = (1 - tension) / 6
-    this._point = 0
+/**
+ * The cubic piece from b to c of a Catmull-Rom spline through a, b, c, d. `la` / `l2a` are the chord lengths
+ * |ab|, |bc|, |cd| raised to alpha and 2 alpha (`l01` is |ab|, `l12` is |bc|, `l23` is |cd|); a vanishing outer
+ * chord leaves its control point on the end point.
+ */
+function catmullPiece(
+  s: PathSink, x: Float64Array, y: Float64Array, a: number, b: number, c: number, d: number,
+  l01a: number, l01b: number, l12a: number, l12b: number, l23a: number, l23b: number,
+): void {
+  const xb = x[b]!, yb = y[b]!, xc = x[c]!, yc = y[c]!
+  let cx1 = xb
+  let cy1 = yb
+  let cx2 = xc
+  let cy2 = yc
+  if (l01a > CATMULL_EPSILON) {
+    const p = 2 * l01b + 3 * l01a * l12a + l12b
+    const q = 3 * l01a * (l01a + l12a)
+    cx1 = (xb * p - x[a]! * l12b + xc * l01b) / q
+    cy1 = (yb * p - y[a]! * l12b + yc * l01b) / q
   }
-  areaStart(): void {
-    this._line = 0
+  if (l23a > CATMULL_EPSILON) {
+    const p = 2 * l23b + 3 * l23a * l12a + l12b
+    const q = 3 * l23a * (l23a + l12a)
+    cx2 = (xc * p + xb * l23b - x[d]! * l12b) / q
+    cy2 = (yc * p + yb * l23b - y[d]! * l12b) / q
   }
-  areaEnd(): void {
-    this._line = NaN
-  }
-  lineStart(): void {
-    this._x0 = this._x1 = this._x2 =
-    this._y0 = this._y1 = this._y2 = NaN
-    this._point = 0
-  }
-  lineEnd(): void {
-    if (this._line || (this._line !== 0 && this._point === 3)) this._context.closePath()
-    this._line = 1 - this._line
-  }
-  point(x: number, y: number): void {
-    x = +x, y = +y
-    switch (this._point) {
-      case 0: this._point = 1; break
-      case 1: this._point = 2; break
-      case 2: this._point = 3; this._line ? this._context.lineTo(this._x2, this._y2) : this._context.moveTo(this._x2, this._y2); break
-      case 3: this._point = 4 // falls through
-      default: cardinalPoint(this as unknown as Cardinal, x, y); break
-    }
-    this._x0 = this._x1, this._x1 = this._x2, this._x2 = x
-    this._y0 = this._y1, this._y1 = this._y2, this._y2 = y
-  }
+  s.bezierCurveTo(cx1, cy1, cx2, cy2, xc, yc)
 }
 
-export function curveCardinalOpenCustom(tension: number): CurveFactory {
-  function cardinal(context: CurveContext): Curve {
-    return new CardinalOpen(context, tension)
-  }
-  const factory = cardinal as CurveFactory
-  factory.tension = function (t: number) {
-    return curveCardinalOpenCustom(+t)
-  }
-  return factory
+/** |pq|^(2 alpha): the squared distance raised to alpha, taken as (p - q) like the segment that precedes q. */
+function chordPow(x: Float64Array, y: Float64Array, p: number, q: number, alpha: number): number {
+  const dx = x[p]! - x[q]!
+  const dy = y[p]! - y[q]!
+  return Math.pow(dx * dx + dy * dy, alpha)
 }
 
-export const curveCardinalOpen = curveCardinalOpenCustom(0)
-
-// --- curve/catmullRom ---------------------------------------------------------
-
-const catmullEpsilon = 1e-12
-
-function catmullPoint(that: CatmullRom | CatmullRomClosed | CatmullRomOpen, x: number, y: number): void {
-  const x1 = that._x1
-  const y1 = that._y1
-  const x2 = that._x2
-  const y2 = that._y2
-  let bx1 = x1
-  let by1 = y1
-  let bx2 = x2
-  let by2 = y2
-  if (that._l01_a > catmullEpsilon) {
-    const a = 2 * that._l01_2a + 3 * that._l01_a * that._l12_a + that._l12_2a
-    const n = 3 * that._l01_a * (that._l01_a + that._l12_a)
-    bx1 = (x1 * a - that._x0 * that._l12_2a + that._x2 * that._l01_2a) / n
-    by1 = (y1 * a - that._y0 * that._l12_2a + that._y2 * that._l01_2a) / n
+/**
+ * The chord table of a run: entry e + 1 holds the chord from point e to the point after it (entry 0 is the
+ * absent chord before the first point, of length 0). `cycle` makes the chord after the last point return to the
+ * first (and continue around); otherwise the chord after the last point is that point to itself.
+ */
+function chords(x: Float64Array, y: Float64Array, lo: number, n: number, alpha: number, cycle: boolean, count: number): [Float64Array, Float64Array] {
+  const pow = new Float64Array(count + 1)
+  const len = new Float64Array(count + 1)
+  for (let e = 0; e < count; e++) {
+    const from = lo + (e < n ? e : e - n)
+    let to = from + 1
+    if (cycle) {
+      if (e + 1 >= n) to = lo + (e + 1 - n)
+    } else if (e + 1 >= n) to = from
+    const v = chordPow(x, y, from, to, alpha)
+    pow[e + 1] = v
+    len[e + 1] = Math.sqrt(v)
   }
-  if (that._l23_a > catmullEpsilon) {
-    const b = 2 * that._l23_2a + 3 * that._l23_a * that._l12_a + that._l12_2a
-    const m = 3 * that._l23_a * (that._l23_a + that._l12_a)
-    bx2 = (x2 * b + that._x1 * that._l23_2a - x * that._l12_2a) / m
-    by2 = (y2 * b + that._y1 * that._l23_2a - y * that._l12_2a) / m
-  }
-  that._context.bezierCurveTo(bx1, by1, bx2, by2, that._x2, that._y2)
+  return [pow, len]
 }
 
-class CatmullRom implements Curve {
-  _context: CurveContext
-  _alpha: number
-  _line!: number
-  _point: number
-  _x0 = NaN; _x1 = NaN; _x2 = NaN
-  _y0 = NaN; _y1 = NaN; _y2 = NaN
-  _l01_a = 0; _l12_a = 0; _l23_a = 0
-  _l01_2a = 0; _l12_2a = 0; _l23_2a = 0
-  constructor(context: CurveContext, alpha: number) {
-    this._context = context
-    this._alpha = alpha
-    this._point = 0
-  }
-  areaStart(): void {
-    this._line = 0
-  }
-  areaEnd(): void {
-    this._line = NaN
-  }
-  lineStart(): void {
-    this._x0 = this._x1 = this._x2 =
-    this._y0 = this._y1 = this._y2 = NaN
-    this._l01_a = this._l12_a = this._l23_a =
-    this._l01_2a = this._l12_2a = this._l23_2a =
-    this._point = 0
-  }
-  lineEnd(): void {
-    switch (this._point) {
-      case 2: this._context.lineTo(this._x2, this._y2); break
-      // through the prototype point, which recomputes the distances (x == _x2)
-      case 3: this.point(this._x2, this._y2); break
-    }
-    if (this._line || (this._line !== 0 && this._point === 1)) this._context.closePath()
-    this._line = 1 - this._line
-  }
-  point(x: number, y: number): void {
-    x = +x, y = +y
-    if (this._point) {
-      const x23 = this._x2 - x
-      const y23 = this._y2 - y
-      this._l23_a = Math.sqrt(this._l23_2a = Math.pow(x23 * x23 + y23 * y23, this._alpha))
-    }
-    switch (this._point) {
-      case 0: this._point = 1; this._line ? this._context.lineTo(x, y) : this._context.moveTo(x, y); break
-      case 1: this._point = 2; break
-      case 2: this._point = 3 // falls through
-      default: catmullPoint(this, x, y); break
-    }
-    this._l01_a = this._l12_a, this._l12_a = this._l23_a
-    this._l01_2a = this._l12_2a, this._l12_2a = this._l23_2a
-    this._x0 = this._x1, this._x1 = this._x2, this._x2 = x
-    this._y0 = this._y1, this._y1 = this._y2, this._y2 = y
-  }
-}
-
-export function curveCatmullRomCustom(alpha: number): CurveFactory {
-  function catmullRom(context: CurveContext): Curve {
-    return alpha ? new CatmullRom(context, alpha) : new Cardinal(context, 0)
-  }
-  const factory = catmullRom as CurveFactory
-  factory.alpha = function (a: number) {
-    return curveCatmullRomCustom(+a)
-  }
-  return factory
-}
-
-export const curveCatmullRom = curveCatmullRomCustom(0.5)
-
-// --- curve/catmullRomClosed ---------------------------------------------------
-
-class CatmullRomClosed implements Curve {
-  _context: CurveContext
-  _alpha: number
-  _point: number
-  _x0 = NaN; _x1 = NaN; _x2 = NaN; _x3 = NaN; _x4 = NaN; _x5 = NaN
-  _y0 = NaN; _y1 = NaN; _y2 = NaN; _y3 = NaN; _y4 = NaN; _y5 = NaN
-  _l01_a = 0; _l12_a = 0; _l23_a = 0
-  _l01_2a = 0; _l12_2a = 0; _l23_2a = 0
-  constructor(context: CurveContext, alpha: number) {
-    this._context = context
-    this._alpha = alpha
-    this._point = 0
-  }
-  areaStart(): void {
-    noop()
-  }
-  areaEnd(): void {
-    noop()
-  }
-  lineStart(): void {
-    this._x0 = this._x1 = this._x2 = this._x3 = this._x4 = this._x5 =
-    this._y0 = this._y1 = this._y2 = this._y3 = this._y4 = this._y5 = NaN
-    this._l01_a = this._l12_a = this._l23_a =
-    this._l01_2a = this._l12_2a = this._l23_2a =
-    this._point = 0
-  }
-  lineEnd(): void {
-    switch (this._point) {
-      case 1: {
-        this._context.moveTo(this._x3, this._y3)
-        this._context.closePath()
-        break
-      }
-      case 2: {
-        this._context.lineTo(this._x3, this._y3)
-        this._context.closePath()
-        break
-      }
-      case 3: {
-        this.point(this._x3, this._y3)
-        this.point(this._x4, this._y4)
-        this.point(this._x5, this._y5)
-        break
-      }
+const catmullRom: Run = (s, x, y, lo, hi, join, alpha) => {
+  if (!alpha) return cardinal(s, x, y, lo, hi, join, 0)
+  const n = hi - lo
+  open(s, join, x[lo]!, y[lo]!)
+  if (n === 2) s.lineTo(x[hi - 1]!, y[hi - 1]!)
+  else if (n >= 3) {
+    const [pow, len] = chords(x, y, lo, n, alpha, false, n)
+    for (let j = 0; j < n - 1; j++) {
+      const b = lo + j
+      catmullPiece(s, x, y, j > 0 ? b - 1 : b, b, b + 1, j + 2 < n ? b + 2 : b + 1, len[j]!, pow[j]!, len[j + 1]!, pow[j + 1]!, len[j + 2]!, pow[j + 2]!)
     }
   }
-  point(x: number, y: number): void {
-    x = +x, y = +y
-    if (this._point) {
-      const x23 = this._x2 - x
-      const y23 = this._y2 - y
-      this._l23_a = Math.sqrt(this._l23_2a = Math.pow(x23 * x23 + y23 * y23, this._alpha))
+  end(s, join, n === 1)
+}
+
+const catmullRomClosed: Run = (s, x, y, lo, hi, join, alpha) => {
+  if (!alpha) return cardinalClosed(s, x, y, lo, hi, join, 0)
+  const n = hi - lo
+  if (n === 1) {
+    s.moveTo(x[lo]!, y[lo]!)
+    s.closePath()
+  } else if (n === 2) {
+    s.moveTo(x[lo + 1]!, y[lo + 1]!)
+    s.lineTo(x[lo]!, y[lo]!)
+    s.closePath()
+  } else {
+    const [pow, len] = chords(x, y, lo, n, alpha, true, n + 2)
+    s.moveTo(x[lo + 1]!, y[lo + 1]!)
+    for (let j = 1; j <= n; j++) {
+      const a = lo + j - 1
+      const b = lo + (j >= n ? j - n : j)
+      const c = lo + (j + 1 >= n ? j + 1 - n : j + 1)
+      const d = lo + (j + 2 >= n ? j + 2 - n : j + 2)
+      catmullPiece(s, x, y, a, b, c, d, len[j]!, pow[j]!, len[j + 1]!, pow[j + 1]!, len[j + 2]!, pow[j + 2]!)
     }
-    switch (this._point) {
-      case 0: this._point = 1; this._x3 = x, this._y3 = y; break
-      case 1: this._point = 2; this._context.moveTo(this._x4 = x, this._y4 = y); break
-      case 2: this._point = 3; this._x5 = x, this._y5 = y; break
-      default: catmullPoint(this, x, y); break
+  }
+}
+
+const catmullRomOpen: Run = (s, x, y, lo, hi, join, alpha) => {
+  if (!alpha) return cardinalOpen(s, x, y, lo, hi, join, 0)
+  const n = hi - lo
+  if (n >= 3) {
+    open(s, join, x[lo + 1]!, y[lo + 1]!)
+    const [pow, len] = chords(x, y, lo, n, alpha, false, n)
+    for (let j = 1; j + 2 < n; j++) {
+      const b = lo + j
+      catmullPiece(s, x, y, b - 1, b, b + 1, b + 2, len[j]!, pow[j]!, len[j + 1]!, pow[j + 1]!, len[j + 2]!, pow[j + 2]!)
     }
-    this._l01_a = this._l12_a, this._l12_a = this._l23_a
-    this._l01_2a = this._l12_2a, this._l12_2a = this._l23_2a
-    this._x0 = this._x1, this._x1 = this._x2, this._x2 = x
-    this._y0 = this._y1, this._y1 = this._y2, this._y2 = y
   }
+  end(s, join, n === 3)
 }
 
-export function curveCatmullRomClosedCustom(alpha: number): CurveFactory {
-  function catmullRom(context: CurveContext): Curve {
-    return alpha ? new CatmullRomClosed(context, alpha) : new CardinalClosed(context, 0)
-  }
-  const factory = catmullRom as CurveFactory
-  factory.alpha = function (a: number) {
-    return curveCatmullRomClosedCustom(+a)
-  }
-  return factory
+// --- monotone cubic (Steffen) ---------------------------------------------------------------------
+
+function sign(v: number): number {
+  return v < 0 ? -1 : 1
 }
 
-export const curveCatmullRomClosed = curveCatmullRomClosedCustom(0.5)
-
-// --- curve/catmullRomOpen -----------------------------------------------------
-
-class CatmullRomOpen implements Curve {
-  _context: CurveContext
-  _alpha: number
-  _line!: number
-  _point: number
-  _x0 = NaN; _x1 = NaN; _x2 = NaN
-  _y0 = NaN; _y1 = NaN; _y2 = NaN
-  _l01_a = 0; _l12_a = 0; _l23_a = 0
-  _l01_2a = 0; _l12_2a = 0; _l23_2a = 0
-  constructor(context: CurveContext, alpha: number) {
-    this._context = context
-    this._alpha = alpha
-    this._point = 0
-  }
-  areaStart(): void {
-    this._line = 0
-  }
-  areaEnd(): void {
-    this._line = NaN
-  }
-  lineStart(): void {
-    this._x0 = this._x1 = this._x2 =
-    this._y0 = this._y1 = this._y2 = NaN
-    this._l01_a = this._l12_a = this._l23_a =
-    this._l01_2a = this._l12_2a = this._l23_2a =
-    this._point = 0
-  }
-  lineEnd(): void {
-    if (this._line || (this._line !== 0 && this._point === 3)) this._context.closePath()
-    this._line = 1 - this._line
-  }
-  point(x: number, y: number): void {
-    x = +x, y = +y
-    if (this._point) {
-      const x23 = this._x2 - x
-      const y23 = this._y2 - y
-      this._l23_a = Math.sqrt(this._l23_2a = Math.pow(x23 * x23 + y23 * y23, this._alpha))
-    }
-    switch (this._point) {
-      case 0: this._point = 1; break
-      case 1: this._point = 2; break
-      case 2: this._point = 3; this._line ? this._context.lineTo(this._x2, this._y2) : this._context.moveTo(this._x2, this._y2); break
-      case 3: this._point = 4 // falls through
-      default: catmullPoint(this, x, y); break
-    }
-    this._l01_a = this._l12_a, this._l12_a = this._l23_a
-    this._l01_2a = this._l12_2a, this._l12_2a = this._l23_2a
-    this._x0 = this._x1, this._x1 = this._x2, this._x2 = x
-    this._y0 = this._y1, this._y1 = this._y2, this._y2 = y
-  }
-}
-
-export function curveCatmullRomOpenCustom(alpha: number): CurveFactory {
-  function catmullRom(context: CurveContext): Curve {
-    return alpha ? new CatmullRomOpen(context, alpha) : new CardinalOpen(context, 0)
-  }
-  const factory = catmullRom as CurveFactory
-  factory.alpha = function (a: number) {
-    return curveCatmullRomOpenCustom(+a)
-  }
-  return factory
-}
-
-export const curveCatmullRomOpen = curveCatmullRomOpenCustom(0.5)
-
-// --- curve/monotone -----------------------------------------------------------
-
-function sign(x: number): number {
-  return x < 0 ? -1 : 1
-}
-
-// Calculate the slopes of the tangents (Hermite-type interpolation) based on
-// the following paper: Steffen, M. 1990. A Simple Method for Monotonic
-// Interpolation in One Dimension. Astronomy and Astrophysics, Vol. 239, NO.
-// NOV(II), P. 443, 1990.
-function slope3(that: MonotoneX, x2: number, y2: number): number {
-  const h0 = that._x1 - that._x0
-  const h1 = x2 - that._x1
-  const s0 = (that._y1 - that._y0) / (h0 ? h0 : (h1 < 0 ? -0 : 0))
-  const s1 = (y2 - that._y1) / (h1 ? h1 : (h0 < 0 ? -0 : 0))
+/**
+ * Steffen's slope at the middle of three points (Steffen 1990, "A simple method for monotonic interpolation in
+ * one dimension"): the slope is clamped so the interpolant stays monotone between the points. A repeated
+ * abscissa gives an infinite chord slope with the sign of the neighbouring step; a NaN result is 0.
+ */
+function steffen(x0: number, y0: number, x1: number, y1: number, x2: number, y2: number): number {
+  const h0 = x1 - x0
+  const h1 = x2 - x1
+  const s0 = (y1 - y0) / (h0 ? h0 : (h1 < 0 ? -0 : 0))
+  const s1 = (y2 - y1) / (h1 ? h1 : (h0 < 0 ? -0 : 0))
   const p = (s0 * h1 + s1 * h0) / (h0 + h1)
   return (sign(s0) + sign(s1)) * Math.min(Math.abs(s0), Math.abs(s1), 0.5 * Math.abs(p)) || 0
 }
 
-// Calculate a one-sided slope.
-function slope2(that: MonotoneX, t: number): number {
-  const h = that._x1 - that._x0
-  return h ? (3 * (that._y1 - that._y0) / h - t) / 2 : t
+/** The slope at the end of a segment from the chord slope and the slope at its other end. */
+function endSlope(x0: number, y0: number, x1: number, y1: number, t: number): number {
+  const h = x1 - x0
+  return h ? (3 * (y1 - y0) / h - t) / 2 : t
 }
 
-// According to https://en.wikipedia.org/wiki/Cubic_Hermite_spline#Representations
-// "you can express cubic Hermite interpolation in terms of cubic Bézier curves
-// with respect to the four values p0, p0 + m0 / 3, p1 - m1 / 3, p1".
-function monotonePoint(that: MonotoneX, t0: number, t1: number): void {
-  const x0 = that._x0
-  const y0 = that._y0
-  const x1 = that._x1
-  const y1 = that._y1
+/** The cubic Bezier of a Hermite segment from (x0, y0) to (x1, y1) with end slopes t0, t1. */
+function hermite(s: PathSink, x0: number, y0: number, x1: number, y1: number, t0: number, t1: number): void {
   const dx = (x1 - x0) / 3
-  that._context.bezierCurveTo(x0 + dx, y0 + dx * t0, x1 - dx, y1 - dx * t1, x1, y1)
+  s.bezierCurveTo(x0 + dx, y0 + dx * t0, x1 - dx, y1 - dx * t1, x1, y1)
 }
 
-class MonotoneX implements Curve {
-  _context: CurveContext
-  _line!: number
-  _point: number
-  _x0 = NaN; _x1 = NaN
-  _y0 = NaN; _y1 = NaN
-  _t0 = NaN
-  constructor(context: CurveContext) {
-    this._context = context
-    this._point = 0
-  }
-  areaStart(): void {
-    this._line = 0
-  }
-  areaEnd(): void {
-    this._line = NaN
-  }
-  lineStart(): void {
-    this._x0 = this._x1 =
-    this._y0 = this._y1 =
-    this._t0 = NaN
-    this._point = 0
-  }
-  lineEnd(): void {
-    switch (this._point) {
-      case 2: this._context.lineTo(this._x1, this._y1); break
-      case 3: monotonePoint(this, this._t0, slope2(this, this._t0)); break
-    }
-    if (this._line || (this._line !== 0 && this._point === 1)) this._context.closePath()
-    this._line = 1 - this._line
-  }
-  point(x: number, y: number): void {
+/** `monotone-x` over (x, y); `monotone-y` calls it with the columns swapped and a sink that swaps back. */
+const monotoneX: Run = (s, x, y, lo, hi, join) => {
+  let kept = 0
+  let x0 = NaN, y0 = NaN, x1 = NaN, y1 = NaN, t0 = NaN
+  for (let i = lo; i < hi; i++) {
+    const px = x[i]!
+    const py = y[i]!
+    if (px === x1 && py === y1) continue // a point equal to the one before it adds nothing
     let t1 = NaN
-    x = +x, y = +y
-    if (x === this._x1 && y === this._y1) return // Ignore coincident points.
-    switch (this._point) {
-      case 0: this._point = 1; this._line ? this._context.lineTo(x, y) : this._context.moveTo(x, y); break
-      case 1: this._point = 2; break
-      case 2: this._point = 3; monotonePoint(this, slope2(this, t1 = slope3(this, x, y)), t1); break
-      default: monotonePoint(this, this._t0, t1 = slope3(this, x, y)); break
+    if (kept === 0) open(s, join, px, py)
+    else if (kept === 2) {
+      t1 = steffen(x0, y0, x1, y1, px, py)
+      hermite(s, x0, y0, x1, y1, endSlope(x0, y0, x1, y1, t1), t1)
+    } else if (kept >= 3) {
+      t1 = steffen(x0, y0, x1, y1, px, py)
+      hermite(s, x0, y0, x1, y1, t0, t1)
     }
-    this._x0 = this._x1, this._x1 = x
-    this._y0 = this._y1, this._y1 = y
-    this._t0 = t1
+    if (kept < 3) kept++
+    x0 = x1, x1 = px
+    y0 = y1, y1 = py
+    t0 = t1
   }
+  if (kept === 2) s.lineTo(x1, y1)
+  else if (kept === 3) hermite(s, x0, y0, x1, y1, t0, endSlope(x0, y0, x1, y1, t0))
+  end(s, join, kept === 1)
 }
 
-class ReflectContext implements CurveContext {
-  _context: CurveContext
-  constructor(context: CurveContext) {
-    this._context = context
-  }
-  moveTo(x: number, y: number): void { this._context.moveTo(y, x) }
-  closePath(): void { this._context.closePath() }
-  lineTo(x: number, y: number): void { this._context.lineTo(y, x) }
-  bezierCurveTo(x1: number, y1: number, x2: number, y2: number, x: number, y: number): void {
-    this._context.bezierCurveTo(y1, x1, y2, x2, y, x)
-  }
+class Transposed implements PathSink {
+  constructor(private readonly s: PathSink) {}
+  moveTo(x: number, y: number): void { this.s.moveTo(y, x) }
+  lineTo(x: number, y: number): void { this.s.lineTo(y, x) }
+  bezierCurveTo(x1: number, y1: number, x2: number, y2: number, x: number, y: number): void { this.s.bezierCurveTo(y1, x1, y2, x2, y, x) }
+  closePath(): void { this.s.closePath() }
 }
 
-class MonotoneY implements Curve {
-  private _monotone: MonotoneX
-  constructor(context: CurveContext) {
-    this._monotone = new MonotoneX(new ReflectContext(context))
+const monotoneY: Run = (s, x, y, lo, hi, join) => monotoneX(new Transposed(s), y, x, lo, hi, join, 0)
+
+// --- natural cubic spline -------------------------------------------------------------------------
+
+/**
+ * First and second Bezier control coordinates of the natural cubic spline through one coordinate of the run's
+ * points (the tridiagonal solve of https://www.particleincell.com/2012/bezier-splines/). `first` and `second`
+ * get n - 1 entries each; `work` is scratch of the same size.
+ */
+function naturalControls(v: Float64Array, lo: number, n: number, first: Float64Array, second: Float64Array, work: Float64Array): void {
+  const m = n - 1
+  first[0] = 0, second[0] = 2, work[0] = v[lo]! + 2 * v[lo + 1]!
+  for (let i = 1; i < m - 1; ++i) first[i] = 1, second[i] = 4, work[i] = 4 * v[lo + i]! + 2 * v[lo + i + 1]!
+  first[m - 1] = 2, second[m - 1] = 7, work[m - 1] = 8 * v[lo + m - 1]! + v[lo + m]!
+  for (let i = 1; i < m; ++i) {
+    const ratio = first[i]! / second[i - 1]!
+    second[i] = second[i]! - ratio
+    work[i] = work[i]! - ratio * work[i - 1]!
   }
-  areaStart(): void { this._monotone.areaStart() }
-  areaEnd(): void { this._monotone.areaEnd() }
-  lineStart(): void { this._monotone.lineStart() }
-  lineEnd(): void { this._monotone.lineEnd() }
-  point(x: number, y: number): void { this._monotone.point(y, x) }
+  first[m - 1] = work[m - 1]! / second[m - 1]!
+  for (let i = m - 2; i >= 0; --i) first[i] = (work[i]! - first[i + 1]!) / second[i]!
+  second[m - 1] = (v[lo + m]! + first[m - 1]!) / 2
+  for (let i = 0; i < m - 1; ++i) second[i] = 2 * v[lo + i + 1]! - first[i + 1]!
 }
 
-export function curveMonotoneX(context: CurveContext): Curve {
-  return new MonotoneX(context)
+const natural: Run = (s, x, y, lo, hi, join) => {
+  const n = hi - lo
+  open(s, join, x[lo]!, y[lo]!)
+  if (n === 2) s.lineTo(x[hi - 1]!, y[hi - 1]!)
+  else if (n >= 3) {
+    const m = n - 1
+    const ax = new Float64Array(m), bx = new Float64Array(m), ay = new Float64Array(m), by = new Float64Array(m), work = new Float64Array(m)
+    naturalControls(x, lo, n, ax, bx, work)
+    naturalControls(y, lo, n, ay, by, work)
+    for (let i = 0; i < m; i++) s.bezierCurveTo(ax[i]!, ay[i]!, bx[i]!, by[i]!, x[lo + i + 1]!, y[lo + i + 1]!)
+  }
+  end(s, join, n === 1)
 }
 
-export function curveMonotoneY(context: CurveContext): Curve {
-  return new MonotoneY(context)
-}
+// --- steps ----------------------------------------------------------------------------------------
 
-// --- curve/natural ------------------------------------------------------------
-
-// See https://www.particleincell.com/2012/bezier-splines/ for derivation.
-function controlPoints(x: number[]): [number[], number[]] {
-  let m: number
-  const n = x.length - 1
-  const a = new Array(n)
-  const b = new Array(n)
-  const r = new Array(n)
-  a[0] = 0, b[0] = 2, r[0] = x[0] as number + 2 * (x[1] as number)
-  for (let i = 1; i < n - 1; ++i) a[i] = 1, b[i] = 4, r[i] = 4 * (x[i] as number) + 2 * (x[i + 1] as number)
-  a[n - 1] = 2, b[n - 1] = 7, r[n - 1] = 8 * (x[n - 1] as number) + (x[n] as number)
-  for (let i = 1; i < n; ++i) m = (a[i] as number) / (b[i - 1] as number), b[i] = (b[i] as number) - m, r[i] = (r[i] as number) - m * (r[i - 1] as number)
-  a[n - 1] = (r[n - 1] as number) / (b[n - 1] as number)
-  for (let i = n - 2; i >= 0; --i) a[i] = ((r[i] as number) - (a[i + 1] as number)) / (b[i] as number)
-  b[n - 1] = ((x[n] as number) + (a[n - 1] as number)) / 2
-  for (let i = 0; i < n - 1; ++i) b[i] = 2 * (x[i + 1] as number) - (a[i + 1] as number)
-  return [a as number[], b as number[]]
-}
-
-class Natural implements Curve {
-  _context: CurveContext
-  _line!: number
-  _x: number[] = []
-  _y: number[] = []
-  constructor(context: CurveContext) {
-    this._context = context
-  }
-  areaStart(): void {
-    this._line = 0
-  }
-  areaEnd(): void {
-    this._line = NaN
-  }
-  lineStart(): void {
-    this._x = []
-    this._y = []
-  }
-  lineEnd(): void {
-    const x = this._x
-    const y = this._y
-    const n = x.length
-    if (n) {
-      this._line ? this._context.lineTo(x[0] as number, y[0] as number) : this._context.moveTo(x[0] as number, y[0] as number)
-      if (n === 2) {
-        this._context.lineTo(x[1] as number, y[1] as number)
-      } else {
-        const px = controlPoints(x)
-        const py = controlPoints(y)
-        for (let i0 = 0, i1 = 1; i1 < n; ++i0, ++i1) {
-          this._context.bezierCurveTo(px[0][i0] as number, py[0][i0] as number, px[1][i0] as number, py[1][i0] as number, x[i1] as number, y[i1] as number)
-        }
-      }
-    }
-    if (this._line || (this._line !== 0 && n === 1)) this._context.closePath()
-    this._line = 1 - this._line
-    this._x = this._y = []
-  }
-  point(x: number, y: number): void {
-    this._x.push(+x)
-    this._y.push(+y)
-  }
-}
-
-export function curveNatural(context: CurveContext): Curve {
-  return new Natural(context)
-}
-
-// --- curve/step ---------------------------------------------------------------
-
-class Step implements Curve {
-  _context: CurveContext
-  _t: number
-  _line!: number
-  _point: number
-  _x = NaN
-  _y = NaN
-  constructor(context: CurveContext, t: number) {
-    this._context = context
-    this._t = t
-    this._point = 0
-  }
-  areaStart(): void {
-    this._line = 0
-  }
-  areaEnd(): void {
-    this._line = NaN
-  }
-  lineStart(): void {
-    this._x = this._y = NaN
-    this._point = 0
-  }
-  lineEnd(): void {
-    if (0 < this._t && this._t < 1 && this._point === 2) this._context.lineTo(this._x, this._y)
-    if (this._line || (this._line !== 0 && this._point === 1)) this._context.closePath()
-    if ((this._line as number) >= 0) this._t = 1 - this._t, this._line = 1 - this._line
-  }
-  point(x: number, y: number): void {
-    x = +x, y = +y
-    switch (this._point) {
-      case 0: this._point = 1; this._line ? this._context.lineTo(x, y) : this._context.moveTo(x, y); break
-      case 1: this._point = 2 // falls through
-      default: {
-        if (this._t <= 0) {
-          this._context.lineTo(this._x, y)
-          this._context.lineTo(x, y)
-        } else {
-          const x1 = this._x * (1 - this._t) + x * this._t
-          this._context.lineTo(x1, this._y)
-          this._context.lineTo(x1, y)
-        }
-        break
-      }
-    }
-    this._x = x, this._y = y
-  }
-}
-
-export function curveStep(context: CurveContext): Curve {
-  return new Step(context, 0.5)
-}
-
-export function curveStepAfter(context: CurveContext): Curve {
-  return new Step(context, 1)
-}
-
-export function curveStepBefore(context: CurveContext): Curve {
-  return new Step(context, 0)
-}
-
-// --- line and area ------------------------------------------------------------
-
-export interface LineGenerator {
-  (data: Iterable<unknown>): string | null
-  x(accessor: (d: unknown, i: number, data: unknown[]) => number): LineGenerator
-  y(accessor: (d: unknown, i: number, data: unknown[]) => number): LineGenerator
-  defined(accessor: (d: unknown, i: number, data: unknown[]) => boolean): LineGenerator
-  curve(factory: CurveFactory): LineGenerator
-  digits(): number | null
-  digits(n: number | null): LineGenerator
-}
-
-export interface AreaGenerator {
-  (data: Iterable<unknown>): string | null
-  x(accessor: (d: unknown, i: number, data: unknown[]) => number): AreaGenerator
-  x0(accessor: (d: unknown, i: number, data: unknown[]) => number): AreaGenerator
-  x1(accessor: ((d: unknown, i: number, data: unknown[]) => number) | null): AreaGenerator
-  y(accessor: (d: unknown, i: number, data: unknown[]) => number): AreaGenerator
-  y0(accessor: (d: unknown, i: number, data: unknown[]) => number): AreaGenerator
-  y1(accessor: ((d: unknown, i: number, data: unknown[]) => number) | null): AreaGenerator
-  defined(accessor: (d: unknown, i: number, data: unknown[]) => boolean): AreaGenerator
-  curve(factory: CurveFactory): AreaGenerator
-  digits(): number | null
-  digits(n: number | null): AreaGenerator
-}
-
-type Accessor = (d: unknown, i: number, data: unknown[]) => number
-
-/** The shapes' shared digits state (d3-shape's `withPath`). */
-function makePathFactory(shape: { digits?: (n: number | null) => unknown }): () => Path {
-  let digits: number | null = 3
-  // `shape` is the generator function itself, so this IS its public `.digits` (d3-shape's `withPath`).
-  ;(shape as Record<string, unknown>).digits = function (_?: number | null) {
-    if (arguments.length === 0) return digits
-    if (_ == null) {
-      digits = null
+/** A staircase that turns at fraction `at` of each interval (0 before, 1 after, 0.5 centred); the bottom pass of an area mirrors it. */
+const step: Run = (s, x, y, lo, hi, join, at) => {
+  const t = join === BOTTOM ? 1 - at : at
+  const n = hi - lo
+  open(s, join, x[lo]!, y[lo]!)
+  let px = x[lo]!
+  let py = y[lo]!
+  for (let i = lo + 1; i < hi; i++) {
+    const nx = x[i]!
+    const ny = y[i]!
+    if (t <= 0) {
+      s.lineTo(px, ny)
+      s.lineTo(nx, ny)
     } else {
-      const d = Math.floor(_)
-      if (!(d >= 0)) throw new RangeError(`invalid digits: ${_}`)
-      digits = d
+      const mid = px * (1 - t) + nx * t
+      s.lineTo(mid, py)
+      s.lineTo(mid, ny)
     }
-    return shape
+    px = nx
+    py = ny
   }
-  return () => new Path(digits as number | undefined)
+  if (0 < t && t < 1 && n >= 2) s.lineTo(px, py)
+  end(s, join, n === 1)
 }
 
-export function line(): LineGenerator {
-  let x: Accessor = pointX as Accessor
-  let y: Accessor = pointY as Accessor
-  let defined = constant(true) as unknown as (d: unknown, i: number, data: unknown[]) => boolean
-  let curve: CurveFactory = curveLinear
-  let context: CurveContext | null = null
-  let output: Curve | null = null
-  const path = makePathFactory(line as unknown as { digits?: (n: number | null) => unknown })
+// --- the curve table -------------------------------------------------------------------------------
 
-  function line(data: Iterable<unknown>): string | null {
-    let d: unknown
-    let defined0 = false
-    let buffer: Path | undefined
-    const arr = array(data)
-    const n = arr.length
-    if (context == null) output = curve(buffer = path())
-    for (let i = 0; i <= n; ++i) {
-      if (!(i < n && defined(d = arr[i], i, arr)) === defined0) {
-        if ((defined0 = !defined0)) output!.lineStart()
-        else output!.lineEnd()
-      }
-      if (defined0) output!.point(+(x(d, i, arr) as number), +(y(d, i, arr) as number))
-    }
-    if (buffer) return output = null, buffer + '' || null
-    return null
-  }
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const gen = line as unknown as LineGenerator & Record<string, any>
-  gen.x = function (_?: ((d: unknown, i: number, data: unknown[]) => number) | number) {
-    return (arguments.length ? (x = (typeof _ === 'function' ? _ : constant(+(_ as number))) as Accessor, gen as LineGenerator) : x) as never
-  }
-  gen.y = function (_?: ((d: unknown, i: number, data: unknown[]) => number) | number) {
-    return (arguments.length ? (y = (typeof _ === 'function' ? _ : constant(+(_ as number))) as Accessor, gen as LineGenerator) : y) as never
-  }
-  gen.defined = function (_?: ((d: unknown, i: number, data: unknown[]) => boolean) | boolean) {
-    return (arguments.length ? (defined = (typeof _ === 'function' ? _ : constant(!!_)) as typeof defined, gen as LineGenerator) : defined) as never
-  }
-  gen.curve = function (_?: CurveFactory) {
-    return (arguments.length ? (curve = _ as CurveFactory, context != null && (output = curve(context)), gen as LineGenerator) : curve) as never
-  }
-  gen.context = function (_?: CurveContext | null) {
-    return (arguments.length ? (_ == null ? context = output = null : output = curve(context = _ as CurveContext), gen as LineGenerator) : context) as never
-  }
-  return gen
+/** A resolved curve: its run function and the one number that parameterizes it (beta, tension, alpha or the step position). */
+export interface Curve {
+  readonly run: Run
+  readonly param: number
 }
 
-export function area(): AreaGenerator {
-  let x0: Accessor = pointX as Accessor
-  let x1: ((d: unknown, i: number, data: unknown[]) => number) | null = null
-  let y0: Accessor = constant(0) as unknown as Accessor
-  let y1: Accessor = pointY as Accessor
-  let defined = constant(true) as unknown as (d: unknown, i: number, data: unknown[]) => boolean
-  let curve: CurveFactory = curveLinear
-  let context: CurveContext | null = null
-  let output: Curve | null = null
-  const path = makePathFactory(area as unknown as { digits?: (n: number | null) => unknown })
+/** interpolate name -> [run, default parameter, whether `tension` sets the parameter]. */
+const FAMILIES = new Map<string, readonly [Run, number, boolean]>([
+  ['linear', [linear, 0, false]],
+  ['linear-closed', [linearClosed, 0, false]],
+  ['basis', [basis, 0, false]],
+  ['basis-closed', [basisClosed, 0, false]],
+  ['basis-open', [basisOpen, 0, false]],
+  ['bundle', [bundle, 0.85, true]],
+  ['cardinal', [cardinal, 0, true]],
+  ['cardinal-closed', [cardinalClosed, 0, true]],
+  ['cardinal-open', [cardinalOpen, 0, true]],
+  ['catmull-rom', [catmullRom, 0.5, true]],
+  ['catmull-rom-closed', [catmullRomClosed, 0.5, true]],
+  ['catmull-rom-open', [catmullRomOpen, 0.5, true]],
+  ['monotone-x', [monotoneX, 0, false]],
+  ['monotone-y', [monotoneY, 0, false]],
+  ['natural', [natural, 0, false]],
+  ['step', [step, 0.5, false]],
+  ['step-after', [step, 1, false]],
+  ['step-before', [step, 0, false]],
+])
 
-  function area(data: Iterable<unknown>): string | null {
-    let d: unknown
-    let defined0 = false
-    let buffer: Path | undefined
-    let j = 0
-    const arr = array(data)
-    const n = arr.length
-    const x0z = new Float64Array(n)
-    const y0z = new Float64Array(n)
-    if (context == null) output = curve(buffer = path())
-    for (let i = 0; i <= n; ++i) {
-      if (!(i < n && defined(d = arr[i], i, arr)) === defined0) {
-        if ((defined0 = !defined0)) {
-          j = i
-          output!.areaStart()
-          output!.lineStart()
-        } else {
-          output!.lineEnd()
-          output!.lineStart()
-          for (let k = i - 1; k >= j; --k) {
-            output!.point(x0z[k] as number, y0z[k] as number)
-          }
-          output!.lineEnd()
-          output!.areaEnd()
-        }
-      }
-      if (defined0) {
-        x0z[i] = +(x0(d, i, arr) as number)
-        y0z[i] = +(y0(d, i, arr) as number)
-        output!.point(x1 ? +(x1(d, i, arr) as number) : x0z[i] as number, y1 ? +(y1(d, i, arr) as number) : y0z[i] as number)
-      }
-    }
-    if (buffer) return output = null, buffer + '' || null
-    return null
-  }
+const LINEAR: Curve = { run: linear, param: 0 }
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const gen = area as unknown as AreaGenerator & Record<string, any>
-  gen.x = function (_?: ((d: unknown, i: number, data: unknown[]) => number) | number) {
-    return (arguments.length ? (x0 = (typeof _ === 'function' ? _ : constant(+(_ as number))) as Accessor, x1 = null as unknown as Accessor, gen as AreaGenerator) : x0) as never
+/**
+ * The curve a mark's `interpolate` value names. `monotone` follows the mark's orientation. `tension`, when
+ * given, is the bundle's beta, the cardinal families' tension or the Catmull-Rom families' alpha. An absent or
+ * unknown name is the linear curve.
+ */
+export function resolveCurve(interpolate: string | undefined, orient: string | undefined, tension: number | null | undefined): Curve {
+  const name = interpolate || 'linear'
+  const family = FAMILIES.get(name === 'monotone' ? (orient === 'horizontal' ? 'monotone-y' : 'monotone-x') : name)
+  if (family === undefined) return LINEAR
+  const [run, dflt, takesTension] = family
+  return { run, param: tension != null && takesTension ? +tension : dflt }
+}
+
+// --- drivers ---------------------------------------------------------------------------------------
+
+/** Calls `fn(lo, hi)` for every maximal run of live entries of `live` (all of `n` when it is null). */
+function forEachRun(n: number, live: Uint8Array | null, fn: (lo: number, hi: number) => void): void {
+  let i = 0
+  while (i < n) {
+    if (live !== null && !live[i]) { i++; continue }
+    let j = i + 1
+    while (j < n && (live === null || live[j])) j++
+    fn(i, j)
+    i = j
   }
-  gen.x0 = function (_?: ((d: unknown, i: number, data: unknown[]) => number) | number) {
-    return (arguments.length ? (x0 = (typeof _ === 'function' ? _ : constant(+(_ as number))) as Accessor, gen as AreaGenerator) : x0) as never
+}
+
+/** Draws the line through (x[i], y[i]), one subpath per run of live points. */
+export function traceLine(s: PathSink, curve: Curve, x: Float64Array, y: Float64Array, live: Uint8Array | null): void {
+  const { run, param } = curve
+  forEachRun(x.length, live, (lo, hi) => run(s, x, y, lo, hi, LINE, param))
+}
+
+/**
+ * Draws the area between a top boundary (tx, ty) and a bottom boundary (bx, by), one outline per run of live
+ * points: the top forwards, then the bottom backwards.
+ */
+export function traceArea(s: PathSink, curve: Curve, tx: Float64Array, ty: Float64Array, bx: Float64Array, by: Float64Array, live: Uint8Array | null): void {
+  const { run, param } = curve
+  const n = tx.length
+  // the bottom boundary reversed once, so that a run [lo, hi) of it is [n - hi, n - lo) of the reversal
+  const rx = new Float64Array(n)
+  const ry = new Float64Array(n)
+  for (let i = 0; i < n; i++) {
+    rx[n - 1 - i] = bx[i]!
+    ry[n - 1 - i] = by[i]!
   }
-  gen.x1 = function (_?: ((d: unknown, i: number, data: unknown[]) => number) | number | null) {
-    return (arguments.length ? (x1 = (_ == null ? null : (typeof _ === 'function' ? _ : constant(+(_ as number)))) as unknown as Accessor, gen as AreaGenerator) : x1) as never
-  }
-  gen.y = function (_?: ((d: unknown, i: number, data: unknown[]) => number) | number) {
-    return (arguments.length ? (y0 = (typeof _ === 'function' ? _ : constant(+(_ as number))) as Accessor, y1 = null as unknown as Accessor, gen as AreaGenerator) : y0) as never
-  }
-  gen.y0 = function (_?: ((d: unknown, i: number, data: unknown[]) => number) | number) {
-    return (arguments.length ? (y0 = (typeof _ === 'function' ? _ : constant(+(_ as number))) as Accessor, gen as AreaGenerator) : y0) as never
-  }
-  gen.y1 = function (_?: ((d: unknown, i: number, data: unknown[]) => number) | number | null) {
-    return (arguments.length ? (y1 = (_ == null ? null : (typeof _ === 'function' ? _ : constant(+(_ as number)))) as unknown as Accessor, gen as AreaGenerator) : y1) as never
-  }
-  gen.defined = function (_?: ((d: unknown, i: number, data: unknown[]) => boolean) | boolean) {
-    return (arguments.length ? (defined = (typeof _ === 'function' ? _ : constant(!!_)) as typeof defined, gen as AreaGenerator) : defined) as never
-  }
-  gen.curve = function (_?: CurveFactory) {
-    return (arguments.length ? (curve = _ as CurveFactory, context != null && (output = curve(context)), gen as AreaGenerator) : curve) as never
-  }
-  gen.context = function (_?: CurveContext | null) {
-    return (arguments.length ? (_ == null ? context = output = null : output = curve(context = _ as CurveContext), gen as AreaGenerator) : context) as never
-  }
-  return gen
+  forEachRun(n, live, (lo, hi) => {
+    run(s, tx, ty, lo, hi, TOP, param)
+    run(s, rx, ry, n - hi, n - lo, BOTTOM, param)
+  })
+}
+
+/** The path text of {@link traceLine}, rounded to `digits` decimals (`null` for none); '' when nothing is drawn. */
+export function linePath(curve: Curve, x: Float64Array, y: Float64Array, live: Uint8Array | null, digits: number | null): string {
+  const w = new PathWriter(digits)
+  traceLine(w, curve, x, y, live)
+  return w.d
+}
+
+/** The path text of {@link traceArea}, rounded to `digits` decimals (`null` for none); '' when nothing is drawn. */
+export function areaPath(curve: Curve, tx: Float64Array, ty: Float64Array, bx: Float64Array, by: Float64Array, live: Uint8Array | null, digits: number | null): string {
+  const w = new PathWriter(digits)
+  traceArea(w, curve, tx, ty, bx, by, live)
+  return w.d
 }

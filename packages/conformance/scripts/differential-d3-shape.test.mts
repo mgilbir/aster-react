@@ -2,7 +2,7 @@
  * LIVE differential for the curve/line/area generators (ADR-0001 suite formerly recorded as
  * `d3-shape.json`): the pinned `d3-shape` and Aster's `shape.ts` build the same path strings
  * from the same points (`d3-shape-cases.mjs`) in ONE process and engine; the strings
- * (or the thrown error, class and message) must be identical. Nothing is recorded: the
+ * (or the thrown error, class and message) must be identical. d3's `null` for an empty path is Aster's ''. Nothing is recorded: the
  * Catmull-Rom / cardinal / bundle / natural curves go through Math.pow and sqrt, which differ in
  * the last bit between V8 versions (see `differential-util.mts`).
  */
@@ -37,17 +37,36 @@ const MODES: Array<{ label: string; digits: number | null | undefined }> = [
   { label: 'full precision', digits: null },
 ]
 
+/** The d3 curve family names the cases use, as Aster's `interpolate` names, and the parameter each takes. */
+const ASTER_NAME: Record<string, string> = {
+  curveBasis: 'basis', curveBasisClosed: 'basis-closed', curveBasisOpen: 'basis-open', curveBundle: 'bundle',
+  curveCardinal: 'cardinal', curveCardinalClosed: 'cardinal-closed', curveCardinalOpen: 'cardinal-open',
+  curveCatmullRom: 'catmull-rom', curveCatmullRomClosed: 'catmull-rom-closed', curveCatmullRomOpen: 'catmull-rom-open',
+  curveLinear: 'linear', curveLinearClosed: 'linear-closed', curveMonotoneX: 'monotone-x', curveMonotoneY: 'monotone-y',
+  curveNatural: 'natural', curveStep: 'step', curveStepAfter: 'step-after', curveStepBefore: 'step-before',
+}
+const asterCurveOf = (curveName: string, opts: Opts) => aster.resolveCurve(ASTER_NAME[curveName], 'vertical', opts.beta ?? opts.tension ?? opts.alpha)
+const column = (points: number[][], i: number): Float64Array => Float64Array.from(points, (p) => p[i] as number)
+
 const lineOf = (api: Api, curve: string, opts: Opts, points: number[][], defined: boolean, digits: number | null | undefined) => exact(() => {
+  if (api === asterApi) {
+    const live = defined ? Uint8Array.from(points, (p) => (p[2] ? 1 : 0)) : null
+    return aster.linePath(asterCurveOf(curve, opts), column(points, 0), column(points, 1), live, digits === undefined ? 3 : digits)
+  }
   const gen = api.line().x((d: number[]) => d[0]).y((d: number[]) => d[1])
   if (digits !== undefined) gen.digits(digits)
   if (defined) gen.defined((d: unknown[]) => d[2])
-  return gen.curve(factoryOf(api, curve, opts))(points)
+  return gen.curve(factoryOf(api, curve, opts))(points) ?? ''
 })
 
 const areaOf = (api: Api, curve: string, opts: Opts, points: number[][], digits: number | null | undefined) => exact(() => {
+  if (api === asterApi) {
+    // x, y0, y1 per point; the area is the top boundary (x, y1) back along the bottom (x, y0)
+    return aster.areaPath(asterCurveOf(curve, opts), column(points, 0), column(points, 2), column(points, 0), column(points, 1), null, digits === undefined ? 3 : digits)
+  }
   const gen = api.area().x((d: number[]) => d[0]).y0((d: number[]) => d[1]).y1((d: number[]) => d[2])
   if (digits !== undefined) gen.digits(digits)
-  return gen.curve(factoryOf(api, curve, opts))(points)
+  return gen.curve(factoryOf(api, curve, opts))(points) ?? ''
 })
 
 const json = (x: unknown) => JSON.stringify(x)
