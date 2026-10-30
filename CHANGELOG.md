@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- **Formatting layer in Aster's own design** (`format.ts`, `time-format.ts`, `time.ts`, `locale.ts`, `color.ts`). Number and date
+  formatting, the calendar intervals, the time-unit floors, the locale facade and the colour spaces are re-decomposed (a specifier is
+  parsed, settled in a locale and rendered; a directive is written once over a time base; a calendar unit is a record `makeInterval`
+  turns into an interval; the colour grammar is built from slots) with output unchanged. New generated live differentials against the
+  pinned d3-format, d3-time, d3-time-format, d3-color, vega-time and vega-format found and fixed: locale `grouping` / `numerals` given
+  as array-likes; the stale SI prefix of an `s` format of a NaN whose locale text is empty or numeric; `formatFloat` under non-ASCII
+  numerals returning `''`; `%Z` parsing half-hour offsets; the dedicated `timeYear.every(k)` / `utcYear.every(k)`; and a second, older
+  `tickStep` that `formatSpan` and `timeBin` used. `timeUnitSpecifier` no longer loops forever on a specifier table that blanks a unit.
+  Not fixed (another module): `timeBin` with a NaN extent picks the year grain where vega-time picks milliseconds.
+
 - **`@aster/vl`: selections and composite marks in Aster's own design** (`selection*.ts`, `composite*.ts`). A selection is resolved
   against its unit into a model and wired by one sequence of steps over the signals it makes; the three composite marks share one
   anatomy and one part builder. The compiled Vega is unchanged on the 2769 specs of the matrices, the corpus and the gallery. New

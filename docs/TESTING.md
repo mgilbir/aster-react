@@ -96,6 +96,16 @@ broke CI once, Node 22 against Node 26):
 | d3-shape generated: every curve x beta/tension/alpha x seeded point sets (gaps, duplicates, collinear, 0-2 points, 1e300 / 1e-300, NaN/Infinity), line and area in five x0/x1/y0/y1 configurations, `d` at 3 / 0 / full digits and the raw context calls | `differential-d3-shape-generated.test.mts` | generated in the test (seeded) | 57 curve variants as line and as area, ~56k comparisons |
 | vega-expression parser and vega-interpreter evaluator (all five kinds) | `differential-vega-expression.test.mts` | `vega-expression-cases.mjs` | 92 + 23 + 74 + 18 + 10 |
 
+Four more live differentials are GENERATED (seeded, so a failure names its seed and case; `ASTER_DIFF_SCALE=10` multiplies the counts,
+`ASTER_DIFF_TRACE=<file>` logs each case before it runs) and cover the formatting layer far beyond the recorded vectors:
+
+| Module | Test | What is drawn |
+|---|---|---|
+| `format.ts`, number half of `locale.ts` vs d3-format and vega-format | `differential-format.test.mts` | specifiers over the whole grammar (and garbage), values incl. -0, NaN, +-Infinity, 1e21+, tiny, ties, non-numbers; `formatPrefix`; `precision*`; `tickStep`; generated locales (separators, grouping, numerals, currency, minus, nan, percent, some malformed); `formatFloat`, `formatSpan`, memoised identity, `defaultLocale` |
+| `time-format.ts`, time half of `locale.ts` vs d3-time-format and vega-format | `differential-time-format.test.mts` | every directive (and non-directives) with the `- _ 0` modifiers, local and UTC, in UTC / America/New_York / Australia/Lord_Howe / Pacific/Apia / Asia/Kolkata; instants clustered at the zones' offset changes (found by scanning) and the ends of the Date range; parse of damaged round trips and garbage; generated locales; multi-format objects |
+| `time.ts` vs d3-time and vega-time | `differential-time-intervals.test.mts` | floor / ceil / round / offset / range / count / `every(k)` / `filter` of every interval with odd steps and inputs; `timeUnits`, `timeUnitSpecifier`, `timeFloor` / `utcFloor` over generated unit lists and steps, `timeOffset`, `timeSequence`, `dayofyear`, `week`, `timeBin` (finite extents) |
+| `color.ts` vs d3-color | `differential-color.test.mts` | well-formed and malformed colour strings (every CSS function, signs, exponents, percents, arity, case, all 148 keywords), constructors with odd channels, conversions between all spaces, brighter / darker / clamp / copy / string forms |
+
 The pinned upstream and Aster run in ONE process on identical inputs and are compared strictly: `NaN`,
 `-0`, `undefined`, `Date`s, and thrown errors (class and message) all count, with no tolerance, no skip list
 and no allow list (`exact()` in `differential-util.mts`). Each test ends with a coverage floor at the old
