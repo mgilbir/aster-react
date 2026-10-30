@@ -224,6 +224,16 @@ thrown errors), then re-runs every case over deep-frozen inputs (no transform ma
 carry the non-UTC zone they run under. Nothing is recorded: `Math.pow/exp/log` differ in the last bit between V8
 versions, so numbers recorded under one Node cannot gate another; running the oracle in the same engine needs no
 tolerance. CI runs `pnpm test` on Node 20, 22 and the current major for this reason.
+
+Two more engine facts the same-process oracle depends on. (1) `Array.prototype.sort` with a comparator over data that is
+not a strict weak order (a column mixing strings and numbers) returns whatever comparison sequence the engine makes, and
+that is the same on Node 20 and 22 (V8 11, 12) and differs on Node 26 (V8 14) and Node 27 (V8 15); Aster sorts data through `sortData`
+(`packages/core/src/util.ts`), which stays on the builtin, so it makes the engine's own comparisons like Vega does. V8 15's
+Maglev also inlines a hot `x.sort(cmp)` call site with a different order from the builtin, so `sortData` keeps the call
+off that path and the vitest workers pin the inlining off for the oracle (`scripts/vitest-engine.setup.mjs`);
+`packages/conformance/src/sort-engine.test.ts` turns it back on and shows the order does not move. (2) The default
+`pnpm test` never sees the fetched gallery cache: tests that need it are `*.gallery.test.ts`, run by
+`pnpm conformance:gallery` (`vitest.gallery.config.mjs`); `scripts/gallery-isolation.test.mjs` guards the split.
 Bootstrap (ci0/ci1) and `sample` use vega-statistics' seeded LCG (seed 42) on both sides.
 Deliberate deviations (documented in the code): seeded randomness instead of `Math.random`, `bin` without `extent`
 derives it from the data, lookup tables are prototype-less, and vega crashes that are TypeErrors are not replicated.

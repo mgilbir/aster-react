@@ -21,6 +21,7 @@
  *
  * Usage: tsx src/gallery/run.ts [--path=static|react|all] [--filter=substr] [--json=file] [--print-passing]
  */
+import { spawn } from 'node:child_process'
 import { readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { FETCH_COMMAND, readManifest, verifyCache } from './cache.js'
@@ -28,6 +29,7 @@ import type { SwapOutcome } from './react.js'
 import { planSwap, swapGateProblems, type SwapPlan } from './swap-plan.js'
 import { GALLERY_DIR, listGallery, type GallerySpec, type Kind, type Outcome } from './lib.js'
 
+const REPO_ROOT = join(GALLERY_DIR, '..', '..', '..')
 const argv = process.argv.slice(2)
 const arg = (n: string): string | undefined => argv.find((a) => a.startsWith(`--${n}=`))?.slice(n.length + 3)
 const PATHS = (arg('path') ?? 'all') === 'all' ? (['static', 'react', 'swap'] as const) : ([arg('path')] as ('static' | 'react' | 'swap')[])
@@ -66,6 +68,20 @@ if (!FILTER) {
   }
 }
 if (!specs.length) { console.log('GATE FAIL: no specs selected'); process.exit(1) }
+
+/**
+ * The unit tests that need the FETCHED cache (`*.gallery.test.ts`, excluded from `pnpm test`) run here, where the cache has just
+ * been verified. A failure is a gate failure, like any other.
+ */
+const runGalleryTests = (): Promise<number> => new Promise((resolve) => {
+  const child = spawn(process.execPath, [join(REPO_ROOT, 'node_modules', 'vitest', 'vitest.mjs'), 'run', '--config', 'vitest.gallery.config.mjs'], { cwd: REPO_ROOT, stdio: 'inherit' })
+  child.on('error', (e) => { console.error(`[gallery] could not start vitest: ${String(e)}`); resolve(1) })
+  child.on('close', (code) => resolve(code ?? 1))
+})
+if (!FILTER && !REGENERATE_SWAP) {
+  console.log('[gallery] unit tests that need the cache (*.gallery.test.ts)')
+  if ((await runGalleryTests()) !== 0) problem('the gallery unit tests (*.gallery.test.ts) failed')
+}
 
 if (REGENERATE_SWAP) {
   const { regenerateSwapPairs } = await import('./swap-pairs.js')

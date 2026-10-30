@@ -20,6 +20,7 @@
  *
  * Registered by `@aster/core/transforms`. The rest of the engine reaches it through the transform registry.
  */
+import { sortData } from './util.js'
 import { AlphaCanvas } from './raster.js'
 import { drawMark } from './label-draw.js'
 import { itemMarkOf, transformRegistry } from './registry.js'
@@ -549,7 +550,7 @@ function layOut(items: Rec[], p: Params): Label[] {
   if (!(inArea && method === 'naive')) {
     if (p.sort) {
       const sort = p.sort
-      labels.sort((a, b) => compareRows(a.item as Row, b.item as Row, sort))
+      sortData(labels, (a, b) => compareRows(a.item as Row, b.item as Row, sort))
     }
     // a label may go inside its mark: it is tested against the outline of the mark, not the interior
     const inside = spots.some((s) => s.inside)

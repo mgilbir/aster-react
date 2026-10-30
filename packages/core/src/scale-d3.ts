@@ -58,6 +58,7 @@ import {
   utcYear,
   type TimeInterval,
 } from './time.js'
+import { sortData } from './util.js'
 import { timeFormat, utcFormat } from './time-format.js'
 
 export type SR = any // upstream scales are untyped closures; vectors verify behaviour
@@ -743,7 +744,7 @@ export function quantileScale(): SR {
       const d = +(raw as number)
       if (raw != null && !isNaN(d)) domain.push(d)
     }
-    domain.sort(ascending)
+    sortData(domain, ascending)
     return rescale()
   }
 
@@ -789,7 +790,7 @@ export function sequentialQuantile(interpolator?: Interpolator): SR {
       const d = +(raw as number)
       if (raw != null && !isNaN(d)) domain.push(d)
     }
-    domain.sort(ascending)
+    sortData(domain, ascending)
     return scale
   }
 
