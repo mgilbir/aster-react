@@ -6,9 +6,10 @@
 import type { CompiledTransform, SortSpec } from './types.js'
 import type { ExpressionRuntime } from './expression.js'
 import { SHAPE_BOUNDS, geoRegistry, requireGeo, requireTransform } from './registry.js'
-import { nominalTextWidth } from './text-metrics.js'
 import { isArray } from './util.js'
-import { activeMeter, boundedCount, meterRows } from './limits.js'
+import { densityGrid, placeContours } from './raster-grid.js'
+import { tickStep } from './arr.js'
+import { activeMeter, boundedCount } from './limits.js'
 import { walkPostOrder, walkPreOrder } from './tree-walk.js'
 import { aggregateRows, type AggregateParams, compareOf, fieldOf, joinAggregateRows, pivotRows, sortBySpec, windowRows } from './transform-agg.js'
 import {
@@ -511,12 +512,6 @@ export function geoJSONPath(geo: unknown): string | undefined {
 // operation so the conformance oracle and our output agree to the bit.
 // ---------------------------------------------------------------------------
 
-// -- shared numeric helpers (d3-array compatible) ------------------------------
-
-export function ascendingNum(a: number, b: number): number {
-  return a == null || b == null ? NaN : a < b ? -1 : a > b ? 1 : a >= b ? 0 : NaN
-}
-
 // ---------------------------------------------------------------------------
 // sequence / graticule (generating transforms)
 // ---------------------------------------------------------------------------
@@ -604,16 +599,6 @@ function graticuleRows(t: Record<string, unknown>): Row[] {
 // marching squares -> coordinate post-transform. Ported to match the oracle.
 // ---------------------------------------------------------------------------
 
-function d3TickStep(start: number, stop: number, count: number): number {
-  const step0 = Math.abs(stop - start) / Math.max(0, count)
-  let step1 = Math.pow(10, Math.floor(Math.log(step0) / Math.LN10))
-  const error = step0 / step1
-  if (error >= Math.sqrt(50)) step1 *= 10
-  else if (error >= Math.sqrt(10)) step1 *= 5
-  else if (error >= Math.sqrt(2)) step1 *= 2
-  return stop < start ? -step1 : step1
-}
-
 /** vega Contour `quantize(k, nice, zero)` -> threshold generator. */
 export function contourQuantize(k: number, nice: boolean, zero: boolean): (values: Float32Array | number[]) => number[] {
   return (values) => {
@@ -634,114 +619,9 @@ export function contourQuantize(k: number, nice: boolean, zero: boolean): (value
     const start = zero ? Math.min(mnv, 0) : mnv
     const stop = mxv
     const span = stop - start
-    const step = nice ? d3TickStep(start, stop, k) : span / (k + 1)
+    const step = nice ? tickStep(start, stop, k) : span / (k + 1)
     return d3Range(start + step, stop, step)
   }
-}
-
-export function blurX(n: number, m: number, source: Float32Array, target: Float32Array, r: number): void {
-  const w = (r << 1) + 1
-  for (let j = 0; j < m; ++j) {
-    for (let i = 0, sr = 0; i < n + r; ++i) {
-      if (i < n) sr += source[i + j * n]!
-      if (i >= r) {
-        if (i >= w) sr -= source[i - w + j * n]!
-        target[i - r + j * n] = sr / Math.min(i + 1, n - 1 + w - i, w)
-      }
-    }
-  }
-}
-export function blurY(n: number, m: number, source: Float32Array, target: Float32Array, r: number): void {
-  const w = (r << 1) + 1
-  for (let i = 0; i < n; ++i) {
-    for (let j = 0, sr = 0; j < m + r; ++j) {
-      if (j < m) sr += source[i + j * n]!
-      if (j >= r) {
-        if (j >= w) sr -= source[i + (j - w) * n]!
-        target[i + (j - r) * n] = sr / Math.min(j + 1, m - 1 + w - j, w)
-      }
-    }
-  }
-}
-/**
- * Silverman's rule-of-thumb bandwidth (vega-statistics `estimateBandwidth`):
- * 1.06 * min(sample stdev, IQR/1.34) * n^-0.2.
- */
-export function estimateBandwidth(array: number[]): number {
-  const n = array.length
-  const d = deviationOf(array)
-  const q = quartilesOf(array)
-  const h = (q[2]! - q[0]!) / 1.34
-  const v = Math.min(d!, h) || d || Math.abs(q[0]!) || 1
-  return 1.06 * v * Math.pow(n, -0.2)
-}
-
-function quartilesOf(values: number[]): number[] {
-  const filtered: number[] = []
-  for (const raw of values) {
-    const value = +raw
-    if (value != null && value >= value) filtered.push(value)
-  }
-  filtered.sort(ascendingNum)
-  return [
-    quantileSorted(filtered, 0.25)!,
-    quantileSorted(filtered, 0.5)!,
-    quantileSorted(filtered, 0.75)!,
-  ]
-}
-
-export function bwRadius(bw: number, data: number[]): number {
-  const v = bw >= 0 ? bw : estimateBandwidth(data)
-  return Math.round((Math.sqrt(4 * v * v + 1) - 1) / 2)
-}
-
-interface DensityGrid { values: Float32Array; scale: number; width: number; height: number; x1: number; y1: number }
-
-function density2D(
-  xs: number[], ys: number[], weights: number[],
-  dx: number, dy: number, bandwidth: [number, number], k: number,
-): DensityGrid {
-  const rx = bwRadius(bandwidth[0], xs) >> k
-  const ry = bwRadius(bandwidth[1], ys) >> k
-  const ox = rx ? rx + 2 : 0
-  const oy = ry ? ry + 2 : 0
-  const n = 2 * ox + (dx >> k)
-  const m = 2 * oy + (dy >> k)
-  // The grid is sized by spec parameters (size, bandwidth radius): bound the
-  // cell count under limits before allocating two Float32Arrays of it (C9).
-  meterRows(n * m, 'contour density grid')
-  const values0 = new Float32Array(n * m)
-  const values1 = new Float32Array(n * m)
-  let values = values0
-  for (let d = 0; d < xs.length; d++) {
-    const xi = ox + (xs[d]! >> k)
-    const yi = oy + (ys[d]! >> k)
-    if (xi >= 0 && xi < n && yi >= 0 && yi < m) values0[xi + yi * n]! += weights[d]!
-  }
-  if (rx > 0 && ry > 0) {
-    blurX(n, m, values0, values1, rx); blurY(n, m, values1, values0, ry)
-    blurX(n, m, values0, values1, rx); blurY(n, m, values1, values0, ry)
-    blurX(n, m, values0, values1, rx); blurY(n, m, values1, values0, ry)
-  } else if (rx > 0) {
-    blurX(n, m, values0, values1, rx); blurX(n, m, values1, values0, rx); blurX(n, m, values0, values1, rx); values = values1
-  } else if (ry > 0) {
-    blurY(n, m, values0, values1, ry); blurY(n, m, values1, values0, ry); blurY(n, m, values0, values1, ry); values = values1
-  }
-  let sum = 0
-  for (let i = 0; i < values.length; i++) sum += values[i]!
-  const s = Math.pow(2, -2 * k)
-  for (let i = 0; i < values.length; i++) values[i]! *= s
-  return { values, scale: 1 << k, width: n, height: m, x1: ox, y1: oy }
-}
-
-function contourPost(grid: DensityGrid, sx: number, sy: number): (geometry: { coordinates: unknown }) => unknown {
-  const x1 = grid.x1 || 0
-  const y1 = grid.y1 || 0
-  const flip = sx * sy < 0
-  const transformPoint = (c: number[]) => { c[0] = (c[0]! - x1) * sx; c[1] = (c[1]! - y1) * sy }
-  const transformRing = (c: number[][]) => { if (flip) c.reverse(); c.forEach(transformPoint) }
-  const transformPolygon = (c: number[][][]) => c.forEach(transformRing)
-  return (geometry) => { (geometry.coordinates as number[][][][]).forEach(transformPolygon); return geometry }
 }
 
 function contourRows(rows: Row[], t: Record<string, unknown>, ctx: TransformContext): Row[] {
@@ -754,12 +634,12 @@ function contourRows(rows: Row[], t: Record<string, unknown>, ctx: TransformCont
     const resolved = resolveNum(t.size, ctx)
     size = Array.isArray(resolved) ? [Number(resolved[0]), Number(resolved[1])] : [resolved ?? 500, resolved ?? 500]
   }
-  const [dx, dy] = size
   const k = t.cellSize ? Math.floor(Math.log(Number(t.cellSize)) / Math.LN2) : 2
 
   // Build the value grid either from a raw `values` array or from point tuples.
   let gridValues: Float32Array | number[]
-  let post: ((g: { coordinates: unknown }) => unknown) | null = null
+  let origin: [number, number] | null = null
+  let pixelsPerCell = 1
   let gridSize: [number, number] = size
   if (Array.isArray(t.values)) {
     gridValues = t.values as number[]
@@ -767,20 +647,18 @@ function contourRows(rows: Row[], t: Record<string, unknown>, ctx: TransformCont
     const xf = t.x != null ? accessorField(String(t.x)) : null
     const yf = t.y != null ? accessorField(String(t.y)) : null
     const wf = t.weight != null ? accessorField(String(t.weight)) : null
-    const xs: number[] = []
-    const ys: number[] = []
-    const ws: number[] = []
-    for (const r of rows) {
-      xs.push(Number(xf ? xf(r) : (r as { x?: unknown }).x))
-      ys.push(Number(yf ? yf(r) : (r as { y?: unknown }).y))
-      ws.push(Number(wf ? wf(r) : 1))
-    }
     const bw: [number, number] = Array.isArray(t.bandwidth) ? [Number(t.bandwidth[0]), Number((t.bandwidth as number[])[1] ?? t.bandwidth[0])]
       : t.bandwidth != null ? [Number(t.bandwidth), Number(t.bandwidth)] : [-1, -1]
-    const grid = density2D(xs, ys, ws, dx, dy, bw, k)
+    const grid = densityGrid({
+      xs: rows.map((r) => Number(xf ? xf(r) : (r as { x?: unknown }).x)),
+      ys: rows.map((r) => Number(yf ? yf(r) : (r as { y?: unknown }).y)),
+      weightAt: (i) => Number(wf ? wf(rows[i]!) : 1),
+      size, k, bandwidth: bw, counts: true, label: 'contour density grid',
+    })
     gridValues = grid.values
     gridSize = [grid.width, grid.height]
-    post = contourPost(grid, grid.scale, grid.scale)
+    origin = [grid.x1 || 0, grid.y1 || 0]
+    pixelsPerCell = grid.scale
   }
 
   const thresholds = Array.isArray(t.thresholds) ? (t.thresholds as number[])
@@ -790,13 +668,9 @@ function contourRows(rows: Row[], t: Record<string, unknown>, ctx: TransformCont
   const contourRun = geoRegistry.contourRun
   if (!contourRun) requireGeo() // throws: geo addon not loaded
   const features = contourRun!(gridValues, thresholds, gridSize, t.smooth !== false)
-  // d3-contour returns {type, value, coordinates} directly; vega ingests each
-  // as the tuple (top-level fields), after a coordinate post-transform that
-  // maps grid indices back to pixel space. `as` is ignored by vega's Contour.
-  return features.map((f) => {
-    if (post) (post as (g: { coordinates: unknown }) => unknown)({ coordinates: f.coordinates })
-    return { type: f.type, value: f.value, coordinates: f.coordinates } as Row
-  })
+  // Each contour is a tuple of its own (`as` is ignored); point data is mapped from grid cells back to pixels.
+  if (origin) placeContours(features, origin, [pixelsPerCell, pixelsPerCell])
+  return features.map((f) => ({ type: f.type, value: f.value, coordinates: f.coordinates }) as Row)
 }
 
 export function resolveNum(v: unknown, ctx: TransformContext): number | number[] | undefined {
@@ -811,60 +685,6 @@ export function resolveNum(v: unknown, ctx: TransformContext): number | number[]
 }
 function accessorField(name: string): (row: Row) => unknown {
   return (row) => getField(row, name)
-}
-
-/** d3-array `quantileSorted(values, p)` — values must be sorted ascending. */
-export function quantileSorted(values: number[], p: number): number | undefined {
-  const n = values.length
-  if (!n || Number.isNaN((p = +p))) return undefined
-  if (p <= 0 || n < 2) return +values[0]!
-  if (p >= 1) return +values[n - 1]!
-  const i = (n - 1) * p
-  const i0 = Math.floor(i)
-  const value0 = +values[i0]!
-  const value1 = +values[i0 + 1]!
-  return value0 + (value1 - value0) * (i - i0)
-}
-
-/** d3-array `variance` (sample variance, Welford-style online update). */
-function varianceSample(values: number[]): number | undefined {
-  let count = 0
-  let mean = 0
-  let sum = 0
-  for (let raw of values) {
-    const value = +raw
-    if (value != null && value >= value) {
-      const delta = value - mean
-      mean += delta / ++count
-      sum += delta * (value - mean)
-    }
-  }
-  if (count > 1) return sum / (count - 1)
-  return undefined
-}
-
-/** d3-array `deviation` (sample standard deviation). */
-export function deviationOf(values: number[]): number | undefined {
-  const v = varianceSample(values)
-  return v ? Math.sqrt(v) : v
-}
-
-/** d3-array `extent` over numeric field values. */
-export function extentOf(values: unknown[]): [number, number] | undefined {
-  let min: number | undefined
-  let max: number | undefined
-  for (const raw of values) {
-    if (raw != null) {
-      const value = +raw
-      if (min === undefined) {
-        if (value >= value) min = max = value
-      } else {
-        if (min > value) min = value
-        if (max! < value) max = value
-      }
-    }
-  }
-  return min === undefined ? undefined : [min, max!]
 }
 
 // ---------------------------------------------------------------------------

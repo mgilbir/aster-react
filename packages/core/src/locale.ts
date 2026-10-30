@@ -17,7 +17,7 @@ import {
   type FormatLocaleDefinition,
 } from './format.js'
 import {
-  timeFormat as d3TimeFormat, timeFormatDefaultLocale as d3TimeFormatDefaultLocale,
+  timeFormat as d3TimeFormat,
   timeFormatLocale as d3TimeFormatLocale, timeParse as d3TimeParse,
   utcFormat as d3UtcFormat, utcParse as d3UtcParse,
   type TimeLocaleDefinition,

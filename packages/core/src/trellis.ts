@@ -113,7 +113,6 @@ function boundFull(item: SceneGroup, field: string): number | undefined {
  * updating each group's x/y. Returns the union of the translated boxes.
  */
 export function gridLayout(groups: SceneGroup[], opt: Opt, measure?: (g: SceneGroup) => Bounds): Bounds {
-  const dirty = !opt.nodirty
   // `measure` supplies the cells' bounds when the caller already holds them
   // (legend entries: the Bound pass of their symbol and label); otherwise
   // they are read off the cell groups as vega's `bounds: 'full' | 'flush'`.
@@ -154,7 +153,6 @@ export function gridLayout(groups: SceneGroup[], opt: Opt, measure?: (g: SceneGr
     yExtent[r] = Math.max(yExtent[r]!, Math.ceil(b.y2))
     xOffset[i] = padCol + offsetValue(b.x1)
     yOffset[i] = padRow + offsetValue(b.y1)
-    if (dirty) void i // vega dirties the view; no-op here
   }
 
   // set initial alignment offsets

@@ -350,7 +350,6 @@ export function computeLinePath(group: SceneGroup, exact = false): {
   /** Vega styles a line from `items[0]`: its paint is the path's paint. */
   first: SceneItem
 } | null {
-  const n3 = exact ? num : num3
   const digits = exact ? null : 3
   const items = itemsOf(group)
   if (!items.length) return null
@@ -395,7 +394,6 @@ export function computeAreaPath(group: SceneGroup, exact = false): {
   /** Vega styles an area from `items[0]`: its paint is the path's paint. */
   first: SceneItem
 } | null {
-  const n3 = exact ? num : num3
   const digits = exact ? null : 3
   const items = itemsOf(group)
 

@@ -9,13 +9,13 @@
 
 import { renameDataRefs, renameExpr, renameFragment } from './embed.js'
 import { optimizeData } from './optimize.js'
-import { VLCompileError, pushAll, signalSafe, flatField, datumRef as dref, genName, safeKey, splitAccessPath, validExpr } from './names.js'
+import { VLCompileError, pushAll, signalSafe, flatField, datumRef as dref, genName, safeKey, splitAccessPath } from './names.js'
 import { validateGeoUnit, validateSpec } from './validate.js'
-import { predicateExpr, domainValueExpr, paramLeaves, dateTimeToExpr, isDateTime as isDateTimeValue } from './predicate.js'
+import { predicateExpr, domainValueExpr, dateTimeToExpr, isDateTime as isDateTimeValue } from './predicate.js'
 import {
   SELECTION_ID, STORE, assembleSelectionScaleDomain, assembleTopLevelSelectionSignals, assembleUnitSelectionData,
   assembleFacetSignals, assembleUnitSelectionMarks, assembleUnitSelectionSignals, interactiveLegendSelections, parseUnitSelections, requiresSelectionId, selectionPredicate,
-  stringValue, varName, type ParamPredicate, type SelCmpt, type SelUnit, type TimeUnitProjection,
+  stringValue, varName, type ParamPredicate, type SelCmpt, type SelUnit,
 } from './selection.js'
 import { alignStackOrders, mergeEncoding, normalizeComposites, normalizePathOverlays } from './composite.js'
 import { timeScaleRange } from './animation.js'
@@ -1816,7 +1816,6 @@ function compileFaceted(spec: VLSpec, ctx: CompileCtx, nested = ''): VLSpec {
         : {}),
     }
   }
-  const domainAggregate = (sort: FacetSortInfo | undefined): Record<string, unknown> => (sort ? { fields: sort.domainFields, ops: sort.domainOps, as: sort.domainAs } : {})
 
   // The child size: the inner view's own width/height (a number, or a step-driven
   // signal over its discrete scale). The facet's own width/height are not used.
@@ -2500,7 +2499,6 @@ function embedCells(cells: CompositeCell[], parent: VLSpec, ctx: CompileCtx, lay
     const binTransforms = unitData.flatMap((d) => ((d.transform as Record<string, unknown>[] | undefined) ?? []).filter((t) => (t.type === 'bin' || t.type === 'extent') && typeof t.signal === 'string'))
     for (const t of binTransforms) sigMap.set(t.signal as string, prefixed(t.signal as string))
     const projList = (vg.projections as Record<string, unknown>[] | undefined) ?? []
-    const projMap = new Map(projList.map((p) => [p.name as string, `${prefix}${p.name as string}`]))
     const renames = { signals: sigMap, scales: scaleMap, datasets: dnames }
     renameFragment(vg.layout, renames)
     for (const t of binTransforms) {
@@ -3122,7 +3120,6 @@ function checkConstChannels(mark: string, encoding: Record<string, unknown>, fil
   for (const [ch, def] of Object.entries(encoding)) {
     if (!isObject(def) || def.field !== undefined) continue
     const isDatum = def.datum !== undefined
-    const isValue = def.value !== undefined && def.condition === undefined
     if (isDatum && !['x', 'y', 'x2', 'y2', 'xOffset', 'yOffset', 'color', 'fill', 'stroke', ...GEO_POSITION_CHANNELS].includes(ch)) {
       throw new VLCompileError(`encoding.${ch}.datum is not supported (datum works on x, y, x2, y2, longitude, latitude, color, fill and stroke)`)
     }
@@ -5921,10 +5918,7 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
           update.y2 = { scale: 'y', field: aggFieldName(y2DefB) }
         } else if (mark === 'rect' && ((yDef.bin && !binDiscrete(yDef)) || (yDef.timeUnit && positionalScaleType(mark, yDef) !== 'band'))) {
           // a rect's second dimension may be binned too (2d heatmaps)
-          if (yDef.bin) {
-            const bn = binNames(yDef.binParams!, yDef.field)
-            setBinnedRect(update, 'y', yDef, spec, mark)
-          } else setBinnedRect(update, 'y', yDef, spec, mark)
+          setBinnedRect(update, 'y', yDef, spec, mark)
         } else if (stacked) {
           update.y = { scale: 'y', field: `${aggFieldName(yDef)}_end` }
           update.y2 = { scale: 'y', field: `${aggFieldName(yDef)}_start` }
@@ -6017,10 +6011,7 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
           update.x = { scale: 'x', field: aggFieldName(xDef) }
           update.x2 = { scale: 'x', field: aggFieldName(x2Field) }
         } else if (mark === 'rect' && ((xDef.bin && !binDiscrete(xDef)) || (xDef.timeUnit && positionalScaleType(mark, xDef) !== 'band'))) {
-          if (xDef.bin) {
-            const bn = binNames(xDef.binParams!, xDef.field)
-            setBinnedRect(update, 'x', xDef, spec, mark)
-          } else setBinnedRect(update, 'x', xDef, spec, mark)
+          setBinnedRect(update, 'x', xDef, spec, mark)
         } else if (stackedX) {
           update.x = { scale: 'x', field: `${aggFieldName(xDef)}_end` }
           update.x2 = { scale: 'x', field: `${aggFieldName(xDef)}_start` }
@@ -6379,7 +6370,6 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
     }
     if (markPaint?.outerRadius != null) update.radius = { value: markPaint.outerRadius }
   } else if (mark === 'arc') {
-    const thetaDefA = fields.find((f) => f.channel === 'theta' && f.field)
     update.fill = markFill != null
       ? { value: markFill }
       : colorDef

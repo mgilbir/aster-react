@@ -1100,7 +1100,7 @@ function voronoiRows(rows: Row[], t: Record<string, unknown>, ctx: TransformCont
 // -- crossfilter / resolvefilter (vega-crossfilter) ----------------------------------
 
 /** What `crossfilter` publishes as its `signal`: the per-tuple filter bitmaps `resolvefilter` reads (vega-crossfilter Bitmaps). */
-export interface CrossfilterBitmaps { mask: number; data(): Row[]; curr(): Uint32Array; prev(): Uint32Array }
+export interface CrossfilterBitmaps { mask: number; data(): Row[]; curr(): Uint32Array }
 
 const ascendingValues = (a: unknown, b: unknown): number => (a == null || b == null ? NaN : (a as number) < (b as number) ? -1 : (a as number) > (b as number) ? 1 : (a as number) >= (b as number) ? 0 : NaN)
 
@@ -1132,9 +1132,6 @@ function crossfilterRows(rows: Row[], t: Record<string, unknown>, ctx: Transform
   const data = rows.map((r, i) => ({ ...r, _index: i }))
   const n = data.length
   const curr = new Uint32Array(n)
-  const prev = new Uint32Array(n)
-  const all = 0xff
-  for (let i = 0; i < n; i++) prev[i] = all
   for (let d = 0; d < m; d++) {
     const f = fieldOf(fields[d])
     const values = data.map((r) => f(r))
@@ -1152,7 +1149,7 @@ function crossfilterRows(rows: Row[], t: Record<string, unknown>, ctx: Transform
   if (typeof t.signal === 'string') {
     // (the mask is all that is hashed with the signals: the arrays stay out of reach of a context fingerprint)
     const bits = { mask: m ? (1 << m) - 1 : 0 } as CrossfilterBitmaps
-    Object.defineProperties(bits, { data: { value: () => data }, curr: { value: () => curr }, prev: { value: () => prev } })
+    Object.defineProperties(bits, { data: { value: () => data }, curr: { value: () => curr } })
     ctx.signals[t.signal] = bits
   }
   return data

@@ -17,7 +17,7 @@ import { range as sequence } from './arr.js'
 import { aggregateGroup } from './transform.js'
 import { aggregateRows } from './transform-agg.js'
 import { SpecParseError } from './parse-error.js'
-import { pushAll, ascending, error as raise, hasOwnProperty, isArray, isFunction, isObject, isString, ownGet, peek, toNumber } from './util.js'
+import { pushAll, ascending, error as raise, hasOwnProperty, isArray, isFunction, isObject, isString, peek, toNumber } from './util.js'
 import type { CompiledScale } from './types.js'
 
 export type Scale = vs.Scale
