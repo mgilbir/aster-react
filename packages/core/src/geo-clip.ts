@@ -484,7 +484,7 @@ function emitBoundaryRing(clipper: { interpolate: Interpolator }, out: Events, s
  * region's own outline.
  */
 export function clipToSphere(ev: Events, clipper: SphereClipper): Events {
-  const out = Events.take()
+  const out = Events.take(ev.length)
   const lines = new LineWriter(out)
   let lineFrom = 0
   let lineSrc = 0
@@ -703,7 +703,7 @@ export class Rectangle {
   /** Clip planar events to this rectangle. */
   clip(ev: Events): Events {
     const { x0, y0, x1, y1 } = this
-    const out = Events.take()
+    const out = Events.take(ev.length)
     // the position and visibility of the first and the previous vertex of the line being clipped; these
     // outlive a line (an empty ring closes onto the previous line's first vertex)
     let xFirst: number = undefined as unknown as number

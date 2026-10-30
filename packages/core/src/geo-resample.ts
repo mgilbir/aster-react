@@ -17,7 +17,7 @@ const COS_MIN_ANGLE = Math.cos(30 * RADIANS)
 
 /** Projects the vertices of one buffer, adding vertices to the segments between them. */
 class Resampler {
-  private readonly out = Events.take()
+  private readonly out: Events
   private readonly at = [0, 0]
   private src = 0
   // the previous vertex of the line being projected: where it landed and the unit vector of its position
@@ -40,7 +40,10 @@ class Resampler {
   constructor(
     private readonly project: PlanarMap,
     private readonly delta2: number,
-  ) {}
+    expected: number,
+  ) {
+    this.out = Events.take(expected)
+  }
 
   /**
    * Add the vertices that make the arc from (x0, y0) to (x1, y1) follow the sphere, not including the end.
@@ -164,5 +167,6 @@ class Resampler {
  * the squared precision (0 projects the vertices only).
  */
 export function resample(ev: Events, project: PlanarMap, delta2: number): Events {
-  return new Resampler(project, delta2).run(ev)
+  // subdividing multiplies the vertices: room for a few times what comes in
+  return new Resampler(project, delta2, ev.length * 3).run(ev)
 }

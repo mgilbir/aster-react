@@ -21,9 +21,9 @@ export const SPHERE = 5
 
 /** Buffers that have been given back, ready to be taken again (typed arrays cost microseconds to allocate). */
 const free: Events[] = []
-/** A buffer that grew past this many events is left to the garbage collector instead of being kept (a few kB each). */
-const KEEP_CAPACITY = 1 << 14
-const KEEP_BUFFERS = 8
+/** A buffer that grew past this many events is left to the garbage collector instead of being kept (at most ~4 MB held). */
+const KEEP_CAPACITY = 1 << 15
+const KEEP_BUFFERS = 6
 
 export class Events {
   /** one entry per event, in four parallel lists: its kind, its coordinates (0 for events that have none), its `src` */
@@ -42,12 +42,16 @@ export class Events {
     this.src = new Int32Array(capacity)
   }
 
-  /** An empty buffer: a recycled one when there is one. Hand it back with `release` once nothing reads it. */
-  static take(): Events {
+  /**
+   * An empty buffer with room for at least `capacity` events (it still grows past that): a recycled one when
+   * there is one. Hand it back with `release` once nothing reads it.
+   */
+  static take(capacity = 0): Events {
     const ev = free.pop()
-    if (!ev) return new Events()
+    if (!ev) return new Events(Math.max(64, capacity))
     ev.count = 0
     ev.onlyPoints = true
+    if (ev.op.length < capacity) ev.grow(capacity)
     return ev
   }
 
@@ -61,8 +65,8 @@ export class Events {
     return this.count
   }
 
-  private grow(): void {
-    const capacity = this.op.length * 2
+  private grow(atLeast = 0): void {
+    const capacity = Math.max(this.op.length * 2, atLeast)
     const op = new Uint8Array(capacity)
     const x = new Float64Array(capacity)
     const y = new Float64Array(capacity)
@@ -98,8 +102,7 @@ export class Events {
 
   /** A copy that a stage can overwrite without disturbing the original. */
   copy(): Events {
-    const c = Events.take()
-    while (c.op.length < this.count) c.grow()
+    const c = Events.take(this.count)
     c.op.set(this.op.subarray(0, this.count))
     c.x.set(this.x.subarray(0, this.count))
     c.y.set(this.y.subarray(0, this.count))
@@ -241,7 +244,7 @@ export function forEachChunk(object: unknown, visit: (ev: Events) => void): void
  * written to a shared output had every input event been pushed through all of them in turn.
  */
 export function interleave(parts: readonly Events[]): Events {
-  const out = Events.take()
+  const out = Events.take(parts.reduce((n, part) => n + part.length, 0))
   const at = parts.map(() => 0)
   for (;;) {
     let best = -1

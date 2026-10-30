@@ -425,7 +425,7 @@ class SphericalProjection extends Projection {
 
   /** Geometry that is only points passes each stage independently, so the stages fold into one loop. */
   private planarPoints(ev: Events, at: number[]): Events {
-    const out = Events.take()
+    const out = Events.take(ev.length)
     for (let i = 0; i < ev.length; i++) {
       this.rotation.forward(ev.x[i]! * RADIANS, ev.y[i]! * RADIANS, at)
       if (!this.clipper.visible(at[0]!, at[1]!)) continue
