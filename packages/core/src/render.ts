@@ -8,7 +8,7 @@ import type { SceneDef, SceneGroup, SceneItem, SceneRoot } from './types.js'
 import { baselineOffset, fontSize as vegaFontSize } from './bounds.js'
 import { checkPathLength, metering } from './limits.js'
 export { baselineOffset }
-import { itemTextWidth } from './text-metrics.js'
+import { textAnchor, truncateToLimit } from './text-metrics.js'
 import { ClipCollector, gradientRef, isGradientPaint, type ClipDef } from './svg-defs.js'
 import { customSymbolPathData } from './svg-path.js'
 import { sanitizeHref } from './url-policy.js'
@@ -788,16 +788,8 @@ export function textItemDesc(it: SceneItem): {
   const angle = +(angleRaw as number) || 0
   const dx = +(rec.dx as number) || 0
   const dy = (+(rec.dy as number) || 0) + baselineOffset(it)
-  // vega anchorPoint: polar text offsets the anchor by (radius, theta - pi/2)
-  let x = +(it.x as number) || 0
-  let y = +(it.y as number) || 0
-  const radius = +(rec.radius as number) || 0
-  if (radius) {
-    const t = ((+(rec.theta as number) || 0)) - Math.PI / 2
-    x += radius * Math.cos(t)
-    y += radius * Math.sin(t)
-  }
-  const lines = textLinesOf(it).map((l) => truncateToLimit(it, l, fontSize))
+  const [x, y] = textAnchor(it)
+  const lines = textLinesOf(it).map((l) => truncateToLimit(it, l))
   const lineHeight = rec.lineHeight != null ? (rec.lineHeight as number) : fontSize + 2
   let transform: GeneratedPath
   let px: number, py: number, ox: number, oy: number
@@ -809,28 +801,6 @@ export function textItemDesc(it: SceneItem): {
     px = x + dx; py = y + dy; ox = 0; oy = 0
   }
   return { transform, fontSize, text: lines[0]!, lines, lineHeight, px, py, ox, oy, angle }
-}
-
-/**
- * Vega text `limit`: maximum pixel width, truncated with an ellipsis.
- * Mirrors vega-scenegraph/src/util/text.js `truncate()` — canvas-measured
- * when a canvas exists, the headless estimate otherwise (see text-metrics).
- */
-function truncateToLimit(it: SceneItem, text: string, fontSize: number): string {
-  const limit = (it as Record<string, unknown>).limit as number | undefined
-  if (limit == null || !(limit > 0) || !text.length) return text
-  const estimateW = (s: string) => itemTextWidth(it, s)
-  if (estimateW(text) < limit) return text
-  const ellipsis = ((it as Record<string, unknown>).ellipsis as string | undefined) ?? '\u2026'
-  const lim = limit - estimateW(ellipsis)
-  let lo = 0
-  let hi = text.length
-  while (lo < hi) {
-    const mid = 1 + ((lo + hi) >>> 1)
-    if (estimateW(text.slice(0, mid)) < lim) lo = mid
-    else hi = mid - 1
-  }
-  return text.slice(0, lo) + ellipsis
 }
 
 function renderPaths(group: SceneGroup, open: string): string {

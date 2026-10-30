@@ -151,6 +151,57 @@ export function itemTextWidth(item: FontProps, text: string): number {
 }
 
 /**
+ * Where a text item is anchored: its x/y, pushed `radius` out along the direction `theta` (radians, clockwise from twelve
+ * o'clock). The item keeps all four channels as encoded; every renderer and the bounds go through this to find the anchor.
+ */
+export function textAnchor(item: { x?: unknown; y?: unknown; radius?: unknown; theta?: unknown }): [number, number] {
+  const x = +(item.x as number) || 0
+  const y = +(item.y as number) || 0
+  const radius = +(item.radius as number) || 0
+  if (!radius) return [x, y]
+  const angle = (+(item.theta as number) || 0) - Math.PI / 2
+  return [x + radius * Math.cos(angle), y + radius * Math.sin(angle)]
+}
+
+/** The fields of a text item that decide how a line is cut to its `limit`. */
+export interface TruncateProps extends FontProps {
+  limit?: unknown
+  ellipsis?: unknown
+  dir?: unknown
+}
+
+/**
+ * A line of text cut to the item's `limit` (a pixel width), the one place every renderer and the bounds ask. A line that fits is
+ * kept whole. Otherwise the longest piece that still fits next to the ellipsis is kept, with the ellipsis (an empty one is
+ * the default "\u2026") where the text was cut: the start of the line, or its end when `dir` is `rtl`.
+ */
+export function truncateToLimit(item: TruncateProps, text: string): string {
+  const limit = +(item.limit as number)
+  if (!(limit > 0) || !text.length) return text
+  const widthOf = (s: string): number => itemTextWidth(item, s)
+  if (widthOf(text) < limit) return text
+  const ellipsis = (item.ellipsis as string | undefined) || '\u2026'
+  const room = limit - widthOf(ellipsis)
+  let lo = 0
+  let hi = text.length
+  if (item.dir === 'rtl') {
+    // the shortest cut, from the end, whose remainder fits
+    while (lo < hi) {
+      const mid = (lo + hi) >>> 1
+      if (widthOf(text.slice(mid)) > room) lo = mid + 1
+      else hi = mid
+    }
+    return ellipsis + text.slice(lo)
+  }
+  while (lo < hi) {
+    const mid = 1 + ((lo + hi) >>> 1)
+    if (widthOf(text.slice(0, mid)) < room) lo = mid
+    else hi = mid - 1
+  }
+  return text.slice(0, lo) + ellipsis
+}
+
+/**
  * Measure a plain string with a nominal font (no scene item). `fontWeight`
  * maps straight onto the canvas font string; the estimate fallback ignores it
  * exactly like vega's headless path does.

@@ -14,6 +14,7 @@
  * the same description they would get from upstream Vega.
  */
 import { SYMBOL_DEFAULT_SIZE } from './util.js'
+import { textAnchor } from './text-metrics.js'
 import type { SceneGroup, SceneItem, SceneNode, SceneRoot } from './types.js'
 import { axisLabel, guideTitleText, legendLabel, scalesFromSnapshots } from './guide-caption.js'
 import { pushAll } from './util.js'
@@ -80,8 +81,10 @@ export interface A11yOptions {
 interface Bounds { x1: number; y1: number; x2: number; y2: number }
 
 function itemBounds(it: SceneItem, tx: number, ty: number): Bounds {
-  const x = tx + (it.x ?? 0)
-  const y = ty + (it.y ?? 0)
+  // (a text item is anchored `radius` out from its x/y along `theta`, and that radius is not a symbol's)
+  const [ax, ay] = it.text != null ? textAnchor(it) : [it.x ?? 0, it.y ?? 0]
+  const x = tx + ax
+  const y = ty + ay
   const x2 = tx + (it.x2 ?? it.x ?? 0)
   const y2 = ty + (it.y2 ?? it.y ?? 0)
   let x1 = Math.min(x, x2)

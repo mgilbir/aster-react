@@ -198,16 +198,6 @@ function fromOurScales(scales: ScaleSnapshot[]): ScaleSnapshot[] {
 
 function itemRecord(it: SceneItem, marktype: string): string {
   const rec = { ...(it as unknown as Record<string, unknown>) }
-  // Text polar anchoring is a renderer step in vega (x/y stay at the centre and
-  // radius/theta are kept on the item); our engine bakes it at build time.
-  // Normalize both to the anchored position.
-  if (marktype === 'text' && typeof rec.radius === 'number' && typeof rec.theta === 'number') {
-    const t = (rec.theta as number) - Math.PI / 2
-    rec.x = (rec.x as number ?? 0) + (rec.radius as number) * Math.cos(t)
-    rec.y = (rec.y as number ?? 0) + (rec.radius as number) * Math.sin(t)
-    delete rec.radius
-    delete rec.theta
-  }
   // Area marks: vega keeps the baseline on y2 (with a NaN height) when the
   // spatial adjust ran; our builder folds it into y. Normalize to the baseline.
   if (marktype === 'area' && rec.y == null && typeof rec.y2 === 'number' && !Number.isFinite(rec.height as number)) {
@@ -275,7 +265,7 @@ function itemBounds(it: SceneItem): { x1: number; y1: number; x2: number; y2: nu
   else if (typeof x2 === 'number') w = x2 - x
   if (typeof rec.height === 'number') h = rec.height
   else if (typeof y2 === 'number') h = y2 - y
-  if (typeof rec.radius === 'number') { w = rec.radius * 2; h = rec.radius * 2; return { x1: x - rec.radius, y1: y - rec.radius, x2: x + rec.radius, y2: y + rec.radius } }
+  if (typeof rec.radius === 'number' && rec.text == null) { w = rec.radius * 2; h = rec.radius * 2; return { x1: x - rec.radius, y1: y - rec.radius, x2: x + rec.radius, y2: y + rec.radius } }
   if (w == null && typeof rec.size === 'number') { const r = Math.sqrt(rec.size) / 2; w = r * 2; h = r * 2; return { x1: x - r, y1: y - r, x2: x + r, y2: y + r } }
   if (w == null && rec.text != null) { const r = ((rec.fontSize as number | undefined) ?? 11) * String(rec.text).length * 0.3; w = r * 2; h = r }
   if (w == null || h == null) return null

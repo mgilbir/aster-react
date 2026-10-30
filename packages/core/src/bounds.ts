@@ -10,7 +10,7 @@
 import { SYMBOL_DEFAULT_SIZE, pushAll } from './util.js'
 import type { SceneGroup, SceneItem, SceneNode } from './types.js'
 import { computeAreaPath, computeLinePath, symbolPathExact, trailPath } from './render.js'
-import { itemTextWidth } from './text-metrics.js'
+import { itemTextWidth, textAnchor, truncateToLimit } from './text-metrics.js'
 import { SHAPE_BOUNDS } from './registry.js'
 import { imageBox } from './image-box.js'
 
@@ -207,25 +207,8 @@ export function multiLineOffset(item: SceneItem): number {
 
 export function textValue(item: SceneItem, line: unknown): string {
   const text = line == null ? '' : (line + '').trim()
-  return item.limit != null && item.limit > 0 && text.length ? truncate(item, text) : text
+  return truncateToLimit(item, text)
 }
-
-function truncate(item: SceneItem, text: string): string {
-  const limit = +item.limit!
-  const width = (t: string) => itemTextWidth(item, t)
-  if (width(text) < limit) return text
-  const ellipsis = item.ellipsis || '…'
-  let lo = 0
-  let hi = text.length
-  let limit2 = limit - width(ellipsis)
-  while (lo < hi) {
-    const mid = 1 + ((lo + hi) >>> 1)
-    if (width(text.slice(0, mid)) < limit2) lo = mid
-    else hi = mid - 1
-  }
-  return text.slice(0, lo) + ellipsis
-}
-
 
 export function textWidth(item: SceneItem, line: unknown): number {
   // vega's two paths, dispatched exactly like textMetrics.width:
@@ -309,8 +292,7 @@ export function boundArcItem(bounds: Bounds, it: SceneItem): Bounds {
 export function boundText(bounds: Bounds, item: SceneItem): Bounds {
   const h = fontSize(item)
   const a = item.align
-  const x = item.x || 0
-  const y = item.y || 0
+  const [x, y] = textAnchor(item)
   const dx = item.dx || 0
   const dy = (item.dy || 0) + baselineOffset(item) - Math.round(0.8 * h)
   const tl = textLines(item)
