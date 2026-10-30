@@ -15,8 +15,8 @@
 import v8 from 'node:v8'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import * as vega from 'vega'
-import { getChartInfo } from '../../core/src/runtime.ts'
-import { sortData } from '../../core/src/util.ts'
+import { getChartInfo } from '../../core/src/runtime.js'
+import { sortData } from '../../core/src/util.js'
 
 const FLAG = process.env.ASTER_V8_SORT_FLAG ?? ''
 const ENABLE_INLINING = FLAG.replace('--', '--no-')
