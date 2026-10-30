@@ -618,7 +618,8 @@ const BIN_INTERVALS: Array<[string[], number, number]> = [
 /** vega-time `timeBin`: pick the units and step that give about `maxbins` bins over the extent. */
 export function timeBin(ext: [number, number], maxbinsParam?: number): { units: string[]; step: number } {
   const max = maxbinsParam || 40
-  const target = Math.abs(ext[ext.length - 1]! - ext[0]!) / max
+  // an extent whose ends do not subtract to a number (NaN, Infinity - Infinity, a missing end) spans nothing
+  const target = Math.abs((ext[ext.length - 1]! - ext[0]!) || 0) / max
   // d3-array bisector(i => i[2]).right
   let lo = 0
   let hi = BIN_INTERVALS.length
@@ -627,8 +628,7 @@ export function timeBin(ext: [number, number], maxbinsParam?: number): { units: 
     if (BIN_INTERVALS[mid]![2] - target <= 0) lo = mid + 1
     else hi = mid
   }
-  // bisector(...).right returns the length when the target is not comparable (NaN)
-  let i = target === target ? lo : BIN_INTERVALS.length
+  let i = lo
   let units: string[]
   let step: number
   if (i === BIN_INTERVALS.length) {
