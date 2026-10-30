@@ -5,7 +5,7 @@
  */
 import * as vega from 'vega'
 import { compileChart, evaluateChart, type SceneGroup, type SceneItem } from '@aster/core'
-import { Bounds, boundTypedMark } from '../../core/src/bounds.js'
+import { Bounds, boundGroupItem, boundTypedMark } from '../../core/src/bounds.js'
 
 type Box = [number, number, number, number]
 interface VegaNode { marktype?: string; role?: string; items?: VegaNode[]; bounds?: { x1: number; y1: number; x2: number; y2: number } }
@@ -18,7 +18,7 @@ export interface BoundsReport { diffs: string[]; marks: number; items: number }
 
 function typedMarks(node: VegaNode | SceneGroup, out: Array<VegaNode | SceneGroup>): void {
   const n = node as VegaNode
-  if (n.marktype && n.marktype !== 'group' && n.role === 'mark') out.push(node)
+  if (n.marktype && n.role === 'mark') out.push(node)
   for (const c of n.items ?? []) typedMarks(c as VegaNode, out)
 }
 
@@ -40,6 +40,20 @@ export async function compareBounds(spec: Record<string, unknown>, tol = 1e-9): 
       const om = ours[mi]!
       marks++
       const label = `${vm.marktype}#${mi}`
+      if (vm.marktype === 'group') {
+        // (a group item's bounds hold its children's, its frame and its stroke)
+        const vgroups = vm.items ?? []
+        const ogroups = (om.items ?? []) as unknown as SceneGroup[]
+        if (vgroups.length !== ogroups.length) { diffs.push(`${label}: ${vgroups.length} vega items, ${ogroups.length} engine`); return }
+        vgroups.forEach((vit, ii) => {
+          items++
+          const g = boundGroupItem(new Bounds(), ogroups[ii]!)
+          const got: Box = [g.x1, g.y1, g.x2, g.y2]
+          const want = boxOf(vit.bounds!)
+          if (want.some((v, i) => !same(v, got[i]!, tol))) diffs.push(`${label} item ${ii}: vega ${fmt(want)} engine ${fmt(got)}`)
+        })
+        return
+      }
       const shared = vm.marktype === 'line' || vm.marktype === 'area' || vm.marktype === 'trail'
       const mine = boundTypedMark(new Bounds(), om)
       const mineBox: Box = [mine.x1, mine.y1, mine.x2, mine.y2]

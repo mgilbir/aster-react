@@ -844,11 +844,19 @@ function renderTrail(group: SceneGroup, open: string): string {
   return out
 }
 
-/** The path of a trail: one capsule per segment of a run of items. */
+/** The path of a trail: one capsule per segment of a run of items, at full precision. */
 export function trailPath(items: SceneItem[]): GeneratedPath {
-  // Each segment between consecutive items is a capsule (round caps of the items' widths) written at full precision.
-  // x and y are `item.x || 0`, the size `item.size || 1`; an item with `defined === false` ends the run.
   const context = new ArcPathWriter()
+  trailInto(context, items)
+  return gen(context.d)
+}
+
+/**
+ * The capsules of a trail drawn into any sink (the path text and the bounds both take them from here). Each segment between
+ * consecutive items is a capsule (round caps of the items' widths). x and y are `item.x || 0`, the size `item.size || 1`;
+ * an item with `defined === false` ends the run.
+ */
+export function trailInto(context: ArcSink, items: SceneItem[]): void {
   let ready = false
   let x1 = 0, y1 = 0, r1 = 0
   const point = (x2: number, y2: number, w2: number): void => {
@@ -888,7 +896,6 @@ export function trailPath(items: SceneItem[]): GeneratedPath {
     }
     if (defined0) point(+((it!.x as number) || 0), +((it!.y as number) || 0), +((it!.size as number) || 1))
   }
-  return gen(context.d)
 }
 
 function renderImages(group: SceneGroup, open: string): string {
