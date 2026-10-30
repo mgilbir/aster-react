@@ -1,13 +1,16 @@
 /**
- * Event selector parser: a port of `vega-event-selector` (v4), which turns a
- * selector string such as `[mousedown, mouseup] > mousemove[event.shiftKey]{10}`
- * into the array of event-stream definitions the signal event loop runs.
+ * Event selector strings, as Vega signals and Vega-Lite selections write them: `click`, `window:keydown!`,
+ * `rect:mouseover[event.shiftKey]{10}`, `@brush:pointermove`, `[pointerdown, pointerup] > pointermove`, merged with
+ * commas. `parseEventSelectorString` turns one into the list of stream definitions that the signal event loop and the
+ * Vega-Lite compiler work with.
  *
- * Grammar (identical to upstream): a comma-separated merge of selectors; each is
- * either `[a, b] > stream` ("between") or a stream
- * `[source|@markname|marktype:]type[!][filter]...[{throttle[,debounce]}]`.
- * Errors are thrown as strings upstream; here they are `Error`s with the same
- * messages.
+ * A stream is `[qualifier:]type[!][filter]...[{throttle[,debounce]}]`; the qualifier names an event source
+ * (`window`, `#id`, ...), a mark type (`rect`) or, after `@`, a mark name. A "between" selector `[a, b] > c` limits `c`
+ * to the time between `a` and `b`. A string that is not valid fails with an `Error` whose message names the problem
+ * and quotes the text; those messages are part of the contract (a user sees them in a spec error).
+ *
+ * `@aster/vl` carries a byte-identical copy of this module (it must not depend on the engine); a conformance test
+ * keeps the two equal and compares both with the reference parser.
  */
 
 export interface StreamDef {
@@ -20,172 +23,140 @@ export interface StreamDef {
   debounce?: number
   consume?: boolean
   between?: StreamDef[]
-  /** Nested stream (a between selector wrapped around a stream that has its own between). */
+  /** The stream a between selector wraps when that stream is itself a between selector. */
   stream?: StreamDef
   merge?: StreamDef[]
 }
 
-const VIEW = 'view'
-const LBRACK = '['
-const RBRACK = ']'
-const LBRACE = '{'
-const RBRACE = '}'
-const COLON = ':'
-const COMMA = ','
-const NAME = '@'
-const GT = '>'
-const ILLEGAL = /[[\]{}]/
-const DEFAULT_MARKS: Record<string, 1> = {
-  '*': 1, arc: 1, area: 1, group: 1, image: 1, line: 1, path: 1, rect: 1, rule: 1, shape: 1, symbol: 1, text: 1, trail: 1,
+/** The mark types a qualifier can name when the caller does not say otherwise. */
+const MARK_TYPES: Record<string, true> = {
+  '*': true, arc: true, area: true, group: true, image: true, line: true, path: true, rect: true, rule: true, shape: true, symbol: true, text: true, trail: true,
 }
 
-interface Ctx { source: string; marks: Record<string, unknown> }
+interface Context {
+  /** The source of a stream that names none. */
+  source: string
+  marks: Record<string, unknown>
+}
 
 function fail(message: string): never {
   throw new Error(message)
 }
 
-/** Parse an event selector string into event-stream definitions. */
+/**
+ * Parse an event selector. `source` is what a stream without a qualifier listens to (default `view`); `marks` is the
+ * set of names that count as mark types (default: the Vega mark types).
+ */
 export function parseEventSelectorString(selector: string, source?: string, marks?: Record<string, unknown>): StreamDef[] {
-  const ctx: Ctx = { source: source || VIEW, marks: marks || DEFAULT_MARKS }
-  return parseMerge(selector.trim()).map((s) => parseSelector(s, ctx))
+  const context: Context = { source: source || 'view', marks: marks || MARK_TYPES }
+  return splitMerge(selector.trim()).map((part) => parseSelector(part, context))
 }
 
-function find(s: string, i: number, endChar: string, pushChar?: string, popChar?: string): number {
-  const n = s.length
-  let count = 0
-  for (; i < n; ++i) {
-    const c = s[i]!
-    if (!count && c === endChar) return i
-    else if (popChar && popChar.includes(c)) --count
-    else if (pushChar && pushChar.includes(c)) ++count
+/**
+ * Index of the first `stop` at nesting depth 0 from `from`, or the text length. Characters of `opens` raise the depth
+ * and those of `closes` lower it; a closer without an opener takes the depth below 0 and keeps later stops hidden.
+ */
+function findTopLevel(text: string, from: number, stop: string, opens = '', closes = ''): number {
+  let depth = 0
+  let i = from
+  for (; i < text.length; i++) {
+    const c = text[i]!
+    if (depth === 0 && c === stop) return i
+    if (closes.includes(c)) depth--
+    else if (opens.includes(c)) depth++
   }
   return i
 }
 
-function parseMerge(s: string): string[] {
-  const output: string[] = []
-  const n = s.length
-  let start = 0
-  let i = 0
-  while (i < n) {
-    i = find(s, i, COMMA, LBRACK + LBRACE, RBRACK + RBRACE)
-    output.push(s.substring(start, i).trim())
-    start = ++i
+/** The comma-separated selectors of a merge, each trimmed; a trailing comma adds nothing. */
+function splitMerge(text: string): string[] {
+  const parts: string[] = []
+  for (let start = 0; start < text.length;) {
+    const end = findTopLevel(text, start, ',', '[{', ']}')
+    parts.push(text.slice(start, end).trim())
+    start = end + 1
   }
-  if (output.length === 0) fail('Empty event selector: ' + s)
-  return output
+  if (!parts.length) fail('Empty event selector: ' + text)
+  return parts
 }
 
-function parseSelector(s: string, ctx: Ctx): StreamDef {
-  return s[0] === '[' ? parseBetween(s, ctx) : parseStream(s, ctx)
+function parseSelector(text: string, context: Context): StreamDef {
+  return text[0] === '[' ? parseBetween(text, context) : parseStream(text, context)
 }
 
-function parseBetween(s: string, ctx: Ctx): StreamDef {
-  const n = s.length
-  let i = 1
-  i = find(s, i, RBRACK, LBRACK, RBRACK)
-  if (i === n) fail('Empty between selector: ' + s)
-  const parts = parseMerge(s.substring(1, i))
-  if (parts.length !== 2) fail('Between selector must have two elements: ' + s)
-  s = s.slice(i + 1).trim()
-  if (s[0] !== GT) fail("Expected '>' after between selector: " + s)
-  const b = parts.map((p) => parseSelector(p, ctx))
-  const stream = parseSelector(s.slice(1).trim(), ctx)
-  if (stream.between) return { between: b, stream }
-  stream.between = b
+function parseBetween(text: string, context: Context): StreamDef {
+  const close = findTopLevel(text, 1, ']', '[', ']')
+  if (close === text.length) fail('Empty between selector: ' + text)
+  const ends = splitMerge(text.slice(1, close))
+  if (ends.length !== 2) fail('Between selector must have two elements: ' + text)
+  const after = text.slice(close + 1).trim()
+  if (after[0] !== '>') fail("Expected '>' after between selector: " + after)
+  const between = ends.map((end) => parseSelector(end, context))
+  const stream = parseSelector(after.slice(1).trim(), context)
+  if (stream.between) return { between, stream }
+  stream.between = between
   return stream
 }
 
-function parseStream(s: string, ctx: Ctx): StreamDef {
-  const stream: StreamDef = { source: ctx.source }
-  const source: string[] = []
-  let throttle: number[] = [0, 0]
-  let markname = 0
-  let start = 0
-  let n = s.length
-  let i = 0
-  let j: number
-  let filter: string[] | undefined
+/** The `throttle[,debounce]` numbers between braces, or undefined if they are not one or two numbers. */
+function readDelays(text: string): [number, number | undefined] | undefined {
+  const items = text.split(',')
+  if (!text.length || items.length > 2) return undefined
+  const numbers = items.map(Number)
+  return numbers.some((x) => Number.isNaN(x)) ? undefined : [numbers[0]!, numbers[1]]
+}
 
-  // extract throttle from end
-  if (s[n - 1] === RBRACE) {
-    i = s.lastIndexOf(LBRACE)
-    if (i >= 0) {
-      try {
-        throttle = parseThrottle(s.substring(i + 1, n - 1))
-      } catch {
-        fail('Invalid throttle specification: ' + s)
-      }
-      s = s.slice(0, i).trim()
-      n = s.length
-    } else fail('Unmatched right brace: ' + s)
-    i = 0
+/** The filter expressions of `[a][b]`, from the `[` at `open`. */
+function readFilters(text: string, open: number): string[] {
+  const filters: string[] = []
+  const end = text.length
+  let pos = open + 1
+  if (pos === end) fail('Unmatched left bracket: ' + text)
+  while (pos < end) {
+    const close = text.indexOf(']', pos)
+    if (close < 0) fail('Unmatched left bracket: ' + text)
+    filters.push(text.slice(pos, close).trim())
+    if (close < end - 1 && text[close + 1] !== '[') fail('Expected left bracket: ' + text)
+    pos = close + 2
   }
-  if (!n) fail(s)
+  return filters
+}
 
-  // set name flag based on first char
-  if (s[0] === NAME) markname = ++i
-
-  // extract first part of multi-part stream selector
-  j = find(s, i, COLON)
-  if (j < n) {
-    source.push(s.substring(start, j).trim())
-    start = i = ++j
+function parseStream(text: string, context: Context): StreamDef {
+  let body = text
+  let throttle = 0
+  let debounce: number | undefined = 0
+  if (body.endsWith('}')) {
+    const brace = body.lastIndexOf('{')
+    if (brace < 0) fail('Unmatched right brace: ' + body)
+    const delays = readDelays(body.slice(brace + 1, -1))
+    if (!delays) fail('Invalid throttle specification: ' + body)
+    ;[throttle, debounce] = delays
+    body = body.slice(0, brace).trim()
   }
+  if (!body) fail(body)
 
-  // extract remaining part of stream selector
-  i = find(s, i, LBRACK)
-  if (i === n) {
-    source.push(s.substring(start, n).trim())
-  } else {
-    source.push(s.substring(start, i).trim())
-    filter = []
-    start = ++i
-    if (start === n) fail('Unmatched left bracket: ' + s)
+  const named = body[0] === '@'
+  const colon = body.indexOf(':', named ? 1 : 0)
+  const qualifier = colon < 0 ? undefined : body.slice(0, colon).trim()
+  const typeStart = colon < 0 ? 0 : colon + 1
+  const bracket = body.indexOf('[', colon < 0 ? (named ? 1 : 0) : typeStart)
+  const typeText = body.slice(typeStart, bracket < 0 ? undefined : bracket).trim()
+  const filter = bracket < 0 ? undefined : readFilters(body, bracket)
+  if (/[[\]{}]/.test(typeText)) fail('Invalid event selector: ' + body)
+
+  const stream: StreamDef = { source: context.source, type: typeText }
+  if (qualifier !== undefined) {
+    if (named) stream.markname = qualifier.slice(1)
+    else if (Object.hasOwn(context.marks, qualifier)) stream.marktype = qualifier
+    else stream.source = qualifier
   }
-
-  // extract filters
-  while (i < n) {
-    i = find(s, i, RBRACK)
-    if (i === n) fail('Unmatched left bracket: ' + s)
-    filter!.push(s.substring(start, i).trim())
-    if (i < n - 1 && s[++i] !== LBRACK) fail('Expected left bracket: ' + s)
-    start = ++i
-  }
-
-  // marshall event stream specification
-  n = source.length
-  if (!n || ILLEGAL.test(source[n - 1]!)) fail('Invalid event selector: ' + s)
-
-  if (n > 1) {
-    stream.type = source[1]
-    if (markname) {
-      stream.markname = source[0]!.slice(1)
-    } else if (Object.hasOwn(ctx.marks, source[0]!)) {
-      stream.marktype = source[0]
-    } else {
-      stream.source = source[0]
-    }
-  } else {
-    stream.type = source[0]
-  }
-  if (stream.type!.slice(-1) === '!') {
+  if (typeText.endsWith('!')) {
     stream.consume = true
-    stream.type = stream.type!.slice(0, -1)
+    stream.type = typeText.slice(0, -1)
   }
-  if (filter != null) stream.filter = filter
-  if (throttle[0]) stream.throttle = throttle[0]
-  if (throttle[1]) stream.debounce = throttle[1]
+  if (filter) stream.filter = filter
+  if (throttle) stream.throttle = throttle
+  if (debounce) stream.debounce = debounce
   return stream
-}
-
-function parseThrottle(s: string): number[] {
-  const a = s.split(COMMA)
-  if (!s.length || a.length > 2) fail(s)
-  return a.map((_) => {
-    const x = +_
-    if (x !== x) fail(s)
-    return x
-  })
 }

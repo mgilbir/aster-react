@@ -5,6 +5,7 @@
  * must return the same stream definitions, or fail with the same message. `src/event-selector.test.ts` pins a fixed
  * grammar; this one finds what a fixed list does not think of.
  */
+import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import { parseEventSelectorString as inCore } from '../../core/src/event-selector.ts'
 import { parseEventSelectorString as inVl } from '../../vl/src/event-selector.ts'
@@ -82,5 +83,11 @@ describe('event selector parsers vs vega-event-selector (generated)', () => {
     // a vacuous mix (all valid or all failing) would prove nothing
     expect(errors).toBeGreaterThan(500)
     expect(valid).toBeGreaterThan(2000)
+  })
+
+  it('keeps the two copies byte for byte the same module', () => {
+    const core = readFileSync(new URL('../../core/src/event-selector.ts', import.meta.url), 'utf8')
+    const vl = readFileSync(new URL('../../vl/src/event-selector.ts', import.meta.url), 'utf8')
+    expect(vl).toBe(core)
   })
 })
