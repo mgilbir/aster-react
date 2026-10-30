@@ -145,7 +145,7 @@ export function interpolateDate(a: Date | number, b: Date | number): (t: number)
 export function interpolateNumberArray(a: ArrayLike<number> | null, b: ArrayLike<number> | null): (t: number) => number[] {
   if (!b) b = []
   const n = a ? Math.min(b.length, a.length) : 0
-  const c = Array.from<number>(b as ArrayLike<number>)
+  const c = (b as unknown as { slice(): number[] }).slice()
   let i: number
   return function (t) {
     for (i = 0; i < n; ++i) c[i] = (a as ArrayLike<number>)[i]! * (1 - t) + (b as ArrayLike<number>)[i]! * t
@@ -158,6 +158,7 @@ export function isNumberArray(x: unknown): x is ArrayLike<number> {
 }
 
 export function interpolateArray(a: readonly unknown[] | null, b: readonly unknown[] | null): (t: number) => unknown[] {
+  if (isNumberArray(b)) return interpolateNumberArray(a as ArrayLike<number> | null, b)
   const nb = b ? b.length : 0
   const na = a ? Math.min(nb, a.length) : 0
   const x = new Array<unknown>(na)

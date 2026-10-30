@@ -99,7 +99,7 @@ const ascendingBisect = bisector(ascending) as unknown as Bisector<number, numbe
 export const bisectRight = ascendingBisect.right
 export const bisectLeft = ascendingBisect.left
 export const bisect = bisectRight
-export const bisectCenter = bisector((d: number) => d).center
+export const bisectCenter = bisector((d: number) => (d === null ? NaN : +d)).center
 
 const e10 = Math.sqrt(50)
 const e5 = Math.sqrt(10)
