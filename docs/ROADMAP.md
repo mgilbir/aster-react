@@ -37,7 +37,7 @@ from the pinned upstream package, implemented behind the same internal API, repl
 | `d3-shape`, `d3-path` | `src/shape.ts`, the arc/path code in `src/render.ts` |
 | `vega-scale`, `d3-scale`, `d3-array`, `d3-interpolate`, `internmap`, `d3-scale-chromatic` | `src/arr.ts`, `src/interp.ts`, `src/scale-d3.ts`, `src/scale.ts`, `src/scale-schemes.ts` |
 | `vega-parser` / `vega-encode` scale parsing | `src/scales.ts` |
-| `d3-geo`, `d3-geo-projection`, `vega-projection` | `src/geo-lib.ts`, `src/geo-projections.ts`, `src/geo.ts` |
+| `d3-geo`, `d3-geo-projection`, `vega-projection` (behaviour matched bit for bit; own design: geometry event buffers, see ARCHITECTURE) | `src/geo-events.ts`, `src/geo-sphere.ts`, `src/geo-sphere-measures.ts`, `src/geo-clip.ts`, `src/geo-resample.ts`, `src/geo-path.ts`, `src/geo-raw.ts`, `src/geo-projections.ts`, `src/geo.ts` |
 | `d3-contour` | `src/contour.ts` |
 | `vega-transforms`, `vega-statistics`, `vega-hierarchy`, `vega-geo`, `vega-regression`, `vega-label`, `delaunator`/`d3-delaunay` | `src/transform*.ts` |
 | `vega-scenegraph` bounds and SVG path machinery | `src/bounds.ts`, `src/svg-path.ts`, `src/render.ts` |

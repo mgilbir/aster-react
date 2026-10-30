@@ -607,3 +607,36 @@ add('edge', 'linear/domainMid-no-domain', spec({ type: 'linear', range: [0, 100]
     add('random', `random/${String(i).padStart(3, '0')}-${type}`, spec(s, d(rows)))
   }
 }
+
+// ---- seeded: quantile-style scales over columns with missing and non-numeric values ------------------------
+// (the domain of a quantile is the raw column; quantize and threshold read its extent / a literal list)
+{
+  let seed = 0x9a17
+  const rnd = () => {
+    seed = (seed + 0x6d2b79f5) | 0
+    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed)
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296
+  }
+  const pick = (a) => a[Math.floor(rnd() * a.length)]
+  const odd = [null, undefined, NaN, '', '3', '12', 'x', true, false, Infinity, -Infinity, new Date(5), 0, -0]
+  for (let i = 0; i < 160; i++) {
+    const n = pick([0, 1, 2, 3, 5, 9, 25])
+    const mode = pick(['clean', 'sparse', 'mostly-odd', 'all-missing', 'dups'])
+    const rows = Array.from({ length: n }, () => ({
+      v: mode === 'all-missing' ? pick([null, undefined, NaN]) : mode === 'dups' ? pick([1, 2, 2, 5, null]) : rnd() < (mode === 'mostly-odd' ? 0.7 : mode === 'sparse' ? 0.25 : 0) ? pick(odd) : Math.round((rnd() * 30 - 8) * 4) / 4,
+      w: rnd() < 0.3 ? pick(odd) : Math.round(rnd() * 50),
+    }))
+    const type = pick(['quantile', 'quantile', 'quantize', 'threshold'])
+    const range = pick([['a', 'b', 'c'], ['a', 'b', 'c', 'd'], ['a', 'b'], [1, 2, 3, 4, 5]])
+    let domain
+    if (type === 'threshold') domain = { domain: Array.from({ length: pick([0, 1, 2, 3]) }, () => pick([1, 5, 12, null, NaN, '3', 'x', 5])) }
+    else if (rnd() < 0.3) domain = { domain: { data: 'd', fields: ['v', 'w'] } }
+    else domain = dom('d', 'v')
+    const extra = {}
+    if (type === 'quantize' && rnd() < 0.4) extra.nice = pick([true, 4])
+    if (type === 'quantize' && rnd() < 0.3) extra.zero = pick([true, false])
+    if (rnd() < 0.15) extra.reverse = true
+    add('quantile-messy', `${type}/${String(i).padStart(3, '0')}`, spec({ type, ...domain, range, ...extra }, d(rows)))
+  }
+}

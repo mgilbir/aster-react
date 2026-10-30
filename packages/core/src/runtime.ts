@@ -1673,8 +1673,11 @@ function forceLinkDatasets(chart: CompiledChart): Set<string> {
   const visit = (transforms: readonly CompiledTransform[] | undefined): void => {
     for (const t of transforms ?? []) {
       if (t.type !== 'force') continue
-      for (const f of (t as { forces?: Array<{ force?: string; links?: unknown }> }).forces ?? []) {
-        if (f.force === 'link' && typeof f.links === 'string') out!.add(f.links)
+      // (a malformed list is the force transform's to refuse, with the message of the parameter check)
+      const forces = (t as { forces?: unknown }).forces
+      if (!Array.isArray(forces)) continue
+      for (const f of forces as Array<{ force?: string; links?: unknown } | null>) {
+        if (f?.force === 'link' && typeof f.links === 'string') out!.add(f.links)
       }
     }
   }
