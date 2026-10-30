@@ -292,6 +292,12 @@ export function withdrawExpressionFunctions(names: readonly string[]): () => voi
   }
 }
 
+/** Every function name an expression can call under the registry as it is now (the built-ins and the registered ones): for the tests that sweep them. */
+export function expressionFunctionNames(): string[] {
+  const stub: ExpressionRuntime = { scale: () => undefined, data: () => undefined, expr: () => () => undefined }
+  return [...new Set([...Object.keys(createFunctionContext(stub)), ...Object.keys(DefaultFunctions)])]
+}
+
 let builtinNames: Set<string> | undefined
 /** Every name an expression already means something by: the functions, the constants, the keywords. */
 function reservedExpressionNames(): ReadonlySet<string> {

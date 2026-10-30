@@ -7,7 +7,7 @@ import { compileExpr, ExpressionParseError, type CompiledExpr, type ExpressionRu
 import { ingestRows, readData, type DataFormatSpec } from './data-format.js'
 import { applyTransforms, compileExprTransform, sortOrder, getField, geoJSONPath, aggregateGroup, type Row, type TransformContext } from './transform.js'
 import { fieldOf } from './transform-agg.js'
-import { atRandomSite, contentKey, replayable } from './random-tape.js'
+import { atRandomSite, contentKey, mayDrawRandom, replayable } from './random-tape.js'
 import { activeMeter, withLimits, boundedCount, checkRowCount, meterItems, meterTick, AsterLimitError } from './limits.js'
 import { withTextMetricsProvider } from './text-metrics.js'
 import { AsterUrlError } from './url-policy.js'
@@ -1160,7 +1160,7 @@ function resolveSignalUpdates(ctx: EvalContext, staticOnly = false): boolean {
         for (const f of frozen) params[f] = ctx.chart.signalDefs!.find((d) => d.name === f)?.value
       }
       ctx.setData.caller = def.name
-      const value = ctx.runtime.random === undefined
+      const value = ctx.runtime.random === undefined || !mayDrawRandom(expr)
         ? ctx.runtime.expr(expr)(undefined, params)
         : atRandomSite(ctx.runtime.random, `signal:${def.name}`, () => randomFingerprint(expr, [], params), () => ctx.runtime.expr(expr)(undefined, params))
       // An `init` that reads a scale or a dataset is only settled once they exist: until the scales are built,
@@ -3475,7 +3475,7 @@ function buildDatasetsOf(ctx: EvalContext, inputData: Record<string, unknown[]>)
         let cur = rows
         for (let k = 0; k < d.transform.length; k++) {
           const from = cur
-          const res = ctx.runtime.random === undefined
+          const res = ctx.runtime.random === undefined || !mayDrawRandom(d.transform[k])
             ? applyOneWithState(from, d.transform[k]!, tctx, name)
             : atRandomSite(ctx.runtime.random, `dataset:${name}#${k}`, () => randomFingerprint(d.transform[k]!, from, ctx.signalParams), () => applyOneWithState(from, d.transform[k]!, tctx, name))
           cur = res.rows
@@ -4145,7 +4145,7 @@ function evaluateMarkItems(
     try {
       // (a transform that draws random numbers - the layout of a word cloud - draws them once for the inputs it is given, as
       // vega's operator does, not again for every evaluation of the scene: see random-tape.ts)
-      const out = atRandomSite(ctx.runtime.random, `mark:${ctx.scopeId ?? ''}/${markIdOf(mark)}#${k}`, () => randomFingerprint(t, items.map(publicProps), ctx.signalParams), () => applyTransforms(items as unknown as Row[], [t], {
+      const out = atRandomSite(mayDrawRandom(t) ? ctx.runtime.random : undefined, `mark:${ctx.scopeId ?? ''}/${markIdOf(mark)}#${k}`, () => randomFingerprint(t, items.map(publicProps), ctx.signalParams), () => applyTransforms(items as unknown as Row[], [t], {
         runtime: ctx.runtime, signals: ctx.signalParams, hierarchies: ctx.hierarchies, projections: ctx.projections,
         // (`lookup` `from` is a dataset, or the name of a mark: its items)
         datasets: (n) => ctx.datasets.get(n) ?? (ctx.markItems.get(n) as unknown as Row[] | undefined),
