@@ -265,6 +265,7 @@ export function newEnv(random?: () => number): AggEnv {
 class TupleStore {
   private _add: Row[] = []
   private _rem = new Set<Row>()
+  private _remN = 0
   private _ext: [Row | undefined, Row | undefined] | null = null
   private _get: Get | null = null
   private _q: Array<number | undefined> | null = null
@@ -275,13 +276,14 @@ class TupleStore {
   reset(): void {
     this._add = []
     this._rem = new Set()
+    this._remN = 0
     this._ext = null
     this._get = null
     this._q = null
     this._ci = null
   }
   add(v: Row): void { this._add.push(v) }
-  rem(v: Row): void { this._rem.add(v) }
+  rem(v: Row): void { this._rem.add(v); this._remN++ }
 
   values(): Row[] {
     this._get = null
@@ -289,13 +291,16 @@ class TupleStore {
     meterTick('aggregate', this._add.length)
     const a = this._add
     const r = this._rem
-    const x: Row[] = []
+    // sized by the removals asked for: more of them than rows is a RangeError, and one that matches no row leaves a hole
+    const x = new Array<Row>(a.length - this._remN)
+    let j = 0
     for (let i = 0; i < a.length; ++i) {
       const v = a[i]!
       if (r.has(v)) r.delete(v)
-      else x.push(v)
+      else x[j++] = v
     }
     this._rem = new Set()
+    this._remN = 0
     return (this._add = x)
   }
 
@@ -824,7 +829,7 @@ export function pivotRows(rows: readonly Row[], p: PivotParams): Row[] {
   const list: unknown[] = []
   for (const t of rows) {
     const k = key(t)
-    const s = k as string
+    const s = String(k)
     if (!seen.has(s)) { seen.add(s); list.push(k) }
   }
   sortData(list, ascending)
