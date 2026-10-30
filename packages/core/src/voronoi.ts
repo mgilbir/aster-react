@@ -452,9 +452,6 @@ function clippedCell(d: Diagram, i: number): number[] | null {
 
 // -- public -----------------------------------------------------------------------------------------------------------
 
-/** A coordinate as it is written in a path; an undefined one (see `castRay`) is written as nothing. */
-const text = (v: number | undefined): string | number => (v === undefined ? '' : v)
-
 export interface VoronoiDiagram {
   /** The clipped cell of point `i`: its corners, flat, as the cell's boundary is walked; null if it has none. */
   cell(i: number): number[] | null
@@ -482,19 +479,19 @@ export function voronoi(points: Float64Array, bounds: Rect): VoronoiDiagram {
       const y = corners[1]!
       let end = corners.length
       while (end > 2 && corners[end - 2] === x && corners[end - 1] === y) end -= 2
-      let path = 'M' + text(x) + ',' + text(y)
-      let drawn = false
+      // pieces are joined at the end: one flat string per cell (a chain of concatenations leaves a rope of tens of nodes that
+      // stays alive with the row), and join writes an undefined coordinate (see `castRay`) as nothing
+      const parts: Array<number | string | undefined> = ['M', x, ',', y]
       for (let k = 2; k < end; k += 2) {
-        if (corners[k] !== corners[k - 2] || corners[k + 1] !== corners[k - 1]) {
-          path += 'L' + text(corners[k]) + ',' + text(corners[k + 1])
-          drawn = true
-        }
+        if (corners[k] !== corners[k - 2] || corners[k + 1] !== corners[k - 1]) parts.push('L', corners[k], ',', corners[k + 1])
       }
       // closing back to the start repeats the first corner, which is left out as redundant -- unless a coordinate is NaN,
       // which equals nothing, itself included: then the repeat stays, and a lone corner is a path of two equal-looking ones
       const redundant = x === x && y === y
-      if (!drawn && redundant) return null
-      return path + (redundant ? '' : 'L' + text(x) + ',' + text(y)) + 'Z'
+      if (parts.length === 4 && redundant) return null
+      if (!redundant) parts.push('L', x, ',', y)
+      parts.push('Z')
+      return parts.join('')
     },
   }
 }
