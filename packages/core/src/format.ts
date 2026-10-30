@@ -98,8 +98,8 @@ function siScaled(x: number, precision: number): string {
     lastSiPower = undefined
     return x.toPrecision(precision)
   }
-  lastSiPower = siPowerOf(d.power)
-  const intDigits = d.power - lastSiPower + 1
+  const power = (lastSiPower = Math.max(-8, Math.min(8, Math.floor(d.power / 3))) * 3)
+  const intDigits = d.power - power + 1
   const n = d.digits.length
   if (intDigits === n) return d.digits
   if (intDigits > n) return d.digits + zeros(intDigits - n)
@@ -131,15 +131,19 @@ const RENDERERS: Record<string, (x: number, precision: number) => string> = {
  * '5.' -> '5'. Only text after a point (past the first character) can be trimmed.
  */
 function trimZeros(text: string): string {
-  const run = /^[\s\S][0-9.]*/.exec(text)
-  if (!run) return text
-  const head = run[0]
-  const point = head.lastIndexOf('.')
-  if (point < 1) return text
-  let zerosFrom = head.length
-  while (zerosFrom > point + 1 && head[zerosFrom - 1] === '0') zerosFrom--
+  // the leading run: the first character whatever it is, then digits and points
+  let end = 1
+  let point = -1
+  for (; end < text.length; end++) {
+    const code = text.charCodeAt(end)
+    if (code === 46) point = end
+    else if (code < 48 || code > 57) break
+  }
+  if (point < 0) return text
+  let zerosFrom = end
+  while (zerosFrom > point + 1 && text.charCodeAt(zerosFrom - 1) === 48) zerosFrom--
   const cut = zerosFrom === point + 1 ? point : zerosFrom
-  return cut < head.length ? text.slice(0, cut) + text.slice(head.length) : text
+  return cut < end ? text.slice(0, cut) + text.slice(end) : text
 }
 
 /**
