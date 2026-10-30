@@ -1,308 +1,292 @@
 /**
- * The locale facade — a faithful port of vega-format (2.1.2), joining the
- * number-format engine (`./format.ts`) with the time-format engine
- * (`./time-format.ts`) into the locale object the runtime and the expression
- * functions consume. Pinned by oracle vectors recorded from the pinned
- * vega-format (`testdata/vectors/vega-format.json`).
+ * Locales: the number and time formatters a chart reads text through, as one object.
  *
- * The memoized surfaces matter for performance: `format`/`timeFormat`/
- * `utcFormat`/`timeParse`/`utcParse` cache compiled formatters per specifier,
- * since axis labels and expression functions reformat thousands of values
- * through one spec.
+ * A locale offers `format`, `formatPrefix`, `formatFloat`, `formatSpan` (numbers) and `timeFormat`, `utcFormat`,
+ * `timeParse`, `utcParse` (dates), built over the engines in `format.ts` and `time-format.ts`. Axis labels and
+ * expression functions format thousands of values through a handful of specifiers, so compiled formatters are kept per
+ * specifier in a bounded least-recently-used table (a specifier is spec- or data-supplied text, and an unbounded table
+ * would be a retention vector in a long-lived process).
+ *
+ * The behaviour is the observable behaviour of vega-format, held by `testdata/vectors/vega-format.json` and the generated
+ * differential `packages/conformance/scripts/differential-format.test.mts` / `-time-format.test.mts`. Forced by it:
+ * - `formatFloat` with no precision rounds to 12 significant digits and trims zeros, and under a locale whose numerals
+ *   are not ASCII digits that trim finds no digit and returns an empty string, as vega's does;
+ * - `formatSpan` picks the precision from the tick step between the ends, and an `s` span formats through
+ *   `formatPrefix` at the larger end (so every label of an axis shares one SI prefix);
+ * - a time multi-format picks, per date, the coarsest unit the date sits exactly on (milliseconds when it is off every
+ *   second, then seconds, minutes, hours, days, and month, year starts with the week and quarter variants);
+ * - `defaultLocale` takes either no arguments (read) or both (set); anything else is an error.
+ * Aster differs from vega on purpose in one place: the table is keyed through a Map, so a specifier such as
+ * `constructor` is just an invalid specifier, not the inherited `Object` function.
  */
 import {
-  format as d3Format, formatLocale as d3FormatLocale,
-  formatPrefix as d3FormatPrefix, formatSpecifier, precisionFixed,
-  precisionPrefix, precisionRound, tickStep,
-  type FormatLocaleDefinition,
+  format as defaultNumberFormat, formatLocale, formatPrefix as defaultNumberFormatPrefix, formatSpecifier,
+  precisionFixed, precisionPrefix, precisionRound, tickStep,
+  type FormatLocaleDefinition, type FormatSpecifier,
 } from './format.js'
 import {
-  timeFormat as d3TimeFormat,
-  timeFormatLocale as d3TimeFormatLocale, timeParse as d3TimeParse,
-  utcFormat as d3UtcFormat, utcParse as d3UtcParse,
+  timeFormat as defaultTimeFormat, timeFormatLocale as makeTimeLocale, timeParse as defaultTimeParse,
+  utcFormat as defaultUtcFormat, utcParse as defaultUtcParse,
   type TimeLocaleDefinition,
 } from './time-format.js'
-import { DATE, DAY, HOURS, MILLISECONDS, MINUTES, MONTH, QUARTER, SECONDS, WEEK, YEAR, timeIntervalFor, utcIntervalFor } from './time.js'
+import {
+  DATE, DAY, HOURS, MILLISECONDS, MINUTES, MONTH, QUARTER, SECONDS, WEEK, YEAR,
+  timeIntervalFor, utcIntervalFor, type TimeInterval,
+} from './time.js'
 import { error, isObject, isString } from './util.js'
 
-/**
- * Entries kept per memoised formatter table. The key is a spec- or data-supplied
- * specifier, so an unbounded table is a slow-growth / cross-tenant retention
- * vector in a long-lived process (C70); this one evicts least-recently-used.
- */
+/** Entries kept per formatter table; the least recently used is dropped past it. */
 export const FORMATTER_CACHE_MAX = 512
 
-/** Cache compiled formatters per specifier (vega-format's memoize), bounded LRU. */
-function memoize<T, A>(method: (arg: A) => T): (arg: A) => T {
-  // a Map: the specifier is spec/data-supplied (`constructor`, `__proto__`, ...)
-  const cache = new Map<string, T>()
-  let newest: string | undefined
-  return (spec: A) => {
-    const key = String(spec)
-    const hit = cache.get(key)
-    if (hit !== undefined) {
-      if (key !== newest) {
-        // refresh recency: Map iteration order is insertion order
-        cache.delete(key)
-        cache.set(key, hit)
-        newest = key
+/** `make`, remembered per `String(key)`, keeping the most recently used `FORMATTER_CACHE_MAX` results. */
+function remember<A, T>(make: (key: A) => T): (key: A) => T {
+  // a Map iterates in insertion order, so re-inserting on a hit keeps the oldest entry first
+  const table = new Map<string, T>()
+  let latest: string | undefined
+  return (key) => {
+    const id = String(key)
+    const known = table.get(id)
+    if (known !== undefined) {
+      // asking again for the entry just used (a label loop) needs no reordering
+      if (id !== latest) {
+        table.delete(id)
+        table.set(id, known)
+        latest = id
       }
-      return hit
+      return known
     }
-    const made = method(spec)
-    cache.set(key, made)
-    newest = key
-    if (cache.size > FORMATTER_CACHE_MAX) cache.delete(cache.keys().next().value as string)
+    const made = make(key)
+    table.set(id, made)
+    latest = id
+    if (table.size > FORMATTER_CACHE_MAX) table.delete(table.keys().next().value as string)
     return made
   }
 }
 
-function rightmostDigit(str: string, dec: number): number {
-  let i = str.lastIndexOf('e')
-  if (i > 0) return i
-  let c: number
-  for (i = str.length; --i > dec;) {
-    c = str.charCodeAt(i)
-    if (c >= 48 && c <= 57) return i + 1 // is digit
-  }
-  return i
+// --- the number half --------------------------------------------------------------------------
+
+type Formatter = (value: unknown) => string
+
+interface NumberEngine {
+  format(specifier: unknown): Formatter
+  formatPrefix(specifier: unknown, value: number): Formatter
 }
 
-function trimZeroes(numberFormat: (x: number) => string, decimalChar: string): (x: number) => string {
-  return (x) => {
-    const str = numberFormat(x)
-    const dec = str.indexOf(decimalChar)
-    if (dec < 0) return str
-    let idx = rightmostDigit(str, dec)
-    const end = idx < str.length ? str.slice(idx) : ''
-    while (--idx > dec) if (str[idx] !== '0') { ++idx; break }
-    return str.slice(0, idx) + end
+/**
+ * Cut the zeros that end the fraction of a formatted number: the text after the last digit (an exponent, a unit) stays.
+ * `decimal` is the locale's decimal mark. Text without a mark is returned as it is. When the text has a mark but no
+ * ASCII digit follows it (a locale with its own numerals) nothing is left: vega-format returns an empty string there.
+ */
+function trimFraction(text: string, decimal: string): string {
+  const mark = text.indexOf(decimal)
+  if (mark < 0) return text
+  let end = text.lastIndexOf('e')
+  if (!(end > 0)) {
+    end = NaN
+    for (let i = text.length - 1; i > mark; i--) {
+      const code = text.charCodeAt(i)
+      if (code >= 48 && code <= 57) {
+        end = i + 1
+        break
+      }
+    }
   }
+  if (Number.isNaN(end)) return ''
+  const tail = end < text.length ? text.slice(end) : ''
+  let keep = end
+  while (--keep > mark) {
+    if (text[keep] !== '0') {
+      keep++
+      break
+    }
+  }
+  return text.slice(0, keep) + tail
 }
 
-type NumberFormat = (spec: unknown) => (v: unknown) => string
+function numberLocale(engine: NumberEngine) {
+  const format = remember(engine.format)
+  const { formatPrefix } = engine
 
-/** The number half of a locale: memoized format/prefix plus the tick formatters. */
-function numberLocale(locale: { format: NumberFormat; formatPrefix: (spec: unknown, value: number) => (v: unknown) => string }) {
-  const format = memoize(locale.format)
-  const formatPrefix = locale.formatPrefix
+  /** A specifier with the precision a span of ticks needs, when it has none and the type calls for one. */
+  const withSpanPrecision = (spec: FormatSpecifier, step: number, largest: number): FormatSpecifier => {
+    if (spec.precision != null) return spec
+    switch (spec.type) {
+      case '':
+      case 'e':
+      case 'g':
+      case 'p':
+      case 'r': {
+        const precision = precisionRound(step, largest)
+        if (!isNaN(precision)) spec.precision = precision - (spec.type === 'e' ? 1 : 0)
+        break
+      }
+      case 'f':
+      case '%': {
+        const precision = precisionFixed(step)
+        if (!isNaN(precision)) spec.precision = precision - (spec.type === '%' ? 2 : 0)
+        break
+      }
+    }
+    return spec
+  }
+
   return {
     format,
     formatPrefix,
-    formatFloat(spec: unknown) {
-      const s = formatSpecifier(spec || ',')
-      if (s.precision == null) {
-        s.precision = 12
-        switch (s.type) {
-          case '%': s.precision = (s.precision as number) - 2; break
-          case 'e': s.precision = (s.precision as number) - 1; break
-        }
-        return trimZeroes(
-          format(s),          // number format
-          format('.1f')(1)[1] as string, // decimal point character
-        )
-      } else {
-        return format(s)
-      }
+    /** Format a number with its natural precision: given, or 12 significant digits with the zeros trimmed. */
+    formatFloat(specifier: unknown): Formatter {
+      const spec = formatSpecifier(specifier || ',')
+      if (spec.precision != null) return format(spec)
+      spec.precision = spec.type === '%' ? 10 : spec.type === 'e' ? 11 : 12
+      const decimal = format('.1f')(1)[1]!
+      const rounded = format(spec)
+      return (x) => trimFraction(rounded(x), decimal)
     },
-    formatSpan(start: number, stop: number, count: number, specifier: unknown) {
+    /** A formatter for tick labels spanning `start..stop` in about `count` ticks: just enough precision to tell them apart. */
+    formatSpan(start: number, stop: number, count: number, specifier: unknown): Formatter {
       const spec = formatSpecifier(specifier == null ? ',f' : specifier)
       const step = tickStep(start, stop, count)
-      const value = Math.max(Math.abs(start), Math.abs(stop))
-      let precision: number
-      if (spec.precision == null) {
-        switch (spec.type) {
-          case 's': {
-            precision = precisionPrefix(step, value)
-            if (!isNaN(precision)) {
-              spec.precision = precision
-            }
-            return formatPrefix(spec, value)
-          }
-          case '':
-          case 'e':
-          case 'g':
-          case 'p':
-          case 'r': {
-            precision = precisionRound(step, value)
-            if (!isNaN(precision)) {
-              spec.precision = precision - (spec.type === 'e' ? 1 : 0)
-            }
-            break
-          }
-          case 'f':
-          case '%': {
-            precision = precisionFixed(step)
-            if (!isNaN(precision)) {
-              spec.precision = precision - (spec.type === '%' ? 2 : 0)
-            }
-            break
-          }
-        }
+      const largest = Math.max(Math.abs(start), Math.abs(stop))
+      if (spec.precision == null && spec.type === 's') {
+        const precision = precisionPrefix(step, largest)
+        if (!isNaN(precision)) spec.precision = precision
+        return formatPrefix(spec, largest)
       }
-      return format(spec)
+      return format(withSpanPrecision(spec, step, largest))
     },
   }
 }
 
-let defaultNumberLocale: ReturnType<typeof numberLocale>
+type NumberLocale = ReturnType<typeof numberLocale>
 
-resetNumberFormatDefaultLocale()
-
-export function resetNumberFormatDefaultLocale(): ReturnType<typeof numberLocale> {
-  return defaultNumberLocale = numberLocale({
-    format: d3Format,
-    formatPrefix: d3FormatPrefix,
-  })
+function defaultNumberEngine(): NumberEngine {
+  return { format: defaultNumberFormat, formatPrefix: defaultNumberFormatPrefix }
 }
 
-export function numberFormatLocale(definition: FormatLocaleDefinition): ReturnType<typeof numberLocale> {
-  return numberLocale(d3FormatLocale(definition))
+let currentNumber: NumberLocale = numberLocale(defaultNumberEngine())
+
+export function resetNumberFormatDefaultLocale(): NumberLocale {
+  return (currentNumber = numberLocale(defaultNumberEngine()))
 }
 
-export function numberFormatDefaultLocale(definition?: FormatLocaleDefinition): ReturnType<typeof numberLocale> {
-  return arguments.length
-    ? (defaultNumberLocale = numberFormatLocale(definition as FormatLocaleDefinition))
-    : defaultNumberLocale
+export function numberFormatLocale(definition: FormatLocaleDefinition): NumberLocale {
+  return numberLocale(formatLocale(definition))
 }
 
-// --- the time half -----------------------------------------------------------
-
-type TimeFormat = (spec: string) => (v: unknown) => string
-
-function timeMultiFormat(
-  format: TimeFormat,
-  interval: (unit: string) => (import('./time.js').TimeInterval | undefined),
-  spec: unknown,
-): (date: unknown) => string {
-  spec = spec || {}
-  if (!isObject(spec)) {
-    error(`Invalid time multi-format specifier: ${spec}`)
-  }
-  const s = spec as Record<string, string>
-  const second = interval(SECONDS)!
-  const minute = interval(MINUTES)!
-  const hour = interval(HOURS)!
-  const day = interval(DATE)!
-  const week = interval(WEEK)!
-  const month = interval(MONTH)!
-  const quarter = interval(QUARTER)!
-  const year = interval(YEAR)!
-  const L = format(s[MILLISECONDS] || '.%L')
-  const S = format(s[SECONDS] || ':%S')
-  const M = format(s[MINUTES] || '%I:%M')
-  const H = format(s[HOURS] || '%I %p')
-  const d = format(s[DATE] || s[DAY] || '%a %d')
-  const w = format(s[WEEK] || '%b %d')
-  const m = format(s[MONTH] || '%B')
-  const q = format(s[QUARTER] || '%B')
-  const y = format(s[YEAR] || '%Y')
-  return (date: unknown) => (
-    second(date as Date) < (date as Date) ? L :
-    minute(date as Date) < (date as Date) ? S :
-    hour(date as Date) < (date as Date) ? M :
-    day(date as Date) < (date as Date) ? H :
-    month(date as Date) < (date as Date) ? (week(date as Date) < (date as Date) ? d : w) :
-    year(date as Date) < (date as Date) ? (quarter(date as Date) < (date as Date) ? m : q) :
-    y)(date)
+/** With no argument, the default number locale; with one, replace it. */
+export function numberFormatDefaultLocale(...definition: [FormatLocaleDefinition?]): NumberLocale {
+  return definition.length ? (currentNumber = numberFormatLocale(definition[0] as FormatLocaleDefinition)) : currentNumber
 }
 
-function timeLocale(locale: {
-  format: TimeFormat
-  parse: (spec: string) => (s: string) => Date | null
-  utcFormat: TimeFormat
-  utcParse: (spec: string) => (s: string) => Date | null
-}) {
-  const timeFormat = memoize(locale.format)
-  const utcFormat = memoize(locale.utcFormat)
-  return {
-    timeFormat: (spec: unknown) => isString(spec)
-      ? timeFormat(spec)
-      : timeMultiFormat(timeFormat, timeIntervalFor, spec),
-    utcFormat: (spec: unknown) => isString(spec)
-      ? utcFormat(spec)
-      : timeMultiFormat(utcFormat, utcIntervalFor, spec),
-    timeParse: memoize(locale.parse),
-    utcParse: memoize(locale.utcParse),
-  }
-}
+// --- the time half --------------------------------------------------------------------------------
 
-let defaultTimeLocale: ReturnType<typeof timeLocale>
-
-resetTimeFormatDefaultLocale()
-
-export function resetTimeFormatDefaultLocale(): ReturnType<typeof timeLocale> {
-  return defaultTimeLocale = timeLocale({
-    format: d3TimeFormat,
-    parse: d3TimeParse,
-    utcFormat: d3UtcFormat,
-    utcParse: d3UtcParse,
-  })
-}
-
-export function timeFormatLocale(definition: TimeLocaleDefinition): ReturnType<typeof timeLocale> {
-  return timeLocale(d3TimeFormatLocale(definition))
-}
-
-export function timeFormatDefaultLocale(definition?: TimeLocaleDefinition): ReturnType<typeof timeLocale> {
-  return arguments.length
-    ? (defaultTimeLocale = timeFormatLocale(definition as TimeLocaleDefinition))
-    : defaultTimeLocale
-}
-
-// --- the combined locale -----------------------------------------------------
-
-export type Locale = ReturnType<typeof numberLocale> & ReturnType<typeof timeLocale>
-
-const createLocale = (number: ReturnType<typeof numberLocale>, time: ReturnType<typeof timeLocale>): Locale =>
-  ({ ...number, ...time })
-
-/** The locale object: `format`, `formatPrefix`, `formatFloat`, `formatSpan`,
- *  `timeFormat`, `utcFormat`, `timeParse`, `utcParse`. */
-export function locale(numberSpec?: FormatLocaleDefinition, timeSpec?: TimeLocaleDefinition): Locale {
-  const number = numberSpec
-    ? numberFormatLocale(numberSpec)
-    : numberFormatDefaultLocale()
-  const time = timeSpec
-    ? timeFormatLocale(timeSpec)
-    : defaultTimeLocale
-  return createLocale(number, time)
-}
-
-let viewNumber: ReturnType<typeof numberLocale> | undefined
-let viewTime: ReturnType<typeof timeLocale> | undefined
-let viewLocale: Locale | undefined
+type TimeFormat = (specifier: string) => (value: unknown) => string
 
 /**
- * The CURRENT default locale as one object, rebuilt only when either default
- * changed. Callers that format repeatedly (expression `format`/`timeFormat`)
- * read it per call instead of snapshotting at import, so a later
- * `defaultLocale(...)` / `timeFormatDefaultLocale(...)` is honoured (C70).
+ * The formatter a time axis uses by default: one function that prints a date with the format of the coarsest unit the
+ * date starts exactly on. `spec` overrides the format per unit name (`milliseconds`, `seconds`, `minutes`, `hours`,
+ * `date`/`day`, `week`, `month`, `quarter`, `year`).
  */
-export function currentLocale(): Locale {
-  if (!viewLocale || viewNumber !== defaultNumberLocale || viewTime !== defaultTimeLocale) {
-    viewNumber = defaultNumberLocale
-    viewTime = defaultTimeLocale
-    viewLocale = createLocale(defaultNumberLocale, defaultTimeLocale)
+function multiFormat(format: TimeFormat, intervalOf: (unit: string) => TimeInterval | undefined, spec: unknown): (date: unknown) => string {
+  const formats = (spec || {}) as Record<string, string | undefined>
+  if (!isObject(formats)) error(`Invalid time multi-format specifier: ${formats}`)
+  const pick = (fallback: string, ...units: string[]): ((value: unknown) => string) => {
+    for (const unit of units) if (formats[unit]) return format(formats[unit]!)
+    return format(fallback)
   }
-  return viewLocale
+  const [second, minute, hour, day, week, month, quarter, year] =
+    [SECONDS, MINUTES, HOURS, DATE, WEEK, MONTH, QUARTER, YEAR].map((unit) => intervalOf(unit)!)
+  const millis = pick('.%L', MILLISECONDS)
+  const seconds = pick(':%S', SECONDS)
+  const minutes = pick('%I:%M', MINUTES)
+  const hours = pick('%I %p', HOURS)
+  const days = pick('%a %d', DATE, DAY)
+  const weeks = pick('%b %d', WEEK)
+  const months = pick('%B', MONTH)
+  const quarters = pick('%B', QUARTER)
+  const years = pick('%Y', YEAR)
+  const isOff = (floor: TimeInterval, date: unknown): boolean => floor(date) < (date as Date)
+  return (date) => (
+    isOff(second!, date) ? millis
+    : isOff(minute!, date) ? seconds
+    : isOff(hour!, date) ? minutes
+    : isOff(day!, date) ? hours
+    : isOff(month!, date) ? (isOff(week!, date) ? days : weeks)
+    : isOff(year!, date) ? (isOff(quarter!, date) ? months : quarters)
+    : years
+  )(date)
 }
 
-/** Read or set the default locale for both engines (vega-format's `defaultLocale`). */
-export function defaultLocale(numberSpec?: FormatLocaleDefinition, timeSpec?: TimeLocaleDefinition): Locale {
-  const args = arguments.length
-  if (args && args !== 2) {
-    error('defaultLocale expects either zero or two arguments.')
+interface TimeEngine {
+  format: TimeFormat
+  parse(specifier: string): (text: string) => Date | null
+  utcFormat: TimeFormat
+  utcParse(specifier: string): (text: string) => Date | null
+}
+
+function timeLocale(engine: TimeEngine) {
+  const local = remember(engine.format)
+  const utc = remember(engine.utcFormat)
+  return {
+    timeFormat: (spec: unknown) => (isString(spec) ? local(spec) : multiFormat(local, timeIntervalFor, spec)),
+    utcFormat: (spec: unknown) => (isString(spec) ? utc(spec) : multiFormat(utc, utcIntervalFor, spec)),
+    timeParse: remember(engine.parse),
+    utcParse: remember(engine.utcParse),
   }
-  return args
-    ? createLocale(
-        numberFormatDefaultLocale(numberSpec),
-        timeFormatDefaultLocale(timeSpec),
-      )
-    : createLocale(
-        numberFormatDefaultLocale(),
-        timeFormatDefaultLocale(),
-      )
+}
+
+type TimeLocale = ReturnType<typeof timeLocale>
+
+function defaultTimeEngine(): TimeEngine {
+  // read at the call: the engine's defaults are live bindings that `timeFormatDefaultLocale` of time-format.ts replaces
+  return { format: defaultTimeFormat, parse: defaultTimeParse, utcFormat: defaultUtcFormat, utcParse: defaultUtcParse }
+}
+
+let currentTime: TimeLocale = timeLocale(defaultTimeEngine())
+
+export function resetTimeFormatDefaultLocale(): TimeLocale {
+  return (currentTime = timeLocale(defaultTimeEngine()))
+}
+
+export function timeFormatLocale(definition: TimeLocaleDefinition): TimeLocale {
+  return timeLocale(makeTimeLocale(definition))
+}
+
+/** With no argument, the default time locale; with one, replace it. */
+export function timeFormatDefaultLocale(...definition: [TimeLocaleDefinition?]): TimeLocale {
+  return definition.length ? (currentTime = timeFormatLocale(definition[0] as TimeLocaleDefinition)) : currentTime
+}
+
+// --- both halves ------------------------------------------------------------------------------------
+
+export type Locale = NumberLocale & TimeLocale
+
+const join = (number: NumberLocale, time: TimeLocale): Locale => ({ ...number, ...time })
+
+/** A locale from definitions; a missing half is the default one. */
+export function locale(numberSpec?: FormatLocaleDefinition, timeSpec?: TimeLocaleDefinition): Locale {
+  return join(numberSpec ? numberFormatLocale(numberSpec) : currentNumber, timeSpec ? timeFormatLocale(timeSpec) : currentTime)
+}
+
+let joined: { number: NumberLocale; time: TimeLocale; locale: Locale } | undefined
+
+/**
+ * The CURRENT default locale as one object, rebuilt only when either default changed. Callers that format repeatedly
+ * (the expression `format` / `timeFormat`) read it per call, so a later `defaultLocale(...)` is honoured.
+ */
+export function currentLocale(): Locale {
+  if (!joined || joined.number !== currentNumber || joined.time !== currentTime) {
+    joined = { number: currentNumber, time: currentTime, locale: join(currentNumber, currentTime) }
+  }
+  return joined.locale
+}
+
+/** With no arguments, the default locale; with both definitions, replace the defaults. One argument is an error. */
+export function defaultLocale(...definitions: [FormatLocaleDefinition?, TimeLocaleDefinition?]): Locale {
+  if (definitions.length && definitions.length !== 2) error('defaultLocale expects either zero or two arguments.')
+  return definitions.length
+    ? join(numberFormatDefaultLocale(definitions[0] as FormatLocaleDefinition), timeFormatDefaultLocale(definitions[1] as TimeLocaleDefinition))
+    : join(currentNumber, currentTime)
 }
 
 export function resetDefaultLocale(): Locale {
