@@ -1,215 +1,203 @@
 /**
- * What vega-label draws into its offscreen canvases: the items of a mark, the way vega-scenegraph's canvas renderer draws them
- * (`Marks[type].draw(context, {items})`), reduced to what decides whether a pixel has any alpha: where the path is, whether
- * it is filled and / or stroked, with what width, cap, join and dash, and the alpha of the paint (opacity x fill / stroke
- * opacity x the colour's own). Gradients and patterns paint opaque. This is the same geometry as `canvas.ts` (the scene's
- * canvas renderer, which this add-on cannot import: a lite chart's bundle must not hold the canvas renderer, and it reaches
- * this module through the lazily loaded transforms add-on) -- the label tests draw the same marks through vega's own draw.
+ * The marks a `label` layout keeps its labels off, drawn onto the coverage-only canvas of `raster.ts`: after this, a pixel with
+ * any alpha is a pixel a label may not cover. Only what decides that is drawn: the path of each item, whether it is filled and /
+ * or stroked, the stroke's width, cap, join and dash, and the alpha of the paint (the item's opacity, its fill or stroke opacity
+ * and the colour's own). A gradient or a pattern paints opaque. An image is not drawn: a layout never waits for one to load.
+ *
+ * The geometry is the one the scene's canvas renderer (`canvas.ts`) draws. That renderer is not imported here: a lite chart's bundle
+ * must not hold it, and this module is reached through the lazily loaded transforms add-on.
  */
-import { SYMBOL_DEFAULT_SIZE } from './util.js'
-import type { SceneGroup, SceneItem } from './types.js'
+import type { AlphaCanvas } from './raster.js'
 import { parsePathData, tracePath } from './path-data.js'
 import { arcInto, computeAreaPath, computeLinePath, rectItemPath, symbolPath, textItemDesc, trailPath } from './render.js'
 import { fontString } from './text-metrics.js'
-import type { AlphaCanvas } from './raster.js'
+import type { SceneGroup, SceneItem } from './types.js'
+import { SYMBOL_DEFAULT_SIZE } from './util.js'
 
-type Rec = Record<string, unknown>
+/** An item as the painters read it: the scene's fields and the two scale factors of a path. */
+type Drawn = SceneItem & { scaleX?: number; scaleY?: number }
 
-const present = (paint: unknown): boolean => paint != null && paint !== false && paint !== 'transparent' && paint !== ''
-const colour = (paint: unknown): string => (typeof paint === 'string' && !paint.startsWith('url(') ? paint : '#000')
+const isPainted = (paint: unknown): boolean => paint != null && paint !== false && paint !== 'transparent' && paint !== ''
+/** The colour a canvas is given for a paint: the paint itself, or opaque black for a gradient or a pattern. */
+const colourOf = (paint: unknown): string => (typeof paint === 'string' && !paint.startsWith('url(') ? paint : '#000')
 
-/** vega-scenegraph `fill` then `stroke` of an item over the path just traced on the context. */
-function paint(ctx: AlphaCanvas, it: SceneItem, op: 'auto' | 'stroke' = 'auto'): void {
-  const opacity = it.opacity == null ? 1 : (it.opacity as number)
-  if (opacity === 0) return
-  const rec = it as unknown as Rec
-  if (op === 'auto' && present(it.fill)) {
-    const a = opacity * (it.fillOpacity == null ? 1 : (it.fillOpacity as number))
-    if (a > 0) {
-      ctx.globalAlpha = a
-      ctx.fillStyle = colour(it.fill)
-      ctx.fill()
-    }
-  }
-  if (present(it.stroke)) {
-    const lw = it.strokeWidth != null ? (it.strokeWidth as number) : 1
-    const a = opacity * (it.strokeOpacity == null ? 1 : (it.strokeOpacity as number))
-    if (lw > 0 && a > 0) {
-      ctx.globalAlpha = a
-      ctx.strokeStyle = colour(it.stroke)
-      ctx.lineWidth = lw
-      ctx.lineCap = (rec.strokeCap as string | undefined) || 'butt'
-      ctx.lineJoin = (rec.strokeJoin as string | undefined) || 'miter'
-      ctx.miterLimit = rec.strokeMiterLimit != null ? (rec.strokeMiterLimit as number) : 4
-      ctx.setLineDash((rec.strokeDash as number[] | undefined) ?? [])
-      ctx.lineDashOffset = (rec.strokeDashOffset as number | undefined) || 0
-      ctx.stroke()
-      ctx.setLineDash([])
-    }
-  }
-  ctx.globalAlpha = 1
-}
-
-/** Trace a frame (translate, rotate, scale) around a path, as the canvas does for items with an angle. */
-function inFrame(ctx: AlphaCanvas, x: number, y: number, angle: number, sx: number, sy: number, build: () => void): void {
-  ctx.save()
-  ctx.translate(x, y)
-  if (angle) ctx.rotate((angle * Math.PI) / 180)
-  if (sx !== 1 || sy !== 1) ctx.scale(sx, sy)
-  ctx.beginPath()
-  build()
-  ctx.restore()
-}
-
-/** Draw the items of one mark (`group.items`, `group.marktype`) onto the coverage context. */
-export function drawMark(group: SceneGroup, ctx: AlphaCanvas): void {
-  const items = (group.items ?? []) as SceneItem[]
-  switch (group.marktype) {
-    case 'line': {
-      const info = computeLinePath(group, true)
-      if (!info) return
-      ctx.beginPath()
-      tracePath(ctx, parsePathData(info.path))
-      // vega draws a line mark from its first item, the stroke width defaulting to 2 with a stroke
-      paint(ctx, { ...items[0]!, strokeWidth: info.sw ?? items[0]!.strokeWidth } as SceneItem)
-      return
-    }
-    case 'area': {
-      const info = computeAreaPath(group, true)
-      if (!info) return
-      ctx.beginPath()
-      tracePath(ctx, parsePathData(info.path))
-      paint(ctx, items[0]!)
-      return
-    }
-    case 'symbol':
-      for (const it of items) {
-        const rec = it as unknown as Rec
-        const x = it.x || 0
-        const y = it.y || 0
-        const r = Math.sqrt((it.size as number) ?? SYMBOL_DEFAULT_SIZE) / 2
-        const segs = parsePathData(symbolPath(rec.shape as string | undefined, r))
-        const angle = (rec.angle as number) || 0
-        if (angle) inFrame(ctx, x, y, angle, 1, 1, () => tracePath(ctx, segs))
-        else { ctx.beginPath(); tracePath(ctx, segs, x, y) }
-        paint(ctx, it)
-      }
-      return
-    case 'circle':
-      for (const it of items) {
-        if (it.x == null || it.y == null) continue
-        const r = it.radius != null ? it.radius : Math.sqrt((it.size as number) ?? SYMBOL_DEFAULT_SIZE) / 2
-        ctx.beginPath()
-        ctx.arc(it.x, it.y, r, 0, 2 * Math.PI, false)
-        paint(ctx, it)
-      }
-      return
-    case 'rect':
-      // vega paints rects in item order and skips unpainted items
-      for (const it of items) {
-        if (it.fill == null && it.stroke == null) continue
-        const d = rectItemPath(it)
-        if (d == null) continue
-        ctx.beginPath()
-        tracePath(ctx, parsePathData(d))
-        paint(ctx, it)
-      }
-      return
-    case 'rule':
-      for (const it of items) {
-        if (it.stroke == null) continue
-        const x = it.x ?? 0
-        const y = it.y ?? 0
-        ctx.beginPath()
-        ctx.moveTo(x, y)
-        ctx.lineTo(it.x2 ?? x, it.y2 ?? y)
-        paint(ctx, it, 'stroke')
-      }
-      return
-    case 'trail': {
-      if (items.length <= 1) return
-      const d = trailPath(items)
-      if (!d) return
-      ctx.beginPath()
-      tracePath(ctx, parsePathData(d))
-      paint(ctx, items[0]!)
-      return
-    }
-    case 'path':
-    case 'shape':
-    case 'geoshape': {
-      // (only a path mark parses a path string: vega draws its arcs as beziers; a shape's geo path goes to the context directly)
-      const arcs = group.marktype === 'path' ? 'bezier' : 'exact'
-      for (const it of items) {
-        if (!it.path) continue
-        const rec = it as unknown as Rec
-        const segs = parsePathData(it.path)
-        inFrame(ctx, it.x || 0, it.y || 0, (rec.angle as number) || 0, (rec.scaleX as number) || 1, (rec.scaleY as number) || 1, () => tracePath(ctx, segs, 0, 0, arcs))
-        paint(ctx, it)
-      }
-      return
-    }
-    case 'arc':
-      for (const it of items) {
-        const rec = it as unknown as Rec
-        const ax = it.x || 0
-        const ay = it.y || 0
-        const angle = (rec.angle as number | undefined) || 0
-        ctx.translate(ax, ay)
-        if (angle) ctx.rotate((angle * Math.PI) / 180)
-        ctx.beginPath()
-        arcInto(ctx, 0, 0, (it.outerRadius as number) ?? (it.radius as number) ?? 0, (it.innerRadius as number) ?? 0, (it.startAngle as number) ?? 0, (it.endAngle as number) ?? 0, (rec.cornerRadius as number | undefined) ?? 0, (rec.padAngle as number | undefined) ?? 0)
-        if (angle) ctx.rotate((-angle * Math.PI) / 180)
-        ctx.translate(-ax, -ay)
-        paint(ctx, it)
-      }
-      return
-    case 'text':
-      for (const it of items) text(ctx, it)
-      return
-    default:
-      // (an image paints once its bitmap is loaded, which a layout never waits for)
-      return
+/** The alpha an item fills and strokes with (0: not at all) and the width it strokes with. */
+function inkOf(item: Drawn, width = item.strokeWidth ?? 1): { fill: number; stroke: number; width: number } {
+  const opacity = item.opacity ?? 1
+  return {
+    fill: isPainted(item.fill) ? opacity * (item.fillOpacity ?? 1) : 0,
+    stroke: isPainted(item.stroke) && width > 0 ? opacity * (item.strokeOpacity ?? 1) : 0,
+    width,
   }
 }
 
-/** vega-scenegraph's canvas text draw: the box of each line (glyph coverage is not modelled, see `AlphaCanvas.fillText`). */
-function text(ctx: AlphaCanvas, it: SceneItem): void {
-  const opacity = it.opacity == null ? 1 : (it.opacity as number)
-  if (opacity === 0 || (it as unknown as Rec).fontSize as number <= 0) return
-  const d = textItemDesc(it)
-  if (d == null || it.text == null || (typeof it.text === 'string' && it.text.length === 0)) return
-  ctx.save()
-  ctx.font = fontString(it as never)
-  ctx.textAlign = it.align || 'left'
-  ctx.textBaseline = 'alphabetic'
-  let x = d.px
-  let y = d.py
-  if (d.angle) {
-    ctx.translate(d.px, d.py)
-    ctx.rotate((d.angle * Math.PI) / 180)
-    x = d.ox
-    y = d.oy
+/** Fill, then stroke, the path last traced on `pen`. */
+function ink(pen: AlphaCanvas, item: Drawn, opts: { fill?: boolean; width?: number } = {}): void {
+  const { fill, stroke, width } = inkOf(item, opts.width)
+  if (opts.fill !== false && fill > 0) {
+    pen.globalAlpha = fill
+    pen.fillStyle = colourOf(item.fill)
+    pen.fill()
   }
-  for (let i = 0; i < d.lines.length; i++) {
-    const ly = i === 0 ? y : y + i * d.lineHeight
-    if (present(it.fill)) {
-      const a = opacity * (it.fillOpacity == null ? 1 : (it.fillOpacity as number))
-      if (a > 0) {
-        ctx.globalAlpha = a
-        ctx.fillStyle = colour(it.fill)
-        ctx.fillText(d.lines[i]!, x, ly)
-      }
-    }
-    if (present(it.stroke)) {
-      const lw = it.strokeWidth != null ? (it.strokeWidth as number) : 1
-      const a = opacity * (it.strokeOpacity == null ? 1 : (it.strokeOpacity as number))
-      if (lw > 0 && a > 0) {
-        ctx.globalAlpha = a
-        ctx.strokeStyle = colour(it.stroke)
-        ctx.strokeText(d.lines[i]!, x, ly)
-      }
-    }
+  if (stroke > 0) {
+    pen.globalAlpha = stroke
+    pen.strokeStyle = colourOf(item.stroke)
+    pen.lineWidth = width
+    pen.lineCap = item.strokeCap || 'butt'
+    pen.lineJoin = item.strokeJoin || 'miter'
+    pen.miterLimit = item.strokeMiterLimit ?? 4
+    pen.setLineDash(item.strokeDash ?? [])
+    pen.lineDashOffset = item.strokeDashOffset || 0
+    pen.stroke()
+    pen.setLineDash([])
   }
-  ctx.restore()
+  pen.globalAlpha = 1
+}
+
+/** Trace a path inside a frame (translated, then rotated, then scaled), as a canvas does for an item with an angle. */
+function inFrame(pen: AlphaCanvas, x: number, y: number, degrees: number, sx: number, sy: number, trace: () => void): void {
+  pen.save()
+  pen.translate(x, y)
+  if (degrees) pen.rotate((degrees * Math.PI) / 180)
+  if (sx !== 1 || sy !== 1) pen.scale(sx, sy)
+  pen.beginPath()
+  trace()
+  pen.restore()
+}
+
+/** A mark painter: draws the `items` of `group` (a mark's container). */
+type Painter = (pen: AlphaCanvas, items: Drawn[], group: SceneGroup) => void
+
+/** A path string as a path on the pen, and the item painted over it. */
+function inkPath(pen: AlphaCanvas, d: string, item: Drawn, opts?: { fill?: boolean; width?: number }): void {
+  pen.beginPath()
+  tracePath(pen, parsePathData(d))
+  ink(pen, item, opts)
+}
+
+const byType: Record<string, Painter> = {
+  // one path for the whole mark, painted as its first item is
+  line: (pen, items, group) => {
+    const line = computeLinePath(group, true)
+    // (a line with a stroke and no width strokes 2 wide)
+    if (line) inkPath(pen, line.path, items[0]!, { width: line.sw ?? items[0]!.strokeWidth })
+  },
+  area: (pen, items, group) => {
+    const area = computeAreaPath(group, true)
+    if (area) inkPath(pen, area.path, items[0]!)
+  },
+  trail: (pen, items) => {
+    const d = items.length > 1 ? trailPath(items) : ''
+    if (d) inkPath(pen, d, items[0]!)
+  },
+
+  symbol: (pen, items) => {
+    for (const it of items) {
+      const half = Math.sqrt(it.size ?? SYMBOL_DEFAULT_SIZE) / 2
+      const segs = parsePathData(symbolPath(it.shape, half))
+      const x = it.x || 0
+      const y = it.y || 0
+      if (it.angle) inFrame(pen, x, y, it.angle, 1, 1, () => tracePath(pen, segs))
+      else {
+        pen.beginPath()
+        tracePath(pen, segs, x, y)
+      }
+      ink(pen, it)
+    }
+  },
+  circle: (pen, items) => {
+    for (const it of items) {
+      if (it.x == null || it.y == null) continue
+      pen.beginPath()
+      pen.arc(it.x, it.y, it.radius ?? Math.sqrt(it.size ?? SYMBOL_DEFAULT_SIZE) / 2, 0, 2 * Math.PI, false)
+      ink(pen, it)
+    }
+  },
+  rect: (pen, items) => {
+    for (const it of items) {
+      if (it.fill == null && it.stroke == null) continue
+      const d = rectItemPath(it)
+      if (d != null) inkPath(pen, d, it)
+    }
+  },
+  rule: (pen, items) => {
+    for (const it of items) {
+      if (it.stroke == null) continue
+      const x = it.x ?? 0
+      const y = it.y ?? 0
+      pen.beginPath()
+      pen.moveTo(x, y)
+      pen.lineTo(it.x2 ?? x, it.y2 ?? y)
+      ink(pen, it, { fill: false })
+    }
+  },
+  arc: (pen, items) => {
+    for (const it of items) {
+      const x = it.x || 0
+      const y = it.y || 0
+      const degrees = it.angle || 0
+      pen.translate(x, y)
+      if (degrees) pen.rotate((degrees * Math.PI) / 180)
+      pen.beginPath()
+      arcInto(pen, 0, 0, it.outerRadius ?? it.radius ?? 0, it.innerRadius ?? 0, it.startAngle ?? 0, it.endAngle ?? 0, it.cornerRadius ?? 0, it.padAngle ?? 0)
+      if (degrees) pen.rotate((-degrees * Math.PI) / 180)
+      pen.translate(-x, -y)
+      ink(pen, it)
+    }
+  },
+  text: (pen, items) => {
+    for (const it of items) inkText(pen, it)
+  },
+}
+
+/** A path mark's arcs are cubic beziers, as a canvas draws them; the path of a shape or a geoshape goes to the canvas as it is. */
+const pathPainter = (arcs: 'bezier' | 'exact'): Painter => (pen, items) => {
+  for (const it of items) {
+    if (!it.path) continue
+    const segs = parsePathData(it.path)
+    inFrame(pen, it.x || 0, it.y || 0, it.angle || 0, it.scaleX || 1, it.scaleY || 1, () => tracePath(pen, segs, 0, 0, arcs))
+    ink(pen, it)
+  }
+}
+byType.path = pathPainter('bezier')
+byType.shape = byType.geoshape = pathPainter('exact')
+const painters = new Map(Object.entries(byType))
+
+/** A text item: the box of each of its lines (glyph coverage is not modelled, see `AlphaCanvas.fillText`). */
+function inkText(pen: AlphaCanvas, it: Drawn): void {
+  const { fill, stroke } = inkOf(it)
+  if (it.opacity === 0 || (it.fontSize as number) <= 0) return
+  const desc = textItemDesc(it)
+  if (desc == null || it.text == null || it.text === '') return
+  pen.save()
+  pen.font = fontString(it as never)
+  pen.textAlign = it.align || 'left'
+  pen.textBaseline = 'alphabetic'
+  let x = desc.px
+  let y = desc.py
+  if (desc.angle) {
+    pen.translate(desc.px, desc.py)
+    pen.rotate((desc.angle * Math.PI) / 180)
+    x = desc.ox
+    y = desc.oy
+  }
+  desc.lines.forEach((line, i) => {
+    const baseline = i === 0 ? y : y + i * desc.lineHeight
+    if (fill > 0) {
+      pen.globalAlpha = fill
+      pen.fillStyle = colourOf(it.fill)
+      pen.fillText(line, x, baseline)
+    }
+    if (stroke > 0) {
+      pen.globalAlpha = stroke
+      pen.strokeStyle = colourOf(it.stroke)
+      pen.strokeText(line, x, baseline)
+    }
+  })
+  pen.restore()
+}
+
+/** Draw the items of one mark (`group.items` of kind `group.marktype`) onto the coverage canvas. */
+export function drawMark(group: SceneGroup, pen: AlphaCanvas): void {
+  painters.get(group.marktype as string)?.(pen, (group.items ?? []) as Drawn[], group)
 }
