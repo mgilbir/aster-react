@@ -175,6 +175,10 @@ function genXY(r: () => number, n: number, kind: number, positive: boolean): Arr
     rows[Math.floor(r() * rows.length)]!.y = NaN
   } else if (odd < 0.4 && rows.length) {
     rows[Math.floor(r() * rows.length)]!.y = (r() - 0.5) * 1e6
+  } else if (odd < 0.46 && rows.length) {
+    rows[Math.floor(r() * rows.length)]!.y = [Infinity, -Infinity, 1e300, -1e300][Math.floor(r() * 4)]!
+  } else if (odd < 0.5 && rows.length) {
+    rows[Math.floor(r() * rows.length)]!.x = [Infinity, -Infinity, 1e300, 'abc', true, ''][Math.floor(r() * 6)]!
   }
   return rows
 }
@@ -205,7 +209,10 @@ const regressionParams = (r: () => number): Record<string, unknown> => {
   const method = ['linear', 'log', 'exp', 'pow', 'quad', 'poly', 'constant', undefined][Math.floor(r() * 8)]
   const p: Record<string, unknown> = { type: 'regression' }
   if (method !== undefined) p.method = method
-  if (method === 'poly' || r() < 0.05) p.order = Math.floor(r() * 8) + (r() < 0.1 ? 0 : 1)
+  if (method === 'poly' || r() < 0.05) {
+    p.order = Math.floor(r() * 8) + (r() < 0.1 ? 0 : 1)
+    if (r() < 0.12) p.order = [-1, 0.5, 2.5, 3.5, '3', '2', NaN, 1.5, null][Math.floor(r() * 9)] // odd orders: the same refusal or the same fit
+  }
   if (r() < 0.3) p.extent = [(r() - 0.3) * 10, 5 + r() * 30]
   if (r() < 0.3) p.params = true
   if (r() < 0.15) p.as = ['px', 'py']
