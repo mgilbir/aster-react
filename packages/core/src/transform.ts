@@ -322,7 +322,7 @@ function applyTransform(rows: Row[], t0: CompiledTransform, ctx: TransformContex
     case 'identifier':
       return identifierRows(rows, t)
     case 'pivot':
-      return pivotRows(rows, t as { field?: unknown; value?: unknown })
+      return pivotRows(rows, t as { field?: unknown; value?: unknown }, ctx.runtime.random)
     default:
       throw new Error(`[aster] unsupported transform type "${(t as { type: string }).type}"`)
   }

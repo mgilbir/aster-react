@@ -280,7 +280,7 @@ class TupleStore {
     this._ext = null
     this._get = null
     this._q = null
-    this._ci = null
+    // (the bootstrap interval is not forgotten: vega's reset keeps it, and a later read under the same accessor returns it)
   }
   add(v: Row): void { this._add.push(v) }
   rem(v: Row): void { this._rem.add(v); this._remN++ }
@@ -820,7 +820,7 @@ export interface PivotParams {
 }
 
 /** vega `pivot`: an aggregate with one measure per distinct pivot key (sorted ascending). */
-export function pivotRows(rows: readonly Row[], p: PivotParams): Row[] {
+export function pivotRows(rows: readonly Row[], p: PivotParams, random?: () => number): Row[] {
   const key = fieldOf(p.field)
   const value = fieldOf(p.value)
   const op = (p.op === 'count' ? '__count__' : p.op) as string || 'sum'
@@ -838,7 +838,7 @@ export function pivotRows(rows: readonly Row[], p: PivotParams): Row[] {
   checkPivotWidth(keys.length)
   const fields = keys.map((k) => accessor((d: unknown) => (key(d) === k ? value(d) : NaN), fieldNames, k + ''))
   const ms = buildMeasures(keys.map(() => op), fields, keys.map((k) => k + ''), [], [])
-  const a = makeAggregator(p.groupby, p.key, ms, newEnv())
+  const a = makeAggregator(p.groupby, p.key, ms, newEnv(random))
   for (let i = 0; i < rows.length; i++) {
     addTuple(a, rows[i]!)
     meterTick('pivot', keys.length)

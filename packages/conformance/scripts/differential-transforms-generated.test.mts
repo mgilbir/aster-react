@@ -304,12 +304,13 @@ function genMeasures(r: Rng, pool: string[], nested: boolean): { ops: string[]; 
 function genAggregateLike(r: Rng, type: 'aggregate' | 'joinaggregate'): Case {
   const nested = r.chance(0.3)
   const m = genMeasures(r, AGG_OPS, nested)
-  const groupby = r.pick<string[] | undefined>([undefined, [], ['g'], ['g'], ['g', 'h'], nested ? ['a.g'] : ['h']])
+  const groupby = r.pick<string[] | undefined>([undefined, [], ['g'], ['g'], ['g', 'h'], nested ? ['a.g'] : ['h'], ['a.g', 'h']])
   const t: Record<string, unknown> = { type, ...(groupby ? { groupby } : {}), fields: m.fields, ops: m.ops }
   if (m.as) t.as = m.as
   if (m.aggregate_params) t.aggregate_params = m.aggregate_params
   if (type === 'aggregate') {
-    if (groupby && groupby.length > 1 && r.chance(0.25)) t.cross = true
+    // (cross fills the missing cells from the group values alone, so a nested group path cannot be read back: both sides throw a TypeError)
+    if (groupby && groupby.length > 1 && r.chance(0.25) && !groupby.some((g) => /[.[\\]/.test(g))) t.cross = true
     if (r.chance(0.1)) t.drop = false
   }
   if (r.chance(0.08)) t.key = r.pick(['k', 'i', 'g'])
@@ -355,11 +356,28 @@ function genWindow(r: Rng): Case {
   return { t: [withSignals(r, t, ['frame', 'ignorePeers', 'params'], signals)], rows: genRows(r, r.chance(0.08) ? 0 : r.between(1, 30)), signals }
 }
 
+
+/**
+ * Windows whose measures read the stored rows of a frame through SEVERAL fields (min, max, quartiles, distinct, argmin... over v, w and
+ * k at once, over sliding frames): the rows a frame holds are shared by every field's measures, and what one field's read leaves
+ * behind is seen by the next field's.
+ */
+function genWindowStores(r: Rng): Case {
+  const pool = ['min', 'max', 'median', 'q1', 'q3', 'distinct', 'argmin', 'argmax', 'values', 'sum', 'mean', 'valid', 'missing', 'ci0']
+  const n = r.between(3, 7)
+  const ops = Array.from({ length: n }, () => r.pick(pool))
+  const fields = ops.map(() => r.pick(['v', 'w', 'k']))
+  const t: Record<string, unknown> = { type: 'window', ops, fields, sort: { field: 'i' }, frame: r.pick([[-2, 0], [-1, 1], [null, 0], [0, null], [-3, 3], [-1, 0], [0, 2]]) }
+  if (r.chance(0.5)) t.groupby = ['g']
+  if (r.chance(0.3)) t.ignorePeers = true
+  return { t: [t], rows: genRows(r, r.between(2, 25)) }
+}
+
 function genPivot(r: Rng): Case {
   const keyPools: unknown[][] = [['x', 'y', 'z'], ['x', 'y', 'z', 'b', 'a', 10, 2, null, '2'], [1, 2, 3, 10], [D('2020-01-01'), D('2019-01-01')]]
   const keys = r.pick(keyPools)
   const rows = genRows(r, r.between(0, 30)).map((row) => ({ ...row, p: r.pick(keys) }))
-  const op = r.pick<string | undefined>([undefined, ...AGG_OPS.filter((o) => o !== 'exponential' && o !== 'exponentialb' && o !== 'ci0' && o !== 'ci1')])
+  const op = r.pick<string | undefined>([undefined, ...AGG_OPS.filter((o) => o !== 'exponential' && o !== 'exponentialb')])
   const t: Record<string, unknown> = { type: 'pivot', field: 'p', value: r.pick(['v', 'w', 'k']), ...(op ? { op } : {}) }
   if (r.chance(0.7)) t.groupby = r.pick([['g'], ['h'], ['g', 'h']])
   if (r.chance(0.35)) t.limit = r.pick([0, 1, 2, 3, 10, '2', null])
@@ -500,6 +518,7 @@ const SUITES: Array<{ name: string; seed: number; count: number; gen: (r: Rng) =
   { name: 'aggregate', seed: 0xa601, count: 700, gen: (r) => genAggregateLike(r, 'aggregate'), maxCrashShare: 0.02 },
   { name: 'joinaggregate', seed: 0xa602, count: 350, gen: (r) => genAggregateLike(r, 'joinaggregate'), maxCrashShare: 0.02 },
   { name: 'window', seed: 0xa603, count: 900, gen: genWindow, maxCrashShare: 0.2 },
+  { name: 'window stores over several fields', seed: 0xa60b, count: 500, gen: genWindowStores, maxCrashShare: 0.02 },
   { name: 'pivot', seed: 0xa604, count: 300, gen: genPivot, maxCrashShare: 0.02 },
   { name: 'bin', seed: 0xa605, count: 700, gen: genBin, maxCrashShare: 0.02 },
   { name: 'stack', seed: 0xa606, count: 350, gen: genStack, maxCrashShare: 0.02 },
@@ -525,9 +544,17 @@ describe('generated transform differential vs real Vega (live, same engine)', { 
           process.env.TZ = tz
           if (process.env.ASTER_GEN_SHOW === `${s.name}#${i}`) {
             const [w, a] = [await runVega(c), runAster(c, false)]
-            console.log('CASE', JSON.stringify({ t: c.t, signals: c.signals, extra: c.extra, rows: c.rows }, (_k, v) => (typeof v === 'number' && !Number.isFinite(v) ? String(v) : v)))
-            console.log('VEGA', JSON.stringify(w.error ? String(w.error) : w.out, (_k, v) => (typeof v === 'number' && !Number.isFinite(v) ? String(v) : v)))
-            console.log('ASTER', JSON.stringify(a.error ? String(a.error) : a.out, (_k, v) => (typeof v === 'number' && !Number.isFinite(v) ? String(v) : v)))
+            const dump = (v: unknown): string => {
+              const seen = new WeakSet<object>()
+              return JSON.stringify(v, (_k, x) => {
+                if (typeof x === 'number' && !Number.isFinite(x)) return String(x)
+                if (x && typeof x === 'object') { if (seen.has(x)) return '[cycle]'; seen.add(x) }
+                return x
+              })
+            }
+            console.log('CASE', dump({ t: c.t, signals: c.signals, extra: c.extra, rows: c.rows }))
+            console.log('VEGA', dump(w.error ? String(w.error) : w.out))
+            console.log('ASTER', dump(a.error ? String(a.error) : a.out))
           }
           const why = await check(c, tally)
           if (why) {
