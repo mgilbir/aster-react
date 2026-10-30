@@ -83,10 +83,13 @@ function joinEnds(pieces: Piece[]): void {
   })
 }
 
-type Emit = (x: number, y: number) => void
-
-/** Writes the boundary stretch from one crossing to the next (`direction` 1 or -1) as points. */
-type Interpolator = (from: Spot | null, to: Spot | null, direction: number, emit: Emit) => void
+/** The boundary of a clip region, as re-joining needs it. */
+interface Boundary {
+  /** the order of crossings along the boundary */
+  compare(a: Spot, b: Spot): number
+  /** write the boundary stretch from one crossing to the next (`direction` 1 or -1) as points */
+  interpolate(from: Spot | null, to: Spot | null, direction: number, out: Events, src: number): void
+}
 
 /* ---- re-joining cut rings ---------------------------------------------------------------------- */
 
@@ -112,20 +115,18 @@ function thread(list: Crossing[]): void {
 
 /**
  * Join the cut pieces of a polygon's rings into closed rings. `crossings` along the boundary are sorted
- * by `compare` and alternately entering and leaving the region, starting from `startInside`; a ring is
+ * by `boundary.compare` and alternately entering and leaving the region, starting from `startInside`; a ring is
  * traced by following a piece to where it leaves, then the boundary to the next entering crossing.
  */
 function rejoin(
   pieces: readonly Piece[],
-  compare: (a: Spot, b: Spot) => number,
+  region: Boundary,
   startInside: boolean,
-  interpolate: Interpolator,
   out: Events,
   src: number,
 ): void {
   const subject: Crossing[] = []
   const boundary: Crossing[] = []
-  const emit: Emit = (x, y) => out.point(x, y, src)
   for (const piece of pieces) {
     const n = piece.xy.length / 2 - 1
     if (n <= 0) continue
@@ -149,7 +150,7 @@ function rejoin(
     tail.twin.twin = tail
   }
   if (!subject.length) return
-  boundary.sort((a, b) => compare(a, b))
+  boundary.sort((a, b) => region.compare(a, b))
   thread(subject)
   thread(boundary)
   for (const crossing of boundary) crossing.entering = startInside = !startInside
@@ -165,13 +166,13 @@ function rejoin(
       current.visited = current.twin.visited = true
       if (current.entering) {
         if (onSubject) for (let i = 0; i < points!.xy.length; i += 2) out.point(points!.xy[i]!, points!.xy[i + 1]!, src)
-        else interpolate(current, current.next, 1, emit)
+        else region.interpolate(current, current.next, 1, out, src)
         current = current.next
       } else {
         if (onSubject) {
           points = current.prev.piece
           for (let i = points!.xy.length - 2; i >= 0; i -= 2) out.point(points!.xy[i]!, points!.xy[i + 1]!, src)
-        } else interpolate(current, current.prev, -1, emit)
+        } else region.interpolate(current, current.prev, -1, out, src)
         current = current.prev
       }
       current = current.twin
@@ -197,7 +198,7 @@ export interface SphereClipper {
   cut(line: Run, closed: boolean, startSrc: number, endSrc: number, sink: PieceSink): number
   /** Whether closed ring `ring` lies wholly inside the region, so that cutting it would only copy it (optional shortcut). */
   keepsWhole?(ring: Run): boolean
-  interpolate: Interpolator
+  interpolate(from: Spot | null, to: Spot | null, direction: number, out: Events, src: number): void
   /** the order of crossings along the boundary */
   compare(a: Spot, b: Spot): number
 }
@@ -282,27 +283,27 @@ export const antimeridian: SphereClipper = {
     sink.end(endSrc)
     return 2 - clean
   },
-  interpolate(from, to, direction, emit) {
+  interpolate(from, to, direction, out, src) {
     if (from == null) {
       // the whole outline of the sphere: the rectangle that the antimeridian cut opens it into
       const phi = direction * HALF_PI
-      emit(-PI, phi)
-      emit(0, phi)
-      emit(PI, phi)
-      emit(PI, 0)
-      emit(PI, -phi)
-      emit(0, -phi)
-      emit(-PI, -phi)
-      emit(-PI, 0)
-      emit(-PI, phi)
+      out.point(-PI, phi, src)
+      out.point(0, phi, src)
+      out.point(PI, phi, src)
+      out.point(PI, 0, src)
+      out.point(PI, -phi, src)
+      out.point(0, -phi, src)
+      out.point(-PI, -phi, src)
+      out.point(-PI, 0, src)
+      out.point(-PI, phi, src)
     } else if (Math.abs(from.x - to!.x) > EPSILON) {
       // between the two sides of the cut, along the pole that lies between them
       const lambda = from.x < to!.x ? PI : -PI
       const phi = (direction * lambda) / 2
-      emit(-lambda, phi)
-      emit(0, phi)
-      emit(lambda, phi)
-    } else emit(to!.x, to!.y)
+      out.point(-lambda, phi, src)
+      out.point(0, phi, src)
+      out.point(lambda, phi, src)
+    } else out.point(to!.x, to!.y, src)
   },
   compare: compareAlongCut,
 }
@@ -335,9 +336,11 @@ export class CircleClipper implements SphereClipper {
     return Math.cos(lambda) * Math.cos(phi) > this.cosRadius
   }
 
-  compare = compareAlongCut
+  compare(a: Spot, b: Spot): number {
+    return compareAlongCut(a, b)
+  }
 
-  interpolate: Interpolator = (from, to, direction, emit) => {
+  interpolate(from: Spot | null, to: Spot | null, direction: number, out: Events, src: number): void {
     const { radius, cosRadius, step: delta } = this
     if (!delta) return
     const sinRadius = Math.sin(radius)
@@ -354,7 +357,7 @@ export class CircleClipper implements SphereClipper {
     }
     for (let t = t0; direction > 0 ? t > t1 : t < t1; t -= step) {
       const at = lonLat([cosRadius, -sinRadius * Math.cos(t), -sinRadius * Math.sin(t)])
-      emit(at[0], at[1])
+      out.point(at[0], at[1], src)
     }
   }
 
@@ -490,9 +493,9 @@ export class CircleClipper implements SphereClipper {
 }
 
 /** Writes the ring a polygon-covering clip region leaves when no piece of the polygon crosses its boundary. */
-function emitBoundaryRing(clipper: { interpolate: Interpolator }, out: Events, src: number): void {
+function emitBoundaryRing(clipper: Boundary, out: Events, src: number): void {
   out.mark(LINE_START, src)
-  clipper.interpolate(null, null, 1, (x, y) => out.point(x, y, src))
+  clipper.interpolate(null, null, 1, out, src)
   out.mark(LINE_END, src)
 }
 
@@ -567,7 +570,7 @@ class SphereClip {
     const startInside = polygonContains(this.rings, lambda, phi)
     if (pieces.length) {
       this.startPolygon(src)
-      rejoin(pieces, (a, b) => clipper.compare(a, b), startInside, clipper.interpolate, out, src)
+      rejoin(pieces, clipper, startInside, out, src)
     } else if (startInside) {
       this.startPolygon(src)
       emitBoundaryRing(clipper, out, src)
@@ -717,19 +720,19 @@ export class Rectangle {
   }
 
   /** Order boundary positions clockwise from the top-left corner. */
-  compare = (a: Spot, b: Spot): number => {
+  compare(a: Spot, b: Spot): number {
     const ca = this.corner(a, 1)
     const cb = this.corner(b, 1)
     return ca !== cb ? ca - cb : ca === 0 ? b.y - a.y : ca === 1 ? a.x - b.x : ca === 2 ? a.y - b.y : b.x - a.x
   }
 
-  interpolate: Interpolator = (from, to, direction, emit) => {
+  interpolate(from: Spot | null, to: Spot | null, direction: number, out: Events, src: number): void {
     let a = 0
     let a1 = 0
     if (from == null || (a = this.corner(from, direction)) !== (a1 = this.corner(to!, direction)) || this.compare(from, to!) < 0 !== direction > 0) {
-      do emit(a === 0 || a === 3 ? this.x0 : this.x1, a > 1 ? this.y1 : this.y0)
+      do out.point(a === 0 || a === 3 ? this.x0 : this.x1, a > 1 ? this.y1 : this.y0, src)
       while ((a = (a + direction + 4) % 4) !== a1)
-    } else emit(to!.x, to!.y)
+    } else out.point(to!.x, to!.y, src)
   }
 
   /**
@@ -875,7 +878,7 @@ class RectClip {
     if (cleanInside || all.length) {
       out.mark(POLYGON_START, src)
       if (cleanInside) emitBoundaryRing(rect, out, src)
-      if (all.length) rejoin(all, rect.compare, startInside, rect.interpolate, out, src)
+      if (all.length) rejoin(all, rect, startInside, out, src)
       out.mark(POLYGON_END, src)
     }
     this.polygonRings = []

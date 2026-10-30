@@ -168,13 +168,6 @@ class SphericalProjection extends Projection {
   private rotation = new Rotation(0, 0, 0)
   private dx = 0
   private dy = 0
-  private readonly mapPlanar = (lambda: number, phi: number, out: number[]): void => {
-    this.raw.forward(lambda, phi, out)
-    const x = out[0]! * this.sx
-    const y = out[1]! * this.sy
-    out[0] = this.dx + this.k * x
-    out[1] = this.dy - this.k * y
-  }
 
   constructor(
     private raw: RawProjection,
@@ -198,7 +191,7 @@ class SphericalProjection extends Projection {
   }
 
   /** Unrotated sphere position (radians) to page position: the raw projection, then scale and translate. */
-  private projectAffine(lambda: number, phi: number, out: number[]): void {
+  toPlane(lambda: number, phi: number, out: number[]): void {
     this.raw.forward(lambda, phi, out)
     const x = out[0]! * this.sx
     const y = out[1]! * this.sy
@@ -386,7 +379,7 @@ class SphericalProjection extends Projection {
   project(lon: number, lat: number): [number, number] {
     const at = [0, 0]
     this.rotation.forward(lon * RADIANS, lat * RADIANS, at)
-    this.projectAffine(at[0]!, at[1]!, at)
+    this.toPlane(at[0]!, at[1]!, at)
     return [at[0]!, at[1]!]
   }
 
@@ -395,7 +388,7 @@ class SphericalProjection extends Projection {
     const at = [0, 0]
     this.rotation.forward(lon * RADIANS, lat * RADIANS, at)
     if (!this.clipper.visible(at[0]!, at[1]!)) return null
-    this.projectAffine(at[0]!, at[1]!, at)
+    this.toPlane(at[0]!, at[1]!, at)
     return !this.rect || this.rect.contains(at[0]!, at[1]!) ? [at[0]!, at[1]!] : null
   }
 
@@ -414,7 +407,7 @@ class SphericalProjection extends Projection {
     this.rotation.rotateEvents(ev)
     const clipped = clipToSphere(ev, this.clipper)
     ev.release()
-    const projected = resample(clipped, this.mapPlanar, this.delta2)
+    const projected = resample(clipped, this, this.delta2)
     clipped.release()
     if (!this.rect) return projected
     const out = this.rect.clip(projected)
@@ -428,7 +421,7 @@ class SphericalProjection extends Projection {
     for (let i = 0; i < ev.length; i++) {
       this.rotation.forward(ev.x[i]! * RADIANS, ev.y[i]! * RADIANS, at)
       if (!this.clipper.visible(at[0]!, at[1]!)) continue
-      this.projectAffine(at[0]!, at[1]!, at)
+      this.toPlane(at[0]!, at[1]!, at)
       if (this.rect && !this.rect.contains(at[0]!, at[1]!)) continue
       out.point(at[0]!, at[1]!, ev.src[i]!)
     }
