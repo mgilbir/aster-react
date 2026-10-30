@@ -29,6 +29,7 @@
  */
 import type { SceneGroup, SceneItem, SceneRoot } from './types.js'
 import { Bounds, boundText } from './bounds.js'
+import { textAnchor } from './text-metrics.js'
 import { imageBox } from './image-box.js'
 import { flattenPath, insidePolys, type Poly } from './path-flatten.js'
 import { SYMBOL_DEFAULT_SIZE, minOf, maxOf } from './util.js'
@@ -244,9 +245,10 @@ export function buildHitIndex(scene: SceneRoot, cell = DEFAULT_CELL): HitIndex {
     // vega's text align is `left` unless set (marks/text.js: item.align || 'left').
     const flat = { ...item, align: item.align ?? 'left', angle: 0, ...(mark ? {} : { dx: 0, dy: 0 }) } as SceneItem
     const b = boundText(new Bounds(), flat)
-    const x = tx + (item.x || 0)
-    const y = ty + (item.y || 0)
-    const box: [number, number, number, number] = [b.x1 - (item.x || 0), b.y1 - (item.y || 0), b.x2 - (item.x || 0), b.y2 - (item.y || 0)]
+    const [ax, ay] = textAnchor(item)
+    const x = tx + ax
+    const y = ty + ay
+    const box: [number, number, number, number] = [b.x1 - ax, b.y1 - ay, b.x2 - ax, b.y2 - ay]
     const rot = ((item.angle as number | undefined) ?? 0) * (Math.PI / 180)
     // axis-aligned bounds of the rotated box (+ slack)
     const corners: Array<[number, number]> = [[box[0], box[1]], [box[2], box[1]], [box[2], box[3]], [box[0], box[3]]]

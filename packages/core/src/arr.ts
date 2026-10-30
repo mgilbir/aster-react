@@ -180,19 +180,15 @@ function max(values: ArrayLike<number>): number {
   return m
 }
 
-function numbers(values: Iterable<unknown>, valueof?: (d: unknown, i: number) => unknown): Float64Array {
+/** The numbers of a column: a missing entry (null, undefined, NaN) is skipped and the rest is coerced with `+`. */
+export function numbers(values: Iterable<unknown>, valueof?: (d: unknown, i: number) => unknown): Float64Array {
   const out: number[] = []
-  if (valueof == null) {
-    for (const raw of values) {
-      const v = +(raw as number)
-      if (v >= v) out.push(v)
-    }
-  } else {
-    let i = -1
-    for (const raw of values) {
-      const v = +(valueof(raw, ++i) as number)
-      if (v >= v) out.push(v)
-    }
+  let i = -1
+  for (const raw of values) {
+    const entry = valueof === undefined ? raw : valueof(raw, ++i)
+    if (entry == null) continue
+    const v = +(entry as number)
+    if (v >= v) out.push(v)
   }
   return Float64Array.from(out)
 }
@@ -249,8 +245,8 @@ function swap(array: Float64Array, i: number, j: number): void {
   array[j] = t
 }
 
-export function quantile(values: readonly number[], p: number, valueof?: (d: unknown, i: number) => unknown): number | undefined {
-  const arr = Float64Array.from(numbers(values, valueof))
+export function quantile(values: Iterable<unknown>, p: number, valueof?: (d: unknown, i: number) => unknown): number | undefined {
+  const arr = numbers(values, valueof)
   const n = arr.length
   if (!n || isNaN((p = +p))) return undefined
   if (p <= 0 || n < 2) return min(arr)
@@ -262,7 +258,7 @@ export function quantile(values: readonly number[], p: number, valueof?: (d: unk
   return value0 + (value1 - value0) * (i - i0)
 }
 
-export function quantileSorted<V>(values: readonly V[], p: number, valueof: (d: V, i: number, a: readonly V[]) => number = (d) => d as unknown as number): number | undefined {
+export function quantileSorted<V>(values: ArrayLike<V>, p: number, valueof: (d: V, i: number, a: ArrayLike<V>) => number = (d) => d as unknown as number): number | undefined {
   const n = values.length
   if (!n || isNaN((p = +p))) return undefined
   if (p <= 0 || n < 2) return +valueof(values[0]!, 0, values)

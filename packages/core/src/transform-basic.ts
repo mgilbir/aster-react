@@ -14,6 +14,7 @@
 import { accessorName, array, error, extent as vegaExtent, one, peek, toNumber } from './util.js'
 import { compareOf, fieldOf, fieldsOf, lcg, SEED, sortBySpec, stableSortBy, type Row } from './transform-agg.js'
 import { tickStep } from './format.js'
+import { quantile } from './arr.js'
 import {
   durationDay, durationHour, durationMinute, durationMonth, durationSecond, durationWeek, durationYear,
   timeFloor, timeIntervalFor, timeUnits, utcFloor, utcIntervalFor,
@@ -61,15 +62,6 @@ export function d3Range(start: number, stop: number, step: number): number[] {
 
 type ValueOf = (d: unknown) => unknown
 
-/** d3-array `numbers` (note: unlike vega-statistics', '' coerces to 0). */
-function d3numbers(values: ArrayLike<unknown>, valueof: ValueOf): number[] {
-  const out: number[] = []
-  for (let i = 0; i < values.length; i++) {
-    let v: unknown = valueof(values[i])
-    if (v != null && (v = +(v as number)) >= (v as number)) out.push(v as number)
-  }
-  return out
-}
 function d3mean(values: ArrayLike<unknown>, valueof: ValueOf): number | undefined {
   let count = 0
   let sum = 0
@@ -81,17 +73,7 @@ function d3mean(values: ArrayLike<unknown>, valueof: ValueOf): number | undefine
   return undefined
 }
 function d3median(values: ArrayLike<unknown>, valueof: ValueOf): number | undefined {
-  const v = Float64Array.from(d3numbers(values, valueof))
-  const n = v.length
-  const p = 0.5
-  if (!n) return undefined
-  v.sort((a, b) => (a < b ? -1 : a > b ? 1 : a >= b ? 0 : NaN))
-  if (n < 2) return v[0]
-  const i = (n - 1) * p
-  const i0 = Math.floor(i)
-  const v0 = v[i0]!
-  const v1 = v[i0 + 1]!
-  return v0 + (v1 - v0) * (i - i0)
+  return quantile(Array.from(values), 0.5, (d) => valueof(d))
 }
 function d3min(values: ArrayLike<unknown>, valueof: ValueOf): unknown {
   let min: unknown

@@ -8,14 +8,14 @@ import type { SceneDef, SceneGroup, SceneItem, SceneRoot } from './types.js'
 import { baselineOffset, fontSize as vegaFontSize } from './bounds.js'
 import { checkPathLength, metering } from './limits.js'
 export { baselineOffset }
-import { itemTextWidth } from './text-metrics.js'
+import { textAnchor, truncateToLimit } from './text-metrics.js'
 import { ClipCollector, gradientRef, isGradientPaint, type ClipDef } from './svg-defs.js'
 import { customSymbolPathData } from './svg-path.js'
 import { sanitizeHref } from './url-policy.js'
 import { imageBox, imageHref, itemImage } from './image-box.js'
 import type { ScaleSnapshots } from './guide-caption.js'
 export { ClipCollector, type ClipDef }
-import { areaPath, ArcPathWriter, linePath, resolveCurve } from './shape.js'
+import { areaPath, ArcPathWriter, linePath, resolveCurve, traceArea, traceLine, type PathSink } from './shape.js'
 
 /**
  * Path data built only from `num`/`num3` output (or a `PathWriter`, which writes
@@ -239,6 +239,60 @@ function itemsOf(group: SceneGroup): SceneItem[] {
   return group.items ?? []
 }
 
+/** The columns a line is drawn from: a gap (`defined === false`) ends the current run of the curve, it is not a closed sub-path. */
+function lineColumns(items: SceneItem[]): { curve: ReturnType<typeof resolveCurve>; xs: Float64Array; ys: Float64Array; live: Uint8Array } {
+  const n = items.length
+  const xs = new Float64Array(n)
+  const ys = new Float64Array(n)
+  const live = new Uint8Array(n)
+  for (let i = 0; i < n; i++) {
+    const it = items[i]!
+    if (it.defined === false) continue
+    live[i] = 1
+    xs[i] = (it.x as number) || 0
+    ys[i] = (it.y as number) || 0
+  }
+  return { curve: itemCurve(items[0] as Record<string, unknown> | undefined), xs, ys, live }
+}
+
+/** The top and bottom boundaries of an area: the top is the items' (x, y), the bottom at `y + height` (a horizontal area: `x + width`). */
+function areaColumns(items: SceneItem[]): { curve: ReturnType<typeof resolveCurve>; topX: Float64Array; topY: Float64Array; baseX: Float64Array; baseY: Float64Array; live: Uint8Array } {
+  const first = items[0] as Record<string, unknown> | undefined
+  const horizontal = first?.orient === 'horizontal'
+  const n = items.length
+  const topX = new Float64Array(n)
+  const topY = new Float64Array(n)
+  const baseX = horizontal ? new Float64Array(n) : topX
+  const baseY = horizontal ? topY : new Float64Array(n)
+  const live = new Uint8Array(n)
+  for (let i = 0; i < n; i++) {
+    const it = items[i]!
+    if (it.defined === false) continue
+    live[i] = 1
+    const x = (it.x as number) || 0
+    const y = (it.y as number) || 0
+    topX[i] = x
+    topY[i] = y
+    if (horizontal) baseX[i] = x + ((it.width as number) || 0)
+    else baseY[i] = y + ((it.height as number) || 0)
+  }
+  return { curve: itemCurve(first), topX, topY, baseX, baseY, live }
+}
+
+/** A line mark's curve drawn into any sink, at full precision. */
+export function lineInto(sink: PathSink, items: SceneItem[]): void {
+  if (!items.length) return
+  const g = lineColumns(items)
+  traceLine(sink, g.curve, g.xs, g.ys, g.live)
+}
+
+/** An area mark's outline drawn into any sink, at full precision. */
+export function areaInto(sink: PathSink, items: SceneItem[]): void {
+  if (!items.length) return
+  const g = areaColumns(items)
+  traceArea(sink, g.curve, g.topX, g.topY, g.baseX, g.baseY, g.live)
+}
+
 function renderLine(group: SceneGroup, open: string): string {
   const items = itemsOf(group)
   let out = open
@@ -279,20 +333,8 @@ export function computeLinePath(group: SceneGroup, exact = false): {
   const digits = exact ? null : 3
   const items = itemsOf(group)
   if (!items.length) return null
-
-  // the items as columns: a gap (`defined === false`) ends the current run of the curve, it is not a closed sub-path
-  const n = items.length
-  const xs = new Float64Array(n)
-  const ys = new Float64Array(n)
-  const live = new Uint8Array(n)
-  for (let i = 0; i < n; i++) {
-    const it = items[i]!
-    if (it.defined === false) continue
-    live[i] = 1
-    xs[i] = (it.x as number) || 0
-    ys[i] = (it.y as number) || 0
-  }
-  const path = linePath(itemCurve(items[0] as Record<string, unknown> | undefined), xs, ys, live, digits)
+  const geometry = lineColumns(items)
+  const path = linePath(geometry.curve, geometry.xs, geometry.ys, geometry.live, digits)
 
   if (!path) return null
   const stroke = group.items?.[0]?.stroke as string | undefined
@@ -329,28 +371,8 @@ export function computeAreaPath(group: SceneGroup, exact = false): {
 } | null {
   const digits = exact ? null : 3
   const items = itemsOf(group)
-
-  // the top boundary is the items' (x, y); the bottom one is at `y + height` (a horizontal area: `x + width`)
-  const first = items[0] as Record<string, unknown> | undefined
-  const horizontal = first?.orient === 'horizontal'
-  const n = items.length
-  const topX = new Float64Array(n)
-  const topY = new Float64Array(n)
-  const baseX = horizontal ? new Float64Array(n) : topX
-  const baseY = horizontal ? topY : new Float64Array(n)
-  const live = new Uint8Array(n)
-  for (let i = 0; i < n; i++) {
-    const it = items[i]!
-    if (it.defined === false) continue
-    live[i] = 1
-    const x = (it.x as number) || 0
-    const y = (it.y as number) || 0
-    topX[i] = x
-    topY[i] = y
-    if (horizontal) baseX[i] = x + ((it.width as number) || 0)
-    else baseY[i] = y + ((it.height as number) || 0)
-  }
-  const path = areaPath(itemCurve(first), topX, topY, baseX, baseY, live, digits)
+  const g = areaColumns(items)
+  const path = areaPath(g.curve, g.topX, g.topY, g.baseX, g.baseY, g.live, digits)
 
   if (!path) return null
   return {
@@ -788,16 +810,8 @@ export function textItemDesc(it: SceneItem): {
   const angle = +(angleRaw as number) || 0
   const dx = +(rec.dx as number) || 0
   const dy = (+(rec.dy as number) || 0) + baselineOffset(it)
-  // vega anchorPoint: polar text offsets the anchor by (radius, theta - pi/2)
-  let x = +(it.x as number) || 0
-  let y = +(it.y as number) || 0
-  const radius = +(rec.radius as number) || 0
-  if (radius) {
-    const t = ((+(rec.theta as number) || 0)) - Math.PI / 2
-    x += radius * Math.cos(t)
-    y += radius * Math.sin(t)
-  }
-  const lines = textLinesOf(it).map((l) => truncateToLimit(it, l, fontSize))
+  const [x, y] = textAnchor(it)
+  const lines = textLinesOf(it).map((l) => truncateToLimit(it, l))
   const lineHeight = rec.lineHeight != null ? (rec.lineHeight as number) : fontSize + 2
   let transform: GeneratedPath
   let px: number, py: number, ox: number, oy: number
@@ -809,28 +823,6 @@ export function textItemDesc(it: SceneItem): {
     px = x + dx; py = y + dy; ox = 0; oy = 0
   }
   return { transform, fontSize, text: lines[0]!, lines, lineHeight, px, py, ox, oy, angle }
-}
-
-/**
- * Vega text `limit`: maximum pixel width, truncated with an ellipsis.
- * Mirrors vega-scenegraph/src/util/text.js `truncate()` — canvas-measured
- * when a canvas exists, the headless estimate otherwise (see text-metrics).
- */
-function truncateToLimit(it: SceneItem, text: string, fontSize: number): string {
-  const limit = (it as Record<string, unknown>).limit as number | undefined
-  if (limit == null || !(limit > 0) || !text.length) return text
-  const estimateW = (s: string) => itemTextWidth(it, s)
-  if (estimateW(text) < limit) return text
-  const ellipsis = ((it as Record<string, unknown>).ellipsis as string | undefined) ?? '\u2026'
-  const lim = limit - estimateW(ellipsis)
-  let lo = 0
-  let hi = text.length
-  while (lo < hi) {
-    const mid = 1 + ((lo + hi) >>> 1)
-    if (estimateW(text.slice(0, mid)) < lim) lo = mid
-    else hi = mid - 1
-  }
-  return text.slice(0, lo) + ellipsis
 }
 
 function renderPaths(group: SceneGroup, open: string): string {
@@ -874,11 +866,19 @@ function renderTrail(group: SceneGroup, open: string): string {
   return out
 }
 
-/** The path of a trail: one capsule per segment of a run of items. */
+/** The path of a trail: one capsule per segment of a run of items, at full precision. */
 export function trailPath(items: SceneItem[]): GeneratedPath {
-  // Each segment between consecutive items is a capsule (round caps of the items' widths) written at full precision.
-  // x and y are `item.x || 0`, the size `item.size || 1`; an item with `defined === false` ends the run.
   const context = new ArcPathWriter()
+  trailInto(context, items)
+  return gen(context.d)
+}
+
+/**
+ * The capsules of a trail drawn into any sink (the path text and the bounds both take them from here). Each segment between
+ * consecutive items is a capsule (round caps of the items' widths). x and y are `item.x || 0`, the size `item.size || 1`;
+ * an item with `defined === false` ends the run.
+ */
+export function trailInto(context: ArcSink, items: SceneItem[]): void {
   let ready = false
   let x1 = 0, y1 = 0, r1 = 0
   const point = (x2: number, y2: number, w2: number): void => {
@@ -918,7 +918,6 @@ export function trailPath(items: SceneItem[]): GeneratedPath {
     }
     if (defined0) point(+((it!.x as number) || 0), +((it!.y as number) || 0), +((it!.size as number) || 1))
   }
-  return gen(context.d)
 }
 
 function renderImages(group: SceneGroup, open: string): string {
@@ -1002,7 +1001,13 @@ class PathEmitter {
   toString(): string { return this.s }
 }
 
-function cornerTangents(x0: number, y0: number, x1: number, y1: number, r1: number, rc: number, cw: boolean): { cx: number; cy: number; x01: number; y01: number; x11: number; y11: number } {
+interface CornerTangents { cx: number; cy: number; x01: number; y01: number; x11: number; y11: number }
+// (the two tangent records of a corner, reused: an arc with a corner radius asks for four of them, and a pie of thousands of arcs
+// would otherwise allocate that many objects per paint and per measure; they are read before the next arc starts)
+const TANGENTS_A: CornerTangents = { cx: 0, cy: 0, x01: 0, y01: 0, x11: 0, y11: 0 }
+const TANGENTS_B: CornerTangents = { cx: 0, cy: 0, x01: 0, y01: 0, x11: 0, y11: 0 }
+
+function cornerTangents(out: CornerTangents, x0: number, y0: number, x1: number, y1: number, r1: number, rc: number, cw: boolean): CornerTangents {
   const x01 = x0 - x1
   const y01 = y0 - y1
   const lo = (cw ? rc : -rc) / Math.sqrt(x01 * x01 + y01 * y01)
@@ -1029,7 +1034,13 @@ function cornerTangents(x0: number, y0: number, x1: number, y1: number, r1: numb
   const dx1 = cx1 - x00
   const dy1 = cy1 - y00
   if (dx0 * dx0 + dy0 * dy0 > dx1 * dx1 + dy1 * dy1) { cx0 = cx1; cy0 = cy1 }
-  return { cx: cx0, cy: cy0, x01: -ox, y01: -oy, x11: cx0 * (r1 / r - 1), y11: cy0 * (r1 / r - 1) }
+  out.cx = cx0
+  out.cy = cy0
+  out.x01 = -ox
+  out.y01 = -oy
+  out.x11 = cx0 * (r1 / r - 1)
+  out.y11 = cy0 * (r1 / r - 1)
+  return out
 }
 
 const arcAbs = Math.abs
@@ -1136,8 +1147,8 @@ export function arcInto(ctx: ArcSink, cx: number, cy: number, rIn: number, r0In:
   }
   if (!(daS > ARC_EPSILON)) ctx.moveTo(x01, y01)
   else if (rc1 > ARC_EPSILON) {
-    const t0 = cornerTangents(x00, y00, x01, y01, r1, rc1, cw)
-    const t1 = cornerTangents(x11, y11, x10, y10, r1, rc1, cw)
+    const t0 = cornerTangents(TANGENTS_A, x00, y00, x01, y01, r1, rc1, cw)
+    const t1 = cornerTangents(TANGENTS_B, x11, y11, x10, y10, r1, rc1, cw)
     ctx.moveTo(t0.cx + t0.x01, t0.cy + t0.y01)
     if (rc1 < rc) ctx.arc(t0.cx, t0.cy, rc1, arcAtan2(t0.y01, t0.x01), arcAtan2(t1.y01, t1.x01), !cw)
     else {
@@ -1151,8 +1162,8 @@ export function arcInto(ctx: ArcSink, cx: number, cy: number, rIn: number, r0In:
   }
   if (!(r0 > ARC_EPSILON) || !(daF > ARC_EPSILON)) ctx.lineTo(x10, y10)
   else if (rc0 > ARC_EPSILON) {
-    const t0 = cornerTangents(x10, y10, x11, y11, r0, -rc0, cw)
-    const t1 = cornerTangents(x01, y01, x00, y00, r0, -rc0, cw)
+    const t0 = cornerTangents(TANGENTS_A, x10, y10, x11, y11, r0, -rc0, cw)
+    const t1 = cornerTangents(TANGENTS_B, x01, y01, x00, y00, r0, -rc0, cw)
     ctx.lineTo(t0.cx + t0.x01, t0.cy + t0.y01)
     if (rc0 < rc) ctx.arc(t0.cx, t0.cy, rc0, arcAtan2(t0.y01, t0.x01), arcAtan2(t1.y01, t1.x01), !cw)
     else {

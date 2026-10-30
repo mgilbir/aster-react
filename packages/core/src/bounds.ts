@@ -9,8 +9,10 @@
  */
 import { SYMBOL_DEFAULT_SIZE, pushAll } from './util.js'
 import type { SceneGroup, SceneItem, SceneNode } from './types.js'
-import { computeAreaPath, computeLinePath, symbolPathExact, trailPath } from './render.js'
-import { itemTextWidth } from './text-metrics.js'
+import { arcInto, areaInto, lineInto, symbolPathExact, trailInto } from './render.js'
+import { BoundsPen } from './bounds-pen.js'
+import { parseSvgPath, renderSvgPath } from './svg-path.js'
+import { itemTextWidth, textAnchor, truncateToLimit } from './text-metrics.js'
 import { SHAPE_BOUNDS } from './registry.js'
 import { imageBox } from './image-box.js'
 
@@ -207,25 +209,8 @@ export function multiLineOffset(item: SceneItem): number {
 
 export function textValue(item: SceneItem, line: unknown): string {
   const text = line == null ? '' : (line + '').trim()
-  return item.limit != null && item.limit > 0 && text.length ? truncate(item, text) : text
+  return truncateToLimit(item, text)
 }
-
-function truncate(item: SceneItem, text: string): string {
-  const limit = +item.limit!
-  const width = (t: string) => itemTextWidth(item, t)
-  if (width(text) < limit) return text
-  const ellipsis = item.ellipsis || '…'
-  let lo = 0
-  let hi = text.length
-  let limit2 = limit - width(ellipsis)
-  while (lo < hi) {
-    const mid = 1 + ((lo + hi) >>> 1)
-    if (width(text.slice(0, mid)) < limit2) lo = mid
-    else hi = mid - 1
-  }
-  return text.slice(0, lo) + ellipsis
-}
-
 
 export function textWidth(item: SceneItem, line: unknown): number {
   // vega's two paths, dispatched exactly like textMetrics.width:
@@ -256,61 +241,20 @@ export function baselineOffset(item: SceneItem): number {
 // Mark bounds — ports of marks/{text,rect,rule}.js bound + path tracing
 // ---------------------------------------------------------------------------
 
-/** Bbox of an annular sector (vega arc item semantics, angles from 12 o'clock). */
+/** The extent of an arc item: its sector traced through the same generator that draws it (corner radius and padding included), turned by the item's angle, stroked, and moved to the item. */
 export function boundArcItem(bounds: Bounds, it: SceneItem): Bounds {
-  const cx = it.x ?? 0
-  const cy = it.y ?? 0
-  const r = (it.outerRadius ?? it.radius ?? 0) as number
-  const r0 = (it.innerRadius ?? 0) as number
-  // d3-arc measures angles from the +y-up axis (12 o'clock); our path frame
-  // rotates by -PI/2 so the path angle t maps to the direction
-  // (cos(t - PI/2), sin(t - PI/2)) in y-down canvas coordinates.
-  // d3-arc sweeps from the start angle to the end angle, clockwise when the end is greater and counterclockwise when it is
-  // smaller (a descending arc, as a stack emits): either way the span is the interval between them, a full turn from 2π on. (vega's
-  // bound context normalizes the arc the same way -- swaps sa/ea -- and samples the interior points aligned to 90°.)
-  const s0 = ((it.startAngle ?? 0) as number) - Math.PI / 2
-  const s1 = ((it.endAngle ?? 0) as number) - Math.PI / 2
-  let a0 = Math.min(s0, s1)
-  let a1 = Math.max(s0, s1)
-  if (a1 - a0 >= 2 * Math.PI) a1 = a0 + 2 * Math.PI
-  const add = (rad: number, ang: number): void => {
-    bounds.add(cx + rad * Math.cos(ang), cy + rad * Math.sin(ang))
-  }
-  add(r, s0)
-  add(r, s1)
-  // cardinal directions inside the span
-  for (const card of [0, Math.PI / 2, Math.PI, (3 * Math.PI) / 2, 2 * Math.PI]) {
-    for (const laps of [-2 * Math.PI, 0, 2 * Math.PI]) {
-      const c = card + laps
-      if (c > a0 && c < a1) add(r, c)
-    }
-  }
-  if (r0 > 0) {
-    add(r0, a0)
-    add(r0, a1)
-    for (const card of [0, Math.PI / 2, Math.PI, (3 * Math.PI) / 2, 2 * Math.PI]) {
-      for (const laps of [-2 * Math.PI, 0, 2 * Math.PI]) {
-        const c = card + laps
-        if (c > a0 && c < a1) add(r0, c)
-      }
-    }
-  } else {
-    // pie sector: the apex is part of the shape
-    bounds.add(cx, cy)
-  }
-  // vega's arc bound always expands with miter semantics (vega-scenegraph
-  // bound/arc.js: boundStroke(bounds, item, true)) — the miterLimit default
-  // of 4 makes the conservative expansion 2px per side at strokeWidth 1.
-  boundStroke(bounds, it, true)
-  return bounds
+  const rec = it as Record<string, unknown>
+  const outer = (it.outerRadius ?? it.radius ?? 0) as number
+  arcInto(new BoundsPen(bounds, +(rec.angle as number) || 0), 0, 0, outer, (it.innerRadius ?? 0) as number,
+    (it.startAngle as number) || 0, (it.endAngle as number) || 0, (rec.cornerRadius as number) || 0, (rec.padAngle as number) || 0)
+  return boundStroke(bounds, it, true).translate(it.x || 0, it.y || 0)
 }
 
 /** marks/text.js `bound` — exact (multi-line, align, angle rotation). */
 export function boundText(bounds: Bounds, item: SceneItem): Bounds {
   const h = fontSize(item)
   const a = item.align
-  const x = item.x || 0
-  const y = item.y || 0
+  const [x, y] = textAnchor(item)
   const dx = item.dx || 0
   const dy = (item.dy || 0) + baselineOffset(item) - Math.round(0.8 * h)
   const tl = textLines(item)
@@ -484,14 +428,35 @@ export function boundsFromPath(
   let ly = 0
   let cx0 = 0 // subpath start (for Z)
   let cy0 = 0
+  // (the current point in the space the bounds are measured in: curves turn where their derivative does there)
+  let tlx = 0
+  let tly = 0
+  const place = (x: number, y: number): [number, number] => (transform ? transform(x, y) : [x, y])
   const add = (x: number, y: number) => {
-    const p = transform ? transform(x, y) : [x, y]
-    bounds.add(p[0]!, p[1]!)
+    const p = place(x, y)
+    bounds.add(p[0], p[1])
+    tlx = p[0]
+    tly = p[1]
   }
 
   const quadExtrema = (x0: number, x1: number, x2: number, onY = false) => {
     const t = (x0 - x1) / (x0 + x2 - 2 * x1)
-    if (0 < t && t < 1) { const v = x0 + (x1 - x0) * t; if (onY) add(bounds.x1, v); else add(v, bounds.y1) }
+    if (0 < t && t < 1) { const v = x0 + (x1 - x0) * t; if (onY) bounds.add(bounds.x1, v); else bounds.add(v, bounds.y1) }
+  }
+  const quadTo = (cx: number, cy: number, x: number, y: number) => {
+    const c = place(cx, cy)
+    const e = place(x, y)
+    quadExtrema(tlx, c[0], e[0])
+    quadExtrema(tly, c[1], e[1], true)
+    add(x, y)
+  }
+  const cubicTo = (x1: number, y1: number, x2: number, y2: number, x: number, y: number) => {
+    const a = place(x1, y1)
+    const b = place(x2, y2)
+    const e = place(x, y)
+    cubicExtrema(tlx, a[0], b[0], e[0])
+    cubicExtrema(tly, a[1], b[1], e[1], true)
+    add(x, y)
   }
   const cubic = (t: number, p0: number, p1: number, p2: number, p3: number) => {
     const s = 1 - t
@@ -517,7 +482,7 @@ export function boundsFromPath(
       t0 = 0.5 * c / b
     }
     for (const t of [t0, t1]) {
-      if (0 < t && t < 1) { const v = cubic(t, x0, x1, x2, x3); if (onY) add(bounds.x1, v); else add(v, bounds.y1) }
+      if (0 < t && t < 1) { const v = cubic(t, x0, x1, x2, x3); if (onY) bounds.add(bounds.x1, v); else bounds.add(v, bounds.y1) }
     }
   }
 
@@ -644,6 +609,10 @@ export function boundsFromPath(
     }
   }
 
+  // the control point a smooth curve (S, T) reflects: the previous curve's, when it was of the same degree
+  let ctlX = 0
+  let ctlY = 0
+  let ctlKind = ''
   for (const tok of tokens) {
     cmd = tok.c
     nums.length = 0
@@ -693,11 +662,10 @@ export function boundsFromPath(
           const y2 = nextNum() + (rel ? ly : 0)
           const x = nextNum() + (rel ? lx : 0)
           const y = nextNum() + (rel ? ly : 0)
-          cubicExtrema(lx, x1, x2, x)
-          cubicExtrema(ly, y1, y2, y, true)
-          add(x, y)
+          cubicTo(x1, y1, x2, y2, x, y)
           lx = x
           ly = y
+          ctlX = x2; ctlY = y2; ctlKind = 'cubic'
         }
         break
       }
@@ -707,12 +675,12 @@ export function boundsFromPath(
           const y2 = nextNum() + (rel ? ly : 0)
           const x = nextNum() + (rel ? lx : 0)
           const y = nextNum() + (rel ? ly : 0)
-          // reflected control point: unknown previous control → use current point
-          cubicExtrema(lx, lx, x2, x)
-          cubicExtrema(ly, ly, y2, y, true)
-          add(x, y)
+          const x1 = ctlKind === 'cubic' ? 2 * lx - ctlX : lx
+          const y1 = ctlKind === 'cubic' ? 2 * ly - ctlY : ly
+          cubicTo(x1, y1, x2, y2, x, y)
           lx = x
           ly = y
+          ctlX = x2; ctlY = y2; ctlKind = 'cubic'
         }
         break
       }
@@ -722,11 +690,10 @@ export function boundsFromPath(
           const y1 = nextNum() + (rel ? ly : 0)
           const x = nextNum() + (rel ? lx : 0)
           const y = nextNum() + (rel ? ly : 0)
-          quadExtrema(lx, x1, x)
-          quadExtrema(ly, y1, y, true)
-          add(x, y)
+          quadTo(x1, y1, x, y)
           lx = x
           ly = y
+          ctlX = x1; ctlY = y1; ctlKind = 'quad'
         }
         break
       }
@@ -734,11 +701,12 @@ export function boundsFromPath(
         while (i < nums.length) {
           const x = nextNum() + (rel ? lx : 0)
           const y = nextNum() + (rel ? ly : 0)
-          quadExtrema(lx, lx, x)
-          quadExtrema(ly, ly, y, true)
-          add(x, y)
+          const x1 = ctlKind === 'quad' ? 2 * lx - ctlX : lx
+          const y1 = ctlKind === 'quad' ? 2 * ly - ctlY : ly
+          quadTo(x1, y1, x, y)
           lx = x
           ly = y
+          ctlX = x1; ctlY = y1; ctlKind = 'quad'
         }
         break
       }
@@ -752,6 +720,7 @@ export function boundsFromPath(
           const x = nextNum() + (rel ? lx : 0)
           const y = nextNum() + (rel ? ly : 0)
           arcTo(lx, ly, rx, ry, rot, large, sweep, x, y)
+          ;[tlx, tly] = place(x, y)
         }
         break
       }
@@ -761,6 +730,7 @@ export function boundsFromPath(
         break
       }
     }
+    if (C !== 'C' && C !== 'S' && C !== 'Q' && C !== 'T') ctlKind = ''
   }
   return bounds
 }
@@ -792,24 +762,25 @@ export function boundTypedMark(bounds: Bounds, mark: SceneGroup, miterPaths = fa
       // an area is bounded by its filled polygon (top edge AND baseline), a line
       // by its polyline: computeLinePath on an area dropped the baseline, so
       // autosize:pad clipped areas that extend below/above their top edge
-      const pathInfo = mark.marktype === 'area' ? computeAreaPath(mark) : computeLinePath(mark)
-      if (pathInfo) {
-        boundsFromPath(bounds, pathInfo.path)
-        // the renderer resolves vega's default line/area strokeWidth=2 at
+      const drawn = new Bounds()
+      const pen = new BoundsPen(drawn)
+      if (mark.marktype === 'area') areaInto(pen, items)
+      else lineInto(pen, items)
+      if (!drawn.empty()) {
+        // the renderer resolves vega's default line strokeWidth=2 at
         // draw time; the bound must measure the same geometry
         const it0 = { ...(items[0] ?? {}) } as Record<string, unknown>
-        if (it0.stroke != null && it0.strokeWidth == null) it0.strokeWidth = 2
-        boundStroke(bounds, it0 as SceneItem, true)
+        if (mark.marktype === 'line' && it0.stroke != null && it0.strokeWidth == null) it0.strokeWidth = 2
+        bounds.union(boundStroke(drawn, it0 as SceneItem, true))
       }
       return bounds
     }
     case 'trail': {
       if (items.length > 1) {
-        const d = trailPath(items)
-        if (d) {
-          boundsFromPath(bounds, d)
-          boundStroke(bounds, items[0] ?? {}, true)
-        }
+        const drawn = new Bounds()
+        trailInto(new BoundsPen(drawn), items)
+        if (!drawn.empty()) boundStroke(drawn, items[0] ?? {}, true)
+        bounds.union(drawn)
       }
       return bounds
     }
@@ -819,6 +790,13 @@ export function boundTypedMark(bounds: Bounds, mark: SceneGroup, miterPaths = fa
       for (const it of items) bounds.union(boundText(new Bounds(), { ...it, _kind: 'text' } as SceneItem))
       return bounds
     }
+    case 'path':
+      // an item with no path draws nothing and measures nothing, not even its stroke: it stands at the origin
+      for (const it of items) {
+        if (it.path == null) bounds.add(0, 0)
+        else boundLeaf(bounds, it, true)
+      }
+      return bounds
     default:
       // vega's arc/path/symbol bounds always expand with miter semantics
       // (vega-scenegraph bound.js: boundStroke(bounds, item, true)) — the
@@ -963,40 +941,23 @@ function boundIsolated(it: SceneItem, miterPaths = false): Bounds {
     // An empty path (a geo shape entirely clipped away) bounds to nothing:
     // vega's boundPath leaves the bounds untouched, so no stroke expansion.
     if (it.path === '') return bounds
-    const sxP = (it as Record<string, unknown>).scaleX as number | undefined
-    const syP = (it as Record<string, unknown>).scaleY as number | undefined
-    const angleP = (it as Record<string, unknown>).angle as number | undefined
-    if (angleP) {
-      // vega's path bound runs pathRender through boundContext: every path
-      // coordinate is scaled, translated by item x/y, then rotated as a point
-      // (unlike the SVG transform, which rotates in the item-local frame).
-      // Trace with that exact point transform so rotated extrema match.
-      const a = angleP * Math.PI / 180
-      const cos = Math.cos(a)
-      const sin = Math.sin(a)
-      const tx = it.x || 0
-      const ty = it.y || 0
-      const sx = sxP ?? 1
-      const sy = syP ?? 1
-      boundsFromPath(bounds, it.path, (x, y) => {
-        const px = x * sx + tx
-        const py = y * sy + ty
-        return [cos * px - sin * py, sin * px + cos * py]
-      })
-    } else {
-      // a projected shape bounds from its unrounded geometry, as vega's bound context sees it, not from the path string
-      const exact = it.datum && it.path === (it.datum as Record<string, unknown>).shape ? SHAPE_BOUNDS.get(it.datum as object)?.() : undefined
-      if (exact) {
-        bounds.add(exact[0], exact[1])
-        bounds.add(exact[2], exact[3])
-      } else boundsFromPath(bounds, it.path)
-      // path marks carry scaleX/scaleY: vega's path bound renders the parsed
-      // path through pathRender(ctx, x, y, sx, sy) — the path scales about its
-      // local origin before the item translate.
-      if ((sxP != null && sxP !== 1) || (syP != null && syP !== 1)) {
-        bounds.scale(sxP ?? 1, syP ?? 1)
-      }
+    const rec = it as Record<string, unknown>
+    // a projected shape bounds from its unrounded geometry, as vega's bound context sees it, not from the path string
+    const exact = !rec.angle && it.datum && it.path === (it.datum as Record<string, unknown>).shape ? SHAPE_BOUNDS.get(it.datum as object)?.() : undefined
+    if (exact) {
+      bounds.add(exact[0], exact[1])
+      bounds.add(exact[2], exact[3])
       bounds.translate(it.x || 0, it.y || 0)
+    } else {
+      // the path as it is drawn: scaled about its own origin, moved to the item, then turned by the item's angle (the turn is the
+      // pen's); the same replay, arcs as bezier approximations included, that draws a custom symbol
+      let commands: ReturnType<typeof parseSvgPath> | null = null
+      try { commands = parseSvgPath(it.path) } catch { /* a path that does not parse is measured as far as it reads */ }
+      if (commands) renderSvgPath(new BoundsPen(bounds, +(rec.angle as number) || 0), commands, it.x || 0, it.y || 0, (rec.scaleX as number) || 1, (rec.scaleY as number) || 1)
+      else {
+        boundsFromPath(bounds, it.path)
+        bounds.translate(it.x || 0, it.y || 0)
+      }
     }
     boundStroke(bounds, it, miterPaths || it.strokeWidth != null)
     return bounds
