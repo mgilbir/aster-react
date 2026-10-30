@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- **Performance: the 200k-row `crossfilter-flights` gallery spec.** On the React path it took 4-5 s (8 s and more under load,
+  past the gallery's settle budget) because a chart given a `random` source fingerprinted every row of every dataset transform
+  that could not draw from it; now only the code that can draw (`random()`, `sampleNormal` / `sampleLogNormal` / `sampleUniform`,
+  `sample`, `wordcloud`, the `ci0` / `ci1` ops) is. `crossfilter` places tuples against a range without sorting when the field
+  holds only numbers, and a dataset declared in a group starts from the rows it is made from instead of copying them when its
+  first transforms only read them (`resolvefilter` + `aggregate` copies nothing). Time to a stable svg in Chromium, measured
+  against vega on the same data: 5.0 s to 0.5 s with a `random` source (vega 0.6 s); the output is unchanged.
+
 - **`@aster/vl`: selections and composite marks in Aster's own design** (`selection*.ts`, `composite*.ts`). A selection is resolved
   against its unit into a model and wired by one sequence of steps over the signals it makes; the three composite marks share one
   anatomy and one part builder. The compiled Vega is unchanged on the 2769 specs of the matrices, the corpus and the gallery. New
