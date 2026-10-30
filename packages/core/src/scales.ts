@@ -683,7 +683,7 @@ function configureRange(scale: Scale, _: Params, count: number): void {
   if (range && _.interpolate && scale.interpolate) {
     scale.interpolate(vs.interpolate(_.interpolate as string, _.interpolateGamma as number | undefined))
   } else if (isFunction(scale.round)) {
-    scale.round(round)
+    (scale.round as (v: unknown) => unknown)(round)
   } else if (isFunction(scale.rangeRound)) {
     scale.interpolate(round ? interpolateRound : interpolateValue)
   }
