@@ -48,6 +48,49 @@ export interface TransformContext {
 
 export type Row = Record<string, unknown>
 
+/** The aggregate ops whose result holds the row objects they were given (the others compute numbers). */
+const ROW_HOLDING_OPS = new Set(['values', 'argmin', 'argmax'])
+
+/**
+ * What a transform does with the row OBJECTS it is given -- the thing that decides whether a pipeline needs rows of its own:
+ *   - `subset`: reads them and returns some of them, unchanged (`filter`, `resolvefilter`, `collect`);
+ *   - `fresh`: reads them and returns new rows that hold none of them (an `aggregate` of numbers);
+ *   - `writes`: anything else -- it may add to them, keep them, or write them.
+ * `subset` and `fresh` never write a row, which the pipeline's rows being another dataset's relies on.
+ */
+export type RowUse = 'subset' | 'fresh' | 'writes'
+export function rowUseOf(t: CompiledTransform): RowUse {
+  switch (t.type) {
+    case 'filter': case 'resolvefilter': case 'collect': return 'subset'
+    case 'aggregate': {
+      // (ops may be a signal: not known, so not read-only)
+      const ops = (t as { ops?: unknown }).ops
+      if (ops === undefined) return 'fresh'
+      return Array.isArray(ops) && ops.every((o) => typeof o === 'string' && !ROW_HOLDING_OPS.has(o)) ? 'fresh' : 'writes'
+    }
+    default: return 'writes'
+  }
+}
+
+/**
+ * Apply `transforms` to `rows`, which are another dataset's row objects (the array itself is the caller's own), and give the result rows
+ * of its own: the transforms are applied to the shared rows for as long as they only read them, and what still is one of them
+ * afterwards is copied (a pipeline that ends with an aggregate copies nothing).
+ */
+export function applyTransformsToSharedRows(rows: Row[], transforms: CompiledTransform[], ctx: TransformContext, sourceName?: string): Row[] {
+  let reading = 0
+  let shared = true
+  while (reading < transforms.length) {
+    const use = rowUseOf(transforms[reading]!)
+    if (use === 'writes') break
+    if (use === 'fresh') shared = false
+    reading++
+  }
+  let out = reading > 0 ? applyTransforms(rows, transforms.slice(0, reading), ctx, sourceName) : rows
+  if (shared) out = out.map((r) => ({ ...r }))
+  return reading < transforms.length ? applyTransforms(out, transforms.slice(reading), ctx, sourceName) : out
+}
+
 export function applyTransforms(
   rows: Row[],
   transforms: CompiledTransform[],

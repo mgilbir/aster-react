@@ -10,8 +10,9 @@
  */
 import { describe, it, expect } from 'vitest'
 import '@aster/core/transforms'
-import { evaluateChart, compileChart, datasetsOfScene } from '@aster/core'
+import { evaluateChart, compileChart, datasetsOfScene, renderSpec } from '@aster/core'
 import { renderWithVegaChecked } from '../src/render-vega.js'
+import { canonicalizeSvg, diffCanonical } from '../src/normalize.js'
 
 /** mulberry32: a fixed stream, so a failure names a case that can be run again. */
 function stream(seed: number): () => number {
@@ -155,4 +156,31 @@ describe('crossfilter and resolvefilter over generated tables and ranges', () =>
     expect(seen.cleanNumeric).toBeGreaterThan(30)
     expect(seen.unsorted).toBeGreaterThan(30)
   })
+})
+
+/**
+ * The gallery's shape: datasets made INSIDE group marks from the crossfiltered one (resolvefilter, then an aggregate), drawn. A group's
+ * dataset starts from the rows of the one it is made from, so what it does with them -- reading them, not changing them -- shows in
+ * the tuples that dataset's marks draw, and in the datasets after it.
+ */
+describe('group-scoped resolved datasets over generated tables', () => {
+  for (const seed of SEEDS.slice(0, 80)) {
+    const base = generate(seed)
+    const fields = ['a', 'b', 'c'].filter((f) => (base.spec.signals as Array<{ name: string }>).some((sg) => sg.name === `q${f}`))
+    const group = (field: string, ignore: number, y: number): unknown => ({
+      type: 'group',
+      encode: { enter: { y: { value: y }, width: { value: 100 }, height: { value: 30 } } },
+      data: [{ name: `agg_${field}`, source: 'rows', transform: [{ type: 'resolvefilter', ignore, filter: { signal: 'xf' } }, { type: 'aggregate', groupby: [field], fields: ['id'], ops: ['sum'], as: ['ids'] }] }],
+      marks: [{ type: 'text', from: { data: `agg_${field}` }, encode: { update: { x: { value: 2 }, y: { signal: 'datum.count * 3' }, text: { signal: `datum.count + ':' + datum.ids + ':' + datum['${field}']` } } } }],
+    })
+    const spec = { ...base.spec, height: 130, marks: fields.map((f, i) => group(f, 1 << i, i * 40)) }
+    it(`${base.name} (drawn)`, async () => {
+      const vega = await renderWithVegaChecked(structuredClone(spec))
+      expect(vega.errors).toEqual([])
+      const errors: unknown[] = []
+      const mine = renderSpec(structuredClone(spec) as never, { logger: { error: (e: unknown) => { errors.push(e) }, warn: () => {} } } as never) as string
+      expect(errors).toEqual([])
+      expect(diffCanonical(canonicalizeSvg(vega.svg), canonicalizeSvg(mine)).slice(0, 3)).toEqual([])
+    }, 30_000)
+  }
 })

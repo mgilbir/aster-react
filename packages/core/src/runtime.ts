@@ -5,7 +5,7 @@
  */
 import { compileExpr, ExpressionParseError, type CompiledExpr, type ExpressionRuntime } from './expression.js'
 import { ingestRows, readData, type DataFormatSpec } from './data-format.js'
-import { applyTransforms, compileExprTransform, sortOrder, getField, geoJSONPath, aggregateGroup, type Row, type TransformContext } from './transform.js'
+import { applyTransforms, applyTransformsToSharedRows, compileExprTransform, sortOrder, getField, geoJSONPath, aggregateGroup, type Row, type TransformContext } from './transform.js'
 import { fieldOf } from './transform-agg.js'
 import { atRandomSite, contentKey, mayDrawRandom, replayable } from './random-tape.js'
 import { activeMeter, withLimits, boundedCount, checkRowCount, meterItems, meterTick, AsterLimitError } from './limits.js'
@@ -4609,11 +4609,13 @@ function buildGroupItem(mark: CompiledMark, ctx: EvalContext, src: GroupSource):
     }
     for (const d of mark.data ?? []) {
       const sources = sourceNames(d)
-      let rows: Row[] = sources.length ? sources.flatMap((n) => (ctx.datasets.get(n) ?? []).map((r) => ({ ...r }))) : d.values != null ? readData(inlineValues(ctx, d.values), d.format) : []
+      // (a dataset made from others holds copies of their rows: the pipeline starts from the rows themselves while it only reads them)
+      const shared = sources.length > 0
+      let rows: Row[] = shared ? sources.flatMap((n) => ctx.datasets.get(n) ?? []) : d.values != null ? readData(inlineValues(ctx, d.values), d.format) : []
       checkRowCount(rows.length, `dataset "${d.name}"`)
-      if (d.transform?.length) {
-        rows = applyTransforms(rows, d.transform, { runtime: ctx.runtime, signals: scopeParams, hierarchies: ctx.hierarchies, projections: ctx.projections }, d.name)
-      }
+      const tctx = { runtime: ctx.runtime, signals: scopeParams, hierarchies: ctx.hierarchies, projections: ctx.projections }
+      if (d.transform?.length) rows = shared ? applyTransformsToSharedRows(rows, d.transform, tctx, d.name) : applyTransforms(rows, d.transform, tctx, d.name)
+      else if (shared) rows = rows.map((r) => ({ ...r }))
       savedData.push([d.name, ctx.datasets.get(d.name)])
       ctx.datasets.set(d.name, rows)
     }
