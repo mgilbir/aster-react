@@ -15,7 +15,7 @@ import { sanitizeHref } from './url-policy.js'
 import { imageBox, imageHref, itemImage } from './image-box.js'
 import type { ScaleSnapshots } from './guide-caption.js'
 export { ClipCollector, type ClipDef }
-import { areaPath, ArcPathWriter, linePath, resolveCurve } from './shape.js'
+import { areaPath, ArcPathWriter, linePath, resolveCurve, traceArea, traceLine, type PathSink } from './shape.js'
 
 /**
  * Path data built only from `num`/`num3` output (or a `PathWriter`, which writes
@@ -239,6 +239,60 @@ function itemsOf(group: SceneGroup): SceneItem[] {
   return group.items ?? []
 }
 
+/** The columns a line is drawn from: a gap (`defined === false`) ends the current run of the curve, it is not a closed sub-path. */
+function lineColumns(items: SceneItem[]): { curve: ReturnType<typeof resolveCurve>; xs: Float64Array; ys: Float64Array; live: Uint8Array } {
+  const n = items.length
+  const xs = new Float64Array(n)
+  const ys = new Float64Array(n)
+  const live = new Uint8Array(n)
+  for (let i = 0; i < n; i++) {
+    const it = items[i]!
+    if (it.defined === false) continue
+    live[i] = 1
+    xs[i] = (it.x as number) || 0
+    ys[i] = (it.y as number) || 0
+  }
+  return { curve: itemCurve(items[0] as Record<string, unknown> | undefined), xs, ys, live }
+}
+
+/** The top and bottom boundaries of an area: the top is the items' (x, y), the bottom at `y + height` (a horizontal area: `x + width`). */
+function areaColumns(items: SceneItem[]): { curve: ReturnType<typeof resolveCurve>; topX: Float64Array; topY: Float64Array; baseX: Float64Array; baseY: Float64Array; live: Uint8Array } {
+  const first = items[0] as Record<string, unknown> | undefined
+  const horizontal = first?.orient === 'horizontal'
+  const n = items.length
+  const topX = new Float64Array(n)
+  const topY = new Float64Array(n)
+  const baseX = horizontal ? new Float64Array(n) : topX
+  const baseY = horizontal ? topY : new Float64Array(n)
+  const live = new Uint8Array(n)
+  for (let i = 0; i < n; i++) {
+    const it = items[i]!
+    if (it.defined === false) continue
+    live[i] = 1
+    const x = (it.x as number) || 0
+    const y = (it.y as number) || 0
+    topX[i] = x
+    topY[i] = y
+    if (horizontal) baseX[i] = x + ((it.width as number) || 0)
+    else baseY[i] = y + ((it.height as number) || 0)
+  }
+  return { curve: itemCurve(first), topX, topY, baseX, baseY, live }
+}
+
+/** A line mark's curve drawn into any sink, at full precision. */
+export function lineInto(sink: PathSink, items: SceneItem[]): void {
+  if (!items.length) return
+  const g = lineColumns(items)
+  traceLine(sink, g.curve, g.xs, g.ys, g.live)
+}
+
+/** An area mark's outline drawn into any sink, at full precision. */
+export function areaInto(sink: PathSink, items: SceneItem[]): void {
+  if (!items.length) return
+  const g = areaColumns(items)
+  traceArea(sink, g.curve, g.topX, g.topY, g.baseX, g.baseY, g.live)
+}
+
 function renderLine(group: SceneGroup, open: string): string {
   const items = itemsOf(group)
   let out = open
@@ -279,20 +333,8 @@ export function computeLinePath(group: SceneGroup, exact = false): {
   const digits = exact ? null : 3
   const items = itemsOf(group)
   if (!items.length) return null
-
-  // the items as columns: a gap (`defined === false`) ends the current run of the curve, it is not a closed sub-path
-  const n = items.length
-  const xs = new Float64Array(n)
-  const ys = new Float64Array(n)
-  const live = new Uint8Array(n)
-  for (let i = 0; i < n; i++) {
-    const it = items[i]!
-    if (it.defined === false) continue
-    live[i] = 1
-    xs[i] = (it.x as number) || 0
-    ys[i] = (it.y as number) || 0
-  }
-  const path = linePath(itemCurve(items[0] as Record<string, unknown> | undefined), xs, ys, live, digits)
+  const geometry = lineColumns(items)
+  const path = linePath(geometry.curve, geometry.xs, geometry.ys, geometry.live, digits)
 
   if (!path) return null
   const stroke = group.items?.[0]?.stroke as string | undefined
@@ -329,28 +371,8 @@ export function computeAreaPath(group: SceneGroup, exact = false): {
 } | null {
   const digits = exact ? null : 3
   const items = itemsOf(group)
-
-  // the top boundary is the items' (x, y); the bottom one is at `y + height` (a horizontal area: `x + width`)
-  const first = items[0] as Record<string, unknown> | undefined
-  const horizontal = first?.orient === 'horizontal'
-  const n = items.length
-  const topX = new Float64Array(n)
-  const topY = new Float64Array(n)
-  const baseX = horizontal ? new Float64Array(n) : topX
-  const baseY = horizontal ? topY : new Float64Array(n)
-  const live = new Uint8Array(n)
-  for (let i = 0; i < n; i++) {
-    const it = items[i]!
-    if (it.defined === false) continue
-    live[i] = 1
-    const x = (it.x as number) || 0
-    const y = (it.y as number) || 0
-    topX[i] = x
-    topY[i] = y
-    if (horizontal) baseX[i] = x + ((it.width as number) || 0)
-    else baseY[i] = y + ((it.height as number) || 0)
-  }
-  const path = areaPath(itemCurve(first), topX, topY, baseX, baseY, live, digits)
+  const g = areaColumns(items)
+  const path = areaPath(g.curve, g.topX, g.topY, g.baseX, g.baseY, g.live, digits)
 
   if (!path) return null
   return {

@@ -13,7 +13,7 @@ const FULL_TURN = 2 * Math.PI
 /** A sweep this close to a full turn is a circle. */
 const CIRCLE_SWEEP = FULL_TURN - 1e-8
 /** Below this the derivative of a curve is treated as linear. */
-const FLAT = 1e-12
+const FLAT = 1e-14
 
 export class BoundsPen {
   private readonly cos: number
@@ -65,16 +65,17 @@ export class BoundsPen {
   arc(cx: number, cy: number, r: number, a0: number, a1: number, ccw = false): void {
     const start = a0 + this.turn
     const end = a1 + this.turn
-    const at = (a: number): void => { this.bounds.add(cx + r * Math.cos(a), cy + r * Math.sin(a)) }
-    this.lx = cx + r * Math.cos(end)
-    this.ly = cy + r * Math.sin(end)
+    const ex = cx + r * Math.cos(end)
+    const ey = cy + r * Math.sin(end)
+    this.lx = ex
+    this.ly = ey
     if (Math.abs(end - start) > CIRCLE_SWEEP) {
       this.bounds.add(cx - r, cy - r)
       this.bounds.add(cx + r, cy + r)
       return
     }
-    at(start)
-    at(end)
+    this.bounds.add(cx + r * Math.cos(start), cy + r * Math.sin(start))
+    this.bounds.add(ex, ey)
     if (end === start) return
     // the angles it passes on the way: the quarter turns within a sweep that is the way round from `from` to `from + sweep`
     const from = ccw ? end : start
@@ -82,34 +83,41 @@ export class BoundsPen {
     sweep %= FULL_TURN
     if (sweep < 0) sweep += FULL_TURN
     let q = Math.ceil(from / QUARTER_TURN)
-    for (let i = 0; i < 5 && q * QUARTER_TURN <= from + sweep; i++, q++) at(q * QUARTER_TURN)
+    for (let i = 0; i < 5; i++, q++) {
+      const a = q * QUARTER_TURN
+      if (a > from + sweep) break
+      this.bounds.add(cx + r * Math.cos(a), cy + r * Math.sin(a))
+    }
   }
 }
 
-/** The parameters in (0, 1) where one coordinate of a cubic Bezier (control values p0..p3) is at an extreme. */
+/**
+ * The parameters in (0, 1) where one coordinate of a cubic Bezier (control values p0..p3) is at an extreme: the roots of its
+ * derivative, a quadratic in t. The operation order is the one a view's size depends on: an extreme that lands within an ulp
+ * of an integer decides the `ceil` of the size.
+ */
 function cubicTurns(p0: number, p1: number, p2: number, p3: number): number[] {
-  // B'(t) / 3 = u (1-t)^2 + 2 v t (1-t) + w t^2 = a t^2 + 2 b t + u
-  const u = p1 - p0
-  const v = p2 - p1
-  const w = p3 - p2
-  const a = u - 2 * v + w
-  const b = v - u
+  const a = p3 - p0 + 3 * p1 - 3 * p2
+  const b = p0 + p2 - 2 * p1
+  const c = p0 - p1
   const out: number[] = []
   const keep = (t: number): void => { if (t > 0 && t < 1) out.push(t) }
   if (Math.abs(a) > FLAT) {
-    const disc = b * b - a * u
+    const disc = b * b + c * a
     if (disc >= 0) {
       const root = Math.sqrt(disc)
       keep((-b + root) / a)
       keep((-b - root) / a)
     }
-  } else if (b) {
-    keep(-u / (2 * b))
+  } else {
+    keep(0.5 * c / b)
   }
   return out
 }
 
 function cubicAt(t: number, p0: number, p1: number, p2: number, p3: number): number {
   const s = 1 - t
-  return s * s * s * p0 + 3 * s * s * t * p1 + 3 * s * t * t * p2 + t * t * t * p3
+  const s2 = s * s
+  const t2 = t * t
+  return s2 * s * p0 + 3 * s2 * t * p1 + 3 * s * t2 * p2 + t2 * t * p3
 }

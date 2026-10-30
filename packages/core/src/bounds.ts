@@ -9,7 +9,7 @@
  */
 import { SYMBOL_DEFAULT_SIZE, pushAll } from './util.js'
 import type { SceneGroup, SceneItem, SceneNode } from './types.js'
-import { arcInto, computeAreaPath, computeLinePath, symbolPathExact, trailInto } from './render.js'
+import { arcInto, areaInto, lineInto, symbolPathExact, trailInto } from './render.js'
 import { BoundsPen } from './bounds-pen.js'
 import { itemTextWidth, textAnchor, truncateToLimit } from './text-metrics.js'
 import { SHAPE_BOUNDS } from './registry.js'
@@ -761,14 +761,16 @@ export function boundTypedMark(bounds: Bounds, mark: SceneGroup, miterPaths = fa
       // an area is bounded by its filled polygon (top edge AND baseline), a line
       // by its polyline: computeLinePath on an area dropped the baseline, so
       // autosize:pad clipped areas that extend below/above their top edge
-      const pathInfo = mark.marktype === 'area' ? computeAreaPath(mark, true) : computeLinePath(mark, true)
-      if (pathInfo) {
-        boundsFromPath(bounds, pathInfo.path)
-        // the renderer resolves vega's default line/area strokeWidth=2 at
+      const drawn = new Bounds()
+      const pen = new BoundsPen(drawn)
+      if (mark.marktype === 'area') areaInto(pen, items)
+      else lineInto(pen, items)
+      if (!drawn.empty()) {
+        // the renderer resolves vega's default line strokeWidth=2 at
         // draw time; the bound must measure the same geometry
         const it0 = { ...(items[0] ?? {}) } as Record<string, unknown>
         if (mark.marktype === 'line' && it0.stroke != null && it0.strokeWidth == null) it0.strokeWidth = 2
-        boundStroke(bounds, it0 as SceneItem, true)
+        bounds.union(boundStroke(drawn, it0 as SceneItem, true))
       }
       return bounds
     }
