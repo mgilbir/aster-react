@@ -292,6 +292,17 @@ describe('regression and loess over random data vs the real vega transforms', { 
       compareRows(runAster(c), await runVega(c), c.name)
     }
   })
+  it('the constant fit takes any row whose x is present and whose y is not NaN, even if x is not a number', async () => {
+    const xsOdd: unknown[] = [1, 'abc', NaN, '', null, undefined, true, '3', Infinity, {}]
+    const ysOdd: unknown[] = [4, '5', NaN, null, undefined, 'abc', true, Infinity, -2.5, new Date(7)]
+    const r = rng(808)
+    for (let k = 0; k < 400; k++) {
+      const rows: Row[] = Array.from({ length: 3 + Math.floor(r() * 5) }, () => ({ x: xsOdd[Math.floor(r() * xsOdd.length)], y: ysOdd[Math.floor(r() * ysOdd.length)] }))
+      const t = k % 2 ? { type: 'regression', x: 'x', y: 'y', method: 'constant', params: k % 4 === 1 } : { type: 'regression', x: 'x', y: 'y', method: 'poly', order: 0 }
+      const c = { name: `constant#${k} ${JSON.stringify(t)} ${JSON.stringify(rows)}`, t, rows }
+      compareRows(runAster(c), await runVega(c), c.name)
+    }
+  })
   it('loess: random data, bandwidths and groups', async () => {
     for (const c of genCases(2002, 500, [loessParams])) compareRows(runAster(c), await runVega(c), c.name)
   })
