@@ -1122,6 +1122,47 @@ function bisectLeftValues(a: readonly unknown[], x: unknown): number {
 }
 
 /**
+ * The bit of one dimension, by the sorted order of its field (vega-crossfilter SortedIndex): the index permuted by the values, `<` / `>`
+ * order (an incomparable pair is a tie); the tuples before the position of `from` and from the position of `to` on lie outside.
+ */
+function markOutsideSorted(data: Row[], f: (r: Row) => unknown, from: unknown, to: unknown, bit: number, curr: Uint32Array): void {
+  const n = data.length
+  const values = data.map((r) => f(r))
+  const index = new Uint32Array(n)
+  for (let i = 0; i < n; i++) index[i] = i
+  Array.prototype.sort.call(index, (a: number, b: number) => (values[a]! < values[b]! ? -1 : values[a]! > values[b]! ? 1 : 0))
+  const sorted = Array.from(index, (k) => values[k])
+  const lo = bisectLeftValues(sorted, from)
+  const hi = bisectLeftValues(sorted, to)
+  for (let i = 0; i < lo; i++) curr[index[i]!]! |= bit
+  for (let i = hi; i < n; i++) curr[index[i]!]! |= bit
+}
+
+/**
+ * The same bit when no sort is needed: every value is a number (none NaN) and so is each end of the range, so the order is total and
+ * a tuple sits before the position of `from` exactly when it is `< from`, and from the position of `to` on exactly when it is
+ * `>= to` (an end that is NaN is the position past the last tuple: the one before it takes every tuple, the other none). Returns
+ * false, having marked nothing, when a value or an end is anything else -- the sorted order of those is the sort's to say.
+ */
+function markOutsideNumeric(data: Row[], f: (r: Row) => unknown, from: unknown, to: unknown, bit: number, curr: Uint32Array): boolean {
+  if (typeof from !== 'number' || typeof to !== 'number') return false
+  const n = data.length
+  const values = new Float64Array(n)
+  for (let i = 0; i < n; i++) {
+    const v = f(data[i]!)
+    if (typeof v !== 'number' || v !== v) return false
+    values[i] = v
+  }
+  // (an end that is NaN is the position n: below it is every tuple; from it on, none)
+  const all = from !== from
+  for (let i = 0; i < n; i++) {
+    const v = values[i]!
+    if (all || v < from || v >= to) curr[i]! |= bit
+  }
+  return true
+}
+
+/**
  * An indexed multi-dimensional filter (vega-crossfilter CrossFilter): bit `i` of a tuple's state is set when the tuple lies outside
  * `query[i]` -- below it or at/above its end, by the sorted order of `fields[i]` -- so a tuple passes when no bit is set. The
  * tuples go on (each carrying its `_index`), the bitmaps are the transform's `signal`.
@@ -1136,17 +1177,9 @@ function crossfilterRows(rows: Row[], t: Record<string, unknown>, ctx: Transform
   const curr = new Uint32Array(n)
   for (let d = 0; d < m; d++) {
     const f = fieldOf(fields[d])
-    const values = data.map((r) => f(r))
-    const index = new Uint32Array(n)
-    for (let i = 0; i < n; i++) index[i] = i
-    // vega-crossfilter SortedIndex: the index permuted by the values, `<` / `>` order (an incomparable pair is a tie)
-    Array.prototype.sort.call(index, (a: number, b: number) => (values[a]! < values[b]! ? -1 : values[a]! > values[b]! ? 1 : 0))
-    const sorted = Array.from(index, (k) => values[k])
-    const lo = bisectLeftValues(sorted, query[d]![0])
-    const hi = bisectLeftValues(sorted, query[d]![1])
+    const range = query[d]!
     const bit = 1 << d
-    for (let i = 0; i < lo; i++) curr[index[i]!]! |= bit
-    for (let i = hi; i < n; i++) curr[index[i]!]! |= bit
+    if (!markOutsideNumeric(data, f, range[0], range[1], bit, curr)) markOutsideSorted(data, f, range[0], range[1], bit, curr)
   }
   if (typeof t.signal === 'string') {
     // (the mask is all that is hashed with the signals: the arrays stay out of reach of a context fingerprint)

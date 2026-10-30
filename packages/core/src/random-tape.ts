@@ -91,6 +91,27 @@ export function atRandomSite<T>(random: Random | undefined, key: string, fingerp
 }
 
 /**
+ * What can draw from the injected source: the expression functions that read it (`random`, the three `sample*` distributions), the
+ * transforms that do (`sample`, `wordcloud`) and the aggregate ops that bootstrap (`ci0`, `ci1`, in `aggregate`, `joinaggregate`
+ * and `window`). Matched as words in the code, so a field that merely shares a name only costs a fingerprint it did not need.
+ */
+const DRAWING_WORDS = /\b(?:random|sampleNormal|sampleLogNormal|sampleUniform|sample|wordcloud|ci0|ci1)\b/
+
+/**
+ * Whether `code` (an expression, or a transform's parameters) could draw from the injected source. A site that cannot has no tape to
+ * replay, so its inputs need no fingerprint -- which for a transform over 200k rows is most of what an evaluation would cost.
+ */
+export function mayDrawRandom(code: unknown): boolean {
+  if (typeof code === 'string') return DRAWING_WORDS.test(code)
+  if (code === null || typeof code !== 'object') return false
+  let may = DRAW_MEMO.get(code)
+  if (may === undefined) DRAW_MEMO.set(code, (may = DRAWING_WORDS.test(JSON.stringify(code))))
+  return may
+}
+// (a compiled transform is not changed once built; the memo is by object, so a replaced spec is a new entry)
+const DRAW_MEMO = new WeakMap<object, boolean>()
+
+/**
  * A fingerprint of ALL of `v`'s content (rows can be long: {@link valueKey} bounds itself and falls back to identity, which is a miss
  * for the equal copy the next pass makes). Two 32-bit FNV-1a lanes over a typed walk of the value; cyclic or non-plain parts (functions,
  * class instances other than Date) are keyed by identity, which can only be a miss.
