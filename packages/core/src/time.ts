@@ -165,6 +165,10 @@ export interface Zone {
   year(d: Date): number
   setDate(d: Date, n: number): void
   setMonth(d: Date, n: number): void
+  /** Move by calendar days, months and years (written out per zone: these are the hot paths of offsets and ranges). */
+  addDays(d: Date, n: number): void
+  addMonths(d: Date, n: number): void
+  addYears(d: Date, n: number): void
   setMonthAndDate(d: Date, month: number, date: number): void
   setYear(d: Date, n: number): void
   midnight(d: Date): void
@@ -183,6 +187,9 @@ export const localZone: Zone = {
   year: (d) => d.getFullYear(),
   setDate: (d, n) => void d.setDate(n),
   setMonth: (d, n) => void d.setMonth(n),
+  addDays: (d, n) => void d.setDate(d.getDate() + n),
+  addMonths: (d, n) => void d.setMonth(d.getMonth() + n),
+  addYears: (d, n) => void d.setFullYear(d.getFullYear() + n),
   setMonthAndDate: (d, m, n) => void d.setMonth(m, n),
   setYear: (d, n) => void d.setFullYear(n),
   midnight: (d) => void d.setHours(0, 0, 0, 0),
@@ -200,6 +207,9 @@ export const utcZone: Zone = {
   year: (d) => d.getUTCFullYear(),
   setDate: (d, n) => void d.setUTCDate(n),
   setMonth: (d, n) => void d.setUTCMonth(n),
+  addDays: (d, n) => void d.setUTCDate(d.getUTCDate() + n),
+  addMonths: (d, n) => void d.setUTCMonth(d.getUTCMonth() + n),
+  addYears: (d, n) => void d.setUTCFullYear(d.getUTCFullYear() + n),
   setMonthAndDate: (d, m, n) => void d.setUTCMonth(m, n),
   setYear: (d, n) => void d.setUTCFullYear(n),
   midnight: (d) => void d.setUTCHours(0, 0, 0, 0),
@@ -207,8 +217,9 @@ export const utcZone: Zone = {
 }
 
 /** Days or weeks between two floored dates, discounting a change of the zone's offset between them. */
-const spanBetween = (zone: Zone, length: number) => (a: Date, b: Date): number =>
-  (+b - +a - (zone.behind(b) - zone.behind(a)) * durationMinute) / length
+const spanBetween = (zone: Zone, length: number) => zone === utcZone
+  ? (a: Date, b: Date): number => (+b - +a) / length
+  : (a: Date, b: Date): number => (+b - +a - (zone.behind(b) - zone.behind(a)) * durationMinute) / length
 
 function calendarUnits(zone: Zone) {
   const minute: Unit = {
@@ -225,7 +236,7 @@ function calendarUnits(zone: Zone) {
   }
   const day: Unit = {
     floor: zone.midnight,
-    shift: (d, n) => zone.setDate(d, zone.date(d) + n),
+    shift: zone.addDays,
     between: spanBetween(zone, durationDay),
     phase: (d) => zone.date(d) - 1,
   }
@@ -234,7 +245,7 @@ function calendarUnits(zone: Zone) {
       zone.setDate(d, zone.date(d) - (zone.day(d) + 7 - firstDay) % 7)
       zone.midnight(d)
     },
-    shift: (d, n) => zone.setDate(d, zone.date(d) + n * 7),
+    shift: (d, n) => zone.addDays(d, n * 7),
     between: spanBetween(zone, durationWeek),
   })
   const month: Unit = {
@@ -242,7 +253,7 @@ function calendarUnits(zone: Zone) {
       zone.setDate(d, 1)
       zone.midnight(d)
     },
-    shift: (d, n) => zone.setMonth(d, zone.month(d) + n),
+    shift: zone.addMonths,
     between: (a, b) => zone.month(b) - zone.month(a) + (zone.year(b) - zone.year(a)) * 12,
     phase: zone.month,
   }
@@ -251,7 +262,7 @@ function calendarUnits(zone: Zone) {
       zone.setMonthAndDate(d, 0, 1)
       zone.midnight(d)
     },
-    shift: (d, n) => zone.setYear(d, zone.year(d) + n),
+    shift: zone.addYears,
     between: (a, b) => zone.year(b) - zone.year(a),
     phase: zone.year,
     // every k years: floor to a multiple of k, and offsetting moves k years whatever the month and day
