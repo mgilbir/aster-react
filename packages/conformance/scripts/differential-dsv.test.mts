@@ -71,7 +71,8 @@ describe('dsvFormat vs d3-dsv (generated)', () => {
         const keep = (log: unknown[][]) => (row: unknown, i: number, columns?: unknown): unknown => {
           log.push([enc(row), i, columns ?? null])
           // drop every third row, rewrite the next: the converter's return value decides what is kept
-          return i % 3 === 2 ? null : i % 3 === 1 ? { n: i } : row
+          // falsy answers other than null and undefined keep their row
+          return i % 5 === 4 ? 0 : i % 5 === 3 ? '' : i % 3 === 2 ? null : i % 3 === 1 ? { n: i } : row
         }
         const a = got.parse(t, keep(seen) as never)
         const b = want.parse(t, keep(seenWant) as never)

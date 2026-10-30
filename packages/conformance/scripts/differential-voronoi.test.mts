@@ -107,6 +107,23 @@ describe('voronoi vs vega-voronoi (generated)', () => {
     expect(refused).toBeGreaterThan(50)
   })
 
+  it('a few points with missing or non-numeric coordinates give the same cells (sets that end in the reference)', async () => {
+    // the reference loops forever on some such inputs, so only small fixed sets, which it finishes, are compared
+    const r = seeded(555)
+    let garbage = 0
+    for (let i = 0; i < 400; i++) {
+      const rows: Row[] = Array.from({ length: 1 + r.int(4) }, () => ({
+        x: r.int(3) === 0 ? r.pick([NaN, 'a', undefined]) : r.next() * 50,
+        y: r.int(4) === 0 ? r.pick([NaN, undefined]) : r.next() * 50,
+      }))
+      const transform = { type: 'voronoi', x: 'x', y: 'y', size: [100, 100] }
+      const want = await vegaPaths(rows, transform)
+      expect(asterPaths(rows, transform), JSON.stringify(rows)).toEqual(want)
+      if (Array.isArray(want) && want.some((p) => typeof p === 'string' && /NaN|^M,/.test(p))) garbage++
+    }
+    expect(garbage).toBeGreaterThan(50)
+  })
+
   it('coordinates that are not numbers, or are beyond 1e150, still end, with one result per row', () => {
     // vega loops forever on some of these, and past about 1e150 its orientation test overflows and answers arbitrarily
     // (Aster's is exact, see orient.ts), so only the shape of the result can be compared
