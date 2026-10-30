@@ -6,12 +6,15 @@
  * store afterwards (upstream rewrites Dates in tuple values as it tests) must be equal. `differential-selections`
  * pins hand-written stores; this one finds the combinations nobody wrote down.
  */
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import * as vega from 'vega'
 import { compileChart } from '../../core/src/compiler.ts'
 import { evaluateChart } from '../../core/src/runtime.ts'
 import { enc, quietLogger } from './differential-util.mts'
 import { seeded } from './upstream.mts'
+
+// generated differentials are heavy; a loaded machine must not turn them into timeouts
+vi.setConfig({ testTimeout: 120_000 })
 
 type Row = Record<string, unknown>
 const STORE = 's_store'

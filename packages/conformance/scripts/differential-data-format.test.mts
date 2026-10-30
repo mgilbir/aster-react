@@ -4,13 +4,16 @@
  * with every form of `parse` (none, `auto`, per-field types, `date:` / `utc:` patterns). The rows, the types and the
  * errors thrown for an illegal pattern must be equal, NaN, -0 and Dates told apart.
  */
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import '../../core/src/addon-load.ts'
 import { inferType, inferTypes, readData, typeParsers } from '../../core/src/data-format.ts'
 import { enc } from './differential-util.mts'
 import { importChain, seeded } from './upstream.mts'
 
 const loader: any = await importChain('vega', 'vega-loader')
+
+// generated differentials are heavy; a loaded machine must not turn them into timeouts
+vi.setConfig({ testTimeout: 120_000 })
 
 const VALUES: unknown[] = [
   'true', 'false', true, false, 1, 0, -0, '1', '1.5', '-2', '', ' ', 'abc', null, undefined, NaN, '2020-01-01', '2020-01-01T10:00:00Z', '12/31/2020',

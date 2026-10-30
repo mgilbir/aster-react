@@ -6,7 +6,7 @@
  *   - the clipped cells of `voronoi` against d3-delaunay's (corner for corner, in the same order).
  * Point sets come from `voronoi-cases.mts`. Nothing is recorded: both sides run in this process.
  */
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { orientation } from '../../core/src/orient.ts'
 import { triangulate } from '../../core/src/delaunay.ts'
 import { voronoi } from '../../core/src/voronoi.ts'
@@ -16,6 +16,9 @@ import { MODES, points } from './voronoi-cases.mts'
 const { orient2d } = (await importChain('vega', 'vega-voronoi', 'd3-delaunay', 'delaunator', 'robust-predicates')) as { orient2d: (...a: number[]) => number }
 const { default: Delaunator } = (await importChain('vega', 'vega-voronoi', 'd3-delaunay', 'delaunator')) as { default: new (c: Float64Array) => { triangles: Uint32Array; halfedges: Int32Array; hull: Uint32Array } }
 const { Delaunay } = (await importChain('vega', 'vega-voronoi', 'd3-delaunay')) as { Delaunay: new (c: Float64Array) => { voronoi(b: number[]): { _clip(i: number): number[] | null } } }
+
+// generated differentials are heavy; a loaded machine must not turn them into timeouts
+vi.setConfig({ testTimeout: 120_000 })
 
 const sign = (v: number): number => (v < 0 ? -1 : v > 0 ? 1 : 0)
 

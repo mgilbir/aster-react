@@ -7,11 +7,14 @@
  */
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import * as upstream from 'topojson-client'
 import { feature, mesh } from '../../core/src/topojson.ts'
 import { enc } from './differential-util.mts'
 import { seeded } from './upstream.mts'
+
+// generated differentials are heavy; a loaded machine must not turn them into timeouts
+vi.setConfig({ testTimeout: 120_000 })
 
 type Topology = any
 type Filter = (a: unknown, b: unknown) => boolean

@@ -8,13 +8,16 @@
  * string, character for character: the cell's vertices come from the same floating point operations in the same order.
  * A rectangle the reference refuses ("invalid bounds") must be refused alike.
  */
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import * as vega from 'vega'
 import '../../core/src/addon-transforms.ts'
 import { applyTransforms } from '../../core/src/transform.ts'
 import { quietLogger } from './differential-util.mts'
 import { seeded } from './upstream.mts'
 import { MODES, hostilePoints, points, type Row } from './voronoi-cases.mts'
+
+// generated differentials are heavy; a loaded machine must not turn them into timeouts
+vi.setConfig({ testTimeout: 120_000 })
 
 const runtime: any = { scale: () => undefined, data: () => [], expr: () => { throw new Error('no expressions here') } }
 

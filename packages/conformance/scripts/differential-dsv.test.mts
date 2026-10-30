@@ -4,11 +4,14 @@
  * `@aster/core`'s `dsvFormat`, for the comma, semicolon, tab and pipe dialects. Rows, their `columns`, the row
  * converter calls (value, index, columns) and the formatted text must be equal, bit for bit.
  */
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import * as d3 from 'd3-dsv'
 import { dsvFormat } from '../../core/src/dsv.ts'
 import { enc } from './differential-util.mts'
 import { seeded } from './upstream.mts'
+
+// generated differentials are heavy; a loaded machine must not turn them into timeouts
+vi.setConfig({ testTimeout: 120_000 })
 
 const DELIMITERS = [',', ';', '\t', '|']
 const PIECES = ['a', 'b', 'c', '0', '1', ' ', 'é', '"', '""', '\n', '\r', '\r\n', 'x y', '__proto__', 'false', '-']

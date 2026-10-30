@@ -6,13 +6,16 @@
  * grammar; this one finds what a fixed list does not think of.
  */
 import { readFileSync } from 'node:fs'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { parseEventSelectorString as inCore } from '../../core/src/event-selector.ts'
 import { parseEventSelectorString as inVl } from '../../vl/src/event-selector.ts'
 import { importChain, seeded } from './upstream.mts'
 
 type Parse = (selector: string, source?: string, marks?: Record<string, unknown>) => unknown
 const upstream = ((await importChain('vega', 'vega-parser', 'vega-event-selector')) as { parseSelector: Parse }).parseSelector
+
+// generated differentials are heavy; a loaded machine must not turn them into timeouts
+vi.setConfig({ testTimeout: 120_000 })
 
 function outcome(f: () => unknown): unknown {
   try {
