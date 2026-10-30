@@ -307,6 +307,17 @@ export const timeYear = timeInterval((date) => {
 }, (date) => {
   return date.getFullYear()
 })
+// An optimized implementation for this simple case (as upstream): offsetting by one steps `k` years.
+timeYear.every = (k: number) => {
+  k = Math.floor(k)
+  return !isFinite(k) || !(k > 0) ? null : timeInterval((date) => {
+    date.setFullYear(Math.floor(date.getFullYear() / k) * k)
+    date.setMonth(0, 1)
+    date.setHours(0, 0, 0, 0)
+  }, (date, step) => {
+    date.setFullYear(date.getFullYear() + (step as number) * k)
+  })
+}
 export const timeYears = timeYear.range
 
 export const utcYear = timeInterval((date) => {
@@ -319,6 +330,16 @@ export const utcYear = timeInterval((date) => {
 }, (date) => {
   return date.getUTCFullYear()
 })
+utcYear.every = (k: number) => {
+  k = Math.floor(k)
+  return !isFinite(k) || !(k > 0) ? null : timeInterval((date) => {
+    date.setUTCFullYear(Math.floor(date.getUTCFullYear() / k) * k)
+    date.setUTCMonth(0, 1)
+    date.setUTCHours(0, 0, 0, 0)
+  }, (date, step) => {
+    date.setUTCFullYear(date.getUTCFullYear() + (step as number) * k)
+  })
+}
 export const utcYears = utcYear.range
 
 // --- vega-time: units --------------------------------------------------------

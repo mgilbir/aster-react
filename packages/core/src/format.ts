@@ -95,26 +95,7 @@ export function precisionRound(step: number, max: number): number {
   return Math.max(0, exponent(max) - exponent(step)) + 1
 }
 
-/** Powers-of-ten thresholds used by `tickStep`'s rounding. */
-const e10 = Math.sqrt(50)
-const e5 = Math.sqrt(10)
-const e2 = Math.sqrt(2)
-
-/** The "nice" step between `count` ticks of a domain (d3-array's tickStep). */
-export function tickStep(start: number, stop: number, count: number): number {
-  const reverse = stop < start
-  const inc = reverse ? tickIncrement(stop, start, count) : tickIncrement(start, stop, count)
-  return (reverse ? -1 : 1) * (inc < 0 ? 1 / -inc : inc)
-}
-
-function tickIncrement(start: number, stop: number, count: number): number {
-  const step = (stop - start) / Math.max(0, count)
-  const power = Math.floor(Math.log10(step))
-  const error = step / Math.pow(10, power)
-  return power >= 0
-    ? (error >= e10 ? 10 : error >= e5 ? 5 : error >= e2 ? 2 : 1) * Math.pow(10, power)
-    : -Math.pow(10, -power) / (error >= e10 ? 10 : error >= e5 ? 5 : error >= e2 ? 2 : 1)
-}
+export { tickStep } from './arr.js'
 
 // --- the specifier -----------------------------------------------------------
 
@@ -265,11 +246,11 @@ const prefixes = ['y', 'z', 'a', 'f', 'p', 'n', 'µ', 'm', '', 'k', 'M', 'G', 'T
 export function formatLocale(locale: FormatLocaleDefinition): FormatLocale {
   const group = locale.grouping === undefined || locale.thousands === undefined
     ? identity
-    : formatGroup((locale.grouping as readonly unknown[]).map(Number), locale.thousands + '')
+    : formatGroup(Array.prototype.map.call(locale.grouping, Number), locale.thousands + '')
   const currencyPrefix = locale.currency === undefined ? '' : locale.currency[0] + ''
   const currencySuffix = locale.currency === undefined ? '' : locale.currency[1] + ''
   const decimal = locale.decimal === undefined ? '.' : locale.decimal + ''
-  const numerals = locale.numerals === undefined ? identity : formatNumerals((locale.numerals as readonly unknown[]).map(String))
+  const numerals = locale.numerals === undefined ? identity : formatNumerals(Array.prototype.map.call(locale.numerals, String))
   const percent = locale.percent === undefined ? '%' : locale.percent + ''
   const minus = locale.minus === undefined ? '−' : locale.minus + ''
   const nan = locale.nan === undefined ? 'NaN' : locale.nan + ''
@@ -323,7 +304,7 @@ export function formatLocale(locale: FormatLocaleDefinition): FormatLocale {
         if (valueNegative && +out === 0 && sign !== '+') valueNegative = false
         // Compute the prefix and suffix.
         valuePrefix = (valueNegative ? (sign === '(' ? sign : minus) : sign === '-' || sign === '(' ? '' : sign) + valuePrefix
-        valueSuffix = (type === 's' && !isNaN(v) && prefixExponent !== undefined ? prefixes[8 + prefixExponent / 3] as string : '') + valueSuffix + (valueNegative && sign === '(' ? ')' : '')
+        valueSuffix = (type === 's' && !isNaN(out as unknown as number) && prefixExponent !== undefined ? prefixes[8 + prefixExponent / 3] as string : '') + valueSuffix + (valueNegative && sign === '(' ? ')' : '')
         // Break the formatted value into the integer "value" part that can be
         // grouped, and fractional or exponential "suffix" part that is not.
         if (maybeSuffix) {

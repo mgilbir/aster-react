@@ -305,7 +305,7 @@ export function timeFormatLocale(definition: TimeLocaleDefinition): TimeFormatLo
       // If a time zone is specified, all fields are interpreted as UTC and then
       // offset according to the specified time zone.
       if ('Z' in d) {
-        d.H = (d.H as number) + (d.Z as number) / 100 | 0
+        d.H = (d.H as number) + ((d.Z as number) / 100 | 0)
         d.M = (d.M as number) + (d.Z as number) % 100
         return utcDate(d)
       }

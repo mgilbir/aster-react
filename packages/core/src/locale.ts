@@ -65,7 +65,7 @@ function rightmostDigit(str: string, dec: number): number {
     c = str.charCodeAt(i)
     if (c >= 48 && c <= 57) return i + 1 // is digit
   }
-  return i
+  return NaN // upstream returns undefined here: the caller then slices to ''
 }
 
 function trimZeroes(numberFormat: (x: number) => string, decimalChar: string): (x: number) => string {
