@@ -1,21 +1,17 @@
 /**
- * Timers: a port of d3-timer, the scheduler vega-view runs its `timer` event streams on
- * (vega-view `view.timer(callback, delay)` is `interval(tick, delay)` of d3-timer).
+ * Timers for the `timer` event streams of the signal event loop, driven by one scheduler per clock.
  *
- * Why a port and not `setInterval`: a Vega-Lite animation integrates the time between its ticks
- * (`anim_clock + (now() - last_tick_at)`), so WHEN the ticks happen decides every frame. d3-timer
- * runs all timers from one animation-frame loop, schedules an interval against its own start time
- * (`time + n * delay`, so a late tick does not push the next one back) and hands the callback the
- * elapsed time since the start; reproducing that schedule is what makes a controlled clock produce
- * vega's frames.
- *
- * Differences from d3-timer, all about deterministic testing and cleanup:
- *  - the clock (`now`, timeouts, intervals, animation frames) is a value (`TimerClock`) and
- *    `createTimers(clock)` builds an independent scheduler; `timers` is the shared default one, bound
- *    to the host's globals LAZILY (a fake clock installed after import is honoured);
- *  - `Timer.stop()` is idempotent; `pending()` reports the live timers, for leak checks. (As in d3-timer, the
- *    frame already requested when the last timer stops still runs once, finds nothing and releases the
- *    clock-skew poll: the scheduler then holds no timeout, interval or frame.)
+ * WHEN a tick happens decides what a Vega-Lite animation draws (its clock adds the time between ticks), so the schedule
+ * is fixed by what the reference scheduler (d3-timer, which vega-view runs on) does, not left free:
+ *   - all timers share one wake-up: a frame, when something is due within 24 ms, otherwise a timeout for the earliest
+ *     due time; ticks that are due run in the order the timers were first started;
+ *   - a timer is due at `time + delay`, and the elapsed time its callback gets is measured from `time`; an interval is
+ *     scheduled against its start (`start + k * delay`), so a late tick does not push the next one back;
+ *   - time is read once per frame, so every callback of a frame sees the same instant;
+ *   - while a frame loop runs, a 1 s poll notices a clock that jumped (a suspended laptop) and shifts the schedule by the
+ *     jump instead of firing a burst.
+ * Everything else is free: the clock is a value (`TimerClock`), a scheduler is an object, and the shared one reads the
+ * host's globals at call time, so a test can install a controlled clock after the module loaded.
  */
 
 /** What the scheduler needs of the host: a monotonic clock and ways to wake up later. */
@@ -38,21 +34,29 @@ export interface Timer {
 
 export interface Timers {
   now(): number
-  /** run `fn(elapsed)` every frame once `delay` ms have passed (d3 `timer`) */
+  /** run `fn(elapsed)` every frame once `delay` ms have passed */
   timer(fn: (elapsed: number) => void, delay?: number, time?: number): Timer
-  /** run `fn(elapsed)` every `delay` ms, scheduled against the start time (d3 `interval`); without a delay, every frame */
+  /** run `fn(elapsed)` every `delay` ms, scheduled against the start time; without a delay, every frame */
   interval(fn: (elapsed: number) => void, delay?: number, time?: number): Timer
-  /** run every due timer now (d3 `timerFlush`) */
+  /** run every due timer now */
   flush(): void
   /** timers started and not stopped */
   pending(): number
 }
 
+type Callback = (elapsed: number) => void
+
+/** One scheduled callback. It stays in the scheduler's list, stopped or not, until the next sweep. */
 interface Task {
-  _call: ((elapsed: number) => void) | null
-  _time: number
-  _next: Task | null
+  callback: Callback | null
+  dueAt: number
+  listed: boolean
 }
+
+/** Frames this soon are waited for; a later wake-up is a timeout. */
+const FRAME_WINDOW = 24
+/** How often the poll looks for a jump of the clock. */
+const POLL_MS = 1000
 
 /** The host's globals, looked up at call time. */
 const globalClock: TimerClock = {
@@ -88,156 +92,181 @@ export const hostClock: TimerClock = {
   requestFrame: (fn) => (injected ?? globalClock).requestFrame(fn),
 }
 
-/** An independent scheduler over `clock` (d3-timer's module state, as an object). */
-export function createTimers(clock: TimerClock): Timers {
-  let frame = 0 // is an animation frame pending?
-  let timeout: unknown = 0 // is a timeout pending?
-  let interval: unknown = 0 // are any timers active?
-  const pokeDelay = 1000 // how frequently we check for clock skew
-  let taskHead: Task | null = null
-  let taskTail: Task | null = null
-  let clockLast = 0
-  let clockNow = 0
-  let clockSkew = 0
-  let live = 0
+class Scheduler implements Timers {
+  /** tasks in the order they were first listed */
+  private tasks: Task[] = []
+  /** the instant the current frame reads as; 0 outside a frame, when the next read starts one */
+  private frameTime = 0
+  /** the clock's own reading at the last wake-up or poll, and what the poll has taken off for jumps */
+  private lastReading = 0
+  private skew = 0
+  /** non-zero while a frame is requested or callbacks are running: nothing else needs to wake the scheduler */
+  private frame = 0
+  private wakeTimeout: unknown
+  private poll: unknown
+  private live = 0
 
-  function now(): number {
-    return clockNow || (clock.requestFrame(clearNow), (clockNow = clock.now() + clockSkew))
-  }
+  constructor(private readonly clock: TimerClock) {}
 
-  function clearNow(): void {
-    clockNow = 0
-  }
-
-  class TimerImpl implements Task, Timer {
-    _call: ((elapsed: number) => void) | null = null
-    _time = 0
-    _next: Task | null = null
-
-    restart(callback: (elapsed: number) => void, delay?: number, time?: number): void {
-      if (typeof callback !== 'function') throw new TypeError('callback is not a function')
-      const t = (time == null ? now() : +time) + (delay == null ? 0 : +delay)
-      if (!this._next && taskTail !== this) {
-        if (taskTail) taskTail._next = this
-        else taskHead = this
-        taskTail = this
-      }
-      if (!this._call) ++live
-      this._call = callback
-      this._time = t
-      sleep()
+  now(): number {
+    if (!this.frameTime) {
+      this.clock.requestFrame(() => {
+        this.frameTime = 0
+      })
+      this.frameTime = this.clock.now() + this.skew
     }
-
-    stop(): void {
-      if (this._call) {
-        this._call = null
-        this._time = Infinity
-        --live
-        sleep()
-      }
-    }
+    return this.frameTime
   }
 
-  function timerFlush(): void {
-    now() // Get the current time, if not already set.
-    ++frame // Pretend we've set an alarm, if we haven't already.
-    let t = taskHead
-    while (t) {
-      const e = clockNow - t._time
-      if (e >= 0) t._call?.call(undefined, e)
-      t = t._next
-    }
-    --frame
+  pending(): number {
+    return this.live
   }
 
-  function wake(): void {
-    clockNow = (clockLast = clock.now()) + clockSkew
-    frame = 0
-    timeout = 0
+  timer(callback: Callback, delay?: number, time?: number): Timer {
+    const handle = new Handle(this, null)
+    handle.restart(callback, delay, time)
+    return handle
+  }
+
+  interval(callback: Callback, delay?: number, time?: number): Timer {
+    const handle = new Handle(this, delay == null ? null : { ticked: delay })
+    handle.restart(callback, delay, time)
+    return handle
+  }
+
+  /** (Re)arm `task` to call `callback` at `time + delay`, with `time` defaulting to now. */
+  arm(task: Task, callback: Callback, delay?: number, time?: number): void {
+    if (typeof callback !== 'function') throw new TypeError('callback is not a function')
+    const dueAt = (time == null ? this.now() : +time) + (delay == null ? 0 : +delay)
+    if (!task.listed) {
+      task.listed = true
+      this.tasks.push(task)
+    }
+    if (!task.callback) this.live++
+    task.callback = callback
+    task.dueAt = dueAt
+    this.reschedule()
+  }
+
+  disarm(task: Task): void {
+    if (!task.callback) return
+    task.callback = null
+    task.dueAt = Infinity
+    this.live--
+    this.reschedule()
+  }
+
+  flush(): void {
+    this.now()
+    // a frame is as good as requested while callbacks run: arming from a callback must not schedule another wake-up
+    this.frame++
+    // a callback may add tasks; the loop reaches them when they are already due
+    for (let i = 0; i < this.tasks.length; i++) {
+      const task = this.tasks[i]!
+      const elapsed = this.frameTime - task.dueAt
+      if (elapsed >= 0) task.callback?.(elapsed)
+    }
+    this.frame--
+  }
+
+  /** The wake-up: read the clock, run what is due, then sweep and plan the next wake-up. */
+  private wake = (): void => {
+    this.frameTime = (this.lastReading = this.clock.now()) + this.skew
+    this.frame = 0
+    this.wakeTimeout = undefined
     try {
-      timerFlush()
+      this.flush()
     } finally {
-      frame = 0
-      nap()
-      clockNow = 0
+      this.frame = 0
+      this.sweep()
+      this.frameTime = 0
     }
   }
 
-  function poke(): void {
-    const n = clock.now()
-    const delay = n - clockLast
-    if (delay > pokeDelay) {
-      clockSkew -= delay
-      clockLast = n
+  /** The poll: a reading far ahead of the last one means the clock jumped; take the jump off the schedule. */
+  private checkJump = (): void => {
+    const reading = this.clock.now()
+    const gap = reading - this.lastReading
+    if (gap > POLL_MS) {
+      this.skew -= gap
+      this.lastReading = reading
     }
   }
 
-  function nap(): void {
-    let t0: Task | null = null
-    let t1 = taskHead
-    let t2: Task | null
-    let time = Infinity
-    while (t1) {
-      if (t1._call) {
-        if (time > t1._time) time = t1._time
-        t0 = t1
-        t1 = t1._next
-      } else {
-        t2 = t1._next
-        t1._next = null
-        t1 = t0 ? (t0._next = t2) : (taskHead = t2)
+  /** Drop stopped tasks from the list and sleep until the earliest remaining one. */
+  private sweep(): void {
+    let earliest = Infinity
+    this.tasks = this.tasks.filter((task) => {
+      if (!task.callback) {
+        task.listed = false
+        return false
       }
-    }
-    taskTail = t0
-    sleep(time)
+      if (task.dueAt < earliest) earliest = task.dueAt
+      return true
+    })
+    this.reschedule(earliest)
   }
 
-  function sleep(time?: number): void {
-    if (frame) return // Soonest alarm already set, or will be.
-    if (timeout) timeout = void clock.clearTimeout(timeout)
-    const delay = (time as number) - clockNow // Strictly less than if we recomputed clockNow (NaN without a time: wake on the next frame).
-    if (delay > 24) {
-      if ((time as number) < Infinity) timeout = clock.setTimeout(wake, (time as number) - clock.now() - clockSkew)
-      if (interval) interval = void clock.clearInterval(interval)
+  /**
+   * Plan the next wake-up for the task due at `dueAt` (none given: as soon as possible, which is the next frame): a
+   * frame when it is within the window, otherwise a timeout, with no frame loop or poll running in between.
+   */
+  private reschedule(dueAt?: number): void {
+    if (this.frame) return
+    if (this.wakeTimeout) this.wakeTimeout = void this.clock.clearTimeout(this.wakeTimeout)
+    if (dueAt! - this.frameTime > FRAME_WINDOW) {
+      if (dueAt! < Infinity) this.wakeTimeout = this.clock.setTimeout(this.wake, dueAt! - this.clock.now() - this.skew)
+      if (this.poll) this.poll = void this.clock.clearInterval(this.poll)
     } else {
-      if (!interval) {
-        clockLast = clock.now()
-        interval = clock.setInterval(poke, pokeDelay)
+      if (!this.poll) {
+        this.lastReading = this.clock.now()
+        this.poll = this.clock.setInterval(this.checkJump, POLL_MS)
       }
-      frame = 1
-      clock.requestFrame(wake)
+      this.frame = 1
+      this.clock.requestFrame(this.wake)
     }
   }
-
-  function timer(callback: (elapsed: number) => void, delay?: number, time?: number): Timer {
-    const t = new TimerImpl()
-    t.restart(callback, delay, time)
-    return t
-  }
-
-  function intervalTimer(callback: (elapsed: number) => void, delay?: number, time?: number): Timer {
-    const t = new TimerImpl()
-    let total = delay as number
-    if (delay == null) {
-      t.restart(callback, delay, time)
-      return t
-    }
-    const base = t.restart.bind(t)
-    t.restart = (cb: (elapsed: number) => void, d?: number, tm?: number): void => {
-      const dd = +(d as number)
-      const start = tm == null ? now() : +tm
-      base(function tick(elapsed: number): void {
-        elapsed += total
-        base(tick, (total += dd), start)
-        cb(elapsed)
-      }, dd, start)
-    }
-    t.restart(callback, delay, time)
-    return t
-  }
-
-  return { now, timer, interval: intervalTimer, flush: timerFlush, pending: () => live }
 }
 
-/** The shared scheduler (what vega's view uses d3-timer's one module-level scheduler for). */
+/**
+ * What the caller holds. A plain timer is one task; an interval re-arms itself from its own ticks. `interval` is non-null
+ * for an interval with a delay, and `ticked` is the offset of the next tick from the start: it keeps counting through
+ * restarts (a restarted interval's `elapsed` includes what the earlier runs accumulated).
+ */
+class Handle implements Timer {
+  private readonly task: Task = { callback: null, dueAt: 0, listed: false }
+
+  constructor(
+    private readonly scheduler: Scheduler,
+    private readonly interval: { ticked: number } | null,
+  ) {}
+
+  restart(callback: Callback, delay?: number, time?: number): void {
+    const interval = this.interval
+    if (!interval) {
+      this.scheduler.arm(this.task, callback, delay, time)
+      return
+    }
+    const step = +delay!
+    const start = time == null ? this.scheduler.now() : +time
+    const tick: Callback = (elapsed) => {
+      const sinceStart = elapsed + interval.ticked
+      interval.ticked += step
+      this.scheduler.arm(this.task, tick, interval.ticked, start)
+      callback(sinceStart)
+    }
+    this.scheduler.arm(this.task, tick, step, start)
+  }
+
+  stop(): void {
+    this.scheduler.disarm(this.task)
+  }
+}
+
+/** An independent scheduler over `clock`. */
+export function createTimers(clock: TimerClock): Timers {
+  return new Scheduler(clock)
+}
+
+/** The shared scheduler, on the host's clock. */
 export const timers: Timers = createTimers(hostClock)

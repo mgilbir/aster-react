@@ -1,43 +1,24 @@
 /**
- * Vega-Lite selection expression functions: a port of vega-selections 6.1.4
- * (`vlSelectionTest`, `vlSelectionIdTest`, `vlSelectionResolve`, `vlSelectionTuples`).
+ * The Vega-Lite selection functions of the expression language: `vlSelectionTest`, `vlSelectionIdTest`,
+ * `vlSelectionResolve` and `vlSelectionTuples`.
  *
- * A selection is stored as a dataset of tuples: `{unit, fields: [{field, type, ...}], values: [...]}`
- * for an intensional store (point / interval selections over fields), or `{unit, _vgsid_}` for an
- * extensional one (point selections over the identifier of each datum). The functions here read such a
- * dataset through `rows` (the dataset's rows AFTER its transforms: an extensional store is a
- * `collect` sorted by `_vgsid_`, which `vlSelectionIdTest` bisects).
+ * A selection lives in a store, a dataset of tuples. An intensional tuple names the fields it constrains,
+ * `{unit, fields: [{field, type}], values}`, and `type` says how its value constrains a datum (see `POINT_TESTS`). An
+ * extensional tuple is just `{unit, _vgsid_}`: the identifier of a selected datum. `unit` names the view the tuple came
+ * from. The functions read the store as the rows of its dataset after the dataset's own transforms, so an extensional
+ * store arrives sorted by `_vgsid_`.
  *
- * Differences from upstream, deliberate:
- *   - upstream reads `this.context.data[name]` and its `index:unit` operator; here the caller passes the rows
- *     and the unit index is derived from them (cached per rows array);
- *   - field getters are cached in a WeakMap instead of being written onto the field definition;
- *   - `d3-array`'s `union` / `intersection` are owned Set operations (the engine imports no d3).
- *
- * Everything else, including the in-place `Date -> number` coercion of tuple values that vega-selections
- * performs while testing, is the upstream behaviour (`selections` differential tests pin it).
+ * What other code can see, and so what is fixed here:
+ *   - Testing rewrites the store. A tuple value that is a Date (or a list that starts with one) becomes a number in the
+ *     tuple itself, the first time a datum is tested against it, and later reads of the store show the numbers.
+ *   - Combining units for `intersect` needs a match in every unit; `union` needs a match in any.
+ *   - With no tuples at all `vlSelectionTest` answers `0`, not `false`.
+ *   - `vlSelectionResolve` merges a unit's lists with the same sloppy rules the store was written under: an empty
+ *     accumulator is replaced by the next list, so an empty intersection starts over with the next unit.
  */
-import { array, error, field, inrange, isArray, isDate, isObject, toNumber, extend } from './util.js'
+import { array, error, extend, field, inrange, isArray, isDate, isObject, toNumber } from './util.js'
 
 export const SELECTION_ID = '_vgsid_'
-const Intersect = 'intersect'
-const Union = 'union'
-const VlMulti = 'vlMulti'
-const VlPoint = 'vlPoint'
-const Or = 'or'
-const And = 'and'
-
-const TYPE_ENUM = 'E'
-const TYPE_RANGE_INC = 'R'
-const TYPE_RANGE_EXC = 'R-E'
-const TYPE_RANGE_LE = 'R-LE'
-const TYPE_RANGE_RE = 'R-RE'
-const TYPE_PRED_LT = 'E-LT'
-const TYPE_PRED_LTE = 'E-LTE'
-const TYPE_PRED_GT = 'E-GT'
-const TYPE_PRED_GTE = 'E-GTE'
-const TYPE_PRED_VALID = 'E-VALID'
-const TYPE_PRED_ONE_OF = 'E-ONE'
 
 type Row = Record<string, unknown>
 type Rows = readonly Row[] | undefined
@@ -45,363 +26,327 @@ interface FieldDef { field: string; type: string }
 
 const selectionIdOf = field(SELECTION_ID)
 
-const getters = new WeakMap<object, (d: unknown) => unknown>()
-/** vega-selections `getter`: the accessor of a projected field, built once per field definition. */
-function getter(f: FieldDef): (d: unknown) => unknown {
-  let g = getters.get(f)
-  if (!g) {
-    g = field(f.field)
-    getters.set(f, g)
+/** What testing needs of one field definition: its accessor and the test for its type, found once. */
+interface FieldTest {
+  type: string
+  read: (d: unknown) => unknown
+  test: ((d: unknown, v: unknown) => boolean) | undefined
+}
+const fieldTests = new WeakMap<object, FieldTest>()
+
+function fieldTestOf(def: FieldDef): FieldTest {
+  let entry = fieldTests.get(def)
+  // the type is compared on every use: a definition is not frozen, and a changed type must not keep its old test
+  if (!entry || entry.type !== def.type) {
+    entry = { type: def.type, read: field(def.field), test: Object.hasOwn(POINT_TESTS, def.type) ? POINT_TESTS[def.type] : undefined }
+    fieldTests.set(def, entry)
   }
-  return g
+  return entry
 }
 
-/** d3-array `ascending`: NaN for a missing or unordered pair. */
-function ascending(a: unknown, b: unknown): number {
-  const x = a as number
-  const y = b as number
-  return a == null || b == null ? NaN : x < y ? -1 : x > y ? 1 : x >= y ? 0 : NaN
+/** The value of the definition's field in a datum. */
+const valueOf = (def: FieldDef, datum: unknown): unknown => fieldTestOf(def).read(datum)
+
+// -- testing a datum against one tuple ------------------------------------------------------------------------------
+
+/** How a tuple of each field type constrains a datum's value `d`, given the tuple's value `v`. */
+const POINT_TESTS: Record<string, (d: unknown, v: unknown) => boolean> = {
+  // a single value, or a list of values (an interval over a discrete field)
+  E: (d, v) => (isArray(v) ? v.includes(d) : d === v),
+  R: (d, v) => inrange(d, v as unknown[]),
+  'R-RE': (d, v) => inrange(d, v as unknown[], true, false),
+  'R-E': (d, v) => inrange(d, v as unknown[], false, false),
+  'R-LE': (d, v) => inrange(d, v as unknown[], false, true),
+  'E-LT': (d, v) => !((d as number) >= (v as number)),
+  'E-LTE': (d, v) => !((d as number) > (v as number)),
+  'E-GT': (d, v) => !((d as number) <= (v as number)),
+  'E-GTE': (d, v) => !((d as number) < (v as number)),
+  'E-VALID': (d) => !(d === null || isNaN(d as number)),
+  'E-ONE': (d, v) => (v as unknown[]).indexOf(d) !== -1,
 }
 
-// ----------------------------------------------------------------------------------------------------------
-// vlSelectionTest
+/** The tuple's i-th value with Dates turned into numbers, written back into the tuple (see the module comment). */
+function numericValue(values: unknown[], i: number): unknown {
+  const v = values[i]
+  if (isDate(v)) return (values[i] = toNumber(v))
+  if (isArray(v) && isDate(v[0])) return (values[i] = v.map(toNumber))
+  return v
+}
 
-function testPoint(datum: unknown, entry: Row): boolean {
-  const fields = entry.fields as FieldDef[]
-  const values = entry.values as unknown[]
-  const n = fields.length
-
-  for (let i = 0; i < n; ++i) {
-    const f = fields[i]!
-    let dval = getter(f)(datum)
-
-    if (isDate(dval)) dval = toNumber(dval)
-    if (isDate(values[i])) values[i] = toNumber(values[i])
-    const vi = values[i]
-    if (isArray(vi) && isDate(vi[0])) values[i] = (vi as unknown[]).map(toNumber)
-
-    const v = values[i]
-    if (f.type === TYPE_ENUM) {
-      // Enumerated fields can either specify individual values (single/multi selections)
-      // or an array of values (interval selections).
-      if (isArray(v) ? !v.includes(dval) : dval !== v) return false
-    } else if (f.type === TYPE_RANGE_INC) {
-      if (!inrange(dval, v as unknown[])) return false
-    } else if (f.type === TYPE_RANGE_RE) {
-      // Discrete selection of bins test within the range [bin_start, bin_end).
-      if (!inrange(dval, v as unknown[], true, false)) return false
-    } else if (f.type === TYPE_RANGE_EXC) {
-      if (!inrange(dval, v as unknown[], false, false)) return false
-    } else if (f.type === TYPE_RANGE_LE) {
-      if (!inrange(dval, v as unknown[], false, true)) return false
-    } else if (f.type === TYPE_PRED_LT) {
-      if ((dval as number) >= (v as number)) return false
-    } else if (f.type === TYPE_PRED_LTE) {
-      if ((dval as number) > (v as number)) return false
-    } else if (f.type === TYPE_PRED_GT) {
-      if ((dval as number) <= (v as number)) return false
-    } else if (f.type === TYPE_PRED_GTE) {
-      if ((dval as number) < (v as number)) return false
-    } else if (f.type === TYPE_PRED_VALID) {
-      if (dval === null || isNaN(dval as number)) return false
-    } else if (f.type === TYPE_PRED_ONE_OF) {
-      if ((v as unknown[]).indexOf(dval) === -1) return false
-    }
+/** Does the datum satisfy every field constraint of the tuple? A field type nobody defined constrains nothing. */
+function matches(datum: unknown, tuple: Row): boolean {
+  const fields = tuple.fields as FieldDef[]
+  const values = tuple.values as unknown[]
+  for (let i = 0; i < fields.length; ++i) {
+    const { read, test } = fieldTestOf(fields[i]!)
+    const found = read(datum)
+    const datumValue = isDate(found) ? toNumber(found) : found
+    const value = numericValue(values, i)
+    if (test && !test(datumValue, value)) return false
   }
-
   return true
 }
 
+// -- units ----------------------------------------------------------------------------------------------------------
+
+interface UnitCounts {
+  length: number
+  first: unknown
+  last: unknown
+  counts: Map<unknown, number>
+}
+const unitCountCache = new WeakMap<readonly Row[], UnitCounts>()
+
 /**
- * vega-selections' `index:unit` operator: per unit, how many tuples of the store carry it. Derived from the
- * rows on demand and cached per rows array; the cache entry is only trusted while the array still has the
- * length and the end tuples it was built for (an array patched in place by the incremental engine is rebuilt).
+ * How many tuples each unit has. Kept per store array, and trusted only while the array has the length and end tuples
+ * it was counted for: the incremental engine patches a store array in place.
  */
-const unitIndexes = new WeakMap<readonly Row[], { length: number; first: unknown; last: unknown; index: Map<unknown, { count: number }> }>()
-function unitIndexOf(rows: readonly Row[]): Map<unknown, { count: number }> {
-  const hit = unitIndexes.get(rows)
-  if (hit && hit.length === rows.length && hit.first === rows[0] && hit.last === rows[rows.length - 1]) return hit.index
-  const index = new Map<unknown, { count: number }>()
-  for (const r of rows) {
-    const e = index.get(r.unit)
-    if (e) e.count++
-    else index.set(r.unit, { count: 1 })
-  }
-  unitIndexes.set(rows, { length: rows.length, first: rows[0], last: rows[rows.length - 1], index })
-  return index
+function countUnits(rows: readonly Row[]): Map<unknown, number> {
+  const cached = unitCountCache.get(rows)
+  if (cached && cached.length === rows.length && cached.first === rows[0] && cached.last === rows[rows.length - 1]) return cached.counts
+  const counts = new Map<unknown, number>()
+  for (const row of rows) counts.set(row.unit, (counts.get(row.unit) ?? 0) + 1)
+  unitCountCache.set(rows, { length: rows.length, first: rows[0], last: rows[rows.length - 1], counts })
+  return counts
 }
 
 /**
- * Tests whether `datum` is contained in the interactive selection stored in `rows`.
- * `op` is the set operation combining the units of the selection: `'intersect'`, or union (default).
- * With no tuples in the store nothing is selected (`0`, falsy), as upstream returns `n && intersect`.
+ * `vlSelectionTest`: is `datum` in the selection `rows` holds? `op` is `'intersect'` (the datum must match in every
+ * unit; within a unit one tuple is enough) or anything else for a union (any tuple of any unit).
  */
 export function selectionTest(rows: Rows, datum: unknown, op?: unknown): boolean | number {
-  const entries = rows ?? []
-  const intersect = op === Intersect
-  const unitIdx = intersect && rows ? unitIndexOf(rows) : undefined
-  const n = entries.length
-  let miss: Record<string, number> | undefined
+  const tuples = rows ?? []
+  if (op !== 'intersect') {
+    for (const tuple of tuples) if (matches(datum, tuple)) return true
+    return tuples.length ? false : 0
+  }
+  if (!rows) return 0
 
-  for (let i = 0; i < n; ++i) {
-    const entry = entries[i]!
-    let b: boolean
-
-    if (unitIdx && intersect) {
-      // multi selections union within the same unit and intersect across units.
-      miss = miss || {}
-      const unit = entry.unit as string
-      let count = miss[unit] || 0
-
-      // if we've already matched this unit, skip.
-      if (count === -1) continue
-
-      b = testPoint(datum, entry)
-      miss[unit] = b ? -1 : ++count
-
-      // if we match and there are no other units return true
-      // if we've missed against all tuples in this unit return false
-      if (b && unitIdx.size === 1) return true
-      if (!b && count === unitIdx.get(unit)!.count) return false
+  const unitCounts = countUnits(rows)
+  const matched = new Set<unknown>()
+  const missed = new Map<unknown, number>()
+  for (const tuple of tuples) {
+    const unit = tuple.unit
+    if (matched.has(unit)) continue
+    if (matches(datum, tuple)) {
+      if (unitCounts.size === 1) return true
+      matched.add(unit)
     } else {
-      b = testPoint(datum, entry)
-
-      // if we find a miss and we do require intersection return false
-      // if we find a match and we don't require intersection return true
-      if ((intersect as unknown as number) ^ (b as unknown as number)) return b
+      const misses = (missed.get(unit) ?? 0) + 1
+      if (misses === unitCounts.get(unit)) return false
+      missed.set(unit, misses)
     }
   }
-
-  // if intersecting and we made it here, then we saw no misses
-  // if not intersecting, then we saw no matches
-  // if no active selections, return false
-  return n && intersect
+  return tuples.length ? true : 0
 }
 
-// ----------------------------------------------------------------------------------------------------------
-// vlSelectionIdTest
+// -- testing by identifier --------------------------------------------------------------------------------------------
 
-/** d3-array `bisector(accessor)`'s `left`: the first index whose key is not below `x`. */
-function bisectLeft(a: readonly Row[], x: unknown): number {
-  let lo = 0
-  let hi = a.length
-  if (lo < hi) {
-    if (ascending(x, x) !== 0) return hi
-    do {
-      const mid = (lo + hi) >>> 1
-      if (ascending(selectionIdOf(a[mid]), x) < 0) lo = mid + 1
-      else hi = mid
-    } while (lo < hi)
-  }
-  return lo
+/** Three-way comparison where anything unordered (a missing value, NaN, mixed types) is `NaN`. */
+function order(a: unknown, b: unknown): number {
+  return a == null || b == null ? NaN : (a as number) < (b as number) ? -1 : (a as number) > (b as number) ? 1 : (a as number) >= (b as number) ? 0 : NaN
 }
 
-/** d3-array `bisector(accessor)`'s `right`: the first index whose key is above `x`. */
-function bisectRight(a: readonly Row[], x: unknown): number {
+/** First position in `rows` (sorted by identifier) whose identifier is not below `id`, or above it if `past`. */
+function searchIds(rows: readonly Row[], id: unknown, past: boolean): number {
   let lo = 0
-  let hi = a.length
-  if (lo < hi) {
-    if (ascending(x, x) !== 0) return hi
-    do {
-      const mid = (lo + hi) >>> 1
-      if (ascending(selectionIdOf(a[mid]), x) <= 0) lo = mid + 1
-      else hi = mid
-    } while (lo < hi)
+  let hi = rows.length
+  if (order(id, id) !== 0) return hi
+  while (lo < hi) {
+    const mid = (lo + hi) >>> 1
+    const c = order(selectionIdOf(rows[mid]), id)
+    if (past ? c <= 0 : c < 0) lo = mid + 1
+    else hi = mid
   }
   return lo
 }
 
 /**
- * Tests whether `datum` (by its `_vgsid_`) is contained in an extensional selection store. `rows` must be
- * sorted by `_vgsid_`, which is what the `collect` transform of such a store does.
+ * `vlSelectionIdTest`: is the datum's `_vgsid_` one of the identifiers in `rows` (sorted by `_vgsid_`)? For
+ * `'intersect'` the identifier must be there once for every unit.
  */
 export function selectionIdTest(rows: Rows, datum: unknown, op?: unknown): boolean {
-  const entries = rows ?? []
-  const intersect = op === Intersect
-  const unitIdx = intersect && rows ? unitIndexOf(rows) : undefined
-  const value = selectionIdOf(datum)
-  const index = bisectLeft(entries, value)
-
-  if (index === entries.length) return false
-  if (selectionIdOf(entries[index]) !== value) return false
-
-  if (unitIdx && intersect) {
-    if (unitIdx.size === 1) return true
-    if (bisectRight(entries, value) - index < unitIdx.size) return false
+  const tuples = rows ?? []
+  const id = selectionIdOf(datum)
+  const first = searchIds(tuples, id, false)
+  if (first === tuples.length || selectionIdOf(tuples[first]) !== id) return false
+  if (op === 'intersect' && rows) {
+    const units = countUnits(rows).size
+    if (units === 1) return true
+    if (searchIds(tuples, id, true) - first < units) return false
   }
-
   return true
 }
 
-// ----------------------------------------------------------------------------------------------------------
-// vlSelectionResolve
-
-/** d3-array `union`: the distinct values of every iterable, first-seen order. */
-function setUnion(...iterables: Iterable<unknown>[]): Set<unknown> {
-  const set = new Set<unknown>()
-  for (const it of iterables) for (const v of it) set.add(v)
-  return set
-}
-
-/** d3-array `intersection`: the values of the first iterable that are in every other one. */
-function setIntersection(values: Iterable<unknown>, ...others: Iterable<unknown>[]): Set<unknown> {
-  const set = new Set<unknown>(values)
-  const sets = others.map((o) => (o instanceof Set ? o : new Set(o)))
-  out: for (const v of set) {
-    for (const o of sets) {
-      if (!o.has(v)) {
-        set.delete(v)
-        continue out
-      }
-    }
-  }
-  return set
-}
-
-type SetOp = (base: any, value: any) => any
-
-const ops: Record<string, (...args: any[]) => any> = {
-  [`${SELECTION_ID}_union`]: setUnion,
-  [`${SELECTION_ID}_intersect`]: setIntersection,
-
-  E_union: ((base: unknown[], value: unknown[]) => {
-    if (!base.length) return value
-
-    for (let i = 0, n = value.length; i < n; ++i) if (!base.includes(value[i])) base.push(value[i])
-    return base
-  }) as SetOp,
-
-  E_intersect: ((base: unknown[], value: unknown[]) => (!base.length ? value : base.filter((v) => value.includes(v)))) as SetOp,
-
-  R_union: ((base: unknown[], value: unknown[]) => {
-    let lo: unknown = toNumber(value[0])
-    let hi: unknown = toNumber(value[1])
-    if ((lo as number) > (hi as number)) {
-      lo = value[1]
-      hi = value[0]
-    }
-
-    if (!base.length) return [lo, hi]
-    if ((base[0] as number) > (lo as number)) base[0] = lo
-    if ((base[1] as number) < (hi as number)) base[1] = hi
-    return base
-  }) as SetOp,
-
-  R_intersect: ((base: unknown[], value: unknown[]) => {
-    let lo: unknown = toNumber(value[0])
-    let hi: unknown = toNumber(value[1])
-    if ((lo as number) > (hi as number)) {
-      lo = value[1]
-      hi = value[0]
-    }
-
-    if (!base.length) return [lo, hi]
-    if ((hi as number) < (base[0] as number) || (base[1] as number) < (lo as number)) {
-      return []
-    } else {
-      if ((base[0] as number) < (lo as number)) base[0] = lo
-      if ((base[1] as number) > (hi as number)) base[1] = hi
-    }
-    return base
-  }) as SetOp,
-}
+// -- resolving --------------------------------------------------------------------------------------------------------
 
 /**
- * Resolves a selection for use as a scale domain or reads it via the API: an object of selected fields and
- * values. `isMulti` marks a "multi" (point) selection, which also yields its per-unit entries under `vlPoint`
- * (`vlMulti` when `vl5` is falsy).
+ * Combines what has been collected so far with the next list. The accumulator is the resolve's own array (the first list
+ * is always a copy of the tuple's), so a merge may grow it in place; only the result is used.
+ */
+type Merge = (accumulated: unknown[], next: unknown[]) => unknown[]
+
+/** Union of enumerated values: `next`'s values that are not yet there are appended. */
+const unionValues: Merge = (acc, next) => {
+  if (!acc.length) return next
+  for (const v of next) if (!acc.includes(v)) acc.push(v)
+  return acc
+}
+
+const intersectValues: Merge = (acc, next) => (acc.length ? acc.filter((v) => next.includes(v)) : next)
+
+/** `[lo, hi]` of a range given in either order; the order test is on numbers, the values kept are the ones given. */
+function ascendingEnds(range: unknown[]): [unknown, unknown] {
+  const lo = toNumber(range[0])
+  const hi = toNumber(range[1])
+  return (lo as number) > (hi as number) ? [range[1], range[0]] : [lo, hi]
+}
+
+const unionRanges: Merge = (acc, next) => {
+  const [lo, hi] = ascendingEnds(next)
+  if (!acc.length) return [lo, hi]
+  if ((acc[0] as number) > (lo as number)) acc[0] = lo
+  if ((acc[1] as number) < (hi as number)) acc[1] = hi
+  return acc
+}
+
+const intersectRanges: Merge = (acc, next) => {
+  const [lo, hi] = ascendingEnds(next)
+  if (!acc.length) return [lo, hi]
+  if ((hi as number) < (acc[0] as number) || (acc[1] as number) < (lo as number)) return []
+  if ((acc[0] as number) < (lo as number)) acc[0] = lo
+  if ((acc[1] as number) > (hi as number)) acc[1] = hi
+  return acc
+}
+
+const MERGES: Record<string, Record<string, Merge>> = {
+  E: { union: unionValues, intersect: intersectValues },
+  R: { union: unionRanges, intersect: intersectRanges },
+}
+
+/** The merge for a field kind (the first letter of its type: `E` enumerated, `R` range) and a set operation. */
+function mergeFor(kind: string, operation: string): Merge | undefined {
+  const table = MERGES
+  return Object.hasOwn(table, kind) && Object.hasOwn(table[kind]!, operation) ? table[kind]![operation] : undefined
+}
+
+/** `target[key] = value` as plain data: a key called `__proto__` becomes a property, not the prototype. */
+function setOwn(target: Record<string, unknown>, key: string, value: unknown): void {
+  if (key === '__proto__') Object.defineProperty(target, key, { value, enumerable: true, writable: true, configurable: true })
+  else target[key] = value
+}
+
+/** Is `key` an array index (`'0'`, `'17'`, not `'01'`), which an object lists before its other keys? */
+const isArrayIndex = (key: string): boolean => /^(0|[1-9]\d*)$/.test(key) && Number(key) < 2 ** 32 - 1
+
+/** The keys in the order an object would list them: array indices ascending, then the rest as they were added. */
+function objectOrder(keys: Iterable<string>): string[] {
+  const indices: string[] = []
+  const others: string[] = []
+  for (const key of keys) (isArrayIndex(key) ? indices : others).push(key)
+  return indices.sort((a, b) => Number(a) - Number(b)).concat(others)
+}
+
+/** The values of a map in `objectOrder` of its keys. */
+const valuesInObjectOrder = <T>(map: Map<string, T>): T[] => objectOrder(map.keys()).map((key) => map.get(key)!)
+
+/**
+ * `vlSelectionResolve`: the selection as an object with, per field, the values (a list) or range (`[lo, hi]`) selected
+ * over all units, combined by `op` (`union`, the default, or `intersect`). An extensional store resolves to the Set of
+ * its identifiers under `_vgsid_`. With `isMulti` the tuples are also listed per unit under `vlPoint` (`vlMulti` unless
+ * `vl5`), in the `{or: [...]}` / `{and: [{or: [...]}, ...]}` form of a Vega-Lite predicate.
+ *
+ * Units and fields are keys, so they are kept in maps (a unit or field called `__proto__` is just a name) and listed
+ * the way an object would list them, which decides the order of the combined lists and of the result's keys.
  */
 export function selectionResolve(rows: Rows, op?: unknown, isMulti?: unknown, vl5?: unknown): Record<string, unknown> {
-  const entries = rows ?? []
-  const resolved: Record<string, any> = {}
-  const multiRes: Record<string, any[]> = {}
-  const types: Record<string, string> = {}
-  const n = entries.length
+  const operation = (op || 'union') as string
+  /** per field, per unit: what that unit's tuples selected */
+  const byField = new Map<string, Map<string, unknown[]>>()
+  const kinds = new Map<string, string>()
+  const perUnit = new Map<string, unknown[]>()
+  const unitsOf = (name: string): Map<string, unknown[]> => {
+    let units = byField.get(name)
+    if (!units) byField.set(name, (units = new Map()))
+    return units
+  }
+  const listOf = <T>(map: Map<string, T[]>, key: string): T[] => {
+    let list = map.get(key)
+    if (!list) map.set(key, (list = []))
+    return list
+  }
 
-  // First union all entries within the same unit.
-  for (let i = 0; i < n; ++i) {
-    const entry = entries[i]!
-    const unit = entry.unit as string
-    const fields = entry.fields as FieldDef[] | undefined
-    const values = entry.values as unknown[] | undefined
-
+  for (const tuple of rows ?? []) {
+    const unit = String(tuple.unit)
+    const fields = tuple.fields as FieldDef[] | undefined
+    const values = tuple.values as unknown[] | undefined
     if (fields && values) {
-      // Intentional selection stores
-      for (let j = 0, m = fields.length; j < m; ++j) {
-        const f = fields[j]!
-        const res = resolved[f.field] || (resolved[f.field] = {})
-        const resUnit = res[unit] || (res[unit] = [])
-        const type = (types[f.field] = f.type.charAt(0))
-        const union = ops[`${type}_union`]!
-        res[unit] = union(resUnit, array(values[j]))
-      }
-
-      // If the same multi-selection is repeated over views and projected over
-      // an encoding, it may operate over different fields making it especially
-      // tricky to reliably resolve it. At best, we can de-dupe identical entries
-      // but doing so may be more computationally expensive than it is worth.
-      // Instead, for now, we simply transform our store representation into
-      // a more human-friendly one.
+      fields.forEach((def, j) => {
+        const units = unitsOf(def.field)
+        const kind = def.type.charAt(0)
+        kinds.set(def.field, kind)
+        const union = mergeFor(kind, 'union')
+        if (!union) throw new TypeError(`vlSelectionResolve: field type "${def.type}" cannot be combined`)
+        units.set(unit, union(units.get(unit) ?? [], array(values[j])))
+      })
       if (isMulti) {
-        const resUnit = multiRes[unit] || (multiRes[unit] = [])
-        resUnit.push(array(values).reduce((obj: Record<string, unknown>, curr, j) => ((obj[fields[j]!.field] = curr), obj), {}))
+        const entry: Record<string, unknown> = {}
+        array(values).forEach((v, j) => setOwn(entry, fields[j]!.field, v))
+        listOf(perUnit, unit).push(entry)
       }
     } else {
-      // Short circuit extensional selectionId stores which hold sorted IDs unique to each unit.
-      const value = selectionIdOf(entry)
-      const res = resolved[SELECTION_ID] || (resolved[SELECTION_ID] = {})
-      const resUnit = res[unit] || (res[unit] = [])
-      resUnit.push(value)
-
-      if (isMulti) {
-        const mu = multiRes[unit] || (multiRes[unit] = [])
-        mu.push({ [SELECTION_ID]: value })
-      }
+      const id = selectionIdOf(tuple)
+      listOf(unitsOf(SELECTION_ID), unit).push(id)
+      if (isMulti) listOf(perUnit, unit).push({ [SELECTION_ID]: id })
     }
   }
 
-  // Then resolve fields across units as per the op.
-  const operation = (op || Union) as string
-  if (resolved[SELECTION_ID]) {
-    resolved[SELECTION_ID] = (ops[`${SELECTION_ID}_${operation}`] as (...a: unknown[]) => unknown)(...Object.values(resolved[SELECTION_ID]))
+  const resolved: Record<string, unknown> = {}
+  const ids = byField.get(SELECTION_ID)
+  if (ids) {
+    const lists = valuesInObjectOrder(ids)
+    if (operation === 'union') resolved[SELECTION_ID] = new Set(lists.flatMap((l) => [...l]))
+    else if (operation === 'intersect') resolved[SELECTION_ID] = intersectSets(lists)
+    else throw new TypeError(`vlSelectionResolve: unknown operation "${operation}"`)
+    // fields beside the identifiers (a mixed store) are left as they were collected, unit by unit
+    for (const [f, units] of byField) if (f !== SELECTION_ID) setOwn(resolved, f, Object.fromEntries(units))
   } else {
-    for (const f of Object.keys(resolved)) {
-      resolved[f] = Object.keys(resolved[f])
-        .map((unit) => resolved[f][unit])
-        .reduce((acc, curr) => (acc === undefined ? curr : (ops[`${types[f]}_${operation}`] as SetOp)(acc, curr)))
+    for (const [f, units] of byField) {
+      const merge = mergeFor(kinds.get(f)!, operation)
+      setOwn(
+        resolved,
+        f,
+        valuesInObjectOrder(units).reduce((acc, next) => {
+          if (!merge) throw new TypeError(`vlSelectionResolve: unknown operation "${operation}"`)
+          return merge(acc, next)
+        }),
+      )
     }
   }
 
-  const units = Object.keys(multiRes)
-  if (isMulti && units.length) {
-    const key = vl5 ? VlPoint : VlMulti
-    resolved[key] = operation === Union
-      ? { [Or]: units.reduce((acc: unknown[], k) => { for (const e of multiRes[k]!) acc.push(e); return acc }, []) }
-      : { [And]: units.map((k) => ({ [Or]: multiRes[k] })) }
+  if (isMulti && perUnit.size) {
+    const lists = valuesInObjectOrder(perUnit)
+    resolved[vl5 ? 'vlPoint' : 'vlMulti'] = operation === 'union' ? { or: lists.flat() } : { and: lists.map((list) => ({ or: list })) }
   }
-
   return resolved
 }
 
-// ----------------------------------------------------------------------------------------------------------
-// vlSelectionTuples
+/** The members of the first list that every other list has too, in the first list's order. */
+function intersectSets(lists: unknown[][]): Set<unknown> {
+  const [first = [], ...rest] = lists
+  const others = rest.map((l) => new Set(l))
+  return new Set([...first].filter((v) => others.every((s) => s.has(v))))
+}
 
 /**
- * Maps an array of scene graph items to an array of selection tuples (`base` extended with the projected
- * `values`, or with the item's `_vgsid_` for an extensional selection).
+ * `vlSelectionTuples`: one tuple per scene item, `base` (the unit and fields) extended with the item's projected
+ * `values`, or with its `_vgsid_` when `base` names no fields.
  */
 export function selectionTuples(items: unknown, base: unknown): unknown[] {
-  if (!isArray(items)) {
-    error('First argument to selectionTuples must be an array.')
-  }
-  if (!isObject(base)) {
-    error('Second argument to selectionTuples must be an object.')
-  }
-  const b = base as { fields?: FieldDef[] }
-  return (items as Array<{ datum?: unknown }>).map((x) =>
-    extend(
-      b.fields ? { values: b.fields.map((f) => getter(f)(x.datum)) } : { [SELECTION_ID]: selectionIdOf(x.datum) },
-      b,
-    ),
+  if (!isArray(items)) error('First argument to selectionTuples must be an array.')
+  if (!isObject(base)) error('Second argument to selectionTuples must be an object.')
+  const { fields } = base as { fields?: FieldDef[] }
+  return (items as Array<{ datum?: unknown }>).map((item) =>
+    extend(fields ? { values: fields.map((def) => valueOf(def, item.datum)) } : { [SELECTION_ID]: selectionIdOf(item.datum) }, base),
   )
 }

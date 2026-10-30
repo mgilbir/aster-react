@@ -35,6 +35,7 @@ interface D3 {
   timer(cb: (e: number) => void, delay?: number, time?: number): D3Timer
   intervalOf(cb: (e: number) => void, delay?: number, time?: number): D3Timer
   now(): number
+  timerFlush(): void
 }
 
 let counter = 0
@@ -59,6 +60,8 @@ type Op =
   | { at: number; op: 'start'; id: number; kind: 'timer' | 'interval'; delay?: number; time?: number }
   | { at: number; op: 'restart'; id: number; delay?: number }
   | { at: number; op: 'stop'; id: number }
+  | { at: number; op: 'jump'; ms: number }
+  | { at: number; op: 'flush' }
 
 function rng(seed: number): () => number {
   let a = seed >>> 0
@@ -92,6 +95,7 @@ interface Engine {
   start(id: number, kind: 'timer' | 'interval', delay: number | undefined, time: number | undefined, log: string[], now: () => number): void
   restart(id: number, delay: number | undefined, log: string[], now: () => number): void
   stop(id: number): void
+  flush(): void
 }
 
 function drive(clock: FakeClock, engine: Engine, ops: Op[]): string[] {
@@ -99,7 +103,11 @@ function drive(clock: FakeClock, engine: Engine, ops: Op[]): string[] {
   const horizon = 8000
   for (const o of ops) {
     clock.advance(o.at - clock.now())
-    if (o.op === 'start') engine.start(o.id, o.kind, o.delay, o.time, log, () => clock.now())
+    if (o.op === 'jump') {
+      clock.jump(o.ms)
+      clock.advance(0)
+    } else if (o.op === 'flush') engine.flush()
+    else if (o.op === 'start') engine.start(o.id, o.kind, o.delay, o.time, log, () => clock.now())
     else if (o.op === 'restart') engine.restart(o.id, o.delay, log, () => clock.now())
     else engine.stop(o.id)
   }
@@ -115,6 +123,7 @@ function asterEngine(clock: FakeClock): Engine {
     start(id, kind, delay, time, log, now) { live.set(id, timers[kind](cb(id, log, now), delay, time)) },
     restart(id, delay, log, now) { live.get(id)?.restart(cb(id, log, now), delay) },
     stop(id) { live.get(id)?.stop() },
+    flush() { timers.flush() },
   }
 }
 
@@ -125,7 +134,17 @@ function d3Engine(d3: D3): Engine {
     start(id, kind, delay, time, log, now) { live.set(id, (kind === 'interval' ? d3.intervalOf : d3.timer)(cb(id, log, now), delay, time)) },
     restart(id, delay, log, now) { live.get(id)?.restart(cb(id, log, now), delay) },
     stop(id) { live.get(id)?.stop() },
+    flush() { d3.timerFlush() },
   }
+}
+
+/** A scenario where the clock also stalls (a suspended tab: time jumps with nothing run) and `flush` is called by hand. */
+function scenarioWithStalls(seed: number): Op[] {
+  const r = rng(seed ^ 0x9e3779b9)
+  const ops = scenario(seed)
+  for (let k = 1 + Math.floor(r() * 3); k > 0; k--) ops.push({ at: Math.floor(r() * 6000), op: 'jump', ms: 1100 + Math.floor(r() * 4000) })
+  for (let k = Math.floor(r() * 3); k > 0; k--) ops.push({ at: Math.floor(r() * 6000), op: 'flush' })
+  return ops.sort((a, b) => a.at - b.at)
 }
 
 for (const withWindow of [false, true]) {
@@ -151,6 +170,35 @@ for (const withWindow of [false, true]) {
         total += drive(clock, d3Engine(d3), scenario(4000 + k * 13)).length
       }
       expect(total).toBeGreaterThan(500)
+    })
+  })
+}
+
+for (const withWindow of [false, true]) {
+  describe(`timer scheduler vs d3-timer (live) with clock stalls and manual flushes, frames from ${withWindow ? 'requestAnimationFrame' : 'a 17 ms timeout'}`, () => {
+    for (let k = 0; k < 300; k++) {
+      const seed = 9000 + k * 17
+      it(`scenario ${seed}`, async () => {
+        const ops = scenarioWithStalls(seed)
+        const clockD3 = new FakeClock(16)
+        const d3 = await d3On(clockD3, withWindow)
+        const want = drive(clockD3, d3Engine(d3), ops)
+        const clockMine = withWindow ? new FakeClock(16) : new TimeoutFrameClock(16)
+        const got = drive(clockMine, asterEngine(clockMine), ops)
+        expect(got).toEqual(want)
+      })
+    }
+    it('the scenarios exercise the stall: some tick log differs from the same scenario without one', async () => {
+      let differing = 0
+      for (let k = 0; k < 30; k++) {
+        const seed = 9000 + k * 17
+        const clockA = new FakeClock(16)
+        const clockB = new FakeClock(16)
+        const a = drive(clockA, d3Engine(await d3On(clockA, withWindow)), scenarioWithStalls(seed))
+        const b = drive(clockB, d3Engine(await d3On(clockB, withWindow)), scenarioWithStalls(seed).filter((o) => o.op !== 'jump'))
+        if (a.join() !== b.join()) differing++
+      }
+      expect(differing).toBeGreaterThan(5)
     })
   })
 }

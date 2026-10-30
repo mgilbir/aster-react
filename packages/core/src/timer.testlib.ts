@@ -53,6 +53,11 @@ export class FakeClock implements TimerClock {
     this.clearTimeout(id)
   }
 
+  /** Move time forward without running anything: a stall (a suspended tab), after which everything that was due is late. */
+  jump(ms: number): void {
+    this.t += ms
+  }
+
   /** What is still scheduled, by kind: a stopped scheduler holds none of it (the leak check). */
   active(): { timeouts: number; intervals: number; frames: number } {
     const count = (k: Job['kind']): number => this.jobs.filter((j) => j.kind === k).length
