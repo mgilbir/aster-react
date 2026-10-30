@@ -39,12 +39,6 @@ const hexByte = (v: number): string => {
   return (b < 16 ? '0' : '') + b.toString(16)
 }
 
-/** `name(args)` or `name(args, alpha)`, with the alpha dropped when it is exactly 1. */
-function cssFunction(name: string, args: readonly (number | string)[], opacity: number): string {
-  const alpha = clampOpacity(opacity)
-  return alpha === 1 ? `${name}(${args.join(', ')})` : `${name}a(${args.join(', ')}, ${alpha})`
-}
-
 // --- the base ---------------------------------------------------------------------
 
 export abstract class Color {
@@ -139,14 +133,19 @@ function hslWithAlpha(h: number, s: number, l: number, alpha: number): Hsl {
   return new Hsl(h, s, l, alpha)
 }
 
+/** A hex digit doubled (`f` is `ff`), read at bit offset `shift` of the digits' value. */
+const doubledNibble = (value: number, shift: number): number => (value >> shift & 0xf) * 17
+
 /** `#rgb`, `#rgba`, `#rrggbb`, `#rrggbbaa`; five- and seven-digit forms are refused. */
 function parseHex(digits: string): Rgb | null {
-  const n = digits.length
-  if (n === 5 || n === 7) return null
-  const full = n <= 4 ? digits.replace(/./g, '$&$&') : digits
-  const value = parseInt(full, 16)
-  if (full.length === 6) return fromRgb24(value)
-  return withAlpha(value >> 24 & 0xff, value >> 16 & 0xff, value >> 8 & 0xff, (value & 0xff) / 0xff)
+  const value = parseInt(digits, 16)
+  switch (digits.length) {
+    case 3: return new Rgb(doubledNibble(value, 8), doubledNibble(value, 4), doubledNibble(value, 0), 1)
+    case 4: return withAlpha(doubledNibble(value, 12), doubledNibble(value, 8), doubledNibble(value, 4), doubledNibble(value, 0) / 0xff)
+    case 6: return fromRgb24(value)
+    case 8: return withAlpha(value >> 24 & 0xff, value >> 16 & 0xff, value >> 8 & 0xff, (value & 0xff) / 0xff)
+    default: return null
+  }
 }
 
 const percentToByte = (p: string): number => +p * 255 / 100
@@ -225,7 +224,9 @@ export class Rgb extends Color {
   }
 
   override formatRgb(): string {
-    return cssFunction('rgb', [clampByte(this.r), clampByte(this.g), clampByte(this.b)], this.opacity)
+    const alpha = clampOpacity(this.opacity)
+    const channels = `${clampByte(this.r)}, ${clampByte(this.g)}, ${clampByte(this.b)}`
+    return alpha === 1 ? `rgb(${channels})` : `rgba(${channels}, ${alpha})`
   }
 }
 
@@ -285,7 +286,9 @@ export class Hsl extends Color {
   }
 
   override formatHsl(): string {
-    return cssFunction('hsl', [clampHue(this.h), clampUnit(this.s) * 100 + '%', clampUnit(this.l) * 100 + '%'], this.opacity)
+    const alpha = clampOpacity(this.opacity)
+    const channels = `${clampHue(this.h)}, ${clampUnit(this.s) * 100}%, ${clampUnit(this.l) * 100}%`
+    return alpha === 1 ? `hsl(${channels})` : `hsla(${channels}, ${alpha})`
   }
 }
 
