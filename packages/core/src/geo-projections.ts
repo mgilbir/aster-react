@@ -14,6 +14,7 @@ import {
   cos as mcos,
   degrees as mdegrees,
   epsilon,
+  epsilon2,
   geoStream,
   pathBoundsStream,
   halfPi,
@@ -841,7 +842,7 @@ equalEarthRaw.invert = function (x: number, y: number): number[] {
     l -= delta = fy / fpy
     l2 = l * l
     l6 = l2 * l2 * l2
-    if (abs(delta) < epsilon) break
+    if (abs(delta) < epsilon2) break
   }
   return [
     (M * x * (A1 + 3 * A2 * l2 + l6 * (7 * A3 + 9 * A4 * l2))) / cos(l),
