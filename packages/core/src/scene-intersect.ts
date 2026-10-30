@@ -18,6 +18,7 @@
  *                          (without one it settles for the bounds)
  */
 import { Bounds, DEG_TO_RAD, boundGroupItem, boundText, boundTypedMark } from './bounds.js'
+import { textAnchor } from './text-metrics.js'
 import { arcPath } from './render.js'
 import { flattenPath, insidePolys } from './path-flatten.js'
 import { MARK_NODE } from './util.js'
@@ -76,7 +77,8 @@ function intersectText(item: SceneItem, box: Bounds): boolean {
   // (vega's text `bound(tempBounds, item, 2)`: the corners of the text box, rotated about the anchor)
   const angle = (item.angle || 0) * DEG_TO_RAD
   const b = boundText(new Bounds(), { ...item, angle: 0 })
-  const p = b.rotatedPoints(angle, item.x || 0, item.y || 0)
+  const [ax, ay] = textAnchor(item)
+  const p = b.rotatedPoints(angle, ax, ay)
   return intersectBoxLine(box, p[0]!, p[1]!, p[2]!, p[3]!)
     || intersectBoxLine(box, p[0]!, p[1]!, p[4]!, p[5]!)
     || intersectBoxLine(box, p[4]!, p[5]!, p[6]!, p[7]!)
