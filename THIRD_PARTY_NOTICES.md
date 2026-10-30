@@ -960,8 +960,27 @@ THIS SOFTWARE.
 
 The `crossfilter` and `resolvefilter` transforms in `packages/core/src/transform-extra.ts`
 follow `vega-crossfilter` (its `CrossFilter`, `SortedIndex`, `Bitmaps` and `ResolveFilter`),
-and the `voronoi` transform follows `vega-voronoi` on top of the d3-delaunay port. Both
-packages are BSD-3-Clause and are listed, with their `LICENSE` text, under "Vega packages" above.
+and the `voronoi` transform follows `vega-voronoi`. Both packages are BSD-3-Clause and are listed,
+with their `LICENSE` text, under "Vega packages" above.
+
+## Modules rewritten as Aster's own designs
+
+`event-selector.ts`, `selections.ts`, `timer.ts`, `topojson.ts`, `dsv.ts`, `data-format.ts`, `delaunay.ts`,
+`voronoi.ts` and `orient.ts` were rewritten with their own structure, naming and comments; none of the upstream source
+text is carried over. They are still derivative in what an output must equal and are listed here, with the licences
+of the projects they follow printed above, for that reason:
+
+- `event-selector.ts` follows the grammar and error messages of `vega-event-selector` (BSD-3-Clause).
+- `selections.ts` follows the semantics of `vega-selections` (BSD-3-Clause), `data-format.ts` those of `vega-loader`
+  (BSD-3-Clause).
+- `timer.ts` follows the scheduling algorithm of `d3-timer` (ISC): when a frame or a timeout wakes the scheduler, how an
+  interval measures its ticks, and the clock-jump poll.
+- `topojson.ts` follows the decoding and arc-stitching algorithms of `topojson-client` (ISC), `dsv.ts` the dialect of
+  `d3-dsv` (ISC).
+- `delaunay.ts` follows the radial-sweep triangulation of `delaunator` (ISC), including the choices that decide ties,
+  and `voronoi.ts` the cell construction and clipping of `d3-delaunay` (ISC). `orient.ts` computes the exact sign that
+  `delaunator` takes from `robust-predicates` (Unlicense) by a different method (floating point filter, then exact
+  integer arithmetic); it reuses the published rounding-error bound of that predicate.
 
 
 ## Other projects (not redistributed; named for completeness)

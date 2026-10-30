@@ -84,7 +84,7 @@ Hosts add functions with `registerExpressionFunction` (vega's `expressionFunctio
 
 Signals are values in the evaluation context. Signal `update` expressions are resolved to a fixed point in the runtime
 (`resolveSignalUpdates`), so a scale range/domain or an encoding can reference a derived signal. Event-driven
-`signal.on` handlers are real: `@aster/core/signals` ports the parts of `vega-event-selector`, `vega-view` and
+`signal.on` handlers are real: `@aster/core/signals` reimplements the behaviour of `vega-event-selector` (its own `event-selector.ts`), `vega-view` and
 `vega-runtime` that turn DOM events into signal updates (selectors, `between`, filters, `throttle`, `consume`,
 `markname:event`), and `<Chart>` re-evaluates the scene when a signal changes ([INTERACTION.md](INTERACTION.md)).
 A signal written into a running chart renders like Vega except in the `retained` cases described under
@@ -105,7 +105,7 @@ Because heavy feature areas are only used by a small fraction of specs, they are
 | Addon | Registers |
 |---|---|
 | `@aster/core/geo` | the projections (`buildProjection`, `projectedPath`) and the contour generator (`contourRun`) |
-| `@aster/core/transforms` | the rare-layout transforms — `kde`, `kde2d`, `isocontour`, `heatmap`, `density`, `quantile`, `regression`, `loess`, `pack`, `partition`, `treemap`, `tree`, `treelinks`, `force`, `wordcloud`, `voronoi`, `geopath`, `label` (implementations in `transform-extra.ts`, `hierarchy-layout.ts` with `circle-pack.ts`, `treemap-tiling.ts` and `hierarchy-tree.ts`, `force-layout.ts` with `quadtree.ts`, `raster-transforms.ts`; `label.ts` places labels as vega-label does, on an occupancy grid, and `label-draw.ts` draws the marks it avoids with `raster.ts`, a coverage-only 2D context that follows Skia's rasterizer, so it needs neither a canvas nor a DOM), and the distribution functions of the expression language (`quantileNormal`, `densityUniform`, ... in `stats-functions.ts`) plus `treePath` / `treeAncestors` |
+| `@aster/core/transforms` | the rare-layout transforms — `kde`, `kde2d`, `isocontour`, `heatmap`, `density`, `quantile`, `regression`, `loess`, `pack`, `partition`, `treemap`, `tree`, `treelinks`, `force`, `wordcloud`, `voronoi`, `geopath`, `label` (implementations in `transform-extra.ts` (`voronoi` on `delaunay.ts`, `voronoi.ts` and `orient.ts`), `hierarchy-layout.ts` with `circle-pack.ts`, `treemap-tiling.ts` and `hierarchy-tree.ts`, `force-layout.ts` with `quadtree.ts`, `raster-transforms.ts`; `label.ts` places labels as vega-label does, on an occupancy grid, and `label-draw.ts` draws the marks it avoids with `raster.ts`, a coverage-only 2D context that follows Skia's rasterizer, so it needs neither a canvas nor a DOM), and the distribution functions of the expression language (`quantileNormal`, `densityUniform`, ... in `stats-functions.ts`) plus `treePath` / `treeAncestors` |
 | `@aster/core/load` | the text-format readers (`csv`/`tsv`/`dsv`, `topojson`; `dsv.ts`, `topojson.ts`) and `loadSpecData`, which vets every URL against a policy (protocols, credentials, private hosts, redirects, size and time bounds), fetches each `url` dataset and inlines its values so the synchronous pipeline runs unchanged ([LIMITS.md](LIMITS.md)) |
 | `@aster/core/dom` | the incremental DOM patcher (`patchSceneDom`, `sceneToDomDesc`, `createChartSession`); `<Chart>` now defaults to this path |
 | `@aster/core/signals` | the signal→view event loop (`bindSceneSignals`, `stampDatumAttrs`) that binds a spec's `signal.on` streams to the rendered svg |
@@ -215,6 +215,10 @@ Aster matches Vega's output wherever the oracle can be run; where it deliberatel
 | Oracle crashes | not reproduced (TypeErrors upstream) | crash | the sweeps count these as `node-error` |
 | An axis whose ticks fail over a late-ranked scale, with a domain or a title to draw | refused (`[aster] the ticks of the axis ... failed`) | the scenegraph has holes and Vega's own `toSVG` throws (`reading 'marktype'`) | there is no document to match; the cases Vega can draw are matched exactly |
 | Names that are members of `Object.prototype` (`toString`) for data sets or scales | handled as any name | `vega.parse` crashes | do not reproduce an upstream crash |
+| `vlSelectionResolve` over several tuples of one array-valued field (an interval over a discrete field, several units) | merges into fresh arrays; the store is left alone | the first tuple's own value array is the accumulator and grows in place, so the result and the store depend on it | a read must not rewrite the data it reads; the generated differential keeps such stores out of the resolve comparison |
+| Voronoi cells of points with missing or non-numeric coordinates, or with coordinates beyond 1e150 | the call ends and answers once per row; the orientation test is exact | the reference loops forever on some such inputs, and its orientation predicate overflows past 1e150 | no spec may hang the host; the cells of finite coordinates are character-for-character the reference's (`differential-voronoi`, `differential-delaunay`) |
+| Decoded topojson positions of a topology without `transform` | fresh arrays | the topology's own position arrays | the output may be modified without changing the topology |
+| `dsv` quoting on write with a delimiter that is a regular expression class character (`-`, `]`, `\`, `^`) | quotes correctly | builds a character class from the raw delimiter, which throws or misquotes | do not reproduce an upstream crash |
 
 ## Known Limitations / Roadmap
 
