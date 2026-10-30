@@ -105,7 +105,17 @@ export function labelCase(seed: number, exact = false, force: { kind?: string; m
   if (avoids.length) label.avoidMarks = avoids.map((m) => m.name as string)
 
   if (kind === 'tuples') {
-    const tuples = rows.map((p) => ({ text: p.name, x: (p.x / 100) * W, y: (p.y / 100) * H, fontSize }))
+    // (a share of the tuples sit exactly on an edge of the view: 0 or the size, on either axis)
+    const onEdge = chance(0.6)
+    const tuples = rows.map((p) => {
+      let x = (p.x / 100) * W
+      let y = (p.y / 100) * H
+      if (onEdge && chance(0.45)) {
+        const edge = int(4)
+        if (edge === 0) x = 0; else if (edge === 1) x = W; else if (edge === 2) y = 0; else y = H
+      }
+      return { text: p.name, x, y, fontSize }
+    })
     // no mark behind the tuples: only the marks named in avoidMarks (drawn by the view) hold the labels off
     const spec: Spec = { ...frame, data: [{ name: 'd', values: rows }, { name: 'src', values: tuples }, { name: 'lab', source: 'src', transform: [label] }], scales, marks: avoids }
     return { id: `label-${seed}`, spec, mark: null, dataset: 'lab', kind }
@@ -168,13 +178,24 @@ export function labelCase(seed: number, exact = false, force: { kind?: string; m
     path: avoidKinds[5]!('base'), line: avoidKinds[6]!('base'), area: avoidKinds[7]!('base'), trail: avoidKinds[8]!('base'),
   }
   const base = baseByKind[kind]!
+  let dataRows: unknown[] = rows
+  if (kind === 'rect' && chance(0.6)) {
+    // boxes that touch an edge of the view exactly, on either side: x === W, x + width === 0, y === H, y + height === 0 (filled, so the box is the rect's)
+    const edges = rows.map((p) => {
+      const w = Math.round(p.w), h = Math.round(p.h)
+      const edge = chance(0.5) ? int(4) : -1
+      return { ...p, ex: edge === 0 ? W : edge === 1 ? -w : Math.round((p.x / 100) * W), ey: edge === 2 ? H : edge === 3 ? -h : Math.round((p.y / 100) * H), ew: w, eh: h }
+    })
+    dataRows = edges
+    base.encode = { enter: { x: { field: 'ex' }, width: { field: 'ew' }, y: { field: 'ey' }, height: { field: 'eh' }, fill: { value: pick(COLOURS) } } }
+  }
   // (known gaps outside the label transform, found by this generator and left out of the base mark: the item bounds of an arc with a
   // corner radius, pad angle or angle, of a trail, and the order of the items of a sorted line / area, which a mark of `from: base` reads)
   if (kind === 'arc') { const e = (base.encode as { enter: Spec }).enter; delete e.cornerRadius; delete e.padAngle; delete e.angle }
   delete base.sort
   if (chance(0.25)) (label.avoidMarks as string[] | undefined) ? (label.avoidMarks as string[]).push('base') : (label.avoidMarks = ['base'])
   const spec: Spec = {
-    ...frame, data: [{ name: 'd', values: rows }], scales,
+    ...frame, data: [{ name: 'd', values: dataRows }], scales,
     marks: [base, ...avoids, { name: 'lab', type: 'text', from: { data: 'base' }, encode: { enter: textEnc }, transform: [label] }],
   }
   return { id: `label-${seed}`, spec, mark: 'lab', dataset: null, kind }
