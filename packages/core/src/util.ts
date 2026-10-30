@@ -366,6 +366,24 @@ export function ascending(_u: unknown, _v: unknown): -1 | 0 | 1 {
           : 0
 }
 
+/**
+ * `Array.prototype.sort` for a comparator over DATA (values of mixed type, `NaN`, missing values),
+ * which is generally not a strict weak order: `ascending('a', 1)` and `ascending(1, 'a')` are both
+ * 0 while `'a' > 'b'`-style chains elsewhere are not, so the sorted result depends on the exact
+ * sequence of comparisons the engine makes. Upstream Vega sorts with the native sort, so Aster must
+ * make the same comparisons the native sort makes, and make them the same way every time.
+ *
+ * V8's Maglev (Node 26+ / V8 15.x) inlines a call it can see statically into `Array.prototype.sort`
+ * with a different comparison order from the builtin; the very same call site then returns another
+ * order for the same input once it has run enough to be compiled (a band scale's domain went from
+ * `d,c,b,1,a` to `c,b,1,d,a`). Going through `Reflect.apply` keeps the call on the builtin on every
+ * tier, so the order does not move while a chart is live.
+ */
+const nativeSort = Array.prototype.sort
+export function sortData<T>(array: T[], compare: (a: T, b: T) => number): T[] {
+  return Reflect.apply(nativeSort, array, [compare]) as T[]
+}
+
 // --- extents -----------------------------------------------------------------
 
 /**

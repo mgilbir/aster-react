@@ -17,7 +17,7 @@ import { range as sequence } from './arr.js'
 import { aggregateGroup } from './transform.js'
 import { aggregateRows } from './transform-agg.js'
 import { SpecParseError } from './parse-error.js'
-import { pushAll, ascending, error as raise, hasOwnProperty, isArray, isFunction, isObject, isString, peek, toNumber } from './util.js'
+import { pushAll, ascending, sortData, error as raise, hasOwnProperty, isArray, isFunction, isObject, isString, peek, toNumber } from './util.js'
 import type { CompiledScale } from './types.js'
 
 export type Scale = vs.Scale
@@ -192,10 +192,10 @@ function valuesOf(tuples: Tuple[], sort: Sort | undefined): unknown[] {
   if (!sort) return tuples.map((t) => t.key)
   const name = aggrField(sort.op, sort.field)
   const sign = (sort.order || 'ascending') === 'descending' ? -1 : 1
-  return tuples
-    .map((t, i) => ({ t, i }))
-    .sort((a, b) => ascending(a.t[name], b.t[name]) * sign || a.i - b.i)
-    .map((e) => e.t.key)
+  return sortData(
+    tuples.map((t, i) => ({ t, i })),
+    (a, b) => ascending(a.t[name], b.t[name]) * sign || a.i - b.i,
+  ).map((e) => e.t.key)
 }
 
 // ---- domains (vega-parser parseScaleDomain) ------------------------------------------

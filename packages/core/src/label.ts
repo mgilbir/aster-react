@@ -10,6 +10,7 @@
  *
  * Registered by `@aster/core/transforms`. The rest of the engine reaches it through the transform registry.
  */
+import { sortData } from './util.js'
 import { AlphaCanvas } from './raster.js'
 import { drawMark } from './label-draw.js'
 import { itemMarkOf, transformRegistry } from './registry.js'
@@ -722,7 +723,7 @@ export function labelLayout(texts: Rec[], p: LabelParams): Entry[] {
     // sort labels in priority order, if comparator is provided
     if (p.sort) {
       const sort = p.sort
-      data.sort((a, b) => compareRows(a.datum as Row, b.datum as Row, sort))
+      sortData(data, (a, b) => compareRows(a.datum as Row, b.datum as Row, sort))
     }
 
     // flag indicating if label can be placed inside its base mark

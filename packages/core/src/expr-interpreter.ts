@@ -19,7 +19,7 @@
  *    function reachable through a member read (a scale, a method) cannot be invoked by one;
  *  - the regular expressions the built-ins run are screened and their input length-capped under limits.
  */
-import { ascending, DisallowedObjectProperties, safeGet } from './util.js'
+import { ascending, DisallowedObjectProperties, safeGet, sortData } from './util.js'
 import type { AstNode, Expr } from './expr-parser.js'
 import { guardedRegExp, checkRegexInput, checkRegexObject } from './limits.js'
 
@@ -72,7 +72,7 @@ export const DefaultFunctions: Record<string, Fn> = {
   lastindexof: viaMethod('lastIndexOf'),
   slice: viaMethod('slice'),
   reverse: ((x: unknown[]) => x.slice().reverse()) as Fn,
-  sort: ((x: unknown[]) => x.slice().sort(ascending)) as Fn,
+  sort: ((x: unknown[]) => sortData(x.slice(), ascending)) as Fn,
 
   upper: ((x: unknown) => String(x).toUpperCase()) as Fn,
   lower: ((x: unknown) => String(x).toLowerCase()) as Fn,

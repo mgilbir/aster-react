@@ -3,7 +3,7 @@
  * Loaded by the `@aster/core/transforms` addon; the core bundle keeps only
  * the transforms a plain chart uses. Shared internals come from transform.ts.
  */
-import { error, hasOwnProperty, minOf, maxOf, ownGet } from './util.js'
+import { error, hasOwnProperty, minOf, maxOf, ownGet, sortData } from './util.js'
 import { compareOf, fieldOf } from './transform-agg.js'
 import { checkRowCount, meterTick } from './limits.js'
 import type { HierNode, Row, TransformContext } from './transform.js'
@@ -1206,7 +1206,7 @@ function pieRows(rows: Row[], t: Record<string, unknown>): Row[] {
   const k = (stop - start) / values.reduce((acc, v) => acc + (+v || 0), 0)
   const index = Array.from({ length: n }, (_, i) => i)
   if (t.sort) {
-    index.sort((x, y) => values[x]! - values[y]!)
+    sortData(index, (x, y) => values[x]! - values[y]!)
   }
   const out = rows.map((r) => ({ ...r }))
   for (let i = 0; i < n; ++i) {
@@ -1316,7 +1316,7 @@ function dotbinRows(rows: Row[], t: Record<string, unknown>, ctx: TransformConte
     groups.set('', rows.map((_, i) => i))
   }
   const sorted = rows.map((r, i) => ({ r, i }))
-  sorted.sort((p, q) => (values[p.i] as number) - (values[q.i] as number))
+  sortData(sorted, (p, q) => (values[p.i] as number) - (values[q.i] as number))
   // compute bins per group over the sorted indices
   const out = rows.map((r) => ({ ...r }))
   const groupIndices = new Map<string, number[]>()

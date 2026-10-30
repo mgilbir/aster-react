@@ -10,7 +10,7 @@
  * (`''`, numeric strings, Dates ...) with JS coercion in the arithmetic, and
  * `partition` keys groups by `String(groupbyValues)`.
  */
-import { accessorName, error, extent as vegaExtent, hasOwnProperty } from './util.js'
+import { accessorName, error, extent as vegaExtent, hasOwnProperty, sortData } from './util.js'
 import { fieldOf, fieldsOf, quantiles, type Row } from './transform-agg.js'
 import { d3Range, required } from './transform-basic.js'
 import { checkRegexInput, checkRowCount, guardedRegExp, meterTick } from './limits.js'
@@ -461,7 +461,7 @@ function points(dataIn: Row[], x: Get, y: Get, sort?: boolean): [Float64Array, F
     let v: unknown = y(d)
     return u != null && (u = +(u as number)) >= (u as number) && v != null && (v = +(v as number)) >= (v as number)
   })
-  if (sort) data.sort((a, b) => (x(a) as number) - (x(b) as number))
+  if (sort) sortData(data, (a, b) => (x(a) as number) - (x(b) as number))
   const n = data.length
   const X = new Float64Array(n)
   const Y = new Float64Array(n)
