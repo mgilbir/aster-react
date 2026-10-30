@@ -14,6 +14,13 @@ describe('selection functions (properties the live differentials cannot reach)',
     expect(selectionTest(rows, { a: 3 })).toBe(true)
   })
 
+  it('a field type that is not one of the known types constrains nothing, even when it names an inherited member', () => {
+    for (const type of ['X', 'constructor', 'toString', '__proto__', 'hasOwnProperty']) {
+      const rows = [{ unit: '', fields: [{ field: 'a', type }], values: [1] }]
+      expect(selectionTest(rows, { a: 99 }), type).toBe(true)
+    }
+  })
+
   it('a unit or field called __proto__ is data, and Object.prototype stays clean', () => {
     const rows = [
       { unit: '__proto__', fields: [{ field: '__proto__', type: 'E' }], values: ['x'] },
