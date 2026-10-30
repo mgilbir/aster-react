@@ -330,18 +330,42 @@ function countMap(records: DrawRecord[]): Map<string, number> {
   return map
 }
 
+/**
+ * Two path keys that are the same drawing: the same commands and paint, every number within the rounding of the serialised SVG
+ * (3 decimals, so up to 0.0005 each; two roundings of a derived coordinate, 0.001). The canvas paints a symbol from the unrounded
+ * numbers (as vega does), so its coordinates, rounded here to 3 decimals, may land one step from the SVG's.
+ */
+const ROUNDING = 0.0011
+function sameDrawing(a: string, b: string): boolean {
+  const num = /-?\d+(?:\.\d+)?(?:e[-+]?\d+)?/g
+  if (a.replace(num, '#') !== b.replace(num, '#')) return false
+  const xs = a.match(num) ?? []
+  const ys = b.match(num) ?? []
+  return xs.length === ys.length && xs.every((x, i) => Math.abs(Number(x) - Number(ys[i])) <= ROUNDING)
+}
+
 function diffRecords(a: DrawRecord[], b: DrawRecord[]): string[] {
   const ma = countMap(a)
   const mb = countMap(b)
-  const diffs: string[] = []
+  const onlyA: Array<[string, number]> = []
+  const onlyB: Array<[string, number]> = []
   for (const [k, v] of ma) {
     const vb = mb.get(k) ?? 0
-    if (vb < v) diffs.push(`svg-only (${v - vb}): ${k}`)
+    if (vb < v) onlyA.push([k, v - vb])
   }
   for (const [k, v] of mb) {
     const va = ma.get(k) ?? 0
-    if (va < v) diffs.push(`canvas-only (${v - va}): ${k}`)
+    if (va < v) onlyB.push([k, v - va])
   }
+  // what is left on both sides may be the same drawing rounded differently: pair those up, one for one
+  for (const ea of onlyA) {
+    for (const eb of onlyB) {
+      while (ea[1] > 0 && eb[1] > 0 && sameDrawing(ea[0], eb[0])) { ea[1]--; eb[1]-- }
+    }
+  }
+  const diffs: string[] = []
+  for (const [k, v] of onlyA) if (v > 0) diffs.push(`svg-only (${v}): ${k}`)
+  for (const [k, v] of onlyB) if (v > 0) diffs.push(`canvas-only (${v}): ${k}`)
   return diffs
 }
 
@@ -534,6 +558,20 @@ describe('incremental canvas append', () => {
     ;(scene as unknown as { __itemGen: number }).__itemGen = 3
     const second = makeRecordingCtx()
     expect(renderSceneToCanvasAppend(prev2, scene, second.ctx)).toBe(false)
+  })
+})
+
+describe('the record comparison', () => {
+  const rec = (path: string): DrawRecord[] => [{ kind: 'fill', path, paint: 'red' }]
+  it('accepts the 3-decimal rounding of a coordinate and nothing larger', () => {
+    expect(diffRecords(rec('M217.977,15A4.153,4.153,0,1,1,209.671,15'), rec('M217.977,15A4.153,4.153,0,1,1,209.67,15'))).toEqual([])
+    expect(diffRecords(rec('M217.977,15A4.153,4.153,0,1,1,209.671,15'), rec('M217.977,15A4.153,4.153,0,1,1,209.66,15'))).toHaveLength(2)
+    expect(diffRecords(rec('M1,2L3,4'), rec('M1,2L3,4L5,6'))).toHaveLength(2)
+    expect(diffRecords(rec('M1,2L3,4'), [{ kind: 'fill', path: 'M1,2L3,4', paint: 'blue' }])).toHaveLength(2)
+  })
+  it('pairs rounded drawings one for one', () => {
+    expect(diffRecords([...rec('M1,2L3,4'), ...rec('M1,2L3,4')], [...rec('M1.001,2L3,4'), ...rec('M1,2L3,4')])).toEqual([])
+    expect(diffRecords([...rec('M1,2L3,4'), ...rec('M1,2L3,4')], rec('M1.001,2L3,4'))).toHaveLength(1)
   })
 })
 
