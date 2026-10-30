@@ -341,7 +341,7 @@ function handGrid(r: Rng, odd: boolean): Record<string, unknown> {
   if (odd) for (let i = 0; i < cells.length; i++) if (chance(r, 0.15)) cells[i] = pick(r, ODD_CELLS)
   const grid: Record<string, unknown> = { width, height, values: !odd && chance(r, 0.4) ? new Float32Array(cells as number[]) : cells }
   if (chance(r, 0.6)) Object.assign(grid, { scale: pick(r, [1, 2, 4, 0, -1]), x1: int(r, 0, 2), y1: int(r, 0, 2) })
-  if (chance(r, 0.2)) grid.translate = pick(r, [[1, 2], [0, 0], [-3, 4]])
+  if (chance(r, 0.4)) grid.translate = pick(r, [[1, 2], [0, 0], [-3, 4]])
   if (chance(r, 0.15)) { grid.x2 = width; grid.y2 = height }
   return grid
 }
@@ -378,6 +378,7 @@ describe('vega-geo contour/isocontour/kde2d over the whole parameter space (gene
         if (chance(r, 0.3)) t.nice = true
       }
       if (chance(r, 0.3)) t.smooth = false
+      if (chance(r, 0.05)) delete t.size // required
       const rows: Row[] = [{ a: 1 }]
       it(`#${i} ${JSON.stringify(enc(t))}`, async () => { await same('contour values', rows, [t]) })
     }
@@ -413,6 +414,7 @@ describe('vega-geo contour/isocontour/kde2d over the whole parameter space (gene
       if (chance(r, 0.4)) t.weight = pick(r, ['w', { expr: 'datum.w * 2' }])
       if (chance(r, 0.5)) t.counts = chance(r, 0.5)
       if (chance(r, 0.4)) t.groupby = pick(r, [['g'], ['g', 'g']])
+      if (chance(r, 0.08)) delete t[pick(r, ['size', 'x', 'y'])] // a required parameter left out
       const rows = pointsWith(r, pick(r, [0, 1, 2, 5, 40]), chance(r, 0.7))
       it(`#${i} ${JSON.stringify(enc(t))} n=${rows.length}`, async () => { await same('kde2d', rows, [t]) })
     }
@@ -430,7 +432,7 @@ describe('vega-geo contour/isocontour/kde2d over the whole parameter space (gene
       if (chance(r, 0.2)) t.smooth = pick(r, [false, 0, null])
       if (chance(r, 0.35)) t.thresholds = pick(r, [[1, 2], [2, 1], [3, 1, 2], [2, 2, 1], [], [0.5, NaN, 1], [1, null], 2, ['1', '2'], [0, 1, 0]])
       if (chance(r, 0.6)) t.scale = pick(r, [0, 1, 2, -1, [0, 0], [1, -1], [0, 2], [2, 0], [3, 2], null, '2', { expr: 'datum.id + 1' }, { expr: '0' }])
-      if (chance(r, 0.5)) t.translate = pick(r, [0, null, [0, 0], [5, 7], [-3, 0], [null, 4], { expr: '[datum.id, 1]' }])
+      if (chance(r, 0.5)) t.translate = pick(r, [0, null, false, { signal: '0' }, { signal: 'null' }, { signal: '[2, 3]' }, { signal: '5' }, [0, 0], [5, 7], [-3, 0], [null, 4], { expr: '[datum.id, 1]' }])
       if (chance(r, 0.15)) t.as = pick(r, ['c', null, ''])
       it(`#${i} ${JSON.stringify(enc([t, rows.map((x) => (x.grid as { scale?: number }).scale)]))}`, async () => { await same('isocontour', rows, [t]) })
     }
