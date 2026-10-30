@@ -1,8 +1,19 @@
 /**
- * The distribution functions of the expression language (vega-statistics 2.0.0 normal.js, lognormal.js, uniform.js):
- * `sample*`, `density*`, `cumulative*` and `quantile*` for the normal, log-normal and uniform distributions, ported
- * operation for operation. Registered by the transforms addon, which is where the `quantile` / `kde` / `density`
- * transforms that go with them live; `transform-stats.ts` builds its distributions on the same functions.
+ * The distribution functions of the expression language: `sample*`, `density*`, `cumulative*` and `quantile*` for the
+ * normal, log-normal and uniform distributions. Registered by the transforms addon, which is where the `quantile` /
+ * `kde` / `density` transforms that go with them live; `transform-stats.ts` builds its distributions on the same
+ * functions.
+ *
+ * Numbers, not shapes, are what these must reproduce: every function evaluates its formula in one fixed order, because the
+ * last bit of the result is observable (a density drawn into a path, a quantile used as a scale bound), and the samplers
+ * draw from the random source in one fixed count and order, because a seeded source must give the same chart as it gives
+ * any other implementation of the expression language.
+ *
+ * Provenance of the numerical parts: the cumulative normal is the double-precision approximation of West (2009), "Better
+ * approximations to cumulative normal functions"; the inverse error function is the rational-minimax approximation of Giles
+ * (2010), "Approximating the erfinv function" (GPU Computing Gems, vol. 2), with the coefficients Apache Commons Math
+ * publishes for `Erf.erfInv` (Apache-2.0; its NOTICE is in THIRD_PARTY_NOTICES.md); the normal sampler is the polar
+ * form of the Box-Muller transform.
  */
 import { registerExpressionFunction, registerRuntimeExpressionFunction } from './expression.js'
 import { normalPairs } from './random-tape.js'
@@ -14,36 +25,50 @@ const SQRT2 = Math.SQRT2
 type Random = () => number
 const MATH_RANDOM: Random = () => Math.random()
 
+// --- parameters ------------------------------------------------------------------------------------------------
+// An argument that is missing, null, NaN or 0 is "no mean"; only a missing or null spread is "no spread" (a spread of 0 or NaN
+// is used as given). The uniform bounds take a lone argument as the upper bound.
+
+const centre = (mean: number | undefined): number => mean || 0
+const spread = (stdev: number | undefined): number => (stdev == null ? 1 : stdev)
+const upper = (min: number | undefined, max: number | undefined): number => (max == null ? (min == null ? 1 : min) : max)
+const lower = (min: number | undefined, max: number | undefined): number => (max == null ? 0 : (min as number))
+
+/** Evaluate the polynomial with these coefficients (highest degree first) at `at`, one multiply and one add per step. */
+function horner(coefficients: readonly number[], at: number): number {
+  let p = coefficients[0]!
+  for (let i = 1; i < coefficients.length; i++) p = coefficients[i]! + p * at
+  return p
+}
+
+// --- normal ----------------------------------------------------------------------------------------------------
+
 /**
- * vega-statistics keeps the second number of a Box-Muller pair in a module variable, shared by every view. Here it
- * belongs to the SOURCE it was drawn from (one entry per injected source; `Math.random`'s is the module-wide one, as
- * vega's), so a view given its own stream starts clean and replays the same numbers however many views came before.
+ * A standard normal number, scaled and shifted, from `random`. Each polar Box-Muller round turns two uniform draws (repeated until
+ * they fall inside the unit circle) into two normals; the second is kept for the next call. The kept number belongs to the SOURCE
+ * it was drawn from (one entry per injected source), so a view given its own stream starts clean and replays the same numbers
+ * however many views came before it. `Math.random`'s entry is shared by every view, as one stream is.
  */
-
-/** vega-statistics `sampleNormal`, drawing from `random` (one Box-Muller pair per two calls, as upstream). */
 export function sampleNormalFrom(random: Random, mean?: number, stdev?: number): number {
-  mean = mean || 0
-  stdev = stdev == null ? 1 : stdev
-
-  let x = 0
-  let y = 0
-  let rds: number
-  let c: number
-  const next = normalPairs.get(random) ?? NaN
-  if (next === next) {
-    x = next
+  const kept = normalPairs.get(random) ?? NaN
+  let z: number
+  if (kept === kept) {
+    z = kept
     normalPairs.set(random, NaN)
   } else {
+    let u: number
+    let v: number
+    let r2: number
     do {
-      x = random() * 2 - 1
-      y = random() * 2 - 1
-      rds = x * x + y * y
-    } while (rds === 0 || rds > 1)
-    c = Math.sqrt(-2 * Math.log(rds) / rds) // Box-Muller transform
-    x *= c
-    normalPairs.set(random, y * c)
+      u = random() * 2 - 1
+      v = random() * 2 - 1
+      r2 = u * u + v * v
+    } while (r2 === 0 || r2 > 1)
+    const k = Math.sqrt(-2 * Math.log(r2) / r2)
+    z = u * k
+    normalPairs.set(random, v * k)
   }
-  return mean + x * stdev
+  return centre(mean) + z * spread(stdev)
 }
 
 export function sampleNormal(mean?: number, stdev?: number): number {
@@ -51,145 +76,137 @@ export function sampleNormal(mean?: number, stdev?: number): number {
 }
 
 export function densityNormal(value: number, mean?: number, stdev?: number): number {
-  stdev = stdev == null ? 1 : stdev
-  const z = (value - (mean || 0)) / stdev
-  return Math.exp(-0.5 * z * z) / (stdev * SQRT2PI)
+  const sd = spread(stdev)
+  const z = (value - centre(mean)) / sd
+  return Math.exp(-0.5 * z * z) / (sd * SQRT2PI)
 }
 
-// Approximation from West (2009), Better Approximations to Cumulative Normal Functions
+// West (2009): a rational function of |z| below 7.07106781186547 (the numerator and denominator polynomials, highest degree
+// first), and a continued fraction beyond it; nothing is left of the tail past 37 standard deviations.
+const WEST_NEAR_NUMERATOR = [
+  3.52624965998911e-02, 0.700383064443688, 6.37396220353165, 33.912866078383, 112.079291497871, 221.213596169931, 220.206867912376,
+]
+const WEST_NEAR_DENOMINATOR = [
+  8.83883476483184e-02, 1.75566716318264, 16.064177579207, 86.7807322029461, 296.564248779674, 637.333633378831, 793.826512519948, 440.413735824752,
+]
+const WEST_TAIL_START = 0.65
+const WEST_TAIL_TERMS = [4, 3, 2, 1]
+const SQRT2PI_ROUNDED = 2.506628274631
+
 export function cumulativeNormal(value: number, mean?: number, stdev?: number): number {
-  mean = mean || 0
-  stdev = stdev == null ? 1 : stdev
-
-  const z = (value - mean) / stdev
-  const Z = Math.abs(z)
-  let cd: number
-
-  if (Z > 37) {
-    cd = 0
+  const z = (value - centre(mean)) / spread(stdev)
+  const a = Math.abs(z)
+  let tail: number // P(Z > a)
+  if (a > 37) {
+    tail = 0
   } else {
-    const exp = Math.exp(-Z * Z / 2)
-    let sum: number
-    if (Z < 7.07106781186547) {
-      sum = 3.52624965998911e-02 * Z + 0.700383064443688
-      sum = sum * Z + 6.37396220353165
-      sum = sum * Z + 33.912866078383
-      sum = sum * Z + 112.079291497871
-      sum = sum * Z + 221.213596169931
-      sum = sum * Z + 220.206867912376
-      cd = exp * sum
-      sum = 8.83883476483184e-02 * Z + 1.75566716318264
-      sum = sum * Z + 16.064177579207
-      sum = sum * Z + 86.7807322029461
-      sum = sum * Z + 296.564248779674
-      sum = sum * Z + 637.333633378831
-      sum = sum * Z + 793.826512519948
-      sum = sum * Z + 440.413735824752
-      cd = cd / sum
+    const e = Math.exp(-a * a / 2)
+    if (a < 7.07106781186547) {
+      tail = e * horner(WEST_NEAR_NUMERATOR, a)
+      tail = tail / horner(WEST_NEAR_DENOMINATOR, a)
     } else {
-      sum = Z + 0.65
-      sum = Z + 4 / sum
-      sum = Z + 3 / sum
-      sum = Z + 2 / sum
-      sum = Z + 1 / sum
-      cd = exp / sum / 2.506628274631
+      let fraction = a + WEST_TAIL_START
+      for (const term of WEST_TAIL_TERMS) fraction = a + term / fraction
+      tail = e / fraction / SQRT2PI_ROUNDED
     }
   }
-  return z > 0 ? 1 - cd : cd
+  return z > 0 ? 1 - tail : tail
 }
 
-// Approximation of Probit function using inverse error function.
-export function quantileNormal(p: number, mean?: number, stdev?: number): number {
-  if (p < 0 || p > 1) return NaN
-  return (mean || 0) + (stdev == null ? 1 : stdev) * SQRT2 * erfinv(2 * p - 1)
-}
+// --- inverse error function ------------------------------------------------------------------------------------
+// Giles: three polynomial approximations of erfinv(x) / x, chosen by w = -ln(1 - x^2) and evaluated in a shifted variable. Their
+// coefficients are listed from the highest degree down.
 
-// Approximate inverse error function. Implementation from "Approximating the erfinv function" by Mike Giles,
-// GPU Computing Gems, volume 2, 2010. Ported from Apache Commons Math (Apache-2.0; see THIRD_PARTY_NOTICES.md).
+const ERFINV_A = [
+  -3.6444120640178196996e-21,
+  -1.685059138182016589e-19,
+  1.2858480715256400167e-18,
+  1.115787767802518096e-17,
+  -1.333171662854620906e-16,
+  2.0972767875968561637e-17,
+  6.6376381343583238325e-15,
+  -4.0545662729752068639e-14,
+  -8.1519341976054721522e-14,
+  2.6335093153082322977e-12,
+  -1.2975133253453532498e-11,
+  -5.4154120542946279317e-11,
+  1.051212273321532285e-09,
+  -4.1126339803469836976e-09,
+  -2.9070369957882005086e-08,
+  4.2347877827932403518e-07,
+  -1.3654692000834678645e-06,
+  -1.3882523362786468719e-05,
+  0.0001867342080340571352,
+  -0.00074070253416626697512,
+  -0.0060336708714301490533,
+  0.24015818242558961693,
+  1.6536545626831027356,
+]
+const ERFINV_B = [
+  2.2137376921775787049e-09,
+  9.0756561938885390979e-08,
+  -2.7517406297064545428e-07,
+  1.8239629214389227755e-08,
+  1.5027403968909827627e-06,
+  -4.013867526981545969e-06,
+  2.9234449089955446044e-06,
+  1.2475304481671778723e-05,
+  -4.7318229009055733981e-05,
+  6.8284851459573175448e-05,
+  2.4031110387097893999e-05,
+  -0.0003550375203628474796,
+  0.00095328937973738049703,
+  -0.0016882755560235047313,
+  0.0024914420961078508066,
+  -0.0037512085075692412107,
+  0.005370914553590063617,
+  1.0052589676941592334,
+  3.0838856104922207635,
+]
+const ERFINV_C = [
+  -2.7109920616438573243e-11,
+  -2.5556418169965252055e-10,
+  1.5076572693500548083e-09,
+  -3.7894654401267369937e-09,
+  7.6157012080783393804e-09,
+  -1.4960026627149240478e-08,
+  2.9147953450901080826e-08,
+  -6.7711997758452339498e-08,
+  2.2900482228026654717e-07,
+  -9.9298272942317002539e-07,
+  4.5260625972231537039e-06,
+  -1.9681778105531670567e-05,
+  7.5995277030017761139e-05,
+  -0.00021503011930044477347,
+  -0.00013871931833623122026,
+  1.0103004648645343977,
+  4.8499064014085844221,
+]
+
+/**
+ * erfinv(x). `w` is formed as -ln((1 - x)(1 + x)), which must NOT be simplified to 1 - x^2: that loses the digits near +-1 that
+ * the outer two approximations exist for. Beyond |x| = 1 (w infinite) the result is infinite, and NaN stays NaN.
+ */
 function erfinv(x: number): number {
-  // beware that the logarithm argument must be
-  // computed as (1.0 - x) * (1.0 + x),
-  // it must NOT be simplified as 1.0 - x * x as this
-  // would induce rounding errors near the boundaries +/-1
-  let w = -Math.log((1 - x) * (1 + x))
+  const w = -Math.log((1 - x) * (1 + x))
   let p: number
-
-  if (w < 6.25) {
-      w -= 3.125
-      p =  -3.6444120640178196996e-21
-      p =   -1.685059138182016589e-19 + p * w
-      p =   1.2858480715256400167e-18 + p * w
-      p =    1.115787767802518096e-17 + p * w
-      p =   -1.333171662854620906e-16 + p * w
-      p =   2.0972767875968561637e-17 + p * w
-      p =   6.6376381343583238325e-15 + p * w
-      p =  -4.0545662729752068639e-14 + p * w
-      p =  -8.1519341976054721522e-14 + p * w
-      p =   2.6335093153082322977e-12 + p * w
-      p =  -1.2975133253453532498e-11 + p * w
-      p =  -5.4154120542946279317e-11 + p * w
-      p =    1.051212273321532285e-09 + p * w
-      p =  -4.1126339803469836976e-09 + p * w
-      p =  -2.9070369957882005086e-08 + p * w
-      p =   4.2347877827932403518e-07 + p * w
-      p =  -1.3654692000834678645e-06 + p * w
-      p =  -1.3882523362786468719e-05 + p * w
-      p =    0.0001867342080340571352 + p * w
-      p =  -0.00074070253416626697512 + p * w
-      p =   -0.0060336708714301490533 + p * w
-      p =      0.24015818242558961693 + p * w
-      p =       1.6536545626831027356 + p * w
-  } else if (w < 16.0) {
-      w = Math.sqrt(w) - 3.25
-      p =   2.2137376921775787049e-09
-      p =   9.0756561938885390979e-08 + p * w
-      p =  -2.7517406297064545428e-07 + p * w
-      p =   1.8239629214389227755e-08 + p * w
-      p =   1.5027403968909827627e-06 + p * w
-      p =   -4.013867526981545969e-06 + p * w
-      p =   2.9234449089955446044e-06 + p * w
-      p =   1.2475304481671778723e-05 + p * w
-      p =  -4.7318229009055733981e-05 + p * w
-      p =   6.8284851459573175448e-05 + p * w
-      p =   2.4031110387097893999e-05 + p * w
-      p =   -0.0003550375203628474796 + p * w
-      p =   0.00095328937973738049703 + p * w
-      p =   -0.0016882755560235047313 + p * w
-      p =    0.0024914420961078508066 + p * w
-      p =   -0.0037512085075692412107 + p * w
-      p =     0.005370914553590063617 + p * w
-      p =       1.0052589676941592334 + p * w
-      p =       3.0838856104922207635 + p * w
-  } else if (Number.isFinite(w)) {
-      w = Math.sqrt(w) - 5.0
-      p =  -2.7109920616438573243e-11
-      p =  -2.5556418169965252055e-10 + p * w
-      p =   1.5076572693500548083e-09 + p * w
-      p =  -3.7894654401267369937e-09 + p * w
-      p =   7.6157012080783393804e-09 + p * w
-      p =  -1.4960026627149240478e-08 + p * w
-      p =   2.9147953450901080826e-08 + p * w
-      p =  -6.7711997758452339498e-08 + p * w
-      p =   2.2900482228026654717e-07 + p * w
-      p =  -9.9298272942317002539e-07 + p * w
-      p =   4.5260625972231537039e-06 + p * w
-      p =  -1.9681778105531670567e-05 + p * w
-      p =   7.5995277030017761139e-05 + p * w
-      p =  -0.00021503011930044477347 + p * w
-      p =  -0.00013871931833623122026 + p * w
-      p =       1.0103004648645343977 + p * w
-      p =       4.8499064014085844221 + p * w
-  } else {
-      p = Infinity
-  }
-
+  if (w < 6.25) p = horner(ERFINV_A, w - 3.125)
+  else if (w < 16.0) p = horner(ERFINV_B, Math.sqrt(w) - 3.25)
+  else if (Number.isFinite(w)) p = horner(ERFINV_C, Math.sqrt(w) - 5.0)
+  else p = Infinity
   return p * x
 }
 
+/** The probit function: the value below which a fraction `p` of the distribution lies. */
+export function quantileNormal(p: number, mean?: number, stdev?: number): number {
+  if (p < 0 || p > 1) return NaN
+  return centre(mean) + spread(stdev) * SQRT2 * erfinv(2 * p - 1)
+}
+
+// --- log-normal ------------------------------------------------------------------------------------------------
+
 export function sampleLogNormalFrom(random: Random, mean?: number, stdev?: number): number {
-  mean = mean || 0
-  stdev = stdev == null ? 1 : stdev
-  return Math.exp(mean + sampleNormalFrom(random) * stdev)
+  return Math.exp(centre(mean) + sampleNormalFrom(random) * spread(stdev))
 }
 
 export function sampleLogNormal(mean?: number, stdev?: number): number {
@@ -198,10 +215,9 @@ export function sampleLogNormal(mean?: number, stdev?: number): number {
 
 export function densityLogNormal(value: number, mean?: number, stdev?: number): number {
   if (value <= 0) return 0
-  mean = mean || 0
-  stdev = stdev == null ? 1 : stdev
-  const z = (Math.log(value) - mean) / stdev
-  return Math.exp(-0.5 * z * z) / (stdev * SQRT2PI * value)
+  const sd = spread(stdev)
+  const z = (Math.log(value) - centre(mean)) / sd
+  return Math.exp(-0.5 * z * z) / (sd * SQRT2PI * value)
 }
 
 export function cumulativeLogNormal(value: number, mean?: number, stdev?: number): number {
@@ -212,12 +228,11 @@ export function quantileLogNormal(p: number, mean?: number, stdev?: number): num
   return Math.exp(quantileNormal(p, mean, stdev))
 }
 
+// --- uniform ---------------------------------------------------------------------------------------------------
+
 export function sampleUniformFrom(random: Random, min?: number, max?: number): number {
-  if (max == null) {
-    max = (min == null ? 1 : min)
-    min = 0
-  }
-  return (min as number) + (max - (min as number)) * random()
+  const lo = lower(min, max)
+  return lo + (upper(min, max) - lo) * random()
 }
 
 export function sampleUniform(min?: number, max?: number): number {
@@ -225,28 +240,23 @@ export function sampleUniform(min?: number, max?: number): number {
 }
 
 export function densityUniform(value: number, min?: number, max?: number): number {
-  if (max == null) {
-    max = (min == null ? 1 : min)
-    min = 0
-  }
-  return (value >= (min as number) && value <= max) ? 1 / (max - (min as number)) : 0
+  const lo = lower(min, max)
+  const hi = upper(min, max)
+  return value >= lo && value <= hi ? 1 / (hi - lo) : 0
 }
 
 export function cumulativeUniform(value: number, min?: number, max?: number): number {
-  if (max == null) {
-    max = (min == null ? 1 : min)
-    min = 0
-  }
-  return value < (min as number) ? 0 : value > max ? 1 : (value - (min as number)) / (max - (min as number))
+  const lo = lower(min, max)
+  const hi = upper(min, max)
+  return value < lo ? 0 : value > hi ? 1 : (value - lo) / (hi - lo)
 }
 
 export function quantileUniform(p: number, min?: number, max?: number): number {
-  if (max == null) {
-    max = (min == null ? 1 : min)
-    min = 0
-  }
-  return (p >= 0 && p <= 1) ? (min as number) + p * (max - (min as number)) : NaN
+  const lo = lower(min, max)
+  return p >= 0 && p <= 1 ? lo + p * (upper(min, max) - lo) : NaN
 }
+
+// --- registration ----------------------------------------------------------------------------------------------
 
 const FUNCTIONS = {
   sampleNormal, densityNormal, cumulativeNormal, quantileNormal,
