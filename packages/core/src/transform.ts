@@ -13,7 +13,8 @@ import { PARAM_RULES, checkParams } from './param-rules.js'
 import { tickStep } from './arr.js'
 import { activeMeter, boundedCount } from './limits.js'
 import { walkPostOrder, walkPreOrder } from './tree-walk.js'
-import { aggregateRows, type AggregateParams, compareOf, fieldOf, joinAggregateRows, pivotRows, sortBySpec, windowRows } from './transform-agg.js'
+import { aggregateRows, type AggregateParams, compareOf, fieldOf, joinAggregateRows, pivotRows, sortBySpec } from './transform-agg.js'
+import { windowRows } from './transform-window.js'
 import {
   binRows, collectRows, d3Range, extentOfField, flattenRows, foldRows, identifierRows, imputeRows,
   lookupRows, projectRows, required, sampleRows, sequenceRows, stackRows, timeunitRows,
