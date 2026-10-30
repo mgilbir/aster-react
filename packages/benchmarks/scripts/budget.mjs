@@ -105,6 +105,8 @@ import { fileURLToPath } from 'node:url'
 // vega-wordcloud / d3-cloud (wordcloud.ts, replacing the stand-in), measured (kB gzip): signals marginal 14.2 (+1.5), transforms
 // marginal 39.1 (+1.7), Chart 188.6, SvgChart + interaction 183.5, Chart + VL 284.9; core, useChart and SvgChart did not move enough to
 // cross their ceilings (core 140.6).
+// The selection and composite-mark compilers rewritten in @aster/vl (a smaller wiring, one part builder): Chart + VL 282.5 (-0.4); the
+// ceiling follows it down. Every other row is unchanged.
 const BUDGETS = {
   '@aster/core': 140.9 * 1024,
   '+ @aster/core/dom': 6.2 * 1024,
@@ -120,7 +122,7 @@ const BUDGETS = {
   '@aster/react SvgChart': 166.1 * 1024,
   '@aster/react SvgChart + interaction': 184.0 * 1024,
   // Base + the VL compiler (opt-in: `import '@aster/react/vl'`).
-  '@aster/react Chart + VL': 285.4 * 1024,
+  '@aster/react Chart + VL': 282.0 * 1024,
 }
 
 const THIS_DIR = dirname(fileURLToPath(import.meta.url))

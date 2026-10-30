@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- **`@aster/vl`: selections and composite marks in Aster's own design** (`selection*.ts`, `composite*.ts`). A selection is resolved
+  against its unit into a model and wired by one sequence of steps over the signals it makes; the three composite marks share one
+  anatomy and one part builder. The compiled Vega is unchanged on the 2769 specs of the matrices, the corpus and the gallery. New
+  matrices compare with vega-lite 6.4.3 every selection type x option x binding x resolve x composition (876 cases) and every
+  composite mark x extent x orientation x input x part x composition, plus path overlays and colour-ordered stacks (583 cases).
+  What they found and fixed: a `{param}` domain keeps zero off; a horizontal area with `x2` ends at `x2`; `config.rule` /
+  `config.text` keep their black against `config.mark.color`; a mark with `aria: false` encodes no role description; the mark
+  inside a path group keeps the mark definition's styles; composite marks group by every entry of a `tooltip` / `detail` list
+  and list a conditional field in their tooltip. Not fixed (pinned in the cases file): composite marks inside a `repeat`.
+
 - **Gallery conformance, runtime (the official Vega / Vega-Lite examples against real vega)**: the fixes below take the
   gallery gate from 37 / 251 (static, Vega / Vega-Lite) and 30 / 186 (React) to 61 / 274 and 45 / 205:
   - Date expression functions are vega's: `time(x)` is a timestamp (a Vega-Lite `filter {timeUnit, equal}` kept no rows),
