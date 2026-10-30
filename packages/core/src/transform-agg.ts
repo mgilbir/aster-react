@@ -219,21 +219,25 @@ export function quartiles(arr: ArrayLike<unknown>, f?: Get): Array<number | unde
   return quantiles(arr, [0.25, 0.5, 0.75], f)
 }
 
-/** vega-statistics `bootstrapCI`, drawing from the given generator. */
+/**
+ * The percentile interval of the mean by bootstrap resampling: `samples` resamples of the valid numbers, each as large as the data
+ * and drawn with replacement, give `samples` means; the interval runs from their `alpha / 2` to their `1 - alpha / 2` quantile.
+ * An empty input has no interval. Fixed by the output: each resample takes its `n` indices as `~~(random() * n)`, one draw per
+ * index and resample after resample, and a mean is the plain sum in draw order over `n`.
+ */
 export function bootstrapCI(arr: ArrayLike<unknown>, samples: number, alpha: number, f: Get | undefined, random: () => number): [number | undefined, number | undefined] {
   if (!arr.length) return [undefined, undefined]
   const values = Float64Array.from(numbersOf(arr, f))
   const n = values.length
-  const m = samples
-  const mu = new Array<number>(m)
-  for (let j = 0; j < m; ++j) {
-    let a = 0
-    for (let i = 0; i < n; ++i) a += values[~~(random() * n)]!
-    mu[j] = a / n
+  const means = new Float64Array(samples)
+  for (let s = 0; s < samples; ++s) {
+    let total = 0
+    for (let i = 0; i < n; ++i) total += values[~~(random() * n)]!
+    means[s] = total / n
     meterTick('bootstrap', n)
   }
-  // d3-array `quantile` (not `quantileSorted`): NaN means (no valid values) are dropped first
-  const sorted = mu.filter((x) => x === x).sort(d3ascending)
+  // the means of data with no valid number are NaN and are left out; the rest sort numerically
+  const sorted = means.filter((mean) => mean === mean).sort()
   return [quantileSortedNumbers(sorted, alpha / 2), quantileSortedNumbers(sorted, 1 - alpha / 2)]
 }
 
