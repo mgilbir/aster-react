@@ -31,7 +31,6 @@ import {
   precisionFixed,
   precisionPrefix,
   precisionRound,
-  type FormatSpecifier as FormatSpecifierObject,
   type FormatFunction,
 } from './format.js'
 import {
@@ -48,7 +47,6 @@ import {
   timeHour,
   timeMinute,
   timeMonth,
-  timeSunday,
   timeWeek,
   timeYear,
   unixDay,
@@ -56,7 +54,6 @@ import {
   utcHour,
   utcMinute,
   utcMonth,
-  utcSunday,
   utcWeek,
   utcYear,
   type TimeInterval,

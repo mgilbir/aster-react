@@ -20,8 +20,6 @@ import type {
   CompiledTitle,
   CompiledTransform,
   EncodeValue,
-  ScaleDomain,
-  ScaleRange,
   SizeSpec,
   VgSpec,
 } from './types.js'

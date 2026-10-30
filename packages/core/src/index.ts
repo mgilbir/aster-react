@@ -95,7 +95,7 @@ export { geoRegistry, transformRegistry, dataFormatRegistry, requireTransform, t
 // before rendering a spec that needs it.
 
 import { compileChart } from './compiler.js'
-import { evaluateChart, getChartInfo } from './runtime.js'
+import { evaluateChart } from './runtime.js'
 import { renderSceneToSvg } from './render.js'
 import { checkSpecLimits, checkSceneLimits, checkSvgLength, createLimitClock, withLimits } from './limits.js'
 import type { RuntimeInput, VgSpec } from './types.js'

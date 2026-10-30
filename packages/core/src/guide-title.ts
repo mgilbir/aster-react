@@ -8,7 +8,7 @@ import type { SceneItem } from './types.js'
 import { Bounds, boundLeaf } from './bounds.js'
 import {
   addEncoders, encodeItem, extendEncode, guideMark, lookup, one, zero,
-  type Block, type Entry, type EntryHost, type GuideMarkDef, type GuideStyles, type MarkEncode, type Row, type UserEncode,
+  type Entry, type EntryHost, type GuideMarkDef, type GuideStyles, type MarkEncode, type Row, type UserEncode,
 } from './guide-encode.js'
 
 type Rec = Record<string, unknown>

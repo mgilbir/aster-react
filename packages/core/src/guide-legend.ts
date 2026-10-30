@@ -140,7 +140,6 @@ interface LegendParts {
   defs?: { packs: Map<string, unknown> }
 }
 
-const newEncode = (): MarkEncode => ({ enter: { opacity: zero }, update: { opacity: one }, exit: { opacity: zero } })
 
 /** guides/legend-gradient.js */
 function gradientMark(p: LegendParts, vertical: boolean, gradientFill: Entry): GuideMarkDef {
@@ -371,7 +370,6 @@ export function buildLegend(inp: LegendBuildInput): LegendBuilt {
     it._part = kind
     return it
   }
-  const leaves: SceneItem[] = []
   const boundOf = (it: SceneItem): Bounds => boundLeaf(new Bounds(), it)
   const union = (items: SceneItem[]): Bounds => {
     const b = new Bounds()
@@ -699,7 +697,7 @@ function buildSymbols(
   const resolved = (v: unknown): unknown => (isSignal(v) ? host.expr(v.signal) : v)
   if (!inp.raw) gridLayout(groups, {
     align: resolved(_('gridAlign')), columns: ncols, center: { row: true, column: false },
-    padding: { row: resolved(_('rowPadding')), column: resolved(_('columnPadding')) }, nodirty: true,
+    padding: { row: resolved(_('rowPadding')), column: resolved(_('columnPadding')) },
   }, (g) => {
     const eb = ebs[paintOrder[groups.indexOf(g)]!]!
     return eb.empty() ? new Bounds().set(0, 0, 0, 0) : eb.clone()
@@ -712,11 +710,10 @@ function buildSymbols(
     if (!eb.empty()) colW[j % ncols] = Math.max(colW[j % ncols]!, eb.x2)
   })
   const bounds = new Bounds()
-  paintOrder.forEach((idx, j) => {
+  paintOrder.forEach((idx) => {
     const eb = ebs[idx]!
     if (eb.empty()) return
     bounds.union(eb.clone().translate(pos[idx]!.x, pos[idx]!.y))
-    void j
   })
   result.bounds = bounds
 
