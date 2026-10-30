@@ -195,6 +195,8 @@ export interface SphereClipper {
    * continue into each other.
    */
   cut(line: Run, closed: boolean, startSrc: number, endSrc: number, sink: PieceSink): number
+  /** Whether closed ring `ring` lies wholly inside the region, so that cutting it would only copy it (optional shortcut). */
+  keepsWhole?(ring: Run): boolean
   interpolate: Interpolator
   /** the order of crossings along the boundary */
   compare(a: Spot, b: Spot): number
@@ -222,6 +224,22 @@ const compareAlongCut = (a: Spot, b: Spot): number =>
 export const antimeridian: SphereClipper = {
   outside: [-PI, -HALF_PI],
   visible: () => true,
+  keepsWhole(ring) {
+    // the ring is cut where a segment passes over a pole or over the antimeridian; closed, it also runs back to its start
+    const n = ring.length
+    const { x, from } = ring
+    let lambda0 = NaN
+    let sign0 = NaN
+    for (let i = 0; i <= n; i++) {
+      const lambda1 = x[from + (i < n ? i : 0)]!
+      const sign1 = lambda1 > 0 ? PI : -PI
+      const delta = Math.abs(lambda1 - lambda0)
+      if (Math.abs(delta - PI) < EPSILON || (sign0 !== sign1 && delta >= PI)) return false
+      lambda0 = lambda1
+      sign0 = sign1
+    }
+    return true
+  },
   cut(line, closed, startSrc, endSrc, sink) {
     let lambda0 = NaN
     let phi0 = NaN
@@ -478,35 +496,51 @@ function emitBoundaryRing(clipper: { interpolate: Interpolator }, out: Events, s
   out.mark(LINE_END, src)
 }
 
-/**
- * Clip events (rotated, in radians) to a region of the sphere. Open lines come out as the pieces inside
- * the region; polygons come out as rings, including, when the polygon swallows the whole region, the
- * region's own outline.
- */
-export function clipToSphere(ev: Events, clipper: SphereClipper): Events {
-  const out = Events.take(ev.length)
-  const lines = new LineWriter(out)
-  let lineFrom = 0
-  let lineSrc = 0
-  let inLine = false
-  // polygon state
-  let inPolygon = false
-  let polygonStarted = false
-  let rings: Ring[] = []
-  let cutRings: Piece[][] = []
+/** How many events a stage handles per call of its loop body. */
+const BATCH = 128
 
-  const startPolygon = (src: number): void => {
-    if (!polygonStarted) out.mark(POLYGON_START, src)
-    polygonStarted = true
+/** The state of clipping one buffer to a region of the sphere; one small method per kind of event. */
+class SphereClip {
+  readonly out: Events
+  private readonly lines: LineWriter
+  private lineFrom = 0
+  private lineSrc = 0
+  private inLine = false
+  private inPolygon = false
+  private polygonStarted = false
+  private rings: Ring[] = []
+  private cutRings: Piece[][] = []
+
+  constructor(
+    private readonly ev: Events,
+    private readonly clipper: SphereClipper,
+  ) {
+    this.out = Events.take(ev.length)
+    this.lines = new LineWriter(this.out)
   }
 
-  const endRing = (ring: Run, src: number): void => {
+  private startPolygon(src: number): void {
+    if (!this.polygonStarted) this.out.mark(POLYGON_START, src)
+    this.polygonStarted = true
+  }
+
+  private endRing(ring: Run, src: number): void {
     if (!ring.length) throw new TypeError("Cannot read properties of undefined (reading '0')")
+    const { out } = this
+    if (this.clipper.keepsWhole?.(ring)) {
+      // nothing is cut: the ring comes out as it went in
+      this.rings.push(ring)
+      this.startPolygon(src)
+      out.mark(LINE_START, src)
+      for (let i = 0, n = ring.length; i < n; i++) out.point(ring.x[ring.from + i]!, ring.y[ring.from + i]!, src)
+      out.mark(LINE_END, src)
+      return
+    }
     const collector = new PieceCollector()
     // the ring is cut closed: with its first vertex repeated at the end
-    const clean = clipper.cut(ring, true, lineSrc, src, collector)
+    const clean = this.clipper.cut(ring, true, this.lineSrc, src, collector)
     const pieces = collector.take()
-    rings.push(ring)
+    this.rings.push(ring)
     const n = pieces.length
     if (!n) return
     if (clean & 1) {
@@ -514,7 +548,7 @@ export function clipToSphere(ev: Events, clipper: SphereClipper): Events {
       const only = pieces[0]!
       const m = only.xy.length / 2 - 1
       if (m > 0) {
-        startPolygon(src)
+        this.startPolygon(src)
         out.mark(LINE_START, src)
         for (let i = 0; i < m; i++) out.point(only.xy[2 * i]!, only.xy[2 * i + 1]!, src)
         out.mark(LINE_END, src)
@@ -522,58 +556,79 @@ export function clipToSphere(ev: Events, clipper: SphereClipper): Events {
       return
     }
     if (n > 1 && clean & 2) joinEnds(pieces)
-    cutRings.push(pieces.filter((piece) => piece.xy.length > 2))
+    this.cutRings.push(pieces.filter((piece) => piece.xy.length > 2))
   }
 
-  for (let i = 0; i < ev.length; i++) {
-    const src = ev.src[i]!
-    switch (ev.op[i]!) {
-      case POINT:
-        if (!inLine && clipper.visible(ev.x[i]!, ev.y[i]!)) out.point(ev.x[i]!, ev.y[i]!, src)
-        break
-      case LINE_START:
-        inLine = true
-        lineFrom = i + 1
-        lineSrc = src
-        break
-      case LINE_END: {
-        inLine = false
-        const line = new Run(ev, lineFrom, i)
-        if (inPolygon) endRing(line, src)
-        else clipper.cut(line, false, lineSrc, src, lines)
-        break
-      }
-      case POLYGON_START:
-        inPolygon = true
-        rings = []
-        cutRings = []
-        break
-      case POLYGON_END: {
-        inPolygon = false
-        const pieces = cutRings.flat()
-        const [lambda, phi] = clipper.outside
-        const startInside = polygonContains(rings, lambda, phi)
-        if (pieces.length) {
-          startPolygon(src)
-          rejoin(pieces, (a, b) => clipper.compare(a, b), startInside, clipper.interpolate, out, src)
-        } else if (startInside) {
-          startPolygon(src)
-          emitBoundaryRing(clipper, out, src)
+  private endPolygon(src: number): void {
+    const { out, clipper } = this
+    this.inPolygon = false
+    const pieces = this.cutRings.flat()
+    const [lambda, phi] = clipper.outside
+    const startInside = polygonContains(this.rings, lambda, phi)
+    if (pieces.length) {
+      this.startPolygon(src)
+      rejoin(pieces, (a, b) => clipper.compare(a, b), startInside, clipper.interpolate, out, src)
+    } else if (startInside) {
+      this.startPolygon(src)
+      emitBoundaryRing(clipper, out, src)
+    }
+    if (this.polygonStarted) out.mark(POLYGON_END, src)
+    this.polygonStarted = false
+    this.rings = []
+    this.cutRings = []
+  }
+
+  run(): Events {
+    // in batches: a loop that runs long inside one call makes V8 compile it a second time for the loop alone
+    for (let i = 0, n = this.ev.length; i < n; i += BATCH) this.range(i, Math.min(n, i + BATCH))
+    return this.out
+  }
+
+  private range(from: number, to: number): void {
+    const { ev, out, clipper } = this
+    for (let i = from; i < to; i++) {
+      const src = ev.src[i]!
+      switch (ev.op[i]!) {
+        case POINT:
+          if (!this.inLine && clipper.visible(ev.x[i]!, ev.y[i]!)) out.point(ev.x[i]!, ev.y[i]!, src)
+          break
+        case LINE_START:
+          this.inLine = true
+          this.lineFrom = i + 1
+          this.lineSrc = src
+          break
+        case LINE_END: {
+          this.inLine = false
+          const line = new Run(ev, this.lineFrom, i)
+          if (this.inPolygon) this.endRing(line, src)
+          else clipper.cut(line, false, this.lineSrc, src, this.lines)
+          break
         }
-        if (polygonStarted) out.mark(POLYGON_END, src)
-        polygonStarted = false
-        rings = []
-        cutRings = []
-        break
+        case POLYGON_START:
+          this.inPolygon = true
+          this.rings = []
+          this.cutRings = []
+          break
+        case POLYGON_END:
+          this.endPolygon(src)
+          break
+        case SPHERE:
+          out.mark(POLYGON_START, src)
+          emitBoundaryRing(clipper, out, src)
+          out.mark(POLYGON_END, src)
+          break
       }
-      case SPHERE:
-        out.mark(POLYGON_START, src)
-        emitBoundaryRing(clipper, out, src)
-        out.mark(POLYGON_END, src)
-        break
     }
   }
-  return out
+}
+
+/**
+ * Clip events (rotated, in radians) to a region of the sphere. Open lines come out as the pieces inside
+ * the region; polygons come out as rings, including, when the polygon swallows the whole region, the
+ * region's own outline.
+ */
+export function clipToSphere(ev: Events, clipper: SphereClipper): Events {
+  return new SphereClip(ev, clipper).run()
 }
 
 /* ---- clipping to a rectangle ------------------------------------------------------------------- */
@@ -681,7 +736,7 @@ export class Rectangle {
    * The winding number of a polygon (rings of [x, y] with the first vertex repeated) about the corner (x0, y1):
    * non-zero when the rectangle's reference corner lies inside the polygon.
    */
-  private winding(rings: readonly number[][]): number {
+  windingOf(rings: readonly number[][]): number {
     let winding = 0
     for (const ring of rings) {
       const n = ring.length / 2
@@ -702,134 +757,163 @@ export class Rectangle {
 
   /** Clip planar events to this rectangle. */
   clip(ev: Events): Events {
-    const { x0, y0, x1, y1 } = this
-    const out = Events.take(ev.length)
-    // the position and visibility of the first and the previous vertex of the line being clipped; these
-    // outlive a line (an empty ring closes onto the previous line's first vertex)
-    let xFirst: number = undefined as unknown as number
-    let yFirst: number = undefined as unknown as number
-    let visibleFirst = false
-    let xPrev = NaN
-    let yPrev = NaN
-    let visiblePrev = false
-    let first = true
-    let clean = true
-    // polygon state: rings kept for the winding test, and the clipped pieces of each ring
-    let inPolygon = false
-    let inLine = false
-    let polygonRings: number[][] = []
-    let ringXY: number[] = []
-    let pieceLists: Piece[][] = []
-    let pieces: Piece[] = []
-    let src = 0
+    return new RectClip(this, ev).run()
+  }
+}
 
-    const beginPiece = (): void => {
-      if (inPolygon) pieces.push({ xy: [], entryMark: 0, exitMark: 0 })
-      else out.mark(LINE_START, src)
-    }
-    const addVertex = (x: number, y: number): void => {
-      if (inPolygon) {
-        const piece = pieces[pieces.length - 1]!
-        piece.xy.push(x, y)
-      } else out.point(x, y, src)
-    }
-    const endPiece = (): void => {
-      if (!inPolygon) out.mark(LINE_END, src)
-    }
+/** The state of clipping one buffer to a rectangle; one small method per kind of event. */
+class RectClip {
+  private readonly out: Events
+  // The first and the previous vertex of the line being clipped. They outlive a line: an empty ring closes
+  // onto the previous line's first vertex.
+  private xFirst: number = undefined as unknown as number
+  private yFirst: number = undefined as unknown as number
+  private visibleFirst = false
+  private xPrev = NaN
+  private yPrev = NaN
+  private visiblePrev = false
+  private first = true
+  private clean = true
+  private inPolygon = false
+  private inLine = false
+  // polygon state: rings kept for the winding test, and the clipped pieces of each ring
+  private polygonRings: number[][] = []
+  private ringXY: number[] = []
+  private pieceLists: Piece[][] = []
+  private pieces: Piece[] = []
+  private src = 0
 
-    const vertex = (xIn: number, yIn: number): void => {
-      const visible = this.contains(xIn, yIn)
-      let x = xIn
-      let y = yIn
-      if (inPolygon) ringXY.push(x, y)
-      if (first) {
-        xFirst = x
-        yFirst = y
-        visibleFirst = visible
-        first = false
-        if (visible) {
-          beginPiece()
-          addVertex(x, y)
-        }
-      } else if (visible && visiblePrev) addVertex(x, y)
-      else {
-        const a = [(xPrev = clamp(xPrev)), (yPrev = clamp(yPrev))]
-        const b = [(x = clamp(x)), (y = clamp(y))]
-        if (clipSegment(a, b, x0, y0, x1, y1)) {
-          if (!visiblePrev) {
-            beginPiece()
-            addVertex(a[0]!, a[1]!)
-          }
-          addVertex(b[0]!, b[1]!)
-          if (!visible) endPiece()
-          clean = false
-        } else if (visible) {
-          beginPiece()
-          addVertex(x, y)
-          clean = false
-        }
+  constructor(
+    private readonly rect: Rectangle,
+    private readonly ev: Events,
+  ) {
+    this.out = Events.take(ev.length)
+  }
+
+  private beginPiece(): void {
+    if (this.inPolygon) this.pieces.push({ xy: [], entryMark: 0, exitMark: 0 })
+    else this.out.mark(LINE_START, this.src)
+  }
+
+  private addVertex(x: number, y: number): void {
+    if (this.inPolygon) this.pieces[this.pieces.length - 1]!.xy.push(x, y)
+    else this.out.point(x, y, this.src)
+  }
+
+  private endPiece(): void {
+    if (!this.inPolygon) this.out.mark(LINE_END, this.src)
+  }
+
+  private vertex(xIn: number, yIn: number): void {
+    const { rect } = this
+    const visible = rect.contains(xIn, yIn)
+    let x = xIn
+    let y = yIn
+    if (this.inPolygon) this.ringXY.push(x, y)
+    if (this.first) {
+      this.xFirst = x
+      this.yFirst = y
+      this.visibleFirst = visible
+      this.first = false
+      if (visible) {
+        this.beginPiece()
+        this.addVertex(x, y)
       }
-      xPrev = x
-      yPrev = y
-      visiblePrev = visible
+    } else if (visible && this.visiblePrev) this.addVertex(x, y)
+    else {
+      const a = [(this.xPrev = clamp(this.xPrev)), (this.yPrev = clamp(this.yPrev))]
+      const b = [(x = clamp(x)), (y = clamp(y))]
+      if (clipSegment(a, b, rect.x0, rect.y0, rect.x1, rect.y1)) {
+        if (!this.visiblePrev) {
+          this.beginPiece()
+          this.addVertex(a[0]!, a[1]!)
+        }
+        this.addVertex(b[0]!, b[1]!)
+        if (!visible) this.endPiece()
+        this.clean = false
+      } else if (visible) {
+        this.beginPiece()
+        this.addVertex(x, y)
+        this.clean = false
+      }
     }
+    this.xPrev = x
+    this.yPrev = y
+    this.visiblePrev = visible
+  }
 
-    for (let i = 0; i < ev.length; i++) {
-      src = ev.src[i]!
+  private lineStart(): void {
+    this.inLine = true
+    if (this.inPolygon) {
+      this.ringXY = []
+      this.polygonRings.push(this.ringXY)
+      this.pieces = []
+    }
+    this.first = true
+    this.visiblePrev = false
+    this.xPrev = this.yPrev = NaN
+  }
+
+  private lineEnd(): void {
+    this.inLine = false
+    if (this.inPolygon) {
+      this.vertex(this.xFirst, this.yFirst)
+      if (this.visibleFirst && this.visiblePrev && this.pieces.length > 1) joinEnds(this.pieces)
+      this.pieceLists.push(this.pieces)
+      this.pieces = []
+    }
+    if (this.visiblePrev) this.endPiece()
+  }
+
+  private polygonEnd(): void {
+    const { out, rect, src } = this
+    this.inPolygon = false
+    const winding = rect.windingOf(this.polygonRings)
+    const startInside = winding !== 0
+    const cleanInside = this.clean && startInside
+    const all = this.pieceLists.flat()
+    if (cleanInside || all.length) {
+      out.mark(POLYGON_START, src)
+      if (cleanInside) emitBoundaryRing(rect, out, src)
+      if (all.length) rejoin(all, rect.compare, startInside, rect.interpolate, out, src)
+      out.mark(POLYGON_END, src)
+    }
+    this.polygonRings = []
+    this.pieceLists = []
+  }
+
+  run(): Events {
+    for (let i = 0, n = this.ev.length; i < n; i += BATCH) this.range(i, Math.min(n, i + BATCH))
+    return this.out
+  }
+
+  private range(from: number, to: number): void {
+    const { ev, rect, out } = this
+    for (let i = from; i < to; i++) {
+      this.src = ev.src[i]!
       switch (ev.op[i]!) {
         case POINT:
-          if (inLine) vertex(ev.x[i]!, ev.y[i]!)
-          else if (this.contains(ev.x[i]!, ev.y[i]!)) out.point(ev.x[i]!, ev.y[i]!, src)
+          if (this.inLine) this.vertex(ev.x[i]!, ev.y[i]!)
+          else if (rect.contains(ev.x[i]!, ev.y[i]!)) out.point(ev.x[i]!, ev.y[i]!, this.src)
           break
         case LINE_START:
-          inLine = true
-          if (inPolygon) {
-            ringXY = []
-            polygonRings.push(ringXY)
-            pieces = []
-          }
-          first = true
-          visiblePrev = false
-          xPrev = yPrev = NaN
+          this.lineStart()
           break
         case LINE_END:
-          inLine = false
-          if (inPolygon) {
-            vertex(xFirst, yFirst)
-            if (visibleFirst && visiblePrev) {
-              if (pieces.length > 1) joinEnds(pieces)
-            }
-            pieceLists.push(pieces)
-            pieces = []
-          }
-          if (visiblePrev) endPiece()
+          this.lineEnd()
           break
         case POLYGON_START:
-          inPolygon = true
-          polygonRings = []
-          pieceLists = []
-          clean = true
+          this.inPolygon = true
+          this.polygonRings = []
+          this.pieceLists = []
+          this.clean = true
           break
-        case POLYGON_END: {
-          inPolygon = false
-          const winding = this.winding(polygonRings)
-          const startInside = winding !== 0
-          const cleanInside = clean && startInside
-          const all = pieceLists.flat()
-          if (cleanInside || all.length) {
-            out.mark(POLYGON_START, src)
-            if (cleanInside) emitBoundaryRing(this, out, src)
-            if (all.length) rejoin(all, this.compare, startInside, this.interpolate, out, src)
-            out.mark(POLYGON_END, src)
-          }
-          polygonRings = []
-          pieceLists = []
+        case POLYGON_END:
+          this.polygonEnd()
           break
-        }
         case SPHERE:
           throw new TypeError('this.stream.sphere is not a function')
       }
     }
-    return out
   }
 }

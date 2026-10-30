@@ -107,58 +107,71 @@ class Resampler {
     this.hasPrevious = true
   }
 
+  private inPolygon = false
+  private inLine = false
+
+  private pointEvent(x: number, y: number): void {
+    if (this.delta2 !== 0 && this.inLine) {
+      const first = !this.hasPrevious
+      this.vertex(x, y)
+      if (first && this.inPolygon) {
+        this.x00 = this.x0
+        this.y00 = this.y0
+        this.lambda00 = this.lambda0
+        this.a00 = this.a0
+        this.b00 = this.b0
+        this.c00 = this.c0
+        this.hasFirst = true
+      }
+    } else {
+      this.project(x, y, this.at)
+      this.out.point(this.at[0]!, this.at[1]!, this.src)
+    }
+  }
+
+  private lineEvent(): void {
+    // a ring is closed by running its last vertex back to its first
+    if (this.delta2 !== 0 && this.inPolygon && this.hasPrevious && this.hasFirst) {
+      this.refine(this.x0, this.y0, this.lambda0, this.a0, this.b0, this.c0, this.x00, this.y00, this.lambda00, this.a00, this.b00, this.c00, MAX_DEPTH)
+    }
+  }
+
   run(ev: Events): Events {
-    const { out, at } = this
-    const subdivide = +this.delta2 !== 0
-    let inPolygon = false
-    let inLine = false
-    for (let i = 0, n = ev.length; i < n; i++) {
+    // in batches: a loop that runs long inside one call makes V8 compile it a second time for the loop alone
+    for (let i = 0, n = ev.length; i < n; i += 128) this.range(ev, i, Math.min(n, i + 128))
+    return this.out
+  }
+
+  private range(ev: Events, from: number, to: number): void {
+    const { out } = this
+    for (let i = from; i < to; i++) {
       const src = (this.src = ev.src[i]!)
       switch (ev.op[i]!) {
         case POINT:
-          if (subdivide && inLine) {
-            const first = !this.hasPrevious
-            this.vertex(ev.x[i]!, ev.y[i]!)
-            if (first && inPolygon) {
-              this.x00 = this.x0
-              this.y00 = this.y0
-              this.lambda00 = this.lambda0
-              this.a00 = this.a0
-              this.b00 = this.b0
-              this.c00 = this.c0
-              this.hasFirst = true
-            }
-          } else {
-            this.project(ev.x[i]!, ev.y[i]!, at)
-            out.point(at[0]!, at[1]!, src)
-          }
+          this.pointEvent(ev.x[i]!, ev.y[i]!)
           break
         case LINE_START:
-          inLine = true
+          this.inLine = true
           this.hasPrevious = this.hasFirst = false
           out.mark(LINE_START, src)
           break
         case LINE_END:
-          // a ring is closed by running its last vertex back to its first
-          if (subdivide && inPolygon && this.hasPrevious && this.hasFirst) {
-            this.refine(this.x0, this.y0, this.lambda0, this.a0, this.b0, this.c0, this.x00, this.y00, this.lambda00, this.a00, this.b00, this.c00, MAX_DEPTH)
-          }
-          inLine = false
+          this.lineEvent()
+          this.inLine = false
           out.mark(LINE_END, src)
           break
         case POLYGON_START:
-          inPolygon = true
+          this.inPolygon = true
           out.mark(POLYGON_START, src)
           break
         case POLYGON_END:
-          inPolygon = false
+          this.inPolygon = false
           out.mark(POLYGON_END, src)
           break
         default:
           out.mark(ev.op[i]!, src)
       }
     }
-    return out
   }
 }
 

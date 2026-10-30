@@ -434,14 +434,19 @@ export class GeoPath {
 
   constructor(readonly projection: PlanarSource | null = null) {}
 
+  private sink: PlanarSink | null = null
+  // one visitor for the life of the path, so that drawing a geometry allocates no closure
+  private readonly visit = (ev: Events): void => {
+    const planar = this.projection ? this.projection.planar(ev) : ev
+    this.sink!.add(planar)
+    planar.release()
+  }
+
   /** Hand the planar events of each geometry of `object` to `sink`. */
   feed(object: unknown, sink: PlanarSink): void {
-    const projection = this.projection
-    forEachChunk(object, (ev) => {
-      const planar = projection ? projection.planar(ev) : ev
-      sink.add(planar)
-      planar.release()
-    })
+    this.sink = sink
+    forEachChunk(object, this.visit)
+    this.sink = null
   }
 
   /** The radius that draws the points of `object`: a function radius is asked about the object. */

@@ -21,9 +21,9 @@ export const SPHERE = 5
 
 /** Buffers that have been given back, ready to be taken again (typed arrays cost microseconds to allocate). */
 const free: Events[] = []
-/** A buffer that grew past this many events is left to the garbage collector instead of being kept (at most ~4 MB held). */
-const KEEP_CAPACITY = 1 << 15
-const KEEP_BUFFERS = 6
+/** The recycled buffers hold at most this many events in all (about 3 MB); a buffer that does not fit is left to the garbage collector. */
+const KEEP_EVENTS = 1 << 17
+let keptEvents = 0
 
 export class Events {
   /** one entry per event, in four parallel lists: its kind, its coordinates (0 for events that have none), its `src` */
@@ -49,6 +49,7 @@ export class Events {
   static take(capacity = 0): Events {
     const ev = free.pop()
     if (!ev) return new Events(Math.max(64, capacity))
+    keptEvents -= ev.op.length
     ev.count = 0
     ev.onlyPoints = true
     if (ev.op.length < capacity) ev.grow(capacity)
@@ -57,7 +58,10 @@ export class Events {
 
   /** Give the buffer back for reuse. Neither the buffer nor any `Run` of it may be used afterwards. */
   release(): void {
-    if (this.op.length <= KEEP_CAPACITY && free.length < KEEP_BUFFERS) free.push(this)
+    if (keptEvents + this.op.length <= KEEP_EVENTS) {
+      keptEvents += this.op.length
+      free.push(this)
+    }
   }
 
   /** The number of events (the lists are longer: their tail is spare capacity). */

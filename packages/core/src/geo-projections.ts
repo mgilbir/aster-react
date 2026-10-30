@@ -409,8 +409,7 @@ class SphericalProjection extends Projection {
   }
 
   planar(ev: Events): Events {
-    const at = [0, 0]
-    if (ev.onlyPoints) return this.planarPoints(ev, at)
+    if (ev.onlyPoints) return this.planarPoints(ev, scratch)
     // the rotation overwrites the events: `planar` takes ownership of its input
     this.rotation.rotateEvents(ev)
     const clipped = clipToSphere(ev, this.clipper)
@@ -525,11 +524,19 @@ class AlbersUsa extends Projection {
   }
 
   planar(ev: Events): Events {
-    // each part consumes the events it is given: they each get their own copy
-    const parts = this.pointProjections.map((p) => p.planar(ev.copy()))
-    ev.release()
-    const merged = interleave(parts)
-    for (const part of parts) part.release()
+    // each part consumes the events it is given: all but the first get their own copy
+    const parts = this.pointProjections
+    const copies = parts.map((_, k) => (k === 0 ? ev : ev.copy()))
+    const results = parts.map((part, k) => part.planar(copies[k]!))
+    const nonEmpty = results.filter((r) => r.length > 0)
+    // most geometry lies in one region: its part's output is then the answer, with nothing to interleave
+    if (nonEmpty.length <= 1) {
+      const keep = nonEmpty[0] ?? results[0]!
+      for (const r of results) if (r !== keep) r.release()
+      return keep
+    }
+    const merged = interleave(results)
+    for (const r of results) r.release()
     return merged
   }
 }
