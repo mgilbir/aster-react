@@ -88,7 +88,7 @@ async function vegaPainted(s: Record<string, unknown>): Promise<Painted[]> {
     await view.runAsync()
     const { ctx, painted } = recorder()
     const mark = (view.scenegraph() as unknown as { root: { items: Array<{ items: Array<{ marktype: string; items: unknown[] }> }> } }).root.items[0]!.items.find((g) => g.marktype === 'symbol')!
-    ;(vega.Marks as unknown as Record<string, { draw(c: unknown, s: unknown, b: unknown): void }>).symbol!.draw(ctx, mark, null)
+    ;(vega as unknown as { Marks: Record<string, { draw(c: unknown, s: unknown, b: unknown): void }> }).Marks.symbol!.draw(ctx, mark, null)
     return painted
   } finally { view.finalize() }
 }
