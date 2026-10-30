@@ -31,8 +31,7 @@
  * Every gated ratio is the MEDIAN OF PER-PAIR RATIOS, where the two members of a pair are timed back to back
  * in the same loop iteration (dense: in the same round). A ratio of two medians taken in separate phases let
  * machine load skew numerator and denominator differently (the dense ratio read 164x-198x under load against
- * 224x-303x idle with the floor at 200x); within a pair load cancels. The dense ratio divides each round's mount by its FASTEST patch (load only adds time to a
- * ~1.5 ms patch; a 1.8x slower patch still reads 130x, under the floor). The floors themselves are unchanged.
+ * 224x-303x idle with the floor at 200x); within a pair load cancels. The floors themselves are unchanged.
  *
  * Below the calibrated shape (speedup scales with the dataset) only the >1x check applies. Override with
  * --min-append=, --min-replace=, --min-dom= (used to prove the gate bites).
@@ -289,24 +288,14 @@ async function main(): Promise<void> {
   denseStream.push({ data: { t: rows(denseN) } })
   const denseFirst = denseStream.flush()
   if (!denseFirst) throw new Error('dense stream produced no scene')
-  // INTERLEAVED rounds, one statistic per round, robust to load in the direction that matters:
-  //
-  //   - each round times one mount of the full scene and, around it, patchesPerRound append patches, so
-  //     the two see the same machine state (a ratio of two medians taken minutes apart measured 164x-198x
-  //     under load against 224x-303x idle);
-  //   - the round's patch cost is the MINIMUM of its patches, not the median. Load, preemption and a stray
-  //     GC only ever ADD time to a ~1.5 ms operation (a patch is a single-threaded, allocation-light
-  //     burst), so the fastest of ten patches is the cleanest estimate of its cost and a 2x slower patch
-  //     (the planted regression) still halves the ratio. A median of five is a typical-case estimate that
-  //     one disturbed stretch of a round shifts. A mount (~400 ms, multi-threaded GC) cannot be cleaned
-  //     that way, and anything that inflates it only raises the ratio, never fails the gate;
-  //   - patches go on BOTH sides of the mount, so garbage the mount leaves behind and the sweeping it
-  //     triggers hit some patches and not others, and the fastest one is clean of it. (Forcing a full GC
-  //     around the mount instead was measured and rejected: it leaves the patcher's 100k-object working
-  //     set cold and made every patch about 1.7x slower, which reads as a regression.)
-  //   - the gate statistic is the median over rounds.
+  // INTERLEAVED rounds: each round times one mount of the full scene and, right next to it, a few
+  // append patches; the round's ratio is mount / median(its patches). A mount is ~300 ms and a patch
+  // ~1 ms, so load, GC and frequency changes that last longer than a patch but shorter than the whole
+  // run hit the two very unequally if they are measured in separate phases (a ratio of two medians
+  // taken minutes apart measured 164x-198x under load against 224x-303x idle); inside a round they
+  // see the same machine state and cancel. The gate statistic is the median over rounds.
   const denseRounds = Math.max(10, Math.min(12, Math.floor(reps / 2)))
-  const patchesPerRound = 10
+  const patchesPerRound = 5
   const mountOnce = (): number => {
     const fresh = document.createElementNS('http://www.w3.org/2000/svg', 'svg')
     host.appendChild(fresh)
@@ -332,18 +321,17 @@ async function main(): Promise<void> {
   }
   for (let i = 0; i < 3; i++) appendPatch() // first appends (JIT, first chunk split); not measured
   const mountTimes: number[] = []
-  const denseTimes: number[] = [] // per-round fastest patch
+  const denseTimes: number[] = [] // per-round median patch
   const roundRatios: number[] = []
-  const half = patchesPerRound / 2
   for (let r = 0; r < denseRounds; r++) {
     const round: number[] = []
-    for (let k = 0; k < half; k++) round.push(appendPatch())
-    const mount = mountOnce()
-    for (let k = 0; k < half; k++) round.push(appendPatch())
-    mountTimes.push(mount)
-    const patchBest = summarize(round).min
-    denseTimes.push(patchBest)
-    roundRatios.push(mount / Math.max(patchBest, 1e-9))
+    // Alternate the order so a GC triggered by the mount does not always land on the patches (or vice versa).
+    if (r % 2 === 0) mountTimes.push(mountOnce())
+    for (let k = 0; k < patchesPerRound; k++) round.push(appendPatch())
+    if (r % 2 === 1) mountTimes.push(mountOnce())
+    const patchMedian = summarize(round).median
+    denseTimes.push(patchMedian)
+    roundRatios.push((mountTimes[r] as number) / Math.max(patchMedian, 1e-9))
   }
   const dMount = summarize(mountTimes)
   const dPatch = summarize(denseTimes)
@@ -351,11 +339,11 @@ async function main(): Promise<void> {
   const denseReps = denseRounds * patchesPerRound
   console.log(
     table(
-      `dense SVG stream DOM — ${denseN} symbols, +${batch}/update, ${denseRounds} rounds x (1 mount + ${patchesPerRound} patches around it), ${denseReps} updates (ms)`,
+      `dense SVG stream DOM — ${denseN} symbols, +${batch}/update, ${denseRounds} rounds x (1 mount + ${patchesPerRound} patches), ${denseReps} updates (ms)`,
       ['path', 'median', 'p95', 'max'],
       [
         ['mount (patchSceneDom into empty <svg>)', fmt(dMount.median), fmt(dMount.p95), fmt(dMount.max)],
-        ['append patch (patchSceneDom, dense; per-round fastest)', fmt(dPatch.median, 2), fmt(dPatch.p95, 2), fmt(dPatch.max, 2)],
+        ['append patch (patchSceneDom, dense; per-round median)', fmt(dPatch.median, 2), fmt(dPatch.p95, 2), fmt(dPatch.max, 2)],
         ['speedup (median of per-round ratios)', `${dRatio.toFixed(1)}x`, '—', '—'],
       ],
     ),
