@@ -26,13 +26,26 @@ interface FieldDef { field: string; type: string }
 
 const selectionIdOf = field(SELECTION_ID)
 
-const accessors = new WeakMap<object, (d: unknown) => unknown>()
-/** The accessor of a tuple's field definition, made once per definition. */
-function valueOf(def: FieldDef, datum: unknown): unknown {
-  let read = accessors.get(def)
-  if (!read) accessors.set(def, (read = field(def.field)))
-  return read(datum)
+/** What testing needs of one field definition: its accessor and the test for its type, found once. */
+interface FieldTest {
+  type: string
+  read: (d: unknown) => unknown
+  test: ((d: unknown, v: unknown) => boolean) | undefined
 }
+const fieldTests = new WeakMap<object, FieldTest>()
+
+function fieldTestOf(def: FieldDef): FieldTest {
+  let entry = fieldTests.get(def)
+  // the type is compared on every use: a definition is not frozen, and a changed type must not keep its old test
+  if (!entry || entry.type !== def.type) {
+    entry = { type: def.type, read: field(def.field), test: Object.hasOwn(POINT_TESTS, def.type) ? POINT_TESTS[def.type] : undefined }
+    fieldTests.set(def, entry)
+  }
+  return entry
+}
+
+/** The value of the definition's field in a datum. */
+const valueOf = (def: FieldDef, datum: unknown): unknown => fieldTestOf(def).read(datum)
 
 // -- testing a datum against one tuple ------------------------------------------------------------------------------
 
@@ -65,10 +78,9 @@ function matches(datum: unknown, tuple: Row): boolean {
   const fields = tuple.fields as FieldDef[]
   const values = tuple.values as unknown[]
   for (let i = 0; i < fields.length; ++i) {
-    const def = fields[i]!
-    const read = valueOf(def, datum)
-    const datumValue = isDate(read) ? toNumber(read) : read
-    const test = POINT_TESTS[def.type]
+    const { read, test } = fieldTestOf(fields[i]!)
+    const found = read(datum)
+    const datumValue = isDate(found) ? toNumber(found) : found
     const value = numericValue(values, i)
     if (test && !test(datumValue, value)) return false
   }
@@ -168,14 +180,17 @@ export function selectionIdTest(rows: Rows, datum: unknown, op?: unknown): boole
 
 // -- resolving --------------------------------------------------------------------------------------------------------
 
+/**
+ * Combines what has been collected so far with the next list. The accumulator is the resolve's own array (the first list
+ * is always a copy of the tuple's), so a merge may grow it in place; only the result is used.
+ */
 type Merge = (accumulated: unknown[], next: unknown[]) => unknown[]
 
 /** Union of enumerated values: `next`'s values that are not yet there are appended. */
 const unionValues: Merge = (acc, next) => {
   if (!acc.length) return next
-  const out = acc.slice()
-  for (const v of next) if (!out.includes(v)) out.push(v)
-  return out
+  for (const v of next) if (!acc.includes(v)) acc.push(v)
+  return acc
 }
 
 const intersectValues: Merge = (acc, next) => (acc.length ? acc.filter((v) => next.includes(v)) : next)
@@ -190,90 +205,123 @@ function ascendingEnds(range: unknown[]): [unknown, unknown] {
 const unionRanges: Merge = (acc, next) => {
   const [lo, hi] = ascendingEnds(next)
   if (!acc.length) return [lo, hi]
-  const out = acc.slice()
-  if ((out[0] as number) > (lo as number)) out[0] = lo
-  if ((out[1] as number) < (hi as number)) out[1] = hi
-  return out
+  if ((acc[0] as number) > (lo as number)) acc[0] = lo
+  if ((acc[1] as number) < (hi as number)) acc[1] = hi
+  return acc
 }
 
 const intersectRanges: Merge = (acc, next) => {
   const [lo, hi] = ascendingEnds(next)
   if (!acc.length) return [lo, hi]
   if ((hi as number) < (acc[0] as number) || (acc[1] as number) < (lo as number)) return []
-  const out = acc.slice()
-  if ((out[0] as number) < (lo as number)) out[0] = lo
-  if ((out[1] as number) > (hi as number)) out[1] = hi
-  return out
+  if ((acc[0] as number) < (lo as number)) acc[0] = lo
+  if ((acc[1] as number) > (hi as number)) acc[1] = hi
+  return acc
+}
+
+const MERGES: Record<string, Record<string, Merge>> = {
+  E: { union: unionValues, intersect: intersectValues },
+  R: { union: unionRanges, intersect: intersectRanges },
 }
 
 /** The merge for a field kind (the first letter of its type: `E` enumerated, `R` range) and a set operation. */
 function mergeFor(kind: string, operation: string): Merge | undefined {
-  const table: Record<string, Record<string, Merge>> = {
-    E: { union: unionValues, intersect: intersectValues },
-    R: { union: unionRanges, intersect: intersectRanges },
-  }
+  const table = MERGES
   return Object.hasOwn(table, kind) && Object.hasOwn(table[kind]!, operation) ? table[kind]![operation] : undefined
 }
 
-/** A dictionary whose keys are all data: units and field names come from specs. */
-const dictionary = <T>(): Record<string, T> => Object.create(null) as Record<string, T>
+/** Is `key` an array index (`'0'`, `'17'`, not `'01'`), which an object lists before its other keys? */
+const isArrayIndex = (key: string): boolean => /^(0|[1-9]\d*)$/.test(key) && Number(key) < 2 ** 32 - 1
+
+/** The keys in the order an object would list them: array indices ascending, then the rest as they were added. */
+function objectOrder(keys: Iterable<string>): string[] {
+  const indices: string[] = []
+  const others: string[] = []
+  for (const key of keys) (isArrayIndex(key) ? indices : others).push(key)
+  return indices.sort((a, b) => Number(a) - Number(b)).concat(others)
+}
+
+/** The values of a map in `objectOrder` of its keys. */
+const valuesInObjectOrder = <T>(map: Map<string, T>): T[] => objectOrder(map.keys()).map((key) => map.get(key)!)
 
 /**
  * `vlSelectionResolve`: the selection as an object with, per field, the values (a list) or range (`[lo, hi]`) selected
  * over all units, combined by `op` (`union`, the default, or `intersect`). An extensional store resolves to the Set of
  * its identifiers under `_vgsid_`. With `isMulti` the tuples are also listed per unit under `vlPoint` (`vlMulti` unless
  * `vl5`), in the `{or: [...]}` / `{and: [{or: [...]}, ...]}` form of a Vega-Lite predicate.
+ *
+ * Units and fields are keys, so they are kept in maps (a unit or field called `__proto__` is just a name) and listed
+ * the way an object would list them, which decides the order of the combined lists and of the result's keys.
  */
 export function selectionResolve(rows: Rows, op?: unknown, isMulti?: unknown, vl5?: unknown): Record<string, unknown> {
   const operation = (op || 'union') as string
   /** per field, per unit: what that unit's tuples selected */
-  const byField = dictionary<Record<string, unknown[]>>()
-  const kinds = dictionary<string>()
-  const perUnit = dictionary<unknown[]>()
+  const byField = new Map<string, Map<string, unknown[]>>()
+  const kinds = new Map<string, string>()
+  const perUnit = new Map<string, unknown[]>()
+  const unitsOf = (name: string): Map<string, unknown[]> => {
+    let units = byField.get(name)
+    if (!units) byField.set(name, (units = new Map()))
+    return units
+  }
+  const listOf = <T>(map: Map<string, T[]>, key: string): T[] => {
+    let list = map.get(key)
+    if (!list) map.set(key, (list = []))
+    return list
+  }
 
   for (const tuple of rows ?? []) {
-    const unit = tuple.unit as string
+    const unit = String(tuple.unit)
     const fields = tuple.fields as FieldDef[] | undefined
     const values = tuple.values as unknown[] | undefined
     if (fields && values) {
       fields.forEach((def, j) => {
-        const units = byField[def.field] ?? (byField[def.field] = dictionary())
-        const kind = (kinds[def.field] = def.type.charAt(0))
+        const units = unitsOf(def.field)
+        const kind = def.type.charAt(0)
+        kinds.set(def.field, kind)
         const union = mergeFor(kind, 'union')
         if (!union) throw new TypeError(`vlSelectionResolve: field type "${def.type}" cannot be combined`)
-        units[unit] = union(units[unit] ?? [], array(values[j]))
+        units.set(unit, union(units.get(unit) ?? [], array(values[j])))
       })
-      if (isMulti) (perUnit[unit] ??= []).push(Object.fromEntries(array(values).map((v, j) => [fields[j]!.field, v])))
+      if (isMulti) {
+        const entry: Record<string, unknown> = {}
+        array(values).forEach((v, j) => {
+          const name = fields[j]!.field
+          // a field called __proto__ is data here, not a prototype
+          if (name === '__proto__') Object.defineProperty(entry, name, { value: v, enumerable: true, writable: true, configurable: true })
+          else entry[name] = v
+        })
+        listOf(perUnit, unit).push(entry)
+      }
     } else {
       const id = selectionIdOf(tuple)
-      const units = byField[SELECTION_ID] ?? (byField[SELECTION_ID] = dictionary())
-      ;(units[unit] ??= []).push(id)
-      if (isMulti) (perUnit[unit] ??= []).push({ [SELECTION_ID]: id })
+      listOf(unitsOf(SELECTION_ID), unit).push(id)
+      if (isMulti) listOf(perUnit, unit).push({ [SELECTION_ID]: id })
     }
   }
 
   const resolved: Record<string, unknown> = {}
-  if (byField[SELECTION_ID]) {
-    const lists = Object.values(byField[SELECTION_ID])
+  const ids = byField.get(SELECTION_ID)
+  if (ids) {
+    const lists = valuesInObjectOrder(ids)
     if (operation === 'union') resolved[SELECTION_ID] = new Set(lists.flatMap((l) => [...l]))
     else if (operation === 'intersect') resolved[SELECTION_ID] = intersectSets(lists)
     else throw new TypeError(`vlSelectionResolve: unknown operation "${operation}"`)
-    for (const f of Object.keys(byField)) if (f !== SELECTION_ID) resolved[f] = byField[f]
+    // fields beside the identifiers (a mixed store) are left as they were collected, unit by unit
+    for (const [f, units] of byField) if (f !== SELECTION_ID) resolved[f] = Object.fromEntries(units)
   } else {
-    for (const f of Object.keys(byField)) {
-      const merge = mergeFor(kinds[f]!, operation)
-      resolved[f] = Object.values(byField[f]!).reduce((acc, next) => {
+    for (const [f, units] of byField) {
+      const merge = mergeFor(kinds.get(f)!, operation)
+      resolved[f] = valuesInObjectOrder(units).reduce((acc, next) => {
         if (!merge) throw new TypeError(`vlSelectionResolve: unknown operation "${operation}"`)
         return merge(acc, next)
       })
     }
   }
 
-  const units = Object.keys(perUnit)
-  if (isMulti && units.length) {
-    resolved[vl5 ? 'vlPoint' : 'vlMulti'] = operation === 'union'
-      ? { or: units.flatMap((u) => perUnit[u]!) }
-      : { and: units.map((u) => ({ or: perUnit[u] })) }
+  if (isMulti && perUnit.size) {
+    const lists = valuesInObjectOrder(perUnit)
+    resolved[vl5 ? 'vlPoint' : 'vlMulti'] = operation === 'union' ? { or: lists.flat() } : { and: lists.map((list) => ({ or: list })) }
   }
   return resolved
 }

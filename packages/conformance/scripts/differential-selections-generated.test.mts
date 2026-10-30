@@ -111,7 +111,8 @@ function tuple(r: Gen, unit: string, enumArrays: boolean): Row {
  */
 function store(seed: number, enumArrays: boolean): Row[] {
   const r = seeded(seed)
-  const units = r.pick([[''], ['', 'u1'], ['u1', 'u2'], ['u1', 'u2', 'u3']])
+  // units named like array indices list before the others in an object, and the order of the combined lists follows
+  const units = r.pick([[''], ['', 'u1'], ['u1', 'u2'], ['u1', 'u2', 'u3'], ['10', '2', 'b', '1'], ['b', '0', 'a', '7']])
   return Array.from({ length: r.int(7) }, () => tuple(r, r.pick(units), enumArrays))
 }
 
@@ -157,7 +158,7 @@ describe('vlSelectionTest / vlSelectionResolve vs vega-selections (generated)', 
   it('agree on random id stores', async () => {
     for (let seed = 1; seed <= 150; seed++) {
       const r = seeded(seed * 104729)
-      const rows: Row[] = Array.from({ length: r.int(9) }, () => ({ unit: r.pick(['u1', 'u2', 'u3']), _vgsid_: r.int(6) }))
+      const rows: Row[] = Array.from({ length: r.int(9) }, () => ({ unit: r.pick(['u1', 'u2', 'u3', '3', '1', '20']), _vgsid_: r.int(6) }))
       const ps = [0, 1, 2, 3, 4, 5, 6, -1, NaN, null].map((_vgsid_) => ({ _vgsid_ }))
       const test = `vlSelectionIdTest("${STORE}", d${r.pick(OPS)})`
       const resolve = `vlSelectionResolve("${STORE}"${r.pick(RESOLVE)})`
