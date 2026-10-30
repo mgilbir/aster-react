@@ -1,7 +1,7 @@
 /**
  * LIVE differential for the expression language (ADR-0001 suite formerly recorded as
  * `vega-expression.json`), all five kinds: `parse` / `parseError` (the pinned vega-expression
- * parser vs Aster's `expr-parser.ts`, ASTs compared whole, errors by class and message) and
+ * parser vs Aster's `expr-parser.ts`, trees compared whole minus vega's own annotations, errors by class and message) and
  * `evalLang` / `evalDatum` / `evalSecurity` (the pinned vega-interpreter vs Aster's
  * `expr-interpreter.ts`, both with an empty host function table so each side's own default
  * table supplies the core). Same process, same engine, same inputs (`vega-expression-cases.mjs`).
@@ -17,6 +17,7 @@ import * as vi from 'vega-interpreter'
 import { parseExpression } from '../../core/src/expr-parser.ts'
 import { interpret } from '../../core/src/expr-interpreter.ts'
 import { exact, withTz } from './differential-util.mts'
+import { canon } from './expression-gen.mts'
 import { evalCodes, evalDatum, evalErrorCodes, evalLangCodes, evalParams, parseCodes, parseErrorCodes } from './vega-expression-cases.mjs'
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -35,7 +36,8 @@ describe('vega-expression / vega-interpreter vs Aster expr-parser + expr-interpr
   for (const [suite, codes] of parseSuites) {
     for (const code of codes) {
       it(`${suite}: ${JSON.stringify(code)}`, () => {
-        const want = exact(() => ve.parseExpression(code))
+        // the tree is Aster's own: it must be exactly the structural fields of vega's (minus vega's own `raw`, `prefix`, ... annotations)
+        const want = exact(() => canon(ve.parseExpression(code)))
         expect(exact(() => parseExpression(code))).toEqual(want)
       })
     }
