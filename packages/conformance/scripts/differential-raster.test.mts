@@ -475,3 +475,36 @@ describe('vega-geo heatmap over hand-made grids (generated, live)', { timeout: 3
     it(`#${i} ${JSON.stringify(enc([t, rows.map((x) => Object.keys(x.grid as object))]))}`, async () => { await same('heatmap grids', rows, [t]) })
   }
 })
+
+// ------------------------------------------------------------------------ several wrong parameters at once
+//
+// vega reports the first problem in the transform's definition order, so the order itself is observable: it only shows when
+// two parameters are wrong together (one missing, or a list written as a plain value) and the messages differ. A null list
+// reads differently from a number, which is what tells apart two lists that are both wrong.
+describe('vega-geo parameter refusals with several problems at once (generated, live)', { timeout: 120_000 }, () => {
+  const WRONG: unknown[] = [null, 5, 'abc', { a: 1 }, true]
+  const withProblems = (r: Rng, base: Params, required: string[], lists: Record<string, unknown>): Params => {
+    const t = { ...base }
+    for (const [name, ok] of Object.entries(lists)) {
+      const roll = r()
+      if (roll < 0.45) t[name] = pick(r, WRONG)
+      else if (roll < 0.6) delete t[name]
+      else t[name] = ok
+    }
+    for (const name of required) if (chance(r, 0.5)) delete t[name]
+    return t
+  }
+  const rows: Row[] = [{ x: 3, y: 4, g: 'a', grid: { width: 2, height: 2, values: [0, 1, 2, 3] } }]
+  const kinds: Array<[string, (r: Rng) => Params]> = [
+    ['kde2d', (r) => withProblems(r, { type: 'kde2d', size: [10, 10], x: 'x', y: 'y' }, ['size', 'x', 'y'], { bandwidth: [2, 2], groupby: ['g'] })],
+    ['contour', (r) => withProblems(r, { type: 'contour', size: [2, 2], values: [0, 1, 2, 3] }, ['size'], { size: [2, 2], values: [0, 1, 2, 3], thresholds: [1] })],
+    ['isocontour', (r) => withProblems(r, { type: 'isocontour', field: 'grid' }, [], { thresholds: [1], translate: [1, 1] })],
+  ]
+  for (const [kind, make] of kinds) {
+    const r = prng(0x7a17 + kind.length)
+    for (let i = 0; i < (kind === 'contour' ? 400 : 150); i++) {
+      const t = make(r)
+      it(`${kind} #${i} ${JSON.stringify(enc(t))}`, async () => { await same(`${kind} problems`, rows, [t]) })
+    }
+  }
+})
