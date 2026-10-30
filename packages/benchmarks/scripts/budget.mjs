@@ -110,6 +110,10 @@ import { fileURLToPath } from 'node:url'
 // The geo engine as geometry event buffers (geo-events / geo-clip / geo-resample / geo-path / geo-projections ...: more, smaller
 // modules, the sinks and the albersUsa interleave in place of d3's shared stream objects), measured (kB gzip): geo marginal 15.4
 // (+1.1 over 14.3); core 138.1 and the other rows did not move.
+// The same engine with its hot loops kept to what a cold start compiles cheaply (stages as batched methods, a pass-through for rings
+// that need no cutting, the point and rectangle fast paths), after one walker for the measuring sinks and one placement base for the
+// projections took out what they duplicated: geo marginal 16.1 (16.113; +0.7 over 15.4, none of it one piece: the pass-through alone is
+// 0.07). Ceiling = the measure + 0.5.
 const BUDGETS = {
   '@aster/core': 140.9 * 1024,
   '+ @aster/core/dom': 6.2 * 1024,
@@ -117,7 +121,7 @@ const BUDGETS = {
   '+ @aster/core/hit': 7.0 * 1024,
   '+ @aster/core/signals': 14.7 * 1024,
   '+ @aster/core/load': 5.6 * 1024,
-  '+ @aster/core/geo': 15.9 * 1024,
+  '+ @aster/core/geo': 16.6 * 1024,
   '+ @aster/core/transforms': 39.6 * 1024,
   '@aster/react useChart': 148.0 * 1024,
   '@aster/react Chart': 189.1 * 1024,
