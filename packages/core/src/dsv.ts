@@ -19,15 +19,12 @@ const QUOTE = 34
 const NEWLINE = 10
 const RETURN = 13
 
-type Rows = string[][]
-
 /** What ended a field. */
 const enum End { Delimiter, LineBreak, Text }
 
-/** The rows of `text`, each a list of its fields' text. */
-function splitRows(text: string, delimiter: number): Rows {
-  const rows: Rows = []
-  if (text.length <= 0) return rows
+/** Hand each row of `text`, a list of its fields' text, to `visit` with its position, in order. */
+function splitRows(text: string, delimiter: number, visit: (row: string[], index: number) => void): void {
+  if (text.length <= 0) return
   let end = text.length
   if (text.charCodeAt(end - 1) === NEWLINE) end--
   if (text.charCodeAt(end - 1) === RETURN) end--
@@ -85,13 +82,13 @@ function splitRows(text: string, delimiter: number): Rows {
     return text.slice(start, end)
   }
 
-  do {
+  for (let index = 0; ; index++) {
     const row: string[] = []
     do row.push(readField())
     while (ended! === End.Delimiter)
-    rows.push(row)
-  } while (ended! === End.LineBreak)
-  return rows
+    visit(row, index)
+    if (ended! !== End.LineBreak) return
+  }
 }
 
 // -- writing ------------------------------------------------------------------------------------------------------------
@@ -148,29 +145,29 @@ export function dsvFormat(delimiter: string): Dsv {
   const body = (rows: ArrayLike<Record<string, unknown>>, columns: readonly string[]): string[] =>
     Array.from(rows as ArrayLike<Record<string, unknown>>, (row) => columns.map((column) => formatValue(row[column])).join(delimiter))
 
-  /** Run the rows through `f` (as many calls as rows, numbered from 0); a row `f` answers `null`/`undefined` for is dropped. */
-  function mapRows<T>(rows: Rows, f: ((row: string[], i: number) => unknown) | undefined): T[] {
-    if (!f) return rows as unknown as T[]
-    const out: T[] = []
-    for (let i = 0; i < rows.length; i++) {
-      const mapped = f(rows[i]!, i)
-      if (mapped != null) out.push(mapped as T)
-    }
-    return out
-  }
-
   return {
-    parseRows: (text, f) => mapRows<string[]>(splitRows(text, separator), f),
+    parseRows(text, f) {
+      const out: string[][] = []
+      splitRows(text, separator, (row, i) => {
+        // `f` answering null or undefined drops the row
+        const mapped = f ? (f(row, i) as string[] | null | undefined) : row
+        if (mapped != null) out.push(mapped)
+      })
+      return out
+    },
     parse(text, f) {
-      const [names = [], ...cells] = splitRows(text, separator)
-      const toObject = (row: string[]): Record<string, string> => {
+      let names: string[] = []
+      const out = [] as Record<string, string>[] & { columns?: string[] }
+      splitRows(text, separator, (row, i) => {
+        if (i === 0) {
+          names = row
+          return
+        }
         const object: Record<string, string> = {}
-        names.forEach((name, k) => {
-          object[name] = row[k] || ''
-        })
-        return object
-      }
-      const out = (f ? mapRows<Record<string, string>>(cells, (row, i) => f(toObject(row), i, names)) : cells.map(toObject)) as Record<string, string>[] & { columns?: string[] }
+        for (let k = 0; k < names.length; k++) object[names[k]!] = row[k] || ''
+        const mapped = f ? (f(object, i - 1, names) as Record<string, string> | null | undefined) : object
+        if (mapped != null) out.push(mapped)
+      })
       out.columns = names
       return out
     },
