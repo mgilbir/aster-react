@@ -52,6 +52,22 @@ export class BoundsPen {
 
   closePath(): void {}
 
+  quadraticCurveTo(cx: number, cy: number, x: number, y: number): void {
+    const [c0, c1, e0, e1] = [this.px(cx, cy), this.py(cx, cy), this.px(x, y), this.py(x, y)]
+    const sx = this.lx
+    const sy = this.ly
+    // a quadratic is extreme where its derivative, linear in t, is zero
+    const tx = (sx - c0) / (sx + e0 - 2 * c0)
+    const ty = (sy - c1) / (sy + e1 - 2 * c1)
+    for (const t of [tx, ty]) {
+      if (t > 0 && t < 1) {
+        const s = 1 - t
+        this.bounds.add(s * s * sx + 2 * s * t * c0 + t * t * e0, s * s * sy + 2 * s * t * c1 + t * t * e1)
+      }
+    }
+    this.visit(e0, e1)
+  }
+
   bezierCurveTo(x1: number, y1: number, x2: number, y2: number, x: number, y: number): void {
     const [a0, a1, b0, b1, e0, e1] = [this.px(x1, y1), this.py(x1, y1), this.px(x2, y2), this.py(x2, y2), this.px(x, y), this.py(x, y)]
     const sx = this.lx

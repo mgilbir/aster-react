@@ -11,6 +11,7 @@ import { SYMBOL_DEFAULT_SIZE, pushAll } from './util.js'
 import type { SceneGroup, SceneItem, SceneNode } from './types.js'
 import { arcInto, areaInto, lineInto, symbolPathExact, trailInto } from './render.js'
 import { BoundsPen } from './bounds-pen.js'
+import { parseSvgPath, renderSvgPath } from './svg-path.js'
 import { itemTextWidth, textAnchor, truncateToLimit } from './text-metrics.js'
 import { SHAPE_BOUNDS } from './registry.js'
 import { imageBox } from './image-box.js'
@@ -940,40 +941,23 @@ function boundIsolated(it: SceneItem, miterPaths = false): Bounds {
     // An empty path (a geo shape entirely clipped away) bounds to nothing:
     // vega's boundPath leaves the bounds untouched, so no stroke expansion.
     if (it.path === '') return bounds
-    const sxP = (it as Record<string, unknown>).scaleX as number | undefined
-    const syP = (it as Record<string, unknown>).scaleY as number | undefined
-    const angleP = (it as Record<string, unknown>).angle as number | undefined
-    if (angleP) {
-      // vega's path bound runs pathRender through boundContext: every path
-      // coordinate is scaled, translated by item x/y, then rotated as a point
-      // (unlike the SVG transform, which rotates in the item-local frame).
-      // Trace with that exact point transform so rotated extrema match.
-      const a = angleP * Math.PI / 180
-      const cos = Math.cos(a)
-      const sin = Math.sin(a)
-      const tx = it.x || 0
-      const ty = it.y || 0
-      const sx = sxP || 1
-      const sy = syP || 1
-      boundsFromPath(bounds, it.path, (x, y) => {
-        const px = x * sx + tx
-        const py = y * sy + ty
-        return [cos * px - sin * py, sin * px + cos * py]
-      })
-    } else {
-      // a projected shape bounds from its unrounded geometry, as vega's bound context sees it, not from the path string
-      const exact = it.datum && it.path === (it.datum as Record<string, unknown>).shape ? SHAPE_BOUNDS.get(it.datum as object)?.() : undefined
-      if (exact) {
-        bounds.add(exact[0], exact[1])
-        bounds.add(exact[2], exact[3])
-      } else if ((sxP != null && sxP !== 1) || (syP != null && syP !== 1)) {
-        // path marks carry scaleX/scaleY: the path scales about its local origin (point by point, so a mirrored
-        // path still measures low to high) before the item translate
-        const sx = sxP || 1
-        const sy = syP || 1
-        boundsFromPath(bounds, it.path, (x, y) => [x * sx, y * sy])
-      } else boundsFromPath(bounds, it.path)
+    const rec = it as Record<string, unknown>
+    // a projected shape bounds from its unrounded geometry, as vega's bound context sees it, not from the path string
+    const exact = !rec.angle && it.datum && it.path === (it.datum as Record<string, unknown>).shape ? SHAPE_BOUNDS.get(it.datum as object)?.() : undefined
+    if (exact) {
+      bounds.add(exact[0], exact[1])
+      bounds.add(exact[2], exact[3])
       bounds.translate(it.x || 0, it.y || 0)
+    } else {
+      // the path as it is drawn: scaled about its own origin, moved to the item, then turned by the item's angle (the turn is the
+      // pen's); the same replay, arcs as bezier approximations included, that draws a custom symbol
+      let commands: ReturnType<typeof parseSvgPath> | null = null
+      try { commands = parseSvgPath(it.path) } catch { /* a path that does not parse is measured as far as it reads */ }
+      if (commands) renderSvgPath(new BoundsPen(bounds, +(rec.angle as number) || 0), commands, it.x || 0, it.y || 0, (rec.scaleX as number) || 1, (rec.scaleY as number) || 1)
+      else {
+        boundsFromPath(bounds, it.path)
+        bounds.translate(it.x || 0, it.y || 0)
+      }
     }
     boundStroke(bounds, it, miterPaths || it.strokeWidth != null)
     return bounds

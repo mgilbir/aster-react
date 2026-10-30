@@ -47,11 +47,16 @@ export function markCase(seed: number, kind?: MarkKind): { spec: Spec; kind: Mar
     if (k === 'area' && maybe(0.4)) update.stroke = v('#222')
   } else if (k === 'path') {
     update.x = { field: 'x' }; update.y = { field: 'y' }
-    const paths = [null, 'M0,0L20,10L-5,25Z', 'M0,0C10,-30 40,-30 50,0S60,30 70,10', '', 'M0,0Q30,40 60,0T120,0', 'm0,0l20,10h-30v15z', 'M0,0c10,-30 40,-30 50,0s10,30 20,10']
+    const paths = [null, 'M0,0L20,10L-5,25Z', 'M0,0C10,-30 40,-30 50,0S60,30 70,10', '', 'M0,0Q30,40 60,0T120,0', 'm0,0l20,10h-30v15z', 'M0,0c10,-30 40,-30 50,0s10,30 20,10',
+      // arcs: circular, elliptical, rotated, every large/sweep pair, a radius too small for the chord, zero radii, an arc that ends where it starts, relative
+      'M0,0A20,20 0 0,1 40,0', 'M0,0A20,20 0 1,1 30,5', 'M0,0A20,10 0 0,1 30,5', 'M0,0A20,10 30 1,1 30,5', 'M0,0A20,10 30 0,0 30,5',
+      'M10,10A30,10 45 1,0 50,30', 'M0,0A5,5 0 0,0 60,20', 'M0,0A0,10 0 0,1 30,5L5,5', 'M0,0A10,0 0 1,0 30,5', 'M5,5A10,10 0 0,1 5,5L9,9',
+      'M0,0a20,20 0 0,1 40,0a15,8 -20 1,0 -10,25', 'M0,0A12,12 90 1,1 24,0A12,12 0 1,1 0,0Z']
     const d = maybe(0.35) ? null : pick(paths.slice(1))
     update.path = v(d)
-    if (maybe(0.3)) set('scaleX', pick([0.5, 2, -1]))
-    if (maybe(0.3)) set('scaleY', pick([0.5, 2]))
+    // (the SVG canonicalizer does not take an arc under a stretch)
+    if (!d?.match(/[Aa]/) && maybe(0.3)) set('scaleX', pick([0.5, 2, -1]))
+    if (!d?.match(/[Aa]/) && maybe(0.3)) set('scaleY', pick([0.5, 2]))
     if (maybe(0.3)) set('angle', pick([20, 90]))
     update.fill = v('purple')
   } else {

@@ -1001,7 +1001,13 @@ class PathEmitter {
   toString(): string { return this.s }
 }
 
-function cornerTangents(x0: number, y0: number, x1: number, y1: number, r1: number, rc: number, cw: boolean): { cx: number; cy: number; x01: number; y01: number; x11: number; y11: number } {
+interface CornerTangents { cx: number; cy: number; x01: number; y01: number; x11: number; y11: number }
+// (the two tangent records of a corner, reused: an arc with a corner radius asks for four of them, and a pie of thousands of arcs
+// would otherwise allocate that many objects per paint and per measure; they are read before the next arc starts)
+const TANGENTS_A: CornerTangents = { cx: 0, cy: 0, x01: 0, y01: 0, x11: 0, y11: 0 }
+const TANGENTS_B: CornerTangents = { cx: 0, cy: 0, x01: 0, y01: 0, x11: 0, y11: 0 }
+
+function cornerTangents(out: CornerTangents, x0: number, y0: number, x1: number, y1: number, r1: number, rc: number, cw: boolean): CornerTangents {
   const x01 = x0 - x1
   const y01 = y0 - y1
   const lo = (cw ? rc : -rc) / Math.sqrt(x01 * x01 + y01 * y01)
@@ -1028,7 +1034,13 @@ function cornerTangents(x0: number, y0: number, x1: number, y1: number, r1: numb
   const dx1 = cx1 - x00
   const dy1 = cy1 - y00
   if (dx0 * dx0 + dy0 * dy0 > dx1 * dx1 + dy1 * dy1) { cx0 = cx1; cy0 = cy1 }
-  return { cx: cx0, cy: cy0, x01: -ox, y01: -oy, x11: cx0 * (r1 / r - 1), y11: cy0 * (r1 / r - 1) }
+  out.cx = cx0
+  out.cy = cy0
+  out.x01 = -ox
+  out.y01 = -oy
+  out.x11 = cx0 * (r1 / r - 1)
+  out.y11 = cy0 * (r1 / r - 1)
+  return out
 }
 
 const arcAbs = Math.abs
@@ -1135,8 +1147,8 @@ export function arcInto(ctx: ArcSink, cx: number, cy: number, rIn: number, r0In:
   }
   if (!(daS > ARC_EPSILON)) ctx.moveTo(x01, y01)
   else if (rc1 > ARC_EPSILON) {
-    const t0 = cornerTangents(x00, y00, x01, y01, r1, rc1, cw)
-    const t1 = cornerTangents(x11, y11, x10, y10, r1, rc1, cw)
+    const t0 = cornerTangents(TANGENTS_A, x00, y00, x01, y01, r1, rc1, cw)
+    const t1 = cornerTangents(TANGENTS_B, x11, y11, x10, y10, r1, rc1, cw)
     ctx.moveTo(t0.cx + t0.x01, t0.cy + t0.y01)
     if (rc1 < rc) ctx.arc(t0.cx, t0.cy, rc1, arcAtan2(t0.y01, t0.x01), arcAtan2(t1.y01, t1.x01), !cw)
     else {
@@ -1150,8 +1162,8 @@ export function arcInto(ctx: ArcSink, cx: number, cy: number, rIn: number, r0In:
   }
   if (!(r0 > ARC_EPSILON) || !(daF > ARC_EPSILON)) ctx.lineTo(x10, y10)
   else if (rc0 > ARC_EPSILON) {
-    const t0 = cornerTangents(x10, y10, x11, y11, r0, -rc0, cw)
-    const t1 = cornerTangents(x01, y01, x00, y00, r0, -rc0, cw)
+    const t0 = cornerTangents(TANGENTS_A, x10, y10, x11, y11, r0, -rc0, cw)
+    const t1 = cornerTangents(TANGENTS_B, x01, y01, x00, y00, r0, -rc0, cw)
     ctx.lineTo(t0.cx + t0.x01, t0.cy + t0.y01)
     if (rc0 < rc) ctx.arc(t0.cx, t0.cy, rc0, arcAtan2(t0.y01, t0.x01), arcAtan2(t1.y01, t1.x01), !cw)
     else {
