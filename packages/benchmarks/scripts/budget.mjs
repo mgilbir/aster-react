@@ -100,6 +100,8 @@ import { fileURLToPath } from 'node:url'
 // The injected random source (RuntimeInput.random: the replayable tapes, the content fingerprint, the per-source Box-Muller pair),
 // vega-functions setdata, and the dataflow order signals resolve in (test/gallery-deterministic), measured (kB gzip): core 140.4,
 // useChart 147.5, Chart 186.4, SvgChart 165.6, SvgChart + interaction 181.3, Chart + VL 282.9 (core +1.6 over 138.8); the marginal entries did not move.
+// The selection and composite-mark compilers rewritten in @aster/vl (a smaller wiring, one part builder): Chart + VL 282.5 (-0.4); the
+// ceiling follows it down. Every other row is unchanged.
 const BUDGETS = {
   '@aster/core': 140.9 * 1024,
   '+ @aster/core/dom': 6.2 * 1024,
@@ -115,7 +117,7 @@ const BUDGETS = {
   '@aster/react SvgChart': 166.1 * 1024,
   '@aster/react SvgChart + interaction': 181.8 * 1024,
   // Base + the VL compiler (opt-in: `import '@aster/react/vl'`).
-  '@aster/react Chart + VL': 283.4 * 1024,
+  '@aster/react Chart + VL': 283.0 * 1024,
 }
 
 const THIS_DIR = dirname(fileURLToPath(import.meta.url))
