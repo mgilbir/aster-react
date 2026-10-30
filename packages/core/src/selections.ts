@@ -230,6 +230,12 @@ function mergeFor(kind: string, operation: string): Merge | undefined {
   return Object.hasOwn(table, kind) && Object.hasOwn(table[kind]!, operation) ? table[kind]![operation] : undefined
 }
 
+/** `target[key] = value` as plain data: a key called `__proto__` becomes a property, not the prototype. */
+function setOwn(target: Record<string, unknown>, key: string, value: unknown): void {
+  if (key === '__proto__') Object.defineProperty(target, key, { value, enumerable: true, writable: true, configurable: true })
+  else target[key] = value
+}
+
 /** Is `key` an array index (`'0'`, `'17'`, not `'01'`), which an object lists before its other keys? */
 const isArrayIndex = (key: string): boolean => /^(0|[1-9]\d*)$/.test(key) && Number(key) < 2 ** 32 - 1
 
@@ -285,12 +291,7 @@ export function selectionResolve(rows: Rows, op?: unknown, isMulti?: unknown, vl
       })
       if (isMulti) {
         const entry: Record<string, unknown> = {}
-        array(values).forEach((v, j) => {
-          const name = fields[j]!.field
-          // a field called __proto__ is data here, not a prototype
-          if (name === '__proto__') Object.defineProperty(entry, name, { value: v, enumerable: true, writable: true, configurable: true })
-          else entry[name] = v
-        })
+        array(values).forEach((v, j) => setOwn(entry, fields[j]!.field, v))
         listOf(perUnit, unit).push(entry)
       }
     } else {
@@ -308,14 +309,18 @@ export function selectionResolve(rows: Rows, op?: unknown, isMulti?: unknown, vl
     else if (operation === 'intersect') resolved[SELECTION_ID] = intersectSets(lists)
     else throw new TypeError(`vlSelectionResolve: unknown operation "${operation}"`)
     // fields beside the identifiers (a mixed store) are left as they were collected, unit by unit
-    for (const [f, units] of byField) if (f !== SELECTION_ID) resolved[f] = Object.fromEntries(units)
+    for (const [f, units] of byField) if (f !== SELECTION_ID) setOwn(resolved, f, Object.fromEntries(units))
   } else {
     for (const [f, units] of byField) {
       const merge = mergeFor(kinds.get(f)!, operation)
-      resolved[f] = valuesInObjectOrder(units).reduce((acc, next) => {
-        if (!merge) throw new TypeError(`vlSelectionResolve: unknown operation "${operation}"`)
-        return merge(acc, next)
-      })
+      setOwn(
+        resolved,
+        f,
+        valuesInObjectOrder(units).reduce((acc, next) => {
+          if (!merge) throw new TypeError(`vlSelectionResolve: unknown operation "${operation}"`)
+          return merge(acc, next)
+        }),
+      )
     }
   }
 
