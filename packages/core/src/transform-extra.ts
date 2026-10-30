@@ -7,7 +7,7 @@ import { error, hasOwnProperty, minOf, maxOf, ownGet } from './util.js'
 import { compareOf, fieldOf } from './transform-agg.js'
 import { checkRowCount, meterTick } from './limits.js'
 import type { HierNode, Row, TransformContext } from './transform.js'
-import { compileExprTransform, getField, resolveSizeParam } from './transform.js'
+import { compileExprTransform, geoPointRadius, getField, resolveSizeParam } from './transform.js'
 import { geoRegistry, requireGeo, transformRegistry } from './registry.js'
 import { registerRuntimeExpressionFunction, type ExpressionRuntime } from './expression.js'
 import { countpatternRows as countpatternStatsRows, densityRows, kdeRows, loessRows, quantileRows, regressionRows } from './transform-stats.js'
@@ -1389,7 +1389,7 @@ function geopathRows(rows: Row[], t: Record<string, unknown>, ctx: TransformCont
   const as = (t.as as string | undefined) || 'path'
   const prev = path.pointRadius()
   path.context(null)
-  if (t.pointRadius != null) path.pointRadius(t.pointRadius)
+  if (t.pointRadius != null) path.pointRadius(geoPointRadius(t.pointRadius, ctx))
   try {
     return rows.map((r) => ({ ...r, [as]: path(field(r)) }))
   } finally {

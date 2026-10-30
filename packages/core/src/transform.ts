@@ -164,11 +164,7 @@ function applyTransform(rows: Row[], t0: CompiledTransform, ctx: TransformContex
       const projName = (t as { projection?: unknown }).projection
       const projection = projName != null ? ctx.projections?.get(String(projName)) : undefined
       if (projection != null && !geoRegistry.projectedPath) requireGeo() // throws: addon not loaded
-      // vega-geo GeoShape `pointRadius`: a number, or an expression of the GeoJSON object (d3 calls it with that object)
-      const prParam = (t as { pointRadius?: unknown }).pointRadius
-      const pointRadius: unknown = prParam != null && typeof prParam === 'object' && typeof (prParam as { expr?: unknown }).expr === 'string'
-        ? ((f) => (feature: unknown): number => +(f(feature as Row) as number))(compileExprTransform((prParam as { expr: string }).expr, ctx))
-        : prParam
+      const pointRadius = geoPointRadius((t as { pointRadius?: unknown }).pointRadius, ctx)
       return rows.map((r) => {
         // vega's field is read off the scenegraph ITEM (`datum["geo"]` is item.datum.geo); a row here is the item's datum
         const geo = field == null || field === 'datum' ? r : getField({ datum: r }, field as string)
@@ -284,6 +280,13 @@ function applyTransform(rows: Row[], t0: CompiledTransform, ctx: TransformContex
     default:
       throw new Error(`[aster] unsupported transform type "${(t as { type: string }).type}"`)
   }
+}
+
+/** A geo transform's `pointRadius`: a number, or `{expr}` -- an expression of the GeoJSON object being drawn. */
+export function geoPointRadius(param: unknown, ctx: TransformContext): unknown {
+  if (param == null || typeof param !== 'object' || typeof (param as { expr?: unknown }).expr !== 'string') return param
+  const radius = compileExprTransform((param as { expr: string }).expr, ctx)
+  return (feature: unknown): number => +(radius(feature as Row) as number)
 }
 
 export function compileExprTransform(expr: string, ctx: TransformContext) {
