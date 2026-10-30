@@ -95,7 +95,7 @@ an expression or a generated dataset/signal/scale name.
 - Params and selections on a unit view, on the units of a layer, and on the units of a concat, hconcat, vconcat, facet or
   repeat view (linked brushing across views, a cross-view filter, a brush per facet cell or repeated view, a selection
   declared on the composition and given to every unit below it), as vega-lite 6.4.3 compiles them
-  (`src/selection.ts` ports `compile/selection/*`): point and interval selections; `fields`, `encodings`, `on`,
+  (`src/selection*.ts`: the parameter resolved against its unit, then its signals, marks and store): point and interval selections; `fields`, `encodings`, `on`,
   `clear`, `toggle`, `nearest`, `resolve`, `mark`, `translate`, `zoom`, `value` (initial values, DateTimes
   included); `config.selection`; `bind` to inputs (`range`, `select`, `radio`, `checkbox`, ...), to the legend
   (`"legend"` or `{legend: stream}`) and to `"scales"` (pan and zoom through the scale domains); `{param}` conditions

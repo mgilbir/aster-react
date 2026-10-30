@@ -64,8 +64,8 @@ export function assembleUnitSelectionSignals(unit: SelUnit, selections: Selectio
 
 function finishWire(unit: SelUnit, sel: Selection, wire: Wire, declared: (name: string) => boolean): Signal[] {
   const { signals } = wire
-  const store = `${sel.name}${TUPLE}`
-  let writes = `${store}, ${sel.resolve === 'global' ? 'true' : `{unit: ${unitNameExpr(unit)}}`}`
+  const tuple = sel.name + TUPLE
+  let writes = `${tuple}, ${sel.resolve === 'global' ? 'true' : `{unit: ${unitNameExpr(unit)}}`}`
 
   const fieldsName = sel.name + TUPLE_FIELDS
   if (!sel.fields.byRowId && !declared(fieldsName) && !signals.some((s) => s.name === fieldsName)) {
@@ -75,7 +75,7 @@ function finishWire(unit: SelUnit, sel: Selection, wire: Wire, declared: (name: 
     wire.toggle = { name: sel.name + TOGGLE, value: false, on: [{ events: sel.events, update: sel.toggle }] }
     signals.push(wire.toggle)
     const flag = sel.name + TOGGLE
-    writes = `${flag} ? null : ${store}, ${sel.resolve === 'global' ? `${flag} ? null : true, ` : `${flag} ? null : {unit: ${unitNameExpr(unit)}}, `}${flag} ? ${store} : null`
+    writes = `${flag} ? null : ${tuple}, ${sel.resolve === 'global' ? `${flag} ? null : true, ` : `${flag} ? null : {unit: ${unitNameExpr(unit)}}, `}${flag} ? ${tuple} : null`
   }
   if (bindsInputs(sel)) fromInputs(sel, wire)
   if (bindsScales(sel)) pushBoundScalesOut(sel, wire)
@@ -83,7 +83,7 @@ function finishWire(unit: SelUnit, sel: Selection, wire: Wire, declared: (name: 
   if (hasClear(sel)) wireClear(sel, wire)
   if (sel.type === 'interval' && sel.translate) wireTranslate(unit, sel, wire)
   if (sel.type === 'interval' && sel.zoom) wireZoom(unit, sel, wire)
-  signals.push({ name: sel.name + MODIFY, on: [{ events: { signal: store }, update: `modify(${stringValue(sel.name + STORE)}, ${writes})` }] })
+  signals.push({ name: sel.name + MODIFY, on: [{ events: { signal: tuple }, update: `modify(${stringValue(sel.name + STORE)}, ${writes})` }] })
   return signals
 }
 
