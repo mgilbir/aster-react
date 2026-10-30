@@ -105,67 +105,54 @@ class Resampler {
   }
 
   private resampleRange(ev: Events, from: number, to: number): void {
-    const { out } = this
+    const { out, at } = this
     for (let i = from; i < to; i++) {
+      const op = ev.op[i]!
       const src = (this.src = ev.src[i]!)
-      switch (ev.op[i]!) {
-        case POINT: {
-          const lambda = ev.x[i]!
-          const phi = ev.y[i]!
-          if (this.delta2 === 0 || !this.inLine) {
-            this.map.toPlane(lambda, phi, this.at)
-            out.point(this.at[0]!, this.at[1]!, src)
-            break
-          }
-          // a vertex of a line: project it, refine the segment that leads to it, and remember it
-          const cosPhi = Math.cos(phi)
-          const a = cosPhi * Math.cos(lambda)
-          const b = cosPhi * Math.sin(lambda)
-          const c = Math.sin(phi)
-          this.map.toPlane(lambda, phi, this.at)
-          const x = this.at[0]!
-          const y = this.at[1]!
-          const first = !this.hasPrevious
-          if (!first) this.refine(this.x0, this.y0, this.lambda0, this.a0, this.b0, this.c0, x, y, lambda, a, b, c, MAX_DEPTH)
-          out.point(x, y, src)
-          this.x0 = x
-          this.y0 = y
-          this.lambda0 = lambda
-          this.a0 = a
-          this.b0 = b
-          this.c0 = c
-          this.hasPrevious = true
-          if (first && this.inPolygon) {
-            this.x00 = x
-            this.y00 = y
-            this.lambda00 = lambda
-            this.a00 = a
-            this.b00 = b
-            this.c00 = c
-            this.hasFirst = true
-          }
-          break
-        }
-        case LINE_START:
+      if (op !== POINT) {
+        if (op === LINE_START) {
           this.inLine = true
           this.hasPrevious = this.hasFirst = false
-          out.mark(LINE_START, src)
-          break
-        case LINE_END:
+        } else if (op === LINE_END) {
           this.lineEvent()
           this.inLine = false
-          out.mark(LINE_END, src)
-          break
-        case POLYGON_START:
-          this.inPolygon = true
-          out.mark(POLYGON_START, src)
-          break
-        case POLYGON_END:
-          this.inPolygon = false
-          out.mark(POLYGON_END, src)
-          break
-        default:
-          out.mark(ev.op[i]!, src)
+        } else if (op === POLYGON_START) this.inPolygon = true
+        else if (op === POLYGON_END) this.inPolygon = false
+        out.mark(op, src)
+        continue
+      }
+      const lambda = ev.x[i]!
+      const phi = ev.y[i]!
+      this.map.toPlane(lambda, phi, at)
+      const x = at[0]!
+      const y = at[1]!
+      if (this.delta2 === 0 || !this.inLine) {
+        out.point(x, y, src)
+        continue
+      }
+      // a vertex of a line: refine the segment that leads to it, and remember it
+      const cosPhi = Math.cos(phi)
+      const a = cosPhi * Math.cos(lambda)
+      const b = cosPhi * Math.sin(lambda)
+      const c = Math.sin(phi)
+      const first = !this.hasPrevious
+      if (!first) this.refine(this.x0, this.y0, this.lambda0, this.a0, this.b0, this.c0, x, y, lambda, a, b, c, MAX_DEPTH)
+      out.point(x, y, src)
+      this.x0 = x
+      this.y0 = y
+      this.lambda0 = lambda
+      this.a0 = a
+      this.b0 = b
+      this.c0 = c
+      this.hasPrevious = true
+      if (first && this.inPolygon) {
+        this.x00 = x
+        this.y00 = y
+        this.lambda00 = lambda
+        this.a00 = a
+        this.b00 = b
+        this.c00 = c
+        this.hasFirst = true
       }
     }
   }
