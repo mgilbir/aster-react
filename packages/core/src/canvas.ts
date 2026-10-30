@@ -15,7 +15,7 @@ import type { SceneDef, SceneGroup, SceneItem, SceneRoot } from './types.js'
 import { gradientDefOf, isGradientPaint as isGradientObject } from './svg-defs.js'
 import { Bounds, boundLeaf, boundTypedMark } from './bounds.js'
 import { imageBox, itemImage } from './image-box.js'
-import { parsePathData, tracePath, type PathSeg, type PathSink } from './path-data.js'
+import { parsePathData, tracePath, type PathSeg } from './path-data.js'
 
 // Path-data parsing and replay live in path-data.ts (hit.ts needs them without the renderer); the public surface is unchanged.
 export { parsePathData, tracePath, type PathSeg, type PathSink } from './path-data.js'
@@ -26,10 +26,9 @@ import {
   computeLinePath,
   num,
   rectItemPath,
-  symbolPath,
+  symbolPathExact,
   textItemDesc,
   trailPath,
-  arcPath,
   frameBackgroundPath,
   frameItem,
   arcInto,
@@ -91,7 +90,7 @@ function cachedSymbolPath(shape: string | undefined, r: number): string {
   const key = `${shape ?? 'circle'}|${r}`
   let d = SYMBOL_CACHE.get(key)
   if (d == null) {
-    d = symbolPath(shape, r)
+    d = symbolPathExact(shape, r)
     if (SYMBOL_CACHE.size > 1024) SYMBOL_CACHE.clear()
     SYMBOL_CACHE.set(key, d)
   }

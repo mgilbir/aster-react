@@ -11,7 +11,7 @@ import { describe, expect, it } from 'vitest'
 import * as d3Geo from 'd3-geo'
 import * as d3Contour from 'd3-contour'
 import * as geoPort from '../../core/src/geo-projections.ts'
-import contoursPort from '../../core/src/contour.ts'
+import { contourPolygons } from '../../core/src/contour.ts'
 import { exact, withTz } from './differential-util.mts'
 import { contourCases, geoPrograms, geoSamples } from './d3-geo-cases.mjs'
 
@@ -77,6 +77,7 @@ function runGeoOps(api: Api, theirs: boolean, type: string, ops: Op[], digits: n
 type Contour = (typeof contourCases)[number]
 const contourOf = (make: () => any, c: Contour) =>
   exact(() => make().smooth(c.smooth).size(c.size).thresholds(c.thresholds)(structuredClone(c.values)))
+const portContourOf = (c: Contour) => exact(() => contourPolygons(structuredClone(c.values), c.thresholds, c.size, c.smooth))
 
 describe(`d3-geo ${(d3Geo as unknown as { version?: string }).version ?? '3.1.1'} vs Aster geo-projections.ts (live)`, () => {
   for (const m of MODES) {
@@ -92,7 +93,7 @@ describe(`d3-geo ${(d3Geo as unknown as { version?: string }).version ?? '3.1.1'
   contourCases.forEach((c: Contour, i: number) => {
     it(`contour #${i} ${c.grid} ${c.size} smooth=${c.smooth} t=${c.thresholds}`, () => {
       const want = contourOf(d3Contour.contours as () => any, c)
-      expect(contourOf(contoursPort, c)).toEqual(want)
+      expect(portContourOf(c)).toEqual(want)
     })
   })
 

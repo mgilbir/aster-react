@@ -1,34 +1,22 @@
 /**
- * The raster-grid transforms of vega-geo: `kde2d` (KDE2D: 2D kernel density estimates of point data, one raster
- * grid per group) and `isocontour` (Isocontour: the level sets of raster grids as GeoJSON MultiPolygons), ported
- * operation for operation (vega-geo 5.1.2 `util/density2D.js`, `util/quantize.js`, `util/contours.js` via the geo
- * addon's marching-squares engine), and `heatmap` (Heatmap: a raster grid drawn as an image). Loaded by the transforms addon;
- * `isocontour` needs the geo addon.
+ * The raster-grid transforms: `kde2d` (a density grid per group of points), `isocontour` (the level sets of grids as
+ * GeoJSON MultiPolygons) and `heatmap` (a grid drawn as an image). The density estimate and the placement of
+ * contours are in `raster-grid.ts`, the polygons in `contour.ts`. Loaded by the transforms addon; `isocontour`
+ * needs the geo addon.
  */
 import { error, isArray } from './util.js'
 import { fieldOf } from './transform-agg.js'
-import { blurX, blurY, bwRadius, compileExprTransform, contourQuantize } from './transform.js'
+import { compileExprTransform, contourQuantize } from './transform.js'
+import { densityGrid, placeContours, type RasterGrid } from './raster-grid.js'
 import type { Row, TransformContext } from './transform.js'
-import { boundedCount, meterRows } from './limits.js'
+import { boundedCount } from './limits.js'
 import { geoRegistry, requireGeo } from './registry.js'
 import { parseExpression, type AstNode } from './expr-parser.js'
-import { rgbConvert } from './color.js'
+import { rgbConvert, type Rgb } from './color.js'
 import { RasterImage } from './raster-image.js'
 
 type Params = Record<string, unknown>
 type Get = (d: Row) => unknown
-
-export interface RasterGrid {
-  values: Float32Array
-  scale: number
-  width: number
-  height: number
-  x1: number
-  y1: number
-  x2: number
-  y2: number
-  translate?: number[]
-}
 
 /** A `field`-typed parameter: a field name, or an `{expr}` evaluated over the tuple. */
 function accessorOf(f: unknown, ctx: TransformContext): Get {
@@ -38,63 +26,21 @@ function accessorOf(f: unknown, ctx: TransformContext): Get {
   return fieldOf(f) as Get
 }
 
-const sum = (values: ArrayLike<number>): number => {
-  let s = 0
-  for (let i = 0; i < values.length; ++i) { const v = values[i]!; if (v != null && !isNaN(v)) s += v }
-  return s
+/** The density grid of one group of points (`kde2d`). */
+function densityOf(data: Row[], x: Get, y: Get, weight: Get | null, size: [number, number], cellSize: number | undefined, bandwidth: [number, number], counts: boolean): RasterGrid {
+  return densityGrid({
+    xs: data.map((d) => +(x(d) as number)),
+    ys: data.map((d) => +(y(d) as number)),
+    weightAt: (i) => +(weight ? (weight(data[i]!) as number) : 1),
+    size,
+    k: cellSize === undefined ? 2 : Math.floor(Math.log(cellSize) / Math.LN2),
+    bandwidth,
+    counts,
+    label: 'kde2d grid',
+  })
 }
 
-/** vega-geo `density2D()(data, counts)`: bin the points, blur the bins (three box blurs), scale to a density. */
-function density2D(data: Row[], x: Get, y: Get, weight: Get | null, size: [number, number], cellSize: number | undefined, bandwidth: [number, number], counts: boolean): RasterGrid {
-  const k = cellSize === undefined ? 2 : Math.floor(Math.log(cellSize) / Math.LN2)
-  const [dx, dy] = size
-  const xs = data.map((d) => +(x(d) as number))
-  const ys = data.map((d) => +(y(d) as number))
-  const rx = bwRadius(bandwidth[0], xs) >> k // blur x-radius
-  const ry = bwRadius(bandwidth[1], ys) >> k // blur y-radius
-  const ox = rx ? rx + 2 : 0 // x-offset padding for blur
-  const oy = ry ? ry + 2 : 0 // y-offset padding for blur
-  const n = 2 * ox + (dx >> k) // grid width
-  const m = 2 * oy + (dy >> k) // grid height
-  // the grid is sized by spec parameters (size, bandwidth): bound it before allocating
-  meterRows(n * m, 'kde2d grid')
-  const values0 = new Float32Array(n * m)
-  const values1 = new Float32Array(n * m)
-  let values = values0
-
-  for (let i = 0; i < data.length; ++i) {
-    const xi = ox + (xs[i]! >> k)
-    const yi = oy + (ys[i]! >> k)
-    if (xi >= 0 && xi < n && yi >= 0 && yi < m) values0[xi + yi * n]! += +(weight ? (weight(data[i]!) as number) : 1)
-  }
-
-  if (rx > 0 && ry > 0) {
-    blurX(n, m, values0, values1, rx)
-    blurY(n, m, values1, values0, ry)
-    blurX(n, m, values0, values1, rx)
-    blurY(n, m, values1, values0, ry)
-    blurX(n, m, values0, values1, rx)
-    blurY(n, m, values1, values0, ry)
-  } else if (rx > 0) {
-    blurX(n, m, values0, values1, rx)
-    blurX(n, m, values1, values0, rx)
-    blurX(n, m, values0, values1, rx)
-    values = values1
-  } else if (ry > 0) {
-    blurY(n, m, values0, values1, ry)
-    blurY(n, m, values1, values0, ry)
-    blurY(n, m, values0, values1, ry)
-    values = values1
-  }
-
-  // scale density estimates: density in points per square pixel or probability density
-  const s = counts ? Math.pow(2, -2 * k) : 1 / sum(values)
-  for (let i = 0, sz = n * m; i < sz; ++i) values[i]! *= s
-
-  return { values, scale: 1 << k, width: n, height: m, x1: ox, y1: oy, x2: ox + (dx >> k), y2: oy + (dy >> k) }
-}
-
-/** vega-geo KDE2D. */
+/** A density grid for each group of the points (all of them when there is no `groupby`). */
 export function kde2dRows(rows: Row[], t: Params, ctx: TransformContext): Row[] {
   if (t.size == null || t.x == null || t.y == null) error('Missing required "kde2d" parameter: size, x and y.')
   const size = (t.size as unknown[]).map((v) => +(v as number)) as [number, number]
@@ -128,19 +74,20 @@ export function kde2dRows(rows: Row[], t: Params, ctx: TransformContext): Row[] 
     }
   }
   return groups.map((g) => {
-    const out: Row = { [as]: density2D(g, x, y, weight, size, t.cellSize == null ? undefined : +(t.cellSize as number), bandwidth, !!t.counts) }
+    const out: Row = { [as]: densityOf(g, x, y, weight, size, t.cellSize == null ? undefined : +(t.cellSize as number), bandwidth, !!t.counts) }
     for (let i = 0; i < names.length; ++i) out[names[i]!] = g.dims![i]
     return out
   })
 }
 
+/** The largest number of a list, skipping NaN and missing entries. */
 const max = (values: ArrayLike<number>): number | undefined => {
   let m: number | undefined
   for (let i = 0; i < values.length; ++i) { const v = values[i]!; if (v != null && v >= v && (m === undefined || v > m)) m = v }
   return m
 }
 
-/** vega-geo Isocontour: the level sets of each input grid, one tuple per level (the source's fields copied on). */
+/** The level sets of each input grid, one tuple per level (the source's fields copied on). */
 export function isocontourRows(rows: Row[], t: Params, ctx: TransformContext): Row[] {
   const field: Get = t.field == null ? (r) => r : accessorOf(t.field, ctx)
   const smooth = t.smooth !== false
@@ -154,6 +101,11 @@ export function isocontourRows(rows: Row[], t: Params, ctx: TransformContext): R
   else tz = t.resolve !== 'shared' ? quantize : quantize(rows.map((r) => max((field(r) as RasterGrid).values) as number))
   const as = t.as === null ? null : (t.as as string | undefined) || 'contour'
 
+  const exprValue = (v: unknown, row: Row): unknown => {
+    const e = exprOf(v)
+    return e === undefined ? v : compileExprTransform(e, ctx)(row)
+  }
+
   const out: Row[] = []
   for (const r of rows) {
     const grid = field(r) as RasterGrid
@@ -162,33 +114,13 @@ export function isocontourRows(rows: Row[], t: Params, ctx: TransformContext): R
     const paths = contourRun!(grid.values, thresholds, [Math.floor(grid.width), Math.floor(grid.height)], smooth)
       .map((f) => ({ type: f.type, value: f.value, coordinates: f.coordinates }))
 
-    // adjust contour path coordinates as needed (vega-geo Isocontour transformPaths)
-    let s: unknown = t.scale ?? grid.scale
-    let tr: unknown = t.translate ?? grid.translate
-    if (typeof s === 'object' && s !== null && typeof (s as { expr?: unknown }).expr === 'string') s = compileExprTransform((s as { expr: string }).expr, ctx)(r)
-    if (typeof tr === 'object' && tr !== null && !isArray(tr) && typeof (tr as { expr?: unknown }).expr === 'string') tr = compileExprTransform((tr as { expr: string }).expr, ctx)(r)
+    // `scale` and `translate` (a number or pair, or an expression of the row) place the polygons in view pixels
+    const s = exprValue(t.scale ?? grid.scale, r)
+    const tr = exprValue(t.translate ?? grid.translate, r) as number[] | undefined
     if (!((s === 1 || s == null) && !tr)) {
-      const sx = ((typeof s === 'number' ? s : (s as number[])[0]) || 1)
-      const sy = ((typeof s === 'number' ? s : (s as number[])[1]) || 1)
-      const tv = tr as number[] | undefined
-      const tx = (tv && tv[0]) || 0
-      const ty = (tv && tv[1]) || 0
-      const x1 = grid.x1 || 0
-      const y1 = grid.y1 || 0
-      const flip = sx * sy < 0
-      for (const geometry of paths) {
-        for (const polygon of geometry.coordinates as number[][][][]) {
-          for (const ring of polygon) {
-            if (flip) ring.reverse() // maintain winding order
-            for (const point of ring) {
-              point[0] = (point[0]! - x1) * sx + tx
-              point[1] = (point[1]! - y1) * sy + ty
-            }
-          }
-        }
-      }
+      const pair = (typeof s === 'number' ? [s, s] : s) as number[]
+      placeContours(paths, [grid.x1 || 0, grid.y1 || 0], [pair[0] || 1, pair[1] || 1], [(tr && tr[0]) || 0, (tr && tr[1]) || 0])
     }
-    // ingest; copy source data properties to output
     for (const p of paths) out.push({ ...(as != null ? { [as]: p } : p), ...r })
   }
   return out
@@ -221,61 +153,86 @@ function datumFieldsOf(expr: string): Set<string> {
 const exprOf = (v: unknown): string | undefined =>
   v !== null && typeof v === 'object' && typeof (v as { expr?: unknown }).expr === 'string' ? (v as { expr: string }).expr : undefined
 
+/** What a heatmap parameter sees of a pixel: its position and cell value, and the grid's (or all grids') maximum. */
 interface Pixel { $x: number; $y: number; $value: number; $max: number | undefined; [k: string]: unknown }
 
-/** vega-geo Heatmap: each tuple's raster grid drawn as an image (one pixel per cell: colour from `color`, alpha from `opacity`). */
+const PIXEL_FIELDS = ['$x', '$y', '$value', '$max']
+
+/** A heatmap parameter: a constant, or an expression of the pixel. One that reads no pixel field is evaluated once per grid. */
+interface PixelParam<T> {
+  perPixel: boolean
+  at(pixel: Pixel): T
+}
+
+const readsPixel = (expr: string): boolean => {
+  const fields = datumFieldsOf(expr)
+  return PIXEL_FIELDS.some((f) => fields.has(f))
+}
+
+function colorParam(t: Params, ctx: TransformContext): PixelParam<Rgb> {
+  const expr = exprOf(t.color)
+  if (expr === undefined) return { perPixel: false, at: () => rgbConvert(t.color || '#888') }
+  const evaluate = compileExprTransform(expr, ctx)
+  return { perPixel: readsPixel(expr), at: (pixel) => rgbConvert(evaluate(pixel as never)) }
+}
+
+function opacityParam(t: Params, ctx: TransformContext): PixelParam<number> {
+  const expr = exprOf(t.opacity)
+  if (expr !== undefined) {
+    const evaluate = compileExprTransform(expr, ctx)
+    return { perPixel: readsPixel(expr), at: (pixel) => evaluate(pixel as never) as number }
+  }
+  // no opacity, or a falsy one, is the gradient from 0 to the maximum
+  if (!t.opacity) return { perPixel: true, at: (pixel) => (pixel.$value / (pixel.$max as number)) || 0 }
+  return { perPixel: false, at: () => +(t.opacity as number) }
+}
+
+const constant = <T,>(value: T) => (): T => value
+
+/** One RGBA pixel per cell of the grid's `[x1, x2) x [y1, y2)` window. */
+function paintGrid(grid: RasterGrid, pixel: Pixel, color: PixelParam<Rgb>, opacity: PixelParam<number>): RasterImage {
+  const colorOf = color.perPixel ? color.at : constant(color.at(pixel))
+  const alphaOf = opacity.perPixel ? opacity.at : constant(opacity.at(pixel))
+
+  const stride = grid.width
+  const x1 = grid.x1 || 0
+  const y1 = grid.y1 || 0
+  const x2 = grid.x2 || stride
+  const y2 = grid.y2 || grid.height
+  const w = x2 - x1
+  const h = y2 - y1
+  boundedCount(w * h, 'heatmap pixels')
+  const bytes = new Uint8ClampedArray(4 * w * h)
+  const cells = grid.values
+  let at = 0
+  for (let j = y1; j < y2; ++j) {
+    pixel.$y = j - y1
+    for (let i = x1; i < x2; ++i, at += 4) {
+      pixel.$x = i - x1
+      pixel.$value = cells ? cells[i + j * stride]! : 0
+      const rgb = colorOf(pixel)
+      bytes[at] = rgb.r
+      bytes[at + 1] = rgb.g
+      bytes[at + 2] = rgb.b
+      bytes[at + 3] = ~~(255 * alphaOf(pixel))
+    }
+  }
+  return new RasterImage(w, h, bytes)
+}
+
+/** Each tuple's raster grid drawn as an image: colour from `color`, alpha from `opacity`, `resolve` choosing the maximum they see. */
 export function heatmapRows(rows: Row[], t: Params, ctx: TransformContext): Row[] {
   const shared = t.resolve === 'shared'
   const field: Get = t.field == null ? (r) => r : accessorOf(t.field, ctx)
   const as = (t.as as string | undefined) || 'image'
+  const color = colorParam(t, ctx)
+  const opacity = opacityParam(t, ctx)
 
-  // a parameter that is an expression is a function of the pixel; it is evaluated once per grid unless it reads one of these
-  const PIXEL = ['$x', '$y', '$value', '$max']
-  const depends = (e: string): boolean => { const f = datumFieldsOf(e); return PIXEL.some((k) => f.has(k)) }
-  const colorExpr = exprOf(t.color)
-  const colorFn = colorExpr !== undefined ? compileExprTransform(colorExpr, ctx) : undefined
-  const colorDep = colorExpr !== undefined && depends(colorExpr)
-  const color = (o: Pixel): ReturnType<typeof rgbConvert> => rgbConvert(colorFn ? colorFn(o as never) : (t.color || '#888'))
-  const opacityExpr = exprOf(t.opacity)
-  const opacityFn = opacityExpr !== undefined ? compileExprTransform(opacityExpr, ctx) : undefined
-  // (vega: no opacity, or a falsy one, is the [0, max] gradient)
-  const opacityDep = opacityExpr !== undefined ? depends(opacityExpr) : !t.opacity
-  const opacity = (o: Pixel): number => (opacityFn ? (opacityFn(o as never) as number) : t.opacity ? +(t.opacity as number) : (o.$value / (o.$max as number)) || 0)
-
-  const obj: Pixel = {
-    $x: 0, $y: 0, $value: 0,
-    $max: shared ? max(rows.map((r) => max((field(r) as RasterGrid).values) as number)) : 0,
-  }
+  const sharedMax = shared ? max(rows.map((r) => max((field(r) as RasterGrid).values) as number)) : 0
   return rows.map((r) => {
     const grid = field(r) as RasterGrid
-    const o: Pixel = { ...r, ...obj }
-    if (!shared) o.$max = max(grid.values || [])
-    const c0 = colorDep ? undefined : color(o)
-    const a0 = opacityDep ? undefined : opacity(o)
-
-    const n = grid.width
-    const m = grid.height
-    const x1 = grid.x1 || 0
-    const y1 = grid.y1 || 0
-    const x2 = grid.x2 || n
-    const y2 = grid.y2 || m
-    const val = grid.values
-    const w = x2 - x1
-    const h = y2 - y1
-    boundedCount(w * h, 'heatmap pixels')
-    const pix = new Uint8ClampedArray(4 * w * h)
-    for (let j = y1, k = 0; j < y2; ++j) {
-      o.$y = j - y1
-      for (let i = x1, base = j * n; i < x2; ++i, k += 4) {
-        o.$x = i - x1
-        o.$value = val ? val[i + base]! : 0
-        const v = c0 ?? color(o)
-        pix[k] = v.r
-        pix[k + 1] = v.g
-        pix[k + 2] = v.b
-        pix[k + 3] = ~~(255 * (a0 ?? opacity(o)))
-      }
-    }
-    return { ...r, [as]: new RasterImage(w, h, pix) }
+    const pixel: Pixel = { ...r, $x: 0, $y: 0, $value: 0, $max: sharedMax }
+    if (!shared) pixel.$max = max(grid.values || [])
+    return { ...r, [as]: paintGrid(grid, pixel, color, opacity) }
   })
 }

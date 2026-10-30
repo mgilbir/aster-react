@@ -1,1235 +1,844 @@
-/**
- * The Vega expression grammar's parser — a faithful port of vega-expression
- * (6.2.1), which itself derives from Esprima. Produces the same AST shape
- * upstream does (plain `{type, …}` nodes), pinned by a live differential
- * against the pinned vega-expression (`conformance/scripts/differential-vega-expression.test.mts`).
- *
- * Deviations from JavaScript-on-purpose, exactly as upstream: keywords other
- * than `if` are rejected ("Disabled."), there are no assignments, no sequence
- * expressions, no ++/--, and error messages are V8-identical strings.
- *
- * Upstream keeps the scanner state in module-level variables; this port
- * encapsulates it in a class so concurrent parses cannot interfere.
- */
+/*
+  The following expression parser is based on Esprima (http://esprima.org/).
+  Original header comment and license for Esprima is included here:
 
-// --- AST node types (vega-expression's constants) ----------------------------
+  Copyright (C) 2013 Ariya Hidayat <ariya.hidayat@gmail.com>
+  Copyright (C) 2013 Thaddee Tyl <thaddee.tyl@gmail.com>
+  Copyright (C) 2013 Mathias Bynens <mathias@qiwi.be>
+  Copyright (C) 2012 Ariya Hidayat <ariya.hidayat@gmail.com>
+  Copyright (C) 2012 Mathias Bynens <mathias@qiwi.be>
+  Copyright (C) 2012 Joost-Wim Boekesteijn <joost-wim@boekesteijn.nl>
+  Copyright (C) 2012 Kris Kowal <kris.kowal@cixar.com>
+  Copyright (C) 2012 Yusuke Suzuki <utatane.tea@gmail.com>
+  Copyright (C) 2012 Arpad Borsos <arpad.borsos@googlemail.com>
+  Copyright (C) 2011 Ariya Hidayat <ariya.hidayat@gmail.com>
+
+  Redistribution and use in source and binary forms, with or without
+  modification, are permitted provided that the following conditions are met:
+
+    * Redistributions of source code must retain the above copyright
+      notice, this list of conditions and the following disclaimer.
+    * Redistributions in binary form must reproduce the above copyright
+      notice, this list of conditions and the following disclaimer in the
+      documentation and/or other materials provided with the distribution.
+
+  THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+  AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+  IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+  ARE DISCLAIMED. IN NO EVENT SHALL <COPYRIGHT HOLDER> BE LIABLE FOR ANY
+  DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
+  (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
+  LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
+  ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+  (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
+  THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+*/
+
+/**
+ * Aster's parser for the Vega expression language.
+ *
+ * The language is a small, side-effect-free subset of ECMAScript 5 expressions: literals, identifiers,
+ * member access, calls, the unary operators ! - + ~, the binary and logical operators, the conditional
+ * operator, array and object literals, and the keyword `if`. Everything else (assignment, `++`/`--`,
+ * comma sequences, `typeof`/`void`/`delete`, functions, every other reserved word) is refused.
+ *
+ * Design: a lexer that produces one token at a time on demand, and a precedence-climbing parser with a
+ * single token of lookahead that builds a plain ESTree-shaped tree (`Expr`). The tree is Aster's own
+ * (just the fields the evaluator and the dependency scanners read); `expr-interpreter.ts` compiles it
+ * to closures.
+ *
+ * What the observable behaviour of the language forces, and this file therefore keeps:
+ *  - the set of accepted sources, including the identifier-character classes (tables that predate
+ *    current Unicode and are part of the contract), octal and hex literals, string escapes, regular
+ *    expression literals;
+ *  - the diagnostics: V8-worded messages, one lexed token of lookahead (so a lexical error in the NEXT
+ *    token is reported before a grammar error in the current one), and `error.index`, the scan position
+ *    at the time of the error;
+ *  - the nesting limit (an `AsterLimitError`, never a stack overflow).
+ *
+ * The identifier-character tables below descend from Esprima's (see the licence above); the rest is
+ * Aster's own code, pinned to vega-expression's behaviour by a live and a generated differential
+ * (`conformance/scripts/differential-vega-expression*.test.mts`).
+ */
 
 import { limitViolation } from './limits.js'
 
-export const RawCode = 'RawCode'
-export const Literal = 'Literal'
-export const Property = 'Property'
-export const Identifier = 'Identifier'
-export const ArrayExpression = 'ArrayExpression'
-export const BinaryExpression = 'BinaryExpression'
-export const CallExpression = 'CallExpression'
-export const ConditionalExpression = 'ConditionalExpression'
-export const LogicalExpression = 'LogicalExpression'
-export const MemberExpression = 'MemberExpression'
-export const ObjectExpression = 'ObjectExpression'
-export const UnaryExpression = 'UnaryExpression'
+// --- the tree -----------------------------------------------------------------------------------
 
+/** A property of an object literal; the key is an identifier or a string/number literal. */
+export interface PropertyNode {
+  type: 'Property'
+  key: Expr
+  value: Expr
+}
+
+export type Expr =
+  | { type: 'Literal'; value: string | number | boolean | RegExp | null }
+  | { type: 'Identifier'; name: string }
+  | { type: 'MemberExpression'; computed: boolean; object: Expr; property: Expr }
+  | { type: 'CallExpression'; callee: Expr; arguments: Expr[] }
+  | { type: 'UnaryExpression'; operator: string; argument: Expr }
+  | { type: 'BinaryExpression'; operator: string; left: Expr; right: Expr }
+  | { type: 'LogicalExpression'; operator: string; left: Expr; right: Expr }
+  | { type: 'ConditionalExpression'; test: Expr; consequent: Expr; alternate: Expr }
+  | { type: 'ArrayExpression'; elements: Array<Expr | null> }
+  | { type: 'ObjectExpression'; properties: PropertyNode[] }
+
+/** The loose view of a tree node that dependency scanners walk generically. */
 export interface AstNode {
   type: string
   [key: string]: unknown
 }
 
-class ASTNode {
-  type: string
-  [key: string]: unknown
-  constructor(type: string) {
-    this.type = type
-  }
-}
-
-// --- token kinds -------------------------------------------------------------
-
-const TokenBooleanLiteral = 1
-const TokenEOF = 2
-const TokenIdentifier = 3
-const TokenKeyword = 4
-const TokenNullLiteral = 5
-const TokenNumericLiteral = 6
-const TokenPunctuator = 7
-const TokenStringLiteral = 8
-const TokenRegularExpression = 9
-
-interface Token {
-  type: number
-  value: unknown
-  start: number
-  end: number
-  octal?: boolean
-  regex?: { pattern: string; flags: string }
-  literal?: string
-  prec?: number
-}
-
-// Error messages should be identical to V8.
-const MessageUnexpectedToken = 'Unexpected token %0'
-const MessageUnexpectedNumber = 'Unexpected number'
-const MessageUnexpectedString = 'Unexpected string'
-const MessageUnexpectedIdentifier = 'Unexpected identifier'
-const MessageUnexpectedReserved = 'Unexpected reserved word'
-const MessageUnexpectedEOS = 'Unexpected end of input'
-const MessageInvalidRegExp = 'Invalid regular expression'
-const MessageUnterminatedRegExp = 'Invalid regular expression: missing /'
-const MessageStrictOctalLiteral = 'Octal literals are not allowed in strict mode.'
-const MessageStrictDuplicateProperty = 'Duplicate data property in object literal not allowed in strict mode'
-
-const ILLEGAL = 'ILLEGAL'
-const DISABLED = 'Disabled.'
-
-// See also tools/generate-unicode-regex.py.
-const RegexNonAsciiIdentifierStart = new RegExp('[\\xAA\\xB5\\xBA\\xC0-\\xD6\\xD8-\\xF6\\xF8-\\u02C1\\u02C6-\\u02D1\\u02E0-\\u02E4\\u02EC\\u02EE\\u0370-\\u0374\\u0376\\u0377\\u037A-\\u037D\\u037F\\u0386\\u0388-\\u038A\\u038C\\u038E-\\u03A1\\u03A3-\\u03F5\\u03F7-\\u0481\\u048A-\\u052F\\u0531-\\u0556\\u0559\\u0561-\\u0587\\u05D0-\\u05EA\\u05F0-\\u05F2\\u0620-\\u064A\\u066E\\u066F\\u0671-\\u06D3\\u06D5\\u06E5\\u06E6\\u06EE\\u06EF\\u06FA-\\u06FC\\u06FF\\u0710\\u0712-\\u072F\\u074D-\\u07A5\\u07B1\\u07CA-\\u07EA\\u07F4\\u07F5\\u07FA\\u0800-\\u0815\\u081A\\u0824\\u0828\\u0840-\\u0858\\u08A0-\\u08B2\\u0904-\\u0939\\u093D\\u0950\\u0958-\\u0961\\u0971-\\u0980\\u0985-\\u098C\\u098F\\u0990\\u0993-\\u09A8\\u09AA-\\u09B0\\u09B2\\u09B6-\\u09B9\\u09BD\\u09CE\\u09DC\\u09DD\\u09DF-\\u09E1\\u09F0\\u09F1\\u0A05-\\u0A0A\\u0A0F\\u0A10\\u0A13-\\u0A28\\u0A2A-\\u0A30\\u0A32\\u0A33\\u0A35\\u0A36\\u0A38\\u0A39\\u0A59-\\u0A5C\\u0A5E\\u0A72-\\u0A74\\u0A85-\\u0A8D\\u0A8F-\\u0A91\\u0A93-\\u0AA8\\u0AAA-\\u0AB0\\u0AB2\\u0AB3\\u0AB5-\\u0AB9\\u0ABD\\u0AD0\\u0AE0\\u0AE1\\u0B05-\\u0B0C\\u0B0F\\u0B10\\u0B13-\\u0B28\\u0B2A-\\u0B30\\u0B32\\u0B33\\u0B35-\\u0B39\\u0B3D\\u0B5C\\u0B5D\\u0B5F-\\u0B61\\u0B71\\u0B83\\u0B85-\\u0B8A\\u0B8E-\\u0B90\\u0B92-\\u0B95\\u0B99-\\u0B9A\\u0B9C\\u0B9E\\u0B9F\\u0BA3\\u0BA4\\u0BA8-\\u0BAA\\u0BAE-\\u0BB9\\u0BD0\\u0C05-\\u0C0C\\u0C0E-\\u0C10\\u0C12-\\u0C28\\u0C2A-\\u0C39\\u0C3D-\\u0C44\\u0C46-\\u0C48\\u0C4A-\\u0C4D\\u0C55\\u0C56\\u0C58\\u0C59\\u0C60-\\u0C61\\u0C85-\\u0C8C\\u0C8E-\\u0C90\\u0C92-\\u0CA8\\u0CAA-\\u0CB3\\u0CB5-\\u0CB9\\u0CBD\\u0CDE\\u0CE0\\u0CE1\\u0CF1\\u0CF2\\u0D05-\\u0D0C\\u0D0E-\\u0D10\\u0D12-\\u0D3A\\u0D3D-\\u0D44\\u0D46-\\u0D48\\u0D4A-\\u0D4E\\u0D57\\u0D60\\u0D61\\u0D7A-\\u0D7F\\u0D85-\\u0D96\\u0D9A-\\u0DB1\\u0DB3-\\u0DBB\\u0DBD\\u0DC0-\\u0DC6\\u0E01-\\u0E30\\u0E32\\u0E33\\u0E40-\\u0E46\\u0E81\\u0E82\\u0E84\\u0E87\\u0E88\\u0E8A\\u0E8D\\u0E94-\\u0E97\\u0E99-\\u0E9F\\u0EA1-\\u0EA3\\u0EA5\\u0EA7\\u0EAA\\u0EAB\\u0EAD-\\u0EB0\\u0EB2\\u0EB3\\u0EBD\\u0EC0-\\u0EC4\\u0EC6\\u0EDC-\\u0EDF\\u0F00\\u0F40-\\u0F47\\u0F49-\\u0F6C\\u0F88-\\u0F8C\\u1000-\\u102A\\u103F\\u1050-\\u1055\\u105A-\\u105D\\u1061\\u1065\\u1066\\u106E-\\u1070\\u1075-\\u1081\\u108E\\u10A0-\\u10C5\\u10C7\\u10CD\\u10D0-\\u10FA\\u10FC-\\u1248\\u124A-\\u124D\\u1250-\\u1256\\u1258\\u125A-\\u125D\\u1260-\\u1288\\u128A-\\u128D\\u1290-\\u12B0\\u12B2-\\u12B5\\u12B8-\\u12BE\\u12C0\\u12C2-\\u12C5\\u12C8-\\u12D6\\u12D8-\\u1310\\u1312-\\u1315\\u1318-\\u135A\\u1380-\\u138F\\u13A0-\\u13F4\\u1401-\\u166C\\u166F-\\u167F\\u1681-\\u169A\\u16A0-\\u16EA\\u16EE-\\u16F8\\u1700-\\u170C\\u170E-\\u1711\\u1720-\\u1731\\u1740-\\u1751\\u1760-\\u176C\\u176E-\\u1770\\u1780-\\u17B3\\u17D7\\u17DC\\u1820-\\u1877\\u1880-\\u18A8\\u18AA\\u18B0-\\u18F5\\u1900-\\u191E\\u1950-\\u196D\\u1970-\\u1974\\u1980-\\u19AB\\u19C1-\\u19C7\\u1A00-\\u1A1B\\u1A20-\\u1A54\\u1AA7\\u1B05-\\u1B33\\u1B45-\\u1B4B\\u1B83-\\u1BA0\\u1BAE-\\u1BAF\\u1BBA-\\u1BE5\\u1C00-\\u1C23\\u1C4D-\\u1C4F\\u1C5A-\\u1C7D\\u1CE9-\\u1CEC\\u1CEE-\\u1CF1\\u1CF5\\u1CF6\\u1D00-\\u1DBF\\u1E00-\\u1F15\\u1F18-\\u1F1D\\u1F20-\\u1F45\\u1F48-\\u1F4D\\u1F50-\\u1F57\\u1F59\\u1F5B\\u1F5D\\u1F5F-\\u1F7D\\u1F80-\\u1FB4\\u1FB6-\\u1FBC\\u1FBE\\u1FC2-\\u1FC4\\u1FC6-\\u1FCC\\u1FD0-\\u1FD3\\u1FD6-\\u1FDB\\u1FE0-\\u1FEC\\u1FF2-\\u1FF4\\u1FF6-\\u1FFC\\u2071\\u207F\\u2090-\\u209C\\u2102\\u2107\\u210A-\\u2113\\u2115\\u2119-\\u211D\\u2124\\u2126\\u2128\\u212A-\\u212D\\u212F-\\u2139\\u213C-\\u213F\\u2145-\\u2149\\u214E\\u2160-\\u2188\\u2C00-\\u2C2E\\u2C30-\\u2C5E\\u2C60-\\u2CE4\\u2CEB-\\u2CEE\\u2CF2\\u2CF3\\u2D00-\\u2D25\\u2D27\\u2D2D\\u2D30-\\u2D67\\u2D6F\\u2D80-\\u2D96\\u2DA0-\\u2DA6\\u2DA8-\\u2DAE\\u2DB0-\\u2DB6\\u2DB8-\\u2DBE\\u2DC0-\\u2DC6\\u2DC8-\\u2DCE\\u2DD0-\\u2DD6\\u2DD8-\\u2DDE\\u2E2F\\u3005-\\u3007\\u3021-\\u3029\\u3031-\\u3035\\u3038-\\u303C\\u3041-\\u3096\\u309D-\\u309F\\u30A1-\\u30FA\\u30FC-\\u30FF\\u3105-\\u312D\\u3131-\\u318E\\u31A0-\\u31BA\\u31F0-\\u31FF\\u3400-\\u4DB5\\u4E00-\\u9FCC\\uA000-\\uA48C\\uA4D0-\\uA4FD\\uA500-\\uA60C\\uA610-\\uA61F\\uA62A\\uA62B\\uA640-\\uA66E\\uA67F-\\uA69D\\uA6A0-\\uA6EF\\uA717-\\uA71F\\uA722-\\uA788\\uA78B-\\uA78E\\uA790-\\uA7AD\\uA7B0\\uA7B1\\uA7F7-\\uA801\\uA803-\\uA805\\uA807-\\uA80A\\uA80C-\\uA822\\uA840-\\uA873\\uA882-\\uA8B3\\uA8F2-\\uA8F7\\uA8FB\\uA90A-\\uA925\\uA930-\\uA946\\uA960-\\uA97C\\uA984-\\uA9B2\\uA9CF\\uA9E0-\\uA9E4\\uA9E6-\\uA9EF\\uA9FA-\\uA9FE\\uAA00-\\uAA28\\uAA40-\\uAA42\\uAA44-\\uAA4B\\uAA60-\\uAA76\\uAA7A\\uAA7E-\\uAAAF\\uAAB1\\uAAB5\\uAAB6\\uAAB9-\\uAABD\\uAAC0\\uAAC2\\uAADB-\\uAADD\\uAAE0-\\uAAEA\\uAAF2-\\uAAF4\\uAB01-\\uAB06\\uAB09-\\uAB0E\\uAB11-\\uAB16\\uAB20-\\uAB26\\uAB28-\\uAB2E\\uAB30-\\uAB5A\\uAB5C-\\uAB5F\\uAB64\\uAB65\\uABC0-\\uABE2\\uAC00-\\uD7A3\\uD7B0-\\uD7C6\\uD7CB-\\uD7FB\\uF900-\\uFA6D\\uFA70-\\uFAD9\\uFB00-\\uFB06\\uFB13-\\uFB17\\uFB1D-\\uFB28\\uFB2A-\\uFB36\\uFB38-\\uFB3C\\uFB3E\\uFB40\\uFB41\\uFB43\\uFB44\\uFB46-\\uFBB1\\uFBD3-\\uFD3D\\uFD50-\\uFD8F\\uFD92-\\uFDC7\\uFDF0-\\uFDFB\\uFE70-\\uFE74\\uFE76-\\uFEFC\\uFF21-\\uFF3A\\uFF41-\\uFF5A\\uFF66-\\uFFBE\\uFFC2-\\uFFC7\\uFFCA-\\uFFCF\\uFFD2-\\uFFD7\\uFFDA-\\uFFDC]')
-const RegexNonAsciiIdentifierPart = new RegExp('[\\xAA\\xB5\\xBA\\xC0-\\xD6\\xD8-\\xF6\\xF8-\\u02C1\\u02C6-\\u02D1\\u02E0-\\u02E4\\u02EC\\u02EE\\u0300-\\u0374\\u0376\\u0377\\u037A-\\u037D\\u037F\\u0386\\u0388-\\u038A\\u038C\\u038E-\\u03A1\\u03A3-\\u03F5\\u03F7-\\u0481\\u0483-\\u0487\\u048A-\\u052F\\u0531-\\u0556\\u0559\\u0561-\\u0587\\u0591-\\u05BD\\u05BF\\u05C1\\u05C2\\u05C4\\u05C5\\u05C7\\u05D0-\\u05EA\\u05F0-\\u05F2\\u0610-\\u061A\\u0620-\\u0669\\u066E-\\u06D3\\u06D5-\\u06DC\\u06DF-\\u06E8\\u06EA-\\u06FC\\u06FF\\u0710-\\u074A\\u074D-\\u07B1\\u07C0-\\u07F5\\u07FA\\u0800-\\u082D\\u0840-\\u085B\\u08A0-\\u08B2\\u08E4-\\u0963\\u0966-\\u096F\\u0971-\\u0983\\u0985-\\u098C\\u098F\\u0990\\u0993-\\u09A8\\u09AA-\\u09B0\\u09B2\\u09B6-\\u09B9\\u09BC-\\u09C4\\u09C7\\u09C8\\u09CB-\\u09CE\\u09D7\\u09DC\\u09DD\\u09DF-\\u09E3\\u09E6-\\u09F1\\u0A01-\\u0A03\\u0A05-\\u0A0A\\u0A0F\\u0A10\\u0A13-\\u0A28\\u0A2A-\\u0A30\\u0A32\\u0A33\\u0A35\\u0A36\\u0A38\\u0A39\\u0A3C\\u0A3E-\\u0A42\\u0A47\\u0A48\\u0A4B-\\u0A4D\\u0A51\\u0A59-\\u0A5C\\u0A5E\\u0A66-\\u0A75\\u0A81-\\u0A83\\u0A85-\\u0A8D\\u0A8F-\\u0A91\\u0A93-\\u0AA8\\u0AAA-\\u0AB0\\u0AB2\\u0AB3\\u0AB5-\\u0AB9\\u0ABC-\\u0AC5\\u0AC7-\\u0AC9\\u0ACB-\\u0ACD\\u0AD0-\\u0AE3\\u0AE6-\\u0AEF\\u0B01-\\u0B03\\u0B05-\\u0B0C\\u0B0F\\u0B10\\u0B13-\\u0B28\\u0B2A-\\u0B30\\u0B32\\u0B33\\u0B35-\\u0B39\\u0B3C-\\u0B44\\u0B47-\\u0B48\\u0B4B-\\u0B4D\\u0B56\\u0B57\\u0B5C\\u0B5D\\u0B5F-\\u0B63\\u0B66-\\u0B6F\\u0B71\\u0B82\\u0B83\\u0B85-\\u0B8A\\u0B8E-\\u0B90\\u0B92-\\u0B95\\u0B99-\\u0B9A\\u0B9C\\u0B9E\\u0B9F\\u0BA3\\u0BA4\\u0BA8-\\u0BAA\\u0BAE-\\u0BB9\\u0BD0\\u0C00-\\u0C03\\u0C05-\\u0C0C\\u0C0E-\\u0C10\\u0C12-\\u0C28\\u0C2A-\\u0C39\\u0C3D-\\u0C44\\u0C46-\\u0C48\\u0C4A-\\u0C4D\\u0C55\\u0C56\\u0C58\\u0C59\\u0C60-\\u0C63\\u0C66-\\u0C6F\\u0C81-\\u0C83\\u0C85-\\u0C8C\\u0C8E-\\u0C90\\u0C92-\\u0CA8\\u0CAA-\\u0CB3\\u0CB5-\\u0CB9\\u0CBC-\\u0CC4\\u0CC6-\\u0CC8\\u0CCA-\\u0CCD\\u0CD5\\u0CD6\\u0CDE\\u0CE0-\\u0CE3\\u0CE6-\\u0CEF\\u0CF1\\u0CF2\\u0D01-\\u0D03\\u0D05-\\u0D0C\\u0D0E-\\u0D10\\u0D12-\\u0D3A\\u0D3D-\\u0D44\\u0D46-\\u0D48\\u0D4A-\\u0D4E\\u0D57\\u0D60-\\u0D63\\u0D66-\\u0D6F\\u0D7A-\\u0D7F\\u0D82\\u0D83\\u0D85-\\u0D96\\u0D9A-\\u0DB1\\u0DB3-\\u0DBB\\u0DBD\\u0DC0-\\u0DC6\\u0DCA\\u0DCF-\\u0DD4\\u0DD6\\u0DD8-\\u0DDF\\u0DE6-\\u0DEF\\u0DF2\\u0DF3\\u0E01-\\u0E3A\\u0E40-\\u0E4E\\u0E50-\\u0E59\\u0E81\\u0E82\\u0E84\\u0E87\\u0E88\\u0E8A\\u0E8D\\u0E94-\\u0E97\\u0E99-\\u0E9F\\u0EA1-\\u0EA3\\u0EA5\\u0EA7\\u0EAA\\u0EAB\\u0EAD-\\u0EB9\\u0EBB-\\u0EBD\\u0EC0-\\u0EC4\\u0EC6\\u0EC8-\\u0ECD\\u0ED0-\\u0ED9\\u0EDC-\\u0EDF\\u0F00\\u0F18\\u0F19\\u0F20-\\u0F29\\u0F35\\u0F37\\u0F39\\u0F3E-\\u0F47\\u0F49-\\u0F6C\\u0F71-\\u0F84\\u0F86-\\u0F97\\u0F99-\\u0FBC\\u0FC6\\u1000-\\u1049\\u1050-\\u109D\\u10A0-\\u10C5\\u10C7\\u10CD\\u10D0-\\u10FA\\u10FC-\\u1248\\u124A-\\u124D\\u1250-\\u1256\\u1258\\u125A-\\u125D\\u1260-\\u1288\\u128A-\\u128D\\u1290-\\u12B0\\u12B2-\\u12B5\\u12B8-\\u12BE\\u12C0\\u12C2-\\u12C5\\u12C8-\\u12D6\\u12D8-\\u1310\\u1312-\\u1315\\u1318-\\u135A\\u135D-\\u135F\\u1380-\\u138F\\u13A0-\\u13F4\\u1401-\\u166C\\u166F-\\u167F\\u1681-\\u169A\\u16A0-\\u16EA\\u16EE-\\u16F8\\u1700-\\u170C\\u170E-\\u1714\\u1720-\\u1734\\u1740-\\u1753\\u1760-\\u176C\\u176E-\\u1770\\u1772\\u1773\\u1780-\\u17D3\\u17D7\\u17DC\\u17DD\\u17E0-\\u17E9\\u180B-\\u180D\\u1810-\\u1819\\u1820-\\u1877\\u1880-\\u18AA\\u18B0-\\u18F5\\u1900-\\u191E\\u1920-\\u192B\\u1930-\\u193B\\u1946-\\u196D\\u1970-\\u1974\\u1980-\\u19AB\\u19B0-\\u19C9\\u19D0-\\u19D9\\u1A00-\\u1A1B\\u1A20-\\u1A5E\\u1A60-\\u1A7C\\u1A7F-\\u1A89\\u1A90-\\u1A99\\u1AA7\\u1AB0-\\u1ABD\\u1B00-\\u1B4B\\u1B50-\\u1B59\\u1B6B-\\u1B73\\u1B80-\\u1BF3\\u1C00-\\u1C37\\u1C40-\\u1C49\\u1C4D-\\u1C7D\\u1CD0-\\u1CD2\\u1CD4-\\u1CF6\\u1CF8\\u1CF9\\u1D00-\\u1DF5\\u1DFC-\\u1F15\\u1F18-\\u1F1D\\u1F20-\\u1F45\\u1F48-\\u1F4D\\u1F50-\\u1F57\\u1F59\\u1F5B\\u1F5D\\u1F5F-\\u1F7D\\u1F80-\\u1FB4\\u1FB6-\\u1FBC\\u1FBE\\u1FC2-\\u1FC4\\u1FC6-\\u1FCC\\u1FD0-\\u1FD3\\u1FD6-\\u1FDB\\u1FE0-\\u1FEC\\u1FF2-\\u1FF4\\u1FF6-\\u1FFC\\u200C\\u200D\\u203F\\u2040\\u2054\\u2071\\u207F\\u2090-\\u209C\\u20D0-\\u20DC\\u20E1\\u20E5-\\u20F0\\u2102\\u2107\\u210A-\\u2113\\u2115\\u2119-\\u211D\\u2124\\u2126\\u2128\\u212A-\\u212D\\u212F-\\u2139\\u213C-\\u213F\\u2145-\\u2149\\u214E\\u2160-\\u2188\\u2C00-\\u2C2E\\u2C30-\\u2C5E\\u2C60-\\u2CE4\\u2CEB-\\u2CEE\\u2CF2\\u2CF3\\u2D00-\\u2D25\\u2D27\\u2D2D\\u2D30-\\u2D67\\u2D6F\\u2D7F-\\u2D96\\u2DA0-\\u2DA6\\u2DA8-\\u2DAE\\u2DB0-\\u2DB6\\u2DB8-\\u2DBE\\u2DC0-\\u2DC6\\u2DC8-\\u2DCE\\u2DD0-\\u2DD6\\u2DD8-\\u2DDE\\u2DE0-\\u2DFF\\u2E2F\\u3005-\\u3007\\u3021-\\u302F\\u3031-\\u3035\\u3038-\\u303C\\u3041-\\u3096\\u3099\\u309A\\u309D-\\u309F\\u30A1-\\u30FA\\u30FC-\\u30FF\\u3105-\\u312D\\u3131-\\u318E\\u31A0-\\u31BA\\u31F0-\\u31FF\\u3400-\\u4DB5\\u4E00-\\u9FCC\\uA000-\\uA48C\\uA4D0-\\uA4FD\\uA500-\\uA60C\\uA610-\\uA61F\\uA62A\\uA62B\\uA640-\\uA66F\\uA674-\\uA67D\\uA67F-\\uA69D\\uA69F-\\uA6F1\\uA717-\\uA71F\\uA722-\\uA788\\uA78B-\\uA78E\\uA790-\\uA7AD\\uA7B0\\uA7B1\\uA7F7-\\uA827\\uA840-\\uA873\\uA880-\\uA8C4\\uA8D0-\\uA8D9\\uA8E0-\\uA8F7\\uA8FB\\uA900-\\uA92D\\uA930-\\uA953\\uA960-\\uA97C\\uA980-\\uA9C0\\uA9CF-\\uA9D9\\uA9E0-\\uA9FE\\uAA00-\\uAA36\\uAA40-\\uAA4D\\uAA50-\\uAA59\\uAA60-\\uAA76\\uAA7A-\\uAAC2\\uAADB-\\uAADD\\uAAE0-\\uAAEF\\uAAF2-\\uAAF6\\uAB01-\\uAB06\\uAB09-\\uAB0E\\uAB11-\\uAB16\\uAB20-\\uAB26\\uAB28-\\uAB2E\\uAB30-\\uAB5A\\uAB5C-\\uAB5F\\uAB64\\uAB65\\uABC0-\\uABEA\\uABEC\\uABED\\uABF0-\\uABF9\\uAC00-\\uD7A3\\uD7B0-\\uD7C6\\uD7CB-\\uD7FB\\uF900-\\uFA6D\\uFA70-\\uFAD9\\uFB00-\\uFB06\\uFB13-\\uFB17\\uFB1D-\\uFB28\\uFB2A-\\uFB36\\uFB38-\\uFB3C\\uFB3E\\uFB40\\uFB41\\uFB43\\uFB44\\uFB46-\\uFBB1\\uFBD3-\\uFD3D\\uFD50-\\uFD8F\\uFD92-\\uFDC7\\uFDF0-\\uFDFB\\uFE00-\\uFE0F\\uFE20-\\uFE2D\\uFE33\\uFE34\\uFE4D-\\uFE4F\\uFE70-\\uFE74\\uFE76-\\uFEFC\\uFF10-\\uFF19\\uFF21-\\uFF3A\\uFF3F\\uFF41-\\uFF5A\\uFF66-\\uFFBE\\uFFC2-\\uFFC7\\uFFCA-\\uFFCF\\uFFD2-\\uFFD7\\uFFDA-\\uFFDC]')
-
-// 7.6.1.1 Keywords
-const keywords: Record<string, number> = {
-  if: 1, in: 1, do: 1,
-  var: 1, for: 1, new: 1, try: 1, let: 1,
-  this: 1, else: 1, case: 1, void: 1, with: 1, enum: 1,
-  while: 1, break: 1, catch: 1, throw: 1, const: 1, yield: 1, class: 1, super: 1,
-  return: 1, typeof: 1, delete: 1, switch: 1, export: 1, import: 1, public: 1, static: 1,
-  default: 1, finally: 1, extends: 1, package: 1, private: 1,
-  function: 1, continue: 1, debugger: 1,
-  interface: 1, protected: 1,
-  instanceof: 1, implements: 1,
-}
-
-function isDecimalDigit(ch: number): boolean {
-  return ch >= 0x30 && ch <= 0x39 // 0..9
-}
-function isHexDigit(ch: string): boolean {
-  return '0123456789abcdefABCDEF'.includes(ch)
-}
-function isOctalDigit(ch: string): boolean {
-  return '01234567'.includes(ch)
-}
-// 7.2 White Space
-function isWhiteSpace(ch: number): boolean {
-  return ch === 0x20 || ch === 0x09 || ch === 0x0B || ch === 0x0C || ch === 0xA0 ||
-    (ch >= 0x1680 && [0x1680, 0x180E, 0x2000, 0x2001, 0x2002, 0x2003, 0x2004, 0x2005, 0x2006, 0x2007, 0x2008, 0x2009, 0x200A, 0x202F, 0x205F, 0x3000, 0xFEFF].includes(ch))
-}
-// 7.3 Line Terminators
-function isLineTerminator(ch: number): boolean {
-  return ch === 0x0A || ch === 0x0D || ch === 0x2028 || ch === 0x2029
-}
-// 7.6 Identifier Names and Identifiers
-function isIdentifierStart(ch: number): boolean {
-  return ch === 0x24 || ch === 0x5F || // $ (dollar) and _ (underscore)
-    (ch >= 0x41 && ch <= 0x5A) || // A..Z
-    (ch >= 0x61 && ch <= 0x7A) || // a..z
-    ch === 0x5C || // \ (backslash)
-    (ch >= 0x80 && RegexNonAsciiIdentifierStart.test(String.fromCharCode(ch)))
-}
-function isIdentifierPart(ch: number): boolean {
-  return ch === 0x24 || ch === 0x5F ||
-    (ch >= 0x41 && ch <= 0x5A) ||
-    (ch >= 0x61 && ch <= 0x7A) ||
-    (ch >= 0x30 && ch <= 0x39) ||
-    ch === 0x5C ||
-    (ch >= 0x80 && RegexNonAsciiIdentifierPart.test(String.fromCharCode(ch)))
-}
-
-// --- the parser --------------------------------------------------------------
-
 /**
- * Deepest expression the parser accepts and the (recursive) interpreter can
- * safely walk: 1000 nested productions or 1000 chained binary operators. Real
- * specs stay far below it; a left-leaning `1+1+1+...` chain has tiny parser
- * recursion but an AST as deep as it is long, so the AST is measured as well.
+ * Deepest expression accepted: 1000 nested productions or a tree 1000 levels tall. Real specs stay far
+ * below it; a chain `1+1+1+...` has tiny parser recursion but a tree as tall as it is long, so the tree
+ * is measured too. Beyond it the evaluator's own recursion could not be trusted to stay off the stack.
  */
 export const EXPR_MAX_DEPTH = 1000
 
-/** Iterative AST depth check (the AST can be far deeper than the parser's own recursion). */
-function checkAstDepth(root: AstNode): void {
-  const stack: Array<[unknown, number]> = [[root, 1]]
-  while (stack.length) {
-    const [node, d] = stack.pop()!
-    if (d > EXPR_MAX_DEPTH) throw limitViolation(`maxDepth ${d} > ${EXPR_MAX_DEPTH} (expression nesting)`)
-    if (Array.isArray(node)) {
-      for (const x of node) stack.push([x, d])
-    } else if (node && typeof node === 'object') {
-      for (const x of Object.values(node as Record<string, unknown>)) {
-        if (x && typeof x === 'object') stack.push([x, d + 1])
-      }
-    }
+// --- character classes ----------------------------------------------------------------------------
+
+// Identifier characters beyond ASCII, as [gap, length] pairs in base 36 over the BMP starting at U+0080.
+// These are the identifier-start and identifier-part classes of the tables vega-expression ships
+// (Unicode 6-era, with their idiosyncrasies): a language contract, so they are measured against it, not
+// replaced by the current \p{ID_Start}. Guarded by an exhaustive differential over every code unit.
+const ID_START_PACKED =
+  '16 0 b 0 5 0 6 m 2 u 2 cp 5 b f 4 8 0 2 0 3m 4 2 1 3 3 2 0 7 0 2 2 2 0 2 j 2 2a 2 3u 9 4l 2 11 3 0 8 12 21 q 6 2 1a 16 ' +
+  '10 1 2 2q 2 0 g 1 8 1 b 2 3 0 h 0 2 t u 2g c 0 p w a 1 5 0 6 l 5 0 a 0 4 0 o o 20 i 2a 1h 4 0 j 0 8 9 g f 5 7 3 1 3 l ' +
+  '2 6 2 0 4 3 4 0 h 0 e 1 2 2 f 1 k 5 5 1 3 l 2 6 2 1 2 1 2 1 w 3 2 0 k 2 h 8 2 2 2 l 2 6 2 1 2 4 4 0 j 0 g 1 10 7 3 1 3 ' +
+  'l 2 6 2 1 2 4 4 0 v 1 2 2 g 0 i 0 2 5 4 2 2 3 4 1 2 0 2 1 4 1 4 2 4 b n 0 1h 7 2 2 2 m 2 f 4 0 r 1 7 1 10 7 2 2 2 m 2 ' +
+  '9 2 4 4 0 x 0 2 1 g 1 j 7 2 2 2 14 3 0 h 0 i 1 p 5 6 h 4 n 2 8 2 0 3 6 1n 1b 2 1 d 6 1n 1 2 0 3 1 2 0 3 0 7 3 2 6 2 2 ' +
+  '2 0 2 0 3 1 2 3 2 1 a 0 3 4 2 0 m 3 x 0 1s 7 2 z s 4 38 16 l 0 h 5 5 3 4 0 4 1 8 2 5 c d 0 i 11 2 0 6 0 3 16 2 98 2 3 ' +
+  '3 6 2 0 2 3 3 14 2 3 3 w 2 3 3 6 2 0 2 3 3 e 2 1k 2 3 3 1u 12 f h 2c d h7 3 g 2 p 6 22 4 a 8 c 2 3 f h f h f c 2 2 g ' +
+  '1f 10 0 5 0 1w 2f 9 14 2 0 6 1x b u 1e t 3 4 c 17 m 6 1l m a 1g 2b 0 2m 1a i 6 1k t e 1 b 17 r z 16 2 b z 30 3 2 3 4 1 ' +
+  'a 5b 1t 7p 3 5 3 11 3 5 3 7 2 0 2 0 2 0 2 u 3 1g 2 6 2 0 4 2 2 6 4 3 3 5 5 c 6 2 2 6 39 0 e 0 h c 2u 0 5 0 3 9 2 0 4 4 ' +
+  '7 0 2 0 2 0 2 3 2 a 3 3 6 4 5 0 i 14 22g 1a 2 1a 2 3o 7 3 4 1 d 11 2 0 6 0 3 1j 8 0 h m a 6 2 6 2 6 2 6 2 6 2 6 2 6 2 ' +
+  '6 29 0 d2 2 q 8 8 4 3 4 5 2d 7 2 2 2h 2 3 6 14 4 2l i q 1i f e9 52t 23 g5o 1g wc 1w 19 3 7g 4 f b 1 l 1a h u 3 27 14 8 ' +
+  '3 2u 3 3 2 t 3 1 1y a 2 2 2 3 2 m u 1f f 1d 1r 5 4 0 f r b m q s 8 1a t 0 h 4 2 9 b 4 2 14 o 2 2 7 l m 4 0 4 1d 2 0 4 ' +
+  '1 3 4 3 0 2 0 p 2 3 a 8 2 d 5 3 5 3 5 a 6 2 6 2 16 2 3 5 1 2j y u 8mb d m 5 1c 6it a5 3 2x 13 6 d 4 6 0 2 9 2 c 2 4 2 ' +
+  '0 2 1 2 1 2 2z y a2 j 1r 3 1h 15 b 39 4 2 3q 11 p 7 p c 2g 4 5 3 5 3 5 3 2 '
+const ID_PART_PACKED =
+  '16 0 b 0 5 0 6 m 2 u 2 cp 5 b f 4 8 0 2 0 i 38 2 1 3 3 2 0 7 0 2 2 2 0 2 j 2 2a 2 3u 2 4 3 4l 2 11 3 0 8 12 a 18 2 0 2 ' +
+  '1 2 1 2 0 9 q 6 2 u a 6 21 5 2t 2 7 3 9 2 i 3 0 h 1m 3 2s f 1h 5 0 6 19 j r 1x i 1e 3j 3 9 2 i 2 7 3 1 3 l 2 6 2 0 4 3 ' +
+  '3 8 3 1 3 3 9 0 5 1 2 4 3 b g 2 2 5 5 1 3 l 2 6 2 1 2 1 2 1 3 0 2 4 5 1 3 2 4 0 8 3 2 0 8 f c 2 2 8 2 2 2 l 2 6 2 1 2 ' +
+  '4 3 9 2 2 2 2 3 0 g 3 3 9 i 2 2 7 3 1 3 l 2 6 2 1 2 4 3 8 3 1 3 2 9 1 5 1 2 4 3 9 2 0 h 1 2 5 4 2 2 3 4 1 2 0 2 1 4 1 ' +
+  '4 2 4 b 5 4 4 2 2 3 3 0 7 0 f 9 h 3 2 7 2 2 2 m 2 f 4 7 2 2 2 3 8 1 2 1 7 3 3 9 i 2 2 7 2 2 2 m 2 9 2 4 3 8 2 2 2 3 8 ' +
+  '1 8 0 2 3 3 9 2 1 f 2 2 7 2 2 2 14 3 7 2 2 2 4 9 0 9 3 3 9 b 5 3 1 2 h 4 n 2 8 2 0 3 6 4 0 5 5 2 0 2 7 7 9 3 1 e 1l 6 ' +
+  'e 2 9 14 1 2 0 3 1 2 0 3 0 7 3 2 6 2 2 2 0 2 0 3 1 2 c 2 2 3 4 2 0 2 5 3 9 3 3 x 0 o 1 7 9 c 0 2 0 2 0 5 9 2 z 5 j 2 h ' +
+  '2 z a 0 1m 21 7 25 3 11 2 0 6 0 3 16 2 98 2 3 3 6 2 0 2 3 3 14 2 3 3 w 2 3 3 6 2 0 2 3 3 e 2 1k 2 3 3 1u 3 2 x f h 2c ' +
+  'd h7 3 g 2 p 6 22 4 a 8 c 2 6 c k c j d c 2 2 2 1 d 2b 4 0 5 1 3 9 y 2 3 9 7 2f 9 16 6 1x b u 2 b 5 b b 13 3 4 c 17 5 ' +
+  'p 7 9 13 r 5 1q 2 s 3 a 7 9 e 0 9 d 1v 23 5 9 i 8 d 37 d 1j 9 9 4 1c 2b 2 2 y 2 1 7 6t 7 7t 3 5 3 11 3 5 3 7 2 0 2 0 2 ' +
+  '0 2 u 3 1g 2 6 2 0 4 2 2 6 4 3 3 5 5 c 6 2 2 6 g 1 1e 1 k 0 t 0 e 0 h c 1g c 5 0 4 b i 0 5 0 3 9 2 0 4 4 7 0 2 0 2 0 2 ' +
+  '3 2 a 3 3 6 4 5 0 i 14 22g 1a 2 1a 2 3o 7 8 d 11 2 0 6 0 3 1j 8 0 g n a 6 2 6 2 6 2 6 2 6 2 6 2 6 2 6 2 v 1c 0 d2 2 q ' +
+  'e 2 4 3 4 5 2d 3 1 3 2 2 2h 2 3 6 14 4 2l i q 1i f e9 52t 23 g5o 1g wc 1w 19 3 7g 4 r l 1b 5 9 2 u 2 2a 12 8 3 2u 3 3 ' +
+  '2 t 3 1 1y 1c p 1f d 1w c 9 7 n 4 0 5 19 3 z d s 4 1s f a 7 u 2 1i a d 3 9 7 m 4 20 p 2 3 f 3 4 b 5 3 5 3 5 a 6 2 6 2 ' +
+  '16 2 3 5 1 2j 16 2 1 3 9 7 8mb d m 5 1c 6it a5 3 2x 13 6 d 4 6 b 2 c 2 4 2 0 2 1 2 1 2 2z y a2 j 1r 3 1h 15 b 5 f h d ' +
+  '6 1 p 2 x 4 2 3q k 9 8 p 5 0 2 p c 2g 4 5 3 5 3 5 3 2 '
+
+function unpack(packed: string): Uint16Array {
+  const t = packed.trim().split(/\s+/)
+  const out = new Uint16Array(t.length)
+  let at = 0x80
+  for (let i = 0; i < t.length; i += 2) {
+    const lo = at + parseInt(t[i] as string, 36)
+    at = lo + parseInt(t[i + 1] as string, 36)
+    out[i] = lo
+    out[i + 1] = at
   }
+  return out
+}
+let idStart: Uint16Array | undefined
+let idPart: Uint16Array | undefined
+
+/** Is `c` inside one of the sorted [lo, hi] pairs of `ranges`? */
+function inRanges(ranges: Uint16Array, c: number): boolean {
+  let a = 0
+  let b = (ranges.length >> 1) - 1
+  while (a <= b) {
+    const m = (a + b) >> 1
+    if (c < (ranges[2 * m] as number)) b = m - 1
+    else if (c > (ranges[2 * m + 1] as number)) a = m + 1
+    else return true
+  }
+  return false
 }
 
-class ExpressionParser {
-  private source: string = ''
-  private index = 0
-  private length = 0
-  private lookahead: Token | null = null
-  private depth = 0
+const isDigit = (c: number): boolean => c >= 48 && c <= 57
+const isOctal = (c: number): boolean => c >= 48 && c <= 55
+const hexValue = (c: number): number => (c >= 48 && c <= 57 ? c - 48 : c >= 97 && c <= 102 ? c - 87 : c >= 65 && c <= 70 ? c - 55 : -1)
+const isLineTerminator = (c: number): boolean => c === 10 || c === 13 || c === 0x2028 || c === 0x2029
+/** Whitespace or a line terminator: all the lexer skips (the language has no comments). */
+const isBlank = (c: number): boolean =>
+  c === 32 || (c >= 9 && c <= 13) || c === 0xA0 ||
+  (c >= 0x1680 && (c === 0x1680 || c === 0x180E || (c >= 0x2000 && c <= 0x200A) || c === 0x2028 || c === 0x2029 || c === 0x202F || c === 0x205F || c === 0x3000 || c === 0xFEFF))
+const isLetterOrUnderscore = (c: number): boolean => (c >= 97 && c <= 122) || (c >= 65 && c <= 90) || c === 36 || c === 95 || c === 92
+/** A backslash begins a `\uXXXX` escape, which the lexer validates itself. */
+const isIdStart = (c: number): boolean => (c < 0x80 ? isLetterOrUnderscore(c) : c >= 0x80 && inRanges((idStart ??= unpack(ID_START_PACKED)), c))
+const isIdPart = (c: number): boolean => (c < 0x80 ? isLetterOrUnderscore(c) || isDigit(c) : c >= 0x80 && inRanges((idPart ??= unpack(ID_PART_PACKED)), c))
+
+/** Words that are never identifiers (`if` is the one the language uses, as a function name). */
+const KEYWORDS = new Set([
+  'if', 'in', 'do', 'var', 'for', 'new', 'try', 'let', 'this', 'else', 'case', 'void', 'with', 'enum', 'while', 'break', 'catch', 'throw',
+  'const', 'yield', 'class', 'super', 'return', 'typeof', 'delete', 'switch', 'export', 'import', 'public', 'static', 'default', 'finally',
+  'extends', 'package', 'private', 'function', 'continue', 'debugger', 'interface', 'protected', 'instanceof', 'implements',
+])
+
+// --- diagnostics ---------------------------------------------------------------------------------
+
+const ILLEGAL = 'Unexpected token ILLEGAL'
+const INVALID_REGEXP = 'Invalid regular expression'
+const UNTERMINATED_REGEXP = 'Invalid regular expression: missing /'
+const OCTAL = 'Octal literals are not allowed in strict mode.'
+const DUPLICATE_KEY = 'Duplicate data property in object literal not allowed in strict mode'
+/** What the language refuses on purpose (assignment, sequences, `++`, `typeof`, other keywords). */
+const DISABLED = 'Disabled.'
+
+type ScanError = Error & { index: number; description: string }
+function scanError(message: string, index: number): ScanError {
+  const err = new Error(message) as ScanError
+  err.index = index
+  err.description = message
+  return err
+}
+
+// --- tokens and the lexer ------------------------------------------------------------------------
+
+const EOF = 0
+const NAME = 1
+const KEYWORD = 2
+const NULL = 3
+const BOOLEAN = 4
+const NUMBER = 5
+const STRING = 6
+const PUNCT = 7
+
+class Token {
+  constructor(
+    readonly kind: number,
+    readonly value: string | number | undefined,
+    readonly start: number,
+    readonly end: number,
+    /** A legacy octal literal or escape: scanned, but refused when the grammar uses it. */
+    readonly octal = false,
+  ) {}
+}
+
+/**
+ * Scans tokens on demand from `pos`. Errors carry `pos` as `index`, so `pos` is kept where the scan
+ * stood, token by token: that position is part of the diagnostics.
+ */
+class Lexer {
+  pos = 0
+  private readonly n: number
+
+  constructor(private readonly src: string) {
+    this.n = src.length
+  }
+
+  private fail(message: string): never {
+    throw scanError(message, this.pos)
+  }
+
+  /** The next token, after any whitespace. */
+  scan(): Token {
+    const s = this.src
+    let p = this.pos
+    while (p < this.n && isBlank(s.charCodeAt(p))) p++
+    this.pos = p
+    if (p >= this.n) return new Token(EOF, undefined, p, p)
+    const c = s.charCodeAt(p)
+    if (isIdStart(c)) return this.name()
+    if (c === 34 || c === 39) return this.string(c)
+    if (isDigit(c) || (c === 46 && isDigit(s.charCodeAt(p + 1)))) return this.number()
+    return this.punctuator()
+  }
+
+  /** Exactly `len` hex digits (of a `\x` or `\u` escape) as a number. */
+  private hexDigits(len: number): number {
+    let code = 0
+    for (let i = 0; i < len; i++) {
+      const d = this.pos < this.n ? hexValue(this.src.charCodeAt(this.pos)) : -1
+      if (d < 0) this.fail(ILLEGAL)
+      code = code * 16 + d
+      this.pos++
+    }
+    return code
+  }
+
+  private name(): Token {
+    const s = this.src
+    const start = this.pos
+    let id = ''
+    let chunk = start
+    let p = s.charCodeAt(start) === 92 ? start : start + 1
+    for (;;) {
+      while (p < this.n) {
+        const c = s.charCodeAt(p)
+        if (c === 92 || !isIdPart(c)) break
+        p++
+      }
+      if (p >= this.n || s.charCodeAt(p) !== 92) break
+      // a \uXXXX escape: its character must itself be valid in this position
+      id += s.slice(chunk, p)
+      this.pos = p + 1
+      if (s.charCodeAt(p + 1) !== 117) this.fail(ILLEGAL)
+      this.pos = p + 2
+      const code = this.hexDigits(4)
+      if (code === 0 || code === 92 || !(p === start ? isIdStart(code) : isIdPart(code))) this.fail(ILLEGAL)
+      id += String.fromCharCode(code)
+      p = chunk = this.pos
+    }
+    id += s.slice(chunk, p)
+    this.pos = p
+    const kind = id.length === 1 ? NAME
+      : KEYWORDS.has(id) ? KEYWORD
+      : id === 'null' ? NULL
+      : id === 'true' || id === 'false' ? BOOLEAN
+      : NAME
+    return new Token(kind, id, start, p)
+  }
+
+  private punctuator(): Token {
+    const s = this.src
+    const p = this.pos
+    const c = s.charCodeAt(p)
+    const c1 = s.charCodeAt(p + 1)
+    const c2 = s.charCodeAt(p + 2)
+    let len: number
+    switch (c) {
+      case 46: case 40: case 41: case 59: case 44: case 123: case 125: case 91: case 93: case 58: case 63: case 126: // . ( ) ; , { } [ ] : ? ~
+        len = 1
+        break
+      case 61: // =  ==  ===  =>
+        len = c1 === 61 ? (c2 === 61 ? 3 : 2) : c1 === 62 ? 2 : 1
+        break
+      case 33: // !  !=  !==
+        len = c1 === 61 ? (c2 === 61 ? 3 : 2) : 1
+        break
+      case 60: // <  <=  <<  <<=
+        len = c1 === 61 ? 2 : c1 === 60 ? (c2 === 61 ? 3 : 2) : 1
+        break
+      case 62: // >  >=  >>  >>=  >>>  >>>=
+        len = c1 === 61 ? 2 : c1 === 62 ? (c2 === 61 ? 3 : c2 === 62 ? (s.charCodeAt(p + 3) === 61 ? 4 : 3) : 2) : 1
+        break
+      case 43: case 45: case 38: case 124: // + - & |  and their doubled and `=` forms
+        len = c1 === c || c1 === 61 ? 2 : 1
+        break
+      case 42: case 37: case 94: // * % ^
+        len = c1 === 61 ? 2 : 1
+        break
+      case 47: // /  /=  (a second slash is refused: there are no comments)
+        if (c1 === 47) this.fail(ILLEGAL)
+        len = c1 === 61 ? 2 : 1
+        break
+      default:
+        return this.fail(ILLEGAL)
+    }
+    this.pos = p + len
+    return new Token(PUNCT, s.slice(p, p + len), p, p + len)
+  }
+
+  private number(): Token {
+    const s = this.src
+    const start = this.pos
+    let p = start
+    if (s.charCodeAt(p) === 46) {
+      p++ // a leading '.': no integer part
+    } else {
+      if (s.charCodeAt(p) === 48) {
+        const next = s.charCodeAt(p + 1)
+        if (next === 120 || next === 88) return this.hex(start)
+        if (isOctal(next)) return this.octal(start)
+        if (isDigit(next)) {
+          this.pos = p + 1
+          this.fail(ILLEGAL) // 08, 09
+        }
+      }
+      while (isDigit(s.charCodeAt(p))) p++
+      if (s.charCodeAt(p) === 46) p++
+    }
+    while (isDigit(s.charCodeAt(p))) p++
+    const e = s.charCodeAt(p)
+    if (e === 101 || e === 69) {
+      p++
+      const sign = s.charCodeAt(p)
+      if (sign === 43 || sign === 45) p++
+      if (!isDigit(s.charCodeAt(p))) {
+        this.pos = p
+        this.fail(ILLEGAL)
+      }
+      while (isDigit(s.charCodeAt(p))) p++
+    }
+    this.pos = p
+    if (isIdStart(s.charCodeAt(p))) this.fail(ILLEGAL)
+    return new Token(NUMBER, parseFloat(s.slice(start, p)), start, p)
+  }
+
+  private hex(start: number): Token {
+    const s = this.src
+    let p = start + 2
+    this.pos = p
+    while (hexValue(s.charCodeAt(p)) >= 0) p++
+    this.pos = p
+    if (p === start + 2 || isIdStart(s.charCodeAt(p))) this.fail(ILLEGAL)
+    return new Token(NUMBER, parseInt(s.slice(start + 2, p), 16), start, p)
+  }
+
+  private octal(start: number): Token {
+    const s = this.src
+    let p = start + 2
+    while (isOctal(s.charCodeAt(p))) p++
+    this.pos = p
+    if (isIdStart(s.charCodeAt(p)) || isDigit(s.charCodeAt(p))) this.fail(ILLEGAL)
+    return new Token(NUMBER, parseInt(s.slice(start + 1, p), 8), start, p, true)
+  }
+
+  private string(quote: number): Token {
+    const s = this.src
+    const start = this.pos
+    let value = ''
+    let octal = false
+    let chunk = start + 1
+    let p = chunk
+    while (p < this.n) {
+      const c = s.charCodeAt(p)
+      if (c === quote) {
+        this.pos = p + 1
+        return new Token(STRING, value + s.slice(chunk, p), start, p + 1, octal)
+      }
+      if (c === 92) {
+        value += s.slice(chunk, p)
+        this.pos = p + 1
+        octal = this.escape((v) => { value += v }) || octal
+        chunk = p = this.pos
+        continue
+      }
+      p++
+      if (isLineTerminator(c)) break
+    }
+    this.pos = p
+    return this.fail(ILLEGAL)
+  }
 
   /**
-   * Nesting guard for the recursive productions. Deviation from vega-expression
-   * (safety): a deeply nested expression is an AsterLimitError here, never a
-   * RangeError from the JS stack (C9).
+   * The escape after a backslash (`pos` is just past it): appends its character through `out` and
+   * reports whether it was a legacy octal escape. A backslash at the very end reads one character
+   * beyond the source, which moves `pos` past it: the diagnostic's `index` shows that.
    */
-  private enter(): void {
-    if (++this.depth > EXPR_MAX_DEPTH) throw limitViolation(`maxDepth ${this.depth} > ${EXPR_MAX_DEPTH} (expression nesting)`)
-  }
-
-  parse(code: string): AstNode {
-    this.source = code
-    this.index = 0
-    this.length = this.source.length
-    this.lookahead = null
-    this.depth = 0
-    this.peek()
-    const expr = this.parseExpression()
-    if (this.lookahead!.type !== TokenEOF) {
-      throw new Error('Unexpect token after expression.')
+  private escape(out: (v: string) => void): boolean {
+    const s = this.src
+    const ch = s[this.pos++]
+    if (ch !== undefined && isLineTerminator(ch.charCodeAt(0))) {
+      // a line continuation contributes nothing; CR LF is one terminator
+      if (ch === '\r' && s[this.pos] === '\n') this.pos++
+      return false
     }
-    checkAstDepth(expr)
-    return expr
-  }
-
-  private assert(condition: unknown, message: string): void {
-    if (!condition) {
-      throw new Error('ASSERT: ' + message)
-    }
-  }
-
-  private skipComment(): void {
-    while (this.index < this.length) {
-      const ch = this.source.charCodeAt(this.index)
-      if (isWhiteSpace(ch) || isLineTerminator(ch)) {
-        ++this.index
-      } else {
-        break
-      }
-    }
-  }
-
-  private scanHexEscape(prefix: string): string {
-    let ch = ''
-    let code = 0
-    const len = prefix === 'u' ? 4 : 2
-    for (let i = 0; i < len; ++i) {
-      if (this.index < this.length && isHexDigit(this.source[this.index] as string)) {
-        ch = this.source[this.index++] as string
-        code = code * 16 + '0123456789abcdef'.indexOf(ch.toLowerCase())
-      } else {
-        this.throwError({} as Partial<Token>, MessageUnexpectedToken, ILLEGAL)
-      }
-    }
-    return String.fromCharCode(code)
-  }
-
-  private scanUnicodeCodePointEscape(): string {
-    let ch: string | undefined
-    let code = 0
-    ch = this.source[this.index]
-    // At least, one hex digit is required.
-    if (ch === '}') {
-      this.throwError({} as Partial<Token>, MessageUnexpectedToken, ILLEGAL)
-    }
-    while (this.index < this.length) {
-      ch = this.source[this.index++] as string
-      if (!isHexDigit(ch)) {
-        break
-      }
-      code = code * 16 + '0123456789abcdef'.indexOf(ch.toLowerCase())
-    }
-    if (code > 0x10FFFF || ch !== '}') {
-      this.throwError({} as Partial<Token>, MessageUnexpectedToken, ILLEGAL)
-    }
-    // UTF-16 Encoding
-    if (code <= 0xFFFF) {
-      return String.fromCharCode(code)
-    }
-    const cu1 = ((code - 0x10000) >> 10) + 0xD800
-    const cu2 = ((code - 0x10000) & 1023) + 0xDC00
-    return String.fromCharCode(cu1, cu2)
-  }
-
-  private getEscapedIdentifier(): string {
-    let ch = this.source.charCodeAt(this.index++)
-    let id = String.fromCharCode(ch)
-    // '\u' (U+005C, U+0075) denotes an escaped character.
-    if (ch === 0x5C) {
-      if (this.source.charCodeAt(this.index) !== 0x75) {
-        this.throwError({} as Partial<Token>, MessageUnexpectedToken, ILLEGAL)
-      }
-      ++this.index
-      ch = this.scanHexEscape('u').charCodeAt(0)
-      if (!ch || ch === 0x5C || !isIdentifierStart(ch)) {
-        this.throwError({} as Partial<Token>, MessageUnexpectedToken, ILLEGAL)
-      }
-      id = String.fromCharCode(ch)
-    }
-    while (this.index < this.length) {
-      ch = this.source.charCodeAt(this.index)
-      if (!isIdentifierPart(ch)) {
-        break
-      }
-      ++this.index
-      id += String.fromCharCode(ch)
-      // '\u' (U+005C, U+0075) denotes an escaped character.
-      if (ch === 0x5C) {
-        id = id.substr(0, id.length - 1)
-        if (this.source.charCodeAt(this.index) !== 0x75) {
-          this.throwError({} as Partial<Token>, MessageUnexpectedToken, ILLEGAL)
-        }
-        ++this.index
-        ch = this.scanHexEscape('u').charCodeAt(0)
-        if (!ch || ch === 0x5C || !isIdentifierPart(ch)) {
-          this.throwError({} as Partial<Token>, MessageUnexpectedToken, ILLEGAL)
-        }
-        id += String.fromCharCode(ch)
-      }
-    }
-    return id
-  }
-
-  private getIdentifier(): string {
-    const start = this.index++
-    while (this.index < this.length) {
-      const ch = this.source.charCodeAt(this.index)
-      if (ch === 0x5C) {
-        // Blackslash (U+005C) marks Unicode escape sequence.
-        this.index = start
-        return this.getEscapedIdentifier()
-      }
-      if (isIdentifierPart(ch)) {
-        ++this.index
-      } else {
-        break
-      }
-    }
-    return this.source.slice(start, this.index)
-  }
-
-  private scanIdentifier(): Token {
-    const start = this.index
-    // Backslash (U+005C) starts an escaped character.
-    const id = this.source.charCodeAt(start) === 0x5C ? this.getEscapedIdentifier() : this.getIdentifier()
-    // There is no keyword or literal with only one character.
-    // Thus, it must be an identifier.
-    let type: number
-    if (id.length === 1) {
-      type = TokenIdentifier
-    } else if (Object.prototype.hasOwnProperty.call(keywords, id)) {
-      type = TokenKeyword
-    } else if (id === 'null') {
-      type = TokenNullLiteral
-    } else if (id === 'true' || id === 'false') {
-      type = TokenBooleanLiteral
-    } else {
-      type = TokenIdentifier
-    }
-    return { type, value: id, start, end: this.index }
-  }
-
-  // 7.7 Punctuators
-  private scanPunctuator(): Token {
-    const start = this.index
-    const code = this.source.charCodeAt(start)
-    const ch1 = this.source[start] as string
-    let ch2: string
-    let ch3: string
-    let ch4: string
-    switch (code) {
-      // Check for most common single-character punctuators.
-      case 0x2E: // . dot
-      case 0x28: // ( open bracket
-      case 0x29: // ) close bracket
-      case 0x3B: // ; semicolon
-      case 0x2C: // , comma
-      case 0x7B: // { open curly brace
-      case 0x7D: // } close curly brace
-      case 0x5B: // [
-      case 0x5D: // ]
-      case 0x3A: // :
-      case 0x3F: // ?
-      case 0x7E: // ~
-        ++this.index
-        return { type: TokenPunctuator, value: String.fromCharCode(code), start, end: this.index }
-      default: {
-        const code2 = this.source.charCodeAt(this.index + 1)
-        // '=' (U+003D) marks an assignment or comparison operator.
-        if (code2 === 0x3D) {
-          switch (code) {
-            case 0x2B: // +
-            case 0x2D: // -
-            case 0x2F: // /
-            case 0x3C: // <
-            case 0x3E: // >
-            case 0x5E: // ^
-            case 0x7C: // |
-            case 0x25: // %
-            case 0x26: // &
-            case 0x2A: // *
-              this.index += 2
-              return { type: TokenPunctuator, value: String.fromCharCode(code) + String.fromCharCode(code2), start, end: this.index }
-            case 0x21: // !
-            case 0x3D: // =
-              this.index += 2
-              // !== and ===
-              if (this.source.charCodeAt(this.index) === 0x3D) {
-                ++this.index
-              }
-              return { type: TokenPunctuator, value: this.source.slice(start, this.index), start, end: this.index }
-          }
-        }
-      }
-    }
-    // 4-character punctuator: >>>=
-    ch4 = this.source.substr(this.index, 4)
-    if (ch4 === '>>>=') {
-      this.index += 4
-      return { type: TokenPunctuator, value: ch4, start, end: this.index }
-    }
-    // 3-character punctuators: === !== >>> <<= >>=
-    ch3 = ch4.substr(0, 3)
-    if (ch3 === '>>>' || ch3 === '<<=' || ch3 === '>>=') {
-      this.index += 3
-      return { type: TokenPunctuator, value: ch3, start, end: this.index }
-    }
-    // Other 2-character punctuators: ++ -- << >> && ||
-    ch2 = ch3.substr(0, 2)
-    if ((ch1 === ch2[1] && ('+-<>&|'.includes(ch1))) || ch2 === '=>') {
-      this.index += 2
-      return { type: TokenPunctuator, value: ch2, start, end: this.index }
-    }
-    if (ch2 === '//') {
-      this.throwError({} as Partial<Token>, MessageUnexpectedToken, ILLEGAL)
-    }
-    // 1-character punctuators: < > = ! + - * % & | ^ /
-    if ('<>=!+-*%&|^/'.includes(ch1)) {
-      ++this.index
-      return { type: TokenPunctuator, value: ch1, start, end: this.index }
-    }
-    this.throwError({} as Partial<Token>, MessageUnexpectedToken, ILLEGAL)
-  }
-
-  // 7.8.3 Numeric Literals
-  private scanHexLiteral(start: number): Token {
-    let number = ''
-    while (this.index < this.length) {
-      if (!isHexDigit(this.source[this.index] as string)) {
-        break
-      }
-      number += this.source[this.index++]
-    }
-    if (number.length === 0) {
-      this.throwError({} as Partial<Token>, MessageUnexpectedToken, ILLEGAL)
-    }
-    if (isIdentifierStart(this.source.charCodeAt(this.index))) {
-      this.throwError({} as Partial<Token>, MessageUnexpectedToken, ILLEGAL)
-    }
-    return { type: TokenNumericLiteral, value: parseInt('0x' + number, 16), start, end: this.index }
-  }
-
-  private scanOctalLiteral(start: number): Token {
-    let number = '0' + this.source[this.index++]
-    while (this.index < this.length) {
-      if (!isOctalDigit(this.source[this.index] as string)) {
-        break
-      }
-      number += this.source[this.index++]
-    }
-    if (isIdentifierStart(this.source.charCodeAt(this.index)) || isDecimalDigit(this.source.charCodeAt(this.index))) {
-      this.throwError({} as Partial<Token>, MessageUnexpectedToken, ILLEGAL)
-    }
-    return { type: TokenNumericLiteral, value: parseInt(number, 8), octal: true, start, end: this.index }
-  }
-
-  private scanNumericLiteral(): Token {
-    let number: string
-    const start = this.index
-    let ch = this.source[this.index] as string
-    this.assert(isDecimalDigit(ch.charCodeAt(0)) || ch === '.',
-      'Numeric literal must start with a decimal digit or a decimal point')
-    number = ''
-    if (ch !== '.') {
-      number = this.source[this.index++] as string
-      ch = this.source[this.index] as string
-      // Hex number starts with '0x'.
-      // Octal number starts with '0'.
-      if (number === '0') {
-        if (ch === 'x' || ch === 'X') {
-          ++this.index
-          return this.scanHexLiteral(start)
-        }
-        if (isOctalDigit(ch)) {
-          return this.scanOctalLiteral(start)
-        }
-        // decimal number starts with '0' such as '09' is illegal.
-        if (ch && isDecimalDigit(ch.charCodeAt(0))) {
-          this.throwError({} as Partial<Token>, MessageUnexpectedToken, ILLEGAL)
-        }
-      }
-      while (isDecimalDigit(this.source.charCodeAt(this.index))) {
-        number += this.source[this.index++]
-      }
-      ch = this.source[this.index] as string
-    }
-    if (ch === '.') {
-      number += this.source[this.index++]
-      while (isDecimalDigit(this.source.charCodeAt(this.index))) {
-        number += this.source[this.index++]
-      }
-      ch = this.source[this.index] as string
-    }
-    if (ch === 'e' || ch === 'E') {
-      number += this.source[this.index++]
-      ch = this.source[this.index] as string
-      if (ch === '+' || ch === '-') {
-        number += this.source[this.index++]
-      }
-      if (isDecimalDigit(this.source.charCodeAt(this.index))) {
-        while (isDecimalDigit(this.source.charCodeAt(this.index))) {
-          number += this.source[this.index++]
-        }
-      } else {
-        this.throwError({} as Partial<Token>, MessageUnexpectedToken, ILLEGAL)
-      }
-    }
-    if (isIdentifierStart(this.source.charCodeAt(this.index))) {
-      this.throwError({} as Partial<Token>, MessageUnexpectedToken, ILLEGAL)
-    }
-    return { type: TokenNumericLiteral, value: parseFloat(number), start, end: this.index }
-  }
-
-  // 7.8.4 String Literals
-  private scanStringLiteral(): Token {
-    let str = ''
-    let code = 0
-    let octal = false
-    let quote = this.source[this.index] as string
-    this.assert(quote === '\'' || quote === '"', 'String literal must starts with a quote')
-    const start = this.index
-    ++this.index
-    while (this.index < this.length) {
-      let ch = this.source[this.index++] as string
-      if (ch === quote) {
-        quote = ''
-        break
-      } else if (ch === '\\') {
-        ch = this.source[this.index++] as string
-        if (!ch || !isLineTerminator(ch.charCodeAt(0))) {
-          switch (ch) {
-            case 'u':
-            case 'x':
-              if (this.source[this.index] === '{') {
-                ++this.index
-                str += this.scanUnicodeCodePointEscape()
-              } else {
-                str += this.scanHexEscape(ch)
-              }
-              break
-            case 'n': str += '\n'; break
-            case 'r': str += '\r'; break
-            case 't': str += '\t'; break
-            case 'b': str += '\b'; break
-            case 'f': str += '\f'; break
-            case 'v': str += '\x0B'; break
-            default:
-              if (isOctalDigit(ch)) {
-                code = '01234567'.indexOf(ch)
-                // \0 is not octal escape sequence
-                if (code !== 0) {
-                  octal = true
-                }
-                if (this.index < this.length && isOctalDigit(this.source[this.index] as string)) {
-                  octal = true
-                  code = code * 8 + '01234567'.indexOf(this.source[this.index++] as string)
-                  // 3 digits are only allowed when string starts
-                  // with 0, 1, 2, 3
-                  if ('0123'.includes(ch) &&
-                    this.index < this.length &&
-                    isOctalDigit(this.source[this.index] as string)) {
-                    code = code * 8 + '01234567'.indexOf(this.source[this.index++] as string)
-                  }
-                }
-                str += String.fromCharCode(code)
-              } else {
-                str += ch
-              }
-              break
-          }
+    switch (ch) {
+      case 'u': case 'x':
+        if (s[this.pos] === '{') {
+          this.pos++
+          out(this.codePointEscape())
         } else {
-          if (ch === '\r' && this.source[this.index] === '\n') {
-            ++this.index
-          }
+          out(String.fromCharCode(this.hexDigits(ch === 'u' ? 4 : 2)))
         }
-      } else if (isLineTerminator(ch.charCodeAt(0))) {
-        break
-      } else {
-        str += ch
-      }
+        return false
+      case 'n': out('\n'); return false
+      case 'r': out('\r'); return false
+      case 't': out('\t'); return false
+      case 'b': out('\b'); return false
+      case 'f': out('\f'); return false
+      case 'v': out('\v'); return false
+      case undefined: return false
     }
-    if (quote !== '') {
-      this.throwError({} as Partial<Token>, MessageUnexpectedToken, ILLEGAL)
+    const first = ch.charCodeAt(0)
+    if (!isOctal(first)) {
+      out(ch)
+      return false
     }
-    return { type: TokenStringLiteral, value: str, octal, start, end: this.index }
+    // \0 alone is NUL. Any other octal escape is legacy: the string scans, and is refused where the grammar
+    // uses it, so its value is never seen (the digits that follow simply scan as ordinary characters)
+    const legacy = first !== 48 || isOctal(s.charCodeAt(this.pos))
+    out(legacy ? ch : '\0')
+    return legacy
   }
 
-  private testRegExp(pattern: string, flags: string): RegExp | null {
-    let tmp = pattern
+  /** `{XXXXXX}` after `\u` / `\x`, up to U+10FFFF. */
+  private codePointEscape(): string {
+    const s = this.src
+    let ch = s[this.pos]
+    if (ch === '}') this.fail(ILLEGAL)
+    let code = 0
+    while (this.pos < this.n) {
+      ch = s[this.pos++]
+      const d = hexValue((ch as string).charCodeAt(0))
+      if (d < 0) break
+      code = code * 16 + d
+    }
+    if (code > 0x10FFFF || ch !== '}') this.fail(ILLEGAL)
+    return String.fromCodePoint(code)
+  }
+
+  /** A regular expression literal starting at `pos` (a slash): its value, or null when this engine rejects the flags. */
+  regex(): RegExp | null {
+    const s = this.src
+    const start = this.pos
+    let p = start + 1
+    let inClass = false
+    let closed = false
+    while (p < this.n) {
+      const c = s.charCodeAt(p++)
+      if (c === 92) {
+        // The escaped character is read without a bounds check, as the language's own scanner does: a
+        // pattern ending in a backslash fails with the engine's TypeError, and that message is the contract.
+        const escaped = s[p++] as string
+        if (isLineTerminator(escaped.charCodeAt(0))) {
+          this.pos = p
+          this.fail(UNTERMINATED_REGEXP)
+        }
+      } else if (isLineTerminator(c)) {
+        this.pos = p
+        this.fail(UNTERMINATED_REGEXP)
+      } else if (inClass) {
+        if (c === 93) inClass = false
+      } else if (c === 47) {
+        closed = true
+        break
+      } else if (c === 91) {
+        inClass = true
+      }
+    }
+    if (!closed) {
+      this.pos = p
+      this.fail(UNTERMINATED_REGEXP)
+    }
+    const body = s.slice(start + 1, p - 1)
+    const flagsAt = p
+    while (p < this.n && isIdPart(s.charCodeAt(p))) {
+      p++
+      if (s.charCodeAt(p - 1) === 92 && p < this.n) {
+        this.pos = p
+        this.fail(ILLEGAL)
+      }
+    }
+    this.pos = p
+    const flags = s.slice(flagsAt, p)
+    if (/[^gimuy]/.test(flags)) this.fail(INVALID_REGEXP)
+
+    // Validate the pattern without the flags (the way the language always has): under `u`, code point
+    // escapes and surrogate pairs stand in as one ordinary character first, so a pattern valid only
+    // with `u` is not rejected here.
+    let probe = body
     if (flags.includes('u')) {
-      // Replace each astral symbol and every Unicode code point
-      // escape sequence with a single ASCII symbol to avoid throwing on
-      // regular expressions that are only valid in combination with the
-      // `/u` flag.
-      tmp = tmp
-        .replace(/\\u\{([0-9a-fA-F]+)\}/g, ($0, $1) => {
-          if (parseInt($1, 16) <= 0x10FFFF) {
-            return 'x'
-          }
-          this.throwError({} as Partial<Token>, MessageInvalidRegExp)
+      probe = probe
+        .replace(/\\u\{([0-9a-fA-F]+)\}/g, (_, hex: string) => {
+          if (parseInt(hex, 16) > 0x10FFFF) this.fail(INVALID_REGEXP)
+          return 'x'
         })
         .replace(/[\uD800-\uDBFF][\uDC00-\uDFFF]/g, 'x')
     }
-    // First, detect invalid regular expressions.
     try {
-      new RegExp(tmp)
+      new RegExp(probe)
     } catch {
-      this.throwError({} as Partial<Token>, MessageInvalidRegExp)
+      this.fail(INVALID_REGEXP)
     }
-    // Return a regular expression object for this pattern-flag pair, or
-    // `null` in case the current environment doesn't support the flags it
-    // uses.
+    // with the real flags it may still be unconstructible (a pattern not valid under them): the literal is then null
     try {
-      return new RegExp(pattern, flags)
+      return new RegExp(body, flags)
     } catch {
       return null
     }
   }
+}
 
-  private scanRegExpBody(): { value: string; literal: string } {
-    let ch: string
-    let str: string
-    let classMarker = false
-    let terminated = false
-    ch = this.source[this.index] as string
-    this.assert(ch === '/', 'Regular expression literal must start with a slash')
-    str = this.source[this.index++] as string
-    while (this.index < this.length) {
-      ch = this.source[this.index++] as string
-      str += ch
-      if (ch === '\\') {
-        ch = this.source[this.index++] as string
-        // ECMA-262 7.8.5
-        if (isLineTerminator(ch.charCodeAt(0))) {
-          this.throwError({} as Partial<Token>, MessageUnterminatedRegExp)
-        }
-        str += ch
-      } else if (isLineTerminator(ch.charCodeAt(0))) {
-        this.throwError({} as Partial<Token>, MessageUnterminatedRegExp)
-      } else if (classMarker) {
-        if (ch === ']') {
-          classMarker = false
-        }
-      } else {
-        if (ch === '/') {
-          terminated = true
-          break
-        } else if (ch === '[') {
-          classMarker = true
-        }
-      }
-    }
-    if (!terminated) {
-      this.throwError({} as Partial<Token>, MessageUnterminatedRegExp)
-    }
-    // Exclude leading and trailing slash.
-    const body = str.substr(1, str.length - 2)
-    return { value: body, literal: str }
+// --- the parser ----------------------------------------------------------------------------------
+
+/** Binary operator precedence (higher binds tighter); all are left-associative. */
+const PRECEDENCE = new Map<string, number>([
+  ['||', 1], ['&&', 2], ['|', 3], ['^', 4], ['&', 5],
+  ['==', 6], ['!=', 6], ['===', 6], ['!==', 6],
+  ['<', 7], ['>', 7], ['<=', 7], ['>=', 7], ['instanceof', 7], ['in', 7],
+  ['<<', 8], ['>>', 8], ['>>>', 8],
+  ['+', 9], ['-', 9],
+  ['*', 10], ['/', 10], ['%', 10],
+])
+
+class Parser {
+  private readonly lx: Lexer
+  /** The next unconsumed token. */
+  private tok: Token
+  /** Nesting of unary and conditional productions, against EXPR_MAX_DEPTH. */
+  private depth = 0
+  /** Regular-expression literals this engine could not construct (their value is null): they still count as regular expressions for the height limit. */
+  unconstructible: Set<Expr> | undefined
+
+  constructor(src: string) {
+    this.lx = new Lexer(src)
+    this.tok = this.lx.scan()
+    this.lx.pos = 0
   }
 
-  private scanRegExpFlags(): { value: string; literal: string } {
-    let ch: string
-    let str = ''
-    let flags = ''
-    while (this.index < this.length) {
-      ch = this.source[this.index] as string
-      if (!isIdentifierPart(ch.charCodeAt(0))) {
+  atEnd(): boolean {
+    return this.tok.kind === EOF
+  }
+
+  /** Consume the next token. The one after it is scanned now, so its lexical error comes first. */
+  private take(): Token {
+    const t = this.tok
+    this.lx.pos = t.end
+    this.tok = this.lx.scan()
+    this.lx.pos = t.end
+    return t
+  }
+
+  private fail(message: string, at: number): never {
+    throw scanError(message, at)
+  }
+
+  private unexpected(t: Token): never {
+    const at = this.lx.pos
+    switch (t.kind) {
+      case EOF: return this.fail('Unexpected end of input', at)
+      case NUMBER: return this.fail('Unexpected number', at)
+      case STRING: return this.fail('Unexpected string', at)
+      case NAME: return this.fail('Unexpected identifier', at)
+      case KEYWORD: return this.fail('Unexpected reserved word', at)
+      default: return this.fail(`Unexpected token ${String(t.value)}`, at)
+    }
+  }
+
+  private is(punct: string): boolean {
+    return this.tok.kind === PUNCT && this.tok.value === punct
+  }
+
+  private expect(punct: string): void {
+    const t = this.take()
+    if (t.kind !== PUNCT || t.value !== punct) this.unexpected(t)
+  }
+
+  expression(): Expr {
+    const e = this.conditional()
+    if (this.is(',')) throw new Error(DISABLED) // no sequence expressions
+    return e
+  }
+
+  private enter(): void {
+    if (++this.depth > EXPR_MAX_DEPTH) throw limitViolation(`maxDepth ${this.depth} > ${EXPR_MAX_DEPTH} (expression nesting)`)
+  }
+
+  private conditional(): Expr {
+    this.enter()
+    const test = this.binary(0)
+    let result = test
+    if (this.is('?')) {
+      this.take()
+      const consequent = this.conditional()
+      this.expect(':')
+      const alternate = this.conditional()
+      result = { type: 'ConditionalExpression', test, consequent, alternate }
+    }
+    this.depth--
+    return result
+  }
+
+  /** Precedence climbing: operators binding tighter than `floor` extend the left operand. */
+  private binary(floor: number): Expr {
+    let left = this.unary()
+    for (;;) {
+      const t = this.tok
+      const prec = t.kind === PUNCT || t.kind === KEYWORD ? PRECEDENCE.get(t.value as string) ?? 0 : 0
+      if (prec <= floor) return left
+      this.take()
+      const right = this.binary(prec)
+      const operator = t.value as string
+      left = operator === '||' || operator === '&&'
+        ? { type: 'LogicalExpression', operator, left, right }
+        : { type: 'BinaryExpression', operator, left, right }
+    }
+  }
+
+  private unary(): Expr {
+    this.enter()
+    const t = this.tok
+    let result: Expr
+    if (t.kind === PUNCT || t.kind === KEYWORD) {
+      if (t.kind === PUNCT && (t.value === '++' || t.value === '--')) throw new Error(DISABLED)
+      if (t.kind === PUNCT && (t.value === '+' || t.value === '-' || t.value === '~' || t.value === '!')) {
+        this.take()
+        result = { type: 'UnaryExpression', operator: t.value as string, argument: this.unary() }
+      } else if (t.kind === KEYWORD && (t.value === 'delete' || t.value === 'void' || t.value === 'typeof')) {
+        throw new Error(DISABLED)
+      } else {
+        result = this.postfix()
+      }
+    } else {
+      result = this.postfix()
+    }
+    this.depth--
+    return result
+  }
+
+  /** A call/member chain, refusing a trailing `++`/`--`. */
+  private postfix(): Expr {
+    let e = this.primary()
+    for (;;) {
+      if (this.is('.')) {
+        this.take()
+        this.lx.pos = this.tok.start
+        const t = this.take()
+        if (t.kind !== NAME && t.kind !== KEYWORD && t.kind !== BOOLEAN && t.kind !== NULL) this.unexpected(t)
+        e = { type: 'MemberExpression', computed: false, object: e, property: { type: 'Identifier', name: t.value as string } }
+      } else if (this.is('(')) {
+        e = { type: 'CallExpression', callee: e, arguments: this.args() }
+      } else if (this.is('[')) {
+        this.take()
+        const property = this.expression()
+        this.expect(']')
+        e = { type: 'MemberExpression', computed: true, object: e, property }
+      } else {
         break
       }
-      ++this.index
-      if (ch === '\\' && this.index < this.length) {
-        this.throwError({} as Partial<Token>, MessageUnexpectedToken, ILLEGAL)
-      } else {
-        flags += ch
-        str += ch
-      }
     }
-    if (flags.search(/[^gimuy]/g) >= 0) {
-      this.throwError({} as Partial<Token>, MessageInvalidRegExp, flags)
-    }
-    return { value: flags, literal: str }
+    if (this.is('++') || this.is('--')) throw new Error(DISABLED)
+    return e
   }
 
-  private scanRegExp(): Token {
-    this.lookahead = null
-    this.skipComment()
-    const start = this.index
-    const body = this.scanRegExpBody()
-    const flags = this.scanRegExpFlags()
-    const value = this.testRegExp(body.value, flags.value)
-    return {
-      type: TokenRegularExpression,
-      literal: body.literal + flags.literal,
-      value: value as unknown,
-      regex: {
-        pattern: body.value,
-        flags: flags.value,
-      },
-      start,
-      end: this.index,
-    }
-  }
-
-  private isIdentifierName(token: Token): boolean {
-    return token.type === TokenIdentifier ||
-      token.type === TokenKeyword ||
-      token.type === TokenBooleanLiteral ||
-      token.type === TokenNullLiteral
-  }
-
-  private advance(): Token {
-    this.skipComment()
-    if (this.index >= this.length) {
-      return { type: TokenEOF, value: undefined, start: this.index, end: this.index }
-    }
-    const ch = this.source.charCodeAt(this.index)
-    if (isIdentifierStart(ch)) {
-      return this.scanIdentifier()
-    }
-    // Very common: ( and ) and ;
-    if (ch === 0x28 || ch === 0x29 || ch === 0x3B) {
-      return this.scanPunctuator()
-    }
-    // String literal starts with single quote (U+0027) or double quote (U+0022).
-    if (ch === 0x27 || ch === 0x22) {
-      return this.scanStringLiteral()
-    }
-    // Dot (.) U+002E can also start a floating-point number, hence the need
-    // to check the next character.
-    if (ch === 0x2E) {
-      if (isDecimalDigit(this.source.charCodeAt(this.index + 1))) {
-        return this.scanNumericLiteral()
-      }
-      return this.scanPunctuator()
-    }
-    if (isDecimalDigit(ch)) {
-      return this.scanNumericLiteral()
-    }
-    return this.scanPunctuator()
-  }
-
-  private lex(): Token {
-    const token = this.lookahead as Token
-    this.index = token.end
-    this.lookahead = this.advance()
-    this.index = token.end
-    return token
-  }
-
-  private peek(): void {
-    const pos = this.index
-    this.lookahead = this.advance()
-    this.index = pos
-  }
-
-  private finishArrayExpression(elements: (AstNode | null)[]): AstNode {
-    const node = new ASTNode(ArrayExpression)
-    node.elements = elements
-    return node
-  }
-
-  private finishBinaryExpression(operator: string, left: AstNode, right: AstNode): AstNode {
-    const node = new ASTNode(operator === '||' || operator === '&&' ? LogicalExpression : BinaryExpression)
-    node.operator = operator
-    node.left = left
-    node.right = right
-    return node
-  }
-
-  private finishCallExpression(callee: AstNode, args: AstNode[]): AstNode {
-    const node = new ASTNode(CallExpression)
-    node.callee = callee
-    node.arguments = args
-    return node
-  }
-
-  private finishConditionalExpression(test: AstNode, consequent: AstNode, alternate: AstNode): AstNode {
-    const node = new ASTNode(ConditionalExpression)
-    node.test = test
-    node.consequent = consequent
-    node.alternate = alternate
-    return node
-  }
-
-  private finishIdentifier(name: string): AstNode {
-    const node = new ASTNode(Identifier)
-    node.name = name
-    return node
-  }
-
-  private finishLiteral(token: Token): AstNode {
-    const node = new ASTNode(Literal)
-    node.value = token.value
-    node.raw = this.source.slice(token.start, token.end)
-    if (token.regex) {
-      if (node.raw === '//') {
-        node.raw = '/(?:)/'
-      }
-      node.regex = token.regex
-    }
-    return node
-  }
-
-  private finishMemberExpression(accessor: string, object: AstNode, property: AstNode): AstNode {
-    const node = new ASTNode(MemberExpression)
-    node.computed = accessor === '['
-    node.object = object
-    node.property = property
-    if (!node.computed) (property as { member?: boolean }).member = true
-    return node
-  }
-
-  private finishObjectExpression(properties: AstNode[]): AstNode {
-    const node = new ASTNode(ObjectExpression)
-    node.properties = properties
-    return node
-  }
-
-  private finishProperty(kind: string, key: AstNode, value: AstNode): AstNode {
-    const node = new ASTNode(Property)
-    node.key = key
-    node.value = value
-    node.kind = kind
-    return node
-  }
-
-  private finishUnaryExpression(operator: string, argument: AstNode): AstNode {
-    const node = new ASTNode(UnaryExpression)
-    node.operator = operator
-    node.argument = argument
-    node.prefix = true
-    return node
-  }
-
-  // Throw an exception
-  private throwError(token: Partial<Token>, messageFormat: string, ...args: unknown[]): never {
-    const msg = messageFormat.replace(
-      /%(\d)/g,
-      (whole, idx: string) => {
-        this.assert(+idx < args.length, 'Message reference must be in range')
-        return String(args[+idx])
-      },
-    )
-    const error = new Error(msg) as Error & { index: number; description: string }
-    error.index = this.index
-    error.description = msg
-    throw error
-  }
-
-  // Throw an exception because of the token.
-  private throwUnexpected(token: Token): never {
-    if (token.type === TokenEOF) {
-      this.throwError(token, MessageUnexpectedEOS)
-    }
-    if (token.type === TokenNumericLiteral) {
-      this.throwError(token, MessageUnexpectedNumber)
-    }
-    if (token.type === TokenStringLiteral) {
-      this.throwError(token, MessageUnexpectedString)
-    }
-    if (token.type === TokenIdentifier) {
-      this.throwError(token, MessageUnexpectedIdentifier)
-    }
-    if (token.type === TokenKeyword) {
-      this.throwError(token, MessageUnexpectedReserved)
-    }
-    // BooleanLiteral, NullLiteral, or Punctuator.
-    this.throwError(token, MessageUnexpectedToken, token.value)
-  }
-
-  // Expect the next token to match the specified punctuator.
-  // If not, an exception will be thrown.
-  private expect(value: string): void {
-    const token = this.lex()
-    if (token.type !== TokenPunctuator || token.value !== value) {
-      this.throwUnexpected(token)
-    }
-  }
-
-  // Return true if the next token matches the specified punctuator.
-  private match(value: string): boolean {
-    return this.lookahead!.type === TokenPunctuator && this.lookahead!.value === value
-  }
-
-  // Return true if the next token matches the specified keyword
-  private matchKeyword(keyword: string): boolean {
-    return this.lookahead!.type === TokenKeyword && this.lookahead!.value === keyword
-  }
-
-  // 11.1.4 Array Initialiser
-  private parseArrayInitialiser(): AstNode {
-    const elements: (AstNode | null)[] = []
-    this.index = this.lookahead!.start
-    this.expect('[')
-    while (!this.match(']')) {
-      if (this.match(',')) {
-        this.lex()
-        elements.push(null)
-      } else {
-        elements.push(this.parseConditionalExpression())
-        if (!this.match(']')) {
-          this.expect(',')
-        }
-      }
-    }
-    this.lex()
-    return this.finishArrayExpression(elements)
-  }
-
-  // 11.1.5 Object Initialiser
-  private parseObjectPropertyKey(): AstNode {
-    this.index = this.lookahead!.start
-    const token = this.lex()
-    // Note: This function is called only from parseObjectProperty(), where
-    // EOF and Punctuator tokens are already filtered out.
-    if (token.type === TokenStringLiteral || token.type === TokenNumericLiteral) {
-      if (token.octal) {
-        this.throwError(token, MessageStrictOctalLiteral)
-      }
-      return this.finishLiteral(token)
-    }
-    return this.finishIdentifier(token.value as string)
-  }
-
-  private parseObjectProperty(): AstNode {
-    let key: AstNode
-    let value: AstNode
-    this.index = this.lookahead!.start
-    const token = this.lookahead as Token
-    if (token.type === TokenIdentifier) {
-      const id = this.parseObjectPropertyKey()
-      this.expect(':')
-      value = this.parseConditionalExpression()
-      return this.finishProperty('init', id, value)
-    }
-    if (token.type === TokenEOF || token.type === TokenPunctuator) {
-      this.throwUnexpected(token)
-    } else {
-      key = this.parseObjectPropertyKey()
-      this.expect(':')
-      value = this.parseConditionalExpression()
-      return this.finishProperty('init', key, value)
-    }
-  }
-
-  private parseObjectInitialiser(): AstNode {
-    const properties: AstNode[] = []
-    const map: Record<string, boolean> = {}
-    const toString = String
-    this.index = this.lookahead!.start
-    this.expect('{')
-    while (!this.match('}')) {
-      const property = this.parseObjectProperty()
-      let name: string
-      if ((property.key as AstNode).type === Identifier) {
-        name = (property.key as { name: string }).name
-      } else {
-        name = toString((property.key as { value: unknown }).value)
-      }
-      const key = '$' + name
-      if (Object.prototype.hasOwnProperty.call(map, key)) {
-        this.throwError({} as Partial<Token>, MessageStrictDuplicateProperty)
-      } else {
-        map[key] = true
-      }
-      properties.push(property)
-      if (!this.match('}')) {
+  private args(): Expr[] {
+    const list: Expr[] = []
+    this.expect('(')
+    if (!this.is(')')) {
+      for (;;) {
+        list.push(this.conditional())
+        if (this.is(')')) break
         this.expect(',')
       }
+    }
+    this.expect(')')
+    return list
+  }
+
+  private primary(): Expr {
+    const t = this.tok
+    if (t.kind === PUNCT) {
+      if (t.value === '(') {
+        this.take()
+        const e = this.expression()
+        this.expect(')')
+        return e
+      }
+      if (t.value === '[') return this.array()
+      if (t.value === '{') return this.object()
+    }
+    this.lx.pos = t.start
+    // `if` is the one keyword that reads as a name (the function `if(test, a, b)`); that includes a *string*
+    // whose text is `if`, which the language has always parsed as the name too
+    if (t.kind === NAME || t.value === 'if') return { type: 'Identifier', name: this.take().value as string }
+    switch (t.kind) {
+      case STRING: case NUMBER:
+        if (t.octal) this.fail(OCTAL, this.lx.pos)
+        return { type: 'Literal', value: this.take().value as string | number }
+      case KEYWORD: throw new Error(DISABLED)
+      case BOOLEAN: this.take(); return { type: 'Literal', value: t.value === 'true' }
+      case NULL: this.take(); return { type: 'Literal', value: null }
+    }
+    if (t.kind === PUNCT && (t.value === '/' || t.value === '/=')) {
+      const value = this.lx.regex()
+      // the token after the literal is scanned from where the literal ended
+      const end = this.lx.pos
+      this.tok = this.lx.scan()
+      this.lx.pos = end
+      const literal: Expr = { type: 'Literal', value }
+      if (value === null) (this.unconstructible ??= new Set()).add(literal)
+      return literal
+    }
+    return this.unexpected(this.take())
+  }
+
+  private array(): Expr {
+    const elements: Array<Expr | null> = []
+    this.expect('[')
+    while (!this.is(']')) {
+      if (this.is(',')) {
+        this.take()
+        elements.push(null) // a hole
+      } else {
+        elements.push(this.conditional())
+        if (!this.is(']')) this.expect(',')
+      }
+    }
+    this.take()
+    return { type: 'ArrayExpression', elements }
+  }
+
+  private object(): Expr {
+    const properties: PropertyNode[] = []
+    const seen = new Set<string>()
+    this.expect('{')
+    while (!this.is('}')) {
+      const property = this.property()
+      const key = property.key.type === 'Identifier' ? property.key.name : String((property.key as { value: unknown }).value)
+      if (seen.has(key)) this.fail(DUPLICATE_KEY, this.lx.pos)
+      seen.add(key)
+      properties.push(property)
+      if (!this.is('}')) this.expect(',')
     }
     this.expect('}')
-    return this.finishObjectExpression(properties)
+    return { type: 'ObjectExpression', properties }
   }
 
-  // 11.1.6 The Grouping Operator
-  private parseGroupExpression(): AstNode {
-    this.expect('(')
-    const expr = this.parseExpression()
-    this.expect(')')
-    return expr
-  }
-
-  // 11.1 Primary Expressions
-  private parsePrimaryExpression(): AstNode {
-    let token: Token
-    let expr: AstNode
-    if (this.match('(')) {
-      return this.parseGroupExpression()
-    }
-    if (this.match('[')) {
-      return this.parseArrayInitialiser()
-    }
-    if (this.match('{')) {
-      return this.parseObjectInitialiser()
-    }
-    const type = this.lookahead!.type
-    this.index = this.lookahead!.start
-    if (type === TokenIdentifier || this.lookahead!.value === 'if') {
-      expr = this.finishIdentifier(this.lex().value as string)
-    } else if (type === TokenStringLiteral || type === TokenNumericLiteral) {
-      if (this.lookahead!.octal) {
-        this.throwError(this.lookahead as Token, MessageStrictOctalLiteral)
-      }
-      expr = this.finishLiteral(this.lex())
-    } else if (type === TokenKeyword) {
-      throw new Error(DISABLED)
-    } else if (type === TokenBooleanLiteral) {
-      token = this.lex()
-      token.value = token.value === 'true'
-      expr = this.finishLiteral(token)
-    } else if (type === TokenNullLiteral) {
-      token = this.lex()
-      token.value = null
-      expr = this.finishLiteral(token)
-    } else if (this.match('/') || this.match('/=')) {
-      expr = this.finishLiteral(this.scanRegExp())
-      this.peek()
+  private property(): PropertyNode {
+    this.lx.pos = this.tok.start
+    if (this.tok.kind === EOF || this.tok.kind === PUNCT) return this.unexpected(this.tok)
+    // the key is a string or number literal, or any word read as a name (keywords and true/false/null included)
+    const t = this.take()
+    let key: Expr
+    if (t.kind === STRING || t.kind === NUMBER) {
+      if (t.octal) this.fail(OCTAL, this.lx.pos)
+      key = { type: 'Literal', value: t.value as string | number }
     } else {
-      this.throwUnexpected(this.lex())
+      key = { type: 'Identifier', name: t.value as string }
     }
-    return expr
-  }
-
-  // 11.2 Left-Hand-Side Expressions
-  private parseArguments(): AstNode[] {
-    const args: AstNode[] = []
-    this.expect('(')
-    if (!this.match(')')) {
-      while (this.index < this.length) {
-        args.push(this.parseConditionalExpression())
-        if (this.match(')')) {
-          break
-        }
-        this.expect(',')
-      }
-    }
-    this.expect(')')
-    return args
-  }
-
-  private parseNonComputedProperty(): AstNode {
-    this.index = this.lookahead!.start
-    const token = this.lex()
-    if (!this.isIdentifierName(token)) {
-      this.throwUnexpected(token)
-    }
-    return this.finishIdentifier(token.value as string)
-  }
-
-  private parseNonComputedMember(): AstNode {
-    this.expect('.')
-    return this.parseNonComputedProperty()
-  }
-
-  private parseComputedMember(): AstNode {
-    this.expect('[')
-    const expr = this.parseExpression()
-    this.expect(']')
-    return expr
-  }
-
-  private parseLeftHandSideExpressionAllowCall(): AstNode {
-    let expr: AstNode
-    let args: AstNode[]
-    let property: AstNode
-    expr = this.parsePrimaryExpression()
-    for (;;) {
-      if (this.match('.')) {
-        property = this.parseNonComputedMember()
-        expr = this.finishMemberExpression('.', expr, property)
-      } else if (this.match('(')) {
-        args = this.parseArguments()
-        expr = this.finishCallExpression(expr, args)
-      } else if (this.match('[')) {
-        property = this.parseComputedMember()
-        expr = this.finishMemberExpression('[', expr, property)
-      } else {
-        break
-      }
-    }
-    return expr
-  }
-
-  // 11.3 Postfix Expressions
-  private parsePostfixExpression(): AstNode {
-    const expr = this.parseLeftHandSideExpressionAllowCall()
-    if (this.lookahead!.type === TokenPunctuator) {
-      if (this.match('++') || this.match('--')) {
-        throw new Error(DISABLED)
-      }
-    }
-    return expr
-  }
-
-  // 11.4 Unary Operators
-  private parseUnaryExpression(): AstNode {
-    this.enter()
-    try {
-      return this.parseUnaryExpressionInner()
-    } finally {
-      this.depth--
-    }
-  }
-
-  private parseUnaryExpressionInner(): AstNode {
-    let expr: AstNode
-    if (this.lookahead!.type !== TokenPunctuator && this.lookahead!.type !== TokenKeyword) {
-      expr = this.parsePostfixExpression()
-    } else if (this.match('++') || this.match('--')) {
-      throw new Error(DISABLED)
-    } else if (this.match('+') || this.match('-') || this.match('~') || this.match('!')) {
-      const token = this.lex()
-      expr = this.parseUnaryExpression()
-      expr = this.finishUnaryExpression(token.value as string, expr)
-    } else if (this.matchKeyword('delete') || this.matchKeyword('void') || this.matchKeyword('typeof')) {
-      throw new Error(DISABLED)
-    } else {
-      expr = this.parsePostfixExpression()
-    }
-    return expr
-  }
-
-  private binaryPrecedence(token: Token): number {
-    let prec = 0
-    if (token.type !== TokenPunctuator && token.type !== TokenKeyword) {
-      return 0
-    }
-    switch (token.value) {
-      case '||': prec = 1; break
-      case '&&': prec = 2; break
-      case '|': prec = 3; break
-      case '^': prec = 4; break
-      case '&': prec = 5; break
-      case '==':
-      case '!=':
-      case '===':
-      case '!==':
-        prec = 6; break
-      case '<':
-      case '>':
-      case '<=':
-      case '>=':
-      case 'instanceof':
-      case 'in':
-        prec = 7; break
-      case '<<':
-      case '>>':
-      case '>>>':
-        prec = 8; break
-      case '+':
-      case '-':
-        prec = 9; break
-      case '*':
-      case '/':
-      case '%':
-        prec = 11; break
-      default: break
-    }
-    return prec
-  }
-
-  // 11.5-11.11 Binary and Logical Operators
-  private parseBinaryExpression(): AstNode {
-    let marker: Token
-    let expr: AstNode
-    let token: Token
-    let prec: number
-    let right: AstNode
-    let operator: string
-    let left: AstNode
-    let i: number
-    marker = this.lookahead as Token
-    left = this.parseUnaryExpression()
-    token = this.lookahead as Token
-    prec = this.binaryPrecedence(token)
-    if (prec === 0) {
-      return left
-    }
-    token.prec = prec
-    this.lex()
-    const markers: Token[] = [marker, this.lookahead as Token]
-    right = this.parseUnaryExpression()
-    const stack: unknown[] = [left, token, right]
-    while ((prec = this.binaryPrecedence(this.lookahead as Token)) > 0) {
-      // Reduce: make a binary expression from the three topmost entries.
-      while (stack.length > 2 && ((stack[stack.length - 2] as Token).prec as number) >= prec) {
-        right = stack.pop() as AstNode
-        operator = (stack.pop() as Token).value as string
-        left = stack.pop() as AstNode
-        markers.pop()
-        expr = this.finishBinaryExpression(operator, left, right)
-        stack.push(expr)
-      }
-      // Shift.
-      token = this.lex()
-      token.prec = prec
-      stack.push(token)
-      markers.push(this.lookahead as Token)
-      expr = this.parseUnaryExpression()
-      stack.push(expr)
-    }
-    // Final reduce to clean-up the stack.
-    i = stack.length - 1
-    expr = stack[i] as AstNode
-    markers.pop()
-    while (i > 1) {
-      markers.pop()
-      expr = this.finishBinaryExpression((stack[i - 1] as Token).value as string, stack[i - 2] as AstNode, expr)
-      i -= 2
-    }
-    return expr
-  }
-
-  // 11.12 Conditional Operator
-  private parseConditionalExpression(): AstNode {
-    this.enter()
-    try {
-      return this.parseConditionalExpressionInner()
-    } finally {
-      this.depth--
-    }
-  }
-
-  private parseConditionalExpressionInner(): AstNode {
-    let expr = this.parseBinaryExpression()
-    if (this.match('?')) {
-      this.lex()
-      const consequent = this.parseConditionalExpression()
-      this.expect(':')
-      const alternate = this.parseConditionalExpression()
-      expr = this.finishConditionalExpression(expr, consequent, alternate)
-    }
-    return expr
-  }
-
-  // 11.14 Comma Operator
-  private parseExpression(): AstNode {
-    const expr = this.parseConditionalExpression()
-    if (this.match(',')) {
-      throw new Error(DISABLED) // no sequence expressions
-    }
-    return expr
+    this.expect(':')
+    return { type: 'Property', key, value: this.conditional() }
   }
 }
 
-/** Parse a Vega expression string to its AST. */
-export function parseExpression(code: string): AstNode {
-  return new ExpressionParser().parse(code)
+/** Fail if the tree is more than EXPR_MAX_DEPTH levels tall. Iterative: the tree can be far deeper than any recursion could take. */
+function checkHeight(root: Expr, unconstructible: Set<Expr> | undefined): void {
+  const nodes: Array<Expr | PropertyNode> = [root]
+  const levels = [1]
+  const exceeds = (level: number): never => { throw limitViolation(`maxDepth ${level} > ${EXPR_MAX_DEPTH} (expression nesting)`) }
+  while (nodes.length > 0) {
+    const node = nodes.pop() as Expr | PropertyNode
+    const level = levels.pop() as number
+    if (level > EXPR_MAX_DEPTH) exceeds(level)
+    const push = (child: Expr | PropertyNode | null): void => {
+      if (child !== null) { nodes.push(child); levels.push(level + 1) }
+    }
+    switch (node.type) {
+      case 'Literal':
+        // a regular expression is a value of its own, one level below its literal
+        if ((node.value instanceof RegExp || unconstructible?.has(node)) && level + 1 > EXPR_MAX_DEPTH) exceeds(level + 1)
+        break
+      case 'Identifier': break
+      case 'MemberExpression': push(node.object); push(node.property); break
+      case 'CallExpression': push(node.callee); node.arguments.forEach(push); break
+      case 'UnaryExpression': push(node.argument); break
+      case 'BinaryExpression': case 'LogicalExpression': push(node.left); push(node.right); break
+      case 'ConditionalExpression': push(node.test); push(node.consequent); push(node.alternate); break
+      case 'ArrayExpression': node.elements.forEach(push); break
+      case 'ObjectExpression': node.properties.forEach(push); break
+      case 'Property': push(node.key); push(node.value); break
+    }
+  }
+}
+
+/** Parse a Vega expression string to its tree. Throws on anything the language does not accept. */
+export function parseExpression(code: string): Expr {
+  const parser = new Parser(code)
+  const expr = parser.expression()
+  if (!parser.atEnd()) throw new Error('Unexpect token after expression.')
+  // every node takes at least one character of source, so a short source cannot be too tall
+  if (code.length > EXPR_MAX_DEPTH) checkHeight(expr, parser.unconstructible)
+  return expr
 }

@@ -49,7 +49,6 @@ import {
   threshold as d3Threshold,
   time,
   utcTime,
-  continuous,
   linear,
   log,
   pow,
@@ -77,7 +76,6 @@ import {
   toNumber,
 } from './util.js'
 import {
-  millisecond,
   timeIntervalFor,
   utcIntervalFor,
   type TimeInterval,
@@ -395,10 +393,6 @@ function invertRangeExtentFor(scale: SR): (range: [number, number]) => unknown[]
 
 // Placeholder returned by `scale(type, ctor, meta)` setter calls (mirrors `this`).
 const scaleRegistryApi = {} as unknown as () => SR
-
-interface RegistryEntry {
-  create: (type: string, constructor: () => SR, metadata: string[]) => () => SR
-}
 
 const VEGA_SCALE = Symbol('vega_scale')
 const scales = new Map<string, () => SR>()
