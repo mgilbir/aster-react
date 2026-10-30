@@ -10,6 +10,7 @@ import { isArray } from './util.js'
 import { densityGrid, placeContours } from './raster-grid.js'
 import { tickStep } from './arr.js'
 import { activeMeter, boundedCount } from './limits.js'
+import { walkPostOrder, walkPreOrder } from './tree-walk.js'
 import { aggregateRows, type AggregateParams, compareOf, fieldOf, joinAggregateRows, pivotRows, sortBySpec, windowRows } from './transform-agg.js'
 import {
   binRows, collectRows, d3Range, extentOfField, flattenRows, foldRows, identifierRows, imputeRows,
@@ -691,14 +692,11 @@ function accessorField(name: string): (row: Row) => unknown {
 // ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
-// stratify / pack (d3-hierarchy circle packing)
+// stratify and the hierarchy tree
 //
-// The vega `pack` transform wraps d3-hierarchy's `pack` layout, which assigns
-// x/y/r to every node. To match the oracle bit-for-bit the d3 algorithm is
-// ported operation-for-operation (packSiblingsRandom + the Welzl-style
-// minimal-enclosing-circle computation in pack/enclose.js). The layout needs
-// the tree that a preceding `stratify` transform built; vega threads it through
-// `pulse.source.root`, we thread it through `TransformContext.hierarchies`.
+// The layouts of the hierarchy transforms (pack, partition, treemap, tree: hierarchy-layout.ts) work on the tree that a
+// preceding `stratify` built; vega threads it through `pulse.source.root`, we thread it through
+// `TransformContext.hierarchies`.
 // ---------------------------------------------------------------------------
 
 export interface HierNode {
@@ -720,35 +718,6 @@ export interface HierNode {
   y0?: number
   x1?: number
   y1?: number
-}
-
-/** Pre-order traversal (d3 `node.eachBefore`). */
-export function eachBefore(root: HierNode, fn: (node: HierNode) => void): void {
-  const nodes: (HierNode | undefined)[] = [root]
-  let node: HierNode | undefined
-  while ((node = nodes.pop()) != null) {
-    fn(node)
-    const children = node.children
-    if (children.length) {
-      for (let i = children.length - 1; i >= 0; i--) nodes.push(children[i])
-    }
-  }
-}
-
-/** Post-order traversal (d3 `node.eachAfter`). */
-export function eachAfter(root: HierNode, fn: (node: HierNode) => void): void {
-  const nodes: (HierNode | undefined)[] = [root]
-  const next: HierNode[] = []
-  let node: HierNode | undefined = root
-  while (node != null) {
-    next.push(node)
-    const children = node.children
-    if (children.length) {
-      for (let i = children.length - 1; i >= 0; i--) nodes.push(children[i])
-    }
-    node = nodes.pop()
-  }
-  while ((node = next.pop()) != null) fn(node)
 }
 
 /**
@@ -799,7 +768,7 @@ export function buildStratifyTree(rows: Row[], key?: string, parentKey?: string)
   // Nodes on a cycle are unreachable from the root; counting the reachable
   // ones is how d3 detects it.
   let reached = 0
-  eachBefore(root, (node) => {
+  walkPreOrder(root, (node) => {
     reached++
     node.depth = node.parent ? node.parent.depth + 1 : 0
   })
@@ -808,7 +777,7 @@ export function buildStratifyTree(rows: Row[], key?: string, parentKey?: string)
   const lookup = new Map<string, HierNode>()
   for (const node of nodes) lookup.set(String(node.data[key]), node)
   root.lookup = lookup
-  eachAfter(root, (node) => {
+  walkPostOrder(root, (node) => {
     let h = 0
     for (const c of node.children) if (c.height + 1 > h) h = c.height + 1
     node.height = h

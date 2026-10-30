@@ -1,13 +1,17 @@
 /**
- * d3-hierarchy `tree` (Reingold-Tilford "tidy" layout after Buchheim et al.) and `cluster` (dendrogram), ported
- * operation for operation (d3-hierarchy 3.1.2) onto the `HierNode` trees `stratify` builds; the `tree` transform
- * (vega-hierarchy Tree) drives them. Loaded by the transforms addon.
+ * The `tree` transform's two layouts over the `HierNode` trees `stratify` builds: the tidy tree (Reingold-Tilford as
+ * improved by Buchheim, Jünger and Leipert, linear time) and the cluster dendrogram. Loaded by the transforms addon.
+ *
+ * Observable behaviour fixed here: the tidy layout's float arithmetic (preliminary positions, modifiers, the shifts moved
+ * onto subtrees and the thread/ancestor bookkeeping that decides where they apply) and the order the nodes are
+ * walked in; the final scaling of the positions into `size` or by `nodeSize`.
  */
 import type { HierNode } from './transform.js'
+import { walkPostOrder, walkPreOrder } from './tree-walk.js'
 
 type Separation = (a: HierNode, b: HierNode) => number
 
-interface TreeOptions {
+export interface TreeOptions {
   /** `[dx, dy]` of the whole layout, or null when `nodeSize` is given. */
   size: [number, number] | null
   /** `[dx, dy]` of one node, or null when `size` is given. */
@@ -15,239 +19,194 @@ interface TreeOptions {
   separation: Separation
 }
 
-/** d3's default `separation`: siblings 1 apart, cousins 2. */
+/** Siblings are 1 apart, cousins 2. */
 export const defaultSeparation: Separation = (a, b) => (a.parent === b.parent ? 1 : 2)
-/** vega-util `one`: every pair 1 apart (the `separation: false` of the tree transform). */
+/** Every pair is 1 apart (the transform's `separation: false`). */
 export const oneSeparation: Separation = () => 1
 
-// d3 `node.eachAfter` / `node.eachBefore`: children are visited first to last (eachAfter pushes them in order and
-// reads the result stack backwards)
-function eachAfter<T extends { children: T[] | null }>(root: T, callback: (node: T) => void): void {
-  const nodes: T[] = [root]
-  const next: T[] = []
-  let node: T | undefined
-  while ((node = nodes.pop())) {
-    next.push(node)
-    const children = node.children
-    if (children) for (let i = 0, n = children.length; i < n; ++i) nodes.push(children[i]!)
-  }
-  while ((node = next.pop())) callback(node)
-}
+const NONE = -1
 
-function eachBefore<T extends { children: T[] | null }>(root: T, callback: (node: T) => void): void {
-  const nodes: T[] = [root]
-  let node: T | undefined
-  while ((node = nodes.pop())) {
-    callback(node)
-    const children = node.children
-    if (children) for (let i = children.length - 1; i >= 0; --i) nodes.push(children[i]!)
-  }
-}
-
-/** A d3 node's `children` is absent for a leaf; a HierNode's is empty. */
-const kids = (node: HierNode): HierNode[] | null => (node.children.length ? node.children : null)
-
-interface TreeNode {
-  _: HierNode | null
-  parent: TreeNode | null
-  children: TreeNode[] | null
-  A: TreeNode | null // default ancestor
-  a: TreeNode // ancestor
-  z: number // prelim
-  m: number // mod
-  c: number // change
-  s: number // shift
-  t: TreeNode | null // thread
-  i: number // number
-}
-
-function newTreeNode(node: HierNode | null, i: number): TreeNode {
-  const t = { _: node, parent: null, children: null, A: null, a: undefined as unknown as TreeNode, z: 0, m: 0, c: 0, s: 0, t: null, i } as TreeNode
-  t.a = t
-  return t
-}
-
-function treeRoot(root: HierNode): TreeNode {
-  const tree = newTreeNode(root, 0)
-  const nodes: TreeNode[] = [tree]
-  let node: TreeNode | undefined
-  while ((node = nodes.pop())) {
-    const children = kids(node._!)
-    if (children) {
-      const n = children.length
-      node.children = new Array<TreeNode>(n)
-      for (let i = n - 1; i >= 0; --i) {
-        const child = node.children[i] = newTreeNode(children[i]!, i)
-        nodes.push(child)
-        child.parent = node
-      }
-    }
-  }
-  ;(tree.parent = newTreeNode(null, 0)).children = [tree]
-  return tree
-}
-
-const nextLeft = (v: TreeNode): TreeNode | null => (v.children ? v.children[0]! : v.t)
-const nextRight = (v: TreeNode): TreeNode | null => (v.children ? v.children[v.children.length - 1]! : v.t)
-
-function moveSubtree(wm: TreeNode, wp: TreeNode, shift: number): void {
-  const change = shift / (wp.i - wm.i)
-  wp.c -= change
-  wp.s += shift
-  wm.c += change
-  wp.z += shift
-  wp.m += shift
-}
-
-function executeShifts(v: TreeNode): void {
-  let shift = 0
-  let change = 0
-  const children = v.children!
-  let i = children.length
-  while (--i >= 0) {
-    const w = children[i]!
-    w.z += shift
-    w.m += shift
-    shift += w.s + (change += w.c)
-  }
-}
-
-const nextAncestor = (vim: TreeNode, v: TreeNode, ancestor: TreeNode): TreeNode => (vim.a.parent === v.parent ? vim.a : ancestor)
-
-/** d3 `tree()(root)`: Reingold-Tilford tidy layout. Writes `x` and `y` on every node. */
+/** Tidy tree layout: writes `x` (position across the tree) and `y` (depth scaled) on every node of the tree under `root`. */
 export function tidyTree(root: HierNode, o: TreeOptions): void {
   const separation = o.separation
-  const t = treeRoot(root)
-
-  function apportion(v: TreeNode, w: TreeNode | null, ancestorIn: TreeNode): TreeNode {
-    let ancestor = ancestorIn
-    if (w) {
-      let vip: TreeNode | null = v
-      let vop: TreeNode | null = v
-      let vim: TreeNode | null = w
-      let vom: TreeNode | null = vip.parent!.children![0]!
-      let sip = vip.m
-      let sop = vop.m
-      let sim = vim.m
-      let som = vom.m
-      let shift: number
-      for (;;) {
-        vim = nextRight(vim!)
-        vip = nextLeft(vip!)
-        if (!(vim && vip)) break
-        vom = nextLeft(vom!)
-        vop = nextRight(vop!)
-        vop!.a = v
-        shift = vim.z + sim - vip.z - sip + separation(vim._!, vip._!)
-        if (shift > 0) {
-          moveSubtree(nextAncestor(vim, v, ancestor), v, shift)
-          sip += shift
-          sop += shift
-        }
-        sim += vim.m
-        sip += vip.m
-        som += vom!.m
-        sop += vop!.m
-      }
-      if (vim && !nextRight(vop!)) {
-        vop!.t = vim
-        vop!.m += sim - sop
-      }
-      if (vip && !nextLeft(vom!)) {
-        vom!.t = vip
-        vom!.m += sip - som
-        ancestor = v
-      }
+  // The nodes are numbered in pre-order, so a parent always precedes its children; the root's virtual parent is the
+  // last number and holds the root as its only child. Per-node state lives in parallel arrays by number.
+  const nodes: HierNode[] = []
+  const numberOf = new Map<HierNode, number>()
+  walkPreOrder(root, (node) => { numberOf.set(node, nodes.length); nodes.push(node) })
+  const n = nodes.length
+  const virtual = n
+  const parent = new Int32Array(n + 1)
+  const kidStart = new Int32Array(n + 1)
+  const kidCount = new Int32Array(n + 1)
+  const kids = new Int32Array(n)
+  const sibling = new Int32Array(n + 1) // position among its parent's children
+  let cursor = 0
+  for (let v = 0; v < n; ++v) {
+    const children = nodes[v]!.children
+    kidStart[v] = cursor
+    kidCount[v] = children.length
+    for (let i = 0; i < children.length; ++i) {
+      const c = numberOf.get(children[i]!)!
+      kids[cursor++] = c
+      parent[c] = v
+      sibling[c] = i
     }
-    return ancestor
+  }
+  kidStart[virtual] = cursor
+  kidCount[virtual] = 1
+  kids[cursor] = 0
+  parent[0] = virtual
+  parent[virtual] = NONE
+
+  const prelim = new Float64Array(n + 1)
+  const mod = new Float64Array(n + 1)
+  const change = new Float64Array(n + 1)
+  const shift = new Float64Array(n + 1)
+  const thread = new Int32Array(n + 1).fill(NONE)
+  const ancestor = new Int32Array(n + 1).map((_, v) => v)
+  const defaultAncestor = new Int32Array(n + 1).fill(NONE) // of a node's children
+
+  const leftmostKid = (v: number): number => kids[kidStart[v]!]!
+  const rightmostKid = (v: number): number => kids[kidStart[v]! + kidCount[v]! - 1]!
+  /** The next node down the left (right) contour of the subtree under `v`: its first (last) child, else its thread. */
+  const nextLeft = (v: number): number => (kidCount[v] ? leftmostKid(v) : thread[v]!)
+  const nextRight = (v: number): number => (kidCount[v] ? rightmostKid(v) : thread[v]!)
+
+  /** Move the subtree at `right` by `by`, spreading the move over the siblings between it and `left`. */
+  function moveSubtree(left: number, right: number, by: number): void {
+    const perSibling = by / (sibling[right]! - sibling[left]!)
+    change[right]! -= perSibling
+    shift[right]! += by
+    change[left]! += perSibling
+    prelim[right]! += by
+    mod[right]! += by
   }
 
-  function firstWalk(v: TreeNode): void {
-    const children = v.children
-    const siblings = v.parent!.children!
-    const w = v.i ? siblings[v.i - 1]! : null
-    if (children) {
-      executeShifts(v)
-      const midpoint = (children[0]!.z + children[children.length - 1]!.z) / 2
-      if (w) {
-        v.z = w.z + separation(v._!, w._!)
-        v.m = v.z - midpoint
+  /** Apply the shifts accumulated on the children of `v`, last child first. */
+  function applyShifts(v: number): void {
+    let carried = 0
+    let changed = 0
+    for (let i = kidCount[v]! - 1; i >= 0; --i) {
+      const w = kids[kidStart[v]! + i]!
+      prelim[w]! += carried
+      mod[w]! += carried
+      carried += shift[w]! + (changed += change[w]!)
+    }
+  }
+
+  /** Place the subtree at `v` against the contours of its left siblings' subtrees; returns the default ancestor. */
+  function apportion(v: number, leftSibling: number, defaultAnc: number): number {
+    if (leftSibling === NONE) return defaultAnc
+    // inside/outside contours of the right (ip, op) and left (im, om) subtrees, with the modifier sums along them
+    let vip = v
+    let vop = v
+    let vim = leftSibling
+    let vom = kids[kidStart[parent[v]!]!]!
+    let sip = mod[vip]!
+    let sop = mod[vop]!
+    let sim = mod[vim]!
+    let som = mod[vom]!
+    for (;;) {
+      vim = nextRight(vim)
+      vip = nextLeft(vip)
+      if (vim === NONE || vip === NONE) break
+      vom = nextLeft(vom)
+      vop = nextRight(vop)
+      ancestor[vop] = v
+      const gap = prelim[vim]! + sim - prelim[vip]! - sip + separation(nodes[vim]!, nodes[vip]!)
+      if (gap > 0) {
+        const a = ancestor[vim]!
+        moveSubtree(parent[a] === parent[v] ? a : defaultAnc, v, gap)
+        sip += gap
+        sop += gap
+      }
+      sim += mod[vim]!
+      sip += mod[vip]!
+      som += mod[vom]!
+      sop += mod[vop]!
+    }
+    if (vim !== NONE && nextRight(vop) === NONE) {
+      thread[vop] = vim
+      mod[vop]! += sim - sop
+    }
+    if (vip !== NONE && nextLeft(vom) === NONE) {
+      thread[vom] = vip
+      mod[vom]! += sip - som
+      defaultAnc = v
+    }
+    return defaultAnc
+  }
+
+  // first walk (children before parents, first child first): preliminary positions and modifiers
+  walkPostOrder(root, (node) => {
+    const v = numberOf.get(node)!
+    const p = parent[v]!
+    const left = sibling[v] ? kids[kidStart[p]! + sibling[v]! - 1]! : NONE
+    if (kidCount[v]) {
+      applyShifts(v)
+      const midpoint = (prelim[leftmostKid(v)]! + prelim[rightmostKid(v)]!) / 2
+      if (left !== NONE) {
+        prelim[v] = prelim[left]! + separation(node, nodes[left]!)
+        mod[v] = prelim[v]! - midpoint
       } else {
-        v.z = midpoint
+        prelim[v] = midpoint
       }
-    } else if (w) {
-      v.z = w.z + separation(v._!, w._!)
+    } else if (left !== NONE) {
+      prelim[v] = prelim[left]! + separation(node, nodes[left]!)
     }
-    v.parent!.A = apportion(v, w, v.parent!.A || siblings[0]!)
-  }
+    defaultAncestor[p] = apportion(v, left, defaultAncestor[p]! !== NONE ? defaultAncestor[p]! : kids[kidStart[p]!]!)
+  })
 
-  function secondWalk(v: TreeNode): void {
-    v._!.x = v.z + v.parent!.m
-    v.m += v.parent!.m
+  // second walk (parents before children): final positions
+  mod[virtual] = -prelim[0]!
+  for (let v = 0; v < n; ++v) {
+    nodes[v]!.x = prelim[v]! + mod[parent[v]!]!
+    mod[v]! += mod[parent[v]!]!
   }
-
-  eachAfter(t, firstWalk)
-  t.parent!.m = -t.z
-  eachBefore(t, secondWalk)
 
   const nodeSize = o.nodeSize
   if (nodeSize) {
     const [dx, dy] = nodeSize
-    eachBefore(root as { children: HierNode[] | null } & HierNode, (node) => {
+    for (const node of nodes) {
       node.x *= dx
       node.y = node.depth * dy
-    })
-  } else {
-    const [dx, dy] = o.size!
-    let left = root
-    let right = root
-    let bottom = root
-    eachBefore(root as { children: HierNode[] | null } & HierNode, (node) => {
-      if (node.x < left.x) left = node
-      if (node.x > right.x) right = node
-      if (node.depth > bottom.depth) bottom = node
-    })
-    const s = left === right ? 1 : separation(left, right) / 2
-    const tx = s - left.x
-    const kx = dx / (right.x + s + tx)
-    const ky = dy / (bottom.depth || 1)
-    eachBefore(root as { children: HierNode[] | null } & HierNode, (node) => {
-      node.x = (node.x + tx) * kx
-      node.y = node.depth * ky
-    })
+    }
+    return
+  }
+  const [dx, dy] = o.size!
+  let left = root
+  let right = root
+  let bottom = root
+  for (const node of nodes) {
+    if (node.x < left.x) left = node
+    if (node.x > right.x) right = node
+    if (node.depth > bottom.depth) bottom = node
+  }
+  const s = left === right ? 1 : separation(left, right) / 2
+  const tx = s - left.x
+  const kx = dx / (right.x + s + tx)
+  const ky = dy / (bottom.depth || 1)
+  for (const node of nodes) {
+    node.x = (node.x + tx) * kx
+    node.y = node.depth * ky
   }
 }
 
-/** d3 `cluster()(root)`: the dendrogram layout (leaves at the same depth). Writes `x` and `y` on every node. */
+/** Cluster dendrogram layout: leaves evenly spread, parents centred over their children, all leaves at the same level. */
 export function clusterTree(root: HierNode, o: TreeOptions): void {
   const separation = o.separation
-  let previousNode: HierNode | undefined
+  let previousLeaf: HierNode | undefined
   let x = 0
-
-  const nodes = root as { children: HierNode[] | null } & HierNode
-  // (a d3 node's `children` is absent for a leaf)
-  const asD3 = (n: HierNode): HierNode[] | null => kids(n)
-  const walk = (cb: (node: HierNode) => void): void => {
-    const stack: HierNode[] = [nodes]
-    const next: HierNode[] = []
-    let node: HierNode | undefined
-    while ((node = stack.pop())) {
-      next.push(node)
-      const children = asD3(node)
-      if (children) for (let i = 0, n = children.length; i < n; ++i) stack.push(children[i]!)
-    }
-    while ((node = next.pop())) cb(node)
-  }
-
-  walk((node) => {
-    const children = asD3(node)
-    if (children) {
-      node.x = children.reduce((s, c) => s + c.x, 0) / children.length
-      node.y = 1 + children.reduce((m, c) => Math.max(m, c.y), 0)
+  walkPostOrder(root, (node) => {
+    const children = node.children
+    if (children.length) {
+      node.x = children.reduce((sum, c) => sum + c.x, 0) / children.length
+      node.y = 1 + children.reduce((top, c) => Math.max(top, c.y), 0)
     } else {
-      node.x = previousNode ? x += separation(node, previousNode) : 0
+      node.x = previousLeaf ? x += separation(node, previousLeaf) : 0
       node.y = 0
-      previousNode = node
+      previousLeaf = node
     }
   })
 
@@ -261,13 +220,13 @@ export function clusterTree(root: HierNode, o: TreeOptions): void {
   const nodeSize = o.nodeSize
   if (nodeSize) {
     const [dx, dy] = nodeSize
-    walk((node) => {
+    walkPostOrder(root, (node) => {
       node.x = (node.x - root.x) * dx
       node.y = (root.y - node.y) * dy
     })
   } else {
     const [dx, dy] = o.size!
-    walk((node) => {
+    walkPostOrder(root, (node) => {
       node.x = (node.x - x0) / (x1 - x0) * dx
       node.y = (1 - (root.y ? node.y / root.y : 1)) * dy
     })

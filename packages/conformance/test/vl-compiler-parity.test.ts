@@ -826,6 +826,15 @@ const GROUPS: Record<string, Case[]> = {
     ['arcs and labels over a binned theta (arc_radial_histogram)', { data: BOX, layer: [{ mark: { type: 'arc', stroke: 'white', tooltip: true } }, { mark: { type: 'text', radiusOffset: 15, align: 'right' }, encoding: { text: { bin: true, field: 'v' }, angle: { bin: true, field: 'v', scale: { range: [90, 450] } } } }], encoding: { theta: { bin: true, field: 'v' }, radius: { aggregate: 'count', scale: { type: 'sqrt' } } } }],
     ['labels over an ordinal theta', { data: DATA, mark: { type: 'text', radiusOffset: 8 }, encoding: { theta: { field: 'c', type: 'ordinal' }, radius: q('v'), text: n('c') } }],
     ['labels over a stacked radius', { data: DATA, mark: 'text', encoding: { theta: n('c'), radius: q('v', { stack: true }), text: n('c'), color: n('g') } }],
+    // position-point.ts positionRef: a bandPosition on the stacked channel places the arc's near edge within its stack segment (the far edge stays the start)
+    ['a stacked theta at the start of its segment (bandPosition 0)', { data: DATA, mark: 'arc', encoding: { theta: q('v', { bandPosition: 0 }), color: n('c') } }],
+    ['a stacked theta in the middle of its segment (bandPosition 0.5)', { data: DATA, mark: 'arc', encoding: { theta: q('v', { bandPosition: 0.5 }), color: n('c') } }],
+    ['a stacked theta a quarter along its segment', { data: DATA, mark: 'arc', encoding: { theta: q('v', { stack: true, bandPosition: 0.25 }), color: n('c') } }],
+    ['a stacked theta at the end of its segment (bandPosition 1)', { data: DATA, mark: 'arc', encoding: { theta: q('v', { bandPosition: 1 }), color: n('c') } }],
+    ['a normalized stacked theta with a bandPosition and a theta offset', { data: DATA, mark: { type: 'arc', thetaOffset: 0.2 }, encoding: { theta: q('v', { stack: 'normalize', bandPosition: 0.3 }), color: n('c') } }],
+    ['a stacked radius with a bandPosition', { data: DATA, mark: 'arc', encoding: { theta: n('c'), radius: q('v', { stack: true, bandPosition: 0.6 }), color: n('g') } }],
+    ['a stacked radius at the start of its segment, with a radius offset', { data: DATA, mark: { type: 'arc', radiusOffset: 4 }, encoding: { theta: n('c'), radius: q('v', { stack: true, bandPosition: 0 }), color: n('g') } }],
+    ['labels over a stacked theta with a bandPosition', { data: DATA, mark: { type: 'text', radius: 90 }, encoding: { theta: q('v', { stack: true, bandPosition: 0 }), text: n('c'), color: n('c') } }],
   ],
   // facet.ts FacetModel (a facet whose child is a facet), header/parse.ts parseFacetHeader: the inner facet nests in the outer cell, its names
   // prefixed `child_`; the headers of one channel join their titles (facet_column_facet_column_point_future and its siblings)

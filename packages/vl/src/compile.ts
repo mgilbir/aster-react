@@ -4198,7 +4198,7 @@ function polarRectPositions(update: Record<string, unknown>, spec: VLSpec, field
       update[far] = { scale: channel, field: aggFieldName(def), offset: sizeRef }
     } else {
       const band = bandScale ? { band: def.bandPosition ?? 0.5 } : {}
-      update[near] = withOffset(stack?.fieldChannel === channel ? { scale: channel, field: `${stack.field}_end` } : { scale: channel, field: aggFieldName(def), ...band })
+      update[near] = withOffset(stack?.fieldChannel === channel ? stackedPolarRef(channel, stack, def.bandPosition) : { scale: channel, field: aggFieldName(def), ...band })
       if (stack?.fieldChannel === channel) update[far] = withOffset({ scale: channel, field: `${stack.field}_start` })
       else {
         const given = channel === 'theta' ? (md.endAngle ?? md.theta2) : innerFallback
@@ -4207,6 +4207,16 @@ function polarRectPositions(update: Record<string, unknown>, spec: VLSpec, field
     }
   }
   return handled
+}
+
+/**
+ * position-point.ts `positionRef` + valueref.ts `interpolatedSignalRef` for the stacked channel of an arc or a label: the stack's end, or,
+ * with a `bandPosition`, that fraction of the way from the stack's start to its end (0 is the start, 1 the end).
+ */
+function stackedPolarRef(channel: 'theta' | 'radius', stack: PolarStack, bandPosition: number | undefined): Record<string, unknown> {
+  if (bandPosition === undefined || bandPosition === 1) return { scale: channel, field: `${stack.field}_end` }
+  if (bandPosition === 0) return { scale: channel, field: `${stack.field}_start` }
+  return { signal: `scale(${JSON.stringify(channel)}, ${1 - bandPosition} * datum[${JSON.stringify(`${stack.field}_start`)}] + ${bandPosition} * datum[${JSON.stringify(`${stack.field}_end`)}])` }
 }
 
 /**
@@ -4221,10 +4231,7 @@ function polarPointPositions(update: Record<string, unknown>, spec: VLSpec, fiel
     const offsetValue = md[`${channel}Offset`]
     const offset = offsetValue ? { offset: offsetValue } : {}
     if (stack?.fieldChannel === channel) {
-      const bp = def.bandPosition ?? 0.5
-      update[channel] = bp === 0 || bp === 1
-        ? { scale: channel, field: `${stack.field}_${bp === 0 ? 'start' : 'end'}`, ...offset }
-        : { signal: `scale(${JSON.stringify(channel)}, ${1 - bp} * datum[${JSON.stringify(`${stack.field}_start`)}] + ${bp} * datum[${JSON.stringify(`${stack.field}_end`)}])`, ...offset }
+      update[channel] = { ...stackedPolarRef(channel, stack, def.bandPosition ?? 0.5), ...offset }
     } else {
       update[channel] = { scale: channel, field: aggFieldName(def), ...offset }
     }

@@ -26,7 +26,7 @@ import {
   computeLinePath,
   num,
   rectItemPath,
-  symbolPath,
+  symbolPathExact,
   textItemDesc,
   trailPath,
   frameBackgroundPath,
@@ -90,7 +90,7 @@ function cachedSymbolPath(shape: string | undefined, r: number): string {
   const key = `${shape ?? 'circle'}|${r}`
   let d = SYMBOL_CACHE.get(key)
   if (d == null) {
-    d = symbolPath(shape, r)
+    d = symbolPathExact(shape, r)
     if (SYMBOL_CACHE.size > 1024) SYMBOL_CACHE.clear()
     SYMBOL_CACHE.set(key, d)
   }
