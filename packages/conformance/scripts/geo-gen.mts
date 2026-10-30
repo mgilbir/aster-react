@@ -210,6 +210,67 @@ export function geoObject(r: Rand): Json {
   }
 }
 
+/**
+ * Shapes that a clip rectangle has nothing to cut: small ones, wholly inside the area an albersUsa part (or a mercator
+ * world) covers, in the places the three parts of albersUsa draw (the lower 48, Alaska, Hawaii), alone and several to a
+ * shape so that the parts of albersUsa have something to merge, with holes, with nothing in them, and with their
+ * positions on the clip rectangle's edge.
+ */
+export function regional(r: Rand): Json {
+  const places: Pt[] = [[-98, 39], [-84, 33], [-120, 37], [-150, 64], [-157, 20.8], [-69, 45], [-110, 45]]
+  const ring = (c: Pt, cw: boolean): Pt[] => blob(r, c, r.pick([0.05, 0.4, 1.5]), r.int(3, 9), cw)
+  const polygon = (c: Pt): Pt[][] => {
+    const rings = [ring(c, true)]
+    if (r.chance(0.3)) rings.push(ring(c, false).map((p) => [c[0]! + (p[0]! - c[0]!) / 4, c[1]! + (p[1]! - c[1]!) / 4] as Pt))
+    if (r.chance(0.08)) rings.push([])
+    return rings
+  }
+  const line = (c: Pt): Pt[] => Array.from({ length: r.pick([0, 1, 2, 3, 6]) }, () => [c[0]! + r.range(-1.5, 1.5), c[1]! + r.range(-1.5, 1.5)] as Pt)
+  const member = (): Json => {
+    const c = r.pick(places)
+    switch (r.pick(['Polygon', 'Polygon', 'MultiPolygon', 'LineString', 'MultiLineString', 'Point', 'MultiPoint', 'Polygon-empty'])) {
+      case 'Polygon': return { type: 'Polygon', coordinates: polygon(c) }
+      case 'MultiPolygon': return { type: 'MultiPolygon', coordinates: Array.from({ length: r.int(1, 3) }, () => polygon(r.pick(places))) }
+      case 'LineString': return { type: 'LineString', coordinates: line(c) }
+      case 'MultiLineString': return { type: 'MultiLineString', coordinates: Array.from({ length: r.int(1, 3) }, () => line(r.pick(places))) }
+      case 'Point': return { type: 'Point', coordinates: c }
+      case 'MultiPoint': return { type: 'MultiPoint', coordinates: Array.from({ length: r.int(1, 4) }, () => r.pick(places)) }
+      default: return { type: 'Polygon', coordinates: [] }
+    }
+  }
+  const k = r.pick(['one', 'collection', 'features', 'multi'])
+  if (k === 'one') return member()
+  if (k === 'collection') return { type: 'GeometryCollection', geometries: Array.from({ length: r.int(1, 4) }, member) }
+  if (k === 'features') return { type: 'FeatureCollection', features: Array.from({ length: r.int(1, 4) }, () => ({ type: 'Feature', properties: {}, geometry: member() })) }
+  return { type: 'MultiPolygon', coordinates: Array.from({ length: r.int(2, 4) }, () => polygon(r.pick(places))) }
+}
+
+/** shapes in the plane, for an identity projection clipped to [[0, 0], [100, 100]]: inside, empty, and on the edge */
+export const PLANAR_SHAPES: Json[] = [
+  { type: 'Polygon', coordinates: [[[10, 10], [90, 10], [90, 90], [10, 90], [10, 10]]] },
+  { type: 'Polygon', coordinates: [[[10, 10], [90, 10], [90, 90], [10, 90], [10, 10]], [[40, 40], [40, 60], [60, 60], [60, 40], [40, 40]]] },
+  { type: 'Polygon', coordinates: [[[0, 0], [100, 0], [100, 100], [0, 100], [0, 0]]] },
+  { type: 'Polygon', coordinates: [[[10, 10], [100, 20], [50, 90], [10, 10]]] },
+  { type: 'Polygon', coordinates: [[[0, 50], [50, 20], [50, 80], [0, 50]]] },
+  { type: 'Polygon', coordinates: [] },
+  { type: 'Polygon', coordinates: [[]] },
+  { type: 'Polygon', coordinates: [[[5, 5]]] },
+  { type: 'Polygon', coordinates: [[[5, 5], [5, 5]]] },
+  { type: 'MultiPolygon', coordinates: [[[[10, 10], [20, 10], [20, 20], [10, 10]]], [[[70, 70], [80, 70], [80, 80], [70, 70]]]] },
+  { type: 'MultiPolygon', coordinates: [[[[10, 10], [20, 10], [20, 20], [10, 10]]], []] },
+  { type: 'LineString', coordinates: [] },
+  { type: 'LineString', coordinates: [[10, 10]] },
+  { type: 'LineString', coordinates: [[10, 10], [20, 30], [90, 90]] },
+  { type: 'LineString', coordinates: [[0, 10], [100, 10]] },
+  { type: 'LineString', coordinates: [[10, 10], [10, 10], [10, 10]] },
+  { type: 'MultiLineString', coordinates: [[[10, 10], [20, 30]], [], [[60, 60], [90, 70], [80, 20]]] },
+  { type: 'Point', coordinates: [50, 50] },
+  { type: 'Point', coordinates: [0, 50] },
+  { type: 'MultiPoint', coordinates: [[1, 1], [99, 99], [100, 100], [50, 50]] },
+  { type: 'GeometryCollection', geometries: [{ type: 'Point', coordinates: [5, 5] }, { type: 'LineString', coordinates: [[1, 2], [3, 4]] }, { type: 'Polygon', coordinates: [[[10, 10], [30, 10], [30, 30], [10, 10]]] }] },
+  { type: 'FeatureCollection', features: [{ type: 'Feature', properties: {}, geometry: null }, { type: 'Feature', properties: {}, geometry: { type: 'Polygon', coordinates: [[[10, 10], [30, 10], [30, 30], [10, 10]]] } }] },
+]
+
 /** a geometry that is certain to have extent (for fitting): a few well-formed blobs */
 export function fittable(r: Rand): Json {
   const one = () => ({ type: 'Polygon', coordinates: [blob(r, [r.range(-170, 170), r.range(-70, 70)], r.pick([2, 10, 30]), r.int(4, 12), true)] })
