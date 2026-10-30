@@ -1673,8 +1673,11 @@ function forceLinkDatasets(chart: CompiledChart): Set<string> {
   const visit = (transforms: readonly CompiledTransform[] | undefined): void => {
     for (const t of transforms ?? []) {
       if (t.type !== 'force') continue
-      for (const f of (t as { forces?: Array<{ force?: string; links?: unknown }> }).forces ?? []) {
-        if (f.force === 'link' && typeof f.links === 'string') out!.add(f.links)
+      // (a malformed list is the force transform's to refuse, with the message of the parameter check)
+      const forces = (t as { forces?: unknown }).forces
+      if (!Array.isArray(forces)) continue
+      for (const f of forces as Array<{ force?: string; links?: unknown } | null>) {
+        if (f?.force === 'link' && typeof f.links === 'string') out!.add(f.links)
       }
     }
   }
@@ -4178,9 +4181,6 @@ function evaluateMarkItems(
     items = items.filter((it) => (it as { __unencoded?: boolean }).__unencoded !== true)
   }
 
-  // Text marks encoded in polar coordinates (`radius` + `theta`, e.g. pie
-  // labels): vega's text renderer offsets the anchor by
-  // `radius * (cos(theta - π/2), sin(theta - π/2))` from the item's x/y.
   // Vega's mark defaults (vega.js defaults()): line {strokeWidth: 2},
   // area {fill: '#4c78a8'}, text {fill: '#000'} — applied when the encode
   // leaves the property unspecified.
@@ -4194,9 +4194,6 @@ function evaluateMarkItems(
       if (fill !== undefined && rec.fill === undefined) rec.fill = fill
       if (mark.type === 'line' && rec.strokeWidth === undefined) rec.strokeWidth = 2
     }
-  }
-  if (mark.type === 'text') {
-    applyTextPolar(items)
   }
 
   // The vega-lite point/circle/square styles default stroked symbols to
@@ -4789,25 +4786,6 @@ function applySymbolStyleDefaults(mark: CompiledMark, items: SceneItem[]): void 
   if (!styles.some((s) => s === 'point' || s === 'circle' || s === 'square')) return
   for (const it of items) {
     if (it.strokeWidth == null) it.strokeWidth = 2
-  }
-}
-
-/**
- * Bake a text item's polar `radius`/`theta` encoding into its x/y anchor,
- * mirroring vega-scenegraph's `anchorPoint` (theta is measured clockwise from
- * 12 o'clock, hence the -π/2 offset).
- */
-function applyTextPolar(items: SceneItem[]): void {
-  for (const it of items) {
-    const radius = it.radius
-    if (radius == null || radius === 0) continue
-    const x = it.x ?? 0
-    const y = it.y ?? 0
-    const t = (it.theta ?? 0) - Math.PI / 2
-    it.x = x + radius * Math.cos(t)
-    it.y = y + radius * Math.sin(t)
-    delete (it as Record<string, unknown>).radius
-    delete (it as Record<string, unknown>).theta
   }
 }
 

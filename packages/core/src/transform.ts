@@ -5,9 +5,11 @@
  */
 import type { CompiledTransform, SortSpec } from './types.js'
 import type { ExpressionRuntime } from './expression.js'
-import { SHAPE_BOUNDS, geoRegistry, requireGeo, requireTransform } from './registry.js'
+import { type ContourFeature, SHAPE_BOUNDS, geoRegistry, requireGeo, requireTransform } from './registry.js'
 import { isArray, sortData } from './util.js'
 import { densityGrid, placeContours } from './raster-grid.js'
+import { accessorOf, densitySettings } from './raster-params.js'
+import { PARAM_RULES, checkParams } from './param-rules.js'
 import { tickStep } from './arr.js'
 import { activeMeter, boundedCount } from './limits.js'
 import { walkPostOrder, walkPreOrder } from './tree-walk.js'
@@ -158,6 +160,8 @@ function resolveSignalParams(t: CompiledTransform, ctx: TransformContext): Compi
 }
 
 function applyTransform(rows: Row[], t0: CompiledTransform, ctx: TransformContext, sourceName?: string): Row[] {
+  const rules = PARAM_RULES.get(t0.type as string)
+  if (rules) checkParams(t0 as Record<string, unknown>, rules)
   const t = resolveSignalParams(t0, ctx)
   switch (t.type) {
     case 'formula': {
@@ -207,25 +211,20 @@ function applyTransform(rows: Row[], t0: CompiledTransform, ctx: TransformContex
       const projName = (t as { projection?: unknown }).projection
       const projection = projName != null ? ctx.projections?.get(String(projName)) : undefined
       if (projection != null && !geoRegistry.projectedPath) requireGeo() // throws: addon not loaded
-      // vega-geo GeoShape `pointRadius`: a number, or an expression of the GeoJSON object (d3 calls it with that object)
-      const prParam = (t as { pointRadius?: unknown }).pointRadius
-      const pointRadius: unknown = prParam != null && typeof prParam === 'object' && typeof (prParam as { expr?: unknown }).expr === 'string'
-        ? ((f) => (feature: unknown): number => +(f(feature as Row) as number))(compileExprTransform((prParam as { expr: string }).expr, ctx))
-        : prParam
+      const pointRadius = geoPointRadius((t as { pointRadius?: unknown }).pointRadius, ctx)
       return rows.map((r) => {
         // vega's field is read off the scenegraph ITEM (`datum["geo"]` is item.datum.geo); a row here is the item's datum
         const geo = field == null || field === 'datum' ? r : getField({ datum: r }, field as string)
-        const p = projection != null
-          ? geoRegistry.projectedPath!(projection, geo, pointRadius)
-          : geoJSONPath(geo)
+        // a projected shape's path and its unrounded bounds (for the bound pass) come from one pass over the geometry
+        const shape = projection != null && as === 'shape' && geoRegistry.projectedShape ? geoRegistry.projectedShape(projection, geo, pointRadius) : undefined
+        const p = shape
+          ? shape.path
+          : projection != null
+            ? geoRegistry.projectedPath!(projection, geo, pointRadius)
+            : geoJSONPath(geo)
         if (p === undefined) return r
         const out = { ...r, [as as string]: p }
-        // the shape's unrounded bounds, for the bound pass (see projectedBounds)
-        if (projection != null && as === 'shape' && geoRegistry.projectedBounds) {
-          const measure = geoRegistry.projectedBounds
-          let memo: ReturnType<typeof measure> | undefined
-          SHAPE_BOUNDS.set(out, () => (memo === undefined ? (memo = measure(projection, geo, pointRadius)) : memo))
-        }
+        if (shape) SHAPE_BOUNDS.set(out, () => shape.bounds)
         return out
       })
     }
@@ -327,6 +326,13 @@ function applyTransform(rows: Row[], t0: CompiledTransform, ctx: TransformContex
     default:
       throw new Error(`[aster] unsupported transform type "${(t as { type: string }).type}"`)
   }
+}
+
+/** A geo transform's `pointRadius`: a number, or `{expr}` -- an expression of the GeoJSON object being drawn. */
+export function geoPointRadius(param: unknown, ctx: TransformContext): unknown {
+  if (param == null || typeof param !== 'object' || typeof (param as { expr?: unknown }).expr !== 'string') return param
+  const radius = compileExprTransform((param as { expr: string }).expr, ctx)
+  return (feature: unknown): number => +(radius(feature as Row) as number)
 }
 
 export function compileExprTransform(expr: string, ctx: TransformContext) {
@@ -642,92 +648,65 @@ function graticuleRows(t: Record<string, unknown>): Row[] {
 // marching squares -> coordinate post-transform. Ported to match the oracle.
 // ---------------------------------------------------------------------------
 
-/** vega Contour `quantize(k, nice, zero)` -> threshold generator. */
-export function contourQuantize(k: number, nice: boolean, zero: boolean): (values: Float32Array | number[]) => number[] {
+/**
+ * The thresholds `levels` evenly spaced over a grid's values, from the smallest value (or from zero, when `zero`) to the
+ * largest: `nice` rounds the spacing to a tick step, otherwise the span is cut into `levels + 1` parts. Missing values
+ * are skipped; the rest are compared as they are, so the spacing is arithmetic on whatever the cells hold.
+ */
+export function contourQuantize(levels: number, nice: boolean, zero: boolean): (values: ArrayLike<unknown>) => number[] {
   return (values) => {
-    let mn: number | undefined
-    let mx: number | undefined
-    const arr = values as ArrayLike<number>
-    for (let i = 0; i < arr.length; i++) {
-      const v = arr[i]!
+    let lowest: number | undefined
+    let highest: number | undefined
+    for (let i = 0; i < values.length; i++) {
+      const v = values[i] as number
       if (v == null || v !== v) continue
-      if (mn === undefined) { mn = v; mx = v; continue }
-      if (v < mn) mn = v
-      if (v > mx!) mx = v
+      if (lowest === undefined) { lowest = highest = v; continue }
+      if (v < lowest) lowest = v
+      if (v > highest!) highest = v
     }
-    if (mn === undefined) mn = NaN
-    if (mx === undefined) mx = NaN
-    const mnv = mn as number
-    const mxv = mx as number
-    const start = zero ? Math.min(mnv, 0) : mnv
-    const stop = mxv
-    const span = stop - start
-    const step = nice ? tickStep(start, stop, k) : span / (k + 1)
+    const start = zero ? Math.min(lowest as number, 0) : (lowest as number)
+    const stop = highest as number
+    const step = nice ? tickStep(start, stop, levels) : (stop - start) / (levels + 1)
     return d3Range(start + step, stop, step)
   }
 }
 
 function contourRows(rows: Row[], t: Record<string, unknown>, ctx: TransformContext): Row[] {
-  // size: [w, h] numbers, signal objects, or a single signal expression.
-  let size: [number, number]
-  if (Array.isArray(t.size)) {
-    const rs = resolveSizeParam(t.size, ctx)
-    size = rs ?? [Number(resolveNum(t.size[0], ctx)) || 500, Number(resolveNum(t.size[1], ctx)) || 500]
-  } else {
-    const resolved = resolveNum(t.size, ctx)
-    size = Array.isArray(resolved) ? [Number(resolved[0]), Number(resolved[1])] : [resolved ?? 500, resolved ?? 500]
-  }
-  const k = t.cellSize ? Math.floor(Math.log(Number(t.cellSize)) / Math.LN2) : 2
+  const values = t.values as ArrayLike<unknown> | undefined
+  // The thresholds: given, or `count` levels spanning the values (from zero when the values are given, not estimated).
+  const quantize = contourQuantize((t.count as number) || 10, !!t.nice, !!values)
+  const given = t.thresholds as number[] | undefined
 
-  // Build the value grid either from a raw `values` array or from point tuples.
-  let gridValues: Float32Array | number[]
-  let origin: [number, number] | null = null
-  let pixelsPerCell = 1
-  let gridSize: [number, number] = size
-  if (Array.isArray(t.values)) {
-    gridValues = t.values as number[]
-  } else {
-    const xf = t.x != null ? accessorField(String(t.x)) : null
-    const yf = t.y != null ? accessorField(String(t.y)) : null
-    const wf = t.weight != null ? accessorField(String(t.weight)) : null
-    const bw: [number, number] = Array.isArray(t.bandwidth) ? [Number(t.bandwidth[0]), Number((t.bandwidth as number[])[1] ?? t.bandwidth[0])]
-      : t.bandwidth != null ? [Number(t.bandwidth), Number(t.bandwidth)] : [-1, -1]
+  let cells: ArrayLike<unknown>
+  let size = t.size as [number, number]
+  let place: ((features: ContourFeature[]) => void) | null = null
+  if (values) cells = values
+  else {
+    const settings = densitySettings(t)
+    const compile = (expr: string): ((d: Row) => unknown) => compileExprTransform(expr, ctx)
+    const x = t.x != null ? accessorOf(t.x, compile) : (d: Row) => (d as unknown as unknown[])[0]
+    const y = t.y != null ? accessorOf(t.y, compile) : (d: Row) => (d as unknown as unknown[])[1]
+    const weight = t.weight != null ? accessorOf(t.weight, compile) : null
     const grid = densityGrid({
-      xs: rows.map((r) => Number(xf ? xf(r) : (r as { x?: unknown }).x)),
-      ys: rows.map((r) => Number(yf ? yf(r) : (r as { y?: unknown }).y)),
-      weightAt: (i) => Number(wf ? wf(rows[i]!) : 1),
-      size, k, bandwidth: bw, counts: true, label: 'contour density grid',
+      xs: rows.map((r) => x(r)),
+      ys: rows.map((r) => y(r)),
+      weightAt: (i) => +(weight ? (weight(rows[i]!) as number) : 1),
+      size: settings.size, k: settings.k, bandwidth: settings.bandwidth, counts: true, label: 'contour density grid',
     })
-    gridValues = grid.values
-    gridSize = [grid.width, grid.height]
-    origin = [grid.x1 || 0, grid.y1 || 0]
-    pixelsPerCell = grid.scale
+    cells = grid.values
+    size = [grid.width, grid.height]
+    // the polygons are in grid cells: back to view pixels
+    place = (features) => placeContours(features, [grid.x1 || 0, grid.y1 || 0], [grid.scale || 1, grid.scale || 1], [0, 0])
   }
 
-  const thresholds = Array.isArray(t.thresholds) ? (t.thresholds as number[])
-    : contourQuantize(Number(t.count ?? 10), !!t.nice, false)(gridValues)
-
+  const thresholds = given || quantize(cells as Float32Array)
   boundedCount(thresholds.length, 'contour thresholds')
   const contourRun = geoRegistry.contourRun
   if (!contourRun) requireGeo() // throws: geo addon not loaded
-  const features = contourRun!(gridValues, thresholds, gridSize, t.smooth !== false)
-  // Each contour is a tuple of its own (`as` is ignored); point data is mapped from grid cells back to pixels.
-  if (origin) placeContours(features, origin, [pixelsPerCell, pixelsPerCell])
+  const features = contourRun!(cells as Float32Array, thresholds, size, t.smooth !== false)
+  place?.(features)
+  // Each contour is a tuple of its own (`as` is ignored).
   return features.map((f) => ({ type: f.type, value: f.value, coordinates: f.coordinates }) as Row)
-}
-
-export function resolveNum(v: unknown, ctx: TransformContext): number | number[] | undefined {
-  if (typeof v === 'number') return v
-  if (v && typeof v === 'object' && 'signal' in (v as Record<string, unknown>)) {
-    try {
-      const r = ctx.runtime.expr(String((v as { signal: string }).signal))({}, ctx.signals)
-      return Array.isArray(r) ? (r as number[]) : (typeof r === 'number' ? r : undefined)
-    } catch { return undefined }
-  }
-  return undefined
-}
-function accessorField(name: string): (row: Row) => unknown {
-  return (row) => getField(row, name)
 }
 
 // ---------------------------------------------------------------------------

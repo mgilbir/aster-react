@@ -10,6 +10,7 @@ import '../../core/src/addon-geo.ts'
 import { compileExpr, type ExpressionRuntime } from '../../core/src/expression.ts'
 import { geoRegistry } from '../../core/src/registry.ts'
 import { exact, quietLogger } from './differential-util.mts'
+import { Rand, seedOf } from './geo-gen.mts'
 
 const PROJECTIONS = [
   { name: 'merc', type: 'mercator', scale: 100, translate: [200, 150] },
@@ -72,6 +73,22 @@ describe('geo expression functions vs real vega (live)', () => {
       }
     })
   }
+  // vega keeps projections among its scales: `scale('p', [lon, lat])` projects, `invert('p', [x, y])` unprojects
+  it.each(['scale', 'invert'])('%s(projection, position) over generated and malformed positions', async (fn) => {
+    const r = new Rand(seedOf(fn, 8))
+    const positions: unknown[] = [
+      ...Array.from({ length: 12 }, () => [r.range(-200, 200), r.range(-100, 100)]),
+      ...Array.from({ length: 12 }, () => [r.range(-100, 600), r.range(-100, 400)]),
+      [0, 0], [180, 90], [-180, -90], [1e-9, -1e-9], [-96, 38], [-150, 62], [-157, 20], [NaN, 1], [1, NaN], [Infinity, 0],
+      [], [1], ['10', '20'], [null, null], 'ab', 5, null, undefined,
+    ]
+    for (const proj of [...PROJECTIONS.map((p) => p.name), 'nope']) {
+      for (const pos of positions) {
+        const code = `${fn}(a, b)`
+        expect(viaAster(code, [proj, pos]), `${fn} ${proj} ${JSON.stringify(pos)}`).toEqual(await viaVega(code, [proj, pos]))
+      }
+    }
+  })
   it('geoScale(projection)', async () => {
     for (const proj of [...PROJECTIONS.map((p) => p.name), 'nope', null, undefined]) {
       expect(viaAster('geoScale(a)', [proj]), `geoScale ${String(proj)}`).toEqual(await viaVega('geoScale(a)', [proj]))

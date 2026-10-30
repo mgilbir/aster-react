@@ -345,10 +345,34 @@ export function registerExpressionFunction(name: string, fn: (...args: never[]) 
   }
 }
 
+/** A map projection (see geo-projections.ts): positions in, positions out. */
+interface ProjectionLike {
+  project(lon: number, lat: number): unknown
+  invert(x: number, y: number): unknown
+}
+const isProjection = (s: unknown): s is ProjectionLike =>
+  typeof s === 'object' && s !== null && typeof (s as ProjectionLike).project === 'function' && typeof (s as ProjectionLike).invert === 'function'
+
+const PROJECTION_SCALES = new WeakMap<object, unknown>()
+
+/** vega keeps projections among its scales: the projection as a function of a [lon, lat] pair, with an `invert`. */
+function projectionScale(p: ProjectionLike): unknown {
+  let scale = PROJECTION_SCALES.get(p)
+  if (scale === undefined) {
+    scale = Object.assign((point: ArrayLike<number>) => p.project(point[0]!, point[1]!), {
+      invert: (point: ArrayLike<number>) => p.invert(point[0]!, point[1]!),
+    })
+    PROJECTION_SCALES.set(p, scale)
+  }
+  return scale
+}
+
 function createBuiltinFunctions(runtime: ExpressionRuntime): Record<string, unknown> {
   // (vega keeps a view's projections among its scales: `scale('projection', [lon, lat])` is the projected point)
-  const scaleObject = (name: unknown): Record<string, unknown> | undefined =>
-    (runtime.scale(String(name)) ?? runtime.projection?.(String(name))) as unknown as Record<string, unknown> | undefined
+  const scaleObject = (name: unknown): Record<string, unknown> | undefined => {
+    const s = runtime.scale(String(name)) ?? runtime.projection?.(String(name))
+    return (isProjection(s) ? projectionScale(s) : s) as unknown as Record<string, unknown> | undefined
+  }
   return {
     // type checking
     isValid,

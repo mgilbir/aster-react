@@ -17,7 +17,7 @@
  * THIRD_PARTY_NOTICES.md.
  */
 import { meterRows } from './limits.js'
-import { quantileSorted } from './arr.js'
+import { quartiles } from './transform-agg.js'
 
 /** A raster of `width` x `height` cells, row-major; `[x1, x2) x [y1, y2)` is the part inside the blur padding. */
 export interface RasterGrid {
@@ -33,12 +33,16 @@ export interface RasterGrid {
   translate?: number[]
 }
 
-/** Sample standard deviation of the non-NaN entries; undefined when there are fewer than two (Welford's update). */
-function sampleDeviation(valid: readonly number[]): number | undefined {
+/** Sample standard deviation of the entries that are numbers once coerced (null and NaN skipped, '' counting as 0); undefined when there are fewer than two (Welford's update). */
+function sampleDeviation(sample: ArrayLike<unknown>): number | undefined {
   let count = 0
   let mean = 0
   let m2 = 0
-  for (const value of valid) {
+  for (let i = 0; i < sample.length; i++) {
+    const entry = sample[i]
+    if (entry == null) continue
+    const value = +(entry as number)
+    if (!(value >= value)) continue
     const delta = value - mean
     mean += delta / ++count
     m2 += delta * (value - mean)
@@ -49,24 +53,19 @@ function sampleDeviation(valid: readonly number[]): number | undefined {
 
 /**
  * Silverman's rule-of-thumb bandwidth, 1.06 * min(sd, IQR / 1.34) * n^-0.2, with the fallbacks sd, |Q1|, 1 when the
- * spread is zero or undefined. `n` counts every entry, NaN included; the spread statistics skip the NaN ones.
+ * spread is zero or undefined. `n` counts every entry of the sample as it was read, missing ones included. The two
+ * spread statistics read the sample differently, and so a '' contributes to one and not the other: the deviation
+ * takes anything that coerces to a number (null skipped), the quartiles take only non-empty, non-null ones.
  */
-export function silvermanBandwidth(sample: ArrayLike<number>): number {
-  const valid: number[] = []
-  for (let i = 0; i < sample.length; i++) {
-    const value = sample[i]!
-    if (value >= value) valid.push(value)
-  }
-  const sd = sampleDeviation(valid)
-  valid.sort((a, b) => a - b)
-  const q1 = quantileSorted(valid, 0.25) ?? NaN
-  const q3 = quantileSorted(valid, 0.75) ?? NaN
-  const spread = sd === undefined ? NaN : Math.min(sd, (q3 - q1) / 1.34)
-  return 1.06 * (spread || sd || Math.abs(q1) || 1) * Math.pow(sample.length, -0.2)
+export function silvermanBandwidth(sample: ArrayLike<unknown>): number {
+  const sd = sampleDeviation(sample)
+  const [q1, , q3] = quartiles(sample)
+  const spread = sd === undefined || q1 === undefined || q3 === undefined ? NaN : Math.min(sd, (q3 - q1) / 1.34)
+  return 1.06 * (spread || sd || Math.abs(q1 ?? NaN) || 1) * Math.pow(sample.length, -0.2)
 }
 
 /** The blur radius, in pixels, of a bandwidth (negative or NaN: estimated from the sample). */
-export function blurRadius(bandwidth: number, sample: ArrayLike<number>): number {
+export function blurRadius(bandwidth: number, sample: ArrayLike<unknown>): number {
   const h = bandwidth >= 0 ? bandwidth : silvermanBandwidth(sample)
   return Math.round((Math.sqrt(4 * h * h + 1) - 1) / 2)
 }
@@ -90,9 +89,12 @@ function boxBlur(from: Float32Array, to: Float32Array, lines: number, length: nu
 }
 
 export interface DensityRequest {
-  /** The points' pixel coordinates (any number, NaN allowed: such a point falls outside the grid). */
-  xs: ArrayLike<number>
-  ys: ArrayLike<number>
+  /**
+   * The points' pixel coordinates as the data holds them. A point is placed at the number its coordinate coerces to
+   * (null is 0, NaN falls outside the grid); an estimated bandwidth reads them uncoerced, where a null is no sample.
+   */
+  xs: ArrayLike<unknown>
+  ys: ArrayLike<unknown>
   /** The weight of point `i`; called only for points inside the grid. */
   weightAt: (i: number) => number
   /** The view size in pixels. */
@@ -121,8 +123,8 @@ export function densityGrid(req: DensityRequest): RasterGrid {
 
   let values = new Float32Array(n * m)
   for (let i = 0; i < xs.length; i++) {
-    const xi = ox + (xs[i]! >> k)
-    const yi = oy + (ys[i]! >> k)
+    const xi = ox + (+(xs[i] as number) >> k)
+    const yi = oy + (+(ys[i] as number) >> k)
     if (xi >= 0 && xi < n && yi >= 0 && yi < m) values[xi + yi * n]! += weightAt(i)
   }
 
