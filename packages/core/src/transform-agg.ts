@@ -28,6 +28,7 @@
  */
 import { accessor, accessorFields, accessorName, array, ascending, constant, sortData, error, extent as vegaExtent, field, identity, type Accessor } from './util.js'
 import { meterTick } from './limits.js'
+import { ascending as d3Ascending, quantileSorted } from './arr.js'
 
 export type Row = Record<string, unknown>
 type Get = (d: unknown) => unknown
@@ -189,29 +190,11 @@ export function numbersOf(values: ArrayLike<unknown>, f?: Get): number[] {
   return out
 }
 
-/** d3-array `ascending` (numbers; NaN when either side is nullish or NaN). */
-function d3ascending(a: number, b: number): number {
-  return a == null || b == null ? NaN : a < b ? -1 : a > b ? 1 : a >= b ? 0 : NaN
-}
-
-/** d3-array `quantileSorted`. */
-export function quantileSortedNumbers(values: ArrayLike<number>, p: number): number | undefined {
-  const n = values.length
-  if (!n || Number.isNaN((p = +p))) return undefined
-  if (p <= 0 || n < 2) return +values[0]!
-  if (p >= 1) return +values[n - 1]!
-  const i = (n - 1) * p
-  const i0 = Math.floor(i)
-  const value0 = +values[i0]!
-  const value1 = +values[i0 + 1]!
-  return value0 + (value1 - value0) * (i - i0)
-}
-
 /** vega-statistics `quantiles(array, p, f)`. */
 export function quantiles(arr: ArrayLike<unknown>, p: readonly number[], f?: Get): Array<number | undefined> {
   const values = Float64Array.from(numbersOf(arr, f))
-  values.sort(d3ascending)
-  return p.map((q) => quantileSortedNumbers(values, q))
+  values.sort(d3Ascending)
+  return p.map((q) => quantileSorted(values, q))
 }
 
 /** vega-statistics `quartiles`. */
@@ -238,7 +221,7 @@ export function bootstrapCI(arr: ArrayLike<unknown>, samples: number, alpha: num
   }
   // the means of data with no valid number are NaN and are left out; the rest sort numerically
   const sorted = means.filter((mean) => mean === mean).sort()
-  return [quantileSortedNumbers(sorted, alpha / 2), quantileSortedNumbers(sorted, 1 - alpha / 2)]
+  return [quantileSorted(sorted, alpha / 2), quantileSorted(sorted, 1 - alpha / 2)]
 }
 
 /** vega-util `extentIndex`: indices of the min and max, skipping null/undefined/NaN; `[-1, -1]` if none. */
