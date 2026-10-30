@@ -10,7 +10,6 @@ import { Adder } from './arr.js'
 import {
   Events, LINE_END, LINE_START, POINT, POLYGON_END, POLYGON_START, SPHERE, forEachChunk,
 } from './geo-events.js'
-import { TAU } from './geo-sphere.js'
 
 /** What a geometry pipeline offers a path: its planar events for a spherical input. */
 export interface PlanarSource {
@@ -115,61 +114,6 @@ export class PathWriter implements PlanarSink {
   /** The path, or null when nothing was drawn. */
   result(): string | null {
     return this.s.length ? this.s : null
-  }
-}
-
-/** A drawing context, as a canvas 2D context's path methods. */
-export interface PathContext {
-  moveTo(x: number, y: number): void
-  lineTo(x: number, y: number): void
-  closePath(): void
-  arc(x: number, y: number, r: number, start: number, end: number): void
-}
-
-/** The drawing of the events as calls on a drawing context (the same strokes as the path string). */
-export class ContextTrace implements PlanarSink {
-  private inPolygon = false
-  private vertex = NaN
-
-  constructor(
-    private readonly ctx: PathContext,
-    private readonly radius: number,
-  ) {}
-
-  add(ev: Events): void {
-    const { ctx, radius } = this
-    for (let i = 0; i < ev.length; i++) {
-      switch (ev.op[i]) {
-        case POLYGON_START:
-          this.inPolygon = true
-          break
-        case POLYGON_END:
-          this.inPolygon = false
-          break
-        case LINE_START:
-          this.vertex = 0
-          break
-        case LINE_END:
-          if (this.inPolygon) ctx.closePath()
-          this.vertex = NaN
-          break
-        case POINT: {
-          const x = ev.x[i]!
-          const y = ev.y[i]!
-          if (this.vertex === 0) {
-            ctx.moveTo(x, y)
-            this.vertex = 1
-          } else if (this.vertex === 1) ctx.lineTo(x, y)
-          else {
-            ctx.moveTo(x + radius, y)
-            ctx.arc(x, y, radius, 0, TAU)
-          }
-          break
-        }
-        case SPHERE:
-          unsupportedSphere()
-      }
-    }
   }
 }
 
@@ -511,11 +455,6 @@ export class GeoPath {
     const writer = new PathWriter(this.digits, this.radiusFor(object, radius))
     this.feed(object, writer)
     return writer.result()
-  }
-
-  /** Replay the drawing of `object` as calls on a drawing context. */
-  trace(object: unknown, ctx: PathContext, radius: PointRadius = this.pointRadius): void {
-    if (object) this.feed(object, new ContextTrace(ctx, this.radiusFor(object, radius)))
   }
 
   area(object: unknown): number {
