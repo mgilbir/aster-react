@@ -1,38 +1,60 @@
 /**
- * Colour parsing and colour spaces (RGB, HSL, Lab, HCL).
+ * Colours: the CSS-ish string parser and five colour spaces (RGB, HSL, Lab, HCL, Cubehelix).
  *
- * A faithful port of the `d3-color` surface the engine uses: the CSS colour
- * parser behind `rgb()`/`hsl()`/`lab()`/`hcl()` (also the expression functions
- * of the same names, which upstream re-exports from d3-color directly), the
- * conversions between the spaces, and the colour objects' formatting and
- * brighten/darken methods.
+ * Aster reads exactly the strings d3-color reads and produces exactly its numbers, because the expression functions
+ * `rgb() hsl() lab() hcl()`, scale interpolation in those spaces and the schemes all hand colours to user code and
+ * to the SVG. The vectors in `testdata/vectors/d3-color.json` and the generated differential
+ * (`packages/conformance/scripts/differential-color.test.mts`) hold that.
  *
- * Behaviour is pinned by vectors recorded from the pinned oracle
- * (`testdata/vectors/d3-color.json`), including the deliberate quirks:
- * channels are *not* clamped (`rgb(300, 0, 0)` stays out of gamut until it is
- * formatted), `'transparent'` parses to NaN channels with opacity 0, an
- * unparsable string converts to all-NaN channels via `rgbConvert`, and
- * `toString` is `formatRgb` — always `rgb(r, g, b)` with rounded channels.
+ * What is shaped by that contract rather than by taste:
+ * - channels are never clamped on construction (`rgb(300, 0, 0)` is out of gamut until it is formatted);
+ * - an unparsable string converts to a colour whose channels are all NaN, and `transparent` to NaN channels with
+ *   opacity 0 (`rgba(..., 0)` discards its channels too);
+ * - arithmetic keeps its operand order (the last bit of a Lab or Cubehelix channel depends on it);
+ * - a space's factory with exactly one argument converts, with any other count it constructs, so `rgb()` is a colour
+ *   of NaN channels and `rgb(undefined)` is a conversion of nothing;
+ * - `toString` is `formatRgb` for every space.
  */
 
-// --- shared constants --------------------------------------------------------
-
-const radians = Math.PI / 180
-const degrees = 180 / Math.PI
-
-/** The brighten/darken factors shared by every colour space (upstream `darker = 0.7`). */
 export const darker = 0.7
 export const brighter = 1 / darker
 
-// --- base class --------------------------------------------------------------
+const RADIANS = Math.PI / 180
+const DEGREES = 180 / Math.PI
+
+/** The brighten / darken multiplier for `steps` applications of `base` (one when no count is given). */
+const gain = (base: number, steps: number | null | undefined): number => (steps == null ? base : Math.pow(base, steps))
+
+// --- channel clamps and the text forms --------------------------------------------
+
+const clampOpacity = (a: number): number => (isNaN(a) ? 1 : Math.max(0, Math.min(1, a)))
+const clampByte = (v: number): number => Math.max(0, Math.min(255, Math.round(v) || 0))
+const clampUnit = (v: number): number => Math.max(0, Math.min(1, v || 0))
+const clampHue = (h: number): number => {
+  const wrapped = (h || 0) % 360
+  return wrapped < 0 ? wrapped + 360 : wrapped
+}
+const hexByte = (v: number): string => {
+  const b = clampByte(v)
+  return (b < 16 ? '0' : '') + b.toString(16)
+}
+
+/** `name(args)` or `name(args, alpha)`, with the alpha dropped when it is exactly 1. */
+function cssFunction(name: string, args: readonly (number | string)[], opacity: number): string {
+  const alpha = clampOpacity(opacity)
+  return alpha === 1 ? `${name}(${args.join(', ')})` : `${name}a(${args.join(', ')}, ${alpha})`
+}
+
+// --- the base ---------------------------------------------------------------------
 
 export abstract class Color {
   opacity!: number
 
+  abstract rgb(): Rgb
+
   copy(channels: Record<string, unknown>): Color {
-    // Object.assign onto a fresh instance of the concrete class, as upstream.
-    const Ctor = this.constructor as new () => Color
-    return Object.assign(new Ctor(), this, channels)
+    const Concrete = this.constructor as new () => Color
+    return Object.assign(new Concrete(), this, channels)
   }
 
   displayable(): boolean {
@@ -62,120 +84,98 @@ export abstract class Color {
   toString(): string {
     return this.formatRgb()
   }
-
-  abstract rgb(): Rgb
 }
 
-// --- parsing -----------------------------------------------------------------
+// --- parsing ----------------------------------------------------------------------
 
-const reI = '\\s*([+-]?\\d+)\\s*'
-const reN = '\\s*([+-]?(?:\\d*\\.)?\\d+(?:[eE][+-]?\\d+)?)\\s*'
-const reP = '\\s*([+-]?(?:\\d*\\.)?\\d+(?:[eE][+-]?\\d+)?)%\\s*'
-const reHex = /^#([0-9a-f]{3,8})$/
-const reRgbInteger = new RegExp(`^rgb\\(${reI},${reI},${reI}\\)$`)
-const reRgbPercent = new RegExp(`^rgb\\(${reP},${reP},${reP}\\)$`)
-const reRgbaInteger = new RegExp(`^rgba\\(${reI},${reI},${reI},${reN}\\)$`)
-const reRgbaPercent = new RegExp(`^rgba\\(${reP},${reP},${reP},${reN}\\)$`)
-const reHslPercent = new RegExp(`^hsl\\(${reN},${reP},${reP}\\)$`)
-const reHslaPercent = new RegExp(`^hsla\\(${reN},${reP},${reP},${reN}\\)$`)
+const INTEGER = '[+-]?\\d+'
+const DECIMAL = '[+-]?(?:\\d*\\.)?\\d+(?:[eE][+-]?\\d+)?'
 
-/** The 148 CSS colour keywords upstream knows, as `0xRRGGBB` literals. */
-const named: Record<string, number> = {
-  aliceblue: 0xf0f8ff, antiquewhite: 0xfaebd7, aqua: 0x00ffff, aquamarine: 0x7fffd4,
-  azure: 0xf0ffff, beige: 0xf5f5dc, bisque: 0xffe4c4, black: 0x000000,
-  blanchedalmond: 0xffebcd, blue: 0x0000ff, blueviolet: 0x8a2be2, brown: 0xa52a2a,
-  burlywood: 0xdeb887, cadetblue: 0x5f9ea0, chartreuse: 0x7fff00, chocolate: 0xd2691e,
-  coral: 0xff7f50, cornflowerblue: 0x6495ed, cornsilk: 0xfff8dc, crimson: 0xdc143c,
-  cyan: 0x00ffff, darkblue: 0x00008b, darkcyan: 0x008b8b, darkgoldenrod: 0xb8860b,
-  darkgray: 0xa9a9a9, darkgreen: 0x006400, darkgrey: 0xa9a9a9, darkkhaki: 0xbdb76b,
-  darkmagenta: 0x8b008b, darkolivegreen: 0x556b2f, darkorange: 0xff8c00, darkorchid: 0x9932cc,
-  darkred: 0x8b0000, darksalmon: 0xe9967a, darkseagreen: 0x8fbc8f, darkslateblue: 0x483d8b,
-  darkslategray: 0x2f4f4f, darkslategrey: 0x2f4f4f, darkturquoise: 0x00ced1, darkviolet: 0x9400d3,
-  deeppink: 0xff1493, deepskyblue: 0x00bfff, dimgray: 0x696969, dimgrey: 0x696969,
-  dodgerblue: 0x1e90ff, firebrick: 0xb22222, floralwhite: 0xfffaf0, forestgreen: 0x228b22,
-  fuchsia: 0xff00ff, gainsboro: 0xdcdcdc, ghostwhite: 0xf8f8ff, gold: 0xffd700,
-  goldenrod: 0xdaa520, gray: 0x808080, green: 0x008000, greenyellow: 0xadff2f,
-  grey: 0x808080, honeydew: 0xf0fff0, hotpink: 0xff69b4, indianred: 0xcd5c5c,
-  indigo: 0x4b0082, ivory: 0xfffff0, khaki: 0xf0e68c, lavender: 0xe6e6fa,
-  lavenderblush: 0xfff0f5, lawngreen: 0x7cfc00, lemonchiffon: 0xfffacd, lightblue: 0xadd8e6,
-  lightcoral: 0xf08080, lightcyan: 0xe0ffff, lightgoldenrodyellow: 0xfafad2, lightgray: 0xd3d3d3,
-  lightgreen: 0x90ee90, lightgrey: 0xd3d3d3, lightpink: 0xffb6c1, lightsalmon: 0xffa07a,
-  lightseagreen: 0x20b2aa, lightskyblue: 0x87cefa, lightslategray: 0x778899, lightslategrey: 0x778899,
-  lightsteelblue: 0xb0c4de, lightyellow: 0xffffe0, lime: 0x00ff00, limegreen: 0x32cd32,
-  linen: 0xfaf0e6, magenta: 0xff00ff, maroon: 0x800000, mediumaquamarine: 0x66cdaa,
-  mediumblue: 0x0000cd, mediumorchid: 0xba55d3, mediumpurple: 0x9370db, mediumseagreen: 0x3cb371,
-  mediumslateblue: 0x7b68ee, mediumspringgreen: 0x00fa9a, mediumturquoise: 0x48d1cc,
-  mediumvioletred: 0xc71585, midnightblue: 0x191970, mintcream: 0xf5fffa, mistyrose: 0xffe4e1,
-  moccasin: 0xffe4b5, navajowhite: 0xffdead, navy: 0x000080, oldlace: 0xfdf5e6,
-  olive: 0x808000, olivedrab: 0x6b8e23, orange: 0xffa500, orangered: 0xff4500,
-  orchid: 0xda70d6, palegoldenrod: 0xeee8aa, palegreen: 0x98fb98, paleturquoise: 0xafeeee,
-  palevioletred: 0xdb7093, papayawhip: 0xffefd5, peachpuff: 0xffdab9, peru: 0xcd853f,
-  pink: 0xffc0cb, plum: 0xdda0dd, powderblue: 0xb0e0e6, purple: 0x800080,
-  rebeccapurple: 0x663399, red: 0xff0000, rosybrown: 0xbc8f8f, royalblue: 0x4169e1,
-  saddlebrown: 0x8b4513, salmon: 0xfa8072, sandybrown: 0xf4a460, seagreen: 0x2e8b57,
-  seashell: 0xfff5ee, sienna: 0xa0522d, silver: 0xc0c0c0, skyblue: 0x87ceeb,
-  slateblue: 0x6a5acd, slategray: 0x708090, slategrey: 0x708090, snow: 0xfffafa,
-  springgreen: 0x00ff7f, steelblue: 0x4682b4, tan: 0xd2b48c, teal: 0x008080,
-  thistle: 0xd8bfd8, tomato: 0xff6347, turquoise: 0x40e0d0, violet: 0xee82ee,
-  wheat: 0xf5deb3, white: 0xffffff, whitesmoke: 0xf5f5f5, yellow: 0xffff00,
-  yellowgreen: 0x9acd32,
+/** One captured, whitespace-tolerant argument of a CSS function. */
+const slot = (pattern: string, unit = ''): string => `\\s*(${pattern})${unit}\\s*`
+
+/** `^name(slot,slot,...)$`; the argument list is comma-separated and nothing else is allowed around it. */
+const functional = (name: string, ...slots: string[]): RegExp => new RegExp(`^${name}\\(${slots.join(',')}\\)$`)
+
+const int = slot(INTEGER)
+const num = slot(DECIMAL)
+const pct = slot(DECIMAL, '%')
+
+const HEX = /^#([0-9a-f]{3,8})$/
+const RGB_INT = functional('rgb', int, int, int)
+const RGB_PCT = functional('rgb', pct, pct, pct)
+const RGBA_INT = functional('rgba', int, int, int, num)
+const RGBA_PCT = functional('rgba', pct, pct, pct, num)
+const HSL = functional('hsl', num, pct, pct)
+const HSLA = functional('hsla', num, pct, pct, num)
+
+/** The 148 CSS keywords, as `name:rrggbb` pairs; unpacked on first use. */
+const KEYWORDS = 'aliceblue:f0f8ff,antiquewhite:faebd7,aqua:00ffff,aquamarine:7fffd4,azure:f0ffff,beige:f5f5dc,bisque:ffe4c4,black:000000,blanchedalmond:ffebcd,blue:0000ff,blueviolet:8a2be2,brown:a52a2a,burlywood:deb887,cadetblue:5f9ea0,chartreuse:7fff00,chocolate:d2691e,coral:ff7f50,cornflowerblue:6495ed,cornsilk:fff8dc,crimson:dc143c,cyan:00ffff,darkblue:00008b,darkcyan:008b8b,darkgoldenrod:b8860b,darkgray:a9a9a9,darkgreen:006400,darkgrey:a9a9a9,darkkhaki:bdb76b,darkmagenta:8b008b,darkolivegreen:556b2f,darkorange:ff8c00,darkorchid:9932cc,darkred:8b0000,darksalmon:e9967a,darkseagreen:8fbc8f,darkslateblue:483d8b,darkslategray:2f4f4f,darkslategrey:2f4f4f,darkturquoise:00ced1,darkviolet:9400d3,deeppink:ff1493,deepskyblue:00bfff,dimgray:696969,dimgrey:696969,dodgerblue:1e90ff,firebrick:b22222,floralwhite:fffaf0,forestgreen:228b22,fuchsia:ff00ff,gainsboro:dcdcdc,ghostwhite:f8f8ff,gold:ffd700,goldenrod:daa520,gray:808080,green:008000,greenyellow:adff2f,grey:808080,honeydew:f0fff0,hotpink:ff69b4,indianred:cd5c5c,indigo:4b0082,ivory:fffff0,khaki:f0e68c,lavender:e6e6fa,lavenderblush:fff0f5,lawngreen:7cfc00,lemonchiffon:fffacd,lightblue:add8e6,lightcoral:f08080,lightcyan:e0ffff,lightgoldenrodyellow:fafad2,lightgray:d3d3d3,lightgreen:90ee90,lightgrey:d3d3d3,lightpink:ffb6c1,lightsalmon:ffa07a,lightseagreen:20b2aa,lightskyblue:87cefa,lightslategray:778899,lightslategrey:778899,lightsteelblue:b0c4de,lightyellow:ffffe0,lime:00ff00,limegreen:32cd32,linen:faf0e6,magenta:ff00ff,maroon:800000,mediumaquamarine:66cdaa,mediumblue:0000cd,mediumorchid:ba55d3,mediumpurple:9370db,mediumseagreen:3cb371,mediumslateblue:7b68ee,mediumspringgreen:00fa9a,mediumturquoise:48d1cc,mediumvioletred:c71585,midnightblue:191970,mintcream:f5fffa,mistyrose:ffe4e1,moccasin:ffe4b5,navajowhite:ffdead,navy:000080,oldlace:fdf5e6,olive:808000,olivedrab:6b8e23,orange:ffa500,orangered:ff4500,orchid:da70d6,palegoldenrod:eee8aa,palegreen:98fb98,paleturquoise:afeeee,palevioletred:db7093,papayawhip:ffefd5,peachpuff:ffdab9,peru:cd853f,pink:ffc0cb,plum:dda0dd,powderblue:b0e0e6,purple:800080,rebeccapurple:663399,red:ff0000,rosybrown:bc8f8f,royalblue:4169e1,saddlebrown:8b4513,salmon:fa8072,sandybrown:f4a460,seagreen:2e8b57,seashell:fff5ee,sienna:a0522d,silver:c0c0c0,skyblue:87ceeb,slateblue:6a5acd,slategray:708090,slategrey:708090,snow:fffafa,springgreen:00ff7f,steelblue:4682b4,tan:d2b48c,teal:008080,thistle:d8bfd8,tomato:ff6347,turquoise:40e0d0,violet:ee82ee,wheat:f5deb3,white:ffffff,whitesmoke:f5f5f5,yellow:ffff00,yellowgreen:9acd32'
+
+let keywordTable: Map<string, number> | undefined
+function keywordRgb(name: string): number | undefined {
+  if (!keywordTable) {
+    keywordTable = new Map()
+    for (const pair of KEYWORDS.split(',')) {
+      const at = pair.indexOf(':')
+      keywordTable.set(pair.slice(0, at), parseInt(pair.slice(at + 1), 16))
+    }
+  }
+  return keywordTable.get(name)
 }
 
-/**
- * Parse a CSS colour string. Returns `null` for anything the grammar above
- * rejects — including modern CSS syntax (e.g. `rgb(1 2 3)`, `color(display-p3 …)`)
- * upstream does not know.
- */
+/** Opaque colour of a 24-bit integer. */
+const fromRgb24 = (n: number): Rgb => new Rgb(n >> 16 & 0xff, n >> 8 & 0xff, n & 0xff, 1)
+
+/** A colour with an alpha; a fully transparent one has no meaningful channels. */
+const withAlpha = (r: number, g: number, b: number, alpha: number): Rgb =>
+  alpha <= 0 ? new Rgb(NaN, NaN, NaN, alpha) : new Rgb(r, g, b, alpha)
+
+/** An HSL colour whose undefined components follow from the others (black, white and grey have no hue). */
+function hslWithAlpha(h: number, s: number, l: number, alpha: number): Hsl {
+  if (alpha <= 0) return new Hsl(NaN, NaN, NaN, alpha)
+  if (l <= 0 || l >= 1) return new Hsl(NaN, NaN, l, alpha)
+  if (s <= 0) return new Hsl(NaN, s, l, alpha)
+  return new Hsl(h, s, l, alpha)
+}
+
+/** `#rgb`, `#rgba`, `#rrggbb`, `#rrggbbaa`; five- and seven-digit forms are refused. */
+function parseHex(digits: string): Rgb | null {
+  const n = digits.length
+  if (n === 5 || n === 7) return null
+  const full = n <= 4 ? digits.replace(/./g, '$&$&') : digits
+  const value = parseInt(full, 16)
+  if (full.length === 6) return fromRgb24(value)
+  return withAlpha(value >> 24 & 0xff, value >> 16 & 0xff, value >> 8 & 0xff, (value & 0xff) / 0xff)
+}
+
+const percentToByte = (p: string): number => +p * 255 / 100
+
+/** Parse a colour string; `null` for anything outside the grammar (modern CSS syntax included). */
 export function color(format: unknown): Color | null {
+  const text = (format + '').trim().toLowerCase()
   let m: RegExpExecArray | null
-  format = (format + '').trim().toLowerCase()
-  if ((m = reHex.exec(format as string))) return hexBody(m)
-  if ((m = reRgbInteger.exec(format as string))) return new Rgb(+m[1]!, +m[2]!, +m[3]!, 1)
-  if ((m = reRgbPercent.exec(format as string))) return new Rgb(+m[1]! * 255 / 100, +m[2]! * 255 / 100, +m[3]! * 255 / 100, 1)
-  if ((m = reRgbaInteger.exec(format as string))) return rgba(+m[1]!, +m[2]!, +m[3]!, +m[4]!)
-  if ((m = reRgbaPercent.exec(format as string))) return rgba(+m[1]! * 255 / 100, +m[2]! * 255 / 100, +m[3]! * 255 / 100, +m[4]!)
-  if ((m = reHslPercent.exec(format as string))) return hsla(+m[1]!, +m[2]! / 100, +m[3]! / 100, 1)
-  if ((m = reHslaPercent.exec(format as string))) return hsla(+m[1]!, +m[2]! / 100, +m[3]! / 100, +m[4]!)
-  if (Object.prototype.hasOwnProperty.call(named, format as string)) return rgbn((named as Record<string, number>)[format as string]!)
-  if (format === 'transparent') return new Rgb(NaN, NaN, NaN, 0)
-  return null
+  if ((m = HEX.exec(text))) return parseHex(m[1]!)
+  if ((m = RGB_INT.exec(text))) return new Rgb(+m[1]!, +m[2]!, +m[3]!, 1)
+  if ((m = RGB_PCT.exec(text))) return new Rgb(percentToByte(m[1]!), percentToByte(m[2]!), percentToByte(m[3]!), 1)
+  if ((m = RGBA_INT.exec(text))) return withAlpha(+m[1]!, +m[2]!, +m[3]!, +m[4]!)
+  if ((m = RGBA_PCT.exec(text))) return withAlpha(percentToByte(m[1]!), percentToByte(m[2]!), percentToByte(m[3]!), +m[4]!)
+  if ((m = HSL.exec(text))) return hslWithAlpha(+m[1]!, +m[2]! / 100, +m[3]! / 100, 1)
+  if ((m = HSLA.exec(text))) return hslWithAlpha(+m[1]!, +m[2]! / 100, +m[3]! / 100, +m[4]!)
+  const keyword = keywordRgb(text)
+  if (keyword !== undefined) return fromRgb24(keyword)
+  return text === 'transparent' ? new Rgb(NaN, NaN, NaN, 0) : null
 }
 
-/** Expand a hex match into a colour, or `null` for an invalid length. */
-function hexBody(m: RegExpExecArray): Color | null {
-  const l = m[1]!.length
-  const n = parseInt(m[1]!, 16)
-  return l === 6 ? rgbn(n)
-    : l === 3 ? new Rgb((n >> 8 & 0xf) | (n >> 4 & 0xf0), (n >> 4 & 0xf) | (n & 0xf0), ((n & 0xf) << 4) | (n & 0xf), 1)
-    : l === 8 ? rgba(n >> 24 & 0xff, n >> 16 & 0xff, n >> 8 & 0xff, (n & 0xff) / 0xff)
-    : l === 4 ? rgba((n >> 12 & 0xf) | (n >> 8 & 0xf0), (n >> 8 & 0xf) | (n >> 4 & 0xf0), (n >> 4 & 0xf) | (n & 0xf0), (((n & 0xf) << 4) | (n & 0xf)) / 0xff)
-    : null
+/** What a space's factory does: one argument converts it, any other number of arguments builds from channels. */
+function colorFactory<C extends Color>(
+  convert: (input: unknown) => C,
+  build: (a: unknown, b: unknown, c: unknown, opacity: unknown) => C,
+): (...args: unknown[]) => C {
+  return (...args) => (args.length === 1 ? convert(args[0]) : build(args[0], args[1], args[2], args[3] == null ? 1 : args[3]))
 }
 
-function rgbn(n: number): Rgb {
-  return new Rgb(n >> 16 & 0xff, n >> 8 & 0xff, n & 0xff, 1)
-}
-
-function rgba(r: number, g: number, b: number, a: number): Rgb {
-  if (a <= 0) r = g = b = NaN
-  return new Rgb(r, g, b, a)
-}
-
-// --- RGB ---------------------------------------------------------------------
-
-/** Coerce anything (spec string or colour) to an `Rgb`; unparsable input is all-NaN. */
-export function rgbConvert(o: unknown): Rgb {
-  const c: Color | null = o instanceof Color ? o : color(o)
-  if (!c) return new Rgb()
-  const r = c.rgb()
-  return new Rgb(r.r, r.g, r.b, r.opacity)
-}
-
-/** The `rgb()` colour factory: one argument parses, four construct. */
-export function rgb(r?: unknown, g?: unknown, b?: unknown, opacity?: unknown): Rgb {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  return arguments.length === 1 ? rgbConvert(r) : new Rgb(r as any, g as any, b as any, opacity == null ? 1 : (opacity as number))
-}
+// --- RGB --------------------------------------------------------------------------
 
 export class Rgb extends Color {
   declare readonly r: number
@@ -191,14 +191,16 @@ export class Rgb extends Color {
     this.opacity = +(opacity as number)
   }
 
-  brighter(k?: number): Rgb {
-    const m = k == null ? brighter : Math.pow(brighter, k)
+  private scaled(m: number): Rgb {
     return new Rgb(this.r * m, this.g * m, this.b * m, this.opacity)
   }
 
-  darker(k?: number): Rgb {
-    const m = k == null ? darker : Math.pow(darker, k)
-    return new Rgb(this.r * m, this.g * m, this.b * m, this.opacity)
+  brighter(steps?: number | null): Rgb {
+    return this.scaled(gain(brighter, steps))
+  }
+
+  darker(steps?: number | null): Rgb {
+    return this.scaled(gain(darker, steps))
   }
 
   override rgb(): Rgb {
@@ -206,82 +208,37 @@ export class Rgb extends Color {
   }
 
   clamp(): Rgb {
-    return new Rgb(clampi(this.r), clampi(this.g), clampi(this.b), clampa(this.opacity))
+    return new Rgb(clampByte(this.r), clampByte(this.g), clampByte(this.b), clampOpacity(this.opacity))
   }
 
   override displayable(): boolean {
-    return (-0.5 <= this.r && this.r < 255.5)
-      && (-0.5 <= this.g && this.g < 255.5)
-      && (-0.5 <= this.b && this.b < 255.5)
-      && (0 <= this.opacity && this.opacity <= 1)
+    const inGamut = (v: number) => -0.5 <= v && v < 255.5
+    return inGamut(this.r) && inGamut(this.g) && inGamut(this.b) && 0 <= this.opacity && this.opacity <= 1
   }
 
   override formatHex(): string {
-    return `#${hex(this.r)}${hex(this.g)}${hex(this.b)}`
+    return '#' + hexByte(this.r) + hexByte(this.g) + hexByte(this.b)
   }
 
   override formatHex8(): string {
-    return `#${hex(this.r)}${hex(this.g)}${hex(this.b)}${hex((isNaN(this.opacity) ? 1 : this.opacity) * 255)}`
+    return this.formatHex() + hexByte((isNaN(this.opacity) ? 1 : this.opacity) * 255)
   }
 
   override formatRgb(): string {
-    const a = clampa(this.opacity)
-    return `${a === 1 ? 'rgb(' : 'rgba('}${clampi(this.r)}, ${clampi(this.g)}, ${clampi(this.b)}${a === 1 ? ')' : `, ${a})`}`
+    return cssFunction('rgb', [clampByte(this.r), clampByte(this.g), clampByte(this.b)], this.opacity)
   }
 }
 
-function clampa(opacity: number): number {
-  return isNaN(opacity) ? 1 : Math.max(0, Math.min(1, opacity))
+export function rgbConvert(input: unknown): Rgb {
+  const parsed = input instanceof Color ? input : color(input)
+  if (!parsed) return new Rgb()
+  const { r, g, b, opacity } = parsed.rgb()
+  return new Rgb(r, g, b, opacity)
 }
 
-function clampi(value: number): number {
-  return Math.max(0, Math.min(255, Math.round(value) || 0))
-}
+export const rgb = colorFactory(rgbConvert, (r, g, b, o) => new Rgb(r, g, b, o))
 
-function hex(value: number): string {
-  value = clampi(value)
-  return (value < 16 ? '0' : '') + value.toString(16)
-}
-
-// --- HSL ---------------------------------------------------------------------
-
-function hsla(h: number, s: number, l: number, a: number): Hsl {
-  if (a <= 0) h = s = l = NaN
-  else if (l <= 0 || l >= 1) h = s = NaN
-  else if (s <= 0) h = NaN
-  return new Hsl(h, s, l, a)
-}
-
-export function hslConvert(o: unknown): Hsl {
-  if (o instanceof Hsl) return new Hsl(o.h, o.s, o.l, o.opacity)
-  const c: Color | null = o instanceof Color ? o : color(o)
-  if (!c) return new Hsl()
-  if (c instanceof Hsl) return c
-  const rgbC = c.rgb()
-  const r = rgbC.r / 255
-  const g = rgbC.g / 255
-  const b = rgbC.b / 255
-  const min = Math.min(r, g, b)
-  const max = Math.max(r, g, b)
-  let h = NaN
-  let s = max - min
-  const l = (max + min) / 2
-  if (s) {
-    if (r === max) h = (g - b) / s + (g < b ? 1 : 0) * 6
-    else if (g === max) h = (b - r) / s + 2
-    else h = (r - g) / s + 4
-    s /= l < 0.5 ? max + min : 2 - max - min
-    h *= 60
-  } else {
-    s = l > 0 && l < 1 ? 0 : h
-  }
-  return new Hsl(h, s, l, rgbC.opacity)
-}
-
-export function hsl(h?: unknown, s?: unknown, l?: unknown, opacity?: unknown): Hsl {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  return arguments.length === 1 ? hslConvert(h) : new Hsl(h as any, s as any, l as any, opacity == null ? 1 : (opacity as number))
-}
+// --- HSL --------------------------------------------------------------------------
 
 export class Hsl extends Color {
   declare readonly h: number
@@ -297,101 +254,108 @@ export class Hsl extends Color {
     this.opacity = +(opacity as number)
   }
 
-  brighter(k?: number): Hsl {
-    const m = k == null ? brighter : Math.pow(brighter, k)
-    return new Hsl(this.h, this.s, this.l * m, this.opacity)
+  brighter(steps?: number | null): Hsl {
+    return new Hsl(this.h, this.s, this.l * gain(brighter, steps), this.opacity)
   }
 
-  darker(k?: number): Hsl {
-    const m = k == null ? darker : Math.pow(darker, k)
-    return new Hsl(this.h, this.s, this.l * m, this.opacity)
+  darker(steps?: number | null): Hsl {
+    return new Hsl(this.h, this.s, this.l * gain(darker, steps), this.opacity)
   }
 
   override rgb(): Rgb {
     const h = this.h % 360 + (this.h < 0 ? 1 : 0) * 360
     const s = isNaN(h) || isNaN(this.s) ? 0 : this.s
     const l = this.l
-    const m2 = l + (l < 0.5 ? l : 1 - l) * s
-    const m1 = 2 * l - m2
+    const upper = l + (l < 0.5 ? l : 1 - l) * s
+    const lower = 2 * l - upper
     return new Rgb(
-      hsl2rgb(h >= 240 ? h - 240 : h + 120, m1, m2),
-      hsl2rgb(h, m1, m2),
-      hsl2rgb(h < 120 ? h + 240 : h - 120, m1, m2),
+      hslChannel(h >= 240 ? h - 240 : h + 120, lower, upper),
+      hslChannel(h, lower, upper),
+      hslChannel(h < 120 ? h + 240 : h - 120, lower, upper),
       this.opacity,
     )
   }
 
   clamp(): Hsl {
-    return new Hsl(clamph(this.h), clampt(this.s), clampt(this.l), clampa(this.opacity))
+    return new Hsl(clampHue(this.h), clampUnit(this.s), clampUnit(this.l), clampOpacity(this.opacity))
   }
 
   override displayable(): boolean {
-    return (0 <= this.s && this.s <= 1 || isNaN(this.s))
-      && (0 <= this.l && this.l <= 1)
-      && (0 <= this.opacity && this.opacity <= 1)
+    return (0 <= this.s && this.s <= 1 || isNaN(this.s)) && 0 <= this.l && this.l <= 1 && 0 <= this.opacity && this.opacity <= 1
   }
 
   override formatHsl(): string {
-    const a = clampa(this.opacity)
-    return `${a === 1 ? 'hsl(' : 'hsla('}${clamph(this.h)}, ${clampt(this.s) * 100}%, ${clampt(this.l) * 100}%${a === 1 ? ')' : `, ${a})`}`
+    return cssFunction('hsl', [clampHue(this.h), clampUnit(this.s) * 100 + '%', clampUnit(this.l) * 100 + '%'], this.opacity)
   }
 }
 
-function clamph(value: number): number {
-  value = (value || 0) % 360
-  return value < 0 ? value + 360 : value
+/** One RGB channel (0..255) of a hue sector, given the lower and upper lightness bounds. */
+function hslChannel(hue: number, lower: number, upper: number): number {
+  const unit = hue < 60 ? lower + (upper - lower) * hue / 60
+    : hue < 180 ? upper
+    : hue < 240 ? lower + (upper - lower) * (240 - hue) / 60
+    : lower
+  return unit * 255
 }
 
-function clampt(value: number): number {
-  return Math.max(0, Math.min(1, value || 0))
-}
-
-/* From FvD 13.37, CSS Color Module Level 3 */
-function hsl2rgb(h: number, m1: number, m2: number): number {
-  return (h < 60 ? m1 + (m2 - m1) * h / 60
-    : h < 180 ? m2
-    : h < 240 ? m1 + (m2 - m1) * (240 - h) / 60
-    : m1) * 255
-}
-
-// --- Lab / HCL ---------------------------------------------------------------
-
-// https://observablehq.com/@mbostock/lab-and-rgb
-const K = 18
-const Xn = 0.96422
-const Yn = 1
-const Zn = 0.82521
-const t0 = 4 / 29
-const t1 = 6 / 29
-const t2 = 3 * t1 * t1
-const t3 = t1 * t1 * t1
-
-function labConvert(o: unknown): Lab {
-  if (o instanceof Lab) return new Lab(o.l, o.a, o.b, o.opacity)
-  if (o instanceof Hcl) return hcl2lab(o)
-  const c = o instanceof Rgb ? o : rgbConvert(o)
-  const r = rgb2lrgb(c.r)
-  const g = rgb2lrgb(c.g)
-  const b = rgb2lrgb(c.b)
-  const y = xyz2lab((0.2225045 * r + 0.7168786 * g + 0.0606169 * b) / Yn)
-  let x: number
-  let z: number
-  if (r === g && g === b) x = z = y
-  else {
-    x = xyz2lab((0.4360747 * r + 0.3850649 * g + 0.1430804 * b) / Xn)
-    z = xyz2lab((0.0139322 * r + 0.0971045 * g + 0.7141733 * b) / Zn)
+export function hslConvert(input: unknown): Hsl {
+  if (input instanceof Hsl) return new Hsl(input.h, input.s, input.l, input.opacity)
+  const parsed = input instanceof Color ? input : color(input)
+  if (!parsed) return new Hsl()
+  if (parsed instanceof Hsl) return parsed
+  const rgbColor = parsed.rgb()
+  const r = rgbColor.r / 255
+  const g = rgbColor.g / 255
+  const b = rgbColor.b / 255
+  const lo = Math.min(r, g, b)
+  const hi = Math.max(r, g, b)
+  const l = (hi + lo) / 2
+  let h = NaN
+  let s = hi - lo
+  if (s) {
+    h = r === hi ? (g - b) / s + (g < b ? 1 : 0) * 6
+      : g === hi ? (b - r) / s + 2
+      : (r - g) / s + 4
+    s /= l < 0.5 ? hi + lo : 2 - hi - lo
+    h *= 60
+  } else {
+    s = l > 0 && l < 1 ? 0 : h
   }
-  return new Lab(116 * y - 16, 500 * (x - y), 200 * (y - z), c.opacity)
+  return new Hsl(h, s, l, rgbColor.opacity)
 }
 
-export function gray(l: number, opacity?: number): Lab {
-  return new Lab(l, 0, 0, opacity == null ? 1 : opacity)
-}
+export const hsl = colorFactory(hslConvert, (h, s, l, o) => new Hsl(h, s, l, o))
 
-export function lab(l?: unknown, a?: unknown, b?: unknown, opacity?: unknown): Lab {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  return arguments.length === 1 ? labConvert(l) : new Lab(l as any, a as any, b as any, opacity == null ? 1 : (opacity as number))
-}
+// --- Lab and HCL (CIE Lab under the D50 white point) --------------------------------
+
+const LAB_STEP = 18
+const WHITE_X = 0.96422
+const WHITE_Y = 1
+const WHITE_Z = 0.82521
+const KNEE = 6 / 29
+const LOW_OFFSET = 4 / 29
+const LOW_SLOPE = 3 * KNEE * KNEE
+const KNEE_CUBED = KNEE * KNEE * KNEE
+
+/** Linear sRGB to D50 XYZ, one row per output. */
+const LINEAR_TO_XYZ = [
+  [0.4360747, 0.3850649, 0.1430804],
+  [0.2225045, 0.7168786, 0.0606169],
+  [0.0139322, 0.0971045, 0.7141733],
+] as const
+/** D50 XYZ to linear sRGB. */
+const XYZ_TO_LINEAR = [
+  [3.1338561, -1.6168667, -0.4906146],
+  [-0.9787684, 1.9161415, 0.0334540],
+  [0.0719453, -0.2289914, 1.4052427],
+] as const
+
+const dot = (row: readonly number[], a: number, b: number, c: number): number => row[0]! * a + row[1]! * b + row[2]! * c
+
+const encodeGamma = (v: number): number => 255 * (v <= 0.0031308 ? 12.92 * v : 1.055 * Math.pow(v, 1 / 2.4) - 0.055)
+const decodeGamma = (byte: number): number => ((byte /= 255) <= 0.04045 ? byte / 12.92 : Math.pow((byte + 0.055) / 1.055, 2.4))
+const labCompress = (t: number): number => (t > KNEE_CUBED ? Math.pow(t, 1 / 3) : t / LOW_SLOPE + LOW_OFFSET)
+const labExpand = (t: number): number => (t > KNEE ? t * t * t : LOW_SLOPE * (t - LOW_OFFSET))
 
 export class Lab extends Color {
   declare readonly l: number
@@ -407,62 +371,49 @@ export class Lab extends Color {
     this.opacity = +(opacity as number)
   }
 
-  brighter(k?: number): Lab {
-    return new Lab(this.l + K * (k == null ? 1 : k), this.a, this.b, this.opacity)
+  brighter(steps?: number | null): Lab {
+    return new Lab(this.l + LAB_STEP * (steps == null ? 1 : steps), this.a, this.b, this.opacity)
   }
 
-  darker(k?: number): Lab {
-    return new Lab(this.l - K * (k == null ? 1 : k), this.a, this.b, this.opacity)
+  darker(steps?: number | null): Lab {
+    return new Lab(this.l - LAB_STEP * (steps == null ? 1 : steps), this.a, this.b, this.opacity)
   }
 
   override rgb(): Rgb {
-    let y = (this.l + 16) / 116
-    let x = isNaN(this.a) ? y : y + this.a / 500
-    let z = isNaN(this.b) ? y : y - this.b / 200
-    x = Xn * lab2xyz(x)
-    y = Yn * lab2xyz(y)
-    z = Zn * lab2xyz(z)
+    const fy = (this.l + 16) / 116
+    const fx = isNaN(this.a) ? fy : fy + this.a / 500
+    const fz = isNaN(this.b) ? fy : fy - this.b / 200
+    const x = WHITE_X * labExpand(fx)
+    const y = WHITE_Y * labExpand(fy)
+    const z = WHITE_Z * labExpand(fz)
     return new Rgb(
-      lrgb2rgb(3.1338561 * x - 1.6168667 * y - 0.4906146 * z),
-      lrgb2rgb(-0.9787684 * x + 1.9161415 * y + 0.0334540 * z),
-      lrgb2rgb(0.0719453 * x - 0.2289914 * y + 1.4052427 * z),
+      encodeGamma(dot(XYZ_TO_LINEAR[0], x, y, z)),
+      encodeGamma(dot(XYZ_TO_LINEAR[1], x, y, z)),
+      encodeGamma(dot(XYZ_TO_LINEAR[2], x, y, z)),
       this.opacity,
     )
   }
 }
 
-function xyz2lab(t: number): number {
-  return t > t3 ? Math.pow(t, 1 / 3) : t / t2 + t0
+function labConvert(input: unknown): Lab {
+  if (input instanceof Lab) return new Lab(input.l, input.a, input.b, input.opacity)
+  if (input instanceof Hcl) return hclToLab(input)
+  const { r, g, b, opacity } = input instanceof Rgb ? input : rgbConvert(input)
+  const lr = decodeGamma(r)
+  const lg = decodeGamma(g)
+  const lb = decodeGamma(b)
+  const fy = labCompress(dot(LINEAR_TO_XYZ[1], lr, lg, lb) / WHITE_Y)
+  // a neutral colour has identical X, Y and Z ratios; skip the matrix rows that would round them apart
+  const neutral = lr === lg && lg === lb
+  const fx = neutral ? fy : labCompress(dot(LINEAR_TO_XYZ[0], lr, lg, lb) / WHITE_X)
+  const fz = neutral ? fy : labCompress(dot(LINEAR_TO_XYZ[2], lr, lg, lb) / WHITE_Z)
+  return new Lab(116 * fy - 16, 500 * (fx - fy), 200 * (fy - fz), opacity)
 }
 
-function lab2xyz(t: number): number {
-  return t > t1 ? t * t * t : t2 * (t - t0)
-}
+export const lab = colorFactory(labConvert, (l, a, b, o) => new Lab(l, a, b, o))
 
-function lrgb2rgb(x: number): number {
-  return 255 * (x <= 0.0031308 ? 12.92 * x : 1.055 * Math.pow(x, 1 / 2.4) - 0.055)
-}
-
-function rgb2lrgb(x: number): number {
-  return (x /= 255) <= 0.04045 ? x / 12.92 : Math.pow((x + 0.055) / 1.055, 2.4)
-}
-
-function hclConvert(o: unknown): Hcl {
-  if (o instanceof Hcl) return new Hcl(o.h, o.c, o.l, o.opacity)
-  const c = o instanceof Lab ? o : labConvert(o)
-  if (c.a === 0 && c.b === 0) return new Hcl(NaN, 0 < c.l && c.l < 100 ? 0 : NaN, c.l, c.opacity)
-  const h = Math.atan2(c.b, c.a) * degrees
-  return new Hcl(h < 0 ? h + 360 : h, Math.sqrt(c.a * c.a + c.b * c.b), c.l, c.opacity)
-}
-
-export function lch(l?: unknown, c?: unknown, h?: unknown, opacity?: unknown): Hcl {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  return arguments.length === 1 ? hclConvert(l) : new Hcl(h as any, c as any, l as any, opacity == null ? 1 : (opacity as number))
-}
-
-export function hcl(h?: unknown, c?: unknown, l?: unknown, opacity?: unknown): Hcl {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  return arguments.length === 1 ? hclConvert(h) : new Hcl(h as any, c as any, l as any, opacity == null ? 1 : (opacity as number))
+export function gray(l: number, opacity?: number): Lab {
+  return new Lab(l, 0, 0, opacity == null ? 1 : opacity)
 }
 
 export class Hcl extends Color {
@@ -479,26 +430,38 @@ export class Hcl extends Color {
     this.opacity = +(opacity as number)
   }
 
-  brighter(k?: number): Hcl {
-    return new Hcl(this.h, this.c, this.l + K * (k == null ? 1 : k), this.opacity)
+  brighter(steps?: number | null): Hcl {
+    return new Hcl(this.h, this.c, this.l + LAB_STEP * (steps == null ? 1 : steps), this.opacity)
   }
 
-  darker(k?: number): Hcl {
-    return new Hcl(this.h, this.c, this.l - K * (k == null ? 1 : k), this.opacity)
+  darker(steps?: number | null): Hcl {
+    return new Hcl(this.h, this.c, this.l - LAB_STEP * (steps == null ? 1 : steps), this.opacity)
   }
 
   override rgb(): Rgb {
-    return hcl2lab(this).rgb()
+    return hclToLab(this).rgb()
   }
 }
 
-function hcl2lab(o: Hcl): Lab {
-  if (isNaN(o.h)) return new Lab(o.l, 0, 0, o.opacity)
-  const h = o.h * radians
-  return new Lab(o.l, Math.cos(h) * o.c, Math.sin(h) * o.c, o.opacity)
+function hclToLab(c: Hcl): Lab {
+  if (isNaN(c.h)) return new Lab(c.l, 0, 0, c.opacity)
+  const angle = c.h * RADIANS
+  return new Lab(c.l, Math.cos(angle) * c.c, Math.sin(angle) * c.c, c.opacity)
 }
 
-// --- Cubehelix ---------------------------------------------------------------
+function hclConvert(input: unknown): Hcl {
+  if (input instanceof Hcl) return new Hcl(input.h, input.c, input.l, input.opacity)
+  const { l, a, b, opacity } = input instanceof Lab ? input : labConvert(input)
+  if (a === 0 && b === 0) return new Hcl(NaN, 0 < l && l < 100 ? 0 : NaN, l, opacity)
+  const h = Math.atan2(b, a) * DEGREES
+  return new Hcl(h < 0 ? h + 360 : h, Math.sqrt(a * a + b * b), l, opacity)
+}
+
+export const hcl = colorFactory(hclConvert, (h, c, l, o) => new Hcl(h, c, l, o))
+/** `lch(l, c, h)` is `hcl(h, c, l)` with the channels in the other order. */
+export const lch = colorFactory(hclConvert, (l, c, h, o) => new Hcl(h, c, l, o))
+
+// --- Cubehelix --------------------------------------------------------------------
 
 const CH_A = -0.14861
 const CH_B = +1.78277
@@ -508,26 +471,6 @@ const CH_E = +1.97294
 const CH_ED = CH_E * CH_D
 const CH_EB = CH_E * CH_B
 const CH_BC_DA = CH_B * CH_C - CH_D * CH_A
-
-function cubehelixConvert(o: unknown): Cubehelix {
-  if (o instanceof Cubehelix) return new Cubehelix(o.h, o.s, o.l, o.opacity)
-  const c = o instanceof Rgb ? o : rgbConvert(o)
-  const r = c.r / 255
-  const g = c.g / 255
-  const b = c.b / 255
-  const l = (CH_BC_DA * b + CH_ED * r - CH_EB * g) / (CH_BC_DA + CH_ED - CH_EB)
-  const bl = b - l
-  const k = (CH_E * (g - l) - CH_C * bl) / CH_D
-  const s = Math.sqrt(k * k + bl * bl) / (CH_E * l * (1 - l)) // NaN if l=0 or l=1
-  const h = s ? Math.atan2(k, bl) * degrees - 120 : NaN
-  return new Cubehelix(h < 0 ? h + 360 : h, s, l, c.opacity)
-}
-
-/** d3-color's `cubehelix`: one argument parses/converts, four construct. */
-export function cubehelix(h?: unknown, s?: unknown, l?: unknown, opacity?: unknown): Cubehelix {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  return arguments.length === 1 ? cubehelixConvert(h) : new Cubehelix(h as any, s as any, l as any, opacity == null ? 1 : (opacity as number))
-}
 
 export class Cubehelix extends Color {
   declare readonly h: number
@@ -543,27 +486,41 @@ export class Cubehelix extends Color {
     this.opacity = +(opacity as number)
   }
 
-  brighter(k?: number): Cubehelix {
-    const m = k == null ? brighter : Math.pow(brighter, k)
-    return new Cubehelix(this.h, this.s, this.l * m, this.opacity)
+  brighter(steps?: number | null): Cubehelix {
+    return new Cubehelix(this.h, this.s, this.l * gain(brighter, steps), this.opacity)
   }
 
-  darker(k?: number): Cubehelix {
-    const m = k == null ? darker : Math.pow(darker, k)
-    return new Cubehelix(this.h, this.s, this.l * m, this.opacity)
+  darker(steps?: number | null): Cubehelix {
+    return new Cubehelix(this.h, this.s, this.l * gain(darker, steps), this.opacity)
   }
 
   override rgb(): Rgb {
-    const h = isNaN(this.h) ? 0 : (this.h + 120) * radians
+    const angle = isNaN(this.h) ? 0 : (this.h + 120) * RADIANS
     const l = +this.l
-    const a = isNaN(this.s) ? 0 : this.s * l * (1 - l)
-    const cosh = Math.cos(h)
-    const sinh = Math.sin(h)
+    const amp = isNaN(this.s) ? 0 : this.s * l * (1 - l)
+    const cos = Math.cos(angle)
+    const sin = Math.sin(angle)
     return new Rgb(
-      255 * (l + a * (CH_A * cosh + CH_B * sinh)),
-      255 * (l + a * (CH_C * cosh + CH_D * sinh)),
-      255 * (l + a * (CH_E * cosh)),
+      255 * (l + amp * (CH_A * cos + CH_B * sin)),
+      255 * (l + amp * (CH_C * cos + CH_D * sin)),
+      255 * (l + amp * (CH_E * cos)),
       this.opacity,
     )
   }
 }
+
+function cubehelixConvert(input: unknown): Cubehelix {
+  if (input instanceof Cubehelix) return new Cubehelix(input.h, input.s, input.l, input.opacity)
+  const source = input instanceof Rgb ? input : rgbConvert(input)
+  const r = source.r / 255
+  const g = source.g / 255
+  const b = source.b / 255
+  const l = (CH_BC_DA * b + CH_ED * r - CH_EB * g) / (CH_BC_DA + CH_ED - CH_EB)
+  const bl = b - l
+  const k = (CH_E * (g - l) - CH_C * bl) / CH_D
+  const s = Math.sqrt(k * k + bl * bl) / (CH_E * l * (1 - l))
+  const h = s ? Math.atan2(k, bl) * DEGREES - 120 : NaN
+  return new Cubehelix(h < 0 ? h + 360 : h, s, l, source.opacity)
+}
+
+export const cubehelix = colorFactory(cubehelixConvert, (h, s, l, o) => new Cubehelix(h, s, l, o))
