@@ -10,9 +10,9 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import { AlphaCanvas } from '../../core/src/raster.js'
-import { SHAPES, type RasterShape } from './raster-shapes.js'
+import { GENERATED_SHAPES, SHAPES, type RasterShape } from './raster-shapes.js'
 
-const FIXTURES = JSON.parse(readFileSync(new URL('./raster-fixtures.json', import.meta.url), 'utf8')) as { browser: string; alpha: Record<string, number[]> }
+const FIXTURES = JSON.parse(readFileSync(new URL('./raster-fixtures.json', import.meta.url), 'utf8')) as { browser: string; alpha: Record<string, number[]>; baseline: Record<string, { mask: number; abs: number }> }
 
 function draw(s: RasterShape): Uint8Array {
   const c = new AlphaCanvas(s.w, s.h) as unknown as Record<string, unknown> & { alpha: Uint8Array }
@@ -57,5 +57,27 @@ describe(`raster.ts against ${FIXTURES.browser}'s canvas`, () => {
     // the browser draws some of the eight identically (those within a quarter-pixel step): so must the engine, the same ones
     expect(chrome).toContain('r')
     expect(engine).toBe(chrome)
+  })
+
+  // The generated drawings (curves of every size, arcs of every sweep, transformed circles, every cap and join, dashes) hold the
+  // engine to a ratchet: no more pixels may disagree with the browser on "has any alpha", and the summed alpha difference may not
+  // grow, than when the baseline was recorded (`scripts/raster-fixtures.mts`). A change to how curves are cut, how vertices snap
+  // or how coverage is summed moves these numbers.
+  describe('generated drawings (ratchet against the recorded disagreement)', () => {
+    for (const s of GENERATED_SHAPES) {
+      it(s.name, () => {
+        const want = FIXTURES.alpha[s.name]!
+        const base = FIXTURES.baseline[s.name]!
+        const got = draw(s)
+        let mask = 0
+        let abs = 0
+        for (let i = 0; i < want.length; i++) {
+          if ((want[i] !== 0) !== (got[i] !== 0)) mask++
+          abs += Math.abs(want[i]! - got[i]!)
+        }
+        expect(mask, 'pixels whose "has any alpha" differs from the browser').toBeLessThanOrEqual(base.mask)
+        expect(abs, 'summed alpha difference from the browser').toBeLessThanOrEqual(base.abs)
+      })
+    }
   })
 })
