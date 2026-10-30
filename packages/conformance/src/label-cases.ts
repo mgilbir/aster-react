@@ -28,7 +28,7 @@ const NAMES = ['a', 'bb', 'Ccc', 'dddd', 'Eeeeee', 'ff fff', 'ggggggggg', 'hh hh
  * (glyph coverage is not modelled, see `AlphaCanvas.fillText`) and no area label by search (floodfill / reduced-search read single
  * pixels of the area's outline, so antialiasing differences move the label).
  */
-export function labelCase(seed: number, exact = false): LabelCase {
+export function labelCase(seed: number, exact = false, force: { kind?: string; method?: string } = {}): LabelCase {
   const r = stream(seed * 6151 + 29)
   const int = (n: number): number => Math.floor(r() * n)
   const pick = <T,>(xs: readonly T[]): T => xs[int(xs.length)]!
@@ -72,7 +72,7 @@ export function labelCase(seed: number, exact = false): LabelCase {
     (name) => ({ name, type: 'symbol', from: { data: 'd' }, encode: { enter: { x: px(), y: py(), size: { field: 's' }, shape: { value: pick(SHAPES) }, angle: { value: pick([0, 30, 90]) }, ...paintOf() } } }),
     (name) => ({ name, type: 'rect', from: { data: 'd' }, encode: { enter: { x: px(), width: { field: 'w' }, y: py(), height: { field: 'h' }, ...paintOf(), cornerRadius: { value: pick([0, 0, 4]) } } } }),
     (name) => ({ name, type: 'rule', from: { data: 'd' }, encode: { enter: { x: px(), x2: { signal: 'datum.w * 3 + 10' }, y: py(), stroke: { value: '#777' }, strokeWidth: { value: pick([1, 3, 12, 14]) }, strokeDash: { value: pick([[], [6, 4], [2, 8], [40, 30], [14, 40]]) }, ...(chance(0.3) ? { strokeDashOffset: { value: pick([5, 20]) } } : {}), strokeCap: { value: pick(['butt', 'round', 'square']) } } } }),
-    (name) => ({ name, type: 'arc', from: { data: 'd' }, encode: { enter: { x: px(), y: py(), innerRadius: { signal: 'datum.w / 4' }, outerRadius: { signal: 'datum.w / 2 + 6' }, startAngle: { signal: 'datum.v * 3' }, endAngle: { signal: 'datum.v * 3 + 1 + datum.h / 10' }, ...paintOf(), padAngle: { value: pick([0, 0.05]) }, cornerRadius: { value: pick([0, 3]) } } } }),
+    (name) => ({ name, type: 'arc', from: { data: 'd' }, encode: { enter: { x: px(), y: py(), innerRadius: { signal: 'datum.w / 4' }, outerRadius: { signal: 'datum.w / 2 + 6' }, startAngle: { signal: 'datum.v * 3' }, endAngle: { signal: 'datum.v * 3 + 1 + datum.h / 10' }, angle: { value: pick([0, 0, 30, -20]) }, ...paintOf(), padAngle: { value: pick([0, 0.05]) }, cornerRadius: { value: pick([0, 3]) } } } }),
     (name) => ({ name, type: 'text', from: { data: 'd' }, encode: { enter: { x: px(), y: py(), text: { value: pick(['MMMMM', 'ii', 'multi\nline']) }, fontSize: { value: pick([8, 12, 18]) }, angle: { value: pick([0, 0, 45, 90]) }, align: { value: pick(['left', 'center', 'right']) }, baseline: { value: pick(['top', 'middle', 'bottom', 'alphabetic']) }, fill: { value: '#000' }, ...(chance(0.3) ? { stroke: { value: '#f00' } } : {}) } } }),
     (name) => ({ name, type: 'path', from: { data: 'd' }, encode: { enter: { x: px(), y: py(), path: { field: 'path' }, angle: { value: pick([0, 20]) }, scaleX: { value: pick([1, 1.5]) }, ...paintOf(), strokeJoin: { value: pick(['miter', 'round', 'bevel']) } } } }),
     (name) => ({ name, type: 'line', from: { data: 'd' }, sort: { field: 'datum.x' }, encode: { enter: { x: px(), y: py(), stroke: { value: '#c33' }, strokeWidth: { value: pick([1, 3, 10]) }, strokeDash: { value: pick([[], [], [30, 30], [8, 20]]) }, interpolate: { value: pick(['linear', 'step', 'monotone', 'basis']) } } } }),
@@ -83,7 +83,7 @@ export function labelCase(seed: number, exact = false): LabelCase {
   const avoidMarks = (count: number): Spec[] => Array.from({ length: count }, (_, i) => pick(drawable)(`av${i}`))
 
   const kinds = ['symbol', 'symbol', 'rect', 'rule', 'arc', 'text', 'path', 'line', 'area', 'group-line', 'group-line', 'group-area', 'tuples'] as const
-  const kind = pick(exact ? kinds.filter((k) => k !== 'text') : kinds)
+  const kind = force.kind ?? pick(exact ? kinds.filter((k) => k !== 'text') : kinds)
   const fontSize = pick([7, 9, 11, 14, 20])
   const textEnc = {
     text: { field: 'datum.name' }, fontSize: { value: fontSize },
@@ -132,7 +132,7 @@ export function labelCase(seed: number, exact = false): LabelCase {
     const useIndex = markIndex === 1
     const groupLabel: Spec = {
       ...label,
-      ...(area ? { method: pick(exact ? ['naive'] : ['naive', 'floodfill', 'reduced-search']) } : { lineAnchor: pick(['start', 'end']) }),
+      ...(area ? { method: ((m) => force.method ?? m)(pick(exact ? ['naive'] : ['naive', 'floodfill', 'reduced-search'])) } : { lineAnchor: pick(['start', 'end']) }),
       ...(useIndex ? { markIndex } : {}),
       ...(area && chance(0.5) ? { markIndex: 0 } : {}),
     }
@@ -167,8 +167,8 @@ export function labelCase(seed: number, exact = false): LabelCase {
   }
   const base = baseByKind[kind]!
   // (known gaps outside the label transform, found by this generator and left out of the base mark: the item bounds of an arc with a
-  // corner radius or pad angle, of a trail, and the order of the items of a sorted line / area, which a mark of `from: base` reads)
-  if (kind === 'arc') { const e = (base.encode as { enter: Spec }).enter; delete e.cornerRadius; delete e.padAngle }
+  // corner radius, pad angle or angle, of a trail, and the order of the items of a sorted line / area, which a mark of `from: base` reads)
+  if (kind === 'arc') { const e = (base.encode as { enter: Spec }).enter; delete e.cornerRadius; delete e.padAngle; delete e.angle }
   delete base.sort
   if (chance(0.25)) (label.avoidMarks as string[] | undefined) ? (label.avoidMarks as string[]).push('base') : (label.avoidMarks = ['base'])
   const spec: Spec = {

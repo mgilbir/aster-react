@@ -23,6 +23,7 @@ type VegaOut = Record<string, { items?: Row[]; error?: string }>
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const SEEDS = Number(process.env.LABEL_SEEDS ?? 160)
+const AREA_SEEDS = Number(process.env.LABEL_AREA_SEEDS ?? 90)
 const BROWSER_SEEDS = Number(process.env.LABEL_BROWSER_SEEDS ?? 40)
 
 function runVega(cases: LabelCase[]): VegaOut {
@@ -50,6 +51,11 @@ const same = (a: unknown, b: unknown): boolean => a === b || (typeof a === 'numb
 describe('label: generated specs vs vega-label', () => {
   it(`${SEEDS} generated specs: every label the same x, y, opacity, align and baseline (Node, shared rasterizer)`, { timeout: 600_000 }, () => {
     const cases = Array.from({ length: SEEDS }, (_, i) => labelCase(i + 1))
+    // the searches for a label inside an area, which the spread above meets a few times: the cells a flood has visited are kept from
+    // one label to the next, and whether an area's neighbour has been flooded into shows in one spec of about twelve
+    for (let i = 0; i < AREA_SEEDS; i++) {
+      for (const method of ['floodfill', 'reduced-search']) cases.push({ ...labelCase(5000 + i, false, { kind: 'group-area', method }), id: `area-${method}-${i}` })
+    }
     // a size that is not a pair: both log the error and leave the labels as they were
     for (const [id, size] of [['size-one', [100]], ['size-three', [100, 100, 100]]] as const) {
       const base = labelCase(2)
