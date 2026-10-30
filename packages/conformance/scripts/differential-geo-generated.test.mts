@@ -115,15 +115,32 @@ function viaAster(params: Record<string, Json>): Any | null {
 
 const radiusFn = (g: any): number => (g && g.type === 'Point' ? 7 : g && g.type === 'MultiPoint' ? 2.5 : 5)
 
-/** Everything one probe reports about one projection; same keys, same order, on both sides. */
+/** Whether a GeoJSON object draws any point (a Point / MultiPoint anywhere inside it). */
+function drawsPoints(g: any): boolean {
+  if (!g || typeof g !== 'object') return false
+  if (g.type === 'Point' || g.type === 'MultiPoint') return true
+  if (g.type === 'Feature') return drawsPoints(g.geometry)
+  if (g.type === 'FeatureCollection') return g.features.some((f: any) => drawsPoints(f.geometry))
+  if (g.type === 'GeometryCollection') return g.geometries.some(drawsPoints)
+  return false
+}
+
+/**
+ * Everything one probe reports about one projection; same keys, same order, on both sides.
+ *
+ * Full-precision paths (`digits(null)`) are asked of point-free shapes only: d3's path string keeps one
+ * module-level "current append function" for its cached point circle, and drawing a point with `digits(null)`
+ * leaves it set to the unrounded one, so every later default-digits path of the process comes out unrounded too.
+ * Vega never sets `digits`, so that state is unreachable from a spec, and Aster does not carry it.
+ */
 function observe(probe: Probe, points: number[][], pixels: number[][], shapes: Json[]): Record<string, unknown> {
   const out: Record<string, unknown> = { config: probe.config() }
   points.forEach((pt, i) => (out[`project#${i}`] = exact(() => probe.project(pt))))
   pixels.forEach((xy, i) => (out[`invert#${i}`] = exact(() => probe.invert(xy))))
   shapes.forEach((g, i) => {
     out[`path#${i}`] = exact(() => probe.path(g, {}))
-    out[`path-full#${i}`] = exact(() => probe.path(g, { digits: null }))
-    out[`path-r#${i}`] = exact(() => probe.path(g, { digits: null, radius: 3.25 }))
+    if (!drawsPoints(g)) out[`path-full#${i}`] = exact(() => probe.path(g, { digits: null }))
+    out[`path-r#${i}`] = exact(() => probe.path(g, { radius: 3.25 }))
     out[`path-rfn#${i}`] = exact(() => probe.path(g, { radius: radiusFn }))
     out[`planar#${i}`] = probe.planar(g)
   })
