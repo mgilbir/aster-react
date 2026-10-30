@@ -78,7 +78,7 @@ function genNumberLocale(r: Rng): Record<string, unknown> {
   set('numerals', [undefined, undefined, DIGITS, ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j']])
   set('percent', [undefined, '%', ' %', '‰', ''])
   set('minus', [undefined, '-', '−', '–', '', '− '])
-  set('nan', [undefined, 'NaN', 'n/a', '', '—'])
+  set('nan', [undefined, 'NaN', 'n/a', '', '—', '1.500', '0.', '10.00', '.50', '2.0e5', '0'])
   if (r.chance(0.04)) {
     const [k, v] = r.pick<[string, unknown]>([
       ['grouping', 5], ['grouping', 'abc'], ['numerals', 'abc'], ['numerals', 5], ['currency', null], ['thousands', 5],
