@@ -384,6 +384,16 @@ export function sortData<T>(array: T[], compare: (a: T, b: T) => number): T[] {
   return Reflect.apply(nativeSort, array, [compare]) as T[]
 }
 
+/**
+ * The `sort` expression function: upstream is `x.slice().sort(ascending)` on whatever it is handed, so a value whose copy
+ * has no `sort` (a string) throws that TypeError, and a typed array sorts natively. An array copy goes through `sortData`.
+ * (The call is spelled `x.slice().sort(...)` because the TypeError names it.)
+ */
+export function sortSlice(x: { slice(): unknown }, compare: (a: unknown, b: unknown) => number): unknown {
+  const copy = x.slice()
+  return Array.isArray(copy) ? sortData(copy as unknown[], compare) : (x.slice() as { sort(c: unknown): unknown }).sort(compare)
+}
+
 // --- extents -----------------------------------------------------------------
 
 /**
