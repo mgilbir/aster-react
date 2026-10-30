@@ -142,11 +142,53 @@ interface SphericalOptions {
 
 const scratch: number[] = [0, 0]
 
+/** A projection with a scale, a translation, reflections and an optional clip rectangle on the page. */
+abstract class PlacedProjection extends Projection {
+  protected k = 150
+  protected tx = 480
+  protected ty = 250
+  protected sx = 1
+  protected sy = 1
+  protected extent: Extent | null = null
+  protected rect: Rectangle | null = null
+
+  get scale(): number {
+    return this.k
+  }
+  get translate(): [number, number] {
+    return [this.tx, this.ty]
+  }
+  get clipExtent(): Extent | null {
+    return this.extent && [[this.extent[0][0], this.extent[0][1]], [this.extent[1][0], this.extent[1][1]]]
+  }
+  get reflectX(): boolean {
+    return this.sx < 0
+  }
+  get reflectY(): boolean {
+    return this.sy < 0
+  }
+
+  protected override clipExtentOrNothing(): Extent | null {
+    return this.clipExtent
+  }
+
+  override setClipExtent(extent: ArrayLike<ArrayLike<unknown>> | null): void {
+    if (extent == null) {
+      this.extent = null
+      this.rect = null
+      return
+    }
+    const x0 = +(extent[0]![0] as number)
+    const y0 = +(extent[0]![1] as number)
+    const x1 = +(extent[1]![0] as number)
+    const y1 = +(extent[1]![1] as number)
+    this.extent = [[x0, y0], [x1, y1]]
+    this.rect = new Rectangle(x0, y0, x1, y1)
+  }
+}
+
 /** A projection of the sphere: raw projection, rotation, clipping, resampling, scale and translation. */
-class SphericalProjection extends Projection {
-  private k = 150
-  private tx = 480
-  private ty = 250
+class SphericalProjection extends PlacedProjection {
   /** the centre of the map, radians */
   private lambda = 0
   private phi = 0
@@ -154,12 +196,8 @@ class SphericalProjection extends Projection {
   private rotLambda = 0
   private rotPhi = 0
   private rotGamma = 0
-  private sx = 1
-  private sy = 1
   private theta: number | null = null
   private clipper: SphereClipper = antimeridian
-  private extent: Extent | null = null
-  private rect: Rectangle | null = null
   /** squared resampling precision */
   private delta2 = 0.5
   private phi0 = 0
@@ -223,12 +261,6 @@ class SphericalProjection extends Projection {
 
   /* ---- reading the state ----------------------------------------------------------------------- */
 
-  get scale(): number {
-    return this.k
-  }
-  get translate(): [number, number] {
-    return [this.tx, this.ty]
-  }
   get center(): [number, number] {
     const c: [number, number] = [this.lambda * DEGREES, this.phi * DEGREES]
     return this.options.cylinder?.quarterTurn ? [c[1], -c[0]] : c
@@ -239,20 +271,11 @@ class SphericalProjection extends Projection {
   get clipAngle(): number {
     return (this.theta as number) * DEGREES
   }
-  get clipExtent(): Extent | null {
-    return this.extent && [[this.extent[0][0], this.extent[0][1]], [this.extent[1][0], this.extent[1][1]]]
-  }
   get precision(): number {
     return Math.sqrt(this.delta2)
   }
   get parallels(): [number, number] | undefined {
     return this.options.conic ? [this.phi0 * DEGREES, this.phi1 * DEGREES] : undefined
-  }
-  get reflectX(): boolean {
-    return this.sx < 0
-  }
-  get reflectY(): boolean {
-    return this.sy < 0
   }
 
   /* ---- changing the state ---------------------------------------------------------------------- */
@@ -267,23 +290,9 @@ class SphericalProjection extends Projection {
     }
   }
 
-  protected override setClipExtent(extent: ArrayLike<ArrayLike<unknown>> | null): void {
-    if (extent == null) {
-      this.extent = null
-      this.rect = null
-    } else {
-      const x0 = +(extent[0]![0] as number)
-      const y0 = +(extent[0]![1] as number)
-      const x1 = +(extent[1]![0] as number)
-      const y1 = +(extent[1]![1] as number)
-      this.extent = [[x0, y0], [x1, y1]]
-      this.rect = new Rectangle(x0, y0, x1, y1)
-    }
+  override setClipExtent(extent: ArrayLike<ArrayLike<unknown>> | null): void {
+    super.setClipExtent(extent)
     if (this.options.cylinder) this.reclip()
-  }
-
-  protected override clipExtentOrNothing(): Extent | null {
-    return this.clipExtent
   }
 
   setScale(k: unknown): void {
@@ -328,11 +337,6 @@ class SphericalProjection extends Projection {
     if (x !== undefined) this.sx = x ? -1 : 1
     if (y !== undefined) this.sy = y ? -1 : 1
     this.recenter()
-  }
-
-  /** Cylindrical projections only: set the clip extent and recompute the clip rectangle. */
-  setExtentOf(extent: ArrayLike<ArrayLike<unknown>> | null): void {
-    this.setClipExtent(extent)
   }
 
   configure(params: Params): void {
@@ -471,14 +475,14 @@ class AlbersUsa extends Projection {
     const x = +(t[0] as number)
     const y = +(t[1] as number)
     this.lower48.setTranslate(t)
-    this.lower48.setExtentOf([[x - 0.455 * k, y - 0.238 * k], [x + 0.455 * k, y + 0.238 * k]])
+    this.lower48.setClipExtent([[x - 0.455 * k, y - 0.238 * k], [x + 0.455 * k, y + 0.238 * k]])
     this.alaska.setTranslate([x - 0.307 * k, y + 0.201 * k])
-    this.alaska.setExtentOf([
+    this.alaska.setClipExtent([
       [x - 0.425 * k + EPSILON, y + 0.12 * k + EPSILON],
       [x - 0.214 * k - EPSILON, y + 0.234 * k - EPSILON],
     ])
     this.hawaii.setTranslate([x - 0.205 * k, y + 0.212 * k])
-    this.hawaii.setExtentOf([
+    this.hawaii.setClipExtent([
       [x - 0.214 * k + EPSILON, y + 0.166 * k + EPSILON],
       [x - 0.115 * k - EPSILON, y + 0.234 * k - EPSILON],
     ])
@@ -535,29 +539,11 @@ class AlbersUsa extends Projection {
 }
 
 /** The planar identity projection: scale, translate and reflect coordinates that are already planar. */
-class IdentityProjection extends Projection {
-  private k = 1
-  private tx = 0
-  private ty = 0
-  private sx = 1
-  private sy = 1
-  private extent: Extent | null = null
-  private rect: Rectangle | null = null
-
-  get scale(): number {
-    return this.k
-  }
-  get translate(): [number, number] {
-    return [this.tx, this.ty]
-  }
-  get clipExtent(): Extent | null {
-    return this.extent && [[this.extent[0][0], this.extent[0][1]], [this.extent[1][0], this.extent[1][1]]]
-  }
-  get reflectX(): boolean {
-    return this.sx < 0
-  }
-  get reflectY(): boolean {
-    return this.sy < 0
+class IdentityProjection extends PlacedProjection {
+  constructor() {
+    super()
+    this.k = 1
+    this.tx = this.ty = 0
   }
 
   protected setScale(k: unknown): void {
@@ -567,23 +553,6 @@ class IdentityProjection extends Projection {
     this.tx = +(t[0] as number)
     this.ty = +(t[1] as number)
   }
-  protected override clipExtentOrNothing(): Extent | null {
-    return this.clipExtent
-  }
-  protected override setClipExtent(extent: ArrayLike<ArrayLike<unknown>> | null): void {
-    if (extent == null) {
-      this.extent = null
-      this.rect = null
-      return
-    }
-    const x0 = +(extent[0]![0] as number)
-    const y0 = +(extent[0]![1] as number)
-    const x1 = +(extent[1]![0] as number)
-    const y1 = +(extent[1]![1] as number)
-    this.extent = [[x0, y0], [x1, y1]]
-    this.rect = new Rectangle(x0, y0, x1, y1)
-  }
-
   configure(params: Params): void {
     for (const key of APPLIED) {
       const v = params[key]
