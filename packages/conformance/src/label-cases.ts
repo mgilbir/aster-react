@@ -117,6 +117,8 @@ export function labelCase(seed: number, exact = false, force: { kind?: string; m
     const T = 4 + int(14)
     const series = names.slice(0, k).flatMap((c, i) => Array.from({ length: T }, (_, t) => ({ c, t, v: 10 + i * 15 + between(0, 12) + t * between(-1, 1.5) })))
     const area = kind === 'group-area'
+    // the data may run past the view: a point outside it is a cell outside the grid
+    const spill = chance(0.4)
     // a second mark in each group, so markIndex has something to choose: the line then the symbols (index 0 is the line), the symbols
     // then the line (index 1 is), or two sets of symbols (the label is placed by the bounds of the group)
     const layer = area ? pick(['alone', 'with symbols']) : pick(['alone', 'with symbols', 'symbols first', 'symbols only'])
@@ -144,8 +146,8 @@ export function labelCase(seed: number, exact = false, force: { kind?: string; m
         { name: 'pts', values: rows },
       ],
       scales: [
-        { name: 'gx', type: 'linear', domain: [-1, T], range: 'width' },
-        { name: 'gy', type: 'linear', domain: [0, area ? 200 : 100], range: 'height' },
+        { name: 'gx', type: 'linear', domain: spill ? [1 + int(3), T - 2 - int(3)] : [-1, T], range: 'width' },
+        { name: 'gy', type: 'linear', domain: [0, area ? (spill ? 120 : 200) : spill ? 60 : 100], range: 'height' },
         { name: 'c', type: 'ordinal', domain: names.slice(0, k), range: 'category' },
         ...scales,
       ],
