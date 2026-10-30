@@ -101,3 +101,55 @@ describe('applyTransformsToSharedRows', () => {
     })
   }
 })
+
+describe('rows a pipeline made are its own to write onto', () => {
+  const run = (t: Array<Record<string, unknown>>, rows: Row[] = make()): Row[] => applyTransforms(rows, t as unknown as CompiledTransform[], ctx() as never)
+
+  // each chain starts with a row-making transform and goes on through writers: the later ones write onto the rows the first made
+  const CHAINS: Array<Array<Record<string, unknown>>> = [
+    [{ type: 'bin', field: 'x', extent: [0, 11], maxbins: 4 }, { type: 'bin', field: 'y', extent: [-6, 7], maxbins: 4, as: ['y0', 'y1'] }, { type: 'bin', field: 'id', extent: [0, 30], step: 10, as: ['i0', 'i1'] }],
+    [{ type: 'formula', as: 'z', expr: 'datum.x * 2' }, { type: 'identifier', as: 'uid' }, { type: 'stack', groupby: ['g'], field: 'x' }, { type: 'formula', as: 'z', expr: 'datum.z + 1' }],
+    [{ type: 'joinaggregate', groupby: ['g'], fields: ['x'], ops: ['sum'], as: ['t'] }, { type: 'window', sort: { field: 'id' }, ops: ['rank'], as: ['r'] }, { type: 'bin', field: 'x', extent: [0, 11], maxbins: 4 }],
+    [{ type: 'filter', expr: 'datum.x > 3' }, { type: 'bin', field: 'x', extent: [0, 11], maxbins: 4 }, { type: 'filter', expr: 'datum.bin0 > 2' }, { type: 'identifier', as: 'uid' }],
+    [{ type: 'bin', field: 'x', extent: [0, 11], maxbins: 4 }, { type: 'impute', field: 'x', key: 'id', groupby: ['g'], keyvals: [0, 1, 2, 100], method: 'mean' }, { type: 'formula', as: 'z', expr: 'datum.id' }],
+    [{ type: 'bin', field: 'x', extent: [0, 11], maxbins: 4 }, { type: 'lookup', from: 'other', key: 'id', fields: ['id'], values: ['x'], as: ['ox'] }, { type: 'timeunit', field: 'id', units: ['year'], timezone: 'utc' }],
+  ]
+  for (const chain of CHAINS) {
+    it(chain.map((t) => t.type).join(' > '), () => {
+      const source = frozen()
+      const before = JSON.stringify(source)
+      const other = frozen()
+      const c = { runtime, signals: {}, datasets: () => other } as never
+      const out = applyTransforms(source, chain as unknown as CompiledTransform[], c)
+      expect(JSON.stringify(source)).toBe(before) // nothing was written onto the input...
+      const given = new Set<unknown>(source)
+      expect(out.some((r) => given.has(r))).toBe(false) // ...and the result holds none of it
+      const again = applyTransforms(source, chain as unknown as CompiledTransform[], c)
+      expect(JSON.stringify(again)).toBe(JSON.stringify(out)) // so a second run over the same rows gives the same
+    })
+  }
+
+  it('a window result that holds rows shows what a later transform writes onto them, as it does in Vega', () => {
+    const out = run([
+      { type: 'joinaggregate', groupby: ['g'], fields: ['x'], ops: ['values'], as: ['members'] },
+      { type: 'formula', as: 'z', expr: 'datum.id' },
+    ])
+    for (const row of out) expect((row.members as Row[]).every((m) => 'z' in m)).toBe(true)
+    expect(out.every((row) => (row.members as Row[]).includes(row))).toBe(true) // (a row is among the members of its own group)
+  })
+
+  it('a transform that makes new rows leaves the ones a result holds as they were', () => {
+    const out = run([
+      { type: 'joinaggregate', groupby: ['g'], fields: ['x'], ops: ['values'], as: ['members'] },
+      { type: 'project' },
+      { type: 'formula', as: 'z', expr: 'datum.id' },
+    ])
+    for (const row of out) expect((row.members as Row[]).some((m) => 'z' in m)).toBe(false)
+  })
+
+  it('rows a transform returns unchanged stay the input\'s: the next writer copies them', () => {
+    const source = frozen()
+    expect(() => applyTransforms(source, [{ type: 'collect' }, { type: 'bin', field: 'x', extent: [0, 11], maxbins: 4 }] as unknown as CompiledTransform[], ctx() as never)).not.toThrow()
+    expect(() => applyTransforms(source, [{ type: 'sample', size: 5 }, { type: 'formula', as: 'z', expr: '1' }] as unknown as CompiledTransform[], ctx() as never)).not.toThrow()
+  })
+})

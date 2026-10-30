@@ -16,11 +16,10 @@ import { walkPostOrder, walkPreOrder } from './tree-walk.js'
 import { aggregateRows, type AggregateParams, compareOf, fieldOf, joinAggregateRows, pivotRows, sortBySpec } from './transform-agg.js'
 import { windowRows } from './transform-window.js'
 import {
-  binRows, collectRows, d3Range, extentOfField, flattenRows, foldRows, identifierRows, imputeRows,
+  binRows, collectRows, numberRange, extentOfField, flattenRows, foldRows, identifierRows, imputeRows,
   lookupRows, projectRows, required, sampleRows, sequenceRows, stackRows, timeunitRows,
 } from './transform-basic.js'
 
-export { d3Range }
 
 /** One group's aggregate tuple (the incremental aggregate re-derives only dirty groups). */
 export function aggregateGroup(group: Row[], t: CompiledTransform, random?: () => number): Row {
@@ -76,6 +75,28 @@ export function rowUseOf(t: CompiledTransform): RowUse {
 }
 
 /**
+ * Whether every row a transform returns is the pipeline's own -- made by the pipeline (this transform or an earlier one) and held by
+ * nothing outside it -- given whether the rows it was given were. A transform handed owned rows may write onto them instead of
+ * copying them first, which is what lets a chain of `bin`s or `formula`s allocate its rows once.
+ *
+ * Inside the pipeline the rows may be held: a window's or joinaggregate's `values`, `argmin` and `argmax` are rows of its output,
+ * and a transform that goes on to write onto those rows shows its fields there, as it does in Vega where the transforms share one set
+ * of tuples. A transform that makes new rows (`project`, `fold`, `flatten`, `aggregate`, `pivot`) leaves the rows it read as they were.
+ * What is never owned: rows another dataset, a hierarchy or an index holds (anything not listed here).
+ */
+function ownsOutput(t: CompiledTransform, ownedIn: boolean): boolean {
+  switch (t.type) {
+    case 'formula': case 'bin': case 'timeunit': case 'identifier': case 'lookup': case 'stack': case 'project':
+    case 'fold': case 'flatten': case 'pivot': case 'aggregate': case 'window': case 'joinaggregate':
+      return true
+    case 'filter': case 'collect': case 'sample': case 'extent': case 'impute':
+      return ownedIn
+    default:
+      return false
+  }
+}
+
+/**
  * Apply `transforms` to `rows`, which are another dataset's row objects (the array itself is the caller's own), and give the result rows
  * of its own: the transforms are applied to the shared rows for as long as they only read them, and what still is one of them
  * afterwards is copied (a pipeline that ends with an aggregate copies nothing).
@@ -91,7 +112,8 @@ export function applyTransformsToSharedRows(rows: Row[], transforms: CompiledTra
   }
   let out = reading > 0 ? applyTransforms(rows, transforms.slice(0, reading), ctx, sourceName) : rows
   if (shared) out = out.map((r) => ({ ...r }))
-  return reading < transforms.length ? applyTransforms(out, transforms.slice(reading), ctx, sourceName) : out
+  // (the rows are now the pipeline's own: copies of the shared ones, or made by an aggregate)
+  return reading < transforms.length ? applyTransforms(out, transforms.slice(reading), ctx, sourceName, true) : out
 }
 
 export function applyTransforms(
@@ -99,12 +121,15 @@ export function applyTransforms(
   transforms: CompiledTransform[],
   ctx: TransformContext,
   sourceName?: string,
+  owned = false,
 ): Row[] {
   let out = rows
   const meter = activeMeter()
   for (const t of transforms) {
     if (meter) meter.clock.check(`transform ${t.type}`)
-    out = applyTransform(out, t, ctx, sourceName)
+    const ownedIn = owned
+    owned = ownsOutput(t, ownedIn)
+    out = applyTransform(out, t, ctx, sourceName, ownedIn)
     if (meter) {
       // Whatever a transform produced is a dataset like any other: it may not
       // exceed maxRows, and rows beyond the input count as generated (C7/C9).
@@ -160,7 +185,7 @@ function resolveSignalParams(t: CompiledTransform, ctx: TransformContext): Compi
   return resolve(t, 0) as CompiledTransform
 }
 
-function applyTransform(rows: Row[], t0: CompiledTransform, ctx: TransformContext, sourceName?: string): Row[] {
+function applyTransform(rows: Row[], t0: CompiledTransform, ctx: TransformContext, sourceName: string | undefined, owned: boolean): Row[] {
   const rules = PARAM_RULES.get(t0.type as string)
   if (rules) checkParams(t0 as Record<string, unknown>, rules)
   const t = resolveSignalParams(t0, ctx)
@@ -169,6 +194,11 @@ function applyTransform(rows: Row[], t0: CompiledTransform, ctx: TransformContex
       required('formula', t, 'expr', 'as')
       const expr = compileExprTransform(t.expr as string, ctx)
       const as = t.as as string
+      if (owned && as !== '__proto__') {
+        const out = rows.slice()
+        for (const r of out) r[as] = expr(r)
+        return out
+      }
       return rows.map((r) => ({ ...r, [as]: expr(r) }))
     }
     case 'filter': {
@@ -187,17 +217,17 @@ function applyTransform(rows: Row[], t0: CompiledTransform, ctx: TransformContex
     case 'bin':
       return binRows(rows, t, (b) => {
         if (t.signal) ctx.signals[t.signal as string] = b
-      })
+      }, owned)
     case 'impute':
       return imputeRows(rows, t)
     case 'aggregate':
       return aggregateRows(rows, t, ctx.runtime.random)
     case 'joinaggregate':
-      return joinAggregateRows(rows, t, ctx.runtime.random)
+      return joinAggregateRows(rows, t, ctx.runtime.random, owned)
     case 'window':
-      return windowRows(rows, t, ctx.runtime.random)
+      return windowRows(rows, t, ctx.runtime.random, owned)
     case 'stack':
-      return stackRows(rows, t)
+      return stackRows(rows, t, owned)
     case 'extent': {
       const ext = extentOfField(rows, t)
       if (t.signal) ctx.signals[t.signal as string] = ext
@@ -262,7 +292,7 @@ function applyTransform(rows: Row[], t0: CompiledTransform, ctx: TransformContex
     case 'density':
       return requireTransform('density')(rows, t as Record<string, unknown>, ctx, sourceName)
     case 'lookup':
-      return lookupRows(rows, t, (ctx.datasets?.(t.from as string) ?? []) as Row[])
+      return lookupRows(rows, t, (ctx.datasets?.(t.from as string) ?? []) as Row[], owned)
     case 'stratify': {
       // Vega's Stratify transform builds a hierarchy from flat parent/child
       // data but emits the ORIGINAL tuples unchanged: depth/height/y layout
@@ -319,9 +349,9 @@ function applyTransform(rows: Row[], t0: CompiledTransform, ctx: TransformContex
     case 'timeunit':
       return timeunitRows(rows, t, (info) => {
         if (t.signal) ctx.signals[t.signal as string] = info
-      })
+      }, owned)
     case 'identifier':
-      return identifierRows(rows, t)
+      return identifierRows(rows, t, owned)
     case 'pivot':
       return pivotRows(rows, t as { field?: unknown; value?: unknown }, ctx.runtime.random)
     default:
@@ -570,13 +600,13 @@ const GEO_EPSILON = 1e-6
 
 /** d3-geo graticuleX: latitude samples along a meridian (step 90, clipped). */
 function graticuleX(y0: number, y1: number, dy: number): (x: number) => number[][] {
-  const y = d3Range(y0, y1 - GEO_EPSILON, dy).concat(y1)
+  const y = numberRange(y0, y1 - GEO_EPSILON, dy).concat(y1)
   return (x) => y.map((yy) => [x, yy])
 }
 
 /** d3-geo graticuleY: longitude samples along a parallel (precision spacing). */
 function graticuleY(x0: number, x1: number, dx: number): (y: number) => number[][] {
-  const x = d3Range(x0, x1 - GEO_EPSILON, dx).concat(x1)
+  const x = numberRange(x0, x1 - GEO_EPSILON, dx).concat(x1)
   return (yy) => x.map((xx) => [xx, yy])
 }
 
@@ -632,10 +662,10 @@ function graticuleRows(t: Record<string, unknown>): Row[] {
   }
 
   const lines = (): number[][][] =>
-    d3Range(Math.ceil(X0 / DX) * DX, X1, DX).map(X)
-      .concat(d3Range(Math.ceil(Y0 / DY) * DY, Y1, DY).map(Y))
-      .concat(d3Range(Math.ceil(x0 / dx) * dx, x1, dx).filter((xx) => Math.abs(xx % DX) > GEO_EPSILON).map(x))
-      .concat(d3Range(Math.ceil(y0 / dy) * dy, y1, dy).filter((yy) => Math.abs(yy % DY) > GEO_EPSILON).map(y))
+    numberRange(Math.ceil(X0 / DX) * DX, X1, DX).map(X)
+      .concat(numberRange(Math.ceil(Y0 / DY) * DY, Y1, DY).map(Y))
+      .concat(numberRange(Math.ceil(x0 / dx) * dx, x1, dx).filter((xx) => Math.abs(xx % DX) > GEO_EPSILON).map(x))
+      .concat(numberRange(Math.ceil(y0 / dy) * dy, y1, dy).filter((yy) => Math.abs(yy % DY) > GEO_EPSILON).map(y))
 
   return [{ type: 'MultiLineString', coordinates: lines() }]
 }
@@ -668,7 +698,7 @@ export function contourQuantize(levels: number, nice: boolean, zero: boolean): (
     const start = zero ? Math.min(lowest as number, 0) : (lowest as number)
     const stop = highest as number
     const step = nice ? tickStep(start, stop, levels) : (stop - start) / (levels + 1)
-    return d3Range(start + step, stop, step)
+    return numberRange(start + step, stop, step)
   }
 }
 

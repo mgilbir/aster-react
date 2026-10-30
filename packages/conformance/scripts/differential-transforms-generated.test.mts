@@ -373,6 +373,47 @@ function genWindowStores(r: Rng): Case {
   return { t: [t], rows: genRows(r, r.between(2, 25)) }
 }
 
+/**
+ * Chains of two to four transforms. The rows a transform returns may be written onto by the next one (in Vega they are the same
+ * tuples all the way down): that must not show anywhere it did not before, and where a result holds rows (`values`, `argmin`,
+ * `argmax`) it must show what Vega shows there.
+ */
+function genChain(r: Rng): Case {
+  const steps: Array<() => Record<string, unknown>> = [
+    () => ({ type: 'formula', expr: r.pick(['datum.i * 2', 'datum.w', 'datum.k + 1', 'datum.v']), as: r.pick(['f1', 'f2', 'v', 'i']) }),
+    () => ({ type: 'formula', expr: 'datum.i + 1', as: r.pick(['f1', 'v', 'bin0']) }),
+    () => ({ type: 'bin', field: r.pick(['v', 'w', 'i']), extent: r.pick([[-10, 30], [0, 25], [-100, 100]]), maxbins: r.pick([5, 10, 20]), as: r.pick([['b0', 'b1'], ['bin0', 'bin1'], ['v', 'w'], ['f1', 'b1']]) }),
+    () => ({ type: 'identifier', as: r.pick(['id', 'i', 'v']) }),
+    () => ({ type: 'project', ...(r.chance(0.6) ? { fields: ['g', 'v', 'w', 'k', 'i', 'f1', 'b0', 'id'], as: r.pick([undefined, ['g', 'v', 'w', 'k', 'i', 'f1', 'b0', 'id']]) } : {}) }),
+    () => ({ type: 'stack', field: r.pick(['w', 'i']), groupby: ['g'], offset: r.pick(['zero', 'center', 'normalize']), as: r.pick([['y0', 'y1'], ['b0', 'b1'], ['v', 'w']]) }),
+    () => ({ type: 'joinaggregate', groupby: ['g'], fields: ['v', 'w', 'v'], ops: [r.pick(['sum', 'max']), r.pick(['values', 'argmin', 'argmax', 'mean']), r.pick(['values', 'count', 'argmax'])], as: [r.pick(['s', 'f1']), r.pick(['vals', 'am', 'f2']), r.pick(['vs', 'n'])] }),
+    () => ({ type: 'window', sort: { field: 'k' }, groupby: r.pick([['g'], []]), ops: [r.pick(['sum', 'values', 'argmax', 'rank', 'count']), r.pick(['row_number', 'values', 'lag'])], fields: ['v', 'w'], as: [r.pick(['ws', 'f1']), r.pick(['wr', 'wv'])], frame: r.pick([[null, 0], [-1, 1], [null, null]]) }),
+    () => ({ type: 'aggregate', groupby: ['g'], fields: ['v', 'w', 'v'], ops: [r.pick(['sum', 'values', 'argmin']), 'max', 'count'] }),
+    () => ({ type: 'filter', expr: r.pick(['datum.i % 2 === 0', 'datum.k > 0', 'true']) }),
+    () => ({ type: 'collect', sort: { field: r.pick(['k', 'i', 'v']), order: r.pick(['ascending', 'descending']) } }),
+    () => ({ type: 'lookup', from: 'lk', key: 'k', fields: ['k'], ...(r.chance(0.5) ? { as: ['m'] } : { values: ['w'], as: ['lw'] }), default: r.pick([0, null]) }),
+    () => ({ type: 'impute', field: 'v', key: 'k', groupby: ['g'], keyvals: [0, 1, 2, 3, 4], method: r.pick(['value', 'mean', 'max']) }),
+    () => ({ type: 'timeunit', field: 'i', units: ['year'], timezone: 'utc', as: r.pick([['u0', 'u1'], ['f1', 'f2']]) }),
+    () => ({ type: 'fold', fields: ['v', 'w'], as: r.pick([['key', 'value'], ['f1', 'f2']]) }),
+  ]
+  // Two things Vega does that the engine does not (and that are not about who writes the rows): its ids number across ALL identifier
+  // transforms of a view, and its ties in a sort go by the order the tuples were created in, which a `collect` before them has changed.
+  // So: one identifier at most, and a collect only last.
+  const t: Array<Record<string, unknown>> = []
+  const length = r.between(2, 4)
+  for (let i = 0; i < length; i++) {
+    let step = r.pick(steps)()
+    for (let tries = 0; tries < 8; tries++) {
+      const clash = (step.type === 'identifier' && t.some((x) => x.type === 'identifier')) || (step.type === 'collect' && i < length - 1)
+      if (!clash) break
+      step = r.pick(steps)()
+    }
+    if ((step.type === 'identifier' && t.some((x) => x.type === 'identifier')) || (step.type === 'collect' && i < length - 1)) step = { type: 'formula', expr: 'datum.i', as: 'f1' }
+    t.push(step)
+  }
+  return { t, rows: genRows(r, r.between(0, 14)), extra: { lk: Array.from({ length: 4 }, (_, i) => ({ k: i, w: i * 10 })) } }
+}
+
 function genPivot(r: Rng): Case {
   const keyPools: unknown[][] = [['x', 'y', 'z'], ['x', 'y', 'z', 'b', 'a', 10, 2, null, '2'], [1, 2, 3, 10], [D('2020-01-01'), D('2019-01-01')]]
   const keys = r.pick(keyPools)
@@ -519,6 +560,7 @@ const SUITES: Array<{ name: string; seed: number; count: number; gen: (r: Rng) =
   { name: 'joinaggregate', seed: 0xa602, count: 350, gen: (r) => genAggregateLike(r, 'joinaggregate'), maxCrashShare: 0.02 },
   { name: 'window', seed: 0xa603, count: 900, gen: genWindow, maxCrashShare: 0.2 },
   { name: 'window stores over several fields', seed: 0xa60b, count: 500, gen: genWindowStores, maxCrashShare: 0.02 },
+  { name: 'transform chains', seed: 0xa60c, count: 900, gen: genChain, maxCrashShare: 0.2 },
   { name: 'pivot', seed: 0xa604, count: 300, gen: genPivot, maxCrashShare: 0.02 },
   { name: 'bin', seed: 0xa605, count: 700, gen: genBin, maxCrashShare: 0.02 },
   { name: 'stack', seed: 0xa606, count: 350, gen: genStack, maxCrashShare: 0.02 },
