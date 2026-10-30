@@ -1,3 +1,7 @@
+/**
+ * Part of the gallery gate (`pnpm conformance:gallery`, which runs it with vitest.gallery.config.mjs after the cache is verified).
+ * It needs the FETCHED gallery cache and headless Chromium, so the default `pnpm test` does not collect it (`*.gallery.test.ts`).
+ */
 import { describe, expect, it } from 'vitest'
 import { dataUrlsIn, listGallery } from './lib.js'
 import { runReact } from './react.js'

@@ -2,7 +2,7 @@
  * The hierarchy layout transforms (`pack`, `partition`, `treemap`, `tree`): each lays out the tree a preceding `stratify`
  * built on its data source and writes the result on copies of the rows. Loaded by the transforms addon.
  */
-import { error, hasOwnProperty } from './util.js'
+import { error, hasOwnProperty, sortData } from './util.js'
 import { compareOf, fieldOf } from './transform-agg.js'
 import type { HierNode, Row, TransformContext } from './transform.js'
 import { clusterTree, defaultSeparation, oneSeparation, tidyTree } from './hierarchy-tree.js'
@@ -49,7 +49,7 @@ function prepareTree(root: HierNode, rows: Row[], p: Record<string, unknown>): v
   // the comparator reads the hierarchy NODES (`value`, `depth`, `data.size`, ...), not the rows: a plain row field such as
   // `size` ties everywhere and leaves the stratify order
   const byRow = (a: HierNode, b: HierNode): number => compare(a, b) || (position.get(a.data) ?? 0) - (position.get(b.data) ?? 0)
-  walkPreOrder(root, (node) => { if (node.children.length) node.children.sort(byRow) })
+  walkPreOrder(root, (node) => { if (node.children.length) sortData(node.children, byRow) })
 }
 
 /**

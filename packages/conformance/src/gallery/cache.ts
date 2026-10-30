@@ -9,7 +9,11 @@ import { fileURLToPath } from 'node:url'
 
 const CONF = join(dirname(fileURLToPath(import.meta.url)), '..', '..')
 export const MANIFEST_PATH = join(CONF, 'gallery', 'manifest.json')
-export const CACHE_DIR = join(CONF, '.gallery')
+/**
+ * `ASTER_GALLERY_CACHE_DIR` moves the cache. The default vitest run (vitest.config.mjs) points it at a directory that does
+ * not exist, so a test that needs the FETCHED cache fails on every machine, not only on CI, and belongs to the gallery gate.
+ */
+export const CACHE_DIR = process.env.ASTER_GALLERY_CACHE_DIR || join(CONF, '.gallery')
 export const FETCH_COMMAND = 'pnpm --filter @aster/conformance gallery:fetch'
 
 export interface Source {

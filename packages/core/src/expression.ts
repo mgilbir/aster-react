@@ -43,7 +43,7 @@ import type { AstNode } from './expr-parser.js'
 import {
   ascending, extent, lerp as lerpOf, isArray, isBoolean, isDate, isNumber, isObject,
   isRegExp, isString, toBoolean, toDate, toNumber, toString, pluck, safeGet, DisallowedObjectProperties,
-  inrange, clampRange, isTuple, panLinear, panLog, panPow, panSymlog, zoomLinear, zoomLog, zoomPow, zoomSymlog,
+  sortSlice, inrange, clampRange, isTuple, panLinear, panLog, panPow, panSymlog, zoomLinear, zoomLog, zoomPow, zoomSymlog,
 } from './util.js'
 
 export interface ExpressionRuntime {
@@ -417,7 +417,7 @@ function createBuiltinFunctions(runtime: ExpressionRuntime): Record<string, unkn
     sequence: (start: number, stop?: number, step?: number) =>
       stop === undefined ? numericSequence(start) : step === undefined ? numericSequence(start, stop) : numericSequence(start, stop, step),
     slice: sliceFn,
-    sort: (seq: unknown) => (seq as unknown[]).slice().sort((a, b) => ascending(a as never, b as never)),
+    sort: (seq: unknown) => sortSlice(seq as unknown[], (a, b) => ascending(a as never, b as never)),
     merge: mergeObj,
     // dataset edits happen inside the signal event loop, which supplies runtime.modify; elsewhere there is nothing to edit
     modify: (name: unknown, insert?: unknown, remove?: unknown, toggle?: unknown, modifyTuple?: unknown, values?: unknown) =>

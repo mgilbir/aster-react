@@ -6,7 +6,7 @@
  * an item.
  */
 import type { SceneItem } from './types.js'
-import { lerp } from './util.js'
+import { lerp, sortData } from './util.js'
 import { Bounds, boundLeaf, boundStroke, multiLineOffset } from './bounds.js'
 import {
   addEncoders, applyDefaults, encoder, encodeItem, encodeItems, extendEncode, getEncoding, guideMark, has, isSignal, joinByValue, lookup, one, shareMarks, sharedMarks, contentKey, isShareable, keyPart, value, zero,
@@ -346,7 +346,7 @@ export function overlapItems(items: SceneItem[], data: Row[], o: OverlapSpec, ho
   if (!source.length) return null
   if (o.order) {
     // (the order is `datum.index`)
-    source = source.slice().sort((a, b) => cmp(a.d?.index, b.d?.index))
+    source = sortData(source.slice(), (a, b) => cmp(a.d?.index, b.d?.index))
   }
   const src = source.map((s) => s.it)
   for (const it of src) it.opacity = 1
