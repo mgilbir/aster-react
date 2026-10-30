@@ -28,6 +28,7 @@
  */
 import { accessor, accessorFields, accessorName, array, ascending, constant, sortData, error, extent as vegaExtent, field, identity, type Accessor } from './util.js'
 import { meterTick } from './limits.js'
+import { ascending as d3Ascending, quantileSorted } from './arr.js'
 
 export type Row = Record<string, unknown>
 type Get = (d: unknown) => unknown
@@ -189,29 +190,11 @@ export function numbersOf(values: ArrayLike<unknown>, f?: Get): number[] {
   return out
 }
 
-/** d3-array `ascending` (numbers; NaN when either side is nullish or NaN). */
-function d3ascending(a: number, b: number): number {
-  return a == null || b == null ? NaN : a < b ? -1 : a > b ? 1 : a >= b ? 0 : NaN
-}
-
-/** d3-array `quantileSorted`. */
-export function quantileSortedNumbers(values: ArrayLike<number>, p: number): number | undefined {
-  const n = values.length
-  if (!n || Number.isNaN((p = +p))) return undefined
-  if (p <= 0 || n < 2) return +values[0]!
-  if (p >= 1) return +values[n - 1]!
-  const i = (n - 1) * p
-  const i0 = Math.floor(i)
-  const value0 = +values[i0]!
-  const value1 = +values[i0 + 1]!
-  return value0 + (value1 - value0) * (i - i0)
-}
-
 /** vega-statistics `quantiles(array, p, f)`. */
 export function quantiles(arr: ArrayLike<unknown>, p: readonly number[], f?: Get): Array<number | undefined> {
   const values = Float64Array.from(numbersOf(arr, f))
-  values.sort(d3ascending)
-  return p.map((q) => quantileSortedNumbers(values, q))
+  values.sort(d3Ascending)
+  return p.map((q) => quantileSorted(values, q))
 }
 
 /** vega-statistics `quartiles`. */
@@ -219,22 +202,26 @@ export function quartiles(arr: ArrayLike<unknown>, f?: Get): Array<number | unde
   return quantiles(arr, [0.25, 0.5, 0.75], f)
 }
 
-/** vega-statistics `bootstrapCI`, drawing from the given generator. */
+/**
+ * The percentile interval of the mean by bootstrap resampling: `samples` resamples of the valid numbers, each as large as the data
+ * and drawn with replacement, give `samples` means; the interval runs from their `alpha / 2` to their `1 - alpha / 2` quantile.
+ * An empty input has no interval. Fixed by the output: each resample takes its `n` indices as `~~(random() * n)`, one draw per
+ * index and resample after resample, and a mean is the plain sum in draw order over `n`.
+ */
 export function bootstrapCI(arr: ArrayLike<unknown>, samples: number, alpha: number, f: Get | undefined, random: () => number): [number | undefined, number | undefined] {
   if (!arr.length) return [undefined, undefined]
   const values = Float64Array.from(numbersOf(arr, f))
   const n = values.length
-  const m = samples
-  const mu = new Array<number>(m)
-  for (let j = 0; j < m; ++j) {
-    let a = 0
-    for (let i = 0; i < n; ++i) a += values[~~(random() * n)]!
-    mu[j] = a / n
+  const means = new Float64Array(samples)
+  for (let s = 0; s < samples; ++s) {
+    let total = 0
+    for (let i = 0; i < n; ++i) total += values[~~(random() * n)]!
+    means[s] = total / n
     meterTick('bootstrap', n)
   }
-  // d3-array `quantile` (not `quantileSorted`): NaN means (no valid values) are dropped first
-  const sorted = mu.filter((x) => x === x).sort(d3ascending)
-  return [quantileSortedNumbers(sorted, alpha / 2), quantileSortedNumbers(sorted, 1 - alpha / 2)]
+  // the means of data with no valid number are NaN and are left out; the rest sort numerically
+  const sorted = means.filter((mean) => mean === mean).sort()
+  return [quantileSorted(sorted, alpha / 2), quantileSorted(sorted, 1 - alpha / 2)]
 }
 
 /** vega-util `extentIndex`: indices of the min and max, skipping null/undefined/NaN; `[-1, -1]` if none. */

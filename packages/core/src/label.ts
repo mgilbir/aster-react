@@ -1,12 +1,22 @@
 /**
- * The `label` transform: a port of vega-label 2.1.2 (`Label.js`, `LabelLayout.js`, `util/*`). Each text item is placed at one
- * of a list of anchors around the mark it labels so that it overlaps neither the marks to avoid nor a label placed before
- * it; the placement is recorded in `x`, `y`, `opacity`, `align` and `baseline` (`as`).
+ * The `label` transform: each text item is put at the first of a list of places around the mark it labels where it overlaps
+ * neither a mark to avoid nor a label already put; the choice is written to the item (`as`: x, y, opacity, align, baseline).
+ * Labels of the lines and areas of a group are placed by the end of the line, or inside the area.
  *
- * The layout works on bitmaps (typed arrays, one bit per pixel of the scaled layout). vega draws the marks to avoid into an
- * offscreen canvas and reads which pixels have any alpha; the same drawing code the scene renders with draws them into the
- * coverage-only context of `raster.ts`, so nothing here depends on a canvas, a DOM or a native module. Text is measured as
- * everywhere else in the engine (`text-metrics.ts`): the host's provider, the browser's canvas, or vega's headless estimate.
+ * What a layout decides on is an occupancy grid: a bit for each cell of the view, scaled down so that a big view has at most about a
+ * million cells. The marks to avoid are drawn onto the coverage-only canvas of `raster.ts` (`label-draw.ts`), and a cell is
+ * occupied where a pixel of it has any alpha, so nothing here depends on a DOM, a canvas or a native module. Text is measured as
+ * everywhere in the engine (`text-metrics.ts`).
+ *
+ * The result is pinned to vega's, label for label, and these parts of the design are forced by that:
+ *  - the order labels are placed in (the sort, else the order of the items) and the order places are tried in: a label takes the
+ *    first place that fits, and takes the cells it covers from the labels after it;
+ *  - the arithmetic of a place (offsets, the diagonal factor, centring on the text width), and `~~` to find a cell, since a label
+ *    fits or not by the cells it touches;
+ *  - cell (x, y) is bit `y * w + x` of a flat array, with no row padding: a cell outside the grid reads as its neighbour on the next
+ *    row, or as free past the end, and the area search can ask for one;
+ *  - the cells a label shown inside its mark is tested against are the mark's outline, not the labels placed (see `Field`);
+ *  - the grid of cells an area search has visited lives as long as the layout, not the label.
  *
  * Registered by `@aster/core/transforms`. The rest of the engine reaches it through the transform registry.
  */
@@ -21,665 +31,463 @@ import type { SceneGroup, SceneItem, SortSpec } from './types.js'
 
 type Rec = Record<string, unknown>
 
-// --- util/Bitmap.js ---------------------------------------------------------
+// --- the grid ----------------------------------------------------------------------------------
 
-const DIV = 5 // bit shift from x, y index to bit vector array index
-const MOD = 31 // bit mask for index lookup within a bit vector
-const SIZE = 32 // individual bit vector size
-const RIGHT0 = new Uint32Array(SIZE + 1) // left-anchored bit vectors, full -> 0
-const RIGHT1 = new Uint32Array(SIZE + 1) // right-anchored bit vectors, 0 -> full
-RIGHT1[0] = 0
-RIGHT0[0] = ~RIGHT1[0]!
-for (let i = 1; i <= SIZE; ++i) {
-  RIGHT1[i] = (RIGHT1[i - 1]! << 1) | 1
-  RIGHT0[i] = ~RIGHT1[i]!
-}
+/** The bits of a 32-bit word at and above bit `at` of the grid, and the bits at and below it. */
+const fromBit = (at: number): number => -1 << (at & 31)
+const toBit = (at: number): number => -1 >>> (31 - (at & 31))
 
-export interface Bitmap {
-  array: Uint32Array
-  get(x: number, y: number): number
-  set(x: number, y: number): void
-  clear(x: number, y: number): void
-  getRange(x: number, y: number, x2: number, y2: number): boolean
-  setRange(x: number, y: number, x2: number, y2: number): void
-  clearRange(x: number, y: number, x2: number, y2: number): void
-  outOfBounds(x: number, y: number, x2: number, y2: number): boolean
-}
+/** Occupied cells, a bit each. Cell (x, y) is bit `y * w + x`: the rows follow each other without padding. */
+class Grid {
+  private readonly bits: Uint32Array
 
-export function bitmap(w: number, h: number): Bitmap {
-  // w x h come from the spec's size and padding: bound the bit array before making it (C9)
-  meterRows((w * h) / SIZE, 'label bitmap')
-  const array = new Uint32Array(~~((w * h + SIZE) / SIZE))
-  return {
-    array,
-    get: (x, y) => {
-      const index = y * w + x
-      return array[index >>> DIV]! & (1 << (index & MOD))
-    },
-    set: (x, y) => {
-      const index = y * w + x
-      array[index >>> DIV]! |= 1 << (index & MOD)
-    },
-    clear: (x, y) => {
-      const index = y * w + x
-      array[index >>> DIV]! &= ~(1 << (index & MOD))
-    },
-    getRange: (x, y, x2, y2) => {
-      for (let r = y2; r >= y; --r) {
-        const start = r * w + x
-        const end = r * w + x2
-        const indexStart = start >>> DIV
-        const indexEnd = end >>> DIV
-        if (indexStart === indexEnd) {
-          if (array[indexStart]! & RIGHT0[start & MOD]! & RIGHT1[(end & MOD) + 1]!) return true
-        } else {
-          if (array[indexStart]! & RIGHT0[start & MOD]!) return true
-          if (array[indexEnd]! & RIGHT1[(end & MOD) + 1]!) return true
-          for (let i = indexStart + 1; i < indexEnd; ++i) if (array[i]) return true
-        }
+  constructor(readonly w: number, readonly h: number) {
+    // w x h come from the spec's size and padding: bound the array before making it
+    meterRows((w * h) / 32, 'label bitmap')
+    this.bits = new Uint32Array(~~((w * h + 32) / 32))
+  }
+
+  has(x: number, y: number): boolean {
+    const at = y * this.w + x
+    return (this.bits[at >>> 5]! & (1 << (at & 31))) !== 0
+  }
+
+  add(x: number, y: number): void {
+    const at = y * this.w + x
+    this.bits[at >>> 5]! |= 1 << (at & 31)
+  }
+
+  /** Whether the box of cells from (x1, y1) to (x2, y2), both included, reaches outside the grid. */
+  outside(x1: number, y1: number, x2: number, y2: number): boolean {
+    return x1 < 0 || y1 < 0 || y2 >= this.h || x2 >= this.w
+  }
+
+  /** Whether any cell of the box is occupied. */
+  anyIn(x1: number, y1: number, x2: number, y2: number): boolean {
+    const { bits, w } = this
+    for (let y = y1; y <= y2; ++y) {
+      const first = y * w + x1
+      const last = y * w + x2
+      const i = first >>> 5
+      const j = last >>> 5
+      if (i === j) {
+        if (bits[i]! & fromBit(first) & toBit(last)) return true
+      } else {
+        if (bits[i]! & fromBit(first) || bits[j]! & toBit(last)) return true
+        for (let k = i + 1; k < j; ++k) if (bits[k]) return true
       }
-      return false
-    },
-    setRange: (x, y, x2, y2) => {
-      for (; y <= y2; ++y) {
-        const start = y * w + x
-        const end = y * w + x2
-        const indexStart = start >>> DIV
-        const indexEnd = end >>> DIV
-        if (indexStart === indexEnd) {
-          array[indexStart]! |= RIGHT0[start & MOD]! & RIGHT1[(end & MOD) + 1]!
-        } else {
-          array[indexStart]! |= RIGHT0[start & MOD]!
-          array[indexEnd]! |= RIGHT1[(end & MOD) + 1]!
-          for (let i = indexStart + 1; i < indexEnd; ++i) array[i] = 0xffffffff
-        }
-      }
-    },
-    clearRange: (x, y, x2, y2) => {
-      for (; y <= y2; ++y) {
-        const start = y * w + x
-        const end = y * w + x2
-        const indexStart = start >>> DIV
-        const indexEnd = end >>> DIV
-        if (indexStart === indexEnd) {
-          array[indexStart]! &= RIGHT1[start & MOD]! | RIGHT0[(end & MOD) + 1]!
-        } else {
-          array[indexStart]! &= RIGHT1[start & MOD]!
-          array[indexEnd]! &= RIGHT0[(end & MOD) + 1]!
-          for (let i = indexStart + 1; i < indexEnd; ++i) array[i] = 0
-        }
-      }
-    },
-    outOfBounds: (x, y, x2, y2) => x < 0 || y < 0 || y2 >= h || x2 >= w,
-  }
-}
-
-// --- util/scaler.js ---------------------------------------------------------
-
-export interface Scaler {
-  (v: number): number
-  invert(v: number): number
-  bitmap(): Bitmap
-  ratio: number
-  padding: number
-  width: number
-  height: number
-}
-
-export function scaler(width: number, height: number, padding: number): Scaler {
-  const ratio = Math.max(1, Math.sqrt((width * height) / 1e6))
-  const w = ~~((width + 2 * padding + ratio) / ratio)
-  const h = ~~((height + 2 * padding + ratio) / ratio)
-  const scale = ((v: number) => ~~((v + padding) / ratio)) as Scaler
-  scale.invert = (v) => v * ratio - padding
-  scale.bitmap = () => bitmap(w, h)
-  scale.ratio = ratio
-  scale.padding = padding
-  scale.width = width
-  scale.height = height
-  return scale
-}
-
-// --- util/markBitmaps.js ----------------------------------------------------
-
-/** A mark container as the scene has it: `marktype` and the items it draws (a group's items are the mark containers inside it). */
-interface Container { marktype: string; items: Rec[] }
-
-/**
- * The marks inside a group item (vega's `group.items`). The scene keeps a group's own background item among them: the marks are
- * the entries that are containers.
- */
-const childMarks = (group: Rec): Container[] =>
-  ((group.items as Rec[] | undefined) ?? []).filter((c) => typeof c.marktype === 'string' && Array.isArray(c.items)) as unknown as Container[]
-
-/** vega's `draw`: a group draws the marks inside each of its items; any other mark draws its items. */
-function draw(ctx: AlphaCanvas, c: Container, interior: boolean): void {
-  if (!c.items.length) return
-  if (c.marktype === 'group') {
-    for (const group of c.items) for (const mark of childMarks(group)) draw(ctx, mark, interior)
-  } else {
-    drawMark({ ...c, items: interior ? (c.items.map(prepare) as unknown as SceneItem[]) : c.items } as unknown as SceneGroup, ctx)
-  }
-}
-
-/** Prepare an item before drawing it for its border: stroke the outline, paint no interior. */
-function prepare(source: Rec): Rec {
-  if ((source.stroke && source.strokeOpacity !== 0) || (source.fill && source.fillOpacity !== 0)) {
-    return { ...source, strokeOpacity: 1, stroke: '#000', fillOpacity: 0 }
-  }
-  return source
-}
-
-function baseBitmaps($: Scaler, data: Entry[] | false | undefined): [Bitmap, undefined] {
-  const bm = $.bitmap()
-  // when there is no base mark but data points are to be avoided
-  for (const d of data || []) bm.set($(d.boundary[0]!), $(d.boundary[3]!))
-  return [bm, undefined]
-}
-
-function markBitmaps($: Scaler, baseMark: Rec[] | false, avoidMarks: Container[], labelInside: boolean, isGroupArea: boolean): [Bitmap, Bitmap | false] {
-  const width = $.width
-  const height = $.height
-  const border = labelInside || isGroupArea
-  const context = new AlphaCanvas(width, height)
-  const baseMarkContext = new AlphaCanvas(width, height)
-  const strokeContext = border ? new AlphaCanvas(width, height) : undefined
-
-  // render all marks to be avoided into the canvas
-  for (const items of avoidMarks) draw(context, items, false)
-  const base = baseMark || []
-  const baseContainer = base.length ? containerOf(base) : undefined
-  if (baseContainer) {
-    draw(baseMarkContext, baseContainer, false)
-    if (strokeContext) draw(strokeContext, baseContainer, true)
+    }
+    return false
   }
 
-  const buffer = context.alpha
-  const baseMarkBuffer = baseMarkContext.alpha
-  const strokeBuffer = strokeContext?.alpha
-  const layer1 = $.bitmap()
-  const layer2 = border ? $.bitmap() : false
-
-  for (let y = 0; y < height; ++y) {
-    for (let x = 0; x < width; ++x) {
-      const index = y * width + x
-      const alpha = buffer[index]!
-      const baseMarkAlpha = baseMarkBuffer[index]!
-      const strokeAlpha = strokeBuffer ? strokeBuffer[index]! : 0
-      if (alpha || strokeAlpha || baseMarkAlpha) {
-        const u = $(x)
-        const v = $(y)
-        if (!isGroupArea && (alpha || baseMarkAlpha)) layer1.set(u, v) // update interior bitmap
-        if (layer2 && (alpha || strokeAlpha)) layer2.set(u, v) // update border bitmap
+  /** Occupy every cell of the box. */
+  fill(x1: number, y1: number, x2: number, y2: number): void {
+    const { bits, w } = this
+    for (let y = y1; y <= y2; ++y) {
+      const first = y * w + x1
+      const last = y * w + x2
+      const i = first >>> 5
+      const j = last >>> 5
+      if (i === j) {
+        bits[i]! |= fromBit(first) & toBit(last)
+      } else {
+        bits[i]! |= fromBit(first)
+        bits[j]! |= toBit(last)
+        for (let k = i + 1; k < j; ++k) bits[k] = -1
       }
     }
   }
-  return [layer1, layer2]
 }
 
-/** The mark container of items that were all read off one mark (vega: `items[0].mark`). */
-function containerOf(items: Rec[]): Container | undefined {
+/** The grid of a view of `width` x `height` with `padding` around it, and the maps between its cells and the view's pixels. */
+class Cells {
+  /** Pixels to a cell: 1 up to a million pixels, more above. */
+  private readonly ratio: number
+  private readonly cols: number
+  private readonly rows: number
+
+  constructor(readonly width: number, readonly height: number, private readonly padding: number) {
+    this.ratio = Math.max(1, Math.sqrt((width * height) / 1e6))
+    this.cols = ~~((width + 2 * padding + this.ratio) / this.ratio)
+    this.rows = ~~((height + 2 * padding + this.ratio) / this.ratio)
+  }
+
+  /** The cell a pixel coordinate falls in. */
+  at(v: number): number {
+    return ~~((v + this.padding) / this.ratio)
+  }
+
+  /** The pixel coordinate of a cell's start. */
+  pixel(cell: number): number {
+    return cell * this.ratio - this.padding
+  }
+
+  grid(): Grid {
+    return new Grid(this.cols, this.rows)
+  }
+}
+
+// --- the marks to avoid -------------------------------------------------------------------------
+
+/** A mark as the scene keeps it: its type and its items (the items of a group are the group items, the marks inside them). */
+interface Mark { marktype: string; items: Rec[] }
+
+/** The marks inside a group item: the entries among its items that are marks (its own background item is not). */
+const marksIn = (group: Rec): Mark[] =>
+  ((group.items as Rec[] | undefined) ?? []).filter((c) => typeof c.marktype === 'string' && Array.isArray(c.items)) as unknown as Mark[]
+
+/** Draw a mark. A group draws the marks inside each of its items. With `outlineOnly` an item that paints is drawn as its outline. */
+function paintMark(pen: AlphaCanvas, mark: Mark, outlineOnly: boolean): void {
+  if (!mark.items.length) return
+  if (mark.marktype === 'group') {
+    for (const group of mark.items) for (const inner of marksIn(group)) paintMark(pen, inner, outlineOnly)
+    return
+  }
+  drawMark({ ...mark, items: outlineOnly ? mark.items.map(outlined) : mark.items } as unknown as SceneGroup, pen)
+}
+
+const outlined = (item: Rec): Rec =>
+  (item.stroke && item.strokeOpacity !== 0) || (item.fill && item.fillOpacity !== 0) ? { ...item, strokeOpacity: 1, stroke: '#000', fillOpacity: 0 } : item
+
+/** The mark that a list of items were all read off (the first decides). */
+function markOf(items: Rec[]): Mark | undefined {
   const info = itemMarkOf(items[0])
   return info === undefined ? undefined : { ...(info.container as Rec), marktype: info.marktype, items }
 }
 
-// --- util/placeMarkLabel.js -------------------------------------------------
+/**
+ * What a label may not cover. `occupied`: the marks to avoid, the base mark's interior (not for an area, whose labels go inside it)
+ * and, as they are placed, the labels. `outlines`, only when a label can sit inside its mark: the marks to avoid and the outline of
+ * the base mark; that is what a label inside is tested against, so it may overlap the labels placed.
+ */
+interface Field { cells: Cells; occupied: Grid; outlines: Grid | null }
 
-const Aligns = ['right', 'center', 'left']
-const Baselines = ['bottom', 'middle', 'top']
+/** The field of the marks to avoid and of the base mark's items (`base`, empty to leave the base mark out). */
+function drawField(cells: Cells, base: Rec[], avoid: Mark[], wantOutlines: boolean, inArea: boolean): Field {
+  const { width, height } = cells
+  const avoided = new AlphaCanvas(width, height)
+  const baseMark = base.length ? markOf(base) : undefined
+  const drawnBase = baseMark ? new AlphaCanvas(width, height) : undefined
+  const drawnOutline = wantOutlines ? new AlphaCanvas(width, height) : undefined
+  for (const mark of avoid) paintMark(avoided, mark, false)
+  if (baseMark && drawnBase) {
+    paintMark(drawnBase, baseMark, false)
+    if (drawnOutline) paintMark(drawnOutline, baseMark, true)
+  }
+  const occupied = cells.grid()
+  const outlines = wantOutlines ? cells.grid() : null
 
-interface Entry {
-  datum: Rec
+  // (the canvas is read at a stride of `width`, which is not the canvas's own for a view of a fractional size: so is vega's)
+  const a = avoided.alpha
+  const b = drawnBase?.alpha
+  const o = drawnOutline?.alpha
+  const column = Int32Array.from({ length: Math.max(0, Math.ceil(width)) }, (_, x) => cells.at(x))
+  for (let y = 0; y < height; ++y) {
+    const row = cells.at(y)
+    const start = y * width
+    for (let x = 0; x < width; ++x) {
+      const i = start + x
+      const hit = a[i] || (b && b[i])
+      const edge = a[i] || (o && o[i])
+      if (!hit && !edge) continue
+      if (hit && !inArea) occupied.add(column[x]!, row)
+      if (edge && outlines) outlines.add(column[x]!, row)
+    }
+  }
+  return { cells, occupied, outlines }
+}
+
+// --- the labels ---------------------------------------------------------------------------------
+
+/** A label being placed: the text item, what the layout has decided, and where its mark is. */
+interface Label {
+  item: Rec
   opacity: number
   x: number | undefined
   y: number | undefined
   align: string | undefined
   baseline: string | undefined
-  boundary: number[]
-  textWidth: number | undefined
+  /** The mark's box as x1, x middle, x2, y1, y middle, y2. */
+  box: number[]
+  /** The text's width when it was measured up front (an unbounded padding needs it), else measured when a label gets that far. */
+  width: number | undefined
 }
 
-type Bitmaps = [Bitmap, Bitmap | false | undefined]
+/** Where a label goes relative to its mark's box: a step of -1, 0 or 1 in each direction from its middle. */
+const DIRECTION = new Map<string, readonly [number, number]>([
+  ['top-left', [-1, -1]], ['top', [0, -1]], ['top-right', [1, -1]],
+  ['left', [-1, 0]], ['middle', [0, 0]], ['right', [1, 0]],
+  ['bottom-left', [-1, 1]], ['bottom', [0, 1]], ['bottom-right', [1, 1]],
+])
+const TOP_LEFT: readonly [number, number] = [-1, -1]
+const DEFAULT_ANCHORS = ['top-left', 'left', 'bottom-left', 'top', 'bottom', 'top-right', 'right', 'bottom-right']
 
-function placeMarkLabel($: Scaler, bitmaps: Bitmaps, anchors: Int8Array, offsets: Float64Array): (d: Entry) => boolean {
-  const width = $.width
-  const height = $.height
-  const bm0 = bitmaps[0]
-  const bm1 = bitmaps[1]
-  const n = offsets.length
+/** One place to try: a direction and an offset (negative: inside the mark's edge). */
+interface Spot { dx: number; dy: number; offset: number; inside: boolean; diagonal: number; side: number }
 
-  return function (d) {
-    const boundary = d.boundary
-    const textHeight = d.datum.fontSize as number
+/**
+ * The places to try, in order: the anchors and the offsets go in pairs, the shorter list repeating its last entry (an empty list
+ * repeats the top left and a missing offset). An anchor that is not a direction is the top left.
+ */
+function spotsOf(offsets: unknown[], anchors: string[]): Spot[] {
+  const count = Math.max(offsets.length, anchors.length)
+  const offset = new Float64Array(count)
+  const direction: Array<readonly [number, number]> = []
+  for (let i = 0; i < count; ++i) {
+    if (i < offsets.length) offset[i] = (offsets[i] as number) || 0
+    else offset[i] = offset[offsets.length - 1]!
+    direction[i] = i < anchors.length ? DIRECTION.get(anchors[i]!) ?? TOP_LEFT : direction[anchors.length - 1] ?? TOP_LEFT
+  }
+  return direction.map(([dx, dy], i) => ({
+    dx, dy, offset: offset[i]!,
+    inside: (dx === 0 && dy === 0) || offset[i]! < 0,
+    diagonal: dx && dy ? Math.SQRT1_2 : 1,
+    side: offset[i]! < 0 ? -1 : 1,
+  }))
+}
 
-    // can not be placed if the mark is not visible in the graph bound
-    if (boundary[2]! < 0 || boundary[5]! < 0 || boundary[0]! > width || boundary[3]! > height) return false
+const ALIGN = ['right', 'center', 'left']
+const BASELINE = ['bottom', 'middle', 'top']
 
-    let textWidth = d.textWidth ?? 0
+/** Put a label beside (or inside) its mark: the first spot where it fits, taking the cells it covers. */
+function placeBeside(field: Field, spots: Spot[], width: number, height: number): (label: Label) => boolean {
+  const { cells, occupied, outlines } = field
+  const fits = (c1: number, c2: number, r1: number, r2: number, inside: boolean): boolean =>
+    !(occupied.outside(c1, r1, c2, r2) || (inside && outlines ? outlines : occupied).anyIn(c1, r1, c2, r2))
 
-    // for each anchor and offset
-    for (let i = 0; i < n; ++i) {
-      const dx = (anchors[i]! & 0x3) - 1
-      const dy = ((anchors[i]! >>> 0x2) & 0x3) - 1
+  return (label) => {
+    const box = label.box
+    const textHeight = label.item.fontSize as number
+    // a mark that is outside the view has no label
+    if (box[2]! < 0 || box[5]! < 0 || box[0]! > width || box[3]! > height) return false
 
-      const isInside = (dx === 0 && dy === 0) || offsets[i]! < 0
-      const sizeFactor = dx && dy ? Math.SQRT1_2 : 1
-      const insideFactor = offsets[i]! < 0 ? -1 : 1
-
-      let x1 = boundary[1 + dx]! + offsets[i]! * dx * sizeFactor
-      const yc = boundary[4 + dy]! + (insideFactor * textHeight * dy) / 2 + offsets[i]! * dy * sizeFactor
-      const y1 = yc - textHeight / 2
-      const y2 = yc + textHeight / 2
-
-      let _x1 = $(x1)
-      const _y1 = $(y1)
-      const _y2 = $(y2)
+    let textWidth = label.width ?? 0
+    for (const { dx, dy, offset, inside, diagonal, side } of spots) {
+      let left = box[1 + dx]! + offset * dx * diagonal
+      const middle = box[4 + dy]! + (side * textHeight * dy) / 2 + offset * dy * diagonal
+      const top = middle - textHeight / 2
+      const bottom = middle + textHeight / 2
+      const row1 = cells.at(top)
+      const row2 = cells.at(bottom)
 
       if (!textWidth) {
-        // to avoid finding width of text label,
-        if (!test(_x1, _x1, _y1, _y2, bm0, bm1, isInside)) {
-          // skip this anchor/offset option if we fail to place a label with 1px width
-          continue
-        }
-        // Otherwise, find the label width
-        textWidth = itemTextWidth(d.datum, d.datum.text as string)
+        // a first look with the width of one cell spares measuring the text where even that does not fit
+        const col = cells.at(left)
+        if (!fits(col, col, row1, row2, inside)) continue
+        textWidth = itemTextWidth(label.item, label.item.text as string)
       }
 
-      const xc = x1 + (insideFactor * textWidth * dx) / 2
-      x1 = xc - textWidth / 2
-      const x2 = xc + textWidth / 2
+      const centre = left + (side * textWidth * dx) / 2
+      left = centre - textWidth / 2
+      const right = centre + textWidth / 2
+      const col1 = cells.at(left)
+      const col2 = cells.at(right)
+      if (!fits(col1, col2, row1, row2, inside)) continue
 
-      _x1 = $(x1)
-      const _x2 = $(x2)
-
-      if (test(_x1, _x2, _y1, _y2, bm0, bm1, isInside)) {
-        // place label if the position is placeable
-        d.x = !dx ? xc : dx * insideFactor < 0 ? x2 : x1
-        d.y = !dy ? yc : dy * insideFactor < 0 ? y2 : y1
-
-        d.align = Aligns[dx * insideFactor + 1]
-        d.baseline = Baselines[dy * insideFactor + 1]
-
-        bm0.setRange(_x1, _y1, _x2, _y2)
-        return true
-      }
+      label.x = !dx ? centre : dx * side < 0 ? right : left
+      label.y = !dy ? middle : dy * side < 0 ? bottom : top
+      label.align = ALIGN[dx * side + 1]
+      label.baseline = BASELINE[dy * side + 1]
+      occupied.fill(col1, row1, col2, row2)
+      return true
     }
-
     return false
   }
 }
 
-// Test if a label with the given dimensions can be added without overlap
-function test(_x1: number, _x2: number, _y1: number, _y2: number, bm0: Bitmap, bm1: Bitmap | false | undefined, isInside: boolean): boolean {
-  return !(bm0.outOfBounds(_x1, _y1, _x2, _y2) || ((isInside && bm1) || bm0).getRange(_x1, _y1, _x2, _y2))
+// --- labels inside the areas of a group ------------------------------------------------------------
+
+/** The box between the two edges of an area at one of its points. */
+interface Slice { x1: number; y1: number; x2: number; y2: number }
+
+/** The areas' points of a label's group: the items of the mark `markIndex` inside it. */
+const slicesOf = (label: Label, markIndex: number): Slice[] =>
+  marksIn(label.item.datum as Rec)[markIndex]!.items.map((p) => {
+    const x1 = p.x as number
+    const y1 = p.y as number
+    return { x1, y1, x2: p.x2 === undefined ? x1 : (p.x2 as number), y2: p.y2 === undefined ? y1 : (p.y2 as number) }
+  })
+
+/** Whether a label of this size centred on (x, y) would reach outside the view. */
+function overflows(x: number, y: number, textWidth: number, textHeight: number, width: number, height: number): boolean {
+  const halfWidth = textWidth / 2
+  const halfHeight = textHeight / 2
+  return x - halfWidth < 0 || x + halfWidth > width || y - halfHeight < 0 || y + halfHeight > height
 }
 
-// --- util/placeAreaLabel/* --------------------------------------------------
+/** The size of label that fits in an area: a label of the text's proportions, `h` high, centred on a point. */
+class Fit {
+  constructor(
+    private readonly field: Field,
+    private readonly textWidth: number,
+    private readonly textHeight: number,
+    private readonly width: number,
+    private readonly height: number,
+  ) {}
 
-function outOfBounds(x: number, y: number, textWidth: number, textHeight: number, width: number, height: number): boolean {
-  let r = textWidth / 2
-  return x - r < 0 || x + r > width || y - (r = textHeight / 2) < 0 || y + r > height
+  /** Whether a label `h` high centred on (x, y) overlaps a label placed, or (`edges`) an outline. */
+  blocked(x: number, y: number, h: number, edges: boolean): boolean {
+    const { cells, occupied, outlines } = this.field
+    const reach = (this.textWidth * h) / (this.textHeight * 2)
+    const half = h / 2
+    const c1 = cells.at(x - reach)
+    const c2 = cells.at(x + reach)
+    const r1 = cells.at(y - half)
+    const r2 = cells.at(y + half)
+    return occupied.outside(c1, r1, c2, r2) || occupied.anyIn(c1, r1, c2, r2) || (edges && outlines !== null && outlines.anyIn(c1, r1, c2, r2))
+  }
+
+  /** The height of the biggest label that fits at (x, y) if it is bigger than `floor`, else undefined. */
+  grow(x: number, y: number, floor: number): number | undefined {
+    if (overflows(x, y, this.textWidth, this.textHeight, this.width, this.height)) return undefined
+    if (this.blocked(x, y, floor, true) || this.blocked(x, y, this.textHeight, false)) return undefined
+    // bisect between the floor and the height of the view
+    let lo = floor
+    let hi = this.height
+    while (hi - lo >= 1) {
+      const mid = (lo + hi) / 2
+      if (this.blocked(x, y, mid, true)) hi = mid
+      else lo = mid
+    }
+    return lo > floor ? lo : undefined
+  }
 }
 
-function collision($: Scaler, x: number, y: number, textHeight: number, textWidth: number, h: number, bm0: Bitmap, bm1: Bitmap | false | undefined): boolean {
-  const w = (textWidth * h) / (textHeight * 2)
-  const x1 = $(x - w)
-  const x2 = $(x + w)
-  const y1 = $(y - (h = h / 2))
-  const y2 = $(y + h)
-  return bm0.outOfBounds(x1, y1, x2, y2) || bm0.getRange(x1, y1, x2, y2) || !!(bm1 && bm1.getRange(x1, y1, x2, y2))
+/** The label found so far for an area: where, how big, and whether a search (and not only the centre of a slice) found it. */
+interface Find { label: Label; size: number; searched: boolean }
+
+/** Look at the cells around a slice, from its middle to each side. */
+function scanSlice(fit: Fit, cells: Cells, find: Find, s: Slice): void {
+  const c1 = cells.at(s.x1)
+  const c2 = cells.at(s.x2)
+  const midCol = ~~((c1 + c2) / 2)
+  const r1 = cells.at(s.y1)
+  const r2 = cells.at(s.y2)
+  const midRow = ~~((r1 + r2) / 2)
+  const look = (col: number, row: number): void => {
+    const x = cells.pixel(col)
+    const y = cells.pixel(row)
+    const size = fit.grow(x, y, find.size)
+    if (size !== undefined) {
+      find.label.x = x
+      find.label.y = y
+      find.size = size
+      find.searched = true
+    }
+  }
+  for (let col = midCol; col >= c1; --col) for (let row = midRow; row >= r1; --row) look(col, row)
+  for (let col = midCol; col <= c2; ++col) for (let row = midRow; row <= r2; ++row) look(col, row)
 }
 
-/** The sample points of the area mark a label is in: `d.datum.datum.items[markIndex].items`. */
-const areaPoints = (d: Entry, markIndex: number): Rec[] => childMarks(d.datum.datum as Rec)[markIndex]!.items as Rec[]
+/**
+ * Flood from the middle of a slice over the cells not visited, occupied or on an outline, a diagonal step at a time, looking at each.
+ * `visited` is kept across slices and labels.
+ */
+function floodSlice(fit: Fit, field: Field, visited: Grid, find: Find, s: Slice): void {
+  const { cells, occupied, outlines } = field
+  // the cells to visit as x, y pairs; the last pushed is the first visited
+  const todo: number[] = [cells.at((s.x1 + s.x2) / 2), cells.at((s.y1 + s.y2) / 2)]
+  while (todo.length) {
+    const row = todo.pop()!
+    const col = todo.pop()!
+    if (occupied.has(col, row) || (outlines && outlines.has(col, row)) || visited.has(col, row)) continue
+    visited.add(col, row)
+    for (let j = 0; j < 4; ++j) {
+      const x = col + (j < 2 ? -1 : 1)
+      const y = row + (j & 1 ? 1 : -1)
+      if (!visited.outside(x, y, x, y)) todo.push(x, y)
+    }
+    const x = cells.pixel(col)
+    const y = cells.pixel(row)
+    const size = fit.grow(x, y, find.size)
+    if (size !== undefined) {
+      find.label.x = x
+      find.label.y = y
+      find.size = size
+      find.searched = true
+    }
+  }
+}
 
-type PlaceArea = ($: Scaler, bitmaps: Bitmaps, avoidBaseMark: boolean, markIndex: number) => (d: Entry) => boolean
-
-const placeAreaLabelNaive: PlaceArea = ($, _bitmaps, _avoidBaseMark, markIndex) => {
-  const width = $.width
-  const height = $.height
-
-  // try to place a label within an input area mark
-  return function (d) {
-    const items = areaPoints(d, markIndex)
-    const n = items.length
-    const textHeight = d.datum.fontSize as number
-    const textWidth = itemTextWidth(d.datum, d.datum.text as string)
-
-    let maxAreaWidth = 0
-    let x1: number, x2: number, y1: number, y2: number, x: number, y: number
-
-    // for each area sample point
-    for (let i = 0; i < n; ++i) {
-      x1 = items[i]!.x as number
-      y1 = items[i]!.y as number
-      x2 = items[i]!.x2 === undefined ? x1 : (items[i]!.x2 as number)
-      y2 = items[i]!.y2 === undefined ? y1 : (items[i]!.y2 as number)
-      x = (x1 + x2) / 2
-      y = (y1 + y2) / 2
-
-      const areaWidth = Math.abs(x2 - x1 + y2 - y1)
-      if (areaWidth >= maxAreaWidth) {
-        maxAreaWidth = areaWidth
-        d.x = x
-        d.y = y
+/**
+ * Put a label in the area of its group, at the widest point of the area; it does not look at what is there, so it needs no field.
+ * The label is aligned to keep it inside the view.
+ */
+function placeAtWidest(markIndex: number, width: number, height: number): (label: Label) => boolean {
+  return (label) => {
+    const textHeight = label.item.fontSize as number
+    const textWidth = itemTextWidth(label.item, label.item.text as string)
+    let widest = 0
+    for (const { x1, y1, x2, y2 } of slicesOf(label, markIndex)) {
+      const span = Math.abs(x2 - x1 + y2 - y1)
+      if (span >= widest) {
+        widest = span
+        label.x = (x1 + x2) / 2
+        label.y = (y1 + y2) / 2
       }
     }
-
-    x = textWidth / 2
-    y = textHeight / 2
-    x1 = d.x! - x
-    x2 = d.x! + x
-    y1 = d.y! - y
-    y2 = d.y! + y
-
-    d.align = 'center'
-    if (x1 < 0 && x2 <= width) d.align = 'left'
-    else if (0 <= x1 && width < x2) d.align = 'right'
-
-    d.baseline = 'middle'
-    if (y1 < 0 && y2 <= height) d.baseline = 'top'
-    else if (0 <= y1 && height < y2) d.baseline = 'bottom'
-
+    const left = label.x! - textWidth / 2
+    const right = label.x! + textWidth / 2
+    const top = label.y! - textHeight / 2
+    const bottom = label.y! + textHeight / 2
+    label.align = left < 0 && right <= width ? 'left' : 0 <= left && width < right ? 'right' : 'center'
+    label.baseline = top < 0 && bottom <= height ? 'top' : 0 <= top && height < bottom ? 'bottom' : 'middle'
     return true
   }
 }
 
-const placeAreaLabelReducedSearch: PlaceArea = ($, bitmaps, avoidBaseMark, markIndex) => {
-  const width = $.width
-  const height = $.height
-  const bm0 = bitmaps[0] // where labels have been placed
-  const bm1 = bitmaps[1] // area outlines
-
-  function tryLabel(_x: number, _y: number, maxSize: number, textWidth: number, textHeight: number): [number, number, number, boolean] | undefined {
-    const x = $.invert(_x)
-    const y = $.invert(_y)
-    let lo = maxSize
-    let hi = height
-    if (
-      !outOfBounds(x, y, textWidth, textHeight, width, height) &&
-      !collision($, x, y, textHeight, textWidth, lo, bm0, bm1) &&
-      !collision($, x, y, textHeight, textWidth, textHeight, bm0, undefined)
-    ) {
-      // if the label fits at the current sample point,
-      // perform binary search to find the largest font size that fits
-      while (hi - lo >= 1) {
-        const mid = (lo + hi) / 2
-        if (collision($, x, y, textHeight, textWidth, mid, bm0, bm1)) hi = mid
-        else lo = mid
-      }
-      // place label if current lower bound exceeds prior max font size
-      if (lo > maxSize) return [x, y, lo, true]
-    }
-    return undefined
-  }
-
-  // try to place a label within an input area mark
-  return function (d) {
-    const items = areaPoints(d, markIndex)
-    const n = items.length
-    const textHeight = d.datum.fontSize as number
-    const textWidth = itemTextWidth(d.datum, d.datum.text as string)
-
-    let maxSize = avoidBaseMark ? textHeight : 0
-    let labelPlaced = false
-    let labelPlaced2 = false
-    let maxAreaWidth = 0
-    let x1: number, x2: number, y1: number, y2: number, x: number, y: number
-
-    // for each area sample point
-    for (let i = 0; i < n; ++i) {
-      x1 = items[i]!.x as number
-      y1 = items[i]!.y as number
-      x2 = items[i]!.x2 === undefined ? x1 : (items[i]!.x2 as number)
-      y2 = items[i]!.y2 === undefined ? y1 : (items[i]!.y2 as number)
-
-      if (x1 > x2) { const t = x1; x1 = x2; x2 = t }
-      if (y1 > y2) { const t = y1; y1 = y2; y2 = t }
-
-      const _x1 = $(x1)
-      const _x2 = $(x2)
-      const _xMid = ~~((_x1 + _x2) / 2)
-      const _y1 = $(y1)
-      const _y2 = $(y2)
-      const _yMid = ~~((_y1 + _y2) / 2)
-
-      // search along the line from mid point between the 2 border to lower border
-      for (let _x = _xMid; _x >= _x1; --_x) {
-        for (let _y = _yMid; _y >= _y1; --_y) {
-          const result = tryLabel(_x, _y, maxSize, textWidth, textHeight)
-          if (result) [d.x, d.y, maxSize, labelPlaced] = result
-        }
-      }
-
-      // search along the line from mid point between the 2 border to upper border
-      for (let _x = _xMid; _x <= _x2; ++_x) {
-        for (let _y = _yMid; _y <= _y2; ++_y) {
-          const result = tryLabel(_x, _y, maxSize, textWidth, textHeight)
-          if (result) [d.x, d.y, maxSize, labelPlaced] = result
-        }
-      }
-
-      // place label at slice center if not placed through other means
-      // and if we're not avoiding overlap with other areas
-      if (!labelPlaced && !avoidBaseMark) {
-        // one span is zero, hence we can add
-        const areaWidth = Math.abs(x2 - x1 + y2 - y1)
-        x = (x1 + x2) / 2
-        y = (y1 + y2) / 2
-
-        // place label if it fits and improves the max area width
-        if (areaWidth >= maxAreaWidth && !outOfBounds(x, y, textWidth, textHeight, width, height) && !collision($, x, y, textHeight, textWidth, textHeight, bm0, undefined)) {
-          maxAreaWidth = areaWidth
-          d.x = x
-          d.y = y
-          labelPlaced2 = true
-        }
-      }
-    }
-
-    // record current label placement information, update label bitmap
-    if (labelPlaced || labelPlaced2) {
-      x = textWidth / 2
-      y = textHeight / 2
-      bm0.setRange($(d.x! - x), $(d.y! - y), $(d.x! + x), $(d.y! + y))
-      d.align = 'center'
-      d.baseline = 'middle'
-      return true
-    }
-    return false
-  }
-}
-
-// pixel direction offsets for flood fill search
-const X_DIR = [-1, -1, 1, 1]
-const Y_DIR = [-1, 1, -1, 1]
-
-const placeAreaLabelFloodFill: PlaceArea = ($, bitmaps, avoidBaseMark, markIndex) => {
-  const width = $.width
-  const height = $.height
-  const bm0 = bitmaps[0] // where labels have been placed
-  const bm1 = bitmaps[1] // area outlines
-  const bm2 = $.bitmap() // flood-fill visitations
-
-  // try to place a label within an input area mark
-  return function (d) {
-    const items = areaPoints(d, markIndex)
-    const n = items.length
-    const textHeight = d.datum.fontSize as number
-    const textWidth = itemTextWidth(d.datum, d.datum.text as string)
-    const stack: Array<[number, number]> = [] // flood fill stack
-
-    let maxSize = avoidBaseMark ? textHeight : 0
-    let labelPlaced = false
-    let labelPlaced2 = false
-    let maxAreaWidth = 0
-    let x1: number, x2: number, y1: number, y2: number, x: number, y: number
-
-    // for each area sample point
-    for (let i = 0; i < n; ++i) {
-      x1 = items[i]!.x as number
-      y1 = items[i]!.y as number
-      x2 = items[i]!.x2 === undefined ? x1 : (items[i]!.x2 as number)
-      y2 = items[i]!.y2 === undefined ? y1 : (items[i]!.y2 as number)
-
-      // add scaled center point to stack
-      stack.push([$((x1 + x2) / 2), $((y1 + y2) / 2)])
-
-      // perform flood fill, visit points
-      while (stack.length) {
-        const [_x, _y] = stack.pop()!
-
-        // exit if point already marked
-        if (bm0.get(_x, _y) || (bm1 && bm1.get(_x, _y)) || bm2.get(_x, _y)) continue
-
-        // mark point in flood fill bitmap
-        // add search points for all (in bound) directions
-        bm2.set(_x, _y)
-        for (let j = 0; j < 4; ++j) {
-          x = _x + X_DIR[j]!
-          y = _y + Y_DIR[j]!
-          if (!bm2.outOfBounds(x, y, x, y)) stack.push([x, y])
-        }
-
-        // unscale point back to x, y space
-        x = $.invert(_x)
-        y = $.invert(_y)
-        let lo = maxSize
-        let hi = height // TODO: make this bound smaller
-
-        if (
-          !outOfBounds(x, y, textWidth, textHeight, width, height) &&
-          !collision($, x, y, textHeight, textWidth, lo, bm0, bm1) &&
-          !collision($, x, y, textHeight, textWidth, textHeight, bm0, undefined)
-        ) {
-          // if the label fits at the current sample point,
-          // perform binary search to find the largest font size that fits
-          while (hi - lo >= 1) {
-            const mid = (lo + hi) / 2
-            if (collision($, x, y, textHeight, textWidth, mid, bm0, bm1)) hi = mid
-            else lo = mid
-          }
-          // place label if current lower bound exceeds prior max font size
-          if (lo > maxSize) {
-            d.x = x
-            d.y = y
-            maxSize = lo
-            labelPlaced = true
-          }
-        }
-      }
-
-      // place label at slice center if not placed through other means
-      // and if we're not avoiding overlap with other areas
-      if (!labelPlaced && !avoidBaseMark) {
-        // one span is zero, hence we can add
-        const areaWidth = Math.abs(x2 - x1 + y2 - y1)
-        x = (x1 + x2) / 2
-        y = (y1 + y2) / 2
-
-        // place label if it fits and improves the max area width
-        if (areaWidth >= maxAreaWidth && !outOfBounds(x, y, textWidth, textHeight, width, height) && !collision($, x, y, textHeight, textWidth, textHeight, bm0, undefined)) {
-          maxAreaWidth = areaWidth
-          d.x = x
-          d.y = y
-          labelPlaced2 = true
-        }
-      }
-    }
-
-    // record current label placement information, update label bitmap
-    if (labelPlaced || labelPlaced2) {
-      x = textWidth / 2
-      y = textHeight / 2
-      bm0.setRange($(d.x! - x), $(d.y! - y), $(d.x! + x), $(d.y! + y))
-      d.align = 'center'
-      d.baseline = 'middle'
-      return true
-    }
-    return false
-  }
-}
-
-const placeAreaLabel: Record<string, PlaceArea> = {
-  naive: placeAreaLabelNaive,
-  'reduced-search': placeAreaLabelReducedSearch,
-  floodfill: placeAreaLabelFloodFill,
-}
-
-// --- LabelLayout.js ---------------------------------------------------------
-
-// 8-bit representation of anchors
-const TOP = 0x0
-const MIDDLE = 0x4
-const BOTTOM = 0x8
-const LEFT = 0x0
-const CENTER = 0x1
-const RIGHT = 0x2
-
-// Mapping from text anchor to number representation
-const anchorCode: Record<string, number> = {
-  'top-left': TOP + LEFT,
-  top: TOP + CENTER,
-  'top-right': TOP + RIGHT,
-  left: MIDDLE + LEFT,
-  middle: MIDDLE + CENTER,
-  right: MIDDLE + RIGHT,
-  'bottom-left': BOTTOM + LEFT,
-  bottom: BOTTOM + CENTER,
-  'bottom-right': BOTTOM + RIGHT,
-}
-
-const Anchors = ['top-left', 'left', 'bottom-left', 'top', 'bottom', 'top-right', 'right', 'bottom-right']
-const Output = ['x', 'y', 'opacity', 'align', 'baseline']
-
-/** What vega reads off the item a label is for: `item.mark.marktype`, `item.bounds`, `item.items`. */
-const markType = (item: Rec | undefined): string | undefined => itemMarkOf(item)?.marktype
-
-function getOffsets(_: number[], count: number): Float64Array {
-  const offsets = new Float64Array(count)
-  const n = _.length
-  for (let i = 0; i < n; ++i) offsets[i] = _[i] || 0
-  for (let i = n; i < count; ++i) offsets[i] = offsets[n - 1]!
-  return offsets
-}
-
-function getAnchors(_: string[], count: number): Int8Array {
-  const anchors = new Int8Array(count)
-  const n = _.length
-  for (let i = 0; i < n; ++i) anchors[i]! |= anchorCode[_[i]!]!
-  for (let i = n; i < count; ++i) anchors[i] = anchors[n - 1]!
-  return anchors
-}
+/** A slice with its sides low to high. */
+const ordered = (s: Slice): Slice => ({ x1: Math.min(s.x1, s.x2), x2: Math.max(s.x1, s.x2), y1: Math.min(s.y1, s.y2), y2: Math.max(s.y1, s.y2) })
 
 /**
- * The base mark boundary, depending on mark and group type. When the mark type is undefined, line or area the boundary is
- * the coordinate of each data point. When the base mark is a grouped line it is the start or end of the line depending on
- * `lineAnchor`. Otherwise it is the bounds of the base mark.
+ * Put a label in the area of its group where the biggest label of its proportions fits among the points of the area: by looking at
+ * the cells around each point (`scan`) or at those a flood from it reaches (`flood`). When the base mark may be covered and nothing
+ * fit, the label goes to the centre of the widest slice, if it fits there.
  */
-function markBoundary(marktype: string | undefined, grouptype: string | false | undefined, lineAnchor: string, markIndex: number): (d: Rec) => number[] {
-  const xy = (d: Rec): number[] => [d.x as number, d.x as number, d.x as number, d.y as number, d.y as number, d.y as number]
+function placeBySearch(flood: boolean, field: Field, avoidBaseMark: boolean, markIndex: number, width: number, height: number): (label: Label) => boolean {
+  const { cells, occupied } = field
+  const visited = flood ? cells.grid() : undefined
+  return (label) => {
+    const textHeight = label.item.fontSize as number
+    const textWidth = itemTextWidth(label.item, label.item.text as string)
+    const fit = new Fit(field, textWidth, textHeight, width, height)
+    const find: Find = { label, size: avoidBaseMark ? textHeight : 0, searched: false }
+    let centred = false
+    let widest = 0
 
-  if (!marktype) return xy // no reactive geometry
-  if (marktype === 'line' || marktype === 'area') return (d) => xy(d.datum as Rec)
-  if (grouptype === 'line') {
-    return (d) => {
-      const items = childMarks(d.datum as Rec)[markIndex]!.items as Rec[]
-      return xy(items.length ? items[lineAnchor === 'start' ? 0 : items.length - 1]! : { x: NaN, y: NaN })
+    for (const slice of slicesOf(label, markIndex)) {
+      // (the scan goes from the middle of a slice to each side, so it takes the slice low to high)
+      const box = visited ? slice : ordered(slice)
+      if (visited) floodSlice(fit, field, visited, find, box)
+      else scanSlice(fit, cells, find, box)
+      if (find.searched || avoidBaseMark) continue
+      const span = Math.abs(box.x2 - box.x1 + box.y2 - box.y1)
+      const x = (box.x1 + box.x2) / 2
+      const y = (box.y1 + box.y2) / 2
+      if (span >= widest && !overflows(x, y, textWidth, textHeight, width, height) && !fit.blocked(x, y, textHeight, false)) {
+        widest = span
+        label.x = x
+        label.y = y
+        centred = true
+      }
     }
-  }
-  return (d) => {
-    const b = itemMarkOf(d.datum)!.bounds()
-    return [b.x1, (b.x1 + b.x2) / 2, b.x2, b.y1, (b.y1 + b.y2) / 2, b.y2]
+
+    if (!find.searched && !centred) return false
+    occupied.fill(cells.at(label.x! - textWidth / 2), cells.at(label.y! - textHeight / 2), cells.at(label.x! + textWidth / 2), cells.at(label.y! + textHeight / 2))
+    label.align = 'center'
+    label.baseline = 'middle'
+    return true
   }
 }
 
-export interface LabelParams {
+// --- the layout --------------------------------------------------------------------------------
+
+interface Params {
   size: [number, number]
-  sort?: SortSpec
-  offset: number[]
+  sort: SortSpec | undefined
+  offset: unknown[]
   anchor: string[]
-  avoidMarks: Container[]
+  avoidMarks: Mark[]
   avoidBaseMark: boolean
   lineAnchor: string
   markIndex: number
@@ -687,102 +495,113 @@ export interface LabelParams {
   method: string
 }
 
-export function labelLayout(texts: Rec[], p: LabelParams): Entry[] {
-  // early exit for empty data
-  if (!texts.length) return []
+const pointBox = (p: Rec): number[] => [p.x as number, p.x as number, p.x as number, p.y as number, p.y as number, p.y as number]
 
-  const { size, offset, anchor, avoidMarks, avoidBaseMark, lineAnchor, markIndex, method } = p
-  let padding = p.padding
-
-  const positions = Math.max(offset.length, anchor.length)
-  const offsets = getOffsets(offset, positions)
-  const anchors = getAnchors(anchor, positions)
-  const marktype = markType(texts[0]!.datum as Rec | undefined)
-  const grouptype = marktype === 'group' && childMarks(texts[0]!.datum as Rec)[markIndex]!.marktype
-  const isGroupArea = grouptype === 'area'
-  const boundary = markBoundary(marktype, grouptype, lineAnchor, markIndex)
-  const infPadding = padding === null || padding === Infinity
-  const isNaiveGroupArea = isGroupArea && method === 'naive'
-
-  let maxTextWidth = -1
-  let maxTextHeight = -1
-
-  // prepare text mark data for placing
-  const data: Entry[] = texts.map((d) => {
-    const textWidth = infPadding ? itemTextWidth(d, d.text as string) : undefined
-    maxTextWidth = Math.max(maxTextWidth, textWidth as number)
-    maxTextHeight = Math.max(maxTextHeight, d.fontSize as number)
-    return { datum: d, opacity: 0, x: undefined, y: undefined, align: undefined, baseline: undefined, boundary: boundary(d), textWidth }
-  })
-
-  padding = padding === null || padding === Infinity ? Math.max(maxTextWidth, maxTextHeight) + maxOf(offset) : padding
-  const $ = scaler(size[0], size[1], padding)
-
-  let bitmaps: Bitmaps | undefined
-  if (!isNaiveGroupArea) {
-    // sort labels in priority order, if comparator is provided
-    if (p.sort) {
-      const sort = p.sort
-      sortData(data, (a, b) => compareRows(a.datum as Row, b.datum as Row, sort))
+/** How the box of a label's mark is read, by the kind of mark the first label belongs to. */
+function boxReader(marktype: string | undefined, groupMark: string | false | undefined, lineAnchor: string, markIndex: number): (item: Rec) => number[] {
+  // no mark behind the labels, or a mark drawn as one path (each item is a point of it): the item's own x, y
+  if (!marktype) return pointBox
+  if (marktype === 'line' || marktype === 'area') return (item) => pointBox(item.datum as Rec)
+  // a group of lines: the end of the line
+  if (groupMark === 'line') {
+    return (item) => {
+      const points = marksIn(item.datum as Rec)[markIndex]!.items
+      return pointBox(points.length ? points[lineAnchor === 'start' ? 0 : points.length - 1]! : { x: NaN, y: NaN })
     }
-
-    // flag indicating if label can be placed inside its base mark
-    let labelInside = false
-    for (let i = 0; i < anchors.length && !labelInside; ++i) {
-      // label inside if anchor is at center
-      // label inside if offset to be inside the mark bound
-      labelInside = anchors[i] === 0x5 || offsets[i]! < 0
-    }
-
-    // extract data information from base mark when base mark is to be avoided
-    // base mark is implicitly avoided if it is a group area
-    const baseMark = ((marktype && avoidBaseMark) || isGroupArea) && texts.map((d) => d.datum as Rec)
-
-    // generate bitmaps for layout calculation
-    bitmaps = avoidMarks.length || baseMark ? markBitmaps($, baseMark || [], avoidMarks, labelInside, isGroupArea) : baseBitmaps($, avoidBaseMark && data)
   }
-
-  // generate label placement function
-  const place = isGroupArea ? placeAreaLabel[method]!($, bitmaps!, avoidBaseMark, markIndex) : placeMarkLabel($, bitmaps!, anchors, offsets)
-
-  // place all labels
-  for (const d of data) d.opacity = +place(d)
-
-  return data
+  return (item) => {
+    const b = itemMarkOf(item.datum)!.bounds()
+    return [b.x1, (b.x1 + b.x2) / 2, b.x2, b.y1, (b.y1 + b.y2) / 2, b.y2]
+  }
 }
 
-// --- Label.js ---------------------------------------------------------------
-
-const maxOf = (values: readonly number[]): number => {
+const greatest = (values: readonly number[]): number => {
   let m = -Infinity
   for (const v of values) if (v > m) m = v
   return m
 }
 
-const array = <T>(v: T | T[]): T[] => (Array.isArray(v) ? v : [v])
+function layOut(items: Rec[], p: Params): Label[] {
+  if (!items.length) return []
+  const { size, offset, anchor, avoidMarks, avoidBaseMark, lineAnchor, markIndex, method } = p
+
+  const spots = spotsOf(offset, anchor)
+  const marktype = itemMarkOf(items[0]!.datum)?.marktype
+  const groupMark = marktype === 'group' && marksIn(items[0]!.datum as Rec)[markIndex]!.marktype
+  const inArea = groupMark === 'area'
+  const readBox = boxReader(marktype, groupMark, lineAnchor, markIndex)
+
+  // an unbounded padding is as much as the biggest label (and offset) can reach
+  const unbounded = p.padding === null || p.padding === Infinity
+  let widest = -1
+  let tallest = -1
+  const labels: Label[] = items.map((item) => {
+    const width = unbounded ? itemTextWidth(item, item.text as string) : undefined
+    if (unbounded) {
+      widest = Math.max(widest, width!)
+      tallest = Math.max(tallest, item.fontSize as number)
+    }
+    return { item, opacity: 0, x: undefined, y: undefined, align: undefined, baseline: undefined, box: readBox(item), width }
+  })
+  const padding = unbounded ? Math.max(widest, tallest) + greatest(offset as number[]) : p.padding!
+  const cells = new Cells(size[0], size[1], padding)
+
+  let field: Field | undefined
+  if (!(inArea && method === 'naive')) {
+    if (p.sort) {
+      const sort = p.sort
+      sortData(labels, (a, b) => compareRows(a.item as Row, b.item as Row, sort))
+    }
+    // a label may go inside its mark: it is tested against the outline of the mark, not the interior
+    const inside = spots.some((s) => s.inside)
+    // the base mark is avoided when asked to be, and an area's always (its labels go on the cells inside it)
+    const base = ((marktype && avoidBaseMark) || inArea) && items.map((item) => item.datum as Rec)
+    if (avoidMarks.length || base) field = drawField(cells, base || [], avoidMarks, inside || inArea, inArea)
+    else {
+      // no mark to draw: the base items are points, and the cell each is on is taken
+      const occupied = cells.grid()
+      if (avoidBaseMark) for (const label of labels) occupied.add(cells.at(label.box[0]!), cells.at(label.box[3]!))
+      field = { cells, occupied, outlines: null }
+    }
+  }
+
+  const place = inArea ? areaPlacer(method, field, avoidBaseMark, markIndex, size) : placeBeside(field!, spots, size[0], size[1])
+  for (const label of labels) label.opacity = +place(label)
+  return labels
+}
+
+function areaPlacer(method: string, field: Field | undefined, avoidBaseMark: boolean, markIndex: number, [width, height]: [number, number]): (label: Label) => boolean {
+  if (method === 'naive') return placeAtWidest(markIndex, width, height)
+  if (method !== 'reduced-search' && method !== 'floodfill') throw new Error(`The label method "${method}" is not naive, reduced-search or floodfill.`)
+  return placeBySearch(method === 'floodfill', field!, avoidBaseMark, markIndex, width, height)
+}
+
+// --- the transform -----------------------------------------------------------------------------
+
+const OUTPUT = ['x', 'y', 'opacity', 'align', 'baseline']
+const toArray = <T>(v: T | T[]): T[] => (Array.isArray(v) ? v : [v])
 
 /**
- * The `label` transform over the text items (a text mark's items, or a dataset's tuples): writes `as` on each. The mark
- * containers it avoids come from the transform context (`marks`).
+ * The `label` transform over the text items (a text mark's items, or a dataset's tuples): writes `as` on each. The marks it avoids
+ * come from the transform context (`marks`).
  */
 function labelRows(rows: Row[], t: Rec, ctx: TransformContext): Row[] {
   const size = resolveSizeParam(t.size, ctx)
-  if (!size || size.length !== 2) throw new Error('Size parameter should be specified as a [width, height] array.')
+  if (!size) throw new Error('Size parameter should be specified as a [width, height] array.')
   if (!rows.length) return rows
 
-  const as = (t.as as string[] | undefined) ?? Output
-  const avoidNames = array((t.avoidMarks as string[] | undefined) ?? [])
-  const avoidMarks: Container[] = []
-  for (const name of avoidNames) {
-    const c = ctx.marks?.(name) as Container | undefined
-    if (c !== undefined) avoidMarks.push(c)
+  const as = (t.as as string[] | undefined) ?? OUTPUT
+  const avoidMarks: Mark[] = []
+  for (const name of toArray((t.avoidMarks as string[] | undefined) ?? [])) {
+    const mark = ctx.marks?.(name) as Mark | undefined
+    if (mark !== undefined) avoidMarks.push(mark)
   }
 
-  const entries = labelLayout(rows, {
+  const labels = layOut(rows, {
     size,
-    ...(t.sort ? { sort: t.sort as SortSpec } : {}),
-    offset: array(t.offset == null ? 1 : (t.offset as number | number[])),
-    anchor: array((t.anchor as string[] | undefined) ?? Anchors),
+    sort: t.sort ? (t.sort as SortSpec) : undefined,
+    offset: toArray(t.offset == null ? 1 : (t.offset as number | number[])),
+    anchor: toArray((t.anchor as string[] | undefined) ?? DEFAULT_ANCHORS),
     avoidMarks,
     avoidBaseMark: t.avoidBaseMark !== false,
     lineAnchor: (t.lineAnchor as string | undefined) || 'end',
@@ -791,16 +610,16 @@ function labelRows(rows: Row[], t: Rec, ctx: TransformContext): Row[] {
     method: (t.method as string | undefined) || 'naive',
   })
 
-  // write the layout to the tuples (a mark's items are written in place: they are vega's tuples)
+  // a mark's items are written in place (they are the tuples); a dataset's rows are copied
   const out = ctx.inPlace ? rows : rows.map((r) => ({ ...r }))
-  const at = ctx.inPlace ? null : new Map<Rec, Row>(rows.map((r, i) => [r, out[i]!]))
-  for (const l of entries) {
-    const target = at === null ? l.datum : at.get(l.datum)!
-    target[as[0]!] = l.x
-    target[as[1]!] = l.y
-    target[as[2]!] = l.opacity
-    target[as[3]!] = l.align
-    target[as[4]!] = l.baseline
+  const copyOf = ctx.inPlace ? null : new Map<Rec, Row>(rows.map((r, i) => [r, out[i]!]))
+  for (const label of labels) {
+    const target = copyOf === null ? label.item : copyOf.get(label.item)!
+    target[as[0]!] = label.x
+    target[as[1]!] = label.y
+    target[as[2]!] = label.opacity
+    target[as[3]!] = label.align
+    target[as[4]!] = label.baseline
   }
   return out
 }

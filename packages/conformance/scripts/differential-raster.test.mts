@@ -73,20 +73,25 @@ function randomThresholds(r: Rng, pool: number[], odd: boolean): unknown[] {
   return out
 }
 
+// d3-contour and vega-geo's own marching squares agree on a grid of numbers and ascending numeric thresholds, and differ where
+// the input is odd: d3-contour sorts the thresholds, throws on a non-numeric one, ranks a null / NaN / undefined cell below every
+// level and smooths around infinite cells; vega-geo keeps the order given and compares and interpolates the raw values as
+// JavaScript does. Aster follows vega (the oracle of the product), so this d3 comparison draws only what the two share and the
+// "contour of a value grid" section further down compares the odd inputs with vega itself.
 const CONTOUR_CASES = 1500
 describe(`d3-contour 4.0.2 vs Aster contour module (${CONTOUR_CASES} generated cases)`, () => {
   const r = prng(0xc0a7)
   for (let i = 0; i < CONTOUR_CASES; i++) {
     const big = i % 5 === 0
-    const odd = i % 3 === 0
+    const odd = false
     const w = big ? int(r, 12, 48) : int(r, 0, 9)
     const h = big ? int(r, 12, 40) : int(r, 0, 9)
     const { values, pool } = randomGrid(r, w, h, odd)
-    const thresholds = randomThresholds(r, pool, odd)
+    const thresholds = (randomThresholds(r, pool, odd) as number[]).sort((a, b) => a - b)
     const smooth = chance(r, 0.6)
     const typed = !odd && chance(r, 0.5)
     // a size that need not match the grid: fractional, negative, NaN
-    const size: [number, number] = chance(r, 0.04) ? [pick(r, [-1, NaN, 2.7]), h] : chance(r, 0.15) ? [w + int(r, -1, 2), h + int(r, -1, 2)] : [w + (chance(r, 0.1) ? 0.6 : 0), h]
+    const size: [number, number] = chance(r, 0.04) ? [pick(r, [-1, NaN, Math.max(0, w - 1) + 0.7]), h] : chance(r, 0.15) ? [Math.max(0, w - int(r, 0, 2)), Math.max(0, h - int(r, 0, 2))] : [w + (chance(r, 0.1) ? 0.6 : 0), h]
     it(`#${i} ${w}x${h} size=${size} smooth=${smooth} ${typed ? 'f32' : 'array'} t=${JSON.stringify(thresholds)}`, () => {
       const cells = typed ? new Float32Array(values as number[]) : values
       const want = exact(() => d3Contour.contours().smooth(smooth).size(size).thresholds(thresholds as number[])(structuredClone(cells) as number[]))
@@ -314,4 +319,192 @@ describe('vega-geo 5.1.2 (vega 6.3.1) vs Aster raster transforms (generated, liv
       })
     }
   })
+})
+
+// ------------------------------------------------------------------------------- the parameter space, generated
+//
+// Everything above draws "sensible" parameters with a few odd cells. The sections below draw from the whole space a spec
+// author can reach -- scalar and short and long bandwidths, `scale: 0`, unsorted and repeated and non-numeric thresholds,
+// null / NaN / string / missing cells and coordinates, `zero` with and without explicit thresholds -- and compare the
+// outcome with vega's: the rows when it produces them, the message when it refuses.
+
+const ODD_CELLS: Cell[] = [NaN, null, undefined, Infinity, -Infinity, '1', '2.5', 'x', '', -0, 0]
+// (no `undefined` here: vega leaves a hole in its output for an undefined entry of a list parameter, which no JSON spec can write)
+const ODD_LEVELS: unknown[] = [NaN, null, '0.5', '2', Infinity, -Infinity, 0, true]
+
+/** A hand-made grid as the isocontour transform reads one: cells, size and the window/scale a density grid carries. */
+function handGrid(r: Rng, odd: boolean): Record<string, unknown> {
+  const width = int(r, 1, 8)
+  const height = int(r, 1, 8)
+  const { values } = randomGrid(r, width, height, false)
+  const cells: Cell[] = values.slice()
+  if (odd) for (let i = 0; i < cells.length; i++) if (chance(r, 0.15)) cells[i] = pick(r, ODD_CELLS)
+  const grid: Record<string, unknown> = { width, height, values: !odd && chance(r, 0.4) ? new Float32Array(cells as number[]) : cells }
+  if (chance(r, 0.6)) Object.assign(grid, { scale: pick(r, [1, 2, 4, 0, -1]), x1: int(r, 0, 2), y1: int(r, 0, 2) })
+  if (chance(r, 0.4)) grid.translate = pick(r, [[1, 2], [0, 0], [-3, 4]])
+  if (chance(r, 0.15)) { grid.x2 = width; grid.y2 = height }
+  return grid
+}
+
+function pointsWith(r: Rng, n: number, odd: boolean): Row[] {
+  const rows: Row[] = []
+  for (let i = 0; i < n; i++) {
+    const row: Row = { x: 5 + r() * 40, y: 5 + r() * 30, w: 0.5 + r() * 2, g: pick(r, ['a', 'b', null]) }
+    if (odd) {
+      for (const f of ['x', 'y', 'w']) if (chance(r, 0.12)) row[f] = pick(r, [null, undefined, NaN, '', '7', 'q', -3, Infinity])
+      if (chance(r, 0.05)) delete row.x
+    }
+    rows.push(row)
+  }
+  return rows
+}
+
+describe('vega-geo contour/isocontour/kde2d over the whole parameter space (generated, live)', { timeout: 300_000 }, () => {
+  describe('contour of a value grid: thresholds, cells, smoothing', () => {
+    const r = prng(0x7a11)
+    for (let i = 0; i < 400; i++) {
+      const w = int(r, 0, 9)
+      const h = int(r, 0, 9)
+      const { values, pool } = randomGrid(r, w, h, chance(r, 0.6))
+      if (chance(r, 0.4)) for (let c = 0; c < values.length; c++) if (chance(r, 0.1)) values[c] = pick(r, ODD_CELLS)
+      const t: Params = { type: 'contour', size: pick(r, [[w, h], [w, h], [w + 0.7, h], [w + 1, h - 1], [-1, h], [NaN, 2]]), values }
+      if (chance(r, 0.8)) {
+        const n = int(r, 0, 5)
+        const base = pool.length ? pool : [0.5]
+        t.thresholds = Array.from({ length: n }, () => (chance(r, 0.12) ? pick(r, ODD_LEVELS) : pick(r, base) + pick(r, [0, 0.25, -0.25, 1])))
+        if (chance(r, 0.3)) (t.thresholds as unknown[]).push(...(t.thresholds as unknown[]).slice(0, 2)) // repeats, in no particular order
+      } else {
+        if (chance(r, 0.6)) t.count = int(r, 0, 9)
+        if (chance(r, 0.3)) t.nice = true
+      }
+      if (chance(r, 0.3)) t.smooth = false
+      if (chance(r, 0.05)) delete t.size // required
+      const rows: Row[] = [{ a: 1 }]
+      it(`#${i} ${JSON.stringify(enc(t))}`, async () => { await same('contour values', rows, [t]) })
+    }
+  })
+
+  describe('contour of points: bandwidth, cell size, coordinates', () => {
+    const r = prng(0x7a12)
+    const BW: unknown[] = [undefined, 3, 0, -1, '4', 'x', null, [], [3], [0], [-1], [2, 5], [0, 4], [null, 3], [NaN, 3], ['3', 3], [1, 2, 3], [undefined]]
+    for (let i = 0; i < 300; i++) {
+      const t: Params = { type: 'contour', size: [int(r, 10, 60), int(r, 10, 50)], x: 'x', y: 'y' }
+      const bw = pick(r, BW)
+      if (bw !== undefined) t.bandwidth = bw
+      const cell = pick(r, [undefined, 1, 2, 4, 3, 0.5, 0, '2', -2, NaN])
+      if (cell !== undefined) t.cellSize = cell
+      if (chance(r, 0.4)) t.weight = 'w'
+      if (chance(r, 0.5)) t.count = int(r, 1, 9)
+      if (chance(r, 0.3)) t.nice = true
+      if (chance(r, 0.25)) t.thresholds = [0.0005, 0.002, 0.00001, 0.002].slice(0, int(r, 0, 4))
+      const rows = pointsWith(r, pick(r, [0, 1, 3, 12, 60]), chance(r, 0.6))
+      it(`#${i} ${JSON.stringify(enc(t))} n=${rows.length}`, async () => { await same('contour points', rows, [t]) })
+    }
+  })
+
+  describe('kde2d: bandwidth forms, size, cell size, null / NaN / string coordinates', () => {
+    const r = prng(0x7a13)
+    const BW: unknown[] = [undefined, 3, 0, -1, '4', null, [], [3], [0], [-1], [2, 5], [0, 4], [null, 3], [NaN, 3], ['3', 3], [1, 2, 3], [-1, -1], [undefined, 2]]
+    for (let i = 0; i < 400; i++) {
+      const t: Params = { type: 'kde2d', size: pick(r, [[40, 30], [40, 30], ['40', 30], [0, 0], [-1, 5], [NaN, 5], [7.5, 9.2]]), x: pick(r, ['x', { expr: 'datum.x' }]), y: pick(r, ['y', { expr: 'datum.y' }]) }
+      const bw = pick(r, BW)
+      if (bw !== undefined) t.bandwidth = bw
+      const cell = pick(r, [undefined, 1, 2, 4, 3, 0.5, 0, '2', -2])
+      if (cell !== undefined) t.cellSize = cell
+      if (chance(r, 0.4)) t.weight = pick(r, ['w', { expr: 'datum.w * 2' }])
+      if (chance(r, 0.5)) t.counts = chance(r, 0.5)
+      if (chance(r, 0.4)) t.groupby = pick(r, [['g'], ['g', 'g']])
+      if (chance(r, 0.08)) delete t[pick(r, ['size', 'x', 'y'])] // a required parameter left out
+      const rows = pointsWith(r, pick(r, [0, 1, 2, 5, 40]), chance(r, 0.7))
+      it(`#${i} ${JSON.stringify(enc(t))} n=${rows.length}`, async () => { await same('kde2d', rows, [t]) })
+    }
+  })
+
+  describe('isocontour of hand-made grids: scale, translate, levels, zero, thresholds, cells', () => {
+    const r = prng(0x7a14)
+    for (let i = 0; i < 500; i++) {
+      const rows: Row[] = Array.from({ length: int(r, 0, 3) }, () => ({ id: int(r, 0, 9), grid: handGrid(r, chance(r, 0.5)) }))
+      const t: Params = { type: 'isocontour', field: 'grid' }
+      if (chance(r, 0.7)) t.levels = pick(r, [1, 2, 3, 5, 0, '4', null, 2.5])
+      if (chance(r, 0.4)) t.nice = chance(r, 0.7)
+      if (chance(r, 0.5)) t.zero = pick(r, [true, false, 0, null])
+      if (chance(r, 0.4)) t.resolve = pick(r, ['shared', 'independent', 'other'])
+      if (chance(r, 0.2)) t.smooth = pick(r, [false, 0, null])
+      if (chance(r, 0.35)) t.thresholds = pick(r, [[1, 2], [2, 1], [3, 1, 2], [2, 2, 1], [], [0.5, NaN, 1], [1, null], 2, ['1', '2'], [0, 1, 0]])
+      if (chance(r, 0.6)) t.scale = pick(r, [0, 1, 2, -1, [0, 0], [1, -1], [0, 2], [2, 0], [3, 2], null, '2', { expr: 'datum.id + 1' }, { expr: '0' }])
+      if (chance(r, 0.5)) t.translate = pick(r, [0, null, false, { signal: '0' }, { signal: 'null' }, { signal: '[2, 3]' }, { signal: '5' }, [0, 0], [5, 7], [-3, 0], [null, 4], { expr: '[datum.id, 1]' }])
+      if (chance(r, 0.15)) t.as = pick(r, ['c', null, ''])
+      it(`#${i} ${JSON.stringify(enc([t, rows.map((x) => (x.grid as { scale?: number }).scale)]))}`, async () => { await same('isocontour', rows, [t]) })
+    }
+  })
+
+  describe('kde2d -> isocontour: the density grid carries its own scale and window', () => {
+    const r = prng(0x7a15)
+    for (let i = 0; i < 200; i++) {
+      const t: Params = { type: 'kde2d', size: [int(r, 10, 60), int(r, 10, 50)], x: 'x', y: 'y', groupby: ['g'], cellSize: pick(r, [1, 2, 4]) }
+      const bw = pick(r, [undefined, [3, 3], [0, 4], [-1, -1]])
+      if (bw !== undefined) t.bandwidth = bw
+      const iso: Params = { type: 'isocontour', field: 'grid' }
+      if (chance(r, 0.7)) iso.scale = pick(r, [0, 1, 2, -1, [0, 3], [3, 0], null])
+      if (chance(r, 0.5)) iso.translate = pick(r, [0, [4, 5], [null, 1]])
+      if (chance(r, 0.5)) iso.levels = int(r, 1, 6)
+      if (chance(r, 0.3)) iso.zero = false
+      if (chance(r, 0.3)) iso.resolve = 'shared'
+      if (chance(r, 0.3)) iso.thresholds = pick(r, [[0.002, 0.0005], [0.001, 0.001, 0.0001]])
+      const rows = pointsWith(r, pick(r, [0, 5, 30, 80]), chance(r, 0.5))
+      it(`#${i} ${JSON.stringify(enc([t, iso]))} n=${rows.length}`, async () => { await same('kde2d->isocontour', rows, [t, iso]) })
+    }
+  })
+})
+
+describe('vega-geo heatmap over hand-made grids (generated, live)', { timeout: 300_000 }, () => {
+  const globals = globalThis as unknown as { document?: unknown }
+  beforeAll(() => { globals.document = fakeDocument() })
+  afterAll(() => { delete globals.document })
+  const r = prng(0x7a16)
+  for (let i = 0; i < 250; i++) {
+    const rows: Row[] = Array.from({ length: int(r, 0, 3) }, () => {
+      const grid = handGrid(r, chance(r, 0.6))
+      if (chance(r, 0.15)) delete grid.values // no cells: every value reads 0
+      return { id: int(r, 0, 9), grid }
+    })
+    const t: Params = { type: 'heatmap', field: 'grid' }
+    if (chance(r, 0.5)) t.color = pick(r, ['#e0aa10', 'steelblue', { expr: 'rgb(255 * datum.$value / datum.$max, datum.$x * 20, 120)' }, { expr: 'datum.id > 4 ? "#f00" : "#00f"' }])
+    if (chance(r, 0.5)) t.opacity = pick(r, [0.5, 1, 0, null, { expr: 'datum.$value / datum.$max * 0.8' }, { expr: 'datum.$x > 2 ? 1 : 0.1' }])
+    if (chance(r, 0.4)) t.resolve = pick(r, ['shared', 'independent'])
+    it(`#${i} ${JSON.stringify(enc([t, rows.map((x) => Object.keys(x.grid as object))]))}`, async () => { await same('heatmap grids', rows, [t]) })
+  }
+})
+
+// ------------------------------------------------------------------------ several wrong parameters at once
+//
+// vega reports the first problem in the transform's definition order, so the order itself is observable: it only shows when
+// two parameters are wrong together (one missing, or a list written as a plain value) and the messages differ. A null list
+// reads differently from a number, which is what tells apart two lists that are both wrong.
+describe('vega-geo parameter refusals with several problems at once (generated, live)', { timeout: 120_000 }, () => {
+  const WRONG: unknown[] = [null, 5, 'abc', { a: 1 }, true]
+  const withProblems = (r: Rng, base: Params, required: string[], lists: Record<string, unknown>): Params => {
+    const t = { ...base }
+    for (const [name, ok] of Object.entries(lists)) {
+      const roll = r()
+      if (roll < 0.45) t[name] = pick(r, WRONG)
+      else if (roll < 0.6) delete t[name]
+      else t[name] = ok
+    }
+    for (const name of required) if (chance(r, 0.5)) delete t[name]
+    return t
+  }
+  const rows: Row[] = [{ x: 3, y: 4, g: 'a', grid: { width: 2, height: 2, values: [0, 1, 2, 3] } }]
+  const kinds: Array<[string, (r: Rng) => Params]> = [
+    ['kde2d', (r) => withProblems(r, { type: 'kde2d', size: [10, 10], x: 'x', y: 'y' }, ['size', 'x', 'y'], { bandwidth: [2, 2], groupby: ['g'] })],
+    ['contour', (r) => withProblems(r, { type: 'contour', size: [2, 2], values: [0, 1, 2, 3] }, ['size'], { size: [2, 2], values: [0, 1, 2, 3], thresholds: [1] })],
+    ['isocontour', (r) => withProblems(r, { type: 'isocontour', field: 'grid' }, [], { thresholds: [1], translate: [1, 1] })],
+  ]
+  for (const [kind, make] of kinds) {
+    const r = prng(0x7a17 + kind.length)
+    for (let i = 0; i < (kind === 'contour' ? 400 : 150); i++) {
+      const t = make(r)
+      it(`${kind} #${i} ${JSON.stringify(enc(t))}`, async () => { await same(`${kind} problems`, rows, [t]) })
+    }
+  }
 })

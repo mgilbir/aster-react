@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- **Transform gaps against real vega** (generated, live differentials over the parameter space):
+  - `quantile` skips `null` like d3-array (`quantile([null, null], 0.25)` was 0, and a column with nulls shifted every percentile).
+  - `contour`, `isocontour`, `kde2d` and `heatmap` follow vega: `scale: 0` and a falsy `translate` fall back to the grid's;
+    `contour` spreads its default thresholds from zero when `values` are given; thresholds keep the order given (repeats too);
+    a null cell reads as 0, a NaN one is below every level and smooths to a NaN coordinate; an estimated bandwidth no longer
+    counts a null or empty coordinate as 0; a list parameter written as a plain value, a missing required parameter, an invalid
+    cell size or bandwidth are refused with vega's messages, in vega's order.
+  - `force` refuses a bad `forces` list with vega's messages (`Unsupported parameter: {"force":"gravity"}`, `Expected an array of
+    sub-parameters`, `Undefined data set name` for a link force). Not fixed: the wording of an expression syntax error is still
+    the parser's, not `Expression parse error: ...`.
+
 - **`@aster/core` geo engine in Aster's own design** (`geo-events.ts`, `geo-sphere.ts`, `geo-clip.ts`, `geo-resample.ts`,
   `geo-raw.ts`, `geo-projections.ts`, `geo-path.ts`, `geo-sphere-measures.ts`, `geo.ts`). A GeoJSON object is flattened into
   an event buffer and each stage (rotate, clip to the visible sphere, project with adaptive resampling, clip to the

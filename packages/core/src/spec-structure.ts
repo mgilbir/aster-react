@@ -131,13 +131,15 @@ function checkFrom(from: unknown, group: boolean, names: Names): void {
   getDataRef(f)
 }
 
-/** The data sets a transform names: `lookup.from` and the label transform's `avoidMarks`. */
+/** The data sets a transform names: `lookup.from`, a force's `links` and the label transform's `avoidMarks`. */
 function checkTransforms(transforms: unknown, names: Names): void {
   for (const t of specList(transforms)) {
     if (!isRecord(t)) continue
     if (t.type === 'lookup' && t.from !== undefined) {
       if (typeof t.from !== 'string') throw new SpecParseError('Lookup "from" parameter must be a string literal.')
       need(names, t.from)
+    } else if (t.type === 'force' && Array.isArray(t.forces)) {
+      for (const f of t.forces) if (isRecord(f) && f.force === 'link' && f.links !== undefined) need(names, f.links)
     } else if (t.type === 'label') {
       for (const m of specList(t.avoidMarks)) need(names, m)
     }

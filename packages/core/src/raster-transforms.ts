@@ -4,10 +4,11 @@
  * contours are in `raster-grid.ts`, the polygons in `contour.ts`. Loaded by the transforms addon; `isocontour`
  * needs the geo addon.
  */
-import { error, isArray } from './util.js'
+import { isArray } from './util.js'
 import { fieldOf } from './transform-agg.js'
 import { compileExprTransform, contourQuantize } from './transform.js'
 import { densityGrid, placeContours, type RasterGrid } from './raster-grid.js'
+import { accessorOf as fieldAccessor, densitySettings, type DensitySettings, type Get } from './raster-params.js'
 import type { Row, TransformContext } from './transform.js'
 import { boundedCount } from './limits.js'
 import { geoRegistry, requireGeo } from './registry.js'
@@ -16,25 +17,19 @@ import { rgbConvert, type Rgb } from './color.js'
 import { RasterImage } from './raster-image.js'
 
 type Params = Record<string, unknown>
-type Get = (d: Row) => unknown
 
 /** A `field`-typed parameter: a field name, or an `{expr}` evaluated over the tuple. */
-function accessorOf(f: unknown, ctx: TransformContext): Get {
-  if (f !== null && typeof f === 'object' && typeof (f as { expr?: unknown }).expr === 'string') {
-    return compileExprTransform((f as { expr: string }).expr, ctx) as Get
-  }
-  return fieldOf(f) as Get
-}
+const accessorOf = (f: unknown, ctx: TransformContext): Get => fieldAccessor(f, (expr) => compileExprTransform(expr, ctx) as Get)
 
 /** The density grid of one group of points (`kde2d`). */
-function densityOf(data: Row[], x: Get, y: Get, weight: Get | null, size: [number, number], cellSize: number | undefined, bandwidth: [number, number], counts: boolean): RasterGrid {
+function densityOf(data: Row[], x: Get, y: Get, weight: Get | null, settings: DensitySettings, counts: boolean): RasterGrid {
   return densityGrid({
-    xs: data.map((d) => +(x(d) as number)),
-    ys: data.map((d) => +(y(d) as number)),
+    xs: data.map((d) => x(d)),
+    ys: data.map((d) => y(d)),
     weightAt: (i) => +(weight ? (weight(data[i]!) as number) : 1),
-    size,
-    k: cellSize === undefined ? 2 : Math.floor(Math.log(cellSize) / Math.LN2),
-    bandwidth,
+    size: settings.size,
+    k: settings.k,
+    bandwidth: settings.bandwidth,
     counts,
     label: 'kde2d grid',
   })
@@ -42,17 +37,7 @@ function densityOf(data: Row[], x: Get, y: Get, weight: Get | null, size: [numbe
 
 /** A density grid for each group of the points (all of them when there is no `groupby`). */
 export function kde2dRows(rows: Row[], t: Params, ctx: TransformContext): Row[] {
-  if (t.size == null || t.x == null || t.y == null) error('Missing required "kde2d" parameter: size, x and y.')
-  const size = (t.size as unknown[]).map((v) => +(v as number)) as [number, number]
-  if (!(size[0] >= 0 && size[1] >= 0)) error('invalid size')
-  if (t.cellSize != null && !(+(t.cellSize as number) >= 1)) error('invalid cell size')
-  let bandwidth: [number, number] = [-1, -1]
-  if (t.bandwidth != null) {
-    const b = ([] as unknown[]).concat(t.bandwidth)
-    if (b.length === 1) bandwidth = [+(b[0] as number), +(b[0] as number)]
-    else if (b.length === 2) bandwidth = [+(b[0] as number), +(b[1] as number)]
-    else error('invalid bandwidth')
-  }
+  const settings = densitySettings(t)
   const x = accessorOf(t.x, ctx)
   const y = accessorOf(t.y, ctx)
   const weight = t.weight != null ? accessorOf(t.weight, ctx) : null
@@ -74,7 +59,7 @@ export function kde2dRows(rows: Row[], t: Params, ctx: TransformContext): Row[] 
     }
   }
   return groups.map((g) => {
-    const out: Row = { [as]: densityOf(g, x, y, weight, size, t.cellSize == null ? undefined : +(t.cellSize as number), bandwidth, !!t.counts) }
+    const out: Row = { [as]: densityOf(g, x, y, weight, settings, !!t.counts) }
     for (let i = 0; i < names.length; ++i) out[names[i]!] = g.dims![i]
     return out
   })
@@ -82,6 +67,7 @@ export function kde2dRows(rows: Row[], t: Params, ctx: TransformContext): Row[] 
 
 /** The largest number of a list, skipping NaN and missing entries. */
 const max = (values: ArrayLike<number>): number | undefined => {
+  if (values == null) throw new TypeError('values is not iterable') // (a grid with no cells)
   let m: number | undefined
   for (let i = 0; i < values.length; ++i) { const v = values[i]!; if (v != null && v >= v && (m === undefined || v > m)) m = v }
   return m
@@ -94,11 +80,10 @@ export function isocontourRows(rows: Row[], t: Params, ctx: TransformContext): R
   const contourRun = geoRegistry.contourRun
   if (!contourRun) requireGeo() // throws: the geo addon is not loaded
 
-  // thresholds: given, or `levels` quantized per grid (independent) or over the grids' maxima (shared)
-  const quantize = contourQuantize(+(t.levels as number) || 10, !!t.nice, t.zero !== false)
-  let tz: number[] | ((values: Float32Array) => number[])
-  if (t.thresholds != null) tz = ([] as unknown[]).concat(t.thresholds).map((v) => +(v as number))
-  else tz = t.resolve !== 'shared' ? quantize : quantize(rows.map((r) => max((field(r) as RasterGrid).values) as number))
+  // thresholds: given (a list, empty included), or `levels` quantized per grid (independent) or over the grids' maxima (shared)
+  const quantize = contourQuantize((t.levels as number) || 10, !!t.nice, t.zero !== false)
+  let tz = t.thresholds as number[] | ((values: Float32Array) => number[]) | undefined
+  if (!tz) tz = t.resolve !== 'shared' ? quantize : quantize(rows.map((r) => max((field(r) as RasterGrid).values) as number))
   const as = t.as === null ? null : (t.as as string | undefined) || 'contour'
 
   const exprValue = (v: unknown, row: Row): unknown => {
@@ -115,8 +100,8 @@ export function isocontourRows(rows: Row[], t: Params, ctx: TransformContext): R
       .map((f) => ({ type: f.type, value: f.value, coordinates: f.coordinates }))
 
     // `scale` and `translate` (a number or pair, or an expression of the row) place the polygons in view pixels
-    const s = exprValue(t.scale ?? grid.scale, r)
-    const tr = exprValue(t.translate ?? grid.translate, r) as number[] | undefined
+    const s = exprValue(t.scale || grid.scale, r)
+    const tr = exprValue(t.translate || grid.translate, r) as number[] | undefined
     if (!((s === 1 || s == null) && !tr)) {
       const pair = (typeof s === 'number' ? [s, s] : s) as number[]
       placeContours(paths, [grid.x1 || 0, grid.y1 || 0], [pair[0] || 1, pair[1] || 1], [(tr && tr[0]) || 0, (tr && tr[1]) || 0])

@@ -94,6 +94,7 @@ broke CI once, Node 22 against Node 26):
 | d3-geo projections and `geoPath`, d3-contour | `differential-d3-geo.test.mts` | `d3-geo-cases.mjs` | 18 + 30 (geo twice, see below) |
 | the geo engine over seeded random GeoJSON and random projection parameters, every projection type, fits, spherical measures, whole specs | `differential-geo-generated.test.mts` | `geo-gen.mts` | 17 types x (36 + 14) + 6 x 17 fit-width/height + 600 spherical + 90 specs |
 | d3-shape lines, areas, curve families | `differential-d3-shape.test.mts` | `d3-shape-cases.mjs` | 247 + 9 (each twice, see below) |
+| d3-shape generated: every curve x beta/tension/alpha x seeded point sets (gaps, duplicates, collinear, 0-2 points, 1e300 / 1e-300, NaN/Infinity), line and area in five x0/x1/y0/y1 configurations, `d` at 3 / 0 / full digits and the raw context calls | `differential-d3-shape-generated.test.mts` | generated in the test (seeded) | 57 curve variants as line and as area, ~56k comparisons |
 | vega-expression parser and vega-interpreter evaluator (all five kinds) | `differential-vega-expression.test.mts` | `vega-expression-cases.mjs` | 92 + 23 + 74 + 18 + 10 |
 
 The pinned upstream and Aster run in ONE process on identical inputs and are compared strictly: `NaN`,
@@ -106,7 +107,7 @@ TypeErrors that `evalSecurity` pins).
 
 d3-shape and d3-geo round path coordinates to 3 decimals by default, which hides a 1-ulp divergence (a planted
 `* (1 + Number.EPSILON)` in a Catmull-Rom curve and in the Mercator raw projection left every string identical).
-Their cases therefore run twice, at the default digits and at full precision (`.digits(null)`).
+Their cases therefore run twice, at the default digits and at full precision (`digits` null). The generated d3-shape differential also compares the exact numbers the curves send to a drawing context, which is what the canvas renderer draws.
 
 The **spec-level** suites work one level up and are LIVE differentials, not recordings
 (`packages/conformance/scripts/differential-{scale-spec,projection,interpolate}.test.mts`): a Vega **scale spec**

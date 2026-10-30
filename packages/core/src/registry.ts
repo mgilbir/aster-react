@@ -31,7 +31,7 @@ export interface GeoRegistry {
   /** vega-projection's `defaultPath`: d3's geoPath with no projection (a `geopath` that names none draws raw coordinates). */
   defaultPath: (() => unknown) | null
   /** d3-contour marching squares over a raster grid; null until loaded. */
-  contourRun: ((values: number[] | Float32Array, thresholds: number[], size: [number, number], smooth: boolean) => ContourFeature[]) | null
+  contourRun: ((values: ArrayLike<unknown>, thresholds: ArrayLike<unknown>, size: ArrayLike<number>, smooth: boolean) => ContourFeature[]) | null
 }
 
 export const geoRegistry: GeoRegistry = {
