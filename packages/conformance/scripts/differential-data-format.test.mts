@@ -19,7 +19,9 @@ const VALUES: unknown[] = [
 
 function image(f: () => unknown): unknown {
   try {
-    return enc(f())
+    const rows = f()
+    // d3-dsv hangs a `columns` list on the rows array; `read` removes it, and so must `readData`
+    return { rows: enc(rows), columns: Array.isArray(rows) && Object.hasOwn(rows, 'columns') }
   } catch (e) {
     // Aster's messages carry an `[aster]` prefix and a lower-case start; what follows must be the same
     return { threw: String((e as Error).message).replace(/^\[aster\] /, '').replace(/^./, (c) => c.toLowerCase()) }

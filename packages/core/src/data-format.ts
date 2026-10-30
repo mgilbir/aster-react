@@ -1,17 +1,15 @@
 /**
- * Vega data-format semantics (port of vega-loader's `read`, `parse` and the
- * JSON reader — oracle-identical type coercion via the ported converters in
- * `./util.js`, replayed against the pinned oracle's vectors).
+ * Reading data in the formats a Vega `data` entry names: choosing the reader by `format.type`, then converting the
+ * columns named by `format.parse` (to numbers, booleans, dates, ...) or inferred from the values (`parse: 'auto'`).
  *
- * Text formats that need real parsers (csv/tsv/dsv via d3-dsv, topojson via
- * topojson-client) and URL fetching live in the `@aster/core/load` addon,
- * which registers them into `dataFormatRegistry`.
+ * Text formats that need a real parser (csv/tsv/dsv, topojson) and fetching URLs live in the `@aster/core/load` addon,
+ * which registers its readers in `dataFormatRegistry`; json is built in.
  */
 import { dataFormatRegistry } from './registry.js'
 import { currentLocale } from './locale.js'
 import { safeGet, toBoolean, toDate, toNumber, toString } from './util.js'
 
-/** vega-loader's typeParsers, backed by the ported converters (oracle-vector-tested). */
+/** The converter for each column type a `parse` entry can name. */
 export const typeParsers: Record<string, (v: unknown) => unknown> = {
   boolean: toBoolean,
   integer: toNumber,
@@ -32,78 +30,74 @@ export interface DataFormatSpec {
   header?: unknown[]
 }
 
+/** The converter for one `parse` entry: a column type, or `date:<pattern>` / `utc:<pattern>` (the pattern may be quoted). */
+function converterFor(field: string, type: string): (v: unknown) => unknown {
+  if (type && (type.startsWith('date:') || type.startsWith('utc:'))) {
+    let pattern = type.slice(type.indexOf(':') + 1)
+    const quote = pattern[0]
+    if ((quote === "'" || quote === '"') && pattern[pattern.length - 1] === quote) pattern = pattern.slice(1, -1)
+    const locale = currentLocale()
+    const parse = type.startsWith('utc:') ? locale.utcParse(pattern) : locale.timeParse(pattern)
+    return (v) => parse(v as string)
+  }
+  if (!Object.hasOwn(typeParsers, type)) throw new Error(`[aster] illegal format pattern: ${field}:${type}`)
+  return typeParsers[type]!
+}
+
 /**
- * Apply `format.parse` type coercion to parsed rows (vega-loader read.js).
- * Handles `parse: 'auto'` (type inference), the plain types, and the
- * `date:'%d/%m/%Y'` / `utc:'%Y-%m-%d'` pattern forms: the pattern (optionally
- * wrapped in single or double quotes) goes through the default locale's
- * `timeParse`/`utcParse`, so the cell becomes a Date (or null when it does not
- * match), exactly like vega-loader.
+ * Convert the columns `parse` names in every row (`'auto'`: every column of the first row, by the type its values
+ * suggest). A date pattern turns a cell into a Date, or null where it does not match. The rows are copied.
  */
 export function coerceRows(rows: Record<string, unknown>[], parse: Record<string, string> | string): Record<string, unknown>[] {
   if (!rows.length) return rows
-  const types: Record<string, string> = parse === 'auto'
-    ? inferTypes(rows, Object.keys(rows[0]!))
-    : (parse as Record<string, string>)
-  const fields = Object.keys(types)
-  const parsers = fields.map((field): ((v: unknown) => unknown) => {
-    const type = types[field] as string
-    if (type && (type.startsWith('date:') || type.startsWith('utc:'))) {
-      const colon = type.indexOf(':')
-      let pattern = type.slice(colon + 1)
-      if ((pattern[0] === "'" && pattern[pattern.length - 1] === "'") || (pattern[0] === '"' && pattern[pattern.length - 1] === '"')) {
-        pattern = pattern.slice(1, -1)
-      }
-      const loc = currentLocale()
-      const parser = type.startsWith('utc:') ? loc.utcParse(pattern) : loc.timeParse(pattern)
-      return (v) => parser(v as string)
-    }
-    if (!Object.hasOwn(typeParsers, type)) throw new Error(`[aster] illegal format pattern: ${field}:${type}`)
-    return typeParsers[type]!
+  const types = parse === 'auto' ? inferTypes(rows, Object.keys(rows[0]!)) : parse
+  const columns = Object.entries(types).map(([field, type]) => [field, converterFor(field, type)] as const)
+  return rows.map((row) => {
+    const out = { ...row }
+    for (const [field, convert] of columns) out[field] = convert(out[field])
+    return out
   })
-  const out = rows.map((r) => ({ ...r }))
-  for (let i = 0; i < out.length; ++i) {
-    const datum = out[i]!
-    for (let j = 0; j < fields.length; ++j) {
-      const field = fields[j]!
-      datum[field] = parsers[j]!(datum[field])
-    }
-  }
-  return out
 }
 
-/** d3-array-free type inference (port of vega-loader type.js inferType). */
-const isValid = (v: unknown) => v != null && v === v
-const isBooleanStr = (v: unknown) => v === 'true' || v === 'false' || v === true || v === false
-const isDateStr = (v: unknown) => !Number.isNaN(Date.parse(v as string))
-const isNumberStr = (v: unknown) => !Number.isNaN(+(v as number)) && !(v instanceof Date)
-const isIntegerStr = (v: unknown) => isNumberStr(v) && Number.isInteger(+(v as string))
-const typeTests = [isBooleanStr, isIntegerStr, isNumberStr, isDateStr]
-const typeList = ['boolean', 'integer', 'number', 'date']
+// -- inferring column types -------------------------------------------------------------------------------------------
 
+const isPresent = (v: unknown): boolean => v != null && v === v
+const looksNumeric = (v: unknown): boolean => !Number.isNaN(+(v as number)) && !(v instanceof Date)
+
+/** The types a column can be, most specific first, with what a value must be to be one. */
+const CANDIDATES: ReadonlyArray<readonly [type: string, accepts: (v: unknown) => boolean]> = [
+  ['boolean', (v) => v === 'true' || v === 'false' || v === true || v === false],
+  ['integer', (v) => looksNumeric(v) && Number.isInteger(+(v as number))],
+  ['number', looksNumeric],
+  ['date', (v) => !Number.isNaN(Date.parse(v as string))],
+]
+
+/**
+ * The type of a column: the first of boolean, integer, number and date that every value (missing ones, null or NaN,
+ * excepted) fits; `string` when none; `unknown` for no values at all; and `boolean` when every value is missing.
+ * `field` picks the column out of row objects.
+ */
 export function inferType(values: unknown[], field?: string): string {
   if (!values || !values.length) return 'unknown'
-  const n = values.length
-  const m = typeTests.length
-  const a = typeTests.map((_, i) => i + 1)
-  for (let i = 0, t = 0, j = 0, value: unknown; i < n; ++i) {
-    value = field ? (values[i] as Record<string, unknown>)?.[field] : values[i]
-    for (j = 0; j < m; ++j) {
-      if (a[j] && isValid(value) && !typeTests[j]!(value)) {
-        a[j] = 0
-        ++t
-        if (t === typeTests.length) return 'string'
+  const open = CANDIDATES.map(() => true)
+  let remaining = CANDIDATES.length
+  for (const row of values) {
+    const value = field ? (row as Record<string, unknown> | undefined)?.[field] : row
+    if (!isPresent(value)) continue
+    for (let k = 0; k < CANDIDATES.length; k++) {
+      if (open[k] && !CANDIDATES[k]![1](value)) {
+        open[k] = false
+        if (--remaining === 0) return 'string'
       }
     }
   }
-  return typeList[a.reduce((u, v) => (u === 0 ? v : u), 0) - 1]!
+  return CANDIDATES[open.indexOf(true)]![0]
 }
 
 export function inferTypes(data: unknown[], fields: string[]): Record<string, string> {
-  return fields.reduce<Record<string, string>>((types, field) => {
-    types[field] = inferType(data, field)
-    return types
-  }, {})
+  const types: Record<string, string> = {}
+  for (const field of fields) types[field] = inferType(data, field)
+  return types
 }
 
 /**
