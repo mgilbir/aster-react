@@ -154,7 +154,7 @@ function makeInterval(unit: Unit): TimeInterval {
 
 // --- zones: local and UTC field access ---------------------------------------------------------
 
-interface Zone {
+export interface Zone {
   ms(d: Date): number
   sec(d: Date): number
   min(d: Date): number
@@ -172,7 +172,7 @@ interface Zone {
   behind(d: Date): number
 }
 
-const LOCAL: Zone = {
+export const localZone: Zone = {
   ms: (d) => d.getMilliseconds(),
   sec: (d) => d.getSeconds(),
   min: (d) => d.getMinutes(),
@@ -189,7 +189,7 @@ const LOCAL: Zone = {
   behind: (d) => d.getTimezoneOffset(),
 }
 
-const UTC: Zone = {
+export const utcZone: Zone = {
   ms: (d) => d.getUTCMilliseconds(),
   sec: (d) => d.getUTCSeconds(),
   min: (d) => d.getUTCMinutes(),
@@ -270,8 +270,8 @@ function calendarUnits(zone: Zone) {
   return { minute, hour, day, week, month, year }
 }
 
-const localUnits = /* @__PURE__ */ calendarUnits(LOCAL)
-const utcUnits = /* @__PURE__ */ calendarUnits(UTC)
+const localUnits = /* @__PURE__ */ calendarUnits(localZone)
+const utcUnits = /* @__PURE__ */ calendarUnits(utcZone)
 
 // --- the exported intervals -----------------------------------------------------------------------
 
@@ -455,7 +455,7 @@ function localJanuary1(year: number): Date {
 }
 
 const LOCAL_CALENDAR: Calendar = {
-  zone: LOCAL,
+  zone: localZone,
   january1: (year) => +localJanuary1(year),
   firstWeekday: (year) => localJanuary1(year).getDay(),
   day: timeDay,
@@ -464,7 +464,7 @@ const LOCAL_CALENDAR: Calendar = {
 }
 
 const UTC_CALENDAR: Calendar = {
-  zone: UTC,
+  zone: utcZone,
   january1: (year) => Date.UTC(year, 0, 1),
   firstWeekday(year) {
     january1Scratch.setTime(Date.UTC(year, 0, 1))
