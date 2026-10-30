@@ -546,11 +546,11 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 ## Apache Commons Math (Apache-2.0)
 
-`erfinv` in `packages/core/src/stats-functions.ts` is ported from Apache Commons
-Math (the inverse error function, `Erf.erfInv`), by way of `vega-statistics`
-`src/normal.js`, whose comment reads "Ported from Apache Commons Math,
-http://www.apache.org/licenses/LICENSE-2.0". Vega itself attributes it only by that
-comment and carries no `NOTICE`. Apache-2.0 section 4(d) asks derivative works to
+`erfinv` in `packages/core/src/stats-functions.ts` evaluates the approximation of
+Apache Commons Math (the inverse error function, `Erf.erfInv`, after Giles) with its
+coefficients, arranged as coefficient tables and a Horner evaluation. `vega-statistics`
+`src/normal.js` carries the same routine, with the comment "Ported from Apache Commons
+Math, http://www.apache.org/licenses/LICENSE-2.0", and no `NOTICE`. Apache-2.0 section 4(d) asks derivative works to
 carry the `NOTICE` text of the work they derive from, so the `NOTICE` of Apache
 Commons Math is reproduced below, followed by the licence.
 
@@ -780,8 +780,9 @@ https://www.apache.org/licenses/LICENSE-2.0.txt :
 
 ## science.js (Jason Davies)
 
-The loess implementation in `packages/core/src/transform-stats.ts` is `vega-statistics`'
-`src/regression/loess.js`, which is "Adapted from science.js by Jason Davies"
+`loessSmooth` in `packages/core/src/curve-fits.ts` implements the algorithm of
+`vega-statistics`' `src/regression/loess.js` (its sliding window of nearest neighbours,
+tricube weights and robustness iterations), which is "Adapted from science.js by Jason Davies"
 (https://github.com/jasondavies/science.js/blob/master/src/stats/loess.js) and names
 https://github.com/jasondavies/science.js/blob/master/LICENSE as its licence. science.js
 is not installed in this repository. The text below is that `LICENSE` as it stood
@@ -820,8 +821,9 @@ ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 ## d3-regression (Harry Stevens) and regression-js (Tom Alexander)
 
-`polyFit` in `packages/core/src/transform-stats.ts`
-follow `vega-statistics`' `src/regression/poly.js`, which is "Adapted from d3-regression
+`polynomialFit` in `packages/core/src/curve-fits.ts`
+follows the method of `vega-statistics`' `src/regression/poly.js` (normal equations on centred data, solved by
+elimination with partial pivoting), which is "Adapted from d3-regression
 by Harry Stevens ... which was adapted from regression-js by Tom Alexander". Neither
 is installed in this repository. The texts below are their `LICENSE` files, fetched from
 https://raw.githubusercontent.com/HarryStevens/d3-regression/29c3b591778118579520b72f09326ad3e9f2c5fd/LICENSE
