@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- **`@aster/core`: the small ports in Aster's own design** (`event-selector.ts`, `selections.ts`, `timer.ts`, `topojson.ts`,
+  `dsv.ts`, `data-format.ts`, and the voronoi transform as `delaunay.ts` + `voronoi.ts` + `orient.ts`). Parsed selectors and their
+  messages, selection results, timer ticks on a virtual clock, topojson features and meshes, parsed rows, inferred types and
+  voronoi paths are unchanged, and now pinned by generated live differentials against the real vega-event-selector,
+  vega-selections, d3-timer (with clock stalls and manual flushes), topojson-client (random topologies and us-10m / world-110m),
+  d3-dsv, vega-loader and d3-delaunay / delaunator / robust-predicates (point sets that stress a triangulation). What they found
+  and fixed: voronoi cells of nearly coincident points were computed with an inexact orientation test (an exact sign is used now);
+  an inverted or NaN extent is refused with `invalid bounds`; voronoi on missing coordinates ends instead of looping. Deviations
+  kept, in docs/ARCHITECTURE.md: `vlSelectionResolve` does not grow the store's arrays in place, topojson positions are fresh
+  arrays. Selection tests over 100k tuples run in about 55% of the time of the code they replace.
+
 - **`@aster/vl`: selections and composite marks in Aster's own design** (`selection*.ts`, `composite*.ts`). A selection is resolved
   against its unit into a model and wired by one sequence of steps over the signals it makes; the three composite marks share one
   anatomy and one part builder. The compiled Vega is unchanged on the 2769 specs of the matrices, the corpus and the gallery. New
