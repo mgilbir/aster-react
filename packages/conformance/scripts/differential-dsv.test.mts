@@ -42,7 +42,7 @@ function run(f: () => unknown): unknown {
 }
 
 const VALUES = ['x', 'y,z', 'q"r', 'a\nb', 'a\rb', '', ' ', 1, 2.5, -0, 0, null, undefined, true, false, NaN, 'semi;colon', 'tab\tbed', 'pipe|', '"']
-const DATES = [0, 1e12, 86399999, 1.7e12 + 123, 951782400000, -62198755200000, 253402300800000 + 60000, NaN, 1e15].map((t) => new Date(t))
+const DATES = [0, 3600000, 3660000, 61000, 1e12, 86399999, 1.7e12 + 123, 951782400000, -62198755200000, 253402300800000 + 60000, NaN, 1e15].map((t) => new Date(t))
 
 describe('dsvFormat vs d3-dsv (generated)', () => {
   for (const delimiter of DELIMITERS) {
