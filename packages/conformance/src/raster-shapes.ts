@@ -106,7 +106,7 @@ function generate(count: number): RasterShape[] {
       cmds.push(['beginPath'], ['moveTo', q(between(2, w - 2)), q(between(2, h - 2))])
       for (let k = 0; k < 2 + Math.floor(r() * 3); k++) cmds.push(['lineTo', q(between(2, w - 2)), q(between(2, h - 2))])
       if (r() < 0.3) cmds.push(['closePath'])
-      cmds.push(...stroke(wid, cap, join, r() < 0.3 ? [q(between(1, 6)), q(between(1, 6))] : []))
+      for (const c of stroke(wid, cap, join, r() < 0.3 ? [q(between(1, 6)), q(between(1, 6))] : [])) cmds.push(c)
       name = `stroke w=${wid} ${cap} ${join}`
     } else { // a stroked curve
       const wid = q(between(0.5, 5))
