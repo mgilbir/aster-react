@@ -331,20 +331,20 @@ function countMap(records: DrawRecord[]): Map<string, number> {
 }
 
 /**
- * Two path keys that are the same drawing: the same commands and paint, every number within the rounding of the serialised SVG
- * (3 decimals, so up to 0.0005 each; two roundings of a derived coordinate, 0.001). The canvas paints a symbol from the unrounded
- * numbers (as vega does), so its coordinates, rounded here to 3 decimals, may land one step from the SVG's.
+ * Two path keys that are the same drawing: the same commands and paint, every number within `rounding`. Only SYMBOLS are painted on
+ * a canvas from unrounded numbers (as vega does), so only a symbol's coordinates, rounded here to 3 decimals, may land one step
+ * (0.001) from the SVG's, which is serialised at 3 decimals. Every other mark is compared with rounding 0: exactly.
  */
-const ROUNDING = 0.0011
-function sameDrawing(a: string, b: string): boolean {
+const SYMBOL_ROUNDING = 0.0011
+function sameDrawing(a: string, b: string, rounding: number): boolean {
   const num = /-?\d+(?:\.\d+)?(?:e[-+]?\d+)?/g
   if (a.replace(num, '#') !== b.replace(num, '#')) return false
   const xs = a.match(num) ?? []
   const ys = b.match(num) ?? []
-  return xs.length === ys.length && xs.every((x, i) => Math.abs(Number(x) - Number(ys[i])) <= ROUNDING)
+  return xs.length === ys.length && xs.every((x, i) => Math.abs(Number(x) - Number(ys[i])) <= rounding)
 }
 
-function diffRecords(a: DrawRecord[], b: DrawRecord[]): string[] {
+function diffRecords(a: DrawRecord[], b: DrawRecord[], rounding = 0): string[] {
   const ma = countMap(a)
   const mb = countMap(b)
   const onlyA: Array<[string, number]> = []
@@ -360,7 +360,7 @@ function diffRecords(a: DrawRecord[], b: DrawRecord[]): string[] {
   // what is left on both sides may be the same drawing rounded differently: pair those up, one for one
   for (const ea of onlyA) {
     for (const eb of onlyB) {
-      while (ea[1] > 0 && eb[1] > 0 && sameDrawing(ea[0], eb[0])) { ea[1]--; eb[1]-- }
+      while (ea[1] > 0 && eb[1] > 0 && sameDrawing(ea[0], eb[0], rounding)) { ea[1]--; eb[1]-- }
     }
   }
   const diffs: string[] = []
@@ -563,17 +563,38 @@ describe('incremental canvas append', () => {
 
 describe('the record comparison', () => {
   const rec = (path: string): DrawRecord[] => [{ kind: 'fill', path, paint: 'red' }]
-  it('accepts the 3-decimal rounding of a coordinate and nothing larger', () => {
-    expect(diffRecords(rec('M217.977,15A4.153,4.153,0,1,1,209.671,15'), rec('M217.977,15A4.153,4.153,0,1,1,209.67,15'))).toEqual([])
-    expect(diffRecords(rec('M217.977,15A4.153,4.153,0,1,1,209.671,15'), rec('M217.977,15A4.153,4.153,0,1,1,209.66,15'))).toHaveLength(2)
+  it('accepts the 3-decimal rounding of a coordinate only when asked to, and nothing larger', () => {
+    expect(diffRecords(rec('M217.977,15A4.153,4.153,0,1,1,209.671,15'), rec('M217.977,15A4.153,4.153,0,1,1,209.67,15'), SYMBOL_ROUNDING)).toEqual([])
+    expect(diffRecords(rec('M217.977,15A4.153,4.153,0,1,1,209.671,15'), rec('M217.977,15A4.153,4.153,0,1,1,209.67,15'))).toHaveLength(2)
+    expect(diffRecords(rec('M217.977,15A4.153,4.153,0,1,1,209.671,15'), rec('M217.977,15A4.153,4.153,0,1,1,209.66,15'), SYMBOL_ROUNDING)).toHaveLength(2)
     expect(diffRecords(rec('M1,2L3,4'), rec('M1,2L3,4L5,6'))).toHaveLength(2)
     expect(diffRecords(rec('M1,2L3,4'), [{ kind: 'fill', path: 'M1,2L3,4', paint: 'blue' }])).toHaveLength(2)
   })
   it('pairs rounded drawings one for one', () => {
-    expect(diffRecords([...rec('M1,2L3,4'), ...rec('M1,2L3,4')], [...rec('M1.001,2L3,4'), ...rec('M1,2L3,4')])).toEqual([])
-    expect(diffRecords([...rec('M1,2L3,4'), ...rec('M1,2L3,4')], rec('M1.001,2L3,4'))).toHaveLength(1)
+    expect(diffRecords([...rec('M1,2L3,4'), ...rec('M1,2L3,4')], [...rec('M1.001,2L3,4'), ...rec('M1,2L3,4')], SYMBOL_ROUNDING)).toEqual([])
+    expect(diffRecords([...rec('M1,2L3,4'), ...rec('M1,2L3,4')], rec('M1.001,2L3,4'), SYMBOL_ROUNDING)).toHaveLength(1)
   })
 })
+
+/** The scene with only the symbol marks (or only the other marks) left: a copy, the marks it drops emptied; groups stay, so positions do. */
+function only(scene: SceneRoot, symbols: boolean): SceneRoot {
+  const mark = (m: SceneGroup): SceneGroup => {
+    const nested = (m.items ?? []).some((g) => Array.isArray((g as { items?: unknown }).items) && ((g as { items: SceneGroup[] }).items).every((c) => c && typeof c.marktype === 'string'))
+    // (a guide group - axis, legend, title - holds its parts as flat items and has no symbols)
+    if (m.marktype === 'group' && !nested) return symbols ? { ...m, items: [] } : m
+    if (m.marktype === 'group') {
+      return {
+        ...m,
+        items: (m.items ?? []).map((g) => {
+          const item = g as SceneItem & { items?: SceneGroup[] }
+          return { ...item, ...(symbols ? { fill: undefined, stroke: undefined } : {}), ...(item.items ? { items: item.items.map(mark) } : {}) } as SceneItem
+        }),
+      }
+    }
+    return (m.marktype === 'symbol') === symbols ? m : { ...m, items: [] }
+  }
+  return { ...scene, items: (scene.items as SceneGroup[]).map(mark) } as SceneRoot
+}
 
 describe('canvas/svg corpus parity', () => {
   it('matches across the vega corpus', () => {
@@ -598,16 +619,19 @@ describe('canvas/svg corpus parity', () => {
       } catch {
         continue // specs needing addons are exercised by the conformance suite
       }
-      let svg: string
-      let recs: DrawRecord[]
+      let diffs: string[]
       try {
-        svg = renderSceneToSvg(scene)
-        recs = canvasRecords(scene).records
+        // symbols apart from every other mark: the others are compared exactly, the symbols to the SVG's own rounding
+        const rest = only(scene, false)
+        const symbols = only(scene, true)
+        diffs = [
+          ...diffRecords(svgRecords(renderSceneToSvg(rest)), canvasRecords(rest).records, 0).map((d) => 'rest ' + d),
+          ...diffRecords(svgRecords(renderSceneToSvg(symbols)), canvasRecords(symbols).records, SYMBOL_ROUNDING),
+        ]
       } catch (e) {
         failures.push([name, ['render threw: ' + (e as Error).message]])
         continue
       }
-      const diffs = diffRecords(svgRecords(svg), recs)
       if (diffs.length === 0) pass++
       else failures.push([name, diffs.slice(0, 4)])
     }
