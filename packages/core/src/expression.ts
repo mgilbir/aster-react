@@ -1,9 +1,9 @@
 /**
  * Expression engine.
  *
- * The expression DSL is parsed by our port of vega-expression's parser
- * (`./expr-parser.ts`) and evaluated by our port of vega-interpreter's
- * CSP-safe AST evaluator (`./expr-interpreter.ts`) — no `new Function`.
+ * The expression DSL is parsed by our parser for the Vega expression language
+ * (`./expr-parser.ts`) and evaluated by closures compiled from its tree
+ * (`./expr-interpreter.ts`) — no `new Function`.
  * This module supplies the *function context* — the semantics of
  * `vega-functions` that our runtime needs — bound to our scales/data, plus
  * owned, oracle-vector-tested ports: the type/array/string/math utilities

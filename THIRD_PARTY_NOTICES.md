@@ -499,12 +499,17 @@ ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 ## Esprima (BSD-2-Clause)
 
-`packages/core/src/expr-parser.ts` is a port of `vega-expression`'s `src/parser.js`,
-which is "based on Esprima" (http://esprima.org/) and carries Esprima's original
-header comment and licence. That header is kept verbatim at the top of
-`expr-parser.ts`; its licence text is reproduced here, taken from the same header
-(Esprima's `LICENSE` is not installed in this repository; the header is
-byte-identical in `vega-expression@6.1.0` and `vega-expression@6.2.1`).
+`packages/core/src/expr-parser.ts` is Aster's own lexer and parser for the expression
+language; it no longer follows the structure of `vega-expression`'s `src/parser.js`
+(itself "based on Esprima", http://esprima.org/). What it still derives from that
+file is data: the identifier-start and identifier-part character classes, which are
+Esprima's Unicode tables as `vega-expression` ships them (re-encoded as code point
+ranges and checked against `vega-expression` for every UTF-16 code unit), and the
+V8-worded diagnostics the language reports. Esprima's original header comment and
+licence therefore stay verbatim at the top of `expr-parser.ts`; the licence text is
+reproduced here, taken from the same header (Esprima's `LICENSE` is not installed
+in this repository; the header is byte-identical in `vega-expression@6.1.0` and
+`vega-expression@6.2.1`).
 
 ```text
 Copyright (C) 2013 Ariya Hidayat <ariya.hidayat@gmail.com>
