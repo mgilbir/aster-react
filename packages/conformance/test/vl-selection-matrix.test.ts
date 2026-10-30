@@ -28,6 +28,19 @@ const marksOf = (ms: any[] | undefined, path = ''): unknown[] =>
     },
     ...marksOf(m.marks, `${path}/${m.name}`),
   ])
+/**
+ * What the view API hands out: the values signals hold and the tuples stores start with, as the text they serialize to (the order of
+ * their keys is part of what a user reads and compares).
+ */
+const valuesOf = (s: any): string[] => {
+  const out: string[] = []
+  const signals = (list: any[] | undefined, at: string): void => { for (const g of list ?? []) if ('value' in g) out.push(`${at}${g.name} = ${JSON.stringify(g.value)}`) }
+  const marks = (ms: any[] | undefined, at: string): void => { for (const m of ms ?? []) { signals(m.signals, `${at}/${m.name} `); marks(m.marks, `${at}/${m.name}`) } }
+  signals(s.signals, '')
+  marks(s.marks, '')
+  for (const d of s.data ?? []) if (/_store$/.test(d.name) && d.values) out.push(`${d.name} = ${JSON.stringify(d.values)}`)
+  return out
+}
 const scalesOf = (s: any): unknown[] => (s.scales ?? []).map((m: any) => ({ name: m.name, domainRaw: m.domainRaw })).sort((a: any, b: any) => (a.name < b.name ? -1 : 1))
 const legendsOf = (s: any): unknown[] => (s.legends ?? []).map((l: any) => l.encode)
 /** The order of the marks of a unit: the brush marks sit around the unit's own, the voronoi cells after the first. */
@@ -46,6 +59,7 @@ async function compare(spec: Record<string, any>): Promise<void> {
   expect(signalsOf(ours).map((s: any) => s.name), 'signal names, in order').toEqual(signalsOf(oracle).map((s: any) => s.name))
   expect(signalsOf(ours)).toEqual(signalsOf(oracle))
   expect(storesOf(ours)).toEqual(storesOf(oracle))
+  expect(valuesOf(ours), 'the values of signals and stores, key by key').toEqual(valuesOf(oracle))
   expect(marksOf(ours.marks)).toEqual(marksOf(oracle.marks))
   expect(markOrderOf(ours.marks), 'the order of the marks').toEqual(markOrderOf(oracle.marks))
   expect(scalesOf(ours)).toEqual(scalesOf(oracle))

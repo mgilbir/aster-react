@@ -10,14 +10,14 @@ import {
 
 type Selections = Record<string, Selection>
 
-/** A stored field as the tuples' `fields` entry describes it: its storage, the field as an access path, the channel it was chosen on. */
+/**
+ * A stored field as the tuples' `fields` entry describes it: its storage, the field as an access path, the channel it was chosen on.
+ * (The entry is a value of the signal and of the store, which the view API hands out: its keys come in this order.)
+ */
 export function assembleProjection(f: SelectedField): Obj {
-  return {
-    type: f.storage,
-    field: escapeFieldPath(f.field),
-    ...(f.channel !== undefined ? { channel: f.channel } : {}),
-    ...(f.geoChannel !== undefined ? { geoChannel: f.geoChannel } : {}),
-  }
+  const field = escapeFieldPath(f.field)
+  if (f.channel === undefined) return { type: f.storage, field }
+  return { field, channel: f.channel, type: f.storage, ...(f.geoChannel !== undefined ? { geoChannel: f.geoChannel } : {}) }
 }
 
 /**

@@ -57,7 +57,7 @@ export function assembleUnitSelectionSignals(unit: SelUnit, selections: Selectio
   for (const sel of Object.values(selections)) {
     const wire = sel.type === 'point' ? wirePoint(unit, sel, selections) : wireInterval(unit, sel, declared)
     for (const s of wire.early) front.unshift(s)
-    rest.push(...finishWire(unit, sel, wire, declared))
+    for (const s of finishWire(unit, sel, wire, declared)) rest.push(s)
   }
   return dropEmptyHandlers([...front, ...rest])
 }
@@ -126,7 +126,7 @@ function wireInterval(unit: SelUnit, sel: Selection, declared: (name: string) =>
   const signals: Signal[] = []
   const brushes: Brush[] = channels.map((field) => {
     const brush = brushOf(unit, sel, field, init?.[field.slot])
-    signals.push(...[brush.visual, brush.data].filter((s): s is Signal => s !== undefined))
+    for (const s of [brush.visual, brush.data]) if (s) signals.push(s)
     return brush
   })
   const tupleName = sel.name + TUPLE
