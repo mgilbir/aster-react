@@ -293,7 +293,7 @@ describe(`generated geo differential vs vega@${vega.version} / d3-geo@3.1.1 (liv
     })
   }
 
-  it('shapes a clip rectangle has nothing to cut come out as they went in (and merge in order across the parts of albersUsa)', { timeout: 120_000 }, async () => {
+  it('shapes a clip rectangle has nothing to cut come out as they went in', { timeout: 120_000 }, async () => {
     const r = new Rand(seedOf('nothing-to-cut', 11))
     const failures: string[] = []
     const configs: Array<[Record<string, Json>, () => Json[]]> = [

@@ -245,7 +245,7 @@ export function regional(r: Rand): Json {
   return { type: 'MultiPolygon', coordinates: Array.from({ length: r.int(2, 4) }, () => polygon(r.pick(places))) }
 }
 
-/** shapes in the plane, for an identity projection clipped to [[0, 0], [100, 100]]: inside, empty, and on the edge */
+/** shapes in the plane, for an identity projection clipped to [[0, 0], [100, 100]]: inside, across it, empty, and on the edge */
 export const PLANAR_SHAPES: Json[] = [
   { type: 'Polygon', coordinates: [[[10, 10], [90, 10], [90, 90], [10, 90], [10, 10]]] },
   { type: 'Polygon', coordinates: [[[10, 10], [90, 10], [90, 90], [10, 90], [10, 10]], [[40, 40], [40, 60], [60, 60], [60, 40], [40, 40]]] },
@@ -256,6 +256,9 @@ export const PLANAR_SHAPES: Json[] = [
   { type: 'Polygon', coordinates: [[]] },
   { type: 'Polygon', coordinates: [[[5, 5]]] },
   { type: 'Polygon', coordinates: [[[5, 5], [5, 5]]] },
+  { type: 'Polygon', coordinates: [[[10, 10], [120, 10], [120, 90], [10, 90], [10, 10]]] },
+  { type: 'Polygon', coordinates: [[[-20, -20], [120, -20], [120, 120], [-20, 120], [-20, -20]]] },
+  { type: 'LineString', coordinates: [[10, 10], [60, 50], [140, 50], [60, 70]] },
   { type: 'MultiPolygon', coordinates: [[[[10, 10], [20, 10], [20, 20], [10, 10]]], [[[70, 70], [80, 70], [80, 80], [70, 70]]]] },
   { type: 'MultiPolygon', coordinates: [[[[10, 10], [20, 10], [20, 20], [10, 10]]], []] },
   { type: 'LineString', coordinates: [] },

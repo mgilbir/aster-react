@@ -756,13 +756,12 @@ export class Rectangle {
   }
 
   /**
-   * Whether clipping `ev` could only give it back: every vertex lies strictly inside, every line has a vertex and every polygon a
-   * ring (the clip drops the empty ones), so that no ring can wind about the corner either.
+   * Whether clipping `ev` could only give it back: every vertex lies strictly inside the rectangle and every line has a vertex
+   * (the clip drops an empty one). A polygon with no ring draws nothing either way, and no ring can wind about the corner.
    */
   private holds(ev: Events): boolean {
     const { x0, y0, x1, y1 } = this
     let line = -1 // the vertices of the open line, -1 outside one
-    let rings = 0
     for (let i = 0, n = ev.length; i < n; i++) {
       switch (ev.op[i]) {
         case POINT: {
@@ -778,13 +777,9 @@ export class Rectangle {
         case LINE_END:
           if (line < 1) return false
           line = -1
-          rings++
           break
         case POLYGON_START:
-          rings = 0
-          break
         case POLYGON_END:
-          if (!rings) return false
           break
         default:
           return false
@@ -793,23 +788,9 @@ export class Rectangle {
     return true
   }
 
-  /**
-   * Clip planar events to this rectangle. Events that the clip would leave as they are come back as they are (`ev` itself),
-   * numbered as the clip would have numbered them: by the vertex a line starts at and the end of a polygon, which is how a
-   * composite of projections merges its parts.
-   */
+  /** Clip planar events to this rectangle; events that the clip would leave as they are come back as they are (`ev` itself). */
   clip(ev: Events): Events {
-    if (!this.holds(ev)) return new RectClip(this, ev).run()
-    let polygon = -1 // where the polygon being walked starts
-    for (let i = 0, n = ev.length; i < n; i++) {
-      const op = ev.op[i]
-      if (op === POLYGON_START) polygon = i
-      else if (op === POLYGON_END) {
-        ev.src.fill(ev.src[i]!, polygon, i)
-        polygon = -1
-      } else if (op === LINE_START && polygon < 0) ev.src[i] = ev.src[i + 1]!
-    }
-    return ev
+    return this.holds(ev) ? ev : new RectClip(this, ev).run()
   }
 }
 
