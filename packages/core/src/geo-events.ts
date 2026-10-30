@@ -140,10 +140,6 @@ export class Run {
 type Coordinate = ArrayLike<unknown>
 type AnyObject = Record<string, any> // eslint-disable-line @typescript-eslint/no-explicit-any
 
-/** Own-property lookup: `type` comes from data, and `constructor` or `__proto__` must not select a handler. */
-const handlerOf = <T>(table: Record<string, T>, type: unknown): T | undefined =>
-  Object.hasOwn(table, type as string) ? table[type as string] : undefined
-
 function addPoint(out: Events, c: Coordinate): void {
   out.point(+(c[0] as number), +(c[1] as number), out.length)
 }
@@ -162,31 +158,39 @@ function addPolygon(out: Events, rings: ArrayLike<ArrayLike<Coordinate>>): void 
   out.mark(POLYGON_END, out.length)
 }
 
-const GEOMETRIES: Record<string, (g: AnyObject, out: Events) => void> = {
-  Sphere: (_, out) => out.mark(SPHERE, out.length),
-  Point: (g, out) => addPoint(out, g.coordinates),
-  MultiPoint: (g, out) => {
-    const points = g.coordinates
-    for (let i = 0; i < points.length; i++) addPoint(out, points[i])
-  },
-  LineString: (g, out) => addLine(out, g.coordinates, 0),
-  MultiLineString: (g, out) => {
-    const lines = g.coordinates
-    for (let i = 0; i < lines.length; i++) addLine(out, lines[i], 0)
-  },
-  Polygon: (g, out) => addPolygon(out, g.coordinates),
-  MultiPolygon: (g, out) => {
-    const polygons = g.coordinates
-    for (let i = 0; i < polygons.length; i++) addPolygon(out, polygons[i])
-  },
-  GeometryCollection: (g, out) => {
-    const parts = g.geometries
-    for (let i = 0; i < parts.length; i++) addGeometry(out, parts[i])
-  },
-}
-
-function addGeometry(out: Events, geometry: AnyObject | null | undefined): void {
-  if (geometry) handlerOf(GEOMETRIES, geometry.type)?.(geometry, out)
+/** Add the events of a geometry; false when its type is not one that is drawn. */
+function addGeometry(out: Events, geometry: AnyObject | null | undefined): boolean {
+  if (!geometry) return false
+  const c = geometry.coordinates
+  switch (geometry.type) {
+    case 'Sphere':
+      out.mark(SPHERE, out.length)
+      return true
+    case 'Point':
+      addPoint(out, c)
+      return true
+    case 'MultiPoint':
+      for (let i = 0; i < c.length; i++) addPoint(out, c[i])
+      return true
+    case 'LineString':
+      addLine(out, c, 0)
+      return true
+    case 'MultiLineString':
+      for (let i = 0; i < c.length; i++) addLine(out, c[i], 0)
+      return true
+    case 'Polygon':
+      addPolygon(out, c)
+      return true
+    case 'MultiPolygon':
+      for (let i = 0; i < c.length; i++) addPolygon(out, c[i])
+      return true
+    case 'GeometryCollection': {
+      const parts = geometry.geometries
+      for (let i = 0; i < parts.length; i++) addGeometry(out, parts[i])
+      return true
+    }
+  }
+  return false
 }
 
 /**
@@ -210,36 +214,34 @@ export function eventsOf(object: unknown): Events {
 
 const OBJECT_TYPES = { Feature: true, FeatureCollection: true }
 
-function chunkGeometry(geometry: AnyObject | null | undefined, visit: (ev: Events) => void): void {
-  if (!geometry) return
-  const handler = handlerOf(GEOMETRIES, geometry.type)
-  if (!handler) return
-  if (geometry.type === 'GeometryCollection') {
-    const parts = geometry.geometries
-    for (let i = 0; i < parts.length; i++) chunkGeometry(parts[i], visit)
-    return
-  }
-  const ev = Events.take()
-  handler(geometry, ev)
-  visit(ev)
-}
-
 /**
  * The same events as `eventsOf`, handed over one geometry at a time: each feature of a FeatureCollection,
  * each member of a GeometryCollection. A stage that sees the geometries one after another gives the results
  * it would for all of them at once, and never holds more than one geometry's events (the `src` of a chunk
- * counts from its own first event).
+ * counts from its own first event). `bare` says that `object` is a geometry, not a Feature or collection.
  */
-export function forEachChunk(object: unknown, visit: (ev: Events) => void): void {
+export function forEachChunk(object: unknown, visit: (ev: Events) => void, bare = false): void {
   const o = object as AnyObject | null | undefined
   if (!o) return
-  if (Object.hasOwn(OBJECT_TYPES, o.type)) {
-    if (o.type === 'Feature') chunkGeometry(o.geometry, visit)
-    else {
-      const features = o.features
-      for (let i = 0; i < features.length; i++) chunkGeometry(features[i].geometry, visit)
+  const wrapped = !bare && Object.hasOwn(OBJECT_TYPES, o.type)
+  const features = wrapped && o.type !== 'Feature' ? o.features : null
+  for (let k = 0, n = features ? features.length : 1; k < n; k++) {
+    const geometry: AnyObject | null | undefined = features ? features[k].geometry : wrapped ? o.geometry : o
+    if (!geometry) continue
+    if (geometry.type === 'GeometryCollection') {
+      const parts = geometry.geometries
+      for (let i = 0; i < parts.length; i++) forEachChunk(parts[i], visit, true)
+      continue
     }
-  } else chunkGeometry(o, visit)
+    const ev = Events.take()
+    if (geometry.type === 'Point') {
+      // by far the commonest geometry of a map of events, and one point needs no walk through the type switch
+      const c = geometry.coordinates
+      ev.point(+c[0], +c[1], 0)
+      visit(ev)
+    } else if (addGeometry(ev, geometry)) visit(ev)
+    else ev.release()
+  }
 }
 
 /**

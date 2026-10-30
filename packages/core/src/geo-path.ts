@@ -186,22 +186,27 @@ export class Tee implements PlanarSink {
   }
 }
 
-/** Area of the polygons (rings counted with their orientation, holes subtract), halved. */
-export class AreaSum implements PlanarSink {
-  private readonly total = new Adder()
-  private ring = new Adder()
-  private inPolygon = false
+/**
+ * The shared walk of the sinks that measure along lines and rings: it follows which polygon and line the
+ * events are in, remembers the previous and the first vertex of the line, and hands over each vertex. A ring
+ * is closed by a step from its last vertex back to its first.
+ */
+abstract class Walker implements PlanarSink {
+  protected inPolygon = false
+  protected atLine = false
   private first = false
-  private x00 = NaN
-  private y00 = NaN
-  private x0 = NaN
-  private y0 = NaN
+  protected x00 = NaN
+  protected y00 = NaN
+  protected x0 = NaN
+  protected y0 = NaN
 
-  private edge(x: number, y: number): void {
-    this.ring.add(this.y0 * x - this.x0 * y)
-    this.x0 = x
-    this.y0 = y
-  }
+  /** A point that is not part of a line. */
+  protected lone(_x: number, _y: number): void {}
+  /** The first vertex of a line or ring. */
+  protected begin(_x: number, _y: number): void {}
+  /** A later vertex: the step from (x0, y0) to (x, y). */
+  protected abstract step(x: number, y: number): void
+  protected polygonEnd(): void {}
 
   add(ev: Events): void {
     for (let i = 0; i < ev.length; i++) {
@@ -211,27 +216,55 @@ export class AreaSum implements PlanarSink {
           break
         case POLYGON_END:
           this.inPolygon = false
-          this.total.add(Math.abs(+this.ring))
-          this.ring = new Adder()
+          this.polygonEnd()
           break
         case LINE_START:
+          this.atLine = true
           this.first = true
           break
-        case POINT:
-          if (!this.inPolygon) break
-          if (this.first) {
+        case POINT: {
+          const x = ev.x[i]!
+          const y = ev.y[i]!
+          if (!this.atLine) this.lone(x, y)
+          else if (this.first) {
             this.first = false
-            this.x00 = this.x0 = ev.x[i]!
-            this.y00 = this.y0 = ev.y[i]!
-          } else this.edge(ev.x[i]!, ev.y[i]!)
+            this.x00 = this.x0 = x
+            this.y00 = this.y0 = y
+            this.begin(x, y)
+          } else {
+            this.step(x, y)
+            this.x0 = x
+            this.y0 = y
+          }
           break
+        }
         case LINE_END:
-          if (this.inPolygon && !this.first) this.edge(this.x00, this.y00)
+          if (this.inPolygon && !this.first) {
+            this.step(this.x00, this.y00)
+            this.x0 = this.x00
+            this.y0 = this.y00
+          }
+          this.atLine = false
           break
         case SPHERE:
           unsupportedSphere()
       }
     }
+  }
+}
+
+/** Area of the polygons (rings counted with their orientation, holes subtract), halved. */
+export class AreaSum extends Walker {
+  private readonly total = new Adder()
+  private ring = new Adder()
+
+  protected step(x: number, y: number): void {
+    if (this.inPolygon) this.ring.add(this.y0 * x - this.x0 * y)
+  }
+
+  protected override polygonEnd(): void {
+    this.total.add(Math.abs(+this.ring))
+    this.ring = new Adder()
   }
 
   result(): number {
@@ -273,7 +306,7 @@ export class BoundsBox implements PlanarSink {
  * The centroid of the planar geometry: of the polygons by area, else of the lines by length, else of
  * the points; [NaN, NaN] for empty geometry.
  */
-export class CentroidSum implements PlanarSink {
+export class CentroidSum extends Walker {
   private x0Sum = 0
   private y0Sum = 0
   private w0 = 0 // points
@@ -283,74 +316,31 @@ export class CentroidSum implements PlanarSink {
   private x2Sum = 0
   private y2Sum = 0
   private w2 = 0 // polygon rings
-  private inPolygon = false
-  private atLine = false
-  private vertex = 0 // 0: the first vertex of the line or ring is next, 1: later vertices
-  private x00 = NaN
-  private y00 = NaN
-  private x0 = NaN
-  private y0 = NaN
 
-  private addPoint(x: number, y: number): void {
+  protected override lone(x: number, y: number): void {
     this.x0Sum += x
     this.y0Sum += y
     ++this.w0
   }
 
-  private segment(x: number, y: number): void {
+  protected override begin(x: number, y: number): void {
+    this.lone(x, y)
+  }
+
+  protected step(x: number, y: number): void {
     const dx = x - this.x0
     const dy = y - this.y0
     const z = Math.sqrt(dx * dx + dy * dy)
     this.x1Sum += (z * (this.x0 + x)) / 2
     this.y1Sum += (z * (this.y0 + y)) / 2
     this.w1 += z
-  }
-
-  private ringEdge(x: number, y: number): void {
-    this.segment(x, y)
-    const z = this.y0 * x - this.x0 * y
-    this.x2Sum += z * (this.x0 + x)
-    this.y2Sum += z * (this.y0 + y)
-    this.w2 += z * 3
-    this.addPoint((this.x0 = x), (this.y0 = y))
-  }
-
-  add(ev: Events): void {
-    for (let i = 0; i < ev.length; i++) {
-      switch (ev.op[i]) {
-        case POLYGON_START:
-          this.inPolygon = true
-          break
-        case POLYGON_END:
-          this.inPolygon = false
-          break
-        case LINE_START:
-          this.atLine = true
-          this.vertex = 0
-          break
-        case LINE_END:
-          if (this.inPolygon && this.vertex === 1) this.ringEdge(this.x00, this.y00)
-          this.atLine = false
-          break
-        case POINT: {
-          const x = ev.x[i]!
-          const y = ev.y[i]!
-          if (!this.atLine) this.addPoint(x, y)
-          else if (this.vertex === 0) {
-            this.vertex = 1
-            if (this.inPolygon) this.addPoint((this.x00 = this.x0 = x), (this.y00 = this.y0 = y))
-            else this.addPoint((this.x0 = x), (this.y0 = y))
-          } else if (this.inPolygon) this.ringEdge(x, y)
-          else {
-            this.segment(x, y)
-            this.addPoint((this.x0 = x), (this.y0 = y))
-          }
-          break
-        }
-        case SPHERE:
-          unsupportedSphere()
-      }
+    if (this.inPolygon) {
+      const w = this.y0 * x - this.x0 * y
+      this.x2Sum += w * (this.x0 + x)
+      this.y2Sum += w * (this.y0 + y)
+      this.w2 += w * 3
     }
+    this.lone(x, y)
   }
 
   result(): [number, number] {
@@ -366,53 +356,13 @@ export class CentroidSum implements PlanarSink {
 }
 
 /** Total length of the lines and the perimeters of the polygon rings. */
-export class LengthSum implements PlanarSink {
+export class LengthSum extends Walker {
   private readonly sum = new Adder()
-  private inPolygon = false
-  private first = false
-  private atLine = false
-  private x00 = NaN
-  private y00 = NaN
-  private x0 = NaN
-  private y0 = NaN
 
-  private step(x: number, y: number): void {
-    this.x0 -= x
-    this.y0 -= y
-    this.sum.add(Math.sqrt(this.x0 * this.x0 + this.y0 * this.y0))
-    this.x0 = x
-    this.y0 = y
-  }
-
-  add(ev: Events): void {
-    for (let i = 0; i < ev.length; i++) {
-      switch (ev.op[i]) {
-        case POLYGON_START:
-          this.inPolygon = true
-          break
-        case POLYGON_END:
-          this.inPolygon = false
-          break
-        case LINE_START:
-          this.atLine = true
-          this.first = true
-          break
-        case POINT:
-          if (!this.atLine) break
-          if (this.first) {
-            this.first = false
-            this.x00 = this.x0 = ev.x[i]!
-            this.y00 = this.y0 = ev.y[i]!
-          } else this.step(ev.x[i]!, ev.y[i]!)
-          break
-        case LINE_END:
-          if (this.inPolygon && !this.first) this.step(this.x00, this.y00)
-          this.atLine = false
-          break
-        case SPHERE:
-          unsupportedSphere()
-      }
-    }
+  protected step(x: number, y: number): void {
+    const dx = this.x0 - x
+    const dy = this.y0 - y
+    this.sum.add(Math.sqrt(dx * dx + dy * dy))
   }
 
   result(): number {

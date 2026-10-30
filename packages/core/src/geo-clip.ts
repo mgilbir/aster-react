@@ -896,8 +896,19 @@ class RectClip {
       this.src = ev.src[i]!
       switch (ev.op[i]!) {
         case POINT:
-          if (this.inLine) this.vertex(ev.x[i]!, ev.y[i]!)
-          else if (rect.contains(ev.x[i]!, ev.y[i]!)) out.point(ev.x[i]!, ev.y[i]!, this.src)
+          if (this.inLine) {
+            const x = ev.x[i]!
+            const y = ev.y[i]!
+            // a vertex that follows a visible one and is visible itself (nearly all of them) only extends the piece
+            if (!this.first && this.visiblePrev && rect.contains(x, y)) {
+              if (this.inPolygon) {
+                this.ringXY.push(x, y)
+                this.pieces[this.pieces.length - 1]!.xy.push(x, y)
+              } else out.point(x, y, this.src)
+              this.xPrev = x
+              this.yPrev = y
+            } else this.vertex(x, y)
+          } else if (rect.contains(ev.x[i]!, ev.y[i]!)) out.point(ev.x[i]!, ev.y[i]!, this.src)
           break
         case LINE_START:
           this.lineStart()
