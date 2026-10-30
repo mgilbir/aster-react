@@ -15,6 +15,7 @@
  * normal-equation method of d3-regression / regression-js (BSD-3-Clause; the notices are in THIRD_PARTY_NOTICES.md).
  */
 import { checkRowCount, meterTick } from './limits.js'
+import { sortData } from './util.js'
 import type { Row } from './transform-agg.js'
 
 type Get = (d: unknown) => unknown
@@ -43,8 +44,8 @@ function validPoints(rows: Row[], x: Get, y: Get, sorted = false): Points {
     }
   }
   if (!sorted) return { xs: xs.subarray(0, n), ys: ys.subarray(0, n) }
-  // by x, ties staying in row order (Array.prototype.sort is stable)
-  const order = Array.from({ length: n }, (_, i) => i).sort((a, b) => xs[a]! - xs[b]!)
+  // by x, ties staying in row order; two infinite xs of one sign compare as NaN, so the order is the builtin sort's own (sortData)
+  const order = sortData(Array.from({ length: n }, (_, i) => i), (a, b) => xs[a]! - xs[b]!)
   return { xs: Float64Array.from(order, (i) => xs[i]!), ys: Float64Array.from(order, (i) => ys[i]!) }
 }
 

@@ -26,7 +26,7 @@
  *    bootstrap interval (ci0/ci1) is a pure function of the data: an incremental
  *    evaluation equals a fresh one.
  */
-import { accessor, accessorFields, accessorName, array, ascending, constant, error, extent as vegaExtent, field, identity, type Accessor } from './util.js'
+import { accessor, accessorFields, accessorName, array, ascending, constant, sortData, error, extent as vegaExtent, field, identity, type Accessor } from './util.js'
 import { meterTick } from './limits.js'
 
 export type Row = Record<string, unknown>
@@ -95,10 +95,10 @@ export function sortBySpec<T>(items: readonly T[], sort: unknown): T[] | null {
   if (m === 1) {
     const k0 = keys[0]!
     const o = ord[0]!
-    order.sort((i, j) => cmp1(k0[i], k0[j]) * o || i - j)
+    sortData(order, (i, j) => cmp1(k0[i], k0[j]) * o || i - j)
   } else {
     const ords = ord.concat(0) // pad zero for convenient lookup
-    order.sort((i, j) => {
+    sortData(order, (i, j) => {
       let c = 0
       let f = -1
       while (c === 0 && ++f < m) c = cmp1(keys[f]![i], keys[f]![j])
@@ -169,7 +169,7 @@ export function stableSortBy<T>(items: readonly T[], cmp: Compare | null): T[] {
   const n = items.length
   const order = new Array<number>(n)
   for (let i = 0; i < n; i++) order[i] = i
-  order.sort((i, j) => cmp(items[i], items[j]) || i - j)
+  sortData(order, (i, j) => cmp(items[i], items[j]) || i - j)
   const out = new Array<T>(n)
   for (let i = 0; i < n; i++) out[i] = items[order[i]!]!
   return out
@@ -844,7 +844,7 @@ export function pivotRows(rows: readonly Row[], p: PivotParams): Row[] {
     const s = k as string
     if (!seen.has(s)) { seen.add(s); list.push(k) }
   }
-  list.sort(ascending)
+  sortData(list, ascending)
   const limit = (p.limit as number) || 0
   const keys = limit ? list.slice(0, limit) : list
   checkPivotWidth(keys.length)
