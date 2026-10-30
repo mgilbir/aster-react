@@ -24,7 +24,7 @@ const aLocale = asterLocale()
 
 const TYPES = ['linear', 'log', 'pow', 'sqrt', 'symlog', 'time', 'utc', 'sequential', 'diverging-linear', 'quantile', 'quantize', 'threshold', 'bin-ordinal', 'ordinal', 'band', 'point', 'identity']
 
-interface Plan { type: string; domain: unknown[]; range: unknown[]; bins?: number[]; date: boolean; wide: boolean }
+interface Plan { type: string; domain: unknown[]; range: unknown[]; bins?: number[]; date: boolean; wide: boolean; clamp: boolean; param?: number }
 
 function planFor(r: Rng): Plan {
   const type = r.pick(TYPES)
@@ -50,7 +50,8 @@ function planFor(r: Rng): Plan {
   if (type === 'sequential' || type === 'diverging-linear') range = []
   const bins = r.chance(0.2) && ['linear', 'time', 'utc', 'sqrt', 'pow'].includes(type) ? Array.from({ length: r.between(2, 7) }, (_, i) => (date ? (domain[0] as number) + i * 3e6 : base + (i * span) / 5)) : undefined
   const wide = date && Math.abs((domain[1] as number) - (domain[0] as number)) > 1e10
-  return { type, domain, range, bins, date, wide }
+  const param = type === 'log' ? r.pick([10, 2, Math.E, 3, 10]) : type === 'pow' ? r.pick([2, 0.3, 1.5]) : type === 'symlog' ? r.pick([1, 10, 0.1]) : undefined
+  return { type, domain, range, bins, date, wide, clamp: r.chance(0.3), param }
 }
 
 /** Fine interval names list millions of dates over a wide time domain. */
@@ -59,13 +60,13 @@ const fine = (c: unknown): boolean => /minute|hour|day|week/.test(JSON.stringify
 const unbounded = (c: unknown): boolean => typeof c === 'number' && !Number.isFinite(c)
 const countFor = (r: Rng, p: Plan, pool: unknown[] = COUNTS): unknown => { let c = r.pick(pool); while ((p.wide && fine(c)) || (p.date && unbounded(c))) c = r.pick(pool); return c }
 
-function build(side: any, p: Plan, r: Rng, seed: number): any {
+function build(side: any, p: Plan): any {
   const s = side.scale(p.type)()
-  void r
-  void seed
   s.domain(p.date ? p.domain.map((v) => new Date(v as number)) : p.domain)
   if (p.type === 'sequential' || p.type === 'diverging-linear') s.interpolator(side.interpolateColors(['#ffffe0', '#8b0000'], 'rgb'))
   else if (p.range.length || p.type !== 'identity') s.range(p.range)
+  if (p.param !== undefined) s[p.type === 'log' ? 'base' : p.type === 'pow' ? 'exponent' : 'constant'](p.param)
+  if (p.clamp && typeof s.clamp === 'function') s.clamp(true)
   if (p.bins) s.bins = p.bins.map((v) => (p.date ? new Date(v) : v))
   return s
 }
@@ -91,10 +92,10 @@ function samples(p: Plan, r: Rng): unknown[] {
 const fmtImage = (f: any, xs: unknown[]): unknown => (typeof f === 'function' ? xs.map((x, i) => { try { return enc(f(x, i, xs)) } catch (e) { return { threw: (e as Error).constructor.name } } }) : enc(f))
 
 describe('scale helpers vs vega-scale 8.1.2 (generated)', () => {
-  it('tickCount, tickValues, validTicks', () => {
+  it('tickCount, tickValues, validTicks', async () => {
     const r = makeRng(0x7c1)
-    withTz('America/New_York', () => {
-      compareCases('ticks-helpers', scaled(9000), () => {
+    const out = await withTz('America/New_York', () => {
+      return compareCases('ticks-helpers', scaled(9000), () => {
         const p = planFor(r)
         const count = countFor(r, p)
         const minStep = r.pick(MIN_STEPS)
@@ -107,8 +108,9 @@ describe('scale helpers vs vega-scale 8.1.2 (generated)', () => {
         }
       })
     })
+    expect(out.informative).toBeGreaterThan(5000)
     function run(side: any, p: Plan, which: string, count: any, minStep: any, cand: unknown[]): unknown {
-      const s = build(side, p, r, 0)
+      const s = build(side, p)
       if (which === 'tickCount') return side.tickCount(s, count, minStep)
       if (which === 'tickValues') return side.tickValues(s, count)
       if (which === 'valid') return side.validTicks(s, cand, typeof count === 'number' ? count : 5)
@@ -116,10 +118,10 @@ describe('scale helpers vs vega-scale 8.1.2 (generated)', () => {
     }
   })
 
-  it('tickFormat, labelValues, labelFormat, labelFraction', () => {
+  it('tickFormat, labelValues, labelFormat, labelFraction', async () => {
     const r = makeRng(0x7c2)
-    withTz('America/New_York', () => {
-      compareCases('label-helpers', scaled(9000), () => {
+    const out = await withTz('America/New_York', () => {
+      return compareCases('label-helpers', scaled(9000), () => {
         const p = planFor(r)
         const count = countFor(r, p, COUNTS.filter((c) => typeof c !== 'object' || c === null))
         const spec = r.pick(SPECS)
@@ -129,7 +131,7 @@ describe('scale helpers vs vega-scale 8.1.2 (generated)', () => {
         const xs = samples(p, r)
         const which = r.pick(['tickFormat', 'labelValues', 'labelFormat', 'labelFraction'])
         const run = (side: any, loc: any): unknown => {
-          const s = build(side, p, r, 0)
+          const s = build(side, p)
           if (which === 'tickFormat') return fmtImage(side.tickFormat(loc, s, count, spec, ft, noSkip), xs)
           if (which === 'labelValues') { const v = side.labelValues(s, count); return { v, max: v?.max } }
           if (which === 'labelFraction') return fmtImage(side.labelFraction(s), xs)
@@ -139,6 +141,7 @@ describe('scale helpers vs vega-scale 8.1.2 (generated)', () => {
         return { label: `${which} ${p.type} ${JSON.stringify(p.domain)} count=${count} spec=${spec} ft=${ft} legend=${legend}`, oracle: () => run(V, vLocale), aster: () => run(A, aLocale) }
       })
     })
+    expect(out.informative).toBeGreaterThan(3000)
   })
 
   it('scaleFraction, scaleCopy, interpolateRange, quantizeInterpolator, interpolateColors', () => {
@@ -154,7 +157,7 @@ describe('scale helpers vs vega-scale 8.1.2 (generated)', () => {
       const n = r.pick([0, 1, 2, 5, 9])
       const xs = [0, 0.25, 0.5, 1, -1, 2, NaN]
       const run = (side: any): unknown => {
-        const s = build(side, p, r, 0)
+        const s = build(side, p)
         if (which === 'scaleFraction') return fmtImage(side.scaleFraction(s, lo, hi), xs)
         if (which === 'scaleCopy') { const c = side.scaleCopy(s); return { type: c.type, same: c === s, d: c.domain() } }
         if (which === 'interpolateRange') return fmtImage(side.interpolateRange((t: number) => t * 100, rng), xs)
@@ -193,6 +196,70 @@ describe('scale helpers vs vega-scale 8.1.2 (generated)', () => {
       if (v) expect(a().type).toBe(v().type)
       if (v) expect(A.isRegisteredScale(a())).toBe(V.isRegisteredScale(v()))
     }
+  })
+
+  it('log scales: ticks, nice and the label filter at and between the powers of the base', async () => {
+    const r = makeRng(0x7c5)
+    await withTz('UTC', () => {
+      const out = compareCases('log-labels', scaled(6000), () => {
+        const base = r.pick([10, 10, 2, Math.E, 3, 5, 16, 100, 1.5])
+        // endpoints on, a hair off and between the powers of the base, either side of zero
+        const edge = (): number => {
+          const k = r.between(-6, 9)
+          const x = Math.pow(base, k)
+          return r.pick([x, x, x * (1 + 1e-15), x * (1 - 1e-15), x * r.pick([2, 3, 5, 7, 0.5, 1.5]), x * r.next() * 10])
+        }
+        let a = edge()
+        let b = edge()
+        if (r.chance(0.12)) [a, b] = [-a, -b]
+        else if (r.chance(0.06)) a = -a
+        if (r.chance(0.15)) [a, b] = [b, a]
+        const count = r.pick([1, 2, 3, 5, 8, 10, 10, 15, 20, 30, 50, 100, 0.5, NaN, undefined, Infinity])
+        const spec = r.pick([undefined, undefined, ',f', '.2f', 's', '~g', 'e', (v: number) => `<${v}>`])
+        const which = r.pick(['ticks', 'format', 'nice', 'helper', 'call', 'labelValues'])
+        const probes = [1, 2, 3, 5, 7, 10, 20, 30, 50, 70, 100, 200, 0.2, 0.3, 0.5, 1e-3, 5e-3, 1e3, 3e3, 1e6, Math.pow(base, 2), Math.pow(base, -1), 2 * base, 3 * base]
+        const run = (side: any, loc: any): unknown => {
+          const s = side.scale('log')()
+          s.base(base)
+          s.domain([a, b]).range([0, 400])
+          if (which === 'ticks') return s.ticks(count)
+          if (which === 'format') return fmtImage(s.tickFormat(count, typeof spec === 'function' ? (v: number) => (spec as (v: number) => string)(v) : spec), probes.concat(s.ticks(count).slice(0, 30)))
+          if (which === 'nice') { const c = s.copy(); return [c.nice().domain(), c.nice(count).domain()] }
+          if (which === 'call') return probes.map((x) => s(x))
+          if (which === 'labelValues') return side.labelValues(s, count)
+          const f = side.tickFormat(loc, s, count === Infinity ? 10 : count, typeof spec === 'function' ? undefined : spec, undefined, undefined)
+          return fmtImage(f, probes.concat(side.tickValues(s, count).slice(0, 30)))
+        }
+        return { label: `${which} base=${base} [${a}, ${b}] count=${count} spec=${String(spec)}`, oracle: () => run(V, vLocale), aster: () => run(A, aLocale) }
+      })
+      expect(out.informative).toBeGreaterThan(4000)
+    })
+  })
+
+  it('discretizing scales: threshold labels and legends whatever the size of the gaps', async () => {
+    const r = makeRng(0x7c6)
+    await withTz('UTC', () => {
+      const out = compareCases('threshold-labels', scaled(6000), () => {
+        const type = r.pick(['quantile', 'quantize', 'threshold'])
+        const gap = Math.exp((r.next() - 0.5) * 2 * Math.log(1e6)) * r.pick([1, 1, 2, 5, 3, 7])
+        const origin = r.pick([0, 1, -3, 1000, 1e-4, -1e5])
+        const n = r.between(2, 6)
+        const domain = type === 'quantize' ? [origin, origin + gap * (n + 1)] : Array.from({ length: type === 'quantile' ? 20 : n }, (_, i) => origin + (type === 'quantile' ? gap * i * r.next() : gap * i * r.pick([1, 1, 1, 2])))
+        const range = Array.from({ length: n + 1 }, (_, i) => 'c' + i)
+        const legend = r.pick(['symbol', 'symbol', 'discrete', 'gradient'])
+        const spec = r.pick([undefined, undefined, ',f', '.2f', 's', '%', 'e'])
+        const ft = r.pick([undefined, undefined, undefined, 'time', 'utc'])
+        const count = r.pick([undefined, 3, 5, 10])
+        const run = (side: any, loc: any): unknown => {
+          const s = side.scale(type)()
+          s.domain(domain).range(range)
+          const vals = side.labelValues(s, count)
+          return { vals, max: vals.max, labels: fmtImage(side.labelFormat(loc, s, count, legend, spec, ft), vals), fraction: fmtImage(side.labelFraction(s), vals.filter((v: number) => Number.isFinite(v))) }
+        }
+        return { label: `${type} gap=${gap} origin=${origin} n=${n} legend=${legend} spec=${spec} ft=${ft}`, oracle: () => run(V, vLocale), aster: () => run(A, aLocale) }
+      })
+      expect(out.informative).toBeGreaterThan(5000)
+    })
   })
 })
 

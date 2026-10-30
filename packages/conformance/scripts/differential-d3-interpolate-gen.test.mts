@@ -57,18 +57,21 @@ function sample(make: () => unknown, positions: number[], extra?: (g: any) => un
   try {
     g = make()
   } catch (e) {
-    return { made: 'throw', cls: (e as Error).constructor.name, msg: e instanceof TypeError ? '' : (e as Error).message }
+    return { made: 'throw', cls: (e as Error).constructor.name, msg: e instanceof TypeError && !STRICT ? '' : (e as Error).message }
   }
   if (typeof g !== 'function') return { made: enc(g) }
   const out = positions.map((t) => {
     try {
       return enc(g(t))
     } catch (e) {
-      return { threw: (e as Error).constructor.name }
+      return { threw: (e as Error).constructor.name, msg: e instanceof TypeError && !STRICT ? '' : (e as Error).message }
     }
   })
   return { out, extra: extra ? enc(extra(g)) : undefined, type: typeof g }
 }
+
+/** `ASTER_DIFF_MESSAGES=1` compares the engine's own wording of a TypeError too (it quotes variables of the library that raised it). */
+const STRICT = !!process.env.ASTER_DIFF_MESSAGES
 
 const NUM = [0, 1, -1, 10, 255, 0.5, 3.14159, 1e-9, 1e9, 123456.789, 1e21, -1e-7, -0, 360, 180, 359.9, NaN, Infinity, -Infinity, 5e-324, 1.7976931348623157e308]
 

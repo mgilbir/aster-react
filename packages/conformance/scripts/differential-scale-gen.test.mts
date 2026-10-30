@@ -461,6 +461,9 @@ function genBandRange(r: Rng): Recipe {
 
 // ---- running a program -------------------------------------------------------------------------------------
 
+/** `ASTER_DIFF_MESSAGES=1` compares the engine's own wording of a TypeError too (it names variables of the library that raised it). */
+const STRICT = !!process.env.ASTER_DIFF_MESSAGES
+
 const SURFACE = ['domain', 'range', 'rangeRound', 'clamp', 'nice', 'ticks', 'tickFormat', 'invert', 'invertRange', 'invertExtent', 'copy', 'interpolate', 'interpolator', 'unknown', 'base', 'exponent', 'constant', 'bandwidth', 'step', 'round', 'padding', 'paddingInner', 'paddingOuter', 'align', 'thresholds', 'quantiles', 'type', 'bins']
 
 const GETTERS = ['clamp', 'unknown', 'base', 'exponent', 'constant', 'bandwidth', 'step', 'round', 'padding', 'paddingInner', 'paddingOuter', 'align', 'thresholds', 'quantiles', 'interpolator']
@@ -469,7 +472,7 @@ function safe(f: () => unknown): unknown {
   try {
     return enc(f())
   } catch (e) {
-    return { threw: (e as Error).constructor.name, msg: e instanceof TypeError ? '' : (e as Error).message }
+    return { threw: (e as Error).constructor.name, msg: e instanceof TypeError && !STRICT ? '' : (e as Error).message }
   }
 }
 
@@ -525,7 +528,7 @@ function runProgram(side: Side, ts: TypeSpec, ops: Op[], probes: Recipe[]): unkn
         else result = enc(ret)
       }
     } catch (e) {
-      result = { threw: (e as Error).constructor.name, msg: e instanceof TypeError ? '' : (e as Error).message }
+      result = { threw: (e as Error).constructor.name, msg: e instanceof TypeError && !STRICT ? '' : (e as Error).message }
     }
     out.push({ op: op.name, target: op.target, result, state: scales.map((x) => snapshot(x, probes, side)) })
   }
