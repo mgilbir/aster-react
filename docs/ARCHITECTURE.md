@@ -63,9 +63,10 @@ import { renderSpec, compileChart, evaluateChart, renderSceneToSvg,
 ## Expression Engine
 
 Expressions (formulas, filters, signal updates, mark encodings) are parsed by `packages/core/src/expr-parser.ts`
-(a port of `vega-expression`'s lexer and Pratt parser, producing the same AST) and evaluated by
-`packages/core/src/expr-interpreter.ts` (a port of `vega-interpreter`'s CSP-safe AST walker). Nothing is
-compiled with `new Function` or `eval`. The function table the interpreter calls lives in
+(an on-demand lexer and a precedence-climbing parser that accept and refuse exactly what `vega-expression` does,
+with its diagnostics, producing a plain ESTree-shaped tree) and compiled once into closures by
+`packages/core/src/expr-interpreter.ts` (the semantics of `vega-interpreter`, with Aster's stricter sandbox).
+Nothing is compiled with `new Function` or `eval`. The function table the interpreter calls lives in
 `packages/core/src/expression.ts`; it mirrors the documented `vega-functions` surface and is bound to the
 runtime's scales and data, to the owned type/array/string/math utilities (`util.ts`), colour spaces
 (`color.ts`), calendar (`time.ts`) and format layer (`format.ts`, `time-format.ts`, `locale.ts`):
