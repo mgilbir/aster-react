@@ -66,16 +66,50 @@ function resolveObject(topology: Topology, object: TopoObject | string | undefin
 
 /** The position(s) of arc data in absolute coordinates, as fresh arrays. */
 function decodePositions(positions: readonly Position[], transform: Transform | undefined): Position[] {
-  if (!transform) return positions.map((p) => p.slice())
-  const [kx, ky] = transform.scale
-  const [dx, dy] = transform.translate
+  const n = positions.length
+  const out = new Array<Position>(n)
+  if (!transform) {
+    for (let i = 0; i < n; i++) out[i] = positions[i]!.slice()
+    return out
+  }
+  const kx = transform.scale[0]
+  const ky = transform.scale[1]
+  const dx = transform.translate[0]
+  const dy = transform.translate[1]
   let x = 0
   let y = 0
-  return positions.map((p) => {
-    const out = [(x += p[0]!) * kx + dx, (y += p[1]!) * ky + dy]
-    for (let j = 2; j < p.length; j++) out.push(p[j]!)
-    return out
-  })
+  for (let i = 0; i < n; i++) {
+    const p = positions[i]!
+    const q = [(x += p[0]!) * kx + dx, (y += p[1]!) * ky + dy]
+    for (let j = 2; j < p.length; j++) q.push(p[j]!)
+    out[i] = q
+  }
+  return out
+}
+
+/** Append the decoded positions of a delta-encoded arc to `out`. */
+function appendTransformed(out: Position[], raw: readonly Position[], transform: Transform): void {
+  const kx = transform.scale[0]
+  const ky = transform.scale[1]
+  const dx = transform.translate[0]
+  const dy = transform.translate[1]
+  let x = 0
+  let y = 0
+  for (let i = 0; i < raw.length; i++) {
+    const p = raw[i]!
+    const q = [(x += p[0]!) * kx + dx, (y += p[1]!) * ky + dy]
+    for (let j = 2; j < p.length; j++) q.push(p[j]!)
+    out.push(q)
+  }
+}
+
+/** Reverse `points` from index `from` to the end. */
+function reverseTail(points: Position[], from: number): void {
+  for (let i = from, j = points.length - 1; i < j; i++, j--) {
+    const t = points[i]!
+    points[i] = points[j]!
+    points[j] = t
+  }
 }
 
 /** Decodes the geometries of one topology. */
@@ -89,9 +123,10 @@ function decoder(topology: Topology) {
     const raw = arcs[index < 0 ? ~index : index] as Position[]
     // one arc can be referenced from any number of geometries, so the decoded size is not bounded by the input's
     meterCoords(raw.length, 'topojson arcs')
-    const decoded = decodePositions(raw, transform)
-    if (index < 0) decoded.reverse()
-    for (const p of decoded) points.push(p)
+    const first = points.length
+    if (transform) appendTransformed(points, raw, transform)
+    else for (let i = 0; i < raw.length; i++) points.push(raw[i]!.slice())
+    if (index < 0) reverseTail(points, first)
   }
 
   function line(indices: number[]): Position[] {
@@ -198,7 +233,8 @@ interface Run {
 }
 
 /** A position as the text two arcs must share to be joined. */
-const keyOf = (p: ArrayLike<number>): string => Array.prototype.join.call(p)
+const keyOf = (p: ArrayLike<number>): string =>
+  p.length === 2 && typeof p[0] === 'number' && typeof p[1] === 'number' ? p[0] + ',' + p[1] : Array.prototype.join.call(p)
 
 /**
  * Chain `indices` (signed arc indices) into runs of arcs that meet end to end. Arcs with no extent are placed first. An
