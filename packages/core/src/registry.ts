@@ -24,17 +24,20 @@ export interface GeoRegistry {
   buildProjection: ((spec: unknown, width: number, height: number) => unknown) | null
   /** GeoJSON -> SVG path through a d3-geo projection; null until loaded. */
   projectedPath: ((projection: unknown, geo: unknown, pointRadius?: unknown) => string) | null
-  /** The unrounded bounds [x1, y1, x2, y2] of a projected shape (what vega's bound pass sees); null until loaded. */
+  /** A projected shape's path and the unrounded bounds [x1, y1, x2, y2] vega's bound pass sees, from one pass over the geometry; null until loaded. */
+  projectedShape: ((projection: unknown, geo: unknown, pointRadius?: unknown) => { path: string; bounds: [number, number, number, number] | null }) | null
+  /** The unrounded bounds [x1, y1, x2, y2] of a projected shape alone; null until loaded. */
   projectedBounds: ((projection: unknown, geo: unknown, pointRadius?: unknown) => [number, number, number, number] | null) | null
   /** vega-projection's `defaultPath`: d3's geoPath with no projection (a `geopath` that names none draws raw coordinates). */
   defaultPath: (() => unknown) | null
   /** d3-contour marching squares over a raster grid; null until loaded. */
-  contourRun: ((values: number[] | Float32Array, thresholds: number[], size: [number, number], smooth: boolean) => ContourFeature[]) | null
+  contourRun: ((values: ArrayLike<unknown>, thresholds: ArrayLike<unknown>, size: ArrayLike<number>, smooth: boolean) => ContourFeature[]) | null
 }
 
 export const geoRegistry: GeoRegistry = {
   buildProjection: null,
   projectedPath: null,
+  projectedShape: null,
   projectedBounds: null,
   defaultPath: null,
   contourRun: null,

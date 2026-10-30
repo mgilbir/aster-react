@@ -2,6 +2,39 @@
 
 ## Unreleased
 
+- **Transform gaps against real vega** (generated, live differentials over the parameter space):
+  - `quantile` skips `null` like d3-array (`quantile([null, null], 0.25)` was 0, and a column with nulls shifted every percentile).
+  - `contour`, `isocontour`, `kde2d` and `heatmap` follow vega: `scale: 0` and a falsy `translate` fall back to the grid's;
+    `contour` spreads its default thresholds from zero when `values` are given; thresholds keep the order given (repeats too);
+    a null cell reads as 0, a NaN one is below every level and smooths to a NaN coordinate; an estimated bandwidth no longer
+    counts a null or empty coordinate as 0; a list parameter written as a plain value, a missing required parameter, an invalid
+    cell size or bandwidth are refused with vega's messages, in vega's order.
+  - `force` refuses a bad `forces` list with vega's messages (`Unsupported parameter: {"force":"gravity"}`, `Expected an array of
+    sub-parameters`, `Undefined data set name` for a link force). Not fixed: the wording of an expression syntax error is still
+    the parser's, not `Expression parse error: ...`.
+
+- **`@aster/core` geo engine in Aster's own design** (`geo-events.ts`, `geo-sphere.ts`, `geo-clip.ts`, `geo-resample.ts`,
+  `geo-raw.ts`, `geo-projections.ts`, `geo-path.ts`, `geo-sphere-measures.ts`, `geo.ts`). A GeoJSON object is flattened into
+  an event buffer and each stage (rotate, clip to the visible sphere, project with adaptive resampling, clip to the
+  screen) is a function from one buffer to another; projections are objects with properties and a `configure(params)` in
+  vega's order, not getter/setter closures; no state survives a call (d3-geo's measures and cached pipelines leak state
+  from a call that throws). The results are the same bit for bit: a seeded generated differential runs random GeoJSON
+  (antimeridian and pole rings, holes, degenerate rings, huge and tiny coordinates) and random parameters
+  (rotate, centre, scale, translate, clipAngle, clipExtent, precision, reflect, parallels, fit, parameters of the wrong
+  kind) for every projection type against vega's projections and d3-geo's paths, and whole specs (geoshape, geopath,
+  geopoint, graticule) against vega's SVG. It found and fixed two divergences: the Equal Earth inversion stopped at 1e-6
+  instead of 1e-12, and `geopath` drew every point with a NaN radius when `pointRadius` was an `{expr}`. `geoshape` takes
+  the path and the unrounded bounds from one pass over the geometry. Not carried over: an empty polygon ring is closed
+  against the vertex the previous call happened to leave in d3's module state, so only an error is stable there.
+
+- **Performance: the 200k-row `crossfilter-flights` gallery spec.** On the React path it took 4-5 s (8 s and more under load,
+  past the gallery's settle budget) because a chart given a `random` source fingerprinted every row of every dataset transform
+  that could not draw from it; now only the code that can draw (`random()`, `sampleNormal` / `sampleLogNormal` / `sampleUniform`,
+  `sample`, `wordcloud`, the `ci0` / `ci1` ops) is. `crossfilter` places tuples against a range without sorting when the field
+  holds only numbers, and a dataset declared in a group starts from the rows it is made from instead of copying them when its
+  first transforms only read them (`resolvefilter` + `aggregate` copies nothing). Time to a stable svg in Chromium, measured
+  against vega on the same data: 5.0 s to 0.5 s with a `random` source (vega 0.6 s); the output is unchanged.
+
 - **Formatting layer in Aster's own design** (`format.ts`, `time-format.ts`, `time.ts`, `locale.ts`, `color.ts`). Number and date
   formatting, the calendar intervals, the time-unit floors, the locale facade and the colour spaces are re-decomposed (a specifier is
   parsed, settled in a locale and rendered; a directive is written once over a time base; a calendar unit is a record `makeInterval`
