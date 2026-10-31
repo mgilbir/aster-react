@@ -279,12 +279,12 @@ function assertNoGeoSignalClash(out: VLSpec): void {
  * A view with a name names the scales it owns and the signals that size them after itself (`outer_x`, `outer_x_step`, `outer_childWidth`),
  * as it names its marks. The scales and sizes of the views of a repeat are named after the repeat's values and keep their names.
  */
-function nameViewParts(out: Record<string, unknown>, prefix: string, except: readonly string[], rawName: string): void {
+function nameViewParts(out: Record<string, unknown>, prefix: string, except: readonly string[], rawName: string, keepScales: ReadonlySet<string> = new Set()): void {
   const scales = new Map<string, string>()
   const signals = new Map<string, string>()
   const declared: Record<string, unknown>[] = []
   const walk = (node: Record<string, unknown>): void => {
-    for (const sc of (node.scales as Record<string, unknown>[] | undefined) ?? []) if (typeof sc.name === 'string' && !sc.name.startsWith('child__') && !except.some((p) => (sc.name as string).startsWith(p))) scales.set(sc.name, prefix + sc.name)
+    for (const sc of (node.scales as Record<string, unknown>[] | undefined) ?? []) if (typeof sc.name === 'string' && !keepScales.has(sc.name) && !sc.name.startsWith('child__') && !except.some((p) => (sc.name as string).startsWith(p))) scales.set(sc.name, prefix + sc.name)
     for (const sg of (node.signals as Record<string, unknown>[] | undefined) ?? []) declared.push(sg)
     for (const d of (node.data as Record<string, unknown>[] | undefined) ?? []) for (const t of (d.transform as Record<string, unknown>[] | undefined) ?? []) if (typeof t.signal === 'string') declared.push({ name: t.signal, transform: t })
     for (const m of (node.marks as Record<string, unknown>[] | undefined) ?? []) if (isObject(m)) walk(m)
@@ -293,7 +293,7 @@ function nameViewParts(out: Record<string, unknown>, prefix: string, except: rea
   for (const sg of declared) {
     const name = sg.name
     if (typeof name !== 'string' || except.some((p) => name.startsWith(p))) continue
-    const sized = name === 'childWidth' || name === 'childHeight' || name === 'child_width' || name === 'child_height' || (/_(width|height)$/.test(name) && !name.startsWith('child__'))
+    const sized = /(^|_)child(Width|Height)$/.test(name) || name === 'child_width' || name === 'child_height' || (/_(width|height)$/.test(name) && !name.startsWith('child__'))
     const step = name.endsWith('_step') && scales.has(name.slice(0, -5))
     const bins = /bin_\w*_(bins|extent)$/.test(name)
     if (sized || step || bins) signals.set(name, prefix + name)
@@ -1580,7 +1580,8 @@ function autosizeOf(spec: VLSpec): unknown {
 // --- facet composition -------------------------------------------------------
 
 /** A spec that lays views out: a repeat or a concat. */
-const isComposition = (s: unknown): s is VLSpec => isObject(s) && (s.repeat !== undefined || s.hconcat !== undefined || s.vconcat !== undefined || s.concat !== undefined)
+const isLayerRepeat = (s: unknown): boolean => isObject(s) && isObject(s.repeat) && Array.isArray((s.repeat as Record<string, unknown>).layer)
+const isComposition = (s: unknown): s is VLSpec => isObject(s) && !isLayerRepeat(s) && (s.repeat !== undefined || s.hconcat !== undefined || s.vconcat !== undefined || s.concat !== undefined)
 
 /**
  * A facet whose spec is a repeat or a concat: each cell holds the composition, laid out by its own layout, over the cell's rows, with the
@@ -1602,7 +1603,18 @@ function compileFacetedComposition(spec: VLSpec, ctx: CompileCtx, nested: string
   if (innerSpec.data === undefined && isObject(spec.data)) innerSpec.data = spec.data
   if (spec.config !== undefined) innerSpec.config = spec.config
   const frag = inChildView(ctx, 'child', facetFields, true, () => compileView(innerSpec, ctx))
-  nameViewParts(frag, `${CH}_`, [], '')
+  // the scales the views of the composition share are the facet's: they keep their names and read the facet's rows
+  const viewPrefixes: string[] = []
+  const findViews = (marks: unknown): void => {
+    for (const m of Array.isArray(marks) ? (marks as Record<string, unknown>[]) : []) {
+      if (typeof m.name === 'string' && m.name.endsWith('group')) viewPrefixes.push(m.name.slice(0, -5))
+      findViews(m.marks)
+    }
+  }
+  findViews(frag.marks)
+  const sharedScales = ((frag.scales as ScaleSpec[] | undefined) ?? []).filter((sc) => !viewPrefixes.some((p) => String(sc.name).startsWith(p)))
+  const sharedNames = new Set(sharedScales.map((sc) => String(sc.name)))
+  nameViewParts(frag, `${CH}_`, [], '', sharedNames)
   frag.marks = (frag.marks as Record<string, unknown>[]).map((m) => prefixMarkNames(m, `${CH}_`, [`${CH}__`]))
   // (the composition has the size signals of its child: the views that read the size of their container read `child_width`, which is
   // declared with the size of a default view)
@@ -1630,13 +1642,35 @@ function compileFacetedComposition(spec: VLSpec, ctx: CompileCtx, nested: string
   // the composition's datasets are made in the cell, from the rows of the cell
   const cellData = fragData.filter((d) => d !== source).map((d) => (d.source === rootSource || d.source === source.name ? { ...d, source: facetName } : d))
   for (const k of ['encode', 'style', 'axes', 'scales', 'signals']) delete cell[k]
+  const cellScales = ((frag.scales as ScaleSpec[] | undefined) ?? []).filter((sc) => !sharedNames.has(String(sc.name)))
   Object.assign(cell, {
     ...(cellData.length ? { data: cellData } : {}),
-    ...(Array.isArray(frag.scales) && frag.scales.length ? { scales: frag.scales } : {}),
-    ...(Array.isArray(frag.legends) && frag.legends.length ? { legends: frag.legends } : {}),
+    ...(cellScales.length ? { scales: cellScales } : {}),
     ...(frag.layout !== undefined ? { layout: frag.layout } : {}),
     marks: frag.marks,
   })
+  // a shared scale reads the rows of the facet: the datasets it reads are made again from the facet's data
+  const rootData: Record<string, unknown>[] = []
+  if (sharedScales.length) {
+    const byName = new Map(cellData.map((d) => [String(d.name), d]))
+    const copies = new Map<string, string>()
+    let next = Math.max(-1, ...[...data, ...cellData].map((d) => /^data_(\d+)$/.exec(String(d.name))?.[1]).filter((n): n is string => n !== undefined).map(Number)) + 1
+    const copyOf = (name: string): string => {
+      const have = copies.get(name)
+      if (have !== undefined) return have
+      const d = byName.get(name)
+      if (d === undefined) return name
+      const copy = `data_${next++}`
+      copies.set(name, copy)
+      rootData.push({ ...d, name: copy, source: d.source === facetName ? rootSource : copyOf(String(d.source)) })
+      return copy
+    }
+    for (const sc of sharedScales) {
+      const redirect = (dom: unknown): unknown => (Array.isArray(dom) ? dom.map(redirect) : isObject(dom) ? Object.fromEntries(Object.entries(dom).map(([k, v]) => [k, k === 'data' && typeof v === 'string' ? copyOf(v) : redirect(v)])) : dom)
+      sc.domain = redirect(sc.domain) as ScaleSpec['domain']
+    }
+    data.push(...rootData)
+  }
   // (the headers follow the size of the cell when the composition has one)
   for (const m of scaffold.marks as Record<string, unknown>[]) {
     if (typeof m.role !== 'string' || !/-(header|footer)$/.test(m.role)) continue
@@ -1644,11 +1678,11 @@ function compileFacetedComposition(spec: VLSpec, ctx: CompileCtx, nested: string
     if (sized.has(dim)) m.encode = { update: { [dim]: { signal: `${CH}_${dim}` } } }
     else delete m.encode
   }
-  const out: Record<string, unknown> = { ...scaffold, data, signals: frag.signals ?? [] }
+  const out: Record<string, unknown> = { ...scaffold, data, signals: frag.signals ?? [], ...(sharedScales.length ? { scales: sharedScales } : {}), ...(Array.isArray(frag.legends) && frag.legends.length ? { legends: frag.legends } : {}) }
   const layout = out.layout as Record<string, unknown>
   // (facet.ts getHeaderLayoutMixins: a facet whose child has no size signal lays its headers out by their band)
   for (const channel of ['row', 'column'] as const) {
-    if ((wrapped ? false : facetDef[channel] !== undefined) || (wrapped && channel === 'column')) {
+    if (((wrapped ? false : facetDef[channel] !== undefined) || (wrapped && channel === 'column')) && !sized.has(channel === 'row' ? 'height' : 'width')) {
       layout.headerBand = { ...(layout.headerBand as Record<string, number> | undefined), [channel]: 0.5 }
     }
   }
@@ -1657,6 +1691,27 @@ function compileFacetedComposition(spec: VLSpec, ctx: CompileCtx, nested: string
 
 /** Compile a faceted chart (encoding.facet / top-level facet + spec). */
 function compileFaceted(spec: VLSpec, ctx: CompileCtx, nested = ''): VLSpec {
+  if (isObject(spec.facet) && isLayerRepeat(spec.spec)) {
+    // (a repeat of layers is a layered view to a facet around it)
+    const rep = spec.spec as VLSpec
+    const layers = ((rep.repeat as Record<string, unknown>).layer as unknown[]).map((v) => {
+      const l = substituteRepeat((rep.spec ?? {}) as VLSpec, { layer: v }) as VLSpec
+      delete l.width
+      delete l.height
+      return l
+    })
+    const { repeat: _r, spec: _s, ...rest } = rep
+    const inner = normalizeUnits({ ...rest, layer: layers }, ctx.userConfig, unitStackProps) as VLSpec
+    const child = (rep.spec ?? {}) as VLSpec
+    if (child.width !== undefined) inner.width = child.width
+    if (child.height !== undefined) inner.height = child.height
+    const res = compileFaceted({ ...spec, spec: inner }, ctx, nested)
+    // (vega-lite names each repeated layer after its value: `child__layer_w_marks`)
+    const values = (rep.repeat as Record<string, unknown>).layer as unknown[]
+    const pre = childModelName(nested, 'child')
+    const text = JSON.stringify(res).replace(new RegExp(`${pre}_layer_(\\d+)_`, 'g'), (m, i: string) => (values[Number(i)] === undefined ? m : `${pre}__layer_${varName(String(values[Number(i)]))}_`))
+    return JSON.parse(text) as VLSpec
+  }
   if (isObject(spec.facet) && isComposition(spec.spec)) return compileFacetedComposition(spec, ctx, nested)
   // (the names of a facet and of everything it makes are its model's: those of a facet inside a facet start with `child`, and its own child
   // is `child_child`; a composite around the facet puts its own name in front afterwards)
