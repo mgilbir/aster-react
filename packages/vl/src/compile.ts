@@ -164,7 +164,7 @@ function compileOnce(input: VLSpec, forward?: ReadonlyMap<string, SelCmpt>, forw
   optimizeData(out, (name) => name.startsWith(ctx.dn(0).slice(0, -1)))
   // a named view names its marks after itself (vega-lite `model.getName`): `chart_marks` (the views of a repeat name themselves)
   if (typeof normalized.name === 'string' && normalized.name !== '' && normalized.repeat === undefined && Array.isArray(out.marks)) {
-    out.marks = (out.marks as Record<string, unknown>[]).map((m) => prefixMarkNames(m, `${signalSafe(normalized.name as string)}_`))
+    out.marks = (out.marks as Record<string, unknown>[]).map((m) => prefixMarkNames(m, `${varName(normalized.name as string)}_`, ctx.namedPrefixes))
   }
   const signals = paramSignals(normalized)
   const layoutSignals = (out.signals as Record<string, unknown>[] | undefined) ?? []
@@ -174,6 +174,7 @@ function compileOnce(input: VLSpec, forward?: ReadonlyMap<string, SelCmpt>, forw
   } else if (signals.length) {
     out.signals = [...signals, ...layoutSignals]
   }
+  if (typeof normalized.name === 'string' && normalized.name !== '') nameViewParts(out, `${varName(normalized.name)}_`, ctx.namedPrefixes, normalized.name)
   assertNoGeoSignalClash(out)
   assembleGuides(out)
   return { out: exprRefsToSignals(out) as VLSpec, misses: ctx.selectionMisses, selections: ctx.selections, lookups: ctx.selectionLookups }
@@ -272,6 +273,84 @@ function assertNoGeoSignalClash(out: VLSpec): void {
       throw new VLCompileError(`the parameter "${sg.name}" has the name of a signal the map's geojson transform publishes (geojson_N, <layer>_geojson_N); rename the parameter`)
     }
   }
+}
+
+/**
+ * A view with a name names the scales it owns and the signals that size them after itself (`outer_x`, `outer_x_step`, `outer_childWidth`),
+ * as it names its marks. The scales and sizes of the views of a repeat are named after the repeat's values and keep their names.
+ */
+function nameViewParts(out: Record<string, unknown>, prefix: string, except: readonly string[], rawName: string): void {
+  const scales = new Map<string, string>()
+  const signals = new Map<string, string>()
+  const declared: Record<string, unknown>[] = []
+  const walk = (node: Record<string, unknown>): void => {
+    for (const sc of (node.scales as Record<string, unknown>[] | undefined) ?? []) if (typeof sc.name === 'string' && !sc.name.startsWith('child__') && !except.some((p) => (sc.name as string).startsWith(p))) scales.set(sc.name, prefix + sc.name)
+    for (const sg of (node.signals as Record<string, unknown>[] | undefined) ?? []) declared.push(sg)
+    for (const d of (node.data as Record<string, unknown>[] | undefined) ?? []) for (const t of (d.transform as Record<string, unknown>[] | undefined) ?? []) if (typeof t.signal === 'string') declared.push({ name: t.signal, transform: t })
+    for (const m of (node.marks as Record<string, unknown>[] | undefined) ?? []) if (isObject(m)) walk(m)
+  }
+  walk(out)
+  for (const sg of declared) {
+    const name = sg.name
+    if (typeof name !== 'string' || except.some((p) => name.startsWith(p))) continue
+    const sized = name === 'childWidth' || name === 'childHeight' || name === 'child_width' || name === 'child_height' || (/_(width|height)$/.test(name) && !name.startsWith('child__'))
+    const step = name.endsWith('_step') && scales.has(name.slice(0, -5))
+    const bins = /bin_\w*_(bins|extent)$/.test(name)
+    if (sized || step || bins) signals.set(name, prefix + name)
+  }
+  if (scales.size === 0 && signals.size === 0) return
+  const rename = { signals, scales }
+  renameFragment(out, rename)
+  const rewrite = (node: Record<string, unknown>): void => {
+    for (const sc of (node.scales as Record<string, unknown>[] | undefined) ?? []) if (typeof sc.name === 'string') sc.name = scales.get(sc.name) ?? sc.name
+    for (const sg of (node.signals as Record<string, unknown>[] | undefined) ?? []) if (typeof sg.name === 'string') sg.name = signals.get(sg.name) ?? sg.name
+    for (const d of (node.data as Record<string, unknown>[] | undefined) ?? []) for (const t of (d.transform as Record<string, unknown>[] | undefined) ?? []) if (typeof t.signal === 'string') t.signal = signals.get(t.signal) ?? t.signal
+    for (const m of (node.marks as Record<string, unknown>[] | undefined) ?? []) if (isObject(m)) rewrite(m)
+  }
+  rewrite(out)
+  // the dataset a facet makes of its cell's rows is named after the view too
+  const facets = new Map<string, string>()
+  const findFacets = (node: Record<string, unknown>): void => {
+    for (const m of (node.marks as Record<string, unknown>[] | undefined) ?? []) {
+      if (!isObject(m)) continue
+      const from = m.from as { facet?: { name?: unknown } } | undefined
+      const facetName = from?.facet?.name
+      // (the facet of a cell; a path's facet by series is named for the layer)
+      if (typeof facetName === 'string' && typeof m.name === 'string' && /(^|_)cell$/.test(m.name) && !except.some((p) => facetName.startsWith(p))) facets.set(facetName, prefix + facetName)
+      findFacets(m)
+    }
+  }
+  findFacets(out)
+  if (facets.size > 0) {
+    renameDataRefs(out, facets)
+    const nameFacets = (node: Record<string, unknown>): void => {
+      for (const m of (node.marks as Record<string, unknown>[] | undefined) ?? []) {
+        if (!isObject(m)) continue
+        const facet = (m.from as { facet?: { name?: string } } | undefined)?.facet
+        if (facet?.name !== undefined && typeof m.name === 'string' && /(^|_)cell$/.test(m.name)) facet.name = facets.get(facet.name) ?? facet.name
+        nameFacets(m)
+      }
+    }
+    nameFacets(out)
+  }
+  // a selection's tuples say which unit they came from: the unit is named after the view too (`unit: "layer_0"` is `unit: "outer_layer_0"`)
+  const root = prefix.slice(0, -1)
+  const unitLabel = /\bunit(: | === )"([^"]+)"/g
+  const relabel = (v: unknown): unknown => {
+    if (typeof v === 'string') {
+      return v
+        .replace(unitLabel, (m, op: string, unit: string) => (unit === root || unit === rawName || unit.startsWith(prefix) || unit.startsWith('child__') || except.some((p) => unit.startsWith(p)) ? m : `unit${op}"${prefix}${unit}"`))
+        // (and the mark a facet's cell is read from is named after the view like every mark)
+        .replace(/\bgroup\("([^"]+)"\)/g, (m, mark: string) => (mark.startsWith(prefix) || except.some((p) => mark.startsWith(p)) ? m : `group("${prefix}${mark}")`))
+    }
+    if (Array.isArray(v)) return v.map(relabel)
+    if (isObject(v)) return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, k === 'values' ? x : relabel(x)]))
+    return v
+  }
+  const relabelAll = (node: Record<string, unknown>): void => {
+    for (const [k, v] of Object.entries(node)) if (k !== 'values') node[k] = relabel(v)
+  }
+  relabelAll(out)
 }
 
 /**
@@ -824,7 +903,10 @@ function compileLayered(spec: VLSpec, ctx: CompileCtx): VLSpec {
       if (lookup) data.push({ name: lookup.name, source: p.dataName, transform: [{ type: 'filter', expr: ctx.selectionTest!({ param: c.name }) }] })
     }
     const builtMarks = buildMarks(p.l, p.fields, p.mark, p.orient, p.dataName, p.markSize)
-    uniquifyLayerMarks(builtMarks, LEAF_PATHS.get(p.l)?.length ? LEAF_PATHS.get(p.l)!.map((n) => `layer_${n}`).join('_') : i)
+    // (a layer the user named is named so: `outer_marks`, whichever layers it is in)
+    const leafName = typeof p.l.name === 'string' && p.l.name !== '' ? varName(p.l.name) : undefined
+    if (leafName !== undefined) ctx.namedPrefixes.push(`${leafName}_`)
+    uniquifyLayerMarks(builtMarks, leafName ?? (LEAF_PATHS.get(p.l)?.length ? LEAF_PATHS.get(p.l)!.map((n) => `layer_${n}`).join('_') : i))
     perLayerMarks.push(builtMarks)
     const layerScales = buildScales(p.l, p.fields, p.mark, p.orient, p.scaleName, wSpec, hSpec, p.seriesFields, p.rawName)
     // (shared scales are judged merged, below; an independent y scale is the layer's own)
@@ -1998,7 +2080,7 @@ function compileFaceted(spec: VLSpec, ctx: CompileCtx, nested = ''): VLSpec {
   }
   const sizeSignalsOut = facetChildSignals
   // (model.getName: a named root view carries its name in front of every name it makes: `trellis_barley_facet_domain`)
-  const facetModelName = ctx.modelName || (typeof spec.name === 'string' && spec.name !== '' ? signalSafe(spec.name) : '')
+  const facetModelName = ctx.modelName || (typeof spec.name === 'string' && spec.name !== '' ? varName(spec.name) : '')
   const rowDomainName = ctx.fresh(childModelName(facetModelName, 'row_domain'))
   const columnDomainName = ctx.fresh(childModelName(facetModelName, 'column_domain'))
 
@@ -2344,6 +2426,8 @@ interface CompositeCell {
   prefix: string
   /** The view's own name when it is a repeated one (`child__x`): a view a repeat names does not take its parent's name in front. */
   repeated?: string
+  /** The name the user gave the view: it names itself, with no parent's name in front. */
+  named?: string
   /** The child spec (data/transform already inherited, config propagated). */
   spec: VLSpec
 }
@@ -2399,7 +2483,7 @@ function embedCells(cells: CompositeCell[], parent: VLSpec, ctx: CompileCtx, lay
       if (selections.length) child.params = selections
       else delete child.params
     }
-    const vg = inChildView(ctx, cell.prefix.replace(/_$/, ''), [], true, () => compileChildFragment(child, ctx), cell.repeated)
+    const vg = inChildView(ctx, cell.prefix.replace(/_$/, ''), [], true, () => compileChildFragment(child, ctx), cell.repeated, cell.named)
     return { cell, vg, spec: child }
   })
 
@@ -2585,7 +2669,7 @@ function embedCells(cells: CompositeCell[], parent: VLSpec, ctx: CompileCtx, lay
     if (groupSignals.length) group.signals = groupSignals
     // vega-lite names every mark after its model, and a child's model carries its parent's prefix (`concat_0_marks`)
     // (a repeat names its marks `child__x_marks` whatever view holds it)
-    group.marks = cell.spec.repeat !== undefined ? (vg.marks as Record<string, unknown>[]) : (vg.marks as Record<string, unknown>[]).map((m) => prefixMarkNames(m, prefix))
+    group.marks = cell.spec.repeat !== undefined ? (vg.marks as Record<string, unknown>[]) : (vg.marks as Record<string, unknown>[]).map((m) => prefixMarkNames(m, prefix, ctx.namedPrefixes))
     if (Array.isArray(vg.axes) && vg.axes.length) group.axes = vg.axes
     if (ownLegends.length) group.legends = ownLegends
     marks.push(group)
@@ -2670,12 +2754,14 @@ function embedCells(cells: CompositeCell[], parent: VLSpec, ctx: CompileCtx, lay
 }
 
 /** `m` and every mark below it, named with the child's model prefix (vega-lite `model.getName`). */
-function prefixMarkNames(m: Record<string, unknown>, prefix: string): Record<string, unknown> {
+function prefixMarkNames(m: Record<string, unknown>, prefix: string, except: readonly string[] = []): Record<string, unknown> {
   const out: Record<string, unknown> = { ...m }
   if (isSelectionMark(m)) return out
+  // (a view the user named names itself)
+  if (typeof m.name === 'string' && except.some((p) => (m.name as string).startsWith(p))) return out
   // (the facet header titles are named `row-title` / `column-title` / `facet-title` whatever the model)
   if (typeof m.name === 'string' && m.name !== 'row-title' && m.name !== 'column-title' && m.name !== 'facet-title') out.name = `${prefix}${m.name}`
-  if (Array.isArray(m.marks)) out.marks = (m.marks as Record<string, unknown>[]).map((c) => prefixMarkNames(c, prefix))
+  if (Array.isArray(m.marks)) out.marks = (m.marks as Record<string, unknown>[]).map((c) => prefixMarkNames(c, prefix, except))
   return out
 }
 
@@ -2729,11 +2815,8 @@ function mergeLegend(into: Record<string, unknown>, other: Record<string, unknow
   for (const [k, v] of Object.entries(other)) if (k !== 'title' && into[k] === undefined && v !== undefined) into[k] = v
   const upd = (into.encode as { symbols?: { update?: Record<string, unknown> } } | undefined)?.symbols?.update
   if (upd && into.fill !== undefined) {
+    // (the legend keeps the empty `update` the fill left: vega-lite's merged legend has it too)
     delete upd.fill
-    if (Object.keys(upd).length === 0) {
-      delete (into.encode as { symbols?: unknown }).symbols
-      if (Object.keys(into.encode as object).length === 0) delete into.encode
-    }
   }
 }
 
@@ -2752,7 +2835,11 @@ function compositeLayout(spec: VLSpec, base: { align: unknown; columns?: unknown
 function compileConcat(spec: VLSpec, ctx: CompileCtx): VLSpec {
   const kind = spec.hconcat != null ? 'hconcat' : spec.vconcat != null ? 'vconcat' : 'concat'
   const children = (spec[kind] as VLSpec[]) ?? []
-  const cells: CompositeCell[] = children.map((c, i) => ({ prefix: `concat_${i}_`, spec: c }))
+  const cells: CompositeCell[] = children.map((c, i) => {
+    if (!isObject(c) || typeof c.name !== 'string' || c.name === '') return { prefix: `concat_${i}_`, spec: c }
+    ctx.namedPrefixes.push(`${varName(c.name)}_`)
+    return { prefix: `${varName(c.name)}_`, named: varName(c.name), spec: c }
+  })
   const columns = kind === 'concat' ? spec.columns : undefined
   const layout: 'row' | 'column' | 'grid' = kind === 'hconcat' || (kind === 'concat' && columns === undefined)
     ? 'row'
@@ -3595,6 +3682,8 @@ interface CompileCtx extends TransformContext {
   currentUnit?: VLSpec
   /** The view being compiled is the child of a facet that is itself inside a facet: its pipeline stays inside the innermost cell. */
   inNestedFacet?: boolean
+  /** The prefixes (`outer_`) of the views the user named inside the one being compiled: they name themselves, and nothing renames them after. */
+  namedPrefixes: string[]
   /** The name of the repeated view being compiled (`child__row_g`): a repeat inside it puts its own children's names after it. */
   repeatPrefix: string
   /** vega-lite's `model.name` of the view being compiled ('' at the root): `concat_0`, `child`, `concat_1_child__column_a`. */
@@ -3612,9 +3701,9 @@ const childModelName = (parent: string, own: string): string => (parent ? `${par
  * Compile `child` as the view named `own` inside the one being compiled (a concat child, a facet's cell, a repeated view). A repeated view
  * is named by its repeat alone (`repeated`), and the repeats inside it name their views after it.
  */
-function inChildView<T>(ctx: CompileCtx, own: string, facetFields: ReadonlyArray<{ channel: string; field: string }>, composite: boolean, f: () => T, repeated?: string): T {
+function inChildView<T>(ctx: CompileCtx, own: string, facetFields: ReadonlyArray<{ channel: string; field: string }>, composite: boolean, f: () => T, repeated?: string, named?: string): T {
   const saved = { modelName: ctx.modelName, compositeDepth: ctx.compositeDepth, facetFields: ctx.facetFields, repeatPrefix: ctx.repeatPrefix }
-  ctx.modelName = repeated ?? childModelName(ctx.modelName, own)
+  ctx.modelName = repeated ?? named ?? childModelName(ctx.modelName, own)
   if (repeated !== undefined) ctx.repeatPrefix = repeated
   if (composite) ctx.compositeDepth++
   ctx.facetFields = [...ctx.facetFields, ...facetFields]
@@ -3685,6 +3774,7 @@ function makeCtx(top: VLSpec): CompileCtx {
     anySelection: hasSelectionParams(top),
     modelName: '',
     repeatPrefix: '',
+    namedPrefixes: [],
     compositeDepth: 0,
     facetFields: [],
     dn: (i) => `${dataPrefix}_${i}`,
@@ -4926,7 +5016,9 @@ function buildScales(spec: VLSpec, fieldsIn: FieldDef[], mark: string, orient: s
     const sc = scales.find((x) => x.name === f.channel)
     if (sc && !EXPLICIT_SCALE_PROPS.has(sc)) recordExplicit(sc, f.scale)
   }
-  return scales
+  // the scales of a unit come in the order of the channels (vega-lite's), whichever order they were made in
+  const rank = (sc: ScaleSpec): number => { const i = UNIT_CHANNEL_ORDER.indexOf(String(sc.name)); return i < 0 ? UNIT_CHANNEL_ORDER.length : i }
+  return scales.map((sc, i) => [sc, i] as const).sort(([a, i], [b, j]) => rank(a) - rank(b) || i - j).map(([sc]) => sc)
 }
 
 /** A scale `scheme` (a name or {name, extent, count}) as a Vega range scheme object. */
@@ -7738,7 +7830,7 @@ const isGraticuleData = (d: unknown): boolean => isObject(d) && d.graticule !== 
 
 /** vega-lite `model.getName` prefix of the root view: its `name`, when it has one. */
 function rootNamePrefix(spec: VLSpec): string {
-  return typeof spec.name === 'string' && spec.name !== '' ? `${signalSafe(spec.name)}_` : ''
+  return typeof spec.name === 'string' && spec.name !== '' ? `${varName(spec.name)}_` : ''
 }
 
 /** The projection component of one unit, and the geo facts its transforms and mark need. */

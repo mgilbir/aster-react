@@ -244,14 +244,6 @@ export function validateSpec(spec: unknown): void {
   validateView(spec, '', true, undefined, true)
 }
 
-/** A view that carries a name names its marks and units after it; the selections' fixed names would then disagree. */
-function checkNamedSelectionView(spec: Obj, at: (k: string) => string): void {
-  // (a timer selection is the exception: an animation's signals are not named after the view, only its tuple's `unit` is)
-  if (spec.name !== undefined && ((Array.isArray(spec.params) && spec.params.some((p) => isObj(p) && p.select !== undefined && !isTimerSelect(p.select))))) {
-    fail(at('name'), 'a view with selection parameters cannot be named: vega-lite names its marks, signals and units after the view, which @aster/vl does not reproduce')
-  }
-}
-
 /** Every parameter name must be unique across the whole spec. */
 let paramNamesSeen: Set<string> = new Set()
 let selectionNamesSeen: Set<string> = new Set()
@@ -278,8 +270,6 @@ function validateView(spec: Obj, path: string, top: boolean, parent: Kind | unde
   if (spec.transform !== undefined) validateTransforms(spec.transform, at('transform'))
   validateSize(spec, at, top && (kind === 'unit' || kind === 'layer'))
   if (spec.params !== undefined) validateParams(spec.params, at('params'), kind !== 'layer' && selOk, kind, spec, at('params'))
-  checkNamedSelectionView(spec, at)
-  if (top && spec.name !== undefined && [...declaredParams].some(([n, k]) => k === 'selection' && !timerNames.has(n))) fail(at('name'), 'a named spec cannot declare selection parameters: vega-lite names its marks, signals and units after the view, which @aster/vl does not reproduce')
   if (spec.resolve !== undefined) validateResolve(spec.resolve, at('resolve'), kind, isObj(spec.encoding) && (spec.encoding.row != null || spec.encoding.column != null || spec.encoding.facet != null))
   if (spec.projection !== undefined) validateProjection(spec.projection, at('projection'))
   if (spec.view !== undefined) validateViewBackground(spec.view, kind, at('view'))
