@@ -419,8 +419,7 @@ export function legendCase(seed: number): GuideCase {
   }
   const spec: Spec = {
     width, height, padding: pick(r, [0, 5, 20]),
-    // (vega's `pad` autosize does not grow the view for an `orient: none` legend that overflows it; Aster's does, see the report)
-    autosize: legends.some((l) => l.orient === 'none') && !G('none') ? 'none' : pick(r, ['pad', 'pad', 'none', 'fit', 'fit-x', 'fit-y', { type: 'fit', contains: 'padding' }]),
+    autosize: pick(r, ['pad', 'pad', 'none', 'fit', 'fit-x', 'fit-y', { type: 'fit', contains: 'padding' }]),
     config: pick(r, LEGEND_CONFIGS),
     data: [{ name: 'rows', values: dataRows(r) }],
     scales, legends,
@@ -466,7 +465,7 @@ function cellContent(r: Rand, depth: number, cellW: number, cellH: number): Spec
   if (chance(r, 0.6)) axes.push({ scale: 'cx', orient: pick(r, ['bottom', 'top']), ...(chance(r, 0.5) ? { grid: true } : {}), ...(chance(r, 0.4) ? { title: 'X' } : {}), ...(chance(r, 0.3) ? { tickCount: 3 } : {}) })
   if (chance(r, 0.6)) axes.push({ scale: 'cy', orient: pick(r, ['left', 'right']), ...(chance(r, 0.5) ? { grid: true } : {}), ...(chance(r, 0.4) ? { title: 'Y' } : {}), ...(chance(r, 0.3) ? { labelFlush: true } : {}) })
   if (axes.length) content.axes = axes
-  if (chance(r, 0.2)) content.legends = [{ fill: 'cc', orient: pick(r, G('none6') ? ['right', 'bottom', 'top-left', 'top-right', 'bottom-left', 'none'] : ['right', 'bottom', 'top-left', 'top-right', 'bottom-left']), title: 'L' }]
+  if (chance(r, 0.2)) content.legends = [{ fill: 'cc', orient: pick(r, ['right', 'bottom', 'top-left', 'top-right', 'bottom-left', 'none']), title: 'L' }]
   return content
 }
 

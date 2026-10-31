@@ -949,7 +949,14 @@ export function boundLegendGroup(g: SceneGroup): Bounds {
   const rec = g as Record<string, unknown>
   // a legend built by guide-legend.ts carries the bounds its layout left on the mark (relative to the group's position)
   const own = rec.legendBounds as Bounds | undefined
-  if (own) return own.clone().translate(g.x ?? 0, g.y ?? 0)
+  if (own) {
+    const placed = own.clone().translate(g.x ?? 0, g.y ?? 0)
+    // a legend that sits nowhere along an axis (`orient: none` with no legendX / legendY) has no extent along it
+    const unplaced = rec.unplaced as { x: boolean; y: boolean } | undefined
+    if (unplaced?.x) { placed.x1 = +Number.MAX_VALUE; placed.x2 = -Number.MAX_VALUE }
+    if (unplaced?.y) { placed.y1 = +Number.MAX_VALUE; placed.y2 = -Number.MAX_VALUE }
+    return placed
+  }
   const stroked = rec._borderStroke === true
     || (rec._borderStroke === undefined
       // vega's boundStroke expands by strokeWidth/2 - a zero-width stroke (the gradient rect's #ddd) does not move the bounds

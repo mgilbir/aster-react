@@ -1345,6 +1345,7 @@ function buildAxisAndLegend(
         const ly = guideNumber(ctx, x.props.y)
         if (lx !== undefined) x.group.x = lx
         if (ly !== undefined) x.group.y = ly
+        if (lx === undefined || ly === undefined) (x.group as unknown as { unplaced?: { x: boolean; y: boolean } }).unplaced = { x: lx === undefined, y: ly === undefined }
         continue
       }
       const list = byOrient.get(orient) ?? []
