@@ -1,204 +1,160 @@
 /**
- * The row transforms of vega-transforms / vega-encode that need no layout
- * engine, ported to Vega's semantics (collect, sample, fold, flatten, extent,
- * sequence, lookup, impute, stack, identifier, project, bin, timeunit, pie,
- * cross, countpattern). Each takes the transform's raw spec params, exactly as
- * Vega receives them, and applies Vega's defaults.
+ * The row transforms that need no layout engine: collect, sample, fold, flatten, project, extent, sequence, lookup, impute,
+ * stack, identifier, bin and timeunit. Each takes the transform's raw spec parameters, as a spec writes them, applies the
+ * defaults of the grammar, and returns new rows (or the rows it was given, when it only selects or reads them).
  *
- * Pinned by `testdata/vectors/vega-transforms*.json`. Conventions shared with
- * `transform-agg.ts`: input rows are never mutated (transforms that write onto
- * their tuples in Vega write onto copies); odd values keep Vega's meaning
- * (null/''/NaN, numeric strings, Dates); field params accept `a.b`, `a[0]`,
- * `a\.b` access paths.
+ * Conventions shared with `transform-agg.ts`: input rows are never written. A transform that adds fields to its rows writes onto
+ * copies; the pipeline may say the rows are its own (`owned`: nothing else holds them), and then it writes onto them directly. Odd
+ * values keep the meaning the grammar gives them (`null`, `''` and `NaN`, numeric strings, Dates), and field parameters accept
+ * the access paths `a.b`, `a[0]` and `a\.b`.
  */
-import { accessorName, array, error, extent as vegaExtent, one, peek, toNumber } from './util.js'
+import { accessorName, array, error, extent as columnExtent, one, peek, toNumber } from './util.js'
 import { compareOf, fieldOf, fieldsOf, lcg, SEED, sortBySpec, stableSortBy, type Row } from './transform-agg.js'
-import { tickStep } from './format.js'
-import { quantile } from './arr.js'
+import { quantile, tickStep } from './arr.js'
 import {
+  DATE, DAY, HOURS, MILLISECONDS, MINUTES, MONTH, SECONDS, WEEK, YEAR,
   durationDay, durationHour, durationMinute, durationMonth, durationSecond, durationWeek, durationYear,
   timeFloor, timeIntervalFor, timeUnits, utcFloor, utcIntervalFor,
 } from './time.js'
 import { AsterLimitError, activeMeter, checkRowCount, meterTick } from './limits.js'
 
 type Params = Record<string, unknown>
+type Read = (d: unknown) => unknown
 
-/** Vega's parse-time check for a `required` transform parameter. */
+/** A transform's required parameter, as the grammar words the complaint. */
 export function required(type: string, p: Params, ...names: string[]): void {
   for (const n of names) {
     if (p[n] === undefined) error(`[aster] Missing required "${type}" parameter: "${n}"`)
   }
 }
 
-/** Derive a copy of a tuple (vega-dataflow `derive`). */
-function derive(t: Row): Row {
-  return { ...t }
-}
+/** A row to write onto: the row itself when the pipeline owns it, otherwise a copy of it. */
+const writable = (row: Row, owned: boolean): Row => (owned ? row : { ...row })
 
-// ---------------------------------------------------------------------------
-// d3-array helpers used by impute / sequence
-// ---------------------------------------------------------------------------
+/** Rows to write onto: `rows` themselves (in a new array) when owned, copies otherwise. */
+const writableRows = (rows: readonly Row[], owned: boolean): Row[] => (owned ? rows.slice() : rows.map((r) => ({ ...r })))
 
-/** d3-array `range(start, stop, step)` (numeric output only). */
-export function d3Range(start: number, stop: number, step: number): number[] {
+/** `start, start + step, ...` below `stop` (above it for a negative step). The length is checked against the limits before it is allocated. */
+export function numberRange(start: number, stop: number, step: number): number[] {
   start = +start
   stop = +stop
   step = +step
-  const len = Math.max(0, Math.ceil((stop - start) / step))
-  // Deviation from d3 (safety): the length is bounded by the active limits
-  // BEFORE the allocation (sequence 5e7, graticule steps ~0, ...).
-  if (len > 0x7fffffff) throw new AsterLimitError(`range length ${len} > 2147483647`)
-  const n = len | 0
+  const length = Math.max(0, Math.ceil((stop - start) / step))
+  if (length > 0x7fffffff) throw new AsterLimitError(`range length ${length} > 2147483647`)
   const meter = activeMeter()
-  if (meter) meter.rows(Number.isFinite(len) ? len : Infinity, 'range')
-  const out: number[] = new Array(n)
-  for (let i = 0; i < n; i++) {
+  if (meter) meter.rows(Number.isFinite(length) ? length : Infinity, 'range')
+  const out: number[] = new Array(length | 0)
+  for (let i = 0; i < out.length; i++) {
     out[i] = start + i * step
     if (meter && (i & 0xffff) === 0xffff) meter.clock.check('range')
   }
   return out
 }
 
-
-type ValueOf = (d: unknown) => unknown
-
-function d3mean(values: ArrayLike<unknown>, valueof: ValueOf): number | undefined {
-  let count = 0
-  let sum = 0
-  for (let i = 0; i < values.length; i++) {
-    let v: unknown = valueof(values[i])
-    if (v != null && (v = +(v as number)) >= (v as number)) { ++count; sum += v as number }
-  }
-  if (count) return sum / count
-  return undefined
-}
-function d3median(values: ArrayLike<unknown>, valueof: ValueOf): number | undefined {
-  return quantile(Array.from(values), 0.5, (d) => valueof(d))
-}
-function d3min(values: ArrayLike<unknown>, valueof: ValueOf): unknown {
-  let min: unknown
-  for (let i = 0; i < values.length; i++) {
-    const value = valueof(values[i])
-    if (value != null && ((min as number) > (value as number) || (min === undefined && (value as number) >= (value as number)))) min = value
-  }
-  return min
-}
-function d3max(values: ArrayLike<unknown>, valueof: ValueOf): unknown {
-  let max: unknown
-  for (let i = 0; i < values.length; i++) {
-    const value = valueof(values[i])
-    if (value != null && ((max as number) < (value as number) || (max === undefined && (value as number) >= (value as number)))) max = value
-  }
-  return max
-}
-
 // ---------------------------------------------------------------------------
 // collect, sample
 // ---------------------------------------------------------------------------
 
-/** vega `collect`: a stable sort by the `sort` comparator (ties keep input order). */
+/** `collect`: a stable sort by the `sort` spec (ties keep input order); the rows as they are without one. */
 export function collectRows(rows: Row[], p: Params): Row[] {
   return sortBySpec(rows, p.sort) ?? rows
 }
 
 /**
- * vega `sample`: a reservoir of `size` rows (uniform), drawn from a seeded LCG.
+ * `sample`: a uniform reservoir of `size` rows. A row past the first `size` replaces slot `~~((seen + 1) * random())` when that falls
+ * inside the reservoir, so the number and order of draws is fixed by the output.
  *
- * Deviation from Vega: unless the host injects a source (`RuntimeInput.random`, which
- * vega's `setRandom` is the counterpart of), the reservoir is filled from `lcg(SEED)`
- * instead of `Math.random`, so the sample is a pure function of the rows (an incremental
- * evaluation equals a fresh one); with the same stream the draw is identical to
- * Vega's (pinned by the vectors). Like vega 6.3.1's runtime, an omitted `size`
- * is NOT defaulted to the documented 1000: nothing is sampled (the
- * documented default lives only in the transform's schema metadata).
+ * The source is the host's injected one (`RuntimeInput.random`, Vega's `setRandom`); without one the engine's seeded stream is used
+ * instead of `Math.random`, which makes a sample a pure function of its rows (an incremental evaluation equals a fresh one). An
+ * omitted `size` is not defaulted to the documented 1000, as in Vega 6.3.1: nothing is sampled.
  */
 export function sampleRows(rows: Row[], p: Params, source?: () => number): Row[] {
-  const num = p.size as number
+  const size = p.size as number
   const random = source ?? lcg(SEED)
-  const res: Row[] = []
-  let cnt = 0
-  for (let i = 0; i < rows.length; i++) {
-    const t = rows[i]!
-    if (res.length < num) {
-      res.push(t)
+  const reservoir: Row[] = []
+  for (let seen = 0; seen < rows.length; seen++) {
+    if (reservoir.length < size) {
+      reservoir.push(rows[seen]!)
     } else {
-      const idx = ~~((cnt + 1) * random())
-      if (idx < res.length && idx >= 0) res[idx] = t
+      const slot = ~~((seen + 1) * random())
+      if (slot < reservoir.length && slot >= 0) reservoir[slot] = rows[seen]!
     }
-    ++cnt
-    if ((i & 1023) === 1023) meterTick('sample', 1024)
+    if ((seen & 1023) === 1023) meterTick('sample', 1024)
   }
-  return res
+  return reservoir
 }
 
 // ---------------------------------------------------------------------------
 // fold, flatten, project
 // ---------------------------------------------------------------------------
 
+/** `fold`: one row per row and field, carrying the field's name and value. */
 export function foldRows(rows: Row[], p: Params): Row[] {
   required('fold', p, 'fields')
   const fields = fieldsOf(p.fields)
-  const fnames = fields.map((f) => accessorName(f))
+  const names = fields.map((f) => accessorName(f))
   const as = (p.as ?? ['key', 'value']) as string[]
-  const k = as[0] as string
-  const v = as[1] as string
-  const n = fields.length
-  checkRowCount(rows.length * n, 'fold')
+  const keyName = as[0] as string
+  const valueName = as[1] as string
+  checkRowCount(rows.length * fields.length, 'fold')
   const out: Row[] = []
-  for (const t of rows) {
-    for (let i = 0; i < n; ++i) {
-      const d = derive(t)
-      d[k] = fnames[i]
-      d[v] = fields[i]!(t)
-      out.push(d)
+  for (const row of rows) {
+    for (let i = 0; i < fields.length; ++i) {
+      const folded = { ...row }
+      folded[keyName] = names[i]
+      folded[valueName] = fields[i]!(row)
+      out.push(folded)
     }
-    meterTick('fold', n)
+    meterTick('fold', fields.length)
   }
   return out
 }
 
-/** The number of output rows Vega's flatten derives from one tuple's arrays. */
+/** The number of rows `flatten` makes of one row: the length of the longest of its arrays. */
 export function flattenLength(arrays: unknown[]): number {
-  return arrays.reduce<number>((l, a) => Math.max(l, (a as { length: number }).length), 0)
+  return arrays.reduce<number>((longest, a) => Math.max(longest, (a as { length: number }).length), 0)
 }
 
+/** `flatten`: one row per array position, each array field spread over the rows (an absent element is `null`). */
 export function flattenRows(rows: Row[], p: Params): Row[] {
   required('flatten', p, 'fields')
   const fields = fieldsOf(p.fields)
-  const asParam = array(p.as) as Array<string | null | undefined>
-  const as = fields.map((f, i) => (asParam[i] || accessorName(f)) as string)
-  const index = (p.index as string | undefined) || null
-  const m = as.length
+  const given = array(p.as) as Array<string | null | undefined>
+  const names = fields.map((f, i) => (given[i] || accessorName(f)) as string)
+  const indexName = (p.index as string | undefined) || null
   const out: Row[] = []
-  for (const t of rows) {
-    const arrays = fields.map((f) => f(t)) as ArrayLike<unknown>[]
-    const maxlen = flattenLength(arrays)
-    // maxlen comes from the data (an array length): bound it before the loop.
-    checkRowCount(out.length + (maxlen > 0 ? maxlen : 0), 'flatten')
-    for (let i = 0; i < maxlen; ++i) {
-      const d = derive(t)
-      for (let j = 0; j < m; ++j) {
-        const v = arrays[j]![i]
-        d[as[j]!] = v == null ? null : v
+  for (const row of rows) {
+    const arrays = fields.map((f) => f(row)) as ArrayLike<unknown>[]
+    const length = flattenLength(arrays)
+    // the length comes from the data: bound it before the loop
+    checkRowCount(out.length + (length > 0 ? length : 0), 'flatten')
+    for (let i = 0; i < length; ++i) {
+      const flat = { ...row }
+      for (let j = 0; j < names.length; ++j) {
+        const element = arrays[j]![i]
+        flat[names[j]!] = element == null ? null : element
       }
-      if (index) d[index] = i
-      out.push(d)
+      if (indexName) flat[indexName] = i
+      out.push(flat)
     }
     meterTick('flatten', 1)
   }
   return out
 }
 
+/**
+ * `project`: the listed fields (renamed by `as`) as rows of their own; without `fields`, copies of the rows. Always new rows, owned or
+ * not: a row some result of an earlier transform holds must not take the fields a later transform writes.
+ */
 export function projectRows(rows: Row[], p: Params): Row[] {
-  const fields = p.fields == null ? null : fieldsOf(p.fields)
-  if (!fields) return rows.map(derive)
-  const asParam = array(p.as) as Array<string | null | undefined>
-  const as = fields.map((f, i) => (asParam[i] || accessorName(f)) as string)
-  const n = fields.length
-  return rows.map((s) => {
-    const t: Row = {}
-    for (let i = 0; i < n; ++i) t[as[i]!] = fields[i]!(s)
-    return t
+  if (p.fields == null) return rows.map((row) => ({ ...row }))
+  const fields = fieldsOf(p.fields)
+  const given = array(p.as) as Array<string | null | undefined>
+  const names = fields.map((f, i) => (given[i] || accessorName(f)) as string)
+  return rows.map((row) => {
+    const projected: Row = {}
+    for (let i = 0; i < fields.length; ++i) projected[names[i]!] = fields[i]!(row)
+    return projected
   })
 }
 
@@ -206,16 +162,16 @@ export function projectRows(rows: Row[], p: Params): Row[] {
 // extent, sequence
 // ---------------------------------------------------------------------------
 
-/** vega `extent`: `[min, max]` of the coerced field values; `[undefined, undefined]` when none are finite. */
+/** `extent`: `[min, max]` of the field's values as numbers; `[undefined, undefined]` unless both ends are finite. */
 export function extentOfField(rows: Row[], p: Params): [number | undefined, number | undefined] {
   required('extent', p, 'field')
-  const f = fieldOf(p.field)
+  const read = fieldOf(p.field)
   let min = +Infinity
   let max = -Infinity
-  for (const t of rows) {
-    const v = toNumber(f(t))
+  for (const row of rows) {
+    const v = toNumber(read(row))
     if (v != null) {
-      // NaNs fail all comparisons
+      // (NaN fails both comparisons and is skipped)
       if (v < min) min = v
       if (v > max) max = v
     }
@@ -224,14 +180,15 @@ export function extentOfField(rows: Row[], p: Params): [number | undefined, numb
   return [min, max]
 }
 
+/** `sequence`: rows `{[as]: start}`, `{[as]: start + step}`, ... below `stop`. */
 export function sequenceRows(p: Params): Row[] {
   required('sequence', p, 'start', 'stop')
-  const as = ((p.as as string | undefined) || 'data')
-  const values = d3Range(p.start as number, p.stop as number, ((p.step === undefined ? 1 : p.step) || 1) as number)
+  const name = ((p.as as string | undefined) || 'data')
+  const values = numberRange(p.start as number, p.stop as number, ((p.step === undefined ? 1 : p.step) || 1) as number)
   const out = new Array<Row>(values.length)
   for (let i = 0; i < values.length; i++) {
-    out[i] = { [as]: values[i] }
-    // limits ON: sample the wall clock while the tuples are built (C7)
+    out[i] = { [name]: values[i] }
+    // limits on: the clock is sampled while the rows are built
     if ((i & 0x3fff) === 0x3fff) meterTick('sequence', 1024)
   }
   return out
@@ -242,50 +199,46 @@ export function sequenceRows(p: Params): Row[] {
 // ---------------------------------------------------------------------------
 
 /**
- * vega-util `fastmap` key: the stringified key, so `1` and `'1'` collide and the last row wins.
- * (`fastmap` prefixes '$' to dodge inherited object members; a `Map` needs no prefix.)
+ * `lookup`: copy fields from the row of `source` whose `key` matches each of the row's `fields` (the whole matched row under `as`
+ * when there are no `values`; the `default`, or null, where nothing matches). Keys match by their string (`1` and `'1'` are one key)
+ * and the last source row with a key wins. A data value such as `constructor` is an ordinary key.
  */
-const mapKey = (k: unknown): string => String(k)
-
-export function lookupRows(rows: Row[], p: Params, source: readonly Row[]): Row[] {
+export function lookupRows(rows: Row[], p: Params, source: readonly Row[], owned = false): Row[] {
   required('lookup', p, 'fields', 'key')
-  const key = fieldOf(p.key)
-  const keys = fieldsOf(p.fields)
+  const keyOf = fieldOf(p.key)
+  const probes = fieldsOf(p.fields)
   const values = p.values == null ? null : fieldsOf(p.values)
-  const defaultValue = p.default == null ? null : p.default
-  const n = keys.length
-  let as = p.as == null ? null : (array(p.as) as string[])
-  let set: (t: Row) => void
-  const index = new Map<string, Row>()
-  for (const t of source) index.set(mapKey(key(t)), t)
+  const fallback = p.default == null ? null : p.default
+  const as = p.as == null ? null : (array(p.as) as string[])
+  const matches = new Map<string, Row>()
+  for (const row of source) matches.set(String(keyOf(row)), row)
 
+  let fill: (row: Row) => void
   if (values) {
-    const m = values.length
-    if (n > 1 && !as) error('Multi-field lookup requires explicit "as" parameter.')
-    if (as && as.length !== n * m) error('The "as" parameter has too few output field names.')
+    if (probes.length > 1 && !as) error('Multi-field lookup requires explicit "as" parameter.')
+    if (as && as.length !== probes.length * values.length) error('The "as" parameter has too few output field names.')
     const names = as || values.map((v) => accessorName(v) as string)
-    set = (t) => {
-      for (let i = 0, k = 0; i < n; ++i) {
-        const v = index.get(mapKey(keys[i]!(t)))
-        if (v == null) for (let j = 0; j < m; ++j, ++k) t[names[k]!] = defaultValue
-        else for (let j = 0; j < m; ++j, ++k) t[names[k]!] = values[j]!(v)
+    // (the probes read the row being filled: a field written by an earlier probe is what a later one sees)
+    fill = (row) => {
+      let at = 0
+      for (let i = 0; i < probes.length; i++) {
+        const found = matches.get(String(probes[i]!(row)))
+        for (let j = 0; j < values.length; j++) row[names[at++]!] = found == null ? fallback : values[j]!(found)
       }
     }
   } else {
     if (!as) error('Missing output field names.')
-    const names = as
-    set = (t) => {
-      for (let i = 0; i < n; ++i) {
-        const v = index.get(mapKey(keys[i]!(t)))
-        t[names[i]!] = v == null ? defaultValue : v
-      }
+    fill = (row) => {
+      probes.forEach((probe, i) => {
+        const found = matches.get(String(probe(row)))
+        row[as[i]!] = found == null ? fallback : found
+      })
     }
   }
-  as = null
-  return rows.map((r) => {
-    const t = derive(r)
-    set(t)
-    return t
+  return rows.map((row) => {
+    const out = writable(row, owned)
+    fill(out)
+    return out
   })
 }
 
@@ -293,145 +246,181 @@ export function lookupRows(rows: Row[], p: Params, source: readonly Row[]): Row[
 // impute
 // ---------------------------------------------------------------------------
 
-type Group = Row[] & { vals?: unknown[] }
+/** What a group of rows is imputed from: the group's rows (holes for the key values it lacks) read through a field. */
+type Imputer = (group: ArrayLike<Row | undefined>, read: Read) => unknown
 
+const imputers: Record<string, Imputer> = {
+  mean(group, read) {
+    let count = 0
+    let sum = 0
+    for (let i = 0; i < group.length; i++) {
+      const raw = read(group[i])
+      const x = raw != null ? +(raw as number) : NaN
+      if (x >= x) { ++count; sum += x }
+    }
+    return count ? sum / count : undefined
+  },
+  median: (group, read) => quantile(Array.from(group), 0.5, (row) => read(row)),
+  min(group, read) {
+    let low: unknown
+    for (let i = 0; i < group.length; i++) {
+      const v = read(group[i])
+      if (v != null && ((low as number) > (v as number) || (low === undefined && (v as number) >= (v as number)))) low = v
+    }
+    return low
+  },
+  max(group, read) {
+    let high: unknown
+    for (let i = 0; i < group.length; i++) {
+      const v = read(group[i])
+      if (v != null && ((high as number) < (v as number) || (high === undefined && (v as number) >= (v as number)))) high = v
+    }
+    return high
+  },
+}
+
+/** One imputation group: the group-by values it was opened with, and its rows at the position of their key value. */
+interface ImputeGroup {
+  by: unknown[]
+  slots: Row[]
+}
+
+/**
+ * `impute`: for each group (by `groupby`) add a row for every key value the group lacks. The key values are `keyvals`, then any
+ * further key met in the data, in order of appearance. The imputed field is the constant `value` (default 0) or the group's
+ * mean/median/min/max, computed once per group (again for each row while it comes out as NaN). An imputed row reads
+ * `{_impute: true, <group fields>, <key>: key value, <field>: imputed}`.
+ */
 export function imputeRows(rows: Row[], p: Params): Row[] {
   required('impute', p, 'field', 'key')
-  const f = fieldOf(p.field)
-  const keyf = fieldOf(p.key)
-  const groupby = p.groupby == null ? null : fieldsOf(p.groupby)
+  const fieldRead = fieldOf(p.field)
+  const keyRead = fieldOf(p.key)
+  const by = p.groupby == null ? null : fieldsOf(p.groupby)
   const method = (p.method as string | undefined) || 'value'
-  let impute: (group: Row[], field: ValueOf) => unknown
+  let imputed: Imputer
   if (method === 'value') {
-    const v = p.value !== undefined ? p.value : 0
-    impute = () => v
-  } else if (method === 'mean') impute = d3mean
-  else if (method === 'median') impute = d3median
-  else if (method === 'min') impute = d3min
-  else if (method === 'max') impute = d3max
+    const constant = p.value !== undefined ? p.value : 0
+    imputed = () => constant
+  } else if (Object.hasOwn(imputers, method)) imputed = imputers[method]!
   else error('Unrecognized imputation method: ' + method)
-  const field: ValueOf = (t) => (t ? f(t) : NaN)
-  const fName = accessorName(f) as string
-  const kName = accessorName(keyf) as string
-  const gNames = (groupby ?? []).map((g) => accessorName(g) as string)
+  const read: Read = (row) => (row ? fieldRead(row) : NaN)
+  const fieldName = accessorName(fieldRead) as string
+  const keyName = accessorName(keyRead) as string
+  const byNames = (by ?? []).map((g) => accessorName(g) as string)
 
-  // partition (vega-transforms Impute `partition`)
   const domain: unknown[] = p.keyvals ? array(p.keyvals).slice() : []
-  const kMap = new Map<string, number>()
-  domain.forEach((k, i) => kMap.set(String(k), i + 1))
-  const gMap = new Map<string, Group>()
-  const groups: Group[] = []
-  for (const t of rows) {
-    const k = keyf(t)
-    const ks = String(k)
-    let j = kMap.get(ks)
-    if (!j) { j = domain.push(k); kMap.set(ks, j) }
-    const gVals = groupby ? groupby.map((g) => g(t)) : []
-    const gKey = gVals + ''
-    let group = gMap.get(gKey)
-    if (!group) {
-      group = [] as unknown as Group
-      gMap.set(gKey, group)
-      groups.push(group)
-      group.vals = gVals
-    }
-    group[j - 1] = t
+  const slotOf = new Map<string, number>()
+  domain.forEach((k, i) => slotOf.set(String(k), i))
+  const groups = new Map<string, ImputeGroup>()
+  for (const row of rows) {
+    const key = keyRead(row)
+    let slot = slotOf.get(String(key))
+    if (slot === undefined) { slot = domain.push(key) - 1; slotOf.set(String(key), slot) }
+    const groupValues = by ? by.map((g) => g(row)) : []
+    // (groups are told apart by the joined string of their values: null, undefined and '' are one, and so on)
+    const groupKey = groupValues + ''
+    let group = groups.get(groupKey)
+    if (!group) groups.set(groupKey, (group = { by: groupValues, slots: [] }))
+    group.slots[slot] = row
   }
 
-  const m = domain.length
-  const curr: Row[] = []
-  checkRowCount(rows.length + groups.length * m, 'impute')
-  for (const group of groups) {
-    const gVals = group.vals!
+  const added: Row[] = []
+  checkRowCount(rows.length + groups.size * domain.length, 'impute')
+  for (const group of groups.values()) {
     let value: unknown = NaN
-    for (let j = 0; j < m; ++j) {
-      if (group[j] != null) continue
-      const kVal = domain[j]
-      const t: Row = { _impute: true }
-      for (let i = 0; i < gVals.length; i++) t[gNames[i]!] = gVals[i]
-      t[kName] = kVal
-      t[fName] = Number.isNaN(value) ? (value = impute(group, field)) : value
-      curr.push(t)
+    for (let slot = 0; slot < domain.length; ++slot) {
+      if (group.slots[slot] != null) continue
+      const row: Row = { _impute: true }
+      for (let i = 0; i < group.by.length; i++) row[byNames[i]!] = group.by[i]
+      row[keyName] = domain[slot]
+      row[fieldName] = Number.isNaN(value) ? (value = imputed(group.slots, read)) : value
+      added.push(row)
     }
-    meterTick('impute', m)
+    meterTick('impute', domain.length)
   }
-  return curr.length ? rows.concat(curr) : rows
+  return added.length ? rows.concat(added) : rows
 }
 
 // ---------------------------------------------------------------------------
 // stack
 // ---------------------------------------------------------------------------
 
-interface StackGroup extends Array<Row> { sum?: number }
+interface StackGroup {
+  rows: Row[]
+  /** Sum of the absolute values of the group, in the rows' input order. */
+  total: number
+}
 
-export function stackRows(rows: Row[], p: Params): Row[] {
-  const out = rows.map(derive)
+/**
+ * `stack`: for each group (by the JSON of its `groupby` values) lay the rows' values end to end and write the two ends to `as`
+ * (`y0`, `y1`). `zero` stacks positive and negative values apart from 0; `center` centres each group on the widest one;
+ * `normalize` scales each group to total 1. A `sort` orders the rows within a group, after its total has been summed in input order.
+ */
+export function stackRows(rows: Row[], p: Params, owned = false): Row[] {
+  const out = writableRows(rows, owned)
   const as = (p.as ?? ['y0', 'y1']) as string[]
-  const y0 = as[0] as string
-  const y1 = as[1] as string
+  const lowName = as[0] as string
+  const highName = as[1] as string
   const sort = compareOf(p.sort) as unknown as ((a: unknown, b: unknown) => number) | null
-  const field = p.field ? fieldOf(p.field) : (one as (d: unknown) => unknown)
-  const groupby = p.groupby == null ? null : fieldsOf(p.groupby)
+  const valueOf = p.field ? fieldOf(p.field) : (one as Read)
+  const by = p.groupby == null ? null : fieldsOf(p.groupby)
 
-  // partition, sum and sort the stack groups
-  const groups: StackGroup[] = []
-  if (groupby == null) {
-    groups.push(out.slice())
+  let groups: StackGroup[]
+  if (by == null) {
+    groups = [{ rows: out.slice(), total: 0 }]
   } else {
-    const map = new Map<string, StackGroup>()
-    for (const t of out) {
-      const k = JSON.stringify(groupby.map((g) => g(t)))
-      let g = map.get(k)
-      if (!g) { g = []; map.set(k, g); groups.push(g) }
-      g.push(t)
+    const byKey = new Map<string, StackGroup>()
+    groups = []
+    for (const row of out) {
+      const key = JSON.stringify(by.map((g) => g(row)))
+      let group = byKey.get(key)
+      if (!group) { byKey.set(key, (group = { rows: [], total: 0 })); groups.push(group) }
+      group.rows.push(row)
     }
   }
-  let max = 0
-  for (let k = 0; k < groups.length; ++k) {
-    let g = groups[k]!
-    let s = 0
-    for (let i = 0; i < g.length; ++i) s += Math.abs(field(g[i]) as number)
-    g.sum = s
-    if (s > max) max = s
-    if (sort) {
-      const sorted = stableSortBy(g, sort) as StackGroup
-      sorted.sum = s
-      groups[k] = g = sorted
-    }
-    meterTick('stack', g.length)
+  let widest = 0
+  for (const group of groups) {
+    let total = 0
+    for (let i = 0; i < group.rows.length; i++) total += Math.abs(valueOf(group.rows[i]) as number)
+    group.total = total
+    if (total > widest) widest = total
+    if (sort) group.rows = stableSortBy(group.rows, sort)
+    meterTick('stack', group.rows.length)
   }
 
   const offset = p.offset
-  for (const group of groups) {
-    const m = group.length
+  for (let g = 0; g < groups.length; g++) {
+    const members = groups[g]!.rows
+    const total = groups[g]!.total
+    const n = members.length
     if (offset === 'center') {
-      let last = (max - group.sum!) / 2
-      for (let j = 0; j < m; ++j) {
-        const t = group[j]!
-        t[y0] = last
-        t[y1] = (last += Math.abs(field(t) as number))
+      let end = (widest - total) / 2
+      for (let i = 0; i < n; i++) {
+        const row = members[i]!
+        row[lowName] = end
+        row[highName] = (end += Math.abs(valueOf(row) as number))
       }
     } else if (offset === 'normalize') {
-      const scale = 1 / group.sum!
-      let last = 0
-      let v = 0
-      for (let j = 0; j < m; ++j) {
-        const t = group[j]!
-        t[y0] = last
-        t[y1] = last = scale * (v += Math.abs(field(t) as number))
+      const scale = 1 / total
+      let end = 0
+      let running = 0
+      for (let i = 0; i < n; i++) {
+        const row = members[i]!
+        row[lowName] = end
+        row[highName] = end = scale * (running += Math.abs(valueOf(row) as number))
       }
     } else {
-      let lastPos = 0
-      let lastNeg = 0
-      for (let j = 0; j < m; ++j) {
-        const t = group[j]!
-        const v = +(field(t) as number)
+      let above = 0
+      let below = 0
+      for (let i = 0; i < n; i++) {
+        const row = members[i]!
+        const v = +(valueOf(row) as number)
         if (v < 0) {
-          t[y0] = lastNeg
-          t[y1] = (lastNeg += v)
+          row[lowName] = below
+          row[highName] = (below += v)
         } else {
-          t[y0] = lastPos
-          t[y1] = (lastPos += v)
+          row[lowName] = above
+          row[highName] = (above += v)
         }
       }
     }
@@ -443,305 +432,288 @@ export function stackRows(rows: Row[], p: Params): Row[] {
 // identifier
 // ---------------------------------------------------------------------------
 
-/** vega `identifier`: a tuple with a truthy value in `as` keeps it; the others get 1, 2, 3, ... */
-export function identifierRows(rows: Row[], p: Params): Row[] {
+/** `identifier`: a row with a truthy value in `as` keeps it; the others are numbered 1, 2, 3, ... in order. */
+export function identifierRows(rows: Row[], p: Params, owned = false): Row[] {
   required('identifier', p, 'as')
-  const as = p.as as string
-  let id = 0
-  return rows.map((r) => {
-    const t = derive(r)
-    t[as] = t[as] || ++id
-    return t
+  const name = p.as as string
+  let last = 0
+  return rows.map((row) => {
+    const out = writable(row, owned)
+    out[name] = out[name] || ++last
+    return out
   })
 }
 
 // ---------------------------------------------------------------------------
-// bin (vega-statistics bin + vega-transforms Bin)
+// bin
 // ---------------------------------------------------------------------------
 
-const BIN_EPSILON = 1e-14
+/** A binning: bin edges run from `start` to `stop` in steps of `step`. */
+export interface BinGrid { start: number; stop: number; step: number }
 
-export interface BinResult { start: number; stop: number; step: number }
-
-/** vega-statistics `bin`. Throws instead of looping forever when the step cannot grow (base <= 1). */
-export function binParams(p: Params): BinResult {
-  const maxb = (p.maxbins as number) || 20
-  const base = (p.base as number) || 10
-  const logb = Math.log(base)
-  const div = (p.divide as number[] | undefined) || [5, 2]
-  const ext = p.extent as number[]
-  let min = ext[0] as number
-  let max = ext[1] as number
-  let step: number
-  const span = (p.span as number) || (max - min) || Math.abs(min) || 1
-  if (p.step) {
-    step = p.step as number
-  } else if (p.steps) {
+/** The step of bins no coarser than `maxBins` over `span`: given, picked from the allowed `steps`, or searched as a nice power of the base. */
+function binStep(p: Params, span: number, maxBins: number, base: number): number {
+  if (p.step) return p.step as number
+  if (p.steps) {
+    // the largest allowed step below span / maxbins (the smallest one when none is)
     const steps = p.steps as number[]
-    const v = span / maxb
-    let i = 0
-    const n = steps.length
-    for (; i < n && steps[i]! < v; ++i);
-    step = steps[Math.max(0, i - 1)]!
-  } else {
-    const level = Math.ceil(Math.log(maxb) / logb)
-    const minstep = (p.minstep as number) || 0
-    step = Math.max(minstep, Math.pow(base, Math.round(Math.log(span) / logb) - level))
-    // increase step size if too many bins. Deliberate deviation from vega: it
-    // loops forever when the step cannot grow (base 1, base < 1, an underflowed
-    // step); we throw instead (C8).
-    for (let guard = 0; Math.ceil(span / step) > maxb; guard++) {
-      const next = step * base
-      if (!(next > step) || guard > 1_000_000) {
-        throw new Error('[aster] bin: cannot derive a step size from base, maxbins and the data span')
-      }
-      step = next
-    }
-    // decrease step size if allowed
-    for (let i = 0, n = div.length; i < n; ++i) {
-      const v = step / div[i]!
-      if (v >= minstep && span / v <= maxb) step = v
-    }
+    const wanted = span / maxBins
+    let below = 0
+    while (below < steps.length && steps[below]! < wanted) ++below
+    return steps[Math.max(0, below - 1)]!
   }
-  // update precision, min and max
-  const v0 = Math.log(step)
-  const precision = v0 >= 0 ? 0 : ~~(-v0 / logb) + 1
-  const eps = Math.pow(base, -precision - 1)
+  const logBase = Math.log(base)
+  const minStep = (p.minstep as number) || 0
+  const level = Math.ceil(Math.log(maxBins) / logBase)
+  let step = Math.max(minStep, Math.pow(base, Math.round(Math.log(span) / logBase) - level))
+  // coarser while too many bins; a base that cannot make it coarser would loop for ever, so it is refused
+  for (let guard = 0; Math.ceil(span / step) > maxBins; guard++) {
+    const coarser = step * base
+    if (!(coarser > step) || guard > 1_000_000) {
+      throw new Error('[aster] bin: cannot derive a step size from base, maxbins and the data span')
+    }
+    step = coarser
+  }
+  // then finer by each divisor that still keeps the bins within the limit
+  for (const divisor of (p.divide as number[] | undefined) || [5, 2]) {
+    const finer = step / divisor
+    if (finer >= minStep && span / finer <= maxBins) step = finer
+  }
+  return step
+}
+
+/** The bin edges `bin` lays over `extent`: the step, and (unless `nice` is off) the extent widened to whole steps. */
+function binGrid(p: Params): BinGrid {
+  const maxBins = (p.maxbins as number) || 20
+  const base = (p.base as number) || 10
+  const extent = p.extent as number[]
+  let min = extent[0] as number
+  let max = extent[1] as number
+  const span = (p.span as number) || (max - min) || Math.abs(min) || 1
+  const step = binStep(p, span, maxBins, base)
   if (p.nice || p.nice === undefined) {
-    const v = Math.floor(min / step + eps) * step
-    min = min < v ? v - step : v
+    const logStep = Math.log(step)
+    const digits = logStep >= 0 ? 0 : ~~(-logStep / Math.log(base)) + 1
+    const slack = Math.pow(base, -digits - 1)
+    const floor = Math.floor(min / step + slack) * step
+    min = min < floor ? floor - step : floor
     max = Math.ceil(max / step) * step
   }
   return { start: min, stop: max === min ? min + step : max, step }
 }
 
-export interface BinFn { (t: unknown): number | null; start: number; stop: number; step: number }
+/** Bias added before the floor, so a value on an edge that rounding left a hair below it lands in the bin above. */
+const EDGE_BIAS = 1e-14
 
-/** The binning accessor of vega-transforms `Bin` (`_bins`): anchor shift, clamping, epsilon bias. */
-export function makeBinner(p: Params): BinFn {
-  const field = fieldOf(p.field)
-  const bins = binParams(p)
-  const step = bins.step
-  let start = bins.start
-  let stop = start + Math.ceil((bins.stop - start) / step) * step
-  const a = p.anchor
-  if (a != null) {
-    const d = (a as number) - (start + step * Math.floor(((a as number) - start) / step))
-    start += d
-    stop += d
-  }
-  const f = ((t: unknown): number | null => {
-    let v = toNumber(field(t))
-    return v == null ? null
-      : v < start ? -Infinity
-        : v > stop ? +Infinity
-          : (v = Math.max(start, Math.min(v, stop - step)),
-            start + step * Math.floor(BIN_EPSILON + (v - start) / step))
-  }) as BinFn
-  f.start = start
-  f.stop = stop
-  f.step = step
-  return f
-}
-
-export function binRows(rows: Row[], p: Params, onBins?: (b: BinResult) => void): Row[] {
+/** `bin`: `as` (default `bin0`, `bin1`) get the start and end of the value's bin; without `interval`, only the start. */
+export function binRows(rows: Row[], p: Params, publish?: (grid: BinGrid) => void, owned = false): Row[] {
   required('bin', p, 'field')
-  // Deviation (Aster extension): vega requires `extent` ("Missing required bin parameter").
-  // Hand-written specs and the incremental engine have always been allowed to omit it, in
-  // which case the extent of the finite numeric values is used ([0, 1] when there are none).
+  const read = fieldOf(p.field)
+  // Extension: Vega requires `extent`; a hand-written spec may leave it out, and the extent of the finite numbers is then used
+  // ([0, 1] when there are none).
   if (p.extent === undefined) {
-    const f = fieldOf(p.field)
-    let lo = Infinity
-    let hi = -Infinity
-    for (const r of rows) {
-      const v = f(r)
+    let low = Infinity
+    let high = -Infinity
+    for (const row of rows) {
+      const v = read(row)
       if (typeof v === 'number' && Number.isFinite(v)) {
-        if (v < lo) lo = v
-        if (v > hi) hi = v
+        if (v < low) low = v
+        if (v > high) high = v
       }
     }
-    p = { ...p, extent: lo <= hi ? [lo, hi] : [0, 1] }
+    p = { ...p, extent: low <= high ? [low, high] : [0, 1] }
   }
-  const bins = makeBinner(p)
-  if (onBins) onBins({ start: bins.start, stop: bins.stop, step: bins.step })
-  const band = p.interval !== false
+  const grid = binGrid(p)
+  const step = grid.step
+  let start = grid.start
+  let stop = start + Math.ceil((grid.stop - start) / step) * step
+  const anchor = p.anchor
+  if (anchor != null) {
+    const shift = (anchor as number) - (start + step * Math.floor(((anchor as number) - start) / step))
+    start += shift
+    stop += shift
+  }
+  publish?.({ start, stop, step })
+  const withEnd = p.interval !== false
   const as = (p.as ?? ['bin0', 'bin1']) as string[]
-  const b0 = as[0] as string
-  const b1 = as[1] as string
-  const start = bins.start
-  const step = bins.step
-  return rows.map((r) => {
-    const t = derive(r)
-    const v = bins(t)
-    if (band) {
-      // minimum bin value (inclusive)
-      t[b0] = v
-      // maximum bin value (exclusive); convoluted math for floating point agreement (vega/vega#830)
-      t[b1] = v == null ? null : start + step * (1 + (v - start) / step)
-    } else {
-      t[b0] = v
-    }
-    return t
+  const startName = as[0] as string
+  const endName = as[1] as string
+  const lastStart = stop - step
+  return rows.map((row) => {
+    const out = writable(row, owned)
+    const raw = read(row)
+    const v = typeof raw === 'number' ? raw : toNumber(raw)
+    // the start of the bin: ±Infinity outside the extent, the first or last bin at its ends, null for no value
+    const binStart = v == null ? null
+      : v < start ? -Infinity
+        : v > stop ? +Infinity
+          : start + step * Math.floor(EDGE_BIAS + (Math.max(start, Math.min(v, lastStart)) - start) / step)
+    out[startName] = binStart
+    // (written as start + step * (1 + (binStart - start) / step), which is what laying the edges out one step at a time gives in floating point)
+    if (withEnd) out[endName] = binStart == null ? null : start + step * (1 + (binStart - start) / step)
+    return out
   })
 }
 
 // ---------------------------------------------------------------------------
-// timeunit (vega-transforms TimeUnit, vega-time bin + detectTimeUnits)
+// timeunit
 // ---------------------------------------------------------------------------
 
-const T_YEAR = 'year'
-const T_MONTH = 'month'
-const T_DATE = 'date'
-const T_HOURS = 'hours'
-const T_MINUTES = 'minutes'
-const T_SECONDS = 'seconds'
-const T_MS = 'milliseconds'
-const T_WEEK = 'week'
-const T_DAY = 'day'
+const THROUGH_MILLISECONDS = [YEAR, MONTH, DATE, HOURS, MINUTES, SECONDS, MILLISECONDS]
+const THROUGH_SECONDS = THROUGH_MILLISECONDS.slice(0, -1)
+const THROUGH_MINUTES = THROUGH_SECONDS.slice(0, -1)
+const THROUGH_HOURS = THROUGH_MINUTES.slice(0, -1)
+const THROUGH_DATE = THROUGH_HOURS.slice(0, -1)
+const YEAR_WEEK = [YEAR, WEEK]
+const YEAR_MONTH = [YEAR, MONTH]
+const YEAR_ONLY = [YEAR]
 
-const MILLI = [T_YEAR, T_MONTH, T_DATE, T_HOURS, T_MINUTES, T_SECONDS, T_MS]
-const SECONDS = MILLI.slice(0, -1)
-const MINUTES = SECONDS.slice(0, -1)
-const HOURS = MINUTES.slice(0, -1)
-const DAYU = HOURS.slice(0, -1)
-const WEEKU = [T_YEAR, T_WEEK]
-const MONTHU = [T_YEAR, T_MONTH]
-const YEARU = [T_YEAR]
-
-const BIN_INTERVALS: Array<[string[], number, number]> = [
-  [SECONDS, 1, durationSecond], [SECONDS, 5, 5 * durationSecond], [SECONDS, 15, 15 * durationSecond], [SECONDS, 30, 30 * durationSecond],
-  [MINUTES, 1, durationMinute], [MINUTES, 5, 5 * durationMinute], [MINUTES, 15, 15 * durationMinute], [MINUTES, 30, 30 * durationMinute],
-  [HOURS, 1, durationHour], [HOURS, 3, 3 * durationHour], [HOURS, 6, 6 * durationHour], [HOURS, 12, 12 * durationHour],
-  [DAYU, 1, durationDay], [WEEKU, 1, durationWeek], [MONTHU, 1, durationMonth], [MONTHU, 3, 3 * durationMonth], [YEARU, 1, durationYear],
+/** The calendar steps a time bin may use, each with its length in ms (an approximation for months and years), shortest first. */
+const BIN_GRAINS: Array<{ units: string[]; step: number; ms: number }> = [
+  { units: THROUGH_SECONDS, step: 1, ms: durationSecond }, { units: THROUGH_SECONDS, step: 5, ms: 5 * durationSecond },
+  { units: THROUGH_SECONDS, step: 15, ms: 15 * durationSecond }, { units: THROUGH_SECONDS, step: 30, ms: 30 * durationSecond },
+  { units: THROUGH_MINUTES, step: 1, ms: durationMinute }, { units: THROUGH_MINUTES, step: 5, ms: 5 * durationMinute },
+  { units: THROUGH_MINUTES, step: 15, ms: 15 * durationMinute }, { units: THROUGH_MINUTES, step: 30, ms: 30 * durationMinute },
+  { units: THROUGH_HOURS, step: 1, ms: durationHour }, { units: THROUGH_HOURS, step: 3, ms: 3 * durationHour },
+  { units: THROUGH_HOURS, step: 6, ms: 6 * durationHour }, { units: THROUGH_HOURS, step: 12, ms: 12 * durationHour },
+  { units: THROUGH_DATE, step: 1, ms: durationDay }, { units: YEAR_WEEK, step: 1, ms: durationWeek },
+  { units: YEAR_MONTH, step: 1, ms: durationMonth }, { units: YEAR_MONTH, step: 3, ms: 3 * durationMonth },
+  { units: YEAR_ONLY, step: 1, ms: durationYear },
 ]
 
-/** vega-time `timeBin`: pick the units and step that give about `maxbins` bins over the extent. */
-export function timeBin(ext: [number, number], maxbinsParam?: number): { units: string[]; step: number } {
-  const max = maxbinsParam || 40
-  const target = Math.abs(ext[ext.length - 1]! - ext[0]!) / max
-  // d3-array bisector(i => i[2]).right
-  let lo = 0
-  let hi = BIN_INTERVALS.length
-  while (lo < hi) {
-    const mid = (lo + hi) >>> 1
-    if (BIN_INTERVALS[mid]![2] - target <= 0) lo = mid + 1
-    else hi = mid
+/**
+ * The units and step that give about `maxbins` bins over a time extent: the calendar step whose length is nearest (in ratio) to
+ * the extent's span over `maxbins`, years in a tick step beyond the longest, and milliseconds below the shortest.
+ * An extent whose ends do not subtract to a number (NaN, Infinity - Infinity, a missing end) spans nothing.
+ */
+export function timeBin(extent: readonly number[], maxbins?: number): { units: string[]; step: number } {
+  const bins = maxbins || 40
+  const target = Math.abs((extent[extent.length - 1]! - extent[0]!) || 0) / bins
+  let longer = 0
+  while (longer < BIN_GRAINS.length && BIN_GRAINS[longer]!.ms - target <= 0) longer++
+  if (longer === BIN_GRAINS.length) {
+    return { units: YEAR_ONLY, step: tickStep(extent[0]! / durationYear, extent[1]! / durationYear, bins) }
   }
-  // bisector(...).right returns the length when the target is not comparable (NaN)
-  let i = target === target ? lo : BIN_INTERVALS.length
-  let units: string[]
-  let step: number
-  if (i === BIN_INTERVALS.length) {
-    units = YEARU
-    step = tickStep(ext[0] / durationYear, ext[1] / durationYear, max)
-  } else if (i) {
-    const pick = BIN_INTERVALS[target / BIN_INTERVALS[i - 1]![2] < BIN_INTERVALS[i]![2] / target ? i - 1 : i]!
-    units = pick[0]
-    step = pick[1]
-  } else {
-    units = MILLI
-    step = Math.max(tickStep(ext[0], ext[1], max), 1)
+  if (longer === 0) {
+    return { units: THROUGH_MILLISECONDS, step: Math.max(tickStep(extent[0]!, extent[1]!, bins), 1) }
   }
-  return { units, step }
+  const shorter = BIN_GRAINS[longer - 1]!
+  const nearer = target / shorter.ms < BIN_GRAINS[longer]!.ms / target ? shorter : BIN_GRAINS[longer]!
+  return { units: nearer.units, step: nearer.step }
 }
 
-type Getters = Record<string, (d: Date) => number>
-const LOCAL_GET: Getters = {
-  [T_YEAR]: (d) => d.getFullYear(), [T_MONTH]: (d) => d.getMonth(), [T_DATE]: (d) => d.getDate(), [T_DAY]: (d) => d.getDay(),
-  [T_HOURS]: (d) => d.getHours(), [T_MINUTES]: (d) => d.getMinutes(), [T_SECONDS]: (d) => d.getSeconds(), [T_MS]: (d) => d.getMilliseconds(),
+type DateParts = (d: Date) => number
+const localParts: Record<string, DateParts> = {
+  [YEAR]: (d) => d.getFullYear(), [MONTH]: (d) => d.getMonth(), [DATE]: (d) => d.getDate(), [DAY]: (d) => d.getDay(),
+  [HOURS]: (d) => d.getHours(), [MINUTES]: (d) => d.getMinutes(), [SECONDS]: (d) => d.getSeconds(), [MILLISECONDS]: (d) => d.getMilliseconds(),
 }
-const UTC_GET: Getters = {
-  [T_YEAR]: (d) => d.getUTCFullYear(), [T_MONTH]: (d) => d.getUTCMonth(), [T_DATE]: (d) => d.getUTCDate(), [T_DAY]: (d) => d.getUTCDay(),
-  [T_HOURS]: (d) => d.getUTCHours(), [T_MINUTES]: (d) => d.getUTCMinutes(), [T_SECONDS]: (d) => d.getUTCSeconds(), [T_MS]: (d) => d.getUTCMilliseconds(),
+const utcParts: Record<string, DateParts> = {
+  [YEAR]: (d) => d.getUTCFullYear(), [MONTH]: (d) => d.getUTCMonth(), [DATE]: (d) => d.getUTCDate(), [DAY]: (d) => d.getUTCDay(),
+  [HOURS]: (d) => d.getUTCHours(), [MINUTES]: (d) => d.getUTCMinutes(), [SECONDS]: (d) => d.getUTCSeconds(), [MILLISECONDS]: (d) => d.getUTCMilliseconds(),
 }
 
-interface Grain { units?: string[]; step?: number; skippable?: boolean; aligned: (dates: Date[], g: Getters) => boolean }
-const GRAINS: Grain[] = [
-  { units: MILLI, step: 1, aligned: () => true },
-  { units: SECONDS, step: 1, aligned: (dates, g) => dates.every((d) => g[T_MS]!(d) === 0) },
-  { units: MINUTES, step: 1, aligned: (dates, g) => dates.every((d) => g[T_SECONDS]!(d) === 0) },
-  { units: MINUTES, step: 5, aligned: (dates, g) => dates.every((d) => g[T_MINUTES]!(d) % 5 === 0) },
-  { units: MINUTES, step: 10, aligned: (dates, g) => dates.every((d) => g[T_MINUTES]!(d) % 10 === 0) },
-  { units: HOURS, step: 1, aligned: (dates, g) => dates.every((d) => g[T_MINUTES]!(d) === 0) },
-  { units: DAYU, step: 1, aligned: (dates, g) => dates.every((d) => g[T_HOURS]!(d) === 0) },
-  { units: WEEKU, step: 1, skippable: true, aligned: (dates, g) => new Set(dates.map((d) => g[T_DAY]!(d))).size === 1 },
-  { units: MONTHU, step: 1, aligned: (dates, g) => dates.every((d) => g[T_DATE]!(d) === 1) },
-  { units: MONTHU, step: 3, aligned: (dates, g) => dates.every((d) => g[T_MONTH]!(d) % 3 === 0) },
-  { units: YEARU, step: 1, aligned: (dates, g) => dates.every((d) => g[T_MONTH]!(d) === 0) },
-  { units: YEARU, step: 10, aligned: (dates, g) => dates.every((d) => g[T_YEAR]!(d) % 10 === 0) },
-  { aligned: () => false },
+/** Time grains from the finest to the coarsest, each with the units and step that bin to it. The last has none: nothing is aligned to it. */
+const GRAINS: Array<{ units: string[]; step: number } | { units?: undefined; step?: undefined }> = [
+  { units: THROUGH_MILLISECONDS, step: 1 }, { units: THROUGH_SECONDS, step: 1 }, { units: THROUGH_MINUTES, step: 1 },
+  { units: THROUGH_MINUTES, step: 5 }, { units: THROUGH_MINUTES, step: 10 }, { units: THROUGH_HOURS, step: 1 },
+  { units: THROUGH_DATE, step: 1 }, { units: YEAR_WEEK, step: 1 }, { units: YEAR_MONTH, step: 1 },
+  { units: YEAR_MONTH, step: 3 }, { units: YEAR_ONLY, step: 1 }, { units: YEAR_ONLY, step: 10 }, {},
 ]
+/** The week grain is the only one the coarse search may step over: dates that share a weekday are on it, yet it is not required. */
+const WEEK_GRAIN = 7
 
-/** vega-time `detectTimeUnits`: the coarsest grain every date is aligned to. */
-export function detectTimeUnits(data: Row[], f: (d: unknown) => unknown, utc: boolean): { units: string[]; step: number } {
-  const getters = utc ? UTC_GET : LOCAL_GET
-  const dates = data.map((t) => {
-    const v = f(t)
+/** Whether every date sits on the boundary of each grain (index as in {@link GRAINS}); the week grain holds when all dates share a weekday. */
+function alignedGrains(dates: readonly Date[], utc: boolean): boolean[] {
+  const part = utc ? utcParts : localParts
+  const aligned = GRAINS.map(() => true)
+  aligned[GRAINS.length - 1] = false
+  const weekdays = new Set<number>()
+  for (const d of dates) {
+    if (part[MILLISECONDS]!(d) !== 0) aligned[1] = false
+    if (part[SECONDS]!(d) !== 0) aligned[2] = false
+    const minute = part[MINUTES]!(d)
+    if (minute % 5 !== 0) aligned[3] = false
+    if (minute % 10 !== 0) aligned[4] = false
+    if (minute !== 0) aligned[5] = false
+    if (part[HOURS]!(d) !== 0) aligned[6] = false
+    weekdays.add(part[DAY]!(d))
+    if (part[DATE]!(d) !== 1) aligned[8] = false
+    const month = part[MONTH]!(d)
+    if (month % 3 !== 0) aligned[9] = false
+    if (month !== 0) aligned[10] = false
+    if (part[YEAR]!(d) % 10 !== 0) aligned[11] = false
+  }
+  aligned[WEEK_GRAIN] = weekdays.size === 1
+  return aligned
+}
+
+/** The coarsest grain every date in `rows` (read through `read`) is aligned to, as the units and step to bin by. */
+function detectTimeUnits(rows: Row[], read: Read, utc: boolean): { units: string[]; step: number } {
+  const dates = rows.map((row) => {
+    const v = read(row)
     const d = new Date(v as string)
     if (Number.isNaN(+d)) error(`Invalid date: ${v}`)
     return d
   })
-  const mismatch = GRAINS.findIndex((g) => !g.aligned(dates, getters))
-  const req = GRAINS.findIndex((g) => !g.skippable && !g.aligned(dates, getters))
-  const index = req > mismatch + 1 ? req : mismatch
-  const g = GRAINS[index - 1]!
-  return { units: g.units!, step: g.step! }
+  const aligned = alignedGrains(dates, utc)
+  const firstMiss = aligned.indexOf(false)
+  const firstRequiredMiss = aligned.findIndex((ok, i) => !ok && i !== WEEK_GRAIN)
+  const stop = firstRequiredMiss > firstMiss + 1 ? firstRequiredMiss : firstMiss
+  const grain = GRAINS[stop - 1]!
+  return { units: grain.units!, step: grain.step! }
 }
 
-/** What vega's TimeUnit publishes as its `signal`: the floor function itself, read for its properties. */
+/** What the `signal` of a timeunit transform publishes: the unit it floors to, the unit list, the step and the span of bins produced. */
 export interface TimeUnitInfo { unit: string; units: string[]; step: number; start: number | Date; stop: number | Date }
 
-export function timeunitRows(rows: Row[], p: Params, publish?: (info: TimeUnitInfo) => void): Row[] {
+/**
+ * `timeunit`: `as` (default `unit0`, `unit1`) get the start and end of the value's time bin; null where there is no value, and
+ * only the start without `interval`. The units are `units` (with `step`), detected from the data (`inferUnits`), or chosen to give
+ * about `maxbins` bins over `extent` (the data's, by default).
+ */
+export function timeunitRows(rows: Row[], p: Params, publish?: (info: TimeUnitInfo) => void, owned = false): Row[] {
   required('timeunit', p, 'field')
-  const field = fieldOf(p.field)
-  const band = p.interval !== false
+  const read = fieldOf(p.field)
+  const withEnd = p.interval !== false
   const utc = p.timezone === 'utc'
   const as = (p.as ?? ['unit0', 'unit1']) as string[]
-  const u0 = as[0] as string
-  const u1 = as[1] as string
+  const startName = as[0] as string
+  const endName = as[1] as string
 
-  // units and step
   let units: unknown
   let step: number
   if (p.inferUnits) {
-    const d = detectTimeUnits(rows, field, utc)
-    units = d.units
-    step = d.step
+    ({ units, step } = detectTimeUnits(rows, read, utc))
   } else if (p.units) {
     units = p.units
     step = (p.step as number) || 1
   } else {
-    const ext = (p.extent as [number, number] | undefined) || (vegaExtent(rows, field) as [number, number])
-    const b = timeBin(ext, p.maxbins as number | undefined)
-    units = b.units
-    step = b.step
+    ({ units, step } = timeBin((p.extent as [number, number] | undefined) || (columnExtent(rows, read) as [number, number]), p.maxbins as number | undefined))
   }
-  const tunits = timeUnits(units)
-  const floor = (utc ? utcFloor : timeFloor)(tunits, step)
-  const unit = peek(tunits) as string
-  const ival = (utc ? utcIntervalFor : timeIntervalFor)(unit)
-  const offset = ival ? (d: Date, s: number): Date => ival.offset(d, s) : undefined
+  const unitList = timeUnits(units)
+  const floor = (utc ? utcFloor : timeFloor)(unitList, step)
+  const unit = peek(unitList) as string
+  const interval = (utc ? utcIntervalFor : timeIntervalFor)(unit)
 
-  // (the extent of the bins goes with the signal: vega's TimeUnit tracks it as it visits the tuples)
-  let min: number | Date = Infinity
-  let max: number | Date = -Infinity
-  const out = rows.map((r) => {
-    const t = derive(r)
-    const v = field(t)
+  // (the span of the bins is published with the signal: it is what the rows visited came to)
+  let first: number | Date = Infinity
+  let last: number | Date = -Infinity
+  const out = rows.map((row) => {
+    const t = writable(row, owned)
+    const v = read(row)
     if (v == null) {
-      t[u0] = null
-      if (band) t[u1] = null
+      t[startName] = null
+      if (withEnd) t[endName] = null
     } else {
-      const a = floor(v)
-      let b: unknown = a
-      t[u0] = a
-      if (band) t[u1] = b = offset ? offset(a, step) : undefined
-      if (a < min) min = a
-      if ((b as number) > (max as number)) max = b as number
+      const binStart = floor(v)
+      let binEnd: unknown = binStart
+      t[startName] = binStart
+      if (withEnd) t[endName] = binEnd = interval ? interval.offset(binStart, step) : undefined
+      if (binStart < first) first = binStart
+      if ((binEnd as number) > (last as number)) last = binEnd as number
     }
     return t
   })
-  publish?.({ unit, units: tunits, step, start: min, stop: max })
+  publish?.({ unit, units: unitList, step, start: first, stop: last })
   return out
 }
-
