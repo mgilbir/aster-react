@@ -255,7 +255,7 @@ function mergeAggregates(out: Obj, generated: (name: string) => boolean): void {
   }
   for (const d of data) {
     const group = placed.get(d)
-    if (group) result.push(...group)
+    if (group) for (const member of group) result.push(member)
     else if (!moved.has(d)) result.push(d)
   }
   out.data = result
