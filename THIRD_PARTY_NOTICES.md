@@ -956,6 +956,31 @@ TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF
 THIS SOFTWARE.
 ```
 
+## time-grain-detector (Paul Rosenzweig)
+
+The time-unit detection of the `timeunit` transform (`packages/core/src/transform-basic.ts`) follows `vega-time`, whose
+`detectTimeUnits` is adapted from `time-grain-detector` 1.1.0 (ISC). Not installed in this repository. The published
+package carries no LICENSE file; its `package.json` declares `"license": "ISC"` and `"author": "Paul Rosenzweig"`, and
+states no year. The ISC licence text follows, with that author as the copyright holder.
+
+```text
+ISC License
+
+Copyright (c) Paul Rosenzweig
+
+Permission to use, copy, modify, and/or distribute this software for any purpose
+with or without fee is hereby granted, provided that the above copyright notice
+and this permission notice appear in all copies.
+
+THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
+REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY AND
+FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
+INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM LOSS
+OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER
+TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF
+THIS SOFTWARE.
+```
+
 ## vega-crossfilter and vega-voronoi
 
 The `crossfilter` and `resolvefilter` transforms in `packages/core/src/transform-extra.ts`
@@ -976,7 +1001,7 @@ of the projects they follow printed above, for that reason:
 - `transform-agg.ts`, `transform-window.ts` and `transform-basic.ts` follow the semantics of `vega-transforms` (Aggregate, JoinAggregate,
   Pivot, Window, Bin, Fold, Flatten, Impute, Lookup, TimeUnit, the aggregate-op table) and of `vega-statistics` (the bin step search,
   quartiles, the bootstrap interval, the linear congruential generator), `vega-util` and `vega-time` (time bins; the time-unit
-  detection there is adapted from the `time-grain-detector` package, ISC, whose licence text is not reproduced here), all
+  detection there is adapted from the `time-grain-detector` package, ISC, printed above), all
   BSD-3-Clause: the order statistics are updated in, the floating-point operations, and the draws from the random source are
   fixed by what the output must equal. None of the upstream source text, names or comments is carried over.
 - `timer.ts` follows the scheduling algorithm of `d3-timer` (ISC): when a frame or a timeout wakes the scheduler, how an
