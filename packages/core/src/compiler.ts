@@ -6,6 +6,7 @@
 import { dict, ownGet } from './util.js'
 import { checkDataReferences, normalizeSpecLists } from './spec-structure.js'
 import { noteWrittenType, transformTypeOf } from './transform-names.js'
+import { checkExpressions } from './spec-expressions.js'
 import { markPlacing } from './tuple-order.js'
 import { markShareable } from './guide-encode.js'
 import { defaultMergedConfig, mergeVegaConfig, vegaDefaultConfig } from './config-defaults.js'
@@ -43,6 +44,7 @@ export function compileChart(givenSpec: VgSpec): CompiledChart {
     ? defaultMergedConfig()
     : mergeVegaConfig(vegaDefaultConfig(), userConfig)) as Record<string, unknown>
   checkDataReferences(rawSpec, mergedConfig)
+  checkExpressions(rawSpec)
   markSeq = 0
   const spec: VgSpec = { ...rawSpec, config: mergedConfig as VgSpec['config'] }
 

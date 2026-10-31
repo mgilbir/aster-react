@@ -842,3 +842,19 @@ export function parseExpression(code: string): Expr {
   if (code.length > EXPR_MAX_DEPTH) checkHeight(expr, parser.unconstructible)
   return expr
 }
+
+const parsed = new Map<string, Expr>()
+
+/**
+ * `parseExpression` for text that is parsed again and again (a spec's expressions are parsed when it is checked and again when
+ * they are compiled): the tree of text seen lately. A tree is only read.
+ */
+export function parseExpressionCached(code: string): Expr {
+  let tree = parsed.get(code)
+  if (tree === undefined) {
+    tree = parseExpression(code)
+    if (parsed.size >= 4096) parsed.clear()
+    parsed.set(code, tree)
+  }
+  return tree
+}

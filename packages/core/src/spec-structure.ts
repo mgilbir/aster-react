@@ -55,7 +55,7 @@ export function normalizeSpecLists<T extends Record<string, unknown>>(spec: T): 
 }
 
 /** vega-util `stringValue`, as used in vega-parser's error messages. */
-function stringValue(x: unknown): string {
+export function stringValue(x: unknown): string {
   if (Array.isArray(x)) return '[' + x.map(stringValue).join(',') + ']'
   if (x !== null && typeof x === 'object' || typeof x === 'string') {
     return String(JSON.stringify(x)).replace(/\u2028/g, '\\u2028').replace(/\u2029/g, '\\u2029')

@@ -14,7 +14,7 @@ import { currentLocale } from './locale.js'
 import { boundedCount, meterBytes, meterTick, guardedRegExp, checkRegexInput, checkRegexObject } from './limits.js'
 import { bandSpace } from './scale.js'
 import { selectionIdTest, selectionResolve, selectionTest, selectionTuples } from './selections.js'
-import { parseExpression } from './expr-parser.js'
+import { parseExpressionCached } from './expr-parser.js'
 import { ADDON_FUNCTIONS } from './addon-functions.js'
 import { expressionInterpreter, DefaultFunctions, ExpressionConstants, EventFunctions } from './expr-interpreter.js'
 import {
@@ -603,11 +603,11 @@ function assertKnownFunctions(ast: AstNode, functions: Record<string, unknown>, 
 export function compileExpr(expr: string, runtime: ExpressionRuntime): CompiledExpr {
   let ast: AstNode
   try {
-    ast = parseExpression(expr)
+    ast = parseExpressionCached(expr)
   } catch (e) {
     // limit violations keep their type (they are the engine's refusal, not a syntax error)
     if (e instanceof Error && e.name === 'AsterLimitError') throw e
-    throw new ExpressionParseError(e instanceof Error ? e.message : String(e), expr, { cause: e })
+    throw new ExpressionParseError('Expression parse error: ' + expr, expr, { cause: e })
   }
   // vega refuses an unknown function when it parses and generates code ("Unrecognized function: x"), not when it is called
   const functions = createFunctionContext(runtime)

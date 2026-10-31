@@ -39,6 +39,7 @@ import type { CompiledChart, CompiledData, CompiledSignalDef, SceneGroup, SceneI
 import { compileExpr, type CompiledExpr, type ExpressionRuntime } from './expression.js'
 import { applyChangeset, newChangeset, planModify, type Changeset } from './modify.js'
 import { parseExpression, type AstNode } from './expr-parser.js'
+import { normalizeEvents, filterCode, type OperatorSource } from './stream-defs.js'
 import { parseEventSelectorString, type StreamDef } from './event-selector.js'
 import { array, dict, heldSignalName, ownGet, setOwn, TUPLE_ID, MARK_NODE, scopedSignalName } from './util.js'
 import { follow, node, Propagation, type SignalNode } from './signal-propagation.js'
@@ -395,42 +396,6 @@ function mergeStreams(first: Stream, rest: Stream[]): Stream {
   first.targets.push(s)
   for (const r of rest) r.targets.push(s)
   return s
-}
-
-// --- selector / stream-spec normalisation -----------------------------------
-
-interface OperatorSource { signal?: string; scale?: string }
-
-/** vega-parser update.js: a string is a selector; otherwise an array of stream objects and operator sources. */
-function normalizeEvents(events: unknown, defaultSource: 'view' | 'scope' = 'view'): { streams: StreamDef[]; sources: OperatorSource[] } {
-  if (events == null) throw new Error('Signal update missing events specification.')
-  // (a selector string's default source is the view's, and a group scope's own in a subscope: vega-parser update.js)
-  const list: unknown[] = typeof events === 'string' ? parseEventSelectorString(events, defaultSource) : Array.isArray(events) ? events : [events]
-  const streams: StreamDef[] = []
-  const sources: OperatorSource[] = []
-  for (const s of list) {
-    const o = s as OperatorSource | null
-    if (o && typeof o === 'object' && (o.signal || o.scale)) sources.push(o)
-    else streams.push(s as StreamDef)
-  }
-  return { streams, sources }
-}
-
-/** vega-parser filterMark. */
-function markFilter(def: { marktype?: string; markname?: string; markrole?: string }): string {
-  const item = 'event.item'
-  return item
-    + (def.marktype && def.marktype !== '*' ? '&&' + item + ".mark.marktype==='" + def.marktype + "'" : '')
-    + (def.markrole ? '&&' + item + ".mark.role==='" + def.markrole + "'" : '')
-    + (def.markname ? '&&' + item + ".mark.name==='" + def.markname + "'" : '')
-}
-
-/** The filter expression text vega-parser's streamParameters builds (or null). */
-function filterCode(def: StreamDef & { markrole?: string }): string | null {
-  const param: string[] = def.filter ? ([] as string[]).concat(def.filter) : []
-  if (def.marktype || def.markname || def.markrole) param.push(markFilter(def))
-  if (def.source === 'scope') param.push('inScope(event.item)')
-  return param.length ? '(' + param.join(')&&(') + ')' : null
 }
 
 // --- expression helpers ------------------------------------------------------
@@ -1130,8 +1095,10 @@ function bindSignalEventsDefs(
           // the value an update produces for a delivery; `e` is the extended event (or a stand-in)
           let compiled: ((datum: unknown, params?: Record<string, unknown>, event?: unknown) => unknown) | null = null
           if (upd.kind === 'expr') compiled = rt.expr(upd.code)
+          // (a `{signal}` update names a signal or, as any signal reference of a spec, is an expression: vega-parser's signalRef)
+          else if (upd.kind === 'signal' && !ownerOf(scope, upd.name) && !Object.hasOwn(signals, upd.name) && !Object.hasOwn(signalParams, upd.name)) compiled = rt.expr(upd.name)
           const evaluate = (e: unknown): unknown =>
-            upd.kind === 'expr' ? compiled!(undefined, params(scope), e) : upd.kind === 'value' ? upd.value : read(upd.name, scope)
+            compiled ? compiled(undefined, params(scope), e) : upd.kind === 'value' ? upd.value : read((upd as { name: string }).name, scope)
           const terminal = (e: ExtEvent): void => update(target, signal.name, evaluate(e), force)
           for (const def of streams) {
             const stream = buildStream(def as StreamDef, keyBase, scope)
