@@ -40,8 +40,8 @@ from the pinned upstream package, implemented behind the same internal API, repl
 | `d3-geo`, `d3-geo-projection`, `vega-projection` (behaviour matched bit for bit; own design: geometry event buffers, see ARCHITECTURE) | `src/geo-events.ts`, `src/geo-sphere.ts`, `src/geo-sphere-measures.ts`, `src/geo-clip.ts`, `src/geo-resample.ts`, `src/geo-path.ts`, `src/geo-raw.ts`, `src/geo-projections.ts`, `src/geo.ts` |
 | `d3-contour` | `src/contour.ts` |
 | `vega-transforms`, `vega-statistics`, `vega-hierarchy`, `vega-geo`, `vega-regression`, `vega-label`, `delaunator`/`d3-delaunay` | `src/transform*.ts`, `src/delaunay.ts`, `src/voronoi.ts`, `src/orient.ts` |
-| `vega-scenegraph` bounds and SVG path machinery | `src/bounds.ts`, `src/svg-path.ts`, `src/render.ts` |
-| `vega-view` layout, `vega-event-selector`, `vega-runtime` signal loop | `src/trellis.ts`, `src/event-selector.ts`, `src/signals.ts`, `src/runtime.ts` |
+| `vega-scenegraph` bounds and SVG path machinery (behaviour matched; the bounds code is Aster's own structure, see ARCHITECTURE) | `src/bounds.ts`, `src/bounds-pen.ts`, `src/svg-path.ts`, `src/render.ts` |
+| `vega-view` and `vega-view-transforms` layout, `vega-parser` guides (behaviour matched; own design: grid core over boxes, axes by frame), `vega-event-selector`, `vega-runtime` signal loop | `src/trellis.ts`, `src/guide-encode.ts`, `src/guide-axis.ts`, `src/guide-legend.ts`, `src/guide-title.ts`, `src/event-selector.ts`, `src/signals.ts`, `src/runtime.ts` |
 | `vega-dataflow`'s observable evaluation order for the event-driven signals (modelled, not ported) | `src/signal-propagation.ts` |
 | `vega-wordcloud`, `d3-cloud` | `src/wordcloud.ts` |
 

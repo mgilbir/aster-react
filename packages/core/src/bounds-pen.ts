@@ -112,7 +112,7 @@ export class BoundsPen {
  * derivative, a quadratic in t. The operation order is the one a view's size depends on: an extreme that lands within an ulp
  * of an integer decides the `ceil` of the size.
  */
-function cubicTurns(p0: number, p1: number, p2: number, p3: number): number[] {
+export function cubicTurns(p0: number, p1: number, p2: number, p3: number): number[] {
   const a = p3 - p0 + 3 * p1 - 3 * p2
   const b = p0 + p2 - 2 * p1
   const c = p0 - p1
@@ -131,7 +131,7 @@ function cubicTurns(p0: number, p1: number, p2: number, p3: number): number[] {
   return out
 }
 
-function cubicAt(t: number, p0: number, p1: number, p2: number, p3: number): number {
+export function cubicAt(t: number, p0: number, p1: number, p2: number, p3: number): number {
   const s = 1 - t
   const s2 = s * s
   const t2 = t * t

@@ -1,25 +1,28 @@
 /**
- * Exact port of vega-scenegraph's bounds computation (Bounds.js, bound/*,
- * marks/{rect,rule,text,group}.js bound functions, boundContext path tracing).
- *
- * The layout passes (trellis/grid layout, view layout) read these measured
- * bounds; pixel-exact parity with vega requires bit-identical arithmetic.
- * Text width uses vega's headless estimate (`~~(0.8 * len * fontSize)`),
- * matching the oracle when no canvas is available.
+ * The extent of what a scene draws: a box type, and the bounds of every kind of item (text, rects, rules, symbols and other shaped
+ * paths, arcs, images, groups). The layout passes (grids, guides, the size of the view) read these, and a view's size is a whole
+ * number of pixels rounded up from them, so the arithmetic is Vega's, operation for operation: a measurement that differs in the
+ * last digit can add a pixel. Text is measured with the estimate a headless Vega uses (`~~(0.8 * length * fontSize)`) unless a
+ * canvas is there to measure it, as in a browser.
  */
 import { SYMBOL_DEFAULT_SIZE, pushAll } from './util.js'
 import type { SceneGroup, SceneItem, SceneNode } from './types.js'
 import { arcInto, areaInto, lineInto, symbolPathExact, trailInto } from './render.js'
-import { BoundsPen } from './bounds-pen.js'
+import { BoundsPen, cubicAt, cubicTurns } from './bounds-pen.js'
 import { parseSvgPath, renderSvgPath } from './svg-path.js'
 import { itemTextWidth, textAnchor, truncateToLimit } from './text-metrics.js'
 import { SHAPE_BOUNDS } from './registry.js'
 import { imageBox } from './image-box.js'
 
 // ---------------------------------------------------------------------------
-// Bounds — exact port of vega-scenegraph Bounds.js
+// Bounds: a box that starts out empty
 // ---------------------------------------------------------------------------
 
+/**
+ * An axis-aligned box. A new box is empty: its minimum is the largest number and its maximum the smallest, so that the first
+ * point added becomes both. (Translating or expanding an empty box leaves it empty, because those numbers absorb the change;
+ * `empty()` is how a caller tells whether anything was drawn.)
+ */
 export class Bounds {
   x1 = +Number.MAX_VALUE
   y1 = +Number.MAX_VALUE
@@ -35,26 +38,16 @@ export class Bounds {
   }
 
   clear(): this {
-    this.x1 = +Number.MAX_VALUE
-    this.y1 = +Number.MAX_VALUE
-    this.x2 = -Number.MAX_VALUE
-    this.y2 = -Number.MAX_VALUE
+    this.x1 = this.y1 = +Number.MAX_VALUE
+    this.x2 = this.y2 = -Number.MAX_VALUE
     return this
   }
 
   empty(): boolean {
-    return (
-      this.x1 === +Number.MAX_VALUE &&
-      this.y1 === +Number.MAX_VALUE &&
-      this.x2 === -Number.MAX_VALUE &&
-      this.y2 === -Number.MAX_VALUE
-    )
+    return this.x1 === +Number.MAX_VALUE && this.y1 === +Number.MAX_VALUE && this.x2 === -Number.MAX_VALUE && this.y2 === -Number.MAX_VALUE
   }
 
-  equals(b: Bounds): boolean {
-    return this.x1 === b.x1 && this.y1 === b.y1 && this.x2 === b.x2 && this.y2 === b.y2
-  }
-
+  /** Make the box these corners, in whichever order they are given. */
   set(x1: number, y1: number, x2: number, y2: number): this {
     if (x2 < x1) {
       this.x2 = x1
@@ -73,6 +66,7 @@ export class Bounds {
     return this
   }
 
+  /** Grow the box to include a point. */
   add(x: number, y: number): this {
     if (x < this.x1) this.x1 = x
     if (y < this.y1) this.y1 = y
@@ -81,15 +75,7 @@ export class Bounds {
     return this
   }
 
-  /** vega Bounds.scale: multiply both extents (NaN-safe like add). */
-  scale(sx: number, sy: number): this {
-    this.x1 *= sx
-    this.y1 *= sy
-    this.x2 *= sx
-    this.y2 *= sy
-    return this
-  }
-
+  /** Grow the box by `d` on every side. */
   expand(d: number): this {
     this.x1 -= d
     this.y1 -= d
@@ -106,19 +92,18 @@ export class Bounds {
     return this
   }
 
+  /** The box around this one turned by `angle` (radians) about (x, y). */
   rotate(angle: number, x: number, y: number): this {
-    const p = this.rotatedPoints(angle, x, y)
-    return this.clear()
-      .add(p[0]!, p[1]!)
-      .add(p[2]!, p[3]!)
-      .add(p[4]!, p[5]!)
-      .add(p[6]!, p[7]!)
+    const c = this.rotatedCorners(angle, x, y)
+    return this.clear().add(c[0]!, c[1]!).add(c[2]!, c[3]!).add(c[4]!, c[5]!).add(c[6]!, c[7]!)
   }
 
-  rotatedPoints(angle: number, x: number, y: number): number[] {
+  /** The four corners (x1,y1), (x1,y2), (x2,y1), (x2,y2) as x, y pairs, turned by `angle` (radians) about (x, y). */
+  rotatedCorners(angle: number, x: number, y: number): number[] {
     const { x1, y1, x2, y2 } = this
     const cos = Math.cos(angle)
     const sin = Math.sin(angle)
+    // turning about (x, y) is turning about the origin, then moving by what the origin's own turn left behind
     const cx = x - x * cos + y * sin
     const cy = y - x * sin - y * cos
     return [
@@ -129,6 +114,7 @@ export class Bounds {
     ]
   }
 
+  /** Grow the box to include another. */
   union(b: Bounds): this {
     if (b.x1 < this.x1) this.x1 = b.x1
     if (b.y1 < this.y1) this.y1 = b.y1
@@ -137,7 +123,7 @@ export class Bounds {
     return this
   }
 
-  /** vega-scenegraph Bounds.intersect: shrink to the overlap with `b` (never grows). */
+  /** Shrink the box to its overlap with another (it never grows). */
   intersect(b: Bounds): this {
     if (b.x1 > this.x1) this.x1 = b.x1
     if (b.y1 > this.y1) this.y1 = b.y1
@@ -158,28 +144,28 @@ export class Bounds {
 export const DEG_TO_RAD = Math.PI / 180
 
 // ---------------------------------------------------------------------------
-// boundStroke — exact port of bound/boundStroke.js
+// The reach of a stroke
 // ---------------------------------------------------------------------------
 
+/**
+ * Grow `bounds` by how far the item's stroke reaches past the outline it is drawn on: half its width, more at a square cap
+ * (up to the diagonal of the half width), and, where the outline's corners are mitered (`miter`, and a join that is the default
+ * or `miter`), as far as a join tip goes: half the width times the miter limit. An item with no stroke, or an invisible one, adds nothing.
+ */
 export function boundStroke(bounds: Bounds, item: SceneItem, miter?: boolean): Bounds {
   const rec = item as Record<string, unknown>
-  if (item.stroke && item.opacity !== 0 && item.strokeOpacity !== 0) {
-    const sw = item.strokeWidth != null ? +item.strokeWidth : 1
-    const cap = rec.strokeCap === 'square' ? Math.SQRT2 : 1
-    let e = cap * sw / 2
-    if (miter && (!(rec.strokeJoin ?? rec.strokeLineJoin) || (rec.strokeJoin ?? rec.strokeLineJoin) === 'miter')) {
-      e = Math.max(e, (rec.strokeMiterLimit != null ? +rec.strokeMiterLimit : 4) * sw / 2)
-    }
-    bounds.expand(e)
+  if (!item.stroke || item.opacity === 0 || item.strokeOpacity === 0) return bounds
+  const width = item.strokeWidth != null ? +item.strokeWidth : 1
+  let reach = (rec.strokeCap === 'square' ? Math.SQRT2 : 1) * width / 2
+  const join = rec.strokeJoin ?? rec.strokeLineJoin
+  if (miter && (!join || join === 'miter')) {
+    reach = Math.max(reach, (rec.strokeMiterLimit != null ? +rec.strokeMiterLimit : 4) * width / 2)
   }
-  return bounds
+  return bounds.expand(reach)
 }
 
 // ---------------------------------------------------------------------------
-// Text metrics — port of util/text.js. The estimate below is vega's headless
-// fallback; when a canvas is available (real browsers) we measure with the
-// same cached measureText vega uses, so browser layout matches browser vega.
-// See text-metrics.ts.
+// Text: lines, widths and where the baseline falls (the measuring itself is in text-metrics.ts)
 // ---------------------------------------------------------------------------
 
 export function fontSize(item: SceneItem): number {
@@ -223,7 +209,7 @@ export function textWidth(item: SceneItem, line: unknown): number {
   return itemTextWidth(item, String(text ?? ''))
 }
 
-/** util/text.js `offset(item)` — baseline correction, exact. */
+/** How far the text's baseline sits from the y it is drawn at, by the baseline it asks for. */
 export function baselineOffset(item: SceneItem): number {
   const baseline = item.baseline
   const h = fontSize(item)
@@ -238,7 +224,7 @@ export function baselineOffset(item: SceneItem): number {
 }
 
 // ---------------------------------------------------------------------------
-// Mark bounds — ports of marks/{text,rect,rule}.js bound + path tracing
+// The bounds of the kinds of item
 // ---------------------------------------------------------------------------
 
 /** The extent of an arc item: its sector traced through the same generator that draws it (corner radius and padding included), turned by the item's angle, stroked, and moved to the item. */
@@ -250,7 +236,7 @@ export function boundArcItem(bounds: Bounds, it: SceneItem): Bounds {
   return boundStroke(bounds, it, true).translate(it.x || 0, it.y || 0)
 }
 
-/** marks/text.js `bound` — exact (multi-line, align, angle rotation). */
+/** The box of a text item: its lines at its alignment and baseline, turned by its angle about the anchor. */
 export function boundText(bounds: Bounds, item: SceneItem): Bounds {
   const h = fontSize(item)
   const a = item.align
@@ -280,7 +266,7 @@ export function boundText(bounds: Bounds, item: SceneItem): Bounds {
   return bounds
 }
 
-/** marks/rect.js `bound` — exact (x2/y2 resolved to width/height as vega items carry). */
+/** The box of a rect: from its corner by its width and height (or to its x2 and y2), stroke included. */
 export function boundRect(bounds: Bounds, item: SceneItem): Bounds {
   let w = (item as Record<string, unknown>).width as number | undefined
   let h = (item as Record<string, unknown>).height as number | undefined
@@ -291,7 +277,7 @@ export function boundRect(bounds: Bounds, item: SceneItem): Bounds {
   return boundStroke(bounds.set(x0, y0, (x0 + (w as number)) || 0, (y0 + (h as number)) || 0), item)
 }
 
-/** marks/rule.js `bound` — exact. */
+/** The box of a rule: the segment from (x, y) to (x2, y2), stroke included. */
 export function boundRule(bounds: Bounds, item: SceneItem): Bounds {
   const x1 = item.x || 0
   const y1 = item.y || 0
@@ -305,15 +291,9 @@ function boundImage(bounds: Bounds, item: SceneItem): Bounds {
 }
 
 // ---------------------------------------------------------------------------
-// Path tracing — port of bound/boundContext.js applied to SVG path data
+// The extent of path data
 // ---------------------------------------------------------------------------
 
-/**
- * Trace an SVG path-data string, accumulating bounds exactly as vega's
- * boundContext does for the shapes it receives from the path generators
- * (curve extrema via quadExtrema/cubicExtrema; arcs sampled at endpoints and
- * quarter-turn aligned interior points; full circles as center ± r).
- */
 /**
  * The extent of a symbol shape's path at a radius, traced once: a legend measures the same few shapes in every evaluation.
  * (Adding the two corners of the extent to the box is adding every point of the path to it.)
@@ -332,29 +312,36 @@ function addShapeExtent(bounds: Bounds, shape: string, r: number, pathOf: (shape
   if (ext[0] <= ext[2] && ext[1] <= ext[3]) bounds.add(ext[0], ext[1]).add(ext[2], ext[3])
 }
 
+const PATH_TOKEN = /([MmLlHhVvCcSsQqTtAaZz])|(-?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?)/g
+
+/** Path data as its commands, each with the numbers that follow its letter (however many there are). */
+function pathTokens(d: string): Array<{ c: string; n: number[] }> {
+  const tokens: Array<{ c: string; n: number[] }> = []
+  let current: { c: string; n: number[] } | null = null
+  PATH_TOKEN.lastIndex = 0
+  for (let m = PATH_TOKEN.exec(d); m; m = PATH_TOKEN.exec(d)) {
+    if (m[1]) tokens.push((current = { c: m[1], n: [] }))
+    else if (current) current.n.push(parseFloat(m[2]!))
+  }
+  return tokens
+}
+
 /**
- * A path with every point rotated about the origin, in absolute commands. vega's boundContext rotates the points a shape's path
- * hands it (control points too) before it takes extrema, so the bounds of a rotated shape are not those of its unrotated box
- * turned; an arc keeps its radii and takes the turn on its x-axis rotation.
+ * A path with every point rotated about the origin, in absolute commands. The bounds of a rotated shape come from its rotated
+ * points (control points too) and the extrema of the curves they make, which are not those of its unrotated box turned; an arc
+ * keeps its radii and takes the turn on its x-axis rotation.
  */
 export function rotatePath(d: string, deg: number): string {
   const rot = deg * (Math.PI / 180)
   const cos = Math.cos(rot)
   const sin = Math.sin(rot)
   const px = (x: number, y: number): string => `${cos * x - sin * y},${sin * x + cos * y}`
-  const re = /([MmLlHhVvCcSsQqTtAaZz])|(-?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?)/g
-  const toks: Array<{ c: string; n: number[] }> = []
-  let cur: { c: string; n: number[] } | null = null
-  for (let m = re.exec(d); m; m = re.exec(d)) {
-    if (m[1]) toks.push((cur = { c: m[1], n: [] }))
-    else if (cur) cur.n.push(parseFloat(m[2]!))
-  }
   let x = 0
   let y = 0
   let sx = 0
   let sy = 0
   let out = ''
-  for (const t of toks) {
+  for (const t of pathTokens(d)) {
     const rel = t.c === t.c.toLowerCase()
     const n = t.n
     switch (t.c.toUpperCase()) {
@@ -419,77 +406,68 @@ export function rotatePath(d: string, deg: number): string {
   return out
 }
 
+/** Where a quadratic curve, with control values p0, p1, p2 along one axis, is at its extreme there, if it turns within the curve. */
+function quadraticExtreme(p0: number, p1: number, p2: number): number | undefined {
+  const t = (p0 - p1) / (p0 + p2 - 2 * p1)
+  return 0 < t && t < 1 ? p0 + (p1 - p0) * t : undefined
+}
+
+/** The extremes along one axis of a cubic curve with control values p0..p3: its value at each parameter where it turns. */
+function cubicExtremes(p0: number, p1: number, p2: number, p3: number): number[] {
+  return cubicTurns(p0, p1, p2, p3).map((t) => cubicAt(t, p0, p1, p2, p3))
+}
+
+/**
+ * Grow `bounds` by the extent of SVG path data: every point it visits, the extremes of its curves, and for an arc its end points and
+ * the quarter turns it passes (a full circle as its centre plus and minus its radius). `transform` puts path coordinates where the
+ * bounds are measured; a curve turns where its derivative does in that space.
+ *
+ * A command with fewer numbers than it needs is read as far as it goes (the missing ones are NaN, which a box ignores), and a
+ * path that is nothing but numbers adds nothing.
+ */
 export function boundsFromPath(
   bounds: Bounds,
   d: string,
   transform?: (x: number, y: number) => [number, number],
 ): Bounds {
+  // the pen's place in path coordinates; where the current subpath began (a close returns there); and its place where the bounds are
   let lx = 0
   let ly = 0
-  let cx0 = 0 // subpath start (for Z)
-  let cy0 = 0
-  // (the current point in the space the bounds are measured in: curves turn where their derivative does there)
-  let tlx = 0
-  let tly = 0
+  let startX = 0
+  let startY = 0
+  let tx = 0
+  let ty = 0
   const place = (x: number, y: number): [number, number] => (transform ? transform(x, y) : [x, y])
-  const add = (x: number, y: number) => {
+  const visit = (x: number, y: number): void => {
     const p = place(x, y)
     bounds.add(p[0], p[1])
-    tlx = p[0]
-    tly = p[1]
+    tx = p[0]
+    ty = p[1]
   }
+  // an extreme of a curve along x widens the box in x only, and along y in y only
+  const reachX = (v: number | undefined): void => { if (v !== undefined) bounds.add(v, bounds.y1) }
+  const reachY = (v: number | undefined): void => { if (v !== undefined) bounds.add(bounds.x1, v) }
 
-  const quadExtrema = (x0: number, x1: number, x2: number, onY = false) => {
-    const t = (x0 - x1) / (x0 + x2 - 2 * x1)
-    if (0 < t && t < 1) { const v = x0 + (x1 - x0) * t; if (onY) bounds.add(bounds.x1, v); else bounds.add(v, bounds.y1) }
-  }
-  const quadTo = (cx: number, cy: number, x: number, y: number) => {
+  const quadTo = (cx: number, cy: number, x: number, y: number): void => {
     const c = place(cx, cy)
     const e = place(x, y)
-    quadExtrema(tlx, c[0], e[0])
-    quadExtrema(tly, c[1], e[1], true)
-    add(x, y)
+    reachX(quadraticExtreme(tx, c[0], e[0]))
+    reachY(quadraticExtreme(ty, c[1], e[1]))
+    visit(x, y)
   }
-  const cubicTo = (x1: number, y1: number, x2: number, y2: number, x: number, y: number) => {
+  const cubicTo = (x1: number, y1: number, x2: number, y2: number, x: number, y: number): void => {
     const a = place(x1, y1)
     const b = place(x2, y2)
     const e = place(x, y)
-    cubicExtrema(tlx, a[0], b[0], e[0])
-    cubicExtrema(tly, a[1], b[1], e[1], true)
-    add(x, y)
-  }
-  const cubic = (t: number, p0: number, p1: number, p2: number, p3: number) => {
-    const s = 1 - t
-    const s2 = s * s
-    const t2 = t * t
-    return s2 * s * p0 + 3 * s2 * t * p1 + 3 * s * t2 * p2 + t2 * t * p3
-  }
-  const cubicExtrema = (x0: number, x1: number, x2: number, x3: number, onY = false) => {
-    const a = x3 - x0 + 3 * x1 - 3 * x2
-    const b = x0 + x2 - 2 * x1
-    const c = x0 - x1
-    let t0 = 0
-    let t1 = 0
-    const Epsilon = 1e-14
-    if (Math.abs(a) > Epsilon) {
-      const r = b * b + c * a
-      if (r >= 0) {
-        const r2 = Math.sqrt(r)
-        t0 = (-b + r2) / a
-        t1 = (-b - r2) / a
-      }
-    } else if (b !== 0) {
-      t0 = 0.5 * c / b
-    }
-    for (const t of [t0, t1]) {
-      if (0 < t && t < 1) { const v = cubic(t, x0, x1, x2, x3); if (onY) bounds.add(bounds.x1, v); else bounds.add(v, bounds.y1) }
-    }
+    for (const v of cubicExtremes(tx, a[0], b[0], e[0])) reachX(v)
+    for (const v of cubicExtremes(ty, a[1], b[1], e[1])) reachY(v)
+    visit(x, y)
   }
 
-  // SVG arc (A command) → center parameterization → sample like boundContext.arc
-  const arcTo = (x1: number, y1: number, rx: number, ry: number, phiDeg: number, largeArc: number, sweep: number, x2: number, y2: number) => {
+  // an elliptical arc from (x1, y1) to (x2, y2): found as the arc of an ellipse about a centre, then sampled
+  const arcTo = (x1: number, y1: number, rx: number, ry: number, phiDeg: number, largeArc: number, sweep: number, x2: number, y2: number): void => {
     if (rx === 0 || ry === 0) {
-      add(x2, y2)
+      visit(x2, y2)
       lx = x2
       ly = y2
       return
@@ -503,11 +481,11 @@ export function boundsFromPath(
     const y1p = -sinPhi * dx2 + cosPhi * dy2
     rx = Math.abs(rx)
     ry = Math.abs(ry)
-    const Lambda = (x1p * x1p) / (rx * rx) + (y1p * y1p) / (ry * ry)
-    if (Lambda > 1) {
-      const s = Math.sqrt(Lambda)
-      rx *= s
-      ry *= s
+    const tooSmall = (x1p * x1p) / (rx * rx) + (y1p * y1p) / (ry * ry)
+    if (tooSmall > 1) {
+      const grow = Math.sqrt(tooSmall)
+      rx *= grow
+      ry *= grow
     }
     const sign = largeArc !== sweep ? 1 : -1
     const numerator = rx * rx * ry * ry - rx * rx * y1p * y1p - ry * ry * x1p * x1p
@@ -518,66 +496,56 @@ export function boundsFromPath(
     const cx = cosPhi * cxp - sinPhi * cyp + (x1 + x2) / 2
     const cy = sinPhi * cxp + cosPhi * cyp + (y1 + y2) / 2
 
-    // angles
-    let s2 = 0
     const theta1 = Math.atan2((y1p - cyp) / ry, (x1p - cxp) / rx)
     const theta2 = Math.atan2((-y1p - cyp) / ry, (-x1p - cxp) / rx)
-    // sample like vega's boundContext.arc: endpoints + quarter-turn aligned
-    // interior points, walking the sweep direction (ccw for sweep=0)
     const Tau = 2 * Math.PI
     const HalfPi = Math.PI / 2
     const ccw = sweep === 0
     if (Math.abs(theta2 - theta1) >= Tau - 1e-8) {
-      // full ellipse
-      add(cx - rx, cy - ry)
-      add(cx + rx, cy + ry)
+      // a full ellipse
+      visit(cx - rx, cy - ry)
+      visit(cx + rx, cy + ry)
     } else {
-      const update = (a: number) => {
+      const at = (a: number): void => {
         const px = rx * Math.cos(a)
         const py = ry * Math.sin(a)
-        add(cx + px * cosPhi - py * sinPhi, cy + px * sinPhi + py * cosPhi)
+        visit(cx + px * cosPhi - py * sinPhi, cy + px * sinPhi + py * cosPhi)
       }
-      // endpoint angles in sweep direction
+      // the end angles, in the direction the arc is swept
       let sa = theta1
       let ea = theta1
-      if (ccw) {
-        // walk counterclockwise: delta negative
-        let delta = theta2 - theta1
-        while (delta > 0) delta -= Tau
-        ea = theta1 + delta
-      } else {
-        let delta = theta2 - theta1
-        while (delta < 0) delta += Tau
-        ea = theta1 + delta
-      }
-      update(sa)
-      update(ea)
+      let delta = theta2 - theta1
+      if (ccw) while (delta > 0) delta -= Tau
+      else while (delta < 0) delta += Tau
+      ea = theta1 + delta
+      at(sa)
+      at(ea)
       if (ea !== sa) {
+        // then the quarter turns between them: from the smaller angle on, a quarter turn at a time
         sa = sa % Tau
         if (sa < 0) sa += Tau
         ea = ea % Tau
         if (ea < 0) ea += Tau
+        let a: number
         if (ea < sa) {
-          // vega: flip direction and swap endpoints
+          // the end came round before the start: the arc runs the other way between the two
           const flipped = !ccw
-          let tmp = sa
-          sa = ea
-          ea = tmp
+          ;[sa, ea] = [ea, sa]
           if (flipped) {
             ea -= Tau
-            s2 = sa - (sa % HalfPi)
-            for (let i = 0; i < 4 && s2 > ea; ++i, s2 -= HalfPi) update(s2)
+            a = sa - (sa % HalfPi)
+            for (let i = 0; i < 4 && a > ea; ++i, a -= HalfPi) at(a)
           } else {
-            s2 = sa - (sa % HalfPi) + HalfPi
-            for (let i = 0; i < 4 && s2 < ea; ++i, s2 += HalfPi) update(s2)
+            a = sa - (sa % HalfPi) + HalfPi
+            for (let i = 0; i < 4 && a < ea; ++i, a += HalfPi) at(a)
           }
         } else if (ccw) {
-          let e2 = ea - Tau
-          s2 = sa - (sa % HalfPi)
-          for (let i = 0; i < 4 && s2 > e2; ++i, s2 -= HalfPi) update(s2)
+          const back = ea - Tau
+          a = sa - (sa % HalfPi)
+          for (let i = 0; i < 4 && a > back; ++i, a -= HalfPi) at(a)
         } else {
-          s2 = sa - (sa % HalfPi) + HalfPi
-          for (let i = 0; i < 4 && s2 < ea; ++i, s2 += HalfPi) update(s2)
+          a = sa - (sa % HalfPi) + HalfPi
+          for (let i = 0; i < 4 && a < ea; ++i, a += HalfPi) at(a)
         }
       }
     }
@@ -585,96 +553,66 @@ export function boundsFromPath(
     ly = y2
   }
 
-  // Tokenize
-  const re = /([MmLlHhVvCcSsQqTtAaZz])|(-?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?)/g
-  let m: RegExpExecArray | null
-  let cmd = ''
-  const nums: number[] = []
-  let i = 0
-
-  const nextNum = (): number => {
-    while (i < nums.length && Number.isNaN(nums[i])) i++
-    return nums[i++] as number
-  }
-
-  // First pass: collect tokens in order
-  const tokens: Array<{ c: string; n: number[] }> = []
-  let cur: { c: string; n: number[] } | null = null
-  while ((m = re.exec(d))) {
-    if (m[1]) {
-      cur = { c: m[1], n: [] }
-      tokens.push(cur)
-    } else if (cur) {
-      cur.n.push(parseFloat(m[2]!))
-    }
-  }
-
   // the control point a smooth curve (S, T) reflects: the previous curve's, when it was of the same degree
   let ctlX = 0
   let ctlY = 0
   let ctlKind = ''
-  for (const tok of tokens) {
-    cmd = tok.c
+  const nums: number[] = []
+  let read = 0
+  // the next number of the command: a command that runs out of numbers gets NaN
+  const next = (): number => nums[read++] as number
+  for (const token of pathTokens(d)) {
+    const cmd = token.c
     nums.length = 0
-    pushAll(nums, tok.n)
-    i = 0
+    pushAll(nums, token.n)
+    read = 0
     const rel = cmd === cmd.toLowerCase()
-    const C = cmd.toUpperCase()
-    switch (C) {
-      case 'M': {
-        // first pair is the moveto; subsequent pairs are implicit linetos
-        while (i < nums.length) {
-          const x = nextNum() + (rel ? lx : 0)
-          const y = nextNum() + (rel ? ly : 0)
-          add(x, y)
-          lx = cx0 = x
-          ly = cy0 = y
+    const kind = cmd.toUpperCase()
+    // each repeat of a command takes its numbers relative to the pen when the letter is lower case
+    const nextX = (): number => next() + (rel ? lx : 0)
+    const nextY = (): number => next() + (rel ? ly : 0)
+    switch (kind) {
+      case 'M':
+        // the first pair moves the pen, later ones draw lines
+        while (read < nums.length) {
+          const x = nextX()
+          const y = nextY()
+          visit(x, y)
+          lx = startX = x
+          ly = startY = y
         }
         break
-      }
-      case 'L': {
-        while (i < nums.length) {
-          lx = nextNum() + (rel ? lx : 0)
-          ly = nextNum() + (rel ? ly : 0)
-          add(lx, ly)
+      case 'L':
+        while (read < nums.length) {
+          lx = nextX()
+          ly = nextY()
+          visit(lx, ly)
         }
         break
-      }
-      case 'H': {
-        while (i < nums.length) {
-          lx = nextNum() + (rel ? lx : 0)
-          add(lx, ly)
+      case 'H':
+        while (read < nums.length) {
+          lx = nextX()
+          visit(lx, ly)
         }
         break
-      }
-      case 'V': {
-        while (i < nums.length) {
-          ly = nextNum() + (rel ? ly : 0)
-          add(lx, ly)
+      case 'V':
+        while (read < nums.length) {
+          ly = nextY()
+          visit(lx, ly)
         }
         break
-      }
-      case 'C': {
-        while (i < nums.length) {
-          const x1 = nextNum() + (rel ? lx : 0)
-          const y1 = nextNum() + (rel ? ly : 0)
-          const x2 = nextNum() + (rel ? lx : 0)
-          const y2 = nextNum() + (rel ? ly : 0)
-          const x = nextNum() + (rel ? lx : 0)
-          const y = nextNum() + (rel ? ly : 0)
+      case 'C':
+        while (read < nums.length) {
+          const x1 = nextX(), y1 = nextY(), x2 = nextX(), y2 = nextY(), x = nextX(), y = nextY()
           cubicTo(x1, y1, x2, y2, x, y)
           lx = x
           ly = y
           ctlX = x2; ctlY = y2; ctlKind = 'cubic'
         }
         break
-      }
-      case 'S': {
-        while (i < nums.length) {
-          const x2 = nextNum() + (rel ? lx : 0)
-          const y2 = nextNum() + (rel ? ly : 0)
-          const x = nextNum() + (rel ? lx : 0)
-          const y = nextNum() + (rel ? ly : 0)
+      case 'S':
+        while (read < nums.length) {
+          const x2 = nextX(), y2 = nextY(), x = nextX(), y = nextY()
           const x1 = ctlKind === 'cubic' ? 2 * lx - ctlX : lx
           const y1 = ctlKind === 'cubic' ? 2 * ly - ctlY : ly
           cubicTo(x1, y1, x2, y2, x, y)
@@ -683,24 +621,18 @@ export function boundsFromPath(
           ctlX = x2; ctlY = y2; ctlKind = 'cubic'
         }
         break
-      }
-      case 'Q': {
-        while (i < nums.length) {
-          const x1 = nextNum() + (rel ? lx : 0)
-          const y1 = nextNum() + (rel ? ly : 0)
-          const x = nextNum() + (rel ? lx : 0)
-          const y = nextNum() + (rel ? ly : 0)
+      case 'Q':
+        while (read < nums.length) {
+          const x1 = nextX(), y1 = nextY(), x = nextX(), y = nextY()
           quadTo(x1, y1, x, y)
           lx = x
           ly = y
           ctlX = x1; ctlY = y1; ctlKind = 'quad'
         }
         break
-      }
-      case 'T': {
-        while (i < nums.length) {
-          const x = nextNum() + (rel ? lx : 0)
-          const y = nextNum() + (rel ? ly : 0)
+      case 'T':
+        while (read < nums.length) {
+          const x = nextX(), y = nextY()
           const x1 = ctlKind === 'quad' ? 2 * lx - ctlX : lx
           const y1 = ctlKind === 'quad' ? 2 * ly - ctlY : ly
           quadTo(x1, y1, x, y)
@@ -709,34 +641,27 @@ export function boundsFromPath(
           ctlX = x1; ctlY = y1; ctlKind = 'quad'
         }
         break
-      }
-      case 'A': {
-        while (i < nums.length) {
-          const rx = nextNum()
-          const ry = nextNum()
-          const rot = nextNum()
-          const large = nextNum()
-          const sweep = nextNum()
-          const x = nextNum() + (rel ? lx : 0)
-          const y = nextNum() + (rel ? ly : 0)
-          arcTo(lx, ly, rx, ry, rot, large, sweep, x, y)
-          ;[tlx, tly] = place(x, y)
+      case 'A':
+        while (read < nums.length) {
+          const rx = next(), ry = next(), rotation = next(), large = next(), sweep = next()
+          const x = nextX()
+          const y = nextY()
+          arcTo(lx, ly, rx, ry, rotation, large, sweep, x, y)
+          ;[tx, ty] = place(x, y)
         }
         break
-      }
-      case 'Z': {
-        lx = cx0
-        ly = cy0
+      case 'Z':
+        lx = startX
+        ly = startY
         break
-      }
     }
-    if (C !== 'C' && C !== 'S' && C !== 'Q' && C !== 'T') ctlKind = ''
+    if (kind !== 'C' && kind !== 'S' && kind !== 'Q' && kind !== 'T') ctlKind = ''
   }
   return bounds
 }
 
 // ---------------------------------------------------------------------------
-// Group bound — exact port of marks/group.js bound
+// Marks and groups
 // ---------------------------------------------------------------------------
 
 /**
@@ -1102,6 +1027,8 @@ export function layoutBounds(node: SceneNode, out = new Bounds()): Bounds {
   if (!isGroup) return g.marktype !== undefined && Array.isArray(g.items) ? out.union(typedMarkBounds(g)) : boundLeaf(out, node as SceneItem)
   if (g.role === 'axis' && (g as Record<string, unknown>).axis !== undefined) return out.union(boundAxisGroup(g))
   if (g.role === 'legend') return out.union(boundLegendGroup(g))
+  // a title the layout placed keeps the extent it measured there (see guide-title.ts)
+  if (g.role === 'title' && (g as Record<string, unknown>).titleBounds) return out.union((g as Record<string, unknown>).titleBounds as Bounds)
   const b = new Bounds()
   if (!g.clip && g.items) {
     const measure = (child: SceneNode): Bounds => {

@@ -971,10 +971,17 @@ with their `LICENSE` text, under "Vega packages" above.
 ## Modules rewritten as Aster's own designs
 
 `event-selector.ts`, `selections.ts`, `timer.ts`, `topojson.ts`, `dsv.ts`, `data-format.ts`, `delaunay.ts`,
-`voronoi.ts`, `orient.ts`, `transform-agg.ts`, `transform-window.ts` and `transform-basic.ts` were rewritten with their own structure, naming and comments; none of the upstream source
+`voronoi.ts`, `orient.ts`, `transform-agg.ts`, `transform-window.ts`, `transform-basic.ts`, `trellis.ts`, `guide-encode.ts`, `guide-axis.ts`, `guide-legend.ts`, `guide-title.ts` and `bounds.ts` were rewritten with their own structure, naming and comments; none of the upstream source
 text is carried over. They are still derivative in what an output must equal and are listed here, with the licences
 of the projects they follow printed above, for that reason:
 
+- `trellis.ts`, `guide-encode.ts`, `guide-axis.ts`, `guide-legend.ts`, `guide-title.ts` and `bounds.ts` were rewritten the same
+  way (and the stack of a view's legends in `runtime.ts` became a call of `trellis.ts`); they follow `vega-view-transforms`
+  (grid, axis, legend and title layout, label overlap), `vega-parser` (what a guide property, `encode` block and style
+  does), `vega-encode` (the legend entries) and `vega-scenegraph` (bounds of items, the reach of a stroke, the extrema of
+  curves) (all BSD-3-Clause) in what an output must equal, including the order of the floating point operations that a
+  view's size depends on. The sampling of an elliptical arc in `bounds.ts` (`boundsFromPath`) still follows the
+  procedure of `vega-scenegraph`'s `boundContext.arc` step for step, with its own names and comments.
 - `event-selector.ts` follows the grammar and error messages of `vega-event-selector` (BSD-3-Clause).
 - `selections.ts` follows the semantics of `vega-selections` (BSD-3-Clause), `data-format.ts` those of `vega-loader`
   (BSD-3-Clause).

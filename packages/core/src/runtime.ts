@@ -51,13 +51,13 @@ import { valueKey, valuesEqual } from './fingerprint.js'
 import { rowsEqual, sourceNames, type PulseChange } from './pulse.js'
 import { aggregateRows, fieldsOf, groupKeyFn } from './transform-agg.js'
 import { flattenLength } from './transform-basic.js'
-import { trellisLayout } from './trellis.js'
+import { layoutFacet } from './trellis.js'
 import { boundAxisGroup, boundLegendGroup, boundGroupItem, boundLeaf, boundTypedMark, Bounds, layoutBounds, eachMarkBounds, hasClippedMark } from './bounds.js'
 import { rectItemPath } from './render.js'
-import { buildAxis as buildAxisGuide, tickBand } from './guide-axis.js'
+import { buildAxis as buildAxisGuide, tickPlacement } from './guide-axis.js'
 import { buildTitle as buildTitleGuide } from './guide-title.js'
-import { buildLegend as buildLegendGuide, legendType, LEGEND_SCALES, type GuideHost } from './guide-legend.js'
-import { isSignal, itemAriaOf, lookup, value, type GuideStyles, type UserEncode } from './guide-encode.js'
+import { buildLegend as buildLegendGuide, legendType, placeLegendStack, LEGEND_SCALES, type GuideHost, type Sides } from './guide-legend.js'
+import { isSignal, itemAriaOf, propsOf, type GuideStyles, type UserEncode } from './guide-encode.js'
 import { defaultMergedConfig } from './config-defaults.js'
 
 const DEFAULT_SIZE = 500
@@ -1267,21 +1267,15 @@ function buildAxisAndLegend(
     }
   }
 
-  // Vega's legend layout (layoutGroup + legendParams + gridLayout): build each
-  // legend at local (0,0), then position the orient groups with the grid
-  // algorithm — vertical stacking for left/right (one column), a horizontal
-  // row for top/bottom/none-direction (one row), anchored outside the axis
-  // bounds with the 18px offset and an 8px margin between legends.
-  // (vega has no legend `disable`: that is a Vega-Lite config key, which the VL
-  // compiler resolves by omitting the legend. A config.legend.disable merged into
-  // a legend that VL kept must not remove it.)
+  // The legends: each is built at its own origin, then those that share an orient are placed as a block against the plot (see
+  // placeLegendStack). A legend is never dropped by the config: `disable` is a Vega-Lite key that the VL compiler has already
+  // resolved by leaving the legend out, so one that is here stays.
   type LegendProps = { orient?: unknown; offset?: unknown; x?: unknown; y?: unknown }
   const built = legends
     .map((legend, legendIndex) => {
       const group = buildLegend(legend, ctx, legendIndex)
       if (group) {
-        // (the mark definition reads these as written -- vega-parser marks/definition.js: `+zindex || undefined`,
-        // `aria`, `description` -- so a signal object is not looked into)
+        // (these are read as written, so a signal object is not looked into)
         const zindex = +(legend.zindex as number) || undefined
         if (zindex) (group as unknown as { zindex?: number }).zindex = zindex
         // `aria: false` removes the legend from the accessibility tree (and marks it aria-hidden)
@@ -1294,7 +1288,7 @@ function buildAxisAndLegend(
           legendScale?: string; legendChannels?: string[]; legendType?: string
           legendFormat?: string; legendFormatType?: string
         }
-        // vega-parser LegendScales: the channels in priority order (the first is the canonical scale)
+        // the channels the legend describes, in priority order (the first gives the legend its scale)
         const own = (legend.own ?? {}) as Record<string, unknown>
         g.legendChannels = LEGEND_SCALES.filter((k) => !!own[k])
         g.legendScale = g.legendChannels.map((k) => String(own[k]))[0]
@@ -1312,39 +1306,29 @@ function buildAxisAndLegend(
     .filter((x) => ctx.pendingEntries || !(x.group.width === 0 && x.group.height === 0 && (x.group.items?.length ?? 0) === 0))
 
   if (built.length) {
-    // legendParams anchors on the axis bounds only: xBounds unions the
-    // vertical (left/right) axes, yBounds the horizontal ones; marks live in
-    // viewBounds and never reach the anchor.
     const layoutW = Math.max(0, ctx.width)
     const layoutH = Math.max(0, ctx.height)
-    let xb = { x1: 0, y1: 0, x2: layoutW, y2: layoutH }
-    let yb = { x1: 0, y1: 0, x2: layoutW, y2: layoutH }
+    // what the legends anchor against: the plot widened by the guides beside it. Legends on the left and right clear the
+    // vertical axes (xb), those above and below clear the horizontal ones (yb); a mark's group counts for both.
+    const xb: Sides = { x1: 0, y1: 0, x2: layoutW, y2: layoutH }
+    const yb: Sides = { x1: 0, y1: 0, x2: layoutW, y2: layoutH }
+    const widen = (to: Sides, b: Bounds): void => {
+      to.x1 = Math.min(to.x1, b.x1)
+      to.y1 = Math.min(to.y1, b.y1)
+      to.x2 = Math.max(to.x2, b.x2)
+      to.y2 = Math.max(to.y2, b.y2)
+    }
     for (const g of anchorItems) {
-      // vega's getRole: every top-level group-typed mark is a scope and
-      // unions into BOTH anchor bounds; axis marks split by orientation.
-      if (g.marktype === 'group' && (g.role === 'scope' || g.role === 'mark' || ((g as Record<string, unknown>)._scope === true && VIEW_ROLES.has(String(g.role))))) {
-        // vega's scope bound is the recursive child union (plus the group
-        // rect) — clipped cells still measure their children.
-        const b = (g as Record<string, unknown>)._scope === true ? layoutBounds(g) : boundGroupItem(new Bounds(), g)
-        xb.x1 = Math.min(xb.x1, b.x1)
-        xb.y1 = Math.min(xb.y1, b.y1)
-        xb.x2 = Math.max(xb.x2, b.x2)
-        xb.y2 = Math.max(xb.y2, b.y2)
-        yb.x1 = Math.min(yb.x1, b.x1)
-        yb.y1 = Math.min(yb.y1, b.y1)
-        yb.x2 = Math.max(yb.x2, b.x2)
-        yb.y2 = Math.max(yb.y2, b.y2)
-        continue
+      const scoped = (g as Record<string, unknown>)._scope === true
+      if (g.marktype === 'group' && (g.role === 'scope' || g.role === 'mark' || (scoped && VIEW_ROLES.has(String(g.role))))) {
+        // a scope counts as everything inside it and its own frame, clipped cells included
+        const b = scoped ? layoutBounds(g) : boundGroupItem(new Bounds(), g)
+        widen(xb, b)
+        widen(yb, b)
+      } else if (g.role === 'axis') {
+        const orient = (g as unknown as { axis?: { orient: string } }).axis?.orient
+        widen(orient === 'left' || orient === 'right' ? xb : yb, boundAxisGroup(g))
       }
-      if (g.role !== 'axis') continue
-      const meta = (g as unknown as { axis?: { orient: string } }).axis
-      const b = boundAxisGroup(g)
-      const isY = meta ? meta.orient === 'left' || meta.orient === 'right' : false
-      const t = isY ? xb : yb
-      t.x1 = Math.min(t.x1, b.x1)
-      t.y1 = Math.min(t.y1, b.y1)
-      t.x2 = Math.max(t.x2, b.x2)
-      t.y2 = Math.max(t.y2, b.y2)
     }
 
     // group legends by orient ('none' skips the grid: vega leaves the item
@@ -1369,135 +1353,9 @@ function buildAxisAndLegend(
     }
 
     for (const [orient, list] of byOrient) {
-      // Raw-guide mode skips the legend grid: the groups stay at (0,0) (the
-      // built legends are pushed unpositioned below).
+      // Raw-guide mode skips the legend grid: the groups stay at (0,0) (the built legends are pushed unpositioned below).
       if (ctx.rawGuides) continue
-      if (typeof process !== 'undefined' && process.env.ASTER_DEBUG_LEG) console.error('[leg]', orient, 'xb', JSON.stringify(xb), 'yb', JSON.stringify(yb), 'W', ctx.width, 'H', ctx.height)
-      const n = list.length
-      // legendParams (vega-view-transforms layout/legend.js): `config.legend.layout`, the orient's own block over the general one
-      const layoutCfg = (ctx.chart.legendLayout ?? {}) as Record<string, unknown>
-      const orientCfg = (layoutCfg[orient] ?? {}) as Record<string, unknown>
-      const cfgOf = (key: string, d?: unknown): unknown => (orientCfg[key] != null ? orientCfg[key] : layoutCfg[key] != null ? layoutCfg[key] : d)
-      // if legends specify an offset directly, the maximum is used
-      let specOffset: number | undefined = undefined
-      for (const x of list) {
-        const o = x.props.offset
-        if (typeof o === 'number') specOffset = specOffset === undefined ? o : Math.max(specOffset, o)
-      }
-      const offset = specOffset ?? (cfgOf('offset', 0) as number)
-      const anchor = cfgOf('anchor', 'start')
-      const frame = cfgOf('frame', 'group')
-      const mult = anchor === 'end' ? 1 : anchor === 'middle' ? 0.5 : 0
-      const W = layoutW
-      const H = layoutH
-      const ax = frame === 'bounds' ? xb.x1 + mult * (xb.x2 - xb.x1) : mult * (W || (yb.x2 - yb.x1) + 2 * yb.x1)
-      const ay = frame === 'bounds' ? yb.y1 + mult * (yb.y2 - yb.y1) : mult * (H || (xb.y2 - xb.y1) + 2 * xb.y1)
-      const margin = cfgOf('margin', 8) as number
-      const full = cfgOf('bounds', 'flush') !== 'flush'
-      const center = cfgOf('center')
-      const centerOf = (key: 'column' | 'row'): unknown => {
-        const v = center !== null && typeof center === 'object' ? (center as Record<string, unknown>)[key] : center
-        return v != null ? v : 0
-      }
-      // gridLayout: one column when the direction is vertical, else a row; align `each`
-      const ncols = cfgOf('direction') === 'vertical' ? 1 : n
-      const nrows = Math.max(1, Math.ceil(n / ncols))
-      // the boxes: the flush ones (legendLayout sized each legend to ceil(childBounds + 2*padding): our group.width / height), or
-      // the legend's own bounds relative to its origin
-      const boxes = list.map((x) => {
-        if (!full) return { x1: 0, y1: 0, x2: x.group.width || 0, y2: x.group.height || 0 }
-        const lb = boundLegendGroup(x.group)
-        return lb.empty() ? { x1: 0, y1: 0, x2: 0, y2: 0 } : { x1: lb.x1 - (x.group.x || 0), y1: lb.y1 - (x.group.y || 0), x2: lb.x2 - (x.group.x || 0), y2: lb.y2 - (x.group.y || 0) }
-      })
-      const xOffset = boxes.map((b) => margin + (b.x1 < 0 ? Math.ceil(-b.x1) : 0))
-      const yOffset = boxes.map((b) => margin + (b.y1 < 0 ? Math.ceil(-b.y1) : 0))
-      const xExtent = Array<number>(ncols).fill(0)
-      const yExtent = Array<number>(nrows).fill(0)
-      boxes.forEach((b, i) => {
-        const c = i % ncols, r = ~~(i / ncols)
-        xExtent[c] = Math.max(xExtent[c]!, Math.ceil(b.x2))
-        yExtent[r] = Math.max(yExtent[r]!, Math.ceil(b.y2))
-      })
-      for (let i = 0; i < n; i++) {
-        if (i % ncols === 0) xOffset[i] = 0
-        if (i < ncols) yOffset[i] = 0
-      }
-      // gridAlign 'each': each column/row offset rides on the previous
-      // column/row extent.
-      for (let c = 1; c < ncols; c++) {
-        let off = 0
-        for (let i = c; i < n; i += ncols) off = Math.max(off, xOffset[i]!)
-        for (let i = c; i < n; i += ncols) xOffset[i] = off + xExtent[c - 1]!
-      }
-      for (let r = 1; r < nrows; r++) {
-        let off = 0
-        for (let i = r * ncols, m = Math.min(i + ncols, n); i < m; i++) off = Math.max(off, yOffset[i]!)
-        for (let i = r * ncols, m = Math.min(i + ncols, n); i < m; i++) yOffset[i] = off + yExtent[r - 1]!
-      }
-      const dx: number[] = []
-      let acc = 0
-      for (let i = 0; i < n; i++) {
-        acc = xOffset[i]! + (i % ncols ? acc : 0)
-        dx.push(acc)
-      }
-      const dy: number[] = Array<number>(n).fill(0)
-      for (let c = 0; c < ncols; c++) {
-        let y = 0
-        for (let i = c; i < n; i += ncols) {
-          y += yOffset[i]!
-          dy[i] = y
-        }
-      }
-      // centering (the legends are at x = y = 0 here)
-      if (centerOf('column') && nrows > 1) {
-        for (let i = 0; i < n; i++) {
-          const x = xExtent[i % ncols]! - boxes[i]!.x2 - dx[i]!
-          if (x > 0) dx[i]! += x / 2
-        }
-      }
-      if (centerOf('row') && ncols !== 1) {
-        for (let i = 0; i < n; i++) {
-          const y = yExtent[~~(i / ncols)]! - boxes[i]!.y2 - dy[i]!
-          if (y > 0) dy[i]! += y / 2
-        }
-      }
-      // laid-out block bounds (the boxes translated by dx/dy)
-      let bx1 = Infinity, by1 = Infinity, bx2 = -Infinity, by2 = -Infinity
-      boxes.forEach((b, i) => {
-        bx1 = Math.min(bx1, b.x1 + dx[i]!)
-        by1 = Math.min(by1, b.y1 + dy[i]!)
-        bx2 = Math.max(bx2, b.x2 + dx[i]!)
-        by2 = Math.max(by2, b.y2 + dy[i]!)
-      })
-      const bw = bx2 - bx1
-      const bh = by2 - by1
-
-      // the anchor of the grid: where it sits, and which of its edges that point is
-      let x: number
-      let y: number
-      let column: unknown = 'start'
-      let row: unknown = 'start'
-      switch (orient) {
-        case 'left': x = Math.floor(xb.x1) - offset; column = 'end'; y = ay; row = anchor; break
-        case 'right': x = Math.ceil(xb.x2) + offset; y = ay; row = anchor; break
-        case 'top': y = Math.floor(yb.y1) - offset; row = 'end'; x = ax; column = anchor; break
-        case 'bottom': y = Math.ceil(yb.y2) + offset; x = ax; column = anchor; break
-        case 'top-left': x = offset; y = offset; break
-        case 'top-right': x = W - offset; y = offset; column = 'end'; break
-        case 'bottom-left': x = offset; y = H - offset; row = 'end'; break
-        case 'bottom-right': x = W - offset; y = H - offset; column = 'end'; row = 'end'; break
-        default: x = Math.ceil(xb.x2) + offset; y = ay; row = anchor; break
-      }
-      if (column === 'end') x -= bw
-      else if (column === 'middle') x -= bw / 2
-      if (row === 'end') y -= bh
-      else if (row === 'middle') y -= bh / 2
-      x = Math.round(x)
-      y = Math.round(y)
-      list.forEach((x1, i) => {
-        x1.group.x = x + dx[i]!
-        x1.group.y = y + dy[i]!
-      })
+      placeLegendStack(orient, list.map((x) => x.group), list.map((x) => x.props.offset), (ctx.chart.legendLayout ?? {}) as Record<string, unknown>, xb, yb, layoutW, layoutH)
     }
 
     for (const x of built) groups.push(x.group)
@@ -1999,7 +1857,7 @@ function buildContentPass(
   const hasLayout = ctx.chart.layout != null
   if (hasLayout && cut === undefined) {
     try {
-      trellisLayout({ marktype: 'group', items } as unknown as SceneGroup, resolveLayoutOptions(ctx.chart.layout!, ctx))
+      layoutFacet({ marktype: 'group', items } as unknown as SceneGroup, resolveLayoutOptions(ctx.chart.layout!, ctx))
     } catch {
       // vega's dataflow logs the layout error and renders the scene unlayouted:
       // cells keep their encoded (0,0) anchors and the view skips overflow growth.
@@ -2273,9 +2131,8 @@ function getChartInfoImpl(spec: VgSpec, input: RuntimeInput): ChartInfo {
 }
 
 /**
- * Vega's titleLayout (vega-view titleLayout) port: the title group holds the
- * title text at (0,0) and the subtitle at (sx,sy); the group is positioned
- * outside the viewBounds by the union of the two text bounds.
+ * A title (or a group's title) as a scene group: the title text at (0,0) and the subtitle where the title layout put it, the group
+ * itself outside the bounds of everything laid out so far.
  */
 function buildTitleGroup(
   title0: CompiledTitle | undefined,
@@ -2288,9 +2145,8 @@ function buildTitleGroup(
   parent?: Row,
 ): SceneGroup | null {
   if (!title0 || !ctx) return null
-  // viewBounds: [0,0,w,h] ∪ marks ∪ axis/legend bounds (axes measured in the
-  // axis-internal frame; our scene bakes the 0.5px axis delta into the leaves
-  // — shift it out). The title unions in afterwards, as in vega's layoutGroup.
+  // What the title sits against: the view's frame, the marks and the bounds of the axes and legends (axes measured in their own
+  // frame: the scene bakes the 0.5px axis delta into their leaves, shifted out here). The title joins them afterwards.
   const b = new Bounds().set(0, 0, width, height)
   const measured = (items as SceneGroup[]).filter((g) => g.role !== 'title')
   // (a clipped mark -- an interval selection's brush -- has its bounds cut to the frame: Bound's boundClip)
@@ -2314,9 +2170,9 @@ function buildTitleGroup(
   // (the mark definition reads these as written -- vega-parser marks/definition.js: `+zindex || undefined`, `aria`, `description`)
   const own = (title0.own ?? {}) as Record<string, unknown>
   const cfg = (title0.cfg ?? {}) as Record<string, unknown>
-  const aria = value(own.aria, cfg.aria)
-  const description = value(own.description, cfg.description)
-  const zindex = +(value(own.zindex, cfg.zindex) as number) || undefined
+  const aria = own.aria ?? cfg.aria
+  const description = own.description ?? cfg.description
+  const zindex = +((own.zindex ?? cfg.zindex) as number) || undefined
   const gb = groupBackground(g as SceneItem, +(g.width as number) || 0, +(g.height as number) || 0)
   const out = {
     marktype: 'group',
@@ -2329,6 +2185,7 @@ function buildTitleGroup(
     ...(aria !== undefined ? { aria } : {}),
     ...(description ? { description } : {}),
     ...(zindex ? { zindex } : {}),
+    ...(built.bounds ? { titleBounds: built.bounds } : {}),
     ...(built.partMeta.group?.name ? { cssName: built.partMeta.group.name } : {}),
     ...(built.partMeta.group?.interactive ? { interactive: true } : {}),
     ...(itemAriaOf(g) ? { itemAria: itemAriaOf(g) } : {}),
@@ -4676,7 +4533,7 @@ function buildGroupItem(mark: CompiledMark, ctx: EvalContext, src: GroupSource):
     // ViewLayout: a `layout` grid positions the child groups (headers, footers, titles, cells) first
     if (mark.layout && !scope.unsettled) {
       try {
-        trellisLayout({ marktype: 'group', items: content } as unknown as SceneGroup, resolveLayoutOptions(mark.layout, childCtx))
+        layoutFacet({ marktype: 'group', items: content } as unknown as SceneGroup, resolveLayoutOptions(mark.layout, childCtx))
       } catch {
         // a grid the layout cannot take (vega's gridLayout throws on e.g. fractional `columns`): the dataflow
         // logs it and the cells stay where their encode put them; the view also skips overflow growth
@@ -4764,10 +4621,6 @@ function resolveLayoutOptions(layout: Record<string, unknown>, ctx: EvalContext)
 }
 
 
-
-// ===========================================================================
-// Trellis layout (exact port of vega's ViewLayout/trellisLayout)
-// ===========================================================================
 
 // ===========================================================================
 // Concat support (horizontal, vertical, and 2D repeat grids)
@@ -5254,7 +5107,7 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext, index: number): S
   if (!scale) return null
   const scaleType = ctx.scaleTypes.get(channels[0]![1]) ?? ''
   // vega's `_('tickCount')`: a signal is what it holds
-  const tickCountRaw = guideScalar(ctx, value(spec.tickCount, config.tickCount))
+  const tickCountRaw = guideScalar(ctx, spec.tickCount ?? config.tickCount)
   // A tickCount interval string ('day', 'month', ...) is only legal on time scales: vega's LegendEntries throws, the
   // dataflow pass aborts there, and the legend (and whatever comes after it in its scope) is never made
   // (a scale ranked late in its own scope puts the failing operator last: the legend is then made without its entries,
@@ -5298,7 +5151,7 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext, index: number): S
     channels, scale: scale as never, scaleType, scaleOf: (name) => ctx.scales.get(name) as never,
     values: resolveLegendValues({ values: spec.values } as unknown as CompiledLegend, ctx),
     count: tickCountRaw, minstep: guideScalar(ctx, spec.tickMinStep) as number | undefined,
-    limit: +(guideScalar(ctx, value(spec.symbolLimit, config.symbolLimit)) as number),
+    limit: +(guideScalar(ctx, spec.symbolLimit ?? config.symbolLimit) as number),
     formatSpecifier: specifierOf(spec.format), formatType,
     locale: locale(undefined), host, style: guideStyles(ctx), raw: !!ctx.rawGuides,
   })
@@ -5685,7 +5538,7 @@ function buildAxis(axis: CompiledAxis, ctx: EvalContext, index: number): SceneGr
   // `{index (fraction 0..1), tickIndex, value, label}`; the `extra` entry (an
   // extra tick pegged to the first value, for binned axes) is
   // `{index: -1, tickIndex: -1, extra: {value}, label: ''}`.
-  const band = tickBand(lookup(own, cfg))
+  const band = tickPlacement(propsOf(own, cfg))
   const extra = isSignal(band.extra) ? ctx.runtime.expr(band.extra.signal)({}, ctx.signalParams) : band.extra
   let rows: Row[] = ticks.map((value, i) => ({ index: i / ((ticks.length - 1) || 1), tickIndex: i, value, label: labelCache[i] }))
   if (extra && ticks.length) rows.push({ index: -1, tickIndex: -1, extra: { value: ticks[0] }, label: '' })

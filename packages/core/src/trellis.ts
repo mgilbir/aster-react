@@ -1,433 +1,295 @@
 /**
- * Exact port of vega-view's trellis/grid layout (ViewLayout transform:
- * gridLayoutGroups, gridLayout, trellisLayout, layoutHeaders, layoutTitle)
- * operating on aster scene groups. All bounds are measured with the exact
- * vega-scenegraph bounds port (bounds.ts) at the time the layout pass reads
- * them, mirroring vega's dataflow order.
+ * Grid layout: cells placed in rows and columns, and the headers, footers and titles of a faceted view placed along them.
+ *
+ * `placeGrid` is the numeric core and works on boxes alone, so the groups of a facet, the entries of a legend and the legends of
+ * a view share it. A layout is one pass per axis: the same arithmetic runs along the columns and along the rows, and only the way a
+ * cell is mapped to its track (its column or its row) differs, so the two axes are one function with a flag.
+ *
+ * What the numbers must be (they decide where every pixel of a faceted chart lands, so the arithmetic is Vega's, operation for
+ * operation): extents are whole pixels, rounded up; a box that starts before its origin pushes its track on by the overhang,
+ * rounded up; a header margin rounds outward; an anchor and a band position round to the nearest pixel; and only an alignment of
+ * `each` or `all` lets a cell be centred in its track.
  */
 import type { SceneGroup } from './types.js'
 import { Bounds, layoutBounds } from './bounds.js'
 import { boundedCount } from './limits.js'
 
-const Group = 'group'
-const End = 1
-
-/** layoutHeaders margin aggregations — exact (floor/ceil matter). */
-const min = (a: number, b: number) => Math.floor(Math.min(a, b))
-const max = (a: number, b: number) => Math.ceil(Math.max(a, b))
-
-type Views = {
-  marks: SceneGroup[]
-  rowheaders: SceneGroup[]
-  rowfooters: SceneGroup[]
-  colheaders: SceneGroup[]
-  colfooters: SceneGroup[]
-  rowtitle: SceneGroup | null
-  coltitle: SceneGroup | null
-}
-
-/**
- * gridLayoutGroups — collect role groups. Our scene is flat: each role'd group
- * at the root IS the header/footer/title/cell item vega would keep inside a
- * role'd container mark, so the mark itself is pushed.
- */
-export function gridLayoutGroups(group: SceneGroup): Views {
-  const groups = (group.items ?? []) as SceneGroup[]
-  const views: Views = {
-    marks: [],
-    rowheaders: [],
-    rowfooters: [],
-    colheaders: [],
-    colfooters: [],
-    rowtitle: null,
-    coltitle: null,
-  }
-
-  for (let i = 0; i < groups.length; ++i) {
-    const mark = groups[i]!
-    if (mark.marktype !== Group) continue
-    switch (mark.role) {
-      case 'axis':
-      case 'legend':
-      case 'title':
-        break
-      case 'row-header':
-        views.rowheaders.push(mark)
-        break
-      case 'row-footer':
-        views.rowfooters.push(mark)
-        break
-      case 'column-header':
-        views.colheaders.push(mark)
-        break
-      case 'column-footer':
-        views.colfooters.push(mark)
-        break
-      case 'row-title':
-        views.rowtitle = mark
-        break
-      case 'column-title':
-        views.coltitle = mark
-        break
-      default:
-        views.marks.push(mark)
-    }
-  }
-  return views
-}
-
 type Opt = Record<string, unknown>
 
-function get(opt: unknown, key: string, d?: unknown): any {
+/** A layout option that is one value or one per side: an object picks `key`, anything else is every side's value. */
+function option(opt: unknown, key: string, unset: unknown = 0): any {
   const v = opt && typeof opt === 'object' && !Array.isArray(opt) ? (opt as Opt)[key] : opt
-  return v != null ? v : d !== undefined ? d : 0
+  return v != null ? v : unset
 }
 
-function offsetValue(v: number): number {
-  return v < 0 ? Math.ceil(-v) : 0
+// --- the numeric core -----------------------------------------------------------------------------------------------------
+
+export interface GridPlan {
+  /** Per cell, how far to move it from where it stands. */
+  dx: number[]
+  dy: number[]
+  /** The box around the cells before the grid is anchored. */
+  bounds: Bounds
 }
 
-function bboxFlush(item: SceneGroup): Bounds {
-  return new Bounds().set(0, 0, item.width || 0, item.height || 0)
-}
-
-function bboxFull(item: SceneGroup): Bounds {
-  const b = layoutBounds(item)
-  return b.empty() ? b.set(0, 0, 0, 0) : b.translate(-(item.x || 0), -(item.y || 0))
-}
-
-function boundFlush(item: SceneGroup, field: string): number | undefined {
-  return field === 'x1' ? item.x || 0
-    : field === 'y1' ? item.y || 0
-    : field === 'x2' ? (item.x || 0) + (item.width || 0)
-    : field === 'y2' ? (item.y || 0) + (item.height || 0)
-    : undefined
-}
-
-function boundFull(item: SceneGroup, field: string): number | undefined {
-  return (layoutBounds(item) as unknown as Record<string, number>)[field]
+/** One axis of the grid: its tracks, and which track a cell is in. */
+interface Axis {
+  /** Tracks are the columns (cells run along a row) rather than the rows. */
+  columns: boolean
+  ncols: number
+  nrows: number
 }
 
 /**
- * gridLayout — exact port. Positions `groups` (cell groups) in a grid,
- * updating each group's x/y. Returns the union of the translated boxes.
+ * How far each cell moves along one axis. The cells of a track share an extent (the widest of them, in whole pixels); a track
+ * starts where the one before it ends, plus the padding and the overhang of the cells that stick out before their origin. `align`
+ * says whether the offsets of a track are made equal across tracks (`each`: against the track before, `all`: against the widest
+ * track), and so whether a cell smaller than its track may be centred in it.
  */
-export function gridLayout(groups: SceneGroup[], opt: Opt, measure?: (g: SceneGroup) => Bounds): Bounds {
-  // `measure` supplies the cells' bounds when the caller already holds them
-  // (legend entries: the Bound pass of their symbol and label); otherwise
-  // they are read off the cell groups as vega's `bounds: 'full' | 'flush'`.
-  const bbox: (g: SceneGroup) => Bounds = measure ?? (opt.bounds === 'flush' ? bboxFlush : bboxFull)
-  const bounds = new Bounds().set(0, 0, 0, 0)
-  const alignCol = get(opt.align, 'column')
-  const alignRow = get(opt.align, 'row')
-  const padCol = get(opt.padding, 'column')
-  const padRow = get(opt.padding, 'row')
-  const ncols = (opt.columns as number) || groups.length
-  // `columns` comes from the spec: bound the per-column arrays before allocating them (C9).
+function shiftAlong(axis: Axis, boxes: Bounds[], at: number[], padding: number, align: unknown, center: unknown): number[] {
+  const { columns, ncols } = axis
+  const tracks = columns ? ncols : axis.nrows
+  const n = boxes.length
+  const near = columns ? 'x1' : 'y1'
+  const far = columns ? 'x2' : 'y2'
+  const trackOf = (i: number): number => (columns ? i % ncols : ~~(i / ncols))
+  const extent = new Array<number>(tracks).fill(0)
+  const lead = new Array<number>(n)
+  let total = 0
+  for (let i = 0; i < n; ++i) {
+    const box = boxes[i]!
+    const reach = Math.ceil(box[far])
+    const t = trackOf(i)
+    total = Math.max(total, reach)
+    extent[t] = Math.max(extent[t]!, reach)
+    lead[i] = padding + (box[near] < 0 ? Math.ceil(-box[near]) : 0)
+  }
+  for (let i = 0; i < n; ++i) if (trackOf(i) === 0) lead[i] = 0
+
+  // the cells of track t are first(t), first(t) + step, ... below last(t)
+  const first = (t: number): number => (columns ? t : t * ncols)
+  const step = columns ? ncols : 1
+  const last = (t: number): number => (columns ? n : Math.min(n, (t + 1) * ncols))
+
+  if (align === 'each') {
+    for (let t = 1; t < tracks; ++t) {
+      let widest = 0
+      for (let i = first(t); i < last(t); i += step) if (widest < lead[i]!) widest = lead[i]!
+      for (let i = first(t); i < last(t); i += step) lead[i] = widest + extent[t - 1]!
+    }
+  } else if (align === 'all') {
+    let widest = 0
+    for (let i = 0; i < n; ++i) if (trackOf(i) > 0 && widest < lead[i]!) widest = lead[i]!
+    for (let i = 0; i < n; ++i) if (trackOf(i) > 0) lead[i] = widest + total
+  } else {
+    for (let t = 1; t < tracks; ++t) for (let i = first(t); i < last(t); i += step) lead[i]! += extent[t - 1]!
+  }
+
+  // a cell lies after the leads of the cells before it in its line (its row when the tracks are columns, its column otherwise)
+  const shift = new Array<number>(n).fill(0)
+  if (columns) {
+    let pos = 0
+    for (let i = 0; i < n; ++i) {
+      pos = lead[i]! + (trackOf(i) ? pos : 0)
+      shift[i]! += pos - at[i]!
+    }
+  } else {
+    for (let c = 0; c < ncols; ++c) {
+      let pos = 0
+      for (let i = c; i < n; i += ncols) {
+        pos += lead[i]!
+        shift[i]! += pos - at[i]!
+      }
+    }
+  }
+
+  if ((align === 'each' || align === 'all') && center && (columns ? axis.nrows > 1 : ncols !== 1)) {
+    for (let i = 0; i < n; ++i) {
+      const slack = (align === 'all' ? total : extent[trackOf(i)]!) - boxes[i]![far] - at[i]! - shift[i]!
+      if (slack > 0) shift[i]! += slack / 2
+    }
+  }
+  return shift
+}
+
+/**
+ * Place boxes in a grid. `at` is where each box's group stands now (the shifts are relative to it). `opt` is a Vega layout:
+ * `columns` (none or 0: one row), `align`, `padding` and `center` (each one value or `{row, column}`), and `anchor`, the point the
+ * whole grid hangs from and which of its edges that point is (`{x, y, column: 'end' | 'middle', row: 'end' | 'middle'}`).
+ */
+export function placeGrid(boxes: Bounds[], at: ReadonlyArray<{ x: number; y: number }>, opt: Opt): GridPlan {
+  const n = boxes.length
+  const ncols = (opt.columns as number) || n
+  // `columns` comes from the spec: bound the per-column arrays before allocating them
   if (ncols > 0) boundedCount(ncols, 'facet columns')
-  const nrows = ncols <= 0 ? 1 : Math.ceil(groups.length / ncols)
-  const n = groups.length
-  const xOffset = new Array<number>(n).fill(0)
-  const xExtent = new Array<number>(ncols).fill(0)
-  let xMax = 0
-  const yOffset = new Array<number>(n).fill(0)
-  const yExtent = new Array<number>(nrows).fill(0)
-  let yMax = 0
-  const dx = new Array<number>(n).fill(0)
-  const dy = new Array<number>(n).fill(0)
-  const boxes: Bounds[] = new Array(n)
-  const center = opt.center as Opt | undefined
+  const nrows = ncols <= 0 ? 1 : Math.ceil(n / ncols)
+  const dx = shiftAlong({ columns: true, ncols, nrows }, boxes, at.map((a) => a.x || 0), option(opt.padding, 'column'), option(opt.align, 'column'), option(opt.center, 'column'))
+  const dy = shiftAlong({ columns: false, ncols, nrows }, boxes, at.map((a) => a.y || 0), option(opt.padding, 'row'), option(opt.align, 'row'), option(opt.center, 'row'))
 
-  // determine offsets for each group
+  const bounds = new Bounds().set(0, 0, 0, 0)
+  for (let i = 0; i < n; ++i) bounds.union(boxes[i]!.translate(dx[i]!, dy[i]!))
+  let x = option(opt.anchor, 'x')
+  let y = option(opt.anchor, 'y')
+  const column = option(opt.anchor, 'column')
+  const row = option(opt.anchor, 'row')
+  if (column === 'end') x -= bounds.width()
+  else if (column === 'middle') x -= bounds.width() / 2
+  if (row === 'end') y -= bounds.height()
+  else if (row === 'middle') y -= bounds.height() / 2
+  x = Math.round(x)
+  y = Math.round(y)
   for (let i = 0; i < n; ++i) {
-    const g = groups[i]!
-    const b = (boxes[i] = bbox(g))
-    dx[i] = 0
-    g.y = g.y || 0
-    dy[i] = 0
-    const c = i % ncols
-    const r = ~~(i / ncols)
-    xMax = Math.max(xMax, Math.ceil(b.x2))
-    yMax = Math.max(yMax, Math.ceil(b.y2))
-    xExtent[c] = Math.max(xExtent[c]!, Math.ceil(b.x2))
-    yExtent[r] = Math.max(yExtent[r]!, Math.ceil(b.y2))
-    xOffset[i] = padCol + offsetValue(b.x1)
-    yOffset[i] = padRow + offsetValue(b.y1)
+    dx[i]! += x
+    dy[i]! += y
   }
+  return { dx, dy, bounds }
+}
 
-  // set initial alignment offsets
-  for (let i = 0; i < n; ++i) {
-    if (i % ncols === 0) xOffset[i] = 0
-    if (i < ncols) yOffset[i] = 0
-  }
+/** The box a cell group occupies relative to its own position: its frame (`flush`) or everything it draws (`full`). */
+function cellBox(g: SceneGroup, flush: boolean): Bounds {
+  if (flush) return new Bounds().set(0, 0, g.width || 0, g.height || 0)
+  const b = layoutBounds(g)
+  return b.empty() ? b.set(0, 0, 0, 0) : b.translate(-(g.x || 0), -(g.y || 0))
+}
 
-  // enforce column alignment constraints
-  if (alignCol === 'each') {
-    for (let c = 1; c < ncols; ++c) {
-      let offset = 0
-      for (let i = c; i < n; i += ncols) {
-        if (offset < xOffset[i]!) offset = xOffset[i]!
-      }
-      for (let i = c; i < n; i += ncols) {
-        xOffset[i] = offset + xExtent[c - 1]!
-      }
-    }
-  } else if (alignCol === 'all') {
-    let offset = 0
-    for (let i = 0; i < n; ++i) {
-      if (i % ncols && offset < xOffset[i]!) offset = xOffset[i]!
-    }
-    for (let i = 0; i < n; ++i) {
-      if (i % ncols) xOffset[i] = offset + xMax
-    }
-  } else {
-    for (let c = 1; c < ncols; ++c) {
-      for (let i = c; i < n; i += ncols) {
-        xOffset[i]! += xExtent[c - 1]!
-      }
-    }
-  }
-
-  // enforce row alignment constraints
-  if (alignRow === 'each') {
-    for (let r = 1; r < nrows; ++r) {
-      let offset = 0
-      for (let i = r * ncols, m2 = i + ncols; i < m2; ++i) {
-        if (offset < yOffset[i]!) offset = yOffset[i]!
-      }
-      for (let i = r * ncols, m2 = i + ncols; i < m2; ++i) {
-        yOffset[i] = offset + yExtent[r - 1]!
-      }
-    }
-  } else if (alignRow === 'all') {
-    let offset = 0
-    for (let i = ncols; i < n; ++i) {
-      if (offset < yOffset[i]!) offset = yOffset[i]!
-    }
-    for (let i = ncols; i < n; ++i) {
-      yOffset[i] = offset + yMax
-    }
-  } else {
-    for (let r = 1; r < nrows; ++r) {
-      for (let i = r * ncols, m2 = i + ncols; i < m2; ++i) {
-        yOffset[i]! += yExtent[r - 1]!
-      }
-    }
-  }
-
-  // perform horizontal grid layout
-  let x = 0
-  for (let i = 0; i < n; ++i) {
-    x = xOffset[i]! + (i % ncols ? x : 0)
-    dx[i]! += x - (groups[i]!.x || 0)
-  }
-
-  // perform vertical grid layout
-  for (let c = 0; c < ncols; ++c) {
-    let y = 0
-    for (let i = c; i < n; i += ncols) {
-      y += yOffset[i]!
-      dy[i]! += y - (groups[i]!.y || 0)
-    }
-  }
-
-  // perform horizontal centering
-  if (alignCol && get(center ?? {}, 'column') && nrows > 1) {
-    for (let i = 0; i < n; ++i) {
-      const b = alignCol === 'all' ? xMax : xExtent[i % ncols]!
-      const cx = b - boxes[i]!.x2 - (groups[i]!.x || 0) - dx[i]!
-      if (cx > 0) dx[i]! += cx / 2
-    }
-  }
-
-  // perform vertical centering
-  if (alignRow && get(center ?? {}, 'row') && ncols !== 1) {
-    for (let i = 0; i < n; ++i) {
-      const b = alignRow === 'all' ? yMax : yExtent[~~(i / ncols)]!
-      const cy = b - boxes[i]!.y2 - (groups[i]!.y || 0) - dy[i]!
-      if (cy > 0) dy[i]! += cy / 2
-    }
-  }
-
-  // position grid relative to anchor
-  for (let i = 0; i < n; ++i) {
-    bounds.union(boxes[i]!.translate(dx[i]!, dy[i]!))
-  }
-  const anchor = opt.anchor as Opt | undefined
-  let ax = get(anchor ?? {}, 'x')
-  let ay = get(anchor ?? {}, 'y')
-  switch (get(anchor ?? {}, 'column')) {
-    case 'end': ax -= bounds.width(); break
-    case 'middle': ax -= bounds.width() / 2; break
-  }
-  switch (get(anchor ?? {}, 'row')) {
-    case 'end': ay -= bounds.height(); break
-    case 'middle': ay -= bounds.height() / 2; break
-  }
-  ax = Math.round(ax)
-  ay = Math.round(ay)
-
-  // update mark positions; the grid's bounds are then those of the groups
-  // THEMSELVES at their new positions (vega: `bounds.union(g.bounds.translate(dx, dy))`),
-  // whichever `bounds` option measured the cells
-  bounds.clear()
-  for (let i = 0; i < n; ++i) {
-    const g = groups[i]!
-    g.x += dx[i]! += ax
-    g.y += dy[i]! += ay
+/** Lay the cell groups of a facet out in a grid, moving each. Returns the box around them at their new places. */
+function layoutCells(groups: SceneGroup[], opt: Opt): Bounds {
+  for (const g of groups) g.y = g.y || 0
+  const boxes = groups.map((g) => cellBox(g, opt.bounds === 'flush'))
+  const { dx, dy } = placeGrid(boxes, groups.map((g) => ({ x: g.x || 0, y: g.y || 0 })), opt)
+  const bounds = new Bounds()
+  groups.forEach((g, i) => {
+    g.x = (g.x as number) + dx[i]!
+    g.y = (g.y as number) + dy[i]!
     bounds.union(layoutBounds(g))
-  }
+  })
   return bounds
 }
 
-/**
- * layoutHeaders — exact port. Positions header/footer groups along an edge.
- * Returns the layout edge (min/max of the positioned header bounds).
- */
-export function layoutHeaders(
-  headers: SceneGroup[],
-  groups: SceneGroup[],
-  ncols: number,
-  limit: number,
-  offset: number,
-  agg: (a: number, b: number) => number,
-  isX: number,
-  bound: (g: SceneGroup, field: string) => number | undefined,
-  bf: string,
-  start: number,
-  stride: number,
-  back: number,
-  band: number | null,
-): number {
-  const n = groups.length
-  let init = 0
-  let edge = 0
+// --- a facet: its cells, headers, footers and titles ----------------------------------------------------------------------
 
-  if (!n) return init
+type Role = 'row-header' | 'row-footer' | 'column-header' | 'column-footer'
 
-  // compute margin
-  for (let i = start; i < n; i += stride) {
-    if (groups[i]) init = agg(init, bound(groups[i]!, bf) ?? 0)
+/** The groups of a faceted view by what they are for; the view's guides and its own title are laid out apart from them. */
+function sortByRole(view: SceneGroup): { cells: SceneGroup[]; strips: Record<Role, SceneGroup[]>; titles: Partial<Record<'row-title' | 'column-title', SceneGroup>> } {
+  const cells: SceneGroup[] = []
+  const strips: Record<Role, SceneGroup[]> = { 'row-header': [], 'row-footer': [], 'column-header': [], 'column-footer': [] }
+  const titles: Partial<Record<'row-title' | 'column-title', SceneGroup>> = {}
+  for (const mark of (view.items ?? []) as SceneGroup[]) {
+    if (mark.marktype !== 'group') continue
+    const role = mark.role ?? ''
+    if (role === 'axis' || role === 'legend' || role === 'title') continue
+    if (role in strips) strips[role as Role].push(mark)
+    else if (role === 'row-title' || role === 'column-title') titles[role] = mark
+    else cells.push(mark)
   }
+  return { cells, strips, titles }
+}
 
-  // if no headers, return margin calculation
-  if (!headers.length) return init
+type Edge = 'x1' | 'y1' | 'x2' | 'y2'
 
-  // check if number of headers exceeds number of rows or columns
-  let hdrs = headers
-  if (hdrs.length > limit) hdrs = hdrs.slice(0, limit)
+/** Where one side of a cell lies: its frame (`flush`) or the extent of everything in it (`full`). */
+function sideOf(cell: SceneGroup, edge: Edge, flush: boolean): number {
+  if (!flush) return layoutBounds(cell)[edge]
+  const x = cell.x || 0
+  const y = cell.y || 0
+  return edge === 'x1' ? x : edge === 'y1' ? y : edge === 'x2' ? x + (cell.width || 0) : y + (cell.height || 0)
+}
 
-  // apply offset
-  init += offset
+/** One side of the grid that carries headers or footers. */
+interface Side {
+  /** The strips sit above or below the cells and line up with their columns, rather than beside them and line up with their rows. */
+  overColumns: boolean
+  /** A header sits before the cells (above, left) and rounds its margin down; a footer sits after them and rounds up. */
+  leading: boolean
+}
 
-  // layout each header
-  for (let i = start, j = 0, m = hdrs.length; j < m; ++j, i += stride) {
-    const h = hdrs[j]!
+/**
+ * Put a side's headers (or footers) beyond the cells. Each lines up with the cell of its column (or row), or with the nearest
+ * cell before it when the table has holes; `band` says where along that cell. Returns how far out the headers reach, which a
+ * title on that side clears; with no header it is still how far the cells themselves reach.
+ */
+function placeStrips(strips: SceneGroup[], cells: SceneGroup[], ncols: number, nrows: number, side: Side, gap: number, band: number | null, flush: boolean): number {
+  const n = cells.length
+  if (!n) return 0
+  const { overColumns, leading } = side
+  const edge: Edge = overColumns ? (leading ? 'y1' : 'y2') : (leading ? 'x1' : 'x2')
+  const outward = leading ? (a: number, b: number) => Math.floor(Math.min(a, b)) : (a: number, b: number) => Math.ceil(Math.max(a, b))
+  // the first cell on the side, and how the cells that line up with successive strips follow one another
+  const start = leading ? 0 : overColumns ? nrows * ncols - ncols : ncols - 1
+  const stride = overColumns ? 1 : ncols
+  const back = overColumns ? ncols : 1
 
-    // search for nearest group to align to (necessary if table has empty cells)
+  let margin = 0
+  for (let i = start; i < n; i += stride) if (cells[i]) margin = outward(margin, sideOf(cells[i]!, edge, flush))
+  if (!strips.length) return margin
+
+  // more strips than the grid has columns (rows) are left where they are
+  const limit = overColumns ? ncols : nrows
+  const placed = strips.length > limit ? strips.slice(0, limit) : strips
+  margin += gap
+  let reach = 0
+  for (let j = 0, i = start; j < placed.length; ++j, i += stride) {
+    const strip = placed[j]!
     let k = i
-    let g: SceneGroup | undefined
-    for (; k >= 0 && (g = groups[k]) == null; k -= back);
-
-    // assign coordinates and update bounds
-    let hx: number
-    let hy: number
-    if (isX) {
-      hx = band == null ? (g ? g.x || 0 : 0) : Math.round((g ? layoutBounds(g).x1 : 0) + band * (g ? layoutBounds(g).width() : 0))
-      hy = init
+    let cell: SceneGroup | undefined
+    for (; k >= 0 && (cell = cells[k]) == null; k -= back);
+    let x: number
+    let y: number
+    if (overColumns) {
+      x = band == null ? (cell ? cell.x || 0 : 0) : Math.round((cell ? layoutBounds(cell).x1 : 0) + band * (cell ? layoutBounds(cell).width() : 0))
+      y = margin
     } else {
-      hx = init
-      hy = band == null ? (g ? g.y || 0 : 0) : Math.round((g ? layoutBounds(g).y1 : 0) + band * (g ? layoutBounds(g).height() : 0))
+      x = margin
+      y = band == null ? (cell ? cell.y || 0 : 0) : Math.round((cell ? layoutBounds(cell).y1 : 0) + band * (cell ? layoutBounds(cell).height() : 0))
     }
-    const hb = layoutBounds(h)
-    hb.translate(hx - (h.x || 0), hy - (h.y || 0))
-    h.x = hx
-    h.y = hy
-
-    // update current edge of layout bounds
-    edge = agg(edge, (hb as unknown as Record<string, number>)[bf] ?? 0)
+    const box = layoutBounds(strip).translate(x - (strip.x || 0), y - (strip.y || 0))
+    strip.x = x
+    strip.y = y
+    reach = outward(reach, box[edge] ?? 0)
   }
-  return edge
+  return reach
 }
 
-/** layoutTitle — exact port. Positions a title group. */
-export function layoutTitle(
-  g: SceneGroup | null,
-  offset: number,
-  isX: number,
-  bounds: Bounds,
-  band: number,
-): void {
-  if (!g) return
-
-  // compute title coordinates
-  let x = offset
-  let y = offset
-  if (isX) x = Math.round(bounds.x1 + band * bounds.width())
-  else y = Math.round(bounds.y1 + band * bounds.height())
-
-  // assign coordinates
-  g.x = x
-  g.y = y
-}
-
-/**
- * trellisLayout — exact port. Lays out a facet container group (cells,
- * headers, footers, titles) given the vega layout options.
- */
-export function trellisLayout(group: SceneGroup, opt: Opt): void {
-  const views = gridLayoutGroups(group)
-  const groups = views.marks
-  const bound: (g: SceneGroup, field: string) => number | undefined =
-    opt.bounds === 'flush' ? boundFlush : boundFull
-  const off = (opt.offset as Opt) ?? {}
-  const ncols = (opt.columns as number) || groups.length
+/** Lay out a faceted group: its cells, then the headers and footers along them, then its row and column titles beside those. */
+export function layoutFacet(view: SceneGroup, opt: Opt): void {
+  const { cells, strips, titles } = sortByRole(view)
+  const flush = opt.bounds === 'flush'
+  const ncols = (opt.columns as number) || cells.length
   if (ncols > 0) boundedCount(ncols, 'facet columns')
-  const nrows = ncols <= 0 ? 1 : Math.ceil(groups.length / ncols)
-  const cells = nrows * ncols
-  let x = 0
-  let y = 0
-  let x2 = 0
-  let y2 = 0
-  let band: number | null
-  let offset: number
-  let anchor: unknown
+  const nrows = ncols <= 0 ? 1 : Math.ceil(cells.length / ncols)
 
-  // -- initial grid layout
-  const bounds = gridLayout(groups, opt)
-  if (bounds.empty()) bounds.set(0, 0, 0, 0) // empty grid
+  const grid = layoutCells(cells, opt)
+  if (grid.empty()) grid.set(0, 0, 0, 0)
 
-  // -- layout grid headers and footers --
-  // (vega: `if (views.rowheaders)` is always true - the lists are arrays - so the
-  // margin of the grid is computed even with no header at all)
-
-  band = get(opt.headerBand ?? null, 'row', null)
-  x = layoutHeaders(views.rowheaders, groups, ncols, nrows, -get(off, 'rowHeader'), min, 0, bound, 'x1', 0, ncols, 1, band)
-
-  band = get(opt.headerBand ?? null, 'column', null)
-  y = layoutHeaders(views.colheaders, groups, ncols, ncols, -get(off, 'columnHeader'), min, 1, bound, 'y1', 0, 1, ncols, band)
-
-  band = get(opt.footerBand ?? null, 'row', null)
-  x2 = layoutHeaders(views.rowfooters, groups, ncols, nrows, get(off, 'rowFooter'), max, 0, bound, 'x2', ncols - 1, ncols, 1, band)
-
-  band = get(opt.footerBand ?? null, 'column', null)
-  y2 = layoutHeaders(views.colfooters, groups, ncols, ncols, get(off, 'columnFooter'), max, 1, bound, 'y2', cells - ncols, 1, ncols, band)
-
-  // perform row title layout
-  if (views.rowtitle) {
-    anchor = get(opt.titleAnchor ?? null, 'row')
-    offset = get(off, 'rowTitle')
-    offset = (anchor === End || anchor === 'end') ? x2 + offset : x - offset
-    band = get(opt.titleBand ?? null, 'row', 0.5)
-    layoutTitle(views.rowtitle, offset, 0, bounds, band ?? 0.5)
+  const reachOf = (role: Role): number => {
+    const overColumns = role.startsWith('column')
+    const leading = role.endsWith('header')
+    const distance = option(opt.offset, (overColumns ? 'column' : 'row') + (leading ? 'Header' : 'Footer')) as number
+    const bands = leading ? opt.headerBand : opt.footerBand
+    return placeStrips(strips[role], cells, ncols, nrows, { overColumns, leading }, leading ? -distance : distance, option(bands, overColumns ? 'column' : 'row', null), flush)
   }
+  const left = reachOf('row-header')
+  const above = reachOf('column-header')
+  const right = reachOf('row-footer')
+  const below = reachOf('column-footer')
 
-  // perform column title layout
-  if (views.coltitle) {
-    anchor = get(opt.titleAnchor ?? null, 'column')
-    offset = get(off, 'columnTitle')
-    offset = (anchor === End || anchor === 'end') ? y2 + offset : y - offset
-    band = get(opt.titleBand ?? null, 'column', 0.5)
-    layoutTitle(views.coltitle, offset, 1, bounds, band ?? 0.5)
+  const titleOf = (role: 'row-title' | 'column-title', before: number, after: number): void => {
+    const title = titles[role]
+    if (!title) return
+    const overColumns = role === 'column-title'
+    const axis = overColumns ? 'column' : 'row'
+    const distance = option(opt.offset, axis + 'Title') as number
+    const across = option(opt.titleAnchor, axis) === 'end' ? after + distance : before - distance
+    const band = option(opt.titleBand, axis, 0.5) as number
+    if (overColumns) {
+      title.x = Math.round(grid.x1 + band * grid.width())
+      title.y = across
+    } else {
+      title.x = across
+      title.y = Math.round(grid.y1 + band * grid.height())
+    }
   }
+  titleOf('row-title', left, right)
+  titleOf('column-title', above, below)
 }

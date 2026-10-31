@@ -1,44 +1,48 @@
 /**
- * A legend, as vega-parser builds it (parsers/legend.js, parsers/guides/legend-*.js), vega-encode's LegendEntries
- * produces its entries, and vega-view-transforms lays it out (layout/legend.js): a group holding the entries (a
- * gradient and its labels, the bands of a discretizing scale and their labels, or one group of symbol and label per
- * entry) and the title, all encoded from the spec and the config (see guide-encode.ts for how a property reaches an
- * item), then `legendLayout`: the entries and the title are placed from the bounds of what was drawn.
+ * A legend: a group holding the entries (a gradient strip with its labels, the bands of a discretizing scale with theirs, or one
+ * symbol and label per entry) and a title, encoded from the spec and the config and then laid out: the entries and the title are
+ * placed against each other from the bounds of what was drawn, and the legend is sized to hold them. See guide-encode.ts for how a
+ * property becomes a channel of an item.
  */
-import type { EncodeValue, SceneItem } from './types.js'
-import { Bounds, boundLeaf, boundStroke, multiLineOffset } from './bounds.js'
-import { gridLayout } from './trellis.js'
+import type { EncodeValue, SceneGroup, SceneItem } from './types.js'
+import { Bounds, boundLeaf, boundLegendGroup, boundStroke, multiLineOffset } from './bounds.js'
+import { placeGrid } from './trellis.js'
 import { rectItemPath, symbolPath } from './render.js'
 import type { Locale } from './locale.js'
 import {
   DiscreteLegend, GradientLegend, SymbolLegend, isContinuous, isDiscretizing, labelFormat, labelFraction, labelValues, scaleFraction, tickCount,
   type LabelValues,
 } from './scale.js'
-import { overlapItems, type OverlapSpec } from './guide-axis.js'
+import { thinOverlaps } from './guide-axis.js'
 import {
-  addEncoders, encoder, encodeItem, extendEncode, getEncoding, guideMark, isSignal, itemAriaOf, joinByValue, lookup, one, shareMarks, sharedMarks, contentKey, isShareable, keyPart, value, zero,
-  type Block, type Entry, type EntryHost, type EntryScope, type GuideMarkDef, type GuideStyles, type Lookup, type MarkEncode, type Row, type UserEncode,
+  ONE, ZERO, contentKey, customize, encodeItem, entryOf, isShareable, isSignal, itemAriaOf, joinByValue, keyPart, mergeUserEncode,
+  propsOf, setChannels, shareMarks, sharedMarks, staticChannel,
+  type Block, type Entry, type EntryHost, type EntryScope, type GuideMarkDef, type GuideProps, type GuideStyles, type MarkEncode, type Row, type UserEncode,
 } from './guide-encode.js'
 
 type Rec = Record<string, unknown>
 type Scale = ((v: unknown) => unknown) & Rec
 
-/** vega-parser LegendScales: the channels a legend can map, in priority order (the first is the canonical scale). */
+/** The channels a legend can describe, in priority order: the first one the spec names gives the legend its scale. */
 export const LEGEND_SCALES = ['size', 'shape', 'fill', 'stroke', 'strokeWidth', 'strokeDash', 'opacity'] as const
 
-/** parsers/legend.js `legendType` */
+/**
+ * What kind of legend a spec makes: as it says, or from its scale. A legend for one color channel with no `type` is a gradient on a
+ * continuous scale, bands on a discretizing one and symbols otherwise; a gradient on a discretizing scale is bands.
+ */
 export function legendType(spec: Rec, scaleType: string): string {
+  const channels = LEGEND_SCALES.filter((c) => spec[c]).length
   let type = (spec.type as string) || SymbolLegend
-  const count = LEGEND_SCALES.reduce((n, c) => n + (spec[c] ? 1 : 0), 0)
-  if (!spec.type && count === 1 && (spec.fill || spec.stroke)) {
+  if (!spec.type && channels === 1 && (spec.fill || spec.stroke)) {
     type = isContinuous(scaleType) ? GradientLegend : isDiscretizing(scaleType) ? DiscreteLegend : SymbolLegend
   }
-  return type !== GradientLegend ? type : isDiscretizing(scaleType) ? DiscreteLegend : GradientLegend
+  return type === GradientLegend && isDiscretizing(scaleType) ? DiscreteLegend : type
 }
 
-// --- LegendEntries (vega-encode) --------------------------------------------------------------------------------------
+// --- the entries a legend lists -----------------------------------------------------------------------------------------------
 
-export interface LegendEntry {
+/** One entry: a value of the scale, its label, and where it falls (a gradient and bands: along the strip; symbols: how big it is). */
+interface LegendEntry {
   index: number
   label: string | null
   value: unknown
@@ -48,213 +52,251 @@ export interface LegendEntry {
   size?: number
 }
 
-export interface EntriesParams {
+interface EntriesParams {
   type: string
   scale: Scale
   count: unknown
   limit: number
   values?: unknown[]
   minstep?: number
+  /** how much room an entry's symbol takes (symbol legends only) */
   size?: (value: unknown) => number
-  /** the fixed size of every entry when there is no size function (`offset = size || 8`) */
-  sizeConst?: number
   formatSpecifier?: unknown
   formatType?: string
   locale: Locale
   warn: (msg: string) => void
 }
 
-/** vega-encode `LegendEntries.transform`: the values a legend lists, with their labels and where they sit. */
-export function legendEntries(p: EntriesParams): LegendEntry[] {
+/** The values a legend lists with their labels, and where each sits. */
+function listEntries(p: EntriesParams): LegendEntry[] {
   const { type, scale } = p
-  const limit = +p.limit
   const count = tickCount(scale as never, p.count == null ? 5 : p.count, p.minstep)
-  const lskip = !!p.values || type === SymbolLegend
-  const format = labelFormat(p.locale, scale as never, count, type, p.formatSpecifier, p.formatType, lskip)
-  let values: LabelValues = (p.values as LabelValues | undefined) || labelValues(scale as never, count)
-  let items: LegendEntry[]
+  const format = labelFormat(p.locale, scale as never, count, type, p.formatSpecifier, p.formatType, !!p.values || type === SymbolLegend)
+  const values: LabelValues = (p.values as LabelValues | undefined) || labelValues(scale as never, count)
 
   if (type === SymbolLegend) {
-    let list: unknown[]
-    let ellipsis = false
-    if (limit && values.length > limit) {
-      p.warn('Symbol legend count exceeds limit, filtering items.')
-      // (a slice is a plain list: it has lost the `max` of the intervals' last upper end)
-      list = values.slice(0, limit - 1)
-      ellipsis = true
-    } else {
-      list = values
+    const roomOf = p.size!
+    // too many symbols are cut to the limit, the last row saying how many were left out
+    const limit = +p.limit
+    const cut = !!limit && values.length > limit
+    if (cut) p.warn('Symbol legend count exceeds limit, filtering items.')
+    // (a slice is a plain list: it has lost the `max` of the intervals' last upper end)
+    let shown: unknown[] = cut ? values.slice(0, limit - 1) : values
+    // a first value that maps to nothing (size 0) is not listed unless the values were given
+    if (!p.values && (scale as (v: unknown) => unknown)(shown[0]) === 0) shown = shown.slice(1)
+    const offset = shown.reduce((widest: number, v) => Math.max(widest, roomOf(v)), 0)
+    const list = shown as LabelValues
+    const entries: LegendEntry[] = shown.map((v, index) => ({ index, label: format(v, index, list), value: v, offset, size: roomOf(v) }))
+    if (cut) {
+      const next = values[entries.length]
+      entries.push({ index: entries.length, label: `…${values.length - entries.length} entries`, value: next, offset, size: roomOf(next) })
     }
-    let size: (v: unknown) => number
-    let offset: number
-    if (p.size) {
-      // if first value maps to size zero, remove from list (vega#717)
-      if (!p.values && (scale as (v: unknown) => unknown)(list[0]) === 0) list = list.slice(1)
-      // compute size offset for legend entries
-      offset = list.reduce((max: number, v) => Math.max(max, p.size!(v)), 0)
-      size = p.size
-    } else {
-      offset = p.sizeConst || 8
-      size = () => offset
-    }
-    const arr = list as LabelValues
-    items = list.map((v, index) => ({ index, label: format(v, index, arr), value: v, offset, size: size(v) }))
-    if (ellipsis) {
-      const ev = values[items.length]
-      items.push({ index: items.length, label: `…${values.length - items.length} entries`, value: ev, offset, size: size(ev) })
-    }
-  } else if (type === GradientLegend) {
-    const domain = scale.domain as unknown as () => number[]
-    const dom = domain()
-    const fraction = scaleFraction(scale as never, dom[0]!, dom[dom.length - 1]!)
-    // if automatic label generation produces 2 or fewer values, use the domain end points instead (vega#1364)
-    if (values.length < 3 && !p.values && dom[0] !== dom[dom.length - 1]) values = [dom[0]!, dom[dom.length - 1]!]
-    const arr = values
-    items = values.map((v, index) => ({ index, label: format(v, index, arr), value: v, perc: fraction(v as number) as number }))
-  } else {
-    const size = values.length - 1
-    const fraction = labelFraction(scale as never)
-    const arr = values
-    items = values.map((v, index) => ({
-      index, label: format(v, index, arr), value: v,
-      perc: index ? fraction(v) : 0,
-      perc2: index === size ? 1 : fraction(values[index + 1]),
-    }))
+    return entries
   }
-  return items
+  if (type === GradientLegend) {
+    const domain = (scale.domain as unknown as () => number[])()
+    const first = domain[0]!
+    const last = domain[domain.length - 1]!
+    const fraction = scaleFraction(scale as never, first, last)
+    // generated labels that come to two or fewer are replaced by the two ends of the domain
+    const labelled = values.length < 3 && !p.values && first !== last ? [first, last] : values
+    return labelled.map((v, index) => ({ index, label: format(v, index, labelled as LabelValues), value: v, perc: fraction(v as number) as number }))
+  }
+  // bands: each value starts one and the next value ends it (the last ends at 1)
+  const fraction = labelFraction(scale as never)
+  return values.map((v, index) => ({
+    index, label: format(v, index, values), value: v,
+    perc: index ? fraction(v) : 0,
+    perc2: index === values.length - 1 ? 1 : fraction(values[index + 1]),
+  }))
 }
 
-// --- the marks ---------------------------------------------------------------------------------------------------------
+// --- the marks -----------------------------------------------------------------------------------------------------------------
 
-/** A number or an entry that holds one, as the number it is for this datum. */
-function num(s: EntryScope, v: unknown): number {
+/** A number, or an encode entry that holds one, as the number it is for this datum. */
+function numeric(s: EntryScope, v: unknown): number {
   return (v !== null && typeof v === 'object' ? s.host.entry(v as EncodeValue, s.datum) : v) as number
 }
 
-interface LegendParts {
+/** What each mark of a legend is made from. */
+interface Kit {
   spec: Rec
   config: Rec
-  _: Lookup
+  props: GuideProps
+  /** the scale the legend is for (the first channel's) */
   scale: string
-  encode: Record<string, UserEncode | undefined>
-  defs?: { packs: Map<string, unknown> }
+  vertical: boolean
+  user: Record<string, UserEncode | undefined>
 }
 
+const gradientStroke = (k: Kit): Rec => ({ stroke: k.props.get('gradientStrokeColor'), strokeWidth: k.props.get('gradientStrokeWidth') })
 
-/** guides/legend-gradient.js */
-function gradientMark(p: LegendParts, vertical: boolean, gradientFill: Entry): GuideMarkDef {
-  const { _ } = p
-  const thickness = _.gradientThickness()
-  const length = _.gradientLength()
-  const width = vertical ? thickness : length
-  const height = vertical ? length : thickness
-  const enter: Block = { opacity: zero, x: zero, y: zero, width: encoder(width) as EncodeValue, height: encoder(height) as EncodeValue }
-  const encode: MarkEncode = { enter, update: Object.assign({}, enter, { opacity: one, fill: gradientFill }), exit: { opacity: zero } }
-  addEncoders(encode, { stroke: _('gradientStrokeColor'), strokeWidth: _('gradientStrokeWidth') }, { opacity: _('gradientOpacity') })
-  return guideMark({ type: 'rect', role: 'legend-gradient', encode, interactive: false }, p.encode.gradient)
-}
-
-/** guides/legend-gradient-discrete.js */
-function bandMark(p: LegendParts, vertical: boolean): GuideMarkDef {
-  const { _ } = p
-  const thickness = _.gradientThickness()
-  const length = _.gradientLength()
-  const [u, uu, v, vv] = vertical ? ['y', 'y2', 'x', 'width'] : ['x', 'x2', 'y', 'height']
-  const along = (field: 'perc' | 'perc2'): Entry => (s) => {
-    const perc = s.datum[field] as number
-    // (the entry's `mult` is applied when the encode gives one)
-    return length != null ? (vertical ? 1 - perc : perc) * num(s, length) : vertical ? 1 - perc : perc
+function gradient(k: Kit, fill: Entry): GuideMarkDef {
+  const thickness = k.props.gradientThickness()
+  const length = k.props.gradientLength()
+  const enter: Block = {
+    opacity: ZERO, x: ZERO, y: ZERO,
+    width: entryOf(k.vertical ? thickness : length) as EncodeValue,
+    height: entryOf(k.vertical ? length : thickness) as EncodeValue,
   }
-  const enter: Block = { opacity: zero, fill: { scale: p.scale, field: 'value' } as unknown as EncodeValue }
-  enter[u!] = along('perc')
-  enter[v!] = zero
-  enter[uu!] = along('perc2')
-  enter[vv!] = encoder(thickness) as EncodeValue
-  const encode: MarkEncode = { enter, update: Object.assign({}, enter, { opacity: one }), exit: { opacity: zero } }
-  addEncoders(encode, { stroke: _('gradientStrokeColor'), strokeWidth: _('gradientStrokeWidth') }, { opacity: _('gradientOpacity') })
-  return guideMark({ type: 'rect', role: 'legend-band', encode, interactive: false }, p.encode.gradient)
+  const encode: MarkEncode = { enter, update: { ...enter, opacity: ONE, fill }, exit: { opacity: ZERO } }
+  setChannels(encode, gradientStroke(k), { opacity: k.props.get('gradientOpacity') })
+  return customize({ type: 'rect', role: 'legend-gradient', encode, interactive: false }, k.user.gradient)
 }
 
-/** guides/legend-gradient-labels.js */
-function gradientLabelsMark(p: LegendParts, vertical: boolean): GuideMarkDef {
-  const { spec, config, _ } = p
-  const thickness = encoder(_.gradientThickness())
-  const length = _.gradientLength()
-  const overlap = _('labelOverlap')
-  const enter: Block = { opacity: zero }
-  const update: Block = { opacity: one, text: { field: 'label' } as EncodeValue }
-  const encode: MarkEncode = { enter, update, exit: { opacity: zero } }
-  addEncoders(encode, {
-    fill: _('labelColor'), fillOpacity: _('labelOpacity'), font: _('labelFont'), fontSize: _('labelFontSize'), fontStyle: _('labelFontStyle'),
-    fontWeight: _('labelFontWeight'), limit: value(spec.labelLimit, config.gradientLabelLimit),
+/** The bands of a discretizing scale: one rect per band, each from its start to its end along the strip. */
+function bands(k: Kit): GuideMarkDef {
+  const thickness = k.props.gradientThickness()
+  const length = k.props.gradientLength()
+  const [start, end, across, size] = k.vertical ? (['y', 'y2', 'x', 'width'] as const) : (['x', 'x2', 'y', 'height'] as const)
+  const along = (field: 'perc' | 'perc2'): Entry => (s) => {
+    const fraction = k.vertical ? 1 - (s.datum[field] as number) : (s.datum[field] as number)
+    return length != null ? fraction * numeric(s, length) : fraction
+  }
+  const enter: Block = { opacity: ZERO, fill: { scale: k.scale, field: 'value' } as unknown as EncodeValue }
+  enter[start] = along('perc')
+  enter[across] = ZERO
+  enter[end] = along('perc2')
+  enter[size] = entryOf(thickness) as EncodeValue
+  const encode: MarkEncode = { enter, update: { ...enter, opacity: ONE }, exit: { opacity: ZERO } }
+  setChannels(encode, gradientStroke(k), { opacity: k.props.get('gradientOpacity') })
+  return customize({ type: 'rect', role: 'legend-band', encode, interactive: false }, k.user.gradient)
+}
+
+/** The labels beside a gradient or its bands: at each value's place along the strip, at the strip's edge. */
+function stripLabels(k: Kit): GuideMarkDef {
+  const { spec, config, props, vertical } = k
+  const thickness = entryOf(props.gradientThickness())
+  const length = props.gradientLength()
+  const enter: Block = { opacity: ZERO }
+  const update: Block = { opacity: ONE, text: { field: 'label' } as EncodeValue }
+  const encode: MarkEncode = { enter, update, exit: { opacity: ZERO } }
+  setChannels(encode, {
+    fill: props.get('labelColor'), fillOpacity: props.get('labelOpacity'), font: props.get('labelFont'), fontSize: props.get('labelFontSize'),
+    fontStyle: props.get('labelFontStyle'), fontWeight: props.get('labelFontWeight'), limit: spec.labelLimit ?? config.gradientLabelLimit,
   })
-  const baselineFn: Entry = (s) => ((s.datum.perc as number) <= 0 ? 'bottom' : (s.datum.perc as number) >= 1 ? 'top' : 'middle')
-  const alignFn: Entry = (s) => ((s.datum.perc as number) <= 0 ? 'left' : (s.datum.perc as number) >= 1 ? 'right' : 'center')
-  let u: string
-  let v: string
+  // a label at the end of the strip hangs off the end rather than centring on it
+  const atEnd = (s: EntryScope, low: string, high: string, middle: string): string => ((s.datum.perc as number) <= 0 ? low : (s.datum.perc as number) >= 1 ? high : middle)
   if (vertical) {
     enter.align = { value: 'left' } as EncodeValue
-    enter.baseline = update.baseline = baselineFn
-    u = 'y'; v = 'x'
+    enter.baseline = update.baseline = (s) => atEnd(s, 'bottom', 'top', 'middle')
   } else {
-    enter.align = update.align = alignFn
+    enter.align = update.align = (s) => atEnd(s, 'left', 'right', 'center')
     enter.baseline = { value: 'top' } as EncodeValue
-    u = 'x'; v = 'y'
   }
-  const along: Entry = (s) => {
-    const perc = vertical ? 1 - (s.datum.perc as number) : (s.datum.perc as number)
-    return length != null ? perc * num(s, length) : perc
+  const [along, across] = vertical ? (['y', 'x'] as const) : (['x', 'y'] as const)
+  const place: Entry = (s) => {
+    const fraction = vertical ? 1 - (s.datum.perc as number) : (s.datum.perc as number)
+    return length != null ? fraction * numeric(s, length) : fraction
   }
-  enter[u] = update[u] = along
-  enter[v] = update[v] = thickness as EncodeValue
-  thickness.offset = value(spec.labelOffset, config.gradientLabelOffset) || 0
-  const mark = guideMark({ type: 'text', role: 'legend-label', style: 'guide-label', encode, interactive: false }, p.encode.labels)
-  if (overlap) mark.overlap = { separation: _('labelSeparation'), method: overlap, order: 'datum.index', bound: null }
+  enter[along] = update[along] = place
+  enter[across] = update[across] = thickness as EncodeValue
+  thickness.offset = (spec.labelOffset ?? config.gradientLabelOffset) || 0
+  const mark = customize({ type: 'text', role: 'legend-label', style: 'guide-label', encode, interactive: false }, k.user.labels)
+  const overlap = props.get('labelOverlap')
+  if (overlap) mark.overlap = { separation: props.get('labelSeparation'), method: overlap, order: 'datum.index', bound: null }
   return mark
 }
 
-/** guides/legend-title.js */
-function titleMark(p: LegendParts): GuideMarkDef {
-  const { spec, _ } = p
+function legendTitle(k: Kit): GuideMarkDef {
+  const { spec, props } = k
   const encode: MarkEncode = {
-    enter: { opacity: zero },
-    update: { opacity: one, x: ((s) => s.group.padding) as Entry, y: ((s) => s.group.padding) as Entry },
-    exit: { opacity: zero },
+    enter: { opacity: ZERO },
+    update: { opacity: ONE, x: ((s) => s.group.padding) as Entry, y: ((s) => s.group.padding) as Entry },
+    exit: { opacity: ZERO },
   }
-  const isLR = (s: EntryScope): boolean => s.item.orient === 'left' || s.item.orient === 'right'
-  const anchorOf = (s: EntryScope, st: string, en: string, mi: string): string => (s.item.anchor === 'start' ? st : s.item.anchor === 'end' ? en : mi)
-  addEncoders(encode, {
-    orient: _('titleOrient'),
-    _anchor: _('titleAnchor'),
-    anchor: ((s) => (s.item._anchor as string) || (isLR(s) ? 'middle' : 'start')) as Entry,
-    angle: ((s) => (s.datum.vgrad && isLR(s) ? (s.item.orient === 'left' ? -90 : 90) : 0)) as Entry,
+  const onSide = (s: EntryScope): boolean => s.item.orient === 'left' || s.item.orient === 'right'
+  const byAnchor = (s: EntryScope, start: string, end: string, middle: string): string => (s.item.anchor === 'start' ? start : s.item.anchor === 'end' ? end : middle)
+  // a title beside a vertical gradient is turned to read along it
+  const alongGradient = (s: EntryScope): boolean => !!s.datum.vgrad && onSide(s)
+  setChannels(encode, {
+    orient: props.get('titleOrient'),
+    _anchor: props.get('titleAnchor'),
+    anchor: ((s) => (s.item._anchor as string) || (onSide(s) ? 'middle' : 'start')) as Entry,
+    angle: ((s) => (alongGradient(s) ? (s.item.orient === 'left' ? -90 : 90) : 0)) as Entry,
     align: ((s) => {
-      const vg = !!s.datum.vgrad
-      const right = s.item.orient === 'right'
-      const left = s.item.orient === 'left'
-      return vg && right ? anchorOf(s, 'right', 'left', 'center')
-        : isLR(s) && !(vg && left) ? 'left'
-        : anchorOf(s, 'left', 'right', 'center')
+      const vgrad = !!s.datum.vgrad
+      if (vgrad && s.item.orient === 'right') return byAnchor(s, 'right', 'left', 'center')
+      return onSide(s) && !(vgrad && s.item.orient === 'left') ? 'left' : byAnchor(s, 'left', 'right', 'center')
     }) as Entry,
-    baseline: ((s) => (isLR(s) ? (s.datum.vgrad ? (s.item.orient === 'right' ? 'bottom' : 'top') : anchorOf(s, 'top', 'bottom', 'middle')) : 'top')) as Entry,
+    baseline: ((s) => (onSide(s) ? (s.datum.vgrad ? (s.item.orient === 'right' ? 'bottom' : 'top') : byAnchor(s, 'top', 'bottom', 'middle')) : 'top')) as Entry,
     text: spec.title,
-    fill: _('titleColor'), fillOpacity: _('titleOpacity'), font: _('titleFont'), fontSize: _('titleFontSize'), fontStyle: _('titleFontStyle'),
-    fontWeight: _('titleFontWeight'), limit: _('titleLimit'), lineHeight: _('titleLineHeight'),
-  }, { align: _('titleAlign'), baseline: _('titleBaseline') })
-  return guideMark({ type: 'text', role: 'legend-title', style: 'guide-title', encode, interactive: false }, p.encode.title)
+    fill: props.get('titleColor'), fillOpacity: props.get('titleOpacity'), font: props.get('titleFont'), fontSize: props.get('titleFontSize'),
+    fontStyle: props.get('titleFontStyle'), fontWeight: props.get('titleFontWeight'), limit: props.get('titleLimit'), lineHeight: props.get('titleLineHeight'),
+  }, { align: props.get('titleAlign'), baseline: props.get('titleBaseline') })
+  return customize({ type: 'text', role: 'legend-title', style: 'guide-title', encode, interactive: false }, k.user.title)
 }
 
-/** parsers/legend.js `buildLegendEncode`: the legend group's own encode, which the layout reads */
-function groupEncode(p: LegendParts): MarkEncode {
-  const { spec, config, _ } = p
+/** The legend group's own channels, which the layout reads. */
+function groupEncode(k: Kit): MarkEncode {
+  const { spec, config, props } = k
   const encode: MarkEncode = { enter: {}, update: {} }
-  addEncoders(encode, {
-    orient: _('orient'), offset: _('offset'), padding: _('padding'), titlePadding: _('titlePadding'), cornerRadius: _('cornerRadius'),
-    fill: _('fillColor'), stroke: _('strokeColor'), strokeWidth: config.strokeWidth, strokeDash: config.strokeDash,
-    x: _('legendX'), y: _('legendY'), format: spec.format, formatType: spec.formatType,
+  setChannels(encode, {
+    orient: props.get('orient'), offset: props.get('offset'), padding: props.get('padding'), titlePadding: props.get('titlePadding'),
+    cornerRadius: props.get('cornerRadius'), fill: props.get('fillColor'), stroke: props.get('strokeColor'), strokeWidth: config.strokeWidth,
+    strokeDash: config.strokeDash, x: props.get('legendX'), y: props.get('legendY'), format: spec.format, formatType: spec.formatType,
   })
-  return extendEncode(encode, p.encode.legend, true)
+  return mergeUserEncode(encode, k.user.legend)
 }
+
+/** The marks of one symbol legend: the symbol, its label, and the group that holds an entry. They depend on whether the legend has columns. */
+interface SymbolMarks {
+  symbols: GuideMarkDef
+  labels: GuideMarkDef
+  entry: GuideMarkDef
+}
+
+function symbolMarks(inp: LegendBuildInput, k: Kit, columns: number): SymbolMarks {
+  const { spec, config, props } = k
+  const height = props.get('clipHeight')
+  const symbolOffset = props.get('symbolOffset')
+  // an entry's symbol sits half its room in from the entry's edge: the room is the entry's offset in a legend with columns, its size otherwise
+  const room = (s: EntryScope): number => (columns ? (s.datum.offset as number) : (s.datum.size as number))
+  const middle: Entry = height ? ({ ...entryOf(height), mult: 0.5 } as unknown as EncodeValue) : (s) => (s.datum.size as number) * 0.5
+
+  const symbolEnter: Block = {
+    opacity: ZERO,
+    // the symbol offset is added only when there is one
+    x: ((s) => (symbolOffset != null ? room(s) * 0.5 + numeric(s, symbolOffset) : room(s) * 0.5)) as Entry,
+    y: middle,
+  }
+  const symbolEncode: MarkEncode = { enter: symbolEnter, update: { opacity: ONE, x: symbolEnter.x, y: symbolEnter.y }, exit: { opacity: ZERO } }
+  const baseFill = spec.fill ? null : config.symbolBaseFillColor
+  const baseStroke = spec.fill ? null : config.symbolBaseStrokeColor
+  setChannels(symbolEncode, {
+    fill: props.get('symbolFillColor', baseFill), shape: props.get('symbolType'), size: props.get('symbolSize'), stroke: props.get('symbolStrokeColor', baseStroke),
+    strokeDash: props.get('symbolDash'), strokeDashOffset: props.get('symbolDashOffset'), strokeWidth: props.get('symbolStrokeWidth'),
+  }, { opacity: props.get('symbolOpacity') })
+  // each channel the legend describes is drawn from its own scale
+  for (const [channel, name] of inp.channels) symbolEncode.update[channel] = symbolEncode.enter[channel] = { scale: name, field: 'value' } as unknown as EncodeValue
+  const symbols = customize({ type: 'symbol', role: 'legend-symbol', encode: symbolEncode, interactive: false }, k.user.symbols)
+
+  // the label starts past the symbol's room, by the symbol offset and the label offset
+  const labelOffset = entryOf(symbolOffset)
+  labelOffset.offset = props.get('labelOffset')
+  const labelEnter: Block = { opacity: ZERO, x: ((s) => room(s) + numeric(s, labelOffset)) as Entry, y: middle }
+  const labelEncode: MarkEncode = { enter: labelEnter, update: { opacity: ONE, text: { field: 'label' } as EncodeValue, x: labelEnter.x, y: labelEnter.y }, exit: { opacity: ZERO } }
+  setChannels(labelEncode, {
+    align: props.get('labelAlign'), baseline: props.get('labelBaseline'), fill: props.get('labelColor'), fillOpacity: props.get('labelOpacity'),
+    font: props.get('labelFont'), fontSize: props.get('labelFontSize'), fontStyle: props.get('labelFontStyle'), fontWeight: props.get('labelFontWeight'),
+    limit: props.get('labelLimit'),
+  })
+  const labels = customize({ type: 'text', role: 'legend-label', style: 'guide-label', encode: labelEncode, interactive: false }, k.user.labels)
+
+  // the group that holds an entry: as tall as the clip, if there is one, and ignored by the bounds otherwise
+  const entries = k.user.entries
+  const entryEnter: Block = {
+    noBound: { value: !height } as EncodeValue,
+    width: ZERO,
+    height: (height ? entryOf(height) : ZERO) as EncodeValue,
+    opacity: ZERO,
+  }
+  const entryEncode: MarkEncode = mergeUserEncode({ enter: entryEnter, update: { opacity: ONE }, exit: { opacity: ZERO } }, entries)
+  const entry: GuideMarkDef = { type: 'rule', role: 'scope', encode: entryEncode, interactive: !!entries?.interactive, name: nameOf(entries?.name) }
+  return { symbols, labels, entry }
+}
+
+// --- the legend's definition -----------------------------------------------------------------------------------------------------
 
 export interface LegendBuildInput {
   /** where the marks of the legend are kept between evaluations, and whether to keep them (see runtime.ts chartGuides) */
@@ -292,7 +334,6 @@ export interface GuideHost extends EntryHost {
   gradient(scaleName: string, vertical: boolean): string
   /** the box of a group item, as a group mark draws it: its background (and foreground) leaves, `_bg`-flagged */
   groupBox(geo: SceneItem, w: number, h: number): { background: SceneItem; foreground?: SceneItem }
-  /** the legend-entry grid: columns the layout cannot take make it throw upstream */
   warn(msg: string): void
 }
 
@@ -309,11 +350,9 @@ export interface LegendBuilt {
   datum: Row
 }
 
-const strOrUndef = (n: unknown): string | undefined => (n == null || n === '' ? undefined : String(n))
-
 /**
- * The marks of a legend that its spec and the config decide (not the data, nor a signal's value: entries read those when
- * they are evaluated), made once per compiled legend.
+ * The marks of a legend that its spec and the config decide, made once per compiled legend (what the data or a signal holds is read
+ * when the entries are evaluated). They are made when first needed.
  */
 interface LegendDefs {
   config: Rec
@@ -322,210 +361,164 @@ interface LegendDefs {
   type: string
   vertical: boolean
   made: Map<string, GuideMarkDef>
-  packs: Map<string, unknown>
+  symbolMarks: Map<boolean, SymbolMarks>
 }
-const made = (defs: LegendDefs, key: string, make: () => GuideMarkDef): GuideMarkDef => {
+
+function legendDefs(inp: LegendBuildInput, scale: string, type: string, vertical: boolean): LegendDefs {
+  const { spec, config } = inp
+  const kept = inp.store?.get(spec) as LegendDefs | undefined
+  if (kept !== undefined && kept.config === config && kept.encode === inp.encode && kept.scale === scale && kept.type === type && kept.vertical === vertical) return kept
+  let shareKey: string | undefined
+  if (isShareable(config)) {
+    const specKey = contentKey(spec)
+    const encodeKey = specKey === undefined ? undefined : contentKey(inp.encode)
+    const channelKey = encodeKey === undefined ? undefined : contentKey(inp.channels)
+    if (channelKey !== undefined) shareKey = 'l' + keyPart(scale) + keyPart(type) + (vertical ? 'V' : 'H') + specKey + '|' + encodeKey + '|' + channelKey
+  }
+  const shared = sharedMarks(shareKey) as LegendDefs | undefined
+  let defs: LegendDefs
+  if (shared !== undefined && shared.config === config) defs = shared
+  else {
+    defs = { config, encode: inp.encode, scale, type, vertical, made: new Map(), symbolMarks: new Map() }
+    shareMarks(shareKey, defs)
+  }
+  if (inp.keep) inp.store?.set(spec, defs)
+  return defs
+}
+
+const markOf = (defs: LegendDefs, key: string, make: () => GuideMarkDef): GuideMarkDef => {
   let def = defs.made.get(key)
   if (def === undefined) defs.made.set(key, (def = make()))
   return def
 }
 
-function legendKey(spec: Rec, inp: LegendBuildInput, scale: string, type: string, vertical: boolean): string | undefined {
-  const a = contentKey(spec)
-  const e = a === undefined ? undefined : contentKey(inp.encode)
-  const c = e === undefined ? undefined : contentKey(inp.channels)
-  return c === undefined ? undefined : 'l' + keyPart(scale) + keyPart(type) + (vertical ? 'V' : 'H') + a + '|' + e + '|' + c
+const nameOf = (n: unknown): string | undefined => (n == null || n === '' ? undefined : String(n))
+
+/** An item that is moved together with the bounds of what it holds. */
+interface Placed {
+  x: number
+  y: number
+  box: Bounds
+}
+function shift(p: Placed, dx: number, dy: number): void {
+  p.x += dx
+  p.y += dy
+  p.box.translate(dx, dy)
 }
 
-/** Build a legend from vega-parser's guides, evaluate it, lay it out. */
+// --- building a legend --------------------------------------------------------------------------------------------------------
+
 export function buildLegend(inp: LegendBuildInput): LegendBuilt {
   const { spec, config, host, style } = inp
-  const _ = lookup(spec, config)
-  const p: LegendParts = { spec, config, _, scale: '', encode: inp.encode }
+  const props = propsOf(spec, config)
   const type = legendType(spec, inp.scaleType)
-  const vertical = _.isVertical()
+  const vertical = props.vertical()
+  const scale = inp.channels[0]?.[1] ?? ''
+  const defs = legendDefs(inp, scale, type, vertical)
+  const k: Kit = { spec, config, props, scale, vertical, user: inp.encode }
+
   const scales: Rec = {}
-  for (const [c, n] of inp.channels) scales[c] = n
-  p.scale = inp.channels[0]?.[1] ?? ''
-  let defs = inp.store?.get(spec) as LegendDefs | undefined
-  if (defs === undefined || defs.config !== config || defs.encode !== inp.encode || defs.scale !== p.scale || defs.type !== type || defs.vertical !== vertical) {
-    const sk = isShareable(config) ? legendKey(spec, inp, p.scale, type, vertical) : undefined
-    const hit = sharedMarks(sk) as LegendDefs | undefined
-    if (hit !== undefined && hit.config === config) defs = hit
-    else {
-      defs = { config, encode: inp.encode, scale: p.scale, type, vertical, made: new Map(), packs: new Map() }
-      shareMarks(sk, defs)
-    }
-    if (inp.keep) inp.store?.set(spec, defs)
-  }
-  p.defs = defs
+  for (const [channel, name] of inp.channels) scales[channel] = name
   const datum: Row = { title: spec.title != null, scales, type, vgrad: type !== SymbolLegend && vertical }
-  const group = encodeItem(made(defs, 'group', () => ({ type: 'rule', role: 'legend', style: inp.encode.legend?.style, encode: groupEncode(p), interactive: false })), datum, {}, host, style) as unknown as Rec
+  const groupDef = markOf(defs, 'group', () => ({ type: 'rule', role: 'legend', style: inp.encode.legend?.style, encode: groupEncode(k), interactive: false }))
+  const group = encodeItem(groupDef, datum, {}, host, style) as unknown as Rec
   const partMeta: LegendBuilt['partMeta'] = {
-    legend: { name: strOrUndef(inp.encode.legend?.name), interactive: !!inp.encode.legend?.interactive },
+    legend: { name: nameOf(inp.encode.legend?.name), interactive: !!inp.encode.legend?.interactive },
   }
-  const eval1 = (def: GuideMarkDef, d: Row, kind: string): SceneItem => {
-    const it = encodeItem(def, d, group, host, style) as SceneItem & Rec
-    it._kind = def.type === 'text' ? 'text' : def.type === 'rect' ? 'rect' : def.type === 'symbol' ? 'symbol' : 'rule'
-    it._part = kind
-    return it
-  }
-  const boundOf = (it: SceneItem): Bounds => boundLeaf(new Bounds(), it)
-  const union = (items: SceneItem[]): Bounds => {
+  const boxOf = (it: SceneItem): Bounds => boundLeaf(new Bounds(), it)
+  const unionOf = (items: SceneItem[]): Bounds => {
     const b = new Bounds()
-    for (const it of items) b.union(boundOf(it))
+    for (const it of items) b.union(boxOf(it))
     return b
   }
-
-  // (the padding is what the group item has: a missing one makes the layout's arithmetic NaN, as vega's)
-  const pad = group.padding as number
-  const titleDef = datum.title ? made(defs, 'title', () => titleMark(p)) : undefined
-  let titleItem: (SceneItem & Rec) | undefined
-  let titleBounds = new Bounds()
-  if (titleDef) {
-    titleItem = eval1(titleDef, datum, 'title') as SceneItem & Rec
-    titleBounds = boundOf(titleItem)
-    partMeta.title = { name: titleDef.name, interactive: titleDef.interactive }
+  const make = (def: GuideMarkDef, d: Row, part: string): SceneItem & Rec => {
+    const it = encodeItem(def, d, group, host, style) as SceneItem & Rec
+    it._kind = def.type
+    it._part = part
+    return it
   }
 
-  // --- the entry group (vega: `legend-entry`) ---
-  let entryBounds = new Bounds()
-  /** the bounds of the entry group's first mark (the gradient or the bands): the title offsets of a gradient legend read it */
-  let firstMarkBounds = new Bounds()
-  const entryLeaves: SceneItem[] = []
-  const symbolGroup: { bounds: Bounds; entries: Array<{ box?: SceneItem; bounds: Bounds; x: number; y: number; w: number; h: number }> } = { bounds: new Bounds(), entries: [] }
+  // the padding is what the group item has: a missing one makes the layout's arithmetic NaN
+  const padding = group.padding as number
+  let titleItem: (SceneItem & Rec) | undefined
+  const title: Placed = { x: 0, y: 0, box: new Bounds() }
+  if (datum.title) {
+    const def = markOf(defs, 'title', () => legendTitle(k))
+    titleItem = make(def, datum, 'title')
+    title.x = titleItem.x as number
+    title.y = titleItem.y as number
+    title.box = boxOf(titleItem)
+    partMeta.title = { name: def.name, interactive: def.interactive }
+  }
 
-  // (vega-parser builds symbol groups for anything that is not a gradient or a discrete legend, whatever LegendEntries makes of the type)
+  // the entry group sits at the legend's origin until the layout moves it
+  const entry: Placed = { x: 0, y: 0, box: new Bounds() }
+  // the strip of a gradient or bands: the title of a gradient legend lines up with it, not with the labels
+  let strip = new Bounds()
+  const entryLeaves: SceneItem[] = []
   if (type !== GradientLegend && type !== DiscreteLegend) {
-    buildSymbols(inp, p, group, datum, partMeta, entryLeaves, symbolGroup, type)
-    entryBounds = symbolGroup.bounds
+    entry.box = symbolEntries(inp, k, defs, group, partMeta, entryLeaves, type)
   } else {
-    const gradientLike = type === GradientLegend
-    // the default tick count of a gradient legend follows its length
+    const isGradient = type === GradientLegend
+    // the default tick count of a gradient follows its length
     let count = inp.count
-    if (gradientLike && !count) {
-      const len = _.gradientLength()
-      const n = isSignal(len) ? (host.expr(len.signal) as number) : (len as number)
-      count = Math.max(2, 2 * Math.floor(n / 100))
+    if (isGradient && !count) {
+      const length = props.gradientLength()
+      count = Math.max(2, 2 * Math.floor((isSignal(length) ? (host.expr(length.signal) as number) : (length as number)) / 100))
     }
-    const entries = legendEntries({
+    const entries = listEntries({
       type, scale: inp.scale, count, limit: inp.limit, values: inp.values, minstep: inp.minstep,
       formatSpecifier: inp.formatSpecifier, formatType: inp.formatType, locale: inp.locale, warn: (m) => host.warn(m),
     })
-    const firstDef = made(defs, gradientLike ? 'gradient' : 'band', () => gradientLike
-      ? gradientMark(p, vertical, ((s: EntryScope) => (s.host as GuideHost).gradient(p.scale, vertical)) as Entry)
-      : bandMark(p, vertical))
-    const labelsDef = made(defs, 'gradient-labels', () => gradientLabelsMark(p, vertical))
-    // (the bands and the labels are keyed by value: entries with one value make one item)
+    const stripDef = markOf(defs, isGradient ? 'gradient' : 'band', () => (isGradient ? gradient(k, ((s: EntryScope) => (s.host as GuideHost).gradient(scale, vertical)) as Entry) : bands(k)))
+    const labelsDef = markOf(defs, 'gradient-labels', () => stripLabels(k))
+    // bands and labels are keyed by value: entries with one value make one item
     const keyed = joinByValue(entries as unknown as Row[])
-    const firstItems: SceneItem[] = gradientLike ? [eval1(firstDef, datum, 'gradient')] : keyed.map((e) => eval1(firstDef, e, 'band'))
-    partMeta[gradientLike ? 'gradient' : 'band'] = { name: firstDef.name, interactive: firstDef.interactive }
-    const labelItems = keyed.map((e) => eval1(labelsDef, e, 'label'))
+    const strips = isGradient ? [make(stripDef, datum, 'gradient')] : keyed.map((e) => make(stripDef, e, 'band'))
+    const labels = keyed.map((e) => make(labelsDef, e, 'label'))
+    partMeta[isGradient ? 'gradient' : 'band'] = { name: stripDef.name, interactive: stripDef.interactive }
     partMeta.label = { name: labelsDef.name, interactive: labelsDef.interactive }
-    let labelBounds: Bounds | null = null
-    if (labelsDef.overlap) labelBounds = overlapItems(labelItems, keyed, labelsDef.overlap as OverlapSpec, host, boundOf)
-    if (!labelBounds) labelBounds = union(labelItems)
-    firstMarkBounds = union(firstItems)
-    entryBounds = new Bounds().union(firstMarkBounds).union(labelBounds)
-    for (const it of firstItems) entryLeaves.push(it)
-    for (const it of labelItems) entryLeaves.push(it)
+    const labelBox = (labelsDef.overlap && thinOverlaps(labels, keyed, labelsDef.overlap, host, boxOf)) || unionOf(labels)
+    strip = unionOf(strips)
+    entry.box = new Bounds().union(strip).union(labelBox)
+    for (const it of strips) entryLeaves.push(it)
+    for (const it of labels) entryLeaves.push(it)
   }
 
-  // --- legendLayout (vega-view-transforms layout/legend.js) ---
-  const entry = { x: 0, y: 0 } // the entry group item sits at the origin (its encode: x, y = 0)
-  const titlePadding = (group.titlePadding as number) || 0
-  const shift = (dx: number, dy: number, node: { x: number; y: number }, bounds: Bounds): void => {
-    node.x += dx
-    node.y += dy
-    bounds.translate(dx, dy)
-  }
-  const title = titleItem ? { x: titleItem.x as number, y: titleItem.y as number } : undefined
-  if (!inp.raw) {
-    let ex = pad - entry.x
-    let ey = pad - entry.y
-    if (!titleItem) {
-      if (ex || ey) shift(ex, ey, entry, entryBounds)
-    } else {
-      const anchor = titleItem.anchor as string
-      let tx = pad - title!.x
-      let ty = pad - title!.y
-      const tOrient = titleItem.orient as string
-      switch (tOrient) {
-        case 'left': ex += Math.ceil(titleBounds.width()) + titlePadding; break
-        case 'right':
-        case 'bottom': break
-        default: ey += titleBounds.height() + titlePadding
-      }
-      if (ex || ey) shift(ex, ey, entry, entryBounds)
-      const gradKind = type !== SymbolLegend
-      const vgrad = !!datum.vgrad
-      const titleOffset = (a: string, y: number, lr: number, noBar?: number): number => {
-        const e = gradKind && (lr || !vgrad) && !noBar ? firstMarkBounds : entryBounds
-        const s = (y ? e.y2 : e.x2) - pad
-        const u = vgrad && lr ? s : 0
-        const v = vgrad && lr ? 0 : s
-        const o = y <= 0 ? 0 : multiLineOffset(titleItem!)
-        return Math.round(a === 'start' ? u : a === 'end' ? v - o : 0.5 * (s - o))
-      }
-      switch (tOrient) {
-        case 'left':
-          ty += titleOffset(anchor, 1, 1)
-          break
-        case 'right':
-          tx += titleOffset('end', 0, 0) + titlePadding
-          ty += titleOffset(anchor, 1, 1)
-          break
-        case 'bottom':
-          tx += titleOffset(anchor, 0, 0)
-          ty += titleOffset('end', -1, 0, 1) + titlePadding
-          break
-        default:
-          tx += titleOffset(anchor, 0, 0)
-      }
-      if (tx || ty) shift(tx, ty, title!, titleBounds)
-      // translate legend if title pushes into negative coordinates
-      const back = Math.round(titleBounds.x1 - pad)
-      if (back < 0) {
-        shift(-back, 0, entry, entryBounds)
-        shift(-back, 0, title!, titleBounds)
-      }
-    }
-  }
+  if (!inp.raw) arrange(entry, titleItem && title, titleItem, strip, group, !!datum.vgrad, type !== SymbolLegend)
   if (titleItem) {
-    titleItem.x = title!.x
-    titleItem.y = title!.y
+    titleItem.x = title.x
+    titleItem.y = title.y
   }
 
-  // legendBounds: the entry and the title, anchored at the legend's origin padding
-  const lb = new Bounds()
-  lb.union(entryBounds)
-  if (titleItem) lb.union(titleBounds)
-  if (lb.empty()) {
-    // set upper-right corner for empty legends (e.g., no entries or title)
-    lb.x2 = pad
-    lb.y2 = pad
+  // the legend's size: its content from the padding on, and padding after it
+  const content = new Bounds().union(entry.box)
+  if (titleItem) content.union(title.box)
+  if (content.empty()) {
+    // nothing to show: a box of the padding alone (an empty box would leave its sentinel extents in the size)
+    content.x2 = padding
+    content.y2 = padding
   }
-  lb.x1 = pad
-  lb.y1 = pad
-  let w = 2 * pad
-  let h = 2 * pad
-  if (!lb.empty()) {
-    w = Math.ceil(lb.width() + w)
-    h = Math.ceil(lb.height() + h)
+  content.x1 = padding
+  content.y1 = padding
+  let width = 2 * padding
+  let height = 2 * padding
+  if (!content.empty()) {
+    width = Math.ceil(content.width() + width)
+    height = Math.ceil(content.height() + height)
   }
   // (relative to the group's position: the scene adds the position a legend is given, legendX / legendY for `orient: none`)
-  const markBounds = boundStroke(new Bounds().set(0, 0, w, h), group as SceneItem)
+  const bounds = boundStroke(new Bounds().set(0, 0, width, height), group as SceneItem)
 
-  // the legend's own box, painted as a group item's background
-  // (a legend whose layout never ran has no size: its box stays a placeholder)
-  const box = host.groupBox(group as SceneItem, inp.raw ? 0 : w, inp.raw ? 0 : h)
-  const out: SceneItem[] = [{ ...box.background, _part: 'bg' } as SceneItem]
-  // the entries' leaves live in the entry group's frame; the scene bakes the frame's position into them
+  // the legend's own box, painted as a group item's background (a legend whose layout never ran has no size)
+  const frame = host.groupBox(group as SceneItem, inp.raw ? 0 : width, inp.raw ? 0 : height)
+  const leaves: SceneItem[] = [{ ...frame.background, _part: 'bg' } as SceneItem]
+  // the entries were made in the entry group's frame; the scene holds them in the legend's
   for (const it of entryLeaves) {
     const r = it as Rec
     r.x = ((r.x as number) || 0) + entry.x
     r.y = ((r.y as number) || 0) + entry.y
-    // the clip of a clipped symbol is its entry's box, in the legend's frame
+    // the clip of a clipped symbol is its entry's box
     const clip = r._clip as { x: number; y: number; w: number; h: number; corners?: Rec; d?: string } | undefined
     if (clip) {
       clip.x += entry.x
@@ -534,256 +527,291 @@ export function buildLegend(inp: LegendBuildInput): LegendBuilt {
       if (clip.corners) clip.d = String(rectItemPath({ x: clip.x, y: clip.y, width: clip.w, height: clip.h, ...clip.corners } as SceneItem))
       delete clip.corners
     }
-    // a rectangle (the gradient, a band) is drawn as the path of its box, at its position
+    // a rectangle (the gradient, a band) is drawn as the path of its box at the origin (it has no rotation)
     if (r._part === 'gradient' || r._part === 'band') {
       r.path = String(rectItemPath({ ...(it as SceneItem), x: 0, y: 0 }))
-      // (a rectangle has no rotation: vega's rect shape ignores `angle`)
       delete r.angle
     }
-    out.push(it)
+    leaves.push(it)
   }
   if (titleItem) {
-    ;(titleItem as Rec)._legendTitle = true
-    out.push(titleItem)
+    titleItem._legendTitle = true
+    leaves.push(titleItem)
   }
-  return { leaves: out, legendType: type, width: w, height: h, bounds: markBounds, group, partMeta, datum }
+  return { leaves, legendType: type, width, height, bounds, group, partMeta, datum }
 }
 
-// --- symbol legends -------------------------------------------------------------------------------------------------------
-
-/** guides/legend-symbol-groups.js, with the entry layout (`legendSymbolLayout`) */
-function buildSymbols(
-  inp: LegendBuildInput, p: LegendParts, group: Rec, datum: Row, partMeta: LegendBuilt['partMeta'], out: SceneItem[],
-  result: { bounds: Bounds; entries: Array<{ box?: SceneItem; bounds: Bounds; x: number; y: number; w: number; h: number }> },
-  entriesType: string,
-): void {
-  const { spec, config, host, style } = inp
-  const _ = p._
-  const userEncode = p.encode
-  const entriesEncode = userEncode.entries
-  const height = _('clipHeight')
-  const symbolOffset = _('symbolOffset')
-  const columnsRaw = _.entryColumns()
-  const columns = isSignal(columnsRaw) ? (host.expr(columnsRaw.signal) as number) : (columnsRaw as number)
-  // the marks of the entries depend on the spec and the config, and on whether the legend has columns: one set each
-  const packKey = columns ? 'sym1' : 'sym0'
-  let pack = p.defs?.packs.get(packKey) as { symEncode: MarkEncode; symbolsDef: GuideMarkDef; lblEncode: MarkEncode; labelsDef: GuideMarkDef } | undefined
-  if (pack === undefined) {
-    const xSignal = (s: EntryScope): unknown => (columns ? s.datum.offset : s.datum.size)
-    const half = (s: EntryScope): number => (xSignal(s) as number) * 0.5
-    const yEncode: Entry = height ? ({ ...(encoder(height) as Rec), mult: 0.5 } as unknown as EncodeValue) : ((s) => (s.datum.size as number) * 0.5)
-
-    // -- LEGEND SYMBOLS --
-    const symEnter: Block = {
-      opacity: zero,
-      // (an entry's offset is added only when the encode gives one: `offset != null`)
-      x: ((s) => (symbolOffset != null ? half(s) + num(s, symbolOffset) : half(s))) as Entry,
-      y: yEncode,
-    }
-    const symEncode: MarkEncode = { enter: symEnter, update: { opacity: one, x: symEnter.x, y: symEnter.y }, exit: { opacity: zero } }
-    let baseFill: unknown = null
-    let baseStroke: unknown = null
-    if (!spec.fill) {
-      baseFill = config.symbolBaseFillColor
-      baseStroke = config.symbolBaseStrokeColor
-    }
-    addEncoders(symEncode, {
-      fill: _('symbolFillColor', baseFill), shape: _('symbolType'), size: _('symbolSize'), stroke: _('symbolStrokeColor', baseStroke),
-      strokeDash: _('symbolDash'), strokeDashOffset: _('symbolDashOffset'), strokeWidth: _('symbolStrokeWidth'),
-    }, { opacity: _('symbolOpacity') })
-    for (const [c, name] of inp.channels) symEncode.update[c] = symEncode.enter[c] = { scale: name, field: 'value' } as unknown as EncodeValue
-    const symbolsDef = guideMark({ type: 'symbol', role: 'legend-symbol', encode: symEncode, interactive: false }, userEncode.symbols)
-
-    // -- LEGEND LABELS --
-    const labelOffset = encoder(symbolOffset)
-    labelOffset.offset = _('labelOffset')
-    const lblEnter: Block = {
-      opacity: zero,
-      x: ((s) => (xSignal(s) as number) + num(s, labelOffset)) as Entry,
-      y: yEncode,
-    }
-    const lblEncode: MarkEncode = { enter: lblEnter, update: { opacity: one, text: { field: 'label' } as EncodeValue, x: lblEnter.x, y: lblEnter.y }, exit: { opacity: zero } }
-    addEncoders(lblEncode, {
-      align: _('labelAlign'), baseline: _('labelBaseline'), fill: _('labelColor'), fillOpacity: _('labelOpacity'), font: _('labelFont'),
-      fontSize: _('labelFontSize'), fontStyle: _('labelFontStyle'), fontWeight: _('labelFontWeight'), limit: _('labelLimit'),
-    })
-    const labelsDef = guideMark({ type: 'text', role: 'legend-label', style: 'guide-label', encode: lblEncode, interactive: false }, userEncode.labels)
-    pack = { symEncode, symbolsDef, lblEncode, labelsDef }
-    p.defs?.packs.set(packKey, pack)
+/**
+ * Place the entries and the title against each other, inside the padding. The title goes on the side `titleOrient` says, and the
+ * entries move over to make room for it; a title that would then start before the padding pushes both along.
+ */
+function arrange(entry: Placed, title: Placed | undefined, titleItem: (SceneItem & Rec) | undefined, strip: Bounds, group: Rec, verticalStrip: boolean, isStrip: boolean): void {
+  const padding = group.padding as number
+  let ex = padding - entry.x
+  let ey = padding - entry.y
+  if (!title || !titleItem) {
+    if (ex || ey) shift(entry, ex, ey)
+    return
   }
-  const { symEncode, symbolsDef, lblEncode, labelsDef } = pack
-  partMeta.symbol = { name: symbolsDef.name, interactive: symbolsDef.interactive }
-  partMeta.label = { name: labelsDef.name, interactive: labelsDef.interactive }
+  const anchor = titleItem.anchor as string
+  const orient = titleItem.orient as string
+  const gap = (group.titlePadding as number) || 0
+  let tx = padding - title.x
+  let ty = padding - title.y
+  if (orient === 'left') ex += Math.ceil(title.box.width()) + gap
+  else if (orient !== 'right' && orient !== 'bottom') ey += title.box.height() + gap
+  if (ex || ey) shift(entry, ex, ey)
 
-  // the size of an entry: sizeExpression, `max(ceil(sqrt(size)+strokeWidth), fontSize)`
-  const channelScale = (c: string): Scale | undefined => {
-    const e = inp.channels.find(([ch]) => ch === c)
-    return e ? inp.scaleOf(e[1]) : undefined
+  // Where along the entries the title goes for an anchor. `y` says along which axis (1: down the entries, 0: across them, -1: from
+  // the bottom), `side` that the title is beside them, and `bare` that it is measured against the whole entry group, not the strip.
+  const along = (at: string, y: number, side: boolean, bare = false): number => {
+    const target = isStrip && (side || !verticalStrip) && !bare ? strip : entry.box
+    const extent = (y ? target.y2 : target.x2) - padding
+    const lead = verticalStrip && side ? extent : 0
+    const trail = verticalStrip && side ? 0 : extent
+    const lines = y <= 0 ? 0 : multiLineOffset(titleItem)
+    return Math.round(at === 'start' ? lead : at === 'end' ? trail - lines : 0.5 * (extent - lines))
   }
-  const symEnc = (name: string): unknown => getEncoding(name, applyStyleless(symEncode))
-  const fontSizeEnc = getEncoding('fontSize', applyStyleless(lblEncode)) || (inp.style.styles['guide-label'] as Rec | undefined)?.fontSize
-  const evalSig = (v: unknown, value: unknown): unknown => (isSignal(v) ? host.exprDatum(v.signal, value) : v)
-  const sizeFn = (v: unknown): number => {
-    const sizeScale = channelScale('size')
-    const strokeWidthScale = channelScale('strokeWidth')
-    const size = sizeScale ? sizeScale(v) : evalSig(symEnc('size'), v)
-    const strokeWidth = strokeWidthScale ? strokeWidthScale(v) : evalSig(symEnc('strokeWidth'), v)
-    const fontSize = evalSig(fontSizeEnc, v)
-    // max(ceil(sqrt(size)+strokeWidth), fontSize): JS arithmetic on whatever the three are
-    return Math.max(Math.ceil(Math.sqrt(size as number) + (strokeWidth as number)), fontSize as number)
+  if (orient === 'left') {
+    ty += along(anchor, 1, true)
+  } else if (orient === 'right') {
+    tx += along('end', 0, false) + gap
+    ty += along(anchor, 1, true)
+  } else if (orient === 'bottom') {
+    tx += along(anchor, 0, false)
+    ty += along('end', -1, false, true) + gap
+  } else {
+    tx += along(anchor, 0, false)
   }
-
-  const entries = legendEntries({
-    type: entriesType, scale: inp.scale, count: inp.count, limit: inp.limit, values: inp.values, minstep: inp.minstep,
-    size: sizeFn, formatSpecifier: inp.formatSpecifier, formatType: inp.formatType, locale: inp.locale, warn: (m) => host.warn(m),
-  })
-
-  // -- LEGEND ENTRY GROUPS --
-  const entryEnter: Block = {
-    noBound: { value: !height } as EncodeValue,
-    width: zero,
-    height: (height ? encoder(height) : zero) as EncodeValue,
-    opacity: zero,
+  if (tx || ty) shift(title, tx, ty)
+  // a title that starts before the padding pushes the legend along
+  const overhang = Math.round(title.box.x1 - padding)
+  if (overhang < 0) {
+    shift(entry, -overhang, 0)
+    shift(title, -overhang, 0)
   }
-  const entryEncode: MarkEncode = { enter: entryEnter, update: { opacity: one }, exit: { opacity: zero } }
-  extendEncode(entryEncode, entriesEncode, true)
-  const entryDef: GuideMarkDef = { type: 'rule', role: 'scope', encode: entryEncode, interactive: !!entriesEncode?.interactive, name: strOrUndef(entriesEncode?.name) }
-  partMeta.entries = { name: entryDef.name, interactive: entryDef.interactive }
-
-  const n = entries.length
-  const items = entries.map((e) => {
-    // the entry's datum is the facet tuple `{index, count}`
-    const g = encodeItem(entryDef, { index: e.index, count: 1 }, group, host, style) as SceneItem & Rec
-    const sym = encodeItem(symbolsDef, e as unknown as Row, group, host, style) as SceneItem & Rec
-    sym._kind = 'symbol'
-    const lbl = encodeItem(labelsDef, e as unknown as Row, group, host, style) as SceneItem & Rec
-    lbl._kind = 'text'
-    sym._part = 'symbol'
-    lbl._part = 'label'
-    return { e, g, sym, lbl }
-  })
-  const hasClip = !!height
-  // bounds of each entry group (the Bound pass): its symbol, its label, and the group box when it is bounded
-  const boundOf = (it: SceneItem): Bounds => boundLeaf(new Bounds(), it)
-  const ebs = items.map(({ g, sym, lbl }) => {
-    // (the symbol's bound: the shape's path traced unrounded, stroked with the miter allowance, at the item's position)
-    const symB = boundOf(symbolBoundItem(sym))
-    // a clipped symbol mark has its bounds cut to the clip region: the entry group's box, whose width is still 0 when the
-    // Bound pass runs (boundClip)
-    if (hasClip) symB.intersect(new Bounds().set(0, 0, 0, +(g.height as number)))
-    const eb = new Bounds().union(symB).union(boundOf(lbl))
-    // group bound: (clip || width || height) && !noBound adds the corner points (0,0) and (width, height)
-    const gw = g.width as number
-    const gh = g.height as number
-    if ((hasClip || gw || gh) && !g.noBound) eb.add(0, 0).add(gw || 0, gh || 0)
-    // the group's own stroke (an `encode.entries` stroke) widens its bound
-    boundStroke(eb, g)
-    return eb
-  })
-
-  // the entry groups are laid out by gridLayout over the SORTED groups; the sort is the paint order
-  const colsFlag = columns
-  // (vega's gridLayout: `columns || groups.length`; a column count that is no valid array length makes it throw, which the
-  // runtime knows beforehand for a number written in the spec)
-  const ncols = colsFlag ? (colsFlag > 0 && Number.isInteger(colsFlag) ? colsFlag : 1) : n
-  const paintOrder = Array.from({ length: n }, (_u, i) => i)
-  if (_.isVertical(true)) {
-    const nrows = Math.ceil(n / Math.max(1, colsFlag))
-    // vertical: sort by [row, index] with row = index % nrows (columns falsy: one row ... the signal is `(columns) ? row : index`)
-    if (colsFlag) paintOrder.sort((x, y) => (x % nrows) - (y % nrows) || x - y)
-  }
-  const groups = paintOrder.map(() => ({ marktype: 'group', x: 0, y: 0, items: [] }) as unknown as Parameters<typeof gridLayout>[0][number])
-  // (the layout never ran: every entry sits at its encode position, on top of the others)
-  const resolved = (v: unknown): unknown => (isSignal(v) ? host.expr(v.signal) : v)
-  if (!inp.raw) gridLayout(groups, {
-    align: resolved(_('gridAlign')), columns: ncols, center: { row: true, column: false },
-    padding: { row: resolved(_('rowPadding')), column: resolved(_('columnPadding')) },
-  }, (g) => {
-    const eb = ebs[paintOrder[groups.indexOf(g)]!]!
-    return eb.empty() ? new Bounds().set(0, 0, 0, 0) : eb.clone()
-  })
-  const colW: number[] = Array<number>(ncols).fill(0)
-  const pos: Array<{ x: number; y: number }> = new Array(n)
-  paintOrder.forEach((idx, j) => {
-    pos[idx] = { x: groups[j]!.x ?? 0, y: groups[j]!.y ?? 0 }
-    const eb = ebs[idx]!
-    if (!eb.empty()) colW[j % ncols] = Math.max(colW[j % ncols]!, eb.x2)
-  })
-  const bounds = new Bounds()
-  paintOrder.forEach((idx) => {
-    const eb = ebs[idx]!
-    if (eb.empty()) return
-    bounds.union(eb.clone().translate(pos[idx]!.x, pos[idx]!.y))
-  })
-  result.bounds = bounds
-
-  // the leaves: per entry (in paint order) its box, its symbol, its label, positions in the entry group's frame
-  paintOrder.forEach((idx, j) => {
-    const { e, g, sym, lbl } = items[idx]!
-    // (an item's datum is the entry it shows -- what `datum.value` reads in a legend's click handlers -- and a part the spec
-    // made `interactive` takes the pointer; the entry rows are transparent so the whole row does)
-    const entryDatum = { value: e.value, label: e.label, index: e.index }
-    const eb = ebs[idx]!
-    const at = pos[idx]!
-    const colWc = colW[j % ncols] ?? 0
-    // legendEntryLayout: the box is as wide as its column and as tall as its own bound
-    const gb = host.groupBox({ ...(g as SceneItem) } as SceneItem, inp.raw ? 0 : colWc, inp.raw ? 0 : eb.y2)
-    const box = { ...gb.background, _part: 'entry', x: at.x, y: at.y, datum: entryDatum } as SceneItem & Rec
-    if (entriesEncode?.interactive === true) box._hit = true
-    if (g.cursor != null) box.cursor = g.cursor
-    const ia = itemAriaOf(g)
-    if (ia) box.itemAria = ia
-    if (g.href != null) box.href = g.href
-    out.push(box)
-    const s = bakeSymbol(sym)
-    s.x = ((sym.x as number) || 0) + at.x
-    s.y = ((sym.y as number) || 0) + at.y
-    if (hasClip) (s as Rec)._clip = { x: at.x, y: at.y, w: colWc, h: eb.y2, corners: cornersOf(g) }
-    ;(s as Rec).datum = entryDatum
-    if (userEncode.symbols?.interactive === true && (s as Rec).fill === 'transparent') (s as Rec)._hit = true
-    out.push(s)
-    lbl.datum = entryDatum
-    lbl.x = ((lbl.x as number) || 0) + at.x
-    lbl.y = ((lbl.y as number) || 0) + at.y
-    out.push(lbl)
-  })
 }
 
-/** the guide marks' blocks without the style defaults (vega's getEncoding reads the mark's own encode) */
-function applyStyleless(e: MarkEncode): MarkEncode {
-  return e
-}
+// --- symbol legends ------------------------------------------------------------------------------------------------------------
 
-/** The corner radii an item has (vega's group clip is a rounded box when any is truthy), or undefined. */
+/** The corner radii an item has (a group's clip is a rounded box when any is truthy), or undefined. */
 function cornersOf(g: Rec): Rec | undefined {
   const keys = ['cornerRadius', 'cornerRadiusTopLeft', 'cornerRadiusTopRight', 'cornerRadiusBottomRight', 'cornerRadiusBottomLeft']
-  if (!keys.some((k) => g[k])) return undefined
+  if (!keys.some((key) => g[key])) return undefined
   const out: Rec = {}
-  for (const k of keys) if (g[k] !== undefined) out[k] = g[k]
+  for (const key of keys) if (g[key] !== undefined) out[key] = g[key]
   return out
 }
 
-/** The symbol item the bound pass reads: the shape and its radius (vega traces the shape's own path). */
-function symbolBoundItem(sym: SceneItem & Rec): SceneItem {
+/** The symbol of an item as the bounds read it: the shape's own path at the symbol's radius (a missing size is the default 64). */
+function symbolForBounds(sym: SceneItem & Rec): SceneItem {
   const size = (sym.size != null ? sym.size : 64) as number
   const item: Rec = {}
-  for (const k in sym) if (k !== 'size' && k !== 'shape') item[k] = sym[k]
+  for (const key in sym) if (key !== 'size' && key !== 'shape') item[key] = sym[key]
   item.shape = (sym.shape as string | undefined) || 'circle'
   item.radius = Math.sqrt(size) / 2
   return item as SceneItem
 }
 
-/** A symbol item as the leaf the renderers draw: its shape's path at its `size`. */
-function bakeSymbol(sym: SceneItem & Rec): SceneItem & Rec {
-  // (vega's symbol shape: `size` is 64 unless the item has one)
+/** A symbol item as the leaf the renderers draw: the path of its shape at its size. */
+function drawnSymbol(sym: SceneItem & Rec): SceneItem & Rec {
   const size = (sym.size != null ? sym.size : 64) as number
-  const r = Math.sqrt(size) / 2
   const leaf: Rec = {}
   // (copied without `size` and `shape`: a `delete` would turn the leaf into a dictionary-mode object)
-  for (const k in sym) if (k !== 'size' && k !== 'shape') leaf[k] = sym[k]
-  leaf.path = String(symbolPath(sym.shape as string | undefined, r))
+  for (const key in sym) if (key !== 'size' && key !== 'shape') leaf[key] = sym[key]
+  leaf.path = String(symbolPath(sym.shape as string | undefined, Math.sqrt(size) / 2))
   leaf._part = 'symbol'
   leaf._kind = 'symbol'
   return leaf as SceneItem & Rec
 }
 
+/**
+ * Make the entries of a symbol legend (a box, a symbol and a label each) and lay them out in a grid of `columns` columns. The leaves
+ * are appended to `out` in the entry group's frame; returns the bounds of all entries.
+ */
+function symbolEntries(inp: LegendBuildInput, k: Kit, defs: LegendDefs, group: Rec, partMeta: LegendBuilt['partMeta'], out: SceneItem[], entriesType: string): Bounds {
+  const { host, style } = inp
+  const { props } = k
+  const clipped = !!props.get('clipHeight')
+  const columnsRaw = props.entryColumns()
+  const columns = isSignal(columnsRaw) ? (host.expr(columnsRaw.signal) as number) : (columnsRaw as number)
+  let marks = defs.symbolMarks.get(!!columns)
+  if (marks === undefined) defs.symbolMarks.set(!!columns, (marks = symbolMarks(inp, k, columns)))
+  const { symbols, labels, entry: entryDef } = marks
+  partMeta.symbol = { name: symbols.name, interactive: symbols.interactive }
+  partMeta.label = { name: labels.name, interactive: labels.interactive }
+  partMeta.entries = { name: entryDef.name, interactive: entryDef.interactive }
+
+  // an entry takes the room of its symbol or of its label's font, whichever is larger; the symbol's size comes from the size scale, or from the encode
+  const channelScale = (channel: string): Scale | undefined => {
+    const hit = inp.channels.find(([c]) => c === channel)
+    return hit ? inp.scaleOf(hit[1]) : undefined
+  }
+  const evaluated = (v: unknown, datum: unknown): unknown => (isSignal(v) ? host.exprDatum(v.signal, datum) : v)
+  const fontSize = staticChannel('fontSize', labels.encode) || (inp.style.styles['guide-label'] as Rec | undefined)?.fontSize
+  const roomOf = (v: unknown): number => {
+    const sizeScale = channelScale('size')
+    const widthScale = channelScale('strokeWidth')
+    const size = sizeScale ? sizeScale(v) : evaluated(staticChannel('size', symbols.encode), v)
+    const strokeWidth = widthScale ? widthScale(v) : evaluated(staticChannel('strokeWidth', symbols.encode), v)
+    return Math.max(Math.ceil(Math.sqrt(size as number) + (strokeWidth as number)), evaluated(fontSize, v) as number)
+  }
+  const entries = listEntries({
+    type: entriesType, scale: inp.scale, count: inp.count, limit: inp.limit, values: inp.values, minstep: inp.minstep, size: roomOf,
+    formatSpecifier: inp.formatSpecifier, formatType: inp.formatType, locale: inp.locale, warn: (m) => host.warn(m),
+  })
+
+  const made = entries.map((e) => {
+    // the entry group's datum is the facet tuple `{index, count}`
+    const g = encodeItem(entryDef, { index: e.index, count: 1 }, group, host, style) as SceneItem & Rec
+    const sym = encodeItem(symbols, e as unknown as Row, group, host, style) as SceneItem & Rec
+    const lbl = encodeItem(labels, e as unknown as Row, group, host, style) as SceneItem & Rec
+    sym._kind = 'symbol'
+    sym._part = 'symbol'
+    lbl._kind = 'text'
+    lbl._part = 'label'
+    // what an entry holds: its symbol, its label, and its own box when it has a clip or a size
+    const symbolBox = boundLeaf(new Bounds(), symbolForBounds(sym))
+    // a clipped symbol has its bounds cut to the clip region: the entry group's box, whose width is still 0 at that point
+    if (clipped) symbolBox.intersect(new Bounds().set(0, 0, 0, +(g.height as number)))
+    const held = new Bounds().union(symbolBox).union(boundLeaf(new Bounds(), lbl))
+    const w = g.width as number
+    const h = g.height as number
+    if ((clipped || w || h) && !g.noBound) held.add(0, 0).add(w || 0, h || 0)
+    boundStroke(held, g)
+    return { e, g, sym, lbl, held }
+  })
+
+  // the order the entries are laid out in: down the columns when the legend is vertical and has columns, along the rows otherwise
+  const n = made.length
+  const flowRows = Math.ceil(n / Math.max(1, columns))
+  let order = Array.from({ length: n }, (_, i) => i)
+  if (props.vertical(true) && columns && flowRows >= 1) {
+    order = []
+    for (let row = 0; row < flowRows; row++) for (let i = row; i < n; i += flowRows) order.push(i)
+  }
+  // a column count the grid cannot take is one column (the runtime reports it beforehand for a number written in the spec)
+  const ncols = columns ? (columns > 0 && Number.isInteger(columns) ? columns : 1) : n
+  const resolved = (v: unknown): unknown => (isSignal(v) ? host.expr(v.signal) : v)
+  const place: Array<{ x: number; y: number }> = new Array(n)
+  if (inp.raw) {
+    for (const i of order) place[i] = { x: 0, y: 0 }
+  } else {
+    const plan = placeGrid(
+      order.map((i) => (made[i]!.held.empty() ? new Bounds().set(0, 0, 0, 0) : made[i]!.held.clone())),
+      order.map(() => ({ x: 0, y: 0 })),
+      {
+        align: resolved(props.get('gridAlign')), columns: ncols, center: { row: true, column: false },
+        padding: { row: resolved(props.get('rowPadding')), column: resolved(props.get('columnPadding')) },
+      },
+    )
+    order.forEach((i, j) => { place[i] = { x: plan.dx[j]!, y: plan.dy[j]! } })
+  }
+
+  // The width of an entry's box is that of the column it is annotated with, which is not always the column the grid puts it in:
+  // with more columns than the vertical flow fills, the two differ.
+  const columnOf = (i: number): number => (columns ? (props.vertical(true) ? Math.floor(i / flowRows) : i % columns) : i)
+  const widths = new Map<number, number>()
+  const all = new Bounds()
+  for (const i of order) {
+    const { held } = made[i]!
+    if (held.empty()) continue
+    widths.set(columnOf(i), Math.max(widths.get(columnOf(i)) ?? 0, held.x2))
+    all.union(held.clone().translate(place[i]!.x, place[i]!.y))
+  }
+
+  for (const i of order) {
+    const { e, g, sym, lbl, held } = made[i]!
+    // an item's datum is the entry it shows (what `datum.value` reads in a legend's click handlers)
+    const entryDatum = { value: e.value, label: e.label, index: e.index }
+    const here = place[i]!
+    const width = widths.get(columnOf(i)) ?? 0
+    // the entry's box is as wide as its column and as tall as what it holds
+    const frame = host.groupBox({ ...(g as SceneItem) } as SceneItem, inp.raw ? 0 : width, inp.raw ? 0 : held.y2)
+    const entryBox = { ...frame.background, _part: 'entry', x: here.x, y: here.y, datum: entryDatum } as SceneItem & Rec
+    if (k.user.entries?.interactive === true) entryBox._hit = true
+    if (g.cursor != null) entryBox.cursor = g.cursor
+    const aria = itemAriaOf(g)
+    if (aria) entryBox.itemAria = aria
+    if (g.href != null) entryBox.href = g.href
+    out.push(entryBox)
+    const drawn = drawnSymbol(sym)
+    drawn.x = ((sym.x as number) || 0) + here.x
+    drawn.y = ((sym.y as number) || 0) + here.y
+    if (clipped) drawn._clip = { x: here.x, y: here.y, w: width, h: held.y2, corners: cornersOf(g) }
+    drawn.datum = entryDatum
+    if (k.user.symbols?.interactive === true && drawn.fill === 'transparent') drawn._hit = true
+    out.push(drawn)
+    lbl.datum = entryDatum
+    lbl.x = ((lbl.x as number) || 0) + here.x
+    lbl.y = ((lbl.y as number) || 0) + here.y
+    out.push(lbl)
+  }
+  return all
+}
+
+// --- the legends of a view ------------------------------------------------------------------------------------------------------
+
+/** A rectangle by its four sides. */
+export interface Sides {
+  x1: number
+  y1: number
+  x2: number
+  y2: number
+}
+
+/**
+ * Place the legends that share an `orient` as one block: stacked down a column for a left or right legend (or `direction:
+ * vertical`), in a row otherwise, and anchored to the plot. Left and right legends sit outside `sideBounds`, top and bottom ones
+ * outside `endBounds` (the plot with the guides beside it), the corners hang from the view's own corners, and `anchor` and `frame`
+ * say where along the plot's edge. `layout` is `config.legend.layout`: a setting under the orient's own name beats the general one.
+ * The legends move; each is placed with its origin at the block's.
+ */
+export function placeLegendStack(
+  orient: string, groups: SceneGroup[], offsets: unknown[], layout: Rec, sideBounds: Sides, endBounds: Sides, width: number, height: number,
+): void {
+  const mine = (layout[orient] ?? {}) as Rec
+  const setting = (key: string, fallback?: unknown): unknown => (mine[key] != null ? mine[key] : layout[key] != null ? layout[key] : fallback)
+  // legends that ask for an offset of their own: the largest wins
+  let asked: number | undefined
+  for (const o of offsets) if (typeof o === 'number') asked = asked === undefined ? o : Math.max(asked, o)
+  const offset = (asked ?? setting('offset', 0)) as number
+  const anchor = setting('anchor', 'start')
+  const fraction = anchor === 'end' ? 1 : anchor === 'middle' ? 0.5 : 0
+  // the point along the plot's edge the anchor names: within the view's frame, or the extent of what the plot reaches
+  const byBounds = setting('frame', 'group') === 'bounds'
+  const alongX = byBounds ? sideBounds.x1 + fraction * (sideBounds.x2 - sideBounds.x1) : fraction * (width || (endBounds.x2 - endBounds.x1) + 2 * endBounds.x1)
+  const alongY = byBounds ? endBounds.y1 + fraction * (endBounds.y2 - endBounds.y1) : fraction * (height || (sideBounds.y2 - sideBounds.y1) + 2 * sideBounds.y1)
+  // the point the block hangs from, and which of its edges that point is
+  const hang: Record<string, unknown> =
+    orient === 'left' ? { x: Math.floor(sideBounds.x1) - offset, column: 'end', y: alongY, row: anchor }
+    : orient === 'top' ? { y: Math.floor(endBounds.y1) - offset, row: 'end', x: alongX, column: anchor }
+    : orient === 'bottom' ? { y: Math.ceil(endBounds.y2) + offset, x: alongX, column: anchor }
+    : orient === 'top-left' ? { x: offset, y: offset }
+    : orient === 'top-right' ? { x: width - offset, y: offset, column: 'end' }
+    : orient === 'bottom-left' ? { x: offset, y: height - offset, row: 'end' }
+    : orient === 'bottom-right' ? { x: width - offset, y: height - offset, column: 'end', row: 'end' }
+    // right, and any orient not named
+    : { x: Math.ceil(sideBounds.x2) + offset, y: alongY, row: anchor }
+
+  // a legend is as big as its frame (flush) or as everything it draws (full), measured from its own origin
+  const whole = setting('bounds', 'flush') !== 'flush'
+  const boxes = groups.map((g) => {
+    if (!whole) return new Bounds().set(0, 0, g.width || 0, g.height || 0)
+    const drawn = boundLegendGroup(g)
+    return drawn.empty() ? new Bounds().set(0, 0, 0, 0) : drawn.translate(-(g.x || 0), -(g.y || 0))
+  })
+  const centre = setting('center')
+  const centreOn = (axis: 'column' | 'row'): unknown => {
+    const v = centre !== null && typeof centre === 'object' ? (centre as Rec)[axis] : centre
+    return v != null ? v : 0
+  }
+  const plan = placeGrid(boxes, groups.map(() => ({ x: 0, y: 0 })), {
+    align: 'each', columns: setting('direction') === 'vertical' ? 1 : groups.length, padding: setting('margin', 8),
+    center: { row: centreOn('row'), column: centreOn('column') }, anchor: hang,
+  })
+  groups.forEach((g, i) => {
+    g.x = plan.dx[i]!
+    g.y = plan.dy[i]!
+  })
+}
