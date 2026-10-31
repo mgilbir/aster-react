@@ -1388,6 +1388,7 @@ function computeGuidePadding(
   width: number,
   height: number,
   base: { top: number; right: number; bottom: number; left: number },
+  fitting = false,
 ): { top: number; right: number; bottom: number; left: number } {
   // Vega's autosize unions the *recursive* bounds of every top-level guide
   // (axis/legend) and mark into the viewBounds and grows the padding by the
@@ -1401,6 +1402,14 @@ function computeGuidePadding(
 
   const grow = (b: Bounds, group: SceneGroup): void => {
     if (b.empty()) return
+    if (fitting && group.role === 'legend') {
+      // a view that fits its viewport takes from a legend only the extent across the side it sits on (a legend that overran
+      // the chart would otherwise squeeze it to nothing): a legend in a corner, or placed freely, takes nothing
+      const side = (group as unknown as { legendProps?: { orient?: unknown } }).legendProps?.orient
+      if (side === 'left' || side === 'right') { minX = Math.min(minX, b.x1); maxX = Math.max(maxX, b.x2) }
+      else if (side === 'top' || side === 'bottom') { minY = Math.min(minY, b.y1); maxY = Math.max(maxY, b.y2) }
+      return
+    }
     // Axis bounds carry fp residue from measured label/title geometry where
     // vega's arithmetic is exact; collapse only that sub-ulp residue. Mark and
     // legend geometry is exact enough that a genuine positive residue (a bar
@@ -1894,7 +1903,7 @@ function buildContentPass(
     || ctx.rawGuides
     || ctx.chart.autosize === 'none'
     ? ctx.chart.padding
-    : computeGuidePadding(items, width, height, ctx.chart.padding)
+    : computeGuidePadding(items, width, height, ctx.chart.padding, ctx.chart.autosize === 'fit' || ctx.chart.autosize === 'fit-x' || ctx.chart.autosize === 'fit-y')
   const ordered = paintOrderOf(items)
   return { record: ctx.passMemory?.cur, items: ordered, padding, ctx, width, height, hasLayout, frame }
 }

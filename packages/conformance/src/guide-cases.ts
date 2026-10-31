@@ -243,7 +243,7 @@ export function axisCase(seed: number): GuideCase {
   }
   const spec: Spec = {
     width, height, padding: pick(r, [0, 5, 20, { left: 4, top: 10, right: 0, bottom: 2 }]),
-    autosize: pick(r, ['pad', 'pad', 'none', 'fit', { type: 'fit', contains: 'padding' }, { type: 'pad', resize: true }, ...(G('fit') ? ['fit-x', 'fit-y'] : [])]),
+    autosize: pick(r, ['pad', 'pad', 'none', 'fit', { type: 'fit', contains: 'padding' }, { type: 'pad', resize: true }, 'fit-x', 'fit-y']),
     background: chance(r, 0.1) ? '#eef' : undefined,
     config,
     data: [{ name: 'rows', values: dataRows(r) }],
@@ -420,7 +420,7 @@ export function legendCase(seed: number): GuideCase {
   const spec: Spec = {
     width, height, padding: pick(r, [0, 5, 20]),
     // (vega's `pad` autosize does not grow the view for an `orient: none` legend that overflows it; Aster's does, see the report)
-    autosize: legends.some((l) => l.orient === 'none') && !G('none') ? 'none' : pick(r, ['pad', 'pad', 'none', ...(G('fit') ? ['fit', { type: 'fit', contains: 'padding' }] : [])]),
+    autosize: legends.some((l) => l.orient === 'none') && !G('none') ? 'none' : pick(r, ['pad', 'pad', 'none', 'fit', 'fit-x', 'fit-y', { type: 'fit', contains: 'padding' }]),
     config: pick(r, LEGEND_CONFIGS),
     data: [{ name: 'rows', values: dataRows(r) }],
     scales, legends,
@@ -563,7 +563,7 @@ export function trellisCase(seed: number): GuideCase {
   }
   const spec: Spec = {
     width: 200, height: 120, padding: pick(r, [0, 5, 12]),
-    autosize: pick(r, ['pad', 'none', 'pad', { type: 'pad', resize: true }, ...(G('fit') ? ['fit', { type: 'fit', contains: 'padding' }] : [])]),
+    autosize: pick(r, ['pad', 'none', 'pad', { type: 'pad', resize: true }, 'fit', 'fit-x', 'fit-y', { type: 'fit', contains: 'padding' }]),
     data, marks: [frame],
   }
   return { id: `trellis-${seed}`, seed, spec, kind: twoD ? 'cross' : 'wrap' }
