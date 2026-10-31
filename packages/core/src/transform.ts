@@ -12,7 +12,7 @@ import { densityGrid, placeContours } from './raster-grid.js'
 import { accessorOf, densitySettings } from './raster-params.js'
 import { PARAM_RULES, checkParams } from './param-rules.js'
 import { tickStep } from './arr.js'
-import { anyPlaced, isPlacing, madeBefore, placeRows, placesAt } from './tuple-order.js'
+import { isPlacing, placeRows, placesAt, placesOf } from './tuple-order.js'
 import { activeMeter, boundedCount } from './limits.js'
 import { walkPostOrder, walkPreOrder } from './tree-walk.js'
 import { aggregateRows, type AggregateParams, compareOf, fieldOf, joinAggregateRows, pivotRows, sortBySpec } from './transform-agg.js'
@@ -451,8 +451,8 @@ export function compareRows(a: Row, b: Row, sort?: SortSpec): number {
 export function sortOrder(rows: Row[], sort?: SortSpec, limit = Infinity): number[] {
   const order = rows.map((_, i) => i)
   const c = comparatorOf(sort)
-  const placed = anyPlaced(rows)
-  if (c) sortData(order, (a, b) => c(rows[a]!, rows[b]!) || (placed ? madeBefore(rows[a], rows[b]) : 0) || a - b)
+  const places = c ? placesOf(rows) : null
+  if (c) sortData(order, (a, b) => c(rows[a]!, rows[b]!) || (places ? places[a]! - places[b]! : 0) || a - b)
   return Number.isFinite(limit) ? order.slice(0, Math.max(0, limit)) : order
 }
 

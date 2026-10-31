@@ -22,17 +22,22 @@ export function placeRows(rows: readonly Row[]): void {
   for (const row of rows) if (row[MADE] === undefined) row[MADE] = ++next
 }
 
-/** Whether some of the rows have a place: a sort need only look at places when they do (the first and the last row tell). */
+/** Whether some of the rows have a place (the first and the last row tell). */
 export function anyPlaced(rows: readonly unknown[]): boolean {
   const n = rows.length
   return n > 1 && (placeOf(rows[0]) !== undefined || placeOf(rows[n - 1]) !== undefined)
 }
 
-/** How two rows compare by the order they were made in (0: neither has a place, or both the same one). */
-export function madeBefore(a: unknown, b: unknown): number {
-  const x = placeOf(a)
-  const y = placeOf(b)
-  return x === undefined ? (y === undefined ? 0 : 1) : y === undefined ? -1 : x - y
+/**
+ * The places of `rows`, read once for a sort: `null` when none has one (the first and the last row tell), else one number each, a row
+ * without a place counting as made after every row that has one.
+ */
+export function placesOf(rows: readonly unknown[]): Float64Array | null {
+  const n = rows.length
+  if (n < 2 || (placeOf(rows[0]) === undefined && placeOf(rows[n - 1]) === undefined)) return null
+  const out = new Float64Array(n)
+  for (let i = 0; i < n; i++) out[i] = placeOf(rows[i]) ?? Infinity
+  return out
 }
 
 const placing = new WeakSet<object>()
