@@ -35,7 +35,7 @@ const FORMS: Array<[string, (unit: unknown) => Record<string, unknown>]> = [
 
 /** The time-unit transforms of a compiled spec, as the fields they read, the parts they cut and the fields they write. */
 const transformsOf = (spec: any): unknown[] =>
-  (spec.data ?? []).flatMap((d: any) => d.transform ?? []).filter((t: any) => t.type === 'timeunit').map(({ field, units, timezone, step, as }: any) => ({ field, units, timezone, step, as }))
+  (spec.data ?? []).flatMap((d: any) => d.transform ?? []).filter((t: any) => t.type === 'timeunit').map(({ field, units, timezone, step, binned, as }: any) => ({ field, units, timezone, step, binned, as }))
 
 describe('every time unit is what vega-lite makes', () => {
   for (const [formName, make] of FORMS) {
@@ -59,11 +59,14 @@ describe('every time unit is what vega-lite makes', () => {
 
 describe('the pre-binned time units', () => {
   for (const unit of BINNED) {
-    it(unit, async () => {
-      const spec = { data: { values: TIME_DATA }, mark: 'bar', encoding: { x: { field: 't', type: 'temporal', timeUnit: unit }, y: { field: 'v', type: 'quantitative' } } }
-      const both = bothCompile(spec)
-      if ('refusedBy' in both) return expect(both.refusedBy).toBe('vega-lite')
-      expect(await rowsOf(both.ours)).toEqual(await rowsOf(both.theirs))
-    })
+    for (const [formName, make] of [['encoding', FORMS[0]![1]], ['transform', FORMS[3]![1]]] as const) {
+      it(`${unit}, in an ${formName}`, async () => {
+        const both = bothCompile(make(unit))
+        if ('refusedBy' in both) return expect(both.refusedBy).toBe('vega-lite')
+        expect(transformsOf(both.ours), 'time-unit transforms').toEqual(transformsOf(both.theirs))
+        expect(await rowsOf(both.ours)).toEqual(await rowsOf(both.theirs))
+        expect(expressionDiff(both.ours, both.theirs)).toBe('')
+      })
+    }
   }
 })
