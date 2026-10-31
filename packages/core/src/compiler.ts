@@ -5,6 +5,7 @@
  */
 import { dict, ownGet } from './util.js'
 import { checkDataReferences, normalizeSpecLists } from './spec-structure.js'
+import { noteWrittenType, transformTypeOf } from './transform-names.js'
 import { markShareable } from './guide-encode.js'
 import { defaultMergedConfig, mergeVegaConfig, vegaDefaultConfig } from './config-defaults.js'
 import type {
@@ -304,8 +305,9 @@ function compileData(d: Record<string, unknown>): CompiledData {
 }
 
 function compileTransform(t: Record<string, unknown>): CompiledTransform {
-  const type = t.type as string
-  const out = dict<unknown>({ type }) // prototype-less: spec keys such as `__proto__` stay plain data
+  const type = transformTypeOf(t.type)
+  const out = dict<unknown>({ type })
+  noteWrittenType(out, t.type as string, type) // prototype-less: spec keys such as `__proto__` stay plain data
   for (const key of Object.keys(t)) {
     if (key === 'type') continue
     out[key] = t[key]

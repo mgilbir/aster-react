@@ -15,6 +15,7 @@
  * compiler will actually run.
  */
 import { SpecParseError } from './parse-error.js'
+import { transformTypeOf } from './transform-names.js'
 import { mergeVegaConfig, vegaDefaultConfig } from './config-defaults.js'
 
 /** vega-util `array()`: a non-array becomes the one-element list, `null`/`undefined` the empty list. */
@@ -135,12 +136,13 @@ function checkFrom(from: unknown, group: boolean, names: Names): void {
 function checkTransforms(transforms: unknown, names: Names): void {
   for (const t of specList(transforms)) {
     if (!isRecord(t)) continue
-    if (t.type === 'lookup' && t.from !== undefined) {
+    const type = transformTypeOf(t.type)
+    if (type === 'lookup' && t.from !== undefined) {
       if (typeof t.from !== 'string') throw new SpecParseError('Lookup "from" parameter must be a string literal.')
       need(names, t.from)
-    } else if (t.type === 'force' && Array.isArray(t.forces)) {
+    } else if (type === 'force' && Array.isArray(t.forces)) {
       for (const f of t.forces) if (isRecord(f) && f.force === 'link' && f.links !== undefined) need(names, f.links)
-    } else if (t.type === 'label') {
+    } else if (type === 'label') {
       for (const m of specList(t.avoidMarks)) need(names, m)
     }
   }
