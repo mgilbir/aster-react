@@ -4,14 +4,15 @@
  * the three legend types over color, size, shape, opacity and dash scales with direction, columns, entry padding, clip height,
  * gradient length and thickness, title orient / anchor / align / baseline / limit, and every legend orient (the four corners
  * and `none` too), several legends to a chart. The strict canonicalizer judges the documents (so positions, offsets, bounds
- * and the view size they decide are all compared); a failing case is named by its seed and replays with GUIDE_SEED=<n>.
+ * and the view size they decide are all compared; the titles are the view's own, with subtitles, on all four edges); a failing case is named by its seed and replays with GUIDE_SEED=<n>.
  */
 import { describe, expect, it } from 'vitest'
-import { axisCase, legendCase, type GuideCase } from './guide-cases.js'
+import { axisCase, legendCase, titleCase, type GuideCase } from './guide-cases.js'
 import { compareToVega } from './guide-compare.js'
 
 const AXES = Number(process.env.GUIDE_AXES ?? 500)
 const LEGENDS = Number(process.env.GUIDE_LEGENDS ?? 500)
+const TITLES = Number(process.env.GUIDE_TITLES ?? 400)
 const ONLY = process.env.GUIDE_SEED === undefined ? undefined : Number(process.env.GUIDE_SEED)
 
 async function sweep(make: (seed: number) => GuideCase, count: number): Promise<{ bad: string[]; refused: number; compared: number }> {
@@ -42,5 +43,11 @@ describe('generated guides vs vega', () => {
     const { bad, refused, compared } = await sweep(legendCase, LEGENDS)
     expect(bad.slice(0, 6)).toEqual([])
     if (ONLY === undefined) { expect(compared).toBeGreaterThan(LEGENDS * 0.9); expect(refused).toBeLessThan(LEGENDS * 0.1) }
+  })
+
+  it(`${TITLES} generated titles with subtitles, on every edge, render the vega document`, { timeout: 900_000 }, async () => {
+    const { bad, refused, compared } = await sweep(titleCase, TITLES)
+    expect(bad.slice(0, 6)).toEqual([])
+    if (ONLY === undefined) { expect(compared).toBeGreaterThan(TITLES * 0.9); expect(refused).toBeLessThan(TITLES * 0.1) }
   })
 })
