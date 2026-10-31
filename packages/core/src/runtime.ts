@@ -8,7 +8,7 @@ import { ingestRows, readData, type DataFormatSpec } from './data-format.js'
 import { applyTransforms, applyTransformsToSharedRows, compileExprTransform, sortOrder, getField, geoJSONPath, aggregateGroup, type Row, type TransformContext } from './transform.js'
 import { fieldOf } from './transform-agg.js'
 import { atRandomSite, contentKey, mayDrawRandom, replayable } from './random-tape.js'
-import { activeMeter, withLimits, boundedCount, checkRowCount, meterItems, meterTick, AsterLimitError } from './limits.js'
+import { activeMeter, withLimits, checkRowCount, meterItems, meterTick, AsterLimitError } from './limits.js'
 import { withTextMetricsProvider } from './text-metrics.js'
 import { AsterUrlError } from './url-policy.js'
 import { SpecParseError } from './parse-error.js'
@@ -5718,83 +5718,8 @@ function axisTicks(axis: CompiledAxis, scale: Scale, ctx: EvalContext): unknown[
     if (typeof counted === 'number') count = counted
   }
 
-  // For continuous non-time scales with tickMinStep but no tickCount, generate
-  // ticks directly from the scale domain using the step value.
-  // For time/utc scales, d3's time ticks already produce calendar-aligned
-  // intervals, so we use scaleTicks normally and apply tickMinStep as a filter.
-  // Band/point scales are excluded: vega's tickValues returns their domain
-  // directly (no .ticks method), so neither count nor minstep reach the ticks.
-  if (tickMinStep != null && tickMinStep > 0 && count == null
-      && scale.type !== 'time' && scale.type !== 'utc'
-      && scale.type !== 'band' && scale.type !== 'point') {
-    const rawDomain = scale.domain()
-    const toNum = (v: unknown): number => v instanceof Date ? v.getTime() : typeof v === 'number' ? v : Number(v)
-    if (rawDomain.length >= 2) {
-      const d0 = toNum(rawDomain[0])
-      const d1 = toNum(rawDomain[rawDomain.length - 1])
-      if (Number.isFinite(d0) && Number.isFinite(d1)) {
-        const ticks: unknown[] = []
-        const eps = tickMinStep * 1e-9
-        for (let v = d0; v <= d1 + eps; v += tickMinStep) {
-          ticks.push(v)
-        }
-        return ticks
-      }
-    }
-  }
-
-  // For time/utc scales, generate calendar-aligned ticks when tickMinStep is
-  // specified (matching vega's AxisTicks behavior). The tickMinStep signal
-  // encodes the duration of a calendar unit (e.g. one month in ms). We step
-  // through calendar months from the domain start to end to produce ticks that
-  // align to month boundaries, avoiding the problem of fixed-interval stepping
-  // across months of different lengths.
-  if ((scale.type === 'time' || scale.type === 'utc') && tickMinStep != null && tickMinStep > 0 && count == null) {
-    const rawDomain = scale.domain()
-    if (rawDomain.length >= 2) {
-      const toD = (v: unknown): Date => v instanceof Date ? v : new Date(Number(v))
-      const d0 = toD(rawDomain[0])
-      const d1 = toD(rawDomain[rawDomain.length - 1])
-      if (Number.isFinite(d0.getTime()) && Number.isFinite(d1.getTime())) {
-        const ticks: unknown[] = []
-        const cur = new Date(d0.getTime())
-        // one tick per calendar month: bound the span before stepping through it (C9)
-        boundedCount((d1.getTime() - d0.getTime()) / (28 * 86_400_000) + 1, 'calendar month ticks')
-        while (cur.getTime() <= d1.getTime() + 1000) {
-          ticks.push(new Date(cur.getTime()))
-          cur.setUTCMonth(cur.getUTCMonth() + 1)
-        }
-        return ticks
-      }
-    }
-  }
-  if (scale.type === 'time' || scale.type === 'utc') {
-    // vega applies tickMinStep through tickCount's count reduction (the
-    // calendar stepping above handles the count==null case); the tick values
-    // themselves come straight from the scale's calendar ticks.
-    return scaleTicks(scale, count)
-  }
-
-  const ticks = scaleTicks(scale, count)
-  // When tickMinStep is specified, filter ticks so consecutive values are at
-  // least tickMinStep apart (matching vega's AxisTicks + tickMinStep filter).
-  // Band/point scales: their domain comes through untouched (no .ticks), so
-  // no filtering — see the generation guard above.
-  if (tickMinStep != null && tickMinStep > 0 && ticks.length > 1
-      && scale.type !== 'band' && scale.type !== 'point') {
-    const toNum = (v: unknown): number => v instanceof Date ? v.getTime() : typeof v === 'number' ? v : Number(v)
-    const filtered: unknown[] = [ticks[0]]
-    let last = toNum(ticks[0])
-    for (let i = 1; i < ticks.length; i++) {
-      const t = toNum(ticks[i])
-      if (Math.abs(t - last) >= tickMinStep - 1e-6) {
-        filtered.push(ticks[i])
-        last = t
-      }
-    }
-    return filtered
-  }
-  return ticks
+  // (the minimum step acts only through the tick count above, as in vega: a log scale's ticks may sit closer than it)
+  return scaleTicks(scale, count)
 }
 
 function axisLabelFormat(axis: CompiledAxis, scale: Scale, count: number, ctx?: EvalContext, noSkip = false): (v: unknown) => string {

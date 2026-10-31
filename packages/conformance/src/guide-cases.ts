@@ -132,8 +132,7 @@ function axisProps(r: Rand, orient: string, kind: string, other: PositionScale):
   setIf(a, 'tickSize', maybe(r, 0.4, () => maybeSignal(r, pick(r, [0, 2, 5, 9, 14]))))
   setIf(a, 'tickRound', maybe(r, 0.2, () => chance(r, 0.5)))
   setIf(a, 'tickCount', maybe(r, 0.4, () => (kind === 'time' || kind === 'utc') && chance(r, 0.5) ? pick(r, ['month', 'week', { interval: 'day', step: 10 }, 'year']) : maybeSignal(r, int(r, 1, 12))))
-  // (tickMinStep on a log scale is the scale stack's, not the guides': see the report)
-  setIf(a, 'tickMinStep', (kind === 'log' || kind === 'symlog') && !G('minstep') ? undefined : maybe(r, 0.1, () => pick(r, [1, 5, 10])))
+  setIf(a, 'tickMinStep', maybe(r, 0.1, () => pick(r, [1, 5, 10])))
   if (kind === 'band' || kind === 'point') {
     setIf(a, 'bandPosition', maybe(r, 0.3, () => pick(r, [0, 0.25, 0.5, 1])))
     setIf(a, 'tickBand', maybe(r, 0.3, () => pick(r, ['center', 'extent'])))
