@@ -773,8 +773,9 @@ export function placeLegendStack(
   const mine = (layout[orient] ?? {}) as Rec
   const setting = (key: string, fallback?: unknown): unknown => (mine[key] != null ? mine[key] : layout[key] != null ? layout[key] : fallback)
   // legends that ask for an offset of their own: the largest wins
-  const asked = offsets.filter((o): o is number => typeof o === 'number')
-  const offset = (asked.length ? Math.max(...asked) : setting('offset', 0)) as number
+  let asked: number | undefined
+  for (const o of offsets) if (typeof o === 'number') asked = asked === undefined ? o : Math.max(asked, o)
+  const offset = (asked ?? setting('offset', 0)) as number
   const anchor = setting('anchor', 'start')
   const fraction = anchor === 'end' ? 1 : anchor === 'middle' ? 0.5 : 0
   // the point along the plot's edge the anchor names: within the view's frame, or the extent of what the plot reaches
