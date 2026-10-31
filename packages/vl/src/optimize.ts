@@ -169,6 +169,100 @@ function mergeIdenticalDatasets(out: Obj, generated: (name: string) => boolean):
   dedupeDomainRefs(out, new Set(renames.values()))
 }
 
+/** A function that makes the next dataset name in the numbered series the compiler's own datasets follow (`data_7`), or none when it made no such dataset. */
+function datasetNamer(data: Obj[], generated: (name: string) => boolean): (() => string) | undefined {
+  const names = new Set(data.map((d) => d.name as string))
+  let counter = 0
+  let prefix = ''
+  for (const d of data) {
+    const m = isDerived(d, generated) ? /^(.*?)(\d+)$/.exec(d.name as string) : null
+    if (m) { prefix = m[1]!; counter = Math.max(counter, Number(m[2]) + 1) }
+  }
+  if (prefix === '') return undefined
+  return () => {
+    while (names.has(`${prefix}${counter}`)) counter++
+    names.add(`${prefix}${counter}`)
+    return `${prefix}${counter}`
+  }
+}
+
+/**
+ * Aggregates of one source that group by the same fields are one aggregate: their measures are computed together and the datasets
+ * that read them read the shared one. The measures are listed from the LAST of them, then the others in order, which is the order a
+ * bootstrap interval (`ci0` / `ci1`) draws its random numbers in. A dataset left with nothing after its aggregate IS the shared one.
+ */
+function mergeAggregates(out: Obj, generated: (name: string) => boolean): void {
+  const data = (out.data as Obj[] | undefined) ?? []
+  const fresh = datasetNamer(data, generated)
+  if (fresh === undefined) return
+  const groups = new Map<string, Obj[]>()
+  for (const d of data) {
+    const first = isDerived(d, generated) ? ((d.transform as Obj[] | undefined) ?? [])[0] : undefined
+    if (first === undefined || first.type !== 'aggregate' || !Object.keys(first).every((k) => k === 'type' || k === 'groupby' || k === 'fields' || k === 'ops' || k === 'as')) continue
+    if (!Array.isArray(first.fields) || !Array.isArray(first.ops) || !Array.isArray(first.as)) continue
+    const key = JSON.stringify([d.source, first.groupby ?? []])
+    groups.set(key, [...(groups.get(key) ?? []), d])
+  }
+  const renames = new Map<string, string>()
+  // the shared dataset is declared where the last of the datasets it replaces was, and the ones that read it follow it
+  const placed = new Map<Obj, Obj[]>()
+  const moved = new Set<Obj>()
+  for (const members of groups.values()) {
+    if (members.length < 2) continue
+    const lead = members[members.length - 1]!
+    const measures = new Map<string, [unknown, unknown]>()
+    for (const d of [lead, ...members.slice(0, -1)]) {
+      const t = (d.transform as Obj[])[0]!
+      ;(t.as as unknown[]).forEach((as, i) => {
+        if (!measures.has(String(as))) measures.set(String(as), [(t.fields as unknown[])[i], (t.ops as unknown[])[i]])
+      })
+    }
+    const lt = (lead.transform as Obj[])[0]!
+    const made: Obj = {
+      name: fresh(),
+      source: lead.source,
+      transform: [{ ...lt, fields: [...measures.values()].map(([f]) => f), ops: [...measures.values()].map(([, o]) => o), as: [...measures.keys()] }],
+    }
+    const readers: Obj[] = []
+    for (const d of members) {
+      const rest = (d.transform as Obj[]).slice(1)
+      if (rest.length === 0) renames.set(d.name as string, made.name as string)
+      else {
+        d.source = made.name
+        d.transform = rest
+        readers.push(d)
+      }
+      moved.add(d)
+    }
+    placed.set(lead, [made, ...readers])
+  }
+  if (placed.size === 0) return
+  // (a dataset between them that reads one of the datasets that moved moves along, so that it still follows what it reads)
+  const reads = (d: Obj, names: ReadonlySet<string>): boolean =>
+    (typeof d.source === 'string' && names.has(d.source)) || ((d.transform as Obj[] | undefined) ?? []).some((t) => typeof t.from === 'string' && names.has(t.from))
+  const result: Obj[] = []
+  for (const [lead, group] of placed) {
+    const names = new Set(group.map((d) => d.name as string))
+    for (const d of renames.keys()) names.add(d)
+    const after: Obj[] = []
+    for (const d of data.slice(0, data.indexOf(lead))) {
+      if (moved.has(d) || after.includes(d) || !reads(d, names)) continue
+      after.push(d)
+      names.add(d.name as string)
+    }
+    placed.set(lead, [...group, ...after])
+    for (const d of after) moved.add(d)
+  }
+  for (const d of data) {
+    const group = placed.get(d)
+    if (group) for (const member of group) result.push(member)
+    else if (!moved.has(d)) result.push(d)
+  }
+  out.data = result
+  renameDatasetRefs(out, renames)
+  dedupeDomainRefs(out, new Set(renames.values()))
+}
+
 /** A transform whose effect is not just its output rows (it declares a signal): it stays with the dataset that declared it. */
 const writesSignal = (t: Obj): boolean => typeof t.signal === 'string'
 
@@ -179,19 +273,8 @@ const writesSignal = (t: Obj): boolean => typeof t.signal === 'string'
  */
 function mergeCommonPrefixes(out: Obj, generated: (name: string) => boolean): void {
   const data = (out.data as Obj[] | undefined) ?? []
-  const names = new Set(data.map((d) => d.name as string))
-  let counter = 0
-  let prefix = ''
-  for (const d of data) {
-    const m = isDerived(d, generated) ? /^(.*?)(\d+)$/.exec(d.name as string) : null
-    if (m) { prefix = m[1]!; counter = Math.max(counter, Number(m[2]) + 1) }
-  }
-  if (prefix === '') return
-  const fresh = (): string => {
-    while (names.has(`${prefix}${counter}`)) counter++
-    names.add(`${prefix}${counter}`)
-    return `${prefix}${counter}`
-  }
+  const fresh = datasetNamer(data, generated)
+  if (fresh === undefined) return
   const renames = new Map<string, string>()
   const added: Array<{ before: Obj; made: Obj }> = []
   const keyOf = (d: Obj): string[] => ((d.transform as Obj[] | undefined) ?? []).map(transformKey)
@@ -302,6 +385,7 @@ export function optimizeData(out: Obj, generated: (name: string) => boolean): vo
   if (!Array.isArray(out.data) || out.data.length < 2) return
   mergeBins(out)
   mergeIdenticalDatasets(out, generated)
+  mergeAggregates(out, generated)
   mergeCommonPrefixes(out, generated)
   // (only the datasets that lay out facet headers: vega-lite keeps the pipeline datasets its scales requested even when a cell's own
   // scales end up reading the cell's copies)

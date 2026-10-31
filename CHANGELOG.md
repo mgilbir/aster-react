@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+- **`@aster/vl`: composite marks in a repeat, and the decision tables as Aster's own.**
+  - A boxplot, errorbar or errorband in a repeat (a list, a row, a column, a grid, a layer, nested in a facet, a concat, a layer or
+    another repeat) is rewritten after the repeat has put its values in; it was rewritten while its field was still a `{repeat}`
+    reference. A generated matrix of composite marks x repeat forms x channels x compositions now compares each against vega-lite 6.4.3
+    (SVG, signals, scales, axes, legends, marks). It found and fixed, in views a repeated composite sits in: a view with an axis and no
+    scale on the other channel declares that size signal in its group (concat and repeat); the legend of a layer of composite marks
+    merges a nested layer's titles first; a datum colour in a composite mark and a datum condition on `color`, `size`, `opacity`,
+    `strokeWidth`, `strokeDash`; a repeat inside a repeat (inner variables shadow the outer's; views are named `child__row_gchild__column_v`);
+    sibling aggregates of one source that group alike are one aggregate, in vega-lite's order, so the bootstrap intervals of an
+    errorbar's views agree.
+  - Which scale properties apply to a scale type (`scaleprops.ts`), a mark's orientation (`orient.ts`), a scale's default zero, time units
+    (`timeunit.ts`) and predicates (`predicate.ts`) no longer follow vega-lite's functions line by line: a table of rows, an ordered
+    run of rules, and shared pieces of their own. Each is pinned over its whole input space (scale property x scale type x channel;
+    mark x position channels x second channels x asked orient; every time unit in every place; every form of predicate over every kind of
+    value) against the compiled Vega of vega-lite, and 178,640 + 15,492 specs compile to the same Vega before and after. The
+    orientation tables found two places the old one was not vega-lite's (a pre-binned channel on a rule or an area; a datum read as a field).
+
 - **`@aster/core` scale stack in Aster's own design** (`arr.ts`, `interp.ts`, `scale.ts`, `scale-continuous.ts`, `scale-discrete.ts`,
   `scale-d3.ts`, `scale-domain.ts`, `scales.ts`). d3-array, d3-interpolate, d3-scale, vega-scale and the spec side of vega-parser /
   vega-encode were written as transcriptions; they are now models of their own: one mapping model and one warp for identity / linear /
