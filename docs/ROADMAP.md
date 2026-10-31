@@ -35,8 +35,8 @@ from the pinned upstream package, implemented behind the same internal API, repl
 | `vega-expression`, `vega-interpreter`, the `vega-functions` surface | `src/expr-parser.ts`, `src/expr-interpreter.ts`, `src/expression.ts` |
 | `d3-dsv`, `topojson-client` | `src/dsv.ts`, `src/topojson.ts` |
 | `d3-shape`, `d3-path` | `src/shape.ts`, the arc/path code in `src/render.ts` |
-| `vega-scale`, `d3-scale`, `d3-array`, `d3-interpolate`, `internmap`, `d3-scale-chromatic` | `src/arr.ts`, `src/interp.ts`, `src/scale-d3.ts`, `src/scale.ts`, `src/scale-schemes.ts` |
-| `vega-parser` / `vega-encode` scale parsing | `src/scales.ts` |
+| `vega-scale`, `d3-scale`, `d3-array`, `d3-interpolate`, `internmap`, `d3-scale-chromatic` | `src/arr.ts`, `src/interp.ts`, `src/scale-continuous.ts`, `src/scale-calendar.ts`, `src/scale-discrete.ts`, `src/scale-registry.ts`, `src/scale-ticks.ts`, `src/scale-labels.ts`, `src/scale-colors.ts`, `src/scale-schemes.ts` (`scale.ts`, `scale-d3.ts` re-export) |
+| `vega-parser` / `vega-encode` scale parsing | `src/scales.ts`, `src/scale-spec.ts`, `src/scale-domain.ts`, `src/scale-signals.ts` |
 | `d3-geo`, `d3-geo-projection`, `vega-projection` (behaviour matched bit for bit; own design: geometry event buffers, see ARCHITECTURE) | `src/geo-events.ts`, `src/geo-sphere.ts`, `src/geo-sphere-measures.ts`, `src/geo-clip.ts`, `src/geo-resample.ts`, `src/geo-path.ts`, `src/geo-raw.ts`, `src/geo-projections.ts`, `src/geo.ts` |
 | `d3-contour` | `src/contour.ts` |
 | `vega-transforms`, `vega-statistics`, `vega-hierarchy`, `vega-geo`, `vega-regression`, `vega-label`, `delaunator`/`d3-delaunay` | `src/transform*.ts`, `src/delaunay.ts`, `src/voronoi.ts`, `src/orient.ts` |
