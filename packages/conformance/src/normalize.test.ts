@@ -149,6 +149,11 @@ describe('canonicalizeSvg ignores representation-only differences', () => {
 })
 
 describe('canonicalizeSvg misc contracts', () => {
+  it('boxes that touch to within float noise are not independent: swapping them is a paint-order difference', () => {
+    const a = '<rect x="0" y="0" width="10" height="10" fill="red"/>'
+    const b = '<rect x="12.0000000001" y="0" width="10" height="10" fill="blue"/>'
+    expect(diff(wrap(a + b), wrap(b + a)).join('\n')).toContain('paint-order')
+  })
   it('dangling references compare equal to each other but not to a real def', () => {
     const dangling = (id: string) => wrap(`<rect width="4" height="4" fill="url(#${id})"/>`)
     expect(diff(dangling('gradient_0'), dangling('gradient_9'))).toEqual([])
