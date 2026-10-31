@@ -1669,7 +1669,7 @@ function compileFacetedComposition(spec: VLSpec, ctx: CompileCtx, nested: string
       const redirect = (dom: unknown): unknown => (Array.isArray(dom) ? dom.map(redirect) : isObject(dom) ? Object.fromEntries(Object.entries(dom).map(([k, v]) => [k, k === 'data' && typeof v === 'string' ? copyOf(v) : redirect(v)])) : dom)
       sc.domain = redirect(sc.domain) as ScaleSpec['domain']
     }
-    data.push(...rootData)
+    for (const d of rootData) data.push(d)
   }
   // (the headers follow the size of the cell when the composition has one)
   for (const m of scaffold.marks as Record<string, unknown>[]) {
