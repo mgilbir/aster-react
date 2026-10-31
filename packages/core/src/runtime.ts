@@ -54,10 +54,10 @@ import { flattenLength } from './transform-basic.js'
 import { trellisLayout } from './trellis.js'
 import { boundAxisGroup, boundLegendGroup, boundGroupItem, boundLeaf, boundTypedMark, Bounds, layoutBounds, eachMarkBounds, hasClippedMark } from './bounds.js'
 import { rectItemPath } from './render.js'
-import { buildAxis as buildAxisGuide, tickBand } from './guide-axis.js'
+import { buildAxis as buildAxisGuide, tickPlacement } from './guide-axis.js'
 import { buildTitle as buildTitleGuide } from './guide-title.js'
 import { buildLegend as buildLegendGuide, legendType, LEGEND_SCALES, type GuideHost } from './guide-legend.js'
-import { isSignal, itemAriaOf, lookup, value, type GuideStyles, type UserEncode } from './guide-encode.js'
+import { isSignal, itemAriaOf, propsOf, type GuideStyles, type UserEncode } from './guide-encode.js'
 import { defaultMergedConfig } from './config-defaults.js'
 
 const DEFAULT_SIZE = 500
@@ -2314,9 +2314,9 @@ function buildTitleGroup(
   // (the mark definition reads these as written -- vega-parser marks/definition.js: `+zindex || undefined`, `aria`, `description`)
   const own = (title0.own ?? {}) as Record<string, unknown>
   const cfg = (title0.cfg ?? {}) as Record<string, unknown>
-  const aria = value(own.aria, cfg.aria)
-  const description = value(own.description, cfg.description)
-  const zindex = +(value(own.zindex, cfg.zindex) as number) || undefined
+  const aria = own.aria ?? cfg.aria
+  const description = own.description ?? cfg.description
+  const zindex = +((own.zindex ?? cfg.zindex) as number) || undefined
   const gb = groupBackground(g as SceneItem, +(g.width as number) || 0, +(g.height as number) || 0)
   const out = {
     marktype: 'group',
@@ -5254,7 +5254,7 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext, index: number): S
   if (!scale) return null
   const scaleType = ctx.scaleTypes.get(channels[0]![1]) ?? ''
   // vega's `_('tickCount')`: a signal is what it holds
-  const tickCountRaw = guideScalar(ctx, value(spec.tickCount, config.tickCount))
+  const tickCountRaw = guideScalar(ctx, spec.tickCount ?? config.tickCount)
   // A tickCount interval string ('day', 'month', ...) is only legal on time scales: vega's LegendEntries throws, the
   // dataflow pass aborts there, and the legend (and whatever comes after it in its scope) is never made
   // (a scale ranked late in its own scope puts the failing operator last: the legend is then made without its entries,
@@ -5298,7 +5298,7 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext, index: number): S
     channels, scale: scale as never, scaleType, scaleOf: (name) => ctx.scales.get(name) as never,
     values: resolveLegendValues({ values: spec.values } as unknown as CompiledLegend, ctx),
     count: tickCountRaw, minstep: guideScalar(ctx, spec.tickMinStep) as number | undefined,
-    limit: +(guideScalar(ctx, value(spec.symbolLimit, config.symbolLimit)) as number),
+    limit: +(guideScalar(ctx, spec.symbolLimit ?? config.symbolLimit) as number),
     formatSpecifier: specifierOf(spec.format), formatType,
     locale: locale(undefined), host, style: guideStyles(ctx), raw: !!ctx.rawGuides,
   })
@@ -5685,7 +5685,7 @@ function buildAxis(axis: CompiledAxis, ctx: EvalContext, index: number): SceneGr
   // `{index (fraction 0..1), tickIndex, value, label}`; the `extra` entry (an
   // extra tick pegged to the first value, for binned axes) is
   // `{index: -1, tickIndex: -1, extra: {value}, label: ''}`.
-  const band = tickBand(lookup(own, cfg))
+  const band = tickPlacement(propsOf(own, cfg))
   const extra = isSignal(band.extra) ? ctx.runtime.expr(band.extra.signal)({}, ctx.signalParams) : band.extra
   let rows: Row[] = ticks.map((value, i) => ({ index: i / ((ticks.length - 1) || 1), tickIndex: i, value, label: labelCache[i] }))
   if (extra && ticks.length) rows.push({ index: -1, tickIndex: -1, extra: { value: ticks[0] }, label: '' })

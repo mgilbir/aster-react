@@ -1,311 +1,308 @@
 /**
- * An axis, as vega-parser builds it (parsers/axis.js, parsers/guides/axis-*.js) and vega-view-transforms lays it out
- * (layout/axis.js): five marks (grid, ticks, labels, domain, title) encoded from the spec and the config, an axis
- * group whose encode carries the layout parameters, the Overlap transform on the labels, and `axisLayout`, which
- * places the group and the title from the bounds of what was drawn. See guide-encode.ts for how a property reaches
- * an item.
+ * An axis: five marks (grid lines, ticks, labels, the domain line, the title) encoded from the spec and the config, and a group
+ * item whose channels are the layout's parameters. Building one evaluates the marks against the scale's ticks, thins out the
+ * labels that collide, then places the axis against the frame from the extent of what was drawn. See guide-encode.ts for how a
+ * property becomes a channel of an item.
+ *
+ * An axis has two directions and two sides, and its marks are written once for them: `Frame` says whether it runs along x or y
+ * and which side of the plot it faces, and each mark names its position channels by the role they play (along the axis, across
+ * it) instead of by orientation.
  */
-import type { SceneItem } from './types.js'
+import type { EncodeValue, SceneItem } from './types.js'
 import { lerp, sortData } from './util.js'
 import { Bounds, boundLeaf, boundStroke, multiLineOffset } from './bounds.js'
 import {
-  addEncoders, applyDefaults, encoder, encodeItem, encodeItems, extendEncode, getEncoding, guideMark, has, isSignal, joinByValue, lookup, one, shareMarks, sharedMarks, contentKey, isShareable, keyPart, value, zero,
-  type Block, type Entry, type EntryFn, type EntryHost, type EntryScope, type GuideMarkDef, type GuideStyles, type Lookup, type MarkEncode, type Row, type UserEncode,
+  ONE, ZERO, contentKey, customize, encodeItem, encodeItems, encodes, entryOf, isShareable, isSignal, joinByValue, keyPart, mergeUserEncode,
+  propsOf, setChannels, shareMarks, sharedMarks,
+  type Block, type Entry, type EntryFn, type EntryHost, type EntryScope, type GuideMarkDef, type GuideProps, type GuideStyles, type MarkEncode, type Row, type UserEncode,
 } from './guide-encode.js'
-import type { EncodeValue } from './types.js'
 
 type Rec = Record<string, unknown>
 const isObj = (v: unknown): v is object => v === Object(v)
 
-// --- guides/axis-util.js (the orient is a static string here: the runtime resolves an orient signal first) -----------
+// --- which way an axis runs --------------------------------------------------------------------------------------------------
 
-const isX = (orient: string): boolean => orient === 'bottom' || orient === 'top'
-const getSign = (orient: string, a: number, b: number): number => (orient === 'left' || orient === 'top' ? a : b)
-const ifX = <T>(orient: string, a: T, b?: T): T | undefined => (isX(orient) ? a : b)
-const ifY = <T>(orient: string, a: T, b?: T): T | undefined => (isX(orient) ? b : a)
-const ifTop = (orient: string, a: string, b: string): EncodeValue => (orient === 'top' ? { value: a } : { value: b })
-const ifRight = (orient: string, a: string, b: string): EncodeValue => (orient === 'right' ? { value: a } : { value: b })
-const mult = (sign: number, v: number): number | EncodeValue => (v === 0 ? 0 : { value: sign * v })
-
-/** guides/guide-util.js `extendOffset` */
-function extendOffset(v: unknown, offset: unknown): unknown {
-  return !offset ? v
-    : !v ? offset
-    : !isObj(v) ? { value: v, offset }
-    : Object.assign({}, v, { offset: extendOffset((v as Rec).offset, offset) })
+interface Frame {
+  /** Runs along x (a top or bottom axis); otherwise along y. */
+  horizontal: boolean
+  /** -1 when it faces the top or the left of the plot, else 1: the sign of "outward" in the axis's own coordinates. */
+  facing: 1 | -1
+  /** The position channel along the axis, and the one across it. */
+  along: 'x' | 'y'
+  across: 'x' | 'y'
 }
 
-/** guides/guide-util.js `tickBand` */
-export function tickBand(_: Lookup): { extra: unknown; band: unknown; offset: unknown } {
-  const v = _('tickBand')
-  let offset: unknown = _('tickOffset')
-  let band: unknown
-  let extra: unknown
-  if (!v) {
-    // if no tick band entry, fall back on other properties
-    band = _('bandPosition')
-    extra = _('tickExtra')
-  } else if (isSignal(v)) {
-    // if signal, augment code to interpret values
-    band = { signal: `(${v.signal}) === 'extent' ? 1 : 0.5` }
-    extra = { signal: `(${v.signal}) === 'extent'` }
-    if (!isObj(offset)) offset = { signal: `(${v.signal}) === 'extent' ? 0 : ${offset}` }
-  } else if (v === 'extent') {
-    band = 1
-    extra = true
-    offset = 0
-  } else {
-    band = 0.5
-    extra = false
+function frameOf(orient: string): Frame {
+  const horizontal = orient === 'top' || orient === 'bottom'
+  return { horizontal, facing: orient === 'top' || orient === 'left' ? -1 : 1, along: horizontal ? 'x' : 'y', across: horizontal ? 'y' : 'x' }
+}
+
+/** Where on the axis the ticks sit within a band of the scale, and the offset that goes with it. */
+export interface TickPlacement {
+  band: unknown
+  extra: unknown
+  offset: unknown
+}
+
+/**
+ * A tick sits in the middle of its band (`center`), at the band's start with one more tick at the end (`extent`), or wherever
+ * `bandPosition` and `tickExtra` say. A `tickBand` that is a signal picks between the first two as the signal changes.
+ */
+export function tickPlacement(props: GuideProps): TickPlacement {
+  const mode = props.get('tickBand')
+  let offset: unknown = props.get('tickOffset')
+  if (!mode) return { band: props.get('bandPosition'), extra: props.get('tickExtra'), offset }
+  if (isSignal(mode)) {
+    const extent = `(${mode.signal}) === 'extent'`
+    if (!isObj(offset)) offset = { signal: `${extent} ? 0 : ${offset}` }
+    return { band: { signal: `${extent} ? 1 : 0.5` }, extra: { signal: extent }, offset }
   }
-  return { extra, band, offset }
+  return mode === 'extent' ? { band: 1, extra: true, offset: 0 } : { band: 0.5, extra: false, offset }
 }
 
-/** vega-util `flush`: one of three values by the distance of a value to a range's ends. */
-function flush(range: readonly number[], v: number, threshold: unknown, left: unknown, right: unknown, center: unknown): unknown {
-  if (!threshold && threshold !== 0) return center
-  const t = +(threshold as number)
-  let a = range[0] as number
-  let b = range[range.length - 1] as number
-  if (b === undefined) return center
-  if (b < a) { const l = a; a = b; b = l }
-  const l = Math.abs(v - a)
-  const r = Math.abs(b - v)
-  return l < r && l <= t ? left : r <= t ? right : center
+/** An entry that adds `extra` to the offset an entry already has. */
+function addOffset(entry: unknown, extra: unknown): unknown {
+  if (!extra) return entry
+  if (!entry) return extra
+  if (!isObj(entry)) return { value: entry, offset: extra }
+  return { ...entry, offset: addOffset((entry as Rec).offset, extra) }
 }
 
-/** vega-parser `deref`: a signal's expression text, else the value */
-const deref = (v: unknown): unknown => (v && (v as { signal?: unknown }).signal) || v
+/** An expression's text if the value is a signal, else the value. */
+const textOf = (v: unknown): unknown => (isSignal(v) ? v.signal : v)
 
-// --- the marks -------------------------------------------------------------------------------------------------------
+/**
+ * Which of three values a position takes by how close it lies to the ends of the range: `atStart` within `threshold` of the first
+ * end (and nearer to it), `atEnd` within `threshold` of the other, `between` otherwise.
+ */
+function byRangeEnd(range: readonly number[], position: number, threshold: unknown, atStart: unknown, atEnd: unknown, between: unknown): unknown {
+  if (!threshold && threshold !== 0) return between
+  const limit = +(threshold as number)
+  let lo = range[0] as number
+  let hi = range[range.length - 1] as number | undefined
+  if (hi === undefined) return between
+  if (hi < lo) [lo, hi] = [hi, lo]
+  const fromLo = Math.abs(position - lo)
+  const fromHi = Math.abs(hi - position)
+  return fromLo < fromHi && fromLo <= limit ? atStart : fromHi <= limit ? atEnd : between
+}
 
-interface AxisParts {
+// --- the marks --------------------------------------------------------------------------------------------------------------
+
+/** What each mark of an axis is made from. */
+interface Kit {
   spec: Rec
-  _: Lookup
+  props: GuideProps
+  frame: Frame
   orient: string
   scale: string
-  band: { extra: unknown; band: unknown; offset: unknown }
-  encode: Record<string, UserEncode | undefined>
+  band: TickPlacement
+  user: Record<string, UserEncode | undefined>
 }
 
-const newEncode = (): MarkEncode => ({ enter: { opacity: zero }, update: { opacity: one }, exit: { opacity: zero } })
+const freshEncode = (): MarkEncode => ({ enter: { opacity: ZERO }, update: { opacity: ONE }, exit: { opacity: ZERO } })
 
-/** guides/axis-ticks.js */
-function ticksMark(p: AxisParts, size: unknown): GuideMarkDef {
-  const { _, orient, scale, band } = p
-  const sign = getSign(orient, -1, 1)
-  const encode = newEncode()
-  const { enter, update } = encode
-  addEncoders(encode, {
-    stroke: _('tickColor'), strokeCap: _('tickCap'), strokeDash: _('tickDash'), strokeDashOffset: _('tickDashOffset'),
-    strokeOpacity: _('tickOpacity'), strokeWidth: _('tickWidth'),
-  })
-  const tickSize = encoder(size)
-  tickSize.mult = sign
-  const tickPos = { scale, field: 'value', band: band.band, extra: band.extra, offset: band.offset, round: _('tickRound') } as unknown as EncodeValue
-  update.y = enter.y = ifX(orient, zero, tickPos)
-  update.y2 = enter.y2 = ifX(orient, tickSize as EncodeValue)
-  update.x = enter.x = ifY(orient, zero, tickPos)
-  update.x2 = enter.x2 = ifY(orient, tickSize as EncodeValue)
-  return guideMark({ type: 'rule', role: 'axis-tick', encode, interactive: false }, p.encode.ticks)
+/** Both blocks get the same entry (the channel is static, or its entry does not care which block it is in). */
+function both(encode: MarkEncode, channel: string, entry: unknown): void {
+  if (entry !== undefined) encode.enter[channel] = encode.update[channel] = entry as Entry
 }
 
-/** guides/axis-grid.js */
-function gridMark(p: AxisParts, host: EntryHost): GuideMarkDef {
-  const { spec, _, orient, scale, band } = p
-  const vscale = spec.gridScale
-  const sign = getSign(orient, 1, -1)
-  const offset = offsetValue(spec.offset, sign)
-  const encode = newEncode()
-  const { enter, update } = encode
-  addEncoders(encode, {
-    stroke: _('gridColor'), strokeCap: _('gridCap'), strokeDash: _('gridDash'), strokeDashOffset: _('gridDashOffset'),
-    strokeOpacity: _('gridOpacity'), strokeWidth: _('gridWidth'),
-  })
-  const tickPos = { scale, field: 'value', band: band.band, extra: band.extra, offset: band.offset, round: _('tickRound') } as unknown as EncodeValue
-  // (the cross-axis length is the view's `height` / `width` SIGNAL: a nested group's axes grid as far as the whole view)
-  const along = (name: 'width' | 'height'): Entry => {
+/** The stroke properties of a mark that draws a line (`prefix` + Color, Cap, Dash, DashOffset, Opacity, Width). */
+function strokeChannels(k: Kit, prefix: string): Rec {
+  const get = (suffix: string): unknown => k.props.get(prefix + suffix)
+  return {
+    stroke: get('Color'), strokeCap: get('Cap'), strokeDash: get('Dash'), strokeDashOffset: get('DashOffset'),
+    strokeOpacity: get('Opacity'), strokeWidth: get('Width'),
+  }
+}
+
+/** A tick's or a grid line's position along the axis: the scale's position of its value, within its band. */
+function tickPosition(k: Kit): EncodeValue {
+  return { scale: k.scale, field: 'value', band: k.band.band, extra: k.band.extra, offset: k.band.offset, round: k.props.get('tickRound') } as unknown as EncodeValue
+}
+
+function ticks(k: Kit, size: unknown): GuideMarkDef {
+  const { frame } = k
+  const encode = freshEncode()
+  setChannels(encode, strokeChannels(k, 'tick'))
+  // a tick reaches out from the axis line by the tick size
+  const reach = { ...entryOf(size), mult: frame.facing } as unknown as EncodeValue
+  both(encode, frame.across, ZERO)
+  both(encode, frame.across + '2', reach)
+  both(encode, frame.along, tickPosition(k))
+  return customize({ type: 'rule', role: 'axis-tick', encode, interactive: false }, k.user.ticks)
+}
+
+/** A grid line's offset for an axis that faces `facing`: the lines run the other way, so the offset's sign flips. */
+function signedOffset(offset: unknown, sign: number): unknown {
+  if (sign === 1) return offset
+  if (!isObj(offset)) return sign * ((offset as number) || 0)
+  // an entry: its innermost `mult` (or a new one) takes the sign
+  const copy: Rec = { ...(offset as Rec) }
+  let at = copy
+  while (at.mult != null) {
+    if (!isObj(at.mult)) {
+      at.mult = (at.mult as number) * sign
+      return copy
+    }
+    at = at.mult = { ...(at.mult as Rec) }
+  }
+  at.mult = sign
+  return copy
+}
+
+function grid(k: Kit): GuideMarkDef {
+  const { spec, frame } = k
+  const alongScale = spec.gridScale
+  // grid lines run across the plot, against the way the ticks point
+  const inward = -frame.facing
+  const offset = signedOffset(spec.offset, inward)
+  const encode = freshEncode()
+  setChannels(encode, strokeChannels(k, 'grid'))
+  // the lines end at the plot's far side: the view's size, so that a nested group's axes grid as far as the whole view
+  const reachView = (extent: 'width' | 'height'): Entry => {
     const fn = ((s: EntryScope) => {
-      const base = s.host.viewSignal(name)
-      const m = base * sign
-      return offset == null ? m : m + Number(s.host.entry(isObj(offset) ? (offset as EncodeValue) : ({ value: offset } as EncodeValue), s.datum))
+      const reach = s.host.viewSignal(extent) * inward
+      return offset == null ? reach : reach + Number(s.host.entry(isObj(offset) ? (offset as EncodeValue) : ({ value: offset } as EncodeValue), s.datum))
     }) as EntryFn
-    // (an offset that is an entry may read the datum; a number is the same for every tick)
+    // an offset that is an entry may read the datum; a number is the same for every line
     fn.perRun = offset == null || !isObj(offset)
     return fn
   }
-  const gridStart = (vscale ? { scale: vscale, range: 0, mult: sign, offset } : { value: 0, offset }) as unknown as EncodeValue
-  const gridEnd: Entry = vscale ? ({ scale: vscale, range: 1, mult: sign, offset } as unknown as EncodeValue) : (ifX(orient, along('height'), along('width')) as Entry)
-  void host
-  enter.x = update.x = ifX(orient, tickPos, gridStart)
-  enter.y = update.y = ifY(orient, tickPos, gridStart)
-  enter.x2 = update.x2 = ifY(orient, gridEnd)
-  enter.y2 = update.y2 = ifX(orient, gridEnd)
-  return guideMark({ type: 'rule', role: 'axis-grid', encode, interactive: false }, p.encode.grid)
+  const start = (alongScale ? { scale: alongScale, range: 0, mult: inward, offset } : { value: 0, offset }) as unknown as EncodeValue
+  const end: Entry = alongScale ? ({ scale: alongScale, range: 1, mult: inward, offset } as unknown as EncodeValue) : reachView(frame.horizontal ? 'height' : 'width')
+  both(encode, frame.along, tickPosition(k))
+  both(encode, frame.across, start)
+  both(encode, frame.across + '2', end)
+  return customize({ type: 'rule', role: 'axis-grid', encode, interactive: false }, k.user.grid)
 }
 
-/** guides/axis-grid.js `offsetValue` */
-function offsetValue(offset: unknown, sign: number): unknown {
-  if (sign === 1) {
-    // no further adjustment needed, just return offset
-  } else if (!isObj(offset)) {
-    offset = sign * ((offset as number) || 0)
-  } else {
-    let entry: Rec = (offset = { ...(offset as Rec) }) as Rec
-    while (entry.mult != null) {
-      if (!isObj(entry.mult)) {
-        entry.mult = (entry.mult as number) * sign
-        return offset
-      }
-      entry = entry.mult = { ...(entry.mult as Rec) }
-    }
-    entry.mult = sign
-  }
-  return offset
+function domain(k: Kit): GuideMarkDef {
+  const { frame, scale } = k
+  const encode = freshEncode()
+  const get = (suffix: string): unknown => k.props.get('domain' + suffix)
+  setChannels(encode, { stroke: get('Color'), strokeCap: get('Cap'), strokeDash: get('Dash'), strokeDashOffset: get('DashOffset'), strokeWidth: get('Width'), strokeOpacity: get('Opacity') })
+  // the line runs the scale's range, along the plot's edge
+  both(encode, frame.along, { scale, range: 0 })
+  both(encode, frame.along + '2', { scale, range: 1 })
+  both(encode, frame.across, ZERO)
+  return customize({ type: 'rule', role: 'axis-domain', encode, interactive: false }, k.user.domain)
 }
 
-/** guides/axis-domain.js */
-function domainMark(p: AxisParts): GuideMarkDef {
-  const { _, orient, scale } = p
-  const encode = newEncode()
-  const { enter, update } = encode
-  addEncoders(encode, {
-    stroke: _('domainColor'), strokeCap: _('domainCap'), strokeDash: _('domainDash'), strokeDashOffset: _('domainDashOffset'),
-    strokeWidth: _('domainWidth'), strokeOpacity: _('domainOpacity'),
-  })
-  const pos0 = { scale, range: 0 } as unknown as EncodeValue
-  const pos1 = { scale, range: 1 } as unknown as EncodeValue
-  enter.x = update.x = ifX(orient, pos0, zero)
-  enter.x2 = update.x2 = ifX(orient, pos1)
-  enter.y = update.y = ifY(orient, pos0, zero)
-  enter.y2 = update.y2 = ifY(orient, pos1)
-  return guideMark({ type: 'rule', role: 'axis-domain', encode, interactive: false }, p.encode.domain)
-}
+function labels(k: Kit, size: unknown): GuideMarkDef {
+  const { frame, props, scale, orient } = k
+  const flush = textOf(props.get('labelFlush'))
+  const flushDistance = textOf(props.get('labelFlushOffset'))
+  const labelAlign = props.get('labelAlign')
+  const labelBaseline = props.get('labelBaseline')
+  const flushing = flush === 0 || !!flush
 
-/** guides/axis-labels.js */
-function labelsMark(p: AxisParts, size: unknown): GuideMarkDef {
-  const { _, orient, scale, band } = p
-  const sign = getSign(orient, -1, 1)
-  const flushV = deref(_('labelFlush'))
-  const flushOffset = deref(_('labelFlushOffset'))
-  const labelAlign = _('labelAlign')
-  const labelBaseline = _('labelBaseline')
-  let flushOn = flushV === 0 || !!flushV
+  // a label sits past the end of the tick by the label padding
+  const distance = { ...entryOf(size), mult: frame.facing, offset: { ...entryOf(props.get('labelPadding') || 0), mult: frame.facing } } as unknown as EncodeValue
+  const position = { scale, field: 'value', band: 0.5, offset: addOffset(k.band.offset, props.get('labelOffset')) } as unknown as EncodeValue
 
-  const tickSize = encoder(size)
-  tickSize.mult = sign
-  tickSize.offset = encoder(_('labelPadding') || 0)
-  ;(tickSize.offset as Rec).mult = sign
-
-  const tickPos = { scale, field: 'value', band: 0.5, offset: extendOffset(band.offset, _('labelOffset')) } as unknown as EncodeValue
-
-  // flush(range("scale"), scale("scale", datum.value), threshold, a, b, c): the arguments are expression text upstream
-  const flushExpr = (threshold: unknown, a: string, b: string, c: string): EntryFn => (s) => {
+  // the end labels of an axis can be pulled in (flush) by shifting their alignment, or (flushDistance) their position
+  const nearEnds = (atStart: string, atEnd: string, between: string, threshold: unknown = flush): EntryFn => (s) => {
     const sc = s.host.scale(scale)
     const range = (sc ? sc.range() : []) as number[]
-    const v = sc ? (sc(s.datum.value) as number) : NaN
-    const ev = (t: string): unknown => s.host.expr(t)
-    return flush(range, v, ev(String(threshold)), ev(a), ev(b), ev(c))
+    const at = sc ? (sc(s.datum.value) as number) : NaN
+    const value = (code: string): unknown => s.host.expr(code)
+    return byRangeEnd(range, at, value(String(threshold)), value(atStart), value(atEnd), value(between))
   }
-  const align = ifX(orient, flushOn ? flushExpr(flushV, '"left"', '"right"', '"center"') : ({ value: 'center' } as EncodeValue), ifRight(orient, 'left', 'right')) as Entry
-  const baseline = ifX(orient, ifTop(orient, 'bottom', 'top'), flushOn ? flushExpr(flushV, '"top"', '"bottom"', '"middle"') : ({ value: 'middle' } as EncodeValue)) as Entry
-  const offsetExpr = flushExpr(flushV, `-(${String(flushOffset)})`, String(flushOffset), '0')
-  flushOn = flushOn && !!flushOffset
+  const align: Entry = frame.horizontal
+    ? (flushing ? nearEnds('"left"', '"right"', '"center"') : { value: 'center' } as EncodeValue)
+    : { value: orient === 'right' ? 'left' : 'right' } as EncodeValue
+  const baseline: Entry = frame.horizontal
+    ? { value: orient === 'top' ? 'bottom' : 'top' } as EncodeValue
+    : (flushing ? nearEnds('"top"', '"bottom"', '"middle"') : { value: 'middle' } as EncodeValue)
+  const nudge = nearEnds(`-(${String(flushDistance)})`, String(flushDistance), '0')
+  const nudging = flushing && !!flushDistance
 
-  const enter: Block = {
-    opacity: zero,
-    x: ifX(orient, tickPos, tickSize as EncodeValue),
-    y: ifY(orient, tickPos, tickSize as EncodeValue),
-  }
-  const update: Block = { opacity: one, text: { field: 'label' } as EncodeValue, x: enter.x, y: enter.y, align, baseline }
-  const encode: MarkEncode = { enter, update, exit: { opacity: zero, x: enter.x, y: enter.y } }
-
-  addEncoders(encode, {
-    dx: !labelAlign && flushOn ? ifX(orient, offsetExpr as unknown) : null,
-    dy: !labelBaseline && flushOn ? ifY(orient, offsetExpr as unknown) : null,
+  const enter: Block = { opacity: ZERO }
+  enter[frame.along] = position
+  enter[frame.across] = distance
+  const update: Block = { opacity: ONE, text: { field: 'label' } as EncodeValue, x: enter.x, y: enter.y, align, baseline }
+  const encode: MarkEncode = { enter, update, exit: { opacity: ZERO, x: enter.x, y: enter.y } }
+  // only labels whose alignment the spec leaves alone are shifted
+  setChannels(encode, {
+    [frame.horizontal ? 'dx' : 'dy']: (frame.horizontal ? !labelAlign : !labelBaseline) && nudging ? nudge : null,
   })
-  addEncoders(encode, {
-    angle: _('labelAngle'), fill: _('labelColor'), fillOpacity: _('labelOpacity'), font: _('labelFont'), fontSize: _('labelFontSize'),
-    fontWeight: _('labelFontWeight'), fontStyle: _('labelFontStyle'), limit: _('labelLimit'), lineHeight: _('labelLineHeight'),
+  setChannels(encode, {
+    angle: props.get('labelAngle'), fill: props.get('labelColor'), fillOpacity: props.get('labelOpacity'), font: props.get('labelFont'),
+    fontSize: props.get('labelFontSize'), fontWeight: props.get('labelFontWeight'), fontStyle: props.get('labelFontStyle'),
+    limit: props.get('labelLimit'), lineHeight: props.get('labelLineHeight'),
   }, { align: labelAlign, baseline: labelBaseline })
 
-  const bound = _('labelBound')
-  let overlap = _('labelOverlap')
-  const mark = guideMark({ type: 'text', role: 'axis-label', style: 'guide-label', encode, interactive: false }, p.encode.labels)
-  // if overlap method or bound defined, request label overlap removal
+  const mark = customize({ type: 'text', role: 'axis-label', style: 'guide-label', encode, interactive: false }, k.user.labels)
+  const overlap = props.get('labelOverlap')
+  const bound = props.get('labelBound')
   if (overlap || bound) {
-    mark.overlap = {
-      separation: _('labelSeparation'), method: overlap, order: 'datum.index',
-      bound: bound ? { scale, orient, tolerance: bound } : null,
-    }
+    mark.overlap = { separation: props.get('labelSeparation'), method: overlap, order: 'datum.index', bound: bound ? { scale, orient, tolerance: bound } : null }
   }
-  overlap = undefined
   return mark
 }
 
+function title(k: Kit): GuideMarkDef {
+  const { spec, frame, props, scale } = k
+  const user = k.user.title
+  const anchorSide = (item: Rec, start: string, end: string, middle: string): string => (item.anchor === 'start' ? start : item.anchor === 'end' ? end : middle)
+  const enter: Block = {
+    opacity: ZERO,
+    anchor: entryOf(props.get('titleAnchor', null)) as EncodeValue,
+    align: (s) => anchorSide(s.item, 'left', 'right', 'center'),
+  }
+  const update: Block = { ...enter, opacity: ONE, text: entryOf(spec.title) as EncodeValue }
+  const encode: MarkEncode = { enter, update, exit: { opacity: ZERO } }
 
-/** guides/axis-title.js */
-function titleMark(p: AxisParts): GuideMarkDef {
-  const { spec, _, orient, scale } = p
-  const sign = getSign(orient, -1, 1)
-  const alignFn: EntryFn = (s) => (s.item.anchor === 'start' ? 'left' : s.item.anchor === 'end' ? 'right' : 'center')
-  const enter: Block = { opacity: zero, anchor: encoder(_('titleAnchor', null)) as EncodeValue, align: alignFn }
-  const update: Block = Object.assign({}, enter, { opacity: one, text: encoder(spec.title) as EncodeValue })
-  const encode: MarkEncode = { enter, update, exit: { opacity: zero } }
-
-  const titlePos: EntryFn = (s) => {
+  // along the axis the title sits at its anchor on the scale's range
+  update[frame.along] = (s: EntryScope) => {
     const sc = s.host.scale(scale)
     const range = (sc ? sc.range() : []) as number[]
-    const a = s.item.anchor
-    return lerp(range, a === 'start' ? 0 : a === 'end' ? 1 : 0.5)
+    return lerp(range, s.item.anchor === 'start' ? 0 : s.item.anchor === 'end' ? 1 : 0.5)
   }
-  update.x = ifX(orient, titlePos)
-  update.y = ifY(orient, titlePos)
-  enter.angle = ifX(orient, zero, mult(sign, 90) as EncodeValue)
-  enter.baseline = ifX(orient, ifTop(orient, 'bottom', 'top'), { value: 'bottom' } as EncodeValue)
+  // a title beside a vertical axis is turned to read along it, facing outward
+  enter.angle = frame.horizontal ? ZERO : ({ value: frame.facing * 90 } as EncodeValue)
+  enter.baseline = frame.horizontal ? ({ value: k.orient === 'top' ? 'bottom' : 'top' } as EncodeValue) : ({ value: 'bottom' } as EncodeValue)
   update.angle = enter.angle
   update.baseline = enter.baseline
 
-  addEncoders(encode, {
-    fill: _('titleColor'), fillOpacity: _('titleOpacity'), font: _('titleFont'), fontSize: _('titleFontSize'), fontStyle: _('titleFontStyle'),
-    fontWeight: _('titleFontWeight'), limit: _('titleLimit'), lineHeight: _('titleLineHeight'),
-  }, { align: _('titleAlign'), angle: _('titleAngle'), baseline: _('titleBaseline') })
+  setChannels(encode, {
+    fill: props.get('titleColor'), fillOpacity: props.get('titleOpacity'), font: props.get('titleFont'), fontSize: props.get('titleFontSize'),
+    fontStyle: props.get('titleFontStyle'), fontWeight: props.get('titleFontWeight'), limit: props.get('titleLimit'), lineHeight: props.get('titleLineHeight'),
+  }, { align: props.get('titleAlign'), angle: props.get('titleAngle'), baseline: props.get('titleBaseline') })
 
-  // autoLayout: an explicit titleX / titleY (or a user x / y) takes the title out of the layout's hands
-  const userEncode = p.encode.title
-  const auto = (v: unknown, dim: 'x' | 'y'): boolean => {
-    if (v != null) {
-      update[dim] = encoder(v) as EncodeValue
+  // the layout places the title across the axis unless the spec pins that position (titleX / titleY, or an x / y of the user's)
+  const free = (pinned: unknown, channel: 'x' | 'y'): boolean => {
+    if (pinned != null) {
+      update[channel] = entryOf(pinned) as EncodeValue
       return false
     }
-    return !has(dim, { enter: (userEncode?.enter ?? {}) as Block, update: (userEncode?.update ?? {}) as Block })
+    return !encodes(channel, { enter: (user?.enter ?? {}) as Block, update: (user?.update ?? {}) as Block })
   }
-  const autoY = auto(_('titleX'), 'x')
-  const autoX = auto(_('titleY'), 'y')
-  enter.auto = autoX === autoY ? (encoder(autoX) as EncodeValue) : (ifX(orient, encoder(autoX) as EncodeValue, encoder(autoY) as EncodeValue) as EncodeValue)
-  return guideMark({ type: 'text', role: 'axis-title', style: 'guide-title', encode, interactive: false }, userEncode)
+  const freeX = free(props.get('titleX'), 'x')
+  const freeY = free(props.get('titleY'), 'y')
+  enter.auto = entryOf(frame.horizontal ? freeY : freeX) as EncodeValue
+  return customize({ type: 'text', role: 'axis-title', style: 'guide-title', encode, interactive: false }, user)
 }
 
-/** parsers/axis.js `buildAxisEncode`: the axis group's own encode, which the layout reads */
-function groupEncode(p: AxisParts): MarkEncode {
-  const { spec, _, scale } = p
+/** The axis group's own channels, which the layout reads: where it goes, how far its content may reach, how long it is. */
+function groupEncode(k: Kit): MarkEncode {
+  const { spec, props, scale } = k
   const encode: MarkEncode = { enter: {}, update: {} }
-  const rangeSpan: EntryFn = (s) => {
+  const length: EntryFn = (s) => {
     const sc = s.host.scale(scale)
-    const r = (sc ? sc.range() : []) as number[]
-    // abs(span(range(scale))); span: the last end minus the first, or 0
-    const span = (r && (r[r.length - 1]! - r[0]!)) || 0
-    return Math.abs(span)
+    const range = (sc ? sc.range() : []) as number[]
+    return Math.abs((range && range[range.length - 1]! - range[0]!) || 0)
   }
-  addEncoders(encode, {
-    orient: p.orient, offset: _('offset') || 0, position: value(spec.position, 0), titlePadding: _('titlePadding'),
-    minExtent: _('minExtent'), maxExtent: _('maxExtent'), range: rangeSpan, translate: _('translate'),
+  setChannels(encode, {
+    orient: k.orient, offset: props.get('offset') || 0, position: spec.position ?? 0, titlePadding: props.get('titlePadding'),
+    minExtent: props.get('minExtent'), maxExtent: props.get('maxExtent'), range: length, translate: props.get('translate'),
     format: spec.format, formatType: spec.formatType,
   })
-  return extendEncode(encode, p.encode.axis, true)
+  return mergeUserEncode(encode, k.user.axis)
 }
 
-// --- Overlap (vega-view-transforms) ----------------------------------------------------------------------------------
+// --- thinning out labels that collide ------------------------------------------------------------------------------------------
 
 export interface OverlapSpec {
   separation?: unknown
@@ -314,78 +311,86 @@ export interface OverlapSpec {
   bound?: { scale: string; orient: string; tolerance: unknown } | null
 }
 
+/** Do two boxes come closer than `gap`? */
+const closerThan = (a: Bounds, b: Bounds, gap: number): boolean => gap > Math.max(b.x1 - a.x2, a.x1 - b.x2, b.y1 - a.y2, a.y1 - b.y2)
+const contains = (a: Bounds, b: Bounds): boolean => a.x1 <= b.x1 && a.x2 >= b.x2 && a.y1 <= b.y1 && a.y2 >= b.y2
+const ascending = (a: unknown, b: unknown): number => ((a as number) < (b as number) ? -1 : (a as number) > (b as number) ? 1 : 0)
+
 /**
- * vega-view-transforms `Overlap`: hide (opacity 0) the items whose boxes collide, so that at least two remain; items
- * outside the bound scale's range (bound) are hidden too. Returns the mark's bounds as the transform re-calculates
- * them (the visible items of the ones that had a box), or null when the transform left them alone.
+ * Hide (opacity 0) the items whose boxes collide until no two neighbours do, always leaving the last one shown; items outside the
+ * range of the bound's scale are hidden too. The method is `greedy` (keep an item only if it clears the last one kept) or, for
+ * anything else, `parity` (keep every other one). Items with no content to speak of (a box 1px across or less) take no part.
+ * Returns the bounds of what is left shown, or null when there was nothing to decide.
  */
-export function overlapItems(items: SceneItem[], data: Row[], o: OverlapSpec, host: EntryHost, boundOf: (it: SceneItem) => Bounds): Bounds | null {
-  const cache = new Map<SceneItem, Bounds>()
-  const bounds = (it: SceneItem): Bounds => { let b = cache.get(it); if (!b) cache.set(it, (b = boundOf(it))); return b }
-  const methods: Record<string, (list: SceneItem[], sep: number) => SceneItem[]> = {
-    parity: (list) => list.filter((it, i) => (i % 2 ? ((it.opacity = 0), false) : true)),
-    greedy: (list, sep) => {
-      let a: SceneItem | undefined
-      return list.filter((b, i) => {
-        if (!i || !intersect(bounds(a!), bounds(b), sep)) { a = b; return true }
-        b.opacity = 0
-        return false
-      })
-    },
+export function thinOverlaps(items: SceneItem[], data: Row[], o: OverlapSpec, host: EntryHost, boxOf: (it: SceneItem) => Bounds): Bounds | null {
+  const boxes = new Map<SceneItem, Bounds>()
+  const box = (it: SceneItem): Bounds => {
+    let b = boxes.get(it)
+    if (!b) boxes.set(it, (b = boxOf(it)))
+    return b
   }
   const method = (isSignal(o.method) ? host.expr(o.method.signal) : o.method) as string
-  const sep = +((isSignal(o.separation) ? host.expr(o.separation.signal) : o.separation) as number) || 0
-  const reduce = (typeof method === 'string' && Object.hasOwn(methods, method) ? methods[method] : methods.parity)!
-  if (!items.length) return null
-  if (!method) return null
-  // skip labels with no content
-  let source = items.map((it, i) => ({ it, d: data[i] })).filter(({ it }) => {
-    const b = bounds(it)
-    return b.width() > 1 && b.height() > 1
-  })
-  if (!source.length) return null
-  if (o.order) {
-    // (the order is `datum.index`)
-    source = sortData(source.slice(), (a, b) => cmp(a.d?.index, b.d?.index))
-  }
-  const src = source.map((s) => s.it)
-  for (const it of src) it.opacity = 1
-  let list = src
-  const hasOverlap = (l: SceneItem[]): boolean => {
-    for (let i = 1; i < l.length; i++) if (intersect(bounds(l[i - 1]!), bounds(l[i]!), sep)) return true
+  const gap = +((isSignal(o.separation) ? host.expr(o.separation.signal) : o.separation) as number) || 0
+  if (!items.length || !method) return null
+
+  let shown = items.map((it, i) => ({ it, datum: data[i] })).filter(({ it }) => box(it).width() > 1 && box(it).height() > 1)
+  if (!shown.length) return null
+  if (o.order) shown = sortData(shown.slice(), (a, b) => ascending(a.datum?.index, b.datum?.index))
+  const order = shown.map((s) => s.it)
+  for (const it of order) it.opacity = 1
+
+  const collides = (list: SceneItem[]): boolean => {
+    for (let i = 1; i < list.length; i++) if (closerThan(box(list[i - 1]!), box(list[i]!), gap)) return true
     return false
   }
-  if (list.length >= 3 && hasOverlap(list)) {
-    do { list = reduce(list, sep) } while (list.length >= 3 && hasOverlap(list))
-    const last = src[src.length - 1]!
-    if (list.length < 3 && !last.opacity) {
-      if (list.length > 1) list[list.length - 1]!.opacity = 0
+  const thin = (list: SceneItem[]): SceneItem[] => {
+    if (method === 'greedy') {
+      let kept: SceneItem | undefined
+      return list.filter((it, i) => {
+        if (i && closerThan(box(kept!), box(it), gap)) {
+          it.opacity = 0
+          return false
+        }
+        kept = it
+        return true
+      })
+    }
+    return list.filter((it, i) => {
+      if (i % 2) it.opacity = 0
+      return !(i % 2)
+    })
+  }
+  let kept = order
+  if (kept.length >= 3 && collides(kept)) {
+    do kept = thin(kept)
+    while (kept.length >= 3 && collides(kept))
+    // the last label is the one a reader looks for: if thinning hid it, it comes back and the one before it goes
+    const last = order[order.length - 1]!
+    if (kept.length < 3 && !last.opacity) {
+      if (kept.length > 1) kept[kept.length - 1]!.opacity = 0
       last.opacity = 1
     }
   }
-  const b = o.bound
-  if (b) {
-    const tol = isSignal(b.tolerance) ? host.expr(b.tolerance.signal) : b.tolerance
-    if ((tol as number) >= 0) {
-      const sc = host.scale(b.scale)
+
+  const bound = o.bound
+  if (bound) {
+    const tolerance = isSignal(bound.tolerance) ? host.expr(bound.tolerance.signal) : bound.tolerance
+    if ((tolerance as number) >= 0) {
+      const sc = host.scale(bound.scale)
       const range = (sc ? sc.range() : []) as number[]
-      const box = new Bounds()
-      if (b.orient === 'top' || b.orient === 'bottom') box.set(range[0]!, -Infinity, range[1]!, Infinity)
-      else box.set(-Infinity, range[0]!, Infinity, range[1]!)
-      box.expand(+(tol as number) || 1)
-      for (const it of src) if (!encloses(box, bounds(it))) it.opacity = 0
+      const within = new Bounds()
+      if (bound.orient === 'top' || bound.orient === 'bottom') within.set(range[0]!, -Infinity, range[1]!, Infinity)
+      else within.set(-Infinity, range[0]!, Infinity, range[1]!)
+      within.expand(+(tolerance as number) || 1)
+      for (const it of order) if (!contains(within, box(it))) it.opacity = 0
     }
   }
   const out = new Bounds()
-  for (const it of src) if (it.opacity) out.union(bounds(it))
+  for (const it of order) if (it.opacity) out.union(box(it))
   return out
 }
 
-const intersect = (a: Bounds, b: Bounds, sep: number): boolean => sep > Math.max(b.x1 - a.x2, a.x1 - b.x2, b.y1 - a.y2, a.y1 - b.y2)
-const encloses = (a: Bounds, b: Bounds): boolean => a.x1 <= b.x1 && a.x2 >= b.x2 && a.y1 <= b.y1 && a.y2 >= b.y2
-const cmp = (a: unknown, b: unknown): number => ((a as number) < (b as number) ? -1 : (a as number) > (b as number) ? 1 : 0)
-
-// --- the axis ---------------------------------------------------------------------------------------------------------
+// --- building an axis ---------------------------------------------------------------------------------------------------------
 
 export interface AxisBuildInput {
   spec: Rec
@@ -403,15 +408,14 @@ export interface AxisBuildInput {
   /** the frame the axis sits on */
   width: number
   height: number
-  /** the layout never ran (vega logged it): the group stays where its encode put it */
+  /** the layout never ran: the group stays where its encode put it */
   raw: boolean
   host: EntryHost
   style: GuideStyles
-  /** the size the axis's ticks/labels read as `tickSize` (AxisTicks' own ticks flag is `_('ticks')`) */
 }
 
 export interface AxisBuilt {
-  /** the leaves of every mark, in the axis group's frame moved to the view frame (vega draws them inside the group) */
+  /** the leaves of every mark, in the axis group's frame moved to the view frame (the scene draws them inside the group) */
   leaves: SceneItem[]
   /** which marks the axis has, in paint order */
   parts: string[]
@@ -419,185 +423,173 @@ export interface AxisBuilt {
   partMeta: Record<string, { name?: string; interactive: boolean }>
   /** the axis group item as encoded and laid out */
   group: Rec
-  /** the axis mark's bounds after layout, in the parent frame (`item.mark.bounds`) */
+  /** the axis mark's bounds after layout, in the parent frame */
   bounds: Bounds
   /** the data the axis group was made from (`datum.ticks` ...) */
   datum: Row
 }
 
+type PartName = 'grid' | 'tick' | 'label' | 'domain' | 'title'
+
+/** The marks an axis has: decided by its spec and the config alone (what a signal holds is read when the entries are evaluated). */
 interface AxisDefs {
   cfg: Rec
   orient: string
   scale: string
   encode: Record<string, UserEncode | undefined>
   flags: { ticks: boolean; labels: boolean; grid: boolean; domain: boolean; title: boolean }
-  marks: Array<{ part: string; def: GuideMarkDef; onTicks: boolean }>
+  parts: Array<{ part: PartName; def: GuideMarkDef; onTicks: boolean }>
   groupDef: GuideMarkDef
 }
 
-function keyOf(spec: Rec, inp: AxisBuildInput): string | undefined {
-  const a = contentKey(spec)
-  const e = a === undefined ? undefined : contentKey(inp.encode)
-  return e === undefined ? undefined : 'a' + keyPart(inp.orient) + keyPart(inp.scale) + a + '|' + e
+function defineAxis(inp: AxisBuildInput): AxisDefs {
+  const { spec, cfg, orient } = inp
+  const props = propsOf(spec, cfg)
+  const k: Kit = { spec, props, frame: frameOf(orient), orient, scale: inp.scale, band: tickPlacement(props), user: inp.encode }
+  const flags = { ticks: !!props.get('ticks'), labels: !!props.get('labels'), grid: !!props.get('grid'), domain: !!props.get('domain'), title: spec.title != null }
+  const parts: AxisDefs['parts'] = []
+  if (flags.grid) parts.push({ part: 'grid', def: grid(k), onTicks: true })
+  // labels start where the ticks end; without ticks, at the axis line
+  const tickSize = flags.ticks ? props.get('tickSize') : 0
+  if (flags.ticks) parts.push({ part: 'tick', def: ticks(k, tickSize), onTicks: true })
+  if (flags.labels) parts.push({ part: 'label', def: labels(k, tickSize), onTicks: true })
+  if (flags.domain) parts.push({ part: 'domain', def: domain(k), onTicks: false })
+  if (flags.title) parts.push({ part: 'title', def: title(k), onTicks: false })
+  const groupDef: GuideMarkDef = { type: 'rule', role: 'axis', style: inp.encode.axis?.style, encode: groupEncode(k), interactive: false }
+  return { cfg, orient, scale: inp.scale, encode: inp.encode, flags, parts, groupDef }
 }
 
-/** Build an axis from vega-parser's guides, evaluate it, lay it out. */
-export function buildAxis(inp: AxisBuildInput): AxisBuilt {
-  const { spec, cfg, host, style } = inp
-  const orient = inp.orient
-
-  // the marks an axis is made of depend on its spec and the config (what is not known until a run is a signal, which
-  // the entries read when they are evaluated): they are made once per compiled axis, and every evaluation reuses them
-  let defs = inp.store?.get(spec) as AxisDefs | undefined
-  if (defs === undefined || defs.cfg !== cfg || defs.orient !== orient || defs.scale !== inp.scale || defs.encode !== inp.encode) {
-    // a config nobody can change (the default one, frozen) makes the marks a function of the spec: charts share them
-    const sk = isShareable(cfg) ? keyOf(spec, inp) : undefined
-    const hit = sharedMarks(sk) as AxisDefs | undefined
-    if (hit !== undefined && hit.cfg === cfg) defs = hit
-    else {
-    const _ = lookup(spec, cfg)
-    const band = tickBand(_)
-    const p: AxisParts = { spec, _, orient, scale: inp.scale, band, encode: inp.encode }
-    const flags = { ticks: !!_('ticks'), labels: !!_('labels'), grid: !!_('grid'), domain: !!_('domain'), title: spec.title != null }
-    const marks: AxisDefs['marks'] = []
-    let size: unknown
-    if (flags.grid) marks.push({ part: 'grid', def: gridMark(p, host), onTicks: true })
-    if (flags.ticks) {
-      size = _('tickSize')
-      marks.push({ part: 'tick', def: ticksMark(p, size), onTicks: true })
-    }
-    if (flags.labels) {
-      size = flags.ticks ? size : 0
-      marks.push({ part: 'label', def: labelsMark(p, size), onTicks: true })
-    }
-    if (flags.domain) marks.push({ part: 'domain', def: domainMark(p), onTicks: false })
-    if (flags.title) marks.push({ part: 'title', def: titleMark(p), onTicks: false })
-    // the axis group item: its encode carries the layout parameters
-    const groupDef: GuideMarkDef = { type: 'rule', role: 'axis', style: inp.encode.axis?.style, encode: groupEncode(p), interactive: false }
-    defs = { cfg, orient, scale: inp.scale, encode: inp.encode, flags, marks, groupDef }
-    shareMarks(sk, defs)
-    }
-    if (inp.keep) inp.store?.set(spec, defs)
+/** Charts that share a config nobody can change also share the marks of an axis with the same spec; so does an axis kept between evaluations. */
+function axisDefs(inp: AxisBuildInput): AxisDefs {
+  const { spec, cfg, orient } = inp
+  const kept = inp.store?.get(spec) as AxisDefs | undefined
+  if (kept !== undefined && kept.cfg === cfg && kept.orient === orient && kept.scale === inp.scale && kept.encode === inp.encode) return kept
+  let shareKey: string | undefined
+  if (isShareable(cfg)) {
+    const specKey = contentKey(spec)
+    const encodeKey = specKey === undefined ? undefined : contentKey(inp.encode)
+    if (encodeKey !== undefined) shareKey = 'a' + keyPart(orient) + keyPart(inp.scale) + specKey + '|' + encodeKey
   }
-  const datum: Row = { scale: inp.scale, ticks: defs.flags.ticks, labels: defs.flags.labels, grid: defs.flags.grid, domain: defs.flags.domain, title: defs.flags.title }
-  const marks = defs.marks.map((m) => ({ part: m.part, def: m.def, data: m.onTicks ? inp.ticks : [datum] }))
+  const shared = sharedMarks(shareKey) as AxisDefs | undefined
+  let defs: AxisDefs
+  if (shared !== undefined && shared.cfg === cfg) defs = shared
+  else {
+    defs = defineAxis(inp)
+    shareMarks(shareKey, defs)
+  }
+  if (inp.keep) inp.store?.set(spec, defs)
+  return defs
+}
+
+export function buildAxis(inp: AxisBuildInput): AxisBuilt {
+  const { host, style } = inp
+  const defs = axisDefs(inp)
+  const datum: Row = { scale: inp.scale, ...defs.flags }
   const group = encodeItem(defs.groupDef, datum, {}, host, style) as unknown as Rec
 
   const leaves: SceneItem[] = []
-  const markBounds = new Map<string, Bounds>()
-  const bounds = (it: SceneItem): Bounds => boundLeaf(new Bounds(), it)
-  const titleItems: SceneItem[] = []
+  const extents = new Map<PartName, Bounds>()
   const partMeta: AxisBuilt['partMeta'] = {}
-  let joined: [Row[], Row[]] | null = null
-  for (const { part, def, data } of marks) {
-    const keyed = part === 'grid' || part === 'tick' || part === 'label'
-    // (the grid, the ticks and the labels are keyed over the same tuples: one join)
-    const rows = keyed ? (joined !== null && joined[0] === data ? joined[1] : (joined = [data, inp.distinctTicks ? data : joinByValue(data)])[1]) : data
-    // (every leaf is tagged with its kind and its part as it is made)
+  let titleItem: (SceneItem & Rec) | undefined
+  const boxOf = (it: SceneItem): Bounds => boundLeaf(new Bounds(), it)
+  // the grid, the ticks and the labels are keyed by value over the same tuples: one join serves all three
+  let joined: Row[] | undefined
+  for (const { part, def, onTicks } of defs.parts) {
+    let rows: Row[] = onTicks ? inp.ticks : [datum]
+    if (part === 'grid' || part === 'tick' || part === 'label') {
+      joined ??= inp.distinctTicks ? inp.ticks : joinByValue(inp.ticks)
+      rows = joined
+    }
     def.seed ??= { _kind: def.type === 'text' ? 'text' : 'rule', _part: part }
-    const items: SceneItem[] = encodeItems(def, rows, group, host, style)
-    let mb: Bounds | null = null
-    if (def.overlap) mb = overlapItems(items, rows, def.overlap, host, bounds)
-    // (the layout reads the bounds of the ticks, the labels and the title: a grid of a thousand lines is not measured)
-    if (!mb && (part === 'tick' || part === 'label' || part === 'title')) {
-      mb = new Bounds()
+    const items = encodeItems(def, rows, group, host, style)
+    let extent: Bounds | null = def.overlap ? thinOverlaps(items, rows, def.overlap, host, boxOf) : null
+    // the layout reads the extent of the ticks, the labels and the title only: a grid of a thousand lines is not measured
+    if (!extent && (part === 'tick' || part === 'label' || part === 'title')) {
+      extent = new Bounds()
       const scratch = new Bounds()
-      for (let i = 0; i < items.length; i++) mb.union(boundLeaf(scratch.clear(), items[i]!))
+      for (const it of items) extent.union(boundLeaf(scratch.clear(), it))
     }
-    if (mb) markBounds.set(part, mb)
+    if (extent) extents.set(part, extent)
     partMeta[part] = { name: def.name, interactive: def.interactive }
-    if (part === 'title') for (let i = 0; i < items.length; i++) titleItems.push(items[i]!)
-    for (let i = 0; i < items.length; i++) leaves.push(items[i]!)
+    if (part === 'title') titleItem = items[0] as SceneItem & Rec
+    for (const it of items) leaves.push(it)
   }
-  partMeta.axis = { name: inp.encode.axis?.name == null || !inp.encode.axis.name ? undefined : String(inp.encode.axis.name), interactive: !!inp.encode.axis?.interactive }
+  const userAxis = inp.encode.axis
+  partMeta.axis = { name: userAxis?.name ? String(userAxis.name) : undefined, interactive: !!userAxis?.interactive }
 
-  // --- axisLayout (vega-view-transforms layout/axis.js) ---
-  const out = new Bounds()
-  if (!inp.raw) {
-    const delta = (group.translate as number) != null ? (group.translate as number) : 0.5
-    const gOrient = group.orient as string
-    const range = group.range as number
-    const offset = group.offset as number
-    const position = group.position as number
-    const minExtent = group.minExtent as number
-    const maxExtent = group.maxExtent as number
-    const titlePadding = group.titlePadding as number
-    const title = titleItems[0]
-    const dl = title ? multiLineOffset(title) : 0
-    const b = new Bounds()
-    const tb = markBounds.get('tick')
-    const lb = markBounds.get('label')
-    if (tb) b.union(tb)
-    if (lb) b.union(lb)
-    let x = 0
-    let y = 0
-    let s: number
-    const titleLayout = (extent: number, pad: number, dl2: number, isYAxis: number, sign: number): void => {
-      const tbounds = markBounds.get('title')!
-      if (title && (title as Rec).auto) {
-        const v = sign * (extent + dl2 + pad)
-        let dx = 0
-        let dy = 0
-        if (isYAxis) { dx = ((title.x as number) || 0) - (title.x = v) } else { dy = ((title.y as number) || 0) - (title.y = v) }
-        tbounds.translate(-dx, -dy)
-      }
-      b.union(tbounds)
-    }
-    switch (gOrient) {
-      case 'top':
-        x = position || 0
-        y = -offset
-        s = Math.max(minExtent, Math.min(maxExtent, -b.y1))
-        b.add(0, -s).add(range, 0)
-        if (title) titleLayout(s, titlePadding, dl, 0, -1)
-        break
-      case 'left':
-        x = -offset
-        y = position || 0
-        s = Math.max(minExtent, Math.min(maxExtent, -b.x1))
-        b.add(-s, 0).add(0, range)
-        if (title) titleLayout(s, titlePadding, dl, 1, -1)
-        break
-      case 'right':
-        x = inp.width + offset
-        y = position || 0
-        s = Math.max(minExtent, Math.min(maxExtent, b.x2))
-        b.add(0, 0).add(s, range)
-        if (title) titleLayout(s, titlePadding, dl, 1, 1)
-        break
-      case 'bottom':
-        x = position || 0
-        y = inp.height + offset
-        s = Math.max(minExtent, Math.min(maxExtent, b.y2))
-        b.add(0, 0).add(range, s)
-        if (title) titleLayout(s, titlePadding, 0, 0, 1)
-        break
-      default:
-        x = group.x as number
-        y = group.y as number
-    }
-    // update bounds
-    boundStroke(b.translate(x, y), group as SceneItem)
-    group.x = x + delta
-    group.y = y + delta
-    out.union(b)
-  }
+  const bounds = inp.raw ? new Bounds() : layoutAxis(group, titleItem, extents, inp.width, inp.height)
 
-  // the leaves live in the group's frame; the scene bakes the group's position into them
+  // the leaves were made in the group's frame; the scene holds them in the view's
   const gx = (group.x as number) || 0
   const gy = (group.y as number) || 0
   if (gx || gy) {
-    for (let i = 0; i < leaves.length; i++) {
-      const it = leaves[i]!
+    for (const it of leaves) {
       const r = it as Rec
-      // (vega draws an item at `item.x || 0` inside the group: a NaN position is the group's origin)
+      // an item is drawn at `x || 0`, so a NaN position is the group's origin
       r.x = ((r.x as number) || 0) + gx
       r.y = ((r.y as number) || 0) + gy
       if (r.x2 != null) r.x2 = (r.x2 as number) + gx
       if (r.y2 != null) r.y2 = (r.y2 as number) + gy
     }
   }
-  return { leaves, parts: marks.map((m) => m.part), partMeta, group, bounds: out, datum }
+  return { leaves, parts: defs.parts.map((p) => p.part), partMeta, group, bounds, datum }
 }
 
-export { getEncoding, applyDefaults }
+/**
+ * Place the axis group against the frame and its title beyond the tick labels, and return the bounds the axis takes up. The reach
+ * of the ticks and labels past the axis line (kept between `minExtent` and `maxExtent`) is how far out the title goes.
+ */
+function layoutAxis(group: Rec, titleItem: (SceneItem & Rec) | undefined, extents: Map<PartName, Bounds>, width: number, height: number): Bounds {
+  const orient = group.orient as string
+  const delta = (group.translate as number) ?? 0.5
+  const length = group.range as number
+  const offset = group.offset as number
+  const position = (group.position as number) || 0
+  const frame = frameOf(orient)
+  const known = orient === 'top' || orient === 'bottom' || orient === 'left' || orient === 'right'
+
+  const box = new Bounds()
+  const tickBox = extents.get('tick')
+  const labelBox = extents.get('label')
+  if (tickBox) box.union(tickBox)
+  if (labelBox) box.union(labelBox)
+
+  let x = 0
+  let y = 0
+  if (known) {
+    // how far the ticks and labels reach out of the axis line
+    const edge = frame.horizontal ? (frame.facing < 0 ? -box.y1 : box.y2) : (frame.facing < 0 ? -box.x1 : box.x2)
+    const reach = Math.max(group.minExtent as number, Math.min(group.maxExtent as number, edge))
+    // the axis line and the box it takes up: across it from the line to `reach` out, and its length along
+    const [from, to] = frame.facing < 0 ? [-reach, 0] : [0, reach]
+    if (frame.horizontal) box.add(0, from).add(length, to)
+    else box.add(from, 0).add(to, length)
+    x = frame.horizontal ? position : frame.facing < 0 ? -offset : width + offset
+    y = frame.horizontal ? (frame.facing < 0 ? -offset : height + offset) : position
+
+    if (titleItem) {
+      const tbox = extents.get('title')!
+      // a multi-line title is moved out by its extra lines on every side but the bottom
+      const lines = orient === 'bottom' ? 0 : multiLineOffset(titleItem)
+      if (titleItem.auto) {
+        const target = frame.facing * (reach + lines + (group.titlePadding as number))
+        if (frame.horizontal) {
+          const dy = ((titleItem.y as number) || 0) - (titleItem.y = target)
+          tbox.translate(0, -dy)
+        } else {
+          const dx = ((titleItem.x as number) || 0) - (titleItem.x = target)
+          tbox.translate(-dx, 0)
+        }
+      }
+      box.union(tbox)
+    }
+  } else {
+    // an axis with no known side is not laid out, and stays where its encode put it
+    x = group.x as number
+    y = group.y as number
+  }
+  boundStroke(box.translate(x, y), group as SceneItem)
+  group.x = x + delta
+  group.y = y + delta
+  return box
+}

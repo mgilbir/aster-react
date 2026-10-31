@@ -1,20 +1,16 @@
 /**
- * A title, as vega-parser builds it (parsers/title.js: a group holding the title text and the subtitle) and
- * vega-view-transforms lays it out (layout/title.js): the group is placed by its `orient`, `anchor` and `offset`
- * against the bounds of the view, the subtitle under (or beside) the title. See guide-encode.ts for how a property
- * reaches an item.
+ * A title: a group item holding the title text and, optionally, a subtitle, placed against the bounds of the view by its `orient`,
+ * `anchor`, `frame` and `offset`, with the subtitle beside or below the title. See guide-encode.ts for how a property becomes a
+ * channel of an item.
  */
 import type { SceneItem } from './types.js'
 import { Bounds, boundLeaf } from './bounds.js'
 import {
-  addEncoders, encodeItem, extendEncode, guideMark, lookup, one, zero,
-  type Entry, type EntryHost, type GuideMarkDef, type GuideStyles, type MarkEncode, type Row, type UserEncode,
+  ONE, ZERO, customize, encodeItem, mergeUserEncode, propsOf, setChannels,
+  type Entry, type EntryHost, type GuideMarkDef, type GuideProps, type GuideStyles, type MarkEncode, type Row, type UserEncode,
 } from './guide-encode.js'
 
 type Rec = Record<string, unknown>
-
-const alignExpr: Entry = (s) => (s.item.anchor === 'start' ? 'left' : s.item.anchor === 'end' ? 'right' : 'center')
-const angleExpr: Entry = (s) => (s.item.orient === 'left' ? -90 : s.item.orient === 'right' ? 90 : 0)
 
 export interface TitleBuildInput {
   /** the title spec (a string title is `{text}`) */
@@ -38,111 +34,128 @@ export interface TitleBuilt {
   partMeta: Record<string, { name?: string; interactive: boolean }>
 }
 
-function textMark(
-  role: string, style: string, text: unknown, props: Rec, updateProps: Rec, user: UserEncode | undefined,
-): GuideMarkDef {
-  const encode: MarkEncode = { enter: { opacity: zero }, update: { opacity: one }, exit: { opacity: zero } }
-  addEncoders(encode, {
+/** A title reads as text along the edge it sits on: turned a quarter to face outward on the left and right. */
+const turnFor = (orient: unknown): number => (orient === 'left' ? -90 : orient === 'right' ? 90 : 0)
+const textAlignFor = (anchor: unknown): string => (anchor === 'start' ? 'left' : anchor === 'end' ? 'right' : 'center')
+
+/**
+ * The title text or the subtitle. Both take their alignment, angle and line limit from the group, and differ in the style they
+ * start from and in the properties (`color`, `fontSize` ... or `subtitleColor`, `subtitleFontSize` ...) that style them.
+ */
+function textPart(props: GuideProps, subtitle: boolean, text: unknown, user: UserEncode | undefined): GuideMarkDef {
+  const prop = (name: string): unknown => props.get(subtitle ? 'subtitle' + name[0]!.toUpperCase() + name.slice(1) : name)
+  const encode: MarkEncode = { enter: { opacity: ZERO }, update: { opacity: ONE }, exit: { opacity: ZERO } }
+  setChannels(encode, {
     text,
     align: ((s) => s.group.align) as Entry,
     angle: ((s) => s.group.angle) as Entry,
     limit: ((s) => s.group.limit) as Entry,
     baseline: 'top',
-    ...props,
-  }, updateProps)
-  return guideMark({ type: 'text', role, style, encode, interactive: false }, user)
+    dx: props.get('dx'), dy: props.get('dy'),
+    fill: prop('color'), font: prop('font'), fontSize: prop('fontSize'), fontStyle: prop('fontStyle'),
+    fontWeight: prop('fontWeight'), lineHeight: prop('lineHeight'),
+  }, { align: props.get('align'), angle: props.get('angle'), baseline: props.get('baseline') })
+  return customize(
+    { type: 'text', role: subtitle ? 'title-subtitle' : 'title-text', style: subtitle ? 'group-subtitle' : 'group-title', encode, interactive: false },
+    user,
+  )
 }
 
-/** Build a title from vega-parser's title.js, evaluate it, lay it out. */
 export function buildTitle(inp: TitleBuildInput): TitleBuilt {
   const { spec, host, style } = inp
-  const _ = lookup(spec, inp.cfg)
-  const encode = (spec.encode ?? {}) as Record<string, UserEncode | undefined>
-  const userEncode = (encode.group ?? {}) as UserEncode
+  const props = propsOf(spec, inp.cfg)
+  const userEncode = (spec.encode ?? {}) as Record<string, UserEncode | undefined>
+  const groupUser = (userEncode.group ?? {}) as UserEncode
 
-  // the group item
-  const g: MarkEncode = { enter: {}, update: {} }
-  addEncoders(g, {
-    orient: _('orient'), anchor: _('anchor'), align: alignExpr, angle: angleExpr, limit: _('limit'), frame: _('frame'),
-    offset: _('offset') || 0, padding: _('subtitlePadding'),
+  // the group item: where the title goes, and the text's alignment and limit that follow from it
+  const groupEncode: MarkEncode = { enter: {}, update: {} }
+  setChannels(groupEncode, {
+    orient: props.get('orient'), anchor: props.get('anchor'),
+    align: ((s) => textAlignFor(s.item.anchor)) as Entry,
+    angle: ((s) => turnFor(s.item.orient)) as Entry,
+    limit: props.get('limit'), frame: props.get('frame'), offset: props.get('offset') || 0, padding: props.get('subtitlePadding'),
   })
-  extendEncode(g, userEncode, true)
+  mergeUserEncode(groupEncode, groupUser)
   const datum: Row = {}
-  const group = encodeItem({ type: 'rule', role: 'title', style: userEncode.style, encode: g, interactive: false }, datum, {}, host, style) as unknown as Rec
+  const group = encodeItem({ type: 'rule', role: 'title', style: groupUser.style, encode: groupEncode, interactive: false }, datum, {}, host, style) as unknown as Rec
 
-  // titleEncode(): the title text's own encode is `encode.title`, else the deprecated top-level encode block
-  const titleUser: UserEncode | undefined = (encode.title as UserEncode | undefined)
-    ?? ({ name: spec.name, interactive: spec.interactive, style: spec.style, ...(encode as unknown as Rec) } as UserEncode)
-  const titleDef = textMark('title-text', 'group-title', spec.text, {
-    dx: _('dx'), dy: _('dy'), fill: _('color'), font: _('font'), fontSize: _('fontSize'), fontStyle: _('fontStyle'),
-    fontWeight: _('fontWeight'), lineHeight: _('lineHeight'),
-  }, { align: _('align'), angle: _('angle'), baseline: _('baseline') }, titleUser)
+  // the text is styled by `encode.title`; a spec that still puts its blocks at the top of `encode` styles it from there
+  const textUser: UserEncode | undefined = userEncode.title
+    ?? ({ name: spec.name, interactive: spec.interactive, style: spec.style, ...(userEncode as unknown as Rec) } as UserEncode)
+  const titleDef = textPart(props, false, spec.text, textUser)
   const title = encodeItem(titleDef, datum, group, host, style) as SceneItem & Rec
   title._kind = 'text'
   const partMeta: TitleBuilt['partMeta'] = {
     title: { name: titleDef.name, interactive: titleDef.interactive },
-    group: { name: userEncode.name == null || userEncode.name === '' ? undefined : String(userEncode.name), interactive: !!userEncode.interactive },
+    group: { name: groupUser.name == null || groupUser.name === '' ? undefined : String(groupUser.name), interactive: !!groupUser.interactive },
   }
   let subtitle: (SceneItem & Rec) | undefined
   if (spec.subtitle) {
-    const subDef = textMark('title-subtitle', 'group-subtitle', spec.subtitle, {
-      dx: _('dx'), dy: _('dy'), fill: _('subtitleColor'), font: _('subtitleFont'), fontSize: _('subtitleFontSize'),
-      fontStyle: _('subtitleFontStyle'), fontWeight: _('subtitleFontWeight'), lineHeight: _('subtitleLineHeight'),
-    }, { align: _('align'), angle: _('angle'), baseline: _('baseline') }, encode.subtitle)
-    subtitle = encodeItem(subDef, datum, group, host, style) as SceneItem & Rec
+    const subtitleDef = textPart(props, true, spec.subtitle, userEncode.subtitle)
+    subtitle = encodeItem(subtitleDef, datum, group, host, style) as SceneItem & Rec
     subtitle._kind = 'text'
-    partMeta.subtitle = { name: subDef.name, interactive: subDef.interactive }
+    partMeta.subtitle = { name: subtitleDef.name, interactive: subtitleDef.interactive }
   }
-
-  // --- titleLayout (vega-view-transforms layout/title.js) ---
-  if (!inp.raw) {
-    const orient = group.orient as string
-    const anchor = group.anchor as string
-    const offset = group.offset as number
-    const padding = group.padding as number
-    const frame = group.frame as string
-    const vb = inp.viewBounds
-    const titleB = boundLeaf(new Bounds(), title)
-    let end = orient === 'left' || orient === 'right' ? inp.height : inp.width
-    let start = 0
-    if (frame !== 'group') {
-      if (orient === 'left') { start = vb.y2; end = vb.y1 }
-      else if (orient === 'right') { start = vb.y1; end = vb.y2 }
-      else { start = vb.x1; end = vb.x2 }
-    } else if (orient === 'left') {
-      start = inp.height; end = 0
-    }
-    const pos = anchor === 'start' ? start : anchor === 'end' ? end : (start + end) / 2
-    let sx = 0
-    let sy = 0
-    const temp = new Bounds()
-    if (subtitle && subtitle.text) {
-      // position subtitle
-      switch (orient) {
-        case 'top':
-        case 'bottom': sy = titleB.height() + padding; break
-        case 'left': sx = titleB.width() + padding; break
-        case 'right': sx = -titleB.width() - padding; break
-      }
-      // the subtitle's bounds are the old ones moved by the difference (vega translates them: a NaN offset poisons them)
-      const moved = boundLeaf(new Bounds(), subtitle).translate(sx - ((subtitle.x as number) || 0), sy - ((subtitle.y as number) || 0))
-      const changed = (subtitle.x === sx ? 0 : 1) | (subtitle.y === sy ? 0 : 1)
-      subtitle.x = sx
-      subtitle.y = sy
-      temp.union(changed ? moved : boundLeaf(new Bounds(), subtitle))
-    }
-    temp.union(titleB)
-    let x = 0
-    let y = 0
-    switch (orient) {
-      case 'top': x = pos; y = vb.y1 - temp.height() - offset; break
-      case 'left': x = vb.x1 - temp.width() - offset; y = pos; break
-      case 'right': x = vb.x2 + temp.width() + offset; y = pos; break
-      case 'bottom': x = pos; y = vb.y2 + offset; break
-      default: x = group.x as number; y = group.y as number
-    }
-    group.x = x
-    group.y = y
-  }
+  if (!inp.raw) placeTitle(group, title, subtitle, inp.viewBounds, inp.width, inp.height)
   return { group, title, subtitle, partMeta }
+}
+
+/**
+ * Put the title group against the view: at its anchor along the edge it is on, outside the bounds of the view (or the frame of the
+ * view's group) by `offset`, clear of the subtitle, which goes below the title on a horizontal edge and beside it on a vertical one.
+ */
+function placeTitle(group: Rec, title: SceneItem, subtitle: (SceneItem & Rec) | undefined, view: Bounds, width: number, height: number): void {
+  const orient = group.orient as string
+  const anchor = group.anchor as string
+  const offset = group.offset as number
+  const padding = group.padding as number
+  const vertical = orient === 'left' || orient === 'right'
+
+  // the stretch of the edge the anchor picks a point on
+  let start = 0
+  let end = vertical ? height : width
+  if (group.frame !== 'group') {
+    if (orient === 'left') [start, end] = [view.y2, view.y1]
+    else if (orient === 'right') [start, end] = [view.y1, view.y2]
+    else [start, end] = [view.x1, view.x2]
+  } else if (orient === 'left') {
+    [start, end] = [height, 0]
+  }
+  const pos = anchor === 'start' ? start : anchor === 'end' ? end : (start + end) / 2
+
+  const titleBox = boundLeaf(new Bounds(), title)
+  const taken = new Bounds()
+  if (subtitle && subtitle.text) {
+    const sx = orient === 'left' ? titleBox.width() + padding : orient === 'right' ? -titleBox.width() - padding : 0
+    const sy = orient === 'top' || orient === 'bottom' ? titleBox.height() + padding : 0
+    // its bounds are the old ones moved by the difference (a NaN offset poisons them), unless it did not move
+    const moved = boundLeaf(new Bounds(), subtitle).translate(sx - ((subtitle.x as number) || 0), sy - ((subtitle.y as number) || 0))
+    const stayed = subtitle.x === sx && subtitle.y === sy
+    subtitle.x = sx
+    subtitle.y = sy
+    taken.union(stayed ? boundLeaf(new Bounds(), subtitle) : moved)
+  }
+  taken.union(titleBox)
+
+  switch (orient) {
+    case 'top':
+      group.x = pos
+      group.y = view.y1 - taken.height() - offset
+      break
+    case 'left':
+      group.x = view.x1 - taken.width() - offset
+      group.y = pos
+      break
+    case 'right':
+      group.x = view.x2 + taken.width() + offset
+      group.y = pos
+      break
+    case 'bottom':
+      group.x = pos
+      group.y = view.y2 + offset
+      break
+    default:
+      // no known edge: the group stays where its encode put it
+      break
+  }
 }
