@@ -1,39 +1,56 @@
-const CONTINUOUS_TO_CONTINUOUS = new Set(['linear', 'log', 'pow', 'sqrt', 'symlog', 'time', 'utc'])
-const CONTINUOUS_DOMAIN = new Set([...CONTINUOUS_TO_CONTINUOUS, 'quantile', 'quantize', 'threshold'])
-
 /**
- * vega-lite `scaleTypeSupportProperty` + `channelScalePropertyIncompatability`: whether a
- * user scale property means anything for this channel and scale type. An
- * inapplicable one is dropped (vega-lite warns), never forwarded: real vega
- * rejects e.g. `exponent` on a linear scale.
+ * Which scale properties mean something for a scale. A property the scale has no use for is dropped from the compiled scale, never
+ * forwarded: Vega rejects, say, `exponent` on a linear scale.
+ *
+ * The answer depends on the property, the scale type and, for the colour properties, the channel. It is kept as a table of rows, one
+ * per property: the scale types it is for, and the channels it is limited to. A property with no row (the four every scale takes, and
+ * any other name) applies everywhere.
  */
+
+/** The scale types that map a continuous domain to a continuous range. */
+const CONTINUOUS = ['linear', 'log', 'pow', 'sqrt', 'symlog', 'time', 'utc'] as const
+/** The scale types of a position laid out in steps. */
+const BANDED = ['band', 'point'] as const
+const COLOUR = ['color', 'fill', 'stroke'] as const
+
+interface Row {
+  /** The scale types the property is for. */
+  types: { readonly only: readonly string[] } | { readonly except: readonly string[] }
+  /** The channels the property is limited to; every channel when absent. */
+  channels?: readonly string[]
+}
+
+const only = (...types: readonly string[]): Row['types'] => ({ only: types })
+const except = (...types: readonly string[]): Row['types'] => ({ except: types })
+
+const ROWS = new Map<string, Row>([
+  // the domain
+  ['domainMin', { types: only(...CONTINUOUS) }],
+  ['domainMax', { types: only(...CONTINUOUS) }],
+  ['domainRaw', { types: only(...CONTINUOUS) }],
+  ['domainMid', { types: only(...CONTINUOUS), channels: COLOUR }],
+  ['nice', { types: only(...CONTINUOUS, 'quantize', 'threshold') }],
+  ['zero', { types: only('linear', 'pow', 'sqrt', 'symlog', 'quantize') }],
+  ['bins', { types: except('point', 'band', 'identity', 'ordinal') }],
+  // the shape of a continuous scale
+  ['exponent', { types: only('pow') }],
+  ['base', { types: only('log') }],
+  ['constant', { types: only('symlog') }],
+  ['clamp', { types: only(...CONTINUOUS) }],
+  // the range
+  ['round', { types: only(...CONTINUOUS, ...BANDED) }],
+  ['padding', { types: only(...CONTINUOUS, ...BANDED) }],
+  ['paddingInner', { types: only('band') }],
+  ['paddingOuter', { types: only(...BANDED) }],
+  ['align', { types: only(...BANDED) }],
+  ['scheme', { types: except('point', 'band', 'identity'), channels: COLOUR }],
+  ['interpolate', { types: except('point', 'band', 'identity'), channels: COLOUR }],
+])
+
+/** Whether the scale property `prop` applies to a scale of type `type` on `channel`. */
 export function scalePropApplies(channel: string, type: string, prop: string): boolean {
-  switch (prop) {
-    case 'type': case 'domain': case 'reverse': case 'range':
-      return true
-    case 'scheme': case 'interpolate': case 'domainMid':
-      if (channel !== 'color' && channel !== 'fill' && channel !== 'stroke') return false
-      return prop === 'domainMid' ? CONTINUOUS_TO_CONTINUOUS.has(type) : !['point', 'band', 'identity'].includes(type)
-    case 'bins':
-      return !['point', 'band', 'identity', 'ordinal'].includes(type)
-    case 'round':
-      return CONTINUOUS_TO_CONTINUOUS.has(type) || type === 'band' || type === 'point'
-    case 'padding':
-      return CONTINUOUS_TO_CONTINUOUS.has(type) || type === 'point' || type === 'band'
-    case 'paddingOuter': case 'align':
-      return type === 'point' || type === 'band'
-    case 'paddingInner':
-      return type === 'band'
-    case 'domainMax': case 'domainMin': case 'domainRaw': case 'clamp':
-      return CONTINUOUS_TO_CONTINUOUS.has(type)
-    case 'nice':
-      return CONTINUOUS_TO_CONTINUOUS.has(type) || type === 'quantize' || type === 'threshold'
-    case 'exponent': return type === 'pow'
-    case 'base': return type === 'log'
-    case 'constant': return type === 'symlog'
-    case 'zero':
-      return CONTINUOUS_DOMAIN.has(type) && !['log', 'time', 'utc', 'threshold', 'quantile'].includes(type)
-    default:
-      return true
-  }
+  const row = ROWS.get(prop)
+  if (row === undefined) return true
+  if (row.channels !== undefined && !row.channels.includes(channel)) return false
+  return 'only' in row.types ? row.types.only.includes(type) : !row.types.except.includes(type)
 }
