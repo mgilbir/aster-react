@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+- **`@aster/core` scale stack in Aster's own design** (`arr.ts`, `interp.ts`, `scale.ts`, `scale-continuous.ts`, `scale-discrete.ts`,
+  `scale-d3.ts`, `scale-domain.ts`, `scales.ts`). d3-array, d3-interpolate, d3-scale, vega-scale and the spec side of vega-parser /
+  vega-encode were written as transcriptions; they are now models of their own: one mapping model and one warp for identity / linear /
+  power / log / symlog, a gradient model for the sequential and diverging scales, a lexicon of categories under ordinal / band / point,
+  a tick-ladder table for time, a tick planner, a shared set of channel ramps for every colour space, and a spec reader that turns a
+  scale spec into typed settings before anything is built. The numbers are the same to the last bit; a seeded live differential runs
+  programs of getter / setter calls on every one of the 28 scale types (reversed, zero-width, NaN, infinite, Date, wrong-length and
+  non-iterable arguments) against vega-scale, every interpolator in every colour space and gamma against d3-interpolate, the
+  array helpers against d3-array, and discrete / quantile domain specs against real vega. 15 % fewer lines; the core bundle is 0.5 kB
+  gzip smaller and a fresh process loads it as fast. They found and fixed six divergences, in the code before the rewrite as well:
+  - `bisectCenter` read `null` as 0 where d3-array reads it as NaN; `interpolateNumberArray` returned a plain array for a typed-array
+    target (d3 slices the target, so a `Uint8Array` truncates) and `interpolateArray` did not hand a typed array to it.
+  - A literal list among a scale domain's `fields` that holds `null` or `undefined` fails in vega's dataflow; the scale now refuses it.
+  - Whether a domain sort is allowed is judged on what the spec wrote, as vega does: over several fields an `op` and `field` given as
+    signals are refused, and an `op` signal with no `field` is refused unless it is `count`.
+  - Over several fields there is no combined `count` column, so a sort by `field: 'count'` keeps first-seen order (it ordered by how
+    many fields held the value).
+  `THIRD_PARTY_NOTICES.md` drops the quickselect notice (no code is based on it any more) and says which projects stay listed.
+
 - **Transform gaps against real vega** (generated, live differentials over the parameter space):
   - `quantile` skips `null` like d3-array (`quantile([null, null], 0.25)` was 0, and a column with nulls shifted every percentile).
   - `contour`, `isocontour`, `kde2d` and `heatmap` follow vega: `scale: 0` and a falsy `translate` fall back to the grid's;

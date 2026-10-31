@@ -347,9 +347,6 @@ describe('vega-time vs the pinned vega-time (generated, live)', () => {
     }
   })
 
-  // KNOWN DIVERGENCE, not mine to fix here (timeBin lives in transform-basic.ts): for an extent with a NaN end vega-time's
-  // `span` reads 0 (`(peek - first) || 0`), so it picks the milliseconds grain; Aster's bisect on NaN picks the year grain.
-  // Extents are therefore finite below.
   it('timeBin picks the same units and step (finite extents)', () => {
     const r = makeRng(0x1b06)
     compareCases('timeBin', scaled(6000), () => {
@@ -362,6 +359,23 @@ describe('vega-time vs the pinned vega-time (generated, live)', () => {
         label: `[${a}, ${b}] maxbins=${String(maxbins)}`,
         oracle: () => vt.timeBin({ extent: [a, b], maxbins } as never),
         aster: () => asterTimeBin([a, b], maxbins),
+      }
+    })
+  })
+
+  // vega-time reads the span of the extent as `(last - first) || 0`: an end that is not a number, or two ends whose difference
+  // is NaN (Infinity - Infinity), is a zero span, which picks the milliseconds grain.
+  it('timeBin picks the same units and step for extents that are not finite numbers', () => {
+    const r = makeRng(0x1b07)
+    const ends: unknown[] = [NaN, Infinity, -Infinity, undefined, null, '', 'abc', '1e12', new Date(1.5e12), new Date(NaN), true, 0, 1.2e12, -4e11, [3]]
+    compareCases('timeBin non-finite', scaled(3000), () => {
+      const a = r.pick(ends)
+      const b = r.pick(ends)
+      const maxbins = r.pick([undefined, 0, 1, 5, 40, 1000, NaN])
+      return {
+        label: `[${String(a)}, ${String(b)}] maxbins=${String(maxbins)}`,
+        oracle: () => vt.timeBin({ extent: [a, b], maxbins } as never),
+        aster: () => asterTimeBin([a, b] as never, maxbins),
       }
     })
   })

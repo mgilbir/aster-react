@@ -11,6 +11,10 @@ its licence text is reproduced verbatim, copied from the `LICENSE` file shipped
 in that package. Where several projects carry byte-identical text it is printed
 once, above the list of projects it covers.
 
+Some modules are no longer ports of the code they were first written from (the scale library, the interpolators and the array helpers are Aster's
+own structure), but they compute the same numbers by the same published procedures (tick steps, interpolation formulas, compensated
+summation, band layout, smooth zoom), so the projects they were checked against stay listed.
+
 `scripts/notices.test.mjs` checks, on every `pnpm test`, that each text below
 is byte-for-byte the `LICENSE` file of every project listed under it.
 
@@ -932,16 +936,17 @@ THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 ```
 
-## quickselect (Vladimir Agafonkin)
+## time-grain-detector (Paul Rosenzweig)
 
-`quickselect` in `packages/core/src/arr.ts` is based on https://github.com/mourner/quickselect
-(ISC). Not installed in this repository; text copied verbatim from
-https://raw.githubusercontent.com/mourner/quickselect/main/LICENSE .
+The time-unit detection of the `timeunit` transform (`packages/core/src/transform-basic.ts`) follows `vega-time`, whose
+`detectTimeUnits` is adapted from `time-grain-detector` 1.1.0 (ISC). Not installed in this repository. The published
+package carries no LICENSE file; its `package.json` declares `"license": "ISC"` and `"author": "Paul Rosenzweig"`, and
+states no year. The ISC licence text follows, with that author as the copyright holder.
 
 ```text
 ISC License
 
-Copyright (c) 2024, Vladimir Agafonkin
+Copyright (c) Paul Rosenzweig
 
 Permission to use, copy, modify, and/or distribute this software for any purpose
 with or without fee is hereby granted, provided that the above copyright notice
@@ -966,7 +971,7 @@ with their `LICENSE` text, under "Vega packages" above.
 ## Modules rewritten as Aster's own designs
 
 `event-selector.ts`, `selections.ts`, `timer.ts`, `topojson.ts`, `dsv.ts`, `data-format.ts`, `delaunay.ts`,
-`voronoi.ts`, `orient.ts`, `trellis.ts`, `guide-encode.ts`, `guide-axis.ts`, `guide-legend.ts`, `guide-title.ts` and `bounds.ts` were rewritten with their own structure, naming and comments; none of the upstream source
+`voronoi.ts`, `orient.ts`, `transform-agg.ts`, `transform-window.ts`, `transform-basic.ts`, `trellis.ts`, `guide-encode.ts`, `guide-axis.ts`, `guide-legend.ts`, `guide-title.ts` and `bounds.ts` were rewritten with their own structure, naming and comments; none of the upstream source
 text is carried over. They are still derivative in what an output must equal and are listed here, with the licences
 of the projects they follow printed above, for that reason:
 
@@ -980,6 +985,12 @@ of the projects they follow printed above, for that reason:
 - `event-selector.ts` follows the grammar and error messages of `vega-event-selector` (BSD-3-Clause).
 - `selections.ts` follows the semantics of `vega-selections` (BSD-3-Clause), `data-format.ts` those of `vega-loader`
   (BSD-3-Clause).
+- `transform-agg.ts`, `transform-window.ts` and `transform-basic.ts` follow the semantics of `vega-transforms` (Aggregate, JoinAggregate,
+  Pivot, Window, Bin, Fold, Flatten, Impute, Lookup, TimeUnit, the aggregate-op table) and of `vega-statistics` (the bin step search,
+  quartiles, the bootstrap interval, the linear congruential generator), `vega-util` and `vega-time` (time bins; the time-unit
+  detection there is adapted from the `time-grain-detector` package, ISC, printed above), all
+  BSD-3-Clause: the order statistics are updated in, the floating-point operations, and the draws from the random source are
+  fixed by what the output must equal. None of the upstream source text, names or comments is carried over.
 - `timer.ts` follows the scheduling algorithm of `d3-timer` (ISC): when a frame or a timeout wakes the scheduler, how an
   interval measures its ticks, and the clock-jump poll.
 - `topojson.ts` follows the decoding and arc-stitching algorithms of `topojson-client` (ISC), `dsv.ts` the dialect of

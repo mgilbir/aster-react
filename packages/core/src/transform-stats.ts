@@ -12,7 +12,7 @@
  */
 import { accessorName, error, extent as vegaExtent, hasOwnProperty } from './util.js'
 import { fieldOf, fieldsOf, quantiles, type Row } from './transform-agg.js'
-import { d3Range, required } from './transform-basic.js'
+import { numberRange, required } from './transform-basic.js'
 import { checkRegexInput, checkRowCount, guardedRegExp, meterTick } from './limits.js'
 import { SQRT2PI, cumulativeNormal, densityNormal } from './stats-functions.js'
 import { FITS, fitParameters, loessSmooth, sampleCurve } from './curve-fits.js'
@@ -343,7 +343,7 @@ export function quantileRows(rows: Row[], p: Params): Row[] {
   const groups = partitionValues(rows, groupby, field)
   const names = (groupby ?? []).map((g) => accessorName(g) as string)
   const step = (p.step as number) || 0.01
-  const probs = (p.probs as number[]) || d3Range(step / 2, 1 - QUANTILE_EPSILON, step)
+  const probs = (p.probs as number[]) || numberRange(step / 2, 1 - QUANTILE_EPSILON, step)
   const n = probs.length
   checkRowCount(groups.length * n, 'quantile')
   const values: Row[] = []
