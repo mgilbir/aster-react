@@ -58,9 +58,9 @@ class Lexicon {
 export function ordinal(): ScaleObject {
   const lexicon = new Lexicon(implicit)
   const scale = ((key: unknown) => lexicon.at(key)) as ScaleObject
-  scale.domain = accessor(scale, () => lexicon.names.slice(), (v: Iterable<unknown>) => lexicon.setNames(v))
-  scale.range = accessor(scale, () => lexicon.values.slice(), (v: Iterable<unknown>) => void (lexicon.values = Array.from(v)))
-  scale.unknown = accessor(scale, () => lexicon.fallback, (v: unknown) => void (lexicon.fallback = v))
+  scale.domain = (...v: [Iterable<unknown>?]) => (v.length ? (lexicon.setNames(v[0]!), scale) : lexicon.names.slice())
+  scale.range = (...v: [Iterable<unknown>?]) => (v.length ? ((lexicon.values = Array.from(v[0]!)), scale) : lexicon.values.slice())
+  scale.unknown = (...v: [unknown?]) => (v.length ? ((lexicon.fallback = v[0]), scale) : lexicon.fallback)
   scale.copy = () => ordinal().domain(lexicon.names).range(lexicon.values).unknown(lexicon.fallback)
   return scale
 }
@@ -108,14 +108,9 @@ function bands(point: boolean): ScaleObject {
     const starts = sequence(n).map((i) => start + step * i)
     lexicon.values = flip ? starts.reverse() : starts
   }
-  const tuned = <T>(read: () => T, write: (v: T) => void) =>
-    accessor(scale, read, (v: T) => {
-      write(v)
-      layout()
-    })
-
-  scale.domain = tuned(() => lexicon.names.slice(), (v: Iterable<unknown>) => lexicon.setNames(v))
-  scale.range = tuned(() => extent.slice(), (v: ArrayLike<unknown>) => void (extent = [+(v[0] as number), +(v[1] as number)]))
+  // each member that changes the layout recomputes it after writing
+  scale.domain = (...v: [Iterable<unknown>?]) => (v.length ? (lexicon.setNames(v[0]!), layout(), scale) : lexicon.names.slice())
+  scale.range = (...v: [ArrayLike<unknown>?]) => (v.length ? ((extent = [+(v[0]![0] as number), +(v[0]![1] as number)]), layout(), scale) : extent.slice())
   scale.rangeRound = (...v: [ArrayLike<unknown>]) => {
     extent = [+(v[0][0] as number), +(v[0][1] as number)]
     round = true
@@ -124,14 +119,14 @@ function bands(point: boolean): ScaleObject {
   }
   scale.bandwidth = () => bandwidth
   scale.step = () => step
-  scale.round = tuned(() => round, (v: unknown) => void (round = !!v))
-  scale.align = tuned(() => align, (v: number) => void (align = unitClamp(v)))
-  scale.paddingOuter = tuned(() => paddingOuter, (v: number) => void (paddingOuter = unitClamp(v)))
+  scale.round = (...v: [unknown?]) => (v.length ? ((round = !!v[0]), layout(), scale) : round)
+  scale.align = (...v: [number?]) => (v.length ? ((align = unitClamp(v[0]!)), layout(), scale) : align)
+  scale.paddingOuter = (...v: [number?]) => (v.length ? ((paddingOuter = unitClamp(v[0]!)), layout(), scale) : paddingOuter)
   if (point) {
     scale.padding = scale.paddingOuter
   } else {
-    scale.paddingInner = tuned(() => paddingInner, (v: number) => void (paddingInner = unitClamp(v)))
-    scale.padding = tuned(() => paddingInner, (v: number) => void (paddingOuter = paddingInner = unitClamp(v)))
+    scale.paddingInner = (...v: [number?]) => (v.length ? ((paddingInner = unitClamp(v[0]!)), layout(), scale) : paddingInner)
+    scale.padding = (...v: [number?]) => (v.length ? ((paddingOuter = paddingInner = unitClamp(v[0]!)), layout(), scale) : paddingInner)
   }
 
   /** The categories whose bands the span [a, b] of the range touches; undefined when it touches none. */

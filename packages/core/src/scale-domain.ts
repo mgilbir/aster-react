@@ -1,21 +1,88 @@
 /**
- * Where a scale's domain comes from: a literal list, a signal, one field of a dataset, or several fields together. A
- * numeric scale takes the extent of the values, a quantile scale the values themselves, and a discrete scale the distinct
- * values, in the order the spec's `sort` asks for (by key, by count, or by an aggregate of another field).
+ * Where a scale's domain comes from, and what a scale spec may refer to. `ScaleContext` is what a scale needs from its
+ * surroundings (signal values, datasets, the size of the view); `signalValue`, `plain`, `plainList` and `plainRecord` read a
+ * spec value that may be a `{signal}` reference. The domain is a literal list, a signal, one field of a dataset, or several
+ * fields together: a numeric scale takes the extent of the values, a quantile scale the values themselves, and a discrete
+ * scale the distinct values, in the order the spec's `sort` asks for (by key, by count, or by an aggregate of another field).
  *
  * What callers observe, and so what is fixed here:
  * - distinct values are told apart by their text, so `1` and `'1'` are one category, represented by the first of them seen;
  * - the categories come in order of first appearance unless a sort says otherwise, and equal sort values keep that order;
- * - a sort over several fields can only combine counts, minima and maxima (sums, minima, maxima of the per-field values);
+ * - a sort over several fields can only combine counts, minima and maxima, and has no combined `count` column to sort by;
  * - a domain that names a dataset that does not exist is an error, and so is one that names no dataset at all;
  * - a field list entry may be a literal list or a signal; its values count as one dataset of their own.
  */
 import { SpecParseError } from './parse-error.js'
-import { isDiscrete, isQuantile } from './scale-registry.js'
-import { plain, signalValue, type ScaleContext } from './scale-signals.js'
+import { isDiscrete, isQuantile } from './scale.js'
 import { aggregateGroup } from './transform.js'
 import { aggregateRows } from './transform-agg.js'
-import { ascending, error as raise, isArray, isObject, isString, pushAll, sortData, toNumber } from './util.js'
+import { ascending, error as raise, isArray, isObject, isString, pushAll, sortData } from './util.js'
+
+export interface ScaleContext {
+  width: number
+  height: number
+  /** Signal values by name. Must be prototype-less (the runtime supplies `dict(...)`): names are spec-supplied. */
+  signals: Record<string, unknown>
+  /** `config.range`: a named range ('category', 'ramp', ...) resolves through it before the built-in aliases. */
+  configRange?: Record<string, unknown>
+  /** Evaluate a JS expression string and return the result. */
+  evaluate?: (expr: string) => unknown
+  /** Collect values of `field` across a named dataset. */
+  dataField: (dataName: string, field: string) => unknown[]
+  /** Return all rows of a named dataset (identity keys the per-evaluation memo). */
+  dataRows?: (dataName: string) => Record<string, unknown>[]
+  /** True when the named dataset exists (a domain over an unknown dataset is refused). */
+  hasData?: (dataName: string) => boolean
+  /** Host/runtime domain override (pan/zoom, brush domains). */
+  domainRaw?: unknown[]
+  /**
+   * Distinct-value memo keyed by the dataset rows ARRAY identity. It must live exactly as long as one evaluation: the
+   * incremental path (and hosts that mutate their arrays in place) reuse an array object with new contents, so a
+   * process-global memo would serve stale domains.
+   */
+  distinctCache?: WeakMap<unknown[], Map<string, unknown[]>>
+  /**
+   * Present when the scale is made in a pass of a view that makes another (autosize fit). A scale operator keeps its scale
+   * between passes, so a pass that changes its parameters finds `bins` where the pass before left them, and a scale with
+   * bins leaves the zero out of its default domain: the first pass includes it, the second does not.
+   */
+  pass?: { prev: { key: string; bins: boolean } | undefined; record: (key: string, bins: boolean) => void }
+}
+
+/** A name a signal reference may be: a bare identifier. */
+const IDENTIFIER = /^[A-Za-z_$][\w$]*$/
+/** Names an expression knows without a signal. */
+const EXPRESSION_CONSTANTS = new Set(['NaN', 'E', 'LN2', 'LN10', 'LOG2E', 'LOG10E', 'PI', 'SQRT1_2', 'SQRT2', 'MIN_VALUE', 'MAX_VALUE'])
+
+/** The value a `signal` reference stands for: a named signal's value, or the value of an expression. */
+export function signalValue(reference: string, ctx: ScaleContext): unknown {
+  if (Object.hasOwn(ctx.signals, reference)) return ctx.signals[reference]
+  // a bare name that is no signal is a slip in the spec; anything else is an expression
+  if (IDENTIFIER.test(reference) && !EXPRESSION_CONSTANTS.has(reference)) raise(`Unrecognized signal name: ${reference}`)
+  if (!ctx.evaluate) raise(`Unrecognized signal expression: ${reference}`)
+  return ctx.evaluate!(reference)
+}
+
+/** A spec value: itself, or what its `signal` reference stands for; any other object is refused. */
+export function plain(value: unknown, ctx: ScaleContext): unknown {
+  if (!isObject(value)) return value
+  const reference = (value as { signal?: unknown }).signal
+  if (reference) return signalValue(String(reference), ctx)
+  return raise('Unsupported object: ' + JSON.stringify(value))
+}
+
+/** A spec list (or a `{signal}` standing for one), each entry read with `plain`. */
+export function plainList(value: unknown, ctx: ScaleContext): unknown {
+  const reference = (value as { signal?: unknown }).signal
+  return reference ? signalValue(String(reference), ctx) : (value as unknown[]).map((entry) => plain(entry, ctx))
+}
+
+/** An object whose members may each be `{signal}` references. */
+export function plainRecord(value: Record<string, unknown>, ctx: ScaleContext): Record<string, unknown> {
+  const out: Record<string, unknown> = {}
+  for (const key of Object.keys(value)) out[key] = plain(value[key], ctx)
+  return out
+}
 
 /** How the categories of a discrete domain are ordered: by `field` (or an aggregate `op` of it), ascending or descending. */
 interface Ordering {
@@ -140,9 +207,10 @@ function categoricalDomain(ctx: ScaleContext, data: string, field: unknown, orde
 function numericExtent(values: unknown[]): [number | undefined, number | undefined] {
   let lo = +Infinity
   let hi = -Infinity
-  for (const raw of values) {
-    const v = toNumber(raw)
-    if (v == null) continue
+  for (let i = 0; i < values.length; i++) {
+    const raw = values[i]
+    if (raw == null || raw === '') continue
+    const v = +(raw as number)
     // (a NaN fails both comparisons)
     if (v < lo) lo = v
     if (v > hi) hi = v

@@ -32,6 +32,32 @@ import {
   precisionRound,
   type FormatFunction,
 } from './format.js'
+import {
+  durationDay,
+  durationHour,
+  durationMinute,
+  durationMonth,
+  durationSecond,
+  durationWeek,
+  durationYear,
+  millisecond,
+  second,
+  timeDay,
+  timeHour,
+  timeMinute,
+  timeMonth,
+  timeWeek,
+  timeYear,
+  unixDay,
+  utcDay,
+  utcHour,
+  utcMinute,
+  utcMonth,
+  utcWeek,
+  utcYear,
+  type TimeInterval,
+} from './time.js'
+import { timeFormat, utcFormat } from './time-format.js'
 
 /** A scale: a function with the members its kind carries. */
 export interface ScaleObject {
@@ -153,6 +179,26 @@ class Mapping {
     this.refresh()
   }
 
+  setDomain(v: Iterable<unknown>): void {
+    this.domain = Array.from(v, toNumber)
+    this.refresh()
+  }
+
+  setRange(v: Iterable<unknown>): void {
+    this.range = Array.from(v)
+    this.refresh()
+  }
+
+  setBlend(blend: Blend): void {
+    this.blend = blend
+    this.refresh()
+  }
+
+  setClamped(v: unknown): void {
+    this.clamped = !!v
+    this.refresh()
+  }
+
   map(value: unknown): unknown {
     if (value == null || isNaN((value = +(value as number)))) return this.fallback
     const warp = this.warp
@@ -172,45 +218,16 @@ export function continuousScale(): { scale: ScaleObject; model: Mapping } {
   const model = new Mapping()
   const scale = ((x: unknown) => model.map(x)) as ScaleObject
   scale.invert = (y: unknown) => model.invert(y)
-  scale.domain = accessor(
-    scale,
-    () => model.domain.slice(),
-    (v: Iterable<unknown>) => {
-      model.domain = Array.from(v, toNumber)
-      model.refresh()
-    },
-  )
-  scale.range = accessor(
-    scale,
-    () => model.range.slice(),
-    (v: Iterable<unknown>) => {
-      model.range = Array.from(v)
-      model.refresh()
-    },
-  )
+  scale.domain = (...v: [Iterable<unknown>?]) => (v.length ? (model.setDomain(v[0]!), scale) : model.domain.slice())
+  scale.range = (...v: [Iterable<unknown>?]) => (v.length ? (model.setRange(v[0]!), scale) : model.range.slice())
   scale.rangeRound = (...v: [Iterable<unknown>?]) => {
     model.range = Array.from(v[0]!)
-    model.blend = interpolateRound as Blend
-    model.refresh()
+    model.setBlend(interpolateRound as Blend)
     return scale
   }
-  scale.clamp = accessor(
-    scale,
-    () => model.clamped,
-    (v: unknown) => {
-      model.clamped = !!v
-      model.refresh()
-    },
-  )
-  scale.interpolate = accessor(
-    scale,
-    () => model.blend,
-    (v: Blend) => {
-      model.blend = v
-      model.refresh()
-    },
-  )
-  scale.unknown = accessor(scale, () => model.fallback, (v: unknown) => void (model.fallback = v))
+  scale.clamp = (...v: [unknown?]) => (v.length ? (model.setClamped(v[0]), scale) : model.clamped)
+  scale.interpolate = (...v: [Blend?]) => (v.length ? (model.setBlend(v[0]!), scale) : model.blend)
+  scale.unknown = (...v: [unknown?]) => (v.length ? ((model.fallback = v[0]), scale) : model.fallback)
   return { scale, model }
 }
 
@@ -522,6 +539,20 @@ class Gradient {
     this.refresh()
   }
 
+  getRange(): unknown[] {
+    const interpolator = this.ramp
+    return this.arity === 2 ? [interpolator(0), interpolator(1)] : [interpolator(0), interpolator(0.5), interpolator(1)]
+  }
+
+  setRange(v: Iterable<unknown>, blend: Blend): void {
+    if (this.arity === 2) {
+      const [a, b] = firstTwo(v)
+      this.ramp = blend(a, b)
+    } else {
+      this.ramp = piecewise(blend, firstThree(v))
+    }
+  }
+
   private bounded(v: number): number {
     return this.clamped ? Math.max(0, Math.min(1, v)) : v
   }
@@ -544,28 +575,12 @@ class Gradient {
 function gradientScale(arity: 2 | 3): { scale: ScaleObject; model: Gradient } {
   const model = new Gradient(arity)
   const scale = ((x: unknown) => model.map(x)) as ScaleObject
-  scale.domain = accessor(scale, () => model.stops.slice(), (v: Iterable<unknown>) => model.setStops(v))
-  scale.clamp = accessor(scale, () => model.clamped, (v: unknown) => void (model.clamped = !!v))
-  scale.interpolator = accessor(scale, () => model.ramp, (v: Ramp) => void (model.ramp = v))
-  const rangeOf = (blend: Blend) =>
-    accessor(
-      scale,
-      () => {
-        const interpolator = model.ramp
-        return arity === 2 ? [interpolator(0), interpolator(1)] : [interpolator(0), interpolator(0.5), interpolator(1)]
-      },
-      (v: Iterable<unknown>) => {
-        if (arity === 2) {
-          const [a, b] = firstTwo(v)
-          model.ramp = blend(a, b)
-        } else {
-          model.ramp = piecewise(blend, firstThree(v))
-        }
-      },
-    )
-  scale.range = rangeOf(interpolateValue as Blend)
-  scale.rangeRound = rangeOf(interpolateRound as Blend)
-  scale.unknown = accessor(scale, () => model.fallback, (v: unknown) => void (model.fallback = v))
+  scale.domain = (...v: [Iterable<unknown>?]) => (v.length ? (model.setStops(v[0]!), scale) : model.stops.slice())
+  scale.clamp = (...v: [unknown?]) => (v.length ? ((model.clamped = !!v[0]), scale) : model.clamped)
+  scale.interpolator = (...v: [Ramp?]) => (v.length ? ((model.ramp = v[0]!), scale) : model.ramp)
+  scale.range = (...v: [Iterable<unknown>?]) => (v.length ? (model.setRange(v[0]!, interpolateValue as Blend), scale) : model.getRange())
+  scale.rangeRound = (...v: [Iterable<unknown>?]) => (v.length ? (model.setRange(v[0]!, interpolateRound as Blend), scale) : model.getRange())
+  scale.unknown = (...v: [unknown?]) => (v.length ? ((model.fallback = v[0]), scale) : model.fallback)
   return { scale, model }
 }
 
@@ -604,3 +619,160 @@ export const divergingLog = (): ScaleObject => gradientKind(3, 'log', divergingL
 export const divergingPow = (): ScaleObject => gradientKind(3, 'pow', divergingPow)
 export const divergingSqrt = (): ScaleObject => divergingPow().exponent(0.5)
 export const divergingSymlog = (): ScaleObject => gradientKind(3, 'symlog', divergingSymlog)
+
+// ---- calendar scales: time and UTC ----------------------------------------------------------------------
+
+// The calendar scales: continuous scales over instants (milliseconds since the epoch), in local time (`time`) or in UTC
+// (`utc`). The domain reads back as Dates, an inverted value is a Date, ticks fall on calendar boundaries (a day starts at
+// midnight of the scale's zone), and the default label for a tick is the coarsest unit the instant sits exactly on.
+//
+// What the callers observe, and so what is fixed here: the ladder of tick intervals (1, 5, 15, 30 seconds; 1, 5, 15, 30
+// minutes; 1, 3, 6, 12 hours; 1, 2 days; a week; 1, 3 months; a year) and the rule that chooses a rung: the one whose span
+// is nearer the wanted step in ratio, with milliseconds below the ladder and multi-year steps above it; and that the UTC
+// ladder counts days from the epoch (so its two-day tick falls on even epoch days, which is not "every second date").
+
+type Unit = 'second' | 'minute' | 'hour' | 'day' | 'week' | 'month' | 'year'
+
+/** The rungs of the tick ladder: a unit and the multiples of it that are ticks. */
+const LADDER: readonly (readonly [Unit, readonly number[]])[] = [
+  ['second', [1, 5, 15, 30]],
+  ['minute', [1, 5, 15, 30]],
+  ['hour', [1, 3, 6, 12]],
+  ['day', [1, 2]],
+  ['week', [1]],
+  ['month', [1, 3]],
+  ['year', [1]],
+]
+
+const UNIT_MS: Record<Unit, number> = {
+  second: durationSecond,
+  minute: durationMinute,
+  hour: durationHour,
+  day: durationDay,
+  week: durationWeek,
+  month: durationMonth,
+  year: durationYear,
+}
+
+interface Zone {
+  units: Record<Unit, TimeInterval>
+  /** The interval whose multiples the ladder's day rung counts (the epoch's days for UTC, calendar days locally). */
+  ladderDay: TimeInterval
+  format: (specifier: string) => (date: Date) => string
+}
+
+const LOCAL: Zone = {
+  units: { second, minute: timeMinute, hour: timeHour, day: timeDay, week: timeWeek, month: timeMonth, year: timeYear },
+  ladderDay: timeDay,
+  format: timeFormat as Zone['format'],
+}
+
+const UTC: Zone = {
+  units: { second, minute: utcMinute, hour: utcHour, day: utcDay, week: utcWeek, month: utcMonth, year: utcYear },
+  ladderDay: unixDay,
+  format: utcFormat as Zone['format'],
+}
+
+interface Rung {
+  interval: TimeInterval
+  step: number
+}
+
+const ladders = new Map<Zone, { rungs: Rung[]; spans: number[] }>()
+
+/** The tick ladder of a zone: its rungs and the span each covers (built once). */
+function ladderOf(zone: Zone): { rungs: Rung[]; spans: number[] } {
+  let ladder = ladders.get(zone)
+  if (!ladder) {
+    const rungs: Rung[] = []
+    const spans: number[] = []
+    for (const [unit, steps] of LADDER) {
+      for (const step of steps) {
+        rungs.push({ interval: unit === 'day' ? zone.ladderDay : zone.units[unit], step })
+        spans.push(step * UNIT_MS[unit])
+      }
+    }
+    ladders.set(zone, (ladder = { rungs, spans }))
+  }
+  return ladder
+}
+
+const msOf = (t: unknown): number => (t instanceof Date ? +t : +new Date(+(t as number)))
+
+function calendarScale(zone: Zone, copy: () => ScaleObject): ScaleObject {
+  const { scale } = continuousScale()
+  const { rungs, spans } = ladderOf(zone)
+  const { year, month, week, day, hour, minute, second: sec } = zone.units
+  const asInstants = scale.domain
+  const asInverse = scale.invert
+
+  /** The interval that puts about `count` ticks between two instants. */
+  const pick = (start: number, stop: number, count: unknown): TimeInterval | null => {
+    const target = Math.abs(stop - start) / (count as number)
+    const at = bisectRight(spans, target)
+    if (at === rungs.length) return year.every!(tickStep(start / durationYear, stop / durationYear, count as number))
+    if (at === 0) return millisecond.every!(Math.max(tickStep(start, stop, count as number), 1))
+    const nearer = target / spans[at - 1]! < spans[at]! / target ? rungs[at - 1]! : rungs[at]!
+    return nearer.interval.every!(nearer.step)
+  }
+
+  const isInterval = (x: unknown): x is TimeInterval => !!x && typeof (x as TimeInterval).range === 'function'
+
+  const listTicks = (start: number, stop: number, count: unknown): Date[] => {
+    const reversed = stop < start
+    if (reversed) [start, stop] = [stop, start]
+    const interval = isInterval(count) ? count : pick(start, stop, count)
+    const dates = interval ? interval.range(start, +stop + 1) : []
+    return reversed ? dates.reverse() : dates
+  }
+
+  const asMillisecond = zone.format('.%L')
+  const asSecond = zone.format(':%S')
+  const asMinute = zone.format('%I:%M')
+  const asHour = zone.format('%I %p')
+  const asDay = zone.format('%a %d')
+  const asWeek = zone.format('%b %d')
+  const asMonth = zone.format('%B')
+  const asYear = zone.format('%Y')
+
+  /** The default label: the coarsest unit the date sits on, read off the finest-first ladder of "is it exactly on it". */
+  const labelFor = (d: Date): string => {
+    const write =
+      sec(d) < d ? asMillisecond
+      : minute(d) < d ? asSecond
+      : hour(d) < d ? asMinute
+      : day(d) < d ? asHour
+      : month(d) < d ? (week(d) < d ? asDay : asWeek)
+      : year(d) < d ? asMonth
+      : asYear
+    return write(d)
+  }
+
+  scale.invert = (y: unknown) => new Date(asInverse(y) as number)
+  scale.domain = accessor(
+    scale,
+    () => (asInstants() as number[]).map((t) => new Date(t)),
+    (v: Iterable<unknown>) => void asInstants(Array.from(v, msOf)),
+  )
+  scale.ticks = (interval?: unknown) => {
+    const d = asInstants() as number[]
+    return listTicks(d[0]!, d[d.length - 1]!, interval == null ? 10 : interval)
+  }
+  scale.tickFormat = (_count?: number, specifier?: string) => (specifier == null ? labelFor : zone.format(specifier))
+  scale.nice = (interval?: unknown) => {
+    const d = asInstants() as number[]
+    const chosen = isInterval(interval) ? interval : pick(d[0]!, d[d.length - 1]!, interval == null ? 10 : interval)
+    if (!chosen) return scale
+    return asInstants(niceDomain(d, { floor: (x) => +chosen.floor(x as unknown as Date), ceil: (x) => +chosen.ceil(x as unknown as Date) }))
+  }
+  scale.copy = () => carry(scale, copy())
+  return scale
+}
+
+export function time(): ScaleObject {
+  return calendarScale(LOCAL, time).domain([new Date(2000, 0, 1), new Date(2000, 0, 2)])
+}
+
+export function utcTime(): ScaleObject {
+  return calendarScale(UTC, utcTime).domain([Date.UTC(2000, 0, 1), Date.UTC(2000, 0, 2)])
+}
