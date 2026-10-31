@@ -93,16 +93,24 @@ export class BoundsPen {
     this.bounds.add(cx + r * Math.cos(start), cy + r * Math.sin(start))
     this.bounds.add(ex, ey)
     if (end === start) return
-    // the angles it passes on the way: the quarter turns within a sweep that is the way round from `from` to `from + sweep`
-    const from = ccw ? end : start
-    let sweep = ccw ? start - end : end - start
-    sweep %= FULL_TURN
-    if (sweep < 0) sweep += FULL_TURN
-    let q = Math.ceil(from / QUARTER_TURN)
-    for (let i = 0; i < 5; i++, q++) {
-      const a = q * QUARTER_TURN
-      if (a > from + sweep) break
-      this.bounds.add(cx + r * Math.cos(a), cy + r * Math.sin(a))
+    // the quarter turns on the way: at most four, found by stepping from the grid line under the first angle of the sweep.
+    // The stepping, not a multiplication, decides the last digits of the extent, and a view's size follows them.
+    let from = start % FULL_TURN
+    if (from < 0) from += FULL_TURN
+    let to = end % FULL_TURN
+    if (to < 0) to += FULL_TURN
+    let backwards = ccw
+    if (to < from) {
+      backwards = !backwards
+      const t = from
+      from = to
+      to = t
+    }
+    if (backwards) {
+      to -= FULL_TURN
+      for (let a = from - (from % QUARTER_TURN), i = 0; i < 4 && a > to; i++, a -= QUARTER_TURN) this.bounds.add(cx + r * Math.cos(a), cy + r * Math.sin(a))
+    } else {
+      for (let a = from - (from % QUARTER_TURN) + QUARTER_TURN, i = 0; i < 4 && a < to; i++, a += QUARTER_TURN) this.bounds.add(cx + r * Math.cos(a), cy + r * Math.sin(a))
     }
   }
 }

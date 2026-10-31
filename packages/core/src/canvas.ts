@@ -31,7 +31,7 @@ import {
   trailPath,
   frameBackgroundPath,
   frameItem,
-  arcInto,
+  itemArcInto,
 } from './render.js'
 
 /** Minimal 2D context surface used by the renderer. */
@@ -1024,14 +1024,8 @@ function renderMark(type: string, group: SceneGroup, ctx: CanvasLike, scene: Sce
     }
     case 'arc': {
       for (const it of group.items ?? []) {
-        const r = (it.outerRadius as number) ?? (it.radius as number) ?? 0
-        const r0 = (it.innerRadius as number) ?? 0
-        const a0 = (it.startAngle as number) ?? 0
-        const a1 = (it.endAngle as number) ?? 0
         // The SVG renderer emits the arc path around (0,0) translated by the
         // item position; trace the same local path with the item offset.
-        const cr = (it as Record<string, unknown>).cornerRadius as number | undefined ?? 0
-        const pa = (it as Record<string, unknown>).padAngle as number | undefined ?? 0
         // vega's markItemPath draw: translate/rotate to the item, build the path
         // with the REAL context (d3-arc calls moveTo/arc/lineTo on it), restore
         // the transform, then fill/stroke. Re-deriving the circles from the SVG
@@ -1042,7 +1036,7 @@ function renderMark(type: string, group: SceneGroup, ctx: CanvasLike, scene: Sce
         ctx.translate(ax, ay)
         if (angle) ctx.rotate((angle * Math.PI) / 180)
         ctx.beginPath()
-        arcInto(ctx, 0, 0, r, r0, a0, a1, cr, pa)
+        itemArcInto(ctx, it)
         if (angle) ctx.rotate((-angle * Math.PI) / 180)
         ctx.translate(-ax, -ay)
         paintPath(ctx, [], it, defs, 'auto', gradientBox(it))

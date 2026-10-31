@@ -19,7 +19,7 @@
  */
 import { Bounds, DEG_TO_RAD, boundGroupItem, boundText, boundTypedMark } from './bounds.js'
 import { textAnchor } from './text-metrics.js'
-import { arcPath } from './render.js'
+import { itemArcPath } from './render.js'
 import { flattenPath, insidePolys } from './path-flatten.js'
 import { MARK_NODE } from './util.js'
 import type { SceneGroup, SceneItem, SceneRoot } from './types.js'
@@ -95,8 +95,7 @@ function outlineOf(marktype: string, item: SceneItem): ReturnType<typeof flatten
   const sin = Math.sin(rot)
   const place = (px: number, py: number): [number, number] => [x + px * cos - py * sin, y + px * sin + py * cos]
   if (marktype === 'arc') {
-    const r = (it.outerRadius as number) ?? (it.radius as number) ?? 0
-    const d = arcPath(0, 0, r, (it.innerRadius as number) ?? 0, (it.startAngle as number) ?? 0, (it.endAngle as number) ?? 0, (it.cornerRadius as number) ?? 0, (it.padAngle as number) ?? 0)
+    const d = itemArcPath(it as SceneItem)
     return flattenPath(d, place)
   }
   const sx = (it.scaleX as number) || 1

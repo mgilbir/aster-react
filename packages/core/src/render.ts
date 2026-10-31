@@ -958,106 +958,26 @@ function renderArcs(group: SceneGroup, open: string): string {
   return out
 }
 
-/**
- * d3-arc port (d3-shape/src/arc.js): the annular-sector path with padAngle
- * and cornerRadius, emitted around (0,0) — vega translates per item. The
- * emitter mirrors d3-path (moveTo/lineTo/arc with large-arc/sweep flags) so
- * the rounding matches the reference renderer exactly.
- */
-const ARC_EPSILON = 1e-12
+// --- annular sectors ---------------------------------------------------------
+//
+// An arc item is a sector of a ring about (0, 0): between two radii, from one angle to another (angles run clockwise
+// from twelve o'clock), optionally with a gap `pad` between neighbours and rounded corners. The outline is traced on
+// any {@link ArcSink}: the SVG path writer, a canvas context or the bounds pen, so all three draw the same shape.
+//
+// What the output depends on, and so cannot change: the thresholds below, the clamped inverse trig functions, the
+// order of the floating-point operations (they decide the printed digits and which side of a threshold a sector
+// falls), and the sequence of sink calls (a canvas replays them). The decomposition into stages is free.
 
-class PathEmitter {
-  private s = ''
-  private x1 = 0
-  private y1 = 0
-  private hasPoint = false
-  // d3-path Path(3): coordinates round to 3 decimals on emit.
-  moveTo(x: number, y: number): void { this.s += `M${num3(x)},${num3(y)}`; this.x1 = x; this.y1 = y; this.hasPoint = true }
-  lineTo(x: number, y: number): void { this.s += `L${num3(x)},${num3(y)}`; this.x1 = x; this.y1 = y; this.hasPoint = true }
-  arc(x: number, y: number, r: number, a0: number, a1: number, ccw = false): void {
-    const x0 = x + r * Math.cos(a0)
-    const y0 = y + r * Math.sin(a0)
-    if (!this.hasPoint) this.moveTo(x0, y0)
-    else if (Math.abs(this.x1 - x0) > ARC_EPSILON || Math.abs(this.y1 - y0) > ARC_EPSILON) this.lineTo(x0, y0)
-    if (!(r > ARC_EPSILON)) return
-    // d3-path: da folds the wrap; a complete circle draws two arcs through the
-    // antipode; large-arc uses >= PI.
-    let da = ccw ? a0 - a1 : a1 - a0
-    if (da < 0) da = (da % (2 * Math.PI)) + 2 * Math.PI
-    const sweep = ccw ? 0 : 1
-    const x2 = x + r * Math.cos(a1)
-    const y2 = y + r * Math.sin(a1)
-    if (da > 2 * Math.PI - ARC_EPSILON) {
-      // complete circle: two half arcs through the antipode
-      this.s += `A${num3(r)},${num3(r)},0,1,${sweep},${num3(x - (x0 - x))},${num3(y - (y0 - y))}`
-      this.s += `A${num3(r)},${num3(r)},0,1,${sweep},${num3(x0)},${num3(y0)}`
-      this.x1 = x0; this.y1 = y0
-    } else if (da > ARC_EPSILON) {
-      this.s += `A${num3(r)},${num3(r)},0,${da >= Math.PI ? 1 : 0},${sweep},${num3(x2)},${num3(y2)}`
-      this.x1 = x2; this.y1 = y2
-    }
-  }
-  closePath(): void { if (this.s) this.s += 'Z' }
-  toString(): string { return this.s }
-}
+const SECTOR_EPS = 1e-12
+const QUARTER_TURN = Math.PI / 2
+const FULL_TURN = 2 * Math.PI
 
-interface CornerTangents { cx: number; cy: number; x01: number; y01: number; x11: number; y11: number }
-// (the two tangent records of a corner, reused: an arc with a corner radius asks for four of them, and a pie of thousands of arcs
-// would otherwise allocate that many objects per paint and per measure; they are read before the next arc starts)
-const TANGENTS_A: CornerTangents = { cx: 0, cy: 0, x01: 0, y01: 0, x11: 0, y11: 0 }
-const TANGENTS_B: CornerTangents = { cx: 0, cy: 0, x01: 0, y01: 0, x11: 0, y11: 0 }
+/** `Math.acos`, but an argument that rounding pushed past 1 or -1 gives 0 or pi instead of NaN. */
+const arccos = (x: number): number => (x > 1 ? 0 : x < -1 ? Math.PI : Math.acos(x))
+/** `Math.asin`, but an argument beyond 1 or -1 gives a quarter turn either way instead of NaN. */
+const arcsin = (x: number): number => (x >= 1 ? QUARTER_TURN : x <= -1 ? -QUARTER_TURN : Math.asin(x))
 
-function cornerTangents(out: CornerTangents, x0: number, y0: number, x1: number, y1: number, r1: number, rc: number, cw: boolean): CornerTangents {
-  const x01 = x0 - x1
-  const y01 = y0 - y1
-  const lo = (cw ? rc : -rc) / Math.sqrt(x01 * x01 + y01 * y01)
-  const ox = lo * y01
-  const oy = -lo * x01
-  const x11 = x0 + ox
-  const y11 = y0 + oy
-  const x10 = x1 + ox
-  const y10 = y1 + oy
-  const x00 = (x11 + x10) / 2
-  const y00 = (y11 + y10) / 2
-  const dx = x10 - x11
-  const dy = y10 - y11
-  const d2 = dx * dx + dy * dy
-  const r = r1 - rc
-  const D = x11 * y10 - x10 * y11
-  const d = (dy < 0 ? -1 : 1) * Math.sqrt(Math.max(0, r * r * d2 - D * D))
-  let cx0 = (D * dy - dx * d) / d2
-  let cy0 = (-D * dx - dy * d) / d2
-  const cx1 = (D * dy + dx * d) / d2
-  const cy1 = (-D * dx + dy * d) / d2
-  const dx0 = cx0 - x00
-  const dy0 = cy0 - y00
-  const dx1 = cx1 - x00
-  const dy1 = cy1 - y00
-  if (dx0 * dx0 + dy0 * dy0 > dx1 * dx1 + dy1 * dy1) { cx0 = cx1; cy0 = cy1 }
-  out.cx = cx0
-  out.cy = cy0
-  out.x01 = -ox
-  out.y01 = -oy
-  out.x11 = cx0 * (r1 / r - 1)
-  out.y11 = cy0 * (r1 / r - 1)
-  return out
-}
-
-const arcAbs = Math.abs
-const arcAcos = Math.acos
-const arcAtan2 = Math.atan2
-// d3-shape math.js asin clamps to +/-halfPi (needed for padAngle > span).
-const arcAsin = (x: number): number => (x > 1 ? Math.PI / 2 : x < -1 ? -Math.PI / 2 : Math.asin(x))
-
-export const arcPath = arcPathImpl as (cx: number, cy: number, rIn: number, r0In: number, a0in: number, a1in: number, cornerRadius?: number, padAngle?: number) => GeneratedPath
-
-function arcPathImpl(cx: number, cy: number, rIn: number, r0In: number, a0in: number, a1in: number, cornerRadius = 0, padAngle = 0): string {
-  const ctx = new PathEmitter()
-  arcInto(ctx, cx, cy, rIn, r0In, a0in, a1in, cornerRadius, padAngle)
-  return ctx.toString()
-}
-
-/** The drawing surface the d3-arc port targets: a d3-path or a canvas 2D context. */
+/** The drawing surface a sector is traced on: a path writer, a canvas 2D context or a bounds pen. */
 export interface ArcSink {
   moveTo(x: number, y: number): void
   lineTo(x: number, y: number): void
@@ -1066,127 +986,206 @@ export interface ArcSink {
 }
 
 /**
- * d3-arc into any sink. The SVG path and the canvas painter share this one
- * port: the canvas draws the exact arcs (like vega's canvas, which hands d3-arc
- * the real context) instead of re-deriving circle centres from a path string
- * rounded to 3 decimals, which is ill-conditioned for near-semicircular arcs.
+ * A rounded corner of a sector: the circle that is tangent to a radial edge and to the ring the edge ends on. `edge` and
+ * `ring` are the vectors from its centre to the two points of tangency.
  */
-export function arcInto(ctx: ArcSink, cx: number, cy: number, rIn: number, r0In: number, a0in: number, a1in: number, cornerRadius = 0, padAngle = 0): void {
-  let r0 = r0In
-  let r1 = rIn
-  let a0 = a0in - Math.PI / 2
-  let a1 = a1in - Math.PI / 2
-  const da0abs = arcAbs(a1 - a0)
+interface Fillet { cx: number; cy: number; edgeX: number; edgeY: number; ringX: number; ringY: number }
+// (two records, reused: a sector with rounded corners needs four fillets, and a pie of thousands of sectors would otherwise
+// allocate that many objects per paint and per measure. They are read before the next sector starts.)
+const FILLET_A: Fillet = { cx: 0, cy: 0, edgeX: 0, edgeY: 0, ringX: 0, ringY: 0 }
+const FILLET_B: Fillet = { cx: 0, cy: 0, edgeX: 0, edgeY: 0, ringX: 0, ringY: 0 }
+
+/**
+ * The corner circle of radius |rad| on the radial edge running from (ax, ay) to (bx, by), inside the ring of radius `ringR`.
+ * The sign of `rad` picks the side of the edge together with the winding (a corner on the inner ring takes a negative one).
+ * The centre lies where the edge, pushed sideways by the radius, meets the circle of radius `ringR - rad`; of the two such
+ * points the one nearer the middle of the pushed edge is the centre.
+ */
+function fillet(out: Fillet, ax: number, ay: number, bx: number, by: number, ringR: number, rad: number, cw: boolean): Fillet {
+  const ex = ax - bx
+  const ey = ay - by
+  const push = (cw ? rad : -rad) / Math.sqrt(ex * ex + ey * ey)
+  const px = push * ey
+  const py = -push * ex
+  const x1 = ax + px
+  const y1 = ay + py
+  const x2 = bx + px
+  const y2 = by + py
+  const mx = (x1 + x2) / 2
+  const my = (y1 + y2) / 2
+  const dx = x2 - x1
+  const dy = y2 - y1
+  const len2 = dx * dx + dy * dy
+  const reach = ringR - rad
+  const cross = x1 * y2 - x2 * y1
+  const half = (dy < 0 ? -1 : 1) * Math.sqrt(Math.max(0, reach * reach * len2 - cross * cross))
+  let cx = (cross * dy - dx * half) / len2
+  let cy = (-cross * dx - dy * half) / len2
+  const otherX = (cross * dy + dx * half) / len2
+  const otherY = (-cross * dx + dy * half) / len2
+  const nearX = cx - mx
+  const nearY = cy - my
+  const farX = otherX - mx
+  const farY = otherY - my
+  if (nearX * nearX + nearY * nearY > farX * farX + farY * farY) { cx = otherX; cy = otherY }
+  out.cx = cx
+  out.cy = cy
+  out.edgeX = -px
+  out.edgeY = -py
+  out.ringX = cx * (ringR / reach - 1)
+  out.ringY = cy * (ringR / reach - 1)
+  return out
+}
+
+/** Where the line through (x0, y0) and (x1, y1) crosses the one through (x2, y2) and (x3, y3); `meet.ok` is false when they are parallel enough to call it never. */
+const meet = { ok: false, x: 0, y: 0 }
+function meetLines(x0: number, y0: number, x1: number, y1: number, x2: number, y2: number, x3: number, y3: number): void {
+  const ux = x1 - x0
+  const uy = y1 - y0
+  const vx = x3 - x2
+  const vy = y3 - y2
+  const t = vy * ux - vx * uy
+  meet.ok = !(t * t < SECTOR_EPS)
+  if (!meet.ok) return
+  const s = (vx * (y0 - y2) - vy * (x0 - x2)) / t
+  meet.x = x0 + s * ux
+  meet.y = y0 + s * uy
+}
+
+/**
+ * One rounded side of a sector: its two corners, and the ring between them unless they have merged (`merged`, when the
+ * corner radius had to shrink to fit). The outer side starts a subpath; the inner side continues the outline.
+ */
+function roundedSide(sink: ArcSink, a: Fillet, b: Fillet, rad: number, merged: boolean, ringR: number, cw: boolean, outer: boolean): void {
+  const startX = a.cx + a.edgeX
+  const startY = a.cy + a.edgeY
+  if (outer) sink.moveTo(startX, startY)
+  else sink.lineTo(startX, startY)
+  if (merged) {
+    sink.arc(a.cx, a.cy, rad, Math.atan2(a.edgeY, a.edgeX), Math.atan2(b.edgeY, b.edgeX), !cw)
+    return
+  }
+  sink.arc(a.cx, a.cy, rad, Math.atan2(a.edgeY, a.edgeX), Math.atan2(a.ringY, a.ringX), !cw)
+  sink.arc(0, 0, ringR, Math.atan2(a.cy + a.ringY, a.cx + a.ringX), Math.atan2(b.cy + b.ringY, b.cx + b.ringX), outer ? !cw : cw)
+  sink.arc(b.cx, b.cy, rad, Math.atan2(b.ringY, b.ringX), Math.atan2(b.edgeY, b.edgeX), !cw)
+}
+
+/**
+ * The outline of a sector on `sink`. Radii may come in either order; a sector narrower than a trillionth of a
+ * radian collapses to a line, an outer radius under that is a point, and a turn or more is a disc or a ring.
+ * `padAngle` is the gap kept between neighbouring sectors, measured at the radius sqrt(inner^2 + outer^2); each radial
+ * edge moves in by the angle that leaves it. `cornerRadius` is capped at half the band, and at what the sector's
+ * angle leaves room for.
+ */
+export function arcInto(sink: ArcSink, outerRadius: number, innerRadius: number, startAngle: number, endAngle: number, cornerRadius = 0, padAngle = 0): void {
+  let ro = outerRadius
+  let ri = innerRadius
+  if (ro < ri) { ro = innerRadius; ri = outerRadius }
+  const a0 = startAngle - QUARTER_TURN
+  const a1 = endAngle - QUARTER_TURN
+  const span = Math.abs(a1 - a0)
   const cw = a1 > a0
-  if (r1 < r0) { const t = r1; r1 = r0; r0 = t }
-  if (!(r1 > ARC_EPSILON)) {
-    // point
-    ctx.moveTo(0, 0)
-    ctx.closePath()
-    return
-  }
-  if (da0abs > 2 * Math.PI - ARC_EPSILON) {
-    // circle or annulus
-    ctx.moveTo(r1 * Math.cos(a0), r1 * Math.sin(a0))
-    ctx.arc(0, 0, r1, a0, a1, !cw)
-    if (r0 > ARC_EPSILON) {
-      ctx.moveTo(r0 * Math.cos(a1), r0 * Math.sin(a1))
-      ctx.arc(0, 0, r0, a1, a0, cw)
+  if (!(ro > SECTOR_EPS)) sink.moveTo(0, 0)
+  else if (span > FULL_TURN - SECTOR_EPS) {
+    sink.moveTo(ro * Math.cos(a0), ro * Math.sin(a0))
+    sink.arc(0, 0, ro, a0, a1, !cw)
+    if (ri > SECTOR_EPS) {
+      sink.moveTo(ri * Math.cos(a1), ri * Math.sin(a1))
+      sink.arc(0, 0, ri, a1, a0, cw)
     }
-    ctx.closePath()
-    return
+  } else traceSector(sink, ro, ri, a0, a1, span, cw, cornerRadius, padAngle)
+  sink.closePath()
+}
+
+function traceSector(sink: ArcSink, ro: number, ri: number, a0: number, a1: number, span: number, cw: boolean, cornerRadius: number, padAngle: number): void {
+  // the angles each ring runs between, and how much of the sweep is left on it, once the gap is taken off both ends
+  let outerFrom = a0
+  let outerTo = a1
+  let innerFrom = a0
+  let innerTo = a1
+  let outerSweep = span
+  let innerSweep = span
+  const halfGap = padAngle / 2
+  const gapRadius = halfGap > SECTOR_EPS ? Math.sqrt(ri * ri + ro * ro) : 0
+  const limit = Math.min(Math.abs(ro - ri) / 2, cornerRadius)
+  if (gapRadius > SECTOR_EPS) {
+    const innerCut = arcsin((gapRadius / ri) * Math.sin(halfGap))
+    const outerCut = arcsin((gapRadius / ro) * Math.sin(halfGap))
+    const dir = cw ? 1 : -1
+    if ((innerSweep -= innerCut * 2) > SECTOR_EPS) { const t = innerCut * dir; innerFrom += t; innerTo -= t }
+    else { innerSweep = 0; innerFrom = innerTo = (a0 + a1) / 2 }
+    if ((outerSweep -= outerCut * 2) > SECTOR_EPS) { const t = outerCut * dir; outerFrom += t; outerTo -= t }
+    else { outerSweep = 0; outerFrom = outerTo = (a0 + a1) / 2 }
   }
-  let a01 = a0
-  let a11 = a1
-  let a00 = a0
-  let a10 = a1
-  let daF = da0abs
-  let daS = da0abs
-  const ap = padAngle / 2
-  const rp = ap > ARC_EPSILON ? Math.sqrt(r0 * r0 + r1 * r1) : 0
-  const rcLimit = Math.min(arcAbs(r1 - r0) / 2, cornerRadius)
-  let rc = rcLimit
-  let rc0 = rc
-  let rc1 = rc
-  if (rp > ARC_EPSILON) {
-    const p0 = arcAsin((rp / r0) * Math.sin(ap))
-    const p1 = arcAsin((rp / r1) * Math.sin(ap))
-    if ((daF -= p0 * 2) > ARC_EPSILON) { const pp0 = p0 * (cw ? 1 : -1); a00 += pp0; a10 -= pp0 }
-    else { daF = 0; a00 = a10 = (a0 + a1) / 2 }
-    if ((daS -= p1 * 2) > ARC_EPSILON) { const pp1 = p1 * (cw ? 1 : -1); a01 += pp1; a11 -= pp1 }
-    else { daS = 0; a01 = a11 = (a0 + a1) / 2 }
-  }
-  const x01 = r1 * Math.cos(a01)
-  const y01 = r1 * Math.sin(a01)
-  const x10 = r0 * Math.cos(a10)
-  const y10 = r0 * Math.sin(a10)
-  let x11 = 0
-  let y11 = 0
-  let x00 = 0
-  let y00 = 0
-  if (rc > ARC_EPSILON) {
-    x11 = r1 * Math.cos(a11)
-    y11 = r1 * Math.sin(a11)
-    x00 = r0 * Math.cos(a00)
-    y00 = r0 * Math.sin(a00)
-    if (da0abs < Math.PI) {
-      const oc = intersectArc(x01, y01, x00, y00, x11, y11, x10, y10)
-      if (oc) {
-        const ax = x01 - oc[0]
-        const ay = y01 - oc[1]
-        const bx = x11 - oc[0]
-        const by = y11 - oc[1]
-        const kc = 1 / Math.sin(arcAcos((ax * bx + ay * by) / (Math.sqrt(ax * ax + ay * ay) * Math.sqrt(bx * bx + by * by))) / 2)
-        const lc = Math.sqrt(oc[0] * oc[0] + oc[1] * oc[1])
-        rc0 = Math.min(rc, (r0 - lc) / (kc - 1))
-        rc1 = Math.min(rc, (r1 - lc) / (kc + 1))
+  // the four corners of the outline: the outer and inner ring at the start and at the end
+  const osx = ro * Math.cos(outerFrom)
+  const osy = ro * Math.sin(outerFrom)
+  const iex = ri * Math.cos(innerTo)
+  const iey = ri * Math.sin(innerTo)
+  let oex = 0
+  let oey = 0
+  let isx = 0
+  let isy = 0
+  // the corner radius each ring can take
+  let outerCorner = limit
+  let innerCorner = limit
+  if (limit > SECTOR_EPS) {
+    oex = ro * Math.cos(outerTo)
+    oey = ro * Math.sin(outerTo)
+    isx = ri * Math.cos(innerFrom)
+    isy = ri * Math.sin(innerFrom)
+    // a narrow sector has less room: the corners are capped where the two radial edges would cross
+    if (span < Math.PI) {
+      meetLines(osx, osy, isx, isy, oex, oey, iex, iey)
+      if (meet.ok) {
+        const ux = osx - meet.x
+        const uy = osy - meet.y
+        const vx = oex - meet.x
+        const vy = oey - meet.y
+        const k = 1 / Math.sin(arccos((ux * vx + uy * vy) / (Math.sqrt(ux * ux + uy * uy) * Math.sqrt(vx * vx + vy * vy))) / 2)
+        const apexDistance = Math.sqrt(meet.x * meet.x + meet.y * meet.y)
+        innerCorner = Math.min(limit, (ri - apexDistance) / (k - 1))
+        outerCorner = Math.min(limit, (ro - apexDistance) / (k + 1))
       } else {
-        rc0 = rc1 = 0
+        innerCorner = outerCorner = 0
       }
     }
   }
-  if (!(daS > ARC_EPSILON)) ctx.moveTo(x01, y01)
-  else if (rc1 > ARC_EPSILON) {
-    const t0 = cornerTangents(TANGENTS_A, x00, y00, x01, y01, r1, rc1, cw)
-    const t1 = cornerTangents(TANGENTS_B, x11, y11, x10, y10, r1, rc1, cw)
-    ctx.moveTo(t0.cx + t0.x01, t0.cy + t0.y01)
-    if (rc1 < rc) ctx.arc(t0.cx, t0.cy, rc1, arcAtan2(t0.y01, t0.x01), arcAtan2(t1.y01, t1.x01), !cw)
-    else {
-      ctx.arc(t0.cx, t0.cy, rc1, arcAtan2(t0.y01, t0.x01), arcAtan2(t0.y11, t0.x11), !cw)
-      ctx.arc(0, 0, r1, arcAtan2(t0.cy + t0.y11, t0.cx + t0.x11), arcAtan2(t1.cy + t1.y11, t1.cx + t1.x11), !cw)
-      ctx.arc(t1.cx, t1.cy, rc1, arcAtan2(t1.y11, t1.x11), arcAtan2(t1.y01, t1.x01), !cw)
-    }
+  // the outer side
+  if (!(outerSweep > SECTOR_EPS)) sink.moveTo(osx, osy)
+  else if (outerCorner > SECTOR_EPS) {
+    roundedSide(sink, fillet(FILLET_A, isx, isy, osx, osy, ro, outerCorner, cw), fillet(FILLET_B, oex, oey, iex, iey, ro, outerCorner, cw), outerCorner, outerCorner < limit, ro, cw, true)
   } else {
-    ctx.moveTo(x01, y01)
-    ctx.arc(0, 0, r1, a01, a11, !cw)
+    sink.moveTo(osx, osy)
+    sink.arc(0, 0, ro, outerFrom, outerTo, !cw)
   }
-  if (!(r0 > ARC_EPSILON) || !(daF > ARC_EPSILON)) ctx.lineTo(x10, y10)
-  else if (rc0 > ARC_EPSILON) {
-    const t0 = cornerTangents(TANGENTS_A, x10, y10, x11, y11, r0, -rc0, cw)
-    const t1 = cornerTangents(TANGENTS_B, x01, y01, x00, y00, r0, -rc0, cw)
-    ctx.lineTo(t0.cx + t0.x01, t0.cy + t0.y01)
-    if (rc0 < rc) ctx.arc(t0.cx, t0.cy, rc0, arcAtan2(t0.y01, t0.x01), arcAtan2(t1.y01, t1.x01), !cw)
-    else {
-      ctx.arc(t0.cx, t0.cy, rc0, arcAtan2(t0.y01, t0.x01), arcAtan2(t0.y11, t0.x11), !cw)
-      ctx.arc(0, 0, r0, arcAtan2(t0.cy + t0.y11, t0.cx + t0.x11), arcAtan2(t1.cy + t1.y11, t1.cx + t1.x11), cw)
-      ctx.arc(t1.cx, t1.cy, rc0, arcAtan2(t1.y11, t1.x11), arcAtan2(t1.y01, t1.x01), !cw)
-    }
-  } else {
-    ctx.arc(0, 0, r0, a10, a00, cw)
-  }
-  ctx.closePath()
-  void cx; void cy
+  // the inner side, back to where the outline began
+  if (!(ri > SECTOR_EPS) || !(innerSweep > SECTOR_EPS)) sink.lineTo(iex, iey)
+  else if (innerCorner > SECTOR_EPS) {
+    roundedSide(sink, fillet(FILLET_A, iex, iey, oex, oey, ri, -innerCorner, cw), fillet(FILLET_B, osx, osy, isx, isy, ri, -innerCorner, cw), innerCorner, innerCorner < limit, ri, cw, false)
+  } else sink.arc(0, 0, ri, innerTo, innerFrom, cw)
 }
 
-function intersectArc(x0: number, y0: number, x1: number, y1: number, x2: number, y2: number, x3: number, y3: number): [number, number] | undefined {
-  const x10 = x1 - x0
-  const y10 = y1 - y0
-  const x32 = x3 - x2
-  const y32 = y3 - y2
-  const t = y32 * x10 - x32 * y10
-  if (t * t < ARC_EPSILON) return undefined
-  const tt = (x32 * (y0 - y2) - y32 * (x0 - x2)) / t
-  return [x0 + tt * x10, y0 + tt * y10]
+/** A number as an arc item holds it: what the arc mark's encoders write for a missing, NaN or 0 value is 0. */
+const arcField = (v: unknown): number => +((v as number) || 0)
+
+/** The outline of an arc item's sector on `sink` (about the origin: the item's position is the caller's to apply). */
+export function itemArcInto(sink: ArcSink, it: SceneItem): void {
+  const rec = recOf(it)
+  arcInto(sink, arcField(it.outerRadius ?? it.radius), arcField(it.innerRadius), arcField(it.startAngle), arcField(it.endAngle), arcField(rec.cornerRadius), arcField(rec.padAngle))
+}
+
+/** The path text of a sector (see {@link arcInto}), rounded to `digits` decimals (`null` for none). */
+export function arcPath(outerRadius: number, innerRadius: number, startAngle: number, endAngle: number, cornerRadius = 0, padAngle = 0, digits: number | null = 3): GeneratedPath {
+  const writer = new ArcPathWriter(digits)
+  arcInto(writer, outerRadius, innerRadius, startAngle, endAngle, cornerRadius, padAngle)
+  return gen(writer.d)
+}
+
+/** The path text of an arc item's sector, rounded to `digits` decimals (`null` for none). */
+export function itemArcPath(it: SceneItem, digits: number | null = 3): GeneratedPath {
+  const rec = recOf(it)
+  return arcPath(arcField(it.outerRadius ?? it.radius), arcField(it.innerRadius), arcField(it.startAngle), arcField(it.endAngle), arcField(rec.cornerRadius), arcField(rec.padAngle), digits)
 }
 
 // --- the one SVG attribute/text writer --------------------------------------
@@ -1648,20 +1647,14 @@ export function imageAttrs(it: SceneItem, w: AttrSink): void {
 }
 
 export function arcItemAttrs(it: SceneItem, w: AttrSink): void {
-  const r = (it.outerRadius as number) ?? (it.radius as number) ?? 0
-  const r0 = (it.innerRadius as number) ?? 0
-  const a0 = (it.startAngle as number) ?? 0
-  const a1 = (it.endAngle as number) ?? 0
   // Vega emits the arc path around (0,0) with a per-item translate; the local
   // coordinates round to 3 decimals independently of the (often fractional)
   // position, which the canonical diff depends on. vega's arc attr emits every
   // defined paint property (stroke-width even without a stroke, opacity, dashes).
-  const cr = recOf(it).cornerRadius as number | undefined ?? 0
-  const pa = recOf(it).padAngle as number | undefined ?? 0
   w.t('transform', rotateItemTransform(it))
   itemDatumAttr(it, w)
   ariaItemAttrs(it, w, 'arc')
-  w.g('d', arcPath(0, 0, r, r0, a0, a1, cr, pa))
+  w.g('d', itemArcPath(it))
   paintAttrs(it, w)
 }
 
