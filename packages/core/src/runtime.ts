@@ -51,7 +51,7 @@ import { valueKey, valuesEqual } from './fingerprint.js'
 import { rowsEqual, sourceNames, type PulseChange } from './pulse.js'
 import { aggregateRows, fieldsOf, groupKeyFn } from './transform-agg.js'
 import { flattenLength } from './transform-basic.js'
-import { trellisLayout } from './trellis.js'
+import { layoutFacet } from './trellis.js'
 import { boundAxisGroup, boundLegendGroup, boundGroupItem, boundLeaf, boundTypedMark, Bounds, layoutBounds, eachMarkBounds, hasClippedMark } from './bounds.js'
 import { rectItemPath } from './render.js'
 import { buildAxis as buildAxisGuide, tickPlacement } from './guide-axis.js'
@@ -1857,7 +1857,7 @@ function buildContentPass(
   const hasLayout = ctx.chart.layout != null
   if (hasLayout && cut === undefined) {
     try {
-      trellisLayout({ marktype: 'group', items } as unknown as SceneGroup, resolveLayoutOptions(ctx.chart.layout!, ctx))
+      layoutFacet({ marktype: 'group', items } as unknown as SceneGroup, resolveLayoutOptions(ctx.chart.layout!, ctx))
     } catch {
       // vega's dataflow logs the layout error and renders the scene unlayouted:
       // cells keep their encoded (0,0) anchors and the view skips overflow growth.
@@ -4533,7 +4533,7 @@ function buildGroupItem(mark: CompiledMark, ctx: EvalContext, src: GroupSource):
     // ViewLayout: a `layout` grid positions the child groups (headers, footers, titles, cells) first
     if (mark.layout && !scope.unsettled) {
       try {
-        trellisLayout({ marktype: 'group', items: content } as unknown as SceneGroup, resolveLayoutOptions(mark.layout, childCtx))
+        layoutFacet({ marktype: 'group', items: content } as unknown as SceneGroup, resolveLayoutOptions(mark.layout, childCtx))
       } catch {
         // a grid the layout cannot take (vega's gridLayout throws on e.g. fractional `columns`): the dataflow
         // logs it and the cells stay where their encode put them; the view also skips overflow growth

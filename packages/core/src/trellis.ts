@@ -152,13 +152,10 @@ function cellBox(g: SceneGroup, flush: boolean): Bounds {
   return b.empty() ? b.set(0, 0, 0, 0) : b.translate(-(g.x || 0), -(g.y || 0))
 }
 
-/**
- * Lay groups out in a grid, moving each. `measure` gives their boxes when the caller has them; otherwise they are read off the
- * groups. Returns the box around the groups at their new places.
- */
-export function gridLayout(groups: SceneGroup[], opt: Opt, measure?: (g: SceneGroup) => Bounds): Bounds {
+/** Lay the cell groups of a facet out in a grid, moving each. Returns the box around them at their new places. */
+function layoutCells(groups: SceneGroup[], opt: Opt): Bounds {
   for (const g of groups) g.y = g.y || 0
-  const boxes = groups.map(measure ?? ((g) => cellBox(g, opt.bounds === 'flush')))
+  const boxes = groups.map((g) => cellBox(g, opt.bounds === 'flush'))
   const { dx, dy } = placeGrid(boxes, groups.map((g) => ({ x: g.x || 0, y: g.y || 0 })), opt)
   const bounds = new Bounds()
   groups.forEach((g, i) => {
@@ -255,14 +252,14 @@ function placeStrips(strips: SceneGroup[], cells: SceneGroup[], ncols: number, n
 }
 
 /** Lay out a faceted group: its cells, then the headers and footers along them, then its row and column titles beside those. */
-export function trellisLayout(view: SceneGroup, opt: Opt): void {
+export function layoutFacet(view: SceneGroup, opt: Opt): void {
   const { cells, strips, titles } = sortByRole(view)
   const flush = opt.bounds === 'flush'
   const ncols = (opt.columns as number) || cells.length
   if (ncols > 0) boundedCount(ncols, 'facet columns')
   const nrows = ncols <= 0 ? 1 : Math.ceil(cells.length / ncols)
 
-  const grid = gridLayout(cells, opt)
+  const grid = layoutCells(cells, opt)
   if (grid.empty()) grid.set(0, 0, 0, 0)
 
   const reachOf = (role: Role): number => {
