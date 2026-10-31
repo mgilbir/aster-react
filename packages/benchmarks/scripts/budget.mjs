@@ -108,7 +108,7 @@ import { fileURLToPath } from 'node:url'
 // The selection and composite-mark compilers rewritten in @aster/vl (a smaller wiring, one part builder): Chart + VL 282.5 (-0.4); the
 // ceiling follows it down. Every other row is unchanged.
 // Lane fix/core-gaps (the id counter of a view, tuple creation order for sort ties, the check of a spec's expressions, transform names):
-// Chart + VL 283.1 (+1.6 over 281.5); the other rows stay inside their ceilings.
+// Chart + VL 283.5 (+2.0 over 281.5); the other rows stay inside their ceilings.
 // The geo engine as geometry event buffers (geo-events / geo-clip / geo-resample / geo-path / geo-projections ...: more, smaller
 // modules, the sinks and the albersUsa interleave in place of d3's shared stream objects), measured (kB gzip): geo marginal 15.4
 // (+1.1 over 14.3); core 138.1 and the other rows did not move.
@@ -132,7 +132,7 @@ const BUDGETS = {
   '@aster/react SvgChart': 166.1 * 1024,
   '@aster/react SvgChart + interaction': 184.0 * 1024,
   // Base + the VL compiler (opt-in: `import '@aster/react/vl'`).
-  '@aster/react Chart + VL': 283.6 * 1024,
+  '@aster/react Chart + VL': 284.0 * 1024,
 }
 
 const THIS_DIR = dirname(fileURLToPath(import.meta.url))
