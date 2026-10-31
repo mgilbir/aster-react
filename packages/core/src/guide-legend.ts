@@ -4,8 +4,8 @@
  * placed against each other from the bounds of what was drawn, and the legend is sized to hold them. See guide-encode.ts for how a
  * property becomes a channel of an item.
  */
-import type { EncodeValue, SceneItem } from './types.js'
-import { Bounds, boundLeaf, boundStroke, multiLineOffset } from './bounds.js'
+import type { EncodeValue, SceneGroup, SceneItem } from './types.js'
+import { Bounds, boundLeaf, boundLegendGroup, boundStroke, multiLineOffset } from './bounds.js'
 import { placeGrid } from './trellis.js'
 import { rectItemPath, symbolPath } from './render.js'
 import type { Locale } from './locale.js'
@@ -748,4 +748,69 @@ function symbolEntries(inp: LegendBuildInput, k: Kit, defs: LegendDefs, group: R
     out.push(lbl)
   }
   return all
+}
+
+// --- the legends of a view ------------------------------------------------------------------------------------------------------
+
+/** A rectangle by its four sides. */
+export interface Sides {
+  x1: number
+  y1: number
+  x2: number
+  y2: number
+}
+
+/**
+ * Place the legends that share an `orient` as one block: stacked down a column for a left or right legend (or `direction:
+ * vertical`), in a row otherwise, and anchored to the plot. Left and right legends sit outside `sideBounds`, top and bottom ones
+ * outside `endBounds` (the plot with the guides beside it), the corners hang from the view's own corners, and `anchor` and `frame`
+ * say where along the plot's edge. `layout` is `config.legend.layout`: a setting under the orient's own name beats the general one.
+ * The legends move; each is placed with its origin at the block's.
+ */
+export function placeLegendStack(
+  orient: string, groups: SceneGroup[], offsets: unknown[], layout: Rec, sideBounds: Sides, endBounds: Sides, width: number, height: number,
+): void {
+  const mine = (layout[orient] ?? {}) as Rec
+  const setting = (key: string, fallback?: unknown): unknown => (mine[key] != null ? mine[key] : layout[key] != null ? layout[key] : fallback)
+  // legends that ask for an offset of their own: the largest wins
+  const asked = offsets.filter((o): o is number => typeof o === 'number')
+  const offset = (asked.length ? Math.max(...asked) : setting('offset', 0)) as number
+  const anchor = setting('anchor', 'start')
+  const fraction = anchor === 'end' ? 1 : anchor === 'middle' ? 0.5 : 0
+  // the point along the plot's edge the anchor names: within the view's frame, or the extent of what the plot reaches
+  const byBounds = setting('frame', 'group') === 'bounds'
+  const alongX = byBounds ? sideBounds.x1 + fraction * (sideBounds.x2 - sideBounds.x1) : fraction * (width || (endBounds.x2 - endBounds.x1) + 2 * endBounds.x1)
+  const alongY = byBounds ? endBounds.y1 + fraction * (endBounds.y2 - endBounds.y1) : fraction * (height || (sideBounds.y2 - sideBounds.y1) + 2 * sideBounds.y1)
+  // the point the block hangs from, and which of its edges that point is
+  const hang: Record<string, unknown> =
+    orient === 'left' ? { x: Math.floor(sideBounds.x1) - offset, column: 'end', y: alongY, row: anchor }
+    : orient === 'top' ? { y: Math.floor(endBounds.y1) - offset, row: 'end', x: alongX, column: anchor }
+    : orient === 'bottom' ? { y: Math.ceil(endBounds.y2) + offset, x: alongX, column: anchor }
+    : orient === 'top-left' ? { x: offset, y: offset }
+    : orient === 'top-right' ? { x: width - offset, y: offset, column: 'end' }
+    : orient === 'bottom-left' ? { x: offset, y: height - offset, row: 'end' }
+    : orient === 'bottom-right' ? { x: width - offset, y: height - offset, column: 'end', row: 'end' }
+    // right, and any orient not named
+    : { x: Math.ceil(sideBounds.x2) + offset, y: alongY, row: anchor }
+
+  // a legend is as big as its frame (flush) or as everything it draws (full), measured from its own origin
+  const whole = setting('bounds', 'flush') !== 'flush'
+  const boxes = groups.map((g) => {
+    if (!whole) return new Bounds().set(0, 0, g.width || 0, g.height || 0)
+    const drawn = boundLegendGroup(g)
+    return drawn.empty() ? new Bounds().set(0, 0, 0, 0) : drawn.translate(-(g.x || 0), -(g.y || 0))
+  })
+  const centre = setting('center')
+  const centreOn = (axis: 'column' | 'row'): unknown => {
+    const v = centre !== null && typeof centre === 'object' ? (centre as Rec)[axis] : centre
+    return v != null ? v : 0
+  }
+  const plan = placeGrid(boxes, groups.map(() => ({ x: 0, y: 0 })), {
+    align: 'each', columns: setting('direction') === 'vertical' ? 1 : groups.length, padding: setting('margin', 8),
+    center: { row: centreOn('row'), column: centreOn('column') }, anchor: hang,
+  })
+  groups.forEach((g, i) => {
+    g.x = plan.dx[i]!
+    g.y = plan.dy[i]!
+  })
 }
