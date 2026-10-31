@@ -1388,6 +1388,20 @@ function measureGuideGroup(g: SceneGroup): Bounds {
   return bounds
 }
 
+/**
+ * What a top-level guide adds to the bounds of the view. A view that fits its viewport takes from a legend only the extent across the
+ * side it sits on (a legend that overran the chart would otherwise squeeze it to nothing): a legend in a corner, or placed freely,
+ * takes nothing. Every other guide adds its whole box.
+ */
+function shareOfView(b: Bounds, group: SceneGroup, fitting: boolean): Bounds {
+  if (!fitting || group.role !== 'legend') return b
+  const side = (group as unknown as { legendProps?: { orient?: unknown } }).legendProps?.orient
+  const share = new Bounds()
+  if (side === 'left' || side === 'right') { share.x1 = b.x1; share.x2 = b.x2 }
+  else if (side === 'top' || side === 'bottom') { share.y1 = b.y1; share.y2 = b.y2 }
+  return share
+}
+
 function computeGuidePadding(
   items: SceneGroup[],
   width: number,
@@ -1406,15 +1420,8 @@ function computeGuidePadding(
   let maxY = height
 
   const grow = (b: Bounds, group: SceneGroup): void => {
+    b = shareOfView(b, group, fitting)
     if (b.empty()) return
-    if (fitting && group.role === 'legend') {
-      // a view that fits its viewport takes from a legend only the extent across the side it sits on (a legend that overran
-      // the chart would otherwise squeeze it to nothing): a legend in a corner, or placed freely, takes nothing
-      const side = (group as unknown as { legendProps?: { orient?: unknown } }).legendProps?.orient
-      if (side === 'left' || side === 'right') { minX = Math.min(minX, b.x1); maxX = Math.max(maxX, b.x2) }
-      else if (side === 'top' || side === 'bottom') { minY = Math.min(minY, b.y1); maxY = Math.max(maxY, b.y2) }
-      return
-    }
     // Axis bounds carry fp residue from measured label/title geometry where
     // vega's arithmetic is exact; collapse only that sub-ulp residue. Mark and
     // legend geometry is exact enough that a genuine positive residue (a bar
@@ -1884,7 +1891,7 @@ function buildContentPass(
   for (const g of guideGroups) items.push(g)
 
   // Top-level title. (A pass that stopped at a failing dataset or signal never made it: it is ranked after them.)
-  const titleGroup = stopped || ctx.datasetAborted ? null : buildTitleGroup(ctx.chart.title, items, width, height, ctx.rawGuides, ctx)
+  const titleGroup = stopped || ctx.datasetAborted ? null : buildTitleGroup(ctx.chart.title, items, width, height, ctx.rawGuides, ctx, undefined, ctx.chart.autosize === 'fit' || ctx.chart.autosize === 'fit-x' || ctx.chart.autosize === 'fit-y')
   if (titleGroup) items.push(titleGroup)
   // The root group's width / height are the view's `width` / `height` signals (0
   // for a composition that sizes only its children), whatever the grid inside covers.
@@ -2157,6 +2164,8 @@ function buildTitleGroup(
   ctx?: EvalContext,
   /** The datum a group title's `parent[...]` reads (its facet key). */
   parent?: Row,
+  /** The view fits its viewport: what a legend adds to the bounds the title sits against is cut (see `shareOfView`). */
+  fitting = false,
 ): SceneGroup | null {
   if (!title0 || !ctx) return null
   // What the title sits against: the view's frame, the marks and the bounds of the axes and legends (axes measured in their own
@@ -2164,8 +2173,8 @@ function buildTitleGroup(
   const b = new Bounds().set(0, 0, width, height)
   const measured = (items as SceneGroup[]).filter((g) => g.role !== 'title')
   // (a clipped mark -- an interval selection's brush -- has its bounds cut to the frame: Bound's boundClip)
-  if (hasClippedMark(measured)) eachMarkBounds(measured, width, height, (n) => measureGuideGroup(n as SceneGroup), (mb) => { b.union(mb) })
-  else for (const g of measured) b.union(measureGuideGroup(g))
+  if (hasClippedMark(measured)) eachMarkBounds(measured, width, height, (n) => measureGuideGroup(n as SceneGroup), (mb, n) => { b.union(shareOfView(mb, n as SceneGroup, fitting)) })
+  else for (const g of measured) b.union(shareOfView(measureGuideGroup(g), g, fitting))
   // (a group title reads its facet datum as `parent`)
   const hostCtx = parent !== undefined ? { ...ctx, signalParams: { ...ctx.signalParams, parent } } : ctx
   const built = buildTitleGuide({

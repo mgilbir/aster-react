@@ -604,7 +604,7 @@ export function titleCase(seed: number): GuideCase {
   const width = int(r, 100, 300)
   const height = int(r, 80, 220)
   const spec: Spec = {
-    width, height, padding: pick(r, [0, 5, 20]), autosize: pick(r, ['pad', 'pad', 'none', { type: 'pad', resize: true }]),
+    width, height, padding: pick(r, [0, 5, 20]), autosize: pick(r, ['pad', 'pad', 'none', { type: 'pad', resize: true }, 'fit', 'fit-x', 'fit-y', { type: 'fit', contains: 'padding' }]),
     config: pick(r, [{}, { title: { color: 'steelblue', fontSize: 16, anchor: 'start', offset: 7 } }, { style: { 'group-title': { fontWeight: 'normal' }, 'group-subtitle': { fill: 'gray' } } }]),
     title: t,
     data: [{ name: 'rows', values: dataRows(r) }],
