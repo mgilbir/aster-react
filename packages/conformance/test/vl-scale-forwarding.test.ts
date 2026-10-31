@@ -34,7 +34,8 @@ const sortKeys = (v: any): any => (Array.isArray(v) ? v.map(sortKeys) : v && typ
 const spec = (channel: string, type: string, scale: Record<string, unknown>): Record<string, unknown> => {
   const ft = FIELD_TYPE[type]!
   const encoding: Record<string, unknown> = { x: { field: 'q2', type: 'quantitative' }, y: { field: 'o', type: 'ordinal' } }
-  if (channel === 'xOffset' || channel === 'yOffset') { encoding.x = { field: 'g', type: 'nominal' }; encoding.y = { field: 'q2', type: 'quantitative' } }
+  if (channel === 'xOffset') { encoding.x = { field: 'g', type: 'nominal' }; encoding.y = { field: 'q2', type: 'quantitative' } }
+  if (channel === 'yOffset') { encoding.y = { field: 'g', type: 'nominal' }; encoding.x = { field: 'q2', type: 'quantitative' } }
   encoding[channel] = { field: FIELD(ft), type: ft, scale }
   return { data: { values: DATA }, mark: channel === 'xOffset' || channel === 'yOffset' ? 'bar' : 'point', encoding }
 }
