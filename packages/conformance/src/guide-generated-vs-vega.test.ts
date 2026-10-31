@@ -50,4 +50,16 @@ describe('generated guides vs vega', () => {
     expect(bad.slice(0, 6)).toEqual([])
     if (ONLY === undefined) { expect(compared).toBeGreaterThan(TITLES * 0.9); expect(refused).toBeLessThan(TITLES * 0.1) }
   })
+
+  // Seeds past the default sweep that each need a behaviour the 500 rarely draw: the second arrangement of a legend by the second pass of
+  // a fit view (its title's width, rounded up from a box carried to its place).
+  it('fit legends whose title width falls on a whole pixel on the second pass render the vega document', { timeout: 60_000 }, async () => {
+    const bad: string[] = []
+    for (const seed of [594, 1715]) {
+      const c = legendCase(seed)
+      const out = await compareToVega(c.spec)
+      if (out.refused === undefined && out.diffs.length) bad.push(`${c.id}: ${out.diffs.slice(0, 2).join(' | ')}`)
+    }
+    expect(bad).toEqual([])
+  })
 })
