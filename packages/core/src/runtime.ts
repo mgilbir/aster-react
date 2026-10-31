@@ -373,6 +373,8 @@ interface PassRecord {
   scales: Map<string, { key: string; bins: boolean }>
   /** Where a pass left the groups a grid layout placed, per layout (see `layoutFacet`): the next pass starts from them. */
   places: Map<string, GridPlace[]>
+  /** What a legend was before its layout, per legend (see `LegendBuildInput.relayout`). */
+  legends: Map<string, string>
 }
 
 /** The previous pass's record (undefined for the first) and the one this pass writes. */
@@ -1834,7 +1836,7 @@ function buildContentPass(
     chart, fitted ? { ...input, width: cw, height: ch } : input, txn,
     fitted ? { width: true, height: true } : { width: input.width != null, height: input.height != null },
     signed,
-    order !== undefined ? { prev: order.prev, cur: { guides: new Map(), scales: new Map(), places: new Map() } } : undefined,
+    order !== undefined ? { prev: order.prev, cur: { guides: new Map(), scales: new Map(), places: new Map(), legends: new Map() } } : undefined,
   )
   const { ctx } = prepared
   ctx.abort.cut = cut
@@ -5177,6 +5179,7 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext, index: number): S
     limit: +(guideScalar(ctx, spec.symbolLimit ?? config.symbolLimit) as number),
     formatSpecifier: specifierOf(spec.format), formatType,
     locale: locale(undefined), host, style: guideStyles(ctx), raw: !!ctx.rawGuides,
+    ...(ctx.passMemory !== undefined ? { relayout: legendMemory(ctx.passMemory, `l${ctx.scope.path.join('/')}:${index}`) } : {}),
   })
   const g = built.group
   const group = {
@@ -5610,6 +5613,11 @@ function buildAxis(axis: CompiledAxis, ctx: EvalContext, index: number): SceneGr
  * in its place, a new key makes a new item after the others, and only then do the first pass's tuples leave: an item whose
  * tuple was not replaced exits. The scene's items are what is left, in that order.
  */
+/** What a legend carries between the passes of a fit view. */
+function legendMemory(memory: PassMemory, id: string): { was: string | undefined; note(state: string): void } {
+  return { was: memory.prev?.legends.get(id), note: (state) => { memory.cur.legends.set(id, state) } }
+}
+
 /** What a grid layout carries between the passes of a fit view, if there are two. */
 function gridMemory(ctx: EvalContext, id: string): { prev: readonly GridPlace[] | undefined; keep(places: GridPlace[]): void } | undefined {
   const memory = ctx.passMemory
