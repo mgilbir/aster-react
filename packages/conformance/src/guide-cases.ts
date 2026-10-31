@@ -213,6 +213,9 @@ const AXIS_CONFIGS: Spec[] = [
   { axisX: { labelAngle: -30, grid: true }, axisY: { titlePadding: 12, gridDash: [3, 3] }, axisBand: { tickExtra: true } },
   { axisTop: { labelColor: 'blue' }, axisBottom: { offset: 3 }, axisLeft: { minExtent: 25 }, axisRight: { domain: false } },
   { style: { 'guide-label': { fill: 'purple', fontSize: 9 }, 'guide-title': { fontWeight: 'bold' } } },
+  // blocks whose keys are read as flags (a truthy signal is a flag whatever it holds) and as label overlap, flush and alignment
+  { axis: { titleColor: 'teal', labelFontSize: 10 }, axisX: { labels: false, labelFlush: 5, ticks: false, titleFont: 'serif' }, axisY: { domain: false, labelAlign: 'center', labelBaseline: 'top', labelBound: 2, labelColor: 'brown' }, style: { 'guide-label': { fill: 'purple', fontSize: 9 }, 'guide-title': { fontWeight: 'bold', fill: 'navy' } } },
+  { axisTop: { grid: true, labelOverlap: 'parity', titleFontSize: 20 }, axisLeft: { labelFlush: 0, labelFontSize: 9, ticks: false }, axisBottom: { labelBound: true, domain: false, gridDash: [2, 2] }, axisRight: { labels: false, tickSize: 3, titleColor: 'green' }, axisBand: { labelOverlap: 'greedy', grid: true }, style: { 'guide-title': { fontSize: 13 } } },
 ]
 
 /** An axis chart: a few axes of random orients over random scales, with random sizing and padding. */
@@ -223,8 +226,6 @@ export function axisCase(seed: number): GuideCase {
   const sx = positionScale(r, 'sx', 'width', ['linear', 'linear', 'band', 'point', 'time', 'utc', 'log', 'symlog', 'sqrt', 'pow'])
   const sy = positionScale(r, 'sy', 'height', ['linear', 'linear', 'band', 'point', 'log', 'time', 'sqrt'])
   const config = pick(r, AXIS_CONFIGS)
-  // (an orient signal with per-orient config blocks is vega's `ifX` over the config: a different parse that Aster does not follow, see the report)
-  const orientSignals = G('orient') || !Object.keys(config).some((k) => /^axis[A-Z]/.test(k))
   const axes: Spec[] = []
   const nAxes = int(r, 1, 4)
   const used = new Set<string>()
@@ -235,9 +236,7 @@ export function axisCase(seed: number): GuideCase {
     const own = horizontal ? sx : sy
     const other = horizontal ? sy : sx
     const props = axisProps(r, orient, own.kind, other)
-    const signalOrient = orientSignals && chance(r, 0.08)
-    // (vega's Overlap reads an orient *signal* unresolved, so `labelBound` sees a vertical axis whatever the signal holds; Aster resolves it first)
-    if (signalOrient && !G('bound')) delete props.labelBound
+    const signalOrient = chance(r, 0.2)
     const axis: Spec = { scale: own.name, orient: signalOrient ? { signal: JSON.stringify(orient) } : orient, ...props }
     axes.push(axis)
     used.add(orient)

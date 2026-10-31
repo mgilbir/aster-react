@@ -413,11 +413,8 @@ export interface CompiledAxis {
    * with a positive sign at the origin, and an `orient` signal can hold anything).
    */
   orient: 'top' | 'bottom' | 'left' | 'right' | (string & {})
-  /**
-   * An `orient` that is a signal: the axis compiled once per orient class (the config blocks it picks up depend on
-   * it), chosen when the signal's value is known. `''` is every other value.
-   */
-  orientSignal?: { signal: string; variants: Record<string, CompiledAxis> }
+  /** An `orient` that is a signal: the expression whose value, once known, is the axis's orient. */
+  orientSignal?: { signal: string }
   grid?: boolean
   gridScale?: string
   domain?: boolean

@@ -5271,15 +5271,13 @@ function viewSignal(ctx: EvalContext, name: 'width' | 'height'): number {
 
 /**
  * An axis whose `orient` is a signal, with the signal's value in (vega: the axis group's `orient` property,
- * which the layout and every guide mark's encode read). The config blocks it picks up follow the value's class.
+ * which the layout and every guide mark's encode read).
  */
 function resolveAxisOrient(axis: CompiledAxis, ctx: EvalContext): CompiledAxis {
   if (!axis.orientSignal) return axis
   let value: unknown
   try { value = ctx.runtime.expr(axis.orientSignal.signal)({}, ctx.signalParams) } catch (e) { reportEvalError(ctx, e); value = undefined }
-  const orient = typeof value === 'string' ? value : ''
-  const variants = axis.orientSignal.variants
-  return { ...(ownGet(variants, orient) ?? variants['']!), orient }
+  return { ...axis, orient: typeof value === 'string' ? value : '' }
 }
 
 /** A guide property that may be a signal, as the value the signal holds. */
@@ -5546,7 +5544,7 @@ function buildAxis(axis: CompiledAxis, ctx: EvalContext, index: number): SceneGr
   const guides = chartGuides(ctx.chart)
   const built = buildAxisGuide({
     store: guides.evals > 1 ? (guides.defs ??= new Map()) : undefined, keep: guides.evals > 1,
-    spec: own, cfg, scale: axis.scale, orient, encode: (axis.encode ?? NO_PROPS) as Record<string, UserEncode | undefined>,
+    spec: own, cfg, scale: axis.scale, orient, orientSignal: axis.orientSignal !== undefined, encode: (axis.encode ?? NO_PROPS) as Record<string, UserEncode | undefined>,
     ticks: rows, distinctTicks: !axisValues(axis, ctx) && DISTINCT_TICK_SCALES.has(ctx.scaleTypes.get(axis.scale) ?? ''), width: ctx.width, height: ctx.height, raw: !!ctx.rawGuides, host: guideHost(ctx), style: guideStyles(ctx),
   })
   const knownOrient = orient === 'top' || orient === 'bottom' || orient === 'left' || orient === 'right'
