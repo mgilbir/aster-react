@@ -2185,6 +2185,7 @@ function buildTitleGroup(
     ...(aria !== undefined ? { aria } : {}),
     ...(description ? { description } : {}),
     ...(zindex ? { zindex } : {}),
+    ...(built.bounds ? { titleBounds: built.bounds } : {}),
     ...(built.partMeta.group?.name ? { cssName: built.partMeta.group.name } : {}),
     ...(built.partMeta.group?.interactive ? { interactive: true } : {}),
     ...(itemAriaOf(g) ? { itemAria: itemAriaOf(g) } : {}),

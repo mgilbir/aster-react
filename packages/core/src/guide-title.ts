@@ -32,6 +32,8 @@ export interface TitleBuilt {
   title: SceneItem & Rec
   subtitle?: SceneItem & Rec
   partMeta: Record<string, { name?: string; interactive: boolean }>
+  /** The group's bounds in its parent's frame as the layout left them, when it laid the group out: the title and the subtitle where they were measured, moved with the group. */
+  bounds?: Bounds
 }
 
 /** A title reads as text along the edge it sits on: turned a quarter to face outward on the left and right. */
@@ -96,15 +98,15 @@ export function buildTitle(inp: TitleBuildInput): TitleBuilt {
     subtitle._kind = 'text'
     partMeta.subtitle = { name: subtitleDef.name, interactive: subtitleDef.interactive }
   }
-  if (!inp.raw) placeTitle(group, title, subtitle, inp.viewBounds, inp.width, inp.height)
-  return { group, title, subtitle, partMeta }
+  const bounds = inp.raw ? undefined : placeTitle(group, title, subtitle, inp.viewBounds, inp.width, inp.height)
+  return { group, title, subtitle, partMeta, ...(bounds ? { bounds } : {}) }
 }
 
 /**
  * Put the title group against the view: at its anchor along the edge it is on, outside the bounds of the view (or the frame of the
  * view's group) by `offset`, clear of the subtitle, which goes below the title on a horizontal edge and beside it on a vertical one.
  */
-function placeTitle(group: Rec, title: SceneItem, subtitle: (SceneItem & Rec) | undefined, view: Bounds, width: number, height: number): void {
+function placeTitle(group: Rec, title: SceneItem, subtitle: (SceneItem & Rec) | undefined, view: Bounds, width: number, height: number): Bounds | undefined {
   const orient = group.orient as string
   const anchor = group.anchor as string
   const offset = group.offset as number
@@ -137,25 +139,33 @@ function placeTitle(group: Rec, title: SceneItem, subtitle: (SceneItem & Rec) | 
   }
   taken.union(titleBox)
 
+  let x: number
+  let y: number
   switch (orient) {
     case 'top':
-      group.x = pos
-      group.y = view.y1 - taken.height() - offset
+      x = pos
+      y = view.y1 - taken.height() - offset
       break
     case 'left':
-      group.x = view.x1 - taken.width() - offset
-      group.y = pos
+      x = view.x1 - taken.width() - offset
+      y = pos
       break
     case 'right':
-      group.x = view.x2 + taken.width() + offset
-      group.y = pos
+      x = view.x2 + taken.width() + offset
+      y = pos
       break
     case 'bottom':
-      group.x = pos
-      group.y = view.y2 + offset
+      x = pos
+      y = view.y2 + offset
       break
     default:
       // no known edge: the group stays where its encode put it
-      break
+      return undefined
   }
+  group.x = x
+  group.y = y
+  // The group's extent is what was measured, moved with the group: measuring the moved text again would not give the same last
+  // digits for text that is turned (a quarter turn leaves a residue that depends on where the text is), and a view's size
+  // follows those digits.
+  return taken.translate(x, y)
 }

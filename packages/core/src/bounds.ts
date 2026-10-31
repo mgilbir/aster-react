@@ -1027,6 +1027,8 @@ export function layoutBounds(node: SceneNode, out = new Bounds()): Bounds {
   if (!isGroup) return g.marktype !== undefined && Array.isArray(g.items) ? out.union(typedMarkBounds(g)) : boundLeaf(out, node as SceneItem)
   if (g.role === 'axis' && (g as Record<string, unknown>).axis !== undefined) return out.union(boundAxisGroup(g))
   if (g.role === 'legend') return out.union(boundLegendGroup(g))
+  // a title the layout placed keeps the extent it measured there (see guide-title.ts)
+  if (g.role === 'title' && (g as Record<string, unknown>).titleBounds) return out.union((g as Record<string, unknown>).titleBounds as Bounds)
   const b = new Bounds()
   if (!g.clip && g.items) {
     const measure = (child: SceneNode): Bounds => {
