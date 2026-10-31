@@ -145,10 +145,9 @@ strict canonicalizer (`packages/conformance/src/*-vs-vega.test.ts`, part of `pnp
   direction, columns, entry padding, clip height, gradient size, title placement and every orient, several to a chart;
   400 titles with subtitles on all four edges; 500 grids of groups, faceted or hand-made, wrapped or crossed, with
   headers, footers, titles, `align`, `bounds`, `center`, padding, bands, offsets, and axes, legends and nested groups in
-  the cells). A failing case names its seed (`GUIDE_SEED=<n>`, `TRELLIS_SEED=<n>`). The generators stay clear of the
-  few combinations where the engine is known to differ from Vega, each named where it is avoided
-  (`packages/conformance/src/guide-cases.ts`); `GUIDE_FULL=1` widens them to those combinations, which is how a refactor of
-  the guides is checked against the build it replaces over the whole space;
+  the cells). A failing case names its seed (`GUIDE_SEED=<n>`, `TRELLIS_SEED=<n>`). The generators draw orient signals with
+  per-orient config, `labelBound`, `fit` autosize with legends and grids, `orient: none` legends that overflow, headers beyond the
+  column count, `tickMinStep` on log scales and the number formats whose precision follows the tick step;
 - `group-item-aria-vs-vega` (the item-level aria channels of group items, and the accessibility tree);
 - `parse-scoping-vs-vega` (6643 generated specs for `Duplicate data set name` and its scoping, against `vega.parse`);
 - `axis-ticks-failure-vs-vega` (an axis whose ticks fail, per scope: 216 generated specs, named level-order cases, and the

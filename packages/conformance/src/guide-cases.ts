@@ -6,13 +6,6 @@
 type Spec = Record<string, unknown>
 type Rand = () => number
 
-/**
- * GUIDE_FULL=1 widens the generators to the cases where the engine is known to differ from vega (see the notes at each site), so a
- * refactor can be checked against the build it replaces on the whole space, not only against vega on the part where they agree.
- */
-const GAPS = (process.env.GUIDE_FULL ?? '').split(',')
-const G = (n: string): boolean => GAPS.includes('1') || GAPS.includes(n)
-
 export function mulberry32(seed: number): Rand {
   let a = seed >>> 0
   return () => {
