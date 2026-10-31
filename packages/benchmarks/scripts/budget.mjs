@@ -108,7 +108,7 @@ import { fileURLToPath } from 'node:url'
 // The selection and composite-mark compilers rewritten in @aster/vl (a smaller wiring, one part builder): Chart + VL 282.5 (-0.4); the
 // ceiling follows it down. Every other row is unchanged.
 // The @aster/vl compile gaps (a facet over a repeat or a concat, view names, scale forwarding, orientation of the marks with no measure),
-// measured (kB gzip): Chart + VL 283.6 (+1.6 over 282.0); every other row is unchanged.
+// measured (kB gzip): Chart + VL 283.6 (1.6 over the 282.0 ceiling; the base was not measured separately); every other row is unchanged.
 // The geo engine as geometry event buffers (geo-events / geo-clip / geo-resample / geo-path / geo-projections ...: more, smaller
 // modules, the sinks and the albersUsa interleave in place of d3's shared stream objects), measured (kB gzip): geo marginal 15.4
 // (+1.1 over 14.3); core 138.1 and the other rows did not move.
