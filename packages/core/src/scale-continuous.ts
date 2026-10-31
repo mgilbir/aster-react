@@ -363,7 +363,7 @@ function withLogAxis(host: Host): ScaleObject {
   }
   retune()
 
-  scale.base = accessor(scale, () => base, (v: number) => { base = +v; retune() })
+  scale.base = (...v: [number?]) => (v.length ? ((base = +v[0]!), retune(), scale) : base)
   scale.domain = (...v: unknown[]) => (v.length ? (plainDomain(...v), retune(), scale) : plainDomain())
 
   scale.ticks = (count?: number) => {
@@ -438,7 +438,7 @@ function withLogAxis(host: Host): ScaleObject {
 function withExponent(host: Host): ScaleObject {
   const { scale } = host
   let exponent = 1
-  scale.exponent = accessor(scale, () => exponent, (v: number) => { exponent = +v; host.bend(powerWarp(exponent)) })
+  scale.exponent = (...v: [number?]) => (v.length ? ((exponent = +v[0]!), host.bend(powerWarp(exponent)), scale) : exponent)
   return withLinearAxis(scale)
 }
 
@@ -447,7 +447,7 @@ function withConstant(host: Host): ScaleObject {
   const { scale } = host
   let c = 1
   host.bend(symlogWarp(c))
-  scale.constant = accessor(scale, () => c, (v: number) => { c = +v; host.bend(symlogWarp(c)) })
+  scale.constant = (...v: [number?]) => (v.length ? ((c = +v[0]!), host.bend(symlogWarp(c)), scale) : c)
   return withLinearAxis(scale)
 }
 
@@ -494,8 +494,8 @@ export function identityScale(): ScaleObject {
   let fallback: unknown
   const scale = ((x: unknown) => (x == null || isNaN((x = +(x as number))) ? fallback : x)) as ScaleObject
   scale.invert = scale
-  scale.domain = scale.range = accessor(scale, () => list.slice(), (v: Iterable<unknown>) => void (list = Array.from(v, toNumber)))
-  scale.unknown = accessor(scale, () => fallback, (v: unknown) => void (fallback = v))
+  scale.domain = scale.range = (...v: [Iterable<unknown>?]) => (v.length ? ((list = Array.from(v[0]!, toNumber)), scale) : list.slice())
+  scale.unknown = (...v: [unknown?]) => (v.length ? ((fallback = v[0]), scale) : fallback)
   scale.copy = () => identityScale().domain(list).unknown(fallback)
   return withLinearAxis(scale)
 }
@@ -749,11 +749,8 @@ function calendarScale(zone: Zone, copy: () => ScaleObject): ScaleObject {
   }
 
   scale.invert = (y: unknown) => new Date(asInverse(y) as number)
-  scale.domain = accessor(
-    scale,
-    () => (asInstants() as number[]).map((t) => new Date(t)),
-    (v: Iterable<unknown>) => void asInstants(Array.from(v, msOf)),
-  )
+  scale.domain = (...v: [Iterable<unknown>?]) =>
+    v.length ? (asInstants(Array.from(v[0]!, msOf)), scale) : (asInstants() as number[]).map((t) => new Date(t))
   scale.ticks = (interval?: unknown) => {
     const d = asInstants() as number[]
     return listTicks(d[0]!, d[d.length - 1]!, interval == null ? 10 : interval)
