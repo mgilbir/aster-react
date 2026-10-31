@@ -306,8 +306,8 @@ function compileData(d: Record<string, unknown>): CompiledData {
 
 function compileTransform(t: Record<string, unknown>): CompiledTransform {
   const type = transformTypeOf(t.type)
-  const out = dict<unknown>({ type })
-  noteWrittenType(out, t.type as string, type) // prototype-less: spec keys such as `__proto__` stay plain data
+  const out = dict<unknown>({ type }) // prototype-less: spec keys such as `__proto__` stay plain data
+  noteWrittenType(out, t.type as string, type)
   for (const key of Object.keys(t)) {
     if (key === 'type') continue
     out[key] = t[key]

@@ -17,6 +17,7 @@ import {
   timeFloor, timeIntervalFor, timeUnits, utcFloor, utcIntervalFor,
 } from './time.js'
 import { AsterLimitError, activeMeter, checkRowCount, meterTick } from './limits.js'
+import type { IdCounter } from './identifier-ids.js'
 
 type Params = Record<string, unknown>
 type Read = (d: unknown) => unknown
@@ -432,14 +433,28 @@ export function stackRows(rows: Row[], p: Params, owned = false): Row[] {
 // identifier
 // ---------------------------------------------------------------------------
 
-/** `identifier`: a row with a truthy value in `as` keeps it; the others are numbered 1, 2, 3, ... in order. */
-export function identifierRows(rows: Row[], p: Params, owned = false): Row[] {
+/**
+ * `identifier`: a row with a truthy value in `as` keeps it; the others are numbered from the view's counter, which every
+ * `identifier` transform of the view draws from (`ids`), in the order the transforms run. A row the counter has numbered before
+ * is given that number again (`ids.carry[i]`, the number row `i` had), and the counter is never behind a number it has handed
+ * out. Without a counter the numbering is the transform's own, from 1.
+ */
+export function identifierRows(rows: Row[], p: Params, owned = false, ids?: IdCounter): Row[] {
   required('identifier', p, 'as')
   const name = p.as as string
-  let last = 0
-  return rows.map((row) => {
+  const counter = ids ?? { value: 0 }
+  const carry = counter.carry
+  return rows.map((row, i) => {
     const out = writable(row, owned)
-    out[name] = out[name] || ++last
+    if (!out[name]) {
+      const had = carry?.[i]
+      if (had) {
+        out[name] = had
+        if (typeof had === 'number' && had > counter.value) counter.value = had
+      } else {
+        out[name] = ++counter.value
+      }
+    }
     return out
   })
 }

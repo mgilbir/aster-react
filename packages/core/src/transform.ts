@@ -4,6 +4,7 @@
  * Each transform is a pure `(rows, params) -> rows` (plus expression/context).
  */
 import type { CompiledTransform, SortSpec } from './types.js'
+import type { IdCounter } from './identifier-ids.js'
 import type { ExpressionRuntime } from './expression.js'
 import { type ContourFeature, SHAPE_BOUNDS, geoRegistry, requireGeo, requireTransform } from './registry.js'
 import { isArray, sortData } from './util.js'
@@ -32,6 +33,11 @@ export interface TransformContext {
   signals: Record<string, unknown>
   /** Cross-dataset lookup (used by 'lookup', deferred). */
   datasets?: (name: string) => unknown[] | undefined
+  /**
+   * The id counter of the view the transforms belong to, which every `identifier` draws from (see identifier-ids.ts). A context
+   * that has none belongs to no view: each call of `applyTransforms` numbers from 1.
+   */
+  ids?: IdCounter
   /** Hierarchy trees built by the `stratify` transform, keyed by data source name. */
   hierarchies?: Map<string, unknown>
   /** Cartographic projections, for the `geoshape` transform's `projection` param. */
@@ -125,11 +131,13 @@ export function applyTransforms(
 ): Row[] {
   let out = rows
   const meter = activeMeter()
+  // (a context that belongs to no view has no counter: the `identifier`s of one call share a counter of their own, from 1)
+  const run = ctx.ids || !transforms.some((t) => t.type === 'identifier') ? ctx : { ...ctx, ids: { value: 0 } }
   for (const t of transforms) {
     if (meter) meter.clock.check(`transform ${t.type}`)
     const ownedIn = owned
     owned = ownsOutput(t, ownedIn)
-    out = applyTransform(out, t, ctx, sourceName, ownedIn)
+    out = applyTransform(out, t, run, sourceName, ownedIn)
     if (meter) {
       // Whatever a transform produced is a dataset like any other: it may not
       // exceed maxRows, and rows beyond the input count as generated (C7/C9).
@@ -351,7 +359,7 @@ function applyTransform(rows: Row[], t0: CompiledTransform, ctx: TransformContex
         if (t.signal) ctx.signals[t.signal as string] = info
       }, owned)
     case 'identifier':
-      return identifierRows(rows, t, owned)
+      return identifierRows(rows, t, owned, ctx.ids)
     case 'pivot':
       return pivotRows(rows, t as { field?: unknown; value?: unknown }, ctx.runtime.random)
     default:

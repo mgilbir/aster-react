@@ -89,7 +89,7 @@ function asRows(v: unknown): Record<string, unknown>[] | null {
   return Array.isArray(v) && (v.length === 0 || (v[0] != null && typeof v[0] === 'object')) ? v as Record<string, unknown>[] : null
 }
 
-function equalCell(a: unknown, b: unknown): boolean {
+export function equalCell(a: unknown, b: unknown): boolean {
   if (a === b) return true
   if (a == null || b == null || typeof a !== 'object' || typeof b !== 'object') {
     return a !== a && b !== b // NaN

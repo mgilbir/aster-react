@@ -5,6 +5,7 @@
  */
 import { compileExpr, ExpressionParseError, type CompiledExpr, type ExpressionRuntime } from './expression.js'
 import { ingestRows, readData, type DataFormatSpec } from './data-format.js'
+import { carryByAlignment, carryByMapping, type IdCounter } from './identifier-ids.js'
 import { applyTransforms, applyTransformsToSharedRows, compileExprTransform, sortOrder, getField, geoJSONPath, aggregateGroup, type Row, type TransformContext } from './transform.js'
 import { fieldOf } from './transform-agg.js'
 import { atRandomSite, contentKey, mayDrawRandom, replayable } from './random-tape.js'
@@ -168,10 +169,12 @@ interface IncrementalState {
   groups: Map<CompiledMark, SceneGroup>
   /** True once a fast path updated a structure in place (see above). */
   stale: boolean
+  /** Where the view's id counter stood (see identifier-ids.ts): the next evaluation numbers new rows from here. */
+  idCounter: number
 }
 
 function newState(gen: number): IncrementalState {
-  return { gen, fp: '', scales: new Map(), scaleEntries: new Map(), datasets: new Map(), groups: new Map(), stale: false }
+  return { gen, fp: '', scales: new Map(), scaleEntries: new Map(), datasets: new Map(), groups: new Map(), stale: false, idCounter: 0 }
 }
 
 /** Committed state per compiled chart. Never stored on the IR itself. */
@@ -449,6 +452,9 @@ interface EvalContext {
   prev?: IncrementalState
   /** The state this evaluation builds; committed by the caller on success. */
   draft: IncrementalState
+  /** The view's id counter: where it stood when the evaluation began (`idStart`) and where it stands (see identifier-ids.ts). */
+  ids: IdCounter
+  idStart: number
   /** Evaluation generation (stamped on newly encoded items). */
   gen: number
   /** Structures already updated in place during this evaluation. */
@@ -614,7 +620,7 @@ function prepareChartCtx(
     ]),
     hierarchies: transformHierarchies, affected: new Set(), incremental: false, deadline, checkDeadline, markItems: new Map(), markContainers: new Map(),
     datasetPulses: new Map(),
-    prev: txn.prev, draft: newState(txn.gen), gen: txn.gen, claimed: txn.claimed, extraFp, dsEpoch: 0, scaleReuse: new Map(), distinctCache: new WeakMap(),
+    prev: txn.prev, draft: newState(txn.gen), ids: { value: txn.prev?.idCounter ?? 0 }, idStart: txn.prev?.idCounter ?? 0, gen: txn.gen, claimed: txn.claimed, extraFp, dsEpoch: 0, scaleReuse: new Map(), distinctCache: new WeakMap(),
     domainRaw: input.domainRaw ? new Map(Object.entries(input.domainRaw).map(([k, v]) => [k, v])) : undefined,
     // Image urls are vetted when the host passes a policy, and with the default
     // policy whenever it passes `limits` (limits mean "this spec is untrusted").
@@ -2072,6 +2078,7 @@ function evaluateChartImpl(chart: CompiledChart, hostInput: RuntimeInput, txn: E
   if (ctx._defs.length) scene.defs = ctx._defs
   // The state the next incremental evaluation starts from; committed by the
   // caller once the scene is accepted.
+  ctx.draft.idCounter = ctx.ids.value
   done.draft = ctx.draft
   done.failed = ctx.failed === true
   return scene
@@ -2484,9 +2491,11 @@ function filterPulse(
     const retained = old >= 0 && !modified.has(i) && prevPass[old] !== undefined
     pass[i] = retained ? prevPass![old]! : fn(rows[i]!)
     if (!pass[i]) continue
-    const oldIdx = retained && old >= 0 ? oldOut[old]! : -1
+    // (a modified row that passed before and passes now is the same row in a new state: it keeps its place in the mapping,
+    // and is listed as changed, so a transform after the filter can tell it from a row that is new)
+    const oldIdx = old >= 0 ? oldOut[old]! : -1
     const outIdx = out.length
-    if (oldIdx >= 0 && prev && prev[oldIdx] !== undefined) out.push(prev[oldIdx]!)
+    if (retained && oldIdx >= 0 && prev && prev[oldIdx] !== undefined) out.push(prev[oldIdx]!)
     else out.push(rows[i]!)
     if (!retained || modified.has(i)) changed.push(outIdx)
     outFrom.push(oldIdx)
@@ -2843,12 +2852,14 @@ function orderedAppendPulse(
   const changed: number[] = []
   for (let j = 0; j < order.length; j++) {
     const idx = order[j]!
-    const old = idx < base && !modified.has(idx) ? oldPos.get(idx) : undefined
-    if (old != null && prev[old] !== undefined) {
+    const old = idx < base ? oldPos.get(idx) : undefined
+    if (old != null && prev[old] !== undefined && !modified.has(idx)) {
       out[j] = prev[old]!
       from[j] = old
     } else {
       out[j] = rows[idx]!
+      // (a modified row is the same row in a new state: it keeps its place in the mapping and is listed as changed)
+      if (old != null && prev[old] !== undefined) from[j] = old
       changed.push(j)
     }
   }
@@ -2931,30 +2942,60 @@ function rowLocal(t: CompiledTransform, tctx: StepTransformContext): boolean {
   }
 }
 
-/**
- * `identifier` over an append-only pulse. Vega numbers only the tuples whose `as`
- * value is falsy, in order (`t[as] || ++id`), so the new rows continue from the
- * count the previous evaluation reached; a modified earlier row can renumber
- * everything after it, which falls back to the aligned re-derive.
- */
-function identifierAppendPulse(
-  rows: Row[], t: CompiledTransform, input: StepPulse, prev: Row[] | undefined, prevState: IdentifierState | undefined,
-): { rows: Row[]; pulse: StepPulse; state: IdentifierState } | null {
-  const base = pulseBaseLength(input)
-  if (!prev || prev.length !== base || !prevState || input.changed.length) return null
-  const as = (t as { as?: string }).as
-  if (as === undefined) return null
-  let id = prevState.count
-  for (let i = base; i < rows.length; i++) {
-    const row = { ...rows[i]! }
-    row[as] = row[as] || ++id
-    prev.push(row)
-  }
-  return { rows: prev, pulse: appendPulse(base, rows.length, []), state: { count: id } }
+/** The field an `identifier` transform numbers into (none: the transform refuses, as it does when run). */
+const idField = (t: CompiledTransform): string => (t as { as?: string }).as as string
+
+/** Run an `identifier` transform with the numbers its rows had (see identifier-ids.ts), if they had any. */
+function applyIdentifier(rows: Row[], t: CompiledTransform, tctx: StepTransformContext, sourceName: string, carry: readonly unknown[] | undefined): Row[] {
+  return withCarry(tctx, carry, () => applyOne(rows, t, tctx, sourceName))
 }
 
-/** Ids handed out so far by an `identifier` step (the vega counter). */
-interface IdentifierState { count: number }
+/** Run `run` with the numbers the rows of the next `identifier` had. */
+function withCarry<T>(tctx: StepTransformContext, carry: readonly unknown[] | undefined, run: () => T): T {
+  const ids = tctx.ids
+  if (ids) ids.carry = carry
+  try {
+    return run()
+  } finally {
+    if (ids) ids.carry = undefined
+  }
+}
+
+/**
+ * `identifier` over an append-only pulse. Vega numbers only the tuples that are new, in order, from the view's counter, so the
+ * new rows continue from where the counter stands (other datasets' `identifier`s may have moved it since); a modified earlier
+ * row, which keeps its number, falls back to the pulse that carries the mapping.
+ */
+function identifierAppendPulse(
+  rows: Row[], t: CompiledTransform, tctx: StepTransformContext, input: StepPulse, prev: Row[] | undefined,
+): { rows: Row[]; pulse: StepPulse } | null {
+  const base = pulseBaseLength(input)
+  if (!prev || prev.length !== base || input.changed.length) return null
+  const as = (t as { as?: string }).as
+  if (as === undefined) return null
+  const ids = tctx.ids
+  if (!ids) return null
+  for (let i = base; i < rows.length; i++) {
+    const row = { ...rows[i]! }
+    row[as] = row[as] || ++ids.value
+    prev.push(row)
+  }
+  return { rows: prev, pulse: appendPulse(base, rows.length, []) }
+}
+
+/**
+ * `identifier` over a pulse with a mapping. A pulse that only modifies rows (the same rows, some in a new state) leaves every row
+ * its number. One that adds or removes rows cannot say which of the rows it lists as changed are modified and which replaced
+ * (the diff that makes it pairs rows by position), so the rows are found by what they hold, as when no pulse says anything.
+ */
+function identifierPulse(
+  rows: Row[], t: CompiledTransform, tctx: StepTransformContext, sourceName: string, input: StepPulse, prev: Row[] | undefined,
+): { rows: Row[]; pulse: StepPulse } | null {
+  const from = input.from!
+  const structural = from.includes(-1) || (input.to?.includes(-1) ?? false)
+  return withCarry(tctx, structural ? carryByAlignment(rows, prev, idField(t)) : carryByMapping(from, prev, idField(t)),
+    () => rederiveAligned(rows, t, tctx, sourceName, input, prev))
+}
 
 /**
  * Apply one transform to a length-changing pulse. Returns `null` when the
@@ -2975,7 +3016,7 @@ function applyStepWithPulse(
       const fast = rowLocalAppendPulse(rows, t, tctx, sourceName, input, prev)
       if (fast) return fast
     } else if (type === 'identifier') {
-      const fast = identifierAppendPulse(rows, t, input, prev, prevStepState as IdentifierState | undefined)
+      const fast = identifierAppendPulse(rows, t, tctx, input, prev)
       if (fast) return fast
     } else if (type === 'filter') {
       const fast = filterAppendPulse(rows, t, tctx, sourceName, input, prev, prevStepState as boolean[] | undefined)
@@ -3019,9 +3060,8 @@ function applyStepWithPulse(
       if (type === 'bin') return rederiveAligned(rows, t, tctx, sourceName, input, prev) ?? { rows: applyOne(rows, t, tctx, sourceName), pulse: null }
       return { rows: applyOne(rows, t, tctx, sourceName), pulse: null }
     case 'identifier':
-      // Ids are positional (`i + 1`): inserts/deletes shift them. Re-derive
-      // aligned so retained rows keep their object only when the id is unchanged.
-      return rederiveAligned(rows, t, tctx, sourceName, input, prev) ?? { rows: applyOne(rows, t, tctx, sourceName), pulse: null }
+      // The rows that were there keep their numbers (a modified one too), the new ones are numbered from the view's counter.
+      return identifierPulse(rows, t, tctx, sourceName, input, prev) ?? { rows: applyIdentifier(rows, t, tctx, sourceName, undefined), pulse: null }
     case 'geojson':
     case 'extent':
     case 'stratify': {
@@ -3078,7 +3118,7 @@ function applyStepWithPulse(
 
 /** Transform types that keep per-step incremental state (see `deriveStepState`). */
 function keepsStepState(type: string): boolean {
-  return type === 'filter' || type === 'flatten' || type === 'aggregate' || type === 'joinaggregate' || type === 'collect' || type === 'identifier'
+  return type === 'filter' || type === 'flatten' || type === 'aggregate' || type === 'joinaggregate' || type === 'collect'
 }
 
 /**
@@ -3103,12 +3143,6 @@ function deriveStepState(t: CompiledTransform, input: Row[], output: Row[], tctx
       return buildAggState(input, (t as { groupby?: string[] }).groupby ?? [], output)
     case 'collect':
       return { order: sortOrder(input, (t as { sort?: SortSpec }).sort) }
-    case 'identifier': {
-      const as = (t as { as?: string }).as
-      let count = 0
-      if (as !== undefined) for (const r of input) if (!r[as]) count++
-      return { count } satisfies IdentifierState
-    }
     default:
       return undefined
   }
@@ -3116,7 +3150,7 @@ function deriveStepState(t: CompiledTransform, input: Row[], output: Row[], tctx
 
 /** Run one transform from scratch, leaving the state the next pulse starts from. */
 function applyOneWithState(
-  rows: Row[], t: CompiledTransform, tctx: StepTransformContext, sourceName: string,
+  rows: Row[], t: CompiledTransform, tctx: StepTransformContext, sourceName: string, previous?: Row[],
 ): { rows: Row[]; state?: unknown } {
   if (t.type === 'filter') {
     // Predicate flags and output in one pass (same function, same errors as the
@@ -3131,7 +3165,7 @@ function applyOneWithState(
     }
     return { rows: out, state: pass }
   }
-  const out = applyOne(rows, t, tctx, sourceName)
+  const out = t.type === 'identifier' ? applyIdentifier(rows, t, tctx, sourceName, carryByAlignment(rows, previous, idField(t))) : applyOne(rows, t, tctx, sourceName)
   return keepsStepState(String(t.type)) ? { rows: out, state: deriveStepState(t, rows, out, tctx) } : { rows: out }
 }
 
@@ -3151,7 +3185,7 @@ function applyPipelineWithPulse(
     const t = transforms[k]!
     const key = `${sourceName}#${k}`
     if (!pulse) {
-      const res = applyOneWithState(cur, t, tctx, sourceName)
+      const res = applyOneWithState(cur, t, tctx, sourceName, prevDS.steps[k])
       cur = res.rows
       checkRowCount(cur.length, `transform ${String(t.type)}`)
       state.steps.push(cur)
@@ -3183,6 +3217,9 @@ function normalizePulse(p: StepPulse, rowCount: number): StepPulse {
 }
 
 function buildDatasets(ctx: EvalContext, inputData: Record<string, unknown[]>): void {
+  // (every build of the datasets numbers from where the view's counter stood: a build repeated under signals that resolved
+  // since is the same evaluation, not one more)
+  ctx.ids.value = ctx.idStart
   // While datasets build, a transform asking for a projection that fits data gets it
   // refreshed against the datasets built so far. The registry outlives the evaluation
   // (scenes keep the transform contexts holding it), so the hook is bound only for this
@@ -3317,6 +3354,7 @@ function buildDatasetsOf(ctx: EvalContext, inputData: Record<string, unknown[]>)
         hierarchies: ctx.hierarchies,
         projections: ctx.projections,
         affectedDatasets: ctx.affected,
+        ids: ctx.ids,
       }
       const state: DatasetState = { fp: passFp, inputLength: rows.length, steps: [], stepState: new Map() }
       // Incremental only when every precondition is provable: the caller named a
@@ -3336,8 +3374,8 @@ function buildDatasetsOf(ctx: EvalContext, inputData: Record<string, unknown[]>)
         for (let k = 0; k < d.transform.length; k++) {
           const from = cur
           const res = ctx.runtime.random === undefined || !mayDrawRandom(d.transform[k])
-            ? applyOneWithState(from, d.transform[k]!, tctx, name)
-            : atRandomSite(ctx.runtime.random, `dataset:${name}#${k}`, () => randomFingerprint(d.transform[k]!, from, ctx.signalParams), () => applyOneWithState(from, d.transform[k]!, tctx, name))
+            ? applyOneWithState(from, d.transform[k]!, tctx, name, prevDS?.steps[k])
+            : atRandomSite(ctx.runtime.random, `dataset:${name}#${k}`, () => randomFingerprint(d.transform[k]!, from, ctx.signalParams), () => applyOneWithState(from, d.transform[k]!, tctx, name, prevDS?.steps[k]))
           cur = res.rows
           state.steps.push(cur)
           if (res.state !== undefined) state.stepState.set(`${name}#${k}`, res.state)

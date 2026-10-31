@@ -396,19 +396,13 @@ function genChain(r: Rng): Case {
     () => ({ type: 'timeunit', field: 'i', units: ['year'], timezone: 'utc', as: r.pick([['u0', 'u1'], ['f1', 'f2']]) }),
     () => ({ type: 'fold', fields: ['v', 'w'], as: r.pick([['key', 'value'], ['f1', 'f2']]) }),
   ]
-  // Two things Vega does that the engine does not (and that are not about who writes the rows): its ids number across ALL identifier
-  // transforms of a view, and its ties in a sort go by the order the tuples were created in, which a `collect` before them has changed.
-  // So: one identifier at most, and a collect only last.
+  // A collect only last: Vega's ties in a sort go by the order the tuples were created in, which a `collect` before them has changed.
   const t: Array<Record<string, unknown>> = []
   const length = r.between(2, 4)
   for (let i = 0; i < length; i++) {
     let step = r.pick(steps)()
-    for (let tries = 0; tries < 8; tries++) {
-      const clash = (step.type === 'identifier' && t.some((x) => x.type === 'identifier')) || (step.type === 'collect' && i < length - 1)
-      if (!clash) break
-      step = r.pick(steps)()
-    }
-    if ((step.type === 'identifier' && t.some((x) => x.type === 'identifier')) || (step.type === 'collect' && i < length - 1)) step = { type: 'formula', expr: 'datum.i', as: 'f1' }
+    for (let tries = 0; tries < 8 && step.type === 'collect' && i < length - 1; tries++) step = r.pick(steps)()
+    if (step.type === 'collect' && i < length - 1) step = { type: 'formula', expr: 'datum.i', as: 'f1' }
     t.push(step)
   }
   return { t, rows: genRows(r, r.between(0, 14)), extra: { lk: Array.from({ length: 4 }, (_, i) => ({ k: i, w: i * 10 })) } }
