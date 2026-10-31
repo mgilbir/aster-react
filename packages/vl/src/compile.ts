@@ -328,6 +328,8 @@ function nameViewParts(out: Record<string, unknown>, prefix: string, except: rea
         if (!isObject(m)) continue
         const facet = (m.from as { facet?: { name?: string } } | undefined)?.facet
         if (facet?.name !== undefined && typeof m.name === 'string' && /(^|_)cell$/.test(m.name)) facet.name = facets.get(facet.name) ?? facet.name
+        // (the datasets a cell makes of its rows read the facet by its name)
+        for (const d of Array.isArray(m.data) ? (m.data as Record<string, unknown>[]) : []) if (isObject(d) && typeof d.source === 'string' && facets.has(d.source)) d.source = facets.get(d.source)
         nameFacets(m)
       }
     }

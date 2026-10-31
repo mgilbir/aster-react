@@ -49,6 +49,9 @@ for (const name of NAMES) {
     [`${name}: a legend of a binned colour`, { name, mark: 'point', encoding: { x: q('q'), y: q('q2'), color: q('q', { bin: true }) } }],
     [`${name}: a bar with a size`, { name, mark: 'bar', encoding: { x: n('n'), y: q('q', { aggregate: 'sum' }), size: { value: 12 } } }],
     [`${name}: a wrapped facet`, { name, facet: n('n'), columns: 2, spec: unit() }],
+    [`${name}: a faceted unit sorted by an aggregate of its rows`, { name, mark: 'point', encoding: { facet: n('n', { columns: 2, sort: { op: 'median', field: 'q' } }), x: q('q', { aggregate: 'median' }), y: n('g') } }],
+    [`${name}: a faceted unit with a y sorted by its own aggregate`, { name, mark: 'point', height: { step: 12 }, encoding: { facet: n('n', { columns: 2, sort: { op: 'median', field: 'q' } }), x: q('q', { aggregate: 'median', scale: { zero: false } }), y: n('g', { sort: '-x' }), color: n('t') } }],
+    [`${name}: a facet row sorted by an aggregate`, { name, facet: { row: n('n', { sort: { op: 'median', field: 'q' } }) }, spec: unit() }],
     [`${name}: a nested layer`, { name, layer: [{ layer: [unit(), unit({ mark: 'rule' })] }, unit({ mark: 'line' })] }],
   )
 }
