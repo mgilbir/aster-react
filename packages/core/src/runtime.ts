@@ -5513,12 +5513,10 @@ function buildAxis(axis: CompiledAxis, ctx: EvalContext, index: number): SceneGr
   } catch (e) {
     return axisTicksFailed(axis, ctx, e, index)
   }
-  // The approximate tick count used for label formatting. When the axis omits
-  // tickCount, vega's axis ticks operator defaults to 10 (see vega-encode
-  // AxisTicks: `_.count == null ? 10 : _.count`); matching that matters for
-  // log-scale labels, whose formatter only labels a subset of ticks depending
-  // on the count.
-  const count0 = (typeof axis.tickCount === "number") ? axis.tickCount : (axis.tickCount && typeof axis.tickCount === "object" && axis.tickCount.signal) ? (ctx.runtime.expr(axis.tickCount.signal)({}, ctx.signalParams) as number) || 10 : 10
+  // The approximate tick count used for label formatting: the axis's tickCount, else one per explicit value, else 10 (vega's
+  // AxisTicks tally); it matters for log-scale labels, whose formatter only labels a subset of ticks depending on the count,
+  // and for the precision of a span format.
+  const count0 = (typeof axis.tickCount === "number") ? axis.tickCount : (axis.tickCount && typeof axis.tickCount === "object" && axis.tickCount.signal) ? (ctx.runtime.expr(axis.tickCount.signal)({}, ctx.signalParams) as number) || 10 : tallyOfValues(axisValues(axis, ctx))
   // (AxisTicks formats with tickCount(scale, tally, minstep) too: a scale with bins asks for a tick per boundary, a minimum step
   // thins the count)
   const count = labelTickCount(axis, scale, count0, ctx)
@@ -5627,6 +5625,9 @@ function vetGuideLinks(g: SceneGroup, ctx: EvalContext): void {
 /** An axis's `values`: what a signal holds when the ticks are made; null, undefined, 0 or '' is no values at all. */
 /** Scales whose own ticks are strictly increasing (d3's) or the scale's distinct domain: no two ticks have one value. */
 const DISTINCT_TICK_SCALES = new Set(['linear', 'log', 'pow', 'sqrt', 'symlog', 'time', 'utc', 'band', 'point'])
+
+/** The tick count the labels are formatted for when the axis gives none: one per explicit value, else ten. */
+const tallyOfValues = (values: unknown): number => (Array.isArray(values) ? values.length : 10)
 
 function axisValues(axis: CompiledAxis, ctx: EvalContext): unknown {
   const vs: unknown = axis.values
