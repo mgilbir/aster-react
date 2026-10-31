@@ -33,7 +33,7 @@ import { textAnchor } from './text-metrics.js'
 import { imageBox } from './image-box.js'
 import { flattenPath, insidePolys, type Poly } from './path-flatten.js'
 import { SYMBOL_DEFAULT_SIZE, minOf, maxOf } from './util.js'
-import { arcPath, computeAreaPath, computeLinePath, isInert, rectItemPath, symbolPath, trailPath } from './render.js'
+import { computeAreaPath, computeLinePath, isInert, itemArcPath, rectItemPath, symbolPath, trailPath } from './render.js'
 
 export interface HitTarget {
   item: SceneItem
@@ -463,10 +463,7 @@ export function buildHitIndex(scene: SceneRoot, cell = DEFAULT_CELL): HitIndex {
         return
       }
       case 'arc': {
-        const r = (item.outerRadius as number) ?? (item.radius as number) ?? 0
-        const r0 = (item.innerRadius as number) ?? 0
-        const d = arcPath(0, 0, r, r0, (item.startAngle as number) ?? 0, (item.endAngle as number) ?? 0,
-          (rec(item).cornerRadius as number | undefined) ?? 0, (rec(item).padAngle as number | undefined) ?? 0)
+        const d = itemArcPath(item)
         const ox = tx + (item.x ?? 0)
         const oy = ty + (item.y ?? 0)
         const e = geomEntry(item, marktype, () => flattenPath(d, (x, y) => [ox + x, oy + y]), item)
