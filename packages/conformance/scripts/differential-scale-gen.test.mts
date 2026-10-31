@@ -324,13 +324,14 @@ function genOps(r: Rng, ts: TypeSpec, probes: Recipe[], rangeProbes: Recipe[]): 
       case 'quantile':
       case 'quantize':
       case 'threshold': {
-        const choices = ['domain', 'domain', 'range', 'range', 'call', 'call', 'call', 'invertExtent', 'invertExtent', 'thresholds', 'quantiles', 'copy', 'unknown', 'getDomain', 'getRange', 'ticks', 'nice', 'tickFormat']
+        const choices = ['domain', 'domain', 'range', 'range', 'call', 'call', 'call', 'invertExtent', 'invertExtent', 'thresholds', 'quantiles', 'copy', 'unknown', 'getDomain', 'getRange', 'ticks', 'nice', 'tickFormat', 'invertRange', 'invertRange']
         const c = startWithState ? (i === 0 ? 'domain' : 'range') : r.pick(choices)
         switch (c) {
           case 'domain': op('domain', ts.family === 'quantile' ? genQuantileDomain(r) : ts.family === 'quantize' ? genNumericDomain(r, r.pick([2, 2, 2, 2, 3, 1, 0])) : genThresholdDomain(r)); break
           case 'range': op('range', genDiscreteRange(r)); break
           case 'call': op('call', r.pick(probes)); break
           case 'invertExtent': op('invertExtent', r.chance(0.7) ? ((i) => () => i)(r.pick(['a', 'b', 'c', 'd', 0, 1, 2, 'zz', NaN, undefined, null])) : r.pick(rangeProbes)); break
+          case 'invertRange': op('invertRange', ((a, b) => (s: Side) => [a(s), b(s)])(r.pick(rangeProbes), r.pick(rangeProbes))); break
           case 'thresholds': op('thresholds'); break
           case 'quantiles': op('quantiles', ...(r.chance(0.5) ? [] : [constant(r.pick([1, 2, 4, 10, 0, -1, NaN]))])); break
           case 'copy': scales++; op('copy'); break

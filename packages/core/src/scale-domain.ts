@@ -25,9 +25,13 @@ interface Ordering {
 }
 
 /** A distinct value with how often it occurs; further columns are named for the aggregates a sort asks for. */
-interface Category {
-  key: unknown
+interface Category extends Keyed {
   count: number
+}
+
+/** What a sort can read: the key and named columns. */
+interface Keyed {
+  key: unknown
   [column: string]: unknown
 }
 
@@ -40,23 +44,24 @@ function columnName(op: string | undefined, field: string | undefined): string {
   return (op || '') + (op && field ? '_' : '') + cleaned
 }
 
-/** The sort a domain asks for, with signals in `op`, `field` and `order` resolved. */
+/**
+ * The sort a domain asks for, with signals in `op`, `field` and `order` resolved. Whether the sort is allowed is judged on
+ * what the spec wrote, before any signal is read: a `field` or `op` that is a `{signal}` counts as present (so a sort over
+ * several fields with a signal `op` and `field` is refused, whatever the signals hold, and an `op` signal with no `field` is
+ * refused unless it is the text `count`).
+ */
 function readOrdering(sort: unknown, severalFields: boolean, ctx: ScaleContext): Ordering | undefined {
   if (!sort) return undefined
+  const written: Ordering = isObject(sort) && !isArray(sort) ? { ...(sort as Ordering) } : {}
+  if (!written.field && !written.op) {
+    written.field = 'key'
+  } else if (!written.field && written.op !== 'count') {
+    raise('No field provided for sort aggregate op: ' + written.op)
+  } else if (severalFields && written.field && written.op && !COMBINE[written.op as string]) {
+    raise('Multiple domain scales can not be sorted using ' + written.op)
+  }
   const resolve = (v: unknown): unknown => (isObject(v) && (v as { signal?: unknown }).signal ? signalValue(String((v as { signal: string }).signal), ctx) : v)
-  let ordering: Ordering = {}
-  if (isObject(sort) && !isArray(sort)) {
-    const given = sort as { op?: unknown; field?: unknown; order?: unknown }
-    ordering = { op: resolve(given.op) as string | undefined, field: resolve(given.field) as string | undefined, order: resolve(given.order) as string | undefined }
-  }
-  if (!ordering.field && !ordering.op) {
-    ordering.field = 'key'
-  } else if (!ordering.field && ordering.op !== 'count') {
-    raise('No field provided for sort aggregate op: ' + ordering.op)
-  } else if (severalFields && ordering.field && ordering.op && !COMBINE[ordering.op]) {
-    raise('Multiple domain scales can not be sorted using ' + ordering.op)
-  }
-  return ordering
+  return { op: resolve(written.op) as string | undefined, field: resolve(written.field) as string | undefined, order: resolve(written.order) as string | undefined }
 }
 
 /** The aggregate `op` over a list of values. */
@@ -106,7 +111,7 @@ function categoriesOf(ctx: ScaleContext, data: string, field: string, ordering: 
 }
 
 /** The keys of the categories in the order asked for (stable for equal values). */
-function orderedKeys(categories: Category[], ordering: Ordering | undefined): unknown[] {
+function orderedKeys(categories: Keyed[], ordering: Ordering | undefined): unknown[] {
   if (!ordering) return categories.map((c) => c.key)
   const column = columnName(ordering.op, ordering.field)
   const direction = (ordering.order || 'ascending') === 'descending' ? -1 : 1
@@ -156,10 +161,14 @@ interface Member {
 
 /**
  * The values of a literal member's `data` field once a dataset has taken them in: an object is its own row, so the field
- * reads its `data` property (a Date or an array has none); anything else is wrapped as `{data: value}`.
+ * reads its `data` property (a Date or an array has none); anything else is wrapped as `{data: value}`. A missing value
+ * cannot be a row: the dataflow fails on it (`tupleid` reads a property of it), and so does the scale.
  */
 function asRows(values: readonly unknown[]): unknown[] {
-  return values.map((x) => (x !== null && (typeof x === 'object' || typeof x === 'function') ? (x as { data?: unknown }).data : x))
+  return values.map((x) => {
+    if (x == null) throw new TypeError(`Cannot read properties of ${x} (reading 'Symbol(vega_id)')`)
+    return typeof x === 'object' || typeof x === 'function' ? (x as { data?: unknown }).data : x
+  })
 }
 
 function membersOf(domain: { fields: unknown[]; data?: string }, ctx: ScaleContext): Member[] {
@@ -199,15 +208,16 @@ function unionCategories(domain: { sort?: unknown }, ctx: ScaleContext, members:
     column = ordering.field ? columnName(op, ordering.field) : 'count'
     combine = COMBINE[op]
   }
-  const merged = new Map<string, { category: Category; seen: unknown[] }>()
+  // a key that appears in several fields is one category; with a sort, its only column is the combined measure
+  // (there is no combined `count`: sorting by `field: 'count'` over several fields finds no such column and keeps the order)
+  const merged = new Map<string, { category: Keyed; seen: unknown[] }>()
   for (const part of parts) {
     const text = String(part.key)
     let entry = merged.get(text)
-    if (!entry) merged.set(text, (entry = { category: { key: part.key, count: 0 }, seen: [] }))
-    entry.category.count++
+    if (!entry) merged.set(text, (entry = { category: { key: part.key }, seen: [] }))
     if (column) entry.seen.push(part[column])
   }
-  const categories: Category[] = []
+  const categories: Keyed[] = []
   for (const { category, seen } of merged.values()) {
     if (column && combine) category[column] = aggregate(combine, seen)
     categories.push(category)
