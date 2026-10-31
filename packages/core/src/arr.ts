@@ -34,13 +34,15 @@ export function peek<T>(list: readonly T[]): T {
  * `range(stop)`, `range(start, stop)` or `range(start, stop, step)`: start + i * step for every i below
  * ceil((stop - start) / step); empty when that is not a positive number.
  */
-export function range(...bounds: [number] | [number, number] | [number, number, number]): number[] {
-  let start = +bounds[0]
+export function range(first: number, last?: number, by?: number): number[] {
+  // how many arguments were given decides what they mean, so an explicit `undefined` is not the same as leaving one out
+  const given = arguments.length
+  let start = +first
   let stop = start
   let step = 1
-  if (bounds.length > 1) {
-    stop = +(bounds[1] as number)
-    if (bounds.length > 2) step = +(bounds[2] as number)
+  if (given > 1) {
+    stop = +last!
+    if (given > 2) step = +by!
   } else {
     start = 0
   }
