@@ -118,8 +118,8 @@ export function gridLayout(groups: SceneGroup[], opt: Opt, measure?: (g: SceneGr
   // they are read off the cell groups as vega's `bounds: 'full' | 'flush'`.
   const bbox: (g: SceneGroup) => Bounds = measure ?? (opt.bounds === 'flush' ? bboxFlush : bboxFull)
   const bounds = new Bounds().set(0, 0, 0, 0)
-  const alignCol = get(opt.align, 'column')
-  const alignRow = get(opt.align, 'row')
+  let alignCol = get(opt.align, 'column')
+  let alignRow = get(opt.align, 'row')
   const padCol = get(opt.padding, 'column')
   const padRow = get(opt.padding, 'row')
   const ncols = (opt.columns as number) || groups.length
@@ -181,6 +181,7 @@ export function gridLayout(groups: SceneGroup[], opt: Opt, measure?: (g: SceneGr
       if (i % ncols) xOffset[i] = offset + xMax
     }
   } else {
+    alignCol = false
     for (let c = 1; c < ncols; ++c) {
       for (let i = c; i < n; i += ncols) {
         xOffset[i]! += xExtent[c - 1]!
@@ -208,6 +209,7 @@ export function gridLayout(groups: SceneGroup[], opt: Opt, measure?: (g: SceneGr
       yOffset[i] = offset + yMax
     }
   } else {
+    alignRow = false
     for (let r = 1; r < nrows; ++r) {
       for (let i = r * ncols, m2 = i + ncols; i < m2; ++i) {
         yOffset[i]! += yExtent[r - 1]!
