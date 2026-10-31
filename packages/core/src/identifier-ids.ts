@@ -50,29 +50,75 @@ function signature(row: Row, as: string): string {
   return text
 }
 
+/** How far ahead of a row that does not match either list is searched for the place they meet again. */
+const RESYNC = 64
+
 /**
  * The numbers rows had when the transform is run again with nothing to say what changed. The rows that are as they were at the
- * start of the list and at the end of it keep their numbers (the common case: nothing changed, or rows were added or taken away
- * at the ends); of the rest, those that are in the previous list too (the same row once for each time it was there), and then
- * those that are at the place of a row that is no longer there -- a row changed where it stood.
+ * start and at the end of the list keep their numbers (the common case: nothing changed, or rows were added or taken away at the
+ * ends). Between, the two lists are walked together: rows that match go on in step, a row of one list that is nowhere near in the
+ * other is an addition or a removal, and a row that is neither -- changed where it stood -- keeps the number of the row it replaces.
+ * When short lists are too unlike for that (rows moved about), rows are found by what they hold: the same row once for each time it
+ * was there.
  */
 export function carryByAlignment(rows: readonly Row[], previous: readonly Row[] | undefined, as: string): unknown[] | undefined {
   if (!previous || !previous.length || !rows.length) return undefined
   const carry = new Array<unknown>(rows.length)
-  const taken = new Uint8Array(previous.length)
   const most = Math.min(rows.length, previous.length)
   let head = 0
-  while (head < most && sameBut(rows[head]!, previous[head]!, as)) { carry[head] = previous[head]![as]; taken[head] = 1; head++ }
+  while (head < most && sameBut(rows[head]!, previous[head]!, as)) { carry[head] = previous[head]![as]; head++ }
   let tail = 0
   while (tail < most - head && sameBut(rows[rows.length - 1 - tail]!, previous[previous.length - 1 - tail]!, as)) {
     carry[rows.length - 1 - tail] = previous[previous.length - 1 - tail]![as]
-    taken[previous.length - 1 - tail] = 1
     tail++
   }
   const open = rows.length - tail
+  const end = previous.length - tail
   if (head === open) return carry
+  const walked = walk(rows, previous, as, head, open, end)
+  if (walked) { for (let i = head; i < open; i++) if (walked[i - head] !== undefined) carry[i] = walked[i - head]; return carry }
+  return byContent(rows, previous, as, head, open, end, carry)
+}
+
+/** Lists longer than this are not searched by content when they part (see `walk`): that costs more than the lists are worth. */
+const SEARCHABLE = 4096
+
+/**
+ * The two lists walked together from `from`; `null` when they part too often for that to mean anything and the lists are short enough
+ * to be searched by what the rows hold (a long list that parts that often is read as rows changed where they stood).
+ */
+function walk(rows: readonly Row[], previous: readonly Row[], as: string, from: number, open: number, end: number): unknown[] | null {
+  const carry = new Array<unknown>(open - from)
+  let parted = 0
+  const allowed = 16 + ((open - from) >> 3)
+  let i = from
+  let j = from
+  let run = 0
+  while (i < open && j < end) {
+    if (sameBut(rows[i]!, previous[j]!, as)) { carry[i - from] = previous[j]![as]; i++; j++; run = 0; continue }
+    let k = 1
+    let found = false
+    // (rows that keep differing are rows changed where they stood: looking for where the lists meet again is for the first few)
+    for (; k <= RESYNC && !found && run < 4; k++) {
+      if (j + k < end && sameBut(rows[i]!, previous[j + k]!, as)) { j += k; found = true } else if (i + k < open && sameBut(rows[i + k]!, previous[j]!, as)) { i += k; found = true }
+    }
+    if (found) { run = 0; continue }
+    run++
+    // neither list has the row soon: it is the row that stood here, changed
+    if (++parted > allowed && open - from <= SEARCHABLE) return null
+    carry[i - from] = previous[j]![as]
+    i++
+    j++
+  }
+  return carry
+}
+
+function byContent(rows: readonly Row[], previous: readonly Row[], as: string, head: number, open: number, end: number, carry: unknown[]): unknown[] {
+  const taken = new Uint8Array(previous.length)
+  for (let j = 0; j < head; j++) taken[j] = 1
+  for (let j = end; j < previous.length; j++) taken[j] = 1
   const waiting = new Map<string, number[]>()
-  for (let j = head; j < previous.length - tail; j++) {
+  for (let j = head; j < end; j++) {
     const key = signature(previous[j]!, as)
     const queue = waiting.get(key)
     if (queue) queue.push(j)

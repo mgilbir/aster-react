@@ -5,34 +5,34 @@
  * another makes new rows of its source's, in the order the source lists them.
  *
  * A row is not given its place until something is about to move rows (a `collect` that sorts, with a sort after it): a row with
- * none was made after every row that has one, in array order. The place rides on the row (copies of a row keep it, as the
- * copies a pipeline makes of rows it writes onto are the same row), and a transform that makes a new row of one drops it.
+ * none was made after every row that has one, in array order. The place rides on the row: the copies a pipeline makes of rows it may
+ * not write onto are the same rows and keep it, and a transform that makes a new row of one (`remake`) gives it a place of its own.
  */
 
 type Row = Record<string | symbol, unknown>
 
-/** Where a row came from in the order rows were made. */
+/** Where a row stands in the order rows were made; a symbol, so no key listing and no serialisation sees it, and a copy by spreading takes it along. */
 export const MADE: unique symbol = Symbol('aster.made') as never
+let next = 0
 
-let made = 0
+const placeOf = (row: unknown): number | undefined => (row !== null && typeof row === 'object' ? (row as Record<symbol, number | undefined>)[MADE] : undefined)
+
+/** Give the rows that have no place theirs, in array order. The rows must be the caller's to write onto. */
+export function placeRows(rows: readonly Row[]): void {
+  for (const row of rows) if (row[MADE] === undefined) row[MADE] = ++next
+}
+
+/** Whether some of the rows have a place: a sort need only look at places when they do (the first and the last row tell). */
+export function anyPlaced(rows: readonly unknown[]): boolean {
+  const n = rows.length
+  return n > 1 && (placeOf(rows[0]) !== undefined || placeOf(rows[n - 1]) !== undefined)
+}
 
 /** How two rows compare by the order they were made in (0: neither has a place, or both the same one). */
 export function madeBefore(a: unknown, b: unknown): number {
-  const x = a !== null && typeof a === 'object' ? (a as Row)[MADE] as number | undefined : undefined
-  const y = b !== null && typeof b === 'object' ? (b as Row)[MADE] as number | undefined : undefined
+  const x = placeOf(a)
+  const y = placeOf(b)
   return x === undefined ? (y === undefined ? 0 : 1) : y === undefined ? -1 : x - y
-}
-
-/** Give the rows that have no place theirs, in array order. The rows must be the caller's to write onto. */
-export function placeRows(rows: Row[]): void {
-  for (const row of rows) if (row[MADE] === undefined) row[MADE] = ++made
-}
-
-/** A new row made of another's fields: the fields, and not the other's place. */
-export function remake(row: Row): Row {
-  const copy = { ...row }
-  if (copy[MADE] !== undefined) delete copy[MADE]
-  return copy
 }
 
 const placing = new WeakSet<object>()
@@ -64,4 +64,28 @@ export function placesAt(transforms: ReadonlyArray<{ type?: unknown; sort?: unkn
     if ((u.type === 'collect' || u.type === 'window' || u.type === 'stack') && u.sort !== undefined) return true
   }
   return false
+}
+
+/** A new row made of the fields of another: the fields, and a place of its own, after the places of every row made so far. */
+export function remake(row: Row): Row {
+  const copy = { ...row }
+  if (copy[MADE] !== undefined) copy[MADE] = ++next
+  return copy
+}
+
+/**
+ * The rows of a dataset made from the rows of others: new rows, made in the order the sources list them. If any source has places the
+ * new rows all have places of their own, after every row made so far, so that no row of the dataset is older than another.
+ */
+export function deriveRows(sources: ReadonlyArray<readonly Row[]>): Row[] {
+  const out: Row[] = []
+  const place = sources.some(anyPlaced)
+  for (const rows of sources) {
+    for (const row of rows) {
+      const copy = { ...row }
+      if (place) copy[MADE] = ++next
+      out.push(copy)
+    }
+  }
+  return out
 }
