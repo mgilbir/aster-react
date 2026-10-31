@@ -5,6 +5,7 @@
  */
 import { compileExpr, ExpressionParseError, type CompiledExpr, type ExpressionRuntime } from './expression.js'
 import { ingestRows, readData, type DataFormatSpec } from './data-format.js'
+import { isPlacing, remake } from './tuple-order.js'
 import { carryByAlignment, carryByMapping, type IdCounter } from './identifier-ids.js'
 import { applyTransforms, applyTransformsToSharedRows, compileExprTransform, sortOrder, getField, geoJSONPath, aggregateGroup, type Row, type TransformContext } from './transform.js'
 import { fieldOf } from './transform-agg.js'
@@ -3030,7 +3031,7 @@ function applyStepWithPulse(
     } else if (type === 'joinaggregate') {
       const fast = joinAggregateAppendPulse(rows, t, tctx, sourceName, input, prev, prevStepState as AggState | undefined)
       if (fast) return fast
-    } else if (type === 'collect') {
+    } else if (type === 'collect' && !isPlacing(t)) {
       const fast = orderedAppendPulse(rows, t, input, prev, prevStepState as { order: number[] } | undefined)
       if (fast) return fast
     } else if (type === 'geojson' || type === 'extent' || type === 'stratify') {
@@ -3283,10 +3284,10 @@ function buildDatasetsOf(ctx: EvalContext, inputData: Record<string, unknown[]>)
     const setRows = srcNames.length === 0 ? ctx.setData.rows.get(name) : undefined
     if (setRows !== undefined) {
       // `setdata(name, tuples)` replaced this dataset's input
-      rows = setRows.map((r) => ({ ...r }))
+      rows = setRows.map(remake)
     } else if (srcNames.length > 1) {
       // several sources: their rows, one source after the other (each pulse adds its tuples in turn)
-      rows = srcNames.flatMap((n) => build(n, seen).map((r) => ({ ...r })))
+      rows = srcNames.flatMap((n) => build(n, seen).map(remake))
     } else if (srcNames.length === 1) {
       const src = srcNames[0]!
       const srcDef = ctx.chart.data.find((sd) => sd.name === src)
@@ -3298,7 +3299,7 @@ function buildDatasetsOf(ctx: EvalContext, inputData: Record<string, unknown[]>)
         rows = readData(ownGet(inputData, src) ?? inlineValues(ctx, srcDef.values), (d as { format?: DataFormatSpec }).format)
         inPulse = ctx.inputPulses?.get(src) ?? null
       } else {
-        rows = build(src, seen).map((r) => ({ ...r }))
+        rows = build(src, seen).map(remake)
         inPulse = ctx.datasetPulses.get(src) ?? null
         // (vega: the backing tree travels with the source array, `pulse.source.root`, to a dataset derived from it)
         const root = ctx.hierarchies.get(src)

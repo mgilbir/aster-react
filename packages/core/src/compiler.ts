@@ -6,6 +6,7 @@
 import { dict, ownGet } from './util.js'
 import { checkDataReferences, normalizeSpecLists } from './spec-structure.js'
 import { noteWrittenType, transformTypeOf } from './transform-names.js'
+import { markPlacing } from './tuple-order.js'
 import { markShareable } from './guide-encode.js'
 import { defaultMergedConfig, mergeVegaConfig, vegaDefaultConfig } from './config-defaults.js'
 import type {
@@ -301,6 +302,7 @@ function compileData(d: Record<string, unknown>): CompiledData {
   for (const t of (d.transform as Array<Record<string, unknown>>) ?? []) {
     compiled.transform.push(compileTransform(t))
   }
+  markPlacing(compiled.transform as ReadonlyArray<{ type?: unknown; sort?: unknown }>)
   return compiled
 }
 

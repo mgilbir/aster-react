@@ -385,7 +385,9 @@ function genChain(r: Rng): Case {
     () => ({ type: 'bin', field: r.pick(['v', 'w', 'i']), extent: r.pick([[-10, 30], [0, 25], [-100, 100]]), maxbins: r.pick([5, 10, 20]), as: r.pick([['b0', 'b1'], ['bin0', 'bin1'], ['v', 'w'], ['f1', 'b1']]) }),
     () => ({ type: 'identifier', as: r.pick(['id', 'i', 'v']) }),
     () => ({ type: 'project', ...(r.chance(0.6) ? { fields: ['g', 'v', 'w', 'k', 'i', 'f1', 'b0', 'id'], as: r.pick([undefined, ['g', 'v', 'w', 'k', 'i', 'f1', 'b0', 'id']]) } : {}) }),
-    () => ({ type: 'stack', field: r.pick(['w', 'i']), groupby: ['g'], offset: r.pick(['zero', 'center', 'normalize']), as: r.pick([['y0', 'y1'], ['b0', 'b1'], ['v', 'w']]) }),
+    () => ({ type: 'stack', field: r.pick(['w', 'i']), groupby: ['g'], offset: r.pick(['zero', 'center', 'normalize']), as: r.pick([['y0', 'y1'], ['b0', 'b1'], ['v', 'w']]), ...(r.chance(0.6) ? { sort: genSort(r) } : {}) }),
+    () => ({ type: 'window', sort: genSort(r), groupby: r.pick([['g'], []]), ops: ['row_number', r.pick(['rank', 'sum', 'lag', 'values'])], fields: [null, 'v'], as: ['rn', 'wk'] }),
+    () => ({ type: 'pivot', field: 'g', value: 'v', groupby: r.pick([['k'], ['h']]), op: r.pick(['sum', 'values', 'count']) }),
     () => ({ type: 'joinaggregate', groupby: ['g'], fields: ['v', 'w', 'v'], ops: [r.pick(['sum', 'max']), r.pick(['values', 'argmin', 'argmax', 'mean']), r.pick(['values', 'count', 'argmax'])], as: [r.pick(['s', 'f1']), r.pick(['vals', 'am', 'f2']), r.pick(['vs', 'n'])] }),
     () => ({ type: 'window', sort: { field: 'k' }, groupby: r.pick([['g'], []]), ops: [r.pick(['sum', 'values', 'argmax', 'rank', 'count']), r.pick(['row_number', 'values', 'lag'])], fields: ['v', 'w'], as: [r.pick(['ws', 'f1']), r.pick(['wr', 'wv'])], frame: r.pick([[null, 0], [-1, 1], [null, null]]) }),
     () => ({ type: 'aggregate', groupby: ['g'], fields: ['v', 'w', 'v'], ops: [r.pick(['sum', 'values', 'argmin']), 'max', 'count'] }),
@@ -396,16 +398,46 @@ function genChain(r: Rng): Case {
     () => ({ type: 'timeunit', field: 'i', units: ['year'], timezone: 'utc', as: r.pick([['u0', 'u1'], ['f1', 'f2']]) }),
     () => ({ type: 'fold', fields: ['v', 'w'], as: r.pick([['key', 'value'], ['f1', 'f2']]) }),
   ]
-  // A collect only last: Vega's ties in a sort go by the order the tuples were created in, which a `collect` before them has changed.
   const t: Array<Record<string, unknown>> = []
-  const length = r.between(2, 4)
-  for (let i = 0; i < length; i++) {
-    let step = r.pick(steps)()
-    for (let tries = 0; tries < 8 && step.type === 'collect' && i < length - 1; tries++) step = r.pick(steps)()
-    if (step.type === 'collect' && i < length - 1) step = { type: 'formula', expr: 'datum.i', as: 'f1' }
-    t.push(step)
-  }
+  const length = r.between(2, 5)
+  for (let i = 0; i < length; i++) t.push(r.pick(steps)())
   return { t, rows: genRows(r, r.between(0, 14)), extra: { lk: Array.from({ length: 4 }, (_, i) => ({ k: i, w: i * 10 })) } }
+}
+
+/**
+ * Ties after a re-ordering. A sort that ties falls back to the order the tuples were created in; a `collect` (or a transform that
+ * creates new tuples: fold, project, aggregate, pivot, flatten) before it has changed how the array reads against that order. The rows
+ * have few distinct sort keys, so most comparisons tie, and every chain sorts, then does something to the rows, then sorts again.
+ */
+function genTieChain(r: Rng): Case {
+  const key = (): string => r.pick(['k', 'g', 'h', 'v', 'i'])
+  const sortOn = (): Record<string, unknown> => ({ field: r.chance(0.8) ? key() : [key(), key()], ...(r.chance(0.5) ? { order: r.pick(['ascending', 'descending']) } : {}) })
+  const fix = (sort: Record<string, unknown>): Record<string, unknown> => (Array.isArray(sort.field) ? { ...sort, order: (sort.field as string[]).map(() => r.pick(['ascending', 'descending'])) } : sort)
+  const sorts: Array<() => Record<string, unknown>> = [
+    () => ({ type: 'collect', sort: fix(sortOn()) }),
+    () => ({ type: 'window', sort: fix(sortOn()), groupby: r.pick([['g'], [], ['h']]), ops: ['row_number', 'rank', 'first_value', 'sum'], fields: [null, null, 'i', 'v'], as: ['rn', 'rk', 'fv', 'sv'], ...(r.chance(0.4) ? { frame: r.pick([[-1, 1], [null, null], [0, 1]]) } : {}) }),
+    () => ({ type: 'stack', field: r.pick(['v', 'w', 'i']), groupby: r.pick([['g'], [], ['h']]), sort: fix(sortOn()), offset: r.pick(['zero', 'center', 'normalize']) }),
+  ]
+  const between: Array<() => Record<string, unknown>> = [
+    () => ({ type: 'formula', expr: 'datum.i + 1', as: 'f1' }),
+    () => ({ type: 'filter', expr: r.pick(['datum.i % 2 === 0', 'datum.i % 3 !== 0', 'true']) }),
+    () => ({ type: 'identifier', as: 'id' }),
+    () => ({ type: 'fold', fields: ['v', 'w'], as: ['key', 'value'] }),
+    () => ({ type: 'project', fields: ['g', 'h', 'k', 'v', 'i'] }),
+    () => ({ type: 'project' }),
+    () => ({ type: 'aggregate', groupby: [r.pick(['g', 'h', 'k'])], fields: ['v', 'i'], ops: ['sum', 'max'], as: ['v', 'i'] }),
+    () => ({ type: 'joinaggregate', groupby: ['g'], fields: ['v'], ops: ['mean'], as: ['m'] }),
+    () => ({ type: 'flatten', fields: ['x'], as: ['xv'] }),
+    () => ({ type: 'lookup', from: 'lk', key: 'k', fields: ['k'], values: ['w'], as: ['lw'], default: 0 }),
+    () => ({ type: 'impute', field: 'v', key: 'k', groupby: ['g'], keyvals: [0, 1, 2, 3], method: 'value', value: 0 }),
+  ]
+  const t: Array<Record<string, unknown>> = [r.pick(sorts)()]
+  for (let n = r.between(1, 3); n > 0; n--) {
+    if (r.chance(0.7)) t.push(r.pick(between)())
+    t.push(r.pick(sorts)())
+  }
+  const rows = genRows(r, r.between(2, 16)).map((row) => ({ ...row, k: r.between(0, 2), g: r.pick(['a', 'b']), h: r.pick(['p', 'q']) }))
+  return { t, rows, extra: { lk: Array.from({ length: 4 }, (_, i) => ({ k: i, w: i * 10 })) } }
 }
 
 function genPivot(r: Rng): Case {
@@ -554,7 +586,8 @@ const SUITES: Array<{ name: string; seed: number; count: number; gen: (r: Rng) =
   { name: 'joinaggregate', seed: 0xa602, count: 350, gen: (r) => genAggregateLike(r, 'joinaggregate'), maxCrashShare: 0.02 },
   { name: 'window', seed: 0xa603, count: 900, gen: genWindow, maxCrashShare: 0.2 },
   { name: 'window stores over several fields', seed: 0xa60b, count: 500, gen: genWindowStores, maxCrashShare: 0.02 },
-  { name: 'transform chains', seed: 0xa60c, count: 900, gen: genChain, maxCrashShare: 0.2 },
+  { name: 'transform chains', seed: 0xa60c, count: 1500, gen: genChain, maxCrashShare: 0.2 },
+  { name: 'sort ties after a re-ordering', seed: 0xa60d, count: 1500, gen: genTieChain, maxCrashShare: 0.2 },
   { name: 'pivot', seed: 0xa604, count: 300, gen: genPivot, maxCrashShare: 0.02 },
   { name: 'bin', seed: 0xa605, count: 700, gen: genBin, maxCrashShare: 0.02 },
   { name: 'stack', seed: 0xa606, count: 350, gen: genStack, maxCrashShare: 0.02 },

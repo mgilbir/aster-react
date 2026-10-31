@@ -16,6 +16,7 @@
  * Deviations from Vega, both on purpose: the input rows are never written (the transforms that write onto their rows in Vega write
  * onto copies, or onto rows the pipeline owns), and group tables hold no inherited names, so a group called `constructor` is a group.
  */
+import { madeBefore } from './tuple-order.js'
 import { accessor, accessorFields, accessorName, array, ascending, error, field, sortData, type Accessor } from './util.js'
 import { meterTick } from './limits.js'
 import { ascending as numericAscending, quantileSorted } from './arr.js'
@@ -115,14 +116,14 @@ export function sortBySpec<T>(items: readonly T[], spec: unknown): T[] | null {
   if (m === 1) {
     const column = columns[0]!
     const sign = keys.sign[0]!
-    sortData(order, (i, j) => compareValues(column[i], column[j]) * sign || i - j)
+    sortData(order, (i, j) => compareValues(column[i], column[j]) * sign || madeBefore(items[i], items[j]) || i - j)
   } else {
     sortData(order, (i, j) => {
       for (let k = 0; k < m; k++) {
         const c = compareValues(columns[k]![i], columns[k]![j])
-        if (c !== 0) return c * keys.sign[k]! || i - j
+        if (c !== 0) return c * keys.sign[k]! || madeBefore(items[i], items[j]) || i - j
       }
-      return i - j
+      return madeBefore(items[i], items[j]) || i - j
     })
   }
   return order.map((i) => items[i]!)
@@ -159,7 +160,7 @@ export function stableSortBy<T>(items: readonly T[], compare: Compare | null): T
   const n = items.length
   const order = new Array<number>(n)
   for (let i = 0; i < n; i++) order[i] = i
-  sortData(order, (i, j) => compare(items[i], items[j]) || i - j)
+  sortData(order, (i, j) => compare(items[i], items[j]) || madeBefore(items[i], items[j]) || i - j)
   const sorted = new Array<T>(n)
   for (let i = 0; i < n; i++) sorted[i] = items[order[i]!]!
   return sorted

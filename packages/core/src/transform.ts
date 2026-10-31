@@ -12,6 +12,7 @@ import { densityGrid, placeContours } from './raster-grid.js'
 import { accessorOf, densitySettings } from './raster-params.js'
 import { PARAM_RULES, checkParams } from './param-rules.js'
 import { tickStep } from './arr.js'
+import { isPlacing, madeBefore, placeRows, placesAt } from './tuple-order.js'
 import { activeMeter, boundedCount } from './limits.js'
 import { walkPostOrder, walkPreOrder } from './tree-walk.js'
 import { aggregateRows, type AggregateParams, compareOf, fieldOf, joinAggregateRows, pivotRows, sortBySpec } from './transform-agg.js'
@@ -69,7 +70,8 @@ const ROW_HOLDING_OPS = new Set(['values', 'argmin', 'argmax'])
 export type RowUse = 'subset' | 'fresh' | 'writes'
 export function rowUseOf(t: CompiledTransform): RowUse {
   switch (t.type) {
-    case 'filter': case 'resolvefilter': case 'collect': return 'subset'
+    case 'collect': return isPlacing(t) ? 'writes' : 'subset'
+    case 'filter': case 'resolvefilter': return 'subset'
     case 'aggregate': {
       // (ops may be a signal: not known, so not read-only)
       const ops = (t as { ops?: unknown }).ops
@@ -111,7 +113,7 @@ export function applyTransformsToSharedRows(rows: Row[], transforms: CompiledTra
   let reading = 0
   let shared = true
   while (reading < transforms.length) {
-    const use = rowUseOf(transforms[reading]!)
+    const use = placesAt(transforms, reading) ? 'writes' : rowUseOf(transforms[reading]!)
     if (use === 'writes') break
     if (use === 'fresh') shared = false
     reading++
@@ -133,9 +135,15 @@ export function applyTransforms(
   const meter = activeMeter()
   // (a context that belongs to no view has no counter: the `identifier`s of one call share a counter of their own, from 1)
   const run = ctx.ids || !transforms.some((t) => t.type === 'identifier') ? ctx : { ...ctx, ids: { value: 0 } }
-  for (const t of transforms) {
+  for (let k = 0; k < transforms.length; k++) {
+    const t = transforms[k]!
     if (meter) meter.clock.check(`transform ${t.type}`)
-    const ownedIn = owned
+    let ownedIn = owned
+    if (placesAt(transforms, k)) {
+      // (the rows get the places the sorts after this one break their ties by: rows that are not the pipeline's own are copied for it)
+      if (!ownedIn) { out = out.map((r) => ({ ...r })); ownedIn = true }
+      placeRows(out)
+    }
     owned = ownsOutput(t, ownedIn)
     out = applyTransform(out, t, run, sourceName, ownedIn)
     if (meter) {
@@ -443,7 +451,7 @@ export function compareRows(a: Row, b: Row, sort?: SortSpec): number {
 export function sortOrder(rows: Row[], sort?: SortSpec, limit = Infinity): number[] {
   const order = rows.map((_, i) => i)
   const c = comparatorOf(sort)
-  if (c) sortData(order, (a, b) => c(rows[a]!, rows[b]!) || a - b)
+  if (c) sortData(order, (a, b) => c(rows[a]!, rows[b]!) || madeBefore(rows[a], rows[b]) || a - b)
   return Number.isFinite(limit) ? order.slice(0, Math.max(0, limit)) : order
 }
 

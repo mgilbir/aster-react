@@ -18,6 +18,7 @@ import {
 } from './time.js'
 import { AsterLimitError, activeMeter, checkRowCount, meterTick } from './limits.js'
 import type { IdCounter } from './identifier-ids.js'
+import { remake } from './tuple-order.js'
 
 type Params = Record<string, unknown>
 type Read = (d: unknown) => unknown
@@ -101,7 +102,7 @@ export function foldRows(rows: Row[], p: Params): Row[] {
   const out: Row[] = []
   for (const row of rows) {
     for (let i = 0; i < fields.length; ++i) {
-      const folded = { ...row }
+      const folded = remake(row)
       folded[keyName] = names[i]
       folded[valueName] = fields[i]!(row)
       out.push(folded)
@@ -130,7 +131,7 @@ export function flattenRows(rows: Row[], p: Params): Row[] {
     // the length comes from the data: bound it before the loop
     checkRowCount(out.length + (length > 0 ? length : 0), 'flatten')
     for (let i = 0; i < length; ++i) {
-      const flat = { ...row }
+      const flat = remake(row)
       for (let j = 0; j < names.length; ++j) {
         const element = arrays[j]![i]
         flat[names[j]!] = element == null ? null : element
@@ -148,7 +149,7 @@ export function flattenRows(rows: Row[], p: Params): Row[] {
  * not: a row some result of an earlier transform holds must not take the fields a later transform writes.
  */
 export function projectRows(rows: Row[], p: Params): Row[] {
-  if (p.fields == null) return rows.map((row) => ({ ...row }))
+  if (p.fields == null) return rows.map(remake)
   const fields = fieldsOf(p.fields)
   const given = array(p.as) as Array<string | null | undefined>
   const names = fields.map((f, i) => (given[i] || accessorName(f)) as string)
