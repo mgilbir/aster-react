@@ -54,3 +54,15 @@ export function scalePropApplies(channel: string, type: string, prop: string): b
   if (row.channels !== undefined && !row.channels.includes(channel)) return false
   return 'only' in row.types ? row.types.only.includes(type) : !row.types.except.includes(type)
 }
+
+/** The marks that draw a value along one axis over a dimension on the other. */
+const ALONG_AXIS = new Set(['bar', 'area', 'line', 'trail'])
+
+/**
+ * Whether a continuous position scale reaches zero when the spec does not say. It does, except on the dimension axis of a mark that is
+ * drawn along the other one: the x axis of a vertical bar, area, line or trail, and the y axis of a horizontal one.
+ */
+export function zeroByDefault(mark: string, channel: string, orient: string): boolean {
+  if (!ALONG_AXIS.has(mark)) return true
+  return channel !== (orient === 'vertical' ? 'x' : orient === 'horizontal' ? 'y' : undefined)
+}

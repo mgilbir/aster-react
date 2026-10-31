@@ -20,7 +20,8 @@ import {
 import { compositeMarkOf } from './composite-marks.js'
 import { mergeEncoding, normalizeUnits } from './composite.js'
 import { timeScaleRange } from './animation.js'
-import { scalePropApplies } from './scaleprops.js'
+import { orientationOf, type Position } from './orient.js'
+import { scalePropApplies, zeroByDefault } from './scaleprops.js'
 import { isTimerSelection, selectionExtent } from './selection.js'
 import { ASSEMBLED_FROM, GEO_POSITION_CHANNELS, assembleProjection, finalProjectionName, geoDataTransforms, geoshapeTransform, hasProjection, mergeLayerProjections, parseUnitProjection, renameComponentSignals, type GeoUnit, type ProjectionComponent, type UnitGeo } from './geo.js'
 import { scaleConfigOf, discreteStep, viewContinuousSize, viewDiscreteSize, sizeRange, countRange, discreteCount, usesUnaggregatedDomain, type ScaleCfg } from './scaleconfig.js'
@@ -408,78 +409,44 @@ function hasTopFacet(spec: VLSpec): boolean {
 // --- layer composition -------------------------------------------------------
 
 /**
- * Orientation of a mark, ported from vega-lite 6.4.3 compile/mark/init.ts
- * `orient()`: marks without an orientation (point/circle/square/rect) are
- * 'vertical' here (the value is unused); line segments (a rule with x/x2 and
- * y/y2) have none, which this returns as 'vertical' too.
+ * The orientation of a mark as the compiler uses it: a mark with none (a point, an arc, a rect, or an encoding that leaves a bar or a
+ * tick without) is 'vertical'.
  */
 function inferOrient(spec: VLSpec, mark: string, markRaw: unknown, fields: FieldDef[]): string {
   return markOrient(spec, mark, markRaw, fields) ?? 'vertical'
 }
 
 /**
- * mark/init.ts orient, exactly: undefined when vega-lite settles on none (a bar or tick over two non-measures, say). Marks read
+ * The orientation of a mark, or `undefined` when its encoding leaves it none (a bar or a tick over two non-measures, say). Marks read
  * that as "not vertical" (tick.ts) or as neither band channel (position-rect.ts isBarOrTickBand), so `inferOrient` says 'vertical'.
  */
 function markOrient(spec: VLSpec, mark: string, markRaw: unknown, fields: FieldDef[]): string | undefined {
-  if (!['bar', 'area', 'rule', 'tick', 'line', 'text'].includes(mark)) return 'vertical'
   const enc = isObject(spec.encoding) ? (spec.encoding as Record<string, unknown>) : {}
-  const xDef = fields.find((f) => f.channel === 'x')
-  const yDef = fields.find((f) => f.channel === 'y')
-  const has = (ch: string): boolean => enc[ch] != null
   const cfg = isObject(spec.config) ? (spec.config as Record<string, unknown>) : undefined
   const cfgType = isObject(cfg?.[mark]) ? (cfg![mark] as Record<string, unknown>) : undefined
   const cfgMark = isObject(cfg?.mark) ? (cfg!.mark as Record<string, unknown>) : undefined
-  const specified = ((isObject(markRaw) ? (markRaw.orient as string | undefined) : undefined)
-    ?? (styleConfigProp(spec, mark, 'orient') as string | undefined)
-    ?? (cfgType?.orient as string | undefined)
-    ?? (cfgMark?.orient as string | undefined))
-  const x2 = has('x2')
-  const y2 = has('y2')
-  let phase = mark === 'text' ? 'bar' : mark
-  if (phase === 'bar') {
-    // (init.ts orient: a pre-binned position decides the orientation)
-    if (xDef?.field && isPrebinned(xDef)) return 'vertical'
-    if (yDef?.field && isPrebinned(yDef)) return 'horizontal'
-    if (xDef?.field && yDef?.aggregate && !xDef.aggregate && yDef.field) return 'vertical'
-    if (yDef?.field && xDef?.aggregate && !yDef.aggregate && xDef.field) return 'horizontal'
-    if (y2 || x2) {
-      if (specified) return specified
-      if (!x2) return 'vertical'
-      if (!y2) return 'horizontal'
+  const position = (channel: string): Position => {
+    const def = fields.find((f) => f.channel === channel)
+    const encoded = enc[channel] as Record<string, unknown> | null | undefined
+    return {
+      present: encoded != null,
+      field: !!def?.field,
+      aggregate: !!def?.aggregate,
+      prebinned: !!def?.field && isPrebinned(def),
+      measure: def ? def.type === 'quantitative' && !def.bin : typeof encoded?.datum === 'number',
+      temporal: def?.type === 'temporal',
     }
-    phase = 'rule'
   }
-  if (phase === 'rule') {
-    if (x2 && y2) return undefined // a line segment has no orientation
-    phase = 'area'
-  }
-  if (phase === 'area') {
-    if (y2) return 'vertical'
-    if (x2) return 'horizontal'
-    if (mark === 'rule') {
-      if (has('x') && !has('y')) return 'vertical'
-      if (has('y') && !has('x')) return 'horizontal'
-    }
-    phase = 'line'
-  }
-  // line / tick (and the fall-through of the others)
-  const isMeasure = (f: FieldDef | undefined, ch: string): boolean => {
-    if (f) return f.type === 'quantitative' && !f.bin
-    const d = (enc[ch] as Record<string, unknown> | undefined)?.datum
-    return typeof d === 'number'
-  }
-  const xIsMeasure = isMeasure(xDef, 'x')
-  const yIsMeasure = isMeasure(yDef, 'y')
-  if (specified) return specified
-  if (xIsMeasure && !yIsMeasure) return mark !== 'tick' ? 'horizontal' : 'vertical'
-  if (!xIsMeasure && yIsMeasure) return mark !== 'tick' ? 'vertical' : 'horizontal'
-  if (xIsMeasure && yIsMeasure) return 'vertical'
-  const xIsTemporal = xDef?.type === 'temporal'
-  const yIsTemporal = yDef?.type === 'temporal'
-  if (xIsTemporal && !yIsTemporal) return 'vertical'
-  if (!xIsTemporal && yIsTemporal) return 'horizontal'
-  return undefined
+  return orientationOf(mark, {
+    x: position('x'),
+    y: position('y'),
+    x2: enc.x2 != null,
+    y2: enc.y2 != null,
+    asked: (isObject(markRaw) ? (markRaw.orient as string | undefined) : undefined)
+      ?? (styleConfigProp(spec, mark, 'orient') as string | undefined)
+      ?? (cfgType?.orient as string | undefined)
+      ?? (cfgMark?.orient as string | undefined),
+  })
 }
 
 const LEAF_PATHS = new WeakMap<VLSpec, number[]>()
@@ -4629,7 +4596,7 @@ function buildScales(spec: VLSpec, fieldsIn: FieldDef[], mark: string, orient: s
       && isContinuousScaleType(type) && def.scale?.padding == null
     ) sc.padding = ((isObject(specConfigOf(spec).bar) ? (specConfigOf(spec).bar as Record<string, unknown>).continuousBandSize : undefined) as number | undefined) ?? 5
     if (type === 'linear' || type === 'log' || type === 'pow' || type === 'sqrt' || type === 'symlog') {
-      const zeroDefault = explicitDom !== undefined ? zeroForCustomDomain(explicitDom) : isParamDomain(def) ? false : type === 'log' ? false : rangedBoth ? true : zeroDefaultFor(mark, channel, orient)
+      const zeroDefault = explicitDom !== undefined ? zeroForCustomDomain(explicitDom) : isParamDomain(def) ? false : type === 'log' ? false : rangedBoth ? true : zeroByDefault(mark, channel, orient)
       if (type !== 'log' || def.scale?.zero != null) {
         sc.zero = (def.scale?.zero as boolean | undefined) ?? zeroDefault
       }
@@ -4965,16 +4932,6 @@ function unionPositionalDomain(def: FieldDef, def2: FieldDef, dataName: string, 
   if (!isDataRef(first) || typeof first.field !== 'string' || first.sort !== true) return plain
   // (the secondary channel has no sort of its own: domain.ts domainSort reads the channel's own field def)
   return mergeDomains([first, { data: dataName, field: aggFieldName(def2) }])
-}
-
-function zeroDefaultFor(mark: string, channel: string, orient: string): boolean {
-  // vega-lite scale/properties.ts zero(): bar/area/line/trail opt out on their
-  // dimension axis; everything else (including their measure axis) falls
-  // through to config.zero (true) for continuous positional scales.
-  if (mark === 'bar' || mark === 'area' || mark === 'line' || mark === 'trail') {
-    if ((orient === 'horizontal' && channel === 'y') || (orient === 'vertical' && channel === 'x')) return false
-  }
-  return true
 }
 
 function positionalDomain(def: FieldDef, dataName: string, mark: string, orient: string, fields: FieldDef[] | undefined, dc: DomainCtx): unknown {
