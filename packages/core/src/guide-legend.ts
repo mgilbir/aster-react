@@ -702,12 +702,16 @@ function buildSymbols(
     const eb = ebs[paintOrder[groups.indexOf(g)]!]!
     return eb.empty() ? new Bounds().set(0, 0, 0, 0) : eb.clone()
   })
-  const colW: number[] = Array<number>(ncols).fill(0)
+  // (an entry group's width is its column's, the column being the one the entry is annotated with -- not the one the grid puts
+  // it in: with more columns than the vertical flow fills, the two differ)
+  const flowRows = Math.ceil(n / Math.max(1, colsFlag))
+  const columnOf = (idx: number): number => (colsFlag ? (_.isVertical(true) ? Math.floor(idx / flowRows) : idx % colsFlag) : idx)
+  const colW = new Map<number, number>()
   const pos: Array<{ x: number; y: number }> = new Array(n)
   paintOrder.forEach((idx, j) => {
     pos[idx] = { x: groups[j]!.x ?? 0, y: groups[j]!.y ?? 0 }
     const eb = ebs[idx]!
-    if (!eb.empty()) colW[j % ncols] = Math.max(colW[j % ncols]!, eb.x2)
+    if (!eb.empty()) colW.set(columnOf(idx), Math.max(colW.get(columnOf(idx)) ?? 0, eb.x2))
   })
   const bounds = new Bounds()
   paintOrder.forEach((idx) => {
@@ -725,7 +729,7 @@ function buildSymbols(
     const entryDatum = { value: e.value, label: e.label, index: e.index }
     const eb = ebs[idx]!
     const at = pos[idx]!
-    const colWc = colW[j % ncols] ?? 0
+    const colWc = colW.get(columnOf(idx)) ?? 0
     // legendEntryLayout: the box is as wide as its column and as tall as its own bound
     const gb = host.groupBox({ ...(g as SceneItem) } as SceneItem, inp.raw ? 0 : colWc, inp.raw ? 0 : eb.y2)
     const box = { ...gb.background, _part: 'entry', x: at.x, y: at.y, datum: entryDatum } as SceneItem & Rec
