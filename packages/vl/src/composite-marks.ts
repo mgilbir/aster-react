@@ -538,7 +538,31 @@ function boxplotLayers(unit: Obj, userConfig: Obj | undefined): Obj {
 // --- entry ---------------------------------------------------------------------------------------------------------------------
 
 /** A composite unit as the layer of simple marks that draws it. `unit.encoding` is complete and typed. */
+/**
+ * The selection parameters a composition gave to a unit are told from the ones the unit declares (which a composite mark does not
+ * take) by a flag on the parameter, which survives the copies a repeat makes of its spec.
+ */
+const GIVEN = '$given'
+export function markGiven<T extends object>(param: T): T {
+  return { ...param, [GIVEN]: true }
+}
+export const isGiven = (param: unknown): boolean => isObj(param) && param[GIVEN] === true
+
 export function compositeLayers(kind: CompositeMark, unit: Obj, userConfig: Obj | undefined): Obj {
+  const made = layersOf(kind, unit, userConfig)
+  const given = Array.isArray(unit.params) ? unit.params.filter(isGiven).map(({ [GIVEN]: _g, ...param }: Obj) => param) : []
+  if (given.length === 0) return made
+  // a selection is declared by every unit the composition gave it to: a composite mark of one unit takes it, one of several declares its
+  // signals twice in a Vega scope, which Vega rejects
+  const leaves = Array.isArray(made.layer) ? (made.layer as Obj[]) : [made]
+  if (kind === 'boxplot' || leaves.length !== 1) {
+    throw new VLCompileError(`params: a selection parameter given to every unit below a composition cannot be given to a ${kind}, which is ${leaves.length === 1 ? 'a layer' : `${leaves.length} units`} once vega-lite has normalized it: declare it on a unit instead`)
+  }
+  if (Array.isArray(made.layer)) return { ...made, layer: [{ ...leaves[0], params: given }] }
+  return { ...made, params: given }
+}
+
+function layersOf(kind: CompositeMark, unit: Obj, userConfig: Obj | undefined): Obj {
   if (kind === 'boxplot') return boxplotLayers(unit, userConfig)
   const config = {
     errorbar: { ...DEFAULT_CONFIG.errorbar, ...(userConfig?.errorbar ?? {}) },

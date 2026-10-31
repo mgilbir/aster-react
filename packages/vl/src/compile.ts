@@ -17,7 +17,7 @@ import {
   assembleFacetSignals, assembleUnitSelectionMarks, assembleUnitSelectionSignals, interactiveLegendSelections, parseUnitSelections, requiresSelectionId, selectionPredicate,
   stringValue, varName, type ParamPredicate, type SelCmpt, type SelUnit,
 } from './selection.js'
-import { compositeMarkOf } from './composite-marks.js'
+import { compositeMarkOf, isGiven, markGiven } from './composite-marks.js'
 import { mergeEncoding, normalizeUnits } from './composite.js'
 import { timeScaleRange } from './animation.js'
 import { orientationOf, type Position } from './orient.js'
@@ -377,7 +377,14 @@ function pushSelectionParams(node: unknown, inherited: Record<string, unknown>[]
     if (isObject(node.spec)) pushSelectionParams(node.spec, carried)
     return
   }
-  if (inherited.length && node.layer === undefined && node.mark !== undefined) node.params = inherited.map((p) => structuredClone(p))
+  if (!inherited.length) return
+  // the unit under a layer of one gets it too (a layer of several was refused: it would declare the signals twice)
+  let unit: Record<string, unknown> = node
+  while (Array.isArray(unit.layer) && unit.layer.length === 1 && isObject(unit.layer[0])) unit = unit.layer[0] as Record<string, unknown>
+  if (Array.isArray(unit.layer)) {
+    throw new VLCompileError('params: a selection parameter given to every unit below a composition cannot be given to a layer of several units (an errorbar with ticks, an errorband with borders, a boxplot): it would declare the selection\'s signals twice in one Vega scope, which Vega rejects; declare it on a unit instead')
+  }
+  if (unit.layer === undefined && unit.mark !== undefined) unit.params = inherited.map((p) => markGiven(structuredClone(p)))
 }
 
 /**
@@ -3746,7 +3753,7 @@ function hasSelectionParams(node: unknown): boolean {
   if (Array.isArray(node)) return node.some(hasSelectionParams)
   if (!isObject(node)) return false
   // (a composite mark takes no selection: its parameters are dropped when it is normalized)
-  if (compositeMarkOf(node) === undefined && Array.isArray(node.params) && node.params.some((p) => isObject(p) && p.select !== undefined)) return true
+  if (Array.isArray(node.params) && node.params.some((p) => isObject(p) && p.select !== undefined && (compositeMarkOf(node) === undefined || isGiven(p)))) return true
   for (const k of ['layer', 'hconcat', 'vconcat', 'concat']) if (hasSelectionParams(node[k])) return true
   return isObject(node.spec) && hasSelectionParams(node.spec)
 }

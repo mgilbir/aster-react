@@ -551,12 +551,20 @@ const BIND_INPUTS = set('range checkbox radio select text number date datetime-l
  * (vega-lite gives every unit a copy), or undefined when it can: a layer below would declare the same signals twice in one
  * Vega scope, which Vega rejects, and a composite mark (boxplot, errorbar, errorband) is a layer once vega-lite has normalized it.
  */
+/** How many units a layer tree holds. */
+function unitsBelow(node: unknown): number {
+  if (Array.isArray(node)) return node.reduce((n: number, c) => n + unitsBelow(c), 0)
+  if (!isObj(node)) return 0
+  return Array.isArray(node.layer) ? unitsBelow(node.layer) : 1
+}
+
 function pushdownProblem(node: unknown): string | undefined {
   if (!isObj(node)) return undefined
   const mark = node.mark
   const markType = typeof mark === 'string' ? mark : isObj(mark) ? mark.type : undefined
-  if (['boxplot', 'errorbar', 'errorband'].includes(markType as string)) return `a ${markType as string} is a layer once vega-lite has normalized it`
-  if (Array.isArray(node.layer)) return 'a layer below would declare the selection\'s signals twice in one Vega scope, which Vega rejects'
+  // (an errorbar or an errorband is one unit unless it draws ticks, borders or points: the compiler refuses the ones that are several)
+  if (markType === 'boxplot') return 'a boxplot is a layer once vega-lite has normalized it'
+  if (Array.isArray(node.layer) && unitsBelow(node.layer) > 1) return 'a layer below would declare the selection\'s signals twice in one Vega scope, which Vega rejects'
   if (node.mark !== undefined && Array.isArray(node.params) && node.params.length > 0) return 'vega-lite replaces the parameters of a unit that has some of its own (so a variable parameter or a selection declared there would be lost)'
   for (const k of ['hconcat', 'vconcat', 'concat']) {
     if (Array.isArray(node[k])) for (const c of node[k] as unknown[]) { const p = pushdownProblem(c); if (p) return p }
