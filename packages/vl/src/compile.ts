@@ -4498,6 +4498,22 @@ function domainLimit(v: unknown, def: FieldDef): unknown {
   return isDateTimeValue(v) || def.type === 'temporal' || def.timeUnit ? { signal: domainValueExpr(v, def.type, def.timeUnit) } : v
 }
 
+/**
+ * The user's scale properties that a scale of this kind honours, written onto it over its defaults. A scale that builds most of its
+ * properties itself says which ones it has dealt with (`skip`).
+ */
+function forwardScaleProps(sc: ScaleSpec, def: FieldDef, channel: string, skip: ReadonlySet<string>): void {
+  for (const [k, v] of Object.entries(def.scale ?? {})) {
+    if (skip.has(k) || !scalePropApplies(channel, String(sc.type), k)) continue
+    sc[k] = k === 'domainMin' || k === 'domainMax' ? domainLimit(v, def) : v
+  }
+}
+
+/** Scale properties that the range and the domain of a scale are made of: never forwarded as they are. */
+const SCALE_BUILT_PROPS: ReadonlySet<string> = new Set(['type', 'domain', 'range', 'rangeMin', 'rangeMax', 'scheme', 'bins', 'zero', 'domainRaw'])
+
+const SCALE_BUILT_PROPS_NO_ZERO: ReadonlySet<string> = new Set([...SCALE_BUILT_PROPS].filter((k) => k !== 'zero'))
+
 /** The scale's `bins` property of a binned field: the bin transform's signal, or the step of pre-binned data. */
 function binsProp(def: FieldDef): Record<string, unknown> | undefined {
   if (isPrebinned(def)) return typeof def.binParams!.step === 'number' ? { step: def.binParams!.step } : undefined
@@ -4598,9 +4614,7 @@ function buildScales(spec: VLSpec, fieldsIn: FieldDef[], mark: string, orient: s
     ) sc.padding = ((isObject(specConfigOf(spec).bar) ? (specConfigOf(spec).bar as Record<string, unknown>).continuousBandSize : undefined) as number | undefined) ?? 5
     if (type === 'linear' || type === 'log' || type === 'pow' || type === 'sqrt' || type === 'symlog') {
       const zeroDefault = explicitDom !== undefined ? zeroForCustomDomain(explicitDom) : isParamDomain(def) ? false : type === 'log' ? false : rangedBoth ? true : zeroByDefault(mark, channel, orient)
-      if (type !== 'log' || def.scale?.zero != null) {
-        sc.zero = (def.scale?.zero as boolean | undefined) ?? zeroDefault
-      }
+      if (scalePropApplies(channel, type, 'zero')) sc.zero = (def.scale?.zero as boolean | undefined) ?? zeroDefault
       // vega-lite nice(): none for a binned field, an array domain, or a domainMin / domainMax
       const niceDefault = def.bin || Array.isArray(explicitDom) || def.scale?.domainMin != null || def.scale?.domainMax != null ? undefined : true
       const niceValue = (def.scale?.nice as unknown) ?? niceDefault
@@ -4615,7 +4629,10 @@ function buildScales(spec: VLSpec, fieldsIn: FieldDef[], mark: string, orient: s
         delete sc.nice
         delete sc.padding
       }
-    } else if (type === 'band') {
+    } else if (def.scale?.nice !== undefined && scalePropApplies(channel, type, 'nice')) {
+      sc.nice = def.scale.nice
+    }
+    if (type === 'band') {
       const hasOffset = fields.some((f) => f.channel === 'xOffset' || f.channel === 'yOffset')
       // vl scale/properties.ts: bar → barBandPaddingInner (0.1), tick → 0.25,
       // everything else (rect/rule/image) → rectBandPaddingInner (0); the
@@ -4706,7 +4723,7 @@ function buildScales(spec: VLSpec, fieldsIn: FieldDef[], mark: string, orient: s
     if (!discrete && scalePropApplies(name, type, 'zero')) sc.zero = (def.scale?.zero as boolean | undefined) ?? (explicitDom !== undefined && isContinuousScaleType(type) ? zeroForCustomDomain(explicitDom) : isParamDomain(def) && isContinuousScaleType(type) ? false : type === 'log' ? false : zero)
     for (const [k, v] of Object.entries(def.scale ?? {})) {
       if (k === 'type' || k === 'domain' || k === 'range' || k === 'zero' || k === 'rangeMin' || k === 'rangeMax' || !scalePropApplies(name, type, k)) continue
-      sc[k] = v
+      sc[k] = k === 'domainMin' || k === 'domainMax' ? domainLimit(v, def) : v
     }
     withRangeLimits(sc, def.scale)
     recordExplicit(sc, def.scale)
@@ -4731,7 +4748,10 @@ function buildScales(spec: VLSpec, fieldsIn: FieldDef[], mark: string, orient: s
       if (isDiscreteType(offDef.type)) {
         // scale/type.ts defaultType + properties.ts paddingOuter: a rect-based mark offsets within a band; any other mark
         // offsets along a point scale whose outer padding is half a step (so the points align with the band centres)
-        const offsetBand = ['bar', 'rect', 'image', 'rule', 'tick'].includes(mark)
+        const askedType = offDef.scale?.type
+        const offsetBand = askedType === 'band' || askedType === 'point' ? askedType === 'band' : ['bar', 'rect', 'image', 'rule', 'tick'].includes(mark)
+        // (offsetPaddings has made the paddings)
+        const paddingsDone: ReadonlySet<string> = new Set([...SCALE_BUILT_PROPS, 'padding', 'paddingInner', 'paddingOuter'])
         scales.push(offsetBand
           ? {
               name: ch,
@@ -4748,6 +4768,7 @@ function buildScales(spec: VLSpec, fieldsIn: FieldDef[], mark: string, orient: s
               range: [0, { signal: `bandwidth('${dimChannel}')` }],
               ...offsetPaddings(offDef, 'point', undefined, 0.5),
             })
+        forwardScaleProps(scales[scales.length - 1]!, offDef, ch, paddingsDone)
       } else {
         scales.push({
           name: ch,
@@ -4757,6 +4778,7 @@ function buildScales(spec: VLSpec, fieldsIn: FieldDef[], mark: string, orient: s
           zero: false,
           ...(offDef.scale?.type != null ? { type: String(offDef.scale.type) } : {}),
         })
+        forwardScaleProps(scales[scales.length - 1]!, offDef, ch, SCALE_BUILT_PROPS_NO_ZERO)
       }
     }
   }
@@ -4781,6 +4803,7 @@ function buildScales(spec: VLSpec, fieldsIn: FieldDef[], mark: string, orient: s
       domain: sortedDomain(shapeDefS, dataName, dc),
       range: rangeRef(shapeDefS, dataName, shapeDefS.scale?.range) ?? 'symbol',
     })
+    forwardScaleProps(scales[scales.length - 1]!, shapeDefS, 'shape', SCALE_BUILT_PROPS)
   }
 
   // stroke dash scale: an ordinal scale over the default dash patterns (scale/range.ts STROKEDASH)
@@ -4792,6 +4815,7 @@ function buildScales(spec: VLSpec, fieldsIn: FieldDef[], mark: string, orient: s
       domain: sortedDomain(strokeDashDefS, dataName, dc),
       range: rangeRef(strokeDashDefS, dataName, strokeDashDefS.scale?.range) ?? [[1, 0], [4, 2], [2, 1], [1, 1], [1, 2, 4, 2]],
     })
+    forwardScaleProps(scales[scales.length - 1]!, strokeDashDefS, 'strokeDash', SCALE_BUILT_PROPS)
   }
 
   // theta and radius (scale/type.ts, range.ts, properties.ts zero, domain.ts): a polar position scale is linear (or the type asked for) over
@@ -4830,6 +4854,7 @@ function buildScales(spec: VLSpec, fieldsIn: FieldDef[], mark: string, orient: s
         range: rangeRef(colorDef, dataName, colorDef.scale?.range) ?? (colorDef.scale?.scheme != null ? schemeRange(colorDef.scale.scheme) : ordinalColor ? 'ordinal' : 'category'),
         ...(ordinalColor ? { interpolate: 'hcl' } : {}),
       })
+      forwardScaleProps(scales[scales.length - 1]!, colorDef, 'color', SCALE_BUILT_PROPS)
     } else {
       const cs = colorDef.scale ?? {}
       // scale/type.ts defaultType: a binned quantitative colour is a bin-ordinal scale over the bins (no domain of its own)
@@ -4883,6 +4908,7 @@ function buildScales(spec: VLSpec, fieldsIn: FieldDef[], mark: string, orient: s
         // (scale/domain.ts: a binned field's continuous scale spans the bins; it carries the bins too)
         ...(colorDef.bin && colorDef.type === 'quantitative' && explicitDomainOf(colorDef) === undefined ? { bins: { signal: binNames(colorDef.binParams!, colorDef.field).signal } } : {}),
       })
+      forwardScaleProps(scales[scales.length - 1]!, colorDef, 'color', SCALE_BUILT_PROPS)
       if (colorDef.bin && colorDef.type === 'quantitative' && explicitDomainOf(colorDef) === undefined) {
         const last = scales[scales.length - 1]!
         last.domain = { signal: `[${binNames(colorDef.binParams!, colorDef.field).signal}.start, ${binNames(colorDef.binParams!, colorDef.field).signal}.stop]` }
