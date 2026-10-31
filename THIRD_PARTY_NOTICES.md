@@ -11,6 +11,10 @@ its licence text is reproduced verbatim, copied from the `LICENSE` file shipped
 in that package. Where several projects carry byte-identical text it is printed
 once, above the list of projects it covers.
 
+Some modules are no longer ports of the code they were first written from (the scale library, the interpolators and the array helpers are Aster's
+own structure), but they compute the same numbers by the same published procedures (tick steps, interpolation formulas, compensated
+summation, band layout, smooth zoom), so the projects they were checked against stay listed.
+
 `scripts/notices.test.mjs` checks, on every `pnpm test`, that each text below
 is byte-for-byte the `LICENSE` file of every project listed under it.
 
@@ -930,30 +934,6 @@ DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
 THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-```
-
-## quickselect (Vladimir Agafonkin)
-
-`quickselect` in `packages/core/src/arr.ts` is based on https://github.com/mourner/quickselect
-(ISC). Not installed in this repository; text copied verbatim from
-https://raw.githubusercontent.com/mourner/quickselect/main/LICENSE .
-
-```text
-ISC License
-
-Copyright (c) 2024, Vladimir Agafonkin
-
-Permission to use, copy, modify, and/or distribute this software for any purpose
-with or without fee is hereby granted, provided that the above copyright notice
-and this permission notice appear in all copies.
-
-THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY AND
-FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM LOSS
-OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER
-TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF
-THIS SOFTWARE.
 ```
 
 ## time-grain-detector (Paul Rosenzweig)

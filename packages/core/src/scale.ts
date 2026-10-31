@@ -1,89 +1,86 @@
 /**
- * vega-scale (8.1.2): the scale registry, tick helpers, and colour scheme
- * registry as Vega uses them. Faithful transcription verified by a live differential
- * against pinned vega-scale@8.1.2 (`conformance/scripts/differential-vega-scale.test.mts`).
+ * Scales as the chart engine uses them: the registry of scale types (name, kind, inverse members), the choice of ticks and
+ * labels for an axis or legend, interpolators by name, colour schemes and gradient stops. The constructors live in
+ * `scale-continuous.ts` (including time and UTC) and `scale-discrete.ts`.
  *
- * Supersedes the `vega-scale` runtime dependency.
+ * What callers observe, and so what is fixed here:
+ * - a constructed scale has its `type` set to the registered name (`sequential` keeps that name), carries a mark that says the
+ *   registry made it, and has an `invertRange` member (undefined for scales with no inverse); a copy made with `scaleCopy`
+ *   keeps its type but neither the mark nor `invertRange`; `identity` is registered with no kind; unregistered names are not
+ *   types, whatever the prototype chain of a table holds;
+ * - a tick count may be a number, an interval name (time and UTC scales only: anything else is an error) or `{interval, step}`;
+ *   a scale with bins takes its ticks from the bins in range, thinned by halving until they fit the count; a minimum step
+ *   shrinks the count until ticks are at least that far apart; a log scale labels only the ticks on a leading digit that fits;
+ * - a symbol legend over a discretizing or binned scale labels each class by its two limits ("a - b", "< b", ">= a"), the first
+ *   value of a discrete legend gets no label, quantile and quantize scales write all labels at one precision taken from the
+ *   smallest gap, and a threshold scale's gradient is padded by one step on each side;
+ * - an interpolator is looked up by its name with each dash-separated word capitalised (`rgb-basis-closed`), an unknown name is
+ *   undefined, a gamma applies only to rgb and cubehelix; scheme names are lower-cased and looked up only among the registered.
  */
-import {
-  bisectRight,
-  peek,
-  range as sequence,
-  tickStep,
-} from './arr.js'
-import { ownGet } from './util.js'
+import { peek, tickStep } from './arr.js'
 import { boundedCount } from './limits.js'
 import {
-  piecewise,
-  interpolateValue,
   interpolateArray,
   interpolateBasis,
   interpolateBasisClosed,
+  interpolateCubehelix,
+  interpolateCubehelixLong,
   interpolateDate,
   interpolateDiscrete,
+  interpolateHcl,
+  interpolateHclLong,
+  interpolateHsl,
+  interpolateHslLong,
   interpolateHue,
+  interpolateLab,
   interpolateNumber,
   interpolateNumberArray,
   interpolateObject,
-  interpolateRound,
-  interpolateString,
-  interpolateZoom,
   interpolateRgb,
   interpolateRgbBasis,
   interpolateRgbBasisClosed,
-  interpolateHsl,
-  interpolateHslLong,
-  interpolateLab,
-  interpolateHcl,
-  interpolateHclLong,
-  interpolateCubehelix,
-  interpolateCubehelixLong,
+  interpolateRound,
+  interpolateString,
+  interpolateZoom,
+  piecewise,
 } from './interp.js'
+import type { Locale } from './locale.js'
 import {
-  identityScale,
-  ordinal as d3Ordinal,
-  d3TickFormat,
-  quantileScale,
-  quantize as d3Quantize,
-  sequentialQuantile,
-  threshold as d3Threshold,
-  time,
-  utcTime,
-  linear,
-  log,
-  pow,
-  sqrt,
-  symlog,
-  sequential,
-  sequentialLog,
-  sequentialPow,
-  sequentialSqrt,
-  sequentialSymlog,
   diverging,
   divergingLog,
   divergingPow,
   divergingSqrt,
   divergingSymlog,
-  type SR,
-} from './scale-d3.js'
-import type { Locale } from './locale.js'
-import {
-  isNumber,
-  isObject,
-  isString,
-  array as arr,
-  error,
-  toNumber,
-} from './util.js'
-import {
-  timeIntervalFor,
-  utcIntervalFor,
-  type TimeInterval,
-} from './time.js'
+  identityScale,
+  linear,
+  log,
+  pow,
+  sequential,
+  sequentialLog,
+  sequentialPow,
+  sequentialSqrt,
+  sequentialSymlog,
+  sqrt,
+  symlog,
+  time,
+  utcTime,
+  type ScaleObject,
+} from './scale-continuous.js'
+import { band, binOrdinal, ordinal, point, quantileScale, quantize, threshold } from './scale-discrete.js'
+import { continuousPalettes, discretePalettes } from './scale-schemes.js'
+import { timeIntervalFor, utcIntervalFor, type TimeInterval } from './time.js'
+import { error, isNumber, isObject, isString } from './util.js'
 
-export type Scale = SR
+export { bandSpace } from './scale-discrete.js'
 
-// ---- scales/types.js --------------------------------------------------------
+/**
+ * The type hosts see for a scale. It is deliberately loose: a host keeps scales in untyped maps next to marks and
+ * signals, and a scale's members differ by type (a band scale has `bandwidth`, a log scale `base`).
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export type Scale = any
+
+// ---- names -------------------------------------------------------------------------------------------------
 
 export const Identity = 'identity'
 export const Linear = 'linear'
@@ -102,484 +99,159 @@ export const Ordinal = 'ordinal'
 export const Point = 'point'
 export const Band = 'band'
 export const BinOrdinal = 'bin-ordinal'
-// categories
+
+/** The kinds a scale type can be. */
 export const Continuous = 'continuous'
 export const Discrete = 'discrete'
 export const Discretizing = 'discretizing'
 export const Interpolating = 'interpolating'
 export const Temporal = 'temporal'
 
-// ---- bandSpace.js -----------------------------------------------------------
+// ---- inverse members ---------------------------------------------------------------------------------------
 
-export function bandSpace(count: number, paddingInner: number, paddingOuter: number): number {
-  const space = count - paddingInner + paddingOuter * 2
-  return count ? (space > 0 ? space : 1) : 0
-}
-
-// ---- numbers.js / slice.js --------------------------------------------------
-
-export function numbers(_: Iterable<unknown>): number[] {
-  // vega-scale numbers.js: map(toNumber), so null / '' stay null (a bin boundary is not 0)
-  return Array.prototype.map.call(_, toNumber) as number[]
-}
-
-export const slice = Array.prototype.slice
-
-// ---- scales/scaleBand.js (vega's band with invertRange) ---------------------
-
-function vegaBand(): SR {
-  const scale: SR = (d3Ordinal as unknown as () => SR)().unknown(undefined)
-  const domain = scale.domain
-  const ordinalRange = scale.range
-  let range: [number, number] = [0, 1]
-  let step: number
-  let bandwidth: number
-  let round = false
-  let paddingInner = 0
-  let paddingOuter = 0
-  let align = 0.5
-  delete scale.unknown
-
-  function rescale(): SR {
-    const n = domain().length
-    const reverse: number = range[1]! < range[0]! ? 1 : 0
-    const stop = range[1 - reverse]! as number
-    let start = range[reverse]! as number
-    step = (stop - start) / (bandSpace(n, paddingInner, paddingOuter) || 1)
-    if (round) {
-      step = Math.floor(step)
-    }
-    start += (stop - start - step * (n - paddingInner)) * align
-    bandwidth = step * (1 - paddingInner)
-    if (round) {
-      start = Math.round(start)
-      bandwidth = Math.round(bandwidth)
-    }
-    const values = sequence(n).map((i: number) => start + step * i)
-    return ordinalRange(reverse ? values.reverse() : values)
-  }
-
-  scale.domain = function (_?: Iterable<unknown>): unknown {
-    if (arguments.length) {
-      domain(_)
-      return rescale()
-    } else {
-      return domain()
-    }
-  }
-
-  scale.range = function (_?: [number, number]): unknown {
-    if (arguments.length) {
-      range = [+_![0], +_![1]]
-      return rescale()
-    } else {
-      return range.slice()
-    }
-  }
-
-  scale.rangeRound = function (_: [number, number]): SR {
-    range = [+_[0], +_[1]]
-    round = true
-    return rescale()
-  }
-
-  scale.bandwidth = function (): number {
-    return bandwidth
-  }
-
-  scale.step = function (): number {
-    return step
-  }
-
-  scale.round = function (_?: boolean): unknown {
-    if (arguments.length) {
-      round = !!_
-      return rescale()
-    } else {
-      return round
-    }
-  }
-
-  scale.padding = function (_?: number): unknown {
-    if (arguments.length) {
-      paddingOuter = Math.max(0, Math.min(1, _ as number))
-      paddingInner = paddingOuter
-      return rescale()
-    } else {
-      return paddingInner
-    }
-  }
-
-  scale.paddingInner = function (_?: number): unknown {
-    if (arguments.length) {
-      paddingInner = Math.max(0, Math.min(1, _ as number))
-      return rescale()
-    } else {
-      return paddingInner
-    }
-  }
-
-  scale.paddingOuter = function (_?: number): unknown {
-    if (arguments.length) {
-      paddingOuter = Math.max(0, Math.min(1, _ as number))
-      return rescale()
-    } else {
-      return paddingOuter
-    }
-  }
-
-  scale.align = function (_?: number): unknown {
-    if (arguments.length) {
-      align = Math.max(0, Math.min(1, _ as number))
-      return rescale()
-    } else {
-      return align
-    }
-  }
-
-  scale.invertRange = function (_: [number, number]): unknown[] | undefined {
-    // bail if range has null or undefined values
-    if (_[0] == null || _[1] == null) return undefined
-    const reverse: number = range[1]! < range[0]! ? 1 : 0
-    const values = reverse ? (ordinalRange() as number[]).reverse() : (ordinalRange() as number[])
-    const n = values.length - 1
-    let lo = +_[0]
-    let hi = +_[1]
-    let a: number
-    let b: number
-    let t: number
-    // bail if either range endpoint is invalid
-    if (lo !== lo || hi !== hi) return undefined
-    // order range inputs, bail if outside of scale range
-    if (hi < lo) {
-      t = lo
-      lo = hi
-      hi = t
-    }
-    if (hi < values[0]! || lo > range[1 - reverse]!) return undefined
-    // binary search to index into scale range
-    a = Math.max(0, bisectRight(values, lo) - 1)
-    b = lo === hi ? a : bisectRight(values, hi) - 1
-    // increment index a if lo is within padding gap
-    if (lo - values[a]! > bandwidth + 1e-10) ++a
-    if (reverse) {
-      // map + swap
-      t = a
-      a = n - b
-      b = n - t
-    }
-    return a > b ? undefined : (domain() as unknown[]).slice(a, b + 1)
-  }
-
-  scale.invert = function (_: number): unknown {
-    const value = scale.invertRange([_, _])
-    return value ? value[0] : value
-  }
-
-  scale.copy = function () {
-    return (vegaBand()
-      .domain(domain())
-      .range(range)
-      .round(round)
-      .paddingInner(paddingInner)
-      .paddingOuter(paddingOuter)
-      .align(align) as unknown) as SR
-  }
-
-  return rescale()
-}
-
-function vegaPointish(scale: SR): SR {
-  const copy = scale.copy
-  scale.padding = scale.paddingOuter
-  delete scale.paddingInner
-  scale.copy = function () {
-    return vegaPointish(copy())
-  }
-  return scale
-}
-
-function vegaPoint(): SR {
-  return vegaPointish((vegaBand() as unknown as { paddingInner(v: number): SR }).paddingInner(1))
-}
-
-// ---- scales/scaleBinOrdinal.js ----------------------------------------------
-
-export function scaleBinOrdinal(): SR {
-  let domain: number[] = []
-  let range: unknown[] = []
-
-  function scale(x: unknown): unknown {
-    return x == null || x !== x
-      ? undefined
-      : range[(bisectRight(domain, x as number) - 1) % range.length]
-  }
-
-  scale.domain = function (_?: Iterable<unknown>): unknown {
-    if (arguments.length) {
-      domain = numbers(_ as Iterable<unknown>)
-      return scale
-    } else {
-      return domain.slice()
-    }
-  }
-
-  scale.range = function (_?: Iterable<unknown>): unknown {
-    if (arguments.length) {
-      range = slice.call(_)
-      return scale
-    } else {
-      return range.slice()
-    }
-  }
-
-  scale.tickFormat = function (count?: number, specifier?: string): (v: number) => string {
-    return d3TickFormat(domain[0]!, domain[domain.length - 1]!, count == null ? 10 : count, specifier)
-  }
-
-  scale.copy = function () {
-    return scaleBinOrdinal().domain(scale.domain()).range(scale.range())
-  }
-
-  return scale
-}
-
-// ---- scales/invertRange.js / invertRangeExtent.js ---------------------------
-
-function invertRangeFor(scale: SR): (range: [number, number]) => unknown[] {
-  return function (_) {
-    let lo = _[0]
-    let hi = _[1]
-    let t: number
-    if (hi < lo) {
-      t = lo
-      lo = hi
-      hi = t
-    }
-    return [scale.invert(lo), scale.invert(hi)]
+/** `invertRange` of a scale with `invert`: the domain values at the two ends of a span of the range. */
+function invertingSpan(scale: Scale): (span: ArrayLike<number>) => unknown[] {
+  return (span) => {
+    const a = span[0]!
+    const b = span[1]!
+    return b < a ? [scale.invert(b), scale.invert(a)] : [scale.invert(a), scale.invert(b)]
   }
 }
 
-function invertRangeExtentFor(scale: SR): (range: [number, number]) => unknown[] | undefined {
-  return function (_) {
-    const range = scale.range() as unknown[]
-    let lo = _[0]
-    let hi = _[1]
-    let min = -1
-    let max: number | undefined
-    let t: number
-    if (hi < lo) {
-      t = lo
-      lo = hi
-      hi = t
-    }
-    for (let i = 0, n = range.length; i < n; ++i) {
-      if ((range[i] as number) >= (lo as number) && (range[i] as number) <= (hi as number)) {
-        if (min < 0) min = i
-        max = i
+/** `invertRange` of a scale with only `invertExtent`: the outer extremes of the classes whose value lies in the span. */
+function invertingExtents(scale: Scale): (span: ArrayLike<number>) => unknown[] | undefined {
+  return (span) => {
+    const a = span[0]!
+    const b = span[1]!
+    const [lo, hi] = b < a ? [b, a] : [a, b]
+    const values = scale.range() as number[]
+    let first = -1
+    let last = -1
+    values.forEach((v, i) => {
+      if (v >= lo && v <= hi) {
+        if (first < 0) first = i
+        last = i
       }
-    }
-    if (min < 0) return undefined
-    const loExt = scale.invertExtent(range[min!])
-    const hiExt = scale.invertExtent(range[max!])
-    return [
-      loExt[0] === undefined ? loExt[1] : loExt[0],
-      hiExt[1] === undefined ? hiExt[0] : hiExt[1],
-    ]
+    })
+    if (first < 0) return undefined
+    const head = scale.invertExtent(values[first])
+    const tail = scale.invertExtent(values[last])
+    return [head[0] === undefined ? head[1] : head[0], tail[1] === undefined ? tail[0] : tail[1]]
   }
 }
 
-// ---- scales.js (registry) ---------------------------------------------------
+// ---- the registry ------------------------------------------------------------------------------------------
 
-// Placeholder returned by `scale(type, ctor, meta)` setter calls (mirrors `this`).
-const scaleRegistryApi = {} as unknown as () => SR
+const MADE_HERE = Symbol('aster.scale')
 
-const VEGA_SCALE = Symbol('vega_scale')
-const scales = new Map<string, () => SR>()
-
-/** Mark a scale as produced by this registry. */
-export function registerScale(scale: SR): SR {
-  scale[VEGA_SCALE] = true
+/** Mark a scale as made by the registry. */
+export function registerScale(scale: Scale): Scale {
+  ;(scale as Record<symbol, unknown>)[MADE_HERE] = true
   return scale
 }
 
-/** Return true if the object was created by a `scale(type)` constructor. */
-export function isRegisteredScale(scale: SR): boolean {
-  return scale && scale[VEGA_SCALE] === true
+/** Whether a scale was made by the registry. */
+export function isRegisteredScale(scale: Scale): boolean {
+  return !!scale && (scale as Record<symbol, unknown>)[MADE_HERE] === true
 }
 
-/** Augment scales with their type and needed inverse methods. */
-function create(type: string, constructor: () => SR, metadata?: string | string[]): () => SR {
-  const ctr = function scale(this: unknown): SR {
-    const s = constructor()
-    if (!s.invertRange) {
-      s.invertRange = s.invert
-        ? invertRangeFor(s)
-        : s.invertExtent
-          ? invertRangeExtentFor(s)
-          : undefined
+export interface ScaleCtor {
+  (): Scale
+  /** The kinds of the type, as an object of `kind: true` (empty for `identity`). */
+  metadata: Record<string, boolean>
+}
+
+const registry = new Map<string, ScaleCtor>()
+
+function register(type: string, make: () => ScaleObject, ...kinds: string[]): void {
+  const ctor = (() => {
+    const scale = make()
+    if (!scale.invertRange) {
+      scale.invertRange = scale.invert ? invertingSpan(scale) : scale.invertExtent ? invertingExtents(scale) : undefined
     }
-    s.type = type
-    return registerScale(s)
-  }
-  ctr.metadata = toSet(arr(metadata) as string[])
-  return ctr
+    scale.type = type
+    return registerScale(scale)
+  }) as ScaleCtor
+  ctor.metadata = Object.fromEntries(kinds.map((kind) => [kind, true]))
+  registry.set(type, ctor)
 }
 
-function toSet(_: Iterable<string>): Record<string, boolean> {
-  const o: Record<string, boolean> = {}
-  for (const v of _) o[v] = true
-  return o
-}
+const NUMERIC = [Continuous, Interpolating]
+register(Identity, identityScale)
+register(Linear, linear, Continuous)
+register(Log, log, Continuous, Log)
+register(Pow, pow, Continuous)
+register(Sqrt, sqrt, Continuous)
+register(Symlog, symlog, Continuous)
+register(Time, time, Continuous, Temporal)
+register(UTC, utcTime, Continuous, Temporal)
+register(Sequential, sequential, ...NUMERIC) // the name before sequential scales had a warp
+register(`${Sequential}-${Linear}`, sequential, ...NUMERIC)
+register(`${Sequential}-${Log}`, sequentialLog, ...NUMERIC, Log)
+register(`${Sequential}-${Pow}`, sequentialPow, ...NUMERIC)
+register(`${Sequential}-${Sqrt}`, sequentialSqrt, ...NUMERIC)
+register(`${Sequential}-${Symlog}`, sequentialSymlog, ...NUMERIC)
+register(`${Diverging}-${Linear}`, diverging, ...NUMERIC)
+register(`${Diverging}-${Log}`, divergingLog, ...NUMERIC, Log)
+register(`${Diverging}-${Pow}`, divergingPow, ...NUMERIC)
+register(`${Diverging}-${Sqrt}`, divergingSqrt, ...NUMERIC)
+register(`${Diverging}-${Symlog}`, divergingSymlog, ...NUMERIC)
+register(Quantile, quantileScale, Discretizing, Quantile)
+register(Quantize, quantize, Discretizing)
+register(Threshold, threshold, Discretizing)
+register(BinOrdinal, binOrdinal, Discrete, Discretizing)
+register(Ordinal, ordinal, Discrete)
+register(Band, band, Discrete)
+register(Point, point, Discrete)
 
-/**
- * Registry function for adding and accessing scale constructor functions.
- * The `type` argument is a String indicating the name of the scale type.
- *
- * If the `scale` argument is not specified, this method returns the matching
- * scale constructor in the registry, or `null` if not found. If the `scale`
- * argument is provided, it must be a scale constructor function to add to the
- * registry under the given `type` name. The `metadata` argument provides
- * additional information to guide appropriate use of scales within Vega
- * (`continuous`, `discrete`, `discretizing`, `interpolating`, `log`,
- * `temporal`).
- */
-export function scale(type: string, scale?: () => SR, metadata?: string | string[]): (() => SR) | undefined {
-  if (arguments.length > 1) {
-    scales.set(type, create(type, scale!, metadata ?? []))
-    return scaleRegistryApi
-  } else {
-    return isValidScaleType(type) ? scales.get(type) : undefined
-  }
+/** The constructor registered for a type name, if there is one. */
+export function scale(type: string): ScaleCtor | undefined {
+  return registry.get(type)
 }
-
-// d3-scale type factories, wrapped to satisfy the registry's constructor shape
-const d3 = {
-  scaleIdentity: identityScale,
-  scaleLinear: linear,
-  scaleLog: log,
-  scalePow: pow,
-  scaleSqrt: sqrt,
-  scaleSymlog: symlog,
-  scaleTime: time,
-  scaleUtc: utcTime,
-  scaleSequential: sequential,
-  scaleSequentialLog: sequentialLog,
-  scaleSequentialPow: sequentialPow,
-  scaleSequentialSqrt: sequentialSqrt,
-  scaleSequentialSymlog: sequentialSymlog,
-  scaleDiverging: diverging,
-  scaleDivergingLog: divergingLog,
-  scaleDivergingPow: divergingPow,
-  scaleDivergingSqrt: divergingSqrt,
-  scaleDivergingSymlog: divergingSymlog,
-  scaleQuantile: quantileScale,
-  scaleQuantize: d3Quantize,
-  scaleThreshold: d3Threshold,
-  scaleOrdinal: d3Ordinal,
-  scaleSequentialQuantile: sequentialQuantile,
-}
-
-// identity scale
-scale(Identity, d3.scaleIdentity as unknown as () => SR) // upstream registers identity with no metadata (not continuous)
-// continuous scales
-scale(Linear, d3.scaleLinear as unknown as () => SR, Continuous)
-scale(Log, d3.scaleLog as unknown as () => SR, [Continuous, Log])
-scale(Pow, d3.scalePow as unknown as () => SR, Continuous)
-scale(Sqrt, d3.scaleSqrt as unknown as () => SR, Continuous)
-scale(Symlog, d3.scaleSymlog as unknown as () => SR, Continuous)
-scale(Time, d3.scaleTime as unknown as () => SR, [Continuous, Temporal])
-scale(UTC, d3.scaleUtc as unknown as () => SR, [Continuous, Temporal])
-// sequential scales
-scale(Sequential, d3.scaleSequential as unknown as () => SR, [Continuous, Interpolating]) // backwards compat
-scale(`${Sequential}-${Linear}`, d3.scaleSequential as unknown as () => SR, [Continuous, Interpolating])
-scale(`${Sequential}-${Log}`, d3.scaleSequentialLog as unknown as () => SR, [Continuous, Interpolating, Log])
-scale(`${Sequential}-${Pow}`, d3.scaleSequentialPow as unknown as () => SR, [Continuous, Interpolating])
-scale(`${Sequential}-${Sqrt}`, d3.scaleSequentialSqrt as unknown as () => SR, [Continuous, Interpolating])
-scale(`${Sequential}-${Symlog}`, d3.scaleSequentialSymlog as unknown as () => SR, [Continuous, Interpolating])
-// diverging scales
-scale(`${Diverging}-${Linear}`, d3.scaleDiverging as unknown as () => SR, [Continuous, Interpolating])
-scale(`${Diverging}-${Log}`, d3.scaleDivergingLog as unknown as () => SR, [Continuous, Interpolating, Log])
-scale(`${Diverging}-${Pow}`, d3.scaleDivergingPow as unknown as () => SR, [Continuous, Interpolating])
-scale(`${Diverging}-${Sqrt}`, d3.scaleDivergingSqrt as unknown as () => SR, [Continuous, Interpolating])
-scale(`${Diverging}-${Symlog}`, d3.scaleDivergingSymlog as unknown as () => SR, [Continuous, Interpolating])
-// discretizing scales
-scale(Quantile, d3.scaleQuantile as unknown as () => SR, [Discretizing, Quantile])
-scale(Quantize, d3.scaleQuantize as unknown as () => SR, Discretizing)
-scale(Threshold, d3.scaleThreshold as unknown as () => SR, Discretizing)
-// discrete scales
-scale(BinOrdinal, scaleBinOrdinal, [Discrete, Discretizing])
-scale(Ordinal, d3.scaleOrdinal as unknown as () => SR, Discrete)
-scale(Band, vegaBand, Discrete)
-scale(Point, vegaPoint, Discrete)
 
 export function isValidScaleType(type: string): boolean {
-  return scales.has(type)
+  return registry.has(type)
 }
 
-function hasType(key: string, type: string): boolean | undefined {
-  const s = scales.get(key)
-  return s && (s as unknown as { metadata?: Record<string, boolean> }).metadata![type]
+const hasKind = (type: string, kind: string): boolean => registry.get(type)?.metadata[kind] === true
+
+export const isContinuous = (type: string): boolean => hasKind(type, Continuous)
+export const isDiscrete = (type: string): boolean => hasKind(type, Discrete)
+export const isDiscretizing = (type: string): boolean => hasKind(type, Discretizing)
+export const isLogarithmic = (type: string): boolean => hasKind(type, Log)
+export const isTemporal = (type: string): boolean => hasKind(type, Temporal)
+export const isInterpolating = (type: string): boolean => hasKind(type, Interpolating)
+export const isQuantile = (type: string): boolean => hasKind(type, Quantile)
+
+/** A copy of a scale of the same type (the copy is a bare scale: it keeps no registry mark and no `invertRange`). */
+export function scaleCopy(source: Scale): Scale {
+  const copy = source.copy()
+  copy.type = source.type
+  return copy
 }
 
-export function isContinuous(key: string): boolean | undefined {
-  return hasType(key, Continuous)
-}
-
-export function isDiscrete(key: string): boolean | undefined {
-  return hasType(key, Discrete)
-}
-
-export function isDiscretizing(key: string): boolean | undefined {
-  return hasType(key, Discretizing)
-}
-
-export function isLogarithmic(key: string): boolean | undefined {
-  return hasType(key, Log)
-}
-
-export function isTemporal(key: string): boolean | undefined {
-  return hasType(key, Temporal)
-}
-
-export function isInterpolating(key: string): boolean | undefined {
-  return hasType(key, Interpolating)
-}
-
-export function isQuantile(key: string): boolean | undefined {
-  return hasType(key, Quantile)
-}
-
-// ---- ticks.js ---------------------------------------------------------------
-
-const defaultFormatter = (value: unknown): unknown =>
-  Array.isArray(value) ? value.map((v) => String(v)) : String(value)
-
-const ascendingCmp = (a: [unknown, unknown], b: [unknown, unknown]) => (a[1] as number) - (b[1] as number)
-const descendingCmp = (a: [unknown, unknown], b: [unknown, unknown]) => (b[1] as number) - (a[1] as number)
+// ---- ticks -------------------------------------------------------------------------------------------------------
 
 /**
- * Determine the tick count or interval function.
- * @param scale - The scale for which to generate tick values.
- * @param count - The desired tick count or interval specifier.
- * @param minStep - The desired minimum step between tick values.
+ * The tick count or interval for a scale: `count` as given, raised to the number of bins, lowered so that ticks are at
+ * least `minStep` apart, and an interval name or object resolved to a time interval.
  */
-export function tickCount(scale: SR, count: unknown, minStep?: number): unknown {
+export function tickCount(scale: Scale, count: unknown, minStep?: number): unknown {
   let step: unknown
   if (isNumber(count)) {
-    if (scale.bins) {
-      count = Math.max(count as number, scale.bins.length)
-    }
+    let wanted = count as number
+    if (scale.bins) wanted = Math.max(wanted, scale.bins.length)
     if (minStep != null) {
       const domain = scale.domain() as number[]
       const lo = Math.min(domain[0]!, peek(domain))
       const hi = Math.max(domain[0]!, peek(domain))
-      count = Math.min(count as number, Math.floor((hi - lo) / minStep || 1) + 1)
+      wanted = Math.min(wanted, Math.floor((hi - lo) / minStep || 1) + 1)
       if (!scale.bins && !isLogarithmic(scale.type) && !isTemporal(scale.type) && lo < hi) {
-        // d3 tick steps grow monotonically as the count shrinks
-        while ((count as number) > 1 && tickStep(lo, hi, count as number) < minStep) --(count as number)
+        // a tick step only grows as the count falls, so stepping down finds the largest count that spaces them enough
+        while (wanted > 1 && tickStep(lo, hi, wanted) < minStep) --wanted
       }
     }
+    count = wanted
   }
   if (isObject(count)) {
     step = (count as { step?: unknown }).step
@@ -597,363 +269,288 @@ export function tickCount(scale: SR, count: unknown, minStep?: number): unknown 
   return count
 }
 
-/**
- * Filter a set of candidate tick values, ensuring that only tick values
- * that lie within the scale range are included.
- */
-export function validTicks(scale: SR, ticks: unknown[], count: number): unknown[] {
-  let range = scale.range() as number[]
-  let lo = range[0]
-  let hi = peek(range)!
-  let cmp = ascendingCmp
-  if (lo! > hi) {
-    range = [hi, hi = lo!] as unknown as number[]
-    cmp = descendingCmp
-  }
-  lo = range[0]!
-  hi = peek(range)!
-  lo = Math.floor(lo)
-  hi = Math.ceil(hi)
-  // filter ticks to valid values within the range
-  // additionally sort ticks in range order (#2579)
-  ticks = (ticks as unknown[])
+/** The candidate ticks that map inside the scale's range (to whole pixels), in range order, thinned to fit `count`. */
+export function validTicks(scale: Scale, candidates: unknown[], count: number): unknown[] {
+  const range = scale.range() as number[]
+  const reversed = range[0]! > peek(range)
+  const lo = Math.floor(reversed ? peek(range) : range[0]!)
+  const hi = Math.ceil(reversed ? range[0]! : peek(range))
+  const byPosition = reversed ? (a: [unknown, unknown], b: [unknown, unknown]) => (b[1] as number) - (a[1] as number) : (a: [unknown, unknown], b: [unknown, unknown]) => (a[1] as number) - (b[1] as number)
+  let ticks = candidates
     .map((v) => [v, scale(v)] as [unknown, unknown])
-    .filter((_) => lo! <= (_[1] as number) && (_[1] as number) <= hi!)
-    .sort(cmp)
-    .map((_) => _[0])
-  if (count > 0 && (ticks as unknown[]).length > 1) {
-    const endpoints = [(ticks as unknown[])[0], peek(ticks as unknown[])]
-    while ((ticks as unknown[]).length > count && (ticks as unknown[]).length >= 3) {
-      ticks = (ticks as unknown[]).filter((_, i) => !(i % 2))
-    }
-    if ((ticks as unknown[]).length < 3) {
-      ticks = endpoints
-    }
+    .filter((p) => lo <= (p[1] as number) && (p[1] as number) <= hi)
+    .sort(byPosition)
+    .map((p) => p[0])
+  if (count > 0 && ticks.length > 1) {
+    const ends = [ticks[0], peek(ticks)]
+    while (ticks.length > count && ticks.length >= 3) ticks = ticks.filter((_, i) => !(i % 2))
+    if (ticks.length < 3) ticks = ends
   }
-  return ticks as unknown[]
+  return ticks
+}
+
+/** The values to put ticks at: the bins in range, else the scale's own ticks, else (for scales without ticks) its domain. */
+export function tickValues(scale: Scale, count?: unknown): unknown[] {
+  return scale.bins ? validTicks(scale, scale.bins, count as number) : scale.ticks ? scale.ticks(count) : scale.domain()
+}
+
+const stringify = (value: unknown): unknown => (Array.isArray(value) ? value.map((v) => String(v)) : String(value))
+
+/** The ticks of a log scale that carry a label (or the test for one): a leading digit small enough for the room. */
+export function logTicks(scale: Scale, count: unknown, valuesOnly: boolean): number[] | ((d: number) => boolean) {
+  const ticks = tickValues(scale, count) as number[]
+  const base = scale.base()
+  const lnBase = Math.log(base)
+  const room = Math.max(1, (base * (count as number)) / ticks.length)
+  const fits = (d: number): boolean => {
+    let lead = d / Math.pow(base, Math.round(Math.log(d) / lnBase))
+    if (lead * base < base - 0.5) lead *= base
+    return lead <= room
+  }
+  return valuesOnly ? ticks.filter(fits) : fits
 }
 
 /**
- * Generate tick values for the given scale and approximate tick count or
- * interval value. If the scale has a 'ticks' method, it will be used to
- * generate the ticks, with the count argument passed as a parameter. If the
- * scale lacks a 'ticks' method, the full scale domain will be returned.
- */
-export function tickValues(scale: SR, count?: unknown): unknown[] {
-  return scale.bins
-    ? validTicks(scale, scale.bins, count as number)
-    : scale.ticks
-      ? scale.ticks(count)
-      : scale.domain()
-}
-
-/**
- * Generate a label format function for a scale. If the scale has a
- * 'tickFormat' method, it will be used to generate the formatter, with the
- * count and specifier arguments passed as parameters. If the scale lacks a
- * 'tickFormat' method, the returned formatter performs simple string coercion.
- * If the input scale is a logarithmic scale and the format specifier does not
- * indicate a desired decimal precision, a special variable precision formatter
- * that automatically trims trailing zeroes will be generated.
+ * A formatter for a scale's tick values: a time format on time scales (or when `formatType` says so), a thinning
+ * number format on log scales, a span-aware number format on other continuous scales, else plain text.
  */
 export function tickFormat(
   locale: Locale,
-  scale: SR,
+  scale: Scale,
   count?: unknown,
   specifier?: unknown,
   formatType?: string,
   noSkip?: boolean,
 ): (v: unknown) => string {
   const type = scale.type
-  let format: (v: unknown) => string = defaultFormatter as (v: unknown) => string
-  if (type === Time || formatType === Time) {
-    format = locale.timeFormat(specifier as string) as unknown as (v: unknown) => string
-  } else if (type === UTC || formatType === UTC) {
-    format = locale.utcFormat(specifier as string) as unknown as (v: unknown) => string
-  } else if (isLogarithmic(type)) {
-    const varfmt = locale.formatFloat(specifier) as unknown as (v: number) => string
-    if (noSkip || scale.bins) {
-      format = varfmt as unknown as (v: unknown) => string
-    } else {
-      const test = tickLog(scale, count, false) as (d: number) => boolean
-      format = (_: unknown) => (test(_ as number) ? varfmt(_ as number) : '')
-    }
-  } else if (scale.tickFormat) {
-    // if d3 scale has tickFormat, it must be continuous
+  if (type === Time || formatType === Time) return locale.timeFormat(specifier as string) as unknown as (v: unknown) => string
+  if (type === UTC || formatType === UTC) return locale.utcFormat(specifier as string) as unknown as (v: unknown) => string
+  if (isLogarithmic(type)) {
+    const write = locale.formatFloat(specifier) as unknown as (v: number) => string
+    if (noSkip || scale.bins) return write as unknown as (v: unknown) => string
+    const labelled = logTicks(scale, count, false) as (d: number) => boolean
+    return (v) => (labelled(v as number) ? write(v as number) : '')
+  }
+  if (scale.tickFormat) {
     const d = scale.domain() as number[]
-    format = locale.formatSpan(d[0]!, d[d.length - 1]!, count as number, specifier) as unknown as (v: unknown) => string
-  } else if (specifier) {
-    format = locale.format(specifier) as unknown as (v: unknown) => string
+    return locale.formatSpan(d[0]!, peek(d), count as number, specifier) as unknown as (v: unknown) => string
   }
-  return format
+  if (specifier) return locale.format(specifier) as unknown as (v: unknown) => string
+  return stringify as (v: unknown) => string
 }
 
-function tickLog(scale: SR, count: unknown, values: boolean): number[] | ((d: number) => boolean) {
-  const ticks = tickValues(scale, count) as number[]
-  const base = scale.base()
-  const logb = Math.log(base)
-  const k = Math.max(1, (base * (count as number)) / ticks.length)
-  // apply d3-scale's log format filter criteria
-  const test = (d: number): boolean => {
-    let i = d / Math.pow(base, Math.round(Math.log(d) / logb))
-    if (i * base < base - 0.5) i *= base
-    return i <= k
-  }
-  return values ? ticks.filter(test) : test
-}
-
-// ---- legend.js / labels.js: what a legend draws for a scale ------------------
+// ---- legend labels -----------------------------------------------------------------------------------------------
 
 export const SymbolLegend = 'symbol'
 export const DiscreteLegend = 'discrete'
 export const GradientLegend = 'gradient'
 
-/** The scale method that lists a discretizing scale's breakpoints, per type (vega-scale labels.js `symbols`). */
-const SYMBOL_METHOD: Record<string, string> = { [Quantile]: 'quantiles', [Quantize]: 'thresholds', [Threshold]: 'domain' }
-/** ... and the one whose values set the label precision (`formats`). */
-const FORMAT_METHOD: Record<string, string> = { [Quantile]: 'quantiles', [Quantize]: 'domain' }
+/** The scale member that lists a discretizing scale's limits, by type. */
+const LIMITS_OF: Record<string, string> = { [Quantile]: 'quantiles', [Quantize]: 'thresholds', [Threshold]: 'domain' }
+/** The scale member whose values set the label precision. */
+const PRECISION_FROM: Record<string, string> = { [Quantile]: 'quantiles', [Quantize]: 'domain' }
 
-/** A legend's label values; `max` is the upper end of the last interval of a discretizing scale. */
+/** The values a legend labels; `max` is the upper end of the last class of a discretizing scale. */
 export type LabelValues = unknown[] & { max?: number }
 
-function thresholdValues(thresholds: unknown[]): LabelValues {
-  const values: LabelValues = [-Infinity, ...thresholds]
-  values.max = +Infinity
-  return values
+/** The values a legend labels for a scale: bins, log ticks, a discretizing scale's limits, else its ticks. */
+export function labelValues(scale: Scale, count: unknown): LabelValues {
+  if (scale.bins) {
+    const bins: LabelValues = scale.bins.slice(0, -1)
+    bins.max = peek(scale.bins as number[])
+    return bins
+  }
+  if (scale.type === Log) return logTicks(scale, count, true) as LabelValues
+  const member = Object.hasOwn(LIMITS_OF, scale.type) ? LIMITS_OF[scale.type]! : undefined
+  if (member) {
+    const values: LabelValues = [-Infinity, ...(scale as unknown as Record<string, () => unknown[]>)[member]!()]
+    values.max = +Infinity
+    return values
+  }
+  return tickValues(scale, count)
 }
 
-function binValues(bins: unknown[]): LabelValues {
-  const values: LabelValues = bins.slice(0, -1)
-  values.max = peek(bins) as number
-  return values
+/** A formatter whose precision is set by the smallest gap between the values a scale cuts at. */
+export function thresholdFormat(locale: Locale, scale: Scale, specifier: unknown): (v: unknown) => string {
+  const cuts = (scale as unknown as Record<string, () => number[]>)[PRECISION_FROM[scale.type]!]!()
+  const n = cuts.length
+  let gap = n > 1 ? cuts[1]! - cuts[0]! : cuts[0]!
+  for (let i = 1; i < n; ++i) gap = Math.min(gap, cuts[i]! - cuts[i - 1]!)
+  // three ticks across the gap, ten times over for resolution
+  return locale.formatSpan(0, gap, 3 * 10, specifier) as unknown as (v: unknown) => string
 }
-
-/** vega-scale `labelValues`: the values a legend labels (bins, log ticks, a discretizing scale's thresholds, else the ticks). */
-export function labelValues(scale: SR, count: unknown): LabelValues {
-  const m = Object.hasOwn(SYMBOL_METHOD, scale.type) ? SYMBOL_METHOD[scale.type]! : undefined
-  return scale.bins ? binValues(scale.bins)
-    : scale.type === Log ? (tickLog(scale, count, true) as LabelValues)
-    : m ? thresholdValues((scale as unknown as Record<string, () => unknown[]>)[m]!())
-    : tickValues(scale, count)
-}
-
-/** vega-scale `thresholdFormat`: one precision for all the labels, from the smallest gap between breakpoints. */
-export function thresholdFormat(locale: Locale, scale: SR, specifier: unknown): (v: unknown) => string {
-  const _ = (scale as unknown as Record<string, () => number[]>)[FORMAT_METHOD[scale.type]!]!()
-  const n = _.length
-  let d = n > 1 ? _[1]! - _[0]! : _[0]!
-  for (let i = 1; i < n; ++i) d = Math.min(d, _[i]! - _[i - 1]!)
-  // tickCount = 3 ticks times 10 for increased resolution
-  return locale.formatSpan(0, d, 3 * 10, specifier) as unknown as (v: unknown) => string
-}
-
-const isDiscreteRange = (scale: SR): boolean => Object.hasOwn(SYMBOL_METHOD, scale.type) || !!scale.bins
-const orElse = <T>(value: T | null | undefined, dflt: T): T => (value != null ? value : dflt)
-const formatValue = (value: unknown, format: (v: unknown) => string): string | null => (Number.isFinite(value) ? format(value) : null)
 
 /** A legend label function: `(value, index, values) => label`. */
-export type LabelFormat = (value: unknown, index: number, array: LabelValues) => string | null
+export type LabelFormat = (value: unknown, index: number, values: LabelValues) => string | null
 
-/** vega-scale `labelFormat`: how a legend labels each of its values, by the kind of legend and scale. */
+const labelsClasses = (scale: Scale): boolean => Object.hasOwn(LIMITS_OF, scale.type) || !!scale.bins
+
+/** How a legend labels each of its values, by the kind of legend and scale. */
 export function labelFormat(
   locale: Locale,
-  scale: SR,
+  scale: Scale,
   count: unknown,
   type: string,
   specifier?: unknown,
   formatType?: string,
   noSkip?: boolean,
 ): LabelFormat {
-  const format = Object.hasOwn(FORMAT_METHOD, scale.type) && formatType !== Time && formatType !== UTC
-    ? thresholdFormat(locale, scale, specifier)
-    : tickFormat(locale, scale, count, specifier, formatType, noSkip)
-  return type === SymbolLegend && isDiscreteRange(scale)
-    // an interval: `lo – hi`, `< hi` for the first, `≥ lo` for the last
-    ? (value, index, array) => {
-        const limit = orElse(array[index + 1], orElse(array.max, +Infinity))
-        const lo = formatValue(value, format)
-        const hi = formatValue(limit, format)
-        return lo && hi ? lo + ' \u2013 ' + hi : hi ? '< ' + hi : '\u2265 ' + lo
-      }
-    : type === DiscreteLegend
-      // the first value is the lower end of the first band: no label
-      ? (value, index) => (index ? format(value) : null)
-      : (value) => format(value)
+  const write =
+    Object.hasOwn(PRECISION_FROM, scale.type) && formatType !== Time && formatType !== UTC
+      ? thresholdFormat(locale, scale, specifier)
+      : tickFormat(locale, scale, count, specifier, formatType, noSkip)
+  if (type === SymbolLegend && labelsClasses(scale)) {
+    const finite = (v: unknown): string | null => (Number.isFinite(v) ? write(v) : null)
+    return (value, index, values) => {
+      const next = values[index + 1]
+      const lo = finite(value)
+      const hi = finite(next != null ? next : values.max != null ? values.max : +Infinity)
+      return lo && hi ? `${lo} – ${hi}` : hi ? `< ${hi}` : `≥ ${lo}`
+    }
+  }
+  // the first value of a discrete legend is the lower end of the first class: it has no label
+  if (type === DiscreteLegend) return (value, index) => (index ? write(value) : null)
+  return (value) => write(value)
 }
 
-/** vega-scale `labelFraction`: where along the legend each value of a discretizing scale sits. */
-export function labelFraction(scale: SR): (value: unknown) => number {
+/** Where along the legend a value of a discretizing scale sits, as a fraction. */
+export function labelFraction(scale: Scale): (value: unknown) => number {
   const domain = scale.domain() as number[]
-  const count = domain.length - 1
+  const classes = domain.length - 1
   let lo = +domain[0]!
   let hi = +peek(domain)!
   let span = hi - lo
   if (scale.type === Threshold) {
-    const adjust = count ? span / count : 0.1
-    lo -= adjust
-    hi += adjust
+    const pad = classes ? span / classes : 0.1
+    lo -= pad
+    hi += pad
     span = hi - lo
   }
   return (value) => ((value as number) - lo) / span
 }
 
-// ---- interpolate.js ---------------------------------------------------------
+// ---- interpolators by name ---------------------------------------------------------------------------------
 
-const scaleProps = ['clamp', 'base', 'constant', 'exponent']
+/** The interpolators a spec can name, keyed by the capitalised, dash-joined form of the name. */
+const INTERPOLATORS = new Map<string, unknown>(
+  Object.entries({
+    Array: interpolateArray,
+    Basis: interpolateBasis,
+    BasisClosed: interpolateBasisClosed,
+    Cubehelix: interpolateCubehelix,
+    CubehelixLong: interpolateCubehelixLong,
+    Date: interpolateDate,
+    Discrete: interpolateDiscrete,
+    Hcl: interpolateHcl,
+    HclLong: interpolateHclLong,
+    Hsl: interpolateHsl,
+    HslLong: interpolateHslLong,
+    Hue: interpolateHue,
+    Lab: interpolateLab,
+    Number: interpolateNumber,
+    NumberArray: interpolateNumberArray,
+    Object: interpolateObject,
+    Rgb: interpolateRgb,
+    RgbBasis: interpolateRgbBasis,
+    RgbBasisClosed: interpolateRgbBasisClosed,
+    Round: interpolateRound,
+    String: interpolateString,
+    Zoom: interpolateZoom,
+  }),
+)
 
-export function interpolateRange(interpolator: (t: number) => unknown, range: number[]): (i: number) => unknown {
-  const start = range[0]!
-  const span = peek(range)! - start
-  return function (i) {
-    return interpolator(start + i * span)
-  }
+/** The interpolator named by a spec (with a gamma, when it takes one); undefined for a name that is not one. */
+export function interpolate(type?: string, gamma?: number): unknown {
+  const key = type!
+    .toLowerCase()
+    .split('-')
+    .map((word) => word[0]!.toUpperCase() + word.slice(1))
+    .join('')
+  const blend = INTERPOLATORS.get(key) as { gamma?: (g: number) => unknown } | undefined
+  return gamma != null && blend && blend.gamma ? blend.gamma(gamma) : blend
 }
 
+/** One ramp through a list of colours, blended in the named space (rgb by default). */
 export function interpolateColors(colors: string[], type?: string, gamma?: number): (t: number) => string {
-  return (piecewise as (i: unknown, v: string[]) => (t: number) => string)(
-    (interpolate as (t?: string, g?: number) => unknown)(type || 'rgb', gamma),
-    colors,
-  )
+  return piecewise(interpolate(type || 'rgb', gamma) as (a: unknown, b: unknown) => (t: number) => unknown, colors) as (t: number) => string
 }
 
-export function quantizeInterpolator(interpolator: (t: number) => unknown, count: number): unknown[] {
+/** A ramp restricted to the part of [0, 1] that `range` spans (reversed when it runs backward). */
+export function interpolateRange(ramp: (t: number) => unknown, range: number[]): (i: number) => unknown {
+  const start = range[0]!
+  const span = peek(range) - start
+  return (i) => ramp(start + i * span)
+}
+
+/** `count` evenly spaced samples of a ramp, none at either end of [0, 1]. */
+export function quantizeInterpolator(ramp: (t: number) => unknown, count: number): unknown[] {
   boundedCount(count, 'quantized colour samples')
   const samples = new Array(count)
   const n = count + 1
-  for (let i = 0; i < count;) samples[i] = interpolator(++i / n)
+  for (let i = 0; i < count; ) samples[i] = ramp(++i / n)
   return samples
 }
 
-export function scaleCopy(scale: SR): SR {
-  const t = scale.type
-  const s = scale.copy()
-  s.type = t
-  return s
-}
+// ---- gradients ---------------------------------------------------------------------------------------------
 
-export function scaleFraction(source: SR, min: number, max: number): (t: number) => unknown {
+/** The members a derived scale copies from the scale it stands for. */
+const SHARED_MEMBERS = ['clamp', 'base', 'constant', 'exponent']
+
+/** Where along [0, 1] a value of `source` sits when its domain is first rescaled to [min, max]. */
+export function scaleFraction(source: Scale, min: number, max: number): (t: number) => unknown {
   const delta = max - min
-  if (!delta || !Number.isFinite(delta)) {
-    return () => 0.5
-  } else {
-    let t: string = source.type
-    const i = t.indexOf('-')
-    t = i < 0 ? t : t.slice(i + 1)
-    const s = (scale(t) as unknown as () => SR)().domain([min, max]).range([0, 1])
-    scaleProps.forEach((m) => (source[m] ? s[m](source[m]()) : 0))
-    return s
-  }
+  if (!delta || !Number.isFinite(delta)) return () => 0.5
+  const dash = (source.type as string).indexOf('-')
+  const kind = dash < 0 ? source.type : (source.type as string).slice(dash + 1)
+  const unit = scale(kind)!().domain([min, max]).range([0, 1])
+  for (const member of SHARED_MEMBERS) if (source[member]) unit[member](source[member]())
+  return unit
 }
 
 /**
- * The stops of a gradient legend, exactly vega-functions' `gradient(scale, p0,
- * p1, count)`: the scale's tick values (`ticks(count || 15)`) with the domain
- * endpoints added when missing, each at `fraction(value)` with colour
- * `scale(value)`. Scales without `ticks` use their domain values as stops.
- * A zero-span domain is expanded onto [0, 1] first (vega#1479).
+ * The stops of a gradient legend for a scale: its tick values (`count`, else 15) with the domain ends added when they are
+ * missing, each at the fraction `scaleFraction` gives and with the colour the scale gives. Scales without ticks use
+ * their domain as stops. A domain of zero width is stretched onto [0, 1] first.
  */
-export function scaleGradientStops(source: SR, count?: number): Array<{ offset: number; color: string }> {
-  let sc: SR = source
+export function scaleGradientStops(source: Scale, count?: number): Array<{ offset: number; color: string }> {
+  let drawn: Scale = source
   let stops: number[] = source.domain()
   let min = stops[0]!
   let max = peek(stops)
   let fraction: (t: number) => unknown = (t) => t
   if (!(max - min)) {
-    const make = (n: string): (() => SR) => scale(n) as () => SR
-    sc = (source.interpolator
-      ? make('sequential')().interpolator(source.interpolator())
-      : make('linear')().interpolate(source.interpolate()).range(source.range())
+    drawn = (source.interpolator
+      ? scale('sequential')!().interpolator(source.interpolator())
+      : scale('linear')!().interpolate(source.interpolate()).range(source.range())
     ).domain([(min = 0), (max = 1)])
   } else {
     fraction = scaleFraction(source, min, max)
   }
-  if (sc.ticks) {
-    stops = sc.ticks(+(count as number) || 15)
+  if (drawn.ticks) {
+    stops = drawn.ticks(+(count as number) || 15)
     if (min !== stops[0]) stops.unshift(min)
     if (max !== peek(stops)) stops.push(max)
   }
-  return stops.map((v) => ({ offset: Number(fraction(v)), color: String(sc(v)) }))
+  return stops.map((v) => ({ offset: Number(fraction(v)), color: String(drawn(v)) }))
 }
 
-export function interpolate(type?: string, gamma?: number): unknown {
-  const interp = (method(type) as unknown as Record<string, unknown>)
-  return gamma != null && interp && (interp as { gamma?: unknown }).gamma
-    ? (interp as { gamma: (g: number) => unknown }).gamma(gamma)
-    : interp
-}
+// ---- schemes -----------------------------------------------------------------------------------------------
 
-function method(type?: string): unknown {
-  const name =
-    'interpolate' +
-    type!.toLowerCase()
-      .split('-')
-      .map((s) => s[0]!.toUpperCase() + s.slice(1))
-      .join('')
-  return ownGet(interpolators, name)
-}
+const schemes = new Map<string, unknown>()
 
-// The d3-interpolate namespace vega-scale reads (`$[method(type)]`), by export
-// name. interpolateTransformCss/Svg are the only omissions: they parse CSS/SVG
-// transforms through a DOM node, which a headless engine has no use for (upstream
-// throws without a `document` too).
-const interpolators: Record<string, unknown> = Object.assign(Object.create(null), {
-  interpolate: interpolateValue,
-  interpolateArray,
-  interpolateBasis,
-  interpolateBasisClosed,
-  interpolateDate,
-  interpolateDiscrete,
-  interpolateHue,
-  interpolateNumber,
-  interpolateNumberArray,
-  interpolateObject,
-  interpolateRound,
-  interpolateString,
-  interpolateZoom,
-  interpolateRgb,
-  interpolateRgbBasis,
-  interpolateRgbBasisClosed,
-  interpolateHsl,
-  interpolateHslLong,
-  interpolateLab,
-  interpolateHcl,
-  interpolateHclLong,
-  interpolateCubehelix,
-  interpolateCubehelixLong,
-})
-
-// ---- schemes.js / palettes.js -----------------------------------------------
-
-import { continuousPalettes, discretePalettes } from './scale-schemes.js'
-
+/** The colours of a palette given as hex runs of six digits, or as a list already. */
 function paletteColors(palette: unknown): string[] {
   if (Array.isArray(palette)) return palette as string[]
-  const s = palette as string
-  const n = (s.length / 6) | 0
-  const c = new Array<string>(n)
-  for (let i = 0; i < n;) {
-    c[i] = '#' + s.slice(i * 6, ++i * 6)
-  }
-  return c
+  const hex = palette as string
+  const colors: string[] = []
+  for (let i = 0; i + 6 <= hex.length; i += 6) colors.push('#' + hex.slice(i, i + 6))
+  return colors
 }
 
-function applyPalettes(obj: Record<string, unknown>, f: (v: unknown) => unknown): void {
-  for (const k in obj) scheme(k, f(obj[k]))
+for (const [name, palette] of Object.entries(discretePalettes)) schemes.set(name.toLowerCase(), paletteColors(palette))
+for (const [name, palette] of Object.entries(continuousPalettes)) schemes.set(name.toLowerCase(), interpolateColors(paletteColors(palette)))
+
+/** The named scheme (a colour list or a ramp over [0, 1]), or undefined. */
+export function scheme(name: string): unknown {
+  return schemes.get(name && name.toLowerCase())
 }
-
-// prototype-less: scheme names come from specs (audit C50)
-const schemes: Record<string, unknown> = Object.create(null)
-const schemeApi = {}
-applyPalettes(discretePalettes, paletteColors)
-applyPalettes(continuousPalettes, (_) => interpolateColors(paletteColors(_)))
-
-export function scheme(name: string, schemeDef?: unknown): unknown {
-  name = name && name.toLowerCase()
-  if (arguments.length > 1) {
-    schemes[name] = schemeDef
-    return schemeApi
-  } else {
-    return schemes[name]
-  }
-}
-
