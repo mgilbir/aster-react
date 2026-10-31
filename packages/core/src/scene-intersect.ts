@@ -78,7 +78,7 @@ function intersectText(item: SceneItem, box: Bounds): boolean {
   const angle = (item.angle || 0) * DEG_TO_RAD
   const b = boundText(new Bounds(), { ...item, angle: 0 })
   const [ax, ay] = textAnchor(item)
-  const p = b.rotatedPoints(angle, ax, ay)
+  const p = b.rotatedCorners(angle, ax, ay)
   return intersectBoxLine(box, p[0]!, p[1]!, p[2]!, p[3]!)
     || intersectBoxLine(box, p[0]!, p[1]!, p[4]!, p[5]!)
     || intersectBoxLine(box, p[4]!, p[5]!, p[6]!, p[7]!)
