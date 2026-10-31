@@ -17,7 +17,8 @@ import {
   assembleFacetSignals, assembleUnitSelectionMarks, assembleUnitSelectionSignals, interactiveLegendSelections, parseUnitSelections, requiresSelectionId, selectionPredicate,
   stringValue, varName, type ParamPredicate, type SelCmpt, type SelUnit,
 } from './selection.js'
-import { alignStackOrders, mergeEncoding, normalizeComposites, normalizePathOverlays } from './composite.js'
+import { compositeMarkOf } from './composite-marks.js'
+import { mergeEncoding, normalizeUnits } from './composite.js'
 import { timeScaleRange } from './animation.js'
 import { isTimerSelection, selectionExtent } from './selection.js'
 import { ASSEMBLED_FROM, GEO_POSITION_CHANNELS, assembleProjection, finalProjectionName, geoDataTransforms, geoshapeTransform, hasProjection, mergeLayerProjections, parseUnitProjection, renameComponentSignals, type GeoUnit, type ProjectionComponent, type UnitGeo } from './geo.js'
@@ -139,7 +140,7 @@ function compileOnce(input: VLSpec, forward?: ReadonlyMap<string, SelCmpt>, forw
   const userConfig = isObject(spec.config) ? (spec.config as Record<string, unknown>) : undefined
   normalizeNestedFacetedUnits(spec, false)
   applyCompositionConfig(spec, spec)
-  const normalized = alignStackOrders(normalizePathOverlays(normalizeComposites(spec, userConfig), userConfig ?? {}, unitStackProps), unitStackProps) as VLSpec
+  const normalized = normalizeUnits(spec, userConfig, unitStackProps) as VLSpec
   // (the overlays are layers now: `config.<mark>.point / line` have done their job)
   if (userConfig) {
     const cfg = { ...userConfig }
@@ -151,6 +152,7 @@ function compileOnce(input: VLSpec, forward?: ReadonlyMap<string, SelCmpt>, forw
   imageAsRect(normalized)
   pushSelectionParams(normalized, [])
   const ctx = makeCtx(normalized)
+  ctx.userConfig = userConfig
   if (forward) ctx.forwardSelections = forward
   if (forwardLookups) for (const [param, lookup] of forwardLookups) ctx.selectionLookups.set(param, lookup)
   const compiled = compileView(normalized, ctx)
@@ -158,8 +160,8 @@ function compileOnce(input: VLSpec, forward?: ReadonlyMap<string, SelCmpt>, forw
   if (selParts) compiled.data = [...selParts.data, ...((compiled.data as Record<string, unknown>[] | undefined) ?? [])]
   const out = finalizeData(compiled, ctx)
   optimizeData(out, (name) => name.startsWith(ctx.dn(0).slice(0, -1)))
-  // a named view names its marks after itself (vega-lite `model.getName`): `chart_marks`
-  if (typeof normalized.name === 'string' && normalized.name !== '' && Array.isArray(out.marks)) {
+  // a named view names its marks after itself (vega-lite `model.getName`): `chart_marks` (the views of a repeat name themselves)
+  if (typeof normalized.name === 'string' && normalized.name !== '' && normalized.repeat === undefined && Array.isArray(out.marks)) {
     out.marks = (out.marks as Record<string, unknown>[]).map((m) => prefixMarkNames(m, `${signalSafe(normalized.name as string)}_`))
   }
   const signals = paramSignals(normalized)
@@ -1136,6 +1138,7 @@ function compileLayered(spec: VLSpec, ctx: CompileCtx): VLSpec {
   if (sizeSignals.length) out.signals = sizeSignals
 
   const legends: Record<string, unknown>[] = []
+  const sharedLegends: Array<{ path: number[]; lg: Record<string, unknown> }> = []
   for (const [pi, p] of parsed.entries()) {
     const unitLegends = buildUnitLegends(p.l, p.fields, p.mark, p.markRaw)
     if (layerSel[pi]) applyLegendSelectionsOf(unitLegends, p.fields, layerSel[pi]!.cmpts)
@@ -1154,15 +1157,28 @@ function compileLayered(spec: VLSpec, ctx: CompileCtx): VLSpec {
         GROUP_LEGENDS.add(lg)
         continue
       }
-      const dup = legends.find((x) => legendChannel(x) === ch)
-      if (dup) {
-        // shared legend: the layers that feed it merge, as for axes
-        mergeLegend(dup, lg)
-        continue
-      }
-      if (!legends.some((x) => JSON.stringify(x) === JSON.stringify(lg))) legends.push(lg)
+      // shared legend: the layers that feed it merge (below)
+      sharedLegends.push({ path: LEAF_PATHS.get(p.l) ?? [pi], lg })
+      if (!legends.some((x) => legendChannel(x) === ch)) legends.push(lg)
     }
   }
+  // (a nested layer's legends merge among themselves first, and the result merges with its siblings': the titles join in that order)
+  const mergeShared = (entries: typeof sharedLegends, depth: number): Record<string, unknown>[] => {
+    const merged: Record<string, unknown>[] = []
+    for (let i = 0; i < entries.length;) {
+      let j = i + 1
+      while (j < entries.length && entries[j]!.path[depth] === entries[i]!.path[depth]) j++
+      const group = entries.slice(i, j)
+      for (const lg of group.length > 1 ? mergeShared(group, depth + 1) : [group[0]!.lg]) {
+        const into = merged.find((x) => legendChannel(x) === legendChannel(lg))
+        if (into) mergeLegend(into, lg)
+        else merged.push(lg)
+      }
+      i = j
+    }
+    return merged
+  }
+  mergeShared(sharedLegends, 0)
   if (legends.length) out.legends = legends
   // the signals every unit's selections add (collected in compile())
   const selUnits = layerSel.filter((sel): sel is UnitSel => sel?.unit !== undefined)
@@ -2357,6 +2373,8 @@ function compileChildFragment(child: VLSpec, ctx: CompileCtx): VLSpec {
 interface CompositeCell {
   /** Names prefix, e.g. `concat_0_` or `child__x_`. */
   prefix: string
+  /** The view's own name when it is a repeated one (`child__x`): a view a repeat names does not take its parent's name in front. */
+  repeated?: string
   /** The child spec (data/transform already inherited, config propagated). */
   spec: VLSpec
 }
@@ -2412,7 +2430,7 @@ function embedCells(cells: CompositeCell[], parent: VLSpec, ctx: CompileCtx, lay
       if (selections.length) child.params = selections
       else delete child.params
     }
-    const vg = inChildView(ctx, cell.prefix.replace(/_$/, ''), [], true, () => compileChildFragment(child, ctx))
+    const vg = inChildView(ctx, cell.prefix.replace(/_$/, ''), [], true, () => compileChildFragment(child, ctx), cell.repeated)
     return { cell, vg, spec: child }
   })
 
@@ -2487,6 +2505,7 @@ function embedCells(cells: CompositeCell[], parent: VLSpec, ctx: CompileCtx, lay
     }
     const scaleMap = new Map<string, string>()
     const scales = (vg.scales as ScaleSpec[]) ?? []
+    const positionChannels = new Set(scales.map((sc) => /^(?:layer_\d+_)?([xy])$/.exec(String(sc.name))?.[1]).filter((ch) => ch !== undefined))
     for (const sc of scales) {
       // everything but the shared (legend-bearing) channels is private to its child; resolve.scale decides the rest
       const asked = parentResolve.scale?.[sc.name]
@@ -2592,7 +2611,9 @@ function embedCells(cells: CompositeCell[], parent: VLSpec, ctx: CompileCtx, lay
     // (the child's title is assembled already: framed on its group for a unit / layer, anchored at the start for a composition)
     if (vg.title) group.title = vg.title
     // a unit's selection signals are its group's (vega-lite: one copy per group item)
-    if (selParts?.unit.length) group.signals = selParts.unit
+    // (after the signals its axes ask for)
+    const groupSignals = [...(composite ? [] : axisSizeSignals(vg.axes as Record<string, unknown>[] | undefined, positionChannels, wName, hName)), ...(selParts?.unit ?? [])]
+    if (groupSignals.length) group.signals = groupSignals
     // vega-lite names every mark after its model, and a child's model carries its parent's prefix (`concat_0_marks`)
     // (a repeat names its marks `child__x_marks` whatever view holds it)
     group.marks = cell.spec.repeat !== undefined ? (vg.marks as Record<string, unknown>[]) : (vg.marks as Record<string, unknown>[]).map((m) => prefixMarkNames(m, prefix))
@@ -2789,17 +2810,31 @@ function compileConcat(spec: VLSpec, ctx: CompileCtx): VLSpec {
   return out
 }
 
-/** Substitute `{repeat: name}` references in a spec tree with the repeat values. */
-function substituteRepeat(node: unknown, repMap: Record<string, unknown>): unknown {
-  if (Array.isArray(node)) return node.map((n) => substituteRepeat(n, repMap))
+/** Whether a spec tree holds a repeat of its own (not a `{repeat: name}` reference): the references it makes may be that repeat's. */
+function holdsRepeat(node: unknown): boolean {
+  if (Array.isArray(node)) return node.some(holdsRepeat)
+  if (!isObject(node)) return false
+  return (node.repeat !== undefined && typeof node.repeat !== 'string' && Object.keys(node).length > 1) || Object.values(node).some(holdsRepeat)
+}
+
+/**
+ * Substitute `{repeat: name}` references in a spec tree with the repeat values. A reference to a variable this repeat does not
+ * bind is left for a repeat inside the tree to bind, if there is one.
+ */
+function substituteRepeat(node: unknown, repMap: Record<string, unknown>, later = holdsRepeat(node)): unknown {
+  if (Array.isArray(node)) return node.map((n) => substituteRepeat(n, repMap, later))
   if (!isObject(node)) return node
   const keys = Object.keys(node)
   if (keys.length === 1 && keys[0] === 'repeat' && typeof node.repeat === 'string') {
-    if (!(node.repeat in repMap)) throw new VLCompileError(`{"repeat": ${JSON.stringify(node.repeat)}} has no matching repeat variable`)
-    return repMap[node.repeat]
+    if (node.repeat in repMap) return repMap[node.repeat]
+    if (later) return node
+    throw new VLCompileError(`{"repeat": ${JSON.stringify(node.repeat)}} has no matching repeat variable`)
   }
+  // a repeat inside binds its own variables (its list's `repeat`, or the `row` / `column` / `layer` it gives) in its spec
+  const own = node.repeat !== undefined && typeof node.repeat !== 'string' && keys.length > 1 ? (Array.isArray(node.repeat) ? ['repeat'] : isObject(node.repeat) ? Object.keys(node.repeat) : []) : []
+  const inner = own.length ? Object.fromEntries(Object.entries(repMap).filter(([name]) => !own.includes(name))) : repMap
   const out: Record<string, unknown> = {}
-  for (const [k, v] of Object.entries(node)) out[k] = substituteRepeat(v, repMap)
+  for (const [k, v] of Object.entries(node)) out[k] = substituteRepeat(v, k === 'spec' ? inner : repMap, later)
   return out
 }
 
@@ -2811,6 +2846,11 @@ function substituteRepeat(node: unknown, repMap: Record<string, unknown>): unkno
 function compileRepeat(spec: VLSpec, ctx: CompileCtx): VLSpec {
   const rep = spec.repeat as unknown
   const child = (spec.spec ?? {}) as VLSpec
+  // (the composite marks, overlays and stack orders of a repeated view are rewritten with the repeated fields in: a rewrite reads them)
+  // (a view a repeat makes is named after the repeated spec's own name, the repeat it is in, and its values)
+  const repeatedName = (suffix: string): string => `${typeof child.name === 'string' && child.name !== '' ? `${child.name}_` : ''}${ctx.repeatPrefix}${suffix}`
+  const repeatedCell = (suffix: string, cellSpec: VLSpec): CompositeCell => ({ prefix: `${repeatedName(suffix)}_`, repeated: repeatedName(suffix), spec: cellSpec })
+  const repeated = (repMap: Record<string, unknown>): VLSpec => normalizeUnits(substituteRepeat(child, repMap), ctx.userConfig, unitStackProps) as VLSpec
 
   // layer repeat: the repeated spec becomes the layers of a single layered view
   if (isObject(rep) && Array.isArray(rep.layer)) {
@@ -2821,14 +2861,15 @@ function compileRepeat(spec: VLSpec, ctx: CompileCtx): VLSpec {
       delete c.height
       return c
     })
-    const layered: VLSpec = { ...spec, layer: layers }
+    // (rewritten together: a composite mark in one layer takes the encoding its sibling layers share)
+    const layered = normalizeUnits({ ...spec, layer: layers, repeat: undefined, spec: undefined }, ctx.userConfig, unitStackProps) as VLSpec
     delete layered.repeat
     delete layered.spec
     if (child.width !== undefined) layered.width = child.width
     if (child.height !== undefined) layered.height = child.height
     const res = compileLayered(layered, ctx)
     // vega-lite names each repeated layer after its repeat value: `child__layer_y_marks`
-    const renames = (rep.layer as unknown[]).map((v, i) => [`layer_${i}_`, `child__layer_${varName(String(v))}_`] as const)
+    const renames = (rep.layer as unknown[]).map((v, i) => [`layer_${i}_`, `${repeatedName(`child__layer_${varName(String(v))}`)}_`] as const)
     const rename = (n: unknown): unknown => {
       if (typeof n === 'string') {
         for (const [from, to] of renames) {
@@ -2907,11 +2948,11 @@ function compileRepeat(spec: VLSpec, ctx: CompileCtx): VLSpec {
         if (r !== undefined) repMap.row = r
         if (c !== undefined) repMap.column = c
         const key = `${r !== undefined ? `row_${String(r)}` : ''}${c !== undefined ? `column_${String(c)}` : ''}`
-        cells.push({ prefix: `child__${varName(key)}_`, spec: substituteRepeat(child, repMap) as VLSpec })
+        cells.push(repeatedCell(`child__${varName(key)}`, repeated(repMap)))
       }
     }
   } else {
-    for (const v of colFields) cells.push({ prefix: `child__${varName(String(v))}_`, spec: substituteRepeat(child, { repeat: v }) as VLSpec })
+    for (const v of colFields) cells.push(repeatedCell(`child__${varName(String(v))}`, repeated({ repeat: v })))
   }
   // vega-lite normalizes a repeat to a concat with `columns` (the column count, or 1 for rows alone): a grid, so the children
   // share both sizes (`childWidth`, `childHeight`) whatever their number
@@ -2954,6 +2995,9 @@ function autoMaxBins(channel: string): number {
   }
 }
 
+/** The channels whose condition may be a datum: it reads the channel's scale (the other channels' scales are named after their paint or their legend). */
+const DATUM_CONDITION_CHANNELS: ReadonlySet<string> = new Set(['color', 'size', 'opacity', 'shape', 'strokeWidth', 'strokeDash'])
+
 function parseChannel(channel: string, def: unknown): FieldDef | null {
   if (def == null) return null
   if (Array.isArray(def)) throw new VLCompileError(`channel arrays not supported: ${channel}`)
@@ -2969,7 +3013,7 @@ function parseChannel(channel: string, def: unknown): FieldDef | null {
     // a channel whose only field is conditional (color: {condition: {test, field}, value}):
     // the conditional field drives the channel's scale and legend
     const conds = (Array.isArray(raw.condition) ? raw.condition : [raw.condition]) as ChannelDef[]
-    const withField = conds.filter((c) => c.field !== undefined || (c.aggregate === 'count' && c.value === undefined && c.datum === undefined))
+    const withField = conds.filter((c) => c.field !== undefined || (c.datum !== undefined && DATUM_CONDITION_CHANNELS.has(channel)) || (c.aggregate === 'count' && c.value === undefined))
     if (withField.length > 1) throw new VLCompileError(`encoding.${channel}.condition: only one conditional field per channel is supported`)
     if (withField.length === 1) {
       const { test: _t, ...rest } = withField[0] as ChannelDef & { test?: unknown }
@@ -3576,10 +3620,14 @@ interface CompileCtx extends TransformContext {
   anySelection: boolean
   /** How many of the first transforms of the view being compiled were written on the facet around it (and not in its `spec`). */
   facetTransformCount: number
+  /** The config the user wrote (the rewrites of a repeat's cells read the mark configs that the compiled spec no longer carries). */
+  userConfig?: Record<string, unknown>
   /** The unit whose pipeline is being built. */
   currentUnit?: VLSpec
   /** The view being compiled is the child of a facet that is itself inside a facet: its pipeline stays inside the innermost cell. */
   inNestedFacet?: boolean
+  /** The name of the repeated view being compiled (`child__row_g`): a repeat inside it puts its own children's names after it. */
+  repeatPrefix: string
   /** vega-lite's `model.name` of the view being compiled ('' at the root): `concat_0`, `child`, `concat_1_child__column_a`. */
   modelName: string
   /** How many concat / facet / repeat views enclose the view being compiled (a unit inside one declares its signals in a group). */
@@ -3591,10 +3639,14 @@ interface CompileCtx extends TransformContext {
 /** The name of a child view: its parent's, then its own (vega-lite `model.getName`, which joins with `_`). */
 const childModelName = (parent: string, own: string): string => (parent ? `${parent}_${own}` : own)
 
-/** Compile `child` as the view named `own` inside the one being compiled (a concat child, a facet's cell, a repeated view). */
-function inChildView<T>(ctx: CompileCtx, own: string, facetFields: ReadonlyArray<{ channel: string; field: string }>, composite: boolean, f: () => T): T {
-  const saved = { modelName: ctx.modelName, compositeDepth: ctx.compositeDepth, facetFields: ctx.facetFields }
-  ctx.modelName = childModelName(ctx.modelName, own)
+/**
+ * Compile `child` as the view named `own` inside the one being compiled (a concat child, a facet's cell, a repeated view). A repeated view
+ * is named by its repeat alone (`repeated`), and the repeats inside it name their views after it.
+ */
+function inChildView<T>(ctx: CompileCtx, own: string, facetFields: ReadonlyArray<{ channel: string; field: string }>, composite: boolean, f: () => T, repeated?: string): T {
+  const saved = { modelName: ctx.modelName, compositeDepth: ctx.compositeDepth, facetFields: ctx.facetFields, repeatPrefix: ctx.repeatPrefix }
+  ctx.modelName = repeated ?? childModelName(ctx.modelName, own)
+  if (repeated !== undefined) ctx.repeatPrefix = repeated
   if (composite) ctx.compositeDepth++
   ctx.facetFields = [...ctx.facetFields, ...facetFields]
   try {
@@ -3603,6 +3655,7 @@ function inChildView<T>(ctx: CompileCtx, own: string, facetFields: ReadonlyArray
     ctx.modelName = saved.modelName
     ctx.compositeDepth = saved.compositeDepth
     ctx.facetFields = saved.facetFields
+    ctx.repeatPrefix = saved.repeatPrefix
   }
 }
 
@@ -3634,7 +3687,8 @@ function hashString(s: string): string {
 function hasSelectionParams(node: unknown): boolean {
   if (Array.isArray(node)) return node.some(hasSelectionParams)
   if (!isObject(node)) return false
-  if (Array.isArray(node.params) && node.params.some((p) => isObject(p) && p.select !== undefined)) return true
+  // (a composite mark takes no selection: its parameters are dropped when it is normalized)
+  if (compositeMarkOf(node) === undefined && Array.isArray(node.params) && node.params.some((p) => isObject(p) && p.select !== undefined)) return true
   for (const k of ['layer', 'hconcat', 'vconcat', 'concat']) if (hasSelectionParams(node[k])) return true
   return isObject(node.spec) && hasSelectionParams(node.spec)
 }
@@ -3661,6 +3715,7 @@ function makeCtx(top: VLSpec): CompileCtx {
     selectionIds: false,
     anySelection: hasSelectionParams(top),
     modelName: '',
+    repeatPrefix: '',
     compositeDepth: 0,
     facetFields: [],
     dn: (i) => `${dataPrefix}_${i}`,
@@ -7469,6 +7524,11 @@ function applyNonPositionConstants(update: Record<string, unknown>, spec: VLSpec
           }
           entry.scale = target.channel
           entry.field = aggFieldName(target)
+        } else if (c.datum !== undefined && DATUM_CONDITION_CHANNELS.has(channel)) {
+          const target = fields.find((f) => f.datumOnly && f.channel === channel)
+          if (!target) throw new VLCompileError(`encoding.${channel}.condition: the conditional datum has no scale`)
+          entry.scale = channel
+          entry.value = c.datum
         } else throw new VLCompileError(`encoding.${channel}.condition: datum conditions are not supported`)
         entries.push(entry)
       }
@@ -7678,6 +7738,23 @@ function showInvalidValues(spec: VLSpec, fields: FieldDef[], mark: string, scale
 
 /** The geo facts of each unit (or layer leaf) that has a projection, read by buildData and buildMarks. */
 const GEO_UNITS = new WeakMap<object, UnitGeo>()
+/**
+ * The size signals a unit's group declares for its axes. A grid is drawn across the view with the group's own `width` / `height`, unless
+ * the view has a scale on the other channel to draw it along: an axis over a view with no scale on the other channel needs that size
+ * signal, and a size the group takes from its composition (`childWidth`, a per-cell `concat_0_width`) is what it is set to.
+ */
+function axisSizeSignals(axes: ReadonlyArray<Record<string, unknown>> | undefined, positionChannels: ReadonlySet<string | undefined>, widthRef: string, heightRef: string): Record<string, unknown>[] {
+  const out: Record<string, unknown>[] = []
+  for (const orientation of ['horizontal', 'vertical'] as const) {
+    const horizontal = orientation === 'horizontal'
+    if (positionChannels.has(horizontal ? 'y' : 'x')) continue
+    if (!(axes ?? []).some((a) => (a.orient === 'bottom' || a.orient === 'top') === horizontal)) continue
+    const [name, update] = horizontal ? ['height', heightRef] : ['width', widthRef]
+    if (update !== name) out.push({ name, update })
+  }
+  return out
+}
+
 /** The projection component a compiled view fragment owns at its root (a composite may merge it with its siblings'). */
 const FRAG_PROJECTION = new WeakMap<object, ProjectionComponent>()
 /** The main dataset (in its fragment's own names) of each leaf a projection component's fit reads. */
