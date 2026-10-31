@@ -519,10 +519,7 @@ export function trellisCase(seed: number): GuideCase {
     encode: { update: { width: { signal: 'child_width' } , ...(chance(r, 0.3) ? { height: { value: int(r, 5, 25) } } : {}) } },
     ...(chance(r, 0.35) ? { axes: [{ scale: role.includes('column') ? 'cx' : 'cy', orient: role.includes('column') ? pick(r, ['top', 'bottom']) : pick(r, ['left', 'right']), domain: chance(r, 0.5), labels: chance(r, 0.5), ticks: chance(r, 0.5) }] } : {}),
   })
-  // (a header per column: more headers than the grid has columns are dropped by the layout, a situation of its own that vega-lite never makes)
-  const columnsFit = G('cols') || layout.columns === undefined || layout.columns === 0 || (layout.columns as number) >= nCats
   const chooseHeaders = (): void => {
-    if (!columnsFit) return
     if (chance(r, 0.6)) marks.push(hdr('column-header', 'colDomain', 'c', 'top', true))
     if (chance(r, 0.3)) marks.push(hdr('column-footer', 'colDomain', 'c', 'bottom', chance(r, 0.5)))
     if (twoD && chance(r, 0.6)) marks.push(hdr('row-header', 'rowDomain', 'rc', 'left', true))

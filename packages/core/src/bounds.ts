@@ -1020,6 +1020,15 @@ function typedMarkBounds(mark: SceneGroup): Bounds {
 }
 
 /**
+ * Does a child of a group add to the group's bounds? Its background box never does (the group's own width and height cover it); nor does
+ * a header or footer a grid layout left where it was for want of a column to put it in (`unbounded`).
+ */
+const countsInBounds = (child: SceneNode): boolean => {
+  const c = child as Record<string, unknown>
+  return c._bg !== true && c.unbounded !== true
+}
+
+/**
  * The bounds vega's Bound pass leaves on a LAID-OUT mark (`mark.bounds`),
  * recursively: a group is its box and the union of its children's, stroke
  * included, translated to its position (marks/group.js `bound`); a child axis /
@@ -1043,10 +1052,10 @@ export function layoutBounds(node: SceneNode, out = new Bounds()): Bounds {
       return c.marktype !== undefined && c.marktype !== 'group' && Array.isArray(c.items) ? typedMarkBounds(c) : layoutBounds(child)
     }
     if (hasClippedMark(g.items)) {
-      eachMarkBounds(g.items.filter((child) => (child as Record<string, unknown>)._bg !== true), g.width || 0, g.height || 0, measure, (mb) => { b.union(mb) })
+      eachMarkBounds(g.items.filter(countsInBounds), g.width || 0, g.height || 0, measure, (mb) => { b.union(mb) })
     } else {
       for (const child of g.items) {
-        if ((child as Record<string, unknown>)._bg === true) continue
+        if (!countsInBounds(child)) continue
         const c = child as SceneGroup
         if (c.marktype !== undefined && c.marktype !== 'group' && Array.isArray(c.items)) b.union(typedMarkBounds(c))
         else layoutBounds(child, b)
@@ -1069,7 +1078,7 @@ export function boundGroupItem(bounds: Bounds, group: SceneGroup): Bounds {
       eachMarkBounds(items.filter((child) => (child as Record<string, unknown>)._bg !== true), group.width || 0, group.height || 0, (child) => boundLeaf(new Bounds(), child as SceneItem), (mb) => { bounds.union(mb) })
     } else {
       for (let j = 0; j < items.length; ++j) {
-        if ((items[j] as Record<string, unknown>)._bg === true) continue
+        if (!countsInBounds(items[j]!)) continue
         boundLeaf(bounds, items[j] as SceneItem)
       }
     }

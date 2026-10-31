@@ -51,7 +51,7 @@ import { valueKey, valuesEqual } from './fingerprint.js'
 import { rowsEqual, sourceNames, type PulseChange } from './pulse.js'
 import { aggregateRows, fieldsOf, groupKeyFn } from './transform-agg.js'
 import { flattenLength } from './transform-basic.js'
-import { layoutFacet } from './trellis.js'
+import { layoutFacet, type GridPlace } from './trellis.js'
 import { boundAxisGroup, boundLegendGroup, boundGroupItem, boundLeaf, boundTypedMark, Bounds, layoutBounds, eachMarkBounds, hasClippedMark } from './bounds.js'
 import { rectItemPath } from './render.js'
 import { buildAxis as buildAxisGuide, tickPlacement } from './guide-axis.js'
@@ -371,6 +371,8 @@ interface AxisAbort {
 interface PassRecord {
   guides: Map<string, string[]>
   scales: Map<string, { key: string; bins: boolean }>
+  /** Where a pass left the groups a grid layout placed, per layout (see `layoutFacet`): the next pass starts from them. */
+  places: Map<string, GridPlace[]>
 }
 
 /** The previous pass's record (undefined for the first) and the one this pass writes. */
@@ -1319,6 +1321,7 @@ function buildAxisAndLegend(
       to.y2 = Math.max(to.y2, b.y2)
     }
     for (const g of anchorItems) {
+      if (g.unbounded) continue
       const scoped = (g as Record<string, unknown>)._scope === true
       if (g.marktype === 'group' && (g.role === 'scope' || g.role === 'mark' || (scoped && VIEW_ROLES.has(String(g.role))))) {
         // a scope counts as everything inside it and its own frame, clipped cells included
@@ -1372,6 +1375,7 @@ function buildAxisAndLegend(
  * viewBounds), everything else recursively.
  */
 function measureGuideGroup(g: SceneGroup): Bounds {
+  if (g.unbounded) return new Bounds()
   if (g.role === 'axis') return boundAxisGroup(g)
   const cacheable = cacheableGroupBounds(g)
   if (cacheable) {
@@ -1823,7 +1827,7 @@ function buildContentPass(
     chart, fitted ? { ...input, width: cw, height: ch } : input, txn,
     fitted ? { width: true, height: true } : { width: input.width != null, height: input.height != null },
     signed,
-    order !== undefined ? { prev: order.prev, cur: { guides: new Map(), scales: new Map() } } : undefined,
+    order !== undefined ? { prev: order.prev, cur: { guides: new Map(), scales: new Map(), places: new Map() } } : undefined,
   )
   const { ctx } = prepared
   ctx.abort.cut = cut
@@ -1867,7 +1871,7 @@ function buildContentPass(
   const hasLayout = ctx.chart.layout != null
   if (hasLayout && cut === undefined) {
     try {
-      layoutFacet({ marktype: 'group', items } as unknown as SceneGroup, resolveLayoutOptions(ctx.chart.layout!, ctx))
+      layoutFacet({ marktype: 'group', items } as unknown as SceneGroup, resolveLayoutOptions(ctx.chart.layout!, ctx), gridMemory(ctx, 'root'))
     } catch {
       // vega's dataflow logs the layout error and renders the scene unlayouted:
       // cells keep their encoded (0,0) anchors and the view skips overflow growth.
@@ -4543,7 +4547,7 @@ function buildGroupItem(mark: CompiledMark, ctx: EvalContext, src: GroupSource):
     // ViewLayout: a `layout` grid positions the child groups (headers, footers, titles, cells) first
     if (mark.layout && !scope.unsettled) {
       try {
-        layoutFacet({ marktype: 'group', items: content } as unknown as SceneGroup, resolveLayoutOptions(mark.layout, childCtx))
+        layoutFacet({ marktype: 'group', items: content } as unknown as SceneGroup, resolveLayoutOptions(mark.layout, childCtx), gridMemory(childCtx, childCtx.scope.path.join('/')))
       } catch {
         // a grid the layout cannot take (vega's gridLayout throws on e.g. fractional `columns`): the dataflow
         // logs it and the cells stay where their encode put them; the view also skips overflow growth
@@ -5597,6 +5601,13 @@ function buildAxis(axis: CompiledAxis, ctx: EvalContext, index: number): SceneGr
  * in its place, a new key makes a new item after the others, and only then do the first pass's tuples leave: an item whose
  * tuple was not replaced exits. The scene's items are what is left, in that order.
  */
+/** What a grid layout carries between the passes of a fit view, if there are two. */
+function gridMemory(ctx: EvalContext, id: string): { prev: readonly GridPlace[] | undefined; keep(places: GridPlace[]): void } | undefined {
+  const memory = ctx.passMemory
+  if (memory === undefined) return undefined
+  return { prev: memory.prev?.places.get(id), keep: (places) => { memory.cur.places.set(id, places) } }
+}
+
 function retainGuideOrder(rows: Row[], memory: PassMemory, id: string): Row[] {
   const prev = memory.prev?.guides.get(id)
   let out = rows
