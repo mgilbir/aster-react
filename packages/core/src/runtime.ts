@@ -8,7 +8,7 @@ import { ingestRows, readData, type DataFormatSpec } from './data-format.js'
 import { applyTransforms, applyTransformsToSharedRows, compileExprTransform, sortOrder, getField, geoJSONPath, aggregateGroup, type Row, type TransformContext } from './transform.js'
 import { fieldOf } from './transform-agg.js'
 import { atRandomSite, contentKey, mayDrawRandom, replayable } from './random-tape.js'
-import { activeMeter, withLimits, boundedCount, checkRowCount, meterItems, meterTick, AsterLimitError } from './limits.js'
+import { activeMeter, withLimits, checkRowCount, meterItems, meterTick, AsterLimitError } from './limits.js'
 import { withTextMetricsProvider } from './text-metrics.js'
 import { AsterUrlError } from './url-policy.js'
 import { SpecParseError } from './parse-error.js'
@@ -51,7 +51,7 @@ import { valueKey, valuesEqual } from './fingerprint.js'
 import { rowsEqual, sourceNames, type PulseChange } from './pulse.js'
 import { aggregateRows, fieldsOf, groupKeyFn } from './transform-agg.js'
 import { flattenLength } from './transform-basic.js'
-import { layoutFacet } from './trellis.js'
+import { layoutFacet, type GridPlace } from './trellis.js'
 import { boundAxisGroup, boundLegendGroup, boundGroupItem, boundLeaf, boundTypedMark, Bounds, layoutBounds, eachMarkBounds, hasClippedMark } from './bounds.js'
 import { rectItemPath } from './render.js'
 import { buildAxis as buildAxisGuide, tickPlacement } from './guide-axis.js'
@@ -371,6 +371,10 @@ interface AxisAbort {
 interface PassRecord {
   guides: Map<string, string[]>
   scales: Map<string, { key: string; bins: boolean }>
+  /** Where a pass left the groups a grid layout placed, per layout (see `layoutFacet`): the next pass starts from them. */
+  places: Map<string, GridPlace[]>
+  /** What a legend was before its layout, per legend (see `LegendBuildInput.relayout`). */
+  legends: Map<string, string>
 }
 
 /** The previous pass's record (undefined for the first) and the one this pass writes. */
@@ -1319,6 +1323,7 @@ function buildAxisAndLegend(
       to.y2 = Math.max(to.y2, b.y2)
     }
     for (const g of anchorItems) {
+      if (g.unbounded) continue
       const scoped = (g as Record<string, unknown>)._scope === true
       if (g.marktype === 'group' && (g.role === 'scope' || g.role === 'mark' || (scoped && VIEW_ROLES.has(String(g.role))))) {
         // a scope counts as everything inside it and its own frame, clipped cells included
@@ -1345,6 +1350,7 @@ function buildAxisAndLegend(
         const ly = guideNumber(ctx, x.props.y)
         if (lx !== undefined) x.group.x = lx
         if (ly !== undefined) x.group.y = ly
+        if (lx === undefined || ly === undefined) (x.group as unknown as { unplaced?: { x: boolean; y: boolean } }).unplaced = { x: lx === undefined, y: ly === undefined }
         continue
       }
       const list = byOrient.get(orient) ?? []
@@ -1371,6 +1377,7 @@ function buildAxisAndLegend(
  * viewBounds), everything else recursively.
  */
 function measureGuideGroup(g: SceneGroup): Bounds {
+  if (g.unbounded) return new Bounds()
   if (g.role === 'axis') return boundAxisGroup(g)
   const cacheable = cacheableGroupBounds(g)
   if (cacheable) {
@@ -1383,11 +1390,26 @@ function measureGuideGroup(g: SceneGroup): Bounds {
   return bounds
 }
 
+/**
+ * What a top-level guide adds to the bounds of the view. A view that fits its viewport takes from a legend only the extent across the
+ * side it sits on (a legend that overran the chart would otherwise squeeze it to nothing): a legend in a corner, or placed freely,
+ * takes nothing. Every other guide adds its whole box.
+ */
+function shareOfView(b: Bounds, group: SceneGroup, fitting: boolean): Bounds {
+  if (!fitting || group.role !== 'legend') return b
+  const side = (group as unknown as { legendProps?: { orient?: unknown } }).legendProps?.orient
+  const share = new Bounds()
+  if (side === 'left' || side === 'right') { share.x1 = b.x1; share.x2 = b.x2 }
+  else if (side === 'top' || side === 'bottom') { share.y1 = b.y1; share.y2 = b.y2 }
+  return share
+}
+
 function computeGuidePadding(
   items: SceneGroup[],
   width: number,
   height: number,
   base: { top: number; right: number; bottom: number; left: number },
+  fitting = false,
 ): { top: number; right: number; bottom: number; left: number } {
   // Vega's autosize unions the *recursive* bounds of every top-level guide
   // (axis/legend) and mark into the viewBounds and grows the padding by the
@@ -1400,6 +1422,7 @@ function computeGuidePadding(
   let maxY = height
 
   const grow = (b: Bounds, group: SceneGroup): void => {
+    b = shareOfView(b, group, fitting)
     if (b.empty()) return
     // Axis bounds carry fp residue from measured label/title geometry where
     // vega's arithmetic is exact; collapse only that sub-ulp residue. Mark and
@@ -1813,7 +1836,7 @@ function buildContentPass(
     chart, fitted ? { ...input, width: cw, height: ch } : input, txn,
     fitted ? { width: true, height: true } : { width: input.width != null, height: input.height != null },
     signed,
-    order !== undefined ? { prev: order.prev, cur: { guides: new Map(), scales: new Map() } } : undefined,
+    order !== undefined ? { prev: order.prev, cur: { guides: new Map(), scales: new Map(), places: new Map(), legends: new Map() } } : undefined,
   )
   const { ctx } = prepared
   ctx.abort.cut = cut
@@ -1857,7 +1880,7 @@ function buildContentPass(
   const hasLayout = ctx.chart.layout != null
   if (hasLayout && cut === undefined) {
     try {
-      layoutFacet({ marktype: 'group', items } as unknown as SceneGroup, resolveLayoutOptions(ctx.chart.layout!, ctx))
+      layoutFacet({ marktype: 'group', items } as unknown as SceneGroup, resolveLayoutOptions(ctx.chart.layout!, ctx), gridMemory(ctx, 'root'))
     } catch {
       // vega's dataflow logs the layout error and renders the scene unlayouted:
       // cells keep their encoded (0,0) anchors and the view skips overflow growth.
@@ -1870,7 +1893,7 @@ function buildContentPass(
   for (const g of guideGroups) items.push(g)
 
   // Top-level title. (A pass that stopped at a failing dataset or signal never made it: it is ranked after them.)
-  const titleGroup = stopped || ctx.datasetAborted ? null : buildTitleGroup(ctx.chart.title, items, width, height, ctx.rawGuides, ctx)
+  const titleGroup = stopped || ctx.datasetAborted ? null : buildTitleGroup(ctx.chart.title, items, width, height, ctx.rawGuides, ctx, undefined, ctx.chart.autosize === 'fit' || ctx.chart.autosize === 'fit-x' || ctx.chart.autosize === 'fit-y')
   if (titleGroup) items.push(titleGroup)
   // The root group's width / height are the view's `width` / `height` signals (0
   // for a composition that sizes only its children), whatever the grid inside covers.
@@ -1894,7 +1917,7 @@ function buildContentPass(
     || ctx.rawGuides
     || ctx.chart.autosize === 'none'
     ? ctx.chart.padding
-    : computeGuidePadding(items, width, height, ctx.chart.padding)
+    : computeGuidePadding(items, width, height, ctx.chart.padding, ctx.chart.autosize === 'fit' || ctx.chart.autosize === 'fit-x' || ctx.chart.autosize === 'fit-y')
   const ordered = paintOrderOf(items)
   return { record: ctx.passMemory?.cur, items: ordered, padding, ctx, width, height, hasLayout, frame }
 }
@@ -2143,6 +2166,8 @@ function buildTitleGroup(
   ctx?: EvalContext,
   /** The datum a group title's `parent[...]` reads (its facet key). */
   parent?: Row,
+  /** The view fits its viewport: what a legend adds to the bounds the title sits against is cut (see `shareOfView`). */
+  fitting = false,
 ): SceneGroup | null {
   if (!title0 || !ctx) return null
   // What the title sits against: the view's frame, the marks and the bounds of the axes and legends (axes measured in their own
@@ -2150,8 +2175,8 @@ function buildTitleGroup(
   const b = new Bounds().set(0, 0, width, height)
   const measured = (items as SceneGroup[]).filter((g) => g.role !== 'title')
   // (a clipped mark -- an interval selection's brush -- has its bounds cut to the frame: Bound's boundClip)
-  if (hasClippedMark(measured)) eachMarkBounds(measured, width, height, (n) => measureGuideGroup(n as SceneGroup), (mb) => { b.union(mb) })
-  else for (const g of measured) b.union(measureGuideGroup(g))
+  if (hasClippedMark(measured)) eachMarkBounds(measured, width, height, (n) => measureGuideGroup(n as SceneGroup), (mb, n) => { b.union(shareOfView(mb, n as SceneGroup, fitting)) })
+  else for (const g of measured) b.union(shareOfView(measureGuideGroup(g), g, fitting))
   // (a group title reads its facet datum as `parent`)
   const hostCtx = parent !== undefined ? { ...ctx, signalParams: { ...ctx.signalParams, parent } } : ctx
   const built = buildTitleGuide({
@@ -4533,7 +4558,7 @@ function buildGroupItem(mark: CompiledMark, ctx: EvalContext, src: GroupSource):
     // ViewLayout: a `layout` grid positions the child groups (headers, footers, titles, cells) first
     if (mark.layout && !scope.unsettled) {
       try {
-        layoutFacet({ marktype: 'group', items: content } as unknown as SceneGroup, resolveLayoutOptions(mark.layout, childCtx))
+        layoutFacet({ marktype: 'group', items: content } as unknown as SceneGroup, resolveLayoutOptions(mark.layout, childCtx), gridMemory(childCtx, childCtx.scope.path.join('/')))
       } catch {
         // a grid the layout cannot take (vega's gridLayout throws on e.g. fractional `columns`): the dataflow
         // logs it and the cells stay where their encode put them; the view also skips overflow growth
@@ -5154,6 +5179,7 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext, index: number): S
     limit: +(guideScalar(ctx, spec.symbolLimit ?? config.symbolLimit) as number),
     formatSpecifier: specifierOf(spec.format), formatType,
     locale: locale(undefined), host, style: guideStyles(ctx), raw: !!ctx.rawGuides,
+    ...(ctx.passMemory !== undefined ? { relayout: legendMemory(ctx.passMemory, `l${ctx.scope.path.join('/')}:${index}`) } : {}),
   })
   const g = built.group
   const group = {
@@ -5271,15 +5297,13 @@ function viewSignal(ctx: EvalContext, name: 'width' | 'height'): number {
 
 /**
  * An axis whose `orient` is a signal, with the signal's value in (vega: the axis group's `orient` property,
- * which the layout and every guide mark's encode read). The config blocks it picks up follow the value's class.
+ * which the layout and every guide mark's encode read).
  */
 function resolveAxisOrient(axis: CompiledAxis, ctx: EvalContext): CompiledAxis {
   if (!axis.orientSignal) return axis
   let value: unknown
   try { value = ctx.runtime.expr(axis.orientSignal.signal)({}, ctx.signalParams) } catch (e) { reportEvalError(ctx, e); value = undefined }
-  const orient = typeof value === 'string' ? value : ''
-  const variants = axis.orientSignal.variants
-  return { ...(ownGet(variants, orient) ?? variants['']!), orient }
+  return { ...axis, orient: typeof value === 'string' ? value : '' }
 }
 
 /** A guide property that may be a signal, as the value the signal holds. */
@@ -5513,12 +5537,10 @@ function buildAxis(axis: CompiledAxis, ctx: EvalContext, index: number): SceneGr
   } catch (e) {
     return axisTicksFailed(axis, ctx, e, index)
   }
-  // The approximate tick count used for label formatting. When the axis omits
-  // tickCount, vega's axis ticks operator defaults to 10 (see vega-encode
-  // AxisTicks: `_.count == null ? 10 : _.count`); matching that matters for
-  // log-scale labels, whose formatter only labels a subset of ticks depending
-  // on the count.
-  const count0 = (typeof axis.tickCount === "number") ? axis.tickCount : (axis.tickCount && typeof axis.tickCount === "object" && axis.tickCount.signal) ? (ctx.runtime.expr(axis.tickCount.signal)({}, ctx.signalParams) as number) || 10 : 10
+  // The approximate tick count used for label formatting: the axis's tickCount, else one per explicit value, else 10 (vega's
+  // AxisTicks tally); it matters for log-scale labels, whose formatter only labels a subset of ticks depending on the count,
+  // and for the precision of a span format.
+  const count0 = (typeof axis.tickCount === "number") ? axis.tickCount : (axis.tickCount && typeof axis.tickCount === "object" && axis.tickCount.signal) ? (ctx.runtime.expr(axis.tickCount.signal)({}, ctx.signalParams) as number) || 10 : tallyOfValues(axisValues(axis, ctx))
   // (AxisTicks formats with tickCount(scale, tally, minstep) too: a scale with bins asks for a tick per boundary, a minimum step
   // thins the count)
   const count = labelTickCount(axis, scale, count0, ctx)
@@ -5548,7 +5570,7 @@ function buildAxis(axis: CompiledAxis, ctx: EvalContext, index: number): SceneGr
   const guides = chartGuides(ctx.chart)
   const built = buildAxisGuide({
     store: guides.evals > 1 ? (guides.defs ??= new Map()) : undefined, keep: guides.evals > 1,
-    spec: own, cfg, scale: axis.scale, orient, encode: (axis.encode ?? NO_PROPS) as Record<string, UserEncode | undefined>,
+    spec: own, cfg, scale: axis.scale, orient, orientSignal: axis.orientSignal !== undefined, encode: (axis.encode ?? NO_PROPS) as Record<string, UserEncode | undefined>,
     ticks: rows, distinctTicks: !axisValues(axis, ctx) && DISTINCT_TICK_SCALES.has(ctx.scaleTypes.get(axis.scale) ?? ''), width: ctx.width, height: ctx.height, raw: !!ctx.rawGuides, host: guideHost(ctx), style: guideStyles(ctx),
   })
   const knownOrient = orient === 'top' || orient === 'bottom' || orient === 'left' || orient === 'right'
@@ -5591,6 +5613,18 @@ function buildAxis(axis: CompiledAxis, ctx: EvalContext, index: number): SceneGr
  * in its place, a new key makes a new item after the others, and only then do the first pass's tuples leave: an item whose
  * tuple was not replaced exits. The scene's items are what is left, in that order.
  */
+/** What a legend carries between the passes of a fit view. */
+function legendMemory(memory: PassMemory, id: string): { was: string | undefined; note(state: string): void } {
+  return { was: memory.prev?.legends.get(id), note: (state) => { memory.cur.legends.set(id, state) } }
+}
+
+/** What a grid layout carries between the passes of a fit view, if there are two. */
+function gridMemory(ctx: EvalContext, id: string): { prev: readonly GridPlace[] | undefined; keep(places: GridPlace[]): void } | undefined {
+  const memory = ctx.passMemory
+  if (memory === undefined) return undefined
+  return { prev: memory.prev?.places.get(id), keep: (places) => { memory.cur.places.set(id, places) } }
+}
+
 function retainGuideOrder(rows: Row[], memory: PassMemory, id: string): Row[] {
   const prev = memory.prev?.guides.get(id)
   let out = rows
@@ -5627,6 +5661,9 @@ function vetGuideLinks(g: SceneGroup, ctx: EvalContext): void {
 /** An axis's `values`: what a signal holds when the ticks are made; null, undefined, 0 or '' is no values at all. */
 /** Scales whose own ticks are strictly increasing (d3's) or the scale's distinct domain: no two ticks have one value. */
 const DISTINCT_TICK_SCALES = new Set(['linear', 'log', 'pow', 'sqrt', 'symlog', 'time', 'utc', 'band', 'point'])
+
+/** The tick count the labels are formatted for when the axis gives none: one per explicit value, else ten. */
+const tallyOfValues = (values: unknown): number => (Array.isArray(values) ? values.length : 10)
 
 function axisValues(axis: CompiledAxis, ctx: EvalContext): unknown {
   const vs: unknown = axis.values
@@ -5717,83 +5754,8 @@ function axisTicks(axis: CompiledAxis, scale: Scale, ctx: EvalContext): unknown[
     if (typeof counted === 'number') count = counted
   }
 
-  // For continuous non-time scales with tickMinStep but no tickCount, generate
-  // ticks directly from the scale domain using the step value.
-  // For time/utc scales, d3's time ticks already produce calendar-aligned
-  // intervals, so we use scaleTicks normally and apply tickMinStep as a filter.
-  // Band/point scales are excluded: vega's tickValues returns their domain
-  // directly (no .ticks method), so neither count nor minstep reach the ticks.
-  if (tickMinStep != null && tickMinStep > 0 && count == null
-      && scale.type !== 'time' && scale.type !== 'utc'
-      && scale.type !== 'band' && scale.type !== 'point') {
-    const rawDomain = scale.domain()
-    const toNum = (v: unknown): number => v instanceof Date ? v.getTime() : typeof v === 'number' ? v : Number(v)
-    if (rawDomain.length >= 2) {
-      const d0 = toNum(rawDomain[0])
-      const d1 = toNum(rawDomain[rawDomain.length - 1])
-      if (Number.isFinite(d0) && Number.isFinite(d1)) {
-        const ticks: unknown[] = []
-        const eps = tickMinStep * 1e-9
-        for (let v = d0; v <= d1 + eps; v += tickMinStep) {
-          ticks.push(v)
-        }
-        return ticks
-      }
-    }
-  }
-
-  // For time/utc scales, generate calendar-aligned ticks when tickMinStep is
-  // specified (matching vega's AxisTicks behavior). The tickMinStep signal
-  // encodes the duration of a calendar unit (e.g. one month in ms). We step
-  // through calendar months from the domain start to end to produce ticks that
-  // align to month boundaries, avoiding the problem of fixed-interval stepping
-  // across months of different lengths.
-  if ((scale.type === 'time' || scale.type === 'utc') && tickMinStep != null && tickMinStep > 0 && count == null) {
-    const rawDomain = scale.domain()
-    if (rawDomain.length >= 2) {
-      const toD = (v: unknown): Date => v instanceof Date ? v : new Date(Number(v))
-      const d0 = toD(rawDomain[0])
-      const d1 = toD(rawDomain[rawDomain.length - 1])
-      if (Number.isFinite(d0.getTime()) && Number.isFinite(d1.getTime())) {
-        const ticks: unknown[] = []
-        const cur = new Date(d0.getTime())
-        // one tick per calendar month: bound the span before stepping through it (C9)
-        boundedCount((d1.getTime() - d0.getTime()) / (28 * 86_400_000) + 1, 'calendar month ticks')
-        while (cur.getTime() <= d1.getTime() + 1000) {
-          ticks.push(new Date(cur.getTime()))
-          cur.setUTCMonth(cur.getUTCMonth() + 1)
-        }
-        return ticks
-      }
-    }
-  }
-  if (scale.type === 'time' || scale.type === 'utc') {
-    // vega applies tickMinStep through tickCount's count reduction (the
-    // calendar stepping above handles the count==null case); the tick values
-    // themselves come straight from the scale's calendar ticks.
-    return scaleTicks(scale, count)
-  }
-
-  const ticks = scaleTicks(scale, count)
-  // When tickMinStep is specified, filter ticks so consecutive values are at
-  // least tickMinStep apart (matching vega's AxisTicks + tickMinStep filter).
-  // Band/point scales: their domain comes through untouched (no .ticks), so
-  // no filtering — see the generation guard above.
-  if (tickMinStep != null && tickMinStep > 0 && ticks.length > 1
-      && scale.type !== 'band' && scale.type !== 'point') {
-    const toNum = (v: unknown): number => v instanceof Date ? v.getTime() : typeof v === 'number' ? v : Number(v)
-    const filtered: unknown[] = [ticks[0]]
-    let last = toNum(ticks[0])
-    for (let i = 1; i < ticks.length; i++) {
-      const t = toNum(ticks[i])
-      if (Math.abs(t - last) >= tickMinStep - 1e-6) {
-        filtered.push(ticks[i])
-        last = t
-      }
-    }
-    return filtered
-  }
-  return ticks
+  // (the minimum step acts only through the tick count above, as in vega: a log scale's ticks may sit closer than it)
+  return scaleTicks(scale, count)
 }
 
 function axisLabelFormat(axis: CompiledAxis, scale: Scale, count: number, ctx?: EvalContext, noSkip = false): (v: unknown) => string {
