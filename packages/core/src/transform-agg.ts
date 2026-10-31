@@ -369,6 +369,9 @@ const HIGH = 64
 const LOW_ROW = 128
 const HIGH_ROW = 256
 const ROWS = 512
+const SUMS = SUM | PRODUCT | EWMA
+const MOMENTS = MEAN | DEVIATION
+const EXTREMES = LOW | HIGH | LOW_ROW | HIGH_ROW
 
 type ReadFn = (acc: Accumulator, rows: RowBag | null, get: Get) => unknown
 
@@ -410,19 +413,9 @@ export class Accumulator {
     if (value !== value) return
     this.valid++
     const stats = this.plan.stats
-    const x = value as number
-    if (stats & SUM) this.sum += +x
-    if (stats & PRODUCT) this.product *= x
-    if (stats & MEAN) {
-      this.meanShift = x - this.mean
-      this.mean += this.meanShift / this.valid
-    }
-    if (stats & EWMA) this.ewma = this.plan.rate * this.ewma + x
-    if (stats & DEVIATION) this.deviation += this.meanShift * (x - this.mean)
-    if (stats & LOW_ROW && x < (this.low as number)) this.lowRow = row
-    if (stats & HIGH_ROW && x > (this.high as number)) this.highRow = row
-    if (stats & LOW && (x < (this.low as number) || this.low === undefined)) this.low = x
-    if (stats & HIGH && (x > (this.high as number) || this.high === undefined)) this.high = x
+    if (stats & SUMS) this.takeSums(value as number, stats)
+    if (stats & MOMENTS) this.takeMoments(value as number, stats)
+    if (stats & EXTREMES) this.takeExtremes(value as number, row, stats)
   }
 
   release(value: unknown): void {
@@ -430,15 +423,48 @@ export class Accumulator {
     if (value !== value) return
     this.valid--
     const stats = this.plan.stats
-    const x = value as number
+    if (stats & SUMS) this.releaseSums(value as number, stats)
+    if (stats & MOMENTS) this.releaseMoments(value as number, stats)
+    if (stats & EXTREMES) this.releaseExtremes(value as number, stats)
+  }
+
+  // (the three groups of statistics are independent of each other; inside a group the order matters)
+  private takeSums(x: number, stats: number): void {
+    if (stats & SUM) this.sum += +x
+    if (stats & PRODUCT) this.product *= x
+    if (stats & EWMA) this.ewma = this.plan.rate * this.ewma + x
+  }
+
+  private takeMoments(x: number, stats: number): void {
+    if (stats & MEAN) {
+      this.meanShift = x - this.mean
+      this.mean += this.meanShift / this.valid
+    }
+    if (stats & DEVIATION) this.deviation += this.meanShift * (x - this.mean)
+  }
+
+  private takeExtremes(x: number, row: Row, stats: number): void {
+    if (stats & LOW_ROW && x < (this.low as number)) this.lowRow = row
+    if (stats & HIGH_ROW && x > (this.high as number)) this.highRow = row
+    if (stats & LOW && (x < (this.low as number) || this.low === undefined)) this.low = x
+    if (stats & HIGH && (x > (this.high as number) || this.high === undefined)) this.high = x
+  }
+
+  private releaseSums(x: number, stats: number): void {
     if (stats & SUM) this.sum -= x
     if (stats & PRODUCT) this.product /= x
+    if (stats & EWMA) this.ewma = (this.ewma - x / this.plan.rate ** (this.valid - 1)) / this.plan.rate
+  }
+
+  private releaseMoments(x: number, stats: number): void {
     if (stats & MEAN) {
       this.meanShift = x - this.mean
       this.mean -= this.valid ? this.meanShift / this.valid : this.mean
     }
-    if (stats & EWMA) this.ewma = (this.ewma - x / this.plan.rate ** (this.valid - 1)) / this.plan.rate
     if (stats & DEVIATION) this.deviation -= this.meanShift * (x - this.mean)
+  }
+
+  private releaseExtremes(x: number, stats: number): void {
     if (stats & LOW_ROW && x <= (this.low as number)) this.lowRow = undefined
     if (stats & HIGH_ROW && x >= (this.high as number)) this.highRow = undefined
     // a removed extreme leaves NaN as a mark: the next read looks the extreme up among the rows left
@@ -584,15 +610,21 @@ export class MeasureGroup {
   private readonly rows: RowBag | null
 
   constructor(private readonly set: MeasureSet, random: () => number) {
-    this.accs = set.fields.map((plan) => new Accumulator(plan))
+    this.accs = MeasureGroup.accumulatorsOf(set)
     this.rows = set.needsRows ? new RowBag(random) : null
+  }
+
+  private static accumulatorsOf(set: MeasureSet): Accumulator[] {
+    const accs = new Array<Accumulator>(set.fields.length)
+    for (let i = 0; i < accs.length; i++) accs[i] = new Accumulator(set.fields[i]!)
+    return accs
   }
 
   /** Back to an empty group, as a window does between partitions. */
   reset(): void {
     this.size = 0
     this.rows?.clear()
-    this.accs = this.set.fields.map((plan) => new Accumulator(plan))
+    this.accs = MeasureGroup.accumulatorsOf(this.set)
   }
 
   add(row: Row): void {
@@ -679,8 +711,6 @@ interface Cell {
   group: MeasureGroup
   /** The group's output row: its group-by values (from the row that opened it), then the measures. */
   tuple: Row
-  /** The names written onto the group's tuple (joinaggregate copies them onto each member). */
-  names?: string[]
 }
 
 interface Grouping {
@@ -773,19 +803,14 @@ function groupingFor(p: AggregateParams, random: () => number): Grouping {
   return newGrouping(p.groupby, p.key, set, random)
 }
 
-/** Fold `rows` into the groups of `g`, spending the wall-clock budget as it goes. */
-function feed(g: Grouping, rows: readonly Row[], what: string): void {
-  for (let i = 0; i < rows.length; i++) {
-    const row = rows[i]!
-    cellAt(g, g.keyOf(row), row).group.add(row)
-    if ((i & 255) === 255) meterTick(what, 256)
-  }
-}
-
 /** vega `aggregate`: one output row per group, in order of first appearance. */
 export function aggregateRows(rows: readonly Row[], p: AggregateParams, random: () => number = lcg(SEED)): Row[] {
   const g = groupingFor(p, random)
-  feed(g, rows, 'aggregate')
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i]!
+    cellAt(g, g.keyOf(row), row).group.add(row)
+    if ((i & 255) === 255) meterTick('aggregate', 256)
+  }
   if (p.cross && g.dims.length > 1) crossFill(g)
   return g.order.map(finishCell)
 }
@@ -798,15 +823,16 @@ export function joinAggregateRows(rows: readonly Row[], p: AggregateParams, rand
   const out = owned ? rows.slice() : rows.map((r) => ({ ...r }))
   // Vega's JoinAggregate declares no `aggregate_params`, `drop` or `cross`: they are not read (an exponential gets no ratio)
   const g = groupingFor({ groupby: p.groupby, fields: p.fields, ops: p.ops, as: p.as, key: p.key }, random)
-  feed(g, out, 'joinaggregate')
-  for (const cell of g.order) {
-    finishCell(cell)
-    cell.names = Object.keys(cell.tuple)
+  for (let i = 0; i < out.length; i++) {
+    const row = out[i]!
+    cellAt(g, g.keyOf(row), row).group.add(row)
+    if ((i & 255) === 255) meterTick('joinaggregate', 256)
   }
+  for (const cell of g.order) finishCell(cell)
   for (const row of out) {
     const cell = g.cells[g.keyOf(row)]!
-    const names = cell.names!
-    for (let i = 0; i < names.length; i++) row[names[i]!] = cell.tuple[names[i]!]
+    const tuple = cell.tuple
+    for (const name in tuple) row[name] = tuple[name]
   }
   return out
 }
