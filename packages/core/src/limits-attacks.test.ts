@@ -248,28 +248,39 @@ describe('wall clock is sampled inside synchronous work (C7)', () => {
   }, T)
 
   it('the fit loop shares one budget instead of restarting it per iteration', async () => {
-    // autosize:fit builds the content several times. Calibrate: one unlimited run
-    // evaluation takes T; a budget of 0.6 T is more than any single build but less than all of
-    // them, so the budget must run out INSIDE a later build (any inner phase, e.g.
-    // "startup" or "mark encoding"). With the budget restarted per build, nothing trips
-    // until the outer renderSpec check after the whole evaluation ("evaluate").
+    // autosize:fit builds the content twice. The budget must be ONE deadline for the whole call, so it
+    // runs out INSIDE the second build (any inner phase, e.g. "startup" or "mark encoding"). With the
+    // budget restarted per build, neither build alone exceeds it and nothing trips until the outer
+    // renderSpec check after the whole evaluation ("evaluate").
+    //
+    // The clock is VIRTUAL: performance.now() returns the number of times it has been read. Every
+    // budget check reads it once, so "time" is the amount of metered work done, which is the same on a
+    // quiet and on a saturated machine. (A budget calibrated as 0.6 x a measured wall-clock evaluation
+    // failed one run in ten on a machine oversubscribed 3x: calibration and attack saw different speeds,
+    // and the budget ran out in a stretch with no check, or not at all.) Calibrate by counting the reads
+    // of one whole call under a budget too large to trip; the first build is about half of them (it
+    // ends near 0.5), so 0.75 of the total is more than either build alone and less than both together.
     const r = await attack(`
       const rows = Array.from({ length: 100000 }, (_, i) => ({ x: i, y: i % 100 }))
       const spec = { autosize: 'fit', width: 300, height: 200, data: [{ name: 't' }],
         scales: [{ name: 'x', type: 'linear', domain: { data: 't', field: 'x' }, range: 'width' }, { name: 'y', type: 'linear', domain: { data: 't', field: 'y' }, range: 'height' }],
         marks: [{ type: 'symbol', from: { data: 't' }, encode: { update: { x: { scale: 'x', field: 'x' }, y: { scale: 'y', field: 'y' } } } }],
         axes: [{ orient: 'bottom', scale: 'x', title: 'a long title' }, { orient: 'left', scale: 'y' }] }
-      const chart = core.compileChart(spec)
-      core.evaluateChart(chart, { data: { t: rows } }) // warm up
-      const t1 = performance.now()
-      core.evaluateChart(chart, { data: { t: rows } })
-      const full = performance.now() - t1
+      const realNow = performance.now
+      let reads = 0
+      performance.now = () => ++reads
       try {
-        core.renderSpec(spec, { data: { t: rows }, limits: { maxTimeMs: full * 0.6 } })
-      } catch (e) {
-        if (/during (compile|evaluate|render)$/.test(e.message)) throw new Error('budget restarted per fit pass; tripped only at the outer checkpoint: ' + e.message)
-        throw e
-      }`)
+        core.renderSpec(spec, { data: { t: rows }, limits: { maxTimeMs: 1e12 } })
+        const total = reads
+        if (total < 100) throw new Error('calibration read the clock only ' + total + ' times; the budget would not be fine-grained enough')
+        reads = 0
+        try {
+          core.renderSpec(spec, { data: { t: rows }, limits: { maxTimeMs: total * 0.75 } })
+        } catch (e) {
+          if (/during (compile|evaluate|render)$/.test(e.message)) throw new Error('budget restarted per fit pass; tripped only at the outer checkpoint: ' + e.message)
+          throw e
+        }
+      } finally { performance.now = realNow }`)
     expectLimit(r, /maxTimeMs exceeded during (?!(compile|evaluate|render)$)/)
   }, T)
 })
