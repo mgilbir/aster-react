@@ -13,6 +13,7 @@
  *
  * A second phase (browser-canvas-append.mts) checks that incremental append painting
  * equals a full repaint, pixel for pixel.
+ * A third phase (browser-canvas-symbols.mts) checks that batched symbol runs paint the plain path's pixels, in time.
  *
  * Run: npx tsx scripts/browser-canvas-parity.mts [--limit=N] [--filter=substr]
  */
@@ -319,4 +320,10 @@ const { runAppendPixelOracle } = await import('./browser-canvas-append.mts')
 const append = await runAppendPixelOracle(BROWSER, 60, 14)
 console.log(`[browser-canvas] append-vs-full-repaint ${BROWSER}: ${append.runs} scenarios, ${append.appended} append-path frames, ${append.failures.length} failing`)
 for (const f of append.failures.slice(0, 20)) console.log(`  ${f}`)
-process.exit(failures.length || append.failures.length ? 1 : 0)
+
+// Phase 3: a batched run of symbols (a browser context builds closed symbols as Path2D) must paint the plain path's pixels, fast.
+const { runSymbolRunOracle } = await import('./browser-canvas-symbols.mts')
+const symbols = await runSymbolRunOracle(BROWSER)
+console.log(`[browser-canvas] symbol-runs ${BROWSER}: ${symbols.cases} cases (${symbols.withInk} with ink), ${symbols.failures.length} failing; 100k scatter ms: ${symbols.timings.map((t) => `${t.shape}=${t.ms}`).join(' ')}`)
+for (const f of symbols.failures.slice(0, 20)) console.log(`  ${f}`)
+process.exit(failures.length || append.failures.length || symbols.failures.length ? 1 : 0)
