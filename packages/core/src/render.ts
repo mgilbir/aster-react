@@ -1166,15 +1166,6 @@ function traceSector(sink: ArcSink, ro: number, ri: number, a0: number, a1: numb
   } else sink.arc(0, 0, ri, innerTo, innerFrom, cw)
 }
 
-/** A number as an arc item holds it: what the arc mark's encoders write for a missing, NaN or 0 value is 0. */
-const arcField = (v: unknown): number => +((v as number) || 0)
-
-/** The outline of an arc item's sector on `sink` (about the origin: the item's position is the caller's to apply). */
-export function itemArcInto(sink: ArcSink, it: SceneItem): void {
-  const rec = recOf(it)
-  arcInto(sink, arcField(it.outerRadius ?? it.radius), arcField(it.innerRadius), arcField(it.startAngle), arcField(it.endAngle), arcField(rec.cornerRadius), arcField(rec.padAngle))
-}
-
 /** The path text of a sector (see {@link arcInto}), rounded to `digits` decimals (`null` for none). */
 export function arcPath(outerRadius: number, innerRadius: number, startAngle: number, endAngle: number, cornerRadius = 0, padAngle = 0, digits: number | null = 3): GeneratedPath {
   const writer = new ArcPathWriter(digits)
@@ -1182,10 +1173,20 @@ export function arcPath(outerRadius: number, innerRadius: number, startAngle: nu
   return gen(writer.d)
 }
 
-/** The path text of an arc item's sector, rounded to `digits` decimals (`null` for none). */
+/**
+ * The outline of an arc item's sector on `sink` (about the origin: the item's position is the caller's to apply). A radius,
+ * angle, corner radius or pad angle that is missing, null, NaN or 0 reads as 0, as the arc mark's accessors read them
+ * (`outerRadius` standing in with the older `radius`); anything else is taken as a number.
+ */
+export function itemArcInto(sink: ArcSink, it: SceneItem): void {
+  const rec = it as Record<string, unknown>
+  arcInto(sink, +((it.outerRadius ?? it.radius) as number || 0), +(it.innerRadius as number || 0), +(it.startAngle as number || 0), +(it.endAngle as number || 0), +(rec.cornerRadius as number || 0), +(rec.padAngle as number || 0))
+}
+
+/** The path text of an arc item's sector (see {@link itemArcInto}), rounded to `digits` decimals (`null` for none). */
 export function itemArcPath(it: SceneItem, digits: number | null = 3): GeneratedPath {
-  const rec = recOf(it)
-  return arcPath(arcField(it.outerRadius ?? it.radius), arcField(it.innerRadius), arcField(it.startAngle), arcField(it.endAngle), arcField(rec.cornerRadius), arcField(rec.padAngle), digits)
+  const rec = it as Record<string, unknown>
+  return arcPath(+((it.outerRadius ?? it.radius) as number || 0), +(it.innerRadius as number || 0), +(it.startAngle as number || 0), +(it.endAngle as number || 0), +(rec.cornerRadius as number || 0), +(rec.padAngle as number || 0), digits)
 }
 
 // --- the one SVG attribute/text writer --------------------------------------

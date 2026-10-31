@@ -45,16 +45,10 @@ const ARC_EPSILON = 1e-6
 export class PathWriter implements PathSink {
   /** The path text so far. */
   d = ''
-  protected readonly scale: number
+  private readonly scale: number
 
   constructor(digits: number | null) {
     this.scale = digits === null ? 0 : 10 ** digits
-  }
-
-  /** `v` as the writer prints a coordinate: rounded to its digits. */
-  protected round(v: number): number {
-    const k = this.scale
-    return k ? Math.round(v * k) / k : v
   }
 
   moveTo(x: number, y: number): void {
@@ -91,13 +85,16 @@ export class PathWriter implements PathSink {
 }
 
 /**
- * A {@link PathWriter} for paths with circular arcs. It follows the current point (an arc joins to it by a line when it
- * does not start there) and the start of the subpath (`closePath` returns to it), and writes an arc as SVG `A` commands:
- * the large-arc flag is set for a sweep of half a turn or more, and a full turn is drawn as two half arcs. Radii,
- * flags and end points are rounded like the other coordinates. `digits` is as for {@link PathWriter}; the default
- * is full precision.
+ * An SVG path writer for outlines made of lines and circular arcs (the trail and the arc mark). It follows the current
+ * point (an arc joins to it by a line when it does not start there) and the start of the subpath (`closePath` returns
+ * to it), and writes an arc as SVG `A` commands: the large-arc flag is set for a sweep of half a turn or more, and a
+ * full turn is drawn as two half arcs. Radii and end points are rounded like the other coordinates; `digits` is as for
+ * {@link PathWriter}, and the default is full precision.
  */
-export class ArcPathWriter extends PathWriter {
+export class ArcPathWriter {
+  /** The path text so far. */
+  d = ''
+  private readonly scale: number
   private sx = 0
   private sy = 0
   private cx = 0
@@ -108,31 +105,29 @@ export class ArcPathWriter extends PathWriter {
   private hasPoint = false
 
   constructor(digits: number | null = null) {
-    super(digits)
+    this.scale = digits === null ? 0 : digits === 3 ? 1000 : 10 ** digits
   }
 
-  override moveTo(x: number, y: number): void {
+  private round(v: number): number {
+    const k = this.scale
+    return k ? Math.round(v * k) / k : v
+  }
+
+  moveTo(x: number, y: number): void {
     this.sx = this.cx = x
     this.sy = this.cy = y
     this.hasStart = this.hasPoint = true
-    super.moveTo(x, y)
+    this.d += 'M' + this.round(x) + ',' + this.round(y)
   }
 
-  override lineTo(x: number, y: number): void {
+  lineTo(x: number, y: number): void {
     this.cx = x
     this.cy = y
     this.hasPoint = true
-    super.lineTo(x, y)
+    this.d += 'L' + this.round(x) + ',' + this.round(y)
   }
 
-  override bezierCurveTo(x1: number, y1: number, x2: number, y2: number, x: number, y: number): void {
-    this.cx = x
-    this.cy = y
-    this.hasPoint = true
-    super.bezierCurveTo(x1, y1, x2, y2, x, y)
-  }
-
-  override closePath(): void {
+  closePath(): void {
     if (!this.hasPoint) return
     this.cx = this.sx
     this.cy = this.sy
@@ -157,7 +152,8 @@ export class ArcPathWriter extends PathWriter {
     if (!radius) return
     let sweep = ccw ? a0 - a1 : a1 - a0
     if (sweep < 0) sweep = (sweep % TAU) + TAU
-    const head = 'A' + this.round(radius) + ',' + this.round(radius) + ',0,'
+    const r = this.round(radius)
+    const head = 'A' + r + ',' + r + ',0,'
     const side = ccw ? ',0,' : ',1,'
     if (sweep > TAU - ARC_EPSILON) {
       this.d += head + '1' + side + this.round(x - dx) + ',' + this.round(y - dy) + head + '1' + side + this.round(x0) + ',' + this.round(y0)

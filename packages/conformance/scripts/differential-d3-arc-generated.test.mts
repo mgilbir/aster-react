@@ -18,6 +18,7 @@ import * as d3Shape from 'd3-shape'
 import * as vega from 'vega'
 import { arcInto, arcPath, itemArcPath } from '../../core/src/render.ts'
 import { Bounds, boundArcItem } from '../../core/src/bounds.ts'
+import { BoundsPen } from '../../core/src/bounds-pen.ts'
 import { enc, exact } from './differential-util.mts'
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -139,6 +140,29 @@ describe('generated d3-shape arc differential', () => {
       compare('bounds', i, () => box((vega as any).boundItem({ ...item, mark: { marktype: 'arc' } })),
         () => { const b = boundArcItem(new Bounds(), { ...item } as never); return box(b) })
     }
+  })
+})
+
+describe('the bounds pen\'s arc is vega\'s boundContext arc', () => {
+  it('measures the same box for random arcs, either way round, turned or not, in or out of one turn', () => {
+    const r = rng(0xb0b0)
+    const angles = [0, -0, Math.PI / 2, Math.PI, 1.5 * Math.PI, TAU, -Math.PI / 2, -TAU, 3 * Math.PI, 4 * TAU, 1e-13, TAU - 1e-9, 1e6, -1e6, NaN, Infinity]
+    const angle = (): number => (r() < 0.25 ? angles[Math.floor(r() * angles.length)]! : (r() - 0.4) * (r() < 0.8 ? 14 : 400))
+    const box = (b: any): unknown => [b.x1, b.y1, b.x2, b.y2]
+    let walked = 0
+    for (let i = 0; i < 20000; i++) {
+      const cx = r() < 0.3 ? 0 : (r() - 0.5) * 300
+      const cy = r() < 0.3 ? 0 : (r() - 0.5) * 300
+      const rad = r() < 0.05 ? [0, -3, NaN][Math.floor(r() * 3)]! : r() * 120
+      const a0 = angle()
+      const a1 = r() < 0.2 ? a0 + (r() - 0.5) * 1e-9 : r() < 0.5 ? a0 + (r() - 0.5) * 7 : angle()
+      const ccw = r() < 0.5
+      const turn = r() < 0.5 ? 0 : [30, 90, -45, 180, 400, 1e-9][Math.floor(r() * 6)]!
+      if (Math.abs(a1 - a0) < TAU - 1e-8) walked++
+      compare('pen', 0, () => { const b = new (vega as any).Bounds(); (vega as any).boundContext(b, turn).arc(cx, cy, rad, a0, a1, ccw); return box(b) },
+        () => { const b = new Bounds(); new BoundsPen(b, turn).arc(cx, cy, rad, a0, a1, ccw); return box(b) })
+    }
+    expect(walked).toBeGreaterThan(10000)
   })
 })
 

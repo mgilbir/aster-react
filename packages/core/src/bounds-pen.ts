@@ -95,10 +95,8 @@ export class BoundsPen {
     if (end === start) return
     // the quarter turns on the way: at most four, found by stepping from the grid line under the first angle of the sweep.
     // The stepping, not a multiplication, decides the last digits of the extent, and a view's size follows them.
-    let from = start % FULL_TURN
-    if (from < 0) from += FULL_TURN
-    let to = end % FULL_TURN
-    if (to < 0) to += FULL_TURN
+    let from = wrapTurn(start)
+    let to = wrapTurn(end)
     let backwards = ccw
     if (to < from) {
       backwards = !backwards
@@ -108,11 +106,31 @@ export class BoundsPen {
     }
     if (backwards) {
       to -= FULL_TURN
-      for (let a = from - (from % QUARTER_TURN), i = 0; i < 4 && a > to; i++, a -= QUARTER_TURN) this.bounds.add(cx + r * Math.cos(a), cy + r * Math.sin(a))
+      for (let a = from - quarterRemainder(from), i = 0; i < 4 && a > to; i++, a -= QUARTER_TURN) this.bounds.add(cx + r * Math.cos(a), cy + r * Math.sin(a))
     } else {
-      for (let a = from - (from % QUARTER_TURN) + QUARTER_TURN, i = 0; i < 4 && a < to; i++, a += QUARTER_TURN) this.bounds.add(cx + r * Math.cos(a), cy + r * Math.sin(a))
+      for (let a = from - quarterRemainder(from) + QUARTER_TURN, i = 0; i < 4 && a < to; i++, a += QUARTER_TURN) this.bounds.add(cx + r * Math.cos(a), cy + r * Math.sin(a))
     }
   }
+}
+
+/**
+ * `angle % FULL_TURN`, moved into [0, FULL_TURN). The remainder is only computed for an angle further out than one turn: within
+ * a turn it is the angle itself (below zero, the angle plus a turn) and from one turn to two it is the angle less a turn,
+ * which the subtraction gives exactly.
+ */
+function wrapTurn(angle: number): number {
+  if (angle >= 0 && angle < FULL_TURN) return angle
+  if (angle < 0 && angle > -FULL_TURN) return angle + FULL_TURN
+  if (angle >= FULL_TURN && angle < 2 * FULL_TURN) return angle - FULL_TURN
+  const r = angle % FULL_TURN
+  return r < 0 ? r + FULL_TURN : r
+}
+
+/** `angle % QUARTER_TURN` for an angle in [0, FULL_TURN) (or NaN), without computing a remainder for the first two quarters. */
+function quarterRemainder(angle: number): number {
+  if (angle < QUARTER_TURN) return angle
+  if (angle < 2 * QUARTER_TURN) return angle - QUARTER_TURN
+  return angle % QUARTER_TURN
 }
 
 /**
