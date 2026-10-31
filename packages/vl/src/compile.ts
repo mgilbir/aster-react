@@ -1579,8 +1579,85 @@ function autosizeOf(spec: VLSpec): unknown {
 
 // --- facet composition -------------------------------------------------------
 
+/** A spec that lays views out: a repeat or a concat. */
+const isComposition = (s: unknown): s is VLSpec => isObject(s) && (s.repeat !== undefined || s.hconcat !== undefined || s.vconcat !== undefined || s.concat !== undefined)
+
+/**
+ * A facet whose spec is a repeat or a concat: each cell holds the composition, laid out by its own layout, over the cell's rows, with the
+ * scales and the signals the composition makes. The composition is compiled first; the facet around it (its datasets, headers, titles and
+ * layout, the cell that facets the data) is made by the facet code over a placeholder view of the same data, and the composition takes the
+ * place of the placeholder in the cell.
+ */
+function compileFacetedComposition(spec: VLSpec, ctx: CompileCtx, nested: string): VLSpec {
+  const own = (name: string): string => childModelName(nested, name)
+  const CH = own('child')
+  const facetDef = spec.facet as Record<string, unknown>
+  const wrapped = facetDef.row === undefined && facetDef.column === undefined
+  const facetFields = (['row', 'column', 'facet'] as const).flatMap((channel) => {
+    const def = wrapped ? (channel === 'facet' ? facetDef : undefined) : (facetDef[channel] as Record<string, unknown> | undefined)
+    const fd = def ? parseChannel(channel, def) : null
+    return fd ? [{ channel, field: aggFieldName(fd) }] : []
+  })
+  const innerSpec: VLSpec = { ...(spec.spec as VLSpec) }
+  if (innerSpec.data === undefined && isObject(spec.data)) innerSpec.data = spec.data
+  if (spec.config !== undefined) innerSpec.config = spec.config
+  const frag = inChildView(ctx, 'child', facetFields, true, () => compileView(innerSpec, ctx))
+  nameViewParts(frag, `${CH}_`, [], '')
+  frag.marks = (frag.marks as Record<string, unknown>[]).map((m) => prefixMarkNames(m, `${CH}_`, [`${CH}__`]))
+  // (the composition has the size signals of its child: the views that read the size of their container read `child_width`, which is
+  // declared with the size of a default view)
+  const sized = new Set<string>()
+  {
+    const declared: Record<string, unknown>[] = []
+    for (const dim of ['width', 'height'] as const) {
+      const before = JSON.stringify(frag)
+      renameFragment(frag, { signals: new Map([[dim, `${CH}_${dim}`]]), scales: new Map() })
+      if (JSON.stringify(frag) !== before) {
+        declared.push({ name: `${CH}_${dim}`, value: 300 })
+        sized.add(dim)
+      }
+    }
+    frag.signals = [...declared, ...((frag.signals as Record<string, unknown>[] | undefined) ?? [])]
+  }
+  const fragData = (frag.data as Record<string, unknown>[]) ?? []
+  const source = fragData.find((d) => d.source === undefined)
+  if (source === undefined || typeof source.name !== 'string') throw new VLCompileError('a facet over a composition needs a data source')
+  const scaffold = compileFaceted({ ...spec, data: { name: source.name }, spec: { mark: 'point' } as VLSpec }, ctx, nested)
+  const data = (scaffold.data as Record<string, unknown>[]).map((d) => (d.name === source.name ? source : d))
+  const cell = (scaffold.marks as Record<string, unknown>[]).find((m) => m.name === own('cell'))!
+  const rootSource = (cell.from as { facet: { data: string } }).facet.data
+  const facetName = (cell.from as { facet: { name: string } }).facet.name
+  // the composition's datasets are made in the cell, from the rows of the cell
+  const cellData = fragData.filter((d) => d !== source).map((d) => (d.source === rootSource || d.source === source.name ? { ...d, source: facetName } : d))
+  for (const k of ['encode', 'style', 'axes', 'scales', 'signals']) delete cell[k]
+  Object.assign(cell, {
+    ...(cellData.length ? { data: cellData } : {}),
+    ...(Array.isArray(frag.scales) && frag.scales.length ? { scales: frag.scales } : {}),
+    ...(Array.isArray(frag.legends) && frag.legends.length ? { legends: frag.legends } : {}),
+    ...(frag.layout !== undefined ? { layout: frag.layout } : {}),
+    marks: frag.marks,
+  })
+  // (the headers follow the size of the cell when the composition has one)
+  for (const m of scaffold.marks as Record<string, unknown>[]) {
+    if (typeof m.role !== 'string' || !/-(header|footer)$/.test(m.role)) continue
+    const dim = m.role.startsWith('row') ? 'height' : 'width'
+    if (sized.has(dim)) m.encode = { update: { [dim]: { signal: `${CH}_${dim}` } } }
+    else delete m.encode
+  }
+  const out: Record<string, unknown> = { ...scaffold, data, signals: frag.signals ?? [] }
+  const layout = out.layout as Record<string, unknown>
+  // (facet.ts getHeaderLayoutMixins: a facet whose child has no size signal lays its headers out by their band)
+  for (const channel of ['row', 'column'] as const) {
+    if ((wrapped ? false : facetDef[channel] !== undefined) || (wrapped && channel === 'column')) {
+      layout.headerBand = { ...(layout.headerBand as Record<string, number> | undefined), [channel]: 0.5 }
+    }
+  }
+  return out as VLSpec
+}
+
 /** Compile a faceted chart (encoding.facet / top-level facet + spec). */
 function compileFaceted(spec: VLSpec, ctx: CompileCtx, nested = ''): VLSpec {
+  if (isObject(spec.facet) && isComposition(spec.spec)) return compileFacetedComposition(spec, ctx, nested)
   // (the names of a facet and of everything it makes are its model's: those of a facet inside a facet start with `child`, and its own child
   // is `child_child`; a composite around the facet puts its own name in front afterwards)
   const own = (name: string): string => childModelName(nested, name)
