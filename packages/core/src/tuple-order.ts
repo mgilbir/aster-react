@@ -4,47 +4,76 @@
  * a transform makes new (fold, flatten, project, aggregate, ...) are made in the order it lists them, and a dataset made from
  * another makes new rows of its source's, in the order the source lists them.
  *
- * A row is not given its place until something is about to move rows (a `collect` that sorts, with a sort after it): a row with
- * none was made after every row that has one, in array order. The place rides on the row: the copies a pipeline makes of rows it may
- * not write onto are the same rows and keep it, and a transform that makes a new row of one (`remake`) gives it a place of its own.
+ * The order is kept beside the rows, not on them: a number per row, in a list that belongs to the array the rows came out in
+ * (rows are not written to, and their shapes do not change). Only a `collect` that sorts, with a sort after it, makes one; it
+ * rides along the transforms that keep their rows and their order (and a filter, which keeps some of them), and any other
+ * transform ends it -- its rows are new, made in the order they are listed, which is what an array without a list means.
  */
 
-type Row = Record<string | symbol, unknown>
+type Row = Record<string, unknown>
 
-/** Where a row stands in the order rows were made; a symbol, so no key listing and no serialisation sees it, and a copy by spreading takes it along. */
-export const MADE: unique symbol = Symbol('aster.made') as never
-let next = 0
+const orders = new WeakMap<readonly unknown[], Float64Array>()
+let recording = false
 
-const placeOf = (row: unknown): number | undefined => (row !== null && typeof row === 'object' ? (row as Record<symbol, number | undefined>)[MADE] : undefined)
-
-/** Give the rows that have no place theirs, in array order. The rows must be the caller's to write onto. */
-export function placeRows(rows: readonly Row[]): void {
-  for (const row of rows) if (row[MADE] === undefined) row[MADE] = ++next
+/** The order of the rows of an array, if it has one (and it still fits the array). */
+export function orderOf(rows: readonly unknown[]): Float64Array | null {
+  const order = orders.get(rows)
+  return order !== undefined && order.length === rows.length ? order : null
 }
 
-/** Whether some of the rows have a place (the first and the last row tell). */
-export function anyPlaced(rows: readonly unknown[]): boolean {
-  const n = rows.length
-  return n > 1 && (placeOf(rows[0]) !== undefined || placeOf(rows[n - 1]) !== undefined)
+/** Ask the next sort to leave the order of its result behind (see `sortBySpec`). */
+export function recordNextOrder(): void {
+  recording = true
 }
 
-/**
- * The places of `rows`, read once for a sort: `null` when none has one (the first and the last row tell), else one number each, a row
- * without a place counting as made after every row that has one.
- */
-export function placesOf(rows: readonly unknown[]): Float64Array | null {
-  const n = rows.length
-  if (n < 2 || (placeOf(rows[0]) === undefined && placeOf(rows[n - 1]) === undefined)) return null
-  const out = new Float64Array(n)
-  for (let i = 0; i < n; i++) out[i] = placeOf(rows[i]) ?? Infinity
-  return out
+/** Whether the order was asked for; a sort takes the request. */
+export function takeRecording(): boolean {
+  const on = recording
+  recording = false
+  return on
+}
+
+/** Say how the rows of `result` stand in the order rows were made in. */
+export function setOrder(result: readonly unknown[], order: Float64Array): void {
+  orders.set(result, order)
+}
+
+/** Transforms that return their rows, all of them and in the order they were given. */
+const KEEPS_ROWS = new Set([
+  'formula', 'bin', 'timeunit', 'identifier', 'lookup', 'stack', 'window', 'joinaggregate', 'geopoint', 'geopath', 'geoshape',
+  'linkpath', 'pie', 'dotbin', 'extent', 'resolvefilter',
+])
+
+/** Carry the order of the rows a transform was given to the rows it returned, if the transform keeps its rows. */
+export function carryOrder(type: unknown, input: readonly Row[], output: readonly Row[]): void {
+  const order = orderOf(input)
+  if (order === null || orders.has(output)) return
+  if (KEEPS_ROWS.has(type as string)) {
+    if (output.length === input.length) orders.set(output, order)
+  } else if (type === 'impute') {
+    // the rows it was given, then the rows it made: those are newer than any
+    if (output.length >= input.length) {
+      const kept = new Float64Array(output.length)
+      kept.set(order)
+      let newest = -1
+      for (let i = 0; i < order.length; i++) if (order[i]! > newest) newest = order[i]!
+      for (let i = input.length; i < output.length; i++) kept[i] = ++newest
+      orders.set(output, kept)
+    }
+  } else if (type === 'filter') {
+    // the rows that pass, in the order they came: walk both lists
+    const kept = new Float64Array(output.length)
+    let j = 0
+    for (let i = 0; i < input.length && j < output.length; i++) if (input[i] === output[j]) kept[j++] = order[i]!
+    if (j === output.length) orders.set(output, kept)
+  }
 }
 
 const placing = new WeakSet<object>()
 
 /**
- * Mark the `collect`s of a dataset's transforms that give the rows their places: those that sort and have a sort (of a `collect`,
- * a `window` or a `stack`) after them. Nothing else needs the places, and giving them costs the rows a write.
+ * Mark the `collect`s of a dataset's transforms that leave the order behind: those that sort and have a sort (of a `collect`,
+ * a `window` or a `stack`) after them. Nothing else needs it.
  */
 export function markPlacing(transforms: ReadonlyArray<{ type?: unknown; sort?: unknown }>): void {
   let sortsAfter = false
@@ -56,10 +85,10 @@ export function markPlacing(transforms: ReadonlyArray<{ type?: unknown; sort?: u
   }
 }
 
-/** Whether a `collect` gives the rows their places before it sorts them. */
+/** Whether a `collect` is marked as one that leaves the order behind. */
 export const isPlacing = (t: object): boolean => placing.has(t)
 
-/** Whether the `collect` at `at` of `transforms` gives the rows their places: it is marked, or a sort comes after it in the list. */
+/** Whether the `collect` at `at` of `transforms` leaves the order behind: it is marked, or a sort comes after it in the list. */
 export function placesAt(transforms: ReadonlyArray<{ type?: unknown; sort?: unknown }>, at: number): boolean {
   const t = transforms[at]!
   if (placing.has(t)) return true
@@ -69,28 +98,4 @@ export function placesAt(transforms: ReadonlyArray<{ type?: unknown; sort?: unkn
     if ((u.type === 'collect' || u.type === 'window' || u.type === 'stack') && u.sort !== undefined) return true
   }
   return false
-}
-
-/** A new row made of the fields of another: the fields, and a place of its own, after the places of every row made so far. */
-export function remake(row: Row): Row {
-  const copy = { ...row }
-  if (copy[MADE] !== undefined) copy[MADE] = ++next
-  return copy
-}
-
-/**
- * The rows of a dataset made from the rows of others: new rows, made in the order the sources list them. If any source has places the
- * new rows all have places of their own, after every row made so far, so that no row of the dataset is older than another.
- */
-export function deriveRows(sources: ReadonlyArray<readonly Row[]>): Row[] {
-  const out: Row[] = []
-  const place = sources.some(anyPlaced)
-  for (const rows of sources) {
-    for (const row of rows) {
-      const copy = { ...row }
-      if (place) copy[MADE] = ++next
-      out.push(copy)
-    }
-  }
-  return out
 }

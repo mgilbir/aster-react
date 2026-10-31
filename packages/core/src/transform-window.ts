@@ -6,6 +6,7 @@
  * (`null` for unbounded); under a sort, and unless `ignorePeers`, each end grows to take in the rows tied with the row it lands on.
  */
 import { accessorName, array, error } from './util.js'
+import { orderOf } from './tuple-order.js'
 import { meterTick } from './limits.js'
 import {
   compareOf, fieldOf, lcg, MeasureGroup, outputName, partitionRows, planMeasures, SEED, stableSortBy,
@@ -196,8 +197,11 @@ export function windowRows(rows: readonly Row[], p: WindowParams, random: () => 
   const noOrder: Compare = () => -1
   const measures = plan.measures && new MeasureGroup(plan.measures, random)
 
-  for (const partition of partitionRows(out, p.groupby)) {
-    const sorted = sort ? stableSortBy(partition, sort) : partition
+  const made: number[][] = []
+  const partitions = partitionRows(out, p.groupby, sort ? orderOf(rows) : null, made)
+  for (let part = 0; part < partitions.length; part++) {
+    const partition = partitions[part]!
+    const sorted = sort ? stableSortBy(partition, sort, made[part]) : partition
     const n = sorted.length
     const at: Position = { rows: sorted, index: 0, lo: 0, hi: 0, compare: sort || noOrder }
     const functions = plan.functions.map((f) => f.make())

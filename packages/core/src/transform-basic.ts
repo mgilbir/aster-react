@@ -18,7 +18,7 @@ import {
 } from './time.js'
 import { AsterLimitError, activeMeter, checkRowCount, meterTick } from './limits.js'
 import type { IdCounter } from './identifier-ids.js'
-import { remake } from './tuple-order.js'
+import { orderOf } from './tuple-order.js'
 
 type Params = Record<string, unknown>
 type Read = (d: unknown) => unknown
@@ -102,7 +102,7 @@ export function foldRows(rows: Row[], p: Params): Row[] {
   const out: Row[] = []
   for (const row of rows) {
     for (let i = 0; i < fields.length; ++i) {
-      const folded = remake(row)
+      const folded = { ...row }
       folded[keyName] = names[i]
       folded[valueName] = fields[i]!(row)
       out.push(folded)
@@ -131,7 +131,7 @@ export function flattenRows(rows: Row[], p: Params): Row[] {
     // the length comes from the data: bound it before the loop
     checkRowCount(out.length + (length > 0 ? length : 0), 'flatten')
     for (let i = 0; i < length; ++i) {
-      const flat = remake(row)
+      const flat = { ...row }
       for (let j = 0; j < names.length; ++j) {
         const element = arrays[j]![i]
         flat[names[j]!] = element == null ? null : element
@@ -149,7 +149,7 @@ export function flattenRows(rows: Row[], p: Params): Row[] {
  * not: a row some result of an earlier transform holds must not take the fields a later transform writes.
  */
 export function projectRows(rows: Row[], p: Params): Row[] {
-  if (p.fields == null) return rows.map(remake)
+  if (p.fields == null) return rows.map((row) => ({ ...row }))
   const fields = fieldsOf(p.fields)
   const given = array(p.as) as Array<string | null | undefined>
   const names = fields.map((f, i) => (given[i] || accessorName(f)) as string)
@@ -351,6 +351,8 @@ interface StackGroup {
   rows: Row[]
   /** Sum of the absolute values of the group, in the rows' input order. */
   total: number
+  /** Where each row stands in the order rows were made in, if that is known (see tuple-order.ts). */
+  made?: number[]
 }
 
 /**
@@ -360,6 +362,7 @@ interface StackGroup {
  */
 export function stackRows(rows: Row[], p: Params, owned = false): Row[] {
   const out = writableRows(rows, owned)
+  const order = orderOf(rows)
   const as = (p.as ?? ['y0', 'y1']) as string[]
   const lowName = as[0] as string
   const highName = as[1] as string
@@ -369,15 +372,17 @@ export function stackRows(rows: Row[], p: Params, owned = false): Row[] {
 
   let groups: StackGroup[]
   if (by == null) {
-    groups = [{ rows: out.slice(), total: 0 }]
+    groups = [{ rows: out.slice(), total: 0, made: order ? Array.from(order) : undefined }]
   } else {
     const byKey = new Map<string, StackGroup>()
     groups = []
-    for (const row of out) {
+    for (let i = 0; i < out.length; i++) {
+      const row = out[i]!
       const key = JSON.stringify(by.map((g) => g(row)))
       let group = byKey.get(key)
-      if (!group) { byKey.set(key, (group = { rows: [], total: 0 })); groups.push(group) }
+      if (!group) { byKey.set(key, (group = { rows: [], total: 0, made: order ? [] : undefined })); groups.push(group) }
       group.rows.push(row)
+      group.made?.push(order![i]!)
     }
   }
   let widest = 0
@@ -386,7 +391,7 @@ export function stackRows(rows: Row[], p: Params, owned = false): Row[] {
     for (let i = 0; i < group.rows.length; i++) total += Math.abs(valueOf(group.rows[i]) as number)
     group.total = total
     if (total > widest) widest = total
-    if (sort) group.rows = stableSortBy(group.rows, sort)
+    if (sort) group.rows = stableSortBy(group.rows, sort, group.made ?? null)
     meterTick('stack', group.rows.length)
   }
 

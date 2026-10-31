@@ -11,7 +11,7 @@
  *
  * What is fixed by the observable behaviour: the order the sites are met in (a scope's signals, data sets, scales, signal handlers,
  * axes, marks, legends, title, then its lambdas -- the same order as the structural check), and the text of the message. The text of
- * an entry is only built when one of its parts is not an expression: a spec that is right costs a parse of each part.
+ * an entry is built and parsed whole, only for an entry that holds a signal or a test.
  *
  * Not checked here: the `on` handlers of signals (their events, filters and updates). A handler that cannot be built is reported
  * when the signals are bound and the other handlers still bind (see signals.ts); what it reports reads as vega's message does.
@@ -69,19 +69,6 @@ class Check {
     const text = textOf(value)
     const bad = parseError(text)
     if (bad) refuse(text, bad.error)
-  }
-
-  /** An expression vega makes of parts: the parts are parsed alone and, only if one is wrong, the whole is built and parsed. */
-  composite(parts: readonly unknown[], whole: () => string | null): void {
-    for (const p of parts) {
-      if (p === undefined || p === null) continue
-      if (parseError(textOf(p)) === null) continue
-      const text = whole()
-      if (text === null) return
-      const bad = parseError(text)
-      if (bad) refuse(text, bad.error)
-      return
-    }
   }
 
   /** The texts of the `{signal: text}` objects of a subtree, in document order. */
@@ -180,7 +167,7 @@ class Check {
   private guideEntries(node: unknown, depth = 0): void {
     if (!isObject(node) || depth > 16) return
     if (!Array.isArray(node) && typeof node.signal === 'string' && node.signal) {
-      if (!this.named.has(node.signal)) this.composite([node.signal], () => `(${node.signal as string})`)
+      if (!this.named.has(node.signal)) this.expression(`(${node.signal})`)
       return
     }
     for (const key of Object.keys(node)) this.guideEntries(node[key], depth + 1)
@@ -228,15 +215,11 @@ class Check {
     }
   }
 
+  /** One channel of an encode block: an entry, or a list of rules. Only one that holds an expression is built and parsed. */
   private entry(spec: unknown): void {
-    const parts: unknown[] = []
-    const list = Array.isArray(spec) ? spec : [spec]
-    for (const e of list) {
-      if (!isObject(e)) continue
-      if (Array.isArray(spec) && (e as Rec).test != null) parts.push((e as Rec).test)
-      collectParts(e as Rec, parts)
-    }
-    this.composite(parts, () => (Array.isArray(spec) ? ruleText(spec) : entryText(spec)))
+    if (!holdsExpression(spec)) return
+    const text = Array.isArray(spec) ? ruleText(spec) : entryText(spec)
+    if (text !== null) this.expression(text)
   }
 }
 
@@ -249,24 +232,12 @@ const BLOCKS: ReadonlySet<string> = new Set(['enter', 'update', 'exit', 'hover',
 
 // -- the text vega makes of an encode entry ----------------------------------------------------------------------------
 
-/** The parts of an entry that are expressions: its signals, and (below) those of the entries it holds. */
-function collectParts(e: Rec, parts: unknown[]): void {
-  if (e.gradient != null) {
-    if (isRecord(e.gradient) && e.gradient.signal) parts.push(e.gradient.signal)
-    else if (isRecord(e.gradient)) fieldParts(e.gradient, parts)
-    return
-  }
-  if (e.signal) parts.push(e.signal)
-  else if (isRecord(e.color)) {
-    for (const k of ['r', 'g', 'b', 'h', 's', 'l', 'c', 'a']) if (isObject(e.color[k])) collectParts(e.color[k] as Rec, parts)
-  } else if (isRecord(e.field)) fieldParts(e.field, parts)
-  if (isRecord(e.scale)) { if (e.scale.signal) parts.push(e.scale.signal); else fieldParts(e.scale, parts) }
-  for (const k of ['exponent', 'mult', 'offset', 'band']) if (isRecord(e[k])) collectParts(e[k] as Rec, parts)
-}
-
-function fieldParts(ref: Rec, parts: unknown[]): void {
-  if (ref.signal) parts.push(ref.signal)
-  else if (isRecord(ref.group) || isRecord(ref.parent) || isRecord(ref.datum)) fieldParts((ref.group ?? ref.parent ?? ref.datum) as Rec, parts)
+/** Whether an entry (or list of rules) has a signal or a test anywhere in it. */
+function holdsExpression(node: unknown, depth = 0): boolean {
+  if (!isObject(node) || depth > 8) return false
+  if (!Array.isArray(node) && (node.signal || node.test)) return true
+  for (const key of Object.keys(node)) if (holdsExpression(node[key], depth + 1)) return true
+  return false
 }
 
 /** A field reference as vega writes it into the expression of an entry: `datum["a"]`, `item.mark.group["a"]`, `datum[signal]`. */
