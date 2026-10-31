@@ -430,7 +430,8 @@ function markOrient(spec: VLSpec, mark: string, markRaw: unknown, fields: FieldD
     const encoded = enc[channel] as Record<string, unknown> | null | undefined
     return {
       present: encoded != null,
-      field: !!def?.field,
+      // (a datum is not a field: it takes no part in the rules that compare the fields of the two axes)
+      field: !!def?.field && !def.datumOnly,
       aggregate: !!def?.aggregate,
       prebinned: !!def?.field && isPrebinned(def),
       measure: def ? def.type === 'quantitative' && !def.bin : typeof encoded?.datum === 'number',

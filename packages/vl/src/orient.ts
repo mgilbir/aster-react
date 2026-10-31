@@ -10,7 +10,7 @@
  *   leadingValue  an aggregate on one axis alone is the value
  *   rangedBar     a bar between two values on an axis is oriented along it (the orient asked for wins)
  *   segment       a span on both axes is a segment, which has no orientation
- *   ranged        a span on one axis is oriented along it (y first)
+ *   ranged        a span on one axis is oriented along it (y first), across it when that axis is binned already
  *   alone         a rule that spans one axis alone runs along the other
  *   measures      the orient asked for; else the axis that is a measure is the value; else the time axis is the dimension
  */
@@ -60,9 +60,16 @@ const rangedBar: Rule = (_m, { x2, y2, asked }) => {
   return !x2 ? 'vertical' : !y2 ? 'horizontal' : undefined
 }
 
-const segment: Rule = (_m, { x2, y2 }) => (x2 && y2 ? NONE : undefined)
+/** A channel whose field is already binned (the span of a bin is read off it, not off the second channel). */
+const spansBins = (p: Position): boolean => p.field && p.prebinned
 
-const ranged: Rule = (_m, { x2, y2 }) => (y2 ? 'vertical' : x2 ? 'horizontal' : undefined)
+const segment: Rule = (_m, { x, y, x2, y2 }) => (x2 && y2 && !spansBins(x) && !spansBins(y) ? NONE : undefined)
+
+const ranged: Rule = (_m, { x, y, x2, y2 }) => {
+  if (y2) return spansBins(y) ? 'horizontal' : 'vertical'
+  if (x2) return spansBins(x) ? 'vertical' : 'horizontal'
+  return undefined
+}
 
 const alone: Rule = (_m, { x, y }) => (x.present && !y.present ? 'vertical' : y.present && !x.present ? 'horizontal' : undefined)
 
