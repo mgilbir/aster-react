@@ -60,6 +60,7 @@ import {
   trailAttrs,
   trailPath,
   viewGroupAttrs,
+  groupItemAttrs,
   itemDatumAttr,
   itemHref,
   linkAttrs,
@@ -657,7 +658,7 @@ export function sceneToDomDesc(scene: SceneRoot, options: DomRenderOptions = {})
       ['role', 'graphics-object'],
       ['aria-roledescription', 'group mark container'],
     ], [
-      g('g', [['transform', `translate(${num(scene.frameX ?? 0)},${num(scene.frameY ?? 0)})`]], [
+      g('g', pairs((w) => groupItemAttrs(scene.frameX ?? 0, scene.frameY ?? 0, w, scene.frameAria)), [
         { tag: 'path', attrs: pairs((w) => frameAttrs(scene, w)) },
         g('g', frameClipId ? pairs((w) => clipRefAttrs(frameClipId, w)) : [], marks),
         { tag: 'path', attrs: FOREGROUND.map((p) => [p[0], p[1]] as [string, string]) },

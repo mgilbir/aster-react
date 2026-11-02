@@ -1480,7 +1480,7 @@ function frameEncodeOf(ctx: EvalContext): FrameEncode | undefined {
     ['strokeDashOffset', 'frameStrokeDashOffset'], ['strokeCap', 'frameStrokeCap'], ['strokeJoin', 'frameStrokeJoin'], ['cornerRadius', 'frameCornerRadius'], ['clip', 'frameClip'],
   ]
   for (const [from, to] of PAINT) if (geo[from] !== undefined) paint[to] = geo[from]
-  return { x: num(geo.x) ?? 0, y: num(geo.y) ?? 0, paint: paint as Partial<SceneRoot> }
+  return { x: num(geo.x) ?? 0, y: num(geo.y) ?? 0, paint: paint as Partial<SceneRoot>, aria: itemAriaOf(geo) }
 }
 
 /** Walk every string reachable in a JSON-ish value (cycle-safe). */
@@ -1803,7 +1803,7 @@ function paintOrderOf(items: SceneGroup[]): SceneGroup[] {
 type BuiltContent = { record: PassRecord | undefined; items: SceneGroup[]; padding: ReturnType<typeof computeGuidePadding>; ctx: EvalContext; width: number; height: number; hasLayout: boolean; frame: FrameEncode | undefined }
 
 /** What the view's own `encode` gives the root group: where it sits, and the paint of its box (see frameEncodeOf). */
-interface FrameEncode { x: number; y: number; paint: Partial<SceneRoot> }
+interface FrameEncode { x: number; y: number; paint: Partial<SceneRoot>; aria: SceneRoot['frameAria'] }
 
 /**
  * The content of the view. A failing axis (axisTicksFailed) aborts vega's dataflow pass at the operator that failed: the
@@ -2089,7 +2089,7 @@ function evaluateChartImpl(chart: CompiledChart, hostInput: RuntimeInput, txn: E
     frameStrokeJoin: ctx.chart.frameStrokeJoin,
     padding: ctx.chart.autosize === 'none' ? ctx.chart.padding : padding,
     items,
-    ...(built.frame ? { ...built.frame.paint, ...(built.frame.x !== 0 ? { frameX: built.frame.x } : {}), ...(built.frame.y !== 0 ? { frameY: built.frame.y } : {}) } : {}),
+    ...(built.frame ? { ...built.frame.paint, ...(built.frame.x !== 0 ? { frameX: built.frame.x } : {}), ...(built.frame.y !== 0 ? { frameY: built.frame.y } : {}), ...(built.frame.aria !== undefined ? { frameAria: built.frame.aria } : {}) } : {}),
   }
   // Event-loop wiring (non-serialized internals)
   ;(scene as unknown as { runtime?: unknown }).runtime = ctx.runtime
@@ -4106,7 +4106,8 @@ function evaluateMarkItems(
   // Vega's mark defaults (vega.js defaults()): line {strokeWidth: 2},
   // area {fill: '#4c78a8'}, text {fill: '#000'} — applied when the encode
   // leaves the property unspecified.
-  if (mark.type === 'line' || mark.type === 'area' || mark.type === 'text') {
+  // (the config blocks they come from are read for a mark of role `mark` only: a mark with a role of its own has none of them)
+  if ((mark.type === 'line' || mark.type === 'area' || mark.type === 'text') && (mark.role === undefined || mark.role === 'mark')) {
     // vega-parser's applyDefaults skips the fill/stroke defaults when the ENCODE defines either channel
     const enc = (mark.encode?.update ?? mark.encode?.enter ?? {}) as Record<string, unknown>
     const paintDefined = enc.fill != null || enc.stroke != null
@@ -4115,6 +4116,13 @@ function evaluateMarkItems(
       const rec = it as unknown as Record<string, unknown>
       if (fill !== undefined && rec.fill === undefined) rec.fill = fill
       if (mark.type === 'line' && rec.strokeWidth === undefined) rec.strokeWidth = 2
+    }
+  } else if (mark.type === 'line') {
+    // (a line with a role of its own has no default width: it is drawn at the scenegraph's 1, which the renderers would
+    // otherwise replace by a line's 2)
+    for (const it of items) {
+      const rec = it as unknown as Record<string, unknown>
+      if (rec.stroke != null && rec.strokeWidth === undefined) rec.strokeWidth = 1
     }
   }
 

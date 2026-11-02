@@ -724,13 +724,15 @@ export function boundTypedMark(bounds: Bounds, mark: SceneGroup, miterPaths = fa
       // (vega-scenegraph bound.js: boundStroke(bounds, item, true)) — the
       // miterLimit default of 4 makes the expansion miterLimit*sw/2 per side
       const miter = miterPaths || mark.marktype === 'arc' || mark.marktype === 'path' || mark.marktype === 'symbol' || mark.marktype === 'shape' || (mark.marktype as string) === 'geoshape'
-      for (const it of items) boundLeaf(bounds, it, miter)
+      // (a rect, rule, symbol or image is measured as its own type: a text or angle channel it carries is inert)
+      const kind = mark.marktype === 'rect' || mark.marktype === 'rule' || mark.marktype === 'symbol' || mark.marktype === 'image' ? mark.marktype : undefined
+      for (const it of items) boundLeaf(bounds, it, miter, kind)
       return bounds
   }
 }
 
 /** Bound one leaf item (or nested group/mark item) into `bounds`. */
-export function boundLeaf(bounds: Bounds, it: SceneItem, miterPaths = false): Bounds {
+export function boundLeaf(bounds: Bounds, it: SceneItem, miterPaths = false, kind?: string): Bounds {
   const mt = (it as SceneGroup).marktype
   const hasItems = Array.isArray((it as SceneGroup).items)
   if (mt === 'group' || (mt === undefined && hasItems)) {
@@ -750,7 +752,7 @@ export function boundLeaf(bounds: Bounds, it: SceneItem, miterPaths = false): Bo
     boundTypedMark(b, it as unknown as SceneGroup, miterPaths)
     return bounds.union(b)
   }
-  return bounds.union(boundIsolated(it, miterPaths))
+  return bounds.union(boundIsolated(it, miterPaths, kind))
 }
 
 /**
@@ -838,20 +840,24 @@ export function boundAxisGroup(axis: SceneGroup): Bounds {
 }
 
 /** Bound a single leaf item into an isolated Bounds (vega's per-item bounds). */
-function boundIsolated(it: SceneItem, miterPaths = false): Bounds {
+/**
+ * `kind`, when the mark's type is known to be one of those that read a fixed set of channels, says which: the item is then
+ * measured as that type, whatever other channels (a `text`, a `width`, an `outerRadius`) its encode gave it.
+ */
+function boundIsolated(it: SceneItem, miterPaths = false, kind?: string): Bounds {
   const bounds = new Bounds()
   // Text first: a text mark inherits `radius`/`outerRadius` from the mark def
   // and config.text (e.g. config.text.outerRadius), but vega bounds text as
   // text -- those arc properties are inert for it. (A guide leaf is a text item
   // like any other: its font size is the item's, 11 when it has none.)
-  if (it._kind === 'text' || (it._kind === undefined && it.text != null)) return boundText(bounds, it)
+  if (it._kind === 'text' || (it._kind === undefined && kind === undefined && it.text != null)) return boundText(bounds, it)
   // a guide's rule says what it is, whatever other channels (a width, a height) its encode gave it
   if (it._kind === 'rule') return boundRule(bounds, it)
   // Arc items: the geometry is angular (outerRadius/innerRadius/angles), not a
   // stored path — bound the annular sector analytically (vega bounds the
   // d3-arc path through the recording context; the analytic bbox matches to
   // the canonical precision).
-  if (it.path == null && (it.outerRadius != null || it.innerRadius != null || it.startAngle != null || it.endAngle != null)) {
+  if (kind === undefined && it.path == null && (it.outerRadius != null || it.innerRadius != null || it.startAngle != null || it.endAngle != null)) {
     return boundArcItem(bounds, it)
   }
   if (it.path != null) {
@@ -900,13 +906,13 @@ function boundIsolated(it: SceneItem, miterPaths = false): Bounds {
     boundStroke(bounds, it, true)
     return bounds.translate(x, y)
   }
-  if (it.url != null) {
+  if (kind === 'image' || (kind === undefined && it.url != null)) {
     return boundImage(bounds, it)
   }
-  if (it.width != null || it.height != null) {
+  if (kind === 'rect' || (kind === undefined && (it.width != null || it.height != null))) {
     return boundRect(bounds, it)
   }
-  if (it.x2 != null || it.y2 != null) {
+  if (kind === 'rule' || (kind === undefined && (it.x2 != null || it.y2 != null))) {
     // rule (x2/y2 line segment)
     return boundRule(bounds, it)
   }

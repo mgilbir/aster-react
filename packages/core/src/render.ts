@@ -109,7 +109,10 @@ export function renderSceneToSvg(scene: SceneRoot): string {
   w.s = ''
   viewGroupAttrs(scene, w)
   out += `<g${w.s}>`
-  out += `<g class="mark-group role-frame root" role="graphics-object" aria-roledescription="group mark container"><g transform="translate(${num(scene.frameX ?? 0)},${num(scene.frameY ?? 0)})">`
+  out += `<g class="mark-group role-frame root" role="graphics-object" aria-roledescription="group mark container">`
+  w.s = ''
+  groupItemAttrs(scene.frameX ?? 0, scene.frameY ?? 0, w, scene.frameAria)
+  out += `<g${w.s}>`
   const { plotW, plotH } = scenePlotSize(scene)
   w.s = ''
   frameAttrs(scene, w)
@@ -1767,19 +1770,26 @@ function titleText(group: SceneGroup): string {
   return Array.isArray(t) ? t.join(' ') : t == null ? '' : String(t)
 }
 
-/** The caption of a guide group's container (`aria-label`): the guide's own `description`, else vega's caption. */
-function guideCaption(group: SceneGroup, scope: GuideScope): string | undefined {
+/**
+ * The caption of a guide's container (`aria-label`): the container's own `description`, else the first item's, else the
+ * generated one; undefined when there is none (the guide still has its role). `role` is the effective role: a data mark
+ * the spec gave a guide's role is read the same way, with its first data item as the item.
+ */
+function guideCaption(group: SceneGroup, role: string, scope: GuideScope): string | undefined {
   if (group.description) return group.description
-  // vega-scenegraph ariaGuide: `mark.description || item.description || caption(item)` -- the item of an axis or a legend is
-  // its group item, that of a title text its text item
-  const itemDescription = group.role === 'title-text' || group.role === 'title-subtitle' ? (group.items?.[0] as SceneItem | undefined)?.description : group.itemAria?.description
+  const isGuide = group.role === role
+  const first = group.items?.[0] as SceneItem | undefined
+  // (a guide's group item carries its aria channels as `itemAria`; the item of a title text, or of a mark, is its first item)
+  const itemDescription = isGuide && (role === 'axis' || role === 'legend') ? group.itemAria?.description : first?.description
   if (itemDescription) return itemDescription
-  switch (group.role) {
-    // (a guide whose scale is unknown has no caption: vega's ariaGuide catches the failure and writes no ARIA at all)
-    case 'axis': return captions && scopeScales(scope).has(group.scale ?? '') ? captions.axis({ ...group, title: captions.titleText(group) }, scopeScales(scope)) : undefined
-    case 'legend': return captions && scopeScales(scope).has(group.legendScale ?? '') ? captions.legend({ ...group, title: captions.titleText(group) }, scopeScales(scope)) : undefined
-    case 'title-text': return `Title text '${titleText(group)}'`
-    case 'title-subtitle': return `Subtitle text '${titleText(group)}'`
+  switch (role) {
+    // (an axis that draws nothing, a guide whose scale is unknown, and a mark that is no guide have no generated caption:
+    // vega's ariaGuide fails to build one and writes no ARIA at all)
+    case 'axis': return isGuide && captions && unwrapAxis(group).parts.length > 0 && scopeScales(scope).has(group.scale ?? '') ? captions.axis({ ...group, title: captions.titleText(group) }, scopeScales(scope)) : undefined
+    case 'legend': return isGuide && captions && scopeScales(scope).has(group.legendScale ?? '') ? captions.legend({ ...group, title: captions.titleText(group) }, scopeScales(scope)) : undefined
+    // (a title caption needs an item to read)
+    case 'title-text': return first ? `Title text '${titleText(group)}'` : undefined
+    case 'title-subtitle': return first ? `Subtitle text '${titleText(group)}'` : undefined
     default: return undefined
   }
 }
@@ -1787,12 +1797,11 @@ function guideCaption(group: SceneGroup, scope: GuideScope): string | undefined 
 /** vega-scenegraph `ariaMarkAttributes` for a mark container (the group or data mark `group` is). */
 function ariaMarkAttrs(group: SceneGroup, w: AttrSink, marktype: string, scope: GuideScope): void {
   if (group.aria === false) { w.v('aria-hidden', 'true'); return }
-  const role = group.role
+  // the role vega reads is the spec's own for a data mark
+  const role = group.role === 'mark' ? group.markRole : group.role
   if (role !== undefined && ARIA_IGNORE.has(role)) return
   if (role === 'axis' || role === 'legend' || role === 'title-text' || role === 'title-subtitle') {
-    // (an axis that draws nothing has no caption in vega either: its ariaGuide finds no mark to read)
-    if (role === 'axis' && unwrapAxis(group).parts.length === 0) return
-    const label = guideCaption(group, scope)
+    const label = guideCaption(group, role, scope)
     if (label === undefined) return
     w.v('role', 'graphics-symbol')
     w.v('aria-roledescription', role === 'title-text' ? 'title' : role === 'title-subtitle' ? 'subtitle' : role)
@@ -1804,7 +1813,8 @@ function ariaMarkAttrs(group: SceneGroup, w: AttrSink, marktype: string, scope: 
   if (!recurse && group.describes === true) recurse = (group.items ?? []).some((it) => (it as SceneItem).description != null && (it as SceneItem).aria !== false)
   w.v('role', recurse ? 'graphics-object' : 'graphics-symbol')
   w.v('aria-roledescription', `${marktype} mark container`)
-  w.v('aria-label', group.description)
+  // (an empty description is no label)
+  if (group.description) w.v('aria-label', group.description)
 }
 
 /** vega-scenegraph cssClass: `mark-<type> role-<role> <name>`; the role and name are the spec's. */
