@@ -96,6 +96,8 @@ interface Kit {
   frame: Frame
   orient: string
   scale: string
+  /** the orient the overlap removal bounds the labels by: what a signal holds is not a side, so the axis is bounded as a vertical one */
+  boundOrient: string
   band: TickPlacement
   user: Record<string, UserEncode | undefined>
 }
@@ -237,7 +239,7 @@ function labels(k: Kit, size: unknown): GuideMarkDef {
   const overlap = props.get('labelOverlap')
   const bound = props.get('labelBound')
   if (overlap || bound) {
-    mark.overlap = { separation: props.get('labelSeparation'), method: overlap, order: 'datum.index', bound: bound ? { scale, orient, tolerance: bound } : null }
+    mark.overlap = { separation: props.get('labelSeparation'), method: overlap, order: 'datum.index', bound: bound ? { scale, orient: k.boundOrient, tolerance: bound } : null }
   }
   return mark
 }
@@ -397,6 +399,8 @@ export interface AxisBuildInput {
   cfg: Rec
   scale: string
   orient: string
+  /** the orient is the value of a signal (the config it picks up and the label bounds are read as for no known side) */
+  orientSignal?: boolean
   encode: Record<string, UserEncode | undefined>
   /** the AxisTicks tuples: `{index, tickIndex, value, label}`, plus the `extra` entry */
   ticks: Row[]
@@ -435,6 +439,7 @@ type PartName = 'grid' | 'tick' | 'label' | 'domain' | 'title'
 interface AxisDefs {
   cfg: Rec
   orient: string
+  orientSignal: boolean
   scale: string
   encode: Record<string, UserEncode | undefined>
   flags: { ticks: boolean; labels: boolean; grid: boolean; domain: boolean; title: boolean }
@@ -445,7 +450,7 @@ interface AxisDefs {
 function defineAxis(inp: AxisBuildInput): AxisDefs {
   const { spec, cfg, orient } = inp
   const props = propsOf(spec, cfg)
-  const k: Kit = { spec, props, frame: frameOf(orient), orient, scale: inp.scale, band: tickPlacement(props), user: inp.encode }
+  const k: Kit = { spec, props, frame: frameOf(orient), orient, boundOrient: inp.orientSignal ? '' : orient, scale: inp.scale, band: tickPlacement(props), user: inp.encode }
   const flags = { ticks: !!props.get('ticks'), labels: !!props.get('labels'), grid: !!props.get('grid'), domain: !!props.get('domain'), title: spec.title != null }
   const parts: AxisDefs['parts'] = []
   if (flags.grid) parts.push({ part: 'grid', def: grid(k), onTicks: true })
@@ -456,19 +461,19 @@ function defineAxis(inp: AxisBuildInput): AxisDefs {
   if (flags.domain) parts.push({ part: 'domain', def: domain(k), onTicks: false })
   if (flags.title) parts.push({ part: 'title', def: title(k), onTicks: false })
   const groupDef: GuideMarkDef = { type: 'rule', role: 'axis', style: inp.encode.axis?.style, encode: groupEncode(k), interactive: false }
-  return { cfg, orient, scale: inp.scale, encode: inp.encode, flags, parts, groupDef }
+  return { cfg, orient, orientSignal: !!inp.orientSignal, scale: inp.scale, encode: inp.encode, flags, parts, groupDef }
 }
 
 /** Charts that share a config nobody can change also share the marks of an axis with the same spec; so does an axis kept between evaluations. */
 function axisDefs(inp: AxisBuildInput): AxisDefs {
   const { spec, cfg, orient } = inp
   const kept = inp.store?.get(spec) as AxisDefs | undefined
-  if (kept !== undefined && kept.cfg === cfg && kept.orient === orient && kept.scale === inp.scale && kept.encode === inp.encode) return kept
+  if (kept !== undefined && kept.cfg === cfg && kept.orient === orient && kept.orientSignal === !!inp.orientSignal && kept.scale === inp.scale && kept.encode === inp.encode) return kept
   let shareKey: string | undefined
   if (isShareable(cfg)) {
     const specKey = contentKey(spec)
     const encodeKey = specKey === undefined ? undefined : contentKey(inp.encode)
-    if (encodeKey !== undefined) shareKey = 'a' + keyPart(orient) + keyPart(inp.scale) + specKey + '|' + encodeKey
+    if (encodeKey !== undefined) shareKey = 'a' + (inp.orientSignal ? 's' : 'o') + keyPart(orient) + keyPart(inp.scale) + specKey + '|' + encodeKey
   }
   const shared = sharedMarks(shareKey) as AxisDefs | undefined
   let defs: AxisDefs

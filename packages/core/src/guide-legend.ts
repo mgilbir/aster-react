@@ -325,6 +325,8 @@ export interface LegendBuildInput {
   style: GuideStyles
   /** the layout never ran: the entries stay where their encode put them */
   raw: boolean
+  /** The view makes a second pass (fit): what the first left of this legend, see `buildLegend`. */
+  relayout?: { was: string | undefined; note(state: string): void }
 }
 
 export interface GuideHost extends EntryHost {
@@ -485,7 +487,18 @@ export function buildLegend(inp: LegendBuildInput): LegendBuilt {
     for (const it of labels) entryLeaves.push(it)
   }
 
-  if (!inp.raw) arrange(entry, titleItem && title, titleItem, strip, group, !!datum.vgrad, type !== SymbolLegend)
+  if (!inp.raw) {
+    const edges = (b: Bounds): string => `${b.x1},${b.y1},${b.x2},${b.y2}`
+    // A view that fits its viewport lays its legends out twice, and the second time from where the first left them: the boxes it
+    // measures are the first pass's boxes carried to their places, which are not always the floats they were (a title's width is
+    // rounded up, and a box carried to a place and back can be a hair over a whole pixel). A legend that is the same in both
+    // passes is therefore arranged again, from the arrangement it has.
+    const state = `${edges(entry.box)}|${titleItem ? `${title.x},${title.y},${edges(title.box)}` : ''}|${edges(strip)}`
+    const again = inp.relayout !== undefined && inp.relayout.was === state
+    inp.relayout?.note(state)
+    arrange(entry, titleItem && title, titleItem, strip, group, !!datum.vgrad, type !== SymbolLegend)
+    if (again) arrange(entry, titleItem && title, titleItem, strip, group, !!datum.vgrad, type !== SymbolLegend)
+  }
   if (titleItem) {
     titleItem.x = title.x
     titleItem.y = title.y

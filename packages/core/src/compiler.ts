@@ -347,10 +347,11 @@ function compileGuideAxes(raw: Array<Record<string, unknown>> | undefined, cfg: 
     // axis def itself then wins over every block.
     const orientRaw = a.orient as unknown
     if (orientRaw && typeof orientRaw === 'object' && typeof (orientRaw as { signal?: unknown }).signal === 'string') {
-      // `orient: {signal}`: vega-parser axis-config picks the config blocks by the signal at run time
-      const variants: Record<string, CompiledAxis> = {}
-      for (const o of ['top', 'bottom', 'left', 'right', '']) variants[o] = compileGuideAxes([{ ...a, orient: o }], cfg, scales)[0]!
-      axes.push({ ...variants.left!, orientSignal: { signal: (orientRaw as { signal: string }).signal, variants } })
+      // `orient: {signal}`: the config blocks are consulted per key, as signal expressions over the orient signal (vega's
+      // axis config), so a guide property that carries one is a signal property like any other
+      const sc = [...scales].reverse().find((s) => s.name === a.scale)
+      const axis = compileAxis(applyConfigDefaults({ ...a, orient: '' }, signalOrientDefaults(cfg, (orientRaw as { signal: string }).signal, sc?.type === 'band'), scales))
+      axes.push({ ...axis, orientSignal: { signal: (orientRaw as { signal: string }).signal } })
       continue
     }
     const orient = String(a.orient ?? '')
@@ -380,6 +381,61 @@ function compileGuideLegends(raw: Array<Record<string, unknown>> | undefined, cf
   if (cfg === defaultMergedConfig() && cfg.legend) markShareable(cfgLegend)
   return (raw ?? []).map((l) => compileLegend(applyConfigDefaults(l, cfgLegend, undefined, true)))
 }
+
+/** Where the config blocks say a thing about the orient: the keys of the blocks, whichever block holds them. */
+const keysOf = (...blocks: Array<unknown>): string[] => {
+  const seen = new Set<string>()
+  for (const b of blocks) if (b && typeof b === 'object') for (const k of Object.keys(b)) seen.add(k)
+  return [...seen]
+}
+
+/**
+ * The axis defaults for an `orient` that is a signal: every key that an orient-dependent config block (axisX / axisY, and
+ * axisTop / axisBottom / axisLeft / axisRight) mentions becomes an expression over the signal choosing among the blocks'
+ * values, the rest are the plain `axis` block. The expression text is the one the orient decides with, so a signal that
+ * is itself an expression keeps its precedence quirks. A property so made is a signal property: it is truthy as a flag
+ * whatever it evaluates to, as for a spec that wrote the signal.
+ */
+function signalOrientDefaults(cfg: Record<string, unknown>, orient: string, band: boolean): Record<string, unknown> {
+  const block = (name: string): Record<string, unknown> | undefined => {
+    const b = cfg[name]
+    return b && typeof b === 'object' ? (b as Record<string, unknown>) : undefined
+  }
+  const axis = block('axis') ?? {}
+  const style = (block('style') ?? {}) as Record<string, Record<string, unknown> | undefined>
+  /** a block's own value for a key, else the `axis` block's, else the guide style's for the title and label keys */
+  const fallback = (key: string, own: Record<string, unknown> | undefined): unknown => {
+    if (own && Object.hasOwn(own, key)) return own[key]
+    if (Object.hasOwn(axis, key)) return axis[key]
+    const from = key.startsWith('title') ? 'guide-title' : key.startsWith('label') ? 'guide-label' : undefined
+    if (from === undefined) return null
+    const prop = key === 'titleColor' || key === 'labelColor' ? 'fill' : /^(title|label)(Font|FontSize|FontWeight)$/.test(key) ? key[5]!.toLowerCase() + key.slice(6) : undefined
+    return prop === undefined ? undefined : style[from]?.[prop]
+  }
+  const text = (v: unknown): string | null => (v === undefined || v === null ? null : isSignalValue(v) ? v.signal : JSON.stringify(v))
+  const axisX = block('axisX')
+  const axisY = block('axisY')
+  const out: Record<string, unknown> = { ...axis }
+  const horizontal = `${orient} === 'top' || ${orient} === 'bottom'`
+  for (const key of keysOf(axisX, axisY)) {
+    out[key] = { signal: `${horizontal} ? (${text(fallback(key, axisX))}) : (${text(fallback(key, axisY))})` }
+  }
+  const top = block('axisTop')
+  const bottom = block('axisBottom')
+  const left = block('axisLeft')
+  const right = block('axisRight')
+  for (const key of keysOf(top, bottom, left, right)) {
+    const part = (name: string, own: Record<string, unknown> | undefined): string => {
+      const v = text(fallback(key, own))
+      return v === null ? '' : `${orient} === '${name}' ? (${v}) : `
+    }
+    out[key] = { signal: part('left', left) + part('bottom', bottom) + part('right', right) + part('top', top) + '(null)' }
+  }
+  if (band) Object.assign(out, block('axisBand'))
+  return out
+}
+
+const isSignalValue = (v: unknown): v is { signal: string } => !!v && typeof v === 'object' && typeof (v as { signal?: unknown }).signal === 'string'
 
 function compileAxis(a: Record<string, unknown>): CompiledAxis {
   const out: CompiledAxis = {
