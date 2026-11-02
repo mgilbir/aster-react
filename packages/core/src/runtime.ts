@@ -10,7 +10,7 @@ import { carryByAlignment, carryByMapping, type IdCounter } from './identifier-i
 import { applyTransforms, applyTransformsToSharedRows, compileExprTransform, sortOrder, getField, geoJSONPath, aggregateGroup, type Row, type TransformContext } from './transform.js'
 import { fieldOf } from './transform-agg.js'
 import { atRandomSite, contentKey, mayDrawRandom, replayable } from './random-tape.js'
-import { activeMeter, withLimits, checkRowCount, meterItems, meterTick, AsterLimitError } from './limits.js'
+import { activeMeter, withLimits, ceiling, checkRowCount, meterItems, meterTick, AsterLimitError } from './limits.js'
 import { withTextMetricsProvider } from './text-metrics.js'
 import { AsterUrlError } from './url-policy.js'
 import { SpecParseError } from './parse-error.js'
@@ -5623,6 +5623,7 @@ function buildAxis(axis: CompiledAxis, ctx: EvalContext, index: number): SceneGr
   let rows: Row[] = ticks.map((value, i) => ({ index: i / ((ticks.length - 1) || 1), tickIndex: i, value, label: labelCache[i] }))
   if (extra && ticks.length) rows.push({ index: -1, tickIndex: -1, extra: { value: ticks[0] }, label: '' })
   if (ctx.passMemory !== undefined) rows = retainGuideOrder(rows, ctx.passMemory, `a${ctx.scope.path.join('/')}:${index}`)
+  ceiling('items', rows.length, 'axis ticks')
   meterItems(rows.length, 'axis ticks')
 
   const guides = chartGuides(ctx.chart)

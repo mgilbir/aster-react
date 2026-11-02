@@ -12,7 +12,7 @@
  */
 import type { SceneGroup } from './types.js'
 import { Bounds, layoutBounds } from './bounds.js'
-import { boundedCount } from './limits.js'
+import { boundedCount, ceiling } from './limits.js'
 
 type Opt = Record<string, unknown>
 
@@ -121,7 +121,7 @@ export function placeGrid(boxes: Bounds[], at: ReadonlyArray<{ x: number; y: num
   const n = boxes.length
   const ncols = (opt.columns as number) || n
   // `columns` comes from the spec: bound the per-column arrays before allocating them
-  if (ncols > 0) boundedCount(ncols, 'facet columns')
+  if (ncols > 0) { ceiling('items', ncols, 'facet columns'); boundedCount(ncols, 'facet columns') }
   const nrows = ncols <= 0 ? 1 : Math.ceil(n / ncols)
   const dx = shiftAlong({ columns: true, ncols, nrows }, boxes, at.map((a) => a.x || 0), option(opt.padding, 'column'), option(opt.align, 'column'), option(opt.center, 'column'))
   const dy = shiftAlong({ columns: false, ncols, nrows }, boxes, at.map((a) => a.y || 0), option(opt.padding, 'row'), option(opt.align, 'row'), option(opt.center, 'row'))
@@ -270,7 +270,7 @@ export function layoutFacet(view: SceneGroup, opt: Opt, memory?: { prev: readonl
   if (before !== undefined && before.length === placed.length) placed.forEach((g, i) => { g.x = before[i]!.x; g.y = before[i]!.y })
   const flush = opt.bounds === 'flush'
   const ncols = (opt.columns as number) || cells.length
-  if (ncols > 0) boundedCount(ncols, 'facet columns')
+  if (ncols > 0) { ceiling('items', ncols, 'facet columns'); boundedCount(ncols, 'facet columns') }
   const nrows = ncols <= 0 ? 1 : Math.ceil(cells.length / ncols)
 
   const grid = layoutCells(cells, opt)

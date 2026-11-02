@@ -4,6 +4,7 @@
  * achieved by running vega-lite.compile in the app build / dev (oracle).
  */
 import { dict, ownGet } from './util.js'
+import { assertSpecDepth } from './limits.js'
 import { checkDataReferences, normalizeSpecLists } from './spec-structure.js'
 import { noteWrittenType, transformTypeOf } from './transform-names.js'
 import { checkExpressions } from './spec-expressions.js'
@@ -33,6 +34,8 @@ export function compileChart(givenSpec: VgSpec): CompiledChart {
   if (!givenSpec || typeof givenSpec !== 'object') {
     throw new Error('[aster] compileChart expects a Vega spec object')
   }
+  // a spec nested past the ceiling (or cyclic) is a typed error here, not a RangeError from the recursion below
+  assertSpecDepth(givenSpec)
   // vega-parser reads every scope list through vega-util `array()` and refuses a spec that uses a data
   // set it never declared (`Undefined data set name`) before any view exists: same here, before anything runs.
   const rawSpec = normalizeSpecLists(givenSpec)

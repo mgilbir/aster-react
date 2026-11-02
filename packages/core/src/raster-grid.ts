@@ -119,7 +119,7 @@ export function densityGrid(req: DensityRequest): RasterGrid {
   const n = 2 * ox + (width >> k)
   const m = 2 * oy + (height >> k)
   // The grid is sized by spec parameters (size, bandwidth radius): bound the cell count before allocating it.
-  meterRows(n * m, req.label)
+  meterRows(n * m, req.label, 'cells')
 
   let values = new Float32Array(n * m)
   for (let i = 0; i < xs.length; i++) {

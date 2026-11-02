@@ -69,7 +69,7 @@ export { compileExpr, type CompiledExpr, type ExpressionRuntime } from './expres
 export { buildScale, type Scale } from './scales.js'
 export { applyTransforms, sortRows, type Row } from './transform.js'
 export {
-  AsterLimitError, checkSpecLimits, checkSceneLimits, checkSvgLength, createLimitClock, withLimits, HARD_MAX_SPEC_DEPTH,
+  AsterLimitError, checkSpecLimits, checkSceneLimits, checkSvgLength, createLimitClock, withLimits, HARD_MAX_SPEC_DEPTH, HARD_CAPS,
   type LimitClock, type LimitMeter, type SpecLimits,
 } from './limits.js'
 export { AsterUrlError, type ImageUrlPolicy } from './url-policy.js'
