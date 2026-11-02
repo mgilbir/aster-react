@@ -42,7 +42,7 @@ interface Shape { numeric: string[]; any: string[] }
 function genStep(r: () => number, shape: Shape, dataset: string, index: number, published: string[], filters: string[], dense: boolean): { t: Record<string, unknown>; shape: Shape; draws?: boolean; publishes?: string; crossfilter?: boolean } {
   const num = (): string => pick(r, shape.numeric)
   const out = (base: string): string => `${base}_${dataset}${index}`
-  const kinds = ['formulaWidth', 'formulaSignal', 'formulaPure', 'filterSignal', 'binFixed', 'binSignal', 'binExtent', 'aggregate', 'collect', 'identifier', 'extent', 'window', 'project', 'stack', 'formulaRandom', 'sample', 'impute', 'crossfilter', 'resolvefilter', 'filterCount', 'formulaPool', 'formulaPool', 'binPool']
+  const kinds = ['formulaWidth', 'formulaSignal', 'formulaPure', 'filterSignal', 'binFixed', 'binSignal', 'binExtent', 'aggregate', 'collect', 'identifier', 'extent', 'window', 'project', 'stack', 'formulaRandom', 'sample', 'impute', 'crossfilter', 'resolvefilter', 'filterCount', 'formulaPool', 'formulaPool', 'binPool', 'formulaPositions', 'filterPositions']
   const kind = dense ? pick(r, ['formulaPool', 'binPool', 'formulaPool', 'binPool', 'formulaWidth', 'formulaSignal']) : pick(r, kinds)
   const keep = shape.any
   switch (kind) {
@@ -72,6 +72,14 @@ function genStep(r: () => number, shape: Shape, dataset: string, index: number, 
     // (fields from a small pool, so steps read and write each other's: a chain of them is where running steps as one could go wrong)
     case 'formulaPool': { const as = pick(r, ['p', 'q', 'x']); return { t: { type: 'formula', as, expr: `datum.${pick(r, ['p', 'q', 'x', 'v'])} + ${pick(r, ['1', 'datum.q', 'sigA', 'datum.p * 2'])}` }, shape: { numeric: [...shape.numeric, as], any: [...keep, as] } } }
     case 'binPool': { const a = pick(r, ['p', 'q']); return { t: { type: 'bin', field: pick(r, ['p', 'q', 'x', 'v']), ...(r() < 0.5 ? { extent: [0, 14], step: pick(r, [1, 2]) } : { maxbins: pick(r, [4, 8]) }), as: [a, pick(r, ['q', 'x', 'p'])] }, shape: { numeric: [...shape.numeric, a], any: [...keep, a] } } }
+    // (a signal in each position of an expression: both branches and the test of a conditional, a call argument at depth, an array or
+    // object literal value, either side of a short-circuit, a computed member)
+    case 'formulaPositions': {
+      const as = out('fx'); const f = num()
+      const expr = pick(r, [`datum.${f} > 3 ? sigA : 0`, `datum.${f} > 3 ? 0 : sigB`, `sigA > 3 ? datum.${f} : 1`, `abs(max(1, min(50, floor(sigA * datum.${f}))))`, `[1, sigB][1] + datum.${f}`, `({a: sigA}).a + datum.${f}`, `datum.${f} > 100 || sigB`, `sigA && datum.${f}`, `[datum.${f}, sigA, sigB][sigB % 3]`, `datum[sigA > 3 ? 'x' : 'v']`])
+      return { t: { type: 'formula', as, expr }, shape: { numeric: [...shape.numeric, as], any: [...keep, as] } }
+    }
+    case 'filterPositions': return { t: { type: 'filter', expr: pick(r, [`datum.${num()} > (sigA > 3 ? thr : 0)`, `datum.${num()} >= (sigB > 1 ? 0 : thr)`, `[thr, sigA][sigB % 2] <= datum.${num()}`]) }, shape }
     case 'crossfilter': { const sig = out('xf'); return { t: { type: 'crossfilter', signal: sig, fields: [num(), num()], query: [{ signal: 'rangeA' }, { signal: 'rangeB' }] }, shape, publishes: sig, crossfilter: true } }
     case 'resolvefilter': {
       if (!filters.length) return { t: { type: 'filter', expr: `datum.${num()} >= 0` }, shape }

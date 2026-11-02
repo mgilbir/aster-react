@@ -94,32 +94,41 @@ function readExpression(code: string, names: Set<string>): boolean {
   return readTree(tree, names)
 }
 
-function readTree(e: Expr | null, names: Set<string>): boolean {
-  if (e === null) return true
-  switch (e.type) {
+/** The node types known to compute from their children alone; any other type (a new or forgotten shape) keeps the step out. */
+const PURE_NODES = new Set(['Literal', 'Identifier', 'MemberExpression', 'CallExpression', 'UnaryExpression', 'BinaryExpression', 'LogicalExpression', 'ConditionalExpression', 'ArrayExpression', 'ObjectExpression', 'Property'])
+
+/**
+ * Every identifier of the tree, found by walking ALL the child nodes of a node whatever its type (not the branches a type is known to
+ * have), so that a read in any position is seen. The only names that are not reads are a property key (`a.b`, `{b: 1}`) and a called
+ * function, which must be a pure or drawing one. `false`: the tree holds a node of a type not known to be pure, or `event`/`item`.
+ */
+function readTree(e: unknown, names: Set<string>): boolean {
+  if (e === null || e === undefined) return true
+  if (Array.isArray(e)) return e.every((x) => readTree(x, names))
+  if (typeof e !== 'object') return true
+  const node = e as { type?: unknown } & Record<string, unknown>
+  if (typeof node.type !== 'string' || !PURE_NODES.has(node.type)) return false
+  switch (node.type) {
     case 'Literal': return true
-    case 'Identifier':
-      if (e.name === 'event' || e.name === 'item' || e.name === 'this') return false
-      if (!KEYWORDS.has(e.name)) names.add(e.name)
-      return true
-    case 'MemberExpression':
-      return readTree(e.object, names) && (!e.computed || readTree(e.property, names))
-    case 'CallExpression': {
-      const f = e.callee
-      if (f.type !== 'Identifier' || !(PURE_FUNCTIONS.has(f.name) || DRAWING_FUNCTIONS.has(f.name))) return false
-      for (const a of e.arguments) if (!readTree(a, names)) return false
+    case 'Identifier': {
+      const name = node.name as string
+      if (name === 'event' || name === 'item' || name === 'this') return false
+      if (!KEYWORDS.has(name)) names.add(name)
       return true
     }
-    case 'UnaryExpression': return readTree(e.argument, names)
-    case 'BinaryExpression': case 'LogicalExpression': return readTree(e.left, names) && readTree(e.right, names)
-    case 'ConditionalExpression': return readTree(e.test, names) && readTree(e.consequent, names) && readTree(e.alternate, names)
-    case 'ArrayExpression':
-      for (const x of e.elements) if (!readTree(x, names)) return false
+    case 'MemberExpression':
+      // (a property name is not a read; a computed property is an expression)
+      return readTree(node.object, names) && (node.computed !== true || readTree(node.property, names))
+    case 'Property': return readTree(node.value, names)
+    case 'CallExpression': {
+      const f = node.callee as { type?: string; name?: string }
+      if (f?.type !== 'Identifier' || !(PURE_FUNCTIONS.has(f.name!) || DRAWING_FUNCTIONS.has(f.name!))) return false
+      return readTree(node.arguments, names)
+    }
+    default:
+      // every other child of the node, whatever it is called
+      for (const k of Object.keys(node)) if (k !== 'type' && !readTree(node[k], names)) return false
       return true
-    case 'ObjectExpression':
-      for (const p of e.properties) if (!readTree(p.value, names)) return false
-      return true
-    default: return false
   }
 }
 
@@ -209,32 +218,35 @@ function footprint(p: Record<string, unknown>): Footprint | null {
   }
 }
 
-/** The fields an expression reads off `datum` by name; `null` when it uses the row any other way (as a whole, or by a computed name). */
+/**
+ * The fields an expression reads off `datum` by name; `null` when it uses the row any other way (as a whole, by a computed name) or
+ * holds a node of a type not known to be pure. All child nodes of a node are walked, whatever its type.
+ */
 function datumFields(code: string): string[] | null {
   let tree: Expr
   try { tree = parseExpressionCached(code) } catch { return null }
   const found = new Set<string>()
-  const visit = (e: Expr | null): boolean => {
-    if (e === null) return true
-    switch (e.type) {
-      case 'Literal': return true
-      case 'Identifier': return e.name !== 'datum'
-      case 'MemberExpression': {
-        if (e.object.type === 'Identifier' && e.object.name === 'datum') {
-          if (!e.computed && e.property.type === 'Identifier') { found.add(e.property.name); return true }
-          if (e.computed && e.property.type === 'Literal' && typeof e.property.value === 'string') { found.add(e.property.value); return true }
-          return false
-        }
-        return visit(e.object) && (!e.computed || visit(e.property))
+  const visit = (e: unknown): boolean => {
+    if (e === null || e === undefined) return true
+    if (Array.isArray(e)) return e.every(visit)
+    if (typeof e !== 'object') return true
+    const n = e as { type?: unknown } & Record<string, unknown>
+    if (typeof n.type !== 'string' || !PURE_NODES.has(n.type)) return false
+    if (n.type === 'Identifier') return n.name !== 'datum'
+    if (n.type === 'Literal') return true
+    if (n.type === 'Property') return visit(n.value)
+    if (n.type === 'MemberExpression') {
+      const o = n.object as { type?: string; name?: string }
+      const p = n.property as { type?: string; name?: string; value?: unknown }
+      if (o?.type === 'Identifier' && o.name === 'datum') {
+        if (n.computed !== true && p.type === 'Identifier') { found.add(p.name!); return true }
+        if (n.computed === true && p.type === 'Literal' && typeof p.value === 'string') { found.add(p.value); return true }
+        return false
       }
-      case 'CallExpression': return visit(e.callee) && e.arguments.every(visit)
-      case 'UnaryExpression': return visit(e.argument)
-      case 'BinaryExpression': case 'LogicalExpression': return visit(e.left) && visit(e.right)
-      case 'ConditionalExpression': return visit(e.test) && visit(e.consequent) && visit(e.alternate)
-      case 'ArrayExpression': return e.elements.every(visit)
-      case 'ObjectExpression': return e.properties.every((x) => visit(x.value))
-      default: return false
+      return visit(n.object) && (n.computed !== true || visit(n.property))
     }
+    for (const k of Object.keys(n)) if (k !== 'type' && !visit(n[k])) return false
+    return true
   }
   return visit(tree) ? [...found] : null
 }

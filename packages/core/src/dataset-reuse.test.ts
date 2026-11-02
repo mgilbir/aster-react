@@ -188,6 +188,71 @@ describe('the rows a dataset starts from are its own, in the order its source li
   })
 })
 
+describe('a signal read in any position of an expression or a parameter moves the step', () => {
+  const rows: Row[] = rowsOf(24)
+  // every expression has a signal `s` in the one position that names it; the values of `s` below change what it computes
+  const exprs: Record<string, string> = {
+    'the test of a conditional': 's ? datum.v : 0',
+    'the consequent of a conditional': 'datum.v > 3 ? s : 0',
+    'the alternate of a conditional': 'datum.v > 3 ? 0 : s',
+    'a nested conditional': 'datum.v > 100 ? 1 : (datum.v > 3 ? s : 0)',
+    'a computed member of the row': 'datum[s]',
+    'an index into the signal': 's[0]',
+    'a computed member of an array literal': '[10, 20, 30][s[0]]',
+    'a call argument': 'abs(s[0] - 3)',
+    'a call argument at depth': 'abs(max(1, min(50, floor(abs(s[0] * 2)))))',
+    'an element of an array literal': '[1, s[0]][1]',
+    'a value of an object literal': '({a: s[0]}).a',
+    'the right of a short-circuit': 'datum.v > 100 || s[0]',
+    'the left of a short-circuit': 's[0] && datum.v',
+    'a unary': '-s[0]',
+    'a binary at depth': '(1 + (2 * (datum.v + s[0]))) - 1',
+  }
+  for (const [where, expr] of Object.entries(exprs)) {
+    it(`${where}: ${expr}`, () => {
+      // `datum[s]` names a field: the signal is a field name there
+      const values = expr.includes('datum[s]') ? ['v', 'x'] : [[1], [7]]
+      const spec = { width: 50, height: 50, autosize: 'none', signals: [{ name: 's', value: values[0] }], data: [{ name: 't', transform: [{ type: 'formula', as: 'r', expr }] }], marks: [] } as unknown as VgSpec
+      const session = createChartSession()
+      const first = session.evaluate(spec, { data: { t: rows }, signals: { s: values[0] } })
+      void first
+      const { out, reused } = counted(() => session.evaluate(spec, { data: { t: rows }, signals: { s: values[1] } }))
+      expect(reused).toBe(0)
+      expect(made(out)).toBe(made(evaluateChart(compileChart(spec), { data: { t: rows }, signals: { s: values[1] } })))
+    })
+  }
+
+  const params: Record<string, { transform: Record<string, unknown>; a: unknown; b: unknown }> = {
+    'bin extent as a signal': { transform: { type: 'bin', field: 'x', extent: { signal: 's' }, maxbins: 4, as: ['b0', 'b1'] }, a: [0, 13], b: [0, 6] },
+    'a signal inside an array': { transform: { type: 'bin', field: 'x', extent: [0, { signal: 's' }], step: 2, as: ['b0', 'b1'] }, a: 13, b: 5 },
+    'a bin step as a signal': { transform: { type: 'bin', field: 'x', extent: [0, 13], step: { signal: 's' }, as: ['b0', 'b1'] }, a: 1, b: 4 },
+    'groupby given as a signal': { transform: { type: 'aggregate', groupby: { signal: 's' }, ops: ['count'], as: ['n'] }, a: ['g'], b: ['x'] },
+    'fields given as a signal': { transform: { type: 'aggregate', groupby: ['g'], fields: { signal: 's' }, ops: ['sum'], as: ['n'] }, a: ['v'], b: ['x'] },
+    'a sort given as a signal': { transform: { type: 'collect', sort: { field: { signal: 's' } } }, a: 'x', b: 'v' },
+    'a nested signal in a window': { transform: { type: 'window', sort: { field: 'x' }, ops: ['sum'], fields: [{ signal: 's' }], as: ['w'] }, a: 'v', b: 'x' },
+    'a filter expression': { transform: { type: 'filter', expr: 'datum.v > s' }, a: 2, b: 8 },
+    'a project field as a signal': { transform: { type: 'project', fields: [{ signal: 's' }], as: ['p'] }, a: 'v', b: 'x' },
+    'a fold field list as a signal': { transform: { type: 'fold', fields: { signal: 's' }, as: ['k', 'val'] }, a: ['v'], b: ['x'] },
+    'an impute value as a signal': { transform: { type: 'impute', field: 'v', key: 'x', value: { signal: 's' } }, a: 0, b: 9 },
+    'a stack offset as a signal': { transform: { type: 'stack', field: 'v', groupby: ['g'], offset: { signal: 's' }, as: ['y0', 'y1'] }, a: 'zero', b: 'center' },
+    'a timeunit field as a signal': { transform: { type: 'timeunit', field: { signal: 's' }, units: ['month'], as: ['u0', 'u1'] }, a: 'v', b: 'x' },
+    'a flatten field as a signal': { transform: { type: 'flatten', fields: { signal: 's' }, as: ['e'] }, a: ['v'], b: ['x'] },
+    'a pivot value as a signal': { transform: { type: 'pivot', field: 'g', value: { signal: 's' }, groupby: ['x'] }, a: 'v', b: 'x' },
+    'a sequence stop as a signal': { transform: { type: 'sequence', start: 0, stop: { signal: 's' }, as: 'i' }, a: 3, b: 9 },
+    'a joinaggregate group as a signal': { transform: { type: 'joinaggregate', groupby: { signal: 's' }, fields: ['v'], ops: ['mean'], as: ['m'] }, a: ['g'], b: ['x'] },
+  }
+  for (const [where, c] of Object.entries(params)) {
+    it(`${where}`, () => {
+      const spec = { width: 50, height: 50, autosize: 'none', signals: [{ name: 's', value: c.a }], data: [{ name: 't', transform: [c.transform] }], marks: [] } as unknown as VgSpec
+      const session = createChartSession()
+      session.evaluate(spec, { data: { t: rows }, signals: { s: c.a } })
+      const { out, reused } = counted(() => session.evaluate(spec, { data: { t: rows }, signals: { s: c.b } }))
+      expect(reused).toBe(0)
+      expect(made(out)).toBe(made(evaluateChart(compileChart(spec), { data: { t: rows }, signals: { s: c.b } })))
+    })
+  }
+})
+
 describe('a step that publishes a signal publishes it again when it is kept', () => {
   const spec = {
     width: 100, height: 100, autosize: 'none',
