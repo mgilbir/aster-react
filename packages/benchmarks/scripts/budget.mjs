@@ -124,6 +124,8 @@ import { fileURLToPath } from 'node:url'
 // its events on): geo marginal 16.3 (16.254; +0.9 over 15.4, none of it one piece: the antimeridian pass-through alone is 0.07).
 // The ARIA of guides and marks over the parameter space (the root group item's channels, the mark roles, the config lookup),
 // measured (kB gzip): core 141.0 (+0.2 over main's 140.8; ceiling 141.5); the other rows stay inside their ceilings.
+// One tab stop per chart (focus hand-over on a spec change, entering the nodes from the container): Chart 189.2 and SvgChart 166.4 kB gzip
+// (main: 188.6 and 165.6); the other rows stay inside their ceilings.
 // Ceiling = the measure + 0.5.
 const BUDGETS = {
   '@aster/core': 141.5 * 1024,
@@ -135,9 +137,9 @@ const BUDGETS = {
   '+ @aster/core/geo': 16.8 * 1024,
   '+ @aster/core/transforms': 39.6 * 1024,
   '@aster/react useChart': 148.0 * 1024,
-  '@aster/react Chart': 189.1 * 1024,
+  '@aster/react Chart': 189.7 * 1024,
   // The light chart (`@aster/react/lite`): SVG only, no canvas renderer; alone and with the `interaction` capability.
-  '@aster/react SvgChart': 166.1 * 1024,
+  '@aster/react SvgChart': 166.9 * 1024,
   '@aster/react SvgChart + interaction': 184.0 * 1024,
   // Base + the VL compiler (opt-in: `import '@aster/react/vl'`).
   '@aster/react Chart + VL': 289.5 * 1024,
