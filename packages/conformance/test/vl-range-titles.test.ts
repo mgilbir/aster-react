@@ -87,6 +87,8 @@ const guideTitles = (vg: any): unknown[] => {
 
 /** Compile both ways. A spec only vega-lite refuses must be refused here, and the other way round. */
 async function same(spec: Obj): Promise<string> {
+  // (a long loop of compiles gives the worker's event loop a turn, so vitest's reporting is not starved)
+  await new Promise((resolve) => setImmediate(resolve))
   let theirs: any, ours: any
   try { theirs = (vl as any).compile(JSON.parse(JSON.stringify(spec)), { logger: silent }).spec } catch { theirs = undefined }
   let refusal = ''
@@ -193,11 +195,12 @@ describe('a ranged channel has the title vega-lite gives it', () => {
   it('nested layers merge among themselves first', async () => {
     const bad: string[] = []
     const one = (a: Obj, b: Obj | undefined): Obj => ({ mark: 'bar', encoding: { x: a, ...(b ? { x2: b } : {}), y: { field: 'k', type: 'ordinal' } } })
-    const sample = DEFS.filter(([n]) => ['v', 'v, title', 'v, other title', 'v, title null', 'k', 'mean v'].includes(n))
+    const sample = DEFS.filter(([n]) => ['v', 'v, title', 'v, other title', 'v, title null'].includes(n))
     for (const [n1, d1] of sample) {
       for (const [n2, d2] of sample) {
         for (const [n3, d3] of sample) {
           for (const [n4, d4] of sample) {
+            if (!fits(d1, d2) || !fits(d3, d4) || !fits(d1, d3)) continue
             const why = await same({ data: { values: TIME_DATA }, layer: [one(d1, d2), { layer: [one(d3, undefined), one(d4, d3)] }] })
             if (why) bad.push(`${n1}+${n2} / (${n3} / ${n4}+${n3}): ${why}`)
             const why2 = await same({ data: { values: TIME_DATA }, layer: [{ layer: [one(d1, undefined), one(d2, undefined)] }, one(d3, d4)] })

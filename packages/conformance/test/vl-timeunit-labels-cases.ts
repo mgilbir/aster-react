@@ -118,6 +118,8 @@ export async function drawn(vg: any): Promise<string[]> {
 export async function labelDifferences(make: Make): Promise<string[]> {
   const bad: string[] = []
   for (const [name, unit] of UNITS) {
+    // (a long loop gives the worker's event loop a turn, so vitest's reporting is not starved)
+    await new Promise((resolve) => setImmediate(resolve))
     const both = bothCompile(make(unit))
     if ('refusedBy' in both) {
       if (both.refusedBy === 'aster') bad.push(`${name}: refused by aster only`)
