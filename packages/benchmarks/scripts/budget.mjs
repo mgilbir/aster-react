@@ -120,9 +120,11 @@ import { fileURLToPath } from 'node:url'
 // that need no cutting, the point and rectangle fast paths), after one walker for the measuring sinks and one placement base for the
 // projections took out what they duplicated, then the batched sinks and the rectangle pass-through (a clip with nothing to cut hands
 // its events on): geo marginal 16.3 (16.254; +0.9 over 15.4, none of it one piece: the antimeridian pass-through alone is 0.07).
+// The ARIA of guides and marks over the parameter space (the root group item's channels, the mark roles, the config lookup),
+// measured (kB gzip): core 141.0 (+0.2 over main's 140.8; ceiling 141.5); the other rows stay inside their ceilings.
 // Ceiling = the measure + 0.5.
 const BUDGETS = {
-  '@aster/core': 140.9 * 1024,
+  '@aster/core': 141.5 * 1024,
   '+ @aster/core/dom': 6.2 * 1024,
   '+ @aster/core/canvas': 6.3 * 1024,
   '+ @aster/core/hit': 7.0 * 1024,
