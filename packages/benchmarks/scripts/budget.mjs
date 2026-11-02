@@ -119,8 +119,8 @@ import { fileURLToPath } from 'node:url'
 // Ceiling = the measure + 0.5.
 // Kept dataset steps (step-reuse.ts: what a step reads, so a re-evaluation keeps the rows of the steps whose inputs did not move; the
 // run of steps written as one; the group scopes' kept pipelines; the session's account of which host datasets are unchanged), measured
-// (kB gzip): core 143.4 (+3.0 over 140.4), useChart 150.5, Chart 191.3, SvgChart 168.6, SvgChart + interaction 185.9, Chart + VL 287.0
-// (+3.5 over 283.5); the marginal rows did not move enough to cross theirs.
+// (kB gzip): core 143.4 (+3.2 over 140.2), useChart 150.5 (+3.5 over 147.0), Chart 191.3 (+3.6), SvgChart 168.6 (+3.5), SvgChart +
+// interaction 185.9 (+3.4), Chart + VL 287.0 (+3.5 over 283.5); the marginal rows did not move enough to cross theirs.
 const BUDGETS = {
   '@aster/core': 143.9 * 1024,
   '+ @aster/core/dom': 6.2 * 1024,
