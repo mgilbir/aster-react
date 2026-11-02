@@ -117,8 +117,12 @@ import { fileURLToPath } from 'node:url'
 // projections took out what they duplicated, then the batched sinks and the rectangle pass-through (a clip with nothing to cut hands
 // its events on): geo marginal 16.3 (16.254; +0.9 over 15.4, none of it one piece: the antimeridian pass-through alone is 0.07).
 // Ceiling = the measure + 0.5.
+// Kept dataset steps (step-reuse.ts: what a step reads, so a re-evaluation keeps the rows of the steps whose inputs did not move; the
+// run of steps written as one; the group scopes' kept pipelines; the session's account of which host datasets are unchanged), measured
+// (kB gzip): core 143.4 (+3.0 over 140.4), useChart 150.5, Chart 191.3, SvgChart 168.6, SvgChart + interaction 185.9, Chart + VL 287.0
+// (+3.5 over 283.5); the marginal rows did not move enough to cross theirs.
 const BUDGETS = {
-  '@aster/core': 140.9 * 1024,
+  '@aster/core': 143.9 * 1024,
   '+ @aster/core/dom': 6.2 * 1024,
   '+ @aster/core/canvas': 6.3 * 1024,
   '+ @aster/core/hit': 7.0 * 1024,
@@ -126,13 +130,13 @@ const BUDGETS = {
   '+ @aster/core/load': 5.6 * 1024,
   '+ @aster/core/geo': 16.8 * 1024,
   '+ @aster/core/transforms': 39.6 * 1024,
-  '@aster/react useChart': 148.0 * 1024,
-  '@aster/react Chart': 189.1 * 1024,
+  '@aster/react useChart': 151.0 * 1024,
+  '@aster/react Chart': 191.8 * 1024,
   // The light chart (`@aster/react/lite`): SVG only, no canvas renderer; alone and with the `interaction` capability.
-  '@aster/react SvgChart': 166.1 * 1024,
-  '@aster/react SvgChart + interaction': 184.0 * 1024,
+  '@aster/react SvgChart': 169.1 * 1024,
+  '@aster/react SvgChart + interaction': 186.4 * 1024,
   // Base + the VL compiler (opt-in: `import '@aster/react/vl'`).
-  '@aster/react Chart + VL': 284.0 * 1024,
+  '@aster/react Chart + VL': 287.5 * 1024,
 }
 
 const THIS_DIR = dirname(fileURLToPath(import.meta.url))
