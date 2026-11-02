@@ -187,6 +187,8 @@ interface EvalTxn {
   gen: number
   /** Structures this evaluation already updated in place (not reusable again). */
   claimed: Set<string>
+  /** What the pass of this evaluation before the one being made left (a view that fits its viewport makes two passes). */
+  lastPass?: IncrementalState
 }
 
 function beginTxn(chart: CompiledChart): EvalTxn {
@@ -455,6 +457,8 @@ interface EvalContext {
   inputPulses?: Map<string, StepPulse>
   /** The committed state of the previous evaluation (read-only; see IncrementalState). */
   prev?: IncrementalState
+  /** The state the pass before this one left (see `EvalTxn.lastPass`). */
+  earlier?: IncrementalState
   /** The state this evaluation builds; committed by the caller on success. */
   draft: IncrementalState
   /** The view's id counter: where it stood when the evaluation began (`idStart`) and where it stands (see identifier-ids.ts). */
@@ -625,7 +629,7 @@ function prepareChartCtx(
     ]),
     hierarchies: transformHierarchies, affected: new Set(), incremental: false, deadline, checkDeadline, markItems: new Map(), markContainers: new Map(),
     datasetPulses: new Map(),
-    prev: txn.prev, draft: newState(txn.gen), ids: { value: txn.prev?.idCounter ?? 0 }, idStart: txn.prev?.idCounter ?? 0, gen: txn.gen, claimed: txn.claimed, extraFp, dsEpoch: 0, scaleReuse: new Map(), distinctCache: new WeakMap(),
+    prev: txn.prev, ...(txn.lastPass ? { earlier: txn.lastPass } : {}), draft: newState(txn.gen), ids: { value: txn.prev?.idCounter ?? 0 }, idStart: txn.prev?.idCounter ?? 0, gen: txn.gen, claimed: txn.claimed, extraFp, dsEpoch: 0, scaleReuse: new Map(), distinctCache: new WeakMap(),
     domainRaw: input.domainRaw ? new Map(Object.entries(input.domainRaw).map(([k, v]) => [k, v])) : undefined,
     // Image urls are vetted when the host passes a policy, and with the default
     // policy whenever it passes `limits` (limits mean "this spec is untrusted").
@@ -745,6 +749,7 @@ function prepareChartCtx(
   // The final context fingerprint: the next evaluation compares its own
   // (scale, mark) inputs against this to decide whether reuse is valid.
   ctx.draft.fp = ctxFpOf(ctx)
+  txn.lastPass = ctx.draft
 
   return { ctx, width, height }
 }
@@ -3388,7 +3393,11 @@ function buildDatasetsOf(ctx: EvalContext, inputData: Record<string, unknown[]>)
       // pulse, the previous state was built under identical params from an input
       // of the length the pulse is relative to, and no earlier pass of THIS
       // evaluation already updated that state in place.
-      const incremental = ctx.incremental && inPulse !== null && !inPulse.full && prevDS !== undefined
+      // A pass of an evaluation numbers the rows of an `identifier` as the pass before it did (a view that fits its viewport builds its
+      // content twice): whichever route numbered them first, the others carry its numbers, and do not number them again by theirs.
+      const hasIds = d.transform.some((x) => x.type === 'identifier')
+      const earlierDS = hasIds ? ctx.draft.datasets.get(name) ?? ctx.earlier?.datasets.get(name) : undefined
+      const incremental = ctx.incremental && inPulse !== null && !inPulse.full && prevDS !== undefined && earlierDS === undefined
         && prevDS.fp === passFp && prevDS.steps.length === d.transform.length
         && prevDS.inputLength === pulseBaseLength(inPulse) && !ctx.claimed.has(`ds:${name}`)
       if (incremental) {
@@ -3400,9 +3409,10 @@ function buildDatasetsOf(ctx: EvalContext, inputData: Record<string, unknown[]>)
         let cur = rows
         for (let k = 0; k < d.transform.length; k++) {
           const from = cur
+          const before = earlierDS?.steps[k] ?? prevDS?.steps[k]
           const res = ctx.runtime.random === undefined || !mayDrawRandom(d.transform[k])
-            ? applyOneWithState(from, d.transform[k]!, tctx, name, prevDS?.steps[k])
-            : atRandomSite(ctx.runtime.random, `dataset:${name}#${k}`, () => randomFingerprint(d.transform[k]!, from, ctx.signalParams), () => applyOneWithState(from, d.transform[k]!, tctx, name, prevDS?.steps[k]))
+            ? applyOneWithState(from, d.transform[k]!, tctx, name, before)
+            : atRandomSite(ctx.runtime.random, `dataset:${name}#${k}`, () => randomFingerprint(d.transform[k]!, from, ctx.signalParams), () => applyOneWithState(from, d.transform[k]!, tctx, name, before))
           cur = res.rows
           state.steps.push(cur)
           if (res.state !== undefined) state.stepState.set(`${name}#${k}`, res.state)
