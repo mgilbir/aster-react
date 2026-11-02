@@ -46,23 +46,24 @@ const VIEW_SIGNALS = ['background', 'autosize', 'padding', 'width', 'height']
  * those of the scopes around it. A group's scope has the signal `parent` as well.
  */
 class Scope {
-  private readonly signals = new Set<string>()
-  private readonly scales = new Map<string, string>()
+  // (a scope with nothing declared is common: the collections are made when there is a name to put in them)
+  private signals: Set<string> | null = null
+  private scales: Map<string, string> | null = null
   constructor(readonly parent: Scope | null = null) {
-    if (parent) this.signals.add('parent')
+    if (parent) this.addSignal('parent')
   }
 
   get isGroup(): boolean { return this.parent !== null }
 
-  addSignal(name: unknown): void { this.signals.add(String(name)) }
-  addScale(name: unknown, type?: unknown): void { this.scales.set(String(name), type ? String(type) : 'linear') }
+  addSignal(name: unknown): void { (this.signals ??= new Set()).add(String(name)) }
+  addScale(name: unknown, type?: unknown): void { (this.scales ??= new Map()).set(String(name), type ? String(type) : 'linear') }
 
   /**
    * Whether a signal of that name is declared here or in a scope around. (Upstream looks names up in plain objects, so `toString`
    * and `constructor` are signals of every scope; here they are absent names like any other, as the sandbox has them everywhere.)
    */
   hasSignal(name: string): boolean {
-    for (let s: Scope | null = this; s; s = s.parent) if (s.signals.has(name)) return true
+    for (let s: Scope | null = this; s; s = s.parent) if (s.signals?.has(name)) return true
     return false
   }
 
@@ -74,12 +75,14 @@ class Scope {
   scaleType(name: unknown): string | undefined {
     const k = String(name)
     for (let s: Scope | null = this; s; s = s.parent) {
-      const type = s.scales.get(k)
+      const type = s.scales?.get(k)
       if (type !== undefined) return type
     }
     return undefined
   }
 }
+
+const isSignalObject = (v: unknown): boolean => isObject(v) && !!(v as Rec).signal
 
 /** vega-util `value(a, b)`: `a` unless it is missing. */
 const orElse = (a: unknown, b: unknown): unknown => (a != null ? a : b)
@@ -177,7 +180,7 @@ class Check {
   private contents(spec: Rec, signals: readonly Rec[], lambdas: string[]): void {
     for (const p of specList(spec.projections)) if (isRecord(p)) this.scope.addScale(p.name, 'projection')
     for (const s of specList(spec.scales)) if (isRecord(s)) this.scope.addScale(s.name, s.type)
-    for (const key of ['projections']) this.lambdas(specList(spec[key]), lambdas)
+    this.lambdas(specList(spec.projections), lambdas)
     for (const d of specList(spec.data)) if (isRecord(d)) this.dataset(d, lambdas)
     for (const s of specList(spec.scales)) this.lambdas(s, lambdas)
     for (const s of signals) this.signal(s, lambdas)
@@ -208,15 +211,14 @@ class Check {
 
   /** One parameter's expressions that are read at once: an `expr` is a text; a field or a comparator may be written `{expr: text}`. */
   private parameter(value: unknown, kind: ParamKind): void {
-    const isSignal = (v: unknown): boolean => isObject(v) && !!(v as Rec).signal
     if (kind === 'expression') {
-      if (isSignal(value)) throw new SpecParseError('Expression references can not be signals.')
+      if (isSignalObject(value)) throw new SpecParseError('Expression references can not be signals.')
       this.expression(value)
     } else if (kind === 'field' || kind === 'compare') {
       // (a comparator is `{field, order}`, each of which is a value or a list of them; any other parameter is a value or a list)
       const parts = kind === 'compare' && isRecord(value) ? [...specList(value.field), ...specList(value.order)] : Array.isArray(value) ? value : [value]
       for (const part of parts) {
-        if (!isSignal(part) && isObject(part) && (part as Rec).expr) this.expression((part as Rec).expr)
+        if (!isSignalObject(part) && isObject(part) && (part as Rec).expr) this.expression((part as Rec).expr)
       }
     }
   }
