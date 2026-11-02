@@ -129,9 +129,12 @@ import { fileURLToPath } from 'node:url'
 // the compile now needs and used to be in the signals chunk alone), measured (kB gzip): core 146.6 (+5.5 over main's 141.1; minified,
 // spec-expressions +3.8, guide-model 4.9, expr-check 3.6, transform-params 2.7, the selector parser 2.0), useChart 153.1, Chart 194.2, SvgChart 171.6, SvgChart + interaction 188.5,
 // Chart + VL 294.2 (each +5.5..5.7 over main); signals marginal 12.9 (-0.9: the selector parser is core's now).
+// With the cross-spec cache of what is found about an expression, measured: core 146.9 (+5.8 over main), useChart 153.3, Chart 194.4,
+// SvgChart 171.9, SvgChart + interaction 188.7, Chart + VL 294.4. Minified, over main: spec-expressions +4.4, guide-model 4.9, expr-check 3.7,
+// transform-params 2.7, the selector parser 2.0 (+0.4 stream-defs). Keeping only the kinded parameters in the transform table would save 0.5.
 // Ceiling = the measure + 0.5.
 const BUDGETS = {
-  '@aster/core': 147.1 * 1024,
+  '@aster/core': 147.4 * 1024,
   '+ @aster/core/dom': 6.2 * 1024,
   '+ @aster/core/canvas': 6.3 * 1024,
   '+ @aster/core/hit': 7.0 * 1024,
@@ -139,13 +142,13 @@ const BUDGETS = {
   '+ @aster/core/load': 5.6 * 1024,
   '+ @aster/core/geo': 16.8 * 1024,
   '+ @aster/core/transforms': 39.6 * 1024,
-  '@aster/react useChart': 153.6 * 1024,
-  '@aster/react Chart': 194.7 * 1024,
+  '@aster/react useChart': 153.8 * 1024,
+  '@aster/react Chart': 194.9 * 1024,
   // The light chart (`@aster/react/lite`): SVG only, no canvas renderer; alone and with the `interaction` capability.
-  '@aster/react SvgChart': 172.1 * 1024,
-  '@aster/react SvgChart + interaction': 189.0 * 1024,
+  '@aster/react SvgChart': 172.4 * 1024,
+  '@aster/react SvgChart + interaction': 189.2 * 1024,
   // Base + the VL compiler (opt-in: `import '@aster/react/vl'`).
-  '@aster/react Chart + VL': 294.7 * 1024,
+  '@aster/react Chart + VL': 294.9 * 1024,
 }
 
 const THIS_DIR = dirname(fileURLToPath(import.meta.url))
