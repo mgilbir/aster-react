@@ -4701,10 +4701,13 @@ function scopeSignalValues(mark: CompiledMark, ctx: EvalContext, id: string, bas
  * steps: a group's dataset is a few steps over the rows of a dataset of the view.
  */
 function runScopedData(
-  ctx: EvalContext, key: string, name: string, transforms: CompiledTransform[], sources: readonly string[], rows: Row[], shared: boolean,
+  ctx: EvalContext, key: string, name: string, transforms: CompiledTransform[], sources: readonly string[], rows: Row[] | (() => Row[]), shared: boolean,
   tctx: TransformContext, scopeParams: Record<string, unknown>,
 ): Row[] {
-  const run = (): Row[] => (shared ? applyTransformsToSharedRows(rows, transforms, tctx, name) : applyTransforms(rows, transforms, tctx, name))
+  const run = (): Row[] => {
+    const input = typeof rows === 'function' ? rows() : rows
+    return shared ? applyTransformsToSharedRows(input, transforms, tctx, name) : applyTransforms(input, transforms, tctx, name)
+  }
   const names = reuse.on && shared ? pipelineReadsOf(transforms) : null
   const inputs = names === null ? undefined : sources.map((n) => ctx.datasets.get(n))
   // (a source the caller named as changed is updated in place: the same array holds other rows)
@@ -4763,11 +4766,14 @@ function buildGroupItem(mark: CompiledMark, ctx: EvalContext, src: GroupSource):
       const sources = sourceNames(d)
       // (a dataset made from others holds copies of their rows: the pipeline starts from the rows themselves while it only reads them)
       const shared = sources.length > 0
-      let rows: Row[] = shared ? sources.flatMap((n) => ctx.datasets.get(n) ?? []) : d.values != null ? readData(inlineValues(ctx, d.values), d.format) : []
-      checkRowCount(rows.length, `dataset "${d.name}"`)
+      // (the rows of the sources, made when a pipeline has to run: a pipeline that is kept does not need them)
+      const gather = (): Row[] => sources.flatMap((n) => ctx.datasets.get(n) ?? [])
+      let rows: Row[] | undefined = shared ? undefined : d.values != null ? readData(inlineValues(ctx, d.values), d.format) : []
+      checkRowCount(rows?.length ?? sources.reduce((n, s) => n + (ctx.datasets.get(s)?.length ?? 0), 0), `dataset "${d.name}"`)
       const tctx = { runtime: ctx.runtime, signals: scopeParams, hierarchies: ctx.hierarchies, projections: ctx.projections }
-      if (d.transform?.length) rows = runScopedData(ctx, `${markIdOf(mark)}/${path.join('.')}/${d.name}`, d.name, d.transform, sources, rows, shared, tctx, scopeParams)
-      else if (shared) rows = rows.map((r) => ({ ...r }))
+      if (d.transform?.length) rows = runScopedData(ctx, `${markIdOf(mark)}/${path.join('.')}/${d.name}`, d.name, d.transform, sources, rows ?? gather, shared, tctx, scopeParams)
+      else if (shared) rows = gather().map((r) => ({ ...r }))
+      else rows = rows ?? []
       savedData.push([d.name, ctx.datasets.get(d.name)])
       ctx.datasets.set(d.name, rows)
     }
