@@ -200,7 +200,7 @@ Known-incomplete areas are captured as feature probes under `probes/` and run vi
 
 ## Deviations from Vega
 
-Aster matches Vega's output wherever the oracle can be run; where it deliberately does not, the difference is in the code with a comment and is listed here. Safety deviations (bounds on time, memory and input) are in [LIMITS.md](LIMITS.md).
+Aster matches Vega's output wherever the oracle can be run; where it deliberately does not, the difference is in the code with a comment and is listed here. Safety deviations (bounds on time, memory and input) are in [LIMITS.md](LIMITS.md): `limits` are opt-in, best-effort budgets (the ambient meter in `limits.ts`), a small set of built-in ceilings holds without them for the inputs a tiny spec can use to exhaust the process, and a killable worker is the hard guarantee for untrusted specs.
 
 | Area | Aster | Vega | Why |
 |---|---|---|---|

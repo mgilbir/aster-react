@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- **`@aster/core` limits: built-in ceilings for the crash-class inputs, and `limits` documented as best-effort.** A few inputs let a tiny
+  spec exhaust the process (a 440 KB topojson topology that decodes to 200M positions, `tickCount: 2e6`, `sequence` of 5e7, a trellis
+  `layout.columns` of 5e7, `pad` / number-format widths of 5e7, a spec nested 20 000 deep). They are now refused with `AsterLimitError`
+  even when no `limits` are given (`HARD_CAPS`: rows 1M, cells 10M, items 100k, bytes 1M, coords 2M; spec depth 1000), naming the
+  ceiling and the limit that raises it; a matching limit replaces the ceiling, and nothing in the gallery or corpus comes near them.
+  A deep or cyclic spec is a typed error without `limits` too (it was a raw `RangeError`). The worker handler serializes the SVG
+  inside the limits scope. The expression `pluck` accessor table is a bounded LRU (it grew without bound). The regex screen refuses
+  three or more adjacent overlapping unbounded quantifiers (`a*a*a*a*a*b` ran over 20 s on 9 000 characters). `docs/LIMITS.md`
+  states that `limits` are best-effort and that the killable worker is the hard guarantee.
+
 - **`@aster/core` guides and layout: eight divergences from vega closed**, which the generated guide and grid differentials had been avoiding
   (they now draw all of them): an axis with explicit `values` formats its labels for one tick per value (a precision that follows the
   tick step, `e` among others, differed); `tickMinStep` acts only through the tick count (a log scale keeps ticks closer than it); an
