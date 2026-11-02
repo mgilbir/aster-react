@@ -125,8 +125,10 @@ import { fileURLToPath } from 'node:url'
 // run of steps written as one; the group scopes' kept pipelines; the session's account of which host datasets are unchanged), measured
 // (kB gzip): core 143.4 (+3.2 over 140.2), useChart 150.5 (+3.5 over 147.0), Chart 191.3 (+3.6), SvgChart 168.6 (+3.5), SvgChart +
 // interaction 185.9 (+3.4), Chart + VL 287.0 (+3.5 over 283.5); the marginal rows did not move enough to cross theirs.
+// Kept dataset steps on top of main (guides and layout, #71-#75), measured (kB gzip): core 144.0, useChart 151.1, Chart 192.0,
+// SvgChart 169.2, SvgChart + interaction 186.4, Chart + VL 292.1; the rest of the work of the section above is in these figures.
 const BUDGETS = {
-  '@aster/core': 143.9 * 1024,
+  '@aster/core': 144.5 * 1024,
   '+ @aster/core/dom': 6.2 * 1024,
   '+ @aster/core/canvas': 6.3 * 1024,
   '+ @aster/core/hit': 7.0 * 1024,
@@ -134,13 +136,13 @@ const BUDGETS = {
   '+ @aster/core/load': 5.6 * 1024,
   '+ @aster/core/geo': 16.8 * 1024,
   '+ @aster/core/transforms': 39.6 * 1024,
-  '@aster/react useChart': 151.0 * 1024,
-  '@aster/react Chart': 191.8 * 1024,
+  '@aster/react useChart': 151.6 * 1024,
+  '@aster/react Chart': 192.5 * 1024,
   // The light chart (`@aster/react/lite`): SVG only, no canvas renderer; alone and with the `interaction` capability.
-  '@aster/react SvgChart': 169.1 * 1024,
-  '@aster/react SvgChart + interaction': 186.4 * 1024,
+  '@aster/react SvgChart': 169.7 * 1024,
+  '@aster/react SvgChart + interaction': 186.9 * 1024,
   // Base + the VL compiler (opt-in: `import '@aster/react/vl'`).
-  '@aster/react Chart + VL': 289.0 * 1024,
+  '@aster/react Chart + VL': 292.6 * 1024,
 }
 
 const THIS_DIR = dirname(fileURLToPath(import.meta.url))
