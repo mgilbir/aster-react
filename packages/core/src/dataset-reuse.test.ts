@@ -163,6 +163,31 @@ describe("a group scope's dataset is kept with the rows it was made from", () =>
   })
 })
 
+describe('the rows a dataset starts from are its own, in the order its source lists them', () => {
+  const rows: Row[] = [{ n: 0, k: 1, g: 'b' }, { n: 1, k: 1, g: 'a' }, { n: 2, k: 0, g: 'a' }]
+  const spec = {
+    width: 50, height: 50, autosize: 'none',
+    data: [
+      // (t is listed against the order its rows were made in, and its last step, a window, keeps the rows and the order they were made in)
+      { name: 't', transform: [{ type: 'collect', sort: { field: 'n', order: 'descending' } }, { type: 'window', sort: { field: 'g' }, ops: ['row_number'], as: ['rn'] }] },
+      // a step that makes rows of its own is handed the array of its source's rows: it must not be the one that carries the order the
+      // rows were made in (a dataset made from another makes new rows, in the order the source lists them: sort ties follow that)
+      { name: 'u', source: 't', transform: [{ type: 'formula', as: 'z', expr: 'datum.n' }, { type: 'collect', sort: { field: 'k' } }] },
+      { name: 'w', source: 't', transform: [{ type: 'bin', field: 'n', extent: [0, 3], step: 1, as: ['b0', 'b1'] }, { type: 'collect', sort: { field: 'k' } }] },
+      { name: 'x', source: 't', transform: [{ type: 'formula', as: 'z', expr: 'datum.n' }, { type: 'formula', as: 'y', expr: 'datum.z + 1' }, { type: 'collect', sort: { field: 'k' } }] },
+    ],
+  } as unknown as VgSpec
+
+  it('ties of a sort follow the order the source listed the rows in', () => {
+    const scene = evaluateChart(compileChart(spec), { data: { t: rows } })
+    const order = (name: string): unknown => (datasetsOfScene(scene).get(name) ?? []).map((r) => (r as Row).n)
+    expect(order('t')).toEqual([2, 1, 0])
+    expect(order('u')).toEqual([2, 1, 0])
+    expect(order('w')).toEqual([2, 1, 0])
+    expect(order('x')).toEqual([2, 1, 0])
+  })
+})
+
 describe('a step that publishes a signal publishes it again when it is kept', () => {
   const spec = {
     width: 100, height: 100, autosize: 'none',

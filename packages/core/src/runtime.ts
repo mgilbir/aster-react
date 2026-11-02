@@ -3542,6 +3542,8 @@ function runPipeline(
         cur = out
         stepCounts.reused += unit.length
       } else {
+        // (the unit's first step copies every row it is given, so a source's rows need only be in an array of their own)
+        if (shared && cur === rows) cur = rows.slice()
         const out = applyTransforms(cur, unit, tctx, name)
         // (the steps before the last stand for the rows it made, which hold what the steps after them added)
         for (let j = k; j < end; j++) {
@@ -3569,8 +3571,10 @@ function runPipeline(
       stepCounts.reused++
       continue
     }
-    // (the rows of a step that has to run are this evaluation's own: a source's are copied now, unless the step makes rows of its own)
-    if (shared && cur === rows && !copiesRows(t)) cur = copyRows(rows)
+    // (the rows of a step that has to run are this evaluation's own: a source's are copied now, unless the step makes rows of its own
+    // and only needs them in an array of their own -- the array a source made carries the order its rows were made in, which a
+    // dataset made from it does not inherit)
+    if (shared && cur === rows) cur = copiesRows(t) ? rows.slice() : copyRows(rows)
     const from = cur
     const had = reads?.publishes !== undefined && Object.hasOwn(ctx.signalParams, reads.publishes)
     const published = reads?.publishes === undefined ? undefined : ctx.signalParams[reads.publishes]
