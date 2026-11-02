@@ -1,10 +1,11 @@
 /**
  * Feature-gap probe runner. Same oracle diff as the conformance run, but pointed
  * at `probes/` — specs that exercise feature areas the corpus doesn't cover yet.
- * Probes are NOT a CI gate: they document gaps. When a gap is implemented, the
- * probe is promoted to `corpus/`.
+ * A probe that fails documents a gap and is allowed; a probe that PASSED and stops passing is not: `--min-pass N` is the
+ * floor on the number that pass (probe-verdict.ts), and the gate (scripts/gates.mjs) runs with the number passing today.
+ * When a gap is implemented, the probe is promoted to `corpus/`.
  *
- * Usage: pnpm probe [name-filter]
+ * Usage: pnpm probe [name-filter] [--min-pass N]
  */
 import { readdirSync, readFileSync, existsSync } from 'node:fs'
 import { join, dirname } from 'node:path'
@@ -16,6 +17,7 @@ import { renderSpec } from '@aster/core'
 import { loadSpecData, TRUSTED_LOAD_OPTIONS } from '@aster/core/load'
 import { renderWithVega } from './render-vega.js'
 import { canonicalizeSvg, diffCanonical } from './normalize.js'
+import { parseProbeArgs, probeVerdict } from './probe-verdict.js'
 
 interface ProbeEntry {
   name: string
@@ -55,7 +57,7 @@ if (!existsSync(dir)) {
   console.error(`[probe] probes directory not found: ${dir}`)
   process.exit(1)
 }
-const filter = process.argv[2]
+const { filter, minPass } = parseProbeArgs(process.argv.slice(2))
 const entries = loadProbes(dir).filter((e) => !filter || e.name.includes(filter))
 
 const results: Array<{ name: string; pass: boolean; note: string }> = []
@@ -74,3 +76,6 @@ for (const entry of entries) {
 const failed = results.filter((r) => !r.pass)
 console.log(`\n[probe] ${results.length - failed.length}/${results.length} passed`)
 if (failed.length) console.log(`[probe] gaps: ${failed.map((f) => f.name).join(', ')}`)
+const verdict = probeVerdict(results.length - failed.length, results.length, minPass)
+console.log(`[probe] ${verdict.ok ? 'ok' : 'FAIL'}: ${verdict.reason}`)
+if (!verdict.ok) process.exitCode = 1
