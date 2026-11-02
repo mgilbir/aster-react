@@ -1195,6 +1195,15 @@ describe('incremental === fresh on container-sized views that are resized betwee
   }
 })
 
+// Seed 100 of the container scenario: a data set whose rows are shuffled, evaluated in a view that was a different size the time
+// before. The first fit pass numbered the rows by alignment, the second by the pulse, so the legend the padding comes from showed
+// other ids than the scene drew (padding.right 78 for 47). Every pass of one evaluation must see the ids of the same rows.
+describe('the passes of one evaluation number the same rows alike', () => {
+  it('seed 100 of the container-sized views', () => {
+    expect(checkSeed(100, STEPS, scenarioContainer) ?? '').toBe('')
+  }, 600_000)
+})
+
 describe('incremental === fresh when every scale reads the source dataset (the domain census, scale reuse)', () => {
   it('the generator is deterministic per seed and drives the census ops', () => {
     expect(JSON.stringify(scenarioCensus(7, 6))).toBe(JSON.stringify(scenarioCensus(7, 6)))
