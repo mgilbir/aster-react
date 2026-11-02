@@ -125,7 +125,7 @@ import { fileURLToPath } from 'node:url'
 // The ARIA of guides and marks over the parameter space (the root group item's channels, the mark roles, the config lookup),
 // measured (kB gzip): core 141.0 (+0.2 over main's 140.8; ceiling 141.5); the other rows stay inside their ceilings.
 // One tab stop per chart (focus hand-over on a spec change, entering the nodes from the container): Chart 189.2 and SvgChart 166.4 kB gzip
-// (main: 188.6 and 165.6); the other rows stay inside their ceilings.
+// (main: 188.8 and 166.1, so +0.3 each); the other rows stay inside their ceilings.
 // Ceiling = the measure + 0.5.
 const BUDGETS = {
   '@aster/core': 141.5 * 1024,
