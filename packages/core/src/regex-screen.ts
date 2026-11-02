@@ -10,10 +10,14 @@
  *      unbounded quantifier (star height > 1): `(a+)+`, `(\w+\s?)*`, `(.*a){2,}`;
  *   2. an UNBOUNDED-quantified alternation whose branches can start with the
  *      same character: `(a|a)*`, `(a|aa)+`, `(\w|\d)+`;
- *   3. a backreference inside a group quantified more than once.
+ *   3. a backreference inside a group quantified more than once;
+ *   4. three or more ADJACENT unbounded quantifiers whose characters overlap: `a*a*a*b`, `.*.*.*x`,
+ *      `\d+\d+\d+$`. Backtracking is polynomial there (degree = how many overlap), n^3 and up on a
+ *      few thousand characters, which a cooperative clock cannot interrupt. Two adjacent ones (`\s*.*`,
+ *      `\d+\.?\d*`) stay allowed: they are quadratic at worst and common.
  *
- * It is a HEURISTIC. It blocks the known exponential shapes; it does not prove
- * a pattern safe (polynomial blow-ups such as `a*a*a*b` pass, and some safe
+ * It is a HEURISTIC. It blocks the known exponential shapes and the adjacent polynomial one; it does
+ * not prove a pattern safe (separated polynomial shapes such as `.*a.*a.*a.*b` pass, and some safe
  * patterns such as `(\d+\.)*\d+` are refused). A hard guarantee still needs a
  * killable worker (docs/LIMITS.md). Syntax this parser does not understand is
  * allowed through: the RegExp constructor validates syntax, and refusing what we
@@ -282,7 +286,27 @@ function hasBackref(alts: Term[][]): boolean {
   return false
 }
 
+/** Adjacent terms that each repeat without bound, whose characters overlap three ways: polynomial backtracking of degree 3+. */
+function adjacentOverlap(seq: Term[]): boolean {
+  let run: Ranges[] = []
+  const settle = (): boolean => {
+    for (let a = 0; a < run.length; a++) {
+      let overlapping = 0
+      for (let b = 0; b < run.length; b++) if (intersects(run[a]!, run[b]!)) overlapping++
+      if (overlapping >= 3) return true
+    }
+    run = []
+    return false
+  }
+  for (const t of seq) {
+    if (t.q && t.q.max === Infinity && t.n.t !== 'assert') run.push(firstOfTerm(t))
+    else if (settle()) return true
+  }
+  return settle()
+}
+
 function check(alts: Term[][]): string | null {
+  for (const seq of alts) if (adjacentOverlap(seq)) return 'adjacent unbounded quantifiers that match the same characters (polynomial backtracking)'
   for (const seq of alts) for (const t of seq) {
     const n = t.n
     if (n.t !== 'group') continue
