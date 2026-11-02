@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- **`@aster/core` guides and layout: eight divergences from vega closed**, which the generated guide and grid differentials had been avoiding
+  (they now draw all of them): an axis with explicit `values` formats its labels for one tick per value (a precision that follows the
+  tick step, `e` among others, differed); `tickMinStep` acts only through the tick count (a log scale keeps ticks closer than it); an
+  axis `orient` signal reads the per-orient config blocks per key as signal expressions, and its `labelBound` clips as a vertical axis;
+  under `fit`, `fit-x` and `fit-y` a legend takes from the view only its extent across its side, the view title sits against the same
+  bounds, a legend is arranged again in the second pass and a grid's second layout starts from the first's places (the floats vega's
+  second pass rounds); an `orient: none` legend with no `legendX` / `legendY` extends nothing along that axis; grid headers beyond the
+  column count add nothing to the bounds.
+
 - **`@aster/vl`: composite marks in a repeat, and the decision tables as Aster's own.**
   - A boxplot, errorbar or errorband in a repeat (a list, a row, a column, a grid, a layer, nested in a facet, a concat, a layer or
     another repeat) is rewritten after the repeat has put its values in; it was rewritten while its field was still a `{repeat}`

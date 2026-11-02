@@ -85,14 +85,16 @@ export class PathWriter implements PathSink {
 }
 
 /**
- * A full-precision {@link PathWriter} that also follows the current point, for the trail builder, which draws
- * circular arcs. The current point is what an arc joins to, and `closePath` returns to the start of the subpath.
+ * An SVG path writer for outlines made of lines and circular arcs (the trail and the arc mark). It follows the current
+ * point (an arc joins to it by a line when it does not start there) and the start of the subpath (`closePath` returns
+ * to it), and writes an arc as SVG `A` commands: the large-arc flag is set for a sweep of half a turn or more, and a
+ * full turn is drawn as two half arcs. Radii and end points are rounded like the other coordinates; `digits` is as for
+ * {@link PathWriter}, and the default is full precision.
  */
-export class ArcPathWriter extends PathWriter {
-  constructor() {
-    super(null)
-  }
-
+export class ArcPathWriter {
+  /** The path text so far. */
+  d = ''
+  private readonly scale: number
   private sx = 0
   private sy = 0
   private cx = 0
@@ -102,28 +104,30 @@ export class ArcPathWriter extends PathWriter {
   /** There is a current point. */
   private hasPoint = false
 
-  override moveTo(x: number, y: number): void {
+  constructor(digits: number | null = null) {
+    this.scale = digits === null ? 0 : digits === 3 ? 1000 : 10 ** digits
+  }
+
+  private round(v: number): number {
+    const k = this.scale
+    return k ? Math.round(v * k) / k : v
+  }
+
+  moveTo(x: number, y: number): void {
     this.sx = this.cx = x
     this.sy = this.cy = y
     this.hasStart = this.hasPoint = true
-    super.moveTo(x, y)
+    this.d += 'M' + this.round(x) + ',' + this.round(y)
   }
 
-  override lineTo(x: number, y: number): void {
+  lineTo(x: number, y: number): void {
     this.cx = x
     this.cy = y
     this.hasPoint = true
-    super.lineTo(x, y)
+    this.d += 'L' + this.round(x) + ',' + this.round(y)
   }
 
-  override bezierCurveTo(x1: number, y1: number, x2: number, y2: number, x: number, y: number): void {
-    this.cx = x
-    this.cy = y
-    this.hasPoint = true
-    super.bezierCurveTo(x1, y1, x2, y2, x, y)
-  }
-
-  override closePath(): void {
+  closePath(): void {
     if (!this.hasPoint) return
     this.cx = this.sx
     this.cy = this.sy
@@ -132,30 +136,34 @@ export class ArcPathWriter extends PathWriter {
   }
 
   /**
-   * A clockwise circular arc about (x, y) from angle a0 to a1 (a1 at or after a0), joined to the current point by
-   * a line when it does not start there. A sweep of a full turn is drawn as two half arcs. A negative radius is
-   * an error.
+   * A circular arc about (x, y) from angle a0 to a1, clockwise unless `ccw`, joined to the current point by a
+   * line when it does not start there (and starting the path when there is none). A sweep the wrong way round
+   * is taken the long way; a full turn is drawn as two half arcs; no radius, or a sweep under a millionth of a
+   * radian, draws nothing but that join. A negative radius is an error.
    */
-  arc(x: number, y: number, radius: number, a0: number, a1: number): void {
+  arc(x: number, y: number, radius: number, a0: number, a1: number, ccw = false): void {
     if (radius < 0) throw new Error(`negative radius: ${radius}`)
     const dx = radius * Math.cos(a0)
     const dy = radius * Math.sin(a0)
     const x0 = x + dx
     const y0 = y + dy
-    const sweep = a1 - a0
-    if (!this.hasPoint) this.d += 'M' + x0 + ',' + y0
-    else if (Math.abs(this.cx - x0) > ARC_EPSILON || Math.abs(this.cy - y0) > ARC_EPSILON) this.d += 'L' + x0 + ',' + y0
+    if (!this.hasPoint) this.d += 'M' + this.round(x0) + ',' + this.round(y0)
+    else if (Math.abs(this.cx - x0) > ARC_EPSILON || Math.abs(this.cy - y0) > ARC_EPSILON) this.d += 'L' + this.round(x0) + ',' + this.round(y0)
     if (!radius) return
-    const head = 'A' + radius + ',' + radius + ',0,'
+    let sweep = ccw ? a0 - a1 : a1 - a0
+    if (sweep < 0) sweep = (sweep % TAU) + TAU
+    const r = this.round(radius)
+    const head = 'A' + r + ',' + r + ',0,'
+    const side = ccw ? ',0,' : ',1,'
     if (sweep > TAU - ARC_EPSILON) {
-      this.d += head + '1,1,' + (x - dx) + ',' + (y - dy) + head + '1,1,' + x0 + ',' + y0
+      this.d += head + '1' + side + this.round(x - dx) + ',' + this.round(y - dy) + head + '1' + side + this.round(x0) + ',' + this.round(y0)
       this.cx = x0
       this.cy = y0
       this.hasPoint = true
     } else if (sweep > ARC_EPSILON) {
       const ex = x + radius * Math.cos(a1)
       const ey = y + radius * Math.sin(a1)
-      this.d += head + (sweep >= Math.PI ? '1' : '0') + ',1,' + ex + ',' + ey
+      this.d += head + (sweep >= Math.PI ? '1' : '0') + side + this.round(ex) + ',' + this.round(ey)
       this.cx = ex
       this.cy = ey
       this.hasPoint = true

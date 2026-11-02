@@ -15,7 +15,7 @@ import type { SceneDef, SceneGroup, SceneItem, SceneRoot } from './types.js'
 import { gradientDefOf, isGradientPaint as isGradientObject } from './svg-defs.js'
 import { Bounds, boundLeaf, boundTypedMark } from './bounds.js'
 import { imageBox, itemImage } from './image-box.js'
-import { parsePathData, tracePath, type PathSeg } from './path-data.js'
+import { parsePathData, tracePath, type PathSeg, type PathSink } from './path-data.js'
 
 // Path-data parsing and replay live in path-data.ts (hit.ts needs them without the renderer); the public surface is unchanged.
 export { parsePathData, tracePath, type PathSeg, type PathSink } from './path-data.js'
@@ -31,7 +31,7 @@ import {
   trailPath,
   frameBackgroundPath,
   frameItem,
-  arcInto,
+  itemArcInto,
 } from './render.js'
 
 /** Minimal 2D context surface used by the renderer. */
@@ -50,7 +50,9 @@ export interface CanvasLike {
   rotate(angle: number): void
   clip(fillRule?: 'nonzero' | 'evenodd'): void
   fill(fillRule?: 'nonzero' | 'evenodd'): void
-  stroke(): void
+  /** (a real context only: a run of symbols is painted from a `Path2D`, see {@link runPath}) */
+  fill(path: unknown, fillRule?: 'nonzero' | 'evenodd'): void
+  stroke(path?: unknown): void
   fillRect(x: number, y: number, w: number, h: number): void
   setLineDash(dashes: number[]): void
   // The renderer never passes a maxWidth (the DOM overload is unused). The
@@ -622,6 +624,7 @@ function paintPath(
   defs: SceneDefs[] | undefined,
   op: 'auto' | 'fill' | 'stroke',
   bbox?: Bbox,
+  path?: unknown,
 ): void {
   const opacity = it.opacity == null ? 1 : (it.opacity as number)
   if (opacity === 0) return
@@ -642,7 +645,8 @@ function paintPath(
       const paint = resolvePaint(fill, ctx, defs, bb)
       // Dangling references and non-string paints serialize as their string form.
       ctx.fillStyle = (paint !== undefined ? paint : String(fill)) as string
-      ctx.fill()
+      if (path === undefined) ctx.fill()
+      else ctx.fill(path)
     }
   }
   if (stroke != null && (stroke as unknown) !== false && stroke !== 'transparent' && stroke !== '') {
@@ -658,7 +662,8 @@ function paintPath(
       ctx.miterLimit = it.strokeMiterLimit != null ? it.strokeMiterLimit : 4
       ctx.setLineDash((it.strokeDash as number[] | undefined) ?? [])
       if (ctx.lineDashOffset !== undefined || it.strokeDashOffset != null) ctx.lineDashOffset = it.strokeDashOffset || 0
-      ctx.stroke()
+      if (path === undefined) ctx.stroke()
+      else ctx.stroke(path)
       ctx.setLineDash([])
     }
   }
@@ -853,6 +858,27 @@ function symbolPaintKey(it: SceneItem): string {
   ].map((v) => (v == null ? '' : Array.isArray(v) ? v.join(',') : String(v))).join('|')
 }
 
+/** A path object a run of symbols can be assembled in (`Path2D`). */
+interface RunPath extends PathSink {
+  addPath(path: RunPath): void
+}
+
+/**
+ * A new empty `Path2D`, when the context is a browser's 2D context (a page's or an OffscreenCanvas's); null for any other
+ * context (a recording, a test double, a node canvas), which gets the symbols on its own current path.
+ *
+ * Why it exists: Blink measures the whole path on every `closePath`, so closing N symbols one after another in a path that
+ * keeps growing costs N squared (100k squares: 17 seconds, circles, which never close, 0.2). A closed symbol traced as a
+ * `Path2D` of its own and then added to the run's path closes in constant time, with the same points, so the same pixels.
+ */
+function runPath(ctx: CanvasLike): RunPath | null {
+  const g = globalThis as unknown as { Path2D?: new () => RunPath; CanvasRenderingContext2D?: abstract new () => unknown; OffscreenCanvasRenderingContext2D?: abstract new () => unknown }
+  if (typeof g.Path2D !== 'function') return null
+  const isPage = typeof g.CanvasRenderingContext2D === 'function' && ctx instanceof g.CanvasRenderingContext2D
+  const isOffscreen = typeof g.OffscreenCanvasRenderingContext2D === 'function' && ctx instanceof g.OffscreenCanvasRenderingContext2D
+  return isPage || isOffscreen ? new g.Path2D() : null
+}
+
 /**
  * Large symbol groups are almost always a dense scatter with a handful of
  * paints. Batch consecutive same-paint items into one path so a 100k-point
@@ -876,20 +902,42 @@ function renderSymbolRuns(items: SceneItem[], ctx: CanvasLike, defs: SceneDefs[]
       run = []
       return
     }
+    const first = run[0]!
+    const shape0 = (first as Record<string, unknown>).shape as string | undefined
+    // (the symbols of a run share a shape and a size, so one parse serves them all; `lastR` guards a size that is not a number)
+    let segs: PathSeg[] | null = null
+    let lastR = NaN
+    const symbolSegs = (shape: string | undefined, r: number): PathSeg[] => {
+      if (segs === null || r !== lastR) { segs = parsePathData(cachedSymbolPath(shape, r)); lastR = r }
+      return segs
+    }
+    const radiusOf = (it: SceneItem): number => Math.sqrt((it.size as number) ?? SYMBOL_DEFAULT_SIZE) / 2
+    const closed = shape0 != null && shape0 !== 'circle' && symbolSegs(shape0, radiusOf(first)).some((sg) => sg.cmd === 'Z' || sg.cmd === 'z')
+    const whole = closed ? runPath(ctx) : null
+    if (whole !== null) {
+      for (const it of run) {
+        const one = runPath(ctx)!
+        tracePath(one, symbolSegs(shape0, radiusOf(it)), it.x || 0, it.y || 0)
+        whole.addPath(one)
+      }
+      paintPath(ctx, [], first, defs, 'auto', undefined, whole)
+      run = []
+      return
+    }
     ctx.beginPath()
     for (const it of run) {
       const x = it.x || 0
       const y = it.y || 0
-      const r = Math.sqrt((it.size as number) ?? SYMBOL_DEFAULT_SIZE) / 2
+      const r = radiusOf(it)
       const shape = (it as Record<string, unknown>).shape as string | undefined
       if (shape == null || shape === 'circle') {
         ctx.moveTo(x + r, y)
         ctx.arc(x, y, r, 0, 2 * Math.PI, false)
       } else {
-        tracePath(ctx, parsePathData(cachedSymbolPath(shape, r)), x, y)
+        tracePath(ctx, symbolSegs(shape, r), x, y)
       }
     }
-    paintPath(ctx, [], run[0]!, defs, 'auto')
+    paintPath(ctx, [], first, defs, 'auto')
     run = []
   }
   for (const it of items) {
@@ -1024,14 +1072,8 @@ function renderMark(type: string, group: SceneGroup, ctx: CanvasLike, scene: Sce
     }
     case 'arc': {
       for (const it of group.items ?? []) {
-        const r = (it.outerRadius as number) ?? (it.radius as number) ?? 0
-        const r0 = (it.innerRadius as number) ?? 0
-        const a0 = (it.startAngle as number) ?? 0
-        const a1 = (it.endAngle as number) ?? 0
         // The SVG renderer emits the arc path around (0,0) translated by the
         // item position; trace the same local path with the item offset.
-        const cr = (it as Record<string, unknown>).cornerRadius as number | undefined ?? 0
-        const pa = (it as Record<string, unknown>).padAngle as number | undefined ?? 0
         // vega's markItemPath draw: translate/rotate to the item, build the path
         // with the REAL context (d3-arc calls moveTo/arc/lineTo on it), restore
         // the transform, then fill/stroke. Re-deriving the circles from the SVG
@@ -1042,7 +1084,7 @@ function renderMark(type: string, group: SceneGroup, ctx: CanvasLike, scene: Sce
         ctx.translate(ax, ay)
         if (angle) ctx.rotate((angle * Math.PI) / 180)
         ctx.beginPath()
-        arcInto(ctx, 0, 0, r, r0, a0, a1, cr, pa)
+        itemArcInto(ctx, it)
         if (angle) ctx.rotate((-angle * Math.PI) / 180)
         ctx.translate(-ax, -ay)
         paintPath(ctx, [], it, defs, 'auto', gradientBox(it))

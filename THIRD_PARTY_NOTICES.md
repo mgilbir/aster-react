@@ -982,6 +982,12 @@ of the projects they follow printed above, for that reason:
   curves) (all BSD-3-Clause) in what an output must equal, including the order of the floating point operations that a
   view's size depends on. The sampling of an elliptical arc in `bounds.ts` (`boundsFromPath`) still follows the
   procedure of `vega-scenegraph`'s `boundContext.arc` step for step, with its own names and comments.
+- The sector outline of an arc item in `render.ts` (`arcInto` and the stages it is made of) and `ArcPathWriter` in `shape.ts` were
+  rewritten with their own structure, names and comments; none of the upstream source text is carried over. They follow
+  `d3-shape`'s arc generator and `d3-path` (ISC) in what the output must equal: the thresholds, the clamped inverse
+  trigonometric functions, the order of the floating point operations, the sequence of path calls and the path text. The
+  quarter-turn walk of an arc in `bounds-pen.ts` follows the stepping of `vega-scenegraph`'s `boundContext.arc` (BSD-3-Clause)
+  for the same reason.
 - `event-selector.ts` follows the grammar and error messages of `vega-event-selector` (BSD-3-Clause).
 - `selections.ts` follows the semantics of `vega-selections` (BSD-3-Clause), `data-format.ts` those of `vega-loader`
   (BSD-3-Clause).
