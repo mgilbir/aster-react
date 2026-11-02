@@ -45,7 +45,6 @@ const REJECTED: Array<[string, unknown, RegExp]> = [
   ['the time channel', unit({ encoding: { x: xq, y: yq, time: { field: 'x', type: 'quantitative' } } }), /time/],
   // --- composition nesting (C34)
   ['a facet inside a layer', { data: DATA, layer: [{ facet: { field: 'c', type: 'nominal' }, spec: unit() }] }, /not allowed inside `layer`/],
-  ['a concat inside a facet', { data: DATA, facet: { field: 'c', type: 'nominal' }, spec: { hconcat: [unit()] } }, /not allowed inside `facet`/],
   ['an empty layer', { data: DATA, layer: [] }, /non-empty array/],
   ['facet without spec', { data: DATA, facet: { field: 'c', type: 'nominal' } }, /nested `spec`/],
   ['a repeat reference outside a repeat', unit({ encoding: { x: { field: { repeat: 'row' }, type: 'quantitative' } } }), /outside a matching `repeat`/],
@@ -83,8 +82,8 @@ const REJECTED: Array<[string, unknown, RegExp]> = [
   ['a point option on an interval selection', unit({ params: [{ name: 'brush', select: { type: 'interval', nearest: true } }] }), /unknown interval selection property "nearest"/],
   ['an interval selection bound to inputs', unit({ params: [{ name: 'brush', select: 'interval', bind: { input: 'range' } }] }), /can only be bound to "scales"/],
   ['a selection on a layer itself', { data: DATA, params: [{ name: 'b', select: 'interval' }], layer: [unit({})] }, /a selection parameter on a layer spec itself.*which Vega rejects/],
-  ['a selection on a concat with a layer below it', { data: DATA, params: [{ name: 'b', select: 'interval' }], hconcat: [{ layer: [unit({})] }, unit({})] }, /given to every unit below it.*a layer below would declare the selection's signals twice/],
-  ['a selection on a facet over a layer', { data: DATA, params: [{ name: 'b', select: 'interval' }], facet: { field: 'c', type: 'nominal' }, spec: { layer: [unit({})] } }, /a layer below would declare/],
+  ['a selection on a concat with a layer of two units below it', { data: DATA, params: [{ name: 'b', select: 'interval' }], hconcat: [{ layer: [unit({}), unit({})] }, unit({})] }, /given to every unit below it.*a layer below would declare the selection's signals twice/],
+  ['a selection on a facet over a layer of two units', { data: DATA, params: [{ name: 'b', select: 'interval' }], facet: { field: 'c', type: 'nominal' }, spec: { layer: [unit({}), unit({})] } }, /a layer below would declare/],
   ['a selection on a repeat over a boxplot', { data: DATA, params: [{ name: 'b', select: 'interval' }], repeat: ['x', 'y'], spec: unit({ mark: 'boxplot' }) }, /boxplot is a layer once vega-lite has normalized it/],
   ['a selection on a concat over a unit with params of its own', { data: DATA, params: [{ name: 'b', select: 'interval' }], hconcat: [unit({ params: [{ name: 'c', value: 1 }] }), unit({})] }, /replaces the parameters of a unit that has some of its own/],
   ['a selection restricted to views', { data: DATA, params: [{ name: 'b', select: 'interval', views: ['a'] }], hconcat: [unit({}), unit({})] }, /`views`.*not supported/],
@@ -100,7 +99,7 @@ const REJECTED: Array<[string, unknown, RegExp]> = [
   ['a condition without a test', unit({ encoding: { x: xq, y: yq, color: { condition: { value: 'red' }, value: 'grey' } } }), /needs `test`/],
   ['an empty condition array', unit({ encoding: { x: xq, y: yq, color: { condition: [], value: 'grey' } } }), /must not be empty/],
   ['a field condition in an array', unit({ encoding: { x: xq, y: yq, color: { condition: [{ test: 'true', field: 'c', type: 'nominal' }], value: 'g' } } }), /value conditions/],
-  ['a datum condition', unit({ encoding: { x: xq, y: yq, color: { condition: { test: 'true', datum: 'a' }, value: 'g' } } }), /datum/],
+  ['a datum condition on a channel whose scale is named after its paint', unit({ encoding: { x: xq, y: yq, fill: { condition: { test: 'true', datum: 'a' }, value: 'g' } } }), /datum/],
   ['a condition with both value and field', unit({ encoding: { x: xq, y: yq, color: { condition: { test: 'true', value: 'r', field: 'c', type: 'nominal' }, value: 'g' } } }), /exactly one of/],
   // --- sort (C35)
   ['an unknown sort string', unit({ encoding: { x: { ...cn, sort: 'sideways' } } }), /unknown sort/],

@@ -104,7 +104,8 @@ export function normalizeComposites(node: unknown, userConfig: Obj | undefined, 
     out.encoding = mergeEncoding(inherited, node.encoding)
   }
   for (const k of COMPOSITIONS) if (node[k] !== undefined) out[k] = normalizeComposites(node[k], userConfig, {})
-  if (node.spec !== undefined) out.spec = normalizeComposites(node.spec, userConfig, {})
+  // (a repeat's spec is rewritten once the repeat has put its values in, cell by cell: `normalizeUnits`)
+  if (node.spec !== undefined) out.spec = node.repeat === undefined ? normalizeComposites(node.spec, userConfig, {}) : node.spec
   return out
 }
 
@@ -164,7 +165,7 @@ export function normalizePathOverlays(node: unknown, config: Obj, stackOf: (unit
   for (const k of COMPOSITIONS) {
     if (node[k] !== undefined) return { ...node, [k]: normalizePathOverlays(node[k], config, stackOf, {}) }
   }
-  if (node.spec !== undefined) return { ...node, spec: normalizePathOverlays(node.spec, config, stackOf, {}) }
+  if (node.spec !== undefined) return node.repeat === undefined ? { ...node, spec: normalizePathOverlays(node.spec, config, stackOf, {}) } : node
   if (node.mark === undefined) return node
 
   if (hasFacetChannel(node.encoding)) {
@@ -201,7 +202,8 @@ export function normalizePathOverlays(node: unknown, config: Obj, stackOf: (unit
     ? { ...encoding, [stack.fieldChannel]: { ...(encoding[stack.fieldChannel] as Obj), ...(stack.offset ? { stack: stack.offset } : {}) } }
     : encoding
   // what the parent layer would give the overlay anyway is not repeated in it
-  const ownOfOverlay = omit(shared, Object.keys(inherited).filter((k) => sameJson(inherited[k], shared[k])))
+  // (an overlay is drawn on the edge of the area, and a point cannot span: neither takes the second channels)
+  const ownOfOverlay = omit(shared, [...Object.keys(inherited).filter((k) => sameJson(inherited[k], shared[k])), 'x2', 'y2'])
   if (line) {
     layer.push({
       ...(projection !== undefined ? { projection } : {}),
@@ -231,7 +233,7 @@ export function alignStackOrders(node: unknown, stackOf: (unit: Obj) => StackPro
   if (!isObj(node)) return node
   if (node.layer !== undefined) return { ...node, layer: alignStackOrders(node.layer, stackOf, mergeEncoding(inherited, node.encoding)) }
   for (const k of COMPOSITIONS) if (node[k] !== undefined) return { ...node, [k]: alignStackOrders(node[k], stackOf, {}) }
-  if (node.spec !== undefined) return { ...node, spec: alignStackOrders(node.spec, stackOf, {}) }
+  if (node.spec !== undefined) return node.repeat === undefined ? { ...node, spec: alignStackOrders(node.spec, stackOf, {}) } : node
   if (node.mark === undefined) return node
 
   const own: Obj = isObj(node.encoding) ? node.encoding : {}
@@ -258,4 +260,43 @@ export function alignStackOrders(node: unknown, stackOf: (unit: Obj) => StackPro
     transform: [...(Array.isArray(node.transform) ? node.transform : []), { calculate: `indexof(${JSON.stringify(domain)}, datum['${color.field}'])`, as }],
     encoding: { ...own, order: { field: as, type: 'quantitative', sort: horizontal ? 'ascending' : 'descending' } },
   }
+}
+
+// --- a line that spans a second channel -----------------------------------------------------------------------------------------
+
+/** The channels that end a span, and the channel each one ends the span of. */
+const SPAN_ENDS: ReadonlyArray<readonly [end: string, start: string]> = [['x2', 'x'], ['y2', 'y'], ['latitude2', 'latitude'], ['longitude2', 'longitude'], ['theta2', 'theta'], ['radius2', 'radius']]
+
+/** A line is not drawn between points that are spans: a line that spans a channel that is a field or a datum (not a pre-binned field) is a rule. */
+function spansAChannel(encoding: Obj): boolean {
+  return SPAN_ENDS.some(([end, start]) => {
+    const def = encoding[start]
+    return !!encoding[end] && isObj(def) && ((def.field !== undefined && def.bin !== 'binned' && !(isObj(def.bin) && def.bin.binned === true)) || def.datum !== undefined)
+  })
+}
+
+/**
+ * Every line unit that spans a channel (a second channel next to its x, y, ...) as a rule over the same encoding. `inherited` is the
+ * encoding a parent layer shares.
+ */
+export function normalizeRangedLines(node: unknown, inherited: Obj = {}): unknown {
+  if (Array.isArray(node)) return node.map((n) => normalizeRangedLines(n, inherited))
+  if (!isObj(node)) return node
+  if (node.layer !== undefined) return { ...node, layer: normalizeRangedLines(node.layer, mergeEncoding(inherited, node.encoding)) }
+  for (const k of COMPOSITIONS) if (node[k] !== undefined) return { ...node, [k]: normalizeRangedLines(node[k], {}) }
+  if (node.spec !== undefined) return node.repeat === undefined ? { ...node, spec: normalizeRangedLines(node.spec, {}) } : node
+  const type = isObj(node.mark) ? node.mark.type : node.mark
+  if (type !== 'line' || !spansAChannel(mergeEncoding(inherited, node.encoding))) return node
+  return { ...node, mark: isObj(node.mark) ? { ...node.mark, type: 'rule' } : 'rule' }
+}
+
+// --- all of them ---------------------------------------------------------------------------------------------------------------
+
+/**
+ * The spec tree with its composite marks, overlays and stack orders rewritten. A repeat's spec is left as it is: it names the
+ * repeated fields by reference, and a rewrite needs the field it reads (the repeat rewrites each cell, with this, once it has put the
+ * values in).
+ */
+export function normalizeUnits(node: unknown, userConfig: Obj | undefined, stackOf: (unit: Obj) => StackProps | undefined): unknown {
+  return alignStackOrders(normalizeRangedLines(normalizePathOverlays(normalizeComposites(node, userConfig), userConfig ?? {}, stackOf)), stackOf)
 }

@@ -175,7 +175,8 @@ const SCHEMA_CHILDREN: Record<Exclude<Kind, 'unit'>, ReadonlySet<Kind>> = {
   vconcat: new Set<Kind>(ANY_VIEW),
   concat: new Set<Kind>(ANY_VIEW),
   // (vega-lite 6.4.3 compiles a facet inside a facet - the `_future` examples - though its schema does not list one)
-  facet: new Set<Kind>(['unit', 'layer', 'facet']),
+  // (and a repeat or a concat: a cell may hold a composition)
+  facet: new Set<Kind>(['unit', 'layer', 'facet', 'hconcat', 'vconcat', 'concat', 'repeat']),
   repeat: new Set<Kind>(ANY_VIEW),
 }
 /** Implemented (parent -> child) nestings: today every schema-valid nesting is implemented; narrow this as the schema grows. */
@@ -244,14 +245,6 @@ export function validateSpec(spec: unknown): void {
   validateView(spec, '', true, undefined, true)
 }
 
-/** A view that carries a name names its marks and units after it; the selections' fixed names would then disagree. */
-function checkNamedSelectionView(spec: Obj, at: (k: string) => string): void {
-  // (a timer selection is the exception: an animation's signals are not named after the view, only its tuple's `unit` is)
-  if (spec.name !== undefined && ((Array.isArray(spec.params) && spec.params.some((p) => isObj(p) && p.select !== undefined && !isTimerSelect(p.select))))) {
-    fail(at('name'), 'a view with selection parameters cannot be named: vega-lite names its marks, signals and units after the view, which @aster/vl does not reproduce')
-  }
-}
-
 /** Every parameter name must be unique across the whole spec. */
 let paramNamesSeen: Set<string> = new Set()
 let selectionNamesSeen: Set<string> = new Set()
@@ -278,8 +271,6 @@ function validateView(spec: Obj, path: string, top: boolean, parent: Kind | unde
   if (spec.transform !== undefined) validateTransforms(spec.transform, at('transform'))
   validateSize(spec, at, top && (kind === 'unit' || kind === 'layer'))
   if (spec.params !== undefined) validateParams(spec.params, at('params'), kind !== 'layer' && selOk, kind, spec, at('params'))
-  checkNamedSelectionView(spec, at)
-  if (top && spec.name !== undefined && [...declaredParams].some(([n, k]) => k === 'selection' && !timerNames.has(n))) fail(at('name'), 'a named spec cannot declare selection parameters: vega-lite names its marks, signals and units after the view, which @aster/vl does not reproduce')
   if (spec.resolve !== undefined) validateResolve(spec.resolve, at('resolve'), kind, isObj(spec.encoding) && (spec.encoding.row != null || spec.encoding.column != null || spec.encoding.facet != null))
   if (spec.projection !== undefined) validateProjection(spec.projection, at('projection'))
   if (spec.view !== undefined) validateViewBackground(spec.view, kind, at('view'))
@@ -561,12 +552,20 @@ const BIND_INPUTS = set('range checkbox radio select text number date datetime-l
  * (vega-lite gives every unit a copy), or undefined when it can: a layer below would declare the same signals twice in one
  * Vega scope, which Vega rejects, and a composite mark (boxplot, errorbar, errorband) is a layer once vega-lite has normalized it.
  */
+/** How many units a layer tree holds. */
+function unitsBelow(node: unknown): number {
+  if (Array.isArray(node)) return node.reduce((n: number, c) => n + unitsBelow(c), 0)
+  if (!isObj(node)) return 0
+  return Array.isArray(node.layer) ? unitsBelow(node.layer) : 1
+}
+
 function pushdownProblem(node: unknown): string | undefined {
   if (!isObj(node)) return undefined
   const mark = node.mark
   const markType = typeof mark === 'string' ? mark : isObj(mark) ? mark.type : undefined
-  if (['boxplot', 'errorbar', 'errorband'].includes(markType as string)) return `a ${markType as string} is a layer once vega-lite has normalized it`
-  if (Array.isArray(node.layer)) return 'a layer below would declare the selection\'s signals twice in one Vega scope, which Vega rejects'
+  // (an errorbar or an errorband is one unit unless it draws ticks, borders or points: the compiler refuses the ones that are several)
+  if (markType === 'boxplot') return 'a boxplot is a layer once vega-lite has normalized it'
+  if (Array.isArray(node.layer) && unitsBelow(node.layer) > 1) return 'a layer below would declare the selection\'s signals twice in one Vega scope, which Vega rejects'
   if (node.mark !== undefined && Array.isArray(node.params) && node.params.length > 0) return 'vega-lite replaces the parameters of a unit that has some of its own (so a variable parameter or a selection declared there would be lost)'
   for (const k of ['hconcat', 'vconcat', 'concat']) {
     if (Array.isArray(node[k])) for (const c of node[k] as unknown[]) { const p = pushdownProblem(c); if (p) return p }
