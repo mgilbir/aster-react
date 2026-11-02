@@ -458,6 +458,8 @@ function createBuiltinFunctions(runtime: ExpressionRuntime): Record<string, unkn
     encodeURIComponent: (value: unknown) => encodeURIComponent(String(value)),
     regexp: (pattern: unknown, flags?: unknown) => guardedRegExp(String(pattern), flags == null ? undefined : String(flags)),
     // date-time
+    // (read when called, not when this module loaded: a host or a test that replaces `Date.now` -- the deterministic clock -- is heard)
+    now: () => Date.now(),
     setdata: (name: unknown, tuples: unknown) => (runtime.setdata ? runtime.setdata(String(name), tuples) : 1),
     // vega-functions codegen.js: `random() { return random(); }`, vega-statistics' (replaceable) source
     random: () => (runtime.random ?? Math.random)(),
