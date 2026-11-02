@@ -5,12 +5,12 @@
  */
 import { compileExpr, ExpressionParseError, type CompiledExpr, type ExpressionRuntime } from './expression.js'
 import { ingestRows, readData, type DataFormatSpec } from './data-format.js'
-import { carryOrder, isPlacing } from './tuple-order.js'
+import { carryOrder, isPlacing, orderOf, setOrder } from './tuple-order.js'
 import { carryByAlignment, carryByMapping, type IdCounter } from './identifier-ids.js'
-import { applyTransforms, applyTransformsToSharedRows, compileExprTransform, sortOrder, getField, geoJSONPath, aggregateGroup, type Row, type TransformContext } from './transform.js'
+import { applyTransforms, applyTransformsToSharedRows, copiesRows, compileExprTransform, sortOrder, getField, geoJSONPath, aggregateGroup, type Row, type TransformContext } from './transform.js'
 import { fieldOf } from './transform-agg.js'
 import { atRandomSite, contentKey, mayDrawRandom, normalPairs, replayable } from './random-tape.js'
-import { dependencyKey, pipelineReadsOf, reuse, stepCounts, stepReadsOf, type StepReads, type StepRecord } from './step-reuse.js'
+import { dependencyKey, fieldsWritten, pipelineReadsOf, reuse, runsOf, stepCounts, stepReadsOf, type StepReads, type StepRecord } from './step-reuse.js'
 import { activeMeter, withLimits, boundedCount, checkRowCount, meterItems, meterTick, AsterLimitError } from './limits.js'
 import { withTextMetricsProvider } from './text-metrics.js'
 import { AsterUrlError } from './url-policy.js'
@@ -51,7 +51,7 @@ import { compileChart } from './compiler.js'
 import { dict, ownGet, pushAll, sortData, lerp, scopedSignalName, heldSignalName, TUPLE_ID } from './util.js'
 import { applyImageUrlPolicy, applyLinkUrlPolicy, resolveImageUrl, type ImageUrlPolicy } from './url-policy.js'
 import { valueKey, valuesEqual } from './fingerprint.js'
-import { rowsEqual, sourceNames, type PulseChange } from './pulse.js'
+import { equalCell, rowsEqual, sourceNames, type PulseChange } from './pulse.js'
 import { aggregateRows, fieldsOf, groupKeyFn } from './transform-agg.js'
 import { flattenLength } from './transform-basic.js'
 import { layoutFacet } from './trellis.js'
@@ -116,6 +116,12 @@ interface DatasetState {
    */
   inputs?: readonly unknown[]
   records?: ReadonlyArray<StepRecord | undefined>
+  /**
+   * `aliased[k]`: the fields that the rows of `steps[k]` may hold beyond what step `k` made of them. Steps that only add fields run
+   * as one over one set of rows (see runsOf), and the rows the first steps of such a run stand for are the rows the last made, which
+   * hold the fields of the steps after them too. A step compared with such rows leaves those fields out.
+   */
+  aliased?: Array<ReadonlySet<string> | undefined>
 }
 
 /** Min/max census of a continuous data-driven scale domain (C11). */
@@ -2466,6 +2472,19 @@ function foldAppendPulse(
   return { rows: prev, pulse: appendPulse(outBase, prev.length, changed) }
 }
 
+/** `rowsEqual`, leaving the fields in `ignore` out of both rows. */
+function rowsEqualBut(a: Row, b: Row, ignore: ReadonlySet<string>): boolean {
+  let n = 0
+  for (const k in a) {
+    if (ignore.has(k)) continue
+    n++
+    if (!equalCell(a[k], b[k])) return false
+  }
+  let m = 0
+  for (const k in b) if (!ignore.has(k)) m++
+  return n === m
+}
+
 /**
  * Re-derive a transform whose output stays 1:1 with its input (layout/pie/
  * dotbin/label), then reuse the previous output row object wherever the value
@@ -2474,7 +2493,7 @@ function foldAppendPulse(
  */
 function rederiveAligned(
   rows: Row[], t: CompiledTransform, tctx: StepTransformContext, sourceName: string,
-  input: StepPulse, prev: Row[] | undefined,
+  input: StepPulse, prev: Row[] | undefined, ignore?: ReadonlySet<string>,
 ): { rows: Row[]; pulse: StepPulse } | null {
   const out = applyOne(rows, t, tctx, sourceName)
   const from = input.from!
@@ -2485,7 +2504,7 @@ function rederiveAligned(
   for (let i = 0; i < out.length; i++) {
     const old = from[i]!
     const canReuse = old >= 0 && !modified.has(i) && prev && prev[old] !== undefined
-    if (canReuse && rowsEqual(out[i]!, prev![old]!)) {
+    if (canReuse && (ignore === undefined ? rowsEqual(out[i]!, prev![old]!) : rowsEqualBut(out[i]!, prev![old]!, ignore))) {
       reused[i] = prev![old]!
     } else {
       reused[i] = out[i]!
@@ -3031,7 +3050,7 @@ function identifierPulse(
  */
 function applyStepWithPulse(
   rows: Row[], t: CompiledTransform, tctx: StepTransformContext, sourceName: string,
-  input: StepPulse, prev: Row[] | undefined, prevStepState: unknown,
+  input: StepPulse, prev: Row[] | undefined, prevStepState: unknown, aliased?: ReadonlySet<string>,
 ): { rows: Row[]; pulse: StepPulse | null; state?: unknown } {
   const type = String(t.type)
   if ((type === 'aggregate' || type === 'joinaggregate') && !groupwiseIncremental(t)) {
@@ -3085,7 +3104,7 @@ function applyStepWithPulse(
       if (rowLocal(t, tctx)) {
         return rowLocalPulse(rows, t, tctx, sourceName, input, prev) ?? { rows: applyOne(rows, t, tctx, sourceName), pulse: null }
       }
-      if (type === 'bin') return rederiveAligned(rows, t, tctx, sourceName, input, prev) ?? { rows: applyOne(rows, t, tctx, sourceName), pulse: null }
+      if (type === 'bin') return rederiveAligned(rows, t, tctx, sourceName, input, prev, aliased) ?? { rows: applyOne(rows, t, tctx, sourceName), pulse: null }
       return { rows: applyOne(rows, t, tctx, sourceName), pulse: null }
     case 'identifier':
       // The rows that were there keep their numbers (a modified one too), the new ones are numbered from the view's counter.
@@ -3222,7 +3241,8 @@ function applyPipelineWithPulse(
       continue
     }
     const stepInput = cur
-    const res = applyStepWithPulse(cur, t, tctx, sourceName, pulse, prevDS.steps[k], prevDS.stepState.get(key))
+    const res = applyStepWithPulse(cur, t, tctx, sourceName, pulse, prevDS.steps[k], prevDS.stepState.get(key), prevDS.aliased?.[k])
+    if (prevDS.aliased?.[k] !== undefined) (state.aliased ??= [])[k] = prevDS.aliased[k]
     cur = res.rows
     checkRowCount(cur.length, `transform ${String(t.type)}`)
     pulse = res.pulse
@@ -3491,7 +3511,7 @@ function reusableRuns(ctx: EvalContext, name: string, inputs: readonly unknown[]
 /**
  * Run a dataset's transforms over `rows` from scratch, keeping every step whose inputs are as they were in an earlier run (see
  * {@link DatasetState.inputs}) and leaving the steps, their state and what each read in `state`. `shared`: `rows` are still the
- * source's own, copied only if a step has to run on them.
+ * source's own, copied only if a step that does not make rows of its own has to run on them.
  */
 function runPipeline(
   ctx: EvalContext, name: string, transforms: CompiledTransform[], tctx: StepTransformContext, rows: Row[], shared: boolean,
@@ -3499,10 +3519,43 @@ function runPipeline(
 ): Row[] {
   const runs = reusableRuns(ctx, name, inputs, raw, transforms.length)
   const records = new Array<StepRecord | undefined>(transforms.length)
+  const ends = runsOf(transforms)
   let cur = rows
   for (let k = 0; k < transforms.length; k++) {
+    const end = reuse.on ? ends[k]! : k
     const t = transforms[k]!
     const reads = stepReadsOf(t)
+    if (end > k) {
+      // consecutive steps that only add fields run as one (the rows are made once; see runsOf)
+      const unit = transforms.slice(k, end + 1)
+      const unitReads = unit.map((u) => stepReadsOf(u)!)
+      const unitKeys = unitReads.map((r) => r.signals.map((n) => dependencyKey(ctx.signalParams[n])))
+      const kept = runs.length > 0 ? keptSteps(ctx, name, unit, unitReads, unitKeys, runs, k, cur) : undefined
+      if (kept !== undefined) {
+        const out = kept.steps[end]!
+        for (let j = k; j <= end; j++) {
+          keepStep(ctx, transforms[j]!, unitReads[j - k]!, kept.records![j]!, cur.length, out)
+          state.steps.push(kept.steps[j]!)
+          if (kept.aliased?.[j] !== undefined) (state.aliased ??= [])[j] = kept.aliased[j]
+          records[j] = kept.records![j]
+        }
+        cur = out
+        stepCounts.reused += unit.length
+      } else {
+        const out = applyTransforms(cur, unit, tctx, name)
+        // (the steps before the last stand for the rows it made, which hold what the steps after them added)
+        for (let j = k; j < end; j++) {
+          state.steps.push(withOrderOf(out, out.slice()))
+          ;(state.aliased ??= [])[j] = new Set(unit.slice(j - k + 1).flatMap(fieldsWritten))
+        }
+        state.steps.push(out)
+        for (let j = 0; j < unit.length; j++) records[k + j] = recordStep(ctx, unitReads[j]!, unitKeys[j]!, false, undefined)
+        cur = out
+        stepCounts.ran += unit.length
+      }
+      k = end
+      continue
+    }
     const keys = reads === null ? undefined : reads.signals.map((n) => dependencyKey(ctx.signalParams[n]))
     const kept = keys !== undefined && runs.length > 0 ? keptSteps(ctx, name, [t], [reads!], [keys], runs, k, cur) : undefined
     if (kept !== undefined) {
@@ -3516,8 +3569,8 @@ function runPipeline(
       stepCounts.reused++
       continue
     }
-    // (the rows of a step that has to run are this evaluation's own: a source's are copied now)
-    if (shared && cur === rows) cur = copyRows(rows)
+    // (the rows of a step that has to run are this evaluation's own: a source's are copied now, unless the step makes rows of its own)
+    if (shared && cur === rows && !copiesRows(t)) cur = copyRows(rows)
     const from = cur
     const had = reads?.publishes !== undefined && Object.hasOwn(ctx.signalParams, reads.publishes)
     const published = reads?.publishes === undefined ? undefined : ctx.signalParams[reads.publishes]
@@ -3533,6 +3586,13 @@ function runPipeline(
   if (shared && cur === rows) cur = copyRows(rows)
   if (inputs !== undefined) { state.inputs = inputs; state.records = records }
   return cur
+}
+
+/** `target` stands in the order rows were made in as `rows` does (see tuple-order.ts). */
+function withOrderOf(rows: readonly Row[], target: Row[]): Row[] {
+  const order = orderOf(rows)
+  if (order !== null) setOrder(target, order)
+  return target
 }
 
 /**

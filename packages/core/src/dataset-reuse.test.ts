@@ -16,7 +16,7 @@ import './addon-transforms.js'
 import { compileChart } from './compiler.js'
 import { datasetsOfScene, evaluateChart, evaluateChartPending } from './runtime.js'
 import { createChartSession } from './session.js'
-import { reuse, stepCounts } from './step-reuse.js'
+import { reuse, runsOf, stepCounts } from './step-reuse.js'
 import { genSpec, made, mulberry32, pick, rowsOf, usable, type Row } from './dataset-reuse.testkit.js'
 import type { RuntimeInput, SceneRoot, VgSpec } from './types.js'
 
@@ -265,6 +265,61 @@ describe('a step that draws does not draw again when it is kept', () => {
     session.evaluate(spec, { data: { t: rows }, width: 100 })
     const { reused } = counted(() => session.evaluate(spec, { data: { t: rows }, width: 180 }))
     expect(reused).toBe(0)
+  })
+})
+
+describe('consecutive steps that add fields run as one, and the engine that updates them cannot tell', () => {
+  const rows: Row[] = rowsOf(30)
+  /**
+   * The updates the incremental engine takes over for: a row less (the first update after the rows were made keeps the steps
+   * the rows were made by as they were), a row changed, a row more.
+   */
+  const updates: Row[][] = [
+    rows,
+    rows.filter((_, i) => i !== 5),
+    rows.map((r, i) => (i === 3 ? { ...r, x: 12, v: 9 } : r)),
+    [...rows, { id: 90, g: 1, x: 40, v: 3 }],
+    rows.slice(2),
+  ]
+  const same = (transform: unknown[], draws = false): void => {
+    const spec = {
+      width: 100, height: 100, autosize: 'none', signals: [{ name: 'k', value: 1 }],
+      data: [{ name: 't', transform }, { name: 'u', source: 't', transform: [{ type: 'formula', as: 'w', expr: 'datum.k' }] }],
+      marks: [{ type: 'symbol', from: { data: 't' }, encode: { update: { x: { field: 'x' } } } }],
+    } as unknown as VgSpec
+    const a = createChartSession()
+    const b = createChartSession()
+    const srcA = mulberry32(3)
+    const srcB = mulberry32(3)
+    for (const [i, data] of updates.entries()) {
+      const got = made(a.evaluate(spec, { data: { t: data }, ...(draws ? { random: srcA } : {}) }))
+      reuse.on = false
+      try { expect(got, `update ${i}`).toBe(made(b.evaluate(spec, { data: { t: data }, ...(draws ? { random: srcB } : {}) }))) } finally { reuse.on = true }
+    }
+  }
+
+  it('a step reads a field that a later step of the run writes', () => {
+    same([{ type: 'formula', as: 'p', expr: 'datum.x + 1' }, { type: 'bin', field: 'p', maxbins: 4, as: ['b0', 'b1'] }, { type: 'formula', as: 'p', expr: 'datum.b0 * 2' }])
+  })
+  it('a step reads a field that the rows came with and a later step of the run writes', () => {
+    same([{ type: 'formula', as: 'y', expr: 'datum.v + 1' }, { type: 'bin', field: 'x', maxbins: 4, as: ['b0', 'b1'] }, { type: 'formula', as: 'x', expr: 'datum.v' }, { type: 'formula', as: 'f', expr: 'datum.b0 + datum.x' }])
+  })
+  it('a step reads the field it writes', () => {
+    same([{ type: 'formula', as: 'y', expr: 'datum.v + 1' }, { type: 'bin', field: 'x', maxbins: 4, as: ['x', 'x1'] }, { type: 'formula', as: 'z', expr: 'datum.x + datum.y' }])
+  })
+  it('two steps write the same field', () => {
+    same([{ type: 'formula', as: 'a', expr: 'datum.x' }, { type: 'bin', field: 'v', maxbins: 4, as: ['b0', 'b1'] }, { type: 'formula', as: 'a', expr: 'datum.b0 + datum.a' }])
+  })
+  it('a global step, then a step that draws: the rows that stay keep their numbers', () => {
+    same([{ type: 'bin', field: 'x', maxbins: 4, as: ['b0', 'b1'] }, { type: 'formula', as: 'f', expr: 'datum.b0 + 1' }, { type: 'formula', as: 'r', expr: 'random()' }], true)
+  })
+  it('a run of steps is one run, and a step that publishes or draws ends it', () => {
+    const t = (...fs: unknown[]): never => compileChart({ data: [{ name: 't', values: [], transform: fs }] } as never).data[0]!.transform as never
+    expect(runsOf(t({ type: 'formula', as: 'a', expr: 'datum.x' }, { type: 'formula', as: 'b', expr: 'datum.a + 1' }, { type: 'bin', field: 'b', maxbins: 3, as: ['c0', 'c1'] }))).toEqual([2, 2, 2])
+    expect(runsOf(t({ type: 'formula', as: 'a', expr: 'datum.x' }, { type: 'bin', field: 'a', maxbins: 3, signal: 'bi', as: ['c0', 'c1'] }, { type: 'formula', as: 'b', expr: 'datum.a' }))).toEqual([0, 1, 2])
+    expect(runsOf(t({ type: 'formula', as: 'a', expr: 'random()' }, { type: 'formula', as: 'b', expr: 'datum.x' }))).toEqual([0, 1])
+    expect(runsOf(t({ type: 'formula', as: 'a', expr: 'datum.x' }, { type: 'filter', expr: 'datum.a > 1' }, { type: 'formula', as: 'b', expr: 'datum.a' }))).toEqual([0, 1, 2])
+    expect(runsOf(t({ type: 'formula', as: 'a', expr: 'datum.x' }, { type: 'formula', as: 'b', expr: 'length(datum)' }))).toEqual([0, 1])
   })
 })
 

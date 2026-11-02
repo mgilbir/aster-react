@@ -92,16 +92,31 @@ export function rowUseOf(t: CompiledTransform): RowUse {
  * What is never owned: rows another dataset, a hierarchy or an index holds (anything not listed here).
  */
 function ownsOutput(t: CompiledTransform, ownedIn: boolean): boolean {
+  return makesOwnRows(t) || (ownedIn && KEEPS_ROW_OBJECTS.has(t.type as string))
+}
+
+/** The transforms that return rows made for the pipeline whatever rows they were given: none of them is a row the input held. */
+export function makesOwnRows(t: CompiledTransform): boolean {
   switch (t.type) {
     case 'formula': case 'bin': case 'timeunit': case 'identifier': case 'lookup': case 'stack': case 'project':
     case 'fold': case 'flatten': case 'pivot': case 'aggregate': case 'window': case 'joinaggregate':
       return true
-    case 'filter': case 'collect': case 'sample': case 'extent': case 'impute':
-      return ownedIn
     default:
       return false
   }
 }
+
+/**
+ * Whether a transform leaves every row object it is given as it was and returns rows of its own, none of them one of those: a
+ * dataset's source rows need no copy before it. (An `aggregate` whose ops hold rows -- `values`, `argmin`, `argmax` -- returns
+ * rows that hold the ones it was given.)
+ */
+export function copiesRows(t: CompiledTransform): boolean {
+  return makesOwnRows(t) && (t.type !== 'aggregate' || rowUseOf(t) === 'fresh')
+}
+
+/** The transforms that return some of the row objects they were given (their rows are the pipeline's own when the input's were). */
+const KEEPS_ROW_OBJECTS = new Set(['filter', 'collect', 'sample', 'extent', 'impute'])
 
 /**
  * Apply `transforms` to `rows`, which are another dataset's row objects (the array itself is the caller's own), and give the result rows
