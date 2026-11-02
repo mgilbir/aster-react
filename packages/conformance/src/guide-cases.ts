@@ -6,12 +6,6 @@
 type Spec = Record<string, unknown>
 type Rand = () => number
 
-/**
- * GUIDE_FULL=1 widens the generators to the cases where the engine is known to differ from vega (see the notes at each site), so a
- * refactor can be checked against the build it replaces on the whole space, not only against vega on the part where they agree.
- */
-const FULL = process.env.GUIDE_FULL === '1'
-
 export function mulberry32(seed: number): Rand {
   let a = seed >>> 0
   return () => {
@@ -36,7 +30,7 @@ const ALIGN = ['left', 'center', 'right']
 const BASELINE = ['top', 'middle', 'bottom', 'alphabetic', 'line-top', 'line-bottom']
 const DASHES = [[2, 2], [4, 1, 1, 1], [6, 3], []]
 const CAPS = ['butt', 'round', 'square']
-const NUMBER_FORMATS = ['d', '.1f', ',.0f', '.2s', '$,.2f', '+.1%', '%', '.3~g', '04d', ...(FULL ? ['e'] : [])]
+const NUMBER_FORMATS = ['d', '.1f', ',.0f', '.2s', '$,.2f', '+.1%', '%', '.3~g', '04d', 'e', 's', 'g', 'r', '', 'p', 'f', '~s', ',']
 const TIME_FORMATS = ['%Y', '%b %d', '%H:%M', '%a %e', '%B', '%Y-%m-%d']
 
 const DAY = 86_400_000
@@ -131,8 +125,7 @@ function axisProps(r: Rand, orient: string, kind: string, other: PositionScale):
   setIf(a, 'tickSize', maybe(r, 0.4, () => maybeSignal(r, pick(r, [0, 2, 5, 9, 14]))))
   setIf(a, 'tickRound', maybe(r, 0.2, () => chance(r, 0.5)))
   setIf(a, 'tickCount', maybe(r, 0.4, () => (kind === 'time' || kind === 'utc') && chance(r, 0.5) ? pick(r, ['month', 'week', { interval: 'day', step: 10 }, 'year']) : maybeSignal(r, int(r, 1, 12))))
-  // (tickMinStep on a log scale is the scale stack's, not the guides': see the report)
-  setIf(a, 'tickMinStep', (kind === 'log' || kind === 'symlog') && !FULL ? undefined : maybe(r, 0.1, () => pick(r, [1, 5, 10])))
+  setIf(a, 'tickMinStep', maybe(r, 0.1, () => pick(r, [1, 5, 10])))
   if (kind === 'band' || kind === 'point') {
     setIf(a, 'bandPosition', maybe(r, 0.3, () => pick(r, [0, 0.25, 0.5, 1])))
     setIf(a, 'tickBand', maybe(r, 0.3, () => pick(r, ['center', 'extent'])))
@@ -213,6 +206,9 @@ const AXIS_CONFIGS: Spec[] = [
   { axisX: { labelAngle: -30, grid: true }, axisY: { titlePadding: 12, gridDash: [3, 3] }, axisBand: { tickExtra: true } },
   { axisTop: { labelColor: 'blue' }, axisBottom: { offset: 3 }, axisLeft: { minExtent: 25 }, axisRight: { domain: false } },
   { style: { 'guide-label': { fill: 'purple', fontSize: 9 }, 'guide-title': { fontWeight: 'bold' } } },
+  // blocks whose keys are read as flags (a truthy signal is a flag whatever it holds) and as label overlap, flush and alignment
+  { axis: { titleColor: 'teal', labelFontSize: 10 }, axisX: { labels: false, labelFlush: 5, ticks: false, titleFont: 'serif' }, axisY: { domain: false, labelAlign: 'center', labelBaseline: 'top', labelBound: 2, labelColor: 'brown' }, style: { 'guide-label': { fill: 'purple', fontSize: 9 }, 'guide-title': { fontWeight: 'bold', fill: 'navy' } } },
+  { axisTop: { grid: true, labelOverlap: 'parity', titleFontSize: 20 }, axisLeft: { labelFlush: 0, labelFontSize: 9, ticks: false }, axisBottom: { labelBound: true, domain: false, gridDash: [2, 2] }, axisRight: { labels: false, tickSize: 3, titleColor: 'green' }, axisBand: { labelOverlap: 'greedy', grid: true }, style: { 'guide-title': { fontSize: 13 } } },
 ]
 
 /** An axis chart: a few axes of random orients over random scales, with random sizing and padding. */
@@ -223,8 +219,6 @@ export function axisCase(seed: number): GuideCase {
   const sx = positionScale(r, 'sx', 'width', ['linear', 'linear', 'band', 'point', 'time', 'utc', 'log', 'symlog', 'sqrt', 'pow'])
   const sy = positionScale(r, 'sy', 'height', ['linear', 'linear', 'band', 'point', 'log', 'time', 'sqrt'])
   const config = pick(r, AXIS_CONFIGS)
-  // (an orient signal with per-orient config blocks is vega's `ifX` over the config: a different parse that Aster does not follow, see the report)
-  const orientSignals = FULL || !Object.keys(config).some((k) => /^axis[A-Z]/.test(k))
   const axes: Spec[] = []
   const nAxes = int(r, 1, 4)
   const used = new Set<string>()
@@ -235,16 +229,14 @@ export function axisCase(seed: number): GuideCase {
     const own = horizontal ? sx : sy
     const other = horizontal ? sy : sx
     const props = axisProps(r, orient, own.kind, other)
-    const signalOrient = orientSignals && chance(r, 0.08)
-    // (vega's Overlap reads an orient *signal* unresolved, so `labelBound` sees a vertical axis whatever the signal holds; Aster resolves it first)
-    if (signalOrient && !FULL) delete props.labelBound
+    const signalOrient = chance(r, 0.2)
     const axis: Spec = { scale: own.name, orient: signalOrient ? { signal: JSON.stringify(orient) } : orient, ...props }
     axes.push(axis)
     used.add(orient)
   }
   const spec: Spec = {
     width, height, padding: pick(r, [0, 5, 20, { left: 4, top: 10, right: 0, bottom: 2 }]),
-    autosize: pick(r, ['pad', 'pad', 'none', 'fit', { type: 'fit', contains: 'padding' }, { type: 'pad', resize: true }, ...(FULL ? ['fit-x', 'fit-y'] : [])]),
+    autosize: pick(r, ['pad', 'pad', 'none', 'fit', { type: 'fit', contains: 'padding' }, { type: 'pad', resize: true }, 'fit-x', 'fit-y']),
     background: chance(r, 0.1) ? '#eef' : undefined,
     config,
     data: [{ name: 'rows', values: dataRows(r) }],
@@ -420,8 +412,7 @@ export function legendCase(seed: number): GuideCase {
   }
   const spec: Spec = {
     width, height, padding: pick(r, [0, 5, 20]),
-    // (vega's `pad` autosize does not grow the view for an `orient: none` legend that overflows it; Aster's does, see the report)
-    autosize: legends.some((l) => l.orient === 'none') && !FULL ? 'none' : pick(r, ['pad', 'pad', 'none', ...(FULL ? ['fit', { type: 'fit', contains: 'padding' }] : [])]),
+    autosize: pick(r, ['pad', 'pad', 'none', 'fit', 'fit-x', 'fit-y', { type: 'fit', contains: 'padding' }]),
     config: pick(r, LEGEND_CONFIGS),
     data: [{ name: 'rows', values: dataRows(r) }],
     scales, legends,
@@ -467,7 +458,7 @@ function cellContent(r: Rand, depth: number, cellW: number, cellH: number): Spec
   if (chance(r, 0.6)) axes.push({ scale: 'cx', orient: pick(r, ['bottom', 'top']), ...(chance(r, 0.5) ? { grid: true } : {}), ...(chance(r, 0.4) ? { title: 'X' } : {}), ...(chance(r, 0.3) ? { tickCount: 3 } : {}) })
   if (chance(r, 0.6)) axes.push({ scale: 'cy', orient: pick(r, ['left', 'right']), ...(chance(r, 0.5) ? { grid: true } : {}), ...(chance(r, 0.4) ? { title: 'Y' } : {}), ...(chance(r, 0.3) ? { labelFlush: true } : {}) })
   if (axes.length) content.axes = axes
-  if (chance(r, 0.2)) content.legends = [{ fill: 'cc', orient: pick(r, FULL ? ['right', 'bottom', 'top-left', 'top-right', 'bottom-left', 'none'] : ['right', 'bottom', 'top-left', 'top-right', 'bottom-left']), title: 'L' }]
+  if (chance(r, 0.2)) content.legends = [{ fill: 'cc', orient: pick(r, ['right', 'bottom', 'top-left', 'top-right', 'bottom-left', 'none']), title: 'L' }]
   return content
 }
 
@@ -521,10 +512,7 @@ export function trellisCase(seed: number): GuideCase {
     encode: { update: { width: { signal: 'child_width' } , ...(chance(r, 0.3) ? { height: { value: int(r, 5, 25) } } : {}) } },
     ...(chance(r, 0.35) ? { axes: [{ scale: role.includes('column') ? 'cx' : 'cy', orient: role.includes('column') ? pick(r, ['top', 'bottom']) : pick(r, ['left', 'right']), domain: chance(r, 0.5), labels: chance(r, 0.5), ticks: chance(r, 0.5) }] } : {}),
   })
-  // (a header per column: more headers than the grid has columns are dropped by the layout, a situation of its own that vega-lite never makes)
-  const columnsFit = FULL || layout.columns === undefined || layout.columns === 0 || (layout.columns as number) >= nCats
   const chooseHeaders = (): void => {
-    if (!columnsFit) return
     if (chance(r, 0.6)) marks.push(hdr('column-header', 'colDomain', 'c', 'top', true))
     if (chance(r, 0.3)) marks.push(hdr('column-footer', 'colDomain', 'c', 'bottom', chance(r, 0.5)))
     if (twoD && chance(r, 0.6)) marks.push(hdr('row-header', 'rowDomain', 'rc', 'left', true))
@@ -564,7 +552,7 @@ export function trellisCase(seed: number): GuideCase {
   }
   const spec: Spec = {
     width: 200, height: 120, padding: pick(r, [0, 5, 12]),
-    autosize: pick(r, ['pad', 'none', 'pad', { type: 'pad', resize: true }, ...(FULL ? ['fit', { type: 'fit', contains: 'padding' }] : [])]),
+    autosize: pick(r, ['pad', 'none', 'pad', { type: 'pad', resize: true }, 'fit', 'fit-x', 'fit-y', { type: 'fit', contains: 'padding' }]),
     data, marks: [frame],
   }
   return { id: `trellis-${seed}`, seed, spec, kind: twoD ? 'cross' : 'wrap' }
@@ -616,7 +604,7 @@ export function titleCase(seed: number): GuideCase {
   const width = int(r, 100, 300)
   const height = int(r, 80, 220)
   const spec: Spec = {
-    width, height, padding: pick(r, [0, 5, 20]), autosize: pick(r, ['pad', 'pad', 'none', { type: 'pad', resize: true }]),
+    width, height, padding: pick(r, [0, 5, 20]), autosize: pick(r, ['pad', 'pad', 'none', { type: 'pad', resize: true }, 'fit', 'fit-x', 'fit-y', { type: 'fit', contains: 'padding' }]),
     config: pick(r, [{}, { title: { color: 'steelblue', fontSize: 16, anchor: 'start', offset: 7 } }, { style: { 'group-title': { fontWeight: 'normal' }, 'group-subtitle': { fill: 'gray' } } }]),
     title: t,
     data: [{ name: 'rows', values: dataRows(r) }],

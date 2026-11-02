@@ -980,7 +980,10 @@ function paintedBox(el: XmlEl, a: Record<string, string>, m: Mat, eff: Record<st
 }
 
 function boxesOverlap(a: Box, b: Box): boolean {
-  return a[0] <= b[2] && b[0] <= a[2] && a[1] <= b[3] && b[1] <= a[3]
+  // (boxes that touch to within float noise overlap: a position carried through a second pass differs from the first by an ulp, and must not
+  // decide whether two records may swap)
+  const eps = 1e-6
+  return a[0] <= b[2] + eps && b[0] <= a[2] + eps && a[1] <= b[3] + eps && b[1] <= a[3] + eps
 }
 
 /**
