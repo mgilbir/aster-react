@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- **A re-evaluation keeps the dataset steps whose inputs did not change** (`step-reuse.ts`, `runtime.ts`, `session.ts`). The React mount
+  evaluates a chart at the spec's size and again at the measured container's, and a resize or a signal write evaluates it again; every
+  dataset pipeline ran from its first step each time. A step records the rows it was made from, the signals it reads, the random source
+  it drew from and what it published; the next evaluation keeps it when they are as they were, writes the signals it published again,
+  and does not draw again. Datasets of group scopes are kept as whole pipelines. Consecutive `bin` / `formula` / `timeunit` steps
+  write onto one set of rows instead of copying every row per step, and source rows are no longer copied before a step that makes
+  rows of its own. On crossfilter-flights (200k rows) a container resize costs 127 ms instead of 17 ms and the React mount to a stable
+  `<svg>` 365 ms instead of 197 ms. Output is the same: a generated differential against an engine that keeps nothing, and a live one
+  against Vega.
+
 - **`@aster/core` scale stack in Aster's own design** (`arr.ts`, `interp.ts`, `scale.ts`, `scale-continuous.ts`, `scale-discrete.ts`,
   `scale-d3.ts`, `scale-domain.ts`, `scales.ts`). d3-array, d3-interpolate, d3-scale, vega-scale and the spec side of vega-parser /
   vega-encode were written as transcriptions; they are now models of their own: one mapping model and one warp for identity / linear /
