@@ -48,7 +48,7 @@ const AXIS_FEATURE: Readonly<Record<string, string>> = { grid: 'grid', tick: 'ti
 
 /** How an axis's properties are read, given the marks it has: what is asked is worked out when it is, once. */
 class AxisReading {
-  private flags = new Map<string, boolean>()
+  private flags: Record<string, boolean | undefined> = {}
   constructor(private readonly a: Rec, private readonly env: GuideEnv) {}
 
   private has(name: string): unknown { return axisValue(this.a, name, this.env.scaleType, this.env.config) }
@@ -56,9 +56,7 @@ class AxisReading {
   /** whether the axis has the feature (`grid`, `ticks`, `labels`, `domain`, `title`) */
   private on(feature: string): boolean {
     if (feature === 'title') return this.a.title != null
-    let on = this.flags.get(feature)
-    if (on === undefined) this.flags.set(feature, (on = !!this.has(feature)))
-    return on
+    return (this.flags[feature] ??= !!this.has(feature))
   }
 
   /** Labels are flushed to the ends of the axis (`labelFlush`), which moves them by an offset (`labelFlushOffset`); that is read for the direction the labels do not have their own alignment in. */

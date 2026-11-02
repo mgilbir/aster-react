@@ -84,9 +84,6 @@ class Scope {
 
 const isSignalObject = (v: unknown): boolean => isObject(v) && !!(v as Rec).signal
 
-/** vega-util `value(a, b)`: `a` unless it is missing. */
-const orElse = (a: unknown, b: unknown): unknown => (a != null ? a : b)
-
 /**
  * The signals of the view that have something to read, in the order vega-parser parses their updates (`collectSignals`): the five
  * every view has (when the author declared one, or a property of the view is a `{signal}`, which is its `update`), then the other
@@ -94,21 +91,39 @@ const orElse = (a: unknown, b: unknown): unknown => (a != null ? a : b)
  */
 function viewSignals(spec: Rec, config: Rec): Rec[] {
   const declared = specList(spec.signals)
-  const out: Rec[] = []
-  for (const name of VIEW_SIGNALS) {
-    // (`width` and `height` are 0 where nothing says otherwise: a number is no signal)
-    const value = orElse(spec[name], config[name])
-    const update = isObject(value) && (value as Rec).signal ? { name, update: (value as Rec).signal } : null
-    let own = null as Rec | null
-    for (const s of declared) if (isRecord(s) && s.name === name) own = own ? { ...own, ...s } : s
-    if (update || own) out.push(update && own ? { ...update, ...own } : (update ?? own)!)
+  // the author's declaration of each of the five, merged where there are several; the other signals as they come
+  let own: Array<Rec | undefined> | undefined
+  const others: Rec[] = []
+  for (const s of declared) {
+    if (!isRecord(s)) continue
+    const at = VIEW_SIGNALS.indexOf(String(s.name))
+    if (at < 0) others.push(s)
+    else (own ??= [])[at] = own[at] ? { ...own[at], ...s } : s
   }
-  for (const s of declared) if (isRecord(s) && !VIEW_SIGNALS.includes(String(s.name))) out.push(s)
-  for (const s of specList(config.signals)) {
-    if (isRecord(s) && !VIEW_SIGNALS.includes(String(s.name)) && !declared.some((d) => isRecord(d) && d.name === s.name)) out.push(s)
+  const out: Rec[] = []
+  for (let i = 0; i < 5; i++) {
+    const name = VIEW_SIGNALS[i]!
+    // (`width` and `height` are 0 where nothing says otherwise: a number is no signal)
+    const value = spec[name] != null ? spec[name] : config[name]
+    const update = isObject(value) && (value as Rec).signal ? { name, update: (value as Rec).signal } : null
+    const mine = own?.[i]
+    if (update || mine) out.push(update && mine ? { ...update, ...mine } : (update ?? mine)!)
+  }
+  for (const s of others) out.push(s)
+  const fromConfig = specList(config.signals)
+  if (fromConfig.length) {
+    const named = new Set(declared.map((d) => (isRecord(d) ? String(d.name) : '')))
+    for (const s of fromConfig) if (isRecord(s) && !VIEW_SIGNALS.includes(String(s.name)) && !named.has(String(s.name))) out.push(s)
   }
   return out
 }
+
+/**
+ * The selectors seen lately and the expressions each one holds (the filters of its streams, in the order vega reads them): the same
+ * few turn up in chart after chart. A selector that does not parse is not kept. `null` is the refusal's message.
+ */
+interface SelectorTexts { readonly texts: readonly string[] }
+const selectors: Record<'view' | 'scope', Map<string, SelectorTexts>> = { view: new Map(), scope: new Map() }
 
 /** The text of an expression given as a value of any type: a string as it is, anything else as its JSON. */
 const textOf = (v: unknown): string => (typeof v === 'string' ? v : stringValue(v) + '')
@@ -131,7 +146,32 @@ class Check {
 
   /** An expression that stands alone. */
   expression(value: unknown): void {
-    checkExpression(textOf(value), this.isSignal)
+    if (this.collecting) this.collecting.push(textOf(value))
+    else checkExpression(textOf(value), this.isSignal)
+  }
+
+  /** while set, the expressions that are met are kept, not checked: what a selector holds is worked out once */
+  private collecting: string[] | null = null
+
+  /** The expressions the streams of a selector hold, in the order they are read. */
+  private selectorTexts(selector: string, source: 'view' | 'scope'): readonly string[] {
+    const cache = selectors[source]
+    let found = cache.get(selector)
+    if (found === undefined) {
+      let defs: ReturnType<typeof parseEventSelectorString>
+      try {
+        defs = parseEventSelectorString(selector, source)
+      } catch (cause) {
+        throw new SpecParseError(cause instanceof Error ? cause.message : String(cause), { cause })
+      }
+      const texts: string[] = []
+      this.collecting = texts
+      try { this.stream(defs.length > 1 ? { merge: defs } : defs[0]) } finally { this.collecting = null }
+      found = { texts }
+      if (cache.size >= 1024) cache.clear()
+      cache.set(selector, found)
+    }
+    return found.texts
   }
 
   /** Whether a name is a signal of the scope being read. */
@@ -250,12 +290,11 @@ class Check {
     if (!isRecord(h)) return
     if (!h.events) throw new SpecParseError('Signal update missing events specification.')
     let events: unknown = h.events
+    // (a selector gives streams alone: what they hold is worked out once, and read after the update)
+    let selected: readonly string[] | null = null
     if (typeof events === 'string') {
-      try {
-        events = parseEventSelectorString(events, this.scope.isGroup ? 'scope' : 'view')
-      } catch (cause) {
-        throw new SpecParseError(cause instanceof Error ? cause.message : String(cause), { cause })
-      }
+      selected = this.selectorTexts(events, this.scope.isGroup ? 'scope' : 'view')
+      events = []
     }
     // the operators that trigger the handler (a signal, a scale), and the event streams
     const operators: Rec[] = []
@@ -286,7 +325,8 @@ class Check {
       else throw new SpecParseError('Invalid signal update specification.')
     }
 
-    for (const source of sources) this.source(source as Rec, lambdas)
+    if (selected) for (const text of selected) this.expression(text)
+    else for (const source of sources) this.source(source as Rec, lambdas)
   }
 
   /** What triggers a handler: an operator (a signal, a scale) or an event stream. */
@@ -349,18 +389,18 @@ class Check {
       else if (how === 'entry') entries.push(key)
     }
     // the entries of a symbol legend lie in a group of their own
-    const inEntries = (key: string): boolean => symbols && ENTRY_PARTS.test(key)
-    for (const key of entries) this.guideProperty(inEntries(key), () => this.guideEntries(g[key]))
+    for (const key of entries) {
+      if (symbols && ENTRY_PARTS.test(key)) this.within(new Scope(this.scope), () => this.guideEntries(g[key]))
+      else this.guideEntries(g[key])
+    }
     if (symbols) this.objectProperty(legendLayout(g, this.env), lambdas)
     if (isRecord(g.encode)) {
-      for (const key of Object.keys(g.encode)) this.guideProperty(inEntries(key), () => this.encode({ [key]: (g.encode as Rec)[key] }))
+      for (const key of Object.keys(g.encode)) {
+        const one = { [key]: g.encode[key] }
+        if (symbols && ENTRY_PARTS.test(key)) this.within(new Scope(this.scope), () => this.encode(one))
+        else this.encode(one)
+      }
     }
-  }
-
-  /** The marks of a symbol legend's entries are parsed in a group of their own: a scope with a signal `parent`. */
-  private guideProperty(entryScope: boolean, read: () => void): void {
-    if (entryScope) this.within(new Scope(this.scope), read)
-    else read()
   }
 
   /** The `{signal}`s a guide property holds, each as the entry of a channel. */

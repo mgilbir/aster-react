@@ -166,27 +166,21 @@ interface Verdict {
   readonly registry: number
 }
 
-const verdicts = new WeakMap<Expr, Verdict>()
+/**
+ * What was found about each text lately, across specs: the same expression turns up in chart after chart (and in the same chart
+ * compiled again), and is neither parsed nor walked a second time. Two generations bound it: a text read in the young one is
+ * found there; one found in the old one moves up; when the young one is full it becomes the old one and the old one goes.
+ */
+const GENERATION = 4096
+let young = new Map<string, Verdict>()
+let old = new Map<string, Verdict>()
 const NO_NAMES: readonly string[] = []
 
-function verdictOf(tree: Expr): Verdict {
+function verdictOf(text: string): Verdict {
   const registry = expressionRegistryEpoch()
-  let verdict = verdicts.get(tree)
-  if (verdict === undefined || verdict.registry !== registry) {
-    const reader = new Reader()
-    // (the callee of a call is walked unread: it is an identifier the code generator does not take for a name)
-    const refusal = reader.walk(tree, true) ?? reader.codegen
-    verdict = { refusal, names: refusal ? NO_NAMES : reader.names, registry }
-    verdicts.set(tree, verdict)
-  }
-  return verdict
-}
-
-/**
- * Refuse `text` as vega's parser does, or return. `isSignal` says whether a name is a signal of the scope the expression is read
- * in. An engine limit (an expression too deep) keeps its own error type.
- */
-export function checkExpression(text: string, isSignal: (name: string) => boolean): void {
+  let verdict = young.get(text)
+  if (verdict === undefined && (verdict = old.get(text)) !== undefined) young.set(text, verdict)
+  if (verdict !== undefined && verdict.registry === registry) return verdict
   let tree: Expr
   try {
     tree = parseExpressionCached(text)
@@ -195,7 +189,20 @@ export function checkExpression(text: string, isSignal: (name: string) => boolea
     if (cause instanceof Error && cause.name === 'AsterLimitError') throw cause
     throw new SpecParseError('Expression parse error: ' + text, { cause })
   }
-  const { refusal, names } = verdictOf(tree)
+  const reader = new Reader()
+  const refusal = reader.walk(tree, true) ?? reader.codegen
+  verdict = { refusal, names: refusal ? NO_NAMES : reader.names, registry }
+  if (young.size >= GENERATION) { old = young; young = new Map() }
+  young.set(text, verdict)
+  return verdict
+}
+
+/**
+ * Refuse `text` as vega's parser does, or return. `isSignal` says whether a name is a signal of the scope the expression is read
+ * in. An engine limit (an expression too deep) keeps its own error type.
+ */
+export function checkExpression(text: string, isSignal: (name: string) => boolean): void {
+  const { refusal, names } = verdictOf(text)
   if (refusal) throw refusal.engine ? new TypeError(refusal.message) : new SpecParseError(refusal.message)
   for (const name of names) if (!isSignal(name)) throw new SpecParseError('Unrecognized signal name: ' + stringValue(name))
 }
