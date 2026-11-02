@@ -1346,9 +1346,6 @@ function ChartView({
     : { ...baseStyle, cursor }
 
   const role = a11yTree ? (ariaLabel ? 'group' : undefined) : ariaLabel ? 'img' : undefined
-  // The rendered SVG sits inside the scene padding; guide/mark boxes from the
-  // a11y tree are relative to the padded origin.
-  const pad = displayScene?.padding ?? { top: 0, right: 0, bottom: 0, left: 0 }
 
   return (
     <div
@@ -1464,8 +1461,8 @@ function ChartView({
                 onKeyDown={(e) => handleA11yKeyDown(node, e)}
                 style={{
                   position: 'absolute',
-                  left: Math.max(0, pad.left + node.x),
-                  top: Math.max(0, pad.top + node.y),
+                  left: Math.max(0, node.x),
+                  top: Math.max(0, node.y),
                   width: Math.max(1, node.width),
                   height: Math.max(1, node.height),
                   opacity: 0,
