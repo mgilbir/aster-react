@@ -168,7 +168,10 @@ dataFormatRegistry.set('json', (data, format) => {
     parsed = data
   }
   const prop = format.property as string | undefined
-  if (prop) parsed = field(prop)(parsed)
+  if (prop) {
+    // (a path that runs into nothing is an empty dataset here; vega logs the failed read and ends up with none)
+    try { parsed = field(prop)(parsed) } catch (e) { if (e instanceof TypeError) return []; throw e }
+  }
   if (Array.isArray(parsed)) return parsed as Record<string, unknown>[]
   // vega wraps a single non-array value (e.g. an inline Topology) into [value]
   return parsed != null && typeof parsed === 'object' ? [parsed as Record<string, unknown>] : []
