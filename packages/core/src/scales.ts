@@ -20,6 +20,7 @@ import * as vs from './scale.js'
 import { implicit as scaleImplicit } from './scale-discrete.js'
 import { plain, plainList, plainRecord, resolveDomain, signalValue, type ScaleContext } from './scale-domain.js'
 import type { CompiledScale } from './types.js'
+import { vegaDefaultConfig } from './config-defaults.js'
 import { error as raise, expT, hasOwnProperty, isArray, isFunction, isObject, isString, logT, peek, powT, symexpT, symlogT } from './util.js'
 
 export type { ScaleContext } from './scale-domain.js'
@@ -342,14 +343,7 @@ export interface Settings {
 }
 
 /** The named ranges a spec can use without defining them; a `config.range` entry of the same name replaces one. */
-const BUILT_IN_RANGES: Record<string, unknown> = Object.assign(Object.create(null), {
-  category: { scheme: 'tableau10' },
-  ordinal: { scheme: 'blues' },
-  heatmap: { scheme: 'yellowgreenblue' },
-  ramp: { scheme: 'blues' },
-  diverging: { scheme: 'blueorange', extent: [1, 0] },
-  symbol: ['circle', 'square', 'triangle-up', 'cross', 'diamond', 'triangle-right', 'triangle-down', 'triangle-left'],
-})
+const BUILT_IN_RANGES: Record<string, unknown> = Object.assign(Object.create(null), vegaDefaultConfig().range)
 
 /** How deep a chain of named ranges may go before it is taken to be a loop. */
 const MAX_RANGE_CHAIN = 32
