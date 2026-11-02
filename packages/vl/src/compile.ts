@@ -197,9 +197,23 @@ const CONDITIONAL_AXIS_PROPS: Record<string, { part: string; vgProp: string } | 
 }
 const GRID_ONLY_AXIS_PROPS = new Set(['gridColor', 'gridDash', 'gridDashOffset', 'gridOpacity', 'gridWidth', 'gridCap'])
 
-function assembleGuides(node: unknown): void {
-  if (Array.isArray(node)) { for (const n of node) assembleGuides(n); return }
+function assembleGuides(node: unknown, scaleTypes: ReadonlyMap<string, unknown> = new Map()): void {
+  if (Array.isArray(node)) { for (const n of node) assembleGuides(n, scaleTypes); return }
   if (!isObject(node)) return
+  if (Array.isArray(node.scales)) {
+    const own = new Map(scaleTypes)
+    for (const sc of node.scales as Record<string, unknown>[]) if (isObject(sc) && typeof sc.name === 'string') own.set(sc.name, sc.type)
+    scaleTypes = own
+  }
+  // a legend over a time scale leaves its labels to the scale
+  if (Array.isArray(node.legends)) {
+    for (const lg of node.legends as Record<string, unknown>[]) {
+      if (!isObject(lg) || !LEGEND_DERIVED_FORMAT_TYPE.has(lg)) continue
+      const scale = LEGEND_SCALE_KEYS.map((k) => lg[k]).find((v) => typeof v === 'string') as string | undefined
+      const type = scale === undefined ? undefined : scaleTypes.get(scale)
+      if (type === 'time' || type === 'utc') delete lg.formatType
+    }
+  }
   // legend/assemble.ts: a falsy legend title (null, '') is no title
   if (Array.isArray(node.legends)) for (const lg of node.legends as Record<string, unknown>[]) if (isObject(lg) && 'title' in lg && !lg.title) delete lg.title
   if (Array.isArray(node.axes)) {
@@ -240,7 +254,7 @@ function assembleGuides(node: unknown): void {
       }
     }
   }
-  for (const v of Object.values(node)) if (v !== null && typeof v === 'object') assembleGuides(v)
+  for (const v of Object.values(node)) if (v !== null && typeof v === 'object') assembleGuides(v, scaleTypes)
 }
 
 /** vega-lite `stack(initMarkdef(markDef, encoding, config), encoding)`: the measure a unit stacks and how. */
@@ -4634,15 +4648,33 @@ function customLabelText(def: FieldDef, guide: Record<string, unknown> | null | 
 
 /** Non-positional legends format timeUnit fields with timeFormat. */
 function applyTimeUnitLegend(lg: Record<string, unknown>, def: FieldDef, userLegend: Record<string, unknown> | undefined, formats: { numberFormat?: string; timeFormat?: string }): void {
-  if (userLegend && userLegend.format !== undefined) return
+  const userFormat = userLegend && userLegend.format !== undefined
   // a raw temporal field formats through config.timeFormat, a quantitative one through config.numberFormat
   if (!def.timeUnit) {
-    if (def.type === 'temporal') lg.format = formats.timeFormat ?? DEFAULT_TIME_FORMAT
+    if (userFormat) return
+    // (guide format: a time format is one that asks for formatType "time", or asks for none of a temporal field)
+    const ft = userLegend?.formatType
+    if (ft === 'time' || (ft === undefined && def.type === 'temporal')) lg.format = formats.timeFormat ?? DEFAULT_TIME_FORMAT
     else if (def.type === 'quantitative' && formats.numberFormat !== undefined) lg.format = formats.numberFormat
     return
   }
-  lg.format = { signal: timeUnitFormatSignal(def.timeUnit) }
-  lg.formatType = 'time'
+  if (!userFormat) lg.format = { signal: timeUnitFormatSignal(def.timeUnit) }
+  if (userLegend?.formatType !== undefined) return
+  // (the scale is not known here: the assembled guides drop the format type of a legend that turns out to read a time scale)
+  setGuideTimeFormatType(lg, def, undefined)
+  LEGEND_DERIVED_FORMAT_TYPE.add(lg)
+}
+
+/** Legends whose `formatType` was derived from the time unit (not written by the user): it goes if their scale is a time scale. */
+const LEGEND_DERIVED_FORMAT_TYPE = new WeakSet<object>()
+
+/**
+ * The format type of a time-unit guide: a guide on a time or utc scale leaves it to the scale (which formats in its own zone);
+ * on any other scale the labels are times all the same, UTC if the unit is.
+ */
+function setGuideTimeFormatType(guide: Record<string, unknown>, def: FieldDef, scaleType: string | undefined): void {
+  if (scaleType === 'time' || scaleType === 'utc') return
+  guide.formatType = def.tu?.utc ? 'utc' : 'time'
 }
 
 
@@ -4943,7 +4975,10 @@ function buildScales(spec: VLSpec, fieldsIn: FieldDef[], mark: string, orient: s
   const numericScale = (name: string, def: FieldDef, range: [number, number | { signal: string }], zero: boolean): ScaleSpec => {
     const discrete = isDiscreteType(def.type)
     const userType = def.scale?.type as string | undefined
-    const type = discrete ? 'point' : ['linear', 'log', 'pow', 'sqrt', 'symlog', 'quantile', 'quantize', 'threshold'].includes(userType ?? '') ? userType! : 'linear'
+    // scale/type.ts defaultType: a temporal field has a time scale (a utc one for a UTC time unit), on a channel with a continuous range
+    const type = discrete ? 'point'
+      : ['linear', 'log', 'pow', 'sqrt', 'symlog', 'quantile', 'quantize', 'threshold', ...(def.type === 'temporal' ? ['time', 'utc'] : [])].includes(userType ?? '') ? userType!
+      : def.type === 'temporal' ? (def.tu?.utc ? 'utc' : 'time') : 'linear'
     const explicitDom = explicitDomainOf(def)
     const userDomain = explicitDom !== undefined ? explicitDomainValue(explicitDom, def) : undefined
     const sc: ScaleSpec = {
@@ -5104,11 +5139,11 @@ function buildScales(spec: VLSpec, fieldsIn: FieldDef[], mark: string, orient: s
           ...(cs.reverse !== undefined ? { reverse: Boolean(cs.reverse) } : colorDef.sort === 'descending' ? { reverse: true } : {}),
         })
       } else {
-      // a temporal colour field is a time scale (utc for a utc time unit), like vega-lite's default type
+      // a temporal colour field is a time scale, whatever its time unit (scale/type.ts defaultType)
       // (vega-lite falls back to linear when a time scale is asked of a non-temporal field)
       const colorScaleType = ['linear', 'log', 'pow', 'sqrt', 'symlog', 'quantile', 'quantize', 'threshold', ...(colorDef.type === 'temporal' ? ['time', 'utc'] : [])].includes(cs.type as string)
         ? cs.type as string
-        : colorDef.type === 'temporal' ? (colorDef.tu?.utc ? 'utc' : 'time') : 'linear'
+        : colorDef.type === 'temporal' ? 'time' : 'linear'
       scales.push({
         name: 'color',
         type: colorScaleType,
@@ -5577,7 +5612,7 @@ function buildAxes(fields: FieldDef[], mark: string, scales: ScaleSpec[], scaleN
         : tickCountSignal
       if (def.timeUnit) {
         labelAxis.format = { signal: timeUnitFormatSignal(def.timeUnit) }
-        labelAxis.formatType = 'time'
+        setGuideTimeFormatType(labelAxis, def, sc.type)
         // the minimum tick step is one unit: expressed as a datetime difference
         const stepExpr = def.tu ? timeUnitMinStepSignal(def.tu) : null
         if (stepExpr) labelAxis.tickMinStep = { signal: stepExpr }
@@ -5647,7 +5682,7 @@ function buildAxes(fields: FieldDef[], mark: string, scales: ScaleSpec[], scaleN
     // a timeUnit on a discrete positional axis still formats with timeFormat
     if (def.timeUnit && !isContinuousScaleType(sc.type)) {
       labelAxis.format = { signal: timeUnitFormatSignal(def.timeUnit) }
-      labelAxis.formatType = 'time'
+      setGuideTimeFormatType(labelAxis, def, sc.type)
     }
     if (userAxis) {
       for (const [k, v] of Object.entries(userAxis)) {
