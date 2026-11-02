@@ -7,7 +7,7 @@
  */
 import { dataFormatRegistry } from './registry.js'
 import { currentLocale } from './locale.js'
-import { safeGet, toBoolean, toDate, toNumber, toString } from './util.js'
+import { field, toBoolean, toDate, toNumber, toString } from './util.js'
 
 /** The converter for each column type a `parse` entry can name. */
 export const typeParsers: Record<string, (v: unknown) => unknown> = {
@@ -155,7 +155,7 @@ export function ingestRows<T>(rows: readonly T[]): Record<string, unknown>[] {
   return rows as unknown as Record<string, unknown>[]
 }
 
-// Built-in JSON reader (no dependencies; `property` is a dotted path).
+// Built-in JSON reader (no dependencies; `property` is a field path: `a.b`, `a\.b`, `a[0]`, `a["b"]`).
 dataFormatRegistry.set('json', (data, format) => {
   let parsed: unknown
   if (typeof data === 'string') {
@@ -168,14 +168,7 @@ dataFormatRegistry.set('json', (data, format) => {
     parsed = data
   }
   const prop = format.property as string | undefined
-  if (prop) {
-    let v: unknown = parsed
-    for (const seg of String(prop).split('.')) {
-      if (v == null) return []
-      v = safeGet(v, seg)
-    }
-    parsed = v
-  }
+  if (prop) parsed = field(prop)(parsed)
   if (Array.isArray(parsed)) return parsed as Record<string, unknown>[]
   // vega wraps a single non-array value (e.g. an inline Topology) into [value]
   return parsed != null && typeof parsed === 'object' ? [parsed as Record<string, unknown>] : []

@@ -282,6 +282,10 @@ const SPEC_TEMPLATES: Array<[string, (p: Pick, r: Rng) => Spec]> = [
       { name: 'y', type: 'linear', range: 'height', domain: { fields: [{ data: 't', field: p.num() }, { data: 't', field: p.num() }] } },
     ],
   })],
+  ['indata over a path', (p) => frame([{ type: 'text', from: { data: 't' }, encode: { update: { x: { field: 'id', mult: 12 }, y: { value: 20 }, text: { signal: `indata("t", ${JSON.stringify(p.key())}, datum.k) ? "in" : "out"` } } } }])],
+  ['indata of a value over a path', (p) => frame([{ type: 'text', from: { data: 'u' }, encode: { update: { x: { field: 'id', mult: 12 }, y: { value: 20 }, text: { signal: `indata("t", ${JSON.stringify(p.key())}, ${JSON.stringify(p.pick(CATS))}) ? "in" : "out"` } } } }])],
+  ['pluck over a path', (p) => frame([{ type: 'text', encode: { update: { x: { value: 5 }, y: { value: 20 }, text: { signal: `join(pluck(data("t"), ${JSON.stringify(p.key())}), ",")` } } } }])],
+  ['pluck of numbers over a path', (p) => frame([{ type: 'text', encode: { update: { x: { value: 5 }, y: { value: 20 }, text: { signal: `join(pluck(data("t"), ${JSON.stringify(p.num())}), ",")` } } } }])],
   ['a mark sorted by a path', (p) => frame([{ type: 'rect', from: { data: 't' }, sort: { field: ((n: string) => (n.startsWith('[') ? 'datum' : 'datum.') + n)(p.num()), order: 'descending' }, encode: { update: { x: { field: 'id', mult: 12 }, width: { value: 8 }, y: { value: 5 }, height: { field: 'id', mult: 5 } } } }])],
   ['an ordinal color scale on a path', (p) => frame([{ type: 'symbol', from: { data: 't' }, encode: { update: { x: { field: 'id', mult: 12 }, y: { value: 20 }, fill: { scale: 'c', field: p.key() } } } }], {
     scales: [{ name: 'c', type: 'ordinal', range: 'category', domain: { data: 't', field: p.key() } }],
@@ -347,5 +351,44 @@ describe('the facet of the reported crash', () => {
     const want = await onVega(spec)
     expect(want.errors).toEqual([])
     expect(diffCanonical(canonicalizeSvg(want.svg), canonicalizeSvg(onAster(spec).svg))).toEqual([])
+  })
+})
+
+// ---------------------------------------------------------------------------
+// the format of a dataset: `parse` names properties, `property` is a path
+// ---------------------------------------------------------------------------
+
+describe('data formats read field paths as vega does', () => {
+  it('parse names properties and property is a path, as in vega', async () => {
+    const r = makeRng(99)
+    const bad: string[] = []
+    const kinds: string[] = ['number', 'string', 'boolean', 'date']
+    const wrappers: Array<[string, (rows: unknown[]) => unknown]> = [
+      ['rows', (rows) => rows],
+      ['w.rows', (rows) => ({ w: { rows } })],
+      ['w\\.rows', (rows) => ({ 'w.rows': rows })],
+      ['w["rows"]', (rows) => ({ w: { rows } })],
+      ['list[1]', (rows) => ({ list: [[], rows] })],
+      ['list.1', (rows) => ({ list: [[], rows] })],
+    ]
+    for (let c = 0; c < scaled(150); c++) {
+      const rows = Array.from({ length: r.between(2, 5) }, (_, i) => rowOf(r, i))
+      const [property, wrap] = r.pick(wrappers)
+      const parse: Record<string, string> = {}
+      for (let j = r.between(0, 3); j > 0; j--) parse[r.pick([...NUMS, ...KEYS, 'n', 't', 'id'])] = r.pick(kinds)
+      const format: Spec = { type: 'json', ...(property === 'rows' ? {} : { property }), ...(r.chance(0.7) ? { parse } : {}) }
+      const spec: Spec = { data: [{ name: 'out', values: wrap(rows), format }] }
+      const label = JSON.stringify(format)
+      const want = await onVega(spec, 'out')
+      let got: ReturnType<typeof onAster>
+      try { got = onAster(spec, 'out') } catch (e) {
+        if (!want.errors.length) bad.push(`${label}: aster threw ${(e as Error).message}`)
+        continue
+      }
+      if (want.errors.length) { if (!got.errors.length) bad.push(`${label}: vega logged "${want.errors[0]}", aster nothing`); continue }
+      if (got.errors.length) bad.push(`${label}: aster logged ${String(got.errors[0])}`)
+      else if (!rowsAreEqual(got.rows, want.rows)) bad.push(`${label}: rows differ`)
+    }
+    expect(bad.slice(0, 5)).toEqual([])
   })
 })
