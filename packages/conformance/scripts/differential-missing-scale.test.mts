@@ -205,3 +205,63 @@ describe('a scale outside the scope of the mark is missing for it', () => {
     expect(diffCanonical(canonicalizeSvg(want.svg), canonicalizeSvg(got.svg))).toEqual([])
   })
 })
+
+// Every path that resolves a scale reference, reached by the entry shape that selects it:
+//  - a plain mark entry of exactly {scale, field}: the encoder's plain-key fast path (it hands a missing scale to the general resolver);
+//  - any other mark entry: the general resolver;
+//  - a guide part's entry of {scale, field, band?, extra?, offset?, round?} with plain names: guide-encode's scaled-field closure;
+//  - a guide part's entry of {scale, range, mult?, offset?, round?}: guide-encode's range closure;
+//  - any other guide entry: the general resolver again, through the host.
+// A guide does not stop the run the way a mark does (one error per part item, the picture differs): the error MESSAGES are what is held.
+describe('every path that reads a scale reference fails with the message of vega', () => {
+  const distinct = (errors: string[]): string[] => [...new Set(errors)]
+  const GUIDE_SHAPES: Array<[string, string, () => Record<string, unknown>]> = [
+    ['guide scaled-field closure', 'field', () => ({ scale: 'nope', field: 'value' })],
+    ['guide scaled-field closure', 'field, band', () => ({ scale: 'nope', field: 'value', band: 0.5 })],
+    ['guide scaled-field closure', 'field, offset, round', () => ({ scale: 'nope', field: 'value', offset: 2, round: true })],
+    ['guide scaled-field closure', 'field, band, extra', () => ({ scale: 'nope', field: 'value', band: 1, extra: true })],
+    ['guide range closure', 'range', () => ({ scale: 'nope', range: 0.5 })],
+    ['guide range closure', 'range, mult, offset', () => ({ scale: 'nope', range: 0.25, mult: 2, offset: 1 })],
+    ['guide range closure', 'range, round', () => ({ scale: 'nope', range: 1, round: true })],
+    ['general resolver in a guide', 'signal', () => ({ scale: 'nope', signal: 'datum.value' })],
+    ['general resolver in a guide', 'value', () => ({ scale: 'nope', value: 3 })],
+  ]
+  const PARTS: Array<[string, string]> = [['axis', 'labels'], ['axis', 'ticks'], ['axis', 'domain'], ['axis', 'grid'], ['legend', 'labels'], ['legend', 'symbols']]
+  const CHANNELS = ['x', 'y', 'dx', 'opacity', 'fontSize']
+  it.each(GUIDE_SHAPES)('%s: %s', async (_path, _name, make) => {
+    const bad: string[] = []
+    const r = makeRng(77)
+    for (const [kind, part] of PARTS) {
+      for (let k = 0; k < 4; k++) {
+        const entry = make()
+        const encode = { [part]: { update: { [r.pick(CHANNELS)]: entry } } }
+        const spec: Spec = {
+          width: 100, height: 50, padding: 5,
+          scales: [{ name: 'x', type: 'linear', domain: [0, 10], range: 'width' }, { name: 'c', type: 'ordinal', domain: ['a', 'b'], range: ['red', 'blue'] }],
+          ...(kind === 'axis' ? { axes: [{ scale: 'x', orient: r.pick(['bottom', 'left']), grid: true, encode }] } : { legends: [{ fill: 'c', encode }] }),
+        }
+        const want = await onVega(spec)
+        const got = onAster(spec)
+        // (the part must exist for the entry to run: a vega run that logged nothing proves nothing about the path)
+        if (want.errors.length === 0 && got.errors.length === 0) continue
+        if (JSON.stringify(distinct(want.errors)) !== JSON.stringify(distinct(got.errors))) bad.push(`${kind}.${part} ${JSON.stringify(entry)}: vega ${JSON.stringify(distinct(want.errors))}, aster ${JSON.stringify(distinct(got.errors))}`)
+        else exercised.add(`${_path}: ${_name}`)
+      }
+    }
+    expect(bad).toEqual([])
+    expect(exercised.has(`${_path}: ${_name}`), 'the shape reached a failing entry in vega and in Aster').toBe(true)
+  })
+  const exercised = new Set<string>()
+
+  it('a plain {scale, field} mark entry and a general one both fail with the message, and the plain one is the fast path', async () => {
+    for (const entry of [{ scale: 'nope', field: 'a' }, { scale: 'nope', field: 'a', offset: 1 }, { scale: 'nope', field: 'a', band: 1 }]) {
+      const spec: Spec = {
+        width: 60, height: 30, data: [{ name: 't', values: [{ a: 1 }, { a: 2 }] }],
+        marks: [{ type: 'rect', from: { data: 't' }, encode: { update: { x: entry, width: { value: 3 }, height: { value: 3 } } } }],
+      }
+      const want = await onVega(spec)
+      expect(want.errors).toEqual(['TypeError: _.%nope is not a function'])
+      expect(onAster(spec).errors).toEqual(want.errors)
+    }
+  })
+})

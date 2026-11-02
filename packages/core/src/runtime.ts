@@ -4893,8 +4893,8 @@ function resolveEncodeSet(encode: Record<string, EncodeValue | EncodeValue[]>, d
           if (bound) resolved = scaleValue(bound.scale, bound.type, getField(datum, spec.field))
           else {
             const s = ctx.scales.get(spec.scale)
-            if (!s) throw scaleCallFailure(spec.scale)
-            resolved = scaleValue(s, ctx.scaleTypes.get(spec.scale), getField(datum, spec.field))
+            // (no such scale: the general resolver fails it, with the one error of a missing scale)
+            resolved = s ? scaleValue(s, ctx.scaleTypes.get(spec.scale), getField(datum, spec.field)) : resolveEncodeProperty(plainSpecs[i], datum, ctx, binding)
           }
           break
         }
