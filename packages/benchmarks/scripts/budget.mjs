@@ -125,8 +125,11 @@ import { fileURLToPath } from 'node:url'
 // The ARIA of guides and marks over the parameter space (the root group item's channels, the mark roles, the config lookup),
 // measured (kB gzip): core 141.0 (+0.2 over main's 140.8; ceiling 141.5); the other rows stay inside their ceilings.
 // Ceiling = the measure + 0.5.
+// #80-#83 land together (test strength, runtime leftovers, one tab stop, vl UTC); the ceilings are set here, in the first of them,
+// from the measure of the four merged (kB gzip): core 141.5, useChart 148.4, Chart 189.6, SvgChart 166.9, SvgChart + interaction 184.2,
+// Chart + VL 290.6; each is measured + 0.5, so every commit on main between them stays inside its ceiling.
 const BUDGETS = {
-  '@aster/core': 141.5 * 1024,
+  '@aster/core': 142.0 * 1024,
   '+ @aster/core/dom': 6.2 * 1024,
   '+ @aster/core/canvas': 6.3 * 1024,
   '+ @aster/core/hit': 7.0 * 1024,
@@ -134,13 +137,13 @@ const BUDGETS = {
   '+ @aster/core/load': 5.6 * 1024,
   '+ @aster/core/geo': 16.8 * 1024,
   '+ @aster/core/transforms': 39.6 * 1024,
-  '@aster/react useChart': 148.0 * 1024,
-  '@aster/react Chart': 189.1 * 1024,
+  '@aster/react useChart': 148.9 * 1024,
+  '@aster/react Chart': 190.1 * 1024,
   // The light chart (`@aster/react/lite`): SVG only, no canvas renderer; alone and with the `interaction` capability.
-  '@aster/react SvgChart': 166.1 * 1024,
-  '@aster/react SvgChart + interaction': 184.0 * 1024,
+  '@aster/react SvgChart': 167.4 * 1024,
+  '@aster/react SvgChart + interaction': 184.7 * 1024,
   // Base + the VL compiler (opt-in: `import '@aster/react/vl'`).
-  '@aster/react Chart + VL': 289.5 * 1024,
+  '@aster/react Chart + VL': 291.1 * 1024,
 }
 
 const THIS_DIR = dirname(fileURLToPath(import.meta.url))
