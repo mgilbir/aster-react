@@ -49,6 +49,7 @@ export function timeUnitTransform(tu: NormalTimeUnit, fieldPath: string, as: str
     units: getTimeUnitParts(tu.unit),
     ...(tu.utc ? { timezone: 'utc' } : {}),
     ...(tu.step !== undefined ? { step: tu.step } : {}),
+    ...(tu.binned ? { binned: true } : {}),
     as: [as, `${as}_end`],
   }
 }

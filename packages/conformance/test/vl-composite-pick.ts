@@ -4,12 +4,14 @@ export const plain = (v: unknown) => JSON.parse(JSON.stringify(v))
 /** The same name on both sides: Aster's name for a field with a path or a space in it carries a hash and has no `.` (names.ts `safeKey`). */
 const HASH = /_[0-9a-f]{6}(?![0-9A-Za-z])/g
 const sameName = (s: string, side: 'oracle' | 'aster'): string => (side === 'aster' ? s.replace(HASH, '') : s).replace(/\\\./g, '_').replace(/(?<=\w)\.(?=\w)/g, '_').replace(/\bdata\("([^"\\]*)"\)/g, "data('$1')")
+/** A scale's domain says which dataset it reads by name; the names of datasets are the compilers' (the draw tells whether the right one is read). */
+const unnamedData = (v: unknown): unknown => (Array.isArray(v) ? v.map(unnamedData) : v !== null && typeof v === 'object' ? Object.fromEntries(Object.entries(v as Record<string, unknown>).map(([k, x]) => [k, k === 'data' && typeof x === 'string' ? '<data>' : unnamedData(x)])) : v)
 const canon = (v: unknown, side: 'oracle' | 'aster'): unknown => {
   if (Array.isArray(v)) return v.map((x) => canon(x, side))
   if (typeof v === 'string') return sameName(v, side)
   if (v === null || typeof v !== 'object') return v
   const o = v as Record<string, unknown>
-  return Object.fromEntries(Object.keys(o).sort().filter((k) => !(k === 'data' && Array.isArray(o[k]))).map((k) => [k, k === 'from' ? '<from>' : canon(o[k], side)]))
+  return Object.fromEntries(Object.keys(o).sort().filter((k) => !(k === 'data' && Array.isArray(o[k]))).map((k) => [k, k === 'from' ? '<from>' : k === 'domain' ? canon(unnamedData(o[k]), side) : canon(o[k], side)]))
 }
 export const pickSpec = (s: any, side: 'oracle' | 'aster'): unknown => canon(plain({
   marks: s.marks,

@@ -28,6 +28,14 @@
     value) against the compiled Vega of vega-lite, and 178,640 + 15,492 specs compile to the same Vega before and after. The
     orientation tables found two places the old one was not vega-lite's (a pre-binned channel on a rule or an area; a datum read as a field).
 
+- **`@aster/vl`: ten compile gaps against vega-lite 6.4.3, each pinned by a generated differential.** A rule over pre-binned channels
+  (`x2: inrange(...)`); area, tick and bar marks with no orientation (two non-measures); a line with `x2`/`y2` is a rule; a view's `name`
+  prefixes its scale and signal names (`outer_x`, `outer_childWidth`), through repeats, concats, layers and facets; continuous colour scales
+  forward `round`, `clamp`, `nice`, `padding` and the like; `zero` on a log scale is dropped; `nice` on a time scale is kept;
+  `binned: true` in the timeunit transform of a binned time unit; a selection a repeat or concat gives to a single-part errorbar or
+  errorband compiles (a boxplot, which vega-lite compiles to a spec Vega cannot parse, stays refused); a repeat or a concat inside a facet
+  compiles (a repeat of layers is a layered view to the facet). The scale-forwarding differential now also covers `yOffset`.
+
 - **`@aster/core` scale stack in Aster's own design** (`arr.ts`, `interp.ts`, `scale.ts`, `scale-continuous.ts`, `scale-discrete.ts`,
   `scale-d3.ts`, `scale-domain.ts`, `scales.ts`). d3-array, d3-interpolate, d3-scale, vega-scale and the spec side of vega-parser /
   vega-encode were written as transcriptions; they are now models of their own: one mapping model and one warp for identity / linear /
