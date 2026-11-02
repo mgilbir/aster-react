@@ -7,7 +7,7 @@
  */
 import { SYMBOL_DEFAULT_SIZE, pushAll } from './util.js'
 import type { SceneGroup, SceneItem, SceneNode } from './types.js'
-import { arcInto, areaInto, lineInto, symbolPathExact, trailInto } from './render.js'
+import { areaInto, itemArcInto, lineInto, symbolPathExact, trailInto } from './render.js'
 import { BoundsPen, cubicAt, cubicTurns } from './bounds-pen.js'
 import { parseSvgPath, renderSvgPath } from './svg-path.js'
 import { itemTextWidth, textAnchor, truncateToLimit } from './text-metrics.js'
@@ -229,10 +229,7 @@ export function baselineOffset(item: SceneItem): number {
 
 /** The extent of an arc item: its sector traced through the same generator that draws it (corner radius and padding included), turned by the item's angle, stroked, and moved to the item. */
 export function boundArcItem(bounds: Bounds, it: SceneItem): Bounds {
-  const rec = it as Record<string, unknown>
-  const outer = (it.outerRadius ?? it.radius ?? 0) as number
-  arcInto(new BoundsPen(bounds, +(rec.angle as number) || 0), 0, 0, outer, (it.innerRadius ?? 0) as number,
-    (it.startAngle as number) || 0, (it.endAngle as number) || 0, (rec.cornerRadius as number) || 0, (rec.padAngle as number) || 0)
+  itemArcInto(new BoundsPen(bounds, +((it as Record<string, unknown>).angle as number) || 0), it)
   return boundStroke(bounds, it, true).translate(it.x || 0, it.y || 0)
 }
 
@@ -949,7 +946,14 @@ export function boundLegendGroup(g: SceneGroup): Bounds {
   const rec = g as Record<string, unknown>
   // a legend built by guide-legend.ts carries the bounds its layout left on the mark (relative to the group's position)
   const own = rec.legendBounds as Bounds | undefined
-  if (own) return own.clone().translate(g.x ?? 0, g.y ?? 0)
+  if (own) {
+    const placed = own.clone().translate(g.x ?? 0, g.y ?? 0)
+    // a legend that sits nowhere along an axis (`orient: none` with no legendX / legendY) has no extent along it
+    const unplaced = rec.unplaced as { x: boolean; y: boolean } | undefined
+    if (unplaced?.x) { placed.x1 = +Number.MAX_VALUE; placed.x2 = -Number.MAX_VALUE }
+    if (unplaced?.y) { placed.y1 = +Number.MAX_VALUE; placed.y2 = -Number.MAX_VALUE }
+    return placed
+  }
   const stroked = rec._borderStroke === true
     || (rec._borderStroke === undefined
       // vega's boundStroke expands by strokeWidth/2 - a zero-width stroke (the gradient rect's #ddd) does not move the bounds
@@ -1013,6 +1017,15 @@ function typedMarkBounds(mark: SceneGroup): Bounds {
 }
 
 /**
+ * Does a child of a group add to the group's bounds? Its background box never does (the group's own width and height cover it); nor does
+ * a header or footer a grid layout left where it was for want of a column to put it in (`unbounded`).
+ */
+const countsInBounds = (child: SceneNode): boolean => {
+  const c = child as Record<string, unknown>
+  return c._bg !== true && c.unbounded !== true
+}
+
+/**
  * The bounds vega's Bound pass leaves on a LAID-OUT mark (`mark.bounds`),
  * recursively: a group is its box and the union of its children's, stroke
  * included, translated to its position (marks/group.js `bound`); a child axis /
@@ -1036,10 +1049,10 @@ export function layoutBounds(node: SceneNode, out = new Bounds()): Bounds {
       return c.marktype !== undefined && c.marktype !== 'group' && Array.isArray(c.items) ? typedMarkBounds(c) : layoutBounds(child)
     }
     if (hasClippedMark(g.items)) {
-      eachMarkBounds(g.items.filter((child) => (child as Record<string, unknown>)._bg !== true), g.width || 0, g.height || 0, measure, (mb) => { b.union(mb) })
+      eachMarkBounds(g.items.filter(countsInBounds), g.width || 0, g.height || 0, measure, (mb) => { b.union(mb) })
     } else {
       for (const child of g.items) {
-        if ((child as Record<string, unknown>)._bg === true) continue
+        if (!countsInBounds(child)) continue
         const c = child as SceneGroup
         if (c.marktype !== undefined && c.marktype !== 'group' && Array.isArray(c.items)) b.union(typedMarkBounds(c))
         else layoutBounds(child, b)
@@ -1062,7 +1075,7 @@ export function boundGroupItem(bounds: Bounds, group: SceneGroup): Bounds {
       eachMarkBounds(items.filter((child) => (child as Record<string, unknown>)._bg !== true), group.width || 0, group.height || 0, (child) => boundLeaf(new Bounds(), child as SceneItem), (mb) => { bounds.union(mb) })
     } else {
       for (let j = 0; j < items.length; ++j) {
-        if ((items[j] as Record<string, unknown>)._bg === true) continue
+        if (!countsInBounds(items[j]!)) continue
         boundLeaf(bounds, items[j] as SceneItem)
       }
     }

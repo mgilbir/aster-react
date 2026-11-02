@@ -224,9 +224,10 @@ function placeStrips(strips: SceneGroup[], cells: SceneGroup[], ncols: number, n
   for (let i = start; i < n; i += stride) if (cells[i]) margin = outward(margin, sideOf(cells[i]!, edge, flush))
   if (!strips.length) return margin
 
-  // more strips than the grid has columns (rows) are left where they are
+  // more strips than the grid has columns (rows) are left where they are, and add nothing to the bounds of the view
   const limit = overColumns ? ncols : nrows
   const placed = strips.length > limit ? strips.slice(0, limit) : strips
+  strips.forEach((strip, j) => { strip.unbounded = j >= limit })
   margin += gap
   let reach = 0
   for (let j = 0, i = start; j < placed.length; ++j, i += stride) {
@@ -251,9 +252,22 @@ function placeStrips(strips: SceneGroup[], cells: SceneGroup[], ncols: number, n
   return reach
 }
 
-/** Lay out a faceted group: its cells, then the headers and footers along them, then its row and column titles beside those. */
-export function layoutFacet(view: SceneGroup, opt: Opt): void {
+/** Where a laid-out group stands. */
+export interface GridPlace { x: number; y: number }
+
+/**
+ * Lay out a faceted group: its cells, then the headers and footers along them, then its row and column titles beside those.
+ *
+ * A view that fits its viewport makes the layout twice, the second time with the groups where the first left them, and the box of
+ * a group is then its box at the new place carried back: that is not the same float as its box measured at the origin, and
+ * where it falls on a whole pixel the rounding of a track can go the other way. `memory` hands the places of the first pass to the
+ * second, so the groups start there.
+ */
+export function layoutFacet(view: SceneGroup, opt: Opt, memory?: { prev: readonly GridPlace[] | undefined; keep(places: GridPlace[]): void }): void {
   const { cells, strips, titles } = sortByRole(view)
+  const placed = [...cells, ...strips['row-header'], ...strips['row-footer'], ...strips['column-header'], ...strips['column-footer']]
+  const before = memory?.prev
+  if (before !== undefined && before.length === placed.length) placed.forEach((g, i) => { g.x = before[i]!.x; g.y = before[i]!.y })
   const flush = opt.bounds === 'flush'
   const ncols = (opt.columns as number) || cells.length
   if (ncols > 0) boundedCount(ncols, 'facet columns')
@@ -292,4 +306,5 @@ export function layoutFacet(view: SceneGroup, opt: Opt): void {
   }
   titleOf('row-title', left, right)
   titleOf('column-title', above, below)
+  memory?.keep(placed.map((g) => ({ x: g.x || 0, y: g.y || 0 })))
 }

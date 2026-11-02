@@ -11,6 +11,39 @@
   rows of its own. On crossfilter-flights (200k rows, Chromium) a container resize costs 7 ms instead of 133 ms and the React mount to a stable
   `<svg>` 198 ms instead of 385 ms. Output is the same: a generated differential against an engine that keeps nothing, and a live one
   against Vega.
+- **`@aster/core` guides and layout: eight divergences from vega closed**, which the generated guide and grid differentials had been avoiding
+  (they now draw all of them): an axis with explicit `values` formats its labels for one tick per value (a precision that follows the
+  tick step, `e` among others, differed); `tickMinStep` acts only through the tick count (a log scale keeps ticks closer than it); an
+  axis `orient` signal reads the per-orient config blocks per key as signal expressions, and its `labelBound` clips as a vertical axis;
+  under `fit`, `fit-x` and `fit-y` a legend takes from the view only its extent across its side, the view title sits against the same
+  bounds, a legend is arranged again in the second pass and a grid's second layout starts from the first's places (the floats vega's
+  second pass rounds); an `orient: none` legend with no `legendX` / `legendY` extends nothing along that axis; grid headers beyond the
+  column count add nothing to the bounds.
+
+- **`@aster/vl`: composite marks in a repeat, and the decision tables as Aster's own.**
+  - A boxplot, errorbar or errorband in a repeat (a list, a row, a column, a grid, a layer, nested in a facet, a concat, a layer or
+    another repeat) is rewritten after the repeat has put its values in; it was rewritten while its field was still a `{repeat}`
+    reference. A generated matrix of composite marks x repeat forms x channels x compositions now compares each against vega-lite 6.4.3
+    (SVG, signals, scales, axes, legends, marks). It found and fixed, in views a repeated composite sits in: a view with an axis and no
+    scale on the other channel declares that size signal in its group (concat and repeat); the legend of a layer of composite marks
+    merges a nested layer's titles first; a datum colour in a composite mark and a datum condition on `color`, `size`, `opacity`,
+    `strokeWidth`, `strokeDash`; a repeat inside a repeat (inner variables shadow the outer's; views are named `child__row_gchild__column_v`);
+    sibling aggregates of one source that group alike are one aggregate, in vega-lite's order, so the bootstrap intervals of an
+    errorbar's views agree.
+  - Which scale properties apply to a scale type (`scaleprops.ts`), a mark's orientation (`orient.ts`), a scale's default zero, time units
+    (`timeunit.ts`) and predicates (`predicate.ts`) no longer follow vega-lite's functions line by line: a table of rows, an ordered
+    run of rules, and shared pieces of their own. Each is pinned over its whole input space (scale property x scale type x channel;
+    mark x position channels x second channels x asked orient; every time unit in every place; every form of predicate over every kind of
+    value) against the compiled Vega of vega-lite, and 178,640 + 15,492 specs compile to the same Vega before and after. The
+    orientation tables found two places the old one was not vega-lite's (a pre-binned channel on a rule or an area; a datum read as a field).
+
+- **`@aster/vl`: ten compile gaps against vega-lite 6.4.3, each pinned by a generated differential.** A rule over pre-binned channels
+  (`x2: inrange(...)`); area, tick and bar marks with no orientation (two non-measures); a line with `x2`/`y2` is a rule; a view's `name`
+  prefixes its scale and signal names (`outer_x`, `outer_childWidth`), through repeats, concats, layers and facets; continuous colour scales
+  forward `round`, `clamp`, `nice`, `padding` and the like; `zero` on a log scale is dropped; `nice` on a time scale is kept;
+  `binned: true` in the timeunit transform of a binned time unit; a selection a repeat or concat gives to a single-part errorbar or
+  errorband compiles (a boxplot, which vega-lite compiles to a spec Vega cannot parse, stays refused); a repeat or a concat inside a facet
+  compiles (a repeat of layers is a layered view to the facet). The scale-forwarding differential now also covers `yOffset`.
 
 - **`@aster/core` scale stack in Aster's own design** (`arr.ts`, `interp.ts`, `scale.ts`, `scale-continuous.ts`, `scale-discrete.ts`,
   `scale-d3.ts`, `scale-domain.ts`, `scales.ts`). d3-array, d3-interpolate, d3-scale, vega-scale and the spec side of vega-parser /

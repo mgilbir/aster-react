@@ -413,11 +413,8 @@ export interface CompiledAxis {
    * with a positive sign at the origin, and an `orient` signal can hold anything).
    */
   orient: 'top' | 'bottom' | 'left' | 'right' | (string & {})
-  /**
-   * An `orient` that is a signal: the axis compiled once per orient class (the config blocks it picks up depend on
-   * it), chosen when the signal's value is known. `''` is every other value.
-   */
-  orientSignal?: { signal: string; variants: Record<string, CompiledAxis> }
+  /** An `orient` that is a signal: the expression whose value, once known, is the axis's orient. */
+  orientSignal?: { signal: string }
   grid?: boolean
   gridScale?: string
   domain?: boolean
@@ -712,6 +709,8 @@ export interface SceneGroup extends SceneItem {
   hasLinks?: boolean
   /** The MARK's `clip` (not the item's): this group item sits in a container clipped to the enclosing group's frame. */
   markClip?: boolean
+  /** A grid header or footer the layout had no column (row) for: it stays where it was and adds nothing to the bounds of the group. */
+  unbounded?: boolean
   /** Pre-computed rounded-rect path `d` for clip-path defs (when cornerRadius > 0). */
   clipPathD?: string
   /** @internal The mark's source dataset, used to match a mark to its previous group. */
