@@ -182,7 +182,8 @@ that scope or one around it; a group also has `parent`, and a view has `width`, 
 Selectors and streams of a signal's `on` are refused the same way: `Signal update missing events specification.`, a
 selector the parser refuses (`Between selector must have two elements: ...`), `Invalid stream specification: ...`,
 `Stream "between" parameter must have 2 entries: ...`, `Unrecognized scale name: "<name>"` for a scale that triggers a
-handler, `Signal encode and update are mutually exclusive.`, `Invalid signal update specification.`.
+handler, `Signal encode and update are mutually exclusive.`, `Invalid signal update specification.`, and for the signal itself
+`Signals can not include both init and update expressions.`.
 
 **Add-on functions.** A function of an add-on (`geoCentroid`, `sampleNormal`, `treePath`, ...) is known to the compile whether
 or not the add-on has been loaded: vega knows it, so the spec is not refused. When the add-on is not loaded the call fails
