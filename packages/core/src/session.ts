@@ -17,7 +17,7 @@
  */
 import { compileChart } from './compiler.js'
 import { dict, ownGet } from './util.js'
-import { evaluateChartPending } from './runtime.js'
+import { evaluateChartPending, type DataStability } from './runtime.js'
 import { refId, valueKey } from './fingerprint.js'
 import { checkSpecLimits, checkSceneLimits, createLimitClock, withLimits, activeMeter } from './limits.js'
 import { diffRows, type DataPulse } from './pulse.js'
@@ -197,7 +197,27 @@ export function createChartSession(): ChartSession {
   let lastScene: SceneRoot | null = null
   let lastSpec: VgSpec | null = null
   let lastRaw: Map<string, unknown> | null = null
+  // the datasets the engine's committed state was made from (`lastRaw` also follows evaluations that found nothing to do)
+  let engineRaw: Map<string, unknown> | null = null
   let lastPulse: DataPulse | null = null
+
+  /**
+   * The datasets whose rows are equal to the ones the engine's state was made from, so the steps made from them need not run: every
+   * source the evaluation has no reason to doubt. By content when the session diffs the rows itself (the replaced arrays of a
+   * re-render); only the very array otherwise, since nothing has looked at the rows. A dataset the host named as changed never is.
+   */
+  const stableData = (input: RuntimeInput, currentRaw: Map<string, unknown>, pulse: DataPulse): DataStability | undefined => {
+    if (engineRaw === null || lastRaw === null) return undefined
+    const byContent = !input.dataChanges && !input.dataPulse && input.autoChanges !== false
+    const named = new Set(input.changedDatasets ?? [])
+    let out: Map<string, unknown> | undefined
+    for (const [name, rows] of currentRaw) {
+      const was = engineRaw.get(name)
+      if (was === undefined || named.has(name) || pulse.datasets.has(name) || pulse.structural.has(name)) continue
+      if (byContent || rows === lastRaw.get(name)) (out ??= new Map()).set(name, was)
+    }
+    return out
+  }
 
   const withAutoPulse = (spec: VgSpec, input: RuntimeInput, currentRaw: Map<string, unknown>): { input: RuntimeInput; pulse: DataPulse } => {
     if (input.dataPulse) {
@@ -315,10 +335,12 @@ export function createChartSession(): ChartSession {
     const recompile = skeleton !== lastSkeleton || !lastChart
     const chart = recompile ? compileChart(spec) : lastChart!
     clock.check('compile')
-    const pending = evaluateChartPending(chart, { ...effectiveInput, data: dataInput(currentRaw) })
+    // (a chart compiled anew has no state to keep steps from)
+    const pending = evaluateChartPending(chart, { ...effectiveInput, data: dataInput(currentRaw) }, recompile ? undefined : stableData(input, currentRaw, pulse))
     clock.check('evaluate')
     if (input.limits) checkSceneLimits(pending.scene, input.limits)
     pending.commit()
+    engineRaw = currentRaw
     lastChart = chart
     lastSkeleton = skeleton
     lastSpec = spec
@@ -342,10 +364,11 @@ export function createChartSession(): ChartSession {
     const currentRaw = new Map(lastRaw)
     for (const [name, rows] of Object.entries(input.data ?? {})) currentRaw.set(name, rows)
     const { input: effectiveInput, pulse } = withAutoPulse(lastSpec, input, currentRaw)
-    const pending = evaluateChartPending(lastChart, { ...effectiveInput, data: dataInput(currentRaw) })
+    const pending = evaluateChartPending(lastChart, { ...effectiveInput, data: dataInput(currentRaw) }, stableData(input, currentRaw, pulse))
     clock.check('change')
     if (input.limits) checkSceneLimits(pending.scene, input.limits)
     pending.commit()
+    engineRaw = currentRaw
     lastScene = pending.scene
     // Every key follows the state that was just committed, or the no-op cache
     // would serve a scene built for different inputs (C15).
