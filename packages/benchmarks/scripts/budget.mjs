@@ -122,6 +122,8 @@ import { fileURLToPath } from 'node:url'
 // its events on): geo marginal 16.3 (16.254; +0.9 over 15.4, none of it one piece: the antimeridian pass-through alone is 0.07).
 // The ARIA of guides and marks over the parameter space (the root group item's channels, the mark roles, the config lookup),
 // measured (kB gzip): core 141.0 (+0.2 over main's 140.8; ceiling 141.5); the other rows stay inside their ceilings.
+// UTC time-unit guide labels (the format type follows the scale), the temporal size/opacity scales and the guide-title rules for
+// ranged channels and layers (titles.ts), measured (kB gzip): Chart + VL 289.5 (+1.0 over 288.5); the other rows did not move.
 // Ceiling = the measure + 0.5.
 const BUDGETS = {
   '@aster/core': 141.5 * 1024,
@@ -138,7 +140,7 @@ const BUDGETS = {
   '@aster/react SvgChart': 166.1 * 1024,
   '@aster/react SvgChart + interaction': 184.0 * 1024,
   // Base + the VL compiler (opt-in: `import '@aster/react/vl'`).
-  '@aster/react Chart + VL': 289.0 * 1024,
+  '@aster/react Chart + VL': 290.0 * 1024,
 }
 
 const THIS_DIR = dirname(fileURLToPath(import.meta.url))
