@@ -7,6 +7,7 @@ import { describe, it, expect } from 'vitest'
 import { compileChart, evaluateChart, renderSceneToSvg } from './index.js'
 import { patchSceneDom, renderSceneToDomElement, sceneToDomDesc } from './addon-dom.js'
 import { canon, firstDomDiff, parityDiff, parseSvg } from './dom-canon.testlib.js'
+import { createChartSession } from './session.js'
 import { PairAttrSink, StringAttrSink } from './render.js'
 import type { SceneGroup, SceneRoot } from './types.js'
 
@@ -27,22 +28,28 @@ describe('C3: removing items patches the right elements', () => {
   const rows = (...v: number[]): { x: number }[] => v.map((x) => ({ x }))
 
   it('shows 0,20,30,40 after removing 10 from 0,10,20,30,40 (the audit repro)', () => {
-    const chart = compileChart(spec as never)
+    // The removal must go through a session with the SAME row objects: only then are the surviving items
+    // reused (clean) and carry their cached descriptors onto elements that now show another item. Fresh row
+    // objects (evaluateChart per step) rebuild every item, so the positional skip is never reached.
+    const session = createChartSession()
+    const all = rows(0, 10, 20, 30, 40)
     const svg = mkSvg()
-    patchSceneDom(svg, evaluateChart(chart, { data: { t: rows(0, 10, 20, 30, 40) } }))
+    patchSceneDom(svg, session.evaluate(spec as never, { data: { t: all } }))
     expect(xs(svg)).toEqual(['translate(0,50)', 'translate(40,50)', 'translate(80,50)', 'translate(120,50)', 'translate(160,50)'])
-    patchSceneDom(svg, evaluateChart(chart, { data: { t: rows(0, 20, 30, 40) } }))
+    patchSceneDom(svg, session.evaluate(spec as never, { data: { t: all.filter((r) => r.x !== 10) } }))
     expect(xs(svg)).toEqual(['translate(0,50)', 'translate(80,50)', 'translate(120,50)', 'translate(160,50)'])
   })
 
-  it('matches a fresh render after two removals and a reorder', () => {
-    const chart = compileChart(spec as never)
+  it('matches a fresh render after two removals and a reorder (reused items, one session)', () => {
+    const session = createChartSession()
     const svg = mkSvg()
-    const steps = [rows(0, 5, 10, 15, 20, 25), rows(0, 10, 15, 20, 25), rows(0, 10, 20, 25), rows(25, 20, 10, 0)]
-    for (const t of steps) {
-      const scene = evaluateChart(chart, { data: { t } })
-      patchSceneDom(svg, scene)
-      const fresh = evaluateChart(compileChart(spec as never), { data: { t } })
+    const pool = new Map<number, { x: number }>()
+    const row = (x: number): { x: number } => pool.get(x) ?? (pool.set(x, { x }), pool.get(x)!)
+    const steps = [[0, 5, 10, 15, 20, 25], [0, 10, 15, 20, 25], [0, 10, 20, 25], [25, 20, 10, 0]]
+    for (const xsOfStep of steps) {
+      const t = xsOfStep.map(row)
+      patchSceneDom(svg, session.evaluate(spec as never, { data: { t } }))
+      const fresh = evaluateChart(compileChart(spec as never), { data: { t: xsOfStep.map((x) => ({ x })) } })
       expect(firstDomDiff(canon(renderSceneToDomElement(fresh, document)), canon(svg))).toBeNull()
     }
   })
