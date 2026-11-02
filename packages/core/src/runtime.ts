@@ -4098,12 +4098,6 @@ function evaluateMarkItems(
     try { items = sortMarkItems(items, mark.sort) } catch (e) { reportEvalError(ctx, e) }
   }
 
-  // Items an aborted run never encoded: vega's mark container holds them but they carry no geometry or paint,
-  // so (but for the zero-size rect path the renderers already read as `|| 0`) nothing of them is drawn.
-  if (false as boolean) {
-    items = items.filter((it) => (it as { __unencoded?: boolean }).__unencoded !== true)
-  }
-
   // Vega's mark defaults (vega.js defaults()): line {strokeWidth: 2},
   // area {fill: '#4c78a8'}, text {fill: '#000'} — applied when the encode
   // leaves the property unspecified.
@@ -4859,7 +4853,8 @@ function registerGradient(paint: object, ctx: EvalContext): void {
 }
 
 function resolveEncodeSet(encode: Record<string, EncodeValue | EncodeValue[]>, datum: Row, ctx: EvalContext, marktype: string): SceneItem {
-  if (ctx.encodeAborted) return { __unencoded: true } as SceneItem
+  // (an item an aborted run never reached stays in its mark, bare: vega's scenegraph holds it without geometry or paint)
+  if (ctx.encodeAborted) return {}
   const plan = encodePlan(encode)
   const binding = ctx.encodeBinding
 
