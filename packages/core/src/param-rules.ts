@@ -8,6 +8,8 @@
  * and that a LITERAL scalar for a list parameter is refused while a signal that evaluates to a scalar is not.
  */
 
+import { writtenTypeOf } from './transform-names.js'
+
 type Params = Record<string, unknown>
 
 /** One parameter of a transform definition. */
@@ -44,7 +46,7 @@ export function checkParams(t: Params, rules: readonly ParamRule[]): void {
   for (const rule of rules) {
     const value = t[rule.name]
     if (value === undefined) {
-      if (rule.required) throw new Error(`Missing required ${JSON.stringify(t.type)} parameter: ${JSON.stringify(rule.name)}`)
+      if (rule.required) throw new Error(`Missing required ${JSON.stringify(writtenTypeOf(t))} parameter: ${JSON.stringify(rule.name)}`)
       continue
     }
     if (rule.kinds) {

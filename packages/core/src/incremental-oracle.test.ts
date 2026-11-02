@@ -36,7 +36,7 @@ import { createChartSession } from './session.js'
 import { diffRows, type RowDiff } from './pulse.js'
 import { applyChangeset, newChangeset, planModify, type Changeset } from './modify.js'
 import { renderSceneToSvg } from './index.js'
-import type { RuntimeInput, SceneGroup, SceneRoot } from './types.js'
+import type { CompiledChart, RuntimeInput, SceneGroup, SceneRoot } from './types.js'
 import { scopedSignalName } from './util.js'
 
 type Row = Record<string, unknown>
@@ -573,13 +573,19 @@ export function inputOf(g: GenSpec, w: World): RuntimeInput {
   return input
 }
 
-function reference(g: GenSpec, w: World): SceneRoot | Error {
+/**
+ * The fresh reference of a state. A spec with an `identifier` is the one thing whose result depends on how the view got there
+ * (vega's id counter is the view's, and a row keeps its id as the data changes), so its reference is a chart of its own that is
+ * evaluated through the same states, each time from scratch with no hint of what changed but one: rows changed where they stood
+ * (`modified`) are the same rows in a new state, which keeps their ids, while a row that moved is a row that moved. `kept` is that chart.
+ */
+function reference(g: GenSpec, w: World, kept?: CompiledChart, modified?: Record<string, number[]>): SceneRoot | Error {
   try {
     const spec = clone(g.spec)
     // The reference sees the SAME visible state: data via input.data, always. A view size the host fixed IS the size:
     // the `width` / `height` signals a `window:resize` handler wrote do not move it, so the reference never sees them.
     const sizeSig = w.sizeSig && { ...(w.width == null ? { width: w.sizeSig.width } : {}), ...(w.height == null ? { height: w.sizeSig.height } : {}) }
-    return evaluateChart(compileChart(spec as never), inputOf(g, { ...w, sizeSig }))
+    return evaluateChart(kept ?? compileChart(spec as never), { ...inputOf(g, { ...w, sizeSig }), ...(modified ? { dataChanges: modified } : {}) })
   } catch (e) {
     return e as Error
   }
@@ -594,6 +600,23 @@ function toDataPulse(d: RowDiff): NonNullable<RuntimeInput['dataPulse']>[string]
     ...(d.removedRanges ? { removed: d.removedRanges } : {}),
     ...(d.appendOnly ? { appendOnly: true, baseLength: d.baseLength } : {}),
   }
+}
+
+/** The rows a step's hints say changed where they stood (and nothing else about them). */
+function modifiedBy(hints: Partial<RuntimeInput>, more?: Record<string, number[]>): Record<string, number[]> | undefined {
+  const out: Record<string, number[]> = { ...more, ...hints.dataChanges }
+  for (const [name, p] of Object.entries(hints.dataPulse ?? {})) if (!p.from) out[name] = p.changed ?? []
+  return Object.keys(out).length ? out : undefined
+}
+
+/** The data sets that have the same number of rows in both worlds, and the rows of each that differ. */
+function sameLengthChanges(prev: World, next: World): Record<string, number[]> {
+  const out: Record<string, number[]> = {}
+  for (const name of ['t', 'u', 'sel'] as const) {
+    const d = diffRows(prev[name], next[name])
+    if (d?.sameLength && d.changed.length) out[name] = d.changed
+  }
+  return out
 }
 
 /** Truthful change hints for a step, given the previous and next worlds. */
@@ -644,8 +667,9 @@ function run(target: 'chart' | 'session', g: GenSpec, world0: World, steps: Step
   // Previously returned scenes must never change under the caller (C52).
   const retained: Array<{ scene: SceneRoot; key: ReturnType<typeof sceneKey>; step: number }> = []
 
-  const compare = (stepNo: number, op: string, actual: SceneRoot | Error, w: World): RunResult | null => {
-    const ref = reference(g, w)
+  const keptReference = JSON.stringify(g.spec).includes('"identifier"') ? compileChart(clone(g.spec) as never) : undefined
+  const compare = (stepNo: number, op: string, actual: SceneRoot | Error, w: World, modified?: Record<string, number[]>): RunResult | null => {
+    const ref = reference(g, w, keptReference, keptReference ? modified : undefined)
     if (ref instanceof Error || actual instanceof Error) {
       const a = actual instanceof Error ? actual.message : 'ok'
       const b = ref instanceof Error ? ref.message : 'ok'
@@ -725,7 +749,7 @@ function run(target: 'chart' | 'session', g: GenSpec, world0: World, steps: Step
         live.sel = clone(world.sel)
       }
       const scene = attempt(() => evaluateChart(chart, input))
-      const r = compare(i, `${s.op}/${s.delivery}`, scene, world) ?? irCheck(i, s.op)
+      const r = compare(i, `${s.op}/${s.delivery}`, scene, world, modifiedBy(hints)) ?? irCheck(i, s.op)
       if (r) return r
     }
     return finalAudit() ?? { failure: null, steps: steps.length }
@@ -780,13 +804,14 @@ function run(target: 'chart' | 'session', g: GenSpec, world0: World, steps: Step
     } else {
       scene = attempt(() => session.evaluate(specFor(world) as never, sessionInput(world, extra)))
     }
-    let r = compare(i, `${s.op}/${s.delivery}/${s.via}`, scene, world) ?? irCheck(i, s.op)
+    // (the session works out what changed itself, unless the step says only which data sets did)
+    let r = compare(i, `${s.op}/${s.delivery}/${s.via}`, scene, world, extra.autoChanges === false ? undefined : modifiedBy(hints, sameLengthChanges(prev, world))) ?? irCheck(i, s.op)
     if (r) return r
     // The no-op cache: re-evaluating the identical state must be correct too,
     // with fresh equal arrays and with the very same inputs.
     if (s.op === 'noop' || i % 3 === 1) {
       const again = attempt(() => session.evaluate(specFor(world) as never, sessionInput(world, {})))
-      r = compare(i, `${s.op}/re-evaluate`, again, world)
+      r = compare(i, `${s.op}/re-evaluate`, again, world, undefined)
       if (r) return r
     }
   }

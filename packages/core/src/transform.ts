@@ -4,6 +4,7 @@
  * Each transform is a pure `(rows, params) -> rows` (plus expression/context).
  */
 import type { CompiledTransform, SortSpec } from './types.js'
+import type { IdCounter } from './identifier-ids.js'
 import type { ExpressionRuntime } from './expression.js'
 import { type ContourFeature, SHAPE_BOUNDS, geoRegistry, requireGeo, requireTransform } from './registry.js'
 import { isArray, sortData } from './util.js'
@@ -11,6 +12,7 @@ import { densityGrid, placeContours } from './raster-grid.js'
 import { accessorOf, densitySettings } from './raster-params.js'
 import { PARAM_RULES, checkParams } from './param-rules.js'
 import { tickStep } from './arr.js'
+import { carryOrder, orderOf, placesAt, recordNextOrder, takeRecording } from './tuple-order.js'
 import { activeMeter, boundedCount } from './limits.js'
 import { walkPostOrder, walkPreOrder } from './tree-walk.js'
 import { aggregateRows, type AggregateParams, compareOf, fieldOf, joinAggregateRows, pivotRows, sortBySpec } from './transform-agg.js'
@@ -32,6 +34,11 @@ export interface TransformContext {
   signals: Record<string, unknown>
   /** Cross-dataset lookup (used by 'lookup', deferred). */
   datasets?: (name: string) => unknown[] | undefined
+  /**
+   * The id counter of the view the transforms belong to, which every `identifier` draws from (see identifier-ids.ts). A context
+   * that has none belongs to no view: each call of `applyTransforms` numbers from 1.
+   */
+  ids?: IdCounter
   /** Hierarchy trees built by the `stratify` transform, keyed by data source name. */
   hierarchies?: Map<string, unknown>
   /** Cartographic projections, for the `geoshape` transform's `projection` param. */
@@ -125,11 +132,19 @@ export function applyTransforms(
 ): Row[] {
   let out = rows
   const meter = activeMeter()
-  for (const t of transforms) {
+  // (a context that belongs to no view has no counter: the `identifier`s of one call share a counter of their own, from 1)
+  const run = ctx.ids || !transforms.some((t) => t.type === 'identifier') ? ctx : { ...ctx, ids: { value: 0 } }
+  for (let k = 0; k < transforms.length; k++) {
+    const t = transforms[k]!
     if (meter) meter.clock.check(`transform ${t.type}`)
     const ownedIn = owned
     owned = ownsOutput(t, ownedIn)
-    out = applyTransform(out, t, ctx, sourceName, ownedIn)
+    // (a collect that sorts, with a sort after it, leaves the order the rows were made in beside its result)
+    if (placesAt(transforms, k)) recordNextOrder()
+    const input = out
+    out = applyTransform(out, t, run, sourceName, ownedIn)
+    takeRecording()
+    carryOrder(t.type, input, out)
     if (meter) {
       // Whatever a transform produced is a dataset like any other: it may not
       // exceed maxRows, and rows beyond the input count as generated (C7/C9).
@@ -351,7 +366,7 @@ function applyTransform(rows: Row[], t0: CompiledTransform, ctx: TransformContex
         if (t.signal) ctx.signals[t.signal as string] = info
       }, owned)
     case 'identifier':
-      return identifierRows(rows, t, owned)
+      return identifierRows(rows, t, owned, ctx.ids)
     case 'pivot':
       return pivotRows(rows, t as { field?: unknown; value?: unknown }, ctx.runtime.random)
     default:
@@ -435,7 +450,8 @@ export function compareRows(a: Row, b: Row, sort?: SortSpec): number {
 export function sortOrder(rows: Row[], sort?: SortSpec, limit = Infinity): number[] {
   const order = rows.map((_, i) => i)
   const c = comparatorOf(sort)
-  if (c) sortData(order, (a, b) => c(rows[a]!, rows[b]!) || a - b)
+  const places = c ? orderOf(rows) : null
+  if (c) sortData(order, (a, b) => c(rows[a]!, rows[b]!) || (places ? places[a]! - places[b]! : 0) || a - b)
   return Number.isFinite(limit) ? order.slice(0, Math.max(0, limit)) : order
 }
 

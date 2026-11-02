@@ -17,6 +17,8 @@ import {
   timeFloor, timeIntervalFor, timeUnits, utcFloor, utcIntervalFor,
 } from './time.js'
 import { AsterLimitError, activeMeter, checkRowCount, meterTick } from './limits.js'
+import type { IdCounter } from './identifier-ids.js'
+import { orderOf } from './tuple-order.js'
 
 type Params = Record<string, unknown>
 type Read = (d: unknown) => unknown
@@ -349,6 +351,8 @@ interface StackGroup {
   rows: Row[]
   /** Sum of the absolute values of the group, in the rows' input order. */
   total: number
+  /** Where each row stands in the order rows were made in, if that is known (see tuple-order.ts). */
+  made?: number[]
 }
 
 /**
@@ -358,6 +362,7 @@ interface StackGroup {
  */
 export function stackRows(rows: Row[], p: Params, owned = false): Row[] {
   const out = writableRows(rows, owned)
+  const order = orderOf(rows)
   const as = (p.as ?? ['y0', 'y1']) as string[]
   const lowName = as[0] as string
   const highName = as[1] as string
@@ -367,15 +372,17 @@ export function stackRows(rows: Row[], p: Params, owned = false): Row[] {
 
   let groups: StackGroup[]
   if (by == null) {
-    groups = [{ rows: out.slice(), total: 0 }]
+    groups = [{ rows: out.slice(), total: 0, made: order ? Array.from(order) : undefined }]
   } else {
     const byKey = new Map<string, StackGroup>()
     groups = []
-    for (const row of out) {
+    for (let i = 0; i < out.length; i++) {
+      const row = out[i]!
       const key = JSON.stringify(by.map((g) => g(row)))
       let group = byKey.get(key)
-      if (!group) { byKey.set(key, (group = { rows: [], total: 0 })); groups.push(group) }
+      if (!group) { byKey.set(key, (group = { rows: [], total: 0, made: order ? [] : undefined })); groups.push(group) }
       group.rows.push(row)
+      group.made?.push(order![i]!)
     }
   }
   let widest = 0
@@ -384,7 +391,7 @@ export function stackRows(rows: Row[], p: Params, owned = false): Row[] {
     for (let i = 0; i < group.rows.length; i++) total += Math.abs(valueOf(group.rows[i]) as number)
     group.total = total
     if (total > widest) widest = total
-    if (sort) group.rows = stableSortBy(group.rows, sort)
+    if (sort) group.rows = stableSortBy(group.rows, sort, group.made ?? null)
     meterTick('stack', group.rows.length)
   }
 
@@ -432,14 +439,28 @@ export function stackRows(rows: Row[], p: Params, owned = false): Row[] {
 // identifier
 // ---------------------------------------------------------------------------
 
-/** `identifier`: a row with a truthy value in `as` keeps it; the others are numbered 1, 2, 3, ... in order. */
-export function identifierRows(rows: Row[], p: Params, owned = false): Row[] {
+/**
+ * `identifier`: a row with a truthy value in `as` keeps it; the others are numbered from the view's counter, which every
+ * `identifier` transform of the view draws from (`ids`), in the order the transforms run. A row the counter has numbered before
+ * is given that number again (`ids.carry[i]`, the number row `i` had), and the counter is never behind a number it has handed
+ * out. Without a counter the numbering is the transform's own, from 1.
+ */
+export function identifierRows(rows: Row[], p: Params, owned = false, ids?: IdCounter): Row[] {
   required('identifier', p, 'as')
   const name = p.as as string
-  let last = 0
-  return rows.map((row) => {
+  const counter = ids ?? { value: 0 }
+  const carry = counter.carry
+  return rows.map((row, i) => {
     const out = writable(row, owned)
-    out[name] = out[name] || ++last
+    if (!out[name]) {
+      const had = carry?.[i]
+      if (had) {
+        out[name] = had
+        if (typeof had === 'number' && had > counter.value) counter.value = had
+      } else {
+        out[name] = ++counter.value
+      }
+    }
     return out
   })
 }

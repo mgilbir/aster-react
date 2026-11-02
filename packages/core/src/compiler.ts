@@ -5,6 +5,9 @@
  */
 import { dict, ownGet } from './util.js'
 import { checkDataReferences, normalizeSpecLists } from './spec-structure.js'
+import { noteWrittenType, transformTypeOf } from './transform-names.js'
+import { checkExpressions } from './spec-expressions.js'
+import { markPlacing } from './tuple-order.js'
 import { markShareable } from './guide-encode.js'
 import { defaultMergedConfig, mergeVegaConfig, vegaDefaultConfig } from './config-defaults.js'
 import type {
@@ -41,6 +44,7 @@ export function compileChart(givenSpec: VgSpec): CompiledChart {
     ? defaultMergedConfig()
     : mergeVegaConfig(vegaDefaultConfig(), userConfig)) as Record<string, unknown>
   checkDataReferences(rawSpec, mergedConfig)
+  checkExpressions(rawSpec)
   markSeq = 0
   const spec: VgSpec = { ...rawSpec, config: mergedConfig as VgSpec['config'] }
 
@@ -300,12 +304,14 @@ function compileData(d: Record<string, unknown>): CompiledData {
   for (const t of (d.transform as Array<Record<string, unknown>>) ?? []) {
     compiled.transform.push(compileTransform(t))
   }
+  markPlacing(compiled.transform as ReadonlyArray<{ type?: unknown; sort?: unknown }>)
   return compiled
 }
 
 function compileTransform(t: Record<string, unknown>): CompiledTransform {
-  const type = t.type as string
+  const type = transformTypeOf(t.type)
   const out = dict<unknown>({ type }) // prototype-less: spec keys such as `__proto__` stay plain data
+  noteWrittenType(out, t.type as string, type)
   for (const key of Object.keys(t)) {
     if (key === 'type') continue
     out[key] = t[key]

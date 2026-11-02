@@ -16,6 +16,7 @@
  * Deviations from Vega, both on purpose: the input rows are never written (the transforms that write onto their rows in Vega write
  * onto copies, or onto rows the pipeline owns), and group tables hold no inherited names, so a group called `constructor` is a group.
  */
+import { orderOf, setOrder, takeRecording } from './tuple-order.js'
 import { accessor, accessorFields, accessorName, array, ascending, error, field, sortData, type Accessor } from './util.js'
 import { meterTick } from './limits.js'
 import { ascending as numericAscending, quantileSorted } from './arr.js'
@@ -101,6 +102,7 @@ function sortKeys(spec: unknown): SortKeys | null {
  * with values (NaN, mixed types) that no ordering is consistent over.
  */
 export function sortBySpec<T>(items: readonly T[], spec: unknown): T[] | null {
+  const record = takeRecording()
   const keys = sortKeys(spec)
   if (keys === null) return null
   const n = items.length
@@ -112,20 +114,27 @@ export function sortBySpec<T>(items: readonly T[], spec: unknown): T[] | null {
   })
   const order = new Array<number>(n)
   for (let i = 0; i < n; i++) order[i] = i
+  const places = orderOf(items)
   if (m === 1) {
     const column = columns[0]!
     const sign = keys.sign[0]!
-    sortData(order, (i, j) => compareValues(column[i], column[j]) * sign || i - j)
+    sortData(order, (i, j) => compareValues(column[i], column[j]) * sign || (places ? places[i]! - places[j]! : 0) || i - j)
   } else {
     sortData(order, (i, j) => {
       for (let k = 0; k < m; k++) {
         const c = compareValues(columns[k]![i], columns[k]![j])
-        if (c !== 0) return c * keys.sign[k]! || i - j
+        if (c !== 0) return c * keys.sign[k]! || (places ? places[i]! - places[j]! : 0) || i - j
       }
-      return i - j
+      return (places ? places[i]! - places[j]! : 0) || i - j
     })
   }
-  return order.map((i) => items[i]!)
+  const sorted = order.map((i) => items[i]!)
+  if (record) {
+    const made = new Float64Array(n)
+    for (let i = 0; i < n; i++) made[i] = places ? places[order[i]!]! : order[i]!
+    setOrder(sorted, made)
+  }
+  return sorted
 }
 
 /** A comparator over rows for a `{field, order}` spec, carrying the fields it reads; `null` when the spec names no field. */
@@ -154,12 +163,12 @@ export function compareOf(spec: unknown): Accessor<number> | null {
 }
 
 /** `items` stably sorted by `compare` (a copy; unsorted without one): ties break by position, and it is the positions that are sorted. */
-export function stableSortBy<T>(items: readonly T[], compare: Compare | null): T[] {
+export function stableSortBy<T>(items: readonly T[], compare: Compare | null, made: ArrayLike<number> | null = null): T[] {
   if (!compare) return items.slice()
   const n = items.length
   const order = new Array<number>(n)
   for (let i = 0; i < n; i++) order[i] = i
-  sortData(order, (i, j) => compare(items[i], items[j]) || i - j)
+  sortData(order, (i, j) => compare(items[i], items[j]) || (made ? made[i]! - made[j]! : 0) || i - j)
   const sorted = new Array<T>(n)
   for (let i = 0; i < n; i++) sorted[i] = items[order[i]!]!
   return sorted
@@ -695,15 +704,23 @@ export function groupKeyFn(groupby: unknown): (row: Row) => string {
 }
 
 /** The partition of `rows` by a `groupby`, in order of first appearance of each group. */
-export function partitionRows(rows: readonly Row[], groupby: unknown): Row[][] {
+export function partitionRows(rows: readonly Row[], groupby: unknown, order: Float64Array | null = null, made?: number[][]): Row[][] {
   const keyOf = groupKeyOf(fieldsOf(groupby))
   const groups = new Map<string, Row[]>()
-  for (const row of rows) {
+  const places = new Map<string, number[]>()
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i]!
     const key = keyOf(row)
     const group = groups.get(key)
     if (group) group.push(row)
     else groups.set(key, [row])
+    if (order) {
+      const at = places.get(key)
+      if (at) at.push(order[i]!)
+      else places.set(key, [order[i]!])
+    }
   }
+  if (order && made) for (const key of groups.keys()) made.push(places.get(key)!)
   return [...groups.values()]
 }
 
