@@ -322,6 +322,8 @@ function applyTransform(rows: Row[], t0: CompiledTransform, ctx: TransformContex
       }
       return rows
     }
+    case 'nest':
+      return requireTransform('nest')(rows, t as Record<string, unknown>, ctx, sourceName)
     case 'pack':
       return requireTransform('pack')(rows, t as Record<string, unknown>, ctx, sourceName)
     case 'partition':
@@ -761,6 +763,11 @@ export interface HierNode {
   y: number
   r: number
   value: number
+  /**
+   * On a tree's root: how many rows the dataset had when the tree was built. A dataset of that size still holds the rows at the
+   * positions (`idx`) the tree remembers; one of another size has been filtered or extended since.
+   */
+  rowCount?: number
   /** On a tree's root: the nodes by their `key` value (vega-hierarchy `lookup`), for `treePath` / `treeAncestors`. */
   lookup?: Map<string, HierNode>
   /** Treemap bounding rectangle (d3-hierarchy node.x0/x1/y0/y1). */
@@ -782,7 +789,7 @@ export interface HierNode {
 export function buildStratifyTree(rows: Row[], key?: string, parentKey?: string): HierNode {
   if (!key) throw new Error('[aster] stratify requires a key field')
   const mk = (data: Row, idx = -1): HierNode => ({ data, idx, children: [], parent: null, depth: 0, height: 0, x: 0, y: 0, r: 0, value: 0 })
-  if (!rows.length) return mk({})
+  if (!rows.length) return Object.assign(mk({}), { rowCount: 0 })
   // (both are fields: paths into the row)
   const idOf = fieldOf(key)
   const parentOf = parentKey ? fieldOf(parentKey) : undefined
@@ -830,6 +837,7 @@ export function buildStratifyTree(rows: Row[], key?: string, parentKey?: string)
   const lookup = new Map<string, HierNode>()
   for (const node of nodes) lookup.set(String(idOf(node.data)), node)
   root.lookup = lookup
+  root.rowCount = rows.length
   walkPostOrder(root, (node) => {
     let h = 0
     for (const c of node.children) if (c.height + 1 > h) h = c.height + 1

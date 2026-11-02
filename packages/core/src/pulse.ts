@@ -64,7 +64,7 @@ const GROUPED = new Set<string>(['aggregate', 'joinaggregate', 'window', 'stack'
 /** Transforms whose output row count/order is independent of the input order. */
 const EXPANDING = new Set<string>([
   'fold', 'flatten', 'pivot', 'geojson', 'geopoint', 'geoshape', 'geopath', 'contour', 'linkpath',
-  'kde', 'quantile', 'regression', 'loess', 'pack', 'partition', 'treemap', 'tree', 'treelinks', 'force', 'kde2d', 'isocontour', 'wordcloud',
+  'kde', 'quantile', 'regression', 'loess', 'nest', 'pack', 'partition', 'treemap', 'tree', 'treelinks', 'force', 'kde2d', 'isocontour', 'wordcloud',
   'voronoi', 'cross', 'countpattern', 'dotbin', 'project', 'label', 'stratify', 'sequence',
   'graticule',
 ])
