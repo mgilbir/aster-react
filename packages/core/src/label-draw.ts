@@ -9,7 +9,7 @@
  */
 import type { AlphaCanvas } from './raster.js'
 import { parsePathData, tracePath } from './path-data.js'
-import { arcInto, computeAreaPath, computeLinePath, rectItemPath, symbolPath, textItemDesc, trailPath } from './render.js'
+import { computeAreaPath, computeLinePath, itemArcInto, rectItemPath, symbolPath, textItemDesc, trailPath } from './render.js'
 import { fontString } from './text-metrics.js'
 import type { SceneGroup, SceneItem } from './types.js'
 import { SYMBOL_DEFAULT_SIZE } from './util.js'
@@ -139,7 +139,7 @@ const byType: Record<string, Painter> = {
       pen.translate(x, y)
       if (degrees) pen.rotate((degrees * Math.PI) / 180)
       pen.beginPath()
-      arcInto(pen, 0, 0, it.outerRadius ?? it.radius ?? 0, it.innerRadius ?? 0, it.startAngle ?? 0, it.endAngle ?? 0, it.cornerRadius ?? 0, it.padAngle ?? 0)
+      itemArcInto(pen, it)
       if (degrees) pen.rotate((-degrees * Math.PI) / 180)
       pen.translate(-x, -y)
       ink(pen, it)

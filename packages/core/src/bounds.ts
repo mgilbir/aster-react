@@ -7,7 +7,7 @@
  */
 import { SYMBOL_DEFAULT_SIZE, pushAll } from './util.js'
 import type { SceneGroup, SceneItem, SceneNode } from './types.js'
-import { arcInto, areaInto, lineInto, symbolPathExact, trailInto } from './render.js'
+import { areaInto, itemArcInto, lineInto, symbolPathExact, trailInto } from './render.js'
 import { BoundsPen, cubicAt, cubicTurns } from './bounds-pen.js'
 import { parseSvgPath, renderSvgPath } from './svg-path.js'
 import { itemTextWidth, textAnchor, truncateToLimit } from './text-metrics.js'
@@ -229,10 +229,7 @@ export function baselineOffset(item: SceneItem): number {
 
 /** The extent of an arc item: its sector traced through the same generator that draws it (corner radius and padding included), turned by the item's angle, stroked, and moved to the item. */
 export function boundArcItem(bounds: Bounds, it: SceneItem): Bounds {
-  const rec = it as Record<string, unknown>
-  const outer = (it.outerRadius ?? it.radius ?? 0) as number
-  arcInto(new BoundsPen(bounds, +(rec.angle as number) || 0), 0, 0, outer, (it.innerRadius ?? 0) as number,
-    (it.startAngle as number) || 0, (it.endAngle as number) || 0, (rec.cornerRadius as number) || 0, (rec.padAngle as number) || 0)
+  itemArcInto(new BoundsPen(bounds, +((it as Record<string, unknown>).angle as number) || 0), it)
   return boundStroke(bounds, it, true).translate(it.x || 0, it.y || 0)
 }
 
