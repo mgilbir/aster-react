@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- **`@aster/core` is about 1 kB gzip smaller (144,479 to 143,481 bytes), and every `@aster/react` row follows (`useChart` -951, `<Chart>` -945,
+  `<SvgChart>` -919, `<SvgChart>` + interaction -949, `<Chart>` + VL -936).** Nothing changes in what is drawn or computed: the expression
+  host table no longer restates the Math, date, string and clock functions the interpreter's default table already provides (`now()` still
+  reads `Date.now` when it is called); the categorical colour schemes are runs of hex like the others; the log, power and symlog maps of
+  scales and of pan / zoom are written once; the fallback for a refused `timeUnitSpecifier` and the built-in scale ranges read the tables
+  they used to copy; the undocumented `ASTER_DEBUG_PAD` console dump is gone. New guards: `differential-expression-math` (the plain
+  built-ins against real Vega) and `time-unit-format` (what an axis labels with a refused `timeUnitSpecifier`).
+
 - **`@aster/core` guides and layout: eight divergences from vega closed**, which the generated guide and grid differentials had been avoiding
   (they now draw all of them): an axis with explicit `values` formats its labels for one tick per value (a precision that follows the
   tick step, `e` among others, differed); `tickMinStep` acts only through the tick count (a log scale keeps ticks closer than it); an
