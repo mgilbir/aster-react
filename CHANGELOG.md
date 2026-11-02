@@ -8,8 +8,8 @@
   it drew from and what it published; the next evaluation keeps it when they are as they were, writes the signals it published again,
   and does not draw again. Datasets of group scopes are kept as whole pipelines. Consecutive `bin` / `formula` / `timeunit` steps
   write onto one set of rows instead of copying every row per step, and source rows are no longer copied before a step that makes
-  rows of its own. On crossfilter-flights (200k rows) a container resize costs 127 ms instead of 17 ms and the React mount to a stable
-  `<svg>` 365 ms instead of 197 ms. Output is the same: a generated differential against an engine that keeps nothing, and a live one
+  rows of its own. On crossfilter-flights (200k rows, Chromium) a container resize costs 7 ms instead of 133 ms and the React mount to a stable
+  `<svg>` 198 ms instead of 385 ms. Output is the same: a generated differential against an engine that keeps nothing, and a live one
   against Vega.
 
 - **`@aster/core` scale stack in Aster's own design** (`arr.ts`, `interp.ts`, `scale.ts`, `scale-continuous.ts`, `scale-discrete.ts`,
