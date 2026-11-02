@@ -124,9 +124,12 @@ import { fileURLToPath } from 'node:url'
 // its events on): geo marginal 16.3 (16.254; +0.9 over 15.4, none of it one piece: the antimeridian pass-through alone is 0.07).
 // The ARIA of guides and marks over the parameter space (the root group item's channels, the mark roles, the config lookup),
 // measured (kB gzip): core 141.0 (+0.2 over main's 140.8; ceiling 141.5); the other rows stay inside their ceilings.
+// Built-in ceilings (HARD_CAPS, the spec depth walk, the no-limits scope, the bounded pluck table, the adjacent-quantifier regex
+// rule) measured: core 141.7 (+0.7), useChart 148.7, Chart 189.6, SvgChart 166.9, SvgChart + interaction 184.2, Chart + VL 289.9;
+// the marginal rows did not move. The ceilings follow to measured + 0.5.
 // Ceiling = the measure + 0.5.
 const BUDGETS = {
-  '@aster/core': 141.5 * 1024,
+  '@aster/core': 142.2 * 1024,
   '+ @aster/core/dom': 6.2 * 1024,
   '+ @aster/core/canvas': 6.3 * 1024,
   '+ @aster/core/hit': 7.0 * 1024,
@@ -134,13 +137,13 @@ const BUDGETS = {
   '+ @aster/core/load': 5.6 * 1024,
   '+ @aster/core/geo': 16.8 * 1024,
   '+ @aster/core/transforms': 39.6 * 1024,
-  '@aster/react useChart': 148.0 * 1024,
-  '@aster/react Chart': 189.1 * 1024,
+  '@aster/react useChart': 149.2 * 1024,
+  '@aster/react Chart': 190.1 * 1024,
   // The light chart (`@aster/react/lite`): SVG only, no canvas renderer; alone and with the `interaction` capability.
-  '@aster/react SvgChart': 166.1 * 1024,
-  '@aster/react SvgChart + interaction': 184.0 * 1024,
+  '@aster/react SvgChart': 167.4 * 1024,
+  '@aster/react SvgChart + interaction': 184.7 * 1024,
   // Base + the VL compiler (opt-in: `import '@aster/react/vl'`).
-  '@aster/react Chart + VL': 289.5 * 1024,
+  '@aster/react Chart + VL': 290.4 * 1024,
 }
 
 const THIS_DIR = dirname(fileURLToPath(import.meta.url))
