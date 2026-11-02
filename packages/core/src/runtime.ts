@@ -51,7 +51,7 @@ import { dict, ownGet, pushAll, sortData, lerp, scopedSignalName, heldSignalName
 import { applyImageUrlPolicy, applyLinkUrlPolicy, resolveImageUrl, type ImageUrlPolicy } from './url-policy.js'
 import { valueKey, valuesEqual } from './fingerprint.js'
 import { rowsEqual, sourceNames, type PulseChange } from './pulse.js'
-import { aggregateRows, fieldsOf, groupKeyFn } from './transform-agg.js'
+import { aggregateGroups, fieldsOf, flatKeyFn, groupKeyFn } from './transform-agg.js'
 import { flattenLength } from './transform-basic.js'
 import { layoutFacet, type GridPlace } from './trellis.js'
 import { boundAxisGroup, boundLegendGroup, boundGroupItem, boundLeaf, boundTypedMark, Bounds, layoutBounds, eachMarkBounds, hasClippedMark } from './bounds.js'
@@ -4251,6 +4251,8 @@ function sortMarkItems(items: SceneItem[], sort: NonNullable<CompiledMark['sort'
 interface GroupSource {
   datum: Row
   rows?: Row[]
+  /** The datum the item's content reads as `parent`, where it is not the item's own (see {@link groupSources}). */
+  parent?: Row
   facetName?: string
   /** Names this item among its mark's (the facet partition's key, a datum's index): the identity of its signal scope. */
   key?: string
@@ -4271,7 +4273,7 @@ interface FacetDef {
  * partition's key fields plus any facet aggregate), one per datum of `from.data`,
  * or a single item with no source.
  */
-function groupSources(mark: CompiledMark, ctx: EvalContext): GroupSource[] {
+function groupSources(mark: CompiledMark, ctx: EvalContext): GroupSource[] | null {
   const facet = (mark.from as { facet?: FacetDef } | undefined)?.facet
   if (facet?.field !== undefined) {
     // vega-transforms PreFacet: one group item per datum (the datum is the item's datum), its rows the array the
@@ -4320,13 +4322,44 @@ function groupSources(mark: CompiledMark, ctx: EvalContext): GroupSource[] {
     // makes the empty cells of the full cross-product of the key values
     const ag = facet.aggregate
     const as = ag?.as ?? (ag?.ops ? ag.ops.map((op, i) => `${op}_${ag.fields?.[i]}`) : undefined)
-    const tuples = aggregateRows(rows, { groupby: keys, ...(ag?.ops ? { fields: ag.fields, ops: ag.ops, as } : {}), ...(ag?.cross ? { cross: true } : {}) })
-    return tuples.map((datum) => {
-      const partKey = keyOf(datum)
-      // (the aggregate's output is a tuple: `isTuple(group().datum)`)
-      Object.defineProperty(datum, TUPLE_ID, { value: true, enumerable: false })
-      return { datum, rows: parts.get(partKey) ?? [], facetName: facet.name, key: partKey }
+    let grouped: ReturnType<typeof aggregateGroups>
+    try {
+      grouped = aggregateGroups(rows, { groupby: keys, ...(ag?.ops ? { fields: ag.fields, ops: ag.ops, as } : {}), ...(ag?.cross ? { cross: true } : {}) })
+    } catch (e) {
+      // (a cross-product over a nested path reads a path from a row that has only the name: the aggregate throws, the run stops
+      // there, and the mark is never made)
+      reportEvalError(ctx, e)
+      ctx.encodeAborted = true
+      return null
+    }
+    // The group items are the aggregate rows joined on the flat key (see flatKeyFn): rows that share one are ONE item, in the
+    // place of the first, whose datum is the last. Its content is the cell of the last of them that has rows (each cell's marks
+    // are made in the one item, the last made is what stays), and reads that cell's row as its `parent`; an item none of whose
+    // cells has rows is the hollow group.
+    const itemKey = flatKeyFn(keys)
+    const places = new Map<string, number>()
+    const items: GroupSource[] = []
+    const content: Array<{ rows: Row[]; parent?: Row }> = []
+    grouped.tuples.forEach((datum, i) => {
+      const cell = parts.get(grouped.keys[i]!)
+      const id = itemKey(datum)
+      let at = places.get(id)
+      if (at === undefined) {
+        places.set(id, (at = items.length))
+        content.push({ rows: [] })
+        items.push({ datum, facetName: facet.name, key: grouped.keys[i]! })
+      } else {
+        items[at] = { datum, facetName: facet.name, key: grouped.keys[i]! }
+      }
+      if (cell !== undefined) content[at] = { rows: cell, parent: datum }
     })
+    items.forEach((item, i) => {
+      // (the aggregate's output is a tuple: `isTuple(group().datum)`)
+      Object.defineProperty(item.datum, TUPLE_ID, { value: true, enumerable: false })
+      item.rows = content[i]!.rows
+      item.parent = content[i]!.parent
+    })
+    return items
   }
   const data = mark.from?.data
   if (data) return (ctx.datasets.get(data) ?? []).map((row, i) => ({ datum: row, key: String(i) }))
@@ -4365,8 +4398,9 @@ function markContainerInfo(mark: CompiledMark): Partial<SceneGroup> {
   return out
 }
 
-function buildGroupMark(mark: CompiledMark, ctx: EvalContext): SceneGroup[] {
+function buildGroupMark(mark: CompiledMark, ctx: EvalContext): SceneGroup[] | null {
   const sources = groupSources(mark, ctx)
+  if (sources === null) return null
   // one group item (and one scope) per datum / facet partition: bounded like any generated item (maxItems, the clock)
   meterItems(sources.length, 'group items')
   const groups = sources.map((src) => { meterTick('group item'); return buildGroupItem(mark, ctx, src) })
@@ -4518,7 +4552,7 @@ function buildGroupItem(mark: CompiledMark, ctx: EvalContext, src: GroupSource):
   try {
     // this item's signal scope (its own signals, over the enclosing ones; a facet's `parent` is its datum)
     const hasParent = src.facetName !== undefined || mark.from?.data !== undefined
-    const outerParams = hasParent ? { ...ctx.signalParams, parent: src.datum } : ctx.signalParams
+    const outerParams = hasParent ? { ...ctx.signalParams, parent: src.parent ?? src.datum } : ctx.signalParams
     const scopeId = mark.signalDefs?.length ? `${ctx.scopeId ? ctx.scopeId + '/' : ''}${mark.userName ?? ''}@${markIdOf(mark)}${src.key !== undefined && src.key !== '' ? `[${src.key}]` : ''}` : undefined
     const scoped = scopeId !== undefined ? scopeSignalValues(mark, ctx, scopeId, outerParams) : undefined
     const scopeParams = scoped ? scoped.params : outerParams

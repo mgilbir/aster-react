@@ -390,13 +390,6 @@ export function isFiniteNumber(v: unknown): v is number {
   return typeof v === 'number' && Number.isFinite(v)
 }
 
-export function collectField(rows: Row[], field: string | null | undefined): unknown[] {
-  if (!field) return []
-  const out: unknown[] = []
-  for (const r of rows) out.push(r[field])
-  return out
-}
-
 /**
  * Resolve a `[w, h]` size parameter whose entries may be numbers or signal
  * references (e.g. `[{signal: "width"}, {signal: "height"}]`). Returns
@@ -514,18 +507,6 @@ export function computeBinEps(step: number): number {
 // ---------------------------------------------------------------------------
 // aggregate / window / stack
 // ---------------------------------------------------------------------------
-
-export function groupRows(rows: Row[], keys: string[]): Row[][] {
-  if (!keys.length) return rows.length ? [rows] : []
-  const map = new Map<string, Row[]>()
-  for (const r of rows) {
-    const key = keys.map((k) => String(r[k])).join('\u0000')
-    let g = map.get(key)
-    if (!g) map.set(key, (g = []))
-    g.push(r)
-  }
-  return [...map.values()]
-}
 
 // ---------------------------------------------------------------------------
 // geoshape: GeoJSON -> SVG path (identity projection)
@@ -802,6 +783,9 @@ export function buildStratifyTree(rows: Row[], key?: string, parentKey?: string)
   if (!key) throw new Error('[aster] stratify requires a key field')
   const mk = (data: Row, idx = -1): HierNode => ({ data, idx, children: [], parent: null, depth: 0, height: 0, x: 0, y: 0, r: 0, value: 0 })
   if (!rows.length) return mk({})
+  // (both are fields: paths into the row)
+  const idOf = fieldOf(key)
+  const parentOf = parentKey ? fieldOf(parentKey) : undefined
   const ambiguous = {} as HierNode
   const byKey = new Map<string, HierNode>()
   const nodes: HierNode[] = []
@@ -810,12 +794,12 @@ export function buildStratifyTree(rows: Row[], key?: string, parentKey?: string)
     const r = rows[i]!
     const node = mk(r, i)
     nodes.push(node)
-    const id = r[key]
+    const id = idOf(r)
     if (id != null && String(id) !== '') {
       const k = String(id)
       byKey.set(k, byKey.has(k) ? ambiguous : node)
     }
-    const pid = parentKey ? r[parentKey] : undefined
+    const pid = parentOf?.(r)
     parentIds.push(pid != null && String(pid) !== '' ? String(pid) : null)
   }
   let root: HierNode | null = null
@@ -844,7 +828,7 @@ export function buildStratifyTree(rows: Row[], key?: string, parentKey?: string)
   if (reached < nodes.length) throw new Error('[aster] stratify: cycle')
   // (vega-hierarchy lookup(): every node by its key, the last of equal keys winning)
   const lookup = new Map<string, HierNode>()
-  for (const node of nodes) lookup.set(String(node.data[key]), node)
+  for (const node of nodes) lookup.set(String(idOf(node.data)), node)
   root.lookup = lookup
   walkPostOrder(root, (node) => {
     let h = 0
