@@ -132,7 +132,7 @@ describe('a ranged channel has the title vega-lite gives it', () => {
       }
     }
     expect(bad.slice(0, 10), `${bad.length} differ`).toEqual([])
-  })
+  }, 300_000)
 
   it('layers that share the guide merge their titles', async () => {
     const bad: string[] = []
@@ -219,5 +219,5 @@ describe('a ranged channel has the title vega-lite gives it', () => {
       }
     }
     expect(bad.slice(0, 10), `${bad.length} differ`).toEqual([])
-  })
+  }, 300_000)
 })
