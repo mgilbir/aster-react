@@ -100,7 +100,7 @@ const REJECTED: Array<[string, unknown, RegExp]> = [
   ['a condition without a test', unit({ encoding: { x: xq, y: yq, color: { condition: { value: 'red' }, value: 'grey' } } }), /needs `test`/],
   ['an empty condition array', unit({ encoding: { x: xq, y: yq, color: { condition: [], value: 'grey' } } }), /must not be empty/],
   ['a field condition in an array', unit({ encoding: { x: xq, y: yq, color: { condition: [{ test: 'true', field: 'c', type: 'nominal' }], value: 'g' } } }), /value conditions/],
-  ['a datum condition', unit({ encoding: { x: xq, y: yq, color: { condition: { test: 'true', datum: 'a' }, value: 'g' } } }), /datum/],
+  ['a datum condition on a channel whose scale is named after its paint', unit({ encoding: { x: xq, y: yq, fill: { condition: { test: 'true', datum: 'a' }, value: 'g' } } }), /datum/],
   ['a condition with both value and field', unit({ encoding: { x: xq, y: yq, color: { condition: { test: 'true', value: 'r', field: 'c', type: 'nominal' }, value: 'g' } } }), /exactly one of/],
   // --- sort (C35)
   ['an unknown sort string', unit({ encoding: { x: { ...cn, sort: 'sideways' } } }), /unknown sort/],

@@ -104,7 +104,8 @@ export function normalizeComposites(node: unknown, userConfig: Obj | undefined, 
     out.encoding = mergeEncoding(inherited, node.encoding)
   }
   for (const k of COMPOSITIONS) if (node[k] !== undefined) out[k] = normalizeComposites(node[k], userConfig, {})
-  if (node.spec !== undefined) out.spec = normalizeComposites(node.spec, userConfig, {})
+  // (a repeat's spec is rewritten once the repeat has put its values in, cell by cell: `normalizeUnits`)
+  if (node.spec !== undefined) out.spec = node.repeat === undefined ? normalizeComposites(node.spec, userConfig, {}) : node.spec
   return out
 }
 
@@ -164,7 +165,7 @@ export function normalizePathOverlays(node: unknown, config: Obj, stackOf: (unit
   for (const k of COMPOSITIONS) {
     if (node[k] !== undefined) return { ...node, [k]: normalizePathOverlays(node[k], config, stackOf, {}) }
   }
-  if (node.spec !== undefined) return { ...node, spec: normalizePathOverlays(node.spec, config, stackOf, {}) }
+  if (node.spec !== undefined) return node.repeat === undefined ? { ...node, spec: normalizePathOverlays(node.spec, config, stackOf, {}) } : node
   if (node.mark === undefined) return node
 
   if (hasFacetChannel(node.encoding)) {
@@ -231,7 +232,7 @@ export function alignStackOrders(node: unknown, stackOf: (unit: Obj) => StackPro
   if (!isObj(node)) return node
   if (node.layer !== undefined) return { ...node, layer: alignStackOrders(node.layer, stackOf, mergeEncoding(inherited, node.encoding)) }
   for (const k of COMPOSITIONS) if (node[k] !== undefined) return { ...node, [k]: alignStackOrders(node[k], stackOf, {}) }
-  if (node.spec !== undefined) return { ...node, spec: alignStackOrders(node.spec, stackOf, {}) }
+  if (node.spec !== undefined) return node.repeat === undefined ? { ...node, spec: alignStackOrders(node.spec, stackOf, {}) } : node
   if (node.mark === undefined) return node
 
   const own: Obj = isObj(node.encoding) ? node.encoding : {}
@@ -258,4 +259,15 @@ export function alignStackOrders(node: unknown, stackOf: (unit: Obj) => StackPro
     transform: [...(Array.isArray(node.transform) ? node.transform : []), { calculate: `indexof(${JSON.stringify(domain)}, datum['${color.field}'])`, as }],
     encoding: { ...own, order: { field: as, type: 'quantitative', sort: horizontal ? 'ascending' : 'descending' } },
   }
+}
+
+// --- all of them ---------------------------------------------------------------------------------------------------------------
+
+/**
+ * The spec tree with its composite marks, overlays and stack orders rewritten. A repeat's spec is left as it is: it names the
+ * repeated fields by reference, and a rewrite needs the field it reads (the repeat rewrites each cell, with this, once it has put the
+ * values in).
+ */
+export function normalizeUnits(node: unknown, userConfig: Obj | undefined, stackOf: (unit: Obj) => StackProps | undefined): unknown {
+  return alignStackOrders(normalizePathOverlays(normalizeComposites(node, userConfig), userConfig ?? {}, stackOf), stackOf)
 }

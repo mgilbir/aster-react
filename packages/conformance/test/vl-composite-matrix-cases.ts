@@ -373,7 +373,6 @@ group('stack order follows a colour domain', (add) => {
 /**
  * Specs on which Aster and vega-lite differ today, so they are in no group above. They are compiled by the refactor guards (the compiled
  * Vega is pinned from before a rewrite) and not compared with vega-lite:
- *  - a composite mark inside a repeat: vega-lite substitutes the repeated field before it normalizes the mark; Aster normalizes first;
  *  - a composite mark over a nested field (`o.v`): vega-lite's own render has no data for it (an axis from 0 to 0);
  *  - errorbar over a binned channel: refused by Aster;
  *  - a boxplot whose parts are all switched off: vega-lite draws an empty 10 x 10 view, Aster draws the empty plot;
@@ -390,6 +389,4 @@ export const ASTER_ONLY: Cases = [
   ['boxplot over a nested field', { data: { values: DATA.values.map((d) => ({ ...d, o: { v: d.v } })) }, mark: 'boxplot', encoding: { x: n('c'), y: q('o.v') } }],
   ['errorbar over a nested field', { data: { values: DATA.values.map((d) => ({ ...d, o: { v: d.v } })) }, mark: 'errorbar', encoding: { x: n('c'), y: q('o.v') } }],
   ['errorbar over a binned x', { data: DATA, mark: 'errorbar', encoding: { x: q('x', { bin: true }), y: q('v') } }],
-  ['boxplot in a repeat', { data: DATA, repeat: { column: ['v', 'w'] }, spec: { mark: 'boxplot', encoding: { x: n('c'), y: q('v', { field: { repeat: 'column' } } as never) } } }],
-  ...(['errorbar', 'errorband'] as const).map((kind): [string, Record<string, any>] => [`${kind} in a repeat`, { data: DATA, repeat: { column: ['v', 'w'] }, spec: { mark: kind, encoding: { x: kind === 'errorband' ? q('x') : n('c'), y: q('v', { field: { repeat: 'column' } } as never) } } }]),
 ]
