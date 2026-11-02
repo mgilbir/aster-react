@@ -145,6 +145,15 @@ ignored.
   aggregate of a composite mark), `regression` `params: true`, key-value `keyvals` ranges, sort
   arrays of DateTime objects.
 
+## Where it matches vega-lite on purpose, rather than the specification
+
+- **UTC time units in filter predicates are read in local time.** A field predicate with a `utc*` time unit (`utcmonth`,
+  `{unit: "month", utc: true}`, ...) cuts the field with the local-time functions (`month(datum.t)`, not `utcmonth(datum.t)`) and
+  compares a bare number or name as that part of a local date, which is what vega-lite 6.4.3 compiles (its source marks it
+  `TODO: support utc`). So a filter keeps the same rows as vega-lite in every zone. (The `timeUnit` transform and the encodings do
+  read a UTC unit in UTC.) A `utc: true` DateTime *value* is still read in UTC.
+  `vl-predicate.tz.test.ts` compares rows and expressions with vega-lite for every UTC unit in the zones of `pnpm test:tz`.
+
 ## Known runtime gaps (Aster, not the compiler)
 
 None are recorded: real vega renders our output identically to vega-lite's for the
