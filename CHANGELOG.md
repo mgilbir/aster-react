@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- **`@aster/core` guides and layout: eight divergences from vega closed**, which the generated guide and grid differentials had been avoiding
+  (they now draw all of them): an axis with explicit `values` formats its labels for one tick per value (a precision that follows the
+  tick step, `e` among others, differed); `tickMinStep` acts only through the tick count (a log scale keeps ticks closer than it); an
+  axis `orient` signal reads the per-orient config blocks per key as signal expressions, and its `labelBound` clips as a vertical axis;
+  under `fit`, `fit-x` and `fit-y` a legend takes from the view only its extent across its side, the view title sits against the same
+  bounds, a legend is arranged again in the second pass and a grid's second layout starts from the first's places (the floats vega's
+  second pass rounds); an `orient: none` legend with no `legendX` / `legendY` extends nothing along that axis; grid headers beyond the
+  column count add nothing to the bounds.
+
 - **`@aster/core` scale stack in Aster's own design** (`arr.ts`, `interp.ts`, `scale.ts`, `scale-continuous.ts`, `scale-discrete.ts`,
   `scale-d3.ts`, `scale-domain.ts`, `scales.ts`). d3-array, d3-interpolate, d3-scale, vega-scale and the spec side of vega-parser /
   vega-encode were written as transcriptions; they are now models of their own: one mapping model and one warp for identity / linear /
