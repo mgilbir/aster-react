@@ -571,11 +571,12 @@ function applyConfigDefaults(o: Record<string, unknown>, defaults: Record<string
   return out
 }
 
-/** The role a mark has once the parser has read its spec: a guide's role is kept, a group mark is a `scope`, a data mark is a `mark` unless it says otherwise. */
+/**
+ * The role vega's parser gives a mark, as far as the config goes: a group mark is a `scope` whatever it is called, a data
+ * mark is a `mark` unless the spec names another role (a guide's role, `frame`, anything).
+ */
 function markRoleOf(m: Record<string, unknown>): string {
-  const role = typeof m.role === 'string' ? m.role : ''
-  if (role.startsWith('axis') || role.startsWith('legend') || role.startsWith('title')) return role
-  return m.type === 'group' ? 'scope' : role || 'mark'
+  return m.type === 'group' ? 'scope' : (typeof m.role === 'string' && m.role) || 'mark'
 }
 
 /**

@@ -4117,6 +4117,13 @@ function evaluateMarkItems(
       if (fill !== undefined && rec.fill === undefined) rec.fill = fill
       if (mark.type === 'line' && rec.strokeWidth === undefined) rec.strokeWidth = 2
     }
+  } else if (mark.type === 'line') {
+    // (a line with a role of its own has no default width: it is drawn at the scenegraph's 1, which the renderers would
+    // otherwise replace by a line's 2)
+    for (const it of items) {
+      const rec = it as unknown as Record<string, unknown>
+      if (rec.stroke != null && rec.strokeWidth === undefined) rec.strokeWidth = 1
+    }
   }
 
   // The vega-lite point/circle/square styles default stroked symbols to
