@@ -113,6 +113,8 @@ import { fileURLToPath } from 'node:url'
 // Chart + VL 283.5 (+2.0 over 281.5); the other rows stay inside their ceilings.
 // Landed together with #71-#74 (guide edges, arc outline, vl repeat/tables, vl compile gaps), measured on the merged tree (kB gzip):
 // Chart + VL 288.5 (+7.0 over main's 281.5); core 140.8 (ceiling 140.9 unchanged).
+// After #76 (role-gated config, mark-type bounds) and #77 (identifier pass consistency) landed together, measured on main (kB gzip):
+// Chart + VL 289.0, at its 289.0 ceiling; the ceiling follows to 289.5. core 141.1 (ceiling 141.5).
 // The geo engine as geometry event buffers (geo-events / geo-clip / geo-resample / geo-path / geo-projections ...: more, smaller
 // modules, the sinks and the albersUsa interleave in place of d3's shared stream objects), measured (kB gzip): geo marginal 15.4
 // (+1.1 over 14.3); core 138.1 and the other rows did not move.
@@ -138,7 +140,7 @@ const BUDGETS = {
   '@aster/react SvgChart': 166.1 * 1024,
   '@aster/react SvgChart + interaction': 184.0 * 1024,
   // Base + the VL compiler (opt-in: `import '@aster/react/vl'`).
-  '@aster/react Chart + VL': 289.0 * 1024,
+  '@aster/react Chart + VL': 289.5 * 1024,
 }
 
 const THIS_DIR = dirname(fileURLToPath(import.meta.url))
