@@ -49,7 +49,7 @@ describe('an expression a spec holds is refused as vega refuses it (Aster vs rea
         const spec = make(e)
         const want = vegaOutcome(spec)
         const got = asterOutcome(spec)
-        if (WRAPPED.has(property) && want.startsWith('Expression parse error') && got.startsWith('Expression parse error')) continue
+        if (WRAPPED.test(property) && want.startsWith('Expression parse error') && got.startsWith('Expression parse error')) continue
         expect(got, `${name}: ${JSON.stringify(e)}`).toBe(want)
       }
     })
@@ -65,7 +65,7 @@ describe('an expression a spec holds is refused as vega refuses it (Aster vs rea
       const want = vegaOutcome(spec)
       const got = asterOutcome(spec)
       if (want === 'ok') accepted++; else refused++
-      if (WRAPPED.has(property) && want.startsWith('Expression parse error') && got.startsWith('Expression parse error')) continue
+      if (WRAPPED.test(property) && want.startsWith('Expression parse error') && got.startsWith('Expression parse error')) continue
       expect(got, `${property}: ${JSON.stringify(e)} in ${JSON.stringify(spec.axes ?? spec.legends)}`).toBe(want)
     }
     expect(refused).toBeGreaterThan(300)

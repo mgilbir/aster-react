@@ -2,20 +2,22 @@
  * Which properties of an axis, a legend and the title vega reads as expressions, and how. An axis, a legend and a title are not
  * parsed as they are written: vega-parser turns each into marks (an axis into a grid, ticks, labels, a domain line and a title; a
  * symbol legend into symbols and labels, a gradient into a bar and labels), and a property of the guide is only read by the mark it
- * belongs to. A property of a mark the guide does not have, one a scale's channel replaces, or one that only switches a feature on
- * (`grid`, `labels`) is never parsed, so an expression in it that vega would refuse is accepted.
+ * belongs to. A property of a mark the guide does not have, one a scale's channel or the author's encode replaces, or one that only
+ * switches a feature on (`grid`, `labels`) is never parsed, so an expression in it that vega would refuse is accepted.
  *
  * What is read is one of:
  * - an `entry`: the signal is the entry of a channel of one of the marks, whose expression is the signal in parentheses;
- * - a `value`: the signal is read on its own, as the parameter of the guide's data (`tickMinStep`, `symbolLimit`, ...), and a
- *   spec's `{signal: name}` that names a signal is a reference rather than an expression;
+ * - a `value`: the signal is read on its own, as the parameter of the guide's data (`tickMinStep`, `symbolLimit`, ...);
  * - an `object`: a list or an object whose parts may be signals (`values`, `tickCount`);
  * - a part of the `layout` of the entries of a symbol legend, an object vega writes out as one expression;
  * - nothing.
  *
+ * The properties of a mark begin alike (`grid*`, `tick*`, `label*`, `domain*`, `title*`, `symbol*`, `gradient*`), which is how they
+ * are told apart; the few that do not follow the rule are named.
+ *
  * Not reproduced: the longer text vega writes around a few of the entries when it is the author's text that is wrong in them
- * (`WRAPPED`: the positions of a band, the offsets of labels and ticks, the flush of labels, the symbol offset, the entry columns
- * and the sizes of a symbol legend other than the size expression below). They are read, and quoted by themselves.
+ * (`WRAPPED`: the positions of a band, the offsets of labels and ticks, the flush of labels, the symbol offset, the entry columns,
+ * the length of a gradient). They are read, and quoted by themselves. The size and the layout of a symbol legend are written out.
  */
 import { axisValue, legendType, LEGEND_CHANNELS } from './spec-structure.js'
 
@@ -31,22 +33,18 @@ export interface GuideEnv {
   scaleType(name: unknown): string | undefined
 }
 
-const set = (words: string): ReadonlySet<string> => new Set(words.split(' '))
+/** The guide properties whose expression vega quotes inside a longer text; they are read, and quoted by themselves (see above). */
+export const WRAPPED = /^(bandPosition|tickBand|tickOffset|tickSize|gridScale|labelFlush|labelFlushOffset|labelOffset|labelPadding|symbolOffset|columns|gradientLength)$/
 
-/** The properties of an axis that vega reads from the axis alone, whichever marks it has. */
-const AXIS_GROUP = set('orient offset position titlePadding minExtent maxExtent translate title')
-const AXIS_OBJECTS = set('tickCount values')
-const AXIS_NEVER = set('aria description zindex domain grid labels ticks tickRound')
-/** Per mark: the properties an axis gives it (`tickSize` and the band's properties are read by more than one). */
-const AXIS_MARKS: Readonly<Record<'grid' | 'ticks' | 'labels' | 'domain' | 'title', ReadonlySet<string>>> = {
-  grid: set('gridCap gridColor gridDash gridDashOffset gridOpacity gridWidth'),
-  ticks: set('tickCap tickColor tickDash tickDashOffset tickOpacity tickWidth tickSize'),
-  labels: set('labelAlign labelAngle labelBaseline labelColor labelFlush labelFont labelFontSize labelFontStyle labelFontWeight labelLimit labelLineHeight labelOffset labelOpacity labelPadding'),
-  domain: set('domainCap domainColor domainDash domainDashOffset domainOpacity domainWidth'),
-  title: set('titleAlign titleAnchor titleAngle titleBaseline titleColor titleFont titleFontSize titleFontStyle titleFontWeight titleLimit titleLineHeight titleOpacity titleX titleY'),
-}
+// -- an axis -------------------------------------------------------------------------------------------------------------------
 
-const AXIS_MARK_NAMES = ['grid', 'ticks', 'labels', 'domain', 'title'] as const
+/** Properties that only switch a feature on, or that vega keeps for itself. */
+const AXIS_NEVER = /^(aria|description|zindex|domain|grid|labels|ticks|tickRound)$/
+/** Properties of the axis itself, whatever marks it has. */
+const AXIS_GROUP = /^(orient|offset|position|titlePadding|minExtent|maxExtent|translate|title|format|formatType)$/
+/** The beginning of a property that belongs to a mark of the axis, and the feature that makes it. */
+const AXIS_MARK = /^(grid|tick|label|domain|title)/
+const AXIS_FEATURE: Readonly<Record<string, string>> = { grid: 'grid', tick: 'ticks', label: 'labels', domain: 'domain', title: 'title' }
 
 /** How an axis's properties are read, given the marks it has: what is asked is worked out when it is, once. */
 class AxisReading {
@@ -55,11 +53,11 @@ class AxisReading {
 
   private has(name: string): unknown { return axisValue(this.a, name, this.env.scaleType, this.env.config) }
 
-  /** whether the axis has the feature (`grid`, `ticks`, `labels`, `domain`) */
-  private on(mark: string): boolean {
-    if (mark === 'title') return this.a.title != null
-    let on = this.flags.get(mark)
-    if (on === undefined) this.flags.set(mark, (on = !!this.has(mark)))
+  /** whether the axis has the feature (`grid`, `ticks`, `labels`, `domain`, `title`) */
+  private on(feature: string): boolean {
+    if (feature === 'title') return this.a.title != null
+    let on = this.flags.get(feature)
+    if (on === undefined) this.flags.set(feature, (on = !!this.has(feature)))
     return on
   }
 
@@ -79,11 +77,11 @@ class AxisReading {
   }
 
   read(key: string): Reading {
-    if (AXIS_NEVER.has(key)) return 'never'
-    if (AXIS_OBJECTS.has(key)) return 'object'
-    if (AXIS_GROUP.has(key) || key === 'format' || key === 'formatType') return 'entry'
-    if (key === 'tickExtra') return this.band() === 'none' ? 'value' : 'never'
+    if (AXIS_NEVER.test(key)) return 'never'
+    if (key === 'tickCount' || key === 'values') return 'object'
+    if (AXIS_GROUP.test(key)) return 'entry'
     if (key === 'tickMinStep') return 'value'
+    if (key === 'tickExtra') return this.band() === 'none' ? 'value' : 'never'
     if (key === 'labelBound' || key === 'labelOverlap') return this.on('labels') ? 'value' : 'never'
     if (key === 'labelSeparation') return this.on('labels') && (!!this.has('labelOverlap') || !!this.has('labelBound')) ? 'value' : 'never'
     if (key === 'labelFlush' || key === 'labelFlushOffset') return this.flushRead() ? 'entry' : 'never'
@@ -91,55 +89,53 @@ class AxisReading {
     if (key === 'tickBand') return 'entry'
     if (key === 'bandPosition') return this.band() === 'none' && (this.on('grid') || this.on('ticks')) ? 'entry' : 'never'
     if (key === 'tickOffset') return this.band() !== 'extent' && (this.on('grid') || this.on('ticks') || this.on('labels')) ? 'entry' : 'never'
-    for (const mark of AXIS_MARK_NAMES) if (AXIS_MARKS[mark]!.has(key)) return this.on(mark) ? 'entry' : 'never'
-    return 'entry'
+    const mark = AXIS_MARK.exec(key)
+    return mark && !this.on(AXIS_FEATURE[mark[1]!]!) ? 'never' : 'entry'
   }
 }
 
-const LEGEND_GROUP = set('orient offset padding titlePadding cornerRadius fillColor strokeColor legendX legendY format formatType')
-const LEGEND_NEVER = set('aria description type direction zindex')
-const LEGEND_TITLE = set('title titleAlign titleAnchor titleBaseline titleColor titleFont titleFontSize titleFontStyle titleFontWeight titleLimit titleLineHeight titleOpacity titleOrient')
-const LEGEND_LABELS = set('labelColor labelFont labelFontSize labelFontStyle labelFontWeight labelLimit labelOpacity labelOffset')
-const LEGEND_GRADIENT = set('gradientLength gradientOpacity gradientStrokeColor gradientStrokeWidth gradientThickness')
-/** A label property and the channel of the labels' encode that replaces it. */
+// -- a legend ------------------------------------------------------------------------------------------------------------------
+
+const LEGEND_NEVER = /^(aria|description|type|direction|zindex)$/
+const LEGEND_GROUP = /^(orient|offset|padding|titlePadding|cornerRadius|fillColor|strokeColor|legendX|legendY|format|formatType)$/
+/** The channel of the labels' encode, or of the symbols', that replaces a property (`labelColor` is the `fill` of the labels). */
 const LABEL_CHANNEL: Readonly<Record<string, string>> = {
-  labelColor: 'fill', labelFont: 'font', labelFontSize: 'fontSize', labelFontStyle: 'fontStyle', labelFontWeight: 'fontWeight',
-  labelLimit: 'limit', labelOpacity: 'fillOpacity', labelAlign: 'align', labelBaseline: 'baseline',
+  Color: 'fill', Font: 'font', FontSize: 'fontSize', FontStyle: 'fontStyle', FontWeight: 'fontWeight', Limit: 'limit', Opacity: 'fillOpacity', Align: 'align', Baseline: 'baseline',
+}
+const SYMBOL_CHANNEL: Readonly<Record<string, string>> = {
+  Type: 'shape', Size: 'size', Opacity: 'opacity', FillColor: 'fill', StrokeColor: 'stroke', StrokeWidth: 'strokeWidth', Dash: 'strokeDash', DashOffset: 'strokeDashOffset',
 }
 
-/** A symbol property, the channel of the legend whose scale replaces it, and the channel of the symbols' encode that does too. */
-const SYMBOL_CHANNEL: Readonly<Record<string, readonly [string, string]>> = {
-  symbolType: ['shape', 'shape'], symbolSize: ['size', 'size'], symbolOpacity: ['opacity', 'opacity'], symbolFillColor: ['fill', 'fill'],
-  symbolStrokeColor: ['stroke', 'stroke'], symbolStrokeWidth: ['strokeWidth', 'strokeWidth'], symbolDash: ['strokeDash', 'strokeDash'],
-  symbolDashOffset: ['', 'strokeDashOffset'],
-}
+/** Whether the encode of a part sets a channel in its `enter` or `update` block. */
+const sets = (part: unknown, channel: string): boolean =>
+  isRecord(part) && ['enter', 'update'].some((block) => isRecord(part[block]) && (part[block] as Rec)[channel] != null)
 
 /** How a legend's properties are read. */
 function legendReading(l: Rec, env: GuideEnv): (key: string) => Reading {
-  const channel = LEGEND_CHANNELS.map((c) => l[c]).find((s) => !!s)
-  const type = legendType(l, channel ? env.scaleType(channel) : undefined)
-  const symbols = type === 'symbol'
-  const title = l.title != null
-  const userSymbols = isRecord(l.encode) && isRecord((l.encode as Rec).symbols) ? ((l.encode as Rec).symbols as Rec) : {}
-  const userLabels = isRecord(l.encode) && isRecord((l.encode as Rec).labels) ? ((l.encode as Rec).labels as Rec) : {}
-  const setIn = (part: Rec, channel: string): boolean => ['enter', 'update'].some((block) => isRecord(part[block]) && (part[block] as Rec)[channel] != null)
-  const symbolEncoded = (channel: string): boolean => setIn(userSymbols, channel)
-  const lookup = (name: string): unknown => (l[name] != null ? l[name] : isRecord(env.config.legend) ? (env.config.legend as Rec)[name] : undefined)
+  const symbols = legendType(l, env.scaleType(LEGEND_CHANNELS.map((c) => l[c]).find((s) => !!s))) === 'symbol'
+  const encode = isRecord(l.encode) ? l.encode : {}
   return (key) => {
-    if (LEGEND_NEVER.has(key)) return 'never'
+    if (LEGEND_NEVER.test(key)) return 'never'
     if (key === 'tickCount' || key === 'values') return 'object'
     if (key === 'symbolLimit' || key === 'tickMinStep') return 'value'
-    if (LEGEND_GROUP.has(key)) return 'entry'
-    if (LEGEND_TITLE.has(key)) return title ? 'entry' : 'never'
-    if (LEGEND_GRADIENT.has(key)) return symbols ? 'never' : 'entry'
-    if (key === 'labelAlign' || key === 'labelBaseline') return symbols && !setIn(userLabels, LABEL_CHANNEL[key]!) ? 'entry' : 'never'
-    if (key === 'labelOverlap' || key === 'labelSeparation') return symbols || !lookup('labelOverlap') ? 'never' : 'value'
-    if (LEGEND_LABELS.has(key)) return Object.hasOwn(LABEL_CHANNEL, key) && setIn(userLabels, LABEL_CHANNEL[key]!) ? 'never' : 'entry'
-    if (key === 'clipHeight' || key === 'symbolOffset') return symbols ? 'entry' : 'never'
-    if (Object.hasOwn(SYMBOL_CHANNEL, key)) {
-      const [scaled, encoded] = SYMBOL_CHANNEL[key]!
+    if (LEGEND_GROUP.test(key)) return 'entry'
+    if (key.startsWith('title')) return l.title != null ? 'entry' : 'never'
+    if (key.startsWith('gradient')) return symbols ? 'never' : 'entry'
+    if (key === 'labelOverlap' || key === 'labelSeparation') {
+      const overlap = l.labelOverlap != null ? l.labelOverlap : isRecord(env.config.legend) ? env.config.legend.labelOverlap : undefined
+      return symbols || !overlap ? 'never' : 'value'
+    }
+    if (key.startsWith('label')) {
+      const channel = LABEL_CHANNEL[key.slice(5)]
+      // (a symbol legend aligns its labels itself; the others do not take `labelAlign` or `labelBaseline`)
+      if (!symbols && (channel === 'align' || channel === 'baseline')) return 'never'
+      return channel !== undefined && sets(encode.labels, channel) ? 'never' : 'entry'
+    }
+    if (key.startsWith('symbol') || key === 'clipHeight') {
+      if (!symbols) return 'never'
+      const channel = SYMBOL_CHANNEL[key.slice(6)]
       // the legend's scale for the channel, or the author's encode of it, replaces the property
-      return symbols && !(scaled && l[scaled]) && !symbolEncoded(encoded) ? 'entry' : 'never'
+      return channel !== undefined && (l[channel] || sets(encode.symbols, channel)) ? 'never' : 'entry'
     }
     if (key === 'columns') return symbols ? 'entry' : 'never'
     if (key === 'gridAlign' || key === 'columnPadding' || key === 'rowPadding') return symbols ? 'layout' : 'never'
@@ -147,12 +143,11 @@ function legendReading(l: Rec, env: GuideEnv): (key: string) => Reading {
   }
 }
 
-const TITLE_NEVER = set('aria description zindex')
-const TITLE_SUBTITLE = /^subtitle(?!Padding)/
+// -- the title -----------------------------------------------------------------------------------------------------------------
 
 /** How the title's properties are read. */
 function titleReading(t: Rec): (key: string) => Reading {
-  return (key) => (TITLE_NEVER.has(key) ? 'never' : TITLE_SUBTITLE.test(key) && !t.subtitle ? 'never' : key === 'subtitle' && !t.subtitle ? 'never' : 'entry')
+  return (key) => (/^(aria|description|zindex)$/.test(key) || (/^subtitle/.test(key) && key !== 'subtitlePadding' && !t.subtitle) ? 'never' : 'entry')
 }
 
 export type GuideKind = 'axis' | 'legend' | 'title'
@@ -166,19 +161,11 @@ export function guideReading(kind: GuideKind, guide: Rec, env: GuideEnv): (key: 
   return kind === 'legend' ? legendReading(guide, env) : titleReading(guide)
 }
 
-/** The guide properties whose expression vega quotes inside a longer text; they are read, and quoted by themselves (see above). */
-export const WRAPPED: ReadonlySet<string> = set(
-  'bandPosition tickBand tickOffset tickSize gridScale labelFlush labelFlushOffset labelOffset labelPadding symbolOffset columns gradientLength',
-)
+// -- the size of the symbols of a legend ---------------------------------------------------------------------------------------
 
-// -- the size of the symbols of a legend -----------------------------------------------------------------------------------------
-
-/**
- * The entry a mark's encode blocks give a channel: what vega reads of the `update` block first and the `enter` block next, as a
- * signal's text or a value. `undefined` when the channel is in neither.
- */
-function encoded(channel: string, blocks: Rec | undefined): unknown {
-  const entry = (isRecord(blocks?.update) && (blocks.update as Rec)[channel]) || (isRecord(blocks?.enter) && (blocks.enter as Rec)[channel]) || undefined
+/** What the encode blocks give a channel: the text of a signal, or the value, read from `update` first and `enter` next. */
+function encoded(channel: string, blocks: Rec): unknown {
+  const entry = (isRecord(blocks.update) && (blocks.update as Rec)[channel]) || (isRecord(blocks.enter) && (blocks.enter as Rec)[channel]) || undefined
   return entry && (entry as Rec).signal ? (entry as Rec).signal : entry ? (entry as Rec).value : null
 }
 
@@ -189,30 +176,30 @@ function encoded(channel: string, blocks: Rec | undefined): unknown {
  * as the legend's entries are made, before any of its marks.
  */
 export function legendSizeExpression(l: Rec, env: GuideEnv): string {
-  const config = isRecord(env.config.legend) ? (env.config.legend as Rec) : {}
-  const encode = isRecord(l.encode) ? (l.encode as Rec) : {}
-  // a property is an entry of `update` when it is an object (a signal), a value of `enter` otherwise; the author's encode replaces it
-  const own = (name: string): unknown => (l[name] != null ? l[name] : config[name])
-  const base = (channel: string, name: string): Rec => {
-    const v = own(name)
-    return v == null ? {} : v !== null && typeof v === 'object' && (!Array.isArray(v) || (v.length > 0 && v[0] !== null && typeof v[0] === 'object')) ? { update: { [channel]: v } } : { enter: { [channel]: { value: v } } }
-  }
-  const merged = (defaults: Rec, user: unknown): Rec => {
-    const out: Rec = { enter: { ...(defaults.enter as Rec) }, update: { ...(defaults.update as Rec) } }
-    if (isRecord(user)) for (const block of ['enter', 'update'] as const) if (isRecord(user[block])) Object.assign(out[block] as Rec, user[block])
+  const config = isRecord(env.config.legend) ? env.config.legend : {}
+  const encode = isRecord(l.encode) ? l.encode : {}
+  /**
+   * What a mark's encode holds for the channels given, from the legend's property of each (the author's, else the config's) and
+   * then the author's own encode of the mark: a property that is an object (a signal) is an entry of `update`, any other value one of `enter`.
+   */
+  const blocks = (channels: Array<[channel: string, property: string]>, user: unknown): Rec => {
+    const out: Rec = { enter: {}, update: {} }
+    for (const [channel, property] of channels) {
+      const v = l[property] != null ? l[property] : config[property]
+      if (v == null) continue
+      if (typeof v === 'object' && (!Array.isArray(v) || (v.length > 0 && v[0] !== null && typeof v[0] === 'object'))) (out.update as Rec)[channel] = v
+      else (out.enter as Rec)[channel] = { value: v }
+    }
+    if (isRecord(user)) for (const block of ['enter', 'update']) if (isRecord(user[block])) Object.assign(out[block] as Rec, user[block])
     return out
   }
   const text = (v: unknown): string => String(v !== null && typeof v === 'object' && (v as Rec).signal ? (v as Rec).signal : v)
-  const symbols = merged(
-    { enter: { ...(base('size', 'symbolSize').enter as Rec), ...(base('strokeWidth', 'symbolStrokeWidth').enter as Rec) }, update: { ...(base('size', 'symbolSize').update as Rec), ...(base('strokeWidth', 'symbolStrokeWidth').update as Rec) } },
-    encode.symbols,
-  )
-  const labels = merged(base('fontSize', 'labelFontSize'), encode.labels)
+  const symbols = blocks([['size', 'symbolSize'], ['strokeWidth', 'symbolStrokeWidth']], encode.symbols)
+  const labels = blocks([['fontSize', 'labelFontSize']], encode.labels)
   const size = l.size ? `scale("${String(l.size)}",datum)` : text(encoded('size', symbols))
   const stroke = l.strokeWidth ? `scale("${String(l.strokeWidth)}",datum)` : text(encoded('strokeWidth', symbols))
-  const style = isRecord(env.config.style) && isRecord((env.config.style as Rec)['guide-label']) ? ((env.config.style as Rec)['guide-label'] as Rec).fontSize : undefined
-  const font = text(encoded('fontSize', labels) || style)
-  return `max(ceil(sqrt(${size})+${stroke}),${font})`
+  const style = isRecord(env.config.style) && isRecord(env.config.style['guide-label']) ? env.config.style['guide-label'].fontSize : undefined
+  return `max(ceil(sqrt(${size})+${stroke}),${text(encoded('fontSize', labels) || style)})`
 }
 
 /**
@@ -220,12 +207,12 @@ export function legendSizeExpression(l: Rec, env: GuideEnv): string {
  * number of columns and the padding between rows and columns (the author's, else the config's).
  */
 export function legendLayout(l: Rec, env: GuideEnv): Rec {
-  const config = isRecord(env.config.legend) ? (env.config.legend as Rec) : {}
-  const own = (name: string, fallback?: unknown): unknown => (l[name] != null ? l[name] : config[name] != null ? config[name] : fallback)
-  const direction = own('direction', config.symbolDirection)
+  const config = isRecord(env.config.legend) ? env.config.legend : {}
+  const own = (name: string): unknown => (l[name] != null ? l[name] : config[name])
+  const direction = l.direction != null ? l.direction : config.direction || config.symbolDirection
   return {
     align: own('gridAlign'),
-    columns: l.columns != null ? l.columns : config.columns != null ? config.columns : +(direction === 'vertical'),
+    columns: own('columns') ?? +(direction === 'vertical'),
     center: { row: true, column: false },
     padding: { row: own('rowPadding'), column: own('columnPadding') },
   }
