@@ -49,7 +49,7 @@ export function checkBrowserBench(results: BrowserResults, kinds: string[], page
     for (const metric of ['mount', 'update'] as const) {
       const a = embedOf(results, `${metric}:${kind}`, 'aster') as unknown as Summary | undefined
       const vegas = ['reactVega', 'embedHook'].map((e) => num((embedOf(results, `${metric}:${kind}`, e) as unknown as Summary | undefined)?.median))
-      const slowest = Math.max(...vegas)
+      const slowest = vegas.reduce((m, v) => (v > m ? v : m), 0)
       if (!a || !(num(a.median) > 0)) { out.push(`${kind}: aster ${metric} has no timing`); continue }
       if (!(slowest > 0)) { out.push(`${kind}: the Vega embeds produced no ${metric} timings to compare with`); continue }
       const ratio = a.median / slowest
