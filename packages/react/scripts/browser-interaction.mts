@@ -68,7 +68,7 @@ window.__mount = (spec, props, record, listen) => {
 `
 }
 
-const spec = (extra: Record<string, unknown> = {}): Record<string, unknown> => ({
+const baseSpec = (extra: Record<string, unknown> = {}): Record<string, unknown> => ({
   $schema: 'https://vega.github.io/schema/vega/v6.json',
   width: 400, height: 240, padding: 30, autosize: 'none',
   signals: [
@@ -89,6 +89,17 @@ const spec = (extra: Record<string, unknown> = {}): Record<string, unknown> => (
   } } }],
   ...extra,
 })
+
+/**
+ * The spec, with the signals of `extra` in place of the usual ones. The marks read `size` and `show`, which vega's parser requires to be
+ * declared: a spec that leaves them out declares them without a value (they stay undefined, as they did when nothing declared them).
+ */
+const spec = (extra: Record<string, unknown> = {}): Record<string, unknown> => {
+  const out = baseSpec(extra)
+  const declared = new Set((out.signals as Array<{ name: string }>).map((s) => s.name))
+  const missing = ['size', 'show'].filter((name) => !declared.has(name)).map((name) => ({ name }))
+  return missing.length ? { ...out, signals: [...(out.signals as unknown[]), ...missing] } : out
+}
 
 let failures = 0
 const check = (ok: boolean, message: string): void => {
