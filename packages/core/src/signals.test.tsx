@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi } from 'vitest'
-import { compileChart, evaluateChart, renderSceneToSvg } from './index.js'
+import { compileChart, evaluateChart, registerExpressionFunction, renderSceneToSvg } from './index.js'
 import { bindSceneSignals, parseEventSelector, stampDatumAttrs } from './signals.js'
 import type { VgSpec } from './types.js'
 
@@ -248,17 +248,51 @@ describe('signal event streams (C20)', () => {
     }
   })
 
-  it('a bad selector or expression is reported at bind time, the other handlers still bind', () => {
-    const t = bindSpec([
-      { name: 'bad', value: 0, on: [{ events: '[mousedown] > mousemove', update: '1' }] },
-      { name: 'badExpr', value: 0, on: [{ events: 'click', update: '1 +' }] },
+  it('a bad selector or expression refuses the spec when it is compiled, as vega.parse does; one that stops being valid later is reported at bind time and the other handlers still bind', () => {
+    const refused = (signals: unknown[]): Error => {
+      try {
+        compileChart({ width: 200, height: 100, signals, marks: [] } as unknown as VgSpec)
+      } catch (e) {
+        return e as Error
+      }
+      throw new Error('the spec compiled')
+    }
+    // (the selector and the expression, each alone: vega's message, a SpecParseError, before anything is drawn)
+    const selector = refused([{ name: 'bad', value: 0, on: [{ events: '[mousedown] > mousemove', update: '1' }] }])
+    expect(selector.name).toBe('SpecParseError')
+    expect(selector.message).toBe('Between selector must have two elements: [mousedown] > mousemove')
+    const syntax = refused([{ name: 'badExpr', value: 0, on: [{ events: 'click', update: '1 +' }] }])
+    expect(syntax.name).toBe('SpecParseError')
+    expect(syntax.message).toBe('Expression parse error: 1 +')
+    // (and one bad handler anywhere refuses the whole spec: the good ones next to it are not bound)
+    expect(refused([
       { name: 'good', value: 0, on: [{ events: 'click', update: 'good + 1' }] },
-    ])
-    expect(t.logs.filter((l) => l.startsWith('error:'))).toHaveLength(2)
-    expect(t.logs[0]).toContain('bad')
-    fire(t.svg, 'click')
-    expect(t.store.good).toBe(1)
-    t.binding.detach()
+      { name: 'badFilter', value: 0, on: [{ events: 'click[nosuch]', update: '1' }] },
+    ]).message).toBe('Unrecognized signal name: "nosuch"')
+    // a function that existed when the spec was compiled and is gone when its handlers are bound is a runtime matter
+    const dispose = registerExpressionFunction('goneByBindTime', () => 1)
+    const spec = {
+      width: 200, height: 100, marks: [],
+      signals: [
+        { name: 'gone', value: 0, on: [{ events: 'click', update: 'goneByBindTime()' }] },
+        { name: 'good', value: 0, on: [{ events: 'click', update: 'good + 1' }] },
+      ],
+    } as unknown as VgSpec
+    const chart = compileChart(spec)
+    dispose()
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    const scene = evaluateChart(chart)
+    host.innerHTML = renderSceneToSvg(scene)
+    const svg = host.querySelector('svg') as SVGSVGElement
+    const logs: string[] = []
+    const store: Record<string, unknown> = {}
+    const binding = bindSceneSignals(svg, scene, store, { logger: { error: (...a) => logs.push('error:' + a.join(' ')), warn: () => {} } })
+    expect(logs.filter((l) => l.startsWith('error:'))).toHaveLength(1)
+    expect(logs[0]).toContain('gone')
+    fire(svg, 'click')
+    expect(store.good).toBe(1)
+    binding.detach()
   })
 
   it('an expression that throws while handling an event is logged, never thrown out of the DOM listener', () => {

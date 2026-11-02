@@ -130,8 +130,10 @@ either, apart from the zero-size rect path, which is invisible).
 
 **Never recovered** (rethrown to the caller): `AsterLimitError`, `AsterUrlError`, `SpecParseError`, an expression that
 does not **parse** (`ExpressionParseError`; vega throws those from `vega.parse`), and any error whose message starts
-with `[aster]` (usage errors, the unsupported-feature errors below). For signal event handlers a malformed selector or
-an unparsable update is reported to the logger when the handlers are bound and that handler is skipped.
+with `[aster]` (usage errors, the unsupported-feature errors below). A handler of a signal that cannot be built (a
+malformed event selector, a bad update, a bad filter) is not recovered either: it refuses the spec when it is compiled,
+as `vega.parse` does (see "Expressions are refused when the spec is compiled" below). What is reported to the logger when
+the handlers are bound is only what changed since the compile: a function the host registered and then removed.
 
 ```ts
 import { renderSpec, type VgSpec } from '@aster/core'
@@ -149,12 +151,79 @@ const svg = renderSpec(spec, {
 console.log(reports.length, svg.includes('<svg')) // 1 true: the filter failed, the run carried on
 ```
 
+## Expressions are refused when the spec is compiled
+
+`vega.parse` reads every expression of a spec before a view exists and refuses the spec, whole, at the first one it cannot
+use. `compileChart` does the same, and so do `renderSpec`, `evaluateChart` of a spec, `useChart` and the mount of a `<Chart>`,
+at the same time, in the same order, with the same message. The error is a `SpecParseError` (an `Error`; vega throws a
+plain `Error`), thrown before anything is drawn and never recovered into a log entry. (The few refusals where vega fails with a
+message of the JavaScript engine, a call such as `upper()` with no argument, are `TypeError`s with that message, as in vega.) In
+the order vega meets them:
+
+| An expression that has | The message |
+|---|---|
+| a syntax error | `Expression parse error: <the text vega parsed>`. The text is what vega built from the spec: the expression itself for a `signal`, `update`, `expr` or filter; `(signal)` or `_scale("x", (signal))+(offset)` for an encode entry; `(a)&&(b)` for the filters of a stream; `if(trigger,modify("d",...),0)` for a data trigger |
+| a call that names data or a scale without a literal | `First argument to data functions must be a string literal.`, `First argument to indata must be a string literal.`, `Second argument to indata must be a string literal.`, `First argument to selection functions must be a string literal.` |
+| a call of a function vega does not know | `Unrecognized function: <name>` |
+| a call of something that is not a name, the identifier `_`, an object literal with a key every object has, `clamp` / `if` with other than three arguments | `Illegal callee type: <type>`, `Illegal identifier: _`, `Illegal property: <key>`, `Missing arguments to clamp function.` / `Too many arguments to if function.` |
+| a name that is no signal of the scope | `Unrecognized signal name: "<name>"` |
+
+The checks are made in that order within one expression (a syntax error before an unknown function, an unknown function
+before an unknown signal) and the expressions are met in vega's order: a scope's data sets and their transforms, scales,
+the signals with their handlers (the update, then the events, then the filters of each stream), axes, marks (a group's content
+in its own scope), legends, the title, and last the `{signal: text}` properties whose text names no signal, which are
+expressions of their own. A function is known when it is a built-in, a function registered with `registerExpressionFunction`,
+one of the add-ons' (loaded or not: see below), `if`, or an event function; names with an underscore are unknown but the three
+that vega's own encode entries are written with (`_scale`, `_bandwidth`, `_range`). A name is a signal of a scope when the spec,
+its config or a transform with a `signal` declared it before the expression (or after it, for a `{signal: text}` property), in
+that scope or one around it; a group also has `parent`, and a view has `width`, `height`, `padding`, `autosize` and
+`background`. The names every object has (`toString`, `constructor`) are signals everywhere, as upstream.
+
+Selectors and streams of a signal's `on` are refused the same way: `Signal update missing events specification.`, a
+selector the parser refuses (`Between selector must have two elements: ...`), `Invalid stream specification: ...`,
+`Stream "between" parameter must have 2 entries: ...`, `Unrecognized scale name: "<name>"` for a scale that triggers a
+handler, `Signal encode and update are mutually exclusive.`, `Invalid signal update specification.`.
+
+**Add-on functions.** A function of an add-on (`geoCentroid`, `sampleNormal`, `treePath`, ...) is known to the compile whether
+or not the add-on has been loaded: vega knows it, so the spec is not refused. When the add-on is not loaded the call fails
+when it is evaluated with `[aster] this spec calls the expression function "<name>"; load the addon first: ...`, as an unloaded
+transform does. `@aster/core/addons` finds the add-on from the same expressions before the spec is compiled, so a host that
+uses `loadAddonsFor`, `<Chart>` or the hooks never sees it. A spec that calls an unknown function *and* an add-on's is refused for
+the unknown one, whichever comes first.
+
+**Functions vega has and Aster does not implement** (`debug`, `info`, `warn`, `encode`, `flush`, `gradient`, `intersectLasso`,
+`lassoAppend`, `lassoPath`, `screen`) are not refused at compile (vega accepts them); calling one fails when it is evaluated with
+`Unrecognized function: <name>`. `isInvalid`, which Aster used to have and vega does not, is refused like any unknown function.
+
+**Transforms** are read through their definition, as vega does: the parameters in the order the definition lists them (so with two
+broken expressions in one transform the first of the definition is the one refused, whatever order the keys are written in), each by its
+kind (a field or a value that takes `{expr: text}` is parsed, one that does not is not; `filter: {signal: ...}` is `Expression
+references can not be signals.`), and a key the definition does not list is not read.
+
+**Guides.** An axis, a legend and the title are read as vega reads them, mark by mark: an expression in a property of a mark the
+guide does not have is not parsed, and so not refused (the `grid*` properties of an axis without gridlines, the `title*` ones of a
+guide without a title, `gradient*` on a symbol legend, `symbolSize` when the legend has a scale for the size or the author's
+`encode.symbols` sets it, `aria`, `description`, `zindex`, and the properties that only turn a feature on: `grid`, `ticks`,
+`labels`, `domain`). The size a symbol legend gives its entries (`max(ceil(sqrt(<size>)+<stroke width>),<font size>)`) and the layout
+of its entries (`gridAlign`, `rowPadding`, `columnPadding`) are written out and parsed as vega writes them, so a syntax error in
+`symbolSize`, `symbolStrokeWidth`, `labelFontSize` or `gridAlign` is quoted as vega quotes it. **Not reproduced:** vega writes the
+positions of a band, the offsets of ticks and labels, the flush of labels, the tick size, `gradientLength`, `gridScale`,
+`symbolOffset` and the number of columns into longer expressions that depend on the config, the orient and the scale; Aster reads
+them (an unknown function or signal in one is refused with vega's message) but quotes a syntax error in them as the author's text
+alone (`(1 +)`, where vega gives `round(_scale("x", datum["value"])+_bandwidth("x")*((1 +))+0)`). The order of two broken properties
+of one guide is that of the spec's keys, where vega's is that of the marks it makes.
+
+What the compile does not check: that a data set named by `indata(...)` or a selection function exists (the structural check of the
+spec, which runs first, reads the data sets of `from`, scales and transforms), a transform's missing required parameter (found
+when the transform runs), and the sandbox's own cases: the names every object has (`toString`, `constructor`, `hasOwnProperty`) are
+names like any other (upstream treats them as signals everywhere or fails on them with a message of the JavaScript engine).
+
 ## Unsupported and unknown features
 
-These are thrown by the **runtime** while the chart is evaluated, not by `compileChart`. The compiler only checks the
-shape of the spec (`[aster] compileChart expects a Vega spec object`, `[aster] spec.scales must be an array of scale
-definitions`, `[aster] a scale definition must be an object`); a spec with an unknown transform compiles and then fails
-on the first `renderSpec`/`evaluateChart`. They are plain `Error`s with an `[aster]` prefix and no `code`.
+These are thrown by the **runtime** while the chart is evaluated, not by `compileChart`. Besides the expressions (next
+section), the compiler only checks the shape of the spec (`[aster] compileChart expects a Vega spec object`, `[aster]
+spec.scales must be an array of scale definitions`, `[aster] a scale definition must be an object`) and the data set
+names; a spec with an unknown transform compiles and then fails on the first `renderSpec`/`evaluateChart`. They are plain `Error`s with an `[aster]` prefix and no `code`.
 
 | Situation | Error |
 |---|---|
@@ -175,21 +244,21 @@ reported through `onError` (the hook's `error`), and it is remembered for the pa
 
 ### Deliberate differences from Vega
 
-- **Unknown dataset names are fatal; unknown signal names are not.** An undeclared dataset used as a source (`from.data`,
+- **Unknown dataset and signal names are fatal.** An undeclared dataset used as a source (`from.data`,
   a scale domain) is `SpecParseError: Undefined data set name: "<name>"`, as `vega.parse`, from `compileChart` and so
   from every host. So is a name declared twice in one scope, `SpecParseError: Duplicate data set name: "<name>"`, with
   vega-parser's scoping: data sets, named marks, a facet's name, `root`, and every user-named mark a guide is made of
   (`encode.axis`, `encode.grid`, `encode.legend`, `encode.symbols`, ...) are data sets of the scope they are parsed in;
   a nested group owns its own names and may shadow its parents'. (Names such as `toString` crash vega's own parser;
-  Aster does not reproduce that.) `vega.parse` also throws on an unknown signal name (`Unrecognized signal name`); Aster renders such a
-  spec (the signal is `undefined`) without a report. An unknown scale `type` is not fatal either: vega throws at parse
+  Aster does not reproduce that.) An unknown signal name is `SpecParseError: Unrecognized signal name: "<name>"` at the same
+  time (see "Expressions are refused when the spec is compiled"). An unknown scale `type` is not fatal at compile: vega throws at parse
   time, Aster logs it and stops building scales (see the table above).
 - **Spec lists follow vega-util `array()`.** `data`, `scales`, `marks`, ... may be a lone object (a one-element list)
   or `null` (empty), as in `vega-parser`: `data: { values: [...] }` is accepted.
-- **Unknown expression functions are fatal, except in a signal `update`.** A call to an unknown function in a formula,
-  a filter or an encode `signal` throws `ExpressionParseError("Unrecognized function: <name>")` out of the
-  render, as vega's parser does. In a signal `update` expression it does not: the update is skipped, the signal keeps
-  its previous value, and nothing is reported (checked with a `logger`; vega throws from `parse`).
+- **Unknown expression functions are fatal, everywhere.** A call to a function vega does not know is
+  `SpecParseError("Unrecognized function: <name>")` out of `compileChart`, in a formula, a filter, an encode `signal`, a signal
+  `update` or the filter of an event stream alike, as vega's parser does. The functions vega has and Aster does not implement
+  are the exception, and fail where they are called (see above).
 - **Unknown projection type.** Without the geo addon Aster throws the "load the addon" error above. With it, an
   unrecognised projection type throws `Unrecognized projection type: <type>` (a plain `Error` without the `[aster]`
   prefix) out of the render, where vega logs the same message and renders without the projection.
@@ -214,9 +283,10 @@ reported through `onError` (the hook's `error`), and it is remembered for the pa
 - **Circular data reference** — named datasets cannot form a cycle: `[aster] circular data reference: <name>`.
 - **Scale domain with a non-string `data`** — `SpecParseError` (`Undefined data set name: ...`), as vega's parser.
 - **Unknown expression function** — a call to a name that is not a built-in, a registered function (see
-  `registerExpressionFunction`), `if` or an event function throws `ExpressionParseError("Unrecognized function:
-  <name>")` when the expression is compiled (vega: from its code generator). A function whose registration was
-  disposed is treated the same way, including by expressions compiled before the disposal.
+  `registerExpressionFunction`), an add-on's, `if` or an event function is `SpecParseError("Unrecognized function:
+  <name>")` when the spec is compiled (see "Expressions are refused when the spec is compiled"). A function whose
+  registration was disposed after the compile is `ExpressionParseError("Unrecognized function: <name>")` the next time an
+  expression compiled earlier runs (a handler of a signal, bound after the disposal, reports it to the logger).
 - **Expression functions** — `registerExpressionFunction` throws `[aster] registerExpressionFunction: "<name>" is not
   a plain identifier | is already an expression function, constant or keyword | needs a function`.
 - **`bin`** — `[aster] bin: cannot derive a step size from base, maxbins and the data span` where vega would loop

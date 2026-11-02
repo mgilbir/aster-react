@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+- **`@aster/core`: every expression of a spec is refused when the spec is compiled, as `vega.parse` refuses it** (same time, same message,
+  same order; a `SpecParseError`). It was only a syntax error in most places, and the handlers of signals were not looked at until they
+  were bound. Now `compileChart`, `renderSpec` and the mount of a `<Chart>` also refuse: the `on` handlers of signals (their updates,
+  event selectors, streams however nested with their filters, the signals and scales that trigger them, `encode` with `update`,
+  `init` with `update`); an unknown function (`Unrecognized function: foo`, in a signal `update` too) and an undeclared name
+  (`Unrecognized signal name: "x"`), with the scope rules of vega-parser (a group's signals and `parent`, the signals transforms
+  declare, the signals of the config, the five of every view); the refusals of vega's code generator (`Illegal callee type`,
+  `Illegal identifier: _`, `Illegal property`, `Missing arguments to clamp function.`, a call that needs a literal data or scale name);
+  the `on` triggers of named marks; and the expressions of a transform in the order of its definition, by the kind of each parameter.
+  A function of an add-on is known to the compile whether or not the add-on is loaded (it is asked for by `@aster/core/addons` and
+  fails, naming the add-on, when called without it). Properties of guides vega never reads are no longer refused, and a symbol legend's
+  size and layout expressions are quoted as vega quotes them (see docs/ERRORS.md for the few it does not).
+  Also: `isInvalid`, which vega does not have, is an unknown function; a spec whose expressions use a name it declares no signal for
+  (one a host supplies in `RuntimeInput.signals`, say) now fails to compile, where it used to render with the name undefined.
+
 - **`@aster/core` guides and layout: eight divergences from vega closed**, which the generated guide and grid differentials had been avoiding
   (they now draw all of them): an axis with explicit `values` formats its labels for one tick per value (a precision that follows the
   tick step, `e` among others, differed); `tickMinStep` acts only through the tick count (a log scale keeps ticks closer than it); an

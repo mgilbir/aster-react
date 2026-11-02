@@ -82,6 +82,28 @@ runtime's scales and data, to the owned type/array/string/math utilities (`util.
 
 Hosts add functions with `registerExpressionFunction` (vega's `expressionFunction`); see [API.md](API.md).
 
+**Expressions are refused at compile time, as `vega.parse` refuses them.** `compileChart` reads every expression of the spec
+before anything runs (`spec-expressions.ts`, called with the merged config) and throws a `SpecParseError` with vega's message
+for the first one vega's parser would refuse; the engine never gets as far as evaluating a spec with a syntax error, an
+unknown function or an undeclared signal. `spec-expressions.ts` walks the spec in the order vega-parser reads it (a scope's
+signals are known first, then projections and scales, data sets with their transforms, signals with their handlers, axes,
+marks, legends, the title, and the `{signal: text}` lambdas last) and keeps what the scope knows at each point (its signals and
+scales, those of the scopes around it, a group's `parent`, the signals transforms declare as they are met); the text of every
+site is built the way vega builds it (an encode entry, a rule list, a data trigger, the filters of a stream), because a syntax
+error quotes that text. `expr-check.ts` is the check of one text: parse, the calls that must name data or a scale, the code
+generator's refusals in tree order (unknown function, illegal callee, arity), and last the free names against the scope.
+Two tables say what vega reads: `transform-params.ts` (the parameters of each transform in the order of its definition, with the
+kind of each; a key the definition does not list is never read) and `guide-model.ts` (which properties of an axis, a legend and the
+title vega reads, as what, and in which marks the guide has; the size expression and the layout a symbol legend writes out).
+`expression.ts` answers "does vega know this function" (`isExpressionFunction`): the built-ins, the registry (host and add-ons),
+the add-ons' table (`addon-functions.ts`, so a function of an add-on that is not loaded yet is accepted by the compile and
+asked for by `@aster/core/addons`, which reads the same expressions, before the first evaluation) and the functions vega has that
+Aster has not written. What remains for bind time is what only a running chart knows: a function removed after the compile
+is reported by `signals.ts` to the logger while the other handlers still bind. The live differentials are
+`differential-parse-errors.test.mts` (every site of `expression-sites.mts` against `vega.parse`),
+`differential-expression-functions.test.mts` (every function name), `differential-transform-params.test.mts` (the table of transform
+parameters against the definitions of the pinned vega) and `jsdom-parse-errors-handlers.test.mts` (the handlers, compile and bind).
+
 Signals are values in the evaluation context. Signal `update` expressions are resolved to a fixed point in the runtime
 (`resolveSignalUpdates`), so a scale range/domain or an encoding can reference a derived signal. Event-driven
 `signal.on` handlers are real: `@aster/core/signals` reimplements the behaviour of `vega-event-selector` (its own `event-selector.ts`), `vega-view` and

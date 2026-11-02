@@ -141,8 +141,9 @@ off() // removes it
 ```
 
 `registerExpressionFunction` returns the function that removes the registration (restoring the one it replaced).
-As in vega's code generator, a call to a name that is not a function of the current context is refused when the
-expression is compiled, with `ExpressionParseError("Unrecognized function: <name>")`, not when the call is first
+As in vega's parser, a call to a name that is not a function of the current context is refused when the
+spec is compiled, with `SpecParseError("Unrecognized function: <name>")` (a function that is removed after the compile
+makes `ExpressionParseError("Unrecognized function: <name>")` the next time an expression compiled earlier runs), not when the call is first
 evaluated (the built-ins, the registered functions, `if` and the event functions `x`, `y`, `xy`, `item`, `group`,
 `view` are known). The check follows the registry: removing a registration (or replacing it) makes expressions
 compiled earlier re-validate the next time they run, so a call to a function you removed throws the same error
