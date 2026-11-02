@@ -45,7 +45,7 @@ import type {
 } from './types.js'
 import { gradientDefOf, hash53, isGradientPaint } from './svg-defs.js'
 import { tickFormat, scaleGradientStops, tickCount, validTicks } from './scale.js'
-import { timeIntervalFor, utcIntervalFor } from './time.js'
+import { DEFAULT_SPECIFIERS, UNIT_ORDER, timeIntervalFor, utcIntervalFor } from './time.js'
 import { compileChart } from './compiler.js'
 import { dict, ownGet, pushAll, sortData, lerp, scopedSignalName, heldSignalName, TUPLE_ID } from './util.js'
 import { applyImageUrlPolicy, applyLinkUrlPolicy, resolveImageUrl, type ImageUrlPolicy } from './url-policy.js'
@@ -5873,17 +5873,6 @@ function axisLabelFormat(axis: CompiledAxis, scale: Scale, count: number, ctx?: 
 // signals.  Mirrors vega-time/src/units.js `timeUnitSpecifier`.
 // ---------------------------------------------------------------------------
 
-const TU_ORDER: Record<string, number> = {
-  year: 1, quarter: 2, month: 3, week: 4, date: 5,
-  day: 6, dayofyear: 7, hours: 8, minutes: 9, seconds: 10, milliseconds: 11,
-}
-const TU_DEFAULTS: Record<string, string> = {
-  year: '%Y ', quarter: 'Q%q ', month: '%b ', date: '%d ',
-  week: 'W%U ', day: '%a ', dayofyear: '%j ',
-  hours: '%H:00', minutes: '00:%M', seconds: ':%S', milliseconds: '.%L',
-  'year-month': '%Y-%m ', 'year-month-date': '%Y-%m-%d ', 'hours-minutes': '%H:%M',
-}
-
 /**
  * Evaluate a `timeUnitSpecifier(["unit", ...], {overrides})` expression string.
  * Returns the resolved format string, or undefined when the string does not match.
@@ -5899,9 +5888,9 @@ function evalTimeUnitSpecifier(sig: string): string | undefined {
     try { overrides = JSON.parse(m[2]!) } catch { /* ignore */ }
   }
   const u = units.slice()
-    .filter((unit) => Object.hasOwn(TU_ORDER, unit))
-    .sort((a, b) => (TU_ORDER[a] ?? 99) - (TU_ORDER[b] ?? 99))
-  const s = { ...TU_DEFAULTS, ...overrides }
+    .filter((unit) => Object.hasOwn(UNIT_ORDER, unit))
+    .sort((a, b) => (UNIT_ORDER[a] ?? 99) - (UNIT_ORDER[b] ?? 99))
+  const s = { ...DEFAULT_SPECIFIERS, ...overrides }
   let fmt = ''
   let start = 0
   const n = u.length
