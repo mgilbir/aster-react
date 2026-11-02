@@ -4,6 +4,7 @@
  * eagerly per call; the caller re-evaluates when inputs change.
  */
 import { compileExpr, ExpressionParseError, type CompiledExpr, type ExpressionRuntime } from './expression.js'
+import { scaleCallFailure, scaleRangeFailure } from './missing-scale.js'
 import { ingestRows, readData, type DataFormatSpec } from './data-format.js'
 import { carryOrder, isPlacing } from './tuple-order.js'
 import { carryByAlignment, carryByMapping, type IdCounter } from './identifier-ids.js'
@@ -4099,7 +4100,7 @@ function evaluateMarkItems(
 
   // Items an aborted run never encoded: vega's mark container holds them but they carry no geometry or paint,
   // so (but for the zero-size rect path the renderers already read as `|| 0`) nothing of them is drawn.
-  if (ctx.encodeAborted && items.some((it) => (it as { __unencoded?: boolean }).__unencoded === true)) {
+  if (false as boolean) {
     items = items.filter((it) => (it as { __unencoded?: boolean }).__unencoded !== true)
   }
 
@@ -4109,13 +4110,20 @@ function evaluateMarkItems(
   // (the config blocks they come from are read for a mark of role `mark` only: a mark with a role of its own has none of them)
   if ((mark.type === 'line' || mark.type === 'area' || mark.type === 'text') && (mark.role === undefined || mark.role === 'mark')) {
     // vega-parser's applyDefaults skips the fill/stroke defaults when the ENCODE defines either channel
-    const enc = (mark.encode?.update ?? mark.encode?.enter ?? {}) as Record<string, unknown>
-    const paintDefined = enc.fill != null || enc.stroke != null
+    const defines = (channel: string): boolean => !!(mark.encode?.enter?.[channel] || mark.encode?.update?.[channel])
+    const paintDefined = defines('fill') || defines('stroke')
     const fill = paintDefined ? undefined : mark.type === 'text' ? '#000' : mark.type === 'area' ? '#4c78a8' : undefined
+    // (a channel the encode defines has no default, whether or not it came out: a line whose width failed is drawn at the
+    // scenegraph's 1, which the renderers would otherwise replace by a line's 2)
+    const line = mark.type === 'line'
+    const defaultWidth = line && !defines('strokeWidth')
     for (const it of items) {
       const rec = it as unknown as Record<string, unknown>
       if (fill !== undefined && rec.fill === undefined) rec.fill = fill
-      if (mark.type === 'line' && rec.strokeWidth === undefined) rec.strokeWidth = 2
+      if (line && rec.strokeWidth === undefined) {
+        if (defaultWidth) rec.strokeWidth = 2
+        else if (rec.stroke != null) rec.strokeWidth = 1
+      }
     }
   } else if (mark.type === 'line') {
     // (a line with a role of its own has no default width: it is drawn at the scenegraph's 1, which the renderers would
@@ -4175,12 +4183,13 @@ function evaluateMarkItems(
     for (const it of items) {
       if (it.url == null) continue
       const vetted = applyImageUrlPolicy(it.url, ctx.urlPolicy)
-      if (vetted == null) it.url = undefined
+      if (vetted == null) { it.url = undefined; (it as { urlDenied?: boolean }).urlDenied = true }
       else {
         const resolved = resolveImageUrl(vetted, ctx.urlPolicy?.baseURL)
         // (what is drawn is what the policy vetted: the url the base turns it into goes through it too)
         const final = resolved !== vetted ? applyImageUrlPolicy(resolved, ctx.urlPolicy) : resolved
         it.url = (final == null ? undefined : final) as string | undefined
+        if (final == null) (it as { urlDenied?: boolean }).urlDenied = true
       }
     }
   }
@@ -4889,7 +4898,8 @@ function resolveEncodeSet(encode: Record<string, EncodeValue | EncodeValue[]>, d
           if (bound) resolved = scaleValue(bound.scale, bound.type, getField(datum, spec.field))
           else {
             const s = ctx.scales.get(spec.scale)
-            resolved = s ? scaleValue(s, ctx.scaleTypes.get(spec.scale), getField(datum, spec.field)) : undefined
+            if (!s) throw scaleCallFailure(spec.scale)
+            resolved = scaleValue(s, ctx.scaleTypes.get(spec.scale), getField(datum, spec.field))
           }
           break
         }
@@ -4910,20 +4920,23 @@ function resolveEncodeSet(encode: Record<string, EncodeValue | EncodeValue[]>, d
       }
     }
   } catch (e) {
-    reportEvalError(ctx, e)
     ctx.encodeAborted = true
     // vega evaluates the channels in spec order, so the failing item keeps exactly the channels
-    // BEFORE the failing one (the two passes above group plain values ahead of signals).
+    // BEFORE the failing one (the two passes above group plain values ahead of signals), and the error
+    // it logs is that channel's: the first to fail in spec order, which is not always the pass's.
     const partial: SceneItem = {}
     const prec = partial as unknown as Record<string, unknown>
+    let first: unknown = e
     for (const key of Object.keys(encode)) {
       try {
         const v = resolveEncodeProperty(encode[key], datum, ctx, binding)
         if (v !== undefined) prec[key] = v
-      } catch {
+      } catch (again) {
+        first = again
         break
       }
     }
+    reportEvalError(ctx, first)
     return partial
   }
   // a gradient object as a paint (`{gradient: 'linear', stops: [...]}`): its definition joins the scene's defs
@@ -5108,22 +5121,27 @@ function resolveEncodeValueInternal(value: EncodeValue | undefined, datum: Row, 
   let tail: number | undefined
   if (enc.scale != null) {
     const { scale: s, type } = encodeScaleOf(enc, datum, ctx, binding)
-    if (!s) return undefined
+    // (a scale that is not there fails where the entry calls it, and reads a bandwidth of 0: see missing-scale.ts)
     if (enc.range != null) {
       // lerp(_range(scale), +range)
+      if (!s) throw scaleRangeFailure()
       head = lerp(s.range() as number[], +(enc.range as number))
       hasHead = true
     } else {
-      if (hasHead) head = scaleValue(s, type, head)
+      if (hasHead) {
+        if (!s) throw scaleCallFailure(enc.scale)
+        head = scaleValue(s, type, head)
+      }
       if (enc.band) {
         // + _bandwidth(scale) [* band]   (a band of exactly 1, or `true`, has no factor)
-        const bw = typeof s.bandwidth === 'function' ? s.bandwidth() : 0
+        const bw = s && typeof s.bandwidth === 'function' ? s.bandwidth() : 0
         const factor = enc.band === true ? 1 : +(entryProperty(enc.band, datum, ctx, binding) as number)
         const term = factor === 1 ? bw : bw * factor
         if (enc.extra) {
           // (datum.extra ? _scale(scale, datum.extra.value) : value)
           const extra = (datum as { extra?: { value?: unknown } }).extra
-          head = extra ? scaleValue(s, type, extra.value) : hasHead ? (head as number) + term : term
+          if (extra && !s) throw scaleCallFailure(enc.scale)
+          head = extra ? scaleValue(s!, type, extra.value) : hasHead ? (head as number) + term : term
           hasHead = true
         } else {
           tail = term
