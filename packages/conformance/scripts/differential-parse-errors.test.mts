@@ -7,7 +7,7 @@
  *
  * Every place a spec holds an expression (signals, formula/filter and field expressions of transforms, data triggers, encode
  * entries of marks and guides, and the `{signal: ...}` of any property; the handlers of signals are in
- * differential-parse-errors-handlers.test.mts) is given a series of broken expressions
+ * jsdom-parse-errors-handlers.test.mts) is given a series of broken expressions
  * and a series of good ones; Aster must refuse exactly when vega does, with vega's message, and accept what vega accepts.
  */
 import { describe, expect, it } from 'vitest'
