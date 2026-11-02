@@ -403,7 +403,20 @@ export function buildA11yTree(
     }
   }
   const rootScales = scales.size ? scales : scene.__scales ? scalesFromSnapshots(scene.__scales) : scales
-  for (const n of scene.items) walk(n, 0, 0, rootScales)
+  // the root group item is an item like any group's: `aria: false` hides everything, a description makes it a node of its own
+  const frame = scene.frameAria
+  if (frame?.aria !== false) {
+    if (frame && frame.description != null) {
+      nodes.push({
+        id: `group-${seq++}`, kind: 'group', marktype: 'group',
+        role: frame.ariaRole || 'graphics-object',
+        roleDescription: String(frame.ariaRoleDescription || 'group mark'),
+        label: String(frame.description),
+        x: scene.frameX ?? 0, y: scene.frameY ?? 0, width: Math.max(2, scene.plotWidth ?? scene.width), height: Math.max(2, scene.plotHeight ?? scene.height),
+      })
+    }
+    for (const n of scene.items) walk(n, 0, 0, rootScales)
+  }
 
   const summary = total > threshold ? `${total} marks in this chart. Zoom in or filter the data to explore individual marks.` : undefined
   return {
