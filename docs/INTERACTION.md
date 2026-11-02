@@ -337,8 +337,10 @@ mark that has more than `a11y.summaryThreshold` items, default 150), axis, legen
 `aria/description` channels, selected state, and continuous axes exposed as sliders. It is on by default; `a11y={false}`
 removes it. `ariaLabel` labels the container.
 
-It is a **roving tabindex** group: exactly one node has `tabindex=0` (the last focused node, else the first), all the
-others `-1`. `Tab` enters the group at that node and the next `Tab` leaves it. Inside:
+It is a **roving tabindex** group: exactly one a11y node has `tabindex=0` (the last focused node, else the first), all the
+others `-1`. `Tab` enters the group at that node and the next `Tab` leaves it. With `pan` or `zoom` enabled the chart
+container is a Tab stop of its own (`tabindex=0`, see "Pan and zoom"), ahead of the group, so such a chart has two:
+the container, then the one node. Inside:
 
 | Node | Keys |
 |---|---|
