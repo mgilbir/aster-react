@@ -24,6 +24,7 @@ import { fileURLToPath } from 'node:url'
 import { chromium } from 'playwright'
 import { summarize, table, fmt } from '../src/stats.js'
 import { ensureBuilt } from '../src/ensure-built.ts'
+import { checkStreamBench } from '../src/browser-floors.ts'
 
 const THIS_DIR = dirname(fileURLToPath(import.meta.url))
 const PKG_DIR = dirname(THIS_DIR)
@@ -68,7 +69,8 @@ const browser = await chromium.launch({
   args: ['--disable-dev-shm-usage', '--js-flags=--max-old-space-size=4096'],
 })
 const page = await browser.newPage()
-page.on('pageerror', (e) => console.error('[page]', e.message))
+const pageErrors = []
+page.on('pageerror', (e) => { console.error('[page]', e.message); pageErrors.push(e.message) })
 await page.goto(`file://${join(OUT_DIR, 'index.html')}`)
 await page.waitForFunction(() => '__streamBench' in window, null, { timeout: 30_000 })
 
@@ -121,3 +123,13 @@ console.log(
     ]),
   ),
 )
+
+// The floors (src/browser-floors.ts): a regression fails the run (and the nightly step), it does not just print a table.
+const failures = checkStreamBench(out, pageErrors)
+if (failures.length) {
+  console.error(`\n[bench:browser-stream] FAIL: ${failures.length} floor(s) crossed`)
+  for (const f of failures) console.error(`  - ${f}`)
+  process.exitCode = 1
+} else {
+  console.log('[bench:browser-stream] pass: every floor held')
+}
