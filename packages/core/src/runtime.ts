@@ -1455,13 +1455,6 @@ function computeGuidePadding(
   // overflow of the viewBounds on each side — no extra margin.
   // Epsilon guard: vega's rotated-text bounds land on exact integers where
   // our fp path can be off by 1 ulp; ceil would otherwise grow the padding.
-  if (typeof process !== 'undefined' && process.env.ASTER_DEBUG_PAD) {
-    for (const group of items) {
-      const b = measureGuideGroup(group)
-      console.error(`[pad] ${group.role ?? '?'} bounds=[${b.x1},${b.y1},${b.x2},${b.y2}] w=${width} h=${height}`)
-    }
-    console.error(`[pad] overflow L=${-minX} T=${-minY} R=${maxX - width} B=${maxY - height}`)
-  }
   return {
     left:   base.left   + Math.max(0, Math.ceil(-minX)),
     right:  base.right  + Math.max(0, Math.ceil(maxX - width)),
