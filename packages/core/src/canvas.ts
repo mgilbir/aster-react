@@ -1000,7 +1000,11 @@ function renderMark(type: string, group: SceneGroup, ctx: CanvasLike, scene: Sce
           const d = cachedSymbolPath(shape, r)
           const segs = parsePathData(d)
           const angle = ((it as Record<string, unknown>).angle as number) || 0
-          if (angle) buildInItemFrame(ctx, x, y, angle, 1, 1, () => tracePath(ctx, segs))
+          if (shape == null || shape === 'circle') {
+            // (vega draws a circle as one full-turn arc about the item's origin: the same curve as two half turns, rasterized
+            // a pixel or two differently by WebKit)
+            buildInItemFrame(ctx, x, y, angle, 1, 1, () => { ctx.moveTo(r, 0); ctx.arc(0, 0, r, 0, 2 * Math.PI, false) })
+          } else if (angle) buildInItemFrame(ctx, x, y, angle, 1, 1, () => tracePath(ctx, segs))
           else { ctx.beginPath(); tracePath(ctx, segs, x, y) }
           paintPath(ctx, segs, it, defs, 'auto', gradientBox(it))
         }

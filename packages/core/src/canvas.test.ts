@@ -344,9 +344,21 @@ function sameDrawing(a: string, b: string, rounding: number): boolean {
   return xs.length === ys.length && xs.every((x, i) => Math.abs(Number(x) - Number(ys[i])) <= rounding)
 }
 
-function diffRecords(a: DrawRecord[], b: DrawRecord[], rounding = 0): string[] {
+/**
+ * A circle is two half-turn arcs in an SVG path, and on the canvas one full-turn arc about its centre (a symbol, as vega draws it) or
+ * two half turns (a guide's): the same curve. Both are written as the recorder writes a full turn (`M<x+r>,<y>` then `CIRC`).
+ */
+function circleAsOneTurn(r: DrawRecord): DrawRecord {
+  const m = /^M(-?[\d.]+),(-?[\d.]+)A([\d.]+),\3,0,1,1,(-?[\d.]+),\2A\3,\3,0,1,1,\1,\2$/.exec(r.path)
+  if (m === null) return r
+  const cx = Number(m[1]) - Number(m[3])
+  return { ...r, path: `M${m[1]},${m[2]}CIRC(${String(Math.round(cx * 1000) / 1000)},${m[2]},${m[3]})` }
+}
+
+function diffRecords(svg: DrawRecord[], b: DrawRecord[], rounding = 0): string[] {
+  const a = svg.map(circleAsOneTurn)
   const ma = countMap(a)
-  const mb = countMap(b)
+  const mb = countMap(b.map(circleAsOneTurn))
   const onlyA: Array<[string, number]> = []
   const onlyB: Array<[string, number]> = []
   for (const [k, v] of ma) {

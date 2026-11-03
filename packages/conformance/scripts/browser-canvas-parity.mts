@@ -245,6 +245,36 @@ async function attachImages(nodes) {
   }
 }
 
+
+// A recorder of how a context is drawn on, in device space: the paths, the gradients and what is painted with them. It lets a gate
+// compare the CALLS of vega and of Aster (a rasterizer may hide a difference in them: WebKit drew a circle made of two half turns a
+// pixel differently from vega's one full turn).
+window.__rec = null
+{
+  const P = CanvasRenderingContext2D.prototype
+  const r6 = (v) => (typeof v === 'number' ? String(Math.round(v * 1e6) / 1e6) : typeof v)
+  const dev = (ctx, x, y) => { const m = ctx.getTransform(); return r6(m.a * x + m.c * y + m.e) + ',' + r6(m.b * x + m.d * y + m.f) }
+  // (a path counts where it is painted: what is traced and never filled or stroked paints nothing)
+  let cur = []
+  const put = (s) => { if (window.__rec) { if (/^(B|M|L|Z|A|C)/.test(s) && !s.startsWith('LG')) { if (s === 'B') cur = []; else cur.push(s) } else window.__rec.push(s) } }
+  const wrap = (name, f) => { const o = P[name]; P[name] = function (...a) { if (window.__rec) f(this, a); return o.apply(this, a) } }
+  wrap('beginPath', () => put('B'))
+  wrap('moveTo', (c, a) => put('M' + dev(c, a[0], a[1])))
+  wrap('lineTo', (c, a) => put('L' + dev(c, a[0], a[1])))
+  wrap('closePath', () => put('Z'))
+  // (arc with a false last argument and arc without one are one call: clockwise)
+  wrap('arc', (c, a) => put('A' + dev(c, a[0], a[1]) + ',' + a.slice(2).filter((v) => v !== false && v !== undefined).map(r6).join(',')))
+  wrap('bezierCurveTo', (c, a) => put('C' + dev(c, a[0], a[1]) + ' ' + dev(c, a[2], a[3]) + ' ' + dev(c, a[4], a[5])))
+  wrap('rect', (c, a) => { const [x, y, w, h] = a; put('M' + dev(c, x, y)); put('L' + dev(c, x + w, y)); put('L' + dev(c, x + w, y + h)); put('L' + dev(c, x, y + h)); put('Z') })
+  wrap('fill', () => put('F[' + cur.join(' ') + ']'))
+  wrap('stroke', () => put('S[' + cur.join(' ') + ']'))
+  wrap('createLinearGradient', (c, a) => put('LG' + dev(c, a[0], a[1]) + ' ' + dev(c, a[2], a[3])))
+  wrap('createRadialGradient', (c, a) => put('RG' + dev(c, a[0], a[1]) + ',' + r6(a[2]) + ' ' + dev(c, a[3], a[4]) + ',' + r6(a[5])))
+  const G = CanvasGradient.prototype
+  const addStop = G.addColorStop
+  G.addColorStop = function (o, c) { put('stop' + r6(o) + c); return addStop.call(this, o, c) }
+}
+
 window.__runCanvas = async (entry) => {
   try {
     const spec = entry.spec
@@ -260,7 +290,12 @@ window.__runCanvas = async (entry) => {
     host.style.height = CONTAINER.height + 'px'
     document.body.appendChild(host)
     // (vega changes the rows of an inline dataset in place -- a force layout rewrites its link rows -- so it gets a copy)
+    // (the calls are compared for the gradient entries)
+    const callLevel = String(entry.name).startsWith('canvas-gradient-')
+    if (callLevel) window.__rec = []
     const result = await embed(host, structuredClone(isVl ? spec : loaded), { actions: false, renderer: 'canvas' })
+    const vegaCalls = callLevel ? window.__rec : null
+    window.__rec = callLevel ? [] : null
     const oracleCanvas = host.querySelector('canvas')
     if (!oracleCanvas) throw new Error('oracle produced no canvas')
     const a = pixels(oracleCanvas)
@@ -276,8 +311,15 @@ window.__runCanvas = async (entry) => {
     ours.height = scene.height
     renderSceneToCanvas(scene, ours.getContext('2d'))
     const b = pixels(ours)
+    const asterCalls = callLevel ? window.__rec : null
+    window.__rec = null
+    let callDiff = null
+    if (callLevel) {
+      const n = Math.max(vegaCalls.length, asterCalls.length)
+      for (let i = 0; i < n; i++) if (vegaCalls[i] !== asterCalls[i]) { callDiff = 'call ' + i + ': vega ' + vegaCalls[i] + ' vs aster ' + asterCalls[i]; break }
+    }
     const d = diff(a, b)
-    return { ...d, pass: !d.error && d.ratio <= RATIO && d.mean <= MEAN }
+    return { ...d, callDiff, pass: !d.error && d.ratio <= RATIO && d.mean <= MEAN && callDiff === null }
   } catch (err) {
     return { pass: false, error: err instanceof Error ? err.message : String(err) }
   }
@@ -316,7 +358,7 @@ for (let i = 0; i < entries.length; i++) {
     return (window as unknown as { __runCanvas: (e: Entry) => Promise<{ pass: boolean; error?: string; ratio?: number; mean?: number }> }).__runCanvas(es[idx]!)
   }, i)
   if (r.pass) pass++
-  else failures.push({ name: entries[i]!.name, error: r.error, ratio: r.ratio, mean: r.mean })
+  else failures.push({ name: entries[i]!.name, error: r.error ?? (r as { callDiff?: string }).callDiff ?? undefined, ratio: r.ratio, mean: r.mean })
   if ((i + 1) % 25 === 0) console.log(`  ${i + 1}/${entries.length} (${((Date.now() - t0) / 1000).toFixed(0)}s)`)
 }
 await browser.close()
