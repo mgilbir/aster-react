@@ -12,7 +12,7 @@ import { densityGrid, placeContours } from './raster-grid.js'
 import { accessorOf, densitySettings } from './raster-params.js'
 import { PARAM_RULES, checkParams } from './param-rules.js'
 import { tickStep } from './arr.js'
-import { carryOrder, orderOf, placesAt, recordNextOrder, takeRecording } from './tuple-order.js'
+import { carryOrder, orderOf, placesAt } from './tuple-order.js'
 import { activeMeter, boundedCount } from './limits.js'
 import { walkPostOrder, walkPreOrder } from './tree-walk.js'
 import { aggregateRows, type AggregateParams, compareOf, fieldOf, joinAggregateRows, pivotRows, sortBySpec } from './transform-agg.js'
@@ -155,10 +155,8 @@ export function applyTransforms(
     const ownedIn = owned
     owned = ownsOutput(t, ownedIn)
     // (a collect that sorts, with a sort after it, leaves the order the rows were made in beside its result)
-    if (placesAt(transforms, k)) recordNextOrder()
     const input = out
-    out = applyTransform(out, t, run, sourceName, ownedIn)
-    takeRecording()
+    out = applyTransform(out, t, run, sourceName, ownedIn, placesAt(transforms, k))
     carryOrder(t.type, input, out)
     if (meter) {
       // Whatever a transform produced is a dataset like any other: it may not
@@ -215,7 +213,7 @@ function resolveSignalParams(t: CompiledTransform, ctx: TransformContext): Compi
   return resolve(t, 0) as CompiledTransform
 }
 
-function applyTransform(rows: Row[], t0: CompiledTransform, ctx: TransformContext, sourceName: string | undefined, owned: boolean): Row[] {
+function applyTransform(rows: Row[], t0: CompiledTransform, ctx: TransformContext, sourceName: string | undefined, owned: boolean, leaveOrder: boolean): Row[] {
   const rules = PARAM_RULES.get(t0.type as string)
   if (rules) checkParams(t0 as Record<string, unknown>, rules)
   const t = resolveSignalParams(t0, ctx)
@@ -237,7 +235,7 @@ function applyTransform(rows: Row[], t0: CompiledTransform, ctx: TransformContex
       return rows.filter((r) => expr(r))
     }
     case 'collect':
-      return collectRows(rows, t)
+      return collectRows(rows, t, leaveOrder)
     case 'sample':
       return sampleRows(rows, t, ctx.runtime.random)
     case 'fold':

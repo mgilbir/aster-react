@@ -113,6 +113,8 @@ import { fileURLToPath } from 'node:url'
 // Chart + VL 283.5 (+2.0 over 281.5); the other rows stay inside their ceilings.
 // Landed together with #71-#74 (guide edges, arc outline, vl repeat/tables, vl compile gaps), measured on the merged tree (kB gzip):
 // Chart + VL 288.5 (+7.0 over main's 281.5); core 140.8 (ceiling 140.9 unchanged).
+// After #76 (role-gated config, mark-type bounds) and #77 (identifier pass consistency) landed together, measured on main (kB gzip):
+// Chart + VL 289.0, at its 289.0 ceiling; the ceiling follows to 289.5. core 141.1 (ceiling 141.5).
 // The geo engine as geometry event buffers (geo-events / geo-clip / geo-resample / geo-path / geo-projections ...: more, smaller
 // modules, the sinks and the albersUsa interleave in place of d3's shared stream objects), measured (kB gzip): geo marginal 15.4
 // (+1.1 over 14.3); core 138.1 and the other rows did not move.
@@ -120,11 +122,16 @@ import { fileURLToPath } from 'node:url'
 // that need no cutting, the point and rectangle fast paths), after one walker for the measuring sinks and one placement base for the
 // projections took out what they duplicated, then the batched sinks and the rectangle pass-through (a clip with nothing to cut hands
 // its events on): geo marginal 16.3 (16.254; +0.9 over 15.4, none of it one piece: the antimeridian pass-through alone is 0.07).
+// The ARIA of guides and marks over the parameter space (the root group item's channels, the mark roles, the config lookup),
+// measured (kB gzip): core 141.0 (+0.2 over main's 140.8; ceiling 141.5); the other rows stay inside their ceilings.
 // Ceiling = the measure + 0.5.
 // Kept dataset steps (step-reuse.ts: what a step reads, so a re-evaluation keeps the rows of the steps whose inputs did not move; the
 // run of steps written as one; the group scopes' kept pipelines; the session's account of which host datasets are unchanged), measured
 // (kB gzip): core 143.4 (+3.2 over 140.2), useChart 150.5 (+3.5 over 147.0), Chart 191.3 (+3.6), SvgChart 168.6 (+3.5), SvgChart +
 // interaction 185.9 (+3.4), Chart + VL 287.0 (+3.5 over 283.5); the marginal rows did not move enough to cross theirs.
+// #80-#83 land together (test strength, runtime leftovers, one tab stop, vl UTC); the ceilings are set here, in the first of them,
+// from the measure of the four merged (kB gzip): core 141.5, useChart 148.4, Chart 189.6, SvgChart 166.9, SvgChart + interaction 184.2,
+// Chart + VL 290.6; each is measured + 0.5, so every commit on main between them stays inside its ceiling.
 // Kept dataset steps on top of main (guides and layout, #71-#75), measured (kB gzip): core 144.0, useChart 151.1, Chart 192.0,
 // SvgChart 169.2, SvgChart + interaction 186.4, Chart + VL 292.1; the rest of the work of the section above is in these figures.
 const BUDGETS = {

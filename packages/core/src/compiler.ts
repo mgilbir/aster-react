@@ -133,7 +133,7 @@ export function compileChart(givenSpec: VgSpec): CompiledChart {
     frameStrokeCap,
     frameStrokeJoin,
     ...((typeof (cfg.legend as { layout?: unknown } | undefined)?.layout === 'object' && (cfg.legend as { layout?: unknown }).layout !== null) ? { legendLayout: (cfg.legend as { layout: Record<string, unknown> }).layout } : {}),
-    ...(spec.encode !== undefined ? { frameEncode: { ...((spec.encode as { enter?: object }).enter ?? {}), ...((spec.encode as { update?: object }).update ?? {}) } as NonNullable<CompiledChart['frameEncode']> } : {}),
+    ...frameEncodeOf(spec),
     data,
     scales,
     axes,
@@ -198,6 +198,21 @@ function frameStyleValue(spec: VgSpec, prop: string): unknown {
     if (block && prop in block) v = block[prop]
   }
   return v
+}
+
+/**
+ * The view's own `encode` (`enter` under `update`), under the ARIA defaults the root frame takes from `config.group` and its
+ * styles (vega-parser applyDefaults: a default is overridden by the encode's channel). Undefined when there is neither.
+ */
+function frameEncodeOf(spec: VgSpec): { frameEncode: NonNullable<CompiledChart['frameEncode']> } | undefined {
+  const own = spec.encode as { enter?: object; update?: object } | undefined
+  const aria: NonNullable<CompiledChart['frameEncode']> = {}
+  for (const k of ['description', 'aria', 'ariaRole', 'ariaRoleDescription']) {
+    const v = frameStyleValue(spec, k)
+    if (v !== undefined) aria[k] = (v !== null && typeof v === 'object' && 'signal' in v ? { signal: (v as { signal: string }).signal } : { value: v }) as EncodeValue
+  }
+  if (own === undefined && Object.keys(aria).length === 0) return undefined
+  return { frameEncode: { ...aria, ...(own?.enter ?? {}), ...(own?.update ?? {}) } as NonNullable<CompiledChart['frameEncode']> }
 }
 
 /** The cell background fill. */
@@ -530,6 +545,8 @@ function compileTitle(value: unknown, config?: Record<string, unknown>): Compile
 function applyConfigDefaults(o: Record<string, unknown>, defaults: Record<string, unknown>, scales?: CompiledScale[], isLegend = false): Record<string, unknown> {
   if (!defaults || typeof defaults !== 'object') return o
   const out: Record<string, unknown> = { ...defaults, ...o }
+  // (a property the spec leaves null is as good as one it omits: the config's value stands in -- vega-parser's `lookup`)
+  for (const k in o) if (o[k] === null && defaults[k] != null) out[k] = defaults[k]
   // `position` is read as `spec.position` in vega's buildAxisEncode — never
   // through the `lookup(spec, config)` — so a config block's copy is dead
   // upstream.  Drop it too, or a config theme would reshift every axis.
@@ -552,6 +569,14 @@ function applyConfigDefaults(o: Record<string, unknown>, defaults: Record<string
   out.own = o
   out.cfg = defaults
   return out
+}
+
+/**
+ * The role vega's parser gives a mark, as far as the config goes: a group mark is a `scope` whatever it is called, a data
+ * mark is a `mark` unless the spec names another role (a guide's role, `frame`, anything).
+ */
+function markRoleOf(m: Record<string, unknown>): string {
+  return m.type === 'group' ? 'scope' : (typeof m.role === 'string' && m.role) || 'mark'
 }
 
 /**
@@ -578,12 +603,16 @@ function applyStyleDefaults(m: Record<string, unknown>, cfgStyle: Record<string,
   const markProps: Record<string, unknown> = {}
   // vega's generic mark block (config.mark) seeds every mark's defaults;
   // the per-marktype block (config.arc etc.) then overrides.
-  if (cfgMarktype) {
+  // (only a mark whose role is `mark` takes them -- a group mark, a mark of a guide's role and one with a role of its own
+  // do not; a mark the spec calls the `frame` takes `config.group`, as the view's root group does)
+  const role = markRoleOf(m)
+  if (cfgMarktype && role === 'mark') {
     const gm = cfgMarktype['mark']
     if (gm && typeof gm === 'object') Object.assign(markProps, gm)
-  }
-  if (m.type && cfgMarktype) {
-    const st = ownGet(cfgMarktype, String(m.type))
+    const st = m.type ? ownGet(cfgMarktype, String(m.type)) : undefined
+    if (st && typeof st === 'object') Object.assign(markProps, st)
+  } else if (cfgMarktype && role === 'frame') {
+    const st = ownGet(cfgMarktype, 'group')
     if (st && typeof st === 'object') Object.assign(markProps, st)
   }
   sources.push({ props: markProps, pairGuard: true })

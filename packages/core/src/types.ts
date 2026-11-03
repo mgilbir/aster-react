@@ -654,6 +654,8 @@ export interface SceneRoot {
   /** Where the root group sits inside the padding (the view `encode`'s x / y; default 0). */
   frameX?: number
   frameY?: number
+  /** The root group item's own aria channels (the view `encode`'s, or `config.group`'s): `description`, `aria`, `ariaRole`, `ariaRoleDescription`. */
+  frameAria?: Pick<SceneItem, 'description' | 'aria' | 'ariaRole' | 'ariaRoleDescription'>
   /** @internal The expression runtime for this evaluation (event-loop wiring). */
   runtime?: unknown
   /** @internal The compiled chart for this evaluation. */

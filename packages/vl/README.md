@@ -110,40 +110,38 @@ an expression or a generated dataset/signal/scale name.
 ## Throws (not supported)
 
 Everything below throws a `VLCompileError` naming the feature and its path; nothing is silently
-ignored.
+ignored. (The list is what `compile` refuses today, checked one spec per line against the build; a feature that
+vega-lite supports and is not here compiles to the same Vega.)
 
 - Params and selections that vega-lite itself compiles to a Vega spec that Vega rejects or that has no well-defined meaning:
   on a layer spec itself, or on a concat / facet / repeat that has a layer or a composite mark (boxplot, errorbar,
   errorband) below it (vega-lite gives every unit a copy of the selection's signals, and the layers would declare them
   twice in one Vega scope), on a composition whose units have params of their own (vega-lite replaces a unit's
-  parameters with the inherited ones), with `views` (restricting a composition's selection to some of its views), on a
-  named view, or on a path mark with an overlay (`mark.point` / `mark.line`: write the layers). Also: `bin.extent` as a parameter; a lookup from a selection of the same unit or of a later layer;
-  `scale.domain.unionWith` in a layered spec; a parameter's `push`.
-- Maps in a facet (`row` / `column` / `facet`, or a facet operator): vega-lite 6.4.3 fits the projection to
-  `data("child_main")`, a dataset it never defines, so there is no output to match. Longitude / latitude
+  parameters with the inherited ones), and with `views` (restricting a composition's selection to some of its views).
+  Also: `bin.extent` as anything but a `[min, max]` pair or a `{param}` reference; a lookup from a selection of the same
+  unit or of a later layer; `scale.domain.unionWith` in a layered spec; a parameter's `push`.
+- Maps: a geoshape without a `shape` field inside a facet (vega-lite 6.4.3 fits the projection to
+  `data("child_main")`, a dataset it never defines, so there is no output to match). Longitude / latitude
   positions on marks other than point, circle, square, text, line, trail and rule; a half pair
-  (only `longitude`); the `sequence` data generator.
+  (only `longitude`).
 - Animation outside the one shape vega-lite 6.4.3 compiles to working output: a `time` channel needs a single
   top-level unit with exactly one timer selection and the `{filter: {param}}` transform (without them vega-lite
   emits marks that read a dataset it never defines); layers, concats, facets, composite marks
-  (boxplot / errorbar / errorband) and point / line overlays are refused, as are other keys on the `time`
-  definition and `bind` / `value` on the timer selection.
-- Data-driven channels without a scale / legend implementation yet: `strokeDash`, `angle`,
-  `fillOpacity`, `strokeOpacity` (constants and conditions work); `key`.
-- Bins and time units: `bin: "binned"` / `binned: true` (pre-binned data), `timeUnit.maxbins`,
-  `timeUnit.binned`, a bin or time-unit on a text / tooltip / href channel, errorbar / errorband over
-  a binned channel or with argmin / argmax; `timeUnitBandPosition` / `timeUnitBandSize` mark keys.
-- Scales and encodings: `scale: null`, channel-level `impute` and `band`,
-  `size` constants or conditions on bars and ticks (a size *field* works), `x`/`y`/`x2`/`y2`/
-  `theta`/`theta2`/`radius2` mark-def constants.
-- Layout: `width` / `height: "container"` on a composition (only a top-level unit or layer),
-  data generators (`sequence`, `sphere`, `graticule`) and `data: null`, config keys outside the
-  supported list, nestings outside `SUPPORTED_NESTING` (a facet inside a facet, a concat inside a
-  layer: the Vega-Lite schema forbids both), layer repeats combined with row / column, layers
-  whose scales are incompatible or conflict, a facet of layers over different data, horizontal
-  boxplots, `argmax` / `argmin` as an op of an `aggregate` or `window` transform (and as a channel
-  aggregate of a composite mark), `regression` `params: true`, key-value `keyvals` ranges, sort
-  arrays of DateTime objects.
+  (boxplot / errorbar / errorband) and point / line overlays are refused, as are `bind` / `value` on the timer
+  selection.
+- Data-driven channels without a scale / legend implementation yet: `fillOpacity` and `strokeOpacity` (constants and
+  conditions work); `key`.
+- Bins and time units: `timeUnit.maxbins`, errorbar / errorband over a binned channel, and the
+  `timeUnitBandPosition` / `timeUnitBandSize` mark keys.
+- Scales and encodings: `scale: null` and channel-level `band`; `size` conditions on bars and ticks (a size constant
+  or field works); the positional mark-def constants `x` / `x2` / `y` / `y2`, except `x` / `y` on point, circle,
+  square and text.
+- Layout: `width` / `height: "container"` on a composition (only a top-level unit or layer), `data: null`, config keys
+  outside the supported list, a wrapped facet (a single `facet` field) around or inside another facet, a selection or
+  a map inside a facet inside a facet, independent x / y scales in a facet that holds another facet, a concat in a
+  layer (the Vega-Lite schema forbids it), layer repeats combined with row / column, layers whose scales are
+  incompatible or conflict, a facet of layers over different data, `argmax` / `argmin` as an op of a `window`
+  transform, sort arrays of DateTime objects.
 
 ## Known runtime gaps (Aster, not the compiler)
 

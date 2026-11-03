@@ -1085,8 +1085,9 @@ function ChartView({
   }, [displayScene, a11yOpts, chartInfo])
   const a11yNodesRef = React.useRef<A11yNode[]>([])
   a11yNodesRef.current = a11yTree?.nodes ?? []
-  // Roving tabindex: exactly one node is a tab stop (the last focused one, else
-  // the first); arrows / PageUp / PageDown move between nodes.
+  // Roving tabindex: exactly one a11y node is a tab stop (the last focused one, else
+  // the first); arrows / PageUp / PageDown move between nodes. (The container is a
+  // tab stop of its own while pan or zoom is enabled: see its tabIndex below.)
   const a11yNodes = a11yTree?.nodes
   const tabStopId = a11yNodes?.some((n) => n.id === activeA11yId) ? activeA11yId : (a11yNodes?.[0]?.id ?? null)
 

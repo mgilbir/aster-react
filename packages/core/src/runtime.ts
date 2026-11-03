@@ -215,6 +215,8 @@ interface EvalTxn {
    * {@link DataStability}): the steps made from them need not run again.
    */
   unchanged?: DataStability
+  /** What the pass of this evaluation before the one being made left (a view that fits its viewport makes two passes). */
+  lastPass?: IncrementalState
 }
 
 /** Source dataset name -> the rows the previous evaluation was given for it, when this evaluation's are equal to them. */
@@ -488,6 +490,8 @@ interface EvalContext {
   prev?: IncrementalState
   /** The host datasets whose rows equal those `prev` was made from (see {@link DataStability}). */
   unchanged?: DataStability
+  /** The state the pass before this one left (see `EvalTxn.lastPass`). */
+  earlier?: IncrementalState
   /** The state this evaluation builds; committed by the caller on success. */
   draft: IncrementalState
   /** The view's id counter: where it stood when the evaluation began (`idStart`) and where it stands (see identifier-ids.ts). */
@@ -658,7 +662,7 @@ function prepareChartCtx(
     ]),
     hierarchies: transformHierarchies, affected: new Set(), incremental: false, deadline, checkDeadline, markItems: new Map(), markContainers: new Map(),
     datasetPulses: new Map(),
-    prev: txn.prev, ...(txn.unchanged ? { unchanged: txn.unchanged } : {}), draft: newState(txn.gen), ids: { value: txn.prev?.idCounter ?? 0 }, idStart: txn.prev?.idCounter ?? 0, gen: txn.gen, claimed: txn.claimed, extraFp, dsEpoch: 0, scaleReuse: new Map(), distinctCache: new WeakMap(),
+    prev: txn.prev, ...(txn.unchanged ? { unchanged: txn.unchanged } : {}), ...(txn.lastPass ? { earlier: txn.lastPass } : {}), draft: newState(txn.gen), ids: { value: txn.prev?.idCounter ?? 0 }, idStart: txn.prev?.idCounter ?? 0, gen: txn.gen, claimed: txn.claimed, extraFp, dsEpoch: 0, scaleReuse: new Map(), distinctCache: new WeakMap(),
     domainRaw: input.domainRaw ? new Map(Object.entries(input.domainRaw).map(([k, v]) => [k, v])) : undefined,
     // Image urls are vetted when the host passes a policy, and with the default
     // policy whenever it passes `limits` (limits mean "this spec is untrusted").
@@ -778,6 +782,7 @@ function prepareChartCtx(
   // The final context fingerprint: the next evaluation compares its own
   // (scale, mark) inputs against this to decide whether reuse is valid.
   ctx.draft.fp = ctxFpOf(ctx)
+  txn.lastPass = ctx.draft
 
   return { ctx, width, height }
 }
@@ -1513,7 +1518,7 @@ function frameEncodeOf(ctx: EvalContext): FrameEncode | undefined {
     ['strokeDashOffset', 'frameStrokeDashOffset'], ['strokeCap', 'frameStrokeCap'], ['strokeJoin', 'frameStrokeJoin'], ['cornerRadius', 'frameCornerRadius'], ['clip', 'frameClip'],
   ]
   for (const [from, to] of PAINT) if (geo[from] !== undefined) paint[to] = geo[from]
-  return { x: num(geo.x) ?? 0, y: num(geo.y) ?? 0, paint: paint as Partial<SceneRoot> }
+  return { x: num(geo.x) ?? 0, y: num(geo.y) ?? 0, paint: paint as Partial<SceneRoot>, aria: itemAriaOf(geo) }
 }
 
 /** Walk every string reachable in a JSON-ish value (cycle-safe). */
@@ -1836,7 +1841,7 @@ function paintOrderOf(items: SceneGroup[]): SceneGroup[] {
 type BuiltContent = { record: PassRecord | undefined; items: SceneGroup[]; padding: ReturnType<typeof computeGuidePadding>; ctx: EvalContext; width: number; height: number; hasLayout: boolean; frame: FrameEncode | undefined }
 
 /** What the view's own `encode` gives the root group: where it sits, and the paint of its box (see frameEncodeOf). */
-interface FrameEncode { x: number; y: number; paint: Partial<SceneRoot> }
+interface FrameEncode { x: number; y: number; paint: Partial<SceneRoot>; aria: SceneRoot['frameAria'] }
 
 /**
  * The content of the view. A failing axis (axisTicksFailed) aborts vega's dataflow pass at the operator that failed: the
@@ -2122,7 +2127,7 @@ function evaluateChartImpl(chart: CompiledChart, hostInput: RuntimeInput, txn: E
     frameStrokeJoin: ctx.chart.frameStrokeJoin,
     padding: ctx.chart.autosize === 'none' ? ctx.chart.padding : padding,
     items,
-    ...(built.frame ? { ...built.frame.paint, ...(built.frame.x !== 0 ? { frameX: built.frame.x } : {}), ...(built.frame.y !== 0 ? { frameY: built.frame.y } : {}) } : {}),
+    ...(built.frame ? { ...built.frame.paint, ...(built.frame.x !== 0 ? { frameX: built.frame.x } : {}), ...(built.frame.y !== 0 ? { frameY: built.frame.y } : {}), ...(built.frame.aria !== undefined ? { frameAria: built.frame.aria } : {}) } : {}),
   }
   // Event-loop wiring (non-serialized internals)
   ;(scene as unknown as { runtime?: unknown }).runtime = ctx.runtime
@@ -3456,7 +3461,11 @@ function buildDatasetsOf(ctx: EvalContext, inputData: Record<string, unknown[]>)
       // pulse, the previous state was built under identical params from an input
       // of the length the pulse is relative to, and no earlier pass of THIS
       // evaluation already updated that state in place.
-      const incremental = ctx.incremental && inPulse !== null && !inPulse.full && prevDS !== undefined
+      // A pass of an evaluation numbers the rows of an `identifier` as the pass before it did (a view that fits its viewport builds its
+      // content twice): whichever route numbered them first, the others carry its numbers, and do not number them again by theirs.
+      const hasIds = d.transform.some((x) => x.type === 'identifier')
+      const earlierDS = hasIds ? ctx.draft.datasets.get(name) ?? ctx.earlier?.datasets.get(name) : undefined
+      const incremental = ctx.incremental && inPulse !== null && !inPulse.full && prevDS !== undefined && earlierDS === undefined
         && prevDS.fp === passFp && prevDS.steps.length === d.transform.length
         && prevDS.inputLength === pulseBaseLength(inPulse) && !ctx.claimed.has(`ds:${name}`)
       if (incremental) {
@@ -3466,7 +3475,7 @@ function buildDatasetsOf(ctx: EvalContext, inputData: Record<string, unknown[]>)
         rows = res.rows
         outPulse = res.pulse
       } else {
-        rows = runPipeline(ctx, name, d.transform, tctx, rows, shared, inputs, raw, prevDS, state)
+        rows = runPipeline(ctx, name, d.transform, tctx, rows, shared, inputs, raw, prevDS, earlierDS, state)
         outPulse = null
       }
       ctx.draft.datasets.set(name, state)
@@ -3540,7 +3549,7 @@ function reusableRuns(ctx: EvalContext, name: string, inputs: readonly unknown[]
  */
 function runPipeline(
   ctx: EvalContext, name: string, transforms: CompiledTransform[], tctx: StepTransformContext, rows: Row[], shared: boolean,
-  inputs: readonly unknown[] | undefined, raw: boolean, prevDS: DatasetState | undefined, state: DatasetState,
+  inputs: readonly unknown[] | undefined, raw: boolean, prevDS: DatasetState | undefined, earlierDS: DatasetState | undefined, state: DatasetState,
 ): Row[] {
   const runs = reusableRuns(ctx, name, inputs, raw, transforms.length)
   const records = new Array<StepRecord | undefined>(transforms.length)
@@ -3555,7 +3564,7 @@ function runPipeline(
       const unit = transforms.slice(k, end + 1)
       const unitReads = unit.map((u) => stepReadsOf(u)!)
       const unitKeys = unitReads.map((r) => r.signals.map((n) => dependencyKey(ctx.signalParams[n])))
-      const kept = runs.length > 0 ? keptSteps(ctx, name, unit, unitReads, unitKeys, runs, k, cur) : undefined
+      const kept = runs.length > 0 ? keptSteps(ctx, name, unit, unitReads, unitKeys, runs, k, cur, earlierDS !== undefined) : undefined
       if (kept !== undefined) {
         const out = kept.steps[end]!
         for (let j = k; j <= end; j++) {
@@ -3584,7 +3593,7 @@ function runPipeline(
       continue
     }
     const keys = reads === null ? undefined : reads.signals.map((n) => dependencyKey(ctx.signalParams[n]))
-    const kept = keys !== undefined && runs.length > 0 ? keptSteps(ctx, name, [t], [reads!], [keys], runs, k, cur) : undefined
+    const kept = keys !== undefined && runs.length > 0 ? keptSteps(ctx, name, [t], [reads!], [keys], runs, k, cur, earlierDS !== undefined) : undefined
     if (kept !== undefined) {
       const out = kept.steps[k]!
       keepStep(ctx, t, reads!, kept.records![k]!, cur.length, out)
@@ -3603,9 +3612,11 @@ function runPipeline(
     const from = cur
     const had = reads?.publishes !== undefined && Object.hasOwn(ctx.signalParams, reads.publishes)
     const published = reads?.publishes === undefined ? undefined : ctx.signalParams[reads.publishes]
+    // (a pass of an evaluation numbers an identifier's rows as the pass before it did: that run is the one whose numbers rows carry)
+    const before = earlierDS?.steps[k] ?? prevDS?.steps[k]
     const res = ctx.runtime.random === undefined || !mayDrawRandom(t)
-      ? applyOneWithState(from, t, tctx, name, prevDS?.steps[k])
-      : atRandomSite(ctx.runtime.random, `dataset:${name}#${k}`, () => randomFingerprint(t, from, ctx.signalParams), () => applyOneWithState(from, t, tctx, name, prevDS?.steps[k]))
+      ? applyOneWithState(from, t, tctx, name, before)
+      : atRandomSite(ctx.runtime.random, `dataset:${name}#${k}`, () => randomFingerprint(t, from, ctx.signalParams), () => applyOneWithState(from, t, tctx, name, before))
     cur = res.rows
     state.steps.push(cur)
     if (res.state !== undefined) state.stepState.set(`${name}#${k}`, res.state)
@@ -3634,7 +3645,7 @@ function withOrderOf(rows: readonly Row[], target: Row[]): Row[] {
  */
 function keptSteps(
   ctx: EvalContext, name: string, steps: readonly CompiledTransform[], reads: readonly StepReads[], keys: ReadonlyArray<readonly string[]>,
-  runs: readonly DatasetState[], k: number, input: Row[],
+  runs: readonly DatasetState[], k: number, input: Row[], earlierPass: boolean,
 ): DatasetState | undefined {
   next: for (const run of runs) {
     if (k > 0 && run.steps[k - 1] !== input) continue
@@ -3644,7 +3655,8 @@ function keptSteps(
       if (rec === undefined || run.steps[k + j] === undefined || rec.keys.length !== mine.length) continue next
       for (let i = 0; i < mine.length; i++) if (rec.keys[i] !== mine[i]) continue next
       if (reads[j]!.draws && (ctx.runtime.random === undefined || rec.random?.source !== ctx.runtime.random)) continue next
-      if (steps[j]!.type === 'identifier' && run !== ctx.prev?.datasets.get(name)) continue next
+      // ... and not at all when an earlier pass of this evaluation numbered the rows: every pass gives the same rows the same ids
+      if (steps[j]!.type === 'identifier' && (earlierPass || run !== ctx.prev?.datasets.get(name))) continue next
     }
     return run
   }
@@ -4335,7 +4347,8 @@ function evaluateMarkItems(
   // Vega's mark defaults (vega.js defaults()): line {strokeWidth: 2},
   // area {fill: '#4c78a8'}, text {fill: '#000'} — applied when the encode
   // leaves the property unspecified.
-  if (mark.type === 'line' || mark.type === 'area' || mark.type === 'text') {
+  // (the config blocks they come from are read for a mark of role `mark` only: a mark with a role of its own has none of them)
+  if ((mark.type === 'line' || mark.type === 'area' || mark.type === 'text') && (mark.role === undefined || mark.role === 'mark')) {
     // vega-parser's applyDefaults skips the fill/stroke defaults when the ENCODE defines either channel
     const enc = (mark.encode?.update ?? mark.encode?.enter ?? {}) as Record<string, unknown>
     const paintDefined = enc.fill != null || enc.stroke != null
@@ -4344,6 +4357,13 @@ function evaluateMarkItems(
       const rec = it as unknown as Record<string, unknown>
       if (fill !== undefined && rec.fill === undefined) rec.fill = fill
       if (mark.type === 'line' && rec.strokeWidth === undefined) rec.strokeWidth = 2
+    }
+  } else if (mark.type === 'line') {
+    // (a line with a role of its own has no default width: it is drawn at the scenegraph's 1, which the renderers would
+    // otherwise replace by a line's 2)
+    for (const it of items) {
+      const rec = it as unknown as Record<string, unknown>
+      if (rec.stroke != null && rec.strokeWidth === undefined) rec.strokeWidth = 1
     }
   }
 

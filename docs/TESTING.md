@@ -24,27 +24,29 @@ with `@aster/vl`, diffs it against the Vega-Lite oracle and renders the Vega tha
 
 ## Reference results
 
-Measured on this tree (node v26.11.1, Linux x86_64, `TZ=UTC` unless stated, 2026-10-26). Every
+Measured on this tree (node v26.13.0, Linux x86_64, `TZ=UTC` unless stated, 2026-11-02). The corpus sizes and every
+count that is "N out of the corpus" are checked against the source by `scripts/docs-counts.test.mjs` (in `pnpm test`); the
+other results are the last measurement. Every
 row is the command in the second column run from the repository root after `pnpm build`; the
 result is the summary line it prints. They change with the code: re-run before quoting them.
 
 | What | Command | Result |
 |---|---|---|
-| Corpus size | `ls packages/conformance/corpus \| wc -l`; `... \| grep -c '\.vg\.json$'`; `... \| grep -c '\.vl\.json$'` | 993 specs: 321 raw Vega, 672 Vega-Lite |
-| Unit, React, script and vector tests | `pnpm test` | 168 files, 16939 tests passed |
+| Corpus size | `ls packages/conformance/corpus \| wc -l`; `... \| grep -c '\.vg\.json$'`; `... \| grep -c '\.vl\.json$'` | 1055 specs: 383 raw Vega, 672 Vega-Lite |
+| Unit, React, script and vector tests | `pnpm test` | 319 files, 33665 tests passed |
 | Time-zone matrix | `pnpm test:tz` | `[tz] all zones passed` (zone-sensitive vitest suites under America/New_York and Asia/Kolkata; `corpus-tz` under UTC and both) |
-| SVG corpus vs real Vega | `pnpm conformance` | 993/993 passed |
+| SVG corpus vs real Vega | `pnpm conformance` | 1055/1055 passed |
 | Vega-Lite corpus through `@aster/vl` | `pnpm conformance-vl` | 672 passed, 0 failed, 0 errored / 672 |
-| Scene differential | `pnpm scene-diff` | 993/993 scenes match |
-| Guide captions vs Vega `aria-label` | `pnpm a11y-parity` | 993/993 caption sets match |
+| Scene differential | `pnpm scene-diff` | 1055/1055 scenes match |
+| Guide captions vs Vega `aria-label` | `pnpm a11y-parity` | 1055/1055 caption sets match |
 | Transform option combinations | `pnpm transform-matrix` | 75/76 match (1 browser-only case skipped here, run by `conformance:browser`) |
 | Vega schema sweep | `pnpm sweep-vega -- --floor 7549 --min-ok 7538 --max-node-error 3` | 7538 ok, 8 both-refused, 3 node-error (the oracle crashes), 0 engine-error, 0 differ / 7549 |
 | Vega-Lite schema sweep | `pnpm sweep-vl -- --floor 27513 --min-ok 27452 --max-node-error 17 --vega-check` | 27452 ok, 44 both-refused, 17 node-error, 0 engine-error, 0 differ, 0 vega-differ / 27513 |
 | Signals sweep | `pnpm sweep-signals -- --floor 166 --min-ok 103 --max-node-error 2 --max-retained 60` | 103 ok, 60 retained, 1 both-refused, 2 node-error, 0 differ / 166 |
-| Gap probes (diagnostic) | `pnpm probe` | 2/2 pass |
+| Gap probes (a probe that passes keeps passing; a failing one documents a gap) | `pnpm probe -- --min-pass 2` | 2/2 pass (floor 2) |
 | Fuzz reproducers | `pnpm fuzz:replay` | 2/2 pass |
-| Corpus in Chromium, live text metrics | `pnpm conformance:browser` | 992/993 passed; `vlx-geo-lines-trail-size` fails (a path differs by trailing digits; it fails identically on the maps branch before this merge, open) |
-| Canvas pixels vs Vega's canvas | `pnpm conformance:canvas` | chromium 994/994 passed; append painting vs full repaint: 120 scenarios, 265 append frames, 0 failing |
+| Corpus in Chromium, live text metrics | `pnpm conformance:browser` | 1055/1055 passed |
+| Canvas pixels vs Vega's canvas | `pnpm conformance:canvas` | chromium 1067/1067 passed; append painting vs full repaint: 120 scenarios, 265 append frames, 0 failing |
 | Batched (dense) SVG vs per-item SVG pixels | `pnpm conformance:batch` | 61/61 passed |
 | Signal event streams vs real Vega | `pnpm conformance:signals` | 64/64 cases agree (group scopes among them) |
 | Vega-Lite selections vs real Vega (same native input, signals/stores/SVG compared per step) | `pnpm conformance:selections` | 53/53 cases agree (concat, facet and repeat views and geographic interval selections among them; steps where Vega keeps its first layout are held to a new Vega view's render, 13 of them, ceiling 13) |
@@ -68,8 +70,8 @@ plain `SvgChart` variant refuses interaction props and the missing-event-loop re
 Guards, all in `pnpm test`: `Chart.matrix.test.ts` (no test renders `<Chart>` outside the matrix without a listed reason),
 `Chart.shells.test.ts` (the shells stay thin; `lite` never reaches canvas/hit/signals), `Chart.types.test.ts` (type fixtures that
 must compile and must fail on exact lines, the props/handle parity assertions, and the documented examples) and
-`Chart.corpus-parity.test.tsx` (the DOM of `<Chart>`, `<SvgChart>` and `<SvgChart interaction>` equal over the 993 corpus
-specs: server markup, client mount, hydration).
+`Chart.corpus-parity.test.tsx` (the DOM of `<Chart>`, `<SvgChart>` and `<SvgChart interaction>` equal over every corpus
+spec: server markup, client mount, hydration).
 
 `retained` in the signals sweep means: the engine equals vega's fresh render of the same signals, and vega's own
 second render (after the signals were written into the running view) does not. See

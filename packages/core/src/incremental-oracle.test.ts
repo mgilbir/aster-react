@@ -176,7 +176,7 @@ function genSpec(r: Rnd): GenSpec {
   const nice = r() < 0.4
   const scales: Array<Record<string, unknown>> = [
     { name: 'x', type: 'linear', domain: dom(xdomKind, pipe.xf, [0, 30], { data: 't', field: 'x' }), range: r() < 0.25 ? { signal: 'rng' } : 'width', nice },
-    { name: 'y', type: 'linear', domain: dom(ydomKind, pipe.yf, [0, 40], { data: 't', field: 'v' }), range: 'height', zero: true, nice: r() < 0.4 },
+    { name: 'y', type: 'linear', domain: dom(ydomKind, pipe.yf, [0, 40], { data: 't', field: 'v' }), range: 'height', zero: r() < 0.6, nice: r() < 0.4 },
   ]
   if (pipe.cf) {
     scales.push({ name: 'bx', type: r() < 0.7 ? 'band' : 'point', domain: { data: ds, field: pipe.cf }, range: 'width', padding: 0.1 })
@@ -322,13 +322,15 @@ function genWorld(r: Rnd): World {
 
 type Op = 'edit' | 'grow' | 'shrink' | 'insert' | 'remove' | 'append' | 'truncate' | 'swap' | 'shuffle'
   | 'replaceAll' | 'editU' | 'signal' | 'size' | 'noop' | 'edit-group' | 'store' | 'scoped' | 'resize'
+  // the domain-census ops: values below the current minimum, the minimum row leaving the extreme, the extreme row removed, a new category
+  | 'low' | 'dropMin' | 'removeExt' | 'newGroup' | 'swapCat'
 type Delivery = 'none' | 'changedDatasets' | 'dataChanges' | 'dataPulse' | 'inplace'
 type Via = 'evaluate' | 'change'
 
 interface Step { op: Op; delivery: Delivery; via: Via; r: number[] }
 
 const OPS: Op[] = ['edit', 'edit', 'grow', 'shrink', 'shrink', 'insert', 'remove', 'append', 'append', 'truncate',
-  'swap', 'shuffle', 'replaceAll', 'editU', 'signal', 'size', 'noop', 'edit-group']
+  'swap', 'shuffle', 'replaceAll', 'editU', 'signal', 'size', 'noop', 'edit-group', 'low', 'low', 'dropMin', 'dropMin', 'removeExt', 'removeExt', 'newGroup']
 
 function genStep(r: Rnd): Step {
   return {
@@ -492,6 +494,51 @@ export function applyStep(w: World, s: Step): World {
       else if (mode === 4) mod(tuple(3), { unit: 'u2' }, null)
       else mod(null, true, null)
       next.sel = cs ? (applyChangeset(rows, cs) as Row[]) : rows
+      break
+    }
+    case 'low': {
+      // A value BELOW the current minimum (the census must widen at the low end too), by an edit or by an append.
+      const minV = t.reduce((m, row) => Math.min(m, Number(row.v)), Infinity)
+      const minX = t.reduce((m, row) => Math.min(m, Number(row.x)), Infinity)
+      const low = (): Row => ({ ...rowAt(0), ...oddFields(minX - 1 - Math.floor(s.r[1]! * 4), minV - 1 - Math.floor(s.r[2]! * 5)) })
+      if (t.length && s.r[3]! < 0.5) { const i = ix(s.r[4]!, t.length); t[i] = { ...t[i]!, ...low(), g: t[i]!.g } } else t.push(low())
+      break
+    }
+    case 'dropMin': {
+      // The row(s) holding the minimum x / v move up into the interior (or stay tied for it when a second row holds it).
+      if (t.length) {
+        const lo = (f: 'x' | 'v'): number => t.reduce((best, row, i) => (Number(row[f]) < Number(t[best]![f]) ? i : best), 0)
+        const a = lo('x'), b = lo('v')
+        t[a] = { ...t[a]!, ...oddFields(5 + Math.floor(s.r[0]! * 5), Number(t[a]!.v)), g: t[a]!.g }
+        if (s.r[1]! < 0.7) t[b] = { ...t[b]!, ...oddFields(Number(t[b]!.x), 8 + Math.floor(s.r[2]! * 8)), g: t[b]!.g }
+        if (s.r[3]! < 0.3 && t.length > 2) { const c = ix(s.r[4]!, t.length); t[c] = { ...t[c]!, ...oddFields(Number(t[a]!.x), Number(t[b]!.v)), g: t[c]!.g } }
+      }
+      break
+    }
+    case 'removeExt': {
+      // Remove the row holding the maximum v, or the minimum x (so its category may vanish with it).
+      if (t.length > 1) {
+        const i = s.r[0]! < 0.5
+          ? t.reduce((best, row, j) => (Number(row.v) > Number(t[best]!.v) ? j : best), 0)
+          : t.reduce((best, row, j) => (Number(row.x) < Number(t[best]!.x) ? j : best), 0)
+        t.splice(i, 1)
+      }
+      break
+    }
+    case 'swapCat': {
+      // A row takes the category of another row: the same-length swap the ordered domain survives only while the old value keeps
+      // another row and its own first occurrence, and the new one already stands earlier than the row.
+      if (t.length > 1) {
+        const i = ix(s.r[0]!, t.length), j = s.r[5]! < 0.5 ? ix(s.r[1]!, i) : (i + 1 + ix(s.r[1]!, t.length - i - 1)) % t.length
+        t[i] = { ...t[i]!, g: t[j]!.g }
+        if (s.r[2]! < 0.4) { const k = ix(s.r[3]!, t.length); t[k] = { ...t[k]!, g: GROUPS[Math.floor(s.r[4]! * 4)]! } }
+      }
+      break
+    }
+    case 'newGroup': {
+      // A category no row had yet (the discrete census must grow), sometimes replacing the only row of its group.
+      const g = `N${Math.floor(s.r[0]! * 3)}`
+      if (t.length && s.r[1]! < 0.5) { const i = ix(s.r[2]!, t.length); t[i] = { ...t[i]!, g } } else t.push({ ...rowAt(1), g })
       break
     }
     case 'noop': break
@@ -828,6 +875,52 @@ export function scenario(seed: number, nSteps: number): { g: GenSpec; world: Wor
 }
 
 /**
+ * The scale-reuse scenario: every scale reads the source dataset `t` DIRECTLY (a numeric domain per axis, a band or ordinal domain
+ * over the category), so each small edit goes through the domain census instead of a rebuild, and the steps are the edits that
+ * decide whether the domain moved: values below the minimum, above the maximum, the extreme row leaving or removed, ties, a
+ * category that is new, gone, or swapped for an earlier row's.
+ */
+const CENSUS_OPS: Op[] = ['edit', 'edit-group', 'edit-group', 'edit-group', 'swapCat', 'swapCat', 'swapCat', 'swapCat', 'swapCat', 'low', 'low', 'dropMin', 'dropMin',
+  'removeExt', 'removeExt', 'newGroup', 'grow', 'shrink', 'append', 'truncate', 'remove', 'insert', 'shuffle', 'swap', 'noop']
+
+export function scenarioCensus(seed: number, nSteps: number): { g: GenSpec; world: World; steps: Step[] } {
+  const r = mulberry32(seed ^ 0xce45a5)
+  const inlineValues = r() < 0.5
+  const xType = pick(r, ['linear', 'linear', 'pow'] as const)
+  const nice = r() < 0.5
+  const zero = r() < 0.5
+  const bandType = pick(r, ['band', 'point', 'ordinal'] as const)
+  const sortColor = r() < 0.5
+  const data: Array<Record<string, unknown>> = [{ name: 't', ...(inlineValues ? { values: [] } : {}) }, { name: 'u', ...(inlineValues ? { values: [] } : {}) }]
+  const scales: Array<Record<string, unknown>> = [
+    { name: 'x', type: xType, ...(xType === 'pow' ? { exponent: 2 } : {}), domain: { data: 't', field: 'x' }, range: 'width', nice },
+    { name: 'y', type: 'linear', domain: { data: 't', field: 'v' }, range: 'height', zero, nice: r() < 0.4 },
+    { name: 'bx', type: bandType === 'ordinal' ? 'band' : bandType, domain: { data: 't', field: 'g' }, range: 'width', padding: 0.1 },
+    { name: 'color', type: 'ordinal', domain: { data: 't', field: 'g', sort: sortColor }, range: 'category' },
+  ]
+  const marks: Array<Record<string, unknown>> = [{
+    type: 'symbol', from: { data: 't' },
+    encode: { update: { x: { scale: 'x', field: 'x' }, y: { scale: 'y', field: 'v' }, size: { value: 30 }, fill: { scale: 'color', field: 'g' } } },
+  }]
+  if (r() < 0.6) {
+    marks.push({
+      type: 'rect', from: { data: 't' },
+      encode: { update: { x: { scale: 'bx', field: 'g' }, width: { scale: 'bx', band: 1 }, y: { scale: 'y', field: 'v' }, y2: { scale: 'y', value: 0 }, fill: { scale: 'color', field: 'g' } } },
+    })
+  }
+  const spec: Record<string, unknown> = {
+    $schema: 'https://vega.github.io/schema/vega/v6.json', width: pick(r, [200, 300]), height: pick(r, [160, 220]), padding: 5, autosize: pick(r, ['none', 'pad'] as const),
+    signals: [{ name: 'sig', value: 3 }, { name: 'thr', update: 'sig + 1' }], data, scales,
+    axes: [{ scale: 'x', orient: 'bottom' }, { scale: 'y', orient: 'left' }, { scale: 'bx', orient: 'top' }],
+    legends: r() < 0.5 ? [{ fill: 'color' }] : [], marks,
+  }
+  const g: GenSpec = { spec, inlineValues, label: `census x=${xType}${nice ? '/nice' : ''} y=${zero ? 'zero' : 'free'} bx=${bandType} color${sortColor ? '/sorted' : ''}` }
+  const world = genWorld(r)
+  const steps = Array.from({ length: nSteps }, () => ({ ...genStep(r), op: pick(r, CENSUS_OPS) }))
+  return { g, world, steps }
+}
+
+/**
  * The same scenarios with a selection store: a dataset `sel` (vega-lite's `<name>_store`: field tuples, or `_vgsid_`
  * ids kept sorted by a `collect`) that the pipeline filters by (`vlSelectionTest` / `vlSelectionIdTest`), a mark
  * highlights by, and a derived signal resolves (`vlSelectionResolve`), edited by `modify`-style updates between the
@@ -1103,12 +1196,38 @@ describe('incremental === fresh on container-sized views that are resized betwee
   }
 })
 
+// Seed 100 of the container scenario: a data set whose rows are shuffled, evaluated in a view that was a different size the time
+// before. The first fit pass numbered the rows by alignment, the second by the pulse, so the legend the padding comes from showed
+// other ids than the scene drew (padding.right 78 for 47). Every pass of one evaluation must see the ids of the same rows.
+describe('the passes of one evaluation number the same rows alike', () => {
+  it('seed 100 of the container-sized views', () => {
+    expect(checkSeed(100, STEPS, scenarioContainer) ?? '').toBe('')
+  }, 600_000)
+})
+
 // Seeds the default sweep does not reach. They drew a pipeline on `t` that looks `u` up, and the generator declared `u` after `t`, which
 // vega (and the engine) refuse: "Undefined data set name". The generator now declares `u` first when `t` looks it up.
 describe('seeds whose pipeline looks up a data set declared after it', () => {
   for (const seed of [77, 159, 230, 280, 297, 375, 399]) {
     it(`holds for seed ${seed} x ${STEPS} steps`, () => {
       expect(checkSeed(seed, STEPS) ?? '', `seed ${seed}`).toBe('')
+    }, 600_000)
+  }
+})
+
+describe('incremental === fresh when every scale reads the source dataset (the domain census, scale reuse)', () => {
+  it('the generator is deterministic per seed and drives the census ops', () => {
+    expect(JSON.stringify(scenarioCensus(7, 6))).toBe(JSON.stringify(scenarioCensus(7, 6)))
+    const ops = new Set(Array.from({ length: 40 }, (_, i) => scenarioCensus(i + 1, 12).steps.map((x) => x.op)).flat())
+    for (const need of ['low', 'dropMin', 'removeExt', 'newGroup', 'swapCat', 'edit-group']) expect(ops.has(need as Op), `no ${need} step`).toBe(true)
+    const all = Array.from({ length: 100 }, (_, i) => scenarioCensus(i + 1, 1).g.label).join('\n')
+    for (const need of ['x=pow', 'y=zero', 'y=free', 'bx=band', 'bx=point', 'bx=ordinal', 'color/sorted', 'x=linear/nice']) expect(all, `no ${need} scenario`).toContain(need)
+  })
+
+  const seedsCensus = ONE != null ? [Number(ONE)] : Array.from({ length: SEEDS }, (_, i) => START + i)
+  for (const seed of seedsCensus) {
+    it(`holds for seed ${seed} x ${STEPS} steps (chart reuse + session)`, () => {
+      expect(checkSeed(seed, STEPS, scenarioCensus) ?? '', `seed ${seed}`).toBe('')
     }, 600_000)
   }
 })
