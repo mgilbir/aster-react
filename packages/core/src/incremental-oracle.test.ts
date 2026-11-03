@@ -157,10 +157,11 @@ function genSpec(r: Rnd): GenSpec {
   const t: Record<string, unknown> = { name: 't' }
   if (inlineValues) t.values = []
   if (onSource) t.transform = clone(pipe.tr)
-  data.push(t)
   const u: Record<string, unknown> = { name: 'u' }
   if (inlineValues) u.values = []
-  data.push(u)
+  // (a lookup reads a data set declared before it, as vega requires: a pipeline on `t` that looks `u` up follows it)
+  if (onSource && JSON.stringify(pipe.tr).includes('"from":"u"')) data.push(u, t)
+  else data.push(t, u)
   if (!onSource && pipe.tr.length) data.push({ name: 'd', source: 't', transform: clone(pipe.tr) })
 
   // Scales ---------------------------------------------------------------
@@ -1202,6 +1203,16 @@ describe('the passes of one evaluation number the same rows alike', () => {
   it('seed 100 of the container-sized views', () => {
     expect(checkSeed(100, STEPS, scenarioContainer) ?? '').toBe('')
   }, 600_000)
+})
+
+// Seeds the default sweep does not reach. They drew a pipeline on `t` that looks `u` up, and the generator declared `u` after `t`, which
+// vega (and the engine) refuse: "Undefined data set name". The generator now declares `u` first when `t` looks it up.
+describe('seeds whose pipeline looks up a data set declared after it', () => {
+  for (const seed of [77, 159, 230, 280, 297, 375, 399]) {
+    it(`holds for seed ${seed} x ${STEPS} steps`, () => {
+      expect(checkSeed(seed, STEPS) ?? '', `seed ${seed}`).toBe('')
+    }, 600_000)
+  }
 })
 
 describe('incremental === fresh when every scale reads the source dataset (the domain census, scale reuse)', () => {

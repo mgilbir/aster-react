@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- **A re-evaluation keeps the dataset steps whose inputs did not change** (`step-reuse.ts`, `runtime.ts`, `session.ts`). The React mount
+  evaluates a chart at the spec's size and again at the measured container's, and a resize or a signal write evaluates it again; every
+  dataset pipeline ran from its first step each time. A step records the rows it was made from, the signals it reads, the random source
+  it drew from and what it published; the next evaluation keeps it when they are as they were, writes the signals it published again,
+  and does not draw again. Datasets of group scopes are kept as whole pipelines. Consecutive `bin` / `formula` / `timeunit` steps
+  write onto one set of rows instead of copying every row per step, and source rows are no longer copied before a step that makes
+  rows of its own. On crossfilter-flights (200k rows, Chromium) a container resize costs 7 ms instead of 133 ms and the React mount to a stable
+  `<svg>` 198 ms instead of 385 ms. Output is the same: a generated differential against an engine that keeps nothing, and a live one
+  against Vega.
+
 - **`@aster/core`: every expression of a spec is refused when the spec is compiled, as `vega.parse` refuses it** (same time, same message,
   same order; a `SpecParseError`). It was only a syntax error in most places, and the handlers of signals were not looked at until they
   were bound. Now `compileChart`, `renderSpec` and the mount of a `<Chart>` also refuse: the `on` handlers of signals (their updates,

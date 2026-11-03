@@ -61,15 +61,19 @@ describe('a fit view numbers its rows once per evaluation', () => {
         const r = mulberry32(seed * 7919)
         const session = createChartSession()
         let rows = rowsOf(4 + Math.floor(r() * 12))
+        let last: { w: number; h: number } | undefined
         const next = { k: 1 }
         for (let step = 0; step < 7; step++) {
           rows = step === 0 ? rows : change(r, rows, next)
           // the same size each time: the second pass builds at the size the last evaluation ended at (its datasets can take the pulse), the first
           // at the view's own (they cannot)
-          const input: RuntimeInput = { data: { t: rows } }
+          // half the time the view is the size the last evaluation's content ended at: the first pass then matches the committed
+          // fingerprint (and takes the pulse), the second does not
+          const input: RuntimeInput = { data: { t: rows }, ...(last && r() < 0.5 ? { width: last.w, height: last.h } : {}) }
           const scene = session.evaluate(specOf(autosize, true), input)
+          last = { w: scene.plotWidth ?? 0, h: scene.plotHeight ?? 0 }
           const made = (datasetsOfScene(scene).get('t') ?? []) as Row[]
-          const want = evaluateChart(compileChart(specOf(autosize, false)), { data: { t: made.map((x) => ({ ...x })) } })
+          const want = evaluateChart(compileChart(specOf(autosize, false)), { data: { t: made.map((x) => ({ ...x })) }, ...(input.width !== undefined ? { width: input.width, height: input.height } : {}) })
           expect(renderSceneToSvg(scene), `${autosize} seed ${seed} step ${step}`).toBe(renderSceneToSvg(want))
         }
       }
