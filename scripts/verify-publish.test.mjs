@@ -70,6 +70,11 @@ describe('verify-publish', () => {
     ['a manifest with no sideEffects field', (d) => editManifest(d, 'vl', (m) => { delete m.sideEffects }), {}, /@aster\/vl packed manifest declares no "sideEffects"/],
     ['a wrong licence', (d) => editManifest(d, 'react', (m) => { m.license = 'MIT' }), {}, /@aster\/react has license MIT/],
     ['a blanket "sideEffects": false that shakes the registrations out of a bundle', (d) => editManifest(d, 'core', (m) => { m.sideEffects = false }), {}, /tree-shaken bundle built from the installed tarballs does not behave/],
+    ['a sideEffects list without the registration of the incremental engine', (d) => editManifest(d, 'core', (m) => { m.sideEffects = m.sideEffects.filter((f) => f !== './dist/incremental-register.js') }), {}, /tree-shaken bundle built from the installed tarballs does not behave|the lite bundle built from the installed tarballs does not run|the reeval bundle lacks the incremental engine/],
+    ['an entry that reaches the incremental engine for every app (a renderSpec bundle then carries it)', (d) => {
+      const file = join(d, 'packages', 'core', 'dist', 'index.js')
+      writeFileSync(file, `import './incremental-register.js'\n${readFileSync(file, 'utf8')}`)
+    }, {}, /the once bundle contains the incremental engine/],
     ['a package whose dist was never built', (d) => rmSync(join(d, 'packages', 'react', 'dist'), { recursive: true }), {}, /packages\/react\/dist is missing/],
   ]
   for (const [name, plant, env, message] of faults) {

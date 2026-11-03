@@ -384,6 +384,49 @@ console.log('lite ok')
     }
   }
   console.log('[verify-publish] <SvgChart> from the installed tarballs: bundled and executed without the canvas renderer; hit and signals only with interaction')
+  // 8c) The incremental engine from the INSTALLED tarballs. An app that only renders once (`renderSpec`) must not read it; an app that
+  //     evaluates a chart again with a `dataPulse` (`evaluateChart`) must carry it, registered, whatever else it imports, and be
+  //     answered with the picture a fresh evaluation makes. (Tree-shaking must neither pull it in nor shake its registration out.)
+  const engineApps = {
+    once: `
+import assert from 'node:assert'
+import { renderSpec } from '@aster/core'
+const svg = renderSpec({ width: 60, height: 40, data: [{ name: 't', values: [{ v: 1 }] }],
+  marks: [{ type: 'rect', from: { data: 't' }, encode: { enter: { x: { value: 0 }, y: { value: 0 }, width: { value: 20 }, height: { value: 20 }, fill: { value: 'tomato' } } } }] })
+assert.ok(svg.includes('tomato'), 'renderSpec renders from the bundled, tree-shaken tarballs')
+console.log('once ok')
+`,
+    reeval: `
+import assert from 'node:assert'
+import { compileChart, evaluateChart, renderSceneToSvg } from '@aster/core'
+const spec = { width: 60, height: 40, data: [{ name: 't', transform: [{ type: 'filter', expr: 'datum.v >= 0' }] }],
+  marks: [{ type: 'rect', from: { data: 't' }, encode: { update: { x: { field: 'v' }, y: { value: 0 }, width: { value: 5 }, height: { value: 5 }, fill: { value: 'tomato' } } } }] }
+const chart = compileChart(spec)
+const rows = [{ v: 1 }, { v: 2 }]
+const grown = [...rows, { v: 9 }]
+const first = evaluateChart(chart, { data: { t: rows } })
+const second = evaluateChart(chart, { data: { t: grown }, dataPulse: { t: { appendOnly: true, baseLength: 2, changed: [] } } })
+const item = (scene) => scene.items.find((g) => g.marktype === 'rect')?.items?.[0]
+assert.ok(item(first) !== undefined && item(first) === item(second), 'the second evaluation took the pulse: the first rect is kept')
+assert.equal(renderSceneToSvg(second), renderSceneToSvg(evaluateChart(compileChart(spec), { data: { t: grown } })), 'and is what a fresh evaluation makes')
+console.log('reeval ok')
+`,
+  }
+  for (const [name, app] of Object.entries(engineApps)) {
+    writeFileSync(join(project, `${name}.mjs`), app)
+    const result = await build({
+      entryPoints: [join(project, `${name}.mjs`)], outfile: join(project, `${name}.bundle.mjs`), bundle: true, minify: true, treeShaking: true, metafile: true,
+      format: 'esm', platform: 'node', external: ['react', 'react-dom', 'react-dom/*'], define: { 'process.env.NODE_ENV': '"production"' }, logLevel: 'silent',
+    }).catch((e) => fail(`bundling ${name} from the installed tarballs failed: ${e.message.split('\n')[0]}`))
+    const carries = Object.entries(result.metafile.outputs).some(([, o]) => Object.entries(o.inputs).some(([f, info]) => /@aster\/core\/dist\/incremental-engine\.js$/.test(f.replace(/\\/g, '/')) && info.bytesInOutput > 0))
+    if (carries !== (name === 'reeval')) fail(`the ${name} bundle ${carries ? 'contains' : 'lacks'} the incremental engine`)
+    try {
+      run(process.execPath, [`${name}.bundle.mjs`], { cwd: project, stdio: ['ignore', 'inherit', 'inherit'] })
+    } catch {
+      fail(`the ${name} bundle built from the installed tarballs does not run (the engine registration was shaken out? see above)`)
+    }
+  }
+  console.log('[verify-publish] the incremental engine from the installed tarballs: not in a renderSpec bundle, registered in an evaluateChart one')
   console.log('[verify-publish] PASS — packed with pnpm, installed with npm, every export imports and typechecks, Vega and Vega-Lite render, a tree-shaken bundle keeps its side effects')
 } finally {
   rmSync(tmp, { recursive: true, force: true })

@@ -90,6 +90,36 @@ const PATTERNS = [
       [/load the addon/.test(r.geoErr ?? ''), 'a geo spec without the addon asks for the addon (it is not registered by accident)'],
       [/load the addon/.test(r.treemapErr ?? ''), 'a treemap spec without the addon asks for the addon'],
     ],
+    // evaluating once needs no incremental engine: the bundle is without it (it is core's, not the entry's, when something re-evaluates)
+    modules: (m) => [
+      [!hasModule(m.contributing, 'core', 'incremental-engine') && !hasModule(m.contributing, 'core', 'incremental-register'), 'the incremental engine is not in the bundle of a renderSpec app'],
+      [hasModule(m.contributing, 'core', 'render') && hasModule(m.contributing, 'core', 'runtime'), 'and the module check sees the modules that are (the runtime and the renderer)'],
+    ],
+  },
+  {
+    name: 'core-evaluate-incremental',
+    why: "import { evaluateChart } from '@aster/core': a second evaluation with a dataPulse is incremental (the engine is registered by the import, whatever else the app imports) and is what a fresh evaluation makes",
+    imports: `import { evaluateChart, compileChart, renderSceneToSvg } from '@aster/core'`,
+    body: `
+      const spec = { width: 100, height: 60, data: [{ name: 't', transform: [{ type: 'filter', expr: 'datum.v >= 0' }, { type: 'aggregate', groupby: ['g'], fields: ['v'], ops: ['sum'], as: ['s'] }] }],
+        scales: [{ name: 'x', type: 'band', domain: ['a', 'b', 'c'], range: 'width' }, { name: 'y', type: 'linear', domain: [0, 40], range: 'height' }],
+        marks: [{ type: 'rect', from: { data: 't' }, encode: { update: { x: { scale: 'x', field: 'g' }, width: { value: 8 }, y: { scale: 'y', field: 's' }, y2: { value: 60 } } } }] }
+      const rows = [{ g: 'a', v: 1 }, { g: 'b', v: 2 }]
+      const grown = [...rows, { g: 'c', v: 3 }, { g: 'a', v: 4 }]
+      const chart = compileChart(spec)
+      const first = evaluateChart(chart, { data: { t: rows } })
+      const second = evaluateChart(chart, { data: { t: grown }, dataPulse: { t: { appendOnly: true, baseLength: rows.length, changed: [] } } })
+      const fresh = evaluateChart(compileChart(spec), { data: { t: grown } })
+      const item = (scene) => scene.items.find((g) => g.marktype === 'rect')?.items?.[1]
+      return { same: renderSceneToSvg(second) === renderSceneToSvg(fresh), differs: renderSceneToSvg(first) !== renderSceneToSvg(second), kept: item(first) !== undefined && item(first) === item(second) }`,
+    check: (r) => [
+      [r.same === true, 'the incremental evaluation is what a fresh one makes'],
+      [r.differs === true, 'and the data did change the picture'],
+      [r.kept === true, 'the rect of the group that did not change (b) is the item of the first evaluation (the pulse was taken, not re-derived)'],
+    ],
+    modules: (m) => [
+      [hasModule(m.contributing, 'core', 'incremental-engine') && hasModule(m.contributing, 'core', 'incremental-register'), 'the engine and its registration are in the bundle of an app that imports evaluateChart'],
+    ],
   },
   {
     name: 'core-geo',
