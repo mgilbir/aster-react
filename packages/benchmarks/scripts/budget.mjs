@@ -124,6 +124,8 @@ import { fileURLToPath } from 'node:url'
 // its events on): geo marginal 16.3 (16.254; +0.9 over 15.4, none of it one piece: the antimeridian pass-through alone is 0.07).
 // The ARIA of guides and marks over the parameter space (the root group item's channels, the mark roles, the config lookup),
 // measured (kB gzip): core 141.0 (+0.2 over main's 140.8; ceiling 141.5); the other rows stay inside their ceilings.
+// UTC time-unit guide labels (the format type follows the scale), the temporal size/opacity scales and the guide-title rules for
+// ranged channels and layers (titles.ts), measured (kB gzip): Chart + VL 289.5 (+0.6 over origin/main's 288.9, measured with the same script); the other rows did not move.
 // One tab stop per chart (focus hand-over on a spec change, entering the nodes from the container): Chart 189.2 and SvgChart 166.4 kB gzip
 // (main: 188.8 and 166.1, so +0.3 each); the other rows stay inside their ceilings.
 // Ceiling = the measure + 0.5.
