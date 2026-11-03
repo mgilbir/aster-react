@@ -9,7 +9,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import * as vega from 'vega'
 import { compileChart } from '../../core/src/compiler.ts'
-import { evaluateChart } from '../../core/src/runtime.ts'
+import { evaluateChart } from '../../core/src/evaluate.ts'
 import { enc, quietLogger } from './differential-util.mts'
 import { seeded } from './upstream.mts'
 

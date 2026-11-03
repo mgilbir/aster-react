@@ -6,7 +6,7 @@
  */
 import { describe, it, expect } from 'vitest'
 import { compileChart } from './compiler.js'
-import { evaluateChart } from './runtime.js'
+import { evaluateChart } from './evaluate.js'
 import { createChartSession } from './session.js'
 import { AsterLimitError } from './limits.js'
 import { renderSceneToSvg } from './index.js'

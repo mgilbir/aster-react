@@ -18,7 +18,7 @@ import { compileExpr, expressionFunctionNames, type ExpressionRuntime } from './
 import { contentKey, mayDrawRandom } from './random-tape.js'
 import { applyTransforms, type Row } from './transform.js'
 import { compileChart } from './compiler.js'
-import { evaluateChart } from './runtime.js'
+import { evaluateChart } from './evaluate.js'
 import { createChartSession } from './session.js'
 import { renderSceneToSvg } from './index.js'
 import type { VgSpec } from './types.js'

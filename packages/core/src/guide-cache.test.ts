@@ -4,7 +4,7 @@
  */
 import { describe, expect, it } from 'vitest'
 import { compileChart } from './compiler.js'
-import { evaluateChart } from './runtime.js'
+import { evaluateChart } from './evaluate.js'
 import { sharedMarkCount } from './guide-encode.js'
 import v8 from 'node:v8'
 import vm from 'node:vm'

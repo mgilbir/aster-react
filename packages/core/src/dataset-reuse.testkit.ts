@@ -3,7 +3,8 @@
  * signals, steps that publish signals, ids, crossfilters and steps that draw, over datasets that read each other.
  */
 import { compileChart } from './compiler.js'
-import { datasetsOfScene, evaluateChart } from './runtime.js'
+import { datasetsOfScene } from './runtime.js'
+import { evaluateChart } from './evaluate.js'
 import { renderSceneToSvg } from './index.js'
 import { contentKey } from './random-tape.js'
 import type { SceneRoot, VgSpec } from './types.js'
