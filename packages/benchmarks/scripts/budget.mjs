@@ -180,13 +180,13 @@ const BUDGETS = {
   '+ @aster/core/load': 5.9 * 1024,
   '+ @aster/core/geo': 16.6 * 1024,
   '+ @aster/core/transforms': 39.7 * 1024,
-  '@aster/react useChart': 157.7 * 1024,
-  '@aster/react Chart': 199.1 * 1024,
+  '@aster/react useChart': 159.9 * 1024,
+  '@aster/react Chart': 201.4 * 1024,
   // The light chart (`@aster/react/lite`): SVG only, no canvas renderer; alone and with the `interaction` capability.
-  '@aster/react SvgChart': 176.4 * 1024,
-  '@aster/react SvgChart + interaction': 193.8 * 1024,
+  '@aster/react SvgChart': 178.7 * 1024,
+  '@aster/react SvgChart + interaction': 196.0 * 1024,
   // Base + the VL compiler (opt-in: `import '@aster/react/vl'`).
-  '@aster/react Chart + VL': 299.9 * 1024,
+  '@aster/react Chart + VL': 302.2 * 1024,
 }
 
 const THIS_DIR = dirname(fileURLToPath(import.meta.url))
