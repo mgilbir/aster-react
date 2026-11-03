@@ -22,7 +22,8 @@ produced it, are in [docs/TESTING.md](docs/TESTING.md#reference-results) and
 
 Known gaps and deliberate differences from Vega are listed in [docs/LIMITS.md](docs/LIMITS.md),
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#deviations-from-vega) and [docs/ROADMAP.md](docs/ROADMAP.md). Specs from
-untrusted sources need `limits` (and, for regular expressions, a killable worker): read
+untrusted sources need `limits` (best-effort budgets) and a killable worker (the hard guarantee; a regular expression, for
+one, cannot be interrupted in-process); a few built-in ceilings hold even without `limits`. Read
 [docs/LIMITS.md](docs/LIMITS.md) before rendering them.
 
 ## How It Works

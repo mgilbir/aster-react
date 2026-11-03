@@ -313,7 +313,9 @@ function SpecChart({ spec: rawSpec, chartRef, ...props }: Omit<ChartCoreProps, '
   // neither recompiles (Vega-Lite) nor re-evaluates.
   const stableSpec = useStableSpecRows(rawSpec)
   const spec = React.useMemo(() => normalizeChartSpec(stableSpec), [stableSpec])
-  return <ChartView key={useChartEpoch(spec)} {...props} spec={spec} chartRef={chartRef} />
+  // Focus inside the chart when its spec changes to another chart: the old chart's DOM goes, the new one takes the focus.
+  const focusHandoff = React.useRef<FocusSpot | null>(null)
+  return <ChartView key={useChartEpoch(spec)} {...props} spec={spec} chartRef={chartRef} focusHandoff={focusHandoff} />
 }
 
 function ChartView({
@@ -359,7 +361,8 @@ function ChartView({
   canvas: canvasCap,
   interaction,
   chartRef,
-}: Omit<ChartCoreProps, 'spec'> & { spec: VgSpec; chartRef: React.ForwardedRef<ChartHandle> }) {
+  focusHandoff,
+}: Omit<ChartCoreProps, 'spec'> & { spec: VgSpec; chartRef: React.ForwardedRef<ChartHandle>; focusHandoff: React.MutableRefObject<FocusSpot | null> }) {
   // The opt-in add-ons the spec needs (transforms, geo, load) arrive before the first evaluation: this suspends while
   // they load, so there is no render of the half-ready chart and no error to flash. A failed import is a chart error.
   const addonError = useAddons(sceneOverride !== undefined ? null : spec)
@@ -1084,12 +1087,41 @@ function ChartView({
     return buildA11yTree(displayScene, scales as Map<string, unknown>, a11yOpts)
   }, [displayScene, a11yOpts, chartInfo])
   const a11yNodesRef = React.useRef<A11yNode[]>([])
+  const activeA11yIdRef = React.useRef<string | null>(null)
+  activeA11yIdRef.current = activeA11yId
   a11yNodesRef.current = a11yTree?.nodes ?? []
-  // Roving tabindex: exactly one a11y node is a tab stop (the last focused one, else
-  // the first); arrows / PageUp / PageDown move between nodes. (The container is a
-  // tab stop of its own while pan or zoom is enabled: see its tabIndex below.)
+  // A chart is ONE tab stop. With pan or zoom the container is it (it owns the pan/zoom keys) and the nodes are only
+  // programmatically focusable, reached from the container with PageDown / PageUp; otherwise the nodes are a roving
+  // tabindex group (the last focused one is the stop, else the first). Arrows / PageUp / PageDown move between nodes.
   const a11yNodes = a11yTree?.nodes
-  const tabStopId = a11yNodes?.some((n) => n.id === activeA11yId) ? activeA11yId : (a11yNodes?.[0]?.id ?? null)
+  const tabStopId = panZoomEnabled ? null : a11yNodes?.some((n) => n.id === activeA11yId) ? activeA11yId : (a11yNodes?.[0]?.id ?? null)
+  // Where focus is within the chart (a node id, or the container), so a commit that removes the focused element can put it
+  // back instead of dropping it on <body>.
+  const focusSpotRef = React.useRef<FocusSpot | null>(null)
+  React.useLayoutEffect(() => () => { focusHandoff.current = focusSpotRef.current }, [focusHandoff])
+  // Focus leaving an element ends the claim, unless the element is being removed by a commit (which can blur it too): a
+  // blur to another element ends it at once, a blur to nowhere is judged after the commit, when a removed element is gone.
+  const releaseFocusSpot = React.useCallback((el: HTMLElement, to: EventTarget | null): void => {
+    if (to != null) { focusSpotRef.current = null; return }
+    queueMicrotask(() => { if (el.isConnected && document.activeElement !== el) focusSpotRef.current = null })
+  }, [])
+  React.useLayoutEffect(() => {
+    // the chart this one replaced (its cleanup ran in this same commit) left its focus to be taken over
+    if (focusHandoff.current != null) { focusSpotRef.current = focusHandoff.current; focusHandoff.current = null }
+    const host = containerRef.current
+    const spot = focusSpotRef.current
+    if (!host || spot == null) return
+    const active = document.activeElement
+    if (active != null && active !== document.body && host.contains(active)) return
+    // focus is on <body> or in another widget; only act if it was this chart's focus that was lost (nothing else took it)
+    if (active != null && active !== document.body) return
+    const byId = (id: string): HTMLElement | null => host.querySelector<HTMLElement>(`[data-a11y-id="${CSS.escape(id)}"]`)
+    const target = (spot !== CONTAINER_FOCUS ? byId(spot) : null)
+      ?? (panZoomEnabled ? host : null)
+      ?? (tabStopId != null ? byId(tabStopId) : null)
+    if (target == null) { focusSpotRef.current = null; return }
+    target.focus({ preventScroll: true })
+  })
 
   const moveA11yFocus = React.useCallback((current: A11yNode, delta: number | 'first' | 'last') => {
     const host = containerRef.current
@@ -1165,6 +1197,17 @@ function ChartView({
   const handleChartKeyDown = React.useCallback((e: React.KeyboardEvent) => {
     if (e.defaultPrevented) return
     const g = gestureInputsRef.current
+    // The container is the chart's tab stop; PageDown / PageUp take focus into the nodes (the arrows pan here).
+    if (e.target === e.currentTarget && (e.key === 'PageDown' || e.key === 'PageUp')) {
+      const nodes = a11yNodesRef.current
+      const entry = e.key === 'PageUp' ? nodes.at(-1) : nodes.find((n) => n.id === activeA11yIdRef.current) ?? nodes[0]
+      if (entry == null) return
+      e.preventDefault()
+      e.stopPropagation()
+      setActiveA11yId(entry.id)
+      containerRef.current?.querySelector<HTMLElement>(`[data-a11y-id="${CSS.escape(entry.id)}"]`)?.focus()
+      return
+    }
     if (e.key === 'Escape') {
       emitSelectionRef.current(null)
       g.onSelect?.(null)
@@ -1347,9 +1390,6 @@ function ChartView({
     : { ...baseStyle, cursor }
 
   const role = a11yTree ? (ariaLabel ? 'group' : undefined) : ariaLabel ? 'img' : undefined
-  // The rendered SVG sits inside the scene padding; guide/mark boxes from the
-  // a11y tree are relative to the padded origin.
-  const pad = displayScene?.padding ?? { top: 0, right: 0, bottom: 0, left: 0 }
 
   return (
     <div
@@ -1357,6 +1397,8 @@ function ChartView({
       role={role}
       aria-label={ariaLabel}
       tabIndex={panZoomEnabled ? 0 : undefined}
+      onFocus={(e) => { if (e.target === e.currentTarget) focusSpotRef.current = CONTAINER_FOCUS }}
+      onBlur={(e) => { if (e.target === e.currentTarget) releaseFocusSpot(e.currentTarget, e.relatedTarget) }}
       onKeyDown={handleChartKeyDown}
       onDoubleClick={panZoomEnabled ? () => applyViewRef.current(null) : undefined}
       className={className}
@@ -1465,8 +1507,8 @@ function ChartView({
                 onKeyDown={(e) => handleA11yKeyDown(node, e)}
                 style={{
                   position: 'absolute',
-                  left: Math.max(0, pad.left + node.x),
-                  top: Math.max(0, pad.top + node.y),
+                  left: Math.max(0, node.x),
+                  top: Math.max(0, node.y),
                   width: Math.max(1, node.width),
                   height: Math.max(1, node.height),
                   opacity: 0,
@@ -1476,8 +1518,11 @@ function ChartView({
                   borderRadius: 2,
                   outline: 'none',
                 }}
-                onFocus={(e) => { setActiveA11yId(node.id); e.currentTarget.style.opacity = '0.001' }}
-                onBlur={(e) => { e.currentTarget.style.opacity = '0' }}
+                onFocus={(e) => { setActiveA11yId(node.id); focusSpotRef.current = node.id; e.currentTarget.style.opacity = '0.001' }}
+                onBlur={(e) => {
+                  e.currentTarget.style.opacity = '0'
+                  releaseFocusSpot(e.currentTarget, e.relatedTarget)
+                }}
               />
             )
           })}
@@ -1512,6 +1557,10 @@ function ChartView({
     </div>
   )
 }
+
+const CONTAINER_FOCUS = Symbol('container')
+/** Where focus is inside a chart: the id of an a11y node, or the container. */
+type FocusSpot = string | typeof CONTAINER_FOCUS
 
 const srOnly: React.CSSProperties = {
   position: 'absolute', width: 1, height: 1, padding: 0, margin: -1,

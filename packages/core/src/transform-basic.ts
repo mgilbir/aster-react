@@ -16,7 +16,7 @@ import {
   durationDay, durationHour, durationMinute, durationMonth, durationSecond, durationWeek, durationYear,
   timeFloor, timeIntervalFor, timeUnits, utcFloor, utcIntervalFor,
 } from './time.js'
-import { AsterLimitError, activeMeter, checkRowCount, meterTick } from './limits.js'
+import { AsterLimitError, activeMeter, ceiling, checkRowCount, meterRows, meterTick } from './limits.js'
 import type { IdCounter } from './identifier-ids.js'
 import { orderOf } from './tuple-order.js'
 
@@ -44,7 +44,7 @@ export function numberRange(start: number, stop: number, step: number): number[]
   const length = Math.max(0, Math.ceil((stop - start) / step))
   if (length > 0x7fffffff) throw new AsterLimitError(`range length ${length} > 2147483647`)
   const meter = activeMeter()
-  if (meter) meter.rows(Number.isFinite(length) ? length : Infinity, 'range')
+  meterRows(Number.isFinite(length) ? length : Infinity, 'range')
   const out: number[] = new Array(length | 0)
   for (let i = 0; i < out.length; i++) {
     out[i] = start + i * step

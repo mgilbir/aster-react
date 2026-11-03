@@ -90,6 +90,28 @@ describe('worker protocol carries limits and text metrics (C65)', () => {
     expect(response.error?.code).toBe('ASTER_LIMIT')
   })
 
+  it('serializes the SVG inside the limits scope: an exact generated path is checked (maxPathLength)', () => {
+    // 1000 points imply >= 4000 characters (under 8000), the real path is ~14000: only the exact check at serialization sees it
+    const spec = {
+      width: 200, height: 100, data: [{ name: 't' }],
+      scales: [{ name: 'x', type: 'linear', domain: [0, 1000], range: [0, 200] }, { name: 'y', type: 'linear', domain: [0, 1], range: [100, 0] }],
+      marks: [{ type: 'line', from: { data: 't' }, encode: { update: { x: { scale: 'x', field: 'i' }, y: { scale: 'y', field: 'v' }, stroke: { value: '#000' } } } }],
+    }
+    const data = { t: Array.from({ length: 1000 }, (_, i) => ({ i, v: (i % 10) / 10 })) }
+    const refused = handleChartWorkerRequest({ id: 1, spec: spec as never, input: { data, limits: { maxPathLength: 8000 } } })
+    expect(refused.error?.code).toBe('ASTER_LIMIT')
+    expect(refused.error?.message).toMatch(/maxPathLength/)
+    const allowed = handleChartWorkerRequest({ id: 2, spec: spec as never, input: { data, limits: { maxPathLength: 100000 } } })
+    expect(allowed.error).toBeUndefined()
+    expect(allowed.svg).toContain('<path')
+  })
+
+  it('a built-in ceiling reaches the worker caller as a typed error with no limits given', () => {
+    const response = handleChartWorkerRequest({ id: 1, spec: { data: [{ name: 't', transform: [{ type: 'sequence', start: 0, stop: 5e7, as: 'x' }] }] } as never, input: {} })
+    expect(response.error?.code).toBe('ASTER_LIMIT')
+    expect(response.error?.message).toMatch(/built-in ceiling/)
+  })
+
   it('resolves text metrics by registered name, and rejects unknown names', () => {
     const titled = specOf(1, { title: { text: 'Title text' } })
     const calls: string[] = []

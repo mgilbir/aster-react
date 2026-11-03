@@ -42,6 +42,9 @@ const entryFor = (variant: VariantName): string => {
   const element = variant === 'Chart'
     ? 'React.createElement(Chart, { ref: window.__ref, spec, ...p })'
     : 'React.createElement(SvgChart, { ref: window.__ref, spec, interaction, ...p })'
+  const bareElement = variant === 'Chart'
+    ? 'React.createElement(Chart, { key: i, spec: it.spec, ...it.props })'
+    : 'React.createElement(SvgChart, { key: i, spec: it.spec, interaction, ...it.props })'
   return `
 import * as React from 'react'
 import { createRoot } from 'react-dom/client'
@@ -64,6 +67,24 @@ window.__mount = (spec, props, record, listen) => {
   if (window.__root) window.__root.unmount()
   window.__root = createRoot(container)
   flushSync(() => window.__root.render(${element}))
+}
+// Several charts on one page between two plain buttons (the sequence a keyboard user tabs through); render again to update.
+window.__page = (rawItems, mountAgain) => {
+  // a prop given as '__fn' is a no-op callback (a function cannot cross from the test to the page)
+  const items = rawItems.map((it) => ({ ...it, props: Object.fromEntries(Object.entries(it.props).map(([k, v]) => [k, v === '__fn' ? () => undefined : v])) }))
+  const host = document.getElementById('root')
+  if (!mountAgain || !window.__pageRoot) {
+    if (window.__root) { window.__root.unmount(); window.__root = null }
+    if (window.__pageRoot) window.__pageRoot.unmount()
+    const container = document.createElement('div')
+    container.id = 'chart-host'
+    host.replaceChildren(container)
+    window.__pageRoot = createRoot(container)
+  }
+  flushSync(() => window.__pageRoot.render(React.createElement('div', null,
+    React.createElement('button', { id: 'before' }, 'before'),
+    ...items.map((it, i) => React.createElement('div', { key: i, 'data-slot': i, style: { position: 'relative', width: 420, height: 260 } }, ${bareElement})),
+    React.createElement('button', { id: 'after' }, 'after'))))
 }
 `
 }
@@ -116,6 +137,92 @@ async function bundleVariant(variant: VariantName): Promise<{ code: string; inpu
     define: { 'process.env.NODE_ENV': '"production"' }, logLevel: 'error',
   })
   return { code: bundle.outputFiles[0]!.text, inputs: Object.keys(bundle.metafile.inputs).map((f) => f.replace(/\\/g, '/')) }
+}
+
+/** Where the keyboard focus is: the button, or which chart and what part of it. */
+const focusSpot = (page: Page): Promise<string> => page.evaluate(() => {
+  const a = document.activeElement as HTMLElement | null
+  if (a == null || a === document.body) return 'body'
+  if (a.id) return a.id
+  const slot = a.closest('[data-slot]')?.getAttribute('data-slot')
+  const node = a.closest('[data-a11y-id]')
+  return `chart${slot}:${node ? 'node' : a.hasAttribute('data-aster-view') ? 'container' : a.tagName.toLowerCase()}`
+})
+/** Every element of the page's charts that sits in the sequential focus order (the container, nodes, anything else). */
+const tabStopsPerChart = (page: Page): Promise<number[]> => page.evaluate(() => [...document.querySelectorAll('[data-slot]')].map((slot) =>
+  [...slot.querySelectorAll('*')].filter((el) => (el as HTMLElement).tabIndex >= 0 && !(el instanceof SVGElement && el.tabIndex < 0)).length))
+const press = async (page: Page, key: string, times = 1): Promise<void> => { for (let i = 0; i < times; i++) await page.keyboard.press(key) }
+
+/** A chart is one tab stop: the real Tab key through a page of charts, in every configuration (audit: two stops per chart). */
+async function tabStopSuite(page: Page): Promise<void> {
+  const base = { width: 400, height: 240 }
+  const items = (): Array<{ spec: Record<string, unknown>; props: Record<string, unknown> }> => [
+    { spec: spec({ signals: [] }), props: { ...base } },
+    { spec: spec({ signals: [] }), props: { ...base, panZoom: true } },
+    { spec: spec({ signals: [] }), props: { ...base, tooltip: true, onSelect: '__fn', ariaLabel: 'selectable' } },
+    { spec: spec({ signals: [] }), props: { ...base, pan: true, tooltip: true } },
+  ]
+  const run = (mountAgain: boolean, its: ReturnType<typeof items>): Promise<void> =>
+    page.evaluate(([a, again]) => (window as never as { __page: (...x: unknown[]) => void }).__page(a, again), [its, mountAgain] as const)
+
+  console.log('[tab] a page of four charts: Tab visits exactly one element per chart')
+  await run(false, items())
+  await page.waitForSelector('svg .mark-symbol path')
+  check((await tabStopsPerChart(page)).every((n) => n === 1), `one element per chart is in the tab order (${JSON.stringify(await tabStopsPerChart(page))})`)
+  await page.focus('#before')
+  const seen: string[] = []
+  for (let i = 0; i < 6; i++) { await page.keyboard.press('Tab'); seen.push(await focusSpot(page)) }
+  const expected = ['chart0:node', 'chart1:container', 'chart2:node', 'chart3:container', 'after', 'body']
+  check(JSON.stringify(seen.slice(0, 5)) === JSON.stringify(expected.slice(0, 5)), `Tab walks chart0 (roving mark) -> chart1 (container) -> chart2 (roving mark) -> chart3 (container) -> after (${JSON.stringify(seen)})`)
+  const back: string[] = []
+  await page.focus('#after')
+  for (let i = 0; i < 4; i++) { await page.keyboard.press('Shift+Tab'); back.push(await focusSpot(page)) }
+  check(JSON.stringify(back) === JSON.stringify(['chart3:container', 'chart2:node', 'chart1:container', 'chart0:node']), `Shift+Tab walks back one stop per chart (${JSON.stringify(back)})`)
+
+  console.log('[tab] pan/zoom: the container takes the pan/zoom keys; PageDown enters the nodes, arrows rove, Tab leaves')
+  await page.focus('#before')
+  await press(page, 'Tab', 2)
+  check(await focusSpot(page) === 'chart1:container', `the zoomable chart is focused as a container (${await focusSpot(page)})`)
+  const zoomed = (): Promise<string | null> => page.locator('[data-slot="1"] [data-aster-view]').first().getAttribute('data-aster-view')
+  await page.keyboard.press('+')
+  check(await zoomed() === 'zoomed', 'the container zooms with +')
+  await page.keyboard.press('0')
+  check(await zoomed() === 'base', 'and resets with 0')
+  await page.keyboard.press('PageDown')
+  check((await focusSpot(page)).startsWith('chart1:') && await focusSpot(page) !== 'chart1:container', `PageDown moves into the chart's nodes (${await focusSpot(page)})`)
+  check((await tabStopsPerChart(page))[1] === 1, 'still one tab stop in the chart while a node has focus')
+  await page.keyboard.press('Tab')
+  check(await focusSpot(page) === 'chart2:node', `Tab from a node leaves the chart (${await focusSpot(page)})`)
+
+  console.log('[tab] re-render, resize and spec swap keep one stop and never drop focus')
+  await page.focus('#before')
+  await press(page, 'Tab', 2)
+  await page.keyboard.press('PageDown')
+  const inChart = (): Promise<boolean> => page.evaluate(() => document.activeElement?.closest('[data-slot="1"]') != null)
+  const wide = items().map((it) => ({ ...it, props: { ...it.props, width: 380 } }))
+  await run(true, wide)
+  check(await inChart(), `focus stays in the chart across a resize (${await focusSpot(page)})`)
+  check((await tabStopsPerChart(page)).every((n) => n === 1), `still one stop per chart after the resize (${JSON.stringify(await tabStopsPerChart(page))})`)
+  const swapped = wide.map((it) => ({ ...it, spec: spec({ signals: [], width: 300 }) }))
+  await run(true, swapped)
+  await page.waitForTimeout(30)
+  check(await inChart(), `focus stays in the chart across a spec swap (${await focusSpot(page)})`)
+  check((await tabStopsPerChart(page)).every((n) => n === 1), `one stop per chart after the swap (${JSON.stringify(await tabStopsPerChart(page))})`)
+  await page.keyboard.press('Tab')
+  check(await focusSpot(page) === 'chart2:node', `and Tab still goes on to the next chart (${await focusSpot(page)})`)
+  // pan/zoom switched off then on while the container is focused
+  await run(true, swapped.map((it, i) => i === 1 ? { ...it, props: { ...it.props, panZoom: false } } : it))
+  check((await tabStopsPerChart(page)).every((n) => n === 1), `pan/zoom off: roving mark stop, one per chart (${JSON.stringify(await tabStopsPerChart(page))})`)
+  await run(true, swapped)
+  check((await tabStopsPerChart(page)).every((n) => n === 1), `pan/zoom on again: one per chart (${JSON.stringify(await tabStopsPerChart(page))})`)
+  console.log('[tab] a click on the page body is not undone by a re-render')
+  await page.focus('#before')
+  await press(page, 'Tab', 2)
+  await page.mouse.click(690, 5)
+  await page.waitForTimeout(20)
+  check(await focusSpot(page) === 'body', 'a click on the page body blurs the chart')
+  await run(true, wide)
+  check(await focusSpot(page) === 'body', `a deliberate click elsewhere keeps focus off the chart (${await focusSpot(page)})`)
 }
 
 /** Every interaction check, against whichever component the page was bundled with. */
@@ -588,7 +695,7 @@ try {
     await page.setContent('<!doctype html><html><body style="margin:0;font:12px sans-serif"><div id="root"></div></body></html>')
     await page.addScriptTag({ content: code })
     if (variant === 'SvgChart') await plainSuite(page)
-    else { await suite(page); await cursorSuite(page, variant === 'Chart' ? ['svg', 'canvas'] : ['svg']) }
+    else { await suite(page); await tabStopSuite(page); await cursorSuite(page, variant === 'Chart' ? ['svg', 'canvas'] : ['svg']) }
     await page.close()
   }
 } finally {

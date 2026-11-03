@@ -8,6 +8,11 @@
  * React host projects these nodes into focusable, absolutely-positioned
  * elements and uses the keyboard contract in `react/src/a11y.ts`.
  *
+ * Every box is in the rendered viewport: the top-left of the chart's SVG (or canvas) is (0, 0), and the view's padding and
+ * the frame's offset inside it are part of the numbers. That is the space of a pointer event mapped into the chart and of
+ * `buildHitIndex`, so a node lies exactly over the mark the pointer would pick there, and a host overlays a node at its
+ * own (x, y) with no knowledge of the padding.
+ *
  * Captions deliberately follow vega-scenegraph's wording where it has one
  * ("X-axis titled '…' for a linear scale with values from … to …", "Symbol
  * legend titled '…' for color with N values: …") so a screen-reader user sees
@@ -32,7 +37,7 @@ export interface A11yNode {
   label: string
   description?: string
   selected?: boolean
-  /** Absolute position in the rendered viewport. */
+  /** Position of the box in the rendered viewport (padding included; see the module comment). */
   x: number
   y: number
   width: number
@@ -403,6 +408,9 @@ export function buildA11yTree(
     }
   }
   const rootScales = scales.size ? scales : scene.__scales ? scalesFromSnapshots(scene.__scales) : scales
+  // where the root group is in the viewport: inside the padding, at the frame's offset (the origin the scene's items are in)
+  const originX = (scene.padding?.left ?? 0) + (scene.frameX ?? 0)
+  const originY = (scene.padding?.top ?? 0) + (scene.frameY ?? 0)
   // the root group item is an item like any group's: `aria: false` hides everything, a description makes it a node of its own
   const frame = scene.frameAria
   if (frame?.aria !== false) {
@@ -412,10 +420,10 @@ export function buildA11yTree(
         role: frame.ariaRole || 'graphics-object',
         roleDescription: String(frame.ariaRoleDescription || 'group mark'),
         label: String(frame.description),
-        x: scene.frameX ?? 0, y: scene.frameY ?? 0, width: Math.max(2, scene.plotWidth ?? scene.width), height: Math.max(2, scene.plotHeight ?? scene.height),
+        x: originX, y: originY, width: Math.max(2, scene.plotWidth ?? scene.width), height: Math.max(2, scene.plotHeight ?? scene.height),
       })
     }
-    for (const n of scene.items) walk(n, 0, 0, rootScales)
+    for (const n of scene.items) walk(n, originX, originY, rootScales)
   }
 
   const summary = total > threshold ? `${total} marks in this chart. Zoom in or filter the data to explore individual marks.` : undefined

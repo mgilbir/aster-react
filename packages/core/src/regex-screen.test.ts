@@ -12,7 +12,9 @@ const REDOS: Array<[string, string?]> = [
   ['^(([a-z])+.)+[A-Z]([a-z])+$'], // OWASP
   ['^(\\d+)*$'], ['(a+)+b'], ['([a-z]+)*'], ['^(\\w|\\d)+$'], ['(\\w|\\d)*'], ['^((a+)+)+$'], ['^(([a-z]+)+)$'],
   ['(?:a+)+'], ['(a+|b+)*'], ['^(.+)+$'], ['^(\\s*\\w+\\s*)*$'], ['(a|a?)+'], ['(\\d+|\\w+)*'], ['^([\\w.]+)*@'],
-  ['(.*a){12,}'], ['^(?:(a|b)\\1)+$'], ['(?<x>a)(\\k<x>)*'], ['(?=(a+)+)b'], ['^(a+)+$', 'i'], ['(A|a)+', 'i'], ['^(\\d|\\w)+$'], ['(?:[a-z]|[a-f0-9])+x'],
+  ['(.*a){12,}'],
+  // polynomial: adjacent unbounded quantifiers over the same characters
+  ['a*a*a*b'], ['a*a*a*a*a*b'], ['.*.*.*x'], ['\\d+\\d+\\d+$'], ['^\\s*\\s*\\s*x'], ['[a-z]*\\w*[a-z]*!'], ['(?:ab)*(?:ab)*(?:ab)*c'], ['^(?:(a|b)\\1)+$'], ['(?<x>a)(\\k<x>)*'], ['(?=(a+)+)b'], ['^(a+)+$', 'i'], ['(A|a)+', 'i'], ['^(\\d|\\w)+$'], ['(?:[a-z]|[a-f0-9])+x'],
 ]
 
 /** Patterns typical in Vega specs and data pipelines. */
@@ -22,7 +24,9 @@ const BENIGN: Array<[string, string?]> = [
   ['^[a-z]{2}-[A-Z]{2}$'], ['(\\d{3})-(\\d{4})'], ['^(?:\\d{1,3}\\.){3}\\d{1,3}$'], ['^[^@]+@[^@]+$'], ['\\.csv$'], ['^(Mon|Tue|Wed|Thu|Fri)$'],
   ['^[+-]?\\d+(\\.\\d+)?$'], ['^\\$?[\\d,]+$'], ['[\\u4e00-\\u9fa5]+'], ['^(?!foo)\\w+$'], ['(?<=\\$)\\d+'], ['^[A-Za-z_][A-Za-z0-9_]*$'],
   ['^\\d+(px|em|%)$'], ['^\\s*$'], ['(a|b|c)+'], ['([A-Z])\\1'], ['\\d+(?:st|nd|rd|th)'], ['^(\\d{1,2})\\/(\\d{1,2})\\/(\\d{4})$'], ['[A-Z]{2,}'],
-  ['^.*$'], ['^(?:[a-z]+\\s){2}[a-z]+$'], ['^\\p{L}+$', 'u'], ['^x*$'], ['[\\w-]+'], ['^(?<y>\\d{4})-(?<m>\\d{2})$'], ['(?:^|,)("[^"]*"|[^,]*)'.replace('*)', '{0,50})')], ['a{2,}b'],
+  ['^.*$'],
+  // adjacent quantifiers that are at worst quadratic, or that do not overlap
+  ['\\s*.*'], ['^\\s*(.*?)\\s*$'], ['\\d+\\.?\\d*'], ["[\\w']{3,}"], ['.*foo.*bar'], ['\\s*\\w+\\s*=\\s*\\d+'], ['a*b*c*'], ['^\\d+\\s*\\w*\\s*$'], ['^(?:[a-z]+\\s){2}[a-z]+$'], ['^\\p{L}+$', 'u'], ['^x*$'], ['[\\w-]+'], ['^(?<y>\\d{4})-(?<m>\\d{2})$'], ['(?:^|,)("[^"]*"|[^,]*)'.replace('*)', '{0,50})')], ['a{2,}b'],
 ]
 
 describe('static regex screen (heuristic)', () => {
@@ -41,6 +45,7 @@ describe('static regex screen (heuristic)', () => {
     expect(regexHazard('(a+)+')).toMatch(/nested quantifiers/)
     expect(regexHazard('(a|aa)+')).toMatch(/same prefix/)
     expect(regexHazard('(?:(a)\\1)+')).toMatch(/backreference/)
+    expect(regexHazard('a*a*a*b')).toMatch(/adjacent unbounded quantifiers/)
   })
   it('leaves unreadable syntax to the RegExp constructor', () => {
     expect(regexHazard('(')).toBeNull()
@@ -103,5 +108,27 @@ describe('the real attack (child process, hard kill)', () => {
         { limits: { maxTimeMs: 200 } })`)
     expectLimit(r, /regexSafety/)
     expect(r.cpuMs).toBeLessThan(50)
+  }, 30_000)
+})
+
+describe('polynomial backtracking (child process, hard kill)', () => {
+  // 'a'.repeat(9000) against /a*a*a*a*a*b/ ran for over 20 s before the screen learnt the shape
+  it('/a*a*a*a*a*b/ on 9000 characters, with an empty limits object, is refused up front', async () => {
+    const r = await attack(`
+      core.renderSpec({ width: 10, height: 10, data: [{ name: 't', values: [{ s: 'a'.repeat(9000) }], transform: [{ type: 'formula', as: 'n', expr: 'test(/a*a*a*a*a*b/, datum.s)' }] }],
+        marks: [{ type: 'rect', from: { data: 't' } }] }, { limits: {} })`)
+    expectLimit(r, /regexSafety: adjacent unbounded quantifiers/)
+    expect(r.cpuMs).toBeLessThan(500)
+  }, 30_000)
+
+  it('the trim idiom and a two-way adjacent pattern on 9000 characters still run under limits', async () => {
+    const r = await attack(`
+      const svg = core.renderSpec({ width: 10, height: 10, data: [{ name: 't', values: [{ s: ' '.repeat(10) + 'a'.repeat(8000) }], transform: [
+        { type: 'formula', as: 'a', expr: "test(/^\\\\s*(.*?)\\\\s*$/, datum.s)" },
+        { type: 'formula', as: 'b', expr: "test(/\\\\s*a*b?/, datum.s)" }] }],
+        marks: [{ type: 'rect', from: { data: 't' } }] }, { limits: {} })
+      return svg.length > 0`)
+    expect(r.threw, JSON.stringify(r)).toBeNull()
+    expect(r.value).toBe(true)
   }, 30_000)
 })

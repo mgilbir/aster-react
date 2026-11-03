@@ -928,7 +928,7 @@ function renderImages(group: SceneGroup, open: string): string {
   let out = open
   const w = new StringAttrSink()
   for (const it of itemsOf(group)) {
-    if ((it.url == null && itemImage(it) == null) || it.x == null || it.y == null) continue
+    if ((it as { urlDenied?: boolean }).urlDenied) continue
     w.s = ''
     imageAttrs(it, w)
     out += links ? withLink(it, `<image${w.s}/>`) : `<image${w.s}/>`
@@ -1564,13 +1564,11 @@ export function leafLineEnds(it: SceneItem): [number, number, number, number] {
 
 /** Endpoints of a rule: vega defaults NaN/undefined to 0, x2/y2 to x/y. */
 export function ruleEnds(it: SceneItem): [number, number, number, number] {
-  // vega-scenegraph's rule/line shapes read `item.x || 0`, so NaN scale
-  // outputs collapse to the origin — but x2/y2 legitimately resolve to 0
-  // (a rule spanning back to the axis origin), so only NaN falls back.
-  const clean = (v: number | undefined, fallback = 0): number => (v == null || Number.isNaN(v) ? fallback : v)
-  const x = clean(it.x)
-  const y = clean(it.y)
-  return [x, y, clean(it.x2, x), clean(it.y2, y)]
+  // vega-scenegraph's rule shape reads `item.x || 0`, so a NaN scale output collapses to the origin; but the far end is `item.x2`
+  // whenever the item has one (`!= null`): a NaN stays NaN (the element says so), and only a missing x2/y2 is the near end.
+  const x = it.x || 0
+  const y = it.y || 0
+  return [x, y, it.x2 != null ? it.x2 : x, it.y2 != null ? it.y2 : y]
 }
 
 /** A line mark's path: vega styles it from the first item; a stroked line defaults to width 2. */
@@ -1642,7 +1640,7 @@ export function imageAttrs(it: SceneItem, w: AttrSink): void {
   itemDatumAttr(it, w)
   ariaItemAttrs(it, w, 'image')
   const image = itemImage(it)
-  w.v('xlink:href', image ? imageHref(image) : it.url)
+  w.v('xlink:href', image ? imageHref(image) : it.url ?? '')
   w.t('transform', `translate(${num(d.x)},${num(d.y)})`)
   w.n('width', d.w)
   w.n('height', d.h)
