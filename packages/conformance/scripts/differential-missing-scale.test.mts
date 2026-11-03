@@ -8,7 +8,8 @@
  * statically and by a signal or a field, in conditional encodes and nested in mult/offset/band, mixed with scales that exist.
  *
  * Compared: the picture (strict canonicalizer), whether and how many errors were logged, the error's class, and for a scale named
- * statically its message too (the text is the same TypeError V8 words for vega's compiled call).
+ * statically its message too (the text is the same TypeError V8 words for vega's compiled call). The guides' entries are held to the
+ * same (one error, the same picture): see the last block.
  */
 import { describe, expect, it } from 'vitest'
 import * as vega from 'vega'
@@ -212,9 +213,9 @@ describe('a scale outside the scope of the mark is missing for it', () => {
 //  - a guide part's entry of {scale, field, band?, extra?, offset?, round?} with plain names: guide-encode's scaled-field closure;
 //  - a guide part's entry of {scale, range, mult?, offset?, round?}: guide-encode's range closure;
 //  - any other guide entry: the general resolver again, through the host.
-// A guide does not stop the run the way a mark does (one error per part item, the picture differs): the error MESSAGES are what is held.
+// A guide stops the run the way a mark does: one error, and what the pass had made when it stopped. Held: the errors (how many, and
+// their messages) and the picture.
 describe('every path that reads a scale reference fails with the message of vega', () => {
-  const distinct = (errors: string[]): string[] => [...new Set(errors)]
   const GUIDE_SHAPES: Array<[string, string, () => Record<string, unknown>]> = [
     ['guide scaled-field closure', 'field', () => ({ scale: 'nope', field: 'value' })],
     ['guide scaled-field closure', 'field, band', () => ({ scale: 'nope', field: 'value', band: 0.5 })],
@@ -244,7 +245,9 @@ describe('every path that reads a scale reference fails with the message of vega
         const got = onAster(spec)
         // (the part must exist for the entry to run: a vega run that logged nothing proves nothing about the path)
         if (want.errors.length === 0 && got.errors.length === 0) continue
-        if (JSON.stringify(distinct(want.errors)) !== JSON.stringify(distinct(got.errors))) bad.push(`${kind}.${part} ${JSON.stringify(entry)}: vega ${JSON.stringify(distinct(want.errors))}, aster ${JSON.stringify(distinct(got.errors))}`)
+        const picture = diffCanonical(canonicalizeSvg(want.svg), canonicalizeSvg(got.svg))
+        if (JSON.stringify(want.errors) !== JSON.stringify(got.errors)) bad.push(`${kind}.${part} ${JSON.stringify(entry)}: vega ${JSON.stringify(want.errors)}, aster ${JSON.stringify(got.errors.slice(0, 3))} (${got.errors.length})`)
+        else if (picture.length) bad.push(`${kind}.${part} ${JSON.stringify(entry)}: ${picture.slice(0, 2).join(' | ')}`)
         else exercised.add(`${_path}: ${_name}`)
       }
     }
