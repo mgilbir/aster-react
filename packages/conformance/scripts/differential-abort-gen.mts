@@ -99,7 +99,9 @@ function group(g: Gen, depth: number, data: string): Spec {
   const own = g.r.chance(0.4)
   const shape = g.r.pick(['plain', 'plain', 'plain', 'facet', 'data'])
   const marks: Spec[] = []
-  const kids = g.r.between(0, 3)
+  // (a group with nothing in it: its scope has no marks, which is what the ranks of the layouts above it depend on)
+  const empty = (fail === undefined || fail === 'group' || fail === 'scope-signal') && g.r.chance(0.15)
+  const kids = empty ? 0 : g.r.between(0, 3)
   const childData = shape === 'facet' ? `f${id}` : data
   for (let i = 0; i < kids; i++) marks.push(depth < 2 && g.r.chance(0.4) ? group(g, depth + 1, childData) : leaf(g, childData))
   const update: Record<string, unknown> = { x: { value: 2 + (id % 4) * 30 }, y: { value: 2 }, width: { value: 28 }, height: { value: 28 }, fill: { value: '#eee' } }
@@ -121,8 +123,8 @@ function group(g: Gen, depth: number, data: string): Spec {
   }
   const axes: Spec[] = []
   const legends: Spec[] = []
-  for (let i = g.r.between(0, 1) + (fail === 'axis' ? 1 : 0); i > 0; i--) axes.push(axis(g, own ? `s${id}` : undefined, false))
-  for (let i = g.r.between(0, 1) + (fail === 'legend' ? 1 : 0); i > 0; i--) legends.push(legend(g, false))
+  for (let i = (empty ? 0 : g.r.between(0, 1)) + (fail === 'axis' ? 1 : 0); i > 0; i--) axes.push(axis(g, own ? `s${id}` : undefined, false))
+  for (let i = (empty ? 0 : g.r.between(0, 1)) + (fail === 'legend' ? 1 : 0); i > 0; i--) legends.push(legend(g, false))
   if (fail === 'axis') {
     axes[g.r.int(axes.length)] = axis(g, own ? `s${id}` : undefined, true)
     g.used.add(fail)
@@ -136,7 +138,7 @@ function group(g: Gen, depth: number, data: string): Spec {
   if (fail === 'title') {
     node.title = { text: 'T', encode: { [g.r.pick(['title', 'group'])]: { update: { dx: failingEntry(g.r) } } } }
     g.used.add(fail)
-  } else if (g.r.chance(0.15)) node.title = { text: 'title' }
+  } else if (!empty && g.r.chance(0.15)) node.title = { text: 'title' }
   return node
 }
 
@@ -156,7 +158,7 @@ export function treeSpec(r: Rng): { spec: Spec; fails: Fail[]; label: string } {
   for (let i = 0; i < count; i++) fails.set(r.int(nodes), r.pick(FAILS))
   const { marks, g } = make(fails)
   const spec: Spec = {
-    width: 130, height: 60, padding: 4, autosize: 'none',
+    width: 130, height: 60, padding: 4, autosize: process.env.ABORT_AUTOSIZE ?? r.pick(['none', 'pad', 'fit']),
     signals: [],
     scales: [
       { name: 'x', type: 'linear', domain: [0, 4], range: [0, 20] },

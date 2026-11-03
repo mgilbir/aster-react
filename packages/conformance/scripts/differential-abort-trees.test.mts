@@ -49,7 +49,7 @@ function onAster(spec: Spec): { svg: string; errors: string[] } {
 }
 
 const SEEDS = [11, 23, 37]
-const PER_SEED = scaled(120)
+const PER_SEED = scaled(200)
 
 describe('a pass that fails builds what vega builds', () => {
   it.each(SEEDS)(`${PER_SEED} generated trees of nested scopes, seed %i`, { timeout: 600_000 }, async (seed) => {
