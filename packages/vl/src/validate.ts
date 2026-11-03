@@ -55,7 +55,7 @@ const ALL_CHANNELS = set(
     'row column facet',
 )
 /** Schema channels compile.ts does not consume (everything else in ALL_CHANNELS is supported; the rest throws). */
-const UNSUPPORTED_CHANNELS = set('theta2 radius2 key')
+const UNSUPPORTED_CHANNELS = set('key')
 const GEO_CHANNELS = set('longitude latitude longitude2 latitude2')
 const SUPPORTED_CHANNELS: ReadonlySet<string> = new Set([...ALL_CHANNELS].filter((c) => !UNSUPPORTED_CHANNELS.has(c)))
 

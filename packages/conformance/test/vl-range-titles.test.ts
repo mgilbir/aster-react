@@ -15,7 +15,6 @@ import { compile } from '@aster/vl'
 import { TIME_DATA, silent } from './vl-time-helpers.js'
 
 type Obj = Record<string, unknown>
-const UNSUPPORTED = /encoding channel "(?:theta2|radius2)" is valid Vega-Lite but is not supported/
 
 /** The definitions a ranged channel can take: a field alone, with a title, with a switched-off title, aggregated, binned, in a time unit. */
 const DEFS: Array<[string, Obj]> = [
@@ -93,9 +92,7 @@ async function same(spec: Obj): Promise<string> {
   try { theirs = (vl as any).compile(JSON.parse(JSON.stringify(spec)), { logger: silent }).spec } catch { theirs = undefined }
   let refusal = ''
   try { ours = compile(JSON.parse(JSON.stringify(spec)) as never) } catch (e) { ours = undefined; refusal = String(e) }
-  // (theta2 and radius2 are valid Vega-Lite that @aster/vl says outright it does not support: there is no title to compare)
-  if (ours === undefined && theirs !== undefined && UNSUPPORTED.test(refusal)) return ''
-  if (theirs === undefined || ours === undefined) return theirs === ours ? '' : `refused by ${theirs === undefined ? 'vega-lite' : 'aster'} only`
+  if (theirs === undefined || ours === undefined) return theirs === ours ? '' : `refused by ${theirs === undefined ? 'vega-lite' : 'aster'} only: ${refusal}`
   const titles = [JSON.stringify(guideTitles(ours)), JSON.stringify(guideTitles(theirs))]
   if (titles[0] !== titles[1]) return `guide titles: expected ${titles[1]} got ${titles[0]}`
   const a = await drawn(theirs)

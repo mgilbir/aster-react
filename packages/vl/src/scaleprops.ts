@@ -66,3 +66,45 @@ export function zeroByDefault(mark: string, channel: string, orient: string): bo
   if (!ALONG_AXIS.has(mark)) return true
   return channel !== (orient === 'vertical' ? 'x' : orient === 'horizontal' ? 'y' : undefined)
 }
+
+const QUANTITATIVE_TYPES = ['linear', 'log', 'pow', 'sqrt', 'symlog'] as const
+/** The scale types that cut a continuous domain into a few classes. */
+const DISCRETIZING = ['quantile', 'quantize', 'threshold'] as const
+/** The scale types that take a list of values as their domain. */
+const DISCRETE_DOMAIN = ['ordinal', 'bin-ordinal', 'point', 'band'] as const
+
+/** Whether a channel can be drawn through a scale of this type. A channel with no scale (a facet, a secondary position) takes none. */
+function channelAcceptsScaleType(channel: string, type: string): boolean {
+  switch (channel) {
+    case 'x': case 'y': case 'xOffset': case 'yOffset': case 'theta': case 'radius':
+      return (CONTINUOUS as readonly string[]).includes(type) || type === 'band' || type === 'point'
+    case 'time':
+      return type === 'linear' || type === 'band'
+    case 'size': case 'strokeWidth': case 'opacity': case 'fillOpacity': case 'strokeOpacity': case 'angle':
+      return (CONTINUOUS as readonly string[]).includes(type) || (DISCRETIZING as readonly string[]).includes(type) || type === 'band' || type === 'point' || type === 'ordinal'
+    case 'color': case 'fill': case 'stroke':
+      return type !== 'band'
+    case 'strokeDash': case 'shape':
+      return type === 'ordinal' || (DISCRETIZING as readonly string[]).includes(type)
+    default:
+      return false
+  }
+}
+
+/** Whether a field of this data type can be drawn through a scale of this type. */
+function dataTypeAcceptsScaleType(dataType: string, type: string): boolean {
+  switch (dataType) {
+    case 'ordinal': case 'nominal': return (DISCRETE_DOMAIN as readonly string[]).includes(type)
+    case 'temporal': return type === 'time' || type === 'utc'
+    case 'quantitative': return (QUANTITATIVE_TYPES as readonly string[]).includes(type) || (DISCRETIZING as readonly string[]).includes(type)
+    default: return true
+  }
+}
+
+/**
+ * Whether the scale type a spec asks for is one the channel and the data can use. When it is not, the scale is the one the field would
+ * have had without asking: the request is dropped, not repaired. `dataType` is absent for a constant, which only the channel limits.
+ */
+export function scaleTypeFits(channel: string, type: string, dataType: string | undefined): boolean {
+  return channelAcceptsScaleType(channel, type) && (dataType === undefined || dataTypeAcceptsScaleType(dataType, type))
+}

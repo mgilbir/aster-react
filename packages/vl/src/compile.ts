@@ -22,7 +22,7 @@ import { mergeEncoding, normalizeUnits } from './composite.js'
 import { timeScaleRange } from './animation.js'
 import { fieldsTitle, mergeGuideTitles, titleText, writtenTitle, type GuideTitle, type TitledField } from './titles.js'
 import { orientationOf, type Position } from './orient.js'
-import { scalePropApplies, zeroByDefault } from './scaleprops.js'
+import { scalePropApplies, scaleTypeFits, zeroByDefault } from './scaleprops.js'
 import { isTimerSelection, selectionExtent } from './selection.js'
 import { ASSEMBLED_FROM, GEO_POSITION_CHANNELS, assembleProjection, finalProjectionName, geoDataTransforms, geoshapeTransform, hasProjection, mergeLayerProjections, parseUnitProjection, renameComponentSignals, type GeoUnit, type ProjectionComponent, type UnitGeo } from './geo.js'
 import { scaleConfigOf, discreteStep, viewContinuousSize, viewDiscreteSize, sizeRange, countRange, discreteCount, usesUnaggregatedDomain, type ScaleCfg } from './scaleconfig.js'
@@ -94,6 +94,8 @@ export interface FieldDef {
   bandPosition?: number
   axis?: Record<string, unknown> | null
   scale?: Record<string, unknown>
+  /** The scale type the spec asked for when the channel or the data could not use it (`scale` no longer holds it; the text of a value still reads it). */
+  requestedScaleType?: string
   legend?: Record<string, unknown> | null
   title?: unknown
   raw: ChannelDef
@@ -3375,8 +3377,8 @@ function checkConstChannels(mark: string, encoding: Record<string, unknown>, fil
   for (const [ch, def] of Object.entries(encoding)) {
     if (!isObject(def) || def.field !== undefined) continue
     const isDatum = def.datum !== undefined
-    if (isDatum && !['x', 'y', 'x2', 'y2', 'xOffset', 'yOffset', 'color', 'fill', 'stroke', ...GEO_POSITION_CHANNELS].includes(ch)) {
-      throw new VLCompileError(`encoding.${ch}.datum is not supported (datum works on x, y, x2, y2, longitude, latitude, color, fill and stroke)`)
+    if (isDatum && !['x', 'y', 'x2', 'y2', 'theta2', 'radius2', 'xOffset', 'yOffset', 'color', 'fill', 'stroke', ...GEO_POSITION_CHANNELS].includes(ch)) {
+      throw new VLCompileError(`encoding.${ch}.datum is not supported (datum works on x, y, x2, y2, theta2, radius2, longitude, latitude, color, fill and stroke)`)
     }
 
   }
@@ -3456,6 +3458,12 @@ function supportedMarks(channel: string): Record<string, 'always' | 'binned'> | 
 }
 
 /** encoding.ts markChannelCompatible. (An image mark is compiled as a rect carrying `$image`; the channel table is the image's.) */
+/** A secondary position channel that does not give its own type (x2 over a temporal x) is of its main channel's type: its field is a date too. */
+function secondaryOfTemporal(f: FieldDef, fields: FieldDef[]): boolean {
+  if (f.raw.type !== undefined) return false
+  const main = SECONDARY_MAIN[f.channel]
+  return main !== undefined && fields.some((g) => g.channel === main && g.type === 'temporal')
+}
 function markChannelCompatible(encoding: Record<string, unknown>, channel: string, mark: string, image: boolean): boolean {
   const table = supportedMarks(channel)
   if (!table) return true // (an unknown channel is validate.ts's to reject)
@@ -3495,10 +3503,20 @@ function parseEncodingFields(encoding: Record<string, unknown>, config?: unknown
   }
   for (const f of fields) {
     if ((f.channel === 'x' || f.channel === 'y') && fields.some((o) => o.channel === `${f.channel}Offset` && o.field)) f.nestedOffset = true
+    // a scale type the channel or the data cannot use is not the field's scale type: it has the one it would have had without asking
+    const askedType = f.scale?.type
+    if (askedType !== undefined) {
+      if (!scaleTypeFits(f.channel, String(askedType), f.datumOnly ? undefined : f.type)) {
+        const { type: dropped, ...rest } = f.scale!
+        f.scale = rest
+        f.requestedScaleType = String(dropped)
+      }
+    }
     // pre-binned data: the bins' ends are the secondary channel's field
     if (isPrebinned(f)) {
-      const d2 = encoding[`${f.channel}2`]
-      if (isObject(d2) && typeof d2.field === 'string') f.binParams = { ...f.binParams!, end: flatField(d2.field).key }
+      // (a second channel the mark does not draw was dropped above: it says nothing about the bins; an aggregated one says it by its result)
+      const second = fields.find((g) => g.channel === `${f.channel}2` && g.field && !g.datumOnly)
+      if (second !== undefined) f.binParams = { ...f.binParams!, end: aggFieldName(second) }
     }
   }
   return fields
@@ -4080,7 +4098,7 @@ function buildData(spec: VLSpec, allFields: FieldDef[], mark: string, orient: st
 
   const thetaDef = fields.find((f) => f.channel === 'theta' && f.field)
   // stack.ts: an arc (or a label) stacks along theta or radius
-  const polarStack = polarStackOf(fields, mark)
+  const polarStack = polarStackOf(allFields, mark)
   // channel roles shared by the pipeline stages below
   const yDef = fields.find((f) => f.channel === 'y')
   const xDef = fields.find((f) => f.channel === 'x')
@@ -4146,7 +4164,7 @@ function buildData(spec: VLSpec, allFields: FieldDef[], mark: string, orient: st
       // sources go through toNumber).
       // (a temporal field declared under one of them is coerced to quantitative with a warning, and then does cast to a number)
       if (f.aggregate != null && declared !== 'temporal' && ['count', 'distinct', 'valid', 'missing'].includes(String(f.aggregate))) continue
-      if (timeUnitFields.has(f.field) || f.timeUnit || f.type === 'temporal') {
+      if (timeUnitFields.has(f.field) || f.timeUnit || f.type === 'temporal' || secondaryOfTemporal(f, fields)) {
         // A temporal axis formatted as a number makes upstream skip the toDate
         // cast entirely (the time scale then gets raw strings and an invalid
         // domain — probed guide-axis-x-temporal-formatType-number).
@@ -4291,7 +4309,8 @@ function buildData(spec: VLSpec, allFields: FieldDef[], mark: string, orient: st
     }
     out.push({
       type: 'stack',
-      groupby: [stackDim, ...fields.filter((f) => f.channel === (dimensionChannel === 'x' ? 'xOffset' : 'yOffset')).map((f) => aggFieldName(f))].filter(Boolean),
+      // (stack.ts: the stacked field is not a group of its own - a dimension or an offset that reads it stacks as one group)
+      groupby: [stackDim, ...fields.filter((f) => f.channel === (dimensionChannel === 'x' ? 'xOffset' : 'yOffset')).map((f) => aggFieldName(f))].filter((g) => g && g !== stackField),
       field: stackField,
       sort: stackSortParams(fields, seriesFields, measureChannel, isObject(spec.encoding) ? (spec.encoding as Record<string, unknown>) : {}),
       as: [`${stackField}_start`, `${stackField}_end`],
@@ -4426,11 +4445,20 @@ function argValueExpr(f: FieldDef): string {
   return dref(argObjName(f)) + splitAccessPath(f.argAgg!.valuePath).map((p) => `[${JSON.stringify(p)}]`).join('')
 }
 
+/** The reference to a polar channel's second channel in the first one's scale; undefined when the unit does not encode one. */
+function secondaryPolarRef(spec: VLSpec, fields: FieldDef[], channel: 'theta' | 'radius', bandScale: boolean): Record<string, unknown> | undefined {
+  const def2 = fields.find((f) => f.channel === `${channel}2` && f.field)
+  // (on a band scale a field sits in the middle of its band, as the first channel's does)
+  if (def2 !== undefined) return { scale: channel, field: aggFieldName(def2), ...(bandScale ? { band: def2.bandPosition ?? 0.5 } : {}) }
+  const written = isObject(spec.encoding) ? (spec.encoding as Record<string, unknown>)[`${channel}2`] : undefined
+  return isObject(written) && 'value' in written ? { value: written.value } : undefined
+}
+
 /**
  * mark/arc.ts + position-rect.ts `rectPosition` for `radius` and `theta`: an arc is a rectangle in polar coordinates. A binned (or time unit)
  * channel spans its bin's end (outer radius, start angle) to its start; a discrete one sits at the start of its band and spans the band;
  * any other is positioned by its field - or, stacked, by its stack's end - and runs to its second channel, the mark definition's
- * inner radius / end angle, or scale zero. Returns the channels a field drove. (theta2 and radius2 channels are refused earlier.)
+ * inner radius / end angle, or scale zero. Returns the channels a field drove. 
  */
 function polarRectPositions(update: Record<string, unknown>, spec: VLSpec, fields: FieldDef[], stack: PolarStack | undefined, markRef: (v: unknown) => Record<string, unknown>, innerFallback: unknown): Set<string> {
   const handled = new Set<string>()
@@ -4446,7 +4474,9 @@ function polarRectPositions(update: Record<string, unknown>, spec: VLSpec, field
     const offsetValue = md[`${channel}Offset`]
     const offset = offsetValue ? offsetValue : undefined
     const withOffset = (ref: Record<string, unknown>): Record<string, unknown> => (offset === undefined ? ref : { ...ref, offset })
-    if ((def.bin || def.tu) && !discrete) {
+    // the second channel (theta2, radius2), a field, a datum or a constant: where the arc ends, in the first channel's scale
+    const second = secondaryPolarRef(spec, fields, channel, bandScale)
+    if ((def.bin || (def.tu && second === undefined)) && !discrete) {
       // rectBinPosition: the band size is 1 (a bin, a time unit), so the near key reads the far end of the band
       let start: string
       let end: string
@@ -4462,7 +4492,7 @@ function polarRectPositions(update: Record<string, unknown>, spec: VLSpec, field
       }
       update[near] = { scale: channel, field: end }
       update[far] = { scale: channel, field: start }
-    } else if (discrete) {
+    } else if (discrete && second === undefined) {
       // positionAndSize: the start of the band, and the band's width on to its end
       const size = bandScale ? { signal: `bandwidth('${channel}')` } : { value: C.defaultStep }
       const sizeRef = offset === undefined ? size : { ...size, offset }
@@ -4472,6 +4502,7 @@ function polarRectPositions(update: Record<string, unknown>, spec: VLSpec, field
       const band = bandScale ? { band: def.bandPosition ?? 0.5 } : {}
       update[near] = withOffset(stack?.fieldChannel === channel ? stackedPolarRef(channel, stack, def.bandPosition) : { scale: channel, field: aggFieldName(def), ...band })
       if (stack?.fieldChannel === channel) update[far] = withOffset({ scale: channel, field: `${stack.field}_start` })
+      else if (second !== undefined) update[far] = withOffset(second)
       else {
         const given = channel === 'theta' ? (md.endAngle ?? md.theta2) : innerFallback
         update[far] = given !== undefined && given !== null ? markRef(given) : zeroOrMinRef(channel)
@@ -4816,7 +4847,9 @@ function buildScales(spec: VLSpec, fieldsIn: FieldDef[], mark: string, orient: s
   // (a `scale: null` field has no scale)
   const fields = fieldsIn.filter((f) => !f.noScale)
   const scales: ScaleSpec[] = []
-  const dc: DomainCtx = { rawName, fields, mark, orient, series, cfg: scaleConfigOf(spec), specConfig: spec.config }
+  const encoded = isObject(spec.encoding) ? (spec.encoding as Record<string, unknown>) : {}
+  const ranged = new Set(['x', 'y'].filter((ch) => fieldsIn.some((f) => f.channel === `${ch}2`) || (encoded[`${ch}2`] != null && markChannelCompatible(encoded, `${ch}2`, mark, false))))
+  const dc: DomainCtx = { rawName, fields, mark, orient, series, cfg: scaleConfigOf(spec), specConfig: spec.config, ranged }
   const userScaleCfg = isObject(spec.config) && isObject((spec.config as Record<string, unknown>).scale)
     ? (spec.config as Record<string, unknown>).scale as Record<string, unknown>
     : undefined
@@ -5104,7 +5137,8 @@ function buildScales(spec: VLSpec, fieldsIn: FieldDef[], mark: string, orient: s
       sc.type = polarDef.tu?.utc ? 'utc' : 'time'
       delete sc.zero
     }
-    if (polarStackS?.fieldChannel === channel && explicitDomainOf(polarDef) === undefined) sc.domain = { data: dataName, fields: [`${polarStackS.field}_start`, `${polarStackS.field}_end`] }
+    // (a normalized stack spans 0 to 1 whatever it holds)
+    if (polarStackS?.fieldChannel === channel && explicitDomainOf(polarDef) === undefined) sc.domain = polarStackS.offset === 'normalize' ? [0, 1] : { data: dataName, fields: [`${polarStackS.field}_start`, `${polarStackS.field}_end`] }
     scales.push(sc)
   }
 
@@ -5211,25 +5245,52 @@ function schemeRange(scheme: unknown): Record<string, unknown> {
   return { scheme }
 }
 
-/** A domain over the values of several defs: one data reference each, or a literal list for a datum. */
-function unionDomain(defs: FieldDef[], dataName: string): unknown {
-  const entries = defs.map((d) => (d.datumOnly ? datumDomain(d) : { data: dataName, field: aggFieldName(d) }))
-  if (entries.every((e) => !Array.isArray(e) && 'field' in (e as object))) return { data: dataName, fields: (entries as Array<{ field: string }>).map((e) => e.field) }
-  return { fields: entries }
+/**
+ * scale/domain.ts parseDomainForChannel: the domain of a position with a secondary channel is the union of the two channels' domains
+ * (mergeDomains), each made as the channel's own: a discrete position's is sorted (domainSort), the secondary's is not, and a time unit
+ * spans start..end wherever it has a band (the primary has none when a secondary is encoded, a typed secondary does).
+ */
+function unionPositionalDomain(def: FieldDef, def2: FieldDef, dataName: string, mark: string, orient: string, fields: FieldDef[], dc: DomainCtx): unknown {
+  return mergeDomains([...domainParts(positionalDomain(def, dataName, mark, orient, fields, dc)), ...domainParts(secondaryDomain(def2, dataName, mark, positionalScaleType(mark, def), dc))])
+}
+
+/** A domain as the references it is made of: one over several fields of a data set is one reference to each. */
+function domainParts(domain: unknown): unknown[] {
+  if (!isObject(domain) || typeof domain.data !== 'string' || !Array.isArray(domain.fields)) return [domain]
+  return (domain.fields as unknown[]).map((field) => ({ data: domain.data, field }))
+}
+
+/** Whether the encoding gives a position a constant second channel (`x2: {value}`): no field def stands for it, but it ranges the position all the same. */
+function hasConstantSecond(spec: VLSpec, pos: 'x' | 'y'): boolean {
+  const written = isObject(spec.encoding) ? (spec.encoding as Record<string, unknown>)[`${pos}2`] : undefined
+  return isObject(written) && written.value !== undefined && written.field === undefined && written.datum === undefined
 }
 
 /**
- * scale/domain.ts parseDomainForChannel: the domain of a position with a secondary channel is the union of the two channels' domains
- * (mergeDomains). A discrete position's is sorted (domainSort), and so is the secondary's, which has no sort of its own.
+ * The reference to a secondary position (x2, y2) in its first channel's scale: its field, on a band scale at the middle of the band. A
+ * secondary that says it is temporal and has a time unit, though, is a point in its band as the first channel's would be: the middle of
+ * it unless the mark's band position says otherwise (valueref.ts midPoint).
  */
-function unionPositionalDomain(def: FieldDef, def2: FieldDef, dataName: string, mark: string, orient: string, fields: FieldDef[], dc: DomainCtx): unknown {
-  const plain = unionDomain([def, def2], dataName)
-  if (def.datumOnly || def2.datumOnly || !isDiscreteType(def.type)) return plain
-  const first = positionalDomain(def, dataName, mark, orient, fields, dc)
-  // (only the default ascending sort is unioned here: a sort by a field reads the raw rows, which the secondary channel does not)
-  if (!isDataRef(first) || typeof first.field !== 'string' || first.sort !== true) return plain
-  // (the secondary channel has no sort of its own: domain.ts domainSort reads the channel's own field def)
-  return mergeDomains([first, { data: dataName, field: aggFieldName(def2) }])
+function secondaryRef(spec: VLSpec, mark: string, pos: 'x' | 'y', primary: FieldDef | undefined, def2: FieldDef): Record<string, unknown> {
+  const scaleType = primary !== undefined ? positionalScaleType(mark, primary) : undefined
+  const bandPosition = def2.tu && def2.raw.type !== undefined && def2.type === 'temporal' && (scaleType === 'time' || scaleType === 'utc') ? bandPositionOf(spec, mark, def2, false) : undefined
+  if (bandPosition) {
+    const start = aggFieldName(def2)
+    if (bandPosition === 1) return { scale: pos, field: `${start}_end` }
+    return { signal: `scale(${JSON.stringify(pos)}, ${1 - bandPosition} * datum[${JSON.stringify(start)}] + ${bandPosition} * datum[${JSON.stringify(`${start}_end`)}])` }
+  }
+  return { scale: pos, field: aggFieldName(def2), ...(scaleType === 'band' ? { band: 0.5 } : {}) }
+}
+
+/** The domain of a secondary position channel (x2, y2) on its own. */
+function secondaryDomain(def: FieldDef, dataName: string, mark: string, scaleType: string, dc: DomainCtx): unknown {
+  if (def.datumOnly) return datumDomain(def)
+  // (a secondary field is a time unit with a band end only when it says it is temporal: domain.ts hasBandEnd reads a typed field def)
+  if (def.tu && def.type === 'temporal' && def.raw.type !== undefined && (scaleType === 'time' || scaleType === 'utc')) {
+    const bp = bandPositionOf({ config: dc.specConfig } as VLSpec, mark, def, false)
+    if (bp !== undefined) return { data: dataName, fields: [timeUnitField(def), `${timeUnitField(def)}_end`] }
+  }
+  return { data: dataName, field: aggFieldName(def) }
 }
 
 function positionalDomain(def: FieldDef, dataName: string, mark: string, orient: string, fields: FieldDef[] | undefined, dc: DomainCtx): unknown {
@@ -5238,9 +5299,8 @@ function positionalDomain(def: FieldDef, dataName: string, mark: string, orient:
   if (unagg !== undefined) return unagg
   if (def.bin && binDiscrete(def)) return sortedDomain(def, dataName, dc)
   if (def.bin && isPrebinned(def)) {
-    const bn = binNames(def.binParams!, def.field)
-    // (with no field that says where the bins end, the domain is that of the field)
-    return def.binParams!.end === undefined ? { data: dataName, field: bn.start } : { data: dataName, fields: [bn.start, bn.end] }
+    // (the field says where the bins start; the secondary channel, which a pre-binned field comes with, says where they end)
+    return { data: dataName, field: binNames(def.binParams!, def.field).start }
   }
   if (def.bin) {
     const sig = binNames(def.binParams!, def.field).signal
@@ -5248,7 +5308,7 @@ function positionalDomain(def: FieldDef, dataName: string, mark: string, orient:
   }
   if (def.timeUnit && !isDiscreteType(def.type) && def.type === 'temporal' && ['time', 'utc'].includes(positionalScaleType(mark, def))) {
     // domain.ts: a time unit with a band end spans start..end (the offsetted rect fields off the middle of a rect's band)
-    const hasSecondary = (fields ?? []).some((g) => g.channel === `${def.channel}2`)
+    const hasSecondary = dc.ranged?.has(def.channel) ?? (fields ?? []).some((g) => g.channel === `${def.channel}2`)
     const bp = bandPositionOf({ config: dc.specConfig } as VLSpec, mark, def, hasSecondary)
     if (bp !== undefined) {
       const offsetted = RECT_BASED_MARKS.has(mark) && bp !== 0.5 && (def.channel === 'x' || def.channel === 'y')
@@ -5337,6 +5397,8 @@ function isStacked(def: FieldDef, mark: string, orient: string, allFields?: Fiel
 
 /** What a discrete scale domain needs to resolve a sort definition. */
 interface DomainCtx {
+  /** the positions whose second channel the unit encodes at all (a constant `x2: {value}` counts) */
+  ranged?: ReadonlySet<string>
   /** the spec's config (band positions read the mark config) */
   specConfig?: unknown
   /** the raw (pre-aggregate) dataset sort-by-field/array domains read */
@@ -6200,9 +6262,9 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
       }
       const y2DefB = fields.find((f) => f.channel === 'y2' && f.field)
       if (yDef) {
-        if (y2DefB) {
+        if (y2DefB && !binsItself(yDef)) {
           update.y = { scale: 'y', field: aggFieldName(yDef) }
-          update.y2 = { scale: 'y', field: aggFieldName(y2DefB) }
+          update.y2 = secondaryRef(spec, mark, 'y', yDef, y2DefB)
         } else if (mark === 'rect' && ((yDef.bin && !binDiscrete(yDef)) || (yDef.timeUnit && positionalScaleType(mark, yDef) !== 'band'))) {
           // a rect's second dimension may be binned too (2d heatmaps)
           setBinnedRect(update, 'y', yDef, spec, mark)
@@ -6293,10 +6355,10 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
       if (xDef) {
         const x2Field = fields.find((f) => f.channel === 'x2' && f.field)
         const stackedX = !x2Field && isStacked(xDef, mark, orient, fields)
-        if (x2Field) {
+        if (x2Field && !binsItself(xDef)) {
           // an explicit x2 field: the bar spans x → x2 (ranged bar)
           update.x = { scale: 'x', field: aggFieldName(xDef) }
-          update.x2 = { scale: 'x', field: aggFieldName(x2Field) }
+          update.x2 = secondaryRef(spec, mark, 'x', xDef, x2Field)
         } else if (mark === 'rect' && ((xDef.bin && !binDiscrete(xDef)) || (xDef.timeUnit && positionalScaleType(mark, xDef) !== 'band'))) {
           setBinnedRect(update, 'x', xDef, spec, mark)
         } else if (stackedX) {
@@ -6328,11 +6390,12 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
     // between the two refs (rangePosition), whatever the scale: the band-size rules above are for single-channel positions
     for (const [pos, def] of [['x', xDef], ['y', yDef]] as const) {
       const def2 = fields.find((f) => f.channel === `${pos}2` && f.field)
-      if (!def || !def2 || def.bin) continue
+      // (a constant second channel is a second channel too: the range ends at its pixel, set below, unless the first channel is stacked)
+      if (!def || def.bin || (def2 === undefined && (!hasConstantSecond(spec, pos) || isStacked(def, mark, orient, fields)))) continue
       const band = positionalScaleType(mark, def) === 'band' ? { band: 0.5 } : {}
       for (const k of [pos, `${pos}c`, `${pos}2`, pos === 'x' ? 'width' : 'height']) delete update[k]
       update[pos] = { scale: pos, field: aggFieldName(def), ...band }
-      update[`${pos}2`] = { scale: pos, field: aggFieldName(def2), ...band }
+      if (def2 !== undefined) update[`${pos}2`] = secondaryRef(spec, mark, pos, def, def2)
     }
     // position-rect.ts rectPosition: an axis whose field is binned, or has a time unit and no second channel, spans its bin, whichever axis
     // the bar stands on. A bar whose encoding leaves it no orientation stands on neither axis, so any other continuous axis is a range of
@@ -6340,7 +6403,7 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
     if (mark === 'bar' && !sizeDef && barSizeProp === undefined) {
       const noOrientation = markOrient(spec, mark, spec.mark, fields) === undefined
       for (const [pos, def] of [['x', xDef], ['y', yDef]] as const) {
-        if (!def || def.datumOnly || fields.some((f) => f.channel === `${pos}2` || f.channel === `${pos}Offset`)) continue
+        if (!def || def.datumOnly || (hasConstantSecond(spec, pos) && !binsItself(def)) || fields.some((f) => (f.channel === `${pos}2` && !binsItself(def)) || f.channel === `${pos}Offset`)) continue
         const sc = positionalScaleType(mark, def)
         if (sc === 'band' || sc === 'point') continue
         const spansBin = (def.bin && !binDiscrete(def)) || def.timeUnit
@@ -6451,10 +6514,10 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
     if (yDef) {
       const stacked = isStacked(yDef, mark, orient, fields)
       update.y = { scale: 'y', field: stacked ? `${aggFieldName(yDef)}_end` : aggFieldName(yDef) }
-      const areaY2 = fields.find((f) => f.channel === 'y2' && f.field && !f.datumOnly)
+      const areaY2 = fields.find((f) => f.channel === 'y2' && f.field)
       if (areaY2 && areaOrient === 'vertical') {
         // a ranged area: y2 is the other end
-        update.y2 = { scale: 'y', field: aggFieldName(areaY2) }
+        update.y2 = secondaryRef(spec, mark, 'y', yDef, areaY2)
       } else if (areaOrient === 'vertical') {
         // vertical area: y is the value axis, y2 the baseline
         update.y2 = stacked
@@ -6476,8 +6539,8 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
         update.x2 = { scale: 'x', field: `${aggFieldName(xDef)}_start` }
       } else {
         // a ranged area: x2 is the other end
-        const areaX2 = fields.find((f) => f.channel === 'x2' && f.field && !f.datumOnly)
-        update.x2 = areaX2 ? { scale: 'x', field: aggFieldName(areaX2) } : zeroOrMinRef('x')
+        const areaX2 = fields.find((f) => f.channel === 'x2' && f.field)
+        update.x2 = areaX2 ? secondaryRef(spec, mark, 'x', xDef, areaX2) : zeroOrMinRef('x')
       }
     }
     { const dfn = definedSignal(spec, fields, mark); if (dfn !== undefined) update.defined = dfn }
@@ -6540,7 +6603,7 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
       const isBand = positionalScaleType(mark, sizeField) === 'band'
       // position-rect.ts rectPosition: a binned / time-unit size axis spans its bin (tick.ts calls rectPosition for it)
       const binnedSizeAxis = !isBand && !sizeDef && sizeRaw === undefined && (sizeField.bin || (sizeField.tu && sizeField.type === 'temporal'))
-        && !fields.some((f) => f.channel === `${sizeAxis}2` || f.channel === `${sizeAxis}Offset`)
+        && !fields.some((f) => (f.channel === `${sizeAxis}2` && !binsItself(sizeField)) || f.channel === `${sizeAxis}Offset`)
       if (binnedSizeAxis) {
         setBinnedRect(update, sizeAxis, sizeField, spec, mark)
       } else if (sizeDef) {
@@ -6590,8 +6653,8 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
     if (yDef) update.y = { scale: 'y', field: aggFieldName(yDef), ...(positionalScaleType(mark, yDef) === 'band' ? { band: 0.5 } : {}), ...(ruleYOff !== undefined ? { offset: ruleYOff } : {}) }
     // (position2Ref: the secondary ref of a band scale sits at the middle of its band too)
     // (a rule spans an axis only along its orientation: a second channel on the other axis is not drawn)
-    if (x2Def && ruleOrient !== 'vertical') update.x2 = { scale: 'x', field: aggFieldName(x2Def), ...(xDef != null && positionalScaleType(mark, xDef) === 'band' ? { band: 0.5 } : {}) }
-    if (y2Def && ruleOrient !== 'horizontal') update.y2 = { scale: 'y', field: aggFieldName(y2Def), ...(yDef != null && positionalScaleType(mark, yDef) === 'band' ? { band: 0.5 } : {}) }
+    if (x2Def && ruleOrient !== 'vertical') update.x2 = secondaryRef(spec, mark, 'x', xDef, x2Def)
+    if (y2Def && ruleOrient !== 'horizontal') update.y2 = secondaryRef(spec, mark, 'y', yDef, y2Def)
     // pointPosition2OrSize zeroOrMin (scaledZeroOrMinOrMax): with no explicit
     // x2/y2 (and no width/height encode), the rule spans to scale zero —
     // {value: 0} when the domain definitely contains zero, otherwise the
@@ -6717,10 +6780,12 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
     update.innerRadius = mInner != null ? markRef(mInner) : { value: (cfgType?.innerRadius as number | undefined) ?? 0 }
     // theta and radius are rectangles in polar coordinates (arc.ts: rectPosition for each); with neither channel the angles are the mark definition's
     const polarHandled = polarRectPositions(update, spec, fields, polarStackOf(fields, mark), markRef, mInner)
-    if (!polarHandled.has('theta') && isObject(arcMark) && (arcMark.theta !== undefined || arcMark.theta2 !== undefined)) {
-      // no theta channel: the angles are the mark def's (rangePosition: theta, then position2orSize for theta2)
-      if (arcMark.theta !== undefined) update.startAngle = markRef(arcMark.theta)
-      if (arcMark.theta2 !== undefined) update.endAngle = markRef(arcMark.theta2)
+    if (!polarHandled.has('theta')) {
+      // no theta channel: the angles are the mark def's, and a full turn when it gives none (rangePosition: theta runs from the whole
+      // circle's end, position2orSize for theta2 back to the scale's start)
+      const given = isObject(arcMark) ? arcMark : {}
+      update.startAngle = given.theta !== undefined ? markRef(given.theta) : { signal: '2*PI' }
+      update.endAngle = given.theta2 !== undefined ? markRef(given.theta2) : { value: 0 }
     }
   } else if (mark === 'trail') {
     // trail: a stroked-by-size line — fill default, size channel/def, sorted
@@ -6781,6 +6846,10 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
     for (const ch of ['x', 'y', 'x2', 'y2'] as const) {
       const d = enc[ch]
       if (isObject(d) && d.value !== undefined && d.field === undefined && d.datum === undefined) {
+        // position-range.ts position2Ref: a secondary constant is where the range ends, unless the first channel is stacked (the stack's
+        // start is) or spans its own bin (a rect's ends are the bin's)
+        const primary = ch.length === 2 ? fields.find((f) => f.channel === ch[0] && !f.datumOnly) : undefined
+        if (primary !== undefined && (isStacked(primary, mark, orient, fields) || (RECT_BASED_MARKS.has(mark) && binsItself(primary)))) continue
         // (tick.ts: the thickness axis of a tick is positioned by its centre, `xc` / `yc`)
         const thickness = mark === 'tick' && ch === (orient === 'horizontal' ? 'y' : 'x')
         update[thickness ? `${ch}c` : ch] = { value: d.value }
@@ -6807,7 +6876,8 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
     const ard = md.ariaRoleDescription ?? (isObject(cfg[mark]) ? (cfg[mark] as Record<string, unknown>).ariaRoleDescription : undefined) ?? (isObject(cfg.mark) ? (cfg.mark as Record<string, unknown>).ariaRoleDescription : undefined)
     if (typeof ard === 'string' && cfg.aria !== false && md.aria !== false) update.ariaRoleDescription = { value: ard }
   }
-  applyTextualChannels(update, spec, fields, (d) => d.stack === 'normalize' && ((d.channel === 'theta' && mark === 'arc' && !d.aggregate) || isStacked(d, mark, orient, fields)))
+  const polarStacked = polarStackOf(fields, mark)
+  applyTextualChannels(update, spec, fields, (d) => d.stack === 'normalize' && (d.channel === 'theta' || d.channel === 'radius' ? polarStacked?.fieldChannel === d.channel : isStacked(d, mark, orient, fields)))
 
   // data-driven opacity, stroke width and stroke dash reach every mark
   for (const prop of ['opacity', 'strokeWidth', 'strokeDash', 'angle']) {
@@ -7327,6 +7397,9 @@ function positionAndSizeRefs(ch: 'x' | 'y', def: FieldDef | undefined, spec: VLS
  * bin spacing (or, when the bin is thinner than minBandSize, half the shortfall) -
  * vega-lite `getBinSpacing`. `x` and `y2` are the "end" channels.
  */
+/** A binned field spans its own bin (a pre-binned one up to its secondary channel): a rect on it takes its ends from the bin, not from the plain range of the two channels. */
+const binsItself = (def: FieldDef): boolean => !!def.bin && !binDiscrete(def)
+
 function setBinnedRect(update: Record<string, unknown>, ch: 'x' | 'y', def: FieldDef, spec: VLSpec, mark: string, hasSecondary = false): void {
   const geometry = binGeometry(spec, mark)
   const md = isObject(spec.mark) ? (spec.mark as Record<string, unknown>) : {}
@@ -7607,7 +7680,7 @@ function fieldTextExpr(def0: FieldDef, opts: { lineBreaks: boolean; spec: VLSpec
   const timeFormatted = formatType === 'time' || (formatType === undefined && (def.type === 'temporal' || def.tu !== undefined))
   if (timeFormatted) {
     // (timeFormatExpression: a UTC time unit, or a utc scale, formats in UTC)
-    const timeFn = def.tu?.utc || def.scale?.type === 'utc' ? 'utcFormat' : 'timeFormat'
+    const timeFn = def.tu?.utc || (def.requestedScaleType ?? def.scale?.type) === 'utc' ? 'utcFormat' : 'timeFormat'
     if (def.tu && fmt === undefined) return `${timeFn}(${f}, ${timeUnitFormatSignal(def.tu.unit)})`
     // (vega-lite's timeFormatExpression: config.timeFormatType applies to a raw time with no format)
     if (def.tu === undefined && typeof cfg?.timeFormatType === 'string') return customFormatExpr(cfg.timeFormatType, f, fmt)

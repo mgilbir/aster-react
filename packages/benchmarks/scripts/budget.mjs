@@ -147,6 +147,8 @@ import { fileURLToPath } from 'node:url'
 // With the compile-time check of expressions merged on top of #78-#86 (kB gzip): core 150.4, useChart 157.2, Chart 198.5, SvgChart 175.9,
 // SvgChart + interaction 193.2, Chart + VL 299.3; marginal: dom 6.0, canvas 6.0, hit 6.4, signals 12.9, load 5.4, geo 16.1, transforms 39.2.
 // Every ceiling is that measure + 0.5.
+// The ranged-channel, scale-type and polar fixes in @aster/vl (fix/vl-ranged-temporal): Chart + VL 300.0 (+0.7 over 299.3: the scale-type rules,
+// the secondary channel's domain, theta2 / radius2 and the constant-second-channel rules); nothing else moves. Its ceiling is that measure + 0.5.
 // The runtime leftovers (fix/runtime-leftovers), measured (kB gzip) against origin/main's 98676b5: core 141.5 (+0.5: the facet
 // join on vega's flat key and the aggregate's group keys, field paths where names were read as plain properties, the error a
 // missing scale throws, the bare items of an aborted run kept, the viewport origin of the accessible tree), transforms marginal 39.2
@@ -186,7 +188,7 @@ const BUDGETS = {
   '@aster/react SvgChart': 178.7 * 1024,
   '@aster/react SvgChart + interaction': 196.0 * 1024,
   // Base + the VL compiler (opt-in: `import '@aster/react/vl'`).
-  '@aster/react Chart + VL': 302.2 * 1024,
+  '@aster/react Chart + VL': 302.9 * 1024,
 }
 
 const THIS_DIR = dirname(fileURLToPath(import.meta.url))
