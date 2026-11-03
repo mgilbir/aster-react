@@ -492,10 +492,10 @@ function holdsSignal(node: unknown, depth = 0): boolean {
   return false
 }
 
-/** Whether an entry (or list of rules) has a signal or a test anywhere in it. */
+/** Whether an entry (or list of rules) has a signal or a test anywhere in it, or is a gradient (its start, stop and count may leave a hole in the call). */
 function holdsExpression(node: unknown, depth = 0): boolean {
   if (!isObject(node) || depth > 8) return false
-  if (!Array.isArray(node) && (node.signal || node.test)) return true
+  if (!Array.isArray(node) && (node.signal || node.test || node.gradient != null)) return true
   for (const key of Object.keys(node)) if (holdsExpression(node[key], depth + 1)) return true
   return false
 }

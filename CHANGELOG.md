@@ -2,6 +2,28 @@
 
 ## Unreleased
 
+- **`@aster/core`: the gradient of a scale.** `{gradient: <scale>, start, stop, count}` in an encode and the expression
+  `gradient(scale, start, stop, count)` (which compiled and failed when called) paint a linear gradient whose stops are the scale's
+  ticks (`count`, else 15) and the ends of its domain, in the colours the scale gives; scales without ticks (quantize, quantile,
+  threshold, ordinal) use their domain, and a domain of no width is stretched onto [0, 1]. The scale may be named by a signal or a field;
+  a scale that cannot draw one (an ordinal scale over words) fails with vega's `TypeError` and stops the pass there. Before, the
+  fill was dropped. The SVG definitions are the same as for a gradient object, once per distinct gradient however many items share it
+  (the ids stay content-addressed: charts on one page cannot collide); a gradient on text and on a rule is painted on canvas over the
+  item's bounds (stroke included), and one on a group's box over the group's bounds, as vega's canvas does. Generated over the kinds of
+  scale, the options and every mark that paints, against vega's SVG (string and DOM renderers) and its canvas in Chromium.
+
+- **`@aster/core`: a failing operator stops the pass as it does in vega, in every scope.** An encode that threw (a mark's, a group's, an
+  entry of an axis, a legend or a title), a signal or a scale of a group's scope, logged one error per item it failed on (11 for one
+  axis) and drew the scopes, legends and titles vega never gets to. Vega's dataflow runs its operators in rank order and stops at the
+  first that throws: one error is logged, and the scenegraph is what the operators before it made. That is now modelled for every
+  step of every scope (signals, projections, scales, axes, marks, legends, title), with the scopes of a group's items made one level
+  after the scope the group is in: a failure in a mark leaves the groups before it empty, the groups after it not made, and the
+  guides after it absent; a guide that fails keeps the channels written before the failing one (in vega's order, so the picture
+  of a left axis differs from a bottom one), the marks of it after the failing one are not made, and the caption names what it
+  made; a gradient legend's labels and a symbol legend's entries come after everything else of their scope; the layout of a group
+  ran only if the pass went past every scope below it. Pinned by generated differentials against vega: random trees with failures
+  at random places (`differential-abort-trees`), and every channel of every guide mark (`differential-guide-partial`).
+
 - **`@aster/core`: `renderSpec` no longer carries the incremental step engine** (`incremental-engine.ts`, `evaluate.ts`, `runtime.ts`).
   The engine (the pulse-driven transform steps and the state a step leaves for the next pulse) is only used by a chart evaluated again from
   a committed state. `renderSpec` and `getChartInfo` evaluate once and no longer import it; the public `evaluateChart` and the chart

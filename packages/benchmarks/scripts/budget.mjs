@@ -172,7 +172,7 @@ import { fileURLToPath } from 'node:url'
 // SvgChart 175.9, SvgChart + interaction 193.3, Chart + VL 299.4; signals 12.9, load 5.4, geo 16.1 and transforms 39.2 did not move.
 // Ceilings are the measured value + 0.5.
 const BUDGETS = {
-  '@aster/core': 146.3 * 1024,
+  '@aster/core': 148.5 * 1024,
   '+ @aster/core/dom': 11.1 * 1024,
   '+ @aster/core/canvas': 6.4 * 1024,
   '+ @aster/core/hit': 7.0 * 1024,
@@ -180,13 +180,13 @@ const BUDGETS = {
   '+ @aster/core/load': 5.9 * 1024,
   '+ @aster/core/geo': 16.6 * 1024,
   '+ @aster/core/transforms': 39.7 * 1024,
-  '@aster/react useChart': 157.7 * 1024,
-  '@aster/react Chart': 199.1 * 1024,
+  '@aster/react useChart': 159.9 * 1024,
+  '@aster/react Chart': 201.4 * 1024,
   // The light chart (`@aster/react/lite`): SVG only, no canvas renderer; alone and with the `interaction` capability.
-  '@aster/react SvgChart': 176.4 * 1024,
-  '@aster/react SvgChart + interaction': 193.8 * 1024,
+  '@aster/react SvgChart': 178.7 * 1024,
+  '@aster/react SvgChart + interaction': 196.0 * 1024,
   // Base + the VL compiler (opt-in: `import '@aster/react/vl'`).
-  '@aster/react Chart + VL': 299.9 * 1024,
+  '@aster/react Chart + VL': 302.2 * 1024,
 }
 
 const THIS_DIR = dirname(fileURLToPath(import.meta.url))

@@ -118,9 +118,11 @@ it). Nothing is swallowed without a report, and each report is the original `Err
 
 | Where the expression threw | What is left (as in vega) |
 |---|---|
-| a conditional-encode `test` or branch, a `signal` or `field` in an encode | the failing item keeps the channels evaluated **before** the failing one (spec order); no later item, of this mark or any later one, is encoded or drawn (the run is aborted) |
+| a conditional-encode `test` or branch, a `signal` or `field` in an encode, of a mark or of a group item | the failing item keeps the channels evaluated **before** the failing one (spec order); no later item, of this mark or any later one, is encoded or drawn (the run is aborted). The pass stops there as vega's does, and the error is logged **once**: the marks before the failing one in its scope were made, and so were its axes; its legends and title were not; the contents of the groups (and of the legend entries) of every scope, of this level or the ones below, are made after the scope, so none was made (see "Scopes and an aborted pass" in `ARCHITECTURE.md`) |
+| an entry of a guide's encode (an axis part, a legend part, a title) | as the line above, in the guide: the channels written before the failing one stay, the items after it are unencoded, the marks of the guide that come after it are not made, nothing after the guide is |
+| a `signal` or a scale of a group's scope | the instance of the scope is made without anything in it, and nothing after it |
 | an entry that calls a scale the spec never declared (`{scale, field}`, `{scale, value}`, `{scale, signal}`, `{scale, range}`, the `extra` of a band) | `TypeError: _.%<name> is not a function` (a `range`: `Cannot read properties of undefined (reading 'range')`), then as the line above. A band on its own reads a bandwidth of 0 and `{scale}` alone is 0, so neither fails. The message is vega's for a scale named in the spec; for one named by a signal or a field it is `_[("%" + <the reference>)] is not a function` |
-| a facet `cross` over a nested group-by path | the aggregate throws (`Cannot read properties of undefined`), the mark is not made and the run stops |
+| a facet `cross` over a nested group-by path | the aggregate throws (`Cannot read properties of undefined`), the mark is not made and the run stops (as above) |
 | a dataset transform (`filter`, `formula`, ...) or a mark-level `transform` | the dataset publishes no rows; marks sourced from it are not built |
 | a mark `sort`, a facet header `sort` | the rows stay in data order |
 | a scale that cannot be built (bad `scheme`, unrecognised scale `type`, non-array `range`, ...) | the run stops there: this and later scales are absent and nothing is encoded |
@@ -194,7 +196,7 @@ transform does. `@aster/core/addons` finds the add-on from the same expressions 
 uses `loadAddonsFor`, `<Chart>` or the hooks never sees it. A spec that calls an unknown function *and* an add-on's is refused for
 the unknown one, whichever comes first.
 
-**Functions vega has and Aster does not implement** (`debug`, `info`, `warn`, `encode`, `flush`, `gradient`, `intersectLasso`,
+**Functions vega has and Aster does not implement** (`debug`, `info`, `warn`, `encode`, `flush`, `intersectLasso`,
 `lassoAppend`, `lassoPath`, `screen`) are not refused at compile (vega accepts them); calling one fails when it is evaluated with
 `Unrecognized function: <name>`. `isInvalid`, which Aster used to have and vega does not, is refused like any unknown function.
 

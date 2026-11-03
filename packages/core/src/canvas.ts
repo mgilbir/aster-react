@@ -459,9 +459,13 @@ function renderGroup(group: SceneGroup, ctx: CanvasLike, scene: SceneRoot, plotW
       else ctx.rect(0, 0, gw, gh)
       ctx.clip()
     }
+    // (a gradient on the group's own box is laid over the group's bounds -- the box, the stroke, what it holds -- as vega's canvas does)
+    const bgBox = (group.items ?? []).some((it) => (it as { _bg?: boolean })._bg === true && (isGradientPaint(it.fill) || isGradientPaint(it.stroke)))
+      ? groupGradientBox(group)
+      : undefined
     for (const item of group.items ?? []) {
       if (isGroup(item)) renderGroup(item, ctx, scene, gw, gh, opts)
-      else renderLeafItem(item, ctx, scene)
+      else renderLeafItem(item, ctx, scene, (item as { _bg?: boolean })._bg === true ? bgBox : undefined)
     }
     ctx.restore()
     return
@@ -584,6 +588,12 @@ function gradientBox(it: SceneItem, mark?: SceneGroup, miter = true): Bbox | und
   return b.empty() ? undefined : { x1: b.x1, y1: b.y1, x2: b.x2, y2: b.y2 }
 }
 
+/** The bounds of a group item in its own frame (its origin where its content starts): what a gradient on its box is laid over. */
+function groupGradientBox(group: SceneGroup): Bbox | undefined {
+  const b = boundLeaf(new Bounds(), { ...group, x: 0, y: 0 } as unknown as SceneItem, true)
+  return b.empty() ? undefined : { x1: b.x1, y1: b.y1, x2: b.x2, y2: b.y2 }
+}
+
 /** Compute the bbox of parsed segments (for objectBoundingBox gradients). */
 function segsBbox(segs: PathSeg[]): Bbox {
   const bb: Bbox = { x1: Infinity, y1: Infinity, x2: -Infinity, y2: -Infinity }
@@ -689,7 +699,7 @@ function fontString(it: SceneItem): string {
 
 const itemAngle = (it: SceneItem): number | undefined => (it as Record<string, unknown>).angle as number | undefined
 
-function renderLeafItem(it: SceneItem, ctx: CanvasLike, scene: SceneRoot): void {
+function renderLeafItem(it: SceneItem, ctx: CanvasLike, scene: SceneRoot, box?: Bbox): void {
   const defs = scene.defs
   // Path items (legend entries, tick labels' misc paths)
   if (it.path != null) {
@@ -714,7 +724,7 @@ function renderLeafItem(it: SceneItem, ctx: CanvasLike, scene: SceneRoot): void 
       ctx.beginPath()
       tracePath(ctx, segs, tx, ty)
     }
-    paintPath(ctx, segs, it, defs, 'auto')
+    paintPath(ctx, segs, it, defs, 'auto', box)
     if (clip) ctx.restore()
     return
   }
@@ -795,6 +805,8 @@ function renderTextItem(it: SceneItem, ctx: CanvasLike, defs: SceneDefs[] | unde
   }
   const fillOk = it.fill != null && (it.fill as unknown) !== false && it.fill !== 'transparent'
   const strokeOk = it.stroke != null && (it.stroke as unknown) !== false && it.stroke !== 'transparent'
+  // (a gradient is laid over the item's bounds, as vega's canvas does: the text's box)
+  const box = gradientBox(it) ?? null
   for (let i = 0; i < d.lines.length; i++) {
     const str = d.lines[i]!
     const ly = i === 0 ? y : y + i * d.lineHeight
@@ -802,7 +814,7 @@ function renderTextItem(it: SceneItem, ctx: CanvasLike, defs: SceneDefs[] | unde
       const a = opacity * (it.fillOpacity == null ? 1 : (it.fillOpacity as number))
       if (a > 0) {
         ctx.globalAlpha = a
-        const paint = resolvePaint(it.fill, ctx, defs, null)
+        const paint = resolvePaint(it.fill, ctx, defs, box)
         ctx.fillStyle = (paint !== undefined ? paint : String(it.fill)) as string
         // No fourth (maxWidth) argument: a real CanvasRenderingContext2D coerces
         // `false` to 0 and can suppress the glyphs.
@@ -814,7 +826,7 @@ function renderTextItem(it: SceneItem, ctx: CanvasLike, defs: SceneDefs[] | unde
       const a = opacity * (it.strokeOpacity == null ? 1 : (it.strokeOpacity as number))
       if (lw > 0 && a > 0) {
         ctx.globalAlpha = a
-        const paint = resolvePaint(it.stroke, ctx, defs, null)
+        const paint = resolvePaint(it.stroke, ctx, defs, box)
         if (paint !== undefined) ctx.strokeStyle = paint
         ctx.lineWidth = lw
         ctx.lineCap = it.strokeCap || 'butt'
@@ -1028,7 +1040,8 @@ function renderMark(type: string, group: SceneGroup, ctx: CanvasLike, scene: Sce
         ctx.beginPath()
         ctx.moveTo(x, y)
         ctx.lineTo(x2, y2)
-        paintPath(ctx, [{ cmd: 'M', x, y }, { cmd: 'L', x: x2, y: y2 }] as PathSeg[], it, defs, 'stroke')
+        // (a gradient is laid over the item's bounds, the stroke width included, as vega's canvas does)
+        paintPath(ctx, [{ cmd: 'M', x, y }, { cmd: 'L', x: x2, y: y2 }] as PathSeg[], it, defs, 'stroke', gradientBox(it))
       }
       return
     }
