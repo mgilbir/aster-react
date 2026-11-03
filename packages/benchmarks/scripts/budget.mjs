@@ -150,8 +150,11 @@ import { fileURLToPath } from 'node:url'
 // Chart + VL 290.6; each is measured + 0.5, so every commit on main between them stays inside its ceiling.
 // Kept dataset steps on top of main (guides and layout, #71-#75), measured (kB gzip): core 144.0, useChart 151.1, Chart 192.0,
 // SvgChart 169.2, SvgChart + interaction 186.4, Chart + VL 292.1; the rest of the work of the section above is in these figures.
+// Kept dataset steps merged with main at d2f753d (the leftovers, nest, field paths, built-in ceilings), measured (kB gzip): core 144.5,
+// useChart 151.9, Chart 193.4, SvgChart 170.6, SvgChart + interaction 187.7, Chart + VL 294.0; the cause of the growth over main is
+// step-reuse.ts and the runtime and session code around it. Ceilings are the measured value + 0.5.
 const BUDGETS = {
-  '@aster/core': 144.5 * 1024,
+  '@aster/core': 145.0 * 1024,
   '+ @aster/core/dom': 6.2 * 1024,
   '+ @aster/core/canvas': 6.3 * 1024,
   '+ @aster/core/hit': 6.9 * 1024,
@@ -159,13 +162,13 @@ const BUDGETS = {
   '+ @aster/core/load': 5.6 * 1024,
   '+ @aster/core/geo': 16.8 * 1024,
   '+ @aster/core/transforms': 39.6 * 1024,
-  '@aster/react useChart': 151.6 * 1024,
-  '@aster/react Chart': 192.5 * 1024,
+  '@aster/react useChart': 152.4 * 1024,
+  '@aster/react Chart': 193.9 * 1024,
   // The light chart (`@aster/react/lite`): SVG only, no canvas renderer; alone and with the `interaction` capability.
-  '@aster/react SvgChart': 169.7 * 1024,
-  '@aster/react SvgChart + interaction': 186.9 * 1024,
+  '@aster/react SvgChart': 171.1 * 1024,
+  '@aster/react SvgChart + interaction': 188.2 * 1024,
   // Base + the VL compiler (opt-in: `import '@aster/react/vl'`).
-  '@aster/react Chart + VL': 292.6 * 1024,
+  '@aster/react Chart + VL': 294.5 * 1024,
 }
 
 const THIS_DIR = dirname(fileURLToPath(import.meta.url))
