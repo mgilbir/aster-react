@@ -188,27 +188,34 @@ const rec = (v: unknown): Record<string, unknown> => (isRecord(v) ? v : {})
 const hasKey = (o: unknown, k: string): boolean => isRecord(o) && Object.hasOwn(o, k)
 const isSignalObject = (v: unknown): boolean => isRecord(v) && !!v.signal
 
-/** vega-parser `lookup(spec, config)(name)` over `axisConfig`: whether the axis feature `name` is on (the guide marks it is made of). */
-function axisFlag(a: Record<string, unknown>, name: string, names: Names, cfg: Record<string, unknown>): boolean {
-  if (a[name] != null) return !!a[name]
-  const axis = rec(cfg.axis)
+/**
+ * vega-parser `lookup(spec, config)(name)` over `axisConfig`: the value the axis has for `name`, the spec's own or else the first
+ * config block that has it (the band block of a band scale, the block of its orient, of its direction, the axis block). An
+ * `orient` that is a signal reads every block that names the key as a signal expression, which is an object (truthy).
+ */
+export function axisValue(a: Record<string, unknown>, name: string, scaleType: (scale: unknown) => string | undefined, cfg: Record<string, unknown>): unknown {
+  if (a[name] != null) return a[name]
   const orient = a.orient
-  const band = names.scaleType(a.scale) === 'band' && isRecord(cfg.axisBand) ? cfg.axisBand : undefined
-  let merged: unknown
+  const axis = cfg.axis
+  const band = cfg.axisBand
+  const bandBlock = isRecord(band) && scaleType(a.scale) === 'band' ? band : undefined
   if (isSignalObject(orient)) {
-    // an orient signal turns every key the x/y or orient blocks name into an expression (a signal object: truthy)
-    const named = (...blocks: unknown[]): boolean => blocks.some((b) => hasKey(b, name))
-    merged = hasKey(band, name) ? (band as Record<string, unknown>)[name]
-      : named(cfg.axisTop, cfg.axisBottom, cfg.axisLeft, cfg.axisRight) || named(cfg.axisX, cfg.axisY) ? { signal: '' }
-      : axis[name]
-  } else {
-    const o = String(orient ?? '')
-    const xy = o === 'top' || o === 'bottom' ? cfg.axisX : cfg.axisY
-    const or = cfg['axis' + o.charAt(0).toUpperCase() + o.slice(1)]
-    const block = [band, or, xy, axis].find((b) => hasKey(b, name))
-    merged = block === undefined ? undefined : (block as Record<string, unknown>)[name]
+    return hasKey(bandBlock, name) ? bandBlock![name]
+      : hasKey(cfg.axisTop, name) || hasKey(cfg.axisBottom, name) || hasKey(cfg.axisLeft, name) || hasKey(cfg.axisRight, name) || hasKey(cfg.axisX, name) || hasKey(cfg.axisY, name) ? { signal: '' }
+      : isRecord(axis) ? axis[name] : undefined
   }
-  return !!merged
+  const o = String(orient ?? '')
+  if (hasKey(bandBlock, name)) return bandBlock![name]
+  const or = cfg['axis' + o.charAt(0).toUpperCase() + o.slice(1)]
+  if (hasKey(or, name)) return (or as Record<string, unknown>)[name]
+  const xy = o === 'top' || o === 'bottom' ? cfg.axisX : cfg.axisY
+  if (hasKey(xy, name)) return (xy as Record<string, unknown>)[name]
+  return hasKey(axis, name) ? (axis as Record<string, unknown>)[name] : undefined
+}
+
+/** Whether the axis feature `name` (`grid`, `ticks`, `labels`, `domain`) is on: the guide marks it is made of. */
+function axisFlag(a: Record<string, unknown>, name: string, names: Names, cfg: Record<string, unknown>): boolean {
+  return !!axisValue(a, name, (scale) => names.scaleType(scale), cfg)
 }
 
 /** vega-parser `parseAxis`: the guide marks the axis is made of (grid, ticks, labels, domain, title), then the axis group. */
@@ -230,22 +237,28 @@ function parseAxisNames(a: unknown, names: Names, cfg: () => Record<string, unkn
   if (name != null) names.declare(name)
 }
 
+/** The channels a legend can have a scale for, in the order the first of them gives the legend its canonical scale (vega-parser `LegendScales`). */
+export const LEGEND_CHANNELS = ['size', 'shape', 'fill', 'stroke', 'strokeWidth', 'strokeDash', 'opacity'] as const
+
+/** vega-parser `legendType`: a symbol legend, a gradient, or a gradient in steps; the type given, else by the kind of its one scale. */
+export function legendType(l: Record<string, unknown>, scaleType: string | undefined): 'symbol' | 'gradient' | 'discrete' {
+  const present = LEGEND_CHANNELS.filter((c) => !!l[c]).length
+  let type = typeof l.type === 'string' && l.type ? l.type : 'symbol'
+  if (!l.type && present === 1 && (l.fill || l.stroke)) {
+    type = scaleType && CONTINUOUS_SCALE_TYPES.has(scaleType) ? 'gradient' : scaleType && DISCRETIZING_SCALE_TYPES.has(scaleType) ? 'discrete' : 'symbol'
+  }
+  if (type === 'gradient' && scaleType && DISCRETIZING_SCALE_TYPES.has(scaleType)) type = 'discrete'
+  return type as 'symbol' | 'gradient' | 'discrete'
+}
+
 /** vega-parser `parseLegend`: which marks a legend is made of depends on its type, and a symbol legend nests two scopes. */
 function parseLegendNames(l: unknown, names: Names): void {
   if (!isRecord(l)) return
   const encode = rec(l.encode)
   // (the marks of a legend are named by its encode blocks alone: none, nothing to declare)
   if (!Object.keys(encode).length) return
-  // the canonical scale: the first channel in LegendScales order
-  const channels = ['size', 'shape', 'fill', 'stroke', 'strokeWidth', 'strokeDash', 'opacity']
-  const scale = channels.map((c) => l[c]).find((s) => !!s)
-  const scaleType = scale ? names.scaleType(scale) : undefined
-  const present = channels.filter((c) => !!l[c]).length
-  let type = typeof l.type === 'string' && l.type ? l.type : 'symbol'
-  if (!l.type && present === 1 && (l.fill || l.stroke)) {
-    type = scaleType && CONTINUOUS_SCALE_TYPES.has(scaleType) ? 'gradient' : scaleType && DISCRETIZING_SCALE_TYPES.has(scaleType) ? 'discrete' : 'symbol'
-  }
-  if (type === 'gradient' && scaleType && DISCRETIZING_SCALE_TYPES.has(scaleType)) type = 'discrete'
+  const scale = LEGEND_CHANNELS.map((c) => l[c]).find((s) => !!s)
+  const type = legendType(l, scale ? names.scaleType(scale) : undefined)
   if (type === 'gradient' || type === 'discrete') {
     // the entry group has no layout of its own: its marks are parsed in the legend's scope
     declareGuideMark(names, encode.gradient)

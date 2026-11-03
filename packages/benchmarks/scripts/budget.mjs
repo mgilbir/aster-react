@@ -135,7 +135,18 @@ import { fileURLToPath } from 'node:url'
 // ranged channels and layers (titles.ts), measured (kB gzip): Chart + VL 289.5 (+0.6 over origin/main's 288.9, measured with the same script); the other rows did not move.
 // One tab stop per chart (focus hand-over on a spec change, entering the nodes from the container): Chart 189.2 and SvgChart 166.4 kB gzip
 // (main: 188.8 and 166.1, so +0.3 each); the other rows stay inside their ceilings.
+// The check of a spec's expressions as vega.parse makes it, at compile time (spec-expressions.ts reading the scopes, the handlers of
+// signals and the guides; expr-check.ts; the tables of transform parameters and of guide properties; the event selector parser, which
+// the compile now needs and used to be in the signals chunk alone), measured (kB gzip): core 146.6 (+5.5 over main's 141.1; minified,
+// spec-expressions +3.8, guide-model 4.9, expr-check 3.6, transform-params 2.7, the selector parser 2.0), useChart 153.1, Chart 194.2, SvgChart 171.6, SvgChart + interaction 188.5,
+// Chart + VL 294.2 (each +5.5..5.7 over main); signals marginal 12.9 (-0.9: the selector parser is core's now).
+// With the cross-spec cache of what is found about an expression, measured: core 146.9 (+5.8 over main), useChart 153.3, Chart 194.4,
+// SvgChart 171.9, SvgChart + interaction 188.7, Chart + VL 294.4. Minified, over main: spec-expressions +4.4, guide-model 4.9, expr-check 3.7,
+// transform-params 2.7, the selector parser 2.0 (+0.4 stream-defs). Keeping only the kinded parameters in the transform table would save 0.5.
 // Ceiling = the measure + 0.5.
+// With the compile-time check of expressions merged on top of #78-#86 (kB gzip): core 150.4, useChart 157.2, Chart 198.5, SvgChart 175.9,
+// SvgChart + interaction 193.2, Chart + VL 299.3; marginal: dom 6.0, canvas 6.0, hit 6.4, signals 12.9, load 5.4, geo 16.1, transforms 39.2.
+// Every ceiling is that measure + 0.5.
 // The runtime leftovers (fix/runtime-leftovers), measured (kB gzip) against origin/main's 98676b5: core 141.5 (+0.5: the facet
 // join on vega's flat key and the aggregate's group keys, field paths where names were read as plain properties, the error a
 // missing scale throws, the bare items of an aborted run kept, the viewport origin of the accessible tree), transforms marginal 39.2
@@ -154,21 +165,21 @@ import { fileURLToPath } from 'node:url'
 // useChart 151.9, Chart 193.4, SvgChart 170.6, SvgChart + interaction 187.7, Chart + VL 294.0; the cause of the growth over main is
 // step-reuse.ts and the runtime and session code around it. Ceilings are the measured value + 0.5.
 const BUDGETS = {
-  '@aster/core': 145.0 * 1024,
-  '+ @aster/core/dom': 6.2 * 1024,
-  '+ @aster/core/canvas': 6.3 * 1024,
+  '@aster/core': 150.9 * 1024,
+  '+ @aster/core/dom': 6.5 * 1024,
+  '+ @aster/core/canvas': 6.5 * 1024,
   '+ @aster/core/hit': 6.9 * 1024,
-  '+ @aster/core/signals': 14.4 * 1024,
-  '+ @aster/core/load': 5.6 * 1024,
-  '+ @aster/core/geo': 16.8 * 1024,
-  '+ @aster/core/transforms': 39.6 * 1024,
-  '@aster/react useChart': 152.4 * 1024,
-  '@aster/react Chart': 193.9 * 1024,
+  '+ @aster/core/signals': 13.4 * 1024,
+  '+ @aster/core/load': 5.9 * 1024,
+  '+ @aster/core/geo': 16.6 * 1024,
+  '+ @aster/core/transforms': 39.7 * 1024,
+  '@aster/react useChart': 157.7 * 1024,
+  '@aster/react Chart': 199.0 * 1024,
   // The light chart (`@aster/react/lite`): SVG only, no canvas renderer; alone and with the `interaction` capability.
-  '@aster/react SvgChart': 171.1 * 1024,
-  '@aster/react SvgChart + interaction': 188.2 * 1024,
+  '@aster/react SvgChart': 176.4 * 1024,
+  '@aster/react SvgChart + interaction': 193.7 * 1024,
   // Base + the VL compiler (opt-in: `import '@aster/react/vl'`).
-  '@aster/react Chart + VL': 294.5 * 1024,
+  '@aster/react Chart + VL': 299.8 * 1024,
 }
 
 const THIS_DIR = dirname(fileURLToPath(import.meta.url))

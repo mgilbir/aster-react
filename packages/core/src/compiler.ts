@@ -47,7 +47,7 @@ export function compileChart(givenSpec: VgSpec): CompiledChart {
     ? defaultMergedConfig()
     : mergeVegaConfig(vegaDefaultConfig(), userConfig)) as Record<string, unknown>
   checkDataReferences(rawSpec, mergedConfig)
-  checkExpressions(rawSpec)
+  checkExpressions(rawSpec, mergedConfig)
   markSeq = 0
   const spec: VgSpec = { ...rawSpec, config: mergedConfig as VgSpec['config'] }
 

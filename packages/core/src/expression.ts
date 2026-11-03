@@ -234,6 +234,8 @@ function contrastRatio(c1: unknown, c2: unknown): number {
 const REGISTERED = new Map<string, (...args: never[]) => unknown>()
 /** Bumped on every registration change: a compiled expression compiled under an older registry re-validates before it runs. */
 let registryEpoch = 0
+/** The version of the registry of expression functions: it changes with every registration, disposal and add-on load. */
+export const expressionRegistryEpoch = (): number => registryEpoch
 
 /** Functions an addon contributes that read the view they run in (a projection by name): built per runtime. */
 const REGISTERED_BOUND = new Map<string, (runtime: ExpressionRuntime) => (...args: never[]) => unknown>()
@@ -280,6 +282,38 @@ export function withdrawExpressionFunctions(names: readonly string[]): () => voi
 export function expressionFunctionNames(): string[] {
   const stub: ExpressionRuntime = { scale: () => undefined, data: () => undefined, expr: () => () => undefined }
   return [...new Set([...Object.keys(createFunctionContext(stub)), ...Object.keys(DefaultFunctions)])]
+}
+
+/**
+ * The functions vega's parser recognises that Aster does not implement (logging, the lasso tools, `screen`, mark re-encoding,
+ * `flush`, `gradient` as a call). A spec that calls one is not refused when it is compiled -- vega accepts it -- but when the call is
+ * evaluated, as before. `expression-register.test.ts` pins this list against the vega the conformance suite runs.
+ */
+export const UNWRITTEN_FUNCTIONS: readonly string[] = Object.freeze([
+  'debug', 'info', 'warn', 'encode', 'flush', 'gradient', 'intersectLasso', 'lassoAppend', 'lassoPath', 'screen',
+])
+/** The internal scale calls vega's own encode entries are written with (`_scale("x", v)`); the only names with an underscore it knows. */
+const SCALE_CALLS: ReadonlySet<string> = new Set(['_scale', '_bandwidth', '_range'])
+
+let writtenNames: Set<string> | undefined
+/** The functions Aster has built in (not those registered later). */
+function builtinFunctionNames(): ReadonlySet<string> {
+  if (writtenNames === undefined) {
+    const stub: ExpressionRuntime = { scale: () => undefined, data: () => undefined, expr: () => () => undefined }
+    writtenNames = new Set([...Object.keys(createBuiltinFunctions(stub)), ...Object.keys(DefaultFunctions)])
+  }
+  return writtenNames
+}
+
+/**
+ * Whether vega's parser would accept a call of `name` in an expression: a built-in, one registered (by the host or an add-on, loaded
+ * or not), an event function, `if`, one of the functions in {@link UNWRITTEN_FUNCTIONS}, or the internal scale calls. Anything else
+ * is `Unrecognized function: <name>` when the spec is compiled.
+ */
+export function isExpressionFunction(name: string): boolean {
+  if (name.startsWith('_')) return SCALE_CALLS.has(name)
+  return builtinFunctionNames().has(name) || REGISTERED.has(name) || REGISTERED_BOUND.has(name) || name === 'if'
+    || EventFunctions.includes(name) || Object.hasOwn(ADDON_FUNCTIONS, name) || UNWRITTEN_FUNCTIONS.includes(name)
 }
 
 let builtinNames: Set<string> | undefined
@@ -360,7 +394,6 @@ function createBuiltinFunctions(runtime: ExpressionRuntime): Record<string, unkn
   return {
     // type checking
     isValid,
-    isInvalid: (value: unknown) => value == null || value !== value,
     isDefined: (value: unknown) => value !== undefined,
     isArray,
     isBoolean,

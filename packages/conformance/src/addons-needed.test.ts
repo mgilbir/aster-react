@@ -19,7 +19,7 @@ import { loadSpecData, TRUSTED_LOAD_OPTIONS } from '@aster/core/load'
 import {
   addonsNeeded, isAddonLoaded, missingAddons, ADDON_FUNCTIONS, registeredFunctionNames, withdrawFunctions, LOAD_ADDON_FORMATS, TRANSFORMS_ADDON_TYPES, type AddonName,
 } from '@aster/core/addons'
-import { dataFormatRegistry, geoRegistry, renderSpec, transformRegistry, type TransformFn, type VgSpec } from '@aster/core'
+import { compileChart, dataFormatRegistry, geoRegistry, renderSpec, transformRegistry, type TransformFn, type VgSpec } from '@aster/core'
 
 const ADDONS: readonly AddonName[] = ['transforms', 'geo', 'load']
 const CORPUS = join(dirname(fileURLToPath(import.meta.url)), '..', 'corpus')
@@ -205,5 +205,47 @@ describe('addonsNeeded reads the structure, not the text', () => {
     expect(only(edited)).toBe('')
     ;(edited.data as Array<Record<string, unknown>>)[0]!.transform = [{ type: 'kde' }]
     expect(only(edited)).toBe('transforms')
+  })
+})
+
+describe('an add-on that is not loaded: its expression functions are known to the compile, and asked for when they are called', () => {
+  const formula = (expr: string): VgSpec => ({ width: 10, height: 10, data: [{ name: 'd', values: [{ a: 1 }], transform: [{ type: 'formula', expr, as: 'x' }] }], marks: [] })
+  const without = <T,>(addon: AddonName, run: () => T): T => {
+    setOnly(new Set(ADDONS.filter((a) => a !== addon)))
+    try { return run() } finally { setOnly(new Set(ADDONS)) }
+  }
+
+  it('compiles a spec that calls one, as vega parses it, and fails to run it, naming the add-on', () => {
+    for (const [expr, addon] of [['sampleNormal(0, 1)', 'transforms'], ['treePath("d", 1, 2)', 'transforms'], ['geoArea("p", datum)', 'geo']] as const) {
+      without(addon, () => {
+        expect(isAddonLoaded(addon), expr).toBe(false)
+        expect(() => compileChart(formula(expr)), expr).not.toThrow()
+        expect(() => renderSpec(formula(expr)), expr).toThrow(MISSING)
+        expect(missingAddons(formula(expr)), expr).toEqual([addon])
+      })
+    }
+  })
+
+  it('refuses an unknown function next to one of the add-on, whichever comes first, as it does with the add-on loaded', () => {
+    for (const expr of ['foo(1) + sampleNormal(0, 1)', 'sampleNormal(0, 1) + foo(1)', 'sampleNormal(foo(1), 1)']) {
+      without('transforms', () => {
+        expect(() => compileChart(formula(expr)), expr).toThrow('Unrecognized function: foo')
+        expect(missingAddons(formula(expr)), expr).toEqual(['transforms'])
+      })
+      setOnly(new Set(ADDONS))
+      expect(() => compileChart(formula(expr)), expr).toThrow('Unrecognized function: foo')
+    }
+  })
+
+  it('knows every function the add-ons register, loaded or not, and no other', () => {
+    for (const addon of ['transforms', 'geo'] as const) {
+      without(addon, () => {
+        for (const [name, owner] of Object.entries(ADDON_FUNCTIONS)) {
+          if (owner !== addon) continue
+          expect(() => compileChart(formula(`${name}(1)`)), name).not.toThrow()
+        }
+      })
+    }
+    expect(() => compileChart(formula('sampleNormalX(1)'))).toThrow('Unrecognized function: sampleNormalX')
   })
 })

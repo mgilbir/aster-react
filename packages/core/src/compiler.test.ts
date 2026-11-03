@@ -46,7 +46,7 @@ describe('compiler', () => {
       signals: [
         { name: 'width', value: 400 },
         { name: 'height', value: 300 },
-        { name: 'click', value: 0, on: [{ trigger: 'click' }] },
+        { name: 'click', value: 0, on: [{ events: 'click', update: 'click + 1' }] },
       ],
     }
     const chart = compileChart(spec)
