@@ -2,7 +2,7 @@
  * vega-scale palettes.js (8.1.2): the colour scheme registry.
  * Hex strings are verbatim from vega-scale@8.1.2; the categorical schemes
  * (accent, category10, dark2, observable10, paired, pastel1/2, set1/2/3)
- * from d3-scale-chromatic@3.1.0, embedded to avoid the dependency.
+ * from d3-scale-chromatic@3.1.0, embedded to avoid the dependency. Every palette is one run of six-digit colours.
  */
 
 export const continuousPalettes: Record<string, string> = {
@@ -61,20 +61,20 @@ export const continuousPalettes: Record<string, string> = {
   darkRed: '3434347036339e3c38cc4037e75d1eec8620eeab29f0ce32ffeb2c',
 }
 
-export const discretePalettes: Record<string, string[] | string> = {
-  accent: ["#7fc97f","#beaed4","#fdc086","#ffff99","#386cb0","#f0027f","#bf5b17","#666666"],
-  category10: ["#1f77b4","#ff7f0e","#2ca02c","#d62728","#9467bd","#8c564b","#e377c2","#7f7f7f","#bcbd22","#17becf"],
+export const discretePalettes: Record<string, string> = {
+  accent: '7fc97fbeaed4fdc086ffff99386cb0f0027fbf5b17666666',
+  category10: '1f77b4ff7f0e2ca02cd627289467bd8c564be377c27f7f7fbcbd2217becf',
   category20: '1f77b4aec7e8ff7f0effbb782ca02c98df8ad62728ff98969467bdc5b0d58c564bc49c94e377c2f7b6d27f7f7fc7c7c7bcbd22dbdb8d17becf9edae5',
   category20b: '393b795254a36b6ecf9c9ede6379398ca252b5cf6bcedb9c8c6d31bd9e39e7ba52e7cb94843c39ad494ad6616be7969c7b4173a55194ce6dbdde9ed6',
   category20c: '3182bd6baed69ecae1c6dbefe6550dfd8d3cfdae6bfdd0a231a35474c476a1d99bc7e9c0756bb19e9ac8bcbddcdadaeb636363969696bdbdbdd9d9d9',
-  dark2: ["#1b9e77","#d95f02","#7570b3","#e7298a","#66a61e","#e6ab02","#a6761d","#666666"],
-  observable10: ["#4269d0","#efb118","#ff725c","#6cc5b0","#3ca951","#ff8ab7","#a463f2","#97bbf5","#9c6b4e","#9498a0"],
-  paired: ["#a6cee3","#1f78b4","#b2df8a","#33a02c","#fb9a99","#e31a1c","#fdbf6f","#ff7f00","#cab2d6","#6a3d9a","#ffff99","#b15928"],
-  pastel1: ["#fbb4ae","#b3cde3","#ccebc5","#decbe4","#fed9a6","#ffffcc","#e5d8bd","#fddaec","#f2f2f2"],
-  pastel2: ["#b3e2cd","#fdcdac","#cbd5e8","#f4cae4","#e6f5c9","#fff2ae","#f1e2cc","#cccccc"],
-  set1: ["#e41a1c","#377eb8","#4daf4a","#984ea3","#ff7f00","#ffff33","#a65628","#f781bf","#999999"],
-  set2: ["#66c2a5","#fc8d62","#8da0cb","#e78ac3","#a6d854","#ffd92f","#e5c494","#b3b3b3"],
-  set3: ["#8dd3c7","#ffffb3","#bebada","#fb8072","#80b1d3","#fdb462","#b3de69","#fccde5","#d9d9d9","#bc80bd","#ccebc5","#ffed6f"],
+  dark2: '1b9e77d95f027570b3e7298a66a61ee6ab02a6761d666666',
+  observable10: '4269d0efb118ff725c6cc5b03ca951ff8ab7a463f297bbf59c6b4e9498a0',
+  paired: 'a6cee31f78b4b2df8a33a02cfb9a99e31a1cfdbf6fff7f00cab2d66a3d9affff99b15928',
+  pastel1: 'fbb4aeb3cde3ccebc5decbe4fed9a6ffffcce5d8bdfddaecf2f2f2',
+  pastel2: 'b3e2cdfdcdaccbd5e8f4cae4e6f5c9fff2aef1e2cccccccc',
+  set1: 'e41a1c377eb84daf4a984ea3ff7f00ffff33a65628f781bf999999',
+  set2: '66c2a5fc8d628da0cbe78ac3a6d854ffd92fe5c494b3b3b3',
+  set3: '8dd3c7ffffb3bebadafb807280b1d3fdb462b3de69fccde5d9d9d9bc80bdccebc5ffed6f',
   tableau10: '4c78a8f58518e4575672b7b254a24beeca3bb279a2ff9da69d755dbab0ac',
   tableau20: '4c78a89ecae9f58518ffbf7954a24b88d27ab79a20f2cf5b43989483bcb6e45756ff9d9879706ebab0acd67195fcbfd2b279a2d6a5c99e765fd8b5a5',
 }

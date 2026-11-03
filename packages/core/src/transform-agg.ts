@@ -16,7 +16,7 @@
  * Deviations from Vega, both on purpose: the input rows are never written (the transforms that write onto their rows in Vega write
  * onto copies, or onto rows the pipeline owns), and group tables hold no inherited names, so a group called `constructor` is a group.
  */
-import { orderOf, setOrder, takeRecording } from './tuple-order.js'
+import { orderOf, setOrder } from './tuple-order.js'
 import { accessor, accessorFields, accessorName, array, ascending, error, field, sortData, type Accessor } from './util.js'
 import { meterTick } from './limits.js'
 import { ascending as numericAscending, quantileSorted } from './arr.js'
@@ -99,10 +99,11 @@ function sortKeys(spec: unknown): SortKeys | null {
 /**
  * A stable sorted copy of `items` by a `{field, order}` spec, or `null` when the spec names no field. Each sort key is read once
  * per item, not twice per comparison, and the positions are what gets sorted: ties keep input order whatever the comparison does
- * with values (NaN, mixed types) that no ordering is consistent over.
+ * with values (NaN, mixed types) that no ordering is consistent over. With `leaveOrder` the sorted copy also carries the order its
+ * rows were made in (see tuple-order.ts), for the sorts that come after it to break their ties by; the request is an argument of
+ * this one call, so it cannot reach any other sort.
  */
-export function sortBySpec<T>(items: readonly T[], spec: unknown): T[] | null {
-  const record = takeRecording()
+export function sortBySpec<T>(items: readonly T[], spec: unknown, leaveOrder = false): T[] | null {
   const keys = sortKeys(spec)
   if (keys === null) return null
   const n = items.length
@@ -129,7 +130,7 @@ export function sortBySpec<T>(items: readonly T[], spec: unknown): T[] | null {
     })
   }
   const sorted = order.map((i) => items[i]!)
-  if (record) {
+  if (leaveOrder) {
     const made = new Float64Array(n)
     for (let i = 0; i < n; i++) made[i] = places ? places[order[i]!]! : order[i]!
     setOrder(sorted, made)
@@ -703,6 +704,26 @@ export function groupKeyFn(groupby: unknown): (row: Row) => string {
   return fn
 }
 
+/**
+ * The string vega identifies the group items of a facet by (what it calls the flat key): each group-by name with its backslash
+ * escapes removed (`a\.b` is `a.b`), read as a plain property name of the group's aggregate row, not as a path. The row names
+ * its values under the names the spec gave, so a name whose escapes change it (`a\.b` is a field `a.b` in the data, and its
+ * value sits under `a\.b` in the row) reads nothing: every group of such a facet has the key `undefined`.
+ */
+export function flatKeyFn(groupby: unknown): (row: Row) => string {
+  const names = array(groupby).map((f) => String(f).replace(/\\(.)/g, '$1'))
+  if (names.length === 0) return () => ''
+  if (names.length === 1) {
+    const only = names[0]!
+    return (row) => '' + row[only]
+  }
+  return (row) => {
+    let key = '' + row[names[0]!]
+    for (let i = 1; i < names.length; i++) key += '|' + row[names[i]!]
+    return key
+  }
+}
+
 /** The partition of `rows` by a `groupby`, in order of first appearance of each group. */
 export function partitionRows(rows: readonly Row[], groupby: unknown, order: Float64Array | null = null, made?: number[][]): Row[][] {
   const keyOf = groupKeyOf(fieldsOf(groupby))
@@ -725,6 +746,8 @@ export function partitionRows(rows: readonly Row[], groupby: unknown, order: Flo
 }
 
 interface Cell {
+  /** The string the group is known by ({@link Grouping.keyOf} of its rows). */
+  key: string
   group: MeasureGroup
   /** The group's output row: its group-by values (from the row that opened it), then the measures. */
   tuple: Row
@@ -761,7 +784,7 @@ function cellAt(g: Grouping, key: string, firstRow: Row): Cell {
   if (!cell) {
     const tuple: Row = {}
     for (let i = 0; i < g.dims.length; ++i) tuple[g.dimNames[i]!] = g.dims[i]!(firstRow)
-    cell = g.cells[key] = { group: new MeasureGroup(g.set, g.random), tuple }
+    cell = g.cells[key] = { key, group: new MeasureGroup(g.set, g.random), tuple }
     g.order.push(cell)
   }
   return cell
@@ -822,6 +845,16 @@ function groupingFor(p: AggregateParams, random: () => number): Grouping {
 
 /** vega `aggregate`: one output row per group, in order of first appearance. */
 export function aggregateRows(rows: readonly Row[], p: AggregateParams, random: () => number = lcg(SEED)): Row[] {
+  return aggregateGroups(rows, p, random).tuples
+}
+
+/**
+ * {@link aggregateRows} with the key of each output row's group (`keys[i]` is the {@link groupKeyFn} of the rows that make
+ * `tuples[i]`; an empty cell of a `cross` has the key its values would have). An output row names its group-by values under
+ * the names the spec gave them, which for a path (`a.b`) is not a path to read them back by: the keys are how a caller finds
+ * the rows of a group.
+ */
+export function aggregateGroups(rows: readonly Row[], p: AggregateParams, random: () => number = lcg(SEED)): { tuples: Row[]; keys: string[] } {
   const g = groupingFor(p, random)
   for (let i = 0; i < rows.length; i++) {
     const row = rows[i]!
@@ -829,7 +862,7 @@ export function aggregateRows(rows: readonly Row[], p: AggregateParams, random: 
     if ((i & 255) === 255) meterTick('aggregate', 256)
   }
   if (p.cross && g.dims.length > 1) crossFill(g)
-  return g.order.map(finishCell)
+  return { tuples: g.order.map(finishCell), keys: g.order.map((cell) => cell.key) }
 }
 
 /**

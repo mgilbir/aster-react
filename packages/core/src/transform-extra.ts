@@ -17,6 +17,7 @@ import { wordcloudRows } from './wordcloud.js'
 import { forceRows } from './force-layout.js'
 import { heatmapRows, isocontourRows, kde2dRows } from './raster-transforms.js'
 import { packRows, partitionRows, treemapRows, treeRows } from './hierarchy-layout.js'
+import { nestRows } from './hierarchy-nest.js'
 import { voronoi, type Rect } from './voronoi.js'
 
 /**
@@ -29,7 +30,7 @@ function treelinksRows(rows: Row[], _t: Record<string, unknown>, ctx: TransformC
   if (!root) error('TreeLinks transform requires a tree data source.')
   const nodes: HierNode[] = []
   breadthFirst(root, (n) => nodes.push(n))
-  const rowOf = treeRowLookup(rows, nodes)
+  const rowOf = treeRowLookup(rows, root, nodes)
   const out: Row[] = []
   for (const node of nodes) {
     const t = rowOf(node)
@@ -49,9 +50,9 @@ function breadthFirst(root: HierNode, callback: (node: HierNode) => void): void 
   }
 }
 
-/** The row of a dataset that stands for a tree node: the row at the node's position, when the dataset still has one row per node. */
-function treeRowLookup(rows: Row[], nodes: HierNode[]): (node: HierNode) => Row | undefined {
-  if (rows.length === nodes.length) return (node) => (node.idx !== undefined && node.idx >= 0 ? rows[node.idx] : undefined)
+/** The row of a dataset that stands for a tree node: the row at the node's position, when the dataset is still as long as it was when the tree was built. */
+function treeRowLookup(rows: Row[], root: HierNode, nodes: HierNode[]): (node: HierNode) => Row | undefined {
+  if (rows.length === (root.rowCount ?? nodes.length)) return (node) => (node.idx !== undefined && node.idx >= 0 ? rows[node.idx] : undefined)
   const present = new Set(rows)
   return (node) => (present.has(node.data) ? node.data : undefined)
 }
@@ -64,7 +65,7 @@ const treeOfDataset = (runtime: ExpressionRuntime, name: unknown): { lookup: Map
   if (!t?.root.lookup) return undefined
   const nodes: HierNode[] = []
   breadthFirst(t.root, (n) => nodes.push(n))
-  return { lookup: t.root.lookup, rowOf: treeRowLookup(t.rows, nodes) }
+  return { lookup: t.root.lookup, rowOf: treeRowLookup(t.rows, t.root, nodes) }
 }
 const pathBetween = (s: HierNode, e: HierNode): HierNode[] => {
   // d3 `node.path(end)`: up from s to the least common ancestor, then down to e
@@ -253,6 +254,7 @@ transformRegistry.set('density', (rows, t, ctx) => densityRows(rows, t, ctx?.dat
 transformRegistry.set('quantile', quantileRows)
 transformRegistry.set('regression', regressionRows)
 transformRegistry.set('loess', loessRows)
+transformRegistry.set('nest', nestRows)
 transformRegistry.set('pack', packRows)
 transformRegistry.set('partition', partitionRows)
 transformRegistry.set('treemap', treemapRows)

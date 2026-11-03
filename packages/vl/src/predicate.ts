@@ -109,11 +109,13 @@ const COMPARISONS: ReadonlyArray<readonly [key: string, operator: string]> = [['
 
 function fieldPredicateExpr(p: Obj): string {
   const field = p.field as string
-  const tu = p.timeUnit !== undefined ? normalizeTimeUnit(p.timeUnit) : undefined
+  // A time unit in a field predicate is read in local time, a UTC one included: that is what vega-lite does (its source marks it
+  // "TODO: support utc"), and a predicate must keep the rows vega-lite keeps. (The `utc` flag of a DateTime value is honoured.)
+  const tu = p.timeUnit !== undefined ? { ...normalizeTimeUnit(p.timeUnit), utc: false } : undefined
   const raw = flatAccessRef(field)
   // (a field that is binned to the unit already holds the start of the unit)
   const subject = tu ? `time(${tu.binned ? raw : timeUnitFieldExpr(tu, field)})` : raw
-  const unit = tu ? (tu.utc ? 'utc' + tu.unit : tu.unit) : undefined
+  const unit = tu?.unit
   const value = (v: unknown): string => {
     const { expr, time } = operand(v, unit, false)
     if (expr) return time ? `time(${expr})` : expr

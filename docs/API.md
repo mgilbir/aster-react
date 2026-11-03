@@ -707,7 +707,8 @@ an empty `<canvas>` there.
 
 ### Accessibility keyboard contract
 
-The accessible tree is a roving-tabindex group: exactly one node is a Tab stop. The keys, per node kind, are listed in
+A chart is one Tab stop. Without pan or zoom the accessible tree is a roving-tabindex group (exactly one node is the stop);
+with pan or zoom the container is the stop and `PageDown` / `PageUp` on it enter the tree. The keys, per node kind, are listed in
 `docs/INTERACTION.md#accessibility`.
 
 ## `@aster/vl`

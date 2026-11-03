@@ -20,6 +20,7 @@ import {
 import { compositeMarkOf, isGiven, markGiven } from './composite-marks.js'
 import { mergeEncoding, normalizeUnits } from './composite.js'
 import { timeScaleRange } from './animation.js'
+import { fieldsTitle, mergeGuideTitles, titleText, writtenTitle, type GuideTitle, type TitledField } from './titles.js'
 import { orientationOf, type Position } from './orient.js'
 import { scalePropApplies, zeroByDefault } from './scaleprops.js'
 import { isTimerSelection, selectionExtent } from './selection.js'
@@ -197,9 +198,23 @@ const CONDITIONAL_AXIS_PROPS: Record<string, { part: string; vgProp: string } | 
 }
 const GRID_ONLY_AXIS_PROPS = new Set(['gridColor', 'gridDash', 'gridDashOffset', 'gridOpacity', 'gridWidth', 'gridCap'])
 
-function assembleGuides(node: unknown): void {
-  if (Array.isArray(node)) { for (const n of node) assembleGuides(n); return }
+function assembleGuides(node: unknown, scaleTypes: ReadonlyMap<string, unknown> = new Map()): void {
+  if (Array.isArray(node)) { for (const n of node) assembleGuides(n, scaleTypes); return }
   if (!isObject(node)) return
+  if (Array.isArray(node.scales)) {
+    const own = new Map(scaleTypes)
+    for (const sc of node.scales as Record<string, unknown>[]) if (isObject(sc) && typeof sc.name === 'string') own.set(sc.name, sc.type)
+    scaleTypes = own
+  }
+  // a legend over a time scale leaves its labels to the scale
+  if (Array.isArray(node.legends)) {
+    for (const lg of node.legends as Record<string, unknown>[]) {
+      if (!isObject(lg) || !LEGEND_DERIVED_FORMAT_TYPE.has(lg)) continue
+      const scale = LEGEND_SCALE_KEYS.map((k) => lg[k]).find((v) => typeof v === 'string') as string | undefined
+      const type = scale === undefined ? undefined : scaleTypes.get(scale)
+      if (type === 'time' || type === 'utc') delete lg.formatType
+    }
+  }
   // legend/assemble.ts: a falsy legend title (null, '') is no title
   if (Array.isArray(node.legends)) for (const lg of node.legends as Record<string, unknown>[]) if (isObject(lg) && 'title' in lg && !lg.title) delete lg.title
   if (Array.isArray(node.axes)) {
@@ -240,7 +255,7 @@ function assembleGuides(node: unknown): void {
       }
     }
   }
-  for (const v of Object.values(node)) if (v !== null && typeof v === 'object') assembleGuides(v)
+  for (const v of Object.values(node)) if (v !== null && typeof v === 'object') assembleGuides(v, scaleTypes)
 }
 
 /** vega-lite `stack(initMarkdef(markDef, encoding, config), encoding)`: the measure a unit stacks and how. */
@@ -740,8 +755,20 @@ function applyCompositionConfig(node: VLSpec, root: VLSpec): void {
 }
 
 /** The merged title of a layered axis on a field def: it replaces the def's own title, and its axis title when it has one. */
-function withAxisTitle(f: FieldDef, title: string): FieldDef {
-  return { ...f, title, ...(isObject(f.axis) && typeof f.axis.title === 'string' ? { axis: { ...f.axis, title } } : {}) } as FieldDef
+function withAxisTitle(f: FieldDef, title: string | string[] | null): FieldDef {
+  return { ...f, title, ...(isObject(f.axis) && f.axis.title !== undefined ? { axis: { ...f.axis, title } } : {}) } as FieldDef
+}
+
+/** The title of an axis the layers share: a nested layer's titles merge among themselves, and the result with its siblings'. */
+function mergeLayerTitles(entries: ReadonlyArray<{ path: number[]; title: GuideTitle }>, depth = 0): GuideTitle {
+  const merged: GuideTitle[] = []
+  for (let i = 0; i < entries.length;) {
+    let j = i + 1
+    while (j < entries.length && entries[j]!.path[depth] === entries[i]!.path[depth]) j++
+    merged.push(j - i > 1 ? mergeLayerTitles(entries.slice(i, j), depth + 1) : entries[i]!.title)
+    i = j
+  }
+  return merged.reduce((a, b) => mergeGuideTitles(a, b))
 }
 
 /** Compile a multi-layer spec: per-source casts, per-layer pipelines,
@@ -1130,38 +1157,25 @@ function compileLayered(spec: VLSpec, ctx: CompileCtx): VLSpec {
     const layersWith = parsed.filter((p) => p.fields.some((f) => f.channel === ch && f.axis !== null))
     if (!layersWith.length) continue
     const base = layersWith[0]!
-    const second = ch === 'y' ? 'y2' : 'x2'
-    // per layer: the channel's title followed by its endpoint field
-    const titles: string[] = []
-    const given: string[] = []
-    let nullTitle = false
-    for (const p of layersWith) {
+    // the layers that share the axis merge their titles, a nested layer's among themselves first
+    const titleOf = (p: (typeof parsed)[number]): GuideTitle => {
       const f = p.fields.find((q) => q.channel === ch)!
-      const d2 = p.fields.find((q) => q.channel === second && q.field)
-      // an explicit title on either endpoint replaces the generated "primary, secondary" pair
-      // (an explicit null title - on the field or its axis - removes the axis title: common.ts mergeTitleComponent)
-      if (f.title === null || d2?.title === null || (isObject(f.axis) && f.axis.title === null)) nullTitle = true
-      // (an `axis.title` is explicit as well, and the whole title of that layer's axis)
-      const axisTitle = isObject(f.axis) && typeof f.axis.title === 'string' && f.axis.title !== '' ? f.axis.title : undefined
-      const explicit = axisTitle !== undefined ? [axisTitle] : [f.title, d2?.title].filter((x): x is string => typeof x === 'string' && x !== '')
-      if (explicit.length) { given.push(explicit.join(', ')); continue }
-      const t = ((f.axis as Record<string, unknown> | null | undefined)?.title as string) ?? (channelTitle(f) as string)
-      if (t) titles.push(t)
-      if (d2 && !d2.datumOnly) titles.push(d2.source)
+      return axisTitleParts(f, isObject(f.axis) ? f.axis : undefined, secondOf(f, p.fields))
     }
-    // titles the user wrote win over the ones derived from fields (mergeTitleComponent)
-    const uniq = Array.from(new Set(given.length ? given : titles))
-    const axisFields = base.fields.filter((f) => f.channel === ch).map((f) =>
-      nullTitle ? ({ ...f, title: null } as unknown as FieldDef) : uniq.length > 1 || given.length ? withAxisTitle(f, uniq.join(', ')) : f,
-    )
+    const merged = mergeLayerTitles(layersWith.map((p) => ({ path: LEAF_PATHS.get(p.l) ?? [parsed.indexOf(p)], title: titleOf(p) })))
+    const text = titleText(merged)
+    // (the axis of a layer is built from its channel alone: the merged title replaces whatever that channel would make of itself)
+    const retitled = (f: FieldDef): FieldDef => {
+      const own = axisTitleParts(f, isObject(f.axis) ? f.axis : undefined, undefined)
+      return JSON.stringify(titleText(own)) === JSON.stringify(text) ? f : withAxisTitle(f, text ?? null)
+    }
+    const axisFields = base.fields.filter((f) => f.channel === ch).map(retitled)
     const gridScaleName = ch === 'x' && indepY ? `layer_${firstYLayer}_y` : undefined
     const built = buildAxes(axisFields, axisMark(base.markRaw, base.mark), scales as ScaleSpec[], undefined, gridScaleName, userConfig)
     // axis/parse.ts mergeAxisComponent: what the first layer's axis lacks (a time unit's format and tick step, say) comes from the
     // other layers that share it
     for (const other of layersWith.slice(1)) {
-      const otherFields = other.fields.filter((f) => f.channel === ch).map((f) =>
-        nullTitle ? ({ ...f, title: null } as unknown as FieldDef) : uniq.length > 1 || given.length ? withAxisTitle(f, uniq.join(', ')) : f,
-      )
+      const otherFields = other.fields.filter((f) => f.channel === ch).map(retitled)
       for (const a2 of buildAxes(otherFields, axisMark(other.markRaw, other.mark), scales as ScaleSpec[], undefined, gridScaleName, userConfig)) {
         const a1 = built.find((a) => a.grid === a2.grid && a.orient === a2.orient)
         // (the label align and baseline follow the label angle: an axis that settled its angle settled them too - a null align is a value
@@ -4634,15 +4648,33 @@ function customLabelText(def: FieldDef, guide: Record<string, unknown> | null | 
 
 /** Non-positional legends format timeUnit fields with timeFormat. */
 function applyTimeUnitLegend(lg: Record<string, unknown>, def: FieldDef, userLegend: Record<string, unknown> | undefined, formats: { numberFormat?: string; timeFormat?: string }): void {
-  if (userLegend && userLegend.format !== undefined) return
+  const userFormat = userLegend && userLegend.format !== undefined
   // a raw temporal field formats through config.timeFormat, a quantitative one through config.numberFormat
   if (!def.timeUnit) {
-    if (def.type === 'temporal') lg.format = formats.timeFormat ?? DEFAULT_TIME_FORMAT
+    if (userFormat) return
+    // (guide format: a time format is one that asks for formatType "time", or asks for none of a temporal field)
+    const ft = userLegend?.formatType
+    if (ft === 'time' || (ft === undefined && def.type === 'temporal')) lg.format = formats.timeFormat ?? DEFAULT_TIME_FORMAT
     else if (def.type === 'quantitative' && formats.numberFormat !== undefined) lg.format = formats.numberFormat
     return
   }
-  lg.format = { signal: timeUnitFormatSignal(def.timeUnit) }
-  lg.formatType = 'time'
+  if (!userFormat) lg.format = { signal: timeUnitFormatSignal(def.timeUnit) }
+  if (userLegend?.formatType !== undefined) return
+  // (the scale is not known here: the assembled guides drop the format type of a legend that turns out to read a time scale)
+  setGuideTimeFormatType(lg, def, undefined)
+  LEGEND_DERIVED_FORMAT_TYPE.add(lg)
+}
+
+/** Legends whose `formatType` was derived from the time unit (not written by the user): it goes if their scale is a time scale. */
+const LEGEND_DERIVED_FORMAT_TYPE = new WeakSet<object>()
+
+/**
+ * The format type of a time-unit guide: a guide on a time or utc scale leaves it to the scale (which formats in its own zone);
+ * on any other scale the labels are times all the same, UTC if the unit is.
+ */
+function setGuideTimeFormatType(guide: Record<string, unknown>, def: FieldDef, scaleType: string | undefined): void {
+  if (scaleType === 'time' || scaleType === 'utc') return
+  guide.formatType = def.tu?.utc ? 'utc' : 'time'
 }
 
 
@@ -4943,7 +4975,10 @@ function buildScales(spec: VLSpec, fieldsIn: FieldDef[], mark: string, orient: s
   const numericScale = (name: string, def: FieldDef, range: [number, number | { signal: string }], zero: boolean): ScaleSpec => {
     const discrete = isDiscreteType(def.type)
     const userType = def.scale?.type as string | undefined
-    const type = discrete ? 'point' : ['linear', 'log', 'pow', 'sqrt', 'symlog', 'quantile', 'quantize', 'threshold'].includes(userType ?? '') ? userType! : 'linear'
+    // scale/type.ts defaultType: a temporal field has a time scale (a utc one for a UTC time unit), on a channel with a continuous range
+    const type = discrete ? 'point'
+      : ['linear', 'log', 'pow', 'sqrt', 'symlog', 'quantile', 'quantize', 'threshold', ...(def.type === 'temporal' ? ['time', 'utc'] : [])].includes(userType ?? '') ? userType!
+      : def.type === 'temporal' ? (def.tu?.utc ? 'utc' : 'time') : 'linear'
     const explicitDom = explicitDomainOf(def)
     const userDomain = explicitDom !== undefined ? explicitDomainValue(explicitDom, def) : undefined
     const sc: ScaleSpec = {
@@ -5104,11 +5139,11 @@ function buildScales(spec: VLSpec, fieldsIn: FieldDef[], mark: string, orient: s
           ...(cs.reverse !== undefined ? { reverse: Boolean(cs.reverse) } : colorDef.sort === 'descending' ? { reverse: true } : {}),
         })
       } else {
-      // a temporal colour field is a time scale (utc for a utc time unit), like vega-lite's default type
+      // a temporal colour field is a time scale, whatever its time unit (scale/type.ts defaultType)
       // (vega-lite falls back to linear when a time scale is asked of a non-temporal field)
       const colorScaleType = ['linear', 'log', 'pow', 'sqrt', 'symlog', 'quantile', 'quantize', 'threshold', ...(colorDef.type === 'temporal' ? ['time', 'utc'] : [])].includes(cs.type as string)
         ? cs.type as string
-        : colorDef.type === 'temporal' ? (colorDef.tu?.utc ? 'utc' : 'time') : 'linear'
+        : colorDef.type === 'temporal' ? 'time' : 'linear'
       scales.push({
         name: 'color',
         type: colorScaleType,
@@ -5577,7 +5612,7 @@ function buildAxes(fields: FieldDef[], mark: string, scales: ScaleSpec[], scaleN
         : tickCountSignal
       if (def.timeUnit) {
         labelAxis.format = { signal: timeUnitFormatSignal(def.timeUnit) }
-        labelAxis.formatType = 'time'
+        setGuideTimeFormatType(labelAxis, def, sc.type)
         // the minimum tick step is one unit: expressed as a datetime difference
         const stepExpr = def.tu ? timeUnitMinStepSignal(def.tu) : null
         if (stepExpr) labelAxis.tickMinStep = { signal: stepExpr }
@@ -5647,7 +5682,7 @@ function buildAxes(fields: FieldDef[], mark: string, scales: ScaleSpec[], scaleN
     // a timeUnit on a discrete positional axis still formats with timeFormat
     if (def.timeUnit && !isContinuousScaleType(sc.type)) {
       labelAxis.format = { signal: timeUnitFormatSignal(def.timeUnit) }
-      labelAxis.formatType = 'time'
+      setGuideTimeFormatType(labelAxis, def, sc.type)
     }
     if (userAxis) {
       for (const [k, v] of Object.entries(userAxis)) {
@@ -5681,23 +5716,33 @@ function buildAxes(fields: FieldDef[], mark: string, scales: ScaleSpec[], scaleN
   return [...gridAxes, ...labelAxes]
 }
 
+/**
+ * What an axis' title is made of: the axis' own title if it has one, else the title written on its channel or the channel's
+ * second channel (x2 / y2), else the default titles of those fields (a field the two share is named once).
+ */
+function axisTitleParts(def: FieldDef, userAxis: Record<string, unknown> | null | undefined, def2: FieldDef | undefined): GuideTitle {
+  if (userAxis && userAxis.title !== undefined) return { kind: 'text', text: userAxis.title as string }
+  // (a datum names no field and has no title of its own to give the axis)
+  if (def.datumOnly) return fieldsTitle()
+  const written = writtenTitle(def.title, def2?.title)
+  if (written) return { kind: 'text', text: written.text }
+  const titled = (d: FieldDef): TitledField => ({
+    key: JSON.stringify([d.field, d.aggregate ?? null, d.bin ? d.binParams ?? d.bin : null, d.tu ? [d.tu.unit, d.tu.utc, d.tu.step ?? null, d.tu.binned ?? null] : null]),
+    title: String(channelTitle({ ...d, title: undefined })),
+  })
+  return fieldsTitle(titled(def), ...(def2 ? [titled(def2)] : []))
+}
+
+/** The second channel (x2 / y2) of an axis' channel, if it holds a field. */
+function secondOf(def: FieldDef, fields: readonly FieldDef[]): FieldDef | undefined {
+  const channel2 = def.channel === 'x' ? 'x2' : def.channel === 'y' ? 'y2' : undefined
+  return channel2 === undefined ? undefined : fields.find((f) => f.channel === channel2 && f.field && !f.datumOnly)
+}
+
 function axisTitle(def: FieldDef, userAxis?: Record<string, unknown> | null, fields?: FieldDef[]): unknown {
-  if (userAxis && 'title' in userAxis) return userAxis.title
-  // ranged channels (x2/y2 fields) join their titles with ', ' (vega-lite
-  // joins the field defs' titles for the shared axis)
-  if (fields) {
-    const ch2 = def.channel === 'x' ? 'x2' : def.channel === 'y' ? 'y2' : null
-    const def2 = ch2 ? fields.find((f) => f.channel === ch2 && f.field) : undefined
-    if (def2) {
-      // an explicit title on either endpoint wins over the joined default
-      if (def2.title !== undefined) return def2.title
-      if (def.title !== undefined) return def.title
-      const t1 = channelTitle(def)
-      const t2 = channelTitle(def2)
-      if (typeof t1 === 'string' && typeof t2 === 'string') return `${t1}, ${t2}`
-    }
-  }
-  return channelTitle(def)
+  const parts = axisTitleParts(def, userAxis, fields ? secondOf(def, fields) : undefined)
+  // a written title is kept as written (a null one is the absence of a title)
+  return parts.kind === 'text' ? parts.text : titleText(parts)
 }
 
 // --- legends -----------------------------------------------------------------

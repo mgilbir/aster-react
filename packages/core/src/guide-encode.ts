@@ -17,6 +17,7 @@
  */
 import type { EncodeValue, SceneGroup, SceneItem } from './types.js'
 import { lerp } from './util.js'
+import { scaleCallFailure, scaleRangeFailure } from './missing-scale.js'
 
 export type Row = Record<string, unknown>
 type Rec = Record<string, unknown>
@@ -252,7 +253,8 @@ function analyseScaleEntry(e: object): Binder | undefined {
   return (host) => {
     if (host.entryScale === undefined) return undefined
     const bound = host.entryScale(scale)
-    if (bound === undefined) return () => undefined
+    // (the entry reads `field`, so it calls the scale: with none, that fails)
+    if (bound === undefined) return () => { throw scaleCallFailure(scale) }
     const fn = bound.fn
     const timeLike = bound.timeLike
     // (the bandwidth of a scale is the same for every datum of an evaluation)
@@ -309,7 +311,7 @@ function analyseEntry(e: unknown): Binder | undefined {
     let head: Fast
     if (scale !== undefined) {
       const sc = host.scale(scale as string)
-      if (!sc) return () => undefined
+      if (!sc) return () => { throw scaleRangeFailure() }
       head = () => lerp(sc.range() as number[], r)
     } else {
       head = () => value

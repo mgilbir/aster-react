@@ -20,7 +20,8 @@ import * as vs from './scale.js'
 import { implicit as scaleImplicit } from './scale-discrete.js'
 import { plain, plainList, plainRecord, resolveDomain, signalValue, type ScaleContext } from './scale-domain.js'
 import type { CompiledScale } from './types.js'
-import { error as raise, hasOwnProperty, isArray, isFunction, isObject, isString, peek } from './util.js'
+import { vegaDefaultConfig } from './config-defaults.js'
+import { error as raise, expT, hasOwnProperty, isArray, isFunction, isObject, isString, logT, peek, powT, symexpT, symlogT } from './util.js'
 import { ceiling } from './limits.js'
 
 export type { ScaleContext } from './scale-domain.js'
@@ -186,10 +187,9 @@ function zoomed(domain: number[], factor: number, lift: Unary, ground: Unary): [
   return [ground(middle + (a - middle) * factor), ground(middle + (b - middle) * factor)]
 }
 
-const logSpace = (sign: number): [Unary, Unary] => [(x) => Math.log(sign * x), (x) => sign * Math.exp(x)]
-const signedPower = (e: number): Unary => (x) => (x < 0 ? -Math.pow(-x, e) : Math.pow(x, e))
-const powerSpace = (e: number): [Unary, Unary] => [signedPower(e), signedPower(1 / e)]
-const symlogSpace = (c: number): [Unary, Unary] => [(x) => Math.sign(x) * Math.log1p(Math.abs(x / c)), (x) => Math.sign(x) * Math.expm1(Math.abs(x)) * c]
+const logSpace = (sign: number): [Unary, Unary] => [logT(sign), expT(sign)]
+const powerSpace = (e: number): [Unary, Unary] => [powT(e), powT(1 / e)]
+const symlogSpace = (c: number): [Unary, Unary] => [symlogT(c), symexpT(c)]
 
 // ---- the bins ---------------------------------------------------------------------------------------------
 
@@ -353,14 +353,7 @@ export interface Settings {
 }
 
 /** The named ranges a spec can use without defining them; a `config.range` entry of the same name replaces one. */
-const BUILT_IN_RANGES: Record<string, unknown> = Object.assign(Object.create(null), {
-  category: { scheme: 'tableau10' },
-  ordinal: { scheme: 'blues' },
-  heatmap: { scheme: 'yellowgreenblue' },
-  ramp: { scheme: 'blues' },
-  diverging: { scheme: 'blueorange', extent: [1, 0] },
-  symbol: ['circle', 'square', 'triangle-up', 'cross', 'diamond', 'triangle-right', 'triangle-down', 'triangle-left'],
-})
+const BUILT_IN_RANGES: Record<string, unknown> = Object.assign(Object.create(null), vegaDefaultConfig().range)
 
 /** How deep a chain of named ranges may go before it is taken to be a loop. */
 const MAX_RANGE_CHAIN = 32

@@ -58,6 +58,7 @@ import {
   type TimeInterval,
 } from './time.js'
 import { timeFormat, utcFormat } from './time-format.js'
+import { powT, symexpT, symlogT } from './util.js'
 
 /** A scale: a function with the members its kind carries. */
 export interface ScaleObject {
@@ -97,18 +98,11 @@ const LOG: Warp = { to: Math.log, from: Math.exp }
 const LOG_NEGATIVE: Warp = { to: (x) => -Math.log(-x), from: (y) => -Math.exp(-y) }
 const SQRT: Warp = { to: (x) => (x < 0 ? -Math.sqrt(-x) : Math.sqrt(x)), from: (y) => (y < 0 ? -y * y : y * y) }
 
-const signedPower = (exponent: number): Unary => (x) => (x < 0 ? -Math.pow(-x, exponent) : Math.pow(x, exponent))
-
 function powerWarp(exponent: number): Warp {
-  return exponent === 1 ? FLAT : exponent === 0.5 ? SQRT : { to: signedPower(exponent), from: signedPower(1 / exponent) }
+  return exponent === 1 ? FLAT : exponent === 0.5 ? SQRT : { to: powT(exponent), from: powT(1 / exponent) }
 }
 
-function symlogWarp(c: number): Warp {
-  return {
-    to: (x) => Math.sign(x) * Math.log1p(Math.abs(x / c)),
-    from: (y) => Math.sign(y) * Math.expm1(Math.abs(y)) * c,
-  }
-}
+const symlogWarp = (c: number): Warp => ({ to: symlogT(c), from: symexpT(c) })
 
 // ---- piecewise maps ---------------------------------------------------------------------------------------
 

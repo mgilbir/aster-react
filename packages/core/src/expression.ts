@@ -43,7 +43,7 @@ import { rgb, hsl, lab, hcl } from './color.js'
 import type { AstNode } from './expr-parser.js'
 import {
   ascending, extent, lerp as lerpOf, isArray, isBoolean, isDate, isNumber, isObject,
-  isRegExp, isString, toBoolean, toDate, toNumber, toString, pluck, safeGet, DisallowedObjectProperties,
+  isRegExp, isString, toBoolean, toDate, toNumber, toString, pluck, memoField, DisallowedObjectProperties,
   sortSlice, inrange, clampRange, isTuple, panLinear, panLog, panPow, panSymlog, zoomLinear, zoomLog, zoomPow, zoomSymlog,
 } from './util.js'
 
@@ -151,33 +151,16 @@ function fmtUtc(value: unknown, spec?: string): string {
 // invalid date), nothing is coerced through toDate and nothing short-circuits to undefined.
 const D = (value: unknown): Date => new Date(value as number)
 
-const yearFn = (v: unknown): number => D(v).getFullYear()
 const quarterFn = (v: unknown): number => 1 + ~~(D(v).getMonth() / 3)
-const monthFn = (v: unknown): number => D(v).getMonth()
 const weekFn = (v: unknown): number => week(v)
-const dateFn = (v: unknown): number => D(v).getDate()
-const dayFn = (v: unknown): number => D(v).getDay()
 const dayofyearFn = (v: unknown): number => dayofyear(v)
-const hoursFn = (v: unknown): number => D(v).getHours()
-const minutesFn = (v: unknown): number => D(v).getMinutes()
-const secondsFn = (v: unknown): number => D(v).getSeconds()
-const millisFn = (v: unknown): number => D(v).getMilliseconds()
 
-const utcYearFn = (v: unknown): number => D(v).getUTCFullYear()
 const utcQuarterFn = (v: unknown): number => 1 + ~~(D(v).getUTCMonth() / 3)
-const utcMonthFn = (v: unknown): number => D(v).getUTCMonth()
 const utcWeekFn = (v: unknown): number => utcweek(v)
-const utcDateFn = (v: unknown): number => D(v).getUTCDate()
-const utcDayFn = (v: unknown): number => D(v).getUTCDay()
 const utcDayofyearFn = (v: unknown): number => utcdayofyear(v)
-const utcHoursFn = (v: unknown): number => D(v).getUTCHours()
-const utcMinutesFn = (v: unknown): number => D(v).getUTCMinutes()
-const utcSecondsFn = (v: unknown): number => D(v).getUTCSeconds()
-const utcMillisFn = (v: unknown): number => D(v).getUTCMilliseconds()
 
 // `datetime` is `new Date(...)` with the arguments as given; `utc` is `Date.UTC(...)`.
 const datetime = (...args: unknown[]): Date => new (Date as unknown as new (...a: unknown[]) => Date)(...args)
-const utcDatetime = (...args: unknown[]): number => (Date.UTC as (...a: unknown[]) => number)(...args)
 const timeOffsetFn = (unit: unknown, date: unknown, step?: unknown): Date | undefined =>
   timeOffset(unit as string, date, step as number)
 const utcOffsetFn = (unit: unknown, date: unknown, step?: unknown): Date | undefined =>
@@ -397,18 +380,13 @@ function createBuiltinFunctions(runtime: ExpressionRuntime): Record<string, unkn
     if: (t: unknown, a: unknown, b: unknown) => (t ? a : b),
     test: testRe,
     // math
-    abs: Math.abs, acos: Math.acos, asin: Math.asin, atan: Math.atan, atan2: Math.atan2,
-    ceil: Math.ceil, cos: Math.cos, exp: Math.exp, floor: Math.floor, hypot: Math.hypot,
+    hypot: Math.hypot,
     // vega-functions: the view's container / the window. Headless vega has
     // neither (`[undefined, undefined]`); here the host passes the container's
     // size in RuntimeInput.containerSize, and without one a spec falls back to
     // its own default size (vega-lite: `isFinite(containerSize()[0]) ? ... : 300`).
     containerSize: () => runtime.containerSize?.() ?? [undefined, undefined],
     windowSize: () => [undefined, undefined],
-    isFinite: Number.isFinite, isNaN: Number.isNaN, log: Math.log, pow: Math.pow,
-    round: Math.round, sin: Math.sin, sqrt: Math.sqrt, tan: Math.tan,
-    min: (...args: number[]) => Math.min(...args),
-    max: (...args: number[]) => Math.max(...args),
     clamp: (value: number, lo: number, hi: number) => Math.min(Math.max(value, lo), hi),
     // arrays
     extent: (arr: unknown) => extent(arr as ArrayLike<unknown>), // unary: no accessor callable
@@ -463,7 +441,6 @@ function createBuiltinFunctions(runtime: ExpressionRuntime): Record<string, unkn
     span: (arr: unknown) => { const a = arr as number[] | null | undefined; return (a && (a[a.length - 1]! - a[0]!)) || 0 },
     pluck,
     // strings
-    lower: (value: unknown) => String(value).toLowerCase(),
     pad,
     parseFloat: (value: unknown) => parseFloat(String(value)),
     parseInt: (value: unknown, radix?: unknown) => parseInt(String(value), radix == null ? undefined : Number(radix)),
@@ -478,31 +455,24 @@ function createBuiltinFunctions(runtime: ExpressionRuntime): Record<string, unkn
       return str.split(sep as string, limit == null ? undefined : Number(limit))
     },
     substring: (value: unknown, start?: number, end?: number) => String(value).substring(start ?? 0, end),
-    trim: (value: unknown) => String(value).trim(),
     truncate,
-    upper: (value: unknown) => String(value).toUpperCase(),
     encodeURIComponent: (value: unknown) => encodeURIComponent(String(value)),
     regexp: (pattern: unknown, flags?: unknown) => guardedRegExp(String(pattern), flags == null ? undefined : String(flags)),
     // date-time
+    // (read when called, not when this module loaded: a host or a test that replaces `Date.now` -- the deterministic clock -- is heard)
     now: () => Date.now(),
     setdata: (name: unknown, tuples: unknown) => (runtime.setdata ? runtime.setdata(String(name), tuples) : 1),
     // vega-functions codegen.js: `random() { return random(); }`, vega-statistics' (replaceable) source
     random: () => (runtime.random ?? Math.random)(),
     datetime,
-    utc: utcDatetime,
-    time: (value: unknown) => D(value).getTime(),
-    timezoneoffset: (value: unknown) => D(value).getTimezoneOffset(),
     timeOffset: (unit: unknown, date: unknown, step?: unknown) => timeOffsetFn(unit, date, step),
     utcOffset: (unit: unknown, date: unknown, step?: unknown) => utcOffsetFn(unit, date, step),
     timeSequence: (unit: unknown, start: unknown, stop: unknown, step?: unknown) =>
       timeSequence(unit as string, start, stop, step as number),
     utcSequence: (unit: unknown, start: unknown, stop: unknown, step?: unknown) =>
       utcSequence(unit as string, start, stop, step as number),
-    year: yearFn, quarter: quarterFn, month: monthFn, week: weekFn, date: dateFn, day: dayFn,
-    dayofyear: dayofyearFn, hours: hoursFn, minutes: minutesFn, seconds: secondsFn, milliseconds: millisFn,
-    utcyear: utcYearFn, utcquarter: utcQuarterFn, utcmonth: utcMonthFn, utcweek: utcWeekFn,
-    utcdate: utcDateFn, utcday: utcDayFn, utcdayofyear: utcDayofyearFn,
-    utchours: utcHoursFn, utcminutes: utcMinutesFn, utcseconds: utcSecondsFn, utcmilliseconds: utcMillisFn,
+    quarter: quarterFn, week: weekFn, dayofyear: dayofyearFn,
+    utcquarter: utcQuarterFn, utcweek: utcWeekFn, utcdayofyear: utcDayofyearFn,
     // formatting
     format: (value: unknown, spec?: string) => fmtNumber(value, spec),
     timeFormat: (value: unknown, spec?: string) => fmtTime(value, spec),
@@ -528,8 +498,9 @@ function createBuiltinFunctions(runtime: ExpressionRuntime): Record<string, unkn
       // O(rows) per call and usually called per row: charge the scan so the
       // wall clock is sampled inside the O(n^2) pattern (C7).
       meterTick('indata', rows.length)
+      const read = memoField(field)
       let count = 0
-      for (const r of rows) if (safeGet(r, field) === value) count++
+      for (const r of rows) if (read(r) === value) count++
       return count ? count : undefined
     },
     scale: function (this: unknown, name: string, value?: unknown) {
