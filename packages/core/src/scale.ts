@@ -507,31 +507,66 @@ export function scaleFraction(source: Scale, min: number, max: number): (t: numb
   return unit
 }
 
+/** A linear gradient as a paint: its end points in the unit square of the item it fills, and its stops. */
+export interface ScaleGradient {
+  gradient: 'linear'
+  x1: number
+  y1: number
+  x2: number
+  y2: number
+  stops: Array<{ offset: number; color: string }>
+}
+
+const makeScale = scale
+
 /**
- * The stops of a gradient legend for a scale: its tick values (`count`, else 15) with the domain ends added when they are
- * missing, each at the fraction `scaleFraction` gives and with the colour the scale gives. Scales without ticks use
- * their domain as stops. A domain of zero width is stretched onto [0, 1] first.
+ * The gradient of a scale (vega's `gradient(scale, start, stop, count)`): a linear gradient from `start` to `stop` (points of the
+ * unit square; left to right by default) whose stops are the scale's tick values (`count`, else 15) with the domain ends added when
+ * they are missing, each at the fraction `scaleFraction` gives and with the colour the scale gives. A scale without ticks (a
+ * discrete one) uses its domain as stops. A domain of zero width is stretched onto [0, 1] first.
+ *
+ * (A scale that cannot be drawn this way -- one with no `interpolate`, such as an ordinal one over a domain with no width -- fails
+ * in the call with the TypeError vega's call gives.)
  */
-export function scaleGradientStops(source: Scale, count?: number): Array<{ offset: number; color: string }> {
-  let drawn: Scale = source
-  let stops: number[] = source.domain()
-  let min = stops[0]!
-  let max = peek(stops)
+export function scaleGradient(scale: Scale, p0?: unknown, p1?: unknown, count?: unknown): ScaleGradient {
+  const first = p0 as ArrayLike<number> | undefined | null
+  const second = p1 as ArrayLike<number> | undefined | null
+  const stops: ScaleGradient['stops'] = []
+  const gradient: ScaleGradient = {
+    gradient: 'linear',
+    x1: first ? first[0]! : 0,
+    y1: first ? first[1]! : 0,
+    x2: second ? second[0]! : 1,
+    y2: second ? second[1]! : 0,
+    stops,
+  }
+  let values: number[] = scale.domain()
+  let min = values[0]!
+  let max = peek(values)
   let fraction: (t: number) => unknown = (t) => t
   if (!(max - min)) {
-    drawn = (source.interpolator
-      ? scale('sequential')!().interpolator(source.interpolator())
-      : scale('linear')!().interpolate(source.interpolate()).range(source.range())
+    // (a domain with no width: the scale it stands for, on [0, 1])
+    // (a scale with neither -- an ordinal one over words: no width at all -- cannot be drawn this way; what vega's call says is kept)
+    if (!scale.interpolator && typeof scale.interpolate !== 'function') throw new TypeError('scale.interpolate is not a function')
+    scale = (scale.interpolator
+      ? makeScale('sequential')!().interpolator(scale.interpolator())
+      : makeScale('linear')!().interpolate(scale.interpolate()).range(scale.range())
     ).domain([(min = 0), (max = 1)])
   } else {
-    fraction = scaleFraction(source, min, max)
+    fraction = scaleFraction(scale, min, max)
   }
-  if (drawn.ticks) {
-    stops = drawn.ticks(+(count as number) || 15)
-    if (min !== stops[0]) stops.unshift(min)
-    if (max !== peek(stops)) stops.push(max)
+  if (scale.ticks) {
+    values = scale.ticks(+(count as number) || 15)
+    if (min !== values[0]) values.unshift(min)
+    if (max !== peek(values)) values.push(max)
   }
-  return stops.map((v) => ({ offset: Number(fraction(v)), color: String(drawn(v)) }))
+  for (const v of values) stops.push({ offset: fraction(v) as number, color: scale(v) as string })
+  return gradient
+}
+
+/** The stops of a gradient legend for a scale (see {@link scaleGradient}). */
+export function scaleGradientStops(source: Scale, count?: number): Array<{ offset: number; color: string }> {
+  return scaleGradient(source, undefined, undefined, count).stops.map((s) => ({ offset: Number(s.offset), color: String(s.color) }))
 }
 
 // ---- schemes -----------------------------------------------------------------------------------------------

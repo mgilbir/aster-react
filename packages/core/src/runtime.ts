@@ -46,7 +46,7 @@ import type {
   VgSpec,
 } from './types.js'
 import { gradientDefOf, hash53, isGradientPaint } from './svg-defs.js'
-import { tickFormat, scaleGradientStops, tickCount, validTicks } from './scale.js'
+import { tickFormat, scaleGradient, scaleGradientStops, tickCount, validTicks } from './scale.js'
 import { DEFAULT_SPECIFIERS, UNIT_ORDER, timeIntervalFor, utcIntervalFor } from './time.js'
 import { compileChart } from './compiler.js'
 import { dict, ownGet, pushAll, sortData, lerp, scopedSignalName, heldSignalName, TUPLE_ID } from './util.js'
@@ -5389,6 +5389,11 @@ function resolveEncodeProperty(
 
 /** The keys of an encode entry (vega-parser encode/entry.js). */
 interface EncodeEntry {
+  /** a scale's gradient (vega's `gradient(scale, start, stop, count)`): the scale named, by a signal, or by a field of the datum */
+  gradient?: unknown
+  start?: unknown
+  stop?: unknown
+  count?: unknown
   signal?: string
   field?: unknown
   value?: unknown
@@ -5403,6 +5408,33 @@ interface EncodeEntry {
   format?: unknown
   formatType?: unknown
 }
+
+/**
+ * `{gradient: <scale>, start, stop, count}`: the gradient of the scale (see `scaleGradient`). The scale is named as it is written, by a
+ * signal (the name the expression gives) or by a field of the datum; `start`, `stop` and `count` are values as written -- vega quotes
+ * them into the expression -- so a signal object in them is an object, not what the signal holds.
+ */
+function gradientOfEntry(enc: EncodeEntry, datum: Row, ctx: EvalContext): unknown {
+  const ref = enc.gradient
+  const signal = ref !== null && typeof ref === 'object' ? (ref as { signal?: unknown }).signal : undefined
+  const name = typeof ref === 'string' ? ref
+    : signal ? ctx.runtime.expr(String(signal))(datum, ctx.signalParams)
+      : encodeFieldValue(ref !== null && typeof ref === 'object' ? ref : { datum: ref }, datum, ctx)
+  const scale = ctx.runtime.scale(name as string)
+  // The gradient of a scale named in the spec is the same for every item of the evaluation: made once. (An item that is given
+  // another scale -- a mark in a group that declares one by that name -- makes its own.)
+  if (typeof ref !== 'string') return scaleGradient(scale as never, enc.start, enc.stop, enc.count)
+  let made = EVALUATED_GRADIENTS.get(ctx.claimed)
+  if (made === undefined) EVALUATED_GRADIENTS.set(ctx.claimed, (made = new Map()))
+  const kept = made.get(enc)
+  if (kept !== undefined && kept.scale === scale) return kept.gradient
+  const gradient = scaleGradient(scale as never, enc.start, enc.stop, enc.count)
+  made.set(enc, { scale, gradient })
+  return gradient
+}
+
+/** The gradients the entries of an evaluation made (`ctx.claimed` is that evaluation's own set), by entry. */
+const EVALUATED_GRADIENTS = new WeakMap<object, Map<EncodeEntry, { scale: unknown; gradient: unknown }>>()
 
 /**
  * A property that may itself be an encode entry (vega entry.js `property()`):
@@ -5492,6 +5524,8 @@ function resolveEncodeValueInternal(value: EncodeValue | undefined, datum: Row, 
   // `band` the scale part is `_scale(..) + _bandwidth(..)*band`, and a trailing
   // `*mult` binds to the bandwidth term only (see `tail` below).
   const enc = value as EncodeEntry
+  // (a gradient entry is the whole entry: nothing else it says is read)
+  if (enc.gradient != null) return gradientOfEntry(enc, datum, ctx)
   let head: unknown
   let hasHead = true
   if (enc.signal) head = ctx.runtime.expr(enc.signal)(datum, ctx.signalParams)

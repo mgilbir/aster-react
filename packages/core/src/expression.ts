@@ -12,7 +12,7 @@
  */
 import { currentLocale } from './locale.js'
 import { boundedCount, ceiling, meterBytes, meterTick, guardedRegExp, checkRegexInput, checkRegexObject } from './limits.js'
-import { bandSpace } from './scale.js'
+import { bandSpace, scaleGradient, type Scale } from './scale.js'
 import { selectionIdTest, selectionResolve, selectionTest, selectionTuples } from './selections.js'
 import { parseExpressionCached } from './expr-parser.js'
 import { ADDON_FUNCTIONS } from './addon-functions.js'
@@ -286,11 +286,11 @@ export function expressionFunctionNames(): string[] {
 
 /**
  * The functions vega's parser recognises that Aster does not implement (logging, the lasso tools, `screen`, mark re-encoding,
- * `flush`, `gradient` as a call). A spec that calls one is not refused when it is compiled -- vega accepts it -- but when the call is
+ * `flush`). A spec that calls one is not refused when it is compiled -- vega accepts it -- but when the call is
  * evaluated, as before. `expression-register.test.ts` pins this list against the vega the conformance suite runs.
  */
 export const UNWRITTEN_FUNCTIONS: readonly string[] = Object.freeze([
-  'debug', 'info', 'warn', 'encode', 'flush', 'gradient', 'intersectLasso', 'lassoAppend', 'lassoPath', 'screen',
+  'debug', 'info', 'warn', 'encode', 'flush', 'intersectLasso', 'lassoAppend', 'lassoPath', 'screen',
 ])
 /** The internal scale calls vega's own encode entries are written with (`_scale("x", v)`); the only names with an underscore it knows. */
 const SCALE_CALLS: ReadonlySet<string> = new Set(['_scale', '_bandwidth', '_range'])
@@ -567,6 +567,8 @@ function createBuiltinFunctions(runtime: ExpressionRuntime): Record<string, unkn
       const s = scaleObject(name)
       return s && s.copy ? (s.copy as () => unknown)() : undefined
     },
+    // vega-functions scale-gradient.js: a linear gradient (`start` and `stop` are points of the unit square) over a scale's stops
+    gradient: (name: string, start?: unknown, stop?: unknown, count?: unknown) => scaleGradient(scaleObject(name) as unknown as Scale, start, stop, count),
   }
 }
 

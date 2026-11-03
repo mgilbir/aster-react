@@ -196,7 +196,7 @@ transform does. `@aster/core/addons` finds the add-on from the same expressions 
 uses `loadAddonsFor`, `<Chart>` or the hooks never sees it. A spec that calls an unknown function *and* an add-on's is refused for
 the unknown one, whichever comes first.
 
-**Functions vega has and Aster does not implement** (`debug`, `info`, `warn`, `encode`, `flush`, `gradient`, `intersectLasso`,
+**Functions vega has and Aster does not implement** (`debug`, `info`, `warn`, `encode`, `flush`, `intersectLasso`,
 `lassoAppend`, `lassoPath`, `screen`) are not refused at compile (vega accepts them); calling one fails when it is evaluated with
 `Unrecognized function: <name>`. `isInvalid`, which Aster used to have and vega does not, is refused like any unknown function.
 

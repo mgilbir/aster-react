@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- **`@aster/core`: the gradient of a scale.** `{gradient: <scale>, start, stop, count}` in an encode and the expression
+  `gradient(scale, start, stop, count)` (which compiled and failed when called) paint a linear gradient whose stops are the scale's
+  ticks (`count`, else 15) and the ends of its domain, in the colours the scale gives; scales without ticks (quantize, quantile,
+  threshold, ordinal) use their domain, and a domain of no width is stretched onto [0, 1]. The scale may be named by a signal or a field;
+  a scale that cannot draw one (an ordinal scale over words) fails with vega's `TypeError` and stops the pass there. Before, the
+  fill was dropped. The SVG definitions are the same as for a gradient object, once per distinct gradient however many items share it
+  (the ids stay content-addressed: charts on one page cannot collide); a gradient on text and on a rule is painted on canvas over the
+  item's bounds (stroke included), and one on a group's box over the group's bounds, as vega's canvas does. Generated over the kinds of
+  scale, the options and every mark that paints, against vega's SVG (string and DOM renderers) and its canvas in Chromium.
+
 - **`@aster/core`: a failing operator stops the pass as it does in vega, in every scope.** An encode that threw (a mark's, a group's, an
   entry of an axis, a legend or a title), a signal or a scale of a group's scope, logged one error per item it failed on (11 for one
   axis) and drew the scopes, legends and titles vega never gets to. Vega's dataflow runs its operators in rank order and stops at the
