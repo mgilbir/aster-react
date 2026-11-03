@@ -306,19 +306,28 @@ function indexIds(el: XmlEl, byId: Map<string, XmlEl>): void {
 }
 
 /** Resolve every `url(#id)` / `#id` reference inside a value to canonical content (N-id). */
-function resolveRefs(value: string, m: Mat, ctx: Ctx, seen: string[] = []): string {
+function resolveRefs(value: string, m: Mat, ctx: Ctx, seen: string[] = [], plain: (text: string) => string = (t) => t): string {
   // `url(#id)`, or `url(<page url>#id)`: a browser-built DOM writes the document
   // URL in front of a same-document reference (vega-embed's `base`); the fragment
-  // is what names the element.
-  return value.replace(/url\(\s*['"]?[^)#'"\s]*#([^'")\s]+)['"]?\s*\)/g, (_all, id: string) => {
-    const target = ctx.byId.get(id)
-    // A reference to an id that does not exist has no paint server / clip
-    // (browsers paint none, or leave the element unclipped); which id it names
-    // is irrelevant, so two dangling references are equal (N-id).
-    if (!target) return 'url(<unresolved>)'
-    if (seen.includes(id)) throw new Error(`canonicalizeSvg: reference cycle through "${id}"`)
-    return `url(${canonDef(target, m, ctx, [...seen, id])})`
-  })
+  // is what names the element. (`plain` is applied to the text between the references, never to an id: digits in one are no numbers.)
+  const ref = /url\(\s*['"]?[^)#'"\s]*#([^'")\s]+)['"]?\s*\)/g
+  let out = ''
+  let at = 0
+  for (const hit of value.matchAll(ref)) {
+    out += plain(value.slice(at, hit.index)) + resolveOne(hit[1]!, m, ctx, seen)
+    at = hit.index! + hit[0].length
+  }
+  return out + plain(value.slice(at))
+}
+
+function resolveOne(id: string, m: Mat, ctx: Ctx, seen: string[]): string {
+  const target = ctx.byId.get(id)
+  // A reference to an id that does not exist has no paint server / clip
+  // (browsers paint none, or leave the element unclipped); which id it names
+  // is irrelevant, so two dangling references are equal (N-id).
+  if (!target) return 'url(<unresolved>)'
+  if (seen.includes(id)) throw new Error(`canonicalizeSvg: reference cycle through "${id}"`)
+  return `url(${canonDef(target, m, ctx, [...seen, id])})`
 }
 
 /** Canonical content of a referenced def. clipPath is geometry under the referencing matrix. */
@@ -339,7 +348,7 @@ function canonDef(el: XmlEl, m: Mat, ctx: Ctx, seen: string[]): string {
   if (el.tag === 'pattern') {
     // a pattern (vega wraps a radial gradient in one): its attributes, and its children as the elements they are
     const attrsStr = (at: Record<string, string>): string =>
-      Object.keys(at).filter((k) => !isNonVisualAttr(k)).sort().map((k) => `${k}=${resolveRefs(roundIn(at[k]!), m, ctx, seen)}`).join(';')
+      Object.keys(at).filter((k) => !isNonVisualAttr(k)).sort().map((k) => `${k}=${resolveRefs(at[k]!, m, ctx, seen, roundIn)}`).join(';')
     const kids: string[] = []
     for (const c of el.children) {
       if (typeof c === 'string') continue

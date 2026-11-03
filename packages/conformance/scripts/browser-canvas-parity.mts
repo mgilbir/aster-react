@@ -22,6 +22,8 @@ import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { build } from 'esbuild'
 import { chromium } from 'playwright'
+import * as vega from 'vega'
+import { gradientSpec, makeRng, UNPAINTABLE_KINDS } from './gradient-gen.mts'
 
 const THIS_DIR = dirname(fileURLToPath(import.meta.url))
 const CONF_DIR = dirname(THIS_DIR)
@@ -176,6 +178,19 @@ for (const [name, shape] of CUSTOM_SHAPES) {
       marks: [{ type: 'image', from: { data: 'density' }, encode: { update: box }, transform: [{ type: 'heatmap', field: 'datum.grid', color: { expr: 'rgb(255 * datum.$value / datum.$max, 0, 120)' } }] }],
     },
   })
+}
+// The gradient of a scale (`{gradient: <scale>, start, stop, count}`, `gradient(scale, ...)`), generated over the kinds of scale, the
+// options and the marks that paint (gradient-gen.mts; the SVG side is differential-gradient.test.mts). Their CanvasGradients are
+// compared in pixels with vega's; the specs that vega itself refuses at parse (a hole in the call), and the scales whose stops are no
+// colours (a number: `addColorStop` throws in vega's canvas too), are not specs for a canvas.
+{
+  const r = makeRng(2024)
+  for (let i = 0; i < 220; i++) {
+    const { spec, kind } = gradientSpec(r)
+    if (UNPAINTABLE_KINDS.has(kind)) continue
+    try { vega.parse(structuredClone(spec) as never) } catch { continue }
+    synthetic.push({ name: `canvas-gradient-${i}`, spec: { $schema: 'https://vega.github.io/schema/vega/v6.json', background: 'white', ...spec } })
+  }
 }
 const all = [...loadCorpus(), ...synthetic].filter((e) => !FILTER || e.name.includes(FILTER))
 const entries = all.filter((e) => !SKIP.has(e.name)).slice(0, LIMIT || undefined)

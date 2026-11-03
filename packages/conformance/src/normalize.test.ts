@@ -123,6 +123,8 @@ const EQUIVALENT: Array<[string, string, string]> = [
   ['text spelt with character references', wrap(TEXT.replace('>hi<', '>&quot;it&apos;s&quot; &amp; &lt;b&gt;<')), wrap(TEXT.replace('>hi<', '>"it\'s" &#38; &#x3c;b&#62;<'))],
   ['text spelt with a raw and with a named quote', wrap(TEXT.replace('>hi<', '>"Quoted" Title<')), wrap(TEXT.replace('>hi<', '>&quot;Quoted&quot; Title<'))],
   ['a radial gradient: ids of the pattern and the gradient', wrap(radial('blue')), wrap(radial('blue').replace(/g7/g, 'gradient_31'))],
+  // (a content-addressed id has runs of digits and letters: none of it is a number to round)
+  ['a radial gradient: an id with runs of digits in it', wrap(radial('blue')), wrap(radial('blue').replace(/g7/g, 'gradient_1vxdmg00ny7i'))],
   ['gradient ids', wrap(grad('blue')), wrap(grad('blue').replace(/gradient_9/g, 'gradient_77'))],
   ['clip ids', wrap(clip(20)), wrap(clip(20).replace(/clip1/g, 'clip42'))],
   ['unreferenced defs', wrap(RECT), wrap(`<defs><clipPath id="c"><rect width="1" height="1"/></clipPath></defs>${RECT}`)],
