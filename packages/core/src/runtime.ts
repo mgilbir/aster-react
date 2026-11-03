@@ -6,9 +6,9 @@
 import { compileExpr, ExpressionParseError, type CompiledExpr, type ExpressionRuntime } from './expression.js'
 import { scaleCallFailure, scaleRangeFailure } from './missing-scale.js'
 import { ingestRows, readData, type DataFormatSpec } from './data-format.js'
-import { carryOrder, isPlacing, orderOf, setOrder } from './tuple-order.js'
-import { carryByAlignment, carryByMapping, type IdCounter } from './identifier-ids.js'
-import { applyTransforms, applyTransformsToSharedRows, copiesRows, compileExprTransform, sortOrder, getField, geoJSONPath, aggregateGroup, type Row, type TransformContext } from './transform.js'
+import { orderOf, setOrder } from './tuple-order.js'
+import { carryByAlignment, type IdCounter } from './identifier-ids.js'
+import { applyTransforms, applyTransformsToSharedRows, copiesRows, sortOrder, getField, geoJSONPath, type Row, type TransformContext } from './transform.js'
 import { fieldOf } from './transform-agg.js'
 import { atRandomSite, contentKey, mayDrawRandom, normalPairs, replayable } from './random-tape.js'
 import { dependencyKey, fieldsWritten, pipelineReadsOf, reuse, runsOf, stepCounts, stepReadsOf, type StepReads, type StepRecord } from './step-reuse.js'
@@ -42,7 +42,6 @@ import type {
   SceneNode,
   SceneRoot,
   SizeSpec,
-  SortSpec,
   VgSpec,
 } from './types.js'
 import { gradientDefOf, hash53, isGradientPaint } from './svg-defs.js'
@@ -52,9 +51,8 @@ import { compileChart } from './compiler.js'
 import { dict, ownGet, pushAll, sortData, lerp, scopedSignalName, heldSignalName, TUPLE_ID } from './util.js'
 import { applyImageUrlPolicy, applyLinkUrlPolicy, resolveImageUrl, type ImageUrlPolicy } from './url-policy.js'
 import { valueKey, valuesEqual } from './fingerprint.js'
-import { equalCell, rowsEqual, sourceNames, type PulseChange } from './pulse.js'
-import { aggregateGroups, fieldsOf, flatKeyFn, groupKeyFn } from './transform-agg.js'
-import { flattenLength } from './transform-basic.js'
+import { sourceNames, type PulseChange } from './pulse.js'
+import { aggregateGroups, flatKeyFn, groupKeyFn } from './transform-agg.js'
 import { layoutFacet, type GridPlace } from './trellis.js'
 import { boundAxisGroup, boundLegendGroup, boundGroupItem, boundLeaf, boundTypedMark, Bounds, layoutBounds, eachMarkBounds, hasClippedMark } from './bounds.js'
 import { rectItemPath } from './render.js'
@@ -66,32 +64,12 @@ import { defaultMergedConfig } from './config-defaults.js'
 
 const DEFAULT_SIZE = 500
 
-/** Persistent per-group index for incremental group transforms. */
-interface AggState {
-  groupby: string[]
-  /** Input row index -> group key (same length as the input rows). */
-  rowKey: string[]
-  /** Group key -> input row indices belonging to it. */
-  keyToIdx: Map<string, number[]>
-  /** Output row order (group keys, first-occurrence order). */
-  outOrder: string[]
-  /** Group key -> output row index (parallel to outOrder; O(1) dirty-index lookup). */
-  outIdx: Map<string, number>
-  /** Group key -> aggregate output row (aggregate only). */
-  outByKey: Map<string, Row>
-  /** Group key -> start index in the grouped output array (window/stack). */
-  groupStart: Map<string, number>
-  /** Group key -> number of output rows it contributes. */
-  groupSize: Map<string, number>
-  out: Row[]
-}
-
 /**
  * A dataset-level pulse: the new output indices whose rows changed, plus the
  * index mapping for length-changing updates. `from` is absent for same-length
  * updates (identity mapping).
  */
-interface StepPulse extends PulseChange {
+export interface StepPulse extends PulseChange {
   /** True when the transform chain could not publish a trustworthy mapping. */
   full?: boolean
 }
@@ -101,7 +79,7 @@ interface StepPulse extends PulseChange {
  * auxiliary indexes (filter pass flags, group membership, flatten offsets,
  * collect order), plus the params it was derived under.
  */
-interface DatasetState {
+export interface DatasetState {
   /** Fingerprint (signals/size/domainRaw/metrics) the pipeline ran under. */
   fp: string
   /** Row count of the pipeline INPUT, to validate a published pulse against. */
@@ -187,7 +165,7 @@ interface IncrementalState {
   stale: boolean
   /** Where the view's id counter stood (see identifier-ids.ts): the next evaluation numbers new rows from here. */
   idCounter: number
-  /** The datasets of group scopes, by instance and name: what the pipeline read and made (see {@link runScopedData}). */
+  /** The datasets of group scopes, by instance and name: what the pipeline read and made (see `runScopedData` in incremental-engine.ts). */
   scoped: Map<string, ScopedRun>
 }
 
@@ -218,62 +196,39 @@ interface EvalTxn {
   unchanged?: DataStability
   /** What the pass of this evaluation before the one being made left (a view that fits its viewport makes two passes). */
   lastPass?: IncrementalState
+  /** The incremental engine, when the evaluation keeps state for a later one (see {@link IncrementalEngine}). */
+  engine?: IncrementalEngine
+}
+
+/**
+ * The part of the dataset pipeline that only a RE-evaluation needs: running a transform chain from a pulse, and leaving behind the
+ * state (filter flags, group membership, flatten offsets, collect order) the next pulse starts from. It lives in
+ * `incremental-engine.ts`, and an evaluation that keeps its state (`evaluateChartPending`) is handed it by its caller (the public
+ * `evaluateChart`, the chart session), so a chart that is evaluated once (`renderSpec`, `evaluateOnce`) does not carry it: no module
+ * of that path imports it.
+ */
+export interface IncrementalEngine {
+  /** A transform chain driven by `input`, reading the committed steps `prevDS` and recording this evaluation's into `state`. */
+  applyPipelineWithPulse(
+    rows: Row[], transforms: CompiledTransform[], tctx: StepTransformContext, sourceName: string,
+    input: StepPulse, prevDS: DatasetState, state: DatasetState,
+  ): { rows: Row[]; pulse: StepPulse | null }
+  /** One transform from scratch, leaving the state the next pulse starts from. */
+  applyOneWithState(
+    rows: Row[], t: CompiledTransform, tctx: StepTransformContext, sourceName: string, previous?: Row[],
+  ): { rows: Row[]; state?: unknown }
 }
 
 /** Source dataset name -> the rows the previous evaluation was given for it, when this evaluation's are equal to them. */
 export type DataStability = ReadonlyMap<string, unknown>
 
-function beginTxn(chart: CompiledChart, unchanged?: DataStability): EvalTxn {
+function beginTxn(engine: IncrementalEngine, chart: CompiledChart, unchanged?: DataStability): EvalTxn {
+  // (an evaluation that keeps state without the engine would leave a state the next pulse cannot start from, and answer with
+  // another evaluation: it does not run)
+  if (typeof engine?.applyPipelineWithPulse !== 'function') throw new Error('[aster] an evaluation that keeps incremental state needs the incremental engine (incremental-engine.ts)')
   const committed = STATES.get(chart)
   const prev = committed && !committed.stale ? committed : undefined
-  return { prev, gen: (committed?.gen ?? 0) + 1, claimed: new Set(), ...(unchanged ? { unchanged } : {}) }
-}
-
-/** The partition key vega's aggregate/joinaggregate use (`String(a)|b|...`): the incremental grouping must equal the fresh one. */
-function groupKeyOf(row: Row, groupby: string[]): string {
-  return groupKeyFn(groupby)(row)
-}
-
-/**
- * Whether an aggregate / joinaggregate can be re-derived group by group.
- * A cross-product, a custom `key` accessor or a bootstrap interval (ci0/ci1
- * draws from one pseudo-random stream shared by all groups, so a group's value
- * depends on the groups before it) must be recomputed from scratch.
- */
-function groupwiseIncremental(t: CompiledTransform): boolean {
-  const p = t as { cross?: unknown; key?: unknown; ops?: unknown }
-  if (p.cross || p.key != null) return false
-  const ops = Array.isArray(p.ops) ? p.ops : []
-  return !ops.includes('ci0') && !ops.includes('ci1')
-}
-
-function buildAggState(input: Row[], groupby: string[], out: Row[]): AggState {
-  const rowKey = new Array<string>(input.length)
-  const keyToIdx = new Map<string, number[]>()
-  for (let i = 0; i < input.length; i++) {
-    const k = groupKeyOf(input[i]!, groupby)
-    rowKey[i] = k
-    let arr = keyToIdx.get(k)
-    if (!arr) keyToIdx.set(k, (arr = []))
-    arr.push(i)
-  }
-  const outOrder = [...keyToIdx.keys()]
-  const outIdx = new Map<string, number>()
-  outOrder.forEach((k, idx) => outIdx.set(k, idx))
-  const outByKey = new Map<string, Row>()
-  outOrder.forEach((k, idx) => outByKey.set(k, out[idx]!))
-  // Grouped outputs (window/stack) place a group's rows contiguously; track
-  // each group's start index and size so dirty groups can be spliced in place.
-  const groupStart = new Map<string, number>()
-  const groupSize = new Map<string, number>()
-  let pos = 0
-  for (const k of outOrder) {
-    const size = keyToIdx.get(k)!.length
-    groupStart.set(k, pos)
-    groupSize.set(k, size)
-    pos += size
-  }
-  return { groupby, rowKey, keyToIdx, outOrder, outIdx, outByKey, groupStart, groupSize, out }
+  return { prev, gen: (committed?.gen ?? 0) + 1, claimed: new Set(), engine, ...(unchanged ? { unchanged } : {}) }
 }
 
 /**
@@ -476,6 +431,8 @@ interface EvalContext {
   affected: Set<string>
   /** True when the caller supplied change info AND a committed previous state exists. */
   incremental: boolean
+  /** Present when this evaluation leaves its step state for a later one (see {@link IncrementalEngine}). */
+  engine?: IncrementalEngine
   /**
    * Pulse propagation: the output pulse per dataset (after its transform
    * pipeline). A same-length update carries only `changed`; a length-changing
@@ -661,7 +618,7 @@ function prepareChartCtx(
       // an explicit view size (the host's, or the fit loop's resize) wins over an `init`
       ...(explicitSize.width ? ['width'] : []), ...(explicitSize.height ? ['height'] : []),
     ]),
-    hierarchies: transformHierarchies, affected: new Set(), incremental: false, deadline, checkDeadline, markItems: new Map(), markContainers: new Map(),
+    hierarchies: transformHierarchies, affected: new Set(), incremental: false, ...(txn.engine ? { engine: txn.engine } : {}), deadline, checkDeadline, markItems: new Map(), markContainers: new Map(),
     datasetPulses: new Map(),
     prev: txn.prev, ...(txn.unchanged ? { unchanged: txn.unchanged } : {}), ...(txn.lastPass ? { earlier: txn.lastPass } : {}), draft: newState(txn.gen), ids: { value: txn.prev?.idCounter ?? 0 }, idStart: txn.prev?.idCounter ?? 0, gen: txn.gen, claimed: txn.claimed, extraFp, dsEpoch: 0, scaleReuse: new Map(), distinctCache: new WeakMap(),
     domainRaw: input.domainRaw ? new Map(Object.entries(input.domainRaw).map(([k, v]) => [k, v])) : undefined,
@@ -1026,7 +983,7 @@ function fitDatasets(fit: unknown): string[] {
 }
 
 /** The projections map a dataset transform sees: reads go through `refreshProjection`. */
-class ProjectionRegistry extends Map<string, unknown> {
+export class ProjectionRegistry extends Map<string, unknown> {
   refresh: ((name: string) => void) | undefined
   /** bumped when a `geojson` transform publishes a value a projection may fit */
   epoch = 0
@@ -1042,7 +999,7 @@ class ProjectionRegistry extends Map<string, unknown> {
 }
 
 /** Expression functions that read datasets or scales (a signal using them cannot resolve before they exist). */
-const DATA_DEPENDENT_EXPR = /\b(data|indata|domain|range|scale|bandwidth|bandspace|invert|copy|gradient|vlSelectionTest|vlSelectionIdTest|vlSelectionResolve)\s*\(/
+export const DATA_DEPENDENT_EXPR = /\b(data|indata|domain|range|scale|bandwidth|bandspace|invert|copy|gradient|vlSelectionTest|vlSelectionIdTest|vlSelectionResolve)\s*\(/
 
 /**
  * Evaluate static signal `update` expressions in declaration order against the
@@ -1975,10 +1932,11 @@ export interface PendingEvaluation {
 
 /**
  * Evaluate without committing the incremental state. The compiled chart is not
- * written; call `commit()` once the scene has been accepted.
+ * written; call `commit()` once the scene has been accepted. `engine` is the incremental
+ * engine the state is made for (see {@link IncrementalEngine}).
  */
-export function evaluateChartPending(chart: CompiledChart, input: RuntimeInput = {}, unchanged?: DataStability): PendingEvaluation {
-  const txn = beginTxn(chart, unchanged)
+export function evaluateChartPending(engine: IncrementalEngine, chart: CompiledChart, input: RuntimeInput = {}, unchanged?: DataStability): PendingEvaluation {
+  const txn = beginTxn(engine, chart, unchanged)
   const done: { draft?: IncrementalState; failed?: boolean } = {}
   const scene = withLimits(input.limits, () => withTextMetricsProvider(input.textMetrics, () => evaluateChartImpl(chart, input, txn, done)))
   return {
@@ -1994,10 +1952,13 @@ export function evaluateChartPending(chart: CompiledChart, input: RuntimeInput =
   }
 }
 
-export function evaluateChart(chart: CompiledChart, input: RuntimeInput = {}): SceneRoot {
-  const pending = evaluateChartPending(chart, input)
-  pending.commit()
-  return pending.scene
+/**
+ * Evaluate a chart once: nothing is read from an earlier evaluation of it and nothing is left for a later one, so the incremental
+ * engine is not involved (`renderSpec`, `getChartInfo`). The scene is what `evaluateChart` gives a chart evaluated for the first time.
+ */
+export function evaluateOnce(chart: CompiledChart, input: RuntimeInput = {}): SceneRoot {
+  const txn: EvalTxn = { prev: undefined, gen: 1, claimed: new Set() }
+  return withLimits(input.limits, () => withTextMetricsProvider(input.textMetrics, () => evaluateChartImpl(chart, input, txn, {})))
 }
 
 function evaluateChartImpl(chart: CompiledChart, hostInput: RuntimeInput, txn: EvalTxn, done: { draft?: IncrementalState; failed?: boolean }): SceneRoot {
@@ -2190,7 +2151,7 @@ function getChartInfoImpl(spec: VgSpec, input: RuntimeInput): ChartInfo {
   // padding and scales -- under autosize `fit`/`pad` too, where the size the scales were built for
   // is the fitted one, not the spec's (C53). (This used to prepare a second, unfitted context and
   // then evaluate the whole chart again.)
-  return chartInfoFromScene(evaluateChart(compileChart(spec), input))
+  return chartInfoFromScene(evaluateOnce(compileChart(spec), input))
 }
 
 /**
@@ -2314,715 +2275,37 @@ function resolveSize(size: SizeSpec, override: number | undefined, signals: Reco
 // Incremental pulse propagation (R13)
 // ---------------------------------------------------------------------------
 
-type StepTransformContext = TransformContext & {
+export type StepTransformContext = TransformContext & {
   datasets: (name: string) => Row[] | undefined
   /** Datasets affected by this update (for lookup safety). */
   affectedDatasets?: Set<string>
 }
 
-/** New-value indices that were inserted (mapping `-1`). */
-function addedRangesOf(from: number[]): Array<[number, number]> {
-  const out: Array<[number, number]> = []
-  for (let i = 0; i < from.length; i++) {
-    if (from[i]! >= 0) continue
-    const start = i
-    while (i + 1 < from.length && from[i + 1]! < 0) i++
-    out.push([start, i + 1])
-  }
-  return out
-}
-
-function removedRangesOf(to: number[] | undefined): Array<[number, number]> {
-  if (!to) return []
-  const out: Array<[number, number]> = []
-  for (let i = 0; i < to.length; i++) {
-    if (to[i]! >= 0) continue
-    const start = i
-    while (i + 1 < to.length && to[i + 1]! < 0) i++
-    out.push([start, i + 1])
-  }
-  return out
-}
-
-/** Derive a pulse from a new->old mapping and the changed output indices. */
-function pulseOfMapping(from: number[], to: number[] | undefined, changed: number[]): StepPulse {
-  return { changed, from, ...(to ? { to } : {}), added: addedRangesOf(from), removed: removedRangesOf(to) }
-}
-
-/** Identity mapping of length `n`. */
-function identityMapping(n: number): number[] {
-  const from = new Array<number>(n)
-  for (let i = 0; i < n; i++) from[i] = i
-  return from
-}
-
-/** Old-index -> new-index inverse (with -1 for removed rows). */
-function inverseMapping(from: number[], oldLen: number): number[] {
-  const to = new Array<number>(oldLen).fill(-1)
-  for (let i = 0; i < from.length; i++) if (from[i]! >= 0) to[from[i]!] = i
-  return to
-}
-
-function isModified(pulse: StepPulse): Set<number> {
-  return new Set(pulse.changed)
-}
-
 /** Previous length of a pulse (for synthesising a mapping). */
-function pulseBaseLength(pulse: StepPulse): number {
+export function pulseBaseLength(pulse: StepPulse): number {
   return pulse.baseLength ?? pulse.to?.length ?? (pulse.from ? pulse.from.length : 0)
 }
 
-/** Expand a compact append pulse to the full new->old mapping (on demand). */
-function mappingFromPulse(pulse: StepPulse, newLen: number): number[] {
-  if (pulse.from) return pulse.from
-  const base = Math.min(pulseBaseLength(pulse), newLen)
-  const from = new Array<number>(newLen)
-  for (let i = 0; i < base; i++) from[i] = i
-  for (let i = base; i < newLen; i++) from[i] = -1
-  return from
-}
-
-/** Stable append pulse from a base length and new length. */
-function appendPulse(baseLength: number, newLen: number, changed: number[]): StepPulse {
-  return {
-    changed,
-    appendOnly: true,
-    baseLength,
-    ...(newLen > baseLength ? { added: [[baseLength, newLen]] } : {}),
-  }
-}
-
 /** Run one transform over the whole input (the fallback path). */
-function applyOne(rows: Row[], t: CompiledTransform, tctx: StepTransformContext, sourceName: string): Row[] {
+export function applyOne(rows: Row[], t: CompiledTransform, tctx: StepTransformContext, sourceName: string): Row[] {
   return applyTransforms(rows, [t], tctx, sourceName)
 }
 
-/**
- * Row-local transforms (`formula`, `timeunit`, fixed-extent `bin`, an
- * unaffected `lookup`, and the 1:1 geo transforms) derive only the added /
- * modified rows and splice the cached output for the retained ones.
- */
-function rowLocalPulse(
-  rows: Row[], t: CompiledTransform, tctx: StepTransformContext, sourceName: string,
-  input: StepPulse, prev: Row[] | undefined,
-): { rows: Row[]; pulse: StepPulse } | null {
-  const from = input.from!
-  const modified = isModified(input)
-  const out = new Array<Row>(rows.length)
-  const changed: number[] = []
-  for (let i = 0; i < rows.length; i++) {
-    const old = from[i]!
-    if (old >= 0 && !modified.has(i) && prev && prev[old] !== undefined) {
-      out[i] = prev[old]!
-      continue
-    }
-    const derived = applyOne([rows[i]!], t, tctx, sourceName)
-    if (derived.length !== 1) return null
-    out[i] = derived[0]!
-    changed.push(i)
-  }
-  return { rows: out, pulse: pulseOfMapping(from, input.to, changed) }
-}
-
-/**
- * Append-only fast paths. These mutate the cached step output (persistent-scene
- * semantics): unchanged rows keep their already-transformed row objects, and
- * new rows are appended, so the cost is O(appended + changed).
- */
-function rowLocalAppendPulse(
-  rows: Row[], t: CompiledTransform, tctx: StepTransformContext, sourceName: string,
-  input: StepPulse, prev: Row[] | undefined,
-): { rows: Row[]; pulse: StepPulse } | null {
-  const base = pulseBaseLength(input)
-  if (!prev || prev.length !== base) return null
-  const changed: number[] = []
-  for (const i of input.changed) {
-    if (i < 0 || i >= base) continue
-    const derived = applyOne([rows[i]!], t, tctx, sourceName)
-    if (derived.length !== 1) return null
-    prev[i] = derived[0]!
-    changed.push(i)
-  }
-  for (let i = base; i < rows.length; i++) {
-    const derived = applyOne([rows[i]!], t, tctx, sourceName)
-    if (derived.length !== 1) return null
-    prev.push(derived[0]!)
-  }
-  return { rows: prev, pulse: appendPulse(base, rows.length, changed) }
-}
-
-function filterAppendPulse(
-  rows: Row[], t: CompiledTransform, tctx: StepTransformContext, sourceName: string,
-  input: StepPulse, prev: Row[] | undefined, prevPass: boolean[] | undefined,
-): { rows: Row[]; pulse: StepPulse; state?: unknown } | null {
-  const base = pulseBaseLength(input)
-  if (input.changed.length || !prev || !prevPass || prevPass.length !== base) return null
-  const expr = (t as { expr?: string }).expr ?? ''
-  const exprFn = compileExprTransform(expr, tctx)
-  const fn = (row: Row): boolean => Boolean(exprFn(row))
-  const outBase = prev.length
-  for (let i = base; i < rows.length; i++) {
-    const passed = fn(rows[i]!)
-    prevPass.push(passed)
-    if (passed) prev.push(rows[i]!)
-  }
-  return { rows: prev, pulse: appendPulse(outBase, prev.length, []), state: prevPass }
-}
-
-function foldAppendPulse(
-  rows: Row[], t: CompiledTransform, tctx: StepTransformContext, sourceName: string,
-  input: StepPulse, prev: Row[] | undefined,
-): { rows: Row[]; pulse: StepPulse } | null {
-  const n = ((t as { fields?: unknown[] }).fields ?? []).length
-  if (!n || !prev) return null
-  const base = pulseBaseLength(input)
-  if (prev.length !== base * n) return null
-  const changed: number[] = []
-  for (const i of input.changed) {
-    if (i < 0 || i >= base) continue
-    const derived = applyOne([rows[i]!], t, tctx, sourceName)
-    if (derived.length !== n) return null
-    for (let j = 0; j < n; j++) {
-      prev[i * n + j] = derived[j]!
-      changed.push(i * n + j)
-    }
-  }
-  const outBase = base * n
-  for (let i = base; i < rows.length; i++) {
-    const derived = applyOne([rows[i]!], t, tctx, sourceName)
-    if (derived.length !== n) return null
-    for (let j = 0; j < n; j++) prev.push(derived[j]!)
-  }
-  return { rows: prev, pulse: appendPulse(outBase, prev.length, changed) }
-}
-
-/** `rowsEqual`, leaving the fields in `ignore` out of both rows. */
-function rowsEqualBut(a: Row, b: Row, ignore: ReadonlySet<string>): boolean {
-  let n = 0
-  for (const k in a) {
-    if (ignore.has(k)) continue
-    n++
-    if (!equalCell(a[k], b[k])) return false
-  }
-  let m = 0
-  for (const k in b) if (!ignore.has(k)) m++
-  return n === m
-}
-
-/**
- * Re-derive a transform whose output stays 1:1 with its input (layout/pie/
- * dotbin/label), then reuse the previous output row object wherever the value
- * is unchanged. This is how a global layout participates in the pulse graph:
- * the mapping survives, so downstream items still splice.
- */
-function rederiveAligned(
-  rows: Row[], t: CompiledTransform, tctx: StepTransformContext, sourceName: string,
-  input: StepPulse, prev: Row[] | undefined, ignore?: ReadonlySet<string>,
-): { rows: Row[]; pulse: StepPulse } | null {
-  const out = applyOne(rows, t, tctx, sourceName)
-  const from = input.from!
-  if (out.length !== from.length) return null
-  const modified = isModified(input)
-  const changed: number[] = []
-  const reused = new Array<Row>(out.length)
-  for (let i = 0; i < out.length; i++) {
-    const old = from[i]!
-    const canReuse = old >= 0 && !modified.has(i) && prev && prev[old] !== undefined
-    if (canReuse && (ignore === undefined ? rowsEqual(out[i]!, prev![old]!) : rowsEqualBut(out[i]!, prev![old]!, ignore))) {
-      reused[i] = prev![old]!
-    } else {
-      reused[i] = out[i]!
-      changed.push(i)
-    }
-  }
-  return { rows: reused, pulse: pulseOfMapping(from, input.to, changed) }
-}
-
-function filterPulse(
-  rows: Row[], t: CompiledTransform, tctx: StepTransformContext, sourceName: string,
-  input: StepPulse, prev: Row[] | undefined, prevPass: boolean[] | undefined,
-): { rows: Row[]; pulse: StepPulse; state?: unknown } | null {
-  const from = input.from!
-  const oldLen = input.to?.length ?? -1
-  if (!prevPass || prevPass.length !== oldLen) return null
-  // Old output index for each old input index (the filter preserves input order).
-  const oldOut = new Array<number>(oldLen).fill(-1)
-  let acc = 0
-  for (let i = 0; i < oldLen; i++) if (prevPass[i]) oldOut[i] = acc++
-  const expr = (t as { expr?: string }).expr ?? ''
-  const exprFn = compileExprTransform(expr, tctx)
-  const fn = (row: Row): boolean => Boolean(exprFn(row))
-  const modified = isModified(input)
-  const pass = new Array<boolean>(rows.length)
-  const out: Row[] = []
-  const outFrom: number[] = []
-  const changed: number[] = []
-  for (let i = 0; i < rows.length; i++) {
-    const old = from[i]!
-    const retained = old >= 0 && !modified.has(i) && prevPass[old] !== undefined
-    pass[i] = retained ? prevPass![old]! : fn(rows[i]!)
-    if (!pass[i]) continue
-    // (a modified row that passed before and passes now is the same row in a new state: it keeps its place in the mapping,
-    // and is listed as changed, so a transform after the filter can tell it from a row that is new)
-    const oldIdx = old >= 0 ? oldOut[old]! : -1
-    const outIdx = out.length
-    if (retained && oldIdx >= 0 && prev && prev[oldIdx] !== undefined) out.push(prev[oldIdx]!)
-    else out.push(rows[i]!)
-    if (!retained || modified.has(i)) changed.push(outIdx)
-    outFrom.push(oldIdx)
-  }
-  const to = new Array<number>(prev ? prev.length : 0).fill(-1)
-  for (let i = 0; i < outFrom.length; i++) if (outFrom[i]! >= 0) to[outFrom[i]!] = i
-  return { rows: out, pulse: pulseOfMapping(outFrom, to, changed), state: pass }
-}
-
-function foldPulse(
-  rows: Row[], t: CompiledTransform, tctx: StepTransformContext, sourceName: string,
-  input: StepPulse, prev: Row[] | undefined,
-): { rows: Row[]; pulse: StepPulse } | null {
-  const n = ((t as { fields?: unknown[] }).fields ?? []).length
-  if (!n) return null
-  const from = input.from!
-  const modified = isModified(input)
-  const out: Row[] = []
-  const outFrom: number[] = []
-  const changed: number[] = []
-  for (let i = 0; i < rows.length; i++) {
-    const old = from[i]!
-    const start = out.length
-    const canReuse = old >= 0 && !modified.has(i) && prev && prev.length === from.length * n
-    if (canReuse) {
-      for (let j = 0; j < n; j++) {
-        out.push(prev![old * n + j]!)
-        outFrom.push(old * n + j)
-      }
-      continue
-    }
-    const derived = applyOne([rows[i]!], t, tctx, sourceName)
-    if (derived.length !== n) return null
-    for (let j = 0; j < n; j++) {
-      out.push(derived[j]!)
-      outFrom.push(-1)
-      changed.push(start + j)
-    }
-  }
-  const to = new Array<number>(prev ? prev.length : 0).fill(-1)
-  for (let i = 0; i < outFrom.length; i++) if (outFrom[i]! >= 0) to[outFrom[i]!] = i
-  return { rows: out, pulse: pulseOfMapping(outFrom, to, changed) }
-}
-
-interface FlattenState { sizes: number[]; offsets: number[] }
-
-function flattenSize(row: Row, fields: string[]): number {
-  // vega's output length for one tuple; `fields` may be access paths (`a.b`, `a[0]`)
-  const maxlen = flattenLength(fieldsOf(fields).map((f) => f(row)))
-  return maxlen > 0 ? maxlen : 0
-}
-
-function flattenPulse(
-  rows: Row[], t: CompiledTransform, tctx: StepTransformContext, sourceName: string,
-  input: StepPulse, prev: Row[] | undefined, prevState: FlattenState | undefined,
-): { rows: Row[]; pulse: StepPulse; state?: unknown } | null {
-  const fields = (t as { fields?: string[] }).fields ?? []
-  const from = input.from!
-  const modified = isModified(input)
-  if (!prevState || prevState.sizes.length !== (input.to?.length ?? -1)) return null
-  const sizes = new Array<number>(rows.length)
-  for (let i = 0; i < rows.length; i++) {
-    const old = from[i]!
-    if (old >= 0 && !modified.has(i)) {
-      sizes[i] = prevState.sizes[old]!
-    } else {
-      sizes[i] = flattenSize(rows[i]!, fields)
-      if (old >= 0 && sizes[i] !== prevState.sizes[old]) return null
-    }
-  }
-  const offsets = new Array<number>(rows.length)
-  let pos = 0
-  for (let i = 0; i < rows.length; i++) { offsets[i] = pos; pos += sizes[i]! }
-  if (prev && prev.length !== prevState.offsets.reduce((a, o, i) => Math.max(a, o + prevState.sizes[i]!), 0)) {
-    // The cached output length does not line up with the cached state; fall back.
-    if (prev.length !== prevState.offsets.length && prev.length < pos) return null
-  }
-  const out: Row[] = []
-  const outFrom: number[] = []
-  const changed: number[] = []
-  for (let i = 0; i < rows.length; i++) {
-    const old = from[i]!
-    const size = sizes[i]!
-    const start = out.length
-    const canReuse = old >= 0 && !modified.has(i) && prev && prevState.sizes[old] === size
-    if (canReuse) {
-      for (let j = 0; j < size; j++) {
-        const oldIdx = prevState.offsets[old]! + j
-        out.push(prev![oldIdx]!)
-        outFrom.push(oldIdx)
-      }
-      continue
-    }
-    const derived = applyOne([rows[i]!], t, tctx, sourceName)
-    for (let j = 0; j < size; j++) {
-      out.push(derived[j] ?? rows[i]!)
-      outFrom.push(-1)
-      changed.push(start + j)
-    }
-  }
-  const to = new Array<number>(prev ? prev.length : 0).fill(-1)
-  for (let i = 0; i < outFrom.length; i++) if (outFrom[i]! >= 0) to[outFrom[i]!] = i
-  return { rows: out, pulse: pulseOfMapping(outFrom, to, changed), state: { sizes, offsets } }
-}
-
-/**
- * Incremental aggregate: rebuild the group membership index, recompute only the
- * dirty groups, and key the output by group so unchanged groups keep their row
- * objects and output positions.
- */
-function aggregatePulse(
-  rows: Row[], t: CompiledTransform, tctx: StepTransformContext, sourceName: string,
-  input: StepPulse, prev: Row[] | undefined, prevState: AggState | undefined,
-): { rows: Row[]; pulse: StepPulse; state?: unknown } | null {
-  if (!prevState) return null
-  const groupby = (t as { groupby?: string[] }).groupby ?? []
-  const from = input.from!
-  const oldLen = input.to?.length ?? -1
-  if (prevState.rowKey.length !== oldLen) return null
-  const dirty = new Set<string>()
-  for (let i = 0; i < from.length; i++) if (from[i]! < 0) dirty.add(groupKeyOf(rows[i]!, groupby))
-  if (input.to) for (let i = 0; i < input.to.length; i++) if (input.to[i]! < 0) dirty.add(prevState.rowKey[i]!)
-  const modified = isModified(input)
-  for (const i of modified) {
-    if (i < 0 || i >= rows.length) return null
-    dirty.add(groupKeyOf(rows[i]!, groupby))
-    const old = from[i]!
-    if (old >= 0 && old < prevState.rowKey.length) dirty.add(prevState.rowKey[old]!)
-  }
-
-  const rowKey = new Array<string>(rows.length)
-  const keyToIdx = new Map<string, number[]>()
-  for (let i = 0; i < rows.length; i++) {
-    const k = groupKeyOf(rows[i]!, groupby)
-    rowKey[i] = k
-    let arr = keyToIdx.get(k)
-    if (!arr) keyToIdx.set(k, (arr = []))
-    arr.push(i)
-  }
-  // Output order is the FIRST-OCCURRENCE order of the groups in the current
-  // rows, exactly like the full aggregate (C52). Surviving groups that moved
-  // are expressed through the pulse mapping (`outFrom`), not by keeping their
-  // previous position.
-  const outOrder = [...keyToIdx.keys()]
-
-  const outByKey = new Map<string, Row>()
-  const out: Row[] = []
-  const outFrom: number[] = []
-  const changed: number[] = []
-  const outIdx = new Map<string, number>()
-  for (const k of outOrder) {
-    const idxs = keyToIdx.get(k)!
-    const oldIdx = prevState.outIdx.get(k)
-    const oldRow = oldIdx != null ? prevState.outByKey.get(k) : undefined
-    let next: Row
-    if (!dirty.has(k) && oldRow) next = oldRow
-    else {
-      next = aggregateGroup(idxs.map((i) => rows[i]!), t)
-      if (oldRow && rowsEqual(next, oldRow)) next = oldRow
-    }
-    const at = out.length
-    outIdx.set(k, at)
-    outByKey.set(k, next)
-    out.push(next)
-    if (oldIdx != null) {
-      outFrom.push(oldIdx)
-      if (next !== oldRow) changed.push(at)
-    } else {
-      outFrom.push(-1)
-    }
-  }
-  const to = new Array<number>(prev ? prev.length : 0).fill(-1)
-  for (let i = 0; i < outFrom.length; i++) if (outFrom[i]! >= 0) to[outFrom[i]!] = i
-  // Refresh the persistent state for the next pulse.
-  const state = buildAggState(rows, groupby, out)
-  state.outByKey = outByKey
-  return { rows: out, pulse: pulseOfMapping(outFrom, to, changed), state }
-}
-
-/** Incremental joinaggregate: 1:1 with the input; only dirty groups re-derive. */
-function joinAggregatePulse(
-  rows: Row[], t: CompiledTransform, tctx: StepTransformContext, sourceName: string,
-  input: StepPulse, prev: Row[] | undefined, prevState: AggState | undefined,
-): { rows: Row[]; pulse: StepPulse; state?: unknown } | null {
-  if (!prevState) return null
-  const groupby = (t as { groupby?: string[] }).groupby ?? []
-  const from = input.from!
-  const oldLen = input.to?.length ?? -1
-  if (prevState.rowKey.length !== oldLen) return null
-  const dirty = new Set<string>()
-  for (let i = 0; i < from.length; i++) if (from[i]! < 0) dirty.add(groupKeyOf(rows[i]!, groupby))
-  if (input.to) for (let i = 0; i < input.to.length; i++) if (input.to[i]! < 0) dirty.add(prevState.rowKey[i]!)
-  const modified = isModified(input)
-  for (const i of modified) {
-    if (i < 0 || i >= rows.length) return null
-    dirty.add(groupKeyOf(rows[i]!, groupby))
-    const old = from[i]!
-    if (old >= 0 && old < prevState.rowKey.length) dirty.add(prevState.rowKey[old]!)
-  }
-  const keyToIdx = new Map<string, number[]>()
-  for (let i = 0; i < rows.length; i++) {
-    const k = groupKeyOf(rows[i]!, groupby)
-    let arr = keyToIdx.get(k)
-    if (!arr) keyToIdx.set(k, (arr = []))
-    arr.push(i)
-  }
-  const out = new Array<Row>(rows.length)
-  const changed: number[] = []
-  for (const k of dirty) {
-    const idxs = keyToIdx.get(k)
-    if (!idxs) continue
-    const derived = applyOne(idxs.map((i) => rows[i]!), t, tctx, sourceName)
-    if (derived.length !== idxs.length) return null
-    for (let j = 0; j < idxs.length; j++) {
-      out[idxs[j]!] = derived[j]!
-      changed.push(idxs[j]!)
-    }
-  }
-  for (let i = 0; i < rows.length; i++) {
-    if (out[i] !== undefined) continue
-    const old = from[i]!
-    if (old >= 0 && !modified.has(i) && prev && prev[old] !== undefined) out[i] = prev[old]!
-    else out[i] = rows[i]!
-  }
-  const state = buildAggState(rows, groupby, out)
-  return { rows: out, pulse: pulseOfMapping(from, input.to, changed), state }
-}
-
-/** Incremental aggregate for an append-only pulse (no group removals). */
-function aggregateAppendPulse(
-  rows: Row[], t: CompiledTransform, tctx: StepTransformContext, sourceName: string,
-  input: StepPulse, prev: Row[] | undefined, prevState: AggState | undefined,
-): { rows: Row[]; pulse: StepPulse; state?: unknown } | null {
-  const base = pulseBaseLength(input)
-  if (!prevState || !prev || prevState.rowKey.length !== base || prev.length !== prevState.outOrder.length) return null
-  const groupby = (t as { groupby?: string[] }).groupby ?? []
-  const keyToIdx = prevState.keyToIdx
-  const rowKey = prevState.rowKey
-  const dirty = new Set<string>()
-  for (const i of input.changed) {
-    if (i < 0 || i >= base) continue
-    const k = groupKeyOf(rows[i]!, groupby)
-    if (prevState.rowKey[i] !== k) return null
-    dirty.add(k)
-  }
-  const newKeys: string[] = []
-  for (let i = base; i < rows.length; i++) {
-    const k = groupKeyOf(rows[i]!, groupby)
-    rowKey.push(k)
-    let idxs = keyToIdx.get(k)
-    if (!idxs) { keyToIdx.set(k, (idxs = [])); newKeys.push(k) }
-    idxs.push(i)
-    dirty.add(k)
-  }
-  const outOrder = [...prevState.outOrder, ...newKeys]
-  const outByKey = new Map(prevState.outByKey)
-  const outIdx = new Map<string, number>()
-  const out: Row[] = []
-  const outFrom: number[] = []
-  const changed: number[] = []
-  for (const k of outOrder) {
-    const oldIdx = prevState.outIdx.get(k)
-    const oldRow = prevState.outByKey.get(k)
-    let next: Row
-    if (!dirty.has(k) && oldRow) next = oldRow
-    else {
-      const idxs = keyToIdx.get(k)!
-      next = aggregateGroup(idxs.map((i) => rows[i]!), t)
-      if (oldRow && rowsEqual(next, oldRow)) next = oldRow
-    }
-    const at = out.length
-    outIdx.set(k, at)
-    outByKey.set(k, next)
-    out.push(next)
-    if (oldIdx != null) {
-      outFrom.push(oldIdx)
-      if (next !== oldRow) changed.push(at)
-    } else outFrom.push(-1)
-  }
-  const state: AggState = {
-    groupby, rowKey, keyToIdx, outOrder, outIdx, outByKey,
-    groupStart: prevState.groupStart, groupSize: prevState.groupSize, out,
-  }
-  void sourceName; void tctx; void outFrom
-  return { rows: out, pulse: appendPulse(prev.length, out.length, changed), state }
-}
-
-/** Incremental joinaggregate for an append-only pulse. */
-function joinAggregateAppendPulse(
-  rows: Row[], t: CompiledTransform, tctx: StepTransformContext, sourceName: string,
-  input: StepPulse, prev: Row[] | undefined, prevState: AggState | undefined,
-): { rows: Row[]; pulse: StepPulse; state?: unknown } | null {
-  const base = pulseBaseLength(input)
-  if (!prevState || !prev || prev.length !== base || prevState.rowKey.length !== base) return null
-  const groupby = (t as { groupby?: string[] }).groupby ?? []
-  const keyToIdx = prevState.keyToIdx
-  const rowKey = prevState.rowKey
-  const dirty = new Set<string>()
-  for (const i of input.changed) {
-    if (i < 0 || i >= base) continue
-    const k = groupKeyOf(rows[i]!, groupby)
-    if (prevState.rowKey[i] !== k) return null
-    dirty.add(k)
-  }
-  const newKeys: string[] = []
-  for (let i = base; i < rows.length; i++) {
-    const k = groupKeyOf(rows[i]!, groupby)
-    rowKey.push(k)
-    let idxs = keyToIdx.get(k)
-    if (!idxs) { keyToIdx.set(k, (idxs = [])); newKeys.push(k) }
-    idxs.push(i)
-    dirty.add(k)
-  }
-  const changed: number[] = []
-  for (const k of dirty) {
-    const idxs = keyToIdx.get(k)
-    if (!idxs) continue
-    const derived = applyOne(idxs.map((i) => rows[i]!), t, tctx, sourceName)
-    if (derived.length !== idxs.length) return null
-    for (let j = 0; j < idxs.length; j++) {
-      const i = idxs[j]!
-      const old = prev[i]
-      if (i < base) {
-        if (old !== undefined && rowsEqual(derived[j]!, old)) continue
-        changed.push(i)
-      }
-      prev[i] = derived[j]!
-    }
-  }
-  const outOrder = [...prevState.outOrder, ...newKeys]
-  const outIdx = new Map(prevState.outIdx)
-  for (const k of newKeys) outIdx.set(k, outIdx.size)
-  const state: AggState = {
-    groupby, rowKey, keyToIdx, outOrder, outIdx, outByKey: prevState.outByKey,
-    groupStart: prevState.groupStart, groupSize: prevState.groupSize, out: prev,
-  }
-  return { rows: prev, pulse: appendPulse(base, rows.length, changed), state }
-}
-
-/** Incremental collect/sample: only the order permutation changes. */
-function orderedAppendPulse(
-  rows: Row[], t: CompiledTransform, input: StepPulse, prev: Row[] | undefined,
-  prevState: { order: number[] } | undefined,
-): { rows: Row[]; pulse: StepPulse; state?: unknown } | null {
-  const base = pulseBaseLength(input)
-  if (!prev || !prevState || prevState.order.length !== base || prev.length !== base) return null
-  const sort = (t as { sort?: SortSpec }).sort
-  const order = sortOrder(rows, sort)
-  const oldPos = new Map<number, number>()
-  for (let i = 0; i < prevState.order.length; i++) oldPos.set(prevState.order[i]!, i)
-  const modified = isModified(input)
-  const out: Row[] = new Array(order.length)
-  const from = new Array<number>(order.length).fill(-1)
-  const changed: number[] = []
-  for (let j = 0; j < order.length; j++) {
-    const idx = order[j]!
-    const old = idx < base ? oldPos.get(idx) : undefined
-    if (old != null && prev[old] !== undefined && !modified.has(idx)) {
-      out[j] = prev[old]!
-      from[j] = old
-    } else {
-      out[j] = rows[idx]!
-      // (a modified row is the same row in a new state: it keeps its place in the mapping and is listed as changed)
-      if (old != null && prev[old] !== undefined) from[j] = old
-      changed.push(j)
-    }
-  }
-  const to = new Array<number>(prev.length).fill(-1)
-  for (let i = 0; i < from.length; i++) if (from[i]! >= 0) to[from[i]!] = i
-  return { rows: out, pulse: pulseOfMapping(from, to, changed), state: { order } }
-}
-
-/** sequence appends generated rows after the source rows; the tail is stable. */
-function sequencePulse(
-  rows: Row[], t: CompiledTransform, tctx: StepTransformContext, sourceName: string,
-  input: StepPulse, prev: Row[] | undefined,
-): { rows: Row[]; pulse: StepPulse } | null {
-  const from = input.from!
-  // A removal/replacement in the source shifts the generated tail; fall back.
-  if (input.to && input.to.some((v) => v < 0)) return null
-  if (input.changed.length) return null
-  const generated = (applyTransforms([], [t], tctx, sourceName) as Row[])
-  const oldLen = input.to?.length ?? -1
-  const out: Row[] = []
-  const outFrom: number[] = []
-  const changed: number[] = []
-  for (let i = 0; i < rows.length; i++) {
-    const old = from[i]!
-    if (old >= 0 && prev && prev[old] !== undefined) { out.push(prev[old]!); outFrom.push(old) }
-    else { out.push(rows[i]!); outFrom.push(-1); changed.push(out.length - 1) }
-  }
-  for (let j = 0; j < generated.length; j++) {
-    const oldIdx = oldLen + j
-    if (prev && prev[oldIdx] !== undefined) { out.push(prev[oldIdx]!); outFrom.push(oldIdx) }
-    else { out.push(generated[j]!); outFrom.push(-1); changed.push(out.length - 1) }
-  }
-  const to = new Array<number>(prev ? prev.length : oldLen + generated.length).fill(-1)
-  for (let i = 0; i < outFrom.length; i++) if (outFrom[i]! >= 0) to[outFrom[i]!] = i
-  return { rows: out, pulse: pulseOfMapping(outFrom, to, changed) }
-}
-
-/** A generating transform whose output is independent of the input rows. */
-function generatingPulse(
-  rows: Row[], t: CompiledTransform, tctx: StepTransformContext, sourceName: string,
-  prev: Row[] | undefined,
-): { rows: Row[]; pulse: StepPulse } {
-  const out = applyOne(rows, t, tctx, sourceName)
-  if (prev && out.length === prev.length && out.every((r, i) => rowsEqual(r, prev[i]!))) {
-    return { rows: prev, pulse: pulseOfMapping(identityMapping(prev.length), identityMapping(prev.length), []) }
-  }
-  return { rows: out, pulse: { changed: [], full: true } }
-}
-
-/**
- * True when a transform's output row depends only on its own input row (plus
- * the params the dataset fingerprint already covers), so the rows a pulse does
- * not name keep their cached output. Anything that reads other rows, other
- * datasets or writes a signal is NOT row-local (bin with a data-derived extent,
- * a lookup into a dataset that changed, a formula calling data()/indata(),
- * ...).
- */
-function rowLocal(t: CompiledTransform, tctx: StepTransformContext): boolean {
-  const type = String(t.type)
-  switch (type) {
-    case 'formula':
-      return !DATA_DEPENDENT_EXPR.test((t as { expr?: string }).expr ?? '')
-    case 'timeunit':
-      // without explicit units vega bins the data extent (global); inferUnits looks at every row
-      // (a `signal` output is a side effect a skipped re-run would lose, and covers every row)
-      return (t as { units?: unknown }).units != null && !(t as { inferUnits?: unknown }).inferUnits && (t as { extent?: unknown }).extent === undefined && !(t as { signal?: unknown }).signal
-    case 'geoshape': case 'geopath': case 'geopoint':
-      // a projection that fits data moves with the data: a derived x/y or path is only valid for the fit it was made under
-      return !(tctx.projections as ProjectionRegistry | undefined)?.fitNames?.has(String((t as { projection?: unknown }).projection))
-    case 'linkpath': case 'project':
-      return true
-    case 'bin':
-      // A fixed numeric extent makes the bins constant; a `signal` output is a
-      // side effect a skipped re-run would lose.
-      return Array.isArray((t as { extent?: unknown }).extent) && !(t as { signal?: unknown }).signal
-    case 'lookup':
-      return !tctx.affectedDatasets?.has((t as { from?: string }).from ?? '')
-    default:
-      return false
-  }
-}
-
 /** The field an `identifier` transform numbers into (none: the transform refuses, as it does when run). */
-const idField = (t: CompiledTransform): string => (t as { as?: string }).as as string
+export const idField = (t: CompiledTransform): string => (t as { as?: string }).as as string
+
+/** One transform from scratch, the numbers an `identifier` had in `previous` carried (the evaluation that keeps no state: no state to leave). */
+export function applyFresh(rows: Row[], t: CompiledTransform, tctx: StepTransformContext, sourceName: string, previous?: Row[]): Row[] {
+  return t.type === 'identifier' ? applyIdentifier(rows, t, tctx, sourceName, carryByAlignment(rows, previous, idField(t))) : applyOne(rows, t, tctx, sourceName)
+}
 
 /** Run an `identifier` transform with the numbers its rows had (see identifier-ids.ts), if they had any. */
-function applyIdentifier(rows: Row[], t: CompiledTransform, tctx: StepTransformContext, sourceName: string, carry: readonly unknown[] | undefined): Row[] {
+export function applyIdentifier(rows: Row[], t: CompiledTransform, tctx: StepTransformContext, sourceName: string, carry: readonly unknown[] | undefined): Row[] {
   return withCarry(tctx, carry, () => applyOne(rows, t, tctx, sourceName))
 }
 
 /** Run `run` with the numbers the rows of the next `identifier` had. */
-function withCarry<T>(tctx: StepTransformContext, carry: readonly unknown[] | undefined, run: () => T): T {
+export function withCarry<T>(tctx: StepTransformContext, carry: readonly unknown[] | undefined, run: () => T): T {
   const ids = tctx.ids
   if (ids) ids.carry = carry
   try {
@@ -3030,252 +2313,6 @@ function withCarry<T>(tctx: StepTransformContext, carry: readonly unknown[] | un
   } finally {
     if (ids) ids.carry = undefined
   }
-}
-
-/**
- * `identifier` over an append-only pulse. Vega numbers only the tuples that are new, in order, from the view's counter, so the
- * new rows continue from where the counter stands (other datasets' `identifier`s may have moved it since); a modified earlier
- * row, which keeps its number, falls back to the pulse that carries the mapping.
- */
-function identifierAppendPulse(
-  rows: Row[], t: CompiledTransform, tctx: StepTransformContext, input: StepPulse, prev: Row[] | undefined,
-): { rows: Row[]; pulse: StepPulse } | null {
-  const base = pulseBaseLength(input)
-  if (!prev || prev.length !== base || input.changed.length) return null
-  const as = (t as { as?: string }).as
-  if (as === undefined) return null
-  const ids = tctx.ids
-  if (!ids) return null
-  for (let i = base; i < rows.length; i++) {
-    const row = { ...rows[i]! }
-    row[as] = row[as] || ++ids.value
-    prev.push(row)
-  }
-  return { rows: prev, pulse: appendPulse(base, rows.length, []) }
-}
-
-/**
- * `identifier` over a pulse with a mapping. A pulse that only modifies rows (the same rows, some in a new state) leaves every row
- * its number. One that adds or removes rows cannot say which of the rows it lists as changed are modified and which replaced
- * (the diff that makes it pairs rows by position), so the rows are found by what they hold, as when no pulse says anything.
- */
-function identifierPulse(
-  rows: Row[], t: CompiledTransform, tctx: StepTransformContext, sourceName: string, input: StepPulse, prev: Row[] | undefined,
-): { rows: Row[]; pulse: StepPulse } | null {
-  const from = input.from!
-  const structural = from.includes(-1) || (input.to?.includes(-1) ?? false)
-  return withCarry(tctx, structural ? carryByAlignment(rows, prev, idField(t)) : carryByMapping(from, prev, idField(t)),
-    () => rederiveAligned(rows, t, tctx, sourceName, input, prev))
-}
-
-/**
- * Apply one transform to a length-changing pulse. Returns `null` when the
- * transform cannot publish a mapping (the caller then re-derives the rest).
- */
-function applyStepWithPulse(
-  rows: Row[], t: CompiledTransform, tctx: StepTransformContext, sourceName: string,
-  input: StepPulse, prev: Row[] | undefined, prevStepState: unknown, aliased?: ReadonlySet<string>,
-): { rows: Row[]; pulse: StepPulse | null; state?: unknown } {
-  const type = String(t.type)
-  if ((type === 'aggregate' || type === 'joinaggregate') && !groupwiseIncremental(t)) {
-    return { rows: applyOne(rows, t, tctx, sourceName), pulse: null }
-  }
-  if (input.appendOnly) {
-    // Fast paths that never need the full mapping.
-    const appendLocal = rowLocal(t, tctx)
-    if (appendLocal) {
-      const fast = rowLocalAppendPulse(rows, t, tctx, sourceName, input, prev)
-      if (fast) return fast
-    } else if (type === 'identifier') {
-      const fast = identifierAppendPulse(rows, t, tctx, input, prev)
-      if (fast) return fast
-    } else if (type === 'filter') {
-      const fast = filterAppendPulse(rows, t, tctx, sourceName, input, prev, prevStepState as boolean[] | undefined)
-      if (fast) return fast
-    } else if (type === 'fold') {
-      const fast = foldAppendPulse(rows, t, tctx, sourceName, input, prev)
-      if (fast) return fast
-    } else if (type === 'aggregate') {
-      const fast = aggregateAppendPulse(rows, t, tctx, sourceName, input, prev, prevStepState as AggState | undefined)
-      if (fast) return fast
-    } else if (type === 'joinaggregate') {
-      const fast = joinAggregateAppendPulse(rows, t, tctx, sourceName, input, prev, prevStepState as AggState | undefined)
-      if (fast) return fast
-    } else if (type === 'collect' && !isPlacing(t)) {
-      const fast = orderedAppendPulse(rows, t, input, prev, prevStepState as { order: number[] } | undefined)
-      if (fast) return fast
-    } else if (type === 'geojson' || type === 'extent' || type === 'stratify') {
-      const out = applyOne(rows, t, tctx, sourceName)
-      return { rows: out, pulse: out.length === rows.length ? input : null }
-    }
-    // Everything else needs old<->new indices; synthesise them only here.
-    const from = mappingFromPulse(input, rows.length)
-    input = { ...input, from, to: inverseMapping(from, pulseBaseLength(input)), appendOnly: undefined, baseLength: undefined }
-  }
-  switch (type) {
-    case 'formula':
-    case 'timeunit':
-    case 'geoshape':
-    case 'geopath':
-    case 'geopoint':
-    case 'linkpath':
-    case 'project':
-    case 'bin':
-    case 'lookup':
-      // Row-local transforms re-derive only the added/modified rows; the others
-      // of the same type (data-extent bin, a lookup into a changed dataset, a
-      // formula that reads datasets) are global and re-derive aligned.
-      if (rowLocal(t, tctx)) {
-        return rowLocalPulse(rows, t, tctx, sourceName, input, prev) ?? { rows: applyOne(rows, t, tctx, sourceName), pulse: null }
-      }
-      if (type === 'bin') return rederiveAligned(rows, t, tctx, sourceName, input, prev, aliased) ?? { rows: applyOne(rows, t, tctx, sourceName), pulse: null }
-      return { rows: applyOne(rows, t, tctx, sourceName), pulse: null }
-    case 'identifier':
-      // The rows that were there keep their numbers (a modified one too), the new ones are numbered from the view's counter.
-      return identifierPulse(rows, t, tctx, sourceName, input, prev) ?? { rows: applyIdentifier(rows, t, tctx, sourceName, undefined), pulse: null }
-    case 'geojson':
-    case 'extent':
-    case 'stratify': {
-      const out = applyOne(rows, t, tctx, sourceName)
-      return { rows: out, pulse: out.length === rows.length ? input : null }
-    }
-    case 'filter':
-      return filterPulse(rows, t, tctx, sourceName, input, prev, prevStepState as boolean[] | undefined)
-        ?? { rows: applyOne(rows, t, tctx, sourceName), pulse: null }
-    case 'fold':
-      return foldPulse(rows, t, tctx, sourceName, input, prev)
-        ?? { rows: applyOne(rows, t, tctx, sourceName), pulse: null }
-    case 'flatten':
-      return flattenPulse(rows, t, tctx, sourceName, input, prev, prevStepState as FlattenState | undefined)
-        ?? { rows: applyOne(rows, t, tctx, sourceName), pulse: null }
-    case 'aggregate':
-      return aggregatePulse(rows, t, tctx, sourceName, input, prev, prevStepState as AggState | undefined)
-        ?? { rows: applyOne(rows, t, tctx, sourceName), pulse: null }
-    case 'joinaggregate':
-      return joinAggregatePulse(rows, t, tctx, sourceName, input, prev, prevStepState as AggState | undefined)
-        ?? { rows: applyOne(rows, t, tctx, sourceName), pulse: null }
-    case 'window':
-      // Window writes its results back in SOURCE order (1:1 with the input,
-      // whatever the partition/sort), so it aligns like any other index-
-      // preserving transform; a row's value can change without the row itself
-      // changing (its partition-mates did), which the content comparison finds.
-      return rederiveAligned(rows, t, tctx, sourceName, input, prev)
-        ?? { rows: applyOne(rows, t, tctx, sourceName), pulse: null }
-    case 'stack':
-      // vega's stack writes y0/y1 onto each tuple in place: 1:1 with the input, in input order
-      return rederiveAligned(rows, t, tctx, sourceName, input, prev)
-        ?? { rows: applyOne(rows, t, tctx, sourceName), pulse: null }
-    case 'pie':
-    case 'dotbin':
-    case 'label':
-    case 'pack':
-    case 'partition':
-    case 'treemap':
-    case 'tree':
-    case 'voronoi':
-      return rederiveAligned(rows, t, tctx, sourceName, input, prev)
-        ?? { rows: applyOne(rows, t, tctx, sourceName), pulse: null }
-    case 'sequence':
-      return sequencePulse(rows, t, tctx, sourceName, input, prev)
-        ?? { rows: applyOne(rows, t, tctx, sourceName), pulse: null }
-    case 'graticule':
-      return generatingPulse(rows, t, tctx, sourceName, prev)
-    default:
-      // Global generators/fitters (kde/regression/loess/wordcloud/contour/...)
-      // cannot expose a row mapping.
-      return { rows: applyOne(rows, t, tctx, sourceName), pulse: null }
-  }
-}
-
-/** Transform types that keep per-step incremental state (see `deriveStepState`). */
-function keepsStepState(type: string): boolean {
-  return type === 'filter' || type === 'flatten' || type === 'aggregate' || type === 'joinaggregate' || type === 'collect'
-}
-
-/**
- * The incremental state of one step, derived from scratch from the step's input
- * and output (what a fully re-derived step leaves behind for the next pulse).
- */
-function deriveStepState(t: CompiledTransform, input: Row[], output: Row[], tctx: StepTransformContext): unknown {
-  switch (t.type) {
-    case 'filter': {
-      const fn = compileExprTransform((t as { expr?: string }).expr ?? '', tctx)
-      return input.map((r) => Boolean(fn(r)))
-    }
-    case 'flatten': {
-      const fields = (t as { fields?: string[] }).fields ?? []
-      const sizes = input.map((r) => flattenSize(r, fields))
-      const offsets: number[] = []
-      let p = 0
-      for (const sz of sizes) { offsets.push(p); p += sz }
-      return { sizes, offsets }
-    }
-    case 'aggregate': case 'joinaggregate':
-      return buildAggState(input, (t as { groupby?: string[] }).groupby ?? [], output)
-    case 'collect':
-      return { order: sortOrder(input, (t as { sort?: SortSpec }).sort) }
-    default:
-      return undefined
-  }
-}
-
-/** Run one transform from scratch, leaving the state the next pulse starts from. */
-function applyOneWithState(
-  rows: Row[], t: CompiledTransform, tctx: StepTransformContext, sourceName: string, previous?: Row[],
-): { rows: Row[]; state?: unknown } {
-  if (t.type === 'filter') {
-    // Predicate flags and output in one pass (same function, same errors as the
-    // plain transform).
-    const fn = compileExprTransform((t as { expr?: string }).expr ?? '', tctx)
-    const pass = new Array<boolean>(rows.length)
-    const out: Row[] = []
-    for (let i = 0; i < rows.length; i++) {
-      const ok = Boolean(fn(rows[i]!))
-      pass[i] = ok
-      if (ok) out.push(rows[i]!)
-    }
-    carryOrder('filter', rows, out)
-    return { rows: out, state: pass }
-  }
-  const out = t.type === 'identifier' ? applyIdentifier(rows, t, tctx, sourceName, carryByAlignment(rows, previous, idField(t))) : applyOne(rows, t, tctx, sourceName)
-  return keepsStepState(String(t.type)) ? { rows: out, state: deriveStepState(t, rows, out, tctx) } : { rows: out }
-}
-
-/**
- * Apply a transform chain driven by a pulse, step by step. Reads the COMMITTED
- * step outputs/state (`prevDS`) and records this evaluation's into `state`;
- * once a step cannot publish a mapping (`pulse` becomes null) the remaining
- * steps run from scratch but still leave their state behind.
- */
-function applyPipelineWithPulse(
-  rows: Row[], transforms: CompiledTransform[], tctx: StepTransformContext, sourceName: string,
-  input: StepPulse, prevDS: DatasetState, state: DatasetState,
-): { rows: Row[]; pulse: StepPulse | null } {
-  let cur = rows
-  let pulse: StepPulse | null = input
-  for (let k = 0; k < transforms.length; k++) {
-    const t = transforms[k]!
-    const key = `${sourceName}#${k}`
-    if (!pulse) {
-      const res = applyOneWithState(cur, t, tctx, sourceName, prevDS.steps[k])
-      cur = res.rows
-      checkRowCount(cur.length, `transform ${String(t.type)}`)
-      state.steps.push(cur)
-      if (res.state !== undefined) state.stepState.set(key, res.state)
-      continue
-    }
-    const stepInput = cur
-    const res = applyStepWithPulse(cur, t, tctx, sourceName, pulse, prevDS.steps[k], prevDS.stepState.get(key), prevDS.aliased?.[k])
-    if (prevDS.aliased?.[k] !== undefined) (state.aliased ??= [])[k] = prevDS.aliased[k]
-    cur = res.rows
-    checkRowCount(cur.length, `transform ${String(t.type)}`)
-    pulse = res.pulse
-    state.steps.push(cur)
-    const next = res.state !== undefined ? res.state
-      : keepsStepState(String(t.type)) ? deriveStepState(t, stepInput, cur, tctx) : undefined
-    if (next !== undefined) state.stepState.set(key, next)
-  }
-  return { rows: cur, pulse }
 }
 
 /**
@@ -3465,7 +2502,7 @@ function buildDatasetsOf(ctx: EvalContext, inputData: Record<string, unknown[]>)
       if (incremental) {
         claim(ctx, `ds:${name}`)
         if (shared) rows = copyRows(rows)
-        const res = applyPipelineWithPulse(rows, d.transform, tctx, name, inPulse!, prevDS, state)
+        const res = ctx.engine!.applyPipelineWithPulse(rows, d.transform, tctx, name, inPulse!, prevDS, state)
         rows = res.rows
         outPulse = res.pulse
       } else {
@@ -3535,6 +2572,7 @@ function reusableRuns(ctx: EvalContext, name: string, inputs: readonly unknown[]
   }
   return runs
 }
+
 
 /**
  * Run a dataset's transforms over `rows` from scratch, keeping every step whose inputs are as they were in an earlier run (see
@@ -3608,9 +2646,12 @@ function runPipeline(
     const published = reads?.publishes === undefined ? undefined : ctx.signalParams[reads.publishes]
     // (a pass of an evaluation numbers an identifier's rows as the pass before it did: that run is the one whose numbers rows carry)
     const before = earlierDS?.steps[k] ?? prevDS?.steps[k]
+    const run = (): { rows: Row[]; state?: unknown } => ctx.engine !== undefined
+      ? ctx.engine.applyOneWithState(from, t, tctx, name, before)
+      : { rows: applyFresh(from, t, tctx, name, before) }
     const res = ctx.runtime.random === undefined || !mayDrawRandom(t)
-      ? applyOneWithState(from, t, tctx, name, before)
-      : atRandomSite(ctx.runtime.random, `dataset:${name}#${k}`, () => randomFingerprint(t, from, ctx.signalParams), () => applyOneWithState(from, t, tctx, name, before))
+      ? run()
+      : atRandomSite(ctx.runtime.random, `dataset:${name}#${k}`, () => randomFingerprint(t, from, ctx.signalParams), run)
     cur = res.rows
     state.steps.push(cur)
     if (res.state !== undefined) state.stepState.set(`${name}#${k}`, res.state)
@@ -3622,12 +2663,14 @@ function runPipeline(
   return cur
 }
 
+
 /** `target` stands in the order rows were made in as `rows` does (see tuple-order.ts). */
 function withOrderOf(rows: readonly Row[], target: Row[]): Row[] {
   const order = orderOf(rows)
   if (order !== null) setOrder(target, order)
   return target
 }
+
 
 /**
  * The earlier run in which the steps `k..k + steps.length - 1`, read as they are now and over the rows they are given, ran: they
@@ -3657,6 +2700,7 @@ function keptSteps(
   return undefined
 }
 
+
 /** Everything running the step would have done besides making its rows: the limits it counts against and what it leaves behind. */
 function keepStep(ctx: EvalContext, t: CompiledTransform, reads: StepReads, rec: StepRecord, rowsIn: number, out: Row[]): void {
   const meter = activeMeter()
@@ -3674,6 +2718,7 @@ function keepStep(ctx: EvalContext, t: CompiledTransform, reads: StepReads, rec:
   }
 }
 
+
 /** What a step that just ran read and left, for the evaluation that may keep it. */
 function recordStep(ctx: EvalContext, reads: StepReads, keys: readonly string[], had: boolean, before: unknown): StepRecord {
   const after = reads.publishes === undefined ? undefined : ctx.signalParams[reads.publishes]
@@ -3684,6 +2729,43 @@ function recordStep(ctx: EvalContext, reads: StepReads, keys: readonly string[],
     ...(reads.publishes !== undefined && Object.hasOwn(ctx.signalParams, reads.publishes) && (!had || after !== before) ? { published: { value: after } } : {}),
     ...(reads.draws && random !== undefined ? { random: { source: random, carry: normalPairs.get(random) } } : {}),
   }
+}
+
+
+/**
+ * The rows a group scope's dataset makes of its sources. A pipeline whose steps read nothing but the rows and signals (see
+ * step-reuse.ts) makes the same rows again while the source arrays are the same arrays -- a source dataset that was kept hands on the
+ * array it made -- and the signals it mentions are as they were: the rows of the earlier run stand for it. Whole pipelines, not
+ * steps: a group's dataset is a few steps over the rows of a dataset of the view.
+ */
+function runScopedData(
+  ctx: EvalContext, key: string, name: string, transforms: CompiledTransform[], sources: readonly string[], rows: Row[] | (() => Row[]), shared: boolean,
+  tctx: TransformContext, scopeParams: Record<string, unknown>,
+): Row[] {
+  const run = (): Row[] => {
+    const input = typeof rows === 'function' ? rows() : rows
+    return shared ? applyTransformsToSharedRows(input, transforms, tctx, name) : applyTransforms(input, transforms, tctx, name)
+  }
+  const names = reuse.on && shared ? pipelineReadsOf(transforms) : null
+  const inputs = names === null ? undefined : sources.map((n) => ctx.datasets.get(n))
+  // (a source the caller named as changed is updated in place: the same array holds other rows)
+  if (names === null || inputs === undefined || inputs.some((a) => a === undefined) || sources.some((n) => ctx.affected.has(n))) return run()
+  const arrays = inputs as Row[][]
+  const keys = names.map((n) => dependencyKey(scopeParams[n]))
+  for (const earlier of [ctx.draft.scoped.get(key), ctx.prev?.scoped.get(key)]) {
+    if (earlier === undefined || earlier.inputs.length !== arrays.length || earlier.keys.length !== keys.length) continue
+    if (arrays.some((a, i) => earlier.inputs[i] !== a) || keys.some((k, i) => earlier.keys[i] !== k)) continue
+    const meter = activeMeter()
+    if (meter) { meter.clock.check('transform'); meter.checkRows(earlier.out.length, 'transform') }
+    checkRowCount(earlier.out.length, 'transform')
+    ctx.draft.scoped.set(key, earlier)
+    stepCounts.reused += transforms.length
+    return earlier.out
+  }
+  const out = run()
+  stepCounts.ran += transforms.length
+  ctx.draft.scoped.set(key, { inputs: arrays, keys, out })
+  return out
 }
 
 /**
@@ -4771,42 +3853,6 @@ function scopeSignalValues(mark: CompiledMark, ctx: EvalContext, id: string, bas
     }
   }
   return { params, values }
-}
-
-/**
- * The rows a group scope's dataset makes of its sources. A pipeline whose steps read nothing but the rows and signals (see
- * step-reuse.ts) makes the same rows again while the source arrays are the same arrays -- a source dataset that was kept hands on the
- * array it made -- and the signals it mentions are as they were: the rows of the earlier run stand for it. Whole pipelines, not
- * steps: a group's dataset is a few steps over the rows of a dataset of the view.
- */
-function runScopedData(
-  ctx: EvalContext, key: string, name: string, transforms: CompiledTransform[], sources: readonly string[], rows: Row[] | (() => Row[]), shared: boolean,
-  tctx: TransformContext, scopeParams: Record<string, unknown>,
-): Row[] {
-  const run = (): Row[] => {
-    const input = typeof rows === 'function' ? rows() : rows
-    return shared ? applyTransformsToSharedRows(input, transforms, tctx, name) : applyTransforms(input, transforms, tctx, name)
-  }
-  const names = reuse.on && shared ? pipelineReadsOf(transforms) : null
-  const inputs = names === null ? undefined : sources.map((n) => ctx.datasets.get(n))
-  // (a source the caller named as changed is updated in place: the same array holds other rows)
-  if (names === null || inputs === undefined || inputs.some((a) => a === undefined) || sources.some((n) => ctx.affected.has(n))) return run()
-  const arrays = inputs as Row[][]
-  const keys = names.map((n) => dependencyKey(scopeParams[n]))
-  for (const earlier of [ctx.draft.scoped.get(key), ctx.prev?.scoped.get(key)]) {
-    if (earlier === undefined || earlier.inputs.length !== arrays.length || earlier.keys.length !== keys.length) continue
-    if (arrays.some((a, i) => earlier.inputs[i] !== a) || keys.some((k, i) => earlier.keys[i] !== k)) continue
-    const meter = activeMeter()
-    if (meter) { meter.clock.check('transform'); meter.checkRows(earlier.out.length, 'transform') }
-    checkRowCount(earlier.out.length, 'transform')
-    ctx.draft.scoped.set(key, earlier)
-    stepCounts.reused += transforms.length
-    return earlier.out
-  }
-  const out = run()
-  stepCounts.ran += transforms.length
-  ctx.draft.scoped.set(key, { inputs: arrays, keys, out })
-  return out
 }
 
 function buildGroupItem(mark: CompiledMark, ctx: EvalContext, src: GroupSource): SceneGroup {

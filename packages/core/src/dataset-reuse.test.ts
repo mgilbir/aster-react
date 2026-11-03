@@ -14,7 +14,9 @@
 import { describe, it, expect } from 'vitest'
 import './addon-transforms.js'
 import { compileChart } from './compiler.js'
-import { datasetsOfScene, evaluateChart, evaluateChartPending } from './runtime.js'
+import { datasetsOfScene, evaluateChartPending } from './runtime.js'
+import { evaluateChart } from './evaluate.js'
+import { incrementalEngine } from './incremental-engine.js'
 import { createChartSession } from './session.js'
 import { reuse, runsOf, stepCounts } from './step-reuse.js'
 import { genSpec, made, mulberry32, pick, rowsOf, usable, type Row } from './dataset-reuse.testkit.js'
@@ -97,7 +99,7 @@ describe('the engine keeps a step only for rows it can tell are the ones it made
   const second = rowsOf(30).map((r) => ({ ...r, x: ((r.x as number) + 1) % 13 }))
   const evaluate = (chart: ReturnType<typeof compileChart>, rows: Row[], input: RuntimeInput, unchanged?: Map<string, unknown>): { scene: SceneRoot; reused: number } => {
     const before = stepCounts.reused
-    const pending = evaluateChartPending(chart, { data: { t: rows }, ...input }, unchanged)
+    const pending = evaluateChartPending(incrementalEngine, chart, { data: { t: rows }, ...input }, unchanged)
     pending.commit()
     return { scene: pending.scene, reused: stepCounts.reused - before }
   }
@@ -154,10 +156,10 @@ describe("a group scope's dataset is kept with the rows it was made from", () =>
   it('rows that were changed in place are not the rows it was made from', () => {
     const live = rows.map((r) => ({ ...r }))
     const chart = compileChart(spec)
-    evaluateChartPending(chart, { data: { t: live } }, undefined).commit()
+    evaluateChartPending(incrementalEngine, chart, { data: { t: live } }, undefined).commit()
     live.length = 0
     for (const r of rows) live.push({ ...r, v: ((r.v as number) + 4) % 11 })
-    const pending = evaluateChartPending(chart, { data: { t: live }, dataChanges: { t: live.map((_, i) => i) } })
+    const pending = evaluateChartPending(incrementalEngine, chart, { data: { t: live }, dataChanges: { t: live.map((_, i) => i) } })
     pending.commit()
     expect(made(pending.scene)).toBe(made(evaluateChart(compileChart(spec), { data: { t: live } })))
   })

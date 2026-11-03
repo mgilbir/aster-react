@@ -15,7 +15,7 @@
 import { describe, expect, it } from 'vitest'
 import * as vega from 'vega'
 import { compileChart } from '../../core/src/compiler.ts'
-import { evaluateChart } from '../../core/src/runtime.ts'
+import { evaluateChart } from '../../core/src/evaluate.ts'
 import { bindSceneSignals } from '../../core/src/signals.ts'
 import { createChartSession } from '../../core/src/session.ts'
 import { enc, quietLogger } from './differential-util.mts'

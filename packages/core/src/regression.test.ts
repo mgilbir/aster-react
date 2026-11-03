@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { buildScale } from './scales.js'
 import { compileChart } from './compiler.js'
-import { evaluateChart } from './runtime.js'
+import { evaluateChart } from './evaluate.js'
 import type { ScaleContext } from './scales.js'
 import './addon-geo.js'
 

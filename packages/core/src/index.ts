@@ -25,7 +25,8 @@ export type {
 export { compileChart } from './compiler.js'
 export { DEFAULT_CURSOR, resolveCursor } from './cursor.js'
 export { clientToSvg, createPointMapper, type PointMapper } from './pointer.js'
-export { chartInfoFromScene, datasetsOfScene, evaluateChart, getChartInfo } from './runtime.js'
+export { chartInfoFromScene, datasetsOfScene, getChartInfo } from './runtime.js'
+export { evaluateChart } from './evaluate.js'
 export {
   createChartStream,
   AsterStreamBackpressureError,
@@ -95,7 +96,7 @@ export { geoRegistry, transformRegistry, dataFormatRegistry, requireTransform, t
 // before rendering a spec that needs it.
 
 import { compileChart } from './compiler.js'
-import { evaluateChart } from './runtime.js'
+import { evaluateOnce } from './runtime.js'
 import { renderSceneToSvg } from './render.js'
 import { checkSpecLimits, checkSceneLimits, checkSvgLength, createLimitClock, withLimits } from './limits.js'
 import type { RuntimeInput, VgSpec } from './types.js'
@@ -110,7 +111,7 @@ export function renderSpec(spec: VgSpec, input: RuntimeInput = {}): string {
     clock.check('compile')
     const chart = compileChart(spec)
     clock.check('evaluate')
-    const scene = evaluateChart(chart, input)
+    const scene = evaluateOnce(chart, input)
     clock.check('evaluate')
     if (input.limits) checkSceneLimits(scene, input.limits)
     const svg = renderSceneToSvg(scene)

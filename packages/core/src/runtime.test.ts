@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { compileChart } from './compiler.js'
-import { chartInfoFromScene, evaluateChart, getChartInfo } from './runtime.js'
+import { chartInfoFromScene, getChartInfo } from './runtime.js'
+import { evaluateChart } from './evaluate.js'
 import { renderSceneToSvg } from './index.js'
 
 /** Deterministic PRNG for the differential fuzz test. */

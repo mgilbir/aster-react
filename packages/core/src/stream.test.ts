@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { AsterStreamBackpressureError, AsterStreamClosedError, createChartStream, getStreamFlushFailure, type StreamPolicy } from './stream.js'
 import { AsterLimitError } from './limits.js'
 import { compileChart } from './compiler.js'
-import { evaluateChart } from './runtime.js'
+import { evaluateChart } from './evaluate.js'
 import { renderSceneToSvg } from './index.js'
 import type { RuntimeInput, VgSpec } from './types.js'
 
