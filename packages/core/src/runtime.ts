@@ -164,7 +164,7 @@ interface IncrementalState {
   stale: boolean
   /** Where the view's id counter stood (see identifier-ids.ts): the next evaluation numbers new rows from here. */
   idCounter: number
-  /** The datasets of group scopes, by instance and name: what the pipeline read and made (see {@link runScopedData}). */
+  /** The datasets of group scopes, by instance and name: what the pipeline read and made (see `runScopedData` in incremental-engine.ts). */
   scoped: Map<string, ScopedRun>
 }
 
@@ -202,9 +202,9 @@ interface EvalTxn {
 /**
  * The part of the dataset pipeline that only a RE-evaluation needs: running a transform chain from a pulse, and leaving behind the
  * state (filter flags, group membership, flatten offsets, collect order) the next pulse starts from. It lives in
- * `incremental-engine.ts` and is handed over by `incremental-register.ts`, so a chart that is evaluated once (`renderSpec`) does not
- * carry it. An evaluation that keeps its state (`evaluateChartPending`) cannot run without it and says so; one that does not
- * (`evaluateOnce`) never touches it.
+ * `incremental-engine.ts`, and an evaluation that keeps its state (`evaluateChartPending`) is handed it by its caller (the public
+ * `evaluateChart`, the chart session), so a chart that is evaluated once (`renderSpec`, `evaluateOnce`) does not carry it: no module
+ * of that path imports it.
  */
 export interface IncrementalEngine {
   /** A transform chain driven by `input`, reading the committed steps `prevDS` and recording this evaluation's into `state`. */
@@ -232,26 +232,16 @@ export interface IncrementalEngine {
   ): Row[]
 }
 
-let incrementalEngine: IncrementalEngine | undefined
-
-/** Hand over the incremental engine (see `incremental-register.ts`). */
-export function registerIncrementalEngine(engine: IncrementalEngine): void {
-  incrementalEngine = engine
-}
-
 /** Source dataset name -> the rows the previous evaluation was given for it, when this evaluation's are equal to them. */
 export type DataStability = ReadonlyMap<string, unknown>
 
-function beginTxn(chart: CompiledChart, unchanged?: DataStability): EvalTxn {
-  if (incrementalEngine === undefined) {
-    throw new Error(
-      '[aster] this evaluation keeps incremental state, and the incremental engine is not registered. Evaluate through the public ' +
-      '`evaluateChart` (or a chart session: `@aster/core/dom`), which load it; `renderSpec` evaluates once and needs none.',
-    )
-  }
+function beginTxn(engine: IncrementalEngine, chart: CompiledChart, unchanged?: DataStability): EvalTxn {
+  // (an evaluation that keeps state without the engine would leave a state the next pulse cannot start from, and answer with
+  // another evaluation: it does not run)
+  if (typeof engine?.applyPipelineWithPulse !== 'function') throw new Error('[aster] an evaluation that keeps incremental state needs the incremental engine (incremental-engine.ts)')
   const committed = STATES.get(chart)
   const prev = committed && !committed.stale ? committed : undefined
-  return { prev, gen: (committed?.gen ?? 0) + 1, claimed: new Set(), engine: incrementalEngine, ...(unchanged ? { unchanged } : {}) }
+  return { prev, gen: (committed?.gen ?? 0) + 1, claimed: new Set(), engine, ...(unchanged ? { unchanged } : {}) }
 }
 
 /**
@@ -1955,10 +1945,11 @@ export interface PendingEvaluation {
 
 /**
  * Evaluate without committing the incremental state. The compiled chart is not
- * written; call `commit()` once the scene has been accepted.
+ * written; call `commit()` once the scene has been accepted. `engine` is the incremental
+ * engine the state is made for (see {@link IncrementalEngine}).
  */
-export function evaluateChartPending(chart: CompiledChart, input: RuntimeInput = {}, unchanged?: DataStability): PendingEvaluation {
-  const txn = beginTxn(chart, unchanged)
+export function evaluateChartPending(engine: IncrementalEngine, chart: CompiledChart, input: RuntimeInput = {}, unchanged?: DataStability): PendingEvaluation {
+  const txn = beginTxn(engine, chart, unchanged)
   const done: { draft?: IncrementalState; failed?: boolean } = {}
   const scene = withLimits(input.limits, () => withTextMetricsProvider(input.textMetrics, () => evaluateChartImpl(chart, input, txn, done)))
   return {
@@ -1981,12 +1972,6 @@ export function evaluateChartPending(chart: CompiledChart, input: RuntimeInput =
 export function evaluateOnce(chart: CompiledChart, input: RuntimeInput = {}): SceneRoot {
   const txn: EvalTxn = { prev: undefined, gen: 1, claimed: new Set() }
   return withLimits(input.limits, () => withTextMetricsProvider(input.textMetrics, () => evaluateChartImpl(chart, input, txn, {})))
-}
-
-export function evaluateChart(chart: CompiledChart, input: RuntimeInput = {}): SceneRoot {
-  const pending = evaluateChartPending(chart, input)
-  pending.commit()
-  return pending.scene
 }
 
 function evaluateChartImpl(chart: CompiledChart, hostInput: RuntimeInput, txn: EvalTxn, done: { draft?: IncrementalState; failed?: boolean }): SceneRoot {

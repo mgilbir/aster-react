@@ -4,10 +4,10 @@
  * and the drawing -- over generated charts (steps that read the size, signals, publish signals, number rows, draw), sizes and signal
  * values. A call that needs the engine and finds it missing says so, and is never answered with a different evaluation.
  */
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect } from 'vitest'
 import './addon-transforms.js'
 import { compileChart } from './compiler.js'
-import { evaluateOnce } from './runtime.js'
+import { evaluateChartPending, evaluateOnce } from './runtime.js'
 import { evaluateChart } from './evaluate.js'
 import { genSpec, made, mulberry32, pick, rowsOf, usable } from './dataset-reuse.testkit.js'
 import type { RuntimeInput } from './types.js'
@@ -43,27 +43,21 @@ describe('an evaluation that keeps no state is the first evaluation of one that 
   })
 })
 
-describe('the incremental engine is registered by the entries that re-evaluate', () => {
-  it('without it, an evaluation that keeps state says what to import, and one that keeps none runs', async () => {
-    vi.resetModules()
-    const runtime = await import('./runtime.js')
-    const { compileChart: compile } = await import('./compiler.js')
-    const chart = compile({ width: 50, height: 50, data: [{ name: 't', values: [{ a: 1 }] }], marks: [] })
-    expect(() => runtime.evaluateChartPending(chart, {})).toThrow(/incremental engine is not registered.*evaluateChart/s)
-    expect(() => runtime.evaluateChart(chart, {})).toThrow(/incremental engine is not registered/)
-    expect(runtime.evaluateOnce(chart, {}).width).toBeGreaterThan(0)
-    // the registration module hands it over, and the same chart then evaluates
-    await import('./incremental-register.js')
-    expect(runtime.evaluateChart(chart, {}).width).toBeGreaterThan(0)
+describe('an evaluation that keeps state is handed the incremental engine', () => {
+  const chart = (): ReturnType<typeof compileChart> => compileChart({ width: 50, height: 50, data: [{ name: 't', values: [{ a: 1 }] }], marks: [] })
+
+  it('without one it does not run, and says what it needs', () => {
+    expect(() => evaluateChartPending(undefined as never, chart(), {})).toThrow(/needs the incremental engine/)
+    expect(() => evaluateChartPending({} as never, chart(), {})).toThrow(/needs the incremental engine/)
   })
 
-  it('a session registers it, and so does the public evaluateChart', async () => {
-    for (const entry of ['./session.js', './evaluate.js']) {
-      vi.resetModules()
-      const runtime = await import('./runtime.js')
-      await import(entry)
-      const chart = (await import('./compiler.js')).compileChart({ width: 50, height: 50, data: [{ name: 't', values: [{ a: 1 }] }], marks: [] })
-      expect(() => runtime.evaluateChart(chart, {}), entry).not.toThrow()
-    }
+  it('the public evaluateChart and a session are handed it: a second evaluation takes a pulse', () => {
+    const c = compileChart({ width: 50, height: 50, data: [{ name: 't', transform: [{ type: 'filter', expr: 'datum.a >= 0' }] }],
+      marks: [{ type: 'symbol', from: { data: 't' }, encode: { update: { x: { field: 'a' }, y: { value: 5 } } } }] })
+    const rows = [{ a: 1 }, { a: 2 }]
+    const first = evaluateChart(c, { data: { t: rows } })
+    const second = evaluateChart(c, { data: { t: [...rows, { a: 3 }] }, dataPulse: { t: { appendOnly: true, baseLength: 2, changed: [] } } })
+    const item = (s: typeof first): unknown => (s.items.find((g) => g.marktype === 'symbol') as { items: unknown[] }).items[0]
+    expect(item(second)).toBe(item(first))
   })
 })

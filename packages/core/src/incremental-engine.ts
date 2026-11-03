@@ -1,8 +1,9 @@
 /**
  * The incremental step engine: a dataset's transform chain driven by a pulse (what the host or the stream says changed in its
  * input), step by step, splicing the rows the steps made before, together with the state a step leaves for the next pulse.
- * A chart that is evaluated once never needs it, so it is not part of `runtime.ts`: `incremental-register.ts` hands it over (see
- * `IncrementalEngine` there) and the entries that re-evaluate import that.
+ * A chart that is evaluated once never needs it, so it is not part of `runtime.ts`, which only declares the shape it has
+ * (`IncrementalEngine`): the entries that re-evaluate a chart (`evaluate.ts`, `session.ts`) import this module and hand the engine to
+ * `evaluateChartPending`.
  */
 import { equalCell, rowsEqual } from './pulse.js'
 import { carryOrder, isPlacing, orderOf, setOrder } from './tuple-order.js'
