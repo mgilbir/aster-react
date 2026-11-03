@@ -109,7 +109,7 @@ describe('datasets of group scopes: shared sources, facets and nested scopes', (
           // (the view's own datasets hold the rows they were given: a group's formula writes onto its own copies)
           for (const [name, ds] of datasetsOfScene(scene)) {
             if (name !== 't' && name !== 'u') continue
-            for (const row of ds) for (const f of written) if (f in (row as object)) throw new Error(`seed ${seed}: dataset ${name} holds ${f}, written by the pipeline of a group scope`)
+            for (const row of ds ?? []) for (const f of written) if (f in (row as object)) throw new Error(`seed ${seed}: dataset ${name} holds ${f}, written by the pipeline of a group scope`)
           }
           withScopes++
         }
