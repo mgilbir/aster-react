@@ -45,7 +45,8 @@ function prepareTree(root: HierNode, rows: Row[], p: Record<string, unknown>): v
   const compare = compareOf(p.sort) as unknown as ((a: unknown, b: unknown) => number) | null
   if (!compare) return
   const position = new Map<Row, number>()
-  rows.forEach((r, i) => position.set(r, i))
+  // (a row listed twice, as `nest` with `generate` does a row that is a node, keeps the place of its first listing)
+  rows.forEach((r, i) => { if (!position.has(r)) position.set(r, i) })
   // the comparator reads the hierarchy NODES (`value`, `depth`, `data.size`, ...), not the rows: a plain row field such as
   // `size` ties everywhere and leaves the stratify order
   const byRow = (a: HierNode, b: HierNode): number => compare(a, b) || (position.get(a.data) ?? 0) - (position.get(b.data) ?? 0)
@@ -76,7 +77,18 @@ function writeLayout(rows: Row[], root: HierNode, fields: string[], as: string[]
     copy[as[last]!] = node.children.length
   })
   if (!byData && out.every((t) => t !== undefined)) return out as Row[]
-  return rows.map((r, i) => out[i] ?? byData?.get(r) ?? r)
+  // (a row the tree reaches once is one object wherever the dataset holds it: `nest` with `generate` lists a row that is a node
+  // of its own a second time)
+  let written: Map<Row, Row> | undefined
+  return rows.map((r, i) => {
+    const own = out[i] ?? byData?.get(r)
+    if (own) return own
+    if (!written) {
+      written = new Map()
+      for (let j = 0; j < rows.length; j++) if (out[j]) written.set(rows[j]!, out[j]!)
+    }
+    return written.get(r) ?? r
+  })
 }
 
 const given = (p: Record<string, unknown>, name: string): boolean => name in p

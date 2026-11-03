@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+- **`@aster/core`: four runtime leftovers closed, each against vega 6.3.1.**
+  - Field paths. A facet `groupby` that is a nested path (`'o.k'`) threw; the group items are matched with their rows by the
+    key the aggregate hands back, and are joined the way vega joins them (rows that share the flat key of their group-by
+    names, an escaped name reading nothing, are one item). `stratify`'s `key` and `parentKey`, a json format's `property`
+    (`a["b"]`, `a\.b`, `a[1]`) and `indata`'s field are paths too. A generated differential draws nested, escaped,
+    bracketed, quoted and numeric paths into 47 transform pipelines and 20 spec shapes (facets, encode entries, scale
+    domains, sorts, expressions) and compares with vega.
+  - `nest` (named in the transform list, refused at run time) is implemented: groups, the generated interior rows,
+    and the layouts and `treelinks` that follow, compared with vega over generated nestings.
+  - An encode entry that calls a scale the spec never declared fails as vega's does (`TypeError: _.%name is not a function`,
+    the run stops, the item keeps the channels before it) instead of drawing a rect. The items an aborted run never
+    encoded now stay in their mark for every mark type, a line whose width failed is drawn at 1, a rule keeps a NaN
+    `x2` / `y2`, and an image with no url, x or y is drawn as vega draws it.
+  - `buildA11yTree` boxes are in the viewport, as `A11yNode` always said: the padding and the frame offset are in the
+    numbers (the React overlay no longer adds the padding). Hosts that added the padding themselves must stop.
+
 - **`@aster/react`: a chart is one Tab stop.** With `pan` / `zoom` the container was a Tab stop next to the roving stop among the
   accessibility nodes (two per chart). Now the container is the only stop and the nodes are `tabindex=-1`, reached from it with
   `PageDown` / `PageUp` (the arrows pan there); without pan or zoom the roving stop stays. Focus survives a re-render, a resize, a

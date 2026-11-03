@@ -39,6 +39,25 @@ forEachVariant(['svg'], (Chart, variant) => {
     act(() => { el.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true })) })
   }
 
+  describe('where the overlay lies', () => {
+    // a node's box is in the chart's own viewport (the padding is in the numbers), so it is placed at exactly (left, top)
+    it.each([20, 40])('a mark node is centred on its mark with a padding of %i', (padding) => {
+      const c = mount(<Chart spec={spec(padding)} />)
+      const marks = nodes(c).filter((n) => n.dataset.a11yKind === 'mark')
+      expect(marks).toHaveLength(3)
+      // the points are (0, 0), (5, 5) and (10, 10) of a 200 x 100 plot whose origin is at the padding; y runs down
+      const want = [[0, 100], [100, 50], [200, 0]]
+      marks.forEach((el, i) => {
+        const cx = parseFloat(el.style.left) + parseFloat(el.style.width) / 2
+        const cy = parseFloat(el.style.top) + parseFloat(el.style.height) / 2
+        // (a node that would start before the chart is cut at its edge, so the centre is only held where it does not)
+        if (parseFloat(el.style.left) > 0) expect(cx).toBeCloseTo(padding + want[i]![0]!, 0)
+        if (parseFloat(el.style.top) > 0) expect(cy).toBeCloseTo(padding + want[i]![1]!, 0)
+      })
+      expect(marks.some((el) => parseFloat(el.style.left) > padding)).toBe(true)
+    })
+  })
+
   describe('roving tabindex (C67)', () => {
     it('exactly one a11y node is a tab stop; the rest are tabindex -1', () => {
       const c = mount(<Chart spec={spec(5)} width={200} height={100} />)
