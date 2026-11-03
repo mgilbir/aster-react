@@ -70,17 +70,16 @@ describe('a pass that fails builds what vega builds', () => {
       }
       // The evaluation that keeps no state (what renderSpec runs) and the one that carries the incremental engine make the same of a pass
       // that stops, and the second evaluation of a chart (which may keep and reuse what the first made) the same again.
-      const kept = (): { svg: string; errors: string[] } => {
+      const chart = compileChart(structuredClone(spec) as never)
+      const evaluate = (): { svg: string; errors: string[] } => {
         const errors: string[] = []
-        const chart = compileChart(structuredClone(spec) as never)
         const input = { logger: { error: (...x: unknown[]) => { errors.push(String(x[0])) }, warn: () => {} } } as never
-        const first = renderSceneToSvg(evaluateChart(chart, input))
-        const again = renderSceneToSvg(evaluateChart(chart, input))
-        if (again !== first) errors.push('the second evaluation differs from the first')
-        return { svg: first, errors: errors.slice(0, got.errors.length) }
+        return { svg: renderSceneToSvg(evaluateChart(chart, input)), errors }
       }
-      const k = kept()
-      if (k.svg !== got.svg || JSON.stringify(k.errors) !== JSON.stringify(got.errors)) { bad.push(`${tag}: the evaluation with the incremental engine made something else than the one without (${JSON.stringify(k.errors)})`); continue }
+      const first = evaluate()
+      const again = evaluate()
+      if (first.svg !== got.svg || JSON.stringify(first.errors) !== JSON.stringify(got.errors)) { bad.push(`${tag}: the evaluation with the incremental engine made something else than the one without (${JSON.stringify(first.errors)})`); continue }
+      if (again.svg !== first.svg || JSON.stringify(again.errors) !== JSON.stringify(first.errors)) { bad.push(`${tag}: the second evaluation made something else than the first (${JSON.stringify(again.errors)})`); continue }
       if (want.errors.length) { failed++; for (const f of fails) kinds.set(f, (kinds.get(f) ?? 0) + 1) }
       // (one error, logged once: the first operator in vega's order that threw)
       if (JSON.stringify(want.errors) !== JSON.stringify(got.errors)) { bad.push(`${tag}: vega logged ${JSON.stringify(want.errors)}, aster ${got.errors.length}: ${JSON.stringify(got.errors.slice(0, 2))}`); continue }
