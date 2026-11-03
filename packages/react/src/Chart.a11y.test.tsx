@@ -68,7 +68,7 @@ forEachVariant(['svg'], (Chart, variant) => {
       expect(document.activeElement).toBe(all[0])
     })
 
-    it('the container is a tab stop of its own only while pan or zoom is enabled: then the chart has two (container, one node)', () => {
+    it('a chart is one tab stop: a roving node, or the container while pan or zoom is enabled (never both)', () => {
       const stops = (c: HTMLElement): HTMLElement[] => [...c.querySelectorAll<HTMLElement>('[tabindex="0"]')]
       const plain = mount(<Chart spec={spec(5)} width={200} height={100} />)
       expect(stops(plain).map((e) => e.hasAttribute('data-a11y-id'))).toEqual([true])
@@ -76,7 +76,8 @@ forEachVariant(['svg'], (Chart, variant) => {
       const panned = mount(<Chart spec={spec(5)} width={200} height={100} panZoom />)
       const host = panned.firstElementChild as HTMLElement
       expect(host.tabIndex).toBe(0)
-      expect(stops(panned).map((e) => e.hasAttribute('data-a11y-id'))).toEqual([false, true])
+      expect(stops(panned)).toEqual([host])
+      expect(nodes(panned).every((n) => n.tabIndex === -1)).toBe(true)
     })
 
     it('PageDown/PageUp leave a slider axis (whose arrows pan) for the neighbouring node', () => {
