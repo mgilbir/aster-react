@@ -13,24 +13,11 @@
 type Row = Record<string, unknown>
 
 const orders = new WeakMap<readonly unknown[], Float64Array>()
-let recording = false
 
 /** The order of the rows of an array, if it has one (and it still fits the array). */
 export function orderOf(rows: readonly unknown[]): Float64Array | null {
   const order = orders.get(rows)
   return order !== undefined && order.length === rows.length ? order : null
-}
-
-/** Ask the next sort to leave the order of its result behind (see `sortBySpec`). */
-export function recordNextOrder(): void {
-  recording = true
-}
-
-/** Whether the order was asked for; a sort takes the request. */
-export function takeRecording(): boolean {
-  const on = recording
-  recording = false
-  return on
 }
 
 /** Say how the rows of `result` stand in the order rows were made in. */

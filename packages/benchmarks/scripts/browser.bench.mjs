@@ -14,6 +14,7 @@ import { fileURLToPath } from 'node:url'
 import { chromium } from 'playwright'
 import { summarize, table, fmt } from '../src/stats.js'
 import { ensureBuilt } from '../src/ensure-built.ts'
+import { checkBrowserBench } from '../src/browser-floors.ts'
 
 const THIS_DIR = dirname(fileURLToPath(import.meta.url))
 const PKG_DIR = dirname(THIS_DIR)
@@ -63,7 +64,8 @@ const browser = await chromium.launch({
   args: ['--disable-dev-shm-usage', '--js-flags=--max-old-space-size=4096'],
 })
 const page = await browser.newPage()
-page.on('pageerror', (e) => console.error('[page]', e.message))
+const pageErrors = []
+page.on('pageerror', (e) => { console.error('[page]', e.message); pageErrors.push(e.message) })
 await page.goto(`file://${join(OUT_DIR, 'index.html')}`)
 await page.waitForFunction(() => '__bench' in window, null, { timeout: 30_000 })
 
@@ -175,8 +177,10 @@ if (KINDS.length > 0) {
 // 8b) Synchronous differential staging: isolates the dataflow (evaluateChart +
 // patchSceneDom) for the differential path against the full re-encode, without
 // the settle protocol that dominates the React-level metric.
+let differential
 if (KINDS.length > 0) {
   const dg = await page.evaluate(([p, r]) => window.__bench.differentialStages(p, r), [POINTS, 9])
+  differential = dg
   console.log(
     table(
       `differential staging (fixed-scale symbol @ ${POINTS} pts, ~1% changed) — ms median`,
@@ -269,3 +273,12 @@ for (const kind of KINDS) {
 await browser.close()
 rmSync(OUT_DIR, { recursive: true, force: true })
 
+// The floors (src/browser-floors.ts): a regression fails the run (and the nightly step), it does not just print a table.
+const failures = checkBrowserBench(results, KINDS, pageErrors, differential)
+if (failures.length) {
+  console.error(`\n[bench:browser] FAIL: ${failures.length} floor(s) crossed`)
+  for (const f of failures) console.error(`  - ${f}`)
+  process.exitCode = 1
+} else {
+  console.log('[bench:browser] pass: every floor held')
+}

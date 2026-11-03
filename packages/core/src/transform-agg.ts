@@ -16,7 +16,7 @@
  * Deviations from Vega, both on purpose: the input rows are never written (the transforms that write onto their rows in Vega write
  * onto copies, or onto rows the pipeline owns), and group tables hold no inherited names, so a group called `constructor` is a group.
  */
-import { orderOf, setOrder, takeRecording } from './tuple-order.js'
+import { orderOf, setOrder } from './tuple-order.js'
 import { accessor, accessorFields, accessorName, array, ascending, error, field, sortData, type Accessor } from './util.js'
 import { meterTick } from './limits.js'
 import { ascending as numericAscending, quantileSorted } from './arr.js'
@@ -99,10 +99,11 @@ function sortKeys(spec: unknown): SortKeys | null {
 /**
  * A stable sorted copy of `items` by a `{field, order}` spec, or `null` when the spec names no field. Each sort key is read once
  * per item, not twice per comparison, and the positions are what gets sorted: ties keep input order whatever the comparison does
- * with values (NaN, mixed types) that no ordering is consistent over.
+ * with values (NaN, mixed types) that no ordering is consistent over. With `leaveOrder` the sorted copy also carries the order its
+ * rows were made in (see tuple-order.ts), for the sorts that come after it to break their ties by; the request is an argument of
+ * this one call, so it cannot reach any other sort.
  */
-export function sortBySpec<T>(items: readonly T[], spec: unknown): T[] | null {
-  const record = takeRecording()
+export function sortBySpec<T>(items: readonly T[], spec: unknown, leaveOrder = false): T[] | null {
   const keys = sortKeys(spec)
   if (keys === null) return null
   const n = items.length
@@ -129,7 +130,7 @@ export function sortBySpec<T>(items: readonly T[], spec: unknown): T[] | null {
     })
   }
   const sorted = order.map((i) => items[i]!)
-  if (record) {
+  if (leaveOrder) {
     const made = new Float64Array(n)
     for (let i = 0; i < n; i++) made[i] = places ? places[order[i]!]! : order[i]!
     setOrder(sorted, made)

@@ -38,7 +38,7 @@ function barSpec(rows: Array<{ cat: string; v: number }>, extra: Record<string, 
   } as never
 }
 
-const dots = (n: number) => Array.from({ length: n }, (_, i) => ({ x: 10 + (i % 20) * 15, y: 10 + Math.floor(i / 20) * 8, k: `p${i}` }))
+const dots = (n: number, key = 'p') => Array.from({ length: n }, (_, i) => ({ x: 10 + (i % 20) * 15, y: 10 + Math.floor(i / 20) * 8, k: `${key}${i}` }))
 function dotSpec(rows: Array<{ x: number; y: number; k: string }>) {
   return {
     $schema: 'https://vega.github.io/schema/vega/v6.json',
@@ -126,17 +126,22 @@ describe('tooltips read the current scene (C33)', () => {
   forEachVariant(['svg', 'interaction'], (Chart) => {
     it('SVG tooltip keeps working when a growing scene crosses the dense-marks threshold', () => {
       const { host, rerender } = mount(<Chart spec={dotSpec(dots(3))} width={400} height={300} tooltip a11y={false} />)
-      const hoverFirst = (): string | undefined => {
+      const hoverAt = (x: number, y: number): string | undefined => {
         // Per-item DOM: the pointer is over the mark element. Batched DOM: it is over the svg.
         const target = host.querySelector('svg g.mark-symbol path') ?? host
-        act(() => { target.dispatchEvent(new MouseEvent('mousemove', { clientX: 10, clientY: 10, bubbles: true })) })
+        act(() => { target.dispatchEvent(new MouseEvent('mousemove', { clientX: x, clientY: y, bubbles: true })) })
         return host.querySelector('[data-testid="chart-tooltip"]')?.textContent ?? undefined
       }
-      expect(hoverFirst()).toContain('p0')
-      rerender(<Chart spec={dotSpec(dots(700))} width={400} height={300} tooltip a11y={false} />)
+      expect(hoverAt(10, 10)).toContain('p0')
+      // The second scene shares NO key with the first: a hit index or tooltip read from the stale scene
+      // cannot produce these names, and the last point (x=295, y=282) does not exist in the 3-point scene.
+      rerender(<Chart spec={dotSpec(dots(700, 'q'))} width={400} height={300} tooltip a11y={false} />)
       // 700 symbols are batched into chunked paths.
       expect(host.querySelectorAll('svg g.mark-symbol > path').length).toBeLessThan(20)
-      expect(hoverFirst()).toContain('p0')
+      const first = hoverAt(10, 10)
+      expect(first).toContain('q0')
+      expect(first).not.toContain('p0')
+      expect(hoverAt(295, 282)).toContain('q699')
     })
   })
 })

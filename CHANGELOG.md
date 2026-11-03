@@ -18,6 +18,12 @@
   - `buildA11yTree` boxes are in the viewport, as `A11yNode` always said: the padding and the frame offset are in the
     numbers (the React overlay no longer adds the padding). Hosts that added the padding themselves must stop.
 
+- **`@aster/react`: a chart is one Tab stop.** With `pan` / `zoom` the container was a Tab stop next to the roving stop among the
+  accessibility nodes (two per chart). Now the container is the only stop and the nodes are `tabindex=-1`, reached from it with
+  `PageDown` / `PageUp` (the arrows pan there); without pan or zoom the roving stop stays. Focus survives a re-render, a resize, a
+  spec swap and pan/zoom being switched off (it moves to the container or the stop node instead of `<body>`), and a click elsewhere
+  is not undone. The jsdom tests walk the tab order of a page of charts; the Chromium gate presses the real Tab and Shift+Tab.
+
 - **`@aster/core` guides and layout: eight divergences from vega closed**, which the generated guide and grid differentials had been avoiding
   (they now draw all of them): an axis with explicit `values` formats its labels for one tick per value (a precision that follows the
   tick step, `e` among others, differed); `tickMinStep` acts only through the tick count (a log scale keeps ticks closer than it); an
