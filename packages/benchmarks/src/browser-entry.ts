@@ -59,7 +59,16 @@ function renderSession(s: Session, embed: EmbedName, spec: Record<string, unknow
   // A spec with numeric width/height is authoritative in both engines; for
   // container-driven sizing the spec must omit them so runtime/view sizes win.
   const responsive = s.responsive
-  const mountSpec = responsive ? (() => { const { width: _w, height: _h, ...rest } = spec; return rest })() : spec
+  // A spec that gives no width is not container-driven in either engine (aster: "a dimension the spec gives no value at all stays
+  // Vega's 0 grown to the content"), so the container run drove nothing and `followed` read 0/4 for aster. The spec of the
+  // aster embeds says what Vega-Lite's `width: "container"` compiles to: a `width` signal that follows the container (aster
+  // measures it; no glue). The Vega embeds keep the documented ResizeObserver + `view.width()` glue of the harness.
+  const containerWidth = { name: 'width', init: 'isFinite(containerSize()[0]) ? containerSize()[0] : 600' }
+  const mountSpec = !responsive
+    ? spec
+    : embed === 'aster' || embed === 'asterDom'
+      ? (() => { const { width: _w, ...rest } = spec; return { ...rest, signals: [...((rest.signals as unknown[] | undefined) ?? []), containerWidth] } })()
+      : (() => { const { width: _w, height: _h, ...rest } = spec; return rest })()
   s.root.render(h(BenchEmbed, {
     name: embed,
     spec: mountSpec,

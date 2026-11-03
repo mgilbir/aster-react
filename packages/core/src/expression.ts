@@ -42,7 +42,7 @@ import { rgb, hsl, lab, hcl } from './color.js'
 import type { AstNode } from './expr-parser.js'
 import {
   ascending, extent, lerp as lerpOf, isArray, isBoolean, isDate, isNumber, isObject,
-  isRegExp, isString, toBoolean, toDate, toNumber, toString, pluck, safeGet, DisallowedObjectProperties,
+  isRegExp, isString, toBoolean, toDate, toNumber, toString, pluck, memoField, DisallowedObjectProperties,
   sortSlice, inrange, clampRange, isTuple, panLinear, panLog, panPow, panSymlog, zoomLinear, zoomLog, zoomPow, zoomSymlog,
 } from './util.js'
 
@@ -527,8 +527,9 @@ function createBuiltinFunctions(runtime: ExpressionRuntime): Record<string, unkn
       // O(rows) per call and usually called per row: charge the scan so the
       // wall clock is sampled inside the O(n^2) pattern (C7).
       meterTick('indata', rows.length)
+      const read = memoField(field)
       let count = 0
-      for (const r of rows) if (safeGet(r, field) === value) count++
+      for (const r of rows) if (read(r) === value) count++
       return count ? count : undefined
     },
     scale: function (this: unknown, name: string, value?: unknown) {

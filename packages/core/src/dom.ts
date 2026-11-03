@@ -586,7 +586,7 @@ function markItems(group: SceneGroup, type: string, options?: DomRenderOptions):
     case 'image': {
       const out: DomDesc[] = []
       for (const it of items) {
-        if (it.url == null || it.x == null || it.y == null) continue
+        if ((it as { urlDenied?: boolean }).urlDenied) continue
         out.push(cachedDesc(it, () => linked(it, { tag: 'image', attrs: pairs((w) => imageAttrs(it, w)), clean: isClean(it) })))
       }
       return out

@@ -4,6 +4,7 @@
  * eagerly per call; the caller re-evaluates when inputs change.
  */
 import { compileExpr, ExpressionParseError, type CompiledExpr, type ExpressionRuntime } from './expression.js'
+import { scaleCallFailure, scaleRangeFailure } from './missing-scale.js'
 import { ingestRows, readData, type DataFormatSpec } from './data-format.js'
 import { carryOrder, isPlacing } from './tuple-order.js'
 import { carryByAlignment, carryByMapping, type IdCounter } from './identifier-ids.js'
@@ -51,7 +52,7 @@ import { dict, ownGet, pushAll, sortData, lerp, scopedSignalName, heldSignalName
 import { applyImageUrlPolicy, applyLinkUrlPolicy, resolveImageUrl, type ImageUrlPolicy } from './url-policy.js'
 import { valueKey, valuesEqual } from './fingerprint.js'
 import { rowsEqual, sourceNames, type PulseChange } from './pulse.js'
-import { aggregateRows, fieldsOf, groupKeyFn } from './transform-agg.js'
+import { aggregateGroups, fieldsOf, flatKeyFn, groupKeyFn } from './transform-agg.js'
 import { flattenLength } from './transform-basic.js'
 import { layoutFacet, type GridPlace } from './trellis.js'
 import { boundAxisGroup, boundLegendGroup, boundGroupItem, boundLeaf, boundTypedMark, Bounds, layoutBounds, eachMarkBounds, hasClippedMark } from './bounds.js'
@@ -187,6 +188,8 @@ interface EvalTxn {
   gen: number
   /** Structures this evaluation already updated in place (not reusable again). */
   claimed: Set<string>
+  /** What the pass of this evaluation before the one being made left (a view that fits its viewport makes two passes). */
+  lastPass?: IncrementalState
 }
 
 function beginTxn(chart: CompiledChart): EvalTxn {
@@ -455,6 +458,8 @@ interface EvalContext {
   inputPulses?: Map<string, StepPulse>
   /** The committed state of the previous evaluation (read-only; see IncrementalState). */
   prev?: IncrementalState
+  /** The state the pass before this one left (see `EvalTxn.lastPass`). */
+  earlier?: IncrementalState
   /** The state this evaluation builds; committed by the caller on success. */
   draft: IncrementalState
   /** The view's id counter: where it stood when the evaluation began (`idStart`) and where it stands (see identifier-ids.ts). */
@@ -625,7 +630,7 @@ function prepareChartCtx(
     ]),
     hierarchies: transformHierarchies, affected: new Set(), incremental: false, deadline, checkDeadline, markItems: new Map(), markContainers: new Map(),
     datasetPulses: new Map(),
-    prev: txn.prev, draft: newState(txn.gen), ids: { value: txn.prev?.idCounter ?? 0 }, idStart: txn.prev?.idCounter ?? 0, gen: txn.gen, claimed: txn.claimed, extraFp, dsEpoch: 0, scaleReuse: new Map(), distinctCache: new WeakMap(),
+    prev: txn.prev, ...(txn.lastPass ? { earlier: txn.lastPass } : {}), draft: newState(txn.gen), ids: { value: txn.prev?.idCounter ?? 0 }, idStart: txn.prev?.idCounter ?? 0, gen: txn.gen, claimed: txn.claimed, extraFp, dsEpoch: 0, scaleReuse: new Map(), distinctCache: new WeakMap(),
     domainRaw: input.domainRaw ? new Map(Object.entries(input.domainRaw).map(([k, v]) => [k, v])) : undefined,
     // Image urls are vetted when the host passes a policy, and with the default
     // policy whenever it passes `limits` (limits mean "this spec is untrusted").
@@ -745,6 +750,7 @@ function prepareChartCtx(
   // The final context fingerprint: the next evaluation compares its own
   // (scale, mark) inputs against this to decide whether reuse is valid.
   ctx.draft.fp = ctxFpOf(ctx)
+  txn.lastPass = ctx.draft
 
   return { ctx, width, height }
 }
@@ -3388,7 +3394,11 @@ function buildDatasetsOf(ctx: EvalContext, inputData: Record<string, unknown[]>)
       // pulse, the previous state was built under identical params from an input
       // of the length the pulse is relative to, and no earlier pass of THIS
       // evaluation already updated that state in place.
-      const incremental = ctx.incremental && inPulse !== null && !inPulse.full && prevDS !== undefined
+      // A pass of an evaluation numbers the rows of an `identifier` as the pass before it did (a view that fits its viewport builds its
+      // content twice): whichever route numbered them first, the others carry its numbers, and do not number them again by theirs.
+      const hasIds = d.transform.some((x) => x.type === 'identifier')
+      const earlierDS = hasIds ? ctx.draft.datasets.get(name) ?? ctx.earlier?.datasets.get(name) : undefined
+      const incremental = ctx.incremental && inPulse !== null && !inPulse.full && prevDS !== undefined && earlierDS === undefined
         && prevDS.fp === passFp && prevDS.steps.length === d.transform.length
         && prevDS.inputLength === pulseBaseLength(inPulse) && !ctx.claimed.has(`ds:${name}`)
       if (incremental) {
@@ -3400,9 +3410,10 @@ function buildDatasetsOf(ctx: EvalContext, inputData: Record<string, unknown[]>)
         let cur = rows
         for (let k = 0; k < d.transform.length; k++) {
           const from = cur
+          const before = earlierDS?.steps[k] ?? prevDS?.steps[k]
           const res = ctx.runtime.random === undefined || !mayDrawRandom(d.transform[k])
-            ? applyOneWithState(from, d.transform[k]!, tctx, name, prevDS?.steps[k])
-            : atRandomSite(ctx.runtime.random, `dataset:${name}#${k}`, () => randomFingerprint(d.transform[k]!, from, ctx.signalParams), () => applyOneWithState(from, d.transform[k]!, tctx, name, prevDS?.steps[k]))
+            ? applyOneWithState(from, d.transform[k]!, tctx, name, before)
+            : atRandomSite(ctx.runtime.random, `dataset:${name}#${k}`, () => randomFingerprint(d.transform[k]!, from, ctx.signalParams), () => applyOneWithState(from, d.transform[k]!, tctx, name, before))
           cur = res.rows
           state.steps.push(cur)
           if (res.state !== undefined) state.stepState.set(`${name}#${k}`, res.state)
@@ -4097,25 +4108,26 @@ function evaluateMarkItems(
     try { items = sortMarkItems(items, mark.sort) } catch (e) { reportEvalError(ctx, e) }
   }
 
-  // Items an aborted run never encoded: vega's mark container holds them but they carry no geometry or paint,
-  // so (but for the zero-size rect path the renderers already read as `|| 0`) nothing of them is drawn.
-  if (ctx.encodeAborted && items.some((it) => (it as { __unencoded?: boolean }).__unencoded === true)) {
-    items = items.filter((it) => (it as { __unencoded?: boolean }).__unencoded !== true)
-  }
-
   // Vega's mark defaults (vega.js defaults()): line {strokeWidth: 2},
   // area {fill: '#4c78a8'}, text {fill: '#000'} — applied when the encode
   // leaves the property unspecified.
   // (the config blocks they come from are read for a mark of role `mark` only: a mark with a role of its own has none of them)
   if ((mark.type === 'line' || mark.type === 'area' || mark.type === 'text') && (mark.role === undefined || mark.role === 'mark')) {
     // vega-parser's applyDefaults skips the fill/stroke defaults when the ENCODE defines either channel
-    const enc = (mark.encode?.update ?? mark.encode?.enter ?? {}) as Record<string, unknown>
-    const paintDefined = enc.fill != null || enc.stroke != null
+    const defines = (channel: string): boolean => !!(mark.encode?.enter?.[channel] || mark.encode?.update?.[channel])
+    const paintDefined = defines('fill') || defines('stroke')
     const fill = paintDefined ? undefined : mark.type === 'text' ? '#000' : mark.type === 'area' ? '#4c78a8' : undefined
+    // (a channel the encode defines has no default, whether or not it came out: a line whose width failed is drawn at the
+    // scenegraph's 1, which the renderers would otherwise replace by a line's 2)
+    const line = mark.type === 'line'
+    const defaultWidth = line && !defines('strokeWidth')
     for (const it of items) {
       const rec = it as unknown as Record<string, unknown>
       if (fill !== undefined && rec.fill === undefined) rec.fill = fill
-      if (mark.type === 'line' && rec.strokeWidth === undefined) rec.strokeWidth = 2
+      if (line && rec.strokeWidth === undefined) {
+        if (defaultWidth) rec.strokeWidth = 2
+        else if (rec.stroke != null) rec.strokeWidth = 1
+      }
     }
   } else if (mark.type === 'line') {
     // (a line with a role of its own has no default width: it is drawn at the scenegraph's 1, which the renderers would
@@ -4175,12 +4187,13 @@ function evaluateMarkItems(
     for (const it of items) {
       if (it.url == null) continue
       const vetted = applyImageUrlPolicy(it.url, ctx.urlPolicy)
-      if (vetted == null) it.url = undefined
+      if (vetted == null) { it.url = undefined; (it as { urlDenied?: boolean }).urlDenied = true }
       else {
         const resolved = resolveImageUrl(vetted, ctx.urlPolicy?.baseURL)
         // (what is drawn is what the policy vetted: the url the base turns it into goes through it too)
         const final = resolved !== vetted ? applyImageUrlPolicy(resolved, ctx.urlPolicy) : resolved
         it.url = (final == null ? undefined : final) as string | undefined
+        if (final == null) (it as { urlDenied?: boolean }).urlDenied = true
       }
     }
   }
@@ -4251,6 +4264,8 @@ function sortMarkItems(items: SceneItem[], sort: NonNullable<CompiledMark['sort'
 interface GroupSource {
   datum: Row
   rows?: Row[]
+  /** The datum the item's content reads as `parent`, where it is not the item's own (see {@link groupSources}). */
+  parent?: Row
   facetName?: string
   /** Names this item among its mark's (the facet partition's key, a datum's index): the identity of its signal scope. */
   key?: string
@@ -4271,7 +4286,7 @@ interface FacetDef {
  * partition's key fields plus any facet aggregate), one per datum of `from.data`,
  * or a single item with no source.
  */
-function groupSources(mark: CompiledMark, ctx: EvalContext): GroupSource[] {
+function groupSources(mark: CompiledMark, ctx: EvalContext): GroupSource[] | null {
   const facet = (mark.from as { facet?: FacetDef } | undefined)?.facet
   if (facet?.field !== undefined) {
     // vega-transforms PreFacet: one group item per datum (the datum is the item's datum), its rows the array the
@@ -4320,13 +4335,44 @@ function groupSources(mark: CompiledMark, ctx: EvalContext): GroupSource[] {
     // makes the empty cells of the full cross-product of the key values
     const ag = facet.aggregate
     const as = ag?.as ?? (ag?.ops ? ag.ops.map((op, i) => `${op}_${ag.fields?.[i]}`) : undefined)
-    const tuples = aggregateRows(rows, { groupby: keys, ...(ag?.ops ? { fields: ag.fields, ops: ag.ops, as } : {}), ...(ag?.cross ? { cross: true } : {}) })
-    return tuples.map((datum) => {
-      const partKey = keyOf(datum)
-      // (the aggregate's output is a tuple: `isTuple(group().datum)`)
-      Object.defineProperty(datum, TUPLE_ID, { value: true, enumerable: false })
-      return { datum, rows: parts.get(partKey) ?? [], facetName: facet.name, key: partKey }
+    let grouped: ReturnType<typeof aggregateGroups>
+    try {
+      grouped = aggregateGroups(rows, { groupby: keys, ...(ag?.ops ? { fields: ag.fields, ops: ag.ops, as } : {}), ...(ag?.cross ? { cross: true } : {}) })
+    } catch (e) {
+      // (a cross-product over a nested path reads a path from a row that has only the name: the aggregate throws, the run stops
+      // there, and the mark is never made)
+      reportEvalError(ctx, e)
+      ctx.encodeAborted = true
+      return null
+    }
+    // The group items are the aggregate rows joined on the flat key (see flatKeyFn): rows that share one are ONE item, in the
+    // place of the first, whose datum is the last. Its content is the cell of the last of them that has rows (each cell's marks
+    // are made in the one item, the last made is what stays), and reads that cell's row as its `parent`; an item none of whose
+    // cells has rows is the hollow group.
+    const itemKey = flatKeyFn(keys)
+    const places = new Map<string, number>()
+    const items: GroupSource[] = []
+    const content: Array<{ rows: Row[]; parent?: Row }> = []
+    grouped.tuples.forEach((datum, i) => {
+      const cell = parts.get(grouped.keys[i]!)
+      const id = itemKey(datum)
+      let at = places.get(id)
+      if (at === undefined) {
+        places.set(id, (at = items.length))
+        content.push({ rows: [] })
+        items.push({ datum, facetName: facet.name, key: grouped.keys[i]! })
+      } else {
+        items[at] = { datum, facetName: facet.name, key: grouped.keys[i]! }
+      }
+      if (cell !== undefined) content[at] = { rows: cell, parent: datum }
     })
+    items.forEach((item, i) => {
+      // (the aggregate's output is a tuple: `isTuple(group().datum)`)
+      Object.defineProperty(item.datum, TUPLE_ID, { value: true, enumerable: false })
+      item.rows = content[i]!.rows
+      item.parent = content[i]!.parent
+    })
+    return items
   }
   const data = mark.from?.data
   if (data) return (ctx.datasets.get(data) ?? []).map((row, i) => ({ datum: row, key: String(i) }))
@@ -4365,8 +4411,9 @@ function markContainerInfo(mark: CompiledMark): Partial<SceneGroup> {
   return out
 }
 
-function buildGroupMark(mark: CompiledMark, ctx: EvalContext): SceneGroup[] {
+function buildGroupMark(mark: CompiledMark, ctx: EvalContext): SceneGroup[] | null {
   const sources = groupSources(mark, ctx)
+  if (sources === null) return null
   // one group item (and one scope) per datum / facet partition: bounded like any generated item (maxItems, the clock)
   meterItems(sources.length, 'group items')
   const groups = sources.map((src) => { meterTick('group item'); return buildGroupItem(mark, ctx, src) })
@@ -4518,7 +4565,7 @@ function buildGroupItem(mark: CompiledMark, ctx: EvalContext, src: GroupSource):
   try {
     // this item's signal scope (its own signals, over the enclosing ones; a facet's `parent` is its datum)
     const hasParent = src.facetName !== undefined || mark.from?.data !== undefined
-    const outerParams = hasParent ? { ...ctx.signalParams, parent: src.datum } : ctx.signalParams
+    const outerParams = hasParent ? { ...ctx.signalParams, parent: src.parent ?? src.datum } : ctx.signalParams
     const scopeId = mark.signalDefs?.length ? `${ctx.scopeId ? ctx.scopeId + '/' : ''}${mark.userName ?? ''}@${markIdOf(mark)}${src.key !== undefined && src.key !== '' ? `[${src.key}]` : ''}` : undefined
     const scoped = scopeId !== undefined ? scopeSignalValues(mark, ctx, scopeId, outerParams) : undefined
     const scopeParams = scoped ? scoped.params : outerParams
@@ -4816,7 +4863,8 @@ function registerGradient(paint: object, ctx: EvalContext): void {
 }
 
 function resolveEncodeSet(encode: Record<string, EncodeValue | EncodeValue[]>, datum: Row, ctx: EvalContext, marktype: string): SceneItem {
-  if (ctx.encodeAborted) return { __unencoded: true } as SceneItem
+  // (an item an aborted run never reached stays in its mark, bare: vega's scenegraph holds it without geometry or paint)
+  if (ctx.encodeAborted) return {}
   const plan = encodePlan(encode)
   const binding = ctx.encodeBinding
 
@@ -4855,7 +4903,8 @@ function resolveEncodeSet(encode: Record<string, EncodeValue | EncodeValue[]>, d
           if (bound) resolved = scaleValue(bound.scale, bound.type, getField(datum, spec.field))
           else {
             const s = ctx.scales.get(spec.scale)
-            resolved = s ? scaleValue(s, ctx.scaleTypes.get(spec.scale), getField(datum, spec.field)) : undefined
+            // (no such scale: the general resolver fails it, with the one error of a missing scale)
+            resolved = s ? scaleValue(s, ctx.scaleTypes.get(spec.scale), getField(datum, spec.field)) : resolveEncodeProperty(plainSpecs[i], datum, ctx, binding)
           }
           break
         }
@@ -4876,20 +4925,23 @@ function resolveEncodeSet(encode: Record<string, EncodeValue | EncodeValue[]>, d
       }
     }
   } catch (e) {
-    reportEvalError(ctx, e)
     ctx.encodeAborted = true
     // vega evaluates the channels in spec order, so the failing item keeps exactly the channels
-    // BEFORE the failing one (the two passes above group plain values ahead of signals).
+    // BEFORE the failing one (the two passes above group plain values ahead of signals), and the error
+    // it logs is that channel's: the first to fail in spec order, which is not always the pass's.
     const partial: SceneItem = {}
     const prec = partial as unknown as Record<string, unknown>
+    let first: unknown = e
     for (const key of Object.keys(encode)) {
       try {
         const v = resolveEncodeProperty(encode[key], datum, ctx, binding)
         if (v !== undefined) prec[key] = v
-      } catch {
+      } catch (again) {
+        first = again
         break
       }
     }
+    reportEvalError(ctx, first)
     return partial
   }
   // a gradient object as a paint (`{gradient: 'linear', stops: [...]}`): its definition joins the scene's defs
@@ -5074,22 +5126,27 @@ function resolveEncodeValueInternal(value: EncodeValue | undefined, datum: Row, 
   let tail: number | undefined
   if (enc.scale != null) {
     const { scale: s, type } = encodeScaleOf(enc, datum, ctx, binding)
-    if (!s) return undefined
+    // (a scale that is not there fails where the entry calls it, and reads a bandwidth of 0: see missing-scale.ts)
     if (enc.range != null) {
       // lerp(_range(scale), +range)
+      if (!s) throw scaleRangeFailure()
       head = lerp(s.range() as number[], +(enc.range as number))
       hasHead = true
     } else {
-      if (hasHead) head = scaleValue(s, type, head)
+      if (hasHead) {
+        if (!s) throw scaleCallFailure(enc.scale)
+        head = scaleValue(s, type, head)
+      }
       if (enc.band) {
         // + _bandwidth(scale) [* band]   (a band of exactly 1, or `true`, has no factor)
-        const bw = typeof s.bandwidth === 'function' ? s.bandwidth() : 0
+        const bw = s && typeof s.bandwidth === 'function' ? s.bandwidth() : 0
         const factor = enc.band === true ? 1 : +(entryProperty(enc.band, datum, ctx, binding) as number)
         const term = factor === 1 ? bw : bw * factor
         if (enc.extra) {
           // (datum.extra ? _scale(scale, datum.extra.value) : value)
           const extra = (datum as { extra?: { value?: unknown } }).extra
-          head = extra ? scaleValue(s, type, extra.value) : hasHead ? (head as number) + term : term
+          if (extra && !s) throw scaleCallFailure(enc.scale)
+          head = extra ? scaleValue(s!, type, extra.value) : hasHead ? (head as number) + term : term
           hasHead = true
         } else {
           tail = term
