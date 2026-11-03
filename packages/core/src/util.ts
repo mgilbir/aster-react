@@ -498,13 +498,19 @@ const pluckAccessors = new Map<string, Accessor>()
  * `pluck` expression function (`field` + `isArray`).
  */
 export function pluck(data: unknown, name: unknown): unknown {
+  const f = memoField(name)
+  return isArray(data) ? (data as unknown[]).map(f) : f(data)
+}
+
+/** The accessor of a field name an expression function was given (a path: `a.b`, `a\\.b`, `a[0]`), built once per name. */
+export function memoField(name: unknown): Accessor {
   const key = String(name)
   let f = pluckAccessors.get(key)
   if (!f) {
     f = field(name)
     pluckAccessors.set(key, f)
   }
-  return isArray(data) ? (data as unknown[]).map(f) : f(data)
+  return f
 }
 
 /** vega-scenegraph `shapes.js` `sz`: an item without `size` is a 64px² symbol. */
