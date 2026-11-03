@@ -19,6 +19,12 @@ the browser).
   group. That walk dominated a one-row update on a large chart. Charts with `autosize: pad/fit` keep the full
   pass (Vega's viewSizeLayout grows or fits the viewport), and the corpus, which includes both, renders
   byte-identically.
+- **Kept dataset steps**: a resize, a signal write or a re-render with equal rows no longer runs every dataset pipeline from its
+  first step. A step records the signals it reads, the rows it was made from and (for a drawing step) the random source; the next
+  evaluation keeps the rows of every step whose reads are as they were, republishing the signals it wrote. The React mount, which
+  evaluates the spec at its own size and then at the measured container's, pays for the datasets once. Consecutive steps that
+  only add fields (`bin`, `formula`, `timeunit`) write onto one set of rows instead of copying every row per step
+  ([ARCHITECTURE.md](ARCHITECTURE.md#incremental-evaluation)).
 - **Auto-pulse inference**: `rowsEqual` compares plain rows with `for...in` instead of two `Object.keys`
   allocations per row, so replacing the whole data array stays cheap even without explicit `dataChanges`.
 - **Per-datum updates**: sessions diff replaced immutable source arrays automatically (`autoChanges`), then

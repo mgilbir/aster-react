@@ -141,11 +141,20 @@ import { fileURLToPath } from 'node:url'
 // missing scale throws, the bare items of an aborted run kept, the viewport origin of the accessible tree), transforms marginal 39.2
 // (+0.6: `nest`), useChart 148.3 (+0.5), Chart 189.2 (+0.5), SvgChart 166.4 (+0.4), SvgChart + interaction 183.8 (+0.5), Chart +
 // VL 289.5 (+0.6). Ceilings are the measured value + 0.5.
+// Kept dataset steps (step-reuse.ts: what a step reads, so a re-evaluation keeps the rows of the steps whose inputs did not move; the
+// run of steps written as one; the group scopes' kept pipelines; the session's account of which host datasets are unchanged), measured
+// (kB gzip): core 143.4 (+3.2 over 140.2), useChart 150.5 (+3.5 over 147.0), Chart 191.3 (+3.6), SvgChart 168.6 (+3.5), SvgChart +
+// interaction 185.9 (+3.4), Chart + VL 287.0 (+3.5 over 283.5); the marginal rows did not move enough to cross theirs.
 // #80-#83 land together (test strength, runtime leftovers, one tab stop, vl UTC); the ceilings are set here, in the first of them,
 // from the measure of the four merged (kB gzip): core 141.5, useChart 148.4, Chart 189.6, SvgChart 166.9, SvgChart + interaction 184.2,
 // Chart + VL 290.6; each is measured + 0.5, so every commit on main between them stays inside its ceiling.
+// Kept dataset steps on top of main (guides and layout, #71-#75), measured (kB gzip): core 144.0, useChart 151.1, Chart 192.0,
+// SvgChart 169.2, SvgChart + interaction 186.4, Chart + VL 292.1; the rest of the work of the section above is in these figures.
+// Kept dataset steps merged with main at d2f753d (the leftovers, nest, field paths, built-in ceilings), measured (kB gzip): core 144.5,
+// useChart 151.9, Chart 193.4, SvgChart 170.6, SvgChart + interaction 187.7, Chart + VL 294.0; the cause of the growth over main is
+// step-reuse.ts and the runtime and session code around it. Ceilings are the measured value + 0.5.
 const BUDGETS = {
-  '@aster/core': 142.0 * 1024,
+  '@aster/core': 145.0 * 1024,
   '+ @aster/core/dom': 6.2 * 1024,
   '+ @aster/core/canvas': 6.3 * 1024,
   '+ @aster/core/hit': 6.9 * 1024,
@@ -153,13 +162,13 @@ const BUDGETS = {
   '+ @aster/core/load': 5.6 * 1024,
   '+ @aster/core/geo': 16.8 * 1024,
   '+ @aster/core/transforms': 39.6 * 1024,
-  '@aster/react useChart': 148.9 * 1024,
-  '@aster/react Chart': 190.1 * 1024,
+  '@aster/react useChart': 152.4 * 1024,
+  '@aster/react Chart': 193.9 * 1024,
   // The light chart (`@aster/react/lite`): SVG only, no canvas renderer; alone and with the `interaction` capability.
-  '@aster/react SvgChart': 167.4 * 1024,
-  '@aster/react SvgChart + interaction': 184.7 * 1024,
+  '@aster/react SvgChart': 171.1 * 1024,
+  '@aster/react SvgChart + interaction': 188.2 * 1024,
   // Base + the VL compiler (opt-in: `import '@aster/react/vl'`).
-  '@aster/react Chart + VL': 291.1 * 1024,
+  '@aster/react Chart + VL': 294.5 * 1024,
 }
 
 const THIS_DIR = dirname(fileURLToPath(import.meta.url))
