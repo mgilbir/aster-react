@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- **`@aster/core`: late signals and mark transforms stop the pass like vega's.** A signal of the view that reads data or a scale (or one
+  declared after it) and throws was never logged and the marks that read it were drawn; a mark's `transform` or `sort` that throws
+  was logged and the run went on. Both are now points the pass stops at (see "Scopes and an aborted pass" in `docs/ARCHITECTURE.md`):
+  a late signal is ranked after every other operator of the view's scope, so everything that does not read it is made, what reads it is
+  left bare, the layout of the view does not run when a mark reads it or a gradient legend's labels wait for it, and nothing below the
+  view is made; a mark's transforms and sort run on its encoded items, so the mark is made in full and the pass stops after it. One
+  error each, as vega logs. The generated trees of `differential-abort-trees` now put failures in them.
+
 - **`@aster/core`: a circular symbol is drawn on canvas as vega draws it** (one full-turn arc about the item's origin, not two half turns),
   and the Chromium canvas gate compares the calls of vega and Aster for the generated gradient entries: WebKit rasterized the two half
   turns a pixel differently and only its nightly noticed.

@@ -123,8 +123,10 @@ it). Nothing is swallowed without a report, and each report is the original `Err
 | a `signal` or a scale of a group's scope | the instance of the scope is made without anything in it, and nothing after it |
 | an entry that calls a scale the spec never declared (`{scale, field}`, `{scale, value}`, `{scale, signal}`, `{scale, range}`, the `extra` of a band) | `TypeError: _.%<name> is not a function` (a `range`: `Cannot read properties of undefined (reading 'range')`), then as the line above. A band on its own reads a bandwidth of 0 and `{scale}` alone is 0, so neither fails. The message is vega's for a scale named in the spec; for one named by a signal or a field it is `_[("%" + <the reference>)] is not a function` |
 | a facet `cross` over a nested group-by path | the aggregate throws (`Cannot read properties of undefined`), the mark is not made and the run stops (as above) |
-| a dataset transform (`filter`, `formula`, ...) or a mark-level `transform` | the dataset publishes no rows; marks sourced from it are not built |
-| a mark `sort`, a facet header `sort` | the rows stay in data order |
+| a dataset transform (`filter`, `formula`, ...) | the dataset publishes no rows; marks sourced from it are not built |
+| a mark-level `transform` (a group's `formula` too), a mark `sort` | vega runs them on the encoded items: the mark is made in full (the items in data order), the error is logged once and the pass stops there, like a failing encode: the marks after it, the legends and the title are not made |
+| a signal of the view that reads data or a scale (or is declared after one that does) | it is ranked after every other operator of the view's scope: everything that does not read it is made, what reads it (marks, and what reads them) is made bare, the layout of the view does not run when a mark reads it, the error is logged once and nothing below the view (the contents of its groups) is made |
+| a facet header `sort` | the rows stay in data order |
 | a scale that cannot be built (bad `scheme`, unrecognised scale `type`, non-array `range`, ...) | the run stops there: this and later scales are absent and nothing is encoded |
 | a `signal.on` filter or update, while an event is handled | that event's delivery stops (updates already applied stand); the next event works |
 
