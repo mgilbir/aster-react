@@ -766,6 +766,11 @@ export interface SceneGroup extends SceneItem {
   title?: string
   /** Legend kind (`gradient`/`symbol`) for caption construction. */
   legendType?: string
+  /**
+   * The marks of a legend that a pass which stopped made (the entry group, the gradient or bands, the labels, the title, the
+   * scope of a symbol legend's entries), when it did not make them all. Absent: all of them.
+   */
+  madeMarks?: string[]
   /** Legend scale/channels (accessibility caption metadata). */
   legendScale?: string
   legendChannels?: string[]

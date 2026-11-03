@@ -192,6 +192,13 @@ export function customize(mark: GuideMarkDef, user: UserEncode | undefined): Gui
 
 // --- the evaluator --------------------------------------------------------------------------------------------------
 
+/** An expression of the spec threw where a guide's builder read it (outside an encode, which reports it): the host wraps what it threw. */
+export class ExpressionFailure extends Error {
+  constructor(readonly error: unknown) {
+    super(error instanceof Error ? error.message : String(error))
+  }
+}
+
 export interface EntryHost {
   /** the generic encode-entry evaluator (value / field / signal / scale / band / mult / offset / round ...) */
   entry(spec: EncodeValue | EncodeValue[], datum: Row): unknown
@@ -201,8 +208,14 @@ export interface EntryHost {
   viewSignal(name: 'width' | 'height'): number
   /** a scale by name (undefined when there is none in scope) */
   scale(name: string): (((v: unknown) => unknown) & { range(): unknown[]; domain(): unknown[] }) | undefined
-  /** a failing entry is reported and its channel is left unset */
+  /**
+   * An entry threw. Vega's encoder stops the dataflow pass at the first entry that throws: the item keeps the channels evaluated before
+   * it and every item made after it (here or in any guide after this one) is left unencoded. `stopped` says so from then on.
+   */
   report(e: unknown): void
+  /** an entry threw that does not stop the pass: logged, and its channel left unset */
+  note?(e: unknown): void
+  stopped?: { error: unknown; at?: string; entryIndex?: number }
   /** a scale by name as an entry calls it (the engine's coercions around the call, its bandwidth), for the entries that read one */
   /** what this evaluation made of the steps' entries (closures over its scales) and of the per-run ones: it, not the steps, keeps them */
   fastCache: Map<object, unknown>
@@ -351,6 +364,8 @@ interface Step {
   /** 0 constant, 1 function, 2 encode entry, 3 an entry that does not depend on the datum (evaluated once) */
   kind: 0 | 1 | 2 | 3 | 4
   cached?: boolean
+  /** an entry of the accessibility channels of a guide's group (`format`): one that throws is logged, and the channel left unset */
+  soft?: boolean
   /** the evaluation `fast` was made for (it holds that evaluation's scale) */
   /** the entry's shape, analysed once (`null`: it has none of the written-out shapes) */
   binder?: Binder | null
@@ -370,9 +385,12 @@ function isStaticEntry(e: object): boolean {
 
 /** A step with every field set, in one order: all steps share one shape. */
 const step = (key: string, kind: Step['kind'], fn?: EntryFn, entry?: EncodeValue | EncodeValue[], v?: unknown): Step =>
-  ({ key, fn, entry, v, kind, cached: false, binder: undefined })
+  ({ key, fn, entry, v, kind, cached: false, soft: false, binder: undefined })
 
-function stepsOf(block: Block, done?: Block): Step[] {
+/** The channels a guide's group gives for its caption only; the labels are formatted before, where a format that throws is the ticks' failure. */
+const SOFT_CHANNELS: ReadonlySet<string> = new Set(['format', 'formatType'])
+
+function stepsOf(block: Block, done?: Block, soft = false): Step[] {
   const steps: Step[] = []
   for (const key in block) {
     const e = block[key]
@@ -384,6 +402,7 @@ function stepsOf(block: Block, done?: Block): Step[] {
     else if (done !== undefined && done[key] === e) continue
     else if (isPlainValue(e)) steps.push(step(key, 0, undefined, undefined, (e as { value?: unknown }).value))
     else steps.push(step(key, isStaticEntry(e) ? 3 : 2, undefined, e as EncodeValue | EncodeValue[]))
+    if (soft && SOFT_CHANNELS.has(key)) steps[steps.length - 1]!.soft = true
   }
   return steps
 }
@@ -398,8 +417,8 @@ interface BlockPlan {
   dyn?: Step[]
 }
 
-function planOf(block: Block, done?: Block, seed?: Rec): BlockPlan {
-  const steps = stepsOf(block, done)
+function planOf(block: Block, done?: Block, seed?: Rec, soft = false): BlockPlan {
+  const steps = stepsOf(block, done, soft)
   if (steps.some((st) => st.kind === 1)) return { steps }
   const tmpl: Rec = seed ? { ...seed } : {}
   const dyn: Step[] = []
@@ -411,7 +430,7 @@ function planOf(block: Block, done?: Block, seed?: Rec): BlockPlan {
 }
 
 /** Run one block's steps in order, each seeing the item so far (`scope` is the one object every function entry of the item reads). */
-function runSteps(steps: Step[], scope: EntryScope): void {
+function runSteps(steps: Step[], scope: EntryScope): { error: unknown } | undefined {
   const { host, datum, item } = scope
   for (let i = 0; i < steps.length; i++) {
     const st = steps[i]!
@@ -427,14 +446,34 @@ function runSteps(steps: Step[], scope: EntryScope): void {
           v = fast !== null ? fast(datum) : host.entry(st.entry!, datum)
         }
       } catch (err) {
-        host.report(err)
-        continue
+        if (st.soft === true) {
+          host.note?.(err)
+          continue
+        }
+        return { error: err }
       }
       if (st.kind === 3) { st.v = v; st.cached = true } else if (st.kind === 4) host.runCache.set(st, v)
     }
     // (a channel is assigned whatever the value, undefined too: an `update` entry that gives undefined clears the `enter` one)
     item[st.key] = v
   }
+  return undefined
+}
+
+/**
+ * The item as far as the encoder got before an entry threw: the channels of the blocks in the order they are written, up to the one
+ * that failed. (The fast paths set a block's plain values together, ahead of the entries that read the datum: after a failure
+ * the item is made again, entry by entry, to hold exactly what came before it.)
+ */
+function partialItem(def: GuideMarkDef, plan: Plan, datum: Row, group: Rec, host: EntryHost): SceneItem {
+  const item: Rec = def.seed !== undefined ? { ...def.seed } : {}
+  const scope: EntryScope = { host, datum, item, group }
+  if (runSteps(plan.enter.steps, scope) === undefined) {
+    // (the blocks that completed have adjusted their extents; the one that threw has not)
+    if (plan.spatialEnter) resolveExtents(item, plan.encode.enter, def.type)
+    runSteps(plan.update.steps, scope)
+  }
+  return item as SceneItem
 }
 
 /** The two axes of an item's box: the channels that say where it starts, where it ends, its middle, and its size. */
@@ -482,24 +521,38 @@ function planOfDef(def: GuideMarkDef, cfg: GuideStyles): Plan {
   let plan = memo._plan
   if (plan === undefined || plan.cfg !== cfg || plan.src !== def.encode) {
     const encode = withStyleDefaults(def.encode, def.type, def.style, cfg)
-    plan = memo._plan = { cfg, src: def.encode, encode, enter: planOf(encode.enter, undefined, def.seed), update: planOf(encode.update, hasSpatial(encode.enter, def.type) ? undefined : encode.enter), spatialEnter: hasSpatial(encode.enter, def.type), spatialUpdate: hasSpatial(encode.update, def.type) }
+    const soft = def.role === 'axis' || def.role === 'legend'
+    plan = memo._plan = { cfg, src: def.encode, encode, enter: planOf(encode.enter, undefined, def.seed, soft), update: planOf(encode.update, hasSpatial(encode.enter, def.type) ? undefined : encode.enter, undefined, soft), spatialEnter: hasSpatial(encode.enter, def.type), spatialUpdate: hasSpatial(encode.update, def.type) }
   }
   return plan
 }
 
 /** One item of a mark: the `enter` block, then the `update` block over it. */
 export function encodeItem(def: GuideMarkDef, datum: Row, group: Rec, host: EntryHost, cfg: GuideStyles): SceneItem {
+  // (once the pass has stopped nothing is encoded: the item is what the mark's join made of its datum)
+  if (host.stopped !== undefined) return bareItem(def)
   const plan = planOfDef(def, cfg)
   const enter = plan.enter
   const item: Rec = enter.tmpl !== undefined ? { ...enter.tmpl } : def.seed !== undefined ? { ...def.seed } : {}
   const scope: EntryScope = { host, datum, item, group }
-  runSteps(enter.dyn ?? enter.steps, scope)
-  if (plan.spatialEnter) resolveExtents(item, plan.encode.enter, def.type)
-  const update = plan.update
-  if (update.tmpl !== undefined) Object.assign(item, update.tmpl)
-  runSteps(update.dyn ?? update.steps, scope)
-  if (plan.spatialUpdate) resolveExtents(item, plan.encode.update, def.type)
+  let failed = runSteps(enter.dyn ?? enter.steps, scope)
+  if (failed === undefined) {
+    if (plan.spatialEnter) resolveExtents(item, plan.encode.enter, def.type)
+    const update = plan.update
+    if (update.tmpl !== undefined) Object.assign(item, update.tmpl)
+    failed = runSteps(update.dyn ?? update.steps, scope)
+    if (failed === undefined && plan.spatialUpdate) resolveExtents(item, plan.encode.update, def.type)
+  }
+  if (failed !== undefined) {
+    host.report(failed.error)
+    return partialItem(def, plan, datum, group, host)
+  }
   return item as SceneItem
+}
+
+/** An item no encode reached: only what the guide gave the mark's items to begin with. */
+function bareItem(def: GuideMarkDef): SceneItem {
+  return (def.seed !== undefined ? { ...def.seed } : {}) as SceneItem
 }
 
 /**
@@ -511,12 +564,13 @@ export function encodeItems(def: GuideMarkDef, rows: Row[], group: Rec, host: En
   const plan = planOfDef(def, cfg)
   if (plan.batch === undefined) plan.batch = batchOf(plan)
   const batch = plan.batch
-  if (rows.length < 1 || batch === null) return rows.map((d) => encodeItem(def, d, group, host, cfg))
+  if (rows.length < 1 || batch === null || host.stopped !== undefined) return rows.map((d) => encodeItem(def, d, group, host, cfg))
   const tmpl: Rec = { ...plan.enter.tmpl }
   const first: EntryScope = { host, datum: rows[0]!, item: tmpl, group }
   const per: Array<{ key: string; fast: (d: Row) => unknown }> = []
+  let abandoned = false
   const stage = (steps: Step[]): void => {
-    for (let i = 0; i < steps.length; i++) {
+    for (let i = 0; i < steps.length && !abandoned; i++) {
       const st = steps[i]!
       if (st.kind === 3 || st.kind === 4) {
         // (the same for every datum: evaluated once, for the evaluation or for good, as the steps do for the first item)
@@ -526,9 +580,10 @@ export function encodeItems(def: GuideMarkDef, rows: Row[], group: Rec, host: En
             const v = st.kind === 4 ? st.fn!(first) : sf !== null ? sf(rows[0]!) : host.entry(st.entry!, rows[0]!)
             if (st.kind === 4) host.runCache.set(st, v)
             else { st.v = v; st.cached = true }
-          } catch (err) {
-            host.report(err)
-            continue
+          } catch {
+            // (the item-by-item path meets the same failure at the first item, in the order the channels are evaluated, and reports it)
+            abandoned = true
+            return
           }
         }
         tmpl[st.key] = st.kind === 4 ? host.runCache.get(st) : st.v
@@ -541,6 +596,7 @@ export function encodeItems(def: GuideMarkDef, rows: Row[], group: Rec, host: En
   stage(batch.enter)
   Object.assign(tmpl, plan.update.tmpl)
   stage(batch.update)
+  if (abandoned) return rows.map((d) => encodeItem(def, d, group, host, cfg))
   // a rule or a text mark whose channels are all among the ones its leaf kind carries is made by that kind's constructor
   const made = leavesOf(def, tmpl, per, rows, group, host, cfg)
   if (made !== null) return made
@@ -549,6 +605,7 @@ export function encodeItems(def: GuideMarkDef, rows: Row[], group: Rec, host: En
   const oneKey = per.length === 1 ? per[0]!.key : ''
   for (let i = 0; i < rows.length; i++) {
     const d = rows[i]!
+    if (host.stopped !== undefined) { out[i] = bareItem(def); continue }
     const item: Rec = { ...tmpl }
     try {
       if (one !== undefined) item[oneKey] = one(d)
@@ -588,6 +645,7 @@ function leavesOf(def: GuideMarkDef, t: Rec, per: Per, rows: Row[], group: Rec, 
     const { _kind, _part, opacity, stroke, strokeCap, strokeDash, strokeDashOffset, strokeOpacity, strokeWidth } = t
     for (let i = 0; i < rows.length; i++) {
       const d = rows[i]!
+      if (host.stopped !== undefined) { out[i] = bareItem(def); continue }
       try {
         out[i] = {
           _kind, _part, opacity, stroke, strokeCap, strokeDash, strokeDashOffset, strokeOpacity, strokeWidth,
@@ -603,6 +661,7 @@ function leavesOf(def: GuideMarkDef, t: Rec, per: Per, rows: Row[], group: Rec, 
   const { _kind, _part, fill, fillOpacity, font, fontSize, fontStyle, fontWeight, opacity, angle, limit, lineHeight, lineBreak, align, baseline, dx, dy } = t
   for (let i = 0; i < rows.length; i++) {
     const d = rows[i]!
+    if (host.stopped !== undefined) { out[i] = bareItem(def); continue }
     try {
       out[i] = {
         _kind, _part, fill, fillOpacity, font, fontSize, fontStyle, fontWeight, opacity, angle, limit, lineHeight, lineBreak, align, baseline, dx, dy,

@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- **`@aster/core`: a failing operator stops the pass as it does in vega, in every scope.** An encode that threw (a mark's, a group's, an
+  entry of an axis, a legend or a title), a signal or a scale of a group's scope, logged one error per item it failed on (11 for one
+  axis) and drew the scopes, legends and titles vega never gets to. Vega's dataflow runs its operators in rank order and stops at the
+  first that throws: one error is logged, and the scenegraph is what the operators before it made. That is now modelled for every
+  step of every scope (signals, projections, scales, axes, marks, legends, title), with the scopes of a group's items made one level
+  after the scope the group is in: a failure in a mark leaves the groups before it empty, the groups after it not made, and the
+  guides after it absent; a guide that fails keeps the channels written before the failing one (in vega's order, so the picture
+  of a left axis differs from a bottom one), the marks of it after the failing one are not made, and the caption names what it
+  made; a gradient legend's labels and a symbol legend's entries come after everything else of their scope; the layout of a group
+  ran only if the pass went past every scope below it. Pinned by generated differentials against vega: random trees with failures
+  at random places (`differential-abort-trees`), and every channel of every guide mark (`differential-guide-partial`).
+
 - **A re-evaluation keeps the dataset steps whose inputs did not change** (`step-reuse.ts`, `runtime.ts`, `session.ts`). The React mount
   evaluates a chart at the spec's size and again at the measured container's, and a resize or a signal write evaluates it again; every
   dataset pipeline ran from its first step each time. A step records the rows it was made from, the signals it reads, the random source

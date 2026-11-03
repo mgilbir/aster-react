@@ -125,7 +125,19 @@ export function legendLabel(
  * child mark's first item, lines joined by a space), so an `encode.title` that replaces the text is what the caption
  * says; the resolved `title` of the guide when no title leaf is there.
  */
-export function guideTitleText(group: { title?: string; items?: unknown[] }): string | undefined {
+export function guideTitleText(group: { title?: string; items?: unknown[]; parts?: string[]; madeMarks?: string[] }): string | undefined {
+  // A pass that stopped in the guide made some of its marks only: the caption reads the first item of the last one it made, which is
+  // the title only when the title was (a label's text otherwise, and none for a mark without text).
+  // (a legend's own marks are its entry group and its title: the entry group has no text to read)
+  const made = group.parts ?? (group.madeMarks === undefined ? undefined : group.madeMarks.includes('title') ? ['title'] : [])
+  if (made !== undefined && group.title) {
+    const last = made[made.length - 1]
+    const leaf = last === undefined ? undefined : (group.items ?? []).find((n) => (n as { _part?: string })._part === last) as { text?: unknown } | undefined
+    const text = leaf?.text
+    if (text == null) return undefined
+    const words = Array.isArray(text) ? text.join(' ') : String(text)
+    return words === '' ? undefined : words
+  }
   const walk = (items: unknown[] | undefined): string | undefined => {
     for (const it of items ?? []) {
       const n = it as { _part?: string; text?: unknown; items?: unknown[] }

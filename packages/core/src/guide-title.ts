@@ -29,7 +29,8 @@ export interface TitleBuildInput {
 
 export interface TitleBuilt {
   group: Rec
-  title: SceneItem & Rec
+  /** absent when an encode threw before the title's mark was made (see `EntryHost.stopped`) */
+  title?: SceneItem & Rec
   subtitle?: SceneItem & Rec
   partMeta: Record<string, { name?: string; interactive: boolean }>
   /** The group's bounds in its parent's frame as the layout left them, when it laid the group out: the title and the subtitle where they were measured, moved with the group. */
@@ -85,20 +86,24 @@ export function buildTitle(inp: TitleBuildInput): TitleBuilt {
   const textUser: UserEncode | undefined = userEncode.title
     ?? ({ name: spec.name, interactive: spec.interactive, style: spec.style, ...(userEncode as unknown as Rec) } as UserEncode)
   const titleDef = textPart(props, false, spec.text, textUser)
-  const title = encodeItem(titleDef, datum, group, host, style) as SceneItem & Rec
-  title._kind = 'text'
+  // (the marks of the group are made one after the other: an encode that threw leaves the ones after it unmade)
+  let title: (SceneItem & Rec) | undefined
+  if (host.stopped === undefined) {
+    title = encodeItem(titleDef, datum, group, host, style) as SceneItem & Rec
+    title._kind = 'text'
+  }
   const partMeta: TitleBuilt['partMeta'] = {
     title: { name: titleDef.name, interactive: titleDef.interactive },
     group: { name: groupUser.name == null || groupUser.name === '' ? undefined : String(groupUser.name), interactive: !!groupUser.interactive },
   }
   let subtitle: (SceneItem & Rec) | undefined
-  if (spec.subtitle) {
+  if (spec.subtitle && host.stopped === undefined) {
     const subtitleDef = textPart(props, true, spec.subtitle, userEncode.subtitle)
     subtitle = encodeItem(subtitleDef, datum, group, host, style) as SceneItem & Rec
     subtitle._kind = 'text'
     partMeta.subtitle = { name: subtitleDef.name, interactive: subtitleDef.interactive }
   }
-  const bounds = inp.raw ? undefined : placeTitle(group, title, subtitle, inp.viewBounds, inp.width, inp.height)
+  const bounds = inp.raw || title === undefined ? undefined : placeTitle(group, title, subtitle, inp.viewBounds, inp.width, inp.height)
   return { group, title, subtitle, partMeta, ...(bounds ? { bounds } : {}) }
 }
 

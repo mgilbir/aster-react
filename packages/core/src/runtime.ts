@@ -61,7 +61,7 @@ import { rectItemPath } from './render.js'
 import { buildAxis as buildAxisGuide, tickPlacement } from './guide-axis.js'
 import { buildTitle as buildTitleGuide } from './guide-title.js'
 import { buildLegend as buildLegendGuide, legendType, placeLegendStack, LEGEND_SCALES, type GuideHost, type Sides } from './guide-legend.js'
-import { isSignal, itemAriaOf, propsOf, type GuideStyles, type UserEncode } from './guide-encode.js'
+import { ExpressionFailure, isSignal, itemAriaOf, propsOf, type GuideStyles, type UserEncode } from './guide-encode.js'
 import { defaultMergedConfig } from './config-defaults.js'
 
 const DEFAULT_SIZE = 500
@@ -382,18 +382,46 @@ interface GuideScope {
   facet?: string
   /** an instance at or after the aborted one is in this scope's subtree (or it is that instance): nothing laid it out */
   unsettled?: boolean
+  /** the index in the scope's `marks` of the mark being made (where an encode that fails stops the pass) */
+  mark?: number
+  /** the default tick counts (by gradient length) the scope's gradient legends have made so far: the first of each is a late operator */
+  counts?: Set<string>
 }
 
 /**
- * Axes whose ticks failed (see axisTicksFailed). A failure aborts vega's dataflow pass: what its scope and the scopes
- * built after it would have made is absent. The first pass of a build records the failures, the second runs with the
- * earliest one as the cut.
+ * Where vega's dataflow pass stopped. A pass runs the operators in rank order and stops at the first one that throws: the error is
+ * logged once, and what the operators before it made is all there is. The operators of one scope come in the order vega-parser
+ * writes them (signals, projections, scales, axes, marks, legends, title); a group's own scopes are made one level after
+ * the scope it is in, level by level (see `compareInstances`), whatever order the spec has them in.
+ *
+ * The first pass of a build records every failure with the instance (`path`) and the step of the scope it was at, and picks the
+ * earliest; the second runs only up to it. Which failures there are, by step:
  */
-/**
- * Where a pass stopped: an axis of a scope (`axis` is its index), or a legend (`legend` is its index; the scope's axes
- * and marks come before the legends in vega's parse order, so they were all made).
- */
-interface AbortPoint { path: number[]; axis: number; legend?: number; late?: boolean; /** a projection of the instance's scope could not be made (nothing else of it was) */ projection?: true }
+interface AbortPoint {
+  /** the instance of the scope the failing operator is in: the ordinals of the group items from the view down (the view is `[]`) */
+  path: number[]
+  /** the axis it is at (its ticks, when `inside` is not set: a failing axis is not made; else the axis part-made); `Infinity` for a later step */
+  axis: number
+  /** the legend it is at (as for `axis`) */
+  legend?: number
+  /** the pass failed in the encode of this mark of the instance (its `marks` index): the marks before it were made, the guides before it too */
+  mark?: number
+  /** the pass failed in the title of the instance's group (the last operator of its scope) */
+  title?: true
+  /** the pass failed in the encode of the guide at this index: the guide is part-made (its ticks and entries were) */
+  inside?: true
+  /** the pass failed in the labels of the gradient legend at `legend`, an operator ranked after all the others of the scope */
+  labels?: true
+  late?: boolean
+  /** a projection of the instance's scope could not be made (nothing else of it was) */
+  projection?: true
+  /** a signal of the instance's scope threw (the first operators of the scope: nothing else of it was made) */
+  signals?: true
+  /** a scale of the instance's scope could not be made (the scales come before everything else of it but its signals and projections) */
+  scales?: true
+  /** what the failing operator threw: logged once, for the point the pass stops at (see `buildContent`) */
+  error?: unknown
+}
 
 interface AxisAbort {
   failures: Array<AbortPoint>
@@ -445,8 +473,6 @@ interface EvalContext {
   rawGuides?: boolean
   /** The guide host of this context (see guideHost). */
   guideHost?: { ctx: EvalContext; host: GuideHost }
-  /** The pass stopped below this scope: the legend entries of symbol legends (a level further down) were never made. */
-  pendingEntries?: boolean
   scales: Map<string, Scale>
   scaleTypes: Map<string, string>
   /** Per-mark, per-eval encode bindings (scale fn + type) so the per-row encode
@@ -553,9 +579,49 @@ interface EvalContext {
  * they are rethrown to the caller.
  */
 function reportEvalError(ctx: EvalContext, e: unknown): void {
-  if (e instanceof AsterLimitError || e instanceof AsterUrlError || e instanceof ExpressionParseError || e instanceof SpecParseError || (e instanceof Error && e.message.startsWith('[aster]'))) throw e
+  refuseUnrecoverable(e)
   ctx.failed = true
   ctx.logger.error(e)
+}
+
+function refuseUnrecoverable(e: unknown): void {
+  if (e instanceof AsterLimitError || e instanceof AsterUrlError || e instanceof ExpressionParseError || e instanceof SpecParseError || (e instanceof Error && e.message.startsWith('[aster]'))) throw e
+}
+
+/**
+ * An operator of the dataflow threw. Vega logs the error once and stops the pass at the first operator (in rank order) that
+ * fails: the point is recorded here, the first pass of a build finds the earliest and logs its error, and the second pass makes
+ * only what ranked before it (see `buildContent`).
+ */
+function failPass(ctx: EvalContext, point: Omit<AbortPoint, 'path'> & { path?: number[] }, e: unknown): void {
+  refuseUnrecoverable(e)
+  ctx.failed = true
+  ctx.abort.failures.push({ ...point, path: point.path ?? ctx.scope.path, error: e })
+}
+
+/**
+ * Where a point stops the pass, among the points of one instance: its projections, then its axes, its marks, its legends and its
+ * title (vega-parser's order of a scope's operators).
+ */
+function stepOf(p: AbortPoint): number {
+  if (p.signals) return -2
+  if (p.scales) return -0.5
+  if (p.labels) return 4e9 + (p.legend ?? 0)
+  if (p.projection) return -1
+  if (p.title) return 3e9
+  if (p.legend !== undefined) return 2e9 + p.legend
+  if (p.mark !== undefined) return 1e9 + p.mark
+  return p.axis
+}
+
+/** How many of the instance's axes and legends the pass that stopped at `cut` began (one that failed inside is part-made). */
+const madeAxes = (cut: AbortPoint): number => Math.max(0, cut.axis + (cut.inside && cut.legend === undefined ? 1 : 0))
+const madeLegends = (cut: AbortPoint): number => (cut.title || cut.labels ? Infinity : cut.legend === undefined ? 0 : cut.legend + (cut.inside ? 1 : 0))
+/** Whether the pass that stopped at `cut` made the marks of the instance it stopped in (they are ranked after its axes only). */
+const madeMarks = (cut: AbortPoint): boolean => cut.legend !== undefined || cut.mark !== undefined || cut.title === true || cut.labels === true
+
+function earlierPoint(a: AbortPoint, b: AbortPoint): AbortPoint {
+  return (compareInstances(a.path, b.path) || stepOf(a) - stepOf(b)) <= 0 ? a : b
 }
 
 /**
@@ -969,9 +1035,9 @@ function scopedProjections(mark: CompiledMark, ctx: EvalContext, params: Record<
       registry.set(p.name, buildProjectionOf(inScope, p))
     } catch (e) {
       // (vega logs the one error that stopped the pass; what the pass would have found after it never ran)
-      if (!ctx.abort.failures.length) reportEvalError(ctx, e)
-      else if (e instanceof Error && e.message.startsWith('[aster]')) throw e
-      ctx.abort.failures.push({ path, axis: 0, projection: true })
+      refuseUnrecoverable(e)
+      ctx.failed = true
+      ctx.abort.failures.push({ path, axis: 0, projection: true, error: e })
       return { registry, failed: true }
     }
   }
@@ -1353,7 +1419,7 @@ function buildAxisAndLegend(
     // string) degenerates to a zero-size group with no items: vega still
     // creates it, but it renders nothing and takes no layout space.
     // (a legend only waiting for its entries is a group like any other)
-    .filter((x) => ctx.pendingEntries || !(x.group.width === 0 && x.group.height === 0 && (x.group.items?.length ?? 0) === 0))
+    .filter((x) => (x.group as unknown as { _entriesPending?: boolean })._entriesPending === true || !(x.group.width === 0 && x.group.height === 0 && (x.group.items?.length ?? 0) === 0))
 
   if (built.length) {
     const layoutW = Math.max(0, ctx.width)
@@ -1854,8 +1920,11 @@ function buildContent(
 ): BuiltContent {
   const first = buildContentPass(chart, input, cw, ch, txn, fitted, signed, undefined, order)
   const failures = first.ctx.abort.failures
-  if (!failures.length) return first
-  const cut = failures.reduce((a, b) => (compareInstances(a.path, b.path) || (a.axis === b.axis ? 0 : a.axis < b.axis ? -1 : 1) || (a.legend ?? 0) - (b.legend ?? 0)) <= 0 ? a : b)
+  // (a signal or a dataset that threw stopped the pass before the operators these failures are: they are not vega's)
+  if (!failures.length || first.ctx.datasetAborted) return first
+  const cut = failures.reduce(earlierPoint)
+  // (the one error of the pass: what failed first, in the order vega ranks its operators)
+  if (cut.error !== undefined) reportEvalError(first.ctx, cut.error)
   return buildContentPass(chart, input, cw, ch, txn, fitted, signed, cut, order)
 }
 
@@ -1893,7 +1962,10 @@ function buildContentPass(
   const items: SceneGroup[] = []
 
   // 1) Build marks (plot area)
-  for (const mark of stopped && cut!.legend === undefined ? [] : ctx.chart.marks) {
+  const marks = stopped && !madeMarks(cut!) ? [] : ctx.chart.marks
+  for (let at = 0; at < marks.length; at++) {
+    const mark = marks[at]!
+    ctx.scope.mark = at
     const prevGroup = ctx.prev?.groups.get(mark) ?? null
     if (prevGroup && canReuseMarkGroup(mark, ctx)) {
       items.push(prevGroup)
@@ -1910,14 +1982,17 @@ function buildContentPass(
     }
   }
 
-  // the ViewLayout of a group never ran if the pass stopped below it: the view is always such a group
-  if (cut !== undefined) { ctx.rawGuides = true; ctx.pendingEntries = entriesPending(0, cut.path.length) }
+  // The layout of the view is ranked after the last instance below it that has marks: it ran, and laid the guides out, when the pass
+  // went past all of them (see `buildGroupItem`).
+  const unlaid = cut !== undefined && (compareInstances(ctx.scope.path, cut.path) === 0 || ctx.scope.unsettled === true
+    || symbolLegendsOf(ctx.chart.legends, ctx).some((_, k) => compareInstances([ctx.scope.nextChild.n + k, 0], cut.path) >= 0))
+  if (unlaid) ctx.rawGuides = true
 
   // 2) ViewLayout of the view's root group (vega-view-transforms): a `layout`
   // grid positions the child groups (cells, headers, footers, titles) first;
   // layoutGroup then lays out the axes, legends and title around them.
   const hasLayout = ctx.chart.layout != null
-  if (hasLayout && cut === undefined) {
+  if (hasLayout && !unlaid) {
     try {
       layoutFacet({ marktype: 'group', items } as unknown as SceneGroup, resolveLayoutOptions(ctx.chart.layout!, ctx), gridMemory(ctx, 'root'))
     } catch {
@@ -1927,12 +2002,12 @@ function buildContentPass(
     }
   }
   const { groups: guideGroups } = stopped
-    ? buildAxisAndLegend(ctx, items, ctx.chart.axes.slice(0, cut!.axis), ctx.chart.legends.slice(0, cut!.legend ?? 0))
+    ? buildAxisAndLegend(ctx, items, ctx.chart.axes.slice(0, madeAxes(cut!)), ctx.chart.legends.slice(0, madeLegends(cut!)))
     : buildAxisAndLegend(ctx, items)
   for (const g of guideGroups) items.push(g)
 
   // Top-level title. (A pass that stopped at a failing dataset or signal never made it: it is ranked after them.)
-  const titleGroup = stopped || ctx.datasetAborted ? null : buildTitleGroup(ctx.chart.title, items, width, height, ctx.rawGuides, ctx, undefined, ctx.chart.autosize === 'fit' || ctx.chart.autosize === 'fit-x' || ctx.chart.autosize === 'fit-y')
+  const titleGroup = (stopped && !cut!.title && !cut!.labels) || ctx.datasetAborted ? null : buildTitleGroup(ctx.chart.title, items, width, height, ctx.rawGuides, ctx, undefined, ctx.chart.autosize === 'fit' || ctx.chart.autosize === 'fit-x' || ctx.chart.autosize === 'fit-y')
   if (titleGroup) items.push(titleGroup)
   // The root group's width / height are the view's `width` / `height` signals (0
   // for a composition that sizes only its children), whatever the grid inside covers.
@@ -1954,6 +2029,7 @@ function buildContentPass(
     || ctx.encodeAborted === true
     || ctx.postRunLost === true
     || ctx.rawGuides
+    || cut !== undefined
     || ctx.chart.autosize === 'none'
     ? ctx.chart.padding
     : computeGuidePadding(items, width, height, ctx.chart.padding, ctx.chart.autosize === 'fit' || ctx.chart.autosize === 'fit-x' || ctx.chart.autosize === 'fit-y')
@@ -2219,10 +2295,13 @@ function buildTitleGroup(
   else for (const g of measured) b.union(shareOfView(measureGuideGroup(g), g, fitting))
   // (a group title reads its facet datum as `parent`)
   const hostCtx = parent !== undefined ? { ...ctx, signalParams: { ...ctx.signalParams, parent } } : ctx
+  const titleHost = guideHost(hostCtx)
+  titleHost.stopped = undefined
   const built = buildTitleGuide({
     spec: (title0.own ?? {}) as Record<string, unknown>, cfg: (title0.cfg ?? {}) as Record<string, unknown>,
-    viewBounds: b, width, height, raw, host: guideHost(hostCtx), style: guideStyles(ctx),
+    viewBounds: b, width, height, raw, host: titleHost, style: guideStyles(ctx),
   })
+  failGuide(ctx, titleHost, { axis: Infinity, title: true })
   const g = built.group
   const mark = (role: string, it: SceneItem, meta: { name?: string; interactive: boolean } | undefined): SceneGroup => ({
     marktype: 'text', role, items: [it],
@@ -2230,7 +2309,7 @@ function buildTitleGroup(
     ...(meta?.name ? { cssName: meta.name } : {}),
     ...(meta?.interactive ? { interactive: true } : {}),
   }) as SceneGroup
-  const children: SceneGroup[] = [mark('title-text', built.title, built.partMeta.title)]
+  const children: SceneGroup[] = built.title ? [mark('title-text', built.title, built.partMeta.title)] : []
   if (built.subtitle) children.push(mark('title-subtitle', built.subtitle, built.partMeta.subtitle))
   // (the mark definition reads these as written -- vega-parser marks/definition.js: `+zindex || undefined`, `aria`, `description`)
   const own = (title0.own ?? {}) as Record<string, unknown>
@@ -3999,7 +4078,7 @@ function buildScales(ctx: EvalContext): void {
     } catch (e) {
       // vega: the Scale operator throws, the dataflow logs it and the run stops there -- this scale
       // and every operator after it (later scales, every encode) are never evaluated.
-      reportEvalError(ctx, e)
+      failPass(ctx, { axis: -0.5, scales: true }, e)
       ctx.encodeAborted = true
       break
     }
@@ -4640,7 +4719,19 @@ function buildGroupMark(mark: CompiledMark, ctx: EvalContext): SceneGroup[] | nu
   if (sources === null) return null
   // one group item (and one scope) per datum / facet partition: bounded like any generated item (maxItems, the clock)
   meterItems(sources.length, 'group items')
-  const groups = sources.map((src) => { meterTick('group item'); return buildGroupItem(mark, ctx, src) })
+  const base = ctx.scope.nextChild.n
+  const settled = sources.map(() => ({ unsettled: false }))
+  const groups = sources.map((src, i) => { meterTick('group item'); return buildGroupItem(mark, ctx, src, settled[i]!) })
+  // The layout of a group mark is one operator for all its items, ranked after every instance below any of them: one item
+  // with an instance the pass did not get to leaves all of them unlaid. The items made before that was known are made again.
+  if (ctx.abort.cut !== undefined && groups.length > 1 && settled.some((o) => o.unsettled) && !settled.every((o) => o.unsettled)) {
+    sources.forEach((src, i) => {
+      if (settled[i]!.unsettled) return
+      ctx.scope.nextChild.n = base + i
+      groups[i] = buildGroupItem(mark, ctx, src, settled[i]!, true)
+    })
+    ctx.scope.nextChild.n = base + sources.length
+  }
   // a group mark with no items is still a container in the scenegraph (vega-scenegraph draws every mark's `<g>`)
   if (!groups.length) return [{ marktype: 'group', role: (mark.role as string | undefined) ?? 'scope', name: mark.name, items: [], emptyMark: true, markIndex: markIdOf(mark), ...markContainerInfo(mark), ...(markClip(mark, ctx) ? { markClip: true } : {}) } as unknown as SceneGroup]
   // SortItems: the group items are ordered by their own properties (`datum["g"]`, `x`, ...)
@@ -4747,12 +4838,13 @@ function markClip(mark: CompiledMark, ctx: EvalContext): boolean {
  * `value`; an `update` signal is derived and always recomputed. `push: "outer"` declares nothing here (its handlers write to
  * the enclosing scope's signal). Returns the group's parameters (the enclosing ones plus these) and the scope's values.
  */
-function scopeSignalValues(mark: CompiledMark, ctx: EvalContext, id: string, base: Record<string, unknown>): { params: Record<string, unknown>; values: Record<string, unknown> } {
+function scopeSignalValues(mark: CompiledMark, ctx: EvalContext, id: string, base: Record<string, unknown>, instance: number[]): { params: Record<string, unknown>; values: Record<string, unknown> } {
   const params = dict<unknown>(base)
   const values: Record<string, unknown> = {}
   const defs = (mark.signalDefs ?? []).filter((d) => d.push !== 'outer')
+  // (a signal that throws stops the pass at the first operators of the instance: see AbortPoint)
   const evalIn = (code: string): unknown => {
-    try { return ctx.runtime.expr(code)({}, params) } catch (e) { reportEvalError(ctx, e); return undefined }
+    try { return ctx.runtime.expr(code)({}, params) } catch (e) { failPass(ctx, { axis: -2, signals: true, path: instance }, e); return undefined }
   }
   for (const d of defs) {
     if (typeof d.update === 'string') continue
@@ -4809,7 +4901,7 @@ function runScopedData(
   return out
 }
 
-function buildGroupItem(mark: CompiledMark, ctx: EvalContext, src: GroupSource): SceneGroup {
+function buildGroupItem(mark: CompiledMark, ctx: EvalContext, src: GroupSource, outcome?: { unsettled: boolean }, unsettled = false): SceneGroup {
   const num = (v: unknown): number | undefined => (typeof v === 'number' && Number.isFinite(v) ? v : undefined)
   // the facet partition is a dataset for everything in this item's scope, its own scales included
   const savedFacet = src.facetName !== undefined ? ctx.datasets.get(src.facetName) : undefined
@@ -4827,10 +4919,10 @@ function buildGroupItem(mark: CompiledMark, ctx: EvalContext, src: GroupSource):
     const hasParent = src.facetName !== undefined || mark.from?.data !== undefined
     const outerParams = hasParent ? { ...ctx.signalParams, parent: src.parent ?? src.datum } : ctx.signalParams
     const scopeId = mark.signalDefs?.length ? `${ctx.scopeId ? ctx.scopeId + '/' : ''}${mark.userName ?? ''}@${markIdOf(mark)}${src.key !== undefined && src.key !== '' ? `[${src.key}]` : ''}` : undefined
-    const scoped = scopeId !== undefined ? scopeSignalValues(mark, ctx, scopeId, outerParams) : undefined
-    const scopeParams = scoped ? scoped.params : outerParams
     // vega builds the instances of nested scopes level by level: what an aborted pass did not reach is not made
     const path = [...ctx.scope.path, ctx.scope.nextChild.n++]
+    const scoped = scopeId !== undefined ? scopeSignalValues(mark, ctx, scopeId, outerParams, path) : undefined
+    const scopeParams = scoped ? scoped.params : outerParams
     const order = ctx.abort.cut === undefined ? -1 : compareInstances(path, ctx.abort.cut.path)
     // this item's projections (vega: its scope's Projection operators, made right after the signals); the type is a parameter like
     // any other, in this scope (`type: {signal: "parent.data"}`). One that cannot be made stops the pass there: see AbortPoint.
@@ -4857,7 +4949,10 @@ function buildGroupItem(mark: CompiledMark, ctx: EvalContext, src: GroupSource):
       ctx.datasets.set(d.name, rows)
     }
     const encode = (mark.encode?.update ?? {}) as Record<string, EncodeValue | EncodeValue[]>
-    const geo = resolveEncodeSet(encode, src.datum, scoped ? { ...ctx, signalParams: scopeParams } : ctx, 'group')
+    const encodeCtx = scoped ? { ...ctx, signalParams: scopeParams } : ctx
+    const geo = resolveEncodeSet(encode, src.datum, encodeCtx, 'group')
+    // (the stop is the run's: the items of this mark after the failing one, and the marks after it, are made nothing of)
+    if (encodeCtx.encodeAborted) ctx.encodeAborted = true
     const gx = num(geo.x) ?? 0
     const gy = num(geo.y) ?? 0
     const gw = Math.max(0, num(geo.width) ?? 0)
@@ -4876,7 +4971,13 @@ function buildGroupItem(mark: CompiledMark, ctx: EvalContext, src: GroupSource):
     const viewW = scopedView('width')
     const viewH = scopedView('height')
     for (const sdef of mark.scales ?? []) {
-      childScales.set(sdef.name, buildScale(sdef, scaleContext({ ...ctx, signalParams: scopeParams, width: viewW, height: viewH }, sdef.name)))
+      try {
+        childScales.set(sdef.name, buildScale(sdef, scaleContext({ ...ctx, signalParams: scopeParams, width: viewW, height: viewH }, sdef.name)))
+      } catch (e) {
+        // (the Scale operator throws: this scale and every operator after it, in this instance and past it, are never made)
+        failPass(ctx, { axis: -0.5, scales: true, path }, e)
+        break
+      }
       childTypes.set(sdef.name, sdef.type)
     }
     if (childScales.size) {
@@ -4887,9 +4988,13 @@ function buildGroupItem(mark: CompiledMark, ctx: EvalContext, src: GroupSource):
     // (the instance that failed in its last operator was made whole)
     const whole = order === 0 && ctx.abort.cut!.late === true
     // (nothing laid out a group that has an instance at or after the stopped one in its subtree)
-    if (order >= 0) for (let up: GuideScope | undefined = ctx.scope; up && !up.unsettled; up = up.parent) up.unsettled = true
+    // (the layout of a group is ranked after the last instance below it that has marks of its own -- an instance with none
+    // connects nothing to it)
+    const hasContent = (mark.marks?.length ?? 0) + (mark.axes?.length ?? 0) + (mark.legends?.length ?? 0) > 0 || mark.groupTitle !== undefined
+    const late = order >= 0 && hasContent
+    if (late) for (let up: GuideScope | undefined = ctx.scope; up && !up.unsettled; up = up.parent) up.unsettled = true
     const scope: GuideScope = {
-      parent: ctx.scope, path, nextChild: { n: 0 }, unsettled: order >= 0,
+      parent: ctx.scope, path, nextChild: { n: 0 }, unsettled: late || unsettled,
       scales: mark.scales ?? NO_DECLARED, data: mark.data ?? NO_DECLARED, facet: src.facetName,
     }
     const childCtx: EvalContext = {
@@ -4909,9 +5014,17 @@ function buildGroupItem(mark: CompiledMark, ctx: EvalContext, src: GroupSource):
     }
 
     const content: SceneGroup[] = []
-    for (const child of hollow || order > 0 || (order === 0 && !whole && ctx.abort.cut!.legend === undefined) ? [] : mark.marks ?? []) {
+    const children = hollow || order > 0 || (order === 0 && !whole && !madeMarks(ctx.abort.cut!)) ? [] : mark.marks ?? []
+    for (let at = 0; at < children.length; at++) {
+      const child = children[at]!
+      scope.mark = at
       const r = evaluateMark(child, childCtx)
       if (r) pushAll(content, Array.isArray(r) ? r : [r])
+    }
+    // (the entries of a symbol legend are instances of their own, after this scope's groups: one the pass never got to
+    // keeps the group from being laid out like any other instance it did not get to)
+    if (ctx.abort.cut !== undefined && !scope.unsettled && symbolLegendsOf(mark.legends, childCtx).some((_, k) => compareInstances([...path, scope.nextChild.n + k, 0], ctx.abort.cut!.path) >= 0)) {
+      for (let up: GuideScope | undefined = scope; up && !up.unsettled; up = up.parent) up.unsettled = true
     }
     // ViewLayout: a `layout` grid positions the child groups (headers, footers, titles, cells) first
     if (mark.layout && !scope.unsettled) {
@@ -4924,16 +5037,14 @@ function buildGroupItem(mark: CompiledMark, ctx: EvalContext, src: GroupSource):
       }
     }
 
-    const guideCtx: EvalContext = scope.unsettled || (ctx.abort.cut !== undefined && entriesPending(path.length, ctx.abort.cut.path.length))
-      ? { ...childCtx, ...(scope.unsettled ? { rawGuides: true } : {}), pendingEntries: entriesPending(path.length, ctx.abort.cut!.path.length) }
-      : childCtx
+    const guideCtx: EvalContext = scope.unsettled ? { ...childCtx, rawGuides: true } : childCtx
     const { groups: guides } = hollow || order > 0
       ? { groups: [] }
       : order === 0 && !whole
-        ? buildAxisAndLegend(guideCtx, content, (mark.axes ?? []).slice(0, ctx.abort.cut!.axis), (mark.legends ?? []).slice(0, ctx.abort.cut!.legend ?? 0))
+        ? buildAxisAndLegend(guideCtx, content, (mark.axes ?? []).slice(0, madeAxes(ctx.abort.cut!)), (mark.legends ?? []).slice(0, madeLegends(ctx.abort.cut!)))
         : buildAxisAndLegend(guideCtx, content, mark.axes ?? [], mark.legends ?? [])
     const siblings: SceneGroup[] = [...content, ...guides]
-    const title = hollow || order > 0 || (order === 0 && !whole) ? null : buildTitleGroup(mark.groupTitle, siblings, gw, gh, !!scope.unsettled, guideCtx, src.datum)
+    const title = hollow || order > 0 || (order === 0 && !whole && !ctx.abort.cut!.title && !ctx.abort.cut!.labels) ? null : buildTitleGroup(mark.groupTitle, siblings, gw, gh, !!scope.unsettled, guideCtx, src.datum)
     if (title) siblings.push(title)
     const ordered = paintOrderOf(siblings)
 
@@ -4960,12 +5071,13 @@ function buildGroupItem(mark: CompiledMark, ctx: EvalContext, src: GroupSource):
       ...(markClip(mark, ctx) ? { markClip: true } : {}),
     } as unknown as SceneGroup
     // (an instance the aborted pass never reached has no operators, so no scales)
-    if (mark.scales?.length && order <= 0) group.__scales = snapshotScales(childScales)
+    if (mark.scales?.length && (order < 0 || (order === 0 && !ctx.abort.cut!.signals))) group.__scales = snapshotScales(childScales)
     if (scoped && scopeId !== undefined) {
       group.scopeSignals = { id: scopeId, defs: mark.signalDefs!, values: scoped.values, hasContent: (mark.marks?.length ?? 0) + (mark.axes?.length ?? 0) + (mark.legends?.length ?? 0) > 0 || mark.groupTitle !== undefined }
       // the scales this scope declares, for the handlers of its signals (`scale('x', ...)` resolves through the scope chain)
       if (childScales.size) Object.defineProperty(group, '__scaleFns', { value: childScales, enumerable: false })
     }
+    if (outcome !== undefined) outcome.unsettled = scope.unsettled === true
     return group
   } finally {
     restoreScaleFns?.()
@@ -5125,6 +5237,12 @@ function registerGradient(paint: object, ctx: EvalContext): void {
   if (!ctx._defs.some((d) => d.id === def.id)) ctx._defs.push(def)
 }
 
+/** A mark's encode threw: the pass stops there, and the items after the failing one are left unencoded. */
+function failEncode(ctx: EvalContext, e: unknown): void {
+  ctx.encodeAborted = true
+  failPass(ctx, { axis: Infinity, mark: ctx.scope.mark ?? 0 }, e)
+}
+
 function resolveEncodeSet(encode: Record<string, EncodeValue | EncodeValue[]>, datum: Row, ctx: EvalContext, marktype: string): SceneItem {
   // (an item an aborted run never reached stays in its mark, bare: vega's scenegraph holds it without geometry or paint)
   if (ctx.encodeAborted) return {}
@@ -5141,8 +5259,7 @@ function resolveEncodeSet(encode: Record<string, EncodeValue | EncodeValue[]>, d
     try {
       definedValue = resolveEncodeProperty(plan.definedSpec, datum, ctx, binding)
     } catch (e) {
-      reportEvalError(ctx, e)
-      ctx.encodeAborted = true
+      failEncode(ctx, e)
       return {}
     }
   }
@@ -5188,7 +5305,6 @@ function resolveEncodeSet(encode: Record<string, EncodeValue | EncodeValue[]>, d
       }
     }
   } catch (e) {
-    ctx.encodeAborted = true
     // vega evaluates the channels in spec order, so the failing item keeps exactly the channels
     // BEFORE the failing one (the two passes above group plain values ahead of signals), and the error
     // it logs is that channel's: the first to fail in spec order, which is not always the pass's.
@@ -5204,7 +5320,7 @@ function resolveEncodeSet(encode: Record<string, EncodeValue | EncodeValue[]>, d
         break
       }
     }
-    reportEvalError(ctx, first)
+    failEncode(ctx, first)
     return partial
   }
   // a gradient object as a paint (`{gradient: 'linear', stops: [...]}`): its definition joins the scene's defs
@@ -5489,6 +5605,29 @@ function resolveLegendValues(legend: CompiledLegend, ctx: EvalContext): unknown[
   return Array.isArray(resolved) ? resolved : undefined
 }
 
+/**
+ * Whether the grid layout of a symbol legend's entries ran before the pass stopped at `cut`: its operator is ranked after the
+ * instances that make the entries, so it did where none of them is at or after the cut.
+ */
+function entryGridRan(scopePath: readonly number[], slot: number, cut: readonly number[]): boolean {
+  const own = [...scopePath, slot]
+  if (cut.length > own.length && own.every((v, i) => cut[i] === v)) return false
+  return compareInstances([...own, 0], cut) < 0
+}
+
+/** The legends of a scope that are symbol legends (the ones whose entries are made in instances of their own). */
+function symbolLegendsOf(legends: readonly CompiledLegend[] | undefined, ctx: EvalContext): CompiledLegend[] {
+  const out: CompiledLegend[] = []
+  for (const legend of legends ?? []) {
+    const spec = (legend.own ?? NO_PROPS) as Record<string, unknown>
+    const channel = LEGEND_SCALES.find((c) => spec[c])
+    if (channel === undefined) continue
+    const name = String(spec[channel])
+    if (ctx.scales.get(name) !== undefined && legendType(spec, ctx.scaleTypes.get(name) ?? '') === 'symbol') out.push(legend)
+  }
+  return out
+}
+
 function buildLegend(legend: CompiledLegend, ctx: EvalContext, index: number): SceneGroup | null {
   const spec = (legend.own ?? NO_PROPS) as Record<string, unknown>
   const config = (legend.cfg ?? NO_PROPS) as Record<string, unknown>
@@ -5509,12 +5648,32 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext, index: number): S
   if (typeof tickCountRaw === 'string' && scaleType !== 'time' && scaleType !== 'utc') {
     const own = scopeScale(ctx.scope, channels[0]![1])
     const late = own !== undefined && scaleIsLate(own, ctx.scope, ctx.chart)
-    ctx.abort.failures.push({ path: ctx.scope.path, axis: Infinity, legend: index, ...(late ? { late: true } : {}) })
+    failPass(ctx, { axis: Infinity, legend: index, ...(late ? { late: true } : {}) }, new Error('Only time and utc scales accept interval strings.'))
     if (!late) return null
     entriesFailed = true
   }
-  // a pass that stopped below this scope never made the entries of a symbol legend (they are a level further down)
-  if (entriesFailed || (ctx.pendingEntries && legendType(spec, scaleType) === 'symbol')) {
+  // The entries of a symbol legend are made in instances of their own, two levels below the legend's scope: the boxes of all
+  // the entries in the first, a symbol and a label per entry in the next. They are the legend's children there, after the
+  // instances of the scope's groups. A pass that stopped before an instance never made what it holds.
+  const symbols = legendType(spec, scaleType) === 'symbol'
+  const slot = symbols ? ctx.scope.nextChild.n++ : undefined
+  const cut = ctx.abort.cut
+  // (a gradient's labels are ranked after every other operator of the scope: made only where the pass went past them)
+  let lateLabels = false
+  if (legendType(spec, scaleType) === 'gradient' && !tickCountRaw) {
+    // (the default tick count is an expression of the gradient's length, made where the scope first needs it)
+    const length = spec.gradientLength ?? config.gradientLength
+    const key = isSignal(length) ? length.signal : String(length)
+    const seen = (ctx.scope.counts ??= new Set())
+    lateLabels = !seen.has(key)
+    seen.add(key)
+  }
+  const labels: 'none' | undefined = lateLabels && cut !== undefined && compareInstances(ctx.scope.path, cut.path) === 0
+    && !(cut.labels === true && cut.legend !== undefined && index <= cut.legend) ? 'none' : undefined
+  const entries: 'none' | 'boxes' | undefined = slot === undefined || cut === undefined ? undefined
+    : compareInstances([...ctx.scope.path, slot], cut.path) > 0 ? 'none'
+      : compareInstances([...ctx.scope.path, slot, 0], cut.path) > 0 ? 'boxes' : undefined
+  if (entriesFailed) {
     const title = guideScalar(ctx, spec.title)
     const titleStr = title == null ? '' : String(title)
     const items: SceneItem[] = []
@@ -5522,7 +5681,7 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext, index: number): S
     // (the kind of legend it would have been: vega-parser's legendType, decided before any entry is built; a gradient
     // legend still has its gradient item, unencoded)
     const kind = legendType(spec, scaleType)
-    if (entriesFailed && kind === 'gradient') items.push({ _part: 'gradient', _kind: 'rect', _bare: true, x: 0, y: 0, path: 'M0,0h0v0h0Z' } as unknown as SceneItem)
+    if (kind === 'gradient') items.push({ _part: 'gradient', _kind: 'rect', _bare: true, x: 0, y: 0, path: 'M0,0h0v0h0Z' } as unknown as SceneItem)
     return { marktype: 'group', role: 'legend', legendType: kind, _entriesPending: true, x: 0, y: 0, width: 0, height: 0, items } as unknown as SceneGroup
   }
   // the format: a specifier, or a signal holding one (a timeUnit legend writes timeUnitSpecifier(...), which the
@@ -5537,18 +5696,38 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext, index: number): S
   }
   const formatType = guideScalar(ctx, spec.formatType) as string | undefined
   const host = guideHost(ctx)
+  host.stopped = undefined
   const guides = chartGuides(ctx.chart)
-  const built = buildLegendGuide({
-    store: guides.evals > 1 ? (guides.defs ??= new Map()) : undefined, keep: guides.evals > 1,
-    spec, config, encode: (legend.encode ?? NO_PROPS) as Record<string, UserEncode | undefined>,
-    channels, scale: scale as never, scaleType, scaleOf: (name) => ctx.scales.get(name) as never,
-    values: resolveLegendValues({ values: spec.values } as unknown as CompiledLegend, ctx),
-    count: tickCountRaw, minstep: guideScalar(ctx, spec.tickMinStep) as number | undefined,
-    limit: +(guideScalar(ctx, spec.symbolLimit ?? config.symbolLimit) as number),
-    formatSpecifier: specifierOf(spec.format), formatType,
-    locale: locale(undefined), host, style: guideStyles(ctx), raw: !!ctx.rawGuides,
-    ...(ctx.passMemory !== undefined ? { relayout: legendMemory(ctx.passMemory, `l${ctx.scope.path.join('/')}:${index}`) } : {}),
-  })
+  // (an entry's size is read while the entries are listed -- an encode of the symbols or the labels that throws there is the
+  // legend's entries operator failing: vega never makes the legend)
+  let built: ReturnType<typeof buildLegendGuide>
+  try {
+    built = buildLegendGuide({
+      store: guides.evals > 1 ? (guides.defs ??= new Map()) : undefined, keep: guides.evals > 1,
+      spec, config, encode: (legend.encode ?? NO_PROPS) as Record<string, UserEncode | undefined>,
+      channels, scale: scale as never, scaleType, scaleOf: (name) => ctx.scales.get(name) as never,
+      values: resolveLegendValues({ values: spec.values } as unknown as CompiledLegend, ctx),
+      count: tickCountRaw, minstep: guideScalar(ctx, spec.tickMinStep) as number | undefined,
+      limit: +(guideScalar(ctx, spec.symbolLimit ?? config.symbolLimit) as number),
+      formatSpecifier: specifierOf(spec.format), formatType,
+      locale: locale(undefined), host, style: guideStyles(ctx), raw: !!ctx.rawGuides,
+      ...(ctx.passMemory !== undefined ? { relayout: legendMemory(ctx.passMemory, `l${ctx.scope.path.join('/')}:${index}`) } : {}),
+      ...(entries !== undefined ? { entries } : {}),
+      ...(lateLabels ? { lateLabels } : {}),
+      ...(labels !== undefined ? { labels } : {}),
+      ...(ctx.rawGuides && slot !== undefined && cut !== undefined && entryGridRan(ctx.scope.path, slot, cut.path) ? { entryGrid: true } : {}),
+    })
+  } catch (e) {
+    // (an expression of the spec threw while the entries were listed -- an entry's size is read there: the legend's entries
+    // operator fails, and vega never makes the legend)
+    if (!(e instanceof ExpressionFailure)) throw e
+    failPass(ctx, { axis: Infinity, legend: index }, e.error)
+    return null
+  }
+  // (an encode of the entries threw in the instance that made them: the pass stopped there, and not in this scope)
+  const stopped = stoppedOf(host)
+  const inEntries = stopped?.at !== undefined && stopped.at !== 'labels' && slot !== undefined
+  failGuide(ctx, host, { axis: Infinity, legend: index, inside: true, ...(stopped?.at === 'labels' ? { labels: true as const } : {}), ...(inEntries ? { path: [...ctx.scope.path, slot!, ...(stopped!.at === 'entry' ? [] : [stopped!.entryIndex ?? 0])] } : {}) })
   const g = built.group
   const group = {
     marktype: 'group',
@@ -5568,6 +5747,7 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext, index: number): S
     ...(g.strokeWidth !== undefined ? { strokeWidth: g.strokeWidth } : {}),
     ...(cursorOf(g) !== undefined ? { cursor: cursorOf(g) } : {}),
     ...(g.href != null ? { href: g.href } : {}),
+    ...(built.madeMarks !== undefined ? { madeMarks: built.madeMarks, _entriesPending: true } : {}),
   } as unknown as SceneGroup
   vetGuideLinks(group, ctx)
   return group
@@ -5584,7 +5764,7 @@ function guideHost(ctx: EvalContext): GuideHost {
   return host
 }
 function makeGuideHost(ctx: EvalContext): GuideHost {
-  return {
+  const host: GuideHost = {
     entry: (spec, datum) => resolveEncodeProperty(spec as EncodeValue | EncodeValue[], datum, ctx),
     fastCache: new Map(), runCache: new Map(),
     entryScale: (name) => {
@@ -5605,11 +5785,15 @@ function makeGuideHost(ctx: EvalContext): GuideHost {
       }
       return { fn: s as (v: unknown) => unknown, timeLike, call, bandwidth: () => (typeof s.bandwidth === 'function' ? s.bandwidth() : 0) }
     },
-    expr: (code) => ctx.runtime.expr(code)({}, ctx.signalParams),
-    exprDatum: (code, datum) => ctx.runtime.expr(code)(datum, ctx.signalParams),
+    expr: (code) => { try { return ctx.runtime.expr(code)({}, ctx.signalParams) } catch (e) { refuseUnrecoverable(e); throw new ExpressionFailure(e) } },
+    exprDatum: (code, datum) => { try { return ctx.runtime.expr(code)(datum, ctx.signalParams) } catch (e) { refuseUnrecoverable(e); throw new ExpressionFailure(e) } },
     viewSignal: (name) => viewSignal(ctx, name),
     scale: (name) => ctx.scales.get(name) as never,
-    report: (e) => reportEvalError(ctx, e),
+    note: (e) => reportEvalError(ctx, e instanceof ExpressionFailure ? e.error : e),
+    report: (e) => {
+      refuseUnrecoverable(e)
+      host.stopped ??= { error: e instanceof ExpressionFailure ? e.error : e, ...(host.at !== undefined ? { at: host.at, entryIndex: host.entryIndex } : {}) }
+    },
     gradient: (name, vertical) => {
       // vega-functions gradient(): stops from the scale's ticks (see scaleGradientStops); the definition is the
       // renderer's, content-addressed by direction and stops
@@ -5621,6 +5805,20 @@ function makeGuideHost(ctx: EvalContext): GuideHost {
     groupBox: (geo, w, h) => groupBackground(geo, w, h),
     warn: (msg) => ctx.logger.warn(msg),
   }
+  return host
+}
+
+/**
+ * A guide's encode threw (the host stopped): the pass stops at that guide, which keeps what it had made. Recorded against the
+ * point the guide's operators are ranked at (`point`), and the host is free for the guides of a pass that goes on.
+ */
+const stoppedOf = (host: GuideHost): GuideHost['stopped'] => host.stopped
+function failGuide(ctx: EvalContext, host: GuideHost, point: Omit<AbortPoint, 'path'> & { path?: number[] }): boolean {
+  const stopped = host.stopped
+  if (stopped === undefined) return false
+  host.stopped = undefined
+  failPass(ctx, point, stopped.error)
+  return true
 }
 
 /** `config.style` (and `config.lineBreak`) as the guide marks' defaults. */
@@ -5696,12 +5894,6 @@ function rootScope(chart: CompiledChart): GuideScope {
   st.evals++
   return { path: [], nextChild: { n: 0 }, scales: chart.scales, data: chart.data }
 }
-
-/**
- * The entries of a symbol legend are a scope two levels below the one the legend is in: a pass that stopped at depth
- * `stopped` never made them where that is not above it.
- */
-const entriesPending = (depth: number, stopped: number): boolean => depth + 2 > stopped
 
 /** Instances are built level by level: the shallower first, those of one level in the order their parents made them. */
 function compareInstances(a: readonly number[], b: readonly number[]): number {
@@ -5871,13 +6063,13 @@ function frozenReadsOf(chart: CompiledChart): Map<string, string[]> {
  * anything of the scopes built after it (recorded here, applied by the build's second pass).
  */
 function axisTicksFailed(axis: CompiledAxis, ctx: EvalContext, e: unknown, index: number): SceneGroup | null {
-  reportEvalError(ctx, e)
+  refuseUnrecoverable(e)
   const own = scopeScale(ctx.scope, axis.scale)
   const late = own !== undefined && scaleIsLate(own, ctx.scope, ctx.chart)
   if (late && (axis.domain !== false || (axis.title !== undefined && axis.title !== null))) {
     throw new Error(`[aster] the ticks of the axis over scale "${axis.scale}" failed (${e instanceof Error ? e.message : String(e)}); vega cannot serialize the half-built axis either`)
   }
-  ctx.abort.failures.push({ path: ctx.scope.path, axis: index, ...(late ? { late: true } : {}) })
+  failPass(ctx, { axis: index, ...(late ? { late: true } : {}) }, e)
   if (!late) return null
   // (the half-made axis: its group item, nothing in it -- not even the caption an encoded axis carries)
   return { marktype: 'group', role: 'axis', x: 0, y: 0, width: 0, height: 0, items: [], parts: [] } as unknown as SceneGroup
@@ -5937,11 +6129,14 @@ function buildAxis(axis: CompiledAxis, ctx: EvalContext, index: number): SceneGr
   meterItems(rows.length, 'axis ticks')
 
   const guides = chartGuides(ctx.chart)
+  const host = guideHost(ctx)
+  host.stopped = undefined
   const built = buildAxisGuide({
     store: guides.evals > 1 ? (guides.defs ??= new Map()) : undefined, keep: guides.evals > 1,
     spec: own, cfg, scale: axis.scale, orient, orientSignal: axis.orientSignal !== undefined, encode: (axis.encode ?? NO_PROPS) as Record<string, UserEncode | undefined>,
-    ticks: rows, distinctTicks: !axisValues(axis, ctx) && DISTINCT_TICK_SCALES.has(ctx.scaleTypes.get(axis.scale) ?? ''), width: ctx.width, height: ctx.height, raw: !!ctx.rawGuides, host: guideHost(ctx), style: guideStyles(ctx),
+    ticks: rows, distinctTicks: !axisValues(axis, ctx) && DISTINCT_TICK_SCALES.has(ctx.scaleTypes.get(axis.scale) ?? ''), width: ctx.width, height: ctx.height, raw: !!ctx.rawGuides, host, style: guideStyles(ctx),
   })
+  failGuide(ctx, host, { axis: index, inside: true })
   const knownOrient = orient === 'top' || orient === 'bottom' || orient === 'left' || orient === 'right'
   const g = built.group
   const href = g.href
