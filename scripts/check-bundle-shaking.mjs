@@ -92,13 +92,13 @@ const PATTERNS = [
     ],
     // evaluating once needs no incremental engine: the bundle is without it (it is core's, not the entry's, when something re-evaluates)
     modules: (m) => [
-      [!hasModule(m.contributing, 'core', 'incremental-engine') && !hasModule(m.contributing, 'core', 'incremental-register'), 'the incremental engine is not in the bundle of a renderSpec app'],
+      [!hasModule(m.contributing, 'core', 'incremental-engine'), 'the incremental engine is not in the bundle of a renderSpec app'],
       [hasModule(m.contributing, 'core', 'render') && hasModule(m.contributing, 'core', 'runtime'), 'and the module check sees the modules that are (the runtime and the renderer)'],
     ],
   },
   {
     name: 'core-evaluate-incremental',
-    why: "import { evaluateChart } from '@aster/core': a second evaluation with a dataPulse is incremental (the engine is registered by the import, whatever else the app imports) and is what a fresh evaluation makes",
+    why: "import { evaluateChart } from '@aster/core': a second evaluation with a dataPulse is incremental (evaluateChart is handed the engine, whatever else the app imports or the bundler assumes) and is what a fresh evaluation makes",
     imports: `import { evaluateChart, compileChart, renderSceneToSvg } from '@aster/core'`,
     body: `
       const spec = { width: 100, height: 60, data: [{ name: 't', transform: [{ type: 'filter', expr: 'datum.v >= 0' }, { type: 'aggregate', groupby: ['g'], fields: ['v'], ops: ['sum'], as: ['s'] }] }],
@@ -118,7 +118,7 @@ const PATTERNS = [
       [r.kept === true, 'the rect of the group that did not change (b) is the item of the first evaluation (the pulse was taken, not re-derived)'],
     ],
     modules: (m) => [
-      [hasModule(m.contributing, 'core', 'incremental-engine') && hasModule(m.contributing, 'core', 'incremental-register'), 'the engine and its registration are in the bundle of an app that imports evaluateChart'],
+      [hasModule(m.contributing, 'core', 'incremental-engine'), 'the engine is in the bundle of an app that imports evaluateChart'],
     ],
   },
   {

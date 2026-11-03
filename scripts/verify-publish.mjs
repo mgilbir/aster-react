@@ -385,8 +385,8 @@ console.log('lite ok')
   }
   console.log('[verify-publish] <SvgChart> from the installed tarballs: bundled and executed without the canvas renderer; hit and signals only with interaction')
   // 8c) The incremental engine from the INSTALLED tarballs. An app that only renders once (`renderSpec`) must not read it; an app that
-  //     evaluates a chart again with a `dataPulse` (`evaluateChart`) must carry it, registered, whatever else it imports, and be
-  //     answered with the picture a fresh evaluation makes. (Tree-shaking must neither pull it in nor shake its registration out.)
+  //     evaluates a chart again with a `dataPulse` (`evaluateChart`) must carry it, handed to the evaluation, whatever else it imports, and be
+  //     answered with the picture a fresh evaluation makes. (Tree-shaking must neither pull it in nor shake it out.)
   const engineApps = {
     once: `
 import assert from 'node:assert'
@@ -423,10 +423,10 @@ console.log('reeval ok')
     try {
       run(process.execPath, [`${name}.bundle.mjs`], { cwd: project, stdio: ['ignore', 'inherit', 'inherit'] })
     } catch {
-      fail(`the ${name} bundle built from the installed tarballs does not run (the engine registration was shaken out? see above)`)
+      fail(`the ${name} bundle built from the installed tarballs does not run (see above)`)
     }
   }
-  console.log('[verify-publish] the incremental engine from the installed tarballs: not in a renderSpec bundle, registered in an evaluateChart one')
+  console.log('[verify-publish] the incremental engine from the installed tarballs: not in a renderSpec bundle, handed to an evaluateChart one')
   console.log('[verify-publish] PASS — packed with pnpm, installed with npm, every export imports and typechecks, Vega and Vega-Lite render, a tree-shaken bundle keeps its side effects')
 } finally {
   rmSync(tmp, { recursive: true, force: true })
