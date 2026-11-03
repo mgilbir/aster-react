@@ -14,7 +14,7 @@ import { flattenLength } from './transform-basic.js'
 import { checkRowCount } from './limits.js'
 import type { CompiledTransform, SortSpec } from './types.js'
 import {
-  applyIdentifier, applyOne, DATA_DEPENDENT_EXPR, idField, pulseBaseLength, withCarry,
+  applyFresh, applyIdentifier, applyOne, DATA_DEPENDENT_EXPR, idField, pulseBaseLength, withCarry,
   type DatasetState, type IncrementalEngine, type ProjectionRegistry, type StepPulse, type StepTransformContext,
 } from './runtime.js'
 
@@ -143,7 +143,7 @@ function applyOneWithState(
     carryOrder('filter', rows, out)
     return { rows: out, state: pass }
   }
-  const out = t.type === 'identifier' ? applyIdentifier(rows, t, tctx, sourceName, carryByAlignment(rows, previous, idField(t))) : applyOne(rows, t, tctx, sourceName)
+  const out = applyFresh(rows, t, tctx, sourceName, previous)
   return keepsStepState(String(t.type)) ? { rows: out, state: deriveStepState(t, rows, out, tctx) } : { rows: out }
 }
 

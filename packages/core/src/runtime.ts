@@ -2295,7 +2295,7 @@ export function applyOne(rows: Row[], t: CompiledTransform, tctx: StepTransformC
 export const idField = (t: CompiledTransform): string => (t as { as?: string }).as as string
 
 /** One transform from scratch, the numbers an `identifier` had in `previous` carried (the evaluation that keeps no state: no state to leave). */
-function applyFresh(rows: Row[], t: CompiledTransform, tctx: StepTransformContext, sourceName: string, previous?: Row[]): Row[] {
+export function applyFresh(rows: Row[], t: CompiledTransform, tctx: StepTransformContext, sourceName: string, previous?: Row[]): Row[] {
   return t.type === 'identifier' ? applyIdentifier(rows, t, tctx, sourceName, carryByAlignment(rows, previous, idField(t))) : applyOne(rows, t, tctx, sourceName)
 }
 
