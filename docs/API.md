@@ -66,7 +66,7 @@ dataflow does: an expression that throws while a chart is evaluated (a condition
 filter or formula, a sort, a scale that cannot be built) is logged and the render carries on with what it has. See
 `docs/ERRORS.md` for exactly what survives each failure.
 
-`limits` are described in `docs/LIMITS.md`, including which entry point enforces which budget.
+`limits` are described in `docs/LIMITS.md`, including which entry point enforces which budget. They are best-effort protection: a killable worker is the hard guarantee for untrusted specs. A few built-in ceilings (`HARD_CAPS`, `HARD_MAX_SPEC_DEPTH`) hold even when no `limits` are given; they throw `AsterLimitError` and a matching limit replaces them.
 
 `compileChart(spec)` produces the `CompiledChart` IR; `evaluateChart(chart, input)` resolves data/scales/encodes into
 a `SceneRoot`; `renderSceneToSvg(scene)` serializes it; `getChartInfo(spec, input)` returns the size, padding and

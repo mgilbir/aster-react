@@ -124,6 +124,9 @@ import { fileURLToPath } from 'node:url'
 // its events on): geo marginal 16.3 (16.254; +0.9 over 15.4, none of it one piece: the antimeridian pass-through alone is 0.07).
 // The ARIA of guides and marks over the parameter space (the root group item's channels, the mark roles, the config lookup),
 // measured (kB gzip): core 141.0 (+0.2 over main's 140.8; ceiling 141.5); the other rows stay inside their ceilings.
+// Built-in ceilings (HARD_CAPS, the spec depth walk, the no-limits scope, the bounded pluck table, the adjacent-quantifier regex
+// rule) measured: core 141.7 (+0.7), useChart 148.7, Chart 189.6, SvgChart 166.9, SvgChart + interaction 184.2, Chart + VL 289.9;
+// the marginal rows did not move. The ceilings follow to measured + 0.5.
 // Size recovered from the existing code (perf/core-size; gzip bytes, same bundles): core 144479 -> 143481 (-998), useChart 151396 -> 150445,
 // Chart 193288 -> 192343, SvgChart 170046 -> 169127, SvgChart + interaction 187811 -> 186862, Chart + VL 295948 -> 295012. The ceilings follow
 // them down (core 140.1, useChart 146.9, Chart 187.8, SvgChart 165.2, SvgChart + interaction 182.5, Chart + VL 288.1, hit 6.4, signals 13.9,

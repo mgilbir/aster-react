@@ -10,7 +10,7 @@ import { compileExprTransform, contourQuantize } from './transform.js'
 import { densityGrid, placeContours, type RasterGrid } from './raster-grid.js'
 import { accessorOf as fieldAccessor, densitySettings, type DensitySettings, type Get } from './raster-params.js'
 import type { Row, TransformContext } from './transform.js'
-import { boundedCount } from './limits.js'
+import { boundedCount, ceiling } from './limits.js'
 import { geoRegistry, requireGeo } from './registry.js'
 import { parseExpression, type AstNode } from './expr-parser.js'
 import { rgbConvert, type Rgb } from './color.js'
@@ -81,6 +81,7 @@ export function isocontourRows(rows: Row[], t: Params, ctx: TransformContext): R
   if (!contourRun) requireGeo() // throws: the geo addon is not loaded
 
   // thresholds: given (a list, empty included), or `levels` quantized per grid (independent) or over the grids' maxima (shared)
+  ceiling('items', (t.levels as number) || 10, 'isocontour levels')
   const quantize = contourQuantize((t.levels as number) || 10, !!t.nice, t.zero !== false)
   let tz = t.thresholds as number[] | ((values: Float32Array) => number[]) | undefined
   if (!tz) tz = t.resolve !== 'shared' ? quantize : quantize(rows.map((r) => max((field(r) as RasterGrid).values) as number))
@@ -186,6 +187,7 @@ function paintGrid(grid: RasterGrid, pixel: Pixel, color: PixelParam<Rgb>, opaci
   const y2 = grid.y2 || grid.height
   const w = x2 - x1
   const h = y2 - y1
+  ceiling('cells', w * h, 'heatmap pixels')
   boundedCount(w * h, 'heatmap pixels')
   const bytes = new Uint8ClampedArray(4 * w * h)
   const cells = grid.values

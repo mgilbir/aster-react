@@ -22,6 +22,7 @@ import { plain, plainList, plainRecord, resolveDomain, signalValue, type ScaleCo
 import type { CompiledScale } from './types.js'
 import { vegaDefaultConfig } from './config-defaults.js'
 import { error as raise, expT, hasOwnProperty, isArray, isFunction, isObject, isString, logT, peek, powT, symexpT, symlogT } from './util.js'
+import { ceiling } from './limits.js'
 
 export type { ScaleContext } from './scale-domain.js'
 
@@ -289,12 +290,19 @@ function schemeRange(type: string, st: Settings, size: number): unknown {
   const classes =
     type === vs.Threshold ? size + 1
     : type === vs.BinOrdinal ? size - 1
-    : type === vs.Quantile || type === vs.Quantize ? +(st.schemeCount as number) || DEFAULT_CLASSES
+    : type === vs.Quantile || type === vs.Quantize ? schemeClasses(st.schemeCount)
     : size
 
   if (vs.isInterpolating(type)) return trimmed(scheme, extent, st.reverse)
   if (isFunction(scheme)) return vs.quantizeInterpolator(trimmed(scheme, extent) as SchemeFn, classes)
   return type === vs.Ordinal ? scheme : (scheme as unknown[]).slice(0, classes)
+}
+
+/** The `count` of a quantile / quantize colour scheme: it comes from the spec and sizes the sampled array. */
+function schemeClasses(count: unknown): number {
+  const n = +(count as number) || DEFAULT_CLASSES
+  ceiling('items', n, 'colour scheme count')
+  return n
 }
 
 /** A ramp restricted to the sub-range of [0, 1] the spec gives (and reversed when asked); a colour list is untouched. */
@@ -306,6 +314,8 @@ function trimmed(scheme: unknown, extent: number[] | undefined, reverse?: unknow
 
 /** The tick values the axis runtime draws for a scale: for `count` ticks, else the scale's default (none for a range of under two). */
 export function scaleTicks(s: Scale, count?: number): unknown[] {
+  // the count comes from the spec: a tick count past the ceiling is refused before ticks are made (it sizes the array)
+  if (typeof count === 'number') ceiling('items', count, 'tickCount')
   if (count != null) return vs.tickValues(s, count)
   return (s.range() as unknown[]).length >= 2 ? vs.tickValues(s, undefined) : []
 }

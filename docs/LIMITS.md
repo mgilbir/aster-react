@@ -4,6 +4,55 @@ Data and specs are untrusted input. `SpecLimits` are the budgets; `loadSpecData`
 takes a URL policy; image marks and `href` links share that policy. Every limit is
 optional: a dimension you do not set is unbounded. There are no default numbers for
 `SpecLimits` (the values below are examples, see "Recommended starting points").
+
+**What this protects, and what it does not.** There are two layers.
+
+- `limits` are **best-effort protection**. They are cooperative: counters and a wall clock
+  checked at the sites that spend (see "How the budgets are enforced"). They turn the
+  common abuse of a spec into a friendly, typed `AsterLimitError`, but a single
+  synchronous native call cannot be interrupted (a regular expression, an engine
+  allocation), and nothing in-process can promise otherwise.
+- **The killable worker is the hard guarantee** for untrusted specs: render in a
+  `worker_threads` Worker or a child process with a memory cap and a deadline, and
+  `terminate()` / kill it when the deadline passes. Whatever `limits` miss, the kill covers.
+- A small set of **built-in ceilings** (next section) holds even when no `limits` are given.
+  They exist for one reason: a few inputs let a spec of a few hundred bytes (or a few
+  hundred KB) exhaust the process, and "every limit is optional" should not mean a fatal
+  out-of-memory for someone who never wrote `limits`. They are not a budget for charts.
+
+## Built-in ceilings (active without `limits`)
+
+Each ceiling bounds an amount that the SPEC controls and that is expensive in memory
+(tens to hundreds of MB, or a fatal out-of-memory) long before the chart is large. It throws
+the usual `AsterLimitError` (`code: 'ASTER_LIMIT'`), naming the amount, the ceiling and the limit
+that raises it, for example
+`[aster] limit exceeded: range 50000000 > 1000000 (built-in ceiling that applies even without limits; raise it with limits.maxRows)`.
+Giving the matching limit replaces the ceiling by your number (your budget governs); giving
+unrelated limits (`limits: {}`, `{ maxStringLength }`) leaves it in force. They are exported as
+`HARD_CAPS` and `HARD_MAX_SPEC_DEPTH` from `@aster/core`.
+
+| Ceiling | Value | Where it applies | Replaced by | Largest seen in the gallery / corpus / test suites |
+|---|---|---|---|---|
+| `rows` | 1 000 000 | rows one parameter-sized generator makes: the `sequence` transform and `range`, expression `sequence(...)`, `quantile` and `kde`/`density` step counts | `maxRows`, `maxGeneratedRows` | 5 000 (`sequence` in the gallery: 1 000; `range`: 5 000; `density` steps 200) |
+| `cells` | 10 000 000 | typed-array grids sized by spec parameters: `heatmap` pixels, `kde2d`/contour density grids, the label bitmap | `maxRows`, `maxGeneratedRows` | 58 200 (a `kde2d` grid), 2 448 heatmap pixels |
+| `items` | 100 000 | counts a spec sets: `tickCount` of axes and legends (and so the ticks made), axis ticks drawn, trellis `layout.columns`, `contour` / `isocontour` `levels`, a quantized colour scheme `count` | `maxItems` | 165 axis ticks, 30 facet columns, 40 thresholds |
+| `bytes` | 1 000 000 | one string an expression builtin builds: `pad`, number-format width | `maxStringLength`, `maxGeneratedBytes` | 5 000 (`pad`), 982 (format width) |
+| `coords` | 2 000 000 | positions one topojson decode produces (an arc referenced by many geometries counts every time) | `maxRows`, `maxGeneratedRows` | 101 000 (the gallery's largest map: 55 713) |
+| spec depth | 1 000 (`HARD_MAX_SPEC_DEPTH`) | nesting of the spec object, checked iteratively when it is compiled (`values` data arrays are not walked); a deeper or cyclic spec is an `AsterLimitError` instead of a raw `RangeError` | `maxDepth` can only lower it | 12 |
+| spec size | 5 000 000 objects | objects and arrays visited by that walk (a spec that shares sub-objects can otherwise make it exponential) | none | a few thousand |
+
+How the values were chosen: the largest value each site reaches in the gallery (720 specs), the
+corpus and the test suites is in the last column; every ceiling is 1 to 3 orders of magnitude above
+it. The upper end is set by memory, not by taste: on Node a million generated rows costs about
+150 MB, a 2-million-position topojson decode about 250 MB, and 5 million rows already fails with
+`--max-old-space-size=512`. A real chart does not draw a million marks; a host that does can raise the matching limit.
+
+Not covered by a ceiling, deliberately: input that is large in itself (inline `values`, host `data`,
+loaded files: they are data, not amplification; budget them with `maxRows`, `maxBytes`), and the
+cumulative cost of many sites each just under its ceiling (that is what `maxGeneratedRows`,
+`maxGeneratedBytes` and `maxTimeMs` are for, and for an untrusted spec the worker kill).
+The ceilings guard spec-driven sites only; the lower-level functions (`ticks`, `range`, ...) are
+unchanged, so they still match d3 for any input.
 Passing a `limits` object at all, even `{}`, turns the limits scope on: that enables
 the pre-flight walk with its hard depth ceiling, the regular-expression screen and
 the default image/link URL policy described below.
@@ -110,7 +159,7 @@ that shares the one wall clock:
 | Transforms and row emitters | `sequence`, `fold` (rows x fields), `flatten`, `cross` (n x n), `impute`, `kde`/`quantile`/`regression`/`loess`/`countpattern` row counts, contour grid cells and thresholds, label bitmap, `range`: checked **before** the output is allocated; `aggregate`, `joinaggregate`, `pivot`, `bootstrap`, `stack`, `window`, `loess`, `kde`, `wordcloud`, `pack`, `voronoi`, `cross` with a filter and `indata()` sample the clock **inside** their loops |
 | Encode loop | one item per row: `maxItems` is checked before the mark is encoded; the clock is sampled every 1024 items. Group items are metered the same way |
 | Guides and scales | numeric tick counts, calendar-month tick counts, time-interval ranges, quantize colour samples (all against `maxItems`), facet `columns` |
-| Expression builtins | `sequence` (rows), `pad` and number-format width (`maxStringLength`, cumulative `maxGeneratedBytes`), regex pattern/input length |
+| Expression builtins | `sequence` (rows), `pad` and number-format width (`maxStringLength`, cumulative `maxGeneratedBytes`), regex pattern/input length. The built-in ceilings apply to these even where the matching limit is unset |
 | Expression parser | nesting depth (1000): an `AsterLimitError`, not a stack overflow. Always thrown by the parser; see "A limit error cannot be swallowed" for what happens without a scope |
 | Topojson | decoded coordinates against `maxGeneratedRows` (else `maxRows`) |
 | Serialisation | every generated path `d` is checked as it is written (`maxPathLength`); `maxSvgLength` on the result where the entry point checks it (see the table above) |
@@ -142,6 +191,7 @@ deliberate difference; each applies only where noted.
 | Deviation | Why |
 |---|---|
 | Any budget in `SpecLimits`; rows, items, strings, paths, generated rows/bytes, SVG length and time are refused with `AsterLimitError` | vega renders whatever it is given |
+| Built-in ceilings (previous section): a few spec-controlled amounts are refused above fixed values **even without `limits`**, and a spec nested deeper than 1000 or cyclic is an `AsterLimitError` even without `limits` | a few hundred bytes of spec can otherwise exhaust the process (a fatal out-of-memory, not an error) |
 | Pre-flight depth ceiling: with a `limits` object, spec nesting deeper than `HARD_MAX_SPEC_DEPTH` (1000, exported from `@aster/core`) fails even when `maxDepth` is unset, and a cyclic spec fails (`spec contains a cycle`) | an unbounded walk overflows the stack |
 | `sequence`, `range`, numeric `ticks`, calendar and time-interval ranges, `pad` and number-format width are bounded by the active limits before they allocate | one call can otherwise allocate gigabytes |
 | Expression nesting deeper than 1000 (parser and AST) throws `AsterLimitError` (the parser does so with or without `limits`; see "A limit error cannot be swallowed") | vega throws a raw `RangeError` at a stack-dependent depth |
@@ -177,9 +227,15 @@ supply (`test`, `regexp`, `replace`/`split` with a RegExp or a `/literal/`,
 2. **Length caps**: a pattern over 1024 characters, or an input longer than
    `maxStringLength` (default 10 000), is refused. This bounds linear patterns.
 
+   - three or more **adjacent** unbounded quantifiers over overlapping characters
+     (`a*a*a*b`, `.*.*.*x`, `\d+\d+\d+$`): polynomial backtracking of degree 3 or more, which
+     on the 9 000 characters of a long input ran for over 20 seconds. Two adjacent ones (`\s*.*`,
+     `\d+\.?\d*`) and the trim idiom `^\s*(.*?)\s*$` are not touched; no regular expression in
+     the gallery, the corpus or the test suites has the refused shape.
+
 **This is a heuristic, not a guarantee.** It blocks the known catastrophic
-shapes. It does not prove a pattern safe: polynomial blow-ups such as `a*a*a*b`
-pass, and safe patterns with a repeated group around an unbounded quantifier,
+shapes. It does not prove a pattern safe: polynomial blow-ups whose quantifiers are not
+adjacent, such as `.*a.*a.*a.*b`, pass, and safe patterns with a repeated group around an unbounded quantifier,
 such as `(\d+\.)*\d+`, are refused (rewrite them without the nesting). Syntax
 the screen cannot parse is passed to the RegExp constructor unscreened (its own
 syntax error then surfaces). Without limits nothing is screened (vega parity).
@@ -348,7 +404,9 @@ for every consumer (scales, layout, marks and expressions); from the strongest: 
 Expression `format`, `timeFormat`, `monthFormat`, ... read the **current**
 default locale on every call, so `defaultLocale(...)` after import takes
 effect. Memoised formatters are bounded (512 per table, least-recently-used out)
-so arbitrary specifiers in data cannot grow the process without bound.
+so arbitrary specifiers in data cannot grow the process without bound. The same holds for the
+expression `pluck` accessor table (1024, least-recently-used out): an accessor is a pure function of
+its name, so a dropped one is simply rebuilt.
 
 ## In React and workers
 
@@ -366,6 +424,8 @@ so arbitrary specifiers in data cannot grow the process without bound.
   Suspense loading too.
 - A worker is not a kill switch by itself. To get the hard guarantee described above,
   terminate the Worker you created (`worker.terminate()`) when your own deadline passes.
+- The worker handler serializes the SVG inside the same limits scope as the evaluation (one meter and clock),
+  so `maxPathLength` and the other serialization checks apply there exactly as in `renderSpec`.
 
 ## Recommended starting points
 

@@ -11,7 +11,7 @@
  * and the format layer (`./locale.js`).
  */
 import { currentLocale } from './locale.js'
-import { boundedCount, meterBytes, meterTick, guardedRegExp, checkRegexInput, checkRegexObject } from './limits.js'
+import { boundedCount, ceiling, meterBytes, meterTick, guardedRegExp, checkRegexInput, checkRegexObject } from './limits.js'
 import { bandSpace } from './scale.js'
 import { selectionIdTest, selectionResolve, selectionTest, selectionTuples } from './selections.js'
 import { parseExpressionCached } from './expr-parser.js'
@@ -30,6 +30,7 @@ function numericSequence(start: number, stop?: number, step?: number): number[] 
   // Deviation from d3/vega (safety): under limits the length is bounded BEFORE
   // the allocation (sequence(0, 5e7) would otherwise build a 400 MB array in
   // one uninterruptible call), and the clock is sampled while filling (C9).
+  ceiling('rows', len, 'sequence')
   boundedCount(len, 'sequence', 'rows')
   const out = new Array(len)
   for (let i = 0; i < len; i++) {

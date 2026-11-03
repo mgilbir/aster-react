@@ -489,9 +489,13 @@ export const falsy = /* @__PURE__ */ accessor(() => false, [], 'false')
  * Memoized `field` accessors, keyed by the *stringified* name — upstream
  * memoizes in a plain object, so `pluck(d, 0)` and `pluck(d, '0')` share one
  * accessor. The keys match; the accessor is built from the raw name, whose
- * path-splitting quirks the vectors pin.
+ * path-splitting quirks the vectors pin. The names come from a spec or its data,
+ * so the table keeps only the most recently used {@link PLUCK_CACHE_MAX} (an
+ * accessor is a pure function of its name: a dropped one is simply rebuilt).
  */
 const pluckAccessors = new Map<string, Accessor>()
+/** Accessors `pluck` remembers; the least recently used is dropped past it. */
+export const PLUCK_CACHE_MAX = 1024
 
 /**
  * Read `name` off a datum, or off every datum of an array — the upstream
@@ -506,12 +510,20 @@ export function pluck(data: unknown, name: unknown): unknown {
 export function memoField(name: unknown): Accessor {
   const key = String(name)
   let f = pluckAccessors.get(key)
-  if (!f) {
+  if (f) {
+    // a Map iterates in insertion order: re-inserting on a hit keeps the oldest entry first
+    pluckAccessors.delete(key)
+    pluckAccessors.set(key, f)
+  } else {
     f = field(name)
     pluckAccessors.set(key, f)
+    if (pluckAccessors.size > PLUCK_CACHE_MAX) pluckAccessors.delete(pluckAccessors.keys().next().value as string)
   }
   return f
 }
+
+/** Accessors `pluck` currently remembers (for tests). @internal */
+export const pluckCacheSize = (): number => pluckAccessors.size
 
 /** vega-scenegraph `shapes.js` `sz`: an item without `size` is a 64px² symbol. */
 export const SYMBOL_DEFAULT_SIZE = 64

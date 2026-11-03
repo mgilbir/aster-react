@@ -13,7 +13,7 @@ import { accessorOf, densitySettings } from './raster-params.js'
 import { PARAM_RULES, checkParams } from './param-rules.js'
 import { tickStep } from './arr.js'
 import { carryOrder, orderOf, placesAt } from './tuple-order.js'
-import { activeMeter, boundedCount } from './limits.js'
+import { activeMeter, boundedCount, ceiling } from './limits.js'
 import { walkPostOrder, walkPreOrder } from './tree-walk.js'
 import { aggregateRows, type AggregateParams, compareOf, fieldOf, joinAggregateRows, pivotRows, sortBySpec } from './transform-agg.js'
 import { windowRows } from './transform-window.js'
@@ -702,6 +702,7 @@ export function contourQuantize(levels: number, nice: boolean, zero: boolean): (
 function contourRows(rows: Row[], t: Record<string, unknown>, ctx: TransformContext): Row[] {
   const values = t.values as ArrayLike<unknown> | undefined
   // The thresholds: given, or `count` levels spanning the values (from zero when the values are given, not estimated).
+  ceiling('items', (t.count as number) || 10, 'contour levels')
   const quantize = contourQuantize((t.count as number) || 10, !!t.nice, !!values)
   const given = t.thresholds as number[] | undefined
 
