@@ -555,13 +555,14 @@ export function clampRange(range: readonly number[], min: number, max: number): 
     : [(lo = Math.min(Math.max(lo, min), max - span)), lo + span]
 }
 
-type TransformFn = (x: number) => number
+/** The maps a scale's domain is seen through to pan and zoom it (log, power, symlog), each with the one that undoes it. */
+export type TransformFn = (x: number) => number
 type Anchor = number | null | undefined
-const expT = (sign: number): TransformFn => (x) => sign * Math.exp(x)
-const logT = (sign: number): TransformFn => (x) => Math.log(sign * x)
-const symlogT = (c: number): TransformFn => (x) => Math.sign(x) * Math.log1p(Math.abs(x / c))
-const symexpT = (c: number): TransformFn => (x) => Math.sign(x) * Math.expm1(Math.abs(x)) * c
-const powT = (exponent: number): TransformFn => (x) => (x < 0 ? -Math.pow(-x, exponent) : Math.pow(x, exponent))
+export const expT = (sign: number): TransformFn => (x) => sign * Math.exp(x)
+export const logT = (sign: number): TransformFn => (x) => Math.log(sign * x)
+export const symlogT = (c: number): TransformFn => (x) => Math.sign(x) * Math.log1p(Math.abs(x / c))
+export const symexpT = (c: number): TransformFn => (x) => Math.sign(x) * Math.expm1(Math.abs(x)) * c
+export const powT = (exponent: number): TransformFn => (x) => (x < 0 ? -Math.pow(-x, exponent) : Math.pow(x, exponent))
 const coerceNumber: TransformFn = (x) => toNumber(x) ?? 0
 const identityT: TransformFn = (x) => x
 
