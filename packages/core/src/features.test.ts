@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { compileChart } from './compiler.js'
-import { evaluateChart } from './runtime.js'
+import { evaluateChart } from './evaluate.js'
 import type { SceneGroup, SceneItem } from './types.js'
 
 const base = { width: 400, height: 300, padding: 5, autosize: 'none' } as const

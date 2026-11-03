@@ -104,6 +104,19 @@ interface Kit {
 
 const freshEncode = (): MarkEncode => ({ enter: { opacity: ZERO }, update: { opacity: ONE }, exit: { opacity: ZERO } })
 
+/**
+ * File the position channels of a rule in the order its encode writes them. Every one of them has its place in the order whether
+ * the axis uses it or not (an entry that is none holds the place), so that an entry of the user's for a channel the axis does not
+ * use takes that place, and an encode that throws has written exactly the channels before it.
+ */
+function inOrder(encode: MarkEncode, order: readonly string[]): void {
+  for (const block of [encode.enter, encode.update]) {
+    const held = order.map((channel) => block[channel])
+    for (const channel of order) delete block[channel]
+    order.forEach((channel, i) => { block[channel] = held[i] })
+  }
+}
+
 /** Both blocks get the same entry (the channel is static, or its entry does not care which block it is in). */
 function both(encode: MarkEncode, channel: string, entry: unknown): void {
   if (entry !== undefined) encode.enter[channel] = encode.update[channel] = entry as Entry
@@ -132,6 +145,7 @@ function ticks(k: Kit, size: unknown): GuideMarkDef {
   both(encode, frame.across, ZERO)
   both(encode, frame.across + '2', reach)
   both(encode, frame.along, tickPosition(k))
+  inOrder(encode, ['y', 'y2', 'x', 'x2'])
   return customize({ type: 'rule', role: 'axis-tick', encode, interactive: false }, k.user.ticks)
 }
 
@@ -176,6 +190,7 @@ function grid(k: Kit): GuideMarkDef {
   both(encode, frame.along, tickPosition(k))
   both(encode, frame.across, start)
   both(encode, frame.across + '2', end)
+  inOrder(encode, ['x', 'y', 'x2', 'y2'])
   return customize({ type: 'rule', role: 'axis-grid', encode, interactive: false }, k.user.grid)
 }
 
@@ -188,6 +203,7 @@ function domain(k: Kit): GuideMarkDef {
   both(encode, frame.along, { scale, range: 0 })
   both(encode, frame.along + '2', { scale, range: 1 })
   both(encode, frame.across, ZERO)
+  inOrder(encode, ['x', 'x2', 'y', 'y2'])
   return customize({ type: 'rule', role: 'axis-domain', encode, interactive: false }, k.user.domain)
 }
 
@@ -221,8 +237,8 @@ function labels(k: Kit, size: unknown): GuideMarkDef {
   const nudging = flushing && !!flushDistance
 
   const enter: Block = { opacity: ZERO }
-  enter[frame.along] = position
-  enter[frame.across] = distance
+  enter.x = frame.horizontal ? position : distance
+  enter.y = frame.horizontal ? distance : position
   const update: Block = { opacity: ONE, text: { field: 'label' } as EncodeValue, x: enter.x, y: enter.y, align, baseline }
   const encode: MarkEncode = { enter, update, exit: { opacity: ZERO, x: enter.x, y: enter.y } }
   // only labels whose alignment the spec leaves alone are shifted
@@ -257,11 +273,14 @@ function title(k: Kit): GuideMarkDef {
   const encode: MarkEncode = { enter, update, exit: { opacity: ZERO } }
 
   // along the axis the title sits at its anchor on the scale's range
-  update[frame.along] = (s: EntryScope) => {
+  const alongTitle = (s: EntryScope): number => {
     const sc = s.host.scale(scale)
     const range = (sc ? sc.range() : []) as number[]
     return lerp(range, s.item.anchor === 'start' ? 0 : s.item.anchor === 'end' ? 1 : 0.5)
   }
+  // (both positions have their place; only the one along the axis has an entry)
+  update.x = frame.horizontal ? alongTitle : undefined
+  update.y = frame.horizontal ? undefined : alongTitle
   // a title beside a vertical axis is turned to read along it, facing outward
   enter.angle = frame.horizontal ? ZERO : ({ value: frame.facing * 90 } as EncodeValue)
   enter.baseline = frame.horizontal ? ({ value: k.orient === 'top' ? 'bottom' : 'top' } as EncodeValue) : ({ value: 'bottom' } as EncodeValue)
@@ -499,7 +518,11 @@ export function buildAxis(inp: AxisBuildInput): AxisBuilt {
   const boxOf = (it: SceneItem): Bounds => boundLeaf(new Bounds(), it)
   // the grid, the ticks and the labels are keyed by value over the same tuples: one join serves all three
   let joined: Row[] | undefined
+  // (the parts made: an encode that throws stops the pass, and the marks of the parts after the one it failed in are never made)
+  const made: PartName[] = []
   for (const { part, def, onTicks } of defs.parts) {
+    if (host.stopped !== undefined) break
+    made.push(part)
     let rows: Row[] = onTicks ? inp.ticks : [datum]
     if (part === 'grid' || part === 'tick' || part === 'label') {
       joined ??= inp.distinctTicks ? inp.ticks : joinByValue(inp.ticks)
@@ -537,7 +560,7 @@ export function buildAxis(inp: AxisBuildInput): AxisBuilt {
       if (r.y2 != null) r.y2 = (r.y2 as number) + gy
     }
   }
-  return { leaves, parts: defs.parts.map((p) => p.part), partMeta, group, bounds, datum }
+  return { leaves, parts: made, partMeta, group, bounds, datum }
 }
 
 /**

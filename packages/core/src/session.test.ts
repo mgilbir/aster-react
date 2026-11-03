@@ -130,7 +130,7 @@ describe('session explicit hints given together', () => {
 
   it('keeps dataChanges for one dataset when dataPulse names another', async () => {
     const { compileChart } = await import('./compiler.js')
-    const { evaluateChart } = await import('./runtime.js')
+    const { evaluateChart } = await import('./evaluate.js')
     const t2 = [{ g: 'A', x: 1 }, { g: 'B', x: 40 }]
     const u2 = [...u1, { v: 3 }]
     const session = createChartSession()
@@ -146,7 +146,7 @@ describe('session explicit hints given together', () => {
 
   it('keeps changedDatasets named by the host when dataPulse is also given', async () => {
     const { compileChart } = await import('./compiler.js')
-    const { evaluateChart } = await import('./runtime.js')
+    const { evaluateChart } = await import('./evaluate.js')
     const t2 = [{ g: 'A', x: 1 }, { g: 'B', x: 40 }, { g: 'B', x: 1 }]
     const u2 = [...u1, { v: 3 }]
     const session = createChartSession()

@@ -79,7 +79,8 @@ export function gradientDefOf(g: GradientPaint): SceneDef {
   const given = typeof g.id === 'string' && g.id !== ''
   const def: SceneDef = {
     id: '',
-    colorStops: g.stops.map((st) => ({ offset: +st.offset, color: String(st.color) })),
+    // (a stop that has no offset or no colour has none to write: the attribute is left out, as vega's writer leaves out an undefined one)
+    colorStops: g.stops.map((st) => ({ offset: (st.offset == null ? st.offset : +st.offset) as number, color: (st.color == null ? st.color : String(st.color)) as string })),
     kind: radial ? 'radial' : 'linear',
   }
   const keys = radial ? (['x1', 'y1', 'r1', 'x2', 'y2', 'r2'] as const) : (['x1', 'y1', 'x2', 'y2'] as const)

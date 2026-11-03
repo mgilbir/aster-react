@@ -327,9 +327,27 @@ export interface LegendBuildInput {
   raw: boolean
   /** The view makes a second pass (fit): what the first left of this legend, see `buildLegend`. */
   relayout?: { was: string | undefined; note(state: string): void }
+  /**
+   * How much of a symbol legend's entries the pass made: none (the instance that makes them is past the point the pass stopped
+   * at), only the entries' boxes, or all of them (the default).
+   */
+  entries?: 'none' | 'boxes'
+  /**
+   * The labels of this gradient are ranked after the scope's other operators (its tick count is an expression no earlier legend of
+   * the scope had made, an operator parsed after the entries that read it).
+   */
+  lateLabels?: boolean
+  /** a gradient's late labels are not made: the pass stopped before them */
+  labels?: 'none'
+  /** the pass stopped, but after the layout of the entries' grid: it ran, though the legend itself was not laid out (`raw`) */
+  entryGrid?: boolean
 }
 
 export interface GuideHost extends EntryHost {
+  /** the stage of the guide being encoded, for the legend's entries (see `EntryHost.stopped`): set by the builder */
+  at?: string
+  /** the entry being made when `at` is a stage of an entry */
+  entryIndex?: number
   /** a signal expression with a datum in scope */
   exprDatum(code: string, datum: unknown): unknown
   /** the fill reference for a gradient over a scale (registers its definition) */
@@ -350,6 +368,8 @@ export interface LegendBuilt {
   group: Rec
   partMeta: Record<string, { name?: string; interactive: boolean }>
   datum: Row
+  /** the marks a pass that stopped in the legend made, when it did not make them all (see `SceneGroup.madeMarks`) */
+  madeMarks?: string[]
 }
 
 /**
@@ -442,15 +462,27 @@ export function buildLegend(inp: LegendBuildInput): LegendBuilt {
 
   // the padding is what the group item has: a missing one makes the layout's arithmetic NaN
   const padding = group.padding as number
-  let titleItem: (SceneItem & Rec) | undefined
+  // The marks the legend's operators make, in the order vega ranks them: a mark whose operator comes after the encode that
+  // threw is never made (see `EntryHost.stopped`).
+  const madeMarks: string[] = []
+  let cutShort = false
+  const stage = (name: string, run: () => void): void => {
+    if (host.stopped !== undefined) { cutShort = true; return }
+    madeMarks.push(name)
+    run()
+  }
+  let titleItem = undefined as (SceneItem & Rec) | undefined
   const title: Placed = { x: 0, y: 0, box: new Bounds() }
-  if (datum.title) {
-    const def = markOf(defs, 'title', () => legendTitle(k))
-    titleItem = make(def, datum, 'title')
-    title.x = titleItem.x as number
-    title.y = titleItem.y as number
-    title.box = boxOf(titleItem)
-    partMeta.title = { name: def.name, interactive: def.interactive }
+  const makeTitle = (): void => {
+    if (!datum.title) return
+    stage('title', () => {
+      const def = markOf(defs, 'title', () => legendTitle(k))
+      titleItem = make(def, datum, 'title')
+      title.x = titleItem.x as number
+      title.y = titleItem.y as number
+      title.box = boxOf(titleItem)
+      partMeta.title = { name: def.name, interactive: def.interactive }
+    })
   }
 
   // the entry group sits at the legend's origin until the layout moves it
@@ -458,8 +490,12 @@ export function buildLegend(inp: LegendBuildInput): LegendBuilt {
   // the strip of a gradient or bands: the title of a gradient legend lines up with it, not with the labels
   let strip = new Bounds()
   const entryLeaves: SceneItem[] = []
+  stage('entry', () => {})
   if (type !== GradientLegend && type !== DiscreteLegend) {
-    entry.box = symbolEntries(inp, k, defs, group, partMeta, entryLeaves, type)
+    // (a symbol legend's entries are instances of their own, ranked after the title)
+    makeTitle()
+    if (inp.entries === 'none') cutShort = true
+    else stage('scope', () => { entry.box = symbolEntries(inp, k, defs, group, partMeta, entryLeaves, type, inp.entries === 'boxes') })
   } else {
     const isGradient = type === GradientLegend
     // the default tick count of a gradient follows its length
@@ -476,15 +512,35 @@ export function buildLegend(inp: LegendBuildInput): LegendBuilt {
     const labelsDef = markOf(defs, 'gradient-labels', () => stripLabels(k))
     // bands and labels are keyed by value: entries with one value make one item
     const keyed = joinByValue(entries as unknown as Row[])
-    const strips = isGradient ? [make(stripDef, datum, 'gradient')] : keyed.map((e) => make(stripDef, e, 'band'))
-    const labels = keyed.map((e) => make(labelsDef, e, 'label'))
-    partMeta[isGradient ? 'gradient' : 'band'] = { name: stripDef.name, interactive: stripDef.interactive }
-    partMeta.label = { name: labelsDef.name, interactive: labelsDef.interactive }
+    let strips: Array<SceneItem & Rec> = []
+    let labels: Array<SceneItem & Rec> = []
+    stage('strip', () => {
+      strips = isGradient ? [make(stripDef, datum, 'gradient')] : keyed.map((e) => make(stripDef, e, 'band'))
+      partMeta[isGradient ? 'gradient' : 'band'] = { name: stripDef.name, interactive: stripDef.interactive }
+    })
+    const makeLabels = (): void => stage('label', () => {
+      labels = keyed.map((e) => make(labelsDef, e, 'label'))
+      partMeta.label = { name: labelsDef.name, interactive: labelsDef.interactive }
+    })
+    // (the entries of a gradient whose tick count follows its length depend on an operator made after them: they and the labels
+    // read from them are ranked after the title, and after the operators of the scope's other guides)
+    const late = isGradient && inp.lateLabels === true
+    if (!late) makeLabels()
+    else {
+      makeTitle()
+      if (inp.labels === 'none') cutShort = true
+      else {
+        host.at = 'labels'
+        makeLabels()
+        host.at = undefined
+      }
+    }
     const labelBox = (labelsDef.overlap && thinOverlaps(labels, keyed, labelsDef.overlap, host, boxOf)) || unionOf(labels)
     strip = unionOf(strips)
     entry.box = new Bounds().union(strip).union(labelBox)
     for (const it of strips) entryLeaves.push(it)
     for (const it of labels) entryLeaves.push(it)
+    if (!late) makeTitle()
   }
 
   if (!inp.raw) {
@@ -542,7 +598,8 @@ export function buildLegend(inp: LegendBuildInput): LegendBuilt {
     }
     // a rectangle (the gradient, a band) is drawn as the path of its box at the origin (it has no rotation)
     if (r._part === 'gradient' || r._part === 'band') {
-      r.path = String(rectItemPath({ ...(it as SceneItem), x: 0, y: 0 }))
+      // (an end the encode did not turn into a size -- it threw before -- is not read: the item is drawn unsized)
+      r.path = String(rectItemPath({ ...(it as SceneItem), x: 0, y: 0, x2: undefined, y2: undefined }))
       delete r.angle
     }
     leaves.push(it)
@@ -551,7 +608,7 @@ export function buildLegend(inp: LegendBuildInput): LegendBuilt {
     titleItem._legendTitle = true
     leaves.push(titleItem)
   }
-  return { leaves, legendType: type, width, height, bounds, group, partMeta, datum }
+  return { leaves, legendType: type, width, height, bounds, group, partMeta, datum, ...(cutShort || host.stopped !== undefined ? { madeMarks } : {}) }
 }
 
 /**
@@ -642,7 +699,7 @@ function drawnSymbol(sym: SceneItem & Rec): SceneItem & Rec {
  * Make the entries of a symbol legend (a box, a symbol and a label each) and lay them out in a grid of `columns` columns. The leaves
  * are appended to `out` in the entry group's frame; returns the bounds of all entries.
  */
-function symbolEntries(inp: LegendBuildInput, k: Kit, defs: LegendDefs, group: Rec, partMeta: LegendBuilt['partMeta'], out: SceneItem[], entriesType: string): Bounds {
+function symbolEntries(inp: LegendBuildInput, k: Kit, defs: LegendDefs, group: Rec, partMeta: LegendBuilt['partMeta'], out: SceneItem[], entriesType: string, boxesOnly: boolean): Bounds {
   const { host, style } = inp
   const { props } = k
   const clipped = !!props.get('clipHeight')
@@ -674,26 +731,49 @@ function symbolEntries(inp: LegendBuildInput, k: Kit, defs: LegendDefs, group: R
     formatSpecifier: inp.formatSpecifier, formatType: inp.formatType, locale: inp.locale, warn: (m) => host.warn(m),
   })
 
-  const made = entries.map((e) => {
+  // The entries are made by three operators each, ranked: the boxes of all the entries (one mark), then for every entry, in its own
+  // instance, its symbol and its label. One that throws stops the pass: what comes after it is never made (see `EntryHost.stopped`).
+  const boxes = entries.map((e, i) => {
+    host.at = 'entry'
+    host.entryIndex = i
     // the entry group's datum is the facet tuple `{index, count}`
-    const g = encodeItem(entryDef, { index: e.index, count: 1 }, group, host, style) as SceneItem & Rec
-    const sym = encodeItem(symbols, e as unknown as Row, group, host, style) as SceneItem & Rec
-    const lbl = encodeItem(labels, e as unknown as Row, group, host, style) as SceneItem & Rec
-    sym._kind = 'symbol'
-    sym._part = 'symbol'
-    lbl._kind = 'text'
-    lbl._part = 'label'
+    return encodeItem(entryDef, { index: e.index, count: 1 }, group, host, style) as SceneItem & Rec
+  })
+  const made = entries.map((e, i) => {
+    const g = boxes[i]!
+    let sym: (SceneItem & Rec) | undefined
+    let lbl: (SceneItem & Rec) | undefined
+    // (a symbol is made if its instance got to run, a label if the symbol's encode did not throw)
+    if (!boxesOnly && host.stopped === undefined) {
+      host.at = 'symbol'
+      host.entryIndex = i
+      sym = encodeItem(symbols, e as unknown as Row, group, host, style) as SceneItem & Rec
+      sym._kind = 'symbol'
+      sym._part = 'symbol'
+      if (host.stopped === undefined) {
+        host.at = 'label'
+        lbl = encodeItem(labels, e as unknown as Row, group, host, style) as SceneItem & Rec
+        lbl._kind = 'text'
+        lbl._part = 'label'
+      }
+    }
     // what an entry holds: its symbol, its label, and its own box when it has a clip or a size
-    const symbolBox = boundLeaf(new Bounds(), symbolForBounds(sym))
-    // a clipped symbol has its bounds cut to the clip region: the entry group's box, whose width is still 0 at that point
-    if (clipped) symbolBox.intersect(new Bounds().set(0, 0, 0, +(g.height as number)))
-    const held = new Bounds().union(symbolBox).union(boundLeaf(new Bounds(), lbl))
+    const held = new Bounds()
+    if (sym !== undefined) {
+      const symbolBox = boundLeaf(new Bounds(), symbolForBounds(sym))
+      // a clipped symbol has its bounds cut to the clip region: the entry group's box, whose width is still 0 at that point
+      if (clipped) symbolBox.intersect(new Bounds().set(0, 0, 0, +(g.height as number)))
+      held.union(symbolBox)
+    }
+    if (lbl !== undefined) held.union(boundLeaf(new Bounds(), lbl))
     const w = g.width as number
     const h = g.height as number
     if ((clipped || w || h) && !g.noBound) held.add(0, 0).add(w || 0, h || 0)
     boundStroke(held, g)
     return { e, g, sym, lbl, held }
   })
+  host.at = undefined
+  host.entryIndex = undefined
 
   // the order the entries are laid out in: down the columns when the legend is vertical and has columns, along the rows otherwise
   const n = made.length
@@ -707,7 +787,9 @@ function symbolEntries(inp: LegendBuildInput, k: Kit, defs: LegendDefs, group: R
   const ncols = columns ? (columns > 0 && Number.isInteger(columns) ? columns : 1) : n
   const resolved = (v: unknown): unknown => (isSignal(v) ? host.expr(v.signal) : v)
   const place: Array<{ x: number; y: number }> = new Array(n)
-  if (inp.raw) {
+  // (the entries' own grid is laid out by an operator of the legend's own: the scope's layout never running does not stop it)
+  const gridded = !inp.raw || inp.entryGrid === true
+  if (!gridded) {
     for (const i of order) place[i] = { x: 0, y: 0 }
   } else {
     const plan = placeGrid(
@@ -742,23 +824,29 @@ function symbolEntries(inp: LegendBuildInput, k: Kit, defs: LegendDefs, group: R
     // the entry's box is as wide as its column and as tall as what it holds
     const frame = host.groupBox({ ...(g as SceneItem) } as SceneItem, inp.raw ? 0 : width, inp.raw ? 0 : held.y2)
     const entryBox = { ...frame.background, _part: 'entry', x: here.x, y: here.y, datum: entryDatum } as SceneItem & Rec
+    // (the marks of the entry's instance the pass made: the symbol's, then the label's)
+    if (lbl === undefined) entryBox._made = sym === undefined ? 0 : 1
     if (k.user.entries?.interactive === true) entryBox._hit = true
     if (g.cursor != null) entryBox.cursor = g.cursor
     const aria = itemAriaOf(g)
     if (aria) entryBox.itemAria = aria
     if (g.href != null) entryBox.href = g.href
     out.push(entryBox)
-    const drawn = drawnSymbol(sym)
-    drawn.x = ((sym.x as number) || 0) + here.x
-    drawn.y = ((sym.y as number) || 0) + here.y
-    if (clipped) drawn._clip = { x: here.x, y: here.y, w: width, h: held.y2, corners: cornersOf(g) }
-    drawn.datum = entryDatum
-    if (k.user.symbols?.interactive === true && drawn.fill === 'transparent') drawn._hit = true
-    out.push(drawn)
-    lbl.datum = entryDatum
-    lbl.x = ((lbl.x as number) || 0) + here.x
-    lbl.y = ((lbl.y as number) || 0) + here.y
-    out.push(lbl)
+    if (sym !== undefined) {
+      const drawn = drawnSymbol(sym)
+      drawn.x = ((sym.x as number) || 0) + here.x
+      drawn.y = ((sym.y as number) || 0) + here.y
+      if (clipped) drawn._clip = { x: here.x, y: here.y, w: width, h: held.y2, corners: cornersOf(g) }
+      drawn.datum = entryDatum
+      if (k.user.symbols?.interactive === true && drawn.fill === 'transparent') drawn._hit = true
+      out.push(drawn)
+    }
+    if (lbl !== undefined) {
+      lbl.datum = entryDatum
+      lbl.x = ((lbl.x as number) || 0) + here.x
+      lbl.y = ((lbl.y as number) || 0) + here.y
+      out.push(lbl)
+    }
   }
   return all
 }

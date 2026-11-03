@@ -70,6 +70,13 @@ describe('verify-publish', () => {
     ['a manifest with no sideEffects field', (d) => editManifest(d, 'vl', (m) => { delete m.sideEffects }), {}, /@aster\/vl packed manifest declares no "sideEffects"/],
     ['a wrong licence', (d) => editManifest(d, 'react', (m) => { m.license = 'MIT' }), {}, /@aster\/react has license MIT/],
     ['a blanket "sideEffects": false that shakes the registrations out of a bundle', (d) => editManifest(d, 'core', (m) => { m.sideEffects = false }), {}, /tree-shaken bundle built from the installed tarballs does not behave/],
+    ['an evaluateChart that is handed no incremental engine', (d) => writeFileSync(join(d, 'packages', 'core', 'dist', 'evaluate.js'),
+      `import { evaluateChartPending } from './runtime.js'\nexport function evaluateChart(chart, input = {}) { const p = evaluateChartPending(undefined, chart, input); p.commit(); return p.scene }\n`),
+    {}, /needs the incremental engine|reeval bundle lacks the incremental engine/],
+    ['an entry that reaches the incremental engine for every app (a renderSpec bundle then carries it)', (d) => {
+      const file = join(d, 'packages', 'core', 'dist', 'index.js')
+      writeFileSync(file, `import { incrementalEngine } from './incremental-engine.js'\nglobalThis.__engine = incrementalEngine\n${readFileSync(file, 'utf8')}`)
+    }, {}, /the once bundle contains the incremental engine/],
     ['a package whose dist was never built', (d) => rmSync(join(d, 'packages', 'react', 'dist'), { recursive: true }), {}, /packages\/react\/dist is missing/],
   ]
   for (const [name, plant, env, message] of faults) {
