@@ -151,14 +151,14 @@ console.log(reports.length, svg.includes('<svg')) // 1 true: the filter failed, 
 
 ## Unsupported and unknown features
 
-These are thrown by the **runtime** while the chart is evaluated, not by `compileChart`. The compiler only checks the
+Most of these are thrown by the **runtime** while the chart is evaluated, not by `compileChart`. The compiler checks the
 shape of the spec (`[aster] compileChart expects a Vega spec object`, `[aster] spec.scales must be an array of scale
-definitions`, `[aster] a scale definition must be an object`); a spec with an unknown transform compiles and then fails
-on the first `renderSpec`/`evaluateChart`. They are plain `Error`s with an `[aster]` prefix and no `code`.
+definitions`, `[aster] a scale definition must be an object`) and, as `vega.parse` does, the names a spec uses: an
+unknown transform `type` is a `SpecParseError` from `compileChart` (so from every host, before any data is read). The
+rows below are plain `Error`s with an `[aster]` prefix and no `code`, thrown on the first `renderSpec`/`evaluateChart`.
 
 | Situation | Error |
 |---|---|
-| unknown transform `type` | `[aster] unsupported transform type "bogus"` |
 | unknown aggregate op | `[aster] unsupported aggregate op "bogus" (vega: AggregateOps[op] is not a function)` |
 | `width` / `height` of the form `{ step }` | `[aster] width/height {step} sizing is not supported yet` |
 | a transform that needs a missing parameter | `[aster] Missing required "<type>" parameter: "<name>"` |

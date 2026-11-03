@@ -58,8 +58,8 @@ export function numberRange(start: number, stop: number, step: number): number[]
 // ---------------------------------------------------------------------------
 
 /** `collect`: a stable sort by the `sort` spec (ties keep input order); the rows as they are without one. */
-export function collectRows(rows: Row[], p: Params): Row[] {
-  return sortBySpec(rows, p.sort) ?? rows
+export function collectRows(rows: Row[], p: Params, leaveOrder = false): Row[] {
+  return sortBySpec(rows, p.sort, leaveOrder) ?? rows
 }
 
 /**

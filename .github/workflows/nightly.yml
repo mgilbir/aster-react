@@ -5,73 +5,127 @@ on:
     - cron: '17 3 * * *'
   workflow_dispatch:
 
+# Read-only: nothing here pushes, comments or publishes.
+permissions:
+  contents: read
+
+# Every check below is its own step and runs even when an earlier one failed (`!cancelled()`), so a failing gate never hides
+# the sweeps, benchmarks and fuzzing that come after it. A check is skipped only when the step it needs (install, Chromium,
+# build, gallery fetch) failed. The last step prints one table of the outcomes and fails the job when any check did not pass
+# (a skipped check counts as not passed): scripts/nightly-summary.mjs. Each step with an `id` is part of that table.
 jobs:
   sweeps:
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     steps:
-      - uses: actions/checkout@v7
-      - uses: pnpm/action-setup@v6
-      - uses: actions/setup-node@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
           node-version: 22
           cache: pnpm
 
-      - run: pnpm install --frozen-lockfile
+      - id: install
+        run: pnpm install --frozen-lockfile
 
-      # The full PR gate list (scripts/gates.mjs), then the heavier nightly-only runs.
-      - name: Install Playwright browsers
+      - id: playwright
+        name: Install Playwright browsers
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: pnpm --filter @aster/conformance exec playwright install --with-deps chromium firefox webkit
 
-      - name: Gates (pnpm check)
+      # The checks below that read built packages (the conformance scripts import @aster/core from dist) need this;
+      # `pnpm check` builds for itself.
+      - id: build
+        name: Build
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: pnpm build
+
+      # The full PR gate list (scripts/gates.mjs), then the heavier nightly-only runs.
+      - id: gates
+        name: Gates (pnpm check)
+        if: ${{ !cancelled() && steps.install.outcome == 'success' && steps.playwright.outcome == 'success' }}
         run: pnpm check
 
       # The official Vega / Vega-Lite example galleries (packages/conformance/gallery/README.md). They are fetched, not committed:
       # the cache is keyed on the manifest (pinned commits + sha256 of every file) and the fetch step verifies every file against
       # it whether or not the cache hit. The gate itself reads only the local cache.
       - name: Restore official gallery cache
+        if: ${{ !cancelled() }}
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: packages/conformance/.gallery
           key: gallery-${{ hashFiles('packages/conformance/gallery/manifest.json') }}
 
-      - name: Fetch official galleries (verified against the manifest)
+      - id: gallery-fetch
+        name: Fetch official galleries (verified against the manifest)
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: pnpm gallery:fetch
 
-      - name: Official gallery conformance (static + React path)
+      - id: gallery
+        name: Official gallery conformance (static + React path)
+        if: ${{ !cancelled() && steps.build.outcome == 'success' && steps.gallery-fetch.outcome == 'success' && steps.playwright.outcome == 'success' }}
         run: pnpm conformance:gallery
 
-      - name: Firefox canvas parity
+      - id: canvas-firefox
+        name: Firefox canvas parity
+        if: ${{ !cancelled() && steps.build.outcome == 'success' && steps.playwright.outcome == 'success' }}
         run: pnpm conformance:canvas -- --browser=firefox
 
-      - name: WebKit canvas parity
+      - id: canvas-webkit
+        name: WebKit canvas parity
+        if: ${{ !cancelled() && steps.build.outcome == 'success' && steps.playwright.outcome == 'success' }}
         run: pnpm conformance:canvas -- --browser=webkit
 
-      - name: Large incremental append benchmark
+      - id: bench-incremental
+        name: Large incremental append benchmark
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: pnpm bench:incremental -- --points=100000 --reps=40
 
-      - name: Streaming browser benchmark
+      # The browser benchmarks exit non-zero when a floor is crossed or a measured invariant breaks
+      # (packages/benchmarks/src/browser-floors.ts); the floors and what they were calibrated on are in that file.
+      - id: bench-stream
+        name: Streaming browser benchmark
+        if: ${{ !cancelled() && steps.build.outcome == 'success' && steps.playwright.outcome == 'success' }}
         run: pnpm bench:browser-stream -- --points=10000 --seconds=3
 
-      - name: Browser mount/update/no-op benchmark
+      - id: bench-browser
+        name: Browser mount/update/no-op benchmark
+        if: ${{ !cancelled() && steps.build.outcome == 'success' && steps.playwright.outcome == 'success' }}
         run: pnpm bench:browser -- --points=1000 --memory=false
 
-      - name: Dense-SVG streaming benchmark
+      - id: bench-dense
+        name: Dense-SVG streaming benchmark
+        if: ${{ !cancelled() && steps.build.outcome == 'success' && steps.playwright.outcome == 'success' }}
         run: pnpm bench:browser-stream -- --points=100000 --seconds=3 --engines=aster --renderers=svg --dense=0,1
 
-      - name: Vega-Lite schema sweep
+      - id: sweep-vl
+        name: Vega-Lite schema sweep
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: pnpm sweep-vl -- --floor 27513 --min-ok 27452 --max-node-error 17 --vega-check
 
-      - name: Vega schema sweep
+      - id: sweep-vega
+        name: Vega schema sweep
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: pnpm sweep-vega -- --floor 7549 --min-ok 7538 --max-node-error 3
 
-      - name: Differential fuzzing (deterministic seeds)
+      - id: fuzz
+        name: Differential fuzzing (deterministic seeds)
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: pnpm --filter @aster/conformance run fuzz -- --seeds 3000
 
       - name: Upload reproducers on failure
-        if: failure()
-        uses: actions/upload-artifact@v7
+        if: ${{ !cancelled() && steps.fuzz.outcome == 'failure' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: fuzz-repro-${{ github.run_id }}
           path: packages/conformance/fuzz-repro/*.vg.json
           if-no-files-found: ignore
+
+      # Last, and always: the table of outcomes, and a failing job when any check failed or was skipped.
+      - name: Summary
+        if: ${{ always() }}
+        env:
+          STEPS: ${{ toJSON(steps) }}
+        run: node scripts/nightly-summary.mjs

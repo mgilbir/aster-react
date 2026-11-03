@@ -306,7 +306,7 @@ after a write equals the scene a fresh chart renders with those signal values. V
 its own fresh render of the same signals, because it retains dataflow state: autosize runs once and again only when
 width/height/padding/autosize change, so a chart whose content outgrows the view keeps its first size. The signals sweep
 (`pnpm sweep-signals`, 166 cases) counts those cases as `retained` when Aster equals Vega's fresh render and Vega's
-incremental render differs: 104 ok, 59 retained, 1 both-refused, 2 node-error, 0 differ, with a ceiling on `retained`
+incremental render differs: 103 ok, 60 retained, 1 both-refused, 2 node-error, 0 differ, with a ceiling on `retained`
 that can only be lowered (`scripts/gates.mjs`).
 
 ## Tooltips
@@ -337,8 +337,10 @@ mark that has more than `a11y.summaryThreshold` items, default 150), axis, legen
 `aria/description` channels, selected state, and continuous axes exposed as sliders. It is on by default; `a11y={false}`
 removes it. `ariaLabel` labels the container.
 
-It is a **roving tabindex** group: exactly one node has `tabindex=0` (the last focused node, else the first), all the
-others `-1`. `Tab` enters the group at that node and the next `Tab` leaves it. Inside:
+It is a **roving tabindex** group: exactly one a11y node has `tabindex=0` (the last focused node, else the first), all the
+others `-1`. `Tab` enters the group at that node and the next `Tab` leaves it. With `pan` or `zoom` enabled the chart
+container is a Tab stop of its own (`tabindex=0`, see "Pan and zoom"), ahead of the group, so such a chart has two:
+the container, then the one node. Inside:
 
 | Node | Keys |
 |---|---|
