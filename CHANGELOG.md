@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- **`@aster/core`: `renderSpec` no longer carries the incremental step engine** (`incremental-engine.ts`, `evaluate.ts`, `runtime.ts`).
+  The engine (the pulse-driven transform steps and the state a step leaves for the next pulse) is only used by a chart evaluated again from
+  a committed state. `renderSpec` and `getChartInfo` evaluate once and no longer import it; the public `evaluateChart` and the chart
+  session (so every `<Chart>`, `useChart`, stream and worker) are handed it. `evaluateChart` behaves as before. A `renderSpec`-only
+  bundle is 4.6 kB gzip smaller (150.4 to 145.8); the React rows and `core + @aster/core/dom` keep the engine. Output is the same:
+  `evaluate-once.test.ts` compares the two evaluations over generated charts, and the shaking gate and `verify-publish` check, by
+  module, that a `renderSpec` bundle does not contain the engine and an `evaluateChart` one does.
+
 - **A re-evaluation keeps the dataset steps whose inputs did not change** (`step-reuse.ts`, `runtime.ts`, `session.ts`). The React mount
   evaluates a chart at the spec's size and again at the measured container's, and a resize or a signal write evaluates it again; every
   dataset pipeline ran from its first step each time. A step records the rows it was made from, the signals it reads, the random source
