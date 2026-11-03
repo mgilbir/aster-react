@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- **`@aster/core`: a circular symbol is drawn on canvas as vega draws it** (one full-turn arc about the item's origin, not two half turns),
+  and the Chromium canvas gate compares the calls of vega and Aster for the generated gradient entries: WebKit rasterized the two half
+  turns a pixel differently and only its nightly noticed.
+
 - **`@aster/core`: the gradient of a scale.** `{gradient: <scale>, start, stop, count}` in an encode and the expression
   `gradient(scale, start, stop, count)` (which compiled and failed when called) paint a linear gradient whose stops are the scale's
   ticks (`count`, else 15) and the ends of its domain, in the colours the scale gives; scales without ticks (quantize, quantile,
