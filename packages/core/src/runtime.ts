@@ -6,11 +6,12 @@
 import { compileExpr, ExpressionParseError, type CompiledExpr, type ExpressionRuntime } from './expression.js'
 import { scaleCallFailure, scaleRangeFailure } from './missing-scale.js'
 import { ingestRows, readData, type DataFormatSpec } from './data-format.js'
+import { orderOf, setOrder } from './tuple-order.js'
 import { carryByAlignment, type IdCounter } from './identifier-ids.js'
 import { applyTransforms, applyTransformsToSharedRows, copiesRows, sortOrder, getField, geoJSONPath, type Row, type TransformContext } from './transform.js'
 import { fieldOf } from './transform-agg.js'
-import { atRandomSite, contentKey, mayDrawRandom, replayable } from './random-tape.js'
-import type { StepRecord } from './step-reuse.js'
+import { atRandomSite, contentKey, mayDrawRandom, normalPairs, replayable } from './random-tape.js'
+import { dependencyKey, fieldsWritten, pipelineReadsOf, reuse, runsOf, stepCounts, stepReadsOf, type StepReads, type StepRecord } from './step-reuse.js'
 import { activeMeter, withLimits, ceiling, checkRowCount, meterItems, meterTick, AsterLimitError } from './limits.js'
 import { withTextMetricsProvider } from './text-metrics.js'
 import { AsterUrlError } from './url-policy.js'
@@ -216,20 +217,6 @@ export interface IncrementalEngine {
   applyOneWithState(
     rows: Row[], t: CompiledTransform, tctx: StepTransformContext, sourceName: string, previous?: Row[],
   ): { rows: Row[]; state?: unknown }
-  /**
-   * A dataset's transforms from scratch, keeping every step whose inputs are as they were in an earlier run (see
-   * {@link DatasetState.inputs}) and leaving the steps, their state and what each read in `state`. The evaluation that keeps no
-   * state runs {@link runPipelineOnce}: the same rows, made step by step.
-   */
-  runPipeline(
-    ctx: EvalContext, name: string, transforms: CompiledTransform[], tctx: StepTransformContext, rows: Row[], shared: boolean,
-    inputs: readonly unknown[] | undefined, raw: boolean, prevDS: DatasetState | undefined, earlierDS: DatasetState | undefined, state: DatasetState,
-  ): Row[]
-  /** The rows a group scope's dataset makes of its sources, from an earlier run's when its pipeline read what it reads now. */
-  runScopedData(
-    ctx: EvalContext, key: string, name: string, transforms: CompiledTransform[], sources: readonly string[], rows: Row[] | (() => Row[]), shared: boolean,
-    tctx: TransformContext, scopeParams: Record<string, unknown>,
-  ): Row[]
 }
 
 /** Source dataset name -> the rows the previous evaluation was given for it, when this evaluation's are equal to them. */
@@ -389,7 +376,7 @@ interface PassMemory {
   cur: PassRecord
 }
 
-export interface EvalContext {
+interface EvalContext {
   chart: CompiledChart
   /** Present while an evaluation makes more than one dataflow pass (autosize fit): see `PassMemory`. */
   passMemory?: PassMemory
@@ -813,7 +800,7 @@ function makeTransformed(
  * given when it has any, and the value of every signal its code mentions. The same fingerprint is the same inputs, whose numbers
  * vega would not have redrawn.
  */
-export function randomFingerprint(code: unknown, rows: readonly unknown[] | Record<string, unknown>, signals: Record<string, unknown>): string {
+function randomFingerprint(code: unknown, rows: readonly unknown[] | Record<string, unknown>, signals: Record<string, unknown>): string {
   const text = typeof code === 'string' ? code : JSON.stringify(code)
   const mentioned = new Set(text.match(IDENT))
   const read: string[] = []
@@ -2307,41 +2294,6 @@ export function applyOne(rows: Row[], t: CompiledTransform, tctx: StepTransformC
 /** The field an `identifier` transform numbers into (none: the transform refuses, as it does when run). */
 export const idField = (t: CompiledTransform): string => (t as { as?: string }).as as string
 
-/**
- * Run a dataset's transforms over `rows` from scratch, one step after the other, leaving the steps (the next pass of the evaluation
- * numbers an `identifier` from them). `shared`: `rows` are still the source's own, copied only if a step that does not make rows of
- * its own has to run on them.
- */
-function runPipelineOnce(
-  ctx: EvalContext, name: string, transforms: CompiledTransform[], tctx: StepTransformContext, rows: Row[], shared: boolean,
-  prevDS: DatasetState | undefined, earlierDS: DatasetState | undefined, state: DatasetState,
-): Row[] {
-  let cur = rows
-  for (let k = 0; k < transforms.length; k++) {
-    const t = transforms[k]!
-    // (the rows of a step that has to run are this evaluation's own: a source's are copied now, unless the step makes rows of its own
-    // and only needs them in an array of their own -- the array a source made carries the order its rows were made in, which a
-    // dataset made from it does not inherit)
-    if (shared && cur === rows) cur = copiesRows(t) ? rows.slice() : copyRows(rows)
-    const from = cur
-    // (a pass of an evaluation numbers an identifier's rows as the pass before it did: that run is the one whose numbers rows carry)
-    const before = earlierDS?.steps[k] ?? prevDS?.steps[k]
-    const run = (): Row[] => applyFresh(from, t, tctx, name, before)
-    cur = ctx.runtime.random === undefined || !mayDrawRandom(t)
-      ? run()
-      : atRandomSite(ctx.runtime.random, `dataset:${name}#${k}`, () => randomFingerprint(t, from, ctx.signalParams), run)
-    state.steps.push(cur)
-  }
-  if (shared && cur === rows) cur = copyRows(rows)
-  return cur
-}
-
-/** The rows a group scope's dataset makes of its sources, with no earlier run to keep (see `IncrementalEngine.runScopedData`). */
-function runScopedOnce(transforms: CompiledTransform[], name: string, rows: Row[] | (() => Row[]), shared: boolean, tctx: TransformContext): Row[] {
-  const input = typeof rows === 'function' ? rows() : rows
-  return shared ? applyTransformsToSharedRows(input, transforms, tctx, name) : applyTransforms(input, transforms, tctx, name)
-}
-
 /** One transform from scratch, the numbers an `identifier` had in `previous` carried (the evaluation that keeps no state: no state to leave). */
 function applyFresh(rows: Row[], t: CompiledTransform, tctx: StepTransformContext, sourceName: string, previous?: Row[]): Row[] {
   return t.type === 'identifier' ? applyIdentifier(rows, t, tctx, sourceName, carryByAlignment(rows, previous, idField(t))) : applyOne(rows, t, tctx, sourceName)
@@ -2554,9 +2506,7 @@ function buildDatasetsOf(ctx: EvalContext, inputData: Record<string, unknown[]>)
         rows = res.rows
         outPulse = res.pulse
       } else {
-        rows = ctx.engine !== undefined
-          ? ctx.engine.runPipeline(ctx, name, d.transform, tctx, rows, shared, inputs, raw, prevDS, earlierDS, state)
-          : runPipelineOnce(ctx, name, d.transform, tctx, rows, shared, prevDS, earlierDS, state)
+        rows = runPipeline(ctx, name, d.transform, tctx, rows, shared, inputs, raw, prevDS, earlierDS, state)
         outPulse = null
       }
       ctx.draft.datasets.set(name, state)
@@ -2600,7 +2550,223 @@ function buildDatasetsOf(ctx: EvalContext, inputData: Record<string, unknown[]>)
   ctx.fpMemo = undefined
 }
 
-export const copyRows = (rows: readonly Row[]): Row[] => rows.map((r) => ({ ...r }))
+const copyRows = (rows: readonly Row[]): Row[] => rows.map((r) => ({ ...r }))
+
+/** The earlier runs of dataset `name` whose steps may be kept: those made from the inputs it has now (see {@link DatasetState.inputs}). */
+function reusableRuns(ctx: EvalContext, name: string, inputs: readonly unknown[] | undefined, raw: boolean, steps: number): DatasetState[] {
+  if (inputs === undefined || !reuse.on) return []
+  const sameInputs = (s: DatasetState | undefined): s is DatasetState => {
+    if (s?.records === undefined || s.inputs === undefined || s.steps.length !== steps || s.inputs.length !== inputs.length) return false
+    for (let i = 0; i < inputs.length; i++) if (s.inputs[i] !== inputs[i]) return false
+    return true
+  }
+  const runs: DatasetState[] = []
+  // (a run of this same evaluation -- the datasets build again once the signals they read resolve -- saw the same host rows)
+  const draft = ctx.draft.datasets.get(name)
+  if (sameInputs(draft)) runs.push(draft)
+  const prev = ctx.prev?.datasets.get(name)
+  if (prev?.records !== undefined && prev.inputs !== undefined && prev.steps.length === steps && !ctx.affected.has(name) && !ctx.claimed.has(`ds:${name}`)) {
+    // a host dataset is the rows the previous evaluation was given when the host's session says these are equal to them; a derived one
+    // is the rows its sources made, which a kept source hands on as the same arrays
+    if (raw ? ctx.unchanged?.has(name) === true && prev.inputs.length === 1 && prev.inputs[0] === ctx.unchanged.get(name) : sameInputs(prev)) runs.push(prev)
+  }
+  return runs
+}
+
+
+/**
+ * Run a dataset's transforms over `rows` from scratch, keeping every step whose inputs are as they were in an earlier run (see
+ * {@link DatasetState.inputs}) and leaving the steps, their state and what each read in `state`. `shared`: `rows` are still the
+ * source's own, copied only if a step that does not make rows of its own has to run on them.
+ */
+function runPipeline(
+  ctx: EvalContext, name: string, transforms: CompiledTransform[], tctx: StepTransformContext, rows: Row[], shared: boolean,
+  inputs: readonly unknown[] | undefined, raw: boolean, prevDS: DatasetState | undefined, earlierDS: DatasetState | undefined, state: DatasetState,
+): Row[] {
+  const runs = reusableRuns(ctx, name, inputs, raw, transforms.length)
+  const records = new Array<StepRecord | undefined>(transforms.length)
+  const ends = runsOf(transforms)
+  let cur = rows
+  for (let k = 0; k < transforms.length; k++) {
+    const end = reuse.on ? ends[k]! : k
+    const t = transforms[k]!
+    const reads = stepReadsOf(t)
+    if (end > k) {
+      // consecutive steps that only add fields run as one (the rows are made once; see runsOf)
+      const unit = transforms.slice(k, end + 1)
+      const unitReads = unit.map((u) => stepReadsOf(u)!)
+      const unitKeys = unitReads.map((r) => r.signals.map((n) => dependencyKey(ctx.signalParams[n])))
+      const kept = runs.length > 0 ? keptSteps(ctx, name, unit, unitReads, unitKeys, runs, k, cur, earlierDS !== undefined) : undefined
+      if (kept !== undefined) {
+        const out = kept.steps[end]!
+        for (let j = k; j <= end; j++) {
+          keepStep(ctx, transforms[j]!, unitReads[j - k]!, kept.records![j]!, cur.length, out)
+          state.steps.push(kept.steps[j]!)
+          if (kept.aliased?.[j] !== undefined) (state.aliased ??= [])[j] = kept.aliased[j]
+          records[j] = kept.records![j]
+        }
+        cur = out
+        stepCounts.reused += unit.length
+      } else {
+        // (the unit's first step copies every row it is given, so a source's rows need only be in an array of their own)
+        if (shared && cur === rows) cur = rows.slice()
+        const out = applyTransforms(cur, unit, tctx, name)
+        // (the steps before the last stand for the rows it made, which hold what the steps after them added)
+        for (let j = k; j < end; j++) {
+          state.steps.push(withOrderOf(out, out.slice()))
+          ;(state.aliased ??= [])[j] = new Set(unit.slice(j - k + 1).flatMap(fieldsWritten))
+        }
+        state.steps.push(out)
+        for (let j = 0; j < unit.length; j++) records[k + j] = recordStep(ctx, unitReads[j]!, unitKeys[j]!, false, undefined)
+        cur = out
+        stepCounts.ran += unit.length
+      }
+      k = end
+      continue
+    }
+    const keys = reads === null ? undefined : reads.signals.map((n) => dependencyKey(ctx.signalParams[n]))
+    const kept = keys !== undefined && runs.length > 0 ? keptSteps(ctx, name, [t], [reads!], [keys], runs, k, cur, earlierDS !== undefined) : undefined
+    if (kept !== undefined) {
+      const out = kept.steps[k]!
+      keepStep(ctx, t, reads!, kept.records![k]!, cur.length, out)
+      cur = out
+      state.steps.push(cur)
+      const ss = kept.stepState.get(`${name}#${k}`)
+      if (ss !== undefined) state.stepState.set(`${name}#${k}`, ss)
+      records[k] = kept.records![k]
+      stepCounts.reused++
+      continue
+    }
+    // (the rows of a step that has to run are this evaluation's own: a source's are copied now, unless the step makes rows of its own
+    // and only needs them in an array of their own -- the array a source made carries the order its rows were made in, which a
+    // dataset made from it does not inherit)
+    if (shared && cur === rows) cur = copiesRows(t) ? rows.slice() : copyRows(rows)
+    const from = cur
+    const had = reads?.publishes !== undefined && Object.hasOwn(ctx.signalParams, reads.publishes)
+    const published = reads?.publishes === undefined ? undefined : ctx.signalParams[reads.publishes]
+    // (a pass of an evaluation numbers an identifier's rows as the pass before it did: that run is the one whose numbers rows carry)
+    const before = earlierDS?.steps[k] ?? prevDS?.steps[k]
+    const run = (): { rows: Row[]; state?: unknown } => ctx.engine !== undefined
+      ? ctx.engine.applyOneWithState(from, t, tctx, name, before)
+      : { rows: applyFresh(from, t, tctx, name, before) }
+    const res = ctx.runtime.random === undefined || !mayDrawRandom(t)
+      ? run()
+      : atRandomSite(ctx.runtime.random, `dataset:${name}#${k}`, () => randomFingerprint(t, from, ctx.signalParams), run)
+    cur = res.rows
+    state.steps.push(cur)
+    if (res.state !== undefined) state.stepState.set(`${name}#${k}`, res.state)
+    stepCounts.ran++
+    if (keys !== undefined) records[k] = recordStep(ctx, reads!, keys, had, published)
+  }
+  if (shared && cur === rows) cur = copyRows(rows)
+  if (inputs !== undefined) { state.inputs = inputs; state.records = records }
+  return cur
+}
+
+
+/** `target` stands in the order rows were made in as `rows` does (see tuple-order.ts). */
+function withOrderOf(rows: readonly Row[], target: Row[]): Row[] {
+  const order = orderOf(rows)
+  if (order !== null) setOrder(target, order)
+  return target
+}
+
+
+/**
+ * The earlier run in which the steps `k..k + steps.length - 1`, read as they are now and over the rows they are given, ran: they
+ * need not run again. A step that draws keeps its numbers only for the source it drew them from (a tape is of one source).
+ * `identifier` gives a row the number it had in the committed evaluation, and numbers the others from the view's counter: run again
+ * over the rows of the committed run it hands every one its number back and leaves the counter where it stands (the evaluation
+ * began at the committed counter, which no number of that run is past), so the rows to keep are the committed run's -- not a run
+ * of this same evaluation, which is not what the step would carry numbers from.
+ */
+function keptSteps(
+  ctx: EvalContext, name: string, steps: readonly CompiledTransform[], reads: readonly StepReads[], keys: ReadonlyArray<readonly string[]>,
+  runs: readonly DatasetState[], k: number, input: Row[], earlierPass: boolean,
+): DatasetState | undefined {
+  next: for (const run of runs) {
+    if (k > 0 && run.steps[k - 1] !== input) continue
+    for (let j = 0; j < steps.length; j++) {
+      const rec = run.records![k + j]
+      const mine = keys[j]!
+      if (rec === undefined || run.steps[k + j] === undefined || rec.keys.length !== mine.length) continue next
+      for (let i = 0; i < mine.length; i++) if (rec.keys[i] !== mine[i]) continue next
+      if (reads[j]!.draws && (ctx.runtime.random === undefined || rec.random?.source !== ctx.runtime.random)) continue next
+      // ... and not at all when an earlier pass of this evaluation numbered the rows: every pass gives the same rows the same ids
+      if (steps[j]!.type === 'identifier' && (earlierPass || run !== ctx.prev?.datasets.get(name))) continue next
+    }
+    return run
+  }
+  return undefined
+}
+
+
+/** Everything running the step would have done besides making its rows: the limits it counts against and what it leaves behind. */
+function keepStep(ctx: EvalContext, t: CompiledTransform, reads: StepReads, rec: StepRecord, rowsIn: number, out: Row[]): void {
+  const meter = activeMeter()
+  if (meter) {
+    meter.clock.check(`transform ${t.type}`)
+    meter.checkRows(out.length, `transform ${t.type}`)
+    meter.generated(out.length - rowsIn, `transform ${t.type}`)
+  }
+  checkRowCount(out.length, `transform ${t.type}`)
+  if (reads.publishes !== undefined && rec.published !== undefined) ctx.signalParams[reads.publishes] = rec.published.value
+  if (rec.random !== undefined) {
+    const source = rec.random.source as () => number
+    if (rec.random.carry === undefined) normalPairs.delete(source)
+    else normalPairs.set(source, rec.random.carry)
+  }
+}
+
+
+/** What a step that just ran read and left, for the evaluation that may keep it. */
+function recordStep(ctx: EvalContext, reads: StepReads, keys: readonly string[], had: boolean, before: unknown): StepRecord {
+  const after = reads.publishes === undefined ? undefined : ctx.signalParams[reads.publishes]
+  const random = ctx.runtime.random
+  return {
+    keys,
+    // (written: the signal is there now, and it was not or held another value)
+    ...(reads.publishes !== undefined && Object.hasOwn(ctx.signalParams, reads.publishes) && (!had || after !== before) ? { published: { value: after } } : {}),
+    ...(reads.draws && random !== undefined ? { random: { source: random, carry: normalPairs.get(random) } } : {}),
+  }
+}
+
+
+/**
+ * The rows a group scope's dataset makes of its sources. A pipeline whose steps read nothing but the rows and signals (see
+ * step-reuse.ts) makes the same rows again while the source arrays are the same arrays -- a source dataset that was kept hands on the
+ * array it made -- and the signals it mentions are as they were: the rows of the earlier run stand for it. Whole pipelines, not
+ * steps: a group's dataset is a few steps over the rows of a dataset of the view.
+ */
+function runScopedData(
+  ctx: EvalContext, key: string, name: string, transforms: CompiledTransform[], sources: readonly string[], rows: Row[] | (() => Row[]), shared: boolean,
+  tctx: TransformContext, scopeParams: Record<string, unknown>,
+): Row[] {
+  const run = (): Row[] => {
+    const input = typeof rows === 'function' ? rows() : rows
+    return shared ? applyTransformsToSharedRows(input, transforms, tctx, name) : applyTransforms(input, transforms, tctx, name)
+  }
+  const names = reuse.on && shared ? pipelineReadsOf(transforms) : null
+  const inputs = names === null ? undefined : sources.map((n) => ctx.datasets.get(n))
+  // (a source the caller named as changed is updated in place: the same array holds other rows)
+  if (names === null || inputs === undefined || inputs.some((a) => a === undefined) || sources.some((n) => ctx.affected.has(n))) return run()
+  const arrays = inputs as Row[][]
+  const keys = names.map((n) => dependencyKey(scopeParams[n]))
+  for (const earlier of [ctx.draft.scoped.get(key), ctx.prev?.scoped.get(key)]) {
+    if (earlier === undefined || earlier.inputs.length !== arrays.length || earlier.keys.length !== keys.length) continue
+    if (arrays.some((a, i) => earlier.inputs[i] !== a) || keys.some((k, i) => earlier.keys[i] !== k)) continue
+    const meter = activeMeter()
+    if (meter) { meter.clock.check('transform'); meter.checkRows(earlier.out.length, 'transform') }
+    checkRowCount(earlier.out.length, 'transform')
+    ctx.draft.scoped.set(key, earlier)
+    stepCounts.reused += transforms.length
+    return earlier.out
+  }
+  const out = run()
+  stepCounts.ran += transforms.length
+  ctx.draft.scoped.set(key, { inputs: arrays, keys, out })
+  return out
+}
 
 /**
  * The builder `refreshProjection` calls for a dataset a projection's fit reads before it is built. A function of its
@@ -3730,12 +3896,8 @@ function buildGroupItem(mark: CompiledMark, ctx: EvalContext, src: GroupSource):
       let rows: Row[] | undefined = shared ? undefined : d.values != null ? readData(inlineValues(ctx, d.values), d.format) : []
       checkRowCount(rows?.length ?? sources.reduce((n, s) => n + (ctx.datasets.get(s)?.length ?? 0), 0), `dataset "${d.name}"`)
       const tctx = { runtime: ctx.runtime, signals: scopeParams, hierarchies: ctx.hierarchies, projections: ctx.projections }
-      if (d.transform?.length) {
-        const input = rows ?? gather
-        rows = ctx.engine !== undefined
-          ? ctx.engine.runScopedData(ctx, `${markIdOf(mark)}/${path.join('.')}/${d.name}`, d.name, d.transform, sources, input, shared, tctx, scopeParams)
-          : runScopedOnce(d.transform, d.name, input, shared, tctx)
-      } else if (shared) rows = gather().map((r) => ({ ...r }))
+      if (d.transform?.length) rows = runScopedData(ctx, `${markIdOf(mark)}/${path.join('.')}/${d.name}`, d.name, d.transform, sources, rows ?? gather, shared, tctx, scopeParams)
+      else if (shared) rows = gather().map((r) => ({ ...r }))
       else rows = rows ?? []
       savedData.push([d.name, ctx.datasets.get(d.name)])
       ctx.datasets.set(d.name, rows)
