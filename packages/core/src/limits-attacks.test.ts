@@ -449,10 +449,14 @@ describe('built-in ceilings hold without limits (crash-class amplification)', ()
     spec.layout.columns = ${n}
     core.renderSpec(spec${limits})`
   it('trellis layout.columns 5e7 (3.7 s before, even under maxTimeMs 100)', async () => {
+    // Under a 100 ms time budget the attack must be bounded either way: on a fast machine the facet-columns ceiling trips first,
+    // on a slow or loaded one the clock can trip first (both are AsterLimitError). Which limit names the error is a race, so this
+    // run asserts only the bound; the run below, with no limits at all, is the one that pins the built-in ceiling itself.
     const r = await attack(cols(50000000, ', { limits: { maxTimeMs: 100 } }'))
-    expectLimit(r, CEILING, 100)
-    expect(r.threw!.message).toMatch(/facet columns/)
-    expectLimit(await attack(cols(50000000)), CEILING, 100)
+    expectLimit(r, /facet columns|maxTimeMs exceeded/, 100)
+    const bare = await attack(cols(50000000))
+    expectLimit(bare, CEILING, 100)
+    expect(bare.threw!.message).toMatch(/facet columns/)
   }, T)
   it('a trellis with columns 4 and with columns 5000 still renders', async () => {
     okResult(await attack(cols(4)))
