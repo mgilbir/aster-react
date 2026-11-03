@@ -18,7 +18,7 @@
  */
 import { describe, it, expect } from 'vitest'
 import { compileChart } from './compiler.js'
-import { evaluateChart } from './runtime.js'
+import { evaluateChart } from './evaluate.js'
 import { renderSceneToSvg } from './index.js'
 import { diffRows } from './pulse.js'
 import { AsterStreamBackpressureError, createChartStream, type StreamBatch, type StreamPolicy, type StreamPulse } from './stream.js'

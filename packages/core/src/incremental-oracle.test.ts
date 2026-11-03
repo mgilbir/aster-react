@@ -31,7 +31,7 @@
  */
 import { describe, it, expect } from 'vitest'
 import { compileChart } from './compiler.js'
-import { evaluateChart } from './runtime.js'
+import { evaluateChart } from './evaluate.js'
 import { createChartSession } from './session.js'
 import { diffRows, type RowDiff } from './pulse.js'
 import { applyChangeset, newChangeset, planModify, type Changeset } from './modify.js'

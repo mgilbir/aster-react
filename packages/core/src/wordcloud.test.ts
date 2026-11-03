@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { evaluateChart } from './runtime.js'
+import { evaluateChart } from './evaluate.js'
 import { compileChart } from './index.js'
 import './addon-transforms.js'
 import { wordcloudRows } from './wordcloud.js'

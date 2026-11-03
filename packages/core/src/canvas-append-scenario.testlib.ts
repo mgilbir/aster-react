@@ -6,7 +6,7 @@
  * recording context, the Chromium gate with real canvases.
  */
 import { compileChart } from './compiler.js'
-import { evaluateChart } from './runtime.js'
+import { evaluateChart } from './evaluate.js'
 import { createChartSession } from './session.js'
 import { createChartStream } from './stream.js'
 import { applyOp, clone, genSpec, inputOf, int, mulberry32, pick, rowOf, type MarkKind, type Op, type World } from './scene-fuzz.testlib.js'

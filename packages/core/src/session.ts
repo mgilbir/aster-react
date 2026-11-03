@@ -17,6 +17,7 @@
  */
 import { compileChart } from './compiler.js'
 import { dict, ownGet } from './util.js'
+import './incremental-register.js'
 import { evaluateChartPending, type DataStability } from './runtime.js'
 import { refId, valueKey } from './fingerprint.js'
 import { checkSpecLimits, checkSceneLimits, createLimitClock, withLimits, activeMeter } from './limits.js'

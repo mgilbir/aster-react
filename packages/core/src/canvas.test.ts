@@ -10,7 +10,7 @@ import {
   type CanvasLike, type GradientLike,
 } from './canvas.js'
 import type { SceneGroup, SceneItem, SceneRoot } from './types.js'
-import { evaluateChart } from './runtime.js'
+import { evaluateChart } from './evaluate.js'
 import { compileChart } from './compiler.js'
 import { readFileSync, readdirSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'

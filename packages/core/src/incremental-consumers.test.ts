@@ -11,7 +11,8 @@ import { createChartStream } from './stream.js'
 import { renderSceneToCanvasAppend, snapshotCanvasScene } from './canvas.js'
 import { patchSceneDom } from './addon-dom.js'
 import { buildHitIndex } from './hit.js'
-import { supersededMaterializations, evaluateChart } from './runtime.js'
+import { supersededMaterializations } from './runtime.js'
+import { evaluateChart } from './evaluate.js'
 import { compileChart } from './compiler.js'
 
 const spec = {

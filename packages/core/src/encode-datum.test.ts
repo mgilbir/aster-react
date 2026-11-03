@@ -9,7 +9,7 @@
  */
 import { describe, expect, it } from 'vitest'
 import { compileChart } from './compiler.js'
-import { evaluateChart } from './runtime.js'
+import { evaluateChart } from './evaluate.js'
 import type { SceneRoot } from './types.js'
 
 type Row = Record<string, unknown>

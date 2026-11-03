@@ -11,7 +11,8 @@
  */
 import { describe, it, expect } from 'vitest'
 import { compileChart } from './compiler.js'
-import { datasetsOfScene, evaluateChart } from './runtime.js'
+import { datasetsOfScene } from './runtime.js'
+import { evaluateChart } from './evaluate.js'
 import { createChartSession } from './session.js'
 import { renderSceneToSvg } from './index.js'
 import type { RuntimeInput, VgSpec } from './types.js'
