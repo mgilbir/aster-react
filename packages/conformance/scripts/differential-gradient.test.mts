@@ -1,4 +1,4 @@
-// @vitest-environment jsdom
+// @vitest-environment node
 /**
  * The gradient of a scale, against the pinned real Vega, in this process.
  *
@@ -7,13 +7,12 @@
  * the scale puts them at, in the colour the scale gives; a scale without ticks (discretizing, ordinal) uses its domain; a domain
  * with no width is stretched onto [0, 1]. Generated over the kinds of scale, the options, the marks that paint (fill, stroke, both,
  * conditionals, shared gradients, a scale named by a signal or by a field), and compared as the picture (strict canonicalizer:
- * every gradient definition resolved to its coordinates and stops) from the string renderer and from the DOM one, and the errors
+ * every gradient definition resolved to its coordinates and stops) from the string renderer (the DOM one is gradient-dom-vs-vega), and the errors
  * logged (a scale that cannot draw a gradient fails in vega's encode, and the pass stops there).
  */
 import { describe, expect, it } from 'vitest'
 import * as vega from 'vega'
-import { compileChart, evaluateChart, renderSpec } from '@aster/core'
-import { renderSceneToDomElement } from '@aster/core/dom'
+import { renderSpec } from '@aster/core'
 import { canonicalizeSvg, diffCanonical } from '../src/normalize.js'
 import { gradientSpec, makeRng } from './gradient-gen.mts'
 import { scaled } from './differential-gen.mts'
@@ -36,17 +35,15 @@ async function onVega(spec: Spec): Promise<{ svg: string; errors: string[] } | {
   }
 }
 
-function onAster(spec: Spec): { svg: string; dom: string; errors: string[] } | { threw: string } {
+function onAster(spec: Spec): { svg: string; errors: string[] } | { threw: string } {
   const errors: string[] = []
   try { return aster(spec, errors) } catch (e) { return { threw: (e as Error).message } }
 }
 
-function aster(spec: Spec, errors: string[]): { svg: string; dom: string; errors: string[] } {
+function aster(spec: Spec, errors: string[]): { svg: string; errors: string[] } {
   const logger = { error: (...a: unknown[]) => { errors.push(String(a[0])) }, warn: () => {} }
   const svg = renderSpec(structuredClone(spec) as never, { logger } as never)
-  const scene = evaluateChart(compileChart(structuredClone(spec) as never), { logger } as never)
-  const dom = new XMLSerializer().serializeToString(renderSceneToDomElement(scene))
-  return { svg, dom, errors: errors.slice(0, errors.length / 2) }
+  return { svg, errors }
 }
 
 describe('the gradient of a scale is painted as vega paints it', () => {
@@ -72,10 +69,8 @@ describe('the gradient of a scale is painted as vega paints it', () => {
       else if (/<(linear|radial)Gradient/.test(want.svg)) withGradient++
       if (JSON.stringify(want.errors) !== JSON.stringify(got.errors)) { bad.push(`${tag}: vega logged ${JSON.stringify(want.errors)}, aster ${JSON.stringify(got.errors.slice(0, 2))}`); continue }
       const canon = canonicalizeSvg(want.svg)
-      for (const [how, svg] of [['string', got.svg], ['DOM', got.dom]] as const) {
-        const d = diffCanonical(canon, canonicalizeSvg(svg))
-        if (d.length) { bad.push(`${tag} (${how}): ${d.slice(0, 2).join(' | ')}`); break }
-      }
+      const d = diffCanonical(canon, canonicalizeSvg(got.svg))
+      if (d.length) bad.push(`${tag}: ${d.slice(0, 2).join(' | ')}`)
     }
     expect(bad.length, `${bad.length} specs differ:\n${bad.slice(0, 8).join('\n')}`).toBe(0)
     // not vacuous: most specs draw gradients in vega, some fail there, and every kind of scale was drawn
