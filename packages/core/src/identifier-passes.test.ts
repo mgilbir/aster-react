@@ -56,28 +56,38 @@ describe('a fit view numbers its rows once per evaluation', () => {
     }
   }
 
+  // Each (mode, block of seeds) is its own test: far below the timeout under load, and a failure names its block. Every seed of 1..60 runs in
+  // every mode, 7 steps each. The two charts are compiled once per mode (a session recompiles only on a changed skeleton, and the
+  // reference spec never changes), so a step costs its two evaluations and two renders.
+  const SEEDS = 60
+  const BLOCK = 10
   for (const autosize of ['fit', 'fit-x', 'fit-y', 'pad']) {
-    it(`${autosize}: the legend of the first pass is drawn from the ids of the scene`, () => {
-      for (let seed = 1; seed <= 60; seed++) {
-        const r = mulberry32(seed * 7919)
-        const session = createChartSession()
-        let rows = rowsOf(4 + Math.floor(r() * 12))
-        let last: { w: number; h: number } | undefined
-        const next = { k: 1 }
-        for (let step = 0; step < 7; step++) {
-          rows = step === 0 ? rows : change(r, rows, next)
-          // the same size each time: the second pass builds at the size the last evaluation ended at (its datasets can take the pulse), the first
-          // at the view's own (they cannot)
-          // half the time the view is the size the last evaluation's content ended at: the first pass then matches the committed
-          // fingerprint (and takes the pulse), the second does not
-          const input: RuntimeInput = { data: { t: rows }, ...(last && r() < 0.5 ? { width: last.w, height: last.h } : {}) }
-          const scene = session.evaluate(specOf(autosize, true), input)
-          last = { w: scene.plotWidth ?? 0, h: scene.plotHeight ?? 0 }
-          const made = (datasetsOfScene(scene).get('t') ?? []) as Row[]
-          const want = evaluateChart(compileChart(specOf(autosize, false)), { data: { t: made.map((x) => ({ ...x })) }, ...(input.width !== undefined ? { width: input.width, height: input.height } : {}) })
-          expect(renderSceneToSvg(scene), `${autosize} seed ${seed} step ${step}`).toBe(renderSceneToSvg(want))
+    const reference = compileChart(specOf(autosize, false))
+    for (let first = 1; first <= SEEDS; first += BLOCK) {
+      it(`${autosize} seeds ${first}-${first + BLOCK - 1}: the legend of the first pass is drawn from the ids of the scene`, () => {
+        for (let seed = first; seed < first + BLOCK; seed++) {
+          const r = mulberry32(seed * 7919)
+          const session = createChartSession()
+          const spec = specOf(autosize, true)
+          let rows = rowsOf(4 + Math.floor(r() * 12))
+          let last: { w: number; h: number } | undefined
+          const next = { k: 1 }
+          for (let step = 0; step < 7; step++) {
+            rows = step === 0 ? rows : change(r, rows, next)
+            // half the time the view is the size the last evaluation's content ended at: the first pass then matches the committed
+            // fingerprint (and takes the pulse), the second does not
+            const input: RuntimeInput = { data: { t: rows }, ...(last && r() < 0.5 ? { width: last.w, height: last.h } : {}) }
+            const scene = session.evaluate(spec, input)
+            last = { w: scene.plotWidth ?? 0, h: scene.plotHeight ?? 0 }
+            const made = (datasetsOfScene(scene).get('t') ?? []) as Row[]
+            const want = evaluateChart(reference, { data: { t: made.map((x) => ({ ...x })) }, ...(input.width !== undefined ? { width: input.width, height: input.height } : {}) })
+            // compared as the rendered SVG (the legend, the padding and every mark); `expect` only on a difference, as it costs more than the compare
+            const got = renderSceneToSvg(scene)
+            const ref = renderSceneToSvg(want)
+            if (got !== ref) expect(got, `${autosize} seed ${seed} step ${step}`).toBe(ref)
+          }
         }
-      }
-    })
+      })
+    }
   }
 })
