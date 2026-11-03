@@ -5,7 +5,7 @@ import {
   defaultLocale, resetDefaultLocale, locale, compileExpr,
 } from './index.js'
 import { createChartSession } from './addon-dom.js'
-import { withLimits, activeMeter, boundedCount } from './limits.js'
+import { withLimits, activeMeter, boundedCount, ceiling } from './limits.js'
 import { FORMATTER_CACHE_MAX as CACHE_MAX } from './locale.js'
 import type { VgSpec } from './types.js'
 
@@ -204,5 +204,53 @@ describe('expression parser depth (C9)', () => {
     const chain = '1' + '+1'.repeat(900)
     const f = compileExpr(chain, { scale: () => undefined, data: () => undefined, expr: () => { throw new Error('x') } })
     expect(f({}, {})).toBe(901) // a 900-term chain still evaluates (the interpreter walks it recursively)
+  })
+})
+
+describe('built-in ceilings (no limits given)', () => {
+  const seqSpec = (stop: number): VgSpec => ({ data: [{ name: 't', transform: [{ type: 'sequence', start: 0, stop, as: 'x' }] }] } as VgSpec)
+
+  it('throw the typed error, naming the cap and how to raise it', () => {
+    const e = lim(() => renderSpec(seqSpec(5e7)))
+    expect(e.code).toBe('ASTER_LIMIT')
+    expect(e.message).toMatch(/range 50000000 > 1000000 \(built-in ceiling that applies even without limits; raise it with limits\.maxRows\)/)
+  })
+
+  it('a limit that governs the same amount replaces the ceiling', () => {
+    expect(() => renderSpec(seqSpec(1_200_000), { limits: { maxRows: 2_000_000 } })).not.toThrow()
+    expect(() => renderSpec(seqSpec(1_200_000), { limits: { maxGeneratedRows: 3_000_000 } })).not.toThrow()
+    expect(lim(() => renderSpec(seqSpec(1_200_000), { limits: { maxItems: 10 } })).message).toMatch(/built-in ceiling/)
+  })
+
+  it('cannot be swallowed by a defensive catch, with or without a scope', () => {
+    // these properties are read in a catch that falls back to a default (a title text, an orient signal); a ceiling still fails the call
+    for (const spec of [
+      { title: { text: { signal: 'length(sequence(0, 50000000))' } }, data: [{ name: 't', values: [{ a: 1 }] }] },
+      { width: 10, height: 10, signals: [{ name: 'o', value: 'bottom' }], scales: [{ name: 'x', type: 'linear', domain: [0, 1], range: [0, 10] }],
+        axes: [{ scale: 'x', orient: { signal: 'length(sequence(0, 50000000)) ? "top" : "bottom"' } }] },
+    ] as VgSpec[]) {
+      expect(lim(() => evaluateChart(compileChart(spec))).message, JSON.stringify(spec)).toMatch(/built-in ceiling/)
+      expect(lim(() => evaluateChart(compileChart(spec), { limits: {} })).message).toMatch(/built-in ceiling/)
+    }
+  })
+
+  it('a ceiling swallowed inside a no-limits scope still fails the call when the scope exits', () => {
+    const swallowed = (): string => {
+      try { ceiling('rows', 5e6, 'swallowed') } catch { /* a defensive catch */ }
+      return 'carried on'
+    }
+    expect(lim(() => withLimits(undefined, swallowed)).message).toMatch(/swallowed 5000000 > 1000000/)
+    // nested no-limits scopes: the inner one fails its own call, the outer one is not told twice
+    expect(lim(() => withLimits(undefined, () => withLimits(undefined, swallowed))).message).toMatch(/swallowed/)
+    expect(withLimits(undefined, () => 'fine')).toBe('fine')
+  })
+
+  it('do not leak into the next call', () => {
+    lim(() => renderSpec(seqSpec(5e7)))
+    expect(() => renderSpec(seqSpec(10))).not.toThrow()
+  })
+
+  it('leave the library layer alone: boundedCount without a scope is still a no-op', () => {
+    expect(boundedCount(1e12, 'x')).toBe(1e12)
   })
 })

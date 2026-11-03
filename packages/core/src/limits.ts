@@ -67,9 +67,17 @@ function over(name: keyof SpecLimits, value: number, limit: number, what?: strin
  */
 export function limitViolation(message: string): AsterLimitError {
   const err = new AsterLimitError(message)
-  if (active && !active.violation) active.violation = err
+  if (active) {
+    if (!active.violation) active.violation = err
+  } else if (!loose) loose = err
   return err
 }
+
+/**
+ * The first violation raised while no scope was active (a built-in ceiling, which holds without `limits`). The entry points
+ * open a scope even without limits ({@link withLimits}) so that, like a scoped one, it cannot be swallowed by a defensive catch.
+ */
+let loose: AsterLimitError | null = null
 
 /** A monotonic clock for one bounded operation. */
 export interface LimitClock {
@@ -127,6 +135,95 @@ function defaultNow(): number {
 /** Ceiling on spec nesting even when `maxDepth` is unset (deep specs overflow the compiler's own recursion). */
 export const HARD_MAX_SPEC_DEPTH = 1000
 
+/**
+ * Built-in ceilings that hold even when no `limits` are given. Each bounds an amount a tiny spec can ask for
+ * (a tick count, a sequence length, a pad width, a topojson arc reused thousands of times) and that would exhaust
+ * the process, not merely make a chart slow. They sit orders of magnitude above anything a real chart uses (the
+ * largest value the gallery and corpus reach is listed in docs/LIMITS.md), so they never fire on a legitimate spec.
+ * They do not replace `limits`, which stay the way to budget a chart: giving the matching limit
+ * (`maxRows`/`maxGeneratedRows`, `maxItems`, `maxStringLength`/`maxGeneratedBytes`) replaces the ceiling by your value.
+ */
+export const HARD_CAPS = Object.freeze({
+  /** Rows (or array entries) one transform, row emitter or expression builtin generates: `sequence`, `range`, `fold`, `flatten`, `kde`, ... */
+  rows: 1_000_000,
+  /** Cells of a typed-array grid built from spec parameters: `heatmap` pixels, density and contour grids, the label bitmap. */
+  cells: 10_000_000,
+  /** Items a spec-controlled count sizes: axis ticks, time ticks, facet `columns`, contour thresholds, quantized colour samples. */
+  items: 100_000,
+  /** Characters of one string an expression builtin builds: `pad`, number-format width. */
+  bytes: 1_000_000,
+  /** Positions one topology decode produces (an arc referenced by many geometries counts every time). */
+  coords: 2_000_000,
+})
+
+/** Which limits replace each ceiling: when one of them is set the caller's own budget governs. */
+const CEILING_KEYS: Record<keyof typeof HARD_CAPS, ReadonlyArray<keyof SpecLimits>> = {
+  rows: ['maxRows', 'maxGeneratedRows'],
+  cells: ['maxRows', 'maxGeneratedRows'],
+  items: ['maxItems'],
+  bytes: ['maxStringLength', 'maxGeneratedBytes'],
+  coords: ['maxRows', 'maxGeneratedRows'],
+}
+
+/** Whether the active scope carries a limit that replaces the built-in ceiling of `kind`. */
+function ceilingReplaced(kind: keyof typeof HARD_CAPS, limits: SpecLimits | undefined): boolean {
+  if (!limits) return false
+  for (const key of CEILING_KEYS[kind]) if (limits[key] != null) return true
+  return false
+}
+
+/**
+ * Refuse `n` of `what` when it passes the built-in ceiling of `kind`, unless a limit the caller gave replaces it.
+ * Works with or without a limits scope (the point of the ceiling); the error is the usual typed one.
+ */
+export function ceiling(kind: keyof typeof HARD_CAPS, n: number, what: string): void {
+  const cap = HARD_CAPS[kind]
+  // (a count from 2^32 up already fails natively and at once, `Invalid array length`, before anything is allocated; the
+  // ceiling keeps to the counts that would otherwise be allocated)
+  if (!(n > cap) || n >= 4294967296 || ceilingReplaced(kind, active?.limits)) return
+  throw limitViolation(`${what} ${n} > ${cap} (built-in ceiling that applies even without limits; raise it with limits.${CEILING_KEYS[kind][0]})`)
+}
+
+/** Ceiling on the objects and arrays one spec walk visits, so a spec that shares sub-objects (a DAG, built in code) cannot make the walk exponential. */
+export const HARD_MAX_SPEC_NODES = 5_000_000
+
+/**
+ * Refuse a spec nested deeper than {@link HARD_MAX_SPEC_DEPTH} (a deep or cyclic one) with a typed error, with or without
+ * `limits`. The compiler and the evaluator recurse over the spec, so past a stack-dependent depth they would throw a raw
+ * `RangeError` (or, in a defensive `catch`, carry on with wrong output). The walk is iterative, does not descend into
+ * `values` arrays (inline data rows are data, not spec structure) and costs one pass over the spec's objects.
+ */
+export function assertSpecDepth(spec: unknown): void {
+  const nodes: unknown[] = [spec]
+  const depths: number[] = [0]
+  let visited = 0
+  while (nodes.length) {
+    const v = nodes.pop()
+    const d = depths.pop()!
+    if (v === null || typeof v !== 'object') continue
+    if (d > HARD_MAX_SPEC_DEPTH) {
+      throw limitViolation(`maxDepth ${d} > ${HARD_MAX_SPEC_DEPTH} (spec nesting; a built-in ceiling that applies even without limits, or the spec contains a cycle)`)
+    }
+    if (++visited > HARD_MAX_SPEC_NODES) {
+      throw limitViolation(`spec size > ${HARD_MAX_SPEC_NODES} objects (a built-in ceiling that applies even without limits; the spec may share sub-objects)`)
+    }
+    if (Array.isArray(v)) {
+      for (let i = 0; i < v.length; i++) {
+        const x = v[i]
+        if (x !== null && typeof x === 'object') { nodes.push(x); depths.push(d + 1) }
+      }
+    } else {
+      for (const key in v as Record<string, unknown>) {
+        const x = (v as Record<string, unknown>)[key]
+        if (x === null || typeof x !== 'object') continue
+        if (key === 'values' && Array.isArray(x)) continue
+        nodes.push(x)
+        depths.push(d + 1)
+      }
+    }
+  }
+}
+
 /** Deviation from the oracle (safety): regexes built under limits may not exceed this many pattern characters. */
 export const REGEX_MAX_PATTERN = 1024
 /** Default cap on the input of one regex call under limits (when `maxStringLength` is unset). */
@@ -148,7 +245,7 @@ export interface LimitMeter {
   /** Add `n` generated rows to the cumulative budget (maxGeneratedRows). */
   generated(n: number, what: string): void
   /** Account `n` rows about to be generated: {@link checkRows} plus {@link generated}. */
-  rows(n: number, what: string): void
+  rows(n: number, what: string, kind?: 'rows' | 'cells'): void
   /** Account a string of `n` characters about to be built (single: maxStringLength; cumulative: maxGeneratedBytes). */
   bytes(n: number, what: string): void
   /** Account `n` scene items about to be generated (maxItems). */
@@ -205,10 +302,11 @@ class Meter implements LimitMeter {
       if (this.genRows > maxGeneratedRows) over('maxGeneratedRows', this.genRows, maxGeneratedRows, what)
     }
   }
-  rows(n: number, what: string): void {
+  rows(n: number, what: string, kind: 'rows' | 'cells' = 'rows'): void {
     if (this.violation) throw this.violation
     const { maxRows } = this.limits
     if (maxRows != null && n > maxRows) over('maxRows', n, maxRows, what)
+    if (n !== Infinity) ceiling(kind, n, what)
     this.generated(n, what)
     this.clock.check(what)
   }
@@ -216,6 +314,7 @@ class Meter implements LimitMeter {
     if (this.violation) throw this.violation
     const { maxStringLength, maxGeneratedBytes } = this.limits
     if (maxStringLength != null && n > maxStringLength) over('maxStringLength', n, maxStringLength, what)
+    ceiling('bytes', n, what)
     if (maxGeneratedBytes != null) {
       this.genBytes += n
       if (this.genBytes > maxGeneratedBytes) over('maxGeneratedBytes', this.genBytes, maxGeneratedBytes, what)
@@ -226,6 +325,7 @@ class Meter implements LimitMeter {
   coords(n: number, what: string): void {
     if (this.violation) throw this.violation
     this.genCoords += n
+    ceiling('coords', this.genCoords, what)
     const cap = this.limits.maxGeneratedRows ?? this.limits.maxRows
     if (cap != null && this.genCoords > cap) over(this.limits.maxGeneratedRows != null ? 'maxGeneratedRows' : 'maxRows', this.genCoords, cap, what)
     this.tick(what, n)
@@ -257,7 +357,23 @@ export function activeMeter(): LimitMeter | null {
  * limits `fn` runs unmetered (an outer scope, if any, stays in force).
  */
 export function withLimits<T>(limits: SpecLimits | undefined, fn: (meter: LimitMeter | null) => T): T {
-  if (!limits) return fn(active)
+  if (!limits) {
+    if (active) return fn(active)
+    // No limits, no meter: a built-in ceiling that fires in here still fails the call, even if a defensive catch ate it.
+    const outer = loose
+    loose = null
+    let result: T
+    try {
+      result = fn(null)
+    } catch (e) {
+      loose = outer
+      throw e
+    }
+    const mine: AsterLimitError | null = loose
+    loose = outer
+    if (mine) throw mine
+    return result
+  }
   if (active && active.limits === limits) return fn(active)
   const prev = active
   const meter = new Meter(limits, createLimitClock(limits))
@@ -283,17 +399,26 @@ export function checkRowCount(n: number, what: string): void {
 export function meterTick(what: string, cost = 1): void {
   if (active) active.tick(what, cost)
 }
-/** Account rows about to be generated; a no-op without an active meter. */
-export function meterRows(n: number, what: string): void {
-  if (active) active.rows(n, what)
+/**
+ * Account rows about to be generated (maxRows, maxGeneratedRows; the built-in ceiling when neither is set). `kind` 'cells' is a
+ * typed-array grid, which holds many more entries than a row array can.
+ */
+export function meterRows(n: number, what: string, kind: 'rows' | 'cells' = 'rows'): void {
+  if (active) active.rows(n, what, kind)
+  else ceiling(kind, n, what)
 }
-/** Account coordinates about to be decoded; a no-op without an active meter. */
-export function meterCoords(n: number, what: string): void {
+/**
+ * Account coordinates about to be decoded. `decoded` is the running total of the caller's own decode, which is what the
+ * built-in ceiling applies to when there is no limits scope to accumulate it.
+ */
+export function meterCoords(n: number, what: string, decoded = n): void {
   if (active) active.coords(n, what)
+  else ceiling('coords', decoded, what)
 }
-/** Account a string about to be built; a no-op without an active meter. */
+/** Account a string about to be built (maxStringLength, maxGeneratedBytes; the built-in ceiling when neither is set). */
 export function meterBytes(n: number, what: string): void {
   if (active) active.bytes(n, what)
+  else ceiling('bytes', n, what)
 }
 /** Account scene items about to be generated; a no-op without an active meter. */
 export function meterItems(n: number, what: string): void {
@@ -301,12 +426,22 @@ export function meterItems(n: number, what: string): void {
 }
 
 /**
- * Bound a count that sizes an allocation or loop (tick counts, columns,
- * sequence length). Without a meter the count is returned unchanged.
+ * Bound a count that sizes an allocation or loop (tick counts, columns, sequence length) by the active limits. Without a
+ * limits scope the count is returned unchanged: this is also the library layer the differentials pin against d3, so the
+ * built-in ceilings apply where a SPEC supplies the count (see {@link ceiling}), not here.
  */
 export function boundedCount(n: number, what: string, kind: 'rows' | 'items' | 'bytes' = 'items'): number {
   if (active) active[kind](n, what)
   return n
+}
+
+/**
+ * Rows a transform or row emitter is about to generate, before it allocates them (fold, flatten, impute, kde, ...):
+ * {@link checkRowCount}, plus the built-in ceiling.
+ */
+export function checkGeneratedRows(n: number, what: string): void {
+  ceiling('rows', n, what)
+  if (active) active.checkRows(n, what)
 }
 
 /**

@@ -115,6 +115,7 @@ function reverseTail(points: Position[], from: number): void {
 /** Decodes the geometries of one topology. */
 function decoder(topology: Topology) {
   const { arcs, transform } = topology
+  let decoded = 0
 
   /** Append arc `index` (negative: backwards) to `points`, which already holds the line so far. */
   function appendArc(points: Position[], index: number): void {
@@ -122,7 +123,7 @@ function decoder(topology: Topology) {
     if (points.length) points.pop()
     const raw = arcs[index < 0 ? ~index : index] as Position[]
     // one arc can be referenced from any number of geometries, so the decoded size is not bounded by the input's
-    meterCoords(raw.length, 'topojson arcs')
+    meterCoords(raw.length, 'topojson arcs', (decoded += raw.length))
     const first = points.length
     if (transform) appendTransformed(points, raw, transform)
     else for (let i = 0; i < raw.length; i++) points.push(raw[i]!.slice())

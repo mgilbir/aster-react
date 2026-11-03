@@ -359,7 +359,8 @@ export const MILLISECONDS = 'milliseconds'
 /** Coarse to fine; a unit list is sorted by this order. */
 export const TIME_UNITS = [YEAR, QUARTER, MONTH, WEEK, DATE, DAY, DAYOFYEAR, HOURS, MINUTES, SECONDS, MILLISECONDS] as const
 
-const UNIT_ORDER: Record<string, number> = {}
+/** The rank of each time unit, coarse to fine, from 1. */
+export const UNIT_ORDER: Record<string, number> = {}
 TIME_UNITS.forEach((unit, i) => { UNIT_ORDER[unit] = i + 1 })
 
 /** Validate a unit list (one unit or an array) and return it coarse to fine; throws on empty, unknown or clashing units. */
@@ -377,7 +378,8 @@ export function timeUnits(units: unknown): string[] {
   return list.sort((a, b) => UNIT_ORDER[a]! - UNIT_ORDER[b]!)
 }
 
-const DEFAULT_SPECIFIERS: Record<string, string> = {
+/** The format specifier of a unit, or of a run of neighbours (`year-month`), as vega-time prints them. */
+export const DEFAULT_SPECIFIERS: Record<string, string> = {
   [YEAR]: '%Y ',
   [QUARTER]: 'Q%q ',
   [MONTH]: '%b ',

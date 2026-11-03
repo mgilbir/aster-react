@@ -538,10 +538,8 @@ export function scaleGradientStops(source: Scale, count?: number): Array<{ offse
 
 const schemes = new Map<string, unknown>()
 
-/** The colours of a palette given as hex runs of six digits, or as a list already. */
-function paletteColors(palette: unknown): string[] {
-  if (Array.isArray(palette)) return palette as string[]
-  const hex = palette as string
+/** The colours of a palette given as a run of six-digit hex colours. */
+function paletteColors(hex: string): string[] {
   const colors: string[] = []
   for (let i = 0; i + 6 <= hex.length; i += 6) colors.push('#' + hex.slice(i, i + 6))
   return colors

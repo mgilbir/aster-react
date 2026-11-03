@@ -14,7 +14,7 @@
  * Derived work: the loess smoother follows the local-regression algorithm of Jason Davies' science.js, the polynomial fit the
  * normal-equation method of d3-regression / regression-js (BSD-3-Clause; the notices are in THIRD_PARTY_NOTICES.md).
  */
-import { checkRowCount, meterTick } from './limits.js'
+import { checkGeneratedRows, meterTick } from './limits.js'
 import { sortData } from './util.js'
 import type { Row } from './transform-agg.js'
 
@@ -429,7 +429,7 @@ export function sampleCurve(f: (x: number) => number, ext: ArrayLike<unknown>, m
   const minSteps = minStepsIn || 25
   const maxSteps = Math.max(minSteps, maxStepsIn || 200)
   // `steps` and `maxsteps` are spec parameters: bound the sample count before evaluating the function that many times
-  checkRowCount(maxSteps, 'density steps')
+  checkGeneratedRows(maxSteps, 'density steps')
 
   const at = (x: number): Pt => [x, f(x)]
   const minX = ext[0] as number

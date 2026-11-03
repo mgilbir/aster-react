@@ -66,7 +66,7 @@ dataflow does: an expression that throws while a chart is evaluated (a condition
 filter or formula, a sort, a scale that cannot be built) is logged and the render carries on with what it has. See
 `docs/ERRORS.md` for exactly what survives each failure.
 
-`limits` are described in `docs/LIMITS.md`, including which entry point enforces which budget.
+`limits` are described in `docs/LIMITS.md`, including which entry point enforces which budget. They are best-effort protection: a killable worker is the hard guarantee for untrusted specs. A few built-in ceilings (`HARD_CAPS`, `HARD_MAX_SPEC_DEPTH`) hold even when no `limits` are given; they throw `AsterLimitError` and a matching limit replaces them.
 
 `compileChart(spec)` produces the `CompiledChart` IR; `evaluateChart(chart, input)` resolves data/scales/encodes into
 a `SceneRoot`; `renderSceneToSvg(scene)` serializes it; `getChartInfo(spec, input)` returns the size, padding and
@@ -708,7 +708,8 @@ an empty `<canvas>` there.
 
 ### Accessibility keyboard contract
 
-The accessible tree is a roving-tabindex group: exactly one node is a Tab stop. The keys, per node kind, are listed in
+A chart is one Tab stop. Without pan or zoom the accessible tree is a roving-tabindex group (exactly one node is the stop);
+with pan or zoom the container is the stop and `PageDown` / `PageUp` on it enter the tree. The keys, per node kind, are listed in
 `docs/INTERACTION.md#accessibility`.
 
 ## `@aster/vl`

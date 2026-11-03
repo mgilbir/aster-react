@@ -61,6 +61,11 @@ describe('gate list', () => {
     }
   })
 
+  it('every gate is blocking: a gate that cannot fail proves nothing (the probe has a floor on the probes that pass)', () => {
+    expect(GATES.filter((g) => g.blocking === false).map((g) => g.name)).toEqual([])
+    expect(GATES.find((g) => g.name === 'probe').args).toEqual(['probe', '--', '--min-pass', '2'])
+  })
+
   it('builds before the dependency check (which inspects dist)', () => {
     const order = GATES.map((g) => g.name)
     expect(order.indexOf('build')).toBeLessThan(order.indexOf('deps'))
@@ -168,4 +173,64 @@ describe('workflow files are valid YAML', () => {
       expect(Object.keys(wf.jobs ?? {}).length, `${f}: at least one job`).toBeGreaterThan(0)
     })
   }
+})
+
+describe('workflow hygiene', () => {
+  const files = readdirSync(join(root, '.github', 'workflows')).filter((f) => /\.ya?ml$/.test(f))
+  const load = (f) => parseDocument(read(`.github/workflows/${f}`)).toJS()
+  const stepsOf = (wf) => Object.values(wf.jobs).flatMap((j) => j.steps ?? [])
+
+  for (const f of files) {
+    it(`${f}: every action is pinned to a commit SHA, with the version as a comment`, () => {
+      const lines = read(`.github/workflows/${f}`).split('\n').filter((l) => /^\s*(?:- )?uses:/.test(l))
+      expect(lines.length, f).toBeGreaterThan(0)
+      for (const l of lines) expect(l, `${f}: ${l.trim()}`).toMatch(/uses: [\w.-]+\/[\w./-]+@[0-9a-f]{40} # v\d+(\.\d+)*\s*$/)
+    })
+
+    it(`${f}: a top-level permissions block grants read access to the contents and nothing else`, () => {
+      const wf = load(f)
+      expect(wf.permissions, `${f}: no top-level permissions block`).toEqual({ contents: 'read' })
+    })
+
+    it(`${f}: a job may only add permissions the release workflow needs (id-token for provenance)`, () => {
+      const wf = load(f)
+      for (const [name, job] of Object.entries(wf.jobs)) {
+        for (const [perm, level] of Object.entries(job.permissions ?? {})) {
+          const allowed = (f === 'release.yml' && name === 'publish' && perm === 'id-token' && level === 'write') || (perm === 'contents' && level === 'read')
+          expect(allowed, `${f} job ${name} grants ${perm}: ${level}`).toBe(true)
+        }
+      }
+    })
+  }
+})
+
+describe('nightly.yml: one failing check does not hide the others', () => {
+  const wf = parseDocument(read('.github/workflows/nightly.yml')).toJS()
+  const steps = Object.values(wf.jobs).flatMap((j) => j.steps)
+  const checks = steps.filter((s) => typeof s.run === 'string' && s.id)
+
+  it('runs each check as its own step that survives an earlier failure and names what it needs', () => {
+    expect(checks.length).toBeGreaterThanOrEqual(12)
+    for (const s of checks) {
+      if (s.id === 'install') { expect(s.if, 'install is the first step').toBeUndefined(); continue }
+      expect(s.if, `${s.id}: needs an \`if\``).toMatch(/^\$\{\{ !cancelled\(\)/)
+    }
+    // the sweeps and the fuzzer are checks of their own, after the gates
+    const ids = checks.map((s) => s.id)
+    for (const want of ['gates', 'gallery', 'canvas-firefox', 'canvas-webkit', 'bench-incremental', 'bench-stream', 'bench-browser', 'bench-dense', 'sweep-vl', 'sweep-vega', 'fuzz']) {
+      expect(ids, want).toContain(want)
+    }
+    expect(ids.indexOf('gates')).toBeLessThan(ids.indexOf('sweep-vl'))
+  })
+
+  it('ends with an always-run summary that fails the job when a check failed or was skipped', () => {
+    const last = steps.at(-1)
+    expect(last.if).toBe('${{ always() }}')
+    expect(last.run).toBe('node scripts/nightly-summary.mjs')
+    expect(last.env.STEPS).toBe('${{ toJSON(steps) }}')
+  })
+
+  it('has no step that could stop the later ones: continue-on-error is not used to hide a failure', () => {
+    expect(read('.github/workflows/nightly.yml')).not.toMatch(/continue-on-error/)
+  })
 })

@@ -382,3 +382,117 @@ describe('maxPathLength and maxStringLength cover generated paths and text array
     expectLimit(r, /maxStringLength/)
   }, T)
 })
+
+// ---------------------------------------------------------------------------
+// Built-in ceilings: bounds that hold WITHOUT any `limits`, only on the inputs where a tiny spec can exhaust the process.
+// Each attack runs in a child process with a 512 MB heap; before the ceilings these were a fatal out-of-memory, a hang or a
+// raw RangeError. Each is paired with a large-but-legitimate input that must still render (the ceilings sit far above it).
+// ---------------------------------------------------------------------------
+describe('built-in ceilings hold without limits (crash-class amplification)', () => {
+  const okResult = (r: Awaited<ReturnType<typeof attack>>): void => {
+    expect(r.killed, `child had to be killed. stderr: ${r.stderr}`).toBe(false)
+    expect(r.threw, JSON.stringify(r)).toBeNull()
+  }
+  const CEILING = /built-in ceiling that applies even without limits/
+  const axisSpec = (extra: string) => `{
+    width: 300, height: 200,
+    scales: [{ name: 'x', type: 'linear', domain: [0, 1e6], range: [0, 300] }],
+    axes: [{ orient: 'bottom', scale: 'x', ${extra} }] }`
+
+  const topo = (refs: number) => `
+    const arc = Array.from({ length: 1000 }, (_, i) => [i, i % 7])
+    const topo = { type: 'Topology', arcs: [arc], objects: { g: { type: 'GeometryCollection', geometries: [
+      { type: 'Polygon', arcs: [new Array(${refs}).fill(0)] } ] } } }`
+  const topoSpec = `{ data: [{ name: 't', values: topo, format: { type: 'topojson', feature: 'g' } }] }`
+
+  it('topojson: a 440 KB topology that decodes to 200M positions (fatal OOM before)', async () => {
+    const r = await attack(`${topo(200000)}; core.renderSpec(${topoSpec})`)
+    expectLimit(r, /topojson arcs.*built-in ceiling/, 1500)
+    expect(r.threw!.message).toMatch(/limits\.maxRows/)
+  }, T)
+  it('topojson: a topology decoding to 1M positions still renders; limits.maxGeneratedRows raises the ceiling', async () => {
+    okResult(await attack(`${topo(1000)}; core.renderSpec(${topoSpec})`))
+    okResult(await attack(`${topo(2500)}; core.renderSpec(${topoSpec}, { limits: { maxGeneratedRows: 4000000 } })`))
+  }, T)
+
+  it('axis tickCount 2e6 with an empty limits object (fatal OOM before)', async () => {
+    const r = await attack(`core.renderSpec(${axisSpec('tickCount: 2000000')}, { limits: {} })`)
+    expectLimit(r, CEILING, 200)
+    expect(r.threw!.message).toMatch(/tickCount/)
+  }, T)
+  it('axis tickCount 2e6 with no limits at all: a typed error, the axis is not silently dropped', async () => {
+    expectLimit(await attack(`core.renderSpec(${axisSpec('tickCount: 2000000')})`), CEILING, 200)
+  }, T)
+  it('a dense axis (tickCount 5000) still renders; limits.maxItems raises the ceiling', async () => {
+    okResult(await attack(`core.renderSpec(${axisSpec('tickCount: 5000')})`))
+    okResult(await attack(`core.renderSpec(${axisSpec('tickCount: 150000')}, { limits: { maxItems: 1000000 } })`))
+  }, T)
+
+  const seq = (stop: string, limits = '') => `core.renderSpec({ data: [{ name: 't', transform: [{ type: 'sequence', start: 0, stop: ${stop}, as: 'x' }] }] }${limits})`
+  it('sequence transform 5e7 rows: with no limits, and with limits that do not name rows', async () => {
+    expectLimit(await attack(seq('5e7')), CEILING, 200)
+    expectLimit(await attack(seq('5e7', ', { limits: { maxStringLength: 10000, maxItems: 1000 } }')), CEILING, 200)
+  }, T)
+  it('expression sequence(0, 5e7) with limits that do not name rows (not bounded by maxStringLength alone)', async () => {
+    const r = await attack(`
+      core.renderSpec({ data: [{ name: 't', values: [{ a: 1 }], transform: [{ type: 'formula', as: 'n', expr: 'length(sequence(0, 50000000))' }] }] },
+        { limits: { maxStringLength: 10000 } })`)
+    expectLimit(r, CEILING, 200)
+  }, T)
+  it('a sequence of 900 000 rows still renders; limits.maxRows raises the ceiling', async () => {
+    okResult(await attack(seq('900000')))
+    okResult(await attack(seq('1500000', ', { limits: { maxRows: 2000000 } }')))
+  }, T)
+
+  const cols = (n: number, limits = '') => `
+    const spec = JSON.parse(trellisSpec)
+    spec.layout.columns = ${n}
+    core.renderSpec(spec${limits})`
+  it('trellis layout.columns 5e7 (3.7 s before, even under maxTimeMs 100)', async () => {
+    // Under a 100 ms time budget the attack must be bounded either way: on a fast machine the facet-columns ceiling trips first,
+    // on a slow or loaded one the clock can trip first (both are AsterLimitError). Which limit names the error is a race, so this
+    // run asserts only the bound; the run below, with no limits at all, is the one that pins the built-in ceiling itself.
+    const r = await attack(cols(50000000, ', { limits: { maxTimeMs: 100 } }'))
+    expectLimit(r, /facet columns|maxTimeMs exceeded/, 100)
+    const bare = await attack(cols(50000000))
+    expectLimit(bare, CEILING, 100)
+    expect(bare.threw!.message).toMatch(/facet columns/)
+  }, T)
+  it('a trellis with columns 4 and with columns 5000 still renders', async () => {
+    okResult(await attack(cols(4)))
+    okResult(await attack(cols(5000)))
+  }, T)
+
+  const nested = (depth: number, limits = '') => `
+    let o = { type: 'group' }; const root = o
+    for (let i = 0; i < ${depth}; i++) { const n = { type: 'group' }; o.marks = [n]; o = n }
+    core.renderSpec({ width: 10, height: 10, marks: [root] }${limits})`
+  it('a spec nested 20000 deep with no limits is a typed error, not a RangeError', async () => {
+    const r = await attack(nested(20000))
+    expectLimit(r, /maxDepth 1001 > 1000/, 100)
+    expectLimit(await attack(nested(20000, ', { limits: {} }')), /maxDepth/, 100)
+  }, T)
+  it('a cyclic spec with no limits is a typed error', async () => {
+    const r = await attack(`const s = { width: 10, height: 10, marks: [] }; s.marks.push(s); core.renderSpec(s)`)
+    expectLimit(r, /maxDepth/, 100)
+  }, T)
+  it('a spec nested 40 deep (groups) still renders', async () => {
+    okResult(await attack(nested(40)))
+  }, T)
+
+  it.each([
+    ['pad', "length(pad('x', 50000000))"],
+    ['number format width', "length(format(1, '50000000d'))"],
+  ])('%s of 5e7 characters with no limits', async (_name, expr) => {
+    const r = await attack(`
+      core.renderSpec({ width: 100, height: 100, marks: [{ type: 'text', encode: { update: { x: { value: 1 }, y: { value: 1 }, text: { signal: ${JSON.stringify(expr)} } } } }] })`)
+    expectLimit(r, CEILING, 200)
+    expect(r.threw!.message).toMatch(/limits\.maxStringLength/)
+  }, T)
+  it('a pad / format width of 100 000 characters still works; limits.maxStringLength raises the ceiling', async () => {
+    const run = (expr: string, limits = '') => attack(`
+      return core.renderSpec({ width: 100, height: 100, marks: [{ type: 'text', encode: { update: { x: { value: 1 }, y: { value: 1 }, text: { signal: ${JSON.stringify(expr)} } } } }] }${limits}).length > 0`)
+    okResult(await run("length(pad('x', 100000)) + length(format(1, '100000d'))"))
+    okResult(await run("length(pad('x', 3000000))", ', { limits: { maxStringLength: 4000000 } }'))
+  }, T)
+})

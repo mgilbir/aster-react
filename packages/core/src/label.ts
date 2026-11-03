@@ -43,7 +43,7 @@ class Grid {
 
   constructor(readonly w: number, readonly h: number) {
     // w x h come from the spec's size and padding: bound the array before making it
-    meterRows((w * h) / 32, 'label bitmap')
+    meterRows((w * h) / 32, 'label bitmap', 'cells')
     this.bits = new Uint32Array(~~((w * h + 32) / 32))
   }
 

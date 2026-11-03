@@ -20,7 +20,9 @@ import * as vs from './scale.js'
 import { implicit as scaleImplicit } from './scale-discrete.js'
 import { plain, plainList, plainRecord, resolveDomain, signalValue, type ScaleContext } from './scale-domain.js'
 import type { CompiledScale } from './types.js'
-import { error as raise, hasOwnProperty, isArray, isFunction, isObject, isString, peek } from './util.js'
+import { vegaDefaultConfig } from './config-defaults.js'
+import { error as raise, expT, hasOwnProperty, isArray, isFunction, isObject, isString, logT, peek, powT, symexpT, symlogT } from './util.js'
+import { ceiling } from './limits.js'
 
 export type { ScaleContext } from './scale-domain.js'
 
@@ -185,10 +187,9 @@ function zoomed(domain: number[], factor: number, lift: Unary, ground: Unary): [
   return [ground(middle + (a - middle) * factor), ground(middle + (b - middle) * factor)]
 }
 
-const logSpace = (sign: number): [Unary, Unary] => [(x) => Math.log(sign * x), (x) => sign * Math.exp(x)]
-const signedPower = (e: number): Unary => (x) => (x < 0 ? -Math.pow(-x, e) : Math.pow(x, e))
-const powerSpace = (e: number): [Unary, Unary] => [signedPower(e), signedPower(1 / e)]
-const symlogSpace = (c: number): [Unary, Unary] => [(x) => Math.sign(x) * Math.log1p(Math.abs(x / c)), (x) => Math.sign(x) * Math.expm1(Math.abs(x)) * c]
+const logSpace = (sign: number): [Unary, Unary] => [logT(sign), expT(sign)]
+const powerSpace = (e: number): [Unary, Unary] => [powT(e), powT(1 / e)]
+const symlogSpace = (c: number): [Unary, Unary] => [symlogT(c), symexpT(c)]
 
 // ---- the bins ---------------------------------------------------------------------------------------------
 
@@ -289,12 +290,19 @@ function schemeRange(type: string, st: Settings, size: number): unknown {
   const classes =
     type === vs.Threshold ? size + 1
     : type === vs.BinOrdinal ? size - 1
-    : type === vs.Quantile || type === vs.Quantize ? +(st.schemeCount as number) || DEFAULT_CLASSES
+    : type === vs.Quantile || type === vs.Quantize ? schemeClasses(st.schemeCount)
     : size
 
   if (vs.isInterpolating(type)) return trimmed(scheme, extent, st.reverse)
   if (isFunction(scheme)) return vs.quantizeInterpolator(trimmed(scheme, extent) as SchemeFn, classes)
   return type === vs.Ordinal ? scheme : (scheme as unknown[]).slice(0, classes)
+}
+
+/** The `count` of a quantile / quantize colour scheme: it comes from the spec and sizes the sampled array. */
+function schemeClasses(count: unknown): number {
+  const n = +(count as number) || DEFAULT_CLASSES
+  ceiling('items', n, 'colour scheme count')
+  return n
 }
 
 /** A ramp restricted to the sub-range of [0, 1] the spec gives (and reversed when asked); a colour list is untouched. */
@@ -306,6 +314,8 @@ function trimmed(scheme: unknown, extent: number[] | undefined, reverse?: unknow
 
 /** The tick values the axis runtime draws for a scale: for `count` ticks, else the scale's default (none for a range of under two). */
 export function scaleTicks(s: Scale, count?: number): unknown[] {
+  // the count comes from the spec: a tick count past the ceiling is refused before ticks are made (it sizes the array)
+  if (typeof count === 'number') ceiling('items', count, 'tickCount')
   if (count != null) return vs.tickValues(s, count)
   return (s.range() as unknown[]).length >= 2 ? vs.tickValues(s, undefined) : []
 }
@@ -343,14 +353,7 @@ export interface Settings {
 }
 
 /** The named ranges a spec can use without defining them; a `config.range` entry of the same name replaces one. */
-const BUILT_IN_RANGES: Record<string, unknown> = Object.assign(Object.create(null), {
-  category: { scheme: 'tableau10' },
-  ordinal: { scheme: 'blues' },
-  heatmap: { scheme: 'yellowgreenblue' },
-  ramp: { scheme: 'blues' },
-  diverging: { scheme: 'blueorange', extent: [1, 0] },
-  symbol: ['circle', 'square', 'triangle-up', 'cross', 'diamond', 'triangle-right', 'triangle-down', 'triangle-left'],
-})
+const BUILT_IN_RANGES: Record<string, unknown> = Object.assign(Object.create(null), vegaDefaultConfig().range)
 
 /** How deep a chain of named ranges may go before it is taken to be a loop. */
 const MAX_RANGE_CHAIN = 32

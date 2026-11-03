@@ -24,7 +24,7 @@ import {
   AsterLimitError,
   getStreamFlushFailure,
   checkSceneLimits, checkSpecLimits, checkSvgLength, compileChart, createChartStream,
-  createLimitClock, evaluateChart, renderSceneToSvg,
+  createLimitClock, evaluateChart, renderSceneToSvg, withLimits,
   type ChartStream, type DataPulse, type ImageUrlPolicy, type SceneRoot, type SpecLimits, type StreamBatch,
   type StreamOptions, type StreamPolicy, type StreamStats, type TextMetricsProvider, type VgSpec,
 } from '@aster/core'
@@ -215,18 +215,22 @@ export function handleChartWorkerRequest(request: ChartWorkerRequest): ChartWork
       ...(urlPolicy != null ? { urlPolicy: resolveWorkerUrlPolicy(urlPolicy) } : {}),
     }
     const limits = input.limits
-    // Same budget sequence as `renderSpec`.
-    const clock = createLimitClock(limits)
-    if (limits) checkSpecLimits(spec as unknown as Record<string, unknown>, limits)
-    clock.check('compile')
-    const chart = compileChart(spec)
-    clock.check('evaluate')
-    const scene = evaluateChart(chart, input)
-    clock.check('evaluate')
-    if (limits) checkSceneLimits(scene, limits)
-    const svg = renderSceneToSvg(scene)
-    clock.check('render')
-    if (limits) checkSvgLength(svg, limits)
+    // Same budget sequence as `renderSpec`, inside one scope: the SVG is serialized under the same meter and clock
+    // (its path-length checks included), and a violation a defensive catch swallowed still fails the request.
+    const { svg, scene } = withLimits(limits, (meter) => {
+      const clock = meter?.clock ?? createLimitClock(limits)
+      if (limits) checkSpecLimits(spec as unknown as Record<string, unknown>, limits)
+      clock.check('compile')
+      const chart = compileChart(spec)
+      clock.check('evaluate')
+      const scene = evaluateChart(chart, input)
+      clock.check('evaluate')
+      if (limits) checkSceneLimits(scene, limits)
+      const out = renderSceneToSvg(scene)
+      clock.check('render')
+      if (limits) checkSvgLength(out, limits)
+      return { svg: out, scene }
+    })
     return { id: request.id, svg, scene: cloneableScene(scene) }
   } catch (error) {
     return { id: request.id, error: wireError(error) }

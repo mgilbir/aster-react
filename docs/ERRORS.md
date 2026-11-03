@@ -119,14 +119,16 @@ it). Nothing is swallowed without a report, and each report is the original `Err
 | Where the expression threw | What is left (as in vega) |
 |---|---|
 | a conditional-encode `test` or branch, a `signal` or `field` in an encode | the failing item keeps the channels evaluated **before** the failing one (spec order); no later item, of this mark or any later one, is encoded or drawn (the run is aborted) |
+| an entry that calls a scale the spec never declared (`{scale, field}`, `{scale, value}`, `{scale, signal}`, `{scale, range}`, the `extra` of a band) | `TypeError: _.%<name> is not a function` (a `range`: `Cannot read properties of undefined (reading 'range')`), then as the line above. A band on its own reads a bandwidth of 0 and `{scale}` alone is 0, so neither fails. The message is vega's for a scale named in the spec; for one named by a signal or a field it is `_[("%" + <the reference>)] is not a function` |
+| a facet `cross` over a nested group-by path | the aggregate throws (`Cannot read properties of undefined`), the mark is not made and the run stops |
 | a dataset transform (`filter`, `formula`, ...) or a mark-level `transform` | the dataset publishes no rows; marks sourced from it are not built |
 | a mark `sort`, a facet header `sort` | the rows stay in data order |
 | a scale that cannot be built (bad `scheme`, unrecognised scale `type`, non-array `range`, ...) | the run stops there: this and later scales are absent and nothing is encoded |
 | a `signal.on` filter or update, while an event is handled | that event's delivery stops (updates already applied stand); the next event works |
 
 An evaluation that logged a recovery is not committed as the base of the next incremental one, so a following update
-re-derives from scratch. Items an aborted run never encoded are dropped from their mark (vega draws nothing for them
-either, apart from the zero-size rect path, which is invisible).
+re-derives from scratch. Items an aborted run never encoded stay in their mark, without geometry or paint, as they do
+in vega's scenegraph (what each mark type draws for one is compared with vega for every type).
 
 **Never recovered** (rethrown to the caller): `AsterLimitError`, `AsterUrlError`, `SpecParseError`, an expression that
 does not **parse** (`ExpressionParseError`; vega throws those from `vega.parse`), and any error whose message starts
@@ -221,14 +223,14 @@ names like any other (upstream treats them as signals everywhere or fails on the
 
 ## Unsupported and unknown features
 
-These are thrown by the **runtime** while the chart is evaluated, not by `compileChart`. Besides the expressions (next
-section), the compiler only checks the shape of the spec (`[aster] compileChart expects a Vega spec object`, `[aster]
-spec.scales must be an array of scale definitions`, `[aster] a scale definition must be an object`) and the data set
-names; a spec with an unknown transform compiles and then fails on the first `renderSpec`/`evaluateChart`. They are plain `Error`s with an `[aster]` prefix and no `code`.
+Most of these are thrown by the **runtime** while the chart is evaluated, not by `compileChart`. Besides the expressions (see
+above), the compiler checks the shape of the spec (`[aster] compileChart expects a Vega spec object`, `[aster] spec.scales must be
+an array of scale definitions`, `[aster] a scale definition must be an object`) and, as `vega.parse` does, the names a spec uses:
+an unknown transform `type` is a `SpecParseError` from `compileChart` (so from every host, before any data is read). The
+rows below are plain `Error`s with an `[aster]` prefix and no `code`, thrown on the first `renderSpec`/`evaluateChart`.
 
 | Situation | Error |
 |---|---|
-| unknown transform `type` | `[aster] unsupported transform type "bogus"` |
 | unknown aggregate op | `[aster] unsupported aggregate op "bogus" (vega: AggregateOps[op] is not a function)` |
 | `width` / `height` of the form `{ step }` | `[aster] width/height {step} sizing is not supported yet` |
 | a transform that needs a missing parameter | `[aster] Missing required "<type>" parameter: "<name>"` |

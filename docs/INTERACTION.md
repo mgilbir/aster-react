@@ -189,8 +189,9 @@ scope that never pulsed before (an internal flag of its operator); Aster fires i
 | `0` / `Home` | `pan` or `zoom` | reset the view |
 | double-click | `pan` or `zoom` | reset the view |
 
-The keys act when the chart container has focus (it is a Tab stop, `tabIndex=0`, only while pan or zoom is enabled) and
-when a continuous axis node is focused (see "Accessibility"). A zoom-only chart does not pan with the keyboard or the
+The keys act when the chart container has focus (while pan or zoom is enabled the container is the chart's one Tab stop,
+`tabIndex=0`; the accessibility nodes are then reached from it with `PageDown` / `PageUp`, see "Accessibility") and
+when a continuous axis node is focused. A zoom-only chart does not pan with the keyboard or the
 pointer, and a pan-only chart does not zoom with the wheel or `+`/`-`. Pointer gestures are handled on the container, so
 marks, tooltips, `signal.on` events and bound inputs underneath keep receiving their own events; a gesture on a form
 control or link is ignored.
@@ -306,7 +307,7 @@ after a write equals the scene a fresh chart renders with those signal values. V
 its own fresh render of the same signals, because it retains dataflow state: autosize runs once and again only when
 width/height/padding/autosize change, so a chart whose content outgrows the view keeps its first size. The signals sweep
 (`pnpm sweep-signals`, 166 cases) counts those cases as `retained` when Aster equals Vega's fresh render and Vega's
-incremental render differs: 104 ok, 59 retained, 1 both-refused, 2 node-error, 0 differ, with a ceiling on `retained`
+incremental render differs: 103 ok, 60 retained, 1 both-refused, 2 node-error, 0 differ, with a ceiling on `retained`
 that can only be lowered (`scripts/gates.mjs`).
 
 ## Tooltips
@@ -337,8 +338,15 @@ mark that has more than `a11y.summaryThreshold` items, default 150), axis, legen
 `aria/description` channels, selected state, and continuous axes exposed as sliders. It is on by default; `a11y={false}`
 removes it. `ariaLabel` labels the container.
 
-It is a **roving tabindex** group: exactly one node has `tabindex=0` (the last focused node, else the first), all the
-others `-1`. `Tab` enters the group at that node and the next `Tab` leaves it. Inside:
+A chart is **one Tab stop**, in every configuration. Without pan or zoom the nodes are a **roving tabindex** group:
+exactly one node has `tabindex=0` (the last focused node, else the first), all the others `-1`; `Tab` enters the group at
+that node and the next `Tab` leaves it. With `pan` or `zoom` the container is the stop (it owns the pan/zoom keys, and the
+arrows would clash with the nodes' arrows), every node is `tabindex=-1`, and `PageDown` on the container moves focus to the
+last focused node (else the first), `PageUp` to the last one. From there the keys below apply; `Tab` leaves the chart
+(`Shift+Tab` returns to the container). A chart that is re-rendered, resized or given another spec keeps the focus it had:
+a focused node that is gone moves the focus to the container (pan/zoom) or to the stop node, never to `<body>`; a click
+elsewhere on the page is not undone. Inputs bound with `bind` are ordinary form controls and are Tab stops of their own.
+Inside:
 
 | Node | Keys |
 |---|---|

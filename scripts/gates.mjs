@@ -77,7 +77,12 @@ export const GATES = [
     why: 'each documented import pattern is bundled (esbuild, production, tree-shaking) and EXECUTED: sideEffects must not shake out a registration (VL, geo, transforms, load, guide captions, worker entry); <SvgChart> bundles contain no canvas/hit/signals module unless asked (esbuild metafile)',
   },
   { name: 'budget', args: ['--filter', '@aster/benchmarks', 'run', 'budget'], why: 'per-import-pattern bundle size budgets (useChart, <Chart>, <SvgChart>, <SvgChart>+interaction, <Chart>+VL, core, addons as marginal cost); fails if tree-shaking breaks' },
-  { name: 'probe', args: ['probe'], blocking: false, why: 'known-gap probes (diagnostic only; never fails the run)' },
+  {
+    // The floor is the number of probes that pass today (probes/ holds 2). A probe that fails documents a gap and is allowed; one that passed
+    // and stops passing is a regression, and an empty probes/ is not a pass either (packages/conformance/src/probe-verdict.ts).
+    name: 'probe', args: ['probe', '--', '--min-pass', '2'],
+    why: 'known-gap probes: those that pass today keep passing (a failing probe documents a gap and is allowed)',
+  },
 ]
 
 function csv(argv, flag) {

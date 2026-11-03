@@ -12,8 +12,8 @@ import { densityGrid, placeContours } from './raster-grid.js'
 import { accessorOf, densitySettings } from './raster-params.js'
 import { PARAM_RULES, checkParams } from './param-rules.js'
 import { tickStep } from './arr.js'
-import { carryOrder, orderOf, placesAt, recordNextOrder, takeRecording } from './tuple-order.js'
-import { activeMeter, boundedCount } from './limits.js'
+import { carryOrder, orderOf, placesAt } from './tuple-order.js'
+import { activeMeter, boundedCount, ceiling } from './limits.js'
 import { walkPostOrder, walkPreOrder } from './tree-walk.js'
 import { aggregateRows, type AggregateParams, compareOf, fieldOf, joinAggregateRows, pivotRows, sortBySpec } from './transform-agg.js'
 import { windowRows } from './transform-window.js'
@@ -140,10 +140,8 @@ export function applyTransforms(
     const ownedIn = owned
     owned = ownsOutput(t, ownedIn)
     // (a collect that sorts, with a sort after it, leaves the order the rows were made in beside its result)
-    if (placesAt(transforms, k)) recordNextOrder()
     const input = out
-    out = applyTransform(out, t, run, sourceName, ownedIn)
-    takeRecording()
+    out = applyTransform(out, t, run, sourceName, ownedIn, placesAt(transforms, k))
     carryOrder(t.type, input, out)
     if (meter) {
       // Whatever a transform produced is a dataset like any other: it may not
@@ -200,7 +198,7 @@ function resolveSignalParams(t: CompiledTransform, ctx: TransformContext): Compi
   return resolve(t, 0) as CompiledTransform
 }
 
-function applyTransform(rows: Row[], t0: CompiledTransform, ctx: TransformContext, sourceName: string | undefined, owned: boolean): Row[] {
+function applyTransform(rows: Row[], t0: CompiledTransform, ctx: TransformContext, sourceName: string | undefined, owned: boolean, leaveOrder: boolean): Row[] {
   const rules = PARAM_RULES.get(t0.type as string)
   if (rules) checkParams(t0 as Record<string, unknown>, rules)
   const t = resolveSignalParams(t0, ctx)
@@ -222,7 +220,7 @@ function applyTransform(rows: Row[], t0: CompiledTransform, ctx: TransformContex
       return rows.filter((r) => expr(r))
     }
     case 'collect':
-      return collectRows(rows, t)
+      return collectRows(rows, t, leaveOrder)
     case 'sample':
       return sampleRows(rows, t, ctx.runtime.random)
     case 'fold':
@@ -322,6 +320,8 @@ function applyTransform(rows: Row[], t0: CompiledTransform, ctx: TransformContex
       }
       return rows
     }
+    case 'nest':
+      return requireTransform('nest')(rows, t as Record<string, unknown>, ctx, sourceName)
     case 'pack':
       return requireTransform('pack')(rows, t as Record<string, unknown>, ctx, sourceName)
     case 'partition':
@@ -388,13 +388,6 @@ export function compileExprTransform(expr: string, ctx: TransformContext) {
 
 export function isFiniteNumber(v: unknown): v is number {
   return typeof v === 'number' && Number.isFinite(v)
-}
-
-export function collectField(rows: Row[], field: string | null | undefined): unknown[] {
-  if (!field) return []
-  const out: unknown[] = []
-  for (const r of rows) out.push(r[field])
-  return out
 }
 
 /**
@@ -514,18 +507,6 @@ export function computeBinEps(step: number): number {
 // ---------------------------------------------------------------------------
 // aggregate / window / stack
 // ---------------------------------------------------------------------------
-
-export function groupRows(rows: Row[], keys: string[]): Row[][] {
-  if (!keys.length) return rows.length ? [rows] : []
-  const map = new Map<string, Row[]>()
-  for (const r of rows) {
-    const key = keys.map((k) => String(r[k])).join('\u0000')
-    let g = map.get(key)
-    if (!g) map.set(key, (g = []))
-    g.push(r)
-  }
-  return [...map.values()]
-}
 
 // ---------------------------------------------------------------------------
 // geoshape: GeoJSON -> SVG path (identity projection)
@@ -721,6 +702,7 @@ export function contourQuantize(levels: number, nice: boolean, zero: boolean): (
 function contourRows(rows: Row[], t: Record<string, unknown>, ctx: TransformContext): Row[] {
   const values = t.values as ArrayLike<unknown> | undefined
   // The thresholds: given, or `count` levels spanning the values (from zero when the values are given, not estimated).
+  ceiling('items', (t.count as number) || 10, 'contour levels')
   const quantize = contourQuantize((t.count as number) || 10, !!t.nice, !!values)
   const given = t.thresholds as number[] | undefined
 
@@ -780,6 +762,11 @@ export interface HierNode {
   y: number
   r: number
   value: number
+  /**
+   * On a tree's root: how many rows the dataset had when the tree was built. A dataset of that size still holds the rows at the
+   * positions (`idx`) the tree remembers; one of another size has been filtered or extended since.
+   */
+  rowCount?: number
   /** On a tree's root: the nodes by their `key` value (vega-hierarchy `lookup`), for `treePath` / `treeAncestors`. */
   lookup?: Map<string, HierNode>
   /** Treemap bounding rectangle (d3-hierarchy node.x0/x1/y0/y1). */
@@ -801,7 +788,10 @@ export interface HierNode {
 export function buildStratifyTree(rows: Row[], key?: string, parentKey?: string): HierNode {
   if (!key) throw new Error('[aster] stratify requires a key field')
   const mk = (data: Row, idx = -1): HierNode => ({ data, idx, children: [], parent: null, depth: 0, height: 0, x: 0, y: 0, r: 0, value: 0 })
-  if (!rows.length) return mk({})
+  if (!rows.length) return Object.assign(mk({}), { rowCount: 0 })
+  // (both are fields: paths into the row)
+  const idOf = fieldOf(key)
+  const parentOf = parentKey ? fieldOf(parentKey) : undefined
   const ambiguous = {} as HierNode
   const byKey = new Map<string, HierNode>()
   const nodes: HierNode[] = []
@@ -810,12 +800,12 @@ export function buildStratifyTree(rows: Row[], key?: string, parentKey?: string)
     const r = rows[i]!
     const node = mk(r, i)
     nodes.push(node)
-    const id = r[key]
+    const id = idOf(r)
     if (id != null && String(id) !== '') {
       const k = String(id)
       byKey.set(k, byKey.has(k) ? ambiguous : node)
     }
-    const pid = parentKey ? r[parentKey] : undefined
+    const pid = parentOf?.(r)
     parentIds.push(pid != null && String(pid) !== '' ? String(pid) : null)
   }
   let root: HierNode | null = null
@@ -844,8 +834,9 @@ export function buildStratifyTree(rows: Row[], key?: string, parentKey?: string)
   if (reached < nodes.length) throw new Error('[aster] stratify: cycle')
   // (vega-hierarchy lookup(): every node by its key, the last of equal keys winning)
   const lookup = new Map<string, HierNode>()
-  for (const node of nodes) lookup.set(String(node.data[key]), node)
+  for (const node of nodes) lookup.set(String(idOf(node.data)), node)
   root.lookup = lookup
+  root.rowCount = rows.length
   walkPostOrder(root, (node) => {
     let h = 0
     for (const c of node.children) if (c.height + 1 > h) h = c.height + 1
