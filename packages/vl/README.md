@@ -52,7 +52,7 @@ an expression or a generated dataset/signal/scale name.
   containerSize signals and an autosize fit / fit-x / fit-y over the padding).
 - Transforms: filter, calculate, bin, timeUnit, aggregate, joinaggregate, window, stack, fold,
   flatten, pivot, impute, lookup, sample, density, loess, regression, quantile, extent.
-- Channels: x, y, x2, y2, xOffset, yOffset, xError(2), yError(2), theta, radius, color, fill,
+- Channels: x, y, x2, y2, xOffset, yOffset, xError(2), yError(2), theta, theta2, radius, radius2, color, fill,
   stroke, opacity, size, strokeWidth, shape, text, tooltip, href, url, description, detail, order,
   row, column, facet. `size` drives points, text (font size), lines, ticks, bars and trails.
 - `config.scale`: every key that reaches the output: band / bar / rect / tick padding, nested- and

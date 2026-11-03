@@ -392,7 +392,7 @@ the same Chromium). All 75 are resolved; the React path passes exactly the specs
 ## Known compiler gaps outside the gallery (lane 8, not yet fixed)
 These are not exercised by any gallery spec, so the gate cannot see them. They are recorded here so they are not lost.
 - **A discrete x with `sort: "descending"` plus `x2`.** The union of the domain needs the raw dataset's sort; the parity case was dropped rather than shipped failing.
-- **The `theta2` / `radius2` channels** (ranged polar arcs) are still refused with an explicit message. `vl/arc_params` uses `radius2` as a *mark def*, which is supported.
+- **The `theta2` / `radius2` channels** (ranged polar arcs) are supported (`vl-polar-ranged.test.ts`). A `datum` or a pre-binned field on `theta` / `radius` themselves is still refused. `vl/arc_params` uses `radius2` as a *mark def*, which is supported.
 - **`filled` on a text or trail mark.** The colour paint should flip, as vega-lite does. Found by the paint matrix in `vl-compiler-parity.test.ts`; 12 cases are left out of it.
 - **Field names of `geopoint` outputs** in a unit inside a concat or facet stay unprefixed (`x`, `layer_1_x`), where vega-lite writes `concat_0_x`. No render or expression differs.
 - **The merged bins-signal name** in one repeat-in-concat case is `layer_1` where vega-lite writes `layer_0`. No render differs.
