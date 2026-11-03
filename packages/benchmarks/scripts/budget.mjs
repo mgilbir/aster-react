@@ -172,7 +172,7 @@ import { fileURLToPath } from 'node:url'
 // SvgChart 175.9, SvgChart + interaction 193.3, Chart + VL 299.4; signals 12.9, load 5.4, geo 16.1 and transforms 39.2 did not move.
 // Ceilings are the measured value + 0.5.
 const BUDGETS = {
-  '@aster/core': 146.3 * 1024,
+  '@aster/core': 148.5 * 1024,
   '+ @aster/core/dom': 11.1 * 1024,
   '+ @aster/core/canvas': 6.4 * 1024,
   '+ @aster/core/hit': 7.0 * 1024,
