@@ -9,8 +9,8 @@ type Spec = Record<string, unknown>
 
 /** The ways a part of the tree fails. */
 export type Fail = 'mark' | 'condition' | 'group' | 'axis' | 'legend' | 'title' | 'signal' | 'scope-signal' | 'scale' | 'late-signal' | 'transform' | 'sort'
-  | 'group-transform' | 'header-sort' | 'encode-and-transform' | 'item-transform'
-export const FAILS: readonly Fail[] = (process.env.ABORT_KINDS?.split(',') as Fail[] | undefined) ?? ['mark', 'condition', 'group', 'axis', 'legend', 'title', 'signal', 'scope-signal', 'scale', 'late-signal', 'transform', 'sort', 'group-transform', 'header-sort', 'encode-and-transform', 'item-transform']
+  | 'group-transform' | 'header-sort' | 'encode-and-transform' | 'item-transform' | 'layout'
+export const FAILS: readonly Fail[] = (process.env.ABORT_KINDS?.split(',') as Fail[] | undefined) ?? ['mark', 'condition', 'group', 'axis', 'legend', 'title', 'signal', 'scope-signal', 'scale', 'late-signal', 'transform', 'sort', 'group-transform', 'header-sort', 'encode-and-transform', 'item-transform', 'layout']
 
 interface Gen {
   r: Rng
@@ -28,7 +28,7 @@ interface Gen {
 
 /** The failures a leaf mark can hold, and those a group can (`signal` is the view's, wherever it is drawn). */
 const LEAF_FAILS: ReadonlySet<Fail> = new Set(['mark', 'condition', 'scale', 'late-signal', 'transform', 'sort', 'encode-and-transform', 'signal', 'item-transform'])
-const GROUP_FAILS: ReadonlySet<Fail> = new Set(['group', 'axis', 'legend', 'title', 'scope-signal', 'scale', 'late-signal', 'transform', 'sort', 'group-transform', 'header-sort', 'encode-and-transform', 'signal'])
+const GROUP_FAILS: ReadonlySet<Fail> = new Set(['group', 'axis', 'legend', 'title', 'scope-signal', 'scale', 'late-signal', 'transform', 'sort', 'group-transform', 'header-sort', 'encode-and-transform', 'signal', 'layout'])
 
 const COLORS = ['teal', 'crimson', 'goldenrod', 'slateblue', 'seagreen', 'orchid', 'tomato', 'navy']
 
@@ -218,9 +218,12 @@ function axis(g: Gen, own: string | undefined, fails: boolean): Spec {
   return a
 }
 
-function legend(g: Gen, fails: boolean): Spec {
-  const kind = g.r.pick(['c', 'c', 'g', 'q'])
+function legend(g: Gen, fails: boolean, badColumns = false): Spec {
+  const kind = badColumns ? 'c' : g.r.pick(['c', 'c', 'g', 'q'])
   const l: Spec = { fill: kind }
+  // (a symbol legend lays its entries out in a grid of its own: one it cannot take throws there)
+  if (badColumns) l.columns = g.r.pick([1.5, -1, 2.5])
+  else if (kind === 'c' && g.r.chance(0.15)) l.columns = g.r.pick([0, 1, 2, 3])
   if (g.r.chance(0.35)) l.title = 'legend'
   if (g.r.chance(0.2)) l.orient = g.r.pick(['left', 'top', 'bottom', 'none'])
   if (fails) {
@@ -264,12 +267,16 @@ function group(g: Gen, depth: number, data: string): Spec {
     g.used.add(fail as Fail)
   } else if (fail === 'sort' || fail === 'encode-and-transform') { node.sort = { field: 'datum.zz.q' }; g.used.add(fail) }
   if (transforms.length) node.transform = transforms
-  if (fail === 'header-sort' || g.r.chance(0.08)) {
-    // a grid of the group's groups, with a header (or footer) group whose items are sorted by what they do not have. (One column, or
-    // as many as there are cells: a grid with more column headers than cells makes vega's layout throw, which is not what is tested here.)
-    node.layout = { ...(g.r.chance(0.5) ? { columns: 1 } : {}), padding: 3, bounds: g.r.pick(['full', 'flush']) }
+  // (a layout that throws: a column count no grid can take, or a legend whose entries' grid cannot take its own)
+  const layoutFails = fail === 'layout' ? g.r.pick(['columns', 'columns', 'legend']) : undefined
+  if (fail === 'header-sort' || layoutFails === 'columns' || g.r.chance(0.12)) {
+    // a grid of the group's groups, with a header (or footer) group whose items are sorted by what they do not have. The columns are
+    // drawn at random: with more columns than cells, a column header or footer finds no cell to line up with, and the layout throws.
+    const columns = layoutFails === 'columns' ? g.r.pick([1.5, -2, 0.5]) : g.r.pick([undefined, 1, 2, 3, 4])
+    node.layout = { ...(columns !== undefined ? { columns } : {}), padding: 3, bounds: g.r.pick(['full', 'flush']), ...(g.r.chance(0.2) ? { headerBand: 0.5 } : {}) }
+    if (layoutFails !== undefined) g.used.add('layout')
     const header: Spec = {
-      type: 'group', role: g.r.pick(['column-header', 'row-header', 'column-footer', 'row-footer']), name: `h${id}`, from: { data: childData },
+      type: 'group', role: g.r.pick(['column-header', 'row-header', 'column-footer', 'row-footer']), name: `h${id}`, from: { data: g.r.chance(0.3) ? 't' : childData },
       sort: { field: fail === 'header-sort' ? 'datum.zz.q' : 'datum.k', order: 'descending' },
       encode: { update: { width: { value: 10 }, height: { value: 6 } } },
       title: { text: { signal: "'' + parent.a" }, fontSize: 6 },
@@ -291,7 +298,7 @@ function group(g: Gen, depth: number, data: string): Spec {
   const axes: Spec[] = []
   const legends: Spec[] = []
   for (let i = (empty ? 0 : g.r.between(0, 1)) + (fail === 'axis' ? 1 : 0); i > 0; i--) axes.push(axis(g, own ? `s${id}` : undefined, false))
-  for (let i = (empty ? 0 : g.r.between(0, 1)) + (fail === 'legend' ? 1 : 0); i > 0; i--) legends.push(legend(g, false))
+  for (let i = (empty ? 0 : g.r.between(0, 1)) + (fail === 'legend' || layoutFails === 'legend' ? 1 : 0); i > 0; i--) legends.push(legend(g, false))
   if (fail === 'axis') {
     axes[g.r.int(axes.length)] = axis(g, own ? `s${id}` : undefined, true)
     g.used.add(fail)
@@ -299,6 +306,10 @@ function group(g: Gen, depth: number, data: string): Spec {
   if (fail === 'legend') {
     legends[g.r.int(legends.length)] = legend(g, true)
     g.used.add(fail)
+  }
+  if (layoutFails === 'legend') {
+    legends[g.r.int(legends.length)] = legend(g, false, true)
+    g.used.add('layout')
   }
   if (axes.length) node.axes = axes
   if (legends.length) node.legends = legends
@@ -341,6 +352,16 @@ export function treeSpec(r: Rng): { spec: Spec; fails: Fail[]; label: string } {
     ],
     data: [{ name: 't', values: [{ a: 1, k: 'p', o: { v: 3 } }, { a: 2, k: 'q' }, { a: 3, k: 'p', o: { v: 2 } }] }],
     marks,
+  }
+  // a grid of the view's own groups, with a header or a footer: its columns drawn at random (more columns than cells make a column header
+  // or footer that finds no cell throw), and a count no grid can take where the view's layout is to fail
+  if (r.chance(0.12)) {
+    const columns = r.chance(0.2) ? r.pick([1.5, -1]) : r.pick([undefined, 1, 2, 3, 5])
+    spec.layout = { ...(columns !== undefined ? { columns } : {}), padding: 2, bounds: r.pick(['full', 'flush']) }
+    ;(spec.marks as Spec[]).push({
+      type: 'group', role: r.pick(['column-header', 'row-header', 'column-footer', 'row-footer']), name: 'vh', from: { data: 't' },
+      encode: { update: { width: { value: 10 }, height: { value: 6 } } }, title: { text: { signal: "'' + parent.a" }, fontSize: 6 },
+    })
   }
   // the view's own guides and title, and a failing signal of the view
   const view = process.env.ABORT_ONE && !FAILS.some((f) => f === 'axis' || f === 'legend' || f === 'title') ? [] : r.pick<string[]>([[], [], ['axis'], ['legend'], ['title'], ['axis', 'legend', 'title']])
