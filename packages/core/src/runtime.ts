@@ -46,7 +46,7 @@ import type {
 } from './types.js'
 import { gradientDefOf, hash53, isGradientPaint } from './svg-defs.js'
 import { tickFormat, scaleGradient, scaleGradientStops, tickCount, validTicks } from './scale.js'
-import { DEFAULT_SPECIFIERS, UNIT_ORDER, timeIntervalFor, utcIntervalFor } from './time.js'
+import { timeIntervalFor, utcIntervalFor } from './time.js'
 import { compileChart } from './compiler.js'
 import { dict, ownGet, pushAll, sortData, lerp, scopedSignalName, heldSignalName, TUPLE_ID } from './util.js'
 import { applyImageUrlPolicy, applyLinkUrlPolicy, resolveImageUrl, type ImageUrlPolicy } from './url-policy.js'
@@ -58,7 +58,7 @@ import { boundAxisGroup, boundLegendGroup, boundGroupItem, boundLeaf, boundTyped
 import { rectItemPath } from './render.js'
 import { buildAxis as buildAxisGuide, tickPlacement } from './guide-axis.js'
 import { buildTitle as buildTitleGuide } from './guide-title.js'
-import { buildLegend as buildLegendGuide, legendType, placeLegendStack, LEGEND_SCALES, type GuideHost, type Sides } from './guide-legend.js'
+import { buildLegend as buildLegendGuide, entriesRefusal, legendType, placeLegendStack, LEGEND_SCALES, type GuideHost, type Sides } from './guide-legend.js'
 import { guideReading, type GuideKind } from './guide-model.js'
 import { ExpressionFailure, isSignal, isUnencoded, itemAriaOf, propsOf, type GuideStyles, type UserEncode } from './guide-encode.js'
 import { defaultMergedConfig } from './config-defaults.js'
@@ -1331,19 +1331,24 @@ function resolveSignalUpdates(ctx: EvalContext, staticOnly = false): boolean {
 // Shared axis/legend + padding computation — used by both evaluateChart and getChartInfo
 // ===========================================================================
 
-/** Resolve a guide string/signal value for accessibility metadata. */
-function guideString(ctx: EvalContext, value: unknown): string | undefined {
-  if (typeof value === 'string') return value
-  // (a numeric format is read as the specifier of its digits, like d3: `42` is a width of 42)
-  if (typeof value === 'number') return String(value)
-  if (value && typeof value === 'object' && typeof (value as { signal?: unknown }).signal === 'string') {
+/**
+ * The first error of the signals a guide's ticks or entries operator is given, in the order it is given them (vega makes each an
+ * operator of its own, ranked just before that one), or undefined when none throws.
+ */
+function paramsFailure(ctx: EvalContext, params: readonly unknown[]): { error: unknown } | undefined {
+  for (const p of params) {
+    if (!isSignal(p)) continue
     try {
-      const v = ctx.runtime.expr(String((value as { signal: string }).signal))({}, ctx.signalParams)
-      return v == null ? undefined : String(v)
-    } catch { return undefined }
+      ctx.runtime.expr(p.signal)({}, ctx.signalParams)
+    } catch (error) {
+      return { error }
+    }
   }
   return undefined
 }
+
+/** A parameter of a guide's operator: the value, or what its signal holds (once {@link paramsFailure} has found that none throws). */
+const paramValue = (ctx: EvalContext, v: unknown): unknown => (isSignal(v) ? ctx.runtime.expr(v.signal)({}, ctx.signalParams) : v)
 
 /** A guide number that may be a `{signal}` (undefined when absent or not a number). */
 function guideNumber(ctx: EvalContext, value: unknown): number | undefined {
@@ -1387,7 +1392,7 @@ function buildAxisAndLegend(
     if (group) {
       // Carry guide identity for the accessible tree (R10.6) without changing
       // the serialized SVG: the fields are scene metadata only.
-      const meta = group as unknown as { zindex?: number; orient?: string; scale?: string; title?: string; aria?: boolean; grid?: boolean; format?: string; formatType?: string }
+      const meta = group as unknown as { zindex?: number; orient?: string; scale?: string; title?: string; aria?: boolean; grid?: boolean; format?: unknown; formatType?: unknown }
       // (the mark definition reads these as written -- vega-parser marks/definition.js: `+zindex || undefined`, `aria`,
       // `description` -- so a signal object is not looked into: its zindex is none, its description is the object)
       const zindex = +(axis.zindex as number) || undefined
@@ -1398,8 +1403,11 @@ function buildAxisAndLegend(
       meta.aria = axis.aria
       meta.grid = guideScalar(ctx, axis.grid) === true
       const unencoded = (group as unknown as { axis?: { unencoded?: boolean } }).axis?.unencoded === true
-      meta.format = unencoded ? undefined : guideString(ctx, axis.format)
-      meta.formatType = unencoded ? undefined : guideString(ctx, axis.formatType)
+      // (the caption reads the format and its type off the axis's group item, as its encode left them: a literal object is an
+      // encode entry there, a signal is what it holds whatever its type, and an `encode.axis` may set them)
+      const item = (group as unknown as { axis?: { format?: unknown; formatType?: unknown } }).axis
+      meta.format = unencoded ? undefined : item?.format
+      meta.formatType = unencoded ? undefined : item?.formatType
       const at = guideTitle(ctx, axis.title)
       if (at) meta.title = at
       // the axis' `description` is the aria-label of its container (vega-scenegraph ariaGuide: mark.description first)
@@ -1429,7 +1437,7 @@ function buildAxisAndLegend(
         if (ldesc) group.description = ldesc as string
         const g = group as unknown as {
           legendScale?: string; legendChannels?: string[]; legendType?: string
-          legendFormat?: string; legendFormatType?: string
+          legendFormat?: unknown; legendFormatType?: unknown
         }
         // the channels the legend describes, in priority order (the first gives the legend its scale)
         const own = (legend.own ?? {}) as Record<string, unknown>
@@ -1437,8 +1445,10 @@ function buildAxisAndLegend(
         g.legendScale = g.legendChannels.map((k) => String(own[k]))[0]
         // (a legend group item whose encode never ran has no format for the caption to read)
         const unencoded = (group as unknown as { unencoded?: boolean }).unencoded === true
-        g.legendFormat = unencoded ? undefined : guideString(ctx, own.format)
-        g.legendFormatType = unencoded ? undefined : guideString(ctx, own.formatType)
+        // (read off the legend's group item, as for an axis)
+        const item = (group as unknown as { legendItemFormat?: { format?: unknown; formatType?: unknown } }).legendItemFormat
+        g.legendFormat = unencoded ? undefined : item?.format
+        g.legendFormatType = unencoded ? undefined : item?.formatType
         // (the legend type is the kind of legend the builder drew: gradient, discrete bands or symbols)
       }
       return { legend, group, props: ((group as unknown as { legendProps?: LegendProps } | null)?.legendProps ?? {}) as LegendProps }
@@ -4926,20 +4936,23 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext, index: number): S
   const scale = ctx.scales.get(channels[0]![1])
   if (!scale) return null
   const scaleType = ctx.scaleTypes.get(channels[0]![1]) ?? ''
+  // (the signals vega's LegendEntries is given are operators of their own, ranked just before it: one that throws stops the pass at the
+  // legend)
+  const lambda = paramsFailure(ctx, [spec.tickCount ?? config.tickCount, spec.symbolLimit ?? config.symbolLimit, spec.values, spec.tickMinStep, spec.formatType, spec.format])
+  if (lambda !== undefined) {
+    failPass(ctx, { axis: Infinity, legend: index }, lambda.error)
+    return null
+  }
   // vega's `_('tickCount')`: a signal is what it holds
   const tickCountRaw = guideScalar(ctx, spec.tickCount ?? config.tickCount)
-  // A tickCount interval string ('day', 'month', ...) is only legal on time scales: vega's LegendEntries throws, the
-  // dataflow pass aborts there, and the legend (and whatever comes after it in its scope) is never made
-  // (a scale ranked late in its own scope puts the failing operator last: the legend is then made without its entries,
-  // and the rest of the scope is made)
-  let entriesFailed = false
-  if (typeof tickCountRaw === 'string' && scaleType !== 'time' && scaleType !== 'utc') {
-    const own = scopeScale(ctx.scope, channels[0]![1])
-    const late = own !== undefined && scaleIsLate(own, ctx.scope, ctx.chart)
-    failPass(ctx, { axis: Infinity, legend: index, ...(late ? { late: true } : {}) }, new Error('Only time and utc scales accept interval strings.'))
-    if (!late) return null
-    entriesFailed = true
-  }
+  const values = resolveLegendValues({ values: spec.values } as unknown as CompiledLegend, ctx)
+  const minstep = guideScalar(ctx, spec.tickMinStep) as number | undefined
+  const formatSpecifier = guideScalar(ctx, spec.format)
+  const formatType = guideScalar(ctx, spec.formatType) as string | undefined
+  // What vega's LegendEntries refuses before it lists anything -- a tickCount interval string ('day', 'month', ...) on a scale that
+  // is not a calendar, a format specifier the label format refuses -- makes it throw: the dataflow pass aborts there, and the
+  // legend (and whatever comes after it in its scope) is never made (a scale ranked late in its own scope puts the failing
+  // operator last: the legend is then made without its entries, and the rest of the scope is made)
   // The entries of a symbol legend are made in instances of their own, two levels below the legend's scope: the boxes of all
   // the entries in the first, a symbol and a label per entry in the next. They are the legend's children there, after the
   // instances of the scope's groups. A pass that stopped before an instance never made what it holds.
@@ -4956,8 +4969,24 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext, index: number): S
     lateLabels = !seen.has(key)
     seen.add(key)
   }
-  const labels: 'none' | undefined = lateLabels && cut !== undefined && compareInstances(ctx.scope.path, cut.path) === 0
+  let labels: 'none' | undefined = lateLabels && cut !== undefined && compareInstances(ctx.scope.path, cut.path) === 0
     && !(cut.labels === true && cut.legend !== undefined && index <= cut.legend) ? 'none' : undefined
+  let entriesFailed = false
+  const refusal = entriesRefusal({ type: legendType(spec, scaleType), scale: scale as never, count: tickCountRaw, minstep, values, formatSpecifier, formatType, locale: locale(undefined) })
+  if (refusal !== undefined) {
+    if (lateLabels) {
+      // (the entries of a gradient whose labels are ranked last: the pass stops there, after the rest of the scope, and the legend
+      // has its gradient and its title but no labels)
+      failPass(ctx, { axis: Infinity, legend: index, labels: true }, refusal)
+      labels = 'none'
+    } else {
+      const own = scopeScale(ctx.scope, channels[0]![1])
+      const late = own !== undefined && scaleIsLate(own, ctx.scope, ctx.chart)
+      failPass(ctx, { axis: Infinity, legend: index, ...(late ? { late: true } : {}) }, refusal)
+      if (!late) return null
+      entriesFailed = true
+    }
+  }
   const entries: 'none' | 'boxes' | undefined = slot === undefined || cut === undefined ? undefined
     : compareInstances([...ctx.scope.path, slot], cut.path) > 0 ? 'none'
       : compareInstances([...ctx.scope.path, slot, 0], cut.path) > 0 ? 'boxes' : undefined
@@ -4972,17 +5001,6 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext, index: number): S
     if (kind === 'gradient') items.push({ _part: 'gradient', _kind: 'rect', _bare: true, x: 0, y: 0, path: 'M0,0h0v0h0Z' } as unknown as SceneItem)
     return { marktype: 'group', role: 'legend', legendType: kind, _entriesPending: true, x: 0, y: 0, width: 0, height: 0, items } as unknown as SceneGroup
   }
-  // the format: a specifier, or a signal holding one (a timeUnit legend writes timeUnitSpecifier(...), which the
-  // expression engine may not have)
-  const specifierOf = (raw: unknown): unknown => {
-    if (!isSignal(raw)) return raw
-    try {
-      return ctx.runtime.expr(raw.signal)({}, ctx.signalParams)
-    } catch {
-      return evalTimeUnitSpecifier(raw.signal)
-    }
-  }
-  const formatType = guideScalar(ctx, spec.formatType) as string | undefined
   const host = guideHost(ctx)
   host.stopped = undefined
   const guides = chartGuides(ctx.chart)
@@ -4994,10 +5012,9 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext, index: number): S
       store: guides.evals > 1 ? (guides.defs ??= new Map()) : undefined, keep: guides.evals > 1,
       spec, config, encode: (legend.encode ?? NO_PROPS) as Record<string, UserEncode | undefined>,
       channels, scale: scale as never, scaleType, scaleOf: (name) => ctx.scales.get(name) as never,
-      values: resolveLegendValues({ values: spec.values } as unknown as CompiledLegend, ctx),
-      count: tickCountRaw, minstep: guideScalar(ctx, spec.tickMinStep) as number | undefined,
+      values, count: tickCountRaw, minstep,
       limit: +(guideScalar(ctx, spec.symbolLimit ?? config.symbolLimit) as number),
-      formatSpecifier: specifierOf(spec.format), formatType,
+      formatSpecifier, formatType,
       locale: locale(undefined), host, style: guideStyles(ctx), raw: !!ctx.rawGuides,
       ...(ctx.passMemory !== undefined ? { relayout: legendMemory(ctx.passMemory, `l${ctx.scope.path.join('/')}:${index}`) } : {}),
       ...(entries !== undefined ? { entries } : {}),
@@ -5032,6 +5049,7 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext, index: number): S
     ...(itemAriaOf(built.group) ? { itemAria: itemAriaOf(built.group) } : {}),
     // what the legend layout reads off the group item
     legendProps: { orient: g.orient, offset: g.offset, x: g.x, y: g.y },
+    legendItemFormat: { format: g.format, formatType: g.formatType },
     ...(isUnencoded(g) ? { unencoded: true } : {}),
     ...(g.strokeWidth !== undefined ? { strokeWidth: g.strokeWidth } : {}),
     ...(cursorOf(g) !== undefined ? { cursor: cursorOf(g) } : {}),
@@ -5428,6 +5446,12 @@ function buildAxis(axis: CompiledAxis, ctx: EvalContext, index: number): SceneGr
       throw new Error(`[aster] the ticks of the axis over scale "${axis.scale}" read a signal that threw (${e instanceof Error ? e.message : String(e)}); vega cannot draw the half-built axis either`)
     }
   }
+  // (the signals vega's AxisTicks is given are operators of their own, ranked just before it: one that throws stops the pass at the axis)
+  const lambda = paramsFailure(ctx, [tickPlacement(propsOf(own, cfg)).extra, axis.tickCount, axis.values, axis.tickMinStep, axis.formatType, axis.format])
+  if (lambda !== undefined) {
+    failPass(ctx, { axis: index }, lambda.error)
+    return null
+  }
   let ticks: unknown[]
   try {
     ticks = axisTicks(axis, scale, ctx)
@@ -5500,7 +5524,7 @@ function buildAxis(axis: CompiledAxis, ctx: EvalContext, index: number): SceneGr
     ...(itemAriaOf(built.group) ? { itemAria: itemAriaOf(built.group) } : {}),
     ...(cursorOf(built.group) !== undefined ? { cursor: cursorOf(built.group) } : {}),
     // (a group item whose encode never ran has no orient: the caption calls it an X-axis, and reads no format off it)
-    axis: { orient, itemOrient: isUnencoded(g) ? '' : typeof g.orient === 'string' ? g.orient : orient, ...(isUnencoded(g) ? { unencoded: true } : {}), range: axisRangeSpan, baseline: 0, translate: ctx.rawGuides ? 0 : (typeof g.translate === 'number' ? g.translate : 0.5), position, bounds: built.bounds, ...(knownOrient ? {} : { noLayout: true }) },
+    axis: { orient, itemOrient: isUnencoded(g) ? '' : typeof g.orient === 'string' ? g.orient : orient, format: g.format, formatType: g.formatType, ...(isUnencoded(g) ? { unencoded: true } : {}), range: axisRangeSpan, baseline: 0, translate: ctx.rawGuides ? 0 : (typeof g.translate === 'number' ? g.translate : 0.5), position, bounds: built.bounds, ...(knownOrient ? {} : { noLayout: true }) },
     ...(href != null ? { href } : {}),
   } as unknown as SceneGroup
   vetGuideLinks(out, ctx)
@@ -5658,103 +5682,16 @@ function axisTicks(axis: CompiledAxis, scale: Scale, ctx: EvalContext): unknown[
   return scaleTicks(scale, count)
 }
 
-function axisLabelFormat(axis: CompiledAxis, scale: Scale, count: number, ctx?: EvalContext, noSkip = false): (v: unknown) => string {
+function axisLabelFormat(axis: CompiledAxis, scale: Scale, count: number, ctx: EvalContext, noSkip = false): (v: unknown) => string {
   // (vega has no axis `labelExpr`: vega-lite compiles it to `encode.labels.update.text`,
   // which is applied to the label items themselves - see applyGuideEncode - so a raw
   // `labelExpr` is ignored here exactly as vega ignores it)
-  const fmtType = axis.formatType ? axis.formatType : undefined
-  // Resolve format: may be a string or a signal expression.
-  let fmt: string | undefined
-  const rawFmt = axis.format ?? undefined
-  // d3's formatSpecifier reads whatever it is given through a regular expression, so a number is its digits
-  // (`42` is a width) and a thing that is no specifier at all is an invalid format
-  if (typeof rawFmt === 'string') {
-    fmt = rawFmt
-  } else if (rawFmt != null && typeof rawFmt !== 'object') {
-    fmt = String(rawFmt)
-  } else if (rawFmt && typeof rawFmt === 'object' && 'signal' in (rawFmt as Record<string, unknown>) && ctx) {
-    try {
-      const v = ctx.runtime.expr((rawFmt as { signal: string }).signal)({}, ctx.signalParams)
-      if (typeof v === 'string') fmt = v
-      else if (v != null) fmt = String(v)
-    } catch {
-      // Fallback: evaluate timeUnitSpecifier(...) inline when the expression
-      // engine doesn't have it.  This is the common case for Vega-Lite
-      // temporal axes whose format signal is
-      //   timeUnitSpecifier(["month"], {"year-month":"%b %Y ", ...})
-      const sig = (rawFmt as { signal: string }).signal
-      if (ctx) {
-        const resolved = evalTimeUnitSpecifier(sig)
-        if (resolved !== undefined) fmt = resolved
-      }
-    }
-  }
-  const calendar = calendarOf(scale.type, fmtType)
-  if (calendar) {
-    const L = locale(undefined)
-    // With no explicit format vega uses the time multi-format, which picks a
-    // specifier per tick interval (e.g. '%B' for month ticks, '%b %d' for
-    // day/week ticks). The `undefined` argument is passed explicitly to satisfy
-    // the strict local type shim for vega-format.
-    const timeFormatter = calendar === 'utc' ? L.utcFormat : L.timeFormat
-    // (an object is the multi-format specifier: a pattern per interval, `{year: '%y', quarter: '%b'}`)
-    if (fmt === undefined && rawFmt !== null && typeof rawFmt === 'object' && !Array.isArray(rawFmt) && !('signal' in (rawFmt as Record<string, unknown>))) {
-      return timeFormatter(rawFmt as unknown as string)
-    }
-    return fmt ? timeFormatter(fmt) : timeFormatter(undefined as unknown as string)
-  }
-  if (scale.type !== 'linear' && scale.type !== 'log' && scale.type !== 'pow' && scale.type !== 'sqrt' && scale.type !== 'symlog') {
-    // vega applies an inherited numeric format specifier even to band/point
-    // labels; non-numeric band values format as NaN.
-    if (fmt != null) {
-      const L = locale(undefined)
-      return (v) => L.format(fmt)(typeof v === 'number' ? v : Number(v))
-    }
-    return (v) => String(v)
-  }
-  const L = locale(undefined)
-  return tickFormat(L, scale, count, fmt, undefined, noSkip)
-
+  // The format and its type are what vega's AxisTicks is given: the values themselves (a signal's is what it holds, whatever its
+  // type), read by the scale's tick format as vega's is. A specifier that is no string is a time multi-format on a calendar
+  // (anything falsy is the default one, an object overrides it per unit, anything else is refused) and the text of its value for a
+  // number format (`42` is a width, `NaN` is refused); a specifier the format refuses throws here, as it makes vega's AxisTicks throw.
+  const formatType = paramValue(ctx, axis.formatType)
+  const specifier = paramValue(ctx, axis.format)
+  return tickFormat(locale(undefined), scale, count, specifier, formatType as string | undefined, noSkip)
 }
 
-// ---------------------------------------------------------------------------
-// timeUnitSpecifier — inline fallback for Vega-Lite temporal axis format
-// signals.  Mirrors vega-time/src/units.js `timeUnitSpecifier`.
-// ---------------------------------------------------------------------------
-
-/**
- * Evaluate a `timeUnitSpecifier(["unit", ...], {overrides})` expression string.
- * Returns the resolved format string, or undefined when the string does not match.
- */
-function evalTimeUnitSpecifier(sig: string): string | undefined {
-  const m = /^\s*timeUnitSpecifier\(\s*(\[.*?\])\s*(?:,\s*(\{.*?\}))?\s*\)\s*$/.exec(sig)
-  if (!m) return undefined
-  let units: string[]
-  try { units = JSON.parse(m[1]!) } catch { return undefined }
-  if (!Array.isArray(units)) return undefined
-  let overrides: Record<string, string> = {}
-  if (m[2]) {
-    try { overrides = JSON.parse(m[2]!) } catch { /* ignore */ }
-  }
-  const u = units.slice()
-    .filter((unit) => Object.hasOwn(UNIT_ORDER, unit))
-    .sort((a, b) => (UNIT_ORDER[a] ?? 99) - (UNIT_ORDER[b] ?? 99))
-  const s = { ...DEFAULT_SPECIFIERS, ...overrides }
-  let fmt = ''
-  let start = 0
-  const n = u.length
-  while (start < n) {
-    let found = false
-    for (let end = n; end > start; --end) {
-      const key = u.slice(start, end).join('-')
-      if (s[key] != null) {
-        fmt += s[key]
-        start = end
-        found = true
-        break
-      }
-    }
-    if (!found) break
-  }
-  return fmt.trim() || undefined
-}

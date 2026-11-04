@@ -67,6 +67,21 @@ interface EntriesParams {
   warn: (msg: string) => void
 }
 
+/**
+ * What vega's LegendEntries throws before it lists a single entry, or undefined: the tick count it asks of the scale (an interval
+ * string on a scale that is no calendar) and the label format it makes (a specifier the format refuses). That operator then fails,
+ * and nothing made from the entries is.
+ */
+export function entriesRefusal(p: Pick<EntriesParams, 'type' | 'scale' | 'count' | 'minstep' | 'values' | 'formatSpecifier' | 'formatType' | 'locale'>): unknown {
+  try {
+    const count = tickCount(p.scale as never, p.count == null ? 5 : p.count, p.minstep)
+    labelFormat(p.locale, p.scale as never, count, p.type, p.formatSpecifier, p.formatType, !!p.values || p.type === SymbolLegend)
+    return undefined
+  } catch (e) {
+    return e
+  }
+}
+
 /** The values a legend lists with their labels, and where each sits. */
 function listEntries(p: EntriesParams): LegendEntry[] {
   const { type, scale } = p
@@ -504,7 +519,9 @@ export function buildLegend(inp: LegendBuildInput): LegendBuilt {
       const length = props.gradientLength()
       count = Math.max(2, 2 * Math.floor((isSignal(length) ? (host.expr(length.signal) as number) : (length as number)) / 100))
     }
-    const entries = listEntries({
+    // (the entries of a gradient whose late labels the pass never reached were never listed: only its labels read them)
+    const late = isGradient && inp.lateLabels === true
+    const entries = late && inp.labels === 'none' ? [] : listEntries({
       type, scale: inp.scale, count, limit: inp.limit, values: inp.values, minstep: inp.minstep,
       formatSpecifier: inp.formatSpecifier, formatType: inp.formatType, locale: inp.locale, warn: (m) => host.warn(m),
     })
@@ -524,7 +541,6 @@ export function buildLegend(inp: LegendBuildInput): LegendBuilt {
     })
     // (the entries of a gradient whose tick count follows its length depend on an operator made after them: they and the labels
     // read from them are ranked after the title, and after the operators of the scope's other guides)
-    const late = isGradient && inp.lateLabels === true
     if (!late) makeLabels()
     else {
       makeTitle()

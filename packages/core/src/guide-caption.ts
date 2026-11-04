@@ -29,8 +29,8 @@ type Rec = Record<string, unknown>
 export function scaleCaption(
   scales: Map<string, unknown>,
   name: string | undefined,
-  format?: string,
-  formatType?: string,
+  format?: unknown,
+  formatType?: unknown,
 ): string {
   if (!name) return ''
   const s = scales.get(name) as Rec & { domain?: () => unknown[]; type?: string } | undefined
@@ -40,10 +40,7 @@ export function scaleCaption(
   if (!domain.length && !isDiscretizing(type)) {
     return DISCRETE.has(type) ? '0 values: ' : 'values from NaN to NaN'
   }
-  const fmt = captionFormat(loc(), s, format, formatType)
-  const print = (v: unknown): string => {
-    try { return fmt(v) } catch { return String(v) }
-  }
+  const print = captionFormat(loc(), s, format, formatType as string | undefined)
   // if scale breaks domain into bins, describe boundaries
   if (isDiscretizing(type)) {
     const v = labelValues(s as never, undefined).slice(1).map(print)
@@ -96,23 +93,40 @@ export function scalesFromSnapshots(snaps: Array<{ name: string; type: string; d
 }
 
 
-/** `X-axis titled 'T' for a linear scale with values from 0 to 9` (vega-scenegraph axisCaption). */
+/**
+ * `X-axis titled 'T' for a linear scale with values from 0 to 9` (vega-scenegraph axisCaption), or undefined when the caption cannot
+ * be made: a format the axis's group item holds that the scale's label format refuses (vega's ariaGuide then writes no ARIA at all).
+ */
 export function axisLabel(
-  g: { orient?: string; title?: string; scale?: string; format?: string; formatType?: string },
+  g: { orient?: string; title?: string; scale?: string; format?: unknown; formatType?: unknown },
   scales: Map<string, unknown>,
-): string {
+): string | undefined {
+  try {
+    return axisCaption(g, scales)
+  } catch {
+    return undefined
+  }
+}
+
+function axisCaption(g: { orient?: string; title?: string; scale?: string; format?: unknown; formatType?: unknown }, scales: Map<string, unknown>): string {
   const type = (scales.get(g.scale ?? '') as { type?: string } | undefined)?.type ?? 'linear'
   const discrete = DISCRETE.has(type)
   const xy = g.orient === 'left' || g.orient === 'right' ? 'Y' : 'X'
   return `${xy}-axis${g.title ? ` titled '${g.title}'` : ''} for a ${discrete ? 'discrete' : type} scale with ${scaleCaption(scales, g.scale, g.format, g.formatType)}`
 }
 
-/** `Symbol legend titled 'K' for fill color with 2 values: a, b` (vega-scenegraph legendCaption). */
-export function legendLabel(
-  g: { title?: string; legendType?: string; legendChannels?: string[]; legendScale?: string; legendFormat?: string; legendFormatType?: string },
-  scales: Map<string, unknown>,
-  fallbackType = 'symbol',
-): string {
+/** `Symbol legend titled 'K' for fill color with 2 values: a, b` (vega-scenegraph legendCaption), or undefined as for an axis. */
+export function legendLabel(g: LegendCaptionOf, scales: Map<string, unknown>, fallbackType = 'symbol'): string | undefined {
+  try {
+    return legendCaption(g, scales, fallbackType)
+  } catch {
+    return undefined
+  }
+}
+
+type LegendCaptionOf = { title?: string; legendType?: string; legendChannels?: string[]; legendScale?: string; legendFormat?: unknown; legendFormatType?: unknown }
+
+function legendCaption(g: LegendCaptionOf, scales: Map<string, unknown>, fallbackType: string): string {
   const chan = typeof g.legendType === 'string' ? g.legendType : fallbackType
   const channels = g.legendChannels?.length ? g.legendChannels : ['fill']
   const channel = channels.map((p) => p + (p === 'fill' || p === 'stroke' ? ' color' : ''))

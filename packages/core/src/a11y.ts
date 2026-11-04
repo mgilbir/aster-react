@@ -210,8 +210,9 @@ function guideNode(group: SceneGroup, id: string, tx: number, ty: number, scales
       : typeof (group as unknown as { scale?: string }).scale === 'string'
         ? (group as unknown as { scale?: string }).scale
         : undefined
-    const gm = group as unknown as { format?: string; formatType?: string }
-    const label = group.description ? String(group.description) : axisLabel({ orient, title, scale: scaleName, format: gm.format, formatType: gm.formatType }, scales)
+    const gm = group as unknown as { format?: unknown; formatType?: unknown }
+    // (a caption vega cannot make -- the scale's label format refuses the axis's format -- leaves the node its role's name)
+    const label = group.description ? String(group.description) : axisLabel({ orient, title, scale: scaleName, format: gm.format, formatType: gm.formatType }, scales) ?? 'axis'
     const dom = (scales.get(scaleName ?? '') as { domain?: () => unknown[] } | undefined)?.domain?.()
     const numeric = dom && dom.length >= 2 && typeof dom[0] === 'number' && typeof dom[dom.length - 1] === 'number'
     return {
@@ -225,8 +226,8 @@ function guideNode(group: SceneGroup, id: string, tx: number, ty: number, scales
       domain: numeric ? [dom[0] as number, dom[dom.length - 1] as number] : undefined,
     }
   }
-  const gm = group as unknown as { legendType?: string; legendScale?: string; legendChannels?: string[]; legendFormat?: string; legendFormatType?: string }
-  const label = group.description ? String(group.description) : legendLabel({ ...gm, title }, scales, typeof datum.type === 'string' ? datum.type : 'symbol')
+  const gm = group as unknown as { legendType?: string; legendScale?: string; legendChannels?: string[]; legendFormat?: unknown; legendFormatType?: unknown }
+  const label = group.description ? String(group.description) : legendLabel({ ...gm, title }, scales, typeof datum.type === 'string' ? datum.type : 'symbol') ?? 'legend'
   return {
     id, kind: 'legend', marktype: 'group', role: 'graphics-symbol', roleDescription: 'legend',
     label, x: b.x1, y: b.y1, width: b.x2 - b.x1, height: b.y2 - b.y1,

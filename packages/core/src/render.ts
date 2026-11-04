@@ -1751,8 +1751,8 @@ export interface GuideScope {
  * guide gets no caption, and so no ARIA role, like a guide whose caption vega could not build.
  */
 export interface GuideCaptions {
-  axis(group: SceneGroup, scales: Map<string, unknown>): string
-  legend(group: SceneGroup, scales: Map<string, unknown>): string
+  axis(group: SceneGroup, scales: Map<string, unknown>): string | undefined
+  legend(group: SceneGroup, scales: Map<string, unknown>): string | undefined
   titleText(group: SceneGroup): string | undefined
   scales(snaps: ScaleSnapshots): Map<string, unknown>
 }
