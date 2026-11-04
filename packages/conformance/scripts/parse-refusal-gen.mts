@@ -68,6 +68,8 @@ function spoil(t: Spec, p: Param, r: Rand): string | undefined {
     return `from:${how}`
   }
   if (p.required && chance(r, 0.4)) { delete t[p.name]; return `drop ${p.name}` }
+  // (an expression that does not parse, in a parameter that holds one: refused where the parameter is read)
+  if ((p.type === 'expr' || p.type === 'field' || p.expr) && !p.array && chance(r, 0.3)) { t[p.name] = p.type === 'expr' ? '1 +' : { expr: '1 +' }; return `${p.name}:expr` }
   if (p.type === 'param') {
     const how = r.pick(['scalar', 'kind', 'null-item', 'sub-required', 'sub-data'])
     if (how === 'scalar') t[p.name] = r.pick([1, 'x', { a: 1 }, ...(p.array ? [{ ...p.params![0]!.key }] : [[]])])
@@ -137,7 +139,10 @@ export function transformSpec(r: Rand): { spec: Spec; label: string } {
     data: [{ name: 'd', values }, { name: 'other', values }],
     marks: [{ type: 'rect', name: 'm', from: { data: 'd' } }],
   }
-  if (where === 'data' || where === 'both') (spec.data as Spec[]).push({ name: 't', source: 'd', transform: many(r.pick([1, 2, 3]), false) })
+  // (a later mark that names a data set no scope has: refused after everything of the data sets)
+  if (chance(r, 0.1)) (spec.marks as Spec[]).push({ type: 'rect', from: { data: 'nope' } })
+  // (the data set a pipeline derives from is read after its transforms: a missing one is refused only when they are not)
+  if (where === 'data' || where === 'both') (spec.data as Spec[]).push({ name: 't', source: chance(r, 0.15) ? 'nope' : 'd', transform: many(r.pick([1, 2, 3]), false) })
   if (where === 'group-data') (spec.marks as Spec[]).push({ type: 'group', data: [{ name: 'g', source: 'd', transform: many(r.pick([1, 2]), false) }] })
   if (where === 'mark' || where === 'both') (spec.marks as Spec[]).push({ type: r.pick(['symbol', 'group']), from: { data: 'd' }, transform: many(r.pick([1, 2]), true) })
   return { spec, label: `${where}: ${what.join(' ')}` }

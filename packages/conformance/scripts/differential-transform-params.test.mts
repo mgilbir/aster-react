@@ -114,7 +114,7 @@ describe('a transform is refused when it is parsed, as vega refuses it (generate
     }
     expect(bad, `${bad.length} differ:\n${bad.slice(0, 10).join('\n')}`).toEqual([])
     // (not vacuous: every kind of refusal is drawn, and many specs are accepted)
-    for (const reason of ['Missing required ', 'Lookup ', 'Undefined data set name', 'Unrecognized scale name', 'Unsupported parameter', 'Expected an array of sub-parameters. Instead', 'value.map is not a function', 'Cannot read properties of null (reading ']) {
+    for (const reason of ['Expression parse error', 'Missing required ', 'Lookup ', 'Undefined data set name', 'Unrecognized scale name', 'Unsupported parameter', 'Expected an array of sub-parameters. Instead', 'value.map is not a function', 'Cannot read properties of null (reading ']) {
       expect([...reasons.keys()].some((k) => k.startsWith(reason) || reason.startsWith(k)), `${reason} in ${JSON.stringify([...reasons])}`).toBe(true)
     }
     expect(accepted).toBeGreaterThan(scaled(3000) * 0.15)
