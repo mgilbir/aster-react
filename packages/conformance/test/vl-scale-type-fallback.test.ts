@@ -5,56 +5,16 @@
  * temporal x or colour is a time scale; `linear` on a nominal x is a band or point; `band` on a colour is an ordinal one; and so on.
  *
  * Every channel, every data type (quantitative, ordinal, nominal, temporal in each time unit form, binned) and every scale type of the
- * schema is compiled by vega-lite 6.4.3 and by @aster/vl; the compiled scales, the scales as they run, the axes, the rows and the SVG
- * must be the same (vl-ranged-compare.ts). Only the requests vega-lite does not honour are compared: those it honours are the scale
- * type's own range, legend and mark rules, a feature of their own.
+ * schema is compiled by vega-lite 6.4.3 and by @aster/vl; the compiled scales, axes and legends, the scales as they run, the axes, the
+ * rows and the SVG must be the same (vl-ranged-compare.ts). Only the requests vega-lite does not honour are compared here: those it
+ * honours are in vl-honoured-scale-types.test.ts, over the same space (vl-honoured-space.ts).
  */
 import { describe, it, expect } from 'vitest'
 import * as vl from 'vega-lite'
 import { TIME_DATA, silent } from './vl-time-helpers.js'
 import { collect } from './vl-ranged-compare.js'
+import { PLACES, DATA, SCALE_TYPES, channelOf, type Obj } from './vl-honoured-space.js'
 
-type Obj = Record<string, unknown>
-
-const SCALE_TYPES = ['linear', 'log', 'pow', 'sqrt', 'symlog', 'identity', 'sequential', 'time', 'utc', 'quantile', 'quantize', 'threshold', 'bin-ordinal', 'ordinal', 'point', 'band']
-
-const DATA: Array<[string, Obj]> = [
-  ['quantitative', { field: 'v', type: 'quantitative' }],
-  ['quantitative, binned', { field: 'v', type: 'quantitative', bin: true }],
-  ['ordinal', { field: 'k', type: 'ordinal' }],
-  ['nominal', { field: 'k', type: 'nominal' }],
-  ['temporal', { field: 't', type: 'temporal' }],
-  ['temporal, month', { field: 't', type: 'temporal', timeUnit: 'month' }],
-  ['temporal, yearmonth', { field: 't', type: 'temporal', timeUnit: 'yearmonth' }],
-  ['temporal, utc month', { field: 't', type: 'temporal', timeUnit: 'utcmonth' }],
-  ['temporal, utc year', { field: 't', type: 'temporal', timeUnit: { unit: 'year', utc: true } }],
-]
-
-/** The channels whose legend does not yet label a temporal field as vega-lite does (a legend format type of its own, whatever the scale asked): see the found-not-fixed list. */
-const NO_TEMPORAL_LEGEND = new Set(['shape', 'strokeDash'])
-/** A continuous x (one with no bands: not discrete, and no time unit) under an xOffset has no offset scale in vega-lite; @aster/vl makes one (found, not fixed). */
-const BANDED_ONLY = new Set(['x with xOffset'])
-
-/** Where each channel lives: its mark, and the rest of the encoding that mark needs. */
-const PLACES: Array<[string, string, (def: Obj) => Obj]> = [
-  ['x', 'point', (d) => ({ x: d, y: { field: 'v', type: 'quantitative' } })],
-  ['x', 'bar', (d) => ({ x: d, y: { aggregate: 'sum', field: 'v', type: 'quantitative' } })],
-  ['x', 'line', (d) => ({ x: d, y: { field: 'v', type: 'quantitative' } })],
-  ['y', 'point', (d) => ({ y: d, x: { field: 'v', type: 'quantitative' } })],
-  ['theta', 'arc', (d) => ({ theta: d })],
-  ['radius', 'arc', (d) => ({ radius: d, theta: { field: 'k', type: 'nominal' } })],
-  ['color', 'point', (d) => ({ color: d, x: { field: 'v', type: 'quantitative' } })],
-  ['size', 'point', (d) => ({ size: d, x: { field: 'v', type: 'quantitative' } })],
-  ['opacity', 'point', (d) => ({ opacity: d, x: { field: 'v', type: 'quantitative' } })],
-  ['strokeWidth', 'point', (d) => ({ strokeWidth: d, x: { field: 'v', type: 'quantitative' } })],
-  ['shape', 'point', (d) => ({ shape: d, x: { field: 'v', type: 'quantitative' } })],
-  ['strokeDash', 'line', (d) => ({ strokeDash: d, x: { field: 'v', type: 'quantitative' }, y: { field: 'v', type: 'quantitative' } })],
-  ['x with xOffset', 'bar', (d) => ({ x: d, xOffset: { field: 'k', type: 'nominal' }, y: { aggregate: 'count' } })],
-]
-
-function channelOf(place: string): string {
-  return place === 'x with xOffset' ? 'x' : place
-}
 function scaleTypeVegaLiteGave(spec: Obj, channel: string): string | undefined {
   try {
     const vg = (vl as any).compile(JSON.parse(JSON.stringify(spec)), { logger: silent }).spec
@@ -70,8 +30,6 @@ describe('a scale type the channel or the data cannot use falls back to the defa
       const cases: Array<[string, Obj]> = []
       let fellBack = 0
       for (const [dn, def] of DATA) {
-        if (NO_TEMPORAL_LEGEND.has(place) && def.type === 'temporal') continue
-        if (BANDED_ONLY.has(place) && def.type !== 'ordinal' && def.type !== 'nominal' && def.timeUnit === undefined) continue
         for (const type of SCALE_TYPES) {
           const spec = { data: { values: TIME_DATA }, mark, encoding: make({ ...def, scale: { type } }) }
           const gave = scaleTypeVegaLiteGave(spec, channelOf(place))
