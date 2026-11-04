@@ -11,10 +11,10 @@ type Case = [string, Obj]
 /** Small squares, so that a geoshape draws them; the same rows carry the fields every other mark reads. */
 const square = (x: number, y: number): Obj => ({ type: 'Polygon', coordinates: [[[x, y], [x + 1, y], [x + 1, y + 1], [x, y + 1], [x, y]]] })
 const ROWS: Obj[] = [
-  { k: 'a', v: 1, w: 2, c: '#e45756' },
-  { k: 'b', v: 2, w: 5, c: '#54a24b' },
-  { k: 'c', v: 3, w: 3, c: '#b279a2' },
-  { k: 'a', v: 4, w: 1, c: '#e45756' },
+  { k: 'a', v: 1, w: 2, n: 1, c: '#e45756' },
+  { k: 'b', v: 2, w: 5, n: null, c: '#54a24b' },
+  { k: 'c', v: 3, w: 3, n: 3, c: '#b279a2' },
+  { k: 'a', v: 4, w: 1, n: 2, c: '#e45756' },
 ]
 const DATA = { values: ROWS }
 const GEO_DATA = { values: ROWS.map((r, i) => ({ type: 'Feature', geometry: square(i * 2, i % 2), ...r })) }
@@ -56,6 +56,8 @@ const DEFS: Array<[string, Obj]> = [
   ['condition field', { condition: { test: 'datum.v > 1', field: 'k', type: 'nominal' }, value: '#72b7b2' }],
   ['condition only', { condition: { test: 'datum.v > 1', value: '#f58518' } }],
   ['no legend', { ...V, legend: null }],
+  ['quantitative field with a null', { field: 'n', type: 'quantitative' }],
+  ['colour field read as it is', { field: 'c', type: 'nominal', scale: null }],
 ]
 
 const other = (ch: 'fill' | 'stroke'): 'fill' | 'stroke' => (ch === 'fill' ? 'stroke' : 'fill')
@@ -69,6 +71,8 @@ const COMPANIONS: Array<[string, (ch: 'fill' | 'stroke') => Obj]> = [
   ['the other paint on the same field', (ch) => ({ [other(ch)]: K })],
   ['the other paint on another field', (ch) => ({ [other(ch)]: W })],
   ['color and the other paint', (ch) => ({ color: K, [other(ch)]: W })],
+  ['a size legend beside', () => ({ size: W })],
+  ['a shape legend on the same field', () => ({ shape: K })],
 ]
 
 /** Every paint channel on `mark`: each way of being filled, each kind of definition, each companion. */
