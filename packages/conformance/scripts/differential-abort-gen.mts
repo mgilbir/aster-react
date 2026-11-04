@@ -1,14 +1,16 @@
 /**
  * The generator of the aborted-pass differentials: random trees of nested scopes (groups, faceted groups, groups per datum, own
- * scales and signals, axes, legends of every kind, titles) with failures put at random places (see differential-abort-trees.test.mts).
+ * scales and signals, axes, legends of every kind, titles, group transforms, header groups in grid layouts) with failures put at
+ * random places (see differential-abort-trees.test.mts).
  */
 import { makeRng, type Rng } from './differential-gen.mts'
 
 type Spec = Record<string, unknown>
 
 /** The ways a part of the tree fails. */
-export type Fail = 'mark' | 'condition' | 'group' | 'axis' | 'legend' | 'title' | 'signal' | 'scope-signal' | 'scale'
-export const FAILS: readonly Fail[] = (process.env.ABORT_KINDS?.split(',') as Fail[] | undefined) ?? ['mark', 'condition', 'group', 'axis', 'legend', 'title', 'signal', 'scope-signal', 'scale']
+export type Fail = 'mark' | 'condition' | 'group' | 'axis' | 'legend' | 'title' | 'signal' | 'scope-signal' | 'scale' | 'late-signal' | 'transform' | 'sort'
+  | 'group-transform' | 'header-sort' | 'encode-and-transform'
+export const FAILS: readonly Fail[] = (process.env.ABORT_KINDS?.split(',') as Fail[] | undefined) ?? ['mark', 'condition', 'group', 'axis', 'legend', 'title', 'signal', 'scope-signal', 'scale', 'late-signal', 'transform', 'sort', 'group-transform', 'header-sort', 'encode-and-transform']
 
 interface Gen {
   r: Rng
@@ -18,7 +20,15 @@ interface Gen {
   used: Set<Fail>
   /** scales a failure puts in the view's scope */
   rootScales: Spec[]
+  /** signals of the view a failure puts there */
+  rootSignals: Spec[]
+  /** the nodes that are groups */
+  groups: Set<number>
 }
+
+/** The failures a leaf mark can hold, and those a group can (`signal` is the view's, wherever it is drawn). */
+const LEAF_FAILS: ReadonlySet<Fail> = new Set(['mark', 'condition', 'scale', 'late-signal', 'transform', 'sort', 'encode-and-transform', 'signal'])
+const GROUP_FAILS: ReadonlySet<Fail> = new Set(['group', 'axis', 'legend', 'title', 'scope-signal', 'scale', 'late-signal', 'transform', 'sort', 'group-transform', 'header-sort', 'encode-and-transform', 'signal'])
 
 const COLORS = ['teal', 'crimson', 'goldenrod', 'slateblue', 'seagreen', 'orchid', 'tomato', 'navy']
 
@@ -27,6 +37,40 @@ function failingEntry(r: Rng): Record<string, unknown> {
   return r.pick<Record<string, unknown>>([
     { scale: 'nope', field: 'value' }, { scale: 'nope', value: 1 }, { scale: 'nope', range: 0.5 }, { scale: 'nope', band: 1 },
     { signal: 'datum.o.v' }, { signal: 'datum.o.v + 1', offset: 2 }, { scale: 'nope', field: 'value', offset: 3 },
+  ])
+}
+
+/**
+ * Transforms of a mark that work on its items and write what they compute onto them (a group's position, size or paint, read by
+ * what the group holds), each of a kind vega lets a mark have. None of them throws.
+ */
+function itemTransforms(r: Rng): Spec[] {
+  return r.pick<Spec[]>([
+    [{ type: 'formula', as: 'x', expr: 'datum.x + 9' }],
+    [{ type: 'formula', as: 'fill', expr: "datum.datum.k == 'q' ? 'orange' : 'purple'" }],
+    [{ type: 'formula', as: 'y', expr: 'datum.datum.a ? datum.datum.a * 4 : 7' }],
+    [{ type: 'window', ops: ['row_number'], as: ['n'] }, { type: 'formula', as: 'y', expr: 'datum.n * 5' }],
+    [{ type: 'collect', sort: { field: 'datum.a', order: 'descending' } }, { type: 'window', ops: ['row_number'], as: ['n'] }, { type: 'formula', as: 'x', expr: 'datum.n * 11' }],
+    [{ type: 'joinaggregate', ops: ['count'], as: ['c'] }, { type: 'formula', as: 'width', expr: 'datum.width + datum.c * 3' }],
+    [{ type: 'stack', field: 'height', as: ['y', 'y1'] }],
+    [{ type: 'bin', field: 'x', extent: [0, 200], step: 25, as: ['x', 'x1'] }],
+    [{ type: 'extent', field: 'x' }, { type: 'formula', as: 'height', expr: 'datum.height - 6' }],
+    // (transforms that work on copies of their tuples: what they compute is on the items all the same)
+    [{ type: 'pie', field: 'width', as: ['p0', 'p1'] }, { type: 'formula', as: 'x', expr: 'datum.x + datum.p1 * 2' }],
+    [{ type: 'dotbin', field: 'x', step: 20, as: 'x' }],
+  ])
+}
+
+/** A transform of a mark that throws when it runs on the items (they have no `zz`), of one of the kinds a mark can have. */
+function failingTransform(r: Rng): Spec {
+  return r.pick<Spec>([
+    { type: 'formula', as: 'z', expr: 'datum.zz.q' },
+    { type: 'window', ops: ['sum'], fields: ['zz.q'], as: ['s'] },
+    { type: 'joinaggregate', ops: ['max'], fields: ['zz.q'], as: ['s'] },
+    { type: 'stack', field: 'zz.q' },
+    { type: 'bin', field: 'zz.q', extent: [0, 10] },
+    { type: 'extent', field: 'zz.q' },
+    { type: 'timeunit', field: 'zz.q', units: ['year'] },
   ])
 }
 
@@ -47,7 +91,7 @@ function leaf(g: Gen, data: string): Spec {
   const fail = g.fails.get(id)
   const [type, paint] = g.r.pick(MARK_TYPES)
   const update: Record<string, unknown> = { x: { scale: 'x', field: 'a' }, y: { value: 4 + (id % 7) * 6 }, ...paint(id) }
-  if (fail === 'mark') {
+  if (fail === 'mark' || fail === 'encode-and-transform') {
     update[g.r.pick(['x', 'y', 'fill', 'opacity'])] = failingEntry(g.r)
     g.used.add(fail)
   } else if (fail === 'condition') {
@@ -56,8 +100,28 @@ function leaf(g: Gen, data: string): Spec {
   } else if (fail === 'scale') {
     g.rootScales.push(badScale(id))
     g.used.add(fail)
+  } else if (fail === 'late-signal') {
+    lateSignal(g, id)
+    if (g.r.chance(0.7)) update.opacity = { signal: `late${id}` }
+    g.used.add(fail)
   }
-  return { type, name: `m${id}`, from: { data }, encode: { update } }
+  const mark: Spec = { type, name: `m${id}`, from: { data }, encode: { update } }
+  // (the transforms and the sort of a mark run on its encoded items, after the encode)
+  // (a mark that fails in its encode and in its transform or sort too: vega runs the encode first)
+  const both = fail === 'encode-and-transform' && g.r.chance(0.6)
+  if (fail === 'transform' || both) {
+    mark.transform = [failingTransform(g.r)]
+    g.used.add(fail)
+  } else if (fail === 'sort' || fail === 'encode-and-transform') {
+    mark.sort = { field: 'datum.zz.q' }
+    g.used.add(fail)
+  }
+  return mark
+}
+
+/** A signal of the view that reads a scale or a dataset and throws: ranked after everything else of the view's scope. */
+function lateSignal(g: Gen, id: number): void {
+  g.rootSignals.push({ name: `late${id}`, update: g.r.pick([`null.x + scale('x', 1)`, `data('t')[0].zz.q`, `bandwidth('x') + null.x`]) })
 }
 
 function guideEncode(r: Rng, parts: readonly string[]): Record<string, unknown> {
@@ -95,6 +159,7 @@ function legend(g: Gen, fails: boolean): Spec {
 
 function group(g: Gen, depth: number, data: string): Spec {
   const id = g.n++
+  g.groups.add(id)
   const fail = g.fails.get(id)
   const own = g.r.chance(0.4)
   const shape = g.r.pick(['plain', 'plain', 'plain', 'facet', 'data'])
@@ -105,11 +170,39 @@ function group(g: Gen, depth: number, data: string): Spec {
   const childData = shape === 'facet' ? `f${id}` : data
   for (let i = 0; i < kids; i++) marks.push(depth < 2 && g.r.chance(0.4) ? group(g, depth + 1, childData) : leaf(g, childData))
   const update: Record<string, unknown> = { x: { value: 2 + (id % 4) * 30 }, y: { value: 2 }, width: { value: 28 }, height: { value: 28 }, fill: { value: '#eee' } }
-  if (fail === 'group') {
+  // (what the group holds reads the group's own size and position: what its transforms wrote)
+  if (marks.length && g.r.chance(0.3)) marks.push({ type: 'rect', encode: { update: { x: { field: { group: 'x' }, mult: 0.1 }, y: { value: 1 }, width: { field: { group: 'width' }, mult: 0.2 }, height: { field: { group: 'height' }, mult: 0.2 }, fill: { value: 'black' } } } })
+  if (fail === 'group' || fail === 'encode-and-transform') {
     update[g.r.pick(['width', 'x', 'fill'])] = failingEntry(g.r)
     g.used.add(fail)
   }
+  if (fail === 'late-signal') {
+    lateSignal(g, id)
+    if (g.r.chance(0.5)) update.opacity = { signal: `late${id}` }
+    g.used.add(fail)
+  }
   const node: Spec = { type: 'group', name: `g${id}`, encode: { update }, marks }
+  // the transforms of a group run on its items, after their encode and before what they hold is made
+  const transforms: Spec[] = g.r.chance(0.35) ? itemTransforms(g.r) : []
+  const both = fail === 'encode-and-transform' && g.r.chance(0.6)
+  if ((fail === 'transform' && g.r.chance(0.5)) || fail === 'group-transform' || both) {
+    transforms.splice(g.r.int(transforms.length + 1), 0, failingTransform(g.r))
+    g.used.add(fail as Fail)
+  } else if (fail === 'sort' || fail === 'encode-and-transform') { node.sort = { field: 'datum.zz.q' }; g.used.add(fail) }
+  if (transforms.length) node.transform = transforms
+  if (fail === 'header-sort' || g.r.chance(0.08)) {
+    // a grid of the group's groups, with a header (or footer) group whose items are sorted by what they do not have. (One column, or
+    // as many as there are cells: a grid with more column headers than cells makes vega's layout throw, which is not what is tested here.)
+    node.layout = { ...(g.r.chance(0.5) ? { columns: 1 } : {}), padding: 3, bounds: g.r.pick(['full', 'flush']) }
+    const header: Spec = {
+      type: 'group', role: g.r.pick(['column-header', 'row-header', 'column-footer', 'row-footer']), name: `h${id}`, from: { data: childData },
+      sort: { field: fail === 'header-sort' ? 'datum.zz.q' : 'datum.k', order: 'descending' },
+      encode: { update: { width: { value: 10 }, height: { value: 6 } } },
+      title: { text: { signal: "'' + parent.a" }, fontSize: 6 },
+    }
+    marks.splice(g.r.int(marks.length + 1), 0, header)
+    if (fail === 'header-sort') g.used.add(fail)
+  }
   if (shape === 'facet') node.from = { facet: { data, name: `f${id}`, groupby: 'k' } }
   else if (shape === 'data') node.from = { data }
   if (own) node.scales = [{ name: `s${id}`, type: 'linear', domain: [0, 4], range: [0, 20] }]
@@ -147,19 +240,24 @@ export function treeSpec(r: Rng): { spec: Spec; fails: Fail[]; label: string } {
   const seed = r.int(1 << 30) + 1
   // The nodes are numbered in generation order, and a failure is put on one of them: the tree is made twice, once to count them.
   const make = (fails: Map<number, Fail>): { marks: Spec[]; g: Gen } => {
-    const g: Gen = { r: makeRng(seed), n: 0, fails, used: new Set(), rootScales: [] }
+    const g: Gen = { r: makeRng(seed), n: 0, fails, used: new Set(), rootScales: [], rootSignals: [], groups: new Set() }
     const marks: Spec[] = []
     for (let i = 0; i < total; i++) marks.push(g.r.chance(0.55) ? group(g, 0, 't') : leaf(g, 't'))
     return { marks, g }
   }
-  const nodes = make(new Map()).g.n
+  const { g: shape } = make(new Map())
   const fails = new Map<number, Fail>()
   const count = process.env.ABORT_ONE ? 1 : r.between(1, 2)
-  for (let i = 0; i < count; i++) fails.set(r.int(nodes), r.pick(FAILS))
+  for (let i = 0; i < count; i++) {
+    // (a kind of failure, on a node that can hold it)
+    const kind = r.pick(FAILS)
+    const nodes = Array.from({ length: shape.n }, (_, id) => id).filter((id) => (shape.groups.has(id) ? GROUP_FAILS : LEAF_FAILS).has(kind))
+    fails.set(nodes.length ? r.pick(nodes) : r.int(shape.n), kind)
+  }
   const { marks, g } = make(fails)
   const spec: Spec = {
     width: 130, height: 60, padding: 4, autosize: process.env.ABORT_AUTOSIZE ?? r.pick(['none', 'pad', 'fit']),
-    signals: [],
+    signals: [...g.rootSignals],
     scales: [
       { name: 'x', type: 'linear', domain: [0, 4], range: [0, 20] },
       { name: 'c', type: 'ordinal', domain: ['p', 'q'], range: ['red', 'blue'] },
