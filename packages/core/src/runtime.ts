@@ -2004,7 +2004,7 @@ function buildContentPass(
   // is ranked after the last of those instances that has marks, ran if there is none)
   const unlaid = cut !== undefined && ((compareInstances(ctx.scope.path, cut.path) === 0 && cut.lateSignal !== true) || ctx.scope.unsettled === true
     // (a mark that reads the late signal connects its operators, ranked after it, to the layout)
-    || (cut.lateSignal === true && (ctx.chart.marks.some((m) => markReadsTaint(m, ctx)) || hasLateLabels(ctx.chart.legends, ctx)))
+    || (cut.lateSignal === true && (ctx.chart.marks.some((m) => markReadsTaint(m, ctx)) || withoutLateReads(ctx, () => hasLateLabels(ctx.chart.legends, ctx))))
     || symbolLegendsOf(ctx.chart.legends, ctx).some((_, k) => compareInstances([ctx.scope.nextChild.n + k, 0], cut.path) >= 0))
   if (unlaid) ctx.rawGuides = true
 
@@ -2021,13 +2021,13 @@ function buildContentPass(
       ctx.layoutState.failed = true
     }
   }
-  const { groups: guideGroups } = stopped
+  const { groups: guideGroups } = withoutLateReads(ctx, () => stopped
     ? buildAxisAndLegend(ctx, items, ctx.chart.axes.slice(0, madeAxes(cut!)), ctx.chart.legends.slice(0, madeLegends(cut!)))
-    : buildAxisAndLegend(ctx, items)
+    : buildAxisAndLegend(ctx, items))
   for (const g of guideGroups) items.push(g)
 
   // Top-level title. (A pass that stopped at a failing dataset or signal never made it: it is ranked after them.)
-  const titleGroup = (stopped && !cut!.title && !cut!.labels && !cut!.lateSignal) || ctx.datasetAborted ? null : buildTitleGroup(ctx.chart.title, items, width, height, ctx.rawGuides, ctx, undefined, ctx.chart.autosize === 'fit' || ctx.chart.autosize === 'fit-x' || ctx.chart.autosize === 'fit-y')
+  const titleGroup = (stopped && !cut!.title && !cut!.labels && !cut!.lateSignal) || ctx.datasetAborted ? null : withoutLateReads(ctx, () => buildTitleGroup(ctx.chart.title, items, width, height, ctx.rawGuides, ctx, undefined, ctx.chart.autosize === 'fit' || ctx.chart.autosize === 'fit-x' || ctx.chart.autosize === 'fit-y'))
   if (titleGroup) items.push(titleGroup)
   // The root group's width / height are the view's `width` / `height` signals (0
   // for a composition that sizes only its children), whatever the grid inside covers.
@@ -5318,10 +5318,56 @@ function labelTickCount(axis: CompiledAxis, scale: Scale, count: number, ctx: Ev
   return typeof counted === 'number' ? counted : count
 }
 
+/**
+ * Build the view's guides with what reads a late signal that threw left out: in vega the operators that read it never ran, so an
+ * expression of a guide that reads it gives nothing here, and throws nothing.
+ */
+function withoutLateReads<T>(ctx: EvalContext, build: () => T): T {
+  if (ctx.lateTaint === undefined) return build()
+  const runtime = ctx.runtime
+  const expr = runtime.expr
+  runtime.expr = (code) => (readsLateSignal(code, ctx) ? nothing : expr(code))
+  try { return build() } finally { runtime.expr = expr }
+}
+const nothing = (): undefined => undefined
+
+/** Whether an expression reads a late signal that threw (or one that reads it): vega never ran what reads it. */
+function readsLateSignal(code: string, ctx: EvalContext): boolean {
+  const t = ctx.lateTaint
+  return t !== undefined && expressionIdentifiers(code).some((id) => t.signals.has(id))
+}
+
+/**
+ * Whether the ticks of an axis read a late signal that threw (its parameters of vega's AxisTicks: `tickCount`, `values`, `tickMinStep`,
+ * `format`, `formatType`, `tickExtra`). That operator is then ranked after the signal and never runs: the axis has no ticks.
+ */
+function axisTicksReadLate(own: Record<string, unknown>, cfg: Record<string, unknown>, ctx: EvalContext): boolean {
+  if (ctx.lateTaint === undefined) return false
+  let hit = false
+  const params = { tickCount: own.tickCount, values: own.values, tickMinStep: own.tickMinStep, format: own.format, formatType: own.formatType, tickExtra: own.tickExtra ?? cfg.tickExtra }
+  walkStrings(params, (str, owner) => {
+    if (!hit && owner !== null && owner.signal === str && readsLateSignal(str, ctx)) hit = true
+  })
+  return hit
+}
+
 function buildAxis(axis: CompiledAxis, ctx: EvalContext, index: number): SceneGroup | null {
   const scale = ctx.scales.get(axis.scale)
   if (!scale) return null
   const orient = String(axis.orient)
+  const own = (axis.own ?? NO_PROPS) as Record<string, unknown>
+  const cfg = (axis.cfg ?? NO_PROPS) as Record<string, unknown>
+  // Ticks that read a late signal that threw were never made. The axis's tick, label and grid marks are made from them, after them:
+  // none of those is in vega's scenegraph, which keeps their places empty, and vega's own renderers cannot draw it (its `toSVG`
+  // rejects; a view logs a second error and stops drawing there). As where the ticks fail of a scale ranked late (axisTicksFailed),
+  // that is refused -- once the pass is known to make the axis (the first pass only finds where it stops).
+  if (ctx.abort.cut !== undefined && axisTicksReadLate(own, cfg, ctx)) {
+    const parts = propsOf(own, cfg)
+    if (parts.get('ticks', true) || parts.get('labels', true) || parts.get('grid', false)) {
+      const e = ctx.abort.failures.find((f) => f.lateSignal)?.error
+      throw new Error(`[aster] the ticks of the axis over scale "${axis.scale}" read a signal that threw (${e instanceof Error ? e.message : String(e)}); vega cannot draw the half-built axis either`)
+    }
+  }
   let ticks: unknown[]
   try {
     ticks = axisTicks(axis, scale, ctx)
@@ -5345,8 +5391,6 @@ function buildAxis(axis: CompiledAxis, ctx: EvalContext, index: number): SceneGr
   } catch (e) {
     return axisTicksFailed(axis, ctx, e, index)
   }
-  const own = (axis.own ?? NO_PROPS) as Record<string, unknown>
-  const cfg = (axis.cfg ?? NO_PROPS) as Record<string, unknown>
   // vega-encode AxisTicks tuples, the datum a tick / label / grid encode reads:
   // `{index (fraction 0..1), tickIndex, value, label}`; the `extra` entry (an
   // extra tick pegged to the first value, for binned axes) is
