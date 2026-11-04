@@ -191,6 +191,8 @@ import { fileURLToPath } from 'node:url'
 // The guide parts that read a late signal, every mark transform on its items and the mark identifier (fix/abort-guide-parts-item-transforms) on
 // main with the Vega-Lite channel work, measured on a clean build (kB gzip): Chart + VL 306.5 (+0.8 over main's 305.7 ceiling). Ceiling is the
 // measured value + 0.5.
+// Guide formats, layout errors and the parse walk (fix/core-parse-format-layout-errors) on main with the sort fix, measured on a clean build
+// (kB gzip): Chart + VL 308.3 (+1.3 over main's 307.0 ceiling; the core growth the lane measured). Ceiling is the measured value + 0.5.
 const BUDGETS = {
   '@aster/core': 152.9 * 1024,
   '+ @aster/core/dom': 11.1 * 1024,
@@ -206,7 +208,7 @@ const BUDGETS = {
   '@aster/react SvgChart': 182.9 * 1024,
   '@aster/react SvgChart + interaction': 200.1 * 1024,
   // Base + the VL compiler (opt-in: `import '@aster/react/vl'`).
-  '@aster/react Chart + VL': 307.0 * 1024,
+  '@aster/react Chart + VL': 308.8 * 1024,
 }
 
 const THIS_DIR = dirname(fileURLToPath(import.meta.url))
