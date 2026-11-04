@@ -262,9 +262,9 @@ function applyTransform(rows: Row[], t0: CompiledTransform, ctx: TransformContex
       return rows
     }
     case 'geoshape': {
-      // Vega's geoshape transform turns each datum's GeoJSON geometry into an
-      // SVG path (default field is the whole datum, default output 'shape').
-      // With a `projection` param the geometry is projected first.
+      // Vega's geoshape transform turns the GeoJSON geometry of each tuple's field (by default
+      // `datum`) into an SVG path (default output 'shape'). With a `projection` param the
+      // geometry is projected first.
       const as = (t as { as?: unknown }).as ?? 'shape'
       const field = (t as { field?: unknown }).field
       const projName = (t as { projection?: unknown }).projection
@@ -272,8 +272,9 @@ function applyTransform(rows: Row[], t0: CompiledTransform, ctx: TransformContex
       if (projection != null && !geoRegistry.projectedPath) requireGeo() // throws: addon not loaded
       const pointRadius = geoPointRadius((t as { pointRadius?: unknown }).pointRadius, ctx)
       return rows.map((r) => {
-        // vega's field is read off the scenegraph ITEM (`datum["geo"]` is item.datum.geo); a row here is the item's datum
-        const geo = field == null || field === 'datum' ? r : getField({ datum: r }, field as string)
+        // (a mark's transform runs on its items: the field is read off the item, `datum` -- the default -- being its data, and the
+        // path is written on the item, which is the transform's own)
+        const geo = getField(r, field == null ? 'datum' : String(field))
         // a projected shape's path and its unrounded bounds (for the bound pass) come from one pass over the geometry
         const shape = projection != null && as === 'shape' && geoRegistry.projectedShape ? geoRegistry.projectedShape(projection, geo, pointRadius) : undefined
         const p = shape
@@ -282,7 +283,8 @@ function applyTransform(rows: Row[], t0: CompiledTransform, ctx: TransformContex
             ? geoRegistry.projectedPath!(projection, geo, pointRadius)
             : geoJSONPath(geo)
         if (p === undefined) return r
-        const out = { ...r, [as as string]: p }
+        const out = owned ? r : { ...r }
+        out[as as string] = p
         if (shape) SHAPE_BOUNDS.set(out, () => shape.bounds)
         return out
       })

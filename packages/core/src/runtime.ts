@@ -1130,14 +1130,21 @@ function lateTaintOf(chart: CompiledChart, failed: readonly string[]): LateTaint
   return t
 }
 
-/** Whether a mark (or what is in it) reads what a late signal that threw took with it: its encode did not run. */
+/**
+ * Whether a mark's own operators read what a late signal that threw took with it: those operators, and the ones after them, did not
+ * run (its encode and its data, or one of its transforms, or its sort).
+ */
 function markReadsTaint(mark: CompiledMark, ctx: EvalContext): boolean {
-  const t = ctx.lateTaint
-  if (t === undefined) return false
-  let hit = false
   // (what a group holds is made in instances of its own, below: only its own operators read the signal here)
-  const own = { encode: mark.encode, from: mark.from, transform: mark.transform, sort: mark.sort }
-  walkStrings(own, (str, owner) => {
+  return readsTaint({ encode: mark.encode, from: mark.from, transform: mark.transform, sort: mark.sort }, ctx)
+}
+
+/** Whether a part of a spec reads what a late signal that threw took with it (the signals that read it, the scales, the data). */
+function readsTaint(part: unknown, ctx: EvalContext): boolean {
+  const t = ctx.lateTaint
+  if (t === undefined || part === undefined) return false
+  let hit = false
+  walkStrings(part, (str, owner) => {
     if (hit || owner === null) return
     if (['signal', 'expr', 'test', 'update'].some((k) => owner[k] === str) && expressionIdentifiers(str).some((id) => t.signals.has(id))) hit = true
     if (typeof owner.scale === 'string' && owner.scale === str && t.scales.has(str)) hit = true
@@ -3317,12 +3324,6 @@ function reusablePulse(
   return pulse
 }
 
-/** A mark `transform` vega runs on the encoded items (see evaluateMarkItems). */
-const ITEM_TRANSFORMS: ReadonlySet<string> = new Set(['voronoi', 'lookup', 'linkpath', 'force', 'geopath', 'label', 'heatmap', 'wordcloud'])
-function isItemTransform(t: CompiledTransform): boolean {
-  return ITEM_TRANSFORMS.has(String(t.type))
-}
-
 /** The bounds of one item of a mark, in the frame of the mark's group (vega's `item.bounds`). */
 function itemBoundsOf(container: { marktype: string }, item: SceneItem): { x1: number; y1: number; x2: number; y2: number } {
   const b = container.marktype === 'group' ? boundGroupItem(new Bounds(), item as unknown as SceneGroup) : boundTypedMark(new Bounds(), { marktype: container.marktype, items: [item] } as unknown as SceneGroup)
@@ -3335,7 +3336,7 @@ function evaluateMark(
   prevGroup?: SceneGroup | null,
 ): SceneGroup | SceneGroup[] | null {
   // (the encode of a mark that reads what a late signal took with it never ran: its items are the join's)
-  if (ctx.lateTaint !== undefined && !ctx.bareEncode && markReadsTaint(mark, ctx)) ctx = { ...ctx, bareEncode: true }
+  if (ctx.lateTaint !== undefined && !ctx.bareEncode && readsTaint({ encode: mark.encode, from: mark.from }, ctx)) ctx = { ...ctx, bareEncode: true }
   const built = evaluateMarkItems(mark, ctx, prevGroup)
   // a named mark's items are what a later mark of `from: {data: <name>}` reads
   if (built && typeof mark.name === 'string') {
@@ -3389,31 +3390,9 @@ function evaluateMarkItems(
         })
       }
     }
-    // Only clone rows when the pipeline will re-encode them all (a mark-level
-    // transform); the differential path reads the raw rows and clones
-    // just the changed indices, so an unchanged row is never copied.
-    let rows: Row[] = rawRows
-    let rowsCloned = false
-    // (vega runs a mark's transforms on the ENCODED items, after the encode; `voronoi`, `lookup` and `linkpath`,
-    // which read item properties (`datum.index`, `sourceNode.x`) and other marks' items, are run that way below)
-    const preTransforms = mark.transform?.filter((t) => !isItemTransform(t))
-    if (preTransforms?.length) {
-      rows = rawRows.map((r) => ({ ...r }))
-      rowsCloned = true
-      try {
-        rows = applyTransforms(rows, preTransforms, {
-          runtime: ctx.runtime,
-          signals: ctx.signalParams,
-          hierarchies: ctx.hierarchies,
-          projections: ctx.projections,
-        }, source)
-      } catch (e) {
-        // (vega runs a mark's transforms after its encode: the items are all made, and the pass stops at the transform that threw)
-        failPass(ctx, { axis: Infinity, mark: ctx.scope.mark ?? 0, afterEncode: true }, e)
-        stoppedAfterEncode = true
-        rows = rawRows.map((r) => ({ ...r }))
-      }
-    }
+    // (the differential path reads the raw rows and clones just the changed indices, so an unchanged row is never copied; a mark's
+    // transforms run on the encoded items, below)
+    const rows: Row[] = rawRows
 
     // Keep dataset order for rect items: vega's scene keeps data order and
     // every renderer paints the array front to back (later datum on top).
@@ -3505,7 +3484,7 @@ function evaluateMarkItems(
         // Same loop with the clock sampled every 1024 items (limits ON only).
         items = new Array<SceneItem>(encodeRows.length)
         for (let i = 0; i < encodeRows.length; i++) {
-          const copy = rowsCloned ? encodeRows[i]! : { ...encodeRows[i]! }
+          const copy = { ...encodeRows[i]! }
           const res = resolveEncodeSet(update, copy, ctx, mark.type)
           res.datum = copy
           res.__gen = gen
@@ -3514,7 +3493,7 @@ function evaluateMarkItems(
         }
       } else {
         items = encodeRows.map((row) => {
-          const copy = rowsCloned ? row : { ...row }
+          const copy = { ...row }
           const res = resolveEncodeSet(update, copy, ctx, mark.type)
           res.datum = copy
           res.__gen = gen
@@ -3529,33 +3508,16 @@ function evaluateMarkItems(
     items = [res]
   }
 
-  // vega-parser mark.js: a mark's `transform`s that work on the encoded items (voronoi cells over the items'
-  // positions, a lookup of another mark's items by `datum.index`, a link path between looked-up items) run right
-  // after the encode: the items are the transform's tuples, so `datum.datum` is the source datum. What they
-  // compute is written onto the items, in order (the next transform reads it).
+  // vega-parser mark.js: a mark's `transform`s run right after the encode, on the encoded items: the items are the transforms'
+  // tuples (`datum.x` is what the encode gave the item, `datum.datum` its data), and what they compute is written onto the items,
+  // which are drawn by it (see `transformMarkItems`). A transform that throws stops the pass there, the mark made in full.
   // (an encode that threw stopped the pass before them: they never ran, and the items stay in data order)
   if (ctx.encodeAborted) stoppedAfterEncode = true
-  for (const [k, t] of (mark.transform ?? []).entries()) {
-    if (!isItemTransform(t) || !source || items.length === 0) continue
-    if (stoppedAfterEncode) break
+  // (what reads a late signal that threw never ran, nor what comes after it: see `transformMarkItems`)
+  let transformed = true
+  if (mark.transform?.length && items.length && !stoppedAfterEncode) {
     try {
-      // (a transform that draws random numbers - the layout of a word cloud - draws them once for the inputs it is given, as
-      // vega's operator does, not again for every evaluation of the scene: see random-tape.ts)
-      const out = atRandomSite(mayDrawRandom(t) ? ctx.runtime.random : undefined, `mark:${ctx.scopeId ?? ''}/${markIdOf(mark)}#${k}`, () => randomFingerprint(t, items.map(publicProps), ctx.signalParams), () => applyTransforms(items as unknown as Row[], [t], {
-        runtime: ctx.runtime, signals: ctx.signalParams, hierarchies: ctx.hierarchies, projections: ctx.projections,
-        // (`lookup` `from` is a dataset, or the name of a mark: its items)
-        datasets: (n) => ctx.datasets.get(n) ?? (ctx.markItems.get(n) as unknown as Row[] | undefined),
-        // (`label` avoids the marks it names)
-        marks: (n) => ctx.markContainers.get(n),
-        // (vega's tuples: a force layout moves the items themselves)
-        inPlace: true,
-      }, source))
-      if (t.type === 'voronoi') {
-        const as = ((t as { as?: string }).as) ?? 'path'
-        items.forEach((it, i) => { (it as unknown as Row)[as] = (out[i] as Row)[as] })
-      } else {
-        items.forEach((it, i) => { Object.assign(it as unknown as Row, out[i]) })
-      }
+      transformed = transformMarkItems(mark, items, ctx, source)
     } catch (e) {
       failPass(ctx, { axis: Infinity, mark: ctx.scope.mark ?? 0, afterEncode: true }, e)
       stoppedAfterEncode = true
@@ -3565,7 +3527,7 @@ function evaluateMarkItems(
   // vega's SortItems: a mark `sort` orders the ENCODED items by their own
   // properties (`x`, `datum.t`, `datum["t"]`), after the encode and before the
   // bound pass; stable. A sort that throws stops the pass there: the items stay in data order.
-  if (mark.sort && source && !stoppedAfterEncode) {
+  if (mark.sort && source && !stoppedAfterEncode && transformed && sortRuns(mark, ctx)) {
     try { items = sortMarkItems(items, mark.sort) } catch (e) {
       failPass(ctx, { axis: Infinity, mark: ctx.scope.mark ?? 0, afterEncode: true }, e)
       stoppedAfterEncode = true
@@ -3622,12 +3584,16 @@ function evaluateMarkItems(
       const datum = (it as { datum?: Row }).datum
       if (!datum) continue
       let path: string | undefined
-      if (mark.type === 'geoshape' && typeof datum.shape !== 'string') {
+      const own = (it as { shape?: unknown }).shape
+      if (typeof own === 'string') {
+        // the path a geoshape transform wrote on the item
+        path = own
+      } else if (mark.type === 'geoshape' && typeof datum.shape !== 'string') {
         // Raw geoshape mark: the datum itself is the GeoJSON geometry.
         path = geoJSONPath(datum)
       } else {
-        // The path may come from a geoshape transform (datum.shape) or from a
-        // `path` data field on a shape mark.
+        // The path may come from a geoshape transform of the data (datum.shape)
+        // or from a `path` data field on a shape mark.
         const shape = datum.shape
         path = typeof shape === 'string' ? shape : (typeof datum.path === 'string' ? datum.path : undefined)
       }
@@ -3885,16 +3851,17 @@ function buildGroupMark(mark: CompiledMark, ctx: EvalContext): SceneGroup[] | nu
   // A group mark's own operators are its enclosing scope's: every item is encoded, then the mark's transforms and its sort run on
   // the items, and only then is what each item holds made (an instance of its own, ranked after them).
   const entered = sources.map((src) => { meterTick('group item'); return enterGroupItem(mark, ctx, src) })
+  let transformed = true
   if (mark.transform?.length && entered.length && !ctx.encodeAborted) {
     try {
-      transformGroupItems(mark, entered.map((g) => g.item), ctx)
+      transformed = transformMarkItems(mark, entered.map((g) => g.item), ctx)
     } catch (e) {
       failPass(ctx, { axis: Infinity, mark: ctx.scope.mark ?? 0, afterEncode: true }, e)
       ctx.encodeAborted = true
     }
   }
   // (an encode or a transform that threw stopped the pass before the sort)
-  const sorts = mark.sort !== undefined && !ctx.encodeAborted
+  const sorts = mark.sort !== undefined && !ctx.encodeAborted && transformed && sortRuns(mark, ctx)
   const settled = sources.map(() => ({ unsettled: false }))
   const groups = entered.map((g, i) => buildGroupItem(mark, ctx, g, settled[i]!))
   // The layout of a group mark is one operator for all its items, ranked after every instance below any of them: one item
@@ -3937,30 +3904,37 @@ function enterGroupItem(mark: CompiledMark, ctx: EvalContext, src: GroupSource):
   return { src, path, item: Object.assign(item, { datum: src.datum }) }
 }
 
-/** The tuple a mark transform was given for an item: a transform that copies its tuples copies this too (see `transformGroupItems`). */
+/** The tuple a mark transform was given for an item: a transform that copies its tuples copies this too (see `transformMarkItems`). */
 const ITEM_OF = Symbol('item')
 
 /**
- * A group mark's transforms, run on its encoded items as vega runs a mark's: a transform reads the items (`datum.x`, `datum.datum.k`)
- * in the order the one before it left them, and what it computes is written onto them, where what the group holds reads it (its
- * `{group: "width"}`) and the group is drawn by it. A transform that works on copies of its tuples has its copies written back onto
- * the items they came from.
+ * A mark's transforms, run on its encoded items as vega runs them: a transform reads the items (`datum.x`, `datum.datum.k`) in the
+ * order the one before it left them, and what it computes is written onto them, which are drawn by it (a group's items are also read
+ * by what the group holds: its `{group: "width"}`). A transform that works on copies of its tuples has its copies written back onto
+ * the items they came from. `source` is the data the mark is from (where a hierarchy built over it is found).
  */
-function transformGroupItems(mark: CompiledMark, items: Array<SceneItem & { datum?: Row }>, ctx: EvalContext): void {
+function transformMarkItems(mark: CompiledMark, items: readonly SceneItem[], ctx: EvalContext, source?: string): boolean {
+  // (a mark whose encode never ran -- it reads a late signal that threw -- has no transform run either; nor has a transform that reads
+  // one, nor any after it: they come after it in vega's dataflow)
+  if (ctx.bareEncode === true) return false
   const own = items as unknown as Array<Row & { [ITEM_OF]?: Row }>
   for (const it of own) it[ITEM_OF] = it
   const tctx: TransformContext = {
     runtime: ctx.runtime, signals: ctx.signalParams, hierarchies: ctx.hierarchies, projections: ctx.projections,
+    // (`lookup` `from` is a dataset, or the name of a mark: its items; `label` avoids the marks it names)
     datasets: (n) => ctx.datasets.get(n) ?? (ctx.markItems.get(n) as unknown as Row[] | undefined),
     marks: (n) => ctx.markContainers.get(n),
-    // (an `identifier` numbers the items from 1, as a mark's other transforms do: not from the view's counter)
+    // (vega's tuples: a force layout moves the items themselves; an `identifier` numbers the items from 1)
     inPlace: true,
   }
   try {
     let rows: Row[] = own
     for (const [k, t] of (mark.transform ?? []).entries()) {
+      if (readsTaint(t, ctx)) return false
       const input = rows
-      const out = atRandomSite(mayDrawRandom(t) ? ctx.runtime.random : undefined, `mark:${ctx.scopeId ?? ''}/${markIdOf(mark)}#${k}`, () => randomFingerprint(t, input.map(publicProps), ctx.signalParams), () => applyTransforms(input, [t], tctx, undefined, true))
+      // (a transform that draws random numbers - the layout of a word cloud - draws them once for the inputs it is given, as vega's
+      // operator does, not again for every evaluation of the scene: see random-tape.ts)
+      const out = atRandomSite(mayDrawRandom(t) ? ctx.runtime.random : undefined, `mark:${ctx.scopeId ?? ''}/${markIdOf(mark)}#${k}`, () => randomFingerprint(t, input.map(publicProps), ctx.signalParams), () => applyTransforms(input, [t], tctx, source, true))
       rows = out.map((r) => {
         const it = (r as { [ITEM_OF]?: Row })[ITEM_OF]
         if (it === undefined || it === r) return r
@@ -3971,6 +3945,12 @@ function transformGroupItems(mark: CompiledMark, items: Array<SceneItem & { datu
   } finally {
     for (const it of own) delete it[ITEM_OF]
   }
+  return true
+}
+
+/** Whether a mark's sort runs: not when its encode never ran, nor when it reads a late signal that threw itself. */
+function sortRuns(mark: CompiledMark, ctx: EvalContext): boolean {
+  return ctx.bareEncode !== true && !readsTaint(mark.sort, ctx)
 }
 
 const GROUP_PAINT_KEYS = ['fill', 'stroke', 'strokeWidth', 'strokeOpacity', 'fillOpacity', 'opacity', 'strokeDash', 'strokeDashOffset', 'strokeCap', 'strokeJoin', 'strokeMiterLimit', 'strokeOffset'] as const
