@@ -121,7 +121,7 @@ forEachVariant(['svg'], (Chart, variant) => {
   describe.each([['xscale/yscale', { x: 'xscale', y: 'yscale' }], ['x/y', { x: 'x', y: 'y' }]])('pan direction follows the scale orientation, %s (C64)', (_l, names) => {
     it('dragging down moves a bottom-to-top y scale so the data follows the pointer', () => {
       const ref = React.createRef<ChartHandle>()
-      const { container, host } = mount(<Chart ref={ref} spec={tutorialSpec(names) as never} panZoom width={200} height={100} />)
+      const { container } = mount(<Chart ref={ref} spec={tutorialSpec(names) as never} panZoom width={200} height={100} />)
       act(() => { ref.current!.setView({ x: [2, 6], y: [2, 6] }) })
       const yBefore = ref.current!.getView()!.y!
       ptr(overlayOf(container), 'pointerdown', 50, 40)
@@ -136,7 +136,7 @@ forEachVariant(['svg'], (Chart, variant) => {
 
     it('dragging right moves the x domain left', () => {
       const ref = React.createRef<ChartHandle>()
-      const { container, host } = mount(<Chart ref={ref} spec={tutorialSpec(names) as never} panZoom width={200} height={100} />)
+      const { container } = mount(<Chart ref={ref} spec={tutorialSpec(names) as never} panZoom width={200} height={100} />)
       act(() => { ref.current!.setView({ x: [2, 6], y: [2, 6] }) })
       ptr(overlayOf(container), 'pointerdown', 50, 40)
       ptr(overlayOf(container), 'pointermove', 90, 40)

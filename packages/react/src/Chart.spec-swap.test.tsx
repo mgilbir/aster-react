@@ -163,7 +163,6 @@ forEachVariant(['svg'], (Chart, variant) => {
       vi.useRealTimers()
     })
     const fake = (): void => { vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'requestAnimationFrame', 'cancelAnimationFrame', 'performance', 'Date'] }) }
-    const width = (c: HTMLElement): string => c.querySelector('.mark-rect path')!.getAttribute('d')!
 
     variant.it(['signals'], 'a timer of the old spec stops with it: nothing keeps ticking behind a spec without timers', () => {
       fake()

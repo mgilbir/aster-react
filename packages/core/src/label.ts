@@ -27,7 +27,7 @@ import { itemMarkOf, transformRegistry } from './registry.js'
 import { compareRows, resolveSizeParam, type Row, type TransformContext } from './transform.js'
 import { meterRows } from './limits.js'
 import { itemTextWidth } from './text-metrics.js'
-import type { SceneGroup, SceneItem, SortSpec } from './types.js'
+import type { SceneGroup, SortSpec } from './types.js'
 
 type Rec = Record<string, unknown>
 

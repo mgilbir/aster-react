@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { describe, it, expect } from 'vitest'
 import { compileChart, evaluateChart } from './index.js'
-import { readData, coerceRows, inferType } from './data-format.js'
+import { readData, inferType } from './data-format.js'
 import { loadSpecData } from './addon-load.js'
 import type { VgSpec } from './types.js'
 
@@ -25,7 +25,6 @@ describe('data formats', () => {
   })
 
   it('parses csv/tsv/dsv strings via the addon readers', async () => {
-    const { dataFormatRegistry } = await import('./registry.js')
     expect(readData('a,b\n1,x\n2,y', { type: 'csv' })).toEqual([{ a: '1', b: 'x' }, { a: '2', b: 'y' }])
     expect(readData('a\tb\n1\tx', { type: 'tsv' })).toEqual([{ a: '1', b: 'x' }])
     expect(readData('a;b\n1;x', { type: 'dsv', delimiter: ';' })).toEqual([{ a: '1', b: 'x' }])

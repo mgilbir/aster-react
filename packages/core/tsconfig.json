@@ -1,6 +1,7 @@
 {
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
+    "noUnusedLocals": true,
     "outDir": "./dist"
   },
   "include": ["src"]

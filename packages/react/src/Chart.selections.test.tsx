@@ -2,7 +2,7 @@
 import * as React from 'react'
 import { createRoot } from 'react-dom/client'
 import { act } from 'react'
-import { describe, it, expect, vi, afterEach } from 'vitest'
+import { describe, expect, vi, afterEach } from 'vitest'
 import './vl'
 import type { ChartHandle } from './Chart'
 import { forEachVariant } from './testing/variants'

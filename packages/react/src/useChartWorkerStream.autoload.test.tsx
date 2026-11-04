@@ -4,7 +4,6 @@
  * creates the stream (with a treemap and nothing imported: the transforms add-on), then streams as usual. No add-on is imported
  * by this file.
  */
-import * as React from 'react'
 import { createRoot } from 'react-dom/client'
 import { act } from 'react'
 import { describe, it, expect, afterEach } from 'vitest'

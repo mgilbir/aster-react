@@ -5,8 +5,6 @@
  * arrival order; its pieces are tested here (`prepareWorkerMessage`, `handleWorkerMessageWithAddons`). No add-on is imported
  * by this file, which is the premise.
  */
-import * as React from 'react'
-import { createRoot } from 'react-dom/client'
 import { act } from 'react'
 import { describe, it, expect, afterEach } from 'vitest'
 import { readFileSync } from 'node:fs'
@@ -32,11 +30,6 @@ const CSV: VgSpec = {
 }
 const roots: Array<{ unmount(): void }> = []
 afterEach(() => { act(() => { for (const r of roots.splice(0)) r.unmount() }); document.body.innerHTML = '' })
-
-async function until(ready: () => boolean, ms = 8000): Promise<void> {
-  const t0 = Date.now()
-  while (!ready() && Date.now() - t0 < ms) await act(async () => { await new Promise((r) => setTimeout(r, 10)) })
-}
 
 describe('the worker host, with nothing imported', () => {
   it('starts with no add-on registered', () => {

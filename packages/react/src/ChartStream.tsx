@@ -11,7 +11,7 @@
  * until it mounts.
  */
 import * as React from 'react'
-import type { ImageUrlPolicy, SceneRoot, SpecLimits, StreamBatch, VgSpec } from '@aster/core'
+import type { SceneRoot, SpecLimits, StreamBatch, VgSpec } from '@aster/core'
 import { Chart, type ChartProps, type ChartStreamInput } from './Chart.js'
 import { positionalScales, viewToDomainRaw } from './interaction.js'
 import { useStableContent } from './spec.js'

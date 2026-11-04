@@ -3,7 +3,7 @@ import * as React from 'react'
 import { createRoot } from 'react-dom/client'
 import { act } from 'react'
 import { describe, it, expect, afterEach } from 'vitest'
-import { handleChartWorkerStreamRequest, type ChartWorkerStreamRequest, type ChartWorkerStreamResponse } from './worker'
+import { handleChartWorkerStreamRequest, type ChartWorkerStreamRequest } from './worker'
 import { useChartWorkerStream, type WorkerChartStreamResult } from './useChartWorkerStream'
 
 const spec = {

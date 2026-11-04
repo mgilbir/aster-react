@@ -30,11 +30,6 @@ export type Scale = vs.Scale
 
 type SchemeFn = (t: number) => unknown
 
-export interface ColorScale extends Scale {
-  interpolate?(interpolator: () => SchemeFn): this
-  interpolator?(fn?: SchemeFn): this | SchemeFn
-}
-
 /** Continuous types (the runtime's domain census and gradient legends key on these). */
 export const CONTINUOUS_TYPES = new Set(['linear', 'log', 'pow', 'sqrt', 'symlog', 'time', 'utc', 'sequential', 'quantize'])
 

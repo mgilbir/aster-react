@@ -42,15 +42,6 @@ function fuzzSpecs(): Array<{ name: string; spec: Record<string, unknown> }> {
 }
 
 describe('differential multi-dataset / source-chain / signal interaction', () => {
-  const fs = (values: Array<{ x: number; y: number }>) => ({
-    $schema: 'https://vega.github.io/schema/vega/v6.json',
-    width: 200, height: 200, autosize: 'none',
-    data: [{ name: 't', values }],
-    scales: [{ name: 'x', type: 'linear', domain: [0, 10], range: 'width' }, { name: 'y', type: 'linear', domain: [0, 10], range: 'height' }],
-    marks: [{ type: 'symbol', from: { data: 't' }, encode: { update: { x: { scale: 'x', field: 'x' }, y: { scale: 'y', field: 'y' }, size: { value: 40 } } } }],
-  } as never)
-  const xs = (s: import('./types.js').SceneRoot) => s.items.find((g) => (g as { marktype?: string }).marktype === 'symbol')!.items!.map((it) => it.x)
-
   it('applies multi-dataset changesets', () => {
     const spec = { $schema: 'https://vega.github.io/schema/vega/v6.json', width: 200, height: 200, autosize: 'none',
       data: [{ name: 'a', values: [{ x: 1, y: 1 }, { x: 2, y: 2 }] }, { name: 'b', values: [{ x: 3, y: 3 }, { x: 4, y: 4 }] }],

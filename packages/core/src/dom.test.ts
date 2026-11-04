@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect } from 'vitest'
 import { compileChart, evaluateChart, renderSceneToSvg } from './index.js'
-import { patchSceneDom, renderSceneToDomElement, sceneToDomDesc } from './addon-dom.js'
+import { patchSceneDom, renderSceneToDomElement } from './addon-dom.js'
 import type { SceneRoot } from './types.js'
 
 const barSpec = (seedOffset: number) => ({

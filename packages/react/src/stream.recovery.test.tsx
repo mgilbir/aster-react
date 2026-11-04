@@ -5,7 +5,7 @@ import { act } from 'react'
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { AsterLimitError, AsterStreamBackpressureError, type ChartStream as CoreStream } from '@aster/core'
 import { ChartStream, ChartWorkerStream, type ChartStreamHandle } from './ChartStream'
-import { useChartStream, type UseChartStreamResult } from './useChartStream'
+import { useChartStream } from './useChartStream'
 import { useChartWorkerStream, type WorkerChartStreamResult } from './useChartWorkerStream'
 import {
   handleChartWorkerRequest, handleWorkerMessage, registerWorkerUrlPolicy, useChartWorker,

@@ -1,5 +1,4 @@
 // @vitest-environment jsdom
-import * as React from 'react'
 import { createRoot, hydrateRoot } from 'react-dom/client'
 import { renderToString } from 'react-dom/server'
 import { act } from 'react'

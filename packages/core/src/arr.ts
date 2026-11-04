@@ -101,8 +101,11 @@ export default function bisector<T, U>(order: ((item: T) => U) | ((item: T, x: U
 
 const ascendingSearch = bisector(ascending) as unknown as Bisector<number, number>
 export const bisectRight = ascendingSearch.right
+/** @public (the d3-array differential reads it by name) */
 export const bisectLeft = ascendingSearch.left
+/** @public (the d3-array differential reads it by name) */
 export const bisect = bisectRight
+/** @public (the d3-array differential reads it by name) */
 export const bisectCenter = bisector((d: number) => (d === null ? NaN : +d)).center
 
 // ---- ticks ------------------------------------------------------------------------------------------------

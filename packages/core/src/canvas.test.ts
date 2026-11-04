@@ -31,7 +31,6 @@ function makeRecordingCtx(): { ctx: CanvasLike; records: DrawRecord[] } {
   let tx = 0, ty = 0
   const stack: Array<[number, number, number]> = []
   let ops: string[] = []
-  let cur: string | null = null // pending paint info at fill/stroke time
   let cp: [number, number] | null = null // current point (device space)
   let fillStyle: unknown = '#000'
   let strokeStyle: unknown = '#000'
@@ -118,7 +117,6 @@ function makeRecordingCtx(): { ctx: CanvasLike; records: DrawRecord[] } {
     get fillStyle() { return fillStyle },
     set fillStyle(v: unknown) {
       fillStyle = v
-      cur = v as string
     },
     get strokeStyle() { return strokeStyle },
     set strokeStyle(v: unknown) { strokeStyle = v },

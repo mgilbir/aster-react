@@ -39,7 +39,7 @@ import type { CompiledChart, CompiledData, CompiledSignalDef, SceneGroup, SceneI
 import { compileExpr, type CompiledExpr, type ExpressionRuntime } from './expression.js'
 import { applyChangeset, newChangeset, planModify, type Changeset } from './modify.js'
 import { parseExpression, type AstNode } from './expr-parser.js'
-import { normalizeEvents, filterCode, type OperatorSource } from './stream-defs.js'
+import { normalizeEvents, filterCode } from './stream-defs.js'
 import { parseEventSelectorString, type StreamDef } from './event-selector.js'
 import { array, dict, heldSignalName, ownGet, setOwn, TUPLE_ID, MARK_NODE, scopedSignalName } from './util.js'
 import { follow, node, Propagation, type SignalNode } from './signal-propagation.js'
@@ -690,8 +690,6 @@ function bindSignalEventsDefs(
     }
     return rt
   }
-  const runtime = bindRuntime
-
   /** The current value of `name` as seen from `scope`: the host's store wins, the evaluated scene's value is the baseline. */
   const read = (name: string, scope: Scope | null = null): unknown => {
     const owner = ownerOf(scope, name)

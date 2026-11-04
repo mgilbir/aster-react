@@ -200,16 +200,3 @@ export function truncateToLimit(item: TruncateProps, text: string): string {
   }
   return text.slice(0, lo) + ellipsis
 }
-
-/**
- * Measure a plain string with a nominal font (no scene item). `fontWeight`
- * maps straight onto the canvas font string; the estimate fallback ignores it
- * exactly like vega's headless path does.
- */
-export function nominalTextWidth(text: string, fontSize: number, fontWeight?: unknown): number {
-  if (usingCanvasTextMetrics()) {
-    if (fontSize <= 0 || !text) return 0
-    return measureText(text, fontString({ fontSize, fontWeight }), { fontSize, fontWeight })
-  }
-  return estimateTextWidth(text, fontSize)
-}

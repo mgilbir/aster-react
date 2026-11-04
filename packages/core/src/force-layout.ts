@@ -241,7 +241,6 @@ class ManyBodyForce implements Force {
 
 /** Springs between linked nodes; the links' ends are looked up (and replaced by the nodes) when the force is bound. */
 class LinkForce implements Force {
-  private nodes: Node[] = []
   private random: Random = Math.random
   private distances = new Float64Array(0)
   private strengths = new Float64Array(0)
@@ -255,7 +254,6 @@ class LinkForce implements Force {
   ) {}
 
   bind(nodes: Node[], random: Random): void {
-    this.nodes = nodes
     this.random = random
     const links = this.links
     const m = links.length
