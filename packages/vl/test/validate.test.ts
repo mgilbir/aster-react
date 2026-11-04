@@ -55,8 +55,6 @@ const REJECTED: Array<[string, unknown, RegExp]> = [
   ['an unknown type', unit({ encoding: { x: { field: 'x', type: 'integer' } } }), /unknown type/],
   ['a malformed field path', unit({ encoding: { x: { field: "v'] + 1 + datum['v", type: 'quantitative' } } }), /access path|invalid field/],
   ['an unknown aggregate', unit({ encoding: { x: { field: 'x', type: 'quantitative', aggregate: 'summ' } } }), /unknown aggregate/],
-  ['a datum on an unsupported channel', unit({ encoding: { x: xq, y: yq, size: { datum: 4 } } }), /size\.datum/],
-  ['scale: null', unit({ encoding: { x: { ...xq, scale: null } } }), /scale: null/],
   ['an unknown scale property', unit({ encoding: { x: { ...xq, scale: { zeroish: true } } } }), /unknown scale property/],
   ['domainRaw', unit({ encoding: { x: { ...xq, scale: { domainRaw: [0, 1] } } } }), /domainRaw/],
   ['a scale domain over an undeclared param', unit({ encoding: { x: { ...xq, scale: { domain: { param: 'p' } } } } }), /parameter "p" is not declared/],
@@ -175,6 +173,8 @@ const ACCEPTED: Array<[string, unknown]> = [
   ['a wrapped faceted unit nested in a concat', { data: DATA, hconcat: [unit(), unit({ encoding: { x: xq, y: yq, facet: { ...cn, columns: 2 } } })] }],
   ['a wrapped facet operator nested in a concat', { data: DATA, vconcat: [unit(), { facet: cn, spec: unit() }] }],
   ['a facet inside a facet', { data: DATA, facet: { column: cn }, spec: { facet: { row: { field: 'g', type: 'nominal' } }, spec: unit() } }],
+  ['a datum on a size (it was refused as "a datum on an unsupported channel")', unit({ encoding: { x: xq, y: yq, size: { datum: 4 } } })],
+  ['scale: null on x (it was refused)', unit({ encoding: { x: { ...xq, scale: null } } })],
   ['a selection declared in two views', { data: DATA, hconcat: [unit({ params: [{ name: 'brush', select: 'interval' }] }), unit({ params: [{ name: 'brush', select: 'interval' }] })] }],
 ]
 

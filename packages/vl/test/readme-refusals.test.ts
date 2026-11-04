@@ -41,8 +41,6 @@ const REFUSED: Array<[string, Record<string, unknown>]> = [
   ['`timeUnit.maxbins`', unit('bar', { x: { field: 'd', type: 'temporal', timeUnit: { maxbins: 5 } }, y: q('c') })],
   ['errorbar / errorband over a binned channel', unit('errorbar', { x: { field: 'b', type: 'quantitative', bin: 'binned' }, y: q('c') })],
   ['`timeUnitBandPosition`', unit({ type: 'bar', timeUnitBandPosition: 0.5 }, { x: { field: 'd', type: 'temporal', timeUnit: 'month' } })],
-  ['`scale: null` on a channel other than color', unit('point', { x: { ...q('b'), scale: null } })],
-  ['a `datum` on a channel other than the positions', unit('point', { x: q('b'), size: { datum: 2 } })],
   ['a `datum`\n  condition on fillOpacity', unit('point', { x: q('b'), fillOpacity: { condition: { test: 'datum.b > 1', datum: 2 }, value: 1 } })],
   ['a field condition that reads a field other than the\n  channel\'s own', unit('point', { x: q('b'), color: { condition: { test: 'datum.b > 1', field: 'c', type: 'quantitative' }, field: 'b', type: 'quantitative' } })],
   ['an array of conditions that holds a field condition', unit('point', { x: q('b'), color: { condition: [{ test: 'datum.b > 1', field: 'a', type: 'nominal' }], value: 'g' } })],
@@ -86,6 +84,8 @@ const COMPILES: Array<[string, Record<string, unknown>]> = [
   ['keyvals ranges', unit('point', { x: q('b') }, { transform: [{ impute: 'b', key: 'c', keyvals: { start: 0, stop: 5 } }] })],
   ['a facet inside a facet (row and column)', { data, facet: { row: { field: 'a' } }, spec: { facet: { column: { field: 'a' } }, spec: { mark: 'point', encoding: { x: q('b') } } } }],
   ['a point mark in a facet', { data, facet: { row: { field: 'a' } }, spec: { ...proj, mark: 'point', encoding: lonlat } }],
+  ['`scale: null` on a position', unit('point', { x: { ...q('b'), scale: null } })],
+  ['a `datum` on a size', unit('point', { x: q('b'), size: { datum: 2 } })],
   ['a selection on a named view', { data, params: [sel], hconcat: [{ name: 'v', mark: 'point', encoding: { x: q('b') } }] }],
 ]
 
@@ -104,7 +104,7 @@ describe('packages/vl/README.md "Throws (not supported)" matches the compiler', 
   }
 
   it('does not list what used to be refused', () => {
-    for (const stale of ['`strokeDash`', '`angle`', '`binned: true`', '`bin: "binned"`', '`sequence`', 'horizontal\n  boxplots', '`params: true`', '`keyvals` ranges', 'named view', 'path mark with an overlay']) {
+    for (const stale of ['`strokeDash`', '`angle`', '`binned: true`', '`bin: "binned"`', '`sequence`', 'horizontal\n  boxplots', '`params: true`', '`keyvals` ranges', 'named view', 'path mark with an overlay', 'a `datum` on a channel other than the positions', '`scale: null` on a channel other than']) {
       expect(LIST, stale).not.toContain(stale)
     }
   })
