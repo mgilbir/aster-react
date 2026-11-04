@@ -11,6 +11,7 @@ import { renameDataRefs, renameExpr, renameFragment } from './embed.js'
 import { optimizeData } from './optimize.js'
 import { VLCompileError, pushAll, signalSafe, flatField, datumRef as dref, genName, safeKey, splitAccessPath } from './names.js'
 import { validateGeoUnit, validateSpec } from './validate.js'
+import { markChannelCompatible } from './channels.js'
 import { predicateExpr, domainValueExpr, dateTimeToExpr, isDateTime as isDateTimeValue } from './predicate.js'
 import {
   SELECTION_ID, STORE, assembleSelectionScaleDomain, assembleTopLevelSelectionSignals, assembleUnitSelectionData,
@@ -26,7 +27,7 @@ import { nonPositionScaleType } from './scaletype.js'
 import { scalePropApplies, scaleTypeFits, zeroByDefault } from './scaleprops.js'
 import { isTimerSelection, selectionExtent } from './selection.js'
 import { ASSEMBLED_FROM, GEO_POSITION_CHANNELS, assembleProjection, finalProjectionName, geoDataTransforms, geoshapeTransform, hasProjection, mergeLayerProjections, parseUnitProjection, renameComponentSignals, type GeoUnit, type ProjectionComponent, type UnitGeo } from './geo.js'
-import { scaleConfigOf, discreteStep, viewContinuousSize, viewDiscreteSize, sizeRange, countRange, discreteCount, usesUnaggregatedDomain, type ScaleCfg } from './scaleconfig.js'
+import { scaleConfigOf, discreteStep, viewDiscreteStep, viewContinuousSize, viewDiscreteSize, sizeRange, countRange, discreteCount, usesUnaggregatedDomain, type ScaleCfg } from './scaleconfig.js'
 import { getTimeUnitParts, normalizeTimeUnit, timeUnitFieldName, timeUnitTransform, type NormalTimeUnit } from './timeunit.js'
 import { binNames, binTransforms, isParameterExtent, imputeTransforms, normalizeBin, translateTransforms, type BinParams, type TransformContext, type TranslateState } from './transforms.js'
 
@@ -808,7 +809,6 @@ function compileLayered(spec: VLSpec, ctx: CompileCtx): VLSpec {
     const mark = typeof markRaw === 'string' ? markRaw : (markRaw as Record<string, unknown>).type as string
     initUnitEncoding(l, mark)
     const encoding = isObject(l.encoding) ? (l.encoding as Record<string, unknown>) : {}
-    checkConstChannels(encoding)
     // (a layer's encoding merged into this unit: the map rules apply to the result)
     validateGeoUnit(mark, encoding, 'encoding')
     const fields = parseEncodingFields(encoding, l.config, markRaw)
@@ -3398,6 +3398,12 @@ function datumValueRef(datum: unknown): Record<string, unknown> {
   return { value: datum }
 }
 
+/** A datum as an expression: what `datumValueRef` refers to, written inline. */
+function datumExpr(datum: unknown): string {
+  const ref = datumValueRef(datum)
+  return typeof ref.signal === 'string' ? ref.signal : JSON.stringify(ref.value)
+}
+
 /** scale/domain.ts convertDomainIfItIsDateTime for a datum: the domain a datum alone gives its scale. */
 function datumDomain(def: FieldDef): unknown {
   // (mapDomainToDataSignal: a time is a signal that gives the domain as a one-row data set)
@@ -3416,18 +3422,6 @@ function patchDatumRefs(node: unknown, datums: Map<string, unknown>): void {
     return
   }
   for (const v of Object.values(node)) if (v !== null && typeof v === 'object') patchDatumRefs(v, datums)
-}
-
-/** A datum is implemented on the positions and the paint channels; on any other channel it throws, never degrades. */
-function checkConstChannels(encoding: Record<string, unknown>): void {
-  for (const [ch, def] of Object.entries(encoding)) {
-    if (!isObject(def) || def.field !== undefined) continue
-    const isDatum = def.datum !== undefined
-    if (isDatum && !['x', 'y', 'x2', 'y2', 'theta2', 'radius2', 'xOffset', 'yOffset', 'color', 'fill', 'stroke', ...GEO_POSITION_CHANNELS].includes(ch)) {
-      throw new VLCompileError(`encoding.${ch}.datum is not supported (datum works on x, y, x2, y2, theta2, radius2, longitude, latitude, color, fill and stroke)`)
-    }
-
-  }
 }
 
 /** Parse every channel of an encoding into field defs (datum-only defs included, flagged). */
@@ -3479,51 +3473,12 @@ function dropUnallowedCustomFormat(def0: unknown, config: unknown): unknown {
   return def
 }
 
-const ALL_MARK_TYPES = ['arc', 'area', 'bar', 'circle', 'geoshape', 'image', 'line', 'rule', 'point', 'rect', 'square', 'trail', 'text', 'tick']
-/** channel.ts getSupportedMark: the marks that draw a channel (`always`), or draw it only for pre-binned data (`binned`). */
-function supportedMarks(channel: string): Record<string, 'always' | 'binned'> | undefined {
-  const always = (marks: string[]): Record<string, 'always'> => Object.fromEntries(marks.map((m) => [m, 'always' as const]))
-  switch (channel) {
-    case 'color': case 'fill': case 'stroke': case 'description': case 'detail': case 'key': case 'tooltip': case 'href': case 'order':
-    case 'opacity': case 'fillOpacity': case 'strokeOpacity': case 'strokeWidth': case 'facet': case 'row': case 'column':
-      return always(ALL_MARK_TYPES)
-    case 'x': case 'y': case 'xOffset': case 'yOffset': case 'latitude': case 'longitude': case 'time':
-      return always(ALL_MARK_TYPES.filter((m) => m !== 'geoshape'))
-    case 'x2': case 'y2': case 'latitude2': case 'longitude2':
-      return { ...always(['area', 'bar', 'image', 'rect', 'rule']), circle: 'binned', point: 'binned', square: 'binned', tick: 'binned', line: 'binned', trail: 'binned' }
-    case 'size': return always(['point', 'tick', 'rule', 'circle', 'square', 'bar', 'text', 'line', 'trail'])
-    case 'strokeDash': return always(['line', 'point', 'tick', 'rule', 'circle', 'square', 'bar', 'geoshape'])
-    case 'shape': return always(['point', 'geoshape'])
-    case 'text': return always(['text'])
-    case 'angle': return always(['point', 'square', 'text'])
-    case 'url': return always(['image'])
-    case 'theta': case 'radius': return always(['text', 'arc'])
-    case 'theta2': case 'radius2': return always(['arc'])
-    default: return undefined
-  }
-}
-
-/** encoding.ts markChannelCompatible. (An image mark is compiled as a rect carrying `$image`; the channel table is the image's.) */
 /** A secondary position channel that does not give its own type (x2 over a temporal x) is of its main channel's type: its field is a date too. */
 function secondaryOfTemporal(f: FieldDef, fields: FieldDef[]): boolean {
   if (f.raw.type !== undefined) return false
   const main = SECONDARY_MAIN[f.channel]
   return main !== undefined && fields.some((g) => g.channel === main && g.type === 'temporal')
 }
-function markChannelCompatible(encoding: Record<string, unknown>, channel: string, mark: string, image: boolean): boolean {
-  const table = supportedMarks(channel)
-  if (!table) return true // (an unknown channel is validate.ts's to reject)
-  const supported = table[image ? 'image' : mark]
-  if (!supported) return false
-  if (supported === 'binned') {
-    // circle, point, square and tick only take x2 / y2 when x / y is pre-binned data and they say where the bin ends
-    const primary = encoding[channel === 'x2' ? 'x' : 'y']
-    const bin = isObject(primary) ? primary.bin : undefined
-    return isObject(primary) && typeof primary.field === 'string' && isObject(encoding[channel]) && typeof (encoding[channel] as Record<string, unknown>).field === 'string' && (bin === 'binned' || (isObject(bin) && bin.binned === true))
-  }
-  return true
-}
-
 function parseEncodingFields(encoding: Record<string, unknown>, config?: unknown, markDef?: unknown): FieldDef[] {
   const fields: FieldDef[] = []
   // vega-lite parseLegend: `disable = legend !== undefined ? !legend : config.legend.disable`
@@ -3543,7 +3498,8 @@ function parseEncodingFields(encoding: Record<string, unknown>, config?: unknown
       const f = parseChannel(channel, d)
       if (!f) continue
       const g = { ...(disableLegends && f.legend === undefined && !f.datumOnly && LEGEND_CHANNELS.has(f.channel) ? { ...f, legend: null } : f), ...titleFromConfig(f, config) }
-      const h = (isObject(d) && d.scale === null && g.field ? { ...g, noScale: true } : g) as FieldDef
+      // (a secondary channel has no scale of its own to disable: it reads its main channel's, `scale: null` or not)
+      const h = (isObject(d) && d.scale === null && g.field && SECONDARY_MAIN[channel] === undefined ? { ...g, noScale: true } : g) as FieldDef
       fields.push(h)
     }
   }
@@ -3588,9 +3544,11 @@ function markSort(spec: VLSpec, fields: FieldDef[], mark: string, orient: string
   const orderRaw = enc.order
   if (isObject(orderRaw) && orderRaw.value !== undefined && (orderRaw.value === null || orderRaw.value === false)) return undefined
   if (orderRaw === undefined && (md.order === false || md.order === null)) return undefined
-  const orderDefs = fields.filter((f) => f.channel === 'order' && f.field && !f.datumOnly)
-  const stacked = fields.some((f) => isStacked(f, mark, orient, fields))
-  if (orderDefs.length && !stacked) {
+  const orderDefs = fields.filter((f) => f.channel === 'order' && f.field && !f.datumOnly && !f.fromCondition)
+  // (a stack, cartesian or polar, is what an order field orders)
+  const stacked = fields.some((f) => isStacked(f, mark, orient, fields)) || polarStackOf(fields, mark) !== undefined
+  // (an order list that kept no field definition sorts by nothing: vega-lite's sortParams of an empty list)
+  if ((orderDefs.length || Array.isArray(orderRaw)) && !stacked) {
     return { field: orderDefs.map((f) => dref(aggFieldName(f))), order: orderDefs.map((f) => (f.sort === 'descending' ? 'descending' : 'ascending')) }
   }
   if (mark === 'line' || mark === 'area' || mark === 'trail') {
@@ -3619,12 +3577,13 @@ function pathGroupingKeys(spec: VLSpec, fields: FieldDef[], mark: string): strin
         if (offsetDef && mainDef && !mainDef.aggregate && !offsetDef.aggregate && aggFieldName(mainDef) !== aggFieldName(offsetDef)) add(aggFieldName(mainDef))
         break
       }
+      // (a field of a condition is not a field definition of these channels: it groups nothing)
       case 'order':
         if (mark === 'line' || mark === 'trail') break
-        for (const d of defs) if (!d.aggregate) add(aggFieldName(d))
+        for (const d of defs) if (!d.aggregate && !d.fromCondition) add(aggFieldName(d))
         break
       case 'detail': case 'key':
-        for (const d of defs) if (!d.aggregate) add(aggFieldName(d))
+        for (const d of defs) if (!d.aggregate && !d.fromCondition) add(aggFieldName(d))
         break
       case 'size':
         if (mark === 'trail') break
@@ -3821,8 +3780,9 @@ function stackByFields(fields: FieldDef[], dimensionChannel: 'x' | 'y'): FieldDe
 
 /** vega-lite's stack sort: the `order` channel when present, else the stack-by fields (descending for y, ascending otherwise). */
 function stackSortParams(fields: FieldDef[], stackBy: FieldDef[], measureChannel: string, enc: Record<string, unknown> = {}): { field: string[]; order: string[] } {
-  const orderDefs = fields.filter((f) => f.channel === 'order' && f.field && !f.datumOnly)
-  if (orderDefs.length) {
+  // (an order of field definitions, an empty list of them included, is the stack's order; the field of a condition is not one)
+  const orderDefs = fields.filter((f) => f.channel === 'order' && f.field && !f.datumOnly && !f.fromCondition)
+  if (orderDefs.length || Array.isArray(enc.order)) {
     return { field: orderDefs.map((f) => aggFieldName(f)), order: orderDefs.map((f) => (f.sort === 'descending' ? 'descending' : 'ascending')) }
   }
   // (stack.ts isOrderOnlyDef: an `order` def with only a `sort` gives the direction of the default stack order)
@@ -4157,7 +4117,6 @@ function buildData(spec: VLSpec, allFields: FieldDef[], mark: string, orient: st
   // channel roles shared by the pipeline stages below
   const yDef = fields.find((f) => f.channel === 'y')
   const xDef = fields.find((f) => f.channel === 'x')
-  const stackable = mark !== 'arc'
   // an explicit stack on x/y decides the measure axis even for marks with no
   // natural orientation (point/circle/square)
   // vega-lite only reads an explicit stack from an unbinned quantitative
@@ -4165,7 +4124,8 @@ function buildData(spec: VLSpec, allFields: FieldDef[], mark: string, orient: st
   const explicitStackDef = fields.find((f) => (f.channel === 'x' || f.channel === 'y')
     && f.type === 'quantitative' && !f.bin
     && f.stack != null && f.stack !== false && f.stack !== 'wiggle')
-  const autoStackDef = !explicitStackDef && (mark === 'bar' || mark === 'area')
+  // (an arc's x and y are asked before its theta and radius)
+  const autoStackDef = !explicitStackDef && STACK_BY_DEFAULT_MARKS.has(mark)
     ? fields.find((f) => f.channel === potentialStackChannel(mark, orient, fields))
     : undefined
   const measureChannel = explicitStackDef
@@ -4396,7 +4356,7 @@ function buildData(spec: VLSpec, allFields: FieldDef[], mark: string, orient: st
       }))
     }
   }
-  const stackAfterAggregate = stackable && measure != null && measure.aggregate != null && measure.type === 'quantitative' && !measure.bin && isStacked(measure, mark, orient, allFields)
+  const stackAfterAggregate = measure != null && measure.aggregate != null && measure.type === 'quantitative' && !measure.bin && isStacked(measure, mark, orient, allFields)
 
   // (aggregate.ts makeFromEncoding: only a field with an aggregate makes an aggregate node; binning alone groups nothing)
   if (hasAggregate) {
@@ -4465,7 +4425,7 @@ function buildData(spec: VLSpec, allFields: FieldDef[], mark: string, orient: st
         pipeline.push({ type: 'formula', expr: argValueExpr(f), as: n })
       }
     }
-  } else if (stackable && measure && measure.type === 'quantitative' && !measure.bin && isStacked(measure, mark, orient, allFields)) {
+  } else if (measure && measure.type === 'quantitative' && !measure.bin && isStacked(measure, mark, orient, allFields)) {
     // stacked bar/area: continuous dimensions impute gaps; discrete ones filter
     pushAll(pipeline, channelImpute)
     pushAll(pipeline, stackTransforms(measure))
@@ -4504,10 +4464,11 @@ function argValueExpr(f: FieldDef): string {
 }
 
 /** The reference to a polar channel's second channel in the first one's scale; undefined when the unit does not encode one. */
-function secondaryPolarRef(spec: VLSpec, fields: FieldDef[], channel: 'theta' | 'radius', bandScale: boolean): Record<string, unknown> | undefined {
-  const def2 = fields.find((f) => f.channel === `${channel}2` && f.field)
-  // (on a band scale a field sits in the middle of its band, as the first channel's does)
-  if (def2 !== undefined) return { scale: channel, field: aggFieldName(def2), ...(bandScale ? { band: def2.bandPosition ?? 0.5 } : {}) }
+function secondaryPolarRef(spec: VLSpec, fields: FieldDef[], channel: 'theta' | 'radius', bandScale: boolean, scaled: boolean): Record<string, unknown> | undefined {
+  const def2 = fields.find((f) => f.channel === `${channel}2` && f.field && !f.fromCondition)
+  // (on a band scale a field sits in the middle of its band, as the first channel's does; with no scale of the first channel it is
+  // read as it is)
+  if (def2 !== undefined) return { ...(scaled ? { scale: channel } : {}), field: aggFieldName(def2), ...(bandScale ? { band: def2.bandPosition ?? 0.5 } : {}) }
   const written = isObject(spec.encoding) ? (spec.encoding as Record<string, unknown>)[`${channel}2`] : undefined
   return isObject(written) && 'value' in written ? { value: written.value } : undefined
 }
@@ -4515,26 +4476,29 @@ function secondaryPolarRef(spec: VLSpec, fields: FieldDef[], channel: 'theta' | 
 /**
  * mark/arc.ts + position-rect.ts `rectPosition` for `radius` and `theta`: an arc is a rectangle in polar coordinates. A binned (or time unit)
  * channel spans its bin's end (outer radius, start angle) to its start; a discrete one sits at the start of its band and spans the band;
- * any other is positioned by its field - or, stacked, by its stack's end - and runs to its second channel, the mark definition's
- * inner radius / end angle, or scale zero. Returns the channels a field drove. 
+ * any other is positioned by its field, datum or constant - or, stacked, by its stack's end - and runs to its second channel, the mark
+ * definition's inner radius / end angle, or the start of the scale (0 without one). With neither channel, the angles are the mark
+ * definition's or the whole turn, and the radii the ones the arc branch gave.
  */
-function polarRectPositions(update: Record<string, unknown>, spec: VLSpec, fields: FieldDef[], stack: PolarStack | undefined, markRef: (v: unknown) => Record<string, unknown>, innerFallback: unknown): Set<string> {
-  const handled = new Set<string>()
+function polarRectPositions(update: Record<string, unknown>, spec: VLSpec, fields: FieldDef[], stack: PolarStack | undefined, markRef: (v: unknown) => Record<string, unknown>, innerFallback: unknown): void {
   const md = isObject(spec.mark) ? (spec.mark as Record<string, unknown>) : {}
+  const enc = isObject(spec.encoding) ? (spec.encoding as Record<string, unknown>) : {}
   for (const channel of ['radius', 'theta'] as const) {
-    const def = fields.find((f) => f.channel === channel && f.field && !f.datumOnly)
-    if (!def) continue
-    handled.add(channel)
+    // (a field or a datum of the channel itself; the field of a condition places nothing: a position takes no condition)
+    const def = fields.find((f) => f.channel === channel && f.field && !f.fromCondition)
+    const written = enc[channel]
     const near = channel === 'theta' ? 'startAngle' : 'outerRadius'
     const far = channel === 'theta' ? 'endAngle' : 'innerRadius'
-    const discrete = isDiscreteType(def.type)
-    const bandScale = discrete && (def.scale?.type === undefined || def.scale.type === 'band')
+    // (a channel without a scale, `scale: null`, is placed as a continuous one is; the field of a condition gives the channel a scale)
+    const scaled = fields.some((f) => f.channel === channel && f.field && !f.noScale)
+    const discrete = def !== undefined && !def.noScale && isDiscreteType(def.type)
+    const bandScale = discrete && (def!.scale?.type === undefined || def!.scale.type === 'band')
     const offsetValue = md[`${channel}Offset`]
     const offset = offsetValue ? offsetValue : undefined
     const withOffset = (ref: Record<string, unknown>): Record<string, unknown> => (offset === undefined ? ref : { ...ref, offset })
     // the second channel (theta2, radius2), a field, a datum or a constant: where the arc ends, in the first channel's scale
-    const second = secondaryPolarRef(spec, fields, channel, bandScale)
-    if ((def.bin || (def.tu && second === undefined)) && !discrete) {
+    const second = secondaryPolarRef(spec, fields, channel, bandScale, scaled)
+    if (def !== undefined && !def.datumOnly && (def.bin || (def.tu && second === undefined)) && !discrete) {
       // rectBinPosition: the band size is 1 (a bin, a time unit), so the near key reads the far end of the band
       let start: string
       let end: string
@@ -4550,24 +4514,35 @@ function polarRectPositions(update: Record<string, unknown>, spec: VLSpec, field
       }
       update[near] = { scale: channel, field: end }
       update[far] = { scale: channel, field: start }
-    } else if (discrete && second === undefined) {
+      continue
+    }
+    if (def !== undefined && discrete && second === undefined) {
       // positionAndSize: the start of the band, and the band's width on to its end
       const size = bandScale ? { signal: `bandwidth('${channel}')` } : { value: C.defaultStep }
       const sizeRef = offset === undefined ? size : { ...size, offset }
       update[near] = withOffset({ scale: channel, field: aggFieldName(def) })
       update[far] = { scale: channel, field: aggFieldName(def), offset: sizeRef }
-    } else {
+      continue
+    }
+    // rangePosition: the channel (a field, a datum or a constant) is the near end, the second channel the far one; with neither, the
+    // mark def's angles or radii, else the whole circle (2*PI) or the radius the arc branch gave (zeroOrMax), back to the start (zeroOrMin)
+    if (def !== undefined) {
       const band = bandScale ? { band: def.bandPosition ?? 0.5 } : {}
       update[near] = withOffset(stack?.fieldChannel === channel ? stackedPolarRef(channel, stack, def.bandPosition) : { scale: channel, field: aggFieldName(def), ...band })
-      if (stack?.fieldChannel === channel) update[far] = withOffset({ scale: channel, field: `${stack.field}_start` })
-      else if (second !== undefined) update[far] = withOffset(second)
-      else {
-        const given = channel === 'theta' ? (md.endAngle ?? md.theta2) : innerFallback
-        update[far] = given !== undefined && given !== null ? markRef(given) : zeroOrMinRef(channel)
-      }
+    } else if (isObject(written) && written.value !== undefined) {
+      update[near] = withOffset(markRef(written.value))
+    } else if (channel === 'theta') {
+      update[near] = md.theta !== undefined ? markRef(md.theta) : { signal: '2*PI' }
+    }
+    if (def !== undefined && stack?.fieldChannel === channel) update[far] = withOffset({ scale: channel, field: `${stack.field}_start` })
+    else if (second !== undefined) update[far] = withOffset(second)
+    else if (channel === 'theta') {
+      const given = def !== undefined ? (md.endAngle ?? md.theta2) : md.theta2
+      update[far] = given !== undefined && given !== null ? markRef(given) : scaled ? zeroOrMinRef(channel) : { value: 0 }
+    } else if (def !== undefined || (isObject(written) && written.value !== undefined)) {
+      update[far] = innerFallback !== undefined && innerFallback !== null ? markRef(innerFallback) : scaled ? zeroOrMinRef(channel) : { value: 0 }
     }
   }
-  return handled
 }
 
 /**
@@ -4581,16 +4556,35 @@ function stackedPolarRef(channel: 'theta' | 'radius', stack: PolarStack, bandPos
 }
 
 /**
+ * position-point.ts pointPosition for x and y: a field through its scale, at the stacked end of a stacked measure; the place a mark
+ * has when a channel is missing is the caller's (`midX`, `midY`), or none.
+ */
+function pointPlace(mark: string, orient: string, fields: FieldDef[], xDef: FieldDef | undefined, yDef: FieldDef | undefined, midX?: Record<string, unknown>, midY?: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {}
+  for (const [ch, def, mid] of [['x', xDef, midX], ['y', yDef, midY]] as const) {
+    if (def) out[ch] = { scale: ch, field: isStacked(def, mark, orient, fields) ? `${aggFieldName(def)}_end` : aggFieldName(def) }
+    else if (mid !== undefined) out[ch] = mid
+  }
+  return out
+}
+
+/**
  * position-point.ts `pointPosition` / `positionRef` for the `theta` and `radius` of a label: a stacked channel sits in the middle of its
  * stack (a label's band position is 0.5 unless it says otherwise), any other at its value; `thetaOffset` / `radiusOffset` move it.
  */
 function polarPointPositions(update: Record<string, unknown>, spec: VLSpec, fields: FieldDef[], stack: PolarStack | undefined): void {
   const md = isObject(spec.mark) ? (spec.mark as Record<string, unknown>) : {}
+  const enc = isObject(spec.encoding) ? (spec.encoding as Record<string, unknown>) : {}
   for (const channel of ['theta', 'radius'] as const) {
-    const def = fields.find((f) => f.channel === channel && f.field && !f.datumOnly)
-    if (!def) continue
+    // (position-point.ts pointPosition: a field or a datum through the scale, a constant as it is; a condition is not read)
+    const def = fields.find((f) => f.channel === channel && f.field && !f.fromCondition)
+    const written = enc[channel]
     const offsetValue = md[`${channel}Offset`]
     const offset = offsetValue ? { offset: offsetValue } : {}
+    if (def === undefined) {
+      if (isObject(written) && written.value !== undefined) update[channel] = { ...constRef(written.value), ...offset }
+      continue
+    }
     if (stack?.fieldChannel === channel) {
       update[channel] = { ...stackedPolarRef(channel, stack, def.bandPosition ?? 0.5), ...offset }
     } else {
@@ -4605,7 +4599,8 @@ function polarPointPositions(update: Record<string, unknown>, spec: VLSpec, fiel
  */
 function potentialStackedChannel(fields: FieldDef[], first: 'x' | 'theta'): 'x' | 'y' | 'theta' | 'radius' | undefined {
   const second = first === 'x' ? 'y' : 'radius'
-  const defOf = (ch: string): FieldDef | undefined => fields.find((f) => f.channel === ch && !f.datumOnly && (f.field !== undefined && f.field !== '' || f.aggregate === 'count'))
+  // (stack.ts isFieldDef: a datum, or the field of a condition, is not a field definition of the channel)
+  const defOf = (ch: string): FieldDef | undefined => fields.find((f) => f.channel === ch && !f.datumOnly && !f.fromCondition && (f.field !== undefined && f.field !== '' || f.aggregate === 'count'))
   const unbinnedQuantitative = (f: FieldDef | undefined): f is FieldDef => f !== undefined && f.type === 'quantitative' && !f.bin
   const a = defOf(first)
   const b = defOf(second)
@@ -4651,6 +4646,12 @@ function polarStackOf(fields: FieldDef[], mark: string): PolarStack | undefined 
     groupby.push(dimensionDef)
     groupFields.add(aggFieldName(dimensionDef))
   }
+  // (stack.ts: the offset of a dimension that is not x is yOffset, so a polar stack is split by a yOffset field too)
+  const offsetDef = fields.find((f) => f.channel === 'yOffset' && !f.datumOnly && !f.fromCondition && f.field)
+  if (offsetDef !== undefined && aggFieldName(offsetDef) !== field) {
+    groupby.push(offsetDef)
+    groupFields.add(aggFieldName(offsetDef))
+  }
   const stackBy: FieldDef[] = []
   for (const ch of NONPOSITION_ORDER) {
     if (ch === 'tooltip') continue
@@ -4665,7 +4666,7 @@ function polarStackOf(fields: FieldDef[], mark: string): PolarStack | undefined 
   if (offset !== 'zero' && offset !== 'center' && offset !== 'normalize') return undefined
   // an aggregate with nothing to split the stack by, and a ranged mark, do not stack
   if (fields.some((f) => f.aggregate) && stackBy.length === 0) return undefined
-  if (fields.some((f) => f.channel === `${fieldChannel}2` && f.field)) return undefined
+  if (fields.some((f) => f.channel === `${fieldChannel}2` && f.field && !f.fromCondition)) return undefined
   return { fieldChannel, field, groupby, stackBy, offset }
 }
 
@@ -4787,10 +4788,11 @@ function offsetPaddings(def: FieldDef, type: 'band' | 'point', defaultInner: unk
   return { ...(inner !== undefined ? { paddingInner: inner } : {}), ...(outer !== undefined ? { paddingOuter: outer } : {}) }
 }
 
-function offsetRange(ch: 'xOffset' | 'yOffset', posDef: FieldDef | undefined, spec: VLSpec, mark: string, paddingInner: unknown): unknown[] {
+function offsetRange(ch: 'xOffset' | 'yOffset', posDef: FieldDef | undefined, spec: VLSpec, mark: string, paddingInner: unknown, continuous = false): unknown[] {
   const pos = ch === 'xOffset' ? 'x' : 'y'
   const size = ch === 'xOffset' ? 'width' : 'height'
-  if (!posDef) return [{ signal: `-${size}/2` }, { signal: `${size}/2` }]
+  // (range.ts fullWidthOrHeightRange, centred: a continuous y offset runs from the bottom up, as a y scale does)
+  if (!posDef) return ch === 'yOffset' && continuous ? [{ signal: `${size}/2` }, { signal: `-${size}/2` }] : [{ signal: `-${size}/2` }, { signal: `${size}/2` }]
   if (positionalScaleType(mark, posDef) === 'band' || !posDef.tu) return [0, { signal: `bandwidth('${pos}')` }]
   const wrap = (e: string): string => `scale('${pos}', ${e})`
   const duration = timeUnitMinStepSignal(posDef.tu, wrap)
@@ -5025,7 +5027,8 @@ function buildScales(spec: VLSpec, fieldsIn: FieldDef[], mark: string, orient: s
     }
     if (type === 'band') {
       // (properties.ts: a band scale with an offset scale of its own nests it; the other axis keeps the padding of its mark)
-      const hasOffset = fields.some((f) => f.channel === `${channel}Offset`)
+      // (an offset without a scale nests in the band all the same: scale/type.ts hasNestedOffsetScale reads the encoding)
+      const hasOffset = fieldsIn.some((f) => f.channel === `${channel}Offset`)
       // vl scale/properties.ts: bar → barBandPaddingInner (0.1), tick → 0.25,
       // everything else (rect/rule/image) → rectBandPaddingInner (0); the
       // outer padding defaults to half the inner. An explicit `padding`
@@ -5107,7 +5110,7 @@ function buildScales(spec: VLSpec, fieldsIn: FieldDef[], mark: string, orient: s
     const sc: ScaleSpec = {
       name,
       type,
-      domain: userDomain ?? (discrete ? sortedDomain(def, dataName, dc) : def.bin ? binsDomain(def) : unaggregatedDomain(def, dataName, cfgS) ?? timeUnitSpanDomain(def, type, spec, mark, dataName) ?? { data: dataName, field: aggFieldName(def) }),
+      domain: userDomain ?? (discrete ? sortedDomain(def, dataName, dc) : def.datumOnly ? datumDomain(def) : def.bin ? binsDomain(def) : unaggregatedDomain(def, dataName, cfgS) ?? timeUnitSpanDomain(def, type, spec, mark, dataName) ?? { data: dataName, field: aggFieldName(def) }),
       range: rangeRef(def, dataName, def.scale?.range) ?? (cutsRange && ['quantile', 'quantize', 'threshold'].includes(type) ? countRange((range as [number, number | { signal: string }])[0], (range as [number, number | { signal: string }])[1], discreteCount(type, cfgS, explicitDom)) : range),
     }
     if (def.bin && !discrete && userDomain === undefined) { const b = binsProp(def); if (b) sc.bins = b }
@@ -5131,7 +5134,7 @@ function buildScales(spec: VLSpec, fieldsIn: FieldDef[], mark: string, orient: s
     if (opacityDefS) scales.push(numericScale(ch, opacityDefS, [cfgS.minOpacity, cfgS.maxOpacity], false))
   }
   // angle: a linear scale to degrees (range.ts defaultRange: [0, 360])
-  const angleDefS = fields.find((f) => f.channel === 'angle' && f.field && !f.datumOnly && !f.noScale)
+  const angleDefS = fields.find((f) => f.channel === 'angle' && f.field && !f.noScale)
   if (angleDefS) scales.push(numericScale('angle', angleDefS, [0, 360], false))
   // xOffset/yOffset scales: discrete offsets use a band, continuous ones a
   // linear scale over the same band-width range (vega-lite probes).
@@ -5165,7 +5168,7 @@ function buildScales(spec: VLSpec, fieldsIn: FieldDef[], mark: string, orient: s
         forwardScaleProps(scales[scales.length - 1]!, offDef, ch, paddingsDone)
       } else {
         // a continuous offset spans the band (or the unit of time) of its position
-        scales.push(numericScale(ch, offDef, offsetRange(ch, dimDef, spec, mark, dc.cfg.bandWithNestedOffsetPaddingInner), false))
+        scales.push(numericScale(ch, offDef, offsetRange(ch, dimDef, spec, mark, dc.cfg.bandWithNestedOffsetPaddingInner, true), false))
       }
     }
   }
@@ -5192,9 +5195,10 @@ function buildScales(spec: VLSpec, fieldsIn: FieldDef[], mark: string, orient: s
   // theta and radius (scale/type.ts, range.ts, properties.ts zero, domain.ts): a polar position scale is linear (or the type asked for) over
   // [0, 2pi] / [0, min(width, height) / 2]; a discrete field is a band scale on an arc and a point scale under a label, a time unit a time scale;
   // the stacked channel spans its start and end
-  const polarStackS = polarStackOf(fields, mark)
+  // (a channel without a scale is a field of the encoding all the same: it takes part in deciding what stacks)
+  const polarStackS = polarStackOf(fieldsIn, mark)
   for (const channel of ['theta', 'radius'] as const) {
-    const polarDef = fields.find((f) => f.channel === channel && f.field && !f.datumOnly && !f.noScale)
+    const polarDef = fields.find((f) => f.channel === channel && f.field && !f.noScale)
     if (!polarDef || (mark !== 'arc' && mark !== 'text')) continue
     const sc = numericScale(channel, polarDef, channel === 'theta' ? [0, 6.283185307179586] : [0, { signal: 'min(width,height)/2' }], !polarDef.bin)
     const asked = polarDef.scale?.type as string | undefined
@@ -5212,6 +5216,8 @@ function buildScales(spec: VLSpec, fieldsIn: FieldDef[], mark: string, orient: s
   }
 
   // the colour scales: one for each paint channel that has a field
+  // (range.ts: a rect or a geoshape is coloured from the heatmap scheme; an image, which is laid out as a rect, is not one)
+  const heatmapMark = (mark === 'rect' && !(isObject(spec.mark) && spec.mark.$image === true)) || mark === 'geoshape'
   for (const colorScaleName of PAINT_CHANNELS) {
     const colorDef = fields.find((f) => f.channel === colorScaleName && f.field)
     const numericAggregate = colorDef?.aggregate != null && ['count', 'distinct', 'valid', 'missing'].includes(colorDef.aggregate)
@@ -5238,7 +5244,7 @@ function buildScales(spec: VLSpec, fieldsIn: FieldDef[], mark: string, orient: s
             name: colorScaleName,
             type: 'bin-ordinal',
             domain: undefined,
-            range: cs.range != null ? rangeRef(colorDef, dataName, cs.range) : cs.scheme != null ? schemeRange(cs.scheme) : mark === 'rect' || mark === 'geoshape' ? 'heatmap' : 'ramp',
+            range: cs.range != null ? rangeRef(colorDef, dataName, cs.range) : cs.scheme != null ? schemeRange(cs.scheme) : heatmapMark ? 'heatmap' : 'ramp',
             bins: { signal: binNames(colorDef.binParams!, colorDef.field).signal },
             interpolate: 'hcl',
             ...(cs.reverse !== undefined ? { reverse: Boolean(cs.reverse) } : colorDef.sort === 'descending' ? { reverse: true } : {}),
@@ -5252,6 +5258,7 @@ function buildScales(spec: VLSpec, fieldsIn: FieldDef[], mark: string, orient: s
           domain: explicitDomainOf(colorDef) !== undefined
             ? explicitDomainValue(explicitDomainOf(colorDef), colorDef)
             // domain.ts: a time unit with a band end spans start..end
+            : colorDef.datumOnly ? datumDomain(colorDef)
             : colorDef.tu && colorDef.type === 'temporal' && ['time', 'utc'].includes(colorScaleType) && bandPositionOf(spec, mark, colorDef, false) !== undefined
               ? { data: dataName, fields: [timeUnitField(colorDef), `${timeUnitField(colorDef)}_end`] }
               : { data: dataName, field: aggFieldName(colorDef) },
@@ -5262,7 +5269,7 @@ function buildScales(spec: VLSpec, fieldsIn: FieldDef[], mark: string, orient: s
             ? { range: rangeRef(colorDef, dataName, cs.range) }
             : cs.scheme != null
               ? { range: schemeRange(cs.scheme) }
-              : { range: cs.domainMid != null ? 'diverging' : mark === 'rect' || mark === 'geoshape' ? 'heatmap' : 'ramp' }),
+              : { range: cs.domainMid != null ? 'diverging' : heatmapMark ? 'heatmap' : 'ramp' }),
           // vega-lite sets the colorspace for continuous color scales (probed:
           // interpolate hcl on ramp/scheme/diverging alike)
           interpolate: 'hcl',
@@ -5387,7 +5394,7 @@ function positionalDomain(def: FieldDef, dataName: string, mark: string, orient:
   // a stack property on a discrete channel is inert (vega-lite ignores it)
   if (def.stack === 'normalize' && def.type === 'quantitative' && !def.bin) return [0, 1]
   if (isDiscreteType(def.type)) return sortedDomain(def, dataName, dc)
-  const measureChannel = (mark === 'bar' || mark === 'area')
+  const measureChannel = STACK_BY_DEFAULT_MARKS.has(mark)
     ? (potentialStackChannel(mark, orient, fields ?? []) ?? (orient === 'vertical' ? 'y' : 'x'))
     : orient === 'vertical' ? 'y' : 'x'
   const stacked = isStacked(def, mark, orient, fields)
@@ -5407,8 +5414,8 @@ function positionalDomain(def: FieldDef, dataName: string, mark: string, orient:
 function potentialStackChannel(mark: string, orient: string, fields: FieldDef[]): 'x' | 'y' | undefined {
   const xDef = fields.find((f) => f.channel === 'x')
   const yDef = fields.find((f) => f.channel === 'y')
-  // (stack.ts: a datum is not a field of the encoding)
-  const isField = (f: FieldDef | undefined): f is FieldDef => f != null && f.field != null && !f.datumOnly
+  // (stack.ts: a datum, or the field of a condition, is not a field of the encoding)
+  const isField = (f: FieldDef | undefined): f is FieldDef => f != null && f.field != null && !f.datumOnly && !f.fromCondition
   const isUQ = (f: FieldDef | undefined): f is FieldDef =>
     isField(f) && f.type === 'quantitative' && !f.bin
   const cartesian = mark === 'bar' || mark === 'area'
@@ -5433,11 +5440,14 @@ function potentialStackChannel(mark: string, orient: string, fields: FieldDef[])
   return undefined
 }
 
+/** stack.ts STACK_BY_DEFAULT_MARKS: the marks that stack a quantitative position unless told not to. */
+const STACK_BY_DEFAULT_MARKS: ReadonlySet<string> = new Set(['bar', 'area', 'arc'])
+
 function isStacked(def: FieldDef, mark: string, orient: string, allFields?: FieldDef[]): boolean {
   // an explicit stack applies to any mark (the sweep's point stack cases);
   // bar/area additionally stack by default.
   const explicit = def.stack != null && def.stack !== false && def.stack !== 'wiggle'
-  if (mark !== 'bar' && mark !== 'area' && !explicit) return false
+  if (!STACK_BY_DEFAULT_MARKS.has(mark) && !explicit) return false
   const measureChannel = explicit ? def.channel : potentialStackChannel(mark, orient, allFields ?? [])
   if (def.channel !== measureChannel) return false
   if (def.type !== 'quantitative' || def.bin || def.datumOnly) return false
@@ -5461,7 +5471,7 @@ function isStacked(def: FieldDef, mark: string, orient: string, allFields?: Fiel
     )
     if (allFields.some((f) => f.aggregate) && stackBy.length === 0) return false
     // (stack.ts: a ranged STACK field - its own secondary channel - never stacks; the other axis may be ranged)
-    if (def.secondDatum || allFields.some((f) => f.channel === `${def.channel}2` && f.field)) return false
+    if (def.secondDatum || allFields.some((f) => f.channel === `${def.channel}2` && f.field && !f.fromCondition)) return false
   }
   return true
 }
@@ -5649,7 +5659,9 @@ function buildAxes(fields: FieldDef[], mark: string, scales: ScaleSpec[], scaleN
     const cfgChannelAxis = isObject(config?.[def.channel === 'x' ? 'axisX' : 'axisY'])
       ? (config![def.channel === 'x' ? 'axisX' : 'axisY'] as Record<string, unknown>)
       : {}
-    const sc = scaleByName.get(scaleName ?? def.channel)!
+    // (a position without a scale, `scale: null`, has no axis: axis/parse.ts parses one per scale)
+    const sc = scaleByName.get(scaleName ?? def.channel)
+    if (sc === undefined) continue
     const axisBand = sc.type === 'band' && isObject(config?.axisBand)
       ? (config!.axisBand as Record<string, unknown>)
       : undefined
@@ -6173,8 +6185,9 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
   // (an offset that is not laid out in bands leaves the mark its default size)
   // position-rect.ts rectPosition: a rect spans the bin or time unit of a position only when that position has no offset channel
   const rectSpansUnit = (ch: 'x' | 'y'): boolean => !sizeDef && (mark !== 'rect' || !fields.some((f) => f.channel === `${ch}Offset` && f.field))
-  const xOffsetContinuous = xOffsetDefM != null && offsetScaleTypeOf(xOffsetDefM, mark) !== 'band'
-  const yOffsetContinuous = yOffsetDefM != null && offsetScaleTypeOf(yOffsetDefM, mark) !== 'band'
+  // (an offset without a scale has no band of its own: the mark takes its position's band, position-rect.ts defaultSizeRef)
+  const xOffsetContinuous = xOffsetDefM != null && !xOffsetDefM.noScale && offsetScaleTypeOf(xOffsetDefM, mark) !== 'band'
+  const yOffsetContinuous = yOffsetDefM != null && !yOffsetDefM.noScale && offsetScaleTypeOf(yOffsetDefM, mark) !== 'band'
   // config resolution (getMarkPropOrConfig): the mark def first, then the
   // mark-type config block, then the generic config.mark block
   const userConfig = isObject(spec.config) ? (spec.config as Record<string, unknown>) : undefined
@@ -6263,7 +6276,7 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
             if (xOffsetPresent) {
               update.x = { scale: 'x', field: aggFieldName(xDef), offset: { scale: 'xOffset', field: aggFieldName(fields.find((f) => f.channel === 'xOffset')!) } }
             }
-            update.width = xOffsetContinuous ? { value: C.defaultStep } : { signal: `max(0.25, bandwidth('${xOffsetPresent ? 'xOffset' : 'x'}'))` }
+            update.width = xOffsetContinuous ? { value: C.defaultStep } : { signal: `max(0.25, bandwidth('${xOffsetPresent && !xOffsetDefM!.noScale ? 'xOffset' : 'x'}'))` }
           }
         } else {
           if (mark === 'rect' && sc !== 'point') {
@@ -6360,7 +6373,7 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
               const ych = yAlignH === 'bottom' ? 'y2' : yAlignH === 'middle' ? 'yc' : 'y'
               update[ych] = { scale: 'y', field: aggFieldName(yDef), offset: { scale: 'yOffset', field: aggFieldName(fields.find((f) => f.channel === 'yOffset')!) } }
             }
-            update.height = yOffsetContinuous ? { value: C.defaultStep } : { signal: `max(0.25, bandwidth('${yOffsetPresent ? 'yOffset' : 'y'}'))` }
+            update.height = yOffsetContinuous ? { value: C.defaultStep } : { signal: `max(0.25, bandwidth('${yOffsetPresent && !yOffsetDefM!.noScale ? 'yOffset' : 'y'}'))` }
           }
         } else {
           if (mark === 'rect' && sc !== 'point') {
@@ -6465,9 +6478,7 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
     // Vega's default (circle) shape; circle/square name their own.
     if (mark !== 'point') update.shape = { value: mark }
     if (markSize != null) update.size = { value: markSize }
-    // a stacked point sits at the stacked end of its measure
-    if (xDef) update.x = { scale: 'x', field: isStacked(xDef, mark, orient, fields) ? `${aggFieldName(xDef)}_end` : aggFieldName(xDef) }
-    if (yDef) update.y = { scale: 'y', field: isStacked(yDef, mark, orient, fields) ? `${aggFieldName(yDef)}_end` : aggFieldName(yDef) }
+    Object.assign(update, pointPlace(mark, orient, fields, xDef, yDef))
     if (sizeDef) update.size = { scale: 'size', field: aggFieldName(sizeDef) }
     if (strokeWidthDef) update.strokeWidth = { scale: 'strokeWidth', field: aggFieldName(strokeWidthDef) }
     if (shapeDef) update.shape = { scale: 'shape', field: aggFieldName(shapeDef) }
@@ -6644,17 +6655,14 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
   } else if (mark === 'text') {
     const thetaDefT = fields.find((f) => f.channel === 'theta' && f.field)
     const radiusDefT = fields.find((f) => f.channel === 'radius' && f.field)
-    if (thetaDefT || radiusDefT) {
-      // polar text (pie labels): anchored at the view center, offset by
-      // radius along theta
-      update.x = { signal: 'width', mult: 0.5 }
-      update.y = { signal: 'height', mult: 0.5 }
-      polarPointPositions(update, spec, fields, polarStackOf(fields, mark))
+    // (text.ts: a text is placed by x and y, and by theta and radius around that place: a pie label sits at the middle of the view;
+    // any other text missing x or y takes the mark def's place, or the middle, below)
+    const polarText = thetaDefT !== undefined || radiusDefT !== undefined
+    Object.assign(update, pointPlace(mark, orient, fields, xDef, yDef, polarText ? { signal: 'width', mult: 0.5 } : undefined, polarText ? { signal: 'height', mult: 0.5 } : undefined))
+    polarPointPositions(update, spec, fields, polarStackOf(fields, mark))
+    if (polarText) {
       const mRadius = isObject(spec.mark) ? (spec.mark.radius as number | undefined) : undefined
       if (mRadius != null && !radiusDefT) update.radius = { value: mRadius }
-    } else {
-      if (xDef) update.x = { scale: 'x', field: aggFieldName(xDef) }
-      if (yDef) update.y = { scale: 'y', field: aggFieldName(yDef) }
     }
     const textDef = fields.find((f) => f.channel === 'text')
     if (textDef?.field) {
@@ -6699,8 +6707,8 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
     if (markOpacity != null) update.opacity = { value: markOpacity }
     const cfgArcX = (cfgType?.x as number | undefined) ?? (cfgMark?.x as number | undefined)
     const cfgArcY = (cfgType?.y as number | undefined) ?? (cfgMark?.y as number | undefined)
-    update.x = cfgArcX != null ? { value: cfgArcX } : { signal: 'width', mult: 0.5 }
-    update.y = cfgArcY != null ? { value: cfgArcY } : { signal: 'height', mult: 0.5 }
+    // (arc.ts: an arc is centred by x and y as a point is, in the middle of the view by default)
+    Object.assign(update, pointPlace(mark, orient, fields, xDef, yDef, cfgArcX != null ? { value: cfgArcX } : { signal: 'width', mult: 0.5 }, cfgArcY != null ? { value: cfgArcY } : { signal: 'height', mult: 0.5 }))
     const arcMark = spec.mark
     // (valueref.ts signalOrValueRef: a mark def value is a constant, an expression or a signal is a signal)
     const markRef = (v: unknown): Record<string, unknown> => (isObject(v) && typeof v.expr === 'string' ? { signal: v.expr } : isObject(v) && typeof v.signal === 'string' ? { signal: v.signal } : { value: v })
@@ -6718,14 +6726,7 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
         : { signal: 'min(width,height)/2' }
     update.innerRadius = mInner != null ? markRef(mInner) : { value: (cfgType?.innerRadius as number | undefined) ?? 0 }
     // theta and radius are rectangles in polar coordinates (arc.ts: rectPosition for each); with neither channel the angles are the mark definition's
-    const polarHandled = polarRectPositions(update, spec, fields, polarStackOf(fields, mark), markRef, mInner)
-    if (!polarHandled.has('theta')) {
-      // no theta channel: the angles are the mark def's, and a full turn when it gives none (rangePosition: theta runs from the whole
-      // circle's end, position2orSize for theta2 back to the scale's start)
-      const given = isObject(arcMark) ? arcMark : {}
-      update.startAngle = given.theta !== undefined ? markRef(given.theta) : { signal: '2*PI' }
-      update.endAngle = given.theta2 !== undefined ? markRef(given.theta2) : { value: 0 }
-    }
+    polarRectPositions(update, spec, fields, polarStackOf(fields, mark), markRef, mInner)
   } else if (mark === 'trail') {
     // trail: a line drawn by size - size channel/def, sorted along the dimension (probed)
     if (markOpacity != null) update.opacity = { value: markOpacity }
@@ -6763,8 +6764,16 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
         if (primary !== undefined && (isStacked(primary, mark, orient, fields) || (RECT_BASED_MARKS.has(mark) && binsItself(primary)))) continue
         // (tick.ts: the thickness axis of a tick is positioned by its centre, `xc` / `yc`)
         const thickness = mark === 'tick' && ch === (orient === 'horizontal' ? 'y' : 'x')
-        update[thickness ? `${ch}c` : ch] = { value: d.value }
+        if (ch.length === 1 && !thickness && RECT_EXTENT_MARKS.has(mark) && enc[`${ch}2`] == null) constantRectPosition(update, spec, mark, orient, ch as 'x' | 'y', { value: d.value })
+        else update[thickness ? `${ch}c` : ch] = { value: d.value }
       }
+    }
+    // (a field without a scale is laid out as a constant is: it has no band, nor a range of its own)
+    for (const ch of ['x', 'y'] as const) {
+      const def = fields.find((f) => f.channel === ch && f.noScale && !f.fromCondition)
+      const thickness = mark === 'tick' && ch === (orient === 'horizontal' ? 'y' : 'x')
+      // (a stacked one still spans its stack, from its start to its end)
+      if (def && !thickness && RECT_EXTENT_MARKS.has(mark) && enc[`${ch}2`] == null && !isStacked(def, mark, orient, fields)) constantRectPosition(update, spec, mark, orient, ch, { field: aggFieldName(def) })
     }
   }
   // (a map unit's positions come from its geopoint output, never from a default)
@@ -6792,7 +6801,7 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
 
   // data-driven opacity, stroke width and stroke dash reach every mark
   for (const prop of ['opacity', 'fillOpacity', 'strokeOpacity', 'strokeWidth', 'strokeDash', 'angle']) {
-    const def = fields.find((f) => f.channel === prop && f.field && !f.datumOnly)
+    const def = fields.find((f) => f.channel === prop && f.field)
     if (def && !(isObject(update[prop]) && 'scale' in (update[prop] as object))) update[prop] = { scale: prop, field: aggFieldName(def) }
   }
 
@@ -6800,6 +6809,17 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
   // `value` is the constant, `condition` entries ({test, value|field}) come
   // first, then the main reference (vega-lite wrapCondition)
   applyNonPositionConstants(update, spec, fields, mark)
+  // zindex.ts: an order that is a value draws the items of a mark that is not a path in that order, its conditions first (a
+  // condition's own value or, for a condition that gives a field, none)
+  {
+    const order = isObject(spec.encoding) ? (spec.encoding as Record<string, unknown>).order : undefined
+    if (mark !== 'line' && mark !== 'area' && mark !== 'trail' && isObject(order) && 'value' in order) {
+      const conds = (order.condition === undefined ? [] : ([] as unknown[]).concat(order.condition)) as Record<string, unknown>[]
+      const entries = conds.map((c) => ({ test: conditionTest(spec, c), ...(c.value !== undefined ? constRef(c.value) : {}) }))
+      const zindex = withConditions(entries, order.value !== undefined ? constRef(order.value) : {})
+      if (zindex !== undefined) update.zindex = zindex
+    }
+  }
 
   // mark-def paint/geometry properties pass straight through to the mark
   // encode (vega-lite's getMarkPropOrConfig resolution): the definition wins
@@ -6833,6 +6853,22 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
   // a link: markDef.href is the mark's href, and any href (mark, config or channel) makes the cursor a pointer
   if (markDefP?.href !== undefined && update.href === undefined) update.href = { value: markDefP.href }
   if ((update.href !== undefined || passProp('href') !== undefined) && update.cursor === undefined) update.cursor = { value: 'pointer' }
+  // offset.ts positionOffset: an xOffset / yOffset channel that is a value (a condition on it is not read: a position takes no
+  // condition) moves the mark's place by that many pixels, ahead of the mark def's offset
+  {
+    const enc = isObject(spec.encoding) ? (spec.encoding as Record<string, unknown>) : {}
+    for (const pos of ['x', 'y'] as const) {
+      const off = enc[`${pos}Offset`]
+      if (!isObject(off) || off.value === undefined || off.field !== undefined || off.datum !== undefined) continue
+      const key = update[pos] !== undefined ? pos : `${pos}c`
+      const ref = update[key]
+      if (isObject(ref)) ref.offset = { value: off.value }
+      // (position-range.ts position2Ref: the start of a stack, the other end of a stacked range, moves with it)
+      const ref2 = update[`${pos}2`]
+      const stackedDef = fields.find((f) => f.channel === pos && f.field && isStacked(f, mark, orient, fields))
+      if (key === pos && stackedDef !== undefined && isObject(ref2) && enc[`${pos}2`] == null) update[`${pos}2`] = { ...ref2, offset: { value: off.value } }
+    }
+  }
   // markDef.xOffset/yOffset shift the corresponding positional channels
   // (including their secondary endpoint and centered forms) — probed.
   const xOff = markDefP?.xOffset as number | undefined
@@ -6886,12 +6922,13 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
   // offset by the offset scale's value, centred in its band, and sits at the start of its own band (bandPosition 0). Bars and
   // rects lay their offset out through the band geometry above.
   // (a rect on a position that is neither banded nor spanning its unit is ranged between two points: it places the first like a point)
-  if (OFFSET_POINT_MARKS.has(mark) || mark === 'rect') {
+  // (an arc is centred as a point is, and offset from wherever its centre is, the middle of the view included)
+  if (OFFSET_POINT_MARKS.has(mark) || mark === 'rect' || mark === 'arc') {
     for (const [pos, offCh] of [['x', 'xOffset'], ['y', 'yOffset']] as const) {
       if (mark === 'rect' && update[`${pos}2`] === undefined) continue
-      const offDef = fields.find((f) => f.channel === offCh && f.field)
+      const offDef = fields.find((f) => f.channel === offCh && f.field && !f.fromCondition)
       const ref = (update[pos] ?? update[`${pos}c`]) as Record<string, unknown> | undefined
-      if (!offDef || !ref || ref.scale !== pos || ref.field === undefined) continue
+      if (!offDef || !ref || (mark !== 'arc' && (ref.scale !== pos || ref.field === undefined))) continue
       delete ref.band
       ref.offset = { scale: offCh, field: aggFieldName(offDef), ...(offsetScaleTypeOf(offDef, mark) === 'band' ? { band: 0.5 } : {}) }
     }
@@ -6972,7 +7009,7 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
 
   // maps: longitude / latitude positions are the geopoint transform's output fields (no scale, no offset)
   const geo = GEO_UNITS.get(spec)
-  if (geo) applyGeoPositions(update, spec, mark, ruleOrientOut)
+  applyGeoPositions(update, spec, mark, ruleOrientOut)
 
   const markSpec: Record<string, unknown> = {
     name: 'marks',
@@ -6980,6 +7017,11 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
     style: [mark, ...(isObject(spec.mark) ? ([] as string[]).concat((spec.mark.style as string | string[] | undefined) ?? []) : [])],
     from: { data: dataName },
     encode: { update },
+  }
+  // mark.ts getMarkGroup: the key channel's field is the key Vega joins the mark's items by
+  {
+    const key = isObject(spec.encoding) ? (spec.encoding as Record<string, unknown>).key : undefined
+    if (isObject(key) && typeof key.field === 'string') markSpec.key = key.field
   }
   // markDef.clip / markDef.aria are properties of the Vega mark itself
   if (isObject(spec.mark)) {
@@ -7020,7 +7062,16 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
     const scaleName = f.channel
     const strip = (v: unknown): void => {
       if (Array.isArray(v)) { v.forEach(strip); return }
+      // (the start of an axis without a scale is the view's edge: position-point.ts zeroOrMinOrMaxPosition, 0 across and the height down)
+      if (isObject(v) && v.scale === scaleName && LAZY_ZERO_OR_MIN.has(v)) {
+        LAZY_ZERO_OR_MIN.delete(v)
+        for (const k of Object.keys(v)) delete v[k]
+        Object.assign(v, scaleName === 'y' ? { field: { group: 'height' } } : { value: 0 })
+        return
+      }
       if (isObject(v) && v.scale === scaleName) delete v.scale
+      // (an offset channel's reference is the offset of its position's)
+      if (isObject(v) && isObject(v.offset)) strip(v.offset)
     }
     for (const v of Object.values(update)) strip(v)
   }
@@ -7121,6 +7172,7 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
         name: 'marks',
         type: markSpec.type,
         style: markSpec.style,
+        ...(markSpec.key !== undefined ? { key: markSpec.key } : {}),
         ...(markSpec.clip !== undefined ? { clip: markSpec.clip } : {}),
         ...(markSpec.aria !== undefined ? { aria: markSpec.aria } : {}),
         ...(markSortSpec ? { sort: markSortSpec } : {}),
@@ -7272,8 +7324,10 @@ function positionAndSizeRefs(ch: 'x' | 'y', def: FieldDef | undefined, spec: VLS
   else if (['band', 'point'].includes(scaleType ?? offsetType ?? '')) band = 1
   else return null
   // defaultSizeRef: a share of the offset scale's (else the position scale's) bandwidth
-  const sizeScale = offDef ? offsetCh : def ? ch : undefined
-  const sizeScaleType = offDef ? offsetType : scaleType
+  // (an offset without a scale has no bandwidth: the position's is the mark's)
+  const offScaled = offDef !== undefined && !offDef.noScale
+  const sizeScale = offScaled ? offsetCh : def ? ch : undefined
+  const sizeScaleType = offScaled ? offsetType : scaleType
   const minBandSize = typeof markConfigProp(spec, mark, 'minBandSize') === 'number' ? (markConfigProp(spec, mark, 'minBandSize') as number) : 0.25
   let size: Record<string, unknown>
   if (absolute) size = { value: sizeVal }
@@ -7447,12 +7501,14 @@ function resolveZeroOrMin(marks: Record<string, unknown>[], scales: ScaleSpec[])
  * x2 / y2 is the geopoint transform's output field; no scale is involved and no offset applies.
  */
 function applyGeoPositions(update: Record<string, unknown>, spec: VLSpec, mark: string, ruleOrient: string | undefined): void {
-  const geo = GEO_UNITS.get(spec)
-  if (!geo || mark === 'geoshape') return
+  // (position-point.ts pointPosition: any longitude or latitude, a constant included, makes a missing x or y read the geoposition of
+  // that name, whether or not a geopoint transform writes it)
+  const prefix = GEO_UNITS.get(spec)?.prefix ?? GEO_NAME_PREFIX.get(spec)
+  if (prefix === undefined || mark === 'geoshape') return
   const enc = isObject(spec.encoding) ? (spec.encoding as Record<string, unknown>) : {}
   const has = (c: string): boolean => enc[c] != null
   if (!has('latitude') && !has('longitude')) return
-  const out = (c: string): { field: string } => ({ field: `${geo.prefix}${c}` })
+  const out = (c: string): { field: string } => ({ field: `${prefix}${c}` })
   // pointPosition: x and y
   for (const ch of ['x', 'y'] as const) if (!has(ch)) update[ch] = out(ch)
   if (mark === 'rule') {
@@ -7475,6 +7531,35 @@ function applyGeoPositions(update: Record<string, unknown>, spec: VLSpec, mark: 
 function hasEncodingChannel(spec: VLSpec, channel: string): boolean {
   const enc = isObject(spec.encoding) ? (spec.encoding as Record<string, unknown>) : {}
   return enc[channel] != null
+}
+
+/** The marks that span an extent on each axis (position-rect.ts rectPosition): a constant position is one end, or the centre, of it. */
+const RECT_EXTENT_MARKS: ReadonlySet<string> = new Set(['bar', 'rect', 'image', 'tick'])
+
+/**
+ * position-rect.ts rectPosition for a constant position, or a field without a scale, with no second channel. On the axis a bar or a tick stands on (its band) it
+ * is the centre of the band, which is the mark def's or the config's size, else the view's discrete step less 2 (defaultSizeRef); on
+ * any other axis it is one end of a range whose other end is the start of the axis (zeroOrMin: 0 across, the height down).
+ */
+function constantRectPosition(update: Record<string, unknown>, spec: VLSpec, mark: string, orient: string, ch: 'x' | 'y', ref: Record<string, unknown>): void {
+  const size = ch === 'x' ? 'width' : 'height'
+  for (const k of [ch, `${ch}c`, `${ch}2`]) delete update[k]
+  const band = (mark === 'bar' && (ch === 'x' ? orient === 'vertical' : orient === 'horizontal')) || (mark === 'tick' && (ch === 'y' ? orient === 'vertical' : orient === 'horizontal'))
+  if (band) {
+    update[`${ch}c`] = ref
+    // (the size of a band is the size channel's when there is one; else it is worked out for a mark with no scale on that axis)
+    const sized = isObject(spec.encoding) && (spec.encoding as Record<string, unknown>).size != null
+    if (!sized || update[size] === undefined) {
+      const md = isObject(spec.mark) ? (spec.mark as Record<string, unknown>) : {}
+      const cfg = isObject(spec.config) ? (spec.config as Record<string, unknown>) : {}
+      const own = md.size ?? markConfigProp(spec, mark, 'size') ?? (isObject(cfg[mark]) ? (cfg[mark] as Record<string, unknown>).discreteBandSize : undefined)
+      update[size] = own !== undefined ? constRef(own) : { value: viewDiscreteStep(spec, size) - 2 }
+    }
+  } else {
+    delete update[size]
+    update[ch] = ref
+    update[`${ch}2`] = ch === 'x' ? { value: 0 } : { field: { group: 'height' } }
+  }
 }
 
 function fillMissingPositions(update: Record<string, unknown>, mark: string, fields: FieldDef[], orient: string, scaleCfg: ScaleCfg, ruleOrient?: string, explicitSizeRaw?: number | { signal: string }, orientUndefined = false): void {
@@ -7585,7 +7670,8 @@ function fieldTextExpr(def0: FieldDef, opts: { lineBreaks: boolean; spec: VLSpec
   const def = def0.bin && isPrebinned(def0) && def0.binParams!.end === undefined ? { ...def0, bin: undefined } : def0
   // (a binned field is shown from its bin's start and end, never from the `_range` text that positions it)
   const name = def.bin ? binNames(def.binParams!, def.field).start : aggFieldName(def)
-  const refOf = (n: string): string => (opts.expr === 'parent' ? `parent[${JSON.stringify(n)}]` : dref(n))
+  // (a datum is shown as the constant it is, read where a field would be: valueref.ts formatSignalRef over a datum def)
+  const refOf = (n: string): string => (def.datumOnly ? datumExpr(def.datum) : opts.expr === 'parent' ? `parent[${JSON.stringify(n)}]` : dref(n))
   // a normalized stack shows its share: end - start (vega-lite fieldToFormat)
   const f = opts.normalizeStack ? `${refOf(`${name}_end`)}-${refOf(`${name}_start`)}` : refOf(name)
   const { format: guideFmt, formatType: guideFmtType } = defFormat(def)
@@ -7661,7 +7747,7 @@ function applyTextualChannels(update: Record<string, unknown>, spec: VLSpec, fie
       seen.add(key)
       // a secondary channel's def that is given no type takes its main channel's (vega-lite tooltipData)
       const main = SECONDARY_MAIN[d.channel] !== undefined ? defs.find((m) => m.channel === SECONDARY_MAIN[d.channel]) ?? fields.find((m) => m.channel === SECONDARY_MAIN[d.channel]) : undefined
-      const typed = main !== undefined && main.type !== d.type && (d.raw as { type?: unknown } | undefined)?.type === undefined ? { ...d, type: main.type } : d
+      const typed = main !== undefined && main.type !== d.type && givenType(d) === undefined ? { ...d, type: main.type } : d
       out.push([key, fieldTextExpr(typed, { lineBreaks: true, spec: s, normalizeStack: normalizedStack(d) })])
     }
     return out
@@ -7680,6 +7766,9 @@ function applyTextualChannels(update: Record<string, unknown>, spec: VLSpec, fie
   if (Array.isArray(enc.tooltip)) {
     const o = objectOf(tipDefs)
     if (o) update.tooltip = { signal: o }
+  } else if (isObject(enc.tooltip) && enc.tooltip.datum !== undefined) {
+    const d = fields.find((f) => f.channel === 'tooltip' && f.datumOnly)
+    if (d) update.tooltip = { signal: fieldTextExpr(d, { lineBreaks: true, spec }) }
   } else if (tipDefs.length === 1 && isObject(enc.tooltip) && (enc.tooltip as Record<string, unknown>).field !== undefined) {
     update.tooltip = { signal: fieldTextExpr(tipDefs[0]!, { lineBreaks: true, spec }) }
   } else if (enc.tooltip === undefined && markTooltip !== undefined && markTooltip !== false && markTooltip !== null) {
@@ -7694,8 +7783,8 @@ function applyTextualChannels(update: Record<string, unknown>, spec: VLSpec, fie
   }
   // href / description
   for (const ch of ['href', 'description', 'url'] as const) {
-    const d = fields.find((f) => f.channel === ch && !f.datumOnly)
-    if (d && isObject(enc[ch]) && (enc[ch] as Record<string, unknown>).field !== undefined) update[ch] = { signal: fieldTextExpr(d, { lineBreaks: false, spec }) }
+    const d = fields.find((f) => f.channel === ch)
+    if (d && isObject(enc[ch]) && ((enc[ch] as Record<string, unknown>).field !== undefined || d.datumOnly)) update[ch] = { signal: fieldTextExpr(d, { lineBreaks: false, spec }) }
   }
   // description (vega-lite mark/encode/aria.ts): the channel (above), else the mark's / config's own, else a summary of
   // the encoded fields, `title: text; title: text` -- the screen-reader text of every item
@@ -7721,6 +7810,13 @@ function applyTextualChannels(update: Record<string, unknown>, spec: VLSpec, fie
   }
 }
 
+/** The type the spec gives a field: the channel's, or that of the condition the field comes from. */
+function givenType(d: FieldDef): unknown {
+  if (!d.fromCondition) return (d.raw as { type?: unknown } | undefined)?.type
+  const conds = ([] as unknown[]).concat(d.raw.condition ?? []) as Record<string, unknown>[]
+  return conds.find((c) => c.field !== undefined || c.aggregate === 'count')?.type
+}
+
 /** The main channel of each secondary one. */
 const SECONDARY_MAIN: Record<string, string> = { x2: 'x', y2: 'y', theta2: 'theta', radius2: 'radius', longitude2: 'longitude', latitude2: 'latitude' }
 
@@ -7743,23 +7839,34 @@ function markIsFilled(spec: VLSpec, mark: string): boolean {
 }
 
 /** The Vega encode property a non-position channel writes on a mark. Throws where that mapping is not implemented. */
-function vgPropFor(channel: string, mark: string, filled: boolean): string {
+function vgPropFor(channel: string, mark: string, filled: boolean, orient: string | undefined): string {
   switch (channel) {
     case 'color': return filled ? 'fill' : 'stroke'
     case 'size':
       if (mark === 'point' || mark === 'circle' || mark === 'square' || mark === 'trail') return 'size'
       if (mark === 'text') return 'fontSize'
       if (mark === 'line' || mark === 'rule') return 'strokeWidth'
+      // (position-rect.ts positionAndSize, tick.ts: the size of a bar or a tick is its extent along the axis it stands on)
+      if (mark === 'bar') return orient === 'horizontal' ? 'height' : 'width'
+      if (mark === 'tick') return orient === 'horizontal' ? 'width' : 'height'
       throw new VLCompileError(`encoding.size is not supported on the "${mark}" mark`)
     default: return channel
   }
+}
+
+/** The channels that write their field as text rather than through a scale. */
+const TEXTUAL_CHANNELS: ReadonlySet<string> = new Set(['text', 'tooltip', 'href', 'description', 'url'])
+
+/** The test of one condition: its predicate, or its parameter's. */
+function conditionTest(spec: VLSpec, c: Record<string, unknown>): string {
+  return c.param !== undefined ? predicateWithParams(ctxOf(spec), { param: c.param as string, ...(c.empty !== undefined ? { empty: c.empty as boolean } : {}) }) : predicateWithParams(ctxOf(spec), c.test)
 }
 
 /** The `{test, ...}` entries of a channel's conditions, in order (vega-lite wrapCondition). */
 function conditionEntries(spec: VLSpec, fields: FieldDef[], channel: string, def: Record<string, unknown>): Record<string, unknown>[] {
   if (def.condition === undefined) return []
   return ((Array.isArray(def.condition) ? def.condition : [def.condition]) as Record<string, unknown>[]).map((c) => {
-    const entry: Record<string, unknown> = { test: c.param !== undefined ? predicateWithParams(ctxOf(spec), { param: c.param as string, ...(c.empty !== undefined ? { empty: c.empty as boolean } : {}) }) : predicateWithParams(ctxOf(spec), c.test) }
+    const entry: Record<string, unknown> = { test: conditionTest(spec, c) }
     if (c.value !== undefined) entry.value = c.value
     else if (c.field !== undefined || c.aggregate === 'count') {
       const target = fields.find((f) => f.channel === channel && !f.datumOnly)
@@ -7768,8 +7875,12 @@ function conditionEntries(spec: VLSpec, fields: FieldDef[], channel: string, def
       if (cf !== target.field && !target.fromCondition) {
         throw new VLCompileError(`encoding.${channel}.condition.field: a conditional field must be the channel's own field or its only conditional field`)
       }
-      if (!target.noScale) entry.scale = target.channel
-      entry.field = aggFieldName(target)
+      // (a channel without a scale shows the field as text: text.ts textRef, tooltip.ts, the url and the aria ones)
+      if (TEXTUAL_CHANNELS.has(channel)) entry.signal = fieldTextExpr(target, { lineBreaks: channel === 'tooltip', spec })
+      else {
+        if (!target.noScale) entry.scale = target.channel
+        entry.field = aggFieldName(target)
+      }
     } else if (c.datum !== undefined && DATUM_CONDITION_CHANNELS.has(channel)) {
       const target = fields.find((f) => f.datumOnly && f.channel === channel)
       if (!target) throw new VLCompileError(`encoding.${channel}.condition: the conditional datum has no scale`)
@@ -7794,7 +7905,7 @@ function applyNonPositionConstants(update: Record<string, unknown>, spec: VLSpec
     // (the paint channels are the mark's paint: markPaint)
     if (!isObject(def) || !NON_POSITION_CHANNELS.has(channel) || isPaintChannel(channel)) continue
     if (def.condition === undefined && def.value === undefined) continue
-    const prop = vgPropFor(channel, mark, filled)
+    const prop = vgPropFor(channel, mark, filled, markOrient(spec, mark, spec.mark, fields))
     // (conditional.ts wrapCondition: a condition-only channel falls back to the mark's default for that property)
     const main = def.value !== undefined ? { value: def.value } : (update[prop] as Record<string, unknown> | undefined)
     const ref = withConditions(conditionEntries(spec, fields, channel, def), main)
@@ -7906,7 +8017,15 @@ function initUnitEncoding(spec: VLSpec, mark: string): void {
   const image = isObject(spec.mark) && spec.mark.$image === true
   const shadowed = 'color' in enc && (markIsFilled(spec, mark) ? 'fill' : 'stroke') in enc
   const kept = Object.entries(enc).filter(([ch]) => markChannelCompatible(enc, ch, mark, image) && !(ch === 'color' && shadowed))
-  if (kept.length !== Object.keys(enc).length) spec.encoding = Object.fromEntries(kept)
+  // detail, and an order that is not a value (nor a sort alone), are lists of field definitions: anything else in them (a datum, a
+  // condition with no value) is dropped, so an order of nothing but that is an empty list
+  const fieldDefs = (def: unknown): unknown[] => ([] as unknown[]).concat(def).filter((d) => isObject(d) && ('field' in d || d.aggregate === 'count'))
+  const listed = kept.map(([ch, def]): [string, unknown] => {
+    if (ch === 'detail' && def != null) return [ch, fieldDefs(def)]
+    if (ch === 'order' && isObject(def) && !('value' in def) && !('field' in def) && !(def.sort !== undefined && def.aggregate === undefined && def.condition === undefined && def.datum === undefined)) return [ch, fieldDefs(def)]
+    return [ch, def]
+  })
+  if (listed.some(([ch, def], i) => def !== enc[ch] || kept[i]![1] !== def) || kept.length !== Object.keys(enc).length) spec.encoding = Object.fromEntries(listed)
 }
 
 // --- invalid values (vega-lite compile/invalid/*, data/filterinvalid.ts, mark/encode/defined.ts) -----------
@@ -8082,7 +8201,7 @@ function showInvalidValues(spec: VLSpec, fields: FieldDef[], mark: string, scale
       const scaleCh = ch === 'x2' || ch === 'y2' ? ch[0]! : ch
       if ((scaleCh === 'x' || scaleCh === 'y') ? !positional : !['color', 'fill', 'stroke', 'size', 'opacity', 'fillOpacity', 'strokeOpacity', 'strokeWidth', 'angle'].includes(ch)) continue
       // (a centred bar position is `xc` / `yc`)
-      const prop = ch === 'color' || ch === 'size' ? vgPropFor(ch, mark, filled) : (ch === 'x' || ch === 'y') && update[ch] === undefined && update[`${ch}c`] !== undefined ? `${ch}c` : ch
+      const prop = ch === 'color' || ch === 'size' ? vgPropFor(ch, mark, filled, markOrient(spec, mark, spec.mark, fields)) : (ch === 'x' || ch === 'y') && update[ch] === undefined && update[`${ch}c`] !== undefined ? `${ch}c` : ch
       const cur = update[prop]
       const main = (Array.isArray(cur) ? cur[cur.length - 1] : cur) as Record<string, unknown> | undefined
       const sc = scales.find((x) => x.name === scaleCh)
@@ -8148,8 +8267,12 @@ function unitProjection(spec: VLSpec, prefix: string, handle: object): Projectio
   }
   const component = parseUnitProjection(unit)
   if (component) GEO_UNITS.set(spec, { component, isFit: component.isFit, prefix })
+  GEO_NAME_PREFIX.set(spec, prefix)
   return component
 }
+
+/** The prefix of the names a unit's geopositions have (`x`, `y`, `x2`, `y2` of its geopoint transform), projection or not. */
+const GEO_NAME_PREFIX = new WeakMap<VLSpec, string>()
 
 /**
  * The projections of a layered view (vega-lite parseProjection / assembleProjections): each unit's
@@ -8245,10 +8368,13 @@ function liftBandSizeValue(spec: VLSpec): void {
   const markRaw = spec.mark
   const mark = typeof markRaw === 'string' ? markRaw : isObject(markRaw) ? markRaw.type : undefined
   const def = (mark === 'bar' || mark === 'tick') && isObject(spec.encoding) ? (spec.encoding as Record<string, unknown>).size : undefined
-  if (!isObject(def) || def.value === undefined || def.field !== undefined || def.datum !== undefined || def.condition !== undefined) return
-  const { size: _size, ...rest } = spec.encoding as Record<string, unknown>
-  void _size
-  spec.encoding = rest
+  if (!isObject(def) || def.value === undefined || def.field !== undefined || def.datum !== undefined) return
+  // (a size with conditions stays a channel, its conditions over the value: the value lays the mark out as a mark def size does)
+  if (def.condition === undefined) {
+    const { size: _size, ...rest } = spec.encoding as Record<string, unknown>
+    void _size
+    spec.encoding = rest
+  }
   spec.mark = { ...(isObject(markRaw) ? markRaw : { type: markRaw }), size: def.value }
 }
 
@@ -8261,7 +8387,6 @@ function compileUnitView(spec: VLSpec, ctx: CompileCtx): VLSpec {
   if (isGraticuleData(spec.data)) GRATICULE_UNITS.add(spec)
   initUnitEncoding(spec, mark)
   const encoding = isObject(spec.encoding) ? (spec.encoding as Record<string, unknown>) : {}
-  checkConstChannels(encoding)
   const fields = parseEncodingFields(encoding, spec.config, markRaw)
 
   // orientation (bar/area/rule/tick): vertical unless the y channel is discrete
@@ -8284,8 +8409,9 @@ function compileUnitView(spec: VLSpec, ctx: CompileCtx): VLSpec {
   const animation = timerSel && fields.some((f) => f.channel === 'time') ? extractFrameFilter(data, timerSel.name) : undefined
   // vega-lite's default sizing: continuous dimensions get 300, discrete
   // dimensions size from the band step (bandspace(domain length) * step)
-  const xDefS = fields.find((f) => f.channel === 'x')
-  const yDefS = fields.find((f) => f.channel === 'y')
+  // (a position without a scale sizes its view as one with no position does)
+  const xDefS = fields.find((f) => f.channel === 'x' && !f.noScale)
+  const yDefS = fields.find((f) => f.channel === 'y' && !f.noScale)
   const wSpec = sizeSpec(spec.width)
   const hSpec = sizeSpec(spec.height)
   const continuousDefault = mark === 'arc' || hasProjection(mark, encoding)
