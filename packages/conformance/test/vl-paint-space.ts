@@ -71,6 +71,8 @@ const COMPANIONS: Array<[string, (ch: 'fill' | 'stroke') => Obj, ((mark: string)
   ['color value', () => ({ color: { value: '#4c78a8' } })],
   ['the other paint on the same field', (ch) => ({ [other(ch)]: K })],
   ['the other paint on another field', (ch) => ({ [other(ch)]: W })],
+  // (a discrete and a continuous scale over one field keep a legend each; two of the same kind share one)
+  ['the other paint on field v as ordinal', (ch) => ({ [other(ch)]: { field: 'v', type: 'ordinal' } })],
   ['color and the other paint', (ch) => ({ color: K, [other(ch)]: W })],
   ['a size legend beside', () => ({ size: W })],
   // (on a geoshape the shape channel carries the geometry: a shape field there is refused, packages/vl/README.md "Throws")
