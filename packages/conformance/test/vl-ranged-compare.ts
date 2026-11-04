@@ -4,6 +4,7 @@
  *
  *   - the compiled scales (type, domain, range and every property), the name of the data a domain reads aside: Aster may name its
  *     datasets differently, the rows they hold are compared below;
+ *   - the compiled axes and legends (every property, the name of the data a guide reads aside);
  *   - the scales as they run: type, domain, range;
  *   - the axes as they run: where every tick and label sits and what the label says;
  *   - the rows the mark draws (of a view with one mark);
@@ -41,6 +42,12 @@ function fieldsOfDomain(domain: unknown): unknown {
 export function scalesOf(vg: Obj): string {
   const scales = ((vg.scales as Obj[] | undefined) ?? []).map((sc) => ({ ...sc, ...(sc.domain !== undefined ? { domain: fieldsOfDomain(sc.domain) } : {}) }))
   return JSON.stringify(canon(JSON.parse(JSON.stringify(scales, (k, v) => (k === 'data' && typeof v === 'string' ? undefined : v)))))
+}
+
+/** Axes and legends as compiled, at every level of the spec, with the names of the data they read left out. */
+export function guidesOf(vg: Obj): string {
+  const levels = (node: Obj): unknown[] => [node.axes, node.legends, ...((node.marks as Obj[] | undefined) ?? []).flatMap((m) => (m.type === 'group' ? levels(m) : []))]
+  return JSON.stringify(canon(JSON.parse(JSON.stringify(levels(vg), (k, v) => (k === 'data' && typeof v === 'string' ? undefined : v)))))
 }
 
 function* marksOf(ms: any[] | undefined): Generator<any> {
@@ -108,6 +115,7 @@ export async function differences(spec: Obj): Promise<Outcome> {
   if (theirs === undefined) return { why: '', compared: false }
   if (ours === undefined) return no(`refused by aster only: ${refusal}`)
   if (scalesOf(ours) !== scalesOf(theirs)) return no(`compiled scales: expected ${scalesOf(theirs)} got ${scalesOf(ours)}`)
+  if (guidesOf(ours) !== guidesOf(theirs)) return no(`compiled guides: expected ${guidesOf(theirs)} got ${guidesOf(ours)}`)
   let a: Run
   let b: Run
   try { a = await run(theirs) } catch { return { why: '', compared: false } } // (vega-lite wrote a spec vega itself cannot run: nothing to compare)

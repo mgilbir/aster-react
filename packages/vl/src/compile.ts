@@ -22,6 +22,7 @@ import { mergeEncoding, normalizeUnits } from './composite.js'
 import { timeScaleRange } from './animation.js'
 import { fieldsTitle, mergeGuideTitles, titleText, writtenTitle, type GuideTitle, type TitledField } from './titles.js'
 import { orientationOf, type Position } from './orient.js'
+import { nonPositionScaleType } from './scaletype.js'
 import { scalePropApplies, scaleTypeFits, zeroByDefault } from './scaleprops.js'
 import { isTimerSelection, selectionExtent } from './selection.js'
 import { ASSEMBLED_FROM, GEO_POSITION_CHANNELS, assembleProjection, finalProjectionName, geoDataTransforms, geoshapeTransform, hasProjection, mergeLayerProjections, parseUnitProjection, renameComponentSignals, type GeoUnit, type ProjectionComponent, type UnitGeo } from './geo.js'
@@ -71,6 +72,8 @@ export interface FieldDef {
   flatExpr?: string
   type: string
   aggregate?: string
+  /** the position's secondary channel is a datum (a datum is no field of the encoding, but it makes the position a range all the same) */
+  secondDatum?: boolean
   /** `fill` / `stroke` channels are the colour machinery restricted to one paint */
   paint?: 'fill' | 'stroke'
   /** the field comes from a condition (the channel itself has none) */
@@ -540,7 +543,8 @@ function markOrient(spec: VLSpec, mark: string, markRaw: unknown, fields: FieldD
       aggregate: !!def?.aggregate,
       prebinned: !!def?.field && isPrebinned(def),
       measure: def ? def.type === 'quantitative' && !def.bin : typeof encoded?.datum === 'number',
-      temporal: def?.type === 'temporal',
+      // (a datum is not a typed field: a time it is given does not make its axis the time axis)
+      temporal: def?.type === 'temporal' && !def.datumOnly,
     }
   }
   return orientationOf(mark, {
@@ -1199,7 +1203,11 @@ function compileLayered(spec: VLSpec, ctx: CompileCtx): VLSpec {
     const sc = scales.find((s) => s.name === channel) ?? (indepY && channel === 'y' ? scales.find(isIndepYScale) : undefined)
     const req = channel === 'x' ? wSpec : hSpec
     const plan = sizePlan(spec, channel === 'x' ? 'width' : 'height', req, sc ? String(sc.type) : undefined, layerContinuous)
-    if ('step' in plan) pushAll(sizeSignals, stepSignals(channel, scales as ScaleSpec[], plan.step, req.stepFor))
+    // (split.ts: the first layer whose position has steps decides the range of the merged scale, and with it whether the step is the
+    // offset's: a later layer that offsets the position does not change what the first one made of it)
+    const stepLayer = parsed.find((p) => p.fields.some((f) => f.channel === channel && f.field && ['band', 'point'].includes(positionalScaleType(p.mark, f))))
+    const stepOffset = stepLayer?.fields.some((f) => f.channel === `${channel}Offset` && f.field && isDiscreteType(f.type)) ?? true
+    if ('step' in plan) pushAll(sizeSignals, stepSignals(channel, scales as ScaleSpec[], plan.step, req.stepFor, stepOffset))
     return plan
   })
   const xStepped = 'step' in layerPlans[0]!
@@ -1273,7 +1281,12 @@ function compileLayered(spec: VLSpec, ctx: CompileCtx): VLSpec {
  * A point-positioned mark (line, point, text, trail, area) layered over a bar shares the bar's
  * BAND scale: it must sit at the band's centre (`band: 0.5`) rather than its start.
  */
-const BIN_MID_MARKS = new Set(['point', 'circle', 'square', 'text', 'line', 'area', 'trail', 'rule', 'tick'])
+/** The channels a field reaches through a scale of its own: the positions, the offsets and every mark property. */
+const SCALED_CHANNELS: ReadonlySet<string> = new Set(['x', 'y', 'xOffset', 'yOffset', 'color', 'size', 'opacity', 'fillOpacity', 'strokeOpacity', 'strokeWidth', 'strokeDash', 'angle', 'shape'])
+/** The scale types whose domain is a list of values: a field is read at one of them, not between two ends. */
+const LISTED_DOMAIN_SCALES: ReadonlySet<string> = new Set(['ordinal', 'point', 'band', 'bin-ordinal'])
+/** The marks drawn at a point: the label of a polar position reads the middle of its bin or unit as a point does. */
+const POINT_DRAWN_MARKS = new Set(['point', 'circle', 'square', 'text', 'line', 'area', 'trail', 'rule', 'tick'])
 const OFFSET_POINT_MARKS = new Set(['point', 'circle', 'square', 'text', 'line', 'area', 'trail', 'rule'])
 
 function centerPointMarksOnBands(marks: Record<string, unknown>[], scales: ScaleSpec[]): void {
@@ -1333,7 +1346,7 @@ function uniquifyLayerMarks(marks: Record<string, unknown>[], layerIndex: number
 }
 
 /** The step-form size signals of a discrete scale: `<ch>_step` plus the size signal over the domain cardinality. */
-function stepSignals(channel: 'x' | 'y', scales: ScaleSpec[], step: number, stepForReq?: 'position' | 'offset'): Record<string, unknown>[] {
+function stepSignals(channel: 'x' | 'y', scales: ScaleSpec[], step: number, stepForReq?: 'position' | 'offset', ownsOffset = true): Record<string, unknown>[] {
   const sc = scales.find((s) => s.name === channel)
   if (!sc) return []
   const stepName = `${channel}_step`
@@ -1347,13 +1360,15 @@ function stepSignals(channel: 'x' | 'y', scales: ScaleSpec[], step: number, step
   const offsetName = `${channel}Offset`
   const offset = scales.find((s) => s.name === offsetName)
   const offsetDiscrete = offset !== undefined && (offset.type === 'band' || offset.type === 'point')
-  const stepFor = offsetDiscrete ? (stepForReq ?? 'offset') : 'position'
+  const offsetStepFor = offsetDiscrete ? (stepForReq ?? 'offset') : 'position'
+  // (the offset's own range is its step, whichever layer made the position scale's)
+  if (offset !== undefined && offsetStepFor === 'offset' && sc.type === 'band') offset.range = { step }
+  const stepFor = ownsOffset ? offsetStepFor : 'position'
   let stepSignal: Record<string, unknown> = { name: stepName, value: step }
   if (stepFor === 'offset' && offset) {
     let count = `domain('${offsetName}').length`
     if (offset.type === 'band') count = `bandspace(${count}, ${(offset.paddingInner as number) ?? (offset.padding as number) ?? 0}, ${(offset.paddingOuter as number) ?? (offset.padding as number) ?? 0})`
     stepSignal = { name: stepName, update: `${step} * ${count} / (1-${(sc.paddingInner as number) ?? (sc.padding as number)})` }
-    if (sc.type === 'band') offset.range = { step }
   }
   return [
     stepSignal,
@@ -3359,12 +3374,6 @@ function patchDatumRefs(node: unknown, datums: Map<string, unknown>): void {
 function checkConstChannels(mark: string, encoding: Record<string, unknown>, filled?: boolean): void {
   // channels that need their own scale + legend are implemented for colour (fill/stroke alias it);
   // the rest are limited to constants and conditions
-  for (const ch of ['fillOpacity', 'strokeOpacity']) {
-    const d = encoding[ch]
-    if (isObject(d) && (d.field !== undefined || d.datum !== undefined)) {
-      throw new VLCompileError(`encoding.${ch}: a data-driven ${ch} (scale + legend) is not supported; use a constant {"value": ...} or a condition`)
-    }
-  }
   for (const ch of ['fill', 'stroke']) {
     const d = encoding[ch]
     if (!isObject(d) || (d.field === undefined && d.datum === undefined)) continue
@@ -3501,7 +3510,16 @@ function parseEncodingFields(encoding: Record<string, unknown>, config?: unknown
       fields.push(channel === 'fill' || channel === 'stroke' ? { ...h, paint: channel } : h)
     }
   }
+  // encoding.ts normalizeEncoding: a field nested inside a continuous position (one with no time unit to make bands of) has nothing to
+  // be nested in: it is dropped, as if it had not been encoded
+  for (let i = fields.length - 1; i >= 0; i--) {
+    const off = fields[i]!
+    if ((off.channel !== 'xOffset' && off.channel !== 'yOffset') || !off.field || off.datumOnly) continue
+    const main = fields.find((m) => m.channel === (off.channel === 'xOffset' ? 'x' : 'y') && m.field && !m.datumOnly)
+    if (main !== undefined && (main.type === 'quantitative' || main.type === 'temporal') && !main.tu) fields.splice(i, 1)
+  }
   for (const f of fields) {
+    if ((f.channel === 'x' || f.channel === 'y') && isObject(encoding[`${f.channel}2`]) && (encoding[`${f.channel}2`] as Record<string, unknown>).datum !== undefined) f.secondDatum = true
     if ((f.channel === 'x' || f.channel === 'y') && fields.some((o) => o.channel === `${f.channel}Offset` && o.field)) f.nestedOffset = true
     // a scale type the channel or the data cannot use is not the field's scale type: it has the one it would have had without asking
     const askedType = f.scale?.type
@@ -3752,12 +3770,12 @@ const NONPOSITION_ORDER = ['color', 'fill', 'stroke', 'time', 'opacity', 'fillOp
  */
 function stackByFields(fields: FieldDef[], dimensionChannel: 'x' | 'y'): FieldDef[] {
   const offsetChannel = dimensionChannel === 'x' ? 'xOffset' : 'yOffset'
-  const groupFields = new Set(fields.filter((f) => f.channel === dimensionChannel || f.channel === offsetChannel).map((f) => f.field))
+  const groupFields = new Set(fields.filter((f) => f.channel === dimensionChannel || f.channel === offsetChannel).map(aggFieldName))
   const out: FieldDef[] = []
   for (const ch of NONPOSITION_ORDER) {
     if (ch === 'tooltip') continue
     for (const f of fields) {
-      if (f.channel !== ch || f.datumOnly || !f.field || f.aggregate || groupFields.has(f.field)) continue
+      if (f.channel !== ch || f.datumOnly || !f.field || f.aggregate || groupFields.has(aggFieldName(f))) continue
       out.push(f)
     }
   }
@@ -4148,6 +4166,8 @@ function buildData(spec: VLSpec, allFields: FieldDef[], mark: string, orient: st
     !fields.some((f) => f.aggregate) &&
     !fields.some((f) => f.timeUnit) &&
     fields.some((f) => f.channel === measureChannel && f.type === 'quantitative') &&
+    // (a temporal field of any channel is a date to parse)
+    !fields.some((f) => f.type === 'temporal') &&
     !continuousDimension)
   const castTypes = new Map<string, 'number' | 'date'>()
   if (!skipCasts) {
@@ -4294,10 +4314,11 @@ function buildData(spec: VLSpec, allFields: FieldDef[], mark: string, orient: st
       const bn = binNames(dimDef!.binParams!, dimDef!.field)
       const start = JSON.stringify(bn.start)
       const end = JSON.stringify(bn.end)
-      out.push({ type: 'formula', expr: `isValid(datum[${start}]) && isFinite(+datum[${start}]) ? 0.5*datum[${start}]+0.5*datum[${end}] : datum[${start}]`, as: binMidName(dimDef!) })
+      out.push({ type: 'formula', expr: `isValid(datum[${start}]) && isFinite(+datum[${start}]) ? ${dimDef!.bandPosition ?? 0.5}*datum[${start}]+${1 - (dimDef!.bandPosition ?? 0.5)}*datum[${end}] : datum[${start}]`, as: binMidName(dimDef!) })
     }
     const stackDim = midDim ? binMidName(dimDef!) : dimField
-    if (continuousDimension && (mark === 'area' || mark === 'line' || mark === 'trail')) {
+    // (stack.ts: a path mark's stack is imputed over its dimension, discrete or continuous)
+    if ((mark === 'area' || mark === 'line' || mark === 'trail') && stackDim !== undefined && stackDim !== stackField) {
       out.push({
         type: 'impute',
         field: stackField,
@@ -4682,11 +4703,17 @@ function applyTimeUnitLegend(lg: Record<string, unknown>, def: FieldDef, userLeg
   const userFormat = userLegend && userLegend.format !== undefined
   // a raw temporal field formats through config.timeFormat, a quantitative one through config.numberFormat
   if (!def.timeUnit) {
-    if (userFormat) return
-    // (guide format: a time format is one that asks for formatType "time", or asks for none of a temporal field)
     const ft = userLegend?.formatType
-    if (ft === 'time' || (ft === undefined && def.type === 'temporal')) lg.format = formats.timeFormat ?? DEFAULT_TIME_FORMAT
-    else if (def.type === 'quantitative' && formats.numberFormat !== undefined) lg.format = formats.numberFormat
+    if (!userFormat) {
+      // (guide format: a time format is one that asks for formatType "time", or asks for none of a temporal field)
+      if (ft === 'time' || (ft === undefined && def.type === 'temporal')) lg.format = formats.timeFormat ?? DEFAULT_TIME_FORMAT
+      else if (def.type === 'quantitative' && formats.numberFormat !== undefined) lg.format = formats.numberFormat
+    }
+    // (guide format type: a temporal field read through a scale that is not a time scale is formatted as a time all the same)
+    if (ft === undefined && def.type === 'temporal') {
+      setGuideTimeFormatType(lg, def, undefined)
+      LEGEND_DERIVED_FORMAT_TYPE.add(lg)
+    }
     return
   }
   if (!userFormat) lg.format = { signal: timeUnitFormatSignal(def.timeUnit) }
@@ -4732,7 +4759,8 @@ function offsetRange(ch: 'xOffset' | 'yOffset', posDef: FieldDef | undefined, sp
   const duration = timeUnitMinStepSignal(posDef.tu, wrap)
   if (!duration) return [0, { signal: `bandwidth('${pos}')` }]
   const padding = typeof paddingInner === 'number' ? paddingInner : 0.2
-  const bpOffset = (bandPositionOf(spec, mark, posDef, false) ?? 0.5) - 0.5
+  // (a mark with no band position of its own for the unit, a point one, leaves the offset of its range undefined: the range is NaN)
+  const bpOffset = (bandPositionOf(spec, mark, posDef, false) ?? NaN) - 0.5
   if (!padding) return [0, { signal: duration }]
   return [{ signal: `${padding / 2 + bpOffset} * (${duration})` }, { signal: `${1 - padding / 2 + bpOffset} * (${duration})` }]
 }
@@ -4843,6 +4871,33 @@ function specConfigOf(spec: VLSpec): Record<string, unknown> {
   return isObject(spec.config) ? (spec.config as Record<string, unknown>) : {}
 }
 
+/**
+ * The scale type of an offset channel's field (scale/type.ts defaultType): a discrete field offsets within a band on a mark that fits
+ * a band (a rect-like one) and along a point scale on any other, unless the spec asks for one of the two; a continuous field has the
+ * scale its data type gives it.
+ */
+function offsetScaleTypeOf(off: FieldDef, mark: string): string {
+  if (!isDiscreteType(off.type)) return nonPositionScaleType(off.channel, off)
+  const asked = off.scale?.type
+  return asked === 'band' || asked === 'point' ? asked : ['bar', 'rect', 'image', 'rule', 'tick'].includes(mark) ? 'band' : 'point'
+}
+
+/**
+ * domain.ts: the domain of a time scale over a time unit that has a band end spans the units from their starts to their ends
+ * (not for a position, whose rect marks may read the offsetted ends: see positionalDomain).
+ */
+function timeUnitSpanDomain(def: FieldDef, scaleType: string, spec: VLSpec, mark: string, dataName: string): Record<string, unknown> | undefined {
+  if (!def.tu || def.type !== 'temporal' || (scaleType !== 'time' && scaleType !== 'utc')) return undefined
+  if (bandPositionOf(spec, mark, def, false) === undefined) return undefined
+  return { data: dataName, fields: [timeUnitField(def), `${timeUnitField(def)}_end`] }
+}
+
+/** The scale type of a colour field: a counting aggregate is a number whatever type the field was given. */
+function colorScaleTypeOf(def: FieldDef): string {
+  const counts = def.aggregate != null && ['count', 'distinct', 'valid', 'missing'].includes(def.aggregate)
+  return nonPositionScaleType('color', counts && isDiscreteType(def.type) ? { ...def, type: 'quantitative' } : def)
+}
+
 function buildScales(spec: VLSpec, fieldsIn: FieldDef[], mark: string, orient: string, dataName: string, wReq: SizeReq, hReq: SizeReq, series: FieldDef[] = [], rawName: string = dataName): ScaleSpec[] {
   // (a `scale: null` field has no scale)
   const fields = fieldsIn.filter((f) => !f.noScale)
@@ -4906,7 +4961,7 @@ function buildScales(spec: VLSpec, fieldsIn: FieldDef[], mark: string, orient: s
     // offset-encoded band layout instead and stay unpadded
     if (
       mark === 'bar' && !rangedBoth && channel !== measureChannel && markOrient(spec, mark, spec.mark, fields) !== undefined &&
-      !def.timeUnit && def.stack == null
+      !def.timeUnit && (def.stack == null || def.datumOnly)
       && (cfgMarkType?.discreteBandSize ?? cfgMarkBlock?.discreteBandSize) !== 0
       // a continuous bar dimension pads by half a bar; band/point scales pad through paddingInner/Outer
       && isContinuousScaleType(type) && def.scale?.padding == null
@@ -4923,7 +4978,7 @@ function buildScales(spec: VLSpec, fieldsIn: FieldDef[], mark: string, orient: s
       // (zero must be explicitly false — a missing key means the engine's
       // linear default kicks in and extends the domain to 0)
       if (def.bin) {
-        sc.zero = false
+        if (scalePropApplies(channel, type, 'zero')) sc.zero = false
         // (scale/properties.ts nice: a binned field gets none - the key is left out, so a layer that wants one decides)
         delete sc.nice
         delete sc.padding
@@ -4932,7 +4987,8 @@ function buildScales(spec: VLSpec, fieldsIn: FieldDef[], mark: string, orient: s
       sc.nice = def.scale.nice
     }
     if (type === 'band') {
-      const hasOffset = fields.some((f) => f.channel === 'xOffset' || f.channel === 'yOffset')
+      // (properties.ts: a band scale with an offset scale of its own nests it; the other axis keeps the padding of its mark)
+      const hasOffset = fields.some((f) => f.channel === `${channel}Offset`)
       // vl scale/properties.ts: bar → barBandPaddingInner (0.1), tick → 0.25,
       // everything else (rect/rule/image) → rectBandPaddingInner (0); the
       // outer padding defaults to half the inner. An explicit `padding`
@@ -5005,20 +5061,17 @@ function buildScales(spec: VLSpec, fieldsIn: FieldDef[], mark: string, orient: s
   const binStepX = binStep('x')
   const binStepY = binStep('y')
   const stepExpr = binStepX || binStepY ? `min(${binStepX ?? widthStep}, ${binStepY ?? heightStep})` : undefined
-  const numericScale = (name: string, def: FieldDef, range: [number, number | { signal: string }], zero: boolean): ScaleSpec => {
-    const discrete = isDiscreteType(def.type)
-    const userType = def.scale?.type as string | undefined
-    // scale/type.ts defaultType: a temporal field has a time scale (a utc one for a UTC time unit), on a channel with a continuous range
-    const type = discrete ? 'point'
-      : ['linear', 'log', 'pow', 'sqrt', 'symlog', 'quantile', 'quantize', 'threshold', ...(def.type === 'temporal' ? ['time', 'utc'] : [])].includes(userType ?? '') ? userType!
-      : def.type === 'temporal' ? (def.tu?.utc ? 'utc' : 'time') : 'linear'
+  const numericScale = (name: string, def: FieldDef, range: unknown, zero: boolean, cutsRange = false): ScaleSpec => {
+    // (a scale type the channel or the data cannot use has been dropped from the field: what is asked here is what is used)
+    const type = nonPositionScaleType(name, def)
+    const discrete = LISTED_DOMAIN_SCALES.has(type)
     const explicitDom = explicitDomainOf(def)
     const userDomain = explicitDom !== undefined ? explicitDomainValue(explicitDom, def) : undefined
     const sc: ScaleSpec = {
       name,
       type,
-      domain: userDomain ?? (discrete ? sortedDomain(def, dataName, dc) : def.bin ? binsDomain(def) : unaggregatedDomain(def, dataName, cfgS) ?? { data: dataName, field: aggFieldName(def) }),
-      range: rangeRef(def, dataName, def.scale?.range) ?? (['quantile', 'quantize', 'threshold'].includes(type) ? countRange(range[0], range[1], discreteCount(type, cfgS, explicitDom)) : range),
+      domain: userDomain ?? (discrete ? sortedDomain(def, dataName, dc) : def.bin ? binsDomain(def) : unaggregatedDomain(def, dataName, cfgS) ?? timeUnitSpanDomain(def, type, spec, mark, dataName) ?? { data: dataName, field: aggFieldName(def) }),
+      range: rangeRef(def, dataName, def.scale?.range) ?? (cutsRange && ['quantile', 'quantize', 'threshold'].includes(type) ? countRange((range as [number, number | { signal: string }])[0], (range as [number, number | { signal: string }])[1], discreteCount(type, cfgS, explicitDom)) : range),
     }
     if (def.bin && !discrete && userDomain === undefined) { const b = binsProp(def); if (b) sc.bins = b }
     if (def.sort === 'descending') sc.reverse = true
@@ -5033,11 +5086,13 @@ function buildScales(spec: VLSpec, fieldsIn: FieldDef[], mark: string, orient: s
   }
   const sizeDef = fields.find((f) => f.channel === 'size' && f.field)
   // (properties.ts zero(): a size scale includes zero unless it discretizes a continuous domain)
-  if (sizeDef) scales.push(numericScale('size', sizeDef, sizeRange(mark, cfgS, step, stepExpr), !['quantile', 'quantize', 'threshold'].includes(String(sizeDef.scale?.type))))
+  if (sizeDef) scales.push(numericScale('size', sizeDef, sizeRange(mark, cfgS, step, stepExpr), !['quantile', 'quantize', 'threshold'].includes(String(sizeDef.scale?.type)), true))
   const strokeWidthDef = fields.find((f) => f.channel === 'strokeWidth' && f.field)
   if (strokeWidthDef) scales.push(numericScale('strokeWidth', strokeWidthDef, [cfgS.minStrokeWidth, cfgS.maxStrokeWidth], false))
-  const opacityDefS = fields.find((f) => f.channel === 'opacity' && f.field)
-  if (opacityDefS) scales.push(numericScale('opacity', opacityDefS, [cfgS.minOpacity, cfgS.maxOpacity], false))
+  for (const ch of ['opacity', 'fillOpacity', 'strokeOpacity']) {
+    const opacityDefS = fields.find((f) => f.channel === ch && f.field)
+    if (opacityDefS) scales.push(numericScale(ch, opacityDefS, [cfgS.minOpacity, cfgS.maxOpacity], false))
+  }
   // angle: a linear scale to degrees (range.ts defaultRange: [0, 360])
   const angleDefS = fields.find((f) => f.channel === 'angle' && f.field && !f.datumOnly && !f.noScale)
   if (angleDefS) scales.push(numericScale('angle', angleDefS, [0, 360], false))
@@ -5047,11 +5102,11 @@ function buildScales(spec: VLSpec, fieldsIn: FieldDef[], mark: string, orient: s
     const offDef = fields.find((f) => f.channel === ch && f.field)
     if (offDef) {
       const dimChannel = ch === 'xOffset' ? 'x' : 'y'
+      const dimDef = fields.find((f) => f.channel === dimChannel && f.field)
       if (isDiscreteType(offDef.type)) {
         // scale/type.ts defaultType + properties.ts paddingOuter: a rect-based mark offsets within a band; any other mark
         // offsets along a point scale whose outer padding is half a step (so the points align with the band centres)
-        const askedType = offDef.scale?.type
-        const offsetBand = askedType === 'band' || askedType === 'point' ? askedType === 'band' : ['bar', 'rect', 'image', 'rule', 'tick'].includes(mark)
+        const offsetBand = offsetScaleTypeOf(offDef, mark) === 'band'
         // (offsetPaddings has made the paddings)
         const paddingsDone: ReadonlySet<string> = new Set([...SCALE_BUILT_PROPS, 'padding', 'paddingInner', 'paddingOuter'])
         scales.push(offsetBand
@@ -5059,7 +5114,7 @@ function buildScales(spec: VLSpec, fieldsIn: FieldDef[], mark: string, orient: s
               name: ch,
               type: 'band',
               domain: sortedDomain(offDef, dataName, dc),
-              range: offsetRange(ch, fields.find((f) => f.channel === dimChannel && f.field), spec, mark, dc.cfg.bandWithNestedOffsetPaddingInner),
+              range: offsetRange(ch, dimDef, spec, mark, dc.cfg.bandWithNestedOffsetPaddingInner),
               // (properties.ts paddingInner / paddingOuter: a padding of the scale replaces both defaults, an explicit inner / outer one its own)
               ...offsetPaddings(offDef, 'band', dc.cfg.offsetBandPaddingInner, dc.cfg.offsetBandPaddingOuter),
             }
@@ -5067,20 +5122,13 @@ function buildScales(spec: VLSpec, fieldsIn: FieldDef[], mark: string, orient: s
               name: ch,
               type: 'point',
               domain: sortedDomain(offDef, dataName, dc),
-              range: [0, { signal: `bandwidth('${dimChannel}')` }],
+              range: offsetRange(ch, dimDef, spec, mark, dc.cfg.bandWithNestedOffsetPaddingInner),
               ...offsetPaddings(offDef, 'point', undefined, 0.5),
             })
         forwardScaleProps(scales[scales.length - 1]!, offDef, ch, paddingsDone)
       } else {
-        scales.push({
-          name: ch,
-          type: 'linear',
-          domain: offDef.scale?.domain ?? { data: dataName, field: aggFieldName(offDef) },
-          range: [0, { signal: `bandwidth('${dimChannel}')` }],
-          zero: false,
-          ...(offDef.scale?.type != null ? { type: String(offDef.scale.type) } : {}),
-        })
-        forwardScaleProps(scales[scales.length - 1]!, offDef, ch, SCALE_BUILT_PROPS_NO_ZERO)
+        // a continuous offset spans the band (or the unit of time) of its position
+        scales.push(numericScale(ch, offDef, offsetRange(ch, dimDef, spec, mark, dc.cfg.bandWithNestedOffsetPaddingInner), false))
       }
     }
   }
@@ -5096,29 +5144,13 @@ function buildScales(spec: VLSpec, fieldsIn: FieldDef[], mark: string, orient: s
     })
   }
 
-  // shape scale
+  // shape scale: an ordinal one over the symbols, or a discretizing one that cuts a continuous field into them
   const shapeDefS = fields.find((f) => f.channel === 'shape' && f.field && f.type !== 'geojson')
-  if (shapeDefS) {
-    scales.push({
-      name: 'shape',
-      type: 'ordinal',
-      domain: sortedDomain(shapeDefS, dataName, dc),
-      range: rangeRef(shapeDefS, dataName, shapeDefS.scale?.range) ?? 'symbol',
-    })
-    forwardScaleProps(scales[scales.length - 1]!, shapeDefS, 'shape', SCALE_BUILT_PROPS)
-  }
+  if (shapeDefS) scales.push(numericScale('shape', shapeDefS, 'symbol', false))
 
-  // stroke dash scale: an ordinal scale over the default dash patterns (scale/range.ts STROKEDASH)
+  // stroke dash scale: the same over the default dash patterns (scale/range.ts STROKEDASH)
   const strokeDashDefS = fields.find((f) => f.channel === 'strokeDash' && f.field)
-  if (strokeDashDefS) {
-    scales.push({
-      name: 'strokeDash',
-      type: 'ordinal',
-      domain: sortedDomain(strokeDashDefS, dataName, dc),
-      range: rangeRef(strokeDashDefS, dataName, strokeDashDefS.scale?.range) ?? [[1, 0], [4, 2], [2, 1], [1, 1], [1, 2, 4, 2]],
-    })
-    forwardScaleProps(scales[scales.length - 1]!, strokeDashDefS, 'strokeDash', SCALE_BUILT_PROPS)
-  }
+  if (strokeDashDefS) scales.push(numericScale('strokeDash', strokeDashDefS, [[1, 0], [4, 2], [2, 1], [1, 1], [1, 2, 4, 2]], false))
 
   // theta and radius (scale/type.ts, range.ts, properties.ts zero, domain.ts): a polar position scale is linear (or the type asked for) over
   // [0, 2pi] / [0, min(width, height) / 2]; a discrete field is a band scale on an arc and a point scale under a label, a time unit a time scale;
@@ -5144,27 +5176,29 @@ function buildScales(spec: VLSpec, fieldsIn: FieldDef[], mark: string, orient: s
 
   // color scale
   const colorDef = fields.find((f) => f.channel === 'color' && f.field)
+  const colorScaleName = colorDef?.paint ?? 'color'
   const numericAggregate = colorDef?.aggregate != null && ['count', 'distinct', 'valid', 'missing'].includes(colorDef.aggregate)
   if (colorDef) {
     if (isDiscreteType(colorDef.type) && !numericAggregate) {
-      // nominal colours are categorical; an ORDINAL field gets vega-lite's sequential
-      // 'ordinal' ramp, interpolated in hcl
-      const ordinalColor = colorDef.type === 'ordinal'
+      // nominal colours are categorical; an ORDINAL field gets vega-lite's sequential 'ordinal' ramp, interpolated in hcl. A point or
+      // bin-ordinal scale asked of the field spreads the colour range over its values.
+      const colorType = nonPositionScaleType('color', colorDef)
+      const cs = colorDef.scale ?? {}
       scales.push({
-        name: 'color',
-        type: 'ordinal',
+        name: colorScaleName,
+        type: colorType,
         domain: sortedDomain(colorDef, dataName, dc),
-        range: rangeRef(colorDef, dataName, colorDef.scale?.range) ?? (colorDef.scale?.scheme != null ? schemeRange(colorDef.scale.scheme) : ordinalColor ? 'ordinal' : 'category'),
-        ...(ordinalColor ? { interpolate: 'hcl' } : {}),
+        range: rangeRef(colorDef, dataName, cs.range) ?? (cs.scheme != null ? schemeRange(cs.scheme) : colorType === 'ordinal' ? (colorDef.type === 'ordinal' ? 'ordinal' : 'category') : cs.domainMid != null ? 'diverging' : 'ramp'),
+        ...(colorDef.type === 'ordinal' && scalePropApplies('color', colorType, 'interpolate') ? { interpolate: 'hcl' } : {}),
       })
-      forwardScaleProps(scales[scales.length - 1]!, colorDef, 'color', SCALE_BUILT_PROPS)
+      forwardScaleProps(scales[scales.length - 1]!, colorDef, colorScaleName, SCALE_BUILT_PROPS)
     } else {
       const cs = colorDef.scale ?? {}
       // scale/type.ts defaultType: a binned quantitative colour is a bin-ordinal scale over the bins (no domain of its own)
       const binOrdinalColor = colorDef.bin && colorDef.type === 'quantitative' && (cs.type === undefined || cs.type === 'bin-ordinal') && !numericAggregate
       if (binOrdinalColor) {
         scales.push({
-          name: 'color',
+          name: colorScaleName,
           type: 'bin-ordinal',
           domain: undefined,
           range: cs.range != null ? rangeRef(colorDef, dataName, cs.range) : cs.scheme != null ? schemeRange(cs.scheme) : mark === 'rect' || mark === 'geoshape' ? 'heatmap' : 'ramp',
@@ -5174,12 +5208,9 @@ function buildScales(spec: VLSpec, fieldsIn: FieldDef[], mark: string, orient: s
         })
       } else {
       // a temporal colour field is a time scale, whatever its time unit (scale/type.ts defaultType)
-      // (vega-lite falls back to linear when a time scale is asked of a non-temporal field)
-      const colorScaleType = ['linear', 'log', 'pow', 'sqrt', 'symlog', 'quantile', 'quantize', 'threshold', ...(colorDef.type === 'temporal' ? ['time', 'utc'] : [])].includes(cs.type as string)
-        ? cs.type as string
-        : colorDef.type === 'temporal' ? 'time' : 'linear'
+      const colorScaleType = colorScaleTypeOf(colorDef)
       scales.push({
-        name: 'color',
+        name: colorScaleName,
         type: colorScaleType,
         domain: explicitDomainOf(colorDef) !== undefined
           ? explicitDomainValue(explicitDomainOf(colorDef), colorDef)
@@ -5211,7 +5242,7 @@ function buildScales(spec: VLSpec, fieldsIn: FieldDef[], mark: string, orient: s
         // (scale/domain.ts: a binned field's continuous scale spans the bins; it carries the bins too)
         ...(colorDef.bin && colorDef.type === 'quantitative' && explicitDomainOf(colorDef) === undefined ? { bins: { signal: binNames(colorDef.binParams!, colorDef.field).signal } } : {}),
       })
-      forwardScaleProps(scales[scales.length - 1]!, colorDef, 'color', SCALE_BUILT_PROPS)
+      forwardScaleProps(scales[scales.length - 1]!, colorDef, colorScaleName, SCALE_BUILT_PROPS)
       if (colorDef.bin && colorDef.type === 'quantitative' && explicitDomainOf(colorDef) === undefined) {
         const last = scales[scales.length - 1]!
         last.domain = { signal: `[${binNames(colorDef.binParams!, colorDef.field).signal}.start, ${binNames(colorDef.binParams!, colorDef.field).signal}.stop]` }
@@ -5223,7 +5254,7 @@ function buildScales(spec: VLSpec, fieldsIn: FieldDef[], mark: string, orient: s
   // the user's scale properties on the non-positional channels count as explicit too
   for (const f of fields) {
     if (!f.scale || f.channel === 'x' || f.channel === 'y') continue
-    const sc = scales.find((x) => x.name === f.channel)
+    const sc = scales.find((x) => x.name === (f.paint ?? f.channel))
     if (sc && !EXPLICIT_SCALE_PROPS.has(sc)) recordExplicit(sc, f.scale)
   }
   // the scales of a unit come in the order of the channels (vega-lite's), whichever order they were made in
@@ -5338,10 +5369,12 @@ function positionalDomain(def: FieldDef, dataName: string, mark: string, orient:
 function potentialStackChannel(mark: string, orient: string, fields: FieldDef[]): 'x' | 'y' | undefined {
   const xDef = fields.find((f) => f.channel === 'x')
   const yDef = fields.find((f) => f.channel === 'y')
+  // (stack.ts: a datum is not a field of the encoding)
+  const isField = (f: FieldDef | undefined): f is FieldDef => f != null && f.field != null && !f.datumOnly
   const isUQ = (f: FieldDef | undefined): f is FieldDef =>
-    f != null && f.field != null && f.type === 'quantitative' && !f.bin
+    isField(f) && f.type === 'quantitative' && !f.bin
   const cartesian = mark === 'bar' || mark === 'area'
-  if (xDef?.field != null && yDef?.field != null) {
+  if (isField(xDef) && isField(yDef)) {
     if (isUQ(xDef) && isUQ(yDef)) {
       if (xDef.stack) return 'x'
       if (yDef.stack) return 'y'
@@ -5382,15 +5415,15 @@ function isStacked(def: FieldDef, mark: string, orient: string, allFields?: Fiel
     const groupFields = new Set(
       allFields
         .filter((f) => f.channel === dimChannel || f.channel === 'xOffset' || f.channel === 'yOffset')
-        .map((f) => f.field),
+        .map(aggFieldName),
     )
     const positional = new Set(['x', 'y', 'x2', 'y2', 'xOffset', 'yOffset', 'theta', 'radius', 'row', 'column', 'facet'])
     const stackBy = allFields.filter(
-      (f) => f.field && !f.datumOnly && !positional.has(f.channel) && !f.aggregate && !groupFields.has(f.field),
+      (f) => f.field && !f.datumOnly && !positional.has(f.channel) && !f.aggregate && !groupFields.has(aggFieldName(f)),
     )
     if (allFields.some((f) => f.aggregate) && stackBy.length === 0) return false
     // (stack.ts: a ranged STACK field - its own secondary channel - never stacks; the other axis may be ranged)
-    if (allFields.some((f) => f.channel === `${def.channel}2` && f.field)) return false
+    if (def.secondDatum || allFields.some((f) => f.channel === `${def.channel}2` && f.field)) return false
   }
   return true
 }
@@ -5863,16 +5896,13 @@ function buildLegends(fields: FieldDef[], mark: string, markOpacity?: number, ma
     // gradient).
     const colorTimeUnitSymbol = colorDef.timeUnit != null
       && ['month', 'day', 'quarter'].includes(String(colorDef.timeUnit))
-    const colorDiscreteScale = ['quantile', 'quantize', 'threshold'].includes(colorDef.scale?.type as string)
-      || (!!colorDef.bin && colorDef.type === 'quantitative' && (colorDef.scale?.type === undefined || colorDef.scale.type === 'bin-ordinal'))
-    const colorContinuous = (!isDiscreteType(colorDef.type)
-      || (colorDef.aggregate != null && ['count', 'distinct', 'valid', 'missing'].includes(colorDef.aggregate)))
-      && !colorTimeUnitSymbol && !colorDiscreteScale
+    // (a legend is a gradient over a continuous scale and a list of symbols over any other, whatever the field's data type)
+    const colorScaleType = colorScaleTypeOf(colorDef)
+    const colorContinuous = isContinuousScaleType(colorScaleType) && !colorTimeUnitSymbol
     // legend.type:'symbol' forces a symbol legend even on a continuous scale
     const colorGradient = colorContinuous && userLegend.type !== 'symbol'
     if (colorTimeUnitSymbol) lg.type = 'symbol'
-    if (colorDef.scale?.type === 'quantile' || colorDef.scale?.type === 'threshold') lg.labelOverlap = 'greedy'
-    lg[legendFilled ? 'fill' : 'stroke'] = 'color'
+    lg[colorDef.paint ?? (legendFilled ? 'fill' : 'stroke')] = colorDef.paint ?? 'color'
     const opacity = markOpacity ?? (['point', 'circle', 'square', 'tick'].includes(mark) ? reducedOpacity : undefined)
     if (colorGradient) {
       GRADIENT_LEGENDS.add(lg)
@@ -6002,6 +6032,7 @@ function buildLegends(fields: FieldDef[], mark: string, markOpacity?: number, ma
     forwardLegendProps(sdUser, sdLg, false)
     push('strokeDash', sdLg, strokeDashLegendDef)
   }
+  // (vega-lite makes no legend of fillOpacity or strokeOpacity)
   const opacityLegendDef = fields.find((f) => f.channel === 'opacity' && f.field)
   if (opacityLegendDef && opacityLegendDef.legend !== null && !legendSuppressed(opacityLegendDef)) {
     const opUser = { ...cfgDefaults, ...(opacityLegendDef.legend ?? {}) }
@@ -6032,6 +6063,11 @@ function buildLegends(fields: FieldDef[], mark: string, markOpacity?: number, ma
     const lg = legendsByKey[key]
     if (!lg) continue
     applyLegendDirection(lg, legendDefs[key]!, cfgLegend)
+    // legend/properties.ts defaultLabelOverlap: the labels of a scale that crowds its ticks (a logarithmic or a quantile one) are thinned
+    if (lg.labelOverlap === undefined && cfgLegend.labelOverlap === undefined) {
+      const d = legendDefs[key]!
+      if (LABEL_THINNING_SCALES.has(d.channel === 'color' ? colorScaleTypeOf(d) : nonPositionScaleType(d.channel, d))) lg.labelOverlap = 'greedy'
+    }
     // vega-lite's legend labelExpr is a label text encode (vega has no such legend property)
     if (typeof lg.labelExpr === 'string') {
       const enc = (lg.encode ?? (lg.encode = {})) as { labels?: { update?: Record<string, unknown> } }
@@ -6053,6 +6089,9 @@ function buildLegends(fields: FieldDef[], mark: string, markOpacity?: number, ma
   }
   return legends
 }
+
+/** The scale types whose legend labels are thinned by default. */
+const LABEL_THINNING_SCALES: ReadonlySet<string> = new Set(['quantile', 'threshold', 'log', 'symlog'])
 
 /** The legends that are a gradient (a colour or size scale that is continuous to continuous). */
 const GRADIENT_LEGENDS = new WeakSet<object>()
@@ -6120,6 +6159,7 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
   const filledMark = markIsFilled(spec, mark)
   const crossPaint = fields.filter((f) => f.noScale && f.paint !== undefined && f.paint !== (filledMark ? 'fill' : 'stroke'))
   const colorDef = fields.find((f) => f.channel === 'color' && f.field && !f.fromCondition && !crossPaint.includes(f))
+  const colorScale = colorDef?.paint ?? 'color'
   const sizeDef = fields.find((f) => f.channel === 'size' && f.field)
   const shapeDef = fields.find((f) => f.channel === 'shape' && f.field && f.type !== 'geojson')
   const opacityDef = fields.find((f) => f.channel === 'opacity' && f.field)
@@ -6131,8 +6171,11 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
   const yOffsetDefM = fields.find((f) => f.channel === 'yOffset' && f.field)
   const xOffsetPresent = xOffsetDefM != null
   const yOffsetPresent = yOffsetDefM != null
-  const xOffsetContinuous = xOffsetDefM != null && !isDiscreteType(xOffsetDefM.type)
-  const yOffsetContinuous = yOffsetDefM != null && !isDiscreteType(yOffsetDefM.type)
+  // (an offset that is not laid out in bands leaves the mark its default size)
+  // position-rect.ts rectPosition: a rect spans the bin or time unit of a position only when that position has no offset channel
+  const rectSpansUnit = (ch: 'x' | 'y'): boolean => !sizeDef && (mark !== 'rect' || !fields.some((f) => f.channel === `${ch}Offset` && f.field))
+  const xOffsetContinuous = xOffsetDefM != null && offsetScaleTypeOf(xOffsetDefM, mark) !== 'band'
+  const yOffsetContinuous = yOffsetDefM != null && offsetScaleTypeOf(yOffsetDefM, mark) !== 'band'
   // config resolution (getMarkPropOrConfig): the mark def first, then the
   // mark-type config block, then the generic config.mark block
   const userConfig = isObject(spec.config) ? (spec.config as Record<string, unknown>) : undefined
@@ -6160,13 +6203,13 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
     if (!filled) {
       if (mark === 'bar') update.fill = { value: 'transparent' }
       update.stroke = colorDef
-        ? { scale: 'color', field: aggFieldName(colorDef) }
+        ? { scale: colorScale, field: aggFieldName(colorDef) }
         : { value: (markDef?.stroke as string | undefined) ?? (cfgType?.stroke as string | undefined) ?? (cfgMark?.stroke as string | undefined) ?? markColor ?? C.blue }
     } else {
       update.fill = markDef?.fill != null
         ? { value: markDef.fill }
         : colorDef
-          ? { scale: 'color', field: aggFieldName(colorDef) }
+          ? { scale: colorScale, field: aggFieldName(colorDef) }
           : { value: (cfgType?.fill as string | undefined) ?? (cfgMark?.fill as string | undefined) ?? (cfgType?.color as string | undefined) ?? (cfgMark?.color as string | undefined) ?? markColor ?? C.blue }
       const stroke = markDef?.stroke ?? cfgType?.stroke ?? cfgMark?.stroke
       if (stroke != null) update.stroke = { value: stroke }
@@ -6199,18 +6242,18 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
           // a rect with a width of its own is centered on its value
           update.xc = { scale: 'x', field: aggFieldName(xDef) }
           update.width = { value: markDef.width }
-        } else if (mark === 'rect' && xDef.timeUnit == null && !xDef.bin && sc !== 'band') {
+        } else if (mark === 'rect' && xDef.timeUnit == null && !xDef.bin && sc !== 'band' && sc !== 'point') {
           // a continuous rect spans to the scale's zero/min (vega-lite rangePosition)
           update.x = { scale: 'x', field: aggFieldName(xDef) }
           update.x2 = zeroOrMinRef('x', xDef, mark)
-        } else if (xDef.timeUnit == null && !xDef.bin && xDef.type === 'temporal') {
+        } else if (xDef.timeUnit == null && !xDef.bin && xDef.type === 'temporal' && !xDef.datumOnly) {
           // a plain temporal dimension centers the bar with the continuous
           // band size (vega-lite's continuousBandSize)
           update.xc = { scale: 'x', field: aggFieldName(xDef) }
-          update.width = { value: continuousBand }
-        } else if (xDef.timeUnit && sc !== 'band') {
+          update.width = sizeDef ? { scale: 'size', field: aggFieldName(sizeDef) } : { value: continuousBand }
+        } else if (xDef.timeUnit && sc !== 'band' && rectSpansUnit('x')) {
           setBinnedRect(update, 'x', xDef, spec, mark)
-        } else if (xDef.bin && !binDiscrete(xDef)) {
+        } else if (xDef.bin && !binDiscrete(xDef) && rectSpansUnit('x')) {
           setBinnedRect(update, 'x', xDef, spec, mark)
         } else if (sc === 'band') {
           // BarConfig band alignment/size (probed): align 'right' anchors
@@ -6249,14 +6292,14 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
             update.width = xOffsetContinuous ? { value: C.defaultStep } : { signal: `max(0.25, bandwidth('${xOffsetPresent ? 'xOffset' : 'x'}'))` }
           }
         } else {
-          if (mark === 'rect') {
+          if (mark === 'rect' && sc !== 'point') {
             update.x = { scale: 'x', field: aggFieldName(xDef) }
             update.x2 = zeroOrMinRef('x', xDef, mark)
           } else {
             update.xc = { scale: 'x', field: aggFieldName(xDef) }
             // a discrete point scale centers a default-step bar (18px); a
             // continuous measure uses the continuous band size
-            update.width = { value: sc === 'point' ? C.defaultStep : continuousBand }
+            update.width = sizeDef ? { scale: 'size', field: aggFieldName(sizeDef) } : { value: sc === 'point' ? C.defaultStep : continuousBand }
           }
         }
       }
@@ -6265,7 +6308,7 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
         if (y2DefB && !binsItself(yDef)) {
           update.y = { scale: 'y', field: aggFieldName(yDef) }
           update.y2 = secondaryRef(spec, mark, 'y', yDef, y2DefB)
-        } else if (mark === 'rect' && ((yDef.bin && !binDiscrete(yDef)) || (yDef.timeUnit && positionalScaleType(mark, yDef) !== 'band'))) {
+        } else if (mark === 'rect' && rectSpansUnit('y') && ((yDef.bin && !binDiscrete(yDef)) || (yDef.timeUnit && positionalScaleType(mark, yDef) !== 'band'))) {
           // a rect's second dimension may be binned too (2d heatmaps)
           setBinnedRect(update, 'y', yDef, spec, mark)
         } else if (stacked) {
@@ -6294,6 +6337,9 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
         } else if (mark === 'rect' && markDef?.height !== undefined) {
           update.yc = { scale: 'y', field: aggFieldName(yDef) }
           update.height = { value: markDef.height }
+        } else if (positionalScaleType(mark, yDef) === 'point') {
+          update.yc = { scale: 'y', field: aggFieldName(yDef) }
+          update.height = { value: C.defaultStep }
         } else {
           update.y = { scale: 'y', field: aggFieldName(yDef) }
           if (mark === 'bar') update.y2 = zeroOrMinRef('y')
@@ -6306,15 +6352,15 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
         if (mark === 'rect' && yDef.timeUnit == null && !yDef.bin && sc !== 'band' && markDef?.height !== undefined) {
           update.yc = { scale: 'y', field: aggFieldName(yDef) }
           update.height = { value: markDef.height }
-        } else if (mark === 'rect' && yDef.timeUnit == null && !yDef.bin && sc !== 'band') {
+        } else if (mark === 'rect' && yDef.timeUnit == null && !yDef.bin && sc !== 'band' && sc !== 'point') {
           update.y = { scale: 'y', field: aggFieldName(yDef) }
           update.y2 = zeroOrMinRef('y', yDef, mark)
-        } else if (yDef.timeUnit == null && !yDef.bin && yDef.type === 'temporal') {
+        } else if (yDef.timeUnit == null && !yDef.bin && yDef.type === 'temporal' && !yDef.datumOnly) {
           update.yc = { scale: 'y', field: aggFieldName(yDef) }
-          update.height = { value: continuousBand }
-        } else if (yDef.timeUnit && sc !== 'band') {
+          update.height = sizeDef ? { scale: 'size', field: aggFieldName(sizeDef) } : { value: continuousBand }
+        } else if (yDef.timeUnit && sc !== 'band' && rectSpansUnit('y')) {
           setBinnedRect(update, 'y', yDef, spec, mark)
-        } else if (yDef.bin && !binDiscrete(yDef)) {
+        } else if (yDef.bin && !binDiscrete(yDef) && rectSpansUnit('y')) {
           setBinnedRect(update, 'y', yDef, spec, mark)
         } else if (sc === 'band') {
           const yAlignH = (markDef?.baseline ?? cfgType?.baseline ?? cfgMark?.baseline) as string | undefined
@@ -6343,12 +6389,12 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
             update.height = yOffsetContinuous ? { value: C.defaultStep } : { signal: `max(0.25, bandwidth('${yOffsetPresent ? 'yOffset' : 'y'}'))` }
           }
         } else {
-          if (mark === 'rect') {
+          if (mark === 'rect' && sc !== 'point') {
             update.y = { scale: 'y', field: aggFieldName(yDef) }
             update.y2 = zeroOrMinRef('y', yDef, mark)
           } else {
             update.yc = { scale: 'y', field: aggFieldName(yDef) }
-            update.height = { value: sc === 'point' ? C.defaultStep : continuousBand }
+            update.height = sizeDef ? { scale: 'size', field: aggFieldName(sizeDef) } : { value: sc === 'point' ? C.defaultStep : continuousBand }
           }
         }
       }
@@ -6359,7 +6405,7 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
           // an explicit x2 field: the bar spans x → x2 (ranged bar)
           update.x = { scale: 'x', field: aggFieldName(xDef) }
           update.x2 = secondaryRef(spec, mark, 'x', xDef, x2Field)
-        } else if (mark === 'rect' && ((xDef.bin && !binDiscrete(xDef)) || (xDef.timeUnit && positionalScaleType(mark, xDef) !== 'band'))) {
+        } else if (mark === 'rect' && rectSpansUnit('x') && ((xDef.bin && !binDiscrete(xDef)) || (xDef.timeUnit && positionalScaleType(mark, xDef) !== 'band'))) {
           setBinnedRect(update, 'x', xDef, spec, mark)
         } else if (stackedX) {
           update.x = { scale: 'x', field: `${aggFieldName(xDef)}_end` }
@@ -6370,6 +6416,10 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
         } else if (mark === 'rect' && markDef?.width !== undefined) {
           update.xc = { scale: 'x', field: aggFieldName(xDef) }
           update.width = { value: markDef.width }
+        } else if (positionalScaleType(mark, xDef) === 'point') {
+          // (a point scale has no band to fill: the mark is a default step wide, centred on its point)
+          update.xc = { scale: 'x', field: aggFieldName(xDef) }
+          update.width = { value: C.defaultStep }
         } else {
           update.x = { scale: 'x', field: aggFieldName(xDef) }
           if (mark === 'bar') update.x2 = zeroOrMinRef('x')
@@ -6378,8 +6428,8 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
       }
     }
     // position-rect.ts positionAndSize: the band channel of a bar with a relative band size or an offset channel
-    if (mark === 'bar') {
-      const bandCh = orient === 'vertical' ? 'x' : 'y'
+    // (a rect lays out each of its axes this way, a bar its band one)
+    for (const bandCh of mark === 'bar' ? [orient === 'vertical' ? 'x' : 'y'] as const : mark === 'rect' ? (['x', 'y'] as const).filter((ch) => { const d = ch === 'x' ? xDef : yDef; return d !== undefined && ['band', 'point'].includes(positionalScaleType(mark, d)) }) : []) {
       const handled = positionAndSizeRefs(bandCh, bandCh === 'x' ? xDef : yDef, spec, mark, fields)
       if (handled) {
         for (const k of [bandCh, `${bandCh}c`, `${bandCh}2`, bandCh === 'x' ? 'width' : 'height']) delete update[k]
@@ -6403,6 +6453,13 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
     if (mark === 'bar' && !sizeDef && barSizeProp === undefined) {
       const noOrientation = markOrient(spec, mark, spec.mark, fields) === undefined
       for (const [pos, def] of [['x', xDef], ['y', yDef]] as const) {
+        // (a datum on an axis the bar does not stand on is a range from the datum to the start of the scale, whatever the datum is)
+        if (def?.datumOnly && noOrientation && update[`${pos}c`] !== undefined && positionalScaleType(mark, def) !== 'band' && !hasConstantSecond(spec, pos)) {
+          update[pos] = update[`${pos}c`]
+          update[`${pos}2`] = zeroOrMinRef(pos)
+          for (const k of [`${pos}c`, pos === 'x' ? 'width' : 'height']) delete update[k]
+          continue
+        }
         if (!def || def.datumOnly || (hasConstantSecond(spec, pos) && !binsItself(def)) || fields.some((f) => (f.channel === `${pos}2` && !binsItself(def)) || f.channel === `${pos}Offset`)) continue
         const sc = positionalScaleType(mark, def)
         if (sc === 'band' || sc === 'point') continue
@@ -6425,7 +6482,7 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
     const markStrokeWidth = isObject(spec.mark) ? (spec.mark.strokeWidth as number | undefined) : undefined
     if (filled) {
       update.fill = colorDef
-        ? { scale: 'color', field: aggFieldName(colorDef) }
+        ? { scale: colorScale, field: aggFieldName(colorDef) }
         : { value: markColor ?? markFill ?? cfgFill ?? cfgColor ?? C.blue }
       const st = markStroke ?? cfgStroke
       if (st != null) update.stroke = { value: st }
@@ -6445,7 +6502,7 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
       update.fill = ptFill != null ? { value: ptFill } : { value: 'transparent' }
       const ptStroke = (isObject(spec.mark) ? (spec.mark.stroke as string | undefined) : undefined) ?? markColor ?? cfgStroke ?? cfgColor ?? C.blue
       update.stroke = colorDef
-        ? { scale: 'color', field: aggFieldName(colorDef) }
+        ? { scale: colorScale, field: aggFieldName(colorDef) }
         : { value: ptStroke }
     }
     update.ariaRoleDescription = { value: mark }
@@ -6463,7 +6520,7 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
   } else if (mark === 'line') {
     const markStroke = isObject(spec.mark) ? (spec.mark.stroke as string | undefined) : undefined
     const markStrokeWidth = isObject(spec.mark) ? (spec.mark.strokeWidth as number | undefined) : undefined
-    update.stroke = colorDef ? { scale: 'color', field: aggFieldName(colorDef) } : { value: markStroke ?? cfgStroke ?? cfgColor ?? markColor ?? C.blue }
+    update.stroke = colorDef ? { scale: colorScale, field: aggFieldName(colorDef) } : { value: markStroke ?? cfgStroke ?? cfgColor ?? markColor ?? C.blue }
     if (markStrokeWidth != null) update.strokeWidth = { value: markStrokeWidth }
     const lineSizeCfg = (cfgType?.size as number | undefined) ?? (cfgMark?.size as number | undefined)
     if (markSize != null) update.strokeWidth = { value: markSize }
@@ -6483,7 +6540,7 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
       : (cfgType?.filled ?? cfgMark?.filled)
     if (lineFilled === true) {
       update.fill = colorDef
-        ? { scale: 'color', field: aggFieldName(colorDef) }
+        ? { scale: colorScale, field: aggFieldName(colorDef) }
         : { value: lineFill ?? markColor ?? cfgFill ?? cfgColor ?? C.blue }
       delete update.stroke
     } else if (lineFill != null) update.fill = { value: lineFill }
@@ -6502,7 +6559,7 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
     if (areaStroke) update.stroke = { value: areaStroke }
     const areaFill = isObject(spec.mark) ? (spec.mark.fill as string | undefined) : undefined
     const areaColor = colorDef
-      ? { scale: 'color', field: aggFieldName(colorDef) }
+      ? { scale: colorScale, field: aggFieldName(colorDef) }
       : { value: areaFill ?? markColor ?? cfgFill ?? cfgColor ?? C.blue }
     if (isObject(spec.mark) && spec.mark.filled === false) {
       update.stroke = areaColor
@@ -6546,7 +6603,7 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
     { const dfn = definedSignal(spec, fields, mark); if (dfn !== undefined) update.defined = dfn }
   } else if (mark === 'tick') {
     if (markOpacity != null || pointOpacityDefault != null) update.opacity = { value: markOpacity ?? pointOpacityDefault }
-    update.fill = colorDef ? { scale: 'color', field: aggFieldName(colorDef) } : { value: markColor ?? markFill ?? cfgFill ?? cfgColor ?? C.blue }
+    update.fill = colorDef ? { scale: colorScale, field: aggFieldName(colorDef) } : { value: markColor ?? markFill ?? cfgFill ?? cfgColor ?? C.blue }
     const tickDef = isObject(spec.mark) ? (spec.mark as Record<string, unknown>) : undefined
     const tickStroke = tickDef?.stroke as string | undefined
     if (tickStroke != null || cfgStroke != null) update.stroke = { value: tickStroke ?? cfgStroke }
@@ -6624,7 +6681,8 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
         update[sizeVg] = { signal: `max(0.25, bandwidth('${sizeAxis}'))` }
       } else {
         update[`${sizeAxis}c`] = { scale: sizeAxis, field: aggFieldName(sizeField) }
-        update[sizeVg] = { value: (cfgType?.continuousBandSize as number | undefined) ?? C.continuousBandSize }
+        // (a point scale has no band to fill: the tick is a default step wide, as a bar on one is)
+        update[sizeVg] = { value: positionalScaleType(mark, sizeField) === 'point' ? C.defaultStep : ((cfgType?.continuousBandSize as number | undefined) ?? C.continuousBandSize) }
       }
     }
     // position-rect.ts positionAndSize for a tick's size axis with a relative band size or an offset channel
@@ -6638,7 +6696,7 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
     update[thickVg] = { value: thickVal }
   } else if (mark === 'rule') {
     const ruleDef = isObject(spec.mark) ? (spec.mark as Record<string, unknown>) : {}
-    update.stroke = colorDef ? { scale: 'color', field: aggFieldName(colorDef) } : { value: (ruleDef.stroke as string | undefined) ?? markColor ?? cfgStroke ?? cfgColorBlack }
+    update.stroke = colorDef ? { scale: colorScale, field: aggFieldName(colorDef) } : { value: (ruleDef.stroke as string | undefined) ?? markColor ?? cfgStroke ?? cfgColorBlack }
     const ruleFill = ruleDef.fill as string | undefined
     if (ruleFill != null) update.fill = { value: ruleFill }
     // the rule runs along its orientation, or between two points when the encoding leaves it none
@@ -6649,8 +6707,8 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
     // band term keys on the scale type, not the orientation)
     const ruleXOff = ruleDef.xOffset as number | undefined
     const ruleYOff = ruleDef.yOffset as number | undefined
-    if (xDef) update.x = { scale: 'x', field: aggFieldName(xDef), ...(positionalScaleType(mark, xDef) === 'band' ? { band: 0.5 } : {}), ...(ruleXOff !== undefined ? { offset: ruleXOff } : {}) }
-    if (yDef) update.y = { scale: 'y', field: aggFieldName(yDef), ...(positionalScaleType(mark, yDef) === 'band' ? { band: 0.5 } : {}), ...(ruleYOff !== undefined ? { offset: ruleYOff } : {}) }
+    if (xDef) update.x = { scale: 'x', field: aggFieldName(xDef), ...(positionalScaleType(mark, xDef) === 'band' ? { band: xDef.bandPosition ?? 0.5 } : {}), ...(ruleXOff !== undefined ? { offset: ruleXOff } : {}) }
+    if (yDef) update.y = { scale: 'y', field: aggFieldName(yDef), ...(positionalScaleType(mark, yDef) === 'band' ? { band: yDef.bandPosition ?? 0.5 } : {}), ...(ruleYOff !== undefined ? { offset: ruleYOff } : {}) }
     // (position2Ref: the secondary ref of a band scale sits at the middle of its band too)
     // (a rule spans an axis only along its orientation: a second channel on the other axis is not drawn)
     if (x2Def && ruleOrient !== 'vertical') update.x2 = secondaryRef(spec, mark, 'x', xDef, x2Def)
@@ -6665,16 +6723,17 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
     // filled rules paint with fill and drop the stroke; the rest pass through
     const ruleSize = markSize
     if (ruleSize != null) update.strokeWidth = { value: ruleSize }
+    if (sizeDef) update.strokeWidth = { scale: 'size', field: aggFieldName(sizeDef) }
     if (ruleDef.strokeWidth !== undefined && update.strokeWidth === undefined) update.strokeWidth = { value: ruleDef.strokeWidth }
     if (ruleDef.strokeDash !== undefined) update.strokeDash = { value: ruleDef.strokeDash }
     if (ruleDef.fillOpacity !== undefined) update.fillOpacity = { value: ruleDef.fillOpacity }
     if (markOpacity != null) update.opacity = { value: markOpacity }
     if (ruleDef.filled === true) {
-      update.fill = colorDef ? { scale: 'color', field: aggFieldName(colorDef) } : { value: markColor ?? ruleFill ?? cfgFill ?? cfgColorBlack }
+      update.fill = colorDef ? { scale: colorScale, field: aggFieldName(colorDef) } : { value: markColor ?? ruleFill ?? cfgFill ?? cfgColorBlack }
       delete update.stroke
     }
   } else if (mark === 'text') {
-    update.fill = colorDef ? { scale: 'color', field: aggFieldName(colorDef) } : { value: markColor ?? markFill ?? cfgFill ?? cfgColorBlack }
+    update.fill = colorDef ? { scale: colorScale, field: aggFieldName(colorDef) } : { value: markColor ?? markFill ?? cfgFill ?? cfgColorBlack }
     const textStroke = isObject(spec.mark) ? (spec.mark.stroke as string | undefined) : undefined
     const tStroke = textStroke ?? cfgStroke
     if (tStroke != null) update.stroke = { value: tStroke }
@@ -6744,7 +6803,7 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
     update.fill = markFill != null
       ? { value: markFill }
       : colorDef
-        ? { scale: 'color', field: aggFieldName(colorDef) }
+        ? { scale: colorScale, field: aggFieldName(colorDef) }
         : { value: markColor ?? cfgFill ?? cfgColor ?? C.blue }
     const arcStroke = isObject(spec.mark) ? (spec.mark.stroke as string | undefined) : undefined
     const aStroke = arcStroke ?? cfgStroke
@@ -6791,7 +6850,7 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
     // trail: a stroked-by-size line — fill default, size channel/def, sorted
     // along the dimension (probed)
     update.fill = colorDef
-      ? { scale: 'color', field: aggFieldName(colorDef) }
+      ? { scale: colorScale, field: aggFieldName(colorDef) }
       : { value: markColor ?? markFill ?? cfgFill ?? cfgColor ?? C.blue }
     if (markOpacity != null) update.opacity = { value: markOpacity }
     for (const p of ['strokeWidth', 'strokeDash', 'strokeCap', 'fillOpacity', 'blend'] as const) {
@@ -6816,13 +6875,13 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
     if (!filled) {
       update.fill = { value: 'transparent' }
       update.stroke = colorDef
-        ? { scale: 'color', field: aggFieldName(colorDef) }
+        ? { scale: colorScale, field: aggFieldName(colorDef) }
         : { value: (markDef?.stroke as string | undefined) ?? (cfgType?.stroke as string | undefined) ?? (cfgMark?.stroke as string | undefined) ?? markColor ?? C.blue }
     } else {
       update.fill = markDef?.fill != null
         ? { value: markDef.fill }
         : colorDef
-          ? { scale: 'color', field: aggFieldName(colorDef) }
+          ? { scale: colorScale, field: aggFieldName(colorDef) }
           : { value: (cfgType?.fill as string | undefined) ?? (cfgMark?.fill as string | undefined) ?? (cfgType?.color as string | undefined) ?? (cfgMark?.color as string | undefined) ?? markColor ?? C.blue }
       const stroke = markDef?.stroke ?? cfgType?.stroke ?? cfgMark?.stroke
       if (stroke != null) update.stroke = { value: stroke }
@@ -6880,7 +6939,7 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
   applyTextualChannels(update, spec, fields, (d) => d.stack === 'normalize' && (d.channel === 'theta' || d.channel === 'radius' ? polarStacked?.fieldChannel === d.channel : isStacked(d, mark, orient, fields)))
 
   // data-driven opacity, stroke width and stroke dash reach every mark
-  for (const prop of ['opacity', 'strokeWidth', 'strokeDash', 'angle']) {
+  for (const prop of ['opacity', 'fillOpacity', 'strokeOpacity', 'strokeWidth', 'strokeDash', 'angle']) {
     const def = fields.find((f) => f.channel === prop && f.field && !f.datumOnly)
     if (def && !(isObject(update[prop]) && 'scale' in (update[prop] as object))) update[prop] = { scale: prop, field: aggFieldName(def) }
   }
@@ -6941,7 +7000,7 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
   if (yOff !== undefined) for (const ch of mark === 'rule' ? ['y', 'yc'] : ['y', 'y2', 'yc']) withOffset(ch, yOff)
   // a stacked measure is positioned at the end of its stack on every mark that does not lay out the stack itself
   // (position-point.ts positionRef: `stack && channel === stack.fieldChannel` reads the `_end` field)
-  if (mark !== 'bar' && mark !== 'rect' && mark !== 'area' && mark !== 'arc') {
+  if (mark !== 'bar' && mark !== 'rect' && mark !== 'arc') {
     for (const pos of ['x', 'y'] as const) {
       const def = fields.find((f) => f.channel === pos && f.field && !f.datumOnly)
       if (!def || !isStacked(def, mark, orient, fields)) continue
@@ -6960,24 +7019,39 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
       }
     }
   }
+  // a band scale is read at the middle of its bands, or where the field's band position says (valueref.ts midPoint)
+  if (OFFSET_POINT_MARKS.has(mark)) {
+    for (const pos of ['x', 'y'] as const) {
+      const def = fields.find((f) => f.channel === pos && f.field && !f.datumOnly)
+      if (!def || positionalScaleType(mark, def) !== 'band') continue
+      for (const key of [pos, `${pos}c`]) {
+        const ref = update[key]
+        if (isObject(ref) && ref.scale === pos && ref.field !== undefined && ref.band === undefined) ref.band = def.bandPosition ?? 0.5
+      }
+    }
+  }
   // an xOffset / yOffset CHANNEL on a point-positioned mark (compile/mark/encode/offset.ts positionOffset): the position is
   // offset by the offset scale's value, centred in its band, and sits at the start of its own band (bandPosition 0). Bars and
   // rects lay their offset out through the band geometry above.
-  if (OFFSET_POINT_MARKS.has(mark)) {
+  // (a rect on a position that is neither banded nor spanning its unit is ranged between two points: it places the first like a point)
+  if (OFFSET_POINT_MARKS.has(mark) || mark === 'rect') {
     for (const [pos, offCh] of [['x', 'xOffset'], ['y', 'yOffset']] as const) {
+      if (mark === 'rect' && update[`${pos}2`] === undefined) continue
       const offDef = fields.find((f) => f.channel === offCh && f.field)
       const ref = (update[pos] ?? update[`${pos}c`]) as Record<string, unknown> | undefined
       if (!offDef || !ref || ref.scale !== pos || ref.field === undefined) continue
       delete ref.band
-      ref.offset = { scale: offCh, field: aggFieldName(offDef), ...(isDiscreteType(offDef.type) && ['bar', 'rect', 'image', 'rule', 'tick'].includes(mark) ? { band: 0.5 } : {}) }
+      ref.offset = { scale: offCh, field: aggFieldName(offDef), ...(offsetScaleTypeOf(offDef, mark) === 'band' ? { band: 0.5 } : {}) }
     }
   }
   // a binned field on a point-positioned mark sits at the middle of its bin (valueref.ts midPoint / interpolatedSignalRef:
   // bandPosition 0.5 over a continuous scale), not at the bin start; so does a binned size / opacity / ... through its scale,
   // and a time unit with a band position (the field's own, or the mark config's timeUnitBandPosition) sits at that point of its unit
-  if (BIN_MID_MARKS.has(mark)) {
-    const midpoint = (node: unknown, scaleName: string, start: string, end: string, bp: number): unknown => {
-      if (Array.isArray(node)) return node.map((x) => midpoint(x, scaleName, start, end, bp))
+  {
+    const midpoint = (node: unknown, scaleName: string, start: string, end: string, bp: number, withOffset: boolean): unknown => {
+      if (Array.isArray(node)) return node.map((x) => midpoint(x, scaleName, start, end, bp, withOffset))
+      // (an offset channel's value is the offset of its position's: read at the middle where the position is, at the start where a mark starts its band)
+      if (isObject(node) && isObject(node.offset) && node.scale !== scaleName) return withOffset ? { ...node, offset: midpoint(node.offset, scaleName, start, end, bp, false) } : node
       if (!isObject(node) || node.scale !== scaleName || node.field !== start) return node
       return {
         ...(bp === 1
@@ -6987,31 +7061,46 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
       }
     }
     for (const def of fields) {
-      if (!def.field || def.datumOnly || def.channel === 'row' || def.channel === 'column' || def.channel === 'facet') continue
-      const timeBand = def.tu && def.type === 'temporal' && (def.channel === 'x' || def.channel === 'y')
+      const polar = def.channel === 'theta' || def.channel === 'radius'
+      if (!def.field || def.datumOnly || !(SCALED_CHANNELS.has(def.channel) || (polar && POINT_DRAWN_MARKS.has(mark)))) continue
+      const positional = def.channel === 'x' || def.channel === 'y'
+      const timeBand = def.tu && def.type === 'temporal'
       if (!def.bin && !timeBand) continue
       // (a pre-binned position with no second channel has no bin to take the middle of: it is read as the field it is)
       if (def.bin && isPrebinned(def) && !fields.some((g) => g.channel === `${def.channel}2`)) continue
-      const bp = def.bin ? (def.bandPosition ?? 0.5) : bandPositionOf(spec, mark, def, fields.some((g) => g.channel === `${def.channel}2`))
-      if (!bp) continue
-      const scaleName = def.channel
-      const discrete = def.channel === 'x' || def.channel === 'y'
+      // (positionOffset: an offset is read at the middle of its unit, wherever the mark that carries it is centred)
+      const bp = def.channel === 'xOffset' || def.channel === 'yOffset' ? 0.5 : def.bin ? (def.bandPosition ?? 0.5) : bandPositionOf(spec, mark, def, fields.some((g) => g.channel === `${def.channel}2`))
+      const scaleName = def.paint ?? def.channel
+      // (a scale over a list of values is read at the value, a continuous or cutting one at the point between the ends)
+      const discrete = positional
         ? ['band', 'point'].includes(positionalScaleType(mark, def))
-        : def.channel === 'color' ? (def.scale?.type === undefined || def.scale.type === 'bin-ordinal') && def.type === 'quantitative'
-          : isDiscreteType(def.type) || def.channel === 'shape' || def.channel === 'strokeDash'
+        : LISTED_DOMAIN_SCALES.has(def.channel === 'color' ? colorScaleTypeOf(def) : nonPositionScaleType(def.channel, def))
       if (discrete) continue
       const names = def.bin ? binNames(def.binParams!, def.field) : { start: timeUnitField(def), end: `${timeUnitField(def)}_end` }
-      if (usesBinMid(spec, def, mark, fields)) {
-        // (valueref.ts midPoint: a stacked, imputed dimension reads the precomputed bin middle)
-        for (const key of Object.keys(update)) {
-          const ref = update[key]
-          if (isObject(ref) && ref.scale === scaleName && ref.field === names.start) update[key] = { ...ref, field: binMidName(def) }
+      if (positional && isImputedDimension(spec, def, mark, fields)) {
+        // (valueref.ts midPoint: a stacked, imputed dimension reads the precomputed bin middle, and a time unit as it is)
+        if (def.bin) {
+          for (const key of Object.keys(update)) {
+            const ref = update[key]
+            if (isObject(ref) && ref.scale === scaleName && ref.field === names.start) update[key] = { ...ref, field: binMidName(def) }
+          }
         }
         continue
       }
+      // (pointPosition: a position with an offset channel stands at the start of its unit, the offset places the mark within it)
+      if (!bp || (positional && fields.some((o) => o.channel === `${def.channel}Offset` && o.field && !o.datumOnly))) continue
       // (a tick spans its bin along its size axis; only the position across it is the middle)
-      for (const key of Object.keys(update)) if (mark !== 'tick' || key === 'xc' || key === 'yc') update[key] = midpoint(update[key], scaleName, names.start, names.end, bp)
+      for (const key of Object.keys(update)) if (!positional || !RECT_BASED_MARKS.has(mark) || key === 'xc' || key === 'yc') update[key] = midpoint(update[key], scaleName, names.start, names.end, bp, OFFSET_POINT_MARKS.has(mark) || key === 'xc' || key === 'yc' || (mark === 'rect' && (key === 'x' || key === 'y') && update[`${key}2`] !== undefined))
     }
+  }
+  // a band scale is read at the middle of its bands (valueref.ts midPoint), or where the field's band position says
+  for (const def of fields) {
+    if (!def.field || def.datumOnly || def.scale?.type !== 'band' || !SCALED_CHANNELS.has(def.channel) || def.channel === 'x' || def.channel === 'y') continue
+    const place = (node: unknown): void => {
+      if (Array.isArray(node)) { node.forEach(place); return }
+      if (isObject(node) && node.scale === def.channel && node.field !== undefined && node.band === undefined) node.band = def.bandPosition ?? 0.5
+    }
+    for (const v of Object.values(update)) place(v)
   }
   // arc polar offsets apply to the angles/radius channels (those a polar channel drives carry theirs already)
   const thetaOff = fields.some((f) => f.channel === 'theta' && f.field) ? undefined : markDefP?.thetaOffset as number | undefined
@@ -7077,7 +7166,7 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
   for (const f of crossPaint) update[f.paint!] = { field: aggFieldName(f) }
   for (const f of fields) {
     if (!f.noScale) continue
-    const scaleName = f.channel === 'fill' || f.channel === 'stroke' ? 'color' : f.channel
+    const scaleName = f.paint ?? f.channel
     const strip = (v: unknown): void => {
       if (Array.isArray(v)) { v.forEach(strip); return }
       if (isObject(v) && v.scale === scaleName) delete v.scale
@@ -7249,10 +7338,14 @@ function offsettedRectFormulas(startField: string, rectBandPosition: number, tu:
 function binMidName(def: FieldDef): string {
   return `${binNames(def.binParams!, def.field).start}_mid`
 }
-function usesBinMid(spec: VLSpec, def: FieldDef | undefined, mark: string, fields: FieldDef[]): boolean {
-  if (!def || !def.bin || (def.channel !== 'x' && def.channel !== 'y') || !(mark === 'area' || mark === 'line' || mark === 'trail')) return false
+/** stack.ts impute: a dimension of a stacked area / line / trail is zero-filled over its own values, read as they are (a bin by its middle). */
+function isImputedDimension(spec: VLSpec, def: FieldDef | undefined, mark: string, fields: FieldDef[]): boolean {
+  if (!def || (def.channel !== 'x' && def.channel !== 'y') || !(mark === 'area' || mark === 'line' || mark === 'trail')) return false
   const orient = inferOrient(spec, mark, spec.mark, fields)
   return fields.some((f) => (f.channel === 'x' || f.channel === 'y') && f.channel !== def.channel && isStacked(f, mark, orient, fields))
+}
+function usesBinMid(spec: VLSpec, def: FieldDef | undefined, mark: string, fields: FieldDef[]): boolean {
+  return !!def?.bin && isImputedDimension(spec, def, mark, fields)
 }
 
 /** vega-lite `getMarkConfig(prop, mark, config)`: config.<mark>.<prop> over config.mark.<prop>. */
@@ -7331,8 +7424,7 @@ function positionAndSizeRefs(ch: 'x' | 'y', def: FieldDef | undefined, spec: VLS
   const hasSecondary = fields.some((f) => f.channel === `${ch}2` && f.field)
   if (hasSecondary) return null
   const scaleType = def ? positionalScaleType(mark, def) : undefined
-  const offsetBand = offDef && isDiscreteType(offDef.type) && ['bar', 'rect', 'image', 'rule', 'tick'].includes(mark)
-  const offsetType = offDef ? (isDiscreteType(offDef.type) ? (offsetBand ? 'band' : 'point') : 'linear') : undefined
+  const offsetType = offDef ? offsetScaleTypeOf(offDef, mark) : undefined
   // channeldef.ts getBandSize
   let band: number
   if (absolute) band = 1
@@ -7350,6 +7442,8 @@ function positionAndSizeRefs(ch: 'x' | 'y', def: FieldDef | undefined, spec: VLS
     const bandwidth = band !== 1 ? `${band} * bandwidth('${sizeScale}')` : `bandwidth('${sizeScale}')`
     size = { signal: minBandSize ? `max(${minBandSize}, ${bandwidth})` : bandwidth }
   } else if (!sizeScale) size = { mult: band, field: { group: sizeProp } }
+  // (an offset that is not laid out in bands leaves the mark a default step wide)
+  else if (offDef) size = { value: C.defaultStep }
   else return null
   // the aligned position channel
   const alignProp = ch === 'x' ? 'align' : 'baseline'
@@ -7846,7 +7940,7 @@ function applyNonPositionConstants(update: Record<string, unknown>, spec: VLSpec
           if (cf !== target.field && !target.fromCondition) {
             throw new VLCompileError(`encoding.${channel}.condition.field: a conditional field must be the channel's own field or its only conditional field`)
           }
-          entry.scale = target.channel
+          entry.scale = target.paint ?? target.channel
           entry.field = aggFieldName(target)
         } else if (c.datum !== undefined && DATUM_CONDITION_CHANNELS.has(channel)) {
           const target = fields.find((f) => f.datumOnly && f.channel === channel)
@@ -7889,7 +7983,7 @@ function channelInvalidMode(spec: VLSpec, mark: string, channel: string): Invali
 }
 
 const COUNTING_AGGREGATES = new Set(['count', 'valid', 'missing', 'distinct'])
-const INVALID_CHANNELS = ['x', 'y', 'theta', 'radius', 'color', 'size', 'opacity', 'strokeWidth', 'angle', 'xOffset', 'yOffset']
+const INVALID_CHANNELS = ['x', 'y', 'theta', 'radius', 'color', 'size', 'opacity', 'fillOpacity', 'strokeOpacity', 'strokeWidth', 'angle', 'xOffset', 'yOffset']
 
 /** The fields (keyed by the raw field, the last def winning; by the field they read, a time unit's or a bin's included, for `byName`, which the paths that break on invalid values do) whose continuous scale can meet an invalid value. */
 function invalidCandidates(spec: VLSpec, fields: FieldDef[], mark: string, byName = false): Array<{ def: FieldDef; mode: InvalidMode }> {
@@ -8039,9 +8133,9 @@ function showInvalidValues(spec: VLSpec, fields: FieldDef[], mark: string, scale
     for (const { def } of cands) {
       const ch = def.channel
       const scaleCh = ch === 'x2' || ch === 'y2' ? ch[0]! : ch
-      if ((scaleCh === 'x' || scaleCh === 'y') ? !positional : !['color', 'size', 'opacity', 'strokeWidth', 'angle'].includes(ch)) continue
+      if ((scaleCh === 'x' || scaleCh === 'y') ? !positional : !['color', 'size', 'opacity', 'fillOpacity', 'strokeOpacity', 'strokeWidth', 'angle'].includes(ch)) continue
       // (a centred bar position is `xc` / `yc`)
-      const prop = ch === 'color' ? (isObject(update.fill) && (update.fill as Record<string, unknown>).scale === 'color' || Array.isArray(update.fill) ? 'fill' : 'stroke') : ch === 'size' ? vgPropFor('size', mark, filled) : (ch === 'x' || ch === 'y') && update[ch] === undefined && update[`${ch}c`] !== undefined ? `${ch}c` : ch
+      const prop = ch === 'color' ? (isObject(update.fill) && ['color', 'fill'].includes(String((update.fill as Record<string, unknown>).scale)) || Array.isArray(update.fill) ? 'fill' : 'stroke') : ch === 'size' ? vgPropFor('size', mark, filled) : (ch === 'x' || ch === 'y') && update[ch] === undefined && update[`${ch}c`] !== undefined ? `${ch}c` : ch
       const cur = update[prop]
       const main = (Array.isArray(cur) ? cur[cur.length - 1] : cur) as Record<string, unknown> | undefined
       const sc = scales.find((x) => x.name === scaleCh)

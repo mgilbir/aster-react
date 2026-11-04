@@ -129,8 +129,7 @@ vega-lite supports and is not here compiles to the same Vega.)
   emits marks that read a dataset it never defines); layers, concats, facets, composite marks
   (boxplot / errorbar / errorband) and point / line overlays are refused, as are `bind` / `value` on the timer
   selection.
-- Data-driven channels without a scale / legend implementation yet: `fillOpacity` and `strokeOpacity` (constants and
-  conditions work); `key`.
+- Data-driven channels without a scale / legend implementation yet: `key`.
 - Bins and time units: `timeUnit.maxbins`, errorbar / errorband over a binned channel, and the
   `timeUnitBandPosition` / `timeUnitBandSize` mark keys.
 - Scales and encodings: `scale: null` and channel-level `band`; `size` conditions on bars and ticks (a size constant

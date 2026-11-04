@@ -37,7 +37,6 @@ const REFUSED: Array<[string, Record<string, unknown>]> = [
   ['a `time` channel needs a single\n  top-level unit', { data, hconcat: [{ params: [timer], transform: frame, mark: 'point', encoding: { x: q('b'), time: q('t') } }] }],
   ['composite marks', unit('boxplot', { x: n('a'), y: q('b'), time: q('t') }, { params: [timer], transform: frame })],
   ['`bind` / `value` on the timer', unit('point', { x: q('b'), time: q('t') }, { params: [{ ...timer, bind: { input: 'range' } }], transform: frame })],
-  ['`fillOpacity` and `strokeOpacity`', unit('point', { x: q('b'), fillOpacity: q('c') })],
   ['`key`', unit('point', { x: q('b'), key: n('a') })],
   ['`timeUnit.maxbins`', unit('bar', { x: { field: 'd', type: 'temporal', timeUnit: { maxbins: 5 } }, y: q('c') })],
   ['errorbar / errorband over a binned channel', unit('errorbar', { x: { field: 'b', type: 'quantitative', bin: 'binned' }, y: q('c') })],
@@ -60,6 +59,7 @@ const REFUSED: Array<[string, Record<string, unknown>]> = [
 
 /** Features the README used to list as refused, that compile now. */
 const COMPILES: Array<[string, Record<string, unknown>]> = [
+  ['`fillOpacity` and `strokeOpacity` fields', unit('point', { x: q('b'), fillOpacity: q('c'), strokeOpacity: n('a') })],
   ['strokeDash', unit('line', { x: q('b'), y: q('c'), strokeDash: n('a') })],
   ['angle', unit('point', { x: q('b'), angle: q('c') })],
   ['bin: "binned"', unit('bar', { x: { field: 'b', type: 'quantitative', bin: 'binned' }, x2: { field: 'c' }, y: q('c') })],

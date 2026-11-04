@@ -51,7 +51,6 @@ const REJECTED: Array<[string, unknown, RegExp]> = [
   // --- channels (C35)
   ['an unknown channel', unit({ encoding: { x: xq, banana: yq } }), /unknown encoding channel "banana"/],
   ['a valid but unimplemented channel', unit({ encoding: { x: xq, key: yq } }), /key.*not supported/],
-  ['a data-driven fillOpacity', unit({ encoding: { x: xq, fillOpacity: cn } }), /fillOpacity/],
   ['fill together with color', unit({ mark: 'bar', encoding: { x: cn, color: cn, fill: cn } }), /together with encoding\.color/],
   ['an array on a single-def channel', unit({ encoding: { x: [xq] } }), /does not accept an array/],
   ['a channel def without field/value/datum', unit({ encoding: { x: { type: 'quantitative' } } }), /needs `field`/],

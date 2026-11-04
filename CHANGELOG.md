@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+- **`@aster/vl`: a scale type a channel can use is the scale the field has, and marks sit where vega-lite puts them.** The #87 fallback
+  covered the requests a channel or the data cannot use; these valid ones were ignored or answered with another scale: colour `point`
+  and `bin-ordinal`; `ordinal` and `band` on size, opacity, stroke width and angle (a band scale is read at the middle of its bands);
+  `quantile`, `quantize` and `threshold` on shape and stroke dash (and on every numeric channel, whose range is cut into classes only
+  for size); a temporal `xOffset` (a time scale, over the span of its time unit); `log` on a binned position. The scales of `fill` and
+  `stroke` are named `fill` and `stroke`; data-driven `fillOpacity` and `strokeOpacity` have their scales (no legend, as in vega-lite);
+  the legend of a log, symlog, quantile or threshold scale thins its labels; a legend over a temporal field read through a scale that is
+  not a time scale formats its labels as times. Positions: `band` on point marks sits at the middle of the band (or at the field's
+  `bandPosition`; a rule honours it too), a rect-based mark on a `point` scale is a default step wide, an `xOffset` on a continuous
+  position is dropped (it has nothing to nest in), a point offset leaves a bar its default width, a layer that offsets a position
+  does not change the step the first layer gave it, a binned or time-unit offset is read at the middle of its unit, a time-unit colour
+  or size on a bar is read at the middle of the unit, a stacked area/line over a discrete dimension is imputed, and a datum is not a
+  typed field when the orientation of a tick or bar is decided. Pinned by generated differentials against vega-lite 6.4.3: every
+  channel x every scale type it honours x every data type (`vl-honoured-scale-types`) and every mark x position x scale type x band
+  position, offsets, time-unit channels and datums (`vl-honoured-positions`); the compared output now includes compiled axes and legends.
+
 - **`@aster/core`: a group mark's transforms run on its items, as vega runs them.** Only a group's `formula` was run, and only to see
   whether it threw; what any transform wrote was dropped. The items of a group mark are now encoded in the scope the mark is in (the
   item's own data sets and projections are its content's, which its encode cannot read), then every transform of the mark runs on them
