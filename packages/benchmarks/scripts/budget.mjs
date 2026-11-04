@@ -187,8 +187,9 @@ const BUDGETS = {
   // The light chart (`@aster/react/lite`): SVG only, no canvas renderer; alone and with the `interaction` capability.
   '@aster/react SvgChart': 178.7 * 1024,
   '@aster/react SvgChart + interaction': 196.0 * 1024,
-  // Base + the VL compiler (opt-in: `import '@aster/react/vl'`).
-  '@aster/react Chart + VL': 302.9 * 1024,
+  // Base + the VL compiler (opt-in: `import '@aster/react/vl'`). 303.1 measured on a clean build (302.4 on origin/main 42aceda): the one
+  // scale-type rule of every channel, the offset and band-position rules and the scale of the opacities add 0.7.
+  '@aster/react Chart + VL': 303.6 * 1024,
 }
 
 const THIS_DIR = dirname(fileURLToPath(import.meta.url))
