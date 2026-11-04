@@ -4,6 +4,9 @@ const ALL_MARK_TYPES = ['arc', 'area', 'bar', 'circle', 'geoshape', 'image', 'li
 
 const isObject = (v: unknown): v is Record<string, unknown> => v !== null && typeof v === 'object' && !Array.isArray(v)
 
+/** A field definition, as vega-lite tells one: it names a `field`, or it counts the records. */
+const isFieldDef = (def: unknown): def is Record<string, unknown> => isObject(def) && ('field' in def || def.aggregate === 'count')
+
 /** channel.ts getSupportedMark: the marks that draw a channel (`always`), or draw it only for pre-binned data (`binned`). */
 function supportedMarks(channel: string): Record<string, 'always' | 'binned'> | undefined {
   const always = (marks: string[]): Record<string, 'always'> => Object.fromEntries(marks.map((m) => [m, 'always' as const]))
@@ -37,10 +40,11 @@ export function markChannelCompatible(encoding: Record<string, unknown>, channel
   const supported = table[image ? 'image' : mark]
   if (!supported) return false
   if (supported === 'binned') {
-    // circle, point, square and tick only take x2 / y2 when x / y is pre-binned data and they say where the bin ends
-    const primary = encoding[channel.slice(0, -1)]
+    // circle, point, square and tick only take an end when the position it ends is pre-binned data and the end says where the bin
+    // ends. The position x2 ends is x; every other end (y2, and longitude2 and latitude2 too) is read against y.
+    const primary = encoding[channel === 'x2' ? 'x' : 'y']
     const bin = isObject(primary) ? primary.bin : undefined
-    return isObject(primary) && typeof primary.field === 'string' && isObject(encoding[channel]) && typeof (encoding[channel] as Record<string, unknown>).field === 'string' && (bin === 'binned' || (isObject(bin) && bin.binned === true))
+    return isFieldDef(primary) && isFieldDef(encoding[channel]) && (bin === 'binned' || (isObject(bin) && bin.binned === true))
   }
   return true
 }

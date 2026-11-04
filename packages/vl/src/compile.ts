@@ -3524,7 +3524,8 @@ function parseEncodingFields(encoding: Record<string, unknown>, config?: unknown
       }
     }
     // pre-binned data: the bins' ends are the secondary channel's field
-    if (isPrebinned(f)) {
+    // (only on x and y: vega-lite reads a pre-binned longitude or latitude as the plain field it projects)
+    if (isPrebinned(f) && (f.channel === 'x' || f.channel === 'y')) {
       // (a second channel the mark does not draw was dropped above: it says nothing about the bins; an aggregated one says it by its result)
       const second = fields.find((g) => g.channel === `${f.channel}2` && g.field && !g.datumOnly)
       if (second !== undefined) f.binParams = { ...f.binParams!, end: aggFieldName(second) }
@@ -5443,7 +5444,11 @@ function potentialStackChannel(mark: string, orient: string, fields: FieldDef[])
 /** stack.ts STACK_BY_DEFAULT_MARKS: the marks that stack a quantitative position unless told not to. */
 const STACK_BY_DEFAULT_MARKS: ReadonlySet<string> = new Set(['bar', 'area', 'arc'])
 
+const STACKABLE_CHANNELS: ReadonlySet<string> = new Set(['x', 'y', 'theta', 'radius'])
+
 function isStacked(def: FieldDef, mark: string, orient: string, allFields?: FieldDef[]): boolean {
+  // (stack.ts: only a position that has a scale stacks; a stack on any other channel, a longitude included, changes nothing)
+  if (!STACKABLE_CHANNELS.has(def.channel)) return false
   // an explicit stack applies to any mark (the sweep's point stack cases);
   // bar/area additionally stack by default.
   const explicit = def.stack != null && def.stack !== false && def.stack !== 'wiggle'
