@@ -54,10 +54,7 @@ const ALL_CHANNELS = set(
     'color fill stroke opacity fillOpacity strokeOpacity strokeWidth strokeDash size angle shape text tooltip href url description key detail order time ' +
     'row column facet',
 )
-/** Schema channels compile.ts does not consume (everything else in ALL_CHANNELS is supported; the rest throws). */
-const UNSUPPORTED_CHANNELS = set('key')
 const GEO_CHANNELS = set('longitude latitude longitude2 latitude2')
-const SUPPORTED_CHANNELS: ReadonlySet<string> = new Set([...ALL_CHANNELS].filter((c) => !UNSUPPORTED_CHANNELS.has(c)))
 
 const AGG_OPS = set(
   'argmax argmin average count distinct max mean median min missing product q1 q3 ci0 ci1 stderr stdev stdevp sum valid values variance variancep exponential exponentialb',
@@ -936,7 +933,6 @@ function validateEncoding(enc: unknown, path: string, where: 'unit' | 'layer', m
   for (const [ch, def] of Object.entries(enc)) {
     const at = `${path}.${ch}`
     if (!ALL_CHANNELS.has(ch)) fail(at, `unknown encoding channel "${ch}"`)
-    if (!SUPPORTED_CHANNELS.has(ch)) fail(at, `encoding channel "${ch}" is valid Vega-Lite but is not supported by @aster/vl`)
     if (def === null) continue
     if ((ch === 'row' || ch === 'column' || ch === 'facet') && where === 'layer') fail(at, 'facet channels are not allowed in a layer encoding (use the facet operator)')
     if (ch === 'detail' || ch === 'order' || ch === 'tooltip' || ch === 'href' || ch === 'description') {

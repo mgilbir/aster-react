@@ -49,7 +49,6 @@ const REJECTED: Array<[string, unknown, RegExp]> = [
   ['a repeat reference outside a repeat', unit({ encoding: { x: { field: { repeat: 'row' }, type: 'quantitative' } } }), /outside a matching `repeat`/],
   // --- channels (C35)
   ['an unknown channel', unit({ encoding: { x: xq, banana: yq } }), /unknown encoding channel "banana"/],
-  ['a valid but unimplemented channel', unit({ encoding: { x: xq, key: yq } }), /key.*not supported/],
   ['an array on a single-def channel', unit({ encoding: { x: [xq] } }), /does not accept an array/],
   ['a channel def without field/value/datum', unit({ encoding: { x: { type: 'quantitative' } } }), /needs `field`/],
   ['an unknown type', unit({ encoding: { x: { field: 'x', type: 'integer' } } }), /unknown type/],
@@ -175,6 +174,7 @@ const ACCEPTED: Array<[string, unknown]> = [
   ['a facet inside a facet', { data: DATA, facet: { column: cn }, spec: { facet: { row: { field: 'g', type: 'nominal' } }, spec: unit() } }],
   ['a datum on a size (it was refused as "a datum on an unsupported channel")', unit({ encoding: { x: xq, y: yq, size: { datum: 4 } } })],
   ['scale: null on x (it was refused)', unit({ encoding: { x: { ...xq, scale: null } } })],
+  ['a key channel (it was refused as "a valid but unimplemented channel")', unit({ encoding: { x: xq, key: yq } })],
   ['a selection declared in two views', { data: DATA, hconcat: [unit({ params: [{ name: 'brush', select: 'interval' }] }), unit({ params: [{ name: 'brush', select: 'interval' }] })] }],
 ]
 

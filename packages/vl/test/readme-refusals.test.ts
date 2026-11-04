@@ -37,7 +37,6 @@ const REFUSED: Array<[string, Record<string, unknown>]> = [
   ['a `time` channel needs a single\n  top-level unit', { data, hconcat: [{ params: [timer], transform: frame, mark: 'point', encoding: { x: q('b'), time: q('t') } }] }],
   ['composite marks', unit('boxplot', { x: n('a'), y: q('b'), time: q('t') }, { params: [timer], transform: frame })],
   ['`bind` / `value` on the timer', unit('point', { x: q('b'), time: q('t') }, { params: [{ ...timer, bind: { input: 'range' } }], transform: frame })],
-  ['`key`', unit('point', { x: q('b'), key: n('a') })],
   ['`timeUnit.maxbins`', unit('bar', { x: { field: 'd', type: 'temporal', timeUnit: { maxbins: 5 } }, y: q('c') })],
   ['errorbar / errorband over a binned channel', unit('errorbar', { x: { field: 'b', type: 'quantitative', bin: 'binned' }, y: q('c') })],
   ['`timeUnitBandPosition`', unit({ type: 'bar', timeUnitBandPosition: 0.5 }, { x: { field: 'd', type: 'temporal', timeUnit: 'month' } })],
@@ -86,6 +85,7 @@ const COMPILES: Array<[string, Record<string, unknown>]> = [
   ['a point mark in a facet', { data, facet: { row: { field: 'a' } }, spec: { ...proj, mark: 'point', encoding: lonlat } }],
   ['`scale: null` on a position', unit('point', { x: { ...q('b'), scale: null } })],
   ['a `datum` on a size', unit('point', { x: q('b'), size: { datum: 2 } })],
+  ['the key channel', unit('point', { x: q('b'), key: n('a') })],
   ['a selection on a named view', { data, params: [sel], hconcat: [{ name: 'v', mark: 'point', encoding: { x: q('b') } }] }],
 ]
 
@@ -104,7 +104,7 @@ describe('packages/vl/README.md "Throws (not supported)" matches the compiler', 
   }
 
   it('does not list what used to be refused', () => {
-    for (const stale of ['`strokeDash`', '`angle`', '`binned: true`', '`bin: "binned"`', '`sequence`', 'horizontal\n  boxplots', '`params: true`', '`keyvals` ranges', 'named view', 'path mark with an overlay', 'a `datum` on a channel other than the positions', '`scale: null` on a channel other than']) {
+    for (const stale of ['`strokeDash`', '`angle`', '`binned: true`', '`bin: "binned"`', '`sequence`', 'horizontal\n  boxplots', '`params: true`', '`keyvals` ranges', 'named view', 'path mark with an overlay', 'a `datum` on a channel other than the positions', '`scale: null` on a channel other than', 'scale / legend implementation yet']) {
       expect(LIST, stale).not.toContain(stale)
     }
   })

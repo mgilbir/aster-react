@@ -53,7 +53,7 @@ an expression or a generated dataset/signal/scale name.
 - Transforms: filter, calculate, bin, timeUnit, aggregate, joinaggregate, window, stack, fold,
   flatten, pivot, impute, lookup, sample, density, loess, regression, quantile, extent.
 - Channels: x, y, x2, y2, xOffset, yOffset, xError(2), yError(2), theta, theta2, radius, radius2, color, fill,
-  stroke, opacity, size, strokeWidth, shape, text, tooltip, href, url, description, detail, order,
+  stroke, opacity, size, strokeWidth, shape, text, tooltip, href, url, description, detail, key, order,
   row, column, facet. `size` drives points, text (font size), lines, ticks, bars and trails.
 - `config.scale`: every key that reaches the output: band / bar / rect / tick padding, nested- and
   offset-band padding, `pointPadding`, `continuousPadding`, `round`, `clamp`, `zero`, `xReverse`,
@@ -129,7 +129,6 @@ vega-lite supports and is not here compiles to the same Vega.)
   emits marks that read a dataset it never defines); layers, concats, facets, composite marks
   (boxplot / errorbar / errorband) and point / line overlays are refused, as are `bind` / `value` on the timer
   selection.
-- Data-driven channels without a scale / legend implementation yet: `key`.
 - Bins and time units: `timeUnit.maxbins`, errorbar / errorband over a binned channel, and the
   `timeUnitBandPosition` / `timeUnitBandSize` mark keys.
 - Channel definitions vega-lite 6.4.3 compiles that are not implemented yet: a `datum`

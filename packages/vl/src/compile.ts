@@ -3544,9 +3544,11 @@ function markSort(spec: VLSpec, fields: FieldDef[], mark: string, orient: string
   const orderRaw = enc.order
   if (isObject(orderRaw) && orderRaw.value !== undefined && (orderRaw.value === null || orderRaw.value === false)) return undefined
   if (orderRaw === undefined && (md.order === false || md.order === null)) return undefined
-  const orderDefs = fields.filter((f) => f.channel === 'order' && f.field && !f.datumOnly)
-  const stacked = fields.some((f) => isStacked(f, mark, orient, fields))
-  if (orderDefs.length && !stacked) {
+  const orderDefs = fields.filter((f) => f.channel === 'order' && f.field && !f.datumOnly && !f.fromCondition)
+  // (a stack, cartesian or polar, is what an order field orders)
+  const stacked = fields.some((f) => isStacked(f, mark, orient, fields)) || polarStackOf(fields, mark) !== undefined
+  // (an order list that kept no field definition sorts by nothing: vega-lite's sortParams of an empty list)
+  if ((orderDefs.length || Array.isArray(orderRaw)) && !stacked) {
     return { field: orderDefs.map((f) => dref(aggFieldName(f))), order: orderDefs.map((f) => (f.sort === 'descending' ? 'descending' : 'ascending')) }
   }
   if (mark === 'line' || mark === 'area' || mark === 'trail') {
@@ -3575,12 +3577,13 @@ function pathGroupingKeys(spec: VLSpec, fields: FieldDef[], mark: string): strin
         if (offsetDef && mainDef && !mainDef.aggregate && !offsetDef.aggregate && aggFieldName(mainDef) !== aggFieldName(offsetDef)) add(aggFieldName(mainDef))
         break
       }
+      // (a field of a condition is not a field definition of these channels: it groups nothing)
       case 'order':
         if (mark === 'line' || mark === 'trail') break
-        for (const d of defs) if (!d.aggregate) add(aggFieldName(d))
+        for (const d of defs) if (!d.aggregate && !d.fromCondition) add(aggFieldName(d))
         break
       case 'detail': case 'key':
-        for (const d of defs) if (!d.aggregate) add(aggFieldName(d))
+        for (const d of defs) if (!d.aggregate && !d.fromCondition) add(aggFieldName(d))
         break
       case 'size':
         if (mark === 'trail') break
@@ -3777,8 +3780,9 @@ function stackByFields(fields: FieldDef[], dimensionChannel: 'x' | 'y'): FieldDe
 
 /** vega-lite's stack sort: the `order` channel when present, else the stack-by fields (descending for y, ascending otherwise). */
 function stackSortParams(fields: FieldDef[], stackBy: FieldDef[], measureChannel: string, enc: Record<string, unknown> = {}): { field: string[]; order: string[] } {
-  const orderDefs = fields.filter((f) => f.channel === 'order' && f.field && !f.datumOnly)
-  if (orderDefs.length) {
+  // (an order of field definitions, an empty list of them included, is the stack's order; the field of a condition is not one)
+  const orderDefs = fields.filter((f) => f.channel === 'order' && f.field && !f.datumOnly && !f.fromCondition)
+  if (orderDefs.length || Array.isArray(enc.order)) {
     return { field: orderDefs.map((f) => aggFieldName(f)), order: orderDefs.map((f) => (f.sort === 'descending' ? 'descending' : 'ascending')) }
   }
   // (stack.ts isOrderOnlyDef: an `order` def with only a `sort` gives the direction of the default stack order)
@@ -6769,6 +6773,17 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
   // `value` is the constant, `condition` entries ({test, value|field}) come
   // first, then the main reference (vega-lite wrapCondition)
   applyNonPositionConstants(update, spec, fields, mark)
+  // zindex.ts: an order that is a value draws the items of a mark that is not a path in that order, its conditions first (a
+  // condition's own value or, for a condition that gives a field, none)
+  {
+    const order = isObject(spec.encoding) ? (spec.encoding as Record<string, unknown>).order : undefined
+    if (mark !== 'line' && mark !== 'area' && mark !== 'trail' && isObject(order) && 'value' in order) {
+      const conds = (order.condition === undefined ? [] : ([] as unknown[]).concat(order.condition)) as Record<string, unknown>[]
+      const entries = conds.map((c) => ({ test: conditionTest(spec, c), ...(c.value !== undefined ? constRef(c.value) : {}) }))
+      const zindex = withConditions(entries, order.value !== undefined ? constRef(order.value) : {})
+      if (zindex !== undefined) update.zindex = zindex
+    }
+  }
 
   // mark-def paint/geometry properties pass straight through to the mark
   // encode (vega-lite's getMarkPropOrConfig resolution): the definition wins
@@ -6950,6 +6965,11 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
     from: { data: dataName },
     encode: { update },
   }
+  // mark.ts getMarkGroup: the key channel's field is the key Vega joins the mark's items by
+  {
+    const key = isObject(spec.encoding) ? (spec.encoding as Record<string, unknown>).key : undefined
+    if (isObject(key) && typeof key.field === 'string') markSpec.key = key.field
+  }
   // markDef.clip / markDef.aria are properties of the Vega mark itself
   if (isObject(spec.mark)) {
     if (typeof spec.mark.clip === 'boolean') markSpec.clip = spec.mark.clip
@@ -7099,6 +7119,7 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
         name: 'marks',
         type: markSpec.type,
         style: markSpec.style,
+        ...(markSpec.key !== undefined ? { key: markSpec.key } : {}),
         ...(markSpec.clip !== undefined ? { clip: markSpec.clip } : {}),
         ...(markSpec.aria !== undefined ? { aria: markSpec.aria } : {}),
         ...(markSortSpec ? { sort: markSortSpec } : {}),
@@ -7931,7 +7952,15 @@ function initUnitEncoding(spec: VLSpec, mark: string): void {
   const image = isObject(spec.mark) && spec.mark.$image === true
   const shadowed = 'color' in enc && (markIsFilled(spec, mark) ? 'fill' : 'stroke') in enc
   const kept = Object.entries(enc).filter(([ch]) => markChannelCompatible(enc, ch, mark, image) && !(ch === 'color' && shadowed))
-  if (kept.length !== Object.keys(enc).length) spec.encoding = Object.fromEntries(kept)
+  // detail, and an order that is not a value (nor a sort alone), are lists of field definitions: anything else in them (a datum, a
+  // condition with no value) is dropped, so an order of nothing but that is an empty list
+  const fieldDefs = (def: unknown): unknown[] => ([] as unknown[]).concat(def).filter((d) => isObject(d) && ('field' in d || d.aggregate === 'count'))
+  const listed = kept.map(([ch, def]): [string, unknown] => {
+    if (ch === 'detail' && def != null) return [ch, fieldDefs(def)]
+    if (ch === 'order' && isObject(def) && !('value' in def) && !('field' in def) && !(def.sort !== undefined && def.aggregate === undefined && def.condition === undefined && def.datum === undefined)) return [ch, fieldDefs(def)]
+    return [ch, def]
+  })
+  if (listed.some(([ch, def], i) => def !== enc[ch] || kept[i]![1] !== def) || kept.length !== Object.keys(enc).length) spec.encoding = Object.fromEntries(listed)
 }
 
 // --- invalid values (vega-lite compile/invalid/*, data/filterinvalid.ts, mark/encode/defined.ts) -----------
