@@ -6,12 +6,13 @@
  */
 import { describe, expect, it } from 'vitest'
 import * as vega from 'vega'
-import { TRANSFORM_TYPES } from '../../core/src/transform-names.ts'
+import { TRANSFORM_TYPES, TUPLE_MAKING_TRANSFORMS } from '../../core/src/transform-names.ts'
 import { transformParams } from '../../core/src/transform-params.ts'
 import { asterOutcome, type Spec, vegaOutcome } from './expression-sites.mts'
 
-interface Param { name: string; type: string; expr?: boolean; params?: Array<{ params: Param[] }>; array?: boolean }
-const definition = (type: string): { params: Param[] } => (vega as unknown as { definition(t: string): { params: Param[] } }).definition(type)
+interface Param { name: string; type: string; expr?: boolean; params?: Array<{ params: Param[] }>; array?: boolean; required?: boolean; values?: unknown[] }
+interface Definition { params: Param[]; metadata?: { generates?: boolean; changes?: boolean } }
+const definition = (type: string): Definition => (vega as unknown as { definition(t: string): Definition }).definition(type)
 
 const kindOf = (p: Param): string => (p.type === 'expr' ? 'expression' : p.type === 'compare' ? 'compare' : p.type === 'field' || p.expr ? 'field' : 'value')
 
@@ -44,5 +45,29 @@ describe('the table of transform parameters is the definitions of the pinned veg
       const spec = data(t)
       expect(asterOutcome(spec), JSON.stringify(t)).toBe(vegaOutcome(spec))
     }
+  })
+
+  it('a mark refuses the transforms whose definition makes tuples or drops some (they cannot run on its items)', () => {
+    const makes = [...TRANSFORM_TYPES].filter((type) => { const md = definition(type).metadata ?? {}; return !!(md.generates || md.changes) })
+    expect([...TUPLE_MAKING_TRANSFORMS].sort()).toEqual(makes.sort())
+    // every transform on a group mark and on a rect mark, with the parameters its definition requires: refused (or not) as vega does
+    const value = (p: Param): unknown => p.type === 'expr' ? 'true' : p.type === 'number' ? 1 : p.type === 'boolean' ? true : p.type === 'projection' ? 'p'
+      : p.type === 'compare' ? { field: 'a' } : p.type === 'enum' ? p.values?.[0] : 'a'
+    let refused = 0
+    for (const type of TRANSFORM_TYPES) {
+      const t: Spec = { type }
+      for (const p of definition(type).params) {
+        if (p.type === 'index') Object.assign(t, { from: 't', key: 'a' })
+        else if (p.required) t[p.name] = p.array ? [value(p)] : value(p)
+      }
+      for (const mark of ['group', 'rect']) {
+        const spec: Spec = { projections: [{ name: 'p', type: 'mercator' }], data: [{ name: 't', values: [{ a: 1 }] }], marks: [{ type: mark, from: { data: 't' }, transform: [t] }] }
+        const want = vegaOutcome(spec)
+        if (want !== 'ok') refused++
+        expect(asterOutcome(spec), `${mark} ${JSON.stringify(t)}`).toBe(want)
+      }
+    }
+    // (not vacuous: each transform that makes tuples is refused, on both marks)
+    expect(refused).toBe(makes.length * 2)
   })
 })

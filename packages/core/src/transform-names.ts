@@ -15,6 +15,15 @@ export const TRANSFORM_TYPES: ReadonlySet<string> = new Set([
   'regression', 'voronoi', 'wordcloud', 'crossfilter', 'resolvefilter',
 ])
 
+/**
+ * The transforms that make tuples of their own or drop some of the ones they are given. A mark's transforms run on its items, which
+ * they may write onto but not replace: a mark that has one of these is refused when the spec is parsed.
+ */
+export const TUPLE_MAKING_TRANSFORMS: ReadonlySet<string> = new Set([
+  'aggregate', 'countpattern', 'cross', 'density', 'filter', 'flatten', 'fold', 'impute', 'kde', 'pivot', 'project', 'quantile',
+  'sequence', 'contour', 'graticule', 'isocontour', 'kde2d', 'nest', 'treelinks', 'loess', 'regression',
+])
+
 /** A value as a message quotes it: JSON for text and objects, the bare value otherwise. */
 function quote(v: unknown): string {
   if (Array.isArray(v)) return '[' + v.map(quote).join(',') + ']'
