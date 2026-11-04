@@ -188,8 +188,10 @@ const BUDGETS = {
   '@aster/react SvgChart': 178.7 * 1024,
   '@aster/react SvgChart + interaction': 196.0 * 1024,
   // Base + the VL compiler (opt-in: `import '@aster/react/vl'`). 303.1 measured on a clean build (302.4 on origin/main 42aceda): the one
-  // scale-type rule of every channel, the offset and band-position rules and the scale of the opacities add 0.7.
-  '@aster/react Chart + VL': 303.6 * 1024,
+  // scale-type rule of every channel, the offset and band-position rules and the scale of the opacities add 0.7. 304.1 measured on a
+  // clean build (303.0 on fix/vl-fill-stroke-paint cae243e): every mark drawing every channel definition (datums, `scale: null`, key,
+  // order zindex, arc / polar placement, constant rect positions, offsets, the channel table validation shares) adds 1.1.
+  '@aster/react Chart + VL': 304.6 * 1024,
 }
 
 const THIS_DIR = dirname(fileURLToPath(import.meta.url))
