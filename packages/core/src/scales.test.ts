@@ -2,8 +2,6 @@ import { describe, it, expect } from 'vitest'
 import { buildScale } from './scales.js'
 
 describe('scales', () => {
-  const dataFieldFn = (vals: unknown[]) => () => vals
-
   const makeCtx = (
     dataFieldFn: () => unknown[],
     signals: Record<string, unknown> = { width: 400, height: 300 },

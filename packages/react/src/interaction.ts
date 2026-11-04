@@ -221,10 +221,6 @@ export function domainOf(scale: unknown): [number, number] | null {
   return Number.isFinite(a) && Number.isFinite(b) ? [a, b] : null
 }
 
-function curve(domain: [number, number]): 'linear' | 'log' {
-  return domain[0]! > 0 && domain[1]! > 0 ? 'log' : 'linear'
-}
-
 /** Scale a domain around an anchor value; factor > 1 zooms in. */
 export function zoomDomain(
   domain: [number, number],
@@ -419,8 +415,6 @@ export function baseDomainsOf(info: ChartInfo, names: PositionalScales): ViewDom
   if (y) out.y = y
   return out
 }
-
-export { curve as domainCurve }
 
 export interface HiddenLegendEntry {
   key: string

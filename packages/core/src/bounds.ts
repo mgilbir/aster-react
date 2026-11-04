@@ -661,20 +661,6 @@ export function boundsFromPath(
 // Marks and groups
 // ---------------------------------------------------------------------------
 
-/**
- * Compute a mark's bounds (union of item bounds), matching vega's
- * mark-level bound: group items recurse via boundGroupItem; typed marks
- * union their leaf items' bounds (line/area/trail trace the emitted path).
- */
-export function boundMark(node: SceneNode, out?: Bounds): Bounds {
-  const bounds = out ?? new Bounds()
-  const type = (node as SceneGroup).marktype
-  if (type === 'group' || (type === undefined && Array.isArray((node as SceneGroup).items))) {
-    return boundGroupItem(bounds, node as SceneGroup)
-  }
-  return boundTypedMark(bounds, node as SceneGroup)
-}
-
 /** Bound a typed (non-group) mark: per-type geometry. */
 export function boundTypedMark(bounds: Bounds, mark: SceneGroup, miterPaths = false): Bounds {
   const items = (mark.items ?? []) as SceneItem[]
@@ -1096,13 +1082,4 @@ export function boundGroupItem(bounds: Bounds, group: SceneGroup): Bounds {
   }
   boundStroke(bounds, group as unknown as SceneItem)
   return bounds.translate(group.x || 0, group.y || 0)
-}
-
-/**
- * Compute the bounds of a scene node in its parent's coordinate frame
- * (group items' bounds include their own x/y translate; leaf marks' bounds
- * include item x/y as vega computes them).
- */
-export function boundsOf(node: SceneNode): Bounds {
-  return boundMark(node, new Bounds())
 }

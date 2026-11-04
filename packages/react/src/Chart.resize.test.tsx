@@ -2,7 +2,7 @@
 import * as React from 'react'
 import { createRoot } from 'react-dom/client'
 import { act } from 'react'
-import { describe, it, expect, afterEach, vi } from 'vitest'
+import { describe, expect, afterEach, vi } from 'vitest'
 import { compile } from '@aster/vl'
 import { forEachVariant } from './testing/variants'
 

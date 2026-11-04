@@ -2,7 +2,7 @@
 import * as React from 'react'
 import { createRoot } from 'react-dom/client'
 import { act } from 'react'
-import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
+import { describe, expect, vi, afterEach, beforeEach } from 'vitest'
 import './vl' // Vega-Lite is opt-in: this registers the compiler
 import type { ChartHandle } from './Chart'
 import { forEachVariant } from './testing/variants'

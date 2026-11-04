@@ -21,11 +21,11 @@ import {
 } from './selection-model.js'
 
 export {
-  GEO_INIT_TICK, SELECTION_ID, STORE, isTimerSelection, stringValue, varName,
-  type SelCmpt, type Selection, type SelUnit, type SelUnitField, type SelectedField, type SelectedFields, type StorageKind, type TimeUnitProjection,
+  SELECTION_ID, STORE, isTimerSelection, stringValue, varName,
+  type SelCmpt, type Selection, type SelUnit,
 } from './selection-model.js'
 export { assembleFacetSignals, assembleTopLevelSelectionSignals, assembleUnitSelectionSignals } from './selection-signals.js'
-export { assembleInit, assembleProjection, assembleUnitSelectionData, assembleUnitSelectionMarks } from './selection-marks.js'
+export { assembleUnitSelectionData, assembleUnitSelectionMarks } from './selection-marks.js'
 
 // --- configuration -------------------------------------------------------------------------------------------------------------
 

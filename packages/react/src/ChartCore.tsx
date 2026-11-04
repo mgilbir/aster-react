@@ -26,7 +26,7 @@ import type { CanvasSceneSnapshot } from '@aster/core/canvas'
 import type { HitIndex } from '@aster/core/hit'
 import type { CursorTracker, SignalBinding } from '@aster/core/signals'
 import type { CanvasCapability, InteractionCapability } from './capabilities.js'
-import type { ChartHandle, ChartProps, ChartStreamInput } from './chart-types.js'
+import type { ChartHandle, ChartProps } from './chart-types.js'
 import {
   baseDomainsOf,
   filterLegendScene,

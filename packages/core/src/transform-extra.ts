@@ -3,8 +3,8 @@
  * Loaded by the `@aster/core/transforms` addon; the core bundle keeps only
  * the transforms a plain chart uses. Shared internals come from transform.ts.
  */
-import { error, hasOwnProperty, minOf, maxOf, ownGet, sortData } from './util.js'
-import { compareOf, fieldOf } from './transform-agg.js'
+import { error, ownGet, sortData } from './util.js'
+import { fieldOf } from './transform-agg.js'
 import { checkRowCount, meterTick } from './limits.js'
 import type { HierNode, Row, TransformContext } from './transform.js'
 import { compileExprTransform, geoPointRadius, getField, resolveSizeParam } from './transform.js'

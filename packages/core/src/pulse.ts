@@ -114,7 +114,7 @@ export function rowsEqual(a: Record<string, unknown>, b: Record<string, unknown>
       if (!equalCell(a[k], b[k])) return false
     }
     let m = 0
-    for (const k in b) m++
+    for (const _k in b) m++
     return n === m
   }
   const ak = Object.keys(a)
@@ -352,35 +352,7 @@ export function transformNeedsFullRederive(types: string[]): boolean {
   return types.some((t) => EXPANDING.has(t) && !STABLE_ROW_COUNT.has(t))
 }
 
-/** True when every transform preserves the input row index (mapping-spliceable). */
-export function transformKeepsRowIndex(types: string[]): boolean {
-  return types.every((t) => STABLE_ROW_COUNT.has(t) || t === 'filter'
-    || t === 'fold' || t === 'flatten' || t === 'aggregate'
-    || t === 'joinaggregate' || t === 'window' || t === 'stack')
-}
-
 /** Grouped transforms (aggregate/window/stack) consume dirty groups in place. */
 export function isGroupedTransform(type: string): boolean {
   return GROUPED.has(type)
-}
-
-/** Convert a RowDiff into the compact change shape the runtime consumes. */
-export function changeOf(diff: RowDiff): PulseChange {
-  return {
-    changed: diff.changed,
-    ...(diff.from ? { from: diff.from } : {}),
-    ...(diff.to ? { to: diff.to } : {}),
-    ...(diff.addedRanges ? { added: diff.addedRanges } : {}),
-    ...(diff.removedRanges ? { removed: diff.removedRanges } : {}),
-    ...(diff.appendOnly ? { appendOnly: true, baseLength: diff.baseLength } : {}),
-  }
-}
-
-// Internal classification shared with the runtime.
-export const pulseInternals = {
-  ROWWISE,
-  GROUPED,
-  EXPANDING,
-  INDEX_PRESERVING,
-  STABLE_ROW_COUNT,
 }

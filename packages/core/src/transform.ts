@@ -403,10 +403,6 @@ export function compileExprTransform(expr: string, ctx: TransformContext) {
   return (datum: Row): unknown => fn(datum, ctx.signals)
 }
 
-export function isFiniteNumber(v: unknown): v is number {
-  return typeof v === 'number' && Number.isFinite(v)
-}
-
 /**
  * Resolve a `[w, h]` size parameter whose entries may be numbers or signal
  * references (e.g. `[{signal: "width"}, {signal: "height"}]`). Returns
@@ -468,54 +464,6 @@ export function sortOrder(rows: Row[], sort?: SortSpec, limit = Infinity): numbe
 // ---------------------------------------------------------------------------
 // bin
 // ---------------------------------------------------------------------------
-
-/**
- * Compute a "nice" step size using the vega-statistics/bin.js algorithm.
- * This produces a step that is a power of a base (default 10), adjusted
- * so that ceil(span/step) <= maxbins, then refined by dividing by factors.
- */
-export function computeBinStep(span: number, maxbins: number | undefined): number {
-  if (span <= 0 || !Number.isFinite(span)) return 1
-  const m = maxbins ?? 20
-  if (m < 1) return span
-
-  const base = 10
-  const logb = Math.log(base)
-
-  // Initial step: power of base that is close to span/maxbins
-  const level = Math.ceil(Math.log(m) / logb)
-  const raw = Math.round(Math.log(span) / logb) - level
-  let step = Math.pow(base, raw)
-  if (step <= 0) step = 1
-
-  // Increase step if too many bins
-  while (Math.ceil(span / step) > m) {
-    step *= base
-  }
-
-  // Decrease step if allowed (try dividing by each factor)
-  for (const div of [5, 2]) {
-    const v = step / div
-    if (v > 0 && span / v <= m) {
-      step = v
-    }
-  }
-
-  return step
-}
-
-/**
- * Compute epsilon for nice extent rounding.
- * Matches vega-statistics/bin.js: eps = base^(-precision-1) where precision
- * is derived from the step's log.
- */
-export function computeBinEps(step: number): number {
-  if (step <= 0) return 0.01
-  const logb = Math.log(10)
-  const vlog = Math.log(step)
-  const precision = vlog >= 0 ? 0 : ~~(-vlog / logb) + 1
-  return Math.pow(10, -precision - 1)
-}
 
 // ---------------------------------------------------------------------------
 // impute

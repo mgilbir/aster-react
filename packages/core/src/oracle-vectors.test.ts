@@ -44,7 +44,7 @@ import {
   precisionFixed, precisionPrefix, precisionRound, tickStep,
   type FormatSpecifier,
 } from './format.js'
-import { locale, type Locale } from './locale.js'
+import { locale } from './locale.js'
 import { dsvFormat } from './dsv.js'
 import { feature as topoFeature, mesh as topoMesh } from './topojson.js'
 

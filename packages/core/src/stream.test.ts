@@ -236,7 +236,6 @@ describe('stream large batches (C91)', () => {
 // ---------------------------------------------------------------------------
 
 describe('stream flush atomicity (C19)', () => {
-  const goodMetrics = { measure: (t: string) => t.length }
   interface Stage {
     name: string
     /** Fields that make the flush throw. */

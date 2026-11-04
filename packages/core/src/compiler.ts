@@ -28,7 +28,6 @@ import type {
   VgSpec,
 } from './types.js'
 
-export type { SizeSpec }
 
 export function compileChart(givenSpec: VgSpec): CompiledChart {
   if (!givenSpec || typeof givenSpec !== 'object') {

@@ -25,7 +25,7 @@
  */
 import { color as parseColor } from './color.js'
 import type { CanvasLike, GradientLike } from './canvas.js'
-import { arcConics, conicQuads, pathEdges, polygonEdges, type Edge, type Op, type Pt, type Sub } from './raster-edges.js'
+import { arcConics, conicQuads, pathEdges, polygonEdges, type Edge, type Pt, type Sub } from './raster-edges.js'
 import { strokePolygons } from './raster-stroke.js'
 
 interface State {

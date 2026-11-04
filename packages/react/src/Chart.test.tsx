@@ -1,5 +1,4 @@
 // @vitest-environment jsdom
-import * as React from 'react'
 import { renderToString } from 'react-dom/server'
 import { describe, it, expect } from 'vitest'
 import { forEachVariant } from './testing/variants'

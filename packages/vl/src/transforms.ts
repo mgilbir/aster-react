@@ -9,7 +9,7 @@
  */
 import { pushAll, genSignal, safeKey, splitAccessPath, VLCompileError, datumPathRef, guardedPathRef, replacePathInField } from './names.js'
 import { predicateExpr, paramLeaves } from './predicate.js'
-import { getTimeUnitParts, normalizeTimeUnit, timeUnitTransform } from './timeunit.js'
+import { normalizeTimeUnit, timeUnitTransform } from './timeunit.js'
 
 type Obj = Record<string, unknown>
 const isObj = (v: unknown): v is Obj => v !== null && typeof v === 'object' && !Array.isArray(v)
@@ -433,4 +433,3 @@ export function translateTransforms(list: Obj[], ctx: TransformContext, st: Tran
   return out
 }
 
-export { getTimeUnitParts }

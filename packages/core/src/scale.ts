@@ -209,6 +209,7 @@ export function scale(type: string): ScaleCtor | undefined {
   return registry.get(type)
 }
 
+/** @public (the scale-helpers differential reads it by name) */
 export function isValidScaleType(type: string): boolean {
   return registry.has(type)
 }
@@ -224,6 +225,7 @@ export const isInterpolating = (type: string): boolean => hasKind(type, Interpol
 export const isQuantile = (type: string): boolean => hasKind(type, Quantile)
 
 /** A copy of a scale of the same type (the copy is a bare scale: it keeps no registry mark and no `invertRange`). */
+/** @public (the scale-helpers differential reads it by name) */
 export function scaleCopy(source: Scale): Scale {
   const copy = source.copy()
   copy.type = source.type

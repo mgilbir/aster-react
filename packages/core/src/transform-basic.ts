@@ -16,7 +16,7 @@ import {
   durationDay, durationHour, durationMinute, durationMonth, durationSecond, durationWeek, durationYear,
   timeFloor, timeIntervalFor, timeUnits, utcFloor, utcIntervalFor,
 } from './time.js'
-import { AsterLimitError, activeMeter, ceiling, checkRowCount, meterRows, meterTick } from './limits.js'
+import { AsterLimitError, activeMeter, checkRowCount, meterRows, meterTick } from './limits.js'
 import type { IdCounter } from './identifier-ids.js'
 import { orderOf } from './tuple-order.js'
 

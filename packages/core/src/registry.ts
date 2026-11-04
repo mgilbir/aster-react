@@ -82,12 +82,6 @@ export type DataFormatReader = (data: unknown, format: Record<string, unknown>) 
  */
 export const dataFormatRegistry = new Map<string, DataFormatReader>()
 
-export function requireDataFormat(type: string): DataFormatReader {
-  const reader = dataFormatRegistry.get(type)
-  if (!reader) throw new Error(`[aster] this spec reads "${type}" data; load the addon first: await import("@aster/core/load")`)
-  return reader
-}
-
 /**
  * What the `label` transform needs of the item a label is placed at, which vega reads off the scenegraph item
  * (`item.mark.marktype`, `item.bounds`, `item.items`): the type of the mark the item is in, that mark's container (its own

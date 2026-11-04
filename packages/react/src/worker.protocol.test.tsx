@@ -9,7 +9,7 @@ import {
   registerWorkerTextMetrics, useChartWorker,
   type ChartWorkerRequest, type ChartWorkerResponse, type ChartWorkerStreamRequest, type ChartWorkerStreamResponse,
 } from './worker'
-import { useChartWorkerStream, type WorkerChartStreamResult } from './useChartWorkerStream'
+import { useChartWorkerStream } from './useChartWorkerStream'
 
 const specOf = (n: number, extra: Record<string, unknown> = {}): never => ({
   $schema: 'https://vega.github.io/schema/vega/v6.json',

@@ -57,12 +57,9 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "prepack": "node ../../scripts/copy-legal.mjs"
   },
-  "dependencies": {},
   "devDependencies": {
-    "typescript": "^5.8.0",
-    "vega": "^6.3.1",
-    "vega-lite": "^6.4.3",
-    "@types/node": "^22.20.1"
+    "@types/node": "^22.20.1",
+    "typescript": "^5.8.0"
   },
   "description": "A small TypeScript Vega/Vega-Lite rendering engine on owned D3 primitives.",
   "license": "BSD-3-Clause",

@@ -8,7 +8,7 @@ import {
   equalEarth, equirectangular, gnomonic, identity, mercator, mollweide, naturalEarth1, orthographic, stereographic,
   transverseMercator, type GeoProjection,
 } from './geo-projections.js'
-import { GeoPath, PathWriter, ShapeBounds, Tee, type PointRadius } from './geo-path.js'
+import { PathWriter, ShapeBounds, Tee, type PointRadius } from './geo-path.js'
 
 type Factory = () => GeoProjection
 
@@ -130,4 +130,4 @@ export function projectedBounds(projection: GeoProjection, geo: unknown, pointRa
   return projectedShape(projection, geo, pointRadius).bounds
 }
 
-export { GeoPath, type GeoProjection }
+export { type GeoProjection }

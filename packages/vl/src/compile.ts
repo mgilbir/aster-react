@@ -9,7 +9,7 @@
 
 import { renameDataRefs, renameExpr, renameFragment } from './embed.js'
 import { optimizeData } from './optimize.js'
-import { VLCompileError, pushAll, signalSafe, flatField, datumRef as dref, genName, safeKey, splitAccessPath } from './names.js'
+import { VLCompileError, pushAll, flatField, datumRef as dref, genName, safeKey, splitAccessPath } from './names.js'
 import { validateGeoUnit, validateSpec } from './validate.js'
 import { markChannelCompatible } from './channels.js'
 import { predicateExpr, domainValueExpr, dateTimeToExpr, isDateTime as isDateTimeValue } from './predicate.js'
@@ -4877,7 +4877,6 @@ function forwardScaleProps(sc: ScaleSpec, def: FieldDef, channel: string, skip: 
 /** Scale properties that the range and the domain of a scale are made of: never forwarded as they are. */
 const SCALE_BUILT_PROPS: ReadonlySet<string> = new Set(['type', 'domain', 'range', 'rangeMin', 'rangeMax', 'scheme', 'bins', 'zero', 'domainRaw'])
 
-const SCALE_BUILT_PROPS_NO_ZERO: ReadonlySet<string> = new Set([...SCALE_BUILT_PROPS].filter((k) => k !== 'zero'))
 
 /** The scale's `bins` property of a binned field: the bin transform's signal, or the step of pre-binned data. */
 function binsProp(def: FieldDef): Record<string, unknown> | undefined {
@@ -7538,11 +7537,6 @@ function applyGeoPositions(update: Record<string, unknown>, spec: VLSpec, mark: 
  * group, and centers ticks/bars with a fractional size. (The same defaults
  * hold for a channel that is only a datum/value.)
  */
-/** Does the unit encode the channel at all (a field, a datum or a constant value)? */
-function hasEncodingChannel(spec: VLSpec, channel: string): boolean {
-  const enc = isObject(spec.encoding) ? (spec.encoding as Record<string, unknown>) : {}
-  return enc[channel] != null
-}
 
 /** The marks that span an extent on each axis (position-rect.ts rectPosition): a constant position is one end, or the centre, of it. */
 const RECT_EXTENT_MARKS: ReadonlySet<string> = new Set(['bar', 'rect', 'image', 'tick'])

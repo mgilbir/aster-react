@@ -15,8 +15,6 @@
  *   measures      the orient asked for; else the axis that is a measure is the value; else the time axis is the dimension
  */
 
-export type Orientation = 'vertical' | 'horizontal'
-
 /** What the rules read of one position channel. */
 export interface Position {
   /** The channel is encoded at all (a field, a datum or a value). */

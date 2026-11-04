@@ -7,7 +7,7 @@
  * thing, the test counts instead ("refused before encoding").
  */
 import { describe, it, expect } from 'vitest'
-import { attack, expectLimit, SLACK_MS } from './attack.testkit.js'
+import { attack, expectLimit } from './attack.testkit.js'
 
 const T = 40_000
 /**
