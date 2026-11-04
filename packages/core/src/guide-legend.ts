@@ -16,7 +16,7 @@ import {
 import { thinOverlaps } from './guide-axis.js'
 import {
   ONE, ZERO, contentKey, customize, encodeItem, entryOf, isShareable, isSignal, itemAriaOf, joinByValue, keyPart, mergeUserEncode,
-  propsOf, setChannels, shareMarks, sharedMarks, staticChannel,
+  propsOf, reading, setChannels, shareMarks, sharedMarks, staticChannel,
   type Block, type Entry, type EntryHost, type EntryScope, type GuideMarkDef, type GuideProps, type GuideStyles, type MarkEncode, type Row, type UserEncode,
 } from './guide-encode.js'
 
@@ -149,10 +149,10 @@ function bands(k: Kit): GuideMarkDef {
   const thickness = k.props.gradientThickness()
   const length = k.props.gradientLength()
   const [start, end, across, size] = k.vertical ? (['y', 'y2', 'x', 'width'] as const) : (['x', 'x2', 'y', 'height'] as const)
-  const along = (field: 'perc' | 'perc2'): Entry => (s) => {
+  const along = (field: 'perc' | 'perc2'): Entry => reading((s: EntryScope) => {
     const fraction = k.vertical ? 1 - (s.datum[field] as number) : (s.datum[field] as number)
     return length != null ? fraction * numeric(s, length) : fraction
-  }
+  }, length)
   const enter: Block = { opacity: ZERO, fill: { scale: k.scale, field: 'value' } as unknown as EncodeValue }
   enter[start] = along('perc')
   enter[across] = ZERO
@@ -185,10 +185,10 @@ function stripLabels(k: Kit): GuideMarkDef {
     enter.baseline = { value: 'top' } as EncodeValue
   }
   const [along, across] = vertical ? (['y', 'x'] as const) : (['x', 'y'] as const)
-  const place: Entry = (s) => {
+  const place: Entry = reading((s: EntryScope) => {
     const fraction = vertical ? 1 - (s.datum.perc as number) : (s.datum.perc as number)
     return length != null ? fraction * numeric(s, length) : fraction
-  }
+  }, length)
   enter[along] = update[along] = place
   enter[across] = update[across] = thickness as EncodeValue
   thickness.offset = (spec.labelOffset ?? config.gradientLabelOffset) || 0
@@ -257,7 +257,7 @@ function symbolMarks(inp: LegendBuildInput, k: Kit, columns: number): SymbolMark
   const symbolEnter: Block = {
     opacity: ZERO,
     // the symbol offset is added only when there is one
-    x: ((s) => (symbolOffset != null ? room(s) * 0.5 + numeric(s, symbolOffset) : room(s) * 0.5)) as Entry,
+    x: reading((s: EntryScope) => (symbolOffset != null ? room(s) * 0.5 + numeric(s, symbolOffset) : room(s) * 0.5), symbolOffset),
     y: middle,
   }
   const symbolEncode: MarkEncode = { enter: symbolEnter, update: { opacity: ONE, x: symbolEnter.x, y: symbolEnter.y }, exit: { opacity: ZERO } }
@@ -274,7 +274,7 @@ function symbolMarks(inp: LegendBuildInput, k: Kit, columns: number): SymbolMark
   // the label starts past the symbol's room, by the symbol offset and the label offset
   const labelOffset = entryOf(symbolOffset)
   labelOffset.offset = props.get('labelOffset')
-  const labelEnter: Block = { opacity: ZERO, x: ((s) => room(s) + numeric(s, labelOffset)) as Entry, y: middle }
+  const labelEnter: Block = { opacity: ZERO, x: reading((s: EntryScope) => room(s) + numeric(s, labelOffset), labelOffset), y: middle }
   const labelEncode: MarkEncode = { enter: labelEnter, update: { opacity: ONE, text: { field: 'label' } as EncodeValue, x: labelEnter.x, y: labelEnter.y }, exit: { opacity: ZERO } }
   setChannels(labelEncode, {
     align: props.get('labelAlign'), baseline: props.get('labelBaseline'), fill: props.get('labelColor'), fillOpacity: props.get('labelOpacity'),

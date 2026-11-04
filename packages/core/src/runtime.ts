@@ -59,7 +59,8 @@ import { rectItemPath } from './render.js'
 import { buildAxis as buildAxisGuide, tickPlacement } from './guide-axis.js'
 import { buildTitle as buildTitleGuide } from './guide-title.js'
 import { buildLegend as buildLegendGuide, legendType, placeLegendStack, LEGEND_SCALES, type GuideHost, type Sides } from './guide-legend.js'
-import { ExpressionFailure, isSignal, itemAriaOf, propsOf, type GuideStyles, type UserEncode } from './guide-encode.js'
+import { guideReading, type GuideKind } from './guide-model.js'
+import { ExpressionFailure, isSignal, isUnencoded, itemAriaOf, propsOf, type GuideStyles, type UserEncode } from './guide-encode.js'
 import { defaultMergedConfig } from './config-defaults.js'
 
 const DEFAULT_SIZE = 500
@@ -1387,8 +1388,9 @@ function buildAxisAndLegend(
       meta.scale = axis.scale
       meta.aria = axis.aria
       meta.grid = guideScalar(ctx, axis.grid) === true
-      meta.format = guideString(ctx, axis.format)
-      meta.formatType = guideString(ctx, axis.formatType)
+      const unencoded = (group as unknown as { axis?: { unencoded?: boolean } }).axis?.unencoded === true
+      meta.format = unencoded ? undefined : guideString(ctx, axis.format)
+      meta.formatType = unencoded ? undefined : guideString(ctx, axis.formatType)
       const at = guideTitle(ctx, axis.title)
       if (at) meta.title = at
       // the axis' `description` is the aria-label of its container (vega-scenegraph ariaGuide: mark.description first)
@@ -1424,8 +1426,10 @@ function buildAxisAndLegend(
         const own = (legend.own ?? {}) as Record<string, unknown>
         g.legendChannels = LEGEND_SCALES.filter((k) => !!own[k])
         g.legendScale = g.legendChannels.map((k) => String(own[k]))[0]
-        g.legendFormat = guideString(ctx, own.format)
-        g.legendFormatType = guideString(ctx, own.formatType)
+        // (a legend group item whose encode never ran has no format for the caption to read)
+        const unencoded = (group as unknown as { unencoded?: boolean }).unencoded === true
+        g.legendFormat = unencoded ? undefined : guideString(ctx, own.format)
+        g.legendFormatType = unencoded ? undefined : guideString(ctx, own.formatType)
         // (the legend type is the kind of legend the builder drew: gradient, discrete bands or symbols)
       }
       return { legend, group, props: ((group as unknown as { legendProps?: LegendProps } | null)?.legendProps ?? {}) as LegendProps }
@@ -2004,7 +2008,7 @@ function buildContentPass(
   // is ranked after the last of those instances that has marks, ran if there is none)
   const unlaid = cut !== undefined && ((compareInstances(ctx.scope.path, cut.path) === 0 && cut.lateSignal !== true) || ctx.scope.unsettled === true
     // (a mark that reads the late signal connects its operators, ranked after it, to the layout)
-    || (cut.lateSignal === true && (ctx.chart.marks.some((m) => markReadsTaint(m, ctx)) || withoutLateReads(ctx, () => hasLateLabels(ctx.chart.legends, ctx))))
+    || (cut.lateSignal === true && (ctx.chart.marks.some((m) => markReadsTaint(m, ctx)) || withoutLateReads(ctx, () => hasLateLabels(ctx.chart.legends, ctx)) || guidesReadLate(ctx)))
     || symbolLegendsOf(ctx.chart.legends, ctx).some((_, k) => compareInstances([ctx.scope.nextChild.n + k, 0], cut.path) >= 0))
   if (unlaid) ctx.rawGuides = true
 
@@ -4846,6 +4850,45 @@ function hasLateLabels(legends: readonly CompiledLegend[] | undefined, ctx: Eval
   return false
 }
 
+const AXIS_TICKS_PARAMS: ReadonlySet<string> = new Set(['tickCount', 'values', 'tickMinStep', 'tickExtra'])
+
+/**
+ * Whether a guide of the view reads a late signal that threw, in a property vega reads (guide-model.ts) or in the author's encode of a
+ * part the guide has: the operator that reads it is ranked after the signal, and so is everything it feeds -- the guide's bounds and
+ * the view's layout, which then never runs.
+ */
+function guidesReadLate(ctx: EvalContext): boolean {
+  if (ctx.lateTaint === undefined) return false
+  const scaleType = (name: unknown): string | undefined => ctx.scaleTypes.get(String(name))
+  const reads = (v: unknown): boolean => {
+    let hit = false
+    walkStrings(v, (str, owner) => { if (!hit && owner !== null && (owner.signal === str || owner.test === str) && readsLateSignal(str, ctx)) hit = true })
+    return hit
+  }
+  const guide = (kind: GuideKind, own: Record<string, unknown>, cfg: Record<string, unknown>, parts: (reading: (key: string) => string) => readonly string[]): boolean => {
+    const reading = guideReading(kind, own, { config: { [kind]: cfg }, scaleType })
+    for (const key of new Set([...Object.keys(own), ...Object.keys(cfg)])) {
+      if (key === 'encode' || key === 'scale' || reading(key) === 'never' || (kind === 'axis' && AXIS_TICKS_PARAMS.has(key))) continue
+      if (reads(own[key] ?? cfg[key])) return true
+    }
+    const encode = own.encode
+    return encode !== null && typeof encode === 'object' && parts(reading).some((part) => reads((encode as Record<string, unknown>)[part]))
+  }
+  // (an axis's ticks read only by the ticks operator feed its tick, label and grid marks: an axis that has one of those is refused
+  // (see buildAxis), and one that has none lays out without them)
+  // (a part the guide does not have is not parsed: the property of its mark that every guide has tells)
+  const axisParts = (reading: (key: string) => string): string[] => ['axis', ...(['grid', 'ticks', 'labels', 'domain', 'title'] as const).filter((p) => reading(p === 'ticks' ? 'tickColor' : p === 'labels' ? 'labelColor' : p + 'Color') !== 'never')]
+  const legendParts = (reading: (key: string) => string): string[] => [
+    'legend', 'labels', ...(reading('titleColor') !== 'never' ? ['title'] : []),
+    ...(reading('clipHeight') !== 'never' ? ['entries', 'symbols'] : []), ...(reading('gradientLength') !== 'never' ? ['gradient'] : []),
+  ]
+  const NONE: Record<string, never> = {}
+  const title = ctx.chart.title
+  return ctx.chart.axes.some((a) => guide('axis', (a.own ?? NONE) as Record<string, unknown>, (a.cfg ?? NONE) as Record<string, unknown>, axisParts))
+    || ctx.chart.legends.some((l) => guide('legend', (l.own ?? NONE) as Record<string, unknown>, (l.cfg ?? NONE) as Record<string, unknown>, legendParts))
+    || (title !== undefined && guide('title', (title.own ?? NONE) as Record<string, unknown>, (title.cfg ?? NONE) as Record<string, unknown>, () => ['group', 'title', 'enter', 'update', ...(title.own?.subtitle ? ['subtitle'] : [])]))
+}
+
 /** The legends of a scope that are symbol legends (the ones whose entries are made in instances of their own). */
 function symbolLegendsOf(legends: readonly CompiledLegend[] | undefined, ctx: EvalContext): CompiledLegend[] {
   const out: CompiledLegend[] = []
@@ -4975,6 +5018,7 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext, index: number): S
     ...(itemAriaOf(built.group) ? { itemAria: itemAriaOf(built.group) } : {}),
     // what the legend layout reads off the group item
     legendProps: { orient: g.orient, offset: g.offset, x: g.x, y: g.y },
+    ...(isUnencoded(g) ? { unencoded: true } : {}),
     ...(g.strokeWidth !== undefined ? { strokeWidth: g.strokeWidth } : {}),
     ...(cursorOf(g) !== undefined ? { cursor: cursorOf(g) } : {}),
     ...(g.href != null ? { href: g.href } : {}),
@@ -5021,6 +5065,8 @@ function makeGuideHost(ctx: EvalContext): GuideHost {
     viewSignal: (name) => viewSignal(ctx, name),
     scale: (name) => ctx.scales.get(name) as never,
     note: (e) => reportEvalError(ctx, e instanceof ExpressionFailure ? e.error : e),
+    // (what reads a late signal that threw never ran: see `withoutLateReads`)
+    get unrun() { return ctx.lateTaint === undefined ? undefined : (code: string) => readsLateSignal(code, ctx) },
     report: (e) => {
       refuseUnrecoverable(e)
       host.stopped ??= { error: e instanceof ExpressionFailure ? e.error : e, ...(host.at !== undefined ? { at: host.at, entryIndex: host.entryIndex } : {}) }
@@ -5439,7 +5485,8 @@ function buildAxis(axis: CompiledAxis, ctx: EvalContext, index: number): SceneGr
     ...(built.partMeta.axis?.name ? { cssName: built.partMeta.axis.name } : {}),
     ...(itemAriaOf(built.group) ? { itemAria: itemAriaOf(built.group) } : {}),
     ...(cursorOf(built.group) !== undefined ? { cursor: cursorOf(built.group) } : {}),
-    axis: { orient, itemOrient: typeof g.orient === 'string' ? g.orient : orient, range: axisRangeSpan, baseline: 0, translate: ctx.rawGuides ? 0 : (typeof g.translate === 'number' ? g.translate : 0.5), position, bounds: built.bounds, ...(knownOrient ? {} : { noLayout: true }) },
+    // (a group item whose encode never ran has no orient: the caption calls it an X-axis, and reads no format off it)
+    axis: { orient, itemOrient: isUnencoded(g) ? '' : typeof g.orient === 'string' ? g.orient : orient, ...(isUnencoded(g) ? { unencoded: true } : {}), range: axisRangeSpan, baseline: 0, translate: ctx.rawGuides ? 0 : (typeof g.translate === 'number' ? g.translate : 0.5), position, bounds: built.bounds, ...(knownOrient ? {} : { noLayout: true }) },
     ...(href != null ? { href } : {}),
   } as unknown as SceneGroup
   vetGuideLinks(out, ctx)

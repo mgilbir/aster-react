@@ -13,7 +13,7 @@ import { lerp, sortData } from './util.js'
 import { Bounds, boundLeaf, boundStroke, multiLineOffset } from './bounds.js'
 import {
   ONE, ZERO, contentKey, customize, encodeItem, encodeItems, encodes, entryOf, isShareable, isSignal, joinByValue, keyPart, mergeUserEncode,
-  propsOf, setChannels, shareMarks, sharedMarks,
+  propsOf, reading, setChannels, shareMarks, sharedMarks,
   type Block, type Entry, type EntryFn, type EntryHost, type EntryScope, type GuideMarkDef, type GuideProps, type GuideStyles, type MarkEncode, type Row, type UserEncode,
 } from './guide-encode.js'
 
@@ -183,6 +183,7 @@ function grid(k: Kit): GuideMarkDef {
     }) as EntryFn
     // an offset that is an entry may read the datum; a number is the same for every line
     fn.perRun = offset == null || !isObj(offset)
+    fn.reads = [offset]
     return fn
   }
   const start = (alongScale ? { scale: alongScale, range: 0, mult: inward, offset } : { value: 0, offset }) as unknown as EncodeValue
@@ -220,13 +221,13 @@ function labels(k: Kit, size: unknown): GuideMarkDef {
   const position = { scale, field: 'value', band: 0.5, offset: addOffset(k.band.offset, props.get('labelOffset')) } as unknown as EncodeValue
 
   // the end labels of an axis can be pulled in (flush) by shifting their alignment, or (flushDistance) their position
-  const nearEnds = (atStart: string, atEnd: string, between: string, threshold: unknown = flush): EntryFn => (s) => {
+  const nearEnds = (atStart: string, atEnd: string, between: string, threshold: unknown = flush): EntryFn => reading((s: EntryScope) => {
     const sc = s.host.scale(scale)
     const range = (sc ? sc.range() : []) as number[]
     const at = sc ? (sc(s.datum.value) as number) : NaN
     const value = (code: string): unknown => s.host.expr(code)
     return byRangeEnd(range, at, value(String(threshold)), value(atStart), value(atEnd), value(between))
-  }
+  }, props.get('labelFlush'), props.get('labelFlushOffset'))
   const align: Entry = frame.horizontal
     ? (flushing ? nearEnds('"left"', '"right"', '"center"') : { value: 'center' } as EncodeValue)
     : { value: orient === 'right' ? 'left' : 'right' } as EncodeValue
