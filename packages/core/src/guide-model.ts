@@ -3,7 +3,8 @@
  * parsed as they are written: vega-parser turns each into marks (an axis into a grid, ticks, labels, a domain line and a title; a
  * symbol legend into symbols and labels, a gradient into a bar and labels), and a property of the guide is only read by the mark it
  * belongs to. A property of a mark the guide does not have, one a scale's channel or the author's encode replaces, or one that only
- * switches a feature on (`grid`, `labels`) is never parsed, so an expression in it that vega would refuse is accepted.
+ * switches a feature on (`grid`, `labels`) is never parsed, and neither is one vega does not know for that kind of guide (a `columns`
+ * on an axis), so an expression in it that vega would refuse is accepted.
  *
  * What is read is one of:
  * - an `entry`: the signal is the entry of a channel of one of the marks, whose expression is the signal in parentheses;
@@ -38,6 +39,13 @@ export const WRAPPED = /^(bandPosition|tickBand|tickOffset|tickSize|gridScale|la
 
 // -- an axis -------------------------------------------------------------------------------------------------------------------
 
+/** Every property vega-parser looks up on an axis: any other is never read. */
+const AXIS_KEYS = new Set(('aria bandPosition description domain domainCap domainColor domainDash domainDashOffset domainOpacity domainWidth format formatType '
+  + 'grid gridCap gridColor gridDash gridDashOffset gridOpacity gridScale gridWidth labelAlign labelAngle labelBaseline labelBound labelColor labelFlush '
+  + 'labelFlushOffset labelFont labelFontSize labelFontStyle labelFontWeight labelLimit labelLineHeight labelOffset labelOpacity labelOverlap labelPadding '
+  + 'labels labelSeparation maxExtent minExtent offset orient position tickBand tickCap tickColor tickCount tickDash tickDashOffset tickExtra tickMinStep '
+  + 'tickOffset tickOpacity tickRound ticks tickSize tickWidth title titleAlign titleAnchor titleAngle titleBaseline titleColor titleFont titleFontSize '
+  + 'titleFontStyle titleFontWeight titleLimit titleLineHeight titleOpacity titlePadding titleX titleY translate values zindex').split(' '))
 /** Properties that only switch a feature on, or that vega keeps for itself. */
 const AXIS_NEVER = /^(aria|description|zindex|domain|grid|labels|ticks|tickRound)$/
 /** Properties of the axis itself, whatever marks it has. */
@@ -75,7 +83,7 @@ class AxisReading {
   }
 
   read(key: string): Reading {
-    if (AXIS_NEVER.test(key)) return 'never'
+    if (!AXIS_KEYS.has(key) || AXIS_NEVER.test(key)) return 'never'
     if (key === 'tickCount' || key === 'values') return 'object'
     if (AXIS_GROUP.test(key)) return 'entry'
     if (key === 'tickMinStep') return 'value'
@@ -94,6 +102,13 @@ class AxisReading {
 
 // -- a legend ------------------------------------------------------------------------------------------------------------------
 
+/** Every property vega-parser looks up on a legend (the scales of its channels included): any other is never read. */
+const LEGEND_KEYS = new Set(('aria clipHeight columnPadding columns cornerRadius description direction fill fillColor format formatType gradientLength '
+  + 'gradientOpacity gradientStrokeColor gradientStrokeWidth gradientThickness gridAlign labelAlign labelBaseline labelColor labelFont labelFontSize '
+  + 'labelFontStyle labelFontWeight labelLimit labelOffset labelOpacity labelOverlap labelSeparation legendX legendY offset opacity orient padding '
+  + 'rowPadding shape size stroke strokeColor strokeDash strokeWidth symbolDash symbolDashOffset symbolFillColor symbolLimit symbolOffset symbolOpacity '
+  + 'symbolSize symbolStrokeColor symbolStrokeWidth symbolType tickCount tickMinStep title titleAlign titleAnchor titleBaseline titleColor titleFont '
+  + 'titleFontSize titleFontStyle titleFontWeight titleLimit titleLineHeight titleOpacity titleOrient titlePadding type values zindex').split(' '))
 const LEGEND_NEVER = /^(aria|description|type|direction|zindex)$/
 const LEGEND_GROUP = /^(orient|offset|padding|titlePadding|cornerRadius|fillColor|strokeColor|legendX|legendY|format|formatType)$/
 /** The channel of the labels' encode, or of the symbols', that replaces a property (`labelColor` is the `fill` of the labels). */
@@ -113,7 +128,7 @@ function legendReading(l: Rec, env: GuideEnv): (key: string) => Reading {
   const symbols = legendType(l, env.scaleType(LEGEND_CHANNELS.map((c) => l[c]).find((s) => !!s))) === 'symbol'
   const encode = isRecord(l.encode) ? l.encode : {}
   return (key) => {
-    if (LEGEND_NEVER.test(key)) return 'never'
+    if (!LEGEND_KEYS.has(key) || LEGEND_NEVER.test(key)) return 'never'
     if (key === 'tickCount' || key === 'values') return 'object'
     if (key === 'symbolLimit' || key === 'tickMinStep') return 'value'
     if (LEGEND_GROUP.test(key)) return 'entry'
@@ -144,8 +159,12 @@ function legendReading(l: Rec, env: GuideEnv): (key: string) => Reading {
 // -- the title -----------------------------------------------------------------------------------------------------------------
 
 /** How the title's properties are read. */
+/** Every property of the title vega-parser can read as an expression (its `name`, `style` and `interactive` are taken as they are). */
+const TITLE_KEYS = new Set(('align anchor angle aria baseline color description dx dy font fontSize fontStyle fontWeight frame limit lineHeight offset orient '
+  + 'subtitle subtitleColor subtitleFont subtitleFontSize subtitleFontStyle subtitleFontWeight subtitleLineHeight subtitlePadding text zindex').split(' '))
+
 function titleReading(t: Rec): (key: string) => Reading {
-  return (key) => (/^(aria|description|zindex)$/.test(key) || (/^subtitle/.test(key) && key !== 'subtitlePadding' && !t.subtitle) ? 'never' : 'entry')
+  return (key) => (!TITLE_KEYS.has(key) || /^(aria|description|zindex)$/.test(key) || (/^subtitle/.test(key) && key !== 'subtitlePadding' && !t.subtitle) ? 'never' : 'entry')
 }
 
 export type GuideKind = 'axis' | 'legend' | 'title'
