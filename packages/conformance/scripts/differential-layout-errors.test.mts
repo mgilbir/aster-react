@@ -179,3 +179,55 @@ describe('a layout vega cannot take is logged and stops the pass where vega stop
     expect(warned).toBeGreaterThan(scaled(500) * 0.05)
   })
 })
+
+/**
+ * A grid moves its groups and the bounds they were measured with, as vega translates an item's bounds rather than measuring them again:
+ * a cell that stood at a fraction of a pixel carries the float of that move (`28.000000000000014`), and a track, a margin or the guides
+ * placed against it round from there. Generated: cells, headers and titles at fractional places, in grids of groups with legends and
+ * axes around them, compared with vega by the picture.
+ */
+describe('a grid moves the bounds of what it lays out with it', () => {
+  it(`${scaled(200)} generated grids of groups at fractional places`, { timeout: 600_000 }, async () => {
+    const r = makeRng(0xb0d5)
+    const bad: string[] = []
+    // (places whose move by the grid leaves a float residue in the box carried with it: what vega's bounds show and fresh ones do not)
+    const frac = (): number => {
+      for (;;) {
+        // (a draw of the generator has 32 bits; times an irrational it fills the mantissa, as a computed place does)
+        const a = r.next() * 64 * Math.SQRT2 + 20
+        if ((a + 28) + (28 - a) !== 56) return a
+      }
+    }
+    for (let c = 0; c < scaled(200); c++) {
+      const cells: Spec = {
+        type: 'group', from: { data: `d${r.between(1, 4)}` },
+                // (a stroke or a mark sticking out moves the box by other amounts: only some cells have them)
+        encode: { update: { x: { value: frac() }, y: { value: frac() }, width: { value: 28 }, ...(r.chance(0.6) ? { height: { value: r.pick([10, 28]) } } : {}), ...(r.chance(0.3) ? { stroke: { value: '#999' } } : {}) } },
+        marks: r.chance(0.5) ? [{ type: 'rect', encode: { update: { x: { value: r.next() * 3 }, width: { value: 4 }, height: { value: 4 }, fill: { value: 'teal' } } } }] : [],
+      }
+      const strips: Spec[] = r.chance(0.5) ? [{ type: 'group', role: r.pick(['row-header', 'column-header', 'column-footer']), from: { data: 'd1' }, encode: { update: { x: { value: frac() }, width: { value: 9.5 }, height: { value: 5.75 } } }, title: { text: 'h', fontSize: 6 } }] : []
+      // (a grid with no size of its own: its bounds are those of what it laid out, which the guides around it are placed against)
+      const grid: Spec = {
+        type: 'group', encode: { update: { x: { value: r.pick([0, 3]) }, ...(r.chance(0.3) ? { width: { value: 50 }, height: { value: 30 } } : {}) } },
+        layout: { padding: r.pick([0, 0, 3]), ...(r.chance(0.5) ? { columns: r.pick([2, 3]) } : {}), bounds: r.pick(['full', 'full', 'flush']) },
+        marks: [...strips, cells],
+        ...(r.chance(0.6) ? { legends: [{ fill: 'c', orient: r.pick(['right', 'left', 'bottom']) }] } : {}),
+        ...(r.chance(0.3) ? { axes: [{ scale: 'x', orient: r.pick(['bottom', 'right']) }] } : {}),
+        ...(r.chance(0.3) ? { title: { text: 'grid', fontSize: 8 } } : {}),
+      }
+      const spec: Spec = {
+        width: 120, height: 70, padding: 4, autosize: r.pick(['pad', 'none']),
+        scales: [{ name: 'x', type: 'linear', domain: [0, 4], range: [0, 20] }, { name: 'c', type: 'ordinal', domain: ['p', 'q'], range: ['red', 'blue'] }, { name: 'g', type: 'linear', domain: [0, 4], range: ['white', 'black'] }],
+        data: DATA,
+        marks: [r.chance(0.6) ? { type: 'group', ...(r.chance(0.5) ? { from: { facet: { data: 'd3', name: 'ff', groupby: 'k' } } } : {}), marks: [grid], legends: [{ fill: r.pick(['c', 'g']), orient: r.pick(['right', 'right', 'bottom']) }] } : grid],
+        ...(r.chance(0.4) ? { legends: [{ fill: 'c' }] } : {}),
+      }
+      const want = await onVega(spec)
+      const got = onAster(spec)
+      if (got.threw !== undefined || JSON.stringify(got.log) !== JSON.stringify(want.log)) { bad.push(`#${c}: ${got.threw ?? JSON.stringify([want.log, got.log])}`); continue }
+      const d = diffCanonical(canonicalizeSvg(want.svg), canonicalizeSvg(got.svg!))
+      if (d.length) bad.push(`#${c} ${JSON.stringify(spec).slice(0, 600)}: ${d.slice(0, 3).join(' | ')}`)
+    }
+    expect(bad, `${bad.length} of ${scaled(200)} differ:\n${bad.slice(0, 5).join('\n')}`).toEqual([])
+  })
+})
