@@ -184,6 +184,12 @@ import { fileURLToPath } from 'node:url'
 // Guide formats read through the scale's formats, layouts that throw as stopping points with their warnings, and one parse walk that
 // refuses the names and transform parameters vega refuses (fix/core-parse-format-layout-errors), measured on a clean build (kB gzip):
 // core 152.4 (+1.9), useChart 163.6, Chart 205.2, SvgChart 182.4, SvgChart + interaction 199.6, Chart + VL 306.6. Ceilings are the
+// The scale types vega-lite honours (fix/vl-honoured-scale-types) on main with the abort work above, measured on a clean build (kB gzip):
+// Chart + VL 304.3 (+0.7 over the abort work's 303.6; the other rows did not move). Ceiling is the measured value + 0.5.
+// Every mark drawing every channel definition (fix/vl-mark-position-channels) on main with the abort work and the paint channels, measured on a
+// clean build (kB gzip): Chart + VL 305.2 (+0.4 over main's 304.8 ceiling; the other rows did not move). Ceiling is the measured value + 0.5.
+// The guide parts that read a late signal, every mark transform on its items and the mark identifier (fix/abort-guide-parts-item-transforms) on
+// main with the Vega-Lite channel work, measured on a clean build (kB gzip): Chart + VL 306.5 (+0.8 over main's 305.7 ceiling). Ceiling is the
 // measured value + 0.5.
 const BUDGETS = {
   '@aster/core': 152.9 * 1024,
@@ -200,7 +206,7 @@ const BUDGETS = {
   '@aster/react SvgChart': 182.9 * 1024,
   '@aster/react SvgChart + interaction': 200.1 * 1024,
   // Base + the VL compiler (opt-in: `import '@aster/react/vl'`).
-  '@aster/react Chart + VL': 307.1 * 1024,
+  '@aster/react Chart + VL': 307.0 * 1024,
 }
 
 const THIS_DIR = dirname(fileURLToPath(import.meta.url))

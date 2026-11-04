@@ -51,6 +51,14 @@ export function viewDiscreteSize(spec: { config?: unknown }, ch: 'width' | 'heig
   return { step: typeof v.step === 'number' ? v.step : 20 }
 }
 
+/** vega-lite `getViewConfigDiscreteStep`: the view config's discrete `{step}`, else `config.view.step` (default 20). */
+export function viewDiscreteStep(spec: { config?: unknown }, ch: 'width' | 'height'): number {
+  const d = viewDiscreteSize(spec, ch)
+  if (typeof d === 'object') return d.step
+  const v = viewConfigOf(spec)
+  return typeof v.step === 'number' ? v.step : 20
+}
+
 /** The discrete step vega-lite sizes marks against: the spec's `{step}`, else the view config's (default 20). */
 export function discreteStep(spec: { width?: unknown; height?: unknown; config?: unknown }, ch: 'width' | 'height'): number {
   const v = spec[ch] as { step?: number } | undefined

@@ -133,8 +133,9 @@ describe('mark keys and the image mark', () => {
     expect(m.encode.update.url.signal).toContain('datum["u"]')
     expect(m.encode.update.fill).toBeUndefined()
   })
-  it('the url channel belongs to image marks only', () => {
-    expect(() => compileFrozen({ data: DATA, mark: 'point', encoding: { x: xq, y: yq, url: cn } })).toThrow(/image mark/)
+  it('the url channel belongs to image marks only: on any other mark it is dropped, as vega-lite drops it', () => {
+    const withUrl = compileFrozen({ data: DATA, mark: 'point', encoding: { x: xq, y: yq, url: cn } })
+    expect(withUrl).toEqual(compileFrozen({ data: DATA, mark: 'point', encoding: { x: xq, y: yq } }))
   })
 })
 

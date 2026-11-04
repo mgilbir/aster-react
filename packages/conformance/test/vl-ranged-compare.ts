@@ -4,6 +4,7 @@
  *
  *   - the compiled scales (type, domain, range and every property), the name of the data a domain reads aside: Aster may name its
  *     datasets differently, the rows they hold are compared below;
+ *   - the compiled axes and legends (every property, the name of the data a guide reads aside);
  *   - the scales as they run: type, domain, range;
  *   - the axes as they run: where every tick and label sits and what the label says;
  *   - the rows the mark draws (of a view with one mark);
@@ -43,6 +44,12 @@ export function scalesOf(vg: Obj): string {
   return JSON.stringify(canon(JSON.parse(JSON.stringify(scales, (k, v) => (k === 'data' && typeof v === 'string' ? undefined : v)))))
 }
 
+/** Axes and legends as compiled, at every level of the spec, with the names of the data they read left out. */
+export function guidesOf(vg: Obj): string {
+  const levels = (node: Obj): unknown[] => [node.axes, node.legends, ...((node.marks as Obj[] | undefined) ?? []).flatMap((m) => (m.type === 'group' ? levels(m) : []))]
+  return JSON.stringify(canon(JSON.parse(JSON.stringify(levels(vg), (k, v) => (k === 'data' && typeof v === 'string' ? undefined : v)))))
+}
+
 function* marksOf(ms: any[] | undefined): Generator<any> {
   for (const m of ms ?? []) {
     yield m
@@ -57,8 +64,19 @@ interface Run {
   svg: string
 }
 
+/**
+ * Vega's loader, reading the link it is asked to sanitize as a string. Vega's SVG renderer sanitizes an `href` in a promise nobody
+ * awaits and crashes on the null a rejected link gives it, and the loader rejects anything but a string: a number in an `href` channel
+ * (an ordinal number field, a number datum) would take the process down with an unhandled rejection. Read as a string, the number is
+ * the link an attribute would hold; both specs of a comparison are drawn with this loader.
+ */
+const LOADER = (() => {
+  const base = vega.loader()
+  return { ...base, sanitize: (uri: unknown, options: unknown) => base.sanitize(String(uri), options as never) }
+})()
+
 async function run(vg: Obj): Promise<Run> {
-  const view = new vega.View(vega.parse(JSON.parse(JSON.stringify(vg))), { renderer: 'none' })
+  const view = new vega.View(vega.parse(JSON.parse(JSON.stringify(vg))), { renderer: 'none', loader: LOADER as never })
   await view.runAsync()
   const names = ((vg.scales as Obj[] | undefined) ?? []).map((s) => String(s.name))
   const scales = names.map((n) => {
@@ -106,8 +124,13 @@ export async function differences(spec: Obj): Promise<Outcome> {
   try { ours = compile(JSON.parse(JSON.stringify(spec)) as never) as Obj } catch (e) { ours = undefined; refusal = String(e).slice(0, 160) }
   const no = (why: string): Outcome => ({ why, compared: true })
   if (theirs === undefined) return { why: '', compared: false }
-  if (ours === undefined) return no(`refused by aster only: ${refusal}`)
+  if (ours === undefined) {
+    // (a refusal of what vega-lite writes and vega itself cannot run refuses nothing there is to match)
+    try { await run(theirs) } catch { return { why: '', compared: false } }
+    return no(`refused by aster only: ${refusal}`)
+  }
   if (scalesOf(ours) !== scalesOf(theirs)) return no(`compiled scales: expected ${scalesOf(theirs)} got ${scalesOf(ours)}`)
+  if (guidesOf(ours) !== guidesOf(theirs)) return no(`compiled guides: expected ${guidesOf(theirs)} got ${guidesOf(ours)}`)
   let a: Run
   let b: Run
   try { a = await run(theirs) } catch { return { why: '', compared: false } } // (vega-lite wrote a spec vega itself cannot run: nothing to compare)

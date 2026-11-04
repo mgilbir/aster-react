@@ -17,11 +17,16 @@
  * vega-lite 6.4.3.
  */
 import { VLCompileError, splitAccessPath } from './names.js'
+import { markChannelCompatible, spansAChannel } from './channels.js'
 import { isTimerSelect, validateTimerSelection } from './animation.js'
 import { parseEventSelectorString } from './event-selector.js'
 
 type Obj = Record<string, unknown>
 const isObj = (v: unknown): v is Obj => v !== null && typeof v === 'object' && !Array.isArray(v)
+
+/** Does `mark` draw `channel`? A composite mark (boxplot, errorbar, errorband) is its parts: they decide, once it unfolds. */
+const draws = (enc: Record<string, unknown>, channel: string, mark: string): boolean =>
+  ['boxplot', 'errorbar', 'errorband'].includes(mark) || markChannelCompatible(enc, channel, mark, false)
 
 function fail(path: string, msg: string): never {
   throw new VLCompileError(`${path || '<spec>'}: ${msg}`)
@@ -54,10 +59,7 @@ const ALL_CHANNELS = set(
     'color fill stroke opacity fillOpacity strokeOpacity strokeWidth strokeDash size angle shape text tooltip href url description key detail order time ' +
     'row column facet',
 )
-/** Schema channels compile.ts does not consume (everything else in ALL_CHANNELS is supported; the rest throws). */
-const UNSUPPORTED_CHANNELS = set('key')
 const GEO_CHANNELS = set('longitude latitude longitude2 latitude2')
-const SUPPORTED_CHANNELS: ReadonlySet<string> = new Set([...ALL_CHANNELS].filter((c) => !UNSUPPORTED_CHANNELS.has(c)))
 
 const AGG_OPS = set(
   'argmax argmin average count distinct max mean median min missing product q1 q3 ci0 ci1 stderr stdev stdevp sum valid values variance variancep exponential exponentialb',
@@ -851,14 +853,16 @@ function validateMark(mark: unknown, at: string): string {
 function validateUnit(spec: Obj, at: (k: string) => string, top = true): void {
   const mark = validateMark(spec.mark, at('mark'))
   const enc = spec.encoding === undefined ? {} : spec.encoding
-  validateEncoding(enc, at('encoding'), 'unit', mark)
-  if (isObj(enc)) validateGeoUnit(mark, enc, at('encoding'))
-  validateAnimation(spec, enc, at)
+  // (a line that spans a channel is drawn as a rule: the channels a rule draws are the ones it keeps)
+  const drawnAs = mark === 'line' && isObj(enc) && spansAChannel(enc) ? 'rule' : mark
+  validateEncoding(enc, at('encoding'), 'unit', drawnAs)
+  if (isObj(enc)) validateGeoUnit(drawnAs, enc, at('encoding'))
+  validateAnimation(spec, enc, at, drawnAs)
   const faceted = isObj(enc) && (enc.row != null || enc.column != null || enc.facet != null)
-  // A map in a facet fits its projection to the facet's data. With a `shape` field (or longitude / latitude) that is a `geojson`
-  // transform's signal; a geoshape with no shape channel reads its data as the GeoJSON, and vega-lite fits it to
-  // `data("child_main")`, a dataset it never defines (it renders in no engine).
-  if ((compositeDepth > 0 || faceted) && mark === 'geoshape' && !(isObj(enc) && isObj(enc.shape) && (enc.shape.field !== undefined || enc.shape.datum !== undefined))) {
+  // A map in a facet fits its projection to the facet's data. With a GeoJSON `shape` field (or longitude / latitude) that is a
+  // `geojson` transform's signal; a geoshape with no GeoJSON shape channel (none, or a field its legend reads) draws its data as
+  // the GeoJSON, and vega-lite fits it to `data("child_main")`, a dataset it never defines (it renders in no engine).
+  if ((compositeDepth > 0 || faceted) && mark === 'geoshape' && !(isObj(enc) && isObj(enc.shape) && enc.shape.type === 'geojson')) {
     fail(at('mark'), 'a geoshape with no `shape` field inside a facet is not supported: vega-lite 6.4.3 fits its projection to a dataset it never defines (data("child_main")), so there is no output to match')
   }
 }
@@ -868,8 +872,9 @@ function validateUnit(spec: Obj, at: (k: string) => string, top = true): void {
  * on it (animation.ts says why vega-lite 6.4.3 needs all three: without them it emits marks that read a dataset it never
  * defines). Anything else that involves a timer selection or the time channel is refused here.
  */
-function validateAnimation(spec: Obj, enc: unknown, at: (k: string) => string): void {
-  const hasTime = isObj(enc) && enc.time != null
+function validateAnimation(spec: Obj, enc: unknown, at: (k: string) => string, mark: string): void {
+  // (a geoshape does not draw the time channel: vega-lite drops it)
+  const hasTime = isObj(enc) && enc.time != null && draws(enc, 'time', mark)
   if (!hasTime) {
     if (timerParams.size) fail(at('params'), 'a timer selection animates the `time` channel: the unit has none')
     return
@@ -901,29 +906,36 @@ function validateAnimation(spec: Obj, enc: unknown, at: (k: string) => string): 
  * leaf after a layer's encoding merges into it.
  */
 export function validateGeoUnit(mark: string, enc: Obj, path: string): void {
-  const geoChannels = Object.keys(enc).filter((c) => GEO_CHANNELS.has(c) && enc[c] != null)
+  // (a geo channel the mark does not draw is dropped, as vega-lite drops it; a constant is no position to project, and changes
+  // nothing but where a mark with no x or y reads its place from: geopositions of its own)
+  const geoChannels = Object.keys(enc).filter((c) => GEO_CHANNELS.has(c) && isFieldOrDatum(enc[c]) && draws(enc, c, mark))
   if (geoChannels.length) {
     if (!GEO_POSITION_MARKS.has(mark)) {
       fail(`${path}.${geoChannels[0]}`, `longitude / latitude positions are only implemented for the ${[...GEO_POSITION_MARKS].join(', ')} marks, not "${mark}"`)
     }
-    const given = (c: string): boolean => enc[c] != null
+    const given = (c: string): boolean => geoChannels.includes(c)
     for (const [lon, lat] of [['longitude', 'latitude'], ['longitude2', 'latitude2']] as const) {
       if (given(lon) !== given(lat)) fail(`${path}.${given(lon) ? lon : lat}`, `needs its pair: give both \`${lon}\` and \`${lat}\` (vega-lite emits a geopoint transform for a half pair that vega refuses)`)
     }
-    const projected = ['longitude', 'latitude', 'longitude2', 'latitude2'].some((c) => isObj(enc[c]) && (enc[c].field !== undefined || enc[c].datum !== undefined))
-    if (!projected) fail(`${path}.${geoChannels[0]}`, 'a longitude / latitude pair needs a `field` or `datum` (value-only positions get no projection in vega-lite)')
   }
   if (isObj(enc.shape) && enc.shape.type === 'geojson' && mark !== 'geoshape') {
     fail(`${path}.shape.type`, 'a geojson shape field only applies to the geoshape mark')
   }
-  if (mark === 'geoshape') {
-    for (const c of ['x', 'y', 'x2', 'y2', 'xOffset', 'yOffset', 'theta', 'radius', 'size', 'angle']) {
-      if (enc[c] != null) fail(`${path}.${c}`, `a geoshape mark is positioned by its projection: the "${c}" channel does not apply`)
-    }
-    if (isObj(enc.shape) && enc.shape.field !== undefined && enc.shape.type !== 'geojson') {
-      fail(`${path}.shape`, 'on a geoshape mark the shape channel carries the GeoJSON ({"field": ..., "type": "geojson"})')
-    }
-  }
+  // (the channels a geoshape does not draw - its positions, size and angle - are dropped, as vega-lite drops them)
+
+}
+
+/** A field or a datum definition (not a constant, nor a condition alone). */
+function isFieldOrDatum(def: unknown): boolean {
+  return isObj(def) && (def.field !== undefined || def.datum !== undefined || def.aggregate === 'count')
+}
+
+/** The channels that place a mark: none of them takes a condition in Vega-Lite (its schema gives position definitions none). */
+const POSITION_CHANNELS = set('x y x2 y2 xOffset yOffset theta theta2 radius radius2 longitude latitude longitude2 latitude2')
+
+/** A condition that gives a field or a datum (rather than a value). */
+function conditionGivesField(cond: unknown): boolean {
+  return ([] as unknown[]).concat(cond ?? []).some((c) => isObj(c) && (c.field !== undefined || c.datum !== undefined || c.aggregate === 'count'))
 }
 
 // --- encoding ----------------------------------------------------------------
@@ -938,9 +950,9 @@ function validateEncoding(enc: unknown, path: string, where: 'unit' | 'layer', m
   for (const [ch, def] of Object.entries(enc)) {
     const at = `${path}.${ch}`
     if (!ALL_CHANNELS.has(ch)) fail(at, `unknown encoding channel "${ch}"`)
-    if (!SUPPORTED_CHANNELS.has(ch)) fail(at, `encoding channel "${ch}" is valid Vega-Lite but is not supported by @aster/vl`)
-    if (ch === 'url' && mark !== 'image') fail(at, 'the url channel only applies to the image mark')
     if (def === null) continue
+    // (a channel the mark does not draw is dropped, as vega-lite drops it: there is nothing of it to check)
+    if (mark !== undefined && !draws(enc, ch, mark)) continue
     if ((ch === 'row' || ch === 'column' || ch === 'facet') && where === 'layer') fail(at, 'facet channels are not allowed in a layer encoding (use the facet operator)')
     if (ch === 'detail' || ch === 'order' || ch === 'tooltip' || ch === 'href' || ch === 'description') {
       if (Array.isArray(def)) {
@@ -952,8 +964,6 @@ function validateEncoding(enc: unknown, path: string, where: 'unit' | 'layer', m
     validateChannelDef(ch, def, at, where === 'layer')
   }
 }
-
-const NO_SCALE_CHANNELS = set('color fill stroke opacity fillOpacity strokeOpacity strokeWidth')
 
 function validateChannelDef(ch: string, def: unknown, at: string, shared = false): void {
   if (!isObj(def)) fail(at, 'a channel definition must be an object')
@@ -968,11 +978,15 @@ function validateChannelDef(ch: string, def: unknown, at: string, shared = false
     fail(`${at}.type`, `unknown type ${JSON.stringify(def.type)}`)
   }
   if (def.type === 'geojson' && ch !== 'shape') fail(`${at}.type`, 'the geojson type only applies to the shape channel of a geoshape mark')
-  if (GEO_CHANNELS.has(ch)) {
-    if (def.type !== undefined && def.type !== 'quantitative') fail(`${at}.type`, 'a longitude / latitude channel is quantitative')
-    for (const k of ['aggregate', 'bin', 'timeUnit', 'sort', 'stack', 'scale', 'axis', 'legend', 'condition', 'impute', 'band', 'bandPosition']) {
-      if (def[k] !== undefined) fail(`${at}.${k}`, `\`${k}\` does not apply to a longitude / latitude channel (it is projected, not scaled)`)
-    }
+  // (vega-lite builds a scale, an axis and a stack group for the field of such a condition, yet places the mark by the value: there
+  // is no coherent output to match)
+  if (POSITION_CHANNELS.has(ch) && conditionGivesField(def.condition)) {
+    fail(`${at}.condition`, `a condition that gives a field or a datum on a position channel (${ch}) is not supported: a position takes no condition in Vega-Lite`)
+  }
+  // (a longitude or a latitude projects its raw field whatever its definition says; a count of records has no field to project)
+  const geo = GEO_CHANNELS.has(ch)
+  if (geo && def.field === undefined && def.aggregate === 'count') {
+    fail(`${at}.aggregate`, 'a count of records reads no field: it has no position to project (vega-lite 6.4.3 emits a geopoint transform with no field, which vega cannot run)')
   }
   if (ch === 'shape' && def.type === 'geojson') {
     for (const k of ['aggregate', 'bin', 'timeUnit', 'sort', 'scale', 'legend', 'condition', 'datum', 'value']) {
@@ -995,8 +1009,9 @@ function validateChannelDef(ch: string, def: unknown, at: string, shared = false
       if (def.aggregate !== 'count' && def.field === undefined) fail(`${at}.aggregate`, `aggregate "${def.aggregate}" needs a field`)
     }
   }
-  if (def.bin !== undefined) validateBin(def.bin, `${at}.bin`, ch === 'x' || ch === 'y')
-  if ((def.bin === 'binned' || (isObj(def.bin) && def.bin.binned === true)) && ch !== 'x' && ch !== 'y') fail(`${at}.bin`, 'pre-binned data (bin: "binned") only applies to the x and y channels')
+  // (vega-lite reads pre-binned data on x and y; on a longitude or a latitude it ignores it, and the mark is placed as it is)
+  if (def.bin !== undefined) validateBin(def.bin, `${at}.bin`, ch === 'x' || ch === 'y' || geo)
+  if ((def.bin === 'binned' || (isObj(def.bin) && def.bin.binned === true)) && ch !== 'x' && ch !== 'y' && !geo) fail(`${at}.bin`, 'pre-binned data (bin: "binned") only applies to the x and y channels')
   if (def.timeUnit !== undefined) {
     normalizeTimeUnit(def.timeUnit, `${at}.timeUnit`)
   }
@@ -1008,7 +1023,8 @@ function validateChannelDef(ch: string, def: unknown, at: string, shared = false
     fail(`${at}.stack`, `unsupported stack ${JSON.stringify(def.stack)}`)
   }
   if (def.impute !== undefined) {
-    if (ch !== 'x' && ch !== 'y') fail(`${at}.impute`, '`impute` only applies to the x and y channels')
+    // (vega-lite imputes along x and y; on a longitude or a latitude it ignores `impute`)
+    if (ch !== 'x' && ch !== 'y' && !geo) fail(`${at}.impute`, '`impute` only applies to the x and y channels')
     const im = def.impute
     if (!isObj(im)) mustBe(`${at}.impute`, OBJECT)
     keysOf(im, set('method value frame keyvals'), `${at}.impute`, 'impute')
@@ -1016,14 +1032,13 @@ function validateChannelDef(ch: string, def: unknown, at: string, shared = false
     if (im.frame !== undefined && !(Array.isArray(im.frame) && im.frame.length === 2)) fail(`${at}.impute.frame`, 'must be a [start, end] pair')
     if (im.keyvals !== undefined) validateImputeKeyvals(im.keyvals, `${at}.impute.keyvals`)
   }
-  if (def.band !== undefined) fail(`${at}.band`, '`band` is not supported')
+  // (a projected position has no band: vega-lite ignores `band` there)
+  if (def.band !== undefined && !geo) fail(`${at}.band`, '`band` is not supported')
   if (def.bandPosition !== undefined && typeof def.bandPosition !== 'number') mustBe(`${at}.bandPosition`, 'a number')
   if (def.condition !== undefined) validateCondition(def.condition, `${at}.condition`)
   for (const k of ['axis', 'legend', 'scale'] as const) {
     if (def[k] !== undefined && def[k] !== null && !isObj(def[k])) mustBe(`${at}.${k}`, 'an object or null')
   }
-  // (`scale: null` reads the field's values as they are; for a position it would need the pixel values to be known)
-  if (def.scale === null && !NO_SCALE_CHANNELS.has(ch)) fail(`${at}.scale`, `\`scale: null\` (identity/disabled scale) is not supported on the ${ch} channel`)
   if (isObj(def.scale)) validateScaleDef(def.scale, `${at}.scale`)
 }
 
