@@ -33,7 +33,6 @@ const REJECTED: Array<[string, unknown, RegExp]> = [
   ['a non-numeric latitude datum', unit({ mark: 'point', encoding: { longitude: { datum: 1 }, latitude: { datum: 'north' } } }), /finite number/],
   ['a geojson shape on a point', unit({ mark: 'point', encoding: { shape: { field: 'g', type: 'geojson' } } }), /geoshape/],
   ['a geojson type outside the shape channel', unit({ mark: 'geoshape', encoding: { color: { field: 'g', type: 'geojson' } } }), /shape channel/],
-  ['an x channel on a geoshape', unit({ mark: 'geoshape', encoding: { x: xq } }), /positioned by its projection/],
   ['a faceted map', unit({ mark: 'geoshape', encoding: { column: cn } }), /inside a facet/],
   ['a topojson format without an object', { data: { values: [], format: { type: 'topojson' } }, mark: 'geoshape' }, /feature.*mesh/],
   ['a feature on a json format', { data: { values: [], format: { type: 'json', feature: 'x' } }, mark: 'geoshape' }, /only applies to the "topojson" format/],
@@ -147,6 +146,7 @@ describe('validation layer: unsupported / invalid input throws a VLCompileError 
 
 /** The matching accepted forms, so the table above is not simply rejecting everything. */
 const ACCEPTED: Array<[string, unknown]> = [
+  ['an x channel on a geoshape (vega-lite drops the channels a geoshape does not draw)', unit({ mark: 'geoshape', encoding: { x: xq } })],
   ['fill together with color (vega-lite drops the color of a filled mark)', unit({ mark: 'bar', encoding: { x: cn, color: cn, fill: cn } })],
   ['a datum condition on fill', unit({ encoding: { x: xq, y: yq, fill: { condition: { test: 'true', datum: 'a' }, value: 'g' } } })],
   ['sort by channel', unit({ encoding: { x: { ...cn, sort: '-y' }, y: { ...yq, aggregate: 'sum' } }, mark: 'bar' })],

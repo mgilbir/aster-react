@@ -7896,14 +7896,16 @@ function markPaint(spec: VLSpec, mark: string, fields: FieldDef[], filled: boole
 }
 
 /**
- * vega-lite initEncoding: a `color` channel gives way to the `fill` (filled mark) or `stroke` (unfilled mark) the encoding has: it is
- * dropped. The encoding of the unit is what is left: nothing after this reads the dropped colour.
+ * vega-lite initEncoding: the channels the mark does not draw are dropped (a size on an area, an x on a geoshape, a url on anything
+ * but an image), and a `color` channel gives way to the `fill` (filled mark) or `stroke` (unfilled mark) the encoding has. The
+ * encoding of the unit is what is left: nothing after this reads a dropped channel.
  */
 function initUnitEncoding(spec: VLSpec, mark: string): void {
   const enc = isObject(spec.encoding) ? (spec.encoding as Record<string, unknown>) : undefined
   if (!enc) return
+  const image = isObject(spec.mark) && spec.mark.$image === true
   const shadowed = 'color' in enc && (markIsFilled(spec, mark) ? 'fill' : 'stroke') in enc
-  const kept = Object.entries(enc).filter(([ch]) => !(ch === 'color' && shadowed))
+  const kept = Object.entries(enc).filter(([ch]) => markChannelCompatible(enc, ch, mark, image) && !(ch === 'color' && shadowed))
   if (kept.length !== Object.keys(enc).length) spec.encoding = Object.fromEntries(kept)
 }
 
