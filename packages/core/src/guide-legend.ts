@@ -385,6 +385,8 @@ export interface LegendBuilt {
   datum: Row
   /** the marks a pass that stopped in the legend made, when it did not make them all (see `SceneGroup.madeMarks`) */
   madeMarks?: string[]
+  /** the grid of a symbol legend's entries threw (a `columns` it cannot take): the entries stay where their encode put them */
+  gridError?: { error: unknown }
 }
 
 /**
@@ -480,6 +482,7 @@ export function buildLegend(inp: LegendBuildInput): LegendBuilt {
   // The marks the legend's operators make, in the order vega ranks them: a mark whose operator comes after the encode that
   // threw is never made (see `EntryHost.stopped`).
   const madeMarks: string[] = []
+  const failed: { grid?: { error: unknown } } = {}
   let cutShort = false
   const stage = (name: string, run: () => void): void => {
     if (host.stopped !== undefined) { cutShort = true; return }
@@ -510,7 +513,7 @@ export function buildLegend(inp: LegendBuildInput): LegendBuilt {
     // (a symbol legend's entries are instances of their own, ranked after the title)
     makeTitle()
     if (inp.entries === 'none') cutShort = true
-    else stage('scope', () => { entry.box = symbolEntries(inp, k, defs, group, partMeta, entryLeaves, type, inp.entries === 'boxes') })
+    else stage('scope', () => { entry.box = symbolEntries(inp, k, defs, group, partMeta, entryLeaves, type, inp.entries === 'boxes', failed) })
   } else {
     const isGradient = type === GradientLegend
     // the default tick count of a gradient follows its length
@@ -624,7 +627,7 @@ export function buildLegend(inp: LegendBuildInput): LegendBuilt {
     titleItem._legendTitle = true
     leaves.push(titleItem)
   }
-  return { leaves, legendType: type, width, height, bounds, group, partMeta, datum, ...(cutShort || host.stopped !== undefined ? { madeMarks } : {}) }
+  return { leaves, legendType: type, width, height, bounds, group, partMeta, datum, ...(cutShort || host.stopped !== undefined ? { madeMarks } : {}), ...(failed.grid !== undefined ? { gridError: failed.grid } : {}) }
 }
 
 /**
@@ -715,7 +718,7 @@ function drawnSymbol(sym: SceneItem & Rec): SceneItem & Rec {
  * Make the entries of a symbol legend (a box, a symbol and a label each) and lay them out in a grid of `columns` columns. The leaves
  * are appended to `out` in the entry group's frame; returns the bounds of all entries.
  */
-function symbolEntries(inp: LegendBuildInput, k: Kit, defs: LegendDefs, group: Rec, partMeta: LegendBuilt['partMeta'], out: SceneItem[], entriesType: string, boxesOnly: boolean): Bounds {
+function symbolEntries(inp: LegendBuildInput, k: Kit, defs: LegendDefs, group: Rec, partMeta: LegendBuilt['partMeta'], out: SceneItem[], entriesType: string, boxesOnly: boolean, failed: { grid?: { error: unknown } }): Bounds {
   const { host, style } = inp
   const { props } = k
   const clipped = !!props.get('clipHeight')
@@ -799,25 +802,29 @@ function symbolEntries(inp: LegendBuildInput, k: Kit, defs: LegendDefs, group: R
     order = []
     for (let row = 0; row < flowRows; row++) for (let i = row; i < n; i += flowRows) order.push(i)
   }
-  // a column count the grid cannot take is one column (the runtime reports it beforehand for a number written in the spec)
-  const ncols = columns ? (columns > 0 && Number.isInteger(columns) ? columns : 1) : n
   const resolved = (v: unknown): unknown => (isSignal(v) ? host.expr(v.signal) : v)
   const place: Array<{ x: number; y: number }> = new Array(n)
   // (the entries' own grid is laid out by an operator of the legend's own: the scope's layout never running does not stop it)
-  const gridded = !inp.raw || inp.entryGrid === true
-  if (!gridded) {
-    for (const i of order) place[i] = { x: 0, y: 0 }
-  } else {
-    const plan = placeGrid(
-      order.map((i) => (made[i]!.held.empty() ? new Bounds().set(0, 0, 0, 0) : made[i]!.held.clone())),
-      order.map(() => ({ x: 0, y: 0 })),
-      {
-        align: resolved(props.get('gridAlign')), columns: ncols, center: { row: true, column: false },
-        padding: { row: resolved(props.get('rowPadding')), column: resolved(props.get('columnPadding')) },
-      },
-    )
-    order.forEach((i, j) => { place[i] = { x: plan.dx[j]!, y: plan.dy[j]! } })
+  let gridded = !inp.raw || inp.entryGrid === true
+  if (gridded) {
+    // (a column count the grid cannot take -- fractional, negative -- throws before an entry moves, as vega's grid does)
+    try {
+      const plan = placeGrid(
+        order.map((i) => (made[i]!.held.empty() ? new Bounds().set(0, 0, 0, 0) : made[i]!.held.clone())),
+        order.map(() => ({ x: 0, y: 0 })),
+        {
+          align: resolved(props.get('gridAlign')), columns: columns || n, center: { row: true, column: false },
+          padding: { row: resolved(props.get('rowPadding')), column: resolved(props.get('columnPadding')) },
+        },
+      )
+      order.forEach((i, j) => { place[i] = { x: plan.dx[j]!, y: plan.dy[j]! } })
+    } catch (error) {
+      if (!(error instanceof RangeError)) throw error
+      failed.grid = { error }
+      gridded = false
+    }
   }
+  if (!gridded) for (const i of order) place[i] = { x: 0, y: 0 }
 
   // The width of an entry's box is that of the column it is annotated with, which is not always the column the grid puts it in:
   // with more columns than the vertical flow fills, the two differ.

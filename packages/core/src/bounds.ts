@@ -1050,6 +1050,9 @@ export function layoutBounds(node: SceneNode, out = new Bounds()): Bounds {
   if (g.role === 'legend') return out.union(boundLegendGroup(g))
   // a title the layout placed keeps the extent it measured there (see guide-title.ts)
   if (g.role === 'title' && (g as Record<string, unknown>).titleBounds) return out.union((g as Record<string, unknown>).titleBounds as Bounds)
+  // a group a grid layout moved keeps the box it was measured with, moved with it (see trellis.ts `carry`)
+  const laid = (g as { laidBounds?: Bounds }).laidBounds
+  if (laid !== undefined) return out.union(laid)
   const b = new Bounds()
   if (!g.clip && g.items) {
     const measure = (child: SceneNode): Bounds => {

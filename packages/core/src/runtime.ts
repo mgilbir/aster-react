@@ -344,6 +344,8 @@ interface GuideScope {
   mark?: number
   /** the default tick counts (by gradient length) the scope's gradient legends have made so far: the first of each is a late operator */
   counts?: Set<string>
+  /** the last instance in this scope's subtree (itself included) that has content of its own: a layout above it is ranked after it */
+  last?: number[]
 }
 
 /**
@@ -381,8 +383,26 @@ interface AbortPoint {
   scales?: true
   /** a signal of the view that reads data or a scale threw: it is ranked after every other operator of the view's scope (see `abortAtThrowingSignal`) */
   lateSignal?: true
+  /**
+   * The layout of a group mark (or of the view) threw (see `LayoutFailure`). Its operator is ranked after the last instance below
+   * the mark's items that has content: the point is that instance, `late` (made whole), or, when none has any, the mark itself
+   * (`mark`, after its encode).
+   */
+  layout?: LayoutFailure
   /** what the failing operator threw: logged once, for the point the pass stops at (see `buildContent`) */
   error?: unknown
+}
+
+/**
+ * A layout that threw. vega lays the items of a group mark out one after the other, each its grid (cells, headers, footers, titles)
+ * and then its guides: the items before the one that threw were laid out, that one only as far as its grid got, and the ones after
+ * it not at all; neither was anything above the mark (the scopes it is in). Everything below the items was made, and laid out.
+ */
+interface LayoutFailure {
+  /** the instances of the mark's items, in item order (the view's own layout: the view, `[]`) */
+  items: number[][]
+  /** the item whose layout threw */
+  at: number
 }
 
 interface AxisAbort {
@@ -403,6 +423,8 @@ interface PassRecord {
   places: Map<string, GridPlace[]>
   /** What a legend was before its layout, per legend (see `LegendBuildInput.relayout`). */
   legends: Map<string, string>
+  /** What a grid layout of a group was given, per layout (see `layoutWarn`). */
+  inputs: Map<string, string>
 }
 
 /** The previous pass's record (undefined for the first) and the one this pass writes. */
@@ -431,8 +453,10 @@ interface EvalContext {
   datasets: Map<string, Row[]>
   /** The rows `setdata(name, tuples)` put in a dataset's input (see `ExpressionRuntime.setdata`), and whether they changed since the datasets were last built. */
   setData: SetDataState
-  /** A legend tickCount threw: the whole layout aborts (raw-guide mode). */
+  /** The guides are not laid out (the layout of their scope never ran, or stopped before them). */
   rawGuides?: boolean
+  /** The guides are not laid out because the layout of their scope threw: what ranks before it (the grids of legend entries) ran. */
+  layoutThrew?: true
   /** The guide host of this context (see guideHost). */
   guideHost?: { ctx: EvalContext; host: GuideHost }
   scales: Map<string, Scale>
@@ -453,7 +477,8 @@ interface EvalContext {
   runtime: ExpressionRuntime
   _defs: SceneDef[]
   /** Shared by every scope of one evaluation: a layout threw (vega logs it and renders the scene unlaid-out). */
-  layoutState: { failed: boolean }
+  /** whether a layout threw, and the warnings the layouts of the pass gave (logged when the pass is the one kept) */
+  layoutState: { failed: boolean; warnings: string[] }
   /** Signals whose `init` expression has run (it runs once). */
   initDone: Set<string>
   /** Signals the host supplied for this evaluation (an `init` never overrides them). */
@@ -578,6 +603,9 @@ function stepOf(p: AbortPoint): number {
   if (p.projection) return -1
   if (p.title) return 3e9
   if (p.lateSignal) return 3.5e9
+  // (a layout ranked after an instance comes after everything of it; one ranked after its mark, after the mark's transforms)
+  if (p.layout && p.late) return 6e9
+  if (p.layout && p.mark !== undefined) return 1e9 + p.mark + 0.75
   if (p.legend !== undefined) return 2e9 + p.legend
   if (p.mark !== undefined) return 1e9 + p.mark + (p.afterEncode ? 0.5 : 0)
   return p.axis
@@ -691,7 +719,7 @@ function prepareChartCtx(
   const extraFp = `${input.domainRaw ? valueKey(input.domainRaw) : ''}\u0002${input.textMetrics ? valueKey(input.textMetrics) : ''}\u0002${input.containerSize ? `${input.containerSize.width}x${input.containerSize.height}` : ''}\u0002${input.measuredSize ? `${input.measuredSize.width}x${input.measuredSize.height}` : ''}`
   const ctx: EvalContext = {
     chart, scope: rootScope(chart), abort: { failures: [] }, ...(passMemory !== undefined ? { passMemory } : {}), signalParams, width, height, datasets, setData, scales, scaleTypes, projections: transformProjections, projectionStamp: new Map(), projectionIncomplete: new Set(), geoStale: false, runtime, _defs: defs,
-    layoutState: { failed: false }, initDone: new Set(), hostSignals: new Set([
+    layoutState: { failed: false, warnings: [] }, initDone: new Set(), hostSignals: new Set([
       ...Object.keys(input.signals ?? {}),
       // an explicit view size (the host's, or the fit loop's resize) wins over an `init`
       ...(explicitSize.width ? ['width'] : []), ...(explicitSize.height ? ['height'] : []),
@@ -713,17 +741,6 @@ function prepareChartCtx(
   // (It must not close over `ctx`: that reaches the previous evaluation's state, and a scene would keep every
   // scene before it alive.)
   runtime.transformed = makeTransformed(chart, runtime, signalParams, transformHierarchies, transformProjections)
-  // A non-integer `columns` makes the symbol-legend grid layout throw: the ViewLayout never completes and
-  // the whole scene renders at raw encode positions (a legend whose entries cannot be made is an aborted
-  // pass in its scope instead: see axisTicksFailed).
-  ctx.rawGuides = chart.legends.some((l) => {
-    // A non-integer/negative `columns` makes vega's symbol-legend gridLayout
-    // throw (Array(columns) with a length that is not a valid uint32-ish int).
-    // Gradient legends do not lay entries out in a grid and ignore columns.
-    if (l.own?.gradientLength == null && typeof l.columns === 'number'
-      && (l.columns > 0 ? !Number.isInteger(l.columns) : l.columns !== 0)) return true
-    return false
-  })
   // Normalise every caller-supplied change description into one pulse per
   // source dataset. `dataChanges` is the same-length form (`{changed}`);
   // `dataPulse` carries the full mapping and wins when both name a dataset.
@@ -1960,11 +1977,33 @@ function buildContent(
   const first = buildContentPass(chart, input, cw, ch, txn, fitted, signed, undefined, order)
   const failures = first.ctx.abort.failures
   // (a signal or a dataset that threw stopped the pass before the operators these failures are: they are not vega's)
-  if (!failures.length || first.ctx.datasetAborted) return first
+  if (!failures.length || first.ctx.datasetAborted) {
+    warnOf(first.ctx)
+    return first
+  }
   const cut = failures.reduce(earlierPoint)
-  // (the one error of the pass: what failed first, in the order vega ranks its operators)
-  if (cut.error !== undefined) reportEvalError(first.ctx, cut.error)
-  return buildContentPass(chart, input, cw, ch, txn, fitted, signed, cut, order)
+  // The pass that stops at the first failure is made with what it reports held back: the layouts it ran are ranked before the
+  // operator that threw, so their warnings come first, then the one error of the pass (what failed first, in the order vega ranks its
+  // operators), then what the pass reported itself.
+  const held: Array<{ level: 'error' | 'warn' | 'info' | 'debug'; args: unknown[] }> = []
+  const hold = (level: 'error' | 'warn' | 'info' | 'debug') => (...args: unknown[]): void => { held.push({ level, args }) }
+  const logger = first.ctx.logger
+  let second: BuiltContent | undefined
+  try {
+    second = buildContentPass(chart, { ...input, logger: { error: hold('error'), warn: hold('warn'), info: hold('info'), debug: hold('debug') } }, cw, ch, txn, fitted, signed, cut, order)
+    second.ctx.logger = logger
+    warnOf(second.ctx)
+  } finally {
+    // (a pass that refuses the view still logs what it stopped at first)
+    if (cut.error !== undefined) reportEvalError(first.ctx, cut.error)
+    for (const { level, args } of held) logger[level]?.(...args)
+  }
+  return second
+}
+
+/** Log the warnings the layouts of the pass that is kept gave, in the order they gave them. */
+function warnOf(ctx: EvalContext): void {
+  for (const message of ctx.layoutState.warnings) ctx.logger.warn(message)
 }
 
 function buildContentPass(
@@ -1983,7 +2022,7 @@ function buildContentPass(
     chart, fitted ? { ...input, width: cw, height: ch } : input, txn,
     fitted ? { width: true, height: true } : { width: input.width != null, height: input.height != null },
     signed,
-    order !== undefined ? { prev: order.prev, cur: { guides: new Map(), scales: new Map(), places: new Map(), legends: new Map() } } : undefined,
+    order !== undefined ? { prev: order.prev, cur: { guides: new Map(), scales: new Map(), places: new Map(), legends: new Map(), inputs: new Map() } } : undefined,
   )
   const { ctx } = prepared
   ctx.abort.cut = cut
@@ -2029,7 +2068,9 @@ function buildContentPass(
   // went past all of them (see `buildGroupItem`).
   // (a late signal is ranked after the operators of the view's scope and before every instance below it: the view's layout, which
   // is ranked after the last of those instances that has marks, ran if there is none)
-  const unlaid = cut !== undefined && ((compareInstances(ctx.scope.path, cut.path) === 0 && cut.lateSignal !== true) || ctx.scope.unsettled === true
+  // (the view's own layout that threw is run again, as far as it gets: see LayoutFailure)
+  const viewLayoutFailed = cut?.layout !== undefined && cut.layout.items.length === 1 && cut.layout.items[0]!.length === 0
+  const unlaid = cut !== undefined && ((compareInstances(ctx.scope.path, cut.path) === 0 && cut.lateSignal !== true) || ctx.scope.unsettled === true || viewLayoutFailed || holdsFailedLayout(ctx.scope.path, cut.layout)
     // (a mark that reads the late signal connects its operators, ranked after it, to the layout)
     || (cut.lateSignal === true && (ctx.chart.marks.some((m) => markReadsTaint(m, ctx)) || withoutLateReads(ctx, () => hasLateLabels(ctx.chart.legends, ctx)) || guidesReadLate(ctx)))
     || symbolLegendsOf(ctx.chart.legends, ctx).some((_, k) => compareInstances([ctx.scope.nextChild.n + k, 0], cut.path) >= 0))
@@ -2039,19 +2080,26 @@ function buildContentPass(
   // grid positions the child groups (cells, headers, footers, titles) first;
   // layoutGroup then lays out the axes, legends and title around them.
   const hasLayout = ctx.chart.layout != null
-  if (hasLayout && !unlaid) {
+  let layoutError: { error: unknown } | undefined
+  if (hasLayout && (!unlaid || viewLayoutFailed)) {
     try {
-      layoutFacet({ marktype: 'group', items } as unknown as SceneGroup, resolveLayoutOptions(ctx.chart.layout!, ctx), gridMemory(ctx, 'root'))
-    } catch {
-      // vega's dataflow logs the layout error and renders the scene unlayouted:
-      // cells keep their encoded (0,0) anchors and the view skips overflow growth.
+      layoutFacet({ marktype: 'group', items } as unknown as SceneGroup, resolveLayoutOptions(ctx.chart.layout!, ctx), gridMemory(ctx, 'root'), layoutWarn(ctx))
+    } catch (e) {
+      // the grid stops where vega's does, the guides and the title are not laid out and the view is not sized (no overflow growth); the
+      // operator is ranked after every instance with content, which were all made
+      refuseUnrecoverable(e)
       ctx.layoutState.failed = true
+      ctx.rawGuides = true
+      if (!unlaid) ctx.layoutThrew = true
+      layoutError = { error: e }
     }
   }
   const { groups: guideGroups } = withoutLateReads(ctx, () => stopped
     ? buildAxisAndLegend(ctx, items, ctx.chart.axes.slice(0, madeAxes(cut!)), ctx.chart.legends.slice(0, madeLegends(cut!)))
     : buildAxisAndLegend(ctx, items))
   for (const g of guideGroups) items.push(g)
+  // (the view's layout is ranked after every instance with content, the entries of its legends included: known once they are made)
+  if (layoutError !== undefined && cut === undefined) failPass(ctx, { path: ctx.scope.last ?? [], axis: Infinity, late: true, layout: { items: [[]], at: 0 } }, layoutError.error)
 
   // Top-level title. (A pass that stopped at a failing dataset or signal never made it: it is ranked after them.)
   const titleGroup = (stopped && !cut!.title && !cut!.labels && !cut!.lateSignal) || ctx.datasetAborted ? null : withoutLateReads(ctx, () => buildTitleGroup(ctx.chart.title, items, width, height, ctx.rawGuides, ctx, undefined, ctx.chart.autosize === 'fit' || ctx.chart.autosize === 'fit-x' || ctx.chart.autosize === 'fit-y'))
@@ -3878,11 +3926,14 @@ function buildGroupMark(mark: CompiledMark, ctx: EvalContext): SceneGroup[] | nu
   }
   // (an encode or a transform that threw stopped the pass before the sort)
   const sorts = mark.sort !== undefined && !ctx.encodeAborted && transformed && sortRuns(mark, ctx)
-  const settled = sources.map(() => ({ unsettled: false }))
+  const settled: GroupOutcome[] = sources.map(() => ({ unsettled: false }))
   const groups = entered.map((g, i) => buildGroupItem(mark, ctx, g, settled[i]!))
+  const failing = layoutFailed(ctx, entered, settled)
+  markLayoutWarnings(mark, ctx, settled)
   // The layout of a group mark is one operator for all its items, ranked after every instance below any of them: one item
   // with an instance the pass did not get to leaves all of them unlaid. The items made before that was known are made again.
-  if (ctx.abort.cut !== undefined && groups.length > 1 && settled.some((o) => o.unsettled) && !settled.every((o) => o.unsettled)) {
+  // (a layout that threw laid the items before the failing one out: they stay as they are)
+  if (ctx.abort.cut !== undefined && !failing && groups.length > 1 && settled.some((o) => o.unsettled) && !settled.every((o) => o.unsettled)) {
     entered.forEach((g, i) => {
       if (!settled[i]!.unsettled) groups[i] = buildGroupItem(mark, ctx, g, settled[i]!, true)
     })
@@ -4118,8 +4169,23 @@ function scopeSignalValues(mark: CompiledMark, ctx: EvalContext, id: string, bas
   return { params, values }
 }
 
-function buildGroupItem(mark: CompiledMark, ctx: EvalContext, entered: EnteredGroup, outcome?: { unsettled: boolean }, unsettled = false): SceneGroup {
+/** What making a group item tells its mark: whether it was laid out, the last instance below it with content, and a layout that threw. */
+interface GroupOutcome {
+  unsettled: boolean
+  last?: number[]
+  layoutError?: { error: unknown }
+  /** what the item's grid layout warned, and (in a view that fits its viewport) what the layout was given: see `markLayoutWarnings` */
+  warnings?: string[]
+  input?: string
+}
+
+/** Whether instance `a` is `b` or below it. */
+const within = (a: readonly number[], b: readonly number[]): boolean => a.length >= b.length && b.every((v, i) => a[i] === v)
+
+function buildGroupItem(mark: CompiledMark, ctx: EvalContext, entered: EnteredGroup, outcome?: GroupOutcome, unsettled = false): SceneGroup {
   const { src, path, item: geo } = entered
+  // (an item made again reports afresh)
+  if (outcome !== undefined) outcome.warnings = outcome.input = outcome.layoutError = undefined
   const num = (v: unknown): number | undefined => (typeof v === 'number' && Number.isFinite(v) ? v : undefined)
   // the facet partition is a dataset for everything in this item's scope, its own scales included
   const savedFacet = src.facetName !== undefined ? ctx.datasets.get(src.facetName) : undefined
@@ -4203,12 +4269,18 @@ function buildGroupItem(mark: CompiledMark, ctx: EvalContext, entered: EnteredGr
     // (the layout of a group is ranked after the last instance below it that has marks of its own -- an instance with none
     // connects nothing to it)
     const hasContent = (mark.marks?.length ?? 0) + (mark.axes?.length ?? 0) + (mark.legends?.length ?? 0) > 0 || mark.groupTitle !== undefined
-    const late = order >= 0 && hasContent
+    // (a layout that threw is ranked after every instance below the items of its mark: those were made and laid out, and of the
+    // items themselves the ones before the failing one; see LayoutFailure)
+    const failing = ctx.abort.cut?.layout
+    const belowFailing = failing !== undefined && failing.items.some((it) => within(path, it))
+    const itemAt = failing === undefined ? -1 : failing.items.findIndex((it) => it.length === path.length && within(path, it))
+    const late = order >= 0 && hasContent && !belowFailing
     if (late) for (let up: GuideScope | undefined = ctx.scope; up && !up.unsettled; up = up.parent) up.unsettled = true
     const scope: GuideScope = {
-      parent: ctx.scope, path, nextChild: { n: 0 }, unsettled: late || unsettled,
+      parent: ctx.scope, path, nextChild: { n: 0 }, unsettled: late || unsettled || (itemAt >= 0 && itemAt > failing!.at) || holdsFailedLayout(path, failing),
       scales: mark.scales ?? NO_DECLARED, data: mark.data ?? NO_DECLARED, facet: src.facetName,
     }
+    if (hasContent && !hollow) noteInstance(scope, path)
     const childCtx: EvalContext = {
       ...ctx,
       scope,
@@ -4239,24 +4311,32 @@ function buildGroupItem(mark: CompiledMark, ctx: EvalContext, entered: EnteredGr
       for (let up: GuideScope | undefined = scope; up && !up.unsettled; up = up.parent) up.unsettled = true
     }
     // ViewLayout: a `layout` grid positions the child groups (headers, footers, titles, cells) first
-    if (mark.layout && !scope.unsettled) {
+    // (a grid the layout cannot take throws as vega's does, with what it placed before that left placed: the item's guides and
+    // title are then not laid out, and the mark reports it -- see `layoutFailed`)
+    let laidOut = !scope.unsettled
+    if (mark.layout && laidOut) {
       try {
-        layoutFacet({ marktype: 'group', items: content } as unknown as SceneGroup, resolveLayoutOptions(mark.layout, childCtx), gridMemory(childCtx, childCtx.scope.path.join('/')))
-      } catch {
-        // a grid the layout cannot take (vega's gridLayout throws on e.g. fractional `columns`): the dataflow
-        // logs it and the cells stay where their encode put them; the view also skips overflow growth
+        const options = resolveLayoutOptions(mark.layout, childCtx)
+        if (outcome !== undefined && ctx.passMemory !== undefined) outcome.input = layoutInput([gx, gy, gw, gh], content, options)
+        const warnings: string[] = []
+        if (outcome !== undefined) outcome.warnings = warnings
+        layoutFacet({ marktype: 'group', items: content } as unknown as SceneGroup, options, gridMemory(childCtx, childCtx.scope.path.join('/')), (message) => { warnings.push(message) })
+      } catch (e) {
+        refuseUnrecoverable(e)
+        laidOut = false
         ctx.layoutState.failed = true
+        if (outcome !== undefined) outcome.layoutError = { error: e }
       }
     }
 
-    const guideCtx: EvalContext = scope.unsettled ? { ...childCtx, rawGuides: true } : childCtx
+    const guideCtx: EvalContext = laidOut ? childCtx : { ...childCtx, rawGuides: true, ...(scope.unsettled ? {} : { layoutThrew: true as const }) }
     const { groups: guides } = hollow || order > 0
       ? { groups: [] }
       : order === 0 && !whole
         ? buildAxisAndLegend(guideCtx, content, (mark.axes ?? []).slice(0, madeAxes(ctx.abort.cut!)), (mark.legends ?? []).slice(0, madeLegends(ctx.abort.cut!)))
         : buildAxisAndLegend(guideCtx, content, mark.axes ?? [], mark.legends ?? [])
     const siblings: SceneGroup[] = [...content, ...guides]
-    const title = hollow || order > 0 || (order === 0 && !whole && !ctx.abort.cut!.title && !ctx.abort.cut!.labels && !ctx.abort.cut!.lateSignal) ? null : buildTitleGroup(mark.groupTitle, siblings, gw, gh, !!scope.unsettled, guideCtx, src.datum)
+    const title = hollow || order > 0 || (order === 0 && !whole && !ctx.abort.cut!.title && !ctx.abort.cut!.labels && !ctx.abort.cut!.lateSignal) ? null : buildTitleGroup(mark.groupTitle, siblings, gw, gh, !laidOut, guideCtx, src.datum)
     if (title) siblings.push(title)
     const ordered = paintOrderOf(siblings)
 
@@ -4289,7 +4369,10 @@ function buildGroupItem(mark: CompiledMark, ctx: EvalContext, entered: EnteredGr
       // the scales this scope declares, for the handlers of its signals (`scale('x', ...)` resolves through the scope chain)
       if (childScales.size) Object.defineProperty(group, '__scaleFns', { value: childScales, enumerable: false })
     }
-    if (outcome !== undefined) outcome.unsettled = scope.unsettled === true
+    if (outcome !== undefined) {
+      outcome.unsettled = scope.unsettled === true
+      outcome.last = scope.last
+    }
     return group
   } finally {
     restoreScaleFns?.()
@@ -4855,8 +4938,11 @@ function resolveLegendValues(legend: CompiledLegend, ctx: EvalContext): unknown[
  * Whether the grid layout of a symbol legend's entries ran before the pass stopped at `cut`: its operator is ranked after the
  * instances that make the entries, so it did where none of them is at or after the cut.
  */
-function entryGridRan(scopePath: readonly number[], slot: number, cut: readonly number[]): boolean {
+function entryGridRan(scopePath: readonly number[], slot: number, point: AbortPoint): boolean {
   const own = [...scopePath, slot]
+  const cut = point.path
+  // (a layout that threw is ranked after the instances its point names, and so after the grids of the entries they hold)
+  if (point.layout !== undefined && within(cut, own)) return true
   if (cut.length > own.length && own.every((v, i) => cut[i] === v)) return false
   return compareInstances([...own, 0], cut) < 0
 }
@@ -4958,6 +5044,8 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext, index: number): S
   // instances of the scope's groups. A pass that stopped before an instance never made what it holds.
   const symbols = legendType(spec, scaleType) === 'symbol'
   const slot = symbols ? ctx.scope.nextChild.n++ : undefined
+  // (its last instance, that of its last entry, is the last a layout above it is ranked after)
+  if (slot !== undefined) noteInstance(ctx.scope, [...ctx.scope.path, slot, Infinity])
   const cut = ctx.abort.cut
   // (a gradient's labels are ranked after every other operator of the scope: made only where the pass went past them)
   let lateLabels = false
@@ -4969,7 +5057,8 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext, index: number): S
     lateLabels = !seen.has(key)
     seen.add(key)
   }
-  let labels: 'none' | undefined = lateLabels && cut !== undefined && compareInstances(ctx.scope.path, cut.path) === 0
+  // (a layout ranked after the instance comes after its late labels too)
+  let labels: 'none' | undefined = lateLabels && cut !== undefined && cut.layout === undefined && compareInstances(ctx.scope.path, cut.path) === 0
     && !(cut.labels === true && cut.legend !== undefined && index <= cut.legend) ? 'none' : undefined
   let entriesFailed = false
   const refusal = entriesRefusal({ type: legendType(spec, scaleType), scale: scale as never, count: tickCountRaw, minstep, values, formatSpecifier, formatType, locale: locale(undefined) })
@@ -5020,7 +5109,7 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext, index: number): S
       ...(entries !== undefined ? { entries } : {}),
       ...(lateLabels ? { lateLabels } : {}),
       ...(labels !== undefined ? { labels } : {}),
-      ...(ctx.rawGuides && slot !== undefined && cut !== undefined && entryGridRan(ctx.scope.path, slot, cut.path) ? { entryGrid: true } : {}),
+      ...(ctx.rawGuides && slot !== undefined && (ctx.layoutThrew === true || (cut !== undefined && entryGridRan(ctx.scope.path, slot, cut))) ? { entryGrid: true } : {}),
     })
   } catch (e) {
     // (an expression of the spec threw while the entries were listed -- an entry's size is read there: the legend's entries
@@ -5028,6 +5117,11 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext, index: number): S
     if (!(e instanceof ExpressionFailure)) throw e
     failPass(ctx, { axis: Infinity, legend: index }, e.error)
     return null
+  }
+  // (the grid of the entries threw: the layout of the instance that holds them is ranked after the last of them)
+  if (built.gridError !== undefined) {
+    const holder = [...ctx.scope.path, slot!]
+    failPass(ctx, { path: [...holder, Infinity], axis: Infinity, late: true, layout: { items: [holder], at: 0 } }, built.gridError.error)
   }
   // (an encode of the entries threw in the instance that made them: the pass stopped there, and not in this scope)
   const stopped = stoppedOf(host)
@@ -5382,6 +5476,76 @@ function axisTicksFailed(axis: CompiledAxis, ctx: EvalContext, e: unknown, index
   if (!late) return null
   // (the half-made axis: its group item, nothing in it -- not even the caption an encoded axis carries)
   return { marktype: 'group', role: 'axis', x: 0, y: 0, width: 0, height: 0, items: [], parts: [] } as unknown as SceneGroup
+}
+
+/**
+ * The last instance below `scope` (or `scope` itself) that has content: every layout above it is ranked after it (see `LayoutFailure`).
+ * vega builds the instances level by level, so the last is the deepest, and of those the last made.
+ */
+function noteInstance(scope: GuideScope, path: number[]): void {
+  for (let up: GuideScope | undefined = scope; up !== undefined; up = up.parent) {
+    if (up.last === undefined || compareInstances(path, up.last) > 0) up.last = path
+  }
+}
+
+/**
+ * After a group mark's items are made: when the layout of one of them threw, the pass stops at the mark's layout operator, which
+ * is ranked after the last instance below its items that has content (made whole), or, when none has any, right after the mark
+ * (nothing after the mark in its scope is made then). In the pass that stops there, the scopes the mark is in are not laid out (see
+ * `holdsFailedLayout`). Returns whether this mark's layout is the one the pass stopped at.
+ */
+function layoutFailed(ctx: EvalContext, entered: readonly EnteredGroup[], outcomes: readonly GroupOutcome[]): boolean {
+  const at = outcomes.findIndex((o) => o.layoutError !== undefined)
+  const cut = ctx.abort.cut?.layout
+  const stoppedHere = cut !== undefined && entered.length === cut.items.length && entered.every((g, i) => compareInstances(g.path, cut.items[i]!) === 0)
+  if (at < 0) return stoppedHere
+  const layout: LayoutFailure = { items: entered.map((g) => g.path), at }
+  const last = outcomes.reduce<number[] | undefined>((max, o) => (o.last !== undefined && (max === undefined || compareInstances(o.last, max) > 0) ? o.last : max), undefined)
+  const error = outcomes[at]!.layoutError!.error
+  if (last !== undefined) failPass(ctx, { path: last, axis: Infinity, late: true, layout }, error)
+  else {
+    failPass(ctx, { axis: Infinity, mark: ctx.scope.mark ?? 0, layout }, error)
+    ctx.encodeAborted = true
+  }
+  return true
+}
+
+/** Whether the mark whose layout threw is in the scope of instance `path` (or below it): that scope's layout, ranked after it, never ran. */
+function holdsFailedLayout(path: readonly number[], failing: LayoutFailure | undefined): boolean {
+  const item = failing?.items[0]
+  return item !== undefined && item.length > path.length && within(item, path)
+}
+
+/** What the view's own layout warns, kept with the pass that makes it (see `buildContent`). */
+function layoutWarn(ctx: EvalContext): (message: string) => void {
+  return (message) => { ctx.layoutState.warnings.push(message) }
+}
+
+/** What the layout of a group item is given, as text: the item's own place and size, its options, and where its content is and reaches. */
+function layoutInput(own: readonly number[], content: readonly SceneGroup[], options: Record<string, unknown>): string {
+  let input = `${own.join(',')}|${JSON.stringify(options)}`
+  for (const g of content) {
+    const b = layoutBounds(g)
+    input += `|${g.role ?? ''}:${g.x},${g.y},${g.width},${g.height}:${b.x1},${b.y1},${b.x2},${b.y2}`
+  }
+  return input
+}
+
+/**
+ * The warnings of a group mark's layout, one operator for all its items, kept with the pass (see `buildContent`). A view that fits its
+ * viewport runs its dataflow again once it is sized: the layout of a group mark runs again only when what it lays out changed (an
+ * item, or what one holds, read the size), so one given what the pass before gave it warns nothing the second time.
+ */
+function markLayoutWarnings(mark: CompiledMark, ctx: EvalContext, outcomes: readonly GroupOutcome[]): void {
+  const warnings = outcomes.flatMap((o) => o.warnings ?? [])
+  const memory = ctx.passMemory
+  if (memory !== undefined) {
+    const id = `${ctx.scope.path.join('/')}#${markIdOf(mark)}`
+    const input = outcomes.map((o) => o.input ?? '').join('\n')
+    memory.cur.inputs.set(id, input)
+    if (memory.prev?.inputs.get(id) === input) return
+  }
+  for (const message of warnings) ctx.layoutState.warnings.push(message)
 }
 
 /** The count the tick labels are formatted for: the axis's tick count through vega's tickCount (bins, tickMinStep). */
