@@ -28,9 +28,11 @@ import { SpecParseError } from './parse-error.js'
 import { checkExpression } from './expr-check.js'
 import { parseEventSelectorString } from './event-selector.js'
 import { filterCode } from './stream-defs.js'
-import { legendType, LEGEND_CHANNELS, specList, stringValue } from './spec-structure.js'
-import { transformParams, type ParamKind } from './transform-params.js'
-import { TUPLE_MAKING_TRANSFORMS } from './transform-names.js'
+import {
+  checkFrom, checkScale, legendType, LEGEND_CHANNELS, Names, need, needDataRef, parseAxisNames, parseLegendNames, parseTitleNames, specList, stringValue,
+} from './spec-structure.js'
+import { transformParams, type ParamKind, type TransformParam } from './transform-params.js'
+import { TUPLE_MAKING_TRANSFORMS, transformTypeOf } from './transform-names.js'
 import { guideReading, legendLayout, legendSizeExpression, type GuideEnv, type GuideKind } from './guide-model.js'
 import { splitAccessPath } from './util.js'
 
@@ -131,6 +133,8 @@ const textOf = (v: unknown): string => (typeof v === 'string' ? v : stringValue(
 
 class Check {
   private scope = new Scope()
+  /** the data sets the scope being read knows (see spec-structure.ts `Names`) */
+  private names = new Names()
 
   constructor(private readonly config: Rec) {}
 
@@ -138,11 +142,13 @@ class Check {
     return { config: this.config, scaleType: (name) => this.scope.scaleType(name) }
   }
 
-  /** Run `read` in a scope of its own, inside the current one. */
-  private within<T>(scope: Scope, read: () => T): T {
+  /** Run `read` in a scope of its own, inside the current one (and, when given, with data sets of its own). */
+  private within<T>(scope: Scope, read: () => T, names: Names = this.names): T {
     const outer = this.scope
+    const outerNames = this.names
     this.scope = scope
-    try { return read() } finally { this.scope = outer }
+    this.names = names
+    try { return read() } finally { this.scope = outer; this.names = outerNames }
   }
 
   /** An expression that stands alone. */
@@ -211,43 +217,129 @@ class Check {
     this.declare(signals)
     this.contents(spec, signals, lambdas)
     this.flush(lambdas)
+    // the view registers its own root item last
+    this.names.declare('root')
   }
 
-  /** `parseSignal`: a signal is known to its whole scope; one that pushes to the outer scope is that scope's already. */
+  /**
+   * `parseSignal`: a signal is known to its whole scope; one that pushes to the outer scope must be one that scope (or one around it)
+   * declared before, and says nothing of its own value.
+   */
   private declare(signals: readonly Rec[]): void {
-    for (const s of signals) if (s.push !== 'outer') this.scope.addSignal(s.name)
+    for (const s of signals) {
+      if (s.push !== 'outer') {
+        this.scope.addSignal(s.name)
+        continue
+      }
+      if (!this.scope.hasSignal(String(s.name))) throw new SpecParseError('No prior signal definition for "outer" push: ' + stringValue(s.name))
+      for (const key of OUTER_INVALID) if (s[key] !== undefined) throw new SpecParseError('Invalid property  for "outer" push: ' + stringValue(key))
+    }
   }
 
   private contents(spec: Rec, signals: readonly Rec[], lambdas: string[]): void {
     for (const p of specList(spec.projections)) if (isRecord(p)) this.scope.addScale(p.name, 'projection')
-    for (const s of specList(spec.scales)) if (isRecord(s)) this.scope.addScale(s.name, s.type)
+    for (const s of specList(spec.scales)) if (isRecord(s)) { this.scope.addScale(s.name, s.type); this.names.addScale(s.name, s.type) }
     this.lambdas(specList(spec.projections), lambdas)
     for (const d of specList(spec.data)) if (isRecord(d)) this.dataset(d, lambdas)
-    for (const s of specList(spec.scales)) this.lambdas(s, lambdas)
+    for (const s of specList(spec.scales)) {
+      checkScale(s, this.names)
+      this.lambdas(s, lambdas)
+    }
     for (const s of signals) this.signal(s, lambdas)
-    for (const a of specList(spec.axes)) if (isRecord(a)) this.guide('axis', a, lambdas)
+    for (const a of specList(spec.axes)) {
+      if (!isRecord(a)) continue
+      // (the axis's configuration is looked up by the type of its scale, first)
+      this.scaleNamed(a.scale)
+      this.guide('axis', a, lambdas)
+      parseAxisNames(a, this.names, () => this.config)
+    }
     for (const m of specList(spec.marks)) if (isRecord(m)) this.mark(m, lambdas)
-    for (const l of specList(spec.legends)) if (isRecord(l)) this.guide('legend', l, lambdas)
-    if (isRecord(spec.title)) this.guide('title', spec.title, lambdas)
+    for (const l of specList(spec.legends)) {
+      if (!isRecord(l)) continue
+      // a legend is for the scale of its first channel, which must be one of the scope
+      const scale = LEGEND_CHANNELS.map((c) => l[c]).find((v) => !!v)
+      if (!scale) throw new SpecParseError('Missing valid scale for legend.')
+      this.scaleNamed(scale)
+      this.guide('legend', l, lambdas)
+      parseLegendNames(l, this.names)
+    }
+    if (spec.title) {
+      if (isRecord(spec.title)) this.guide('title', spec.title, lambdas)
+      parseTitleNames(spec.title, this.names)
+    }
   }
 
+  /** `scope.getScale`: a scale (or a projection) of the scope, or one around it. */
+  private scaleNamed(name: unknown): void {
+    if (!this.scope.hasScale(name)) throw new SpecParseError('Unrecognized scale name: ' + stringValue(name))
+  }
+
+  /** `parseData`: its transforms, its triggers, the data sets it is derived from (when it has no values of its own), then its name. */
   private dataset(d: Rec, lambdas: string[]): void {
     for (const t of specList(d.transform)) if (isRecord(t)) this.transform(t, lambdas)
     for (const on of specList(d.on)) if (isRecord(on)) this.trigger(on, String(d.name))
     this.lambdas({ url: d.url, async: d.async, values: Array.isArray(d.values) ? undefined : d.values }, lambdas)
     this.objectProperty(d.format, lambdas)
+    if (!d.values && !d.url && d.source) for (const source of specList(d.source)) need(this.names, source)
+    this.names.declare(d.name)
   }
 
   /** `parseTransform`: the parameters in the order of the definition, each read whole; then the transform's own signal. */
   private transform(t: Rec, lambdas: string[]): void {
-    for (const { name, kind } of transformParams(t.type)) {
-      const value = t[name]
-      if (value === undefined) continue
-      if (kind === 'expression' || (kind !== 'value' && isObject(value))) this.parameter(value, kind)
-      if (isObject(value)) this.lambdas(value, lambdas)
-    }
+    this.parameters(t, transformParams(t.type), lambdas)
     // (the transform's own signal is a signal of its scope from here on)
     if (t.signal) this.scope.addSignal(t.signal)
+  }
+
+  /**
+   * `parseParameters`: each parameter of a definition in its order, as vega reads it -- the data set a lookup indexes (a literal name of
+   * the scope), a required one that is missing, objects of sub-parameters (a list of them, each of a known kind), the name of a
+   * projection or of a data set of the scope, a list (anything but a list or a `{signal}` makes vega's parser throw as it maps over it),
+   * and the expressions it holds. `owner` is the object the parameters are written in: its `type` names it in a message.
+   *
+   * A `bin` without `extent` is the one required parameter not refused: Aster derives it from the data (a deliberate deviation, see
+   * docs/ARCHITECTURE.md), where vega refuses it.
+   */
+  private parameters(owner: Rec, params: readonly TransformParam[], lambdas: string[]): void {
+    for (const p of params) {
+      if (p.ref === 'index') {
+        if (typeof owner.from !== 'string') throw new SpecParseError('Lookup "from" parameter must be a string literal.')
+        need(this.names, owner.from)
+        continue
+      }
+      const value = owner[p.name]
+      if (value === undefined) {
+        if (p.required && !(p.name === 'extent' && transformTypeOf(owner.type) === 'bin')) throw new SpecParseError('Missing required ' + stringValue(owner.type) + ' parameter: ' + stringValue(p.name))
+        continue
+      }
+      if (p.sub !== undefined) {
+        if (p.list && !Array.isArray(value)) throw new SpecParseError('Expected an array of sub-parameters. Instead: ' + stringValue(value))
+        for (const item of p.list ? (value as unknown[]) : [value]) this.subParameters(item, p.sub, lambdas)
+        continue
+      }
+      if (p.ref === 'projection') {
+        this.scaleNamed(value)
+        continue
+      }
+      if (p.list && !isSignalObject(value) && !Array.isArray(value)) {
+        throw new TypeError(value === null ? "Cannot read properties of null (reading 'map')" : 'value.map is not a function')
+      }
+      if (p.ref === 'data' && !isSignalObject(value)) {
+        for (const name of p.list ? (value as unknown[]) : [value]) if (!isSignalObject(name)) need(this.names, name)
+      }
+      if (p.kind === 'expression' || (p.kind !== 'value' && isObject(value))) this.parameter(value, p.kind)
+      if (isObject(value)) this.lambdas(value, lambdas)
+    }
+  }
+
+  /** `parseSubParameter`: an object of the kind whose key it has, read through that kind's parameters. */
+  private subParameters(item: unknown, kinds: NonNullable<TransformParam['sub']>, lambdas: string[]): void {
+    const keys = Object.keys(kinds[0]?.key ?? {})
+    if (item == null) throw new TypeError(`Cannot read properties of ${item} (reading '${keys[0]}')`)
+    const o = item as Rec
+    const kind = kinds.find((k) => Object.keys(k.key).every((key) => k.key[key] === o[key]))
+    if (kind === undefined) throw new SpecParseError('Unsupported parameter: ' + stringValue(item))
+    this.parameters(o, kind.params, lambdas)
   }
 
   /** One parameter's expressions that are read at once: an `expr` is a text; a field or a comparator may be written `{expr: text}`. */
@@ -426,6 +518,9 @@ class Check {
 
   /** `parseMark`, in the order its parts are read: interactivity and clip, the encode sets, the transforms, the sort, the layout, the content of a group, the triggers. */
   private mark(m: Rec, lambdas: string[]): void {
+    const group = m.type === 'group'
+    const facet = isRecord(m.from) && isRecord(m.from.facet) ? m.from.facet : undefined
+    checkFrom(m.from, group, this.names)
     for (const key of ['interactive', 'clip']) this.lambdas(m[key], lambdas)
     this.encode(m.encode)
     for (const t of specList(m.transform)) {
@@ -438,7 +533,20 @@ class Check {
       this.lambdas(m.sort, lambdas)
     }
     this.objectProperty(m.layout, lambdas)
-    if (m.type === 'group') {
+    if (group) {
+      // a facet is read with the group's content: its data set again, its name, its data, how it groups
+      if (facet !== undefined) {
+        needDataRef(facet, this.names)
+        if (!facet.name) throw new SpecParseError('Facet must have a name: ' + stringValue(facet))
+        if (!facet.data) throw new SpecParseError('Facet must reference a data set: ' + stringValue(facet))
+        if (!facet.field && !facet.groupby) throw new SpecParseError('Facet must specify groupby or field: ' + stringValue(facet))
+      }
+      // a group is a scope of data sets of its own, unless its role is a guide's and it has no layout and no facet: then it is parsed in
+      // its parent's (a facet's name is a data set of the group's scope)
+      const role = typeof m.role === 'string' ? m.role : ''
+      const guideRole = role.startsWith('axis') || role.startsWith('legend') || role.startsWith('title')
+      const names = !guideRole || !!m.layout || facet !== undefined ? new Names(this.names) : this.names
+      if (facet !== undefined) names.declare(facet.name)
       const inner: string[] = []
       const scope = new Scope(this.scope)
       this.within(scope, () => {
@@ -446,9 +554,10 @@ class Check {
         this.declare(signals)
         this.contents(m, signals, inner)
         this.flush(inner)
-      })
+      }, names)
     }
     this.lambdas(m.overlap, lambdas)
+    if (m.name != null) this.names.declare(m.name)
     // a named mark's triggers are read last, in the scope the mark is in
     if (m.name != null) for (const on of specList(m.on)) if (isRecord(on) && !(on.insert || on.remove || on.toggle)) this.trigger(on, String(m.name))
   }
@@ -484,6 +593,8 @@ class Check {
 
 /** The properties and encode blocks of a legend that belong to the marks of its entries (symbols and labels), as against its title and frame. */
 const ENTRY_PARTS = /^(symbol|label|entries$)/
+/** What a signal that pushes to an outer scope may not say (its value is the outer signal's). */
+const OUTER_INVALID = ['value', 'update', 'init', 'react', 'bind'] as const
 const NONE: ReadonlySet<string> = new Set()
 const BLOCKS: ReadonlySet<string> = new Set(['enter', 'update', 'exit', 'hover', 'leave', 'select', 'release', 'name', 'interactive', 'style'])
 

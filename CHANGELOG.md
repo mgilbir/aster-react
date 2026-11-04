@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+- **`@aster/core`: a guide's format, a layout that throws, and the names and parameters a spec must have, as vega reads them.** A
+  legend's `format` the label format refuses (`{signal: '0/0'}`, `zzz%%`) made `renderSpec` throw; it is now the error vega logs, and
+  the pass stops at the legend (a gradient whose labels are ranked last keeps its gradient). The format and format type of an axis or
+  a legend are the values their signals hold, read through the scale's own tick format (a falsy time specifier is the default
+  multi-format, as in vega, not the text `NaN`), and a signal given to a guide's ticks or entries that throws stops the pass at the
+  guide, logged once. The caption reads the format off the guide's group item and is not written when it cannot be made. A layout vega
+  cannot take (a `columns` that is no count, a column header or footer with no cell to line up with, a legend's entries `columns`) is
+  logged and stops the pass where vega's does, instead of being swallowed; `Grid headers exceed limit` is warned; a grid moves a cell's
+  bounds with it rather than measuring them again, as vega. `compileChart` refuses, in vega's order and with its messages, a transform
+  without a required parameter (a `bin` without `extent` included: it was an Aster extension), a lookup without a literal `from`, a
+  projection, a data set or the scale of an axis or legend that the scope does not have, a list parameter given as something else,
+  sub-parameters of no known kind, a facet without a name or a grouping, a signal pushed to an outer scope that has none, and a domain
+  sorted by an op without its field. A `timeUnitSpecifier(...)` format the engine refuses is vega's logged error, no longer read off
+  the call's text.
+
 - **`@aster/core`: every transform of a mark runs on its encoded items, and a guide that reads a late signal is drawn as vega leaves
   it.** A mark's transforms other than `lookup`, `force`, `label`, `voronoi`, `wordcloud`, `heatmap`, `linkpath` and `geopath` ran on
   the data rows before the encode: a `formula` that read `datum.datum.a` threw, and what a transform wrote (`x`, `fill`, a stack's

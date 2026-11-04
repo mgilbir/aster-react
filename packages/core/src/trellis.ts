@@ -152,16 +152,28 @@ function cellBox(g: SceneGroup, flush: boolean): Bounds {
   return b.empty() ? b.set(0, 0, 0, 0) : b.translate(-(g.x || 0), -(g.y || 0))
 }
 
+/**
+ * A group the layout moved keeps the box it was measured with, moved with it (vega translates the item's bounds rather than measuring
+ * them again): where the group stood at a fraction of a pixel, that is not the float its box at the new place would be, and a track or
+ * a margin that rounds it can come out a pixel apart. `layoutBounds` reads it.
+ */
+function carry(g: SceneGroup, box: Bounds, dx: number, dy: number): Bounds {
+  const moved = box.translate(dx, dy)
+  ;(g as { laidBounds?: Bounds }).laidBounds = moved
+  return moved
+}
+
 /** Lay the cell groups of a facet out in a grid, moving each. Returns the box around them at their new places. */
 function layoutCells(groups: SceneGroup[], opt: Opt): Bounds {
   for (const g of groups) g.y = g.y || 0
   const boxes = groups.map((g) => cellBox(g, opt.bounds === 'flush'))
+  const measured = groups.map((g) => layoutBounds(g))
   const { dx, dy } = placeGrid(boxes, groups.map((g) => ({ x: g.x || 0, y: g.y || 0 })), opt)
   const bounds = new Bounds()
   groups.forEach((g, i) => {
     g.x = (g.x as number) + dx[i]!
     g.y = (g.y as number) + dy[i]!
-    bounds.union(layoutBounds(g))
+    bounds.union(carry(g, measured[i]!, dx[i]!, dy[i]!))
   })
   return bounds
 }
@@ -176,7 +188,8 @@ function sortByRole(view: SceneGroup): { cells: SceneGroup[]; strips: Record<Rol
   const strips: Record<Role, SceneGroup[]> = { 'row-header': [], 'row-footer': [], 'column-header': [], 'column-footer': [] }
   const titles: Partial<Record<'row-title' | 'column-title', SceneGroup>> = {}
   for (const mark of (view.items ?? []) as SceneGroup[]) {
-    if (mark.marktype !== 'group') continue
+    // (a group mark with no items is a container in the scene, but vega lays out items: it has none to place)
+    if (mark.marktype !== 'group' || (mark as { emptyMark?: boolean }).emptyMark === true) continue
     const role = mark.role ?? ''
     if (role === 'axis' || role === 'legend' || role === 'title') continue
     if (role in strips) strips[role as Role].push(mark)
@@ -209,7 +222,7 @@ interface Side {
  * cell before it when the table has holes; `band` says where along that cell. Returns how far out the headers reach, which a
  * title on that side clears; with no header it is still how far the cells themselves reach.
  */
-function placeStrips(strips: SceneGroup[], cells: SceneGroup[], ncols: number, nrows: number, side: Side, gap: number, band: number | null, flush: boolean): number {
+function placeStrips(strips: SceneGroup[], cells: SceneGroup[], ncols: number, nrows: number, side: Side, gap: number, band: number | null, flush: boolean, warn: (message: string) => void): number {
   const n = cells.length
   if (!n) return 0
   const { overColumns, leading } = side
@@ -226,6 +239,7 @@ function placeStrips(strips: SceneGroup[], cells: SceneGroup[], ncols: number, n
 
   // more strips than the grid has columns (rows) are left where they are, and add nothing to the bounds of the view
   const limit = overColumns ? ncols : nrows
+  if (strips.length > limit) warn('Grid headers exceed limit: ' + limit)
   const placed = strips.length > limit ? strips.slice(0, limit) : strips
   strips.forEach((strip, j) => { strip.unbounded = j >= limit })
   margin += gap
@@ -235,16 +249,20 @@ function placeStrips(strips: SceneGroup[], cells: SceneGroup[], ncols: number, n
     let k = i
     let cell: SceneGroup | undefined
     for (; k >= 0 && (cell = cells[k]) == null; k -= back);
+    // A strip with no cell at or before its place (more column headers or footers than the grid has cells, in a grid with more columns
+    // than cells): vega's layout reads the position of the cell it did not find and throws. The strips before it stay where they were
+    // put, and the layout stops there (see `layoutFacet`).
+    if (cell === undefined) throw new TypeError(`Cannot read properties of undefined (reading '${band != null ? 'bounds' : overColumns ? 'x' : 'y'}')`)
     let x: number
     let y: number
     if (overColumns) {
-      x = band == null ? (cell ? cell.x || 0 : 0) : Math.round((cell ? layoutBounds(cell).x1 : 0) + band * (cell ? layoutBounds(cell).width() : 0))
+      x = band == null ? cell.x || 0 : Math.round(layoutBounds(cell).x1 + band * layoutBounds(cell).width())
       y = margin
     } else {
       x = margin
-      y = band == null ? (cell ? cell.y || 0 : 0) : Math.round((cell ? layoutBounds(cell).y1 : 0) + band * (cell ? layoutBounds(cell).height() : 0))
+      y = band == null ? cell.y || 0 : Math.round(layoutBounds(cell).y1 + band * layoutBounds(cell).height())
     }
-    const box = layoutBounds(strip).translate(x - (strip.x || 0), y - (strip.y || 0))
+    const box = carry(strip, layoutBounds(strip), x - (strip.x || 0), y - (strip.y || 0))
     strip.x = x
     strip.y = y
     reach = outward(reach, box[edge] ?? 0)
@@ -258,53 +276,65 @@ export interface GridPlace { x: number; y: number }
 /**
  * Lay out a faceted group: its cells, then the headers and footers along them, then its row and column titles beside those.
  *
+ * What vega's layout cannot take throws as vega's does, at the same point, with what was placed before it left placed: a `columns`
+ * that is no count (fractional, negative: `RangeError: Invalid array length`, before any cell moves) and a column header or footer
+ * with no cell to line up with (the cells, the row headers and the strips before it are placed). More strips than the grid has
+ * columns (rows) are reported to `warn`, as vega warns.
+ *
  * A view that fits its viewport makes the layout twice, the second time with the groups where the first left them, and the box of
  * a group is then its box at the new place carried back: that is not the same float as its box measured at the origin, and
  * where it falls on a whole pixel the rounding of a track can go the other way. `memory` hands the places of the first pass to the
  * second, so the groups start there.
  */
-export function layoutFacet(view: SceneGroup, opt: Opt, memory?: { prev: readonly GridPlace[] | undefined; keep(places: GridPlace[]): void }): void {
+export function layoutFacet(view: SceneGroup, opt: Opt, memory?: { prev: readonly GridPlace[] | undefined; keep(places: GridPlace[]): void }, warn: (message: string) => void = () => {}): void {
   const { cells, strips, titles } = sortByRole(view)
   const placed = [...cells, ...strips['row-header'], ...strips['row-footer'], ...strips['column-header'], ...strips['column-footer']]
   const before = memory?.prev
   if (before !== undefined && before.length === placed.length) placed.forEach((g, i) => { g.x = before[i]!.x; g.y = before[i]!.y })
-  const flush = opt.bounds === 'flush'
-  const ncols = (opt.columns as number) || cells.length
-  if (ncols > 0) { ceiling('items', ncols, 'facet columns'); boundedCount(ncols, 'facet columns') }
-  const nrows = ncols <= 0 ? 1 : Math.ceil(cells.length / ncols)
+  // (where the groups stand is kept for the next pass even when the layout stops part-way: vega's groups stay where it left them)
+  try {
+    const flush = opt.bounds === 'flush'
+    const ncols = (opt.columns as number) || cells.length
+    if (ncols > 0) { ceiling('items', ncols, 'facet columns'); boundedCount(ncols, 'facet columns') }
+    const nrows = ncols <= 0 ? 1 : Math.ceil(cells.length / ncols)
 
-  const grid = layoutCells(cells, opt)
-  if (grid.empty()) grid.set(0, 0, 0, 0)
+    const grid = layoutCells(cells, opt)
+    if (grid.empty()) grid.set(0, 0, 0, 0)
 
-  const reachOf = (role: Role): number => {
-    const overColumns = role.startsWith('column')
-    const leading = role.endsWith('header')
-    const distance = option(opt.offset, (overColumns ? 'column' : 'row') + (leading ? 'Header' : 'Footer')) as number
-    const bands = leading ? opt.headerBand : opt.footerBand
-    return placeStrips(strips[role], cells, ncols, nrows, { overColumns, leading }, leading ? -distance : distance, option(bands, overColumns ? 'column' : 'row', null), flush)
-  }
-  const left = reachOf('row-header')
-  const above = reachOf('column-header')
-  const right = reachOf('row-footer')
-  const below = reachOf('column-footer')
-
-  const titleOf = (role: 'row-title' | 'column-title', before: number, after: number): void => {
-    const title = titles[role]
-    if (!title) return
-    const overColumns = role === 'column-title'
-    const axis = overColumns ? 'column' : 'row'
-    const distance = option(opt.offset, axis + 'Title') as number
-    const across = option(opt.titleAnchor, axis) === 'end' ? after + distance : before - distance
-    const band = option(opt.titleBand, axis, 0.5) as number
-    if (overColumns) {
-      title.x = Math.round(grid.x1 + band * grid.width())
-      title.y = across
-    } else {
-      title.x = across
-      title.y = Math.round(grid.y1 + band * grid.height())
+    const reachOf = (role: Role): number => {
+      const overColumns = role.startsWith('column')
+      const leading = role.endsWith('header')
+      const distance = option(opt.offset, (overColumns ? 'column' : 'row') + (leading ? 'Header' : 'Footer')) as number
+      const bands = leading ? opt.headerBand : opt.footerBand
+      return placeStrips(strips[role], cells, ncols, nrows, { overColumns, leading }, leading ? -distance : distance, option(bands, overColumns ? 'column' : 'row', null), flush, warn)
     }
+    const left = reachOf('row-header')
+    const above = reachOf('column-header')
+    const right = reachOf('row-footer')
+    const below = reachOf('column-footer')
+
+    const titleOf = (role: 'row-title' | 'column-title', before: number, after: number): void => {
+      const title = titles[role]
+      if (!title) return
+      const overColumns = role === 'column-title'
+      const axis = overColumns ? 'column' : 'row'
+      const distance = option(opt.offset, axis + 'Title') as number
+      const across = option(opt.titleAnchor, axis) === 'end' ? after + distance : before - distance
+      const band = option(opt.titleBand, axis, 0.5) as number
+      const was = { x: title.x || 0, y: title.y || 0 }
+      const box = layoutBounds(title)
+      if (overColumns) {
+        title.x = Math.round(grid.x1 + band * grid.width())
+        title.y = across
+      } else {
+        title.x = across
+        title.y = Math.round(grid.y1 + band * grid.height())
+      }
+      carry(title, box, title.x - was.x, title.y - was.y)
+    }
+    titleOf('row-title', left, right)
+    titleOf('column-title', above, below)
+  } finally {
+    memory?.keep(placed.map((g) => ({ x: g.x || 0, y: g.y || 0 })))
   }
-  titleOf('row-title', left, right)
-  titleOf('column-title', above, below)
-  memory?.keep(placed.map((g) => ({ x: g.x || 0, y: g.y || 0 })))
 }

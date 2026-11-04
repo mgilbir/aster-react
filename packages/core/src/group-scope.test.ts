@@ -98,7 +98,8 @@ describe('group items', () => {
 describe('group scopes: the signals a group mark declares (one set per group item)', () => {
   const spec = (): VgSpec => ({
     width: 200, height: 100, padding: 0, autosize: 'none',
-    signals: [{ name: 'view', value: 5 }],
+    // (a signal pushed to an outer scope must be one that scope declared: vega refuses the spec otherwise)
+    signals: [{ name: 'view', value: 5 }, { name: 'outer', value: 0 }],
     data: [{ name: 't', values: rows(3) }],
     marks: [{
       type: 'group', name: 'cell', from: { facet: { name: 'f', data: 't', groupby: 'g' } },

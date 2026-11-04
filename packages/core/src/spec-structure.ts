@@ -4,19 +4,17 @@
  * - `normalizeSpecLists`: vega-parser reads every spec-level list through vega-util's
  *   `array()` (parsers/scope.js), so `data: {values: [...]}`, `marks: {type: 'rect'}` or
  *   `scales: {name: 'x'}` is the one-element list, not an error, and `null` is the empty list.
- * - `checkDataReferences`: `Scope.getData(name)` throws `Undefined data set name: "<name>"` when
+ * - the names of data sets (`Names`): `Scope.getData(name)` throws `Undefined data set name: "<name>"` when
  *   a data set is used before (or without) being declared in the scope chain, and `Scope.addData`
  *   throws `Duplicate data set name: "<name>"` for a name the SAME scope already owns. A parse error:
- *   nothing is drawn, exactly as with `vega.parse`. The walk follows vega-parser's own order and its
- *   scoping: what registers a data set (data, named marks, a facet's name, the root's `root`, and every
- *   named mark a guide is made of) and which of those get a scope of their own.
+ *   nothing is drawn, exactly as with `vega.parse`. What registers a data set (data, named marks, a
+ *   facet's name, the root's `root`, and every named mark a guide is made of) is here; the walk that
+ *   meets them in vega-parser's order, with everything else it refuses, is spec-expressions.ts.
  *
  * The limits pre-flight (limits.ts) reads the lists through `specList` so it counts what the
  * compiler will actually run.
  */
 import { SpecParseError } from './parse-error.js'
-import { transformTypeOf } from './transform-names.js'
-import { mergeVegaConfig, vegaDefaultConfig } from './config-defaults.js'
 
 /** vega-util `array()`: a non-array becomes the one-element list, `null`/`undefined` the empty list. */
 export function specList(value: unknown): unknown[] {
@@ -72,7 +70,7 @@ const key = (name: unknown): string => String(name)
  * name the scope already owns (`hasOwnProperty(this.data, name)`), so a group may shadow a parent's name but
  * not repeat its own.
  */
-class Names {
+export class Names {
   private readonly own = new Set<string>()
   private readonly types = new Map<string, string>()
   constructor(private readonly parent?: Names) {}
@@ -104,12 +102,20 @@ class Names {
   }
 }
 
-function need(names: Names, name: unknown): void {
+export function need(names: Names, name: unknown): void {
   if (!names.has(name)) throw new SpecParseError('Undefined data set name: ' + stringValue(name))
 }
 
-/** A mark's `from`: vega-parser `parseData` (parsers/marks/data.js) and `parseFacet`. */
-function checkFrom(from: unknown, group: boolean, names: Names): void {
+/** A data reference that names a data set (`{data}`), unless it is one vega made itself (`$ref`). */
+export function needDataRef(d: Record<string, unknown>, names: Names): void {
+  if (d.$ref) return
+  const data = d.data
+  if (data !== null && typeof data === 'object' && (data as Record<string, unknown>).$ref) return
+  need(names, data)
+}
+
+/** A mark's `from`: vega-parser `parseData` (parsers/marks/data.js); a facet's own reading (`parseFacet`) comes with the group's content. */
+export function checkFrom(from: unknown, group: boolean, names: Names): void {
   if (!from) return
   const f = from as Record<string, unknown>
   const getDataRef = (d: Record<string, unknown>): void => {
@@ -125,36 +131,38 @@ function checkFrom(from: unknown, group: boolean, names: Names): void {
     if (facet.field != null) getDataRef(facet)
     else if (!f.data) getDataRef(facet)
     else need(names, f.data)
-    // parseFacet resolves the facet's own data again
-    getDataRef(facet)
     return
   }
   getDataRef(f)
 }
 
-/** The data sets a transform names: `lookup.from`, a force's `links` and the label transform's `avoidMarks`. */
-function checkTransforms(transforms: unknown, names: Names): void {
-  for (const t of specList(transforms)) {
-    if (!isRecord(t)) continue
-    const type = transformTypeOf(t.type)
-    if (type === 'lookup' && t.from !== undefined) {
-      if (typeof t.from !== 'string') throw new SpecParseError('Lookup "from" parameter must be a string literal.')
-      need(names, t.from)
-    } else if (type === 'force' && Array.isArray(t.forces)) {
-      for (const f of t.forces) if (isRecord(f) && f.force === 'link' && f.links !== undefined) need(names, f.links)
-    } else if (type === 'label') {
-      for (const m of specList(t.avoidMarks)) need(names, m)
-    }
-  }
+const DISCRETE_SCALE_TYPES: ReadonlySet<string> = new Set(['ordinal', 'band', 'point', 'bin-ordinal'])
+
+/** vega-parser `parseSort`: a domain sorted by an aggregate op needs the field it aggregates (`count` counts the values themselves). */
+function checkSort(sort: unknown): void {
+  if (!sort || typeof sort !== 'object') return
+  const o = sort as Record<string, unknown>
+  if (!o.field && o.op && o.op !== 'count') throw new SpecParseError('No field provided for sort aggregate op: ' + String(o.op))
 }
 
-function checkScale(s: unknown, names: Names): void {
+/**
+ * vega-parser `parseScaleDomain`: a `domainMin` / `domainMax` needs a domain to override; a domain read from data names data sets of
+ * the scope, and a discrete scale's domain may be sorted by an aggregate of a field it must name (checked before the data sets of a
+ * domain of several fields, after the data set of one).
+ */
+export function checkScale(s: unknown, names: Names): void {
   if (!isRecord(s)) return
   const domain = s.domain
-  if (!domain || typeof domain !== 'object' || Array.isArray(domain)) return
+  if (!domain) {
+    if (s.domainMin != null || s.domainMax != null) throw new SpecParseError('No scale domain defined for domainMin/domainMax to override.')
+    return
+  }
+  if (typeof domain !== 'object' || Array.isArray(domain)) return
   const d = domain as Record<string, unknown>
   if (d.signal) return
+  const discrete = DISCRETE_SCALE_TYPES.has(String(s.type))
   if (d.fields) {
+    if (discrete) checkSort(d.sort)
     for (const f of specList(d.fields)) {
       if (typeof f === 'string') need(names, d.data)
       else if (Array.isArray(f) || (f as Record<string, unknown>)?.signal) continue
@@ -162,6 +170,7 @@ function checkScale(s: unknown, names: Names): void {
     }
   } else {
     need(names, d.data)
+    if (discrete) checkSort(d.sort)
   }
 }
 
@@ -219,7 +228,7 @@ function axisFlag(a: Record<string, unknown>, name: string, names: Names, cfg: R
 }
 
 /** vega-parser `parseAxis`: the guide marks the axis is made of (grid, ticks, labels, domain, title), then the axis group. */
-function parseAxisNames(a: unknown, names: Names, cfg: () => Record<string, unknown>): void {
+export function parseAxisNames(a: unknown, names: Names, cfg: () => Record<string, unknown>): void {
   if (!isRecord(a)) return
   const encode = rec(a.encode)
   // (the marks of an axis are named by its encode blocks alone: none, nothing to declare)
@@ -252,7 +261,7 @@ export function legendType(l: Record<string, unknown>, scaleType: string | undef
 }
 
 /** vega-parser `parseLegend`: which marks a legend is made of depends on its type, and a symbol legend nests two scopes. */
-function parseLegendNames(l: unknown, names: Names): void {
+export function parseLegendNames(l: unknown, names: Names): void {
   if (!isRecord(l)) return
   const encode = rec(l.encode)
   // (the marks of a legend are named by its encode blocks alone: none, nothing to declare)
@@ -279,7 +288,7 @@ function parseLegendNames(l: unknown, names: Names): void {
 }
 
 /** vega-parser `parseTitle`: the title text, the subtitle, then the title group. */
-function parseTitleNames(title: unknown, names: Names): void {
+export function parseTitleNames(title: unknown, names: Names): void {
   const spec = typeof title === 'string' ? { text: title } : title
   if (!isRecord(spec)) return
   const encode = rec(spec.encode)
@@ -289,59 +298,4 @@ function parseTitleNames(title: unknown, names: Names): void {
   if (spec.subtitle) declareGuideMark(names, encode.subtitle)
   const name = userEncode.name || undefined
   if (name != null) names.declare(name)
-}
-
-/** vega-parser `parseMark`: the mark's own data (`from`, transforms), a group's content in its scope, then the mark's name. */
-function parseMarkNames(m: Record<string, unknown>, names: Names, cfg: () => Record<string, unknown>): void {
-  const group = m.type === 'group'
-  const from = isRecord(m.from) ? m.from : undefined
-  const facet = from && isRecord(from.facet) ? from.facet : undefined
-  checkFrom(m.from, group, names)
-  checkTransforms(m.transform, names)
-  if (group) {
-    // getRole: a group is a `scope`, unless its role is a guide role -- then it is parsed in its parent's scope
-    const role = typeof m.role === 'string' ? m.role : ''
-    const guideRole = role.startsWith('axis') || role.startsWith('legend') || role.startsWith('title')
-    const nested = !guideRole || !!m.layout || !!facet
-    if (nested) {
-      const sub = new Names(names)
-      // a facet's name is a data set of the group's own scope, declared before the group's content is parsed
-      if (facet) sub.declare(facet.name)
-      parseScope(m, sub, cfg)
-    } else {
-      parseScope(m, names, cfg)
-    }
-  }
-  if (m.name != null) names.declare(m.name)
-}
-
-/** One scope in vega-parser's order (parsers/scope.js): scales are initialised, then data, scale domains, axes, marks (in order), legends, title. */
-function parseScope(spec: Record<string, unknown>, names: Names, cfg: () => Record<string, unknown>): void {
-  for (const s of specList(spec.scales)) if (isRecord(s)) names.addScale(s.name, s.type)
-  for (const d of specList(spec.data)) {
-    if (!isRecord(d)) continue
-    // the transforms are parsed first, then the data set's sources: a derived data set names its sources
-    checkTransforms(d.transform, names)
-    if (d.source !== undefined) for (const s of specList(d.source)) need(names, s)
-    names.declare(d.name)
-  }
-  for (const s of specList(spec.scales)) checkScale(s, names)
-  for (const a of specList(spec.axes)) parseAxisNames(a, names, cfg)
-  for (const m of specList(spec.marks)) if (isRecord(m)) parseMarkNames(m, names, cfg)
-  for (const l of specList(spec.legends)) parseLegendNames(l, names)
-  if (spec.title) parseTitleNames(spec.title, names)
-}
-
-/**
- * Throw `SpecParseError` for the first data set a spec uses without declaring (vega-parser `getData`) or
- * declares twice in one scope (`addData`), in vega-parser's own order.
- */
-export function checkDataReferences(spec: Record<string, unknown>, config?: Record<string, unknown>): void {
-  // (the merged config of the view, vega's `mergeConfig(defaultConfig(), spec.config)`: the caller has it already)
-  let merged: Record<string, unknown> | undefined = config
-  const cfg = (): Record<string, unknown> => (merged ??= mergeVegaConfig(vegaDefaultConfig(), isRecord(spec.config) ? spec.config : undefined))
-  const top = new Names()
-  parseScope(spec, top, cfg)
-  // the view registers its own root item last (parsers/view.js)
-  top.declare('root')
 }
