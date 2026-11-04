@@ -168,6 +168,8 @@ interface IncrementalState {
   idCounter: number
   /** The datasets of group scopes, by instance and name: what the pipeline read and made (see `runScopedData` in incremental-engine.ts). */
   scoped: Map<string, ScopedRun>
+  /** The items of each mark (by instance) whose transforms number them: the numbers an item keeps (see `transformMarkItems`). */
+  numbered: Map<string, readonly SceneItem[]>
 }
 
 /** One run of a group scope's dataset pipeline: the source arrays it read, what its transforms mentioned, and the rows it made. */
@@ -178,7 +180,7 @@ interface ScopedRun {
 }
 
 function newState(gen: number): IncrementalState {
-  return { gen, fp: '', scales: new Map(), scaleEntries: new Map(), datasets: new Map(), groups: new Map(), stale: false, idCounter: 0, scoped: new Map() }
+  return { gen, fp: '', scales: new Map(), scaleEntries: new Map(), datasets: new Map(), groups: new Map(), stale: false, idCounter: 0, scoped: new Map(), numbered: new Map() }
 }
 
 /** Committed state per compiled chart. Never stored on the IR itself. */
@@ -1997,6 +1999,10 @@ function buildContentPass(
     if (prevGroup && canReuseMarkGroup(mark, ctx)) {
       items.push(prevGroup)
       ctx.draft.groups.set(mark, prevGroup)
+      // (the numbers its items hold are kept with them)
+      const key = numberedKey(mark, ctx)
+      const kept = ctx.prev?.numbered.get(key)
+      if (kept !== undefined) ctx.draft.numbered.set(key, kept)
       continue
     }
     const result = evaluateMark(mark, ctx, prevGroup)
@@ -2458,7 +2464,7 @@ export function applyIdentifier(rows: Row[], t: CompiledTransform, tctx: StepTra
 }
 
 /** Run `run` with the numbers the rows of the next `identifier` had. */
-export function withCarry<T>(tctx: StepTransformContext, carry: readonly unknown[] | undefined, run: () => T): T {
+export function withCarry<T>(tctx: Pick<TransformContext, 'ids'>, carry: readonly unknown[] | undefined, run: () => T): T {
   const ids = tctx.ids
   if (ids) ids.carry = carry
   try {
@@ -3918,13 +3924,17 @@ function transformMarkItems(mark: CompiledMark, items: readonly SceneItem[], ctx
   // one, nor any after it: they come after it in vega's dataflow)
   if (ctx.bareEncode === true) return false
   const own = items as unknown as Array<Row & { [ITEM_OF]?: Row }>
+  // (an `identifier` numbers the items from the view's counter, after the datasets; an item keeps the number it had in the previous
+  // evaluation -- it is the item of the same datum -- and a new one takes the next)
+  const numbers = mark.transform?.some((t) => t.type === 'identifier') ? numberedKey(mark, ctx) : undefined
+  const before = numbers !== undefined ? ctx.prev?.numbered.get(numbers) : undefined
   for (const it of own) it[ITEM_OF] = it
   const tctx: TransformContext = {
-    runtime: ctx.runtime, signals: ctx.signalParams, hierarchies: ctx.hierarchies, projections: ctx.projections,
+    runtime: ctx.runtime, signals: ctx.signalParams, hierarchies: ctx.hierarchies, projections: ctx.projections, ids: ctx.ids,
     // (`lookup` `from` is a dataset, or the name of a mark: its items; `label` avoids the marks it names)
     datasets: (n) => ctx.datasets.get(n) ?? (ctx.markItems.get(n) as unknown as Row[] | undefined),
     marks: (n) => ctx.markContainers.get(n),
-    // (vega's tuples: a force layout moves the items themselves; an `identifier` numbers the items from 1)
+    // (vega's tuples: a force layout moves the items themselves)
     inPlace: true,
   }
   try {
@@ -3934,7 +3944,10 @@ function transformMarkItems(mark: CompiledMark, items: readonly SceneItem[], ctx
       const input = rows
       // (a transform that draws random numbers - the layout of a word cloud - draws them once for the inputs it is given, as vega's
       // operator does, not again for every evaluation of the scene: see random-tape.ts)
-      const out = atRandomSite(mayDrawRandom(t) ? ctx.runtime.random : undefined, `mark:${ctx.scopeId ?? ''}/${markIdOf(mark)}#${k}`, () => randomFingerprint(t, input.map(publicProps), ctx.signalParams), () => applyTransforms(input, [t], tctx, source, true))
+      const run = (): Row[] => applyTransforms(input, [t], tctx, source, true)
+      const out = t.type === 'identifier'
+        ? withCarry(tctx, carriedNumbers(input, before, idField(t)), run)
+        : atRandomSite(mayDrawRandom(t) ? ctx.runtime.random : undefined, `mark:${ctx.scopeId ?? ''}/${markIdOf(mark)}#${k}`, () => randomFingerprint(t, input.map(publicProps), ctx.signalParams), run)
       rows = out.map((r) => {
         const it = (r as { [ITEM_OF]?: Row })[ITEM_OF]
         if (it === undefined || it === r) return r
@@ -3944,8 +3957,28 @@ function transformMarkItems(mark: CompiledMark, items: readonly SceneItem[], ctx
     }
   } finally {
     for (const it of own) delete it[ITEM_OF]
+    if (numbers !== undefined) ctx.draft.numbered.set(numbers, items)
   }
   return true
+}
+
+/** The key of a mark's instance among the evaluation's numbered marks: the mark, and the instance of the scope it is in. */
+function numberedKey(mark: CompiledMark, ctx: EvalContext): string {
+  return `${markIdOf(mark)}@${ctx.scope.path.join('.')}`
+}
+
+/** A key no datum has: the number an item held, beside its datum (see `carriedNumbers`). */
+const HELD = '\u0000held'
+
+/**
+ * The numbers the items of a mark had in the previous evaluation, for the items it has now (`carry[i]` for `items[i]`): an item is the
+ * item of its datum, so the datums are aligned as an identifier's rows are (identifier-ids.ts).
+ */
+function carriedNumbers(items: readonly Row[], before: readonly SceneItem[] | undefined, as: string): unknown[] | undefined {
+  if (before === undefined || !before.length) return undefined
+  const datumOf = (it: unknown): Row => ((it as { datum?: Row }).datum ?? {})
+  const previous = before.map((it) => ({ ...datumOf(it), [HELD]: (it as unknown as Row)[as] }))
+  return carryByAlignment(items.map(datumOf), previous, HELD)
 }
 
 /** Whether a mark's sort runs: not when its encode never ran, nor when it reads a late signal that threw itself. */
