@@ -67,8 +67,8 @@ interface Run {
 /**
  * Vega's loader, reading the link it is asked to sanitize as a string. Vega's SVG renderer sanitizes an `href` in a promise nobody
  * awaits and crashes on the null a rejected link gives it, and the loader rejects anything but a string: a number in an `href` channel
- * (an ordinal number field, a number datum) would take the process down with an unhandled rejection. The SVG of a first render carries
- * no link either way (the renderer adds it once the promise settles), so this changes nothing compared.
+ * (an ordinal number field, a number datum) would take the process down with an unhandled rejection. Read as a string, the number is
+ * the link an attribute would hold; both specs of a comparison are drawn with this loader.
  */
 const LOADER = (() => {
   const base = vega.loader()
