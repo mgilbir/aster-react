@@ -51,7 +51,6 @@ const REJECTED: Array<[string, unknown, RegExp]> = [
   // --- channels (C35)
   ['an unknown channel', unit({ encoding: { x: xq, banana: yq } }), /unknown encoding channel "banana"/],
   ['a valid but unimplemented channel', unit({ encoding: { x: xq, key: yq } }), /key.*not supported/],
-  ['fill together with color', unit({ mark: 'bar', encoding: { x: cn, color: cn, fill: cn } }), /together with encoding\.color/],
   ['an array on a single-def channel', unit({ encoding: { x: [xq] } }), /does not accept an array/],
   ['a channel def without field/value/datum', unit({ encoding: { x: { type: 'quantitative' } } }), /needs `field`/],
   ['an unknown type', unit({ encoding: { x: { field: 'x', type: 'integer' } } }), /unknown type/],
@@ -98,7 +97,6 @@ const REJECTED: Array<[string, unknown, RegExp]> = [
   ['a condition without a test', unit({ encoding: { x: xq, y: yq, color: { condition: { value: 'red' }, value: 'grey' } } }), /needs `test`/],
   ['an empty condition array', unit({ encoding: { x: xq, y: yq, color: { condition: [], value: 'grey' } } }), /must not be empty/],
   ['a field condition in an array', unit({ encoding: { x: xq, y: yq, color: { condition: [{ test: 'true', field: 'c', type: 'nominal' }], value: 'g' } } }), /value conditions/],
-  ['a datum condition on a channel whose scale is named after its paint', unit({ encoding: { x: xq, y: yq, fill: { condition: { test: 'true', datum: 'a' }, value: 'g' } } }), /datum/],
   ['a condition with both value and field', unit({ encoding: { x: xq, y: yq, color: { condition: { test: 'true', value: 'r', field: 'c', type: 'nominal' }, value: 'g' } } }), /exactly one of/],
   // --- sort (C35)
   ['an unknown sort string', unit({ encoding: { x: { ...cn, sort: 'sideways' } } }), /unknown sort/],
@@ -149,6 +147,8 @@ describe('validation layer: unsupported / invalid input throws a VLCompileError 
 
 /** The matching accepted forms, so the table above is not simply rejecting everything. */
 const ACCEPTED: Array<[string, unknown]> = [
+  ['fill together with color (vega-lite drops the color of a filled mark)', unit({ mark: 'bar', encoding: { x: cn, color: cn, fill: cn } })],
+  ['a datum condition on fill', unit({ encoding: { x: xq, y: yq, fill: { condition: { test: 'true', datum: 'a' }, value: 'g' } } })],
   ['sort by channel', unit({ encoding: { x: { ...cn, sort: '-y' }, y: { ...yq, aggregate: 'sum' } }, mark: 'bar' })],
   ['sort arrays', unit({ encoding: { x: { ...cn, sort: ['B', 'A'] }, y: { ...yq, aggregate: 'sum' } }, mark: 'bar' })],
   ['sort field+op', unit({ encoding: { x: { ...cn, sort: { field: 'v', op: 'max' } }, y: { ...yq, aggregate: 'sum' } }, mark: 'bar' })],
