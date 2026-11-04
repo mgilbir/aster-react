@@ -5115,7 +5115,8 @@ function buildScales(spec: VLSpec, fieldsIn: FieldDef[], mark: string, orient: s
       range: rangeRef(def, dataName, def.scale?.range) ?? (cutsRange && ['quantile', 'quantize', 'threshold'].includes(type) ? countRange((range as [number, number | { signal: string }])[0], (range as [number, number | { signal: string }])[1], discreteCount(type, cfgS, explicitDom)) : range),
     }
     if (def.bin && !discrete && userDomain === undefined) { const b = binsProp(def); if (b) sc.bins = b }
-    if (def.sort === 'descending') sc.reverse = true
+    // (a discrete scale is ordered by its domain's sort: only a continuous one is reversed)
+    if (def.sort === 'descending' && !discrete) sc.reverse = true
     if (!discrete && scalePropApplies(name, type, 'zero')) sc.zero = (def.scale?.zero as boolean | undefined) ?? (explicitDom !== undefined && isContinuousScaleType(type) ? zeroForCustomDomain(explicitDom) : isParamDomain(def) && isContinuousScaleType(type) ? false : type === 'log' ? false : zero)
     for (const [k, v] of Object.entries(def.scale ?? {})) {
       if (k === 'type' || k === 'domain' || k === 'range' || k === 'zero' || k === 'rangeMin' || k === 'rangeMax' || !scalePropApplies(name, type, k)) continue
@@ -5248,7 +5249,8 @@ function buildScales(spec: VLSpec, fieldsIn: FieldDef[], mark: string, orient: s
             range: cs.range != null ? rangeRef(colorDef, dataName, cs.range) : cs.scheme != null ? schemeRange(cs.scheme) : heatmapMark ? 'heatmap' : 'ramp',
             bins: { signal: binNames(colorDef.binParams!, colorDef.field).signal },
             interpolate: 'hcl',
-            ...(cs.reverse !== undefined ? { reverse: Boolean(cs.reverse) } : colorDef.sort === 'descending' ? { reverse: true } : {}),
+            // (a bin-ordinal scale is discrete: a descending sort does not reverse it)
+            ...(cs.reverse !== undefined ? { reverse: Boolean(cs.reverse) } : {}),
           })
         } else {
         // a temporal colour field is a time scale, whatever its time unit (scale/type.ts defaultType)
@@ -5554,7 +5556,8 @@ function sortedDomain(def: FieldDef, dataName: string, dc: DomainCtx): unknown {
   const field = aggFieldName(def)
   const main = { data: dataName, field }
   const sort = def.sort
-  if (sort === null) return main
+  // (the categories of a binned field are ordered whatever the sort says)
+  if (sort === null) return def.bin ? { ...main, sort: true } : main
   // domain.ts: the categories of a binned field are the bins' texts, in the order of their starts
   if (binDiscrete(def) && (sort === undefined || sort === 'ascending' || sort === 'descending')) {
     return { ...main, sort: { field: binNames(def.binParams!, def.field).start, op: 'min', ...(sort === 'descending' ? { order: 'descending' } : {}) } }
@@ -5586,6 +5589,9 @@ function sortedDomain(def: FieldDef, dataName: string, dc: DomainCtx): unknown {
     }
     if (sort.field !== undefined || sort.op !== undefined) {
       const sortField = sort.field !== undefined ? flatField(String(sort.field)).key : undefined
+      // a count counts the records of each value, whatever field it names; a sort by the domain's own field is the domain's own order
+      if (sort.op === 'count') return { ...raw, sort: { op: 'count', ...(order ? { order } : {}) } }
+      if (sortField === field) return order === 'descending' ? { ...raw, sort: { order: 'descending' } } : { ...raw, sort: true }
       const isStackedMeasure = stacked && !(sortField !== undefined && dims.has(sortField))
       const op = (sort.op as string | undefined) ?? (isStackedMeasure ? 'sum' : 'min')
       return { ...raw, sort: { op, ...(sortField !== undefined ? { field: sortField } : {}), ...(order ? { order } : {}) } }
