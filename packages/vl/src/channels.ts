@@ -38,10 +38,20 @@ export function markChannelCompatible(encoding: Record<string, unknown>, channel
   if (!supported) return false
   if (supported === 'binned') {
     // circle, point, square and tick only take x2 / y2 when x / y is pre-binned data and they say where the bin ends
-    const primary = encoding[channel === 'x2' ? 'x' : 'y']
+    const primary = encoding[channel.slice(0, -1)]
     const bin = isObject(primary) ? primary.bin : undefined
     return isObject(primary) && typeof primary.field === 'string' && isObject(encoding[channel]) && typeof (encoding[channel] as Record<string, unknown>).field === 'string' && (bin === 'binned' || (isObject(bin) && bin.binned === true))
   }
   return true
 }
 
+/** The channels that end a span, and the channel each one ends the span of. */
+const SPAN_ENDS: ReadonlyArray<readonly [end: string, start: string]> = [['x2', 'x'], ['y2', 'y'], ['latitude2', 'latitude'], ['longitude2', 'longitude'], ['theta2', 'theta'], ['radius2', 'radius']]
+
+/** A line is not drawn between points that are spans: a line that spans a channel that is a field or a datum (not a pre-binned field) is a rule. */
+export function spansAChannel(encoding: Record<string, unknown>): boolean {
+  return SPAN_ENDS.some(([end, start]) => {
+    const def = encoding[start]
+    return !!encoding[end] && isObject(def) && ((def.field !== undefined && def.bin !== 'binned' && !(isObject(def.bin) && def.bin.binned === true)) || def.datum !== undefined)
+  })
+}

@@ -7009,7 +7009,7 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
 
   // maps: longitude / latitude positions are the geopoint transform's output fields (no scale, no offset)
   const geo = GEO_UNITS.get(spec)
-  if (geo) applyGeoPositions(update, spec, mark, ruleOrientOut)
+  applyGeoPositions(update, spec, mark, ruleOrientOut)
 
   const markSpec: Record<string, unknown> = {
     name: 'marks',
@@ -7501,12 +7501,14 @@ function resolveZeroOrMin(marks: Record<string, unknown>[], scales: ScaleSpec[])
  * x2 / y2 is the geopoint transform's output field; no scale is involved and no offset applies.
  */
 function applyGeoPositions(update: Record<string, unknown>, spec: VLSpec, mark: string, ruleOrient: string | undefined): void {
-  const geo = GEO_UNITS.get(spec)
-  if (!geo || mark === 'geoshape') return
+  // (position-point.ts pointPosition: any longitude or latitude, a constant included, makes a missing x or y read the geoposition of
+  // that name, whether or not a geopoint transform writes it)
+  const prefix = GEO_UNITS.get(spec)?.prefix ?? GEO_NAME_PREFIX.get(spec)
+  if (prefix === undefined || mark === 'geoshape') return
   const enc = isObject(spec.encoding) ? (spec.encoding as Record<string, unknown>) : {}
   const has = (c: string): boolean => enc[c] != null
   if (!has('latitude') && !has('longitude')) return
-  const out = (c: string): { field: string } => ({ field: `${geo.prefix}${c}` })
+  const out = (c: string): { field: string } => ({ field: `${prefix}${c}` })
   // pointPosition: x and y
   for (const ch of ['x', 'y'] as const) if (!has(ch)) update[ch] = out(ch)
   if (mark === 'rule') {
@@ -8265,8 +8267,12 @@ function unitProjection(spec: VLSpec, prefix: string, handle: object): Projectio
   }
   const component = parseUnitProjection(unit)
   if (component) GEO_UNITS.set(spec, { component, isFit: component.isFit, prefix })
+  GEO_NAME_PREFIX.set(spec, prefix)
   return component
 }
+
+/** The prefix of the names a unit's geopositions have (`x`, `y`, `x2`, `y2` of its geopoint transform), projection or not. */
+const GEO_NAME_PREFIX = new WeakMap<VLSpec, string>()
 
 /**
  * The projections of a layered view (vega-lite parseProjection / assembleProjections): each unit's

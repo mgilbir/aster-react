@@ -54,7 +54,11 @@ an expression or a generated dataset/signal/scale name.
   flatten, pivot, impute, lookup, sample, density, loess, regression, quantile, extent.
 - Channels: x, y, x2, y2, xOffset, yOffset, xError(2), yError(2), theta, theta2, radius, radius2, color, fill,
   stroke, opacity, size, strokeWidth, shape, text, tooltip, href, url, description, detail, key, order,
-  row, column, facet. `size` drives points, text (font size), lines, ticks, bars and trails.
+  row, column, facet. `size` drives points, text (font size), lines, ticks, bars and trails (a constant, a field or
+  conditions). Every channel takes a field of each type, a value, a datum and `scale: null` (the field read as it is);
+  a channel the mark does not draw is dropped, as vega-lite drops it. An arc is centred by x / y and their offsets,
+  a text placed by theta / radius around its x / y. `vl-mark-channels.test.ts` compares every mark x channel x
+  definition with vega-lite.
 - `config.scale`: every key that reaches the output: band / bar / rect / tick padding, nested- and
   offset-band padding, `pointPadding`, `continuousPadding`, `round`, `clamp`, `zero`, `xReverse`,
   `useUnaggregatedDomain`, `minSize`/`maxSize`, `minBandSize`/`maxBandSize`, `minFontSize`/
@@ -120,7 +124,7 @@ vega-lite supports and is not here compiles to the same Vega.)
   parameters with the inherited ones), and with `views` (restricting a composition's selection to some of its views).
   Also: `bin.extent` as anything but a `[min, max]` pair or a `{param}` reference; a lookup from a selection of the same
   unit or of a later layer; `scale.domain.unionWith` in a layered spec; a parameter's `push`.
-- Maps: a geoshape without a `shape` field inside a facet (vega-lite 6.4.3 fits the projection to
+- Maps: a geoshape without a GeoJSON `shape` field inside a facet (vega-lite 6.4.3 fits the projection to
   `data("child_main")`, a dataset it never defines, so there is no output to match). Longitude / latitude
   positions on marks other than point, circle, square, text, line, trail and rule; a half pair
   (only `longitude`).
@@ -134,8 +138,13 @@ vega-lite supports and is not here compiles to the same Vega.)
 - Channel definitions vega-lite 6.4.3 compiles that are not implemented yet: a `datum`
   condition on fillOpacity, strokeOpacity, angle, text or tooltip; a field condition that reads a field other than the
   channel's own; an array of conditions that holds a field condition; `impute` or
-  pre-binned data (`binned`) on a channel other than x and y; the `geojson` type on a channel other than shape, a shape field that is not
-  GeoJSON on a geoshape, and a GeoJSON shape on any other mark.
+  pre-binned data (`binned`) on a channel other than x and y; the `geojson` type on a channel other than shape, and
+  a GeoJSON shape on any other mark.
+- Positions: a condition that gives a field or a datum on a position channel (x, y, x2, y2, xOffset, yOffset, theta,
+  theta2, radius, radius2, longitude, latitude and their ends). The Vega-Lite schema gives a position no condition, and
+  vega-lite 6.4.3 makes a scale, an axis and a stack group of the condition's field while it places the mark by the
+  value, so there is no coherent output to match. (A condition with a value is read as its value, as vega-lite
+  reads it; on a channel the mark does not draw the condition is dropped with the channel.)
 - Scales and encodings: channel-level `band`; the positional mark-def constants `x` / `x2` / `y` / `y2`, except
   `x` / `y` on point, circle, square and text.
 - Layout: `width` / `height: "container"` on a composition (only a top-level unit or layer), `data: null`, config keys

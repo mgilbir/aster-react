@@ -27,7 +27,6 @@ const REJECTED: Array<[string, unknown, RegExp]> = [
   ['a format type that is not a function name', unit({ config: { customFormatTypes: true, numberFormatType: 7 } }), /numberFormatType/],
   ['container sizing of a composition', { data: DATA, width: 'container', hconcat: [unit(), unit()] }, /container/],
   ['a longitude without its latitude', unit({ mark: 'point', encoding: { longitude: xq } }), /needs its pair/],
-  ['a longitude / latitude value pair', unit({ mark: 'point', encoding: { longitude: { value: 1 }, latitude: { value: 2 } } }), /needs a `field` or `datum`/],
   ['a longitude on a bar', unit({ mark: 'bar', encoding: { longitude: xq, latitude: yq } }), /only implemented for the/],
   ['an aggregated latitude', unit({ mark: 'point', encoding: { longitude: xq, latitude: { ...yq, aggregate: 'mean' } } }), /aggregate.*does not apply/],
   ['a non-numeric latitude datum', unit({ mark: 'point', encoding: { longitude: { datum: 1 }, latitude: { datum: 'north' } } }), /finite number/],
@@ -174,6 +173,7 @@ const ACCEPTED: Array<[string, unknown]> = [
   ['a facet inside a facet', { data: DATA, facet: { column: cn }, spec: { facet: { row: { field: 'g', type: 'nominal' } }, spec: unit() } }],
   ['a datum on a size (it was refused as "a datum on an unsupported channel")', unit({ encoding: { x: xq, y: yq, size: { datum: 4 } } })],
   ['scale: null on x (it was refused)', unit({ encoding: { x: { ...xq, scale: null } } })],
+  ['a longitude / latitude value pair (it was refused: vega-lite reads no position from constants, and neither does this)', unit({ mark: 'point', encoding: { longitude: { value: 1 }, latitude: { value: 2 } } })],
   ['a key channel (it was refused as "a valid but unimplemented channel")', unit({ encoding: { x: xq, key: yq } })],
   ['a selection declared in two views', { data: DATA, hconcat: [unit({ params: [{ name: 'brush', select: 'interval' }] }), unit({ params: [{ name: 'brush', select: 'interval' }] })] }],
 ]
