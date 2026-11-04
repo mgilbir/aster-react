@@ -916,10 +916,8 @@ export function validateGeoUnit(mark: string, enc: Obj, path: string): void {
   if (isObj(enc.shape) && enc.shape.type === 'geojson' && mark !== 'geoshape') {
     fail(`${path}.shape.type`, 'a geojson shape field only applies to the geoshape mark')
   }
+  // (the channels a geoshape does not draw - its positions, size and angle - are dropped, as vega-lite drops them)
   if (mark === 'geoshape') {
-    for (const c of ['x', 'y', 'x2', 'y2', 'xOffset', 'yOffset', 'theta', 'radius', 'size', 'angle']) {
-      if (enc[c] != null) fail(`${path}.${c}`, `a geoshape mark is positioned by its projection: the "${c}" channel does not apply`)
-    }
     if (isObj(enc.shape) && enc.shape.field !== undefined && enc.shape.type !== 'geojson') {
       fail(`${path}.shape`, 'on a geoshape mark the shape channel carries the GeoJSON ({"field": ..., "type": "geojson"})')
     }
@@ -939,7 +937,6 @@ function validateEncoding(enc: unknown, path: string, where: 'unit' | 'layer', m
     const at = `${path}.${ch}`
     if (!ALL_CHANNELS.has(ch)) fail(at, `unknown encoding channel "${ch}"`)
     if (!SUPPORTED_CHANNELS.has(ch)) fail(at, `encoding channel "${ch}" is valid Vega-Lite but is not supported by @aster/vl`)
-    if (ch === 'url' && mark !== 'image') fail(at, 'the url channel only applies to the image mark')
     if (def === null) continue
     if ((ch === 'row' || ch === 'column' || ch === 'facet') && where === 'layer') fail(at, 'facet channels are not allowed in a layer encoding (use the facet operator)')
     if (ch === 'detail' || ch === 'order' || ch === 'tooltip' || ch === 'href' || ch === 'description') {

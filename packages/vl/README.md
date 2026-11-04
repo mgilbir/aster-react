@@ -132,7 +132,14 @@ vega-lite supports and is not here compiles to the same Vega.)
 - Data-driven channels without a scale / legend implementation yet: `key`.
 - Bins and time units: `timeUnit.maxbins`, errorbar / errorband over a binned channel, and the
   `timeUnitBandPosition` / `timeUnitBandSize` mark keys.
-- Scales and encodings: `scale: null` and channel-level `band`; `size` conditions on bars and ticks (a size constant
+- Channel definitions vega-lite 6.4.3 compiles that are not implemented yet: a `datum` on a channel other than the positions
+  (x, y, x2, y2, theta2, radius2, xOffset, yOffset, longitude, latitude) and the paint channels (color, fill, stroke); a `datum`
+  condition on fillOpacity, strokeOpacity, angle, text or tooltip; a field condition that reads a field other than the
+  channel's own; an array of conditions that holds a field condition; `impute` or
+  pre-binned data (`binned`) on a channel other than x and y; the `geojson` type on a channel other than shape, a shape field that is not
+  GeoJSON on a geoshape, and a GeoJSON shape on any other mark.
+- Scales and encodings: `scale: null` on a channel other than color, fill, stroke, opacity, fillOpacity, strokeOpacity and
+  strokeWidth, and channel-level `band`; `size` conditions on bars and ticks (a size constant
   or field works); the positional mark-def constants `x` / `x2` / `y` / `y2`, except `x` / `y` on point, circle,
   square and text.
 - Layout: `width` / `height: "container"` on a composition (only a top-level unit or layer), `data: null`, config keys

@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- **`@aster/vl`: `fill` and `stroke` paint every mark as vega-lite paints them, beside `color` and each other.** A fill on a stroked
+  mark, a stroke on a filled one, and either beside a `color` were refused; now each paint channel has its scale and legend, a `color`
+  gives way to the fill (filled mark) or stroke (unfilled mark) the encoding has, and every mark is painted by one rule (the mark
+  definition's and the config's paint, then color, fill and stroke). Legend symbols are painted from the mark's paint, and the legends
+  that read one field merge when both scales are discrete or both continuous (vega-lite 6.4.3), after layers and views merge theirs.
+  Channels a mark does not draw (a size on an area, an x on a geoshape, a url off an image) are dropped as vega-lite drops them instead
+  of being refused. A layer whose leaf has two legends no longer overflows the stack. The encoding refusals that remain are listed in
+  the README. Pinned by `vl-paint-channels` (mark x filled x channel x definition x companion, config defaults, layers) and
+  `vl-mark-channels` against vega-lite 6.4.3.
+
 - **`@aster/vl`: a scale type a channel can use is the scale the field has, and marks sit where vega-lite puts them.** The #87 fallback
   covered the requests a channel or the data cannot use; these valid ones were ignored or answered with another scale: colour `point`
   and `bin-ordinal`; `ordinal` and `band` on size, opacity, stroke width and angle (a band scale is read at the middle of its bands);

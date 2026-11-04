@@ -74,8 +74,6 @@ export interface FieldDef {
   aggregate?: string
   /** the position's secondary channel is a datum (a datum is no field of the encoding, but it makes the position a range all the same) */
   secondDatum?: boolean
-  /** `fill` / `stroke` channels are the colour machinery restricted to one paint */
-  paint?: 'fill' | 'stroke'
   /** the field comes from a condition (the channel itself has none) */
   fromCondition?: boolean
   /** `scale: null`: the field's values are used as they are (no scale, no legend) */
@@ -211,6 +209,7 @@ function assembleGuides(node: unknown, scaleTypes: ReadonlyMap<string, unknown> 
     for (const sc of node.scales as Record<string, unknown>[]) if (isObject(sc) && typeof sc.name === 'string') own.set(sc.name, sc.type)
     scaleTypes = own
   }
+  if (Array.isArray(node.legends)) node.legends = groupLegends(node.legends as Record<string, unknown>[])
   // a legend over a time scale leaves its labels to the scale
   if (Array.isArray(node.legends)) {
     for (const lg of node.legends as Record<string, unknown>[]) {
@@ -807,8 +806,9 @@ function compileLayered(spec: VLSpec, ctx: CompileCtx): VLSpec {
     liftBandSizeValue(l)
     const markRaw = l.mark
     const mark = typeof markRaw === 'string' ? markRaw : (markRaw as Record<string, unknown>).type as string
+    initUnitEncoding(l, mark)
     const encoding = isObject(l.encoding) ? (l.encoding as Record<string, unknown>) : {}
-    checkConstChannels(mark, encoding, markIsFilled(l, mark))
+    checkConstChannels(encoding)
     // (a layer's encoding merged into this unit: the map rules apply to the result)
     validateGeoUnit(mark, encoding, 'encoding')
     const fields = parseEncodingFields(encoding, l.config, markRaw)
@@ -1222,6 +1222,8 @@ function compileLayered(spec: VLSpec, ctx: CompileCtx): VLSpec {
   if (sizeSignals.length) out.signals = sizeSignals
 
   const legends: Record<string, unknown>[] = []
+  // (layer.ts assembleLegends: the layer's shared legends come first, then each layer's own)
+  const layerOwnLegends: Record<string, unknown>[] = []
   const sharedLegends: Array<{ path: number[]; lg: Record<string, unknown> }> = []
   for (const [pi, p] of parsed.entries()) {
     const unitLegends = buildUnitLegends(p.l, p.fields, p.mark, p.markRaw)
@@ -1230,14 +1232,18 @@ function compileLayered(spec: VLSpec, ctx: CompileCtx): VLSpec {
       // one legend per scale channel (vega resolves shared legends across layers)
       const ch = legendChannel(lg)
       // a layer's own scale has its own legend, which reads that scale
+      // (a layer's own legends are assembled among themselves: layer.ts assembleLegends)
+      const own = (): void => { const g = LEGEND_GROUP.get(lg); if (g) LEGEND_GROUP.set(lg, { ...g, scope: `layer_${pi}` }) }
       if (indepChannels.has(ch)) {
         for (const k of LEGEND_SCALE_KEYS) if (lg[k] === ch) lg[k] = `layer_${pi}_${ch}`
-        legends.push(lg)
+        own()
+        layerOwnLegends.push(lg)
         continue
       }
       // resolve.legend: independent - every layer keeps its own legend of this channel (they read the same scale)
       if (isObject(spec.resolve) && isObject((spec.resolve as Record<string, unknown>).legend) && ((spec.resolve as Record<string, Record<string, unknown>>).legend)?.[ch] === 'independent') {
-        legends.push(lg)
+        own()
+        layerOwnLegends.push(lg)
         GROUP_LEGENDS.add(lg)
         continue
       }
@@ -1253,7 +1259,9 @@ function compileLayered(spec: VLSpec, ctx: CompileCtx): VLSpec {
       let j = i + 1
       while (j < entries.length && entries[j]!.path[depth] === entries[i]!.path[depth]) j++
       const group = entries.slice(i, j)
-      for (const lg of group.length > 1 ? mergeShared(group, depth + 1) : [group[0]!.lg]) {
+      // (the legends of one leaf - their paths end here - are its own already: they are merged into the others as they are)
+      const nested = group.length > 1 && group.some((e) => e.path.length > depth + 1)
+      for (const lg of nested ? mergeShared(group, depth + 1) : group.map((e) => e.lg)) {
         const into = merged.find((x) => legendChannel(x) === legendChannel(lg))
         if (into) mergeLegend(into, lg)
         else merged.push(lg)
@@ -1263,6 +1271,7 @@ function compileLayered(spec: VLSpec, ctx: CompileCtx): VLSpec {
     return merged
   }
   mergeShared(sharedLegends, 0)
+  for (const lg of layerOwnLegends) legends.push(lg)
   if (legends.length) out.legends = legends
   // the signals every unit's selections add (collected in compile())
   const selUnits = layerSel.filter((sel): sel is UnitSel => sel?.unit !== undefined)
@@ -1282,7 +1291,7 @@ function compileLayered(spec: VLSpec, ctx: CompileCtx): VLSpec {
  * BAND scale: it must sit at the band's centre (`band: 0.5`) rather than its start.
  */
 /** The channels a field reaches through a scale of its own: the positions, the offsets and every mark property. */
-const SCALED_CHANNELS: ReadonlySet<string> = new Set(['x', 'y', 'xOffset', 'yOffset', 'color', 'size', 'opacity', 'fillOpacity', 'strokeOpacity', 'strokeWidth', 'strokeDash', 'angle', 'shape'])
+const SCALED_CHANNELS: ReadonlySet<string> = new Set(['x', 'y', 'xOffset', 'yOffset', 'color', 'fill', 'stroke', 'size', 'opacity', 'fillOpacity', 'strokeOpacity', 'strokeWidth', 'strokeDash', 'angle', 'shape'])
 /** The scale types whose domain is a list of values: a field is read at one of them, not between two ends. */
 const LISTED_DOMAIN_SCALES: ReadonlySet<string> = new Set(['ordinal', 'point', 'band', 'bin-ordinal'])
 /** The marks drawn at a point: the label of a polar position reads the middle of its bin or unit as a point does. */
@@ -1465,7 +1474,7 @@ function domainEntries(domain: unknown): DomainEntry[] | null {
  * (differing explicit domains, signal domains) throw rather than pick one.
  */
 /** The non-position channels whose scales layers can keep apart. */
-const INDEPENDENT_CAPABLE_CHANNELS = ['color', 'size', 'opacity', 'shape', 'strokeWidth', 'strokeDash', 'fillOpacity', 'strokeOpacity', 'angle']
+const INDEPENDENT_CAPABLE_CHANNELS = ['color', 'fill', 'stroke', 'size', 'opacity', 'shape', 'strokeWidth', 'strokeDash', 'fillOpacity', 'strokeOpacity', 'angle']
 
 /** The family a scale type belongs to; scales of one family merge across layers, the others cannot (scale/assemble.ts). */
 function scaleTypeCategory(t: string): string {
@@ -2579,7 +2588,7 @@ function compileFaceted(spec: VLSpec, ctx: CompileCtx, nested = ''): VLSpec {
 // --- concat / repeat composition ---------------------------------------------
 
 /** Channels that own a scale (those whose aggregate output takes part in the invalid-value filter). */
-const SCALE_CHANNELS = ['x', 'y', 'color', 'size', 'opacity', 'shape', 'strokeWidth', 'theta', 'xOffset', 'yOffset']
+const SCALE_CHANNELS = ['x', 'y', 'color', 'fill', 'stroke', 'size', 'opacity', 'shape', 'strokeWidth', 'theta', 'xOffset', 'yOffset']
 
 /** Scale channels that are SHARED across the children of a concat/repeat (vega-lite's default resolve). */
 const SHARED_SCALES = new Set(['color', 'fill', 'stroke', 'size', 'opacity', 'fillOpacity', 'strokeOpacity', 'strokeWidth', 'strokeDash', 'shape', 'angle'])
@@ -2985,11 +2994,54 @@ function mergeLegend(into: Record<string, unknown>, other: Record<string, unknow
   // legend/parse.ts mergeSymbolType: a circle beats a stroke symbol
   if (other.symbolType === 'circle' && into.symbolType !== undefined) into.symbolType = 'circle'
   for (const [k, v] of Object.entries(other)) if (k !== 'title' && into[k] === undefined && v !== undefined) into[k] = v
-  const upd = (into.encode as { symbols?: { update?: Record<string, unknown> } } | undefined)?.symbols?.update
-  if (upd && into.fill !== undefined) {
-    // (the legend keeps the empty `update` the fill left: vega-lite's merged legend has it too)
-    delete upd.fill
+  // (assemble.ts getFieldKeyForChannel: the views that share a legend's channel name one field, or the legend is the channel's alone)
+  const a = LEGEND_GROUP.get(into)
+  const b = LEGEND_GROUP.get(other)
+  if (a && b && a.key !== b.key) LEGEND_GROUP.set(into, { ...a, key: `channel:${legendChannel(into)}` })
+}
+
+/** What groups a legend with others where legends are assembled: the field it reads, whether its scale is discrete, its listed domain. */
+const LEGEND_GROUP = new WeakMap<object, { key: string; discrete: boolean; domain: unknown; scope?: string }>()
+
+/**
+ * legend/assemble.ts assembleLegends: the legends (of one scope) that read one field are one legend when their scales are both discrete or
+ * both continuous and their orients do not conflict; the groups come out in the order of their first legends. Two discrete legends
+ * merged show the union of their scales' listed domains. Then each legend's symbols are assembled.
+ */
+function groupLegends(legends: Record<string, unknown>[]): Record<string, unknown>[] {
+  const groups: Array<{ key: string; members: Record<string, unknown>[] }> = []
+  for (const lg of legends) {
+    const info = LEGEND_GROUP.get(lg)
+    const key = info ? `${info.scope ?? ''}|${info.key}` : undefined
+    const group = key === undefined ? undefined : groups.find((g) => g.key === key)
+    if (!group || !info) { groups.push({ key: key ?? '', members: [lg] }); continue }
+    const into = group.members.find((m) => LEGEND_GROUP.get(m)?.discrete === info.discrete && (m.orient === undefined || lg.orient === undefined || m.orient === lg.orient))
+    if (into === undefined) { group.members.push(lg); continue }
+    const intoInfo = LEGEND_GROUP.get(into)!
+    if (info.discrete && into.values === undefined) {
+      const primitive = (v: unknown): boolean => typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean'
+      const listed = (d: unknown): unknown[] | undefined => (Array.isArray(d) && d.some(primitive) ? d.filter(primitive) : undefined)
+      const va = listed(intoInfo.domain)
+      const vb = listed(info.domain)
+      if (va && vb) into.values = JSON.stringify(intoInfo.domain) === JSON.stringify(info.domain) ? va : [...new Map([...va, ...vb].map((v) => [JSON.stringify(v), v])).values()]
+    }
+    mergeLegend(into, lg)
+    LEGEND_GROUP.set(into, intoInfo)
   }
+  const out = groups.flatMap((g) => g.members)
+  out.forEach(assembleLegendSymbols)
+  return out
+}
+
+/**
+ * legend/assemble.ts: a symbol that is filled and has no stroke of its own is not stroked (vega's legend config would stroke it), and
+ * what the legend itself encodes is the legend's, not the symbols'. (A symbol update this empties stays, empty, as in vega-lite.)
+ */
+function assembleLegendSymbols(lg: Record<string, unknown>): void {
+  const upd = (lg.encode as { symbols?: { update?: Record<string, unknown> } } | undefined)?.symbols?.update
+  if (!upd) return
+  if (upd.fill && (upd.fill as Record<string, unknown>).value !== 'transparent' && !upd.stroke && !lg.stroke) upd.stroke = { value: 'transparent' }
+  for (const p of ['size', 'shape', 'fill', 'stroke', 'strokeDash', 'strokeWidth', 'opacity']) if (lg[p]) delete upd[p]
 }
 
 /** Vega layout for a composite: spacing, bounds, align, center (vega-lite defaults per operator). */
@@ -3224,7 +3276,7 @@ function autoMaxBins(channel: string): number {
 }
 
 /** The channels whose condition may be a datum: it reads the channel's scale (the other channels' scales are named after their paint or their legend). */
-const DATUM_CONDITION_CHANNELS: ReadonlySet<string> = new Set(['color', 'size', 'opacity', 'shape', 'strokeWidth', 'strokeDash'])
+const DATUM_CONDITION_CHANNELS: ReadonlySet<string> = new Set(['color', 'fill', 'stroke', 'size', 'opacity', 'shape', 'strokeWidth', 'strokeDash'])
 
 function parseChannel(channel: string, def: unknown): FieldDef | null {
   if (def == null) return null
@@ -3366,23 +3418,8 @@ function patchDatumRefs(node: unknown, datums: Map<string, unknown>): void {
   for (const v of Object.values(node)) if (v !== null && typeof v === 'object') patchDatumRefs(v, datums)
 }
 
-/**
- * Constant (`datum`/`value`) position channels are implemented for the marks
- * whose position is a plain point (or a rule's end); a datum on a non-position
- * channel is supported for colour only. Everything else throws, never degrades.
- */
-function checkConstChannels(mark: string, encoding: Record<string, unknown>, filled?: boolean): void {
-  // channels that need their own scale + legend are implemented for colour (fill/stroke alias it);
-  // the rest are limited to constants and conditions
-  for (const ch of ['fill', 'stroke']) {
-    const d = encoding[ch]
-    if (!isObject(d) || (d.field === undefined && d.datum === undefined)) continue
-    if (encoding.color !== undefined) throw new VLCompileError(`encoding.${ch} together with encoding.color is not supported`)
-    // (a `scale: null` field is read as it is - no colour machinery is involved, so the mark's filledness does not matter)
-    if (filled !== undefined && (ch === 'fill') !== filled && d.scale !== null) {
-      throw new VLCompileError(`encoding.${ch} on a ${filled ? 'filled' : 'stroked'} "${mark}" mark is not supported; use encoding.color or set mark.filled`)
-    }
-  }
+/** A datum is implemented on the positions and the paint channels; on any other channel it throws, never degrades. */
+function checkConstChannels(encoding: Record<string, unknown>): void {
   for (const [ch, def] of Object.entries(encoding)) {
     if (!isObject(def) || def.field !== undefined) continue
     const isDatum = def.datum !== undefined
@@ -3395,7 +3432,7 @@ function checkConstChannels(mark: string, encoding: Record<string, unknown>, fil
 
 /** Parse every channel of an encoding into field defs (datum-only defs included, flagged). */
 /** Channels whose scale can have a legend (position channels have axes instead). */
-const LEGEND_CHANNELS = new Set(['color', 'size', 'shape', 'opacity', 'fillOpacity', 'strokeOpacity', 'strokeWidth', 'strokeDash', 'angle'])
+const LEGEND_CHANNELS = new Set(['color', 'fill', 'stroke', 'size', 'shape', 'opacity', 'fillOpacity', 'strokeOpacity', 'strokeWidth', 'strokeDash', 'angle'])
 
 /** vega-lite defaultTitleFormatter: config.fieldTitle ('verbal' | 'plain' | 'functional') and config.countTitle. */
 function titleFromConfig(f: FieldDef, config: unknown): { autoTitle?: string } {
@@ -3503,11 +3540,11 @@ function parseEncodingFields(encoding: Record<string, unknown>, config?: unknown
     // detail / order / tooltip accept a list of definitions
     for (const d0 of Array.isArray(def) ? def : [def]) {
       const d = dropUnallowedCustomFormat(d0, config)
-      const f = parseChannel(channel === 'fill' || channel === 'stroke' ? 'color' : channel, d)
+      const f = parseChannel(channel, d)
       if (!f) continue
       const g = { ...(disableLegends && f.legend === undefined && !f.datumOnly && LEGEND_CHANNELS.has(f.channel) ? { ...f, legend: null } : f), ...titleFromConfig(f, config) }
       const h = (isObject(d) && d.scale === null && g.field ? { ...g, noScale: true } : g) as FieldDef
-      fields.push(channel === 'fill' || channel === 'stroke' ? { ...h, paint: channel } : h)
+      fields.push(h)
     }
   }
   // encoding.ts normalizeEncoding: a field nested inside a continuous position (one with no time unit to make bands of) has nothing to
@@ -5174,79 +5211,80 @@ function buildScales(spec: VLSpec, fieldsIn: FieldDef[], mark: string, orient: s
     scales.push(sc)
   }
 
-  // color scale
-  const colorDef = fields.find((f) => f.channel === 'color' && f.field)
-  const colorScaleName = colorDef?.paint ?? 'color'
-  const numericAggregate = colorDef?.aggregate != null && ['count', 'distinct', 'valid', 'missing'].includes(colorDef.aggregate)
-  if (colorDef) {
-    if (isDiscreteType(colorDef.type) && !numericAggregate) {
-      // nominal colours are categorical; an ORDINAL field gets vega-lite's sequential 'ordinal' ramp, interpolated in hcl. A point or
-      // bin-ordinal scale asked of the field spreads the colour range over its values.
-      const colorType = nonPositionScaleType('color', colorDef)
-      const cs = colorDef.scale ?? {}
-      scales.push({
-        name: colorScaleName,
-        type: colorType,
-        domain: sortedDomain(colorDef, dataName, dc),
-        range: rangeRef(colorDef, dataName, cs.range) ?? (cs.scheme != null ? schemeRange(cs.scheme) : colorType === 'ordinal' ? (colorDef.type === 'ordinal' ? 'ordinal' : 'category') : cs.domainMid != null ? 'diverging' : 'ramp'),
-        ...(colorDef.type === 'ordinal' && scalePropApplies('color', colorType, 'interpolate') ? { interpolate: 'hcl' } : {}),
-      })
-      forwardScaleProps(scales[scales.length - 1]!, colorDef, colorScaleName, SCALE_BUILT_PROPS)
-    } else {
-      const cs = colorDef.scale ?? {}
-      // scale/type.ts defaultType: a binned quantitative colour is a bin-ordinal scale over the bins (no domain of its own)
-      const binOrdinalColor = colorDef.bin && colorDef.type === 'quantitative' && (cs.type === undefined || cs.type === 'bin-ordinal') && !numericAggregate
-      if (binOrdinalColor) {
+  // the colour scales: one for each paint channel that has a field
+  for (const colorScaleName of PAINT_CHANNELS) {
+    const colorDef = fields.find((f) => f.channel === colorScaleName && f.field)
+    const numericAggregate = colorDef?.aggregate != null && ['count', 'distinct', 'valid', 'missing'].includes(colorDef.aggregate)
+    if (colorDef) {
+      if (isDiscreteType(colorDef.type) && !numericAggregate) {
+        // nominal colours are categorical; an ORDINAL field gets vega-lite's sequential 'ordinal' ramp, interpolated in hcl. A point or
+        // bin-ordinal scale asked of the field spreads the colour range over its values.
+        const colorType = nonPositionScaleType('color', colorDef)
+        const cs = colorDef.scale ?? {}
         scales.push({
           name: colorScaleName,
-          type: 'bin-ordinal',
-          domain: undefined,
-          range: cs.range != null ? rangeRef(colorDef, dataName, cs.range) : cs.scheme != null ? schemeRange(cs.scheme) : mark === 'rect' || mark === 'geoshape' ? 'heatmap' : 'ramp',
-          bins: { signal: binNames(colorDef.binParams!, colorDef.field).signal },
-          interpolate: 'hcl',
-          ...(cs.reverse !== undefined ? { reverse: Boolean(cs.reverse) } : colorDef.sort === 'descending' ? { reverse: true } : {}),
+          type: colorType,
+          domain: sortedDomain(colorDef, dataName, dc),
+          range: rangeRef(colorDef, dataName, cs.range) ?? (cs.scheme != null ? schemeRange(cs.scheme) : colorType === 'ordinal' ? (colorDef.type === 'ordinal' ? 'ordinal' : 'category') : cs.domainMid != null ? 'diverging' : 'ramp'),
+          ...(colorDef.type === 'ordinal' && scalePropApplies('color', colorType, 'interpolate') ? { interpolate: 'hcl' } : {}),
         })
+        forwardScaleProps(scales[scales.length - 1]!, colorDef, colorScaleName, SCALE_BUILT_PROPS)
       } else {
-      // a temporal colour field is a time scale, whatever its time unit (scale/type.ts defaultType)
-      const colorScaleType = colorScaleTypeOf(colorDef)
-      scales.push({
-        name: colorScaleName,
-        type: colorScaleType,
-        domain: explicitDomainOf(colorDef) !== undefined
-          ? explicitDomainValue(explicitDomainOf(colorDef), colorDef)
-          // domain.ts: a time unit with a band end spans start..end
-          : colorDef.tu && colorDef.type === 'temporal' && ['time', 'utc'].includes(colorScaleType) && bandPositionOf(spec, mark, colorDef, false) !== undefined
-            ? { data: dataName, fields: [timeUnitField(colorDef), `${timeUnitField(colorDef)}_end`] }
-            : { data: dataName, field: aggFieldName(colorDef) },
-        // vega-lite's quantitative color range: 'heatmap' scheme for
-        // rect/geoshape marks, a ramp otherwise; a domainMid makes it
-        // diverging; an explicit scheme replaces the range (probed)
-        ...(cs.range != null
-          ? { range: rangeRef(colorDef, dataName, cs.range) }
-          : cs.scheme != null
-            ? { range: schemeRange(cs.scheme) }
-            : { range: cs.domainMid != null ? 'diverging' : mark === 'rect' || mark === 'geoshape' ? 'heatmap' : 'ramp' }),
-        // vega-lite sets the colorspace for continuous color scales (probed:
-        // interpolate hcl on ramp/scheme/diverging alike)
-        interpolate: 'hcl',
-        ...(cs.reverse !== undefined
-          ? { reverse: Boolean(cs.reverse) }
-          : colorDef.sort === 'descending' ? { reverse: true } : {}),
-        ...(cs.domainMin !== undefined && scalePropApplies('color', colorScaleType, 'domainMin') ? { domainMin: cs.domainMin } : {}),
-        ...(cs.domainMax !== undefined && scalePropApplies('color', colorScaleType, 'domainMax') ? { domainMax: cs.domainMax } : {}),
-        ...(cs.domainMid !== undefined && scalePropApplies('color', colorScaleType, 'domainMid') ? { domainMid: cs.domainMid } : {}),
-        ...(cs.bins !== undefined && scalePropApplies('color', colorScaleType, 'bins') ? { bins: cs.bins } : {}),
-        ...(!scalePropApplies('color', colorScaleType, 'zero')
-          ? {}
-          : { zero: (cs.zero as boolean | undefined) ?? (explicitDomainOf(colorDef) !== undefined && isContinuousScaleType(colorScaleType) ? zeroForCustomDomain(explicitDomainOf(colorDef)) : false) }),
-        // (scale/domain.ts: a binned field's continuous scale spans the bins; it carries the bins too)
-        ...(colorDef.bin && colorDef.type === 'quantitative' && explicitDomainOf(colorDef) === undefined ? { bins: { signal: binNames(colorDef.binParams!, colorDef.field).signal } } : {}),
-      })
-      forwardScaleProps(scales[scales.length - 1]!, colorDef, colorScaleName, SCALE_BUILT_PROPS)
-      if (colorDef.bin && colorDef.type === 'quantitative' && explicitDomainOf(colorDef) === undefined) {
-        const last = scales[scales.length - 1]!
-        last.domain = { signal: `[${binNames(colorDef.binParams!, colorDef.field).signal}.start, ${binNames(colorDef.binParams!, colorDef.field).signal}.stop]` }
-      }
+        const cs = colorDef.scale ?? {}
+        // scale/type.ts defaultType: a binned quantitative colour is a bin-ordinal scale over the bins (no domain of its own)
+        const binOrdinalColor = colorDef.bin && colorDef.type === 'quantitative' && (cs.type === undefined || cs.type === 'bin-ordinal') && !numericAggregate
+        if (binOrdinalColor) {
+          scales.push({
+            name: colorScaleName,
+            type: 'bin-ordinal',
+            domain: undefined,
+            range: cs.range != null ? rangeRef(colorDef, dataName, cs.range) : cs.scheme != null ? schemeRange(cs.scheme) : mark === 'rect' || mark === 'geoshape' ? 'heatmap' : 'ramp',
+            bins: { signal: binNames(colorDef.binParams!, colorDef.field).signal },
+            interpolate: 'hcl',
+            ...(cs.reverse !== undefined ? { reverse: Boolean(cs.reverse) } : colorDef.sort === 'descending' ? { reverse: true } : {}),
+          })
+        } else {
+        // a temporal colour field is a time scale, whatever its time unit (scale/type.ts defaultType)
+        const colorScaleType = colorScaleTypeOf(colorDef)
+        scales.push({
+          name: colorScaleName,
+          type: colorScaleType,
+          domain: explicitDomainOf(colorDef) !== undefined
+            ? explicitDomainValue(explicitDomainOf(colorDef), colorDef)
+            // domain.ts: a time unit with a band end spans start..end
+            : colorDef.tu && colorDef.type === 'temporal' && ['time', 'utc'].includes(colorScaleType) && bandPositionOf(spec, mark, colorDef, false) !== undefined
+              ? { data: dataName, fields: [timeUnitField(colorDef), `${timeUnitField(colorDef)}_end`] }
+              : { data: dataName, field: aggFieldName(colorDef) },
+          // vega-lite's quantitative color range: 'heatmap' scheme for
+          // rect/geoshape marks, a ramp otherwise; a domainMid makes it
+          // diverging; an explicit scheme replaces the range (probed)
+          ...(cs.range != null
+            ? { range: rangeRef(colorDef, dataName, cs.range) }
+            : cs.scheme != null
+              ? { range: schemeRange(cs.scheme) }
+              : { range: cs.domainMid != null ? 'diverging' : mark === 'rect' || mark === 'geoshape' ? 'heatmap' : 'ramp' }),
+          // vega-lite sets the colorspace for continuous color scales (probed:
+          // interpolate hcl on ramp/scheme/diverging alike)
+          interpolate: 'hcl',
+          ...(cs.reverse !== undefined
+            ? { reverse: Boolean(cs.reverse) }
+            : colorDef.sort === 'descending' ? { reverse: true } : {}),
+          ...(cs.domainMin !== undefined && scalePropApplies('color', colorScaleType, 'domainMin') ? { domainMin: cs.domainMin } : {}),
+          ...(cs.domainMax !== undefined && scalePropApplies('color', colorScaleType, 'domainMax') ? { domainMax: cs.domainMax } : {}),
+          ...(cs.domainMid !== undefined && scalePropApplies('color', colorScaleType, 'domainMid') ? { domainMid: cs.domainMid } : {}),
+          ...(cs.bins !== undefined && scalePropApplies('color', colorScaleType, 'bins') ? { bins: cs.bins } : {}),
+          ...(!scalePropApplies('color', colorScaleType, 'zero')
+            ? {}
+            : { zero: (cs.zero as boolean | undefined) ?? (explicitDomainOf(colorDef) !== undefined && isContinuousScaleType(colorScaleType) ? zeroForCustomDomain(explicitDomainOf(colorDef)) : false) }),
+          // (scale/domain.ts: a binned field's continuous scale spans the bins; it carries the bins too)
+          ...(colorDef.bin && colorDef.type === 'quantitative' && explicitDomainOf(colorDef) === undefined ? { bins: { signal: binNames(colorDef.binParams!, colorDef.field).signal } } : {}),
+        })
+        forwardScaleProps(scales[scales.length - 1]!, colorDef, colorScaleName, SCALE_BUILT_PROPS)
+        if (colorDef.bin && colorDef.type === 'quantitative' && explicitDomainOf(colorDef) === undefined) {
+          const last = scales[scales.length - 1]!
+          last.domain = { signal: `[${binNames(colorDef.binParams!, colorDef.field).signal}.start, ${binNames(colorDef.binParams!, colorDef.field).signal}.stop]` }
+        }
+        }
       }
     }
   }
@@ -5254,7 +5292,7 @@ function buildScales(spec: VLSpec, fieldsIn: FieldDef[], mark: string, orient: s
   // the user's scale properties on the non-positional channels count as explicit too
   for (const f of fields) {
     if (!f.scale || f.channel === 'x' || f.channel === 'y') continue
-    const sc = scales.find((x) => x.name === (f.paint ?? f.channel))
+    const sc = scales.find((x) => x.name === f.channel)
     if (sc && !EXPLICIT_SCALE_PROPS.has(sc)) recordExplicit(sc, f.scale)
   }
   // the scales of a unit come in the order of the channels (vega-lite's), whichever order they were made in
@@ -5842,7 +5880,10 @@ function axisTitle(def: FieldDef, userAxis?: Record<string, unknown> | null, fie
 
 // --- legends -----------------------------------------------------------------
 
-function buildLegends(fields: FieldDef[], mark: string, markOpacity?: number, markFilled?: boolean, markStroke?: string, markStrokeWidth?: number, markFillOpacity?: number, cfgLegendIn?: Record<string, unknown>, markStrokeDash?: number[], formats: { numberFormat?: string; timeFormat?: string; customFormatTypes?: boolean; numberFormatType?: string; timeFormatType?: string } = {}, paint: { fill?: string; stroke?: string; markFill?: string; shape?: string; colorScaleless?: boolean } = {}): Record<string, unknown>[] {
+/** The paint of a legend's symbols, for the legend of a channel with the user's legend definition (legendSymbolPaint). */
+type SymbolPaint = (channel: string, userLegend: Record<string, unknown>) => Record<string, unknown>
+
+function buildLegends(fields: FieldDef[], mark: string, markOpacity: number | undefined, markFilled: boolean, cfgLegendIn: Record<string, unknown> | undefined, formats: { numberFormat?: string; timeFormat?: string; customFormatTypes?: boolean; numberFormatType?: string; timeFormatType?: string }, paint: { shape?: string }, symbolPaint: SymbolPaint): Record<string, unknown>[] {
   const legends: Record<string, unknown>[] = []
   // config.legend is a defaults layer: orient/direction keys are translated
   // into the compiled `direction`, everything else merges under the channel's
@@ -5857,15 +5898,10 @@ function buildLegends(fields: FieldDef[], mark: string, markOpacity?: number, ma
   // vega-lite's reduced symbol opacity (init.ts opacity()) does not apply
   // when the encoding is aggregate — the mark legend follows the mark.
   const reducedOpacity = fields.some((f) => f.aggregate) ? undefined : C.pointOpacity
-  // a field's legend is suppressed when ANY channel bound to the same field
-  // disables it (vega-lite merges per-field legends)
+  // a legend is suppressed when a channel it would merge with disables its own (the merged legend is disabled)
   const legendSuppressed = (def: FieldDef): boolean =>
-    fields.some((f) => f.field === def.field && f.legend === null)
-  // vega-lite emits legends in a fixed channel order (color, size, shape,
-  // opacity) regardless of the encoding's key order — verified by probing
-  // vl.compile with permuted encodings.
+    fields.some((f) => f.legend === null && legendGroupOf(f) === legendGroupOf(def) && legendIsDiscrete(f) === legendIsDiscrete(def))
   const legendsByKey: Record<string, Record<string, unknown>> = {}
-  const order: string[] = []
   const legendDefs: Record<string, FieldDef> = {}
   const push = (key: string, lg: Record<string, unknown>, def: FieldDef): void => {
     // a custom format type moves the label text into the labels encode and leaves vega's `format` unset
@@ -5881,13 +5917,12 @@ function buildLegends(fields: FieldDef[], mark: string, markOpacity?: number, ma
     legendDefs[key] = def
     // legend/parse.ts isExplicit: the title is the legend's own, or the field def's title
     if ((isObject(def.legend) && 'title' in def.legend) || (def.title !== undefined && lg.title === def.title)) EXPLICIT_LEGEND_TITLE.add(lg)
-    order.push(key)
   }
-  // the paint a legend symbol shows: vega-lite fills every mark but point, line and rule unless configured (trail never)
-  const legendFilled = mark !== 'trail' && (markFilled ?? !['point', 'line', 'rule'].includes(mark))
-  const colorDef = fields.find((f) => f.channel === 'color' && f.field)
-  const colorLegendShown = !!colorDef && colorDef.legend !== null && !legendSuppressed(colorDef)
-  if (colorDef && colorDef.legend !== null && !legendSuppressed(colorDef)) {
+  // legend/properties.ts defaultSymbolType: a square for the marks drawn as boxes, a stroke for the lines, else the constant shape or a circle
+  const symbolType = paint.shape ?? (['bar', 'rect', 'square'].includes(mark) ? 'square' : ['line', 'trail', 'rule'].includes(mark) ? 'stroke' : 'circle')
+  // the colour legends: one for each paint channel with a field (a colour one names the property the colour paints; a trail's is its stroke)
+  for (const colorDef of PAINT_CHANNELS.map((ch) => fields.find((f) => f.channel === ch && f.field))) {
+    if (!colorDef || colorDef.legend === null || legendSuppressed(colorDef)) continue
     const userLegend = { ...cfgDefaults, ...(colorDef.legend ?? {}) }
     const lg: Record<string, unknown> = { title: legendTitle(colorDef, userLegend) }
     // only a cyclic (discrete) time unit switches the color legend from a
@@ -5902,22 +5937,15 @@ function buildLegends(fields: FieldDef[], mark: string, markOpacity?: number, ma
     // legend.type:'symbol' forces a symbol legend even on a continuous scale
     const colorGradient = colorContinuous && userLegend.type !== 'symbol'
     if (colorTimeUnitSymbol) lg.type = 'symbol'
-    lg[colorDef.paint ?? (legendFilled ? 'fill' : 'stroke')] = colorDef.paint ?? 'color'
-    const opacity = markOpacity ?? (['point', 'circle', 'square', 'tick'].includes(mark) ? reducedOpacity : undefined)
+    lg[colorDef.channel !== 'color' ? colorDef.channel : mark !== 'trail' && markFilled ? 'fill' : 'stroke'] = colorDef.channel
     if (colorGradient) {
       GRADIENT_LEGENDS.add(lg)
       lg.gradientLength = { signal: 'clamp(height, 64, 200)' }
+      const opacity = markOpacity ?? (['point', 'circle', 'square', 'tick'].includes(mark) ? reducedOpacity : undefined)
       if (opacity) lg.encode = { gradient: { update: { opacity: { value: opacity } } } }
     } else {
-      lg.symbolType = paint.shape ?? (['bar', 'rect', 'square'].includes(mark) ? 'square' : ['line', 'trail', 'rule'].includes(mark) ? 'stroke' : 'circle')
-      // the mark's own paint and opacity ride along on the symbols (legend/encode.ts symbols())
-      const symUpdate: Record<string, unknown> = {}
-      if (!legendFilled && !['line', 'rule', 'trail'].includes(mark)) symUpdate.fill = { value: paint.markFill ?? 'transparent' }
-      if (markStroke) symUpdate.stroke = { value: markStroke }
-      if (markStrokeWidth != null) symUpdate.strokeWidth = { value: markStrokeWidth }
-      if (markStrokeDash != null) symUpdate.strokeDash = { value: markStrokeDash }
-      if (markFillOpacity != null) symUpdate.fillOpacity = { value: markFillOpacity }
-      if (opacity) symUpdate.opacity = { value: opacity }
+      lg.symbolType = symbolType
+      const symUpdate = symbolPaint(colorDef.channel, userLegend)
       if (Object.keys(symUpdate).length) lg.encode = { symbols: { update: symUpdate } }
     }
     applyTimeUnitLegend(lg, colorDef, userLegend, formats)
@@ -5933,30 +5961,13 @@ function buildLegends(fields: FieldDef[], mark: string, markOpacity?: number, ma
       if (k === 'title' || k === 'encode' || k === 'fill' || k === 'stroke' || k === 'shape' || k === 'size' || k === 'opacity') continue
       if (isGradient ? (k.startsWith('symbol') || k === 'gradientStroke') : k.startsWith('gradient')) delete lg[k]
     }
-    push('color', lg, colorDef)
+    push(colorDef.channel, lg, colorDef)
   }
-  // the symbol of a size / strokeWidth / opacity legend follows the mark (legend/encode.ts symbols())
-  const symbolFor = (channel: string): { symbolType: string; update: Record<string, unknown> } => {
-    const filled = legendFilled
-    // the symbol is painted like the mark: its constant colour (channel value, then mark def) over the mark's default
-    const base = (filled ? paint.fill : paint.stroke) ?? (mark === 'text' || mark === 'rule' ? 'black' : C.blue)
-    const opacity = markOpacity ?? (['point', 'circle', 'square', 'tick'].includes(mark) ? reducedOpacity : undefined)
-    // a colour legend colours the symbols only when the channel is a field of its own: a channel whose field is a
-    // condition's (`{condition: {test, field}, value: "lightgray"}`) is a value def to the legend, whose constant paints them
-    // (legend/encode.ts symbols(): a colour channel that is a field makes the symbols black, whether or not its own legend is shown)
-    // (a `scale: null` colour is a field too: the symbols are not painted like the mark)
-    const byColor = (colorDef != null && !colorDef.fromCondition) || paint.colorScaleless === true
-    const u: Record<string, unknown> = {}
-    if (filled) {
-      if (byColor) Object.assign(u, { fill: { value: 'black' }, fillOpacity: { value: opacity ?? 1 } })
-      else u.fill = { value: base }
-      u.stroke = { value: markStroke ?? 'transparent' }
-    } else {
-      if (mark === 'point') u.fill = { value: 'transparent' }
-      if (!byColor) u.stroke = { value: markStroke ?? base }
-    }
-    if (channel !== 'opacity' && opacity) u.opacity = { value: opacity }
-    return { symbolType: paint.shape ?? (['bar', 'rect', 'square'].includes(mark) ? 'square' : ['line', 'trail', 'rule'].includes(mark) ? 'stroke' : 'circle'), update: u }
+  // the symbols of the other legends are painted the same way (legend/encode.ts symbols())
+  const symbolFor = (channel: string, userLegend: Record<string, unknown>): { symbolType: string; encode: Record<string, unknown> } => {
+    // (symbols with nothing to paint have no encode)
+    const update = symbolPaint(channel, userLegend)
+    return { symbolType, encode: Object.keys(update).length ? { encode: { symbols: { update } } } : {} }
   }
   const sizeDef = fields.find((f) => f.channel === 'size' && f.field)
   if (sizeDef && sizeDef.legend !== null && !legendSuppressed(sizeDef)) {
@@ -5976,14 +5987,13 @@ function buildLegends(fields: FieldDef[], mark: string, markOpacity?: number, ma
       GRADIENT_LEGENDS.add(glg)
       push('size', glg, sizeDef)
     } else {
-    const sizeSym = symbolFor('size')
-    if (sizeUser.symbolOpacity != null) delete sizeSym.update.opacity
+    const sizeSym = symbolFor('size', sizeUser)
     const sizeLg: Record<string, unknown> = {
       // (a trail's size scale is its stroke width: vega-lite legend/parse.ts getLegendDefWithScale)
       [mark === 'trail' ? 'strokeWidth' : 'size']: 'size',
       symbolType: sizeSym.symbolType,
       title: legendTitle(sizeDef, sizeUser),
-      encode: { symbols: { update: sizeSym.update } },
+      ...sizeSym.encode,
     }
     applyTimeUnitLegend(sizeLg, sizeDef, sizeUser, formats)
     forwardLegendProps(sizeUser, sizeLg, false)
@@ -5998,7 +6008,7 @@ function buildLegends(fields: FieldDef[], mark: string, markOpacity?: number, ma
       symbolType: 'circle',
       title: legendTitle(shapeDefL, shapeUser),
       // (a filled mark - a point overlay is one - paints the symbols like the mark; an unfilled point strokes them)
-      encode: { symbols: { update: legendFilled ? symbolFor('shape').update : { fill: { value: 'transparent' }, ...(colorLegendShown && !colorDef?.fromCondition ? {} : { stroke: { value: paint.stroke ?? C.blue } }), opacity: { value: markOpacity ?? reducedOpacity ?? 1 } } } },
+      ...symbolFor('shape', shapeUser).encode,
     }
     applyTimeUnitLegend(shapeLg, shapeDefL, shapeUser, formats)
     forwardLegendProps(shapeUser, shapeLg, false)
@@ -6007,12 +6017,12 @@ function buildLegends(fields: FieldDef[], mark: string, markOpacity?: number, ma
   const strokeWidthLegendDef = fields.find((f) => f.channel === 'strokeWidth' && f.field)
   if (strokeWidthLegendDef && strokeWidthLegendDef.legend !== null && !legendSuppressed(strokeWidthLegendDef)) {
     const swUser = { ...cfgDefaults, ...(strokeWidthLegendDef.legend ?? {}) }
-    const swSym = symbolFor('strokeWidth')
+    const swSym = symbolFor('strokeWidth', swUser)
     const swLg: Record<string, unknown> = {
       strokeWidth: 'strokeWidth',
       symbolType: swSym.symbolType,
       title: legendTitle(strokeWidthLegendDef, swUser),
-      encode: { symbols: { update: swSym.update } },
+      ...swSym.encode,
     }
     applyTimeUnitLegend(swLg, strokeWidthLegendDef, swUser, formats)
     forwardLegendProps(swUser, swLg, false)
@@ -6021,12 +6031,12 @@ function buildLegends(fields: FieldDef[], mark: string, markOpacity?: number, ma
   const strokeDashLegendDef = fields.find((f) => f.channel === 'strokeDash' && f.field)
   if (strokeDashLegendDef && strokeDashLegendDef.legend !== null && !legendSuppressed(strokeDashLegendDef)) {
     const sdUser = { ...cfgDefaults, ...(strokeDashLegendDef.legend ?? {}) }
-    const sdSym = symbolFor('strokeDash')
+    const sdSym = symbolFor('strokeDash', sdUser)
     const sdLg: Record<string, unknown> = {
       strokeDash: 'strokeDash',
       symbolType: sdSym.symbolType,
       title: legendTitle(strokeDashLegendDef, sdUser),
-      encode: { symbols: { update: sdSym.update } },
+      ...sdSym.encode,
     }
     applyTimeUnitLegend(sdLg, strokeDashLegendDef, sdUser, formats)
     forwardLegendProps(sdUser, sdLg, false)
@@ -6036,37 +6046,28 @@ function buildLegends(fields: FieldDef[], mark: string, markOpacity?: number, ma
   const opacityLegendDef = fields.find((f) => f.channel === 'opacity' && f.field)
   if (opacityLegendDef && opacityLegendDef.legend !== null && !legendSuppressed(opacityLegendDef)) {
     const opUser = { ...cfgDefaults, ...(opacityLegendDef.legend ?? {}) }
-    const opSym = symbolFor('opacity')
+    const opSym = symbolFor('opacity', opUser)
     const opLg: Record<string, unknown> = {
       opacity: 'opacity',
       symbolType: opSym.symbolType,
       title: legendTitle(opacityLegendDef, opUser),
-      encode: { symbols: { update: opSym.update } },
+      ...opSym.encode,
     }
     applyTimeUnitLegend(opLg, opacityLegendDef, opUser, formats)
     forwardLegendProps(opUser, opLg, false)
     push('opacity', opLg, opacityLegendDef)
   }
-  // legends over the SAME domain (a colour and a shape both on `c`) are one legend (legend/assemble.ts assembleLegends: keyed by
-  // the scale's domains, so differing titles do not keep them apart - they merge by mergeTitleComponent)
-  const sigOf = (d: FieldDef): string => JSON.stringify([d.source, d.aggregate ?? null, d.bin ? 1 : 0, d.timeUnit ?? null])
-  const merged = new Map<string, string>()
-  for (const key of order) {
-    const sig = sigOf(legendDefs[key]!)
-    const into = merged.get(sig)
-    if (into !== undefined && legendsByKey[into]!.orient === legendsByKey[key]!.orient) {
-      mergeLegend(legendsByKey[into]!, legendsByKey[key]!)
-      delete legendsByKey[key]
-    } else if (into === undefined) merged.set(sig, key)
-  }
-  for (const key of order) {
-    const lg = legendsByKey[key]
-    if (!lg) continue
+  // the legends of the channels, in vega-lite's legend channel order; the ones that read one field become one legend where the legends
+  // are assembled (groupLegends), after the layers and views that share a channel have merged theirs
+  for (const key of LEGEND_CHANNEL_ORDER.filter((ch) => legendsByKey[ch] !== undefined)) {
+    const lg = legendsByKey[key]!
+    const def = legendDefs[key]!
+    LEGEND_GROUP.set(lg, { key: legendGroupOf(def), discrete: legendIsDiscrete(def), domain: explicitDomainOf(def) })
     applyLegendDirection(lg, legendDefs[key]!, cfgLegend)
     // legend/properties.ts defaultLabelOverlap: the labels of a scale that crowds its ticks (a logarithmic or a quantile one) are thinned
     if (lg.labelOverlap === undefined && cfgLegend.labelOverlap === undefined) {
       const d = legendDefs[key]!
-      if (LABEL_THINNING_SCALES.has(d.channel === 'color' ? colorScaleTypeOf(d) : nonPositionScaleType(d.channel, d))) lg.labelOverlap = 'greedy'
+      if (LABEL_THINNING_SCALES.has(isPaintChannel(d.channel) ? colorScaleTypeOf(d) : nonPositionScaleType(d.channel, d))) lg.labelOverlap = 'greedy'
     }
     // vega-lite's legend labelExpr is a label text encode (vega has no such legend property)
     if (typeof lg.labelExpr === 'string') {
@@ -6076,18 +6077,24 @@ function buildLegends(fields: FieldDef[], mark: string, markOpacity?: number, ma
       update.text = { signal: labelExprSignal(lg.labelExpr, update.text) }
       // `labelExpr` itself stays as an unknown key that real Vega and Aster both ignore; the encode above labels the ticks
     }
-    // the mark-derived symbol stroke default must not shadow a user symbolStrokeColor
-    const upd = (lg.encode as { symbols?: { update?: Record<string, unknown> } } | undefined)?.symbols?.update
-    if (upd) {
-      // (vega-lite only lets symbolStrokeColor through; its transparent fill and
-      // reduced opacity overrides stay and shadow symbolFillColor/symbolOpacity)
-      if (lg.symbolStrokeColor !== undefined) delete upd.stroke
-      if (Object.keys(upd).length === 0) delete (lg.encode as { symbols?: unknown }).symbols
-      if (Object.keys(lg.encode as object).length === 0) delete lg.encode
-    }
     legends.push(lg)
   }
   return legends
+}
+
+/** vega-lite's legend channels, in the order their legends are made (compile/legend/parse.ts parseUnitLegend). */
+const LEGEND_CHANNEL_ORDER = ['color', 'size', 'shape', 'fill', 'stroke', 'strokeDash', 'strokeWidth', 'opacity']
+
+/** The legends that may merge: those of the channels that read one field (a channel without one - a count, a datum - is alone). */
+function legendGroupOf(def: FieldDef): string {
+  const field = def.datumOnly || (def.aggregate === 'count' && def.source === '__count') ? undefined : def.source
+  return field !== undefined ? `field:${field}` : `channel:${def.channel}`
+}
+
+/** Whether a legend's scale has a discrete domain (scale.ts hasDiscreteDomain): legends merge only with their own kind. */
+function legendIsDiscrete(def: FieldDef): boolean {
+  const type = isPaintChannel(def.channel) ? colorScaleTypeOf(def) : nonPositionScaleType(def.channel, def)
+  return type === 'ordinal' || type === 'bin-ordinal' || type === 'point' || type === 'band'
 }
 
 /** The scale types whose legend labels are thinned by default. */
@@ -6149,17 +6156,9 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
   const hasFillOpacity = isObject(spec.mark) && (spec.mark as Record<string, unknown>).fillOpacity !== undefined
   let pointOpacityDefault = isAggregateEnc || hasFillOpacity ? undefined : C.pointOpacity
 
-  const markColor = isObject(spec.mark) ? (spec.mark.color as string | undefined) : undefined
-  const markFill = isObject(spec.mark) ? (spec.mark.fill as string | undefined) : undefined
   let markOpacity = isObject(spec.mark) ? (spec.mark.opacity as number | undefined) : undefined
   const xDef = fields.find((f) => f.channel === 'x')
   const yDef = fields.find((f) => f.channel === 'y')
-  // A `fill` / `stroke` field that is read as it is (`scale: null`) and is the paint the mark does NOT use (a stroked point with a
-  // fill field) is just that one property: the mark keeps painting its own (color.ts colorOrFillOrStroke; the channels are independent)
-  const filledMark = markIsFilled(spec, mark)
-  const crossPaint = fields.filter((f) => f.noScale && f.paint !== undefined && f.paint !== (filledMark ? 'fill' : 'stroke'))
-  const colorDef = fields.find((f) => f.channel === 'color' && f.field && !f.fromCondition && !crossPaint.includes(f))
-  const colorScale = colorDef?.paint ?? 'color'
   const sizeDef = fields.find((f) => f.channel === 'size' && f.field)
   const shapeDef = fields.find((f) => f.channel === 'shape' && f.field && f.type !== 'geojson')
   const opacityDef = fields.find((f) => f.channel === 'opacity' && f.field)
@@ -6181,11 +6180,6 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
   const userConfig = isObject(spec.config) ? (spec.config as Record<string, unknown>) : undefined
   const cfgType = isObject(userConfig?.[mark]) ? (userConfig![mark] as Record<string, unknown>) : undefined
   const cfgMark = isObject(userConfig?.mark) ? (userConfig!.mark as Record<string, unknown>) : undefined
-  const cfgColor = (cfgType?.color ?? cfgMark?.color) as string | undefined
-  // (config.ts defaultConfig: `rule` and `text` carry a black colour of their own, which keeps config.mark.color off them)
-  const cfgColorBlack = (cfgType?.color ?? 'black') as string
-  const cfgFill = (cfgType?.fill ?? cfgMark?.fill) as string | undefined
-  const cfgStroke = (cfgType?.stroke ?? cfgMark?.stroke) as string | undefined
   // markDef.opacity ?? config[type].opacity ?? config.mark.opacity
   markOpacity = markOpacity ?? (cfgType?.opacity as number | undefined) ?? (cfgMark?.opacity as number | undefined)
   // any fillOpacity (definition or config) suppresses the reduced-opacity default
@@ -6193,27 +6187,7 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
   pointOpacityDefault = isAggregateEnc || (hasFillOpacity || cfgFillOpacity !== undefined) ? undefined : C.pointOpacity
 
   if (mark === 'bar' || mark === 'rect') {
-    // getMarkPropOrConfig precedence (probed): markDef.fill overrides the
-    // color channel; the channel beats config fill; config beats markDef.color;
-    // filled:false moves the colour onto stroke (bar fills transparent, rect
-    // drops fill entirely) and markDef.fill is ignored.
     const markDef = isObject(spec.mark) ? spec.mark : undefined
-    const filledSetting = markDef?.filled ?? cfgType?.filled ?? cfgMark?.filled
-    const filled = filledSetting !== false
-    if (!filled) {
-      if (mark === 'bar') update.fill = { value: 'transparent' }
-      update.stroke = colorDef
-        ? { scale: colorScale, field: aggFieldName(colorDef) }
-        : { value: (markDef?.stroke as string | undefined) ?? (cfgType?.stroke as string | undefined) ?? (cfgMark?.stroke as string | undefined) ?? markColor ?? C.blue }
-    } else {
-      update.fill = markDef?.fill != null
-        ? { value: markDef.fill }
-        : colorDef
-          ? { scale: colorScale, field: aggFieldName(colorDef) }
-          : { value: (cfgType?.fill as string | undefined) ?? (cfgMark?.fill as string | undefined) ?? (cfgType?.color as string | undefined) ?? (cfgMark?.color as string | undefined) ?? markColor ?? C.blue }
-      const stroke = markDef?.stroke ?? cfgType?.stroke ?? cfgMark?.stroke
-      if (stroke != null) update.stroke = { value: stroke }
-    }
     if (markOpacity != null) update.opacity = { value: markOpacity }
     // pass-through mark-def paint props (getMarkPropOrConfig reads each
     // straight off the definition; vega renders the ones it knows)
@@ -6474,18 +6448,8 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
       }
     }
   } else if (mark === 'point' || mark === 'circle' || mark === 'square') {
-    const filledSetting = isObject(spec.mark) && spec.mark.filled !== undefined
-      ? spec.mark.filled
-      : (cfgType?.filled ?? cfgMark?.filled)
-    const filled = mark === 'point' ? filledSetting === true : filledSetting !== false
-    const markStroke = isObject(spec.mark) ? (spec.mark.stroke as string | undefined) : undefined
     const markStrokeWidth = isObject(spec.mark) ? (spec.mark.strokeWidth as number | undefined) : undefined
-    if (filled) {
-      update.fill = colorDef
-        ? { scale: colorScale, field: aggFieldName(colorDef) }
-        : { value: markColor ?? markFill ?? cfgFill ?? cfgColor ?? C.blue }
-      const st = markStroke ?? cfgStroke
-      if (st != null) update.stroke = { value: st }
+    if (markIsFilled(spec, mark)) {
       if (markStrokeWidth) update.strokeWidth = { value: markStrokeWidth }
       if (markOpacity != null || pointOpacityDefault != null) update.opacity = { value: markOpacity ?? pointOpacityDefault }
       if (mark !== 'point') update.shape = { value: mark }
@@ -6495,15 +6459,6 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
         ? { scale: 'opacity', field: aggFieldName(opacityDef) }
         : (markOpacity != null || pointOpacityDefault != null ? { value: markOpacity ?? pointOpacityDefault } : undefined)
       if (update.opacity === undefined) delete update.opacity
-      // an unfilled point keeps its stroke-mode defaults; a config fill
-      // (point.fill / mark.fill) still fills it (probed). filled:false on a
-      // circle/square also moves the paint onto the stroke.
-      const ptFill = (isObject(spec.mark) ? (spec.mark.fill as string | undefined) : undefined) ?? cfgFill
-      update.fill = ptFill != null ? { value: ptFill } : { value: 'transparent' }
-      const ptStroke = (isObject(spec.mark) ? (spec.mark.stroke as string | undefined) : undefined) ?? markColor ?? cfgStroke ?? cfgColor ?? C.blue
-      update.stroke = colorDef
-        ? { scale: colorScale, field: aggFieldName(colorDef) }
-        : { value: ptStroke }
     }
     update.ariaRoleDescription = { value: mark }
     // Vega's symbol shape vocabulary has no "point": the point mark keeps
@@ -6518,9 +6473,7 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
     if (shapeDef) update.shape = { scale: 'shape', field: aggFieldName(shapeDef) }
     void 0
   } else if (mark === 'line') {
-    const markStroke = isObject(spec.mark) ? (spec.mark.stroke as string | undefined) : undefined
     const markStrokeWidth = isObject(spec.mark) ? (spec.mark.strokeWidth as number | undefined) : undefined
-    update.stroke = colorDef ? { scale: colorScale, field: aggFieldName(colorDef) } : { value: markStroke ?? cfgStroke ?? cfgColor ?? markColor ?? C.blue }
     if (markStrokeWidth != null) update.strokeWidth = { value: markStrokeWidth }
     const lineSizeCfg = (cfgType?.size as number | undefined) ?? (cfgMark?.size as number | undefined)
     if (markSize != null) update.strokeWidth = { value: markSize }
@@ -6529,21 +6482,6 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
     if (sizeDef) update.strokeWidth = { scale: 'size', field: aggFieldName(sizeDef) }
     const markInterpolate = isObject(spec.mark) ? (spec.mark.interpolate as string | undefined) : undefined
     if (markInterpolate) update.interpolate = { value: markInterpolate }
-    // a line's markDef.fill fills the line's area (vega paints line marks);
-    // the stroke default stays. markDef.filled:true paints the area instead
-    // of the stroke, like a filled rule.
-    const lineFill = (isObject(spec.mark) ? (spec.mark.fill as string | undefined) : undefined)
-      ?? (cfgType?.fill as string | undefined)
-      ?? (cfgMark?.fill as string | undefined)
-    const lineFilled = isObject(spec.mark) && spec.mark.filled !== undefined
-      ? spec.mark.filled
-      : (cfgType?.filled ?? cfgMark?.filled)
-    if (lineFilled === true) {
-      update.fill = colorDef
-        ? { scale: colorScale, field: aggFieldName(colorDef) }
-        : { value: lineFill ?? markColor ?? cfgFill ?? cfgColor ?? C.blue }
-      delete update.stroke
-    } else if (lineFill != null) update.fill = { value: lineFill }
     if (xDef) update.x = { scale: 'x', field: aggFieldName(xDef) }
     if (yDef) update.y = { scale: 'y', field: aggFieldName(yDef) }
     { const dfn = definedSignal(spec, fields, mark); if (dfn !== undefined) update.defined = dfn }
@@ -6551,22 +6489,10 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
     // (an area whose encoding leaves it no orientation says none, and spans neither axis)
     const areaOrient = markOrient(spec, mark, spec.mark, fields)
     if (areaOrient !== undefined) update.orient = { value: areaOrient }
-    const areaStroke = isObject(spec.mark) ? (spec.mark.stroke as string | undefined) : undefined
     const areaInterpolate = isObject(spec.mark) ? (spec.mark.interpolate as string | undefined) : undefined
     if (areaInterpolate) update.interpolate = { value: areaInterpolate }
     const areaFillOpacity = isObject(spec.mark) ? (spec.mark.fillOpacity as number | undefined) : undefined
     if (areaFillOpacity != null) update.fillOpacity = { value: areaFillOpacity }
-    if (areaStroke) update.stroke = { value: areaStroke }
-    const areaFill = isObject(spec.mark) ? (spec.mark.fill as string | undefined) : undefined
-    const areaColor = colorDef
-      ? { scale: colorScale, field: aggFieldName(colorDef) }
-      : { value: areaFill ?? markColor ?? cfgFill ?? cfgColor ?? C.blue }
-    if (isObject(spec.mark) && spec.mark.filled === false) {
-      update.stroke = areaColor
-      update.fill = { value: 'transparent' }
-    } else {
-      update.fill = areaColor
-    }
     if (xDef) update.x = { scale: 'x', field: aggFieldName(xDef) }
     if (yDef) {
       const stacked = isStacked(yDef, mark, orient, fields)
@@ -6603,16 +6529,7 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
     { const dfn = definedSignal(spec, fields, mark); if (dfn !== undefined) update.defined = dfn }
   } else if (mark === 'tick') {
     if (markOpacity != null || pointOpacityDefault != null) update.opacity = { value: markOpacity ?? pointOpacityDefault }
-    update.fill = colorDef ? { scale: colorScale, field: aggFieldName(colorDef) } : { value: markColor ?? markFill ?? cfgFill ?? cfgColor ?? C.blue }
     const tickDef = isObject(spec.mark) ? (spec.mark as Record<string, unknown>) : undefined
-    const tickStroke = tickDef?.stroke as string | undefined
-    if (tickStroke != null || cfgStroke != null) update.stroke = { value: tickStroke ?? cfgStroke }
-    const tickFilled = tickDef?.filled !== undefined ? tickDef.filled : (cfgType?.filled ?? cfgMark?.filled)
-    if (tickFilled === false) {
-      const tf = update.fill
-      delete update.fill
-      update.stroke = tf
-    }
     update.ariaRoleDescription = { value: 'tick' }
     // Tick orientation is the opposite of bar/line/area's measure inference (mark/init.ts orient, which inferOrient ports): a
     // quantitative x over a discrete y is a VERTICAL tick (its size axis is y and its thickness axis is x). A tick whose
@@ -6696,9 +6613,6 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
     update[thickVg] = { value: thickVal }
   } else if (mark === 'rule') {
     const ruleDef = isObject(spec.mark) ? (spec.mark as Record<string, unknown>) : {}
-    update.stroke = colorDef ? { scale: colorScale, field: aggFieldName(colorDef) } : { value: (ruleDef.stroke as string | undefined) ?? markColor ?? cfgStroke ?? cfgColorBlack }
-    const ruleFill = ruleDef.fill as string | undefined
-    if (ruleFill != null) update.fill = { value: ruleFill }
     // the rule runs along its orientation, or between two points when the encoding leaves it none
     const x2Def = fields.find((f) => f.channel === 'x2' && f.field)
     const y2Def = fields.find((f) => f.channel === 'y2' && f.field)
@@ -6719,8 +6633,7 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
     // inrange(0, domain) probe signal (nominal/band scales, zero:false)
     if (!x2Def && ruleOrient !== 'vertical' && xDef) update.x2 = zeroOrMinRef('x')
     if (!y2Def && ruleOrient !== 'horizontal' && yDef) update.y2 = zeroOrMinRef('y')
-    // rule paint plumbing: size maps to strokeWidth (rule.ts nonPosition);
-    // filled rules paint with fill and drop the stroke; the rest pass through
+    // size maps to strokeWidth (rule.ts nonPosition); the rest pass through
     const ruleSize = markSize
     if (ruleSize != null) update.strokeWidth = { value: ruleSize }
     if (sizeDef) update.strokeWidth = { scale: 'size', field: aggFieldName(sizeDef) }
@@ -6728,15 +6641,7 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
     if (ruleDef.strokeDash !== undefined) update.strokeDash = { value: ruleDef.strokeDash }
     if (ruleDef.fillOpacity !== undefined) update.fillOpacity = { value: ruleDef.fillOpacity }
     if (markOpacity != null) update.opacity = { value: markOpacity }
-    if (ruleDef.filled === true) {
-      update.fill = colorDef ? { scale: colorScale, field: aggFieldName(colorDef) } : { value: markColor ?? ruleFill ?? cfgFill ?? cfgColorBlack }
-      delete update.stroke
-    }
   } else if (mark === 'text') {
-    update.fill = colorDef ? { scale: colorScale, field: aggFieldName(colorDef) } : { value: markColor ?? markFill ?? cfgFill ?? cfgColorBlack }
-    const textStroke = isObject(spec.mark) ? (spec.mark.stroke as string | undefined) : undefined
-    const tStroke = textStroke ?? cfgStroke
-    if (tStroke != null) update.stroke = { value: tStroke }
     const thetaDefT = fields.find((f) => f.channel === 'theta' && f.field)
     const radiusDefT = fields.find((f) => f.channel === 'radius' && f.field)
     if (thetaDefT || radiusDefT) {
@@ -6789,33 +6694,8 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
       const v = p === 'dx' || p === 'dy' || p === 'baseline' || p === 'align' ? markPaint?.[p] : textProp(p)
       if (v !== undefined) update[p] = { value: v }
     }
-    const textFilled = markPaint?.filled ?? cfgType?.filled ?? cfgMark?.filled
-    if (textFilled === false) {
-      const tf = update.fill
-      update.fill = { value: 'transparent' }
-      update.stroke = tf
-    } else if (textFilled === true) {
-      const ts = update.stroke
-      if (ts != null) { delete update.stroke; update.fill = ts }
-    }
     if (markPaint?.outerRadius != null) update.radius = { value: markPaint.outerRadius }
   } else if (mark === 'arc') {
-    update.fill = markFill != null
-      ? { value: markFill }
-      : colorDef
-        ? { scale: colorScale, field: aggFieldName(colorDef) }
-        : { value: markColor ?? cfgFill ?? cfgColor ?? C.blue }
-    const arcStroke = isObject(spec.mark) ? (spec.mark.stroke as string | undefined) : undefined
-    const aStroke = arcStroke ?? cfgStroke
-    if (aStroke != null) update.stroke = { value: aStroke }
-    const arcFilled = isObject(spec.mark) && spec.mark.filled !== undefined
-      ? spec.mark.filled
-      : (cfgType?.filled ?? cfgMark?.filled)
-    if (arcFilled === false) {
-      const ac = update.fill
-      delete update.fill
-      update.stroke = ac
-    }
     if (markOpacity != null) update.opacity = { value: markOpacity }
     const cfgArcX = (cfgType?.x as number | undefined) ?? (cfgMark?.x as number | undefined)
     const cfgArcY = (cfgType?.y as number | undefined) ?? (cfgMark?.y as number | undefined)
@@ -6847,20 +6727,10 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
       update.endAngle = given.theta2 !== undefined ? markRef(given.theta2) : { value: 0 }
     }
   } else if (mark === 'trail') {
-    // trail: a stroked-by-size line — fill default, size channel/def, sorted
-    // along the dimension (probed)
-    update.fill = colorDef
-      ? { scale: colorScale, field: aggFieldName(colorDef) }
-      : { value: markColor ?? markFill ?? cfgFill ?? cfgColor ?? C.blue }
+    // trail: a line drawn by size - size channel/def, sorted along the dimension (probed)
     if (markOpacity != null) update.opacity = { value: markOpacity }
     for (const p of ['strokeWidth', 'strokeDash', 'strokeCap', 'fillOpacity', 'blend'] as const) {
       if (isObject(spec.mark) && (spec.mark as Record<string, unknown>)[p] !== undefined) update[p] = { value: (spec.mark as Record<string, unknown>)[p] }
-    }
-    const trailStroke = isObject(spec.mark) ? (spec.mark.stroke as string | undefined) : undefined
-    if (trailStroke != null) update.stroke = { value: trailStroke }
-    if (isObject(spec.mark) && spec.mark.filled === false) {
-      update.stroke = { value: trailStroke ?? markColor ?? cfgStroke ?? cfgColor ?? C.blue }
-      update.fill = { value: 'transparent' }
     }
     if (markSize != null) update.size = { value: markSize }
     if (sizeDef) update.size = { scale: 'size', field: aggFieldName(sizeDef) }
@@ -6868,32 +6738,14 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
     if (yDef) update.y = { scale: 'y', field: aggFieldName(yDef) }
     { const dfn = definedSignal(spec, fields, mark); if (dfn !== undefined) update.defined = dfn }
   } else if (mark === 'geoshape') {
-    // vega-lite mark/geoshape.ts: baseEncodeEntry with colour included (a filled mark: bar's colour rules);
-    // the shape itself is drawn by the `geoshape` transform below, from the projection
-    const markDef = isObject(spec.mark) ? spec.mark : undefined
-    const filled = markIsFilled(spec, mark)
-    if (!filled) {
-      update.fill = { value: 'transparent' }
-      update.stroke = colorDef
-        ? { scale: colorScale, field: aggFieldName(colorDef) }
-        : { value: (markDef?.stroke as string | undefined) ?? (cfgType?.stroke as string | undefined) ?? (cfgMark?.stroke as string | undefined) ?? markColor ?? C.blue }
-    } else {
-      update.fill = markDef?.fill != null
-        ? { value: markDef.fill }
-        : colorDef
-          ? { scale: colorScale, field: aggFieldName(colorDef) }
-          : { value: (cfgType?.fill as string | undefined) ?? (cfgMark?.fill as string | undefined) ?? (cfgType?.color as string | undefined) ?? (cfgMark?.color as string | undefined) ?? markColor ?? C.blue }
-      const stroke = markDef?.stroke ?? cfgType?.stroke ?? cfgMark?.stroke
-      if (stroke != null) update.stroke = { value: stroke }
-    }
-    // an explicit null (`fill: null`, the usual way to draw an outline only) is the mark def's own value
-    if (markDef && markDef.fill === null) update.fill = { value: null }
-    if (markDef && markDef.stroke === null) update.stroke = { value: null }
+    // vega-lite mark/geoshape.ts: the shape itself is drawn by the `geoshape` transform below, from the projection
     if (markOpacity != null) update.opacity = { value: markOpacity }
     update.ariaRoleDescription = { value: 'geoshape' }
   } else {
     throw new Error(`[aster/vl] mark type not supported yet: ${mark}`)
   }
+  // the paint: the colour, fill and stroke channels over the mark's own and the config's (an image has none: it is dropped below)
+  Object.assign(update, markPaint(spec, mark, fields, markIsFilled(spec, mark)))
 
   // position `value` channels are pixels; `datum` channels (flagged by a sentinel
   // field) map the constant through the channel's scale
@@ -7070,11 +6922,11 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
       if (def.bin && isPrebinned(def) && !fields.some((g) => g.channel === `${def.channel}2`)) continue
       // (positionOffset: an offset is read at the middle of its unit, wherever the mark that carries it is centred)
       const bp = def.channel === 'xOffset' || def.channel === 'yOffset' ? 0.5 : def.bin ? (def.bandPosition ?? 0.5) : bandPositionOf(spec, mark, def, fields.some((g) => g.channel === `${def.channel}2`))
-      const scaleName = def.paint ?? def.channel
+      const scaleName = def.channel
       // (a scale over a list of values is read at the value, a continuous or cutting one at the point between the ends)
       const discrete = positional
         ? ['band', 'point'].includes(positionalScaleType(mark, def))
-        : LISTED_DOMAIN_SCALES.has(def.channel === 'color' ? colorScaleTypeOf(def) : nonPositionScaleType(def.channel, def))
+        : LISTED_DOMAIN_SCALES.has(isPaintChannel(def.channel) ? colorScaleTypeOf(def) : nonPositionScaleType(def.channel, def))
       if (discrete) continue
       const names = def.bin ? binNames(def.binParams!, def.field) : { start: timeUnitField(def), end: `${timeUnitField(def)}_end` }
       if (positional && isImputedDimension(spec, def, mark, fields)) {
@@ -7163,27 +7015,14 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
   if (markSortSpec) markSpec.sort = markSortSpec
 
   // a `scale: null` channel reads its field as it is: no scale in the reference
-  for (const f of crossPaint) update[f.paint!] = { field: aggFieldName(f) }
   for (const f of fields) {
     if (!f.noScale) continue
-    const scaleName = f.paint ?? f.channel
+    const scaleName = f.channel
     const strip = (v: unknown): void => {
       if (Array.isArray(v)) { v.forEach(strip); return }
       if (isObject(v) && v.scale === scaleName) delete v.scale
     }
     for (const v of Object.values(update)) strip(v)
-  }
-
-  // color.ts: `nonPosition('fill')` and `nonPosition('stroke')` come after the colour and, when the encoding has no fill / stroke of its
-  // own, read the mark definition's: the definition's paint is what the mark has, whatever the colour channel said (a hover line
-  // drawn transparent over the colour-conditioned lines)
-  {
-    const own = isObject(spec.mark) ? (spec.mark as Record<string, unknown>) : {}
-    for (const ch of ['fill', 'stroke'] as const) {
-      const v = own[ch]
-      if (v === undefined || fields.some((f) => f.channel === ch)) continue
-      update[ch] = isObject(v) && typeof v.signal === 'string' ? { signal: v.signal } : isObject(v) && typeof v.expr === 'string' ? { signal: v.expr } : { value: v }
-    }
   }
 
   const out: BuiltMarks = [markSpec]
@@ -7897,12 +7736,9 @@ const NON_POSITION_CHANNELS = new Set(['color', 'fill', 'stroke', 'opacity', 'fi
 /** vega-lite defaultFilled: every mark but point, line and rule is filled unless configured. */
 function markIsFilled(spec: VLSpec, mark: string): boolean {
   const md = isObject(spec.mark) ? (spec.mark as Record<string, unknown>) : undefined
-  const cfg = isObject(spec.config) ? (spec.config as Record<string, unknown>) : undefined
-  const cfgType = isObject(cfg?.[mark]) ? (cfg![mark] as Record<string, unknown>) : undefined
-  const cfgMark = isObject(cfg?.mark) ? (cfg!.mark as Record<string, unknown>) : undefined
   // vega-lite defaultFilled: a unit drawing a graticule is unfilled unless its mark def says otherwise
-  if (GRATICULE_UNITS.has(spec) && typeof md?.filled !== 'boolean') return false
-  const v = md?.filled ?? cfgType?.filled ?? cfgMark?.filled
+  if ((GRATICULE_UNITS.has(spec) || isGraticuleData(spec.data)) && typeof md?.filled !== 'boolean') return false
+  const v = md?.filled ?? markConfigProp(spec, mark, 'filled')
   return typeof v === 'boolean' ? v : mark !== 'point' && mark !== 'line' && mark !== 'rule'
 }
 
@@ -7919,47 +7755,158 @@ function vgPropFor(channel: string, mark: string, filled: boolean): string {
   }
 }
 
+/** The `{test, ...}` entries of a channel's conditions, in order (vega-lite wrapCondition). */
+function conditionEntries(spec: VLSpec, fields: FieldDef[], channel: string, def: Record<string, unknown>): Record<string, unknown>[] {
+  if (def.condition === undefined) return []
+  return ((Array.isArray(def.condition) ? def.condition : [def.condition]) as Record<string, unknown>[]).map((c) => {
+    const entry: Record<string, unknown> = { test: c.param !== undefined ? predicateWithParams(ctxOf(spec), { param: c.param as string, ...(c.empty !== undefined ? { empty: c.empty as boolean } : {}) }) : predicateWithParams(ctxOf(spec), c.test) }
+    if (c.value !== undefined) entry.value = c.value
+    else if (c.field !== undefined || c.aggregate === 'count') {
+      const target = fields.find((f) => f.channel === channel && !f.datumOnly)
+      if (!target) throw new VLCompileError(`encoding.${channel}.condition: the conditional field has no scale`)
+      const cf = c.field === undefined ? '__count' : flatField(String(c.field)).key
+      if (cf !== target.field && !target.fromCondition) {
+        throw new VLCompileError(`encoding.${channel}.condition.field: a conditional field must be the channel's own field or its only conditional field`)
+      }
+      if (!target.noScale) entry.scale = target.channel
+      entry.field = aggFieldName(target)
+    } else if (c.datum !== undefined && DATUM_CONDITION_CHANNELS.has(channel)) {
+      const target = fields.find((f) => f.datumOnly && f.channel === channel)
+      if (!target) throw new VLCompileError(`encoding.${channel}.condition: the conditional datum has no scale`)
+      entry.scale = channel
+      entry.value = c.datum
+    } else throw new VLCompileError(`encoding.${channel}.condition: datum conditions are not supported`)
+    return entry
+  })
+}
+
+/** A test-bearing entry must use the array form or Vega never runs the test; a lone reference is itself. */
+function withConditions(entries: Record<string, unknown>[], main: Record<string, unknown> | Record<string, unknown>[] | undefined): Record<string, unknown> | Record<string, unknown>[] | undefined {
+  const parts = main === undefined ? entries : [...entries, ...(Array.isArray(main) ? main : [main])]
+  if (parts.length === 0) return undefined
+  return parts.length === 1 && entries.length === 0 ? parts[0] : parts
+}
+
 function applyNonPositionConstants(update: Record<string, unknown>, spec: VLSpec, fields: FieldDef[], mark: string): void {
   const enc = isObject(spec.encoding) ? (spec.encoding as Record<string, unknown>) : {}
   const filled = markIsFilled(spec, mark)
   for (const [channel, def] of Object.entries(enc)) {
-    if (!isObject(def) || !NON_POSITION_CHANNELS.has(channel)) continue
-    const hasCondition = def.condition !== undefined
-    const hasValue = def.value !== undefined
-    if (!hasCondition && !hasValue) continue
+    // (the paint channels are the mark's paint: markPaint)
+    if (!isObject(def) || !NON_POSITION_CHANNELS.has(channel) || isPaintChannel(channel)) continue
+    if (def.condition === undefined && def.value === undefined) continue
     const prop = vgPropFor(channel, mark, filled)
-    const entries: Record<string, unknown>[] = []
-    if (hasCondition) {
-      for (const c of (Array.isArray(def.condition) ? def.condition : [def.condition]) as Record<string, unknown>[]) {
-        const entry: Record<string, unknown> = { test: c.param !== undefined ? predicateWithParams(ctxOf(spec), { param: c.param as string, ...(c.empty !== undefined ? { empty: c.empty as boolean } : {}) }) : predicateWithParams(ctxOf(spec), c.test) }
-        if (c.value !== undefined) entry.value = c.value
-        else if (c.field !== undefined || c.aggregate === 'count') {
-          const target = fields.find((f) => f.channel === channel || ((channel === 'fill' || channel === 'stroke') && f.channel === 'color' && f.paint === channel))
-          if (!target) throw new VLCompileError(`encoding.${channel}.condition: the conditional field has no scale`)
-          const cf = c.field === undefined ? '__count' : flatField(String(c.field)).key
-          if (cf !== target.field && !target.fromCondition) {
-            throw new VLCompileError(`encoding.${channel}.condition.field: a conditional field must be the channel's own field or its only conditional field`)
-          }
-          entry.scale = target.paint ?? target.channel
-          entry.field = aggFieldName(target)
-        } else if (c.datum !== undefined && DATUM_CONDITION_CHANNELS.has(channel)) {
-          const target = fields.find((f) => f.datumOnly && f.channel === channel)
-          if (!target) throw new VLCompileError(`encoding.${channel}.condition: the conditional datum has no scale`)
-          entry.scale = channel
-          entry.value = c.datum
-        } else throw new VLCompileError(`encoding.${channel}.condition: datum conditions are not supported`)
-        entries.push(entry)
-      }
-    }
     // (conditional.ts wrapCondition: a condition-only channel falls back to the mark's default for that property)
-    const main: Record<string, unknown> | Record<string, unknown>[] | undefined = hasValue
-      ? { value: def.value }
-      : (update[prop] as Record<string, unknown> | undefined)
-    const parts = main === undefined ? entries : [...entries, ...(Array.isArray(main) ? main : [main])]
-    if (parts.length === 0) continue
-    // a test-bearing entry must use the array form or Vega never runs the test
-    update[prop] = parts.length === 1 && entries.length === 0 ? parts[0] : parts
+    const main = def.value !== undefined ? { value: def.value } : (update[prop] as Record<string, unknown> | undefined)
+    const ref = withConditions(conditionEntries(spec, fields, channel, def), main)
+    if (ref !== undefined) update[prop] = ref
   }
+}
+
+// --- paint ---------------------------------------------------------------------
+//
+// What a mark is painted with. `color` paints the property the mark uses (fill when it is filled, stroke when it is not); `fill`
+// and `stroke` paint their own, after it. Without a channel, a property has the mark definition's paint, else the config's
+// (a named style, the mark type's block, then config.mark, over vega-lite's defaults: a #4c78a8 mark colour, black rules and
+// text). The marks that read as shapes keep a transparent fill when they have no other, so that they can be hovered. A legend
+// paints its symbols from the same, then takes out what the legend itself encodes.
+
+/** The channels that paint a mark. */
+const PAINT_CHANNELS = ['color', 'fill', 'stroke'] as const
+type PaintChannel = typeof PAINT_CHANNELS[number]
+const isPaintChannel = (ch: string): ch is PaintChannel => ch === 'color' || ch === 'fill' || ch === 'stroke'
+
+/** The marks whose fill is transparent rather than absent when nothing paints it. */
+const TRANSPARENT_FILL_MARKS: ReadonlySet<string> = new Set(['bar', 'point', 'circle', 'square', 'geoshape'])
+
+type PaintRef = Record<string, unknown> | Record<string, unknown>[]
+interface Paint { fill?: PaintRef; stroke?: PaintRef }
+
+/** A mark-def or config value as a Vega reference: an expression or a signal is a signal, anything else the value itself. */
+function constRef(v: unknown): Record<string, unknown> {
+  if (isObject(v) && typeof v.expr === 'string') return { signal: v.expr }
+  if (isObject(v) && typeof v.signal === 'string') return { signal: v.signal }
+  return { value: v }
+}
+
+/**
+ * Where a mark property comes from when no channel sets it: `markProp` is the mark definition's (`fill` read where the definition
+ * has it, before its `color`), `configProp` the config's. `vg` is the Vega property, `prop` the Vega-Lite one it stands for
+ * (`color` for the property the colour paints; none for the other).
+ */
+function paintSource(spec: VLSpec, mark: string): (prop: string | undefined, vg: 'fill' | 'stroke', ownOnly: boolean) => unknown {
+  const md = isObject(spec.mark) ? (spec.mark as Record<string, unknown>) : {}
+  const cfg = isObject(spec.config) ? (spec.config as Record<string, unknown>) : {}
+  const ofType = isObject(cfg[mark]) ? (cfg[mark] as Record<string, unknown>) : {}
+  const ofMark = isObject(cfg.mark) ? (cfg.mark as Record<string, unknown>) : {}
+  // (vega-lite's default config: config.mark.color, and a black colour on rules and text that config.mark.color does not reach)
+  const typeValue = (p: string): unknown => (p === 'color' && ofType.color === undefined && (mark === 'rule' || mark === 'text') ? 'black' : ofType[p])
+  const firstDefined = (...vs: unknown[]): unknown => vs.find((v) => v !== undefined)
+  return (prop, vg, ownOnly) => {
+    if (Object.prototype.hasOwnProperty.call(md, vg)) return md[vg]
+    if (prop !== undefined && md[prop] !== undefined) return md[prop]
+    if (ownOnly && prop === vg) return undefined
+    const styled = prop === undefined ? undefined : styleConfigProp(spec, mark, prop)
+    // (config.mark's own `color` is not read here: the mark-type block's colour, black on rules and text, comes first)
+    return firstDefined(styled, ofType[vg], prop === undefined ? undefined : typeValue(prop), ofMark[vg])
+  }
+}
+
+/** config.mark.color, vega-lite's default (#4c78a8) unless the config gives another. */
+function configMarkColor(spec: VLSpec): unknown {
+  const cfg = isObject(spec.config) ? (spec.config as Record<string, unknown>) : {}
+  const ofMark = isObject(cfg.mark) ? (cfg.mark as Record<string, unknown>) : {}
+  return ofMark.color === undefined ? C.blue : ofMark.color
+}
+
+/**
+ * The reference a paint channel gives the property it paints: its conditions, then its field (through its scale, or as it is with
+ * `scale: null`), its datum (through its scale), its value, or else `fallback`.
+ */
+function paintChannelRef(spec: VLSpec, fields: FieldDef[], channel: PaintChannel, def: unknown, fallback: Record<string, unknown> | undefined): PaintRef | undefined {
+  if (!isObject(def)) return fallback
+  const own = fields.find((f) => f.channel === channel && !f.fromCondition)
+  const main = own === undefined || !own.field
+    ? (def.value !== undefined ? constRef(def.value) : fallback)
+    : own.datumOnly ? { scale: channel, ...datumValueRef(own.datum) }
+      : own.noScale ? { field: aggFieldName(own) } : { scale: channel, field: aggFieldName(own) }
+  return withConditions(conditionEntries(spec, fields, channel, def), main)
+}
+
+/** The fill and stroke a unit's mark is painted with, the mark filled or not as `filled` says. */
+function markPaint(spec: VLSpec, mark: string, fields: FieldDef[], filled: boolean): Paint {
+  const enc = isObject(spec.encoding) ? (spec.encoding as Record<string, unknown>) : {}
+  const source = paintSource(spec, mark)
+  const defaultFill = source(filled ? 'color' : undefined, 'fill', false) ?? (filled ? configMarkColor(spec) : undefined) ?? (TRANSPARENT_FILL_MARKS.has(mark) ? 'transparent' : undefined)
+  const defaultStroke = source(filled ? undefined : 'color', 'stroke', false) ?? (filled ? undefined : configMarkColor(spec))
+  const out: Record<string, PaintRef> = {}
+  // (a falsy paint - none, or an empty one - is left to the channels)
+  if (defaultFill) out.fill = constRef(defaultFill)
+  if (defaultStroke) out.stroke = constRef(defaultStroke)
+  const paint = (channel: PaintChannel, vg: 'fill' | 'stroke', given: unknown): void => {
+    const def = enc[channel]
+    // (a channel with conditions falls back on the config too; otherwise the mark definition's paint is all it falls back on)
+    const fallback = given ?? source(channel, vg, !(isObject(def) && def.condition !== undefined))
+    const ref = paintChannelRef(spec, fields, channel, def, fallback === undefined ? undefined : constRef(fallback))
+    if (ref !== undefined) out[vg] = ref
+  }
+  paint('color', filled ? 'fill' : 'stroke', filled ? defaultFill : defaultStroke)
+  paint('fill', 'fill', enc.fill !== undefined ? defaultFill : undefined)
+  paint('stroke', 'stroke', enc.stroke !== undefined ? defaultStroke : undefined)
+  return out
+}
+
+/**
+ * vega-lite initEncoding: the channels the mark does not draw are dropped (a size on an area, an x on a geoshape, a url on anything
+ * but an image), and a `color` channel gives way to the `fill` (filled mark) or `stroke` (unfilled mark) the encoding has. The
+ * encoding of the unit is what is left: nothing after this reads a dropped channel.
+ */
+function initUnitEncoding(spec: VLSpec, mark: string): void {
+  const enc = isObject(spec.encoding) ? (spec.encoding as Record<string, unknown>) : undefined
+  if (!enc) return
+  const image = isObject(spec.mark) && spec.mark.$image === true
+  const shadowed = 'color' in enc && (markIsFilled(spec, mark) ? 'fill' : 'stroke') in enc
+  const kept = Object.entries(enc).filter(([ch]) => markChannelCompatible(enc, ch, mark, image) && !(ch === 'color' && shadowed))
+  if (kept.length !== Object.keys(enc).length) spec.encoding = Object.fromEntries(kept)
 }
 
 // --- invalid values (vega-lite compile/invalid/*, data/filterinvalid.ts, mark/encode/defined.ts) -----------
@@ -7983,13 +7930,13 @@ function channelInvalidMode(spec: VLSpec, mark: string, channel: string): Invali
 }
 
 const COUNTING_AGGREGATES = new Set(['count', 'valid', 'missing', 'distinct'])
-const INVALID_CHANNELS = ['x', 'y', 'theta', 'radius', 'color', 'size', 'opacity', 'fillOpacity', 'strokeOpacity', 'strokeWidth', 'angle', 'xOffset', 'yOffset']
+const INVALID_CHANNELS = ['x', 'y', 'theta', 'radius', 'color', 'fill', 'stroke', 'size', 'opacity', 'fillOpacity', 'strokeOpacity', 'strokeWidth', 'angle', 'xOffset', 'yOffset']
 
 /** The fields (keyed by the raw field, the last def winning; by the field they read, a time unit's or a bin's included, for `byName`, which the paths that break on invalid values do) whose continuous scale can meet an invalid value. */
 function invalidCandidates(spec: VLSpec, fields: FieldDef[], mark: string, byName = false): Array<{ def: FieldDef; mode: InvalidMode }> {
   const byField = new Map<string, { def: FieldDef; mode: InvalidMode }>()
   // (model.reduceFieldDef walks the unit's encoding, which initEncoding rebuilds in the order of channel.ts UNIT_CHANNELS, not the user's)
-  const unitOrder = (f: FieldDef): number => UNIT_CHANNEL_ORDER.indexOf(String(f.paint ?? f.channel))
+  const unitOrder = (f: FieldDef): number => UNIT_CHANNEL_ORDER.indexOf(f.channel)
   for (const f of [...fields].sort((a, b) => unitOrder(a) - unitOrder(b))) {
     // (a counting aggregate never outputs an invalid value (isCountingAggregateOp: count, valid, missing, distinct); `scale: null` has no scale)
     if (f.datumOnly || f.noScale || !f.field || !INVALID_CHANNELS.includes(f.channel) || COUNTING_AGGREGATES.has(String(f.aggregate))) continue
@@ -7997,7 +7944,7 @@ function invalidCandidates(spec: VLSpec, fields: FieldDef[], mark: string, byNam
     if (type !== 'quantitative' && type !== 'temporal') continue
     if (f.channel === 'x' || f.channel === 'y' ? ['band', 'point', 'ordinal'].includes(positionalScaleType(mark, f)) : ['ordinal', 'point'].includes(String(f.scale?.type))) continue
     // scale/type.ts defaultType: a binned quantitative colour is a bin-ordinal scale, a discrete one that takes any value (getScaleInvalidDataMode)
-    if (f.channel === 'color' && f.bin && type === 'quantitative' && (f.scale?.type === undefined || f.scale.type === 'bin-ordinal')) continue
+    if (isPaintChannel(f.channel) && f.bin && type === 'quantitative' && (f.scale?.type === undefined || f.scale.type === 'bin-ordinal')) continue
     byField.set(byName ? invalidFieldName(f) : f.field, { def: f, mode: channelInvalidMode(spec, mark, f.channel) })
   }
   return [...byField.values()]
@@ -8133,9 +8080,9 @@ function showInvalidValues(spec: VLSpec, fields: FieldDef[], mark: string, scale
     for (const { def } of cands) {
       const ch = def.channel
       const scaleCh = ch === 'x2' || ch === 'y2' ? ch[0]! : ch
-      if ((scaleCh === 'x' || scaleCh === 'y') ? !positional : !['color', 'size', 'opacity', 'fillOpacity', 'strokeOpacity', 'strokeWidth', 'angle'].includes(ch)) continue
+      if ((scaleCh === 'x' || scaleCh === 'y') ? !positional : !['color', 'fill', 'stroke', 'size', 'opacity', 'fillOpacity', 'strokeOpacity', 'strokeWidth', 'angle'].includes(ch)) continue
       // (a centred bar position is `xc` / `yc`)
-      const prop = ch === 'color' ? (isObject(update.fill) && ['color', 'fill'].includes(String((update.fill as Record<string, unknown>).scale)) || Array.isArray(update.fill) ? 'fill' : 'stroke') : ch === 'size' ? vgPropFor('size', mark, filled) : (ch === 'x' || ch === 'y') && update[ch] === undefined && update[`${ch}c`] !== undefined ? `${ch}c` : ch
+      const prop = ch === 'color' || ch === 'size' ? vgPropFor(ch, mark, filled) : (ch === 'x' || ch === 'y') && update[ch] === undefined && update[`${ch}c`] !== undefined ? `${ch}c` : ch
       const cur = update[prop]
       const main = (Array.isArray(cur) ? cur[cur.length - 1] : cur) as Record<string, unknown> | undefined
       const sc = scales.find((x) => x.name === scaleCh)
@@ -8311,15 +8258,16 @@ function compileUnitView(spec: VLSpec, ctx: CompileCtx): VLSpec {
   liftBandSizeValue(spec)
   markRaw = spec.mark
   const markSize = isObject(markRaw) ? (markRaw.size as number | undefined) : undefined
+  if (isGraticuleData(spec.data)) GRATICULE_UNITS.add(spec)
+  initUnitEncoding(spec, mark)
   const encoding = isObject(spec.encoding) ? (spec.encoding as Record<string, unknown>) : {}
-  checkConstChannels(mark, encoding, markIsFilled(spec, mark))
+  checkConstChannels(encoding)
   const fields = parseEncodingFields(encoding, spec.config, markRaw)
 
   // orientation (bar/area/rule/tick): vertical unless the y channel is discrete
   // and x is not, or the mark def says otherwise
   const orient = inferOrient(spec, mark, markRaw, fields)
 
-  if (isGraticuleData(spec.data)) GRATICULE_UNITS.add(spec)
   const unitHandle = {}
   const unitProj = unitProjection(spec, rootNamePrefix(spec), unitHandle)
   // selections: parsed first, since the data pipeline, the mark encodings and the scales all depend on them
@@ -8463,40 +8411,12 @@ function buildUnitLegends(spec: VLSpec, fields: FieldDef[], mark: string, markRa
     return nums.length ? nums.reduce((a, b) => Math.max(a, b)) : undefined
   })()
   const markOpacity = channelOpacity ?? (isObject(markRaw) ? (markRaw.opacity as number | undefined) : undefined)
-  // the legend symbols' stroke resolves through getMarkPropOrConfig
-  // (markDef.stroke ?? config[type].stroke ?? config.mark.stroke — probed:
-  // config.arc.stroke propagates onto the arc legend's symbols)
-  const lgStroke = (isObject(markRaw) ? (markRaw.stroke as string | undefined) : undefined)
-    ?? (isObject(userConfig?.[mark]) ? ((userConfig![mark] as Record<string, unknown>).stroke as string | undefined) : undefined)
-    ?? (isObject(userConfig?.mark) ? ((userConfig!.mark as Record<string, unknown>).stroke as string | undefined) : undefined)
-  const cfgMarkBlock = isObject(userConfig?.[mark]) ? (userConfig![mark] as Record<string, unknown>) : undefined
-  const cfgGenericMark = isObject(userConfig?.mark) ? (userConfig!.mark as Record<string, unknown>) : undefined
-  const legendFilled = isObject(markRaw) && markRaw.filled !== undefined
-    ? markRaw.filled === true
-    : cfgMarkBlock?.filled !== undefined
-      ? cfgMarkBlock.filled === true
-      : cfgGenericMark?.filled !== undefined
-        ? cfgGenericMark.filled === true
-        : undefined
-  const legendStrokeWidth = (cfgMarkBlock?.strokeWidth as number | undefined)
-    ?? (cfgGenericMark?.strokeWidth as number | undefined)
-  // Only config-level paint propagates onto legend symbols (vega's mark style
-  // applies to the generated legend marks); a markDef fillOpacity/strokeDash
-  // stays on the mark itself.
-  const legendFillOpacity = (cfgMarkBlock?.fillOpacity as number | undefined)
-    ?? (cfgGenericMark?.fillOpacity as number | undefined)
-  const legendStrokeDash = (cfgMarkBlock?.strokeDash as number[] | undefined)
-    ?? (cfgGenericMark?.strokeDash as number[] | undefined)
   return buildLegends(
     fields.filter((f) => !f.noScale),
     mark,
     markOpacity,
-    legendFilled,
-    lgStroke,
-    legendStrokeWidth,
-    legendFillOpacity,
+    markIsFilled(spec, mark),
     isObject(userConfig?.legend) ? (userConfig!.legend as Record<string, unknown>) : undefined,
-    legendStrokeDash,
     {
       numberFormat: userConfig?.numberFormat as string | undefined,
       timeFormat: userConfig?.timeFormat as string | undefined,
@@ -8504,27 +8424,82 @@ function buildUnitLegends(spec: VLSpec, fields: FieldDef[], mark: string, markRa
       numberFormatType: userConfig?.numberFormatType as string | undefined,
       timeFormatType: userConfig?.timeFormatType as string | undefined,
     },
-    { ...legendPaint(spec, markRaw), ...(fields.some((f) => f.noScale && f.channel === 'color') ? { colorScaleless: true } : {}) },
+    { shape: constantShape(spec, markRaw) },
+    (channel, userLegend) => legendSymbolPaint(spec, mark, fields, channel, userLegend, channelOpacity),
   )
 }
 
-/** The constant colour a legend symbol takes: a `value` colour channel, else the mark def's `fill` / `stroke` / `color`. */
-function legendPaint(spec: VLSpec, markRaw: unknown): { fill?: string; stroke?: string; markFill?: string; shape?: string } {
+/** legend/properties.ts defaultSymbolType: a constant shape (a value def or its first condition's value, else the mark's) is every non-shape legend's symbol. */
+function constantShape(spec: VLSpec, markRaw: unknown): string | undefined {
   const enc = isObject(spec.encoding) ? (spec.encoding as Record<string, unknown>) : {}
+  const d = enc.shape
+  const own = isObject(d) && d.field === undefined && d.datum === undefined && typeof d.value === 'string' ? d.value : undefined
   const md = isObject(markRaw) ? markRaw : {}
-  const encValue = (ch: string): string | undefined => {
-    const d = enc[ch]
-    return isObject(d) && d.field === undefined && d.datum === undefined && typeof d.value === 'string' ? d.value : undefined
+  return own ?? (typeof md.shape === 'string' ? md.shape : undefined)
+}
+
+/** Fill and stroke properties that the config gives a legend's symbols as it gives the mark (mark.ts FILL_STROKE_CONFIG). */
+const FILL_STROKE_CONFIG = ['stroke', 'strokeWidth', 'strokeDash', 'strokeDashOffset', 'strokeOpacity', 'strokeJoin', 'strokeMiterLimit', 'fill', 'fillOpacity']
+
+/** The first value a channel takes (its value, else its first condition's): what a legend symbol shows of a conditioned paint. */
+function firstConditionValue(def: unknown): unknown {
+  if (!isObject(def)) return undefined
+  // (a list of conditions, or one that is a value: the first value given, the channel's own first)
+  if (Array.isArray(def.condition) || (isObject(def.condition) && 'value' in def.condition)) {
+    return [def.value, ...([] as unknown[]).concat(def.condition).map((c) => (isObject(c) ? c.value : undefined))].find((v) => v !== undefined)
   }
-  const str = (v: unknown): string | undefined => (typeof v === 'string' ? v : undefined)
-  return {
-    fill: encValue('fill') ?? encValue('color') ?? str(md.fill) ?? str(md.color),
-    stroke: encValue('stroke') ?? encValue('color') ?? str(md.stroke) ?? str(md.color),
-    // (the mark definition's own fill: what an unfilled mark's legend symbols are filled with)
-    markFill: str(md.fill),
-    // legend/properties.ts symbolType: a constant shape (a value def, else the mark's) is every non-shape legend's symbol
-    shape: encValue('shape') ?? str(md.shape),
+  return def.value
+}
+
+/**
+ * legend/encode.ts symbols + assemble.ts: a legend's symbols are painted like the mark (filled as the mark is, but a trail's are
+ * stroked), over the config's fill and stroke properties; then the channel the legend is about takes out the property it paints, a
+ * fill that a field paints is black (or the symbol fill colour the legend asks for) and a stroke a field paints is left out, and a
+ * property that only conditions paint takes the first value they give. The symbols carry the mark's opacity.
+ */
+function legendSymbolPaint(spec: VLSpec, mark: string, fields: FieldDef[], channel: string, userLegend: Record<string, unknown>, channelOpacity: number | undefined): Record<string, unknown> {
+  const enc = isObject(spec.encoding) ? (spec.encoding as Record<string, unknown>) : {}
+  const md = isObject(spec.mark) ? (spec.mark as Record<string, unknown>) : {}
+  const cfgLegend = isObject(spec.config) && isObject((spec.config as Record<string, unknown>).legend) ? ((spec.config as Record<string, unknown>).legend as Record<string, unknown>) : {}
+  const filled = markIsFilled(spec, mark) && mark !== 'trail'
+  const out: Record<string, unknown> = {}
+  for (const p of FILL_STROKE_CONFIG) {
+    const v = markConfigProp(spec, mark, p)
+    if (v !== undefined) out[p] = constRef(v)
   }
+  Object.assign(out, markPaint(spec, mark, fields, filled))
+  const symbolOpacity = userLegend.symbolOpacity ?? cfgLegend.symbolOpacity
+  const symbolFillColor = userLegend.symbolFillColor ?? cfgLegend.symbolFillColor
+  const symbolStrokeColor = userLegend.symbolStrokeColor ?? cfgLegend.symbolStrokeColor
+  // init.ts opacity: a point, tick, circle or square that is not aggregated is drawn at 0.7 unless an opacity or a fill opacity is given
+  const reduced = ['point', 'tick', 'circle', 'square'].includes(mark) && !fields.some((f) => f.aggregate)
+    && markConfigProp(spec, mark, 'opacity') === undefined && markConfigProp(spec, mark, 'fillOpacity') === undefined && md.fillOpacity === undefined
+  const markOpacity = md.opacity ?? (reduced ? C.pointOpacity : undefined)
+  const opacity = symbolOpacity === undefined ? (channelOpacity ?? markOpacity) : undefined
+  const fieldRef = (r: unknown): boolean => isObject(r) && 'field' in r
+  if (out.fill) {
+    if (channel === 'fill' || (filled && channel === 'color')) delete out.fill
+    else if (fieldRef(out.fill)) {
+      if (symbolFillColor) delete out.fill
+      else {
+        out.fill = constRef(cfgLegend.symbolBaseFillColor ?? 'black')
+        out.fillOpacity = constRef(opacity ?? 1)
+      }
+    } else if (Array.isArray(out.fill)) {
+      const fill = firstConditionValue(enc.fill ?? enc.color) ?? md.fill ?? (filled ? md.color : undefined)
+      if (fill) out.fill = constRef(fill)
+    }
+  }
+  if (out.stroke) {
+    if (channel === 'stroke' || (!filled && channel === 'color')) delete out.stroke
+    else if (fieldRef(out.stroke) || symbolStrokeColor) delete out.stroke
+    else if (Array.isArray(out.stroke)) {
+      const stroke = [firstConditionValue(enc.stroke || enc.color), md.stroke, filled ? md.color : undefined].find((v) => v !== undefined)
+      if (stroke) out.stroke = { value: stroke }
+    }
+  }
+  if (channel !== 'opacity' && opacity) out.opacity = constRef(opacity)
+  return out
 }
 
 // --- selections (params with `select`) ----------------------------------------
