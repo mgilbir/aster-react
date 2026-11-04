@@ -7,8 +7,8 @@ import { makeRng, type Rng } from './differential-gen.mts'
 type Spec = Record<string, unknown>
 
 /** The ways a part of the tree fails. */
-export type Fail = 'mark' | 'condition' | 'group' | 'axis' | 'legend' | 'title' | 'signal' | 'scope-signal' | 'scale'
-export const FAILS: readonly Fail[] = (process.env.ABORT_KINDS?.split(',') as Fail[] | undefined) ?? ['mark', 'condition', 'group', 'axis', 'legend', 'title', 'signal', 'scope-signal', 'scale']
+export type Fail = 'mark' | 'condition' | 'group' | 'axis' | 'legend' | 'title' | 'signal' | 'scope-signal' | 'scale' | 'late-signal' | 'transform' | 'sort'
+export const FAILS: readonly Fail[] = (process.env.ABORT_KINDS?.split(',') as Fail[] | undefined) ?? ['mark', 'condition', 'group', 'axis', 'legend', 'title', 'signal', 'scope-signal', 'scale', 'late-signal', 'transform', 'sort']
 
 interface Gen {
   r: Rng
@@ -18,6 +18,8 @@ interface Gen {
   used: Set<Fail>
   /** scales a failure puts in the view's scope */
   rootScales: Spec[]
+  /** signals of the view a failure puts there */
+  rootSignals: Spec[]
 }
 
 const COLORS = ['teal', 'crimson', 'goldenrod', 'slateblue', 'seagreen', 'orchid', 'tomato', 'navy']
@@ -56,8 +58,26 @@ function leaf(g: Gen, data: string): Spec {
   } else if (fail === 'scale') {
     g.rootScales.push(badScale(id))
     g.used.add(fail)
+  } else if (fail === 'late-signal') {
+    lateSignal(g, id)
+    if (g.r.chance(0.7)) update.opacity = { signal: `late${id}` }
+    g.used.add(fail)
   }
-  return { type, name: `m${id}`, from: { data }, encode: { update } }
+  const mark: Spec = { type, name: `m${id}`, from: { data }, encode: { update } }
+  // (the transforms and the sort of a mark run on its encoded items, after the encode)
+  if (fail === 'transform') {
+    mark.transform = [{ type: 'formula', as: 'z', expr: 'datum.zz.q' }]
+    g.used.add(fail)
+  } else if (fail === 'sort') {
+    mark.sort = { field: 'datum.zz.q' }
+    g.used.add(fail)
+  }
+  return mark
+}
+
+/** A signal of the view that reads a scale or a dataset and throws: ranked after everything else of the view's scope. */
+function lateSignal(g: Gen, id: number): void {
+  g.rootSignals.push({ name: `late${id}`, update: g.r.pick([`null.x + scale('x', 1)`, `data('t')[0].zz.q`, `bandwidth('x') + null.x`]) })
 }
 
 function guideEncode(r: Rng, parts: readonly string[]): Record<string, unknown> {
@@ -109,7 +129,14 @@ function group(g: Gen, depth: number, data: string): Spec {
     update[g.r.pick(['width', 'x', 'fill'])] = failingEntry(g.r)
     g.used.add(fail)
   }
+  if (fail === 'late-signal') {
+    lateSignal(g, id)
+    if (g.r.chance(0.5)) update.opacity = { signal: `late${id}` }
+    g.used.add(fail)
+  }
   const node: Spec = { type: 'group', name: `g${id}`, encode: { update }, marks }
+  if (fail === 'transform' && g.r.chance(0.5)) { node.transform = [{ type: 'formula', as: 'z', expr: 'datum.zz.q' }]; g.used.add(fail) }
+  else if (fail === 'sort') { node.sort = { field: 'datum.zz.q' }; g.used.add(fail) }
   if (shape === 'facet') node.from = { facet: { data, name: `f${id}`, groupby: 'k' } }
   else if (shape === 'data') node.from = { data }
   if (own) node.scales = [{ name: `s${id}`, type: 'linear', domain: [0, 4], range: [0, 20] }]
@@ -147,7 +174,7 @@ export function treeSpec(r: Rng): { spec: Spec; fails: Fail[]; label: string } {
   const seed = r.int(1 << 30) + 1
   // The nodes are numbered in generation order, and a failure is put on one of them: the tree is made twice, once to count them.
   const make = (fails: Map<number, Fail>): { marks: Spec[]; g: Gen } => {
-    const g: Gen = { r: makeRng(seed), n: 0, fails, used: new Set(), rootScales: [] }
+    const g: Gen = { r: makeRng(seed), n: 0, fails, used: new Set(), rootScales: [], rootSignals: [] }
     const marks: Spec[] = []
     for (let i = 0; i < total; i++) marks.push(g.r.chance(0.55) ? group(g, 0, 't') : leaf(g, 't'))
     return { marks, g }
@@ -159,7 +186,7 @@ export function treeSpec(r: Rng): { spec: Spec; fails: Fail[]; label: string } {
   const { marks, g } = make(fails)
   const spec: Spec = {
     width: 130, height: 60, padding: 4, autosize: process.env.ABORT_AUTOSIZE ?? r.pick(['none', 'pad', 'fit']),
-    signals: [],
+    signals: [...g.rootSignals],
     scales: [
       { name: 'x', type: 'linear', domain: [0, 4], range: [0, 20] },
       { name: 'c', type: 'ordinal', domain: ['p', 'q'], range: ['red', 'blue'] },
