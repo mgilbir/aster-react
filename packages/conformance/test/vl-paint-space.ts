@@ -55,6 +55,7 @@ const DEFS: Array<[string, Obj]> = [
   ['condition value', { condition: { test: 'datum.v > 1', value: '#f58518' }, value: '#72b7b2' }],
   ['condition field', { condition: { test: 'datum.v > 1', field: 'k', type: 'nominal' }, value: '#72b7b2' }],
   ['condition only', { condition: { test: 'datum.v > 1', value: '#f58518' } }],
+  ['condition datum', { condition: { test: 'datum.v > 1', datum: 'b' }, value: '#72b7b2' }],
   ['no legend', { ...V, legend: null }],
   ['quantitative field with a null', { field: 'n', type: 'quantitative' }],
   ['colour field read as it is', { field: 'c', type: 'nominal', scale: null }],
@@ -63,7 +64,7 @@ const DEFS: Array<[string, Obj]> = [
 const other = (ch: 'fill' | 'stroke'): 'fill' | 'stroke' => (ch === 'fill' ? 'stroke' : 'fill')
 
 /** What else the encoding paints with. */
-const COMPANIONS: Array<[string, (ch: 'fill' | 'stroke') => Obj]> = [
+const COMPANIONS: Array<[string, (ch: 'fill' | 'stroke') => Obj, ((mark: string) => boolean)?]> = [
   ['alone', () => ({})],
   ['color on the same field', () => ({ color: K })],
   ['color on another field', () => ({ color: W })],
@@ -72,7 +73,8 @@ const COMPANIONS: Array<[string, (ch: 'fill' | 'stroke') => Obj]> = [
   ['the other paint on another field', (ch) => ({ [other(ch)]: W })],
   ['color and the other paint', (ch) => ({ color: K, [other(ch)]: W })],
   ['a size legend beside', () => ({ size: W })],
-  ['a shape legend on the same field', () => ({ shape: K })],
+  // (on a geoshape the shape channel carries the geometry: a shape field there is refused, packages/vl/README.md "Throws")
+  ['a shape legend on the same field', () => ({ shape: K }), (mark) => mark !== 'geoshape'],
 ]
 
 /** Every paint channel on `mark`: each way of being filled, each kind of definition, each companion. */
@@ -82,7 +84,8 @@ export function* paintCases(mark: string): Generator<Case> {
     const f = filled(mark)
     for (const ch of ['fill', 'stroke'] as const) {
       for (const [dn, def] of DEFS) {
-        for (const [cn, companion] of COMPANIONS) {
+        for (const [cn, companion, applies] of COMPANIONS) {
+          if (applies && !applies(mark)) continue
           const spec = { data: base.data, ...base.extra, mark: f.mark, encoding: { ...base.encoding, ...companion(ch), [ch]: def }, ...(f.config ? { config: f.config } : {}) }
           yield [`${mark} (${fn}) ${ch} ${dn}, ${cn}`, spec]
         }
