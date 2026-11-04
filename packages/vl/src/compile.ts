@@ -1253,7 +1253,9 @@ function compileLayered(spec: VLSpec, ctx: CompileCtx): VLSpec {
       let j = i + 1
       while (j < entries.length && entries[j]!.path[depth] === entries[i]!.path[depth]) j++
       const group = entries.slice(i, j)
-      for (const lg of group.length > 1 ? mergeShared(group, depth + 1) : [group[0]!.lg]) {
+      // (the legends of one leaf - their paths end here - are its own already: they are merged into the others as they are)
+      const nested = group.length > 1 && group.some((e) => e.path.length > depth + 1)
+      for (const lg of nested ? mergeShared(group, depth + 1) : group.map((e) => e.lg)) {
         const into = merged.find((x) => legendChannel(x) === legendChannel(lg))
         if (into) mergeLegend(into, lg)
         else merged.push(lg)
