@@ -3956,7 +3956,8 @@ function transformMarkItems(mark: CompiledMark, items: readonly SceneItem[], ctx
       })
     }
   } finally {
-    for (const it of own) delete it[ITEM_OF]
+    // (cleared, not deleted: deleting a property that was not the last one added leaves the item a slow dictionary-mode object)
+    for (const it of own) it[ITEM_OF] = undefined
     if (numbers !== undefined) ctx.draft.numbered.set(numbers, items)
   }
   return true
