@@ -1,0 +1,72 @@
+{
+  "$schema": "https://unpkg.com/knip@6/schema.json",
+  "ignoreExportsUsedInFile": true,
+  "ignoreWorkspaces": [
+    "packages/benchmarks",
+    "apps/*"
+  ],
+  "workspaces": {
+    ".": {
+      "entry": [
+        "scripts/*.mjs",
+        "scripts/lib/*.mjs"
+      ],
+      "project": [
+        "scripts/**/*.mjs"
+      ]
+    },
+    "packages/core": {
+      "entry": [
+        "src/scale-d3.ts",
+        "src/**/*.test.ts",
+        "src/**/*.testlib.ts",
+        "src/**/*.testkit.ts"
+      ],
+      "project": [
+        "src/**/*.ts"
+      ]
+    },
+    "packages/vl": {
+      "entry": [
+        "test/**/*.ts"
+      ],
+      "project": [
+        "src/**/*.ts"
+      ]
+    },
+    "packages/react": {
+      "entry": [
+        "src/parity.assert.ts",
+        "src/**/*.test.{ts,tsx}",
+        "type-fixtures/**/*.{ts,tsx}"
+      ],
+      "project": [
+        "src/**/*.{ts,tsx}"
+      ]
+    },
+    "packages/conformance": {
+      "entry": [
+        "src/**/*.{ts,tsx,mts,mjs}",
+        "scripts/**/*.{ts,mts,mjs}",
+        "test/**/*.{ts,mts}",
+        "test-fixtures/**/*.mjs"
+      ],
+      "project": [
+        "src/**/*.{ts,tsx,mts,mjs}",
+        "scripts/**/*.{ts,mts,mjs}",
+        "test/**/*.{ts,mts}"
+      ]
+    }
+  },
+  "rules": {
+    "duplicates": "warn"
+  },
+  "ignoreDependencies": [
+    "react-dom",
+    "a",
+    "vega-datasets",
+    "vega-embed",
+    "vega-functions",
+    "vega-util"
+  ]
+}
