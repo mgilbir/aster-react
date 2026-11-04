@@ -8,8 +8,8 @@
  *
  * Generated: specs of marks and groups nested up to three deep (own scales, faceted groups, axes, legends, titles) with one or
  * two failures put at random places (a mark's encode, a group's own encode, a guide part's encode, a signal, a mark's or a group's
- * transform or sort, a header group's sort, an encode and a transform of one mark), groups whose transforms write onto their items,
- * and header groups in grid layouts, compared to vega
+ * transform or sort, a header group's sort, an encode and a transform of one mark, a transform of a mark among others that work on
+ * its items), groups and marks whose transforms write onto their items, and header groups in grid layouts, compared to vega
  * by the picture (strict canonicalizer) and by what was logged (how many errors and their class; the text when it names a
  * scale written out).
  *
