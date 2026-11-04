@@ -178,8 +178,11 @@ import { fileURLToPath } from 'node:url'
 // A group mark's transforms on its items, the encode before a mark's transforms, the refusal of tuple-making mark transforms and the guides that read
 // a late signal (fix/abort-guides-group-transforms), measured on a clean build (kB gzip): core 149.2 (+0.5), useChart 160.7, Chart 202.2,
 // SvgChart 179.4, SvgChart + interaction 196.7, Chart + VL 303.6. Ceilings are the measured value + 0.5.
+// Every mark transform on the items, a mark's identifier from the view's counter, the guide parts left unencoded by a late signal and the
+// properties each kind of guide has (fix/abort-guide-parts-item-transforms), measured on a clean build (kB gzip): core 150.5 (+1.3),
+// useChart 161.9, Chart 203.4, SvgChart 180.7, SvgChart + interaction 197.8, Chart + VL 304.8. Ceilings are the measured value + 0.5.
 const BUDGETS = {
-  '@aster/core': 149.7 * 1024,
+  '@aster/core': 151.0 * 1024,
   '+ @aster/core/dom': 11.1 * 1024,
   '+ @aster/core/canvas': 6.4 * 1024,
   '+ @aster/core/hit': 7.0 * 1024,
@@ -187,13 +190,13 @@ const BUDGETS = {
   '+ @aster/core/load': 5.9 * 1024,
   '+ @aster/core/geo': 16.6 * 1024,
   '+ @aster/core/transforms': 39.7 * 1024,
-  '@aster/react useChart': 161.2 * 1024,
-  '@aster/react Chart': 202.7 * 1024,
+  '@aster/react useChart': 162.4 * 1024,
+  '@aster/react Chart': 203.9 * 1024,
   // The light chart (`@aster/react/lite`): SVG only, no canvas renderer; alone and with the `interaction` capability.
-  '@aster/react SvgChart': 179.9 * 1024,
-  '@aster/react SvgChart + interaction': 197.2 * 1024,
+  '@aster/react SvgChart': 181.2 * 1024,
+  '@aster/react SvgChart + interaction': 198.3 * 1024,
   // Base + the VL compiler (opt-in: `import '@aster/react/vl'`).
-  '@aster/react Chart + VL': 304.1 * 1024,
+  '@aster/react Chart + VL': 305.3 * 1024,
 }
 
 const THIS_DIR = dirname(fileURLToPath(import.meta.url))
