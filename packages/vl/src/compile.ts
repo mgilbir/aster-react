@@ -1271,7 +1271,7 @@ function compileLayered(spec: VLSpec, ctx: CompileCtx): VLSpec {
     return merged
   }
   mergeShared(sharedLegends, 0)
-  legends.push(...layerOwnLegends)
+  for (const lg of layerOwnLegends) legends.push(lg)
   if (legends.length) out.legends = legends
   // the signals every unit's selections add (collected in compile())
   const selUnits = layerSel.filter((sel): sel is UnitSel => sel?.unit !== undefined)
