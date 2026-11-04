@@ -34,6 +34,9 @@ const REFUSED: Array<[string, Record<string, unknown>]> = [
   ['a geoshape without a GeoJSON `shape` field inside a facet', { data: { values: [{ type: 'Feature', geometry: { type: 'Point', coordinates: [0, 0] }, properties: { a: 'A' } }] }, facet: { row: { field: 'properties.a' } }, spec: { ...proj, mark: 'geoshape' } }],
   ['positions on marks other than point', unit('bar', lonlat, proj)],
   ['a half pair', unit('point', { longitude: q('lon') }, proj)],
+  ['one of a pair given as a value or a condition alone', unit('point', { longitude: { value: 1 }, latitude: q('lat') }, proj)],
+  ['a count of records (`aggregate: "count"` with no field)', unit('point', { longitude: { aggregate: 'count', type: 'quantitative' }, latitude: q('lat') }, proj)],
+  ['a longitude / latitude datum that is not a number', unit('point', { longitude: { datum: 'east', type: 'nominal' }, latitude: q('lat') }, proj)],
   ['a `time` channel needs a single\n  top-level unit', { data, hconcat: [{ params: [timer], transform: frame, mark: 'point', encoding: { x: q('b'), time: q('t') } }] }],
   ['composite marks', unit('boxplot', { x: n('a'), y: q('b'), time: q('t') }, { params: [timer], transform: frame })],
   ['`bind` / `value` on the timer', unit('point', { x: q('b'), time: q('t') }, { params: [{ ...timer, bind: { input: 'range' } }], transform: frame })],
@@ -87,6 +90,9 @@ const COMPILES: Array<[string, Record<string, unknown>]> = [
   ['a shape field that is not GeoJSON on a geoshape (a shape legend; the geoshape draws its data)', { data: { values: [{ type: 'Feature', geometry: { type: 'Point', coordinates: [0, 0] }, a: 'A' }] }, ...proj, mark: 'geoshape', encoding: { shape: n('a') } }],
   ['`size` conditions on bars and ticks', unit('bar', { x: n('a'), y: q('b'), size: { condition: { test: 'datum.b > 1', value: 3 }, value: 5 } })],
   ['the key channel', unit('point', { x: q('b'), key: n('a') })],
+  ['every property of a longitude / latitude definition (it was refused as "projected, not scaled")', unit('point', { longitude: { ...q('lon'), aggregate: 'mean', sort: 'descending', scale: null, axis: null, legend: null, stack: 'zero' }, latitude: { ...q('lat'), bin: true } }, proj)],
+  ['a time unit and any data type on a longitude / latitude (it was refused as "quantitative only")', unit('point', { longitude: { field: 'lon', type: 'nominal' }, latitude: { field: 'lat', type: 'temporal', timeUnit: 'year' } }, proj)],
+  ['`impute`, pre-binned data and `band` on a longitude / latitude (vega-lite ignores them)', unit('point', { longitude: { ...q('lon'), impute: { value: 0 }, band: 0.5 }, latitude: { ...q('lat'), bin: 'binned' } }, proj)],
   ['a selection on a named view', { data, params: [sel], hconcat: [{ name: 'v', mark: 'point', encoding: { x: q('b') } }] }],
 ]
 
@@ -105,7 +111,7 @@ describe('packages/vl/README.md "Throws (not supported)" matches the compiler', 
   }
 
   it('does not list what used to be refused', () => {
-    for (const stale of ['`strokeDash`', '`angle`', '`binned: true`', '`bin: "binned"`', '`sequence`', 'horizontal\n  boxplots', '`params: true`', '`keyvals` ranges', 'named view', 'path mark with an overlay', 'a `datum` on a channel other than the positions', '`scale: null` on a channel other than', 'scale / legend implementation yet', '`size` conditions on bars', 'a shape field that is not']) {
+    for (const stale of ['`strokeDash`', '`angle`', '`binned: true`', '`bin: "binned"`', '`sequence`', 'horizontal\n  boxplots', '`params: true`', '`keyvals` ranges', 'named view', 'path mark with an overlay', 'a `datum` on a channel other than the positions', '`scale: null` on a channel other than', 'scale / legend implementation yet', '`size` conditions on bars', 'a shape field that is not', 'projected, not scaled']) {
       expect(LIST, stale).not.toContain(stale)
     }
   })

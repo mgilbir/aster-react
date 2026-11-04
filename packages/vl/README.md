@@ -83,7 +83,10 @@ an expression or a generated dataset/signal/scale name.
 - Maps (`src/geo.ts`, a port of vega-lite's `compile/projection`): `geoshape` marks over GeoJSON / TopoJSON
   (inline, `url`, or `sphere` / `graticule` generators) with `{type: "geojson"}` on `shape`; `projection`
   with every property and `config.projection`; `longitude` / `latitude` (and `longitude2` / `latitude2`) on
-  point-like marks, text, line, trail and rule, layered over geoshapes. A unit fits its projection to its
+  point-like marks, text, line, trail and rule, layered over geoshapes. A longitude / latitude projects its raw field
+  whatever else its definition says, as vega-lite does: an aggregate, a bin, a time unit, a sort array and the data type
+  are read as on any other channel (a temporal type parses the field before it is projected), and a scale, an axis, a
+  legend, a stack, an impute, a band or a pre-binned bin changes nothing. A unit fits its projection to its
   geoshape data unless it gives `scale` or `translate`; layer, concat and repeat children share one
   merged projection as vega-lite does. Vega's runtime computes the same projection as the Aster runtime
   (`projectedBounds`), and the corpus holds a `vlx-geo-*` case per feature.
@@ -126,8 +129,11 @@ vega-lite supports and is not here compiles to the same Vega.)
   unit or of a later layer; `scale.domain.unionWith` in a layered spec; a parameter's `push`.
 - Maps: a geoshape without a GeoJSON `shape` field inside a facet (vega-lite 6.4.3 fits the projection to
   `data("child_main")`, a dataset it never defines, so there is no output to match). Longitude / latitude
-  positions on marks other than point, circle, square, text, line, trail and rule; a half pair
-  (only `longitude`).
+  positions on marks other than point, circle, square, text, line, trail and rule. What vega cannot run of vega-lite
+  6.4.3's output: a half pair (only `longitude`, or one of a pair given as a value or a condition alone), and a
+  longitude / latitude that is a count of records (`aggregate: "count"` with no field), both of which vega-lite
+  projects with a geopoint transform that reads no field; a longitude / latitude datum that is not a number, which
+  vega-lite writes into the geopoint transform as an expression vega cannot parse.
 - Animation outside the one shape vega-lite 6.4.3 compiles to working output: a `time` channel needs a single
   top-level unit with exactly one timer selection and the `{filter: {param}}` transform (without them vega-lite
   emits marks that read a dataset it never defines); layers, concats, facets, composite marks
@@ -138,14 +144,15 @@ vega-lite supports and is not here compiles to the same Vega.)
 - Channel definitions vega-lite 6.4.3 compiles that are not implemented yet: a `datum`
   condition on fillOpacity, strokeOpacity, angle, text or tooltip; a field condition that reads a field other than the
   channel's own; an array of conditions that holds a field condition; `impute` or
-  pre-binned data (`binned`) on a channel other than x and y; the `geojson` type on a channel other than shape, and
+  pre-binned data (`binned`) on a channel other than x and y (and longitude / latitude, where vega-lite ignores
+  them); the `geojson` type on a channel other than shape, and
   a GeoJSON shape on any other mark.
 - Positions: a condition that gives a field or a datum on a position channel (x, y, x2, y2, xOffset, yOffset, theta,
   theta2, radius, radius2, longitude, latitude and their ends). The Vega-Lite schema gives a position no condition, and
   vega-lite 6.4.3 makes a scale, an axis and a stack group of the condition's field while it places the mark by the
   value, so there is no coherent output to match. (A condition with a value is read as its value, as vega-lite
   reads it; on a channel the mark does not draw the condition is dropped with the channel.)
-- Scales and encodings: channel-level `band`; the positional mark-def constants `x` / `x2` / `y` / `y2`, except
+- Scales and encodings: channel-level `band` (except on longitude / latitude, where vega-lite ignores it); the positional mark-def constants `x` / `x2` / `y` / `y2`, except
   `x` / `y` on point, circle, square and text.
 - Layout: `width` / `height: "container"` on a composition (only a top-level unit or layer), `data: null`, config keys
   outside the supported list, a wrapped facet (a single `facet` field) around or inside another facet, a selection or

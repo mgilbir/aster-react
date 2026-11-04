@@ -983,12 +983,10 @@ function validateChannelDef(ch: string, def: unknown, at: string, shared = false
   if (POSITION_CHANNELS.has(ch) && conditionGivesField(def.condition)) {
     fail(`${at}.condition`, `a condition that gives a field or a datum on a position channel (${ch}) is not supported: a position takes no condition in Vega-Lite`)
   }
-  // (a constant longitude or latitude, conditions and all, is no position to project: vega-lite reads nothing from it)
-  if (GEO_CHANNELS.has(ch) && isFieldOrDatum(def)) {
-    if (def.type !== undefined && def.type !== 'quantitative') fail(`${at}.type`, 'a longitude / latitude channel is quantitative')
-    for (const k of ['aggregate', 'bin', 'timeUnit', 'sort', 'stack', 'scale', 'axis', 'legend', 'condition', 'impute', 'band', 'bandPosition']) {
-      if (def[k] !== undefined) fail(`${at}.${k}`, `\`${k}\` does not apply to a longitude / latitude channel (it is projected, not scaled)`)
-    }
+  // (a longitude or a latitude projects its raw field whatever its definition says; a count of records has no field to project)
+  const geo = GEO_CHANNELS.has(ch)
+  if (geo && def.field === undefined && def.aggregate === 'count') {
+    fail(`${at}.aggregate`, 'a count of records reads no field: it has no position to project (vega-lite 6.4.3 emits a geopoint transform with no field, which vega cannot run)')
   }
   if (ch === 'shape' && def.type === 'geojson') {
     for (const k of ['aggregate', 'bin', 'timeUnit', 'sort', 'scale', 'legend', 'condition', 'datum', 'value']) {
@@ -1011,8 +1009,9 @@ function validateChannelDef(ch: string, def: unknown, at: string, shared = false
       if (def.aggregate !== 'count' && def.field === undefined) fail(`${at}.aggregate`, `aggregate "${def.aggregate}" needs a field`)
     }
   }
-  if (def.bin !== undefined) validateBin(def.bin, `${at}.bin`, ch === 'x' || ch === 'y')
-  if ((def.bin === 'binned' || (isObj(def.bin) && def.bin.binned === true)) && ch !== 'x' && ch !== 'y') fail(`${at}.bin`, 'pre-binned data (bin: "binned") only applies to the x and y channels')
+  // (vega-lite reads pre-binned data on x and y; on a longitude or a latitude it ignores it, and the mark is placed as it is)
+  if (def.bin !== undefined) validateBin(def.bin, `${at}.bin`, ch === 'x' || ch === 'y' || geo)
+  if ((def.bin === 'binned' || (isObj(def.bin) && def.bin.binned === true)) && ch !== 'x' && ch !== 'y' && !geo) fail(`${at}.bin`, 'pre-binned data (bin: "binned") only applies to the x and y channels')
   if (def.timeUnit !== undefined) {
     normalizeTimeUnit(def.timeUnit, `${at}.timeUnit`)
   }
@@ -1024,7 +1023,8 @@ function validateChannelDef(ch: string, def: unknown, at: string, shared = false
     fail(`${at}.stack`, `unsupported stack ${JSON.stringify(def.stack)}`)
   }
   if (def.impute !== undefined) {
-    if (ch !== 'x' && ch !== 'y') fail(`${at}.impute`, '`impute` only applies to the x and y channels')
+    // (vega-lite imputes along x and y; on a longitude or a latitude it ignores `impute`)
+    if (ch !== 'x' && ch !== 'y' && !geo) fail(`${at}.impute`, '`impute` only applies to the x and y channels')
     const im = def.impute
     if (!isObj(im)) mustBe(`${at}.impute`, OBJECT)
     keysOf(im, set('method value frame keyvals'), `${at}.impute`, 'impute')
@@ -1032,7 +1032,8 @@ function validateChannelDef(ch: string, def: unknown, at: string, shared = false
     if (im.frame !== undefined && !(Array.isArray(im.frame) && im.frame.length === 2)) fail(`${at}.impute.frame`, 'must be a [start, end] pair')
     if (im.keyvals !== undefined) validateImputeKeyvals(im.keyvals, `${at}.impute.keyvals`)
   }
-  if (def.band !== undefined) fail(`${at}.band`, '`band` is not supported')
+  // (a projected position has no band: vega-lite ignores `band` there)
+  if (def.band !== undefined && !geo) fail(`${at}.band`, '`band` is not supported')
   if (def.bandPosition !== undefined && typeof def.bandPosition !== 'number') mustBe(`${at}.bandPosition`, 'a number')
   if (def.condition !== undefined) validateCondition(def.condition, `${at}.condition`)
   for (const k of ['axis', 'legend', 'scale'] as const) {
