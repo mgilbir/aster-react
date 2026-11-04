@@ -180,6 +180,8 @@ import { fileURLToPath } from 'node:url'
 // SvgChart 179.4, SvgChart + interaction 196.7, Chart + VL 303.6. Ceilings are the measured value + 0.5.
 // The scale types vega-lite honours (fix/vl-honoured-scale-types) on main with the abort work above, measured on a clean build (kB gzip):
 // Chart + VL 304.3 (+0.7 over the abort work's 303.6; the other rows did not move). Ceiling is the measured value + 0.5.
+// Every mark drawing every channel definition (fix/vl-mark-position-channels) on main with the abort work and the paint channels, measured on a
+// clean build (kB gzip): Chart + VL 305.2 (+0.4 over main's 304.8 ceiling; the other rows did not move). Ceiling is the measured value + 0.5.
 const BUDGETS = {
   '@aster/core': 149.7 * 1024,
   '+ @aster/core/dom': 11.1 * 1024,
@@ -195,7 +197,7 @@ const BUDGETS = {
   '@aster/react SvgChart': 179.9 * 1024,
   '@aster/react SvgChart + interaction': 197.2 * 1024,
   // Base + the VL compiler (opt-in: `import '@aster/react/vl'`).
-  '@aster/react Chart + VL': 304.8 * 1024,
+  '@aster/react Chart + VL': 305.7 * 1024,
 }
 
 const THIS_DIR = dirname(fileURLToPath(import.meta.url))
