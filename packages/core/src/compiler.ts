@@ -5,7 +5,7 @@
  */
 import { dict, ownGet } from './util.js'
 import { assertSpecDepth } from './limits.js'
-import { checkDataReferences, normalizeSpecLists } from './spec-structure.js'
+import { normalizeSpecLists } from './spec-structure.js'
 import { noteWrittenType, transformTypeOf } from './transform-names.js'
 import { checkExpressions } from './spec-expressions.js'
 import { markPlacing } from './tuple-order.js'
@@ -46,7 +46,7 @@ export function compileChart(givenSpec: VgSpec): CompiledChart {
   const mergedConfig = (userConfig == null || (typeof userConfig === 'object' && !Array.isArray(userConfig) && Object.keys(userConfig).length === 0)
     ? defaultMergedConfig()
     : mergeVegaConfig(vegaDefaultConfig(), userConfig)) as Record<string, unknown>
-  checkDataReferences(rawSpec, mergedConfig)
+  // (one walk, in vega-parser's order: the data sets and scales a spec names, the parameters of its transforms, its expressions)
   checkExpressions(rawSpec, mergedConfig)
   markSeq = 0
   const spec: VgSpec = { ...rawSpec, config: mergedConfig as VgSpec['config'] }

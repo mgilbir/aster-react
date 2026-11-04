@@ -18,16 +18,31 @@ interface Definition { params: Param[]; metadata?: { generates?: boolean; change
 const definition = (type: string): Definition => (vega as unknown as { definition(t: string): Definition }).definition(type)
 
 const kindOf = (p: Param): string => (p.type === 'expr' ? 'expression' : p.type === 'compare' ? 'compare' : p.type === 'field' || p.expr ? 'field' : 'value')
+const refOf = (p: Param): Spec => (p.type === 'projection' ? { ref: 'projection' } : p.type === 'data' ? { ref: 'data' } : {})
 
-/** What the spec's keys are for a definition: an index parameter is read from the keys `from` and `key` of the spec. */
-const keysOf = (p: Param): Array<{ name: string; kind: string }> =>
-  p.type === 'index' ? [{ name: 'from', kind: 'value' }, { name: 'key', kind: 'value' }] : [{ name: p.name, kind: kindOf(p) }]
+interface Read { name: string; kind: string; required: boolean; list: boolean; ref?: string; sub?: Array<{ key: Record<string, string>; params: Read[] }> }
+
+/**
+ * What the spec's keys are for a definition, and how each is read: an index parameter is read from the keys `from` (the data set) and
+ * `key`; a parameter may be required, a list, the name of a projection or of a data set, or objects of sub-parameters of several kinds.
+ */
+const keysOf = (p: Param): Read[] =>
+  p.type === 'index' ? [{ name: 'from', kind: 'value', required: false, list: false, ref: 'index' }, { name: 'key', kind: 'value', required: false, list: false }]
+    : [{
+      name: p.name, kind: kindOf(p), required: !!p.required, list: !!p.array, ...refOf(p),
+      ...(p.type === 'param' ? { sub: (p.params as unknown as Array<{ key: Record<string, string>; params?: Param[] }>).map((s) => ({ key: s.key, params: (s.params ?? []).flatMap(keysOf) })) } : {}),
+    }]
+
+const asRead = (p: ReturnType<typeof transformParams>[number]): Read => ({
+  name: p.name, kind: p.kind, required: p.required, list: p.list, ...(p.ref ? { ref: p.ref } : {}),
+  ...(p.sub ? { sub: p.sub.map((s) => ({ key: { ...s.key }, params: s.params.map(asRead) })) } : {}),
+})
 
 describe('the table of transform parameters is the definitions of the pinned vega', () => {
   for (const type of TRANSFORM_TYPES) {
     it(type, () => {
       const want = definition(type).params.flatMap(keysOf)
-      expect(transformParams(type).map(({ name, kind }) => ({ name, kind }))).toEqual(want)
+      expect(transformParams(type).map(asRead)).toEqual(want)
     })
   }
 
@@ -90,7 +105,8 @@ describe('a transform is refused when it is parsed, as vega refuses it (generate
     let accepted = 0
     for (let i = 0; i < scaled(3000); i++) {
       const { spec, label } = transformSpec(r)
-      const want = vegaOutcome(spec)
+      // (a bin without an extent is the one documented deviation: Aster derives it from the data, so vega is asked about the spec with one)
+      const want = vegaOutcome(withBinExtents(spec))
       const got = asterOutcome(spec)
       if (want === 'ok') accepted++
       else reasons.set(want.replace(/[:"].*$/, ''), (reasons.get(want.replace(/[:"].*$/, '')) ?? 0) + 1)
@@ -104,3 +120,17 @@ describe('a transform is refused when it is parsed, as vega refuses it (generate
     expect(accepted).toBeGreaterThan(scaled(3000) * 0.15)
   })
 })
+
+/** The spec with an extent on every `bin` transform that has none (see docs/ARCHITECTURE.md, "Deviations from Vega"). */
+function withBinExtents(spec: Spec): Spec {
+  const out = structuredClone(spec)
+  const visit = (node: unknown): void => {
+    if (Array.isArray(node)) { node.forEach(visit); return }
+    if (node === null || typeof node !== 'object') return
+    const o = node as Spec
+    if (Array.isArray(o.transform)) for (const t of o.transform as Spec[]) if (t && typeof t.type === 'string' && t.type.toLowerCase() === 'bin' && t.extent === undefined) t.extent = [0, 1]
+    for (const v of Object.values(o)) visit(v)
+  }
+  visit(out)
+  return out
+}
