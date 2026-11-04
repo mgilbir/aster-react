@@ -9,8 +9,8 @@ type Spec = Record<string, unknown>
 
 /** The ways a part of the tree fails. */
 export type Fail = 'mark' | 'condition' | 'group' | 'axis' | 'legend' | 'title' | 'signal' | 'scope-signal' | 'scale' | 'late-signal' | 'transform' | 'sort'
-  | 'group-transform' | 'header-sort' | 'encode-and-transform'
-export const FAILS: readonly Fail[] = (process.env.ABORT_KINDS?.split(',') as Fail[] | undefined) ?? ['mark', 'condition', 'group', 'axis', 'legend', 'title', 'signal', 'scope-signal', 'scale', 'late-signal', 'transform', 'sort', 'group-transform', 'header-sort', 'encode-and-transform']
+  | 'group-transform' | 'header-sort' | 'encode-and-transform' | 'item-transform'
+export const FAILS: readonly Fail[] = (process.env.ABORT_KINDS?.split(',') as Fail[] | undefined) ?? ['mark', 'condition', 'group', 'axis', 'legend', 'title', 'signal', 'scope-signal', 'scale', 'late-signal', 'transform', 'sort', 'group-transform', 'header-sort', 'encode-and-transform', 'item-transform']
 
 interface Gen {
   r: Rng
@@ -27,7 +27,7 @@ interface Gen {
 }
 
 /** The failures a leaf mark can hold, and those a group can (`signal` is the view's, wherever it is drawn). */
-const LEAF_FAILS: ReadonlySet<Fail> = new Set(['mark', 'condition', 'scale', 'late-signal', 'transform', 'sort', 'encode-and-transform', 'signal'])
+const LEAF_FAILS: ReadonlySet<Fail> = new Set(['mark', 'condition', 'scale', 'late-signal', 'transform', 'sort', 'encode-and-transform', 'signal', 'item-transform'])
 const GROUP_FAILS: ReadonlySet<Fail> = new Set(['group', 'axis', 'legend', 'title', 'scope-signal', 'scale', 'late-signal', 'transform', 'sort', 'group-transform', 'header-sort', 'encode-and-transform', 'signal'])
 
 const COLORS = ['teal', 'crimson', 'goldenrod', 'slateblue', 'seagreen', 'orchid', 'tomato', 'navy']
@@ -58,6 +58,59 @@ function itemTransforms(r: Rng): Spec[] {
     // (transforms that work on copies of their tuples: what they compute is on the items all the same)
     [{ type: 'pie', field: 'width', as: ['p0', 'p1'] }, { type: 'formula', as: 'x', expr: 'datum.x + datum.p1 * 2' }],
     [{ type: 'dotbin', field: 'x', step: 20, as: 'x' }],
+  ])
+}
+
+/**
+ * Transforms of a mark that is not a group, of the kinds vega lets a mark have, that work on its items: they read what the encode
+ * gave the items (`datum.x`, `datum.y`) and their data (`datum.datum.a`), and what they write onto the items (a position, a paint,
+ * a number a later transform reads) is what is drawn. None of them throws.
+ */
+function leafTransforms(r: Rng, type: string): Spec[] {
+  const paint = type === 'line' || type === 'rule' ? 'stroke' : 'fill'
+  return r.pick<Spec[]>([
+    [{ type: 'formula', as: 'x', expr: 'datum.datum.a * 10' }],
+    [{ type: 'formula', as: 'y', expr: 'datum.y + datum.datum.a * 3' }],
+    [{ type: 'formula', as: paint, expr: "datum.datum.k == 'q' ? 'orange' : 'purple'" }],
+    [{ type: 'formula', as: 'opacity', expr: 'datum.datum.a / 4' }],
+    [{ type: 'window', ops: ['row_number'], as: ['n'] }, { type: 'formula', as: 'x', expr: 'datum.n * 11' }],
+    [{ type: 'window', ops: ['sum'], fields: ['x'], as: ['run'] }, { type: 'formula', as: 'y', expr: 'datum.run / 2' }],
+    [{ type: 'collect', sort: { field: 'datum.a', order: 'descending' } }, { type: 'window', ops: ['row_number'], as: ['n'] }, { type: 'formula', as: 'x', expr: 'datum.n * 11' }],
+    [{ type: 'joinaggregate', ops: ['count', 'max'], fields: [null, 'x'], as: ['c', 'top'] }, { type: 'formula', as: 'y', expr: 'datum.y + datum.c + datum.top / 4' }],
+    [{ type: 'stack', field: 'x', as: ['x', 'x2'] }],
+    [{ type: 'stack', groupby: ['datum.k'], field: 'y', sort: { field: 'datum.a' }, as: ['y', 'y2'] }],
+    [{ type: 'bin', field: 'x', extent: [0, 40], step: 5, as: ['x', 'x1'] }],
+    [{ type: 'extent', field: 'x' }, { type: 'formula', as: 'y', expr: 'datum.x * 2' }],
+    [{ type: 'pie', field: 'x', as: ['p0', 'p1'] }, { type: 'formula', as: 'x', expr: 'datum.x + datum.p1 * 2' }],
+    [{ type: 'dotbin', field: 'x', step: 4, as: 'x' }],
+    [{ type: 'timeunit', field: 'datum.a', units: ['year'], as: ['t0', 't1'] }, { type: 'formula', as: 'y', expr: 'datum.y + (datum.t0 > 0 ? 3 : 9)' }],
+  ])
+}
+
+/** A transform that reads the mark's defaults: they are the encode's, so a line's width is 2 before its transforms run. */
+const READS_DEFAULTS: Spec = { type: 'formula', as: 'y', expr: 'datum.strokeWidth == 2 ? 20 : 8' }
+
+/** Transforms of a mark that has no data (one item, whose datum is empty): they read what the encode gave it. */
+function sourcelessTransforms(r: Rng): Spec[] {
+  return r.pick<Spec[]>([
+    [{ type: 'formula', as: 'y', expr: 'datum.x / 2 + 3' }],
+    [{ type: 'window', ops: ['row_number'], as: ['n'] }, { type: 'formula', as: 'x', expr: 'datum.n * 11' }],
+    [{ type: 'formula', as: 'opacity', expr: '0.5' }],
+  ])
+}
+
+/** A transform of a mark that throws when it runs on the items and would not on the data (or would with another message). */
+function failingItemTransform(r: Rng): Spec {
+  return r.pick<Spec>([
+    failingTransform(r),
+    { type: 'formula', as: 'z', expr: 'datum.datum.zz.q' },
+    { type: 'formula', as: 'x', expr: 'datum.datum.o.v.w' },
+    { type: 'window', ops: ['sum'], fields: ['datum.zz.q'], as: ['s'] },
+    { type: 'joinaggregate', ops: ['max'], fields: ['datum.zz.q'], as: ['s'] },
+    { type: 'stack', field: 'datum.zz.q' },
+    { type: 'bin', field: 'datum.zz.q', extent: [0, 10] },
+    { type: 'pie', field: 'datum.zz.q' },
+    { type: 'collect', sort: { field: 'datum.zz.q' } },
   ])
 }
 
@@ -100,13 +153,34 @@ function leaf(g: Gen, data: string): Spec {
   } else if (fail === 'scale') {
     g.rootScales.push(badScale(id))
     g.used.add(fail)
-  } else if (fail === 'late-signal') {
+  }
+  // (a late signal read by the encode, by a transform of the mark or by its sort: what reads it, and what comes after that, never runs)
+  let lateTransform: Spec | undefined
+  let lateSort: Spec | undefined
+  if (fail === 'late-signal') {
     lateSignal(g, id)
-    if (g.r.chance(0.7)) update.opacity = { signal: `late${id}` }
+    const where = g.r.int(10)
+    if (where < 5) update.opacity = { signal: `late${id}` }
+    else if (where < 8) lateTransform = { type: 'formula', as: g.r.pick(['y', 'opacity']), expr: `late${id} + 1` }
+    else if (where < 9) lateSort = { field: 'datum.k', order: { signal: `late${id}` } }
     g.used.add(fail)
   }
-  const mark: Spec = { type, name: `m${id}`, from: { data }, encode: { update } }
-  // (the transforms and the sort of a mark run on its encoded items, after the encode)
+  // (a mark with no data has one item; its transforms run on it all the same)
+  const sourceless = fail === undefined && g.r.chance(0.08)
+  if (sourceless) update.x = { value: 5 + id }
+  const mark: Spec = { type, name: `m${id}`, ...(sourceless ? {} : { from: { data } }), encode: { update } }
+  // (the transforms and the sort of a mark run on its encoded items, after the encode, and write onto them)
+  // (what reads a late signal never runs, nor what comes after it: the mark's transforms and its sort)
+  const transforms: Spec[] = sourceless ? sourcelessTransforms(g.r) : g.r.chance(0.35) || fail === 'late-signal' ? leafTransforms(g.r, type) : []
+  if (lateTransform) transforms.splice(g.r.int(transforms.length + 1), 0, lateTransform)
+  if (type === 'line' && g.r.chance(0.4)) transforms.push(READS_DEFAULTS)
+  if (fail === 'item-transform') {
+    transforms.splice(g.r.int(transforms.length + 1), 0, failingItemTransform(g.r))
+    g.used.add(fail)
+  }
+  if (transforms.length) mark.transform = transforms
+  if (lateSort) mark.sort = lateSort
+  else if (fail === 'late-signal' && g.r.chance(0.4)) mark.sort = { field: 'datum.a', order: 'descending' }
   // (a mark that fails in its encode and in its transform or sort too: vega runs the encode first)
   const both = fail === 'encode-and-transform' && g.r.chance(0.6)
   if (fail === 'transform' || both) {

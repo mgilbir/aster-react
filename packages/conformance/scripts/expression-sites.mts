@@ -192,6 +192,8 @@ const AXIS_PROPERTIES = [
   'tickOffset', 'tickOpacity', 'tickRound', 'ticks', 'tickSize', 'tickWidth', 'title', 'titleAlign', 'titleAnchor', 'titleAngle', 'titleBaseline', 'titleColor',
   'titleFont', 'titleFontSize', 'titleFontStyle', 'titleFontWeight', 'titleLimit', 'titleLineHeight', 'titleOpacity', 'titlePadding', 'titleX', 'titleY',
   'translate', 'values', 'zindex',
+  // (properties an axis does not have: vega never reads them)
+  'columns', 'direction', 'fillColor', 'padding', 'symbolSize', 'gradientLength', 'text', 'nonesuch',
 ]
 const LEGEND_PROPERTIES = [
   'aria', 'description', 'type', 'direction', 'orient', 'format', 'formatType', 'title', 'titleAlign', 'titleAnchor', 'titleBaseline', 'titleColor', 'titleFont',
@@ -201,11 +203,15 @@ const LEGEND_PROPERTIES = [
   'symbolDashOffset', 'symbolLimit', 'symbolOffset', 'tickCount', 'tickMinStep', 'values', 'labelAlign', 'labelBaseline', 'labelColor', 'labelFont',
   'labelFontSize', 'labelFontStyle', 'labelFontWeight', 'labelLimit', 'labelOffset', 'labelOpacity', 'labelOverlap', 'labelSeparation',
   'legendX', 'legendY', 'offset', 'padding', 'cornerRadius', 'fillColor', 'strokeColor', 'zindex',
+  // (properties a legend does not have: vega never reads them)
+  'tickSize', 'domainColor', 'labelPadding', 'translate', 'position', 'text', 'nonesuch',
 ]
 const TITLE_PROPERTIES = [
   'aria', 'description', 'orient', 'anchor', 'frame', 'offset', 'align', 'angle', 'baseline', 'color', 'dx', 'dy', 'font', 'fontSize', 'fontStyle',
   'fontWeight', 'limit', 'lineHeight', 'zindex', 'subtitle', 'subtitleColor', 'subtitleFont', 'subtitleFontSize', 'subtitleFontStyle',
   'subtitleFontWeight', 'subtitleLineHeight', 'subtitlePadding',
+  // (properties the title does not have, or takes as they are: vega never reads them as expressions)
+  'titleColor', 'labelColor', 'tickSize', 'padding', 'name', 'style', 'interactive', 'nonesuch',
 ]
 
 const ordinal = { name: 'c', type: 'ordinal', domain: [0, 1], range: ['red', 'blue'] }

@@ -871,7 +871,9 @@ function boundIsolated(it: SceneItem, miterPaths = false, kind?: string): Bounds
     if (it.path === '') return bounds
     const rec = it as Record<string, unknown>
     // a projected shape bounds from its unrounded geometry, as vega's bound context sees it, not from the path string
-    const exact = !rec.angle && it.datum && it.path === (it.datum as Record<string, unknown>).shape ? SHAPE_BOUNDS.get(it.datum as object)?.() : undefined
+    // (the shape is the item's own when a mark's geoshape transform wrote it, its datum's when the data's did)
+    const shaped = rec.angle ? undefined : it.path === rec.shape ? it : it.datum && it.path === (it.datum as Record<string, unknown>).shape ? it.datum : undefined
+    const exact = shaped !== undefined ? SHAPE_BOUNDS.get(shaped as object)?.() : undefined
     if (exact) {
       bounds.add(exact[0], exact[1])
       bounds.add(exact[2], exact[3])

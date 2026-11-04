@@ -178,12 +178,18 @@ import { fileURLToPath } from 'node:url'
 // A group mark's transforms on its items, the encode before a mark's transforms, the refusal of tuple-making mark transforms and the guides that read
 // a late signal (fix/abort-guides-group-transforms), measured on a clean build (kB gzip): core 149.2 (+0.5), useChart 160.7, Chart 202.2,
 // SvgChart 179.4, SvgChart + interaction 196.7, Chart + VL 303.6. Ceilings are the measured value + 0.5.
+// Every mark transform on the items, a mark's identifier from the view's counter, the guide parts left unencoded by a late signal and the
+// properties each kind of guide has (fix/abort-guide-parts-item-transforms), measured on a clean build (kB gzip): core 150.5 (+1.3),
+// useChart 161.9, Chart 203.4, SvgChart 180.7, SvgChart + interaction 197.8, Chart + VL 304.8. Ceilings are the measured value + 0.5.
 // The scale types vega-lite honours (fix/vl-honoured-scale-types) on main with the abort work above, measured on a clean build (kB gzip):
 // Chart + VL 304.3 (+0.7 over the abort work's 303.6; the other rows did not move). Ceiling is the measured value + 0.5.
 // Every mark drawing every channel definition (fix/vl-mark-position-channels) on main with the abort work and the paint channels, measured on a
 // clean build (kB gzip): Chart + VL 305.2 (+0.4 over main's 304.8 ceiling; the other rows did not move). Ceiling is the measured value + 0.5.
+// The guide parts that read a late signal, every mark transform on its items and the mark identifier (fix/abort-guide-parts-item-transforms) on
+// main with the Vega-Lite channel work, measured on a clean build (kB gzip): Chart + VL 306.5 (+0.8 over main's 305.7 ceiling). Ceiling is the
+// measured value + 0.5.
 const BUDGETS = {
-  '@aster/core': 149.7 * 1024,
+  '@aster/core': 151.0 * 1024,
   '+ @aster/core/dom': 11.1 * 1024,
   '+ @aster/core/canvas': 6.4 * 1024,
   '+ @aster/core/hit': 7.0 * 1024,
@@ -191,13 +197,13 @@ const BUDGETS = {
   '+ @aster/core/load': 5.9 * 1024,
   '+ @aster/core/geo': 16.6 * 1024,
   '+ @aster/core/transforms': 39.7 * 1024,
-  '@aster/react useChart': 161.2 * 1024,
-  '@aster/react Chart': 202.7 * 1024,
+  '@aster/react useChart': 162.4 * 1024,
+  '@aster/react Chart': 203.9 * 1024,
   // The light chart (`@aster/react/lite`): SVG only, no canvas renderer; alone and with the `interaction` capability.
-  '@aster/react SvgChart': 179.9 * 1024,
-  '@aster/react SvgChart + interaction': 197.2 * 1024,
+  '@aster/react SvgChart': 181.2 * 1024,
+  '@aster/react SvgChart + interaction': 198.3 * 1024,
   // Base + the VL compiler (opt-in: `import '@aster/react/vl'`).
-  '@aster/react Chart + VL': 305.7 * 1024,
+  '@aster/react Chart + VL': 307.0 * 1024,
 }
 
 const THIS_DIR = dirname(fileURLToPath(import.meta.url))

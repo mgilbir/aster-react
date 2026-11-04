@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+- **`@aster/core`: every transform of a mark runs on its encoded items, and a guide that reads a late signal is drawn as vega leaves
+  it.** A mark's transforms other than `lookup`, `force`, `label`, `voronoi`, `wordcloud`, `heatmap`, `linkpath` and `geopath` ran on
+  the data rows before the encode: a `formula` that read `datum.datum.a` threw, and what a transform wrote (`x`, `fill`, a stack's
+  `y`) was never drawn. All of them now run after the encode, on the items, through the path group marks use: they read what the
+  encode gave the items and write onto them, which is what is drawn; `geoshape` reads its feature off the item. A mark's `identifier`
+  numbers its items from the view's counter, after the datasets, and an item keeps its number from one evaluation to the next
+  (nested scopes are numbered in Aster's build order: see "Known differences not yet matched" in `docs/ERRORS.md`). What reads a late
+  signal that threw follows vega's dataflow: a mark whose encode reads it runs none of its transforms nor its sort, a transform that
+  reads it stops them there. The part of a guide whose encode reads it (a title's text, a label's color, a legend's symbol size) is
+  left unencoded, every part of the guide when it is the guide's group that reads it (an `offset`, a `padding`, a `format`), and the
+  view is not laid out; the generated guides of `differential-abort-trees` compare the picture where vega can draw it. A guide no
+  longer reads a property vega does not know for its kind (`columns` on an axis), so an expression there that does not parse is
+  accepted, as vega accepts it.
+
 - **`@aster/vl`: a longitude or latitude takes every definition vega-lite compiles.** `aggregate`, `bin`, `timeUnit`, `sort`,
   `stack`, `scale`, `axis`, `legend`, a value `condition`, `impute`, `band` and `bandPosition`, and any type but quantitative, were
   refused on longitude / latitude and their ends. vega-lite 6.4.3 projects the raw field whatever the definition says and reads the

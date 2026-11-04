@@ -34,9 +34,15 @@ export interface EntryScope {
 
 /**
  * An entry written as a function in place of an expression's text. `perRun` marks one that reads neither the datum nor the item
- * (a size, a view signal): its value is the same for every item of an evaluation.
+ * (a size, a view signal): its value is the same for every item of an evaluation. `reads` lists the properties of the spec it
+ * evaluates (an entry, a signal, a number): what the encode it is part of depends on, as an entry of its own would.
  */
-export type EntryFn = ((s: EntryScope) => unknown) & { perRun?: boolean }
+export type EntryFn = ((s: EntryScope) => unknown) & { perRun?: boolean; reads?: readonly unknown[] }
+
+/** Say which properties of the spec an entry function evaluates (see `EntryFn.reads`). */
+export function reading<F extends (s: EntryScope) => unknown>(fn: F, ...reads: unknown[]): F & EntryFn {
+  return Object.assign(fn, { reads })
+}
 export type Entry = EncodeValue | EncodeValue[] | EntryFn
 export type Block = Record<string, Entry | null | undefined>
 export interface MarkEncode {
@@ -216,6 +222,12 @@ export interface EntryHost {
   /** an entry threw that does not stop the pass: logged, and its channel left unset */
   note?(e: unknown): void
   stopped?: { error: unknown; at?: string; entryIndex?: number }
+  /**
+   * Whether an expression reads what never ran in this pass (a late signal that threw: see runtime.ts `withoutLateReads`). A mark
+   * whose encode reads one is never encoded: its items are what the join made, and so are those of the marks inside a group item
+   * left so (vega's encoders of a guide's marks listen to the encoder of the guide's group). Absent when nothing is left unrun.
+   */
+  unrun?: (code: string) => boolean
   /** a scale by name as an entry calls it (the engine's coercions around the call, its bandwidth), for the entries that read one */
   /** what this evaluation made of the steps' entries (closures over its scales) and of the per-run ones: it, not the steps, keeps them */
   fastCache: Map<object, unknown>
@@ -527,11 +539,36 @@ function planOfDef(def: GuideMarkDef, cfg: GuideStyles): Plan {
   return plan
 }
 
+/** The items whose encode never ran in this pass (see `EntryHost.unrun`): the marks a group item of them holds are never encoded either. */
+const UNRUN_ITEMS = new WeakSet<object>()
+
+/** Whether anything in the blocks of an encode, the entry functions' readings included, reads an expression that never ran. */
+function readsUnrun(encode: MarkEncode, unrun: (code: string) => boolean): boolean {
+  const seen = (v: unknown, depth: number): boolean => {
+    if (v === null || typeof v !== 'object' || depth > 12) {
+      return typeof v === 'function' && !!(v as EntryFn).reads?.some((r) => seen(r, depth + 1))
+    }
+    if (isArr(v)) return v.some((x) => seen(x, depth + 1))
+    for (const k in v as Rec) {
+      const x = (v as Rec)[k]
+      if (typeof x === 'string' ? (k === 'signal' || k === 'test') && unrun(x) : seen(x, depth + 1)) return true
+    }
+    return false
+  }
+  return [encode.enter, encode.update, encode.exit].some((block) => block !== undefined && seen(block, 0))
+}
+
+/** Whether a mark's encode never runs in this pass: it reads what never ran, or the group item it is in was left unencoded. */
+function neverEncoded(plan: Plan, group: Rec, host: EntryHost): boolean {
+  return host.unrun !== undefined && (UNRUN_ITEMS.has(group) || readsUnrun(plan.encode, host.unrun))
+}
+
 /** One item of a mark: the `enter` block, then the `update` block over it. */
 export function encodeItem(def: GuideMarkDef, datum: Row, group: Rec, host: EntryHost, cfg: GuideStyles): SceneItem {
   // (once the pass has stopped nothing is encoded: the item is what the mark's join made of its datum)
   if (host.stopped !== undefined) return bareItem(def)
   const plan = planOfDef(def, cfg)
+  if (neverEncoded(plan, group, host)) return unrunItem(def)
   const enter = plan.enter
   const item: Rec = enter.tmpl !== undefined ? { ...enter.tmpl } : def.seed !== undefined ? { ...def.seed } : {}
   const scope: EntryScope = { host, datum, item, group }
@@ -555,6 +592,16 @@ function bareItem(def: GuideMarkDef): SceneItem {
   return (def.seed !== undefined ? { ...def.seed } : {}) as SceneItem
 }
 
+/** Whether an item is one whose encode never ran in this pass (see `neverEncoded`): the caption of a guide reads nothing off it. */
+export const isUnencoded = (item: object): boolean => UNRUN_ITEMS.has(item)
+
+/** An item whose encode never ran in this pass (see `neverEncoded`): bare, and what it holds is never encoded either. */
+function unrunItem(def: GuideMarkDef): SceneItem {
+  const item = bareItem(def)
+  UNRUN_ITEMS.add(item)
+  return item
+}
+
 /**
  * Every item of a mark, one per datum. A mark whose channels are plain values, per-run values and positions over a scale
  * (a rule: the ticks and the grid lines of an axis) is made from one template per evaluation, the values that do not
@@ -562,6 +609,7 @@ function bareItem(def: GuideMarkDef): SceneItem {
  */
 export function encodeItems(def: GuideMarkDef, rows: Row[], group: Rec, host: EntryHost, cfg: GuideStyles): SceneItem[] {
   const plan = planOfDef(def, cfg)
+  if (neverEncoded(plan, group, host)) return rows.map(() => unrunItem(def))
   if (plan.batch === undefined) plan.batch = batchOf(plan)
   const batch = plan.batch
   if (rows.length < 1 || batch === null || host.stopped !== undefined) return rows.map((d) => encodeItem(def, d, group, host, cfg))
