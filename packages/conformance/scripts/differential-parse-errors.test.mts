@@ -17,6 +17,7 @@
  */
 import { describe, expect, it } from 'vitest'
 import { seeded } from './upstream.mts'
+import { referenceSpec } from './parse-refusal-gen.mts'
 import { WRAPPED } from '../../core/src/guide-model.ts'
 import { asterOutcome, BAD, GOOD, GUIDE_CASES, HANDLER_SHAPES, HANDLER_SITES, randomGuide, SEMANTIC, SITES, UNBOUND_HANDLER_SITES, vegaOutcome } from './expression-sites.mts'
 
@@ -93,5 +94,28 @@ describe('an expression a spec holds is refused as vega refuses it (Aster vs rea
       expect([...reasons.keys()].some((k) => k.startsWith(reason) || reason.startsWith(k)) || reason === 'TypeError', reason).toBe(true)
     }
     expect(accepted).toBeGreaterThan(40)
+  })
+
+  // the names a spec refers to outside its expressions and transforms: the scale of an axis or a legend, a facet's name, data and
+  // groups, a signal pushed to an outer scope (and what such a push must not say), the field a domain is sorted by, the domain a
+  // `domainMin` overrides -- present or not, in nested scopes, several in one spec (the first in vega's order is the one refused)
+  it('references made at random are refused as vega refuses them', () => {
+    const r = seeded(0x5ef5)
+    const bad: string[] = []
+    const reasons = new Map<string, number>()
+    let accepted = 0
+    for (let i = 0; i < 2000; i++) {
+      const spec = referenceSpec(r)
+      const want = vegaOutcome(spec)
+      const got = asterOutcome(spec)
+      if (want === 'ok') accepted++
+      else reasons.set(want.replace(/[:"].*$/, ''), (reasons.get(want.replace(/[:"].*$/, '')) ?? 0) + 1)
+      if (got !== want) bad.push(`#${i}: vega ${JSON.stringify(want)}, aster ${JSON.stringify(got)} in ${JSON.stringify(spec)}`)
+    }
+    expect(bad, `${bad.length} differ:\n${bad.slice(0, 6).join('\n')}`).toEqual([])
+    for (const reason of ['Unrecognized scale name', 'Missing valid scale for legend.', 'Facet must have a name', 'Facet must specify groupby or field', 'Undefined data set name', 'No prior signal definition for "outer" push', 'Invalid property  for "outer" push', 'No field provided for sort aggregate op', 'No scale domain defined for domainMin/domainMax to override.']) {
+      expect([...reasons.keys()].some((k) => reason.startsWith(k)), `${reason} in ${JSON.stringify([...reasons])}`).toBe(true)
+    }
+    expect(accepted).toBeGreaterThan(150)
   })
 })

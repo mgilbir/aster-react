@@ -9,6 +9,9 @@ import * as vega from 'vega'
 import { TRANSFORM_TYPES, TUPLE_MAKING_TRANSFORMS } from '../../core/src/transform-names.ts'
 import { transformParams } from '../../core/src/transform-params.ts'
 import { asterOutcome, type Spec, vegaOutcome } from './expression-sites.mts'
+import { seeded } from './upstream.mts'
+import { scaled } from './differential-gen.mts'
+import { transformSpec } from './parse-refusal-gen.mts'
 
 interface Param { name: string; type: string; expr?: boolean; params?: Array<{ params: Param[] }>; array?: boolean; required?: boolean; values?: unknown[] }
 interface Definition { params: Param[]; metadata?: { generates?: boolean; changes?: boolean } }
@@ -69,5 +72,35 @@ describe('the table of transform parameters is the definitions of the pinned veg
     }
     // (not vacuous: each transform that makes tuples is refused, on both marks)
     expect(refused).toBe(makes.length * 2)
+  })
+})
+
+/**
+ * What vega refuses when it parses a transform, generated from the definitions: transforms of every type, in data sets, in a group's data
+ * sets and on marks, each with its required parameters and others at random, with one or two parameters spoiled (left out though
+ * required, a list given as something else, a projection or a data set the scope does not have, a lookup without a literal `from`,
+ * sub-parameters of no known kind, not in a list, or missing what they require). Aster must refuse exactly when vega does, with its
+ * message (the first refusal in vega's order), and accept what vega accepts.
+ */
+describe('a transform is refused when it is parsed, as vega refuses it (generated from the definitions)', () => {
+  it(`${scaled(3000)} generated specs`, { timeout: 300_000 }, () => {
+    const r = seeded(0x7a2f)
+    const bad: string[] = []
+    const reasons = new Map<string, number>()
+    let accepted = 0
+    for (let i = 0; i < scaled(3000); i++) {
+      const { spec, label } = transformSpec(r)
+      const want = vegaOutcome(spec)
+      const got = asterOutcome(spec)
+      if (want === 'ok') accepted++
+      else reasons.set(want.replace(/[:"].*$/, ''), (reasons.get(want.replace(/[:"].*$/, '')) ?? 0) + 1)
+      if (got !== want) bad.push(`#${i} ${label}: vega ${JSON.stringify(want)}, aster ${JSON.stringify(got)}`)
+    }
+    expect(bad, `${bad.length} differ:\n${bad.slice(0, 10).join('\n')}`).toEqual([])
+    // (not vacuous: every kind of refusal is drawn, and many specs are accepted)
+    for (const reason of ['Missing required ', 'Lookup ', 'Undefined data set name', 'Unrecognized scale name', 'Unsupported parameter', 'Expected an array of sub-parameters. Instead', 'value.map is not a function', 'Cannot read properties of null (reading ']) {
+      expect([...reasons.keys()].some((k) => k.startsWith(reason) || reason.startsWith(k)), `${reason} in ${JSON.stringify([...reasons])}`).toBe(true)
+    }
+    expect(accepted).toBeGreaterThan(scaled(3000) * 0.15)
   })
 })
