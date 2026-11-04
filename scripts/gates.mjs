@@ -26,6 +26,7 @@ import { fileURLToPath } from 'node:url'
 export const GATES = [
   { name: 'build', args: ['build'], why: 'every package compiles to dist' },
   { name: 'deps', args: ['check:deps'], why: 'runtime and built dist import none of vega/d3/topojson' },
+  { name: 'knip', args: ['knip'], why: 'no unused files, exports or dependencies in the published packages, their tests and the conformance suite (knip.json)' },
   { name: 'typecheck', args: ['typecheck'], why: 'all workspaces typecheck' },
   { name: 'test', args: ['test'], why: 'unit, React interaction/SSR/a11y, script tests; the React component tests run on <Chart>, <SvgChart> and <SvgChart interaction> (variant matrix), with the thin-shell, matrix-coverage, type-parity and corpus-wide output-parity guards' },
   { name: 'tz-matrix', args: ['test:tz'], why: 'zone-sensitive tests and the time-zone corpus under non-UTC zones (UTC labels, local time scales)' },
