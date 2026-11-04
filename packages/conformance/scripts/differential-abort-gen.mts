@@ -84,10 +84,11 @@ function leafTransforms(r: Rng, type: string): Spec[] {
     [{ type: 'pie', field: 'x', as: ['p0', 'p1'] }, { type: 'formula', as: 'x', expr: 'datum.x + datum.p1 * 2' }],
     [{ type: 'dotbin', field: 'x', step: 4, as: 'x' }],
     [{ type: 'timeunit', field: 'datum.a', units: ['year'], as: ['t0', 't1'] }, { type: 'formula', as: 'y', expr: 'datum.y + (datum.t0 > 0 ? 3 : 9)' }],
-    // (the mark's defaults are the encode's: a line's width is 2 before its transforms run)
-    [{ type: 'formula', as: 'y', expr: 'datum.strokeWidth == 2 ? 20 : 8' }],
   ])
 }
+
+/** A transform that reads the mark's defaults: they are the encode's, so a line's width is 2 before its transforms run. */
+const READS_DEFAULTS: Spec = { type: 'formula', as: 'y', expr: 'datum.strokeWidth == 2 ? 20 : 8' }
 
 /** Transforms of a mark that has no data (one item, whose datum is empty): they read what the encode gave it. */
 function sourcelessTransforms(r: Rng): Spec[] {
@@ -153,13 +154,15 @@ function leaf(g: Gen, data: string): Spec {
     g.rootScales.push(badScale(id))
     g.used.add(fail)
   }
-  // (a late signal read by the encode, or by a transform of the mark: what reads it, and what comes after that, never runs)
+  // (a late signal read by the encode, by a transform of the mark or by its sort: what reads it, and what comes after that, never runs)
   let lateTransform: Spec | undefined
+  let lateSort: Spec | undefined
   if (fail === 'late-signal') {
     lateSignal(g, id)
     const where = g.r.int(10)
-    if (where < 6) update.opacity = { signal: `late${id}` }
-    else if (where < 9) lateTransform = { type: 'formula', as: g.r.pick(['y', 'opacity']), expr: `late${id} + 1` }
+    if (where < 5) update.opacity = { signal: `late${id}` }
+    else if (where < 8) lateTransform = { type: 'formula', as: g.r.pick(['y', 'opacity']), expr: `late${id} + 1` }
+    else if (where < 9) lateSort = { field: 'datum.k', order: { signal: `late${id}` } }
     g.used.add(fail)
   }
   // (a mark with no data has one item; its transforms run on it all the same)
@@ -167,13 +170,17 @@ function leaf(g: Gen, data: string): Spec {
   if (sourceless) update.x = { value: 5 + id }
   const mark: Spec = { type, name: `m${id}`, ...(sourceless ? {} : { from: { data } }), encode: { update } }
   // (the transforms and the sort of a mark run on its encoded items, after the encode, and write onto them)
-  const transforms: Spec[] = sourceless ? sourcelessTransforms(g.r) : g.r.chance(0.35) || lateTransform ? leafTransforms(g.r, type) : []
+  // (what reads a late signal never runs, nor what comes after it: the mark's transforms and its sort)
+  const transforms: Spec[] = sourceless ? sourcelessTransforms(g.r) : g.r.chance(0.35) || fail === 'late-signal' ? leafTransforms(g.r, type) : []
   if (lateTransform) transforms.splice(g.r.int(transforms.length + 1), 0, lateTransform)
+  if (type === 'line' && g.r.chance(0.4)) transforms.push(READS_DEFAULTS)
   if (fail === 'item-transform') {
     transforms.splice(g.r.int(transforms.length + 1), 0, failingItemTransform(g.r))
     g.used.add(fail)
   }
   if (transforms.length) mark.transform = transforms
+  if (lateSort) mark.sort = lateSort
+  else if (fail === 'late-signal' && g.r.chance(0.4)) mark.sort = { field: 'datum.a', order: 'descending' }
   // (a mark that fails in its encode and in its transform or sort too: vega runs the encode first)
   const both = fail === 'encode-and-transform' && g.r.chance(0.6)
   if (fail === 'transform' || both) {
