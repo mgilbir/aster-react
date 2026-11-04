@@ -30,6 +30,7 @@ import { parseEventSelectorString } from './event-selector.js'
 import { filterCode } from './stream-defs.js'
 import { legendType, LEGEND_CHANNELS, specList, stringValue } from './spec-structure.js'
 import { transformParams, type ParamKind } from './transform-params.js'
+import { TUPLE_MAKING_TRANSFORMS } from './transform-names.js'
 import { guideReading, legendLayout, legendSizeExpression, type GuideEnv, type GuideKind } from './guide-model.js'
 import { splitAccessPath } from './util.js'
 
@@ -427,7 +428,11 @@ class Check {
   private mark(m: Rec, lambdas: string[]): void {
     for (const key of ['interactive', 'clip']) this.lambdas(m[key], lambdas)
     this.encode(m.encode)
-    for (const t of specList(m.transform)) if (isRecord(t)) this.transform(t, lambdas)
+    for (const t of specList(m.transform)) {
+      if (!isRecord(t)) continue
+      this.transform(t, lambdas)
+      if (typeof t.type === 'string' && TUPLE_MAKING_TRANSFORMS.has(t.type.toLowerCase())) throw new SpecParseError('Mark transforms should not generate new data.')
+    }
     if (m.sort) {
       this.parameter(m.sort, 'compare')
       this.lambdas(m.sort, lambdas)
