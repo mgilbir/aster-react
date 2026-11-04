@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- **`@aster/vl`: every mark draws every channel as vega-lite draws it, whatever the channel's definition.** A datum on a size, opacity,
+  shape, dash, angle, theta, radius or text channel, and `scale: null` on any channel, were refused; they compile now (a datum is its
+  scale's domain, a field without a scale is read as it is, a position without a scale has no axis). The `key` channel is supported.
+  An arc is centred by x, y and their offsets (and stacks a quantitative x or y), theta and radius take values, datums and second
+  channels alone, and a text is placed by x and y around which theta and radius move it. A constant x or y on a bar, rect, tick or
+  image is laid out as a field is (the centre of a band, or one end of a range), an offset that is a value moves the mark, and size
+  conditions work on bars and ticks. Order and detail keep only their field definitions, as vega-lite does, and an order value is the
+  zindex of the items. A text, tooltip, href, url or description shows a condition's field as text. A non-GeoJSON shape field on a
+  geoshape is a shape legend, a constant longitude / latitude is no projected position, and channels a mark does not draw are no
+  longer validated. A condition that gives a field on a position is refused (listed under "Throws": the schema gives positions no
+  condition and vega-lite's output for it is incoherent). Pinned by `vl-mark-channels` (every mark x every channel x every kind of
+  definition, 6188 cases) against vega-lite 6.4.3.
+
 - **`@aster/vl`: `fill` and `stroke` paint every mark as vega-lite paints them, beside `color` and each other.** A fill on a stroked
   mark, a stroke on a filled one, and either beside a `color` were refused; now each paint channel has its scale and legend, a `color`
   gives way to the fill (filled mark) or stroke (unfilled mark) the encoding has, and every mark is painted by one rule (the mark
