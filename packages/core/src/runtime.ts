@@ -361,6 +361,8 @@ interface AbortPoint {
   legend?: number
   /** the pass failed in the encode of this mark of the instance (its `marks` index): the marks before it were made, the guides before it too */
   mark?: number
+  /** the pass failed in a transform or the sort of the mark at `mark`, which run on its encoded items: after its encode */
+  afterEncode?: true
   /** the pass failed in the title of the instance's group (the last operator of its scope) */
   title?: true
   /** the pass failed in the encode of the guide at this index: the guide is part-made (its ticks and entries were) */
@@ -374,6 +376,8 @@ interface AbortPoint {
   signals?: true
   /** a scale of the instance's scope could not be made (the scales come before everything else of it but its signals and projections) */
   scales?: true
+  /** a signal of the view that reads data or a scale threw: it is ranked after every other operator of the view's scope (see `abortAtThrowingSignal`) */
+  lateSignal?: true
   /** what the failing operator threw: logged once, for the point the pass stops at (see `buildContent`) */
   error?: unknown
 }
@@ -519,6 +523,10 @@ interface EvalContext {
   projectionError?: unknown
   /** a signal ranked last threw: the pass's post-run work (the layout that grows the padding) did not happen */
   postRunLost?: boolean
+  /** a late signal of the view threw: what was ranked after it did not run (see `abortAtThrowingSignal`) */
+  lateTaint?: LateTaint
+  /** the encode of the mark being made did not run: its items are the join's, bare */
+  bareEncode?: boolean
   /** the pass stopped before the root group's size was encoded (a signal threw): the frame is 0 x 0 */
   rootUnsized?: boolean
   /** The error each signal's expression threw the last time it was evaluated (a later evaluation that succeeds clears it). */
@@ -566,16 +574,17 @@ function stepOf(p: AbortPoint): number {
   if (p.labels) return 4e9 + (p.legend ?? 0)
   if (p.projection) return -1
   if (p.title) return 3e9
+  if (p.lateSignal) return 3.5e9
   if (p.legend !== undefined) return 2e9 + p.legend
-  if (p.mark !== undefined) return 1e9 + p.mark
+  if (p.mark !== undefined) return 1e9 + p.mark + (p.afterEncode ? 0.5 : 0)
   return p.axis
 }
 
 /** How many of the instance's axes and legends the pass that stopped at `cut` began (one that failed inside is part-made). */
 const madeAxes = (cut: AbortPoint): number => Math.max(0, cut.axis + (cut.inside && cut.legend === undefined ? 1 : 0))
-const madeLegends = (cut: AbortPoint): number => (cut.title || cut.labels ? Infinity : cut.legend === undefined ? 0 : cut.legend + (cut.inside ? 1 : 0))
+const madeLegends = (cut: AbortPoint): number => (cut.title || cut.labels || cut.lateSignal ? Infinity : cut.legend === undefined ? 0 : cut.legend + (cut.inside ? 1 : 0))
 /** Whether the pass that stopped at `cut` made the marks of the instance it stopped in (they are ranked after its axes only). */
-const madeMarks = (cut: AbortPoint): boolean => cut.legend !== undefined || cut.mark !== undefined || cut.title === true || cut.labels === true
+const madeMarks = (cut: AbortPoint): boolean => cut.legend !== undefined || cut.mark !== undefined || cut.title === true || cut.labels === true || cut.lateSignal === true
 
 function earlierPoint(a: AbortPoint, b: AbortPoint): AbortPoint {
   return (compareInstances(a.path, b.path) || stepOf(a) - stepOf(b)) <= 0 ? a : b
@@ -1098,6 +1107,44 @@ function signalReadsDataflow(chart: CompiledChart, defs: ReadonlyMap<string, num
   return false
 }
 
+/** The signals, scales and datasets of a view that read (directly or through each other) a signal that threw. */
+interface LateTaint { signals: Set<string>; scales: Set<string>; data: Set<string> }
+
+function lateTaintOf(chart: CompiledChart, failed: readonly string[]): LateTaint {
+  const t: LateTaint = { signals: new Set(failed), scales: new Set(), data: new Set() }
+  const reads = (node: unknown): boolean => {
+    let hit = false
+    walkStrings(node, (str, owner) => {
+      if (hit || owner === null) return
+      if (['signal', 'expr', 'test', 'update', 'init'].some((k) => owner[k] === str) && expressionIdentifiers(str).some((id) => t.signals.has(id))) hit = true
+    })
+    return hit
+  }
+  for (let changed = true; changed;) {
+    changed = false
+    for (const d of chart.signalDefs ?? []) if (!t.signals.has(d.name) && ([d.update, d.init].some((x) => typeof x === 'string' && expressionIdentifiers(x).some((id) => t.signals.has(id))) || reads(d.on))) { t.signals.add(d.name); changed = true }
+    for (const sc of chart.scales) if (!t.scales.has(sc.name) && reads(sc)) { t.scales.add(sc.name); changed = true }
+    for (const d of chart.data) if (!t.data.has(d.name) && (reads(d) || sourceNames(d).some((n) => t.data.has(n)))) { t.data.add(d.name); changed = true }
+  }
+  return t
+}
+
+/** Whether a mark (or what is in it) reads what a late signal that threw took with it: its encode did not run. */
+function markReadsTaint(mark: CompiledMark, ctx: EvalContext): boolean {
+  const t = ctx.lateTaint
+  if (t === undefined) return false
+  let hit = false
+  // (what a group holds is made in instances of its own, below: only its own operators read the signal here)
+  const own = { encode: mark.encode, from: mark.from, transform: mark.transform, sort: mark.sort }
+  walkStrings(own, (str, owner) => {
+    if (hit || owner === null) return
+    if (['signal', 'expr', 'test', 'update'].some((k) => owner[k] === str) && expressionIdentifiers(str).some((id) => t.signals.has(id))) hit = true
+    if (typeof owner.scale === 'string' && owner.scale === str && t.scales.has(str)) hit = true
+    if (t.data.has(str) && (owner.data === str || owner.from === str)) hit = true
+  })
+  return hit
+}
+
 /**
  * vega runs its signals first, in declaration order, and a signal whose expression throws stops the whole pass: it is logged,
  * the signals after it never get a value and nothing ranked after the signals runs -- every dataset, scale, mark and guide.
@@ -1112,14 +1159,26 @@ function abortAtThrowingSignal(ctx: EvalContext): string | undefined {
   const defs = ctx.chart.signalDefs ?? []
   const index = new Map<string, number>()
   defs.forEach((d, i) => { if (!index.has(d.name)) index.set(d.name, i) })
+  const failing = (name: string): boolean => errors.has(name) && !ctx.hostSignals.has(name)
+  const isLate = (name: string): boolean => signalReadsDataflow(ctx.chart, index, name, new Set()) || signalIsLate(ctx.chart, index, name, new Set())
+  // A signal that reads data or a scale, or one declared after it, is ranked after every other operator of the view's scope: vega
+  // re-ranks it past them when the dataflow connects its parameters. Everything ranked before it ran -- the datasets, the scales,
+  // the marks that do not read it, the guides, the title -- and what reads it, or what reads that, did not; the late signals after it
+  // did not run either. The pass stops there. (A signal that is not late runs before everything: one that throws is the first
+  // failure, in whatever order the signals are written.)
+  const lateFrom = defs.findIndex((d) => failing(d.name) && isLate(d.name))
+  if (lateFrom >= 0 && !defs.some((d) => failing(d.name) && !isLate(d.name))) {
+    const error = errors.get(defs[lateFrom]!.name)
+    refuseUnrecoverable(error)
+    ctx.postRunLost = true
+    ctx.failed = true
+    ctx.lateTaint = lateTaintOf(ctx.chart, defs.slice(lateFrom).filter((d) => isLate(d.name)).map((d) => d.name))
+    ctx.abort.failures.push({ path: [], axis: Infinity, lateSignal: true, error })
+    return undefined
+  }
   for (const def of defs) {
-    if (!errors.has(def.name) || ctx.hostSignals.has(def.name)) continue
-    // (one that reads data or a scale is settled only once they are built, with the signals they feed: not told from a throw)
-    if (signalReadsDataflow(ctx.chart, index, def.name, new Set())) continue
+    if (!failing(def.name) || isLate(def.name)) continue
     reportEvalError(ctx, errors.get(def.name))
-    // (a signal ranked after the datasets throws after them: they and the marks ran, and only the pass's post-run work, the
-    // layout that grows the padding, is lost: see the padding of evaluateChartImpl)
-    if (signalIsLate(ctx.chart, index, def.name, new Set())) { ctx.postRunLost = true; return undefined }
     ctx.rootUnsized = true
     for (const d of ctx.chart.data) {
       ;(ctx.failedDatasets ??= new Set()).add(d.name)
@@ -1941,7 +2000,11 @@ function buildContentPass(
 
   // The layout of the view is ranked after the last instance below it that has marks: it ran, and laid the guides out, when the pass
   // went past all of them (see `buildGroupItem`).
-  const unlaid = cut !== undefined && (compareInstances(ctx.scope.path, cut.path) === 0 || ctx.scope.unsettled === true
+  // (a late signal is ranked after the operators of the view's scope and before every instance below it: the view's layout, which
+  // is ranked after the last of those instances that has marks, ran if there is none)
+  const unlaid = cut !== undefined && ((compareInstances(ctx.scope.path, cut.path) === 0 && cut.lateSignal !== true) || ctx.scope.unsettled === true
+    // (a mark that reads the late signal connects its operators, ranked after it, to the layout)
+    || (cut.lateSignal === true && (ctx.chart.marks.some((m) => markReadsTaint(m, ctx)) || withoutLateReads(ctx, () => hasLateLabels(ctx.chart.legends, ctx))))
     || symbolLegendsOf(ctx.chart.legends, ctx).some((_, k) => compareInstances([ctx.scope.nextChild.n + k, 0], cut.path) >= 0))
   if (unlaid) ctx.rawGuides = true
 
@@ -1958,13 +2021,13 @@ function buildContentPass(
       ctx.layoutState.failed = true
     }
   }
-  const { groups: guideGroups } = stopped
+  const { groups: guideGroups } = withoutLateReads(ctx, () => stopped
     ? buildAxisAndLegend(ctx, items, ctx.chart.axes.slice(0, madeAxes(cut!)), ctx.chart.legends.slice(0, madeLegends(cut!)))
-    : buildAxisAndLegend(ctx, items)
+    : buildAxisAndLegend(ctx, items))
   for (const g of guideGroups) items.push(g)
 
   // Top-level title. (A pass that stopped at a failing dataset or signal never made it: it is ranked after them.)
-  const titleGroup = (stopped && !cut!.title && !cut!.labels) || ctx.datasetAborted ? null : buildTitleGroup(ctx.chart.title, items, width, height, ctx.rawGuides, ctx, undefined, ctx.chart.autosize === 'fit' || ctx.chart.autosize === 'fit-x' || ctx.chart.autosize === 'fit-y')
+  const titleGroup = (stopped && !cut!.title && !cut!.labels && !cut!.lateSignal) || ctx.datasetAborted ? null : withoutLateReads(ctx, () => buildTitleGroup(ctx.chart.title, items, width, height, ctx.rawGuides, ctx, undefined, ctx.chart.autosize === 'fit' || ctx.chart.autosize === 'fit-x' || ctx.chart.autosize === 'fit-y'))
   if (titleGroup) items.push(titleGroup)
   // The root group's width / height are the view's `width` / `height` signals (0
   // for a composition that sizes only its children), whatever the grid inside covers.
@@ -3267,6 +3330,8 @@ function evaluateMark(
   ctx: EvalContext,
   prevGroup?: SceneGroup | null,
 ): SceneGroup | SceneGroup[] | null {
+  // (the encode of a mark that reads what a late signal took with it never ran: its items are the join's)
+  if (ctx.lateTaint !== undefined && !ctx.bareEncode && markReadsTaint(mark, ctx)) ctx = { ...ctx, bareEncode: true }
   const built = evaluateMarkItems(mark, ctx, prevGroup)
   // a named mark's items are what a later mark of `from: {data: <name>}` reads
   if (built && typeof mark.name === 'string') {
@@ -3298,6 +3363,8 @@ function evaluateMarkItems(
   if (source && ctx.failedDatasets?.has(source)) return null
 
   let items: SceneItem[]
+  // a transform of the mark threw (see `failPass`): what ranks after it is not made
+  let stoppedAfterEncode = false
   // Union bounds carried over from the previous group (pure appends only) and
   // the items appended to it, so the cache survives without a recomputation.
   let carriedBounds: Bounds | undefined
@@ -3337,9 +3404,10 @@ function evaluateMarkItems(
           projections: ctx.projections,
         }, source)
       } catch (e) {
-        // a mark-level transform that throws publishes nothing (see buildDatasetsOf)
-        reportEvalError(ctx, e)
-        return null
+        // (vega runs a mark's transforms after its encode: the items are all made, and the pass stops at the transform that threw)
+        failPass(ctx, { axis: Infinity, mark: ctx.scope.mark ?? 0, afterEncode: true }, e)
+        stoppedAfterEncode = true
+        rows = rawRows.map((r) => ({ ...r }))
       }
     }
 
@@ -3461,8 +3529,11 @@ function evaluateMarkItems(
   // positions, a lookup of another mark's items by `datum.index`, a link path between looked-up items) run right
   // after the encode: the items are the transform's tuples, so `datum.datum` is the source datum. What they
   // compute is written onto the items, in order (the next transform reads it).
+  // (an encode that threw stopped the pass before them: they never ran, and the items stay in data order)
+  if (ctx.encodeAborted) stoppedAfterEncode = true
   for (const [k, t] of (mark.transform ?? []).entries()) {
     if (!isItemTransform(t) || !source || items.length === 0) continue
+    if (stoppedAfterEncode) break
     try {
       // (a transform that draws random numbers - the layout of a word cloud - draws them once for the inputs it is given, as
       // vega's operator does, not again for every evaluation of the scene: see random-tape.ts)
@@ -3482,16 +3553,22 @@ function evaluateMarkItems(
         items.forEach((it, i) => { Object.assign(it as unknown as Row, out[i]) })
       }
     } catch (e) {
-      reportEvalError(ctx, e)
+      failPass(ctx, { axis: Infinity, mark: ctx.scope.mark ?? 0, afterEncode: true }, e)
+      stoppedAfterEncode = true
     }
   }
 
   // vega's SortItems: a mark `sort` orders the ENCODED items by their own
   // properties (`x`, `datum.t`, `datum["t"]`), after the encode and before the
-  // bound pass; stable. A sort that throws is logged and the items stay in data order.
-  if (mark.sort && source) {
-    try { items = sortMarkItems(items, mark.sort) } catch (e) { reportEvalError(ctx, e) }
+  // bound pass; stable. A sort that throws stops the pass there: the items stay in data order.
+  if (mark.sort && source && !stoppedAfterEncode) {
+    try { items = sortMarkItems(items, mark.sort) } catch (e) {
+      failPass(ctx, { axis: Infinity, mark: ctx.scope.mark ?? 0, afterEncode: true }, e)
+      stoppedAfterEncode = true
+    }
   }
+  // (the marks after it are never made)
+  if (stoppedAfterEncode) ctx.encodeAborted = true
 
   // Vega's mark defaults (vega.js defaults()): line {strokeWidth: 2},
   // area {fill: '#4c78a8'}, text {fill: '#000'} — applied when the encode
@@ -3801,29 +3878,95 @@ function buildGroupMark(mark: CompiledMark, ctx: EvalContext): SceneGroup[] | nu
   if (sources === null) return null
   // one group item (and one scope) per datum / facet partition: bounded like any generated item (maxItems, the clock)
   meterItems(sources.length, 'group items')
-  const base = ctx.scope.nextChild.n
+  // A group mark's own operators are its enclosing scope's: every item is encoded, then the mark's transforms and its sort run on
+  // the items, and only then is what each item holds made (an instance of its own, ranked after them).
+  const entered = sources.map((src) => { meterTick('group item'); return enterGroupItem(mark, ctx, src) })
+  if (mark.transform?.length && entered.length && !ctx.encodeAborted) {
+    try {
+      transformGroupItems(mark, entered.map((g) => g.item), ctx)
+    } catch (e) {
+      failPass(ctx, { axis: Infinity, mark: ctx.scope.mark ?? 0, afterEncode: true }, e)
+      ctx.encodeAborted = true
+    }
+  }
+  // (an encode or a transform that threw stopped the pass before the sort)
+  const sorts = mark.sort !== undefined && !ctx.encodeAborted
   const settled = sources.map(() => ({ unsettled: false }))
-  const groups = sources.map((src, i) => { meterTick('group item'); return buildGroupItem(mark, ctx, src, settled[i]!) })
+  const groups = entered.map((g, i) => buildGroupItem(mark, ctx, g, settled[i]!))
   // The layout of a group mark is one operator for all its items, ranked after every instance below any of them: one item
   // with an instance the pass did not get to leaves all of them unlaid. The items made before that was known are made again.
   if (ctx.abort.cut !== undefined && groups.length > 1 && settled.some((o) => o.unsettled) && !settled.every((o) => o.unsettled)) {
-    sources.forEach((src, i) => {
-      if (settled[i]!.unsettled) return
-      ctx.scope.nextChild.n = base + i
-      groups[i] = buildGroupItem(mark, ctx, src, settled[i]!, true)
+    entered.forEach((g, i) => {
+      if (!settled[i]!.unsettled) groups[i] = buildGroupItem(mark, ctx, g, settled[i]!, true)
     })
-    ctx.scope.nextChild.n = base + sources.length
   }
   // a group mark with no items is still a container in the scenegraph (vega-scenegraph draws every mark's `<g>`)
   if (!groups.length) return [{ marktype: 'group', role: (mark.role as string | undefined) ?? 'scope', name: mark.name, items: [], emptyMark: true, markIndex: markIdOf(mark), ...markContainerInfo(mark), ...(markClip(mark, ctx) ? { markClip: true } : {}) } as unknown as SceneGroup]
   // SortItems: the group items are ordered by their own properties (`datum["g"]`, `x`, ...)
-  if (mark.sort && groups.length > 1) {
-    try { return sortMarkItems(groups as SceneItem[], mark.sort) as SceneGroup[] } catch (e) {
-      // vega logs a sort that throws and leaves the items in data order
-      reportEvalError(ctx, e)
+  if (sorts && groups.length > 1) {
+    try { return sortMarkItems(groups as SceneItem[], mark.sort!) as SceneGroup[] } catch (e) {
+      // the SortItems operator threw: the items stay in data order, and the pass stops there
+      failPass(ctx, { axis: Infinity, mark: ctx.scope.mark ?? 0, afterEncode: true }, e)
+      ctx.encodeAborted = true
     }
   }
   return groups
+}
+
+/** A group item as its mark's own operators leave it: where its instance sits, and its encoded properties (with its `datum`). */
+interface EnteredGroup {
+  src: GroupSource
+  /** the instance of the item's scope (see `GuideScope.path`) */
+  path: number[]
+  /** the encoded item: what the mark's transforms read and write */
+  item: SceneItem & { datum?: Row }
+}
+
+/**
+ * Encode one group item, in the scope its mark is in: the item's own signals, data sets and projections are its content's, which
+ * the encode cannot read. Its instance takes the next place among the instances of the enclosing scope.
+ */
+function enterGroupItem(mark: CompiledMark, ctx: EvalContext, src: GroupSource): EnteredGroup {
+  const path = [...ctx.scope.path, ctx.scope.nextChild.n++]
+  // (`parent` is the enclosing group's datum here, as for any mark of the scope; a failing encode stops the run: see failEncode)
+  const item = resolveEncodeSet((mark.encode?.update ?? {}) as Record<string, EncodeValue | EncodeValue[]>, src.datum, ctx, 'group')
+  return { src, path, item: Object.assign(item, { datum: src.datum }) }
+}
+
+/** The tuple a mark transform was given for an item: a transform that copies its tuples copies this too (see `transformGroupItems`). */
+const ITEM_OF = Symbol('item')
+
+/**
+ * A group mark's transforms, run on its encoded items as vega runs a mark's: a transform reads the items (`datum.x`, `datum.datum.k`)
+ * in the order the one before it left them, and what it computes is written onto them, where what the group holds reads it (its
+ * `{group: "width"}`) and the group is drawn by it. A transform that works on copies of its tuples has its copies written back onto
+ * the items they came from.
+ */
+function transformGroupItems(mark: CompiledMark, items: Array<SceneItem & { datum?: Row }>, ctx: EvalContext): void {
+  const own = items as unknown as Array<Row & { [ITEM_OF]?: Row }>
+  for (const it of own) it[ITEM_OF] = it
+  const tctx: TransformContext = {
+    runtime: ctx.runtime, signals: ctx.signalParams, hierarchies: ctx.hierarchies, projections: ctx.projections,
+    datasets: (n) => ctx.datasets.get(n) ?? (ctx.markItems.get(n) as unknown as Row[] | undefined),
+    marks: (n) => ctx.markContainers.get(n),
+    // (an `identifier` numbers the items from 1, as a mark's other transforms do: not from the view's counter)
+    inPlace: true,
+  }
+  try {
+    let rows: Row[] = own
+    for (const [k, t] of (mark.transform ?? []).entries()) {
+      const input = rows
+      const out = atRandomSite(mayDrawRandom(t) ? ctx.runtime.random : undefined, `mark:${ctx.scopeId ?? ''}/${markIdOf(mark)}#${k}`, () => randomFingerprint(t, input.map(publicProps), ctx.signalParams), () => applyTransforms(input, [t], tctx, undefined, true))
+      rows = out.map((r) => {
+        const it = (r as { [ITEM_OF]?: Row })[ITEM_OF]
+        if (it === undefined || it === r) return r
+        Object.assign(it, r)
+        return it
+      })
+    }
+  } finally {
+    for (const it of own) delete it[ITEM_OF]
+  }
 }
 
 const GROUP_PAINT_KEYS = ['fill', 'stroke', 'strokeWidth', 'strokeOpacity', 'fillOpacity', 'opacity', 'strokeDash', 'strokeDashOffset', 'strokeCap', 'strokeJoin', 'strokeMiterLimit', 'strokeOffset'] as const
@@ -3947,7 +4090,8 @@ function scopeSignalValues(mark: CompiledMark, ctx: EvalContext, id: string, bas
   return { params, values }
 }
 
-function buildGroupItem(mark: CompiledMark, ctx: EvalContext, src: GroupSource, outcome?: { unsettled: boolean }, unsettled = false): SceneGroup {
+function buildGroupItem(mark: CompiledMark, ctx: EvalContext, entered: EnteredGroup, outcome?: { unsettled: boolean }, unsettled = false): SceneGroup {
+  const { src, path, item: geo } = entered
   const num = (v: unknown): number | undefined => (typeof v === 'number' && Number.isFinite(v) ? v : undefined)
   // the facet partition is a dataset for everything in this item's scope, its own scales included
   const savedFacet = src.facetName !== undefined ? ctx.datasets.get(src.facetName) : undefined
@@ -3966,7 +4110,6 @@ function buildGroupItem(mark: CompiledMark, ctx: EvalContext, src: GroupSource, 
     const outerParams = hasParent ? { ...ctx.signalParams, parent: src.parent ?? src.datum } : ctx.signalParams
     const scopeId = mark.signalDefs?.length ? `${ctx.scopeId ? ctx.scopeId + '/' : ''}${mark.userName ?? ''}@${markIdOf(mark)}${src.key !== undefined && src.key !== '' ? `[${src.key}]` : ''}` : undefined
     // vega builds the instances of nested scopes level by level: what an aborted pass did not reach is not made
-    const path = [...ctx.scope.path, ctx.scope.nextChild.n++]
     const scoped = scopeId !== undefined ? scopeSignalValues(mark, ctx, scopeId, outerParams, path) : undefined
     const scopeParams = scoped ? scoped.params : outerParams
     const order = ctx.abort.cut === undefined ? -1 : compareInstances(path, ctx.abort.cut.path)
@@ -3994,11 +4137,6 @@ function buildGroupItem(mark: CompiledMark, ctx: EvalContext, src: GroupSource, 
       savedData.push([d.name, ctx.datasets.get(d.name)])
       ctx.datasets.set(d.name, rows)
     }
-    const encode = (mark.encode?.update ?? {}) as Record<string, EncodeValue | EncodeValue[]>
-    const encodeCtx = scoped ? { ...ctx, signalParams: scopeParams } : ctx
-    const geo = resolveEncodeSet(encode, src.datum, encodeCtx, 'group')
-    // (the stop is the run's: the items of this mark after the failing one, and the marks after it, are made nothing of)
-    if (encodeCtx.encodeAborted) ctx.encodeAborted = true
     const gx = num(geo.x) ?? 0
     const gy = num(geo.y) ?? 0
     const gw = Math.max(0, num(geo.width) ?? 0)
@@ -4090,7 +4228,7 @@ function buildGroupItem(mark: CompiledMark, ctx: EvalContext, src: GroupSource, 
         ? buildAxisAndLegend(guideCtx, content, (mark.axes ?? []).slice(0, madeAxes(ctx.abort.cut!)), (mark.legends ?? []).slice(0, madeLegends(ctx.abort.cut!)))
         : buildAxisAndLegend(guideCtx, content, mark.axes ?? [], mark.legends ?? [])
     const siblings: SceneGroup[] = [...content, ...guides]
-    const title = hollow || order > 0 || (order === 0 && !whole && !ctx.abort.cut!.title && !ctx.abort.cut!.labels) ? null : buildTitleGroup(mark.groupTitle, siblings, gw, gh, !!scope.unsettled, guideCtx, src.datum)
+    const title = hollow || order > 0 || (order === 0 && !whole && !ctx.abort.cut!.title && !ctx.abort.cut!.labels && !ctx.abort.cut!.lateSignal) ? null : buildTitleGroup(mark.groupTitle, siblings, gw, gh, !!scope.unsettled, guideCtx, src.datum)
     if (title) siblings.push(title)
     const ordered = paintOrderOf(siblings)
 
@@ -4291,7 +4429,7 @@ function failEncode(ctx: EvalContext, e: unknown): void {
 
 function resolveEncodeSet(encode: Record<string, EncodeValue | EncodeValue[]>, datum: Row, ctx: EvalContext, marktype: string): SceneItem {
   // (an item an aborted run never reached stays in its mark, bare: vega's scenegraph holds it without geometry or paint)
-  if (ctx.encodeAborted) return {}
+  if (ctx.encodeAborted || ctx.bareEncode === true) return {}
   const plan = encodePlan(encode)
   const binding = ctx.encodeBinding
 
@@ -4693,6 +4831,19 @@ function entryGridRan(scopePath: readonly number[], slot: number, cut: readonly 
   const own = [...scopePath, slot]
   if (cut.length > own.length && own.every((v, i) => cut[i] === v)) return false
   return compareInstances([...own, 0], cut) < 0
+}
+
+/** Whether a gradient legend of the list has labels ranked after the scope's other operators (see `lateLabels` in `buildLegend`). */
+function hasLateLabels(legends: readonly CompiledLegend[] | undefined, ctx: EvalContext): boolean {
+  for (const legend of legends ?? []) {
+    const spec = (legend.own ?? NO_PROPS) as Record<string, unknown>
+    const config = (legend.cfg ?? NO_PROPS) as Record<string, unknown>
+    const channel = LEGEND_SCALES.find((c) => spec[c])
+    if (channel === undefined) continue
+    const name = String(spec[channel])
+    if (ctx.scales.get(name) !== undefined && legendType(spec, ctx.scaleTypes.get(name) ?? '') === 'gradient' && !guideScalar(ctx, spec.tickCount ?? config.tickCount)) return true
+  }
+  return false
 }
 
 /** The legends of a scope that are symbol legends (the ones whose entries are made in instances of their own). */
@@ -5167,10 +5318,56 @@ function labelTickCount(axis: CompiledAxis, scale: Scale, count: number, ctx: Ev
   return typeof counted === 'number' ? counted : count
 }
 
+/**
+ * Build the view's guides with what reads a late signal that threw left out: in vega the operators that read it never ran, so an
+ * expression of a guide that reads it gives nothing here, and throws nothing.
+ */
+function withoutLateReads<T>(ctx: EvalContext, build: () => T): T {
+  if (ctx.lateTaint === undefined) return build()
+  const runtime = ctx.runtime
+  const expr = runtime.expr
+  runtime.expr = (code) => (readsLateSignal(code, ctx) ? nothing : expr(code))
+  try { return build() } finally { runtime.expr = expr }
+}
+const nothing = (): undefined => undefined
+
+/** Whether an expression reads a late signal that threw (or one that reads it): vega never ran what reads it. */
+function readsLateSignal(code: string, ctx: EvalContext): boolean {
+  const t = ctx.lateTaint
+  return t !== undefined && expressionIdentifiers(code).some((id) => t.signals.has(id))
+}
+
+/**
+ * Whether the ticks of an axis read a late signal that threw (its parameters of vega's AxisTicks: `tickCount`, `values`, `tickMinStep`,
+ * `format`, `formatType`, `tickExtra`). That operator is then ranked after the signal and never runs: the axis has no ticks.
+ */
+function axisTicksReadLate(own: Record<string, unknown>, cfg: Record<string, unknown>, ctx: EvalContext): boolean {
+  if (ctx.lateTaint === undefined) return false
+  let hit = false
+  const params = { tickCount: own.tickCount, values: own.values, tickMinStep: own.tickMinStep, format: own.format, formatType: own.formatType, tickExtra: own.tickExtra ?? cfg.tickExtra }
+  walkStrings(params, (str, owner) => {
+    if (!hit && owner !== null && owner.signal === str && readsLateSignal(str, ctx)) hit = true
+  })
+  return hit
+}
+
 function buildAxis(axis: CompiledAxis, ctx: EvalContext, index: number): SceneGroup | null {
   const scale = ctx.scales.get(axis.scale)
   if (!scale) return null
   const orient = String(axis.orient)
+  const own = (axis.own ?? NO_PROPS) as Record<string, unknown>
+  const cfg = (axis.cfg ?? NO_PROPS) as Record<string, unknown>
+  // Ticks that read a late signal that threw were never made. The axis's tick, label and grid marks are made from them, after them:
+  // none of those is in vega's scenegraph, which keeps their places empty, and vega's own renderers cannot draw it (its `toSVG`
+  // rejects; a view logs a second error and stops drawing there). As where the ticks fail of a scale ranked late (axisTicksFailed),
+  // that is refused -- once the pass is known to make the axis (the first pass only finds where it stops).
+  if (ctx.abort.cut !== undefined && axisTicksReadLate(own, cfg, ctx)) {
+    const parts = propsOf(own, cfg)
+    if (parts.get('ticks', true) || parts.get('labels', true) || parts.get('grid', false)) {
+      const e = ctx.abort.failures.find((f) => f.lateSignal)?.error
+      throw new Error(`[aster] the ticks of the axis over scale "${axis.scale}" read a signal that threw (${e instanceof Error ? e.message : String(e)}); vega cannot draw the half-built axis either`)
+    }
+  }
   let ticks: unknown[]
   try {
     ticks = axisTicks(axis, scale, ctx)
@@ -5194,8 +5391,6 @@ function buildAxis(axis: CompiledAxis, ctx: EvalContext, index: number): SceneGr
   } catch (e) {
     return axisTicksFailed(axis, ctx, e, index)
   }
-  const own = (axis.own ?? NO_PROPS) as Record<string, unknown>
-  const cfg = (axis.cfg ?? NO_PROPS) as Record<string, unknown>
   // vega-encode AxisTicks tuples, the datum a tick / label / grid encode reads:
   // `{index (fraction 0..1), tickIndex, value, label}`; the `extra` entry (an
   // extra tick pegged to the first value, for binned axes) is
