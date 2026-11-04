@@ -505,7 +505,6 @@ the ref (`SvgChartHandle`) has every `ChartHandle` member; `src/parity.assert.ts
 added to `<Chart>` without a decision about `<SvgChart>` fails `pnpm typecheck`.
 
 ```tsx
-import * as React from 'react'
 import { SvgChart } from '@aster/react/lite'
 import { interaction } from '@aster/react/interaction'
 import type { VgSpec } from '@aster/core'

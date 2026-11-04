@@ -1,7 +1,6 @@
 // Must NOT compile, exactly at the lines marked `@error`: <SvgChart> without `interaction` rejects every prop that
 // needs hit testing or the event loop, and the canvas renderer. A line carrying `@error` on the line above it
 // must produce a diagnostic, and no other line may.
-import * as React from 'react'
 import { SvgChart } from '../src/SvgChart.js'
 import { interaction } from '../src/interaction-capability.js'
 import type { InteractionCapability } from '../src/capabilities.js'

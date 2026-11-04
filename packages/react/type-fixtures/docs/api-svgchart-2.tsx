@@ -1,4 +1,3 @@
-import * as React from 'react'
 import { SvgChart } from '@aster/react/lite'
 import { interaction } from '@aster/react/interaction'
 import type { VgSpec } from '@aster/core'
