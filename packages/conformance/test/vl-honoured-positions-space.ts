@@ -15,9 +15,10 @@ const K = { field: 'k', type: 'nominal' }
 export const MARKS = ['point', 'circle', 'square', 'tick', 'bar', 'rect', 'rule', 'line', 'area', 'trail', 'text'] as const
 
 /** What the rest of the encoding of `mark` needs, with `pos` the position under test on `channel`. */
-function around(mark: string, channel: 'x' | 'y', pos: Obj): Obj {
+function around(mark: string, channel: 'x' | 'y', pos: Obj, partner?: Obj): Obj {
   const other = channel === 'x' ? 'y' : 'x'
-  const rest: Obj = mark === 'bar' ? { [other]: { aggregate: 'sum', field: 'v', type: 'quantitative' } }
+  const rest: Obj = partner ? { [other]: partner }
+    : mark === 'bar' ? { [other]: { aggregate: 'sum', field: 'v', type: 'quantitative' } }
     : mark === 'rect' ? { [other]: K }
     : { [other]: V }
   return { ...rest, [channel]: pos, ...(mark === 'text' ? { text: { field: 'k', type: 'nominal' } } : {}) }
@@ -45,6 +46,11 @@ export function* markPositionCases(mark: string): Generator<Case> {
         for (const bp of BAND_POSITIONS) {
           const pos = { ...def, scale: { type }, ...(bp !== undefined ? { bandPosition: bp } : {}) }
           yield [`${mark} ${channel}: ${dn}, ${type}, bandPosition ${bp}`, { data: { values: TIME_DATA }, mark, encoding: around(mark, channel, pos) }]
+        }
+        // (a temporal field on the other channel: the bar, rect or tick is then sized on this one's scale whatever its type)
+        if (mark === 'bar' || mark === 'rect' || mark === 'tick') {
+          const pos = { ...def, scale: { type } }
+          yield [`${mark} ${channel}: ${dn}, ${type}, the other channel temporal`, { data: { values: TIME_DATA }, mark, encoding: around(mark, channel, pos, { field: 't', type: 'temporal' }) }]
         }
       }
     }
