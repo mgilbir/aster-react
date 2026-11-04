@@ -136,9 +136,8 @@ vega-lite supports and is not here compiles to the same Vega.)
   channel's own; an array of conditions that holds a field condition; `impute` or
   pre-binned data (`binned`) on a channel other than x and y; the `geojson` type on a channel other than shape, a shape field that is not
   GeoJSON on a geoshape, and a GeoJSON shape on any other mark.
-- Scales and encodings: channel-level `band`; `size` conditions on bars and ticks (a size constant
-  or field works); the positional mark-def constants `x` / `x2` / `y` / `y2`, except `x` / `y` on point, circle,
-  square and text.
+- Scales and encodings: channel-level `band`; the positional mark-def constants `x` / `x2` / `y` / `y2`, except
+  `x` / `y` on point, circle, square and text.
 - Layout: `width` / `height: "container"` on a composition (only a top-level unit or layer), `data: null`, config keys
   outside the supported list, a wrapped facet (a single `facet` field) around or inside another facet, a selection or
   a map inside a facet inside a facet, independent x / y scales in a facet that holds another facet, a concat in a

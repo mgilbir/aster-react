@@ -5216,6 +5216,8 @@ function buildScales(spec: VLSpec, fieldsIn: FieldDef[], mark: string, orient: s
   }
 
   // the colour scales: one for each paint channel that has a field
+  // (range.ts: a rect or a geoshape is coloured from the heatmap scheme; an image, which is laid out as a rect, is not one)
+  const heatmapMark = (mark === 'rect' && !(isObject(spec.mark) && spec.mark.$image === true)) || mark === 'geoshape'
   for (const colorScaleName of PAINT_CHANNELS) {
     const colorDef = fields.find((f) => f.channel === colorScaleName && f.field)
     const numericAggregate = colorDef?.aggregate != null && ['count', 'distinct', 'valid', 'missing'].includes(colorDef.aggregate)
@@ -5242,7 +5244,7 @@ function buildScales(spec: VLSpec, fieldsIn: FieldDef[], mark: string, orient: s
             name: colorScaleName,
             type: 'bin-ordinal',
             domain: undefined,
-            range: cs.range != null ? rangeRef(colorDef, dataName, cs.range) : cs.scheme != null ? schemeRange(cs.scheme) : mark === 'rect' || mark === 'geoshape' ? 'heatmap' : 'ramp',
+            range: cs.range != null ? rangeRef(colorDef, dataName, cs.range) : cs.scheme != null ? schemeRange(cs.scheme) : heatmapMark ? 'heatmap' : 'ramp',
             bins: { signal: binNames(colorDef.binParams!, colorDef.field).signal },
             interpolate: 'hcl',
             ...(cs.reverse !== undefined ? { reverse: Boolean(cs.reverse) } : colorDef.sort === 'descending' ? { reverse: true } : {}),
@@ -5267,7 +5269,7 @@ function buildScales(spec: VLSpec, fieldsIn: FieldDef[], mark: string, orient: s
             ? { range: rangeRef(colorDef, dataName, cs.range) }
             : cs.scheme != null
               ? { range: schemeRange(cs.scheme) }
-              : { range: cs.domainMid != null ? 'diverging' : mark === 'rect' || mark === 'geoshape' ? 'heatmap' : 'ramp' }),
+              : { range: cs.domainMid != null ? 'diverging' : heatmapMark ? 'heatmap' : 'ramp' }),
           // vega-lite sets the colorspace for continuous color scales (probed:
           // interpolate hcl on ramp/scheme/diverging alike)
           interpolate: 'hcl',
@@ -6762,7 +6764,8 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
         if (primary !== undefined && (isStacked(primary, mark, orient, fields) || (RECT_BASED_MARKS.has(mark) && binsItself(primary)))) continue
         // (tick.ts: the thickness axis of a tick is positioned by its centre, `xc` / `yc`)
         const thickness = mark === 'tick' && ch === (orient === 'horizontal' ? 'y' : 'x')
-        update[thickness ? `${ch}c` : ch] = { value: d.value }
+        if (ch.length === 1 && !thickness && RECT_EXTENT_MARKS.has(mark) && enc[`${ch}2`] == null) constantRectPosition(update, spec, mark, orient, ch as 'x' | 'y', { value: d.value })
+        else update[thickness ? `${ch}c` : ch] = { value: d.value }
       }
     }
     // (a field without a scale is laid out as a constant is: it has no band, nor a range of its own)
@@ -6850,6 +6853,22 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
   // a link: markDef.href is the mark's href, and any href (mark, config or channel) makes the cursor a pointer
   if (markDefP?.href !== undefined && update.href === undefined) update.href = { value: markDefP.href }
   if ((update.href !== undefined || passProp('href') !== undefined) && update.cursor === undefined) update.cursor = { value: 'pointer' }
+  // offset.ts positionOffset: an xOffset / yOffset channel that is a value (a condition on it is not read: a position takes no
+  // condition) moves the mark's place by that many pixels, ahead of the mark def's offset
+  {
+    const enc = isObject(spec.encoding) ? (spec.encoding as Record<string, unknown>) : {}
+    for (const pos of ['x', 'y'] as const) {
+      const off = enc[`${pos}Offset`]
+      if (!isObject(off) || off.value === undefined || off.field !== undefined || off.datum !== undefined) continue
+      const key = update[pos] !== undefined ? pos : `${pos}c`
+      const ref = update[key]
+      if (isObject(ref)) ref.offset = { value: off.value }
+      // (position-range.ts position2Ref: the start of a stack, the other end of a stacked range, moves with it)
+      const ref2 = update[`${pos}2`]
+      const stackedDef = fields.find((f) => f.channel === pos && f.field && isStacked(f, mark, orient, fields))
+      if (key === pos && stackedDef !== undefined && isObject(ref2) && enc[`${pos}2`] == null) update[`${pos}2`] = { ...ref2, offset: { value: off.value } }
+    }
+  }
   // markDef.xOffset/yOffset shift the corresponding positional channels
   // (including their secondary endpoint and centered forms) — probed.
   const xOff = markDefP?.xOffset as number | undefined
@@ -7818,13 +7837,16 @@ function markIsFilled(spec: VLSpec, mark: string): boolean {
 }
 
 /** The Vega encode property a non-position channel writes on a mark. Throws where that mapping is not implemented. */
-function vgPropFor(channel: string, mark: string, filled: boolean): string {
+function vgPropFor(channel: string, mark: string, filled: boolean, orient: string | undefined): string {
   switch (channel) {
     case 'color': return filled ? 'fill' : 'stroke'
     case 'size':
       if (mark === 'point' || mark === 'circle' || mark === 'square' || mark === 'trail') return 'size'
       if (mark === 'text') return 'fontSize'
       if (mark === 'line' || mark === 'rule') return 'strokeWidth'
+      // (position-rect.ts positionAndSize, tick.ts: the size of a bar or a tick is its extent along the axis it stands on)
+      if (mark === 'bar') return orient === 'horizontal' ? 'height' : 'width'
+      if (mark === 'tick') return orient === 'horizontal' ? 'width' : 'height'
       throw new VLCompileError(`encoding.size is not supported on the "${mark}" mark`)
     default: return channel
   }
@@ -7881,7 +7903,7 @@ function applyNonPositionConstants(update: Record<string, unknown>, spec: VLSpec
     // (the paint channels are the mark's paint: markPaint)
     if (!isObject(def) || !NON_POSITION_CHANNELS.has(channel) || isPaintChannel(channel)) continue
     if (def.condition === undefined && def.value === undefined) continue
-    const prop = vgPropFor(channel, mark, filled)
+    const prop = vgPropFor(channel, mark, filled, markOrient(spec, mark, spec.mark, fields))
     // (conditional.ts wrapCondition: a condition-only channel falls back to the mark's default for that property)
     const main = def.value !== undefined ? { value: def.value } : (update[prop] as Record<string, unknown> | undefined)
     const ref = withConditions(conditionEntries(spec, fields, channel, def), main)
@@ -8177,7 +8199,7 @@ function showInvalidValues(spec: VLSpec, fields: FieldDef[], mark: string, scale
       const scaleCh = ch === 'x2' || ch === 'y2' ? ch[0]! : ch
       if ((scaleCh === 'x' || scaleCh === 'y') ? !positional : !['color', 'fill', 'stroke', 'size', 'opacity', 'fillOpacity', 'strokeOpacity', 'strokeWidth', 'angle'].includes(ch)) continue
       // (a centred bar position is `xc` / `yc`)
-      const prop = ch === 'color' || ch === 'size' ? vgPropFor(ch, mark, filled) : (ch === 'x' || ch === 'y') && update[ch] === undefined && update[`${ch}c`] !== undefined ? `${ch}c` : ch
+      const prop = ch === 'color' || ch === 'size' ? vgPropFor(ch, mark, filled, markOrient(spec, mark, spec.mark, fields)) : (ch === 'x' || ch === 'y') && update[ch] === undefined && update[`${ch}c`] !== undefined ? `${ch}c` : ch
       const cur = update[prop]
       const main = (Array.isArray(cur) ? cur[cur.length - 1] : cur) as Record<string, unknown> | undefined
       const sc = scales.find((x) => x.name === scaleCh)
@@ -8340,10 +8362,13 @@ function liftBandSizeValue(spec: VLSpec): void {
   const markRaw = spec.mark
   const mark = typeof markRaw === 'string' ? markRaw : isObject(markRaw) ? markRaw.type : undefined
   const def = (mark === 'bar' || mark === 'tick') && isObject(spec.encoding) ? (spec.encoding as Record<string, unknown>).size : undefined
-  if (!isObject(def) || def.value === undefined || def.field !== undefined || def.datum !== undefined || def.condition !== undefined) return
-  const { size: _size, ...rest } = spec.encoding as Record<string, unknown>
-  void _size
-  spec.encoding = rest
+  if (!isObject(def) || def.value === undefined || def.field !== undefined || def.datum !== undefined) return
+  // (a size with conditions stays a channel, its conditions over the value: the value lays the mark out as a mark def size does)
+  if (def.condition === undefined) {
+    const { size: _size, ...rest } = spec.encoding as Record<string, unknown>
+    void _size
+    spec.encoding = rest
+  }
   spec.mark = { ...(isObject(markRaw) ? markRaw : { type: markRaw }), size: def.value }
 }
 

@@ -48,7 +48,6 @@ const REFUSED: Array<[string, Record<string, unknown>]> = [
   ['a shape field that is not\n  GeoJSON on a geoshape', { data: { values: [{ type: 'Feature', geometry: { type: 'Point', coordinates: [0, 0] }, a: 'A' }] }, ...proj, mark: 'geoshape', encoding: { shape: n('a') } }],
   ['a GeoJSON shape on any other mark', unit('point', { x: q('b'), shape: { field: 'g', type: 'geojson' } })],
   ['channel-level `band`', unit('bar', { x: { field: 'd', type: 'temporal', timeUnit: 'month', band: 0.5 } })],
-  ['`size` conditions on bars and ticks', unit('bar', { x: n('a'), y: q('b'), size: { condition: { test: 'datum.b > 1', value: 3 }, value: 5 } })],
   ['the positional mark-def constants', unit({ type: 'bar', x: 5 }, { y: q('b') })],
   ['`width` / `height: "container"` on a composition', { data, width: 'container', hconcat: [{ mark: 'point', encoding: { x: q('b') } }] }],
   ['`data: null`', { data: null, mark: 'point' }],
@@ -85,6 +84,7 @@ const COMPILES: Array<[string, Record<string, unknown>]> = [
   ['a point mark in a facet', { data, facet: { row: { field: 'a' } }, spec: { ...proj, mark: 'point', encoding: lonlat } }],
   ['`scale: null` on a position', unit('point', { x: { ...q('b'), scale: null } })],
   ['a `datum` on a size', unit('point', { x: q('b'), size: { datum: 2 } })],
+  ['`size` conditions on bars and ticks', unit('bar', { x: n('a'), y: q('b'), size: { condition: { test: 'datum.b > 1', value: 3 }, value: 5 } })],
   ['the key channel', unit('point', { x: q('b'), key: n('a') })],
   ['a selection on a named view', { data, params: [sel], hconcat: [{ name: 'v', mark: 'point', encoding: { x: q('b') } }] }],
 ]
@@ -104,7 +104,7 @@ describe('packages/vl/README.md "Throws (not supported)" matches the compiler', 
   }
 
   it('does not list what used to be refused', () => {
-    for (const stale of ['`strokeDash`', '`angle`', '`binned: true`', '`bin: "binned"`', '`sequence`', 'horizontal\n  boxplots', '`params: true`', '`keyvals` ranges', 'named view', 'path mark with an overlay', 'a `datum` on a channel other than the positions', '`scale: null` on a channel other than', 'scale / legend implementation yet']) {
+    for (const stale of ['`strokeDash`', '`angle`', '`binned: true`', '`bin: "binned"`', '`sequence`', 'horizontal\n  boxplots', '`params: true`', '`keyvals` ranges', 'named view', 'path mark with an overlay', 'a `datum` on a channel other than the positions', '`scale: null` on a channel other than', 'scale / legend implementation yet', '`size` conditions on bars']) {
       expect(LIST, stale).not.toContain(stale)
     }
   })
