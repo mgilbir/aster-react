@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- **`@aster/core`: a group mark's transforms run on its items, as vega runs them.** Only a group's `formula` was run, and only to see
+  whether it threw; what any transform wrote was dropped. The items of a group mark are now encoded in the scope the mark is in (the
+  item's own data sets and projections are its content's, which its encode cannot read), then every transform of the mark runs on them
+  and writes onto them (a `formula` that sets `x` or `fill`, a `window`, a `stack`, a `pie`, ...), then its sort, and only then is what
+  each item holds made: it reads the group's position and size as the transforms left them. A transform that throws stops the pass
+  there. A mark (of any type) whose transform makes or drops tuples (`filter`, `aggregate`, `fold`, ...) is refused when the spec is
+  parsed, with vega's `Mark transforms should not generate new data.` A mark whose encode throws and whose transform or sort throws
+  too logs the encode's error, as vega runs the encode first. A guide of the view that reads a late signal that threw no longer evaluates
+  it (a derived format made `renderSpec` throw, a derived tick count logged an error vega never logs): the one error logged is the
+  signal's. An axis whose ticks read it is refused (`[aster]`), since vega's renderers cannot draw what it leaves. The
+  generated trees of `differential-abort-trees` put transforms on groups, header groups in grids and two failures in one mark.
+
 - **`@aster/core`: late signals and mark transforms stop the pass like vega's.** A signal of the view that reads data or a scale (or one
   declared after it) and throws was never logged and the marks that read it were drawn; a mark's `transform` or `sort` that throws
   was logged and the run went on. Both are now points the pass stops at (see "Scopes and an aborted pass" in `docs/ARCHITECTURE.md`):
