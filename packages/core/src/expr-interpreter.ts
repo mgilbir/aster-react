@@ -135,6 +135,8 @@ type Params = Record<string, unknown>
 /** What one evaluation sees. `self` is the `this` handed to host functions, made on first use. */
 interface Frame {
   params: Params
+  /** the parameters are the signals by their own names (the engine's), not vega's `$`-prefixed ones */
+  plain: boolean
   datum: unknown
   event: unknown
   item: unknown
@@ -286,7 +288,8 @@ function compile(node: Expr, host: Record<string, unknown>): Run {
       const constant = Object.hasOwn(ExpressionConstants, name) ? ExpressionConstants[name] : undefined
       if (constant) return () => constant
       const param = '$' + name
-      return (f) => f.params[param]
+      // (a signal by its own name is an own property only: no name reaches the prototype)
+      return (f) => (f.plain ? (Object.hasOwn(f.params, name) ? f.params[name] : undefined) : f.params[param])
     }
     case 'MemberExpression':
       return member(compile(node.object, host), node.property, node.computed ? compile(node.property, host) : undefined)
@@ -323,9 +326,9 @@ const NO_PARAMS: Params = Object.freeze({}) as Params
  * Bind a tree to a host function table. The closures are made on the first evaluation: an expression is
  * bound for several roles (a parameter, an event handler) of which one is usually all that runs.
  */
-function compileFor(ast: AstNode, fn: Record<string, unknown>): (params: Params | undefined, datum: unknown, event: unknown, item: unknown) => unknown {
+function compileFor(ast: AstNode, fn: Record<string, unknown>, plain = false): (params: Params | undefined, datum: unknown, event: unknown, item: unknown) => unknown {
   let run: Run | undefined
-  return (params, datum, event, item) => (run ??= compile(ast as Expr, fn))({ params: params ?? NO_PARAMS, datum, event, item, self: undefined })
+  return (params, datum, event, item) => (run ??= compile(ast as Expr, fn))({ params: params ?? NO_PARAMS, plain, datum, event, item, self: undefined })
 }
 
 /** Evaluate a parsed expression against a host function table (compiles on every call; bind with `expressionInterpreter` to reuse). */
@@ -367,4 +370,14 @@ export const expressionInterpreter = {
     return (params: Record<string, unknown>, event: unknown) =>
       run(params, (event as { item?: { datum?: unknown } } | undefined)?.item?.datum, event, undefined)
   },
+}
+
+/**
+ * The engine's own entry: the parameters are the signals by their own names, read where they are (vega's entry points above take
+ * them `$`-prefixed, which would mean copying every signal on every evaluation).
+ */
+export function compileExpression(functions: Record<string, unknown>, ast: AstNode): (datum: unknown, params: Record<string, unknown> | undefined, event: unknown) => unknown {
+  const run = compileFor(ast, functions, true)
+  return (datum, params, event) =>
+    event != null ? run(params, (event as { item?: { datum?: unknown } } | undefined)?.item?.datum, event, undefined) : run(params, datum, undefined, undefined)
 }

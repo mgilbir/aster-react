@@ -25,6 +25,16 @@ describe('expression', () => {
     expect(fn({}, { width: 400 })).toBe(10)
   })
 
+  it('a name is a signal only when the parameters hold it as their own: none reaches the prototype', () => {
+    const params = { width: 400, toString: 'mine' }
+    for (const name of ['constructor', '__proto__', 'hasOwnProperty', 'valueOf', 'isPrototypeOf']) {
+      expect(compileExpr(name, runtime)({}, params), name).toBeUndefined()
+    }
+    expect(compileExpr('toString', runtime)({}, params)).toBe('mine')
+    expect(compileExpr('width', runtime)({}, Object.create({ width: 1 }))).toBeUndefined()
+    expect(compileExpr('width', runtime)({}, undefined)).toBeUndefined()
+  })
+
   it('scale("x", datum.v) + 1 for v=21 → 43', () => {
     const fn = compileExpr('scale("x", datum.v) + 1', runtime)
     expect(fn({ v: 21 })).toBe(43)

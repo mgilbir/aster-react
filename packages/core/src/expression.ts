@@ -16,7 +16,7 @@ import { bandSpace, scaleGradient, type Scale } from './scale.js'
 import { selectionIdTest, selectionResolve, selectionTest, selectionTuples } from './selections.js'
 import { parseExpressionCached } from './expr-parser.js'
 import { ADDON_FUNCTIONS } from './addon-functions.js'
-import { expressionInterpreter, DefaultFunctions, ExpressionConstants, EventFunctions } from './expr-interpreter.js'
+import { compileExpression, DefaultFunctions, ExpressionConstants, EventFunctions } from './expr-interpreter.js'
 import {
   timeOffset, utcOffset, timeSequence, utcSequence,
   dayofyear, utcdayofyear, week, utcweek, timeUnitSpecifier,
@@ -620,27 +620,15 @@ export function compileExpr(expr: string, runtime: ExpressionRuntime): CompiledE
   const functions = createFunctionContext(runtime)
   assertKnownFunctions(ast, functions, expr)
   const compiledEpoch = registryEpoch
-  const evalParam = expressionInterpreter.parameter({ functions }, { ast })
-  const evalHandler = expressionInterpreter.handler({ functions }, { ast })
+  const evaluate = compileExpression(functions, ast)
   const compiled = (datum: unknown, params: unknown, event?: unknown): unknown => {
     // the registry changed since this closure was made (a function disposed, replaced): compile again under the
     // current one -- an unknown name is then refused as at first compile, a replaced one calls the new function
     if (registryEpoch !== compiledEpoch) {
       return compileExpr(expr, runtime)(datum, params as never, event)
     }
-    // Signal values are exposed to expressions as $-prefixed params (vega convention).
-    const p: Record<string, unknown> = {}
-    if (params) {
-      for (const key of Object.keys(params as Record<string, unknown>)) p[`$${key}`] = (params as Record<string, unknown>)[key]
-    }
-    // vega-interpreter's handler arity: (params, event) with
-    // datum = event.item.datum — our event facade carries both.
-    if (event != null) {
-      const h = evalHandler as unknown as (p: Record<string, unknown> | undefined, e: unknown) => unknown
-      return h(p, event)
-    }
-    const e2 = evalParam as unknown as (d: unknown, p: Record<string, unknown> | undefined) => unknown
-    return e2(datum, p)
+    // (the signals are read by their own names off the parameters: an event's datum is its item's)
+    return evaluate(datum, params as Record<string, unknown> | undefined, event)
   }
   return compiled as CompiledExpr
 }
