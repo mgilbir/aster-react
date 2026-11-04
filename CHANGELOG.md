@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- **`@aster/vl`: a longitude or latitude takes every definition vega-lite compiles.** `aggregate`, `bin`, `timeUnit`, `sort`,
+  `stack`, `scale`, `axis`, `legend`, a value `condition`, `impute`, `band` and `bandPosition`, and any type but quantitative, were
+  refused on longitude / latitude and their ends. vega-lite 6.4.3 projects the raw field whatever the definition says and reads the
+  rest as on any other channel (an aggregate grouped by the projected positions, the fields of a bin and a time unit, a sort index,
+  the parse and format of the type), while a scale, an axis, a legend, a stack, an impute, a band or pre-binned data change nothing;
+  so does this now. The end of a pair on a point, circle, square, line or trail is kept beside a pre-binned `y`, as vega-lite keeps
+  it (it was read against a pre-binned longitude / latitude). A count of records on a longitude / latitude is refused, with the half
+  pair and the datum that is not a number, because vega cannot run what vega-lite emits for them (listed under "Throws"). Pinned by
+  `vl-geo-channels` (mark x geographic channel x definition x companion, 4020 cases) against vega-lite 6.4.3.
+
 - **`@aster/vl`: every mark draws every channel as vega-lite draws it, whatever the channel's definition.** A datum on a size, opacity,
   shape, dash, angle, theta, radius or text channel, and `scale: null` on any channel, were refused; they compile now (a datum is its
   scale's domain, a field without a scale is read as it is, a position without a scale has no axis). The `key` channel is supported.
