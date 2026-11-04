@@ -16,6 +16,55 @@
   longer reads a property vega does not know for its kind (`columns` on an axis), so an expression there that does not parse is
   accepted, as vega accepts it.
 
+- **`@aster/vl`: a longitude or latitude takes every definition vega-lite compiles.** `aggregate`, `bin`, `timeUnit`, `sort`,
+  `stack`, `scale`, `axis`, `legend`, a value `condition`, `impute`, `band` and `bandPosition`, and any type but quantitative, were
+  refused on longitude / latitude and their ends. vega-lite 6.4.3 projects the raw field whatever the definition says and reads the
+  rest as on any other channel (an aggregate grouped by the projected positions, the fields of a bin and a time unit, a sort index,
+  the parse and format of the type), while a scale, an axis, a legend, a stack, an impute, a band or pre-binned data change nothing;
+  so does this now. The end of a pair on a point, circle, square, line or trail is kept beside a pre-binned `y`, as vega-lite keeps
+  it (it was read against a pre-binned longitude / latitude). A count of records on a longitude / latitude is refused, with the half
+  pair and the datum that is not a number, because vega cannot run what vega-lite emits for them (listed under "Throws"). Pinned by
+  `vl-geo-channels` (mark x geographic channel x definition x companion, 4020 cases) against vega-lite 6.4.3.
+
+- **`@aster/vl`: every mark draws every channel as vega-lite draws it, whatever the channel's definition.** A datum on a size, opacity,
+  shape, dash, angle, theta, radius or text channel, and `scale: null` on any channel, were refused; they compile now (a datum is its
+  scale's domain, a field without a scale is read as it is, a position without a scale has no axis). The `key` channel is supported.
+  An arc is centred by x, y and their offsets (and stacks a quantitative x or y), theta and radius take values, datums and second
+  channels alone, and a text is placed by x and y around which theta and radius move it. A constant x or y on a bar, rect, tick or
+  image is laid out as a field is (the centre of a band, or one end of a range), an offset that is a value moves the mark, and size
+  conditions work on bars and ticks. Order and detail keep only their field definitions, as vega-lite does, and an order value is the
+  zindex of the items. A text, tooltip, href, url or description shows a condition's field as text. A non-GeoJSON shape field on a
+  geoshape is a shape legend, a constant longitude / latitude is no projected position, and channels a mark does not draw are no
+  longer validated. A condition that gives a field on a position is refused (listed under "Throws": the schema gives positions no
+  condition and vega-lite's output for it is incoherent). Pinned by `vl-mark-channels` (every mark x every channel x every kind of
+  definition, 6188 cases) against vega-lite 6.4.3.
+
+- **`@aster/vl`: `fill` and `stroke` paint every mark as vega-lite paints them, beside `color` and each other.** A fill on a stroked
+  mark, a stroke on a filled one, and either beside a `color` were refused; now each paint channel has its scale and legend, a `color`
+  gives way to the fill (filled mark) or stroke (unfilled mark) the encoding has, and every mark is painted by one rule (the mark
+  definition's and the config's paint, then color, fill and stroke). Legend symbols are painted from the mark's paint, and the legends
+  that read one field merge when both scales are discrete or both continuous (vega-lite 6.4.3), after layers and views merge theirs.
+  Channels a mark does not draw (a size on an area, an x on a geoshape, a url off an image) are dropped as vega-lite drops them instead
+  of being refused. A layer whose leaf has two legends no longer overflows the stack. The encoding refusals that remain are listed in
+  the README. Pinned by `vl-paint-channels` (mark x filled x channel x definition x companion, config defaults, layers) and
+  `vl-mark-channels` against vega-lite 6.4.3.
+
+- **`@aster/vl`: a scale type a channel can use is the scale the field has, and marks sit where vega-lite puts them.** The #87 fallback
+  covered the requests a channel or the data cannot use; these valid ones were ignored or answered with another scale: colour `point`
+  and `bin-ordinal`; `ordinal` and `band` on size, opacity, stroke width and angle (a band scale is read at the middle of its bands);
+  `quantile`, `quantize` and `threshold` on shape and stroke dash (and on every numeric channel, whose range is cut into classes only
+  for size); a temporal `xOffset` (a time scale, over the span of its time unit); `log` on a binned position. The scales of `fill` and
+  `stroke` are named `fill` and `stroke`; data-driven `fillOpacity` and `strokeOpacity` have their scales (no legend, as in vega-lite);
+  the legend of a log, symlog, quantile or threshold scale thins its labels; a legend over a temporal field read through a scale that is
+  not a time scale formats its labels as times. Positions: `band` on point marks sits at the middle of the band (or at the field's
+  `bandPosition`; a rule honours it too), a rect-based mark on a `point` scale is a default step wide, an `xOffset` on a continuous
+  position is dropped (it has nothing to nest in), a point offset leaves a bar its default width, a layer that offsets a position
+  does not change the step the first layer gave it, a binned or time-unit offset is read at the middle of its unit, a time-unit colour
+  or size on a bar is read at the middle of the unit, a stacked area/line over a discrete dimension is imputed, and a datum is not a
+  typed field when the orientation of a tick or bar is decided. Pinned by generated differentials against vega-lite 6.4.3: every
+  channel x every scale type it honours x every data type (`vl-honoured-scale-types`) and every mark x position x scale type x band
+  position, offsets, time-unit channels and datums (`vl-honoured-positions`); the compared output now includes compiled axes and legends.
+
 - **`@aster/core`: a group mark's transforms run on its items, as vega runs them.** Only a group's `formula` was run, and only to see
   whether it threw; what any transform wrote was dropped. The items of a group mark are now encoded in the scope the mark is in (the
   item's own data sets and projections are its content's, which its encode cannot read), then every transform of the mark runs on them

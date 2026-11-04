@@ -7,6 +7,7 @@
  * under it (the layer keeps none) so that a unit is complete by itself when it is rewritten.
  */
 import { compositeLayers, compositeMarkOf } from './composite-marks.js'
+import { spansAChannel } from './channels.js'
 
 type Obj = Record<string, any>
 const isObj = (v: unknown): v is Obj => v !== null && typeof v === 'object' && !Array.isArray(v)
@@ -263,17 +264,6 @@ export function alignStackOrders(node: unknown, stackOf: (unit: Obj) => StackPro
 }
 
 // --- a line that spans a second channel -----------------------------------------------------------------------------------------
-
-/** The channels that end a span, and the channel each one ends the span of. */
-const SPAN_ENDS: ReadonlyArray<readonly [end: string, start: string]> = [['x2', 'x'], ['y2', 'y'], ['latitude2', 'latitude'], ['longitude2', 'longitude'], ['theta2', 'theta'], ['radius2', 'radius']]
-
-/** A line is not drawn between points that are spans: a line that spans a channel that is a field or a datum (not a pre-binned field) is a rule. */
-function spansAChannel(encoding: Obj): boolean {
-  return SPAN_ENDS.some(([end, start]) => {
-    const def = encoding[start]
-    return !!encoding[end] && isObj(def) && ((def.field !== undefined && def.bin !== 'binned' && !(isObj(def.bin) && def.bin.binned === true)) || def.datum !== undefined)
-  })
-}
 
 /**
  * Every line unit that spans a channel (a second channel next to its x, y, ...) as a rule over the same encoding. `inherited` is the

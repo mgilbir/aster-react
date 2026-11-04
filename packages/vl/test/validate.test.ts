@@ -27,13 +27,11 @@ const REJECTED: Array<[string, unknown, RegExp]> = [
   ['a format type that is not a function name', unit({ config: { customFormatTypes: true, numberFormatType: 7 } }), /numberFormatType/],
   ['container sizing of a composition', { data: DATA, width: 'container', hconcat: [unit(), unit()] }, /container/],
   ['a longitude without its latitude', unit({ mark: 'point', encoding: { longitude: xq } }), /needs its pair/],
-  ['a longitude / latitude value pair', unit({ mark: 'point', encoding: { longitude: { value: 1 }, latitude: { value: 2 } } }), /needs a `field` or `datum`/],
   ['a longitude on a bar', unit({ mark: 'bar', encoding: { longitude: xq, latitude: yq } }), /only implemented for the/],
-  ['an aggregated latitude', unit({ mark: 'point', encoding: { longitude: xq, latitude: { ...yq, aggregate: 'mean' } } }), /aggregate.*does not apply/],
+  ['a latitude that counts records (no field to project)', unit({ mark: 'point', encoding: { longitude: xq, latitude: { aggregate: 'count', type: 'quantitative' } } }), /a count of records reads no field/],
   ['a non-numeric latitude datum', unit({ mark: 'point', encoding: { longitude: { datum: 1 }, latitude: { datum: 'north' } } }), /finite number/],
   ['a geojson shape on a point', unit({ mark: 'point', encoding: { shape: { field: 'g', type: 'geojson' } } }), /geoshape/],
   ['a geojson type outside the shape channel', unit({ mark: 'geoshape', encoding: { color: { field: 'g', type: 'geojson' } } }), /shape channel/],
-  ['an x channel on a geoshape', unit({ mark: 'geoshape', encoding: { x: xq } }), /positioned by its projection/],
   ['a faceted map', unit({ mark: 'geoshape', encoding: { column: cn } }), /inside a facet/],
   ['a topojson format without an object', { data: { values: [], format: { type: 'topojson' } }, mark: 'geoshape' }, /feature.*mesh/],
   ['a feature on a json format', { data: { values: [], format: { type: 'json', feature: 'x' } }, mark: 'geoshape' }, /only applies to the "topojson" format/],
@@ -50,16 +48,11 @@ const REJECTED: Array<[string, unknown, RegExp]> = [
   ['a repeat reference outside a repeat', unit({ encoding: { x: { field: { repeat: 'row' }, type: 'quantitative' } } }), /outside a matching `repeat`/],
   // --- channels (C35)
   ['an unknown channel', unit({ encoding: { x: xq, banana: yq } }), /unknown encoding channel "banana"/],
-  ['a valid but unimplemented channel', unit({ encoding: { x: xq, key: yq } }), /key.*not supported/],
-  ['a data-driven fillOpacity', unit({ encoding: { x: xq, fillOpacity: cn } }), /fillOpacity/],
-  ['fill together with color', unit({ mark: 'bar', encoding: { x: cn, color: cn, fill: cn } }), /together with encoding\.color/],
   ['an array on a single-def channel', unit({ encoding: { x: [xq] } }), /does not accept an array/],
   ['a channel def without field/value/datum', unit({ encoding: { x: { type: 'quantitative' } } }), /needs `field`/],
   ['an unknown type', unit({ encoding: { x: { field: 'x', type: 'integer' } } }), /unknown type/],
   ['a malformed field path', unit({ encoding: { x: { field: "v'] + 1 + datum['v", type: 'quantitative' } } }), /access path|invalid field/],
   ['an unknown aggregate', unit({ encoding: { x: { field: 'x', type: 'quantitative', aggregate: 'summ' } } }), /unknown aggregate/],
-  ['a datum on an unsupported channel', unit({ encoding: { x: xq, y: yq, size: { datum: 4 } } }), /size\.datum/],
-  ['scale: null', unit({ encoding: { x: { ...xq, scale: null } } }), /scale: null/],
   ['an unknown scale property', unit({ encoding: { x: { ...xq, scale: { zeroish: true } } } }), /unknown scale property/],
   ['domainRaw', unit({ encoding: { x: { ...xq, scale: { domainRaw: [0, 1] } } } }), /domainRaw/],
   ['a scale domain over an undeclared param', unit({ encoding: { x: { ...xq, scale: { domain: { param: 'p' } } } } }), /parameter "p" is not declared/],
@@ -99,7 +92,6 @@ const REJECTED: Array<[string, unknown, RegExp]> = [
   ['a condition without a test', unit({ encoding: { x: xq, y: yq, color: { condition: { value: 'red' }, value: 'grey' } } }), /needs `test`/],
   ['an empty condition array', unit({ encoding: { x: xq, y: yq, color: { condition: [], value: 'grey' } } }), /must not be empty/],
   ['a field condition in an array', unit({ encoding: { x: xq, y: yq, color: { condition: [{ test: 'true', field: 'c', type: 'nominal' }], value: 'g' } } }), /value conditions/],
-  ['a datum condition on a channel whose scale is named after its paint', unit({ encoding: { x: xq, y: yq, fill: { condition: { test: 'true', datum: 'a' }, value: 'g' } } }), /datum/],
   ['a condition with both value and field', unit({ encoding: { x: xq, y: yq, color: { condition: { test: 'true', value: 'r', field: 'c', type: 'nominal' }, value: 'g' } } }), /exactly one of/],
   // --- sort (C35)
   ['an unknown sort string', unit({ encoding: { x: { ...cn, sort: 'sideways' } } }), /unknown sort/],
@@ -150,6 +142,9 @@ describe('validation layer: unsupported / invalid input throws a VLCompileError 
 
 /** The matching accepted forms, so the table above is not simply rejecting everything. */
 const ACCEPTED: Array<[string, unknown]> = [
+  ['an x channel on a geoshape (vega-lite drops the channels a geoshape does not draw)', unit({ mark: 'geoshape', encoding: { x: xq } })],
+  ['fill together with color (vega-lite drops the color of a filled mark)', unit({ mark: 'bar', encoding: { x: cn, color: cn, fill: cn } })],
+  ['a datum condition on fill', unit({ encoding: { x: xq, y: yq, fill: { condition: { test: 'true', datum: 'a' }, value: 'g' } } })],
   ['sort by channel', unit({ encoding: { x: { ...cn, sort: '-y' }, y: { ...yq, aggregate: 'sum' } }, mark: 'bar' })],
   ['sort arrays', unit({ encoding: { x: { ...cn, sort: ['B', 'A'] }, y: { ...yq, aggregate: 'sum' } }, mark: 'bar' })],
   ['sort field+op', unit({ encoding: { x: { ...cn, sort: { field: 'v', op: 'max' } }, y: { ...yq, aggregate: 'sum' } }, mark: 'bar' })],
@@ -176,6 +171,11 @@ const ACCEPTED: Array<[string, unknown]> = [
   ['a wrapped faceted unit nested in a concat', { data: DATA, hconcat: [unit(), unit({ encoding: { x: xq, y: yq, facet: { ...cn, columns: 2 } } })] }],
   ['a wrapped facet operator nested in a concat', { data: DATA, vconcat: [unit(), { facet: cn, spec: unit() }] }],
   ['a facet inside a facet', { data: DATA, facet: { column: cn }, spec: { facet: { row: { field: 'g', type: 'nominal' } }, spec: unit() } }],
+  ['a datum on a size (it was refused as "a datum on an unsupported channel")', unit({ encoding: { x: xq, y: yq, size: { datum: 4 } } })],
+  ['scale: null on x (it was refused)', unit({ encoding: { x: { ...xq, scale: null } } })],
+  ['a longitude / latitude value pair (it was refused: vega-lite reads no position from constants, and neither does this)', unit({ mark: 'point', encoding: { longitude: { value: 1 }, latitude: { value: 2 } } })],
+  ['an aggregated latitude (it was refused: vega-lite aggregates it, grouped by the projected longitude)', unit({ mark: 'point', encoding: { longitude: xq, latitude: { ...yq, aggregate: 'mean' } } })],
+  ['a key channel (it was refused as "a valid but unimplemented channel")', unit({ encoding: { x: xq, key: yq } })],
   ['a selection declared in two views', { data: DATA, hconcat: [unit({ params: [{ name: 'brush', select: 'interval' }] }), unit({ params: [{ name: 'brush', select: 'interval' }] })] }],
 ]
 
