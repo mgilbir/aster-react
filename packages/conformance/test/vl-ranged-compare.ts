@@ -64,8 +64,19 @@ interface Run {
   svg: string
 }
 
+/**
+ * Vega's loader, reading the link it is asked to sanitize as a string. Vega's SVG renderer sanitizes an `href` in a promise nobody
+ * awaits and crashes on the null a rejected link gives it, and the loader rejects anything but a string: a number in an `href` channel
+ * (an ordinal number field, a number datum) would take the process down with an unhandled rejection. The SVG of a first render carries
+ * no link either way (the renderer adds it once the promise settles), so this changes nothing compared.
+ */
+const LOADER = (() => {
+  const base = vega.loader()
+  return { ...base, sanitize: (uri: unknown, options: unknown) => base.sanitize(String(uri), options as never) }
+})()
+
 async function run(vg: Obj): Promise<Run> {
-  const view = new vega.View(vega.parse(JSON.parse(JSON.stringify(vg))), { renderer: 'none' })
+  const view = new vega.View(vega.parse(JSON.parse(JSON.stringify(vg))), { renderer: 'none', loader: LOADER as never })
   await view.runAsync()
   const names = ((vg.scales as Obj[] | undefined) ?? []).map((s) => String(s.name))
   const scales = names.map((n) => {
@@ -113,7 +124,11 @@ export async function differences(spec: Obj): Promise<Outcome> {
   try { ours = compile(JSON.parse(JSON.stringify(spec)) as never) as Obj } catch (e) { ours = undefined; refusal = String(e).slice(0, 160) }
   const no = (why: string): Outcome => ({ why, compared: true })
   if (theirs === undefined) return { why: '', compared: false }
-  if (ours === undefined) return no(`refused by aster only: ${refusal}`)
+  if (ours === undefined) {
+    // (a refusal of what vega-lite writes and vega itself cannot run refuses nothing there is to match)
+    try { await run(theirs) } catch { return { why: '', compared: false } }
+    return no(`refused by aster only: ${refusal}`)
+  }
   if (scalesOf(ours) !== scalesOf(theirs)) return no(`compiled scales: expected ${scalesOf(theirs)} got ${scalesOf(ours)}`)
   if (guidesOf(ours) !== guidesOf(theirs)) return no(`compiled guides: expected ${guidesOf(theirs)} got ${guidesOf(ours)}`)
   let a: Run
