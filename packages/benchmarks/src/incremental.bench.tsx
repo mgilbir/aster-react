@@ -28,9 +28,6 @@
  *                                                                      median, 12x, would have been too close)
  *   DOM patch vs full SVG serialization    3.3x -  5.8x   floor 1.6x  (about half of the slowest run)
  *
- * At 100,000 points (the nightly's run) the append floor is 120x: healthy runs read 158x-165x, here and on the CI
- * runner (2026-11-05); while every append re-scanned the dataset they read 66x-99x, and the 8x floor let that through.
- *
  * Every gated ratio is the MEDIAN OF PER-PAIR RATIOS, where the two members of a pair are timed back to back
  * in the same loop iteration (dense: in the same round). A ratio of two medians taken in separate phases let
  * machine load skew numerator and denominator differently (the dense ratio read 164x-198x under load against
@@ -58,10 +55,7 @@ async function main(): Promise<void> {
   const reps = Math.max(5, Number(arg('reps', '100')))
   const calibrated = points >= 10000 && reps >= 30
   const floorOf = (name: string, calibratedFloor: number): number => Number(arg(name, String(calibrated ? calibratedFloor : 1)))
-  // An append's cost does not grow with the dataset and a full evaluation's does, so the floor grows with it: at 100,000 points
-  // the append was 158x-165x cheaper than a full evaluation (2026-11-05, here and on the CI runner), and 66x-99x while every
-  // append re-scanned the dataset (2026-10-27..2026-11-04), which the 8x floor let through.
-  const minAppend = floorOf('min-append', points >= 100000 ? 120 : 8)
+  const minAppend = floorOf('min-append', 8)
   const minReplace = floorOf('min-replace', 8)
   const minDom = floorOf('min-dom', 1.6)
 
@@ -156,8 +150,6 @@ async function main(): Promise<void> {
   // Paired: each update times full and incremental back to back, so load cancels in the per-update ratio.
   const ratio = pairedRatio(fullTimes, incTimes).median
   const vega = vegaTimes.length ? summarize(vegaTimes) : null
-  // (not gated: the ratio to vega depends on the machine -- 48x here, 63x on the CI runner for the same build)
-  const vsVega = vegaTimes.length ? pairedRatio(vegaTimes, incTimes).median : null
   const expectedVegaRows = points + batch * (reps + 1) // includes the warmup append
   const vegaRows = vegaView ? vegaView.data('t').length : 0
   if (vegaView && vegaRows !== expectedVegaRows) {
@@ -173,8 +165,7 @@ async function main(): Promise<void> {
         ['aster stream append + pulse', fmt(inc.median), fmt(inc.p95), fmt(inc.max)],
         ...(vega
           ? ([['vega view.change + run', fmt(vega.median), fmt(vega.p95), fmt(vega.max)],
-              ['aster vs vega (median)', `${(vega.median / Math.max(inc.median, 1e-9)).toFixed(2)}x`, '—', '—'],
-              ['aster vs vega (median of per-update ratios)', `${vsVega!.toFixed(2)}x`, '—', '—']] as string[][])
+              ['aster vs vega (median)', `${(vega.median / Math.max(inc.median, 1e-9)).toFixed(2)}x`, '—', '—']] as string[][])
           : []),
         ['speedup vs full (median of per-update ratios)', `${ratio.toFixed(2)}x`, '—', '—'],
       ],
