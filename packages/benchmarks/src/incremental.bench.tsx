@@ -34,13 +34,16 @@
  * 224x-303x idle with the floor at 200x); within a pair load cancels. The floors themselves are unchanged.
  *
  * Below the calibrated shape (speedup scales with the dataset) only the >1x check applies. Override with
- * --min-append=, --min-replace=, --min-dom= (used to prove the gate bites).
+ * --min-append=, --min-replace=, --min-dom=, --max-append-growth= (used to prove the gate bites).
  *
  * Run: pnpm bench:incremental [--points=5000] [--batch=1] [--reps=100] [--vega=1]
  */
 import { performance } from 'node:perf_hooks'
 import { ensureBuilt } from './ensure-built.js'
 import { summarize, pairedRatio, table, fmt } from './stats.js'
+
+/** Ceiling on an append to N rows over one to N/10 (see the call site): at 100,000 points healthy runs read 2.00x-2.03x and the 2026-10-27..2026-11-04 regression 4.27x-4.34x (2026-11-05, development machine). */
+const MAX_APPEND_GROWTH = 3
 
 /** Dense append patch vs a full dense mount (same process). Set from measurements; see the notes at the call site. */
 const DENSE_APPEND_FLOOR = 200
@@ -101,6 +104,17 @@ async function main(): Promise<void> {
   stream.push({ data: { t: rows(points) } })
   stream.flush()
 
+  // The same append to a stream a tenth the size, timed right after each one above: an append's cost must not grow with the
+  // dataset. Gated from 100,000 points (the nightly's run) as the median of the per-update ratios, so load cancels and the
+  // machine does not matter; it was the property every append broke from 2026-10-27 to 2026-11-04 (each one re-scanned the
+  // dataset, #103), which the floors against a full evaluation let through.
+  const smallPoints = Math.floor(points / 10)
+  const maxGrowth = Number(arg('max-append-growth', String(points >= 100000 && reps >= 30 ? MAX_APPEND_GROWTH : 0)))
+  const smallStream = maxGrowth > 0 ? createChartStream({ ...spec, data: [{ name: 't', values: rows(smallPoints) }] } as never, { capacity: 8 }) : null
+  smallStream?.push({ data: { t: rows(smallPoints) } })
+  smallStream?.flush()
+  const smallTimes: number[] = []
+
   // Direct Vega baseline: identical spec, identical append per update, through
   // the documented streaming API. renderer 'none' keeps this compute-only (no
   // SVG/canvas paint) so it lines up with `evaluateChart`. --vega=0 disables it.
@@ -138,6 +152,13 @@ async function main(): Promise<void> {
     incTimes.push(performance.now() - t1)
     if (!flush) throw new Error('stream flush produced no scene')
 
+    if (smallStream) {
+      const ts = performance.now()
+      smallStream.push({ append: { t: rows(batch, smallPoints + i * batch) } })
+      if (!smallStream.flush()) throw new Error('small stream flush produced no scene')
+      smallTimes.push(performance.now() - ts)
+    }
+
     if (vegaView) {
       const t2 = performance.now()
       vegaView.change('t', vegaInsert(appended)).run()
@@ -168,6 +189,9 @@ async function main(): Promise<void> {
               ['aster vs vega (median)', `${(vega.median / Math.max(inc.median, 1e-9)).toFixed(2)}x`, '—', '—']] as string[][])
           : []),
         ['speedup vs full (median of per-update ratios)', `${ratio.toFixed(2)}x`, '—', '—'],
+        ...(smallTimes.length
+          ? ([[`append at ${points} vs at ${smallPoints} pts (median of per-update ratios)`, `${pairedRatio(incTimes, smallTimes).median.toFixed(2)}x`, '—', '—']] as string[][])
+          : []),
       ],
     ),
   )
@@ -227,6 +251,15 @@ async function main(): Promise<void> {
     return
   }
   console.log(`\n[incremental] pass: append is ${ratio.toFixed(2)}x cheaper (median, floor ${minAppend}x), final rows ${svgRows}`)
+  if (smallTimes.length) {
+    const growth = pairedRatio(incTimes, smallTimes).median
+    if (growth > maxGrowth) {
+      console.error(`\n[incremental] FAIL: an append to ${points} rows costs ${growth.toFixed(2)}x one to ${smallPoints} (median of per-update ratios, ceiling ${maxGrowth}x): the append grows with the dataset`)
+      process.exitCode = 1
+    } else {
+      console.log(`[incremental] pass: an append to ${points} rows costs ${growth.toFixed(2)}x one to ${smallPoints} (ceiling ${maxGrowth}x)`)
+    }
+  }
 
   // DOM path: patch the persistent <svg> vs re-serialize/replace the full SVG.
   // jsdom patching is slower than a browser, but the relative cost is the point.
