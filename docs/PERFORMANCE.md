@@ -66,9 +66,12 @@ the browser).
 
 ## Reference measurements
 
-Measured 2026-10-23 on the development machine (Linux x86_64, node v26.11.1, headless Chromium from
-Playwright), one run each, nothing else running, after `pnpm build`. Timings are machine- and
-load-dependent: compare the ratios and the shape, and re-run before quoting. The incremental gate
+Measured 2026-11-05 on main at 098b243 on the development machine (Linux x86_64, node v26.13.0, headless Chromium
+from Playwright), after `pnpm build`. The machine is shared: other users kept the load average between 0.5 and 5
+during the runs. The Node figures are the median of three runs unless a table shows each run; the browser figures
+are the median of two runs (six for `pnpm bench:browser`). Timings are machine- and load-dependent: compare the
+ratios and the shape, and re-run before quoting. To compare two builds, run them alternately on the same machine
+(the numbers below drifted from earlier editions of this page with the machine, not only with the code). The incremental gate
 (`pnpm bench:incremental`) is the only one of these with a pass/fail floor; the floors and how they were
 chosen are at the top of `packages/benchmarks/src/incremental.bench.tsx`.
 
@@ -79,41 +82,47 @@ one row appended per update:
 
 | Path | Run 1 | Run 2 | Run 3 |
 |---|---|---|---|
-| full `evaluateChart` | 2.3 | 2.5 | 2.2 |
-| `createChartStream` append + flush | 0.1 | 0.1 | 0.1 |
-| `view.change(changeset().insert(...)).run()` in vega (`renderer: 'none'`) | 1.0 | 1.0 | 1.0 |
-| append speedup vs full | 22.2x | 26.7x | 24.0x |
-| append vs vega | 10.1x | 11.2x | 11.3x |
-| whole-array replacement speedup vs full | 23.2x | 24.9x | 22.0x |
-| DOM patch (`patchSceneDom`, 4000 points, jsdom) vs `renderSceneToSvg` | 5.2x | 6.9x | 4.9x |
-| dense 100,000-symbol mark: append patch vs mount (ms) | 0.85 vs 283.1 (332x) | 0.87 vs 273.6 (316x) | 0.89 vs 273.2 (306x) |
+| full `evaluateChart` | 2.9 | 3.0 | 2.7 |
+| `createChartStream` append + flush | 0.2 | 0.2 | 0.2 |
+| `view.change(changeset().insert(...)).run()` in vega (`renderer: 'none'`) | 1.2 | 1.2 | 1.1 |
+| append speedup vs full | 18.3x | 15.8x | 18.2x |
+| append vs vega | 7.1x | 5.8x | 6.6x |
+| whole-array replacement speedup vs full | 15.9x | 12.7x | 17.1x |
+| DOM patch (`patchSceneDom`, 4000 points, jsdom) vs `renderSceneToSvg` | 3.3x | 3.7x | 5.4x |
+| dense 100,000-symbol mark: append patch vs mount (ms) | 1.31 vs 314.3 (249x) | 1.17 vs 275.6 (254x) | 1.12 vs 265.9 (254x) |
 
-`pnpm bench:incremental -- --points=100000 --reps=40`: full evaluate 37.8 ms, stream append 0.2 ms
-(179x), vega `view.change` 12.6 ms (aster 60x cheaper), whole-array replacement 77x; dense append patch
-0.85 ms vs a 249.6 ms mount (293x).
+`pnpm bench:incremental -- --points=100000 --reps=40`: full evaluate 42.1 ms, stream append 0.3 ms
+(163x), vega `view.change` 19.0 ms (13.6 to 34.7 ms across the runs: aster 54x to 107x cheaper), whole-array
+replacement 37x; dense append patch 1.00 ms vs a 263.3 ms mount (273x). From 2026-10-27 to 2026-11-04 the stream
+append had regressed to 0.7 ms at 100,000 points (every evaluation scanned the whole dataset for rows to wrap as
+`{data: v}`); #103 restored it.
 
 ### Differential updates (node, no DOM)
 
-`pnpm bench:differential -- --points=50000` (about 1% of rows changed; `evaluateChart` with a changeset vs a full
-re-encode): row-wise `formula` 46.8 to 1.1 ms (40.9x), fixed-scale symbol 17.4 to 0.4 ms (45.7x),
-`aggregate` over 1000 groups 5.4 to 2.6 ms (2.1x). Scene evaluation plus `patchSceneDom` at 4000 points:
-9.9x, 9.7x and 3.4x for the same three cases.
+`pnpm bench:differential` (50,000 points, about 1% of rows changed; `evaluateChart` with a changeset vs a full
+re-encode): row-wise `formula` 22.6 to 1.0 ms (23.1x), fixed-scale symbol 19.2 to 0.5 ms (38.8x),
+`aggregate` over 1000 groups 6.2 to 2.5 ms (2.5x). Scene evaluation plus `patchSceneDom` at 4000 points:
+6.6x, 9.5x and 3.0x for the same three cases. (The row-wise ratio is lower than in earlier editions because the full
+re-encode got cheaper: expressions read the signals in place since #101.)
 
 ### Embedding: `<Chart>` vs react-vega and the vega-embed tutorial
 
-`pnpm bench:runtime` (jsdom, relative timings only; median update ms, 1000 points): line aster 3.2 /
-asterDom 2.6 / react-vega 6.3 / vega-embed hook 4.0; scatter 5.1 / 4.3 / 32.0 / 66.1; bar 12.0 / 11.0 / 78.3 /
-55.3. DOM nodes for the scatter chart: 82 vs 1073.
+`pnpm bench:runtime` (jsdom, relative timings only; median update ms, 1000 points): line aster 3.5 /
+asterDom 2.9 / react-vega 6.1 / vega-embed hook 3.7; scatter 4.6 / 4.2 / 33.1 / 70.7; bar 13.4 / 13.8 / 86.5 /
+62.4. DOM nodes for the scatter chart: 82 vs 1073.
 
-`pnpm bench:browser -- --points=1000 --memory=false` (headless Chromium, median ms, first render / update):
-line aster 2.2 / 2.5, asterDom 1.4 / 1.9, react-vega 2.8 / 3.3, vega-embed hook 2.3 / 2.5; scatter aster
-2.7 / 3.4, asterDom 2.5 / 3.2, react-vega 7.7 / 8.4, vega-embed hook 7.3 / 8.2. Stable-content re-render
-(fresh spec object, same data): 0 DOM mutations on all four; 0.3 to 0.4 ms for aster vs 0.1 to 0.2 ms for the
-Vega wrappers. Under a one-update-per-frame stream the line and scatter charts hold 16.7 ms median frames on all
-four; long frames (over 21 ms) are 0.0% to 0.6% for aster, 0.0% to 3.4% for the Vega embeds.
+`pnpm bench:browser -- --points=1000` (headless Chromium, median ms, first render / update):
+line aster 2.65 / 2.55, asterDom 1.75 / 1.90, react-vega 2.90 / 3.45, vega-embed hook 2.40 / 2.60; scatter aster
+2.90 / 3.45, asterDom 2.75 / 3.30, react-vega 8.20 / 7.90, vega-embed hook 7.05 / 8.35; bar aster 10.10 / 8.00,
+asterDom 9.25 / 7.30, react-vega 15.50 / 16.75, vega-embed hook 14.90 / 8.30. Stable-content re-render (fresh spec
+object, same data): 0 DOM mutations on all four; 0.3 ms for aster vs 0.1 ms for the Vega wrappers. Under a
+one-update-per-frame stream the line chart holds 16.7 ms median frames on all four; long frames (over 21 ms) are
+0.0% for aster, 1.7% to 3.7% for the Vega embeds. Run alternately against the 2026-10-27 build (2a03147), aster's
+first render and update here are 5% to 17% slower, the Vega embeds within noise (normalised by the Vega embeds of
+the same run, about 5%); the cause is not identified.
 
-`pnpm bench:memory` (jsdom heap growth per cycle, steady state, kB): line update aster 23.0 /
-asterDom 15.5 / react-vega 42.1 / vega-embed hook 10.4; scatter update 16.0 / 13.5 / 31.9 / 19.0.
+`pnpm bench:memory` (jsdom heap growth per cycle, steady state, kB): line update aster 24.4 /
+asterDom 28.6 / react-vega 42.2 / vega-embed hook 12.4; scatter update 27.1 / 26.9 / 46.0 / 36.2.
 
 ### Streaming appends in a real browser: `<ChartStream>` vs vega `view.change`
 
@@ -122,15 +131,15 @@ symbol fill, headless Chromium, median frame / share of frames over 21 ms / DOM 
 
 | Points | Backend | aster | vega `view.change` + `run` |
 |---|---|---|---|
-| 10,000 | SVG | 16.7 ms / 0.6% / 1.0 | 16.6 ms / 2.9% / 242.0 |
-| 10,000 | canvas | 16.6 ms / 0.0% / 0 | 16.7 ms / 0.0% / 0 |
-| 100,000 | SVG (per-item, `denseMarks` off) | 149.3 ms / 94.1% / 1.0 | 166.2 ms / 100.0% / 30,782.8 |
-| 100,000 | canvas | 16.7 ms / 0.0% / 0 | 18.6 ms / 19.3% / 0 |
+| 10,000 | SVG | 16.6 ms / 0.9% / 1.0 | 16.6 ms / 2.5% / 240.1 |
+| 10,000 | canvas | 16.7 ms / 0.0% / 0 | 16.7 ms / 0.3% / 0 |
+| 100,000 | SVG (per-item, `denseMarks` off) | 157.7 ms / 93.8% / 1.0 | 174.4 ms / 100.0% / 34,862.3 |
+| 100,000 | canvas | 16.7 ms / 0.0% / 0 | 16.7 ms / 5.9% / 0 |
 
 `pnpm bench:browser-stream -- --points=100000 --seconds=3 --engines=aster --renderers=svg --dense=0,1`
-(aster SVG, microtask flush): per-item 154.3 ms median frame, 94.4% long, 100,030 DOM nodes, 19 appends in 3 s;
-with `denseMarks` 33.3 ms, 97.7% long, 402 DOM nodes, 88 appends. Dense marks cut the per-frame cost by about
-4.6x; neither SVG variant holds a 16.7 ms frame at 100,000 points, canvas does.
+(aster SVG, microtask flush): per-item 161.2 ms median frame, 94.2% long, 100,030 DOM nodes, 18 to 19 appends in
+3 s; with `denseMarks` 33.5 ms, 96.3% long, 402 DOM nodes, 82 to 84 appends. Dense marks cut the per-frame cost by
+about 4.8x; neither SVG variant holds a 16.7 ms frame at 100,000 points, canvas does.
 
 **Earlier figures for the 100,000-point SVG stream were wrong.** Previous versions of this document and of the
 README, CHANGELOG and benchmarks README quoted about 77 ms per frame per-item and 16.7 ms with 0% long frames with
