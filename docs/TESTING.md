@@ -52,7 +52,7 @@ result is the summary line it prints. They change with the code: re-run before q
 | Vega-Lite selections vs real Vega (same native input, signals/stores/SVG compared per step) | `pnpm conformance:selections` | 53/53 cases agree (concat, facet and repeat views and geographic interval selections among them; steps where Vega keeps its first layout are held to a new Vega view's render, 13 of them, ceiling 13) |
 | `intersect()` (vega-lite's geo interval selections) over every mark type, seeded boxes, by mark name / type, vs real vega in Chromium | `pnpm conformance:intersect` | every (box, scope) pair agrees (2771) |
 | `<Chart>` interaction in Chromium | `pnpm --filter @aster/react run test:browser` | all checks passed |
-| Incremental gate | `pnpm bench:incremental -- --points=10000 --reps=30` | append 22.2x–26.7x (floor 8x), whole-array replace 22.0x–24.9x (floor 8x), DOM patch 4.9x–6.9x (floor 1.6x), dense 100k-symbol append patch vs mount 306x–332x (floor 200x) over three runs |
+| Incremental gate | `pnpm bench:incremental -- --points=10000 --reps=30` | append 15.8x–18.3x (floor 8x), whole-array replace 12.7x–17.1x (floor 8x), DOM patch 3.3x–5.4x (floor 1.6x), dense 100k-symbol append patch vs mount 249x–254x (floor 200x) over three runs (2026-11-05, docs/PERFORMANCE.md) |
 | Bundle shaking | `pnpm check:bundle` | every documented import pattern still works after tree-shaking (`--blanket-false` must fail) |
 | Bundle budgets | `pnpm --filter @aster/benchmarks run budget` | all 13 import-pattern rows pass (sizes in [PERFORMANCE.md](PERFORMANCE.md#bundle-sizes)) |
 
