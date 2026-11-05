@@ -134,25 +134,26 @@ export function readData(data: unknown, format?: DataFormatSpec): Record<string,
   return ingestRows(rows)
 }
 
+const isPrimitiveRow = (v: unknown): boolean => v === null || (typeof v !== 'object' && typeof v !== 'function')
+
 /**
  * vega-dataflow `ingest`: a datum that is not an object is wrapped as `{data: datum}` (`[12, 23]` is two rows
  * `{data: 12}`, `{data: 23}`). Returns the input array when every row is already an object, so the common case
- * costs one scan and no copy.
+ * costs one scan and no copy. The rows before `from` are known to be objects already, but for the ones listed in
+ * `changed`: only the others are looked at (an append to a long dataset looks at what was appended).
  */
-export function ingestRows<T>(rows: readonly T[]): Record<string, unknown>[] {
+export function ingestRows<T>(rows: readonly T[], from = 0, changed?: readonly number[]): Record<string, unknown>[] {
   const n = rows.length
-  for (let i = 0; i < n; ++i) {
-    const v = rows[i]
-    if (v === null || (typeof v !== 'object' && typeof v !== 'function')) {
-      const out: Record<string, unknown>[] = new Array(n)
-      for (let j = 0; j < n; ++j) {
-        const r = rows[j]
-        out[j] = r !== null && (typeof r === 'object' || typeof r === 'function') ? (r as Record<string, unknown>) : { data: r }
-      }
-      return out
-    }
+  let found = false
+  for (let i = from; i < n && !found; ++i) found = isPrimitiveRow(rows[i])
+  if (!found && changed) for (const i of changed) if (i < from && isPrimitiveRow(rows[i])) { found = true; break }
+  if (!found) return rows as unknown as Record<string, unknown>[]
+  const out: Record<string, unknown>[] = new Array(n)
+  for (let j = 0; j < n; ++j) {
+    const r = rows[j]
+    out[j] = isPrimitiveRow(r) ? { data: r } : (r as Record<string, unknown>)
   }
-  return rows as unknown as Record<string, unknown>[]
+  return out
 }
 
 // Built-in JSON reader (no dependencies; `property` is a field path: `a.b`, `a\.b`, `a[0]`, `a["b"]`).

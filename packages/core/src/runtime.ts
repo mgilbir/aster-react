@@ -2648,8 +2648,10 @@ function buildDatasetsOf(ctx: EvalContext, inputData: Record<string, unknown[]>)
       }
     } else if (d.values != null) {
       const given = ownGet(inputData, name)
+      inPulse = ctx.inputPulses?.get(name) ?? null
       if (given) {
-        rows = readData(given, d.format)
+        // (rows that readData would pass through as they are -- an array of JSON rows, nothing to parse -- are only ingested)
+        rows = Array.isArray(given) && passesThroughRead(d.format, given) ? ingestHostRows(given as Row[], inPulse) : readData(given, d.format)
         inputs = [given]
         raw = true
       } else {
@@ -2657,7 +2659,6 @@ function buildDatasetsOf(ctx: EvalContext, inputData: Record<string, unknown[]>)
         // coercion; string values are parsed by the registered reader.
         rows = readData(inlineValues(ctx, d.values), d.format)
       }
-      inPulse = ctx.inputPulses?.get(name) ?? null
     } else {
       const given = ownGet(inputData, name) as Row[] | undefined
       if (given == null && (d as { url?: unknown }).url != null) {
@@ -2669,10 +2670,10 @@ function buildDatasetsOf(ctx: EvalContext, inputData: Record<string, unknown[]>)
           `or pass the rows as input.data["${name}"]`,
         )
       }
-      rows = ingestRows(given ?? [])
+      inPulse = ctx.inputPulses?.get(name) ?? null
+      rows = ingestHostRows(given ?? [], inPulse)
       shared = true
       if (given != null) { inputs = [given]; raw = true }
-      inPulse = ctx.inputPulses?.get(name) ?? null
     }
     // Inline values, host `input.data`, a `source` copy and a loaded dataset all
     // count against maxRows here, nested group data included (C49).
@@ -2768,6 +2769,27 @@ function buildDatasetsOf(ctx: EvalContext, inputData: Record<string, unknown[]>)
 }
 
 const copyRows = (rows: readonly Row[]): Row[] => rows.map((r) => ({ ...r }))
+
+/** Whether `readData(rows, format)` returns `ingestRows(rows)`: JSON rows already parsed, nothing to coerce, no d3-dsv `columns`. */
+function passesThroughRead(format: DataFormatSpec | undefined, rows: readonly unknown[]): boolean {
+  return (!format?.type || format.type === 'json') && !format?.parse && !Object.hasOwn(rows, 'columns')
+}
+
+/** The host's arrays whose leading rows are known to be objects, by how many (see `ingestHostRows`). */
+const objectRowPrefix = new WeakMap<readonly unknown[], number>()
+
+/**
+ * `ingestRows` on the rows the host gave a dataset. An append-only pulse leaves the rows before its `baseLength` as they were but
+ * for the ones it lists as changed (a stream appends to the array it already gave): when those were already all objects, only
+ * the appended and the changed rows are looked at, not the whole dataset on every append.
+ */
+function ingestHostRows(given: readonly Row[], pulse: StepPulse | null): Row[] {
+  const known = objectRowPrefix.get(given) ?? 0
+  const base = pulse?.appendOnly && pulse.baseLength !== undefined && pulse.baseLength <= known && pulse.baseLength <= given.length ? pulse.baseLength : 0
+  const rows = ingestRows(given, base, pulse?.changed)
+  if (rows === given) objectRowPrefix.set(given, given.length)
+  return rows
+}
 
 /** The earlier runs of dataset `name` whose steps may be kept: those made from the inputs it has now (see {@link DatasetState.inputs}). */
 function reusableRuns(ctx: EvalContext, name: string, inputs: readonly unknown[] | undefined, raw: boolean, steps: number): DatasetState[] {
