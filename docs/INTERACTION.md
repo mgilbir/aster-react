@@ -269,8 +269,9 @@ export function Signals(): React.ReactElement {
   as a signal override and the listeners are notified.
 - The spec's DOM event streams are bound on the SVG renderer only (`renderer="svg"`, `interactive` not `false`); the
   canvas renderer does not bind them. Use props, `setSignal`, `tooltip` and the selection props there.
-- `denseMarks: 'auto'` stays off for a spec with `signal.on` streams, because those read the datum from per-item DOM
-  nodes. Like vega's view, the chart calls `preventDefault()` on the events of its own surface that a stream listens to, except those
+- `denseMarks: 'auto'` stays off for a spec with `signal.on` streams, as a conservative default: the event loop is given
+  the scene hit index (`pick`), which resolves `event.item` and its datum from the scene, not from per-item DOM nodes, and
+  `denseMarks={true}` batches whatever the spec binds. Like vega's view, the chart calls `preventDefault()` on the events of its own surface that a stream listens to, except those
   `config.events.defaults` leaves alone (default `{allow: ['wheel']}`; `prevent` / `allow` lists or booleans as in vega, a `consume`d
   stream always prevents), so dragging a brush selects no text and a wheel still scrolls the page. The `preventDefault` prop is
   vega's `view.preventDefault()`: the verdict when the config names neither `prevent` nor `allow`;
