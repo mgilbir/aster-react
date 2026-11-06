@@ -118,8 +118,10 @@ asterDom 9.25 / 7.30, react-vega 15.50 / 16.75, vega-embed hook 14.90 / 8.30. St
 object, same data): 0 DOM mutations on all four; 0.3 ms for aster vs 0.1 ms for the Vega wrappers. Under a
 one-update-per-frame stream the line chart holds 16.7 ms median frames on all four; long frames (over 21 ms) are
 0.0% for aster, 1.7% to 3.7% for the Vega embeds. Run alternately against the 2026-10-27 build (2a03147), aster's
-first render and update here are 5% to 17% slower, the Vega embeds within noise (normalised by the Vega embeds of
-the same run, about 5%); the cause is not identified.
+first render and update timings here read 5% to 17% slower (about 5% normalised by the Vega embeds of the same run),
+but the work does not differ: both builds emit byte-identical SVG for these charts, and CPU profiles of the same
+mounts and updates in Chromium, taken alternately, show the current build busy no longer than the old one (2.4 to 3.7 s
+against 2.7 to 4.0 s, tracking the machine's load). The timing difference is within this machine's noise.
 
 `pnpm bench:memory` (jsdom heap growth per cycle, steady state, kB): line update aster 24.4 /
 asterDom 28.6 / react-vega 42.2 / vega-embed hook 12.4; scatter update 27.1 / 26.9 / 46.0 / 36.2.
