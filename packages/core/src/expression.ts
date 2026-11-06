@@ -29,7 +29,7 @@ function numericSequence(start: number, stop?: number, step?: number): number[] 
   const len = Math.max(0, Math.ceil((stop - start) / step))
   // Deviation from d3/vega (safety): under limits the length is bounded BEFORE
   // the allocation (sequence(0, 5e7) would otherwise build a 400 MB array in
-  // one uninterruptible call), and the clock is sampled while filling (C9).
+  // one uninterruptible call), and the clock is sampled while filling.
   ceiling('rows', len, 'sequence')
   boundedCount(len, 'sequence', 'rows')
   const out = new Array(len)
@@ -106,7 +106,7 @@ export type CompiledExpr = (datum: unknown, params?: Record<string, unknown>, ev
 
 // The default locale -- upstream's expression `format` goes through
 // vega-format's default locale (grouping included). It is read per call (not
-// snapshotted at import) so a later `defaultLocale(...)` is honoured (C70).
+// snapshotted at import) so a later `defaultLocale(...)` is honoured.
 const L = {
   format: (spec: string) => currentLocale().format(spec),
   timeFormat: (spec: unknown) => currentLocale().timeFormat(spec),
@@ -406,7 +406,7 @@ function createBuiltinFunctions(runtime: ExpressionRuntime): Record<string, unkn
     toBoolean: (value: unknown) => toBoolean(value),
     toNumber: (value: unknown) => toNumber(value),
     // unary, like vega-functions ("suppress extra arguments"): a second argument
-    // would be a caller-supplied callable (audit C1)
+    // would be a caller-supplied callable
     toDate: (value: unknown) => toDate(value),
     toString: (value: unknown) => toString(value),
     // control flow
@@ -529,7 +529,7 @@ function createBuiltinFunctions(runtime: ExpressionRuntime): Record<string, unkn
     indata: (name: string, field: string, value: unknown) => {
       const rows = runtime.data(name) ?? []
       // O(rows) per call and usually called per row: charge the scan so the
-      // wall clock is sampled inside the O(n^2) pattern (C7).
+      // wall clock is sampled inside the O(n^2) pattern.
       meterTick('indata', rows.length)
       const read = memoField(field)
       let count = 0
@@ -573,8 +573,9 @@ function createBuiltinFunctions(runtime: ExpressionRuntime): Record<string, unkn
 }
 
 /**
- * An expression that does not parse. vega finds these in `vega.parse` (before anything runs) and
- * throws; the engine parses lazily, so the error surfaces mid-evaluation -- but it stays a throw: it
+ * An expression that does not parse, as thrown by the engine's expression compiler. vega finds these in
+ * `vega.parse` (before anything runs) and throws; the expressions a spec contains are checked when the spec is
+ * compiled, before evaluation, and fail there as a `SpecParseError`. Either way it is a throw: it
  * is the spec that is wrong, not one datum, and the "log and carry on" recovery of runtime
  * expression errors (see RuntimeInput.logger) does not apply to it.
  */

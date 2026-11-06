@@ -122,7 +122,7 @@ describe('event-driven signals', () => {
 })
 
 // ---------------------------------------------------------------------------
-// C20: vega's event-stream semantics (the real-browser parity gate is
+// vega's event-stream semantics (the real-browser parity gate is
 // packages/conformance/scripts/browser-signals.mts; these are the jsdom-level checks)
 // ---------------------------------------------------------------------------
 

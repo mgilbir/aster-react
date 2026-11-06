@@ -1,7 +1,10 @@
 /**
  * Runtime: evaluate a CompiledChart against runtime inputs (data, size) into a
- * renderer-neutral SceneRoot. Static execution mode: everything is evaluated
- * eagerly per call; the caller re-evaluates when inputs change.
+ * renderer-neutral SceneRoot. Each call evaluates eagerly from the inputs it is
+ * given. The chart also keeps a committed `IncrementalState` (see below), so a
+ * later call with `dataChanges`, `dataPulse` or `changedDatasets` reuses the
+ * transform steps, scales and mark items that cannot have changed; the result is
+ * the scene a fresh evaluation would produce.
  */
 import { compileExpr, ExpressionParseError, type CompiledExpr, type ExpressionRuntime } from './expression.js'
 import { scaleCallFailure, scaleRangeFailure } from './missing-scale.js'
@@ -104,7 +107,7 @@ export interface DatasetState {
   aliased?: Array<ReadonlySet<string> | undefined>
 }
 
-/** Min/max census of a continuous data-driven scale domain (C11). */
+/** Min/max census of a continuous data-driven scale domain. */
 interface ContCensus {
   data: string
   field: string
@@ -138,7 +141,7 @@ interface ScaleEntry {
 
 /**
  * Everything the incremental path remembers about the previous evaluation of
- * one compiled chart (audit T1). The compiled IR is immutable; this object is the
+ * one compiled chart. The compiled IR is immutable; this object is the
  * ONLY place per-chart evaluation memory lives, so correctness no longer
  * depends on how many times per evaluation `buildScales`/`buildDatasets` run:
  *
@@ -160,13 +163,13 @@ interface IncrementalState {
   scales: Map<string, Scale>
   scaleEntries: Map<string, ScaleEntry>
   datasets: Map<string, DatasetState>
-  /** Top-level mark groups, keyed by compiled-mark identity (C4). */
+  /** Top-level mark groups, keyed by compiled-mark identity. */
   groups: Map<CompiledMark, SceneGroup>
   /** True once a fast path updated a structure in place (see above). */
   stale: boolean
   /** Where the view's id counter stood (see identifier-ids.ts): the next evaluation numbers new rows from here. */
   idCounter: number
-  /** The datasets of group scopes, by instance and name: what the pipeline read and made (see `runScopedData` in incremental-engine.ts). */
+  /** The datasets of group scopes, by instance and name: what the pipeline read and made (see `runScopedData` below). */
   scoped: Map<string, ScopedRun>
   /** The items of each mark (by instance) whose transforms number them: the numbers an item keeps (see `transformMarkItems`). */
   numbered: Map<string, readonly SceneItem[]>
@@ -238,7 +241,7 @@ function beginTxn(engine: IncrementalEngine, chart: CompiledChart, unchanged?: D
  * Fingerprint of everything that feeds expression evaluation and encoding
  * besides the data: the signal params (width/height included). Typed and
  * structural (fingerprint.ts), so a derived object-valued signal that is
- * re-created each round (`[0, width]`) hashes equal when unchanged (C57).
+ * re-created each round (`[0, width]`) hashes equal when unchanged.
  */
 function paramFpOf(params: Record<string, unknown>): string {
   const parts: string[] = []
@@ -268,7 +271,7 @@ const GROUP_BOUNDS = new WeakMap<SceneGroup, Bounds>()
 interface ItemsUndo { oldLen: number; idx: number[]; items: SceneItem[] }
 
 /**
- * Persistent-scene sharing without mutating a returned scene (C52).
+ * Persistent-scene sharing without mutating a returned scene.
  *
  * An append / same-length update advances the engine-owned items array in place
  * (O(changes)) and hands it to the NEW group. The SUPERSEDED group — the one in
@@ -653,7 +656,7 @@ function prepareChartCtx(
   // The deadline belongs to the enclosing limits scope (evaluateChart /
   // getChartInfo / renderSpec / session), so one wall clock covers the whole
   // call -- the `fit` loop re-enters this function per iteration and must not
-  // restart the budget (C7).
+  // restart the budget.
   const meter = activeMeter()
   const deadline = meter?.clock.deadline ?? undefined
   const checkDeadline = (phase = 'evaluation'): void => {
@@ -943,7 +946,7 @@ function resolveProjectionParam(ctx: EvalContext, v: unknown): unknown {
   return v
 }
 
-/** Build the d3-geo projection one compiled definition describes, in the current context. */
+/** Build the projection one compiled definition describes, in the current context. */
 function buildProjectionOf(ctx: EvalContext, p: CompiledProjection): unknown {
   const build = requireGeo() // throws an actionable error if the geo addon is absent
   // (the type is a parameter like any other: `type: {signal: "projectionName"}`)
@@ -1101,12 +1104,12 @@ export const DATA_DEPENDENT_EXPR = /\b(data|indata|domain|range|scale|bandwidth|
  * current signal params (vega-expression rewrites bare identifiers to the
  * `$`-prefixed params our interpreter binds). Expressions that depend on not-yet
  * resolved values throw and are skipped for this round. Returns whether any
- * value changed (drives the fixed-point loop). Values compare structurally
- * (C57): an unchanged object-valued signal such as `[0, width]` is a fresh array
+ * value changed (drives the fixed-point loop). Values compare structurally: an
+ * unchanged object-valued signal such as `[0, width]` is a fresh array
  * every round and must not count as a change.
  *
  * Resolved values live in `ctx.signalParams` for THIS evaluation only: the
- * compiled chart is never written (C17), so an evaluation is a pure function of
+ * compiled chart is never written, so an evaluation is a pure function of
  * (compiled spec, input).
  *
  * `staticOnly` resolves just the signals that do not read datasets or scales.
@@ -1407,7 +1410,7 @@ function buildAxisAndLegend(
     const axis = resolveAxisOrient(axis0, ctx)
     const group = buildAxis(axis, ctx, axisIndex)
     if (group) {
-      // Carry guide identity for the accessible tree (R10.6) without changing
+      // Carry guide identity for the accessible tree without changing
       // the serialized SVG: the fields are scene metadata only.
       const meta = group as unknown as { zindex?: number; orient?: string; scale?: string; title?: string; aria?: boolean; grid?: boolean; format?: unknown; formatType?: unknown }
       // (the mark definition reads these as written -- vega-parser marks/definition.js: `+zindex || undefined`, `aria`,
@@ -1910,7 +1913,7 @@ function markScaleNames(mark: CompiledMark, chart: CompiledChart): string[] {
  * context (signals, size, overrides), each dataset it reads (closed over
  * dependencies), and each scale it reads (by object identity). Group marks
  * (facets, trellises, scoped scopes) are always rebuilt: their layout is
- * written by later passes, so reusing their objects is not sound (C14).
+ * written by later passes, so reusing their objects is not sound.
  */
 function canReuseMarkGroup(mark: CompiledMark, ctx: EvalContext): boolean {
   const prev = ctx.prev
@@ -2036,7 +2039,7 @@ function buildContentPass(
   // the previous scene's group object as-is, and marks over a changed dataset
   // splice theirs (item identity preserved for the DOM patcher). Groups are
   // matched by COMPILED-MARK IDENTITY, never by source dataset or name: two
-  // layers over one dataset, or several unnamed marks, are distinct (C4).
+  // layers over one dataset, or several unnamed marks, are distinct.
   const items: SceneGroup[] = []
 
   // 1) Build marks (plot area)
@@ -2137,7 +2140,7 @@ function buildContentPass(
  * usable immediately; `commit()` makes this evaluation the base the next
  * incremental one starts from. A host that runs post-evaluation checks (the
  * session's limits) commits only after they pass, so a rejected evaluation can
- * never become the state later pulses are relative to (C16).
+ * never become the state later pulses are relative to.
  */
 export interface PendingEvaluation {
   scene: SceneRoot
@@ -2353,7 +2356,9 @@ export function datasetsOfScene(scene: SceneRoot): ReadonlyMap<string, readonly 
 }
 
 /**
- * Compute chart metadata (size, padding, scales) without building the full scene.
+ * Compute chart metadata (size, padding, scales). This evaluates the chart once, as
+ * `evaluateChart` does, and reads the metadata off the evaluated scene
+ * (`chartInfoFromScene`); a host that already holds the scene can call that instead.
  * Useful for interaction, brushing, crosshair, etc.
  */
 export function getChartInfo(spec: VgSpec, input: RuntimeInput = {}): ChartInfo {
@@ -2363,7 +2368,7 @@ export function getChartInfo(spec: VgSpec, input: RuntimeInput = {}): ChartInfo 
 function getChartInfoImpl(spec: VgSpec, input: RuntimeInput): ChartInfo {
   // ONE evaluation: the info is read off the evaluated scene, so it is the scene's own plot size,
   // padding and scales -- under autosize `fit`/`pad` too, where the size the scales were built for
-  // is the fitted one, not the spec's (C53). (This used to prepare a second, unfitted context and
+  // is the fitted one, not the spec's. (This used to prepare a second, unfitted context and
   // then evaluate the whole chart again.)
   return chartInfoFromScene(evaluateOnce(compileChart(spec), input))
 }
@@ -2489,7 +2494,7 @@ function resolveSize(size: SizeSpec, override: number | undefined, signals: Reco
 
 
 // ---------------------------------------------------------------------------
-// Incremental pulse propagation (R13)
+// Incremental pulse propagation
 // ---------------------------------------------------------------------------
 
 export type StepTransformContext = TransformContext & {
@@ -2536,7 +2541,7 @@ export function withCarry<T>(tctx: Pick<TransformContext, 'ids'>, carry: readonl
  * A published pulse in the engine's two canonical shapes. A same-length update
  * (`{changed}`) is exactly an append-only pulse whose base is the current length
  * and that appends nothing, so ONE set of per-transform fast paths serves both
- * (C13: there used to be a second, same-length-only engine with separate state).
+ * (there used to be a second, same-length-only engine with separate state).
  */
 function normalizePulse(p: StepPulse, rowCount: number): StepPulse {
   if (p.from || p.appendOnly || p.added?.length || p.removed?.length) return p
@@ -2663,7 +2668,7 @@ function buildDatasetsOf(ctx: EvalContext, inputData: Record<string, unknown[]>)
       const given = ownGet(inputData, name) as Row[] | undefined
       if (given == null && (d as { url?: unknown }).url != null) {
         // A url dataset nobody resolved would render as an empty chart with no
-        // hint why (C60): fail loudly and say how to fix it.
+        // hint why: fail loudly and say how to fix it.
         throw new Error(
           `[aster] dataset "${name}" has a url but no data was loaded for it; resolve url datasets first: ` +
           `import { loadSpecData } from "@aster/core/load" and render await loadSpecData(spec, { baseURL, ... }), ` +
@@ -2676,7 +2681,7 @@ function buildDatasetsOf(ctx: EvalContext, inputData: Record<string, unknown[]>)
       if (given != null) { inputs = [given]; raw = true }
     }
     // Inline values, host `input.data`, a `source` copy and a loaded dataset all
-    // count against maxRows here, nested group data included (C49).
+    // count against maxRows here, nested group data included.
     checkRowCount(rows.length, `dataset "${name}"`)
     if (inPulse) inPulse = normalizePulse(inPulse, rows.length)
     let outPulse: StepPulse | null = inPulse
@@ -3018,7 +3023,7 @@ function onDemandBuilder(ctx: EvalContext, sources: ReadonlyMap<string, unknown>
   }
 }
 
-/** Snapshot resolved scales into plain data for the scene differential (R8.1/R8.2). */
+/** Snapshot resolved scales into plain data for the scene differential. */
 function snapshotScales(scales: Map<string, Scale>): Array<{ name: string; type: string; domain: unknown[]; range: unknown[]; bandwidth?: number; samples?: [unknown, unknown] }> {
   const out: Array<{ name: string; type: string; domain: unknown[]; range: unknown[]; bandwidth?: number; samples?: [unknown, unknown] }> = []
   for (const [name, scale] of scales) {
@@ -3117,7 +3122,7 @@ function freshDiscCensus(dom: { data: string; field: string }, rows: Row[]): Dis
 /**
  * Advance a continuous min/max census by a pulse, or return null when the domain
  * can no longer be proven unchanged (a value left [lo,hi], or the LAST row
- * holding the min/max moved away: the extreme itself moves — C11).
+ * holding the min/max moved away: the extreme itself moves).
  *
  * An append-only pulse (which includes the same-length form) updates `vals` in
  * place; the caller has claimed the entry. Any other mapping builds a fresh
@@ -3257,7 +3262,7 @@ function buildScales(ctx: EvalContext): void {
   // unchanged is identical to the previous evaluation's scale: reuse it and skip
   // the O(n) domain re-scan. Reuse reads the COMMITTED state only; this call's
   // result goes to the draft, so calling buildScales several times per
-  // evaluation (fixed-point rounds, size re-resolution) is harmless (T1, C5).
+  // evaluation (fixed-point rounds, size re-resolution) is harmless.
   const fp = ctxFpOf(ctx)
   const reusable = ctx.incremental && prev !== undefined && prev.fp === fp
   const stamp = `${fp}#${ctx.dsEpoch}`
@@ -3273,7 +3278,7 @@ function buildScales(ctx: EvalContext): void {
     }
     // A `{ fields: [...] }` domain (vega-lite's layered charts: several datasets
     // contribute to one shared scale) is resolved by buildScale itself, from the
-    // CURRENT datasets, every evaluation (C12): the IR keeps the declared domain.
+    // CURRENT datasets, every evaluation: the IR keeps the declared domain.
     // Such a scale has no single-dataset census, so it is never census-reused.
     const multi = isMultiFieldDomain(s.domain)
     const prevEntry = prev?.scaleEntries.get(s.name)
@@ -3492,11 +3497,11 @@ function evaluateMarkItems(
     // re-encode of those items is skipped entirely (including the row clone).
     // `rows` is in dataset order (pulse indices refer to it).
     //
-    // A returned scene is never observably written (C52): structural updates
+    // A returned scene is never observably written: structural updates
     // build a new array; appends/edits advance the engine-owned array in place
     // and turn the superseded group into a lazy snapshot (supersedeItems).
     // One item per row: refuse an over-sized mark before encoding any of it, and
-    // sample the wall clock inside the encode loops (C7).
+    // sample the wall clock inside the encode loops.
     const meter = activeMeter()
     if (meter) meter.items(encodeRows.length, `mark ${mark.type} encoding`)
     const pulse = reusablePulse(mark, ctx, source, encodeRows.length, prevGroup)
@@ -3697,7 +3702,7 @@ function evaluateMarkItems(
     }
   }
 
-  // Image URLs are spec-controlled: vet each through the URL policy (C93) so a
+  // Image URLs are spec-controlled: vet each through the URL policy so a
   // hostile spec cannot make the viewer's browser request arbitrary URLs.
   // Applied here, on the scene, so the string renderer, the DOM path and canvas
   // all see the same vetted items.
@@ -3746,7 +3751,7 @@ function evaluateMarkItems(
 
 /**
  * Hyperlinks (the `href` channel) pass the same URL policy as images and loaded
- * data (C93), here on the scene so every renderer sees vetted items. The
+ * data, here on the scene so every renderer sees vetted items. The
  * renderers additionally sanitize whatever they are handed (`sanitizeHref`,
  * vega-loader's rule), so with no policy a script URL is still never linked.
  */
@@ -4568,7 +4573,7 @@ function resolveEncodeSet(encode: Record<string, EncodeValue | EncodeValue[]>, d
 
   // The encoded channel values (pixels, colours, ...) live on the scene ITEM and
   // are never written back onto the datum: `datum` is the caller's data row, and
-  // tooltips, signals and interactions read data values from it (C21). A data
+  // tooltips, signals and interactions read data values from it. A data
   // field named like a channel (`x`, `size`, `fill`) therefore keeps its value.
   // `defined` is evaluated against the data tuple, as Vega does.
   let definedValue: unknown
@@ -5870,7 +5875,7 @@ function axisTicks(axis: CompiledAxis, scale: Scale, ctx: EvalContext): unknown[
 
 function axisLabelFormat(axis: CompiledAxis, scale: Scale, count: number, ctx: EvalContext, noSkip = false): (v: unknown) => string {
   // (vega has no axis `labelExpr`: vega-lite compiles it to `encode.labels.update.text`,
-  // which is applied to the label items themselves - see applyGuideEncode - so a raw
+  // which is applied to the label items themselves - see `customize` in guide-encode.ts - so a raw
   // `labelExpr` is ignored here exactly as vega ignores it)
   // The format and its type are what vega's AxisTicks is given: the values themselves (a signal's is what it holds, whatever its
   // type), read by the scale's tick format as vega's is. A specifier that is no string is a time multi-format on a calendar

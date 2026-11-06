@@ -1,9 +1,9 @@
 /**
- * Scene hit index (R10.1): resolves the mark item under a view coordinate
+ * Scene hit index: resolves the mark item under a view coordinate
  * without walking the DOM — the canvas backend has no DOM to query, and the
  * SVG backend benefits from O(1) hover on dense scenes.
  *
- * Every entry is picked against the geometry the renderers paint (audit C47),
+ * Every entry is picked against the geometry the renderers paint,
  * never a coarse stand-in: a point is a hit when it is inside the painted fill
  * or within the painted stroke (plus a 2px pointing slack), so a pie slice is
  * not found from the empty corner of its bounding box and a map region is found
@@ -25,7 +25,7 @@
  * resolvable by a linear scan for small scenes. Cell ranges are clamped to the
  * grid and an entry spanning too many cells (a huge item, a full-view
  * background) is kept in a short separate list instead of being replicated into
- * every cell (audit C41).
+ * every cell.
  */
 import type { SceneGroup, SceneItem, SceneRoot } from './types.js'
 import { Bounds, boundText } from './bounds.js'

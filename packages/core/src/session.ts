@@ -1,7 +1,9 @@
 /**
  * Incremental evaluation sessions.
  *
- * `renderSpec`/`evaluateChart` are pure, stateless one-shots. A live React app
+ * `renderSpec` is a pure one-shot (it compiles and evaluates from scratch); `evaluateChart` on a held
+ * `CompiledChart` commits incremental state that a later call with change hints reuses.
+ * A live React app
  * re-renders constantly — often with the same data (parent state changed, a
  * sibling updated, spec literal rebuilt). Without a session, aster re-evaluates
  * the whole scene on every one of those renders; Vega's dataflow skips work
@@ -27,7 +29,7 @@ import type { CompiledChart, RuntimeInput, SceneRoot, VgSpec } from './types.js'
 /**
  * Fingerprint of a dataset value: object/array values by IDENTITY (the caveat in
  * the file header), primitives (an inline JSON/CSV string) by typed VALUE — a
- * replaced string must invalidate the cache (C15).
+ * replaced string must invalidate the cache.
  */
 function dataRefKey(v: unknown): string {
   return v !== null && (typeof v === 'object' || typeof v === 'function') ? `#${refId(v as object)}` : valueKey(v)
@@ -154,7 +156,7 @@ export interface ChartSession {
  * Non-data input fingerprint: skeleton + everything else evaluateChart consumes.
  * Every component is TYPED (`valueKey`): width `undefined` vs `0`, signal `1` vs
  * `"1"`, and so on never collide; limits are part of the key because a cached
- * scene was accepted under specific budgets (C15/C49).
+ * scene was accepted under specific budgets.
  */
 function metaKeyOf(skeleton: string, input: RuntimeInput): string {
   const parts: string[] = []
@@ -330,7 +332,7 @@ export function createChartSession(): ChartSession {
     }
 
     // Compute everything into locals and commit only after every check has
-    // passed (C16): a limit that throws must leave the session — and the
+    // passed: a limit that throws must leave the session — and the
     // engine's incremental state — exactly as the previous accepted
     // evaluation left them.
     const recompile = skeleton !== lastSkeleton || !lastChart
@@ -372,7 +374,7 @@ export function createChartSession(): ChartSession {
     engineRaw = currentRaw
     lastScene = pending.scene
     // Every key follows the state that was just committed, or the no-op cache
-    // would serve a scene built for different inputs (C15).
+    // would serve a scene built for different inputs.
     lastKey = fingerprint(lastSpec, { ...effectiveInput, data: dataInput(currentRaw) })
     lastMetaKey = metaKeyOf(lastSkeleton, effectiveInput)
     lastRaw = currentRaw

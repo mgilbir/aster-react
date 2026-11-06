@@ -1,5 +1,5 @@
 /**
- * Canvas append-paint oracle (audit C22).
+ * Canvas append-paint oracle.
  *
  * The contract: whatever the canvas shows after `renderSceneToCanvasAppend`
  * returned true - the prior frames' paint plus the appended items - must be what a

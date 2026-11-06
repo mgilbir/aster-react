@@ -13,7 +13,10 @@
 /** Loose input: the Vega spec is JSON we interpret. Refined per-mark types come later. */
 export type VgSpec = Record<string, unknown>
 
-/** Specified chart size: fixed number, a width/height signal, or a band step. */
+/**
+ * Specified chart size: fixed number or a width/height signal. The type also admits a
+ * `{ step }` band step, but evaluating one throws (`{step}` sizing is not supported yet).
+ */
 export type SizeSpec = number | { signal: string } | { step: number }
 
 /** Runtime inputs resolved at evaluate time. */
@@ -21,7 +24,7 @@ export interface RuntimeInput {
   /** Budgets for untrusted specs (see limits.ts). */
   limits?: import('./limits.js').SpecLimits
   /**
-   * Policy for image-mark `url`s (C93). Applied when given, and with its
+   * Policy for image-mark `url`s. Applied when given, and with its
    * defaults whenever `limits` is set (a spec rendered under limits is
    * untrusted). Default: only http:, https: and data: (and relative) URLs pass;
    * `javascript:`, `file:`, `blob:` ... and URLs with credentials throw
@@ -76,8 +79,8 @@ export interface RuntimeInput {
    * the previous evaluate (the datasets' transform pipeline re-runs, and only
    * the marks drawing from them — directly or via a derived source chain —
    * are rebuilt). Unaffected marks reuse the previous scene's groups, so an
-   * update to one dataset skips re-encoding every other mark. Scales rebuild
-   * whenever any dataset changed (domains may span datasets). When omitted,
+   * update to one dataset skips re-encoding every other mark. Scales that read a
+   * changed dataset rebuild (a domain may span datasets); a scale over unchanged datasets is reused. When omitted,
    * all datasets are treated as changed (the safe default).
    */
   changedDatasets?: string[]
@@ -715,7 +718,7 @@ export interface SceneGroup extends SceneItem {
   unbounded?: boolean
   /** Pre-computed rounded-rect path `d` for clip-path defs (when cornerRadius > 0). */
   clipPathD?: string
-  /** @internal The mark's source dataset, used to match a mark to its previous group. */
+  /** @internal The mark's source dataset. Written when the group is built; nothing reads it (groups are matched by compiled-mark identity). */
   __source?: string
   /** Guide orientation (`left`/`right`/`top`/`bottom`) for axes. */
   orient?: string

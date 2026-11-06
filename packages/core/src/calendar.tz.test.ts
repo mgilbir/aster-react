@@ -1,5 +1,5 @@
 /**
- * Calendar of axis/legend labels (audit C25): a UTC scale formats its labels in
+ * Calendar of axis/legend labels: a UTC scale formats its labels in
  * UTC whatever the viewer's zone, a time scale in local time. Expected strings
  * were recorded from real vega (6.3.1) and are the same under every zone for the
  * UTC cases; the local-time case is derived from the zone the runner asked for.

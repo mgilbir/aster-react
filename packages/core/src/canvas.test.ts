@@ -1,5 +1,5 @@
 /**
- * Canvas renderer tests (R9.1): a recording 2D-context mock captures the
+ * Canvas renderer tests: a recording 2D-context mock captures the
  * renderer's draw commands; geometry and paint are compared against the same
  * scene's SVG serialization via shared path canonicalization.
  */

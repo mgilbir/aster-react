@@ -47,7 +47,7 @@ dataFormatRegistry.set('topojson', (data, format) => {
   }
   // `format.feature` / `format.mesh` name an object of the topology: look it up
   // by OWN property (topojson.ts rejects `constructor`, `__proto__`, ...), and
-  // the decoded coordinates are metered against the limits in scope (C60).
+  // the decoded coordinates are metered against the limits in scope.
   if (format.feature) {
     const fc = topoFeature(topo as never, String(format.feature))
     return (fc as { features?: unknown[] }).features as Record<string, unknown>[]
@@ -60,7 +60,7 @@ dataFormatRegistry.set('topojson', (data, format) => {
 })
 
 // ---------------------------------------------------------------------------
-// URL loading with a policy (C6, C60)
+// URL loading with a policy
 // ---------------------------------------------------------------------------
 
 /** Typed loader failure that is not a budget: the URL policy refused a request, or the response was unusable. */

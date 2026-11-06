@@ -7,7 +7,7 @@ import { patchSceneDom, renderSceneToDomElement } from './addon-dom.js'
 import { parseSvgPath } from './svg-path.js'
 import type { SceneRoot } from './types.js'
 
-// Regression + property suite for SVG string escaping (audit C2).
+// Regression + property suite for SVG string escaping.
 //
 // Method: take a scene that contains every mark type, axis and legend leaf and
 // a gradient def. For every channel the serializers read, overwrite that
@@ -342,7 +342,7 @@ describe('C2: SVG string renderer escapes every attribute and text value', () =>
   it('render.ts writes attribute values only through the shared writer (source guard)', () => {
     const src = readFileSync(join(import.meta.dirname, 'render.ts'), 'utf8')
     const interpolations = [...src.split('\n').filter((l) => !/\bt\(name: string, value: string\)/.test(l)).join('\n').matchAll(/="\$\{((?:[^{}]|\{[^{}]*\})*)\}/g)].map((m) => m[1]!.trim())
-    // The per-element attribute lists write through the AttrSink writers (audit C43),
+    // The per-element attribute lists write through the AttrSink writers,
     // so what is left to interpolate is the writers themselves plus a few constant-shaped
     // sites; the check below still covers every one of them. (The floor only guards
     // against the regex silently matching nothing.)

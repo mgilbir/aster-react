@@ -1,5 +1,5 @@
 /**
- * Named regressions for the transform layer's Vega semantics (audit C24, C59, C94).
+ * Named regressions for the transform layer's Vega semantics.
  *
  * The exhaustive check is `packages/conformance/scripts/differential-transforms.test.mts`
  * (thousands of params + rows -> rows cases run live through real Vega and the engine).

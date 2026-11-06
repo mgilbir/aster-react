@@ -1,6 +1,6 @@
 // @vitest-environment node
 /**
- * Every budget gets a test that drives the REAL attack shape (C6-C9, C49, T3).
+ * Every budget gets a test that drives the REAL attack shape.
  * Each attack runs in a child process with a hard kill (see attack.testkit.ts);
  * the test asserts an AsterLimitError after at most `2 * maxTimeMs + SLACK` of CPU time
  * (not wall time: that measures the scheduler on a loaded machine). Where a count can show the same

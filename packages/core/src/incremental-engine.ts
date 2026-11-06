@@ -516,7 +516,7 @@ function aggregatePulse(
     arr.push(i)
   }
   // Output order is the FIRST-OCCURRENCE order of the groups in the current
-  // rows, exactly like the full aggregate (C52). Surviving groups that moved
+  // rows, exactly like the full aggregate. Surviving groups that moved
   // are expressed through the pulse mapping (`outFrom`), not by keeping their
   // previous position.
   const outOrder = [...keyToIdx.keys()]

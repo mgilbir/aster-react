@@ -1,5 +1,5 @@
 /**
- * Small, direct regression tests for the scale/geo port nits (audit C62, C95) the
+ * Small, direct regression tests for the scale/geo port nits the
  * oracle vectors only reach indirectly.
  */
 import { describe, expect, it } from 'vitest'

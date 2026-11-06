@@ -96,7 +96,7 @@ const fresh = (spec: VgSpec, input: RuntimeInput): string =>
   renderSceneToSvg(evaluateChart(compileChart(structuredClone(spec)), input))
 
 // ---------------------------------------------------------------------------
-// C18: batch order
+// batch order
 // ---------------------------------------------------------------------------
 
 describe('stream batch order (C18)', () => {
@@ -201,7 +201,7 @@ describe('stream batch order (C18)', () => {
 })
 
 // ---------------------------------------------------------------------------
-// C91: large appends
+// large appends
 // ---------------------------------------------------------------------------
 
 describe('stream large batches (C91)', () => {
@@ -232,7 +232,7 @@ describe('stream large batches (C91)', () => {
 })
 
 // ---------------------------------------------------------------------------
-// C19: a throwing flush leaves the stream exactly as before it
+// a throwing flush leaves the stream exactly as before it
 // ---------------------------------------------------------------------------
 
 describe('stream flush atomicity (C19)', () => {
@@ -339,7 +339,7 @@ describe('stream flush atomicity (C19)', () => {
 })
 
 // ---------------------------------------------------------------------------
-// C91 / C49: honest backpressure, close(), and options
+// honest backpressure, close(), and options
 // ---------------------------------------------------------------------------
 
 describe('stream backpressure bounds', () => {

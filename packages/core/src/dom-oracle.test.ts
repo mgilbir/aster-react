@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 /**
- * DOM patch oracle (audit C3, T2).
+ * DOM patch oracle.
  *
  * The contract: patching a live <svg> step by step with `patchSceneDom` yields
  * the SAME DOM as building the final scene from scratch. The reference is built

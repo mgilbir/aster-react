@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 /**
- * C93: image `url`s pass the same policy as loaded data, in the string renderer
+ * Image `url`s pass the same policy as loaded data, in the string renderer
  * AND the DOM path. The policy runs while the scene is built, so both renderers
  * (and canvas) see already-vetted items.
  */

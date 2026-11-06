@@ -1,7 +1,7 @@
 // @vitest-environment node
 /**
- * C8: non-terminating loops (bin maxbins <= 0, stratify cycles) must terminate
- * or throw exactly where vega does. C42: no Math.min/max(...array) (or push
+ * Non-terminating loops (bin maxbins <= 0, stratify cycles) must terminate
+ * or throw exactly where vega does. No Math.min/max(...array) (or push
  * spread) over data-sized arrays: 300k rows must not overflow the stack.
  */
 import { describe, it, expect, afterAll } from 'vitest'

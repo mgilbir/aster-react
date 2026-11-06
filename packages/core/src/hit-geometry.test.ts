@@ -1,5 +1,5 @@
 /**
- * Hit-index geometry oracle (audit C47, C41).
+ * Hit-index geometry oracle.
  *
  * For every mark type, a point inside the geometry the canvas renderer PAINTS
  * must resolve to that mark's item, and a point well outside everything painted
@@ -306,7 +306,7 @@ function collectTexts(g: SceneGroup): SceneItem[] {
 }
 
 // ---------------------------------------------------------------------------
-// C41: the grid cannot be made to allocate without bound
+// the grid cannot be made to allocate without bound
 // ---------------------------------------------------------------------------
 
 describe('hit grid memory (audit C41)', () => {

@@ -30,7 +30,7 @@ const gen = (s: string): GeneratedPath => s as GeneratedPath
 // Every generated `d` (line/area/trail/arc/symbol/...) is written through an
 // AttrSink's `g()` (string AND DOM output share the `*Attrs` functions), which
 // calls this, so maxPathLength is enforced on the exact string at the one place
-// it is produced (C49). With no limits scope active it is one boolean load.
+// it is produced. With no limits scope active it is one boolean load.
 const genD = (d: GeneratedPath): string => { if (metering) checkPathLength(d); return d }
 
 // A line or area mark draws one path through its items, in the curve the first item's `interpolate` names (see
@@ -1195,7 +1195,7 @@ export function itemArcPath(it: SceneItem, digits: number | null = 3): Generated
 // --- the one SVG attribute/text writer --------------------------------------
 //
 // Every value the string renderer writes into the document goes through the
-// functions below (audit C2): `num`/`num3` for numbers (anything that is not a
+// functions below: `num`/`num3` for numbers (anything that is not a
 // number is coerced with `Number`, so a string can never survive into a
 // coordinate), `escAttr` for attribute values (including path data) and
 // `escText` for text content. Nothing else may interpolate a non-constant into
@@ -1261,7 +1261,7 @@ function attr(name: string, value: unknown): string {
 }
 
 
-// --- per-element attribute lists: the single source (audit C43, T2) ----------
+// --- per-element attribute lists: the single source ----------
 //
 // The string renderer and the DOM descriptor builder (dom.ts) both obtain every
 // element's attributes from the functions below, each writing into an
@@ -1273,7 +1273,7 @@ function attr(name: string, value: unknown): string {
 //
 // The paint of EVERY element goes through `paintAttrs` below: vega-scenegraph's
 // `stylesAttr` list, written once, in vega's order. A paint property therefore
-// cannot be dropped by one mark kind or one renderer only (C38/C48).
+// cannot be dropped by one mark kind or one renderer only.
 
 export interface AttrSink {
   /** Paint/presentation attribute with vega's SVG-renderer conventions (see `attr`). */

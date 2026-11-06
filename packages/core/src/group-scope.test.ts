@@ -1,5 +1,5 @@
 /**
- * Group marks as vega scopes (audit C51, C56, C58): the structure the runtime builds. The pixels are
+ * Group marks as vega scopes: the structure the runtime builds. The pixels are
  * compared against real vega in packages/conformance (guides-layout-vs-vega.test.ts); these tests pin
  * what a core-only run can see: scene shape, limits, and the cases that must not throw.
  */

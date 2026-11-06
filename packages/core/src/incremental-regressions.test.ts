@@ -1,7 +1,9 @@
 /**
- * One explicit regression per audit finding in the incremental core (C4, C5,
- * C11-C17, C52, C57). Each repro states the audit's own scenario and compares the
- * incremental result with a fresh `evaluateChart(compileChart(spec))`; the
+ * One explicit regression per known defect class of the incremental core (layer
+ * identity, stale scales, domain census, multi-dataset domains, transform state, group
+ * reuse, the session cache key, rejected evaluations, compiled-chart immutability,
+ * aggregate order, derived-signal caches). Each repro states the original scenario and
+ * compares the incremental result with a fresh `evaluateChart(compileChart(spec))`; the
  * property/fuzz oracle (incremental-oracle.test.ts) covers the general shape.
  */
 import { describe, it, expect } from 'vitest'
@@ -327,7 +329,7 @@ describe('C16: a rejected evaluation commits nothing', () => {
     // The formula throws on the appended row (no `obj`) AFTER it already
     // re-derived the changed row 0: the in-place fast path had half-updated its
     // cache when it died. The failure is a LIMIT violation inside the expression: a
-    // plain TypeError is logged and recovered like vega's (C90) and does not throw,
+    // plain TypeError is logged and recovered like vega's and does not throw,
     // while a limit refusal never is.
     const spec = {
       ...BASE,

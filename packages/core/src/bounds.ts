@@ -1000,7 +1000,7 @@ export function eachMarkBounds(
 
 /**
  * The bounds of a typed mark, cached per mark object: a scene that has been
- * returned is never written (C52), and a layout reads the same marks several
+ * returned is never written, and a layout reads the same marks several
  * times (grid cells, guide anchors, titles), each time over every item.
  */
 const TYPED_MARK_BOUNDS = new WeakMap<SceneGroup, Bounds>()

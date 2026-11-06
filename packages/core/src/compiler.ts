@@ -1,7 +1,8 @@
 /**
  * vg-compiler: Vega spec JSON -> CompiledChart IR.
- * Consumes the Vega spec directly (the canonical IR); vega-lite compatibility is
- * achieved by running vega-lite.compile in the app build / dev (oracle).
+ * Consumes the Vega spec directly (the canonical IR). Vega-Lite specs reach it
+ * through `@aster/vl` (packages/vl), the from-scratch Vega-Lite compiler, which
+ * emits the Vega this compiler consumes.
  */
 import { dict, ownGet } from './util.js'
 import { assertSpecDepth } from './limits.js'
@@ -273,7 +274,7 @@ function compileSignalDefs(signals?: Array<Record<string, unknown>>): CompiledSi
     if (Array.isArray(s.on)) {
       // An event handler's `update` runs when its event fires; it is NOT a static
       // initial value. (Promoting the first handler to `def.update` made a signal
-      // such as `(count||0)+1` tick on every evaluation with no event — C17;
+      // such as `(count||0)+1` tick on every evaluation with no event;
       // vega leaves such a signal undefined until the event.)
       // Keep the full event-stream spec: the host binds these via
       // bindSignalEvents (signals.ts) to drive the event loop.
@@ -353,7 +354,7 @@ function compileScale(s: Record<string, unknown>): CompiledScale {
  * The axes of one scope (the view or a group mark) with their config defaults.
  * vega applies the same lookup at every level - the config is the view's, the
  * scales are those the scope can see - so a nested group's axes follow
- * `config.axis` exactly as the top-level ones do (C51).
+ * `config.axis` exactly as the top-level ones do.
  */
 /** the axis config blocks of the default config, by orient and band: four orients, two kinds of scale at most */
 const DEFAULT_AXIS_BLOCKS = new Map<string, Record<string, unknown>>()
@@ -734,7 +735,7 @@ function compileMark(m0: Record<string, unknown>, cfgStyle?: Record<string, Reco
   if ((m as any).scales !== undefined) out.scales = ((m as any).scales as Array<Record<string, unknown>>).map(compileScale)
   const inScope = out.scales ? [...scopeScales, ...out.scales] : scopeScales
   if (m.marks !== undefined) out.marks = (m.marks as Array<Record<string, unknown>>).map((nm) => compileMark(nm, cfgStyle, cfgMarktype, inScope))
-  // a nested group's axes and legends are compiled like the view's: same config lookups (C51)
+  // a nested group's axes and legends are compiled like the view's: same config lookups
   const cfgAll = (cfgMarktype ?? {}) as unknown as Record<string, unknown>
   if ((m as any).axes !== undefined) out.axes = compileGuideAxes((m as any).axes as Array<Record<string, unknown>>, cfgAll, inScope)
   if ((m as any).legends !== undefined) out.legends = compileGuideLegends((m as any).legends as Array<Record<string, unknown>>, cfgAll)

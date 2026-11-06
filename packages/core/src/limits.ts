@@ -1,4 +1,7 @@
-/** Budgets for untrusted specs. All are optional; omitted limits are unlimited. */
+/**
+ * Budgets for untrusted specs. All are optional; an omitted limit sets no cap of its own, but the
+ * built-in ceilings on single calls (for example the length `sequence` may allocate) apply even without `limits`.
+ */
 export interface SpecLimits {
   /**
    * Maximum rows. Applies to the total of inline `data[].values` rows (top level
@@ -45,7 +48,7 @@ export interface SpecLimits {
   maxTimeMs?: number
 }
 
-/** Typed limit violation (R12.1); hosts can distinguish it from a render bug. */
+/** Typed limit violation; hosts can distinguish it from a render bug. */
 export class AsterLimitError extends Error {
   readonly code = 'ASTER_LIMIT'
   constructor(message: string) {
@@ -116,7 +119,7 @@ function defaultNow(): number {
 }
 
 // ---------------------------------------------------------------------------
-// The meter: budgets as counters at the sites that spend them (T3).
+// The meter: budgets as counters at the sites that spend them.
 //
 // A checkpoint clock only fires between phases, but the costs live inside
 // single synchronous calls (a transform, an emitter, one builtin allocating a

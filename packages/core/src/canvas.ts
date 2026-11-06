@@ -1,5 +1,5 @@
 /**
- * Scene -> Canvas2D renderer (R9.1). Both backends render the same scene, so
+ * Scene -> Canvas2D renderer. Both backends render the same scene, so
  * the engine stays single-sourced: the walk mirrors `render.ts` (same group
  * traversal, same shared geometry helpers) and only the final paint differs.
  *
@@ -122,7 +122,7 @@ export function canonicalPath(segs: PathSeg[]): string {
 // ---------------------------------------------------------------------------
 
 export interface RenderCanvasOptions {
-  /** Device pixel ratio: scales the context transform (R9.2 uses this). */
+  /** Device pixel ratio: scales the context transform. */
   dpr?: number
   /**
    * Batch large runs of identically-painted symbols into one fill/stroke (default
@@ -205,8 +205,7 @@ const NON_PAINT_KEYS = new Set(['datum', 'dataDatum', 'runtime', 'compiled'])
 
 /**
  * Structural equality of two scene values over their painted fields, with a
- * visit budget. Replaces the per-frame `JSON.stringify` of whole item arrays
- * (audit C96): no allocation, stops at the first difference, ignores
+ * visit budget. Replaces the per-frame `JSON.stringify` of whole item arrays. It allocates nothing, stops at the first difference, ignores
  * bookkeeping and the datum, and gives up (not equal) on a pathological graph.
  */
 function samePaint(a: unknown, b: unknown, budget: { n: number }, depth = 0): boolean {
@@ -1065,7 +1064,7 @@ function renderMark(type: string, group: SceneGroup, ctx: CanvasLike, scene: Sce
       const segs = parsePathData(d)
       tracePath(ctx, segs)
       // The trail polygon carries the FIRST item's full paint set, fill included
-      // (Vega-Lite encodes a trail's colour as `fill`; audit C23).
+      // (Vega-Lite encodes a trail's colour as `fill`).
       paintPath(ctx, segs, first, defs, 'auto', gradientBox(first, group))
       return
     }

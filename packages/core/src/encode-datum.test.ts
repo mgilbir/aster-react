@@ -1,5 +1,5 @@
 /**
- * C21: encoding never writes channel values back into the datum.
+ * Encoding never writes channel values back into the datum.
  *
  * `resolveEncodeSet` used to mirror every resolved channel (x, y, size, fill,
  * opacity, ...) onto `item.datum`, so a data field named like a channel was

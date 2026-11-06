@@ -3,7 +3,7 @@ import { renderSpec } from './index.js'
 import type { VgSpec } from './types.js'
 
 /**
- * C90: a sort that throws in a facet header builder used to be swallowed by `catch {}`. vega logs
+ * A sort that throws in a facet header builder used to be swallowed by `catch {}`. vega logs
  * it and leaves the rows in data order; the engine now reports it through RuntimeInput.logger.
  * (The encode / filter / mark-sort sites are compared with real vega in
  * packages/conformance/src/error-semantics.test.ts.)

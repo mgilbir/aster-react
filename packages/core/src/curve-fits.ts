@@ -301,7 +301,7 @@ export const FITS: Record<string, (rows: Row[], x: Get, y: Get, order: number) =
   poly: polynomialFit,
 }
 
-/** The number of coefficients a method estimates, the least a group must exceed in size to be fitted. */
+/** The polynomial degree a method fits (2 for `quad`, `order` for `poly`, 1 for every other method): a group must have more rows than this to be fitted. */
 export const fitParameters = (method: string, order: number): number => (method === 'poly' ? order : method === 'quad' ? 2 : 1)
 
 // --- loess --------------------------------------------------------------------------------------------------------------

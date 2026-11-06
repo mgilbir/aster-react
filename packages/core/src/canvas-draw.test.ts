@@ -1,7 +1,7 @@
 /**
  * The canvas painter follows vega-scenegraph's canvas draw rules (util/canvas/draw.js,
  * fill.js, stroke.js, marks/text.js, marks/image.js, markItemPath.js). A spy context
- * records every call and property write so each rule is asserted directly (audit C48),
+ * records every call and property write so each rule is asserted directly,
  * independent of the SVG comparison in canvas.test.ts.
  */
 import { describe, expect, it } from 'vitest'

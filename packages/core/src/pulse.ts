@@ -1,5 +1,5 @@
 /**
- * Dataflow pulses (R13).
+ * Dataflow pulses.
  *
  * Vega's runtime is a pulse graph: a source dataset emits a change tuple, each
  * transform propagates it to its targets, and only the dirty marks re-encode.

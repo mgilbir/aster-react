@@ -1,12 +1,12 @@
 /**
- * Accessible scene tree (R10.6).
+ * Accessible scene tree.
  *
  * The rendered SVG is an implementation detail: assistive technology needs a
  * small, stable tree of positioned controls with captions, not thousands of
  * `<path>` nodes. This module walks the scene exactly once and emits one node
  * per mark item (or one dense-chart summary per mark), guide and title. The
  * React host projects these nodes into focusable, absolutely-positioned
- * elements and uses the keyboard contract in `react/src/a11y.ts`.
+ * elements and uses the keyboard contract in `react/src/interaction.ts` (`keyboardView`).
  *
  * Every box is in the rendered viewport: the top-left of the chart's SVG (or canvas) is (0, 0), and the view's padding and
  * the frame's offset inside it are part of the numbers. That is the space of a pointer event mapped into the chart and of
@@ -42,7 +42,7 @@ export interface A11yNode {
   y: number
   width: number
   height: number
-  /** Continuous-axis adjustment metadata (R10.7). */
+  /** Continuous-axis adjustment metadata. */
   scale?: string
   orient?: string
   domain?: [number, number]
@@ -74,7 +74,7 @@ export interface A11yOptions {
   description?: string
   /**
    * Above this many mark items the tree collapses to one summary node per mark
-   * (the threshold vega-embed exposes as `aria` density control). Default 150.
+   * (Aster's own option; vega-embed has no equivalent). Default 150.
    */
   summaryThreshold?: number
   /** IDs / predicates marked as selected (`aria-selected`). */

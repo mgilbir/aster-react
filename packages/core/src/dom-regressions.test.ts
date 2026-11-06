@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 /**
- * Targeted regressions for the DOM findings (C3, C23, C43), each next to the
+ * Targeted regressions for the DOM findings (positional skip, trail fill, shared attribute list), each next to the
  * general oracle that covers its shape (dom-oracle, dom-string-parity).
  */
 import { describe, it, expect } from 'vitest'
@@ -15,7 +15,7 @@ const NS = 'http://www.w3.org/2000/svg'
 const mkSvg = (): Element => document.createElementNS(NS, 'svg')
 
 // ---------------------------------------------------------------------------
-// C3: positional `clean` skip
+// positional `clean` skip
 // ---------------------------------------------------------------------------
 
 describe('C3: removing items patches the right elements', () => {
@@ -56,7 +56,7 @@ describe('C3: removing items patches the right elements', () => {
 })
 
 // ---------------------------------------------------------------------------
-// C23: trail fill
+// trail fill
 // ---------------------------------------------------------------------------
 
 describe('C23: a trail keeps its fill', () => {
@@ -88,7 +88,7 @@ describe('C23: a trail keeps its fill', () => {
 })
 
 // ---------------------------------------------------------------------------
-// C43: one attribute list for the string renderer and the DOM descriptor
+// one attribute list for the string renderer and the DOM descriptor
 // ---------------------------------------------------------------------------
 
 const paint = {

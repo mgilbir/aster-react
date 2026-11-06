@@ -10,7 +10,7 @@ import { installGuideCaptions } from './render.js'
 export type ScaleSnapshots = Array<{ name: string; type: string; domain: unknown[]; range: unknown[]; bandwidth?: number; labelValues?: unknown[] }>
 
 const DISCRETE = new Set(['band', 'point', 'ordinal', 'bin-ordinal'])
-// read per call, not snapshotted at import (C70)
+// read per call, not snapshotted at import
 const loc = (): ReturnType<typeof currentLocale> => currentLocale()
 
 /** vega-scale caption.js `format`: the labels the caption quotes are formatted as a legend would, with the temporal defaults of a screen reader. */

@@ -1,6 +1,6 @@
 // @vitest-environment node
 /**
- * C6 / C60: loadSpecData takes a URL policy. Real HTTP servers on 127.0.0.1 so
+ * loadSpecData takes a URL policy. Real HTTP servers on 127.0.0.1 so
  * redirects, stalls, endless bodies and concurrency are the real thing.
  */
 import { describe, it, expect, afterAll, beforeAll } from 'vitest'

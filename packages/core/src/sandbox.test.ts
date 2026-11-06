@@ -5,8 +5,8 @@ import { eventsOf } from './geo-events.js'
 import { field, pluck, splitAccessPath } from './util.js'
 import { timeOffset, timeSequence, utcOffset, utcSequence } from './time.js'
 
-// Regression suite for the expression sandbox (audit C1) and the
-// prototype-keyed lookups (C50). Hostile inputs live here only.
+// Regression suite for the expression sandbox and the
+// prototype-keyed lookups. Hostile inputs live here only.
 
 const rt = { scale: () => undefined, data: () => undefined, expr: () => () => undefined }
 const run = (src: string, datum: unknown = {}, params: Record<string, unknown> = {}): unknown =>
@@ -133,7 +133,7 @@ describe('C1: Function constructor is unreachable from expressions', () => {
   })
 })
 
-// --- C50: spec-keyed lookups must not see Object.prototype --------------------
+// --- spec-keyed lookups must not see Object.prototype --------------------
 
 const HOSTILE_NAMES = ['constructor', 'toString', 'valueOf', 'hasOwnProperty', '__proto__', '__defineGetter__', 'isPrototypeOf']
 

@@ -1,5 +1,5 @@
 /**
- * Targeted regressions for the canvas findings (C22, C23, C96), each next to the
+ * Targeted regressions for the canvas findings (append paint, trail fill, per-frame serialisation), each next to the
  * general oracle that covers its shape (canvas-append-oracle, and the Chromium
  * pixel check in packages/conformance/scripts/browser-canvas-append.mts).
  */
@@ -17,7 +17,7 @@ const sceneOf = (items: SceneGroup[], extra: Record<string, unknown> = {}): Scen
   ({ width: 220, height: 140, padding: { top: 5, right: 6, bottom: 7, left: 8 }, items, ...extra }) as unknown as SceneRoot
 
 // ---------------------------------------------------------------------------
-// C23: trail fill
+// trail fill
 // ---------------------------------------------------------------------------
 
 describe('C23: a trail keeps its fill', () => {
@@ -51,7 +51,7 @@ describe('C23: a trail keeps its fill', () => {
 })
 
 // ---------------------------------------------------------------------------
-// C22 + guide changes + z-order: the append path equals a full repaint
+// append paint + guide changes + z-order: the append path equals a full repaint
 // ---------------------------------------------------------------------------
 
 describe('C22: canvas append paint equals a full repaint', () => {
@@ -121,7 +121,7 @@ describe('C22: canvas append paint equals a full repaint', () => {
 })
 
 // ---------------------------------------------------------------------------
-// C96: no per-frame JSON.stringify of item arrays
+// no per-frame JSON.stringify of item arrays
 // ---------------------------------------------------------------------------
 
 describe('C96: the append path never serialises item arrays', () => {

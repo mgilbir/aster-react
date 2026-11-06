@@ -99,7 +99,7 @@ describe('differential fuzz (incremental === full re-derive)', () => {
   it('matches a FRESH full evaluation across random changesets and specs', () => {
     // The reference is `evaluateChart(compileChart(spec))` built from scratch for
     // every trial. (It used to be the same mutated compiled chart, which cannot
-    // see a stale cache: audit C84.) Values move both up AND down, so domains
+    // see a stale cache.) Values move both up AND down, so domains
     // grow and shrink; the full property/fuzz oracle lives in
     // incremental-oracle.test.ts.
     const rand = mulberry32(0xC0FFEE)
@@ -151,7 +151,7 @@ describe('differential fuzz (incremental === full re-derive)', () => {
     const b = evaluateChart(chart, { data: { t: next }, dataChanges: { t: [3] } })
     const itemsB = b.items[0]!.items as unknown[]
     expect(renderSceneToSvg(b)).toBe(renderSceneToSvg(evaluateChart(chart, { data: { t: next } })))
-    // The previous scene is never written (C52): a new item array, with every
+    // The previous scene is never written: a new item array, with every
     // unchanged item shared by identity and the old array left as it was.
     expect(b.items[0]).not.toBe(groupA)
     const readA = groupA.items as unknown[] // re-read through the property
@@ -363,7 +363,7 @@ describe('per-datum differential update', () => {
     expect(after[1]).not.toBe(before[1]) // changed -> re-encoded
     expect((after[1] as { x?: number }).x).not.toBe((before[1] as { x?: number }).x)
     // The mark GROUP is a new object per update and the earlier scene is left
-    // untouched (C52): structural sharing of the unchanged items only.
+    // untouched: structural sharing of the unchanged items only.
     const group = (s: import('./types.js').SceneRoot) => s.items.find((g) => (g as { marktype?: string }).marktype === 'symbol')!
     expect(group(s2)).not.toBe(group(s1))
     expect(symbolItems(s1)).toEqual(before)

@@ -8,7 +8,7 @@
  *     share an id when their clip geometry is identical, in which case the shared
  *     `<clipPath>` is the same shape and the reference resolves correctly.
  * A per-render counter (`clip1`, `clip2`, ...) restarted in every document, so
- * the first clipPath in document order silently won for every other chart (C45).
+ * the first clipPath in document order silently won for every other chart.
  *
  * Within one render a hash collision between two DIFFERENT geometries (2^-53 per
  * pair) is detected and resolved with a numeric suffix, never shared.
