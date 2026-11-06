@@ -56,10 +56,12 @@ feature. The refusal list is in [packages/vl/README.md](../packages/vl/README.md
 
 ### Conformance rigour: in place
 
-The oracle gates are the `pnpm check` list ([TESTING.md](TESTING.md)): the SVG corpus, the Vega-Lite corpus, the scene
-differential, guide captions, the transform matrix, the three schema sweeps, differential fuzzing with committed
-reproducers, oracle vectors (incl. a time-zone matrix), and the real-browser gates (corpus with live text metrics,
-canvas pixels in Chromium, Firefox and WebKit nightly, batched-SVG pixels, signal event streams, React interaction).
+The oracle gates are split between the PR gate and the nightly workflow ([TESTING.md](TESTING.md)). `pnpm check` (the
+PR gate, and the only gate of a release tag) runs the SVG corpus, the Vega-Lite corpus, the scene differential, guide
+captions, the transform matrix, the signals sweep, committed fuzz reproducers, oracle vectors (incl. a time-zone matrix),
+and the Chromium gates (corpus with live text metrics, canvas pixels, batched-SVG pixels, signal event streams, React
+interaction). The nightly workflow adds the Vega and Vega-Lite schema sweeps, the official example gallery, differential fuzzing
+(3000 seeds), canvas pixels in Firefox and WebKit, and the long benchmarks.
 The canonicalizer is strict and each normalization is justified in `packages/conformance/src/normalize.ts`.
 
 ### Rendering targets, interaction, React idioms, production: done
@@ -100,16 +102,19 @@ Each item is something the code or the gates show today; none is a plan that has
 
 ## 3. Method (how a port is made safe)
 
-Record, implement, replay, swap, ban:
+Implement, compare, swap, ban. The comparison is recorded only where the result does not depend on the JavaScript engine,
+and live (real upstream and Aster in one process) everywhere else ([TESTING.md](TESTING.md#oracle-vectors)):
 
-1. **Record.** A `gen-*.mjs` script uses the real dependency to emit input to output vectors, including edge
-   cases (`packages/conformance/scripts`, output in `packages/core/testdata`).
-2. **Implement** the replacement behind the same internal API, as a transcription of the upstream code (surprising
+1. **Implement** the replacement behind the same internal API, as a transcription of the upstream code (surprising
    upstream behaviour is reproduced and pinned, not tidied).
-3. **Replay.** A unit test asserts exact equality against the vectors, independent of the browser and the SVG oracle,
-   so a failure is localised to one library.
-4. **Swap and delete.** Flip the import, remove the dependency.
-5. **Ban it.** `pnpm check:deps` fails on any banned import or dependency.
+2. **Compare.** Libraries whose results are engine-independent (vega-util, d3-color, d3-format / vega-format, vega-time,
+   d3-dsv, topojson-client) are replayed against vectors a `gen-*.mjs` script recorded from the pinned upstream
+   (`packages/conformance/scripts`, output in `packages/core/testdata`), with exact equality, independent of the browser and
+   the SVG oracle. Libraries that go through `Math.pow/exp/log`, the trig functions or `sqrt` (not bit-identical across V8
+   versions), and the spec-level suites, are live differentials: real upstream and Aster run in one process on identical
+   inputs and are compared strictly (see "Why live" in TESTING.md). Either way a failure is localised to one library.
+3. **Swap and delete.** Flip the import, remove the dependency.
+4. **Ban it.** `pnpm check:deps` fails on any banned import or dependency.
 
 The SVG corpus, the scene differential, the sweeps and the fuzzer then check the whole pipeline against the same oracle.
 
