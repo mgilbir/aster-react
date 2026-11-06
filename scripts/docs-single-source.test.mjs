@@ -42,7 +42,7 @@ const ticks = (text) => new Set([...text.matchAll(/`([^`\n]+)`/g)].map((m) => m[
 const countIn = (text, names) => [...ticks(text)].filter((t) => names.has(t))
 
 /** Docs whose job is to be a history, a snapshot or a table of commands: they may name anything. */
-const HISTORY = new Set(['CHANGELOG.md', 'THIRD_PARTY_NOTICES.md', 'packages/conformance/gallery/TRIAGE.md'])
+const HISTORY = new Set(['CHANGELOG.md', 'THIRD_PARTY_NOTICES.md'])
 
 describe('add-ons: TRANSFORMS_ADDON_TYPES and LOAD_ADDON_FORMATS are the lists', () => {
   const types = new Set(TRANSFORMS_ADDON_TYPES)

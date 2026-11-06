@@ -176,6 +176,16 @@ vega-lite supports and is not here compiles to the same Vega.)
   `TODO: support utc`). So a filter keeps the same rows as vega-lite in every zone. (The `timeUnit` transform and the encodings do
   read a UTC unit in UTC.) A `utc: true` DateTime *value* is still read in UTC.
 
+## Known compiler gaps outside the gallery
+
+No gallery spec exercises these, so the gallery gate cannot see them. Each was reproduced against vega-lite 6.4.3 on 2026-11-06.
+
+- **A discrete `x` with `sort: "descending"` and an `x2` on another field** (`x: {field: "a", type: "nominal", sort: "descending"}`,
+  `x2: {field: "c"}`) renders a different SVG from vega-lite's (the earlier triage put the cause in the union of
+  the two domains, which needs the raw dataset's sort). The same spec with no `sort`, or `sort: "ascending"`, matches.
+- **Field names of `geopoint` outputs** in a unit inside a `concat` or a `facet` stay `x` and `y`, where vega-lite writes
+  `concat_0_x` / `child_x`. No render differs; the names show only in the compiled Vega.
+
 ## Known runtime gaps (Aster, not the compiler)
 
 None are recorded: real vega renders our output identically to vega-lite's for the

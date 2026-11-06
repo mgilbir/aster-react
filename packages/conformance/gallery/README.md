@@ -139,9 +139,12 @@ gallery) is SKIPPED with a reason and listed in the output -- never a swap regre
 (`floors.json` `swap`): every runnable pair must pass and equal vega's B, at least `minRunnable` pairs must be runnable (the sample cannot
 erode silently), unverifiable ceiling. `pnpm conformance:gallery --regenerate-swap-pairs` rewrites the list deliberately (review the diff). It is reported apart
 from the fresh-mount counts, and runs after the other paths (a load-dependent timeout of a data load would otherwise decide it).
-On origin/main 187 of the 223 pairs passed; the rest left the old chart's elements, timers or state behind.
+All 223 pairs run and pass (checked 2026-11-06). When the path was added, 187 of the 223 passed; the rest left the old chart's elements, timers or state behind.
 
 ## Triage
 
-`TRIAGE.md` is the snapshot of why each non-passing spec does not pass; `triage.json` is the same per spec;
-`scripts/gallery-triage.mts` regenerates them (`pnpm conformance:gallery --json=out.json` first).
+There is nothing open to triage: on 2026-11-06 every spec on every path passes except the 4 Vega specs the static oracle cannot
+render (it needs a canvas Node lacks), and `floors.json` holds that state. [TRIAGE.md](TRIAGE.md) says so and keeps the method.
+When a spec fails again, run `pnpm conformance:gallery --json=out.json`, then
+`pnpm --filter @aster/conformance exec tsx scripts/gallery-triage.mts out.json triage.json`, which puts each failing spec into a
+root-cause category (`triage.json` is the per-spec output; the committed one is from the first run of the gate and is stale).
