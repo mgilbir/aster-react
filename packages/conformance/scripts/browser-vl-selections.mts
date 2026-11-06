@@ -17,10 +17,15 @@
  * index among the group frames in document order), and positions are fractions of that frame. Their signals live in
  * group scopes, which are compared too (vega: the sub-contexts of the view's state).
  *
- * Run: pnpm conformance:selections [--filter=substr] [--min-cases=N]   (after `pnpm build`)
+ * Run: pnpm conformance:selections [--filter=substr] [--min-cases=N] [--max-retained=N]   (after `pnpm build`)
+ *
+ * Debugging: SEL_DUMP=1 writes the SVGs of one step of every case (the step set by SEL_DUMP_AT, default 0 = the initial render) as
+ * sel-vega.svg, sel-aster.svg and sel-vega-fresh.svg into SEL_DUMP_DIR (default `aster-vl-selections-dump` under the OS temp
+ * directory; created if missing) and prints the directory. Each case overwrites the previous one's files, so combine it with --filter.
  */
 import { writeFileSync, rmSync, mkdirSync, readFileSync, readdirSync } from 'node:fs'
 import { join, dirname } from 'node:path'
+import { tmpdir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 import { createRequire } from 'node:module'
 import { build } from 'esbuild'
@@ -876,7 +881,14 @@ for (const c of cases) {
       for (const n of Object.keys(vs.stores)) {
         if (vs.stores[n] !== as.stores[n]) problems.push(`${label}: store ${n}: vega=${vs.stores[n]!.slice(0, 200)} aster=${as.stores[n]!.slice(0, 200)}`)
       }
-      if (process.env.SEL_DUMP && i === Number(process.env.SEL_DUMP_AT ?? 0)) { writeFileSync('/tmp/fix-20-vl-selections-scratch/sel-vega.svg', vs.svg); writeFileSync('/tmp/fix-20-vl-selections-scratch/sel-aster.svg', as.svg); writeFileSync('/tmp/fix-20-vl-selections-scratch/sel-vega-fresh.svg', vs.fresh ?? '') }
+      if (process.env.SEL_DUMP && i === Number(process.env.SEL_DUMP_AT ?? 0)) {
+        const dir = process.env.SEL_DUMP_DIR ?? join(tmpdir(), 'aster-vl-selections-dump')
+        mkdirSync(dir, { recursive: true })
+        writeFileSync(join(dir, 'sel-vega.svg'), vs.svg)
+        writeFileSync(join(dir, 'sel-aster.svg'), as.svg)
+        writeFileSync(join(dir, 'sel-vega-fresh.svg'), vs.fresh ?? '')
+        console.log(`[browser-vl-selections] SEL_DUMP: ${c.name} / ${label} written to ${dir}`)
+      }
       const retained = canonicalizeSvg(vs.svg)
       const aster = canonicalizeSvg(as.svg)
       const diffs = diffCanonical(retained, aster)
