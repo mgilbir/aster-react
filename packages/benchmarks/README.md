@@ -6,7 +6,7 @@ to embed Vega in React.
 | Approach | What it measures |
 |---|---|
 | `aster` | `<Chart>` from `@aster/react` with `incremental={false}`: the full SVG is re-serialized and re-parsed per update |
-| `asterDom` | same `<Chart incremental>` — keeps the `<svg>` and patches only changed attributes (`patchSceneDom` in `@aster/core`) |
+| `asterDom` | same `<Chart incremental>` — keeps the `<svg>` and patches only changed attributes (`patchSceneDom` in `@aster/core/dom`) |
 | `reactVega` | `react-vega` v8 `<VegaEmbed>` — the React wrapper from the vega org. Data updates deep-compare the spec and **re-embed** the view |
 | `embedHook` | `vega-embed` in a `useEffect` following the official tutorials — incl. the documented incremental paths (`view.change()` for data, `view.width()/height()` for resize). This is Vega's best case |
 
@@ -41,7 +41,7 @@ pnpm bench:browser-stream # per-frame append: aster <ChartStream> vs vega view.c
 Knobs (all runners): `--points=1000` (dataset size), `--reps=…`, `--kind=line,scatter,bar`
 (runtime/browser), `--cycles=…` (memory), `--seconds=3` (browser frame pacing),
 `--dense=0,1` (streaming: aster SVG with `denseMarks` batching on/off).
-The browser runner needs a Chromium for Playwright (`npx playwright install chromium`).
+The browser runner needs a Chromium for Playwright (`pnpm --filter @aster/conformance exec playwright install --with-deps chromium`).
 
 ## Interpreting
 
@@ -80,7 +80,7 @@ The browser runner needs a Chromium for Playwright (`npx playwright install chro
 - `src/browser-entry.ts` — `window.__bench` API bundled into the browser page
 - `scripts/browser.bench.mjs` — esbuild + Playwright + CDP driver
 - `scripts/bundle-size.mjs` — per-approach payload table
-- `scripts/budget.mjs` — per-import-pattern gzip gates (core `renderSpec`, `useChart`, `<Chart>`, `<Chart>` + VL, and dom/canvas/hit/signals/load/geo/transforms as marginal cost on top of core); part of `pnpm check`. `ASTER_BUDGET_IGNORE_SIDE_EFFECTS=1` bundles as if the manifests had no `sideEffects` field, and the `useChart`/`<Chart>` rows must then fail. It compares each `dist` file with its source and exits if one is missing or older, so it never measures a stale build
+- `scripts/budget.mjs` — per-import-pattern gzip gates (core `renderSpec`, `useChart`, `<Chart>`, `<SvgChart>`, `<SvgChart>` + `interaction`, `<Chart>` + VL, and dom/canvas/hit/signals/load/geo/transforms as marginal cost on top of core); part of `pnpm check`. `ASTER_BUDGET_IGNORE_SIDE_EFFECTS=1` bundles as if the manifests had no `sideEffects` field, and the `useChart`/`<Chart>` rows must then fail. It compares each `dist` file with its source and exits if one is missing or older, so it never measures a stale build
 
 ## Results
 

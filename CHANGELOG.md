@@ -432,14 +432,14 @@
   implementation shared with the accessible tree. The strict canonicalizer compares this structure, so it
   can not drift again; `@aster/vl` now emits vega-lite's `description`, `ariaRoleDescription` and mark names.
   The corpus SVG changes (759 of 785 files); the pictures do not.
-- **Spec lists are vega's (C80)**: `data: {values: [...]}`, a lone mark or scale object and `null` are read
+- **Spec lists are vega's** (the README example used to throw a raw `TypeError`): `data: {values: [...]}`, a lone mark or scale object and `null` are read
   through vega-util `array()` as in vega-parser, and a data set used without being declared is
   `SpecParseError: Undefined data set name: "<name>"` (as `vega.parse`), in `compileChart` and so in every host.
   `checkSpecLimits` counts the same lists.
 - **Dense SVG streams**: an append no longer re-scans every full chunk of a 100k-symbol mark (patch 1.8 ms to
   0.8 ms); `bench:incremental` gates it against a full mount. The browser stream bench states its symbol fill
   (vega draws a bare symbol filled; the old numbers measured an empty layer).
-- **Release tooling and docs (audit C75, C77, C79, C80-C82, C86, C87, C89)**:
+- **Release tooling and docs**:
   - `pnpm verify:publish` packs with `pnpm pack` (what the release uses), fails on any `workspace:` range in a packed
     manifest, installs the tarballs with `npm install` into a scratch project (offline), imports every declared export
     entry and typechecks a consumer file (`module: nodenext`).
@@ -480,7 +480,7 @@
   `browser-conformance` (`conformance:browser`, 785/785, now comparing vega's string renderer with an
   explicitly sized container) join the gate list.
 
-- **Group marks are vega scopes (audit C51, C55, C58, corpus-vega-only drained)**: every group mark
+- **Group marks are vega scopes (nested group axes skipped `config.axis`, nested legends were dropped, axis `encode` was ignored; corpus-vega-only drained)**: every group mark
   is built and laid out like vega (one group item per facet partition / datum, own scales and data,
   `layout` grid, then axes, legends and the title), replacing the per-shape concat / facet / header
   builders. Concat, repeat and wrapped / layered / nested facets, facet header placement
@@ -500,7 +500,7 @@
   default invalid-value filter for null data.
 - **@aster/vl is production-usable**: every Vega-Lite feature either compiles to
   Vega that renders like vega-lite 6.4.3 or throws a `VLCompileError` naming the
-  unsupported feature (audit C34-C37, C71-C74, C97). New validation layer, one
+  unsupported feature (compositions, encodings and transforms used to be mis-compiled silently, field names went into expressions unescaped, the compiler emitted Vega only Aster's lenient runtime accepted and mutated the caller's spec). New validation layer, one
   field-name escaping helper, VL transform translation, nested composition,
   layer parent transforms/config, sort/condition/timeUnit/bin forms, shared
   scales and legends, collision-free generated names, and `compile` never
@@ -528,7 +528,7 @@
   errors); `Math.min/max(...rows)` no longer overflows the stack at ~120k rows; `format.parse`
   accepts `date:`/`utc:` patterns; expression `format`/`timeFormat` follow the current default
   locale; formatter caches are bounded.
-- **DOM, canvas and hit-testing fixes** (audit C3, C22, C23, C41, C43, C47, C96): the
+- **DOM, canvas and hit-testing fixes**: the
   DOM patcher no longer leaves removed items drawn and drops others after a removal or
   reorder; the string renderer and the DOM descriptor take every attribute from one
   per-element list in `render.ts` (a first patch no longer rewrites gradient direction,
