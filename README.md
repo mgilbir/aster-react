@@ -50,8 +50,8 @@ pinned upstream packages ([docs/TESTING.md](docs/TESTING.md#oracle-vectors)); th
 
 | Path | Description |
 |---------|-------------|
-| `packages/core` (`@aster/core`) | Compiler (spec to IR), runtime (IR to scene), SVG renderer, expression engine, limits. Entry points: `.`, `/dom` (incremental DOM, sessions), `/canvas`, `/hit` (hit testing), `/signals` (event loop), `/load` (URL datasets), `/geo`, `/transforms`. |
-| `packages/react` (`@aster/react`) | `<Chart>` (SVG/canvas, incremental DOM patching, selection, pan/zoom, tooltips, accessibility tree), `useChart`, streaming and worker components and hooks, SSR helpers. `@aster/react/vl` registers the Vega-Lite compiler. |
+| `packages/core` (`@aster/core`) | Compiler (spec to IR), runtime (IR to scene), SVG renderer, expression engine, limits. Entry points: `.`, `/addons` (which add-ons a spec needs, loaded on demand), `/dom` (incremental DOM, sessions), `/canvas`, `/hit` (hit testing), `/signals` (event loop), `/load` (URL datasets), `/geo`, `/transforms`. |
+| `packages/react` (`@aster/react`) | `<Chart>` (SVG/canvas, incremental DOM patching, selection, pan/zoom, tooltips, accessibility tree), `useChart`, streaming and worker components and hooks, SSR helpers. Entry points: `.`, `/lite` (SVG-only `<SvgChart>`), `/interaction`, `/ssr`, `/worker`, `/worker-entry`, `/vl` (registers the Vega-Lite compiler). |
 | `packages/vl` (`@aster/vl`) | The Vega-Lite to Vega compiler. Throws `VLCompileError` for what it does not support. |
 | `packages/conformance` (`@aster/conformance`, private) | The oracle harness: corpus, sweeps, vectors, browser gates, fuzzing. |
 | `packages/benchmarks` (`@aster/benchmarks`, private) | Runtime, memory, bundle and browser performance harness (`<Chart>` vs react-vega and vega-embed) and the bundle-size budgets. |

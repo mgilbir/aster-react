@@ -5,9 +5,9 @@ Aster ships three public packages:
 | Package | Entry | Purpose |
 |---|---|---|
 | `@aster/core` | `@aster/core` | compile/evaluate/render a Vega spec to SVG; limits, streams, a11y tree |
-| `@aster/core/…` | `/dom`, `/canvas`, `/hit`, `/signals`, `/load`, `/geo`, `/transforms` | opt-in addons (tree-shaking boundaries) |
+| `@aster/core/…` | `/addons`, `/dom`, `/canvas`, `/hit`, `/signals`, `/load`, `/geo`, `/transforms` | `/addons` says which add-ons a spec needs and loads them on demand; the others are opt-in add-ons (tree-shaking boundaries) |
 | `@aster/react` | `@aster/react` | `<Chart>`, `useChart`, streams, SSR/hydration, worker hooks |
-| `@aster/react/…` | `/vl`, `/worker`, `/worker-entry`, `/ssr` | `/vl` registers the Vega-Lite compiler; `/worker` has the worker registries and protocol; `/worker-entry` is a ready worker script; `/ssr` is the string/hydration pair |
+| `@aster/react/…` | `/lite`, `/interaction`, `/vl`, `/worker`, `/worker-entry`, `/ssr` | `/lite` is the SVG-only `<SvgChart>`; `/interaction` is the `interaction` capability that adds tooltips, point selection and `signal.on` streams to it; `/vl` registers the Vega-Lite compiler (and exports `compile`, `isVegaLiteSpec`, `normalizeChartSpec`); `/worker` has the worker registries and protocol; `/worker-entry` is a ready worker script; `/ssr` is the string/hydration pair |
 | `@aster/vl` | `@aster/vl` | from-scratch Vega-Lite → Vega compiler |
 
 `@aster/core` takes Vega specs only. Vega-Lite goes through `@aster/vl` (or `@aster/react/vl`).
