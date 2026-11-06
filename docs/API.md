@@ -706,7 +706,7 @@ matters; it is the zero-setup default and its behaviour does not depend on this 
 ### Registry and session re-exports
 
 `@aster/react` also exports `registerVegaLiteCompiler(compile)` and `hasVegaLiteCompiler()`, the registry that `@aster/react/vl` fills as a
-side effect (see [`@aster/vl`](#asteravl)): a host that bundles `@aster/vl` itself registers `(spec) => vegaSpec` once, and `hasVegaLiteCompiler()`
+side effect (see [`@aster/vl`](#astervl)): a host that bundles `@aster/vl` itself registers `(spec) => vegaSpec` once, and `hasVegaLiteCompiler()`
 says whether one is registered. `createChartSession` is `@aster/core/dom`'s, re-exported for a host that renders through the
 session ([Sessions and per-datum updates](#sessions-and-per-datum-updates)).
 
