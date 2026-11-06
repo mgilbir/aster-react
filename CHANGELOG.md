@@ -11,7 +11,8 @@
   cannot take (a `columns` that is no count, a column header or footer with no cell to line up with, a legend's entries `columns`) is
   logged and stops the pass where vega's does, instead of being swallowed; `Grid headers exceed limit` is warned; a grid moves a cell's
   bounds with it rather than measuring them again, as vega. `compileChart` refuses, in vega's order and with its messages, a transform
-  without a required parameter (a `bin` without `extent` included: it was an Aster extension), a lookup without a literal `from`, a
+  without a required parameter (a `bin` without `extent` is the exception: Aster accepts it and derives the extent from the data, see
+  "Deviations from Vega" in `docs/ARCHITECTURE.md`), a lookup without a literal `from`, a
   projection, a data set or the scale of an axis or legend that the scope does not have, a list parameter given as something else,
   sub-parameters of no known kind, a facet without a name or a grouping, a signal pushed to an outer scope that has none, and a domain
   sorted by an op without its field. A `timeUnitSpecifier(...)` format the engine refuses is vega's logged error, no longer read off
