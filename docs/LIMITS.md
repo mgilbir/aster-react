@@ -1,5 +1,36 @@
 # Limits (untrusted specs and data)
 
+## Recommended starting points
+
+These are suggestions (a judgement, not measured defaults).
+
+- **Public dashboard:** 100k rows, 50k items, 8 MB SVG, 2 s wall clock, and `maxGeneratedRows: 500_000`.
+- **Unknown spec on a server:** use smaller numbers (10k rows, 250 ms), a `loadSpecData` allowlist, and a **killable worker** for the render.
+
+For an untrusted spec you need all three of these; `limits` alone is best-effort (see the two layers below):
+
+1. `loadSpecData` with an `allow` hook for the origins you serve data from, and the same `limits`.
+2. `limits` on the render itself.
+3. The render in a `worker_threads` Worker (or a child process) that you `terminate()` when your own deadline passes. The kill is the hard guarantee; `limits` produce the friendly typed errors in the common case.
+
+```ts
+import { renderSpec, type SpecLimits, type VgSpec } from '@aster/core'
+import { loadSpecData } from '@aster/core/load'
+
+// Run this inside the Worker you can terminate().
+const limits: SpecLimits = { maxRows: 10_000, maxItems: 50_000, maxSvgLength: 8_000_000, maxTimeMs: 250 }
+
+async function render(untrusted: VgSpec): Promise<string> {
+  const loaded = await loadSpecData(untrusted, {
+    allow: (url) => url.origin === 'https://data.example.com',
+    limits,
+  })
+  return renderSpec(loaded, { limits })
+}
+```
+
+In React, `<Chart limits>` and the worker hooks take the same `limits` ("In React and workers" below); the pieces of the model follow.
+
 Data and specs are untrusted input. `SpecLimits` are the budgets; `loadSpecData`
 takes a URL policy; image marks and `href` links share that policy. Every limit is
 optional: a dimension you do not set is unbounded. There are no default numbers for
@@ -428,13 +459,6 @@ its name, so a dropped one is simply rebuilt.
   terminate the Worker you created (`worker.terminate()`) when your own deadline passes.
 - The worker handler serializes the SVG inside the same limits scope as the evaluation (one meter and clock),
   so `maxPathLength` and the other serialization checks apply there exactly as in `renderSpec`.
-
-## Recommended starting points
-
-These are suggestions (a judgement, not measured defaults). Public dashboard: 100k rows, 50k items, 8 MB SVG, 2 s wall clock, and
-`maxGeneratedRows: 500_000`. For an unknown spec on a server use smaller numbers
-(10k rows, 250 ms), a `loadSpecData` allowlist, and a **killable worker** for the
-render.
 
 ## The `heatmap` image
 
