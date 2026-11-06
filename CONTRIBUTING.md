@@ -18,6 +18,10 @@ prints the gates with the reason for each. The browser gates need Chromium
 (`pnpm --filter @aster/conformance exec playwright install --with-deps chromium`);
 `pnpm check -- --skip browser` skips them locally, but that is not the CI list.
 
+When a gate is red, [docs/RUNBOOK.md](docs/RUNBOOK.md) covers debugging one failing corpus spec end to end, the stale-`dist`
+refusals, and every environment variable the harness reads. Changing the Vega-Lite compiler: see
+[packages/vl/CONTRIBUTING.md](packages/vl/CONTRIBUTING.md).
+
 The heavier schema sweeps and fuzzing run nightly (see
 [docs/TESTING.md](docs/TESTING.md)); run them yourself when you touch the
 Vega-Lite compiler or expression/transform semantics.
