@@ -19,9 +19,9 @@ a spec needs them: the chart suspends meanwhile (wrap it in `<Suspense>` for a f
 imported. See docs/API.md. Without `@aster/react/vl`, a Vega-Lite spec throws an error naming the missing
 import; if you compile Vega-Lite specs in a worker, import the addon in the worker entry too.
 
-For a smaller bundle there is an SVG-only chart: `<SvgChart>` from `@aster/react/lite` (142 kB gzip against 157 kB for
-`<Chart>`; it never imports the canvas renderer). Tooltips, point selection and `signal.on` event streams come with the
-`interaction` capability, passed as a prop (151.5 kB gzip with it):
+For a smaller bundle there is an SVG-only chart: `<SvgChart>` from `@aster/react/lite` (182.5 kB gzip against 205.3 kB for
+`<Chart>`, measured 2026-11-06 with `pnpm --filter @aster/benchmarks run budget`; it never imports the canvas renderer). Tooltips, point selection and `signal.on` event streams come with the
+`interaction` capability, passed as a prop (199.7 kB gzip with it; current figures in docs/PERFORMANCE.md):
 
 ```tsx
 import { SvgChart } from '@aster/react/lite'

@@ -419,9 +419,9 @@ In a worker, the shipped `@aster/react/worker-entry` imports what a message's sp
 fetched automatically (`useSpecData` / `loadSpecData`), only its readers load. Bundlers split the add-ons into chunks fetched on
 demand; the bundle budget counts what loads up front.
 
-The base `@aster/react` entry does not include the Vega-Lite compiler; importing `@aster/react/vl` adds about 54.2 kB
-gzip to the bundle (`<Chart>` 157.2 kB, `<Chart>` + `@aster/react/vl` 211.3 kB, measured by
-`pnpm --filter @aster/benchmarks run budget`; see [PERFORMANCE.md](PERFORMANCE.md#bundle-sizes)). Passing a VL spec without the addon throws an error naming the missing
+The base `@aster/react` entry does not include the Vega-Lite compiler; importing `@aster/react/vl` adds about 103 kB
+gzip to the bundle (`<Chart>` 205.3 kB, `<Chart>` + `@aster/react/vl` 308.3 kB eager, measured 2026-11-06 by
+`pnpm --filter @aster/benchmarks run budget`; the budgets and current figures are in [PERFORMANCE.md](PERFORMANCE.md#bundle-sizes)). Passing a VL spec without the addon throws an error naming the missing
 import. Vega specs need no extra import. Worker hosts must import `@aster/react/vl` in the worker entry as well,
 since compilation happens there.
 
@@ -536,8 +536,9 @@ Without `interaction`, `setSignal` and bound inputs (`signal.bind`) still work a
 `interaction`, and equals vega's: no per-item datum attribute is written (the mark under the pointer is found through the scene
 hit index).
 
-Sizes (gzip, `pnpm --filter @aster/benchmarks run budget`): `<Chart>` 157.2 kB, `<SvgChart>` 142.0 kB,
-`<SvgChart>` + `interaction` 151.5 kB ([PERFORMANCE.md](PERFORMANCE.md#bundle-sizes)). Use `<Chart>` unless that 15 kB
+Sizes (gzip, eager, measured 2026-11-06 with `pnpm --filter @aster/benchmarks run budget`): `<Chart>` 205.3 kB,
+`<SvgChart>` 182.5 kB, `<SvgChart>` + `interaction` 199.7 kB ([PERFORMANCE.md](PERFORMANCE.md#bundle-sizes) holds the
+current figures). Use `<Chart>` unless that 23 kB
 matters; it is the zero-setup default and its behaviour does not depend on this component.
 
 ### Hooks
