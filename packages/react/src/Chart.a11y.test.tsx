@@ -58,7 +58,7 @@ forEachVariant(['svg'], (Chart, variant) => {
     })
   })
 
-  describe('roving tabindex (C67)', () => {
+  describe('roving tabindex', () => {
     it('exactly one a11y node is a tab stop; the rest are tabindex -1', () => {
       const c = mount(<Chart spec={spec(5)} width={200} height={100} />)
       const all = nodes(c)
@@ -112,7 +112,7 @@ forEachVariant(['svg'], (Chart, variant) => {
     })
   })
 
-  describe('a11y nodes sit on the rendered marks, padding included (C67)', () => {
+  describe('a11y nodes sit on the rendered marks, padding included', () => {
     it.each([5, 40])('padding %i', (padding) => {
       const ref = React.createRef<ChartHandle>()
       const c = mount(<Chart ref={ref} spec={spec(padding)} width={200} height={100} />)

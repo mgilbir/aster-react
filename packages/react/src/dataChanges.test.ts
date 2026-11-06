@@ -5,7 +5,7 @@ import { contentEqual } from './spec.js'
 
 const rows = (n: number): unknown[] => Array.from({ length: n }, (_, i) => ({ i }))
 
-describe('validateDataChanges (C66)', () => {
+describe('validateDataChanges', () => {
   it('passes a correct changeset', () => {
     expect(validateDataChanges({ t: [0, 2] }, { t: rows(3) }, new Map([['t', 3]]))).toEqual({ changes: { t: [0, 2] }, problems: [] })
   })
@@ -28,7 +28,7 @@ describe('validateDataChanges (C66)', () => {
   })
 })
 
-describe('mergeBatches (C69)', () => {
+describe('mergeBatches', () => {
   it('concatenates appends, lets a later snapshot supersede earlier appends, keeps later scalars', () => {
     const merged = mergeBatches(
       { append: { t: [1], u: [1] }, signals: { a: 1 }, width: 10 },
@@ -48,7 +48,7 @@ describe('mergeBatches (C69)', () => {
   })
 })
 
-describe('contentEqual (C32)', () => {
+describe('contentEqual', () => {
   it('is equal for equal content and different otherwise', () => {
     expect(contentEqual({ a: [1, { b: 2 }] }, { a: [1, { b: 2 }] })).toBe(true)
     expect(contentEqual({ a: 1 }, { a: 2 })).toBe(false)

@@ -35,7 +35,7 @@ const mount = (node: React.ReactElement) => {
 }
 afterEach(() => { document.body.innerHTML = '' })
 
-describe('urlPolicy reaches evaluation (C93)', () => {
+describe('urlPolicy reaches evaluation', () => {
   const allow = (u: URL): boolean => u.host === 'good.example'
 
   forEachVariant(['svg'], (Chart) => {

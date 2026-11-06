@@ -138,7 +138,7 @@ const VEGA_BIN_ROWS: Array<[Record<string, unknown>, string]> = [
   ]
 ]
 
-describe('C8 stratify matches vega-hierarchy / d3-stratify', () => {
+describe('stratify matches vega-hierarchy / d3-stratify', () => {
   const cases: Record<string, unknown[]> = {
     cycle: [{ id: 'a', p: 'b' }, { id: 'b', p: 'a' }, { id: 'r', p: null }],
     'self parent': [{ id: 'a', p: 'a' }, { id: 'r', p: null }],
@@ -178,7 +178,7 @@ describe('C8 stratify matches vega-hierarchy / d3-stratify', () => {
   })
 })
 
-describe('C8 bin follows vega-statistics bin()', () => {
+describe('bin follows vega-statistics bin()', () => {
   for (const [params, oracle] of VEGA_BIN_ROWS) {
     it(`${JSON.stringify(params)}: terminates with vega's rows`, async () => {
       const r = await attack(`
@@ -212,7 +212,7 @@ describe('C8 bin follows vega-statistics bin()', () => {
   }, 30_000)
 })
 
-describe('C42: data-sized arrays never go through argument spread', () => {
+describe('data-sized arrays never go through argument spread', () => {
   const N = 300_000
   const rows = Array.from({ length: N }, (_, i) => ({ x: i, y: (i * 7) % 1000, c: i % 5, t: 1.6e12 + i * 1000, g: 'g' + (i % 3) }))
 

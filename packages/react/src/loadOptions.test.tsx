@@ -18,7 +18,7 @@ const csv = (text = 'x,y\n1,2\n'): typeof fetch =>
 
 const rowsOf = (s: Record<string, unknown>): unknown[] => ((s.data as Array<{ values?: unknown[] }>)[0]!.values ?? [])
 
-describe('loader options are forwarded (C93 / LoadOptions)', () => {
+describe('loader options are forwarded', () => {
   it('a relative url needs baseURL, and baseURL resolves it', async () => {
     const fetchImpl = csv()
     await expect(loadSpecData(specOf('data.csv'), { fetch: fetchImpl })).rejects.toBeInstanceOf(AsterUrlError)

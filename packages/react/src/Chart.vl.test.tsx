@@ -20,7 +20,7 @@ const vlSpec = {
   },
 } as never
 
-describe('direct Vega-Lite input (R11.1)', () => {
+describe('direct Vega-Lite input', () => {
   afterEach(() => { document.body.innerHTML = '' })
 
   it('detects and normalizes a VL spec without importing vega-lite', () => {

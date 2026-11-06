@@ -174,7 +174,7 @@ function recordsOf(scene: SceneRoot, group: SceneGroup, items: SceneItem[]): Pai
 
 const perItem = new Set(['symbol', 'circle', 'rect', 'rule', 'arc', 'path', 'shape', 'geoshape', 'image'])
 
-describe('hit index finds what is painted, and only that (audit C47)', () => {
+describe('hit index finds what is painted, and only that', () => {
   for (const { name, scene } of scenes) {
     it(`${name}: inside the painted geometry hits the item; outside everything hits nothing`, () => {
       const index = buildHitIndex(scene)
@@ -309,7 +309,7 @@ function collectTexts(g: SceneGroup): SceneItem[] {
 // the grid cannot be made to allocate without bound
 // ---------------------------------------------------------------------------
 
-describe('hit grid memory (audit C41)', () => {
+describe('hit grid memory', () => {
   it('an enormous item, many small ones and far-away items neither exhaust the heap nor change who is on top (child process with a 256 MB cap)', () => {
     // The old index allocated one list entry per covered cell: ~10^9 cells for
     // this rect, i.e. "FATAL ERROR: Reached heap limit". Run it in a child with a

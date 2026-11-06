@@ -179,7 +179,7 @@ function describeDiff(a: Sk, b: Sk, path = 'svg'): string | null {
   return null
 }
 
-describe('C2: SVG string renderer escapes every attribute and text value', () => {
+describe('SVG string renderer escapes every attribute and text value', () => {
   it('the base scene covers every mark type, axis/legend leaves and a gradient', () => {
     const svg = renderSceneToSvg(baseScene())
     for (const cls of ['mark-symbol', 'mark-rect', 'mark-text', 'mark-rule', 'mark-trail', 'mark-arc', 'mark-image', 'mark-path', 'mark-line', 'mark-area', 'linearGradient']) {

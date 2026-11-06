@@ -27,7 +27,7 @@ const setInputValue = (input: HTMLInputElement, value: string): void => {
   act(() => { input.dispatchEvent(new Event('input', { bubbles: true })) })
 }
 
-describe('bound signal inputs (C66)', () => {
+describe('bound signal inputs', () => {
   const spec = {
     $schema: 'https://vega.github.io/schema/vega/v6.json',
     width: 100, height: 50, padding: 0, autosize: 'none',
@@ -96,7 +96,7 @@ describe('bound signal inputs (C66)', () => {
   })
 })
 
-describe('dataChanges validation (C66)', () => {
+describe('dataChanges validation', () => {
   const spec = {
     $schema: 'https://vega.github.io/schema/vega/v6.json',
     width: 100, height: 100, padding: 0, autosize: 'none',
@@ -150,7 +150,7 @@ describe('dataChanges validation (C66)', () => {
   })
 })
 
-describe('useChart memo covers every input (C66)', () => {
+describe('useChart memo covers every input', () => {
   const spec = {
     width: 100, height: 50, padding: 0, autosize: 'none', title: { text: 'Hello there' },
     marks: [],
@@ -192,7 +192,7 @@ describe('useChart memo covers every input (C66)', () => {
   })
 })
 
-describe('maxSvgLength is enforced, as the limits docs promise (C92 / JSDoc)', () => {
+describe('maxSvgLength is enforced, as the limits docs promise', () => {
   const spec = {
     width: 100, height: 100, padding: 0, autosize: 'none',
     data: [{ name: 't', values: Array.from({ length: 20 }, (_, i) => ({ a: i, b: i })) }],

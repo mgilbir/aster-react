@@ -28,7 +28,7 @@ describe('group items', () => {
     expect(new Set(groups.map((g) => g.x)).size).toBe(2)
   })
 
-  it('any group name or role is a plain group (no routing on name substrings, C56)', () => {
+  it('any group name or role is a plain group (no routing on name substrings)', () => {
     for (const name of ['page_header', 'page_footer', 'my-title', 'row_header_x']) {
       const s = spec()
       ;(s as unknown as { marks: Array<Record<string, unknown>> }).marks[0]!.name = name

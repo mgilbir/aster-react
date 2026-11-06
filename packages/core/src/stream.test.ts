@@ -99,7 +99,7 @@ const fresh = (spec: VgSpec, input: RuntimeInput): string =>
 // batch order
 // ---------------------------------------------------------------------------
 
-describe('stream batch order (C18)', () => {
+describe('stream batch order', () => {
   const POLICIES: StreamPolicy[] = ['coalesce', 'drop-oldest', 'drop-newest', 'error']
   for (const policy of POLICIES) {
     it(`${policy}: snapshot then append in one queue keeps the appended rows`, () => {
@@ -204,7 +204,7 @@ describe('stream batch order (C18)', () => {
 // large appends
 // ---------------------------------------------------------------------------
 
-describe('stream large batches (C91)', () => {
+describe('stream large batches', () => {
   const N = 300_000
   const big = (from: number): Row[] => Array.from({ length: N }, (_, i) => ({ id: from + i, x: i, v: i % 7, g: 'ABCD'[i % 4]! }))
   for (const policy of ['coalesce', 'drop-oldest', 'error'] as StreamPolicy[]) {
@@ -235,7 +235,7 @@ describe('stream large batches (C91)', () => {
 // a throwing flush leaves the stream exactly as before it
 // ---------------------------------------------------------------------------
 
-describe('stream flush atomicity (C19)', () => {
+describe('stream flush atomicity', () => {
   interface Stage {
     name: string
     /** Fields that make the flush throw. */
@@ -445,7 +445,7 @@ describe('stream close()', () => {
   })
 })
 
-describe('stream limits (C49)', () => {
+describe('stream limits', () => {
   it('honours options.limits and options.textMetrics like the session does', () => {
     expect(() => createChartStream(titled, { limits: { maxItems: 1 } }).flush()).toThrow(AsterLimitError)
     expect(() => createChartStream(titled, { limits: { maxMarks: 0 } }).flush()).toThrow(AsterLimitError)

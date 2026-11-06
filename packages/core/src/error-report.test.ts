@@ -8,7 +8,7 @@ import type { VgSpec } from './types.js'
  * (The encode / filter / mark-sort sites are compared with real vega in
  * packages/conformance/src/error-semantics.test.ts.)
  */
-describe('header sort errors are reported, not swallowed (C90)', () => {
+describe('header sort errors are reported, not swallowed', () => {
   const spec = (role: string, name: string): VgSpec => ({
     width: 100, height: 60, padding: 5, autosize: 'none',
     data: [{ name: 'cols', values: [{ k: 'a', o: { x: 2 } }, { k: 'b' }, { k: 'c', o: { x: 1 } }] }],

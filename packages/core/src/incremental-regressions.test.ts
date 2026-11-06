@@ -26,7 +26,7 @@ const sym = (dataset: string, scale = 'x', field = 'v', extra: Record<string, un
   type: 'symbol', from: { data: dataset }, encode: { update: { x: { scale, field }, y: { value: 5 }, size: { value: 20 } } }, ...extra,
 })
 
-describe('C4: layered marks over one dataset keep their own identity', () => {
+describe('layered marks over one dataset keep their own identity', () => {
   // A fixed domain keeps the scale unchanged by the update, which is exactly
   // when whole-item reuse engages (and when mark matching used to go wrong).
   const spec = {
@@ -58,7 +58,7 @@ describe('C4: layered marks over one dataset keep their own identity', () => {
   })
 })
 
-describe('C5: stale scales never leave unchanged items at old positions', () => {
+describe('stale scales never leave unchanged items at old positions', () => {
   it('values [10,0,5,8], row 0 -> 3', () => {
     const spec = { ...BASE, data: [{ name: 't', values: [] }], scales: [lin('x', { data: 't', field: 'v' })], marks: [sym('t')] }
     const s = createChartSession()
@@ -70,7 +70,7 @@ describe('C5: stale scales never leave unchanged items at old positions', () => 
   })
 })
 
-describe('C11: the domain census shrinks', () => {
+describe('the domain census shrinks', () => {
   const spec = { ...BASE, data: [{ name: 't', values: [] }], scales: [lin('x', { data: 't', field: 'v' }, { zero: false })], marks: [sym('t')] }
   it('both rows holding the minimum move up, in two successive updates', () => {
     const chart = compileChart(spec as never)
@@ -108,7 +108,7 @@ describe('discrete domain census', () => {
   })
 })
 
-describe('C12: multi-dataset domains are re-resolved every evaluation', () => {
+describe('multi-dataset domains are re-resolved every evaluation', () => {
   const spec = {
     ...BASE,
     data: [{ name: 'a', values: [] }, { name: 'b', values: [] }],
@@ -132,7 +132,7 @@ describe('C12: multi-dataset domains are re-resolved every evaluation', () => {
   })
 })
 
-describe('C13: one incremental transform engine, consistent with a full re-derive', () => {
+describe('one incremental transform engine, consistent with a full re-derive', () => {
   const run = (transform: unknown[], rows: Array<Record<string, unknown>>, steps: Array<{ rows: Array<Record<string, unknown>>; hint: Record<string, unknown> }>, field = 'v') => {
     const spec = {
       ...BASE,
@@ -190,7 +190,7 @@ describe('C13: one incremental transform engine, consistent with a full re-deriv
   })
 })
 
-describe('C14: a group is reused only when everything it reads is unchanged', () => {
+describe('a group is reused only when everything it reads is unchanged', () => {
   const textGroup = (dataset: string) => ({ type: 'group', marks: [{ type: 'text', from: { data: dataset }, encode: { update: { x: { scale: 'x', field: 'v' }, y: { value: 5 }, text: { field: 'v' } } } }] })
   it('a child mark reading top-level data sees an append', () => {
     const spec = { ...BASE, data: [{ name: 'table', values: [] }], scales: [lin('x', [0, 10])], marks: [textGroup('table')] }
@@ -263,7 +263,7 @@ describe('signal and data change together', () => {
   })
 })
 
-describe('C15: the session no-op cache key is complete and typed', () => {
+describe('the session no-op cache key is complete and typed', () => {
   const spec = { ...BASE, data: [{ name: 't', format: { type: 'json' }, values: '[{"v":1},{"v":2}]' }], scales: [lin('x', [0, 10])], marks: [sym('t')] }
   it('replacing an inline JSON string invalidates the cache', () => {
     const s = createChartSession()
@@ -309,7 +309,7 @@ describe('C15: the session no-op cache key is complete and typed', () => {
   })
 })
 
-describe('C16: a rejected evaluation commits nothing', () => {
+describe('a rejected evaluation commits nothing', () => {
   it('evaluate(A) -> evaluate(B, maxItems) throws -> evaluate(A) returns A', () => {
     const mk = (n: number) => ({ ...BASE, data: [{ name: 't', values: Array.from({ length: n }, (_, i) => ({ v: i })) }], scales: [lin('x', [0, 10])], marks: [sym('t')] })
     const A = mk(3)
@@ -354,7 +354,7 @@ describe('C16: a rejected evaluation commits nothing', () => {
   })
 })
 
-describe('C17: evaluateChart does not write the compiled chart', () => {
+describe('evaluateChart does not write the compiled chart', () => {
   it('an event-only signal is not promoted to a static update', () => {
     const spec = {
       ...BASE, signals: [{ name: 'count', on: [{ events: 'click', update: '(count||0)+1' }] }],
@@ -380,7 +380,7 @@ describe('C17: evaluateChart does not write the compiled chart', () => {
   })
 })
 
-describe('C52: aggregate order and previous scenes', () => {
+describe('aggregate order and previous scenes', () => {
   it('first-occurrence group order, incremental === full', () => {
     const spec = {
       ...BASE,
@@ -414,7 +414,7 @@ describe('C52: aggregate order and previous scenes', () => {
   })
 })
 
-describe('C57: object-valued derived signals do not defeat the caches', () => {
+describe('object-valued derived signals do not defeat the caches', () => {
   it('unchanged items keep their identity across an update when a derived signal is an array', () => {
     const spec = {
       ...BASE, signals: [{ name: 'rng', update: '[0, width]' }],
@@ -436,7 +436,7 @@ describe('C57: object-valued derived signals do not defeat the caches', () => {
   })
 })
 
-describe('C52: lazily materialised superseded scenes', () => {
+describe('lazily materialised superseded scenes', () => {
   const spec = { ...BASE, data: [{ name: 't', values: [] }], scales: [lin('x', [0, 100])], marks: [sym('t')] }
   const ap = (base: number) => ({ t: { changed: [] as number[], appendOnly: true, baseLength: base, added: [[base, base + 1]] as Array<[number, number]> } })
   const rowsN = (n: number, bump = -1) => Array.from({ length: n }, (_, i) => ({ v: i === bump ? 77 : i }))

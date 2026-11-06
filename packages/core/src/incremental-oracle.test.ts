@@ -1077,7 +1077,7 @@ const STEPS = Number(env('ASTER_ORACLE_STEPS') ?? 12)
 const START = Number(env('ASTER_ORACLE_START') ?? 1)
 const ONE = env('ASTER_ORACLE_SEED')
 
-describe('incremental === fresh evaluateChart(compileChart(spec)) (audit C84 / T1)', () => {
+describe('incremental === fresh evaluateChart(compileChart(spec))', () => {
   it('the generator is deterministic per seed', () => {
     const a = scenario(7, 6), b = scenario(7, 6)
     expect(JSON.stringify(a)).toBe(JSON.stringify(b))

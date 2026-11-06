@@ -29,7 +29,7 @@ const ESCAPE_PATHS = [
   '__defineGetter__.constructor',
 ]
 
-describe('C1: Function constructor is unreachable from expressions', () => {
+describe('Function constructor is unreachable from expressions', () => {
   const body = `globalThis.${SENTINEL}=1`
 
   it('two-argument toDate never calls its second argument', () => {
@@ -148,7 +148,7 @@ const symbolsSpec = (dataset: string, values?: unknown[], extra: Record<string, 
   ...extra,
 })) as never
 
-describe('C50: prototype-named datasets, signals and tables', () => {
+describe('prototype-named datasets, signals and tables', () => {
   const rows = [{ x: 10 }, { x: 20 }, { x: 30 }]
   const with3 = marksOf(renderSpec(symbolsSpec('benign', rows)))
   const with0 = marksOf(renderSpec(symbolsSpec('benign')))

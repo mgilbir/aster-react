@@ -73,7 +73,7 @@ function mountProbe<T>(useIt: () => T): { host: HTMLElement; root: ReturnType<ty
 
 afterEach(() => { document.body.innerHTML = '' })
 
-describe('worker protocol carries limits and text metrics (C65)', () => {
+describe('worker protocol carries limits and text metrics', () => {
   it('enforces limits inside the worker handler with a typed code', () => {
     const response = handleChartWorkerRequest({ id: 1, spec: specOf(5), input: { limits: { maxItems: 2 } } })
     expect(response.scene).toBeUndefined()
@@ -160,7 +160,7 @@ describe('worker protocol carries limits and text metrics (C65)', () => {
   })
 })
 
-describe('sharing one worker between hooks (C65)', () => {
+describe('sharing one worker between hooks', () => {
   it('request ids are unique across protocols, and each hook only applies its own response', async () => {
     const fake = new FakeWorker()
     const one = mountProbe(() => useChartWorker(specOf(2), { worker: fake as unknown as Worker }))
@@ -187,7 +187,7 @@ describe('sharing one worker between hooks (C65)', () => {
   })
 })
 
-describe('worker hook lifecycle (C65)', () => {
+describe('worker hook lifecycle', () => {
   it('an inline workerFactory creates one worker and requests reach it', async () => {
     let created = 0
     const workers: FakeWorker[] = []
@@ -241,7 +241,7 @@ describe('worker hook lifecycle (C65)', () => {
     expect(m.result().pending).toBe(false)
   })
 
-  it('an equal inline spec, a new factory arrow and a flipped serialize do not restart the worker stream (C32)', async () => {
+  it('an equal inline spec, a new factory arrow and a flipped serialize do not restart the worker stream', async () => {
     const fake = new FakeWorker()
     let serialize = true
     const m = mountProbe(() => useChartWorkerStream(specOf(2), { worker: fake as unknown as Worker, workerFactory: () => null, serialize }))
@@ -258,7 +258,7 @@ describe('worker hook lifecycle (C65)', () => {
   })
 })
 
-describe('worker stream payloads and queue (C69)', () => {
+describe('worker stream payloads and queue', () => {
   it('serialize:false responses carry no SVG; the default does', () => {
     const streams = new Map<number, ChartStream>()
     const lean = handleChartWorkerStreamRequest({ kind: 'stream', id: 1, streamId: 1, op: 'init', spec: specOf(3), serialize: false }, streams)
@@ -338,7 +338,7 @@ describe('worker stream payloads and queue (C69)', () => {
   })
 })
 
-describe('worker message validation (C92)', () => {
+describe('worker message validation', () => {
   const streams = new Map<number, ChartStream>()
   it('drops what it cannot answer and rejects malformed requests with a typed error', () => {
     for (const junk of [null, undefined, 5, 'x', [], {}, { id: 'a' }]) expect(handleWorkerMessage(junk, streams)).toBeNull()

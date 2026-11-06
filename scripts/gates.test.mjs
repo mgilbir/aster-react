@@ -38,7 +38,7 @@ describe('gate list', () => {
     }
   })
 
-  it('covers the gates the repo has always claimed (incl. conformance-vl, C39)', () => {
+  it('covers the gates the repo has always claimed (incl. conformance-vl)', () => {
     const names = new Set(GATES.map((g) => g.name))
     for (const want of [
       'build', 'deps', 'typecheck', 'test', 'verify-publish', 'conformance', 'conformance-vl',

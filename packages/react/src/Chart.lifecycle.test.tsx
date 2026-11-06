@@ -68,7 +68,7 @@ beforeEach(() => {
 })
 afterEach(() => { document.body.innerHTML = '' })
 
-describe('renderer round trip (C29)', () => {
+describe('renderer round trip', () => {
   const rows = [{ cat: 'a', v: 5 }, { cat: 'b', v: 7 }]
   forEachVariant(['svg', 'canvas'], (Chart) => {
     it('svg -> canvas -> svg refills the SVG host', () => {
@@ -109,7 +109,7 @@ describe('renderer round trip (C29)', () => {
   })
 })
 
-describe('tooltips read the current scene (C33)', () => {
+describe('tooltips read the current scene', () => {
   forEachVariant(['svg', 'canvas', 'interaction'], (Chart) => {
     it('canvas tooltip follows a data change', () => {
       const { host, rerender } = mount(<Chart spec={barSpec([{ cat: 'a', v: 5 }, { cat: 'b', v: 7 }])} width={100} height={100} renderer="canvas" tooltip />)
@@ -146,7 +146,7 @@ describe('tooltips read the current scene (C33)', () => {
   })
 })
 
-describe('hygiene (C92)', () => {
+describe('hygiene', () => {
   forEachVariant(['svg'], (Chart) => {
     it('does not refire onError on re-renders while the same error persists', () => {
       const calls: Error[] = []
@@ -229,7 +229,7 @@ describe('hygiene (C92)', () => {
   })
 })
 
-describe('the DOM the patcher owns is never rebuilt by React (C28 follow-up)', () => {
+describe('the DOM the patcher owns is never rebuilt by React', () => {
   forEachVariant(['svg'], (Chart) => {
     it('keeps the same <svg> element across re-renders', () => {
       const spec = barSpec([{ cat: 'a', v: 5 }, { cat: 'b', v: 7 }])
@@ -261,7 +261,7 @@ describe('the DOM the patcher owns is never rebuilt by React (C28 follow-up)', (
   })
 })
 
-describe('ChartHandle.setSignal is portable (C64)', () => {
+describe('ChartHandle.setSignal is portable', () => {
   const sigSpec = {
     ...(barSpec([{ cat: 'a', v: 5 }]) as Record<string, unknown>),
     signals: [{ name: 'w', value: 20 }],

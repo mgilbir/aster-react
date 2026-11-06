@@ -147,7 +147,7 @@ const fire = (el: EventTarget, type: string, init: MouseEventInit = {}): void =>
   el.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, ...init }))
 }
 
-describe('signal event streams (C20)', () => {
+describe('signal event streams', () => {
   it('exposes the native event: shiftKey and deltaY are the browser\'s own', () => {
     const t = bindSpec([
       { name: 'shift', value: 'init', on: [{ events: 'click', update: 'event.shiftKey' }] },

@@ -174,7 +174,7 @@ describe('canonicalizeSvg misc contracts', () => {
     expect(diff(wrap(`${RECT}<rect width="100" height="80" fill="white"/>`), wrap(RECT))).not.toEqual([])
   })
 
-  it('a rect equal to itself is not a background check (C76): a half-width rect at 0,0 survives', () => {
+  it('a rect equal to itself is not a background check: a half-width rect at 0,0 survives', () => {
     expect(canonicalizeSvg(wrap('<rect width="50" height="80" fill="white"/>')).records).toHaveLength(1)
   })
 

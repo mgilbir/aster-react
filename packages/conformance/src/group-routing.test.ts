@@ -39,7 +39,7 @@ const rectIn = (extra: Record<string, unknown> = {}): Record<string, unknown> =>
   type: 'rect', from: { data: 't' }, encode: { update: { x: { field: 'v' }, y: { value: 3 }, width: { value: 6 }, height: { value: 9 }, fill: { value: 'tomato' }, ...extra } },
 })
 
-describe('groups route by role, not by name (C56)', () => {
+describe('groups route by role, not by name', () => {
   const NAMES = ['page_header', 'page_footer', 'header', 'footer', 'row_header', 'column_header', 'column_footer', 'my_header_row', 'footer_notes']
   it.each(NAMES)('a plain group named %s renders like vega', async (name) => {
     const spec = { ...FRAME, data: DATA, marks: [{ type: 'group', name, encode: { update: { x: { value: 12 }, y: { value: 8 }, width: { value: 150 }, height: { value: 60 } } }, marks: [rectIn()] }] }
@@ -64,7 +64,7 @@ describe('groups route by role, not by name (C56)', () => {
   })
 })
 
-describe('facet groupby is read through array() (C56)', () => {
+describe('facet groupby is read through array()', () => {
   const facetSpec = (groupby: unknown): Spec => ({
     ...FRAME, data: DATA,
     scales: [{ name: 'gx', type: 'band', domain: { data: 't', field: 'g' }, range: 'width', padding: 0.1 }],

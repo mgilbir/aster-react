@@ -158,7 +158,7 @@ describe('signal init and containerSize(): a container-sized spec falls back lik
   })
 })
 
-describe('C55: time gradient legends label and place their Date ticks like vega', () => {
+describe('time gradient legends label and place their Date ticks like vega', () => {
   const timeSpec = (scaleType: string, legend: Spec, extra: Spec = {}): Spec => ({
     width: 200, height: 120, padding: 5, autosize: 'none',
     data: [{ name: 'd', values: [{ t: '2024-01-15' }, { t: '2024-03-10' }, { t: '2024-06-30' }, { t: '2024-11-03' }], format: { parse: { t: 'date' } } }],
@@ -349,7 +349,7 @@ describe('symbol legends: every channel goes through vega\'s one symbol encode (
   })
 })
 
-describe('C51: a nested group\'s axes follow config.axis like the view\'s', () => {
+describe('a nested group\'s axes follow config.axis like the view\'s', () => {
   const nested = (config: Spec, axes: Spec[], extra: Spec = {}): Spec => ({
     width: 200, height: 120, padding: 5, autosize: 'none', config,
     data: [{ name: 't', values: [{ c: 'a', v: 3 }, { c: 'b', v: 8 }, { c: 'c', v: 5 }] }],
@@ -387,7 +387,7 @@ describe('C51: a nested group\'s axes follow config.axis like the view\'s', () =
   })
 })
 
-describe('C58: an axis `encode` block styles and moves the generated marks like vega', () => {
+describe('an axis `encode` block styles and moves the generated marks like vega', () => {
   const spec = (axis: Spec, scaleType = 'linear', extra: Spec = {}): Spec => {
     const horizontal = axis.orient === 'bottom' || axis.orient === 'top'
     const scales = scaleType === 'band'
@@ -462,7 +462,7 @@ describe('group marks are scopes: guides, titles, data, facets and grid layouts 
   describe('a nested group lays out its own axes, legends and title', () => {
     const variants: Array<[string, Spec]> = [
       ['axes only', {}],
-      ['a nested legend (C51)', { legends: [{ fill: 'bc', title: 'kind' }] }],
+      ['a nested legend', { legends: [{ fill: 'bc', title: 'kind' }] }],
       ['nested legends on every orient', { legends: [{ fill: 'bc', orient: 'left' }, { stroke: 'bc', orient: 'bottom', direction: 'horizontal' }, { size: 'bsz', orient: 'top' }] }],
       ['two legends on one orient (grid layout)', { legends: [{ fill: 'bc', title: 'one' }, { stroke: 'bc', title: 'two' }] }],
       ['title top', { title: { text: 'T' } }],

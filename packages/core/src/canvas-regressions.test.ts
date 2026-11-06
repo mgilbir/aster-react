@@ -20,7 +20,7 @@ const sceneOf = (items: SceneGroup[], extra: Record<string, unknown> = {}): Scen
 // trail fill
 // ---------------------------------------------------------------------------
 
-describe('C23: a trail keeps its fill', () => {
+describe('a trail keeps its fill', () => {
   const trail = (extra: Record<string, unknown>): SceneRoot => ({
     width: 100, height: 100, padding: { top: 0, right: 0, bottom: 0, left: 0 },
     items: [{
@@ -54,7 +54,7 @@ describe('C23: a trail keeps its fill', () => {
 // append paint + guide changes + z-order: the append path equals a full repaint
 // ---------------------------------------------------------------------------
 
-describe('C22: canvas append paint equals a full repaint', () => {
+describe('canvas append paint equals a full repaint', () => {
   const twoDatasets = {
     width: 200, height: 100, padding: 0, autosize: 'none', data: [{ name: 'a' }, { name: 'b' }],
     scales: [{ name: 'x', type: 'linear', domain: [0, 100], range: [0, 200] }, { name: 'y', type: 'linear', domain: [0, 10], range: [100, 0] }],
@@ -124,7 +124,7 @@ describe('C22: canvas append paint equals a full repaint', () => {
 // no per-frame JSON.stringify of item arrays
 // ---------------------------------------------------------------------------
 
-describe('C96: the append path never serialises item arrays', () => {
+describe('the append path never serialises item arrays', () => {
   it('does not call JSON.stringify while deciding/painting an append with guides present', () => {
     const spec = {
       width: 300, height: 200, padding: 10, autosize: 'none', title: { text: 'T' }, data: [{ name: 't' }],

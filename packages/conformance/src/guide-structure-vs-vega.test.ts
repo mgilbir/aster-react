@@ -79,7 +79,7 @@ const CASES: Array<[string, Spec, RegExp[]]> = [
   }), [/X-axis titled 'inner' for a linear scale/, /Title text 'cell'/]],
 ]
 
-describe('guides and titles have the structure and ARIA vega writes (N3)', () => {
+describe('guides and titles have the structure and ARIA vega writes', () => {
   for (const [name, spec, expected] of CASES) {
     it(name, async () => {
       const want = canonicalizeSvg(await oracle(spec))

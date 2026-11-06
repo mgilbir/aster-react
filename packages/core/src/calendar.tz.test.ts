@@ -44,7 +44,7 @@ describe('time zone of the test run', () => {
   })
 })
 
-describe('UTC scales format in UTC (C25)', () => {
+describe('UTC scales format in UTC', () => {
   it('hour ticks', () => {
     expect(axisLabels({ type: 'utc', domain: [0, 6 * H] })).toEqual(
       ['1970', '12:30', '01 AM', '01:30', '02 AM', '02:30', '03 AM', '03:30', '04 AM', '04:30', '05 AM', '05:30', '06 AM'],

@@ -7,7 +7,7 @@ import { ascending, descending } from './arr.js'
 import { buildProjection } from './geo.js'
 import { interpolate, isContinuous, isDiscrete, isInterpolating, scale } from './scale.js'
 
-describe('d3-array 3.2.4 ascending/descending (C62)', () => {
+describe('d3-array 3.2.4 ascending/descending', () => {
   it('a null or undefined operand compares as NaN, never as 0 or an ordering', () => {
     for (const bad of [null, undefined]) {
       for (const other of [1, 'a', 0, new Date(0), null, undefined]) {
@@ -30,7 +30,7 @@ describe('d3-array 3.2.4 ascending/descending (C62)', () => {
   })
 })
 
-describe('the scale registry (C95)', () => {
+describe('the scale registry', () => {
   it('identity carries no metadata (upstream registers none)', () => {
     const ctor = scale('identity') as unknown as { metadata: Record<string, boolean> }
     expect(Object.keys(ctor.metadata)).toEqual([])
@@ -53,7 +53,7 @@ describe('the scale registry (C95)', () => {
   })
 })
 
-describe('geo: the projection path owns pointRadius (C95)', () => {
+describe('geo: the projection path owns pointRadius', () => {
   it('the radius lands on the bound path; the projection has no pointRadius of its own', () => {
     const p = buildProjection({ name: 'p', type: 'mercator', pointRadius: 7 })
     expect(p.path.pointRadius).toBe(7)

@@ -79,7 +79,7 @@ function rowsFor(mark: string): Row[] {
   })
 }
 
-describe('C21: the datum keeps its data values', () => {
+describe('the datum keeps its data values', () => {
   it.each(Object.keys(CHANNELS))('%s: a field named like every channel is not overwritten by encoding', (mark) => {
     const rows = rowsFor(mark)
     const before = JSON.parse(JSON.stringify(rows)) as Row[]

@@ -32,7 +32,7 @@ forEachVariant(['svg'], (Chart, variant) => {
     }
   }
 
-  describe('Suspense / use() async data (R11.2)', () => {
+  describe('Suspense / use() async data', () => {
     afterEach(() => { document.body.innerHTML = '' })
 
     it('suspends, loads URL data through the load addon, then renders', async () => {

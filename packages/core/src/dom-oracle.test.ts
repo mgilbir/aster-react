@@ -73,7 +73,7 @@ const STEPS = Number(env('ASTER_DOM_ORACLE_STEPS') ?? 10)
 const START = Number(env('ASTER_DOM_ORACLE_START') ?? 1)
 const ONE = env('ASTER_DOM_ORACLE_SEED')
 
-describe('patched DOM === DOM built fresh from the final scene (audit C3)', () => {
+describe('patched DOM === DOM built fresh from the final scene', () => {
   const seeds = ONE != null ? [Number(ONE)] : Array.from({ length: SEEDS }, (_, i) => START + i)
   for (const dense of [false, true]) {
     for (const fromString of [false, true]) {

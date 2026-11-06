@@ -84,7 +84,7 @@ beforeEach(() => {
 })
 afterEach(() => { document.body.innerHTML = '' })
 
-describe('<ChartStream> honours the Chart props its type accepts (C31)', () => {
+describe('<ChartStream> honours the Chart props its type accepts', () => {
   it('a controlled view reaches the stream: the scale domain and the SVG change', async () => {
     const ref = React.createRef<ChartStreamHandle>()
     const m = mount(<ChartStream ref={ref} spec={dataSpec(base)} width={200} height={100} view={null} panZoom />)
@@ -183,7 +183,7 @@ describe('<ChartStream> honours the Chart props its type accepts (C31)', () => {
   })
 })
 
-describe('pan/zoom/brush use the streamed or supplied data, not just the spec (C30)', () => {
+describe('pan/zoom/brush use the streamed or supplied data, not just the spec', () => {
   const sliderMax = (c: HTMLElement): string | null =>
     c.querySelector('[data-a11y-kind="axis"][role="slider"][aria-label^="X-axis"]')?.getAttribute('aria-valuemax') ?? null
 
@@ -268,7 +268,7 @@ describe('pan/zoom/brush use the streamed or supplied data, not just the spec (C
   })
 })
 
-describe('stream component hygiene (C92)', () => {
+describe('stream component hygiene', () => {
   it('onStreamError is reported once per error, not once per render of an inline callback', async () => {
     const calls: Error[] = []
     const node = (i: number) => <ChartStream spec={dataSpec(base)} width={200} height={100} limits={{ maxItems: 1 }} className={`r${i}`} onStreamError={(e) => { calls.push(e) }} />
@@ -288,7 +288,7 @@ describe('stream component hygiene (C92)', () => {
   })
 })
 
-describe('streams survive a new-but-equal spec (C32)', () => {
+describe('streams survive a new-but-equal spec', () => {
   it('useChartStream keeps pushed rows across re-renders with an equal inline spec', async () => {
     let result: UseChartStreamResult | null = null
     let bump = (): void => {}

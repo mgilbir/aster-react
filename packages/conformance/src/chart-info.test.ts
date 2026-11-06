@@ -40,7 +40,7 @@ async function viewOf(spec: Spec): Promise<{ width: number; height: number; padd
   return out
 }
 
-describe('getChartInfo describes the chart that is drawn (C53)', () => {
+describe('getChartInfo describes the chart that is drawn', () => {
   it.each(AUTOSIZES)('autosize %s: size, padding and scale ranges equal vega\'s', async (_n, autosize) => {
     const spec = specOf(autosize)
     const want = await viewOf(spec)
