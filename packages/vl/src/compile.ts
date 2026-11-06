@@ -5565,7 +5565,7 @@ function sortedDomain(def: FieldDef, dataName: string, dc: DomainCtx): unknown {
   // vega-lite assembles {op: 'min', field: <the domain field>, order} as just {order}
   if (sort === 'descending') return { ...main, sort: { order: 'descending' } }
   const raw = { data: dc.rawName, field }
-  if (Array.isArray(sort)) return { ...raw, sort: { op: 'min', field: sortIndexName(def), order: 'ascending' } }
+  if (Array.isArray(sort)) return { ...raw, sort: { op: 'min', field: sortIndexName(def) } }
   if (isObject(sort)) {
     // stacked measure: a sort by anything that is not a stack dimension defaults to 'sum'
     const stackedDef = dc.fields.find((f) => isStacked(f, dc.mark, dc.orient, dc.fields))
