@@ -55,7 +55,7 @@ pinned upstream packages ([docs/TESTING.md](docs/TESTING.md#oracle-vectors)); th
 | `packages/vl` (`@aster/vl`) | The Vega-Lite to Vega compiler. Throws `VLCompileError` for what it does not support. |
 | `packages/conformance` (`@aster/conformance`, private) | The oracle harness: corpus, sweeps, vectors, browser gates, fuzzing. |
 | `packages/benchmarks` (`@aster/benchmarks`, private) | Runtime, memory, bundle and browser performance harness (`<Chart>` vs react-vega and vega-embed) and the bundle-size budgets. |
-| `apps/demo` (private) | A gallery and playground that renders Aster next to Vega. |
+| `apps/demo` (private) | A gallery and playground that renders Aster next to Vega: [apps/demo/README.md](apps/demo/README.md) (run, build, deploy). |
 | `scripts/` | The gate list (`gates.mjs`), dependency boundary, publish verification, release guards and their tests. |
 | `.github/workflows/` | `ci.yml` (runs `pnpm check`), `nightly.yml` (sweeps, fuzzing, extra browsers), `release.yml` (tag-triggered, see [docs/RELEASE.md](docs/RELEASE.md)). |
 
