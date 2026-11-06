@@ -3,6 +3,13 @@
 A from-scratch Vega-Lite → Vega compiler verified against the vega-lite oracle by
 rendering parity.
 
+Install (version 0.1.0 is not yet published to npm; the command works once the first release is tagged). Node 20 or newer;
+no runtime dependencies and no peer dependencies (render the compiled spec with `@aster/core`, or let `@aster/react` compile it):
+
+```bash
+npm i @aster/vl
+```
+
 Use it directly:
 
 ```ts

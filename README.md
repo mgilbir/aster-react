@@ -7,7 +7,7 @@ oracle only; nothing in the published packages imports them or any `d3-*` / `top
 
 ## Status
 
-**Pre-alpha. Not published.** The behaviour is checked against the real packages by the gates in
+**Pre-alpha. Version 0.1.0, not yet published to npm** (the install commands below work once the first release is tagged; until then, build from this repository, see Quick Start). The behaviour is checked against the real packages by the gates in
 [`scripts/gates.mjs`](scripts/gates.mjs) (`pnpm check`). The current results, each next to the command that
 produced it, are in [docs/TESTING.md](docs/TESTING.md#reference-results) and
 [docs/PERFORMANCE.md](docs/PERFORMANCE.md#reference-measurements); in short, as measured on this tree:
@@ -59,7 +59,26 @@ pinned upstream packages ([docs/TESTING.md](docs/TESTING.md#oracle-vectors)); th
 | `scripts/` | The gate list (`gates.mjs`), dependency boundary, publish verification, release guards and their tests. |
 | `.github/workflows/` | `ci.yml` (runs `pnpm check`), `nightly.yml` (sweeps, fuzzing, extra browsers), `release.yml` (tag-triggered, see [docs/RELEASE.md](docs/RELEASE.md)). |
 
+## Install
+
+Not yet published (see Status); these are the commands for the packages once they are. Consumers need Node 20 or newer (`engines`
+in each package).
+
+```bash
+npm i @aster/react react react-dom   # React charts: <Chart>, useChart; react ^19 is a peer dependency
+npm i @aster/core                    # no React: renderSpec and the engine (no dependencies)
+npm i @aster/vl                      # only to compile Vega-Lite yourself (no dependencies)
+```
+
+`@aster/react` depends on `@aster/core` and `@aster/vl` itself, so a React app needs only the first line. Install `@aster/core`
+as well when the app imports it directly (for example `@aster/core/dom` or `renderSpec`). Vega-Lite in a React app is opt-in with
+`import '@aster/react/vl'`. `react-dom` is not a declared peer of `@aster/react`; a browser app mounts with it, and server
+rendering uses `react-dom/server`.
+
 ## Quick Start
+
+For working on this repository (contributors need Node 22.13 or newer, which pnpm 11 requires; pnpm is pinned by
+`packageManager`):
 
 ```bash
 pnpm install

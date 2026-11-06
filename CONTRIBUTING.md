@@ -1,5 +1,9 @@
 # Contributing
 
+Prerequisites: Node 22.13 or newer (pnpm 11 does not run on older Node; the published packages support Node 20, which CI
+covers with the engine-sensitive tests only), pnpm as pinned by `packageManager` in `package.json` (corepack or the
+pnpm action installs it), `pnpm install`, and Playwright Chromium for the browser gates (command below).
+
 Aster Charts is verified against the real Vega renderer. Before opening a PR,
 run the full gate list from the repository root:
 

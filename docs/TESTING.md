@@ -248,7 +248,8 @@ output rows). `differential-transforms.test.mts` runs every case through the pin
 thrown errors), then re-runs every case over deep-frozen inputs (no transform may mutate its input). `timeunit` cases
 carry the non-UTC zone they run under. Nothing is recorded: `Math.pow/exp/log` differ in the last bit between V8
 versions, so numbers recorded under one Node cannot gate another; running the oracle in the same engine needs no
-tolerance. CI runs `pnpm test` on Node 20, 22 and the current major for this reason.
+tolerance. CI's `unit` job runs `pnpm test` on Node 22 and the current major, and on Node 20 only the engine-sensitive, jsdom-free suites (the
+`packages/conformance/scripts/differential-*` tests and the oracle vectors), because the jsdom dev dependency does not load on Node 20; the `ci` job (`pnpm check`) runs on Node 22.
 
 Two more engine facts the same-process oracle depends on. (1) `Array.prototype.sort` with a comparator over data that is
 not a strict weak order (a column mixing strings and numbers) returns whatever comparison sequence the engine makes, and
