@@ -106,7 +106,7 @@ one row appended per update:
 | dense 100,000-symbol mark: append patch vs mount (ms) | 1.31 vs 314.3 (249x) | 1.17 vs 275.6 (254x) | 1.12 vs 265.9 (254x) |
 
 `pnpm bench:incremental -- --points=100000 --reps=40`: full evaluate 42.1 ms, stream append 0.3 ms
-(163x), vega `view.change` 19.0 ms (13.6 to 34.7 ms across the runs: aster 54x to 107x cheaper), whole-array
+(163x), vega `view.change` 19.0 ms (13.6 to 34.7 ms across the runs: Aster 54x to 107x cheaper), whole-array
 replacement 37x; dense append patch 1.00 ms vs a 263.3 ms mount (273x).
 
 ### Differential updates (node, no DOM)
@@ -126,9 +126,9 @@ asterDom 2.9 / react-vega 6.1 / vega-embed hook 3.7; scatter 4.6 / 4.2 / 33.1 / 
 line aster 2.65 / 2.55, asterDom 1.75 / 1.90, react-vega 2.90 / 3.45, vega-embed hook 2.40 / 2.60; scatter aster
 2.90 / 3.45, asterDom 2.75 / 3.30, react-vega 8.20 / 7.90, vega-embed hook 7.05 / 8.35; bar aster 10.10 / 8.00,
 asterDom 9.25 / 7.30, react-vega 15.50 / 16.75, vega-embed hook 14.90 / 8.30. Stable-content re-render (fresh spec
-object, same data): 0 DOM mutations on all four; 0.3 ms for aster vs 0.1 ms for the Vega wrappers. Under a
+object, same data): 0 DOM mutations on all four; 0.3 ms for Aster vs 0.1 ms for the Vega wrappers. Under a
 one-update-per-frame stream the line chart holds 16.7 ms median frames on all four; long frames (over 21 ms) are
-0.0% for aster, 1.7% to 3.7% for the Vega embeds. Run alternately against the 2026-10-27 build (2a03147), aster's
+0.0% for Aster, 1.7% to 3.7% for the Vega embeds. Run alternately against the 2026-10-27 build (2a03147), Aster's
 first render and update timings here read 5% to 17% slower (about 5% normalised by the Vega embeds of the same run),
 but the work does not differ: both builds emit byte-identical SVG for these charts, and CPU profiles of the same
 mounts and updates in Chromium, taken alternately, show the current build busy no longer than the old one (2.4 to 3.7 s
@@ -150,7 +150,7 @@ symbol fill, headless Chromium, median frame / share of frames over 21 ms / DOM 
 | 100,000 | canvas | 16.7 ms / 0.0% / 0 | 16.7 ms / 5.9% / 0 |
 
 `pnpm bench:browser-stream -- --points=100000 --seconds=3 --engines=aster --renderers=svg --dense=0,1`
-(aster SVG, microtask flush): per-item 161.2 ms median frame, 94.2% long, 100,030 DOM nodes, 18 to 19 appends in
+(Aster SVG, microtask flush): per-item 161.2 ms median frame, 94.2% long, 100,030 DOM nodes, 18 to 19 appends in
 3 s; with `denseMarks` 33.5 ms, 96.3% long, 402 DOM nodes, 82 to 84 appends. Dense marks cut the per-frame cost by
 about 4.8x; neither SVG variant holds a 16.7 ms frame at 100,000 points, canvas does.
 
@@ -166,8 +166,8 @@ Vega-Lite compiler: 308.3 kB gzip eager plus 59.1 kB gzip loaded on demand (the 
 is above react-vega's 288.7 kB. The smaller figure holds for Vega specs only.
 
 `pnpm --filter @aster/benchmarks run budget` bundles one tiny app per documented import pattern (esbuild, minify,
-`NODE_ENV=production`, tree-shaking on, react external) and gates its gzip size (default level). The addon rows are
-MARGINAL: the addon's gzip added to the `@aster/core` app. The old rows measured each addon standalone, which
+`NODE_ENV=production`, tree-shaking on, react external) and gates its gzip size (default level). The add-on rows are
+MARGINAL: the add-on's gzip added to the `@aster/core` app. The old rows measured each add-on standalone, which
 double counted the code it shares with core (hit read 15.6 kB where an app pays about 5). Each budget is the measured
 size plus 0.5 kB (`packages/benchmarks/scripts/budget.mjs` holds the rationale and the budgets, which are not copied
 here); a change that needs more room edits the number in the same PR. These rows count the code a page loads eagerly: a

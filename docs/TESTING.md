@@ -182,7 +182,7 @@ result is the summary line it prints. They change with the code: re-run before q
 
 ## React component tests: the variant matrix
 
-`<Chart>` and `<SvgChart>` are two shells over one `ChartCore`, so the component tests run on both instead of the light chart
+`<Chart>` and `<SvgChart>` are two shells over one `ChartCore`, so the component tests run on both instead of `<SvgChart>`
 getting a thinner copy. `packages/react/src/testing/variants.tsx` provides `forEachVariant(needs, (Chart, variant) => …)`,
 which runs its body once per variant that has the declared capabilities (`svg`, `canvas`, `interaction`, `signals`) with the
 variant's component bound to the name `Chart`: `Chart` (all four), `SvgChart` (`svg`) and `SvgChart+interaction` (`svg`,
@@ -192,7 +192,7 @@ plain `SvgChart` variant refuses interaction props and the missing-event-loop re
 `interaction`/`signals`. `variant.it(needs, name, fn)` declares needs for a single test.
 
 Guards, all in `pnpm test`: `Chart.matrix.test.ts` (no test renders `<Chart>` outside the matrix without a listed reason),
-`Chart.shells.test.ts` (the shells stay thin; `lite` never reaches canvas/hit/signals), `Chart.types.test.ts` (type fixtures that
+`Chart.shells.test.ts` (the shells stay thin; `@aster/react/lite` never reaches canvas/hit/signals), `Chart.types.test.ts` (type fixtures that
 must compile and must fail on exact lines, the props/handle parity assertions, and the documented examples) and
 `Chart.corpus-parity.test.tsx` (the DOM of `<Chart>`, `<SvgChart>` and `<SvgChart interaction>` equal over every corpus
 spec: server markup, client mount, hydration).

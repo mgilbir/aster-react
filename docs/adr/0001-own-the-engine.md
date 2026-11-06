@@ -9,7 +9,7 @@ time argued for. Those documents now describe the owned engine.
 
 ## Context
 
-Aster React reimplements the Vega and Vega-Lite languages and their rendering, as
+Aster Charts reimplements the Vega and Vega-Lite languages and their rendering, as
 [`aster`](https://github.com/mgilbir/aster) (Go) and
 [`aster-kotlin`](https://github.com/mgilbir/aster-kotlin) (Kotlin) do. The intended
 shape of the TypeScript engine is therefore the same as its siblings: the language and

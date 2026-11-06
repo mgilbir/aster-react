@@ -21,7 +21,7 @@ provide Workers but not uniformly (SSR, older hosts, jsdom).
    `renderChartToStaticMarkup` + `hydrateChart`, which patches the existing node
    directly.
 3. **Async data uses Suspense/`use()`.** `useSpecData` returns a stable promise keyed
-   by the spec object and fetch implementation; the loader addon is dynamically
+   by the spec object and fetch implementation; the loader add-on is dynamically
    imported so it stays out of the base bundle. A promise `spec` on `<Chart>` suspends
    to the host's boundary (no internal boundary, so the host fallback is used).
 4. **Workers are optional and symmetric.** `handleChartWorkerRequest` is a pure
@@ -36,7 +36,7 @@ provide Workers but not uniformly (SSR, older hosts, jsdom).
 - Data loading is explicit and cacheable; there is no hidden fetch in the renderer.
 - Worker mode returns a scene without event-loop handles, so interaction that depends
   on signals stays on the main thread unless the host forwards events.
-- The loader addon and worker entry remain separately gateable in the bundle budget.
+- The loader add-on and worker entry remain separately gateable in the bundle budget.
 
 ## Amendments
 

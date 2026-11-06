@@ -21,7 +21,7 @@ full contract; in short:
 | `signal.on` event streams, `preventDefault` | yes | reported: the chart renders but does not respond | yes |
 | `renderer="canvas"` | yes | compile error; renders SVG and reports | compile error; renders SVG and reports |
 
-Pan/zoom, brushing and the keyboard contract do not use the hit index, so the light chart keeps them. Choose `<SvgChart>`
+Pan/zoom, brushing and the keyboard contract do not use the hit index, so `<SvgChart>` keeps them. Choose `<SvgChart>`
 when bundle size matters and the chart is static, zoomable or brushable; add `interaction` when it needs tooltips,
 clicks on marks or `signal.on`; use `<Chart>` when you want all of it with no setup or need the canvas renderer.
 Every interaction check in `packages/react/scripts/browser-interaction.mts` runs against `<Chart>` and

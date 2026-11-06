@@ -40,7 +40,7 @@ pnpm bench:browser-stream # per-frame append: aster <ChartStream> vs vega view.c
 
 Knobs (all runners): `--points=1000` (dataset size), `--reps=…`, `--kind=line,scatter,bar`
 (runtime/browser), `--cycles=…` (memory), `--seconds=3` (browser frame pacing),
-`--dense=0,1` (streaming: aster SVG with `denseMarks` batching on/off).
+`--dense=0,1` (streaming: Aster SVG with `denseMarks` batching on/off).
 The browser runner needs a Chromium for Playwright (`pnpm --filter @aster/conformance exec playwright install --with-deps chromium`).
 
 ## Interpreting
@@ -50,7 +50,7 @@ The browser runner needs a Chromium for Playwright (`pnpm --filter @aster/confor
   for absolute and near-tie numbers. jsdom is still useful in CI (no browser needed).
 - **Frame pacing** streams one data update per animation frame; the interesting column
   is `% long frames (>21ms)` — dropped frames a user would feel. The streaming runner
-  puts aster and Vega on the *same* spec and rows, so the `engine`/`flush` columns are
+  puts Aster and Vega on the *same* spec and rows, so the `engine`/`flush` columns are
   directly comparable: `aster` flushes on a microtask or in `requestAnimationFrame`,
   `vega` calls the documented `view.change('t', changeset().insert(rows))` and then
   `.run()` (synchronous) or `.runAsync()` (deferred). `mut/append` counts DOM mutations
@@ -93,13 +93,13 @@ Two results are worth knowing how to read:
 - **Streaming appends.** `bench:browser-stream` runs Vega's own streaming path
   (`view.change('t', changeset().insert(rows)).run()` / `.runAsync()`) and `<ChartStream>` on the identical spec and
   rows, one append per animation frame. Vega's `view.change` sets the dataset's `modified` flag, so its SVG renderer
-  re-walks and re-writes the scene and the mutation count per append grows with the dataset; aster's append path writes
+  re-walks and re-writes the scene and the mutation count per append grows with the dataset; Aster's append path writes
   only the appended item. At large sizes SVG is bound by the browser's cost of mutating a very large node tree (and
   most of all per-item `transform` attributes), not by the engine; that is why `denseMarks` batches dense symbol marks
-  into a few hundred `<path>` elements and why canvas stays frame-bound. `--dense=0,1` compares aster SVG with
+  into a few hundred `<path>` elements and why canvas stays frame-bound. `--dense=0,1` compares Aster SVG with
   batching off and on.
 - **Compute only.** `bench:incremental` runs the same append workload through Vega with `renderer: 'none'` so no paint
-  is in the way: the gap is the pulse. Vega inserts one tuple but still walks the affected operators, while aster
+  is in the way: the gap is the pulse. Vega inserts one tuple but still walks the affected operators, while Aster
   splices the mark items and patches the domain census in O(appended).
 
 String mode (`incremental={false}`) is still the better default when every mark changes on each update (scatter-style

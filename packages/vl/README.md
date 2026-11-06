@@ -23,13 +23,13 @@ const vegaLiteSpec = {
 const vegaSpec = compile(vegaLiteSpec) // a Vega spec; renderSpec(vegaSpec) from @aster/core draws it
 ```
 
-or let `<Chart>`/`useChart` do it by registering the addon once:
+or let `<Chart>`/`useChart` do it by registering the add-on once:
 
 ```ts
 import '@aster/react/vl'
 ```
 
-`@aster/react` is Vega-only by default; the addon is the opt-in boundary, mirroring `@aster/core/dom` and
+`@aster/react` is Vega-only by default; the add-on is the opt-in boundary, mirroring `@aster/core/dom` and
 `@aster/core/transforms` (its size is in [docs/PERFORMANCE.md](https://github.com/mgilbir/aster-react/blob/main/docs/PERFORMANCE.md#bundle-sizes)).
 
 ## Contract
@@ -116,7 +116,7 @@ an expression or a generated dataset/signal/scale name.
   (`empty`) and predicates in `test`, `filter` (and, or, not) and `lookup.from`; `scale.domain` as `{param}` /
   `{unionWith}`; variable parameters (`value`, `expr`, `bind`, `react`). Projections over a bin or a time unit work as
   in vega-lite. A selection's state is its `<name>_store` dataset and the `<name>` signal, exactly as in vega-lite.
-  `nearest` needs the transforms addon (`import '@aster/core/transforms'`) for its voronoi cells. The interaction
+  `nearest` needs the transforms add-on (`import '@aster/core/transforms'`) for its voronoi cells. The interaction
   needs the signal event loop (`<Chart>`, or `<SvgChart interaction>`): see [docs/INTERACTION.md](https://github.com/mgilbir/aster-react/blob/main/docs/INTERACTION.md). In a composition a unit's
   signals are its group mark's (a Vega group scope: one copy per view or facet cell, `push: "outer"` for the signals that
   feed a bound scale, the `facet` signal in a facet's cells), and the named selection, its store and `unit` stay at the root.

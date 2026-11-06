@@ -1,6 +1,6 @@
 # Roadmap
 
-Aster React is the browser/React member of the Aster family. Like [`aster`](https://github.com/mgilbir/aster) (Go)
+Aster Charts is the browser/React member of the Aster family. Like [`aster`](https://github.com/mgilbir/aster) (Go)
 and [`aster-kotlin`](https://github.com/mgilbir/aster-kotlin) (Kotlin), it **reimplements the Vega and Vega-Lite
 languages and their rendering from scratch**, so that it draws what upstream draws, while being idiomatic and fast
 inside a React app. The real `vega` and `vega-lite` packages are the **oracle**: a dev-only reference the tests

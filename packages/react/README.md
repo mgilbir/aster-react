@@ -1,6 +1,6 @@
 # @aster/react
 
-React bindings for Aster Charts: `<Chart>` (SVG or canvas; Vega, or Vega-Lite through an opt-in addon), `useChart`,
+React bindings for Aster Charts: `<Chart>` (SVG or canvas; Vega, or Vega-Lite through an opt-in add-on), `useChart`,
 `useSpecData`, `useChartWorker`, streaming components and hooks, SSR/hydration helpers, declarative selection and
 pan/zoom, and an accessible scene tree.
 
@@ -24,8 +24,8 @@ export const Demo = () => <Chart spec={spec} panZoom tooltip a11y limits={{ maxT
 
 Vega specs need only the first import. The opt-in core add-ons (`@aster/core/transforms`, `/geo`, `/load`) are loaded on demand when
 a spec needs them: the chart suspends meanwhile (wrap it in `<Suspense>` for a fallback), then renders as it would have with the add-on
-imported ([how add-ons load themselves](https://github.com/mgilbir/aster-react/blob/main/docs/ARCHITECTURE.md#geo-projections--the-addon-boundary)). Without `@aster/react/vl`, a Vega-Lite spec throws an error naming the missing
-import; if you compile Vega-Lite specs in a worker, import the addon in the worker entry too.
+imported ([how add-ons load themselves](https://github.com/mgilbir/aster-react/blob/main/docs/ARCHITECTURE.md#geo-projections--the-add-on-boundary)). Without `@aster/react/vl`, a Vega-Lite spec throws an error naming the missing
+import; if you compile Vega-Lite specs in a worker, import the add-on in the worker entry too.
 
 For a smaller bundle there is an SVG-only chart: `<SvgChart>` from `@aster/react/lite` (182.5 kB gzip against 205.3 kB for
 `<Chart>`, measured 2026-11-06 with `pnpm --filter @aster/benchmarks run budget`; it never imports the canvas renderer). Tooltips, point selection and `signal.on` event streams come with the

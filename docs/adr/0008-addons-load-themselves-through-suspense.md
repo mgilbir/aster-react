@@ -49,4 +49,4 @@ it what to import, and the engine itself is synchronous, so it cannot wait for a
   `Chart.autoload.ssr.test.tsx`, `Chart.autoload.static.test.tsx`,
   `useChart.autoload.test.tsx`, `worker.autoload.test.tsx`: the React, SSR and worker behaviour
   above.
-- How it works in detail: [ARCHITECTURE.md](../ARCHITECTURE.md#geo-projections--the-addon-boundary).
+- How it works in detail: [ARCHITECTURE.md](../ARCHITECTURE.md#geo-projections--the-add-on-boundary).

@@ -15,7 +15,7 @@ Aster Charts reads a Vega or Vega-Lite spec and produces a scene graph, then SVG
 | Package | Entry points | What it is |
 |---|---|---|
 | `@aster/vl` | `.` | `compile(vlSpec)`: Vega-Lite to Vega. It does not import `@aster/core`. |
-| `@aster/core` | `.` (the barrel: compile, evaluate, SVG string), `/addons`, `/geo`, `/transforms`, `/load`, `/dom`, `/signals`, `/canvas`, `/hit` | The engine. Heavy or optional parts are separate entries (see "Geo projections & the addon boundary"). |
+| `@aster/core` | `.` (the barrel: compile, evaluate, SVG string), `/addons`, `/geo`, `/transforms`, `/load`, `/dom`, `/signals`, `/canvas`, `/hit` | The engine. Heavy or optional parts are separate entries (see "Geo projections & the add-on boundary"). |
 | `@aster/react` | `.` (`<Chart>`, hooks, streams, workers), `/lite` (`<SvgChart>`), `/interaction`, `/vl`, `/ssr`, `/worker`, `/worker-entry` | The React bindings: one chart implementation (`ChartCore`) behind two shells. |
 
 ```mermaid
@@ -63,14 +63,14 @@ flowchart LR
 | Why an update equals a from-scratch evaluation, and where the state lives | "Incremental evaluation" |
 | How SVG, the DOM patcher, canvas and hit testing share code | "Renderers, the DOM patcher and hit testing" |
 | How expressions are parsed, refused and run | "Expression Engine" |
-| What `@aster/core/geo`, `/transforms` and `/load` register, and how they load | "Geo projections & the addon boundary" |
+| What `@aster/core/geo`, `/transforms` and `/load` register, and how they load | "Geo projections & the add-on boundary" |
 | How `<Chart>` and `<SvgChart>` share one implementation | "ChartCore and the two shells" |
 | Which files have import-time effects | "Side effects and tree-shaking" |
 | Scales, transforms, SVG output and guides | "Scales", "Transforms", "Rendering" |
 | How the oracle checks all of it | "Conformance" |
 | Where Aster deliberately differs from Vega | "Deviations from Vega" (a reference table) |
 
-The reference tables are the add-on table (under "Geo projections & the addon boundary"), the side-effects table, and "Deviations from Vega"; the other sections explain how and why.
+The reference tables are the add-on table (under "Geo projections & the add-on boundary"), the side-effects table, and "Deviations from Vega"; the other sections explain how and why.
 
 ## Pipeline Overview
 
@@ -89,7 +89,7 @@ VgSpec (JSON)
 
 The scene shapes (`SceneRoot`, `SceneGroup`, `SceneItem`, `SceneNode`) are defined in `packages/core/src/types.ts` and intentionally mirror `vega-scenegraph`'s JSON structure so the conformance oracle (real Vega, rendered headless) can be compared structurally.
 
-Vega-Lite input is a separate step in front of this pipeline: `@aster/vl`'s `compile(vlSpec)` emits a Vega spec, which then follows the three stages above. `<Chart>` does this through the opt-in `@aster/react/vl` addon; `renderSpec` takes Vega only.
+Vega-Lite input is a separate step in front of this pipeline: `@aster/vl`'s `compile(vlSpec)` emits a Vega spec, which then follows the three stages above. `<Chart>` does this through the opt-in `@aster/react/vl` add-on; `renderSpec` takes Vega only.
 
 Public API:
 
@@ -216,7 +216,7 @@ A signal written into a running chart renders like Vega except in the `retained`
 
 `compileChart` reads `spec.config` and applies it as encode/property defaults (encode always wins): `config.background` → root background, `config.view` / `config.style.cell` → frame stroke (a `transparent` stroke serializes as *no* stroke), `config.style.<marktype|name>` → mark encode defaults (e.g. a `rect` style's `fill`/`cornerRadius`), and `config.axis` / `config.legend` → guide defaults. The chart `title` (string or object, with `subtitle`) merges from `config.title` and the vega-theme style defaults (fontSize 13, bold, offset 4, subtitlePadding 3).
 
-## Geo projections & the addon boundary
+## Geo projections & the add-on boundary
 
 `packages/core/src/geo.ts` builds projections (`mercator`, `albers`, `albersUsa`, `equirectangular`, `orthographic`, …) from the compiled `projections` spec the way vega's Projection transform does, resolving `scale`/`translate`/`center`/`rotate` signal params against the runtime; the `geoshape` transform and shape marks route geometry through the projection's `GeoPath` (`geo-path.ts`; a path with no projection draws coordinates as they are).
 
@@ -231,7 +231,7 @@ The geo engine is Aster's own design and matches d3-geo/vega bit for bit (the ge
 
 Because heavy feature areas are only used by a small fraction of specs, they are **not** reachable from the `@aster/core` barrel. The core code paths consult injection registries (`packages/core/src/registry.ts`: `geoRegistry`, `transformRegistry`, `dataFormatRegistry`); opt-in entries register their implementations (or, for `canvas`, `hit` and `addons`, provide a capability a plain chart does not need):
 
-| Addon | Registers |
+| Add-on | Registers |
 |---|---|
 | `@aster/core/geo` | the projections (`buildProjection`, `projectedPath`) and the contour generator (`contourRun`) |
 | `@aster/core/transforms` | the transforms that are not in the core dispatch: every type of `TRANSFORMS_ADDON_TYPES` (exported from `@aster/core/addons`, the one list; it includes `pie`, `cross`, `countpattern`, `dotbin`, `geopoint`, `geojson`, `linkpath`, `crossfilter` and `resolvefilter` besides the layout transforms) (implementations in `transform-extra.ts` (`voronoi` on `delaunay.ts`, `voronoi.ts` and `orient.ts`), `hierarchy-nest.ts` (`nest`), `hierarchy-layout.ts` with `circle-pack.ts`, `treemap-tiling.ts` and `hierarchy-tree.ts`, `force-layout.ts` with `quadtree.ts`, `raster-transforms.ts`; `label.ts` places labels as vega-label does, on an occupancy grid, and `label-draw.ts` draws the marks it avoids with `raster.ts`, a coverage-only 2D context that follows Skia's rasterizer, so it needs neither a canvas nor a DOM), and the distribution functions of the expression language (`quantileNormal`, `densityUniform`, ... in `stats-functions.ts`) plus `treePath` / `treeAncestors` |
@@ -253,7 +253,7 @@ Because heavy feature areas are only used by a small fraction of specs, they are
 - **Data.** Data is never fetched on its own: a `url` dataset is still resolved by `loadSpecData` / `useSpecData` (a fetch is the host's decision, under its URL policy), only the readers for its format load by themselves.
 - **Bundles.** Bundlers split the add-ons into chunks fetched on demand; the bundle budget counts what loads up front.
 
-`@aster/react/vl` is the same pattern at the grammar level: the Vega-Lite compiler (`@aster/vl`) is registered by `import '@aster/react/vl'`, so Vega-only hosts do not pay for it. A spec that needs a gated feature without its addon loaded gets an actionable error naming what to import first. `packages/benchmarks/scripts/budget.mjs` gates one bundle per import pattern (core `renderSpec`, `useChart`, `<Chart>`, `<Chart>` + VL, and each core addon as its marginal cost on top of core); the measured sizes are in [PERFORMANCE.md](PERFORMANCE.md#bundle-sizes).
+`@aster/react/vl` is the same pattern at the grammar level: the Vega-Lite compiler (`@aster/vl`) is registered by `import '@aster/react/vl'`, so Vega-only hosts do not pay for it. A spec that needs a gated feature without its add-on loaded gets an actionable error naming what to import first. `packages/benchmarks/scripts/budget.mjs` gates one bundle per import pattern (core `renderSpec`, `useChart`, `<Chart>`, `<Chart>` + VL, and each core add-on as its marginal cost on top of core); the measured sizes are in [PERFORMANCE.md](PERFORMANCE.md#bundle-sizes).
 
 ## ChartCore and the two shells
 
@@ -263,7 +263,7 @@ the canvas renderer (`CanvasCapability`, `@aster/core/canvas`) and hit testing +
 `@aster/core/hit`, `@aster/core/signals`). `<Chart>` (`Chart.tsx`) and `<SvgChart>` (`SvgChart.tsx`) are shells that render
 `<ChartCore>`: `<Chart>` injects both capabilities, `<SvgChart>` injects nothing itself and passes through the `interaction`
 its caller gives it. So `@aster/react/lite` (`SvgChart`) never reaches the canvas module, and `@aster/react/interaction`
-(the `interaction` value) is the only way hit and signals enter a lite bundle. The shell split costs `<Chart>` 0.7 kB gzip
+(the `interaction` value) is the only way hit and signals enter a bundle that uses `<SvgChart>`. The shell split costs `<Chart>` 0.7 kB gzip
 (the property reads through the capability objects, and the missing-capability report that only `<SvgChart>` can trigger).
 
 `<SvgChart>` was chosen over lazy-loading the heavy modules: nothing loads asynchronously, the first paint is synchronous and
@@ -337,7 +337,7 @@ Everything else that runs at import time only fills the module's own tables (`sc
 
 ### How the manifests are checked
 
-`scripts/check-bundle-shaking.mjs` (`pnpm check:bundle`, a `pnpm check` gate) bundles a tiny app per documented import pattern with esbuild (production, tree-shaking), executes the bundle in a fresh node process (jsdom where it needs a DOM) and asserts the behaviour: Vega-Lite registered and rendered, geo projections, rare transforms, URL and inline csv data, `<Chart>` on the server and the client, `useChart` with and without serialising, `/ssr` hydration, the worker handler and the worker entry, the dom/canvas/hit/signals addons, `<SvgChart>` alone and with `interaction` (asserted on the esbuild metafile: no `core/canvas`, no `core/hit` or `core/signals` without the capability), the lazy `await import('@aster/core/geo')` form, and negative controls (without the addon the spec asks for it).
+`scripts/check-bundle-shaking.mjs` (`pnpm check:bundle`, a `pnpm check` gate) bundles a tiny app per documented import pattern with esbuild (production, tree-shaking), executes the bundle in a fresh node process (jsdom where it needs a DOM) and asserts the behaviour: Vega-Lite registered and rendered, geo projections, rare transforms, URL and inline csv data, `<Chart>` on the server and the client, `useChart` with and without serialising, `/ssr` hydration, the worker handler and the worker entry, the dom/canvas/hit/signals add-ons, `<SvgChart>` alone and with `interaction` (asserted on the esbuild metafile: no `core/canvas`, no `core/hit` or `core/signals` without the capability), the lazy `await import('@aster/core/geo')` form, and negative controls (without the add-on the spec asks for it).
 
 `node scripts/check-bundle-shaking.mjs --blanket-false` simulates `"sideEffects": false` and must fail (the patterns that live on an import effect do, 11 of 26 on 2026-11-06; `scripts/bundle-shaking.test.mjs` asserts the names of the ones that must).
 
@@ -359,7 +359,7 @@ Scales are built from a spec in `packages/core/src/scales.ts` (the spec read int
 
 Eager data transforms are dispatched by `applyTransform` in `packages/core/src/transform.ts`; the implementations are in `transform-basic.ts`, `transform-agg.ts`, `transform-window.ts`, `transform-stats.ts` (its regression and loess fits and `sampleCurve` are in `curve-fits.ts`) and `transform-extra.ts`. Each is a function from input rows to output rows that never mutates its input.
 
-- **Dispatch.** The dispatch handles: `formula`, `filter`, `collect`, `sample`, `fold`, `flatten`, `bin`, `impute`, `aggregate`, `joinaggregate`, `window`, `stack`, `extent`, `lookup`, `pivot`, `sequence`, `identifier`, `timeunit`, `stratify`, `contour`, `graticule`, `geoshape`, `project`, and the transforms of the `@aster/core/transforms` addon, which must be loaded first (`TRANSFORMS_ADDON_TYPES` in `@aster/core/addons` is the list; `contour` and a projection need the `@aster/core/geo` addon).
+- **Dispatch.** The dispatch handles: `formula`, `filter`, `collect`, `sample`, `fold`, `flatten`, `bin`, `impute`, `aggregate`, `joinaggregate`, `window`, `stack`, `extent`, `lookup`, `pivot`, `sequence`, `identifier`, `timeunit`, `stratify`, `contour`, `graticule`, `geoshape`, `project`, and the transforms of the `@aster/core/transforms` add-on, which must be loaded first (`TRANSFORMS_ADDON_TYPES` in `@aster/core/addons` is the list; `contour` and a projection need the `@aster/core/geo` add-on).
 - **Mark transforms.** Every transform of a mark runs on the mark's encoded items, after the encode and the mark's defaults, as vega-parser's mark transforms do (`transformMarkItems`, for group marks too): it reads the items (`datum.x` is what the encode gave the item, `datum.datum` its data) and writes onto them, and the items are drawn by what it wrote; a transform that works on copies of its tuples has them written back onto the items they came from. A mark's `identifier` numbers its items from the view's counter, after the datasets, and an item keeps its number from one evaluation to the next (it is the item of the same datum).
 - **Unknown types.** Any other type is a `SpecParseError` (`Unrecognized transform type: "<type>"`) from `compileChart`, as `vega.parse` refuses it, so it never reaches the dispatch.
 - **Coverage.** Option coverage follows Vega's, case by case, through the transform vectors and the transform matrix ([TESTING.md](TESTING.md)); the deliberate differences are listed under "Deviations from Vega".

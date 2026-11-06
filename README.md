@@ -1,6 +1,6 @@
 # Aster Charts
 
-Aster renders [Vega](https://vega.github.io/vega/) and [Vega-Lite](https://vega.github.io/vega-lite/) specs to SVG or canvas
+Aster Charts (Aster for short) renders [Vega](https://vega.github.io/vega/) and [Vega-Lite](https://vega.github.io/vega-lite/) specs to SVG or canvas
 from TypeScript, with React bindings: a `<Chart>` component, hooks, streaming, workers and server rendering. It is a
 reimplementation of the Vega and Vega-Lite rendering stack that aims to produce what the real Vega renderer produces. The real
 `vega` and `vega-lite` packages are the test oracle only; nothing in the published packages imports them or any `d3-*` /
@@ -187,7 +187,7 @@ The Vega spec is the canonical intermediate representation. A Vega-Lite spec is 
    equals a fresh evaluation ([docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#incremental-evaluation)).
 3. **Render**: `renderSceneToSvg(scene)` produces an SVG string that has the structure of `vega-scenegraph`'s SVG renderer
    (classes, roles and ARIA labels included, compared by the conformance gate); the
-   `@aster/core/dom` addon patches a live `<svg>` instead, and `@aster/core/canvas` paints the same scene to a canvas.
+   `@aster/core/dom` add-on patches a live `<svg>` instead, and `@aster/core/canvas` paints the same scene to a canvas.
 
 Everything below the spec language is owned: the expression parser and CSP-safe interpreter (no `new Function`), scales, ticks
 and colour schemes, number and time formatting, time zones, curves and symbols, geo projections, contours, DSV and TopoJSON

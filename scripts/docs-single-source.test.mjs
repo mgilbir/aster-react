@@ -78,7 +78,7 @@ describe('add-ons: TRANSFORMS_ADDON_TYPES and LOAD_ADDON_FORMATS are the lists',
     for (const { file, text } of DOCS) {
       if (HISTORY.has(file) || file === 'docs/LIMITS.md' || file === 'docs/PERFORMANCE.md') continue // their lists are per-transform cost, not the add-on
       for (const p of paragraphs(text)) {
-        if (file === 'docs/ARCHITECTURE.md' && p.startsWith('| Addon | Registers |')) continue // the canonical sample
+        if (file === 'docs/ARCHITECTURE.md' && p.startsWith('| Add-on | Registers |')) continue // the canonical sample
         if (countIn(p, types).length >= 4) copies.push(`${file}: ${p.slice(0, 70).replace(/\n/g, ' ')}...`)
       }
     }

@@ -625,7 +625,7 @@ export function Example(): React.ReactElement {
 ```
 
 `spec` may be a Vega spec, a Vega-Lite spec, or a promise (wrap the chart in
-`<Suspense>`). Vega-Lite is an opt-in addon — import it once before rendering VL
+`<Suspense>`). Vega-Lite is an opt-in add-on — import it once before rendering VL
 specs:
 
 ```ts
@@ -636,11 +636,11 @@ import '@aster/react/vl'   // side effect: registers the from-scratch VL compile
 imported: `<Chart>`, `<SvgChart>`, the hooks and the worker entry import what the spec needs (`addonsNeeded` in `@aster/core/addons`),
 and the chart suspends meanwhile, so put a `<Suspense fallback>` above it. The synchronous entry points (`renderSpec`,
 `renderChartToStaticMarkup`, `hydrateChart`) cannot wait: `await loadAddonsFor(spec)` before them. The rules, server rendering,
-workers and `url` data are in [ARCHITECTURE.md](ARCHITECTURE.md#geo-projections--the-addon-boundary).
+workers and `url` data are in [ARCHITECTURE.md](ARCHITECTURE.md#geo-projections--the-add-on-boundary).
 
 The base `@aster/react` entry does not include the Vega-Lite compiler; importing `@aster/react/vl` adds about 103 kB
 gzip to the bundle (`<Chart>` 205.3 kB, `<Chart>` + `@aster/react/vl` 308.3 kB eager, measured 2026-11-06 by
-`pnpm --filter @aster/benchmarks run budget`; the budgets and current figures are in [PERFORMANCE.md](PERFORMANCE.md#bundle-sizes)). Passing a VL spec without the addon throws an error naming the missing
+`pnpm --filter @aster/benchmarks run budget`; the budgets and current figures are in [PERFORMANCE.md](PERFORMANCE.md#bundle-sizes)). Passing a VL spec without the add-on throws an error naming the missing
 import. Vega specs need no extra import. Worker hosts must import `@aster/react/vl` in the worker entry as well,
 since compilation happens there.
 
@@ -687,7 +687,7 @@ picks the scales are in `docs/INTERACTION.md`.
 
 #### `<SvgChart>` and the `interaction` capability
 
-`<SvgChart>` is the light chart for size-sensitive apps: the same engine and the same DOM as `<Chart renderer="svg">`
+`<SvgChart>` is the SVG-only chart for size-sensitive apps: the same engine and the same DOM as `<Chart renderer="svg">`
 (it is a second shell over the one implementation, see [ARCHITECTURE.md](ARCHITECTURE.md#chartcore-and-the-two-shells)),
 minus what an SVG-only app does not use. It lives in its own entry and never imports the canvas renderer.
 

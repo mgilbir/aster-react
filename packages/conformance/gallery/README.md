@@ -83,7 +83,7 @@ Every spec ends in exactly one of:
 
 * `pass` - the canonical SVGs are equal.
 * `fail` - they differ. Printed with the first diff (`first`) and the first diff that says WHAT differs (`->`: for a structure
-  diff the oracle/aster line pair).
+  diff the oracle/Aster line pair).
 * `error` - Aster (or `@aster/vl`) threw, or its SVG could not be canonicalised.
 * `unverifiable` - the **oracle** cannot be compared: it is not a function of its inputs even with the gate's determinism (below), or
   vega itself fails. Always listed with the reason; never counted as a pass; capped by a ceiling. Today that is only the specs whose

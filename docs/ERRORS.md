@@ -293,15 +293,15 @@ rows below are plain `Error`s with an `[aster]` prefix and no `code`, thrown on 
 |---|---|
 | unknown aggregate op | `[aster] unsupported aggregate op "bogus" (vega: AggregateOps[op] is not a function)` |
 | `width` / `height` of the form `{ step }` | `[aster] width/height {step} sizing is not supported yet` |
-| a geo projection used without the addon | `[aster] this spec uses a geo projection; load the addon first: await import("@aster/core/geo")` |
-| a rare transform (`kde`, `linkpath`, `treemap`, ...) without the addon | `[aster] this spec uses the "kde" transform; load the addon first: await import("@aster/core/transforms")` |
-| `csv`/`tsv`/`dsv`/`topojson` data format without the addon | `[aster] this spec reads "csv" data; load the addon first: await import("@aster/core/load")` |
+| a geo projection used without the add-on | `[aster] this spec uses a geo projection; load the addon first: await import("@aster/core/geo")` |
+| a rare transform (`kde`, `linkpath`, `treemap`, ...) without the add-on | `[aster] this spec uses the "kde" transform; load the addon first: await import("@aster/core/transforms")` |
+| `csv`/`tsv`/`dsv`/`topojson` data format without the add-on | `[aster] this spec reads "csv" data; load the addon first: await import("@aster/core/load")` |
 | an unknown symbol `shape` (not a built-in name, not a valid SVG path) | `Invalid SVG path, incorrect parameter count` (the same message vega gives) |
-| a Vega-Lite spec without the VL addon (`<Chart>`, `useChart`, the worker handlers) | `A Vega-Lite spec was passed but the compiler is not loaded. Add ...` followed by the import to add, `import '@aster/react/vl'` (no `[aster]` prefix) |
+| a Vega-Lite spec without the VL add-on (`<Chart>`, `useChart`, the worker handlers) | `A Vega-Lite spec was passed but the compiler is not loaded. Add ...` followed by the import to add, `import '@aster/react/vl'` (no `[aster]` prefix) |
 
-Load the matching addon (`@aster/core/geo`, `@aster/core/transforms`, `@aster/core/load`) before calling `renderSpec` or another synchronous entry point
+Load the matching add-on (`@aster/core/geo`, `@aster/core/transforms`, `@aster/core/load`) before calling `renderSpec` or another synchronous entry point
 (`await loadAddonsFor(spec)` from `@aster/react`, or `loadAddons(missingAddons(spec))` from `@aster/core/addons`, does it for you). The React shells, hooks and the worker entry
-load them themselves ([how](ARCHITECTURE.md#geo-projections--the-addon-boundary)); if that import fails the error is `[aster] could not load the "geo" add-on (@aster/core/geo): <reason>`,
+load them themselves ([how](ARCHITECTURE.md#geo-projections--the-add-on-boundary)); if that import fails the error is `[aster] could not load the "geo" add-on (@aster/core/geo): <reason>`,
 reported through `onError` (the hook's `error`), and it is remembered for the page (reload to retry).
 
 ### Deliberate differences from Vega
@@ -321,7 +321,7 @@ reported through `onError` (the hook's `error`), and it is remembered for the pa
   `SpecParseError("Unrecognized function: <name>")` out of `compileChart`, in a formula, a filter, an encode `signal`, a signal
   `update` or the filter of an event stream alike, as vega's parser does. The functions vega has and Aster does not implement
   are the exception, and fail where they are called (see above).
-- **Unknown projection type.** Without the geo addon Aster throws the "load the addon" error above. With it, an
+- **Unknown projection type.** Without the geo add-on Aster throws the "load the addon" error above. With it, an
   unrecognised projection type throws `Unrecognized projection type: <type>` (a plain `Error` without the `[aster]`
   prefix) out of the render, where vega logs the same message and renders without the projection.
 - **Vega-Lite is validated strictly.** `@aster/vl` implements a subset of Vega-Lite and throws a `VLCompileError`
