@@ -28,10 +28,17 @@
  * because that is what consumers receive. This needs `pnpm build` first.
  *
  * Usage: node scripts/check-deps.mjs [--root <dir>] [--src-only]
+ *   --root <dir>  check the repository at <dir> (default: the current directory)
+ *   --src-only    skip the built dist of each package (for a checkout that has not been built)
+ *
+ * Exit codes: 0 clean, 1 a violation or a stale baseline entry, 2 bad usage (an unknown option).
  */
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
 import { join, relative, resolve, sep, posix } from 'node:path'
+import { cli } from './lib/cli.mjs'
 import { CODE_EXT, isBanned, packageName, scanSource } from './lib/scan-imports.mjs'
+
+cli({ url: import.meta.url, flags: { root: 'value', 'src-only': 'bool' } })
 
 const argv = process.argv.slice(2)
 const rootIdx = argv.indexOf('--root')

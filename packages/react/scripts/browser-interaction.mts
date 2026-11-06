@@ -28,6 +28,9 @@ import { dirname, join } from 'node:path'
 import { build } from 'esbuild'
 import { chromium, type Page } from 'playwright'
 import { compile as compileVl } from '@aster/vl'
+import { cli } from '../../../scripts/lib/cli.mjs'
+
+cli({ url: import.meta.url })
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const PKG = dirname(HERE)

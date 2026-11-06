@@ -13,6 +13,9 @@ import { writeFileSync, rmSync, mkdirSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { build } from 'esbuild'
+import { cli } from '../../../scripts/lib/cli.mjs'
+
+cli({ url: import.meta.url })
 
 const CONF_DIR = dirname(dirname(fileURLToPath(import.meta.url)))
 const OUT_DIR = join(CONF_DIR, '.tmp-browser-intersect')

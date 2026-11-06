@@ -15,6 +15,9 @@ import '@aster/core/geo'
 import '@aster/core/transforms'
 import { compileChart, evaluateChart, renderSceneToSvg } from '@aster/core'
 import { canonicalizeSvg } from './normalize.js'
+import { cli } from '../../../scripts/lib/cli.mjs'
+
+cli({ url: import.meta.url })
 
 const THIS_DIR = dirname(fileURLToPath(import.meta.url))
 const CORPUS_DIR = join(THIS_DIR, '..', 'corpus')

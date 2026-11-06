@@ -16,6 +16,9 @@ import { performance } from 'node:perf_hooks'
 import { ensureBuilt } from './ensure-built.js'
 import { summarize, table, fmt, type Summary } from './stats.js'
 import type { ChartKind } from './fixtures.js'
+import { cli } from '../../../scripts/lib/cli.mjs'
+
+cli({ url: import.meta.url, flags: { kinds: 'eq', points: 'eq', reps: 'eq' } })
 
 async function main(): Promise<void> {
   ensureBuilt()

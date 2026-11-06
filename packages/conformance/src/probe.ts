@@ -18,6 +18,9 @@ import { loadSpecData, TRUSTED_LOAD_OPTIONS } from '@aster/core/load'
 import { renderWithVega } from './render-vega.js'
 import { canonicalizeSvg, diffCanonical } from './normalize.js'
 import { parseProbeArgs, probeVerdict } from './probe-verdict.js'
+import { cli } from '../../../scripts/lib/cli.mjs'
+
+cli({ url: import.meta.url, flags: { 'min-pass': 'both' }, args: '[name-filter]' })
 
 interface ProbeEntry {
   name: string

@@ -24,6 +24,9 @@ import { build } from 'esbuild'
 import { chromium } from 'playwright'
 import * as vega from 'vega'
 import { gradientSpec, makeRng, UNPAINTABLE_KINDS } from './gradient-gen.mts'
+import { cli } from '../../../scripts/lib/cli.mjs'
+
+cli({ url: import.meta.url, flags: { limit: 'eq', filter: 'eq', browser: 'eq', pixel: 'eq', ratio: 'eq', mean: 'eq' } })
 
 const THIS_DIR = dirname(fileURLToPath(import.meta.url))
 const CONF_DIR = dirname(THIS_DIR)

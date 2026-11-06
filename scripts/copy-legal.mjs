@@ -9,6 +9,9 @@
 import { copyFileSync, existsSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { cli } from './lib/cli.mjs'
+
+cli({ url: import.meta.url })
 
 const here = dirname(fileURLToPath(import.meta.url))
 const root = dirname(here)

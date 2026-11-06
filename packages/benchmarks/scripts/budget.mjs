@@ -1,8 +1,20 @@
+/**
+ * Bundle-size budgets: one tiny app per documented import pattern is bundled (esbuild, production, minify) and its gzip size is
+ * checked against the ceiling in BUDGETS below (the measured size plus 0.5 kB). Needs `pnpm build` and refuses a stale dist.
+ *
+ * Run: pnpm --filter @aster/benchmarks run budget   (the `budget` gate of `pnpm check`)
+ * Environment: ASTER_BUDGET_IGNORE_SIDE_EFFECTS=1 bundles as if no package declared `sideEffects` (the "before" column of docs/PERFORMANCE.md).
+ *
+ * Exit codes: 0 every pattern is within its budget, 1 a budget is exceeded or a pattern fails to bundle, 2 bad usage (an unknown option).
+ */
 import { build } from 'esbuild'
 import { writeFileSync, readFileSync, statSync, rmSync, mkdirSync, readdirSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { gzipSync } from 'node:zlib'
 import { fileURLToPath } from 'node:url'
+import { cli } from '../../../scripts/lib/cli.mjs'
+
+cli({ url: import.meta.url })
 
 // Per-import-pattern bundle gates (reshaped with the `sideEffects` work).
 //

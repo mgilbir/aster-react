@@ -42,6 +42,9 @@
 import { performance } from 'node:perf_hooks'
 import { ensureBuilt } from './ensure-built.js'
 import { summarize, pairedRatio, table, fmt } from './stats.js'
+import { cli } from '../../../scripts/lib/cli.mjs'
+
+cli({ url: import.meta.url, flags: { batch: 'eq', 'dense-points': 'eq', 'max-append-growth': 'eq', points: 'eq', reps: 'eq', vega: 'eq', 'min-append': 'eq', 'min-replace': 'eq', 'min-dom': 'eq' } })
 
 /** Ceiling on an append to N rows over one to N/10 (see the call site): at 100,000 points healthy runs read 2.00x-2.03x here and 2.07x-2.78x on the CI runner, the 2026-10-27..2026-11-04 regression
  * 4.27x-4.34x here and 3.63x on the CI runner (2026-11-05). 4x keeps healthy runs clear of it; it catches a regression of that size here,

@@ -14,6 +14,9 @@
  *   pnpm check -- --only conformance,a11y-parity
  *   pnpm check -- --skip browser        skip gates tagged `browser` (needs no Chromium)
  *   pnpm check -- --fail-fast           stop at the first failure
+ *   pnpm check -- --help                print this text
+ *
+ * Exit codes: 0 every selected gate passed (or --list/--help), 1 a blocking gate failed, 2 bad usage (an unknown option or gate name).
  *
  * Browser gates need Playwright Chromium:
  *   pnpm --filter @aster/conformance exec playwright install --with-deps chromium
@@ -21,6 +24,7 @@
  */
 import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
+import { cli } from './lib/cli.mjs'
 
 /** @type {{ name: string, args: string[], tags?: string[], blocking?: boolean, why: string }[]} */
 export const GATES = [
@@ -98,6 +102,7 @@ function csv(argv, flag) {
 }
 
 function main() {
+  cli({ url: import.meta.url, flags: { list: 'bool', only: 'value', skip: 'value', 'fail-fast': 'bool' } })
   const argv = process.argv.slice(2)
   if (argv.includes('--list')) {
     for (const g of GATES) {

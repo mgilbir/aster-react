@@ -29,6 +29,9 @@ import { FETCH_COMMAND, readManifest, verifyCache } from './cache.js'
 import type { SwapOutcome } from './react.js'
 import { planSwap, swapGateProblems, type SwapPlan } from './swap-plan.js'
 import { GALLERY_DIR, listGallery, type GallerySpec, type Kind, type Outcome } from './lib.js'
+import { cli } from '../../../../scripts/lib/cli.mjs'
+
+cli({ url: import.meta.url, flags: { path: 'eq', filter: 'eq', json: 'eq', 'print-passing': 'bool', 'regenerate-swap-pairs': 'bool' } })
 
 const REPO_ROOT = join(GALLERY_DIR, '..', '..', '..')
 const argv = process.argv.slice(2)

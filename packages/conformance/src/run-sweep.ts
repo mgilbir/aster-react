@@ -38,6 +38,9 @@ import { loadSpecData, TRUSTED_LOAD_OPTIONS } from '@aster/core/load'
 import { compile as compileVL } from '@aster/vl'
 import { renderWithVega, renderWithVegaChecked } from './render-vega.js'
 import { canonicalizeSvg, diffCanonical } from './normalize.js'
+import { cli } from '../../../scripts/lib/cli.mjs'
+
+cli({ url: import.meta.url, flags: { floor: 'value', 'min-ok': 'value', 'max-node-error': 'value', 'max-retained': 'value', filter: 'value', 'vega-check': 'bool' }, args: '<sweep-name>' })
 
 const require = createRequire(import.meta.url)
 

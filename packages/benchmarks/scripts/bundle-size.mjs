@@ -9,6 +9,9 @@ import { writeFileSync, readFileSync, rmSync, mkdirSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { table, fmt } from '../src/stats.js'
+import { cli } from '../../../scripts/lib/cli.mjs'
+
+cli({ url: import.meta.url })
 
 const THIS_DIR = dirname(fileURLToPath(import.meta.url))
 const PKG_DIR = dirname(THIS_DIR)

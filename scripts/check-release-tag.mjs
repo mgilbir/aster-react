@@ -3,11 +3,16 @@
  * of EVERY public package, and the three public packages must agree.
  *
  * Usage: node scripts/check-release-tag.mjs <tag> [--root <repo>]
- *        (the release workflow passes $GITHUB_REF_NAME)
+ *        (the release workflow passes $GITHUB_REF_NAME; --root defaults to this repository)
+ *
+ * Exit codes: 0 the tag matches, 1 it does not, 2 bad usage (an unknown option).
  */
 import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { cli } from './lib/cli.mjs'
+
+cli({ url: import.meta.url, flags: { root: 'value' }, args: '<tag>' })
 
 const PUBLIC = ['core', 'react', 'vl']
 const args = process.argv.slice(2)

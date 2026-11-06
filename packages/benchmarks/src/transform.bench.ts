@@ -11,6 +11,9 @@
 import { performance } from 'node:perf_hooks'
 import { ensureBuilt } from './ensure-built.js'
 import { summarize, table, fmt } from './stats.js'
+import { cli } from '../../../scripts/lib/cli.mjs'
+
+cli({ url: import.meta.url, flags: { only: 'eq', reps: 'eq', rows: 'eq' } })
 
 type Row = Record<string, unknown>
 

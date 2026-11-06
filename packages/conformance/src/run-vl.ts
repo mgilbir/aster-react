@@ -34,6 +34,9 @@ import { loadSpecData, TRUSTED_LOAD_OPTIONS } from '@aster/core/load'
 import { compile as compileOurs } from '@aster/vl'
 import { renderWithVega, renderWithVegaChecked } from './render-vega.js'
 import { canonicalizeSvg, diffCanonical } from './normalize.js'
+import { cli } from '../../../scripts/lib/cli.mjs'
+
+cli({ url: import.meta.url, args: '[filter]' })
 
 /** Recursively freeze so any in-place write by the compiler throws (ESM is strict). */
 function deepFreeze<T>(v: T): T {

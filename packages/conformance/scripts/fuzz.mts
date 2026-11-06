@@ -17,6 +17,9 @@ import { fileURLToPath } from 'node:url'
 import { renderSpec } from '@aster/core'
 import { renderWithVega } from '../src/render-vega.js'
 import { canonicalizeSvg, diffCanonical } from '../src/normalize.js'
+import { cli } from '../../../scripts/lib/cli.mjs'
+
+cli({ url: import.meta.url, flags: { replay: 'bool', clean: 'bool', seeds: 'value', start: 'value' } })
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const REPRO = join(HERE, '..', 'fuzz-repro')

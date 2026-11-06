@@ -24,6 +24,9 @@ import { compile as compileOurs } from '@aster/vl'
 import { canonicalizeSvg } from '../src/normalize.js'
 import { vegaSvg } from '../src/gallery/oracle.js'
 import { BASE_URL, fileFetch, listGallery, readSpec, type Outcome } from '../src/gallery/lib.js'
+import { cli } from '../../../scripts/lib/cli.mjs'
+
+cli({ url: import.meta.url, args: '<gate-results.json> [out.json]' })
 
 const render = async (vg: unknown): Promise<string> =>
   renderSpec((await loadSpecData(JSON.parse(JSON.stringify(vg)), { ...TRUSTED_LOAD_OPTIONS, fetch: fileFetch, baseURL: BASE_URL })) as never) as string

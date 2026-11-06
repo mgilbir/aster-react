@@ -8,6 +8,9 @@ import { tmpdir } from 'node:os'
 import { join, dirname } from 'node:path'
 import { createRequire } from 'node:module'
 import { compile as compileOurs } from '@aster/vl'
+import { cli } from '../../../scripts/lib/cli.mjs'
+
+cli({ url: import.meta.url, args: '<family|case-filter> [limit]' })
 
 const require = createRequire(import.meta.url)
 

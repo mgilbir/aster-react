@@ -21,6 +21,7 @@ import { writeFileSync, rmSync, mkdirSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { build } from 'esbuild'
+import { cli } from '../../../scripts/lib/cli.mjs'
 
 const THIS_DIR = dirname(fileURLToPath(import.meta.url))
 const CONF_DIR = dirname(THIS_DIR)
@@ -127,6 +128,7 @@ window.__time = (shape, n) => {
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+  cli({ url: import.meta.url, flags: { browser: 'eq' } })
   const argv = process.argv.slice(2)
   const arg = (n: string, d: string): string => argv.find((a) => a.startsWith(`--${n}=`))?.split('=')[1] ?? d
   const res = await runSymbolRunOracle(arg('browser', 'chromium') as 'chromium')

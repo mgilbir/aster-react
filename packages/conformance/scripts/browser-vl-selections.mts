@@ -26,6 +26,9 @@ import { createRequire } from 'node:module'
 import { build } from 'esbuild'
 import type { Page } from 'playwright'
 import { canonicalizeSvg, diffCanonical } from '../src/normalize.js'
+import { cli } from '../../../scripts/lib/cli.mjs'
+
+cli({ url: import.meta.url, flags: { filter: 'eq', 'min-cases': 'eq', 'max-retained': 'eq' } })
 
 const THIS_DIR = dirname(fileURLToPath(import.meta.url))
 const CONF_DIR = dirname(THIS_DIR)

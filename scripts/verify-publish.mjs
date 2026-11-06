@@ -33,6 +33,9 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpath
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { cli } from './lib/cli.mjs'
+
+cli({ url: import.meta.url })
 
 const root = process.env.ASTER_VERIFY_PUBLISH_ROOT ?? dirname(dirname(fileURLToPath(import.meta.url)))
 // Test hook only: the fault-injection test sets this to `npm` to prove the `workspace:` check bites.

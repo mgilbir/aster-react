@@ -7,6 +7,10 @@
  *   corpus/*.vl.json — Vega-Lite specs (compiled via vega-lite.compile)
  *   corpus/*.vg.json — raw Vega specs
  *
+ * Environment: ASTER_CORPUS_DIR picks another corpus directory, relative to the package (default `corpus`; the time-zone matrix uses
+ * `corpus-tz`); ASTER_CORPUS_FILTER keeps the entries whose name matches the regular expression.
+ * Exit codes: 0 every entry matches the oracle, 1 a difference (or a missing corpus directory), 2 bad usage (an unknown option).
+ *
  * Convention: most entries set explicit numeric width/height and `autosize: 'none'` so
  * layout is deterministic and comparable. Nothing enforces it, and not every entry
  * follows it: some use another autosize or have no numeric width/height.
@@ -21,6 +25,9 @@ import { renderSpec } from '@aster/core'
 import { loadSpecData, TRUSTED_LOAD_OPTIONS } from '@aster/core/load'
 import { renderWithVega } from './render-vega.js'
 import { canonicalizeSvg, diffCanonical } from './normalize.js'
+import { cli } from '../../../scripts/lib/cli.mjs'
+
+cli({ url: import.meta.url })
 
 interface CorpusEntry {
   name: string

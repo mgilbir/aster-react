@@ -12,8 +12,12 @@
  *     by real vega and by Aster in that same zone, SVG diffed
  *
  * `pnpm check` runs it as the `tz-matrix` gate. Usage: node scripts/test-tz.mjs [zone ...]
+ * (zones are IANA names such as Asia/Kolkata; with none given it runs the three above, plus UTC for the corpus).
  */
 import { spawnSync } from 'node:child_process'
+import { cli } from './lib/cli.mjs'
+
+cli({ url: import.meta.url, args: '[zone ...]' })
 
 /** Three zones with different offsets: one with DST, one half-hour offset without, one ahead of UTC whose daylight saving is half an hour. */
 export const ZONES = ['America/New_York', 'Asia/Kolkata', 'Australia/Lord_Howe']

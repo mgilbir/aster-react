@@ -9,6 +9,9 @@ import * as vl from 'vega-lite'
 import '@aster/core/geo'
 import '@aster/core/transforms'
 import { sceneDiff } from '../src/scene-diff.js'
+import { cli } from '../../../scripts/lib/cli.mjs'
+
+cli({ url: import.meta.url, flags: { filter: 'value', 'scales-only': 'bool' } })
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const CORPUS = join(HERE, '..', 'corpus')
