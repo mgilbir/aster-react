@@ -187,8 +187,8 @@ canvas renderer, interaction and accessibility tree as `<Chart>`. Measurements a
 
 ## What is not covered
 
-- **Vega-Lite**: `@aster/vl` throws a `VLCompileError` naming the feature for what it does not compile (a selection on a layer spec itself, maps, the `time` channel, a few data-driven channels, pre-binned data). The list is in
-  [packages/vl/README.md](packages/vl/README.md).
+- **Vega-Lite**: `@aster/vl` throws a `VLCompileError` naming the feature and its path for what it does not compile. Maps, the `time` channel (animation), `scale: null`, horizontal boxplots and pre-binned `x` / `y` are supported; the refusals are narrower cases (for example a selection on a layer spec itself, `timeUnit.maxbins`, `argmax` / `argmin` as a `window` op). The canonical list, held to the compiler by a test, is in
+  [packages/vl/README.md](packages/vl/README.md#throws-not-supported).
 - **Signals**: a signal written into a running chart renders the fresh result for the new signals; real Vega keeps some
   state from its first run (the `retained` cases, see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#deviations-from-vega)).
 - **Word clouds**: `wordcloud` is vega-wordcloud / d3-cloud, and draws its sprites on the host's canvas as vega does, so a browser lays out the cloud vega lays out. Where the host has no canvas (Node) vega cannot lay one out; the words are then boxes of their measured width, which is deterministic and not a browser's.

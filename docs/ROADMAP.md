@@ -82,9 +82,8 @@ the tag are the owner's steps ([RELEASE.md](RELEASE.md)).
 
 Each item is something the code or the gates show today; none is a plan that has not been checked against them.
 
-- **Vega-Lite coverage.** What `@aster/vl` refuses today (selections on a layer spec itself, maps,
-  the `time` channel, pre-binned data,
-  `timeUnit.maxbins`, `scale: null`, some composition nestings, horizontal boxplots, argmin/argmax transform ops, ...).
+- **Vega-Lite coverage.** What `@aster/vl` still refuses is listed in
+  [packages/vl/README.md](../packages/vl/README.md#throws-not-supported), which a test holds to the compiler.
 - **Signals sweep.** Cases where real Vega's second render differs from its own fresh render (the `retained`
   status) are a documented deviation, not a fix; the gate has a ceiling that can only be lowered.
 - **Word clouds.** `wordcloud` is vega-wordcloud / d3-cloud, drawn on the host's canvas as vega does; without a host
