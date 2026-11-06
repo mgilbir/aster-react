@@ -23,6 +23,7 @@ const SORTS: Array<[string, unknown]> = [
   ['by the count of a field, descending', { field: 'k', op: 'count', order: 'descending' }],
   ['by the sum of a field', { field: 'v', op: 'sum' }],
   ['by the max of the time, descending', { field: 't', op: 'max', order: 'descending' }],
+  ['by a list of values', ['b', 'a', 'c']],
 ]
 
 function scaleTypeVegaLiteGave(spec: Obj, channel: string): string | undefined {
