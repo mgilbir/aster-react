@@ -52,6 +52,27 @@ with `@aster/vl`, diffs it against the Vega-Lite oracle and renders the Vega tha
 `@aster/vl` emits through real vega (an error or a warning from vega fails the entry);
 `verify-publish` packs, installs and imports the tarballs (see [RELEASE.md](RELEASE.md)).
 
+### Command-line options and exit codes
+
+Every command-line entry point of the repository (the scripts a `package.json` runs, plus the few that a workflow or a documented
+command runs directly) takes `--help` or `-h`, which prints a usage line and the script's own header comment to stdout
+and exits 0 without doing any work:
+
+```bash
+pnpm check -- --help
+pnpm --filter @aster/conformance run sweep-values --help
+node scripts/check-deps.mjs --help
+```
+
+An option the script does not declare is an error: the script prints the offending option, the usage line and a pointer to `--help`
+to stderr and exits 2, again before doing any work, so a typo such as `--flor 10` fails instead of being ignored. The same goes
+for a value attached the wrong way: a script that declares `--name=<value>` rejects `--name value`, and one that declares
+`--name <value>` rejects `--name=value`. Positional arguments are not checked, and a bare `--` (what `pnpm run script -- --flag` forwards) is ignored.
+
+The exit codes of these scripts are: 0 for success (and for `--help` and `--list`), 1 when the check failed, 2 for bad usage.
+The shared code is `scripts/lib/cli.mjs` (`cli()`); `scripts/cli-usage.test.mjs` runs every script's `--help` and an unknown option
+and fails when a script named in a `package.json` does not call `cli()`, so a new script must call it.
+
 ## Writing a new test
 
 - **Core**: a focused Vitest file beside the module (`packages/core/src/*.test.ts`);
