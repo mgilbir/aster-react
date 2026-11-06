@@ -1,0 +1,47 @@
+{
+  "$schema": "https://vega.github.io/schema/vega-lite/v6.json",
+  "description": "A descending sort orders a discrete channel by its domain, on the axis and in the legend alike.",
+  "width": 320,
+  "height": 200,
+  "data": {
+    "values": [
+      {
+        "cat": "apple",
+        "v": 28
+      },
+      {
+        "cat": "banana",
+        "v": 55
+      },
+      {
+        "cat": "cherry",
+        "v": 43
+      },
+      {
+        "cat": "date",
+        "v": 91
+      },
+      {
+        "cat": "elder",
+        "v": 81
+      }
+    ]
+  },
+  "mark": "bar",
+  "encoding": {
+    "x": {
+      "field": "cat",
+      "type": "nominal",
+      "sort": "descending"
+    },
+    "y": {
+      "field": "v",
+      "type": "quantitative"
+    },
+    "color": {
+      "field": "cat",
+      "type": "ordinal",
+      "sort": "descending"
+    }
+  }
+}

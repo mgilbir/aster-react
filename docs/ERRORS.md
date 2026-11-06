@@ -294,7 +294,8 @@ reported through `onError` (the hook's `error`), and it is remembered for the pa
 - **Vega-Lite is validated strictly.** `@aster/vl` implements a subset of Vega-Lite and throws a `VLCompileError`
   (`[aster/vl] <path>: <message>`) for an unknown key (`unknown top-level property "foo"`), a config property it does
   not implement (`config.bogus: this config property is valid Vega-Lite but is not supported by @aster/vl`), a
-  feature it does not implement (`mark type "geoshape" is not supported by @aster/vl yet`) and an unknown mark.
+  feature it does not implement (`` a wrapped facet (a single `facet` field) around or inside another facet is not
+  supported yet ``) and an unknown mark.
   vega-lite itself compiles the first three (it ignores the key or property) and crashes on the unknown mark.
 - **Safety refusals.** Limits, the regular-expression screen, the URL policy, the hard spec-depth ceiling and the
   `bin`/`stratify` refusals are Aster additions; see `docs/LIMITS.md`.

@@ -46,7 +46,7 @@ import {
   GroupedBarSpec,
   RadarSpec,
 } from './specs.js'
-import { SHOWCASE } from './showcase'
+import { NEW_SHOWCASE, SHOWCASE } from './showcase'
 
 /**
  * The oracle column (official vega-embed) lives in its own chunk and streams
@@ -556,8 +556,9 @@ export function App() {
           separately; aster paints first.
         </p>
         <div className="hero-stats">
-          <div><b>419/419</b> conformance specs vs the oracle</div>
-          <div><b>157 kB</b> gzip React chart (no vega runtime)</div>
+          <div><b>1,055/1,055</b> conformance specs vs the oracle</div>
+          <div><b>720/720</b> official Vega and Vega-Lite gallery examples</div>
+          <div><b>205 kB</b> gzip React chart (no vega runtime)</div>
           <div><b>16.7 ms</b> streaming frames @ 100k canvas</div>
           <div><b>~0 MB</b> retained per update</div>
         </div>
@@ -612,6 +613,18 @@ export function App() {
       <section id="new">
         <div className="section-head">
           <h2>New in this build — same spec, both engines</h2>
+          <p className="desc">Scale types on every channel, fill and stroke, polar charts, datums and sorts, each matching vega-lite. Each spec was compared with the official toolchain before it was added.</p>
+        </div>
+        <div className="grid">
+          {NEW_SHOWCASE.map((s) => (
+            <CompareCard key={s.title} title={s.title} desc={s.desc} spec={s.raw} aster={s.aster} wide={s.wide === 'wide'} />
+          ))}
+        </div>
+      </section>
+
+      <section id="interactions">
+        <div className="section-head">
+          <h2>Selections, maps and animation — same spec, both engines</h2>
           <p className="desc">Selections across composed views, maps, the time channel and discretizing legends. Each spec is from the conformance corpus, where it is checked against the official toolchain.</p>
         </div>
         <div className="grid">

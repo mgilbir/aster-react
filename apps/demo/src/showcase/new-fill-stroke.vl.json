@@ -1,0 +1,519 @@
+{
+  "$schema": "https://vega.github.io/schema/vega-lite/v6.json",
+  "description": "fill and stroke as channels of their own on a stroked point mark: two scales, two legends.",
+  "width": 320,
+  "height": 220,
+  "data": {
+    "values": [
+      {
+        "x": 32.4,
+        "y": 15.1,
+        "rank": "high",
+        "value": 2.4,
+        "group": "C",
+        "kind": "solid"
+      },
+      {
+        "x": 36.6,
+        "y": 5.8,
+        "rank": "high",
+        "value": 10.7,
+        "group": "A",
+        "kind": "hollow"
+      },
+      {
+        "x": 41.8,
+        "y": 24.1,
+        "rank": "high",
+        "value": 21.2,
+        "group": "C",
+        "kind": "solid"
+      },
+      {
+        "x": 94.7,
+        "y": 63.1,
+        "rank": "high",
+        "value": 47.4,
+        "group": "C",
+        "kind": "hollow"
+      },
+      {
+        "x": 5.0,
+        "y": 22.1,
+        "rank": "high",
+        "value": 42.9,
+        "group": "B",
+        "kind": "hollow"
+      },
+      {
+        "x": 14.4,
+        "y": 11.8,
+        "rank": "mid",
+        "value": 28.0,
+        "group": "C",
+        "kind": "solid"
+      },
+      {
+        "x": 10.3,
+        "y": 57.1,
+        "rank": "low",
+        "value": 18.6,
+        "group": "C",
+        "kind": "solid"
+      },
+      {
+        "x": 56.4,
+        "y": 61.9,
+        "rank": "mid",
+        "value": 34.0,
+        "group": "B",
+        "kind": "hollow"
+      },
+      {
+        "x": 46.6,
+        "y": 92.3,
+        "rank": "mid",
+        "value": 15.0,
+        "group": "A",
+        "kind": "solid"
+      },
+      {
+        "x": 8.2,
+        "y": 30.0,
+        "rank": "mid",
+        "value": 43.8,
+        "group": "C",
+        "kind": "hollow"
+      },
+      {
+        "x": 28.8,
+        "y": 98.0,
+        "rank": "low",
+        "value": 25.6,
+        "group": "A",
+        "kind": "hollow"
+      },
+      {
+        "x": 15.2,
+        "y": 48.9,
+        "rank": "low",
+        "value": 48.1,
+        "group": "A",
+        "kind": "hollow"
+      },
+      {
+        "x": 34.0,
+        "y": 35.0,
+        "rank": "mid",
+        "value": 29.0,
+        "group": "B",
+        "kind": "solid"
+      },
+      {
+        "x": 84.0,
+        "y": 94.5,
+        "rank": "mid",
+        "value": 34.9,
+        "group": "A",
+        "kind": "solid"
+      },
+      {
+        "x": 73.1,
+        "y": 31.0,
+        "rank": "high",
+        "value": 49.7,
+        "group": "B",
+        "kind": "hollow"
+      },
+      {
+        "x": 71.7,
+        "y": 88.7,
+        "rank": "mid",
+        "value": 1.1,
+        "group": "B",
+        "kind": "hollow"
+      },
+      {
+        "x": 16.8,
+        "y": 11.7,
+        "rank": "low",
+        "value": 10.9,
+        "group": "B",
+        "kind": "solid"
+      },
+      {
+        "x": 73.8,
+        "y": 39.8,
+        "rank": "mid",
+        "value": 4.0,
+        "group": "B",
+        "kind": "hollow"
+      },
+      {
+        "x": 54.9,
+        "y": 88.3,
+        "rank": "mid",
+        "value": 43.2,
+        "group": "B",
+        "kind": "hollow"
+      },
+      {
+        "x": 98.6,
+        "y": 68.3,
+        "rank": "mid",
+        "value": 47.9,
+        "group": "A",
+        "kind": "solid"
+      },
+      {
+        "x": 17.6,
+        "y": 23.2,
+        "rank": "low",
+        "value": 0.6,
+        "group": "C",
+        "kind": "solid"
+      },
+      {
+        "x": 26.3,
+        "y": 0.4,
+        "rank": "mid",
+        "value": 26.7,
+        "group": "C",
+        "kind": "hollow"
+      },
+      {
+        "x": 95.3,
+        "y": 69.0,
+        "rank": "high",
+        "value": 47.5,
+        "group": "C",
+        "kind": "solid"
+      },
+      {
+        "x": 45.7,
+        "y": 87.1,
+        "rank": "high",
+        "value": 39.9,
+        "group": "B",
+        "kind": "hollow"
+      },
+      {
+        "x": 39.9,
+        "y": 10.4,
+        "rank": "high",
+        "value": 20.0,
+        "group": "A",
+        "kind": "solid"
+      },
+      {
+        "x": 98.5,
+        "y": 44.1,
+        "rank": "low",
+        "value": 17.0,
+        "group": "A",
+        "kind": "solid"
+      },
+      {
+        "x": 0.0,
+        "y": 15.1,
+        "rank": "low",
+        "value": 47.4,
+        "group": "C",
+        "kind": "solid"
+      },
+      {
+        "x": 7.0,
+        "y": 20.8,
+        "rank": "mid",
+        "value": 7.4,
+        "group": "B",
+        "kind": "hollow"
+      },
+      {
+        "x": 60.2,
+        "y": 47.4,
+        "rank": "low",
+        "value": 42.4,
+        "group": "B",
+        "kind": "hollow"
+      },
+      {
+        "x": 48.4,
+        "y": 8.6,
+        "rank": "low",
+        "value": 37.5,
+        "group": "C",
+        "kind": "hollow"
+      },
+      {
+        "x": 47.9,
+        "y": 69.2,
+        "rank": "high",
+        "value": 1.2,
+        "group": "C",
+        "kind": "hollow"
+      },
+      {
+        "x": 14.7,
+        "y": 54.3,
+        "rank": "low",
+        "value": 37.9,
+        "group": "B",
+        "kind": "solid"
+      },
+      {
+        "x": 69.6,
+        "y": 26.1,
+        "rank": "mid",
+        "value": 45.4,
+        "group": "B",
+        "kind": "solid"
+      },
+      {
+        "x": 53.3,
+        "y": 77.9,
+        "rank": "mid",
+        "value": 31.8,
+        "group": "C",
+        "kind": "solid"
+      },
+      {
+        "x": 80.6,
+        "y": 81.8,
+        "rank": "high",
+        "value": 40.2,
+        "group": "A",
+        "kind": "hollow"
+      },
+      {
+        "x": 35.6,
+        "y": 2.9,
+        "rank": "low",
+        "value": 39.5,
+        "group": "B",
+        "kind": "hollow"
+      },
+      {
+        "x": 19.4,
+        "y": 60.5,
+        "rank": "mid",
+        "value": 22.4,
+        "group": "C",
+        "kind": "hollow"
+      },
+      {
+        "x": 95.5,
+        "y": 36.5,
+        "rank": "low",
+        "value": 5.1,
+        "group": "B",
+        "kind": "solid"
+      },
+      {
+        "x": 33.8,
+        "y": 48.3,
+        "rank": "high",
+        "value": 42.0,
+        "group": "B",
+        "kind": "hollow"
+      },
+      {
+        "x": 80.0,
+        "y": 8.5,
+        "rank": "high",
+        "value": 6.0,
+        "group": "B",
+        "kind": "solid"
+      },
+      {
+        "x": 47.8,
+        "y": 17.9,
+        "rank": "high",
+        "value": 16.6,
+        "group": "C",
+        "kind": "hollow"
+      },
+      {
+        "x": 46.3,
+        "y": 74.3,
+        "rank": "low",
+        "value": 36.2,
+        "group": "A",
+        "kind": "solid"
+      },
+      {
+        "x": 2.8,
+        "y": 59.1,
+        "rank": "mid",
+        "value": 40.3,
+        "group": "A",
+        "kind": "hollow"
+      },
+      {
+        "x": 65.7,
+        "y": 35.0,
+        "rank": "high",
+        "value": 27.4,
+        "group": "A",
+        "kind": "solid"
+      },
+      {
+        "x": 79.9,
+        "y": 72.6,
+        "rank": "low",
+        "value": 26.3,
+        "group": "A",
+        "kind": "hollow"
+      },
+      {
+        "x": 98.7,
+        "y": 19.5,
+        "rank": "low",
+        "value": 1.4,
+        "group": "A",
+        "kind": "hollow"
+      },
+      {
+        "x": 50.1,
+        "y": 76.4,
+        "rank": "mid",
+        "value": 13.0,
+        "group": "B",
+        "kind": "solid"
+      },
+      {
+        "x": 6.1,
+        "y": 74.0,
+        "rank": "mid",
+        "value": 33.1,
+        "group": "C",
+        "kind": "hollow"
+      },
+      {
+        "x": 82.7,
+        "y": 87.8,
+        "rank": "low",
+        "value": 26.6,
+        "group": "C",
+        "kind": "solid"
+      },
+      {
+        "x": 87.3,
+        "y": 77.7,
+        "rank": "high",
+        "value": 0.2,
+        "group": "A",
+        "kind": "solid"
+      },
+      {
+        "x": 14.2,
+        "y": 61.9,
+        "rank": "low",
+        "value": 27.8,
+        "group": "B",
+        "kind": "hollow"
+      },
+      {
+        "x": 78.4,
+        "y": 10.6,
+        "rank": "high",
+        "value": 2.8,
+        "group": "A",
+        "kind": "hollow"
+      },
+      {
+        "x": 4.2,
+        "y": 9.8,
+        "rank": "mid",
+        "value": 28.1,
+        "group": "A",
+        "kind": "hollow"
+      },
+      {
+        "x": 32.6,
+        "y": 97.3,
+        "rank": "high",
+        "value": 25.6,
+        "group": "C",
+        "kind": "hollow"
+      },
+      {
+        "x": 45.2,
+        "y": 53.3,
+        "rank": "mid",
+        "value": 25.4,
+        "group": "A",
+        "kind": "hollow"
+      },
+      {
+        "x": 92.3,
+        "y": 89.3,
+        "rank": "low",
+        "value": 42.0,
+        "group": "A",
+        "kind": "hollow"
+      },
+      {
+        "x": 12.2,
+        "y": 44.2,
+        "rank": "low",
+        "value": 33.6,
+        "group": "B",
+        "kind": "solid"
+      },
+      {
+        "x": 21.3,
+        "y": 30.3,
+        "rank": "low",
+        "value": 44.9,
+        "group": "A",
+        "kind": "hollow"
+      },
+      {
+        "x": 14.3,
+        "y": 88.3,
+        "rank": "mid",
+        "value": 11.0,
+        "group": "A",
+        "kind": "hollow"
+      },
+      {
+        "x": 88.5,
+        "y": 16.3,
+        "rank": "high",
+        "value": 41.6,
+        "group": "A",
+        "kind": "hollow"
+      }
+    ]
+  },
+  "mark": {
+    "type": "point",
+    "strokeWidth": 2,
+    "size": 90
+  },
+  "encoding": {
+    "x": {
+      "field": "x",
+      "type": "quantitative"
+    },
+    "y": {
+      "field": "y",
+      "type": "quantitative"
+    },
+    "fill": {
+      "field": "group",
+      "type": "nominal"
+    },
+    "stroke": {
+      "field": "kind",
+      "type": "nominal",
+      "scale": {
+        "range": [
+          "#222",
+          "#e45756"
+        ]
+      }
+    }
+  }
+}

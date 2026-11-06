@@ -1,0 +1,85 @@
+{
+  "$schema": "https://vega.github.io/schema/vega-lite/v6.json",
+  "description": "A datum on any channel: a threshold rule and its label at a constant y, drawn with the bars.",
+  "width": 320,
+  "height": 200,
+  "data": {
+    "values": [
+      {
+        "m": "Jan",
+        "v": 32
+      },
+      {
+        "m": "Feb",
+        "v": 48
+      },
+      {
+        "m": "Mar",
+        "v": 41
+      },
+      {
+        "m": "Apr",
+        "v": 64
+      },
+      {
+        "m": "May",
+        "v": 58
+      },
+      {
+        "m": "Jun",
+        "v": 71
+      }
+    ]
+  },
+  "layer": [
+    {
+      "mark": "bar",
+      "encoding": {
+        "x": {
+          "field": "m",
+          "type": "ordinal",
+          "sort": null
+        },
+        "y": {
+          "field": "v",
+          "type": "quantitative"
+        }
+      }
+    },
+    {
+      "mark": {
+        "type": "rule",
+        "color": "#e45756",
+        "strokeDash": [
+          4,
+          3
+        ]
+      },
+      "encoding": {
+        "y": {
+          "datum": 50
+        }
+      }
+    },
+    {
+      "mark": {
+        "type": "text",
+        "align": "left",
+        "dx": 4,
+        "dy": -6,
+        "color": "#e45756"
+      },
+      "encoding": {
+        "y": {
+          "datum": 50
+        },
+        "text": {
+          "datum": "target 50"
+        },
+        "x": {
+          "value": 0
+        }
+      }
+    }
+  ]
+}

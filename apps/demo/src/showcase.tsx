@@ -12,6 +12,11 @@ import shapesAndPoints from './showcase/vlx-geo-layered-geoshape-points.vl.json'
 import animScatter from './showcase/vlx-anim-scatter.vl.json'
 import quantizeLegend from './showcase/color-quantize-scheme-legend.vl.json'
 import thresholdScale from './showcase/bar-threshold-scale.vg.json'
+import scaleTypes from './showcase/new-scale-types.vl.json'
+import fillStroke from './showcase/new-fill-stroke.vl.json'
+import radial from './showcase/new-radial.vl.json'
+import descendingSort from './showcase/new-descending-sort.vl.json'
+import datumChannels from './showcase/new-datum-channels.vl.json'
 
 /**
  * Specs from the conformance corpus (packages/conformance/corpus), each one checked against real vega / vega-lite by
@@ -40,4 +45,16 @@ export const SHOWCASE: Array<{ title: string; desc: string; raw: Spec; aster: Re
   { title: 'Animated scatter (time channel)', desc: 'The `time` encoding with a timer-driven point selection steps through the years.', raw: animScatter, aster: <AsterPane spec={animScatter} label="Animated scatter" /> },
   { title: 'Quantize legend', desc: 'A quantize colour scale: the legend labels its bins at the breakpoints, as vega-encode does.', raw: quantizeLegend, aster: <AsterPane spec={quantizeLegend} label="Quantize legend" /> },
   { title: 'Threshold scale (raw Vega)', desc: 'A threshold scale and its discrete legend in a raw Vega spec.', raw: thresholdScale, aster: <AsterPane spec={thresholdScale} label="Threshold scale" /> },
+]
+
+/**
+ * This build: one spec for each change a reader can see, each compared with vega-lite 6.4.3 and vega 6.3.1 (compiled scales,
+ * axes and legends, the scales as they run, the rows and the SVG) before it was added here.
+ */
+export const NEW_SHOWCASE: Array<{ title: string; desc: string; raw: Spec; aster: React.ReactNode; wide?: string }> = [
+  { title: 'Every scale type vega-lite honours', desc: 'Size by an ordinal scale and shape by a quantile scale: each channel takes the scale types vega-lite gives it.', raw: scaleTypes, aster: <AsterPane spec={scaleTypes} label="Ordinal size and quantile shape" /> },
+  { title: 'fill and stroke as channels', desc: 'A stroked point mark with fill and stroke on fields of their own: two scales and two legends.', raw: fillStroke, aster: <AsterPane spec={fillStroke} label="fill and stroke channels" /> },
+  { title: 'A radial chart', desc: 'Angle and radius both from fields, the radius on a square-root scale, with the values as labels.', raw: radial, aster: <AsterPane spec={radial} label="Radial chart" /> },
+  { title: 'Descending sorts', desc: 'A descending sort orders a discrete channel by its domain, on the axis and in the legend alike.', raw: descendingSort, aster: <AsterPane spec={descendingSort} label="Descending sort" /> },
+  { title: 'A datum on any channel', desc: 'A threshold rule and its label at a constant y, layered over the bars.', raw: datumChannels, aster: <AsterPane spec={datumChannels} label="Datum on channels" /> },
 ]
