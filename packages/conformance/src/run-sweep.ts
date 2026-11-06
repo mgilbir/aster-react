@@ -1,5 +1,5 @@
 /**
- * Schema-sweep runner (R8.4, ported from the Go aster project's sweep tests).
+ * Schema-sweep runner (ported from the Go aster project's sweep tests).
  *
  * For every (property, value) pair Vega's own schema declares, render one small
  * chart through upstream vega (oracle) and through @aster/core, and compare the

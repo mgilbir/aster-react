@@ -1,5 +1,5 @@
 /**
- * Pack-install-consume check for the published packages (C75).
+ * Pack-install-consume check for the published packages.
  *
  * `pnpm check` exercises the workspace; this verifies the artifact a consumer
  * actually receives, built the way the release builds it:

@@ -1,5 +1,5 @@
 /**
- * Batched-SVG pixel parity gate (R13 / perf).
+ * Batched-SVG pixel parity gate.
  *
  * `denseMarks` rewrites dense symbol marks as chunked `<path>` elements instead
  * of one element per datum (100k symbols -> ~400 paths). Positions are baked

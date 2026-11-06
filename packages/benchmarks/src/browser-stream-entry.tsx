@@ -1,5 +1,5 @@
 /**
- * Browser streaming benchmark API for `<ChartStream>` (R13 / P0).
+ * Browser streaming benchmark API for `<ChartStream>`.
  * Bundled by scripts/browser-stream.bench.mjs and driven through window.__streamBench.
  *
  * Two engines run the *same* streaming workload (same spec, same rows, one

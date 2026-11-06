@@ -1,5 +1,5 @@
 /**
- * R8.1–R8.3 gate: compare resolved scenes (scales, groups, items) against the
+ * Scene gate: compare resolved scenes (scales, groups, items) against the
  * real Vega scenegraph for every corpus spec.
  */
 import { readdirSync, readFileSync, existsSync } from 'node:fs'

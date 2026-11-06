@@ -1,7 +1,6 @@
 // @vitest-environment jsdom
 /**
- * DOM descriptor vs string renderer parity over the whole conformance corpus
- * (audit C43, T2).
+ * DOM descriptor vs string renderer parity over the whole conformance corpus.
  *
  * `dom.ts` claimed the two renderers "can never drift". They did: the first
  * `patchSceneDom` over a string-rendered <svg> rewrote attributes (gradient

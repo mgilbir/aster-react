@@ -35,7 +35,7 @@ const req = createRequire(join(here, '..', 'package.json'))
 
 // --- value codec -------------------------------------------------------------
 // JSON cannot express NaN/Infinity/-0/undefined/Dates/RegExp/Symbols, so
-// values are tagged. The replay test (`util-vectors.test.ts`) mirrors this
+// values are tagged. The replay test (`oracle-vectors.test.ts` (packages/core/src)) mirrors this
 // codec; the two must agree.
 
 function enc(v) {

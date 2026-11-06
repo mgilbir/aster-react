@@ -1,5 +1,5 @@
 /**
- * Real-browser streaming benchmark (R13 / P0).
+ * Real-browser streaming benchmark.
  *
  * Drives one append per animation frame through two engines on the identical
  * spec/rows and measures frame pacing, DOM mutations and node count:

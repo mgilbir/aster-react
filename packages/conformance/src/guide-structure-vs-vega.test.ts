@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 /**
- * Accessibility structure of guides and titles (audit N3).
+ * Accessibility structure of guides and titles.
  *
  * vega-scenegraph draws an axis, a legend and a title as group marks: a container
  * `<g class="mark-group role-axis" role="graphics-symbol" aria-roledescription="axis" aria-label="...">`

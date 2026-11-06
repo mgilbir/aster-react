@@ -5,7 +5,7 @@
  * oracle protocol as the Node harness, but in the environment users actually
  * run in.
  *
- * This gate exists because the Node harness runs both engines in jsdom, where
+ * This gate exists because the Node harness runs both engines in plain Node, where
  * neither can measure text: vega falls back to the same headless estimate
  * aster ported, so text-metric divergence is invisible there by construction.
  * The browser gate is the oracle that catches it.

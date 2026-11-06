@@ -11,7 +11,7 @@
 // `vega/build/vega-schema.json` is the list of them, and it is machine-readable: every guide,
 // scale and mark property with its type, and for the many that take a word, the enumeration of the
 // words. This walks that schema and writes one small chart per (property, value) pair, so the
-// sweep covers the declared surface rather than the used one. The sweep test (sweep_test.go)
+// sweep covers the declared surface rather than the used one. The sweep runner (`src/run-sweep.ts`)
 // renders each case with upstream and with the engine and compares the SVG.
 //
 // ### What is swept, and what is left out
@@ -1156,7 +1156,7 @@ function codePropertyShape(property) {
  * skips the whole of both, which is 26 cases of real geometry.
  *
  * Read out of the pinned source rather than transcribed here, so the list cannot drift from the
- * package: a name added upstream appears in the sweep on the next `npm ci`. Every name is then put
+ * package: a name added upstream appears in the sweep on the next install of the pinned package. Every name is then put
  * back through upstream's own lookup by [verified], so a broken extraction fails loudly instead of
  * quietly sweeping nothing.
  */

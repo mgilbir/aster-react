@@ -1,5 +1,5 @@
 /**
- * Real-browser signal-event parity gate (audit C20).
+ * Real-browser signal-event parity gate.
  *
  * The same specs are mounted twice in headless Chromium, each in its own page:
  * once in REAL vega (a `View` with the svg renderer) and once in @aster/core

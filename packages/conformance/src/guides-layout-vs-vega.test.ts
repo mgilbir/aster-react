@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 /**
- * Targeted differentials against real Vega for the guide / layout / link work of
- * audit C51, C55, C58 and the corpus-vega-only drain: each block pins one class
+ * Targeted differentials against real Vega for the guide / layout / link work (nested group axes and legends, time gradient legends, axis `encode` blocks)
+ * and the corpus-vega-only drain: each block pins one class
  * of defect over the general shape of the problem (every mark type, every
  * channel, every orient), judged by the strict canonicalizer. They run against
  * the built `@aster/core` (the `build` gate precedes `test`).

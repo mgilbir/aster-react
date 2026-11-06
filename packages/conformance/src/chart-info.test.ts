@@ -1,5 +1,5 @@
 /**
- * getChartInfo against the evaluated scene and against real vega (audit C53).
+ * getChartInfo against the evaluated scene and against real vega.
  *
  * It used to build a second, UNFITTED context (the spec's width/height, scales sized for them)
  * and then evaluate the whole chart again just for the padding, so under autosize `fit` /

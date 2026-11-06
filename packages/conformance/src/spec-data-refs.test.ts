@@ -1,5 +1,5 @@
 /**
- * The structural half of vega-parser, replayed against the pinned oracle (audit C80).
+ * The structural half of vega-parser, replayed against the pinned oracle.
  *
  * vega-parser reads every scope list through vega-util `array()` (a lone object is the one-element
  * list, null is empty) and `Scope.getData` throws `Undefined data set name: "<name>"` for a data set

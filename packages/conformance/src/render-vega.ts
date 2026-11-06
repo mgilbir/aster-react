@@ -28,7 +28,7 @@ export interface CheckedRender {
  * Render a Vega spec through real vega while capturing everything its logger
  * reports. Aster's own runtime is lenient (it renders specs real vega refuses),
  * so the VL harness uses this to prove the Vega @aster/vl EMITS is valid Vega,
- * not merely something Aster tolerates (audit C39/T4).
+ * not merely something Aster tolerates.
  */
 export async function renderWithVegaChecked(vgSpec: Record<string, unknown>): Promise<CheckedRender> {
   const errors: string[] = []

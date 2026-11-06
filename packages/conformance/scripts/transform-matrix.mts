@@ -1,5 +1,5 @@
 /**
- * Transform option matrix (R13.3).
+ * Transform option matrix.
  *
  * The schema sweeps cover marks/scales/guides; this gate covers the data
  * transform surface, including option combinations that a corpus chart rarely

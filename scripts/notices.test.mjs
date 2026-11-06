@@ -1,6 +1,6 @@
 /**
  * THIRD_PARTY_NOTICES.md must carry the real licence text of every project the
- * sources port or transcribe (C79), copied verbatim from the package's LICENSE.
+ * sources port or transcribe, copied verbatim from the package's LICENSE.
  */
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'

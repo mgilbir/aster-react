@@ -1,5 +1,5 @@
 /**
- * Group routing (audit C56): Aster used to send any group whose NAME contained "header" or
+ * Group routing: Aster used to send any group whose NAME contained "header" or
  * "footer" through its facet-header builders (a group called `page_header` threw, `page_footer`
  * rendered nothing), and crashed on `facet.groupby: 'g'` (vega reads groupby through
  * `array()`, like every transform's groupby). Groups route by the structural role vega's

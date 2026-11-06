@@ -1,5 +1,5 @@
 /**
- * Incremental append vs full re-evaluation (R13).
+ * Incremental append vs full re-evaluation.
  *
  * Measures the per-update cost of appending a small batch to a live chart:
  *
@@ -18,7 +18,7 @@
  * paint/frame pacing). It is informational: the pass/fail gate stays on aster's
  * own incremental vs full comparison.
  *
- * Gate floors (C86). At the calibrated shape (>= 10000 points and >= 30 updates, which is what
+ * Gate floors. At the calibrated shape (>= 10000 points and >= 30 updates, which is what
  * `pnpm check` runs) each path must beat its baseline by a MEASURED floor, not just by >1x, so a large
  * regression cannot pass. Seven sequential runs of `pnpm bench:incremental -- --points=10000 --reps=30`
  * on the development machine (2026-10-23), speedup of the median:
@@ -34,7 +34,8 @@
  * 224x-303x idle with the floor at 200x); within a pair load cancels. The floors themselves are unchanged.
  *
  * Below the calibrated shape (speedup scales with the dataset) only the >1x check applies. Override with
- * --min-append=, --min-replace=, --min-dom=, --max-append-growth= (used to prove the gate bites).
+ * --min-append=, --min-replace=, --min-dom=, --max-append-growth= (used to prove the gate bites). The dense
+ * append floor (`DENSE_APPEND_FLOOR`, 200x) has no override.
  *
  * Run: pnpm bench:incremental [--points=5000] [--batch=1] [--reps=100] [--vega=1]
  */

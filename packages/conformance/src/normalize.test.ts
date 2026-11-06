@@ -1,6 +1,6 @@
 /**
  * The canonicalizer is the oracle's ruler. These tests plant one difference at
- * a time and require it to be reported (C38), and require representation-only
+ * a time and require it to be reported, and require representation-only
  * differences to be ignored (so the strictness is not noise).
  */
 import { describe, expect, it } from 'vitest'
@@ -76,7 +76,7 @@ const PLANTED: Array<[string, string, string]> = [
   ['stroke-width', wrap(LINE), wrap(LINE.replace('stroke-width="1"', 'stroke-width="2"'))],
   ['text dy', wrap(TEXT), wrap(TEXT.replace('<text', '<text dy="3"'))],
   ['display none', wrap(RECT), wrap(RECT.replace('<rect', '<rect display="none"'))],
-  // the accessibility structure (N3): a screen reader sees each of these
+  // the accessibility structure: a screen reader sees each of these
   ['an extra group', wrap(`<g><g class="x">${RECT}</g></g>`), wrap(RECT)],
   ['group nesting', wrap(`<g class="a"><g class="b">${RECT}</g></g>`), wrap(`<g class="a"></g><g class="b">${RECT}</g>`)],
   ['group class', wrap(`<g class="mark-group role-axis">${RECT}</g>`), wrap(`<g class="mark-group role-legend">${RECT}</g>`)],

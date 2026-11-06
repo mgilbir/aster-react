@@ -1,7 +1,7 @@
 /**
  * Targeted differentials against the real Vega runtime, judged by the STRICT
  * canonicalizer (normalize.ts). Each block pins one class of renderer defect the
- * strict oracle exposed (audit C38, C44, C45, C46, C48, N1, N2) over the general
+ * strict oracle exposed over the general
  * shape of the problem — every mark type, every paint channel, every axis
  * property — not just the one value that first failed.
  *

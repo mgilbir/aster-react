@@ -1,5 +1,5 @@
 /**
- * Chromium pixel oracle for incremental canvas painting (audit C22).
+ * Chromium pixel oracle for incremental canvas painting.
  *
  * `renderSceneToCanvasAppend` paints only the appended marks on top of the
  * previous frame; the contract is that the canvas then shows exactly what a

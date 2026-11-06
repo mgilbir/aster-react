@@ -1,5 +1,5 @@
 /**
- * Release guard (C77): the pushed tag must be `v<version>` and equal the version
+ * Release guard: the pushed tag must be `v<version>` and equal the version
  * of EVERY public package, and the three public packages must agree.
  *
  * Usage: node scripts/check-release-tag.mjs <tag> [--root <repo>]

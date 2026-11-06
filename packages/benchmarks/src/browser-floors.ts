@@ -8,8 +8,9 @@
  *  - RATIOS between engines measured in the same run (aster against the Vega embeds), not milliseconds;
  *  - COUNTS and INVARIANTS (DOM mutations of a no-op re-render, DOM nodes of a dense render, appends that completed, a page
  *    error), which do not depend on the speed of the machine;
- *  - no absolute frame time: a frame is vsync-bound (16.7 ms) and on a loaded machine every engine's frames lengthen together
+ *  - no absolute median or p95 frame time: a frame is vsync-bound (16.7 ms) and on a loaded machine every engine's frames lengthen together
  *    (a measured run took 40 ms per frame for aster AND vega at 10,000 points), so frames are compared with vega's in the same run.
+ *    The one absolute figure is `maxLongShare`, a cap on the share of frames over 21 ms, set far above the measured value.
  *
  * Each floor sits well below the measured value (the measured value is in the comment next to it), so noise does not trip it
  * and a real regression -- an engine that stopped being incremental, batching that stopped batching, a leak into the DOM --

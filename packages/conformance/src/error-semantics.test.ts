@@ -1,5 +1,5 @@
 /**
- * Recovered errors follow vega (audit C90).
+ * Recovered errors follow vega.
  *
  * vega does not throw out of a render when an expression fails: the dataflow logs the error
  * through its logger and carries on with what it has -- a conditional-encode test or a signal

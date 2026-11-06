@@ -1,5 +1,5 @@
 /**
- * Differential fuzzer (R12.4).
+ * Differential fuzzer.
  *
  * Generates deterministic Vega specs from a seeded PRNG, renders each through
  * the real Vega oracle and through @aster/core, canonicalizes both SVGs and

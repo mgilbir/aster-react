@@ -3,8 +3,8 @@
  * Time-zone matrix: the zone-sensitive tests, run under zones other than UTC.
  *
  * The whole repo used to run under TZ=UTC (the oracle vectors even pin it), which
- * hid every bug where a UTC scale formatted its labels in the viewer's local zone
- * (audit C25). This runs, per zone:
+ * hid every bug where a UTC scale formatted its labels in the viewer's local zone.
+ * This runs, per zone:
  *
  *   - the zone-aware unit tests (`*.tz.test.ts`) and the live scale-spec differential
  *     against real Vega (vega runs in the same process and zone; UTC and numeric scales must not move)

@@ -9,7 +9,7 @@
  *   - PIXELS: the same pixels as the plain way (the symbols traced straight onto the context's own path,
  *     which is what any other context still gets and what Aster drew before), over every built-in shape and
  *     two custom ones, solid, stroked, dashed, translucent and blended paints, three sizes and NaN positions;
- *   - TIME: a 100k scatter of each closed shape paints in a few hundred milliseconds, not tens of seconds.
+ *   - TIME: a 100k scatter of each closed shape paints within `SCATTER_LIMIT_MS` (5 s), not tens of seconds.
  *
  * The plain way is reached by handing the renderer a stand-in that forwards to the real context but is not
  * an instance of it, so the renderer cannot take the Path2D route.
