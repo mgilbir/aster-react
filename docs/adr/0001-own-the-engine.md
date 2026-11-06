@@ -2,8 +2,10 @@
 
 Date: 2026-10-12
 Status: Accepted
-Supersedes: the "reuse only pure Vega packages" decision described in
-[ARCHITECTURE.md](../ARCHITECTURE.md#expression-engine) and the related README text.
+Supersedes: the earlier decision to reuse the pure upstream packages (`vega-expression`,
+`vega-interpreter`, `vega-format`, `vega-scale`, `vega-time`, `vega-util` and the `d3-*` and
+`topojson-client` packages they sit on) in the runtime, which the README and ARCHITECTURE.md of the
+time argued for. Those documents now describe the owned engine.
 
 ## Context
 

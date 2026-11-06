@@ -17,7 +17,8 @@ the oracle (Vega) must never become a runtime dependency.
    GitHub workflow with npm provenance (`id-token: write`, `--provenance`).
 3. Keep the dependency-boundary ratchet in the release workflow, before build/test, so
    a forbidden oracle import can never be published.
-4. Gate each published entry point independently in the bundle budget (R11.5).
+4. Gate each published entry point independently in the bundle budget, so that one entry cannot grow
+   behind the others (`packages/benchmarks/scripts/budget.mjs`, one row per documented import pattern).
 5. Document the clean-app smoke test (Vega + Vega-Lite render, typed limit error) as
    the post-publish acceptance check.
 
