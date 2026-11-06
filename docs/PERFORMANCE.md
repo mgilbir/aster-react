@@ -72,7 +72,7 @@ during the runs. The Node figures are the median of three runs unless a table sh
 are the median of two runs (six for `pnpm bench:browser`). Timings are machine- and load-dependent: compare the
 ratios and the shape, and re-run before quoting. To compare two builds, run them alternately on the same machine
 (the numbers below drifted from earlier editions of this page with the machine, not only with the code). The incremental gate
-(`pnpm bench:incremental`) is the only one of these with a pass/fail floor; the floors and how they were
+(`pnpm bench:incremental`) has a pass/fail floor in the PR gate, and the nightly browser benchmarks (`pnpm bench:browser`, `pnpm bench:browser-stream`) have floors too (`packages/benchmarks/src/browser-floors.ts`); the other benchmarks only print. The incremental floors and how they were
 chosen are at the top of `packages/benchmarks/src/incremental.bench.tsx`.
 
 ### Compute: incremental append vs full evaluation (node, no paint)

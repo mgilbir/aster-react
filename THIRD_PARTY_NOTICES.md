@@ -896,10 +896,11 @@ THE SOFTWARE.
 
 ## Skia (BSD-3-Clause)
 
-`packages/core/src/raster.ts` follows named routines of Skia's software scan converter
+`packages/core/src/raster-edges.ts` follows named routines of Skia's software scan converter
 (`SkAnalyticEdge::setLine`, `SkEdge.cpp` `diff_to_shift` and `cubic_delta_from_line`,
 `SkConic::BuildUnitArc`, `SkConic::computeQuadPOW2`), re-expressed in TypeScript, and
-reproduces one of its comments. Skia's source files are headed "Copyright 2006 The
+reproduces one of its comments; `packages/core/src/raster.ts` follows its analytic coverage rule
+(`SkAlphaMul(alpha, coverage + 1)`). Skia's source files are headed "Copyright 2006 The
 Android Open Source Project ... Use of this source code is governed by a BSD-style
 license that can be found in the LICENSE file"; that `LICENSE` is reproduced below,
 copied verbatim from https://raw.githubusercontent.com/google/skia/main/LICENSE .

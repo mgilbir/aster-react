@@ -13,7 +13,7 @@ pnpm check -- --skip browser   # no Chromium installed (not the CI list)
 ```
 
 CI runs `pnpm check` and nothing else; nightly runs it and then the extras below.
-`scripts/gates.test.mjs` fails if a workflow or these docs grow their own copy.
+`scripts/gates.test.mjs` fails if a workflow, CONTRIBUTING.md or this file (in its code blocks) grows its own copy.
 
 What the notable gates establish: the dependency check parses every import form
 and also scans the built `dist` (see `scripts/check-deps.mjs`); `conformance` is
@@ -34,7 +34,7 @@ result is the summary line it prints. They change with the code: re-run before q
 |---|---|---|
 | Corpus size | `ls packages/conformance/corpus \| wc -l`; `... \| grep -c '\.vg\.json$'`; `... \| grep -c '\.vl\.json$'` | 1055 specs: 383 raw Vega, 672 Vega-Lite |
 | Unit, React, script and vector tests | `pnpm test` | 319 files, 33665 tests passed |
-| Time-zone matrix | `pnpm test:tz` | `[tz] all zones passed` (zone-sensitive vitest suites under America/New_York and Asia/Kolkata; `corpus-tz` under UTC and both) |
+| Time-zone matrix | `pnpm test:tz` | `[tz] all zones passed` (zone-sensitive vitest suites under America/New_York, Asia/Kolkata and Australia/Lord_Howe; `corpus-tz` under UTC and those three) |
 | SVG corpus vs real Vega | `pnpm conformance` | 1055/1055 passed |
 | Vega-Lite corpus through `@aster/vl` | `pnpm conformance-vl` | 672 passed, 0 failed, 0 errored / 672 |
 | Scene differential | `pnpm scene-diff` | 1055/1055 scenes match |
@@ -165,7 +165,7 @@ The repo's default run pins `TZ=UTC`, which hides zone bugs (a UTC scale formatt
 time passes there). The `tz-matrix` gate (`pnpm test:tz`) re-runs the zone-aware unit tests
 (`*.tz.test.ts`), the live scale-spec differential (every case also runs in each zone inside the test) and
 `packages/conformance/corpus-tz` (raw Vega specs rendered by vega and Aster in the same zone)
-under `America/New_York` and `Asia/Kolkata`. Add a case to `corpus-tz` when a fix depends on
+under `America/New_York`, `Asia/Kolkata` and `Australia/Lord_Howe` (a half-hour daylight-saving offset the other two cannot catch; `ZONES` in `scripts/test-tz.mjs`; the corpus also runs in UTC). Add a case to `corpus-tz` when a fix depends on
 the zone.
 
 ## Sweeps
@@ -216,7 +216,8 @@ both schema sweeps, 3000 fuzz seeds and the reproducer replay, plus Firefox and 
   `getBoundingClientRect` for pointer-coordinate tests. SSR tests use
   `renderToString` and (for the strict no-replacement guarantee) `hydrateChart`.
 - **Conformance**: add a minimal spec to `packages/conformance/corpus/*.vg.json` or
-  `*.vl.json`; the corpus requires explicit `width`/`height` and `autosize: 'none'`.
+  `*.vl.json`. Most entries set explicit numeric `width`/`height` and `autosize: 'none'` so layout is deterministic, but nothing
+  requires it; a case that needs another autosize or a container size may set it.
 
 ## Reproducers
 
