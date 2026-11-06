@@ -610,7 +610,7 @@ instead of one element per datum. Positions are baked into `d`, so the pixels ma
 point selection and the a11y tree resolve through the scene.
 
 - `'auto'` (default) batches a symbol mark with at least 512 items unless the spec has
-  `signal.on` event streams (those read the datum from per-item DOM nodes). Each path holds up to
+  `signal.on` event streams (a conservative default: the event loop resolves `event.item` through the scene hit index, not per-item DOM nodes). Each path holds up to
   256 symbols, so 100,000 points become 391 paths.
 - `true` always batches (still only marks with at least 512 items), `false` disables.
 - Client-only mounts batch directly. SSR/hydrated pages emit the per-item markup on
