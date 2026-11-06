@@ -629,19 +629,11 @@ specs:
 import '@aster/react/vl'   // side effect: registers the from-scratch VL compiler
 ```
 
-**Add-ons load themselves.** A spec that needs an opt-in core add-on (`@aster/core/transforms`: `pie`, `treemap`, `kde`, ...;
-`@aster/core/geo`: projections, `contour`; `@aster/core/load`: `csv`/`tsv`/`dsv`/`topojson` formats) renders with nothing imported:
-`<Chart>`, `<SvgChart>`, `useChart`, `useChartStream`, `<ChartStream>` and the worker hooks read what the spec needs
-(`addonsNeeded` in `@aster/core/addons`) and import it. The wait is a Suspense wait, the same as for an async `spec`: put a
-`<Suspense fallback>` above the chart to show something meanwhile (without one the new root commits when the chart is ready; to keep an
-existing chart on screen while a changed spec's add-on loads, update inside `startTransition`). A spec that needs no add-on never
-suspends and imports nothing; an app that imported the add-on itself never loads it twice. A failed import reaches `onError`
-(`error` in the hooks) once. Server rendering: `renderToPipeableStream` / `renderToReadableStream` wait for the import and
-send the chart; `renderToString` renders the `<Suspense>` fallback (the client renders the chart) and `renderChartToStaticMarkup` /
-`hydrateChart` are synchronous, so `await loadAddonsFor(spec)` (or a static `import '@aster/core/geo'` in the server entry) before them.
-In a worker, the shipped `@aster/react/worker-entry` imports what a message's spec needs before handling it; `url` data is never
-fetched automatically (`useSpecData` / `loadSpecData`), only its readers load. Bundlers split the add-ons into chunks fetched on
-demand; the bundle budget counts what loads up front.
+**Add-ons load themselves.** A spec that needs an opt-in core add-on (`@aster/core/transforms`, `/geo`, `/load`) renders with nothing
+imported: `<Chart>`, `<SvgChart>`, the hooks and the worker entry import what the spec needs (`addonsNeeded` in `@aster/core/addons`),
+and the chart suspends meanwhile, so put a `<Suspense fallback>` above it. The synchronous entry points (`renderSpec`,
+`renderChartToStaticMarkup`, `hydrateChart`) cannot wait: `await loadAddonsFor(spec)` before them. The rules, server rendering,
+workers and `url` data are in [ARCHITECTURE.md](ARCHITECTURE.md#geo-projections--the-addon-boundary).
 
 The base `@aster/react` entry does not include the Vega-Lite compiler; importing `@aster/react/vl` adds about 103 kB
 gzip to the bundle (`<Chart>` 205.3 kB, `<Chart>` + `@aster/react/vl` 308.3 kB eager, measured 2026-11-06 by
@@ -1027,8 +1019,8 @@ specs (it fails with a `TypeError`, not a `VLCompileError`): use `compile` for a
 ### Maps and animation
 
 Vega-Lite maps (`geoshape`, `projection`, `longitude` / `latitude`, `{type: "geojson"}`) and animation (the `time`
-channel with a `timer` point selection and `{filter: {param}}`) compile to what vega-lite 6.4.3 emits; a geoshape without a GeoJSON `shape` field inside a facet and
-animations outside a single top-level unit throw (reasons in `packages/vl/README.md`). Running an animation needs
+channel with a `timer` point selection and `{filter: {param}}`) compile to what vega-lite 6.4.3 emits; what throws is listed in
+[packages/vl/README.md](../packages/vl/README.md#throws-not-supported). Running an animation needs
 the signal event loop (`<Chart>` or `<SvgChart interaction>`): `timer` streams run on one scheduler, with d3-timer's schedule, shared by the page,
 stop on unmount. `setTimerClock(clock | null)`, imported from `@aster/core/signals`, drives the shared scheduler (and so every
 `timer` stream) from `clock` instead of the host's globals; `null` goes back to them. A clock is `{ now, setTimeout,

@@ -117,8 +117,7 @@ pnpm --filter @aster/conformance exec tsx scripts/browser-vl-selections.mts --fi
 ```
 
 `--filter=` is a substring of the case name (a sentence such as `concat: a brush in one view filters another`). A case counted
-as `retained` is not a failure: it is the documented difference after a signal write (Aster renders the fresh result, vega keeps its
-first layout); see TESTING.md.
+as `retained` is not a failure: it is the documented difference after a signal write ([INTERACTION.md](INTERACTION.md#signals)).
 
 ### 1.7 Fix, then prove it
 

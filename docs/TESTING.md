@@ -85,9 +85,7 @@ also renders the Vega that `@aster/vl` emits through real vega. The signals swee
 when the schemas grow, never lower them. The Vega sweep's three oracle-side node-errors are vega-interpreter's
 area `bundle` interpolator (two cases) and a negative trail radius.
 
-`retained` in the signals sweep means: the engine equals vega's fresh render of the same signals, and vega's own
-second render (after the signals were written into the running view) does not. See
-[ARCHITECTURE.md](ARCHITECTURE.md#deviations-from-vega).
+What `retained` means in the signals sweep is defined once, in [INTERACTION.md](INTERACTION.md#signals).
 
 ## Browser and parity gates
 
@@ -150,7 +148,7 @@ result is the summary line it prints. They change with the code: re-run before q
 | Canvas pixels vs Vega's canvas | `pnpm conformance:canvas` | chromium 1067/1067 passed; append painting vs full repaint: 120 scenarios, 265 append frames, 0 failing |
 | Batched (dense) SVG vs per-item SVG pixels | `pnpm conformance:batch` | 61/61 passed |
 | Signal event streams vs real Vega | `pnpm conformance:signals` | 64/64 cases agree (group scopes among them) |
-| Vega-Lite selections vs real Vega (same native input, signals/stores/SVG compared per step) | `pnpm conformance:selections` | 53/53 cases agree (concat, facet and repeat views and geographic interval selections among them; steps where Vega keeps its first layout are held to a new Vega view's render, 13 of them, ceiling 13) |
+| Vega-Lite selections vs real Vega (same native input, signals/stores/SVG compared per step) | `pnpm conformance:selections` | 53/53 cases agree (concat, facet and repeat views and geographic interval selections among them; steps counted as `retained` ([INTERACTION.md](INTERACTION.md#signals)): 13 of them, ceiling 13) |
 | `intersect()` (vega-lite's geo interval selections) over every mark type, seeded boxes, by mark name / type, vs real vega in Chromium | `pnpm conformance:intersect` | every (box, scope) pair agrees (2771) |
 | `<Chart>` interaction in Chromium | `pnpm --filter @aster/react run test:browser` | all checks passed |
 | Incremental gate | `pnpm bench:incremental -- --points=10000 --reps=30` | append 15.8x–18.3x (floor 8x), whole-array replace 12.7x–17.1x (floor 8x), DOM patch 3.3x–5.4x (floor 1.6x), dense 100k-symbol append patch vs mount 249x–254x (floor 200x) over three runs (2026-11-05, docs/PERFORMANCE.md) |
@@ -242,8 +240,8 @@ tolerance. CI's `unit` job runs `pnpm test` on Node 22 and the current major, an
 `packages/conformance/scripts/differential-*` tests and the oracle vectors), because the jsdom dev dependency does not load on Node 20; the `ci` job (`pnpm check`) runs on Node 22.
 
 Bootstrap (ci0/ci1) and `sample` use vega-statistics' seeded LCG (seed 42) on both sides.
-Deliberate deviations (documented in the code): seeded randomness instead of `Math.random`, `bin` without `extent`
-derives it from the data, lookup tables are prototype-less, and vega crashes that are TypeErrors are not replicated.
+The deliberate deviations (seeded randomness instead of `Math.random`, `bin` without `extent`, prototype-less lookup tables, upstream
+crashes not replicated, ...) are listed once, in [ARCHITECTURE.md](ARCHITECTURE.md#deviations-from-vega).
 
 ## Engine facts the same-process oracle depends on
 

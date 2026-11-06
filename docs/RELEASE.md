@@ -28,8 +28,7 @@ dispatch. Two jobs:
      version of every public package, and the three must agree;
    - the tagged commit must be an ancestor of `origin/main`;
    - `pnpm install --frozen-lockfile`, then `pnpm check`, the gate list in
-     `scripts/gates.mjs` (build, dependency boundary, typecheck, tests, `verify:publish`,
-     the Vega and Vega-Lite corpora, the signals sweep, the Chromium browser gates, bundle budgets). The tag is gated
+     `scripts/gates.mjs`. The tag is gated
      on `pnpm check` only: the Vega and Vega-Lite schema sweeps, the gallery, differential fuzzing, the Firefox and
      WebKit canvas runs and the long benchmarks run in the nightly workflow (`.github/workflows/nightly.yml`), not here;
    - `pnpm pack` of each public package (the same packer `verify:publish` checks), uploaded as an artifact.

@@ -137,19 +137,17 @@ What works, and how it differs from Vega, precisely:
   declared on the composition, a brush or a point per facet cell, bound scales shared by cells, a legend binding).
 - A scale event (`{scale: "x"}`, which an unbound interval selection listens to so that its brush follows its
   scale) fires when the chart is bound to a scene whose scale differs from the previous one's.
-- **Deviation:** a signal write is a fresh render ([Signals](#signals)): after it Aster draws what a new chart with those
-  signal and store values draws, where Vega keeps the autosize, padding and axis-tick order it first computed. The
-  conformance gate holds this exactly and with no tolerance: a step passes when Aster equals Vega's retained render, or
-  when it equals the render of a NEW Vega view initialised with the same signals and stores (and Vega's own retained
-  render differs); those steps are counted against a ceiling (`--max-retained`, like `sweep-signals`). Set
+- **Deviation:** a signal write is a fresh render, where Vega keeps the autosize, padding and axis-tick order it first computed
+  ([Signals](#signals)). The selections gate holds this exactly and with no tolerance: a step passes when Aster equals Vega's
+  retained render, or when it equals the render of a NEW Vega view initialised with the same signals and stores (and Vega's own
+  retained render differs); those steps are counted against a ceiling (`--max-retained`, like `sweep-signals`). Set
   `autosize: "none"` for a pan/zoom chart whose plot must not move.
-- **Deviation:** `modify(name, ..., tuple)` / `remove` compare a tuple read back from `data()` by value (the evaluation
-  does not hand out its input rows), where Vega compares tuple identity.
+- **Deviation:** `modify(name, ..., tuple)` / `remove` compare a tuple read back from `data()` by value, where Vega compares tuple
+  identity ([Deviations from Vega](ARCHITECTURE.md#deviations-from-vega)).
 - **Selections in concat, facet and repeat views** (linked brushing, a brush per facet cell, a selection declared on the
   composition and given to every unit below it) work as in Vega: a unit's signals belong to its group mark, a Vega group
   scope with one copy per view or cell. The event loop scopes them the way Vega does (see [Group scopes](#group-scopes)).
-  What it refuses is what vega-lite compiles to a Vega spec Vega rejects (a selection on a layer spec itself, or on a
-  composition with a layer below it): see packages/vl/README.md.
+  What `@aster/vl` refuses is listed in [packages/vl/README.md](../packages/vl/README.md#throws-not-supported).
 
 ### Group scopes
 
@@ -173,7 +171,7 @@ and is checked against it (`pnpm conformance:signals`, the group-scope cases):
 - `scale()` in a scope's handlers sees the scales its group (and the groups around it) declare.
 
 **Deviation:** Vega swallows the first firing of a `{signal}` handler that a scope declares on a signal of an enclosing
-scope that never pulsed before (an internal flag of its operator); Aster fires it. No Vega-Lite output relies on it.
+scope that never pulsed before; Aster fires it ([Deviations from Vega](ARCHITECTURE.md#deviations-from-vega)).
 
 ## Pan and zoom
 
@@ -232,7 +230,7 @@ extra evaluation).
 ## Signals
 
 Spec `signal.on` streams are bound to the rendered SVG with vega's event-stream semantics (selectors, filters,
-throttle, `consume`, mark-scoped streams such as `@name:click` and `symbol:click`; the full list is in `docs/API.md`).
+throttle, `consume`, mark-scoped streams such as `@name:click` and `symbol:click`; the full list is in [API.md](API.md#astercoresignals)).
 Updating a signal calls `onSignal(name, value)` and `signalListeners[name](name, value)`, and the value is stored in an
 external store consumed with `useSyncExternalStore`, so each event is one normal React state transition (no tearing
 under concurrent rendering).

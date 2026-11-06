@@ -56,12 +56,9 @@ feature. The refusal list is in [packages/vl/README.md](../packages/vl/README.md
 
 ### Conformance rigour: in place
 
-The oracle gates are split between the PR gate and the nightly workflow ([TESTING.md](TESTING.md)). `pnpm check` (the
-PR gate, and the only gate of a release tag) runs the SVG corpus, the Vega-Lite corpus, the scene differential, guide
-captions, the transform matrix, the signals sweep, committed fuzz reproducers, oracle vectors (incl. a time-zone matrix),
-and the Chromium gates (corpus with live text metrics, canvas pixels, batched-SVG pixels, signal event streams, React
-interaction). The nightly workflow adds the Vega and Vega-Lite schema sweeps, the official example gallery, differential fuzzing
-(3000 seeds), canvas pixels in Firefox and WebKit, and the long benchmarks.
+The oracle gates are split between the PR gate and the nightly workflow ([TESTING.md](TESTING.md#what-runs-where)). `pnpm check` (the
+PR gate, and the only gate of a release tag) runs the gate list in [`scripts/gates.mjs`](../scripts/gates.mjs); `pnpm check -- --list`
+prints each gate with what it asserts. The nightly workflow adds what is too slow for a PR, listed in TESTING.md.
 The canonicalizer is strict and each normalization is justified in `packages/conformance/src/normalize.ts`.
 
 ### Rendering targets, interaction, React idioms, production: done
@@ -86,8 +83,8 @@ Each item is something the code or the gates show today; none is a plan that has
 
 - **Vega-Lite coverage.** What `@aster/vl` still refuses is listed in
   [packages/vl/README.md](../packages/vl/README.md#throws-not-supported), which a test holds to the compiler.
-- **Signals sweep.** Cases where real Vega's second render differs from its own fresh render (the `retained`
-  status) are a documented deviation, not a fix; the gate has a ceiling that can only be lowered.
+- **Signals sweep.** The `retained` cases ([INTERACTION.md](INTERACTION.md#signals)) are a documented deviation, not a
+  fix; the gate has a ceiling that can only be lowered.
 - **Word clouds.** `wordcloud` is vega-wordcloud / d3-cloud, drawn on the host's canvas as vega does; without a host
   canvas (Node) the words are boxes of their measured width, a cloud no browser draws.
 - **Known interaction limits.** A zoomed stream-fed chart keeps the last unzoomed base extent until the view is
