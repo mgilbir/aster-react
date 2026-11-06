@@ -266,17 +266,21 @@ It has no root script, is not in the gate list and is not run by `nightly.yml`; 
 pnpm --filter @aster/conformance run sweep-values --floor 500 --min-ok 1 --max-node-error 0
 ```
 
-**As committed, this sweep checks nothing.** `values.mjs` emits each case as `specText` (JSON text, so that `-0` survives), and
-`run-sweep.ts` reads `spec`, which the value cases do not have. Every case therefore throws on both sides and is counted as
-agreement: the run above prints `500 both-refused, 0 ok` and fails only because `--min-ok 1` was given; without a `--min-ok` it
-cannot fail. To see what it would report, `JSON.parse(c.specText)` into `c.spec` before the cases are filtered: on this tree that
-gives 482 ok and 18 differ: 15 in the `time-line` journey (including its `plain` control, where Aster draws a tick line
-vega does not), and one each for `band-over-the-values` and `point-over-the-values` with `with-a-list-in-a-cell` and
-`gradient-legend` with `with-infinity-written-out`. Whether those 18 are Aster defects or sweep-spec problems was not
-investigated. Fixing the runner and setting floors from a real run is a code change that this page does not make.
+`values.mjs` emits each case as `specText` (the chart as JSON text, so that a negative zero survives), and `run-sweep.ts` parses it
+with `JSON.parse` into the case's `spec` before anything is rendered. A generated case with neither a `spec` object nor a `specText`
+that parses to an object fails the run before it renders anything, so the sweep cannot go back to reading every case as "both
+refused" and checking nothing.
+
+Run as above, it generates 500 cases and reports `482 ok, 18 differ` (no both-refused, node-error or engine-error), and exits 1
+because of the 18. The 18 differences are open and unscheduled: 15 are in the `time-line` journey (including its `plain` control,
+where Aster draws a tick line vega does not), and one each are `band-over-the-values` and `point-over-the-values` with
+`with-a-list-in-a-cell` and `gradient-legend` with `with-infinity-written-out`. Whether they are Aster defects or sweep-spec
+problems has not been investigated. This sweep is not a gate and not part of the nightly run, so nothing tracks them; the floors on the command line above are
+placeholders, not committed ratchets.
 
 ## 5. Related
 
 - [TESTING.md](TESTING.md): what every suite proves, with the last measured results.
+- Every script here takes `--help` (usage and the script's header comment, exit 0) and refuses an option it does not declare (exit 2); 1 means the check failed: [TESTING.md](TESTING.md#command-line-options-and-exit-codes).
 - [packages/vl/CONTRIBUTING.md](../packages/vl/CONTRIBUTING.md): where the Vega-Lite compiler's contract is implemented and tested.
 - [ERRORS.md](ERRORS.md) for what an error message at run time means; [FONTS.md](FONTS.md) for text metrics.
