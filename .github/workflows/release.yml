@@ -48,8 +48,11 @@ jobs:
       - name: Install Playwright Chromium
         run: pnpm --filter @aster/conformance exec playwright install --with-deps chromium
 
-      # The full gate list (scripts/gates.mjs): build, deps boundary, typecheck, tests,
-      # verify-publish, conformance, sweeps, canvas/browser parity, bundle budgets.
+      # The full gate list (scripts/gates.mjs), nothing skipped: build, deps boundary, knip, typecheck, unit tests, time-zone
+      # matrix, verify-publish, the incremental-append floors, the oracle gates (conformance, conformance-vl, scene-diff,
+      # a11y-parity, transform-matrix), the Chromium gates (canvas, batch, signals, selections, intersect, react,
+      # browser-conformance), the signals sweep (sweep-signals), fuzz-replay, bundle-shaking, the size budgets and the probes.
+      # The schema sweeps (sweep-vl, sweep-vega), the gallery, the seeded fuzz run and the other browsers are nightly only.
       - name: Gates (pnpm check)
         run: pnpm check
 
