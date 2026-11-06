@@ -43,6 +43,9 @@ function fromPackageJson() {
   return out
 }
 
+/** Runs as the `prepack` hook from a scratch copy that holds this one file (scripts/verify-publish.test.mjs), so it answers --help itself. */
+const SELF_CONTAINED = 'scripts/copy-legal.mjs'
+
 const CLIS = [...new Set([...fromPackageJson(), ...NOT_IN_PACKAGE_JSON])].sort()
 
 function command(rel) {
@@ -82,8 +85,13 @@ describe('command-line entry points', { timeout: 120_000 }, () => {
 
   it('every script a package.json runs is covered (a new CLI needs cli() from scripts/lib/cli.mjs)', () => {
     for (const rel of fromPackageJson()) {
+      if (rel === SELF_CONTAINED) continue
       expect(readFileSync(join(ROOT, rel), 'utf8'), `${rel} does not call cli()`).toMatch(/\bcli\(\{/)
     }
+  })
+
+  it('copy-legal stays free of scripts/lib: verify-publish.test.mjs copies that one file into a scratch repository', () => {
+    expect(readFileSync(join(ROOT, SELF_CONTAINED), 'utf8')).not.toMatch(/from '\.\/lib\//)
   })
 })
 
