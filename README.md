@@ -28,12 +28,12 @@ rendering uses `react-dom/server`.
 
 ## Render a first chart
 
-### A Vega spec to an SVG string
+### Minimal Example
 
 ```ts
-import { renderSpec, type VgSpec } from '@aster/core'
+import { renderSpec } from '@aster/core'
 
-const spec: VgSpec = {
+const spec = {
   $schema: 'https://vega.github.io/schema/vega/v6.json',
   width: 400, height: 300,
   data: [{ name: 'data0', values: [
@@ -55,6 +55,7 @@ const svg = renderSpec(spec)
 // svg is a plain SVG string
 ```
 
+A Vega spec rendered to an SVG string, with no React.
 `data` is a list of named datasets. As in `vega-parser`, a lone object stands for a one-element list (the lists
 are read through vega-util `array()`), and a mark that reads a dataset the spec does not declare fails with
 `SpecParseError: Undefined data set name: "<name>"`. This example is rendered by real Vega and by Aster in the
