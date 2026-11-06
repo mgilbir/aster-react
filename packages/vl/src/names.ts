@@ -1,7 +1,7 @@
 /**
  * Field-name and generated-name helpers. EVERY place that lets a user-supplied
  * field name reach an expression string, a generated field name, or a signal
- * name goes through this module (audit C37):
+ * name goes through this module, so a field name can neither inject into an expression nor break on a dot:
  *
  *  - expressions reference fields with `datum[<JSON string>]` (never string
  *    concatenation into a quoted literal), so a hostile name cannot restructure

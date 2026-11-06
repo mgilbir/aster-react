@@ -57,7 +57,7 @@ const serverOrHydrating = (): boolean => true
 
 
 // ---------------------------------------------------------------------------
-// Concurrent-safe signal store (R10.4)
+// Concurrent-safe signal store
 // ---------------------------------------------------------------------------
 
 interface SignalStore {
@@ -522,8 +522,9 @@ function ChartView({
     [scene, hiddenLegend],
   )
   // Dense SVG marks: batched `<path>` chunks instead of one element per datum.
-  // `'auto'` stays out of the way when the spec binds mark events (`signal.on`),
-  // because those resolve their datum from per-item DOM nodes.
+  // `'auto'` stays out of the way when the spec binds mark events (`signal.on`); `true`
+  // forces batching regardless (the event loop resolves its datum from the scene hit
+  // index, not from per-item DOM nodes).
   const denseRequested = denseMarks === true || denseMarks === 'auto'
   const denseAllowed = React.useMemo(() => {
     if (!denseRequested) return false
@@ -1334,7 +1335,7 @@ function ChartView({
     return selectionToPixels(persistedInterval, chartInfo, positional)
   }, [persistedInterval, chartInfo, positional])
 
-  // --- imperative handle (R11.1) ------------------------------------------
+  // --- imperative handle ------------------------------------------
   React.useImperativeHandle(chartRef, () => ({
     getScene: () => sceneRef.current,
     getSvg: () => (sceneRef.current ? renderSceneToSvg(sceneRef.current) : null),

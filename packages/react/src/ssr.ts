@@ -1,5 +1,5 @@
 /**
- * Server rendering and DOM-patcher hydration (R11.3).
+ * Server rendering and DOM-patcher hydration.
  *
  * `renderChartToStaticMarkup` is the string half: it accepts either grammar,
  * applies the same limits as the client, and emits the full SVG the server can

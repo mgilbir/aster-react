@@ -412,7 +412,7 @@ function pushSelectionParams(node: unknown, inherited: Record<string, unknown>[]
 /**
  * Variable parameters (anywhere in the spec tree) become Vega signals; they are
  * global in Vega-Lite, so they are declared once at the root. Interval
- * selections are handled by the unit compiler (static brush marks only).
+ * selections are handled by the unit compiler (brush marks and the translate/zoom signals).
  */
 function paramSignals(root: VLSpec): Record<string, unknown>[] {
   const out: Record<string, unknown>[] = []
@@ -1470,8 +1470,8 @@ function domainEntries(domain: unknown): DomainEntry[] | null {
  * merge rules (split.ts mergeValuesWithExplicit): an explicitly specified
  * property beats an implicit one; equal values merge; otherwise the first
  * layer wins (for a `range` step, the larger step). Domains union their data
- * references; sorts must agree. Scales whose domains cannot be unioned
- * (differing explicit domains, signal domains) throw rather than pick one.
+ * references and explicit arrays (two layers with explicit domains [0, 10] and [0, 20]
+ * give `{fields: [[0, 10], [0, 20]]}`, as vega-lite does); sorts must agree.
  */
 /** The non-position channels whose scales layers can keep apart. */
 const INDEPENDENT_CAPABLE_CHANNELS = ['color', 'fill', 'stroke', 'size', 'opacity', 'shape', 'strokeWidth', 'strokeDash', 'fillOpacity', 'strokeOpacity', 'angle']
@@ -1858,8 +1858,8 @@ function compileFaceted(spec: VLSpec, ctx: CompileCtx, nested = ''): VLSpec {
 
   // the facet fields: an aggregated facet def keys everything on the
   // aggregated name (probed: column {aggregate: 'average', field: 't'}
-  // names the facet 'average_t', aggregates the child pipeline grouped by
-  // the inner groupby, and titles the column 'Average of t')
+  // names the facet 'average_t', which the child pipeline never computes (see the
+  // facet domain datasets below), and titles the column 'Average of t')
   const rowFd = rowDef ? parseChannel('row', rowDef) : null
   const colFd = colDef ? parseChannel('column', colDef) : null
   const rowField = rowFd ? aggFieldName(rowFd) : undefined
@@ -5503,9 +5503,9 @@ function unaggregatedDomain(def: FieldDef, dataName: string, cfg: ScaleCfg): unk
 }
 
 /**
- * vega-lite scale/domain.ts parseSingleChannelDomain: a `domain` that is not 'unaggregated' (nor a {param} /
- * {unionWith} object, which validation refuses) is the scale's domain as written -- an array, or a bare string /
- * number / `true` that vega itself then refuses (`Undefined data set name`).
+ * vega-lite scale/domain.ts parseSingleChannelDomain: a `domain` that is not 'unaggregated' is the scale's domain as
+ * written -- an array, a `{signal}` / `{expr}` object, or a bare string / number / `true` that vega itself then refuses
+ * (`Undefined data set name`). A `{unionWith}` object is not read here: `applyDomainUnion` joins it to the default domain.
  */
 function explicitDomainOf(def: FieldDef): unknown | undefined {
   const d = def.scale?.domain

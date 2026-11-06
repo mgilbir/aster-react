@@ -12,7 +12,7 @@ export interface ViewDomain {
 }
 
 /**
- * Unified declarative selection value (R10.2). One shape covers interval
+ * Unified declarative selection value. One shape covers interval
  * brushes (SVG + canvas) and point/click selections, so hosts can keep a single
  * `selection` state and round-trip it through controlled props.
  */

@@ -1,5 +1,5 @@
 /**
- * Vega-Lite transform -> Vega transform translation (audit C36).
+ * Vega-Lite transform -> Vega transform translation.
  *
  * Each translation follows vega-lite 6.4.3's assemble() for the matching
  * DataFlowNode (compile/data/*.ts). Output objects are always freshly built:

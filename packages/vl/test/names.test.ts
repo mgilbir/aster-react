@@ -90,7 +90,7 @@ describe('field names reach expressions only through JSON-escaped datum[...] rea
     expect(splitAccessPath(copy!.as)).toEqual([copy!.as])
     const agg = flat.find((t) => t.type === 'aggregate')!
     expect(agg.fields).toEqual([copy!.as])
-    // the bars read the aggregated field, a flat name (the audit repro gave no bars)
+    // the bars read the aggregated field, a flat name
     const mark = out.marks[0]
     expect(mark.encode.update.y.field).toBe(agg.as[0])
     expect(splitAccessPath(agg.as[0])).toEqual([agg.as[0]])
