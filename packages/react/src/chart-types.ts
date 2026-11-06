@@ -23,11 +23,14 @@ export interface ChartProps {
    */
   spec: VgSpec | Promise<VgSpec>
   /**
-   * Pre-evaluated scene override (streaming): when provided, the chart renders
-   * this scene instead of evaluating the spec. `undefined` keeps the normal
-   * session path; `null` renders the loading/error state. Used by
+   * @internal Pre-evaluated scene override (streaming): when provided, the chart
+   * renders this scene instead of evaluating the spec. `undefined` keeps the
+   * normal session path; `null` renders the loading/error state. Used by
    * `<ChartStream>` / `<ChartWorkerStream>` so streamed scenes go through the
    * same DOM patcher, canvas renderer, interaction and a11y tree.
+   *
+   * Unstable, host-internal plumbing between those components and `<Chart>`: it
+   * is not covered by semver and may change or go away in any release.
    */
   sceneOverride?: SceneRoot | null
   data?: Record<string, unknown[]>
@@ -161,6 +164,9 @@ export interface ChartProps {
    * to receive what this chart derives from props and gestures — the `domainRaw`
    * of the pan/zoom view and the merged signal values — so the stream can
    * re-evaluate with them.
+   *
+   * Unstable, host-internal plumbing (the counterpart of `sceneOverride`): it is
+   * not covered by semver and may change or go away in any release.
    */
   onStreamInput?: (input: ChartStreamInput) => void
   /** Disable the spec-driven event loop (defaults to on when the spec has signal.on streams). */
