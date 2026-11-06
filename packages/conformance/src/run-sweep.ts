@@ -19,6 +19,9 @@
  *   - zero differ and zero engine-error (Aster crashes are never reclassified).
  * --floor/--min-ok/--max-node-error are required unless --filter is given.
  *
+ * Every generated case carries its chart as `spec` (an object) or `specText` (JSON text, for a chart with a value JSON.stringify
+ * cannot write, a negative zero); a case with neither fails the run before anything is rendered.
+ *
  * --vega-check (Vega-Lite cases only): additionally render the Vega that @aster/vl EMITS through REAL
  * vega; a case where real vega errors, warns (beyond what vega-lite's own output raises) or renders
  * something different from vega-lite's output counts as 'vega-differ' and fails the run. Aster's runtime
@@ -78,6 +81,7 @@ interface SweepCase {
   name: string
   family: string
   property: string
+  /** The chart. A generator that must carry a value JSON has no spelling for -- a negative zero -- emits `specText` instead. */
   spec: Record<string, unknown>
   writes?: Array<{ name: string; value: unknown }>
   lite?: boolean
@@ -99,6 +103,32 @@ interface Status {
   nondeterministic: number
   vegaDiffer: number
   failNames: string[]
+}
+
+/** What a sweep generator yields: the chart as an object (`spec`) or as JSON text (`specText`, parsed here so `-0` survives). */
+type GeneratedCase = Omit<SweepCase, 'spec'> & { spec?: unknown; specText?: unknown }
+
+/**
+ * Give every generated case its `spec` object. A case that has neither a spec object nor JSON text that parses to one cannot be
+ * rendered, and a case that cannot be rendered by either side reads as "both refused", which is agreement: a sweep whose cases
+ * all lack a spec would pass while checking nothing. They are returned by name so the run can fail on them instead.
+ */
+function resolveSpecs(generated: GeneratedCase[]): { cases: SweepCase[]; unusable: string[] } {
+  const cases: SweepCase[] = []
+  const unusable: string[] = []
+  for (const g of generated) {
+    let spec: unknown = g.spec
+    if (spec === undefined && typeof g.specText === 'string') {
+      try {
+        spec = JSON.parse(g.specText)
+      } catch {
+        spec = undefined
+      }
+    }
+    if (typeof spec !== 'object' || spec === null || Array.isArray(spec)) unusable.push(String(g.name))
+    else cases.push({ ...g, spec: spec as Record<string, unknown> })
+  }
+  return { cases, unusable }
 }
 
 /**
@@ -326,7 +356,15 @@ async function main(): Promise<void> {
   try {
     const { generate } = await import(`./sweeps/${sweepName}.mjs`)
     const ctx = { vega, vl, require, nodeModules }
-    const out = (generate as (ctx: unknown) => { cases: SweepCase[]; skips: Array<{ family: string; property: string; reason: string }> })(ctx)
+    const generated = (generate as (ctx: unknown) => { cases: GeneratedCase[]; skips: Array<{ family: string; property: string; reason: string }> })(ctx)
+    const resolved = resolveSpecs(generated.cases)
+    if (resolved.unusable.length > 0) {
+      console.error(`[${sweepName}] ${resolved.unusable.length} of ${generated.cases.length} generated case(s) have no usable spec (neither a \`spec\` object nor \`specText\` JSON that parses to an object), e.g. ${resolved.unusable.slice(0, 5).join(', ')}`)
+      console.error(`[${sweepName}] FAIL`)
+      process.exitCode = 1
+      return
+    }
+    const out = { cases: resolved.cases, skips: generated.skips }
     const all = out.cases.filter((c) => !filter || c.name.includes(filter))
     console.log(`[${sweepName}] ${out.cases.length} cases generated, ${out.skips.length} properties skipped; running ${all.length}`)
     const problems: string[] = []
