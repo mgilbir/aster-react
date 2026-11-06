@@ -6,10 +6,10 @@ Status: Accepted (records a decision already in force)
 ## Context
 
 Vega's view keeps dataflow state between evaluations. A signal written into a running view
-re-runs only the operators the write reaches, so state computed earlier survives: autosize
-runs once and again only when `width`, `height`, `padding` or `autosize` change, and a chart
-whose content outgrows the view keeps its first size. Vega's own second render can therefore
-differ from its own fresh render of the same signal values.
+re-runs only the operators the write reaches, so state computed earlier survives (the layout
+size is one such piece). Vega's own second render can therefore differ from its own fresh render
+of the same signal values. The mechanism and an example are in
+[INTERACTION.md](../INTERACTION.md#signals).
 
 Aster's evaluator is a function of the spec, the data and the signals. Its incremental paths
 (sessions, `dataChanges`, streams) exist to be faster than a full evaluation, not to give a
