@@ -48,7 +48,7 @@ pnpm install --frozen-lockfile
 pnpm check                 # the same gate list the workflow runs
 # confirm the nightly workflow is green for the commit to be tagged (see below)
 # update CHANGELOG.md and the version of all three public packages (lockstep)
-# update the README status line and the "not yet published" notes of the Install sections, and the publishing items in docs/ROADMAP.md
+# update the README pre-alpha status paragraph and the "not yet published" notes of the Install sections, and the publishing items in docs/ROADMAP.md
 node scripts/check-release-tag.mjs v0.1.0     # tag name = version in every package.json
 git commit -am "release v0.1.0"
 git tag v0.1.0
@@ -61,7 +61,7 @@ repository's Actions tab. The release workflow does not run them and does not ch
 nightly ran on an older commit, wait for the next one or run it manually (it has a `workflow_dispatch` trigger)
 before pushing the tag.
 
-The README status line, the "not yet published" notes of the Install sections (root README and the three package READMEs)
+The README's pre-alpha status paragraph, the "not yet published" notes of the Install sections (root README and the three package READMEs: [core](../packages/core/README.md), [react](../packages/react/README.md), [vl](../packages/vl/README.md))
 and the ROADMAP's "Not done: publishing" (section 1), "Release" open item (section 2) and
 definition-of-done item 7 (section 4) go stale the moment the tag is published; update them in the release commit,
 together with the version and the CHANGELOG heading.

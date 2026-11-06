@@ -45,6 +45,9 @@ Aster ships three public packages:
 
 `@aster/core` takes Vega specs only. Vega-Lite goes through `@aster/vl` (or `@aster/react/vl`).
 
+Each package also has a README with its install line and a first example: [`@aster/core`](../packages/core/README.md),
+[`@aster/react`](../packages/react/README.md), [`@aster/vl`](../packages/vl/README.md).
+
 Each package section below has the same order: guides (a task, start to finish, with a runnable example), then the reference
 (what each export does and the rules it follows), then the entry points that are separate imports.
 
