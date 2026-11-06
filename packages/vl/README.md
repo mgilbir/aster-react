@@ -30,7 +30,7 @@ import '@aster/react/vl'
 ```
 
 `@aster/react` is Vega-only by default; the addon is the opt-in boundary, mirroring `@aster/core/dom` and
-`@aster/core/transforms` (its size is in `docs/PERFORMANCE.md`).
+`@aster/core/transforms` (its size is in [docs/PERFORMANCE.md](https://github.com/mgilbir/aster-react/blob/main/docs/PERFORMANCE.md#bundle-sizes)).
 
 ## Contract
 
@@ -38,12 +38,12 @@ For every Vega-Lite feature `compile` either produces Vega that renders like
 vega-lite 6.4.3, or throws a `VLCompileError` naming the unsupported feature
 (with the path in the spec, e.g. `encoding.x.scale.domain: ...`). It never
 compiles a wrong chart silently, and it never mutates its input (the spec is
-cloned; tests deep-freeze every corpus spec).
+cloned).
 
-A validation layer (`src/validate.ts`) runs first and rejects unknown channels,
+A validation layer runs first and rejects unknown channels,
 transform keys, composition nesting, params and selections, condition and sort
 forms, time units, bin options, `resolve` values, config keys and mark-def keys.
-Field names go through one escaping helper (`src/names.ts`) wherever they enter
+Field names are escaped in one place wherever they enter
 an expression or a generated dataset/signal/scale name.
 
 ## Supported
@@ -53,8 +53,8 @@ an expression or a generated dataset/signal/scale name.
   aggregate transform (extents `stderr`, `stdev`, `ci`, `iqr`, pre-aggregated bounds, `xError` /
   `yError`); `ci0` / `ci1` are emitted as Vega aggregate ops. `image` is laid out like a rect and
   takes the `url` channel (field or value).
-- Composition: layer, hconcat, vconcat, concat, facet (row/column/wrap), repeat, with the nestings
-  listed in `SUPPORTED_NESTING`; `resolve` for scales, axes and legends; shared scales and legends.
+- Composition: layer, hconcat, vconcat, concat, facet (row/column/wrap), repeat, with every nesting the
+  Vega-Lite schema allows except those listed under "Throws"; `resolve` for scales, axes and legends; shared scales and legends.
 - Sizing: numbers, `{"step": n}`, and `"container"` on a top-level unit or layer (vega-lite's
   containerSize signals and an autosize fit / fit-x / fit-y over the padding).
 - Transforms: filter, calculate, bin, timeUnit, aggregate, joinaggregate, window, stack, fold,
@@ -64,8 +64,8 @@ an expression or a generated dataset/signal/scale name.
   row, column, facet. `size` drives points, text (font size), lines, ticks, bars and trails (a constant, a field or
   conditions). Every channel takes a field of each type, a value, a datum and `scale: null` (the field read as it is);
   a channel the mark does not draw is dropped, as vega-lite drops it. An arc is centred by x / y and their offsets,
-  a text placed by theta / radius around its x / y. `vl-mark-channels.test.ts` compares every mark x channel x
-  definition with vega-lite.
+  a text placed by theta / radius around its x / y. Every mark x channel x
+  definition is compared with vega-lite.
 - `config.scale`: every key that reaches the output: band / bar / rect / tick padding, nested- and
   offset-band padding, `pointPadding`, `continuousPadding`, `round`, `clamp`, `zero`, `xReverse`,
   `useUnaggregatedDomain`, `minSize`/`maxSize`, `minBandSize`/`maxBandSize`, `minFontSize`/
@@ -87,7 +87,7 @@ an expression or a generated dataset/signal/scale name.
   axis and mark blocks.
 - Mark keys: `binSpacing`, `minBandSize`, `bandSize` (vega-lite ignores it too), `x2Offset`,
   `y2Offset`, `theta2Offset`, `radius2Offset`, `style`, `smooth`, `aspect`, `clip`, `aria`.
-- Maps (`src/geo.ts`, a port of vega-lite's `compile/projection`): `geoshape` marks over GeoJSON / TopoJSON
+- Maps: `geoshape` marks over GeoJSON / TopoJSON
   (inline, `url`, or `sphere` / `graticule` generators) with `{type: "geojson"}` on `shape`; `projection`
   with every property and `config.projection`; `longitude` / `latitude` (and `longitude2` / `latitude2`) on
   point-like marks, text, line, trail and rule, layered over geoshapes. A longitude / latitude projects its raw field
@@ -95,21 +95,21 @@ an expression or a generated dataset/signal/scale name.
   are read as on any other channel (a temporal type parses the field before it is projected), and a scale, an axis, a
   legend, a stack, an impute, a band or a pre-binned bin changes nothing. A unit fits its projection to its
   geoshape data unless it gives `scale` or `translate`; layer, concat and repeat children share one
-  merged projection as vega-lite does. Vega's runtime computes the same projection as the Aster runtime
-  (`projectedBounds`), and the corpus holds a `vlx-geo-*` case per feature.
-- Animation (`src/animation.ts`): the `time` channel, driven by a `point` selection whose `on` is a
+  merged projection as vega-lite does. Vega's runtime computes the same projection as the Aster runtime,
+  and the conformance corpus holds a case per feature.
+- Animation: the `time` channel, driven by a `point` selection whose `on` is a
   timer (`"timer"`, `"timer{ms}"`, `{type: "timer"}`) and the `{filter: {param}}` transform; `mark.time`,
   `config.scale.framesPerSecond`. The signals, the `<main>_curr` frame dataset and the band `time` scale
   are vega-lite's. The first frame draws all the data (the store is empty), as in vega; the runtime ticks
-  the clock with the same d3-timer schedule vega uses (see docs/INTERACTION.md#signals).
+  the clock with the same d3-timer schedule vega uses (see [docs/INTERACTION.md](https://github.com/mgilbir/aster-react/blob/main/docs/INTERACTION.md#signals)).
 - Sort forms (arrays, `ascending`/`descending`, channel, `{field, op, order}`, `{encoding}`),
   conditions with `test` predicates (and/or/not, field predicates, DateTime values), time units
   (single, multi, `utc`, `step`), bin options, dotted/escaped/bracketed field names.
 
 - Params and selections on a unit view, on the units of a layer, and on the units of a concat, hconcat, vconcat, facet or
   repeat view (linked brushing across views, a cross-view filter, a brush per facet cell or repeated view, a selection
-  declared on the composition and given to every unit below it), as vega-lite 6.4.3 compiles them
-  (`src/selection*.ts`: the parameter resolved against its unit, then its signals, marks and store): point and interval selections; `fields`, `encodings`, `on`,
+  declared on the composition and given to every unit below it), as vega-lite 6.4.3 compiles them:
+  point and interval selections; `fields`, `encodings`, `on`,
   `clear`, `toggle`, `nearest`, `resolve`, `mark`, `translate`, `zoom`, `value` (initial values, DateTimes
   included); `config.selection`; `bind` to inputs (`range`, `select`, `radio`, `checkbox`, ...), to the legend
   (`"legend"` or `{legend: stream}`) and to `"scales"` (pan and zoom through the scale domains); `{param}` conditions
@@ -117,7 +117,7 @@ an expression or a generated dataset/signal/scale name.
   `{unionWith}`; variable parameters (`value`, `expr`, `bind`, `react`). Projections over a bin or a time unit work as
   in vega-lite. A selection's state is its `<name>_store` dataset and the `<name>` signal, exactly as in vega-lite.
   `nearest` needs the transforms addon (`import '@aster/core/transforms'`) for its voronoi cells. The interaction
-  needs the signal event loop (`<Chart>`, or `<SvgChart interaction>`): see docs/INTERACTION.md. In a composition a unit's
+  needs the signal event loop (`<Chart>`, or `<SvgChart interaction>`): see [docs/INTERACTION.md](https://github.com/mgilbir/aster-react/blob/main/docs/INTERACTION.md). In a composition a unit's
   signals are its group mark's (a Vega group scope: one copy per view or facet cell, `push: "outer"` for the signals that
   feed a bound scale, the `facet` signal in a facet's cells), and the named selection, its store and `unit` stay at the root.
 
@@ -175,11 +175,10 @@ vega-lite supports and is not here compiles to the same Vega.)
   compares a bare number or name as that part of a local date, which is what vega-lite 6.4.3 compiles (its source marks it
   `TODO: support utc`). So a filter keeps the same rows as vega-lite in every zone. (The `timeUnit` transform and the encodings do
   read a UTC unit in UTC.) A `utc: true` DateTime *value* is still read in UTC.
-  `vl-predicate.tz.test.ts` compares rows and expressions with vega-lite for every UTC unit in the zones of `pnpm test:tz`.
 
 ## Known runtime gaps (Aster, not the compiler)
 
 None are recorded: real vega renders our output identically to vega-lite's for the
-whole corpus, and Aster's runtime renders both, so `packages/conformance/corpus-vega-only`
-(where a spec lives while Aster cannot yet render vega-lite's output for it, held to the
-real-vega check only) is empty. A new gap is recorded there, with its measured root cause.
+whole conformance corpus, and Aster's runtime renders both.
+
+Working on the compiler? See [packages/vl/CONTRIBUTING.md](https://github.com/mgilbir/aster-react/blob/main/packages/vl/CONTRIBUTING.md): where each part of the contract is implemented and tested.

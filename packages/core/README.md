@@ -31,6 +31,6 @@ Addons (each a separate entry, so a chart pays only for what it imports): `@aste
 `@aster/core/addons` says which of them a spec needs (`addonsNeeded(spec)`, read from its structure and from the functions its expressions call, parsed with the engine's own parser) and imports the missing ones on
 demand (`loadAddonsFor(spec)`); the React shells use it, so a spec renders with nothing imported.
 
-Specs from untrusted sources need `limits`; see `docs/LIMITS.md`. See also the
-[repository documentation](https://github.com/mgilbir/aster-react#readme), especially `docs/API.md`, `docs/LIMITS.md`
-and `docs/ERRORS.md`.
+Specs from untrusted sources need `limits`; see [LIMITS](https://github.com/mgilbir/aster-react/blob/main/docs/LIMITS.md). See also the
+[repository documentation](https://github.com/mgilbir/aster-react#readme), especially the [API reference](https://github.com/mgilbir/aster-react/blob/main/docs/API.md),
+[LIMITS](https://github.com/mgilbir/aster-react/blob/main/docs/LIMITS.md) and [ERRORS](https://github.com/mgilbir/aster-react/blob/main/docs/ERRORS.md).
