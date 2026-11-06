@@ -3804,7 +3804,7 @@ interface FacetDef {
 }
 
 /**
- * The items a group mark produces (vega parse/mark.js + marks/data.js): one per
+ * The items a group mark produces (vega-parser parsers/mark.js + parsers/marks/data.js): one per
  * facet partition of the source data (first-appearance order, datum = the
  * partition's key fields plus any facet aggregate), one per datum of `from.data`,
  * or a single item with no source.

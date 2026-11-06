@@ -966,7 +966,7 @@ function compileLayered(spec: VLSpec, ctx: CompileCtx): VLSpec {
       renameFragment(layerScales, r)
     }
   })
-  // optimize/mergebins.ts: the layers that bin the same field with the same parameters share ONE bin node. Its extent is taken once,
+  // vega-lite compile/data/optimizers.ts MergeBins: the layers that bin the same field with the same parameters share ONE bin node. Its extent is taken once,
   // over the rows of the first layer's pipeline; a later layer (a filtered one, say) bins with that extent instead of writing the
   // signal again over its own rows. The shared signals keep the name of the last layer that has them (MergeBins pops the last promotable
   // bin and merges the others into it, `renameSignal(other, this)`)

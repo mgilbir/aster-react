@@ -741,7 +741,7 @@ function renderTexts(group: SceneGroup, open: string): string {
 /**
  * One `<text>` element, exactly vega-scenegraph's text markup: first line as
  * the element content and each following line as `<tspan x="0" dy="lineHeight">`
- * (svg.js `textLines`); a single line is a plain text node. Shared by mark text
+ * (vega-scenegraph util/text.js `textLines`); a single line is a plain text node. Shared by mark text
  * and guide labels so they cannot drift.
  */
 function textElement(it: SceneItem): string {

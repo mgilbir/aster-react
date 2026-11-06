@@ -707,7 +707,7 @@ export function boundTypedMark(bounds: Bounds, mark: SceneGroup, miterPaths = fa
       return bounds
     default:
       // vega's arc/path/symbol bounds always expand with miter semantics
-      // (vega-scenegraph bound.js: boundStroke(bounds, item, true)) — the
+      // (vega-scenegraph bound/boundStroke.js: boundStroke(bounds, item, true)) — the
       // miterLimit default of 4 makes the expansion miterLimit*sw/2 per side
       const miter = miterPaths || mark.marktype === 'arc' || mark.marktype === 'path' || mark.marktype === 'symbol' || mark.marktype === 'shape' || (mark.marktype as string) === 'geoshape'
       // (a rect, rule, symbol or image is measured as its own type: a text or angle channel it carries is inert)
