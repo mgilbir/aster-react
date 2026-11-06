@@ -283,8 +283,10 @@ vega-view uses), so ticks fall on the same instants with the same `{timestamp, e
 real vega and Aster on one fake browser clock and compares frames). The timers belong to the chart's host element, not
 to one rendered SVG: a re-bind after each render keeps the schedule, and they stop when the chart unmounts, when the host
 element is removed from the document, or on `binding.release()` (vega's `view.finalize()`); nothing is left scheduled.
-`bindSceneSignals` takes `owner` (the element the timers belong to; `<Chart>` passes its host) and `setTimerClock` from
-`@aster/core` swaps the scheduler's clock for a controlled one (tests, hosts that step frames themselves). A Vega-Lite
+`bindSceneSignals` takes `owner` (the element the timers belong to; `<Chart>` passes its host) and `setTimerClock(clock | null)` from
+`@aster/core/signals` swaps the scheduler's clock (`{ now, setTimeout, clearTimeout, setInterval, clearInterval, requestFrame }`)
+for a controlled one (tests, hosts that step frames themselves); `null` restores the host's globals, and it should only be
+swapped while no timer is live. A Vega-Lite
 animation (the `time` channel and its timer selection, see `packages/vl/README.md`) is a timer stream whose clock
 signal feeds `modify` on the selection's store; the store and the other `modify` semantics are described above.
 

@@ -297,13 +297,16 @@ focusable elements; non-React hosts can do the same. The keyboard contract is in
 - `@aster/core/hit` — `buildHitIndex(scene)` returns `{ query(x, y), queryMark(x, y), size() }`; `queryMark` returns
   data-bearing mark items only (guides excluded), `query` returns anything painted. Both give a `HitTarget`
   (`{ item, marktype }`) or `null`.
-- `@aster/core/signals` — `bindSceneSignals(svg, scene, values, hooks, { pick })`, `stampDatumAttrs`.
+- `@aster/core/signals` — `bindSceneSignals(svg, scene, values, hooks?, { pick?, data?, owner?, containerSize? })`, `stampDatumAttrs`, `setTimerClock`.
   Binds every `signal.on` entry with vega's event-stream semantics: selector strings (`[mousedown, mouseup] > mousemove`,
   `@name:click`, `symbol:click`, `window:keydown`, `click[event.shiftKey]{100}`, `mousedown!`), object-form `events`, arrays,
   `{signal}` sources, `between`, filters, throttle, debounce, `consume` and `force`. `event` is the native event extended with
   `item`, `vega` and `dataflow`, so `event.deltaY`, `event.shiftKey`, `x()`, `y()`, `item()` and `group()` behave as in vega;
   `datum` is `event.item.datum`. A handler runs only when its stream matched; a signal's `update` re-runs only when a signal
-  it reads changed. It returns `{ detach(), setSignal(name, value) }`.
+  it reads changed. It returns `{ detach(), release(), setSignal(name, value) }`: `detach()` stops delivering events to this
+  binding but leaves timer streams and pending debounces running (a host re-binds after every render and the timers belong
+  to the view); call `release()` when the host is done with the svg, which detaches and stops its timer streams and
+  pending debounces (vega's `view.finalize()`). `setTimerClock(clock | null)` (below) swaps the clock the timer streams run on.
   - `hooks.onSignal(name, value, all)` — once per signal that changed while an event was processed.
   - `hooks.onData(name, rows)` — once per dataset that `modify(...)` edited (a Vega-Lite selection's `<name>_store`), with
     its input rows. The host passes them back as `data[name]` to the next evaluation and as `{ data }` to the next
@@ -733,9 +736,12 @@ dependency. Hosts that already bundle `@aster/vl` themselves can instead call
 anything outside the supported subset (see `docs/ERRORS.md`).
 
 Vega-Lite maps (`geoshape`, `projection`, `longitude` / `latitude`, `{type: "geojson"}`) and animation (the `time`
-channel with a `timer` point selection and `{filter: {param}}`) compile to what vega-lite 6.4.3 emits; maps in a facet and
+channel with a `timer` point selection and `{filter: {param}}`) compile to what vega-lite 6.4.3 emits; a geoshape without a GeoJSON `shape` field inside a facet and
 animations outside a single top-level unit throw (reasons in `packages/vl/README.md`). Running an animation needs
 the signal event loop (`<Chart>` or `<SvgChart interaction>`): `timer` streams run on one scheduler, with d3-timer's schedule, shared by the page,
-stop on unmount, and `setTimerClock` from `@aster/core` installs a controlled clock. `bindSceneSignals(..)` takes
-`{ owner, data }` (the element the timers belong to, the datasets the loop starts from), an `onData` hook, and returns a
+stop on unmount. `setTimerClock(clock | null)`, imported from `@aster/core/signals`, drives the shared scheduler (and so every
+`timer` stream) from `clock` instead of the host's globals; `null` goes back to them. A clock is `{ now, setTimeout,
+clearTimeout, setInterval, clearInterval, requestFrame }`. It is the seam for a test, or a host that steps frames itself. Swap
+it only while no timer is live: a timer's pending wake-up belongs to the clock it was scheduled on. `bindSceneSignals(..)`
+takes `{ owner, data }` (the element the timers belong to, the datasets the loop starts from), an `onData` hook, and returns a
 binding with `release()`.
