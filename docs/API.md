@@ -1,5 +1,38 @@
 # API
 
+The public surface of the three Aster packages: what each entry point exports, with the examples that are type-checked against the source. For install and a first chart see the [README](../README.md#render-a-first-chart); for what a failure means see [ERRORS.md](ERRORS.md).
+
+## Start here
+
+| I want to | Import | Read |
+|---|---|---|
+| render a Vega spec to an SVG string, with no React | `renderSpec` from `@aster/core` | [Render a Vega spec](#render-a-vega-spec) |
+| show a chart in a React app | `Chart` from `@aster/react` | [`<Chart>`](#chart) |
+| use a Vega-Lite spec | `import '@aster/react/vl'` once (React), or `compile` from `@aster/vl` | [`<Chart>`](#chart), [`@aster/vl`](#astervl) |
+| ship the smallest React bundle | `SvgChart` from `@aster/react/lite` (and `interaction` from `@aster/react/interaction` for tooltips and `signal.on`) | [`<SvgChart>`](#svgchart-and-the-interaction-capability) |
+| get the scene or the SVG without a component | `useChart` from `@aster/react` | [Hooks](#hooks) |
+| update a chart as data arrives | `ChartStream` from `@aster/react`, or `createChartStream` from `@aster/core` | [Streaming and pulses](#streaming-and-pulses), [Streaming components](#streaming-components) |
+| update a chart when only some rows changed | `createChartSession` from `@aster/core/dom`, or the `dataChanges` prop | [Sessions and per-datum updates](#sessions-and-per-datum-updates) |
+| keep rendering off the main thread | `useChartWorker` from `@aster/react`, and `@aster/react/worker-entry` in the worker | [Workers](#workers) |
+| render on the server and hydrate | `renderChartToStaticMarkup`, `hydrateChart` from `@aster/react` (or `@aster/react/ssr`) | [SSR + hydration](#ssr--hydration) |
+| render specs from untrusted sources | the `limits` and `urlPolicy` inputs, and a worker | [RuntimeInput](#runtimeinput), [LIMITS.md](LIMITS.md) |
+| load a spec's `url` datasets | `loadSpecData` from `@aster/core/load`, or `useSpecData` in React | [`@aster/core/load`](#astercoreload) |
+| call my own function from an expression | `registerExpressionFunction` from `@aster/core` | [Custom expression functions](#custom-expression-functions) |
+
+## Contents
+
+- [Packages and entry points](#packages-and-entry-points)
+- [`@aster/core`](#astercore)
+  - Guides: [Render a Vega spec](#render-a-vega-spec), [Sessions and per-datum updates](#sessions-and-per-datum-updates), [Custom expression functions](#custom-expression-functions), [Streaming and pulses](#streaming-and-pulses)
+  - Reference: [RuntimeInput](#runtimeinput), [The pipeline steps](#the-pipeline-steps), [Locales](#locales), [Text metrics](#text-metrics), [Logger](#logger), [Pointer position and cursor](#pointer-position-and-cursor), [Building blocks](#building-blocks), [Limit checks](#limit-checks), [Typed errors](#typed-errors), [Accessibility tree](#accessibility-tree)
+  - Add-on entry points: [`/hit`](#astercorehit), [`/signals`](#astercoresignals), [`/addons`](#astercoreaddons), [`/dom`](#astercoredom), [`/canvas`](#astercorecanvas), [`/load`](#astercoreload), [`/geo` and `/transforms`](#astercoregeo-and-astercoretransforms), [an example](#example-hit-testing-a-scene)
+- [`@aster/react`](#asterreact)
+  - Components and hooks: [`<Chart>`](#chart), [`<SvgChart>` and the `interaction` capability](#svgchart-and-the-interaction-capability), [Hooks](#hooks), [Streaming components](#streaming-components), [Workers](#workers), [SSR + hydration](#ssr--hydration)
+  - Reference: [Registry and session re-exports](#registry-and-session-re-exports), [Pan, zoom and selection helpers](#pan-zoom-and-selection-helpers), [Accessibility keyboard contract](#accessibility-keyboard-contract)
+- [`@aster/vl`](#astervl): [Compile a Vega-Lite spec](#compile-a-vega-lite-spec), [Maps and animation](#maps-and-animation)
+
+## Packages and entry points
+
 Aster ships three public packages:
 
 | Package | Entry | Purpose |
@@ -12,7 +45,14 @@ Aster ships three public packages:
 
 `@aster/core` takes Vega specs only. Vega-Lite goes through `@aster/vl` (or `@aster/react/vl`).
 
+Each package section below has the same order: guides (a task, start to finish, with a runnable example), then the reference
+(what each export does and the rules it follows), then the entry points that are separate imports.
+
 ## `@aster/core`
+
+### Guides
+
+#### Render a Vega spec
 
 ```ts
 import { renderSpec, type VgSpec } from '@aster/core'
@@ -46,139 +86,7 @@ const svg = renderSpec(vegaSpec, {
 console.log(svg.startsWith('<svg'))
 ```
 
-`RuntimeInput` (the second argument of `renderSpec`, `evaluateChart` and the session) has these fields: `limits`,
-`urlPolicy`, `logger`, `random`, `textMetrics`, `data`, `width`, `height`, `signals`, `containerSize`, `measuredSize`, `changedDatasets`,
-`dataChanges`, `dataPulse`, `autoChanges`, `domainRaw`. `data` is a `Record<string, unknown[]>` keyed by dataset
-name; it overrides or supplies the rows of the spec dataset of that name.
-
-`random` (`RuntimeInput.random`, `() => number` in [0, 1)) is the chart's source of random numbers, the per-chart counterpart of
-vega's `setRandom`: expression `random()`, `sampleNormal` / `sampleLogNormal` / `sampleUniform`, the `sample` transform and the
-bootstrap `ci0` / `ci1` aggregate ops draw from it, one number per draw, in vega's order and count, so a host that gives Aster and
-vega the same seeded generator gets the same numbers. The engine touches no global: without `random`, expressions use
-`Math.random` and `sample` / `ci` the engine's own seeded stream. The evaluator reaches a fixed point (it builds datasets and
-resolves signals more than once), so a source is consumed once per transform or signal *run*: a site whose inputs (its rows, its
-parameters, the signals it mentions) are unchanged replays the numbers it drew, as vega's dataflow does not rerun an operator whose
-inputs did not change; one whose inputs changed draws the next ones. The `<Chart random>` prop forwards it (pass one generator for
-the life of the chart); a function cannot cross a worker boundary, so the worker protocol does not carry it.
-
-`logger` (`RuntimeInput.logger`, type `Logger`) is where the engine reports an error it recovers from, as vega's
-dataflow does: an expression that throws while a chart is evaluated (a conditional-encode test, an encode signal, a
-filter or formula, a sort, a scale that cannot be built) is logged and the render carries on with what it has. See
-`docs/ERRORS.md` for exactly what survives each failure.
-
-`limits` are described in `docs/LIMITS.md`, including which entry point enforces which budget. They are best-effort protection: a killable worker is the hard guarantee for untrusted specs. A few built-in ceilings (`HARD_CAPS`, `HARD_MAX_SPEC_DEPTH`) hold even when no `limits` are given; they throw `AsterLimitError` and a matching limit replaces them.
-
-`compileChart(spec)` produces the `CompiledChart` IR; `evaluateChart(chart, input)` resolves data/scales/encodes into
-a `SceneRoot`; `renderSceneToSvg(scene)` serializes it; `getChartInfo(spec, input)` returns the size, padding and
-scales (`ChartInfo`) of the evaluated scene (`chartInfoFromScene(scene)` reads the same from a scene you already
-have). `renderSpec` is those steps plus the limit checks.
-
-### Locales
-
-A locale is one object over the number and time formatters a chart reads text through: `format(specifier)`,
-`formatPrefix(specifier, value)`, `formatFloat(specifier)`, `formatSpan(start, stop, count, specifier)` (numbers) and
-`timeFormat`, `utcFormat`, `timeParse`, `utcParse` (dates). Each returns a formatter or parser function. The behaviour is
-vega-format's; compiled formatters are kept per specifier in a bounded least-recently-used table
-([LIMITS.md](LIMITS.md#locale-and-formatter-caches)).
-
-- `locale(numberDefinition?, timeDefinition?)` returns a `Locale` from d3-format / d3-time-format style definitions
-  (`FormatLocaleDefinition`, `TimeLocaleDefinition`); a missing half is the current default one. It does not change the default.
-- `numberFormatLocale(definition)` and `timeFormatLocale(definition)` build one half alone (the number half has the
-  number methods, the time half the date methods).
-- `defaultLocale()` reads the default locale; `defaultLocale(numberDefinition, timeDefinition)` replaces both halves. One
-  argument is an error. `numberFormatDefaultLocale(definition?)` and `timeFormatDefaultLocale(definition?)` read or replace one half.
-  The expression functions `format`, `timeFormat`, `utcFormat`, `timeParse`, `utcParse`, the guide captions and the `date:` / `utc:` patterns of a data `parse` read the default on every call, so a replacement takes effect at once. It is
-  process-wide state: set it once at start-up.
-- `resetDefaultLocale()` puts both halves back to the built-in locale (a test seam).
-
-```ts
-import { locale } from '@aster/core'
-
-const de = locale({ decimal: ',', thousands: '.', grouping: [3], currency: ['', ' €'] })
-console.log(de.format(',.2f')(1234.5)) // 1.234,50
-```
-
-### Text metrics
-
-Text is measured for layout (axis labels, legends, `text` mark bounds) with, in order: the host provider, a canvas 2D
-context, vega's headless estimate. [FONTS.md](FONTS.md) explains the order and why it decides whether a chart matches vega.
-A `TextMetricsProvider` is `{ measure(text, font, fontSize, item?) => number }`, a non-negative advance width in CSS pixels.
-
-- `setTextMetricsProvider(provider | null)` installs (or removes) the provider for the whole module and clears the width cache.
-- `getTextMetricsProvider()` returns the installed provider or `null`.
-- `withTextMetricsProvider(provider, fn)` runs `fn` with a scoped provider and restores the previous one afterwards, also when `fn`
-  throws; `renderSpec` and `<Chart textMetrics>` use it. A `null` / `undefined` provider runs `fn` as it is.
-- `usingCanvasTextMetrics()` is `true` when a provider is installed or a canvas 2D context exists in this environment.
-- `measureText(text, font, item?)` is vega-scenegraph's cached width measurement (keyed by provider, font and text): the provider's
-  answer (a throwing provider, or a negative or non-finite answer, falls back to the estimate), else the canvas context's
-  `measureText`, and `0` when neither exists. Check `usingCanvasTextMetrics()` first to choose the estimate instead.
-- `estimateTextWidth(text, fontSize)` is vega's headless estimate, `~~(0.8 * text.length * fontSize)`.
-- `fontString(item)` builds the CSS font string vega builds from a text item: `[style ][variant ][weight ]{size}px {family}`
-  from `fontStyle`, `fontVariant`, `fontWeight`, `fontSize` (default 11) and `fontFamily` or `font` (default `sans-serif`).
-
-### Logger
-
-`consoleLogger` is the default `Logger`: `error` and `warn` go to `console.error` / `console.warn`, as vega's default
-does. Pass it, or a `Logger` of your own, as `RuntimeInput.logger`.
-
-### Pointer position and cursor
-
-- `clientToSvg(element, clientX, clientY)` returns `[x, y]`, the pointer in the chart element's own coordinates, as
-  vega-scenegraph's `point(event, el)` does. It inverts the element's screen CTM, so a `viewBox` against a CSS-scaled
-  width, borders, padding and ancestor transforms are accounted for. Without a CTM (a canvas) it unscales the bounding rect.
-- `createPointMapper(getElement)` is the same map measured once and reused, so a `pointermove` costs no layout read. It returns
-  `{ map(clientX, clientY), invalidate() }` (`PointMapper`); call `invalidate()` when the layout can have changed (a commit, a resize,
-  a scroll, the pointer entering). While `getElement()` returns `null` the point is returned unchanged.
-- `DEFAULT_CURSOR` is `'default'`, the cursor a view shows when nothing sets one.
-- `resolveCursor(signalValue, itemCursor)` returns the CSS cursor to show, or `null` for none, from the value of the spec's
-  `cursor` signal and the `cursor` of the item under the pointer (vega-view's rule: a `cursor` signal other than `default` wins,
-  else the item's, else the signal's). A signal value that is vega's own `{ user, item }` object carries its item.
-
-### Building blocks
-
-The pieces `renderSpec` and the session are made of are exported for hosts that build on them. Wrap calls in
-`withLimits(limits, () => ...)` to get the same metering as `renderSpec` ([LIMITS.md](LIMITS.md#which-entry-point-enforces-what)).
-
-- `compileExpr(expression, runtime)` compiles a Vega expression string against an `ExpressionRuntime`
-  (`{ scale(name), data(name), expr(string), ... }`: how the expression reaches scales and datasets) and returns
-  `(datum, params?, event?) => value`. A malformed expression throws `ExpressionParseError`.
-- `buildScale(compiledScale, context)` builds one scale (`Scale`, a callable with `domain()`, `range()` and, where the type has
-  one, `invert()`) from a `CompiledScale` and a `ScaleContext` (`width`, `height`, `signals`, `dataField(dataName, field)`, ...).
-- `applyTransforms(rows, transforms, context, sourceName?)` runs a list of `CompiledTransform`s over `Row[]` (a `Row` is
-  `Record<string, unknown>`); `sortRows(rows, sort?)` orders rows by a `SortSpec` (`{ field, order }`) and returns them
-  unchanged without one. `context` is a `TransformContext`: the expression `runtime` and the `signals` by name.
-- `datasetsOfScene(scene)` returns the rows each spec dataset ended with in the evaluation that made `scene`
-  (`ReadonlyMap<name, rows | null>`, vega's `view.data(name)`); `null` marks a dataset that never ran, and the map is empty for a scene
-  that did not come from this runtime (a clone, a worker result).
-- Pulses: `rowsEqual(a, b)` is the row equality `diffRows` uses (plain rows by own keys, nested values by their JSON);
-  `transformNeedsFullRederive(types)` says whether a chain of transform types holds a row-expanding or reordering one (`fold`,
-  `flatten`, `pivot`, the layouts...), so a row-wise pulse cannot be applied through it; `isGroupedTransform(type)` is `true` for
-  `aggregate`, `joinaggregate`, `window` and `stack`.
-- Registries, filled by the add-ons: `transformRegistry` (`Map<type, TransformFn>`, the rare transforms of
-  `@aster/core/transforms`), `dataFormatRegistry` (`Map<format, reader>`, `json` built in; csv / tsv / dsv / topojson from
-  `@aster/core/load`), `geoRegistry` (the projection and contour hooks of `@aster/core/geo`, `null` fields until loaded).
-  `requireTransform(type)` returns a registered transform or throws the error that names the import to make
-  (`await import("@aster/core/transforms")`, see `docs/ERRORS.md`).
-
-### Limit checks
-
-`renderSpec` runs these in a fixed order; call them yourself when you assemble the steps. All throw `AsterLimitError`.
-
-- `checkSpecLimits(spec, limits, input?)` is the pre-flight, before anything is allocated: string lengths, depth, marks, inline rows
-  (including `input.data`).
-- `checkSceneLimits(scene, limits)` checks the generated geometry (items, path and text lengths) before serialization.
-- `checkSvgLength(svg, limits)` checks `maxSvgLength` on the serialized string.
-- `createLimitClock(limits?, now?)` starts the wall-clock budget (`maxTimeMs`, opt-in) and returns `{ started, deadline, check(phase?),
-  remaining() }`; `check` throws once the budget is spent and is a no-op without `maxTimeMs`. `now` defaults to `performance.now`.
-- `withLimits(limits, fn)` runs `fn(meter)` with a `LimitMeter` active, so every layer below reports to one budget. Nested calls with
-  the same `limits` object share the outer meter; without `limits` the function runs unmetered (the built-in ceilings still hold).
-
-### Typed errors
-
-`AsterUrlError` (`code: 'ASTER_URL_DENIED'`, `url`, `reason`) is thrown when the URL policy refuses a request, before any
-request is made; it is exported from `@aster/core` and from `@aster/core/load`. `docs/ERRORS.md` lists every error class.
-
-### Sessions and per-datum updates
+#### Sessions and per-datum updates
 
 `createChartSession()` (from `@aster/core/dom`, also re-exported by `@aster/react`) caches the IR and the scene across
 updates. An evaluation with the same spec content, data array identities, size, signals and limits returns the *same*
@@ -221,7 +129,7 @@ console.log(session.pulse()?.datasets.get('table')?.appendOnly) // true
 session.change({ data: { table: [{ x: 1 }, { x: 4 }, { x: 9 }] }, dataChanges: { table: [1] } })
 ```
 
-### Custom expression functions
+#### Custom expression functions
 
 `registerExpressionFunction(name, fn)` is the counterpart of vega's `expressionFunction(name, fn)`: expressions
 (`{signal: ...}`, filters, formulas, encodes) may then call `name(...)`. It is how Vega-Lite's custom `formatType`
@@ -261,7 +169,7 @@ function, a constant, `datum`, `event`, ...), or that starts with `_`, is refuse
 vega-lite drops a custom `formatType` and its `format` from field definitions, axes and legends (a facet header keeps
 its own), and so does `@aster/vl`.
 
-### Streaming and pulses
+#### Streaming and pulses
 
 `diffRows(previous, next)` classifies a replacement snapshot: same-length changes return
 the changed indices; length-changing updates also return `from` (new → old row index,
@@ -389,7 +297,145 @@ Afterwards `push` returns `false` (not counted as a drop), `flush` returns `null
 `scene()`/`pulse()` are `null`, `canAccept()` is `false`, and `session()` throws
 `AsterStreamClosedError` (`code: 'ASTER_STREAM_CLOSED'`). `close()` is idempotent.
 
-### Accessibility tree
+### Reference
+
+#### RuntimeInput
+
+`RuntimeInput` (the second argument of `renderSpec`, `evaluateChart` and the session) has these fields: `limits`,
+`urlPolicy`, `logger`, `random`, `textMetrics`, `data`, `width`, `height`, `signals`, `containerSize`, `measuredSize`, `changedDatasets`,
+`dataChanges`, `dataPulse`, `autoChanges`, `domainRaw`. `data` is a `Record<string, unknown[]>` keyed by dataset
+name; it overrides or supplies the rows of the spec dataset of that name.
+
+`random` (`RuntimeInput.random`, `() => number` in [0, 1)) is the chart's source of random numbers, the per-chart counterpart of
+vega's `setRandom`: expression `random()`, `sampleNormal` / `sampleLogNormal` / `sampleUniform`, the `sample` transform and the
+bootstrap `ci0` / `ci1` aggregate ops draw from it, one number per draw, in vega's order and count, so a host that gives Aster and
+vega the same seeded generator gets the same numbers. The engine touches no global: without `random`, expressions use
+`Math.random` and `sample` / `ci` the engine's own seeded stream. The evaluator reaches a fixed point (it builds datasets and
+resolves signals more than once), so a source is consumed once per transform or signal *run*: a site whose inputs (its rows, its
+parameters, the signals it mentions) are unchanged replays the numbers it drew, as vega's dataflow does not rerun an operator whose
+inputs did not change; one whose inputs changed draws the next ones. The `<Chart random>` prop forwards it (pass one generator for
+the life of the chart); a function cannot cross a worker boundary, so the worker protocol does not carry it.
+
+`logger` (`RuntimeInput.logger`, type `Logger`) is where the engine reports an error it recovers from, as vega's
+dataflow does: an expression that throws while a chart is evaluated (a conditional-encode test, an encode signal, a
+filter or formula, a sort, a scale that cannot be built) is logged and the render carries on with what it has. See
+`docs/ERRORS.md` for exactly what survives each failure.
+
+`limits` are described in `docs/LIMITS.md`, including which entry point enforces which budget. They are best-effort protection: a killable worker is the hard guarantee for untrusted specs. A few built-in ceilings (`HARD_CAPS`, `HARD_MAX_SPEC_DEPTH`) hold even when no `limits` are given; they throw `AsterLimitError` and a matching limit replaces them.
+
+#### The pipeline steps
+
+`compileChart(spec)` produces the `CompiledChart` IR; `evaluateChart(chart, input)` resolves data/scales/encodes into
+a `SceneRoot`; `renderSceneToSvg(scene)` serializes it; `getChartInfo(spec, input)` returns the size, padding and
+scales (`ChartInfo`) of the evaluated scene (`chartInfoFromScene(scene)` reads the same from a scene you already
+have). `renderSpec` is those steps plus the limit checks.
+
+#### Locales
+
+A locale is one object over the number and time formatters a chart reads text through: `format(specifier)`,
+`formatPrefix(specifier, value)`, `formatFloat(specifier)`, `formatSpan(start, stop, count, specifier)` (numbers) and
+`timeFormat`, `utcFormat`, `timeParse`, `utcParse` (dates). Each returns a formatter or parser function. The behaviour is
+vega-format's; compiled formatters are kept per specifier in a bounded least-recently-used table
+([LIMITS.md](LIMITS.md#locale-and-formatter-caches)).
+
+- `locale(numberDefinition?, timeDefinition?)` returns a `Locale` from d3-format / d3-time-format style definitions
+  (`FormatLocaleDefinition`, `TimeLocaleDefinition`); a missing half is the current default one. It does not change the default.
+- `numberFormatLocale(definition)` and `timeFormatLocale(definition)` build one half alone (the number half has the
+  number methods, the time half the date methods).
+- `defaultLocale()` reads the default locale; `defaultLocale(numberDefinition, timeDefinition)` replaces both halves. One
+  argument is an error. `numberFormatDefaultLocale(definition?)` and `timeFormatDefaultLocale(definition?)` read or replace one half.
+  The expression functions `format`, `timeFormat`, `utcFormat`, `timeParse`, `utcParse`, the guide captions and the `date:` / `utc:` patterns of a data `parse` read the default on every call, so a replacement takes effect at once. It is
+  process-wide state: set it once at start-up.
+- `resetDefaultLocale()` puts both halves back to the built-in locale (a test seam).
+
+```ts
+import { locale } from '@aster/core'
+
+const de = locale({ decimal: ',', thousands: '.', grouping: [3], currency: ['', ' €'] })
+console.log(de.format(',.2f')(1234.5)) // 1.234,50
+```
+
+#### Text metrics
+
+Text is measured for layout (axis labels, legends, `text` mark bounds) with, in order: the host provider, a canvas 2D
+context, vega's headless estimate. [FONTS.md](FONTS.md) explains the order and why it decides whether a chart matches vega.
+A `TextMetricsProvider` is `{ measure(text, font, fontSize, item?) => number }`, a non-negative advance width in CSS pixels.
+
+- `setTextMetricsProvider(provider | null)` installs (or removes) the provider for the whole module and clears the width cache.
+- `getTextMetricsProvider()` returns the installed provider or `null`.
+- `withTextMetricsProvider(provider, fn)` runs `fn` with a scoped provider and restores the previous one afterwards, also when `fn`
+  throws; `renderSpec` and `<Chart textMetrics>` use it. A `null` / `undefined` provider runs `fn` as it is.
+- `usingCanvasTextMetrics()` is `true` when a provider is installed or a canvas 2D context exists in this environment.
+- `measureText(text, font, item?)` is vega-scenegraph's cached width measurement (keyed by provider, font and text): the provider's
+  answer (a throwing provider, or a negative or non-finite answer, falls back to the estimate), else the canvas context's
+  `measureText`, and `0` when neither exists. Check `usingCanvasTextMetrics()` first to choose the estimate instead.
+- `estimateTextWidth(text, fontSize)` is vega's headless estimate, `~~(0.8 * text.length * fontSize)`.
+- `fontString(item)` builds the CSS font string vega builds from a text item: `[style ][variant ][weight ]{size}px {family}`
+  from `fontStyle`, `fontVariant`, `fontWeight`, `fontSize` (default 11) and `fontFamily` or `font` (default `sans-serif`).
+
+#### Logger
+
+`consoleLogger` is the default `Logger`: `error` and `warn` go to `console.error` / `console.warn`, as vega's default
+does. Pass it, or a `Logger` of your own, as `RuntimeInput.logger`.
+
+#### Pointer position and cursor
+
+- `clientToSvg(element, clientX, clientY)` returns `[x, y]`, the pointer in the chart element's own coordinates, as
+  vega-scenegraph's `point(event, el)` does. It inverts the element's screen CTM, so a `viewBox` against a CSS-scaled
+  width, borders, padding and ancestor transforms are accounted for. Without a CTM (a canvas) it unscales the bounding rect.
+- `createPointMapper(getElement)` is the same map measured once and reused, so a `pointermove` costs no layout read. It returns
+  `{ map(clientX, clientY), invalidate() }` (`PointMapper`); call `invalidate()` when the layout can have changed (a commit, a resize,
+  a scroll, the pointer entering). While `getElement()` returns `null` the point is returned unchanged.
+- `DEFAULT_CURSOR` is `'default'`, the cursor a view shows when nothing sets one.
+- `resolveCursor(signalValue, itemCursor)` returns the CSS cursor to show, or `null` for none, from the value of the spec's
+  `cursor` signal and the `cursor` of the item under the pointer (vega-view's rule: a `cursor` signal other than `default` wins,
+  else the item's, else the signal's). A signal value that is vega's own `{ user, item }` object carries its item.
+
+#### Building blocks
+
+The pieces `renderSpec` and the session are made of are exported for hosts that build on them. Wrap calls in
+`withLimits(limits, () => ...)` to get the same metering as `renderSpec` ([LIMITS.md](LIMITS.md#which-entry-point-enforces-what)).
+
+- `compileExpr(expression, runtime)` compiles a Vega expression string against an `ExpressionRuntime`
+  (`{ scale(name), data(name), expr(string), ... }`: how the expression reaches scales and datasets) and returns
+  `(datum, params?, event?) => value`. A malformed expression throws `ExpressionParseError`.
+- `buildScale(compiledScale, context)` builds one scale (`Scale`, a callable with `domain()`, `range()` and, where the type has
+  one, `invert()`) from a `CompiledScale` and a `ScaleContext` (`width`, `height`, `signals`, `dataField(dataName, field)`, ...).
+- `applyTransforms(rows, transforms, context, sourceName?)` runs a list of `CompiledTransform`s over `Row[]` (a `Row` is
+  `Record<string, unknown>`); `sortRows(rows, sort?)` orders rows by a `SortSpec` (`{ field, order }`) and returns them
+  unchanged without one. `context` is a `TransformContext`: the expression `runtime` and the `signals` by name.
+- `datasetsOfScene(scene)` returns the rows each spec dataset ended with in the evaluation that made `scene`
+  (`ReadonlyMap<name, rows | null>`, vega's `view.data(name)`); `null` marks a dataset that never ran, and the map is empty for a scene
+  that did not come from this runtime (a clone, a worker result).
+- Pulses: `rowsEqual(a, b)` is the row equality `diffRows` uses (plain rows by own keys, nested values by their JSON);
+  `transformNeedsFullRederive(types)` says whether a chain of transform types holds a row-expanding or reordering one (`fold`,
+  `flatten`, `pivot`, the layouts...), so a row-wise pulse cannot be applied through it; `isGroupedTransform(type)` is `true` for
+  `aggregate`, `joinaggregate`, `window` and `stack`.
+- Registries, filled by the add-ons: `transformRegistry` (`Map<type, TransformFn>`, the rare transforms of
+  `@aster/core/transforms`), `dataFormatRegistry` (`Map<format, reader>`, `json` built in; csv / tsv / dsv / topojson from
+  `@aster/core/load`), `geoRegistry` (the projection and contour hooks of `@aster/core/geo`, `null` fields until loaded).
+  `requireTransform(type)` returns a registered transform or throws the error that names the import to make
+  (`await import("@aster/core/transforms")`, see `docs/ERRORS.md`).
+
+#### Limit checks
+
+`renderSpec` runs these in a fixed order; call them yourself when you assemble the steps. All throw `AsterLimitError`.
+
+- `checkSpecLimits(spec, limits, input?)` is the pre-flight, before anything is allocated: string lengths, depth, marks, inline rows
+  (including `input.data`).
+- `checkSceneLimits(scene, limits)` checks the generated geometry (items, path and text lengths) before serialization.
+- `checkSvgLength(svg, limits)` checks `maxSvgLength` on the serialized string.
+- `createLimitClock(limits?, now?)` starts the wall-clock budget (`maxTimeMs`, opt-in) and returns `{ started, deadline, check(phase?),
+  remaining() }`; `check` throws once the budget is spent and is a no-op without `maxTimeMs`. `now` defaults to `performance.now`.
+- `withLimits(limits, fn)` runs `fn(meter)` with a `LimitMeter` active, so every layer below reports to one budget. Nested calls with
+  the same `limits` object share the outer meter; without `limits` the function runs unmetered (the built-in ceilings still hold).
+
+#### Typed errors
+
+`AsterUrlError` (`code: 'ASTER_URL_DENIED'`, `url`, `reason`) is thrown when the URL policy refuses a request, before any
+request is made; it is exported from `@aster/core` and from `@aster/core/load`. `docs/ERRORS.md` lists every error class.
+
+#### Accessibility tree
 
 `buildA11yTree(scene, scales, options)` returns positioned, captioned nodes (`A11yNode`) for marks,
 axes, legends, legend entries and titles. A mark with more than `summaryThreshold` items (default 150) collapses to a
@@ -397,92 +443,114 @@ single summary node, and the tree carries a `summary` caption when the scene's m
 `description`, `summaryThreshold`, `isSelected` and `isLegendEntryHidden`. `<Chart>` projects the nodes into
 focusable elements; non-React hosts can do the same. The keyboard contract is in `docs/INTERACTION.md`.
 
-### Interaction addons
+### Add-on entry points
 
-- `@aster/core/hit` — `buildHitIndex(scene)` returns `{ query(x, y), queryMark(x, y), size() }`; `queryMark` returns
-  data-bearing mark items only (guides excluded), `query` returns anything painted. Both give a `HitTarget`
-  (`{ item, marktype }`) or `null`.
-- `@aster/core/signals` — `bindSceneSignals(svg, scene, values, hooks?, { pick?, data?, owner?, containerSize? })`, `stampDatumAttrs`, `setTimerClock`.
-  Binds every `signal.on` entry with vega's event-stream semantics: selector strings (`[mousedown, mouseup] > mousemove`,
-  `@name:click`, `symbol:click`, `window:keydown`, `click[event.shiftKey]{100}`, `mousedown!`), object-form `events`, arrays,
-  `{signal}` sources, `between`, filters, throttle, debounce, `consume` and `force`. `event` is the native event extended with
-  `item`, `vega` and `dataflow`, so `event.deltaY`, `event.shiftKey`, `x()`, `y()`, `item()` and `group()` behave as in vega;
-  `datum` is `event.item.datum`. A handler runs only when its stream matched; a signal's `update` re-runs only when a signal
-  it reads changed. It returns `{ detach(), release(), setSignal(name, value) }`: `detach()` stops delivering events to this
-  binding but leaves timer streams and pending debounces running (a host re-binds after every render and the timers belong
-  to the view); call `release()` when the host is done with the svg, which detaches and stops its timer streams and
-  pending debounces (vega's `view.finalize()`). `setTimerClock(clock | null)` (below) swaps the clock the timer streams run on.
-  - `hooks.onSignal(name, value, all)` — once per signal that changed while an event was processed.
-  - `hooks.onData(name, rows)` — once per dataset that `modify(...)` edited (a Vega-Lite selection's `<name>_store`), with
-    its input rows. The host passes them back as `data[name]` to the next evaluation and as `{ data }` to the next
-    `bindSceneSignals`, so the dataset is an input like any other (`<Chart>` does this itself). The expression functions
-    `vlSelectionTest`, `vlSelectionIdTest`, `vlSelectionResolve`, `vlSelectionTuples`, `modify`, `isTuple`, `panLinear` /
-    `panLog` / `panPow` / `panSymlog`, `zoomLinear` / `zoomLog` / `zoomPow` / `zoomSymlog` are part of the expression
-    language (vega-selections 6.1.4, vega-functions, vega-util); `{scale}` event sources fire when a scale changed
-    between two bindings.
-  - Group scopes: a group mark's `signals` (`SceneGroup.scopeSignals`) are read and written per group item; `onSignal` and
-    `setSignal` name them `<scope id>:<name>` (the id is `scopeSignals.id`), and the store holds them under that key:
-    see [INTERACTION.md](INTERACTION.md#group-scopes).
-  - `hooks.logger` — where bind-time errors (a malformed selector or expression: the handler is skipped) and run-time errors
-    (an expression that throws while an event is handled: that event's delivery stops, earlier updates stand) are reported;
-    default: the console. Nothing escapes the DOM listener.
-  - `hooks.preventDefault` — vega's `view.preventDefault()` (default `false`): whether events of the chart's own surface are
-    prevented when `config.events.defaults` names neither `prevent` nor `allow`. The config decides first (vega's default is
-    `{allow: ['wheel']}`, so every listened view event but `wheel` is prevented); a `consume`d stream always prevents.
-  - `{ pick }` — `(x, y) => HitTarget | null`, e.g. `buildHitIndex(scene).query`: resolves `event.item` (mark type, name, role,
-    datum, enclosing group). Without it, or when it finds nothing, the item is read from the DOM (the `mark-*`/`role-*`
-    classes, and a `data-datum` stamp if `stampDatumAttrs` was called), where mark names are not available. `<Chart>` passes its own hit index.
-  - Lower-level pieces of the same module. `bindSignalEvents(svg, chart, runtime, signalParams, signals, hooks?, options?)` is
-    what `bindSceneSignals` calls once it has read the compiled chart, expression runtime and signal parameters off the scene; use
-    it when you hold those yourself (`options` also takes `originX` / `originY`, the padding the view-space position is offset by,
-    and `scene`). `parseEventSelector(selector)` returns the event types a selector string, event-stream object or array listens to
-    (`parseEventSelector('mousemove, click')` is `['mousemove', 'click']`) and throws on a malformed one.
-    `sceneIntersect(scene, box, options, group)` is vega-scenegraph's `intersect` over a scene (the body of the `intersect()`
-    expression function: `box` is `[[x0, y0], [x1, y1]]`, `options` may hold `marktype` and `markname`); it is exported for the
-    conformance gate and is internal.
-  - The cursor. `sceneHasCursor(scene)` is `true` when any item of the scene has a `cursor` channel, so a host can skip picking on
-    every pointer move when none does (the answer is cached per scene). `createCursorTracker({ pick, user, onCursor, eventConfig? })`
-    is vega-view's cursor logic without any DOM: `move(x, y)` takes the `cursor` of the item `pick(x, y)` finds and
-    `refresh()` re-reads the `cursor` signal; each calls `onCursor(cursor | null)` only when the shown cursor changes (see
-    `resolveCursor` in `@aster/core`). A `config.events.view` rule that blocks `pointermove` stops `move` from looking.
-- `@aster/core/addons` — which add-ons a spec needs, and loading them (the `Chart` shells and hooks do this themselves; use it
-  where you cannot wait inside React). `addonsNeeded(spec)` reads the spec's structure (and parses its expressions) and returns the
-  needed `AddonName`s (`'transforms' | 'geo' | 'load'`); `missingAddons(spec)` is the subset not loaded yet; `loadAddons(names)`
-  imports them (concurrently, each at most once, rejecting with an error that names the add-on); `loadAddonsFor(spec)` (also in
-  `@aster/react`) is the last two in one call. `isAddonLoaded(name)` says whether an add-on's registrations are present however they
-  got there, and `notLoaded(names)` filters a list by it. Constants: `TRANSFORMS_ADDON_TYPES` (every transform type the
-  transforms add-on registers), `LOAD_ADDON_FORMATS` (`csv`, `tsv`, `dsv`, `topojson`) and `ADDON_FUNCTIONS` (expression function name to the
-  add-on that registers it). Test seams: `registeredFunctionNames` lists the expression functions registered beyond the built-ins, and
-  `withdrawFunctions(names)` removes some and returns a function that restores them.
-- `@aster/core/dom` — `patchSceneDom(svg, scene, options?)` makes an existing `<svg>` element match a scene, touching only changed
-  attributes (it throws for a non-`svg` element); `renderSceneToDomElement(scene, document?, options?)` builds the element;
-  `sceneToDomDesc(scene, options?)` is the plain-data description (`DomDesc`: `tag`, `attrs`, `text`, `children`) both are made from;
-  `createChartSession`; `hasDenseSymbolMarks(scene, minItems?)` is `true` when a symbol mark is large enough for `denseMarks`
-  batching (default 512 items). `options` (`DomRenderOptions`) are `denseMarks` and `denseChunkSize` (default 256). Also:
-  `chartSkeleton(spec)` serializes a spec without its top-level datasets' inline values: two specs with the same skeleton compile to the
-  same chart, so a host can tell "same chart, new rows" from "a different chart" (`<Chart>` keeps live state for the first and
-  starts afresh for the second); `translatePathData(d, dx, dy)` shifts every absolute coordinate of an SVG path string by `(dx, dy)`,
-  copying arguments that do not move (relative deltas, arc radii and flags) verbatim.
-- `@aster/core/canvas` — `renderSceneToCanvas(scene, ctx, { dpr, batchSymbols })` paints a scene on a `CanvasLike` (a real 2D context, an
-  OffscreenCanvas context or a recording mock); `batchSymbols` (default `true`) merges long runs of identically painted symbols.
-  For streams: `snapshotCanvasScene(scene)` records what was drawn (`CanvasSceneSnapshot`) and `renderSceneToCanvasAppend(snapshot, nextScene, ctx, options?)`
-  paints only the appended items of the next scene on top of it; it returns `false`, having drawn nothing, when the
-  result would not equal a full repaint (anything but one mark group gained items at its end, a changed guide, a later group the new
-  items could cover), and the caller repaints in full. Path geometry: `parsePathData(d)` parses an SVG path string into absolute-command
-  segments (`PathSeg[]`: `M L H V C S Q T A Z`, relative commands included); `tracePath(sink, segments, tx?, ty?, arcs?)` replays them onto a
-  `PathSink` (the path methods of a 2D context) offset by `(tx, ty)`, with `arcs: 'bezier'` for vega's bezier approximation of an arc;
-  `canonicalPath(segments)` is the normalized text of parsed segments, the form in which canvas and SVG geometry are compared.
-- `@aster/core/load` — `loadSpecData(spec, { baseURL, allow, protocols, timeoutMs, maxBytes, ... })` for URL datasets, with a URL policy (safe defaults, see `docs/LIMITS.md`).
-  `LOAD_DEFAULTS` holds the numeric defaults (`timeoutMs`, `maxBytes`, `maxConcurrent`, `maxRedirects`) and `TRUSTED_LOAD_OPTIONS`
-  is the policy for a host that loads its own specs only (any http, https or data URL, private hosts included): never use it for specs
-  you did not write. `isNonPublicHost(hostname)` is the check behind `allowPrivateNetwork`: `true` for `localhost` and local-only
-  suffixes, loopback, private, link-local and reserved IPv4 addresses and their IPv6 equivalents. `readData(data, format?)` reads
-  data by a Vega `format` spec (`type`, `parse`, ...) the way vega-loader's `read` does, through the registered reader of the type and then
-  `coerceRows`; `coerceRows(rows, parse)` converts the columns that `parse` names (a column type, a `date:<pattern>` /
-  `utc:<pattern>`, or `'auto'` to infer from the first row) and returns copies. `dataFormatRegistry` and `AsterUrlError` are
-  re-exported here.
-- `@aster/core/geo`, `@aster/core/transforms` — importing them registers the projections / rare transforms; load them
-  before rendering a spec that needs them (otherwise rendering throws an error naming the import, see `docs/ERRORS.md`).
+#### `@aster/core/hit`
+
+`buildHitIndex(scene)` returns `{ query(x, y), queryMark(x, y), size() }`; `queryMark` returns
+data-bearing mark items only (guides excluded), `query` returns anything painted. Both give a `HitTarget`
+(`{ item, marktype }`) or `null`.
+
+#### `@aster/core/signals`
+
+`bindSceneSignals(svg, scene, values, hooks?, { pick?, data?, owner?, containerSize? })`, `stampDatumAttrs`, `setTimerClock`.
+Binds every `signal.on` entry with vega's event-stream semantics: selector strings (`[mousedown, mouseup] > mousemove`,
+`@name:click`, `symbol:click`, `window:keydown`, `click[event.shiftKey]{100}`, `mousedown!`), object-form `events`, arrays,
+`{signal}` sources, `between`, filters, throttle, debounce, `consume` and `force`. `event` is the native event extended with
+`item`, `vega` and `dataflow`, so `event.deltaY`, `event.shiftKey`, `x()`, `y()`, `item()` and `group()` behave as in vega;
+`datum` is `event.item.datum`. A handler runs only when its stream matched; a signal's `update` re-runs only when a signal
+it reads changed. It returns `{ detach(), release(), setSignal(name, value) }`: `detach()` stops delivering events to this
+binding but leaves timer streams and pending debounces running (a host re-binds after every render and the timers belong
+to the view); call `release()` when the host is done with the svg, which detaches and stops its timer streams and
+pending debounces (vega's `view.finalize()`). `setTimerClock(clock | null)` ([Maps and animation](#maps-and-animation)) swaps the clock the timer streams run on.
+- `hooks.onSignal(name, value, all)` — once per signal that changed while an event was processed.
+- `hooks.onData(name, rows)` — once per dataset that `modify(...)` edited (a Vega-Lite selection's `<name>_store`), with
+  its input rows. The host passes them back as `data[name]` to the next evaluation and as `{ data }` to the next
+  `bindSceneSignals`, so the dataset is an input like any other (`<Chart>` does this itself). The expression functions
+  `vlSelectionTest`, `vlSelectionIdTest`, `vlSelectionResolve`, `vlSelectionTuples`, `modify`, `isTuple`, `panLinear` /
+  `panLog` / `panPow` / `panSymlog`, `zoomLinear` / `zoomLog` / `zoomPow` / `zoomSymlog` are part of the expression
+  language (vega-selections 6.1.4, vega-functions, vega-util); `{scale}` event sources fire when a scale changed
+  between two bindings.
+- Group scopes: a group mark's `signals` (`SceneGroup.scopeSignals`) are read and written per group item; `onSignal` and
+  `setSignal` name them `<scope id>:<name>` (the id is `scopeSignals.id`), and the store holds them under that key:
+  see [INTERACTION.md](INTERACTION.md#group-scopes).
+- `hooks.logger` — where bind-time errors (a malformed selector or expression: the handler is skipped) and run-time errors
+  (an expression that throws while an event is handled: that event's delivery stops, earlier updates stand) are reported;
+  default: the console. Nothing escapes the DOM listener.
+- `hooks.preventDefault` — vega's `view.preventDefault()` (default `false`): whether events of the chart's own surface are
+  prevented when `config.events.defaults` names neither `prevent` nor `allow`. The config decides first (vega's default is
+  `{allow: ['wheel']}`, so every listened view event but `wheel` is prevented); a `consume`d stream always prevents.
+- `{ pick }` — `(x, y) => HitTarget | null`, e.g. `buildHitIndex(scene).query`: resolves `event.item` (mark type, name, role,
+  datum, enclosing group). Without it, or when it finds nothing, the item is read from the DOM (the `mark-*`/`role-*`
+  classes, and a `data-datum` stamp if `stampDatumAttrs` was called), where mark names are not available. `<Chart>` passes its own hit index.
+- Lower-level pieces of the same module. `bindSignalEvents(svg, chart, runtime, signalParams, signals, hooks?, options?)` is
+  what `bindSceneSignals` calls once it has read the compiled chart, expression runtime and signal parameters off the scene; use
+  it when you hold those yourself (`options` also takes `originX` / `originY`, the padding the view-space position is offset by,
+  and `scene`). `parseEventSelector(selector)` returns the event types a selector string, event-stream object or array listens to
+  (`parseEventSelector('mousemove, click')` is `['mousemove', 'click']`) and throws on a malformed one.
+  `sceneIntersect(scene, box, options, group)` is vega-scenegraph's `intersect` over a scene (the body of the `intersect()`
+  expression function: `box` is `[[x0, y0], [x1, y1]]`, `options` may hold `marktype` and `markname`); it is exported for the
+  conformance gate and is internal.
+- The cursor. `sceneHasCursor(scene)` is `true` when any item of the scene has a `cursor` channel, so a host can skip picking on
+  every pointer move when none does (the answer is cached per scene). `createCursorTracker({ pick, user, onCursor, eventConfig? })`
+  is vega-view's cursor logic without any DOM: `move(x, y)` takes the `cursor` of the item `pick(x, y)` finds and
+  `refresh()` re-reads the `cursor` signal; each calls `onCursor(cursor | null)` only when the shown cursor changes (see
+  `resolveCursor` in `@aster/core`). A `config.events.view` rule that blocks `pointermove` stops `move` from looking.
+
+#### `@aster/core/addons`
+
+which add-ons a spec needs, and loading them (the `Chart` shells and hooks do this themselves; use it
+where you cannot wait inside React). `addonsNeeded(spec)` reads the spec's structure (and parses its expressions) and returns the
+needed `AddonName`s (`'transforms' | 'geo' | 'load'`); `missingAddons(spec)` is the subset not loaded yet; `loadAddons(names)`
+imports them (concurrently, each at most once, rejecting with an error that names the add-on); `loadAddonsFor(spec)` (also in
+`@aster/react`) is the last two in one call. `isAddonLoaded(name)` says whether an add-on's registrations are present however they
+got there, and `notLoaded(names)` filters a list by it. Constants: `TRANSFORMS_ADDON_TYPES` (every transform type the
+transforms add-on registers), `LOAD_ADDON_FORMATS` (`csv`, `tsv`, `dsv`, `topojson`) and `ADDON_FUNCTIONS` (expression function name to the
+add-on that registers it). Test seams: `registeredFunctionNames` lists the expression functions registered beyond the built-ins, and
+`withdrawFunctions(names)` removes some and returns a function that restores them.
+
+#### `@aster/core/dom`
+
+`patchSceneDom(svg, scene, options?)` makes an existing `<svg>` element match a scene, touching only changed
+attributes (it throws for a non-`svg` element); `renderSceneToDomElement(scene, document?, options?)` builds the element;
+`sceneToDomDesc(scene, options?)` is the plain-data description (`DomDesc`: `tag`, `attrs`, `text`, `children`) both are made from;
+`createChartSession`; `hasDenseSymbolMarks(scene, minItems?)` is `true` when a symbol mark is large enough for `denseMarks`
+batching (default 512 items). `options` (`DomRenderOptions`) are `denseMarks` and `denseChunkSize` (default 256). Also:
+`chartSkeleton(spec)` serializes a spec without its top-level datasets' inline values: two specs with the same skeleton compile to the
+same chart, so a host can tell "same chart, new rows" from "a different chart" (`<Chart>` keeps live state for the first and
+starts afresh for the second); `translatePathData(d, dx, dy)` shifts every absolute coordinate of an SVG path string by `(dx, dy)`,
+copying arguments that do not move (relative deltas, arc radii and flags) verbatim.
+
+#### `@aster/core/canvas`
+
+`renderSceneToCanvas(scene, ctx, { dpr, batchSymbols })` paints a scene on a `CanvasLike` (a real 2D context, an
+OffscreenCanvas context or a recording mock); `batchSymbols` (default `true`) merges long runs of identically painted symbols.
+For streams: `snapshotCanvasScene(scene)` records what was drawn (`CanvasSceneSnapshot`) and `renderSceneToCanvasAppend(snapshot, nextScene, ctx, options?)`
+paints only the appended items of the next scene on top of it; it returns `false`, having drawn nothing, when the
+result would not equal a full repaint (anything but one mark group gained items at its end, a changed guide, a later group the new
+items could cover), and the caller repaints in full. Path geometry: `parsePathData(d)` parses an SVG path string into absolute-command
+segments (`PathSeg[]`: `M L H V C S Q T A Z`, relative commands included); `tracePath(sink, segments, tx?, ty?, arcs?)` replays them onto a
+`PathSink` (the path methods of a 2D context) offset by `(tx, ty)`, with `arcs: 'bezier'` for vega's bezier approximation of an arc;
+`canonicalPath(segments)` is the normalized text of parsed segments, the form in which canvas and SVG geometry are compared.
+
+#### `@aster/core/load`
+
+`loadSpecData(spec, { baseURL, allow, protocols, timeoutMs, maxBytes, ... })` for URL datasets, with a URL policy (safe defaults, see `docs/LIMITS.md`).
+`LOAD_DEFAULTS` holds the numeric defaults (`timeoutMs`, `maxBytes`, `maxConcurrent`, `maxRedirects`) and `TRUSTED_LOAD_OPTIONS`
+is the policy for a host that loads its own specs only (any http, https or data URL, private hosts included): never use it for specs
+you did not write. `isNonPublicHost(hostname)` is the check behind `allowPrivateNetwork`: `true` for `localhost` and local-only
+suffixes, loopback, private, link-local and reserved IPv4 addresses and their IPv6 equivalents. `readData(data, format?)` reads
+data by a Vega `format` spec (`type`, `parse`, ...) the way vega-loader's `read` does, through the registered reader of the type and then
+`coerceRows`; `coerceRows(rows, parse)` converts the columns that `parse` names (a column type, a `date:<pattern>` /
+`utc:<pattern>`, or `'auto'` to infer from the first row) and returns copies. `dataFormatRegistry` and `AsterUrlError` are
+re-exported here.
+
+#### `@aster/core/geo` and `@aster/core/transforms`
+
+Importing them registers the projections / rare transforms; load them
+before rendering a spec that needs them (otherwise rendering throws an error naming the import, see `docs/ERRORS.md`).
+
+#### Example: hit-testing a scene
 
 ```ts
 import { renderSpec, type SceneRoot, type VgSpec } from '@aster/core'
@@ -503,7 +571,9 @@ console.log(renderSpec(spec).startsWith('<svg'))
 
 ## `@aster/react`
 
-### `<Chart>`
+### Components and hooks
+
+#### `<Chart>`
 
 ```tsx
 import * as React from 'react'
@@ -620,7 +690,7 @@ point selection and the a11y tree resolve through the scene.
 Pan, zoom and brushing are driven through scale `domainRaw`; the gestures, the keyboard contract and the rule that
 picks the scales are in `docs/INTERACTION.md`.
 
-### `<SvgChart>` and the `interaction` capability
+#### `<SvgChart>` and the `interaction` capability
 
 `<SvgChart>` is the light chart for size-sensitive apps: the same engine and the same DOM as `<Chart renderer="svg">`
 (it is a second shell over the one implementation, see [ARCHITECTURE.md](ARCHITECTURE.md#chartcore-and-the-two-shells)),
@@ -703,40 +773,7 @@ Sizes (gzip, eager, measured 2026-11-06 with `pnpm --filter @aster/benchmarks ru
 current figures). Use `<Chart>` unless that 23 kB
 matters; it is the zero-setup default and its behaviour does not depend on this component.
 
-### Registry and session re-exports
-
-`@aster/react` also exports `registerVegaLiteCompiler(compile)` and `hasVegaLiteCompiler()`, the registry that `@aster/react/vl` fills as a
-side effect (see [`@aster/vl`](#astervl)): a host that bundles `@aster/vl` itself registers `(spec) => vegaSpec` once, and `hasVegaLiteCompiler()`
-says whether one is registered. `createChartSession` is `@aster/core/dom`'s, re-exported for a host that renders through the
-session ([Sessions and per-datum updates](#sessions-and-per-datum-updates)).
-
-### Pan, zoom and selection helpers
-
-The pure functions behind `<Chart>`'s selection, pan and zoom are exported from `@aster/react`, for a host that draws its own
-controls or keeps the state outside the component. A `ViewDomain` is `{ x?: [number, number], y?: [number, number] }`, the visible
-domain of the horizontal and vertical continuous scales; a `SelectionInterval` has the same shape; `PixelPoint` is `{ x, y }`.
-`names` is the `PositionalScales` (`{ x?: scaleName, y?: scaleName }`) that says which scales are the horizontal and vertical ones
-(default: scales named `x` and `y`). The `info` argument is the `ChartInfo` of the evaluated scene (`getChartInfo`, or
-`ChartHandle.getChartInfo()`).
-
-- `domainOf(scale)` reads a continuous scale's `[min, max]` domain, or `null` when the scale has no invertible numeric domain.
-- `continuousAxes(info, names?)` lists which of `'x'` and `'y'` have such a domain, that is, which axes can pan and zoom.
-- `zoomDomain(domain, anchor, factor, minSpan?)` scales a domain around an anchor value (`factor > 1` zooms in) and keeps its
-  orientation; `panDomain(domain, fraction)` shifts it by a fraction of its span (positive: toward higher values).
-- `cursorZoom(current, base, axis, anchorValue, factor)` zooms one axis of a view around a cursor value: zooming in stops at 1/1000 of the base
-  span, and zooming out past the base domain returns the base domain.
-- `keyboardView(key, current, base, { fast?, axis?, anchor?, pan?, zoom? })` is the keyboard contract (arrows pan, `+` / `-` zoom by 1.5x,
-  `0` / `Home` reset). It returns `{ handled, view? }`, where `view: null` means reset; `pan: false` / `zoom: false` disable those keys.
-- `normalizeView(view, base)` validates a controlled view against the chart's base domains and returns `null` for "not zoomed" (empty,
-  non-finite, or equal to the base).
-- `viewToDomainRaw(view, names?)` turns a view into the `RuntimeInput.domainRaw` override, keyed by the positional scale names.
-- `dragToDataInterval(start, end, info, names?)` converts a container-local pixel drag into a `SelectionInterval` (an axis whose scale cannot
-  be inverted, like a band scale, is left out); `selectionToPixels(selection, info, names?)` is the reverse, `{ x, y, width, height }` in pixels
-  of the SVG.
-- `selectValueToInterval(value)` and `selectValueToDatum(value)` read the interval or the point datum out of a `SelectValue`
-  (`{ type: 'interval', interval }` or `{ type: 'point', datum }`), `null` for the other kind.
-
-### Hooks
+#### Hooks
 
 ```tsx
 import * as React from 'react'
@@ -774,7 +811,7 @@ of options (a repeat call returns the same promise, as Suspense needs) and impor
 datasets never bundles it. A failed load is dropped from the cache so the next render retries. `isPromiseLike(value)` is the
 type guard for a `then`-able (the check `<Chart>` uses to tell an async `spec` from a spec).
 
-### Streaming components
+#### Streaming components
 
 ```tsx
 import * as React from 'react'
@@ -824,7 +861,7 @@ The ref (`ChartStreamHandle`) has `push`, `flush`, `pending`, `pulse`, `stats`, 
 - **Errors.** A failed flush renders `<div role="alert">` with the message and reports once through `onStreamError`;
   the failed batches are discarded so the next flush recovers (`failure.discarded` says how many).
 
-### Workers
+#### Workers
 
 `useChartWorker` offloads compile/evaluate/render to a Worker and returns `{ svg, scene, error, pending }`;
 `useChartWorkerStream` and `<ChartWorkerStream>` run a stream in a Worker. Without a Worker (no `worker`, and
@@ -894,7 +931,7 @@ export function Offloaded(): React.ReactElement {
   a policy with functions when a Worker is in use; `resolveWorkerTextMetrics(textMetrics)` and `resolveWorkerUrlPolicy(policy)` are the
   worker-side lookups of a registered name (they throw for an unknown one).
 
-### SSR + hydration
+#### SSR + hydration
 
 ```tsx
 import { renderToString } from 'react-dom/server'
@@ -920,13 +957,50 @@ console.log(html.includes('<svg'), svg.startsWith('<svg'))
 apply `limits` like the client. A `<Chart>` on the server renders its markup in the HTML; the canvas renderer renders
 an empty `<canvas>` there.
 
-### Accessibility keyboard contract
+### Reference
+
+#### Registry and session re-exports
+
+`@aster/react` also exports `registerVegaLiteCompiler(compile)` and `hasVegaLiteCompiler()`, the registry that `@aster/react/vl` fills as a
+side effect (see [`@aster/vl`](#astervl)): a host that bundles `@aster/vl` itself registers `(spec) => vegaSpec` once, and `hasVegaLiteCompiler()`
+says whether one is registered. `createChartSession` is `@aster/core/dom`'s, re-exported for a host that renders through the
+session ([Sessions and per-datum updates](#sessions-and-per-datum-updates)).
+
+#### Pan, zoom and selection helpers
+
+The pure functions behind `<Chart>`'s selection, pan and zoom are exported from `@aster/react`, for a host that draws its own
+controls or keeps the state outside the component. A `ViewDomain` is `{ x?: [number, number], y?: [number, number] }`, the visible
+domain of the horizontal and vertical continuous scales; a `SelectionInterval` has the same shape; `PixelPoint` is `{ x, y }`.
+`names` is the `PositionalScales` (`{ x?: scaleName, y?: scaleName }`) that says which scales are the horizontal and vertical ones
+(default: scales named `x` and `y`). The `info` argument is the `ChartInfo` of the evaluated scene (`getChartInfo`, or
+`ChartHandle.getChartInfo()`).
+
+- `domainOf(scale)` reads a continuous scale's `[min, max]` domain, or `null` when the scale has no invertible numeric domain.
+- `continuousAxes(info, names?)` lists which of `'x'` and `'y'` have such a domain, that is, which axes can pan and zoom.
+- `zoomDomain(domain, anchor, factor, minSpan?)` scales a domain around an anchor value (`factor > 1` zooms in) and keeps its
+  orientation; `panDomain(domain, fraction)` shifts it by a fraction of its span (positive: toward higher values).
+- `cursorZoom(current, base, axis, anchorValue, factor)` zooms one axis of a view around a cursor value: zooming in stops at 1/1000 of the base
+  span, and zooming out past the base domain returns the base domain.
+- `keyboardView(key, current, base, { fast?, axis?, anchor?, pan?, zoom? })` is the keyboard contract (arrows pan, `+` / `-` zoom by 1.5x,
+  `0` / `Home` reset). It returns `{ handled, view? }`, where `view: null` means reset; `pan: false` / `zoom: false` disable those keys.
+- `normalizeView(view, base)` validates a controlled view against the chart's base domains and returns `null` for "not zoomed" (empty,
+  non-finite, or equal to the base).
+- `viewToDomainRaw(view, names?)` turns a view into the `RuntimeInput.domainRaw` override, keyed by the positional scale names.
+- `dragToDataInterval(start, end, info, names?)` converts a container-local pixel drag into a `SelectionInterval` (an axis whose scale cannot
+  be inverted, like a band scale, is left out); `selectionToPixels(selection, info, names?)` is the reverse, `{ x, y, width, height }` in pixels
+  of the SVG.
+- `selectValueToInterval(value)` and `selectValueToDatum(value)` read the interval or the point datum out of a `SelectValue`
+  (`{ type: 'interval', interval }` or `{ type: 'point', datum }`), `null` for the other kind.
+
+#### Accessibility keyboard contract
 
 A chart is one Tab stop. Without pan or zoom the accessible tree is a roving-tabindex group (exactly one node is the stop);
 with pan or zoom the container is the stop and `PageDown` / `PageUp` on it enter the tree. The keys, per node kind, are listed in
 `docs/INTERACTION.md#accessibility`.
 
 ## `@aster/vl`
+
+### Compile a Vega-Lite spec
 
 ```ts
 import { compile } from '@aster/vl'
@@ -949,6 +1023,8 @@ anything outside the supported subset (see `docs/ERRORS.md`).
 `compileUnit(spec)` compiles a spec that is a single unit (`mark` and `encoding`) to Vega; it validates its input and does not mutate it. For a
 unit spec it returns the same Vega spec as `compile`. It does not handle `layer`, `facet`, `concat` or `repeat`
 specs (it fails with a `TypeError`, not a `VLCompileError`): use `compile` for anything that is not known to be one unit.
+
+### Maps and animation
 
 Vega-Lite maps (`geoshape`, `projection`, `longitude` / `latitude`, `{type: "geojson"}`) and animation (the `time`
 channel with a `timer` point selection and `{filter: {param}}`) compile to what vega-lite 6.4.3 emits; a geoshape without a GeoJSON `shape` field inside a facet and
