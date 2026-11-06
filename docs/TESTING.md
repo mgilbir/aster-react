@@ -1,5 +1,34 @@
 # Testing
 
+Aster is tested against the real Vega and Vega-Lite packages, which are the oracle (a dev dependency of `packages/conformance`, never of the shipped packages). This file says what runs where, how to run and write tests, what the results are, and why the oracles are built the way they are.
+
+## What runs where
+
+| When | What runs | Defined in |
+|---|---|---|
+| Before you push | `pnpm check`: every gate, including the ones that need Chromium (`pnpm check -- --skip browser` leaves them out) | `scripts/gates.mjs` |
+| Every pull request and push to `main` | the `ci` job runs `pnpm check` and nothing else; the `unit` job runs the unit tests on Node 20, 22 and the newest major (Node 20 runs only the engine-sensitive differentials and the oracle vectors) | `.github/workflows/ci.yml` |
+| Nightly, 03:17 UTC | `pnpm check`, then what is too slow for a PR: the official galleries, Firefox and WebKit canvas parity, the large incremental and browser benchmarks, the Vega and Vega-Lite schema sweeps and 3000 fuzz seeds; a last step fails the run on any failed or skipped step | `.github/workflows/nightly.yml`, `scripts/nightly-summary.mjs` |
+| A release tag | check the tag against the package versions, require the commit to be on `main`, `pnpm check`, pack, then publish; the nightly-only checks do not run here, so look at the tagged commit's nightly first ([RELEASE.md](RELEASE.md)) | `.github/workflows/release.yml` |
+| By hand | `pnpm probe`, `pnpm fuzz`, the sweeps with other flags, the benchmarks | the sections below |
+
+```mermaid
+flowchart TB
+  PR["pull request / push to main"] --> CI["ci.yml, job ci: pnpm check (every gate in scripts/gates.mjs, Chromium)"]
+  PR --> UNIT["ci.yml, job unit: Node 22 and newest run the full vitest suite, Node 20 runs the differentials and oracle vectors only"]
+  CRON["nightly 03:17 UTC"] --> NCHK["pnpm check"]
+  CRON --> NX["nightly-only: sweep-vega, sweep-vl, conformance:gallery, fuzz 3000 seeds, Firefox and WebKit canvas, browser and incremental benchmarks"]
+  NCHK & NX --> SUM["nightly-summary.mjs: fails on any failed or skipped step"]
+  TAG["tag vX.Y.Z"] --> V["release.yml verify: check-release-tag, ancestor of origin/main, pnpm check, pnpm pack"]
+  V --> PUB["publish (environment npm-release, id-token): npm publish core, vl, react with --provenance --ignore-scripts"]
+  NX -. "not run by the release workflow: check the tagged commit's nightly" .-> TAG
+```
+
+*Verification pipeline: which workflow runs which checks.*
+
+Read on for the gates, then how to write and run tests (corpus cases, reproducers, sweeps, fuzzing, time zones), then the reference results, and last the explanation of the oracles: oracle vectors, live differentials, the canonicalizer and the canvas comparison.
+
+
 ## Gates
 
 The PR gate list is defined once, in [`scripts/gates.mjs`](../scripts/gates.mjs).
@@ -21,6 +50,78 @@ the real-Vega SVG diff over the corpus; `conformance-vl` compiles the Vega-Lite 
 with `@aster/vl`, diffs it against the Vega-Lite oracle and renders the Vega that
 `@aster/vl` emits through real vega (an error or a warning from vega fails the entry);
 `verify-publish` packs, installs and imports the tarballs (see [RELEASE.md](RELEASE.md)).
+
+## Writing a new test
+
+- **Core**: a focused Vitest file beside the module (`packages/core/src/*.test.ts`);
+  prefer oracle-vector replay or canonical SVG diff for rendering semantics.
+- **React**: use `@vitest-environment jsdom`, `createRoot`/`act`, and patch
+  `getBoundingClientRect` for pointer-coordinate tests. SSR tests use
+  `renderToString` and (for the strict no-replacement guarantee) `hydrateChart`.
+- **Conformance**: add a minimal spec to `packages/conformance/corpus/*.vg.json` or
+  `*.vl.json`. Most entries set explicit numeric `width`/`height` and `autosize: 'none'` so layout is deterministic, but nothing
+  requires it; a case that needs another autosize or a container size may set it.
+
+## Reproducers
+
+Keep failures small and deterministic: no `Math.random` in specs, no clock-dependent
+expressions, and no unseeded bootstrap aggregates. Pin dates through data values or
+`datetime(...)` expressions.
+
+## Sweeps
+
+```bash
+pnpm sweep-vl -- --floor N --min-ok N --max-node-error N --vega-check       # Vega-Lite property sweep
+pnpm sweep-vega -- --floor N --min-ok N --max-node-error N                  # Vega schema sweep
+pnpm sweep-signals -- --floor N --min-ok N --max-node-error N --max-retained N   # signals written into a running chart
+```
+
+A sweep generates one small chart per property/value of the schema (`--filter substr` runs a subset). It only
+passes when cases actually ran, the generated count is at least `--floor`, the number of equal renders is at least
+`--min-ok`, nothing differs and Aster crashes on nothing. `--max-node-error` is a ceiling on cases the oracle itself
+crashes on (an Aster crash is never reclassified), `--max-retained` a ceiling on `retained` cases. `--vega-check`
+also renders the Vega that `@aster/vl` emits through real vega. The signals sweep is a PR gate (`sweep-signals` in
+`scripts/gates.mjs`); the other two run nightly with the values in `.github/workflows/nightly.yml`. Raise the floors
+when the schemas grow, never lower them. The Vega sweep's three oracle-side node-errors are vega-interpreter's
+area `bundle` interpolator (two cases) and a negative trail radius.
+
+`retained` in the signals sweep means: the engine equals vega's fresh render of the same signals, and vega's own
+second render (after the signals were written into the running view) does not. See
+[ARCHITECTURE.md](ARCHITECTURE.md#deviations-from-vega).
+
+## Browser and parity gates
+
+The browser gate (`pnpm conformance:browser`) runs the same oracle protocol in
+Chromium with live text metrics. `pnpm conformance:batch` rasterizes the normal and
+`denseMarks` SVG DOMs of the same scene and diffs the pixels, so the batched path
+(which intentionally stops mirroring Vega's per-item DOM) cannot drift. `pnpm a11y-parity` checks every corpus guide caption
+against Vega's own `aria-label`; `pnpm transform-matrix` covers bin/window/stack/
+joinaggregate/impute/sequence/identifier/fold/flatten/pivot/lookup combinations. The scene differential compares the resolved scenes
+before serialization: scale domains/ranges/bandwidth per scope (including nested scopes),
+group/item multisets, and paint order wherever painted extents overlap.
+
+## Differential fuzzing
+
+```bash
+pnpm fuzz                         # 200 deterministic seeds from 0
+pnpm fuzz -- --seeds 3000 --start 200
+```
+
+`pnpm fuzz:replay` (a PR gate, see `scripts/gates.mjs`) replays every committed reproducer.
+
+A failing seed is written as a standalone spec under
+`packages/conformance/fuzz-repro/`; replay it, fix the engine, then promote it into
+`corpus/` and delete the reproducer. The nightly workflow runs the conformance corpus,
+both schema sweeps, 3000 fuzz seeds and the reproducer replay, plus Firefox and WebKit canvas parity.
+
+## Time zones
+
+The repo's default run pins `TZ=UTC`, which hides zone bugs (a UTC scale formatted in local
+time passes there). The `tz-matrix` gate (`pnpm test:tz`) re-runs the zone-aware unit tests
+(`*.tz.test.ts`), the live scale-spec differential (every case also runs in each zone inside the test) and
+`packages/conformance/corpus-tz` (raw Vega specs rendered by vega and Aster in the same zone)
+under `America/New_York`, `Asia/Kolkata` and `Australia/Lord_Howe` (a half-hour daylight-saving offset the other two cannot catch; `ZONES` in `scripts/test-tz.mjs`; the corpus also runs in UTC). Add a case to `corpus-tz` when a fix depends on
+the zone.
 
 ## Reference results
 
@@ -72,10 +173,6 @@ Guards, all in `pnpm test`: `Chart.matrix.test.ts` (no test renders `<Chart>` ou
 must compile and must fail on exact lines, the props/handle parity assertions, and the documented examples) and
 `Chart.corpus-parity.test.tsx` (the DOM of `<Chart>`, `<SvgChart>` and `<SvgChart interaction>` equal over every corpus
 spec: server markup, client mount, hydration).
-
-`retained` in the signals sweep means: the engine equals vega's fresh render of the same signals, and vega's own
-second render (after the signals were written into the running view) does not. See
-[ARCHITECTURE.md](ARCHITECTURE.md#deviations-from-vega).
 
 ## Oracle vectors
 
@@ -133,6 +230,28 @@ and `interpolate-cases.mjs`. Why live: `Math.pow/exp/log` and the trig functions
 versions, so an exactly-compared recording only holds on the Node that made it; running the oracle in the same engine
 needs no tolerance. Shared helpers: `differential-util.mts`.
 
+## Transform differential (live)
+
+`packages/conformance/scripts/transform-cases.mjs` lists the transform-level cases (transform params + input rows ->
+output rows). `differential-transforms.test.mts` runs every case through the pinned real Vega and through
+`applyTransforms` in the same process and compares strictly (NaN, -0, `undefined` keys, Dates, row order, cycles,
+thrown errors), then re-runs every case over deep-frozen inputs (no transform may mutate its input). `timeunit` cases
+carry the non-UTC zone they run under. Nothing is recorded: `Math.pow/exp/log` differ in the last bit between V8
+versions, so numbers recorded under one Node cannot gate another; running the oracle in the same engine needs no
+tolerance. CI's `unit` job runs `pnpm test` on Node 22 and the current major, and on Node 20 only the engine-sensitive, jsdom-free suites (the
+`packages/conformance/scripts/differential-*` tests and the oracle vectors), because the jsdom dev dependency does not load on Node 20; the `ci` job (`pnpm check`) runs on Node 22.
+
+Bootstrap (ci0/ci1) and `sample` use vega-statistics' seeded LCG (seed 42) on both sides.
+Deliberate deviations (documented in the code): seeded randomness instead of `Math.random`, `bin` without `extent`
+derives it from the data, lookup tables are prototype-less, and vega crashes that are TypeErrors are not replicated.
+
+## Engine facts the same-process oracle depends on
+
+Two engine facts the same-process oracle depends on.
+
+1. `Array.prototype.sort` with a comparator over data that is not a strict weak order (a column mixing strings and numbers) returns whatever comparison sequence the engine makes, and that is the same on Node 20 and 22 (V8 11, 12) and differs on Node 26 (V8 14) and Node 27 (V8 15); Aster sorts data through `sortData` (`packages/core/src/util.ts`), which stays on the builtin, so it makes the engine's own comparisons like Vega does. V8 15's Maglev also inlines a hot `x.sort(cmp)` call site with a different order from the builtin, so `sortData` keeps the call off that path and the vitest workers pin the inlining off for the oracle (`scripts/vitest-engine.setup.mjs`); `packages/conformance/src/sort-engine.test.ts` turns it back on and shows the order does not move.
+2. The default `pnpm test` never sees the fetched gallery cache: tests that need it are `*.gallery.test.ts`, run by `pnpm conformance:gallery` (`vitest.gallery.config.mjs`); `scripts/gallery-isolation.test.mjs` guards the split.
+
 ## Guides, scopes and aria against real Vega
 
 Raw Vega specs are run through `vega.View` and through Aster in the same process, every document compared with the
@@ -159,71 +278,15 @@ strict canonicalizer (`packages/conformance/src/*-vs-vega.test.ts`, part of `pnp
 Where the oracle itself cannot answer (`vega.parse` refuses a config null that makes it write `undefined` into an
 expression, or the document has a non-finite transform) the case is counted against a ceiling, not compared.
 
-## Time zones
+## The SVG canonicalizer
 
-The repo's default run pins `TZ=UTC`, which hides zone bugs (a UTC scale formatted in local
-time passes there). The `tz-matrix` gate (`pnpm test:tz`) re-runs the zone-aware unit tests
-(`*.tz.test.ts`), the live scale-spec differential (every case also runs in each zone inside the test) and
-`packages/conformance/corpus-tz` (raw Vega specs rendered by vega and Aster in the same zone)
-under `America/New_York`, `Asia/Kolkata` and `Australia/Lord_Howe` (a half-hour daylight-saving offset the other two cannot catch; `ZONES` in `scripts/test-tz.mjs`; the corpus also runs in UTC). Add a case to `corpus-tz` when a fix depends on
-the zone.
+The SVG oracle's canonicalizer (`packages/conformance/src/normalize.ts`) is strict: it records every
+paint, geometry and text attribute, the full transform and the paint order, and (as the
+structure, `N-structure`) every group's class, role, `aria-roledescription`, `aria-label`, `aria-hidden` and nesting, and only normalizes
+representation differences it can justify (each is documented in the file).
+`normalize.test.ts` plants one difference at a time and requires each to be reported.
 
-## Sweeps
-
-```bash
-pnpm sweep-vl -- --floor N --min-ok N --max-node-error N --vega-check       # Vega-Lite property sweep
-pnpm sweep-vega -- --floor N --min-ok N --max-node-error N                  # Vega schema sweep
-pnpm sweep-signals -- --floor N --min-ok N --max-node-error N --max-retained N   # signals written into a running chart
-```
-
-A sweep generates one small chart per property/value of the schema (`--filter substr` runs a subset). It only
-passes when cases actually ran, the generated count is at least `--floor`, the number of equal renders is at least
-`--min-ok`, nothing differs and Aster crashes on nothing. `--max-node-error` is a ceiling on cases the oracle itself
-crashes on (an Aster crash is never reclassified), `--max-retained` a ceiling on `retained` cases. `--vega-check`
-also renders the Vega that `@aster/vl` emits through real vega. The signals sweep is a PR gate (`sweep-signals` in
-`scripts/gates.mjs`); the other two run nightly with the values in `.github/workflows/nightly.yml`. Raise the floors
-when the schemas grow, never lower them. The Vega sweep's three oracle-side node-errors are vega-interpreter's
-area `bundle` interpolator (two cases) and a negative trail radius.
-
-The browser gate (`pnpm conformance:browser`) runs the same oracle protocol in
-Chromium with live text metrics. `pnpm conformance:batch` rasterizes the normal and
-`denseMarks` SVG DOMs of the same scene and diffs the pixels, so the batched path
-(which intentionally stops mirroring Vega's per-item DOM) cannot drift. `pnpm a11y-parity` checks every corpus guide caption
-against Vega's own `aria-label`; `pnpm transform-matrix` covers bin/window/stack/
-joinaggregate/impute/sequence/identifier/fold/flatten/pivot/lookup combinations. The scene differential compares the resolved scenes
-before serialization: scale domains/ranges/bandwidth per scope (including nested scopes),
-group/item multisets, and paint order wherever painted extents overlap.
-
-## Differential fuzzing
-
-```bash
-pnpm fuzz                         # 200 deterministic seeds from 0
-pnpm fuzz -- --seeds 3000 --start 200
-```
-
-`pnpm fuzz:replay` (a PR gate, see `scripts/gates.mjs`) replays every committed reproducer.
-
-A failing seed is written as a standalone spec under
-`packages/conformance/fuzz-repro/`; replay it, fix the engine, then promote it into
-`corpus/` and delete the reproducer. The nightly workflow runs the conformance corpus,
-both schema sweeps, 3000 fuzz seeds and the reproducer replay, plus Firefox and WebKit canvas parity.
-
-## Writing a new test
-
-- **Core**: a focused Vitest file beside the module (`packages/core/src/*.test.ts`);
-  prefer oracle-vector replay or canonical SVG diff for rendering semantics.
-- **React**: use `@vitest-environment jsdom`, `createRoot`/`act`, and patch
-  `getBoundingClientRect` for pointer-coordinate tests. SSR tests use
-  `renderToString` and (for the strict no-replacement guarantee) `hydrateChart`.
-- **Conformance**: add a minimal spec to `packages/conformance/corpus/*.vg.json` or
-  `*.vl.json`. Most entries set explicit numeric `width`/`height` and `autosize: 'none'` so layout is deterministic, but nothing
-  requires it; a case that needs another autosize or a container size may set it.
-
-## Reproducers
-
-Keep failures small and deterministic: no `Math.random` in specs, no clock-dependent
-expressions, and no unseeded bootstrap aggregates. Pin dates through data values or
-`datetime(...)` expressions.
+## Canvas pixel parity
 
 `pnpm conformance:canvas` renders the whole corpus plus custom-font/multi-line fixtures
 through both canvas backends in headless Chromium (also `--browser=firefox|webkit`)
@@ -234,33 +297,3 @@ in `scripts/browser-canvas-parity.mts`. It gates canvas paint order, path replay
 metrics; the call-by-call draw rules are asserted in `packages/core/src/canvas-draw.test.ts` and
 the recorded/jsdom canvas-vs-SVG differential stays in `packages/core/src/canvas.test.ts`.
 A second phase renders random append sequences to two real canvases (incremental append painting vs a full repaint of a freshly built scene) and requires every pixel to match after every step (`packages/conformance/scripts/browser-canvas-append.mts`, also runnable alone).
-
-The SVG oracle's canonicalizer (`packages/conformance/src/normalize.ts`) is strict: it records every
-paint, geometry and text attribute, the full transform and the paint order, and (as the
-structure, `N-structure`) every group's class, role, `aria-roledescription`, `aria-label`, `aria-hidden` and nesting, and only normalizes
-representation differences it can justify (each is documented in the file).
-`normalize.test.ts` plants one difference at a time and requires each to be reported.
-
-## Transform differential (live)
-
-`packages/conformance/scripts/transform-cases.mjs` lists the transform-level cases (transform params + input rows ->
-output rows). `differential-transforms.test.mts` runs every case through the pinned real Vega and through
-`applyTransforms` in the same process and compares strictly (NaN, -0, `undefined` keys, Dates, row order, cycles,
-thrown errors), then re-runs every case over deep-frozen inputs (no transform may mutate its input). `timeunit` cases
-carry the non-UTC zone they run under. Nothing is recorded: `Math.pow/exp/log` differ in the last bit between V8
-versions, so numbers recorded under one Node cannot gate another; running the oracle in the same engine needs no
-tolerance. CI's `unit` job runs `pnpm test` on Node 22 and the current major, and on Node 20 only the engine-sensitive, jsdom-free suites (the
-`packages/conformance/scripts/differential-*` tests and the oracle vectors), because the jsdom dev dependency does not load on Node 20; the `ci` job (`pnpm check`) runs on Node 22.
-
-Two more engine facts the same-process oracle depends on. (1) `Array.prototype.sort` with a comparator over data that is
-not a strict weak order (a column mixing strings and numbers) returns whatever comparison sequence the engine makes, and
-that is the same on Node 20 and 22 (V8 11, 12) and differs on Node 26 (V8 14) and Node 27 (V8 15); Aster sorts data through `sortData`
-(`packages/core/src/util.ts`), which stays on the builtin, so it makes the engine's own comparisons like Vega does. V8 15's
-Maglev also inlines a hot `x.sort(cmp)` call site with a different order from the builtin, so `sortData` keeps the call
-off that path and the vitest workers pin the inlining off for the oracle (`scripts/vitest-engine.setup.mjs`);
-`packages/conformance/src/sort-engine.test.ts` turns it back on and shows the order does not move. (2) The default
-`pnpm test` never sees the fetched gallery cache: tests that need it are `*.gallery.test.ts`, run by
-`pnpm conformance:gallery` (`vitest.gallery.config.mjs`); `scripts/gallery-isolation.test.mjs` guards the split.
-Bootstrap (ci0/ci1) and `sample` use vega-statistics' seeded LCG (seed 42) on both sides.
-Deliberate deviations (documented in the code): seeded randomness instead of `Math.random`, `bin` without `extent`
-derives it from the data, lookup tables are prototype-less, and vega crashes that are TypeErrors are not replicated.
