@@ -13,7 +13,9 @@ pnpm check
 
 The gate list lives in one place, [`scripts/gates.mjs`](scripts/gates.mjs), and
 CI runs exactly `pnpm check`, so a green local run is a green CI run. Do not copy
-the list anywhere else (a test fails if a workflow, this file or docs/TESTING.md does). `pnpm check -- --list`
+the list anywhere else: `scripts/gates.test.mjs` fails if `ci.yml` runs anything beyond `pnpm check`, the toolchain setup and the Node-matrix unit tests, or if a
+code block of this file or docs/TESTING.md has a line that is a gate's command; `scripts/docs-single-source.test.mjs` fails if a
+paragraph of any other doc (outside docs/TESTING.md and docs/RUNBOOK.md, which tabulate results) names four or more gates. `pnpm check -- --list`
 prints the gates with the reason for each. The browser gates need Chromium
 (`pnpm --filter @aster/conformance exec playwright install --with-deps chromium`);
 `pnpm check -- --skip browser` skips them locally, but that is not the CI list.

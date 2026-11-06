@@ -8,7 +8,7 @@ Aster is tested against the real Vega and Vega-Lite packages, which are the orac
 |---|---|---|
 | Before you push | `pnpm check`: every gate, including the ones that need Chromium (`pnpm check -- --skip browser` leaves them out) | `scripts/gates.mjs` |
 | Every pull request and push to `main` | the `ci` job runs `pnpm check` and nothing else; the `unit` job runs the unit tests on Node 20, 22 and the newest major (Node 20 runs only the engine-sensitive differentials and the oracle vectors) | `.github/workflows/ci.yml` |
-| Nightly, 03:17 UTC | `pnpm check`, then what is too slow for a PR: the official galleries ([how they are compared](../packages/conformance/gallery/README.md), [why each non-passing spec does not pass](../packages/conformance/gallery/TRIAGE.md)), Firefox and WebKit canvas parity, the large incremental and browser benchmarks, the Vega and Vega-Lite schema sweeps and 3000 fuzz seeds; a last step fails the run on any failed or skipped step | `.github/workflows/nightly.yml`, `scripts/nightly-summary.mjs` |
+| Nightly, 03:17 UTC | `pnpm check`, then what is too slow for a PR: the official galleries ([how they are compared](../packages/conformance/gallery/README.md), [the current result and how to triage a failure](../packages/conformance/gallery/TRIAGE.md)), Firefox and WebKit canvas parity, the large incremental and browser benchmarks, the Vega and Vega-Lite schema sweeps and 3000 fuzz seeds; a last step fails the run on any failed or skipped step | `.github/workflows/nightly.yml`, `scripts/nightly-summary.mjs` |
 | A release tag | check the tag against the package versions, require the commit to be on `main`, `pnpm check`, pack, then publish; the nightly-only checks do not run here, so look at the tagged commit's nightly first ([RELEASE.md](RELEASE.md)) | `.github/workflows/release.yml` |
 | By hand | `pnpm probe`, `pnpm fuzz`, the sweeps with other flags, the benchmarks | the sections below |
 
@@ -43,7 +43,10 @@ pnpm check -- --skip browser   # no Chromium installed (not the CI list)
 
 CI runs `pnpm check` and nothing else; nightly runs it and then the extras below. When a gate is red,
 [RUNBOOK.md](RUNBOOK.md) says how to reproduce one failing spec and what each environment variable does.
-`scripts/gates.test.mjs` fails if a workflow, CONTRIBUTING.md or this file (in its code blocks) grows its own copy.
+Two guards keep the list in one place. `scripts/gates.test.mjs` fails if `ci.yml` runs anything but `pnpm check` and the toolchain
+setup, or if a code block of CONTRIBUTING.md or of this file has a line that is a gate's command. `scripts/docs-single-source.test.mjs`
+fails if a paragraph of any other doc, outside this file and RUNBOOK.md, names four or more gates, and if a doc names a `pnpm <script>`
+that does not exist. Neither finds a list reworded: they find one copied.
 
 What the notable gates establish: the dependency check parses every import form
 and also scans the built `dist` (see `scripts/check-deps.mjs`); `conformance` is
