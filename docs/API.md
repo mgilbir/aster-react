@@ -849,6 +849,8 @@ component renders the scene itself) and `onStreamError(error, failure?)`.
 batches, so scales, marks and guides recompute inside the stream; `limits`, `textMetrics` and `urlPolicy` configure
 the stream's evaluation; rendering, selection, tooltip, a11y and event props go to the underlying `<Chart>`.
 The ref (`ChartStreamHandle`) has `push`, `flush`, `pending`, `pulse`, `stats`, `scene` and `close`.
+The hook form is `useChartStream(spec, options)` (and `useChartWorkerStream` for a worker), described under
+[Streaming and pulses](#streaming-and-pulses).
 
 - **SSR.** `<ChartStream>` primes its first scene synchronously, so a server render contains the full chart
   markup (the same markup `<Chart>` emits). `<ChartWorkerStream>` has no worker on the server and renders an empty
