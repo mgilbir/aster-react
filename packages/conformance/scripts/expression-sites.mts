@@ -7,7 +7,7 @@
  * reasons, and good ones. The two engines must give the same outcome at every site for every text.
  */
 import * as vega from 'vega'
-import { compileChart } from '@aster/core'
+import { compileChart } from '@aster-charts/core'
 
 export type Spec = Record<string, unknown>
 

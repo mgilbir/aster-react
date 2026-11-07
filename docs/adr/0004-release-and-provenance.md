@@ -11,7 +11,7 @@ the oracle (Vega) must never become a runtime dependency.
 
 ## Decision
 
-1. Publish `@aster/core`, `@aster/react`, `@aster/vl`; keep conformance, benchmarks and
+1. Publish `@aster-charts/core`, `@aster-charts/react`, `@aster-charts/vl`; keep conformance, benchmarks and
    the demo private.
 2. Version the three public packages in lockstep and publish from a tag-triggered
    GitHub workflow with npm provenance (`id-token: write`, `--provenance`).

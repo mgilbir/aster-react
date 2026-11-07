@@ -1,8 +1,8 @@
 /**
- * Which opt-in add-ons a spec needs, and loading them on demand (`@aster/core/addons`).
+ * Which opt-in add-ons a spec needs, and loading them on demand (`@aster-charts/core/addons`).
  *
- * The Vega features that cost bundle size live in add-ons that a plain chart never imports: `@aster/core/transforms` (the
- * rare-layout transforms), `@aster/core/geo` (projections, `contour`) and `@aster/core/load` (the csv / tsv / dsv / topojson
+ * The Vega features that cost bundle size live in add-ons that a plain chart never imports: `@aster-charts/core/transforms` (the
+ * rare-layout transforms), `@aster-charts/core/geo` (projections, `contour`) and `@aster-charts/core/load` (the csv / tsv / dsv / topojson
  * readers). A host that knows what its specs need imports them statically; a host that renders specs it does not know
  * asks this module, which reads the spec (no evaluation, no regular expression) and imports exactly what it uses:
  *
@@ -11,7 +11,7 @@
  *
  * An add-on the app already imported statically is recognised by what it registered (`isAddonLoaded`), so it is never
  * imported a second time; a bundler that sees both the static and the dynamic import puts the add-on in one module.
- * Nothing here is imported by `@aster/core`'s main entry: an app that does not use this module does not pay for it.
+ * Nothing here is imported by `@aster-charts/core`'s main entry: an app that does not use this module does not pay for it.
  */
 import { dataFormatRegistry, geoRegistry, transformRegistry } from './registry.js'
 import { HARD_MAX_SPEC_DEPTH } from './limits.js'
@@ -23,7 +23,7 @@ import type { VgSpec } from './types.js'
 
 export type AddonName = 'transforms' | 'geo' | 'load'
 
-/** Every transform the `@aster/core/transforms` add-on registers (and `requireTransform` asks it for). */
+/** Every transform the `@aster-charts/core/transforms` add-on registers (and `requireTransform` asks it for). */
 export const TRANSFORMS_ADDON_TYPES: readonly string[] = [
   'kde', 'density', 'quantile', 'regression', 'loess', 'pack', 'partition', 'treemap', 'wordcloud', 'voronoi',
   'pie', 'cross', 'countpattern', 'dotbin', 'geopoint', 'geojson', 'linkpath',
@@ -35,7 +35,7 @@ export { ADDON_FUNCTIONS }
 export const registeredFunctionNames = registeredExpressionFunctionNames
 /** Take expression functions out of the registry and get a function that restores them (a test seam). */
 export const withdrawFunctions = withdrawExpressionFunctions
-/** The data formats the `@aster/core/load` add-on registers readers for. */
+/** The data formats the `@aster-charts/core/load` add-on registers readers for. */
 export const LOAD_ADDON_FORMATS: readonly string[] = ['csv', 'tsv', 'dsv', 'topojson']
 
 const TRANSFORM_TYPES = new Set(TRANSFORMS_ADDON_TYPES)
@@ -172,7 +172,7 @@ function loadAddon(name: AddonName): Promise<void> {
       (cause: unknown) => {
         loading.delete(name) // a failed import is not remembered: the next call tries again
         const reason = cause instanceof Error ? cause.message : String(cause)
-        throw new Error(`[aster] could not load the "${name}" add-on (@aster/core/${name}): ${reason}`, { cause })
+        throw new Error(`[aster] could not load the "${name}" add-on (@aster-charts/core/${name}): ${reason}`, { cause })
       },
     )
     loading.set(name, p)

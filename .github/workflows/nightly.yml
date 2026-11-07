@@ -33,9 +33,9 @@ jobs:
       - id: playwright
         name: Install Playwright browsers
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
-        run: pnpm --filter @aster/conformance exec playwright install --with-deps chromium firefox webkit
+        run: pnpm --filter @aster-charts/conformance exec playwright install --with-deps chromium firefox webkit
 
-      # The checks below that read built packages (the conformance scripts import @aster/core from dist) need this;
+      # The checks below that read built packages (the conformance scripts import @aster-charts/core from dist) need this;
       # `pnpm check` builds for itself.
       - id: build
         name: Build
@@ -118,7 +118,7 @@ jobs:
       - id: fuzz
         name: Differential fuzzing (deterministic seeds)
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
-        run: pnpm --filter @aster/conformance run fuzz -- --seeds 3000
+        run: pnpm --filter @aster-charts/conformance run fuzz -- --seeds 3000
 
       - name: Upload reproducers on failure
         if: ${{ !cancelled() && steps.fuzz.outcome == 'failure' }}

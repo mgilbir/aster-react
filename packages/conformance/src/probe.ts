@@ -11,10 +11,10 @@ import { readdirSync, readFileSync, existsSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import * as vl from 'vega-lite'
-import '@aster/core/geo' // registers the geo projections and contours for geo/projection/contour specs
-import '@aster/core/transforms' // registers kde/regression/loess/pack/treemap/wordcloud/voronoi
-import { renderSpec } from '@aster/core'
-import { loadSpecData, TRUSTED_LOAD_OPTIONS } from '@aster/core/load'
+import '@aster-charts/core/geo' // registers the geo projections and contours for geo/projection/contour specs
+import '@aster-charts/core/transforms' // registers kde/regression/loess/pack/treemap/wordcloud/voronoi
+import { renderSpec } from '@aster-charts/core'
+import { loadSpecData, TRUSTED_LOAD_OPTIONS } from '@aster-charts/core/load'
 import { renderWithVega } from './render-vega.js'
 import { canonicalizeSvg, diffCanonical } from './normalize.js'
 import { parseProbeArgs, probeVerdict } from './probe-verdict.js'

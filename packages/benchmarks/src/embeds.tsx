@@ -1,7 +1,7 @@
 /**
  * The three embedding approaches under benchmark, behind one React interface.
  *
- * - aster:      @aster/react <Chart> (our library)
+ * - aster:      @aster-charts/react <Chart> (our library)
  * - reactVega:  <VegaEmbed> from react-vega v8 (community-standard React wrapper;
  *               re-embeds whenever the spec deep-changes)
  * - embedHook:  vega-embed inside useEffect following the official tutorials, incl.
@@ -13,7 +13,7 @@
  * ResizeObserver + view API glue for the Vega paths).
  */
 import * as React from 'react'
-import { Chart as AsterChart } from '@aster/react'
+import { Chart as AsterChart } from '@aster-charts/react'
 import { VegaEmbed } from 'react-vega'
 import embed from 'vega-embed'
 import { changeset } from 'vega'

@@ -2,9 +2,9 @@ import type {
   renderSceneToCanvas,
   renderSceneToCanvasAppend,
   snapshotCanvasScene,
-} from '@aster/core/canvas'
-import type { buildHitIndex } from '@aster/core/hit'
-import type { bindSceneSignals, createCursorTracker, sceneHasCursor } from '@aster/core/signals'
+} from '@aster-charts/core/canvas'
+import type { buildHitIndex } from '@aster-charts/core/hit'
+import type { bindSceneSignals, createCursorTracker, sceneHasCursor } from '@aster-charts/core/signals'
 
 /**
  * Capabilities are plain values handed to `ChartCore`; there is no registry and no side-effect
@@ -12,7 +12,7 @@ import type { bindSceneSignals, createCursorTracker, sceneHasCursor } from '@ast
  * imported, so `<SvgChart>` without `interaction` ships none of it.
  */
 
-/** The canvas renderer (`@aster/core/canvas`). Only `<Chart>` supplies it. */
+/** The canvas renderer (`@aster-charts/core/canvas`). Only `<Chart>` supplies it. */
 export interface CanvasCapability {
   readonly renderSceneToCanvas: typeof renderSceneToCanvas
   readonly renderSceneToCanvasAppend: typeof renderSceneToCanvasAppend
@@ -20,10 +20,10 @@ export interface CanvasCapability {
 }
 
 /**
- * Hit testing (`@aster/core/hit`) and the signal event loop (`@aster/core/signals`): tooltips,
+ * Hit testing (`@aster-charts/core/hit`) and the signal event loop (`@aster-charts/core/signals`): tooltips,
  * point selection, `signal.on` event streams, and the item cursor (an item's `cursor` channel
  * shown while the pointer is over it).
- * Import the value from `@aster/react/interaction`.
+ * Import the value from `@aster-charts/react/interaction`.
  */
 export interface InteractionCapability {
   readonly buildHitIndex: typeof buildHitIndex

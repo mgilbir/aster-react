@@ -4,7 +4,7 @@
  * `direction`, `bounds` and `center`, over vega's defaults (offset 18, horizontal, left and right vertical).
  */
 import { describe, it, expect } from 'vitest'
-import { renderSpec } from '@aster/core'
+import { renderSpec } from '@aster-charts/core'
 import { renderWithVegaChecked } from '../src/render-vega.js'
 import { canonicalizeSvg, diffCanonical } from '../src/normalize.js'
 

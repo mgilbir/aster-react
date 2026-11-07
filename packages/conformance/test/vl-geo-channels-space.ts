@@ -7,7 +7,7 @@
  * `longitude2` / `latitude2` on a point, a circle, a square, a line or a trail only when `y` is pre-binned: it reads `y` as the
  * position every end but x2 ends).
  *
- * Every case is in the space whatever vega-lite does with it (vl-geo-channels.test.ts says which ones @aster/vl refuses, and why).
+ * Every case is in the space whatever vega-lite does with it (vl-geo-channels.test.ts says which ones @aster-charts/vl refuses, and why).
  */
 type Obj = Record<string, unknown>
 type Case = [string, Obj]
@@ -99,7 +99,7 @@ const PLAIN: Array<[string, (f: string, n: number) => Obj]> = [
 ]
 
 /**
- * Every definition. (Not here: a field read through a nested or an escaped path, and an `argmax` aggregate. @aster/vl keeps the
+ * Every definition. (Not here: a field read through a nested or an escaped path, and an `argmax` aggregate. @aster-charts/vl keeps the
  * flattened copy of such a field, and the field an argmax reads, under names of its own on every channel - an x as much as a
  * longitude - so the rows the mark reads differ from vega-lite's by those names alone; everything else compared equal, for 1140 such
  * cases of this space, when it was written.)

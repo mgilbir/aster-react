@@ -20,11 +20,11 @@ import * as vl from 'vega-lite'
 import * as React from 'react'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
-import { compileChart, evaluateChart } from '@aster/core'
-import { buildHitIndex } from '@aster/core/hit'
-import { Chart } from '@aster/react'
-import { SvgChart } from '@aster/react/lite'
-import { interaction } from '@aster/react/interaction'
+import { compileChart, evaluateChart } from '@aster-charts/core'
+import { buildHitIndex } from '@aster-charts/core/hit'
+import { Chart } from '@aster-charts/react'
+import { SvgChart } from '@aster-charts/react/lite'
+import { interaction } from '@aster-charts/react/interaction'
 
 type Spec = Record<string, unknown>
 interface VItem { x?: number; y?: number; datum?: unknown; cursor?: string; _svg?: Element; mark: { marktype: string; interactive?: boolean; name?: string; role?: string }; items?: VItem[] }

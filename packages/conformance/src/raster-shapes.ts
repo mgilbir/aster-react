@@ -1,5 +1,5 @@
 /**
- * Drawings used to hold the engine's coverage-only 2D context (`@aster/core` raster.ts) to a browser canvas: each is a list of
+ * Drawings used to hold the engine's coverage-only 2D context (`@aster-charts/core` raster.ts) to a browser canvas: each is a list of
  * 2D-context commands, replayed by `scripts/raster-fixtures.mts` on a real canvas (Chromium) to record the alpha channel it
  * leaves, and by `raster-vs-chromium.test.ts` on the engine's context.
  */

@@ -2,18 +2,18 @@
  * Static path of the gallery gate: real vega vs Aster's `renderSpec`, canonical SVG compared exactly.
  *
  *   vega spec:  oracle = vega.parse + View (renderer none) .toSVG()      ours = loadSpecData + renderSpec
- *   VL spec:    oracle = vega-lite.compile -> vega                         ours = @aster/vl compile -> loadSpecData + renderSpec
+ *   VL spec:    oracle = vega-lite.compile -> vega                         ours = @aster-charts/vl compile -> loadSpecData + renderSpec
  *
  * Data comes from the pinned vega-datasets through one offline `fetch` handed to BOTH engines.
  * A spec whose ORACLE is not a function of its inputs (random(), timers, now()) or whose oracle fails is
  * `unverifiable`, never `pass`: the reason is part of the outcome and is printed.
  */
 import * as vl from 'vega-lite'
-import '@aster/core/geo'
-import '@aster/core/transforms'
-import { renderSpec } from '@aster/core'
-import { loadSpecData, TRUSTED_LOAD_OPTIONS } from '@aster/core/load'
-import { compile as compileOurs } from '@aster/vl'
+import '@aster-charts/core/geo'
+import '@aster-charts/core/transforms'
+import { renderSpec } from '@aster-charts/core'
+import { loadSpecData, TRUSTED_LOAD_OPTIONS } from '@aster-charts/core/load'
+import { compile as compileOurs } from '@aster-charts/vl'
 import { canonicalizeSvg, diffCanonical } from '../normalize.js'
 import { summarizeDiffs } from './diffs.js'
 import { logged, settle, stray, vegaSvg } from './oracle.js'

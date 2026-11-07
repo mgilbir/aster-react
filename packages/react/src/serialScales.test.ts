@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { compileChart, evaluateChart } from '@aster/core'
+import { compileChart, evaluateChart } from '@aster-charts/core'
 import { SCALE_INFO_KEY, scalesFromSerialized, serializeScales } from './serialScales.js'
 
 const specFor = (type: string, extra: Record<string, unknown> = {}, domain: unknown = [1, 100]): never => ({

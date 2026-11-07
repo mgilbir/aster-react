@@ -1,7 +1,7 @@
 /**
  * Type coercion, predicates, accessors and ordering.
  *
- * A faithful port of the `vega-util` surface `@aster/core` uses, plus the
+ * A faithful port of the `vega-util` surface `@aster-charts/core` uses, plus the
  * `field`/`getter`/`splitAccessPath` access-path helpers the expression
  * functions need (`pluck` upstream is `field` + `isArray`).
  *

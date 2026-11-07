@@ -20,7 +20,7 @@ import {
   type StreamOptions,
   type StreamStats,
   type VgSpec,
-} from '@aster/core'
+} from '@aster-charts/core'
 import { normalizeChartSpec, useStableSpec } from './spec.js'
 import { useAddons } from './addons.js'
 

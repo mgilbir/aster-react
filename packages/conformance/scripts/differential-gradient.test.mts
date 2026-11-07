@@ -12,7 +12,7 @@
  */
 import { describe, expect, it } from 'vitest'
 import * as vega from 'vega'
-import { renderSpec } from '@aster/core'
+import { renderSpec } from '@aster-charts/core'
 import { canonicalizeSvg, diffCanonical } from '../src/normalize.js'
 import { gradientSpec, makeRng } from './gradient-gen.mts'
 import { scaled } from './differential-gen.mts'

@@ -1,7 +1,7 @@
 // @vitest-environment node
 /**
- * @aster/vl output through REAL vega. Aster's own runtime is lenient, so the
- * Vega that @aster/vl emits is checked where the semantics are defined: for every
+ * @aster-charts/vl output through REAL vega. Aster's own runtime is lenient, so the
+ * Vega that @aster-charts/vl emits is checked where the semantics are defined: for every
  * Vega-Lite spec, real vega must (1) raise no error/warning beyond what vega-lite's own
  * output raises and (2) render our Vega to the same canonical SVG as vega-lite's.
  *
@@ -13,7 +13,7 @@ import { describe, it, expect } from 'vitest'
 import { readdirSync, readFileSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 import * as vl from 'vega-lite'
-import { compile } from '@aster/vl'
+import { compile } from '@aster-charts/vl'
 import { renderWithVega, renderWithVegaChecked } from '../src/render-vega.js'
 import { canonicalizeSvg, diffCanonical } from '../src/normalize.js'
 
@@ -73,7 +73,7 @@ async function check(spec: Record<string, any>): Promise<void> {
   expect(diffs.slice(0, 2)).toEqual([])
 }
 
-describe('@aster/vl output renders identically to vega-lite in real vega', () => {
+describe('@aster-charts/vl output renders identically to vega-lite in real vega', () => {
   it('found the corpus', () => {
     expect(specs.length).toBeGreaterThan(150)
   })

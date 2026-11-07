@@ -48,9 +48,9 @@ export { renderSceneToSvg } from './render.js'
 export { consoleLogger, type Logger } from './logger.js'
 export { ExpressionParseError, registerExpressionFunction } from './expression.js'
 export { SpecParseError } from './parse-error.js'
-// The canvas renderer ships as an opt-in addon (`@aster/core/canvas`): hosts
+// The canvas renderer ships as an opt-in addon (`@aster-charts/core/canvas`): hosts
 // that only need SVG never bundle it.
-// The incremental DOM patcher ships as an opt-in addon (`@aster/core/dom`);
+// The incremental DOM patcher ships as an opt-in addon (`@aster-charts/core/dom`);
 // string-mode hosts never need it. To keep the DOM path working without
 // touching the addon entry, the re-exports live there.
 export { type DomDesc } from './dom.js'
@@ -85,14 +85,14 @@ export {
   type DataPulse, type DatasetPulse, type PulseGraph, type PulseNode, type PulsePropagation, type RowDiff,
 } from './pulse.js'
 export { geoRegistry, transformRegistry, dataFormatRegistry, requireTransform, type GeoRegistry, type ContourFeature, type TransformFn, type DataFormatReader } from './registry.js'
-// The event-driven signal loop (`@aster/core/signals`: bindSceneSignals etc.)
+// The event-driven signal loop (`@aster-charts/core/signals`: bindSceneSignals etc.)
 // ships as an opt-in addon like the DOM patcher; hosts using signal.on streams
 // import it explicitly.
-// Geo projections (`@aster/core/geo`), the rare-layout and statistics transforms
-// (`@aster/core/transforms`: kde, quantile, regression, loess, the hierarchy
+// Geo projections (`@aster-charts/core/geo`), the rare-layout and statistics transforms
+// (`@aster-charts/core/transforms`: kde, quantile, regression, loess, the hierarchy
 // layouts, wordcloud, voronoi, force, label and others; the list is
 // `TRANSFORMS_ADDON_TYPES` in addons.ts) and URL/text-format data loading
-// (`@aster/core/load`: loadSpecData, csv/tsv/dsv/topojson) are optional
+// (`@aster-charts/core/load`: loadSpecData, csv/tsv/dsv/topojson) are optional
 // addons so a plain bar/line/scatter chart never bundles them. Load an addon
 // before rendering a spec that needs it.
 

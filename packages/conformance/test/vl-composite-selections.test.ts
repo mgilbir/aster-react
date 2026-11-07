@@ -8,7 +8,7 @@
 import { describe, it, expect } from 'vitest'
 import * as vl from 'vega-lite'
 import * as vega from 'vega'
-import { compile } from '@aster/vl'
+import { compile } from '@aster-charts/vl'
 import { compare } from './vl-composite-compare.js'
 
 const DATA = { values: Array.from({ length: 30 }, (_, i) => ({ c: ['A', 'B', 'C'][i % 3], g: i % 2 ? 'p' : 'q', x: i % 6, v: (i * 7) % 13 + 1, w: (i * 3) % 11 + 2 })) }

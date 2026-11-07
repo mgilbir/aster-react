@@ -42,7 +42,7 @@ const BOX_ORIENTS: Array<[string, Record<string, unknown>, Record<string, unknow
   ['both quantitative, no orient', { x: q('x'), y: q('v') }, {}],
   ['quantitative x with a nominal y, orient vertical', { x: q('v'), y: n('c') }, { orient: 'vertical' }],
 ]
-group('@aster/vl == vega-lite: boxplot, extent x orientation', (add) => {
+group('@aster-charts/vl == vega-lite: boxplot, extent x orientation', (add) => {
   for (const [en, extent] of BOX_EXTENTS) {
     for (const [on, encoding, md] of BOX_ORIENTS) {
       add(`${on}, ${en}`, { data: DATA, mark: { type: 'boxplot', ...(extent !== undefined ? { extent } : {}), ...md }, encoding })
@@ -82,7 +82,7 @@ const BOX_ENCODINGS: Array<[string, Record<string, unknown>]> = [
   ['size', { x: n('c'), y: q('v'), size: { value: 9 } }],
   ['colour and size', { x: n('c'), y: q('v'), color: n('g'), size: { value: 9 } }],
 ]
-group('@aster/vl == vega-lite: boxplot, every part and mark property', (add) => {
+group('@aster-charts/vl == vega-lite: boxplot, every part and mark property', (add) => {
   for (const [pn, p] of BOX_PARTS) {
     for (const [en, encoding] of BOX_ENCODINGS) {
       add(`${pn}, ${en}`, { data: DATA, ...p, encoding })
@@ -114,7 +114,7 @@ const BOX_TOOLTIPS: Case[] = [
   ['an aggregate size', { size: q('w', { aggregate: 'mean' }) }],
   ['a time unit tooltip', { tooltip: tm('t', { timeUnit: 'year' }) }],
 ]
-group('@aster/vl == vega-lite: boxplot tooltips and groupings', (add) => {
+group('@aster-charts/vl == vega-lite: boxplot tooltips and groupings', (add) => {
   for (const [tn, extra] of BOX_TOOLTIPS) {
     for (const [en, extent] of [['default', undefined], ['min-max', 'min-max']] as const) {
       add(`${tn}, ${en}`, { data: DATA, mark: { type: 'boxplot', ...(extent ? { extent } : {}) }, encoding: { x: n('c'), y: q('v'), ...extra } })
@@ -122,7 +122,7 @@ group('@aster/vl == vega-lite: boxplot tooltips and groupings', (add) => {
   }
 })
 
-group('@aster/vl == vega-lite: boxplot in a layer, a facet, with axis and scale options', (add) => {
+group('@aster-charts/vl == vega-lite: boxplot in a layer, a facet, with axis and scale options', (add) => {
   const CASES: Case[] = [
     ['titled continuous axis', { data: DATA, mark: 'boxplot', encoding: { x: n('c'), y: q('v', { title: 'Value' }) } }],
     ['axis options on the continuous channel', { data: DATA, mark: 'boxplot', encoding: { x: n('c'), y: q('v', { axis: { title: 'V!', grid: false } }) } }],
@@ -168,7 +168,7 @@ const ERROR_ORIENTS: Array<[string, Record<string, unknown>, Record<string, unkn
   ['ordinal x', { x: { field: 'k', type: 'ordinal' }, y: q('v') }, {}],
   ['y with a mean aggregate', { x: n('c'), y: q('v', { aggregate: 'mean' }) }, {}],
 ]
-group('@aster/vl == vega-lite: errorbar and errorband, extent x orientation', (add) => {
+group('@aster-charts/vl == vega-lite: errorbar and errorband, extent x orientation', (add) => {
   for (const kind of KINDS) {
     for (const extent of EXTENTS) {
       for (const [on, encoding, md] of ERROR_ORIENTS) {
@@ -190,7 +190,7 @@ group('@aster/vl == vega-lite: errorbar and errorband, extent x orientation', (a
   }
 })
 
-group('@aster/vl == vega-lite: errorbar and errorband over aggregated input', (add) => {
+group('@aster-charts/vl == vega-lite: errorbar and errorband over aggregated input', (add) => {
   const FORMS: Array<[string, Record<string, unknown>, Record<string, unknown>]> = [
     ['y and y2', { x: n('c'), y: q('lo'), y2: { field: 'hi' } }, {}],
     ['x and x2', { y: n('c'), x: q('lo'), x2: { field: 'hi' } }, {}],
@@ -219,7 +219,7 @@ group('@aster/vl == vega-lite: errorbar and errorband over aggregated input', (a
   }
 })
 
-group('@aster/vl == vega-lite: errorbar and errorband, parts, options, tooltips and compositions', (add) => {
+group('@aster-charts/vl == vega-lite: errorbar and errorband, parts, options, tooltips and compositions', (add) => {
   const ENC = { x: n('c'), y: q('v') }
   const BAR: Case[] = [
     ['ticks on', { mark: { type: 'errorbar', ticks: true }, encoding: ENC }],

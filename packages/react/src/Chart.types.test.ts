@@ -79,9 +79,9 @@ describe('the documented <SvgChart> examples compile', () => {
     ['docs/readme-lite.tsx', join(PKG, 'README.md')],
   ]
   const paths = {
-    '@aster/react/lite': ['src/lite.ts'],
-    '@aster/react/interaction': ['src/interaction-capability.ts'],
-    '@aster/react': ['src/index.ts'],
+    '@aster-charts/react/lite': ['src/lite.ts'],
+    '@aster-charts/react/interaction': ['src/interaction-capability.ts'],
+    '@aster-charts/react': ['src/index.ts'],
   }
   it.each(examples)('%s is in %s verbatim', (fixture, doc) => {
     const code = readFileSync(join(PKG, 'type-fixtures', fixture), 'utf8')

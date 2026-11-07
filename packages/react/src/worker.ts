@@ -27,8 +27,8 @@ import {
   createLimitClock, evaluateChart, renderSceneToSvg, withLimits,
   type ChartStream, type DataPulse, type ImageUrlPolicy, type SceneRoot, type SpecLimits, type StreamBatch,
   type StreamOptions, type StreamPolicy, type StreamStats, type TextMetricsProvider, type VgSpec,
-} from '@aster/core'
-import { loadAddons, missingAddons, type AddonName } from '@aster/core/addons'
+} from '@aster-charts/core'
+import { loadAddons, missingAddons, type AddonName } from '@aster-charts/core/addons'
 import { normalizeChartSpec, useStableContent, useStableSpec } from './spec.js'
 import { SCALE_INFO_KEY, serializeScales } from './serialScales.js'
 

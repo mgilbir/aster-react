@@ -10,9 +10,9 @@
  */
 import { describe, expect, it } from 'vitest'
 import * as vega from 'vega'
-import '@aster/core/geo'
-import '@aster/core/transforms'
-import { chartInfoFromScene, compileChart, evaluateChart, getChartInfo } from '@aster/core'
+import '@aster-charts/core/geo'
+import '@aster-charts/core/transforms'
+import { chartInfoFromScene, compileChart, evaluateChart, getChartInfo } from '@aster-charts/core'
 
 type Spec = Record<string, unknown>
 

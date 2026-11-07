@@ -5,14 +5,14 @@ Status: Accepted (records a decision already in force)
 
 ## Context
 
-The Vega features that cost bundle size live in opt-in add-ons that the `@aster/core` barrel does
-not reach: `@aster/core/transforms`, `/geo` and `/load`. A host that knows its specs imports the
+The Vega features that cost bundle size live in opt-in add-ons that the `@aster-charts/core` barrel does
+not reach: `@aster-charts/core/transforms`, `/geo` and `/load`. A host that knows its specs imports the
 add-ons it needs. A host that renders specs it does not know would otherwise get an error telling
 it what to import, and the engine itself is synchronous, so it cannot wait for a module.
 
 ## Decision
 
-1. `@aster/core/addons` reads a spec's structure (no evaluation) and says which add-ons it needs
+1. `@aster-charts/core/addons` reads a spec's structure (no evaluation) and says which add-ons it needs
    (`addonsNeeded`); `loadAddons` imports exactly those, each at most once. An add-on the app
    already imported is recognised by what it registered and not imported again.
 2. In React the wait is a Suspense wait (`React.use`), the same one an async `spec` and
@@ -26,7 +26,7 @@ it what to import, and the engine itself is synchronous, so it cannot wait for a
    wait and keep the actionable error; `loadAddonsFor(spec)` is the awaitable step for them.
 5. Data is never fetched on its own. A `url` dataset is resolved by `loadSpecData` or
    `useSpecData` under the host's URL policy; only the readers for its format load by themselves.
-6. The Vega-Lite compiler stays an explicit import (`@aster/react/vl`).
+6. The Vega-Lite compiler stays an explicit import (`@aster-charts/react/vl`).
 
 ## Consequences
 

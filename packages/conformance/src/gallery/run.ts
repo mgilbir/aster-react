@@ -2,7 +2,7 @@
  * `pnpm conformance:gallery` - the OFFICIAL Vega and Vega-Lite example galleries (vendored in ../../gallery at the versions the
  * oracle is pinned to) against real vega, through the paths a user takes:
  *
- *   static  real vega vs `renderSpec` (+ @aster/vl for Vega-Lite), canonical SVG compared exactly, in Node
+ *   static  real vega vs `renderSpec` (+ @aster-charts/vl for Vega-Lite), canonical SVG compared exactly, in Node
  *   react   real vega vs <Chart> mounted as an app would (loadSpecData, add-ons, no size props unless the spec has numeric ones),
  *           in headless Chromium
  *   swap    one mounted <Chart> that goes from spec A to spec B (the pairs in gallery/swap-pairs.txt), in headless Chromium
@@ -12,7 +12,7 @@
  * is listed with its reason and counted against a ceiling. A diff is never tolerated: every fail and error is printed with its
  * first diff.
  *
- * The galleries are fetched, not committed (`pnpm --filter @aster/conformance gallery:fetch`, see gallery/README.md); the gate reads
+ * The galleries are fetched, not committed (`pnpm --filter @aster-charts/conformance gallery:fetch`, see gallery/README.md); the gate reads
  * only the local cache and fails, naming that command, when it is missing or does not match gallery/manifest.json.
  * The gate is a ratchet (gallery/floors.json, gallery/passing-<path>.txt):
  *   - the spec counts must equal the manifest (specs cannot be dropped to improve the numbers);

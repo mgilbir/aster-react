@@ -8,9 +8,9 @@
  * generating transforms). Each case is rendered through real Vega and the
  * engine, canonicalized and diffed.
  */
-import '@aster/core/geo'
-import '@aster/core/transforms'
-import { renderSpec } from '@aster/core'
+import '@aster-charts/core/geo'
+import '@aster-charts/core/transforms'
+import { renderSpec } from '@aster-charts/core'
 import { renderWithVega } from '../src/render-vega.js'
 import { canonicalizeSvg, diffCanonical } from '../src/normalize.js'
 import { cli } from '../../../scripts/lib/cli.mjs'

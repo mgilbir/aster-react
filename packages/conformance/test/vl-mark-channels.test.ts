@@ -1,7 +1,7 @@
 // @vitest-environment node
 /**
  * Every mark x every encoding channel x every kind of definition (vl-mark-channels-space.ts), compiled by vega-lite 6.4.3 and by
- * @aster/vl: a field of each type, a value, a datum, a condition with a value and with a field, and a field without a scale. The
+ * @aster-charts/vl: a field of each type, a value, a datum, a condition with a value and with a field, and a field without a scale. The
  * channels a mark does not draw are dropped, as vega-lite 6.4.3's initEncoding drops them (a size on an area, an x on a geoshape, a
  * url on anything but an image: the output is the output without the channel); the ones it draws are drawn as vega-lite draws them.
  * The compiled scales, axes and legends, the scales as they run, the rows and the SVG must be the same (vl-ranged-compare.ts).
@@ -9,12 +9,12 @@
  * One kind of case is refused on purpose, and listed under "Throws" in packages/vl/README.md (readme-refusals.test.ts checks the
  * list): a condition that gives a field on a position the mark draws. The Vega-Lite schema gives a position no condition, and
  * vega-lite makes a scale, an axis and a stack group of the condition's field while it places the mark by the value. Those cases
- * stay in the space: @aster/vl must refuse each of them with that error, so one that comes to compile fails here until it is
+ * stay in the space: @aster-charts/vl must refuse each of them with that error, so one that comes to compile fails here until it is
  * compared like the rest.
  */
 import { describe, it, expect } from 'vitest'
 import * as vl from 'vega-lite'
-import { compile, VLCompileError } from '@aster/vl'
+import { compile, VLCompileError } from '@aster-charts/vl'
 import { silent } from './vl-time-helpers.js'
 import { collect } from './vl-ranged-compare.js'
 import { MARKS, base, markChannelCases } from './vl-mark-channels-space.js'

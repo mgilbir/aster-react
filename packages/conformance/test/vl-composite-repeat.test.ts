@@ -18,10 +18,10 @@ for (const [title, cases] of GROUPS) {
  * A selection a repeat gives to every unit below it reaches a composite mark as the layer it has become, one copy of the selection's
  * signals per part. For a boxplot that is a Vega spec Vega itself rejects (vega-lite's compile succeeds and its output does not
  * parse), so the selection is refused there. (An errorbar or errorband without ticks, borders or other parts is one part: vega-lite's
- * output is valid for it, and @aster/vl compiles it; vl-composite-selections.test.ts holds those.)
+ * output is valid for it, and @aster-charts/vl compiles it; vl-composite-selections.test.ts holds those.)
  */
 describe('a selection a repeat gives to a repeated boxplot', async () => {
-  const { compile } = await import('@aster/vl')
+  const { compile } = await import('@aster-charts/vl')
   const vl = await import('vega-lite')
   const vega = await import('vega')
   const spec = {

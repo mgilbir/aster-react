@@ -34,7 +34,7 @@ rules.push(
   ['pre-binned with a colour', { mark: 'rule', encoding: { x: binned('b0'), x2: q('b1'), y: n('n'), color: n('n') } }],
   ['pre-binned x with x2 and a size', { mark: 'rule', encoding: { x: binned('b0'), x2: q('b1'), y: n('n'), size: { value: 4 } } }],
 )
-cases('@aster/vl == vega-lite: a rule over pre-binned channels', rules)
+cases('@aster-charts/vl == vega-lite: a rule over pre-binned channels', rules)
 
 // --- marks over two channels that are neither measures ---------------------------------------------------------------------------
 
@@ -47,7 +47,7 @@ for (const mark of ['bar', 'tick', 'area', 'line', 'text', 'rule']) {
       list.push([`x ${xn}, y ${yn}`, { mark, encoding: { ...(x ? { x } : {}), ...(y ? { y } : {}) } }])
     }
   }
-  cases(`@aster/vl == vega-lite: a ${mark} over two channels that are not measures`, list)
+  cases(`@aster-charts/vl == vega-lite: a ${mark} over two channels that are not measures`, list)
 }
 
 // the orientation asked for, over the same channels
@@ -60,7 +60,7 @@ for (const mark of ['bar', 'tick', 'area', 'line']) {
         list.push([`x ${xn}, y ${yn}`, { mark: { type: mark, orient }, encoding: { ...(x ? { x } : {}), ...(y ? { y } : {}) } }])
       }
     }
-    cases(`@aster/vl == vega-lite: a ${orient} ${mark} over two channels that are not measures`, list)
+    cases(`@aster-charts/vl == vega-lite: a ${orient} ${mark} over two channels that are not measures`, list)
   }
 }
 
@@ -83,4 +83,4 @@ lines.push(
   ['a line with x2 only', { mark: 'line', encoding: { x: q('q'), x2: q('q2') } }],
   ['a layer of a line with y2 and a point', { layer: [{ mark: 'line', encoding: { x: n('n'), y: q('q'), y2: q('q2') } }, { mark: 'point', encoding: { x: n('n'), y: q('q') } }] }],
 )
-cases('@aster/vl == vega-lite: a line with a second channel', lines)
+cases('@aster-charts/vl == vega-lite: a line with a second channel', lines)

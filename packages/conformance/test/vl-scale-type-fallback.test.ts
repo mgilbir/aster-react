@@ -5,7 +5,7 @@
  * temporal x or colour is a time scale; `linear` on a nominal x is a band or point; `band` on a colour is an ordinal one; and so on.
  *
  * Every channel, every data type (quantitative, ordinal, nominal, temporal in each time unit form, binned) and every scale type of the
- * schema is compiled by vega-lite 6.4.3 and by @aster/vl; the compiled scales, axes and legends, the scales as they run, the axes, the
+ * schema is compiled by vega-lite 6.4.3 and by @aster-charts/vl; the compiled scales, axes and legends, the scales as they run, the axes, the
  * rows and the SVG must be the same (vl-ranged-compare.ts). Only the requests vega-lite does not honour are compared here: those it
  * honours are in vl-honoured-scale-types.test.ts, over the same space (vl-honoured-space.ts).
  */

@@ -1,6 +1,6 @@
 // @vitest-environment node
 /**
- * Animations (the `time` channel and its timer selection): what @aster/vl emits must be vega-lite 6.4.3's, piece by piece.
+ * Animations (the `time` channel and its timer selection): what @aster-charts/vl emits must be vega-lite 6.4.3's, piece by piece.
  *
  * Over every `vlx-anim-*` corpus spec and 150 seeded random animation specs (marks, time field types and time units, selection
  * forms and names, frame rates, `empty`, other transforms, named views, variable parameters) the animation's parts are compared
@@ -16,7 +16,7 @@ import { describe, it, expect } from 'vitest'
 import { readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import * as vl from 'vega-lite'
-import { compile } from '@aster/vl'
+import { compile } from '@aster-charts/vl'
 import { renderWithVega } from '../src/render-vega.js'
 import { canonicalizeSvg, diffCanonical } from '../src/normalize.js'
 

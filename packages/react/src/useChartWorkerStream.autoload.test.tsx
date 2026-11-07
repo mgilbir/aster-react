@@ -7,8 +7,8 @@
 import { createRoot } from 'react-dom/client'
 import { act } from 'react'
 import { describe, it, expect, afterEach } from 'vitest'
-import type { VgSpec } from '@aster/core'
-import { isAddonLoaded } from '@aster/core/addons'
+import type { VgSpec } from '@aster-charts/core'
+import { isAddonLoaded } from '@aster-charts/core/addons'
 import { useChartWorkerStream } from './useChartWorkerStream'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true

@@ -1,4 +1,4 @@
-import type { ChartInfo, VgSpec } from '@aster/core'
+import type { ChartInfo, VgSpec } from '@aster-charts/core'
 
 export interface SelectionInterval {
   x?: [number, number]
@@ -428,9 +428,9 @@ export interface HiddenLegendEntry {
  * the scene is cloned lazily so the session's cached scene stays untouched.
  */
 export function filterLegendScene(
-  scene: import('@aster/core').SceneRoot,
+  scene: import('@aster-charts/core').SceneRoot,
   hidden: Iterable<HiddenLegendEntry>,
-): import('@aster/core').SceneRoot {
+): import('@aster-charts/core').SceneRoot {
   const entries = [...hidden]
   if (!entries.length) return scene
   const hideable = new Set(['rect', 'symbol', 'circle', 'arc', 'text', 'path', 'shape', 'geoshape', 'image'])
@@ -438,8 +438,8 @@ export function filterLegendScene(
     (e.color != null && (item.fill === e.color || item.stroke === e.color))
     || (e.shape != null && item.shape === e.shape),
   )
-  const cloneNode = (node: import('@aster/core').SceneNode): import('@aster/core').SceneNode => {
-    const group = node as import('@aster/core').SceneGroup
+  const cloneNode = (node: import('@aster-charts/core').SceneNode): import('@aster-charts/core').SceneNode => {
+    const group = node as import('@aster-charts/core').SceneGroup
     if (!Array.isArray(group.items)) return node
     if (group.role === 'mark' && group.marktype && hideable.has(group.marktype)) {
       const kept = group.items.filter((it) => !matches(it as Record<string, unknown>))

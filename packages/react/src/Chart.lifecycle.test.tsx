@@ -7,8 +7,8 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
 // Count hit-index builds without changing behaviour.
 const hit = vi.hoisted(() => ({ builds: 0 }))
-vi.mock('@aster/core/hit', async (importOriginal) => {
-  const mod = await importOriginal<typeof import('@aster/core/hit')>()
+vi.mock('@aster-charts/core/hit', async (importOriginal) => {
+  const mod = await importOriginal<typeof import('@aster-charts/core/hit')>()
   return { ...mod, buildHitIndex: (...args: Parameters<typeof mod.buildHitIndex>) => { hit.builds++; return mod.buildHitIndex(...args) } }
 })
 

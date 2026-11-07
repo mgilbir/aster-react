@@ -30,7 +30,7 @@ async function main(): Promise<void> {
   const kinds = (arg('kinds', 'line,scatter,bar') as string).split(',') as ChartKind[]
 
   const { buildSpec, genValues } = await import('./fixtures.js')
-  const { compileChart, evaluateChart, renderSceneToSvg } = await import('@aster/core')
+  const { compileChart, evaluateChart, renderSceneToSvg } = await import('@aster-charts/core')
   const vega = await import('vega')
 
   const med = (s: Summary): string => `${fmt(s.median, 2)}`

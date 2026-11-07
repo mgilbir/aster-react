@@ -1,6 +1,6 @@
 // @vitest-environment node
 /**
- * @aster/vl against vega-lite 6.4.3, one compiler rule at a time (the gallery-conformance lane for the compiler).
+ * @aster-charts/vl against vega-lite 6.4.3, one compiler rule at a time (the gallery-conformance lane for the compiler).
  *
  * Every case is a small inline Vega-Lite spec. Both compilers' output is rendered by REAL vega and the canonical SVGs are
  * compared exactly; the size / layout part of the compiled Vega (root width / height, size signals, the positional scales'
@@ -9,7 +9,7 @@
  */
 import { describe, it, expect } from 'vitest'
 import * as vl from 'vega-lite'
-import { compile } from '@aster/vl'
+import { compile } from '@aster-charts/vl'
 import { renderWithVega, renderWithVegaChecked } from '../src/render-vega.js'
 import { canonicalizeSvg, diffCanonical } from '../src/normalize.js'
 import { expressionDiff, expressionsOf } from './vl-expressions.js'
@@ -916,7 +916,7 @@ async function check(spec: Record<string, any>): Promise<void> {
 }
 
 for (const [group, cases] of Object.entries(GROUPS)) {
-  describe(`@aster/vl == vega-lite: ${group}`, () => {
+  describe(`@aster-charts/vl == vega-lite: ${group}`, () => {
     for (const [name, spec] of cases) it(name, () => check(spec), 30_000)
   })
 }
@@ -924,7 +924,7 @@ for (const [group, cases] of Object.entries(GROUPS)) {
 // compile/invalid/datasources.ts + data/parse.ts: every invalid mode over every kind of mark. The marks read the data the mode gives
 // them, the scales' domains read the data it gives them (a PreFilterInvalid or a PostFilterInvalid dataset when they differ), and what
 // the two compilers draw is the same (test_invalid_break_paths_filter_domains, test_invalid_break_paths_show_domains)
-describe('@aster/vl == vega-lite: the data that marks and scale domains read, per invalid mode', () => {
+describe('@aster-charts/vl == vega-lite: the data that marks and scale domains read, per invalid mode', () => {
   const MODES: Array<string | null> = ['filter', 'show', 'break-paths-filter-domains', 'break-paths-show-domains', 'break-paths-show-path-domains', null]
   const MARKS: Array<[string, unknown]> = [['point', 'point'], ['bar', 'bar'], ['line', 'line'], ['area', 'area'], ['line with points', { type: 'line', point: true }], ['tick', 'tick']]
   /** Which dataset (by the number of the transforms behind it) each mark and each scale domain reads. */
@@ -998,7 +998,7 @@ describe('@aster/vl == vega-lite: the data that marks and scale domains read, pe
 
 // legend/parse.ts + legend/properties.ts: a legend's orient, direction and gradient length, from the legend and from config.legend; a
 // property config.legend sets and the legend does not is left to the config (trail_comet)
-describe('@aster/vl == vega-lite: the orient, direction and gradient length of a legend', () => {
+describe('@aster-charts/vl == vega-lite: the orient, direction and gradient length of a legend', () => {
   const CONFIGS: Array<Record<string, unknown>> = [
     {}, { orient: 'bottom' }, { orient: 'top' }, { orient: 'top-left' }, { orient: 'left' }, { direction: 'horizontal' }, { gradientDirection: 'horizontal' },
     { symbolDirection: 'horizontal' }, { orient: 'bottom', direction: 'horizontal' }, { orient: 'bottom', gradientLength: 50 },
@@ -1028,7 +1028,7 @@ describe('@aster/vl == vega-lite: the orient, direction and gradient length of a
 
 // compile/mark/encode/color.ts + base.ts: the colour of a mark is the fill of a filled mark and the stroke of an unfilled one; the mark
 // definition's own fill / stroke of that kind is what the mark has, whatever colour the encoding says (interactive_line_hover)
-describe('@aster/vl == vega-lite: a mark definition that sets the paint the colour channel would set', () => {
+describe('@aster-charts/vl == vega-lite: a mark definition that sets the paint the colour channel would set', () => {
   const MARKS = ['line', 'point', 'bar', 'area', 'tick', 'circle', 'square', 'text', 'rule', 'trail'] as const
   const DEFS: Array<Record<string, unknown>> = [{ stroke: 'red' }, { fill: 'red' }, { color: 'red' }, { stroke: 'red', fill: 'blue' }, { stroke: 'red', filled: true }, { fill: 'red', filled: false }]
   const ENCODINGS: Array<[string, Record<string, unknown>]> = [
@@ -1038,7 +1038,7 @@ describe('@aster/vl == vega-lite: a mark definition that sets the paint the colo
   ]
   for (const mark of MARKS) {
     for (const def of DEFS) {
-      // (`filled` on a text or a trail mark flips which paint the colour channel sets: @aster/vl does not do that for either yet)
+      // (`filled` on a text or a trail mark flips which paint the colour channel sets: @aster-charts/vl does not do that for either yet)
       if ('filled' in def && (mark === 'text' || mark === 'trail')) continue
       for (const [label, enc] of ENCODINGS) {
         it(`${mark} ${JSON.stringify(def)} with ${label}`, async () => {
@@ -1053,7 +1053,7 @@ describe('@aster/vl == vega-lite: a mark definition that sets the paint the colo
 // compile/mark/mark.ts scaleClip + compile/scale/assemble.ts: a unit is clipped when its x or y scale follows a selection - also when
 // the scale is the one its siblings share and the selection is a sibling's - and the scales of a concat are the shared ones, then
 // each child's own, in order (interactive_panzoom_vconcat_shared)
-describe('@aster/vl == vega-lite: scales bound to a selection in a concat', () => {
+describe('@aster-charts/vl == vega-lite: scales bound to a selection in a concat', () => {
   const bound = (extra: Record<string, unknown> = {}) => ({ params: [{ name: 'region', select: { type: 'interval', ...extra }, bind: 'scales' }] })
   const CASES: Array<[string, Record<string, any>]> = [
     ['a vconcat sharing x, the first bound', { data: DATA, vconcat: [{ ...bound(), mark: 'point', encoding: { x: q('x'), y: q('y') } }, { mark: 'point', encoding: { x: q('x'), y: q('v') } }], resolve: { scale: { x: 'shared' } } }],
@@ -1077,7 +1077,7 @@ describe('@aster/vl == vega-lite: scales bound to a selection in a concat', () =
 
 // compile/selection/interval.ts (the projection branch), project.ts (geo channels), parse.ts: an interval selection over a map brushes
 // longitude / latitude through the projection, by the marks it covers (interactive_1d_geo_brush, interactive_airport_crossfilter)
-describe('@aster/vl == vega-lite: interval selections over a map', () => {
+describe('@aster-charts/vl == vega-lite: interval selections over a map', () => {
   const PLACES = {
     values: [
       { name: 'a', longitude: -122.3, latitude: 47.6, n: 3 }, { name: 'b', longitude: -118.2, latitude: 34.1, n: 9 }, { name: 'c', longitude: -87.6, latitude: 41.9, n: 5 },
@@ -1148,7 +1148,7 @@ describe('@aster/vl == vega-lite: interval selections over a map', () => {
 
 // compile/data/lookup.ts + selection/parse.ts materializeSelections: a lookup from a selection reads the selected rows of the view that
 // declares it, whichever view comes first (interactive_airport_crossfilter); data/source numbering across a concat's children
-describe('@aster/vl == vega-lite: lookups from a selection across views, and source names across children', () => {
+describe('@aster-charts/vl == vega-lite: lookups from a selection across views, and source names across children', () => {
   const unit = (extra: Record<string, unknown> = {}) => ({ mark: 'point', encoding: { x: q('x'), y: q('y'), color: { condition: { param: 'brush', empty: false, value: 'goldenrod' }, value: 'steelblue' } }, ...extra })
   const brush = { name: 'brush', select: { type: 'interval', encodings: ['x'] } }
   const looked = { transform: [{ lookup: 'c', from: { param: 'brush', key: 'c' } }], mark: 'bar', encoding: { x: n('c'), y: q('v', { aggregate: 'sum' }) } }
@@ -1195,7 +1195,7 @@ const DOMAIN_SHAPES = (vg: any): unknown =>
     const strip = (d: any): any => (Array.isArray(d) ? d.map(strip) : d && typeof d === 'object' ? Object.fromEntries(Object.entries(d).map(([k, v]) => [k, k === 'data' && typeof v === 'string' ? '*' : strip(v)])) : d)
     return [s.name, strip(s.domain)]
   })
-describe('@aster/vl == vega-lite: the domains of the scales (the datasets read by name, the references once, the sorts)', () => {
+describe('@aster-charts/vl == vega-lite: the domains of the scales (the datasets read by name, the references once, the sorts)', () => {
   for (const [name, spec] of GROUPS['layers under a parent transform read one dataset (bar_heatlane)']!) {
     it(name, () => {
       const oracle = (vl as unknown as { compile: (s: unknown) => { spec: Record<string, any> } }).compile(plain(spec)).spec
@@ -1206,7 +1206,7 @@ describe('@aster/vl == vega-lite: the domains of the scales (the datasets read b
 })
 
 // util.ts accessPathWithDatum: a nested field is flattened with every prefix guarded, so a row that lacks `o` is a missing value
-describe('@aster/vl == vega-lite: the guarded flatten expression of a nested field (test_subobject_missing)', () => {
+describe('@aster-charts/vl == vega-lite: the guarded flatten expression of a nested field (test_subobject_missing)', () => {
   const flattenExprs = (vg: any): string[] =>
     (vg.data ?? []).flatMap((d: any) => d.transform ?? []).filter((t: any) => t.type === 'formula' && /^datum\[[^(]*$/.test(t.expr)).map((t: any) => t.expr).sort()
   for (const [name, field] of [['two levels', 'o.v'], ['three levels', 'o.p.v'], ['an escaped dot inside a path', 'o.a\\.b']] as const) {
@@ -1223,7 +1223,7 @@ describe('@aster/vl == vega-lite: the guarded flatten expression of a nested fie
 // Every place a field accessor reaches an expression: vega-lite reads the FLATTENED field (`datum["o.v"]`, written by a parse
 // formula that guards the path) in filters, conditions and time-unit predicates, and escapes the dot in the transforms that read
 // a field by name (aggregate, bin, extent, timeunit). Rows without the parent object must not stop the chart.
-describe('@aster/vl == vega-lite: nested fields in predicates and transforms (rows missing the parent object)', () => {
+describe('@aster-charts/vl == vega-lite: nested fields in predicates and transforms (rows missing the parent object)', () => {
   const NESTED = { values: [{ o: { v: 1, t: '2020-01-01' }, x: 1, c: 'a' }, { o: { v: 2, t: '2021-01-01' }, x: 2, c: 'b' }, { o: { v: 1, t: '2022-01-01' }, x: 3, c: 'a' }, { x: 4, c: 'b' }] }
   const px = { x: { field: 'x', type: 'quantitative' } }
   const pt = (transform: unknown[]) => ({ data: NESTED, transform, mark: 'point', encoding: px })
@@ -1265,7 +1265,7 @@ describe('@aster/vl == vega-lite: nested fields in predicates and transforms (ro
 })
 
 // optimize/mergebins.ts: layers that bin the same field share one bin node (one extent, one bins signal)
-describe('@aster/vl == vega-lite: layers that bin the same field (concat_bar_layer_circle)', () => {
+describe('@aster-charts/vl == vega-lite: layers that bin the same field (concat_bar_layer_circle)', () => {
   const binned = { x: { bin: { maxbins: 10 }, field: 'x', type: 'quantitative' }, y: { bin: { maxbins: 10 }, field: 'y', type: 'quantitative' }, size: { aggregate: 'count', type: 'quantitative' } }
   const SEL = { name: 'pts', select: { type: 'point', encodings: ['x'] } }
   const GROUP = { mark: 'bar', params: [SEL], encoding: { x: { field: 'c', type: 'nominal' }, y: { aggregate: 'count', type: 'quantitative' } } }
@@ -1282,7 +1282,7 @@ describe('@aster/vl == vega-lite: layers that bin the same field (concat_bar_lay
 })
 
 // compile/data/sequence.ts producedFields: the generated numbers are not parsed again (no cast formula in front of the pipeline)
-describe('@aster/vl == vega-lite: a sequence is not cast', () => {
+describe('@aster-charts/vl == vega-lite: a sequence is not cast', () => {
   const casts = (vg: any): string[] => (vg.data ?? []).flatMap((d: any) => d.transform ?? []).filter((t: any) => t.type === 'formula' && /toNumber|toDate/.test(t.expr)).map((t: any) => t.expr)
   it('the output name is left alone', () => {
     const spec = { data: { sequence: { start: 0, stop: 6, step: 1, as: 'x' } }, mark: 'point', encoding: { x: q('x'), y: q('x') } }
@@ -1293,7 +1293,7 @@ describe('@aster/vl == vega-lite: a sequence is not cast', () => {
 })
 
 // compile/mark/encode/tooltip.ts tooltipData: the tooltip's formats are the config's overlaid by config.tooltipFormat
-describe('@aster/vl == vega-lite: config.tooltipFormat', () => {
+describe('@aster-charts/vl == vega-lite: config.tooltipFormat', () => {
   const tooltips = (vg: any): string[] => {
     const out: string[] = []
     const walk = (ms: any[]): void => { for (const m of ms ?? []) { if (m.encode?.update?.tooltip) out.push(JSON.stringify(m.encode.update.tooltip)); walk(m.marks) } }
@@ -1328,7 +1328,7 @@ describe('@aster/vl == vega-lite: config.tooltipFormat', () => {
 })
 
 // compile/selection/... parseParameter: an input binding's own properties (placeholder, autocomplete, debounce, element) reach the signal
-describe('@aster/vl == vega-lite: input bindings', () => {
+describe('@aster-charts/vl == vega-lite: input bindings', () => {
   const binds = (vg: any): unknown[] => (vg.signals ?? []).filter((sg: any) => sg.bind).map((sg: any) => [sg.name, sg.bind])
   const BINDS: Array<[string, Record<string, unknown>]> = [
     ['a search input with a placeholder and a name', { input: 'search', placeholder: 'Car model', name: 'Search' }],
@@ -1349,7 +1349,7 @@ describe('@aster/vl == vega-lite: input bindings', () => {
 
 // facet.ts assembleDefaultLayout + axis/assemble.ts assembleAxisSignals: cells are not aligned along an independent direction (unless both row and column
 // are given), and a cell whose axis has no grid scale gets the child's size as its own `width` / `height`
-describe('@aster/vl == vega-lite: the layout and the signals of a faceted cell', () => {
+describe('@aster-charts/vl == vega-lite: the layout and the signals of a faceted cell', () => {
   const cell = (vg: any): any => (vg.marks ?? []).find((m: any) => m.type === 'group' && m.style === 'cell' || m.name === 'cell')
   const SPECS: Array<[string, Record<string, any>]> = [
     ['a column facet with an independent x', { data: DATA, resolve: { scale: { x: 'independent' } }, facet: { column: n('g') }, spec: { mark: 'bar', encoding: { x: n('c'), y: q('v', { aggregate: 'sum' }) } } }],
@@ -1370,7 +1370,7 @@ describe('@aster/vl == vega-lite: the layout and the signals of a faceted cell',
 })
 
 // spec/base.ts extractCompositionLayout: a spacing given for one direction takes the config's (20) for the other (trellis_area_seattle)
-describe('@aster/vl == vega-lite: the spacing of a composition', () => {
+describe('@aster-charts/vl == vega-lite: the spacing of a composition', () => {
   const unit = { mark: 'point', encoding: { x: q('x'), y: q('y') } }
   const SPECS: Array<[string, Record<string, any>]> = [
     ['a row facet with a row spacing', { data: DATA, spacing: { row: 1 }, facet: { row: n('g') }, spec: unit }],
@@ -1398,7 +1398,7 @@ describe('@aster/vl == vega-lite: the spacing of a composition', () => {
 // set). Here the expressions themselves are compared (test/vl-expressions.ts: every filter / formula / signal / encode expression of the
 // compiled Vega, parsed and printed back, with Aster's safe field names reduced to vega-lite's), over the composite marks, whose data
 // flow is nothing but generated expressions, and over the other features that generate them.
-describe('@aster/vl == vega-lite: the compiled expressions', () => {
+describe('@aster-charts/vl == vega-lite: the compiled expressions', () => {
   const same = (spec: Record<string, any>): void => {
     const oracle = (vl as unknown as { compile: (s: unknown) => { spec: Record<string, any> } }).compile(plain(spec)).spec
     const ours = compile(deepFreeze(plain(spec)) as never) as Record<string, any>
@@ -1520,7 +1520,7 @@ describe('@aster/vl == vega-lite: the compiled expressions', () => {
 })
 
 // compile/data/source.ts: the format of a URL source names the file's type (Vega reads json when it is not told, so a csv would not load)
-describe('@aster/vl == vega-lite: the format of a URL source', () => {
+describe('@aster-charts/vl == vega-lite: the format of a URL source', () => {
   const URLS = ['data/cars.json', 'data/stocks.csv', 'data/flights.tsv', 'data/world.topojson', 'data/points.dsv', 'data/noextension', 'data/x.csv?v=1', 'https://example.com/a/b.json']
   for (const url of URLS) {
     for (const format of [undefined, { parse: { n: 'number' } }, { type: 'tsv' }] as const) {

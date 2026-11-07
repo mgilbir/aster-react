@@ -13,18 +13,18 @@ import {
   type Logger,
   type SceneRoot,
   type VgSpec,
-} from '@aster/core'
+} from '@aster-charts/core'
 import { isPromiseLike, normalizeChartSpec, useChartEpoch, useStableContent, useStableSpecRows } from './spec.js'
 import { useAddons } from './addons.js'
 import { validateDataChanges } from './dataChanges.js'
 import { SCALE_INFO_KEY, scalesFromSerialized, type SerializedScale } from './serialScales.js'
-// The incremental DOM patcher ships as the `@aster/core/dom` addon, which every chart needs. The canvas
+// The incremental DOM patcher ships as the `@aster-charts/core/dom` addon, which every chart needs. The canvas
 // renderer and the hit/signal event loop are NOT imported here: they arrive as the `canvas` and
 // `interaction` props (see capabilities.ts), so `<SvgChart>` bundles neither.
-import { createChartSession, hasDenseSymbolMarks, patchSceneDom, renderSceneToDomElement } from '@aster/core/dom'
-import type { CanvasSceneSnapshot } from '@aster/core/canvas'
-import type { HitIndex } from '@aster/core/hit'
-import type { CursorTracker, SignalBinding } from '@aster/core/signals'
+import { createChartSession, hasDenseSymbolMarks, patchSceneDom, renderSceneToDomElement } from '@aster-charts/core/dom'
+import type { CanvasSceneSnapshot } from '@aster-charts/core/canvas'
+import type { HitIndex } from '@aster-charts/core/hit'
+import type { CursorTracker, SignalBinding } from '@aster-charts/core/signals'
 import type { CanvasCapability, InteractionCapability } from './capabilities.js'
 import type { ChartHandle, ChartProps } from './chart-types.js'
 import {
@@ -554,7 +554,7 @@ function ChartView({
   const canvasUnavailable = requestedRenderer === 'canvas' && canvasCap == null
   const capabilityKey = `${canvasUnavailable ? 'c' : ''}|${interactionPropsUsed}|${eventStreamsUnbound ? 'e' : ''}`
   React.useEffect(() => {
-    const fix = "pass interaction={interaction} from '@aster/react/interaction'"
+    const fix = "pass interaction={interaction} from '@aster-charts/react/interaction'"
     const problems = [
       canvasUnavailable && 'renderer="canvas" needs <Chart>: <SvgChart> has no canvas renderer, so it renders SVG',
       interactionPropsUsed && `${interactionPropsUsed} need hit testing and the signal event loop and are ignored: ${fix}`,

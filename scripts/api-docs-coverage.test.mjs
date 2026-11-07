@@ -4,10 +4,10 @@
  * The entry points are the keys of each published package's `exports` map; their runtime exports are read by importing the built
  * `dist` entry (so this test needs `pnpm build`, which `pnpm check` runs before the tests). A name counts as documented when it
  * appears, as a whole word, inside inline code or a fenced code block of the section of docs/API.md for its package
- * (`## \`@aster/core\``, `## \`@aster/react\``, `## \`@aster/vl\``) or of the parts of the document outside the package sections (the
+ * (`## \`@aster-charts/core\``, `## \`@aster-charts/react\``, `## \`@aster-charts/vl\``) or of the parts of the document outside the package sections (the
  * "Start here" table, the contents and the package table): prose that merely contains the word (`locale`, `format`) does not count. Types are not runtime exports and are not checked.
  *
- * The one entry without exports is `@aster/react/worker-entry` (a worker script that installs a message handler when it is loaded);
+ * The one entry without exports is `@aster-charts/react/worker-entry` (a worker script that installs a message handler when it is loaded);
  * it is not imported here, and the test checks its declaration file says it exports nothing.
  */
 import { existsSync, readFileSync } from 'node:fs'
@@ -17,17 +17,17 @@ import { describe, expect, it } from 'vitest'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 const PACKAGES = ['core', 'react', 'vl']
-const NO_EXPORTS = new Set(['@aster/react/worker-entry'])
+const NO_EXPORTS = new Set(['@aster-charts/react/worker-entry'])
 
 /** docs/API.md cut at its `## ` headings: one text per package section, and the rest (the title, "Start here", the contents, the package table). */
 function apiSections(markdown) {
   const parts = markdown.split(/^(?=## )/m)
   const sections = new Map()
   for (const part of parts) {
-    const name = /^## `(@aster\/[a-z]+)`/.exec(part)?.[1]
+    const name = /^## `(@aster-charts\/[a-z]+)`/.exec(part)?.[1]
     if (name) sections.set(name, part)
   }
-  const preamble = parts.filter((p) => !/^## `@aster\/[a-z]+`/.test(p)).join('\n')
+  const preamble = parts.filter((p) => !/^## `@aster-charts\/[a-z]+`/.test(p)).join('\n')
   return { preamble, sections }
 }
 
@@ -54,7 +54,7 @@ for (const dir of PACKAGES) {
 }
 
 describe('docs/API.md has a section for every package', () => {
-  it.each(PACKAGES.map((d) => `@aster/${d}`))('%s', (name) => {
+  it.each(PACKAGES.map((d) => `@aster-charts/${d}`))('%s', (name) => {
     expect(api.sections.has(name), `docs/API.md has no "## \`${name}\`" section`).toBe(true)
   })
 })

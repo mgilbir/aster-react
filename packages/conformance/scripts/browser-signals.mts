@@ -2,7 +2,7 @@
  * Real-browser signal-event parity gate.
  *
  * The same specs are mounted twice in headless Chromium, each in its own page:
- * once in REAL vega (a `View` with the svg renderer) and once in @aster/core
+ * once in REAL vega (a `View` with the svg renderer) and once in @aster-charts/core
  * (`renderSceneToDomElement` + `bindSceneSignals`). The same native input
  * (Playwright mouse / wheel / keyboard / touch events, real timing) is driven
  * through both, and the resulting signal values -- and whether an error was
@@ -559,10 +559,10 @@ const cases = CASES.filter((c) => !FILTER || c.name.includes(FILTER))
 
 const entrySrc = `
 import * as vega from 'vega'
-import { compileChart, evaluateChart, renderSceneToSvg } from '@aster/core'
-import { renderSceneToDomElement } from '@aster/core/dom'
-import { buildHitIndex } from '@aster/core/hit'
-import { bindSceneSignals } from '@aster/core/signals'
+import { compileChart, evaluateChart, renderSceneToSvg } from '@aster-charts/core'
+import { renderSceneToDomElement } from '@aster-charts/core/dom'
+import { buildHitIndex } from '@aster-charts/core/hit'
+import { bindSceneSignals } from '@aster-charts/core/signals'
 
 const logs = []
 const logger = {
@@ -745,7 +745,7 @@ async function drive(engine: 'vega' | 'aster', c: Case): Promise<{ initial: Obse
 
 interface AnimCase {
   name: string
-  /** the Vega-Lite spec; compiled with @aster/vl for both engines (vega-lite 6.4.3's own output is pinned by the corpus) */
+  /** the Vega-Lite spec; compiled with @aster-charts/vl for both engines (vega-lite 6.4.3's own output is pinned by the corpus) */
   vl: Record<string, unknown>
   /** virtual times (ms since the mount) at which both engines are sampled */
   at: number[]

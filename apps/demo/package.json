@@ -1,17 +1,17 @@
 {
-  "name": "@aster/demo",
+  "name": "@aster-charts/demo",
   "private": true,
   "version": "0.0.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "pnpm --filter @aster/react run build && vite build",
+    "build": "pnpm --filter @aster-charts/react run build && vite build",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@aster/core": "workspace:*",
-    "@aster/react": "workspace:*",
-    "@aster/vl": "workspace:*",
+    "@aster-charts/core": "workspace:*",
+    "@aster-charts/react": "workspace:*",
+    "@aster-charts/vl": "workspace:*",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "vega-embed": "^7.1.0"

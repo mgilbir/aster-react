@@ -59,16 +59,16 @@ describe('verify-publish', () => {
   const faults = [
     ['packing with npm leaves `workspace:` ranges in the manifest', undefined, { ASTER_VERIFY_PUBLISH_PACKER: 'npm' }, /packed manifest has \w+\.@?[\w/-]+ = "workspace:/],
     ['a THIRD_PARTY_NOTICES.md without licence texts', (d) => writeFileSync(join(d, 'THIRD_PARTY_NOTICES.md'), '# notices\n'), {}, /THIRD_PARTY_NOTICES\.md carries no licence texts/],
-    ['a declaration file missing from dist', (d) => rmSync(join(d, 'packages', 'core', 'dist', 'index.d.ts')), {}, /@aster\/core tarball is missing dist\/index\.d\.ts/],
+    ['a declaration file missing from dist', (d) => rmSync(join(d, 'packages', 'core', 'dist', 'index.d.ts')), {}, /@aster-charts\/core tarball is missing dist\/index\.d\.ts/],
     ['a source map shipped without its sources (the `!dist/**/*.map` exclusion dropped from "files")', (d) => {
       writeFileSync(join(d, 'packages', 'core', 'dist', 'leak.js.map'), '{}')
       editManifest(d, 'core', (m) => { m.files = m.files.filter((f) => f !== '!dist/**/*.map') })
-    }, {}, /@aster\/core tarball ships source maps/],
-    ['a JS file that references a source map that is not shipped', (d) => writeFileSync(join(d, 'packages', 'vl', 'dist', 'dangling.js'), 'export {}\n//# sourceMappingURL=dangling.js.map\n'), {}, /@aster\/vl\/dist\/dangling\.js references a source map/],
-    ['an exports entry whose target does not exist', (d) => editManifest(d, 'core', (m) => { m.exports['.'].default = './dist/does-not-exist.js' }), {}, /@aster\/core tarball is missing dist\/does-not-exist\.js/],
-    ['an exports entry with no types condition', (d) => editManifest(d, 'vl', (m) => { delete m.exports['.'].types }), {}, /@aster\/vl exports\["\."\] has no "types" condition/],
-    ['a manifest with no sideEffects field', (d) => editManifest(d, 'vl', (m) => { delete m.sideEffects }), {}, /@aster\/vl packed manifest declares no "sideEffects"/],
-    ['a wrong licence', (d) => editManifest(d, 'react', (m) => { m.license = 'MIT' }), {}, /@aster\/react has license MIT/],
+    }, {}, /@aster-charts\/core tarball ships source maps/],
+    ['a JS file that references a source map that is not shipped', (d) => writeFileSync(join(d, 'packages', 'vl', 'dist', 'dangling.js'), 'export {}\n//# sourceMappingURL=dangling.js.map\n'), {}, /@aster-charts\/vl\/dist\/dangling\.js references a source map/],
+    ['an exports entry whose target does not exist', (d) => editManifest(d, 'core', (m) => { m.exports['.'].default = './dist/does-not-exist.js' }), {}, /@aster-charts\/core tarball is missing dist\/does-not-exist\.js/],
+    ['an exports entry with no types condition', (d) => editManifest(d, 'vl', (m) => { delete m.exports['.'].types }), {}, /@aster-charts\/vl exports\["\."\] has no "types" condition/],
+    ['a manifest with no sideEffects field', (d) => editManifest(d, 'vl', (m) => { delete m.sideEffects }), {}, /@aster-charts\/vl packed manifest declares no "sideEffects"/],
+    ['a wrong licence', (d) => editManifest(d, 'react', (m) => { m.license = 'MIT' }), {}, /@aster-charts\/react has license MIT/],
     ['a blanket "sideEffects": false that shakes the registrations out of a bundle', (d) => editManifest(d, 'core', (m) => { m.sideEffects = false }), {}, /tree-shaken bundle built from the installed tarballs does not behave/],
     ['an evaluateChart that is handed no incremental engine', (d) => writeFileSync(join(d, 'packages', 'core', 'dist', 'evaluate.js'),
       `import { evaluateChartPending } from './runtime.js'\nexport function evaluateChart(chart, input = {}) { const p = evaluateChartPending(undefined, chart, input); p.commit(); return p.scene }\n`),

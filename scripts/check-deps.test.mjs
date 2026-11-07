@@ -25,7 +25,7 @@ function fixture(edit = () => {}) {
   const root = mkdtempSync(join(tmpdir(), 'aster-checkdeps-'))
   made.push(root)
   for (const p of PKGS) {
-    put(root, `packages/${p}/package.json`, JSON.stringify({ name: `@aster/${p}`, dependencies: {} }))
+    put(root, `packages/${p}/package.json`, JSON.stringify({ name: `@aster-charts/${p}`, dependencies: {} }))
     put(root, `packages/${p}/dep-baseline.json`, JSON.stringify({ imports: {}, deps: [] }))
     put(root, `packages/${p}/src/index.ts`, `export const x = 1\n`)
     put(root, `packages/${p}/dist/index.js`, `export const x = 1\n`)
@@ -120,7 +120,7 @@ describe('check-deps', () => {
   for (const [name, patch] of Object.entries(manifestViolations)) {
     it(`manifest: ${name}`, async () => {
       const root = fixture((w) =>
-        w('packages/vl/package.json', JSON.stringify({ name: '@aster/vl', ...patch })))
+        w('packages/vl/package.json', JSON.stringify({ name: '@aster-charts/vl', ...patch })))
       const r = await run(root)
       expect(r.code, r.out).toBe(1)
       expect(r.out).toMatch(/packages\/vl\/package\.json|banned dependency/)
@@ -166,7 +166,7 @@ describe('check-deps', () => {
           `import { readFileSync } from 'node:fs'`,
           `import { x } from './index'`,
           `import 'react'`,
-          `import type { Y } from '@aster/core'`,
+          `import type { Y } from '@aster-charts/core'`,
           `import 'vegas'`,
           `import 'd3x'`,
           `import 'my-vega'`,
@@ -181,7 +181,7 @@ describe('check-deps', () => {
     })
     it('allows devDependencies on the oracle (tests/benchmarks use it)', async () => {
       const root = fixture((w) =>
-        w('packages/core/package.json', JSON.stringify({ name: '@aster/core', devDependencies: { vega: '^6' } })))
+        w('packages/core/package.json', JSON.stringify({ name: '@aster-charts/core', devDependencies: { vega: '^6' } })))
       expect((await run(root)).code).toBe(0)
     })
   })

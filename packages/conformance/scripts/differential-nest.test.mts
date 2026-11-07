@@ -12,9 +12,9 @@
  */
 import { describe, expect, it } from 'vitest'
 import * as vega from 'vega'
-import '@aster/core/geo'
-import '@aster/core/transforms'
-import { compileChart, datasetsOfScene, evaluateChart } from '@aster/core'
+import '@aster-charts/core/geo'
+import '@aster-charts/core/transforms'
+import { compileChart, datasetsOfScene, evaluateChart } from '@aster-charts/core'
 import { enc } from './differential-util.mts'
 import { makeRng, scaled, type Rng } from './differential-gen.mts'
 

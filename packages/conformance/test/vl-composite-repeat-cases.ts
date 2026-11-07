@@ -58,22 +58,22 @@ const UNITS: Array<[string, (r: unknown) => Unit]> = [
 ]
 
 // a list: `repeat: [..]` names its variable `repeat`
-group('@aster/vl == vega-lite: a composite mark in a repeat over a list', (add) => {
+group('@aster-charts/vl == vega-lite: a composite mark in a repeat over a list', (add) => {
   for (const [name, unit] of UNITS) {
     add(`${name}`, { data: DATA, repeat: ['v', 'w'], spec: unit(ref('repeat')) })
     add(`${name}, columns 1`, { data: DATA, repeat: ['v', 'w'], columns: 1, spec: unit(ref('repeat')) })
   }
 })
 
-group('@aster/vl == vega-lite: a composite mark in a column repeat', (add) => {
+group('@aster-charts/vl == vega-lite: a composite mark in a column repeat', (add) => {
   for (const [name, unit] of UNITS) add(`${name}`, { data: DATA, repeat: { column: ['v', 'w'] }, spec: unit(ref('column')) })
 })
 
-group('@aster/vl == vega-lite: a composite mark in a row repeat', (add) => {
+group('@aster-charts/vl == vega-lite: a composite mark in a row repeat', (add) => {
   for (const [name, unit] of UNITS) add(`${name}`, { data: DATA, repeat: { row: ['v', 'w'] }, spec: unit(ref('row')) })
 })
 
-group('@aster/vl == vega-lite: a composite mark in a grid repeat', (add) => {
+group('@aster-charts/vl == vega-lite: a composite mark in a grid repeat', (add) => {
   for (const [name, unit] of UNITS) {
     add(`${name}, the row variable`, { data: DATA, repeat: { row: ['v', 'w'], column: ['x', 'k'] }, spec: unit(ref('row')) })
     add(`${name}, the column variable`, { data: DATA, repeat: { row: ['v', 'w'], column: ['x', 'k'] }, spec: unit(ref('column')) })
@@ -84,13 +84,13 @@ group('@aster/vl == vega-lite: a composite mark in a grid repeat', (add) => {
   add('errorband reading both variables', { data: DATA, repeat: { row: ['v', 'w'], column: ['v', 'x'] }, spec: { mark: 'errorband', encoding: { x: q(ref('column')), y: q(ref('row')) } } })
 })
 
-group('@aster/vl == vega-lite: a composite mark in a layer repeat', (add) => {
+group('@aster-charts/vl == vega-lite: a composite mark in a layer repeat', (add) => {
   for (const [name, unit] of UNITS) add(`${name}`, { data: DATA, repeat: { layer: ['v', 'w'] }, spec: unit(ref('layer')) })
   add('a boxplot layer repeat with a colour by the layer', { data: DATA, repeat: { layer: ['v', 'w'] }, spec: { mark: 'boxplot', encoding: { x: n('c'), y: q(ref('layer')), color: { datum: ref('layer'), type: 'nominal' } } } })
   add('an errorbar layer repeat, three layers', { data: DATA, repeat: { layer: ['v', 'w', 'x'] }, spec: { mark: 'errorbar', encoding: { x: n('c'), y: q(ref('layer')), color: { datum: ref('layer'), type: 'nominal' } } } })
 })
 
-group('@aster/vl == vega-lite: a composite mark under other compositions inside a repeat', (add) => {
+group('@aster-charts/vl == vega-lite: a composite mark under other compositions inside a repeat', (add) => {
   const box = (r: string) => ({ mark: 'boxplot', encoding: { x: n('c'), y: q(ref(r)) } })
   const bar = (r: string) => ({ mark: 'errorbar', encoding: { x: n('c'), y: q(ref(r)) } })
   const band = (r: string) => ({ mark: 'errorband', encoding: { x: q('x'), y: q(ref(r)) } })
@@ -111,7 +111,7 @@ group('@aster/vl == vega-lite: a composite mark under other compositions inside 
   }
 })
 
-group('@aster/vl == vega-lite: a composite mark in a repeat, with sizes, config, transforms and selections', (add) => {
+group('@aster-charts/vl == vega-lite: a composite mark in a repeat, with sizes, config, transforms and selections', (add) => {
   const box = { mark: 'boxplot', encoding: { x: n('c'), y: q(ref('column')) } }
   add('width and height on the repeated spec', { data: DATA, repeat: { column: ['v', 'w'] }, spec: { ...box, width: 120, height: 90 } })
   add('a step width', { data: DATA, repeat: { column: ['v', 'w'] }, spec: { ...box, width: { step: 20 } } })
@@ -141,7 +141,7 @@ group('@aster/vl == vega-lite: a composite mark in a repeat, with sizes, config,
 // --- what a composite mark in a repeat needs from the views around it ---------------------------------------------------------------
 // (none of these is a composite mark in a repeat itself: each is a part of the view a repeated composite sits in)
 
-group('@aster/vl == vega-lite: a view with no scale on a channel, in a concat, a repeat and a facet', (add) => {
+group('@aster-charts/vl == vega-lite: a view with no scale on a channel, in a concat, a repeat and a facet', (add) => {
   const ONE_D: Array<[string, (f: unknown) => Unit]> = [
     ['y only', (f) => ({ mark: 'point', encoding: { y: q(f) } })],
     ['x only', (f) => ({ mark: 'point', encoding: { x: q(f) } })],
@@ -164,7 +164,7 @@ group('@aster/vl == vega-lite: a view with no scale on a channel, in a concat, a
   }
 })
 
-group('@aster/vl == vega-lite: the legend of a layer of composite marks', (add) => {
+group('@aster-charts/vl == vega-lite: the legend of a layer of composite marks', (add) => {
   const box = (colour: string) => ({ mark: 'boxplot', encoding: { x: n('c'), y: q('v'), color: n(colour) } })
   const bar = (colour: string) => ({ mark: 'errorbar', encoding: { x: n('c'), y: q('v'), color: n(colour) } })
   const point = (colour: string) => ({ mark: 'point', encoding: { x: n('c'), y: q('v'), color: n(colour) } })
@@ -178,7 +178,7 @@ group('@aster/vl == vega-lite: the legend of a layer of composite marks', (add) 
   add('a column repeat of boxplots coloured by the repeated field', { data: DATA, repeat: { column: ['g', 'c', 'k'] }, spec: box(ref('column') as never) })
 })
 
-group('@aster/vl == vega-lite: a datum colour in a composite mark, a datum condition', (add) => {
+group('@aster-charts/vl == vega-lite: a datum colour in a composite mark, a datum condition', (add) => {
   const datum = { datum: 'a series', type: 'nominal' }
   add('a boxplot with a datum colour', { data: DATA, mark: 'boxplot', encoding: { x: n('c'), y: q('v'), color: datum } })
   add('a boxplot with a datum colour, min-max', { data: DATA, mark: { type: 'boxplot', extent: 'min-max' }, encoding: { x: n('c'), y: q('v'), color: datum } })
@@ -194,7 +194,7 @@ group('@aster/vl == vega-lite: a datum colour in a composite mark, a datum condi
   }
 })
 
-group('@aster/vl == vega-lite: the views a repeat names', (add) => {
+group('@aster-charts/vl == vega-lite: the views a repeat names', (add) => {
   const point = (e: Record<string, unknown>) => ({ mark: 'point', encoding: e })
   add('a repeat in a repeat', { data: DATA, repeat: { row: ['g', 'c'] }, spec: { repeat: { column: ['v', 'w'] }, spec: point({ x: q('x'), y: q(ref('column')), color: n(ref('row')) }) } })
   add('a list repeat in a list repeat', { data: DATA, repeat: ['g', 'c'], spec: { repeat: ['v', 'w'], spec: point({ x: q('x'), y: q(ref('repeat')) }) } })
@@ -205,7 +205,7 @@ group('@aster/vl == vega-lite: the views a repeat names', (add) => {
   add('a named repeated spec', { data: DATA, repeat: { column: ['v', 'w'] }, spec: { name: 'inner', ...point({ x: q('x'), y: q(ref('column')) }) } })
 })
 
-group('@aster/vl == vega-lite: aggregates the views of a composition share', (add) => {
+group('@aster-charts/vl == vega-lite: aggregates the views of a composition share', (add) => {
   const bar = (f: string, extra: Record<string, unknown> = {}, extent = 'ci') => ({ mark: { type: 'errorbar', extent }, encoding: { x: n('c'), y: q(f), ...extra } })
   for (const extent of ['ci', 'stdev', 'stderr', 'iqr']) {
     add(`${extent}: two errorbars side by side`, { data: DATA, hconcat: [bar('v', {}, extent), bar('w', {}, extent)] })

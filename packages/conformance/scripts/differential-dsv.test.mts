@@ -1,7 +1,7 @@
 /**
  * LIVE generated differential for the delimited-text reader and writer (d3-dsv 3.0.1): random texts over an alphabet
  * of delimiters, quotes, line breaks and literals, and random rows to format, go through the real d3-dsv and through
- * `@aster/core`'s `dsvFormat`, for the comma, semicolon, tab and pipe dialects. Rows, their `columns`, the row
+ * `@aster-charts/core`'s `dsvFormat`, for the comma, semicolon, tab and pipe dialects. Rows, their `columns`, the row
  * converter calls (value, index, columns) and the formatted text must be equal, bit for bit.
  */
 import { describe, expect, it, vi } from 'vitest'

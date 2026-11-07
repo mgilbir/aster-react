@@ -2,7 +2,7 @@
  * Differential fuzzer.
  *
  * Generates deterministic Vega specs from a seeded PRNG, renders each through
- * the real Vega oracle and through @aster/core, canonicalizes both SVGs and
+ * the real Vega oracle and through @aster-charts/core, canonicalizes both SVGs and
  * compares geometry. Any mismatch is written to `fuzz-repro/` as a standalone
  * spec, so the nightly job leaves a committed, replayable artifact instead of
  * an ephemeral log.
@@ -14,7 +14,7 @@
 import { mkdirSync, readdirSync, readFileSync, writeFileSync, existsSync, rmSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { renderSpec } from '@aster/core'
+import { renderSpec } from '@aster-charts/core'
 import { renderWithVega } from '../src/render-vega.js'
 import { canonicalizeSvg, diffCanonical } from '../src/normalize.js'
 import { cli } from '../../../scripts/lib/cli.mjs'

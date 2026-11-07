@@ -2,12 +2,12 @@
 /**
  * HANDOFF (lane 3 -> lane 7): a scale whose domain is a signal that reads another scale's domain (`domain('color')`) through a
  * `react: false` signal, with a legend bound to a selection. Real vega draws the legend with its 3 entries and every point; Aster's runtime
- * draws a legend with 0 values and drops the points. The Vega is vega-lite's own output (nothing of @aster/vl is involved):
+ * draws a legend with 0 values and drops the points. The Vega is vega-lite's own output (nothing of @aster-charts/vl is involved):
  * gallery spec vl/point_constant_legend_domain. Fails today; belongs in packages/conformance/test/.
  */
 import { describe, it, expect } from 'vitest'
 import * as vl from 'vega-lite'
-import { renderSpec } from '@aster/core'
+import { renderSpec } from '@aster-charts/core'
 import { renderWithVegaChecked } from '../src/render-vega.js'
 import { canonicalizeSvg, diffCanonical } from '../src/normalize.js'
 

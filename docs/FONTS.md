@@ -27,7 +27,7 @@ Implications:
 ## Custom measurement
 
 ```ts
-import { renderSpec, withTextMetricsProvider, type TextMetricsProvider } from '@aster/core'
+import { renderSpec, withTextMetricsProvider, type TextMetricsProvider } from '@aster-charts/core'
 
 const provider: TextMetricsProvider = {
   // text, the CSS font string, the font size in px, and the scene item's font properties

@@ -21,22 +21,22 @@ const REACT_ALIAS = join(MONOREPO_ROOT, 'node_modules', '.pnpm')
 
 const ENTRIES = [
   {
-    label: '@aster/react <Chart>',
+    label: '@aster-charts/react <Chart>',
     file: 'aster.tsx',
-    src: `import { Chart } from '@aster/react'
+    src: `import { Chart } from '@aster-charts/react'
 export default Chart`,
   },
   {
-    label: '@aster/react <SvgChart> (lite)',
+    label: '@aster-charts/react <SvgChart> (lite)',
     file: 'aster-lite.tsx',
-    src: `import { SvgChart } from '@aster/react/lite'
+    src: `import { SvgChart } from '@aster-charts/react/lite'
 export default SvgChart`,
   },
   {
-    label: '@aster/react <SvgChart> + interaction',
+    label: '@aster-charts/react <SvgChart> + interaction',
     file: 'aster-lite-interaction.tsx',
-    src: `import { SvgChart } from '@aster/react/lite'
-import { interaction } from '@aster/react/interaction'
+    src: `import { SvgChart } from '@aster-charts/react/lite'
+import { interaction } from '@aster-charts/react/interaction'
 export { SvgChart, interaction }`,
   },
   {
@@ -75,7 +75,7 @@ for (const entry of ENTRIES) {
     logLevel: 'silent',
     // No manual aliases: workspace deps resolve through node_modules symlinks
     // and each package's package.json "exports" map, which stays correct as
-    // @aster/core grows subpath exports (dom, canvas, hit, ...).
+    // @aster-charts/core grows subpath exports (dom, canvas, hit, ...).
   })
   const buf = readFileSync(outPath)
   rows.push([entry.label, kb(buf.length), kb(gzipSync(buf).length), kb(brotliCompressSync(buf).length)])

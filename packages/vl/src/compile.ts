@@ -1512,7 +1512,7 @@ function mergeLayerScales(perLayer: ScaleSpec[][]): ScaleSpec[] {
     const merged: ScaleSpec = { name, type: first.type, domain: undefined }
     for (const s2 of list) {
       if (!compatibleScaleTypes(first.type, s2.type)) {
-        throw new VLCompileError(`layers give scale "${name}" incompatible types ("${first.type}" and "${s2.type}"); vega-lite would make them independent scales, which @aster/vl does not support`)
+        throw new VLCompileError(`layers give scale "${name}" incompatible types ("${first.type}" and "${s2.type}"); vega-lite would make them independent scales, which @aster-charts/vl does not support`)
       }
     }
     const explicitMerged = new Set<string>()

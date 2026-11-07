@@ -2,7 +2,7 @@
 /** The comparison of the composite-mark tests: one spec through vega-lite and through Aster, on the marks, axes, scales, legends and signals, the expressions and the SVG. */
 import { expect } from 'vitest'
 import * as vl from 'vega-lite'
-import { compile } from '@aster/vl'
+import { compile } from '@aster-charts/vl'
 import { renderWithVega, renderWithVegaChecked } from '../src/render-vega.js'
 import { canonicalizeSvg, diffCanonical } from '../src/normalize.js'
 import { expressionDiff } from './vl-expressions.js'

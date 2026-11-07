@@ -20,8 +20,8 @@
  */
 import { describe, expect, it } from 'vitest'
 import * as vega from 'vega'
-import { applyTransforms, compileExpr, type Row } from '@aster/core'
-import '@aster/core/transforms'
+import { applyTransforms, compileExpr, type Row } from '@aster-charts/core'
+import '@aster-charts/core/transforms'
 import { CASES, SEED } from './transform-cases.mjs'
 
 /** Real Vega crashes (incidental TypeErrors) on exactly this many cases; see header. */

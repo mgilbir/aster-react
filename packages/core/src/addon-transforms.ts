@@ -9,8 +9,8 @@
  * (sample/density/cumulative/quantile for the normal, log-normal and uniform distributions,
  * treePath, treeAncestors):
  *
- *   import '@aster/core/transforms'            // static
- *   await import('@aster/core/transforms')     // lazy
+ *   import '@aster-charts/core/transforms'            // static
+ *   await import('@aster-charts/core/transforms')     // lazy
  *
  * A plain bar/line/scatter chart never needs it; a spec that does use one of
  * these transforms throws an actionable "load the addon" error when the addon

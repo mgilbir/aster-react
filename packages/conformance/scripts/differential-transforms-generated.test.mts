@@ -20,8 +20,8 @@
  */
 import { describe, expect, it } from 'vitest'
 import * as vega from 'vega'
-import { applyTransforms, compileExpr, type Row } from '@aster/core'
-import '@aster/core/transforms'
+import { applyTransforms, compileExpr, type Row } from '@aster-charts/core'
+import '@aster-charts/core/transforms'
 import { makeRng, scaled, type Rng } from './differential-gen.mts'
 
 const SEED = 42

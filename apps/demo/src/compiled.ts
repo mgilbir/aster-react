@@ -1,4 +1,4 @@
-import { compile } from '@aster/vl'
+import { compile } from '@aster-charts/vl'
 import {
   LineSpec,
   ParamBoundSpec,
@@ -21,7 +21,7 @@ import {
 } from './specs.js'
 
 /**
- * Vega-Lite compilation for the demo runs through @aster/vl — the from-scratch
+ * Vega-Lite compilation for the demo runs through @aster-charts/vl — the from-scratch
  * compiler in this repo. No npm vega-lite in the render path: the oracle column
  * on the page is the only place the official toolchain appears, and it is
  * lazy-loaded separately.

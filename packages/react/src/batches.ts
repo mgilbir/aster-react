@@ -1,4 +1,4 @@
-import type { StreamBatch } from '@aster/core'
+import type { StreamBatch } from '@aster-charts/core'
 
 /**
  * Compose two batches into one that has the same effect as applying `a` then

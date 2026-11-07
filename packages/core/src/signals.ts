@@ -112,7 +112,7 @@ export interface SignalBindOptions {
   /**
    * Resolve a view-space position (page coords minus the svg origin, padding
    * included) to the scene item under it -- `buildHitIndex(scene).query` from
-   * `@aster/core/hit` fits. Without it `event.item` is recovered from the DOM
+   * `@aster-charts/core/hit` fits. Without it `event.item` is recovered from the DOM
    * (the `mark-*`/`role-*` classes, and the `data-datum` stamp when `stampDatumAttrs` was called).
    */
   pick?: (x: number, y: number) => { item: object; marktype?: string } | null

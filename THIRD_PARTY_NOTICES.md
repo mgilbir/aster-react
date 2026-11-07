@@ -1,6 +1,6 @@
 # Third-party notices
 
-`@aster/core`, `@aster/react` and `@aster/vl` have no runtime dependency on any
+`@aster-charts/core`, `@aster-charts/react` and `@aster-charts/vl` have no runtime dependency on any
 `vega-*`, `d3-*` or `topojson-*` package (`pnpm check:deps` enforces that on the
 sources and on the built `dist`). They do, however, contain TypeScript ports and
 transcriptions of those projects' algorithms, tables and colour palettes, and
@@ -52,7 +52,7 @@ OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 ```
 
-## Vega-Lite (ported by `@aster/vl`)
+## Vega-Lite (ported by `@aster-charts/vl`)
 
 Projects: vega-lite@6.4.3
 
@@ -1014,4 +1014,4 @@ The tests, benchmarks and conformance harness run against React, React DOM, Vega
 Vega-Lite, vega-embed, TypeScript, esbuild, Vite, Vitest, tsx, Playwright and
 pnpm, all installed from their registries under their own licences (MIT, BSD-3-Clause,
 Apache-2.0, ISC). None of their code is copied into the published packages;
-`react` is a peer dependency of `@aster/react` and is installed by the consumer.
+`react` is a peer dependency of `@aster-charts/react` and is installed by the consumer.

@@ -49,7 +49,7 @@ await build({
   logLevel: 'warning',
   // No manual aliases: workspace deps resolve through node_modules symlinks
   // and each package's package.json "exports" map, which stays correct as
-  // @aster/core grows subpath exports (dom, geo, signals, load, transforms,
+  // @aster-charts/core grows subpath exports (dom, geo, signals, load, transforms,
   // canvas, hit, ...).
 })
 

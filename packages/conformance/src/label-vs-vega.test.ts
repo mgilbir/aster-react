@@ -12,8 +12,8 @@ import { execFileSync } from 'node:child_process'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
-import '@aster/core/transforms'
-import { compileChart, datasetsOfScene, evaluateChart } from '@aster/core'
+import '@aster-charts/core/transforms'
+import { compileChart, datasetsOfScene, evaluateChart } from '@aster-charts/core'
 
 type Spec = Record<string, unknown>
 interface LabelItem { text: unknown; x: unknown; y: unknown; opacity: unknown; align: unknown; baseline: unknown }

@@ -1,16 +1,16 @@
 /**
  * The conformance corpus as Vega specs, for the React differential tests.
  * Vega-Lite entries are compiled with the same compiler `<Chart>` uses
- * (`@aster/vl`); URL data is resolved through the load addon, exactly as a host would.
+ * (`@aster-charts/vl`); URL data is resolved through the load addon, exactly as a host would.
  */
 import { readdirSync, readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { compile } from '@aster/vl'
-import type { VgSpec } from '@aster/core'
-import '@aster/core/geo'
-import '@aster/core/transforms'
-import { loadSpecData, TRUSTED_LOAD_OPTIONS } from '@aster/core/load'
+import { compile } from '@aster-charts/vl'
+import type { VgSpec } from '@aster-charts/core'
+import '@aster-charts/core/geo'
+import '@aster-charts/core/transforms'
+import { loadSpecData, TRUSTED_LOAD_OPTIONS } from '@aster-charts/core/load'
 
 export const CORPUS_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'conformance', 'corpus')
 

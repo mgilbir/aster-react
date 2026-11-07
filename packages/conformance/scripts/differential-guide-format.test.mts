@@ -17,7 +17,7 @@
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import * as vega from 'vega'
-import { compileChart, evaluateChart, registerExpressionFunction, renderSceneToSvg, renderSpec } from '@aster/core'
+import { compileChart, evaluateChart, registerExpressionFunction, renderSceneToSvg, renderSpec } from '@aster-charts/core'
 import { canonicalizeSvg, diffCanonical } from '../src/normalize.js'
 import { makeRng, scaled, type Rng } from './differential-gen.mts'
 

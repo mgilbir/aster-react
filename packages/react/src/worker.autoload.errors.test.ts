@@ -3,12 +3,12 @@
  * it are answered in order, and a message that needs nothing is never held up by the failure of an earlier one's import.
  */
 import { describe, expect, it, vi } from 'vitest'
-import type { ChartStream, VgSpec } from '@aster/core'
+import type { ChartStream, VgSpec } from '@aster-charts/core'
 import { createWorkerDispatcher, type ChartWorkerResponse, type ChartWorkerStreamResponse } from './worker'
 
-vi.mock('@aster/core/addons', async (importOriginal) => {
-  const real = await importOriginal<typeof import('@aster/core/addons')>()
-  return { ...real, loadAddons: vi.fn(() => Promise.reject(new Error('[aster] could not load the "transforms" add-on (@aster/core/transforms): offline'))) }
+vi.mock('@aster-charts/core/addons', async (importOriginal) => {
+  const real = await importOriginal<typeof import('@aster-charts/core/addons')>()
+  return { ...real, loadAddons: vi.fn(() => Promise.reject(new Error('[aster] could not load the "transforms" add-on (@aster-charts/core/transforms): offline'))) }
 })
 
 const PIE: VgSpec = {

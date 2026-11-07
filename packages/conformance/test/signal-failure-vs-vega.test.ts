@@ -6,7 +6,7 @@
  * the way vega's topological order does.
  */
 import { describe, it, expect } from 'vitest'
-import { renderSpec, evaluateChart, compileChart, datasetsOfScene } from '@aster/core'
+import { renderSpec, evaluateChart, compileChart, datasetsOfScene } from '@aster-charts/core'
 import { renderWithVegaChecked } from '../src/render-vega.js'
 import { canonicalizeSvg, diffCanonical } from '../src/normalize.js'
 

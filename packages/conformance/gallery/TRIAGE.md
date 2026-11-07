@@ -19,7 +19,7 @@ there is nothing to compare against. They are `vega/contour-plot`, `vega/density
 
 ```bash
 pnpm conformance:gallery --json=out.json
-pnpm --filter @aster/conformance exec tsx scripts/gallery-triage.mts out.json triage.json
+pnpm --filter @aster-charts/conformance exec tsx scripts/gallery-triage.mts out.json triage.json
 ```
 
 [scripts/gallery-triage.mts](../scripts/gallery-triage.mts) puts every spec the static path did not pass into a root-cause category
@@ -29,7 +29,7 @@ The gallery cache must be fetched first ([README.md](README.md#the-specs-are-fet
 
 ## Compiler gaps the gallery cannot see
 
-Gaps in `@aster/vl` that no gallery spec exercises are listed, with how to reproduce them, in
+Gaps in `@aster-charts/vl` that no gallery spec exercises are listed, with how to reproduce them, in
 [packages/vl/README.md](../../vl/README.md#known-compiler-gaps-outside-the-gallery).
 
 ## History

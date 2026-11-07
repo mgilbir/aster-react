@@ -10,9 +10,9 @@
  */
 import { describe, it, expect } from 'vitest'
 import * as vega from 'vega'
-import '@aster/core/transforms'
-import { datasetsOfScene } from '@aster/core'
-import { createChartSession } from '@aster/core/dom'
+import '@aster-charts/core/transforms'
+import { datasetsOfScene } from '@aster-charts/core'
+import { createChartSession } from '@aster-charts/core/dom'
 import { seededRandom, withOracleRandom } from '../src/gallery/seeded.js'
 
 const rows = Array.from({ length: 80 }, (_, i) => ({ id: i, g: i % 4, x: (i * 37) % 23, y: ((i * 11) % 17) - 8 }))

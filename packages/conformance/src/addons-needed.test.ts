@@ -13,13 +13,13 @@ import { readdirSync, readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import * as vl from 'vega-lite'
-import '@aster/core/geo'
-import '@aster/core/transforms'
-import { loadSpecData, TRUSTED_LOAD_OPTIONS } from '@aster/core/load'
+import '@aster-charts/core/geo'
+import '@aster-charts/core/transforms'
+import { loadSpecData, TRUSTED_LOAD_OPTIONS } from '@aster-charts/core/load'
 import {
   addonsNeeded, isAddonLoaded, missingAddons, ADDON_FUNCTIONS, registeredFunctionNames, withdrawFunctions, LOAD_ADDON_FORMATS, TRANSFORMS_ADDON_TYPES, type AddonName,
-} from '@aster/core/addons'
-import { compileChart, dataFormatRegistry, geoRegistry, renderSpec, transformRegistry, type TransformFn, type VgSpec } from '@aster/core'
+} from '@aster-charts/core/addons'
+import { compileChart, dataFormatRegistry, geoRegistry, renderSpec, transformRegistry, type TransformFn, type VgSpec } from '@aster-charts/core'
 
 const ADDONS: readonly AddonName[] = ['transforms', 'geo', 'load']
 const CORPUS = join(dirname(fileURLToPath(import.meta.url)), '..', 'corpus')
@@ -59,7 +59,7 @@ function setLoaded(name: AddonName, on: boolean): void {
 }
 const setOnly = (loaded: ReadonlySet<AddonName>): void => { for (const a of ADDONS) setLoaded(a, loaded.has(a)) }
 
-const MISSING = /load the addon first: await import\("@aster\/core\/(transforms|geo|load)"\)/
+const MISSING = /load the addon first: await import\("@aster-charts\/core\/(transforms|geo|load)"\)/
 
 /** The add-ons the engine asks for, discovered the way a loading app would: one "load the addon" failure at a time. */
 function discovered(spec: VgSpec): { needed: Set<AddonName>; svg: string } | { error: string } {
@@ -127,7 +127,7 @@ describe('addonsNeeded is exactly what the engine asks for, over the whole corpu
 })
 
 describe('the detector\'s tables are the add-ons\' registrations', () => {
-  it('TRANSFORMS_ADDON_TYPES is what @aster/core/transforms registers, and what the engine asks it for', () => {
+  it('TRANSFORMS_ADDON_TYPES is what @aster-charts/core/transforms registers, and what the engine asks it for', () => {
     setOnly(new Set(ADDONS))
     expect([...transformRegistry.keys()].sort()).toEqual([...TRANSFORMS_ADDON_TYPES].sort())
     const source = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'core', 'src', 'transform.ts'), 'utf8')
@@ -149,11 +149,11 @@ describe('the detector\'s tables are the add-ons\' registrations', () => {
       // without the add-on the engine names it (rather than "Unrecognized function")
       const other = ADDONS.filter((a) => a !== addon)
       setOnly(new Set(other))
-      expect(() => renderSpec(call(name)), name).toThrow(new RegExp(`load the addon first: await import\\("@aster/core/${addon}"\\)`))
+      expect(() => renderSpec(call(name)), name).toThrow(new RegExp(`load the addon first: await import\\("@aster-charts/core/${addon}"\\)`))
       setOnly(new Set(ADDONS))
     }
   })
-  it('LOAD_ADDON_FORMATS is what @aster/core/load registers beyond the built-in json', () => {
+  it('LOAD_ADDON_FORMATS is what @aster-charts/core/load registers beyond the built-in json', () => {
     setOnly(new Set(ADDONS))
     expect([...dataFormatRegistry.keys()].filter((f) => f !== 'json').sort()).toEqual([...LOAD_ADDON_FORMATS].sort())
   })

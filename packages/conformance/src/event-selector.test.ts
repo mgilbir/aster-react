@@ -1,5 +1,5 @@
 /**
- * @aster/core's event selector parser is a port of vega-event-selector. A port can drift, so
+ * @aster-charts/core's event selector parser is a port of vega-event-selector. A port can drift, so
  * it is compared with the real parser (vega re-exports it as `parseSelector`) over a grammar
  * of selectors -- including the malformed ones, where the error message must match too.
  */
@@ -65,7 +65,7 @@ describe('event selector parser matches vega-event-selector', () => {
     })
   }
 
-  it('the copy @aster/vl carries (it has no dependency on the engine) is the same parser', () => {
+  it('the copy @aster-charts/vl carries (it has no dependency on the engine) is the same parser', () => {
     let compared = 0
     for (const s of [...generate(), ...ODD]) {
       expect(outcome(() => parseInVl(s, 'scope')), JSON.stringify(s)).toEqual(outcome(() => parseEventSelectorString(s, 'scope')))

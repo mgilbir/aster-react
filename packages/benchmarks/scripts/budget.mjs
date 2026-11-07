@@ -2,7 +2,7 @@
  * Bundle-size budgets: one tiny app per documented import pattern is bundled (esbuild, production, minify) and its gzip size is
  * checked against the ceiling in BUDGETS below (the measured size plus 0.5 kB). Needs `pnpm build` and refuses a stale dist.
  *
- * Run: pnpm --filter @aster/benchmarks run budget   (the `budget` gate of `pnpm check`)
+ * Run: pnpm --filter @aster-charts/benchmarks run budget   (the `budget` gate of `pnpm check`)
  * Environment: ASTER_BUDGET_IGNORE_SIDE_EFFECTS=1 bundles as if no package declared `sideEffects` (the "before" column of docs/PERFORMANCE.md).
  *
  * Exit codes: 0 every pattern is within its budget, 1 a budget is exceeded or a pattern fails to bundle, 2 bad usage (an unknown option).
@@ -22,7 +22,7 @@ cli({ url: import.meta.url })
 // on, react/react-dom external) and gates its gzip size. What a row means:
 //
 //   absolute rows  the whole bundle of that app: core `renderSpec`, `useChart`, `<Chart>`, `<Chart>` + the VL compiler.
-//   marginal rows  "+ @aster/core/<addon>": the addon's gzip ADDED to the `@aster/core` app. The addons share most of
+//   marginal rows  "+ @aster-charts/core/<addon>": the addon's gzip ADDED to the `@aster-charts/core` app. The addons share most of
 //                  their code with core, so a standalone figure (the old rows: hit 15.6, load 14.6) double counts it
 //                  and hid regressions: what an app pays for `+ hit` is ~5 kB.
 //
@@ -32,7 +32,7 @@ cli({ url: import.meta.url })
 // scripts/bundle-shaking.test.mjs asserts the row fails). The opposite failure, a `sideEffects` list that is too
 // narrow, is caught by scripts/check-bundle-shaking.mjs, which executes the bundles.
 //
-// Every ceiling is the measured value + 0.5 kB (gzip, default level; `pnpm --filter @aster/benchmarks run budget`).
+// Every ceiling is the measured value + 0.5 kB (gzip, default level; `pnpm --filter @aster-charts/benchmarks run budget`).
 // A change that needs more room edits the number here, in the PR, where the owner sees it. The history of why the
 // core row grew (colour, calendar, format, transforms, scales, signals, limits, ...) is in docs/PERFORMANCE.md and the
 // git log of this file.
@@ -51,12 +51,12 @@ cli({ url: import.meta.url })
 // Measured 2026-10-26 (kB gzip), after the Vega-Lite maps and animation work: core 125.3 (+2.2: the d3-timer port, real
 // `modify`, the vega-selections functions, the fit-projection registry); marginal signals 5.8 (+1.4: timer streams, owners,
 // the data hook); geo 12.5; useChart 128.6; Chart 161.1; SvgChart 144.2; SvgChart + interaction 155.4; Chart + VL 223.5
-// (+12.2 over the 211.3 above: the maps and animation compile in @aster/vl and the core runtime they need).
+// (+12.2 over the 211.3 above: the maps and animation compile in @aster-charts/vl and the core runtime they need).
 // Measured 2026-10-26 after the Vega-Lite maps and animation work on top of the selections work (kB gzip): signals marginal
 // 7.8 (+0.4 over the selections raise: the d3-timer port and timer owners in the event loop); Chart 164.8 (+1.0), SvgChart 145.9
 // (+0.6), SvgChart + interaction 159.1 (+1.1): the timer port, the fit-projection registry and unrounded geoshape bounds
 // in core; Chart + VL 240.0 (+8.8): the maps (projections, geojson / geopoint data, geoshape marks) and animation (the time
-// channel's scale, frame dataset and the timer selection) compile in @aster/vl.
+// channel's scale, frame dataset and the timer selection) compile in @aster-charts/vl.
 // Runtime parity (guides built from ports of vega-parser's guide encoders, shared immutable plans, per-scope abort model,
 // legend part metadata) on top of the above, measured 2026-10-27 (kB gzip): core 133.8 (+8.5 over 125.3; the guide ports),
 // useChart 137.7, Chart 172.4, SvgChart 153.0, SvgChart + interaction 166.2, Chart + VL 247.4. Marginal rows unchanged.
@@ -70,8 +70,8 @@ cli({ url: import.meta.url })
 // The pointer through the svg's screen CTM (core/pointer.ts, one cached map for the cursor, tooltip and gestures), the
 // painted-geometry hit index and the inert flags, merged, measured (kB gzip): hit marginal 5.8, Chart 174.8, SvgChart 154.3,
 // SvgChart + interaction 168.7, Chart + VL 249.9.
-// Add-on auto-load (the shells and hooks read which add-ons a spec needs and import them on demand: @aster/core/addons, the
-// Suspense wait in @aster/react), measured (kB gzip, the entry and the chunks it imports statically; the add-ons are chunks
+// Add-on auto-load (the shells and hooks read which add-ons a spec needs and import them on demand: @aster-charts/core/addons, the
+// Suspense wait in @aster-charts/react), measured (kB gzip, the entry and the chunks it imports statically; the add-ons are chunks
 // fetched on demand and are not counted): useChart 139.9 (+2.0), Chart 176.6 (+1.8), SvgChart 157.5 (+3.2), SvgChart +
 // interaction 171.7 (+3.0), Chart + VL 252.0 (+2.1). The code itself is +0.7..0.9 (the detector, its tables, the loader and the
 // hook; measured with the add-ons kept out of the bundle); the rest is the chunk boundary a bundler draws once the add-ons are
@@ -87,7 +87,7 @@ cli({ url: import.meta.url })
 // expression compiler reads to say which add-on to load); useChart 142.1, Chart 178.2, SvgChart 159.7, SvgChart + interaction
 // 173.2, Chart + VL 253.5. The two sets of changes add up: the gallery work moves code core shares with the add-ons into the
 // chunks the entry imports by name (the same chunk boundary as above), and the detector now parses expressions.
-// The @aster/vl compiler ports vega-lite's layout-size, band/bin/time-unit position, path-overlay, stack-order, resolve and
+// The @aster-charts/vl compiler ports vega-lite's layout-size, band/bin/time-unit position, path-overlay, stack-order, resolve and
 // legend-merge rules (gallery conformance): Chart + VL 257.6 (+7.7: the binned discrete fields and the layered axis merge came last).
 // Nothing outside the VL row moved.
 // The dataflow-failure containment (a throwing dataset stops the pass like vega's): SvgChart +0.1.
@@ -117,9 +117,9 @@ cli({ url: import.meta.url })
 // vega-wordcloud / d3-cloud (wordcloud.ts, replacing the stand-in), measured (kB gzip): signals marginal 14.2 (+1.5), transforms
 // marginal 39.1 (+1.7), Chart 188.6, SvgChart + interaction 183.5, Chart + VL 284.9; core, useChart and SvgChart did not move enough to
 // cross their ceilings (core 140.6).
-// The selection and composite-mark compilers rewritten in @aster/vl (a smaller wiring, one part builder): Chart + VL 282.5 (-0.4); the
+// The selection and composite-mark compilers rewritten in @aster-charts/vl (a smaller wiring, one part builder): Chart + VL 282.5 (-0.4); the
 // ceiling follows it down. Every other row is unchanged.
-// The @aster/vl compile gaps (a facet over a repeat or a concat, view names, scale forwarding, orientation of the marks with no measure),
+// The @aster-charts/vl compile gaps (a facet over a repeat or a concat, view names, scale forwarding, orientation of the marks with no measure),
 // measured (kB gzip): Chart + VL 283.6 (1.6 over the 282.0 ceiling; the base was not measured separately); every other row is unchanged.
 // Lane fix/core-gaps (the id counter of a view, tuple creation order for sort ties, the check of a spec's expressions, transform names):
 // Chart + VL 283.5 (+2.0 over 281.5); the other rows stay inside their ceilings.
@@ -159,7 +159,7 @@ cli({ url: import.meta.url })
 // With the compile-time check of expressions merged on top of #78-#86 (kB gzip): core 150.4, useChart 157.2, Chart 198.5, SvgChart 175.9,
 // SvgChart + interaction 193.2, Chart + VL 299.3; marginal: dom 6.0, canvas 6.0, hit 6.4, signals 12.9, load 5.4, geo 16.1, transforms 39.2.
 // Every ceiling is that measure + 0.5.
-// The ranged-channel, scale-type and polar fixes in @aster/vl (fix/vl-ranged-temporal): Chart + VL 300.0 (+0.7 over 299.3: the scale-type rules,
+// The ranged-channel, scale-type and polar fixes in @aster-charts/vl (fix/vl-ranged-temporal): Chart + VL 300.0 (+0.7 over 299.3: the scale-type rules,
 // the secondary channel's domain, theta2 / radius2 and the constant-second-channel rules); nothing else moves. Its ceiling is that measure + 0.5.
 // The runtime leftovers (fix/runtime-leftovers), measured (kB gzip) against origin/main's 98676b5: core 141.5 (+0.5: the facet
 // join on vega's flat key and the aggregate's group keys, field paths where names were read as plain properties, the error a
@@ -206,28 +206,28 @@ cli({ url: import.meta.url })
 // Guide formats, layout errors and the parse walk (fix/core-parse-format-layout-errors) on main with the sort fix, measured on a clean build
 // (kB gzip): Chart + VL 308.3 (+1.3 over main's 307.0 ceiling; the core growth the lane measured). Ceiling is the measured value + 0.5.
 const BUDGETS = {
-  '@aster/core': 152.9 * 1024,
-  '+ @aster/core/dom': 11.1 * 1024,
-  '+ @aster/core/canvas': 6.4 * 1024,
-  '+ @aster/core/hit': 7.0 * 1024,
-  '+ @aster/core/signals': 13.4 * 1024,
-  '+ @aster/core/load': 5.9 * 1024,
-  '+ @aster/core/geo': 16.6 * 1024,
-  '+ @aster/core/transforms': 39.7 * 1024,
-  '@aster/react useChart': 164.1 * 1024,
-  '@aster/react Chart': 205.7 * 1024,
-  // The light chart (`@aster/react/lite`): SVG only, no canvas renderer; alone and with the `interaction` capability.
-  '@aster/react SvgChart': 182.9 * 1024,
-  '@aster/react SvgChart + interaction': 200.1 * 1024,
-  // Base + the VL compiler (opt-in: `import '@aster/react/vl'`).
-  '@aster/react Chart + VL': 308.8 * 1024,
+  '@aster-charts/core': 152.9 * 1024,
+  '+ @aster-charts/core/dom': 11.1 * 1024,
+  '+ @aster-charts/core/canvas': 6.4 * 1024,
+  '+ @aster-charts/core/hit': 7.0 * 1024,
+  '+ @aster-charts/core/signals': 13.4 * 1024,
+  '+ @aster-charts/core/load': 5.9 * 1024,
+  '+ @aster-charts/core/geo': 16.6 * 1024,
+  '+ @aster-charts/core/transforms': 39.7 * 1024,
+  '@aster-charts/react useChart': 164.1 * 1024,
+  '@aster-charts/react Chart': 205.7 * 1024,
+  // The light chart (`@aster-charts/react/lite`): SVG only, no canvas renderer; alone and with the `interaction` capability.
+  '@aster-charts/react SvgChart': 182.9 * 1024,
+  '@aster-charts/react SvgChart + interaction': 200.1 * 1024,
+  // Base + the VL compiler (opt-in: `import '@aster-charts/react/vl'`).
+  '@aster-charts/react Chart + VL': 308.8 * 1024,
 }
 
 const THIS_DIR = dirname(fileURLToPath(import.meta.url))
 const MONOREPO_ROOT = dirname(dirname(dirname(THIS_DIR)))
 const TMP = join(MONOREPO_ROOT, 'packages', 'benchmarks', '.tmp')
 
-const CORE_APP = String.raw`import { renderSpec } from '@aster/core'
+const CORE_APP = String.raw`import { renderSpec } from '@aster-charts/core'
 const spec = { width: 400, height: 300, data: [{ name: 't', values: [{ x: 0, y: 10 }] }], scales: [{ name: 'x', type: 'linear', domain: { data: 't', field: 'x' }, range: 'width' }], marks: [] }
 export default () => renderSpec(spec)
 `
@@ -238,112 +238,112 @@ export default () => renderSpec(spec)
  * most of their code with core, so a standalone figure double counts it; the marginal one is what an app pays.
  */
 const ENTRIES = [
-  { name: '@aster/core', file: 'core.mjs', platform: 'node', src: CORE_APP },
+  { name: '@aster-charts/core', file: 'core.mjs', platform: 'node', src: CORE_APP },
   {
-    name: '+ @aster/core/dom',
-    base: '@aster/core',
+    name: '+ @aster-charts/core/dom',
+    base: '@aster-charts/core',
     file: 'dom.mjs',
     platform: 'node',
-    src: CORE_APP + String.raw`import { createChartSession, patchSceneDom } from '@aster/core/dom'
+    src: CORE_APP + String.raw`import { createChartSession, patchSceneDom } from '@aster-charts/core/dom'
 export const dom = { createChartSession, patchSceneDom }
 `,
   },
   {
-    name: '+ @aster/core/canvas',
-    base: '@aster/core',
+    name: '+ @aster-charts/core/canvas',
+    base: '@aster-charts/core',
     file: 'canvas.mjs',
     platform: 'node',
-    src: CORE_APP + String.raw`import { renderSceneToCanvas } from '@aster/core/canvas'
+    src: CORE_APP + String.raw`import { renderSceneToCanvas } from '@aster-charts/core/canvas'
 export const canvas = renderSceneToCanvas
 `,
   },
   {
-    name: '+ @aster/core/hit',
-    base: '@aster/core',
+    name: '+ @aster-charts/core/hit',
+    base: '@aster-charts/core',
     file: 'hit.mjs',
     platform: 'node',
-    src: CORE_APP + String.raw`import { buildHitIndex } from '@aster/core/hit'
+    src: CORE_APP + String.raw`import { buildHitIndex } from '@aster-charts/core/hit'
 export const hit = buildHitIndex
 `,
   },
   {
-    name: '+ @aster/core/signals',
-    base: '@aster/core',
+    name: '+ @aster-charts/core/signals',
+    base: '@aster-charts/core',
     file: 'signals.mjs',
     platform: 'node',
-    src: CORE_APP + String.raw`import { bindSceneSignals } from '@aster/core/signals'
+    src: CORE_APP + String.raw`import { bindSceneSignals } from '@aster-charts/core/signals'
 export const signals = bindSceneSignals
 `,
   },
   {
-    name: '+ @aster/core/load',
-    base: '@aster/core',
+    name: '+ @aster-charts/core/load',
+    base: '@aster-charts/core',
     file: 'load.mjs',
     platform: 'node',
-    src: CORE_APP + String.raw`import { loadSpecData } from '@aster/core/load'
+    src: CORE_APP + String.raw`import { loadSpecData } from '@aster-charts/core/load'
 export const load = loadSpecData
 `,
   },
   {
-    name: '+ @aster/core/geo',
-    base: '@aster/core',
+    name: '+ @aster-charts/core/geo',
+    base: '@aster-charts/core',
     file: 'geo.mjs',
     platform: 'node',
-    src: CORE_APP + String.raw`import '@aster/core/geo'
+    src: CORE_APP + String.raw`import '@aster-charts/core/geo'
 `,
   },
   {
-    name: '+ @aster/core/transforms',
-    base: '@aster/core',
+    name: '+ @aster-charts/core/transforms',
+    base: '@aster-charts/core',
     file: 'transforms.mjs',
     platform: 'node',
-    src: CORE_APP + String.raw`import '@aster/core/transforms'
+    src: CORE_APP + String.raw`import '@aster-charts/core/transforms'
 `,
   },
   {
-    name: '@aster/react useChart',
+    name: '@aster-charts/react useChart',
     file: 'react-usechart.tsx',
     platform: 'browser',
     external: ['react', 'react-dom', 'react/jsx-runtime'],
-    src: String.raw`import { useChart } from '@aster/react'
+    src: String.raw`import { useChart } from '@aster-charts/react'
 export default useChart
 `,
   },
   {
-    name: '@aster/react Chart',
+    name: '@aster-charts/react Chart',
     file: 'react.tsx',
     platform: 'browser',
     external: ['react', 'react-dom', 'react/jsx-runtime'],
-    src: String.raw`import { Chart } from '@aster/react'
+    src: String.raw`import { Chart } from '@aster-charts/react'
 export default Chart
 `,
   },
   {
-    name: '@aster/react SvgChart',
+    name: '@aster-charts/react SvgChart',
     file: 'react-svgchart.tsx',
     platform: 'browser',
     external: ['react', 'react-dom', 'react/jsx-runtime'],
-    src: String.raw`import { SvgChart } from '@aster/react/lite'
+    src: String.raw`import { SvgChart } from '@aster-charts/react/lite'
 export default SvgChart
 `,
   },
   {
-    name: '@aster/react SvgChart + interaction',
+    name: '@aster-charts/react SvgChart + interaction',
     file: 'react-svgchart-interaction.tsx',
     platform: 'browser',
     external: ['react', 'react-dom', 'react/jsx-runtime'],
-    src: String.raw`import { SvgChart } from '@aster/react/lite'
-import { interaction } from '@aster/react/interaction'
+    src: String.raw`import { SvgChart } from '@aster-charts/react/lite'
+import { interaction } from '@aster-charts/react/interaction'
 export { SvgChart, interaction }
 `,
   },
   {
-    name: '@aster/react Chart + VL',
+    name: '@aster-charts/react Chart + VL',
     file: 'react-vl.tsx',
     platform: 'browser',
     external: ['react', 'react-dom', 'react/jsx-runtime'],
-    src: String.raw`import '@aster/react/vl'
-import { Chart } from '@aster/react'
+    src: String.raw`import '@aster-charts/react/vl'
+import { Chart } from '@aster-charts/react'
 export default Chart
 `,
   },
@@ -424,8 +424,8 @@ try {
     const outDir = join(TMP, 'out')
     rmSync(outDir, { recursive: true, force: true })
     writeFileSync(entryPath, entry.src)
-    // Code-split, so an add-on that is only ever `import()`ed (the shells load @aster/core/geo, /transforms and /load on demand,
-    // see @aster/core/addons) is a chunk of its own, as it is in a real build. The row counts what the page loads up front: the
+    // Code-split, so an add-on that is only ever `import()`ed (the shells load @aster-charts/core/geo, /transforms and /load on demand,
+    // see @aster-charts/core/addons) is a chunk of its own, as it is in a real build. The row counts what the page loads up front: the
     // entry and every chunk it imports statically, not the chunks fetched later and only by a spec that needs them.
     const built = await build({
       entryPoints: [entryPath],

@@ -23,7 +23,7 @@
  * avoids marks with), measured by the engine's text metrics. That cloud is deterministic and well formed, and not the one a
  * browser draws.
  *
- * Registered by `@aster/core/transforms`.
+ * Registered by `@aster-charts/core/transforms`.
  */
 /*
 Copyright (c) 2013, Jason Davies.

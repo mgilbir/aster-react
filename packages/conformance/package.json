@@ -1,5 +1,5 @@
 {
-  "name": "@aster/conformance",
+  "name": "@aster-charts/conformance",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -30,9 +30,9 @@
     "conformance:selections": "tsx scripts/browser-vl-selections.mts --min-cases=53 --max-retained=13"
   },
   "dependencies": {
-    "@aster/core": "workspace:*",
-    "@aster/react": "workspace:*",
-    "@aster/vl": "workspace:*",
+    "@aster-charts/core": "workspace:*",
+    "@aster-charts/react": "workspace:*",
+    "@aster-charts/vl": "workspace:*",
     "vega": "^6.3.1",
     "vega-lite": "^6.4.3"
   },

@@ -18,7 +18,7 @@ used only by the conformance harness, the vector generators and the benchmarks.
 
 The codebase as inherited does not have that shape:
 
-1. `@aster/core` depends at runtime on `vega-expression`, `vega-interpreter`,
+1. `@aster-charts/core` depends at runtime on `vega-expression`, `vega-interpreter`,
    `vega-format`, `vega-scale`, `vega-time`, `vega-util` and on `d3-color`,
    `d3-contour`, `d3-dsv`, `d3-geo`, `d3-shape`, `topojson-client` (with
    `d3-array`/`d3-format`/`d3-scale`/`d3-time`/`d3-time-format` declared but unused).
@@ -32,7 +32,7 @@ behaviour end to end, and it is the only route to rendering Vega-Lite directly.
 
 ## Decision
 
-1. **The runtime owns the engine.** `@aster/core` and `@aster/react` must not import
+1. **The runtime owns the engine.** `@aster-charts/core` and `@aster-charts/react` must not import
    or declare any `vega-*`, `d3-*` or `topojson-*` package. Every such surface is
    reimplemented in TypeScript and covered by two gates:
    - **oracle vectors** — input/output pairs recorded from the pinned upstream package
@@ -43,7 +43,7 @@ behaviour end to end, and it is the only route to rendering Vega-Lite directly.
      machine-independent.
    - **the SVG conformance corpus** — real Vega renders the same spec and the two
      outputs are diffed, as before.
-2. **The oracle stays pinned and dev-only.** `@aster/conformance` declares the exact
+2. **The oracle stays pinned and dev-only.** `@aster-charts/conformance` declares the exact
    oracle versions it records against, in its devDependencies. They never ship.
 3. **The boundary is enforced by a ratchet.** `scripts/check-deps.mjs` fails on any
    banned import or dependency not listed in a package's `dep-baseline.json`, and on
@@ -70,7 +70,7 @@ behaviour end to end, and it is the only route to rendering Vega-Lite directly.
 
 *2026-10-23, to match the code.* The decision stands; the mechanics moved:
 
-- The boundary covers `@aster/core`, `@aster/react` and `@aster/vl`, and checks the built `dist` (JS and `.d.ts`)
+- The boundary covers `@aster-charts/core`, `@aster-charts/react` and `@aster-charts/vl`, and checks the built `dist` (JS and `.d.ts`)
   as well as the sources. It matches `vega`, `d3`, `topojson` and their `-*` packages (including `@types/` forms),
   parses every import form with the TypeScript compiler (`scripts/lib/scan-imports.mjs`) and refuses a specifier it
   cannot resolve statically.
@@ -82,5 +82,5 @@ behaviour end to end, and it is the only route to rendering Vega-Lite directly.
   zones.
 - The bundle gap to react-vega holds for Vega specs only. Measured 2026-11-06 with `pnpm bench:bundle`: `<Chart>` (Vega, all
   chunks) 264.0 kB gzip against react-vega 288.7 kB, whose bundle also contains Vega-Lite. With the Vega-Lite compiler
-  `<Chart>` is 308.3 kB gzip eager plus 59.1 kB on demand (`pnpm --filter @aster/benchmarks run budget`), above react-vega.
+  `<Chart>` is 308.3 kB gzip eager plus 59.1 kB on demand (`pnpm --filter @aster-charts/benchmarks run budget`), above react-vega.
   The per-entry sizes are in [PERFORMANCE.md](../PERFORMANCE.md#bundle-sizes).

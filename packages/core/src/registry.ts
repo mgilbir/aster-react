@@ -4,10 +4,10 @@
  * The core bundle (scales, marks, layout, expressions, transforms) must not
  * statically include the geo projections and contours — a line/bar chart has no
  * business paying for projection clipping code. Instead, an opt-in addon entry
- * (`@aster/core/geo`) registers Aster's own implementations of them (geo.ts,
+ * (`@aster-charts/core/geo`) registers Aster's own implementations of them (geo.ts,
  * geo-projections.ts, geo-path.ts) here before the first render:
  *
- *   await import('@aster/core/geo')
+ *   await import('@aster-charts/core/geo')
  *
  * The core code paths consult the registry and throw an actionable error when a
  * spec uses geo/contour without the addon loaded.
@@ -50,7 +50,7 @@ export const geoRegistry: GeoRegistry = {
 export const SHAPE_BOUNDS = new WeakMap<object, () => [number, number, number, number] | null>()
 
 export function requireGeo(): NonNullable<GeoRegistry['buildProjection']> {
-  if (!geoRegistry.buildProjection) throw new Error('[aster] this spec uses a geo projection; load the addon first: await import("@aster/core/geo")')
+  if (!geoRegistry.buildProjection) throw new Error('[aster] this spec uses a geo projection; load the addon first: await import("@aster-charts/core/geo")')
   return geoRegistry.buildProjection
 }
 
@@ -60,16 +60,16 @@ export type TransformFn = (rows: any[], params: Record<string, unknown>, ctx: an
 /**
  * Registry for the rare-layout and statistics transforms (the types are listed in
  * `TRANSFORMS_ADDON_TYPES`, addons.ts). The core bundle keeps only the
- * transforms a plain chart uses; the opt-in addon entry (`@aster/core/transforms`)
+ * transforms a plain chart uses; the opt-in addon entry (`@aster-charts/core/transforms`)
  * registers the rest:
  *
- *   await import('@aster/core/transforms')
+ *   await import('@aster-charts/core/transforms')
  */
 export const transformRegistry = new Map<string, TransformFn>()
 
 export function requireTransform(type: string): TransformFn {
   const fn = transformRegistry.get(type)
-  if (!fn) throw new Error(`[aster] this spec uses the "${type}" transform; load the addon first: await import("@aster/core/transforms")`)
+  if (!fn) throw new Error(`[aster] this spec uses the "${type}" transform; load the addon first: await import("@aster-charts/core/transforms")`)
   return fn
 }
 
@@ -78,7 +78,7 @@ export type DataFormatReader = (data: unknown, format: Record<string, unknown>) 
 /**
  * Registry for text-format data readers (csv/tsv/dsv/topojson). The core
  * ships the JSON reader and the `format.parse` type coercion; text formats
- * and URL fetching are registered by the `@aster/core/load` addon.
+ * and URL fetching are registered by the `@aster-charts/core/load` addon.
  */
 export const dataFormatRegistry = new Map<string, DataFormatReader>()
 

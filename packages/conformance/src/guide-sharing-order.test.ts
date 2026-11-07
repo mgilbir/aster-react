@@ -9,9 +9,9 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import * as vl from 'vega-lite'
-import '@aster/core/geo'
-import '@aster/core/transforms'
-import { compileChart, evaluateChart, renderSceneToSvg, renderSpec } from '@aster/core'
+import '@aster-charts/core/geo'
+import '@aster-charts/core/transforms'
+import { compileChart, evaluateChart, renderSceneToSvg, renderSpec } from '@aster-charts/core'
 
 const CORPUS = join(dirname(fileURLToPath(import.meta.url)), '..', 'corpus')
 const files = readdirSync(CORPUS).filter((f) => f.endsWith('.vg.json') || f.endsWith('.vl.json')).sort()

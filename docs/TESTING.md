@@ -51,8 +51,8 @@ that does not exist. Neither finds a list reworded: they find one copied.
 What the notable gates establish: the dependency check parses every import form
 and also scans the built `dist` (see `scripts/check-deps.mjs`); `conformance` is
 the real-Vega SVG diff over the corpus; `conformance-vl` compiles the Vega-Lite corpus
-with `@aster/vl`, diffs it against the Vega-Lite oracle and renders the Vega that
-`@aster/vl` emits through real vega (an error or a warning from vega fails the entry);
+with `@aster-charts/vl`, diffs it against the Vega-Lite oracle and renders the Vega that
+`@aster-charts/vl` emits through real vega (an error or a warning from vega fails the entry);
 `verify-publish` packs, installs and imports the tarballs (see [RELEASE.md](RELEASE.md)).
 
 ### Command-line options and exit codes
@@ -63,7 +63,7 @@ and exits 0 without doing any work:
 
 ```bash
 pnpm check -- --help
-pnpm --filter @aster/conformance run sweep-values --help
+pnpm --filter @aster-charts/conformance run sweep-values --help
 node scripts/check-deps.mjs --help
 ```
 
@@ -106,7 +106,7 @@ A sweep generates one small chart per property/value of the schema (`--filter su
 passes when cases actually ran, the generated count is at least `--floor`, the number of equal renders is at least
 `--min-ok`, nothing differs and Aster crashes on nothing. `--max-node-error` is a ceiling on cases the oracle itself
 crashes on (an Aster crash is never reclassified), `--max-retained` a ceiling on `retained` cases. `--vega-check`
-also renders the Vega that `@aster/vl` emits through real vega. The signals sweep is a PR gate (`sweep-signals` in
+also renders the Vega that `@aster-charts/vl` emits through real vega. The signals sweep is a PR gate (`sweep-signals` in
 `scripts/gates.mjs`); the other three (Vega, Vega-Lite, values) run nightly with the values in `.github/workflows/nightly.yml`. Raise the floors
 when the schemas grow, never lower them. The Vega sweep's three oracle-side node-errors are vega-interpreter's
 area `bundle` interpolator (two cases) and a negative trail radius.
@@ -161,7 +161,7 @@ result is the summary line it prints. They change with the code: re-run before q
 | Unit, React, script and vector tests | `pnpm test` | 319 files, 33665 tests passed |
 | Time-zone matrix | `pnpm test:tz` | `[tz] all zones passed` (zone-sensitive vitest suites under America/New_York, Asia/Kolkata and Australia/Lord_Howe; `corpus-tz` under UTC and those three) |
 | SVG corpus vs real Vega | `pnpm conformance` | 1059/1059 passed |
-| Vega-Lite corpus through `@aster/vl` | `pnpm conformance-vl` | 672 passed, 0 failed, 0 errored / 672 |
+| Vega-Lite corpus through `@aster-charts/vl` | `pnpm conformance-vl` | 672 passed, 0 failed, 0 errored / 672 |
 | Scene differential | `pnpm scene-diff` | 1059/1059 scenes match |
 | Incremental vs fresh evaluation (no oracle) | `pnpm conformance:diff` | 0 differential mismatches, 0 skipped |
 | Guide captions vs Vega `aria-label` | `pnpm a11y-parity` | 1059/1059 caption sets match |
@@ -178,10 +178,10 @@ result is the summary line it prints. They change with the code: re-run before q
 | Signal event streams vs real Vega | `pnpm conformance:signals` | 64/64 cases agree (group scopes among them) |
 | Vega-Lite selections vs real Vega (same native input, signals/stores/SVG compared per step) | `pnpm conformance:selections` | 53/53 cases agree (concat, facet and repeat views and geographic interval selections among them; steps counted as `retained` ([INTERACTION.md](INTERACTION.md#signals)): 13 of them, ceiling 13) |
 | `intersect()` (vega-lite's geo interval selections) over every mark type, seeded boxes, by mark name / type, vs real vega in Chromium | `pnpm conformance:intersect` | every (box, scope) pair agrees (2771) |
-| `<Chart>` interaction in Chromium | `pnpm --filter @aster/react run test:browser` | all checks passed |
+| `<Chart>` interaction in Chromium | `pnpm --filter @aster-charts/react run test:browser` | all checks passed |
 | Incremental gate | `pnpm bench:incremental -- --points=10000 --reps=30` | append 15.8x–18.3x (floor 8x), whole-array replace 12.7x–17.1x (floor 8x), DOM patch 3.3x–5.4x (floor 1.6x), dense 100k-symbol append patch vs mount 249x–254x (floor 200x) over three runs (2026-11-05, docs/PERFORMANCE.md) |
 | Bundle shaking | `pnpm check:bundle` | every documented import pattern still works after tree-shaking (`--blanket-false` must fail) |
-| Bundle budgets | `pnpm --filter @aster/benchmarks run budget` | all 13 import-pattern rows pass (sizes in [PERFORMANCE.md](PERFORMANCE.md#bundle-sizes)) |
+| Bundle budgets | `pnpm --filter @aster-charts/benchmarks run budget` | all 13 import-pattern rows pass (sizes in [PERFORMANCE.md](PERFORMANCE.md#bundle-sizes)) |
 
 ## React component tests: the variant matrix
 
@@ -195,7 +195,7 @@ plain `SvgChart` variant refuses interaction props and the missing-event-loop re
 `interaction`/`signals`. `variant.it(needs, name, fn)` declares needs for a single test.
 
 Guards, all in `pnpm test`: `Chart.matrix.test.ts` (no test renders `<Chart>` outside the matrix without a listed reason),
-`Chart.shells.test.ts` (the shells stay thin; `@aster/react/lite` never reaches canvas/hit/signals), `Chart.types.test.ts` (type fixtures that
+`Chart.shells.test.ts` (the shells stay thin; `@aster-charts/react/lite` never reaches canvas/hit/signals), `Chart.types.test.ts` (type fixtures that
 must compile and must fail on exact lines, the props/handle parity assertions, and the documented examples) and
 `Chart.corpus-parity.test.tsx` (the DOM of `<Chart>`, `<SvgChart>` and `<SvgChart interaction>` equal over every corpus
 spec: server markup, client mount, hydration).

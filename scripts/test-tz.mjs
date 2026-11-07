@@ -39,7 +39,7 @@ for (const tz of zones.length ? zones : ZONES) {
 for (const tz of zones.length ? zones : CORPUS_ZONES) {
   ok = run(
     `corpus-tz under TZ=${tz}`,
-    'pnpm', ['--filter', '@aster/conformance', 'exec', 'tsx', 'src/run.ts'],
+    'pnpm', ['--filter', '@aster-charts/conformance', 'exec', 'tsx', 'src/run.ts'],
     { TZ: tz, ASTER_CORPUS_DIR: 'corpus-tz' },
   ) && ok
 }

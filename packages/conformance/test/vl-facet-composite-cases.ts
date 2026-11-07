@@ -44,4 +44,4 @@ list.push(
   ['a facet over a repeat with a transform on the facet', { data: DATA, transform: [{ filter: 'datum.v > 3' }], facet: { column: n('g') }, spec: columnRepeat(point({ x: n('c'), y: q(ref('column')) })) }],
   ['a facet over an hconcat that holds a repeat', { data: DATA, facet: { column: n('g') }, spec: { hconcat: [columnRepeat(point({ x: n('c'), y: q(ref('column')) })), point({ x: q('x'), y: q('v') })] } }],
 )
-GROUPS.push(['@aster/vl == vega-lite: a facet over a repeat or a concat', list])
+GROUPS.push(['@aster-charts/vl == vega-lite: a facet over a repeat or a concat', list])
