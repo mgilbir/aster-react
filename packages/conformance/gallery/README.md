@@ -147,4 +147,4 @@ There is nothing open to triage: on 2026-11-06 every spec on every path passes e
 render (it needs a canvas Node lacks), and `floors.json` holds that state. [TRIAGE.md](TRIAGE.md) says so and keeps the method.
 When a spec fails again, run `pnpm conformance:gallery --json=out.json`, then
 `pnpm --filter @aster/conformance exec tsx scripts/gallery-triage.mts out.json triage.json`, which puts each failing spec into a
-root-cause category (`triage.json` is the per-spec output; the committed one is from the first run of the gate and is stale).
+root-cause category (`triage.json` is the per-spec output; the committed one is `[]`, the output of a run with nothing to triage).

@@ -24,7 +24,7 @@ pnpm --filter @aster/conformance exec tsx scripts/gallery-triage.mts out.json tr
 
 [scripts/gallery-triage.mts](../scripts/gallery-triage.mts) puts every spec the static path did not pass into a root-cause category
 (a tested claim, not a guess from a message) and prints the category table; `triage.json` is the per-spec output. Run on the current
-state it prints an empty table. The `triage.json` committed here is from the first run of the gate and no longer describes anything.
+state it prints an empty table, and the `triage.json` committed here is that run's output: `[]`.
 The gallery cache must be fetched first ([README.md](README.md#the-specs-are-fetched-not-committed)).
 
 ## Compiler gaps the gallery cannot see
