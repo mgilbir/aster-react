@@ -4602,11 +4602,11 @@ function resolveEncodeSet(encode: Record<string, EncodeValue | EncodeValue[]>, d
         case EK_SCALE_FIELD: {
           const spec = plainSpecs[i] as unknown as { scale: string; field: string }
           const bound = binding?.get(spec)
-          if (bound) resolved = scaleValue(bound.scale, bound.type, getField(datum, spec.field))
+          if (bound) resolved = scaleValue(bound.scale, getField(datum, spec.field))
           else {
             const s = ctx.scales.get(spec.scale)
             // (no such scale: the general resolver fails it, with the one error of a missing scale)
-            resolved = s ? scaleValue(s, ctx.scaleTypes.get(spec.scale), getField(datum, spec.field)) : resolveEncodeProperty(plainSpecs[i], datum, ctx, binding)
+            resolved = s ? scaleValue(s, getField(datum, spec.field)) : resolveEncodeProperty(plainSpecs[i], datum, ctx, binding)
           }
           break
         }
@@ -4822,17 +4822,13 @@ function encodeScaleOf(enc: EncodeEntry, datum: Row, ctx: EvalContext, binding?:
 }
 
 /** `_scale(scale, value)`: the engine's tolerant coercions around the scale call. */
-function scaleValue(s: Scale, type: string | undefined, raw: unknown): unknown {
+function scaleValue(s: Scale, raw: unknown): unknown {
   if (raw === undefined) {
     // A discrete domain can legitimately contain undefined (e.g. an aggregate
     // over a nominal field); vega still maps that domain entry through the scale
     // rather than dropping the channel.
     const dom = s.domain?.() as unknown[] | undefined
     if (!Array.isArray(dom) || !dom.includes(undefined)) return undefined
-  }
-  if ((type === 'time' || type === 'utc') && typeof raw === 'string') {
-    const dateObj = new Date(raw)
-    if (Number.isFinite(dateObj.getTime())) raw = dateObj
   }
   return s(raw)
 }
@@ -4860,7 +4856,7 @@ function resolveEncodeValueInternal(value: EncodeValue | undefined, datum: Row, 
   // `tail` is a product term added to `head` (the band step `_bandwidth(scale)*band`)
   let tail: number | undefined
   if (enc.scale != null) {
-    const { scale: s, type } = encodeScaleOf(enc, datum, ctx, binding)
+    const { scale: s } = encodeScaleOf(enc, datum, ctx, binding)
     // (a scale that is not there fails where the entry calls it, and reads a bandwidth of 0: see missing-scale.ts)
     if (enc.range != null) {
       // lerp(_range(scale), +range)
@@ -4870,7 +4866,7 @@ function resolveEncodeValueInternal(value: EncodeValue | undefined, datum: Row, 
     } else {
       if (hasHead) {
         if (!s) throw scaleCallFailure(enc.scale)
-        head = scaleValue(s, type, head)
+        head = scaleValue(s, head)
       }
       if (enc.band) {
         // + _bandwidth(scale) [* band]   (a band of exactly 1, or `true`, has no factor)
@@ -4881,7 +4877,7 @@ function resolveEncodeValueInternal(value: EncodeValue | undefined, datum: Row, 
           // (datum.extra ? _scale(scale, datum.extra.value) : value)
           const extra = (datum as { extra?: { value?: unknown } }).extra
           if (extra && !s) throw scaleCallFailure(enc.scale)
-          head = extra ? scaleValue(s!, type, extra.value) : hasHead ? (head as number) + term : term
+          head = extra ? scaleValue(s!, extra.value) : hasHead ? (head as number) + term : term
           hasHead = true
         } else {
           tail = term
@@ -5198,20 +5194,15 @@ function makeGuideHost(ctx: EvalContext): GuideHost {
     entryScale: (name) => {
       const s = ctx.scales.get(name)
       if (!s) return undefined
-      const type = ctx.scaleTypes.get(name)
       // (scaleValue's coercions, written out here: the guides' scale calls do not share a call site with the marks')
-      const timeLike = type === 'time' || type === 'utc'
       const call = (raw: unknown): unknown => {
         if (raw === undefined) {
           const dom = s.domain?.() as unknown[] | undefined
           if (!Array.isArray(dom) || !dom.includes(undefined)) return undefined
-        } else if (timeLike && typeof raw === 'string') {
-          const dateObj = new Date(raw)
-          if (Number.isFinite(dateObj.getTime())) raw = dateObj
         }
         return s(raw)
       }
-      return { fn: s as (v: unknown) => unknown, timeLike, call, bandwidth: () => (typeof s.bandwidth === 'function' ? s.bandwidth() : 0) }
+      return { fn: s as (v: unknown) => unknown, call, bandwidth: () => (typeof s.bandwidth === 'function' ? s.bandwidth() : 0) }
     },
     expr: (code) => { try { return ctx.runtime.expr(code)({}, ctx.signalParams) } catch (e) { refuseUnrecoverable(e); throw new ExpressionFailure(e) } },
     exprDatum: (code, datum) => { try { return ctx.runtime.expr(code)(datum, ctx.signalParams) } catch (e) { refuseUnrecoverable(e); throw new ExpressionFailure(e) } },
@@ -5774,8 +5765,12 @@ function vetGuideLinks(g: SceneGroup, ctx: EvalContext): void {
 }
 
 /** An axis's `values`: what a signal holds when the ticks are made; null, undefined, 0 or '' is no values at all. */
-/** Scales whose own ticks are strictly increasing (d3's) or the scale's distinct domain: no two ticks have one value. */
-const DISTINCT_TICK_SCALES = new Set(['linear', 'log', 'pow', 'sqrt', 'symlog', 'time', 'utc', 'band', 'point'])
+/**
+ * Scales whose own ticks are strictly increasing numbers (d3's) or the scale's distinct domain: no two ticks have one key. The
+ * calendar scales are not among them: their ticks are Dates, keyed by their string, which stops at the second, so ticks a few
+ * milliseconds apart are one key (vega draws one item for them).
+ */
+const DISTINCT_TICK_SCALES = new Set(['linear', 'log', 'pow', 'sqrt', 'symlog', 'band', 'point'])
 
 /** The tick count the labels are formatted for when the axis gives none: one per explicit value, else ten. */
 const tallyOfValues = (values: unknown): number => (Array.isArray(values) ? values.length : 10)

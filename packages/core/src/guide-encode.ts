@@ -232,7 +232,7 @@ export interface EntryHost {
   /** what this evaluation made of the steps' entries (closures over its scales) and of the per-run ones: it, not the steps, keeps them */
   fastCache: Map<object, unknown>
   runCache: Map<object, unknown>
-  entryScale?(name: string): { call(raw: unknown): unknown; bandwidth(): number; /** the scale itself, and whether a string is read as a date by it */ fn: (v: unknown) => unknown; timeLike: boolean } | undefined
+  entryScale?(name: string): { call(raw: unknown): unknown; bandwidth(): number; /** the scale itself */ fn: (v: unknown) => unknown } | undefined
 }
 
 /** An entry that is nothing but a plain value (`{value: 3}`): what it gives does not depend on the datum. */
@@ -281,10 +281,9 @@ function analyseScaleEntry(e: object): Binder | undefined {
     // (the entry reads `field`, so it calls the scale: with none, that fails)
     if (bound === undefined) return () => { throw scaleCallFailure(scale) }
     const fn = bound.fn
-    const timeLike = bound.timeLike
     // (the bandwidth of a scale is the same for every datum of an evaluation)
     const term = hasBand ? (factor === 1 ? bound.bandwidth() : bound.bandwidth() * factor) : 0
-    const scaled = (raw: unknown): number => (raw === undefined || (timeLike && typeof raw === 'string') ? bound.call(raw) : fn(raw)) as number
+    const scaled = (raw: unknown): number => (raw === undefined ? bound.call(raw) : fn(raw)) as number
     if (!hasBand && bare) return (datum) => scaled(datum[field])
     if (hasBand && !extra && bare) return (datum) => scaled(datum[field]) + term
     return (datum) => {
