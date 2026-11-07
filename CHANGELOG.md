@@ -53,6 +53,22 @@ against. They are not current values; for the current ones see [README.md](READM
 
 The engine: compiling and evaluating Vega specs, scales, geo, formats, guides, scenes, data loading and limits.
 
+- **`@aster/core`: a time axis keys its ticks by value, and a time scale reads a string as a number, as vega does.** The ticks of a
+  `time` or `utc` axis are joined by their value as text, which stops at the second, so ticks a few milliseconds apart share one item
+  (the last tick's datum, the first one's place), where each used to be its own. A string handed to a `time` or `utc` scale is
+  read as a number (`'2'` is 2 ms), not parsed as a date, so a date string in a time-scale encode gives `NaN`: parse dates with
+  `format.parse` or a `timeparse` formula before they reach the scale.
+- **`@aster/core`: an incremental evaluation keeps the gradient definitions of the marks it does not re-encode.** A mark reused from
+  the previous scene, or a row a pulse leaves alone, still brings the `<defs>` its gradient fill or stroke refers to, so the SVG of an
+  incremental update no longer references a gradient the scene lost; one nothing uses any more is dropped.
+- **`@aster/core`: an axis label is the value the format returns, not its text.** A band or point axis over a column whose cell holds a
+  list (`[1, 2]`) writes the label as two lines, as vega does, and sizes the axis for both; it was one line, `1,2`.
+- **`@aster/core`: a mark whose encode throws is contained as vega contains it.** The item that threw keeps the channels set before
+  the failing one and its edges (`y2`, `x2`) are never made a size, so it draws as a zero-size rect where it drew the full one. When
+  the encode reads a scale that is ranked late (a domain over data of its own scope), the pass reaches the title and the guides that
+  read no late scale, as vega's does: a legend over a late scale is its group, title and an unmade gradient or entry (the aria
+  caption included), one over a literal domain is made whole. Before, the chart stopped at the mark.
+
 - **`@aster/core`: a guide's format, a layout that throws, and the names and parameters a spec must have, as vega reads them.** A
   legend's `format` the label format refuses (`{signal: '0/0'}`, `zzz%%`) made `renderSpec` throw; it is now the error vega logs, and
   the pass stops at the legend (a gradient whose labels are ranked last keeps its gradient). The format and format type of an axis or
