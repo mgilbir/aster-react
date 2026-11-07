@@ -58,9 +58,6 @@ The engine: compiling and evaluating Vega specs, scales, geo, formats, guides, s
   (the last tick's datum, the first one's place), where each used to be its own. A string handed to a `time` or `utc` scale is
   read as a number (`'2'` is 2 ms), not parsed as a date, so a date string in a time-scale encode gives `NaN`: parse dates with
   `format.parse` or a `timeparse` formula before they reach the scale.
-- **`@aster/core`: an incremental evaluation keeps the gradient definitions of the marks it does not re-encode.** A mark reused from
-  the previous scene, or a row a pulse leaves alone, still brings the `<defs>` its gradient fill or stroke refers to, so the SVG of an
-  incremental update no longer references a gradient the scene lost; one nothing uses any more is dropped.
 - **`@aster/core`: an axis label is the value the format returns, not its text.** A band or point axis over a column whose cell holds a
   list (`[1, 2]`) writes the label as two lines, as vega does, and sizes the axis for both; it was one line, `1,2`.
 - **`@aster/core`: a mark whose encode throws is contained as vega contains it.** The item that threw keeps the channels set before
