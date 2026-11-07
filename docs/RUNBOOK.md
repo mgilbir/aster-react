@@ -23,6 +23,7 @@ corpus, and the command that re-runs one spec of each:
 | `conformance` | canonical SVG of real vega against Aster (`.vg.json` and `.vl.json`, the latter compiled by `vega-lite`) | `ASTER_CORPUS_FILTER='^bar-basic$' pnpm conformance` |
 | `conformance-vl` | `.vl.json` only: `@aster/vl` against `vega-lite`, see 1.4 | `pnpm conformance-vl bar-basic` (a substring; no `--`) |
 | `scene-diff` | resolved scales, groups and items per scope, before any SVG is written | `pnpm scene-diff -- --filter bar-basic` (add `--scales-only`) |
+| `incremental-diff` | an incremental evaluation (random per-datum changeset) against a fresh one of the same data, over the inline-data specs; it does not involve vega | `pnpm conformance:diff` (all specs, about 5 s; it takes no filter) |
 | `a11y-parity` | guide captions against vega-scenegraph's `aria-label` | `pnpm a11y-parity -- --filter bar-basic` |
 | `transform-matrix` | transform option combinations (not per spec: cases are generated) | `pnpm transform-matrix -- --filter aggregate` |
 | `browser-conformance` | vega-embed and Aster in Chromium with live canvas text metrics | `pnpm conformance:browser -- --filter=bar-basic` |

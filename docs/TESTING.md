@@ -163,6 +163,7 @@ result is the summary line it prints. They change with the code: re-run before q
 | SVG corpus vs real Vega | `pnpm conformance` | 1059/1059 passed |
 | Vega-Lite corpus through `@aster/vl` | `pnpm conformance-vl` | 672 passed, 0 failed, 0 errored / 672 |
 | Scene differential | `pnpm scene-diff` | 1059/1059 scenes match |
+| Incremental vs fresh evaluation (no oracle) | `pnpm conformance:diff` | 0 differential mismatches, 0 skipped |
 | Guide captions vs Vega `aria-label` | `pnpm a11y-parity` | 1059/1059 caption sets match |
 | Transform option combinations | `pnpm transform-matrix` | 75/76 match (1 browser-only case skipped here, run by `conformance:browser`) |
 | Vega schema sweep | `pnpm sweep-vega -- --floor 7549 --min-ok 7538 --max-node-error 3` | 7538 ok, 8 both-refused, 3 node-error (the oracle crashes), 0 engine-error, 0 differ / 7549 |

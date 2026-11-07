@@ -87,7 +87,12 @@ async function main(): Promise<void> {
       if (rand() < 0.2) { changed.push(i); return { ...r, [field]: (r[field] as number) + 1 } }
       return r
     })
-    if (changed.length === 0) continue
+    // (a spec whose draw changed nothing still gets one changed row, so no spec drops out of the check by chance)
+    if (changed.length === 0) {
+      const i = Math.floor(rand() * values.length)
+      changed.push(i)
+      next[i] = { ...values[i]!, [field]: (values[i]![field] as number) + 1 }
+    }
     ran++
     let inc: { records: string[]; root: string | null }
     let full: { records: string[]; root: string | null }

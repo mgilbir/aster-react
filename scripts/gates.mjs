@@ -42,6 +42,10 @@ export const GATES = [
   { name: 'conformance', args: ['conformance'], why: 'Vega corpus: SVG diff against the real Vega oracle' },
   { name: 'conformance-vl', args: ['conformance-vl'], why: '@aster/vl compile + render against the Vega-Lite oracle' },
   { name: 'scene-diff', args: ['scene-diff'], why: 'resolved scales/groups/items per scope' },
+  {
+    name: 'incremental-diff', args: ['conformance:diff'],
+    why: 'every inline-data corpus spec: a random per-datum changeset (dataChanges) over the built chart renders the same SVG as a fresh evaluation of the new data (reads dist, so it runs after build)',
+  },
   { name: 'a11y-parity', args: ['a11y-parity'], why: 'guide captions vs vega-scenegraph aria-label' },
   { name: 'transform-matrix', args: ['transform-matrix'], why: 'transform option combinations vs the oracle' },
   { name: 'canvas', args: ['conformance:canvas'], tags: ['browser'], why: 'Chromium canvas pixel parity' },

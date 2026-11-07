@@ -42,7 +42,7 @@ describe('gate list', () => {
     const names = new Set(GATES.map((g) => g.name))
     for (const want of [
       'build', 'deps', 'typecheck', 'test', 'verify-publish', 'conformance', 'conformance-vl',
-      'scene-diff', 'a11y-parity', 'transform-matrix', 'canvas', 'batch', 'fuzz-replay', 'budget',
+      'scene-diff', 'incremental-diff', 'a11y-parity', 'transform-matrix', 'canvas', 'batch', 'fuzz-replay', 'budget',
     ]) expect(names.has(want), want).toBe(true)
   })
 

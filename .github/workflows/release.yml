@@ -50,7 +50,7 @@ jobs:
 
       # The full gate list (scripts/gates.mjs), nothing skipped: build, deps boundary, knip, typecheck, unit tests, time-zone
       # matrix, verify-publish, the incremental-append floors, the oracle gates (conformance, conformance-vl, scene-diff,
-      # a11y-parity, transform-matrix), the Chromium gates (canvas, batch, signals, selections, intersect, react,
+      # incremental-diff, a11y-parity, transform-matrix), the Chromium gates (canvas, batch, signals, selections, intersect, react,
       # browser-conformance), the signals sweep (sweep-signals), fuzz-replay, bundle-shaking, the size budgets and the probes.
       # The schema sweeps (sweep-vl, sweep-vega), the value sweep (sweep-values), the gallery, the seeded fuzz run and the other browsers are nightly only.
       - name: Gates (pnpm check)
