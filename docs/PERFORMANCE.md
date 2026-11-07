@@ -197,8 +197,9 @@ every module has effects, so `import { useChart }` pulled in `Chart`, `ChartStre
 node packages/benchmarks/scripts/budget.mjs`, run from `packages/benchmarks`, bundles the apps that way.
 `<Chart>` is a shell over `ChartCore` with injected capabilities; that costs a little code in both shells: the property
 reads through the capability objects (a minifier cannot rename them) and the report of a missing capability, which only
-`<SvgChart>` can trigger but both share. `<SvgChart>` is 22.8 kB smaller than `<Chart>` (205.3 minus 182.5): the canvas
-renderer, the hit index and the signal loop (6.1 + 6.4 + 12.9 kB as marginal rows). The rows that contain no such
+`<SvgChart>` can trigger but both share. `<SvgChart>` is 22.8 kB smaller than `<Chart>` (205.3 minus 182.5): it leaves out the canvas
+renderer, the hit index and the signal loop. Their marginal rows (6.1, 6.4 and 12.9 kB) are each measured on their own,
+so they do not add up to the 22.8 kB gap. The rows that contain no such
 code are checked on the module list, not only the byte count: `pnpm check:bundle` asserts on the esbuild metafile that the
 `<SvgChart>` bundle reads no `core/canvas`, `core/hit` or `core/signals` module, and that with `interaction` it reads hit and
 signals but still no canvas (`hit.ts` and `canvas.ts` share the path parser through `path-data.ts` for exactly this reason).

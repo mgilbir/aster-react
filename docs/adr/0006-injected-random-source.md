@@ -27,17 +27,21 @@ incremental evaluation that draws fresh random numbers cannot equal a fresh one
    again on the same inputs replays its tape; different inputs read the source on. The source is
    consumed in the count and order of vega's dataflow. Sites that cannot draw are never
    fingerprinted.
-3. With no injected source, the transforms whose result must be a pure function of their rows
-   use the engine's own seeded stream: `sample` and the bootstrap ops use a linear congruential
-   generator (vega's constants) seeded with 42; the force simulation and the circle packer use a
-   fixed-seed generator of their own. Expression functions (`random()`, `sampleNormal`, ...) and
-   `wordcloud` fall back to `Math.random`, as vega does.
-4. A function cannot cross a worker boundary, so the worker protocol does not carry the source.
+3. With no injected source, `sample` and the bootstrap ops use the engine's own seeded stream, a
+   linear congruential generator (vega's constants) seeded with 42, so their result is a pure
+   function of their rows. Expression functions (`random()`, `sampleNormal`, ...) and `wordcloud`
+   fall back to `Math.random`, as vega does.
+4. The force simulation and the circle packer never read the injected source: they always draw
+   from `layoutRandom()` (`packages/core/src/layout-random.ts`, a fixed-seed linear congruential
+   stream that starts from the same state every run), whether or not a host injects one.
+5. A function cannot cross a worker boundary, so the worker protocol does not carry the source.
 
 ## Consequences
 
-- A host that gives Aster and vega the same seeded stream gets the same numbers, which is how
-  the differential tests compare randomised charts.
+- A host that gives Aster and vega the same seeded stream gets the same numbers from `sample`,
+  the bootstrap ops, `wordcloud` and the expression functions, which is how the differential
+  tests compare randomised charts. Force and pack layouts are reproducible on their own fixed
+  stream instead; injecting a source does not change them.
 - `sample` and bootstrap intervals are reproducible by default, which vega's are not.
   Expression `random()` without an injected source is not reproducible, as in vega.
 - Taping costs a fingerprint of a site's inputs when a source is injected; without one nothing

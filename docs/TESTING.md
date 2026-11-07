@@ -41,10 +41,10 @@ pnpm check -- --only conformance,a11y-parity
 pnpm check -- --skip browser   # no Chromium installed (not the CI list)
 ```
 
-CI runs `pnpm check` and nothing else; nightly runs it and then the extras below. When a gate is red,
+CI runs `pnpm check`, plus the `unit` job that reruns the unit tests on other Node majors (it adds no gate); nightly runs `pnpm check` and then the extras below. When a gate is red,
 [RUNBOOK.md](RUNBOOK.md) says how to reproduce one failing spec and what each environment variable does.
-Two guards keep the list in one place. `scripts/gates.test.mjs` fails if `ci.yml` runs anything but `pnpm check` and the toolchain
-setup, or if a code block of CONTRIBUTING.md or of this file has a line that is a gate's command. `scripts/docs-single-source.test.mjs`
+Two guards keep the list in one place. `scripts/gates.test.mjs` fails if `ci.yml` runs anything but `pnpm check`, the toolchain
+setup and the `unit` job's build and vitest run, or if a code block of CONTRIBUTING.md or of this file has a line that is a gate's command. `scripts/docs-single-source.test.mjs`
 fails if a paragraph of any other doc, outside this file and RUNBOOK.md, names four or more gates, and if a doc names a `pnpm <script>`
 that does not exist. Neither finds a list reworded: they find one copied.
 

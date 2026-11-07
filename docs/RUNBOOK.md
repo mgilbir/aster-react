@@ -235,7 +235,7 @@ substitute; nothing reads it.
 | `SEL_MOD` | same | unset | Wraps vega's `modify` expression function, logs each call (group, dataset, row count before/after) and prints the `modlog` per case. |
 | `SEL_NOFRESH` | same | unset | Skips vega's fresh-render snapshot, so a difference cannot be classified as `retained` and shows as a failure. |
 | `SEL_MAX` | same | 6 | How many problems are printed per failing case. |
-| `SEL_DUMP`, `SEL_DUMP_AT` | same | unset, 0 | `SEL_DUMP` (any value) writes `sel-vega.svg`, `sel-aster.svg` and `sel-vega-fresh.svg` for step `SEL_DUMP_AT`. The directory is hard-coded to `/tmp/fix-20-vl-selections-scratch/` and must already exist, or the script throws; create it first, or change the path in the script. |
+| `SEL_DUMP`, `SEL_DUMP_AT`, `SEL_DUMP_DIR` | same | unset, 0, `<os tmpdir>/aster-vl-selections-dump` | `SEL_DUMP` (any value) writes `sel-vega.svg`, `sel-aster.svg` and `sel-vega-fresh.svg` for step `SEL_DUMP_AT` into `SEL_DUMP_DIR`, which is created if missing; the script prints the directory. Each case overwrites the previous one's files, so combine it with `--filter`. |
 
 ### Scripts and test hooks
 
