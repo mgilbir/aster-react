@@ -33,9 +33,33 @@ function mulberry32(seed: number): () => number {
   }
 }
 
-function firstNumericField(row: Record<string, unknown>): string | null {
+/** Transforms that join rows by field value: a field they name is a key, and bumping it breaks the join, not the differential path. */
+const JOIN_TRANSFORMS = new Set(['lookup', 'stratify', 'treelinks', 'nest'])
+const KEY_PROPS = ['key', 'fields', 'parentKey', 'groupby']
+
+/** Every identifier written in the join properties of the spec's join transforms (`datum.id`, `'id'`, ...): the names a mutation must not touch. */
+function joinKeyNames(node: unknown, out: Set<string> = new Set()): Set<string> {
+  if (Array.isArray(node)) {
+    for (const v of node) joinKeyNames(v, out)
+  } else if (node !== null && typeof node === 'object') {
+    const rec = node as Record<string, unknown>
+    if (typeof rec.type === 'string' && JOIN_TRANSFORMS.has(rec.type)) {
+      for (const prop of KEY_PROPS) {
+        const v = rec[prop]
+        for (const str of Array.isArray(v) ? v : [v]) {
+          if (typeof str === 'string') for (const m of str.matchAll(/[A-Za-z_$][\w$]*/g)) out.add(m[0])
+        }
+      }
+    }
+    for (const v of Object.values(rec)) joinKeyNames(v, out)
+  }
+  return out
+}
+
+/** The first numeric field of the row that no join transform of the spec uses as a key. */
+function firstNumericField(row: Record<string, unknown>, keys: ReadonlySet<string>): string | null {
   for (const [k, v] of Object.entries(row)) {
-    if (typeof v === 'number' && Number.isFinite(v)) return k
+    if (typeof v === 'number' && Number.isFinite(v) && !keys.has(k)) return k
   }
   return null
 }
@@ -44,6 +68,7 @@ async function main(): Promise<void> {
   const rand = mulberry32(0xBEAD)
   let ran = 0
   let failed = 0
+  let skipped = 0
   const failures: string[] = []
   for (const f of readdirSync(CORPUS_DIR).sort()) {
     if (!f.endsWith('.json')) continue
@@ -54,7 +79,7 @@ async function main(): Promise<void> {
     if (!dataset?.name || !dataset.values) continue
     const name = dataset.name
     const values = dataset.values as Array<Record<string, unknown>>
-    const field = firstNumericField(values[0]!)
+    const field = firstNumericField(values[0]!, joinKeyNames(spec))
     if (field == null) continue
     // random changeset over a same-length data replacement
     const changed: number[] = []
@@ -73,7 +98,8 @@ async function main(): Promise<void> {
       full = canonicalizeSvg(renderSceneToSvg(evaluateChart(chart, { data: { [name]: next } })))
     } catch {
       // A mutated value can break a layout transform (e.g. pack) independent of
-      // the differential path; such specs aren't a differential signal, skip them.
+      // the differential path; such specs aren't a differential signal, skip them (and count them: see the summary).
+      skipped++
       continue
     }
     if (inc.root !== full.root || inc.records.join('\u0000') !== full.records.join('\u0000')) {
@@ -81,7 +107,7 @@ async function main(): Promise<void> {
       failures.push(f)
     }
   }
-  console.log(`[conformance:diff] ${ran} corpus specs with inline values; ${failed} differential mismatches`)
+  console.log(`[conformance:diff] ${ran} corpus specs with inline values; ${failed} differential mismatches; ${skipped} skipped (the mutated data made the spec throw)`)
   for (const f of failures) console.log(`  ✗ ${f}`)
   if (failed > 0) process.exit(1)
 }
