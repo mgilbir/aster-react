@@ -7,7 +7,7 @@ const unit = (extra: Record<string, unknown> = {}) => ({ data: DATA, mark: 'poin
 
 /** Each entry: a spec the validation layer must reject, and a phrase its message must carry. */
 const REJECTED: Array<[string, unknown, RegExp]> = [
-  // --- views: missing/ambiguous mark and unknown keys (C97)
+  // --- views: missing/ambiguous mark and unknown keys
   ['a unit without a mark', { data: DATA, encoding: { x: xq } }, /needs exactly one of `mark`/],
   ['mark and layer together', { data: DATA, mark: 'point', layer: [] }, /ambiguous view/],
   ['an unknown top-level key', unit({ colour: 'red' }), /unknown top-level property "colour"/],
@@ -41,12 +41,12 @@ const REJECTED: Array<[string, unknown, RegExp]> = [
   ['an unknown invalid mode', unit({ mark: { type: 'point', invalid: 'drop' } }), /unknown invalid-value mode/],
   ['a bad scale invalid value', unit({ config: { scale: { invalid: { x: 'nope' } } } }), /zero-or-min/],
   ['the time channel', unit({ encoding: { x: xq, y: yq, time: { field: 'x', type: 'quantitative' } } }), /time/],
-  // --- composition nesting (C34)
+  // --- composition nesting
   ['a facet inside a layer', { data: DATA, layer: [{ facet: { field: 'c', type: 'nominal' }, spec: unit() }] }, /not allowed inside `layer`/],
   ['an empty layer', { data: DATA, layer: [] }, /non-empty array/],
   ['facet without spec', { data: DATA, facet: { field: 'c', type: 'nominal' } }, /nested `spec`/],
   ['a repeat reference outside a repeat', unit({ encoding: { x: { field: { repeat: 'row' }, type: 'quantitative' } } }), /outside a matching `repeat`/],
-  // --- channels (C35)
+  // --- channels
   ['an unknown channel', unit({ encoding: { x: xq, banana: yq } }), /unknown encoding channel "banana"/],
   ['an array on a single-def channel', unit({ encoding: { x: [xq] } }), /does not accept an array/],
   ['a channel def without field/value/datum', unit({ encoding: { x: { type: 'quantitative' } } }), /needs `field`/],
@@ -56,7 +56,7 @@ const REJECTED: Array<[string, unknown, RegExp]> = [
   ['an unknown scale property', unit({ encoding: { x: { ...xq, scale: { zeroish: true } } } }), /unknown scale property/],
   ['domainRaw', unit({ encoding: { x: { ...xq, scale: { domainRaw: [0, 1] } } } }), /domainRaw/],
   ['a scale domain over an undeclared param', unit({ encoding: { x: { ...xq, scale: { domain: { param: 'p' } } } } }), /parameter "p" is not declared/],
-  // --- transforms (C36)
+  // --- transforms
   ['an unknown transform', unit({ transform: [{ frobnicate: 'x' }] }), /unknown transform/],
   ['a vega-style transform', unit({ transform: [{ type: 'formula', expr: '1', as: 'z' }] }), /Vega-style transforms/],
   ['two transforms in one object', unit({ transform: [{ filter: 'true', calculate: '1', as: 'z' }] }), /ambiguous transform|unknown filter transform property/],
@@ -70,7 +70,7 @@ const REJECTED: Array<[string, unknown, RegExp]> = [
   ['a selection predicate over an undeclared param', unit({ transform: [{ filter: { param: 'brush' } }] }), /parameter "brush" is not declared/],
   ['an unknown impute method', unit({ transform: [{ impute: 'y', key: 'x', method: 'mode' }] }), /unknown impute method/],
   ['a lookup from an undeclared param', unit({ transform: [{ lookup: 'c', from: { param: 'p', key: 'k' } }] }), /parameter "p" is not declared/],
-  // --- params / selections (C35)
+  // --- params / selections
   ['a legacy selection type', unit({ params: [{ name: 'pick', select: 'single' }] }), /selection type "single"/],
   ['a point option on an interval selection', unit({ params: [{ name: 'brush', select: { type: 'interval', nearest: true } }] }), /unknown interval selection property "nearest"/],
   ['an interval selection bound to inputs', unit({ params: [{ name: 'brush', select: 'interval', bind: { input: 'range' } }] }), /can only be bound to "scales"/],
@@ -87,25 +87,25 @@ const REJECTED: Array<[string, unknown, RegExp]> = [
   ['duplicate parameter names', unit({ params: [{ name: 'p', value: 1 }, { name: 'p', value: 2 }] }), /duplicate parameter/],
   ['a parameter with neither value nor expr', unit({ params: [{ name: 'p' }] }), /needs `value`, `expr` or `bind`/],
   ['an unknown bind input', unit({ params: [{ name: 'p', value: 1, bind: { input: 'dial' } }] }), /input type/],
-  // --- conditions (C35)
+  // --- conditions
   ['a param condition', unit({ encoding: { x: xq, y: yq, color: { condition: { param: 'brush', value: 'red' }, value: 'grey' } } }), /param/],
   ['a condition without a test', unit({ encoding: { x: xq, y: yq, color: { condition: { value: 'red' }, value: 'grey' } } }), /needs `test`/],
   ['an empty condition array', unit({ encoding: { x: xq, y: yq, color: { condition: [], value: 'grey' } } }), /must not be empty/],
   ['a field condition in an array', unit({ encoding: { x: xq, y: yq, color: { condition: [{ test: 'true', field: 'c', type: 'nominal' }], value: 'g' } } }), /value conditions/],
   ['a condition with both value and field', unit({ encoding: { x: xq, y: yq, color: { condition: { test: 'true', value: 'r', field: 'c', type: 'nominal' }, value: 'g' } } }), /exactly one of/],
-  // --- sort (C35)
+  // --- sort
   ['an unknown sort string', unit({ encoding: { x: { ...cn, sort: 'sideways' } } }), /unknown sort/],
   ['an empty sort array', unit({ encoding: { x: { ...cn, sort: [] } } }), /at least one value/],
   ['a sort object with an unknown key', unit({ encoding: { x: { ...cn, sort: { field: 'y', direction: 'up' } } } }), /unknown sort property/],
   ['a sort op without a field', unit({ encoding: { x: { ...cn, sort: { op: 'mean' } } } }), /needs a `field`/],
   ['a sort with a bad order', unit({ encoding: { x: { ...cn, sort: { field: 'y', order: 'up' } } } }), /unknown order/],
   ['a sort by an unknown encoding', unit({ encoding: { x: { ...cn, sort: { encoding: 'tooltip' } } } }), /unknown sort channel/],
-  // --- timeUnit (C74)
+  // --- timeUnit
   ['an unknown time unit', unit({ encoding: { x: { field: 't', type: 'temporal', timeUnit: 'fortnight' } } }), /unknown timeUnit/],
   ['a binned time unit with maxbins', unit({ encoding: { x: { field: 't', type: 'temporal', timeUnit: { unit: 'year', maxbins: 4 } } } }), /maxbins/],
   ['time-unit maxbins', unit({ encoding: { x: { field: 't', type: 'temporal', timeUnit: { maxbins: 6 } } } }), /maxbins/],
   ['a time-unit step of zero', unit({ encoding: { x: { field: 't', type: 'temporal', timeUnit: { unit: 'month', step: 0 } } } }), /step/],
-  // --- bin (C74)
+  // --- bin
   ['pre-binned data off the positions', unit({ encoding: { x: xq, color: { field: 'x', type: 'quantitative', bin: 'binned' } } }), /property of an x or y channel/],
   ['binned: true off the positions', unit({ encoding: { x: xq, size: { field: 'x', type: 'quantitative', bin: { binned: true } } } }), /property of an x or y channel/],
   ['binned: true in a bin transform', unit({ transform: [{ bin: { binned: true }, field: 'x', as: 'b' }] }), /property of an x or y channel/],
@@ -113,7 +113,7 @@ const REJECTED: Array<[string, unknown, RegExp]> = [
   ['an unknown bin option', unit({ encoding: { x: { field: 'x', type: 'quantitative', bin: { buckets: 4 } } } }), /unknown bin property/],
   ['a negative maxbins', unit({ encoding: { x: { field: 'x', type: 'quantitative', bin: { maxbins: -1 } } } }), /positive number/],
   ['a bad extent', unit({ encoding: { x: { field: 'x', type: 'quantitative', bin: { extent: [5, 1] } } } }), /min must be less/],
-  // --- resolve (C72)
+  // --- resolve
   ['an unknown resolve channel', { data: DATA, resolve: { scale: { banana: 'shared' } }, hconcat: [unit()] }, /unknown channel "banana"/],
   ['a bad resolve value', { data: DATA, resolve: { scale: { color: 'both' } }, hconcat: [unit()] }, /"shared" or "independent"/],
   ['resolve on a unit', unit({ resolve: { scale: { y: 'independent' } } }), /no meaning on a single unit/],

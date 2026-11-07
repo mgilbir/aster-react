@@ -95,7 +95,7 @@ export interface CanonicalResult {
   records: string[]
   root: string | null
   /**
-   * The accessibility structure (N3): one line per container and per element that carries ARIA, in
+   * The accessibility structure: one line per container and per element that carries ARIA, in
    * document order, indented by depth. See `structureLine`.
    */
   structure: string[]

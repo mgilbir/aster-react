@@ -1,6 +1,6 @@
 // @vitest-environment node
 /**
- * @aster/vl output through REAL vega (audit C39/T4). Aster's own runtime is lenient, so the
+ * @aster/vl output through REAL vega. Aster's own runtime is lenient, so the
  * Vega that @aster/vl emits is checked where the semantics are defined: for every
  * Vega-Lite spec, real vega must (1) raise no error/warning beyond what vega-lite's own
  * output raises and (2) render our Vega to the same canonical SVG as vega-lite's.

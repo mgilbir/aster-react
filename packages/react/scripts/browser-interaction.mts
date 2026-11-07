@@ -1,5 +1,5 @@
 /**
- * Real-browser interaction gate for <Chart> and <SvgChart interaction={interaction}> (audit C28 and friends).
+ * Real-browser interaction gate for <Chart> and <SvgChart interaction={interaction}>.
  *
  * jsdom has no layout and no hit testing, so it cannot tell whether the marks
  * are actually reachable by a real pointer: an overlay swallowing events passes
@@ -28,6 +28,9 @@ import { dirname, join } from 'node:path'
 import { build } from 'esbuild'
 import { chromium, type Page } from 'playwright'
 import { compile as compileVl } from '@aster/vl'
+import { cli } from '../../../scripts/lib/cli.mjs'
+
+cli({ url: import.meta.url })
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const PKG = dirname(HERE)
@@ -164,7 +167,7 @@ const tabStopsPerChart = (page: Page): Promise<number[]> => page.evaluate(() => 
   [...slot.querySelectorAll('*')].filter((el) => (el as HTMLElement).tabIndex >= 0 && !(el instanceof SVGElement && el.tabIndex < 0)).length))
 const press = async (page: Page, key: string, times = 1): Promise<void> => { for (let i = 0; i < times; i++) await page.keyboard.press(key) }
 
-/** A chart is one tab stop: the real Tab key through a page of charts, in every configuration (audit: two stops per chart). */
+/** A chart is one tab stop: the real Tab key through a page of charts, in every configuration (it used to be two stops per chart). */
 async function tabStopSuite(page: Page): Promise<void> {
   const base = { width: 400, height: 240 }
   const items = (): Array<{ spec: Record<string, unknown>; props: Record<string, unknown> }> => [

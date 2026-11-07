@@ -14,7 +14,7 @@ const lim = (fn: () => unknown): AsterLimitError => {
   throw new Error('expected an AsterLimitError, nothing was thrown')
 }
 
-describe('checkSpecLimits (C9, C49)', () => {
+describe('checkSpecLimits', () => {
   it('counts nested group data, top-level data and host input.data toward maxRows', () => {
     const spec = {
       data: [{ name: 'a', values: new Array(40).fill({}) }],
@@ -40,7 +40,7 @@ describe('checkSpecLimits (C9, C49)', () => {
   })
 })
 
-describe('checkSceneLimits (C49)', () => {
+describe('checkSceneLimits', () => {
   const group = (marktype: string, items: unknown[]) => ({ items: [{ marktype, items }] })
   it('line/area points imply a minimum path length', () => {
     const pts = Array.from({ length: 1000 }, () => ({}))
@@ -56,7 +56,7 @@ describe('checkSceneLimits (C49)', () => {
   })
 })
 
-describe('the meter is ambient, nests, and a swallowed violation still fails the call (T3)', () => {
+describe('the meter is ambient, nests, and a swallowed violation still fails the call', () => {
   it('no scope: every helper is a no-op', () => {
     expect(activeMeter()).toBeNull()
     expect(boundedCount(1e12, 'x')).toBe(1e12)
@@ -151,7 +151,7 @@ describe('generated rows are budgeted cumulatively (maxGeneratedRows)', () => {
   })
 })
 
-describe('expression locale follows the default locale (C70)', () => {
+describe('expression locale follows the default locale', () => {
   afterEach(() => { resetDefaultLocale() })
   const ev = (expr: string): unknown =>
     compileExpr(expr, { scale: () => undefined, data: () => undefined, expr: () => { throw new Error('unused') } })({}, {})
@@ -174,7 +174,7 @@ describe('expression locale follows the default locale (C70)', () => {
   })
 })
 
-describe('formatter caches are bounded LRU (C70)', () => {
+describe('formatter caches are bounded LRU', () => {
   it('the table never grows past FORMATTER_CACHE_MAX and evicts the least recently used', () => {
     const l = locale()
     const keep = l.format('.3f')
@@ -196,7 +196,7 @@ describe('formatter caches are bounded LRU (C70)', () => {
   })
 })
 
-describe('expression parser depth (C9)', () => {
+describe('expression parser depth', () => {
   const parse = (n: number): unknown => compileExpr('(' .repeat(n) + '1' + ')'.repeat(n), { scale: () => undefined, data: () => undefined, expr: () => { throw new Error('x') } })
   it('ordinary nesting is unaffected; absurd nesting is an AsterLimitError, not a RangeError', () => {
     expect(() => parse(100)).not.toThrow()

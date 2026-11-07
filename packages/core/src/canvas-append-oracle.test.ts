@@ -1,5 +1,5 @@
 /**
- * Canvas append-paint oracle (audit C22).
+ * Canvas append-paint oracle.
  *
  * The contract: whatever the canvas shows after `renderSceneToCanvasAppend`
  * returned true - the prior frames' paint plus the appended items - must be what a
@@ -56,7 +56,7 @@ const STEPS = Number(env('ASTER_CANVAS_ORACLE_STEPS') ?? 12)
 const START = Number(env('ASTER_CANVAS_ORACLE_START') ?? 1)
 const ONE = env('ASTER_CANVAS_ORACLE_SEED')
 
-describe('canvas append paint === full repaint (audit C22)', () => {
+describe('canvas append paint === full repaint', () => {
   const seeds = ONE != null ? [Number(ONE)] : Array.from({ length: SEEDS }, (_, i) => START + i)
   for (const driver of ['session', 'stream'] as const) {
     it(`${driver}: ${seeds.length} seeds x ${STEPS} steps`, () => {

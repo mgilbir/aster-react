@@ -8,6 +8,70 @@
 > [TESTING.md](TESTING.md) and [PERFORMANCE.md](PERFORMANCE.md), each next to the command that produced it.
 > [ROADMAP.md](ROADMAP.md) lists what is still open.
 
+## Overview
+
+Aster Charts reads a Vega or Vega-Lite spec and produces a scene graph, then SVG (a string, or a DOM patched in place) or canvas pixels, and runs the signal event loop that makes the chart interactive. It is three packages, with no dependency on `vega-*`, `d3-*` or `topojson-*`.
+
+| Package | Entry points | What it is |
+|---|---|---|
+| `@aster/vl` | `.` | `compile(vlSpec)`: Vega-Lite to Vega. It does not import `@aster/core`. |
+| `@aster/core` | `.` (the barrel: compile, evaluate, SVG string), `/addons`, `/geo`, `/transforms`, `/load`, `/dom`, `/signals`, `/canvas`, `/hit` | The engine. Heavy or optional parts are separate entries (see "Geo projections & the add-on boundary"). |
+| `@aster/react` | `.` (`<Chart>`, hooks, streams, workers), `/lite` (`<SvgChart>`), `/interaction`, `/vl`, `/ssr`, `/worker`, `/worker-entry` | The React bindings: one chart implementation (`ChartCore`) behind two shells. |
+
+```mermaid
+flowchart LR
+  subgraph vl["@aster/vl"]
+    VLC["compile(vlSpec) to Vega"]
+  end
+  subgraph core["@aster/core"]
+    C0["@aster/core<br/>compileChart, evaluateChart, renderSceneToSvg,<br/>renderSpec, createChartStream, limits"]
+    DOM["/dom<br/>createChartSession, patchSceneDom"]
+    CAN["/canvas"]
+    HIT["/hit"]
+    SIG["/signals<br/>bindSceneSignals"]
+    ADD["/addons<br/>addonsNeeded, loadAddonsFor"]
+    GEO["/geo"]
+    TRX["/transforms"]
+    LOAD["/load<br/>loadSpecData"]
+  end
+  subgraph react["@aster/react"]
+    R0["@aster/react<br/>Chart, useChart, ChartStream, workers"]
+    LITE["/lite<br/>SvgChart"]
+    INT["/interaction<br/>interaction capability"]
+    RVL["/vl<br/>registers the compiler"]
+    SSR["/ssr"]
+    WK["/worker, /worker-entry"]
+  end
+  R0 --> C0 & DOM & ADD
+  R0 -- "injects canvas and interaction" --> CAN & HIT & SIG
+  LITE --> C0 & DOM & ADD
+  INT --> HIT & SIG
+  LITE -. "interaction prop" .-> INT
+  RVL --> VLC
+  ADD -. "dynamic import on demand" .-> GEO & TRX & LOAD
+```
+
+*Package map. Solid arrows are static imports. `<Chart>` imports the canvas and interaction capabilities itself; `<SvgChart>` imports neither and receives the interaction capability only through its `interaction` prop (dotted). The add-on imports are dynamic and happen only when a spec needs them.*
+
+**The render lifecycle** of a `<Chart>`: detect the add-ons the spec needs (and suspend until they are loaded), evaluate the spec in a chart session, write the output (full SVG on the first commit, a patch afterwards, or a canvas paint), then bind the signal event loop, whose signal and data changes feed the next evaluation. The sequence is drawn under "ChartCore and the two shells".
+
+**Where to look**
+
+| You want | Section |
+|---|---|
+| The three stages from spec to SVG | "Pipeline Overview" |
+| Why an update equals a from-scratch evaluation, and where the state lives | "Incremental evaluation" |
+| How SVG, the DOM patcher, canvas and hit testing share code | "Renderers, the DOM patcher and hit testing" |
+| How expressions are parsed, refused and run | "Expression Engine" |
+| What `@aster/core/geo`, `/transforms` and `/load` register, and how they load | "Geo projections & the add-on boundary" |
+| How `<Chart>` and `<SvgChart>` share one implementation | "ChartCore and the two shells" |
+| Which files have import-time effects | "Side effects and tree-shaking" |
+| Scales, transforms, SVG output and guides | "Scales", "Transforms", "Rendering" |
+| How the oracle checks all of it | "Conformance" |
+| Where Aster deliberately differs from Vega | "Deviations from Vega" (a reference table) |
+
+The reference tables are the add-on table (under "Geo projections & the add-on boundary"), the side-effects table, and "Deviations from Vega"; the other sections explain how and why.
+
 ## Pipeline Overview
 
 The rendering pipeline transforms a Vega (or Vega-Lite) spec into an SVG string through three stages:
@@ -25,7 +89,7 @@ VgSpec (JSON)
 
 The scene shapes (`SceneRoot`, `SceneGroup`, `SceneItem`, `SceneNode`) are defined in `packages/core/src/types.ts` and intentionally mirror `vega-scenegraph`'s JSON structure so the conformance oracle (real Vega, rendered headless) can be compared structurally.
 
-Vega-Lite input is a separate step in front of this pipeline: `@aster/vl`'s `compile(vlSpec)` emits a Vega spec, which then follows the three stages above. `<Chart>` does this through the opt-in `@aster/react/vl` addon; `renderSpec` takes Vega only.
+Vega-Lite input is a separate step in front of this pipeline: `@aster/vl`'s `compile(vlSpec)` emits a Vega spec, which then follows the three stages above. `<Chart>` does this through the opt-in `@aster/react/vl` add-on; `renderSpec` takes Vega only.
 
 Public API:
 
@@ -46,17 +110,57 @@ import { renderSpec, compileChart, evaluateChart, renderSceneToSvg,
 - Reuse is keyed by what a result actually depends on: the evaluation context (signals incl. `width`/`height`, `domainRaw`, text metrics; typed and structural, so an unchanged `[0, width]` derived signal is unchanged), every dataset the unit reads (closed over `source` chains, `lookup.from` and `data()`/`indata()` expressions), and each scale it reads (by object identity).
 - Mark groups are matched to the previous scene by compiled-mark identity, never by source dataset or name. Group marks (facets, trellises, scoped groups) are always rebuilt.
 
-**Scenes are never observably mutated after they are returned.** A structural update (insert/remove/reorder) builds a new items array. An append or same-length edit advances the engine-owned array in place (O(changes)) and hands it to the new group; the superseded group's `items` becomes a lazy snapshot (old length plus the overwritten items) that materialises on first read and composes across a chain, so earlier scenes can be read in any order, or never. Newer groups never reference older ones (an unreferenced old scene is collectable); an old scene that is retained but never read keeps one small undo record per later update alive. Always read `group.items` through the group: an array reference captured earlier is the engine's live array. The other live link is `scene.runtime` (the signal event loop's expression runtime), which reads the chart's datasets as they are *now*.
+```mermaid
+stateDiagram-v2
+  [*] --> Empty: chart compiled
+  Empty --> Committed: an evaluation commits its draft
+  Committed --> Committed: an evaluation commits its draft (replaces the state)
+  Committed --> Stale: a fast path claims a structure for an in-place update
+  Committed --> Stale: commit() of an evaluation that logged a recovered error (its draft is dropped)
+  Stale --> Committed: the next evaluation re-derives from scratch and commits its draft
+```
+
+*The committed state of one compiled chart. An evaluation reads it only while it is `Committed`; from `Empty` and `Stale` it starts from nothing. A draft belongs to one evaluation and is not a state of the chart: an evaluation that throws before it claims anything leaves `Committed` as it was.*
+
+**Scenes are never observably mutated after they are returned.**
+
+- A structural update (insert/remove/reorder) builds a new items array. An append or same-length edit advances the engine-owned array in place (O(changes)) and hands it to the new group; the superseded group's `items` becomes a lazy snapshot (old length plus the overwritten items) that materialises on first read and composes across a chain, so earlier scenes can be read in any order, or never.
+- Newer groups never reference older ones (an unreferenced old scene is collectable); an old scene that is retained but never read keeps one small undo record per later update alive.
+- Always read `group.items` through the group: an array reference captured earlier is the engine's live array.
+- The other live link is `scene.runtime` (the signal event loop's expression runtime), which reads the chart's datasets as they are *now*.
 
 **Transforms.** Same-length and length-changing updates go through one engine (`applyStepWithPulse`, in `incremental-engine.ts`): a same-length pulse is an append-only pulse that appends nothing. Per-transform fast paths exist for row-local transforms, `filter`, `fold`, `flatten`, `aggregate`, `joinaggregate`, `collect`/`sample`, `identifier`; `window` (which writes results in source order) and `stack` re-derive and are compared row by row; everything else re-derives. A transform is row-local only when its output row depends on nothing but its input row.
 
-**Kept steps.** An evaluation that is not driven by a pulse (a resize, a signal write, a replaced array whose rows are equal) used to run every dataset pipeline from its first step. A step of `step-reuse.ts`'s list (formula, filter, bin, timeunit, extent, crossfilter, resolvefilter, aggregate, joinaggregate, window, collect, identifier, project, fold, flatten, stack, impute, pivot, sample, sequence) reads its input rows, the signals its parameters and expressions mention (found in the expression tree; a call outside the pure functions, `event`, `item` or a malformed expression keeps the step out of the list), the injected random source and, for `identifier`, the numbers the committed evaluation gave. `runPipeline` records those reads when a step runs; the next evaluation keeps the step (its rows, its state, the signal it published, the Box-Muller carry-over a drawing step left) when they are as they were over the same input rows. Input rows are recognised by identity: the arrays of a derived dataset's sources, and for a host dataset the array the committed state was made from, which the session vouches for (`stableData`: by content when it diffed the rows itself, by identity when it did not look; a dataset named as changed never). Datasets of group scopes are kept as whole pipelines over the same source arrays and signals (`runScopedData`). Consecutive formula / bin / timeunit steps that cannot tell the difference run as one over one set of rows (`runsOf`); the earlier steps of such a run stand for the rows the last made, so the incremental engine compares them without the fields the later steps added (`aliased`). `dataset-reuse.test.ts` pins all of it against an engine that keeps nothing, `differential-step-reuse.test.mts` against real Vega.
+**Kept steps.** An evaluation that is not driven by a pulse (a resize, a signal write, a replaced array whose rows are equal) does not run every dataset pipeline from its first step: it keeps the steps whose reads are unchanged.
 
-**Where the engine lives.** The incremental step engine (`incremental-engine.ts`: the pulse-driven step functions, and the state a step leaves for the next pulse) is not part of `runtime.ts`, which only declares its shape (`IncrementalEngine`). The kept steps (`runPipeline`, `runScopedData`) stay in the runtime: a view that builds its datasets again under signals that resolved since keeps the steps of the first build, in a single evaluation. `runtime.ts` evaluates a chart once: `evaluateOnce`, which `renderSpec` and `getChartInfo` run, reads nothing from an earlier evaluation of the chart and leaves no step state for a later one. An evaluation that keeps its state for a later one, `evaluateChartPending`, is handed the engine by its caller: the public `evaluateChart` (`evaluate.ts`) and the chart session (`session.ts`, so every stream and React shell) import it and pass it. The engine is an argument, not a registration, so it needs no `sideEffects` entry and no bundler setting can drop it, and a bundle of `renderSpec` alone does not contain it (`scripts/check-bundle-shaking.mjs` and `scripts/verify-publish.mjs` pin both directions). An evaluation that keeps state and is given no engine does not fall back to anything else: it throws. `evaluate-once.test.ts` pins that `evaluateOnce` makes what `evaluateChart` makes of a chart evaluated for the first time, over generated charts.
+- **Which steps.** A step of `step-reuse.ts`'s list (formula, filter, bin, timeunit, extent, crossfilter, resolvefilter, aggregate, joinaggregate, window, collect, identifier, project, fold, flatten, stack, impute, pivot, sample, sequence) reads its input rows, the signals its parameters and expressions mention (found in the expression tree; a call outside the pure functions, `event`, `item` or a malformed expression keeps the step out of the list), the injected random source and, for `identifier`, the numbers the committed evaluation gave.
+- **When a step is kept.** `runPipeline` records those reads when a step runs; the next evaluation keeps the step (its rows, its state, the signal it published, the Box-Muller carry-over a drawing step left) when they are as they were over the same input rows.
+- **Input rows** are recognised by identity: the arrays of a derived dataset's sources, and for a host dataset the array the committed state was made from, which the session vouches for (`stableData`: by content when it diffed the rows itself, by identity when it did not look; a dataset named as changed never).
+- **Scoped datasets.** Datasets of group scopes are kept as whole pipelines over the same source arrays and signals (`runScopedData`).
+- **Runs of steps.** Consecutive formula / bin / timeunit steps that cannot tell the difference run as one over one set of rows (`runsOf`); the earlier steps of such a run stand for the rows the last made, so the incremental engine compares them without the fields the later steps added (`aliased`).
+- **Pinned by.** `dataset-reuse.test.ts` pins all of it against an engine that keeps nothing, `differential-step-reuse.test.mts` against real Vega.
+
+**Where the engine lives.** In short: the engine is `incremental-engine.ts`, and it is passed to the evaluation as an argument instead of being registered.
+
+- The incremental step engine (`incremental-engine.ts`: the pulse-driven step functions, and the state a step leaves for the next pulse) is not part of `runtime.ts`, which only declares its shape (`IncrementalEngine`).
+- The kept steps (`runPipeline`, `runScopedData`) stay in the runtime: a view that builds its datasets again under signals that resolved since keeps the steps of the first build, in a single evaluation.
+- `runtime.ts` evaluates a chart once: `evaluateOnce`, which `renderSpec` and `getChartInfo` run, reads nothing from an earlier evaluation of the chart and leaves no step state for a later one.
+- An evaluation that keeps its state for a later one, `evaluateChartPending`, is handed the engine by its caller: the public `evaluateChart` (`evaluate.ts`) and the chart session (`session.ts`, so every stream and React shell) import it and pass it.
+- The engine is an argument, not a registration, so it needs no `sideEffects` entry and no bundler setting can drop it, and a bundle of `renderSpec` alone does not contain it (`scripts/check-bundle-shaking.mjs` and `scripts/verify-publish.mjs` pin both directions).
+- An evaluation that keeps state and is given no engine does not fall back to anything else: it throws.
+- **Pinned by.** `evaluate-once.test.ts` pins that `evaluateOnce` makes what `evaluateChart` makes of a chart evaluated for the first time, over generated charts.
 
 ## Renderers, the DOM patcher and hit testing
 
-**One attribute list per element.** `render.ts` defines, for every SVG element the scene produces (symbol, rect, line, area, trail, text, arc, path, image, guide leaves, frame, background, gradients, clip paths), one `*Attrs(item, sink)` function. The string renderer (`renderSceneToSvg`) writes it through `StringAttrSink` (escaped `name="value"` text, the single `escAttr`/`escText` writer); the DOM descriptor builder (`dom.ts`) writes the same function through `PairAttrSink` (`[name, value]` pairs for `setAttribute`). Neither side owns a list of its own, so they cannot drift; `dom.ts` only decides structure (nesting, clip registration, per-item descriptor caching, `denseMarks` batching, which deliberately does not mirror the string output). The paint of every element (fill, stroke, dash, cap, join, opacity, blend: vega's `stylesAttr`) is one function, `paintAttrs`, so a paint property cannot be dropped by one mark kind or one renderer; text geometry (`textItemDesc`), item transforms (`rotateItemTransform`/`transformItemTransform`), the frame (`frameBackgroundPath`/`frameItem`) and the d3-arc port (`arcInto`) are shared with the canvas painter. Clip ids are content-addressed (`svg-defs.ts`), so a descriptor never depends on traversal order. `packages/conformance/scripts/dom-string-parity.test.mts` enforces it over the whole conformance corpus with no allow-list, and `dom-regressions.test.ts` over hand-built scenes for what the corpus lacks. The canvas painter still has its own paint code; `canvas.test.ts` and the Chromium canvas gate compare it with the SVG output.
+**One attribute list per element.** `render.ts` defines, for every SVG element the scene produces (symbol, rect, line, area, trail, text, arc, path, image, guide leaves, frame, background, gradients, clip paths), one `*Attrs(item, sink)` function.
+
+- The string renderer (`renderSceneToSvg`) writes it through `StringAttrSink` (escaped `name="value"` text, the single `escAttr`/`escText` writer).
+- The DOM descriptor builder (`dom.ts`) writes the same function through `PairAttrSink` (`[name, value]` pairs for `setAttribute`).
+- Neither side owns a list of its own, so they cannot drift; `dom.ts` only decides structure (nesting, clip registration, per-item descriptor caching, `denseMarks` batching, which deliberately does not mirror the string output).
+- The paint of every element (fill, stroke, dash, cap, join, opacity, blend: vega's `stylesAttr`) is one function, `paintAttrs`, so a paint property cannot be dropped by one mark kind or one renderer; text geometry (`textItemDesc`), item transforms (`rotateItemTransform`/`transformItemTransform`), the frame (`frameBackgroundPath`/`frameItem`) and the d3-arc port (`arcInto`) are shared with the canvas painter.
+- Clip ids are content-addressed (`svg-defs.ts`), so a descriptor never depends on traversal order.
+- **Pinned by.** `packages/conformance/scripts/dom-string-parity.test.mts` enforces it over the whole conformance corpus with no allow-list, and `dom-regressions.test.ts` over hand-built scenes for what the corpus lacks.
+- The canvas painter still has its own paint code; `canvas.test.ts` and the Chromium canvas gate compare it with the SVG output.
 
 **The DOM patcher** matches children by position. A reused item keeps its cached descriptor (`clean`), and a clean descriptor is only skipped when the element it lands on was last patched with that very descriptor; after a removal or reorder it is compared and written like any other (`dom-oracle.test.ts` checks patched DOM against a freshly built one over random insert/remove/reorder sequences, per-item and dense).
 
@@ -86,27 +190,19 @@ runtime's scales and data, to the owned type/array/string/math utilities (`util.
 
 Hosts add functions with `registerExpressionFunction` (vega's `expressionFunction`); see [API.md](API.md).
 
-**Expressions are refused at compile time, as `vega.parse` refuses them.** `compileChart` reads every expression of the spec
-before anything runs (`spec-expressions.ts`, called with the merged config) and throws a `SpecParseError` with vega's message
-for the first one vega's parser would refuse; the engine never gets as far as evaluating a spec with a syntax error, an
-unknown function or an undeclared signal. `spec-expressions.ts` walks the spec in the order vega-parser reads it (a scope's
-signals are known first, then projections and scales, data sets with their transforms, signals with their handlers, axes,
-marks, legends, the title, and the `{signal: text}` lambdas last) and keeps what the scope knows at each point (its signals and
-scales, those of the scopes around it, a group's `parent`, the signals transforms declare as they are met); the text of every
-site is built the way vega builds it (an encode entry, a rule list, a data trigger, the filters of a stream), because a syntax
-error quotes that text. `expr-check.ts` is the check of one text: parse, the calls that must name data or a scale, the code
-generator's refusals in tree order (unknown function, illegal callee, arity), and last the free names against the scope.
-Two tables say what vega reads: `transform-params.ts` (the parameters of each transform in the order of its definition, with the
-kind of each; a key the definition does not list is never read) and `guide-model.ts` (which properties of an axis, a legend and the
-title vega reads, as what, and in which marks the guide has; the size expression and the layout a symbol legend writes out).
-`expression.ts` answers "does vega know this function" (`isExpressionFunction`): the built-ins, the registry (host and add-ons),
-the add-ons' table (`addon-functions.ts`, so a function of an add-on that is not loaded yet is accepted by the compile and
-asked for by `@aster/core/addons`, which reads the same expressions, before the first evaluation) and the functions vega has that
-Aster has not written. What remains for bind time is what only a running chart knows: a function removed after the compile
-is reported by `signals.ts` to the logger while the other handlers still bind. The live differentials are
-`differential-parse-errors.test.mts` (every site of `expression-sites.mts` against `vega.parse`),
-`differential-expression-functions.test.mts` (every function name), `differential-transform-params.test.mts` (the table of transform
-parameters against the definitions of the pinned vega) and `jsdom-parse-errors-handlers.test.mts` (the handlers, compile and bind).
+### Expressions are refused at compile time, as `vega.parse` refuses them
+
+`compileChart` reads every expression of the spec before anything runs (`spec-expressions.ts`, called with the merged config) and throws a `SpecParseError` with vega's message for the first one vega's parser would refuse; the engine never gets as far as evaluating a spec with a syntax error, an unknown function or an undeclared signal.
+
+- **Walk order.** `spec-expressions.ts` walks the spec in the order vega-parser reads it (a scope's signals are known first, then projections and scales, data sets with their transforms, signals with their handlers, axes, marks, legends, the title, and the `{signal: text}` lambdas last) and keeps what the scope knows at each point (its signals and scales, those of the scopes around it, a group's `parent`, the signals transforms declare as they are met).
+- **Site text.** The text of every site is built the way vega builds it (an encode entry, a rule list, a data trigger, the filters of a stream), because a syntax error quotes that text.
+- **One text.** `expr-check.ts` is the check of one text: parse, the calls that must name data or a scale, the code generator's refusals in tree order (unknown function, illegal callee, arity), and last the free names against the scope.
+- **What vega reads.** Two tables say what vega reads: `transform-params.ts` (the parameters of each transform in the order of its definition, with the kind of each; a key the definition does not list is never read) and `guide-model.ts` (which properties of an axis, a legend and the title vega reads, as what, and in which marks the guide has; the size expression and the layout a symbol legend writes out).
+- **Which functions exist.** `expression.ts` answers "does vega know this function" (`isExpressionFunction`): the built-ins, the registry (host and add-ons), the add-ons' table (`addon-functions.ts`, so a function of an add-on that is not loaded yet is accepted by the compile and asked for by `@aster/core/addons`, which reads the same expressions, before the first evaluation) and the functions vega has that Aster has not written.
+- **Bind time.** What remains for bind time is what only a running chart knows: a function removed after the compile is reported by `signals.ts` to the logger while the other handlers still bind.
+- **Pinned by.** The live differentials are `differential-parse-errors.test.mts` (every site of `expression-sites.mts` against `vega.parse`), `differential-expression-functions.test.mts` (every function name), `differential-transform-params.test.mts` (the table of transform parameters against the definitions of the pinned vega) and `jsdom-parse-errors-handlers.test.mts` (the handlers, compile and bind).
+
+### Signals
 
 Signals are values in the evaluation context. Signal `update` expressions are resolved to a fixed point in the runtime
 (`resolveSignalUpdates`), so a scale range/domain or an encoding can reference a derived signal. Event-driven
@@ -120,27 +216,44 @@ A signal written into a running chart renders like Vega except in the `retained`
 
 `compileChart` reads `spec.config` and applies it as encode/property defaults (encode always wins): `config.background` → root background, `config.view` / `config.style.cell` → frame stroke (a `transparent` stroke serializes as *no* stroke), `config.style.<marktype|name>` → mark encode defaults (e.g. a `rect` style's `fill`/`cornerRadius`), and `config.axis` / `config.legend` → guide defaults. The chart `title` (string or object, with `subtitle`) merges from `config.title` and the vega-theme style defaults (fontSize 13, bold, offset 4, subtitlePadding 3).
 
-## Geo projections & the addon boundary
+## Geo projections & the add-on boundary
 
 `packages/core/src/geo.ts` builds projections (`mercator`, `albers`, `albersUsa`, `equirectangular`, `orthographic`, …) from the compiled `projections` spec the way vega's Projection transform does, resolving `scale`/`translate`/`center`/`rotate` signal params against the runtime; the `geoshape` transform and shape marks route geometry through the projection's `GeoPath` (`geo-path.ts`; a path with no projection draws coordinates as they are).
 
-The geo engine is Aster's own design and matches d3-geo/vega bit for bit (the generated differential pins it, see TESTING). A GeoJSON object is flattened once into an **event buffer** (`geo-events.ts`: points, line and polygon starts and ends, the sphere), and every stage is a pure function from one buffer to another: rotation and clipping to the visible sphere (`geo-clip.ts`: antimeridian cut, small-circle cap, cut pieces re-joined into rings along the clip boundary), projection with adaptive resampling (`geo-resample.ts`), clipping to the screen rectangle. A projection (`geo-projections.ts`: raw projection formulas in `geo-raw.ts`, plus scale/translate/centre/rotation/clip state) offers `project`/`invert` for one position and `planar` for a whole buffer; the path string and the planar measures (`geo-path.ts`) and the spherical measures (`geo-sphere-measures.ts`) are folds over the final buffer. No state outlives a call. The hot loops are written for a cold start, where compile time is most of a render: each stage walks its buffer in batches of 128 events through one method (a loop that runs long inside one call is compiled twice by V8), methods and not per-instance closures are the call targets (a closure that changes between calls deoptimises its caller), a ring that crosses neither the antimeridian nor a pole is passed through the sphere clip, and a buffer that lies strictly inside the clip rectangle is passed through the rectangle clip. Events carry the index of the input event they descend from, which is how the three parts of the albersUsa composite are interleaved back into the order a streaming pipeline would have written them.
+The geo engine is Aster's own design and matches d3-geo/vega bit for bit (the generated differential pins it, see TESTING).
+
+- **Pipeline.** A GeoJSON object is flattened once into an **event buffer** (`geo-events.ts`: points, line and polygon starts and ends, the sphere), and every stage is a pure function from one buffer to another: rotation and clipping to the visible sphere (`geo-clip.ts`: antimeridian cut, small-circle cap, cut pieces re-joined into rings along the clip boundary), projection with adaptive resampling (`geo-resample.ts`), clipping to the screen rectangle.
+- **Projections.** A projection (`geo-projections.ts`: raw projection formulas in `geo-raw.ts`, plus scale/translate/centre/rotation/clip state) offers `project`/`invert` for one position and `planar` for a whole buffer; the path string and the planar measures (`geo-path.ts`) and the spherical measures (`geo-sphere-measures.ts`) are folds over the final buffer. No state outlives a call.
+- **Hot loops.** The hot loops are written for a cold start, where compile time is most of a render: each stage walks its buffer in batches of 128 events through one method (a loop that runs long inside one call is compiled twice by V8), methods and not per-instance closures are the call targets (a closure that changes between calls deoptimises its caller), a ring that crosses neither the antimeridian nor a pole is passed through the sphere clip, and a buffer that lies strictly inside the clip rectangle is passed through the rectangle clip.
+- **Event indices.** Events carry the index of the input event they descend from, which is how the three parts of the albersUsa composite are interleaved back into the order a streaming pipeline would have written them.
 
 **Projections that fit data.** A projection with `fit` reads its extent from datasets and signals (`data('a')`, a `geojson` transform's signal), so the runtime keeps a projection registry: it rebuilds a projection when a dataset or signal it was fitted to changes (an epoch counter), builds datasets on demand when a fit needs one that has not been evaluated yet, and treats `geopoint` / `geoshape` as not row-local when their projection fits (a row's pixels depend on all rows). The `geojson` transform publishes its collection as the signal it names. `geoshape` reads its feature from the item and measures the path with an unrounded bounding context (`projectedBounds`, a lazy thunk on the item), because vega's group layout uses unrounded bounds and a rounded path would shift a concat grid by a pixel.
 
-Because heavy feature areas are only used by a small fraction of specs, they are **not** reachable from the `@aster/core` barrel. The core code paths consult injection registries (`packages/core/src/registry.ts`: `geoRegistry`, `transformRegistry`, `dataFormatRegistry`); five opt-in addon entries register their implementations:
+Because heavy feature areas are only used by a small fraction of specs, they are **not** reachable from the `@aster/core` barrel. The core code paths consult injection registries (`packages/core/src/registry.ts`: `geoRegistry`, `transformRegistry`, `dataFormatRegistry`); opt-in entries register their implementations (or, for `canvas`, `hit` and `addons`, provide a capability a plain chart does not need):
 
-| Addon | Registers |
+| Add-on | Registers |
 |---|---|
 | `@aster/core/geo` | the projections (`buildProjection`, `projectedPath`) and the contour generator (`contourRun`) |
-| `@aster/core/transforms` | the rare-layout transforms — `kde`, `kde2d`, `isocontour`, `heatmap`, `density`, `quantile`, `regression`, `loess`, `nest`, `pack`, `partition`, `treemap`, `tree`, `treelinks`, `force`, `wordcloud`, `voronoi`, `geopath`, `label` (implementations in `transform-extra.ts` (`voronoi` on `delaunay.ts`, `voronoi.ts` and `orient.ts`), `hierarchy-nest.ts` (`nest`), `hierarchy-layout.ts` with `circle-pack.ts`, `treemap-tiling.ts` and `hierarchy-tree.ts`, `force-layout.ts` with `quadtree.ts`, `raster-transforms.ts`; `label.ts` places labels as vega-label does, on an occupancy grid, and `label-draw.ts` draws the marks it avoids with `raster.ts`, a coverage-only 2D context that follows Skia's rasterizer, so it needs neither a canvas nor a DOM), and the distribution functions of the expression language (`quantileNormal`, `densityUniform`, ... in `stats-functions.ts`) plus `treePath` / `treeAncestors` |
-| `@aster/core/load` | the text-format readers (`csv`/`tsv`/`dsv`, `topojson`; `dsv.ts`, `topojson.ts`) and `loadSpecData`, which vets every URL against a policy (protocols, credentials, private hosts, redirects, size and time bounds), fetches each `url` dataset and inlines its values so the synchronous pipeline runs unchanged ([LIMITS.md](LIMITS.md)) |
+| `@aster/core/transforms` | the transforms that are not in the core dispatch: every type of `TRANSFORMS_ADDON_TYPES` (exported from `@aster/core/addons`, the one list; it includes `pie`, `cross`, `countpattern`, `dotbin`, `geopoint`, `geojson`, `linkpath`, `crossfilter` and `resolvefilter` besides the layout transforms) (implementations in `transform-extra.ts` (`voronoi` on `delaunay.ts`, `voronoi.ts` and `orient.ts`), `hierarchy-nest.ts` (`nest`), `hierarchy-layout.ts` with `circle-pack.ts`, `treemap-tiling.ts` and `hierarchy-tree.ts`, `force-layout.ts` with `quadtree.ts`, `raster-transforms.ts`; `label.ts` places labels as vega-label does, on an occupancy grid, and `label-draw.ts` draws the marks it avoids with `raster.ts`, a coverage-only 2D context that follows Skia's rasterizer, so it needs neither a canvas nor a DOM), and the distribution functions of the expression language (`quantileNormal`, `densityUniform`, ... in `stats-functions.ts`) plus `treePath` / `treeAncestors` |
+| `@aster/core/load` | the data-format readers (`csv`/`tsv`/`dsv`/`topojson`; `dsv.ts`, `topojson.ts`) and `loadSpecData`, which vets every URL against a policy (protocols, credentials, private hosts, redirects, size and time bounds), fetches each `url` dataset and inlines its values so the synchronous pipeline runs unchanged ([LIMITS.md](LIMITS.md)) |
 | `@aster/core/dom` | the incremental DOM patcher (`patchSceneDom`, `sceneToDomDesc`, `createChartSession`); `<Chart>` now defaults to this path |
-| `@aster/core/signals` | the signal→view event loop (`bindSceneSignals`, `stampDatumAttrs`) that binds a spec's `signal.on` streams to the rendered svg |
+| `@aster/core/signals` | the signal→view event loop (`bindSceneSignals`, `stampDatumAttrs`) that binds a spec's `signal.on` streams to the rendered svg, and the timer clock seam (`setTimerClock`) |
+| `@aster/core/canvas` | the canvas renderer (`renderSceneToCanvas`) |
+| `@aster/core/hit` | the hit index (`buildHitIndex`) |
+| `@aster/core/addons` | which add-ons a spec needs and loading them on demand (`addonsNeeded`, `loadAddonsFor`), and `TRANSFORMS_ADDON_TYPES`, the list of transform types the transforms add-on registers |
 
-**Add-ons load themselves.** A host that knows what its specs need imports the add-ons (`import '@aster/core/geo'`); the shells and hooks also load them on demand, so a spec renders with nothing imported. `@aster/core/addons` reads the spec's structure (a transform of the transforms add-on, a `contour` transform or a `projections` entry for geo, a `csv`/`tsv`/`dsv`/`topojson` format for load, in `data` and in every mark's `data` / `transform` at any depth; no evaluation, no regular expression, cached per spec object) and imports exactly those, each at most once; an add-on the app imported itself is recognised by what it registered and never imported again. Test: `packages/conformance/src/addons-needed.test.ts` checks the detector against the engine itself over every corpus spec (the add-ons discovered by loading one at a time on each "load the addon" failure are exactly the ones named, and a render with just those equals a render with all). The React wait is a Suspense wait (`React.use`), like an async `spec` and `useSpecData`: `<Chart>`, `<SvgChart>`, `useChart`, `useChartStream` suspend until the add-ons are there (a boundary above shows its fallback; with none the new root waits), render the same document the static path renders, and report a failed import through `onError` / the hook's `error`. The synchronous entry points (`renderSpec`, `renderChartToStaticMarkup`, `hydrateChart`) cannot wait and keep the actionable error; `loadAddonsFor(spec)` is the awaitable step for them. In a worker the entry (`@aster/react/worker-entry`) imports what a message's spec needs before it handles it, in arrival order; the main-thread fallbacks of the worker hooks wait the same way. The Vega-Lite compiler stays an explicit import (`@aster/react/vl`). Data is never fetched on its own: a `url` dataset is still resolved by `loadSpecData` / `useSpecData` (a fetch is the host's decision, under its URL policy), only the readers for its format load by themselves.
+**Add-ons load themselves.** A host that knows what its specs need imports the add-ons (`import '@aster/core/geo'`); the shells and hooks also load them on demand, so a spec renders with nothing imported.
 
-`@aster/react/vl` is the same pattern at the grammar level: the Vega-Lite compiler (`@aster/vl`) is registered by `import '@aster/react/vl'`, so Vega-only hosts do not pay for it. A spec that needs a gated feature without its addon loaded gets an actionable error naming what to import first. `packages/benchmarks/scripts/budget.mjs` gates one bundle per import pattern (core `renderSpec`, `useChart`, `<Chart>`, `<Chart>` + VL, and each core addon as its marginal cost on top of core); the measured sizes are in [PERFORMANCE.md](PERFORMANCE.md#bundle-sizes).
+- **Detection.** `@aster/core/addons` reads the spec's structure (a transform of the transforms add-on, a `contour` transform or a `projections` entry for geo, a `csv`/`tsv`/`dsv`/`topojson` format for load, in `data` and in every mark's `data` / `transform` at any depth, and an add-on's expression function such as `treePath` in any expression, found by parsing it with the engine's own parser; no evaluation, no regular expression, cached per spec object) and imports exactly those, each at most once; an add-on the app imported itself is recognised by what it registered and never imported again.
+- Test: `packages/conformance/src/addons-needed.test.ts` checks the detector against the engine itself over every corpus spec (the add-ons discovered by loading one at a time on each "load the addon" failure are exactly the ones named, and a render with just those equals a render with all).
+- **In React.** The React wait is a Suspense wait (`React.use`), like an async `spec` and `useSpecData`: `<Chart>`, `<SvgChart>`, `useChart`, `useChartStream`, `<ChartStream>` and the worker hooks suspend until the add-ons are there (a `<Suspense fallback>` above the chart shows something meanwhile; with none the new root commits when the chart is ready; to keep an existing chart on screen while a changed spec's add-on loads, update inside `startTransition`), render the same document the static path renders, and report a failed import through `onError` / the hook's `error`, once. A spec that needs no add-on never suspends and imports nothing, and an app that imported the add-on itself never loads it twice.
+- **Synchronous entry points.** The synchronous entry points (`renderSpec`, `renderChartToStaticMarkup`, `hydrateChart`) cannot wait and keep the actionable error; `loadAddonsFor(spec)` is the awaitable step for them. Server rendering: `renderToPipeableStream` and `renderToReadableStream` wait for the import and send the chart; `renderToString` renders the `<Suspense>` fallback (the client renders the chart), so `await loadAddonsFor(spec)` (or a static `import '@aster/core/geo'` in the server entry) before it, and before `renderChartToStaticMarkup` and `hydrateChart`.
+- **In a worker** the entry (`@aster/react/worker-entry`) imports what a message's spec needs before it handles it, in arrival order; the main-thread fallbacks of the worker hooks wait the same way.
+- **Vega-Lite.** The Vega-Lite compiler stays an explicit import (`@aster/react/vl`).
+- **Data.** Data is never fetched on its own: a `url` dataset is still resolved by `loadSpecData` / `useSpecData` (a fetch is the host's decision, under its URL policy), only the readers for its format load by themselves.
+- **Bundles.** Bundlers split the add-ons into chunks fetched on demand; the bundle budget counts what loads up front.
+
+`@aster/react/vl` is the same pattern at the grammar level: the Vega-Lite compiler (`@aster/vl`) is registered by `import '@aster/react/vl'`, so Vega-only hosts do not pay for it. A spec that needs a gated feature without its add-on loaded gets an actionable error naming what to import first. `packages/benchmarks/scripts/budget.mjs` gates one bundle per import pattern (core `renderSpec`, `useChart`, `<Chart>`, `<Chart>` + VL, and each core add-on as its marginal cost on top of core); the measured sizes are in [PERFORMANCE.md](PERFORMANCE.md#bundle-sizes).
 
 ## ChartCore and the two shells
 
@@ -150,11 +263,42 @@ the canvas renderer (`CanvasCapability`, `@aster/core/canvas`) and hit testing +
 `@aster/core/hit`, `@aster/core/signals`). `<Chart>` (`Chart.tsx`) and `<SvgChart>` (`SvgChart.tsx`) are shells that render
 `<ChartCore>`: `<Chart>` injects both capabilities, `<SvgChart>` injects nothing itself and passes through the `interaction`
 its caller gives it. So `@aster/react/lite` (`SvgChart`) never reaches the canvas module, and `@aster/react/interaction`
-(the `interaction` value) is the only way hit and signals enter a lite bundle. The shell split costs `<Chart>` 0.7 kB gzip
+(the `interaction` value) is the only way hit and signals enter a bundle that uses `<SvgChart>`. The shell split costs `<Chart>` 0.7 kB gzip
 (the property reads through the capability objects, and the missing-capability report that only `<SvgChart>` can trigger).
 
 `<SvgChart>` was chosen over lazy-loading the heavy modules: nothing loads asynchronously, the first paint is synchronous and
 SSR-safe, and the cost is explicit in the importing code.
+
+### Render lifecycle
+
+```mermaid
+sequenceDiagram
+  participant App
+  participant Chart as Chart (ChartCore)
+  participant Addons as @aster/core/addons
+  participant Session as chart session
+  participant DOM as svg or canvas
+  participant EvLoop as signal event loop
+  App->>Chart: spec, data, props
+  Chart->>Addons: addonsNeeded(spec)
+  alt add-on missing
+    Chart-->>App: suspend (React.use), the nearest Suspense fallback shows
+    Addons->>Addons: import geo, transforms or load, once each
+  end
+  Chart->>Session: evaluate(spec, input), compile once, incremental after
+  Session-->>Chart: SceneRoot (the same object if the inputs are unchanged)
+  alt first commit (also SSR)
+    Chart->>DOM: full SVG markup
+  else update
+    Chart->>DOM: patchSceneDom (changed items only), or a canvas repaint or append paint
+  end
+  Chart->>EvLoop: bindSceneSignals(svg, scene, signals, hooks, {pick, owner, data})
+  DOM-->>EvLoop: native event
+  EvLoop-->>Chart: onSignal and onData (kept in external stores read with useSyncExternalStore)
+  Chart->>Session: re-evaluate with the new signals and store rows
+```
+
+*The event loop is bound for the SVG renderer only, when the chart is `interactive` and has an interaction capability (always for `<Chart>`, only with the `interaction` prop for `<SvgChart>`).*
 
 **Making drift hard.** A second component that mostly copies the first is where a prop gets handled in one and forgotten in
 the other. Six mechanisms, each with a check that fails when the property it protects is broken:
@@ -173,28 +317,52 @@ the real-browser behaviour and the size/import guarantees ([PERFORMANCE.md](PERF
 
 ## Side effects and tree-shaking
 
-The package manifests declare `sideEffects` so a bundler can drop every module an app does not use: `@aster/vl` is `false`, `@aster/core` and `@aster/react` list the files below. A blanket `false` would be wrong because several documented imports work only through a module's top-level effect. The audit covered every module in `packages/{core,react,vl}/src` for top-level effects (registrations, `globalThis` writes, polyfills, prototype patches, mutable singletons whose initialisation matters, imports done only for their effect). Everything else that runs at import time only fills the module's own tables (`scale.ts` registers the scale types into its own map, `locale.ts`/`format.ts`/`time-format.ts` build their default locale, the `geo-*` ports and `time.ts` build their own constants and caches, `data-format.ts` registers the `json` reader in the registry it reads from), so it stays whenever the module is used and needs no listing.
+The package manifests declare `sideEffects` so a bundler can drop every module an app does not use: `@aster/vl` is `false`, `@aster/core` and `@aster/react` list the files below.
+
+A blanket `false` would be wrong because several documented imports work only through a module's top-level effect. The audit covered every module in `packages/{core,react,vl}/src` for top-level effects (registrations, `globalThis` writes, polyfills, prototype patches, mutable singletons whose initialisation matters, imports done only for their effect).
+
+Everything else that runs at import time only fills the module's own tables (`scale.ts` registers the scale types into its own map, `locale.ts`/`format.ts`/`time-format.ts` build their default locale, the `geo-*` ports and `time.ts` build their own constants and caches, `data-format.ts` registers the `json` reader in the registry it reads from), so it stays whenever the module is used and needs no listing.
 
 | File (dist) | Effect | Why it must be listed |
 |---|---|---|
 | core `addon-geo.js` | assigns `geoRegistry.buildProjection/projectedPath/contourRun` | `import '@aster/core/geo'` exports nothing used |
 | core `addon-transforms.js` | bare `import './transform-extra.js'` | the entry only exists for its effect |
 | core `label.js` | `transformRegistry.set('label', ...)` | imported bare by `addon-transforms.js`; listed in `sideEffects`, without which a bundler drops the import and `label` is missing |
-| core `transform-extra.js` | `transformRegistry.set(...)` for kde, kde2d, isocontour, heatmap, density, quantile, regression, loess, nest, pack, partition, treemap, tree, treelinks, force, wordcloud, voronoi, pie, cross, countpattern, dotbin, geopoint, geopath, geojson, linkpath | reached only through the bare import above |
+| core `transform-extra.js` | `transformRegistry.set(...)` for every type of `TRANSFORMS_ADDON_TYPES` except `label` | reached only through the bare import above |
+| core `stats-functions.js` | a top-level loop of `registerExpressionFunction` for the distribution functions (`sampleNormal`, `quantileNormal`, ...) | imported bare by `addon-transforms.js` (and by `transform-stats.ts` for its values); a bundler that drops it as side-effect free loses the functions from the expression language |
 | core `addon-load.js` | `dataFormatRegistry.set('csv' \| 'tsv' \| 'dsv' \| 'topojson')` | `import '@aster/core/load'` for the readers alone must register them |
 | core `guide-caption.js` | `installGuideCaptions(...)` into `render.ts` | imported bare by `index.ts` and `dom.ts`; without it axis/legend `aria-label` captions vanish. Canvas and hit never import it, so they do not pay for it |
 | react `vl.js` | `registerVegaLiteCompiler(...)` (a `globalThis` registry under `Symbol.for('@aster/react/vega-lite-compiler')`) | `import '@aster/react/vl'` |
 | react `worker-entry.js` | `globalThis.onmessage = ...` | `import '@aster/react/worker-entry'` is the worker's whole body |
 
-`scripts/check-bundle-shaking.mjs` (`pnpm check:bundle`, a `pnpm check` gate) bundles a tiny app per documented import pattern with esbuild (production, tree-shaking), executes the bundle in a fresh node process (jsdom where it needs a DOM) and asserts the behaviour: Vega-Lite registered and rendered, geo projections, rare transforms, URL and inline csv data, `<Chart>` on the server and the client, `useChart` with and without serialising, `/ssr` hydration, the worker handler and the worker entry, the dom/canvas/hit/signals addons, `<SvgChart>` alone and with `interaction` (asserted on the esbuild metafile: no `core/canvas`, no `core/hit` or `core/signals` without the capability), the lazy `await import('@aster/core/geo')` form, and negative controls (without the addon the spec asks for it). `node scripts/check-bundle-shaking.mjs --blanket-false` simulates `"sideEffects": false` and must fail (10 of 23 patterns do; `scripts/bundle-shaking.test.mjs` asserts it); `--bundler vite` runs the same patterns through Vite/Rollup (a vitest dependency in the pnpm store; not a gate). `pnpm verify:publish` repeats the exercise on the installed tarballs.
+### How the manifests are checked
+
+`scripts/check-bundle-shaking.mjs` (`pnpm check:bundle`, a `pnpm check` gate) bundles a tiny app per documented import pattern with esbuild (production, tree-shaking), executes the bundle in a fresh node process (jsdom where it needs a DOM) and asserts the behaviour: Vega-Lite registered and rendered, geo projections, rare transforms, URL and inline csv data, `<Chart>` on the server and the client, `useChart` with and without serialising, `/ssr` hydration, the worker handler and the worker entry, the dom/canvas/hit/signals add-ons, `<SvgChart>` alone and with `interaction` (asserted on the esbuild metafile: no `core/canvas`, no `core/hit` or `core/signals` without the capability), the lazy `await import('@aster/core/geo')` form, and negative controls (without the add-on the spec asks for it).
+
+`node scripts/check-bundle-shaking.mjs --blanket-false` simulates `"sideEffects": false` and must fail (the patterns that live on an import effect do, 11 of 26 on 2026-11-06; `scripts/bundle-shaking.test.mjs` asserts the names of the ones that must).
+
+`--bundler vite` runs the same patterns through Vite/Rollup (a vitest dependency in the pnpm store; not a gate).
+
+`pnpm verify:publish` repeats the exercise on the installed tarballs.
 
 ## Scales
 
-Scales are built from a spec in `packages/core/src/scales.ts` (the spec read into typed settings: signals, named ranges, scheme and step ranges; then the type, the options applied by name, and the fit of domain, bins and range), over `scale-domain.ts` (what a spec may refer to: signals, datasets, the view size; and where a domain comes from: literal, field, several fields, sorted categories). The scales themselves are Aster's own models of what `vega-scale` and d3-scale do: `scale-continuous.ts` (one mapping model for identity, linear, power, log and symlog, which differ only in a warp; one gradient model for the sequential and diverging colour scales; time and UTC over a tick-ladder table) and `scale-discrete.ts` (a lexicon of categories under ordinal, band and point; quantize, threshold, quantile, bin-ordinal). `scale.ts` is the registry (types, kinds, inverse members) with the tick and legend-label choices, interpolators by name, colour schemes and gradient stops; `scale-d3.ts` only names the constructors together. They sit on `arr.ts` (ticks, bisect, quantile, exact sum, interning map), `interp.ts` (interpolators) and the colour schemes (`scale-schemes.ts`). They are not line-for-line ports: the observable behaviour (values to the last bit, tick positions, error messages) is pinned by live differentials that run the real packages in the same process (`differential-scale-spec`, `-scale-spec-gen`, `-vega-scale`, `-scale-gen`, `-scale-helpers-gen`, `-d3-interpolate-gen`, `-d3-array-gen`), and the structure is free. Tick generation is the same code path as Vega's, so tick positions and labels match.
+Scales are built from a spec in `packages/core/src/scales.ts` (the spec read into typed settings: signals, named ranges, scheme and step ranges; then the type, the options applied by name, and the fit of domain, bins and range), over `scale-domain.ts` (what a spec may refer to: signals, datasets, the view size; and where a domain comes from: literal, field, several fields, sorted categories).
+
+- The scales themselves are Aster's own models of what `vega-scale` and d3-scale do: `scale-continuous.ts` (one mapping model for identity, linear, power, log and symlog, which differ only in a warp; one gradient model for the sequential and diverging colour scales; time and UTC over a tick-ladder table) and `scale-discrete.ts` (a lexicon of categories under ordinal, band and point; quantize, threshold, quantile, bin-ordinal).
+- `scale.ts` is the registry (types, kinds, inverse members) with the tick and legend-label choices, interpolators by name, colour schemes and gradient stops; `scale-d3.ts` only names the constructors together.
+- They sit on `arr.ts` (ticks, bisect, quantile, exact sum, interning map), `interp.ts` (interpolators) and the colour schemes (`scale-schemes.ts`).
+- They are not line-for-line ports: the observable behaviour (values to the last bit, tick positions, error messages) is pinned by live differentials that run the real packages in the same process (`differential-scale-spec`, `-scale-spec-gen`, `-vega-scale`, `-scale-gen`, `-scale-helpers-gen`, `-d3-interpolate-gen`, `-d3-array-gen`), and the structure is free.
+- Tick generation is the same code path as Vega's, so tick positions and labels match.
 
 ## Transforms
 
-Eager data transforms are dispatched by `applyTransform` in `packages/core/src/transform.ts`; the implementations are in `transform-basic.ts`, `transform-agg.ts`, `transform-window.ts`, `transform-stats.ts` (its regression and loess fits and `sampleCurve` are in `curve-fits.ts`) and `transform-extra.ts`. Each is a function from input rows to output rows that never mutates its input. The dispatch handles: `formula`, `filter`, `collect`, `sample`, `fold`, `flatten`, `bin`, `impute`, `aggregate`, `joinaggregate`, `window`, `stack`, `extent`, `lookup`, `pivot`, `sequence`, `identifier`, `timeunit`, `cross`, `countpattern`, `dotbin`, `pie`, `stratify`, `contour`, `graticule`, `geojson`, `geopoint`, `geoshape`, `linkpath`, `project`, and (through the `@aster/core/transforms` addon) `kde`, `kde2d`, `isocontour`, `density`, `quantile`, `regression`, `loess`, `nest`, `pack`, `partition`, `treemap`, `tree`, `treelinks`, `force`, `geopath`, `wordcloud`, `voronoi` and `label`. Every transform of a mark runs on the mark's encoded items, after the encode and the mark's defaults, as vega-parser's mark transforms do (`transformMarkItems`, for group marks too): it reads the items (`datum.x` is what the encode gave the item, `datum.datum` its data) and writes onto them, and the items are drawn by what it wrote; a transform that works on copies of its tuples has them written back onto the items they came from. A mark's `identifier` numbers its items from the view's counter, after the datasets, and an item keeps its number from one evaluation to the next (it is the item of the same datum). Any other type is a `SpecParseError` (`Unrecognized transform type: "<type>"`) from `compileChart`, as `vega.parse` refuses it, so it never reaches the dispatch. Option coverage follows Vega's, case by case, through the transform vectors and the transform matrix ([TESTING.md](TESTING.md)); the deliberate differences are listed under "Deviations from Vega".
+Eager data transforms are dispatched by `applyTransform` in `packages/core/src/transform.ts`; the implementations are in `transform-basic.ts`, `transform-agg.ts`, `transform-window.ts`, `transform-stats.ts` (its regression and loess fits and `sampleCurve` are in `curve-fits.ts`) and `transform-extra.ts`. Each is a function from input rows to output rows that never mutates its input.
+
+- **Dispatch.** The dispatch handles: `formula`, `filter`, `collect`, `sample`, `fold`, `flatten`, `bin`, `impute`, `aggregate`, `joinaggregate`, `window`, `stack`, `extent`, `lookup`, `pivot`, `sequence`, `identifier`, `timeunit`, `stratify`, `contour`, `graticule`, `geoshape`, `project`, and the transforms of the `@aster/core/transforms` add-on, which must be loaded first (`TRANSFORMS_ADDON_TYPES` in `@aster/core/addons` is the list; `contour` and a projection need the `@aster/core/geo` add-on).
+- **Mark transforms.** Every transform of a mark runs on the mark's encoded items, after the encode and the mark's defaults, as vega-parser's mark transforms do (`transformMarkItems`, for group marks too): it reads the items (`datum.x` is what the encode gave the item, `datum.datum` its data) and writes onto them, and the items are drawn by what it wrote; a transform that works on copies of its tuples has them written back onto the items they came from. A mark's `identifier` numbers its items from the view's counter, after the datasets, and an item keeps its number from one evaluation to the next (it is the item of the same datum).
+- **Unknown types.** Any other type is a `SpecParseError` (`Unrecognized transform type: "<type>"`) from `compileChart`, as `vega.parse` refuses it, so it never reaches the dispatch.
+- **Coverage.** Option coverage follows Vega's, case by case, through the transform vectors and the transform matrix ([TESTING.md](TESTING.md)); the deliberate differences are listed under "Deviations from Vega".
 
 `TransformContext` provides an `ExpressionRuntime` (for formula/filter), the signal values, a cross-dataset lookup for `lookup`, and the hierarchy and projection tables for the geo/hierarchy operators. Transforms run sequentially per dataset inside `evaluateChart`.
 
@@ -204,9 +372,26 @@ The SVG serializer in `packages/core/src/render.ts` walks the `SceneRoot` tree a
 
 - **Frame (plot bounds)** — rendered as a path with 0.5-pixel alignment when the view has a stroke, matching Vega's cell boundary; the view content sits in a `<g>` translated by the padding.
 - **Mark dispatch** — `renderGroup` routes on `marktype` (`group`, `line`, `area`, `symbol`, `rect`, `rule`, `text`, `trail`, `path`, `shape`, `geoshape`, `image`, `arc`); each mark kind has one `*Attrs(item, sink)` function (see "Renderers, the DOM patcher and hit testing" above).
-- **Guides** — an axis, a legend and a title are each a few marks defined by encode blocks, with Aster's own description of what a guide is (`guide-encode.ts`: `propsOf` reads a property from the spec, then the config; `setChannels` files it under `enter` or `update`; `customize` lays the user's `encode.<part>` over it; `withStyleDefaults` fills what is left from `config.style`; a `null` is a value that reaches the item). `guide-axis.ts` describes an axis by the way it runs and the side it faces and places it from what was measured; `guide-legend.ts` and `guide-title.ts` do the same for legends (entries, gradient strip or bands, title) and titles (with the stack of a view's legends placed by `placeLegendStack`). `trellis.ts` is the grid layout over boxes (`placeGrid`) that facets, a legend's entries and a view's legends share. Their output is Vega's (a property, an `encode` block or a `config.style` reaches an item the way it does there, for every property rather than a list of them, and positions come from the same arithmetic), which the generated differentials in `docs/TESTING.md` hold them to. The discretizing scales' legend labels are `labelFormat` / `labelValues` (`scale.ts`).
-- **Scopes and an aborted pass** — `spec-structure.ts` walks a spec in vega-parser's order and scoping (a data set name may repeat in a nested group but not in one scope). Vega's dataflow runs its operators in rank order and stops at the first one that throws: one error is logged and the scenegraph is what the operators before it made. The operators of a scope are ranked in the order vega-parser writes them (signals, projections, scales, axes, marks, legends, title), the scopes of a group's items (instances) after the whole scope the group is in, level by level, so a failure anywhere decides what the other scopes got. The first pass of a build records each failure as an `AbortPoint` (an instance and a step of its scope; `failPass` in `runtime.ts`: a mark's or a group's encode, an entry of a guide's encode, a signal, a scale, an axis whose ticks cannot be made, a legend whose entries cannot be listed, a projection) and picks the earliest; the second builds only what ranked before it, and the error is logged once. What vega's layout operators did is part of it: the layout of a group is ranked after the last scope below it that has marks, so it ran only where the pass went past all of them (a scope the pass did not reach leaves the guides of the groups above it unlaid-out, `GuideScope.unsettled`); a gradient legend's labels and a symbol legend's entries are operators of their own, ranked after the scope's guides, or in instances two levels down. A signal of the view that reads data or a scale is ranked after every other operator of the view's scope: it is a point after the title (`lateSignal`), what reads it is made bare (`LateTaint`), and a mark's transform or sort stops the pass after the mark is made (after its encode: `afterEncode`). A group mark's items are encoded first, in the scope the mark is in; its transforms (any a mark may have: one that makes or drops tuples is refused when the spec is parsed) run on them and write onto them, then its sort, and only then is what each item holds made. A scale ranked late in its own scope leaves a scenegraph Vega cannot serialize (refused here). The differentials `axis-ticks-failure-vs-vega.test.ts`, `differential-abort-trees.test.mts` (random trees with failures at random places) and `differential-guide-partial.test.mts` (every channel of every guide mark) pin the rules.
+- **Guides** — an axis, a legend and a title are each a few marks defined by encode blocks, with Aster's own description of what a guide is (`guide-encode.ts`: `propsOf` reads a property from the spec, then the config; `setChannels` files it under `enter` or `update`; `customize` lays the user's `encode.<part>` over it; `withStyleDefaults` fills what is left from `config.style`; a `null` is a value that reaches the item).
+  - `guide-axis.ts` describes an axis by the way it runs and the side it faces and places it from what was measured; `guide-legend.ts` and `guide-title.ts` do the same for legends (entries, gradient strip or bands, title) and titles (with the stack of a view's legends placed by `placeLegendStack`).
+  - `trellis.ts` is the grid layout over boxes (`placeGrid`) that facets, a legend's entries and a view's legends share.
+  - Their output is Vega's (a property, an `encode` block or a `config.style` reaches an item the way it does there, for every property rather than a list of them, and positions come from the same arithmetic), which the generated differentials in `docs/TESTING.md` hold them to.
+  - The discretizing scales' legend labels are `labelFormat` / `labelValues` (`scale.ts`).
+- **Scopes and an aborted pass** — see the subsection below.
 - **Path numbers** — paths produced by the shape code (lines, areas: `shape.ts`; symbols, arcs: `render.ts`) are written with the three-decimal rounding Vega's d3-path buffers apply (`digits = 3`); rect and frame paths are written with raw doubles, as Vega does. The conformance canonicalizer does not paper over either.
+
+### Scopes and an aborted pass
+
+`spec-structure.ts` walks a spec in vega-parser's order and scoping (a data set name may repeat in a nested group but not in one scope).
+
+- **Rank order.** Vega's dataflow runs its operators in rank order and stops at the first one that throws: one error is logged and the scenegraph is what the operators before it made.
+- **Ranking.** The operators of a scope are ranked in the order vega-parser writes them (signals, projections, scales, axes, marks, legends, title), the scopes of a group's items (instances) after the whole scope the group is in, level by level, so a failure anywhere decides what the other scopes got.
+- **Aborting.** The first pass of a build records each failure as an `AbortPoint` (an instance and a step of its scope; `failPass` in `runtime.ts`: a mark's or a group's encode, an entry of a guide's encode, a signal, a scale, an axis whose ticks cannot be made, a legend whose entries cannot be listed, a projection) and picks the earliest; the second builds only what ranked before it, and the error is logged once.
+- **Layout operators.** What vega's layout operators did is part of it: the layout of a group is ranked after the last scope below it that has marks, so it ran only where the pass went past all of them (a scope the pass did not reach leaves the guides of the groups above it unlaid-out, `GuideScope.unsettled`); a gradient legend's labels and a symbol legend's entries are operators of their own, ranked after the scope's guides, or in instances two levels down.
+- **Late signals.** A signal of the view that reads data or a scale is ranked after every other operator of the view's scope: it is a point after the title (`lateSignal`), what reads it is made bare (`LateTaint`), and a mark's transform or sort stops the pass after the mark is made (after its encode: `afterEncode`).
+- **Group marks.** A group mark's items are encoded first, in the scope the mark is in; its transforms (any a mark may have: one that makes or drops tuples is refused when the spec is parsed) run on them and write onto them, then its sort, and only then is what each item holds made.
+- **Refused.** A scale ranked late in its own scope leaves a scenegraph Vega cannot serialize (refused here).
+- **Pinned by.** The differentials `axis-ticks-failure-vs-vega.test.ts`, `differential-abort-trees.test.mts` (random trees with failures at random places) and `differential-guide-partial.test.mts` (every channel of every guide mark) pin the rules.
 
 ## Conformance
 
@@ -215,14 +400,14 @@ The conformance harness (`packages/conformance`) uses the real Vega and Vega-Lit
 - **SVG corpus** (`src/run.ts`): every `corpus/*.vg.json` (raw Vega) and `corpus/*.vl.json` (Vega-Lite, compiled by upstream `vega-lite`) is rendered by real Vega (headless) and by `@aster/core`'s `renderSpec`, both canonicalized by `src/normalize.ts` and diffed. The canonicalizer records every paint, geometry and text attribute, the full transform and the paint order, and normalizes only representation (each normalization has its reason in the file); `normalize.test.ts` plants one difference at a time and requires it to be reported.
 - **Vega-Lite corpus** (`src/run-vl.ts`): the same `.vl.json` entries compiled by `@aster/vl` (not upstream), diffed against the upstream-compiled render, and the Vega `@aster/vl` emits is also rendered through real Vega, which must not error or warn.
 - **Scene differential** (`scripts/scene-diff.mts`): resolved scales per scope, mark and item multisets, and paint order compared with Vega's scenegraph before anything is serialized.
-- **Guide captions** (`a11y-parity`), **transform option combinations** (`transform-matrix`), **schema sweeps** (`src/run-sweep.ts`: one generated chart per property/value of the Vega, Vega-Lite and signals schemas), **differential fuzzing** (`fuzz`), and the **real-browser** gates (Chromium text metrics, canvas pixels, batched-SVG pixels, signal event streams, React interaction).
+- **Guide captions** (`a11y-parity`), **transform option combinations** (`transform-matrix`), **schema sweeps** (`src/run-sweep.ts`: one generated chart per property/value of the Vega, Vega-Lite and signals schemas, and `src/sweeps/values.mjs`: one fixed chart per journey with a column of awkward values), **differential fuzzing** (`fuzz`), and the **real-browser** gates (Chromium text metrics, canvas pixels, batched-SVG pixels, signal event streams, React interaction).
 - **Oracle vectors**: per-library input/output pairs recorded from the pinned packages and replayed by `pnpm test`.
 
-Corpus entries set explicit numeric `width`/`height` and `autosize: 'none'` so layout is deterministic. Headless text metrics are matched by reimplementing Vega's estimate (`~~(0.8 * len * fontSize)`, see [FONTS.md](FONTS.md)).
+Most corpus entries set explicit numeric `width`/`height` and `autosize: 'none'` so layout is deterministic, but nothing enforces it: of the 1059 specs, 109 do not set a top-level `autosize: 'none'` and 68 have no numeric top-level `width`/`height` (counted 2026-11-06), so autosize and container sizing are exercised by the gate too. Headless text metrics are matched by reimplementing Vega's estimate (`~~(0.8 * len * fontSize)`, see [FONTS.md](FONTS.md)).
 
 ### Gap probes (`packages/conformance/probes/`)
 
-Known-incomplete areas are captured as feature probes under `probes/` and run via `pnpm probe`. A probe renders the same oracle diff as the corpus but is a diagnostic, never a blocking gate: its failure documents a real gap, and when the gap is implemented the probe is promoted into `corpus/`.
+Known-incomplete areas are captured as feature probes under `probes/` and run via `pnpm probe`. A probe renders the same oracle diff as the corpus but documents a gap: a failing probe is allowed, but a probe that passed must keep passing, which the `probe` gate (`pnpm probe -- --min-pass 2`, in `scripts/gates.mjs`) enforces. When a gap is implemented the probe is promoted into `corpus/`.
 
 ## Deviations from Vega
 
@@ -235,7 +420,9 @@ Aster matches Vega's output wherever the oracle can be run; where it deliberatel
 | Lookup tables | prototype-less | plain objects | a data value such as `constructor` is a key, not an inherited member |
 | `bin` without `extent` | derives the extent from the data | "Missing required bin parameter" | Aster extension |
 | `{signal}` in scale `interpolate`/`gamma` | resolved | TypeError in `parseScaleInterpolate` | do not reproduce an upstream crash |
-| Signals written into a running chart: `retained` | renders the fresh result for the new signals (a pure function of its inputs) | the running view retains its first autosize (and some other dataflow state), so its second render can differ from its own fresh render | an incremental session must equal a fresh evaluation; the sweep counts these cases as `retained` and the gate has a ceiling that can only be lowered |
+| Signals written into a running chart: `retained` | renders the fresh result for the new signals (a pure function of its inputs) | the running view retains its first autosize (and some other dataflow state), so its second render can differ from its own fresh render | an incremental session must equal a fresh evaluation; the sweep counts these cases as `retained` and the gate has a ceiling that can only be lowered. What `retained` means, in full: [INTERACTION.md](INTERACTION.md#signals) |
+| `modify(name, ..., tuple)` / `remove` with a tuple read back from `data()` | the tuple is compared by value | the tuple is compared by identity | the evaluation does not hand out its input rows |
+| The first firing of a `{signal}` handler that a scope declares on a signal of an enclosing scope that never pulsed | fires | swallowed (an internal flag of the operator) | no Vega-Lite output relies on it |
 | Unsupported or unknown features | throw a typed error naming the feature | some are silently ignored | no silent wrong charts; see [ERRORS.md](ERRORS.md) |
 | SVG output of dense marks (`denseMarks`) | batched `<path>` chunks; pixel parity gated by `pnpm conformance:batch` | one element per item | node cost of large SVG; opt-out with `denseMarks={false}` |
 | `force` that keeps running (`static: false`, `restart`) | the layout of the first tick, a pure function of its inputs; no animation | the simulation keeps ticking on a timer, the picture at the first frame is the first tick | the engine renders a snapshot; a spec that animates needs the event loop's timers |
@@ -255,9 +442,4 @@ The open items are in [ROADMAP.md](ROADMAP.md); the feature areas that are not c
 
 ## Verification Commands
 
-```bash
-pnpm build && pnpm typecheck && pnpm test
-pnpm check                      # the whole gate list (scripts/gates.mjs)
-pnpm probe                      # diagnostic only: documents known-incomplete features
-pnpm --filter @aster/benchmarks run budget
-```
+`pnpm check` runs the whole gate list (`scripts/gates.mjs`; `pnpm check -- --list` prints it). `pnpm probe` runs the gap probes and prints which pass. `pnpm --filter @aster/benchmarks run budget` prints the bundle sizes against their budgets.

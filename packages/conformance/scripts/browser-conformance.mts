@@ -5,7 +5,7 @@
  * oracle protocol as the Node harness, but in the environment users actually
  * run in.
  *
- * This gate exists because the Node harness runs both engines in jsdom, where
+ * This gate exists because the Node harness runs both engines in plain Node, where
  * neither can measure text: vega falls back to the same headless estimate
  * aster ported, so text-metric divergence is invisible there by construction.
  * The browser gate is the oracle that catches it.
@@ -17,6 +17,9 @@ import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { build } from 'esbuild'
 import { chromium } from 'playwright'
+import { cli } from '../../../scripts/lib/cli.mjs'
+
+cli({ url: import.meta.url, flags: { limit: 'eq', filter: 'eq' } })
 
 const THIS_DIR = dirname(fileURLToPath(import.meta.url))
 const CONF_DIR = dirname(THIS_DIR)

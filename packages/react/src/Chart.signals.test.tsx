@@ -20,7 +20,7 @@ forEachVariant(['svg'], (Chart, variant) => {
     }],
   } as never
 
-  describe('event-driven signals as React state (R10.4)', () => {
+  describe('event-driven signals as React state', () => {
     afterEach(() => { document.body.innerHTML = '' })
 
     variant.it(['signals'], 'routes signal.on through useSyncExternalStore and re-renders', () => {

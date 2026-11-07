@@ -27,9 +27,10 @@ dispatch. Two jobs:
    - `node scripts/check-release-tag.mjs "$GITHUB_REF_NAME"`: the tag must equal the
      version of every public package, and the three must agree;
    - the tagged commit must be an ancestor of `origin/main`;
-   - `pnpm install --frozen-lockfile`, then `pnpm check`, the full gate list in
-     `scripts/gates.mjs` (build, dependency boundary, typecheck, tests, `verify:publish`,
-     conformance, sweeps, browser gates, bundle budgets);
+   - `pnpm install --frozen-lockfile`, then `pnpm check`, the gate list in
+     `scripts/gates.mjs`. The tag is gated
+     on `pnpm check` only: the Vega and Vega-Lite schema sweeps, the value sweep, the gallery, differential fuzzing, the Firefox and
+     WebKit canvas runs and the long benchmarks run in the nightly workflow (`.github/workflows/nightly.yml`), not here;
    - `pnpm pack` of each public package (the same packer `verify:publish` checks), uploaded as an artifact.
 2. `publish` (needs `verify`, environment `npm-release`, `id-token: write`): downloads
    those tarballs and runs `npm publish <tarball> --access public --provenance --ignore-scripts`
@@ -45,12 +46,25 @@ pinning, the environment and the ordering of the steps on the workflow file.
 ```bash
 pnpm install --frozen-lockfile
 pnpm check                 # the same gate list the workflow runs
+# confirm the nightly workflow is green for the commit to be tagged (see below)
 # update CHANGELOG.md and the version of all three public packages (lockstep)
+# update the README pre-alpha status paragraph and the "not yet published" notes of the Install sections, and the publishing items in docs/ROADMAP.md
 node scripts/check-release-tag.mjs v0.1.0     # tag name = version in every package.json
 git commit -am "release v0.1.0"
 git tag v0.1.0
 git push --follow-tags
 ```
+
+Before tagging, confirm that the nightly workflow (`.github/workflows/nightly.yml`: the schema sweeps, the value sweep, the gallery,
+differential fuzzing, the Firefox and WebKit canvas runs and the benchmarks) is green for the commit being tagged, in the
+repository's Actions tab. The release workflow does not run them and does not check that they passed. If the latest
+nightly ran on an older commit, wait for the next one or run it manually (it has a `workflow_dispatch` trigger)
+before pushing the tag.
+
+The README's pre-alpha status paragraph, the "not yet published" notes of the Install sections (root README and the three package READMEs: [core](../packages/core/README.md), [react](../packages/react/README.md), [vl](../packages/vl/README.md))
+and the ROADMAP's "Not done: publishing" (section 1), "Release" open item (section 2) and
+definition-of-done item 7 (section 4) go stale the moment the tag is published; update them in the release commit,
+together with the version and the CHANGELOG heading.
 
 `pnpm verify:publish` is the packaging gate (part of `pnpm check`): it packs each
 package with `pnpm pack`, fails on any `workspace:` range left in a packed manifest,

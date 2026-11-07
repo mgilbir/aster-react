@@ -14,6 +14,9 @@ import { buildA11yTree, compileChart, evaluateChart, getChartInfo } from '@aster
 import { loadSpecData, TRUSTED_LOAD_OPTIONS } from '@aster/core/load'
 import { renderWithVega } from '../src/render-vega.js'
 import { parseSvg, type XmlEl } from '../src/svg-parse.js'
+import { cli } from '../../../scripts/lib/cli.mjs'
+
+cli({ url: import.meta.url, flags: { filter: 'value' } })
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const CORPUS = join(HERE, '..', 'corpus')

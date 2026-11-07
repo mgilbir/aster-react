@@ -43,7 +43,7 @@ export function* canvasScenario(seed: number, nSteps: number, driver: 'session' 
     ops.push(op)
     const before = world
     world = applyOp(r, world, op, false)
-    // Often TWO edits in one update: an append together with an in-place change elsewhere (C22).
+    // Often TWO edits in one update: an append together with an in-place change elsewhere.
     if (r() < 0.45) { const op2 = pick(r, CANVAS_OPS); ops.push(op2); world = applyOp(r, world, op2, false) }
     if (stream) {
       const pureAppend = ops.length > 0 && world.u === before.u && world.t.length > before.t.length

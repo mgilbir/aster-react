@@ -17,6 +17,10 @@
  *   node scripts/check-bundle-shaking.mjs --bundler vite   second opinion: the same patterns through Vite/Rollup
  *                                                          (not a gate: Vite is only present as a vitest dependency;
  *                                                          it is resolved from the pnpm store and the run fails if absent)
+ *   node scripts/check-bundle-shaking.mjs --verbose        print each pattern's result object (first 600 characters)
+ *   node scripts/check-bundle-shaking.mjs --outputs        print, per pattern with module assertions, each output file (ENTRY marks the app entry) and the add-on inputs it carries
+ *
+ * Exit codes: 0 every pattern passed, 1 a pattern failed, 2 bad usage (an unknown option) or a package whose dist is missing (run `pnpm build`).
  *
  * Needs `pnpm build` (it bundles the packages' dist, like a consumer does).
  */
@@ -26,6 +30,9 @@ import { createServer } from 'node:http'
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
+import { cli } from './lib/cli.mjs'
+
+cli({ url: import.meta.url, flags: { 'blanket-false': 'bool', bundler: 'value', only: 'value', verbose: 'bool', outputs: 'bool' } })
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)))
 const TMP = join(ROOT, 'packages', 'react', '.tmp-shaking') // under packages/react so `react` and `react-dom` resolve

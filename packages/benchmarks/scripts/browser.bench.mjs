@@ -15,6 +15,9 @@ import { chromium } from 'playwright'
 import { summarize, table, fmt } from '../src/stats.js'
 import { ensureBuilt } from '../src/ensure-built.ts'
 import { checkBrowserBench } from '../src/browser-floors.ts'
+import { cli } from '../../../scripts/lib/cli.mjs'
+
+cli({ url: import.meta.url, flags: { kind: 'eq', memory: 'eq', points: 'eq', reps: 'eq', seconds: 'eq' } })
 
 const THIS_DIR = dirname(fileURLToPath(import.meta.url))
 const PKG_DIR = dirname(THIS_DIR)

@@ -1,4 +1,4 @@
-/** Manifest consistency for the three published packages (C88). */
+/** Manifest consistency for the three published packages. */
 import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'

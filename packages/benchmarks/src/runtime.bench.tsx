@@ -13,6 +13,9 @@ import { summarize, table, fmt } from './stats.js'
 import { timeWork, waitForSvg } from './settle.js'
 import type { ChartKind } from './fixtures.js'
 import type { EmbedName } from './embeds.js'
+import { cli } from '../../../scripts/lib/cli.mjs'
+
+cli({ url: import.meta.url, flags: { kinds: 'eq', points: 'eq', reps: 'eq' } })
 
 async function main(): Promise<void> {
   ensureBuilt()

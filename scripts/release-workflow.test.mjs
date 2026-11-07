@@ -1,5 +1,5 @@
 /**
- * Structural guards for .github/workflows/release.yml (C77). The workflow is never run
+ * Structural guards for .github/workflows/release.yml. The workflow is never run
  * by tests; these assert the properties that keep a release safe.
  */
 import { execFileSync } from 'node:child_process'

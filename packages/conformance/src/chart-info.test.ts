@@ -1,5 +1,5 @@
 /**
- * getChartInfo against the evaluated scene and against real vega (audit C53).
+ * getChartInfo against the evaluated scene and against real vega.
  *
  * It used to build a second, UNFITTED context (the spec's width/height, scales sized for them)
  * and then evaluate the whole chart again just for the padding, so under autosize `fit` /
@@ -40,7 +40,7 @@ async function viewOf(spec: Spec): Promise<{ width: number; height: number; padd
   return out
 }
 
-describe('getChartInfo describes the chart that is drawn (C53)', () => {
+describe('getChartInfo describes the chart that is drawn', () => {
   it.each(AUTOSIZES)('autosize %s: size, padding and scale ranges equal vega\'s', async (_n, autosize) => {
     const spec = specOf(autosize)
     const want = await viewOf(spec)

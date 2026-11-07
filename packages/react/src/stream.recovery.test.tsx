@@ -170,7 +170,7 @@ describe('worker stream: failed flush is reported and discarded in the worker', 
   })
 })
 
-describe('urlPolicy over the worker protocol (C93)', () => {
+describe('urlPolicy over the worker protocol', () => {
   const imgSpec = {
     width: 80, height: 40, padding: 0, autosize: 'none',
     data: [{ name: 't', values: [{ u: 'https://good.example/a.png', x: 0 }, { u: 'https://evil.example/b.png', x: 20 }] }],

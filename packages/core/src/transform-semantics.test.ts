@@ -1,5 +1,5 @@
 /**
- * Named regressions for the transform layer's Vega semantics (audit C24, C59, C94).
+ * Named regressions for the transform layer's Vega semantics.
  *
  * The exhaustive check is `packages/conformance/scripts/differential-transforms.test.mts`
  * (thousands of params + rows -> rows cases run live through real Vega and the engine).
@@ -39,7 +39,7 @@ function withTZ<T>(tz: string, fn: () => T): T {
 
 const iso = (d: unknown): string => (d as Date).toISOString()
 
-describe('C24: timeunit', () => {
+describe('timeunit', () => {
   const t = new Date('2020-05-15T12:34:56.789Z')
 
   it('ends at the next unit of the FINEST unit, not the coarsest', () => {
@@ -76,7 +76,7 @@ describe('C24: timeunit', () => {
   })
 })
 
-describe('C59: aggregate semantics', () => {
+describe('aggregate semantics', () => {
   const rows = [{ g: 'a', v: '10' }, { g: 'a', v: 2 }, { g: 'a', v: null }, { g: 'b', v: NaN }, { g: 'b', v: '' }]
 
   it('coerces with +v, counts valid/missing and yields undefined for empty groups', () => {
@@ -136,7 +136,7 @@ describe('C59: aggregate semantics', () => {
   })
 })
 
-describe('C59: lookup', () => {
+describe('lookup', () => {
   const lk = [{ k: 'a', w: 1 }, { k: 'b', w: 2 }, { k: 'a', w: 99 }, { k: 1, w: 'one' }]
 
   it('the last row wins and keys are string-coerced', () => {
@@ -156,7 +156,7 @@ describe('C59: lookup', () => {
   })
 })
 
-describe('C59: ordering', () => {
+describe('ordering', () => {
   it('ascending sorts null/undefined FIRST, NaN ties, ties stay in input order', () => {
     const rows = [{ v: 3, i: 0 }, { v: null, i: 1 }, { v: 1, i: 2 }, { v: undefined, i: 3 }, { v: 3, i: 4 }]
     expect(run(rows, { type: 'collect', sort: { field: 'v' } }).map((r) => r.i)).toEqual([1, 3, 2, 0, 4])
@@ -171,7 +171,7 @@ describe('C59: ordering', () => {
   })
 })
 
-describe('C59: hierarchy layouts write only their own output fields', () => {
+describe('hierarchy layouts write only their own output fields', () => {
   const nodes = [{ id: 'r', p: null, s: 0 }, { id: 'a', p: 'r', s: 3 }, { id: 'b', p: 'r', s: 1 }]
   const keep = nodes.map((n) => ({ ...n, x: 'k', y: 'k', width: 'k', height: 'k', r: 'k', depth: 'k', children: 'k', x0: 'k' }))
   const st = { type: 'stratify', key: 'id', parentKey: 'p' }
@@ -210,7 +210,7 @@ describe('C59: hierarchy layouts write only their own output fields', () => {
   })
 })
 
-describe('C94: minor divergences', () => {
+describe('minor divergences', () => {
   it('sample: a reservoir of `size` rows, uniform over the input, deterministic', () => {
     const rows = Array.from({ length: 1000 }, (_, i) => ({ i }))
     const a = run(rows, { type: 'sample', size: 100 })

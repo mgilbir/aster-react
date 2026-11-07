@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 /**
- * C93: image `url`s pass the same policy as loaded data, in the string renderer
+ * Image `url`s pass the same policy as loaded data, in the string renderer
  * AND the DOM path. The policy runs while the scene is built, so both renderers
  * (and canvas) see already-vetted items.
  */
@@ -18,7 +18,7 @@ const imageSpec = (url: string): VgSpec => ({
 const hrefs = (el: Element): string[] => [...el.querySelectorAll('image')].map((i) => i.getAttribute('xlink:href') ?? i.getAttribute('href') ?? '')
 const domOf = (spec: VgSpec, input: RuntimeInput): Element => renderSceneToDomElement(evaluateChart(compileChart(spec), input), document) as unknown as Element
 
-describe('image url policy (C93)', () => {
+describe('image url policy', () => {
   const HOSTILE = ['javascript:alert(1)', '  javascript:alert(1)', 'java\tscript:alert(1)', 'JaVaScRiPt:alert(1)', 'file:///etc/passwd', 'vbscript:x', 'ftp://example.test/a.png',
     'https://user:pw@example.test/a.png', 'blob:https://example.test/uuid']
 

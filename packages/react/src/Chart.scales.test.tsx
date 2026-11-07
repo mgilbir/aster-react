@@ -62,7 +62,7 @@ forEachVariant(['svg'], (Chart, variant) => {
     ['xscale/yscale', { x: 'xscale', y: 'yscale' }],
     ['x/y', { x: 'x', y: 'y' }],
     ['arbitrary names', { x: 'horizontal', y: 'vertical' }],
-  ])('pan/zoom/brush with scales named %s (C68)', (_label, names) => {
+  ])('pan/zoom/brush with scales named %s', (_label, names) => {
     it('zooms on wheel and reports a view for both positional axes', () => {
       const onViewChange = vi.fn<(v: ViewDomain | null) => void>()
       const { host } = mount(<Chart spec={tutorialSpec(names) as never} panZoom onViewChange={onViewChange} width={200} height={100} />)
@@ -107,7 +107,7 @@ forEachVariant(['svg'], (Chart, variant) => {
       expect(interval.x![1]).toBeGreaterThan(interval.x![0])
     })
 
-    variant.it(['interaction'], 'a controlled interval selection draws its rectangle (C64)', () => {
+    variant.it(['interaction'], 'a controlled interval selection draws its rectangle', () => {
       const { container } = mount(
         <Chart spec={tutorialSpec(names) as never} selection={{ type: 'interval', interval: { x: [2, 6], y: [1, 4] } }} width={200} height={100} />,
       )
@@ -118,7 +118,7 @@ forEachVariant(['svg'], (Chart, variant) => {
     })
   })
 
-  describe.each([['xscale/yscale', { x: 'xscale', y: 'yscale' }], ['x/y', { x: 'x', y: 'y' }]])('pan direction follows the scale orientation, %s (C64)', (_l, names) => {
+  describe.each([['xscale/yscale', { x: 'xscale', y: 'yscale' }], ['x/y', { x: 'x', y: 'y' }]])('pan direction follows the scale orientation, %s', (_l, names) => {
     it('dragging down moves a bottom-to-top y scale so the data follows the pointer', () => {
       const ref = React.createRef<ChartHandle>()
       const { container } = mount(<Chart ref={ref} spec={tutorialSpec(names) as never} panZoom width={200} height={100} />)
@@ -145,7 +145,7 @@ forEachVariant(['svg'], (Chart, variant) => {
     })
   })
 
-  describe('pan / zoom aliases enable only their own gestures (C66)', () => {
+  describe('pan / zoom aliases enable only their own gestures', () => {
     it('pan: arrows and drag work, wheel and +/- do not', () => {
       const onViewChange = vi.fn()
       const { host } = mount(<Chart spec={tutorialSpec() as never} pan onViewChange={onViewChange} width={200} height={100} />)
@@ -180,7 +180,7 @@ forEachVariant(['svg'], (Chart, variant) => {
     })
   })
 
-  describe('width and height props are independent (C64)', () => {
+  describe('width and height props are independent', () => {
     const sizeOf = (c: HTMLElement): [string | null | undefined, string | null | undefined] => {
       const svg = c.querySelector('svg')
       return [svg?.getAttribute('width'), svg?.getAttribute('height')]

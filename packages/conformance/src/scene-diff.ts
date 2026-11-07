@@ -1,5 +1,5 @@
 /**
- * Scene-level differential (R8.1–R8.3).
+ * Scene-level differential.
  *
  * The SVG canonicalizer proves what a viewer sees; this compares the resolved
  * scenes *before* serialization: scale domains/ranges/bandwidth per scope,

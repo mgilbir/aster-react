@@ -1,5 +1,5 @@
 /**
- * Chromium pixel oracle for incremental canvas painting (audit C22).
+ * Chromium pixel oracle for incremental canvas painting.
  *
  * `renderSceneToCanvasAppend` paints only the appended marks on top of the
  * previous frame; the contract is that the canvas then shows exactly what a
@@ -19,6 +19,7 @@ import { writeFileSync, rmSync, mkdirSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { build } from 'esbuild'
+import { cli } from '../../../scripts/lib/cli.mjs'
 
 const THIS_DIR = dirname(fileURLToPath(import.meta.url))
 const CONF_DIR = dirname(THIS_DIR)
@@ -118,6 +119,7 @@ window.__runAppend = (seed, steps, driver) => {
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+  cli({ url: import.meta.url, flags: { browser: 'eq', seeds: 'eq', steps: 'eq' } })
   const argv = process.argv.slice(2)
   const arg = (n: string, d: string): string => argv.find((a) => a.startsWith(`--${n}=`))?.split('=')[1] ?? d
   const res = await runAppendPixelOracle(arg('browser', 'chromium') as 'chromium', Number(arg('seeds', '60')), Number(arg('steps', '14')))

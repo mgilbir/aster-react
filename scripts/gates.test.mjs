@@ -38,11 +38,11 @@ describe('gate list', () => {
     }
   })
 
-  it('covers the gates the repo has always claimed (incl. conformance-vl, C39)', () => {
+  it('covers the gates the repo has always claimed (incl. conformance-vl)', () => {
     const names = new Set(GATES.map((g) => g.name))
     for (const want of [
       'build', 'deps', 'typecheck', 'test', 'verify-publish', 'conformance', 'conformance-vl',
-      'scene-diff', 'a11y-parity', 'transform-matrix', 'canvas', 'batch', 'fuzz-replay', 'budget',
+      'scene-diff', 'incremental-diff', 'a11y-parity', 'transform-matrix', 'canvas', 'batch', 'fuzz-replay', 'budget',
     ]) expect(names.has(want), want).toBe(true)
   })
 
@@ -217,7 +217,7 @@ describe('nightly.yml: one failing check does not hide the others', () => {
     }
     // the sweeps and the fuzzer are checks of their own, after the gates
     const ids = checks.map((s) => s.id)
-    for (const want of ['gates', 'gallery', 'canvas-firefox', 'canvas-webkit', 'bench-incremental', 'bench-stream', 'bench-browser', 'bench-dense', 'sweep-vl', 'sweep-vega', 'fuzz']) {
+    for (const want of ['gates', 'gallery', 'canvas-firefox', 'canvas-webkit', 'bench-incremental', 'bench-stream', 'bench-browser', 'bench-dense', 'sweep-vl', 'sweep-vega', 'sweep-values', 'fuzz']) {
       expect(ids, want).toContain(want)
     }
     expect(ids.indexOf('gates')).toBeLessThan(ids.indexOf('sweep-vl'))

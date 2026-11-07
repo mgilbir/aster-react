@@ -1,6 +1,6 @@
 // @vitest-environment node
 /**
- * Every budget gets a test that drives the REAL attack shape (C6-C9, C49, T3).
+ * Every budget gets a test that drives the REAL attack shape.
  * Each attack runs in a child process with a hard kill (see attack.testkit.ts);
  * the test asserts an AsterLimitError after at most `2 * maxTimeMs + SLACK` of CPU time
  * (not wall time: that measures the scheduler on a loaded machine). Where a count can show the same
@@ -17,7 +17,7 @@ const T = 40_000
  */
 const BACKSTOP_MS = 5000
 
-describe('single-call allocators are bounded before they allocate (C9)', () => {
+describe('single-call allocators are bounded before they allocate', () => {
   it('sequence transform: 5e7 rows under maxRows', async () => {
     const r = await attack(`
       core.renderSpec({ data: [{ name: 't', transform: [{ type: 'sequence', start: 0, stop: 5e7, as: 'x' }] }] },
@@ -25,7 +25,7 @@ describe('single-call allocators are bounded before they allocate (C9)', () => {
     expectLimit(r, /maxRows/, 200)
   }, T)
 
-  it('sequence transform with only a time budget is cut off by the clock inside the loop (C7)', async () => {
+  it('sequence transform with only a time budget is cut off by the clock inside the loop', async () => {
     const r = await attack(`
       core.renderSpec({ data: [{ name: 't', transform: [{ type: 'sequence', start: 0, stop: 1e8, as: 'x' }] }] },
         { limits: { maxTimeMs: 50 } })`)
@@ -116,7 +116,7 @@ describe('single-call allocators are bounded before they allocate (C9)', () => {
   }, T)
 })
 
-describe('generated rows count against maxRows (C7, C49)', () => {
+describe('generated rows count against maxRows', () => {
   it('fold: rows x fields is refused before it is built', async () => {
     const r = await attack(`
       // 400k rows x 8 fields = 3.2M output rows: building them would take seconds and
@@ -211,7 +211,7 @@ describe('generated rows count against maxRows (C7, C49)', () => {
   }, T)
 })
 
-describe('wall clock is sampled inside synchronous work (C7)', () => {
+describe('wall clock is sampled inside synchronous work', () => {
   it('the encode loop samples the clock: 2.5M rows under 500 ms', async () => {
     const r = await attack(`
       core.renderSpec({ width: 100, height: 100, data: [{ name: 't' }],
@@ -285,7 +285,7 @@ describe('wall clock is sampled inside synchronous work (C7)', () => {
   }, T)
 })
 
-describe('recursion is an AsterLimitError, never a RangeError (C9)', () => {
+describe('recursion is an AsterLimitError, never a RangeError', () => {
   it.each([
     ['nested parentheses', `'('.repeat(100000) + '1' + ')'.repeat(100000)`],
     ['a 100000-term chain', `'1' + '+1'.repeat(100000)`],
@@ -314,7 +314,7 @@ describe('recursion is an AsterLimitError, never a RangeError (C9)', () => {
   }, T)
 })
 
-describe('regular expressions: the caps that can be enforced (C7, T3)', () => {
+describe('regular expressions: the caps that can be enforced', () => {
   // A cooperative clock cannot preempt a backtracking regex. What IS enforced is
   // the input and pattern length per call; docs/LIMITS.md says plainly that a
   // hard guarantee needs a killable worker. This attack would run for years if
@@ -341,7 +341,7 @@ describe('regular expressions: the caps that can be enforced (C7, T3)', () => {
   }, T)
 })
 
-describe('topojson cannot amplify past the limits (C60)', () => {
+describe('topojson cannot amplify past the limits', () => {
   it('a ~100 KB topology that decodes to 20M points', async () => {
     const r = await attack(`
       const arc = Array.from({ length: 1000 }, (_, i) => [i, i % 7])
@@ -353,7 +353,7 @@ describe('topojson cannot amplify past the limits (C60)', () => {
   }, T)
 })
 
-describe('maxPathLength and maxStringLength cover generated paths and text arrays (C49)', () => {
+describe('maxPathLength and maxStringLength cover generated paths and text arrays', () => {
   const lineSpec = (n: number) => `{
     width: 200, height: 100, data: [{ name: 't' }],
     scales: [{ name: 'x', type: 'linear', domain: [0, ${n}], range: [0, 200] }, { name: 'y', type: 'linear', domain: [0, 1], range: [100, 0] }],

@@ -19,7 +19,7 @@
  * (FAILURE_MODES below) in place of the test, so a variant that quietly started to work, or to fail
  * differently, turns the suite red.
  *
- * `Chart.matrix.test.tsx` fails if a component test renders <Chart> outside this matrix without an
+ * `Chart.matrix.test.ts` fails if a component test renders <Chart> outside this matrix without an
  * entry (and a reason) in `DIRECT_CHART_TESTS`.
  */
 import * as React from 'react'

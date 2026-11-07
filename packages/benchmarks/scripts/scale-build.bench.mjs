@@ -11,6 +11,9 @@
 import { performance } from 'node:perf_hooks'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
+import { cli } from '../../../scripts/lib/cli.mjs'
+
+cli({ url: import.meta.url, flags: { dist: 'eq', iters: 'eq', rows: 'eq' } })
 
 const arg = (name, dflt) => process.argv.find((a) => a.startsWith(`--${name}=`))?.slice(name.length + 3) ?? dflt
 const dist = arg('dist', join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'core', 'dist'))

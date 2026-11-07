@@ -11,7 +11,7 @@ const specFor = (type: string, extra: Record<string, unknown> = {}, domain: unkn
   marks: [],
 }) as never
 
-describe('serialized scales rebuild invertible scales (C30)', () => {
+describe('serialized scales rebuild invertible scales', () => {
   for (const [type, extra, domain] of [
     ['linear', {}, [0, 10]],
     ['log', { base: 10 }, [1, 1000]],

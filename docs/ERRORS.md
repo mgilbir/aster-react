@@ -26,6 +26,23 @@ try {
 }
 ```
 
+## What to do with an error
+
+Catch the typed errors by `code` (see "`instanceof` or `code`?" below); everything else is a plain `Error` whose message starts with `[aster]`.
+
+| You see | It means | You do |
+|---|---|---|
+| `AsterLimitError` (`ASTER_LIMIT`) | a `limits` budget was exceeded: rows, marks, depth, items, output size, or the wall-clock deadline | show an error state; raise the budget only for a spec you trust ([Budget errors](#budget-errors), `docs/LIMITS.md`) |
+| `AsterUrlError` (`ASTER_URL_DENIED`) | the URL policy refused a URL (protocol, credentials, non-public host, relative URL, the `allow` hook) | fix the URL, or widen the policy deliberately ([URL errors](#url-errors)) |
+| `AsterStreamBackpressureError` (`ASTER_STREAM_BACKPRESSURE`) | a `push` would overflow the queue under `policy: 'error'` | flush before pushing, slow the producer, or choose another policy ([Stream errors](#stream-errors)) |
+| `AsterStreamClosedError` (`ASTER_STREAM_CLOSED`) | `stream.session()` was called after `close()` | stop using the stream after closing it |
+| `SpecParseError` | the spec was refused when it was compiled, as `vega.parse` refuses it | fix the spec; the message is vega's ([Expressions are refused when the spec is compiled](#expressions-are-refused-when-the-spec-is-compiled)) |
+| `ExpressionParseError` | an expression does not parse, or a function was removed after the compile | fix the expression or the registration |
+| `VLCompileError` (`[aster/vl] <path>: <message>`) | the Vega-Lite spec has an unknown key or a feature `@aster/vl` does not implement | fix the spec at `<path>` ([Deliberate differences from Vega](#deliberate-differences-from-vega)) |
+| `[aster] ... load the addon first` | the spec needs an add-on that is not loaded, and the entry point cannot wait | `await loadAddonsFor(spec)`, or import the add-on ([Unsupported and unknown features](#unsupported-and-unknown-features)) |
+| a report on `logger` | an expression threw at run time and the render carried on, as vega's does | route `logger` to your own log; the chart is partial ([Recovered expression errors](#recovered-expression-errors-logger)) |
+| `<div role="alert">` in `<Chart>` | the render failed, or a limit was exceeded | read the message; `onError` receives the error ([Other runtime errors](#other-runtime-errors)) |
+
 ## Typed errors at a glance
 
 | Class | From | `name` | `code` | Extra fields |
@@ -97,17 +114,33 @@ A batch that is not an object, or whose `data.<name>` / `append.<name>` is not a
 
 A `flush()` that throws (any error, including `AsterLimitError`) leaves the stream
 exactly as it was before the call, with its batches still queued, and rethrows the
-original error. `getStreamFlushFailure(err)` returns `{ batches, queuedRows }` for such an
-error, and `stream.discard()` drops the queued batches so the next flush can succeed
-(otherwise every later flush fails the same way). See "Atomic flush" and "Recovering from
-a failed flush" in `docs/API.md`.
+original error.
 
-The React bindings do the discard for you: `useChartStream`, `useChartWorkerStream`, `<ChartStream>` and
-`<ChartWorkerStream>` call `stream.discard()` right after capturing a flush error, expose it as `error` together with
-`flushFailure: { batches, queuedRows, discarded }`, and clear both on the next successful flush. The components
-render `<div role="alert">` with the message and call `onStreamError(error, failure?)` once per error. With
-`policy: 'error'` a local `push` throws `AsterStreamBackpressureError` to the caller; with a Worker the producer-side
-buffer throws the same class before anything is posted.
+- `getStreamFlushFailure(err)` returns `{ batches, queuedRows }` for such an error.
+- `stream.discard()` drops the queued batches so the next flush can succeed (otherwise every later flush fails the same way).
+- See "Atomic flush" and "Recovering from a failed flush" in `docs/API.md`.
+
+```mermaid
+stateDiagram-v2
+  [*] --> Idle
+  Idle --> Queued: push accepted
+  Queued --> Queued: push, where the policy folds (coalesce), evicts (drop-oldest), rejects with false (drop-newest, coalesce row bound) or throws AsterStreamBackpressureError (error)
+  Queued --> Idle: flush succeeds, base rows, signals and scene committed
+  Queued --> Queued: flush throws, nothing committed, batches stay queued, every later flush fails the same way
+  Queued --> Idle: discard() (the React bindings call it after a failed flush)
+  Idle --> Idle: the first flush primes the scene, later empty flushes return null
+  Idle --> Closed: close()
+  Queued --> Closed: close()
+  Closed --> Closed: push returns false, flush returns null, session() throws AsterStreamClosedError
+```
+
+*The stream queue (`createChartStream`). The queue and the committed rows change together or not at all.*
+
+The React bindings do the discard for you:
+
+- `useChartStream`, `useChartWorkerStream`, `<ChartStream>` and `<ChartWorkerStream>` call `stream.discard()` right after capturing a flush error, expose it as `error` together with `flushFailure: { batches, queuedRows, discarded }`, and clear both on the next successful flush.
+- The components render `<div role="alert">` with the message and call `onStreamError(error, failure?)` once per error.
+- With `policy: 'error'` a local `push` throws `AsterStreamBackpressureError` to the caller; with a Worker the producer-side buffer throws the same class before anything is posted.
 
 ## Recovered expression errors (`logger`)
 
@@ -118,18 +151,18 @@ it). Nothing is swallowed without a report, and each report is the original `Err
 
 | Where the expression threw | What is left (as in vega) |
 |---|---|
-| a conditional-encode `test` or branch, a `signal` or `field` in an encode, of a mark or of a group item | the failing item keeps the channels evaluated **before** the failing one (spec order); no later item, of this mark or any later one, is encoded or drawn (the run is aborted). The pass stops there as vega's does, and the error is logged **once**: the marks before the failing one in its scope were made, and so were its axes; its legends and title were not; the contents of the groups (and of the legend entries) of every scope, of this level or the ones below, are made after the scope, so none was made (see "Scopes and an aborted pass" in `ARCHITECTURE.md`) |
+| a conditional-encode `test` or branch, a `signal` or `field` in an encode, of a mark or of a group item | the failing item keeps the channels evaluated before it; nothing later in the pass is made; the error is logged once ([details](#encode-failure-in-a-mark-or-group-item)) |
 | an entry of a guide's encode (an axis part, a legend part, a title) | as the line above, in the guide: the channels written before the failing one stay, the items after it are unencoded, the marks of the guide that come after it are not made, nothing after the guide is |
 | a `signal` or a scale of a group's scope | the instance of the scope is made without anything in it, and nothing after it |
-| an entry that calls a scale the spec never declared (`{scale, field}`, `{scale, value}`, `{scale, signal}`, `{scale, range}`, the `extra` of a band) | `TypeError: _.%<name> is not a function` (a `range`: `Cannot read properties of undefined (reading 'range')`), then as the line above. A band on its own reads a bandwidth of 0 and `{scale}` alone is 0, so neither fails. The message is vega's for a scale named in the spec; for one named by a signal or a field it is `_[("%" + <the reference>)] is not a function` |
+| an entry that calls a scale the spec never declared (`{scale, field}`, `{scale, value}`, `{scale, signal}`, `{scale, range}`, the `extra` of a band) | `TypeError: _.%<name> is not a function`, then as the encode row above ([details](#reference-to-a-scale-the-spec-never-declared)) |
 | a facet `cross` over a nested group-by path | the aggregate throws (`Cannot read properties of undefined`), the mark is not made and the run stops (as above) |
 | a dataset transform (`filter`, `formula`, ...) | the dataset publishes no rows; marks sourced from it are not built |
-| a mark-level `transform`, a mark `sort` (a group's too: a facet's cells, a header or footer group) | vega runs them on the encoded items: the mark is made in full (the items in data order, with what the transforms before the failing one wrote), the error is logged once and the pass stops there, like a failing encode: the marks after it, the legends and the title are not made, nor what the group's items hold. An encode of the same mark that throws comes first: its error is the one logged, and the transforms and the sort never run |
-| a signal of the view that reads data or a scale (or is declared after one that does) | it is ranked after every other operator of the view's scope: everything that does not read it is made, what reads it (marks, and what reads them) is made bare (a mark whose encode reads it has its items as the join made them, and none of its transforms or its sort runs; one whose transform or sort reads it is encoded, and its transforms run up to the one that reads it), the layout of the view does not run when a mark reads it, the error is logged once and nothing below the view (the contents of its groups) is made. A guide or title of the view that reads it logs nothing of its own: what reads the signal gives nothing (in vega it never ran), so the one error is the signal's. An axis whose ticks read it (`tickCount`, `values`, `tickMinStep`, `format`, `formatType`, `tickExtra`) has no tick, label or grid marks at all: vega leaves their places in the axis empty and its own renderers cannot draw the view (`toSVG` rejects; a live view logs a second `TypeError` and stops drawing there, so what it shows depends on the renderer). Aster logs the error and then refuses the view with an `[aster]` error, as it refuses an axis over a scale ranked late in its own scope whose ticks fail (see "Scopes and an aborted pass" in `ARCHITECTURE.md`). Elsewhere the mark of the guide whose encode reads it (a title's text, a label's color or size, a legend's symbol size) has its items as the join made them, and so does every mark of the guide when it is the guide's group that reads it (an `offset`, a `padding`, a `translate`, a legend's `format`): vega's encoders of a guide's marks listen to the group's. The view is then not laid out, and the caption of a guide whose group was left so reads no orient and no format off it. A property a guide does not have (an axis's `columns`, a legend's `tickSize`) is never read, as in vega |
+| a mark-level `transform`, a mark `sort` (a group's too: a facet's cells, a header or footer group) | the mark is made in full, the error is logged once and the pass stops there: the marks after it, the legends and the title are not made ([details](#mark-transform-or-sort-failure)) |
+| a signal of the view that reads data or a scale (or is declared after one that does) | everything that does not read the signal is made; what reads it is made bare; the error is logged once; nothing below the view is made ([details](#a-view-signal-that-reads-data-or-a-scale)) |
 | a scale that cannot be built (bad `scheme`, unrecognised scale `type`, non-array `range`, ...) | the run stops there: this and later scales are absent and nothing is encoded |
-| the `format` of an axis or a legend that its label format refuses (`zzz%%`, `{signal: '0/0'}`, `{}` for numbers; `true` for dates) | the format and `formatType` are the values the guide's ticks (entries) operator is given -- a signal's whatever its type -- read through the scale's tick format: on a calendar (a `time`/`utc` scale or format type) a falsy specifier is the default multi-format, an object overrides it per unit, anything else is `Invalid time multi-format specifier: <value>`; elsewhere the text of the value is a number format (`42` is a width), and a scale with no tick format (ordinal, band) reads it only when it is truthy. A refusal (`invalid format: <text>`) makes that operator throw: logged once, the guide and what comes after it are not made (a gradient whose labels are ranked last keeps its gradient and title, and the rest of its scope is made). The caption of a guide whose group item holds a format the caption's format refuses is not written (no ARIA at all), as vega's |
+| the `format` of an axis or a legend that its label format refuses (`zzz%%`, `{signal: '0/0'}`, `{}` for numbers; `true` for dates) | a refused format makes the guide's operator throw: logged once, the guide and what comes after it are not made ([details](#a-label-format-the-guide-refuses)) |
 | a `{signal}` given to the ticks of an axis or the entries of a legend (`tickCount`, `values`, `tickMinStep`, `format`, `formatType`, `symbolLimit`, a band's `extra`) that throws | each is an operator of its own ranked just before the guide's: logged once, and the pass stops at the guide |
-| a grid layout (`layout`) it cannot take: a `columns` that is no count (fractional, negative, text: `RangeError: Invalid array length`), a column header or footer with no cell at or before its place (`TypeError: Cannot read properties of undefined (reading 'x')`, `'bounds'` with a band); a symbol legend's `columns` that is no count | vega lays a group mark's items out one after the other, in one operator ranked after every instance below them: the error is logged once and the pass stops there. Everything below the items is made and laid out, the items before the failing one are laid out, the failing one only as far as its grid got (a bad count moves nothing; a header that finds no cell leaves the cells and the strips before it placed) and not its guides, the items after it not at all, and no scope around the mark is laid out (the view is not sized). More strips than the grid has columns (rows) is the warning `Grid headers exceed limit: <n>`, given each time the layout runs (in a view that fits its viewport, a group's layout runs again only when what it lays out changed) |
+| a grid layout (`layout`) it cannot take: a `columns` that is no count (fractional, negative, text: `RangeError: Invalid array length`), a column header or footer with no cell at or before its place (`TypeError: Cannot read properties of undefined (reading 'x')`, `'bounds'` with a band); a symbol legend's `columns` that is no count | logged once; the pass stops at the layout, so no scope around the mark is laid out ([details](#a-grid-layout-that-cannot-be-laid-out)) |
 | a `signal.on` filter or update, while an event is handled | that event's delivery stops (updates already applied stand); the next event works |
 
 An evaluation that logged a recovery is not committed as the base of the next incremental one, so a following update
@@ -260,15 +293,15 @@ rows below are plain `Error`s with an `[aster]` prefix and no `code`, thrown on 
 |---|---|
 | unknown aggregate op | `[aster] unsupported aggregate op "bogus" (vega: AggregateOps[op] is not a function)` |
 | `width` / `height` of the form `{ step }` | `[aster] width/height {step} sizing is not supported yet` |
-| a geo projection used without the addon | `[aster] this spec uses a geo projection; load the addon first: await import("@aster/core/geo")` |
-| a rare transform (`kde`, `linkpath`, `treemap`, ...) without the addon | `[aster] this spec uses the "kde" transform; load the addon first: await import("@aster/core/transforms")` |
-| `csv`/`tsv`/`topojson` data format without the addon | `[aster] this spec reads "csv" data; load the addon first: await import("@aster/core/load")` |
+| a geo projection used without the add-on | `[aster] this spec uses a geo projection; load the addon first: await import("@aster/core/geo")` |
+| a rare transform (`kde`, `linkpath`, `treemap`, ...) without the add-on | `[aster] this spec uses the "kde" transform; load the addon first: await import("@aster/core/transforms")` |
+| `csv`/`tsv`/`dsv`/`topojson` data format without the add-on | `[aster] this spec reads "csv" data; load the addon first: await import("@aster/core/load")` |
 | an unknown symbol `shape` (not a built-in name, not a valid SVG path) | `Invalid SVG path, incorrect parameter count` (the same message vega gives) |
-| a Vega-Lite spec without the VL addon (`<Chart>`, `useChart`, the worker handlers) | `A Vega-Lite spec was passed but the compiler is not loaded. Add ...` followed by the import to add, `import '@aster/react/vl'` (no `[aster]` prefix) |
+| a Vega-Lite spec without the VL add-on (`<Chart>`, `useChart`, the worker handlers) | `A Vega-Lite spec was passed but the compiler is not loaded. Add ...` followed by the import to add, `import '@aster/react/vl'` (no `[aster]` prefix) |
 
-Load the matching addon (`@aster/core/geo`, `@aster/core/transforms`, `@aster/core/load`) before calling `renderSpec` or another synchronous entry point
-(`await loadAddonsFor(spec)` from `@aster/react`, or `loadAddons(missingAddons(spec))` from `@aster/core/addons`, does it for you). `<Chart>`, `<SvgChart>`, `useChart`,
-`useChartStream` and the worker hooks load them themselves; if that import fails the error is `[aster] could not load the "geo" add-on (@aster/core/geo): <reason>`,
+Load the matching add-on (`@aster/core/geo`, `@aster/core/transforms`, `@aster/core/load`) before calling `renderSpec` or another synchronous entry point
+(`await loadAddonsFor(spec)` from `@aster/react`, or `loadAddons(missingAddons(spec))` from `@aster/core/addons`, does it for you). The React shells, hooks and the worker entry
+load them themselves ([how](ARCHITECTURE.md#geo-projections--the-add-on-boundary)); if that import fails the error is `[aster] could not load the "geo" add-on (@aster/core/geo): <reason>`,
 reported through `onError` (the hook's `error`), and it is remembered for the page (reload to retry).
 
 ### Deliberate differences from Vega
@@ -288,13 +321,14 @@ reported through `onError` (the hook's `error`), and it is remembered for the pa
   `SpecParseError("Unrecognized function: <name>")` out of `compileChart`, in a formula, a filter, an encode `signal`, a signal
   `update` or the filter of an event stream alike, as vega's parser does. The functions vega has and Aster does not implement
   are the exception, and fail where they are called (see above).
-- **Unknown projection type.** Without the geo addon Aster throws the "load the addon" error above. With it, an
+- **Unknown projection type.** Without the geo add-on Aster throws the "load the addon" error above. With it, an
   unrecognised projection type throws `Unrecognized projection type: <type>` (a plain `Error` without the `[aster]`
   prefix) out of the render, where vega logs the same message and renders without the projection.
 - **Vega-Lite is validated strictly.** `@aster/vl` implements a subset of Vega-Lite and throws a `VLCompileError`
   (`[aster/vl] <path>: <message>`) for an unknown key (`unknown top-level property "foo"`), a config property it does
   not implement (`config.bogus: this config property is valid Vega-Lite but is not supported by @aster/vl`), a
-  feature it does not implement (`mark type "geoshape" is not supported by @aster/vl yet`) and an unknown mark.
+  feature it does not implement (`` a wrapped facet (a single `facet` field) around or inside another facet is not
+  supported yet ``) and an unknown mark.
   vega-lite itself compiles the first three (it ignores the key or property) and crashes on the unknown mark.
 - **Safety refusals.** Limits, the regular-expression screen, the URL policy, the hard spec-depth ceiling and the
   `bin`/`stratify` refusals are Aster additions; see `docs/LIMITS.md`.
@@ -358,3 +392,69 @@ reported through `onError` (the hook's `error`), and it is remembered for the pa
   request with a bad `op`, `streamId`, `batches` or `options` is answered with a `TypeError` wire error
   (`[aster] request needs a spec object`, ...); a message without a numeric `id` is dropped because there is nobody to
   answer; a flush for an unknown stream gives `[aster] unknown stream <id>`.
+
+## Recovered expression errors in detail
+
+What is left of a chart when an expression throws at run time follows vega-dataflow: its operators run in rank order and the pass stops at the first one that throws. The table under "Recovered expression errors (`logger`)" gives the outcome in a line; this section has the full account for the sites where it takes more than a line. "Scopes and an aborted pass" in [ARCHITECTURE.md](ARCHITECTURE.md) explains the ranking itself.
+
+### Encode failure in a mark or group item
+
+**Where the expression threw:** a conditional-encode `test` or branch, a `signal` or `field` in an encode, of a mark or of a group item.
+
+**What is left (as in vega):**
+
+- the failing item keeps the channels evaluated **before** the failing one (spec order); no later item, of this mark or any later one, is encoded or drawn (the run is aborted).
+- The pass stops there as vega's does, and the error is logged **once**: the marks before the failing one in its scope were made, and so were its axes; its legends and title were not; the contents of the groups (and of the legend entries) of every scope, of this level or the ones below, are made after the scope, so none was made (see "Scopes and an aborted pass" in `ARCHITECTURE.md`)
+
+### Reference to a scale the spec never declared
+
+**Where the expression threw:** an entry that calls a scale the spec never declared (`{scale, field}`, `{scale, value}`, `{scale, signal}`, `{scale, range}`, the `extra` of a band).
+
+**What is left (as in vega):**
+
+- `TypeError: _.%<name> is not a function` (a `range`: `Cannot read properties of undefined (reading 'range')`), then as for any failing encode entry (the first two rows of the table).
+- A band on its own reads a bandwidth of 0 and `{scale}` alone is 0, so neither fails.
+- The message is vega's for a scale named in the spec; for one named by a signal or a field it is `_[("%" + <the reference>)] is not a function`
+
+### Mark transform or sort failure
+
+**Where the expression threw:** a mark-level `transform`, a mark `sort` (a group's too: a facet's cells, a header or footer group).
+
+**What is left (as in vega):**
+
+- vega runs them on the encoded items: the mark is made in full (the items in data order, with what the transforms before the failing one wrote), the error is logged once and the pass stops there, like a failing encode: the marks after it, the legends and the title are not made, nor what the group's items hold.
+- An encode of the same mark that throws comes first: its error is the one logged, and the transforms and the sort never run
+
+### A view signal that reads data or a scale
+
+**Where the expression threw:** a signal of the view that reads data or a scale (or is declared after one that does).
+
+**What is left (as in vega):**
+
+- it is ranked after every other operator of the view's scope: everything that does not read it is made, what reads it (marks, and what reads them) is made bare (a mark whose encode reads it has its items as the join made them, and none of its transforms or its sort runs; one whose transform or sort reads it is encoded, and its transforms run up to the one that reads it), the layout of the view does not run when a mark reads it, the error is logged once and nothing below the view (the contents of its groups) is made.
+- A guide or title of the view that reads it logs nothing of its own: what reads the signal gives nothing (in vega it never ran), so the one error is the signal's.
+- An axis whose ticks read it (`tickCount`, `values`, `tickMinStep`, `format`, `formatType`, `tickExtra`) has no tick, label or grid marks at all: vega leaves their places in the axis empty and its own renderers cannot draw the view (`toSVG` rejects; a live view logs a second `TypeError` and stops drawing there, so what it shows depends on the renderer).
+- Aster logs the error and then refuses the view with an `[aster]` error, as it refuses an axis over a scale ranked late in its own scope whose ticks fail (see "Scopes and an aborted pass" in `ARCHITECTURE.md`).
+- Elsewhere the mark of the guide whose encode reads it (a title's text, a label's color or size, a legend's symbol size) has its items as the join made them, and so does every mark of the guide when it is the guide's group that reads it (an `offset`, a `padding`, a `translate`, a legend's `format`): vega's encoders of a guide's marks listen to the group's.
+- The view is then not laid out, and the caption of a guide whose group was left so reads no orient and no format off it.
+- A property a guide does not have (an axis's `columns`, a legend's `tickSize`) is never read, as in vega
+
+### A label format the guide refuses
+
+**Where the expression threw:** the `format` of an axis or a legend that its label format refuses (`zzz%%`, `{signal: '0/0'}`, `{}` for numbers; `true` for dates).
+
+**What is left (as in vega):**
+
+- the format and `formatType` are the values the guide's ticks (entries) operator is given -- a signal's whatever its type -- read through the scale's tick format: on a calendar (a `time`/`utc` scale or format type) a falsy specifier is the default multi-format, an object overrides it per unit, anything else is `Invalid time multi-format specifier: <value>`; elsewhere the text of the value is a number format (`42` is a width), and a scale with no tick format (ordinal, band) reads it only when it is truthy.
+- A refusal (`invalid format: <text>`) makes that operator throw: logged once, the guide and what comes after it are not made (a gradient whose labels are ranked last keeps its gradient and title, and the rest of its scope is made).
+- The caption of a guide whose group item holds a format the caption's format refuses is not written (no ARIA at all), as vega's
+
+### A grid layout that cannot be laid out
+
+**Where the expression threw:** a grid layout (`layout`) it cannot take: a `columns` that is no count (fractional, negative, text: `RangeError: Invalid array length`), a column header or footer with no cell at or before its place (`TypeError: Cannot read properties of undefined (reading 'x')`, `'bounds'` with a band); a symbol legend's `columns` that is no count.
+
+**What is left (as in vega):**
+
+- vega lays a group mark's items out one after the other, in one operator ranked after every instance below them: the error is logged once and the pass stops there.
+- Everything below the items is made and laid out, the items before the failing one are laid out, the failing one only as far as its grid got (a bad count moves nothing; a header that finds no cell leaves the cells and the strips before it placed) and not its guides, the items after it not at all, and no scope around the mark is laid out (the view is not sized).
+- More strips than the grid has columns (rows) is the warning `Grid headers exceed limit: <n>`, given each time the layout runs (in a view that fits its viewport, a group's layout runs again only when what it lays out changed)

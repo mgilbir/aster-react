@@ -1,0 +1,50 @@
+{
+  "$schema": "https://vega.github.io/schema/vega/v6.json",
+  "width": 200,
+  "height": 120,
+  "padding": 5,
+  "background": "white",
+  "autosize": "none",
+  "data": [
+    {
+      "name": "table",
+      "values": [
+        { "k": "a", "t": 1704067200000 },
+        { "k": "b", "t": "1706745600000" },
+        { "k": "c", "t": "2024-03-01" },
+        { "k": "d", "t": 1711929600000 }
+      ]
+    }
+  ],
+  "scales": [
+    { "name": "x", "type": "band", "domain": { "data": "table", "field": "k" }, "range": "width", "padding": 0.1 },
+    { "name": "y", "type": "time", "domain": [1704067200000, 1711929600000], "range": "height" }
+  ],
+  "axes": [
+    { "orient": "bottom", "scale": "x" },
+    { "orient": "left", "scale": "y" }
+  ],
+  "marks": [
+    {
+      "type": "symbol",
+      "from": { "data": "table" },
+      "encode": {
+        "enter": {
+          "x": { "scale": "x", "field": "k", "band": 0.5 },
+          "y": { "scale": "y", "field": "t" },
+          "size": { "value": 50 }
+        }
+      }
+    },
+    {
+      "type": "line",
+      "from": { "data": "table" },
+      "encode": {
+        "enter": {
+          "x": { "scale": "x", "field": "k", "band": 0.5 },
+          "y": { "scale": "y", "field": "t" }
+        }
+      }
+    }
+  ]
+}

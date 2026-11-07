@@ -1,7 +1,10 @@
 /**
- * Eager row transforms. Vega's dataflow applies these reactively; for the static
- * execution mode we apply the same semantics eagerly against the current rows.
- * Each transform is a pure `(rows, params) -> rows` (plus expression/context).
+ * Eager row transforms. Vega's dataflow applies these reactively; here each one
+ * applies the same semantics eagerly against the current rows, and the incremental
+ * path in runtime.ts keeps their results across calls. Each transform is a
+ * `(rows, params) -> rows` function (plus expression/context). It may write onto rows
+ * the pipeline owns instead of copying them (see `ownsOutput`), and `force` moves its
+ * rows in place; rows that another dataset, a hierarchy or an index holds are not written.
  */
 import type { CompiledTransform, SortSpec } from './types.js'
 import type { IdCounter } from './identifier-ids.js'
@@ -32,7 +35,7 @@ export interface TransformContext {
   runtime: ExpressionRuntime
   /** Signal values by name. Must be prototype-less (the runtime supplies `dict(...)`): names are spec-supplied. */
   signals: Record<string, unknown>
-  /** Cross-dataset lookup (used by 'lookup', deferred). */
+  /** Cross-dataset lookup: the rows of a named dataset, read by the 'lookup' transform. */
   datasets?: (name: string) => unknown[] | undefined
   /**
    * The id counter of the view the transforms belong to, which every `identifier` draws from (see identifier-ids.ts). A context
@@ -160,7 +163,7 @@ export function applyTransforms(
     carryOrder(t.type, input, out)
     if (meter) {
       // Whatever a transform produced is a dataset like any other: it may not
-      // exceed maxRows, and rows beyond the input count as generated (C7/C9).
+      // exceed maxRows, and rows beyond the input count as generated.
       meter.checkRows(out.length, `transform ${t.type}`)
       meter.generated(out.length - rows.length, `transform ${t.type}`)
     }
@@ -637,8 +640,8 @@ function graticuleRows(t: Record<string, unknown>): Row[] {
 // ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
-// contour (generating transform) — vega's Contour: density2D grid -> d3-contour
-// marching squares -> coordinate post-transform. Ported to match the oracle.
+// contour (generating transform) — vega's Contour: density2D grid -> marching
+// squares (Aster's own implementation) -> coordinate post-transform. Written to match the oracle.
 // ---------------------------------------------------------------------------
 
 /**
@@ -743,7 +746,7 @@ export interface HierNode {
 
 /**
  * Build a hierarchy tree from flat id/parent-id tuples. Mirrors d3-hierarchy
- * `stratify` as vega-hierarchy drives it (C8): ids and parent ids are
+ * `stratify` as vega-hierarchy drives it: ids and parent ids are
  * stringified, null/empty ids are ignored, and the same errors are thrown --
  * `missing: <id>`, `ambiguous: <id>`, `multiple roots`, `no root`, `cycle`.
  * A parent/child cycle therefore throws instead of looping, and no walk here

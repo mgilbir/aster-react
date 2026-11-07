@@ -1,7 +1,7 @@
 /**
  * @aster/core's event selector parser is a port of vega-event-selector. A port can drift, so
  * it is compared with the real parser (vega re-exports it as `parseSelector`) over a grammar
- * of selectors -- including the malformed ones, where the error message must match too (C20).
+ * of selectors -- including the malformed ones, where the error message must match too.
  */
 import { describe, expect, it } from 'vitest'
 import * as vega from 'vega'

@@ -1,5 +1,5 @@
 /**
- * Recovered errors follow vega (audit C90).
+ * Recovered errors follow vega.
  *
  * vega does not throw out of a render when an expression fails: the dataflow logs the error
  * through its logger and carries on with what it has -- a conditional-encode test or a signal
@@ -86,7 +86,7 @@ describe('items left unencoded by an aborted run draw what vega draws', () => {
   })
 })
 
-describe('recovered errors are logged and the render carries on, like vega (C90)', () => {
+describe('recovered errors are logged and the render carries on, like vega', () => {
   it.each(CASES)('%s', async (_name, spec) => {
     const want = await oracle(spec)
     expect(want.errors.length, 'vega itself must report the error').toBeGreaterThan(0)

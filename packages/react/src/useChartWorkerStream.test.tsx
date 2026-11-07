@@ -34,7 +34,7 @@ class FakeWorker {
   terminate(): void { this.terminated = true }
 }
 
-describe('worker streaming (R13)', () => {
+describe('worker streaming', () => {
   afterEach(() => { document.body.innerHTML = '' })
 
   it('handles init/flush/close through the pure stream protocol', () => {

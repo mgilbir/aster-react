@@ -1,5 +1,5 @@
 /**
- * Incremental append vs full re-evaluation (R13).
+ * Incremental append vs full re-evaluation.
  *
  * Measures the per-update cost of appending a small batch to a live chart:
  *
@@ -18,7 +18,7 @@
  * paint/frame pacing). It is informational: the pass/fail gate stays on aster's
  * own incremental vs full comparison.
  *
- * Gate floors (C86). At the calibrated shape (>= 10000 points and >= 30 updates, which is what
+ * Gate floors. At the calibrated shape (>= 10000 points and >= 30 updates, which is what
  * `pnpm check` runs) each path must beat its baseline by a MEASURED floor, not just by >1x, so a large
  * regression cannot pass. Seven sequential runs of `pnpm bench:incremental -- --points=10000 --reps=30`
  * on the development machine (2026-10-23), speedup of the median:
@@ -34,13 +34,17 @@
  * 224x-303x idle with the floor at 200x); within a pair load cancels. The floors themselves are unchanged.
  *
  * Below the calibrated shape (speedup scales with the dataset) only the >1x check applies. Override with
- * --min-append=, --min-replace=, --min-dom=, --max-append-growth= (used to prove the gate bites).
+ * --min-append=, --min-replace=, --min-dom=, --max-append-growth= (used to prove the gate bites). The dense
+ * append floor (`DENSE_APPEND_FLOOR`, 200x) has no override.
  *
  * Run: pnpm bench:incremental [--points=5000] [--batch=1] [--reps=100] [--vega=1]
  */
 import { performance } from 'node:perf_hooks'
 import { ensureBuilt } from './ensure-built.js'
 import { summarize, pairedRatio, table, fmt } from './stats.js'
+import { cli } from '../../../scripts/lib/cli.mjs'
+
+cli({ url: import.meta.url, flags: { batch: 'eq', 'dense-points': 'eq', 'max-append-growth': 'eq', points: 'eq', reps: 'eq', vega: 'eq', 'min-append': 'eq', 'min-replace': 'eq', 'min-dom': 'eq' } })
 
 /** Ceiling on an append to N rows over one to N/10 (see the call site): at 100,000 points healthy runs read 2.00x-2.03x here and 2.07x-2.78x on the CI runner, the 2026-10-27..2026-11-04 regression
  * 4.27x-4.34x here and 3.63x on the CI runner (2026-11-05). 4x keeps healthy runs clear of it; it catches a regression of that size here,

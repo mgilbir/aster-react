@@ -8,6 +8,9 @@ import { writeFileSync } from 'node:fs'
 import { chromium } from 'playwright'
 import { GENERATED_SHAPES, SHAPES } from '../src/raster-shapes.js'
 import { AlphaCanvas } from '../../core/src/raster.js'
+import { cli } from '../../../scripts/lib/cli.mjs'
+
+cli({ url: import.meta.url })
 
 const browser = await chromium.launch({ headless: true })
 const page = await browser.newPage()

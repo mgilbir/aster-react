@@ -1,5 +1,5 @@
 /**
- * Real-browser signal-event parity gate (audit C20).
+ * Real-browser signal-event parity gate.
  *
  * The same specs are mounted twice in headless Chromium, each in its own page:
  * once in REAL vega (a `View` with the svg renderer) and once in @aster/core
@@ -25,6 +25,9 @@ import { fileURLToPath } from 'node:url'
 import { build } from 'esbuild'
 import { compile as compileVL } from '../../vl/src/index.ts'
 import { canonicalizeSvg, diffCanonical } from '../src/normalize.ts'
+import { cli } from '../../../scripts/lib/cli.mjs'
+
+cli({ url: import.meta.url, flags: { filter: 'eq', 'min-cases': 'eq' } })
 
 const THIS_DIR = dirname(fileURLToPath(import.meta.url))
 const CONF_DIR = dirname(THIS_DIR)

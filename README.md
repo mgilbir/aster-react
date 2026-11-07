@@ -1,71 +1,32 @@
 # Aster Charts
 
-A TypeScript reimplementation of the Vega and Vega-Lite rendering stack, with React bindings. It
-accepts Vega specs (and Vega-Lite specs through `@aster/vl`) and renders them to SVG or canvas, aiming
-to produce what the real Vega renderer produces. The real `vega` and `vega-lite` packages are the test
-oracle only; nothing in the published packages imports them or any `d3-*` / `topojson-*` package.
+Aster Charts (Aster for short) renders [Vega](https://vega.github.io/vega/) and [Vega-Lite](https://vega.github.io/vega-lite/) specs to SVG or canvas
+from TypeScript, with React bindings: a `<Chart>` component, hooks, streaming, workers and server rendering. It is a
+reimplementation of the Vega and Vega-Lite rendering stack that aims to produce what the real Vega renderer produces. The real
+`vega` and `vega-lite` packages are the test oracle only; nothing in the published packages imports them or any `d3-*` /
+`topojson-*` package.
 
-## Status
+**Pre-alpha. Version 0.1.0, not yet published to npm.** The install commands below work once the first release is tagged; until
+then, build from this repository ([Build from source](#build-from-source)). How closely the output matches Vega is measured by
+the gates, and the results are in [Conformance results](#conformance-results).
 
-**Pre-alpha. Not published.** The behaviour is checked against the real packages by the gates in
-[`scripts/gates.mjs`](scripts/gates.mjs) (`pnpm check`). The current results, each next to the command that
-produced it, are in [docs/TESTING.md](docs/TESTING.md#reference-results) and
-[docs/PERFORMANCE.md](docs/PERFORMANCE.md#reference-measurements); in short, as measured on this tree:
+## Install
 
-- the SVG corpus (1055 specs: 383 Vega, 672 Vega-Lite) renders identically to real Vega under a strict
-  canonicalizer: `pnpm conformance` (1055/1055);
-- the same 672 Vega-Lite specs compiled by `@aster/vl` render identically to vega-lite's output: `pnpm conformance-vl` (672/672);
-- the schema sweeps (one chart per property/value of the schema) have no differences: Vega 7538 ok of 7549 (8 both-refused, 3 the oracle itself crashes on), Vega-Lite 27452 ok of 27513 (44 both-refused, 17 oracle crashes),
-  signals 103 ok of 166 (60 `retained`, see below; 0 differ);
-- in real Chromium, the corpus matches Vega's string renderer (1055/1055), the canvas renderer matches Vega's canvas (1067/1067 pixel comparisons),
-  and signal event streams match Vega (64/64 cases).
-
-Known gaps and deliberate differences from Vega are listed in [docs/LIMITS.md](docs/LIMITS.md),
-[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#deviations-from-vega) and [docs/ROADMAP.md](docs/ROADMAP.md). Specs from
-untrusted sources need `limits` (best-effort budgets) and a killable worker (the hard guarantee; a regular expression, for
-one, cannot be interrupted in-process); a few built-in ceilings hold even without `limits`. Read
-[docs/LIMITS.md](docs/LIMITS.md) before rendering them.
-
-## How It Works
-
-The Vega spec is the canonical intermediate representation. A Vega-Lite spec is first compiled to Vega by
-`@aster/vl`. The Vega pipeline has three phases, all implemented in `@aster/core`:
-
-1. **Compile**: `compileChart(spec)` turns the Vega JSON into a `CompiledChart` IR (data, scales, transforms, marks, axes, legends, signals).
-2. **Evaluate**: `evaluateChart(chart, input)` resolves the IR against runtime inputs (data rows, size, signals): it runs the
-   transforms, builds the scales and builds the scene graph, with Vega's layout, bounds and guide algorithms. Updates are
-   incremental: a changed row, an appended batch or a changed signal re-derives only what it affects, and the result always
-   equals a fresh evaluation ([docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#incremental-evaluation)).
-3. **Render**: `renderSceneToSvg(scene)` produces an SVG string that has the structure of `vega-scenegraph`'s SVG renderer
-   (classes, roles and ARIA labels included, compared by the conformance gate); the
-   `@aster/core/dom` addon patches a live `<svg>` instead, and `@aster/core/canvas` paints the same scene to a canvas.
-
-Everything below the spec language is owned: the expression parser and CSP-safe interpreter (no `new Function`), scales, ticks
-and colour schemes, number and time formatting, time zones, curves and symbols, geo projections, contours, DSV and TopoJSON
-readers, and the transforms. They are ports of the upstream algorithms, each checked against oracle vectors recorded from the
-pinned upstream packages ([docs/TESTING.md](docs/TESTING.md#oracle-vectors)); their licences are reproduced in
-[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
-
-## Repo Layout
-
-| Path | Description |
-|---------|-------------|
-| `packages/core` (`@aster/core`) | Compiler (spec to IR), runtime (IR to scene), SVG renderer, expression engine, limits. Entry points: `.`, `/dom` (incremental DOM, sessions), `/canvas`, `/hit` (hit testing), `/signals` (event loop), `/load` (URL datasets), `/geo`, `/transforms`. |
-| `packages/react` (`@aster/react`) | `<Chart>` (SVG/canvas, incremental DOM patching, selection, pan/zoom, tooltips, accessibility tree), `useChart`, streaming and worker components and hooks, SSR helpers. `@aster/react/vl` registers the Vega-Lite compiler. |
-| `packages/vl` (`@aster/vl`) | The Vega-Lite to Vega compiler. Throws `VLCompileError` for what it does not support. |
-| `packages/conformance` (`@aster/conformance`, private) | The oracle harness: corpus, sweeps, vectors, browser gates, fuzzing. |
-| `packages/benchmarks` (`@aster/benchmarks`, private) | Runtime, memory, bundle and browser performance harness (`<Chart>` vs react-vega and vega-embed) and the bundle-size budgets. |
-| `apps/demo` (private) | A gallery and playground that renders Aster next to Vega. |
-| `scripts/` | The gate list (`gates.mjs`), dependency boundary, publish verification, release guards and their tests. |
-| `.github/workflows/` | `ci.yml` (runs `pnpm check`), `nightly.yml` (sweeps, fuzzing, extra browsers), `release.yml` (tag-triggered, see [docs/RELEASE.md](docs/RELEASE.md)). |
-
-## Quick Start
+Not yet published (see above); these are the commands for the packages once they are. Consumers need Node 20 or newer (`engines`
+in each package).
 
 ```bash
-pnpm install
-pnpm build
-pnpm check          # every gate; `pnpm check -- --list` shows them, `-- --skip browser` skips the Chromium ones
+npm i @aster/react react react-dom   # React charts: <Chart>, useChart; react ^19 is a peer dependency
+npm i @aster/core                    # no React: renderSpec and the engine (no dependencies)
+npm i @aster/vl                      # only to compile Vega-Lite yourself (no dependencies)
 ```
+
+`@aster/react` depends on `@aster/core` and `@aster/vl` itself, so a React app needs only the first line. Install `@aster/core`
+as well when the app imports it directly (for example `@aster/core/dom` or `renderSpec`). Vega-Lite in a React app is opt-in with
+`import '@aster/react/vl'`. `react-dom` is not a declared peer of `@aster/react`; a browser app mounts with it, and server
+rendering uses `react-dom/server`.
+
+## Render a first chart
 
 ### Minimal Example
 
@@ -94,12 +55,31 @@ const svg = renderSpec(spec)
 // svg is a plain SVG string
 ```
 
+A Vega spec rendered to an SVG string, with no React.
 `data` is a list of named datasets. As in `vega-parser`, a lone object stands for a one-element list (the lists
 are read through vega-util `array()`), and a mark that reads a dataset the spec does not declare fails with
 `SpecParseError: Undefined data set name: "<name>"`. This example is rendered by real Vega and by Aster in the
-tests and the outputs agree.
+tests and the outputs agree. [scripts/readme-examples.test.mjs](scripts/readme-examples.test.mjs) type-checks every code block of
+this README against the built packages and runs the first two.
 
-### React API
+### A Vega-Lite spec
+
+`@aster/vl` compiles Vega-Lite to Vega; `renderSpec` draws the result.
+
+```ts
+import { renderSpec, type VgSpec } from '@aster/core'
+import { compile } from '@aster/vl'
+
+const vegaSpec = compile({
+  data: { values: [{ a: 'A', b: 28 }, { a: 'B', b: 55 }, { a: 'C', b: 43 }] },
+  mark: 'bar',
+  encoding: { x: { field: 'a', type: 'nominal' }, y: { field: 'b', type: 'quantitative' } },
+}) as VgSpec
+
+const svg = renderSpec(vegaSpec)
+```
+
+### In React
 
 ```tsx
 import { useState } from 'react'
@@ -174,26 +154,93 @@ In React use `<ChartStream spec={spec}>` or `<ChartWorkerStream>`: the streamed 
 canvas renderer, interaction and accessibility tree as `<Chart>`. Measurements are in
 [docs/PERFORMANCE.md](docs/PERFORMANCE.md#reference-measurements).
 
-## Documentation
+## Where to go next
 
-- [API](docs/API.md): core, React and Vega-Lite entry points
-- [Architecture](docs/ARCHITECTURE.md): pipeline, incremental evaluation, renderers, deviations from Vega
-- [Interaction](docs/INTERACTION.md): selection, pan/zoom, signals, accessibility
-- [Limits](docs/LIMITS.md) / [Errors](docs/ERRORS.md): untrusted specs and typed failures
-- [Testing](docs/TESTING.md): gates, oracles, sweeps, fuzzing, reference results
-- [Performance](docs/PERFORMANCE.md) / [Fonts](docs/FONTS.md)
-- [Release](docs/RELEASE.md) / [ADRs](docs/adr/README.md) / [Roadmap](docs/ROADMAP.md) / [Changelog](CHANGELOG.md)
-- [Third-party notices](THIRD_PARTY_NOTICES.md)
+| I want to | Read |
+|---|---|
+| see every export and prop of a package | [docs/API.md](docs/API.md) (start with its "Start here" table), and the package READMEs: [`@aster/core`](packages/core/README.md), [`@aster/react`](packages/react/README.md), [`@aster/vl`](packages/vl/README.md) |
+| try it next to real Vega in a browser | [apps/demo/README.md](apps/demo/README.md) (the gallery and playground: run, build, deploy) |
+| render specs I did not write | [docs/LIMITS.md](docs/LIMITS.md) (budgets, the URL policy, what a worker guarantees) |
+| understand an error message | [docs/ERRORS.md](docs/ERRORS.md) (every error class and what survives each failure) |
+| use Vega-Lite and know what it refuses | [packages/vl/README.md](packages/vl/README.md) (what compiles, and the "Throws" list) |
+| add pan, zoom, selection, tooltips or `signal.on` handlers | [docs/INTERACTION.md](docs/INTERACTION.md) |
+| match Vega's text widths or fix a chart whose labels differ | [docs/FONTS.md](docs/FONTS.md) |
+| keep the bundle small or the chart fast | [docs/PERFORMANCE.md](docs/PERFORMANCE.md) (guidance, bundle sizes, measurements); the harness is [packages/benchmarks/README.md](packages/benchmarks/README.md) |
+| know where Aster differs from Vega on purpose | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#deviations-from-vega) |
+| understand how the engine works | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) and the [ADRs](docs/adr/README.md) |
+| build, test or change the code | [CONTRIBUTING.md](CONTRIBUTING.md), [docs/TESTING.md](docs/TESTING.md) |
+| debug a red gate or one failing spec | [docs/RUNBOOK.md](docs/RUNBOOK.md) |
+| see what the official Vega and Vega-Lite galleries show | [packages/conformance/gallery/README.md](packages/conformance/gallery/README.md) and its [triage](packages/conformance/gallery/TRIAGE.md) |
+| cut a release | [docs/RELEASE.md](docs/RELEASE.md) |
+| see what is open or changed | [docs/ROADMAP.md](docs/ROADMAP.md), [CHANGELOG.md](CHANGELOG.md) |
+| check a licence | [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) |
 
-## What is not covered
+## How It Works
 
-- **Vega-Lite**: `@aster/vl` throws a `VLCompileError` naming the feature for what it does not compile (a selection on a layer spec itself, maps, the `time` channel, a few data-driven channels, pre-binned data). The list is in
-  [packages/vl/README.md](packages/vl/README.md).
-- **Signals**: a signal written into a running chart renders the fresh result for the new signals; real Vega keeps some
-  state from its first run (the `retained` cases, see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#deviations-from-vega)).
-- **Word clouds**: `wordcloud` is vega-wordcloud / d3-cloud, and draws its sprites on the host's canvas as vega does, so a browser lays out the cloud vega lays out. Where the host has no canvas (Node) vega cannot lay one out; the words are then boxes of their measured width, which is deterministic and not a browser's.
-- **Streaming transport**: `createChartStream` and the hooks give a bounded queue, policies and explicit pulses; the host owns the
-  network and decides when to flush.
-- **Transforms without an incremental fast path** (for example the global fitters `kde`, `regression`, `loess`) re-derive
-  on every append; the result is still exactly a fresh evaluation ([docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#incremental-evaluation)).
-- **Export**: PNG and PDF export are out of scope; a host can rasterize the SVG or canvas.
+The Vega spec is the canonical intermediate representation. A Vega-Lite spec is first compiled to Vega by
+`@aster/vl`. The Vega pipeline has three phases, all implemented in `@aster/core`:
+
+1. **Compile**: `compileChart(spec)` turns the Vega JSON into a `CompiledChart` IR (data, scales, transforms, marks, axes, legends, signals).
+2. **Evaluate**: `evaluateChart(chart, input)` resolves the IR against runtime inputs (data rows, size, signals): it runs the
+   transforms, builds the scales and builds the scene graph, with Vega's layout, bounds and guide algorithms. Updates are
+   incremental: a changed row, an appended batch or a changed signal re-derives only what it affects, and the result always
+   equals a fresh evaluation ([docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#incremental-evaluation)).
+3. **Render**: `renderSceneToSvg(scene)` produces an SVG string that has the structure of `vega-scenegraph`'s SVG renderer
+   (classes, roles and ARIA labels included, compared by the conformance gate); the
+   `@aster/core/dom` add-on patches a live `<svg>` instead, and `@aster/core/canvas` paints the same scene to a canvas.
+
+Everything below the spec language is owned: the expression parser and CSP-safe interpreter (no `new Function`), scales, ticks
+and colour schemes, number and time formatting, time zones, curves and symbols, geo projections, contours, DSV and TopoJSON
+readers, and the transforms. They are ports of the upstream algorithms, each checked against oracle vectors recorded from the
+pinned upstream packages ([docs/TESTING.md](docs/TESTING.md#oracle-vectors)); their licences are reproduced in
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+
+## Repo Layout
+
+| Path | Description |
+|---------|-------------|
+| `packages/core` (`@aster/core`) | Compiler (spec to IR), runtime (IR to scene), SVG renderer, expression engine, limits. Entry points: `.`, `/addons` (which add-ons a spec needs, loaded on demand), `/dom` (incremental DOM, sessions), `/canvas`, `/hit` (hit testing), `/signals` (event loop), `/load` (URL datasets), `/geo`, `/transforms`. [README](packages/core/README.md). |
+| `packages/react` (`@aster/react`) | `<Chart>` (SVG/canvas, incremental DOM patching, selection, pan/zoom, tooltips, accessibility tree), `useChart`, streaming and worker components and hooks, SSR helpers. Entry points: `.`, `/lite` (SVG-only `<SvgChart>`), `/interaction`, `/ssr`, `/worker`, `/worker-entry`, `/vl` (registers the Vega-Lite compiler). [README](packages/react/README.md). |
+| `packages/vl` (`@aster/vl`) | The Vega-Lite to Vega compiler. Throws `VLCompileError` for what it does not support. [README](packages/vl/README.md). |
+| `packages/conformance` (`@aster/conformance`, private) | The oracle harness: corpus, sweeps, vectors, browser gates, fuzzing, and the [official gallery runs](packages/conformance/gallery/README.md). |
+| `packages/benchmarks` (`@aster/benchmarks`, private) | Runtime, memory, bundle and browser performance harness (`<Chart>` vs react-vega and vega-embed) and the bundle-size budgets: [packages/benchmarks/README.md](packages/benchmarks/README.md). |
+| `apps/demo` (private) | A gallery and playground that renders Aster next to Vega: [apps/demo/README.md](apps/demo/README.md) (run, build, deploy). |
+| `scripts/` | The gate list (`gates.mjs`), dependency boundary, publish verification, release guards and their tests. |
+| `.github/workflows/` | `ci.yml` (runs `pnpm check`), `nightly.yml` (sweeps, fuzzing, extra browsers), `release.yml` (tag-triggered, see [docs/RELEASE.md](docs/RELEASE.md)). |
+
+## Known gaps and differences from Vega
+
+Each list lives in one place; this page only points at them.
+
+- **Vega-Lite features `@aster/vl` refuses:** [packages/vl/README.md](packages/vl/README.md#throws-not-supported), held to the compiler by a test. Each is a `VLCompileError` naming the feature and its path.
+- **Where Aster deliberately differs from Vega** (including the `retained` cases, where a signal written into a running chart renders the fresh result): [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#deviations-from-vega); the differences made for safety are in [docs/LIMITS.md](docs/LIMITS.md#deviations-from-vega-made-for-safety).
+- **Untrusted specs:** `limits` are best-effort budgets and a killable worker is the hard guarantee (a regular expression, for one, cannot be interrupted in-process); a few built-in ceilings hold even without `limits`. Read [docs/LIMITS.md](docs/LIMITS.md) before rendering specs from untrusted sources.
+- **Open work, word clouds, streaming transport and export:** [docs/ROADMAP.md](docs/ROADMAP.md#2-open-work). PNG and PDF export are out of scope; a host can rasterize the SVG or canvas.
+- **Transforms without an incremental fast path** (the global fitters such as `kde`, `regression`, `loess`) re-derive on every append; the result is still exactly a fresh evaluation ([docs/PERFORMANCE.md](docs/PERFORMANCE.md)).
+
+## Conformance results
+
+The behaviour is checked against the real packages by the gates in
+[`scripts/gates.mjs`](scripts/gates.mjs) (`pnpm check`). The current results, each next to the command that
+produced it, are in [docs/TESTING.md](docs/TESTING.md#reference-results) and
+[docs/PERFORMANCE.md](docs/PERFORMANCE.md#reference-measurements); in short, as measured on this tree:
+
+- the SVG corpus (1059 specs: 387 Vega, 672 Vega-Lite) renders identically to real Vega under a strict
+  canonicalizer: `pnpm conformance` (1059/1059);
+- the same 672 Vega-Lite specs compiled by `@aster/vl` render identically to vega-lite's output: `pnpm conformance-vl` (672/672);
+- the schema sweeps (one chart per property/value of the schema) have no differences: Vega 7538 ok of 7549 (9 both-refused, 2 the oracle itself crashes on), Vega-Lite 27452 ok of 27513 (47 both-refused, 14 oracle crashes),
+  signals 103 ok of 166 (60 `retained`, see [Known gaps](#known-gaps-and-differences-from-vega); 0 differ),
+  values 500 ok of 500 (the same specification with awkward cells: `null`, `""`, words, lists, `Infinity` written out; 0 differ);
+- in real Chromium, the corpus matches Vega's string renderer (1059/1059), the canvas renderer matches Vega's canvas (1220/1220 pixel comparisons),
+  and signal event streams match Vega (64/64 cases).
+
+## Build from source
+
+For working on this repository (contributors need Node 22.13 or newer, which pnpm 11 requires; pnpm is pinned by
+`packageManager`). [CONTRIBUTING.md](CONTRIBUTING.md) has the rest.
+
+```bash
+pnpm install
+pnpm build
+pnpm check          # every gate; `pnpm check -- --list` shows them, `-- --skip browser` skips the Chromium ones
+```

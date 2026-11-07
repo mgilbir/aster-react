@@ -1,5 +1,5 @@
 /**
- * Transform option matrix (R13.3).
+ * Transform option matrix.
  *
  * The schema sweeps cover marks/scales/guides; this gate covers the data
  * transform surface, including option combinations that a corpus chart rarely
@@ -13,6 +13,9 @@ import '@aster/core/transforms'
 import { renderSpec } from '@aster/core'
 import { renderWithVega } from '../src/render-vega.js'
 import { canonicalizeSvg, diffCanonical } from '../src/normalize.js'
+import { cli } from '../../../scripts/lib/cli.mjs'
+
+cli({ url: import.meta.url, flags: { filter: 'value' } })
 
 type Spec = Record<string, unknown>
 const rows = [

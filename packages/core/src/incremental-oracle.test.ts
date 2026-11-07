@@ -1,5 +1,5 @@
 /**
- * The incremental-equivalence oracle (audit C84, design tension T1).
+ * The incremental-equivalence oracle.
  *
  * The contract under test is a CORRECTNESS GUARANTEE, not a best-effort
  * optimisation:
@@ -97,7 +97,7 @@ const PIPES: Pipe[] = [
   { name: 'aggregate>filter', tr: [{ type: 'aggregate', groupby: ['g'], fields: ['v'], ops: ['sum'], as: ['s'] }, { type: 'filter', expr: 'datum.s > 5' }], xf: 's', yf: 's', cf: 'g' },
   { name: 'lookup>formula', tr: [{ type: 'lookup', from: 'u', key: 'g', fields: ['g'], values: ['w'], as: ['w'] }, { type: 'formula', expr: 'datum.w + datum.v', as: 'wv' }], xf: 'wv', yf: 'v', cf: 'g' },
   { name: 'bin>aggregate', tr: [{ type: 'bin', field: 'x', maxbins: 4, as: ['b0', 'b1'] }, { type: 'aggregate', groupby: ['b0'], fields: ['v'], ops: ['sum'], as: ['s'] }], xf: 'b0', yf: 's' },
-  // -- Vega-faithful transform semantics (audit C59/C94/C24): odd values (`s` numeric strings, `n` nullable),
+  // -- Vega-faithful transform semantics: odd values (`s` numeric strings, `n` nullable),
   //    nested paths (`o.a`, `o.b[0]`), argmin/argmax/ci0/ci1, window ranks and frames, stack offsets, impute,
   //    sample, identifier, project, pivot, lookup (last wins), timeunit (fixed units and data-derived).
   { name: 'aggregate-stats', tr: [{ type: 'aggregate', groupby: ['g'], fields: ['v', 'v', 'v', 'n', 's', 'x'], ops: ['stdev', 'median', 'distinct', 'valid', 'sum', 'argmin'], as: ['sd', 'md', 'ds', 'vl', 'ss', 'am'] }], xf: 'md', yf: 'ss', cf: 'g' },
@@ -216,7 +216,7 @@ function genSpec(r: Rnd): GenSpec {
   else marks.push(line(ds, r() < 0.5 ? pipe.xf : undefined))
   if (layered) {
     // Layered marks over ONE shared dataset (symbol + text), the classic
-    // labels-over-points chart (C4).
+    // labels-over-points chart.
     marks.push(txt(ds))
     features.push('layered(text)')
     if (r() < 0.4) { marks.push(sym(ds)); features.push('layered(sym2)') }
@@ -712,7 +712,7 @@ interface RunResult { failure: Failure | null; steps: number }
 function run(target: 'chart' | 'session', g: GenSpec, world0: World, steps: Step[], seed: number): RunResult {
   const fail = (step: number, op: string, where: string, detail: string): RunResult => ({ failure: { seed, target, step, op, where, detail }, steps: step })
   let world = world0
-  // Previously returned scenes must never change under the caller (C52).
+  // Previously returned scenes must never change under the caller.
   const retained: Array<{ scene: SceneRoot; key: ReturnType<typeof sceneKey>; step: number }> = []
 
   const keptReference = JSON.stringify(g.spec).includes('"identifier"') ? compileChart(clone(g.spec) as never) : undefined
@@ -766,7 +766,7 @@ function run(target: 'chart' | 'session', g: GenSpec, world0: World, steps: Step
   if (target === 'chart') {
     const chart = compileChart(clone(g.spec) as never)
     const live = { t: clone(world.t), u: clone(world.u), sel: clone(world.sel) }
-    // The compiled IR must stay byte-identical across every evaluation (C12/C17).
+    // The compiled IR must stay byte-identical across every evaluation.
     const irAtCompile = JSON.stringify(chart)
     const irCheck = (stepNo: number, op: string): RunResult | null => {
       const now = JSON.stringify(chart)
@@ -1077,7 +1077,7 @@ const STEPS = Number(env('ASTER_ORACLE_STEPS') ?? 12)
 const START = Number(env('ASTER_ORACLE_START') ?? 1)
 const ONE = env('ASTER_ORACLE_SEED')
 
-describe('incremental === fresh evaluateChart(compileChart(spec)) (audit C84 / T1)', () => {
+describe('incremental === fresh evaluateChart(compileChart(spec))', () => {
   it('the generator is deterministic per seed', () => {
     const a = scenario(7, 6), b = scenario(7, 6)
     expect(JSON.stringify(a)).toBe(JSON.stringify(b))

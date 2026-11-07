@@ -2,12 +2,14 @@
 
 Date: 2026-10-12
 Status: Accepted
-Supersedes: the "reuse only pure Vega packages" decision described in
-[ARCHITECTURE.md](../ARCHITECTURE.md#expression-engine) and the related README text.
+Supersedes: the earlier decision to reuse the pure upstream packages (`vega-expression`,
+`vega-interpreter`, `vega-format`, `vega-scale`, `vega-time`, `vega-util` and the `d3-*` and
+`topojson-client` packages they sit on) in the runtime, which the README and ARCHITECTURE.md of the
+time argued for. Those documents now describe the owned engine.
 
 ## Context
 
-Aster React reimplements the Vega and Vega-Lite languages and their rendering, as
+Aster Charts reimplements the Vega and Vega-Lite languages and their rendering, as
 [`aster`](https://github.com/mgilbir/aster) (Go) and
 [`aster-kotlin`](https://github.com/mgilbir/aster-kotlin) (Kotlin) do. The intended
 shape of the TypeScript engine is therefore the same as its siblings: the language and
@@ -53,7 +55,7 @@ behaviour end to end, and it is the only route to rendering Vega-Lite directly.
 
 - **The base bundle grows** before it shrinks: scales, expressions, geo and shape
   become ours, and the per-entry budget gates are re-baselined as phases land. The
-  gap to react-vega (288 kB gzip) is expected to hold.
+  gap to react-vega (288 kB gzip, which includes Vega-Lite) is expected to hold for Vega specs.
 - **Ports are transcriptions, not paraphrases.** Where upstream's behaviour is
   surprising (e.g. `toBoolean('False')` is `true`, `NaN` compares equal to everything
   in `ascending`), the port reproduces it and the vectors pin it. Correctness against
@@ -78,4 +80,7 @@ behaviour end to end, and it is the only route to rendering Vega-Lite directly.
 - Oracle vectors that depend on the time zone carry the zone they were recorded under (`UTC` or
   `America/New_York`) and the replay pins it; the `tz-matrix` gate re-runs the zone-sensitive suites under non-UTC
   zones.
-- The bundle gap to react-vega held; the per-entry sizes are in [PERFORMANCE.md](../PERFORMANCE.md).
+- The bundle gap to react-vega holds for Vega specs only. Measured 2026-11-06 with `pnpm bench:bundle`: `<Chart>` (Vega, all
+  chunks) 264.0 kB gzip against react-vega 288.7 kB, whose bundle also contains Vega-Lite. With the Vega-Lite compiler
+  `<Chart>` is 308.3 kB gzip eager plus 59.1 kB on demand (`pnpm --filter @aster/benchmarks run budget`), above react-vega.
+  The per-entry sizes are in [PERFORMANCE.md](../PERFORMANCE.md#bundle-sizes).

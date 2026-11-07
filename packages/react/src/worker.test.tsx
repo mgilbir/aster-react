@@ -15,7 +15,7 @@ const spec = {
   marks: [{ type: 'line', from: { data: 't' }, encode: { update: { x: { scale: 'x', field: 'x' }, y: { scale: 'y', field: 'y' } } } }],
 } as never
 
-describe('worker offload (R11.4)', () => {
+describe('worker offload', () => {
   afterEach(() => { document.body.innerHTML = '' })
 
   it('handles a request synchronously and returns a cloneable scene', () => {

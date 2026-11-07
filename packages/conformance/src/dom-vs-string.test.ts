@@ -2,7 +2,7 @@
 /**
  * The DOM descriptors (what `patchSceneDom` and `renderSceneToDomElement` build) must
  * describe the same document as the string renderer. Both take their attributes from
- * the per-element lists in render.ts (audit C43/T2); this compares the two over the
+ * the per-element lists in render.ts; this compares the two over the
  * whole corpus under the strict canonicalizer, so a structural difference (clips,
  * nesting, ordering) or a list that stopped being shared shows up as a paint difference.
  */

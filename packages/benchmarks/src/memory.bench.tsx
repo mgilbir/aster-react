@@ -10,6 +10,9 @@ import { table, fmt } from './stats.js'
 import { waitForSettle, waitForSvg } from './settle.js'
 import type { ChartKind } from './fixtures.js'
 import type { EmbedName } from './embeds.js'
+import { cli } from '../../../scripts/lib/cli.mjs'
+
+cli({ url: import.meta.url, flags: { cycles: 'eq', kinds: 'eq', points: 'eq' } })
 
 declare const gc: (() => void) | undefined
 

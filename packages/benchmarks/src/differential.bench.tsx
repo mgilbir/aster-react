@@ -12,6 +12,9 @@
 import { performance } from 'node:perf_hooks'
 import { ensureBuilt } from './ensure-built.js'
 import { summarize, table, fmt, type Summary } from './stats.js'
+import { cli } from '../../../scripts/lib/cli.mjs'
+
+cli({ url: import.meta.url, flags: { changed: 'eq', points: 'eq', reps: 'eq' } })
 
 interface Case {
   name: string

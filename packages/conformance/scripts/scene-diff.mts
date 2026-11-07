@@ -1,5 +1,5 @@
 /**
- * R8.1–R8.3 gate: compare resolved scenes (scales, groups, items) against the
+ * Scene gate: compare resolved scenes (scales, groups, items) against the
  * real Vega scenegraph for every corpus spec.
  */
 import { readdirSync, readFileSync, existsSync } from 'node:fs'
@@ -9,6 +9,9 @@ import * as vl from 'vega-lite'
 import '@aster/core/geo'
 import '@aster/core/transforms'
 import { sceneDiff } from '../src/scene-diff.js'
+import { cli } from '../../../scripts/lib/cli.mjs'
+
+cli({ url: import.meta.url, flags: { filter: 'value', 'scales-only': 'bool' } })
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const CORPUS = join(HERE, '..', 'corpus')

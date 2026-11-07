@@ -8,7 +8,7 @@
  * `fill: #4c78a8` because `config.symbol` says so, a `rect` gets the `#4c78a8`
  * fill, a `line` its stroke and width, `text` its font and size. Vega-Lite specs
  * compile to a spec that restates most of these, which is why only raw Vega
- * specs ever showed the gap (N1). Applying the merged config once, at compile
+ * specs ever showed the gap. Applying the merged config once, at compile
  * time, is the general mechanism: no mark type is special-cased.
  */
 

@@ -1,7 +1,10 @@
 /**
  * Runtime: evaluate a CompiledChart against runtime inputs (data, size) into a
- * renderer-neutral SceneRoot. Static execution mode: everything is evaluated
- * eagerly per call; the caller re-evaluates when inputs change.
+ * renderer-neutral SceneRoot. Each call evaluates eagerly from the inputs it is
+ * given. The chart also keeps a committed `IncrementalState` (see below), so a
+ * later call with `dataChanges`, `dataPulse` or `changedDatasets` reuses the
+ * transform steps, scales and mark items that cannot have changed; the result is
+ * the scene a fresh evaluation would produce.
  */
 import { compileExpr, ExpressionParseError, type CompiledExpr, type ExpressionRuntime } from './expression.js'
 import { scaleCallFailure, scaleRangeFailure } from './missing-scale.js'
@@ -104,7 +107,7 @@ export interface DatasetState {
   aliased?: Array<ReadonlySet<string> | undefined>
 }
 
-/** Min/max census of a continuous data-driven scale domain (C11). */
+/** Min/max census of a continuous data-driven scale domain. */
 interface ContCensus {
   data: string
   field: string
@@ -138,7 +141,7 @@ interface ScaleEntry {
 
 /**
  * Everything the incremental path remembers about the previous evaluation of
- * one compiled chart (audit T1). The compiled IR is immutable; this object is the
+ * one compiled chart. The compiled IR is immutable; this object is the
  * ONLY place per-chart evaluation memory lives, so correctness no longer
  * depends on how many times per evaluation `buildScales`/`buildDatasets` run:
  *
@@ -160,13 +163,13 @@ interface IncrementalState {
   scales: Map<string, Scale>
   scaleEntries: Map<string, ScaleEntry>
   datasets: Map<string, DatasetState>
-  /** Top-level mark groups, keyed by compiled-mark identity (C4). */
+  /** Top-level mark groups, keyed by compiled-mark identity. */
   groups: Map<CompiledMark, SceneGroup>
   /** True once a fast path updated a structure in place (see above). */
   stale: boolean
   /** Where the view's id counter stood (see identifier-ids.ts): the next evaluation numbers new rows from here. */
   idCounter: number
-  /** The datasets of group scopes, by instance and name: what the pipeline read and made (see `runScopedData` in incremental-engine.ts). */
+  /** The datasets of group scopes, by instance and name: what the pipeline read and made (see `runScopedData` below). */
   scoped: Map<string, ScopedRun>
   /** The items of each mark (by instance) whose transforms number them: the numbers an item keeps (see `transformMarkItems`). */
   numbered: Map<string, readonly SceneItem[]>
@@ -238,7 +241,7 @@ function beginTxn(engine: IncrementalEngine, chart: CompiledChart, unchanged?: D
  * Fingerprint of everything that feeds expression evaluation and encoding
  * besides the data: the signal params (width/height included). Typed and
  * structural (fingerprint.ts), so a derived object-valued signal that is
- * re-created each round (`[0, width]`) hashes equal when unchanged (C57).
+ * re-created each round (`[0, width]`) hashes equal when unchanged.
  */
 function paramFpOf(params: Record<string, unknown>): string {
   const parts: string[] = []
@@ -260,6 +263,8 @@ function gradientDefId(direction: 'horizontal' | 'vertical', stops: ReadonlyArra
 
 /** Cached recursive bounds for unchanged top-level mark groups. */
 const GROUP_BOUNDS = new WeakMap<SceneGroup, Bounds>()
+/** The gradient definitions a leaf mark's items use, in item order: a group that is reused, or updated in part, brings them to the scene's defs. */
+const GROUP_GRADIENTS = new WeakMap<SceneGroup, SceneDef[]>()
 
 /**
  * Undo record for a mark whose items array was updated IN PLACE: the length it
@@ -268,7 +273,7 @@ const GROUP_BOUNDS = new WeakMap<SceneGroup, Bounds>()
 interface ItemsUndo { oldLen: number; idx: number[]; items: SceneItem[] }
 
 /**
- * Persistent-scene sharing without mutating a returned scene (C52).
+ * Persistent-scene sharing without mutating a returned scene.
  *
  * An append / same-length update advances the engine-owned items array in place
  * (O(changes)) and hands it to the NEW group. The SUPERSEDED group — the one in
@@ -375,6 +380,12 @@ interface AbortPoint {
   /** the pass failed in the labels of the gradient legend at `legend`, an operator ranked after all the others of the scope */
   labels?: true
   late?: boolean
+  /**
+   * the failing encode (`mark`) reads a scale ranked late (see scaleIsLate): vega ranks it after every operator that reads no late
+   * scale, so the guides over scales that are not late were made, and those over late scales (made after this mark's encode, as
+   * the mark is declared before them) were not
+   */
+  lateScale?: true
   /** a projection of the instance's scope could not be made (nothing else of it was) */
   projection?: true
   /** a signal of the instance's scope threw (the first operators of the scope: nothing else of it was made) */
@@ -563,6 +574,8 @@ interface EvalContext {
   markItems: Map<string, SceneItem[]>
   /** The container of each named mark built so far (its type and items; a group mark's are its group items): what a `label` transform avoids or labels. */
   markContainers: Map<string, { marktype: string; items: SceneItem[] }>
+  /** The gradient definitions the leaf mark being made registers (merged into the scene's defs when the mark is done: see `evaluateMark`). */
+  markGradients?: { defs: SceneDef[]; /** only some of the mark's items were encoded (a pulse): the rest bring their gradients from the previous group */ partial: boolean }
 }
 
 /**
@@ -613,7 +626,7 @@ function stepOf(p: AbortPoint): number {
 
 /** How many of the instance's axes and legends the pass that stopped at `cut` began (one that failed inside is part-made). */
 const madeAxes = (cut: AbortPoint): number => Math.max(0, cut.axis + (cut.inside && cut.legend === undefined ? 1 : 0))
-const madeLegends = (cut: AbortPoint): number => (cut.title || cut.labels || cut.lateSignal ? Infinity : cut.legend === undefined ? 0 : cut.legend + (cut.inside ? 1 : 0))
+const madeLegends = (cut: AbortPoint): number => (cut.title || cut.labels || cut.lateSignal || cut.lateScale ? Infinity : cut.legend === undefined ? 0 : cut.legend + (cut.inside ? 1 : 0))
 /** Whether the pass that stopped at `cut` made the marks of the instance it stopped in (they are ranked after its axes only). */
 const madeMarks = (cut: AbortPoint): boolean => cut.legend !== undefined || cut.mark !== undefined || cut.title === true || cut.labels === true || cut.lateSignal === true
 
@@ -653,7 +666,7 @@ function prepareChartCtx(
   // The deadline belongs to the enclosing limits scope (evaluateChart /
   // getChartInfo / renderSpec / session), so one wall clock covers the whole
   // call -- the `fit` loop re-enters this function per iteration and must not
-  // restart the budget (C7).
+  // restart the budget.
   const meter = activeMeter()
   const deadline = meter?.clock.deadline ?? undefined
   const checkDeadline = (phase = 'evaluation'): void => {
@@ -943,7 +956,7 @@ function resolveProjectionParam(ctx: EvalContext, v: unknown): unknown {
   return v
 }
 
-/** Build the d3-geo projection one compiled definition describes, in the current context. */
+/** Build the projection one compiled definition describes, in the current context. */
 function buildProjectionOf(ctx: EvalContext, p: CompiledProjection): unknown {
   const build = requireGeo() // throws an actionable error if the geo addon is absent
   // (the type is a parameter like any other: `type: {signal: "projectionName"}`)
@@ -1101,12 +1114,12 @@ export const DATA_DEPENDENT_EXPR = /\b(data|indata|domain|range|scale|bandwidth|
  * current signal params (vega-expression rewrites bare identifiers to the
  * `$`-prefixed params our interpreter binds). Expressions that depend on not-yet
  * resolved values throw and are skipped for this round. Returns whether any
- * value changed (drives the fixed-point loop). Values compare structurally
- * (C57): an unchanged object-valued signal such as `[0, width]` is a fresh array
+ * value changed (drives the fixed-point loop). Values compare structurally: an
+ * unchanged object-valued signal such as `[0, width]` is a fresh array
  * every round and must not count as a change.
  *
  * Resolved values live in `ctx.signalParams` for THIS evaluation only: the
- * compiled chart is never written (C17), so an evaluation is a pure function of
+ * compiled chart is never written, so an evaluation is a pure function of
  * (compiled spec, input).
  *
  * `staticOnly` resolves just the signals that do not read datasets or scales.
@@ -1407,7 +1420,7 @@ function buildAxisAndLegend(
     const axis = resolveAxisOrient(axis0, ctx)
     const group = buildAxis(axis, ctx, axisIndex)
     if (group) {
-      // Carry guide identity for the accessible tree (R10.6) without changing
+      // Carry guide identity for the accessible tree without changing
       // the serialized SVG: the fields are scene metadata only.
       const meta = group as unknown as { zindex?: number; orient?: string; scale?: string; title?: string; aria?: boolean; grid?: boolean; format?: unknown; formatType?: unknown }
       // (the mark definition reads these as written -- vega-parser marks/definition.js: `+zindex || undefined`, `aria`,
@@ -1910,7 +1923,7 @@ function markScaleNames(mark: CompiledMark, chart: CompiledChart): string[] {
  * context (signals, size, overrides), each dataset it reads (closed over
  * dependencies), and each scale it reads (by object identity). Group marks
  * (facets, trellises, scoped scopes) are always rebuilt: their layout is
- * written by later passes, so reusing their objects is not sound (C14).
+ * written by later passes, so reusing their objects is not sound.
  */
 function canReuseMarkGroup(mark: CompiledMark, ctx: EvalContext): boolean {
   const prev = ctx.prev
@@ -2036,7 +2049,7 @@ function buildContentPass(
   // the previous scene's group object as-is, and marks over a changed dataset
   // splice theirs (item identity preserved for the DOM patcher). Groups are
   // matched by COMPILED-MARK IDENTITY, never by source dataset or name: two
-  // layers over one dataset, or several unnamed marks, are distinct (C4).
+  // layers over one dataset, or several unnamed marks, are distinct.
   const items: SceneGroup[] = []
 
   // 1) Build marks (plot area)
@@ -2048,6 +2061,9 @@ function buildContentPass(
     if (prevGroup && canReuseMarkGroup(mark, ctx)) {
       items.push(prevGroup)
       ctx.draft.groups.set(mark, prevGroup)
+      // (its items are not encoded again: their gradients are the group's)
+      const keptGradients = GROUP_GRADIENTS.get(prevGroup)
+      if (keptGradients !== undefined) addDefs(ctx, keptGradients)
       // (the numbers its items hold are kept with them)
       const key = numberedKey(mark, ctx)
       const kept = ctx.prev?.numbered.get(key)
@@ -2102,7 +2118,7 @@ function buildContentPass(
   if (layoutError !== undefined && cut === undefined) failPass(ctx, { path: ctx.scope.last ?? [], axis: Infinity, late: true, layout: { items: [[]], at: 0 } }, layoutError.error)
 
   // Top-level title. (A pass that stopped at a failing dataset or signal never made it: it is ranked after them.)
-  const titleGroup = (stopped && !cut!.title && !cut!.labels && !cut!.lateSignal) || ctx.datasetAborted ? null : withoutLateReads(ctx, () => buildTitleGroup(ctx.chart.title, items, width, height, ctx.rawGuides, ctx, undefined, ctx.chart.autosize === 'fit' || ctx.chart.autosize === 'fit-x' || ctx.chart.autosize === 'fit-y'))
+  const titleGroup = (stopped && !cut!.title && !cut!.labels && !cut!.lateSignal && !cut!.lateScale) || ctx.datasetAborted ? null : withoutLateReads(ctx, () => buildTitleGroup(ctx.chart.title, items, width, height, ctx.rawGuides, ctx, undefined, ctx.chart.autosize === 'fit' || ctx.chart.autosize === 'fit-x' || ctx.chart.autosize === 'fit-y'))
   if (titleGroup) items.push(titleGroup)
   // The root group's width / height are the view's `width` / `height` signals (0
   // for a composition that sizes only its children), whatever the grid inside covers.
@@ -2137,7 +2153,7 @@ function buildContentPass(
  * usable immediately; `commit()` makes this evaluation the base the next
  * incremental one starts from. A host that runs post-evaluation checks (the
  * session's limits) commits only after they pass, so a rejected evaluation can
- * never become the state later pulses are relative to (C16).
+ * never become the state later pulses are relative to.
  */
 export interface PendingEvaluation {
   scene: SceneRoot
@@ -2353,7 +2369,9 @@ export function datasetsOfScene(scene: SceneRoot): ReadonlyMap<string, readonly 
 }
 
 /**
- * Compute chart metadata (size, padding, scales) without building the full scene.
+ * Compute chart metadata (size, padding, scales). This evaluates the chart once, as
+ * `evaluateChart` does, and reads the metadata off the evaluated scene
+ * (`chartInfoFromScene`); a host that already holds the scene can call that instead.
  * Useful for interaction, brushing, crosshair, etc.
  */
 export function getChartInfo(spec: VgSpec, input: RuntimeInput = {}): ChartInfo {
@@ -2363,7 +2381,7 @@ export function getChartInfo(spec: VgSpec, input: RuntimeInput = {}): ChartInfo 
 function getChartInfoImpl(spec: VgSpec, input: RuntimeInput): ChartInfo {
   // ONE evaluation: the info is read off the evaluated scene, so it is the scene's own plot size,
   // padding and scales -- under autosize `fit`/`pad` too, where the size the scales were built for
-  // is the fitted one, not the spec's (C53). (This used to prepare a second, unfitted context and
+  // is the fitted one, not the spec's. (This used to prepare a second, unfitted context and
   // then evaluate the whole chart again.)
   return chartInfoFromScene(evaluateOnce(compileChart(spec), input))
 }
@@ -2489,7 +2507,7 @@ function resolveSize(size: SizeSpec, override: number | undefined, signals: Reco
 
 
 // ---------------------------------------------------------------------------
-// Incremental pulse propagation (R13)
+// Incremental pulse propagation
 // ---------------------------------------------------------------------------
 
 export type StepTransformContext = TransformContext & {
@@ -2536,7 +2554,7 @@ export function withCarry<T>(tctx: Pick<TransformContext, 'ids'>, carry: readonl
  * A published pulse in the engine's two canonical shapes. A same-length update
  * (`{changed}`) is exactly an append-only pulse whose base is the current length
  * and that appends nothing, so ONE set of per-transform fast paths serves both
- * (C13: there used to be a second, same-length-only engine with separate state).
+ * (there used to be a second, same-length-only engine with separate state).
  */
 function normalizePulse(p: StepPulse, rowCount: number): StepPulse {
   if (p.from || p.appendOnly || p.added?.length || p.removed?.length) return p
@@ -2663,7 +2681,7 @@ function buildDatasetsOf(ctx: EvalContext, inputData: Record<string, unknown[]>)
       const given = ownGet(inputData, name) as Row[] | undefined
       if (given == null && (d as { url?: unknown }).url != null) {
         // A url dataset nobody resolved would render as an empty chart with no
-        // hint why (C60): fail loudly and say how to fix it.
+        // hint why: fail loudly and say how to fix it.
         throw new Error(
           `[aster] dataset "${name}" has a url but no data was loaded for it; resolve url datasets first: ` +
           `import { loadSpecData } from "@aster/core/load" and render await loadSpecData(spec, { baseURL, ... }), ` +
@@ -2676,7 +2694,7 @@ function buildDatasetsOf(ctx: EvalContext, inputData: Record<string, unknown[]>)
       if (given != null) { inputs = [given]; raw = true }
     }
     // Inline values, host `input.data`, a `source` copy and a loaded dataset all
-    // count against maxRows here, nested group data included (C49).
+    // count against maxRows here, nested group data included.
     checkRowCount(rows.length, `dataset "${name}"`)
     if (inPulse) inPulse = normalizePulse(inPulse, rows.length)
     let outPulse: StepPulse | null = inPulse
@@ -3018,7 +3036,7 @@ function onDemandBuilder(ctx: EvalContext, sources: ReadonlyMap<string, unknown>
   }
 }
 
-/** Snapshot resolved scales into plain data for the scene differential (R8.1/R8.2). */
+/** Snapshot resolved scales into plain data for the scene differential. */
 function snapshotScales(scales: Map<string, Scale>): Array<{ name: string; type: string; domain: unknown[]; range: unknown[]; bandwidth?: number; samples?: [unknown, unknown] }> {
   const out: Array<{ name: string; type: string; domain: unknown[]; range: unknown[]; bandwidth?: number; samples?: [unknown, unknown] }> = []
   for (const [name, scale] of scales) {
@@ -3117,7 +3135,7 @@ function freshDiscCensus(dom: { data: string; field: string }, rows: Row[]): Dis
 /**
  * Advance a continuous min/max census by a pulse, or return null when the domain
  * can no longer be proven unchanged (a value left [lo,hi], or the LAST row
- * holding the min/max moved away: the extreme itself moves — C11).
+ * holding the min/max moved away: the extreme itself moves).
  *
  * An append-only pulse (which includes the same-length form) updates `vals` in
  * place; the caller has claimed the entry. Any other mapping builds a fresh
@@ -3257,7 +3275,7 @@ function buildScales(ctx: EvalContext): void {
   // unchanged is identical to the previous evaluation's scale: reuse it and skip
   // the O(n) domain re-scan. Reuse reads the COMMITTED state only; this call's
   // result goes to the draft, so calling buildScales several times per
-  // evaluation (fixed-point rounds, size re-resolution) is harmless (T1, C5).
+  // evaluation (fixed-point rounds, size re-resolution) is harmless.
   const fp = ctxFpOf(ctx)
   const reusable = ctx.incremental && prev !== undefined && prev.fp === fp
   const stamp = `${fp}#${ctx.dsEpoch}`
@@ -3273,7 +3291,7 @@ function buildScales(ctx: EvalContext): void {
     }
     // A `{ fields: [...] }` domain (vega-lite's layered charts: several datasets
     // contribute to one shared scale) is resolved by buildScale itself, from the
-    // CURRENT datasets, every evaluation (C12): the IR keeps the declared domain.
+    // CURRENT datasets, every evaluation: the IR keeps the declared domain.
     // Such a scale has no single-dataset census, so it is never census-reused.
     const multi = isMultiFieldDomain(s.domain)
     const prevEntry = prev?.scaleEntries.get(s.name)
@@ -3423,7 +3441,27 @@ function evaluateMark(
 ): SceneGroup | SceneGroup[] | null {
   // (the encode of a mark that reads what a late signal took with it never ran: its items are the join's)
   if (ctx.lateTaint !== undefined && !ctx.bareEncode && readsTaint({ encode: mark.encode, from: mark.from }, ctx)) ctx = { ...ctx, bareEncode: true }
-  const built = evaluateMarkItems(mark, ctx, prevGroup)
+  // A leaf mark's gradient definitions are collected apart, so the mark's list is exact: the scene's defs dedupe, and an item that
+  // is not encoded (a row a pulse leaves alone) registers nothing.
+  const outer = ctx.markGradients
+  const own = mark.type === 'group' ? undefined : { defs: [] as SceneDef[], partial: false }
+  ctx.markGradients = own
+  let built: SceneGroup | SceneGroup[] | null
+  try {
+    built = evaluateMarkItems(mark, ctx, prevGroup)
+  } finally {
+    ctx.markGradients = outer
+  }
+  if (own !== undefined) {
+    let defs = own.defs
+    if (built && !Array.isArray(built)) {
+      // (a pulse encoded only the changed rows: the group's list is read off its items, unless neither the rows before nor the ones
+      // encoded now had a gradient)
+      if (own.partial && (defs.length > 0 || (prevGroup != null && (GROUP_GRADIENTS.get(prevGroup)?.length ?? 0) > 0))) defs = gradientsOf(built.items as SceneItem[])
+      if (defs.length > 0) GROUP_GRADIENTS.set(built, defs)
+    }
+    addDefs(ctx, defs)
+  }
   // a named mark's items are what a later mark of `from: {data: <name>}` reads
   if (built && typeof mark.name === 'string') {
     // (a group mark's items are the group items themselves, a mark's are the items of its container)
@@ -3492,17 +3530,18 @@ function evaluateMarkItems(
     // re-encode of those items is skipped entirely (including the row clone).
     // `rows` is in dataset order (pulse indices refer to it).
     //
-    // A returned scene is never observably written (C52): structural updates
+    // A returned scene is never observably written: structural updates
     // build a new array; appends/edits advance the engine-owned array in place
     // and turn the superseded group into a lazy snapshot (supersedeItems).
     // One item per row: refuse an over-sized mark before encoding any of it, and
-    // sample the wall clock inside the encode loops (C7).
+    // sample the wall clock inside the encode loops.
     const meter = activeMeter()
     if (meter) meter.items(encodeRows.length, `mark ${mark.type} encoding`)
     const pulse = reusablePulse(mark, ctx, source, encodeRows.length, prevGroup)
     if (pulse) {
       const prevItems = prevGroup!.items as SceneItem[]
       const gen = ctx.gen
+      if (ctx.markGradients) ctx.markGradients.partial = true
       // (an interactive mark's transparent items are marked `_hit` as they are encoded: an update touches only these)
       hitMarked = true
       const hittable = mark.interactive !== false
@@ -3697,7 +3736,7 @@ function evaluateMarkItems(
     }
   }
 
-  // Image URLs are spec-controlled: vet each through the URL policy (C93) so a
+  // Image URLs are spec-controlled: vet each through the URL policy so a
   // hostile spec cannot make the viewer's browser request arbitrary URLs.
   // Applied here, on the scene, so the string renderer, the DOM path and canvas
   // all see the same vetted items.
@@ -3746,7 +3785,7 @@ function evaluateMarkItems(
 
 /**
  * Hyperlinks (the `href` channel) pass the same URL policy as images and loaded
- * data (C93), here on the scene so every renderer sees vetted items. The
+ * data, here on the scene so every renderer sees vetted items. The
  * renderers additionally sanitize whatever they are handed (`sanitizeHref`,
  * vega-loader's rule), so with no policy a script URL is still never linked.
  */
@@ -3799,7 +3838,7 @@ interface FacetDef {
 }
 
 /**
- * The items a group mark produces (vega parse/mark.js + marks/data.js): one per
+ * The items a group mark produces (vega-parser parsers/mark.js + parsers/marks/data.js): one per
  * facet partition of the source data (first-appearance order, datum = the
  * partition's key fields plus any facet aggregate), one per datum of `from.data`,
  * or a single item with no source.
@@ -4551,13 +4590,50 @@ function encodePlan(encode: Record<string, EncodeValue | EncodeValue[]>): Encode
 function registerGradient(paint: object, ctx: EvalContext): void {
   if (!isGradientPaint(paint)) return
   const def = gradientDefOf(paint)
-  if (!ctx._defs.some((d) => d.id === def.id)) ctx._defs.push(def)
+  const into = ctx.markGradients?.defs ?? ctx._defs
+  if (!into.some((d) => d.id === def.id)) into.push(def)
+}
+
+/** The scene's defs take `defs` in order, each once. */
+function addDefs(ctx: EvalContext, defs: readonly SceneDef[]): void {
+  for (const def of defs) if (!ctx._defs.some((d) => d.id === def.id)) ctx._defs.push(def)
+}
+
+/** The definitions of the gradient paints (fill, then stroke, item by item) on `items`: what encoding all of them registers. */
+function gradientsOf(items: readonly SceneItem[]): SceneDef[] {
+  const defs: SceneDef[] = []
+  for (const it of items) {
+    const rec = it as unknown as Record<string, unknown>
+    for (const paint of [rec['fill'], rec['stroke']]) {
+      if (!isGradientPaint(paint)) continue
+      const def = gradientDefOf(paint)
+      if (!defs.some((d) => d.id === def.id)) defs.push(def)
+    }
+  }
+  return defs
 }
 
 /** A mark's encode threw: the pass stops there, and the items after the failing one are left unencoded. */
-function failEncode(ctx: EvalContext, e: unknown): void {
+function failEncode(ctx: EvalContext, encode: Record<string, EncodeValue | EncodeValue[]>, e: unknown): void {
   ctx.encodeAborted = true
-  failPass(ctx, { axis: Infinity, mark: ctx.scope.mark ?? 0 }, e)
+  failPass(ctx, { axis: Infinity, mark: ctx.scope.mark ?? 0, ...(encodeReadsLateScale(encode, ctx.scope, ctx.chart) ? { lateScale: true as const } : {}) }, e)
+}
+
+/**
+ * Whether the scale of this name that the scope declares is ranked late (see scaleIsLate). A scale of an enclosing scope is not: its
+ * operators ran before the instances of the nested scope were made, whatever their rank was among their own.
+ */
+function scaleNamedIsLate(scope: GuideScope, name: string, chart: CompiledChart): boolean {
+  const own = scopeScale(scope, name)
+  return own !== undefined && scaleIsLate(own, scope, chart)
+}
+
+/** Whether an encode reads a scale that is ranked late: by a `scale` entry, or by a call of `scale()` and its kin in an expression. */
+function encodeReadsLateScale(encode: Record<string, EncodeValue | EncodeValue[]>, scope: GuideScope, chart: CompiledChart): boolean {
+  const reads = newReads()
+  specReads(encode, reads)
+  for (const name of reads.scales) if (scaleNamedIsLate(scope, name, chart)) return true
+  return false
 }
 
 function resolveEncodeSet(encode: Record<string, EncodeValue | EncodeValue[]>, datum: Row, ctx: EvalContext, marktype: string): SceneItem {
@@ -4568,7 +4644,7 @@ function resolveEncodeSet(encode: Record<string, EncodeValue | EncodeValue[]>, d
 
   // The encoded channel values (pixels, colours, ...) live on the scene ITEM and
   // are never written back onto the datum: `datum` is the caller's data row, and
-  // tooltips, signals and interactions read data values from it (C21). A data
+  // tooltips, signals and interactions read data values from it. A data
   // field named like a channel (`x`, `size`, `fill`) therefore keeps its value.
   // `defined` is evaluated against the data tuple, as Vega does.
   let definedValue: unknown
@@ -4576,7 +4652,7 @@ function resolveEncodeSet(encode: Record<string, EncodeValue | EncodeValue[]>, d
     try {
       definedValue = resolveEncodeProperty(plan.definedSpec, datum, ctx, binding)
     } catch (e) {
-      failEncode(ctx, e)
+      failEncode(ctx, encode, e)
       return {}
     }
   }
@@ -4597,11 +4673,11 @@ function resolveEncodeSet(encode: Record<string, EncodeValue | EncodeValue[]>, d
         case EK_SCALE_FIELD: {
           const spec = plainSpecs[i] as unknown as { scale: string; field: string }
           const bound = binding?.get(spec)
-          if (bound) resolved = scaleValue(bound.scale, bound.type, getField(datum, spec.field))
+          if (bound) resolved = scaleValue(bound.scale, getField(datum, spec.field))
           else {
             const s = ctx.scales.get(spec.scale)
             // (no such scale: the general resolver fails it, with the one error of a missing scale)
-            resolved = s ? scaleValue(s, ctx.scaleTypes.get(spec.scale), getField(datum, spec.field)) : resolveEncodeProperty(plainSpecs[i], datum, ctx, binding)
+            resolved = s ? scaleValue(s, getField(datum, spec.field)) : resolveEncodeProperty(plainSpecs[i], datum, ctx, binding)
           }
           break
         }
@@ -4637,7 +4713,7 @@ function resolveEncodeSet(encode: Record<string, EncodeValue | EncodeValue[]>, d
         break
       }
     }
-    failEncode(ctx, first)
+    failEncode(ctx, encode, first)
     return partial
   }
   // a gradient object as a paint (`{gradient: 'linear', stops: [...]}`): its definition joins the scene's defs
@@ -4817,17 +4893,13 @@ function encodeScaleOf(enc: EncodeEntry, datum: Row, ctx: EvalContext, binding?:
 }
 
 /** `_scale(scale, value)`: the engine's tolerant coercions around the scale call. */
-function scaleValue(s: Scale, type: string | undefined, raw: unknown): unknown {
+function scaleValue(s: Scale, raw: unknown): unknown {
   if (raw === undefined) {
     // A discrete domain can legitimately contain undefined (e.g. an aggregate
     // over a nominal field); vega still maps that domain entry through the scale
     // rather than dropping the channel.
     const dom = s.domain?.() as unknown[] | undefined
     if (!Array.isArray(dom) || !dom.includes(undefined)) return undefined
-  }
-  if ((type === 'time' || type === 'utc') && typeof raw === 'string') {
-    const dateObj = new Date(raw)
-    if (Number.isFinite(dateObj.getTime())) raw = dateObj
   }
   return s(raw)
 }
@@ -4855,7 +4927,7 @@ function resolveEncodeValueInternal(value: EncodeValue | undefined, datum: Row, 
   // `tail` is a product term added to `head` (the band step `_bandwidth(scale)*band`)
   let tail: number | undefined
   if (enc.scale != null) {
-    const { scale: s, type } = encodeScaleOf(enc, datum, ctx, binding)
+    const { scale: s } = encodeScaleOf(enc, datum, ctx, binding)
     // (a scale that is not there fails where the entry calls it, and reads a bandwidth of 0: see missing-scale.ts)
     if (enc.range != null) {
       // lerp(_range(scale), +range)
@@ -4865,7 +4937,7 @@ function resolveEncodeValueInternal(value: EncodeValue | undefined, datum: Row, 
     } else {
       if (hasHead) {
         if (!s) throw scaleCallFailure(enc.scale)
-        head = scaleValue(s, type, head)
+        head = scaleValue(s, head)
       }
       if (enc.band) {
         // + _bandwidth(scale) [* band]   (a band of exactly 1, or `true`, has no factor)
@@ -4876,7 +4948,7 @@ function resolveEncodeValueInternal(value: EncodeValue | undefined, datum: Row, 
           // (datum.extra ? _scale(scale, datum.extra.value) : value)
           const extra = (datum as { extra?: { value?: unknown } }).extra
           if (extra && !s) throw scaleCallFailure(enc.scale)
-          head = extra ? scaleValue(s!, type, extra.value) : hasHead ? (head as number) + term : term
+          head = extra ? scaleValue(s!, extra.value) : hasHead ? (head as number) + term : term
           hasHead = true
         } else {
           tail = term
@@ -5082,8 +5154,10 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext, index: number): S
   // (a layout ranked after the instance comes after its late labels too)
   let labels: 'none' | undefined = lateLabels && cut !== undefined && cut.layout === undefined && compareInstances(ctx.scope.path, cut.path) === 0
     && !(cut.labels === true && cut.legend !== undefined && index <= cut.legend) ? 'none' : undefined
-  let entriesFailed = false
-  const refusal = entriesRefusal({ type: legendType(spec, scaleType), scale: scale as never, count: tickCountRaw, minstep, values, formatSpecifier, formatType, locale: locale(undefined) })
+  // (the pass stopped in the encode of a mark that reads a late scale, in this very scope: a legend over a late scale is ranked after
+  // that encode, and only what the legend's group and its title read of nothing late was made)
+  let entriesFailed = cut?.lateScale === true && compareInstances(ctx.scope.path, cut.path) === 0 && scaleNamedIsLate(ctx.scope, channels[0]![1], ctx.chart)
+  const refusal = entriesFailed ? undefined : entriesRefusal({ type: legendType(spec, scaleType), scale: scale as never, count: tickCountRaw, minstep, values, formatSpecifier, formatType, locale: locale(undefined) })
   if (refusal !== undefined) {
     if (lateLabels) {
       // (the entries of a gradient whose labels are ranked last: the pass stops there, after the rest of the scope, and the legend
@@ -5110,7 +5184,7 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext, index: number): S
     // legend still has its gradient item, unencoded)
     const kind = legendType(spec, scaleType)
     if (kind === 'gradient') items.push({ _part: 'gradient', _kind: 'rect', _bare: true, x: 0, y: 0, path: 'M0,0h0v0h0Z' } as unknown as SceneItem)
-    return { marktype: 'group', role: 'legend', legendType: kind, _entriesPending: true, x: 0, y: 0, width: 0, height: 0, items } as unknown as SceneGroup
+    return { marktype: 'group', role: 'legend', legendType: kind, _entriesPending: true, x: 0, y: 0, width: 0, height: 0, items, ...(kind === 'discrete' ? { madeMarks: ['entry'] } : {}) } as unknown as SceneGroup
   }
   const host = guideHost(ctx)
   host.stopped = undefined
@@ -5193,20 +5267,15 @@ function makeGuideHost(ctx: EvalContext): GuideHost {
     entryScale: (name) => {
       const s = ctx.scales.get(name)
       if (!s) return undefined
-      const type = ctx.scaleTypes.get(name)
       // (scaleValue's coercions, written out here: the guides' scale calls do not share a call site with the marks')
-      const timeLike = type === 'time' || type === 'utc'
       const call = (raw: unknown): unknown => {
         if (raw === undefined) {
           const dom = s.domain?.() as unknown[] | undefined
           if (!Array.isArray(dom) || !dom.includes(undefined)) return undefined
-        } else if (timeLike && typeof raw === 'string') {
-          const dateObj = new Date(raw)
-          if (Number.isFinite(dateObj.getTime())) raw = dateObj
         }
         return s(raw)
       }
-      return { fn: s as (v: unknown) => unknown, timeLike, call, bandwidth: () => (typeof s.bandwidth === 'function' ? s.bandwidth() : 0) }
+      return { fn: s as (v: unknown) => unknown, call, bandwidth: () => (typeof s.bandwidth === 'function' ? s.bandwidth() : 0) }
     },
     expr: (code) => { try { return ctx.runtime.expr(code)({}, ctx.signalParams) } catch (e) { refuseUnrecoverable(e); throw new ExpressionFailure(e) } },
     exprDatum: (code, datum) => { try { return ctx.runtime.expr(code)(datum, ctx.signalParams) } catch (e) { refuseUnrecoverable(e); throw new ExpressionFailure(e) } },
@@ -5652,12 +5721,12 @@ function buildAxis(axis: CompiledAxis, ctx: EvalContext, index: number): SceneGr
   // thins the count)
   const count = labelTickCount(axis, scale, count0, ctx)
   let labelFormat: (v: unknown) => unknown
-  const labelCache: string[] = []
+  const labelCache: unknown[] = []
   try {
     labelFormat = axisLabelFormat(axis, scale, count, ctx, !!axisValues(axis, ctx))
     // vega's AxisTicks formats every tick as it makes the tuples: a format that throws (an invalid
     // specifier) is logged and the axis never gets its ticks
-    for (let i = 0; i < ticks.length; i++) labelCache[i] = String(labelFormat(ticks[i]))
+    for (let i = 0; i < ticks.length; i++) labelCache[i] = labelFormat(ticks[i])
   } catch (e) {
     return axisTicksFailed(axis, ctx, e, index)
   }
@@ -5769,8 +5838,12 @@ function vetGuideLinks(g: SceneGroup, ctx: EvalContext): void {
 }
 
 /** An axis's `values`: what a signal holds when the ticks are made; null, undefined, 0 or '' is no values at all. */
-/** Scales whose own ticks are strictly increasing (d3's) or the scale's distinct domain: no two ticks have one value. */
-const DISTINCT_TICK_SCALES = new Set(['linear', 'log', 'pow', 'sqrt', 'symlog', 'time', 'utc', 'band', 'point'])
+/**
+ * Scales whose own ticks are strictly increasing numbers (d3's) or the scale's distinct domain: no two ticks have one key. The
+ * calendar scales are not among them: their ticks are Dates, keyed by their string, which stops at the second, so ticks a few
+ * milliseconds apart are one key (vega draws one item for them).
+ */
+const DISTINCT_TICK_SCALES = new Set(['linear', 'log', 'pow', 'sqrt', 'symlog', 'band', 'point'])
 
 /** The tick count the labels are formatted for when the axis gives none: one per explicit value, else ten. */
 const tallyOfValues = (values: unknown): number => (Array.isArray(values) ? values.length : 10)
@@ -5870,7 +5943,7 @@ function axisTicks(axis: CompiledAxis, scale: Scale, ctx: EvalContext): unknown[
 
 function axisLabelFormat(axis: CompiledAxis, scale: Scale, count: number, ctx: EvalContext, noSkip = false): (v: unknown) => string {
   // (vega has no axis `labelExpr`: vega-lite compiles it to `encode.labels.update.text`,
-  // which is applied to the label items themselves - see applyGuideEncode - so a raw
+  // which is applied to the label items themselves - see `customize` in guide-encode.ts - so a raw
   // `labelExpr` is ignored here exactly as vega ignores it)
   // The format and its type are what vega's AxisTicks is given: the values themselves (a signal's is what it holds, whatever its
   // type), read by the scale's tick format as vega's is. A specifier that is no string is a time multi-format on a calendar

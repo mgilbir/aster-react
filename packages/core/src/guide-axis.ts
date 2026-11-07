@@ -339,7 +339,7 @@ const contains = (a: Bounds, b: Bounds): boolean => a.x1 <= b.x1 && a.x2 >= b.x2
 const ascending = (a: unknown, b: unknown): number => ((a as number) < (b as number) ? -1 : (a as number) > (b as number) ? 1 : 0)
 
 /**
- * Hide (opacity 0) the items whose boxes collide until no two neighbours do, always leaving the last one shown; items outside the
+ * Hide (opacity 0) the items whose boxes collide until no two neighbours do (the last one is brought back only when thinning leaves fewer than three shown); items outside the
  * range of the bound's scale are hidden too. The method is `greedy` (keep an item only if it clears the last one kept) or, for
  * anything else, `parity` (keep every other one). Items with no content to speak of (a box 1px across or less) take no part.
  * Returns the bounds of what is left shown, or null when there was nothing to decide.

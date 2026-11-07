@@ -7,19 +7,27 @@
  *   corpus/*.vl.json — Vega-Lite specs (compiled via vega-lite.compile)
  *   corpus/*.vg.json — raw Vega specs
  *
- * M0 conventions: specs must set explicit numeric width/height and
- * `autosize: 'none'` so layout is deterministic and comparable.
+ * Environment: ASTER_CORPUS_DIR picks another corpus directory, relative to the package (default `corpus`; the time-zone matrix uses
+ * `corpus-tz`); ASTER_CORPUS_FILTER keeps the entries whose name matches the regular expression.
+ * Exit codes: 0 every entry matches the oracle, 1 a difference (or a missing corpus directory), 2 bad usage (an unknown option).
+ *
+ * Convention: most entries set explicit numeric width/height and `autosize: 'none'` so
+ * layout is deterministic and comparable. Nothing enforces it, and not every entry
+ * follows it: some use another autosize or have no numeric width/height.
  */
 import { readdirSync, readFileSync, existsSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import * as vl from 'vega-lite'
-import '@aster/core/geo' // registers d3-geo/d3-contour for geo/projection/contour specs
+import '@aster/core/geo' // registers the geo projections and contours for geo/projection/contour specs
 import '@aster/core/transforms' // registers kde/regression/loess/pack/treemap/wordcloud/voronoi
 import { renderSpec } from '@aster/core'
 import { loadSpecData, TRUSTED_LOAD_OPTIONS } from '@aster/core/load'
 import { renderWithVega } from './render-vega.js'
 import { canonicalizeSvg, diffCanonical } from './normalize.js'
+import { cli } from '../../../scripts/lib/cli.mjs'
+
+cli({ url: import.meta.url })
 
 interface CorpusEntry {
   name: string

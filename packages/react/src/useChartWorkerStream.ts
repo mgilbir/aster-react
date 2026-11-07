@@ -1,10 +1,10 @@
 /**
- * Worker-backed streaming chart (R13). The worker owns the `ChartStream`; the
+ * Worker-backed streaming chart. The worker owns the `ChartStream`; the
  * main thread only ships batches and receives scenes/pulses. When no Worker is
  * available the same hook falls back to a local stream, so hosts need one code
  * path.
  *
- * Lifecycle: the stream is keyed on the spec CONTENT (plus capacity/policy and
+ * Lifecycle: the stream is keyed on the spec CONTENT (plus capacity/policy/maxQueuedRows and
  * the supplied `worker`). A parent re-render with an equal inline `spec`, a new
  * `workerFactory` arrow, or a changed `serialize` does not restart it and does
  * not discard streamed rows.
@@ -83,7 +83,7 @@ export interface WorkerChartStreamResult {
    */
   flushFailure: (StreamFlushFailure & { discarded: number }) | null
   pending: boolean
-  /** Increments each time the stream is (re)created (spec content, capacity, policy or worker changed). */
+  /** Increments each time the stream is (re)created (spec content, capacity, policy, maxQueuedRows or worker changed). */
   generation: number
   /**
    * Enqueue a batch. With a Worker the producer-side buffer applies the same

@@ -1,5 +1,5 @@
 /**
- * Streaming and backpressure (R13).
+ * Streaming and backpressure.
  *
  * `createChartSession` is pull-based: the host calls `evaluate`/`change` with a
  * snapshot. A live feed is push-based and may arrive faster than the renderer
@@ -87,7 +87,8 @@ export interface StreamBatch {
   /**
    * Explicit pulse for this batch. When every queued batch supplies a compatible
    * pulse, `flush` delivers the merged pulse without diffing the snapshots; when
-   * they cannot be composed it falls back to a snapshot diff (still correct).
+   * they cannot be composed the dataset is re-derived (`changedDatasets`, no pulse),
+   * which is always correct.
    */
   pulse?: StreamPulseInput
   signals?: Record<string, unknown>

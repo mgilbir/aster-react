@@ -1,7 +1,9 @@
 /**
- * One explicit regression per audit finding in the incremental core (C4, C5,
- * C11-C17, C52, C57). Each repro states the audit's own scenario and compares the
- * incremental result with a fresh `evaluateChart(compileChart(spec))`; the
+ * One explicit regression per known defect class of the incremental core (layer
+ * identity, stale scales, domain census, multi-dataset domains, transform state, group
+ * reuse, the session cache key, rejected evaluations, compiled-chart immutability,
+ * aggregate order, derived-signal caches). Each repro states the original scenario and
+ * compares the incremental result with a fresh `evaluateChart(compileChart(spec))`; the
  * property/fuzz oracle (incremental-oracle.test.ts) covers the general shape.
  */
 import { describe, it, expect } from 'vitest'
@@ -24,7 +26,7 @@ const sym = (dataset: string, scale = 'x', field = 'v', extra: Record<string, un
   type: 'symbol', from: { data: dataset }, encode: { update: { x: { scale, field }, y: { value: 5 }, size: { value: 20 } } }, ...extra,
 })
 
-describe('C4: layered marks over one dataset keep their own identity', () => {
+describe('layered marks over one dataset keep their own identity', () => {
   // A fixed domain keeps the scale unchanged by the update, which is exactly
   // when whole-item reuse engages (and when mark matching used to go wrong).
   const spec = {
@@ -56,7 +58,7 @@ describe('C4: layered marks over one dataset keep their own identity', () => {
   })
 })
 
-describe('C5: stale scales never leave unchanged items at old positions', () => {
+describe('stale scales never leave unchanged items at old positions', () => {
   it('values [10,0,5,8], row 0 -> 3', () => {
     const spec = { ...BASE, data: [{ name: 't', values: [] }], scales: [lin('x', { data: 't', field: 'v' })], marks: [sym('t')] }
     const s = createChartSession()
@@ -68,7 +70,7 @@ describe('C5: stale scales never leave unchanged items at old positions', () => 
   })
 })
 
-describe('C11: the domain census shrinks', () => {
+describe('the domain census shrinks', () => {
   const spec = { ...BASE, data: [{ name: 't', values: [] }], scales: [lin('x', { data: 't', field: 'v' }, { zero: false })], marks: [sym('t')] }
   it('both rows holding the minimum move up, in two successive updates', () => {
     const chart = compileChart(spec as never)
@@ -106,7 +108,7 @@ describe('discrete domain census', () => {
   })
 })
 
-describe('C12: multi-dataset domains are re-resolved every evaluation', () => {
+describe('multi-dataset domains are re-resolved every evaluation', () => {
   const spec = {
     ...BASE,
     data: [{ name: 'a', values: [] }, { name: 'b', values: [] }],
@@ -130,7 +132,7 @@ describe('C12: multi-dataset domains are re-resolved every evaluation', () => {
   })
 })
 
-describe('C13: one incremental transform engine, consistent with a full re-derive', () => {
+describe('one incremental transform engine, consistent with a full re-derive', () => {
   const run = (transform: unknown[], rows: Array<Record<string, unknown>>, steps: Array<{ rows: Array<Record<string, unknown>>; hint: Record<string, unknown> }>, field = 'v') => {
     const spec = {
       ...BASE,
@@ -188,7 +190,7 @@ describe('C13: one incremental transform engine, consistent with a full re-deriv
   })
 })
 
-describe('C14: a group is reused only when everything it reads is unchanged', () => {
+describe('a group is reused only when everything it reads is unchanged', () => {
   const textGroup = (dataset: string) => ({ type: 'group', marks: [{ type: 'text', from: { data: dataset }, encode: { update: { x: { scale: 'x', field: 'v' }, y: { value: 5 }, text: { field: 'v' } } } }] })
   it('a child mark reading top-level data sees an append', () => {
     const spec = { ...BASE, data: [{ name: 'table', values: [] }], scales: [lin('x', [0, 10])], marks: [textGroup('table')] }
@@ -261,7 +263,7 @@ describe('signal and data change together', () => {
   })
 })
 
-describe('C15: the session no-op cache key is complete and typed', () => {
+describe('the session no-op cache key is complete and typed', () => {
   const spec = { ...BASE, data: [{ name: 't', format: { type: 'json' }, values: '[{"v":1},{"v":2}]' }], scales: [lin('x', [0, 10])], marks: [sym('t')] }
   it('replacing an inline JSON string invalidates the cache', () => {
     const s = createChartSession()
@@ -307,7 +309,7 @@ describe('C15: the session no-op cache key is complete and typed', () => {
   })
 })
 
-describe('C16: a rejected evaluation commits nothing', () => {
+describe('a rejected evaluation commits nothing', () => {
   it('evaluate(A) -> evaluate(B, maxItems) throws -> evaluate(A) returns A', () => {
     const mk = (n: number) => ({ ...BASE, data: [{ name: 't', values: Array.from({ length: n }, (_, i) => ({ v: i })) }], scales: [lin('x', [0, 10])], marks: [sym('t')] })
     const A = mk(3)
@@ -327,7 +329,7 @@ describe('C16: a rejected evaluation commits nothing', () => {
     // The formula throws on the appended row (no `obj`) AFTER it already
     // re-derived the changed row 0: the in-place fast path had half-updated its
     // cache when it died. The failure is a LIMIT violation inside the expression: a
-    // plain TypeError is logged and recovered like vega's (C90) and does not throw,
+    // plain TypeError is logged and recovered like vega's and does not throw,
     // while a limit refusal never is.
     const spec = {
       ...BASE,
@@ -352,7 +354,7 @@ describe('C16: a rejected evaluation commits nothing', () => {
   })
 })
 
-describe('C17: evaluateChart does not write the compiled chart', () => {
+describe('evaluateChart does not write the compiled chart', () => {
   it('an event-only signal is not promoted to a static update', () => {
     const spec = {
       ...BASE, signals: [{ name: 'count', on: [{ events: 'click', update: '(count||0)+1' }] }],
@@ -378,7 +380,7 @@ describe('C17: evaluateChart does not write the compiled chart', () => {
   })
 })
 
-describe('C52: aggregate order and previous scenes', () => {
+describe('aggregate order and previous scenes', () => {
   it('first-occurrence group order, incremental === full', () => {
     const spec = {
       ...BASE,
@@ -412,7 +414,7 @@ describe('C52: aggregate order and previous scenes', () => {
   })
 })
 
-describe('C57: object-valued derived signals do not defeat the caches', () => {
+describe('object-valued derived signals do not defeat the caches', () => {
   it('unchanged items keep their identity across an update when a derived signal is an array', () => {
     const spec = {
       ...BASE, signals: [{ name: 'rng', update: '[0, width]' }],
@@ -434,7 +436,7 @@ describe('C57: object-valued derived signals do not defeat the caches', () => {
   })
 })
 
-describe('C52: lazily materialised superseded scenes', () => {
+describe('lazily materialised superseded scenes', () => {
   const spec = { ...BASE, data: [{ name: 't', values: [] }], scales: [lin('x', [0, 100])], marks: [sym('t')] }
   const ap = (base: number) => ({ t: { changed: [] as number[], appendOnly: true, baseLength: base, added: [[base, base + 1]] as Array<[number, number]> } })
   const rowsN = (n: number, bump = -1) => Array.from({ length: n }, (_, i) => ({ v: i === bump ? 77 : i }))
@@ -481,5 +483,57 @@ describe('C52: lazily materialised superseded scenes', () => {
     const alive = refs.slice(0, -2).filter((r) => r.deref() !== undefined).length
     expect(alive).toBe(0)
     expect(groups(newest)[0]!.items).toHaveLength(60)
+  })
+})
+
+describe('gradient paints keep their <defs> through an incremental evaluation', () => {
+  // A gradient object on an item is defined once in the scene's defs. Defs are collected while items are encoded, so an item
+  // that is not re-encoded (a reused mark, an unchanged row) must still bring its definition: the SVG references it by id.
+  const grad = (color: string) => ({ gradient: 'linear', stops: [{ offset: 0, color: 'white' }, { offset: 1, color }] })
+  const gradientIds = (scene: SceneRoot): string[] => (scene.defs ?? []).map((d) => d.id)
+  const svgDefs = (scene: SceneRoot): string => renderSceneToSvg(scene).match(/<defs>[\s\S]*<\/defs>/)?.[0] ?? ''
+
+  it('a mark over unchanged data keeps its gradient when another mark is re-encoded', () => {
+    const spec = {
+      ...BASE,
+      data: [{ name: 't', values: [{ x: 0 }, { x: 1 }, { x: 2 }] }],
+      marks: [
+        { type: 'rect', from: { data: 't' }, encode: { update: { x: { signal: '10 * datum.x' }, width: { value: 5 }, height: { value: 5 }, fill: { value: grad('red') } } } },
+        { type: 'rect', encode: { update: { x: { value: 50 }, y: { value: 50 }, width: { value: 20 }, height: { value: 20 }, fill: { value: grad('blue') } } } },
+      ],
+    }
+    const rows = [{ x: 0 }, { x: 1 }, { x: 2 }]
+    const next = [{ x: 0 }, { x: 5 }, { x: 2 }]
+    const chart = compileChart(spec as never)
+    evaluateChart(chart, { data: { t: rows } })
+    const inc = evaluateChart(chart, { data: { t: next }, dataChanges: { t: [1] } })
+    const full = fresh(spec, { data: { t: next } })
+    expect(gradientIds(inc)).toEqual(gradientIds(full))
+    expect(gradientIds(full)).toHaveLength(2)
+    expect(svgDefs(inc)).toBe(svgDefs(full))
+  })
+
+  it('rows that are not re-encoded keep their gradients, and a gradient nothing uses any more is dropped', () => {
+    const spec = {
+      ...BASE,
+      data: [{ name: 't', values: [] }],
+      marks: [{ type: 'rect', from: { data: 't' }, encode: { update: { x: { signal: '10 * datum.x' }, width: { value: 5 }, height: { value: 5 }, fill: { signal: "datum.c === 'a' ? {gradient: 'linear', stops: [{offset: 0, color: 'white'}, {offset: 1, color: 'red'}]} : datum.c === 'b' ? {gradient: 'linear', stops: [{offset: 0, color: 'white'}, {offset: 1, color: 'blue'}]} : 'green'" } } } }],
+    }
+    const rows = [{ x: 0, c: 'a' }, { x: 1, c: 'b' }, { x: 2, c: 'b' }]
+    const chart = compileChart(spec as never)
+    evaluateChart(chart, { data: { t: rows } })
+    // row 0 (the only red gradient) is re-encoded as a plain colour; row 1 (a blue one) is untouched
+    const next = [{ x: 0, c: 'z' }, { x: 1, c: 'b' }, { x: 2, c: 'b' }]
+    const inc = evaluateChart(chart, { data: { t: next }, dataChanges: { t: [0] } })
+    const full = fresh(spec, { data: { t: next } })
+    expect(gradientIds(full)).toHaveLength(1)
+    expect(gradientIds(inc)).toEqual(gradientIds(full))
+    expect(svgDefs(inc)).toBe(svgDefs(full))
+    // and the other way: the plain row takes the red gradient back
+    const back = [{ x: 0, c: 'a' }, { x: 1, c: 'b' }, { x: 2, c: 'b' }]
+    const inc2 = evaluateChart(chart, { data: { t: back }, dataChanges: { t: [0] } })
+    const full2 = fresh(spec, { data: { t: back } })
+    expect(gradientIds(inc2)).toEqual(gradientIds(full2))
+    expect(svgDefs(inc2)).toBe(svgDefs(full2))
   })
 })

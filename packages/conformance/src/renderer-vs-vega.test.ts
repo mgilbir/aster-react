@@ -1,7 +1,7 @@
 /**
  * Targeted differentials against the real Vega runtime, judged by the STRICT
  * canonicalizer (normalize.ts). Each block pins one class of renderer defect the
- * strict oracle exposed (audit C38, C44, C45, C46, C48, N1, N2) over the general
+ * strict oracle exposed over the general
  * shape of the problem — every mark type, every paint channel, every axis
  * property — not just the one value that first failed.
  *
@@ -54,7 +54,7 @@ function markSpec(type: string, extra: Record<string, unknown> = {}, markProps: 
   return { ...FRAME, data: DATA, marks: [{ type, from: { data: 't' }, encode: { update: { ...MARKS[type], ...extra } }, ...markProps }] }
 }
 
-describe('N1: raw Vega specs get Vega\'s default config', () => {
+describe('raw Vega specs get Vega\'s default config', () => {
   // no fill / size / stroke / font encoded: every value comes from the default config
   const BARE: Record<string, Record<string, unknown>> = {
     symbol: { x: { field: 'a' }, y: { field: 'b' } },
@@ -74,7 +74,7 @@ describe('N1: raw Vega specs get Vega\'s default config', () => {
     })
   }
 
-  it('the default symbol is size 64 filled #4c78a8 (the repro from the audit)', async () => {
+  it('the default symbol is size 64 filled #4c78a8', async () => {
     const spec: Spec = { width: 50, height: 50, padding: 0, autosize: 'none', marks: [{ type: 'symbol', encode: { update: { x: { value: 10 }, y: { value: 10 } } } }] }
     const svg = renderSpec(spec as never)
     expect(svg).toContain('fill="#4c78a8"')
@@ -94,7 +94,7 @@ describe('N1: raw Vega specs get Vega\'s default config', () => {
   })
 })
 
-describe('N2: custom SVG path strings as symbol shapes', () => {
+describe('custom SVG path strings as symbol shapes', () => {
   const SHAPES = [
     'M-1,-1L1,1L-1,1Z',
     'M0,-1A1,1,0,1,1,0,1A1,1,0,1,1,0,-1Z',
@@ -123,7 +123,7 @@ describe('N2: custom SVG path strings as symbol shapes', () => {
   })
 })
 
-describe('C48/C38: every paint channel reaches every mark kind', () => {
+describe('every paint channel reaches every mark kind', () => {
   const CHANNEL_VALUES: Array<[string, unknown[]]> = [
     ['opacity', [0.4, 0]],
     ['fillOpacity', [0.3]],
@@ -159,7 +159,7 @@ describe('C48/C38: every paint channel reaches every mark kind', () => {
   })
 })
 
-describe('C44: text', () => {
+describe('text', () => {
   const T = (extra: Record<string, unknown>): Spec => markSpec('text', extra)
   const CASES: Array<[string, Record<string, unknown>]> = [
     ['no align (Vega: start)', {}],
@@ -189,7 +189,7 @@ describe('C44: text', () => {
   })
 })
 
-describe('C46: area bounds include the baseline', () => {
+describe('area bounds include the baseline', () => {
   it('an area whose baseline lies far below its top edge grows the view like Vega', async () => {
     const spec: Spec = {
       width: 100, height: 100, padding: 5, autosize: 'pad',
@@ -213,7 +213,7 @@ describe('C46: area bounds include the baseline', () => {
   })
 })
 
-describe('C45: ids are deterministic per render and cannot collide across charts', () => {
+describe('ids are deterministic per render and cannot collide across charts', () => {
   const clipSpec = (w: number, h: number): Spec => ({
     width: w, height: h, padding: 5, autosize: 'none',
     data: DATA,
@@ -270,7 +270,7 @@ describe('C45: ids are deterministic per render and cannot collide across charts
   })
 })
 
-describe('C38: axis guide properties', () => {
+describe('axis guide properties', () => {
   const axisSpec = (props: Record<string, unknown>, config?: Record<string, unknown>): Spec => ({
     ...FRAME, width: 160, height: 100, padding: 5,
     ...(config ? { config: { axis: props } } : {}),

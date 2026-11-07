@@ -16,6 +16,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { CACHE_DIR, MANIFEST_PATH, sha256, verifyCache, type Manifest, type Source } from '../src/gallery/cache.js'
+import { cli } from '../../../scripts/lib/cli.mjs'
 
 const raw = (s: Source, path: string): string => `https://raw.githubusercontent.com/${s.repo}/${s.commit}/${path}`
 
@@ -77,6 +78,7 @@ async function regenerate(manifest: Manifest): Promise<void> {
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+  cli({ url: import.meta.url, flags: { regenerate: 'bool', verify: 'bool' } })
   const manifest = JSON.parse(readFileSync(MANIFEST_PATH, 'utf8')) as Manifest
   const flags = process.argv.slice(2)
   try {

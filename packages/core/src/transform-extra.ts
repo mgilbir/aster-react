@@ -1,6 +1,9 @@
 /**
- * Rare-layout transforms (stats, hierarchy layouts, wordcloud, voronoi).
- * Loaded by the `@aster/core/transforms` addon; the core bundle keeps only
+ * Rare-layout and statistics transforms: stats (kde, density, quantile,
+ * regression, loess, kde2d, isocontour, heatmap, dotbin), hierarchy and network
+ * layouts (nest, tree, treelinks, pack, partition, treemap, force), wordcloud,
+ * voronoi, crossfilter, resolvefilter, pie, cross, countpattern, and the geo
+ * ones (geopoint, geopath, geojson, linkpath). Loaded by the `@aster/core/transforms` addon; the core bundle keeps only
  * the transforms a plain chart uses. Shared internals come from transform.ts.
  */
 import { error, ownGet, sortData } from './util.js'
@@ -311,7 +314,7 @@ function crossRows(rows: Row[], t: Record<string, unknown>, ctx: TransformContex
   const n = rows.length
   // Without a filter the output is exactly n*n rows: refuse it up front. With a
   // filter the n*n candidates are still evaluated, so the wall clock is sampled
-  // inside the inner loop (C7).
+  // inside the inner loop.
   if (!test) checkRowCount(n * n, 'cross')
   for (let i = 0; i < n; ++i) {
     const left = rows[i]!

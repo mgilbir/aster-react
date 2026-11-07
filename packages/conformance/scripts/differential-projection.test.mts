@@ -5,7 +5,7 @@
  * points and path strings must be identical. See `differential-util.mts` for why nothing is
  * recorded (projections are trig-heavy, and trig differs in the last bit between V8 versions).
  * Types are case-insensitive, an unrecognised type throws, parameters apply in vega's order,
- * and `fit` with `size` / `extent` fits the projection to the data (audit C27, C63, C95).
+ * and `fit` with `size` / `extent` fits the projection to the data.
  */
 import { describe, expect, it } from 'vitest'
 import * as vega from 'vega'

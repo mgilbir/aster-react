@@ -1,5 +1,5 @@
 /**
- * Real-browser streaming benchmark (R13 / P0).
+ * Real-browser streaming benchmark.
  *
  * Drives one append per animation frame through two engines on the identical
  * spec/rows and measures frame pacing, DOM mutations and node count:
@@ -25,6 +25,9 @@ import { chromium } from 'playwright'
 import { summarize, table, fmt } from '../src/stats.js'
 import { ensureBuilt } from '../src/ensure-built.ts'
 import { checkStreamBench } from '../src/browser-floors.ts'
+import { cli } from '../../../scripts/lib/cli.mjs'
+
+cli({ url: import.meta.url, flags: { batch: 'eq', dense: 'eq', engines: 'eq', points: 'eq', policies: 'eq', renderers: 'eq', seconds: 'eq', 'vega-modes': 'eq' } })
 
 const THIS_DIR = dirname(fileURLToPath(import.meta.url))
 const PKG_DIR = dirname(THIS_DIR)

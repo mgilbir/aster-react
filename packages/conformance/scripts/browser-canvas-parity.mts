@@ -1,5 +1,5 @@
 /**
- * Chromium canvas parity gate (R9.1 / P2).
+ * Chromium canvas parity gate.
  *
  * The existing canvas differential replays recorded draw commands and runs in
  * jsdom; the SVG browser gate checks live text metrics but only for the SVG
@@ -24,6 +24,9 @@ import { build } from 'esbuild'
 import { chromium } from 'playwright'
 import * as vega from 'vega'
 import { gradientSpec, makeRng, UNPAINTABLE_KINDS } from './gradient-gen.mts'
+import { cli } from '../../../scripts/lib/cli.mjs'
+
+cli({ url: import.meta.url, flags: { limit: 'eq', filter: 'eq', browser: 'eq', pixel: 'eq', ratio: 'eq', mean: 'eq' } })
 
 const THIS_DIR = dirname(fileURLToPath(import.meta.url))
 const CONF_DIR = dirname(THIS_DIR)
@@ -37,7 +40,8 @@ const BROWSER = arg('browser', 'chromium') as 'chromium' | 'firefox' | 'webkit'
 //   PIXEL  a pixel differs when |dR|+|dG|+|dB|+|dA| > PIXEL (48 = 12/255 per channel on average)
 //   RATIO  an entry may have at most this fraction of differing pixels
 //   MEAN   and at most this mean per-channel difference over ALL pixels
-// Against vega's own canvas, 327 of 420 corpus entries are BIT-EXACT; the rest of the
+// Against vega's own canvas, 1156 of the 1216 entries compared are BIT-EXACT (`--pixel=0 --ratio=0 --mean=0`
+// counts them, Chromium, 2026-11-06); the rest of the
 // agreeing entries differ only by the 3-decimal rounding of path coordinates (Aster
 // paints most marks from the same path string the SVG renderer emits, vega's canvas from the
 // unrounded numbers; line, area and symbol marks are the exception: they are drawn unrounded, because

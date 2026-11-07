@@ -2,10 +2,10 @@
  * Dependency-injection registry for optional, heavy capabilities.
  *
  * The core bundle (scales, marks, layout, expressions, transforms) must not
- * statically pull `d3-geo` / `d3-contour` — a line/bar chart has no business
- * paying for projection clipping code. Instead, an opt-in addon entry
- * (`@aster/core/geo`) imports the d3 modules and registers their entry points
- * here before the first render:
+ * statically include the geo projections and contours — a line/bar chart has no
+ * business paying for projection clipping code. Instead, an opt-in addon entry
+ * (`@aster/core/geo`) registers Aster's own implementations of them (geo.ts,
+ * geo-projections.ts, geo-path.ts) here before the first render:
  *
  *   await import('@aster/core/geo')
  *
@@ -20,17 +20,17 @@ export interface ContourFeature {
 }
 
 export interface GeoRegistry {
-  /** d3-geo projection builder (see geo.ts); null until the addon is loaded. */
+  /** Projection builder (see geo.ts); null until the addon is loaded. */
   buildProjection: ((spec: unknown, width: number, height: number) => unknown) | null
-  /** GeoJSON -> SVG path through a d3-geo projection; null until loaded. */
+  /** GeoJSON -> SVG path through a projection; null until loaded. */
   projectedPath: ((projection: unknown, geo: unknown, pointRadius?: unknown) => string) | null
   /** A projected shape's path and the unrounded bounds [x1, y1, x2, y2] vega's bound pass sees, from one pass over the geometry; null until loaded. */
   projectedShape: ((projection: unknown, geo: unknown, pointRadius?: unknown) => { path: string; bounds: [number, number, number, number] | null }) | null
   /** The unrounded bounds [x1, y1, x2, y2] of a projected shape alone; null until loaded. */
   projectedBounds: ((projection: unknown, geo: unknown, pointRadius?: unknown) => [number, number, number, number] | null) | null
-  /** vega-projection's `defaultPath`: d3's geoPath with no projection (a `geopath` that names none draws raw coordinates). */
+  /** vega-projection's `defaultPath`: the path generator with no projection (a `geopath` that names none draws raw coordinates). */
   defaultPath: (() => unknown) | null
-  /** d3-contour marching squares over a raster grid; null until loaded. */
+  /** Marching squares over a raster grid; null until loaded. */
   contourRun: ((values: ArrayLike<unknown>, thresholds: ArrayLike<unknown>, size: ArrayLike<number>, smooth: boolean) => ContourFeature[]) | null
 }
 
@@ -58,8 +58,8 @@ export function requireGeo(): NonNullable<GeoRegistry['buildProjection']> {
 export type TransformFn = (rows: any[], params: Record<string, unknown>, ctx: any, sourceName?: string) => any[]
 
 /**
- * Registry for the rare-layout transforms (kde/quantile/regression/loess,
- * pack/partition/treemap, wordcloud, voronoi). The core bundle keeps only the
+ * Registry for the rare-layout and statistics transforms (the types are listed in
+ * `TRANSFORMS_ADDON_TYPES`, addons.ts). The core bundle keeps only the
  * transforms a plain chart uses; the opt-in addon entry (`@aster/core/transforms`)
  * registers the rest:
  *

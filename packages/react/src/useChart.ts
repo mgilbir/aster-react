@@ -60,7 +60,7 @@ export function useChart(spec: VgSpec, options: UseChartOptions = {}): UseChartR
 }
 
 // ---------------------------------------------------------------------------
-// Async data: Suspense / use() (R11.2)
+// Async data: Suspense / use()
 // ---------------------------------------------------------------------------
 
 /**
@@ -101,7 +101,7 @@ function optionsKey(options: UseSpecDataOptions): string {
 }
 
 /**
- * Stable promise for `loadSpecData(spec)` (R11.2), keyed by the spec object and
+ * Stable promise for `loadSpecData(spec)`, keyed by the spec object and
  * fetch implementation. The loader addon is imported lazily, so a host that
  * never uses URL datasets never bundles the csv/topojson readers.
  */

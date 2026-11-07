@@ -13,7 +13,7 @@ import type { SelectValue, SelectionInterval, ViewDomain } from './interaction.j
 
 // The public prop and handle types of `<Chart>`. They live apart from the component so the
 // two shells over `ChartCore` (`<Chart>` and `<SvgChart>`) and the parity tests that compare
-// them (`Chart.parity.types.ts`) share one definition.
+// them (`parity.assert.ts`) share one definition.
 
 export interface ChartProps {
   /**
@@ -23,11 +23,14 @@ export interface ChartProps {
    */
   spec: VgSpec | Promise<VgSpec>
   /**
-   * Pre-evaluated scene override (streaming): when provided, the chart renders
-   * this scene instead of evaluating the spec. `undefined` keeps the normal
-   * session path; `null` renders the loading/error state. Used by
+   * @internal Pre-evaluated scene override (streaming): when provided, the chart
+   * renders this scene instead of evaluating the spec. `undefined` keeps the
+   * normal session path; `null` renders the loading/error state. Used by
    * `<ChartStream>` / `<ChartWorkerStream>` so streamed scenes go through the
    * same DOM patcher, canvas renderer, interaction and a11y tree.
+   *
+   * Unstable, host-internal plumbing between those components and `<Chart>`: it
+   * is not covered by semver and may change or go away in any release.
    */
   sceneOverride?: SceneRoot | null
   data?: Record<string, unknown[]>
@@ -109,7 +112,7 @@ export interface ChartProps {
   /** Persisted interval rectangle to draw (the legacy controlled form of `selection`). */
   brush?: SelectionInterval | null
   /**
-   * Unified declarative selection (R10.2): either an interval or a point value.
+   * Unified declarative selection: either an interval or a point value.
    * Controlled when supplied (`select` wins when both are given);
    * `onSelectionChange` receives every change. A controlled or internal interval
    * is drawn as the persisted selection rectangle.
@@ -119,7 +122,7 @@ export interface ChartProps {
   select?: SelectValue | null
   onSelectionChange?: (value: SelectValue | null) => void
   /**
-   * Pan/zoom (R10.3): wheel, drag, pinch and keyboard. The in-flight state is
+   * Pan/zoom: wheel, drag, pinch and keyboard. The in-flight state is
    * uncontrolled unless `view` is supplied. Domains are fed back through the
    * scale layer (`domainRaw`), so marks and every guide recompute on both
    * rendering backends.
@@ -149,13 +152,21 @@ export interface ChartProps {
    * values after each event.
    */
   signalListeners?: Record<string, (name: string, value: unknown) => void>
-  /** Internal: shared listeners (the event loop and bound inputs drive these). */
+  /**
+   * Called with `(name, value)` for every signal that changes, whatever drives the
+   * change (the spec's `signal.on` event streams, a bound input or
+   * `ChartHandle.setSignal`). `signalListeners` is the per-signal form of the same
+   * notification.
+   */
   onSignal?: (name: string, value: unknown) => void
   /**
    * @internal Used by `<ChartStream>`/`<ChartWorkerStream>` (with `sceneOverride`)
    * to receive what this chart derives from props and gestures — the `domainRaw`
    * of the pan/zoom view and the merged signal values — so the stream can
    * re-evaluate with them.
+   *
+   * Unstable, host-internal plumbing (the counterpart of `sceneOverride`): it is
+   * not covered by semver and may change or go away in any release.
    */
   onStreamInput?: (input: ChartStreamInput) => void
   /** Disable the spec-driven event loop (defaults to on when the spec has signal.on streams). */
@@ -212,7 +223,7 @@ export interface ChartProps {
   preventDefault?: boolean
   /** Host text measurement for custom fonts / non-browser engines. */
   textMetrics?: TextMetricsProvider
-  /** Accessible scene tree (R10.6). Enabled by default; pass `false` to opt out. */
+  /** Accessible scene tree. Enabled by default; pass `false` to opt out. */
   a11y?: boolean | A11yOptions
   /**
    * Called once per failed evaluation (typed `AsterLimitError` for budgets), and
@@ -230,7 +241,7 @@ export interface ChartStreamInput {
   signals: Record<string, unknown>
 }
 
-/** Imperative handle exposed by `<Chart ref={…}>` (R11.1). */
+/** Imperative handle exposed by `<Chart ref={…}>`. */
 export interface ChartHandle {
   getScene(): SceneRoot | null
   getSvg(): string | null

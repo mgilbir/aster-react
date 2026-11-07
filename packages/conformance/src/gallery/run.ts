@@ -1,10 +1,11 @@
 /**
  * `pnpm conformance:gallery` - the OFFICIAL Vega and Vega-Lite example galleries (vendored in ../../gallery at the versions the
- * oracle is pinned to) against real vega, through both paths a user takes:
+ * oracle is pinned to) against real vega, through the paths a user takes:
  *
  *   static  real vega vs `renderSpec` (+ @aster/vl for Vega-Lite), canonical SVG compared exactly, in Node
  *   react   real vega vs <Chart> mounted as an app would (loadSpecData, add-ons, no size props unless the spec has numeric ones),
  *           in headless Chromium
+ *   swap    one mounted <Chart> that goes from spec A to spec B (the pairs in gallery/swap-pairs.txt), in headless Chromium
  *
  * Every outcome is one of pass / fail / error / unverifiable. `unverifiable` is the only non-failure that is not a pass: the
  * ORACLE is not a function of its inputs (random(), timers) or fails itself, so there is nothing to compare against; each one
@@ -19,7 +20,7 @@
  *   - every spec listed in passing-<path>.txt must still pass (a count floor alone lets one fix hide one regression).
  * When the numbers improve it says so: raise the floors and add the names (`--print-passing`), never lower them.
  *
- * Usage: tsx src/gallery/run.ts [--path=static|react|all] [--filter=substr] [--json=file] [--print-passing]
+ * Usage: tsx src/gallery/run.ts [--path=static|react|swap|all] [--filter=substr] [--json=file] [--print-passing] [--regenerate-swap-pairs]
  */
 import { spawn } from 'node:child_process'
 import { readFileSync, writeFileSync } from 'node:fs'
@@ -28,6 +29,9 @@ import { FETCH_COMMAND, readManifest, verifyCache } from './cache.js'
 import type { SwapOutcome } from './react.js'
 import { planSwap, swapGateProblems, type SwapPlan } from './swap-plan.js'
 import { GALLERY_DIR, listGallery, type GallerySpec, type Kind, type Outcome } from './lib.js'
+import { cli } from '../../../../scripts/lib/cli.mjs'
+
+cli({ url: import.meta.url, flags: { path: 'eq', filter: 'eq', json: 'eq', 'print-passing': 'bool', 'regenerate-swap-pairs': 'bool' } })
 
 const REPO_ROOT = join(GALLERY_DIR, '..', '..', '..')
 const argv = process.argv.slice(2)

@@ -3,8 +3,8 @@
  * Time-zone matrix: the zone-sensitive tests, run under zones other than UTC.
  *
  * The whole repo used to run under TZ=UTC (the oracle vectors even pin it), which
- * hid every bug where a UTC scale formatted its labels in the viewer's local zone
- * (audit C25). This runs, per zone:
+ * hid every bug where a UTC scale formatted its labels in the viewer's local zone.
+ * This runs, per zone:
  *
  *   - the zone-aware unit tests (`*.tz.test.ts`) and the live scale-spec differential
  *     against real Vega (vega runs in the same process and zone; UTC and numeric scales must not move)
@@ -12,8 +12,12 @@
  *     by real vega and by Aster in that same zone, SVG diffed
  *
  * `pnpm check` runs it as the `tz-matrix` gate. Usage: node scripts/test-tz.mjs [zone ...]
+ * (zones are IANA names such as Asia/Kolkata; with none given it runs the three above, plus UTC for the corpus).
  */
 import { spawnSync } from 'node:child_process'
+import { cli } from './lib/cli.mjs'
+
+cli({ url: import.meta.url, args: '[zone ...]' })
 
 /** Three zones with different offsets: one with DST, one half-hour offset without, one ahead of UTC whose daylight saving is half an hour. */
 export const ZONES = ['America/New_York', 'Asia/Kolkata', 'Australia/Lord_Howe']

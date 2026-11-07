@@ -5,12 +5,12 @@
  *
  * Usage: npx tsx src/run-vl.ts [filter]
  *
- * Checks per entry (audit C39):
+ * Checks per entry:
  *  1. @aster/vl compiles a DEEP-FROZEN copy of the spec (compile must never
- *     mutate its input — C73) and the emitted Vega must survive JSON round-trip.
+ *     mutate its input) and the emitted Vega must survive JSON round-trip.
  *  2. The emitted Vega is rendered through REAL vega; any vega error or
  *     warning fails the entry (Aster's own runtime is lenient, so rendering it
- *     only through Aster hid invalid Vega — C71). Messages that vega-lite's
+ *     only through Aster hid invalid Vega). Messages that vega-lite's
  *     own output also triggers (data-dependent noise) are not counted.
  *  3. Real vega's rendering of OUR Vega must equal its rendering of
  *     vega-lite's output (canonicalized SVG): the emitted spec means the same
@@ -34,6 +34,9 @@ import { loadSpecData, TRUSTED_LOAD_OPTIONS } from '@aster/core/load'
 import { compile as compileOurs } from '@aster/vl'
 import { renderWithVega, renderWithVegaChecked } from './render-vega.js'
 import { canonicalizeSvg, diffCanonical } from './normalize.js'
+import { cli } from '../../../scripts/lib/cli.mjs'
+
+cli({ url: import.meta.url, args: '[filter]' })
 
 /** Recursively freeze so any in-place write by the compiler throws (ESM is strict). */
 function deepFreeze<T>(v: T): T {

@@ -134,6 +134,82 @@ describe('a throwing transform and the signal-ordered dataset build', () => {
   }
 })
 
+// A mark whose encode throws stops the pass at that operator. vega-runtime connects an operator to one made after it by re-ranking it
+// (and what hangs off it) past everything created so far: a scale over data of its own scope is that, so the encode that reads it
+// is ranked after every operator that reads no such scale, the guides and the title over scales with literal domains among them,
+// and before the guides over a scale that is itself ranked late (made after this mark's encode). The item that threw keeps the
+// channels it set before the failing one, with the edges (`y2`) never turned into a size: it draws as a zero-height rect.
+describe('a mark encode that throws where a scale is ranked late', () => {
+  const THROWS = { signal: 'datum["nosuch"]["x"]' }
+  const frame = (extra: any): any => ({
+    $schema: 'https://vega.github.io/schema/vega/v6.json', width: 200, height: 120, padding: 5,
+    data: [{ name: 't', values: [1, 2, 3, 4].map((v, i) => ({ v, k: 'r' + i })) }],
+    marks: [{ type: 'rect', from: { data: 't' }, encode: { enter: { x: { scale: 'x', field: 'k' }, width: { scale: 'x', band: 1 }, y: { value: 0 }, y2: { value: 60 }, fill: THROWS } } }],
+    ...extra,
+  })
+  const bandX = { name: 'x', type: 'band', domain: { data: 't', field: 'k' }, range: 'width', padding: 0.1 }
+  const lateColour = { name: 'colour', type: 'linear', domain: { data: 't', field: 'v' }, range: { scheme: 'blues' } }
+  const literalColour = { name: 'colour', type: 'linear', domain: [1, 4], range: { scheme: 'blues' } }
+  const CASES3: Record<string, any> = {
+    'an edge (y2) set before the property that throws is never made a height': frame({
+      scales: [], marks: [{ type: 'rect', from: { data: 't' }, encode: { enter: { x: { value: 1 }, width: { value: 10 }, y: { value: 0 }, y2: { value: 60 }, fill: THROWS } } }],
+    }),
+    'a gradient legend over a late scale has its group, title and an unmade gradient': frame({
+      scales: [bandX, lateColour], legends: [{ fill: 'colour', type: 'gradient', title: 'T' }],
+    }),
+    'a gradient legend over a scale that is not late is made whole': frame({
+      scales: [bandX, literalColour], legends: [{ fill: 'colour', type: 'gradient', title: 'T' }],
+    }),
+    'a symbol legend over a late scale': frame({
+      scales: [bandX, { name: 'colour', type: 'ordinal', domain: { data: 't', field: 'v' }, range: 'category' }], legends: [{ fill: 'colour' }],
+    }),
+    'a discrete legend over a late scale': frame({
+      scales: [bandX, { name: 'q', type: 'quantize', domain: { data: 't', field: 'v' }, range: ['#eee', '#999', '#333'] }], legends: [{ fill: 'q' }],
+    }),
+    'a legend over a scale that is not late and one that is': frame({
+      scales: [bandX, lateColour, { name: 'o', type: 'ordinal', domain: ['a', 'b'], range: ['red', 'blue'] }],
+      legends: [{ fill: 'o' }, { fill: 'colour', type: 'gradient' }],
+    }),
+    'an axis and a title': frame({ scales: [bandX], axes: [{ orient: 'bottom', scale: 'x' }], title: { text: 'T' } }),
+    'a group whose scales are its own, with a legend, an axis and a title': {
+      $schema: 'https://vega.github.io/schema/vega/v6.json', width: 200, height: 120, padding: 5,
+      data: [{ name: 't', values: [1, 2, 3, 4].map((v, i) => ({ v, k: 'r' + i })) }],
+      marks: [{
+        type: 'group', encode: { enter: { width: { value: 200 }, height: { value: 100 } } },
+        scales: [bandX, lateColour], legends: [{ fill: 'colour', type: 'gradient' }], axes: [{ orient: 'bottom', scale: 'x' }], title: { text: 'T' },
+        marks: [{ type: 'rect', from: { data: 't' }, encode: { enter: { x: { scale: 'x', field: 'k' }, width: { scale: 'x', band: 1 }, y: { value: 0 }, y2: { value: 60 }, fill: THROWS } } }],
+      }],
+    },
+    'a group over the scales of the view: they are not late for its instance': {
+      $schema: 'https://vega.github.io/schema/vega/v6.json', width: 200, height: 120, padding: 5,
+      data: [{ name: 't', values: [1, 2, 3, 4].map((v, i) => ({ v, k: 'r' + i })) }],
+      scales: [bandX, lateColour],
+      marks: [{
+        type: 'group', encode: { enter: { width: { value: 200 }, height: { value: 100 } } },
+        legends: [{ fill: 'colour', type: 'gradient' }], title: { text: 'T' },
+        marks: [{ type: 'rect', from: { data: 't' }, encode: { enter: { x: { scale: 'x', field: 'k' }, width: { scale: 'x', band: 1 }, y: { value: 0 }, y2: { value: 60 }, fill: THROWS } } }],
+      }],
+    },
+    // (vega calls the colour scale with a domain that has no finite end: the interpolator it builds from the extent of text that reads
+    // as infinities is not a function of the value, and the scale call throws)
+    'a gradient legend whose scale cannot be called': frame({
+      data: [{ name: 't', values: [{ v: 'Infinity', k: 'r0' }, { v: '-Infinity', k: 'r1' }, { v: 1, k: 'r2' }, { v: 2, k: 'r3' }] }],
+      scales: [bandX, lateColour], legends: [{ fill: 'colour', type: 'gradient' }],
+      marks: [{ type: 'rect', from: { data: 't' }, encode: { enter: { x: { scale: 'x', field: 'k' }, width: { scale: 'x', band: 1 }, y: { value: 0 }, y2: { value: 60 }, fill: { scale: 'colour', field: 'v' } } } }],
+    }),
+  }
+  for (const [name, spec] of Object.entries(CASES3)) {
+    it(name, async () => {
+      const vega = await renderWithVegaChecked(JSON.parse(JSON.stringify(spec)))
+      expect(vega.errors.length, 'the case must make vega log an error').toBeGreaterThan(0)
+      const errors: unknown[] = []
+      const mine = renderSpec(JSON.parse(JSON.stringify(spec)), { logger: { error: (e: unknown) => { errors.push(e) }, warn: () => {} } } as never) as string
+      expect(errors.length, 'the engine logs the failure').toBeGreaterThan(0)
+      expect(diffCanonical(canonicalizeSvg(vega.svg), canonicalizeSvg(mine)).slice(0, 4)).toEqual([])
+    }, 30_000)
+  }
+})
+
 // A dataset that vega re-ranked past the scales and marks (it reads a signal a later dataset writes) throws after the marks that
 // read nothing late ran, and vega draws them. Aster stops all of them (a known gap, see datasetRanksOf), so only the datasets are
 // compared here: they are what the rank decides.

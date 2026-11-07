@@ -8,8 +8,8 @@
  * as `{expr: text}`, `?` a comparator (`{field, order}` whose parts may be `{signal}` or `{expr}`), `@` the name of a projection (or a
  * scale) of the scope, `^` the name of a data set of the scope, `#` the data set a lookup indexes (with the `key` after it), `*` objects of
  * sub-parameters (see `SUB_PARAMS`); a bare name takes a value, or a `{signal}` for one. `!` before the name: the parameter is required;
- * `[]` after it: it is a list (of such values; a `{signal}` stands for a whole list but for sub-parameters, which must be a list). `transform-params.test.ts` and the live differential `differential-transform-params.test.mts` hold the table
- * to the definitions of the pinned vega.
+ * `[]` after it: it is a list (of such values; a `{signal}` stands for a whole list but for sub-parameters, which must be a list). The live differential
+ * `packages/conformance/scripts/differential-transform-params.test.mts` holds the table to the definitions of the pinned vega.
  */
 import { transformTypeOf } from './transform-names.js'
 

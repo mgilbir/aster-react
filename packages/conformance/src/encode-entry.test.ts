@@ -1,5 +1,5 @@
 /**
- * Encode entries against the real vega-parser (audit C54).
+ * Encode entries against the real vega-parser.
  *
  * vega-parser's encode/entry.js builds the channel's expression as concatenated TEXT:
  *   value = (signal) | field | value;  scale(...);  pow(value, e);  *mult;  +offset;  round(value)

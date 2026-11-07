@@ -21,7 +21,7 @@ full contract; in short:
 | `signal.on` event streams, `preventDefault` | yes | reported: the chart renders but does not respond | yes |
 | `renderer="canvas"` | yes | compile error; renders SVG and reports | compile error; renders SVG and reports |
 
-Pan/zoom, brushing and the keyboard contract do not use the hit index, so the light chart keeps them. Choose `<SvgChart>`
+Pan/zoom, brushing and the keyboard contract do not use the hit index, so `<SvgChart>` keeps them. Choose `<SvgChart>`
 when bundle size matters and the chart is static, zoomable or brushable; add `interaction` when it needs tooltips,
 clicks on marks or `signal.on`; use `<Chart>` when you want all of it with no setup or need the canvas renderer.
 Every interaction check in `packages/react/scripts/browser-interaction.mts` runs against `<Chart>` and
@@ -137,19 +137,17 @@ What works, and how it differs from Vega, precisely:
   declared on the composition, a brush or a point per facet cell, bound scales shared by cells, a legend binding).
 - A scale event (`{scale: "x"}`, which an unbound interval selection listens to so that its brush follows its
   scale) fires when the chart is bound to a scene whose scale differs from the previous one's.
-- **Deviation:** a signal write is a fresh render ([Signals](#signals)): after it Aster draws what a new chart with those
-  signal and store values draws, where Vega keeps the autosize, padding and axis-tick order it first computed. The
-  conformance gate holds this exactly and with no tolerance: a step passes when Aster equals Vega's retained render, or
-  when it equals the render of a NEW Vega view initialised with the same signals and stores (and Vega's own retained
-  render differs); those steps are counted against a ceiling (`--max-retained`, like `sweep-signals`). Set
+- **Deviation:** a signal write is a fresh render, where Vega keeps the autosize, padding and axis-tick order it first computed
+  ([Signals](#signals)). The selections gate holds this exactly and with no tolerance: a step passes when Aster equals Vega's
+  retained render, or when it equals the render of a NEW Vega view initialised with the same signals and stores (and Vega's own
+  retained render differs); those steps are counted against a ceiling (`--max-retained`, like `sweep-signals`). Set
   `autosize: "none"` for a pan/zoom chart whose plot must not move.
-- **Deviation:** `modify(name, ..., tuple)` / `remove` compare a tuple read back from `data()` by value (the evaluation
-  does not hand out its input rows), where Vega compares tuple identity.
+- **Deviation:** `modify(name, ..., tuple)` / `remove` compare a tuple read back from `data()` by value, where Vega compares tuple
+  identity ([Deviations from Vega](ARCHITECTURE.md#deviations-from-vega)).
 - **Selections in concat, facet and repeat views** (linked brushing, a brush per facet cell, a selection declared on the
   composition and given to every unit below it) work as in Vega: a unit's signals belong to its group mark, a Vega group
   scope with one copy per view or cell. The event loop scopes them the way Vega does (see [Group scopes](#group-scopes)).
-  What it refuses is what vega-lite compiles to a Vega spec Vega rejects (a selection on a layer spec itself, or on a
-  composition with a layer below it): see packages/vl/README.md.
+  What `@aster/vl` refuses is listed in [packages/vl/README.md](../packages/vl/README.md#throws-not-supported).
 
 ### Group scopes
 
@@ -173,7 +171,7 @@ and is checked against it (`pnpm conformance:signals`, the group-scope cases):
 - `scale()` in a scope's handlers sees the scales its group (and the groups around it) declare.
 
 **Deviation:** Vega swallows the first firing of a `{signal}` handler that a scope declares on a signal of an enclosing
-scope that never pulsed before (an internal flag of its operator); Aster fires it. No Vega-Lite output relies on it.
+scope that never pulsed before; Aster fires it ([Deviations from Vega](ARCHITECTURE.md#deviations-from-vega)).
 
 ## Pan and zoom
 
@@ -232,7 +230,7 @@ extra evaluation).
 ## Signals
 
 Spec `signal.on` streams are bound to the rendered SVG with vega's event-stream semantics (selectors, filters,
-throttle, `consume`, mark-scoped streams such as `@name:click` and `symbol:click`; the full list is in `docs/API.md`).
+throttle, `consume`, mark-scoped streams such as `@name:click` and `symbol:click`; the full list is in [API.md](API.md#astercoresignals)).
 Updating a signal calls `onSignal(name, value)` and `signalListeners[name](name, value)`, and the value is stored in an
 external store consumed with `useSyncExternalStore`, so each event is one normal React state transition (no tearing
 under concurrent rendering).
@@ -269,8 +267,9 @@ export function Signals(): React.ReactElement {
   as a signal override and the listeners are notified.
 - The spec's DOM event streams are bound on the SVG renderer only (`renderer="svg"`, `interactive` not `false`); the
   canvas renderer does not bind them. Use props, `setSignal`, `tooltip` and the selection props there.
-- `denseMarks: 'auto'` stays off for a spec with `signal.on` streams, because those read the datum from per-item DOM
-  nodes. Like vega's view, the chart calls `preventDefault()` on the events of its own surface that a stream listens to, except those
+- `denseMarks: 'auto'` stays off for a spec with `signal.on` streams, as a conservative default: the event loop is given
+  the scene hit index (`pick`), which resolves `event.item` and its datum from the scene, not from per-item DOM nodes, and
+  `denseMarks={true}` batches whatever the spec binds. Like vega's view, the chart calls `preventDefault()` on the events of its own surface that a stream listens to, except those
   `config.events.defaults` leaves alone (default `{allow: ['wheel']}`; `prevent` / `allow` lists or booleans as in vega, a `consume`d
   stream always prevents), so dragging a brush selects no text and a wheel still scrolls the page. The `preventDefault` prop is
   vega's `view.preventDefault()`: the verdict when the config names neither `prevent` nor `allow`;
@@ -283,8 +282,10 @@ vega-view uses), so ticks fall on the same instants with the same `{timestamp, e
 real vega and Aster on one fake browser clock and compares frames). The timers belong to the chart's host element, not
 to one rendered SVG: a re-bind after each render keeps the schedule, and they stop when the chart unmounts, when the host
 element is removed from the document, or on `binding.release()` (vega's `view.finalize()`); nothing is left scheduled.
-`bindSceneSignals` takes `owner` (the element the timers belong to; `<Chart>` passes its host) and `setTimerClock` from
-`@aster/core` swaps the scheduler's clock for a controlled one (tests, hosts that step frames themselves). A Vega-Lite
+`bindSceneSignals` takes `owner` (the element the timers belong to; `<Chart>` passes its host) and `setTimerClock(clock | null)` from
+`@aster/core/signals` swaps the scheduler's clock (`{ now, setTimeout, clearTimeout, setInterval, clearInterval, requestFrame }`)
+for a controlled one (tests, hosts that step frames themselves); `null` restores the host's globals, and it should only be
+swapped while no timer is live. A Vega-Lite
 animation (the `time` channel and its timer selection, see `packages/vl/README.md`) is a timer stream whose clock
 signal feeds `modify` on the selection's store; the store and the other `modify` semantics are described above.
 

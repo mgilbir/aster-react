@@ -1,7 +1,6 @@
 // @vitest-environment jsdom
 /**
- * DOM descriptor vs string renderer parity over the whole conformance corpus
- * (audit C43, T2).
+ * DOM descriptor vs string renderer parity over the whole conformance corpus.
  *
  * `dom.ts` claimed the two renderers "can never drift". They did: the first
  * `patchSceneDom` over a string-rendered <svg> rewrote attributes (gradient
@@ -59,7 +58,7 @@ function parseSvg(svg: string): Element {
   return doc.documentElement
 }
 
-describe('DOM descriptor === string renderer over the conformance corpus (audit C43)', () => {
+describe('DOM descriptor === string renderer over the conformance corpus', () => {
   const allFiles = readdirSync(CORPUS_DIR).filter((f) => f.endsWith('.vg.json') || f.endsWith('.vl.json')).sort()
   // The corpus is cut into slices, one test each: one long synchronous test keeps a vitest worker from answering its host
   // (Timeout calling onTaskUpdate), and a slice names where a difference is.

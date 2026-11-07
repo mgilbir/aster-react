@@ -1,10 +1,23 @@
 # Performance
 
 Aster keeps a differential engine and adds opt-in boundaries so a chart pays only for the features it
-imports. This document describes the mechanisms, then gives the measurements. Every number is in
+imports. This document gives the practical guidance first, then the mechanisms, then the measurements. Every number is in
 [Reference measurements](#reference-measurements) or [Bundle sizes](#bundle-sizes) next to the command that
 produced it; the mechanisms below carry no numbers on purpose (they change with the code, the machine and
 the browser).
+
+## Practical guidance
+
+- Large static dashboards: keep `<Chart incremental>` (default) and pass stable spec objects. Memoize spec
+  builders at the call site.
+- Streaming updates: use `createChartStream` (bounded queue, coalesced appends) or supply `dataChanges` with
+  the new immutable data array.
+- Transforms with no fast path (the global fitters `kde`, `regression`, `loess`, `quantile`, `contour`,
+  `wordcloud`, ...) re-derive on an append; the downstream change result is still correct.
+- Huge or untrusted specs: combine `limits` with `useChartWorker`.
+- Dense marks: canvas avoids SVG node cost; hit testing uses a uniform grid above 400 items.
+- Accessibility tree: set `a11y={{ summaryThreshold: N }}` (default 150) to collapse very dense marks into one
+  summary node.
 
 ## What is fast
 
@@ -72,8 +85,9 @@ during the runs. The Node figures are the median of three runs unless a table sh
 are the median of two runs (six for `pnpm bench:browser`). Timings are machine- and load-dependent: compare the
 ratios and the shape, and re-run before quoting. To compare two builds, run them alternately on the same machine
 (the numbers below drifted from earlier editions of this page with the machine, not only with the code). The incremental gate
-(`pnpm bench:incremental`) is the only one of these with a pass/fail floor; the floors and how they were
-chosen are at the top of `packages/benchmarks/src/incremental.bench.tsx`.
+(`pnpm bench:incremental`) has a pass/fail floor in the PR gate, and the nightly browser benchmarks (`pnpm bench:browser`, `pnpm bench:browser-stream`) have floors too (`packages/benchmarks/src/browser-floors.ts`); the other benchmarks only print. The incremental floors and how they were
+chosen are at the top of `packages/benchmarks/src/incremental.bench.tsx`. What each benchmark measures, and how to run the harness:
+[packages/benchmarks/README.md](../packages/benchmarks/README.md).
 
 ### Compute: incremental append vs full evaluation (node, no paint)
 
@@ -92,18 +106,15 @@ one row appended per update:
 | dense 100,000-symbol mark: append patch vs mount (ms) | 1.31 vs 314.3 (249x) | 1.17 vs 275.6 (254x) | 1.12 vs 265.9 (254x) |
 
 `pnpm bench:incremental -- --points=100000 --reps=40`: full evaluate 42.1 ms, stream append 0.3 ms
-(163x), vega `view.change` 19.0 ms (13.6 to 34.7 ms across the runs: aster 54x to 107x cheaper), whole-array
-replacement 37x; dense append patch 1.00 ms vs a 263.3 ms mount (273x). From 2026-10-27 to 2026-11-04 the stream
-append had regressed to 0.7 ms at 100,000 points (every evaluation scanned the whole dataset for rows to wrap as
-`{data: v}`); #103 restored it.
+(163x), vega `view.change` 19.0 ms (13.6 to 34.7 ms across the runs: Aster 54x to 107x cheaper), whole-array
+replacement 37x; dense append patch 1.00 ms vs a 263.3 ms mount (273x).
 
 ### Differential updates (node, no DOM)
 
 `pnpm bench:differential` (50,000 points, about 1% of rows changed; `evaluateChart` with a changeset vs a full
 re-encode): row-wise `formula` 22.6 to 1.0 ms (23.1x), fixed-scale symbol 19.2 to 0.5 ms (38.8x),
 `aggregate` over 1000 groups 6.2 to 2.5 ms (2.5x). Scene evaluation plus `patchSceneDom` at 4000 points:
-6.6x, 9.5x and 3.0x for the same three cases. (The row-wise ratio is lower than in earlier editions because the full
-re-encode got cheaper: expressions read the signals in place since #101.)
+6.6x, 9.5x and 3.0x for the same three cases.
 
 ### Embedding: `<Chart>` vs react-vega and the vega-embed tutorial
 
@@ -115,9 +126,9 @@ asterDom 2.9 / react-vega 6.1 / vega-embed hook 3.7; scatter 4.6 / 4.2 / 33.1 / 
 line aster 2.65 / 2.55, asterDom 1.75 / 1.90, react-vega 2.90 / 3.45, vega-embed hook 2.40 / 2.60; scatter aster
 2.90 / 3.45, asterDom 2.75 / 3.30, react-vega 8.20 / 7.90, vega-embed hook 7.05 / 8.35; bar aster 10.10 / 8.00,
 asterDom 9.25 / 7.30, react-vega 15.50 / 16.75, vega-embed hook 14.90 / 8.30. Stable-content re-render (fresh spec
-object, same data): 0 DOM mutations on all four; 0.3 ms for aster vs 0.1 ms for the Vega wrappers. Under a
+object, same data): 0 DOM mutations on all four; 0.3 ms for Aster vs 0.1 ms for the Vega wrappers. Under a
 one-update-per-frame stream the line chart holds 16.7 ms median frames on all four; long frames (over 21 ms) are
-0.0% for aster, 1.7% to 3.7% for the Vega embeds. Run alternately against the 2026-10-27 build (2a03147), aster's
+0.0% for Aster, 1.7% to 3.7% for the Vega embeds. Run alternately against the 2026-10-27 build (2a03147), Aster's
 first render and update timings here read 5% to 17% slower (about 5% normalised by the Vega embeds of the same run),
 but the work does not differ: both builds emit byte-identical SVG for these charts, and CPU profiles of the same
 mounts and updates in Chromium, taken alternately, show the current build busy no longer than the old one (2.4 to 3.7 s
@@ -139,16 +150,90 @@ symbol fill, headless Chromium, median frame / share of frames over 21 ms / DOM 
 | 100,000 | canvas | 16.7 ms / 0.0% / 0 | 16.7 ms / 5.9% / 0 |
 
 `pnpm bench:browser-stream -- --points=100000 --seconds=3 --engines=aster --renderers=svg --dense=0,1`
-(aster SVG, microtask flush): per-item 161.2 ms median frame, 94.2% long, 100,030 DOM nodes, 18 to 19 appends in
+(Aster SVG, microtask flush): per-item 161.2 ms median frame, 94.2% long, 100,030 DOM nodes, 18 to 19 appends in
 3 s; with `denseMarks` 33.5 ms, 96.3% long, 402 DOM nodes, 82 to 84 appends. Dense marks cut the per-frame cost by
 about 4.8x; neither SVG variant holds a 16.7 ms frame at 100,000 points, canvas does.
+
+## Bundle sizes
+
+`pnpm bench:bundle` (esbuild, minified, react external; every chunk counts, including the ones loaded on demand), measured
+2026-11-06: `@aster/react` `<Chart>` 264.0 kB gzip (711.5 kB minified, 222.9 kB brotli), `<SvgChart>` from `@aster/react/lite`
+243.2 kB gzip (656.5 kB minified, 206.5 kB brotli), `<SvgChart>` + `interaction` 258.4 kB gzip (695.4 kB minified,
+218.8 kB brotli), vs react-vega 288.7 kB gzip (832.2 kB minified, 239.9 kB brotli) and the official vega-embed tutorial 288.0 kB
+(830.5 kB minified, 239.6 kB brotli). The Aster rows are Vega only. The react-vega and vega-embed bundles include
+Vega-Lite (about 731 kB of their source inputs), so the like-for-like comparison for a Vega-Lite app is `<Chart>` plus the
+Vega-Lite compiler: 308.3 kB gzip eager plus 59.1 kB gzip loaded on demand (the `budget` rows below), 367.4 kB in all, which
+is above react-vega's 288.7 kB. The smaller figure holds for Vega specs only.
+
+`pnpm --filter @aster/benchmarks run budget` bundles one tiny app per documented import pattern (esbuild, minify,
+`NODE_ENV=production`, tree-shaking on, react external) and gates its gzip size (default level). The add-on rows are
+MARGINAL: the add-on's gzip added to the `@aster/core` app. The old rows measured each add-on standalone, which
+double counted the code it shares with core (hit read 15.6 kB where an app pays about 5). Each budget is the measured
+size plus 0.5 kB (`packages/benchmarks/scripts/budget.mjs` holds the rationale and the budgets, which are not copied
+here); a change that needs more room edits the number in the same PR. These rows count the code a page loads eagerly: a
+chunk loaded on demand is reported next to the row and is not in the gzip column. Measured 2026-11-06 with
+`pnpm --filter @aster/benchmarks run budget` (all rows PASS):
+
+| Import pattern | gzip kB (eager) | Loaded on demand (gzip kB) |
+|---|---|---|
+| `import { renderSpec } from '@aster/core'` | 152.5 | |
+| `import { useChart } from '@aster/react'` | 163.7 | 61.1 |
+| `import { Chart } from '@aster/react'` | 205.3 | 59.1 |
+| `import { SvgChart } from '@aster/react/lite'` | 182.5 | 61.1 |
+| `<SvgChart>` + `import { interaction } from '@aster/react/interaction'` | 199.7 | 59.1 |
+| `import '@aster/react/vl'` + `<Chart>` | 308.3 | 59.1 |
+| core + `@aster/core/dom` (marginal) | 10.6 | |
+| core + `@aster/core/canvas` (marginal) | 6.1 | |
+| core + `@aster/core/hit` (marginal) | 6.4 | |
+| core + `@aster/core/signals` (marginal) | 12.9 | |
+| core + `@aster/core/load` (marginal) | 5.4 | |
+| core + `@aster/core/geo` (marginal) | 16.0 | |
+| core + `@aster/core/transforms` (marginal) | 39.2 | |
+
+The manifests list only the files that really have an import effect (see
+[ARCHITECTURE.md](ARCHITECTURE.md#side-effects-and-tree-shaking)). Without a `sideEffects` field a bundler must assume
+every module has effects, so `import { useChart }` pulled in `Chart`, `ChartStream`, `useChartStream`,
+`useChartWorkerStream`, the worker host and `batches` (37.7 kB gzip it never calls); `ASTER_BUDGET_IGNORE_SIDE_EFFECTS=1
+node packages/benchmarks/scripts/budget.mjs`, run from `packages/benchmarks`, bundles the apps that way.
+`<Chart>` is a shell over `ChartCore` with injected capabilities; that costs a little code in both shells: the property
+reads through the capability objects (a minifier cannot rename them) and the report of a missing capability, which only
+`<SvgChart>` can trigger but both share. `<SvgChart>` is 22.8 kB smaller than `<Chart>` (205.3 minus 182.5): it leaves out the canvas
+renderer, the hit index and the signal loop. Their marginal rows (6.1, 6.4 and 12.9 kB) are each measured on their own,
+so they do not add up to the 22.8 kB gap. The rows that contain no such
+code are checked on the module list, not only the byte count: `pnpm check:bundle` asserts on the esbuild metafile that the
+`<SvgChart>` bundle reads no `core/canvas`, `core/hit` or `core/signals` module, and that with `interaction` it reads hit and
+signals but still no canvas (`hit.ts` and `canvas.ts` share the path parser through `path-data.ts` for exactly this reason).
+
+The `useChart` and `<Chart>` rows fail if the field is removed or widened; `scripts/bundle-shaking.test.mjs` plants
+that fault and requires the budget to fail. The other direction (a list that is too narrow drops a registration) is
+caught by `pnpm check:bundle`, which bundles and executes each import pattern.
+
+The Vega-Lite compiler is 103.0 kB gzip on top of the base `<Chart>` (308.3 minus 205.3, measured 2026-11-06). It was 54.1 at an earlier measurement, before the selections, maps and animation work.
+
+Where the growth sits, measured 2026-11-06 on `@aster/vl` alone (esbuild, minified, `@aster/core` external): the bundle is 324,435 bytes minified and 105.8 kB gzip level 9, against 176,836 bytes and 55.6 kB for the tree of 2026-10-23 (commit 861eb0b). The largest increases are in `compile.ts` (+74.0 kB minified) and `validate.ts` (+19.1 kB). With the selection modules (`selection.ts`, `selection-signals.ts`, `selection-marks.ts`, `selection-model.ts`) replaced by stubs the bundle is 7.1 kB gzip smaller, with `geo.ts` stubbed 1.5 kB smaller and with `animation.ts` stubbed 0.8 kB smaller (9.2 kB for the three together), so those three feature modules are a minor part of the growth. The selection handling inside `compile.ts` is not part of that figure.
+
+Trimming the validation layer
+(`packages/vl/src/validate.ts`: allow-lists derived from one table each, shared message templates, dead branches removed;
+no check dropped, every message unchanged) took `@aster/vl` from 180,940 to 176,836 bytes minified (-4.1 kB) and from
+55,828 to 55,606 bytes gzip level 9 (-0.2 kB): the validator is mostly unique error text, which gzip already compresses well.
+Measure it with `node` and esbuild on `packages/vl/dist/index.js` (`@aster/core` external, minify).
+
+## Dated measurement notes
+
+Narrative that belongs to a measurement date rather than to the current numbers.
+
+### Corrections to earlier figures
 
 **Earlier figures for the 100,000-point SVG stream were wrong.** Previous versions of this document and of the
 README, CHANGELOG and benchmarks README quoted about 77 ms per frame per-item and 16.7 ms with 0% long frames with
 `denseMarks`. Those were measured on an unfilled render: the benchmark spec drew symbols without a `fill`, and before
 the default-config fix Aster rendered such symbols unfilled (Vega draws them filled), so the benchmark measured an
 empty paint layer. The benchmark spec now states its fill, and the numbers above are the filled render on this
-machine. I measured them on the current stack; the reviewer reports that the pre-audit baseline gives the same numbers once the fill is explicit (I did not re-run that).
+machine. They were measured on the current stack. A report that the pre-audit baseline gives the same numbers once the fill is explicit has not been re-run.
+
+From 2026-10-27 to 2026-11-04 the stream append had regressed to 0.7 ms at 100,000 points (every evaluation scanned the whole dataset for rows to wrap as `{data: v}`); #103 restored it.
+
+The row-wise ratio of the differential-updates benchmark is lower than in earlier editions of this page because the full re-encode got cheaper: expressions read the signals in place since #101.
 
 ### What the guides cost (2026-10-26)
 
@@ -176,69 +261,3 @@ What made this cheap: a chart's guide marks are shared by every chart whose guid
 (the merged default config is built once and frozen, so a spec without a config shares it), the entries of a guide are closures made once
 per entry and bound to an evaluation's scales (the marks' own evaluator is never called by a guide: sharing it made the marks' evaluation
 slower), ticks, grid lines and labels are made by one constructor per leaf kind, and nothing keeps a weak-map entry per chart.
-
-## Bundle sizes
-
-`pnpm bench:bundle` (esbuild, minified, react external): `@aster/react` `<Chart>` 172.4 kB gzip
-(489.2 kB minified, 145.9 kB brotli), `<SvgChart>` from `@aster/react/lite` 153.0 kB gzip (440.5 kB minified, 130.3 kB brotli),
-`<SvgChart>` + `interaction` 166.2 kB gzip (473.8 kB minified, 141.3 kB brotli), vs react-vega 288.7 kB gzip and the official
-vega-embed tutorial 288.0 kB.
-
-`pnpm --filter @aster/benchmarks run budget` bundles one tiny app per documented import pattern (esbuild, minify,
-`NODE_ENV=production`, tree-shaking on, react external) and gates its gzip size (default level). The addon rows are
-MARGINAL: the addon's gzip added to the `@aster/core` app. The old rows measured each addon standalone, which
-double counted the code it shares with core (hit read 15.6 kB where an app pays about 5). Each budget is the measured
-size plus 0.5 kB (`packages/benchmarks/scripts/budget.mjs` holds the rationale); a change that needs more room edits
-the number in the same PR. Measured 2026-10-27 (after the runtime parity work, vega's event config and the single resolved view size; the minified/brotli figures above predate it):
-
-| Import pattern | Before selections (gzip kB) | Now (gzip kB) | Budget (kB) |
-|---|---|---|---|
-| `import { renderSpec } from '@aster/core'` | 123.1 | 133.9 | 134.3 |
-| `import { useChart } from '@aster/react'` | 126.4 | 137.8 | 138.2 |
-| `import { Chart } from '@aster/react'` | 157.2 | 172.9 | 173.4 |
-| `import { SvgChart } from '@aster/react/lite'` | 142.0 | 153.4 | 153.5 |
-| `<SvgChart>` + `import { interaction } from '@aster/react/interaction'` | 151.5 | 166.7 | 167.2 |
-| `import '@aster/react/vl'` + `<Chart>` | 211.3 | 247.9 | 248.4 |
-| core + `@aster/core/dom` (marginal) | 5.8 | 5.7 | 6.2 |
-| core + `@aster/core/canvas` (marginal) | 4.8 | 4.8 | 5.3 |
-| core + `@aster/core/hit` (marginal) | 5.1 | 5.2 | 5.5 |
-| core + `@aster/core/signals` (marginal) | 4.4 | 7.7 | 8.3 |
-| core + `@aster/core/load` (marginal) | 5.1 | 5.0 | 5.6 |
-| core + `@aster/core/geo` (marginal) | 12.4 | 12.6 | 12.8 |
-| core + `@aster/core/transforms` (marginal) | 15.1 | 15.1 | 15.6 |
-
-"Before" is the same apps bundled with no `sideEffects` field (`ASTER_BUDGET_IGNORE_SIDE_EFFECTS=1 node
-packages/benchmarks/scripts/budget.mjs`, run from `packages/benchmarks`; the Vega-Lite row also had the untrimmed validator). Without
-the field a bundler must assume every module has effects, so `import { useChart }` pulled in `Chart`, `ChartStream`,
-`useChartStream`, `useChartWorkerStream`, the worker host and `batches` (37.7 kB gzip it never calls). The manifests now
-list the files that really have an import effect (see [ARCHITECTURE.md](ARCHITECTURE.md#side-effects-and-tree-shaking)).
-`<Chart>` was 156.5 kB (+ VL 210.7) before it became a shell over `ChartCore` with injected capabilities; the +0.7 kB is the
-property reads through the capability objects (a minifier cannot rename them) and the report of a missing capability, which
-only `<SvgChart>` can trigger but both share. `<SvgChart>` is 15.2 kB smaller than `<Chart>`: the canvas renderer, the hit index
-and the signal loop (4.8 + 5.0 + 4.4 kB as marginal rows, plus what they share with nothing else). The rows that contain no such
-code are checked on the module list, not only the byte count: `pnpm check:bundle` asserts on the esbuild metafile that the
-`<SvgChart>` bundle reads no `core/canvas`, `core/hit` or `core/signals` module, and that with `interaction` it reads hit and
-signals but still no canvas (`hit.ts` and `canvas.ts` share the path parser through `path-data.ts` for exactly this reason).
-
-The `useChart` and `<Chart>` rows fail if the field is removed or widened; `scripts/bundle-shaking.test.mjs` plants
-that fault and requires the budget to fail. The other direction (a list that is too narrow drops a registration) is
-caught by `pnpm check:bundle`, which bundles and executes each import pattern.
-
-The Vega-Lite compiler is 75.0 kB gzip on top of the base `<Chart>` (247.4 minus 172.4). It was 54.1 before the selections, maps and animation work: the selection compiler is most of the growth, then the maps (projections, geojson / geopoint data, geoshape marks) and the animation (the `time` channel's scale and frame dataset). Trimming the validation layer
-(`packages/vl/src/validate.ts`: allow-lists derived from one table each, shared message templates, dead branches removed;
-no check dropped, every message unchanged) took `@aster/vl` from 180,940 to 176,836 bytes minified (-4.1 kB) and from
-55,828 to 55,606 bytes gzip level 9 (-0.2 kB): the validator is mostly unique error text, which gzip already compresses well.
-Measure it with `node` and esbuild on `packages/vl/dist/index.js` (`@aster/core` external, minify).
-
-## Practical guidance
-
-- Large static dashboards: keep `<Chart incremental>` (default) and pass stable spec objects. Memoize spec
-  builders at the call site.
-- Streaming updates: use `createChartStream` (bounded queue, coalesced appends) or supply `dataChanges` with
-  the new immutable data array.
-- Transforms with no fast path (the global fitters `kde`, `regression`, `loess`, `quantile`, `contour`,
-  `wordcloud`, ...) re-derive on an append; the downstream change result is still correct.
-- Huge or untrusted specs: combine `limits` with `useChartWorker`.
-- Dense marks: canvas avoids SVG node cost; hit testing uses a uniform grid above 400 items.
-- Accessibility tree: set `a11y={{ summaryThreshold: N }}` (default 150) to collapse very dense marks into one
-  summary node.

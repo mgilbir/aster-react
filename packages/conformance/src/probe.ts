@@ -11,13 +11,16 @@ import { readdirSync, readFileSync, existsSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import * as vl from 'vega-lite'
-import '@aster/core/geo' // registers d3-geo/d3-contour for geo/projection/contour specs
+import '@aster/core/geo' // registers the geo projections and contours for geo/projection/contour specs
 import '@aster/core/transforms' // registers kde/regression/loess/pack/treemap/wordcloud/voronoi
 import { renderSpec } from '@aster/core'
 import { loadSpecData, TRUSTED_LOAD_OPTIONS } from '@aster/core/load'
 import { renderWithVega } from './render-vega.js'
 import { canonicalizeSvg, diffCanonical } from './normalize.js'
 import { parseProbeArgs, probeVerdict } from './probe-verdict.js'
+import { cli } from '../../../scripts/lib/cli.mjs'
+
+cli({ url: import.meta.url, flags: { 'min-pass': 'both' }, args: '[name-filter]' })
 
 interface ProbeEntry {
   name: string

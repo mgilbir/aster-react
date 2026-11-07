@@ -1,5 +1,5 @@
 /**
- * Explicit validation layer for Vega-Lite input (audit C34-C37, C97).
+ * Explicit validation layer for Vega-Lite input.
  *
  * `@aster/vl` implements a subset of Vega-Lite. Anything outside that subset
  * must fail LOUDLY, naming the feature, rather than fall through to a default
@@ -89,7 +89,8 @@ export interface NormalTimeUnit {
 
 /**
  * Validate and normalize a Vega-Lite timeUnit (string, utc-prefixed string, or
- * {unit, utc, step} object). Throws for unknown units, `binned` and `maxbins`.
+ * {unit, utc, step, binned} object). Throws for unknown units and `maxbins`; a `binned` prefix or flag is
+ * accepted and reported as `binned` (the field already holds the start of the unit).
  */
 export function normalizeTimeUnit(tu: unknown, path = 'timeUnit'): NormalTimeUnit {
   let unit: unknown = tu
@@ -184,14 +185,14 @@ const SCHEMA_CHILDREN: Record<Exclude<Kind, 'unit'>, ReadonlySet<Kind>> = {
 /** Implemented (parent -> child) nestings: today every schema-valid nesting is implemented; narrow this as the schema grows. */
 export const SUPPORTED_NESTING: Record<Exclude<Kind, 'unit'>, ReadonlySet<Kind>> = SCHEMA_CHILDREN
 
-/** The names of the timer selections declared on the top-level unit being validated (the only place `{param}` filters may refer to). */
+/** The names of the timer selections declared on the top-level unit being validated (the `time` channel needs exactly one). */
 let timerParams: ReadonlySet<string> = new Set()
 /** The names of every timer selection param in the spec (an animation's selection may sit in a view that has a name). */
 let timerNames: Set<string> = new Set()
-/** Is the view being validated a top-level unit (where selection params live)? */
+/** Is the view being validated a top-level unit (the only view where the `time` channel is supported)? */
 let validatingTopUnit = false
 
-/** Depth of facet operators above the view being validated (a map inside a facet is not supported). */
+/** Depth of facet operators above the view being validated (a geoshape with no GeoJSON `shape` field inside a facet is not supported). */
 let compositeDepth = 0
 
 /** Repeat variables in scope while validating a repeat's child spec. */
@@ -1158,8 +1159,8 @@ function validateSort(sort: unknown, at: string, ch: string): void {
 const FIELD_PREDICATE_KEYS = ['equal', 'lt', 'lte', 'gt', 'gte', 'range', 'oneOf', 'valid'] as const
 
 /**
- * Validate a VL predicate (string expression, field predicate, and/or/not). A `{param}` predicate is accepted only as
- * the whole of a `filter` transform (`allowParam`), and only for a timer selection (an animation's frame filter).
+ * Validate a VL predicate (string expression, field predicate, and/or/not). A `{param}` predicate must name a declared
+ * parameter (a `{filter: {param}}` over an interval selection is valid); `allowParam` is not read.
  */
 export function validatePredicate(p: unknown, at: string, allowParam = false): void {
   if (typeof p === 'string') return

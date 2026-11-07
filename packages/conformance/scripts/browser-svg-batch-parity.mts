@@ -1,5 +1,5 @@
 /**
- * Batched-SVG pixel parity gate (R13 / perf).
+ * Batched-SVG pixel parity gate.
  *
  * `denseMarks` rewrites dense symbol marks as chunked `<path>` elements instead
  * of one element per datum (100k symbols -> ~400 paths). Positions are baked
@@ -15,6 +15,9 @@ import { readdirSync, readFileSync, writeFileSync, rmSync, mkdirSync } from 'nod
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { build } from 'esbuild'
+import { cli } from '../../../scripts/lib/cli.mjs'
+
+cli({ url: import.meta.url, flags: { limit: 'eq', filter: 'eq', browser: 'eq', ratio: 'eq', delta: 'eq', mean: 'eq' } })
 
 const THIS_DIR = dirname(fileURLToPath(import.meta.url))
 const CONF_DIR = dirname(THIS_DIR)

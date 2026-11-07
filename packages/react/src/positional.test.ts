@@ -24,7 +24,7 @@ const tutorial = mk({
   marks: marks('xscale', 'yscale'),
 })
 
-describe('positionalScales (C68)', () => {
+describe('positionalScales', () => {
   it('finds scales that are not literally named x/y (axes first)', () => {
     expect(positionalScales(tutorial)).toEqual({ x: 'xscale', y: 'yscale' })
   })
@@ -76,7 +76,7 @@ describe('positionalScales (C68)', () => {
   })
 })
 
-describe('positional scale names flow through the helpers (C68)', () => {
+describe('positional scale names flow through the helpers', () => {
   const info = getChartInfo(tutorial, { width: 300, height: 200 })
   const names = positionalScales(tutorial)
 
@@ -104,7 +104,7 @@ describe('positional scale names flow through the helpers (C68)', () => {
   })
 })
 
-describe('keyboardView gating (C66)', () => {
+describe('keyboardView gating', () => {
   const base = { x: [0, 10] as [number, number], y: [0, 20] as [number, number] }
   it('pan:false blocks arrows but not zoom or reset', () => {
     expect(keyboardView('ArrowRight', null, base, { pan: false }).handled).toBe(false)
@@ -118,7 +118,7 @@ describe('keyboardView gating (C66)', () => {
   })
 })
 
-describe('pixelSpanOf (C64)', () => {
+describe('pixelSpanOf', () => {
   it('is signed by the scale orientation', () => {
     const up = getChartInfo(tutorial, { width: 300, height: 200 }).scales.get('yscale')
     const right = getChartInfo(tutorial, { width: 300, height: 200 }).scales.get('xscale')

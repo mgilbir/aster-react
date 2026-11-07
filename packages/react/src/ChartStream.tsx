@@ -1,5 +1,5 @@
 /**
- * Streaming chart components (R13 / P0).
+ * Streaming chart components.
  *
  * These are thin shells over the existing `<Chart>`: the stream evaluates the
  * scene, and `<Chart sceneOverride={scene}>` runs the same SVG DOM patcher,

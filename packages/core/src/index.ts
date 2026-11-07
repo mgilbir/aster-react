@@ -88,9 +88,10 @@ export { geoRegistry, transformRegistry, dataFormatRegistry, requireTransform, t
 // The event-driven signal loop (`@aster/core/signals`: bindSceneSignals etc.)
 // ships as an opt-in addon like the DOM patcher; hosts using signal.on streams
 // import it explicitly.
-// Geo projections (`@aster/core/geo`), the rare-layout transforms
-// (`@aster/core/transforms`: kde/quantile/regression/loess, pack/partition/
-// treemap, wordcloud, voronoi) and URL/text-format data loading
+// Geo projections (`@aster/core/geo`), the rare-layout and statistics transforms
+// (`@aster/core/transforms`: kde, quantile, regression, loess, the hierarchy
+// layouts, wordcloud, voronoi, force, label and others; the list is
+// `TRANSFORMS_ADDON_TYPES` in addons.ts) and URL/text-format data loading
 // (`@aster/core/load`: loadSpecData, csv/tsv/dsv/topojson) are optional
 // addons so a plain bar/line/scatter chart never bundles them. Load an addon
 // before rendering a spec that needs it.

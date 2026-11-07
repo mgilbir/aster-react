@@ -1,5 +1,5 @@
 /**
- * Stream batch-order property test (audit C18, C91).
+ * Stream batch-order property test.
  *
  * A random sequence of push / flush / pause / resume calls runs against a real
  * `createChartStream` under every backpressure policy. The reference applies the

@@ -1,5 +1,5 @@
 /**
- * C21: encoding never writes channel values back into the datum.
+ * Encoding never writes channel values back into the datum.
  *
  * `resolveEncodeSet` used to mirror every resolved channel (x, y, size, fill,
  * opacity, ...) onto `item.datum`, so a data field named like a channel was
@@ -79,7 +79,7 @@ function rowsFor(mark: string): Row[] {
   })
 }
 
-describe('C21: the datum keeps its data values', () => {
+describe('the datum keeps its data values', () => {
   it.each(Object.keys(CHANNELS))('%s: a field named like every channel is not overwritten by encoding', (mark) => {
     const rows = rowsFor(mark)
     const before = JSON.parse(JSON.stringify(rows)) as Row[]

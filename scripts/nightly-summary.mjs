@@ -12,6 +12,7 @@
  */
 import { appendFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
+import { cli } from './lib/cli.mjs'
 
 /** @param {Record<string, { outcome?: string }>} steps @returns {{ rows: string[][], bad: string[] }} */
 export function summarize(steps) {
@@ -26,6 +27,7 @@ export function summarize(steps) {
 }
 
 function main() {
+  cli({ url: import.meta.url })
   const raw = process.env.STEPS
   if (!raw) {
     console.error('[nightly-summary] STEPS is not set (expected ${{ toJSON(steps) }})')

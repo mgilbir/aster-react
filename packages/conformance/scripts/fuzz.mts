@@ -1,5 +1,5 @@
 /**
- * Differential fuzzer (R12.4).
+ * Differential fuzzer.
  *
  * Generates deterministic Vega specs from a seeded PRNG, renders each through
  * the real Vega oracle and through @aster/core, canonicalizes both SVGs and
@@ -17,6 +17,9 @@ import { fileURLToPath } from 'node:url'
 import { renderSpec } from '@aster/core'
 import { renderWithVega } from '../src/render-vega.js'
 import { canonicalizeSvg, diffCanonical } from '../src/normalize.js'
+import { cli } from '../../../scripts/lib/cli.mjs'
+
+cli({ url: import.meta.url, flags: { replay: 'bool', clean: 'bool', seeds: 'value', start: 'value' } })
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const REPRO = join(HERE, '..', 'fuzz-repro')

@@ -1,10 +1,22 @@
+/**
+ * Bundle-size budgets: one tiny app per documented import pattern is bundled (esbuild, production, minify) and its gzip size is
+ * checked against the ceiling in BUDGETS below (the measured size plus 0.5 kB). Needs `pnpm build` and refuses a stale dist.
+ *
+ * Run: pnpm --filter @aster/benchmarks run budget   (the `budget` gate of `pnpm check`)
+ * Environment: ASTER_BUDGET_IGNORE_SIDE_EFFECTS=1 bundles as if no package declared `sideEffects` (the "before" column of docs/PERFORMANCE.md).
+ *
+ * Exit codes: 0 every pattern is within its budget, 1 a budget is exceeded or a pattern fails to bundle, 2 bad usage (an unknown option).
+ */
 import { build } from 'esbuild'
 import { writeFileSync, readFileSync, statSync, rmSync, mkdirSync, readdirSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { gzipSync } from 'node:zlib'
 import { fileURLToPath } from 'node:url'
+import { cli } from '../../../scripts/lib/cli.mjs'
 
-// Per-import-pattern bundle gates (R11.5, reshaped with the `sideEffects` work).
+cli({ url: import.meta.url })
+
+// Per-import-pattern bundle gates (reshaped with the `sideEffects` work).
 //
 // Every row bundles a tiny app that imports ONE documented pattern (esbuild, minify, NODE_ENV=production, tree-shaking
 // on, react/react-dom external) and gates its gzip size. What a row means:
@@ -101,7 +113,7 @@ import { fileURLToPath } from 'node:url'
 // vega-functions setdata, and the dataflow order signals resolve in (test/gallery-deterministic), measured (kB gzip): core 140.4,
 // useChart 147.5, Chart 186.4, SvgChart 165.6, SvgChart + interaction 181.3, Chart + VL 282.9 (core +1.6 over 138.8); the marginal entries did not move.
 //
-// The signal event loop as vega-dataflow's run loop (signal-dataflow.ts, the graph built in signals.ts) and the wordcloud transform as
+// The signal event loop as vega-dataflow's run loop (signal-propagation.ts, the graph built in signals.ts) and the wordcloud transform as
 // vega-wordcloud / d3-cloud (wordcloud.ts, replacing the stand-in), measured (kB gzip): signals marginal 14.2 (+1.5), transforms
 // marginal 39.1 (+1.7), Chart 188.6, SvgChart + interaction 183.5, Chart + VL 284.9; core, useChart and SvgChart did not move enough to
 // cross their ceilings (core 140.6).
@@ -354,7 +366,7 @@ function listSources(dir) {
 }
 
 /**
- * The budget must measure what `pnpm build` produces from the CURRENT sources (C86): a dist that is
+ * The budget must measure what `pnpm build` produces from the CURRENT sources: a dist that is
  * missing, or older than the source file it was built from, makes the numbers describe code that no
  * longer exists. Returns a list of problems (empty when every dist file is at least as new as its source).
  */

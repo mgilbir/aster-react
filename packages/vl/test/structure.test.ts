@@ -34,7 +34,7 @@ function defined(vg: any): { data: Set<string>; scales: Set<string>; dupes: stri
   return { data, scales, dupes }
 }
 
-describe('every compiled corpus spec is internally consistent (C71)', () => {
+describe('every compiled corpus spec is internally consistent', () => {
   for (const [name, spec] of corpus) {
     it(`${name}: all scale/dataset references resolve, no duplicates, no invalid values`, () => {
       const vg = compileFrozen(spec)
@@ -62,7 +62,7 @@ describe('every compiled corpus spec is internally consistent (C71)', () => {
         if (typeof o.data === 'string' && o.field !== undefined) expect(data.has(o.data), `domain data "${o.data}" is undefined`).toBe(true)
         // (an event stream {source: 'view', type: 'click'} also has a `source`; a dataset never has a `type`)
         if (typeof o.source === 'string' && o.type === undefined) expect(data.has(o.source), `dataset source "${o.source}" is undefined`).toBe(true)
-        // values real vega rejects (C71)
+        // values real vega rejects
         if (o.shape && typeof o.shape === 'object' && 'value' in o.shape) expect(o.shape.value).not.toBe('point')
         if (o.type === 'stack') expect(['zero', 'center', 'normalize']).toContain(o.offset)
         if (o.type === 'bin' && typeof o.signal === 'string') expect(o.signal).toMatch(/^[A-Za-z_]\w*$/)
@@ -72,7 +72,7 @@ describe('every compiled corpus spec is internally consistent (C71)', () => {
   }
 })
 
-describe('C71 audit repros', () => {
+describe('output a lenient runtime accepted but real vega rejects', () => {
   it('a point mark emits no shape:"point" (real vega rejects it); circle/square name their own', () => {
     const shapes = (mark: string) => {
       const out = compileFrozen({ data: DATA, mark, encoding: { x: xq, y: yq } })
@@ -108,7 +108,7 @@ describe('C71 audit repros', () => {
   })
 })
 
-describe('C74: time units and bin options', () => {
+describe('time units and bin options', () => {
   const units = (timeUnit: unknown) => {
     const out = compileFrozen({ data: DATA, mark: 'bar', encoding: { x: { field: 't', type: 'ordinal', timeUnit }, y: { aggregate: 'count', type: 'quantitative' } } })
     return out.data.flatMap((d: any) => d.transform ?? []).find((t: any) => t.type === 'timeunit')
@@ -153,8 +153,8 @@ describe('C74: time units and bin options', () => {
   })
 })
 
-describe('C97: argmax / argmin', () => {
-  it('compile an argmax encoding (the audit repro crashed with op.charAt)', () => {
+describe('argmax / argmin', () => {
+  it('compile an argmax encoding (it used to crash with op.charAt)', () => {
     const out = compileFrozen({ data: DATA, mark: 'bar', encoding: { x: cn, y: { field: 'v', type: 'quantitative', aggregate: { argmax: 'x' } } } })
     const ts = out.data.flatMap((d: any) => d.transform ?? [])
     const agg = ts.find((t: any) => t.type === 'aggregate')
@@ -163,7 +163,7 @@ describe('C97: argmax / argmin', () => {
   })
 })
 
-describe('sorts and domains (C35)', () => {
+describe('sorts and domains', () => {
   const barSort = (sort: unknown) => compileFrozen({ data: DATA, mark: 'bar', encoding: { x: { ...cn, sort }, y: { ...yq, aggregate: 'sum' } } })
   const domainOf = (out: any) => out.scales.find((s: any) => s.name === 'x').domain
   it('-y sorts by the sum of y, descending (not by x)', () => {
@@ -193,7 +193,7 @@ describe('sorts and domains (C35)', () => {
   })
 })
 
-describe('conditions (C35)', () => {
+describe('conditions', () => {
   it('a test condition wraps the base as [{test, value}, {value}]', () => {
     const out = compileFrozen({ data: DATA, mark: 'point', encoding: { x: xq, y: yq, color: { condition: { test: { field: 'y', gt: 2 }, value: 'red' }, value: 'grey' } } })
     expect(out.marks[0].encode.update.stroke).toEqual([{ test: 'datum["y"]>2', value: 'red' }, { value: 'grey' }])
@@ -216,7 +216,7 @@ describe('missing position channels get explicit defaults (real vega leaves them
   })
 })
 
-describe('layer composition (C34)', () => {
+describe('layer composition', () => {
   it('a parent filter and a parent config reach the layers, nested layers flatten, per-layer data stays separate', () => {
     const out = compileFrozen({
       data: DATA,

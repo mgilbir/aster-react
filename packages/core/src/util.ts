@@ -239,7 +239,7 @@ const hasOwn = Object.prototype.hasOwnProperty
  * `DisallowedObjectProperties` resolve only when they are *own* properties of
  * `obj` (a data column literally named `constructor` is data; the inherited
  * `Object` constructor is not). This is the shared guard for every dynamic
- * property walk (audit C1); a nullish `obj` falls through to the plain read,
+ * property walk; a nullish `obj` falls through to the plain read,
  * which throws as before.
  */
 export function safeGet(obj: unknown, key: unknown): unknown {
@@ -252,7 +252,7 @@ export function safeGet(obj: unknown, key: unknown): unknown {
  * Own-property read from a spec-keyed table (dataset, signal, scheme, ...).
  * A plain `{}` table inherits `constructor`, `toString`, `__proto__` from
  * `Object.prototype`, so `table[name]` for a spec/data-supplied `name` can
- * return an inherited function or object (audit C50). Use this (or a `Map`)
+ * return an inherited function or object. Use this (or a `Map`)
  * for every lookup keyed by a name that is not a compile-time constant.
  */
 export function ownGet<T>(table: Readonly<Record<string, T>> | null | undefined, key: string): T | undefined {
@@ -448,7 +448,7 @@ export function extent<T>(
 
 /**
  * `Math.min(...a)` without the argument spread: spreading a data-sized array
- * overflows the call stack at roughly 120k-200k elements (C42). Same result as
+ * overflows the call stack at roughly 120k-200k elements. Same result as
  * Math.min(...a): NaN propagates, an empty array gives Infinity.
  */
 export function minOf(a: ArrayLike<number>): number {

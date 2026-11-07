@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { loadSpecDataResource } from './useChart'
 
-describe('Vega-Lite registry is shared across package copies (C92)', () => {
+describe('Vega-Lite registry is shared across package copies', () => {
   afterEach(async () => {
     const reg = await import('./vl-registry')
     reg.resetVegaLiteCompiler()
@@ -23,7 +23,7 @@ describe('Vega-Lite registry is shared across package copies (C92)', () => {
   })
 })
 
-describe('useSpecData does not cache a failure forever (C92)', () => {
+describe('useSpecData does not cache a failure forever', () => {
   const spec = { data: [{ name: 't', url: 'https://example.test/d.csv', format: { type: 'csv' } }], marks: [] } as never
 
   it('a rejected load is retried on the next request', async () => {

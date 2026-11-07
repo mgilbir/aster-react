@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 /**
- * Accessibility structure of guides and titles (audit N3).
+ * Accessibility structure of guides and titles.
  *
  * vega-scenegraph draws an axis, a legend and a title as group marks: a container
  * `<g class="mark-group role-axis" role="graphics-symbol" aria-roledescription="axis" aria-label="...">`
@@ -79,7 +79,7 @@ const CASES: Array<[string, Spec, RegExp[]]> = [
   }), [/X-axis titled 'inner' for a linear scale/, /Title text 'cell'/]],
 ]
 
-describe('guides and titles have the structure and ARIA vega writes (N3)', () => {
+describe('guides and titles have the structure and ARIA vega writes', () => {
   for (const [name, spec, expected] of CASES) {
     it(name, async () => {
       const want = canonicalizeSvg(await oracle(spec))

@@ -1,6 +1,6 @@
 // @vitest-environment node
 /**
- * C6 / C60: loadSpecData takes a URL policy. Real HTTP servers on 127.0.0.1 so
+ * loadSpecData takes a URL policy. Real HTTP servers on 127.0.0.1 so
  * redirects, stalls, endless bodies and concurrency are the real thing.
  */
 import { describe, it, expect, afterAll, beforeAll } from 'vitest'
@@ -74,7 +74,7 @@ beforeAll(async () => {
 })
 afterAll(async () => { await Promise.all([secret, main, redirector, stall, endless, slowGate].map(close)) })
 
-describe('default policy (C6)', () => {
+describe('default policy', () => {
   it('loopback / private targets are denied by default and the server is never contacted', async () => {
     for (const url of [`${secret.origin}/x`, `http://localhost:${secret.port}/x`, `http://[::1]:${secret.port}/x`, `http://0x7f.1:${secret.port}/x`,
       `http://2130706433:${secret.port}/x`, `http://[::ffff:127.0.0.1]:${secret.port}/x`, 'http://169.254.169.254/latest/meta-data', 'http://10.0.0.5/x', 'http://192.168.1.1/x']) {
@@ -141,7 +141,7 @@ describe('default policy (C6)', () => {
   })
 })
 
-describe('redirects are re-checked hop by hop (C6)', () => {
+describe('redirects are re-checked hop by hop', () => {
   it('a redirect from the host\'s own service to a loopback/private host is denied before it is requested', async () => {
     const before = secret.hits.length
     const err = await loadSpecData(spec({ name: 't', url: `/go?to=${encodeURIComponent(secret.origin + '/stolen')}` }), { baseURL: redirector.origin }).catch((e) => e)
@@ -174,7 +174,7 @@ describe('redirects are re-checked hop by hop (C6)', () => {
   })
 })
 
-describe('bounded in time, bytes and concurrency (C6)', () => {
+describe('bounded in time, bytes and concurrency', () => {
   it('a server that never answers: timeoutMs aborts with an AsterLimitError (a missed abort hangs until the test timeout)', async () => {
     const err = await loadSpecData(spec({ name: 't', url: `${stall.origin}/headers-never` }), { ...TRUSTED_LOAD_OPTIONS, timeoutMs: 200 }).catch((e) => e)
     expect(err).toBeInstanceOf(AsterLimitError)
@@ -230,7 +230,7 @@ describe('bounded in time, bytes and concurrency (C6)', () => {
   })
 })
 
-describe('what is loaded (C60)', () => {
+describe('what is loaded', () => {
   const okFetch = (body: string): typeof fetch => (async () => ({ ok: true, status: 200, headers: new Headers(), text: async () => body })) as unknown as typeof fetch
 
   it('group-level url datasets (nested at any depth) are resolved, the input spec is not mutated', async () => {

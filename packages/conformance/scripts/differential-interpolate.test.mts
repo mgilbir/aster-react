@@ -4,7 +4,7 @@
  * engine) and compares the values at the `T` positions exactly. See `differential-util.mts`
  * for why nothing is recorded. (`hcl`/`cubehelix`/`zoom`/gamma go through pow, trig and
  * atan2, the very functions that differ between V8 versions.)
- * `interpolate('hcl')` used to be undefined in Aster (audit C95).
+ * `interpolate('hcl')` used to be undefined in Aster.
  */
 import { describe, expect, it } from 'vitest'
 import * as vega from 'vega'

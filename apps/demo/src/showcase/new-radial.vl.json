@@ -1,0 +1,84 @@
+{
+  "$schema": "https://vega.github.io/schema/vega-lite/v6.json",
+  "description": "A radial chart: angle and radius both from fields, the radius on a square-root scale.",
+  "width": 260,
+  "height": 260,
+  "data": {
+    "values": [
+      {
+        "m": "Jan",
+        "v": 12
+      },
+      {
+        "m": "Feb",
+        "v": 23
+      },
+      {
+        "m": "Mar",
+        "v": 47
+      },
+      {
+        "m": "Apr",
+        "v": 6
+      },
+      {
+        "m": "May",
+        "v": 52
+      },
+      {
+        "m": "Jun",
+        "v": 19
+      },
+      {
+        "m": "Jul",
+        "v": 31
+      },
+      {
+        "m": "Aug",
+        "v": 40
+      }
+    ]
+  },
+  "layer": [
+    {
+      "mark": {
+        "type": "arc",
+        "innerRadius": 20,
+        "stroke": "#fff"
+      }
+    },
+    {
+      "mark": {
+        "type": "text",
+        "radiusOffset": 12
+      },
+      "encoding": {
+        "text": {
+          "field": "v",
+          "type": "quantitative"
+        }
+      }
+    }
+  ],
+  "encoding": {
+    "theta": {
+      "field": "v",
+      "type": "quantitative",
+      "stack": true
+    },
+    "radius": {
+      "field": "v",
+      "scale": {
+        "type": "sqrt",
+        "zero": true,
+        "rangeMin": 20
+      }
+    },
+    "color": {
+      "field": "m",
+      "type": "nominal",
+      "legend": null,
+      "sort": null
+    }
+  }
+}

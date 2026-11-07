@@ -4,6 +4,9 @@
  */
 import { chromium } from 'playwright'
 import { canonicalizeSvg, diffCanonical } from '../../conformance/src/normalize.js'
+import { cli } from '../../../scripts/lib/cli.mjs'
+
+cli({ url: import.meta.url, args: '[url]' })
 
 const URL = process.argv[2] ?? 'https://aster-charts-demo.ringed-crane.workers.dev/'
 

@@ -30,9 +30,10 @@
 // is named "<journey>--<column>". A specification upstream refuses is not
 // dropped: the comparison records "both refuse" as an agreement.
 //
-// The values are inline in each specification, so a negative zero is written
-// as 0 (JSON has no negative zero) by the time a case crosses to the
-// comparison; the column keeps its reason, but the case carries a plain 0.
+// The values are inline in each specification. JSON.stringify writes a negative
+// zero as 0, so a case carries its specification as text (specText) with the
+// negative zero written as -0; run-sweep parses it with JSON.parse, which reads
+// -0 back as negative zero, and both sides get the same object.
 
 /**
  * The columns. `note` says what a column is for.
@@ -589,7 +590,7 @@ export function generate() {
         name: `${chart.name}--${column.name}`,
         family: chart.name,
         property: column.name,
-        // As text, so a negative zero reaches both sides as -0.
+        // As text, so a negative zero reaches both sides as -0 (run-sweep reads `specText`).
         specText: specText(withColumn(chart, column)),
       });
     }

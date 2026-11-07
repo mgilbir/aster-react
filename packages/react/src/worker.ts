@@ -1,5 +1,5 @@
 /**
- * Optional worker offload for compile/evaluate/render (R11.4).
+ * Optional worker offload for compile/evaluate/render.
  *
  * A large spec can block the main thread for tens of milliseconds. This entry
  * exposes a small request/response protocol that runs the pure pipeline in a
@@ -433,7 +433,7 @@ export function useChartWorker(spec: VgSpec, options: ChartWorkerOptions & {
 }
 
 // ---------------------------------------------------------------------------
-// Stream protocol (R13)
+// Stream protocol
 // ---------------------------------------------------------------------------
 
 /** A batch as sent to a worker: `textMetrics` travels by registered name. */

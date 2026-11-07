@@ -25,6 +25,9 @@ import { createRequire } from 'node:module'
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { cli } from '../../../scripts/lib/cli.mjs'
+
+cli({ url: import.meta.url })
 
 process.env.TZ = 'UTC'
 
@@ -35,7 +38,7 @@ const req = createRequire(join(here, '..', 'package.json'))
 
 // --- value codec -------------------------------------------------------------
 // JSON cannot express NaN/Infinity/-0/undefined/Dates/RegExp/Symbols, so
-// values are tagged. The replay test (`util-vectors.test.ts`) mirrors this
+// values are tagged. The replay test (`oracle-vectors.test.ts` (packages/core/src)) mirrors this
 // codec; the two must agree.
 
 function enc(v) {

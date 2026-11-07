@@ -16,7 +16,7 @@ for (const dir of ['corpus', 'corpus-vega-only']) {
   }
 }
 
-describe('compile never mutates its input (C73)', () => {
+describe('compile never mutates its input', () => {
   it('found the conformance corpus', () => {
     expect(corpus.length).toBeGreaterThan(150)
   })
@@ -36,7 +36,7 @@ describe('compile never mutates its input (C73)', () => {
     })
   }
 
-  it('repeated compiles of a faceted spec do not accumulate group-by keys in the caller\'s transform (audit repro)', () => {
+  it('repeated compiles of a faceted spec do not accumulate group-by keys in the caller\'s transform', () => {
     const spec = {
       data: DATA,
       facet: { row: { field: 'c', type: 'nominal' }, column: { field: 'g', type: 'nominal' } },

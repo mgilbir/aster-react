@@ -1,5 +1,5 @@
 /**
- * React binding for `createChartStream` (R13).
+ * React binding for `createChartStream`.
  *
  * A push-based feed cannot wait for a React render per event. This hook owns a
  * bounded stream, coalesces pushes into one flush per tick (by default), and
@@ -91,7 +91,7 @@ interface TaggedState extends StreamState {
 }
 
 /**
- * The stream is keyed on the spec CONTENT, `capacity` and `policy`: a parent
+ * The stream is keyed on the spec CONTENT, `capacity`, `policy` and `maxQueuedRows`: a parent
  * re-render that hands in an equal (but new) inline `spec` keeps the stream and
  * the rows streamed into it. `initial` is read when the stream is created.
  *

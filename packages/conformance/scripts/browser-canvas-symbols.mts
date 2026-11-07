@@ -9,7 +9,7 @@
  *   - PIXELS: the same pixels as the plain way (the symbols traced straight onto the context's own path,
  *     which is what any other context still gets and what Aster drew before), over every built-in shape and
  *     two custom ones, solid, stroked, dashed, translucent and blended paints, three sizes and NaN positions;
- *   - TIME: a 100k scatter of each closed shape paints in a few hundred milliseconds, not tens of seconds.
+ *   - TIME: a 100k scatter of each closed shape paints within `SCATTER_LIMIT_MS` (5 s), not tens of seconds.
  *
  * The plain way is reached by handing the renderer a stand-in that forwards to the real context but is not
  * an instance of it, so the renderer cannot take the Path2D route.
@@ -21,6 +21,7 @@ import { writeFileSync, rmSync, mkdirSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { build } from 'esbuild'
+import { cli } from '../../../scripts/lib/cli.mjs'
 
 const THIS_DIR = dirname(fileURLToPath(import.meta.url))
 const CONF_DIR = dirname(THIS_DIR)
@@ -127,6 +128,7 @@ window.__time = (shape, n) => {
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+  cli({ url: import.meta.url, flags: { browser: 'eq' } })
   const argv = process.argv.slice(2)
   const arg = (n: string, d: string): string => argv.find((a) => a.startsWith(`--${n}=`))?.split('=')[1] ?? d
   const res = await runSymbolRunOracle(arg('browser', 'chromium') as 'chromium')

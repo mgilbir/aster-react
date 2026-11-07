@@ -1,5 +1,5 @@
 /**
- * Canvas renderer tests (R9.1): a recording 2D-context mock captures the
+ * Canvas renderer tests: a recording 2D-context mock captures the
  * renderer's draw commands; geometry and paint are compared against the same
  * scene's SVG serialization via shared path canonicalization.
  */
@@ -616,7 +616,7 @@ describe('canvas/svg corpus parity', () => {
       // Multi-line text is excluded from the draw-record parity: vega's own
       // backends disagree (SVG tspans restart at x=0; canvas continues at the
       // anchor x). The browser canvas gate covers the single-line case.
-      if (name === 'text-linebreak.vg.json') continue
+      if (name === 'text-linebreak.vg.json' || name === 'axis-label-list-value.vg.json') continue
       // vega's SVG backend serializes a non-colour paint as fill="false" (which
       // rasterizes black); its canvas backend skips it. The SVG conformance gate
       // follows the SVG oracle; the browser canvas gate follows the canvas one.

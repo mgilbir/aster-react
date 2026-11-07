@@ -1,15 +1,16 @@
 /**
- * URL policy shared by the data loader (`@aster/core/load`, C6) and image marks
- * (C93). A spec is untrusted input: every URL it names is something the host
+ * URL policy shared by the data loader (`@aster/core/load`) and image marks.
+ * A spec is untrusted input: every URL it names is something the host
  * (or the viewer's browser) will request, so each one passes a policy first.
  *
  * Defaults (documented in docs/LIMITS.md):
  *  - only `http:` and `https:` (image marks also allow `data:`); anything else
  *    (`javascript:`, `file:`, `ftp:`, `blob:` ...) is denied;
  *  - URLs carrying credentials (`user:pass@host`) are denied;
- *  - relative URLs resolve against `baseURL`; without one a relative URL is an
- *    error rather than a guess about the environment (an image `url` is also drawn
- *    resolved against it, as vega's loader does: `resolveImageUrl`);
+ *  - relative URLs resolve against `baseURL`; without one the data loader refuses a relative
+ *    URL rather than guess about the environment (an image `url` or link is passed through
+ *    unchanged unless an `allow` hook is set, which refuses it; with a `baseURL` an image
+ *    `url` is also drawn resolved against it, as vega's loader does: `resolveImageUrl`);
  *  - `allow(url)` is a veto hook consulted for every URL (and every redirect hop).
  */
 

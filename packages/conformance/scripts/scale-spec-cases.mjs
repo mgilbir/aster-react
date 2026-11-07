@@ -424,7 +424,7 @@ add('bins', 'linear/bins-colour-array-interpolate', spec({ type: 'linear', ...do
   f('ordinal/multi-data-nulls', { domain: { fields: [{ data: 'd', field: 'c' }, { data: 'e', field: 'c' }] }, range: ['1', '2', '3', '4', '5', '6'] }, { data: [{ name: 'd', values: catsNull }, { name: 'e', values: [{ c: 'q' }, { c: null }] }] }, ['x', 'y', 'q', null])
   f('ordinal/multi-data-numbers', { domain: { fields: [{ data: 'd', field: 'c' }, { data: 'e', field: 'c' }] }, range: ['1', '2', '3', '4', '5', '6'] }, { data: [{ name: 'd', values: catsNum }, { name: 'e', values: [{ c: 4 }, { c: 10 }] }] }, [10, 2, 33, 7, 4])
   f('ordinal/multi-data-numbers-sorted', { domain: { fields: [{ data: 'd', field: 'c' }, { data: 'e', field: 'c' }], sort: true }, range: ['1', '2', '3', '4', '5', '6'] }, { data: [{ name: 'd', values: catsNum }, { name: 'e', values: [{ c: 4 }, { c: 10 }] }] }, [10, 2, 33, 7, 4])
-  // scheme ranges (C10)
+  // scheme ranges on ordinal scales (each value must resolve to a colour of the scheme)
   for (const sc of ['category10', 'category20', 'tableau10', 'set1', 'paired', 'Category10']) {
     f(`ordinal/range-scheme-${sc}`, { ...dom('d', 'c'), range: { scheme: sc } })
   }

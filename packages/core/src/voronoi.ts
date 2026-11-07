@@ -56,7 +56,7 @@ const edgeOf = (r: Rect, x: number, y: number): number =>
 
 // -- the triangulation and its lookups --------------------------------------------------------------------------------
 
-/** Is every triangle flat (area at most 1e-10)? Then the points are on a line as far as cells are concerned. */
+/** Is every triangle flat (twice its area at most 1e-10)? Then the points are on a line as far as cells are concerned. */
 function allFlat(points: Float64Array, triangles: ArrayLike<number>): boolean {
   for (let t = 0; t < triangles.length; t += 3) {
     const a = 2 * triangles[t]!

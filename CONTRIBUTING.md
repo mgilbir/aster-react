@@ -1,5 +1,9 @@
 # Contributing
 
+Prerequisites: Node 22.13 or newer (pnpm 11 does not run on older Node; the published packages support Node 20, which CI
+covers with the engine-sensitive tests only), pnpm as pinned by `packageManager` in `package.json` (corepack or the
+pnpm action installs it), `pnpm install`, and Playwright Chromium for the browser gates (command below).
+
 Aster Charts is verified against the real Vega renderer. Before opening a PR,
 run the full gate list from the repository root:
 
@@ -9,12 +13,18 @@ pnpm check
 
 The gate list lives in one place, [`scripts/gates.mjs`](scripts/gates.mjs), and
 CI runs exactly `pnpm check`, so a green local run is a green CI run. Do not copy
-the list anywhere else (a test fails if a workflow or doc does). `pnpm check -- --list`
+the list anywhere else: `scripts/gates.test.mjs` fails if `ci.yml` runs anything beyond `pnpm check`, the toolchain setup and the Node-matrix unit tests, or if a
+code block of this file or docs/TESTING.md has a line that is a gate's command; `scripts/docs-single-source.test.mjs` fails if a
+paragraph of any other doc (outside docs/TESTING.md and docs/RUNBOOK.md, which tabulate results) names four or more gates. `pnpm check -- --list`
 prints the gates with the reason for each. The browser gates need Chromium
 (`pnpm --filter @aster/conformance exec playwright install --with-deps chromium`);
 `pnpm check -- --skip browser` skips them locally, but that is not the CI list.
 
-The heavier schema sweeps and fuzzing run nightly (see
+When a gate is red, [docs/RUNBOOK.md](docs/RUNBOOK.md) covers debugging one failing corpus spec end to end, the stale-`dist`
+refusals, and every environment variable the harness reads. Changing the Vega-Lite compiler: see
+[packages/vl/CONTRIBUTING.md](packages/vl/CONTRIBUTING.md).
+
+The heavier schema sweeps, the value sweep and fuzzing run nightly (see
 [docs/TESTING.md](docs/TESTING.md)); run them yourself when you touch the
 Vega-Lite compiler or expression/transform semantics.
 

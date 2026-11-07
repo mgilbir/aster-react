@@ -8,7 +8,7 @@
  * Descriptors take every element's attributes from the per-element attribute
  * lists in render.ts (`*Attrs`, written into an `AttrSink`); the string renderer
  * writes the same lists into escaped markup. There is ONE list per element, so
- * the two renderers cannot drift (audit C43, T2) - `dom-string-parity.test.ts`
+ * the two renderers cannot drift - `packages/conformance/scripts/dom-string-parity.test.mts`
  * checks it over the whole conformance corpus. The one deliberate exception is
  * `denseMarks`, which batches symbols into chunked paths.
  */
@@ -197,7 +197,7 @@ const DENSE_SYMBOL_CHUNK = 256
 
 interface DenseChunk { from: number; to: number; first: SceneItem; last: SceneItem; desc: DomDesc }
 interface DenseCache { items: SceneItem[]; chunkSize: number; chunks: Map<number, DenseChunk> }
-// Keyed by scene group: the runtime reuses the group (and its items array) for
+// Cached per items array of a scene group: the runtime reuses the items array for
 // incremental updates, so unchanged chunks keep their descriptor and their DOM.
 // Keyed by the items ARRAY, not the group: an incremental update hands the same
 // (in-place advanced) array to a NEW group object, so a group key would miss
@@ -227,8 +227,8 @@ function symbolAttrs(it: SceneItem): Array<[string, string]> {
 
 /**
  * Chunk consecutive same-paint symbols into one `<path>` each. Chunks are
- * bounded (so an append only re-serializes the last one) and cached per scene
- * group, so a streamed append rebuilds a single ~256-item path string instead
+ * bounded (so an append only re-serializes the last one) and cached per items
+ * array of a scene group, so a streamed append rebuilds a single ~256-item path string instead
  * of every descriptor in the mark.
  */
 function denseSymbolItems(group: SceneGroup, items: SceneItem[], chunkSize: number): DomDesc[] {
@@ -329,7 +329,7 @@ function symbolItemDesc(it: SceneItem): DomDesc {
 }
 
 interface SymbolItemsCache { items: SceneItem[]; keys: SceneItem[]; descs: DomDesc[] }
-// Per-group; the runtime mutates the items array in place for incremental
+// Per items array; the runtime mutates the items array in place for incremental
 // updates, so an unchanged item keeps its descriptor without rebuilding the
 // 100k-entry array on every append.
 const SYMBOL_ITEMS = new WeakMap<SceneItem[], SymbolItemsCache>()
@@ -752,7 +752,7 @@ function patchEl(el: Element, desc: DomDesc): void {
   // we can avoid descending into it entirely. That holds only when THIS element
   // was last patched with THIS descriptor: children are matched by position, so
   // after a removal or reorder a reused item's cached descriptor lands on an
-  // element that currently shows a different item (audit C3).
+  // element that currently shows a different item.
   if (desc.clean && last === desc) return
 
   // Attributes: fast path compares against the cached descriptor.

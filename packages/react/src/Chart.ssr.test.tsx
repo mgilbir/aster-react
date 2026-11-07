@@ -18,7 +18,7 @@ const spec = {
   marks: [{ type: 'line', from: { data: 't' }, encode: { update: { x: { scale: 'x', field: 'x' }, y: { scale: 'y', field: 'y' }, stroke: { value: 'steelblue' } } } }],
 } as never
 
-describe('SSR string render + hydration (R11.3)', () => {
+describe('SSR string render + hydration', () => {
   afterEach(() => { document.body.innerHTML = '' })
 
   forEachVariant(['svg'], (Chart) => {

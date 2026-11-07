@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 /**
- * DOM patch oracle (audit C3, T2).
+ * DOM patch oracle.
  *
  * The contract: patching a live <svg> step by step with `patchSceneDom` yields
  * the SAME DOM as building the final scene from scratch. The reference is built
@@ -73,7 +73,7 @@ const STEPS = Number(env('ASTER_DOM_ORACLE_STEPS') ?? 10)
 const START = Number(env('ASTER_DOM_ORACLE_START') ?? 1)
 const ONE = env('ASTER_DOM_ORACLE_SEED')
 
-describe('patched DOM === DOM built fresh from the final scene (audit C3)', () => {
+describe('patched DOM === DOM built fresh from the final scene', () => {
   const seeds = ONE != null ? [Number(ONE)] : Array.from({ length: SEEDS }, (_, i) => START + i)
   for (const dense of [false, true]) {
     for (const fromString of [false, true]) {

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 /**
- * Targeted regressions for the DOM findings (C3, C23, C43), each next to the
+ * Targeted regressions for the DOM findings (positional skip, trail fill, shared attribute list), each next to the
  * general oracle that covers its shape (dom-oracle, dom-string-parity).
  */
 import { describe, it, expect } from 'vitest'
@@ -15,10 +15,10 @@ const NS = 'http://www.w3.org/2000/svg'
 const mkSvg = (): Element => document.createElementNS(NS, 'svg')
 
 // ---------------------------------------------------------------------------
-// C3: positional `clean` skip
+// positional `clean` skip
 // ---------------------------------------------------------------------------
 
-describe('C3: removing items patches the right elements', () => {
+describe('removing items patches the right elements', () => {
   const spec = {
     width: 200, height: 100, padding: 0, autosize: 'none', data: [{ name: 't' }],
     scales: [{ name: 'x', type: 'linear', domain: [0, 50], range: [0, 200] }],
@@ -27,7 +27,7 @@ describe('C3: removing items patches the right elements', () => {
   const xs = (svg: Element): string[] => [...svg.querySelectorAll('.mark-symbol path')].map((p) => p.getAttribute('transform')!)
   const rows = (...v: number[]): { x: number }[] => v.map((x) => ({ x }))
 
-  it('shows 0,20,30,40 after removing 10 from 0,10,20,30,40 (the audit repro)', () => {
+  it('shows 0,20,30,40 after removing 10 from 0,10,20,30,40', () => {
     // The removal must go through a session with the SAME row objects: only then are the surviving items
     // reused (clean) and carry their cached descriptors onto elements that now show another item. Fresh row
     // objects (evaluateChart per step) rebuild every item, so the positional skip is never reached.
@@ -56,10 +56,10 @@ describe('C3: removing items patches the right elements', () => {
 })
 
 // ---------------------------------------------------------------------------
-// C23: trail fill
+// trail fill
 // ---------------------------------------------------------------------------
 
-describe('C23: a trail keeps its fill', () => {
+describe('a trail keeps its fill', () => {
   const trail = (extra: Record<string, unknown>): SceneRoot => ({
     width: 100, height: 100, padding: { top: 0, right: 0, bottom: 0, left: 0 },
     items: [{
@@ -88,7 +88,7 @@ describe('C23: a trail keeps its fill', () => {
 })
 
 // ---------------------------------------------------------------------------
-// C43: one attribute list for the string renderer and the DOM descriptor
+// one attribute list for the string renderer and the DOM descriptor
 // ---------------------------------------------------------------------------
 
 const paint = {
@@ -145,14 +145,14 @@ const MARK_SCENES: Record<string, SceneRoot> = {
   'frame stroke without width': sceneOf([], { frameStroke: '#333' }),
 }
 
-describe('C43: the DOM descriptor and the string renderer take one attribute list', () => {
+describe('the DOM descriptor and the string renderer take one attribute list', () => {
   for (const [name, scene] of Object.entries(MARK_SCENES)) {
     it(`${name}: patched DOM === parsed string output`, () => {
       expect(parityDiff(scene)).toBeNull()
     })
   }
 
-  it('the audit\'s listed drifts are gone', () => {
+  it('the attributes the DOM descriptor used to drop are present', () => {
     const attrs = (scene: SceneRoot, sel: string): Record<string, string> => {
       const el = renderSceneToDomElement(scene, document).querySelector(sel)!
       return Object.fromEntries([...el.attributes].map((a) => [a.name, a.value]))
@@ -199,7 +199,7 @@ describe('C43: the DOM descriptor and the string renderer take one attribute lis
 })
 
 
-describe('C43: the two sinks apply the same value rules', () => {
+describe('the two sinks apply the same value rules', () => {
   const values: unknown[] = [
     undefined, null, 'transparent', 'red', '', 0, 3, -2.5, 1e21, Number.NaN, Infinity, true, false, [], [1, 2], [3, 'a&b', '"'],
     'a&b<c>"d\'e\tf\ng', '\u0000\uD800x', { gradient: 'g1' },

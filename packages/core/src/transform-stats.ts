@@ -5,7 +5,7 @@
  * operation so the output agrees with the oracle to the bit.
  *
  * Loaded by the transforms addon (`transform-extra.ts` registers them). Pinned
- * by `testdata/vectors/vega-transforms.json`. Input rows are never mutated; odd
+ * by the live differential `packages/conformance/scripts/differential-transforms.test.mts`. Input rows are never mutated; odd
  * values keep Vega's meaning: group support values are the RAW field values
  * (`''`, numeric strings, Dates ...) with JS coercion in the arithmetic, and
  * `partition` keys groups by `String(groupbyValues)`.

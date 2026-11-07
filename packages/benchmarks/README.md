@@ -6,7 +6,7 @@ to embed Vega in React.
 | Approach | What it measures |
 |---|---|
 | `aster` | `<Chart>` from `@aster/react` with `incremental={false}`: the full SVG is re-serialized and re-parsed per update |
-| `asterDom` | same `<Chart incremental>` — keeps the `<svg>` and patches only changed attributes (`patchSceneDom` in `@aster/core`) |
+| `asterDom` | same `<Chart incremental>` — keeps the `<svg>` and patches only changed attributes (`patchSceneDom` in `@aster/core/dom`) |
 | `reactVega` | `react-vega` v8 `<VegaEmbed>` — the React wrapper from the vega org. Data updates deep-compare the spec and **re-embed** the view |
 | `embedHook` | `vega-embed` in a `useEffect` following the official tutorials — incl. the documented incremental paths (`view.change()` for data, `view.width()/height()` for resize). This is Vega's best case |
 
@@ -40,8 +40,8 @@ pnpm bench:browser-stream # per-frame append: aster <ChartStream> vs vega view.c
 
 Knobs (all runners): `--points=1000` (dataset size), `--reps=…`, `--kind=line,scatter,bar`
 (runtime/browser), `--cycles=…` (memory), `--seconds=3` (browser frame pacing),
-`--dense=0,1` (streaming: aster SVG with `denseMarks` batching on/off).
-The browser runner needs a Chromium for Playwright (`npx playwright install chromium`).
+`--dense=0,1` (streaming: Aster SVG with `denseMarks` batching on/off).
+The browser runner needs a Chromium for Playwright (`pnpm --filter @aster/conformance exec playwright install --with-deps chromium`).
 
 ## Interpreting
 
@@ -50,7 +50,7 @@ The browser runner needs a Chromium for Playwright (`npx playwright install chro
   for absolute and near-tie numbers. jsdom is still useful in CI (no browser needed).
 - **Frame pacing** streams one data update per animation frame; the interesting column
   is `% long frames (>21ms)` — dropped frames a user would feel. The streaming runner
-  puts aster and Vega on the *same* spec and rows, so the `engine`/`flush` columns are
+  puts Aster and Vega on the *same* spec and rows, so the `engine`/`flush` columns are
   directly comparable: `aster` flushes on a microtask or in `requestAnimationFrame`,
   `vega` calls the documented `view.change('t', changeset().insert(rows))` and then
   `.run()` (synchronous) or `.runAsync()` (deferred). `mut/append` counts DOM mutations
@@ -80,7 +80,7 @@ The browser runner needs a Chromium for Playwright (`npx playwright install chro
 - `src/browser-entry.ts` — `window.__bench` API bundled into the browser page
 - `scripts/browser.bench.mjs` — esbuild + Playwright + CDP driver
 - `scripts/bundle-size.mjs` — per-approach payload table
-- `scripts/budget.mjs` — per-import-pattern gzip gates (core `renderSpec`, `useChart`, `<Chart>`, `<Chart>` + VL, and dom/canvas/hit/signals/load/geo/transforms as marginal cost on top of core); part of `pnpm check`. `ASTER_BUDGET_IGNORE_SIDE_EFFECTS=1` bundles as if the manifests had no `sideEffects` field, and the `useChart`/`<Chart>` rows must then fail. It compares each `dist` file with its source and exits if one is missing or older, so it never measures a stale build
+- `scripts/budget.mjs` — per-import-pattern gzip gates (core `renderSpec`, `useChart`, `<Chart>`, `<SvgChart>`, `<SvgChart>` + `interaction`, `<Chart>` + VL, and dom/canvas/hit/signals/load/geo/transforms as marginal cost on top of core); part of `pnpm check`. `ASTER_BUDGET_IGNORE_SIDE_EFFECTS=1` bundles as if the manifests had no `sideEffects` field, and the `useChart`/`<Chart>` rows must then fail. It compares each `dist` file with its source and exits if one is missing or older, so it never measures a stale build
 
 ## Results
 
@@ -93,13 +93,13 @@ Two results are worth knowing how to read:
 - **Streaming appends.** `bench:browser-stream` runs Vega's own streaming path
   (`view.change('t', changeset().insert(rows)).run()` / `.runAsync()`) and `<ChartStream>` on the identical spec and
   rows, one append per animation frame. Vega's `view.change` sets the dataset's `modified` flag, so its SVG renderer
-  re-walks and re-writes the scene and the mutation count per append grows with the dataset; aster's append path writes
+  re-walks and re-writes the scene and the mutation count per append grows with the dataset; Aster's append path writes
   only the appended item. At large sizes SVG is bound by the browser's cost of mutating a very large node tree (and
   most of all per-item `transform` attributes), not by the engine; that is why `denseMarks` batches dense symbol marks
-  into a few hundred `<path>` elements and why canvas stays frame-bound. `--dense=0,1` compares aster SVG with
+  into a few hundred `<path>` elements and why canvas stays frame-bound. `--dense=0,1` compares Aster SVG with
   batching off and on.
 - **Compute only.** `bench:incremental` runs the same append workload through Vega with `renderer: 'none'` so no paint
-  is in the way: the gap is the pulse. Vega inserts one tuple but still walks the affected operators, while aster
+  is in the way: the gap is the pulse. Vega inserts one tuple but still walks the affected operators, while Aster
   splices the mark items and patches the domain census in O(appended).
 
 String mode (`incremental={false}`) is still the better default when every mark changes on each update (scatter-style

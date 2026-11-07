@@ -9,7 +9,7 @@ import { forEachVariant } from './testing/variants'
 // `Chart` is the variant's component (see testing/variants.tsx).
 forEachVariant(['svg', 'signals'], (Chart, variant) => {
   /**
-   * `<Chart logger>` is the observable channel for recovered errors (C90): an expression that throws is reported
+   * `<Chart logger>` is the observable channel for recovered errors: an expression that throws is reported
    * there, from evaluation and from `signal.on` events, instead of being swallowed or escaping the DOM listener.
    */
   const spec = {

@@ -16,7 +16,7 @@ the page fetches the files the spec mentions with no timeout, and both engines' 
 each load waited on the harness's Node event loop inside the chart loader's own 10 s `timeoutMs`; that loop is the one the static
 path's synchronous renders block (measured stalls of 4.6 s, a 1.7 MB file taking 5.6 s to be answered), so on a loaded machine a local
 file read as `timeoutMs 10000 exceeded loading data/...json`. A load is now independent of how busy the harness is
-(`src/gallery/data-preload.test.ts` starves the harness's loop for longer than the timeout and the spec still passes).
+(`src/gallery/data-preload.gallery.test.ts` starves the harness's loop for longer than the timeout and the spec still passes).
 
 ## The specs are fetched, not committed
 
@@ -83,7 +83,7 @@ Every spec ends in exactly one of:
 
 * `pass` - the canonical SVGs are equal.
 * `fail` - they differ. Printed with the first diff (`first`) and the first diff that says WHAT differs (`->`: for a structure
-  diff the oracle/aster line pair).
+  diff the oracle/Aster line pair).
 * `error` - Aster (or `@aster/vl`) threw, or its SVG could not be canonicalised.
 * `unverifiable` - the **oracle** cannot be compared: it is not a function of its inputs even with the gate's determinism (below), or
   vega itself fails. Always listed with the reason; never counted as a pass; capped by a ceiling. Today that is only the specs whose
@@ -139,9 +139,12 @@ gallery) is SKIPPED with a reason and listed in the output -- never a swap regre
 (`floors.json` `swap`): every runnable pair must pass and equal vega's B, at least `minRunnable` pairs must be runnable (the sample cannot
 erode silently), unverifiable ceiling. `pnpm conformance:gallery --regenerate-swap-pairs` rewrites the list deliberately (review the diff). It is reported apart
 from the fresh-mount counts, and runs after the other paths (a load-dependent timeout of a data load would otherwise decide it).
-On origin/main 187 of the 223 pairs passed; the rest left the old chart's elements, timers or state behind.
+All 223 pairs run and pass (checked 2026-11-06). When the path was added, 187 of the 223 passed; the rest left the old chart's elements, timers or state behind.
 
 ## Triage
 
-`TRIAGE.md` is the snapshot of why each non-passing spec does not pass; `triage.json` is the same per spec;
-`scripts/gallery-triage.mts` regenerates them (`pnpm conformance:gallery --json=out.json` first).
+There is nothing open to triage: on 2026-11-06 every spec on every path passes except the 4 Vega specs the static oracle cannot
+render (it needs a canvas Node lacks), and `floors.json` holds that state. [TRIAGE.md](TRIAGE.md) says so and keeps the method.
+When a spec fails again, run `pnpm conformance:gallery --json=out.json`, then
+`pnpm --filter @aster/conformance exec tsx scripts/gallery-triage.mts out.json triage.json`, which puts each failing spec into a
+root-cause category (`triage.json` is the per-spec output; the committed one is `[]`, the output of a run with nothing to triage).

@@ -25,7 +25,7 @@ function reads(expr: string): string[] {
   return out
 }
 
-describe('field names reach expressions only through JSON-escaped datum[...] reads (C37)', () => {
+describe('field names reach expressions only through JSON-escaped datum[...] reads', () => {
   for (const n of NAMES) {
     it(`${n.label}: raw ${JSON.stringify(n.raw)} compiles with the key ${JSON.stringify(n.key)} read as ONE literal`, () => {
       const out = compileFrozen({
@@ -90,7 +90,7 @@ describe('field names reach expressions only through JSON-escaped datum[...] rea
     expect(splitAccessPath(copy!.as)).toEqual([copy!.as])
     const agg = flat.find((t) => t.type === 'aggregate')!
     expect(agg.fields).toEqual([copy!.as])
-    // the bars read the aggregated field, a flat name (the audit repro gave no bars)
+    // the bars read the aggregated field, a flat name
     const mark = out.marks[0]
     expect(mark.encode.update.y.field).toBe(agg.as[0])
     expect(splitAccessPath(agg.as[0])).toEqual([agg.as[0]])
@@ -138,7 +138,7 @@ describe('names.ts helpers', () => {
   })
 })
 
-describe('generated dataset names never collide with the user\'s (C97)', () => {
+describe('generated dataset names never collide with the user\'s', () => {
   it('a user dataset called data_0 / source_0 / lookup_x keeps its name and the generated ones move', () => {
     const out = compileFrozen({
       data: { name: 'data_0', values: DATA.values },

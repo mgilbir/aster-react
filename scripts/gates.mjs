@@ -14,6 +14,9 @@
  *   pnpm check -- --only conformance,a11y-parity
  *   pnpm check -- --skip browser        skip gates tagged `browser` (needs no Chromium)
  *   pnpm check -- --fail-fast           stop at the first failure
+ *   pnpm check -- --help                print this text
+ *
+ * Exit codes: 0 every selected gate passed (or --list/--help), 1 a blocking gate failed, 2 bad usage (an unknown option or gate name).
  *
  * Browser gates need Playwright Chromium:
  *   pnpm --filter @aster/conformance exec playwright install --with-deps chromium
@@ -21,6 +24,7 @@
  */
 import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
+import { cli } from './lib/cli.mjs'
 
 /** @type {{ name: string, args: string[], tags?: string[], blocking?: boolean, why: string }[]} */
 export const GATES = [
@@ -38,6 +42,10 @@ export const GATES = [
   { name: 'conformance', args: ['conformance'], why: 'Vega corpus: SVG diff against the real Vega oracle' },
   { name: 'conformance-vl', args: ['conformance-vl'], why: '@aster/vl compile + render against the Vega-Lite oracle' },
   { name: 'scene-diff', args: ['scene-diff'], why: 'resolved scales/groups/items per scope' },
+  {
+    name: 'incremental-diff', args: ['conformance:diff'],
+    why: 'every inline-data corpus spec: a random per-datum changeset (dataChanges) over the built chart renders the same SVG as a fresh evaluation of the new data (reads dist, so it runs after build)',
+  },
   { name: 'a11y-parity', args: ['a11y-parity'], why: 'guide captions vs vega-scenegraph aria-label' },
   { name: 'transform-matrix', args: ['transform-matrix'], why: 'transform option combinations vs the oracle' },
   { name: 'canvas', args: ['conformance:canvas'], tags: ['browser'], why: 'Chromium canvas pixel parity' },
@@ -98,6 +106,7 @@ function csv(argv, flag) {
 }
 
 function main() {
+  cli({ url: import.meta.url, flags: { list: 'bool', only: 'value', skip: 'value', 'fail-fast': 'bool' } })
   const argv = process.argv.slice(2)
   if (argv.includes('--list')) {
     for (const g of GATES) {

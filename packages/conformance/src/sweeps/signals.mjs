@@ -27,10 +27,10 @@
 // - Upstream retains state across a write: a scale whose domain is overwritten
 //   with null keeps its old domain, a data-driven domain keeps the order its
 //   surviving rows were in and appends re-admitted ones, an axis keeps the tick
-//   items whose values survived. The engine re-runs the same dataflow
-//   incrementally, so the second render has to show the same retention; such a
-//   case is not excluded, and a difference in it is a difference in the
-//   dataflow rather than in the spec.
+//   items whose values survived. The engine does not retain: it renders what a
+//   fresh chart with the written signals renders (see the next rule). A case
+//   whose only difference is that retention is counted as `retained`
+//   (run-sweep.ts), not excluded.
 // - Upstream's second render can differ from upstream's own FRESH render of the same signals: autosize
 //   runs once and again only when width/height/padding/autosize change, so a chart whose content
 //   outgrows the view keeps its first size. The engine is a pure function of (spec, data, signals)

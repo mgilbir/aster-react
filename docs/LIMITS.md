@@ -1,9 +1,43 @@
 # Limits (untrusted specs and data)
 
+## Recommended starting points
+
+These are suggestions (a judgement, not measured defaults).
+
+- **Public dashboard:** 100k rows, 50k items, 8 MB SVG, 2 s wall clock, and `maxGeneratedRows: 500_000`.
+- **Unknown spec on a server:** use smaller numbers (10k rows, 250 ms), a `loadSpecData` allowlist, and a **killable worker** for the render.
+
+For an untrusted spec you need all three of these; `limits` alone is best-effort (see the two layers below):
+
+1. `loadSpecData` with an `allow` hook for the origins you serve data from, and the same `limits`.
+2. `limits` on the render itself.
+3. The render in a `worker_threads` Worker (or a child process) that you `terminate()` when your own deadline passes. The kill is the hard guarantee; `limits` produce the friendly typed errors in the common case.
+
+```ts
+import { renderSpec, type SpecLimits, type VgSpec } from '@aster/core'
+import { loadSpecData } from '@aster/core/load'
+
+// Run this inside the Worker you can terminate().
+const limits: SpecLimits = { maxRows: 10_000, maxItems: 50_000, maxSvgLength: 8_000_000, maxTimeMs: 250 }
+
+async function render(untrusted: VgSpec): Promise<string> {
+  const loaded = await loadSpecData(untrusted, {
+    allow: (url) => url.origin === 'https://data.example.com',
+    limits,
+  })
+  return renderSpec(loaded, { limits })
+}
+```
+
+In React, `<Chart limits>` and the worker hooks take the same `limits` ("In React and workers" below); the pieces of the model follow.
+
 Data and specs are untrusted input. `SpecLimits` are the budgets; `loadSpecData`
 takes a URL policy; image marks and `href` links share that policy. Every limit is
 optional: a dimension you do not set is unbounded. There are no default numbers for
-`SpecLimits` (the values below are examples, see "Recommended starting points").
+`SpecLimits` (the values below are examples, see "Recommended starting points"), with one
+exception: once a `limits` object is present, even `{}`, a regular expression's input is capped at
+10 000 characters (raise it with `maxStringLength`). What else switches on with a `limits` object is
+under "Passing a `limits` object at all" below.
 
 **What this protects, and what it does not.** There are two layers.
 
@@ -54,8 +88,8 @@ cumulative cost of many sites each just under its ceiling (that is what `maxGene
 The ceilings guard spec-driven sites only; the lower-level functions (`ticks`, `range`, ...) are
 unchanged, so they still match d3 for any input.
 Passing a `limits` object at all, even `{}`, turns the limits scope on: that enables
-the pre-flight walk with its hard depth ceiling, the regular-expression screen and
-the default image/link URL policy described below.
+the pre-flight walk with its hard depth ceiling, the regular-expression screen (including the
+10 000-character input cap, `maxStringLength`) and the default image/link URL policy described below.
 
 ```ts
 import { renderSpec, type SpecLimits, type VgSpec } from '@aster/core'
@@ -218,20 +252,19 @@ supply (`test`, `regexp`, `replace`/`split` with a RegExp or a `/literal/`,
 
 1. **Static screen** (`regex-screen.ts`): the pattern is parsed into a small AST
    (not matched with another regex) and refused, with an `AsterLimitError`
-   (`regexSafety: ...`), when it has one of the known exponential shapes:
+   (`regexSafety: ...`), when it has one of the known catastrophic shapes:
    - a group under an unbounded quantifier whose body contains another unbounded
      quantifier (`(a+)+`, `(\w+\s?)*`, `(.*a){2,}`);
    - an unbounded-quantified alternation whose branches can start with the same
      character (`(a|a)*`, `(a|aa)+`, `(\w|\d)+`);
    - a backreference inside a group that repeats more than once (`(?:(a)\1)*`, `(?:(a)\1){2,}`).
-2. **Length caps**: a pattern over 1024 characters, or an input longer than
-   `maxStringLength` (default 10 000), is refused. This bounds linear patterns.
-
    - three or more **adjacent** unbounded quantifiers over overlapping characters
      (`a*a*a*b`, `.*.*.*x`, `\d+\d+\d+$`): polynomial backtracking of degree 3 or more, which
      on the 9 000 characters of a long input ran for over 20 seconds. Two adjacent ones (`\s*.*`,
      `\d+\.?\d*`) and the trim idiom `^\s*(.*?)\s*$` are not touched; no regular expression in
      the gallery, the corpus or the test suites has the refused shape.
+2. **Length caps**: a pattern over 1024 characters, or an input longer than
+   `maxStringLength` (default 10 000), is refused. This bounds linear patterns.
 
 **This is a heuristic, not a guarantee.** It blocks the known catastrophic
 shapes. It does not prove a pattern safe: polynomial blow-ups whose quantifiers are not
@@ -426,13 +459,6 @@ its name, so a dropped one is simply rebuilt.
   terminate the Worker you created (`worker.terminate()`) when your own deadline passes.
 - The worker handler serializes the SVG inside the same limits scope as the evaluation (one meter and clock),
   so `maxPathLength` and the other serialization checks apply there exactly as in `renderSpec`.
-
-## Recommended starting points
-
-These are suggestions (a judgement, not measured defaults). Public dashboard: 100k rows, 50k items, 8 MB SVG, 2 s wall clock, and
-`maxGeneratedRows: 500_000`. For an unknown spec on a server use smaller numbers
-(10k rows, 250 ms), a `loadSpecData` allowlist, and a **killable worker** for the
-render.
 
 ## The `heatmap` image
 

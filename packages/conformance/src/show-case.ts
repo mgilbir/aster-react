@@ -10,6 +10,9 @@ import '@aster/core/transforms'
 import { renderSpec } from '@aster/core'
 import { loadSpecData, TRUSTED_LOAD_OPTIONS } from '@aster/core/load'
 import { compile as compileVL } from '@aster/vl'
+import { cli } from '../../../scripts/lib/cli.mjs'
+
+cli({ url: import.meta.url, args: '<case-name-substr>' })
 
 const require = createRequire(import.meta.url)
 

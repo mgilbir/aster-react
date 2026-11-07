@@ -71,7 +71,7 @@ forEachVariant(['svg', 'interaction'], (Chart, variant) => {
       act(() => { root.unmount() })
     })
 
-    // C21 is fixed in core: the scene's datum is the pure source row, so the tooltip
+    // The scene's datum is the pure source row, so the tooltip
     // needs no list of "engine" field names to hide (which also hid real data fields).
     describe('shows pure datum values', () => {
       const row = { label: 'L', x: 1, y: 2, size: 'XL', fill: 'red', text: 'hello', description: 'a thing', limit: 7 }
