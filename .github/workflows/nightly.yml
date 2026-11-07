@@ -110,6 +110,11 @@ jobs:
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: pnpm sweep-vega -- --floor 7549 --min-ok 7538 --max-node-error 3
 
+      - id: sweep-values
+        name: Value sweep
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: pnpm sweep-values -- --floor 500 --min-ok 500 --max-node-error 0
+
       - id: fuzz
         name: Differential fuzzing (deterministic seeds)
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}

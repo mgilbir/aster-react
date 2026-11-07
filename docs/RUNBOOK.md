@@ -260,10 +260,12 @@ cell, `Infinity` written out...). Every other sweep varies the specification and
 column. Cases are named `<journey>--<column>`. Like the other sweeps it renders each case with real vega and with Aster and compares
 the SVG; `--floor`, `--min-ok` and `--max-node-error` are required, and `--filter <substring>` selects cases.
 
-It has no root script, is not in the gate list and is not run by `nightly.yml`; no document mentioned it before this page. To run it:
+It is not in the gate list (`pnpm check` does not run it); `nightly.yml` runs it as the `sweep-values` step, next to `sweep-vl` and
+`sweep-vega`, with `pnpm sweep-values -- --floor 500 --min-ok 500 --max-node-error 0`. Those are the measured numbers, so any case that
+differs, any engine error, any oracle crash or any case that goes missing fails the night. To run it:
 
 ```bash
-pnpm --filter @aster/conformance run sweep-values --floor 500 --min-ok 1 --max-node-error 0
+pnpm sweep-values -- --floor 500 --min-ok 500 --max-node-error 0
 ```
 
 `values.mjs` emits each case as `specText` (the chart as JSON text, so that a negative zero survives), and `run-sweep.ts` parses it
@@ -271,12 +273,9 @@ with `JSON.parse` into the case's `spec` before anything is rendered. A generate
 that parses to an object fails the run before it renders anything, so the sweep cannot go back to reading every case as "both
 refused" and checking nothing.
 
-Run as above, it generates 500 cases and reports `482 ok, 18 differ` (no both-refused, node-error or engine-error), and exits 1
-because of the 18. The 18 differences are open and unscheduled: 15 are in the `time-line` journey (including its `plain` control,
-where Aster draws a tick line vega does not), and one each are `band-over-the-values` and `point-over-the-values` with
-`with-a-list-in-a-cell` and `gradient-legend` with `with-infinity-written-out`. Whether they are Aster defects or sweep-spec
-problems has not been investigated. This sweep is not a gate and not part of the nightly run, so nothing tracks them; the floors on the command line above are
-placeholders, not committed ratchets.
+Run as above, it generates 500 cases and reports `500 ok` (no both-refused, node-error, engine-error or differ). A failure names the
+cases (`<journey>--<column>`) and prints the first lines of the SVG structure that differ; `--filter <name>` re-runs one. Raise the
+floors when journeys or columns are added; never lower them.
 
 ## 5. Related
 

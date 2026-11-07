@@ -217,7 +217,7 @@ describe('nightly.yml: one failing check does not hide the others', () => {
     }
     // the sweeps and the fuzzer are checks of their own, after the gates
     const ids = checks.map((s) => s.id)
-    for (const want of ['gates', 'gallery', 'canvas-firefox', 'canvas-webkit', 'bench-incremental', 'bench-stream', 'bench-browser', 'bench-dense', 'sweep-vl', 'sweep-vega', 'fuzz']) {
+    for (const want of ['gates', 'gallery', 'canvas-firefox', 'canvas-webkit', 'bench-incremental', 'bench-stream', 'bench-browser', 'bench-dense', 'sweep-vl', 'sweep-vega', 'sweep-values', 'fuzz']) {
       expect(ids, want).toContain(want)
     }
     expect(ids.indexOf('gates')).toBeLessThan(ids.indexOf('sweep-vl'))

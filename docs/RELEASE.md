@@ -29,7 +29,7 @@ dispatch. Two jobs:
    - the tagged commit must be an ancestor of `origin/main`;
    - `pnpm install --frozen-lockfile`, then `pnpm check`, the gate list in
      `scripts/gates.mjs`. The tag is gated
-     on `pnpm check` only: the Vega and Vega-Lite schema sweeps, the gallery, differential fuzzing, the Firefox and
+     on `pnpm check` only: the Vega and Vega-Lite schema sweeps, the value sweep, the gallery, differential fuzzing, the Firefox and
      WebKit canvas runs and the long benchmarks run in the nightly workflow (`.github/workflows/nightly.yml`), not here;
    - `pnpm pack` of each public package (the same packer `verify:publish` checks), uploaded as an artifact.
 2. `publish` (needs `verify`, environment `npm-release`, `id-token: write`): downloads
@@ -55,7 +55,7 @@ git tag v0.1.0
 git push --follow-tags
 ```
 
-Before tagging, confirm that the nightly workflow (`.github/workflows/nightly.yml`: the schema sweeps, the gallery,
+Before tagging, confirm that the nightly workflow (`.github/workflows/nightly.yml`: the schema sweeps, the value sweep, the gallery,
 differential fuzzing, the Firefox and WebKit canvas runs and the benchmarks) is green for the commit being tagged, in the
 repository's Actions tab. The release workflow does not run them and does not check that they passed. If the latest
 nightly ran on an older commit, wait for the next one or run it manually (it has a `workflow_dispatch` trigger)

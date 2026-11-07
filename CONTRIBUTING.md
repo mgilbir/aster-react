@@ -24,7 +24,7 @@ When a gate is red, [docs/RUNBOOK.md](docs/RUNBOOK.md) covers debugging one fail
 refusals, and every environment variable the harness reads. Changing the Vega-Lite compiler: see
 [packages/vl/CONTRIBUTING.md](packages/vl/CONTRIBUTING.md).
 
-The heavier schema sweeps and fuzzing run nightly (see
+The heavier schema sweeps, the value sweep and fuzzing run nightly (see
 [docs/TESTING.md](docs/TESTING.md)); run them yourself when you touch the
 Vega-Lite compiler or expression/transform semantics.
 
