@@ -403,7 +403,7 @@ The conformance harness (`packages/conformance`) uses the real Vega and Vega-Lit
 - **Guide captions** (`a11y-parity`), **transform option combinations** (`transform-matrix`), **schema sweeps** (`src/run-sweep.ts`: one generated chart per property/value of the Vega, Vega-Lite and signals schemas), **differential fuzzing** (`fuzz`), and the **real-browser** gates (Chromium text metrics, canvas pixels, batched-SVG pixels, signal event streams, React interaction).
 - **Oracle vectors**: per-library input/output pairs recorded from the pinned packages and replayed by `pnpm test`.
 
-Most corpus entries set explicit numeric `width`/`height` and `autosize: 'none'` so layout is deterministic, but nothing enforces it: of the 1057 specs, 109 do not set a top-level `autosize: 'none'` and 68 have no numeric top-level `width`/`height` (counted 2026-11-06), so autosize and container sizing are exercised by the gate too. Headless text metrics are matched by reimplementing Vega's estimate (`~~(0.8 * len * fontSize)`, see [FONTS.md](FONTS.md)).
+Most corpus entries set explicit numeric `width`/`height` and `autosize: 'none'` so layout is deterministic, but nothing enforces it: of the 1058 specs, 109 do not set a top-level `autosize: 'none'` and 68 have no numeric top-level `width`/`height` (counted 2026-11-06), so autosize and container sizing are exercised by the gate too. Headless text metrics are matched by reimplementing Vega's estimate (`~~(0.8 * len * fontSize)`, see [FONTS.md](FONTS.md)).
 
 ### Gap probes (`packages/conformance/probes/`)
 
