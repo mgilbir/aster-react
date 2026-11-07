@@ -1,0 +1,42 @@
+{
+  "$schema": "https://vega.github.io/schema/vega/v6.json",
+  "width": 200,
+  "height": 120,
+  "padding": 5,
+  "background": "white",
+  "autosize": "none",
+  "data": [
+    {
+      "name": "table",
+      "values": [
+        { "v": [1, 2], "n": 1 },
+        { "v": [3], "n": 2 },
+        { "v": 4, "n": 3 },
+        { "v": 5, "n": 4 }
+      ]
+    }
+  ],
+  "scales": [
+    { "name": "x", "type": "band", "domain": { "data": "table", "field": "v" }, "range": "width", "padding": 0.1 },
+    { "name": "p", "type": "point", "domain": { "data": "table", "field": "v" }, "range": "width" }
+  ],
+  "axes": [
+    { "orient": "bottom", "scale": "x", "labelOverlap": false },
+    { "orient": "top", "scale": "p", "labelOverlap": false }
+  ],
+  "marks": [
+    {
+      "type": "rect",
+      "from": { "data": "table" },
+      "encode": {
+        "enter": {
+          "x": { "scale": "x", "field": "v" },
+          "width": { "scale": "x", "band": 1 },
+          "y": { "value": 0 },
+          "y2": { "value": 60 },
+          "fill": { "value": "#4c78a8" }
+        }
+      }
+    }
+  ]
+}

@@ -374,12 +374,10 @@ export function buildHitIndex(scene: SceneRoot, cell = DEFAULT_CELL): HitIndex {
     switch (marktype) {
       case 'rect': {
         if (item.fill == null && item.stroke == null) return
-        let w = item.width
-        let h = item.height
-        let x0 = item.x ?? 0
-        let y0 = item.y ?? 0
-        if (w == null && item.x2 != null) { w = Math.abs((item.x2 as number) - x0); x0 = Math.min(x0, item.x2 as number) }
-        if (h == null && item.y2 != null) { h = Math.abs((item.y2 as number) - y0); y0 = Math.min(y0, item.y2 as number) }
+        const w = item.width
+        const h = item.height
+        const x0 = item.x ?? 0
+        const y0 = item.y ?? 0
         if (w == null || h == null) return
         // Rect marks paint in item order; the entry keeps that order (see the mark walk).
         const rounded = rec(item).cornerRadius !== undefined || rec(item).cornerRadiusTopLeft !== undefined

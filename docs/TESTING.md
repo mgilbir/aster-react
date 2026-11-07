@@ -8,7 +8,7 @@ Aster is tested against the real Vega and Vega-Lite packages, which are the orac
 |---|---|---|
 | Before you push | `pnpm check`: every gate, including the ones that need Chromium (`pnpm check -- --skip browser` leaves them out) | `scripts/gates.mjs` |
 | Every pull request and push to `main` | the `ci` job runs `pnpm check` and nothing else; the `unit` job runs the unit tests on Node 20, 22 and the newest major (Node 20 runs only the engine-sensitive differentials and the oracle vectors) | `.github/workflows/ci.yml` |
-| Nightly, 03:17 UTC | `pnpm check`, then what is too slow for a PR: the official galleries ([how they are compared](../packages/conformance/gallery/README.md), [the current result and how to triage a failure](../packages/conformance/gallery/TRIAGE.md)), Firefox and WebKit canvas parity, the large incremental and browser benchmarks, the Vega and Vega-Lite schema sweeps and 3000 fuzz seeds; a last step fails the run on any failed or skipped step | `.github/workflows/nightly.yml`, `scripts/nightly-summary.mjs` |
+| Nightly, 03:17 UTC | `pnpm check`, then what is too slow for a PR: the official galleries ([how they are compared](../packages/conformance/gallery/README.md), [the current result and how to triage a failure](../packages/conformance/gallery/TRIAGE.md)), Firefox and WebKit canvas parity, the large incremental and browser benchmarks, the Vega and Vega-Lite schema sweeps, the value sweep and 3000 fuzz seeds; a last step fails the run on any failed or skipped step | `.github/workflows/nightly.yml`, `scripts/nightly-summary.mjs` |
 | A release tag | check the tag against the package versions, require the commit to be on `main`, `pnpm check`, pack, then publish; the nightly-only checks do not run here, so look at the tagged commit's nightly first ([RELEASE.md](RELEASE.md)) | `.github/workflows/release.yml` |
 | By hand | `pnpm probe`, `pnpm fuzz`, the sweeps with other flags, the benchmarks | the sections below |
 
@@ -17,7 +17,7 @@ flowchart TB
   PR["pull request / push to main"] --> CI["ci.yml, job ci: pnpm check (every gate in scripts/gates.mjs, Chromium)"]
   PR --> UNIT["ci.yml, job unit: Node 22 and newest run the full vitest suite, Node 20 runs the differentials and oracle vectors only"]
   CRON["nightly 03:17 UTC"] --> NCHK["pnpm check"]
-  CRON --> NX["nightly-only: sweep-vega, sweep-vl, conformance:gallery, fuzz 3000 seeds, Firefox and WebKit canvas, browser and incremental benchmarks"]
+  CRON --> NX["nightly-only: sweep-vega, sweep-vl, sweep-values, conformance:gallery, fuzz 3000 seeds, Firefox and WebKit canvas, browser and incremental benchmarks"]
   NCHK & NX --> SUM["nightly-summary.mjs: fails on any failed or skipped step"]
   TAG["tag vX.Y.Z"] --> V["release.yml verify: check-release-tag, ancestor of origin/main, pnpm check, pnpm pack"]
   V --> PUB["publish (environment npm-release, id-token): npm publish core, vl, react with --provenance --ignore-scripts"]
@@ -99,6 +99,7 @@ expressions, and no unseeded bootstrap aggregates. Pin dates through data values
 pnpm sweep-vl -- --floor N --min-ok N --max-node-error N --vega-check       # Vega-Lite property sweep
 pnpm sweep-vega -- --floor N --min-ok N --max-node-error N                  # Vega schema sweep
 pnpm sweep-signals -- --floor N --min-ok N --max-node-error N --max-retained N   # signals written into a running chart
+pnpm sweep-values -- --floor N --min-ok N --max-node-error N                # one chart per (journey, column of awkward values)
 ```
 
 A sweep generates one small chart per property/value of the schema (`--filter substr` runs a subset). It only
@@ -106,7 +107,7 @@ passes when cases actually ran, the generated count is at least `--floor`, the n
 `--min-ok`, nothing differs and Aster crashes on nothing. `--max-node-error` is a ceiling on cases the oracle itself
 crashes on (an Aster crash is never reclassified), `--max-retained` a ceiling on `retained` cases. `--vega-check`
 also renders the Vega that `@aster/vl` emits through real vega. The signals sweep is a PR gate (`sweep-signals` in
-`scripts/gates.mjs`); the other two run nightly with the values in `.github/workflows/nightly.yml`. Raise the floors
+`scripts/gates.mjs`); the other three (Vega, Vega-Lite, values) run nightly with the values in `.github/workflows/nightly.yml`. Raise the floors
 when the schemas grow, never lower them. The Vega sweep's three oracle-side node-errors are vega-interpreter's
 area `bundle` interpolator (two cases) and a negative trail radius.
 
@@ -156,21 +157,22 @@ result is the summary line it prints. They change with the code: re-run before q
 
 | What | Command | Result |
 |---|---|---|
-| Corpus size | `ls packages/conformance/corpus \| wc -l`; `... \| grep -c '\.vg\.json$'`; `... \| grep -c '\.vl\.json$'` | 1058 specs: 386 raw Vega, 672 Vega-Lite |
+| Corpus size | `ls packages/conformance/corpus \| wc -l`; `... \| grep -c '\.vg\.json$'`; `... \| grep -c '\.vl\.json$'` | 1059 specs: 387 raw Vega, 672 Vega-Lite |
 | Unit, React, script and vector tests | `pnpm test` | 319 files, 33665 tests passed |
 | Time-zone matrix | `pnpm test:tz` | `[tz] all zones passed` (zone-sensitive vitest suites under America/New_York, Asia/Kolkata and Australia/Lord_Howe; `corpus-tz` under UTC and those three) |
-| SVG corpus vs real Vega | `pnpm conformance` | 1058/1058 passed |
+| SVG corpus vs real Vega | `pnpm conformance` | 1059/1059 passed |
 | Vega-Lite corpus through `@aster/vl` | `pnpm conformance-vl` | 672 passed, 0 failed, 0 errored / 672 |
-| Scene differential | `pnpm scene-diff` | 1058/1058 scenes match |
-| Guide captions vs Vega `aria-label` | `pnpm a11y-parity` | 1058/1058 caption sets match |
+| Scene differential | `pnpm scene-diff` | 1059/1059 scenes match |
+| Guide captions vs Vega `aria-label` | `pnpm a11y-parity` | 1059/1059 caption sets match |
 | Transform option combinations | `pnpm transform-matrix` | 75/76 match (1 browser-only case skipped here, run by `conformance:browser`) |
 | Vega schema sweep | `pnpm sweep-vega -- --floor 7549 --min-ok 7538 --max-node-error 3` | 7538 ok, 8 both-refused, 3 node-error (the oracle crashes), 0 engine-error, 0 differ / 7549 |
 | Vega-Lite schema sweep | `pnpm sweep-vl -- --floor 27513 --min-ok 27452 --max-node-error 17 --vega-check` | 27452 ok, 44 both-refused, 17 node-error, 0 engine-error, 0 differ, 0 vega-differ / 27513 |
+| Value sweep | `pnpm sweep-values -- --floor 500 --min-ok 500 --max-node-error 0` | 500 ok, 0 both-refused, 0 node-error, 0 engine-error, 0 differ / 500 |
 | Signals sweep | `pnpm sweep-signals -- --floor 166 --min-ok 103 --max-node-error 2 --max-retained 60` | 103 ok, 60 retained, 1 both-refused, 2 node-error, 0 differ / 166 |
 | Gap probes (a probe that passes keeps passing; a failing one documents a gap) | `pnpm probe -- --min-pass 2` | 2/2 pass (floor 2) |
 | Fuzz reproducers | `pnpm fuzz:replay` | 2/2 pass |
-| Corpus in Chromium, live text metrics | `pnpm conformance:browser` | 1058/1058 passed |
-| Canvas pixels vs Vega's canvas | `pnpm conformance:canvas` | chromium 1219/1219 passed; append painting vs full repaint: 120 scenarios, 265 append frames, 0 failing |
+| Corpus in Chromium, live text metrics | `pnpm conformance:browser` | 1059/1059 passed |
+| Canvas pixels vs Vega's canvas | `pnpm conformance:canvas` | chromium 1220/1220 passed; append painting vs full repaint: 120 scenarios, 265 append frames, 0 failing |
 | Batched (dense) SVG vs per-item SVG pixels | `pnpm conformance:batch` | 61/61 passed |
 | Signal event streams vs real Vega | `pnpm conformance:signals` | 64/64 cases agree (group scopes among them) |
 | Vega-Lite selections vs real Vega (same native input, signals/stores/SVG compared per step) | `pnpm conformance:selections` | 53/53 cases agree (concat, facet and repeat views and geographic interval selections among them; steps counted as `retained` ([INTERACTION.md](INTERACTION.md#signals)): 13 of them, ceiling 13) |

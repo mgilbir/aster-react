@@ -561,12 +561,10 @@ export function hasRectCorner(it: SceneItem): boolean {
 
 /** Split a rect item into its normalized origin and positive width/height. */
 export function rectGeometry(it: SceneItem): { x: number; y: number; w: number; h: number } | null {
-  let w = it.width
-  let h = it.height
-  let x = (it.x as number | undefined) ?? 0
-  let y = (it.y as number | undefined) ?? 0
-  if (w == null && it.x2 != null) { w = Math.abs((it.x2 as number) - x); x = Math.min(x, it.x2 as number) }
-  if (h == null && it.y2 != null) { h = Math.abs((it.y2 as number) - y); y = Math.min(y, it.y2 as number) }
+  const w = it.width
+  const h = it.height
+  const x = (it.x as number | undefined) ?? 0
+  const y = (it.y as number | undefined) ?? 0
   return w == null || h == null ? null : { x, y, w, h }
 }
 
@@ -660,15 +658,10 @@ function rectItemPathImpl(it: SceneItem): string | null {
   // Vega-scenegraph renders rects with undefined positions at (0,0)
   // (`item.x || 0`, `item.y || 0`), so default missing x/y to 0 rather than
   // dropping the rect.
-  let x0 = (it.x as number | undefined) || 0
-  let y0 = (it.y as number | undefined) || 0
-  // When x2/y2 are present, vega normalizes the rect so that x is the min
-  // edge and width is positive (same for y). This keeps the path winding
-  // consistent (positive h first) regardless of which edge is "x" vs "x2".
-  // A non-finite x2/y2 (a NaN scale result) gives a NaN extent and leaves the origin where it is:
-  // `Math.min(x0, NaN)` would turn the origin itself into NaN.
-  if (w == null && it.x2 != null) { w = Math.abs((it.x2 as number) - x0); if (Number.isFinite(it.x2)) x0 = Math.min(x0, it.x2 as number) }
-  if (h == null && it.y2 != null) { h = Math.abs((it.y2 as number) - y0); if (Number.isFinite(it.y2)) y0 = Math.min(y0, it.y2 as number) }
+  const x0 = (it.x as number | undefined) || 0
+  const y0 = (it.y as number | undefined) || 0
+  // The extent is the item's own width and height: the encode turned x2/y2 into them (adjustSpatial, which normalizes the rect so
+  // x is the min edge and the extent positive), and an item whose encode threw before that never had them -- a zero-size path.
   // vega draws every rect item, an unsized one as a zero-size path at its origin
   // (`item.width || 0`, `item.height || 0`), e.g. a scale that returned nothing for y2
   if (w == null) w = 0

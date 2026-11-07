@@ -378,6 +378,12 @@ interface AbortPoint {
   /** the pass failed in the labels of the gradient legend at `legend`, an operator ranked after all the others of the scope */
   labels?: true
   late?: boolean
+  /**
+   * the failing encode (`mark`) reads a scale ranked late (see scaleIsLate): vega ranks it after every operator that reads no late
+   * scale, so the guides over scales that are not late were made, and those over late scales (made after this mark's encode, as
+   * the mark is declared before them) were not
+   */
+  lateScale?: true
   /** a projection of the instance's scope could not be made (nothing else of it was) */
   projection?: true
   /** a signal of the instance's scope threw (the first operators of the scope: nothing else of it was made) */
@@ -616,7 +622,7 @@ function stepOf(p: AbortPoint): number {
 
 /** How many of the instance's axes and legends the pass that stopped at `cut` began (one that failed inside is part-made). */
 const madeAxes = (cut: AbortPoint): number => Math.max(0, cut.axis + (cut.inside && cut.legend === undefined ? 1 : 0))
-const madeLegends = (cut: AbortPoint): number => (cut.title || cut.labels || cut.lateSignal ? Infinity : cut.legend === undefined ? 0 : cut.legend + (cut.inside ? 1 : 0))
+const madeLegends = (cut: AbortPoint): number => (cut.title || cut.labels || cut.lateSignal || cut.lateScale ? Infinity : cut.legend === undefined ? 0 : cut.legend + (cut.inside ? 1 : 0))
 /** Whether the pass that stopped at `cut` made the marks of the instance it stopped in (they are ranked after its axes only). */
 const madeMarks = (cut: AbortPoint): boolean => cut.legend !== undefined || cut.mark !== undefined || cut.title === true || cut.labels === true || cut.lateSignal === true
 
@@ -2105,7 +2111,7 @@ function buildContentPass(
   if (layoutError !== undefined && cut === undefined) failPass(ctx, { path: ctx.scope.last ?? [], axis: Infinity, late: true, layout: { items: [[]], at: 0 } }, layoutError.error)
 
   // Top-level title. (A pass that stopped at a failing dataset or signal never made it: it is ranked after them.)
-  const titleGroup = (stopped && !cut!.title && !cut!.labels && !cut!.lateSignal) || ctx.datasetAborted ? null : withoutLateReads(ctx, () => buildTitleGroup(ctx.chart.title, items, width, height, ctx.rawGuides, ctx, undefined, ctx.chart.autosize === 'fit' || ctx.chart.autosize === 'fit-x' || ctx.chart.autosize === 'fit-y'))
+  const titleGroup = (stopped && !cut!.title && !cut!.labels && !cut!.lateSignal && !cut!.lateScale) || ctx.datasetAborted ? null : withoutLateReads(ctx, () => buildTitleGroup(ctx.chart.title, items, width, height, ctx.rawGuides, ctx, undefined, ctx.chart.autosize === 'fit' || ctx.chart.autosize === 'fit-x' || ctx.chart.autosize === 'fit-y'))
   if (titleGroup) items.push(titleGroup)
   // The root group's width / height are the view's `width` / `height` signals (0
   // for a composition that sizes only its children), whatever the grid inside covers.
@@ -4560,9 +4566,26 @@ function registerGradient(paint: object, ctx: EvalContext): void {
 }
 
 /** A mark's encode threw: the pass stops there, and the items after the failing one are left unencoded. */
-function failEncode(ctx: EvalContext, e: unknown): void {
+function failEncode(ctx: EvalContext, encode: Record<string, EncodeValue | EncodeValue[]>, e: unknown): void {
   ctx.encodeAborted = true
-  failPass(ctx, { axis: Infinity, mark: ctx.scope.mark ?? 0 }, e)
+  failPass(ctx, { axis: Infinity, mark: ctx.scope.mark ?? 0, ...(encodeReadsLateScale(encode, ctx.scope, ctx.chart) ? { lateScale: true as const } : {}) }, e)
+}
+
+/**
+ * Whether the scale of this name that the scope declares is ranked late (see scaleIsLate). A scale of an enclosing scope is not: its
+ * operators ran before the instances of the nested scope were made, whatever their rank was among their own.
+ */
+function scaleNamedIsLate(scope: GuideScope, name: string, chart: CompiledChart): boolean {
+  const own = scopeScale(scope, name)
+  return own !== undefined && scaleIsLate(own, scope, chart)
+}
+
+/** Whether an encode reads a scale that is ranked late: by a `scale` entry, or by a call of `scale()` and its kin in an expression. */
+function encodeReadsLateScale(encode: Record<string, EncodeValue | EncodeValue[]>, scope: GuideScope, chart: CompiledChart): boolean {
+  const reads = newReads()
+  specReads(encode, reads)
+  for (const name of reads.scales) if (scaleNamedIsLate(scope, name, chart)) return true
+  return false
 }
 
 function resolveEncodeSet(encode: Record<string, EncodeValue | EncodeValue[]>, datum: Row, ctx: EvalContext, marktype: string): SceneItem {
@@ -4581,7 +4604,7 @@ function resolveEncodeSet(encode: Record<string, EncodeValue | EncodeValue[]>, d
     try {
       definedValue = resolveEncodeProperty(plan.definedSpec, datum, ctx, binding)
     } catch (e) {
-      failEncode(ctx, e)
+      failEncode(ctx, encode, e)
       return {}
     }
   }
@@ -4642,7 +4665,7 @@ function resolveEncodeSet(encode: Record<string, EncodeValue | EncodeValue[]>, d
         break
       }
     }
-    failEncode(ctx, first)
+    failEncode(ctx, encode, first)
     return partial
   }
   // a gradient object as a paint (`{gradient: 'linear', stops: [...]}`): its definition joins the scene's defs
@@ -5083,8 +5106,10 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext, index: number): S
   // (a layout ranked after the instance comes after its late labels too)
   let labels: 'none' | undefined = lateLabels && cut !== undefined && cut.layout === undefined && compareInstances(ctx.scope.path, cut.path) === 0
     && !(cut.labels === true && cut.legend !== undefined && index <= cut.legend) ? 'none' : undefined
-  let entriesFailed = false
-  const refusal = entriesRefusal({ type: legendType(spec, scaleType), scale: scale as never, count: tickCountRaw, minstep, values, formatSpecifier, formatType, locale: locale(undefined) })
+  // (the pass stopped in the encode of a mark that reads a late scale, in this very scope: a legend over a late scale is ranked after
+  // that encode, and only what the legend's group and its title read of nothing late was made)
+  let entriesFailed = cut?.lateScale === true && compareInstances(ctx.scope.path, cut.path) === 0 && scaleNamedIsLate(ctx.scope, channels[0]![1], ctx.chart)
+  const refusal = entriesFailed ? undefined : entriesRefusal({ type: legendType(spec, scaleType), scale: scale as never, count: tickCountRaw, minstep, values, formatSpecifier, formatType, locale: locale(undefined) })
   if (refusal !== undefined) {
     if (lateLabels) {
       // (the entries of a gradient whose labels are ranked last: the pass stops there, after the rest of the scope, and the legend
@@ -5111,7 +5136,7 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext, index: number): S
     // legend still has its gradient item, unencoded)
     const kind = legendType(spec, scaleType)
     if (kind === 'gradient') items.push({ _part: 'gradient', _kind: 'rect', _bare: true, x: 0, y: 0, path: 'M0,0h0v0h0Z' } as unknown as SceneItem)
-    return { marktype: 'group', role: 'legend', legendType: kind, _entriesPending: true, x: 0, y: 0, width: 0, height: 0, items } as unknown as SceneGroup
+    return { marktype: 'group', role: 'legend', legendType: kind, _entriesPending: true, x: 0, y: 0, width: 0, height: 0, items, ...(kind === 'discrete' ? { madeMarks: ['entry'] } : {}) } as unknown as SceneGroup
   }
   const host = guideHost(ctx)
   host.stopped = undefined
@@ -5648,12 +5673,12 @@ function buildAxis(axis: CompiledAxis, ctx: EvalContext, index: number): SceneGr
   // thins the count)
   const count = labelTickCount(axis, scale, count0, ctx)
   let labelFormat: (v: unknown) => unknown
-  const labelCache: string[] = []
+  const labelCache: unknown[] = []
   try {
     labelFormat = axisLabelFormat(axis, scale, count, ctx, !!axisValues(axis, ctx))
     // vega's AxisTicks formats every tick as it makes the tuples: a format that throws (an invalid
     // specifier) is logged and the axis never gets its ticks
-    for (let i = 0; i < ticks.length; i++) labelCache[i] = String(labelFormat(ticks[i]))
+    for (let i = 0; i < ticks.length; i++) labelCache[i] = labelFormat(ticks[i])
   } catch (e) {
     return axisTicksFailed(axis, ctx, e, index)
   }
