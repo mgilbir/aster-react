@@ -485,3 +485,55 @@ describe('lazily materialised superseded scenes', () => {
     expect(groups(newest)[0]!.items).toHaveLength(60)
   })
 })
+
+describe('gradient paints keep their <defs> through an incremental evaluation', () => {
+  // A gradient object on an item is defined once in the scene's defs. Defs are collected while items are encoded, so an item
+  // that is not re-encoded (a reused mark, an unchanged row) must still bring its definition: the SVG references it by id.
+  const grad = (color: string) => ({ gradient: 'linear', stops: [{ offset: 0, color: 'white' }, { offset: 1, color }] })
+  const gradientIds = (scene: SceneRoot): string[] => (scene.defs ?? []).map((d) => d.id)
+  const svgDefs = (scene: SceneRoot): string => renderSceneToSvg(scene).match(/<defs>[\s\S]*<\/defs>/)?.[0] ?? ''
+
+  it('a mark over unchanged data keeps its gradient when another mark is re-encoded', () => {
+    const spec = {
+      ...BASE,
+      data: [{ name: 't', values: [{ x: 0 }, { x: 1 }, { x: 2 }] }],
+      marks: [
+        { type: 'rect', from: { data: 't' }, encode: { update: { x: { signal: '10 * datum.x' }, width: { value: 5 }, height: { value: 5 }, fill: { value: grad('red') } } } },
+        { type: 'rect', encode: { update: { x: { value: 50 }, y: { value: 50 }, width: { value: 20 }, height: { value: 20 }, fill: { value: grad('blue') } } } },
+      ],
+    }
+    const rows = [{ x: 0 }, { x: 1 }, { x: 2 }]
+    const next = [{ x: 0 }, { x: 5 }, { x: 2 }]
+    const chart = compileChart(spec as never)
+    evaluateChart(chart, { data: { t: rows } })
+    const inc = evaluateChart(chart, { data: { t: next }, dataChanges: { t: [1] } })
+    const full = fresh(spec, { data: { t: next } })
+    expect(gradientIds(inc)).toEqual(gradientIds(full))
+    expect(gradientIds(full)).toHaveLength(2)
+    expect(svgDefs(inc)).toBe(svgDefs(full))
+  })
+
+  it('rows that are not re-encoded keep their gradients, and a gradient nothing uses any more is dropped', () => {
+    const spec = {
+      ...BASE,
+      data: [{ name: 't', values: [] }],
+      marks: [{ type: 'rect', from: { data: 't' }, encode: { update: { x: { signal: '10 * datum.x' }, width: { value: 5 }, height: { value: 5 }, fill: { signal: "datum.c === 'a' ? {gradient: 'linear', stops: [{offset: 0, color: 'white'}, {offset: 1, color: 'red'}]} : datum.c === 'b' ? {gradient: 'linear', stops: [{offset: 0, color: 'white'}, {offset: 1, color: 'blue'}]} : 'green'" } } } }],
+    }
+    const rows = [{ x: 0, c: 'a' }, { x: 1, c: 'b' }, { x: 2, c: 'b' }]
+    const chart = compileChart(spec as never)
+    evaluateChart(chart, { data: { t: rows } })
+    // row 0 (the only red gradient) is re-encoded as a plain colour; row 1 (a blue one) is untouched
+    const next = [{ x: 0, c: 'z' }, { x: 1, c: 'b' }, { x: 2, c: 'b' }]
+    const inc = evaluateChart(chart, { data: { t: next }, dataChanges: { t: [0] } })
+    const full = fresh(spec, { data: { t: next } })
+    expect(gradientIds(full)).toHaveLength(1)
+    expect(gradientIds(inc)).toEqual(gradientIds(full))
+    expect(svgDefs(inc)).toBe(svgDefs(full))
+    // and the other way: the plain row takes the red gradient back
+    const back = [{ x: 0, c: 'a' }, { x: 1, c: 'b' }, { x: 2, c: 'b' }]
+    const inc2 = evaluateChart(chart, { data: { t: back }, dataChanges: { t: [0] } })
+    const full2 = fresh(spec, { data: { t: back } })
+    expect(gradientIds(inc2)).toEqual(gradientIds(full2))
+    expect(svgDefs(inc2)).toBe(svgDefs(full2))
+  })
+})

@@ -263,6 +263,8 @@ function gradientDefId(direction: 'horizontal' | 'vertical', stops: ReadonlyArra
 
 /** Cached recursive bounds for unchanged top-level mark groups. */
 const GROUP_BOUNDS = new WeakMap<SceneGroup, Bounds>()
+/** The gradient definitions a leaf mark's items use, in item order: a group that is reused, or updated in part, brings them to the scene's defs. */
+const GROUP_GRADIENTS = new WeakMap<SceneGroup, SceneDef[]>()
 
 /**
  * Undo record for a mark whose items array was updated IN PLACE: the length it
@@ -572,6 +574,8 @@ interface EvalContext {
   markItems: Map<string, SceneItem[]>
   /** The container of each named mark built so far (its type and items; a group mark's are its group items): what a `label` transform avoids or labels. */
   markContainers: Map<string, { marktype: string; items: SceneItem[] }>
+  /** The gradient definitions the leaf mark being made registers (merged into the scene's defs when the mark is done: see `evaluateMark`). */
+  markGradients?: { defs: SceneDef[]; /** only some of the mark's items were encoded (a pulse): the rest bring their gradients from the previous group */ partial: boolean }
 }
 
 /**
@@ -2057,6 +2061,9 @@ function buildContentPass(
     if (prevGroup && canReuseMarkGroup(mark, ctx)) {
       items.push(prevGroup)
       ctx.draft.groups.set(mark, prevGroup)
+      // (its items are not encoded again: their gradients are the group's)
+      const keptGradients = GROUP_GRADIENTS.get(prevGroup)
+      if (keptGradients !== undefined) addDefs(ctx, keptGradients)
       // (the numbers its items hold are kept with them)
       const key = numberedKey(mark, ctx)
       const kept = ctx.prev?.numbered.get(key)
@@ -3434,7 +3441,27 @@ function evaluateMark(
 ): SceneGroup | SceneGroup[] | null {
   // (the encode of a mark that reads what a late signal took with it never ran: its items are the join's)
   if (ctx.lateTaint !== undefined && !ctx.bareEncode && readsTaint({ encode: mark.encode, from: mark.from }, ctx)) ctx = { ...ctx, bareEncode: true }
-  const built = evaluateMarkItems(mark, ctx, prevGroup)
+  // A leaf mark's gradient definitions are collected apart, so the mark's list is exact: the scene's defs dedupe, and an item that
+  // is not encoded (a row a pulse leaves alone) registers nothing.
+  const outer = ctx.markGradients
+  const own = mark.type === 'group' ? undefined : { defs: [] as SceneDef[], partial: false }
+  ctx.markGradients = own
+  let built: SceneGroup | SceneGroup[] | null
+  try {
+    built = evaluateMarkItems(mark, ctx, prevGroup)
+  } finally {
+    ctx.markGradients = outer
+  }
+  if (own !== undefined) {
+    let defs = own.defs
+    if (built && !Array.isArray(built)) {
+      // (a pulse encoded only the changed rows: the group's list is read off its items, unless neither the rows before nor the ones
+      // encoded now had a gradient)
+      if (own.partial && (defs.length > 0 || (prevGroup != null && (GROUP_GRADIENTS.get(prevGroup)?.length ?? 0) > 0))) defs = gradientsOf(built.items as SceneItem[])
+      if (defs.length > 0) GROUP_GRADIENTS.set(built, defs)
+    }
+    addDefs(ctx, defs)
+  }
   // a named mark's items are what a later mark of `from: {data: <name>}` reads
   if (built && typeof mark.name === 'string') {
     // (a group mark's items are the group items themselves, a mark's are the items of its container)
@@ -3514,6 +3541,7 @@ function evaluateMarkItems(
     if (pulse) {
       const prevItems = prevGroup!.items as SceneItem[]
       const gen = ctx.gen
+      if (ctx.markGradients) ctx.markGradients.partial = true
       // (an interactive mark's transparent items are marked `_hit` as they are encoded: an update touches only these)
       hitMarked = true
       const hittable = mark.interactive !== false
@@ -4562,7 +4590,27 @@ function encodePlan(encode: Record<string, EncodeValue | EncodeValue[]>): Encode
 function registerGradient(paint: object, ctx: EvalContext): void {
   if (!isGradientPaint(paint)) return
   const def = gradientDefOf(paint)
-  if (!ctx._defs.some((d) => d.id === def.id)) ctx._defs.push(def)
+  const into = ctx.markGradients?.defs ?? ctx._defs
+  if (!into.some((d) => d.id === def.id)) into.push(def)
+}
+
+/** The scene's defs take `defs` in order, each once. */
+function addDefs(ctx: EvalContext, defs: readonly SceneDef[]): void {
+  for (const def of defs) if (!ctx._defs.some((d) => d.id === def.id)) ctx._defs.push(def)
+}
+
+/** The definitions of the gradient paints (fill, then stroke, item by item) on `items`: what encoding all of them registers. */
+function gradientsOf(items: readonly SceneItem[]): SceneDef[] {
+  const defs: SceneDef[] = []
+  for (const it of items) {
+    const rec = it as unknown as Record<string, unknown>
+    for (const paint of [rec['fill'], rec['stroke']]) {
+      if (!isGradientPaint(paint)) continue
+      const def = gradientDefOf(paint)
+      if (!defs.some((d) => d.id === def.id)) defs.push(def)
+    }
+  }
+  return defs
 }
 
 /** A mark's encode threw: the pass stops there, and the items after the failing one are left unencoded. */
