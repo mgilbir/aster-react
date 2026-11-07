@@ -14,8 +14,8 @@ For an untrusted spec you need all three of these; `limits` alone is best-effort
 3. The render in a `worker_threads` Worker (or a child process) that you `terminate()` when your own deadline passes. The kill is the hard guarantee; `limits` produce the friendly typed errors in the common case.
 
 ```ts
-import { renderSpec, type SpecLimits, type VgSpec } from '@aster/core'
-import { loadSpecData } from '@aster/core/load'
+import { renderSpec, type SpecLimits, type VgSpec } from '@aster-charts/core'
+import { loadSpecData } from '@aster-charts/core/load'
 
 // Run this inside the Worker you can terminate().
 const limits: SpecLimits = { maxRows: 10_000, maxItems: 50_000, maxSvgLength: 8_000_000, maxTimeMs: 250 }
@@ -63,7 +63,7 @@ that raises it, for example
 `[aster] limit exceeded: range 50000000 > 1000000 (built-in ceiling that applies even without limits; raise it with limits.maxRows)`.
 Giving the matching limit replaces the ceiling by your number (your budget governs); giving
 unrelated limits (`limits: {}`, `{ maxStringLength }`) leaves it in force. They are exported as
-`HARD_CAPS` and `HARD_MAX_SPEC_DEPTH` from `@aster/core`.
+`HARD_CAPS` and `HARD_MAX_SPEC_DEPTH` from `@aster-charts/core`.
 
 | Ceiling | Value | Where it applies | Replaced by | Largest seen in the gallery / corpus / test suites |
 |---|---|---|---|---|
@@ -92,7 +92,7 @@ the pre-flight walk with its hard depth ceiling, the regular-expression screen (
 10 000-character input cap, `maxStringLength`) and the default image/link URL policy described below.
 
 ```ts
-import { renderSpec, type SpecLimits, type VgSpec } from '@aster/core'
+import { renderSpec, type SpecLimits, type VgSpec } from '@aster-charts/core'
 
 const spec: VgSpec = {
   width: 200,
@@ -139,7 +139,7 @@ So `evaluateChart` and `getChartInfo` do not apply `maxMarks`, `maxDepth`, the
 spec-string check or the summed pre-flight row count, and they never check
 `maxSvgLength` or the scene's `path`/`text` lengths. Call `checkSpecLimits`,
 `checkSceneLimits` and `checkSvgLength` yourself if you build on the lower-level
-functions (they are exported from `@aster/core`).
+functions (they are exported from `@aster-charts/core`).
 
 ## What `maxRows` counts
 
@@ -226,7 +226,7 @@ deliberate difference; each applies only where noted.
 |---|---|
 | Any budget in `SpecLimits`; rows, items, strings, paths, generated rows/bytes, SVG length and time are refused with `AsterLimitError` | vega renders whatever it is given |
 | Built-in ceilings (previous section): a few spec-controlled amounts are refused above fixed values **even without `limits`**, and a spec nested deeper than 1000 or cyclic is an `AsterLimitError` even without `limits` | a few hundred bytes of spec can otherwise exhaust the process (a fatal out-of-memory, not an error) |
-| Pre-flight depth ceiling: with a `limits` object, spec nesting deeper than `HARD_MAX_SPEC_DEPTH` (1000, exported from `@aster/core`) fails even when `maxDepth` is unset, and a cyclic spec fails (`spec contains a cycle`) | an unbounded walk overflows the stack |
+| Pre-flight depth ceiling: with a `limits` object, spec nesting deeper than `HARD_MAX_SPEC_DEPTH` (1000, exported from `@aster-charts/core`) fails even when `maxDepth` is unset, and a cyclic spec fails (`spec contains a cycle`) | an unbounded walk overflows the stack |
 | `sequence`, `range`, numeric `ticks`, calendar and time-interval ranges, `pad` and number-format width are bounded by the active limits before they allocate | one call can otherwise allocate gigabytes |
 | Expression nesting deeper than 1000 (parser and AST) throws `AsterLimitError` (the parser does so with or without `limits`; see "A limit error cannot be swallowed") | vega throws a raw `RangeError` at a stack-dependent depth |
 | `bin`: a step that can never grow (underflowed to 0, `base` <= 1 that never reaches `maxbins`) throws `[aster] bin: cannot derive a step size ...` | vega loops forever. `maxbins: 0` (treated as 20) and `maxbins: -1` (NaN bins) give vega's output |
@@ -281,7 +281,7 @@ shapes, and the kill covers the rest.
 
 ## Loading URL data: `loadSpecData(spec, options)`
 
-`url` datasets are fetched by `loadSpecData` from `@aster/core/load`, never by
+`url` datasets are fetched by `loadSpecData` from `@aster-charts/core/load`, never by
 `renderSpec` (a `url` dataset that was not loaded is an error that tells you to
 call it, not an empty chart). It resolves `url` datasets at the top level **and**
 inside group marks at any depth, and returns a new spec.
@@ -302,7 +302,7 @@ Every URL a spec names passes the policy before any request is made:
 | `signal` | none | abort the whole load |
 | `limits` | none | `maxRows` per loaded dataset, topojson coordinates, and `maxTimeMs` over the whole call (`maxTimeMs exceeded during loadSpecData`) |
 
-The defaults are exported as `LOAD_DEFAULTS` (`timeoutMs`, `maxBytes`, `maxConcurrent`, `maxRedirects`) from `@aster/core/load`.
+The defaults are exported as `LOAD_DEFAULTS` (`timeoutMs`, `maxBytes`, `maxConcurrent`, `maxRedirects`) from `@aster-charts/core/load`.
 Policy refusals are `AsterUrlError`; timeout, size, redirect and budget failures are `AsterLimitError`; an HTTP error
 status is a plain `Error` (`[aster] failed to load dataset url ...: HTTP 404`).
 
@@ -331,8 +331,8 @@ Trusted specs (a demo, a test harness) can opt out explicitly with
 not write.
 
 ```ts
-import { loadSpecData } from '@aster/core/load'
-import type { VgSpec } from '@aster/core'
+import { loadSpecData } from '@aster-charts/core/load'
+import type { VgSpec } from '@aster-charts/core'
 
 const spec: VgSpec = {
   width: 200,
@@ -360,7 +360,7 @@ same checks, applied while the scene is built so the string renderer, the DOM
 path and canvas all see vetted items:
 
 ```ts
-import { renderSpec, type VgSpec } from '@aster/core'
+import { renderSpec, type VgSpec } from '@aster-charts/core'
 
 const spec: VgSpec = {
   width: 100,
@@ -403,7 +403,7 @@ console.log(svg.includes('cdn.example.com'), svg.includes('tracker.example.net')
   stream reads it when it is created). Functions in it are compared by identity, so
   memoize the object. A Worker cannot receive `allow`/`onDeny` functions: register them
   in the worker with `registerWorkerUrlPolicy(name, { allow, onDeny })` and send
-  `urlPolicy: { hooks: name, baseURL, protocols }` (`@aster/react/worker`).
+  `urlPolicy: { hooks: name, baseURL, protocols }` (`@aster-charts/react/worker`).
 
 ## Hyperlinks (`href`)
 
@@ -452,8 +452,8 @@ its name, so a dropped one is simply rebuilt.
   worker, which enforces them there (the request handler runs the same sequence as
   `renderSpec`). A violation comes back as `{ name, message, code: 'ASTER_LIMIT' }`; the
   hooks turn it into an `AsterLimitError` (see `docs/ERRORS.md`).
-- `useSpecData`, `useChartData` and `loadSpecData` from `@aster/react` take the same
-  options as `loadSpecData` in `@aster/core/load`, so the URL policy and `limits` apply to
+- `useSpecData`, `useChartData` and `loadSpecData` from `@aster-charts/react` take the same
+  options as `loadSpecData` in `@aster-charts/core/load`, so the URL policy and `limits` apply to
   Suspense loading too.
 - A worker is not a kill switch by itself. To get the hard guarantee described above,
   terminate the Worker you created (`worker.terminate()`) when your own deadline passes.
@@ -462,7 +462,7 @@ its name, so a dropped one is simply rebuilt.
 
 ## The `heatmap` image
 
-The `heatmap` transform (`@aster/core/transforms`) draws a raster grid into a bitmap that an image mark shows (`item.image`). vega draws it into a
+The `heatmap` transform (`@aster-charts/core/transforms`) draws a raster grid into a bitmap that an image mark shows (`item.image`). vega draws it into a
 `<canvas>`, which Node does not have: there `heatmap` throws. Here the bitmap holds its own pixels, so the transform and the SVG / canvas
 renderers also run where there is no canvas (Node, a worker). The image's `href` is the platform canvas' `toDataURL()` when the document
 has a canvas (the PNG a browser makes is byte for byte vega's), and otherwise a PNG written by the engine: valid, but uncompressed

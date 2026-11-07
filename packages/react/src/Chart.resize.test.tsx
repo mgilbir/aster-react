@@ -3,7 +3,7 @@ import * as React from 'react'
 import { createRoot } from 'react-dom/client'
 import { act } from 'react'
 import { describe, expect, afterEach, vi } from 'vitest'
-import { compile } from '@aster/vl'
+import { compile } from '@aster-charts/vl'
 import { forEachVariant } from './testing/variants'
 
 // A Vega-Lite view that fills its container: `width: 'container'` compiles to width / height signals that read

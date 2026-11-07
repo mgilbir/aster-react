@@ -5,8 +5,8 @@ paths a user takes, and compares the canonical SVG exactly (`src/normalize.ts`, 
 
 | path   | oracle                                                         | Aster                                                                                                          |
 |--------|----------------------------------------------------------------|----------------------------------------------------------------------------------------------------------------|
-| static | vega in Node (`vega-lite` compiles first for Vega-Lite)        | `loadSpecData` + `renderSpec` (`@aster/vl` compiles Vega-Lite)                                                 |
-| react  | the same vega in headless Chromium, in a 600 x 400 host        | `<Chart>` mounted as an app would: `@aster/react/vl`, **no** add-on imported (`<Chart>` loads geo / transforms itself, and the page checks it loaded exactly what the spec needs), data through `loadSpecData`, **no** size props unless the (compiled) spec has numeric top-level `width` / `height` |
+| static | vega in Node (`vega-lite` compiles first for Vega-Lite)        | `loadSpecData` + `renderSpec` (`@aster-charts/vl` compiles Vega-Lite)                                                 |
+| react  | the same vega in headless Chromium, in a 600 x 400 host        | `<Chart>` mounted as an app would: `@aster-charts/react/vl`, **no** add-on imported (`<Chart>` loads geo / transforms itself, and the page checks it loaded exactly what the spec needs), data through `loadSpecData`, **no** size props unless the (compiled) spec has numeric top-level `width` / `height` |
 
 Both read the data from the pinned `vega-datasets` package (3.2.1, the version both repositories' lockfiles use) through one offline
 `fetch`; the browser page has every request routed to disk or aborted. There is no network at test time.
@@ -26,9 +26,9 @@ file read as `timeoutMs 10000 exceeded loading data/...json`. A load is now inde
 | vega/vega-lite | v6.4.3 | `f4bb2188709204860329aff2aeaf678c0280c315` | `examples/specs/` (627; `normalized/` is not part of it) |
 
 ```
-pnpm --filter @aster/conformance gallery:fetch              # download what is missing into packages/conformance/.gallery/ (gitignored), verify all
-pnpm --filter @aster/conformance gallery:fetch -- --verify  # verify only, no network
-pnpm --filter @aster/conformance gallery:fetch -- --regenerate   # maintainers: re-list the pinned commits and rewrite manifest.json
+pnpm --filter @aster-charts/conformance gallery:fetch              # download what is missing into packages/conformance/.gallery/ (gitignored), verify all
+pnpm --filter @aster-charts/conformance gallery:fetch -- --verify  # verify only, no network
+pnpm --filter @aster-charts/conformance gallery:fetch -- --regenerate   # maintainers: re-list the pinned commits and rewrite manifest.json
 ```
 
 `manifest.json` (committed) lists every file with its sha256. Files are downloaded from `raw.githubusercontent.com` **at the commit**
@@ -84,7 +84,7 @@ Every spec ends in exactly one of:
 * `pass` - the canonical SVGs are equal.
 * `fail` - they differ. Printed with the first diff (`first`) and the first diff that says WHAT differs (`->`: for a structure
   diff the oracle/Aster line pair).
-* `error` - Aster (or `@aster/vl`) threw, or its SVG could not be canonicalised.
+* `error` - Aster (or `@aster-charts/vl`) threw, or its SVG could not be canonicalised.
 * `unverifiable` - the **oracle** cannot be compared: it is not a function of its inputs even with the gate's determinism (below), or
   vega itself fails. Always listed with the reason; never counted as a pass; capped by a ceiling. Today that is only the specs whose
   oracle needs a canvas Node lacks (`oracle-needs-canvas`: heatmap, label, wordcloud transforms); on the React path, in Chromium,
@@ -146,5 +146,5 @@ All 223 pairs run and pass (checked 2026-11-06). When the path was added, 187 of
 There is nothing open to triage: on 2026-11-06 every spec on every path passes except the 4 Vega specs the static oracle cannot
 render (it needs a canvas Node lacks), and `floors.json` holds that state. [TRIAGE.md](TRIAGE.md) says so and keeps the method.
 When a spec fails again, run `pnpm conformance:gallery --json=out.json`, then
-`pnpm --filter @aster/conformance exec tsx scripts/gallery-triage.mts out.json triage.json`, which puts each failing spec into a
+`pnpm --filter @aster-charts/conformance exec tsx scripts/gallery-triage.mts out.json triage.json`, which puts each failing spec into a
 root-cause category (`triage.json` is the per-spec output; the committed one is `[]`, the output of a run with nothing to triage).

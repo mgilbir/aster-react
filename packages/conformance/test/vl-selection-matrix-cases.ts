@@ -127,7 +127,7 @@ function group(title: string, body: (add: (name: string, spec: Record<string, an
   GROUPS.push([title, cases])
 }
 
-group('@aster/vl == vega-lite: point selections, every option x composition', (add) => {
+group('@aster-charts/vl == vega-lite: point selections, every option x composition', (add) => {
   for (const [cname, compose] of COMPOSERS) {
     for (const [vname, param, enc] of POINT) {
       add(`${vname} in a ${cname}`, compose(param, undefined, 'point', enc))
@@ -135,7 +135,7 @@ group('@aster/vl == vega-lite: point selections, every option x composition', (a
   }
 })
 
-group('@aster/vl == vega-lite: interval selections, every option x composition', (add) => {
+group('@aster-charts/vl == vega-lite: interval selections, every option x composition', (add) => {
   for (const [cname, compose] of COMPOSERS) {
     for (const [vname, param, enc] of INTERVAL) {
       add(`${vname} in a ${cname}`, compose(param, undefined, 'point', enc))
@@ -143,7 +143,7 @@ group('@aster/vl == vega-lite: interval selections, every option x composition',
   }
 })
 
-group('@aster/vl == vega-lite: resolve x type x composition', (add) => {
+group('@aster-charts/vl == vega-lite: resolve x type x composition', (add) => {
   const CASES: Variant[] = [
     ['point', sel({ type: 'point', fields: ['c'] })],
     ['point, no toggle', sel({ type: 'point', fields: ['c'], toggle: false })],
@@ -159,7 +159,7 @@ group('@aster/vl == vega-lite: resolve x type x composition', (add) => {
   }
 })
 
-group('@aster/vl == vega-lite: interval translate / zoom / scale binding over each scale type', (add) => {
+group('@aster-charts/vl == vega-lite: interval translate / zoom / scale binding over each scale type', (add) => {
   const INTERVALS: Variant[] = [
     ['interval', sel({ type: 'interval' })],
     ['interval x', sel({ type: 'interval', encodings: ['x'] })],
@@ -183,7 +183,7 @@ group('@aster/vl == vega-lite: interval translate / zoom / scale binding over ea
   add('a point selection over a time unit', { data: DATA, params: [sel({ type: 'point', encodings: ['x'] })], mark: 'point', encoding: { x: { field: 't', type: 'temporal', timeUnit: 'year' }, y: q('y'), color: { condition: { param: 'sel', value: 'red' }, value: 'grey' } } })
 })
 
-group('@aster/vl == vega-lite: the marks a selection is used on', (add) => {
+group('@aster-charts/vl == vega-lite: the marks a selection is used on', (add) => {
   const MARKS = ['point', 'bar', 'line', 'area', 'tick', 'circle', 'square', 'text', 'rule', 'trail'] as const
   const VARIANTS: Variant[] = [
     ['point', sel({ type: 'point', fields: ['c'] })],
@@ -197,7 +197,7 @@ group('@aster/vl == vega-lite: the marks a selection is used on', (add) => {
   }
 })
 
-group('@aster/vl == vega-lite: a selection used by a filter, an opacity and a scale domain', (add) => {
+group('@aster-charts/vl == vega-lite: a selection used by a filter, an opacity and a scale domain', (add) => {
   const P = (extra: Record<string, unknown> = {}) => sel({ type: 'interval', encodings: ['x'], ...extra })
   const CASES: Array<[string, Record<string, any>]> = [
     ['a filter on a selection', { data: DATA, params: [P()], mark: 'point', encoding: { x: q('x'), y: q('y') }, transform: [{ filter: { param: 'sel' } }] }],

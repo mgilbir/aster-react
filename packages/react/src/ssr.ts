@@ -17,9 +17,9 @@ import {
   type RuntimeInput,
   type SceneRoot,
   type VgSpec,
-} from '@aster/core'
-import { createChartSession, patchSceneDom, renderSceneToDomElement } from '@aster/core/dom'
-import { stampDatumAttrs } from '@aster/core/signals'
+} from '@aster-charts/core'
+import { createChartSession, patchSceneDom, renderSceneToDomElement } from '@aster-charts/core/dom'
+import { stampDatumAttrs } from '@aster-charts/core/signals'
 import { normalizeChartSpec } from './spec.js'
 
 export interface HydrateChartOptions extends RuntimeInput {

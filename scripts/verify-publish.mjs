@@ -18,8 +18,8 @@
  *     `module: nodenext` so the `exports` map and its `types` conditions are
  *     resolved exactly as a consumer's compiler resolves them,
  *  7. a Vega and a Vega-Lite render run through the installed packages,
- *  8. a consumer app that depends on import side effects (`@aster/react/vl`, `@aster/core/geo`,
- *     `@aster/core/transforms`, the guide captions) is BUNDLED from the installed tarballs with esbuild
+ *  8. a consumer app that depends on import side effects (`@aster-charts/react/vl`, `@aster-charts/core/geo`,
+ *     `@aster-charts/core/transforms`, the guide captions) is BUNDLED from the installed tarballs with esbuild
  *     (production, tree-shaking) and the bundle is executed: the `sideEffects` field that survived `pnpm pack`
  *     must keep those registrations.
  *
@@ -73,11 +73,11 @@ try {
     mkdirSync(dest, { recursive: true })
     run(PACKER, ['pack', '--pack-destination', dest], { cwd: join(root, 'packages', pkg), stdio: ['ignore', 'pipe', 'inherit'] })
     const files = readdirSync(dest).filter((f) => f.endsWith('.tgz'))
-    if (files.length !== 1) fail(`${PACKER} pack produced ${files.length} tarballs for @aster/${pkg}`)
+    if (files.length !== 1) fail(`${PACKER} pack produced ${files.length} tarballs for @aster-charts/${pkg}`)
     const file = join(dest, files[0])
     tarballs.set(pkg, file)
     manifests.set(pkg, JSON.parse(tarRead(file, 'package.json')))
-    console.log(`[verify-publish] packed @aster/${pkg} with ${PACKER} pack: ${files[0]}`)
+    console.log(`[verify-publish] packed @aster-charts/${pkg} with ${PACKER} pack: ${files[0]}`)
   }
 
   // 2) No unresolved workspace ranges in any dependency field of any packed manifest.
@@ -86,7 +86,7 @@ try {
     for (const field of ['dependencies', 'devDependencies', 'peerDependencies', 'optionalDependencies']) {
       for (const [dep, range] of Object.entries(m[field] ?? {})) {
         if (/^(workspace|link|file):/.test(String(range))) {
-          fail(`@aster/${pkg} packed manifest has ${field}.${dep} = "${range}" (the published package would be uninstallable)`)
+          fail(`@aster-charts/${pkg} packed manifest has ${field}.${dep} = "${range}" (the published package would be uninstallable)`)
         }
       }
     }
@@ -100,29 +100,29 @@ try {
     const wanted = [...REQUIRED]
     for (const [sub, target] of entriesOf(m)) {
       for (const cond of ['types', 'default']) {
-        if (typeof target?.[cond] !== 'string') fail(`@aster/${pkg} exports["${sub}"] has no "${cond}" condition`)
+        if (typeof target?.[cond] !== 'string') fail(`@aster-charts/${pkg} exports["${sub}"] has no "${cond}" condition`)
         wanted.push(target[cond].replace(/^\.\//, ''))
       }
     }
     for (const want of wanted) {
-      if (!names.has(want)) fail(`@aster/${pkg} tarball is missing ${want}`)
+      if (!names.has(want)) fail(`@aster-charts/${pkg} tarball is missing ${want}`)
     }
     const maps = [...names].filter((n) => n.endsWith('.map'))
-    if (maps.length) fail(`@aster/${pkg} tarball ships source maps whose sources are not included: ${maps.slice(0, 3).join(', ')}`)
+    if (maps.length) fail(`@aster-charts/${pkg} tarball ships source maps whose sources are not included: ${maps.slice(0, 3).join(', ')}`)
     for (const n of names) {
       if (!/\.(c|m)?js$/.test(n)) continue
-      if (/^\/\/# sourceMappingURL=/m.test(tarRead(tarballs.get(pkg), n))) fail(`@aster/${pkg}/${n} references a source map that is not in the tarball`)
+      if (/^\/\/# sourceMappingURL=/m.test(tarRead(tarballs.get(pkg), n))) fail(`@aster-charts/${pkg}/${n} references a source map that is not in the tarball`)
     }
-    if (m.sideEffects === undefined) fail(`@aster/${pkg} packed manifest declares no "sideEffects" (bundlers could not tree-shake it)`)
-    if (m.private) fail(`@aster/${pkg} is private but was packed`)
-    if (m.license !== 'BSD-3-Clause') fail(`@aster/${pkg} has license ${m.license}`)
+    if (m.sideEffects === undefined) fail(`@aster-charts/${pkg} packed manifest declares no "sideEffects" (bundlers could not tree-shake it)`)
+    if (m.private) fail(`@aster-charts/${pkg} is private but was packed`)
+    if (m.license !== 'BSD-3-Clause') fail(`@aster-charts/${pkg} has license ${m.license}`)
     const notices = tarRead(tarballs.get(pkg), 'THIRD_PARTY_NOTICES.md')
     if (!/Permission to use, copy, modify, and\/or distribute this software/.test(notices) || !/Redistribution and use in source and binary forms/.test(notices)) {
-      fail(`@aster/${pkg} THIRD_PARTY_NOTICES.md carries no licence texts`)
+      fail(`@aster-charts/${pkg} THIRD_PARTY_NOTICES.md carries no licence texts`)
     }
   }
 
-  // 4) Install the tarballs into a scratch consumer, like `npm install @aster/react` would, minus the registry.
+  // 4) Install the tarballs into a scratch consumer, like `npm install @aster-charts/react` would, minus the registry.
   const project = join(tmp, 'consumer')
   mkdirSync(project, { recursive: true })
   writeFileSync(join(project, 'package.json'), JSON.stringify({ name: 'aster-consumer', private: true, type: 'module' }))
@@ -138,8 +138,8 @@ try {
     ...PUBLIC.map((p) => tarballs.get(p)), ...peers,
   ], { cwd: project, stdio: ['ignore', 'pipe', 'inherit'] })
   for (const pkg of PUBLIC) {
-    const installed = join(project, 'node_modules', '@aster', pkg, 'package.json')
-    if (!existsSync(installed)) fail(`npm install did not install @aster/${pkg}`)
+    const installed = join(project, 'node_modules', '@aster-charts', pkg, 'package.json')
+    if (!existsSync(installed)) fail(`npm install did not install @aster-charts/${pkg}`)
   }
 
   // 5) Import EVERY declared export entry by its public specifier.
@@ -164,15 +164,15 @@ for (const s of specifiers) {
   // 6) Typecheck a consumer that uses the public types, resolving through the `exports` map.
   const typeImports = specifiers.map((s, i) => `import * as entry${i} from '${s}'\nvoid entry${i}`).join('\n')
   writeFileSync(join(project, 'consumer.ts'), `${typeImports}
-import type { VgSpec, RuntimeInput, SceneRoot, SpecLimits, ChartInfo } from '@aster/core'
-import { renderSpec, evaluateChart, compileChart, getChartInfo, chartInfoFromScene, AsterLimitError } from '@aster/core'
-import { compile } from '@aster/vl'
-import { Chart } from '@aster/react'
-import type { ChartProps } from '@aster/react'
-import { SvgChart } from '@aster/react/lite'
-import type { SvgChartProps, SvgChartHandle } from '@aster/react/lite'
-import { interaction } from '@aster/react/interaction'
-import type { InteractionCapability } from '@aster/react/interaction'
+import type { VgSpec, RuntimeInput, SceneRoot, SpecLimits, ChartInfo } from '@aster-charts/core'
+import { renderSpec, evaluateChart, compileChart, getChartInfo, chartInfoFromScene, AsterLimitError } from '@aster-charts/core'
+import { compile } from '@aster-charts/vl'
+import { Chart } from '@aster-charts/react'
+import type { ChartProps } from '@aster-charts/react'
+import { SvgChart } from '@aster-charts/react/lite'
+import type { SvgChartProps, SvgChartHandle } from '@aster-charts/react/lite'
+import { interaction } from '@aster-charts/react/interaction'
+import type { InteractionCapability } from '@aster-charts/react/interaction'
 import { createElement, createRef } from 'react'
 
 const spec: VgSpec = { width: 100, height: 50, marks: [] }
@@ -223,18 +223,18 @@ void [liteEl, richEl, fullEl]
 import assert from 'node:assert'
 import { createElement } from 'react'
 import { renderToString, renderToReadableStream } from 'react-dom/server'
-import { renderSpec, compileChart, evaluateChart, transformRegistry } from '@aster/core'
-import { createChartSession, patchSceneDom } from '@aster/core/dom'
-import { renderSceneToCanvas } from '@aster/core/canvas'
-import { buildHitIndex } from '@aster/core/hit'
-import { bindSceneSignals } from '@aster/core/signals'
-import { compile } from '@aster/vl'
-import { Chart, hasVegaLiteCompiler } from '@aster/react'
-import { SvgChart } from '@aster/react/lite'
-import { interaction } from '@aster/react/interaction'
-import '@aster/react/vl'
-import { renderChartToStaticMarkup } from '@aster/react/ssr'
-import { handleChartWorkerRequest } from '@aster/react/worker'
+import { renderSpec, compileChart, evaluateChart, transformRegistry } from '@aster-charts/core'
+import { createChartSession, patchSceneDom } from '@aster-charts/core/dom'
+import { renderSceneToCanvas } from '@aster-charts/core/canvas'
+import { buildHitIndex } from '@aster-charts/core/hit'
+import { bindSceneSignals } from '@aster-charts/core/signals'
+import { compile } from '@aster-charts/vl'
+import { Chart, hasVegaLiteCompiler } from '@aster-charts/react'
+import { SvgChart } from '@aster-charts/react/lite'
+import { interaction } from '@aster-charts/react/interaction'
+import '@aster-charts/react/vl'
+import { renderChartToStaticMarkup } from '@aster-charts/react/ssr'
+import { handleChartWorkerRequest } from '@aster-charts/react/worker'
 
 const rows = [{ c: 'a', v: 3 }, { c: 'b', v: 7 }]
 const vega = {
@@ -272,8 +272,8 @@ const vl = {
   mark: 'bar',
   encoding: { x: { field: 'c', type: 'nominal' }, y: { field: 'v', type: 'quantitative' } },
 }
-assert.ok(Array.isArray(compile(vl).marks), 'direct @aster/vl compile')
-assert.equal(hasVegaLiteCompiler(), true, '@aster/react/vl registered the compiler')
+assert.ok(Array.isArray(compile(vl).marks), 'direct @aster-charts/vl compile')
+assert.equal(hasVegaLiteCompiler(), true, '@aster-charts/react/vl registered the compiler')
 
 const chartHtml = renderToString(createElement(Chart, { spec: vega, width: 200, height: 120, a11y: false }))
 assert.ok(chartHtml.includes('<svg'), '<Chart> renders Vega through the published package')
@@ -316,15 +316,15 @@ assert.ok(worker.scene && !('runtime' in worker.scene), 'worker scene is clone-s
 import assert from 'node:assert'
 import { createElement } from 'react'
 import { renderToString } from 'react-dom/server'
-import '@aster/react/vl'
-import '@aster/core/geo'
-import '@aster/core/transforms'
-import { renderSpec } from '@aster/core'
-import { Chart, hasVegaLiteCompiler } from '@aster/react'
+import '@aster-charts/react/vl'
+import '@aster-charts/core/geo'
+import '@aster-charts/core/transforms'
+import { renderSpec } from '@aster-charts/core'
+import { Chart, hasVegaLiteCompiler } from '@aster-charts/react'
 
 const vl = { width: 200, height: 120, data: { values: [{ c: 'a', v: 3 }, { c: 'b', v: 7 }] }, mark: 'bar',
   encoding: { x: { field: 'c', type: 'nominal' }, y: { field: 'v', type: 'quantitative' } } }
-assert.equal(hasVegaLiteCompiler(), true, 'the packed @aster/react/vl registers the compiler after bundling')
+assert.equal(hasVegaLiteCompiler(), true, 'the packed @aster-charts/react/vl registers the compiler after bundling')
 const html = renderToString(createElement(Chart, { spec: vl, width: 200, height: 120 }))
 assert.ok(html.includes('mark-rect'), 'a Vega-Lite spec renders through the bundled, tree-shaken packages')
 assert.ok(/aria-label="[XY]-axis/.test(html), 'the guide captions survived tree-shaking')
@@ -332,12 +332,12 @@ assert.ok(/aria-label="[XY]-axis/.test(html), 'the guide captions survived tree-
 const geo = { width: 200, height: 120, projections: [{ name: 'p', type: 'mercator', fit: true, size: { signal: '[width, height]' }, extent: null }],
   data: [{ name: 'g', values: [{ type: 'Feature', properties: {}, geometry: { type: 'Polygon', coordinates: [[[-10, -10], [10, -10], [10, 10], [-10, 10], [-10, -10]]] } }] }],
   marks: [{ type: 'shape', from: { data: 'g' }, encode: { update: { fill: { value: 'steelblue' } } }, transform: [{ type: 'geoshape', projection: 'p' }] }] }
-assert.ok(/<path [^>]*d="M/.test(renderSpec(geo)), 'the packed @aster/core/geo registers projections after bundling')
+assert.ok(/<path [^>]*d="M/.test(renderSpec(geo)), 'the packed @aster-charts/core/geo registers projections after bundling')
 
 const treemap = { width: 100, height: 100, data: [{ name: 't', values: [{ id: 1, parent: null, value: 10 }, { id: 2, parent: 1, value: 5 }, { id: 3, parent: 1, value: 5 }],
   transform: [{ type: 'stratify', key: 'id', parentKey: 'parent' }, { type: 'treemap', field: 'value' }] }],
   marks: [{ type: 'rect', from: { data: 't' }, encode: { update: { x: { field: 'x0' }, y: { field: 'y0' }, x2: { field: 'x1' }, y2: { field: 'y1' }, fill: { value: 'tomato' } } } }] }
-assert.ok(renderSpec(treemap).includes('tomato'), 'the packed @aster/core/transforms registers the treemap after bundling')
+assert.ok(renderSpec(treemap).includes('tomato'), 'the packed @aster-charts/core/transforms registers the treemap after bundling')
 console.log('shaken ok')
 `)
   await build({
@@ -358,8 +358,8 @@ console.log('shaken ok')
 import assert from 'node:assert'
 import { createElement } from 'react'
 import { renderToString } from 'react-dom/server'
-import { SvgChart } from '@aster/react/lite'
-${withInteraction ? "import { interaction } from '@aster/react/interaction'" : ''}
+import { SvgChart } from '@aster-charts/react/lite'
+${withInteraction ? "import { interaction } from '@aster-charts/react/interaction'" : ''}
 const spec = { width: 100, height: 60, data: [{ name: 't', values: [{ v: 1 }] }],
   marks: [{ type: 'rect', from: { data: 't' }, encode: { enter: { x: { value: 0 }, y: { value: 0 }, width: { value: 20 }, height: { value: 20 }, fill: { value: 'tomato' } } } }] }
 const html = renderToString(createElement(SvgChart, { spec, ${withInteraction ? 'interaction, tooltip: true' : ''} }))
@@ -375,9 +375,9 @@ console.log('lite ok')
     }).catch((e) => fail(`bundling ${name} from the installed tarballs failed: ${e.message.split('\n')[0]}`))
     const inputs = Object.keys(result.metafile.inputs).map((f) => f.replace(/\\/g, '/'))
     const has = (re) => inputs.some((f) => re.test(f))
-    if (has(/@aster\/core\/dist\/canvas\.js$/) || has(/@aster\/react\/dist\/canvas-capability\.js$/)) fail(`the ${name} bundle contains the canvas renderer`)
+    if (has(/@aster-charts\/core\/dist\/canvas\.js$/) || has(/@aster-charts\/react\/dist\/canvas-capability\.js$/)) fail(`the ${name} bundle contains the canvas renderer`)
     const wantsLoop = withInteraction
-    if (has(/@aster\/core\/dist\/hit\.js$/) !== wantsLoop || has(/@aster\/core\/dist\/signals\.js$/) !== wantsLoop) {
+    if (has(/@aster-charts\/core\/dist\/hit\.js$/) !== wantsLoop || has(/@aster-charts\/core\/dist\/signals\.js$/) !== wantsLoop) {
       fail(`the ${name} bundle ${wantsLoop ? 'lacks' : 'contains'} the hit index / signal loop`)
     }
     try {
@@ -393,7 +393,7 @@ console.log('lite ok')
   const engineApps = {
     once: `
 import assert from 'node:assert'
-import { renderSpec } from '@aster/core'
+import { renderSpec } from '@aster-charts/core'
 const svg = renderSpec({ width: 60, height: 40, data: [{ name: 't', values: [{ v: 1 }] }],
   marks: [{ type: 'rect', from: { data: 't' }, encode: { enter: { x: { value: 0 }, y: { value: 0 }, width: { value: 20 }, height: { value: 20 }, fill: { value: 'tomato' } } } }] })
 assert.ok(svg.includes('tomato'), 'renderSpec renders from the bundled, tree-shaken tarballs')
@@ -401,7 +401,7 @@ console.log('once ok')
 `,
     reeval: `
 import assert from 'node:assert'
-import { compileChart, evaluateChart, renderSceneToSvg } from '@aster/core'
+import { compileChart, evaluateChart, renderSceneToSvg } from '@aster-charts/core'
 const spec = { width: 60, height: 40, data: [{ name: 't', transform: [{ type: 'filter', expr: 'datum.v >= 0' }] }],
   marks: [{ type: 'rect', from: { data: 't' }, encode: { update: { x: { field: 'v' }, y: { value: 0 }, width: { value: 5 }, height: { value: 5 }, fill: { value: 'tomato' } } } }] }
 const chart = compileChart(spec)
@@ -421,7 +421,7 @@ console.log('reeval ok')
       entryPoints: [join(project, `${name}.mjs`)], outfile: join(project, `${name}.bundle.mjs`), bundle: true, minify: true, treeShaking: true, metafile: true,
       format: 'esm', platform: 'node', external: ['react', 'react-dom', 'react-dom/*'], define: { 'process.env.NODE_ENV': '"production"' }, logLevel: 'silent',
     }).catch((e) => fail(`bundling ${name} from the installed tarballs failed: ${e.message.split('\n')[0]}`))
-    const carries = Object.entries(result.metafile.outputs).some(([, o]) => Object.entries(o.inputs).some(([f, info]) => /@aster\/core\/dist\/incremental-engine\.js$/.test(f.replace(/\\/g, '/')) && info.bytesInOutput > 0))
+    const carries = Object.entries(result.metafile.outputs).some(([, o]) => Object.entries(o.inputs).some(([f, info]) => /@aster-charts\/core\/dist\/incremental-engine\.js$/.test(f.replace(/\\/g, '/')) && info.bytesInOutput > 0))
     if (carries !== (name === 'reeval')) fail(`the ${name} bundle ${carries ? 'contains' : 'lacks'} the incremental engine`)
     try {
       run(process.execPath, [`${name}.bundle.mjs`], { cwd: project, stdio: ['ignore', 'inherit', 'inherit'] })

@@ -9,8 +9,8 @@ import * as React from 'react'
 import { createRoot } from 'react-dom/client'
 import { act } from 'react'
 import { describe, it, expect, afterEach } from 'vitest'
-import { compileChart, evaluateChart } from '@aster/core'
-import { buildHitIndex } from '@aster/core/hit'
+import { compileChart, evaluateChart } from '@aster-charts/core'
+import { buildHitIndex } from '@aster-charts/core/hit'
 import { forEachVariant } from './testing/variants'
 
 const spec = (extra: Record<string, unknown> = {}): Record<string, unknown> => ({

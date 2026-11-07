@@ -18,9 +18,9 @@
  */
 import { describe, expect, it } from 'vitest'
 import * as vega from 'vega'
-import '@aster/core/geo'
-import '@aster/core/transforms'
-import { compileChart, evaluateChart, renderSceneToSvg, renderSpec } from '@aster/core'
+import '@aster-charts/core/geo'
+import '@aster-charts/core/transforms'
+import { compileChart, evaluateChart, renderSceneToSvg, renderSpec } from '@aster-charts/core'
 import { canonicalizeSvg, diffCanonical } from '../src/normalize.js'
 import { makeRng, scaled } from './differential-gen.mts'
 import { FAILS, treeSpec, type Fail } from './differential-abort-gen.mts'

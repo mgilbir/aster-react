@@ -2,7 +2,7 @@
 import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { compile as vlCompile } from 'vega-lite'
-import { compile } from '@aster/vl'
+import { compile } from '@aster-charts/vl'
 
 // The strict conformance oracle compares paint order, which depends on the order
 // and zindex of the compiled axes. Vega-Lite emits all grid axes first, then the

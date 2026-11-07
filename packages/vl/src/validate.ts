@@ -1,7 +1,7 @@
 /**
  * Explicit validation layer for Vega-Lite input.
  *
- * `@aster/vl` implements a subset of Vega-Lite. Anything outside that subset
+ * `@aster-charts/vl` implements a subset of Vega-Lite. Anything outside that subset
  * must fail LOUDLY, naming the feature, rather than fall through to a default
  * and render a plausible but wrong chart. This module walks the whole spec
  * once, before compilation, and throws a VLCompileError for:
@@ -261,7 +261,7 @@ function validateView(spec: Obj, path: string, top: boolean, parent: Kind | unde
     const allowed = SCHEMA_CHILDREN[parent as Exclude<Kind, 'unit'>]
     if (!allowed.has(kind)) fail(path, `a ${kind} spec is not allowed inside \`${parent}\` (vega-lite schema)`)
     if (!SUPPORTED_NESTING[parent as Exclude<Kind, 'unit'>].has(kind)) {
-      fail(path, `a ${kind} spec nested inside \`${parent}\` is valid Vega-Lite but is not supported by @aster/vl yet`)
+      fail(path, `a ${kind} spec nested inside \`${parent}\` is valid Vega-Lite but is not supported by @aster-charts/vl yet`)
     }
   }
   if (spec.$schema !== undefined && typeof spec.$schema !== 'string') mustBe(at('$schema'), 'a string')
@@ -430,13 +430,13 @@ const CONFIG_SCALE_KEYS = set(
 function validateConfig(cfg: Obj, path: string): void {
   for (const k of Object.keys(cfg)) {
     if (!CONFIG_KEYS.has(k)) {
-      fail(`${path}.${k}`, 'this config property is valid Vega-Lite but is not supported by @aster/vl (it would be silently ignored)')
+      fail(`${path}.${k}`, 'this config property is valid Vega-Lite but is not supported by @aster-charts/vl (it would be silently ignored)')
     }
   }
   if (cfg.scale !== undefined) {
     if (!isObj(cfg.scale)) mustBe(`${path}.scale`, OBJECT)
     for (const k of Object.keys(cfg.scale)) {
-      if (!CONFIG_SCALE_KEYS.has(k)) fail(`${path}.scale.${k}`, 'this scale config property is not supported by @aster/vl')
+      if (!CONFIG_SCALE_KEYS.has(k)) fail(`${path}.scale.${k}`, 'this scale config property is not supported by @aster-charts/vl')
     }
     const inv = cfg.scale.invalid
     if (inv !== undefined) {
@@ -831,7 +831,7 @@ function validateMark(mark: unknown, at: string): string {
   const type = def.type
   const typeAt = typeof mark === 'string' ? at : `${at}.type`
   if (typeof type !== 'string' || !MARKS.has(type)) fail(typeAt, `unknown mark type ${JSON.stringify(type)}`)
-  if (!SUPPORTED_MARKS.has(type)) fail(typeAt, `mark type "${type}" is not supported by @aster/vl yet`)
+  if (!SUPPORTED_MARKS.has(type)) fail(typeAt, `mark type "${type}" is not supported by @aster-charts/vl yet`)
   if (typeof mark !== 'string') {
     for (const k of Object.keys(def)) {
       if (!MARK_DEF_KEYS.has(k)) fail(`${at}.${k}`, `unknown mark property "${k}"`)

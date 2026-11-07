@@ -19,7 +19,7 @@
  * Exit codes: 0 every selected gate passed (or --list/--help), 1 a blocking gate failed, 2 bad usage (an unknown option or gate name).
  *
  * Browser gates need Playwright Chromium:
- *   pnpm --filter @aster/conformance exec playwright install --with-deps chromium
+ *   pnpm --filter @aster-charts/conformance exec playwright install --with-deps chromium
  * Skipping them locally is allowed; CI never skips anything.
  */
 import { spawnSync } from 'node:child_process'
@@ -40,7 +40,7 @@ export const GATES = [
     why: 'incremental append, whole-array replace and DOM patch beat their baselines by the measured floors (8x, 8x, 1.6x), not just by >1x',
   },
   { name: 'conformance', args: ['conformance'], why: 'Vega corpus: SVG diff against the real Vega oracle' },
-  { name: 'conformance-vl', args: ['conformance-vl'], why: '@aster/vl compile + render against the Vega-Lite oracle' },
+  { name: 'conformance-vl', args: ['conformance-vl'], why: '@aster-charts/vl compile + render against the Vega-Lite oracle' },
   { name: 'scene-diff', args: ['scene-diff'], why: 'resolved scales/groups/items per scope' },
   {
     name: 'incremental-diff', args: ['conformance:diff'],
@@ -56,14 +56,14 @@ export const GATES = [
   },
   {
     name: 'selections-browser', args: ['conformance:selections'], tags: ['browser'],
-    why: 'Vega-Lite selections: the same native input (click, shift-click, drag, wheel, legend click, bound inputs, nearest, bound scales) through vega-lite + real vega and through @aster/vl + <Chart>; signals, selection stores and SVG compared after every step',
+    why: 'Vega-Lite selections: the same native input (click, shift-click, drag, wheel, legend click, bound inputs, nearest, bound scales) through vega-lite + real vega and through @aster-charts/vl + <Chart>; signals, selection stores and SVG compared after every step',
   },
   {
     name: 'intersect-browser', args: ['conformance:intersect'], tags: ['browser'],
     why: 'the intersect() expression function (vega-lite geo interval selections) over every mark type, boxes and filters vs real vega in Chromium (arc and path outlines need a canvas context)',
   },
   {
-    name: 'react-browser', args: ['--filter', '@aster/react', 'run', 'test:browser'], tags: ['browser'],
+    name: 'react-browser', args: ['--filter', '@aster-charts/react', 'run', 'test:browser'], tags: ['browser'],
     why: '<Chart> and <SvgChart interaction> pointer/keyboard interaction, selection, pan/zoom, signal.on, bound inputs and the a11y overlay in a real Chromium; <SvgChart> without interaction renders and reports the missing event loop',
   },
   {
@@ -85,7 +85,7 @@ export const GATES = [
     name: 'bundle-shaking', args: ['check:bundle'],
     why: 'each documented import pattern is bundled (esbuild, production, tree-shaking) and EXECUTED: sideEffects must not shake out a registration (VL, geo, transforms, load, guide captions, worker entry); <SvgChart> bundles contain no canvas/hit/signals module unless asked (esbuild metafile)',
   },
-  { name: 'budget', args: ['--filter', '@aster/benchmarks', 'run', 'budget'], why: 'per-import-pattern bundle size budgets (useChart, <Chart>, <SvgChart>, <SvgChart>+interaction, <Chart>+VL, core, addons as marginal cost); fails if tree-shaking breaks' },
+  { name: 'budget', args: ['--filter', '@aster-charts/benchmarks', 'run', 'budget'], why: 'per-import-pattern bundle size budgets (useChart, <Chart>, <SvgChart>, <SvgChart>+interaction, <Chart>+VL, core, addons as marginal cost); fails if tree-shaking breaks' },
   {
     // The floor is the number of probes that pass today (probes/ holds 2). A probe that fails documents a gap and is allowed; one that passed
     // and stops passing is a regression, and an empty probes/ is not a pass either (packages/conformance/src/probe-verdict.ts).

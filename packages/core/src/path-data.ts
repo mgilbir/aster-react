@@ -2,8 +2,8 @@
  * SVG path-data parsing and replay, shared by the canvas renderer (canvas.ts) and the hit index (hit.ts).
  *
  * It lives apart from canvas.ts so that hit testing does not pull the renderer into a bundle: an app that uses
- * `@aster/core/hit` (tooltips, point selection) but never draws to a canvas must not contain `@aster/core/canvas`.
- * `@aster/core/canvas` re-exports these names, so its public surface is unchanged.
+ * `@aster-charts/core/hit` (tooltips, point selection) but never draws to a canvas must not contain `@aster-charts/core/canvas`.
+ * `@aster-charts/core/canvas` re-exports these names, so its public surface is unchanged.
  */
 
 // ---------------------------------------------------------------------------

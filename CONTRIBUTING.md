@@ -17,7 +17,7 @@ the list anywhere else: `scripts/gates.test.mjs` fails if `ci.yml` runs anything
 code block of this file or docs/TESTING.md has a line that is a gate's command; `scripts/docs-single-source.test.mjs` fails if a
 paragraph of any other doc (outside docs/TESTING.md and docs/RUNBOOK.md, which tabulate results) names four or more gates. `pnpm check -- --list`
 prints the gates with the reason for each. The browser gates need Chromium
-(`pnpm --filter @aster/conformance exec playwright install --with-deps chromium`);
+(`pnpm --filter @aster-charts/conformance exec playwright install --with-deps chromium`);
 `pnpm check -- --skip browser` skips them locally, but that is not the CI list.
 
 When a gate is red, [docs/RUNBOOK.md](docs/RUNBOOK.md) covers debugging one failing corpus spec end to end, the stale-`dist`
@@ -30,7 +30,7 @@ Vega-Lite compiler or expression/transform semantics.
 
 Guidelines:
 
-- Keep `@aster/core`, `@aster/react` and `@aster/vl` free of `vega-*`/`d3-*`/`topojson-*`
+- Keep `@aster-charts/core`, `@aster-charts/react` and `@aster-charts/vl` free of `vega-*`/`d3-*`/`topojson-*`
   dependencies and imports; the dependency boundary (`pnpm check:deps`) enforces this on the
   sources and on the built `dist`.
 - When you port an algorithm or table from an upstream project, add that project's `LICENSE` text to

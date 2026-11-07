@@ -1,5 +1,5 @@
 /**
- * @aster/core — scene IR types.
+ * @aster-charts/core — scene IR types.
  *
  * The compiler consumes a Vega spec (JSON) and produces a `CompiledChart` (our IR).
  * `evaluateChart` resolves the IR against runtime inputs (data, size) into a
@@ -274,7 +274,7 @@ export interface CompiledSignalDef {
 /**
  * One `signal.on` entry (vega's signal update spec). `events` is whatever the spec
  * had: a selector string, an event-stream object, an array of either, or
- * `{signal}` / `{scale}` operator sources; `@aster/core/signals` interprets it.
+ * `{signal}` / `{scale}` operator sources; `@aster-charts/core/signals` interprets it.
  */
 export interface SignalOnDef {
   events: unknown
@@ -739,7 +739,7 @@ export interface SceneGroup extends SceneItem {
   /**
    * A group item whose mark declares `signals` is a signal scope: `id` names the item (the mark's place in the spec, plus
    * the facet partition's key) and the values its signals had when the scene was evaluated. The event loop
-   * (`@aster/core/signals`) keeps the values events write under `<id>:<name>` in the signal store, and hands
+   * (`@aster-charts/core/signals`) keeps the values events write under `<id>:<name>` in the signal store, and hands
    * them back in `RuntimeInput.signals` for the next evaluation.
    */
   scopeSignals?: { id: string; defs: CompiledSignalDef[]; values: Record<string, unknown>; /** false when the group holds no mark, axis, legend or title: vega then has no `context.group`, and `inScope` is false for every item */ hasContent: boolean }

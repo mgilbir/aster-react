@@ -1,11 +1,11 @@
 // @vitest-environment node
 /**
- * The color legend @aster/vl emits (gradient vs symbols, symbol type, reduced opacity, fill vs
+ * The color legend @aster-charts/vl emits (gradient vs symbols, symbol type, reduced opacity, fill vs
  * stroke) must be vega-lite's for every mark and every color field type.
  */
 import { describe, it, expect } from 'vitest'
 import * as vl from 'vega-lite'
-import { compile } from '@aster/vl'
+import { compile } from '@aster-charts/vl'
 
 const data = { values: [{ c: 'A', x: 1, y: 2, v: 5, t: '2024-01-01' }, { c: 'B', x: 2, y: 4, v: 9, t: '2024-02-01' }] }
 const MARKS = ['bar', 'point', 'circle', 'square', 'line', 'tick', 'text', 'area', 'trail', 'rect', 'rule', 'arc']

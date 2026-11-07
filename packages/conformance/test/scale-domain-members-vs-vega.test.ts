@@ -4,7 +4,7 @@
  * ingested as vega-util `array(value)`: a scalar is one value, an array its elements, null/undefined none.
  */
 import { describe, it, expect } from 'vitest'
-import { renderSpec } from '@aster/core'
+import { renderSpec } from '@aster-charts/core'
 import { renderWithVegaChecked } from '../src/render-vega.js'
 import { canonicalizeSvg, diffCanonical } from '../src/normalize.js'
 

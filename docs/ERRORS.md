@@ -5,7 +5,7 @@ Aster separates **host controls** (a budget, a URL policy, a backpressure bound)
 whose message starts with `[aster]` (or `[aster/vl]` for the Vega-Lite compiler).
 
 ```ts
-import { AsterLimitError, renderSpec, type VgSpec } from '@aster/core'
+import { AsterLimitError, renderSpec, type VgSpec } from '@aster-charts/core'
 
 const untrustedSpec: VgSpec = {
   width: 100,
@@ -38,7 +38,7 @@ Catch the typed errors by `code` (see "`instanceof` or `code`?" below); everythi
 | `AsterStreamClosedError` (`ASTER_STREAM_CLOSED`) | `stream.session()` was called after `close()` | stop using the stream after closing it |
 | `SpecParseError` | the spec was refused when it was compiled, as `vega.parse` refuses it | fix the spec; the message is vega's ([Expressions are refused when the spec is compiled](#expressions-are-refused-when-the-spec-is-compiled)) |
 | `ExpressionParseError` | an expression does not parse, or a function was removed after the compile | fix the expression or the registration |
-| `VLCompileError` (`[aster/vl] <path>: <message>`) | the Vega-Lite spec has an unknown key or a feature `@aster/vl` does not implement | fix the spec at `<path>` ([Deliberate differences from Vega](#deliberate-differences-from-vega)) |
+| `VLCompileError` (`[aster/vl] <path>: <message>`) | the Vega-Lite spec has an unknown key or a feature `@aster-charts/vl` does not implement | fix the spec at `<path>` ([Deliberate differences from Vega](#deliberate-differences-from-vega)) |
 | `[aster] ... load the addon first` | the spec needs an add-on that is not loaded, and the entry point cannot wait | `await loadAddonsFor(spec)`, or import the add-on ([Unsupported and unknown features](#unsupported-and-unknown-features)) |
 | a report on `logger` | an expression threw at run time and the render carried on, as vega's does | route `logger` to your own log; the chart is partial ([Recovered expression errors](#recovered-expression-errors-logger)) |
 | `<div role="alert">` in `<Chart>` | the render failed, or a limit was exceeded | read the message; `onError` receives the error ([Other runtime errors](#other-runtime-errors)) |
@@ -47,13 +47,13 @@ Catch the typed errors by `code` (see "`instanceof` or `code`?" below); everythi
 
 | Class | From | `name` | `code` | Extra fields |
 |---|---|---|---|---|
-| `AsterLimitError` | `@aster/core` | `AsterLimitError` | `ASTER_LIMIT` | none |
-| `AsterUrlError` | `@aster/core`, `@aster/core/load` | `AsterUrlError` | `ASTER_URL_DENIED` | `url`, `reason` |
-| `AsterStreamBackpressureError` | `@aster/core` | `AsterStreamBackpressureError` | `ASTER_STREAM_BACKPRESSURE` | `bound` (`'batches'` or `'rows'`), `limit` |
-| `AsterStreamClosedError` | `@aster/core` | `AsterStreamClosedError` | `ASTER_STREAM_CLOSED` | none |
-| `ExpressionParseError` | `@aster/core` | `ExpressionParseError` | none | `expression`, `cause` |
-| `SpecParseError` | `@aster/core` | `SpecParseError` | none | `cause` |
-| `VLCompileError` | `@aster/vl` | `VLCompileError` | none | none |
+| `AsterLimitError` | `@aster-charts/core` | `AsterLimitError` | `ASTER_LIMIT` | none |
+| `AsterUrlError` | `@aster-charts/core`, `@aster-charts/core/load` | `AsterUrlError` | `ASTER_URL_DENIED` | `url`, `reason` |
+| `AsterStreamBackpressureError` | `@aster-charts/core` | `AsterStreamBackpressureError` | `ASTER_STREAM_BACKPRESSURE` | `bound` (`'batches'` or `'rows'`), `limit` |
+| `AsterStreamClosedError` | `@aster-charts/core` | `AsterStreamClosedError` | `ASTER_STREAM_CLOSED` | none |
+| `ExpressionParseError` | `@aster-charts/core` | `ExpressionParseError` | none | `expression`, `cause` |
+| `SpecParseError` | `@aster-charts/core` | `SpecParseError` | none | `cause` |
+| `VLCompileError` | `@aster-charts/vl` | `VLCompileError` | none | none |
 
 Everything else the packages throw is a plain `Error` (or a `TypeError` for a malformed stream batch or worker
 message) with an `[aster]` prefix and **no `code`**. Do not claim a `code` for an error that is not in this table.
@@ -64,14 +64,14 @@ Prefer `err.code === 'ASTER_LIMIT'` (and the other codes) over `instanceof` when
 boundary or come from a second copy of the package:
 
 - The worker hooks (`useChartWorker`, `useChartWorkerStream`, `<ChartWorkerStream>`) rebuild the error from
-  `{ name, message, code }` (`errorFromWire` in `@aster/react/worker`). A limit error (`code: 'ASTER_LIMIT'`) comes
+  `{ name, message, code }` (`errorFromWire` in `@aster-charts/react/worker`). A limit error (`code: 'ASTER_LIMIT'`) comes
   back as a real `AsterLimitError`. **Every other class comes back as a plain `Error` with `name` and `code` copied
   over and none of its other fields**: an `AsterUrlError` loses `url` and `reason`, an
   `AsterStreamBackpressureError` loses `bound` and `limit`, so `instanceof AsterUrlError` is `false` there while
   `err.code === 'ASTER_URL_DENIED'` works.
 - If you call `handleChartWorkerRequest` / `handleChartWorkerStreamRequest` yourself, or read `ChartWorkerResponse`
   messages directly, you get the wire form `error: { name, message, code? }`.
-- Two copies of `@aster/core` (a bundler duplicating a dependency) have two different `AsterLimitError` classes.
+- Two copies of `@aster-charts/core` (a bundler duplicating a dependency) have two different `AsterLimitError` classes.
 
 ## Budget errors
 
@@ -177,7 +177,7 @@ as `vega.parse` does (see "Expressions are refused when the spec is compiled" be
 the handlers are bound is only what changed since the compile: a function the host registered and then removed.
 
 ```ts
-import { renderSpec, type VgSpec } from '@aster/core'
+import { renderSpec, type VgSpec } from '@aster-charts/core'
 
 const reports: unknown[] = []
 const spec: VgSpec = {
@@ -229,7 +229,7 @@ handler, `Signal encode and update are mutually exclusive.`, `Invalid signal upd
 **Add-on functions.** A function of an add-on (`geoCentroid`, `sampleNormal`, `treePath`, ...) is known to the compile whether
 or not the add-on has been loaded: vega knows it, so the spec is not refused. When the add-on is not loaded the call fails
 when it is evaluated with `[aster] this spec calls the expression function "<name>"; load the addon first: ...`, as an unloaded
-transform does. `@aster/core/addons` finds the add-on from the same expressions before the spec is compiled, so a host that
+transform does. `@aster-charts/core/addons` finds the add-on from the same expressions before the spec is compiled, so a host that
 uses `loadAddonsFor`, `<Chart>` or the hooks never sees it. A spec that calls an unknown function *and* an add-on's is refused for
 the unknown one, whichever comes first.
 
@@ -293,15 +293,15 @@ rows below are plain `Error`s with an `[aster]` prefix and no `code`, thrown on 
 |---|---|
 | unknown aggregate op | `[aster] unsupported aggregate op "bogus" (vega: AggregateOps[op] is not a function)` |
 | `width` / `height` of the form `{ step }` | `[aster] width/height {step} sizing is not supported yet` |
-| a geo projection used without the add-on | `[aster] this spec uses a geo projection; load the addon first: await import("@aster/core/geo")` |
-| a rare transform (`kde`, `linkpath`, `treemap`, ...) without the add-on | `[aster] this spec uses the "kde" transform; load the addon first: await import("@aster/core/transforms")` |
-| `csv`/`tsv`/`dsv`/`topojson` data format without the add-on | `[aster] this spec reads "csv" data; load the addon first: await import("@aster/core/load")` |
+| a geo projection used without the add-on | `[aster] this spec uses a geo projection; load the addon first: await import("@aster-charts/core/geo")` |
+| a rare transform (`kde`, `linkpath`, `treemap`, ...) without the add-on | `[aster] this spec uses the "kde" transform; load the addon first: await import("@aster-charts/core/transforms")` |
+| `csv`/`tsv`/`dsv`/`topojson` data format without the add-on | `[aster] this spec reads "csv" data; load the addon first: await import("@aster-charts/core/load")` |
 | an unknown symbol `shape` (not a built-in name, not a valid SVG path) | `Invalid SVG path, incorrect parameter count` (the same message vega gives) |
-| a Vega-Lite spec without the VL add-on (`<Chart>`, `useChart`, the worker handlers) | `A Vega-Lite spec was passed but the compiler is not loaded. Add ...` followed by the import to add, `import '@aster/react/vl'` (no `[aster]` prefix) |
+| a Vega-Lite spec without the VL add-on (`<Chart>`, `useChart`, the worker handlers) | `A Vega-Lite spec was passed but the compiler is not loaded. Add ...` followed by the import to add, `import '@aster-charts/react/vl'` (no `[aster]` prefix) |
 
-Load the matching add-on (`@aster/core/geo`, `@aster/core/transforms`, `@aster/core/load`) before calling `renderSpec` or another synchronous entry point
-(`await loadAddonsFor(spec)` from `@aster/react`, or `loadAddons(missingAddons(spec))` from `@aster/core/addons`, does it for you). The React shells, hooks and the worker entry
-load them themselves ([how](ARCHITECTURE.md#geo-projections--the-add-on-boundary)); if that import fails the error is `[aster] could not load the "geo" add-on (@aster/core/geo): <reason>`,
+Load the matching add-on (`@aster-charts/core/geo`, `@aster-charts/core/transforms`, `@aster-charts/core/load`) before calling `renderSpec` or another synchronous entry point
+(`await loadAddonsFor(spec)` from `@aster-charts/react`, or `loadAddons(missingAddons(spec))` from `@aster-charts/core/addons`, does it for you). The React shells, hooks and the worker entry
+load them themselves ([how](ARCHITECTURE.md#geo-projections--the-add-on-boundary)); if that import fails the error is `[aster] could not load the "geo" add-on (@aster-charts/core/geo): <reason>`,
 reported through `onError` (the hook's `error`), and it is remembered for the page (reload to retry).
 
 ### Deliberate differences from Vega
@@ -324,9 +324,9 @@ reported through `onError` (the hook's `error`), and it is remembered for the pa
 - **Unknown projection type.** Without the geo add-on Aster throws the "load the addon" error above. With it, an
   unrecognised projection type throws `Unrecognized projection type: <type>` (a plain `Error` without the `[aster]`
   prefix) out of the render, where vega logs the same message and renders without the projection.
-- **Vega-Lite is validated strictly.** `@aster/vl` implements a subset of Vega-Lite and throws a `VLCompileError`
+- **Vega-Lite is validated strictly.** `@aster-charts/vl` implements a subset of Vega-Lite and throws a `VLCompileError`
   (`[aster/vl] <path>: <message>`) for an unknown key (`unknown top-level property "foo"`), a config property it does
-  not implement (`config.bogus: this config property is valid Vega-Lite but is not supported by @aster/vl`), a
+  not implement (`config.bogus: this config property is valid Vega-Lite but is not supported by @aster-charts/vl`), a
   feature it does not implement (`` a wrapped facet (a single `facet` field) around or inside another facet is not
   supported yet ``) and an unknown mark.
   vega-lite itself compiles the first three (it ignores the key or property) and crashes on the unknown mark.
@@ -351,7 +351,7 @@ reported through `onError` (the hook's `error`), and it is remembered for the pa
   `AsterUrlError`, an `AsterLimitError` (timeout, size, redirects, rows), or a parse error such as `[aster] invalid
   JSON data: ...`.
 - **Unloaded `url` dataset** — rendering a spec whose `url` dataset was never loaded throws `[aster] dataset "t" has a
-  url but no data was loaded for it; resolve url datasets first: import { loadSpecData } from "@aster/core/load" and
+  url but no data was loaded for it; resolve url datasets first: import { loadSpecData } from "@aster-charts/core/load" and
   render await loadSpecData(spec, { baseURL, ... }), or pass the rows as input.data["t"]`.
 - **Stratify** — `[aster] stratify: cycle | multiple roots | missing: id | ambiguous: id | no root` (vega's messages
   with the prefix), and `[aster] stratify requires a key field`.
@@ -372,11 +372,11 @@ reported through `onError` (the hook's `error`), and it is remembered for the pa
 - **Rejected `dataChanges`** — an unknown dataset, a non-integer or out-of-range index, or a changed row count makes
   `<Chart>` ignore the whole changeset (the update is diffed in full, the chart stays correct) and call `onError` with
   `[aster] dataChanges["<name>"]: ...`.
-- **`@aster/vl`** — `compile()` throws `VLCompileError` for anything it validates (see above).
+- **`@aster-charts/vl`** — `compile()` throws `VLCompileError` for anything it validates (see above).
 
 ## Worker errors
 
-`@aster/react/worker` answers a request with `{ id, error: { name, message, code? } }`; stream requests may add
+`@aster-charts/react/worker` answers a request with `{ id, error: { name, message, code? } }`; stream requests may add
 `failure: { batches, queuedRows, discarded }`. The hooks rehydrate it with `errorFromWire` (see
 [`instanceof` or `code`?](#instanceof-or-code) for what survives). In addition:
 
@@ -388,7 +388,7 @@ reported through `onError` (the hook's `error`), and it is remembered for the pa
   registerWorkerTextMetrics and pass its name` (respectively `... registerWorkerUrlPolicy ...`). An unregistered name
   fails in the worker with `[aster] unknown text-metrics provider "<name>" (register it with registerWorkerTextMetrics
   in the worker)` / `[aster] unknown url-policy hooks "<name>" ...`.
-- The shipped worker entry (`@aster/react/worker-entry`) validates messages: a request without a spec object, a stream
+- The shipped worker entry (`@aster-charts/react/worker-entry`) validates messages: a request without a spec object, a stream
   request with a bad `op`, `streamId`, `batches` or `options` is answered with a `TypeError` wire error
   (`[aster] request needs a spec object`, ...); a message without a numeric `id` is dropped because there is nobody to
   answer; a flush for an unknown stream gives `[aster] unknown stream <id>`.

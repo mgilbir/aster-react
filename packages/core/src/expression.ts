@@ -263,7 +263,7 @@ export function registeredExpressionFunctionNames(): string[] {
 
 /**
  * Take the named functions out of the registry (the add-ons', as if their module had not been imported); the returned function puts
- * them back. For the tests of `@aster/core/addons`, which check the detector against an app that has not loaded an add-on.
+ * them back. For the tests of `@aster-charts/core/addons`, which check the detector against an app that has not loaded an add-on.
  */
 export function withdrawExpressionFunctions(names: readonly string[]): () => void {
   const bound = names.flatMap((n) => REGISTERED_BOUND.has(n) ? [[n, REGISTERED_BOUND.get(n)!] as const] : [])
@@ -598,7 +598,7 @@ function assertKnownFunctions(ast: AstNode, functions: Record<string, unknown>, 
       if (name !== 'if' && !EventFunctions.includes(name) && !Object.hasOwn(functions, name) && !Object.hasOwn(DefaultFunctions, name)) {
         const addon = Object.hasOwn(ADDON_FUNCTIONS, name) ? ADDON_FUNCTIONS[name] : undefined
         throw new ExpressionParseError(addon
-          ? `[aster] this spec calls the expression function "${name}"; load the addon first: await import("@aster/core/${addon}")`
+          ? `[aster] this spec calls the expression function "${name}"; load the addon first: await import("@aster-charts/core/${addon}")`
           : `Unrecognized function: ${name}`, expr)
       }
     }

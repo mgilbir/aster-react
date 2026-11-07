@@ -1,6 +1,6 @@
 # Release
 
-Published packages: `@aster/core`, `@aster/react`, `@aster/vl`, versioned in lockstep.
+Published packages: `@aster-charts/core`, `@aster-charts/react`, `@aster-charts/vl`, versioned in lockstep.
 Conformance, benchmarks and the demo remain private workspaces.
 
 Nothing in this document is run by tests or by a contributor's machine except the
@@ -9,7 +9,9 @@ pre-flight commands; the publish itself is done by the `Release` workflow
 
 ## One-time registry and repository setup
 
-1. Create the `@aster` npm scope (or change package names).
+1. The packages publish under the `aster-charts` npm organization (`@aster-charts/core`, `@aster-charts/react`,
+   `@aster-charts/vl`). The org exists; its owners and members are managed on npmjs.com. The account behind `NPM_TOKEN`
+   must be a member of the org with publish rights to the `@aster-charts` scope.
 2. In the GitHub repository create an **environment named `npm-release`**
    (Settings, Environments). Add required reviewers, restrict it to version tags,
    and store the `NPM_TOKEN` secret (publish rights) in that environment, not as a
@@ -78,18 +80,18 @@ packages plus the SSR and worker handlers.
 After the workflow finishes, verify with:
 
 ```bash
-npm view @aster/core version
-npm view @aster/react version
-npm view @aster/vl version
+npm view @aster-charts/core version
+npm view @aster-charts/react version
+npm view @aster-charts/vl version
 ```
 
 ## Clean-app smoke test
 
 ```bash
 npm create vite@latest aster-smoke -- --template react-ts
-cd aster-smoke && npm i @aster/react @aster/core
+cd aster-smoke && npm i @aster-charts/react @aster-charts/core
 # Vega-Lite is opt-in:
-#   import '@aster/react/vl'
+#   import '@aster-charts/react/vl'
 # render a Vega-Lite spec directly (no vega-lite dependency)
 ```
 

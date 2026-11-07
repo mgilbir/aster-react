@@ -11,9 +11,9 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { crc32, inflateSync } from 'node:zlib'
 import { describe, expect, it } from 'vitest'
-import '@aster/core/transforms'
-import { compileChart, datasetsOfScene, evaluateChart, renderSpec } from '@aster/core'
-import { addonsNeeded } from '@aster/core/addons'
+import '@aster-charts/core/transforms'
+import { compileChart, datasetsOfScene, evaluateChart, renderSpec } from '@aster-charts/core'
+import { addonsNeeded } from '@aster-charts/core/addons'
 
 type Spec = Record<string, unknown>
 interface Bitmap { width: number; height: number; pixels: number[] }

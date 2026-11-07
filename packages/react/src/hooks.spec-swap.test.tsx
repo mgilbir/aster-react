@@ -8,7 +8,7 @@
  */
 import * as React from 'react'
 import { createRoot } from 'react-dom/client'
-import { renderSceneToSvg, type SceneRoot, type VgSpec } from '@aster/core'
+import { renderSceneToSvg, type SceneRoot, type VgSpec } from '@aster-charts/core'
 import { act } from 'react'
 import { describe, it, expect, afterEach } from 'vitest'
 import { useChart } from './useChart'

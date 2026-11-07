@@ -7,8 +7,8 @@
  */
 import { expect } from 'vitest'
 import * as vega from 'vega'
-import '@aster/core/transforms'
-import { evaluateChart, compileChart, datasetsOfScene } from '@aster/core'
+import '@aster-charts/core/transforms'
+import { evaluateChart, compileChart, datasetsOfScene } from '@aster-charts/core'
 
 /** mulberry32: a small seeded generator, so a failing case replays from its index. */
 export function rng(seed: number): () => number {

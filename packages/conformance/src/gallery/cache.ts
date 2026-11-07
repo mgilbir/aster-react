@@ -14,7 +14,7 @@ export const MANIFEST_PATH = join(CONF, 'gallery', 'manifest.json')
  * not exist, so a test that needs the FETCHED cache fails on every machine, not only on CI, and belongs to the gallery gate.
  */
 export const CACHE_DIR = process.env.ASTER_GALLERY_CACHE_DIR || join(CONF, '.gallery')
-export const FETCH_COMMAND = 'pnpm --filter @aster/conformance gallery:fetch'
+export const FETCH_COMMAND = 'pnpm --filter @aster-charts/conformance gallery:fetch'
 
 export interface Source {
   repo: string

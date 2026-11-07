@@ -1,14 +1,14 @@
 /**
  * Triage aid for the gallery gate (not a gate): puts every spec the STATIC path did not pass into a root-cause category.
  *
- *   pnpm --filter @aster/conformance exec tsx scripts/gallery-triage.mts <gate-results.json> [out.json]
+ *   pnpm --filter @aster-charts/conformance exec tsx scripts/gallery-triage.mts <gate-results.json> [out.json]
  *   (results written by `conformance:gallery --json=<file>`)
  *
  * Method. A category is a TESTED claim, not a guess from a message:
- *   - error      -> by the error message (the engine or @aster/vl refused the spec).
+ *   - error      -> by the error message (the engine or @aster-charts/vl refused the spec).
  *   - Vega-Lite  -> `runtime` when Aster's runtime already differs on the Vega that vega-lite itself compiled
- *                   (so @aster/vl is not involved), `compiler` when the runtime matches there and only the Vega
- *                   @aster/vl emitted differs.
+ *                   (so @aster-charts/vl is not involved), `compiler` when the runtime matches there and only the Vega
+ *                   @aster-charts/vl emitted differs.
  *   - fail       -> the first matching entry of SIGNATURES, each a normalisation that, applied to the aster-only and
  *                   oracle-only records, makes the two multisets equal (e.g. "drop a Z that precedes an M"); then the
  *                   FEATURES table (source features that were checked against representative specs); else `uncategorised`.
@@ -16,11 +16,11 @@
  */
 import { readFileSync, writeFileSync } from 'node:fs'
 import * as vl from 'vega-lite'
-import '@aster/core/geo'
-import '@aster/core/transforms'
-import { renderSpec } from '@aster/core'
-import { loadSpecData, TRUSTED_LOAD_OPTIONS } from '@aster/core/load'
-import { compile as compileOurs } from '@aster/vl'
+import '@aster-charts/core/geo'
+import '@aster-charts/core/transforms'
+import { renderSpec } from '@aster-charts/core'
+import { loadSpecData, TRUSTED_LOAD_OPTIONS } from '@aster-charts/core/load'
+import { compile as compileOurs } from '@aster-charts/vl'
 import { canonicalizeSvg } from '../src/normalize.js'
 import { vegaSvg } from '../src/gallery/oracle.js'
 import { BASE_URL, fileFetch, listGallery, readSpec, type Outcome } from '../src/gallery/lib.js'
@@ -67,9 +67,9 @@ function signatureOf(o: string[], a: string[]): string | null {
   return null
 }
 
-/** The Vega-Lite errors that are `@aster/vl` refusing a valid feature, and the runtime errors, by message. */
+/** The Vega-Lite errors that are `@aster-charts/vl` refusing a valid feature, and the runtime errors, by message. */
 const ERROR_CLASSES: Array<[RegExp, string]> = [
-  [/^\[aster\/vl\]/, 'error: @aster/vl rejects a valid Vega-Lite feature'],
+  [/^\[aster\/vl\]/, 'error: @aster-charts/vl rejects a valid Vega-Lite feature'],
   [/unsupported transform type|Unrecognized function|Disabled\./, 'error: runtime lacks a Vega transform / expression function / transform backend'],
   [/Projection type must be a name string|Missing required "sequence"|signal-valued url|Unrecognized signal name|Undefined data set name/, 'error: runtime rejects a spec value that vega takes from a signal / another dataset'],
 ]
@@ -107,7 +107,7 @@ async function culprit(vg: Json): Promise<string | null> {
 }
 
 /**
- * COMPILER culprit: graft one group of vega-lite's compiled Vega into @aster/vl's and see whether the render becomes the oracle's.
+ * COMPILER culprit: graft one group of vega-lite's compiled Vega into @aster-charts/vl's and see whether the render becomes the oracle's.
  * Groups: size/layout (signals, width, height, autosize, padding, layout), scales+guides (scales, axes, legends), data+marks,
  * title/config/projections. The smallest group (or pair) that fixes the render holds the defect.
  */

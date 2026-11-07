@@ -7,7 +7,7 @@ import embed from 'vega-embed'
  * even downloaded — the load delay you see on the left panes is the official
  * toolchain arriving, not aster.
  *
- * The same spec object the aster column receives (after @aster/vl compilation
+ * The same spec object the aster column receives (after @aster-charts/vl compilation
  * for Vega-Lite inputs) is handed to vega-embed verbatim.
  *
  * Specs with signal-based width/height (e.g. `{ signal: 'width' }`) render at

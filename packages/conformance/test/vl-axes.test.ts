@@ -1,6 +1,6 @@
 // @vitest-environment node
 /**
- * The axes @aster/vl emits must be vega-lite's: the same axes in the same order (every grid axis,
+ * The axes @aster-charts/vl emits must be vega-lite's: the same axes in the same order (every grid axis,
  * then the main axes, x before y), with the same orient, grid flag and zindex. Paint order in the
  * rendered scenegraph follows this order, so a lenient canonicalizer would never notice a
  * reordering; this compares the arrays themselves for every Vega-Lite corpus spec.
@@ -9,7 +9,7 @@ import { describe, it, expect } from 'vitest'
 import { readdirSync, readFileSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 import * as vl from 'vega-lite'
-import { compile } from '@aster/vl'
+import { compile } from '@aster-charts/vl'
 
 const ROOT = join(__dirname, '..')
 const specs: Array<[string, Record<string, any>]> = []

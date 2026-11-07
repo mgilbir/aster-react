@@ -29,7 +29,7 @@ describe('gate list', () => {
     expect(new Set(names).size).toBe(names.length)
     for (const g of GATES) {
       if (g.args[0] === '--filter') {
-        const pkg = g.args[1] === '@aster/benchmarks' ? benchPkg : g.args[1] === '@aster/react' ? reactPkg : confPkg
+        const pkg = g.args[1] === '@aster-charts/benchmarks' ? benchPkg : g.args[1] === '@aster-charts/react' ? reactPkg : confPkg
         expect(g.args[2], g.name).toBe('run')
         expect(pkg.scripts, `${g.name}: ${g.args[3]}`).toHaveProperty(g.args[3])
       } else {
@@ -51,7 +51,7 @@ describe('gate list', () => {
       pkgName === 'root' ? g.args[0] === script
         : g.args[0] === '--filter' ? g.args[2] === 'run' && g.args[3] === script && g.args[1] === pkgName
           : g.args[0] === script))
-    for (const [dir, pkgName, pkg] of [['packages/conformance', '@aster/conformance', confPkg], ['packages/react', '@aster/react', reactPkg]]) {
+    for (const [dir, pkgName, pkg] of [['packages/conformance', '@aster-charts/conformance', confPkg], ['packages/react', '@aster-charts/react', reactPkg]]) {
       for (const [script, cmd] of Object.entries(pkg.scripts)) {
         const file = /\btsx\s+(scripts\/[\w.-]+\.mts)/.exec(cmd)?.[1]
         if (!file || !/from 'playwright'/.test(read(`${dir}/${file}`))) continue
@@ -79,7 +79,7 @@ describe('gate list', () => {
 describe('nothing keeps a second copy of the list', () => {
   const allowedCi = [
     /^pnpm install --frozen-lockfile$/,
-    /^pnpm --filter @aster\/conformance exec playwright install /,
+    /^pnpm --filter @aster-charts\/conformance exec playwright install /,
     /^pnpm check$/,
   ]
   // The `unit` job (Node matrix) builds, then runs vitest directly under the matrix Node

@@ -1,5 +1,5 @@
 {
-  "name": "@aster/vl",
+  "name": "@aster-charts/vl",
   "version": "0.1.0",
   "type": "module",
   "description": "From-scratch Vega-Lite compiler: Vega-Lite -> Vega, verified against the vega-lite oracle by rendering parity.",

@@ -2,7 +2,7 @@
 /**
  * A scale type a channel can use is the scale the field has. vl-scale-type-fallback.test.ts covers the requests the channel or the data
  * cannot use (the field has the scale it would have had without asking); this covers the others: every channel, every scale type
- * vega-lite 6.4.3 honours for it (it compiled a scale of the type asked), and every data type, compiled by vega-lite and by @aster/vl.
+ * vega-lite 6.4.3 honours for it (it compiled a scale of the type asked), and every data type, compiled by vega-lite and by @aster-charts/vl.
  * The compiled scales, axes and legends (type, domain, range and every property), the scales as they run, the axes, the rows and the SVG
  * must be the same (vl-ranged-compare.ts).
  */

@@ -1,7 +1,7 @@
 import * as React from 'react'
-import { SvgChart } from '@aster/react/lite'
-import { interaction } from '@aster/react/interaction'
-import type { VgSpec } from '@aster/core'
+import { SvgChart } from '@aster-charts/react/lite'
+import { interaction } from '@aster-charts/react/interaction'
+import type { VgSpec } from '@aster-charts/core'
 
 const spec: VgSpec = {
   width: 300,

@@ -8,7 +8,7 @@
  * renderers (guide wrapper groups) and strict on the parts that must not.
  */
 import * as vega from 'vega'
-import { loadSpecData, TRUSTED_LOAD_OPTIONS } from '@aster/core/load'
+import { loadSpecData, TRUSTED_LOAD_OPTIONS } from '@aster-charts/core/load'
 import {
   compileChart,
   evaluateChart,
@@ -17,7 +17,7 @@ import {
   type SceneItem,
   type SceneNode,
   type SceneRoot,
-} from '@aster/core'
+} from '@aster-charts/core'
 
 export interface SceneDiffResult {
   diffs: string[]

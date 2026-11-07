@@ -1,7 +1,7 @@
 // @vitest-environment node
 /**
  * Every mark that draws longitude / latitude positions x each geographic channel x every property a channel definition takes, every
- * data type, and a datum and a value of each type (vl-geo-channels-space.ts), compiled by vega-lite 6.4.3 and by @aster/vl.
+ * data type, and a datum and a value of each type (vl-geo-channels-space.ts), compiled by vega-lite 6.4.3 and by @aster-charts/vl.
  * vega-lite projects the raw field whatever the definition says, and reads the rest of it as it reads it on any other channel: an
  * aggregate aggregates (grouped by the projected positions of the other channels), a bin and a time unit add their fields and a
  * temporal type parses the field before it is projected, a sort array adds its index, the type says how the description formats
@@ -11,19 +11,19 @@
  * Where vega runs vega-lite's output, the compiled scales, axes and legends, the scales as they run, the rows and the SVG must be the
  * same (vl-ranged-compare.ts).
  *
- * The cases @aster/vl refuses stay in the space, and each must be refused with its own error (all under "Throws" in
+ * The cases @aster-charts/vl refuses stay in the space, and each must be refused with its own error (all under "Throws" in
  * packages/vl/README.md, which readme-refusals.test.ts checks):
  *   - a condition that gives a field on a position the mark draws (vl-mark-channels.test.ts gives the reason);
  *   - what vega cannot run of vega-lite's output, each checked here to be so: a pair of coordinates of which one is a value, a
  *     condition alone or a count of records (vega-lite emits a geopoint transform with no field for it, and vega fails the
  *     dataflow), and a datum that is not a number (vega-lite writes it into the geopoint transform as an expression vega cannot
  *     parse).
- * A case vega cannot run that @aster/vl has no refusal for fails here, so the space cannot silently stop comparing anything.
+ * A case vega cannot run that @aster-charts/vl has no refusal for fails here, so the space cannot silently stop comparing anything.
  */
 import { describe, it, expect } from 'vitest'
 import * as vega from 'vega'
 import * as vl from 'vega-lite'
-import { compile, VLCompileError } from '@aster/vl'
+import { compile, VLCompileError } from '@aster-charts/vl'
 import { silent } from './vl-time-helpers.js'
 import { differences } from './vl-ranged-compare.js'
 import { GEO_MARKS, geoChannelCases } from './vl-geo-channels-space.js'
@@ -56,7 +56,7 @@ function drawnAs(mark: string, enc: Obj): string {
   return mark === 'line' && spans ? 'rule' : mark
 }
 
-/** The error @aster/vl must refuse `spec` with, if any. */
+/** The error @aster-charts/vl must refuse `spec` with, if any. */
 function refusalOf(spec: Obj): RegExp | undefined {
   const enc = spec.encoding as Obj
   const mark = drawnAs(spec.mark as string, enc)
@@ -84,7 +84,7 @@ async function vegaRuns(spec: Obj): Promise<boolean> {
   return !failed
 }
 
-/** What @aster/vl throws compiling `spec`, if anything. */
+/** What @aster-charts/vl throws compiling `spec`, if anything. */
 function refusalFrom(spec: Obj): unknown {
   try { compile(JSON.parse(JSON.stringify(spec)) as never) } catch (e) { return e }
   return undefined
@@ -109,7 +109,7 @@ describe('a geographic channel reads every definition as vega-lite reads it', ()
         }
         const out = await differences(spec)
         if (out.why) bad.push(`${name}: ${out.why}`)
-        else if (!out.compared || !(await vegaRuns(spec))) bad.push(`${name}: vega cannot run vega-lite's output, and @aster/vl does not refuse it`)
+        else if (!out.compared || !(await vegaRuns(spec))) bad.push(`${name}: vega cannot run vega-lite's output, and @aster-charts/vl does not refuse it`)
         else compared++
       }
       expect(bad.slice(0, 8), `${bad.length} of ${all.length} differ`).toEqual([])

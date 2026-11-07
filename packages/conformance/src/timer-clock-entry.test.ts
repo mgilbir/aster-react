@@ -1,12 +1,12 @@
 // @vitest-environment jsdom
 /**
- * `setTimerClock` is part of the `@aster/core/signals` entry: a consumer installs a controlled clock through the
+ * `setTimerClock` is part of the `@aster-charts/core/signals` entry: a consumer installs a controlled clock through the
  * package export (the built `dist/signals.js`, not a source path) and the `timer` event streams follow it.
  */
 import { afterEach, expect, it } from 'vitest'
-import { compileChart, evaluateChart } from '@aster/core'
-import { renderSceneToDomElement } from '@aster/core/dom'
-import { bindSceneSignals, setTimerClock, type TimerClock } from '@aster/core/signals'
+import { compileChart, evaluateChart } from '@aster-charts/core'
+import { renderSceneToDomElement } from '@aster-charts/core/dom'
+import { bindSceneSignals, setTimerClock, type TimerClock } from '@aster-charts/core/signals'
 
 /** A clock a consumer writes by hand: time moves only when `advance` says so, and nothing runs on its own. */
 function manualClock(): TimerClock & { advance(ms: number): void; live(): number } {
@@ -48,7 +48,7 @@ afterEach(() => {
   document.body.innerHTML = ''
 })
 
-it('a clock installed through @aster/core/signals drives a timer stream deterministically', () => {
+it('a clock installed through @aster-charts/core/signals drives a timer stream deterministically', () => {
   const clock = manualClock()
   setTimerClock(clock)
   const scene = evaluateChart(compileChart({

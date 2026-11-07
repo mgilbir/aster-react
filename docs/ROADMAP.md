@@ -21,7 +21,7 @@ corpus counts, sweep results, bundle sizes and benchmark ratios are in [TESTING.
 
 ### Own the runtime: done
 
-`@aster/core`, `@aster/react` and `@aster/vl` have no dependency on `vega-*`, `d3-*` or `topojson-*`.
+`@aster-charts/core`, `@aster-charts/react` and `@aster-charts/vl` have no dependency on `vega-*`, `d3-*` or `topojson-*`.
 `pnpm check:deps` (`scripts/check-deps.mjs`) fails on any banned import or dependency in the sources or in the built
 `dist`; the per-package `dep-baseline.json` files are empty. Each replaced library was recorded as oracle vectors
 from the pinned upstream package, implemented behind the same internal API, replayed, and then swapped in:
@@ -47,10 +47,10 @@ from the pinned upstream package, implemented behind the same internal API, repl
 
 Licences of everything ported: [THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md).
 
-### Vega-Lite: `@aster/vl` compiles it, with an explicit refusal list
+### Vega-Lite: `@aster-charts/vl` compiles it, with an explicit refusal list
 
-`@aster/vl` compiles Vega-Lite to Vega with no dependency on `vega-lite`. For every feature it either produces Vega
-that renders like vega-lite 6.4.3 (`pnpm conformance-vl` renders the corpus through `@aster/vl` and diffs it against
+`@aster-charts/vl` compiles Vega-Lite to Vega with no dependency on `vega-lite`. For every feature it either produces Vega
+that renders like vega-lite 6.4.3 (`pnpm conformance-vl` renders the corpus through `@aster-charts/vl` and diffs it against
 vega-lite's output, and the emitted Vega is also run through real vega) or throws a `VLCompileError` naming the
 feature. The refusal list is in [packages/vl/README.md](../packages/vl/README.md).
 
@@ -81,7 +81,7 @@ the tag are the owner's steps ([RELEASE.md](RELEASE.md)).
 
 Each item is something the code or the gates show today; none is a plan that has not been checked against them.
 
-- **Vega-Lite coverage.** What `@aster/vl` still refuses is listed in
+- **Vega-Lite coverage.** What `@aster-charts/vl` still refuses is listed in
   [packages/vl/README.md](../packages/vl/README.md#throws-not-supported), which a test holds to the compiler.
 - **Signals sweep.** The `retained` cases ([INTERACTION.md](INTERACTION.md#signals)) are a documented deviation, not a
   fix; the gate has a ceiling that can only be lowered.

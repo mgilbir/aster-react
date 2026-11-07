@@ -9,7 +9,7 @@
  * to the time between `a` and `b`. A string that is not valid fails with an `Error` whose message names the problem
  * and quotes the text; those messages are part of the contract (a user sees them in a spec error).
  *
- * `@aster/vl` carries a byte-identical copy of this module (it must not depend on the engine); a conformance test
+ * `@aster-charts/vl` carries a byte-identical copy of this module (it must not depend on the engine); a conformance test
  * keeps the two equal and compares both with the reference parser.
  */
 

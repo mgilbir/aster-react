@@ -8,7 +8,7 @@ const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 const read = (rel) => readFileSync(join(root, rel), 'utf8')
 const PUBLIC = ['core', 'react', 'vl']
 
-describe.each(PUBLIC)('@aster/%s manifest', (name) => {
+describe.each(PUBLIC)('@aster-charts/%s manifest', (name) => {
   const pkg = JSON.parse(read(`packages/${name}/package.json`))
 
   it('keywords is an array of non-empty strings', () => {

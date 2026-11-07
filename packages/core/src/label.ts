@@ -18,7 +18,7 @@
  *  - the cells a label shown inside its mark is tested against are the mark's outline, not the labels placed (see `Field`);
  *  - the grid of cells an area search has visited lives as long as the layout, not the label.
  *
- * Registered by `@aster/core/transforms`. The rest of the engine reaches it through the transform registry.
+ * Registered by `@aster-charts/core/transforms`. The rest of the engine reaches it through the transform registry.
  */
 import { sortData } from './util.js'
 import { AlphaCanvas } from './raster.js'

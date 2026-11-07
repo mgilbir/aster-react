@@ -6,7 +6,7 @@
  * This is a source-level check, because the drift it prevents (a prop handled in one shell, forgotten in the
  * other) is invisible to types and to behavioural tests that run the same props through both.
  *
- * The second guard walks the VALUE import graph of `@aster/react/lite`: it must never reach the canvas renderer,
+ * The second guard walks the VALUE import graph of `@aster-charts/react/lite`: it must never reach the canvas renderer,
  * the hit index or the signal loop, nor the modules that import them. (The bundle-shaking gate re-checks the
  * same thing on a real bundle; this one names the offending import chain.)
  */
@@ -81,7 +81,7 @@ describe('<Chart> and <SvgChart> are thin shells over ChartCore', () => {
 
 // ---------------------------------------------------------------------------
 
-const FORBIDDEN_PACKAGES = ['@aster/core/canvas', '@aster/core/hit', '@aster/core/signals']
+const FORBIDDEN_PACKAGES = ['@aster-charts/core/canvas', '@aster-charts/core/hit', '@aster-charts/core/signals']
 const FORBIDDEN_MODULES = ['canvas-capability.ts', 'interaction-capability.ts']
 
 /** Value (non-`import type`) imports and re-exports of a source file. */
@@ -114,7 +114,7 @@ export function chainToForbidden(entry: string, read: (file: string) => string):
   return walk(entry, [])
 }
 
-describe('@aster/react/lite never reaches the canvas renderer, the hit index or the signal loop', () => {
+describe('@aster-charts/react/lite never reaches the canvas renderer, the hit index or the signal loop', () => {
   const fromSrc = (f: string): string => readFileSync(resolve(SRC, f), 'utf8')
   it('the value import graph of lite.ts is clean', () => {
     expect(chainToForbidden('lite.ts', fromSrc)).toBeNull()
@@ -123,7 +123,7 @@ describe('@aster/react/lite never reaches the canvas renderer, the hit index or 
     expect(chainToForbidden('Chart.tsx', fromSrc)).not.toBeNull()
   })
   it('the guard bites: a value import of core/hit in ChartCore is reported with its chain', () => {
-    const tampered = (f: string): string => (f === 'ChartCore.tsx' ? `import { buildHitIndex } from '@aster/core/hit'\n${fromSrc(f)}` : fromSrc(f))
-    expect(chainToForbidden('lite.ts', tampered)).toEqual(['lite.ts', 'SvgChart.tsx', 'ChartCore.tsx', '@aster/core/hit'])
+    const tampered = (f: string): string => (f === 'ChartCore.tsx' ? `import { buildHitIndex } from '@aster-charts/core/hit'\n${fromSrc(f)}` : fromSrc(f))
+    expect(chainToForbidden('lite.ts', tampered)).toEqual(['lite.ts', 'SvgChart.tsx', 'ChartCore.tsx', '@aster-charts/core/hit'])
   })
 })

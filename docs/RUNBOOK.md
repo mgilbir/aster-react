@@ -21,7 +21,7 @@ corpus, and the command that re-runs one spec of each:
 | Gate | What it compares | One spec |
 |---|---|---|
 | `conformance` | canonical SVG of real vega against Aster (`.vg.json` and `.vl.json`, the latter compiled by `vega-lite`) | `ASTER_CORPUS_FILTER='^bar-basic$' pnpm conformance` |
-| `conformance-vl` | `.vl.json` only: `@aster/vl` against `vega-lite`, see 1.4 | `pnpm conformance-vl bar-basic` (a substring; no `--`) |
+| `conformance-vl` | `.vl.json` only: `@aster-charts/vl` against `vega-lite`, see 1.4 | `pnpm conformance-vl bar-basic` (a substring; no `--`) |
 | `scene-diff` | resolved scales, groups and items per scope, before any SVG is written | `pnpm scene-diff -- --filter bar-basic` (add `--scales-only`) |
 | `incremental-diff` | an incremental evaluation (random per-datum changeset) against a fresh one of the same data, over the inline-data specs; it does not involve vega | `pnpm conformance:diff` (all specs, about 5 s; it takes no filter) |
 | `a11y-parity` | guide captions against vega-scenegraph's `aria-label` | `pnpm a11y-parity -- --filter bar-basic` |
@@ -37,7 +37,7 @@ specs.
 
 ### 1.2 Rule out a stale build first
 
-The harness imports `@aster/core`, `@aster/react` and `@aster/vl` by package name, which resolves to each package's **`dist`**, not
+The harness imports `@aster-charts/core`, `@aster-charts/react` and `@aster-charts/vl` by package name, which resolves to each package's **`dist`**, not
 its `src`. If you edited a source file and did not rebuild, the conformance run is checking the old code and says nothing about
 your edit. See section 2. When in doubt: `pnpm build`, then re-run.
 
@@ -48,7 +48,7 @@ ASTER_CORPUS_FILTER='^bar-basic$' pnpm conformance
 ```
 
 A green spec prints `PASS  bar-basic` and `[conformance] 1/1 passed`. A red one prints the first twelve differences. This is the
-output with a planted bug (`num()` in `packages/core/src/render.ts` made to add 0.5 to every number, `pnpm --filter @aster/core build`;
+output with a planted bug (`num()` in `packages/core/src/render.ts` made to add 0.5 to every number, `pnpm --filter @aster-charts/core build`;
 shortened):
 
 ```text
@@ -74,14 +74,14 @@ number of records on each side.
 `pnpm conformance-vl <name>` runs four checks per spec, in this order (the header of `packages/conformance/src/run-vl.ts` has the
 full list), so the first line it prints says where to look:
 
-1. `@aster/vl` compiles a deep-frozen copy of the spec, and the emitted Vega survives a JSON round trip. A throw here is a
+1. `@aster-charts/vl` compiles a deep-frozen copy of the spec, and the emitted Vega survives a JSON round trip. A throw here is a
    compiler problem (a `VLCompileError` is a refusal, not a bug, if the feature is on the "Throws" list of `packages/vl/README.md`).
 2. The emitted Vega is rendered by **real vega**; any vega error or warning that vega-lite's own output does not also raise fails
    the spec (`error:` / `warn:` lines). The compiler emitted invalid Vega.
 3. Real vega's rendering of **our** Vega equals its rendering of **vega-lite's** Vega
    (`real vega on our Vega differs from vega-lite's`). The compiler emitted valid Vega that means something else.
 4. Aster's runtime renders our Vega like the reference (`oracle-only` / `ours-only` lines). The compiler is fine; the runtime
-   (`@aster/core`) differs.
+   (`@aster-charts/core`) differs.
 
 Stages 1-3 never involve the Aster runtime: debug them in `packages/vl`
 ([packages/vl/CONTRIBUTING.md](../packages/vl/CONTRIBUTING.md)). Stage 4 and every `.vg.json` failure are runtime failures.
@@ -102,8 +102,8 @@ pnpm scene-diff -- --filter bar-basic
 Then narrow by reading the first differing record: its tag and attributes name the mark or guide (`role-axis`, `mark-rect`...), and
 the same spec in `packages/conformance/corpus` with the other marks removed is the smallest reproduction. To see both SVGs, call
 `renderWithVega` (`packages/conformance/src/render-vega.ts`, takes a Vega spec: compile a `.vl.json` with `vega-lite` first) and
-`renderSpec` from `@aster/core` in a `tsx` script placed in `packages/conformance` (so `vega` and `@aster/*` resolve) and run with
-`pnpm --filter @aster/conformance exec tsx <script>`; print each result, or `canonicalizeSvg` of it.
+`renderSpec` from `@aster-charts/core` in a `tsx` script placed in `packages/conformance` (so `vega` and `@aster-charts/*` resolve) and run with
+`pnpm --filter @aster-charts/conformance exec tsx <script>`; print each result, or `canonicalizeSvg` of it.
 
 ### 1.6 Fails only in the browser
 
@@ -114,7 +114,7 @@ the browser once with the command in CONTRIBUTING.md. For the interaction gates 
 directly, because the package script also passes `--min-cases` and `--max-retained`, which a filtered run cannot meet:
 
 ```bash
-pnpm --filter @aster/conformance exec tsx scripts/browser-vl-selections.mts --filter=legend
+pnpm --filter @aster-charts/conformance exec tsx scripts/browser-vl-selections.mts --filter=legend
 ```
 
 `--filter=` is a substring of the case name (a sentence such as `concat: a brush in one view filters another`). A case counted
@@ -135,9 +135,9 @@ Add a corpus spec (or a unit or oracle-vector test) for every fixed behaviour (C
 
 ## 2. Stale `dist`
 
-`@aster/core`, `@aster/react` and `@aster/vl` have `exports` that point at `dist` (`./dist/index.js`, `./dist/<entry>.js`).
+`@aster-charts/core`, `@aster-charts/react` and `@aster-charts/vl` have `exports` that point at `dist` (`./dist/index.js`, `./dist/<entry>.js`).
 Whatever imports them by name gets the build, not the source: the conformance scripts and tests, the benchmarks, the demo, the
-packaging checks, and the React tests (18 of them import `@aster/core` or one of its entries). Only a package's own tests that import `./x.js` or `../src`
+packaging checks, and the React tests (18 of them import `@aster-charts/core` or one of its entries). Only a package's own tests that import `./x.js` or `../src`
 read source. So one `pnpm test` can mix source and build, and after an edit without a rebuild it tests old code against new code.
 
 What reads `dist` and what happens when it is missing or old:
@@ -147,14 +147,14 @@ What reads `dist` and what happens when it is missing or old:
 | `pnpm check:deps` | refuses: `packages/vl/dist is missing -> run \`pnpm build\` first (or pass --src-only)`, exit 1 | not checked |
 | `pnpm verify:publish` | refuses: `[verify-publish] FAIL: packages/vl/dist is missing — run \`pnpm build\` first`, exit 1 | not checked |
 | `pnpm check:bundle` | refuses: `[bundle-shaking] packages/vl/dist is missing: run \`pnpm build\` first`, exit 2 | not checked |
-| `pnpm --filter @aster/benchmarks run budget` | refuses (`... .js is missing`) | **refuses**: `Refusing to measure a stale or missing dist (1 problem); run \`pnpm build\` first:` then `packages/core/dist/render.js is older than its source`, exit 1 |
+| `pnpm --filter @aster-charts/benchmarks run budget` | refuses (`... .js is missing`) | **refuses**: `Refusing to measure a stale or missing dist (1 problem); run \`pnpm build\` first:` then `packages/core/dist/render.js is older than its source`, exit 1 |
 | `scripts/bundle-shaking.test.mjs`, `scripts/api-docs-coverage.test.mjs` | the test fails with `is not built (pnpm build)` / `is missing: run pnpm build` | not checked |
-| `pnpm conformance`, `conformance-vl`, `scene-diff`, sweeps, `bench:bundle`, `vitest` suites that import `@aster/*` | module not found | **silent**: they run on the old build |
+| `pnpm conformance`, `conformance-vl`, `scene-diff`, sweeps, `bench:bundle`, `vitest` suites that import `@aster-charts/*` | module not found | **silent**: they run on the old build |
 
 Only `budget` compares times (the modification time of every `src` file of the three packages, except `src/testing`, against its
 `dist` counterpart); everything else only checks that the file exists. A dist that exists but is old passes the others. Measured on
 this tree: with `num()` in `render.ts` changed and no rebuild, `pnpm conformance` printed `PASS  bar-basic`; after
-`pnpm --filter @aster/core build` it printed `FAIL  bar-basic`.
+`pnpm --filter @aster-charts/core build` it printed `FAIL  bar-basic`.
 
 The fix is always the same, and it is cheap to do too often:
 
@@ -162,8 +162,8 @@ The fix is always the same, and it is cheap to do too often:
 pnpm build
 ```
 
-It builds the three packages and the private workspaces in dependency order (`pnpm -r build`). `pnpm --filter @aster/core build`
-rebuilds one package; the packages that depend on it do not need a rebuild to see it, because they import `@aster/core` at run time.
+It builds the three packages and the private workspaces in dependency order (`pnpm -r build`). `pnpm --filter @aster-charts/core build`
+rebuilds one package; the packages that depend on it do not need a rebuild to see it, because they import `@aster-charts/core` at run time.
 A `git checkout` or `git pull` that touches many sources makes the budget refuse until the next build. The `build` gate of
 `pnpm check` runs first for that reason.
 
@@ -252,7 +252,7 @@ substitute; nothing reads it.
 
 ## 4. `sweep-values`
 
-`pnpm --filter @aster/conformance run sweep-values` runs `packages/conformance/src/run-sweep.ts values` over
+`pnpm --filter @aster-charts/conformance run sweep-values` runs `packages/conformance/src/run-sweep.ts values` over
 `packages/conformance/src/sweeps/values.mjs`. It is the value sweep: one small chart per (journey, column of values), 20 journeys
 (a scale of each family under a mark, the legends, and the transforms that accumulate or format values) by 25 columns of values
 that JavaScript treats differently from the obvious reading (a `null`, the word `null`, an empty cell, a word, a boolean, numeric

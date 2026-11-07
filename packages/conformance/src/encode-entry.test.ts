@@ -8,16 +8,16 @@
  * `mult`/`offset`/`exponent`/`band` may themselves be entries ({signal}, {field}, {scale,...}),
  * and `round`, `range` and `extra` are part of the grammar.
  *
- * Every combination below is rendered by real vega and by @aster/core and judged by the
+ * Every combination below is rendered by real vega and by @aster-charts/core and judged by the
  * strict canonicalizer; the entries are placed on a rect's `x`, so a wrong number is a wrong
  * path. The test is also required to see numbers MOVE with each modifier (a case where every
  * modifier were silently ignored would still "agree" with an engine that ignores them).
  */
 import { describe, expect, it } from 'vitest'
 import * as vega from 'vega'
-import '@aster/core/geo'
-import '@aster/core/transforms'
-import { renderSpec } from '@aster/core'
+import '@aster-charts/core/geo'
+import '@aster-charts/core/transforms'
+import { renderSpec } from '@aster-charts/core'
 import { canonicalizeSvg, diffCanonical } from './normalize.js'
 
 type Spec = Record<string, unknown>

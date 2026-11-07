@@ -13,8 +13,8 @@
  */
 import { describe, expect, it } from 'vitest'
 import * as vega from 'vega'
-import { compileChart, evaluateChart, renderSpec } from '@aster/core'
-import { renderSceneToDomElement } from '@aster/core/dom'
+import { compileChart, evaluateChart, renderSpec } from '@aster-charts/core'
+import { renderSceneToDomElement } from '@aster-charts/core/dom'
 import { canonicalizeSvg, diffCanonical } from './normalize.js'
 
 type Spec = Record<string, unknown>

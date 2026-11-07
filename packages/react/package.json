@@ -1,5 +1,5 @@
 {
-  "name": "@aster/react",
+  "name": "@aster-charts/react",
   "version": "0.1.0",
   "type": "module",
   "main": "./dist/index.js",
@@ -46,8 +46,8 @@
     "test:browser": "tsx scripts/browser-interaction.mts"
   },
   "dependencies": {
-    "@aster/core": "workspace:*",
-    "@aster/vl": "workspace:*"
+    "@aster-charts/core": "workspace:*",
+    "@aster-charts/vl": "workspace:*"
   },
   "devDependencies": {
     "@types/react": "^19.0.0",

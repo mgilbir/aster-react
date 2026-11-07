@@ -2,12 +2,12 @@
 
 Vega-Lite specs that `conformance-vl` checks against **real vega only**.
 
-Every spec here is held to the same bar as `corpus/` in real vega: `@aster/vl` compiles a
+Every spec here is held to the same bar as `corpus/` in real vega: `@aster-charts/vl` compiles a
 deep-frozen copy, the emitted Vega raises no vega error or warning (beyond what vega-lite's own
 output raises), and real vega renders it to the same canonical SVG as vega-lite's output
 (strict canonicalizer, paint order included). What they skip is the last check, "Aster's runtime
 renders our Vega like the reference": Aster cannot yet render **vega-lite's own output** for
-them, so that check would fail on the reference, not on `@aster/vl`.
+them, so that check would fail on the reference, not on `@aster-charts/vl`.
 
 This directory is empty: every case that lived here (50 of them, each with the root cause measured
 in the table that used to be here) now renders correctly in Aster and was moved to `corpus/` with its

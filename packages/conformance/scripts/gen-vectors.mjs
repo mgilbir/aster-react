@@ -2,17 +2,17 @@
  * Records oracle vectors: input -> output pairs captured from the pinned,
  * dev-only upstream packages, written to `packages/core/testdata/vectors/`.
  *
- * Every library `@aster/core` reimplements is replayed against these vectors
+ * Every library `@aster-charts/core` reimplements is replayed against these vectors
  * by a unit test, so a port can be swapped in and verified for exact
  * behaviour — independent of the SVG conformance oracle — before its
  * dependency is dropped. This mirrors the sibling projects' method (Go's
  * `testdata/upstream-vectors`, Kotlin's `test-fixtures/upstream-vectors`).
  *
  * One output file per library. The oracle packages are devDependencies of
- * @aster/conformance, pinned to the exact versions the runtime previously
+ * @aster-charts/conformance, pinned to the exact versions the runtime previously
  * depended on. Run with:
  *
- *   pnpm --filter @aster/conformance run vectors
+ *   pnpm --filter @aster-charts/conformance run vectors
  *
  * Local-time parsing is pinned to UTC so vectors are machine-independent.
  *
@@ -173,7 +173,7 @@ async function loadPkg(pkgName) {
   return m.default && typeof m.default === 'object' ? m.default : m
 }
 
-// --- the vega-util surface @aster/core reimplements ---------------------------
+// --- the vega-util surface @aster-charts/core reimplements ---------------------------
 
 const vegaUtil = await loadPkg('vega-util')
 const vegaFunctions = await loadPkg('vega-functions')
@@ -272,7 +272,7 @@ const utilSuites = {
   ]),
 }
 
-// --- the vega-time + d3-time surface @aster/core reimplements -----------------
+// --- the vega-time + d3-time surface @aster-charts/core reimplements -----------------
 // Suites carry the `tz` they were recorded under; the replay pins process.env.TZ
 // per suite (Node re-reads it). UTC covers the calendar engine; a DST-observing
 // zone covers the local-time paths, including the spring and autumn transitions.
@@ -501,7 +501,7 @@ const colorSuites = {
   ]),
 }
 
-// --- the d3-format + vega-format surface @aster/core reimplements ------------
+// --- the d3-format + vega-format surface @aster-charts/core reimplements ------------
 
 const formatSpecs = [
   'd', 'f', '.2f', '.0f', 'g', '.3g', 's', '.2s', 'e', '.2e', '%', '.1%',
@@ -626,7 +626,7 @@ const localeSuites = {
   ]),
 }
 
-// --- the d3-dsv + topojson-client surface @aster/core reimplements ------------
+// --- the d3-dsv + topojson-client surface @aster-charts/core reimplements ------------
 
 // named converter/filter variants the replay reconstructs
 

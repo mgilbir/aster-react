@@ -3,7 +3,7 @@
  * regression, loess, kde2d, isocontour, heatmap, dotbin), hierarchy and network
  * layouts (nest, tree, treelinks, pack, partition, treemap, force), wordcloud,
  * voronoi, crossfilter, resolvefilter, pie, cross, countpattern, and the geo
- * ones (geopoint, geopath, geojson, linkpath). Loaded by the `@aster/core/transforms` addon; the core bundle keeps only
+ * ones (geopoint, geopath, geojson, linkpath). Loaded by the `@aster-charts/core/transforms` addon; the core bundle keeps only
  * the transforms a plain chart uses. Shared internals come from transform.ts.
  */
 import { error, ownGet, sortData } from './util.js'

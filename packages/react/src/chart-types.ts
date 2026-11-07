@@ -8,7 +8,7 @@ import type {
   SpecLimits,
   TextMetricsProvider,
   VgSpec,
-} from '@aster/core'
+} from '@aster-charts/core'
 import type { SelectValue, SelectionInterval, ViewDomain } from './interaction.js'
 
 // The public prop and handle types of `<Chart>`. They live apart from the component so the
@@ -17,7 +17,7 @@ import type { SelectValue, SelectionInterval, ViewDomain } from './interaction.j
 
 export interface ChartProps {
   /**
-   * A Vega spec, a Vega-Lite spec (needs `import '@aster/react/vl'`), or a
+   * A Vega spec, a Vega-Lite spec (needs `import '@aster-charts/react/vl'`), or a
    * promise of either (suspends to the host's `<Suspense>`). Compared by
    * content: re-rendering with an equal inline literal does no work.
    */

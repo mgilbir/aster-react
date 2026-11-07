@@ -8,7 +8,7 @@
  * - The gates: scripts/gates.mjs. Outside docs/TESTING.md and docs/RUNBOOK.md (which tabulate results and how to run one), no
  *   paragraph lists four or more gates, and every `pnpm <script>` any doc names is a script that exists.
  * - What `retained` means: docs/INTERACTION.md ("Signals"); docs/ARCHITECTURE.md's table row points at it.
- * - What `@aster/vl` refuses: packages/vl/README.md ("Throws"), held to the compiler by packages/vl/test/readme-refusals.test.ts;
+ * - What `@aster-charts/vl` refuses: packages/vl/README.md ("Throws"), held to the compiler by packages/vl/test/readme-refusals.test.ts;
  *   the distinctive refusals are named nowhere else.
  *
  * The checks read the docs as text. They find a list that is copied back into a paragraph; they do not find a fact reworded.
@@ -54,7 +54,7 @@ describe('add-ons: TRANSFORMS_ADDON_TYPES and LOAD_ADDON_FORMATS are the lists',
 
   it('every transform ARCHITECTURE.md names in its add-on table is one of them', () => {
     const arch = doc('docs/ARCHITECTURE.md')
-    const row = arch.split('\n').find((l) => l.startsWith('| `@aster/core/transforms` |')) ?? ''
+    const row = arch.split('\n').find((l) => l.startsWith('| `@aster-charts/core/transforms` |')) ?? ''
     const sample = row.slice(0, row.indexOf('(implementations'))
     const named = [...ticks(sample)].filter((t) => /^[a-z0-9]+$/.test(t))
     expect(named.length, 'the add-on table row is gone or no longer names transforms').toBeGreaterThan(5)

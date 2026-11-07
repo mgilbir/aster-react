@@ -66,7 +66,7 @@ describe('the gates bite', () => {
   it('the budget FAILS when the manifests do not shake (no sideEffects field): the useChart row regains Chart, streams and workers', async () => {
     const r = await run('packages/benchmarks/scripts/budget.mjs', [], { ASTER_BUDGET_IGNORE_SIDE_EFFECTS: '1' })
     expect(r.status).toBe(1)
-    expect(r.stdout).toMatch(/@aster\/react useChart .*FAIL/)
-    expect(r.stdout).toMatch(/@aster\/react Chart .*FAIL/)
+    expect(r.stdout).toMatch(/@aster-charts\/react useChart .*FAIL/)
+    expect(r.stdout).toMatch(/@aster-charts\/react Chart .*FAIL/)
   }, 300_000)
 })

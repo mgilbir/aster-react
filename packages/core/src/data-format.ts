@@ -2,7 +2,7 @@
  * Reading data in the formats a Vega `data` entry names: choosing the reader by `format.type`, then converting the
  * columns named by `format.parse` (to numbers, booleans, dates, ...) or inferred from the values (`parse: 'auto'`).
  *
- * Text formats that need a real parser (csv/tsv/dsv, topojson) and fetching URLs live in the `@aster/core/load` addon,
+ * Text formats that need a real parser (csv/tsv/dsv, topojson) and fetching URLs live in the `@aster-charts/core/load` addon,
  * which registers its readers in `dataFormatRegistry`; json is built in.
  */
 import { dataFormatRegistry } from './registry.js'
@@ -105,7 +105,7 @@ export function inferTypes(data: unknown[], fields: string[]): Record<string, st
  * vega-loader's `read`: dispatch by `format.type`, then apply `parse`
  * coercion. Object arrays pass through the coercion only; string inputs are
  * parsed by the registered reader for the type (json is built in; csv/tsv/
- * dsv/topojson come from the `@aster/core/load` addon).
+ * dsv/topojson come from the `@aster-charts/core/load` addon).
  */
 export function readData(data: unknown, format?: DataFormatSpec): Record<string, unknown>[] {
   const schema = format ?? {}
@@ -115,7 +115,7 @@ export function readData(data: unknown, format?: DataFormatSpec): Record<string,
   // through and wraps a single non-array value like vega's array()).
   const reader = dataFormatRegistry.get(type)
   if (!reader) {
-    throw new Error(`[aster] this spec reads "${type}" data; load the addon first: await import("@aster/core/load")`)
+    throw new Error(`[aster] this spec reads "${type}" data; load the addon first: await import("@aster-charts/core/load")`)
   }
   // Pre-parsed row arrays (inline values, or values inlined by loadSpecData
   // after a URL fetch) pass through; only raw strings/objects hit the reader.

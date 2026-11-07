@@ -4,7 +4,7 @@
  * for the same mark of its own scene.
  */
 import * as vega from 'vega'
-import { compileChart, evaluateChart, type SceneGroup, type SceneItem } from '@aster/core'
+import { compileChart, evaluateChart, type SceneGroup, type SceneItem } from '@aster-charts/core'
 import { Bounds, boundGroupItem, boundTypedMark } from '../../core/src/bounds.js'
 
 type Box = [number, number, number, number]

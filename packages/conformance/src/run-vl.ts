@@ -1,12 +1,12 @@
 /**
  * Vega-Lite compiler conformance: for each .vl.json corpus entry, compile with
- * @aster/vl (ours), render with @aster/core, and compare the canonicalized SVG
+ * @aster-charts/vl (ours), render with @aster-charts/core, and compare the canonicalized SVG
  * against real vega rendering of vega-lite.compile's output (the oracle).
  *
  * Usage: npx tsx src/run-vl.ts [filter]
  *
  * Checks per entry:
- *  1. @aster/vl compiles a DEEP-FROZEN copy of the spec (compile must never
+ *  1. @aster-charts/vl compiles a DEEP-FROZEN copy of the spec (compile must never
  *     mutate its input) and the emitted Vega must survive JSON round-trip.
  *  2. The emitted Vega is rendered through REAL vega; any vega error or
  *     warning fails the entry (Aster's own runtime is lenient, so rendering it
@@ -21,17 +21,17 @@
  * corpus-vega-only/ -> checks 1-3. These specs compile to a Vega that Aster's
  *     runtime cannot yet render even from vega-lite's own output (see the README
  *     there for the per-case reason), so check 4 would fail on the REFERENCE,
- *     not on @aster/vl. They are still held to checks 1-3 in real vega.
+ *     not on @aster-charts/vl. They are still held to checks 1-3 in real vega.
  */
 import { readdirSync, readFileSync, existsSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import * as vl from 'vega-lite'
-import '@aster/core/geo'
-import '@aster/core/transforms'
-import { renderSpec } from '@aster/core'
-import { loadSpecData, TRUSTED_LOAD_OPTIONS } from '@aster/core/load'
-import { compile as compileOurs } from '@aster/vl'
+import '@aster-charts/core/geo'
+import '@aster-charts/core/transforms'
+import { renderSpec } from '@aster-charts/core'
+import { loadSpecData, TRUSTED_LOAD_OPTIONS } from '@aster-charts/core/load'
+import { compile as compileOurs } from '@aster-charts/vl'
 import { renderWithVega, renderWithVegaChecked } from './render-vega.js'
 import { canonicalizeSvg, diffCanonical } from './normalize.js'
 import { cli } from '../../../scripts/lib/cli.mjs'

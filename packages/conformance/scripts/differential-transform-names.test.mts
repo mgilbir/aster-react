@@ -9,9 +9,9 @@
  */
 import { describe, expect, it } from 'vitest'
 import * as vega from 'vega'
-import { compileChart, datasetsOfScene, evaluateChart } from '@aster/core'
-import '@aster/core/transforms'
-import '@aster/core/geo'
+import { compileChart, datasetsOfScene, evaluateChart } from '@aster-charts/core'
+import '@aster-charts/core/transforms'
+import '@aster-charts/core/geo'
 import { CASES } from './transform-cases.mjs'
 
 type Spec = Record<string, unknown>

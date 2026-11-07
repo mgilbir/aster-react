@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { chartInfoFromScene, evaluateChart, compileChart, getChartInfo } from '@aster/core'
+import { chartInfoFromScene, evaluateChart, compileChart, getChartInfo } from '@aster-charts/core'
 import {
   baseDomainsOf, continuousAxes, dragToDataInterval, keyboardView, pixelSpanOf, positionalScales,
   selectionToPixels, viewToDomainRaw,

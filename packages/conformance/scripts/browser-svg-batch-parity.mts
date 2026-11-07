@@ -164,12 +164,12 @@ console.log(`[browser-batch] ${BROWSER}: ${entries.length} entries (${synthetic.
 
 const entrySrc = `
 import embed from 'vega-embed'
-import { compileChart, evaluateChart } from '@aster/core'
-import { renderSceneToDomElement } from '@aster/core/dom'
-import { loadSpecData, TRUSTED_LOAD_OPTIONS } from '@aster/core/load'
-import { compile } from '@aster/vl'
-import '@aster/core/geo'
-import '@aster/core/transforms'
+import { compileChart, evaluateChart } from '@aster-charts/core'
+import { renderSceneToDomElement } from '@aster-charts/core/dom'
+import { loadSpecData, TRUSTED_LOAD_OPTIONS } from '@aster-charts/core/load'
+import { compile } from '@aster-charts/vl'
+import '@aster-charts/core/geo'
+import '@aster-charts/core/transforms'
 
 const NS = 'http://www.w3.org/2000/svg'
 

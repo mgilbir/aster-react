@@ -10,14 +10,14 @@ import { describe, it, expect, afterEach, vi } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import '@aster/core/geo'
-import '@aster/core/transforms'
-import { renderSpec, type VgSpec } from '@aster/core'
-import { isAddonLoaded, loadAddons } from '@aster/core/addons'
+import '@aster-charts/core/geo'
+import '@aster-charts/core/transforms'
+import { renderSpec, type VgSpec } from '@aster-charts/core'
+import { isAddonLoaded, loadAddons } from '@aster-charts/core/addons'
 import { forEachVariant } from './testing/variants'
 
-vi.mock('@aster/core/addons', async (importOriginal) => {
-  const real = await importOriginal<typeof import('@aster/core/addons')>()
+vi.mock('@aster-charts/core/addons', async (importOriginal) => {
+  const real = await importOriginal<typeof import('@aster-charts/core/addons')>()
   return { ...real, loadAddons: vi.fn(real.loadAddons) }
 })
 

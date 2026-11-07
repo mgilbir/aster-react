@@ -9,7 +9,7 @@
  */
 import { describe, it, expect } from 'vitest'
 import * as vl from 'vega-lite'
-import { compile } from '@aster/vl'
+import { compile } from '@aster-charts/vl'
 import { renderWithVega, renderWithVegaChecked } from '../src/render-vega.js'
 import { canonicalizeSvg, diffCanonical } from '../src/normalize.js'
 import { expressionDiff } from './vl-expressions.js'

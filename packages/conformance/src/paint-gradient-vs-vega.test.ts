@@ -5,7 +5,7 @@
  */
 import { describe, expect, it } from 'vitest'
 import * as vega from 'vega'
-import { renderSpec } from '@aster/core'
+import { renderSpec } from '@aster-charts/core'
 import { canonicalizeSvg, diffCanonical } from './normalize.js'
 
 const lin = { gradient: 'linear', x1: 0, y1: 1, x2: 1, y2: 0, stops: [{ offset: 0, color: 'white' }, { offset: 0.6, color: 'orange' }, { offset: 1, color: 'darkred' }] }

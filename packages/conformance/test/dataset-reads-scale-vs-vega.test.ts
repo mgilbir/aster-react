@@ -4,8 +4,8 @@
  * transform's operator after the scale's. The datasets are compared (view.data) and the render.
  */
 import { describe, it, expect } from 'vitest'
-import '@aster/core/transforms'
-import { renderSpec, evaluateChart, compileChart, datasetsOfScene } from '@aster/core'
+import '@aster-charts/core/transforms'
+import { renderSpec, evaluateChart, compileChart, datasetsOfScene } from '@aster-charts/core'
 import { renderWithVegaChecked } from '../src/render-vega.js'
 import { canonicalizeSvg, diffCanonical } from '../src/normalize.js'
 

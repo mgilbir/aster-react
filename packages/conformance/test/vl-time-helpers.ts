@@ -1,7 +1,7 @@
 /** Shared by the time-unit and predicate differentials: run a compiled Vega spec and read the rows its first mark draws from. */
 import * as vega from 'vega'
 import * as vl from 'vega-lite'
-import { compile } from '@aster/vl'
+import { compile } from '@aster-charts/vl'
 
 export const silent: any = { level: () => silent, warn: () => silent, info: () => silent, debug: () => silent, error: () => silent }
 

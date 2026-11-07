@@ -6,12 +6,12 @@
  * Field predicates (equal, lt, lte, gt, gte, range, oneOf, valid) over a number, a string, a boolean and a field with nulls in it, and
  * over a time unit; each with the kinds of value it takes (a plain value, a DateTime, a time-unit value, an expression); and the ways
  * to put them together (not, and, or, nested, a bare expression). A UTC time unit is here too, and is read in local time: vega-lite
- * reads a time unit in a field predicate in local time whatever it says (its source says "TODO: support utc"), and @aster/vl matches it,
+ * reads a time unit in a field predicate in local time whatever it says (its source says "TODO: support utc"), and @aster-charts/vl matches it,
  * so a filter keeps the same rows in every zone. The last tests pin the expressions that come of it.
  */
 import { describe, it, expect } from 'vitest'
 import { createRequire } from 'node:module'
-import { compile } from '@aster/vl'
+import { compile } from '@aster-charts/vl'
 import * as vl from 'vega-lite'
 import { INSTANTS, bothCompile, rowsOf, silent } from './vl-time-helpers.js'
 import { expressionDiff } from './vl-expressions.js'

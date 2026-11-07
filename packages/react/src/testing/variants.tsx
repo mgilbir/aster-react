@@ -66,7 +66,7 @@ const PlainSvgChartChecked: ChartComponent = React.forwardRef<ChartHandle, Chart
   if (used.length) throw new Error(`the SvgChart variant has no interaction: declare the \`interaction\` capability (uses ${used.join(', ')})`)
   const onError = (error: Error): void => {
     // The runtime report for an event-stream spec without `interaction`: the test needs the `signals` capability.
-    if (error.message.includes("'@aster/react/interaction'")) throw new Error(`the SvgChart variant has no event loop: declare the \`signals\` capability (${error.message})`)
+    if (error.message.includes("'@aster-charts/react/interaction'")) throw new Error(`the SvgChart variant has no event loop: declare the \`signals\` capability (${error.message})`)
     props.onError?.(error)
   }
   return <PlainSvgChart {...props} onError={onError} ref={ref} />
@@ -166,7 +166,7 @@ export const FAILURE_MODES: Record<Capability, FailureMode> = {
     const m = mount(variant, { spec: tinySpec, width: 40, height: 30, tooltip: true, onPointSelect: () => {} })
     try {
       expect(m.errors.map((e) => e.message)).toEqual([
-        expect.stringMatching(/^\[aster\] tooltip, onPointSelect need hit testing and the signal event loop and are ignored: pass interaction=\{interaction\} from '@aster\/react\/interaction'$/),
+        expect.stringMatching(/^\[aster\] tooltip, onPointSelect need hit testing and the signal event loop and are ignored: pass interaction=\{interaction\} from '@aster-charts\/react\/interaction'$/),
       ])
       const rect = m.container.querySelector('svg path')!
       rect.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: 5, clientY: 5 }))
@@ -184,7 +184,7 @@ export const FAILURE_MODES: Record<Capability, FailureMode> = {
     try {
       expect(m.container.querySelector('svg')).not.toBeNull()
       expect(m.errors.map((e) => e.message)).toEqual([
-        expect.stringMatching(/^\[aster\] this spec has event streams \(signal\.on\) but no event loop is bound: pass interaction=\{interaction\} from '@aster\/react\/interaction'$/),
+        expect.stringMatching(/^\[aster\] this spec has event streams \(signal\.on\) but no event loop is bound: pass interaction=\{interaction\} from '@aster-charts\/react\/interaction'$/),
       ])
     } finally { m.unmount() }
   },

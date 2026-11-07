@@ -57,7 +57,7 @@ function spreadOffenders(dirs: string[]): string[] {
         readFileSync(p, 'utf8').split('\n').forEach((line, i) => {
           if (/^\s*(\*|\/\/|\/\*)/.test(line) || /\.\.\.args\b/.test(line)) return // comments; builtin argument lists
           if (/Math\.(min|max)\(\s*(0,\s*)?\.\.\./.test(line)) offenders.push(`${p}:${i + 1}`)
-          // the only allowlisted spreads: @aster/vl cast lists (small, spec-bounded; that package is another lane)
+          // the only allowlisted spreads: @aster-charts/vl cast lists (small, spec-bounded; that package is another lane)
           else if (/\.(push|unshift)\(\s*\.\.\.[A-Za-z_]/.test(line) && !/\.\.\.(d\.casts|pre)\b/.test(line)) offenders.push(`${p}:${i + 1}`)
         })
       }

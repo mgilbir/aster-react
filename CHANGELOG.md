@@ -5,7 +5,7 @@ and Fixed, per package. Everything built before the first release is in [Pre-rel
 
 ## 0.1.0 (unreleased): initial release
 
-### `@aster/core`
+### `@aster-charts/core`
 
 The rendering engine, with no runtime dependencies. It compiles, evaluates and renders a Vega spec to an SVG string (`renderSpec`)
 or a scene, and reimplements the Vega and D3 pieces it needs (scales, formats, time, colors, geo, transforms, expressions) as its own
@@ -22,17 +22,17 @@ code; the real `vega` and `d3-*` packages are the test oracle only.
   design; see [docs/LIMITS.md](docs/LIMITS.md).
 - A URL policy for `loadSpecData` (http/https only, private hosts denied, timeouts and byte bounds).
 
-### `@aster/vl`
+### `@aster-charts/vl`
 
 A from-scratch Vega-Lite compiler (`compile`: Vega-Lite spec to Vega spec) with no runtime dependency on `vega-lite`. It covers
 the unit, layer, concat, facet and repeat views, parameters and selections, composite marks (`boxplot`, `errorbar`, `errorband`),
 maps (`geoshape`, projections) and animation, and is checked against the real `vega-lite` compiler's output.
 
-### `@aster/react`
+### `@aster-charts/react`
 
-- `<Chart>` (SVG or canvas) and the headless `useChart` hook, for Vega specs; Vega-Lite is opt-in with `import '@aster/react/vl'`.
-- `<SvgChart>` from `@aster/react/lite`, an SVG-only chart for a smaller bundle, and the `interaction` capability from
-  `@aster/react/interaction` that adds tooltips, point selection and `signal.on` streams to it.
+- `<Chart>` (SVG or canvas) and the headless `useChart` hook, for Vega specs; Vega-Lite is opt-in with `import '@aster-charts/react/vl'`.
+- `<SvgChart>` from `@aster-charts/react/lite`, an SVG-only chart for a smaller bundle, and the `interaction` capability from
+  `@aster-charts/react/interaction` that adds tooltips, point selection and `signal.on` streams to it.
 - Interaction as React state: controlled or uncontrolled selection and pan/zoom, signal binds, tooltips, and keyboard navigation over
   the accessible scene tree.
 - Data: `useSpecData` / `useChartData` (Suspense and `use()`), `dataChanges` for differential updates, and streaming components and hooks.
@@ -49,27 +49,27 @@ topic and carry no dates, so an entry later in a group may be superseded by one 
 longer is carries a **Superseded** marker. The counts, sizes and corpus totals in an entry are those of the build it was written
 against. They are not current values; for the current ones see [README.md](README.md) and [docs/PERFORMANCE.md](docs/PERFORMANCE.md).
 
-### `@aster/core`
+### `@aster-charts/core`
 
 The engine: compiling and evaluating Vega specs, scales, geo, formats, guides, scenes, data loading and limits.
 
-- **`@aster/core`: a time axis keys its ticks by value, and a time scale reads a string as a number, as vega does.** The ticks of a
+- **`@aster-charts/core`: a time axis keys its ticks by value, and a time scale reads a string as a number, as vega does.** The ticks of a
   `time` or `utc` axis are joined by their value as text, which stops at the second, so ticks a few milliseconds apart share one item
   (the last tick's datum, the first one's place), where each used to be its own. A string handed to a `time` or `utc` scale is
   read as a number (`'2'` is 2 ms), not parsed as a date, so a date string in a time-scale encode gives `NaN`: parse dates with
   `format.parse` or a `timeparse` formula before they reach the scale.
-- **`@aster/core`: an incremental evaluation keeps the gradient definitions of the marks it does not re-encode.** A mark reused from
+- **`@aster-charts/core`: an incremental evaluation keeps the gradient definitions of the marks it does not re-encode.** A mark reused from
   the previous scene, or a row a pulse leaves alone, still brings the `<defs>` its gradient fill or stroke refers to, so the SVG of an
   incremental update no longer references a gradient the scene lost; one nothing uses any more is dropped.
-- **`@aster/core`: an axis label is the value the format returns, not its text.** A band or point axis over a column whose cell holds a
+- **`@aster-charts/core`: an axis label is the value the format returns, not its text.** A band or point axis over a column whose cell holds a
   list (`[1, 2]`) writes the label as two lines, as vega does, and sizes the axis for both; it was one line, `1,2`.
-- **`@aster/core`: a mark whose encode throws is contained as vega contains it.** The item that threw keeps the channels set before
+- **`@aster-charts/core`: a mark whose encode throws is contained as vega contains it.** The item that threw keeps the channels set before
   the failing one and its edges (`y2`, `x2`) are never made a size, so it draws as a zero-size rect where it drew the full one. When
   the encode reads a scale that is ranked late (a domain over data of its own scope), the pass reaches the title and the guides that
   read no late scale, as vega's does: a legend over a late scale is its group, title and an unmade gradient or entry (the aria
   caption included), one over a literal domain is made whole. Before, the chart stopped at the mark.
 
-- **`@aster/core`: a guide's format, a layout that throws, and the names and parameters a spec must have, as vega reads them.** A
+- **`@aster-charts/core`: a guide's format, a layout that throws, and the names and parameters a spec must have, as vega reads them.** A
   legend's `format` the label format refuses (`{signal: '0/0'}`, `zzz%%`) made `renderSpec` throw; it is now the error vega logs, and
   the pass stops at the legend (a gradient whose labels are ranked last keeps its gradient). The format and format type of an axis or
   a legend are the values their signals hold, read through the scale's own tick format (a falsy time specifier is the default
@@ -85,7 +85,7 @@ The engine: compiling and evaluating Vega specs, scales, geo, formats, guides, s
   sorted by an op without its field. A `timeUnitSpecifier(...)` format the engine refuses is vega's logged error, no longer read off
   the call's text.
 
-- **`@aster/core`: every transform of a mark runs on its encoded items, and a guide that reads a late signal is drawn as vega leaves
+- **`@aster-charts/core`: every transform of a mark runs on its encoded items, and a guide that reads a late signal is drawn as vega leaves
   it.** A mark's transforms other than `lookup`, `force`, `label`, `voronoi`, `wordcloud`, `heatmap`, `linkpath` and `geopath` ran on
   the data rows before the encode: a `formula` that read `datum.datum.a` threw, and what a transform wrote (`x`, `fill`, a stack's
   `y`) was never drawn. All of them now run after the encode, on the items, through the path group marks use: they read what the
@@ -99,7 +99,7 @@ The engine: compiling and evaluating Vega specs, scales, geo, formats, guides, s
   longer reads a property vega does not know for its kind (`columns` on an axis), so an expression there that does not parse is
   accepted, as vega accepts it.
 
-- **`@aster/core`: a group mark's transforms run on its items, as vega runs them.** Only a group's `formula` was run, and only to see
+- **`@aster-charts/core`: a group mark's transforms run on its items, as vega runs them.** Only a group's `formula` was run, and only to see
   whether it threw; what any transform wrote was dropped. The items of a group mark are now encoded in the scope the mark is in (the
   item's own data sets and projections are its content's, which its encode cannot read), then every transform of the mark runs on them
   and writes onto them (a `formula` that sets `x` or `fill`, a `window`, a `stack`, a `pie`, ...), then its sort, and only then is what
@@ -111,7 +111,7 @@ The engine: compiling and evaluating Vega specs, scales, geo, formats, guides, s
   signal's. An axis whose ticks read it is refused (`[aster]`), since vega's renderers cannot draw what it leaves. The
   generated trees of `differential-abort-trees` put transforms on groups, header groups in grids and two failures in one mark.
 
-- **`@aster/core`: late signals and mark transforms stop the pass like vega's.** A signal of the view that reads data or a scale (or one
+- **`@aster-charts/core`: late signals and mark transforms stop the pass like vega's.** A signal of the view that reads data or a scale (or one
   declared after it) and throws was never logged and the marks that read it were drawn; a mark's `transform` or `sort` that throws
   was logged and the run went on. Both are now points the pass stops at (see "Scopes and an aborted pass" in `docs/ARCHITECTURE.md`):
   a late signal is ranked after every other operator of the view's scope, so everything that does not read it is made, what reads it is
@@ -119,11 +119,11 @@ The engine: compiling and evaluating Vega specs, scales, geo, formats, guides, s
   view is made; a mark's transforms and sort run on its encoded items, so the mark is made in full and the pass stops after it. One
   error each, as vega logs. The generated trees of `differential-abort-trees` now put failures in them.
 
-- **`@aster/core`: a circular symbol is drawn on canvas as vega draws it** (one full-turn arc about the item's origin, not two half turns),
+- **`@aster-charts/core`: a circular symbol is drawn on canvas as vega draws it** (one full-turn arc about the item's origin, not two half turns),
   and the Chromium canvas gate compares the calls of vega and Aster for the generated gradient entries: WebKit rasterized the two half
   turns a pixel differently and only its nightly noticed.
 
-- **`@aster/core`: the gradient of a scale.** `{gradient: <scale>, start, stop, count}` in an encode and the expression
+- **`@aster-charts/core`: the gradient of a scale.** `{gradient: <scale>, start, stop, count}` in an encode and the expression
   `gradient(scale, start, stop, count)` (which compiled and failed when called) paint a linear gradient whose stops are the scale's
   ticks (`count`, else 15) and the ends of its domain, in the colours the scale gives; scales without ticks (quantize, quantile,
   threshold, ordinal) use their domain, and a domain of no width is stretched onto [0, 1]. The scale may be named by a signal or a field;
@@ -133,7 +133,7 @@ The engine: compiling and evaluating Vega specs, scales, geo, formats, guides, s
   item's bounds (stroke included), and one on a group's box over the group's bounds, as vega's canvas does. Generated over the kinds of
   scale, the options and every mark that paints, against vega's SVG (string and DOM renderers) and its canvas in Chromium.
 
-- **`@aster/core`: a failing operator stops the pass as it does in vega, in every scope.** An encode that threw (a mark's, a group's, an
+- **`@aster-charts/core`: a failing operator stops the pass as it does in vega, in every scope.** An encode that threw (a mark's, a group's, an
   entry of an axis, a legend or a title), a signal or a scale of a group's scope, logged one error per item it failed on (11 for one
   axis) and drew the scopes, legends and titles vega never gets to. Vega's dataflow runs its operators in rank order and stops at the
   first that throws: one error is logged, and the scenegraph is what the operators before it made. That is now modelled for every
@@ -145,11 +145,11 @@ The engine: compiling and evaluating Vega specs, scales, geo, formats, guides, s
   ran only if the pass went past every scope below it. Pinned by generated differentials against vega: random trees with failures
   at random places (`differential-abort-trees`), and every channel of every guide mark (`differential-guide-partial`).
 
-- **`@aster/core`: `renderSpec` no longer carries the incremental step engine** (`incremental-engine.ts`, `evaluate.ts`, `runtime.ts`).
+- **`@aster-charts/core`: `renderSpec` no longer carries the incremental step engine** (`incremental-engine.ts`, `evaluate.ts`, `runtime.ts`).
   The engine (the pulse-driven transform steps and the state a step leaves for the next pulse) is only used by a chart evaluated again from
   a committed state. `renderSpec` and `getChartInfo` evaluate once and no longer import it; the public `evaluateChart` and the chart
   session (so every `<Chart>`, `useChart`, stream and worker) are handed it. `evaluateChart` behaves as before. A `renderSpec`-only
-  bundle is 4.6 kB gzip smaller (150.4 to 145.8); the React rows and `core + @aster/core/dom` keep the engine. Output is the same:
+  bundle is 4.6 kB gzip smaller (150.4 to 145.8); the React rows and `core + @aster-charts/core/dom` keep the engine. Output is the same:
   `evaluate-once.test.ts` compares the two evaluations over generated charts, and the shaking gate and `verify-publish` check, by
   module, that a `renderSpec` bundle does not contain the engine and an `evaluateChart` one does.
 
@@ -163,7 +163,7 @@ The engine: compiling and evaluating Vega specs, scales, geo, formats, guides, s
   `<svg>` 198 ms instead of 385 ms. Output is the same: a generated differential against an engine that keeps nothing, and a live one
   against Vega.
 
-- **`@aster/core`: every expression of a spec is refused when the spec is compiled, as `vega.parse` refuses it** (same time, same message,
+- **`@aster-charts/core`: every expression of a spec is refused when the spec is compiled, as `vega.parse` refuses it** (same time, same message,
   same order; a `SpecParseError`). It was only a syntax error in most places, and the handlers of signals were not looked at until they
   were bound. Now `compileChart`, `renderSpec` and the mount of a `<Chart>` also refuse: the `on` handlers of signals (their updates,
   event selectors, streams however nested with their filters, the signals and scales that trigger them, `encode` with `update`,
@@ -172,13 +172,13 @@ The engine: compiling and evaluating Vega specs, scales, geo, formats, guides, s
   declare, the signals of the config, the five of every view); the refusals of vega's code generator (`Illegal callee type`,
   `Illegal identifier: _`, `Illegal property`, `Missing arguments to clamp function.`, a call that needs a literal data or scale name);
   the `on` triggers of named marks; and the expressions of a transform in the order of its definition, by the kind of each parameter.
-  A function of an add-on is known to the compile whether or not the add-on is loaded (it is asked for by `@aster/core/addons` and
+  A function of an add-on is known to the compile whether or not the add-on is loaded (it is asked for by `@aster-charts/core/addons` and
   fails, naming the add-on, when called without it). Properties of guides vega never reads are no longer refused, and a symbol legend's
   size and layout expressions are quoted as vega quotes them (see docs/ERRORS.md for the few it does not).
   Also: `isInvalid`, which vega does not have, is an unknown function; a spec whose expressions use a name it declares no signal for
   (one a host supplies in `RuntimeInput.signals`, say) now fails to compile, where it used to render with the name undefined.
 
-- **`@aster/core` limits: built-in ceilings for the crash-class inputs, and `limits` documented as best-effort.** A few inputs let a tiny
+- **`@aster-charts/core` limits: built-in ceilings for the crash-class inputs, and `limits` documented as best-effort.** A few inputs let a tiny
   spec exhaust the process (a 440 KB topojson topology that decodes to 200M positions, `tickCount: 2e6`, `sequence` of 5e7, a trellis
   `layout.columns` of 5e7, `pad` / number-format widths of 5e7, a spec nested 20 000 deep). They are now refused with `AsterLimitError`
   even when no `limits` are given (`HARD_CAPS`: rows 1M, cells 10M, items 100k, bytes 1M, coords 2M; spec depth 1000), naming the
@@ -188,7 +188,7 @@ The engine: compiling and evaluating Vega specs, scales, geo, formats, guides, s
   three or more adjacent overlapping unbounded quantifiers (`a*a*a*a*a*b` ran over 20 s on 9 000 characters). `docs/LIMITS.md`
   states that `limits` are best-effort and that the killable worker is the hard guarantee.
 
-- **`@aster/core`: four runtime leftovers closed, each against vega 6.3.1.**
+- **`@aster-charts/core`: four runtime leftovers closed, each against vega 6.3.1.**
   - Field paths. A facet `groupby` that is a nested path (`'o.k'`) threw; the group items are matched with their rows by the
     key the aggregate hands back, and are joined the way vega joins them (rows that share the flat key of their group-by
     names, an escaped name reading nothing, are one item). `stratify`'s `key` and `parentKey`, a json format's `property`
@@ -204,7 +204,7 @@ The engine: compiling and evaluating Vega specs, scales, geo, formats, guides, s
   - `buildA11yTree` boxes are in the viewport, as `A11yNode` always said: the padding and the frame offset are in the
     numbers (the React overlay no longer adds the padding). Hosts that added the padding themselves must stop.
 
-- **`@aster/core` guides and layout: eight divergences from vega closed**, which the generated guide and grid differentials had been avoiding
+- **`@aster-charts/core` guides and layout: eight divergences from vega closed**, which the generated guide and grid differentials had been avoiding
   (they now draw all of them): an axis with explicit `values` formats its labels for one tick per value (a precision that follows the
   tick step, `e` among others, differed); `tickMinStep` acts only through the tick count (a log scale keeps ticks closer than it); an
   axis `orient` signal reads the per-orient config blocks per key as signal expressions, and its `labelBound` clips as a vertical axis;
@@ -213,7 +213,7 @@ The engine: compiling and evaluating Vega specs, scales, geo, formats, guides, s
   second pass rounds); an `orient: none` legend with no `legendX` / `legendY` extends nothing along that axis; grid headers beyond the
   column count add nothing to the bounds.
 
-- **`@aster/core` scale stack in Aster's own design** (`arr.ts`, `interp.ts`, `scale.ts`, `scale-continuous.ts`, `scale-discrete.ts`,
+- **`@aster-charts/core` scale stack in Aster's own design** (`arr.ts`, `interp.ts`, `scale.ts`, `scale-continuous.ts`, `scale-discrete.ts`,
   `scale-d3.ts`, `scale-domain.ts`, `scales.ts`). d3-array, d3-interpolate, d3-scale, vega-scale and the spec side of vega-parser /
   vega-encode were written as transcriptions; they are now models of their own: one mapping model and one warp for identity / linear /
   power / log / symlog, a gradient model for the sequential and diverging scales, a lexicon of categories under ordinal / band / point,
@@ -244,7 +244,7 @@ The engine: compiling and evaluating Vega specs, scales, geo, formats, guides, s
     the parser's, not `Expression parse error: ...`. **Superseded:** a `force` whose expression does not parse now throws
     `SpecParseError: Expression parse error: 1 +` from `renderSpec`.
 
-- **`@aster/core` geo engine in Aster's own design** (`geo-events.ts`, `geo-sphere.ts`, `geo-clip.ts`, `geo-resample.ts`,
+- **`@aster-charts/core` geo engine in Aster's own design** (`geo-events.ts`, `geo-sphere.ts`, `geo-clip.ts`, `geo-resample.ts`,
   `geo-raw.ts`, `geo-projections.ts`, `geo-path.ts`, `geo-sphere-measures.ts`, `geo.ts`). A GeoJSON object is flattened into
   an event buffer and each stage (rotate, clip to the visible sphere, project with adaptive resampling, clip to the
   screen) is a function from one buffer to another; projections are objects with properties and a `configure(params)` in
@@ -268,7 +268,7 @@ The engine: compiling and evaluating Vega specs, scales, geo, formats, guides, s
   `tickStep` that `formatSpan` and `timeBin` used. `timeUnitSpecifier` no longer loops forever on a specifier table that blanks a unit.
   Not fixed (another module): `timeBin` with a NaN extent picks the year grain where vega-time picks milliseconds. **Superseded:** `timeBin` with a NaN extent now returns the same units and step as vega-time's `timeBin` (checked for `[NaN, NaN]` and `[NaN, 5]`).
 
-- **`@aster/core`: the small ports in Aster's own design** (`event-selector.ts`, `selections.ts`, `timer.ts`, `topojson.ts`,
+- **`@aster-charts/core`: the small ports in Aster's own design** (`event-selector.ts`, `selections.ts`, `timer.ts`, `topojson.ts`,
   `dsv.ts`, `data-format.ts`, and the voronoi transform as `delaunay.ts` + `voronoi.ts` + `orient.ts`). Parsed selectors and their
   messages, selection results, timer ticks on a virtual clock, topojson features and meshes, parsed rows, inferred types and
   voronoi paths are unchanged, and now pinned by generated live differentials against the real vega-event-selector,
@@ -318,7 +318,7 @@ The engine: compiling and evaluating Vega specs, scales, geo, formats, guides, s
     Vega's dataflow abort per scope: a clean cut after the axis for most scales, a refusal where Vega's own serializer
     crashes. Also fixed on the way: a scale in a group nested two levels deep ranges over the view's size, and an
     `orient: none` legend no longer widens the view by its `legendX` twice.
-  - The bundle budgets of the rows that contain `@aster/core` were raised by 7.2 kB gzip (130.8 kB for core). Guides cost
+  - The bundle budgets of the rows that contain `@aster-charts/core` were raised by 7.2 kB gzip (130.8 kB for core). Guides cost
     more per item than before (every channel of every tick and label is Vega's own encode): see docs/PERFORMANCE.md.
 
 - **Accessibility structure of the SVG (N3)**: axes, legends and titles are drawn as vega-scenegraph draws them
@@ -328,7 +328,7 @@ The engine: compiling and evaluating Vega specs, scales, geo, formats, guides, s
   `aria-label`, and items carry `aria-label` / `role` / `aria-roledescription` from `description`, `ariaRole`,
   `ariaRoleDescription` (`aria: false` hides). The old `role="axis"` was no ARIA role. The captions are one
   implementation shared with the accessible tree. The strict canonicalizer compares this structure, so it
-  can not drift again; `@aster/vl` now emits vega-lite's `description`, `ariaRoleDescription` and mark names.
+  can not drift again; `@aster-charts/vl` now emits vega-lite's `description`, `ariaRoleDescription` and mark names.
   The corpus SVG changes (759 of 785 files); the pictures do not.
 
 - **Spec lists are vega's** (the README example used to throw a raw `TypeError`): `data: {values: [...]}`, a lone mark or scale object and `null` are read
@@ -346,8 +346,8 @@ The engine: compiling and evaluating Vega specs, scales, geo, formats, guides, s
   view width signal can be null or a word, and a negative width or height is laid out in vega's two passes;
   a text angle that is a word is written `rotate(word)`.
 
-- **`registerExpressionFunction`** (`@aster/core`): vega's `expressionFunction`, the hook for Vega-Lite's
-  custom `formatType`. `@aster/vl` now emits vega-lite's custom format types (text, tooltip, href,
+- **`registerExpressionFunction`** (`@aster-charts/core`): vega's `expressionFunction`, the hook for Vega-Lite's
+  custom `formatType`. `@aster-charts/vl` now emits vega-lite's custom format types (text, tooltip, href,
   description, axis and legend labels, headers; `config.customFormatTypes`, `numberFormatType`,
   `normalizedNumberFormatType`, `timeFormatType`), explicit scale domains with vega-lite's `zero` / `nice`
   rules (continuous x / y, size, opacity and colour scales ignored them before), `zero` / `nice` on
@@ -438,11 +438,11 @@ The engine: compiling and evaluating Vega specs, scales, geo, formats, guides, s
 - **Limits**: `maxTimeMs` wall-clock deadline checked across compile/evaluate/render
   and inside dataset/encode loops; `domainRaw` scale overrides in core.
 
-### `@aster/vl`
+### `@aster-charts/vl`
 
 The Vega-Lite compiler.
 
-- **`@aster/vl`: a longitude or latitude takes every definition vega-lite compiles.** `aggregate`, `bin`, `timeUnit`, `sort`,
+- **`@aster-charts/vl`: a longitude or latitude takes every definition vega-lite compiles.** `aggregate`, `bin`, `timeUnit`, `sort`,
   `stack`, `scale`, `axis`, `legend`, a value `condition`, `impute`, `band` and `bandPosition`, and any type but quantitative, were
   refused on longitude / latitude and their ends. vega-lite 6.4.3 projects the raw field whatever the definition says and reads the
   rest as on any other channel (an aggregate grouped by the projected positions, the fields of a bin and a time unit, a sort index,
@@ -452,7 +452,7 @@ The Vega-Lite compiler.
   pair and the datum that is not a number, because vega cannot run what vega-lite emits for them (listed under "Throws"). Pinned by
   `vl-geo-channels` (mark x geographic channel x definition x companion, 4020 cases) against vega-lite 6.4.3.
 
-- **`@aster/vl`: every mark draws every channel as vega-lite draws it, whatever the channel's definition.** A datum on a size, opacity,
+- **`@aster-charts/vl`: every mark draws every channel as vega-lite draws it, whatever the channel's definition.** A datum on a size, opacity,
   shape, dash, angle, theta, radius or text channel, and `scale: null` on any channel, were refused; they compile now (a datum is its
   scale's domain, a field without a scale is read as it is, a position without a scale has no axis). The `key` channel is supported.
   An arc is centred by x, y and their offsets (and stacks a quantitative x or y), theta and radius take values, datums and second
@@ -465,7 +465,7 @@ The Vega-Lite compiler.
   condition and vega-lite's output for it is incoherent). Pinned by `vl-mark-channels` (every mark x every channel x every kind of
   definition, 6188 cases) against vega-lite 6.4.3.
 
-- **`@aster/vl`: `fill` and `stroke` paint every mark as vega-lite paints them, beside `color` and each other.** A fill on a stroked
+- **`@aster-charts/vl`: `fill` and `stroke` paint every mark as vega-lite paints them, beside `color` and each other.** A fill on a stroked
   mark, a stroke on a filled one, and either beside a `color` were refused; now each paint channel has its scale and legend, a `color`
   gives way to the fill (filled mark) or stroke (unfilled mark) the encoding has, and every mark is painted by one rule (the mark
   definition's and the config's paint, then color, fill and stroke). Legend symbols are painted from the mark's paint, and the legends
@@ -475,7 +475,7 @@ The Vega-Lite compiler.
   the README. Pinned by `vl-paint-channels` (mark x filled x channel x definition x companion, config defaults, layers) and
   `vl-mark-channels` against vega-lite 6.4.3.
 
-- **`@aster/vl`: a scale type a channel can use is the scale the field has, and marks sit where vega-lite puts them.** The #87 fallback
+- **`@aster-charts/vl`: a scale type a channel can use is the scale the field has, and marks sit where vega-lite puts them.** The #87 fallback
   covered the requests a channel or the data cannot use; these valid ones were ignored or answered with another scale: colour `point`
   and `bin-ordinal`; `ordinal` and `band` on size, opacity, stroke width and angle (a band scale is read at the middle of its bands);
   `quantile`, `quantize` and `threshold` on shape and stroke dash (and on every numeric channel, whose range is cut into classes only
@@ -491,7 +491,7 @@ The Vega-Lite compiler.
   channel x every scale type it honours x every data type (`vl-honoured-scale-types`) and every mark x position x scale type x band
   position, offsets, time-unit channels and datums (`vl-honoured-positions`); the compared output now includes compiled axes and legends.
 
-- **`@aster/vl`: composite marks in a repeat, and the decision tables as Aster's own.**
+- **`@aster-charts/vl`: composite marks in a repeat, and the decision tables as Aster's own.**
   - A boxplot, errorbar or errorband in a repeat (a list, a row, a column, a grid, a layer, nested in a facet, a concat, a layer or
     another repeat) is rewritten after the repeat has put its values in; it was rewritten while its field was still a `{repeat}`
     reference. A generated matrix of composite marks x repeat forms x channels x compositions now compares each against vega-lite 6.4.3
@@ -508,7 +508,7 @@ The Vega-Lite compiler.
     value) against the compiled Vega of vega-lite, and 178,640 + 15,492 specs compile to the same Vega before and after. The
     orientation tables found two places the old one was not vega-lite's (a pre-binned channel on a rule or an area; a datum read as a field).
 
-- **`@aster/vl`: ten compile gaps against vega-lite 6.4.3, each pinned by a generated differential.** A rule over pre-binned channels
+- **`@aster-charts/vl`: ten compile gaps against vega-lite 6.4.3, each pinned by a generated differential.** A rule over pre-binned channels
   (`x2: inrange(...)`); area, tick and bar marks with no orientation (two non-measures); a line with `x2`/`y2` is a rule; a view's `name`
   prefixes its scale and signal names (`outer_x`, `outer_childWidth`), through repeats, concats, layers and facets; continuous colour scales
   forward `round`, `clamp`, `nice`, `padding` and the like; `zero` on a log scale is dropped; `nice` on a time scale is kept;
@@ -516,7 +516,7 @@ The Vega-Lite compiler.
   errorband compiles (a boxplot, which vega-lite compiles to a spec Vega cannot parse, stays refused); a repeat or a concat inside a facet
   compiles (a repeat of layers is a layered view to the facet). The scale-forwarding differential now also covers `yOffset`.
 
-- **`@aster/vl`: selections and composite marks in Aster's own design** (`selection*.ts`, `composite*.ts`). A selection is resolved
+- **`@aster-charts/vl`: selections and composite marks in Aster's own design** (`selection*.ts`, `composite*.ts`). A selection is resolved
   against its unit into a model and wired by one sequence of steps over the signals it makes; the three composite marks share one
   anatomy and one part builder. The compiled Vega is unchanged on the 2769 specs of the matrices, the corpus and the gallery. New
   matrices compare with vega-lite 6.4.3 every selection type x option x binding x resolve x composition (876 cases) and every
@@ -524,17 +524,17 @@ The Vega-Lite compiler.
   What they found and fixed: a `{param}` domain keeps zero off; a horizontal area with `x2` ends at `x2`; `config.rule` /
   `config.text` keep their black against `config.mark.color`; a mark with `aria: false` encodes no role description; the mark
   inside a path group keeps the mark definition's styles; composite marks group by every entry of a `tooltip` / `detail` list
-  and list a conditional field in their tooltip. Not fixed (pinned in the cases file): composite marks inside a `repeat`. **Superseded** by the entry "composite marks in a repeat" above in `@aster/vl`: a `boxplot` in a `repeat` compiles.
+  and list a conditional field in their tooltip. Not fixed (pinned in the cases file): composite marks inside a `repeat`. **Superseded** by the entry "composite marks in a repeat" above in `@aster-charts/vl`: a `boxplot` in a `repeat` compiles.
 
-- **Vega-Lite params and selections**: `@aster/vl` compiles point and interval selections, `bind` to inputs / legend /
+- **Vega-Lite params and selections**: `@aster-charts/vl` compiles point and interval selections, `bind` to inputs / legend /
   scales, `{param}` conditions, predicates and filters, lookups from a selection, `scale.domain` `{param}` /
   `{unionWith}` and value params as vega-lite 6.4.3 does (a port of `compile/selection/*`), on a unit view and on the
   units of a layer and of a concat, facet or repeat view (linked brushing across views, a brush or a point per facet cell, a
   selection declared on the composition and given to every unit below it: each unit's signals are its group's, a Vega group
-  scope). `@aster/core` gains group-scoped signals as Vega defines them (one copy per group item, shadowing, `push:
+  scope). `@aster-charts/core` gains group-scoped signals as Vega defines them (one copy per group item, shadowing, `push:
   "outer"`, `scope`-source events, streams shared with the enclosing scope, `group()`/`inScope` over the scope's group, a
   group item picked where it has a fill or stroke, a facet cell's datum a tuple with `count`), the event loop keeps their
-  values under `<scope id>:<name>`, and clipped marks no longer grow a group title's frame. `@aster/core` gains
+  values under `<scope id>:<name>`, and clipped marks no longer grow a group title's frame. `@aster-charts/core` gains
   the expression functions behind them (vega-selections' `vlSelectionTest` / `vlSelectionIdTest` /
   `vlSelectionResolve` / `vlSelectionTuples`, `modify` with vega's changeset semantics, `isTuple`, the pan / zoom
   functions, faithful `inrange` and `clampRange`), `{scale}` event sources, and datasets the event loop edits
@@ -542,13 +542,13 @@ The Vega-Lite compiler.
   interactive legends, a mark that reads another mark's items, the voronoi mark transform, pointer events on
   transparent items and on the painted frame. Gates: 70 `vlx-sel-*` corpus specs render like vega-lite's output in
   real vega and in Aster and compile to vega-lite's own signals, stores and marks (a structure test); `pnpm
-  conformance:selections` drives the same native input through vega-lite + vega and `@aster/vl` + `<Chart>` (37 cases,
+  conformance:selections` drives the same native input through vega-lite + vega and `@aster-charts/vl` + `<Chart>` (37 cases,
   composed views among them) and compares signals, group-scope signals, stores and SVG after every step: a step passes
   when Aster equals Vega's retained render or, where Vega keeps its first layout, a new Vega view initialised with the
   same state (counted against a ceiling, no tolerance); `pnpm conformance:signals` has the group-scope cases; live differentials of every
   selection function and of `modify` against the pinned vega; the incremental oracle edits selection stores.
 
-- **Vega-Lite maps and animation (`@aster/vl`, runtime in `@aster/core`)**: `geoshape` marks, `projection` (every
+- **Vega-Lite maps and animation (`@aster-charts/vl`, runtime in `@aster-charts/core`)**: `geoshape` marks, `projection` (every
   property, `config.projection`), `longitude` / `latitude` (and `2`) channels and `{type: "geojson"}` compile to what
   vega-lite 6.4.3 emits for units, layers, concats and repeats (inline GeoJSON / TopoJSON, `sphere` and `graticule`
   generators; a unit fits its projection unless it gives `scale` / `translate`); maps in a facet stay refused, because
@@ -562,27 +562,27 @@ The Vega-Lite compiler.
   compile differential for animation, live differentials for the timer scheduler and the geo pipeline, and a Playwright
   frame comparison against vega on a controlled clock (`pnpm conformance:signals`, 6 animation cases).
 
-- **@aster/vl round 2**: `config.scale` keys, `mark.invalid`, `bandSize`/`binSpacing`/secondary
+- **@aster-charts/vl round 2**: `config.scale` keys, `mark.invalid`, `bandSize`/`binSpacing`/secondary
   offsets, errorbar / errorband, the image mark, `"container"` sizing, `numberFormat` /
   `timeFormat` / `fieldTitle` config, vega-lite's axis order, zindex and color-legend rules, and the
   default invalid-value filter for null data.
 
-- **@aster/vl is production-usable**: every Vega-Lite feature either compiles to
+- **@aster-charts/vl is production-usable**: every Vega-Lite feature either compiles to
   Vega that renders like vega-lite 6.4.3 or throws a `VLCompileError` naming the
   unsupported feature (compositions, encodings and transforms used to be mis-compiled silently, field names went into expressions unescaped, the compiler emitted Vega only Aster's lenient runtime accepted and mutated the caller's spec). New validation layer, one
   field-name escaping helper, VL transform translation, nested composition,
   layer parent transforms/config, sort/condition/timeUnit/bin forms, shared
   scales and legends, collision-free generated names, and `compile` never
   mutates its input. `conformance-vl` now renders our output through real vega
-  and fails on vega errors or warnings. The opt-in `@aster/react/vl` bundle row
+  and fails on vega errors or warnings. The opt-in `@aster-charts/react/vl` bundle row
   grew with it (budgets and sizes: docs/PERFORMANCE.md). Core: domain `sort: {op}` uses Vega's
   aggregate ops and ordinal `{scheme}` ranges resolve to colours.
 
-### `@aster/react`
+### `@aster-charts/react`
 
 The React bindings.
 
-- **`@aster/react`: a chart is one Tab stop.** With `pan` / `zoom` the container was a Tab stop next to the roving stop among the
+- **`@aster-charts/react`: a chart is one Tab stop.** With `pan` / `zoom` the container was a Tab stop next to the roving stop among the
   accessibility nodes (two per chart). Now the container is the only stop and the nodes are `tabindex=-1`, reached from it with
   `PageDown` / `PageUp` (the arrows pan there); without pan or zoom the roving stop stays. Focus survives a re-render, a resize, a
   spec swap and pan/zoom being switched off (it moves to the container or the stop node instead of `<body>`), and a click elsewhere
@@ -595,7 +595,7 @@ The React bindings.
   differential test. `HitIndex.pick` (new) is vega's `event.item` (interactive items only, guide parts included), and
   legend entries and group items now carry their `cursor`.
 
-- **`<SvgChart>` (`@aster/react/lite`) and the `interaction` capability (`@aster/react/interaction`)**: an SVG-only chart
+- **`<SvgChart>` (`@aster-charts/react/lite`) and the `interaction` capability (`@aster-charts/react/interaction`)**: an SVG-only chart
   for size-sensitive apps. It never imports the canvas renderer (142.0 kB gzip against 157.2 for `<Chart>`); hit testing
   and the `signal.on` event loop arrive only as `<SvgChart interaction={interaction}>` (151.5 kB), a plain value, with no
   registry and no side-effect import. Tooltips, point selection and `preventDefault` are a compile error without it, and
@@ -608,7 +608,7 @@ The React bindings.
   interaction>` through one matrix; and the DOM of all three is compared over the whole corpus (server markup, client mount,
   hydration). The browser gate drives every interaction check through both components, the bundle-shaking gate asserts the
   modules of each bundle, and `verify:publish` bundles and typechecks the new entries from the installed tarballs. In
-  `@aster/core` the SVG path parser moved to `path-data.ts` (`@aster/core/canvas` re-exports it) so hit testing no longer
+  `@aster-charts/core` the SVG path parser moved to `path-data.ts` (`@aster-charts/core/canvas` re-exports it) so hit testing no longer
   reads the canvas renderer module.
 
 - **Streaming API**: `createChartStream` (bounded queue, `coalesce`/`drop-oldest`/
@@ -633,12 +633,12 @@ The React bindings.
   Measured results: docs/PERFORMANCE.md.
 
 - **Vega-Lite is opt-in**: the from-scratch VL compiler now lives behind
-  `import '@aster/react/vl'` instead of being imported by the base `<Chart>` entry.
+  `import '@aster-charts/react/vl'` instead of being imported by the base `<Chart>` entry.
   Vega specs need no addon (as before); a VL spec without it
   throws an error naming the exact import, and `registerVegaLiteCompiler` /
   `hasVegaLiteCompiler` are exported for hosts that compile VL themselves. Worker
   hosts import the addon in the worker entry. The budget gate covers both entries
-  (`@aster/react` and `@aster/react/vl`) separately; sizes are in docs/PERFORMANCE.md.
+  (`@aster-charts/react` and `@aster-charts/react/vl`) separately; sizes are in docs/PERFORMANCE.md.
 
 - **Signal binds**: `<Chart>` renders `signal.bind` range/select/checkbox/radio/
   color/text controls and routes changes through the signal store; VL compilers
@@ -670,7 +670,7 @@ The React bindings.
   navigation across marks/guides.
 
 - **Vega-Lite input**: `<Chart>` and `useChart` compile Vega-Lite directly through
-  `@aster/vl`; no `vega-lite` runtime dependency.
+  `@aster-charts/vl`; no `vega-lite` runtime dependency.
 
 - **Async/SSR/worker**: `useSpecData`/`useChartData` (Suspense + `use()`),
   promise specs, `renderChartToStaticMarkup` + `hydrateChart`, and
@@ -678,9 +678,9 @@ The React bindings.
 
 ### Performance and benchmarks
 
-Entries that are mainly about speed or size; they touch `@aster/core` and `@aster/react`.
+Entries that are mainly about speed or size; they touch `@aster-charts/core` and `@aster-charts/react`.
 
-- **`@aster/core` is about 1 kB gzip smaller (144,479 to 143,481 bytes), and every `@aster/react` row follows (`useChart` -951, `<Chart>` -945,
+- **`@aster-charts/core` is about 1 kB gzip smaller (144,479 to 143,481 bytes), and every `@aster-charts/react` row follows (`useChart` -951, `<Chart>` -945,
   `<SvgChart>` -919, `<SvgChart>` + interaction -949, `<Chart>` + VL -936).** Nothing changes in what is drawn or computed: the expression
   host table no longer restates the Math, date, string and clock functions the interpreter's default table already provides (`now()` still
   reads `Date.now` when it is called); the categorical colour schemes are runs of hex like the others; the log, power and symlog maps of
@@ -746,9 +746,9 @@ Entries that are mainly about speed or size; they touch `@aster/core` and `@aste
 
 Gates, test suites, release checks and documentation, none of it shipped in the packages.
 
-- **Tree-shaking works (`sideEffects`)**: `@aster/core` and `@aster/react` declare the files whose import has an effect
-  (the geo/transforms/load addons, the guide captions, `@aster/react/vl`, the worker entry), `@aster/vl` declares none.
-  `import { useChart } from '@aster/react'` goes from 164.1 to 126.4 kB gzip, `<Chart>` from 163.9 to 156.5, `<Chart>`
+- **Tree-shaking works (`sideEffects`)**: `@aster-charts/core` and `@aster-charts/react` declare the files whose import has an effect
+  (the geo/transforms/load addons, the guide captions, `@aster-charts/react/vl`, the worker entry), `@aster-charts/vl` declares none.
+  `import { useChart } from '@aster-charts/react'` goes from 164.1 to 126.4 kB gzip, `<Chart>` from 163.9 to 156.5, `<Chart>`
   + VL from 218.3 to 210.7. `pnpm check:bundle` bundles and executes each documented import pattern (a blanket
   `false` fails it), the budget gates one bundle per pattern with the addons as marginal cost, and `pnpm
   verify:publish` executes a tree-shaken bundle of the installed tarballs. The Vega-Lite validator is 4.1 kB
@@ -768,7 +768,7 @@ Gates, test suites, release checks and documentation, none of it shipped in the 
     `delaunator`, `robust-predicates`, `internmap`, `topojson-client`, the d3-cloud notice); `scripts/notices.test.mjs`
     checks them against `node_modules` and that every upstream name the sources port is listed.
   - `pnpm bench:incremental` fails below measured floors; `budget.mjs` refuses a stale `dist`, has an
-    `@aster/core/load` row, and its ceilings are measured + 0.5 kB.
+    `@aster-charts/core/load` row, and its ceilings are measured + 0.5 kB.
   - README, ARCHITECTURE, ROADMAP, API, INTERACTION, LIMITS, ERRORS, FONTS, PERFORMANCE, TESTING, RELEASE, the ADRs and
     the package READMEs describe the current code; measured numbers appear only with the command that produced them
     (docs/TESTING.md, docs/PERFORMANCE.md). The README minimal example uses `data: [{ name, values }]` and runs.
@@ -776,19 +776,19 @@ Gates, test suites, release checks and documentation, none of it shipped in the 
     `intervalParams`, the compiler's `resolveSizeSpec`, and unreferenced runtime helpers. Added root scripts
     `bench:differential` and `bench:pipeline`.
 
-- **Browser gates in `pnpm check`**: `react-browser` (`pnpm --filter @aster/react run test:browser`) and
+- **Browser gates in `pnpm check`**: `react-browser` (`pnpm --filter @aster-charts/react run test:browser`) and
   `browser-conformance` (`conformance:browser`, 785/785, now comparing vega's string renderer with an
   explicitly sized container) join the gate list.
 
 - **Publish artifacts are tested**: new `pnpm verify:publish` packs every public
   package, asserts the tarball carries `LICENSE` + `THIRD_PARTY_NOTICES.md`
   (copied by a `prepack` step) plus `dist`/types, then extracts the tarballs into
-  a clean `node_modules` and imports every declared entry (`@aster/core` addons,
-  `@aster/react`, `/vl`, `/ssr`, `/worker`) to render Vega and Vega-Lite specs.
+  a clean `node_modules` and imports every declared entry (`@aster-charts/core` addons,
+  `@aster-charts/react`, `/vl`, `/ssr`, `/worker`) to render Vega and Vega-Lite specs.
   It runs in `pnpm check` (CI, nightly and the release workflow), and now packs with `pnpm pack`, fails on a
   `workspace:` range, installs the tarballs with `npm install`, imports every declared export and typechecks a
   consumer file. This caught a real packaging
-  bug: `@aster/react`'s barrel used extensionless relative imports, which
+  bug: `@aster-charts/react`'s barrel used extensionless relative imports, which
   bundlers accept but Node ESM rejects (SSR/worker consumers would fail to
   import the published package) — fixed.
 

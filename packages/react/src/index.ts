@@ -22,7 +22,7 @@ export {
   normalizeChartSpec,
   isPromiseLike,
 } from './spec.js'
-// Vega-Lite compiler registry: `@aster/react/vl` registers it as a side effect;
+// Vega-Lite compiler registry: `@aster-charts/react/vl` registers it as a side effect;
 // hosts that compile VL themselves can call `registerVegaLiteCompiler` instead.
 export {
   hasVegaLiteCompiler,
@@ -78,5 +78,5 @@ export {
   type HydrateChartOptions,
   type HydratedChart,
 } from './ssr.js'
-export { createChartSession } from '@aster/core/dom'
-export type { ChartSession } from '@aster/core/dom'
+export { createChartSession } from '@aster-charts/core/dom'
+export type { ChartSession } from '@aster-charts/core/dom'

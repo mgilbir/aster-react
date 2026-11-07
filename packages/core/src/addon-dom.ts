@@ -5,8 +5,8 @@
  * `<Chart incremental>`. The module only re-exports them and registers nothing;
  * it exists so that the patcher stays out of the core bundle:
  *
- *   import '@aster/core/dom'            // static
- *   await import('@aster/core/dom')     // lazy
+ *   import '@aster-charts/core/dom'            // static
+ *   await import('@aster-charts/core/dom')     // lazy
  *
  * A string-mode host (renderSpec → SVG string) never needs it.
  */

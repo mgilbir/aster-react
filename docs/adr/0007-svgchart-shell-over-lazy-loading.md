@@ -12,11 +12,11 @@ ship a second component that never imports them.
 
 ## Decision
 
-`@aster/react` has one implementation, `ChartCore` (`packages/react/src/ChartCore.tsx`). It
+`@aster-charts/react` has one implementation, `ChartCore` (`packages/react/src/ChartCore.tsx`). It
 receives its capabilities as injected values and never imports them. `<Chart>` and `<SvgChart>`
 are shells that render `<ChartCore>`: `<Chart>` injects the canvas and interaction capabilities;
-`<SvgChart>` (from `@aster/react/lite`) injects none and passes through the `interaction` value its
-caller imports from `@aster/react/interaction`.
+`<SvgChart>` (from `@aster-charts/react/lite`) injects none and passes through the `interaction` value its
+caller imports from `@aster-charts/react/interaction`.
 
 Lazy loading inside `<Chart>` was rejected. Nothing loads asynchronously, so the first paint is
 synchronous and server-render-safe, and the cost of a capability is visible in the importing
@@ -24,7 +24,7 @@ code.
 
 ## Consequences
 
-- An app that imports only `@aster/react/lite` never reaches the canvas module, the hit index or
+- An app that imports only `@aster-charts/react/lite` never reaches the canvas module, the hit index or
   the signal loop. `<SvgChart>` without `interaction` renders, and reports a missing event loop
   if the spec needs one.
 - The split costs `<Chart>` about 0.7 kB gzip: property reads through the capability objects and
@@ -42,7 +42,7 @@ code.
 - `packages/react/src/Chart.shells.test.ts`: a shell renders only `<ChartCore>` (at most 14 code
   lines); the value import graph of `lite.ts` never reaches canvas, hit or signals, and the
   guard is shown to bite.
-- `scripts/check-bundle-shaking.mjs`: bundles `@aster/react/lite` and asserts the bundle holds no
+- `scripts/check-bundle-shaking.mjs`: bundles `@aster-charts/react/lite` and asserts the bundle holds no
   canvas, hit or signals code; `scripts/bundle-shaking.test.mjs` asserts the gate fails when the
   `sideEffects` fields are wrong.
 - `packages/react/src/Chart.corpus-parity.test.tsx` (named in

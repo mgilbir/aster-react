@@ -8,9 +8,9 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import * as vega from 'vega'
 import { compile as vlCompile } from 'vega-lite'
-import { compile } from '@aster/vl'
-import { renderSpec, registerExpressionFunction } from '@aster/core'
-import '@aster/core/transforms'
+import { compile } from '@aster-charts/vl'
+import { renderSpec, registerExpressionFunction } from '@aster-charts/core'
+import '@aster-charts/core/transforms'
 import { canonicalizeSvg, diffCanonical } from './normalize.js'
 
 type Obj = Record<string, unknown>

@@ -68,7 +68,7 @@ const REGRESSION_VG = {
   ],
   marks: [{ type: 'line', from: { data: 't' }, encode: { update: { x: { scale: 'sx', field: 'rx' }, y: { scale: 'sy', field: 'ry' }, stroke: { value: 'red' } } } }],
 }
-/** A spec with a signal handler, for `@aster/core/signals`. */
+/** A spec with a signal handler, for `@aster-charts/core/signals`. */
 const SIGNAL_VG = {
   width: 100, height: 100,
   signals: [{ name: 'clicks', value: 0, on: [{ events: 'click', update: 'clicks + 1' }] }],
@@ -85,8 +85,8 @@ const lit = (v) => JSON.stringify(v)
 const PATTERNS = [
   {
     name: 'core-renderSpec',
-    why: "import { renderSpec } from '@aster/core': SVG with the guide captions installed; geo/transforms are NOT registered",
-    imports: `import { renderSpec } from '@aster/core'`,
+    why: "import { renderSpec } from '@aster-charts/core': SVG with the guide captions installed; geo/transforms are NOT registered",
+    imports: `import { renderSpec } from '@aster-charts/core'`,
     body: `
       const svg = renderSpec(${lit(BAR_VG)})
       const err = (spec) => { try { renderSpec(spec); return null } catch (e) { return String(e.message) } }
@@ -105,8 +105,8 @@ const PATTERNS = [
   },
   {
     name: 'core-evaluate-incremental',
-    why: "import { evaluateChart } from '@aster/core': a second evaluation with a dataPulse is incremental (evaluateChart is handed the engine, whatever else the app imports or the bundler assumes) and is what a fresh evaluation makes",
-    imports: `import { evaluateChart, compileChart, renderSceneToSvg } from '@aster/core'`,
+    why: "import { evaluateChart } from '@aster-charts/core': a second evaluation with a dataPulse is incremental (evaluateChart is handed the engine, whatever else the app imports or the bundler assumes) and is what a fresh evaluation makes",
+    imports: `import { evaluateChart, compileChart, renderSceneToSvg } from '@aster-charts/core'`,
     body: `
       const spec = { width: 100, height: 60, data: [{ name: 't', transform: [{ type: 'filter', expr: 'datum.v >= 0' }, { type: 'aggregate', groupby: ['g'], fields: ['v'], ops: ['sum'], as: ['s'] }] }],
         scales: [{ name: 'x', type: 'band', domain: ['a', 'b', 'c'], range: 'width' }, { name: 'y', type: 'linear', domain: [0, 40], range: 'height' }],
@@ -130,27 +130,27 @@ const PATTERNS = [
   },
   {
     name: 'core-geo',
-    why: "import '@aster/core/geo': projections register",
-    imports: `import { renderSpec } from '@aster/core'\nimport '@aster/core/geo'`,
+    why: "import '@aster-charts/core/geo': projections register",
+    imports: `import { renderSpec } from '@aster-charts/core'\nimport '@aster-charts/core/geo'`,
     body: `return { svg: renderSpec(${lit(GEO_VG)}) }`,
     check: (r) => [[/<path [^>]*d="M/.test(r.svg), 'a projected geoshape renders path data']],
   },
   {
     name: 'core-geo-bare',
     why: "bare side-effect import + the spec through the compile/evaluate entry (no renderSpec import from the barrel)",
-    imports: `import '@aster/core/geo'\nimport { createChartSession } from '@aster/core/dom'`,
+    imports: `import '@aster-charts/core/geo'\nimport { createChartSession } from '@aster-charts/core/dom'`,
     body: `const scene = createChartSession().evaluate(${lit(GEO_VG)}, {}); return { scene: JSON.stringify(scene, (k, v) => (k === 'runtime' || k === 'compiled' ? undefined : v)).length }`,
     check: (r) => [[r.scene > 500, 'the geo spec evaluates through the session']],
   },
   {
     name: 'core-geo-lazy',
-    why: "await import('@aster/core/geo'): the lazy form registers too (code-split chunk)",
+    why: "await import('@aster-charts/core/geo'): the lazy form registers too (code-split chunk)",
     split: true,
-    imports: `import { renderSpec } from '@aster/core'`,
+    imports: `import { renderSpec } from '@aster-charts/core'`,
     body: `
       let before = null
       try { renderSpec(${lit(GEO_VG)}) } catch (e) { before = String(e.message) }
-      await import('@aster/core/geo')
+      await import('@aster-charts/core/geo')
       return { before, svg: renderSpec(${lit(GEO_VG)}) }`,
     check: (r) => [
       [/load the addon/.test(r.before ?? ''), 'before the dynamic import the addon is missing'],
@@ -159,8 +159,8 @@ const PATTERNS = [
   },
   {
     name: 'core-transforms',
-    why: "import '@aster/core/transforms': the rare-layout transforms register",
-    imports: `import { renderSpec } from '@aster/core'\nimport '@aster/core/transforms'`,
+    why: "import '@aster-charts/core/transforms': the rare-layout transforms register",
+    imports: `import { renderSpec } from '@aster-charts/core'\nimport '@aster-charts/core/transforms'`,
     body: `return { treemap: renderSpec(${lit(TREEMAP_VG)}), regression: renderSpec(${lit(REGRESSION_VG)}) }`,
     check: (r) => [
       [(r.treemap.match(/fill="steelblue"/g) ?? []).length >= 5, 'treemap lays out one rect per node'],
@@ -169,8 +169,8 @@ const PATTERNS = [
   },
   {
     name: 'core-load',
-    why: "import { loadSpecData } from '@aster/core/load': a URL dataset loads (csv over http) and renders",
-    imports: `import { renderSpec } from '@aster/core'\nimport { loadSpecData, TRUSTED_LOAD_OPTIONS } from '@aster/core/load'`,
+    why: "import { loadSpecData } from '@aster-charts/core/load': a URL dataset loads (csv over http) and renders",
+    imports: `import { renderSpec } from '@aster-charts/core'\nimport { loadSpecData, TRUSTED_LOAD_OPTIONS } from '@aster-charts/core/load'`,
     body: `
       const spec = { width: 100, height: 50, data: [{ name: 't', url: env.url, format: { type: 'csv', parse: 'auto' } }],
         scales: [{ name: 'x', type: 'linear', domain: { data: 't', field: 'a' }, range: 'width' }],
@@ -184,8 +184,8 @@ const PATTERNS = [
   },
   {
     name: 'core-load-bare',
-    why: "import '@aster/core/load' for the side effect only: csv/tsv/topojson readers register for inline strings",
-    imports: `import { renderSpec } from '@aster/core'\nimport '@aster/core/load'`,
+    why: "import '@aster-charts/core/load' for the side effect only: csv/tsv/topojson readers register for inline strings",
+    imports: `import { renderSpec } from '@aster-charts/core'\nimport '@aster-charts/core/load'`,
     body: `
       const spec = (fmt, values) => ({ width: 100, height: 50, data: [{ name: 't', values, format: fmt }],
         scales: [{ name: 'x', type: 'linear', domain: { data: 't', field: 'a' }, range: 'width' }],
@@ -198,9 +198,9 @@ const PATTERNS = [
   },
   {
     name: 'core-dom',
-    why: "import from '@aster/core/dom' only: patcher + session, guide captions installed by dom.ts' own import",
+    why: "import from '@aster-charts/core/dom' only: patcher + session, guide captions installed by dom.ts' own import",
     dom: true,
-    imports: `import { createChartSession, renderSceneToDomElement, patchSceneDom } from '@aster/core/dom'`,
+    imports: `import { createChartSession, renderSceneToDomElement, patchSceneDom } from '@aster-charts/core/dom'`,
     body: `
       const session = createChartSession()
       const scene = session.evaluate(${lit(BAR_VG)}, {})
@@ -216,8 +216,8 @@ const PATTERNS = [
   },
   {
     name: 'core-canvas',
-    why: "import { renderSceneToCanvas } from '@aster/core/canvas'",
-    imports: `import { evaluateChart, compileChart } from '@aster/core'\nimport { renderSceneToCanvas } from '@aster/core/canvas'`,
+    why: "import { renderSceneToCanvas } from '@aster-charts/core/canvas'",
+    imports: `import { evaluateChart, compileChart } from '@aster-charts/core'\nimport { renderSceneToCanvas } from '@aster-charts/core/canvas'`,
     body: `
       const calls = {}
       const ctx = new Proxy({}, { get: (t, k) => (k in t ? t[k] : (...a) => { calls[k] = (calls[k] ?? 0) + 1 }), set: (t, k, v) => { t[k] = v; return true } })
@@ -227,8 +227,8 @@ const PATTERNS = [
   },
   {
     name: 'core-hit',
-    why: "import { buildHitIndex } from '@aster/core/hit'",
-    imports: `import { evaluateChart, compileChart } from '@aster/core'\nimport { buildHitIndex } from '@aster/core/hit'`,
+    why: "import { buildHitIndex } from '@aster-charts/core/hit'",
+    imports: `import { evaluateChart, compileChart } from '@aster-charts/core'\nimport { buildHitIndex } from '@aster-charts/core/hit'`,
     body: `
       const scene = evaluateChart(compileChart(${lit(BAR_VG)}), {})
       const index = buildHitIndex(scene)
@@ -239,9 +239,9 @@ const PATTERNS = [
   },
   {
     name: 'core-signals',
-    why: "import { bindSceneSignals } from '@aster/core/signals': a click updates a signal",
+    why: "import { bindSceneSignals } from '@aster-charts/core/signals': a click updates a signal",
     dom: true,
-    imports: `import { createChartSession, renderSceneToDomElement } from '@aster/core/dom'\nimport { bindSceneSignals } from '@aster/core/signals'`,
+    imports: `import { createChartSession, renderSceneToDomElement } from '@aster-charts/core/dom'\nimport { bindSceneSignals } from '@aster-charts/core/signals'`,
     body: `
       const session = createChartSession()
       const scene = session.evaluate(${lit(SIGNAL_VG)}, {})
@@ -257,7 +257,7 @@ const PATTERNS = [
   {
     name: 'core-expression-fn',
     why: 'registerExpressionFunction (a call, not an import effect) keeps working',
-    imports: `import { renderSpec, registerExpressionFunction } from '@aster/core'`,
+    imports: `import { renderSpec, registerExpressionFunction } from '@aster-charts/core'`,
     body: `
       registerExpressionFunction('triple', (n) => n * 3)
       const svg = renderSpec({ width: 50, height: 50, data: [{ name: 't', values: [{ v: 1 }] }],
@@ -268,7 +268,7 @@ const PATTERNS = [
   {
     name: 'core-stream',
     why: 'createChartStream from the barrel',
-    imports: `import { createChartStream } from '@aster/core'`,
+    imports: `import { createChartStream } from '@aster-charts/core'`,
     body: `
       const spec = { width: 100, height: 50, data: [{ name: 't', values: [] }], scales: [{ name: 'x', type: 'linear', domain: [0, 10], range: 'width' }],
         marks: [{ type: 'rect', from: { data: 't' }, encode: { enter: { x: { scale: 'x', field: 'v' }, y: { value: 0 }, width: { value: 4 }, height: { value: 4 } } } }] }
@@ -280,16 +280,16 @@ const PATTERNS = [
   },
   {
     name: 'vl-compile',
-    why: "import { compile } from '@aster/vl'",
-    imports: `import { compile } from '@aster/vl'\nimport { renderSpec } from '@aster/core'`,
+    why: "import { compile } from '@aster-charts/vl'",
+    imports: `import { compile } from '@aster-charts/vl'\nimport { renderSpec } from '@aster-charts/core'`,
     body: `const vg = compile(${lit(BAR_VL)}); return { marks: vg.marks.length, svg: renderSpec(vg) }`,
     check: (r) => [[r.marks >= 1 && /class="mark-rect/.test(r.svg), 'a Vega-Lite spec compiles and renders']],
   },
   {
     name: 'react-chart',
-    why: "import { Chart } from '@aster/react': server markup and a client mount",
+    why: "import { Chart } from '@aster-charts/react': server markup and a client mount",
     dom: true,
-    imports: `import * as React from 'react'\nimport { renderToString } from 'react-dom/server'\nimport { flushSync } from 'react-dom'\nimport { createRoot } from 'react-dom/client'\nimport { Chart } from '@aster/react'`,
+    imports: `import * as React from 'react'\nimport { renderToString } from 'react-dom/server'\nimport { flushSync } from 'react-dom'\nimport { createRoot } from 'react-dom/client'\nimport { Chart } from '@aster-charts/react'`,
     body: `
       const el = React.createElement(Chart, { spec: ${lit(BAR_VG)}, width: 300, height: 200 })
       const html = renderToString(el)
@@ -305,9 +305,9 @@ const PATTERNS = [
   },
   {
     name: 'react-svgchart',
-    why: "import { SvgChart } from '@aster/react/lite': renders and reports a missing event loop, and the bundle holds NO canvas, hit or signals code",
+    why: "import { SvgChart } from '@aster-charts/react/lite': renders and reports a missing event loop, and the bundle holds NO canvas, hit or signals code",
     dom: true,
-    imports: `import * as React from 'react'\nimport { renderToString } from 'react-dom/server'\nimport { flushSync } from 'react-dom'\nimport { createRoot } from 'react-dom/client'\nimport { SvgChart } from '@aster/react/lite'`,
+    imports: `import * as React from 'react'\nimport { renderToString } from 'react-dom/server'\nimport { flushSync } from 'react-dom'\nimport { createRoot } from 'react-dom/client'\nimport { SvgChart } from '@aster-charts/react/lite'`,
     body: `
       const el = React.createElement(SvgChart, { spec: ${lit(BAR_VG)}, width: 300, height: 200 })
       const html = renderToString(el)
@@ -321,22 +321,22 @@ const PATTERNS = [
       [/<svg/.test(r.html) && /class="mark-rect/.test(r.html), 'server render'],
       [/<svg/.test(r.client) && /class="mark-rect/.test(r.client), 'client mount'],
       [/aria-label="[XY]-axis/.test(r.html), 'axis caption'],
-      [r.errors.length === 1 && /event streams/.test(r.errors[0]) && /@aster\/react\/interaction/.test(r.errors[0]), 'an event-stream spec without `interaction` reports how to fix it'],
+      [r.errors.length === 1 && /event streams/.test(r.errors[0]) && /@aster-charts\/react\/interaction/.test(r.errors[0]), 'an event-stream spec without `interaction` reports how to fix it'],
       [/<svg/.test(r.streamSvg), 'and still renders'],
     ],
     modules: (m) => [
       [!hasModule(m.parsed, 'core', 'canvas'), 'the canvas renderer (core/canvas.js) is not even read'],
       [!hasModule(m.parsed, 'core', 'hit'), 'the hit index (core/hit.js) is not even read'],
       [!hasModule(m.parsed, 'core', 'signals'), 'the signal event loop (core/signals.js) is not even read'],
-      [!hasModule(m.parsed, 'react', 'canvas-capability') && !hasModule(m.parsed, 'react', 'interaction-capability'), 'neither capability module of @aster/react is read'],
+      [!hasModule(m.parsed, 'react', 'canvas-capability') && !hasModule(m.parsed, 'react', 'interaction-capability'), 'neither capability module of @aster-charts/react is read'],
       [hasModule(m.contributing, 'react', 'ChartCore') && hasModule(m.contributing, 'core', 'dom'), 'ChartCore and the DOM patcher are what it is made of'],
     ],
   },
   {
     name: 'react-svgchart-interaction',
-    why: "import { SvgChart } from '@aster/react/lite' + { interaction } from '@aster/react/interaction': a click drives a signal; hit and signals are in the bundle, canvas is not",
+    why: "import { SvgChart } from '@aster-charts/react/lite' + { interaction } from '@aster-charts/react/interaction': a click drives a signal; hit and signals are in the bundle, canvas is not",
     dom: true,
-    imports: `import * as React from 'react'\nimport { flushSync } from 'react-dom'\nimport { createRoot } from 'react-dom/client'\nimport { SvgChart } from '@aster/react/lite'\nimport { interaction } from '@aster/react/interaction'`,
+    imports: `import * as React from 'react'\nimport { flushSync } from 'react-dom'\nimport { createRoot } from 'react-dom/client'\nimport { SvgChart } from '@aster-charts/react/lite'\nimport { interaction } from '@aster-charts/react/interaction'`,
     body: `
       const ref = React.createRef()
       const errors = []
@@ -360,8 +360,8 @@ const PATTERNS = [
   },
   {
     name: 'react-usechart',
-    why: "import { useChart } from '@aster/react'",
-    imports: `import * as React from 'react'\nimport { renderToString } from 'react-dom/server'\nimport { useChart } from '@aster/react'`,
+    why: "import { useChart } from '@aster-charts/react'",
+    imports: `import * as React from 'react'\nimport { renderToString } from 'react-dom/server'\nimport { useChart } from '@aster-charts/react'`,
     body: `
       function App() { const r = useChart(${lit(BAR_VG)}, { width: 300, height: 200 }); return React.createElement('div', { 'data-scene': r.scene ? 'yes' : 'none', dangerouslySetInnerHTML: { __html: r.svg ?? '' } }) }
       function Headless() { const r = useChart(${lit(BAR_VG)}, { serialize: false }); return React.createElement('i', { 'data-w': r.scene ? r.scene.width : 'none', 'data-svg': String(r.svg) }) }
@@ -376,7 +376,7 @@ const PATTERNS = [
     why: "<Chart> with nothing imported: a plain spec imports no add-on; pie, a projection and csv text load theirs on demand, from chunks the entry does not contain, and render what the static path renders",
     split: true,
     dom: true,
-    imports: `import * as React from 'react'\nimport { flushSync } from 'react-dom'\nimport { createRoot } from 'react-dom/client'\nimport { Chart } from '@aster/react'\nimport { renderSpec, geoRegistry, transformRegistry, dataFormatRegistry } from '@aster/core'`,
+    imports: `import * as React from 'react'\nimport { flushSync } from 'react-dom'\nimport { createRoot } from 'react-dom/client'\nimport { Chart } from '@aster-charts/react'\nimport { renderSpec, geoRegistry, transformRegistry, dataFormatRegistry } from '@aster-charts/core'`,
     body: `
       const registered = () => ({ geo: geoRegistry.buildProjection !== null, transforms: transformRegistry.size > 0, load: dataFormatRegistry.has('csv') })
       const mount = (spec) => {
@@ -437,7 +437,7 @@ const PATTERNS = [
     why: "an app that imports an add-on itself: <Chart> renders at once, the add-on is in the entry once and no chunk of it is built twice",
     split: true,
     dom: true,
-    imports: `import * as React from 'react'\nimport { flushSync } from 'react-dom'\nimport { createRoot } from 'react-dom/client'\nimport '@aster/core/geo'\nimport { Chart } from '@aster/react'\nimport { renderSpec } from '@aster/core'`,
+    imports: `import * as React from 'react'\nimport { flushSync } from 'react-dom'\nimport { createRoot } from 'react-dom/client'\nimport '@aster-charts/core/geo'\nimport { Chart } from '@aster-charts/react'\nimport { renderSpec } from '@aster-charts/core'`,
     body: `
       const host = document.createElement('div'); document.body.appendChild(host)
       flushSync(() => createRoot(host).render(React.createElement(React.Suspense, { fallback: React.createElement('i', { id: 'fb' }) }, React.createElement(Chart, { spec: ${lit(GEO_VG)}, width: 300, height: 200, a11y: false }))))
@@ -457,8 +457,8 @@ const PATTERNS = [
   },
   {
     name: 'react-vl',
-    why: "import '@aster/react/vl' registers the Vega-Lite compiler for <Chart> and useChart",
-    imports: `import * as React from 'react'\nimport { renderToString } from 'react-dom/server'\nimport '@aster/react/vl'\nimport { Chart, useChart, hasVegaLiteCompiler } from '@aster/react'`,
+    why: "import '@aster-charts/react/vl' registers the Vega-Lite compiler for <Chart> and useChart",
+    imports: `import * as React from 'react'\nimport { renderToString } from 'react-dom/server'\nimport '@aster-charts/react/vl'\nimport { Chart, useChart, hasVegaLiteCompiler } from '@aster-charts/react'`,
     body: `
       function Hook() { const r = useChart(${lit(BAR_VL)}); return React.createElement('div', { dangerouslySetInnerHTML: { __html: r.svg ?? ('ERR ' + r.error) } }) }
       return { has: hasVegaLiteCompiler(), chart: renderToString(React.createElement(Chart, { spec: ${lit(BAR_VL)}, width: 200, height: 100 })), hook: renderToString(React.createElement(Hook)) }`,
@@ -471,18 +471,18 @@ const PATTERNS = [
   {
     name: 'react-novl',
     why: 'without the vl import a Vega-Lite spec asks for it (the base entry carries no compiler)',
-    imports: `import * as React from 'react'\nimport { renderToString } from 'react-dom/server'\nimport { Chart, hasVegaLiteCompiler } from '@aster/react'`,
+    imports: `import * as React from 'react'\nimport { renderToString } from 'react-dom/server'\nimport { Chart, hasVegaLiteCompiler } from '@aster-charts/react'`,
     body: `
       let err = null
       try { renderToString(React.createElement(Chart, { spec: ${lit(BAR_VL)}, width: 200, height: 100 })) } catch (e) { err = String(e.message) }
       return { has: hasVegaLiteCompiler(), err }`,
-    check: (r) => [[r.has === false && /@aster\/react\/vl/.test(r.err ?? ''), 'the error names the import to add']],
+    check: (r) => [[r.has === false && /@aster-charts\/react\/vl/.test(r.err ?? ''), 'the error names the import to add']],
   },
   {
     name: 'react-ssr',
-    why: "import { renderChartToStaticMarkup, hydrateChart } from '@aster/react/ssr'",
+    why: "import { renderChartToStaticMarkup, hydrateChart } from '@aster-charts/react/ssr'",
     dom: true,
-    imports: `import { renderChartToStaticMarkup, hydrateChart } from '@aster/react/ssr'`,
+    imports: `import { renderChartToStaticMarkup, hydrateChart } from '@aster-charts/react/ssr'`,
     body: `
       const markup = renderChartToStaticMarkup(${lit(BAR_VG)}, { width: 300, height: 200 })
       const host = document.createElement('div'); host.innerHTML = markup; document.body.appendChild(host)
@@ -496,8 +496,8 @@ const PATTERNS = [
   },
   {
     name: 'react-worker',
-    why: "import { handleChartWorkerRequest } from '@aster/react' (+ '@aster/react/vl' inside the worker)",
-    imports: `import '@aster/react/vl'\nimport { handleChartWorkerRequest } from '@aster/react'`,
+    why: "import { handleChartWorkerRequest } from '@aster-charts/react' (+ '@aster-charts/react/vl' inside the worker)",
+    imports: `import '@aster-charts/react/vl'\nimport { handleChartWorkerRequest } from '@aster-charts/react'`,
     body: `return { vg: handleChartWorkerRequest({ id: 1, spec: ${lit(BAR_VG)} }), vl: handleChartWorkerRequest({ id: 2, spec: ${lit(BAR_VL)} }) }`,
     check: (r) => [
       [r.vg.id === 1 && /class="mark-rect/.test(r.vg.svg ?? ''), 'a Vega request is answered'],
@@ -506,8 +506,8 @@ const PATTERNS = [
   },
   {
     name: 'react-worker-entry',
-    why: "import '@aster/react/worker-entry' installs self.onmessage (the whole point of the import)",
-    imports: `import '@aster/react/worker-entry'`,
+    why: "import '@aster-charts/react/worker-entry' installs self.onmessage (the whole point of the import)",
+    imports: `import '@aster-charts/react/worker-entry'`,
     pre: `globalThis.__sent = []; globalThis.postMessage = (m) => globalThis.__sent.push(m)`,
     body: `
       const handler = globalThis.onmessage
@@ -601,7 +601,7 @@ async function viteBuild(p, entry, out) {  // (no module report: the metafile is
     configFile: false,
     logLevel: 'silent',
     define: { 'process.env.NODE_ENV': '"production"' },
-    ssr: { noExternal: [/^@aster\//], external: ['react', 'react-dom'] },
+    ssr: { noExternal: [/^@aster-charts\//], external: ['react', 'react-dom'] },
     build: {
       ssr: entry,
       outDir: out,

@@ -2,7 +2,7 @@
 /**
  * Dependency-boundary ratchet.
  *
- * `@aster/core`, `@aster/react` and `@aster/vl` must not import (or declare) the packages
+ * `@aster-charts/core`, `@aster-charts/react` and `@aster-charts/vl` must not import (or declare) the packages
  * they are committed to reimplementing: the Vega/D3 oracle stack. Conformance,
  * benchmarks and the demo may import them — they are the oracle and its
  * drivers, dev-only by definition.

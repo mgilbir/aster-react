@@ -10,8 +10,8 @@ import { describe, it, expect, afterEach } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { renderSpec, type ChartStream, type VgSpec } from '@aster/core'
-import { isAddonLoaded } from '@aster/core/addons'
+import { renderSpec, type ChartStream, type VgSpec } from '@aster-charts/core'
+import { isAddonLoaded } from '@aster-charts/core/addons'
 import {
   createWorkerDispatcher, handleChartWorkerRequest, handleWorkerMessage, handleWorkerMessageWithAddons, prepareWorkerMessage,   type ChartWorkerResponse, type ChartWorkerStreamResponse,
 } from './worker'

@@ -1,7 +1,7 @@
 /**
  * LIVE generated differential for the event selector parser (vega-event-selector 4.0.0, reached through vega-parser):
  * random selectors, built from the grammar and then damaged character by character, go through the real parser and
- * through both copies Aster carries (`@aster/core` runs its signals on one, `@aster/vl` compiles with the other). Each
+ * through both copies Aster carries (`@aster-charts/core` runs its signals on one, `@aster-charts/vl` compiles with the other). Each
  * must return the same stream definitions, or fail with the same message. `src/event-selector.test.ts` pins a fixed
  * grammar; this one finds what a fixed list does not think of.
  */

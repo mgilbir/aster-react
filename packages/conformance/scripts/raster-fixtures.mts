@@ -2,7 +2,7 @@
  * Record the alpha channel a real browser canvas (Chromium) leaves for each drawing of `src/raster-shapes.ts`, into
  * `src/raster-fixtures.json`: the ground truth `raster-vs-chromium.test.ts` holds the engine's coverage-only context to.
  *
- *   pnpm --filter @aster/conformance exec tsx scripts/raster-fixtures.mts
+ *   pnpm --filter @aster-charts/conformance exec tsx scripts/raster-fixtures.mts
  */
 import { writeFileSync } from 'node:fs'
 import { chromium } from 'playwright'

@@ -203,12 +203,12 @@ console.log(`[browser-canvas] ${BROWSER}: ${entries.length} entries compared${sk
 
 const entrySrc = `
 import embed from 'vega-embed'
-import { compileChart, evaluateChart, renderSpec } from '@aster/core'
-import { renderSceneToCanvas } from '@aster/core/canvas'
-import { loadSpecData, TRUSTED_LOAD_OPTIONS } from '@aster/core/load'
-import { compile } from '@aster/vl'
-import '@aster/core/geo'
-import '@aster/core/transforms'
+import { compileChart, evaluateChart, renderSpec } from '@aster-charts/core'
+import { renderSceneToCanvas } from '@aster-charts/core/canvas'
+import { loadSpecData, TRUSTED_LOAD_OPTIONS } from '@aster-charts/core/load'
+import { compile } from '@aster-charts/vl'
+import '@aster-charts/core/geo'
+import '@aster-charts/core/transforms'
 
 function pixels(canvas) {
   const ctx = canvas.getContext('2d')

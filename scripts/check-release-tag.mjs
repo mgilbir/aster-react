@@ -31,7 +31,7 @@ if (!m) fail(`tag "${tag}" is not a version tag (v<major>.<minor>.<patch>[-prere
 const want = m[1]
 for (const pkg of PUBLIC) {
   const manifest = JSON.parse(readFileSync(join(root, 'packages', pkg, 'package.json'), 'utf8'))
-  if (manifest.private) fail(`@aster/${pkg} is private`)
-  if (manifest.version !== want) fail(`tag ${tag} does not match @aster/${pkg} version ${manifest.version}`)
+  if (manifest.private) fail(`@aster-charts/${pkg} is private`)
+  if (manifest.version !== want) fail(`tag ${tag} does not match @aster-charts/${pkg} version ${manifest.version}`)
 }
-console.log(`[check-release-tag] ${tag} matches every public package (${PUBLIC.map((p) => `@aster/${p}`).join(', ')}) at ${want}`)
+console.log(`[check-release-tag] ${tag} matches every public package (${PUBLIC.map((p) => `@aster-charts/${p}`).join(', ')}) at ${want}`)

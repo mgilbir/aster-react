@@ -1,6 +1,6 @@
 // @vitest-environment node
 /**
- * What @aster/vl emits for selections is vega-lite's own output, piece by piece: the store datasets, every signal
+ * What @aster-charts/vl emits for selections is vega-lite's own output, piece by piece: the store datasets, every signal
  * (with its handlers, in vega-lite's order), the brush and voronoi marks, the `interactive` / `clip` / cursor of the
  * marks, the scales' `domainRaw` and the legends' interactive encodes. The corpus tests prove the two Vega specs
  * RENDER alike; this one proves the interaction wiring (which a static render cannot show) is the same text.
@@ -9,7 +9,7 @@ import { describe, it, expect } from 'vitest'
 import { readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import * as vl from 'vega-lite'
-import { compile } from '@aster/vl'
+import { compile } from '@aster-charts/vl'
 
 const ROOT = join(__dirname, '..', 'corpus')
 const specs = readdirSync(ROOT)

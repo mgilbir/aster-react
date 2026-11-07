@@ -1,6 +1,6 @@
 /**
  * A stand-in for the `canvas` package, for running vega (and so vega-label) in Node with a canvas it can draw into: the
- * coverage-only context of `@aster/core` (`raster.ts`), plus what vega asks of a context (`getImageData`, `measureText`).
+ * coverage-only context of `@aster-charts/core` (`raster.ts`), plus what vega asks of a context (`getImageData`, `measureText`).
  * The text width is vega's headless estimate (`~~(0.8 * length * fontSize)`), which is what the engine measures with in Node.
  */
 import { AlphaCanvas } from '../../../core/dist/raster.js'

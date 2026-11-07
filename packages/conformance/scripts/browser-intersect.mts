@@ -7,7 +7,7 @@
  * Chromium page real vega and Aster's scene evaluate `intersect()` over a seeded set of boxes -- over the whole scene, by mark
  * name, by mark type, and from a group item's `mark` -- and must return the same items in the same order.
  *
- * Run: pnpm --filter @aster/conformance exec tsx scripts/browser-intersect.mts   (after `pnpm build`)
+ * Run: pnpm --filter @aster-charts/conformance exec tsx scripts/browser-intersect.mts   (after `pnpm build`)
  */
 import { writeFileSync, rmSync, mkdirSync } from 'node:fs'
 import { join, dirname } from 'node:path'
@@ -90,10 +90,10 @@ const SCOPES: Array<{ markname?: string; marktype?: string }> = [
 
 const entry = `
 import * as vega from 'vega'
-import { compileChart, evaluateChart, compileExpr } from '@aster/core'
-import { sceneIntersect } from '@aster/core/signals'
-import '@aster/core/geo'
-import '@aster/core/transforms'
+import { compileChart, evaluateChart, compileExpr } from '@aster-charts/core'
+import { sceneIntersect } from '@aster-charts/core/signals'
+import '@aster-charts/core/geo'
+import '@aster-charts/core/transforms'
 
 window.__run = async (spec, boxes, scopes) => {
   const errors = []

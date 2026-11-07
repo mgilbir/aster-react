@@ -11,8 +11,8 @@
  * handlers still bind.
  */
 import { afterEach, describe, expect, it } from 'vitest'
-import { compileChart, evaluateChart, registerExpressionFunction, renderSceneToSvg } from '@aster/core'
-import { bindSceneSignals } from '@aster/core/signals'
+import { compileChart, evaluateChart, registerExpressionFunction, renderSceneToSvg } from '@aster-charts/core'
+import { bindSceneSignals } from '@aster-charts/core/signals'
 import { asterOutcome, BAD, BIND_TIME_REPORTS, GOOD, HANDLER_SHAPES, HANDLER_SITES, type Spec, UNBOUND_HANDLER_SITES, vegaOutcome } from './expression-sites.mts'
 
 /** Compile a spec, draw it, bind its handlers: what the engine reports, and the signals the handlers set when `fire` has run. */

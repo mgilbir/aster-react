@@ -1,7 +1,7 @@
 /**
  * vg-compiler: Vega spec JSON -> CompiledChart IR.
  * Consumes the Vega spec directly (the canonical IR). Vega-Lite specs reach it
- * through `@aster/vl` (packages/vl), the from-scratch Vega-Lite compiler, which
+ * through `@aster-charts/vl` (packages/vl), the from-scratch Vega-Lite compiler, which
  * emits the Vega this compiler consumes.
  */
 import { dict, ownGet } from './util.js'

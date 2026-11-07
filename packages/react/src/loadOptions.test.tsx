@@ -3,7 +3,7 @@ import * as React from 'react'
 import { createRoot } from 'react-dom/client'
 import { act } from 'react'
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { AsterUrlError } from '@aster/core'
+import { AsterUrlError } from '@aster-charts/core'
 import { loadSpecData, loadSpecDataResource, useChartData, type UseChartResult } from './useChart'
 import { forEachVariant } from './testing/variants'
 

@@ -37,10 +37,10 @@ afterAll(() => rmSync(work, { recursive: true, force: true }))
 
 const REACT_TYPES = join(pkg('react'), 'node_modules', '@types', 'react')
 const PATHS = {
-  '@aster/core': [dist('core', 'index.d.ts')],
-  '@aster/core/dom': [dist('core', 'dom.d.ts')],
-  '@aster/react': [dist('react', 'index.d.ts')],
-  '@aster/vl': [dist('vl', 'index.d.ts')],
+  '@aster-charts/core': [dist('core', 'index.d.ts')],
+  '@aster-charts/core/dom': [dist('core', 'dom.d.ts')],
+  '@aster-charts/react': [dist('react', 'index.d.ts')],
+  '@aster-charts/vl': [dist('vl', 'index.d.ts')],
   react: [join(REACT_TYPES, 'index.d.ts')],
   'react/jsx-runtime': [join(REACT_TYPES, 'jsx-runtime.d.ts')],
 }
@@ -85,8 +85,8 @@ describe('the code blocks of README.md', () => {
       const dir = join(work, `run-${index}`)
       mkdirSync(dir, { recursive: true })
       let js = ts.transpileModule(blocks[index].code, { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 } }).outputText
-      js = js.replace(/'@aster\/core'/g, JSON.stringify(pathToFileURL(dist('core', 'index.js')).href))
-      js = js.replace(/'@aster\/vl'/g, JSON.stringify(pathToFileURL(dist('vl', 'index.js')).href))
+      js = js.replace(/'@aster-charts\/core'/g, JSON.stringify(pathToFileURL(dist('core', 'index.js')).href))
+      js = js.replace(/'@aster-charts\/vl'/g, JSON.stringify(pathToFileURL(dist('vl', 'index.js')).href))
       const file = join(dir, 'example.mjs')
       writeFileSync(file, `${js}\nexport { svg }\n`)
       return (await import(pathToFileURL(file).href)).svg

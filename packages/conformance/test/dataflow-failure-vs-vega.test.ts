@@ -5,7 +5,7 @@
  * same failure the same way (not an empty chart where vega draws content, nor content where vega stops).
  */
 import { describe, it, expect } from 'vitest'
-import { renderSpec, evaluateChart, compileChart, datasetsOfScene } from '@aster/core'
+import { renderSpec, evaluateChart, compileChart, datasetsOfScene } from '@aster-charts/core'
 import { renderWithVegaChecked } from '../src/render-vega.js'
 import { canonicalizeSvg, diffCanonical } from '../src/normalize.js'
 
