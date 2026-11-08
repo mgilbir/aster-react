@@ -3,7 +3,7 @@
 A from-scratch Vega-Lite → Vega compiler verified against the vega-lite oracle by
 rendering parity.
 
-Install (version 0.1.0 is not yet published to npm; the command works once the first release is tagged). Node 20 or newer;
+Install. Node 20 or newer;
 no runtime dependencies and no peer dependencies (render the compiled spec with `@aster-charts/core`, or let `@aster-charts/react` compile it):
 
 ```bash

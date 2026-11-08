@@ -6,14 +6,13 @@ reimplementation of the Vega and Vega-Lite rendering stack that aims to produce 
 `vega` and `vega-lite` packages are the test oracle only; nothing in the published packages imports them or any `d3-*` /
 `topojson-*` package.
 
-**Pre-alpha. Version 0.1.0, not yet published to npm.** The install commands below work once the first release is tagged; until
-then, build from this repository ([Build from source](#build-from-source)). How closely the output matches Vega is measured by
+**Pre-alpha. Version 0.1.0 is published to npm** as `@aster-charts/core`, `@aster-charts/react` and `@aster-charts/vl`; to work on
+the engine itself, build from this repository ([Build from source](#build-from-source)). How closely the output matches Vega is measured by
 the gates, and the results are in [Conformance results](#conformance-results).
 
 ## Install
 
-Not yet published (see above); these are the commands for the packages once they are. Consumers need Node 20 or newer (`engines`
-in each package).
+Consumers need Node 20 or newer (`engines` in each package).
 
 ```bash
 npm i @aster-charts/react react react-dom   # React charts: <Chart>, useChart; react ^19 is a peer dependency

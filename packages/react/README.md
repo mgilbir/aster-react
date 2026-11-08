@@ -4,7 +4,7 @@ React bindings for Aster Charts: `<Chart>` (SVG or canvas; Vega, or Vega-Lite th
 `useSpecData`, `useChartWorker`, streaming components and hooks, SSR/hydration helpers, declarative selection and
 pan/zoom, and an accessible scene tree.
 
-Install (version 0.1.0 is not yet published to npm; the command works once the first release is tagged). Node 20 or newer;
+Install. Node 20 or newer;
 `react` ^19 is a peer dependency, and a browser app mounts with `react-dom`. `@aster-charts/core` and `@aster-charts/vl` are installed with it as
 dependencies; add `@aster-charts/core` yourself only if your code imports it (for example `@aster-charts/core/dom`).
 

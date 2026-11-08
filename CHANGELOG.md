@@ -1,9 +1,9 @@
 # Changelog
 
-Version 0.1.0 is the first release and is not yet published. From 0.1.0 on, entries are added per release under Added, Changed
+Version 0.1.0 is the first release. From 0.1.0 on, entries are added per release under Added, Changed
 and Fixed, per package. Everything built before the first release is in [Pre-release history](#pre-release-history) below.
 
-## 0.1.0 (unreleased): initial release
+## 0.1.0 (2026-11-08): initial release
 
 ### `@aster-charts/core`
 

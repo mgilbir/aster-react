@@ -72,8 +72,8 @@ The canonicalizer is strict and each normalization is justified in `packages/con
 - Three publishable packages with a verified tarball ([RELEASE.md](RELEASE.md)); licence, contributing guide,
   changelog and third-party notices.
 
-**Not done: publishing.** Nothing has been published. The registry scope, the protected `npm-release` environment and
-the tag are the owner's steps ([RELEASE.md](RELEASE.md)).
+**Published.** 0.1.0 is on npm under the `aster-charts` org (`@aster-charts/core`, `@aster-charts/react`,
+`@aster-charts/vl`), published with provenance by the tag-triggered release workflow ([RELEASE.md](RELEASE.md)).
 
 ---
 
@@ -92,8 +92,8 @@ Each item is something the code or the gates show today; none is a plan that has
   ([INTERACTION.md](INTERACTION.md)).
 - **Probes.** `packages/conformance/probes` holds two probes; both pass today and can be promoted into `corpus/`.
 - **Streaming transport.** The host owns the network and decides when to flush.
-- **Release.** Registry scope, `npm-release` environment with reviewers and `NPM_TOKEN` (or trusted publishing),
-  version bump and tag ([RELEASE.md](RELEASE.md)).
+- **Release.** Move publishing from the `NPM_TOKEN` secret to npm trusted publishing now that the packages exist, and
+  add required reviewers to the `npm-release` environment ([RELEASE.md](RELEASE.md)).
 
 ---
 
@@ -120,13 +120,13 @@ The SVG corpus, the scene differential, the sweeps and the fuzzer then check the
 1. The three packages have no runtime dependency on `vega-*`, `d3-*` or `topojson-*`; a gate enforces it. **Met.**
 2. They render Vega and Vega-Lite directly, matching upstream property for property and scene for scene. **Met for
    the gates' corpus and sweeps; the exceptions are the open items above.**
-3. Schema sweeps and recorded upstream vectors cover the language, not a fixture list. **Met** (three sweeps, vectors per library).
+3. Schema sweeps and recorded upstream vectors cover the language, not a fixture list. **Met** (four sweeps: Vega, Vega-Lite, signals and values; vectors per library).
 4. SVG and canvas render the same scene and pass the same differential; there is no PDF/PNG workstream. **Met.**
 5. `<Chart>` is idiomatic React: either grammar, SSR/hydration, async data, declarative select/pan/zoom/tooltip and a
    positioned accessibility tree on both backends. **Met.**
 6. Untrusted specs are bounded in time and memory and fail with typed errors. **Met with the documented caveats**
    ([LIMITS.md](LIMITS.md): native regular-expression calls are not interruptible without a worker).
-7. Packages publish to npm with docs, changelog and licence. **Packaged and verified; not published.**
+7. Packages publish to npm with docs, changelog and licence. **Met** (0.1.0).
 
 ## 5. Keeping this document honest
 
