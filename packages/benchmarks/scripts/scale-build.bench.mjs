@@ -4,8 +4,8 @@
  *
  *   node scripts/scale-build.bench.mjs [--dist=<dir with index.js>] [--iters=10000] [--rows=200]
  *
- * `--dist` points at another build of @aster/core (the base of a comparison); the
- * default is this workspace's build. Run it with `pnpm --filter @aster/core build`
+ * `--dist` points at another build of @aster-charts/core (the base of a comparison); the
+ * default is this workspace's build. Run it with `pnpm --filter @aster-charts/core build`
  * done first.
  */
 import { performance } from 'node:perf_hooks'

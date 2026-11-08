@@ -4,7 +4,7 @@
  * descending ones) and covers the interval between them; a polar text (`radius`, `theta`) is anchored at the offset point.
  */
 import { describe, it, expect } from 'vitest'
-import { renderSpec } from '@aster/core'
+import { renderSpec } from '@aster-charts/core'
 import { renderWithVegaChecked } from '../src/render-vega.js'
 import { canonicalizeSvg, diffCanonical } from '../src/normalize.js'
 

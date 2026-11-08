@@ -15,19 +15,19 @@
  *   - a11y nodes are positioned over the marks they describe (padding included).
  *
  * Every check runs against both components, each bundled on its own (so the light one is the real light bundle):
- * `<Chart>` from the package entry, and `<SvgChart interaction={interaction}>` from `@aster/react/lite` +
- * `@aster/react/interaction`. A third pass covers `<SvgChart>` WITHOUT interaction: it renders, it works for what
+ * `<Chart>` from the package entry, and `<SvgChart interaction={interaction}>` from `@aster-charts/react/lite` +
+ * `@aster-charts/react/interaction`. A third pass covers `<SvgChart>` WITHOUT interaction: it renders, it works for what
  * needs no hit testing (pan/zoom, brush), and an event-stream spec reports the documented error instead of going
  * silently dead. The light bundles are asserted (esbuild metafile) not to contain the canvas renderer, and the one
  * without `interaction` not to contain the hit index or the signal loop either.
  *
- * Run: pnpm --filter @aster/react test:browser   (after `pnpm build`)
+ * Run: pnpm --filter @aster-charts/react test:browser   (after `pnpm build`)
  */
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 import { build } from 'esbuild'
 import { chromium, type Page } from 'playwright'
-import { compile as compileVl } from '@aster/vl'
+import { compile as compileVl } from '@aster-charts/vl'
 import { cli } from '../../../scripts/lib/cli.mjs'
 
 cli({ url: import.meta.url })
@@ -685,7 +685,7 @@ async function plainSuite(page: Page): Promise<void> {
   check(rendered === 3, 'an event-stream spec still renders its marks')
   entries = await log(page)
   const errs = entries.filter((e) => e.name === 'onError').map((e) => String(e.args[0]))
-  check(errs.length === 1 && /event streams \(signal\.on\)/.test(errs[0]!) && /@aster\/react\/interaction/.test(errs[0]!), `an event-stream spec reports the documented error (${JSON.stringify(errs)})`)
+  check(errs.length === 1 && /event streams \(signal\.on\)/.test(errs[0]!) && /@aster-charts\/react\/interaction/.test(errs[0]!), `an event-stream spec reports the documented error (${JSON.stringify(errs)})`)
   const stamped = await page.evaluate(() => document.querySelectorAll('[data-datum]').length)
   check(stamped === 0, 'and no data-datum is stamped (nothing reads it)')
 }

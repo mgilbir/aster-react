@@ -1,12 +1,12 @@
-# @aster/benchmarks
+# @aster-charts/benchmarks
 
-Performance comparison harness: our library (`@aster/react`) vs the two standard ways
+Performance comparison harness: our library (`@aster-charts/react`) vs the two standard ways
 to embed Vega in React.
 
 | Approach | What it measures |
 |---|---|
-| `aster` | `<Chart>` from `@aster/react` with `incremental={false}`: the full SVG is re-serialized and re-parsed per update |
-| `asterDom` | same `<Chart incremental>` — keeps the `<svg>` and patches only changed attributes (`patchSceneDom` in `@aster/core/dom`) |
+| `aster` | `<Chart>` from `@aster-charts/react` with `incremental={false}`: the full SVG is re-serialized and re-parsed per update |
+| `asterDom` | same `<Chart incremental>` — keeps the `<svg>` and patches only changed attributes (`patchSceneDom` in `@aster-charts/core/dom`) |
 | `reactVega` | `react-vega` v8 `<VegaEmbed>` — the React wrapper from the vega org. Data updates deep-compare the spec and **re-embed** the view |
 | `embedHook` | `vega-embed` in a `useEffect` following the official tutorials — incl. the documented incremental paths (`view.change()` for data, `view.width()/height()` for resize). This is Vega's best case |
 
@@ -32,7 +32,7 @@ pnpm bench:pipeline   # per-stage compute breakdown: aster compile/evaluate/seri
 pnpm bench:incremental # streaming append / whole-array replace / DOM patch vs their baselines;
                       # fails below measured floors (see the header of src/incremental.bench.tsx)
 pnpm bench:differential # changed-set update vs full re-encode (scene eval and DOM patch)
-pnpm --filter @aster/benchmarks run budget  # per-import-pattern gzip budgets (addons as marginal cost); refuses a stale dist
+pnpm --filter @aster-charts/benchmarks run budget  # per-import-pattern gzip budgets (addons as marginal cost); refuses a stale dist
 pnpm bench:browser-stream # per-frame append: aster <ChartStream> vs vega view.change
                       # SVG/canvas, microtask/raf and run/runAsync
                       # flush policies, long frames + DOM mutations
@@ -41,7 +41,7 @@ pnpm bench:browser-stream # per-frame append: aster <ChartStream> vs vega view.c
 Knobs (all runners): `--points=1000` (dataset size), `--reps=…`, `--kind=line,scatter,bar`
 (runtime/browser), `--cycles=…` (memory), `--seconds=3` (browser frame pacing),
 `--dense=0,1` (streaming: Aster SVG with `denseMarks` batching on/off).
-The browser runner needs a Chromium for Playwright (`pnpm --filter @aster/conformance exec playwright install --with-deps chromium`).
+The browser runner needs a Chromium for Playwright (`pnpm --filter @aster-charts/conformance exec playwright install --with-deps chromium`).
 
 ## Interpreting
 

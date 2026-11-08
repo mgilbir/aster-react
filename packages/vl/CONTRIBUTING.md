@@ -1,4 +1,4 @@
-# Working on `@aster/vl`
+# Working on `@aster-charts/vl`
 
 This page is for people who change the compiler. It is not part of the published package: the npm page is [README.md](README.md),
 which states the contract (what compiles, what throws). The repository-wide workflow is [CONTRIBUTING.md](../../CONTRIBUTING.md); how
@@ -30,9 +30,9 @@ to debug a failing conformance case end to end is in [docs/RUNBOOK.md](../../doc
   `## Known runtime gaps`). Every feature it names must be refused by `compile` with a `VLCompileError`, and the features that used to be on
   the list must not be. To change the list, change the README and the table in the test together; keep both headings.
 - Parity against the real vega-lite lives in the conformance package, not here: `packages/conformance/test/vl-mark-channels.test.ts` compiles
-  every mark x channel x definition (`vl-mark-channels-space.ts`) with vega-lite 6.4.3 and with `@aster/vl` and compares the compiled
+  every mark x channel x definition (`vl-mark-channels-space.ts`) with vega-lite 6.4.3 and with `@aster-charts/vl` and compares the compiled
   scales, axes and legends, the rows and the SVG; `vl-predicate.tz.test.ts` compares the rows and expressions of every predicate form, including
   every UTC time unit read in local time, under the zones of `pnpm test:tz`; the `vlx-geo-*` specs of `packages/conformance/corpus` hold a case
-  per map feature. `pnpm conformance-vl` renders the whole Vega-Lite corpus through vega-lite and through `@aster/vl` and compares both.
+  per map feature. `pnpm conformance-vl` renders the whole Vega-Lite corpus through vega-lite and through `@aster-charts/vl` and compares both.
 - `packages/conformance/corpus-vega-only` is where a Vega-Lite spec would live while the Aster runtime cannot yet render vega-lite's own Vega for it
   (it is held to the real-vega check only). It is empty today; its README says how to record a case.

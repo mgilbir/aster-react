@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { getChartInfo } from '@aster/core'
+import { getChartInfo } from '@aster-charts/core'
 import { dragToDataInterval, selectionToPixels } from './interaction.js'
 
 describe('dragToDataInterval', () => {

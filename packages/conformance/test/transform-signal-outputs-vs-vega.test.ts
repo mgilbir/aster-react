@@ -4,7 +4,7 @@
  * vega publishes. A text mark shows the expression's value, so the render compares it with the real vega.
  */
 import { describe, it, expect } from 'vitest'
-import { renderSpec } from '@aster/core'
+import { renderSpec } from '@aster-charts/core'
 import { renderWithVegaChecked } from '../src/render-vega.js'
 import { canonicalizeSvg, diffCanonical } from '../src/normalize.js'
 

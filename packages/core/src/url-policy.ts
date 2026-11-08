@@ -1,5 +1,5 @@
 /**
- * URL policy shared by the data loader (`@aster/core/load`) and image marks.
+ * URL policy shared by the data loader (`@aster-charts/core/load`) and image marks.
  * A spec is untrusted input: every URL it names is something the host
  * (or the viewer's browser) will request, so each one passes a policy first.
  *

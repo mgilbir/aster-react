@@ -3,7 +3,7 @@ import * as React from 'react'
 import { createRoot } from 'react-dom/client'
 import { act } from 'react'
 import { describe, it, expect, afterEach } from 'vitest'
-import { AsterLimitError, createChartStream, renderSceneToSvg, type ChartStream } from '@aster/core'
+import { AsterLimitError, createChartStream, renderSceneToSvg, type ChartStream } from '@aster-charts/core'
 import {
   cloneableScene, handleChartWorkerRequest, handleChartWorkerStreamRequest, handleWorkerMessage,
   registerWorkerTextMetrics, useChartWorker,

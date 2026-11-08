@@ -6,7 +6,7 @@
  */
 import { describe, expect, it } from 'vitest'
 import * as vega from 'vega'
-import { compileChart, evaluateChart } from '@aster/core'
+import { compileChart, evaluateChart } from '@aster-charts/core'
 
 type Spec = Record<string, unknown>
 const VALUES: unknown[] = [15, 0, -3, 2.5, 1e21, true, false, null, '', 'sqrt(16)', '3 + 4', 'width * 2', [1, 2, 3], [], [[1, 2], [3]], { a: 1 }, { a: [1, { b: 2 }] }, 'datum', 'width / 0']

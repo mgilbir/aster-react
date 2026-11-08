@@ -11,9 +11,9 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import * as vega from 'vega'
 import * as vl from 'vega-lite'
-import { compileChart, evaluateChart } from '@aster/core'
-import { renderSceneToDomElement } from '@aster/core/dom'
-import { bindSceneSignals } from '@aster/core/signals'
+import { compileChart, evaluateChart } from '@aster-charts/core'
+import { renderSceneToDomElement } from '@aster-charts/core/dom'
+import { bindSceneSignals } from '@aster-charts/core/signals'
 
 type Spec = Record<string, unknown>
 type VegaView = {

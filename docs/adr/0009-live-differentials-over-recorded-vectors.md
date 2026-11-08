@@ -28,7 +28,7 @@ real one-ulp divergences.
 ## Consequences
 
 - The oracle packages must be installed to run the suites, which they are, as dev-only
-  dependencies of `@aster/conformance` ([ADR 0001](0001-own-the-engine.md)).
+  dependencies of `@aster-charts/conformance` ([ADR 0001](0001-own-the-engine.md)).
 - The suites run on every Node version CI uses; the jsdom-free ones also on Node 20
   ([TESTING.md](../TESTING.md)).
 - A difference between Aster and the oracle is a failure of the test that found it, not a

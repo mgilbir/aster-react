@@ -1,6 +1,6 @@
 /**
  * The comparison the ranged-channel, scale-type and polar differentials share: one Vega-Lite spec compiled by vega-lite 6.4.3 and by
- * @aster/vl, both run through the same vega in this process. What must be the same is what a reader sees and what the scales decide:
+ * @aster-charts/vl, both run through the same vega in this process. What must be the same is what a reader sees and what the scales decide:
  *
  *   - the compiled scales (type, domain, range and every property), the name of the data a domain reads aside: Aster may name its
  *     datasets differently, the rows they hold are compared below;
@@ -14,7 +14,7 @@
  */
 import * as vega from 'vega'
 import * as vl from 'vega-lite'
-import { compile } from '@aster/vl'
+import { compile } from '@aster-charts/vl'
 import { silent } from './vl-time-helpers.js'
 
 type Obj = Record<string, unknown>

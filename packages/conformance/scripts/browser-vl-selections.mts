@@ -2,7 +2,7 @@
  * Real-browser differential for Vega-Lite selections.
  *
  * Each case is a Vega-Lite spec (inline data) mounted twice in headless Chromium, each in its own page:
- * vega-lite 6.4.3's compiled spec in a real vega `View`, and Aster's own `@aster/vl` output in `<Chart>`
+ * vega-lite 6.4.3's compiled spec in a real vega `View`, and Aster's own `@aster-charts/vl` output in `<Chart>`
  * (which brings the signal event loop and hit testing). The SAME native input -- Playwright mouse, wheel,
  * keyboard and form-control events -- is driven through both, and after EVERY step the two must agree on
  *
@@ -514,7 +514,7 @@ const entrySrc = `
 import * as React from 'react'
 import { createRoot } from 'react-dom/client'
 import { flushSync } from 'react-dom'
-import '@aster/core/transforms' // (a nearest selection's voronoi cells)
+import '@aster-charts/core/transforms' // (a nearest selection's voronoi cells)
 import * as vega from 'vega'
 import * as vl from 'vega-lite'
 import { Chart } from ${JSON.stringify(join(REACT_DIR, 'src/index.ts'))}

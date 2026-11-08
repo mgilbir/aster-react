@@ -7,7 +7,7 @@
  */
 import { describe, expect, it } from 'vitest'
 import * as vega from 'vega'
-import { renderSpec } from '@aster/core'
+import { renderSpec } from '@aster-charts/core'
 import { canonicalizeSvg, diffCanonical } from './normalize.js'
 
 function points(n: number, seed: number): Array<{ x: number; y: number; s: number; ok: boolean }> {

@@ -1,5 +1,5 @@
 {
-  "name": "@aster/core",
+  "name": "@aster-charts/core",
   "version": "0.1.0",
   "type": "module",
   "main": "./dist/index.js",

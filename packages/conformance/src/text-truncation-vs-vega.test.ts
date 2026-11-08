@@ -9,8 +9,8 @@
  */
 import { describe, expect, it } from 'vitest'
 import * as vega from 'vega'
-import { compileChart, evaluateChart, renderSpec } from '@aster/core'
-import { renderSceneToCanvas, type CanvasLike } from '@aster/core/canvas'
+import { compileChart, evaluateChart, renderSpec } from '@aster-charts/core'
+import { renderSceneToCanvas, type CanvasLike } from '@aster-charts/core/canvas'
 import { canonicalizeSvg, diffCanonical } from './normalize.js'
 import { compareBounds } from './mark-bounds-oracle.js'
 import { textCase } from './text-cases.js'

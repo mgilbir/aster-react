@@ -59,4 +59,4 @@ kinds.push(
   ['no name: a layer of a bar and a point with a colour', { encoding: { x: n('n'), y: q('q', { aggregate: 'sum' }), color: n('g') }, layer: [{ mark: 'bar' }, { mark: 'point' }] }],
   ['no name: size and opacity', unit({}, { size: q('q'), opacity: q('q2') })],
 )
-GROUPS.push(['@aster/vl == vega-lite: the name of a view', kinds.map(([name, spec]) => [name, { data: DATA, ...spec }] as Case)])
+GROUPS.push(['@aster-charts/vl == vega-lite: the name of a view', kinds.map(([name, spec]) => [name, { data: DATA, ...spec }] as Case)])

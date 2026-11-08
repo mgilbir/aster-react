@@ -185,7 +185,7 @@ export interface DomRenderOptions {
    * the DOM intentionally stops mirroring Vega's per-item structure: 100k
    * symbols become a few hundred paths, which is what keeps large SVG streams
    * inside the frame budget. Tooltips and hit-testing resolve through the scene
-   * hit index (`@aster/core/hit`).
+   * hit index (`@aster-charts/core/hit`).
    */
   denseMarks?: boolean
   /** Maximum items per batched path (default 256). */

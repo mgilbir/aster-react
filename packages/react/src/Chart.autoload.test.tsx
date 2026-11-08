@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 /**
- * Add-on auto-load, through the shells: a spec that needs an opt-in add-on (`@aster/core/transforms`, `@aster/core/geo`)
+ * Add-on auto-load, through the shells: a spec that needs an opt-in add-on (`@aster-charts/core/transforms`, `@aster-charts/core/geo`)
  * renders with NOTHING imported by the app. The shell reads which add-ons the spec needs, imports them, and renders when
  * they are there; until then it SUSPENDS (a <Suspense> boundary above shows its fallback; with none the root waits), so
  * there is no flash of an error. What it renders is what the static path renders. A spec that needs no add-on renders
@@ -16,8 +16,8 @@ import { describe, it, expect, afterEach } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { renderSpec, geoRegistry, transformRegistry, type VgSpec } from '@aster/core'
-import { isAddonLoaded } from '@aster/core/addons'
+import { renderSpec, geoRegistry, transformRegistry, type VgSpec } from '@aster-charts/core'
+import { isAddonLoaded } from '@aster-charts/core/addons'
 import { forEachVariant } from './testing/variants'
 import { ignoreSuspendedActWarning } from './testing/quiet'
 

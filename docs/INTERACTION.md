@@ -5,9 +5,9 @@ Interaction is expressed as React props and values, not an imperative view wrapp
 
 ## `<Chart>` or `<SvgChart>`
 
-Everything below is `<Chart>`. `<SvgChart>` (`@aster/react/lite`) takes the same props except `renderer`; the ones that
+Everything below is `<Chart>`. `<SvgChart>` (`@aster-charts/react/lite`) takes the same props except `renderer`; the ones that
 need hit testing or the signal event loop need the `interaction` capability, passed as a prop
-(`<SvgChart spec={spec} interaction={interaction} />`, `interaction` from `@aster/react/interaction`). API.md has the
+(`<SvgChart spec={spec} interaction={interaction} />`, `interaction` from `@aster-charts/react/interaction`). API.md has the
 full contract; in short:
 
 | | `<Chart>` | `<SvgChart>` | `<SvgChart interaction={interaction}>` |
@@ -31,7 +31,7 @@ Every interaction check in `packages/react/scripts/browser-interaction.mts` runs
 
 `ViewDomain`, `SelectionInterval` (the `onSelect`/`brush` interval) and the interval of a `SelectValue` have two keys,
 `x` and `y`. They mean **the horizontal and the vertical positional scale**, not scales literally named `x` and `y`.
-The scales are derived from the spec by position (`positionalScales(spec)` in `@aster/react`'s source, not exported):
+The scales are derived from the spec by position (`positionalScales(spec)` in `@aster-charts/react`'s source, not exported):
 
 1. Candidates for the horizontal orientation, in order: the scales of axes with `orient` `bottom` or `top`, then the
    scales referenced by the mark channels `x`, `x2`, `xc` in any encode set. For the vertical orientation: axes with
@@ -50,8 +50,8 @@ domain per orientation. So a Vega tutorial spec with `xscale`/`yscale` pans and 
 
 ```tsx
 import * as React from 'react'
-import { Chart, type SelectValue, type SelectionInterval } from '@aster/react'
-import type { VgSpec } from '@aster/core'
+import { Chart, type SelectValue, type SelectionInterval } from '@aster-charts/react'
+import type { VgSpec } from '@aster-charts/core'
 
 const spec: VgSpec = {
   width: 300,
@@ -126,11 +126,11 @@ spec's interval brush listen to the same drag.
 What works, and how it differs from Vega, precisely:
 
 - The interaction needs the signal event loop: `<Chart>`, or `<SvgChart interaction={interaction}>`. `nearest` also
-  needs `import '@aster/core/transforms'` (its voronoi cells). `renderer="canvas"` and `interactive={false}` bind no event loop (see [Signals](#signals)), so no spec selection
+  needs `import '@aster-charts/core/transforms'` (its voronoi cells). `renderer="canvas"` and `interactive={false}` bind no event loop (see [Signals](#signals)), so no spec selection
   reacts there. On `<ChartStream>` / `<ChartWorkerStream>` the edited store is not an input of the stream's
   evaluation (only signals and the view are), so a spec selection does not update the scene there.
 - The state is the one Vega computes for the same input; `pnpm conformance:selections` drives the same native
-  mouse, wheel and form-control input through vega-lite + Vega and through `@aster/vl` + `<Chart>` and compares every
+  mouse, wheel and form-control input through vega-lite + Vega and through `@aster-charts/vl` + `<Chart>` and compares every
   signal, every store and the SVG after each step (point click, shift-toggle, hover, `nearest`, brush, move, wheel
   zoom, legend click, `select` / `radio` / `range` / `checkbox` bindings, `bind: "scales"`, layered filters and lookups, and
   across concat, facet and repeat views: a brush filtering another view, a point selection linking two, a selection
@@ -147,7 +147,7 @@ What works, and how it differs from Vega, precisely:
 - **Selections in concat, facet and repeat views** (linked brushing, a brush per facet cell, a selection declared on the
   composition and given to every unit below it) work as in Vega: a unit's signals belong to its group mark, a Vega group
   scope with one copy per view or cell. The event loop scopes them the way Vega does (see [Group scopes](#group-scopes)).
-  What `@aster/vl` refuses is listed in [packages/vl/README.md](../packages/vl/README.md#throws-not-supported).
+  What `@aster-charts/vl` refuses is listed in [packages/vl/README.md](../packages/vl/README.md#throws-not-supported).
 
 ### Group scopes
 
@@ -196,8 +196,8 @@ control or link is ignored.
 
 ```tsx
 import * as React from 'react'
-import { Chart, type ViewDomain } from '@aster/react'
-import type { VgSpec } from '@aster/core'
+import { Chart, type ViewDomain } from '@aster-charts/react'
+import type { VgSpec } from '@aster-charts/core'
 
 const spec: VgSpec = {
   width: 300,
@@ -230,15 +230,15 @@ extra evaluation).
 ## Signals
 
 Spec `signal.on` streams are bound to the rendered SVG with vega's event-stream semantics (selectors, filters,
-throttle, `consume`, mark-scoped streams such as `@name:click` and `symbol:click`; the full list is in [API.md](API.md#astercoresignals)).
+throttle, `consume`, mark-scoped streams such as `@name:click` and `symbol:click`; the full list is in [API.md](API.md#aster-chartscoresignals)).
 Updating a signal calls `onSignal(name, value)` and `signalListeners[name](name, value)`, and the value is stored in an
 external store consumed with `useSyncExternalStore`, so each event is one normal React state transition (no tearing
 under concurrent rendering).
 
 ```tsx
 import * as React from 'react'
-import { Chart, type ChartHandle } from '@aster/react'
-import type { VgSpec } from '@aster/core'
+import { Chart, type ChartHandle } from '@aster-charts/react'
+import type { VgSpec } from '@aster-charts/core'
 
 const spec: VgSpec = {
   width: 200,
@@ -283,7 +283,7 @@ real vega and Aster on one fake browser clock and compares frames). The timers b
 to one rendered SVG: a re-bind after each render keeps the schedule, and they stop when the chart unmounts, when the host
 element is removed from the document, or on `binding.release()` (vega's `view.finalize()`); nothing is left scheduled.
 `bindSceneSignals` takes `owner` (the element the timers belong to; `<Chart>` passes its host) and `setTimerClock(clock | null)` from
-`@aster/core/signals` swaps the scheduler's clock (`{ now, setTimeout, clearTimeout, setInterval, clearInterval, requestFrame }`)
+`@aster-charts/core/signals` swaps the scheduler's clock (`{ now, setTimeout, clearTimeout, setInterval, clearInterval, requestFrame }`)
 for a controlled one (tests, hosts that step frames themselves); `null` restores the host's globals, and it should only be
 swapped while no timer is live. A Vega-Lite
 animation (the `time` channel and its timer selection, see `packages/vl/README.md`) is a timer stream whose clock
@@ -375,8 +375,8 @@ renderer, interaction, tooltips, accessibility tree), and these props work on th
 
 ```tsx
 import * as React from 'react'
-import { ChartStream, type ChartStreamHandle, type ViewDomain } from '@aster/react'
-import type { VgSpec } from '@aster/core'
+import { ChartStream, type ChartStreamHandle, type ViewDomain } from '@aster-charts/react'
+import type { VgSpec } from '@aster-charts/core'
 
 const spec: VgSpec = {
   width: 300,

@@ -6,7 +6,7 @@
  * Used to compare two builds (same file, run against each dist) — the table is
  * what the transform-semantics work was held to (within 10% median and p95).
  *
- * Run: pnpm --filter @aster/benchmarks run bench:transforms [--rows=100000] [--reps=15] [--only=aggregate,window]
+ * Run: pnpm --filter @aster-charts/benchmarks run bench:transforms [--rows=100000] [--reps=15] [--only=aggregate,window]
  */
 import { performance } from 'node:perf_hooks'
 import { ensureBuilt } from './ensure-built.js'
@@ -25,8 +25,8 @@ async function main(): Promise<void> {
   const reps = Math.max(5, Number(arg('reps', '15')))
   const only = arg('only', '').split(',').filter(Boolean)
 
-  const core = await import('@aster/core')
-  await import('@aster/core/transforms')
+  const core = await import('@aster-charts/core')
+  await import('@aster-charts/core/transforms')
   const { applyTransforms, compileExpr } = core as unknown as {
     applyTransforms: (rows: Row[], t: unknown[], ctx: unknown, source?: string) => Row[]
     compileExpr: (e: string, rt: unknown) => unknown

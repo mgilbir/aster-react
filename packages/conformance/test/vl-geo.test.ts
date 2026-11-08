@@ -1,6 +1,6 @@
 // @vitest-environment node
 /**
- * Maps: the projections @aster/vl emits must be vega-lite's.
+ * Maps: the projections @aster-charts/vl emits must be vega-lite's.
  *
  * Two differentials against vega-lite 6.4.3, both on the compile output rather than a single value:
  *  1. every `.vl.json` corpus spec (maps and not): the `projections` array, and the projection each
@@ -14,7 +14,7 @@ import { describe, it, expect } from 'vitest'
 import { readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import * as vl from 'vega-lite'
-import { compile } from '@aster/vl'
+import { compile } from '@aster-charts/vl'
 import { renderWithVegaChecked, renderWithVega } from '../src/render-vega.js'
 import { canonicalizeSvg, diffCanonical } from '../src/normalize.js'
 import { genSpec } from './vl-geo-gen.js'

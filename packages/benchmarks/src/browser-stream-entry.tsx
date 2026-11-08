@@ -18,7 +18,7 @@
 import * as React from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { changeset, parse as parseVega, View } from 'vega'
-import { ChartStream, type ChartStreamHandle } from '@aster/react'
+import { ChartStream, type ChartStreamHandle } from '@aster-charts/react'
 
 export type Engine = 'aster' | 'vega'
 type Renderer = 'svg' | 'canvas'

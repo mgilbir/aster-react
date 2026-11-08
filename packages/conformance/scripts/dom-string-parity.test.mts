@@ -20,11 +20,11 @@ import { readFileSync, readdirSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 import * as vl from 'vega-lite'
-import { compileChart, evaluateChart, renderSceneToSvg } from '@aster/core'
-import { patchSceneDom, renderSceneToDomElement } from '@aster/core/dom'
-import { loadSpecData, TRUSTED_LOAD_OPTIONS } from '@aster/core/load'
-import '@aster/core/geo'
-import '@aster/core/transforms'
+import { compileChart, evaluateChart, renderSceneToSvg } from '@aster-charts/core'
+import { patchSceneDom, renderSceneToDomElement } from '@aster-charts/core/dom'
+import { loadSpecData, TRUSTED_LOAD_OPTIONS } from '@aster-charts/core/load'
+import '@aster-charts/core/geo'
+import '@aster-charts/core/transforms'
 
 const CORPUS_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', 'corpus')
 

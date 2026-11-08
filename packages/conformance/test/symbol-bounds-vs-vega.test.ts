@@ -4,7 +4,7 @@
  * the stroke) drive the view's padding under autosize pad. A symbol at the edge of the view makes the overflow visible.
  */
 import { describe, it, expect } from 'vitest'
-import { renderSpec } from '@aster/core'
+import { renderSpec } from '@aster-charts/core'
 import { renderWithVegaChecked } from '../src/render-vega.js'
 import { canonicalizeSvg, diffCanonical } from '../src/normalize.js'
 

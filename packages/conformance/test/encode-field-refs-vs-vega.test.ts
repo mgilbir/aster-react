@@ -5,7 +5,7 @@
  * `item.mark.group.datum[datum['f']]`, the field of the group's datum that the item's own datum names. Also a scale chosen so.
  */
 import { describe, it, expect } from 'vitest'
-import { renderSpec } from '@aster/core'
+import { renderSpec } from '@aster-charts/core'
 import { renderWithVegaChecked } from '../src/render-vega.js'
 import { canonicalizeSvg, diffCanonical } from '../src/normalize.js'
 

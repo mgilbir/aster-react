@@ -13,9 +13,9 @@
  */
 import { describe, expect, it } from 'vitest'
 import * as vega from 'vega'
-import '@aster/core/geo'
-import '@aster/core/transforms'
-import { renderSpec } from '@aster/core'
+import '@aster-charts/core/geo'
+import '@aster-charts/core/transforms'
+import { renderSpec } from '@aster-charts/core'
 import { canonicalizeSvg, diffCanonical } from '../src/normalize.js'
 import { makeRng, scaled, type Rng } from './differential-gen.mts'
 

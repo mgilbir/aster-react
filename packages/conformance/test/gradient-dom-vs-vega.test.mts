@@ -5,8 +5,8 @@
  */
 import { describe, expect, it } from 'vitest'
 import * as vega from 'vega'
-import { compileChart, evaluateChart } from '@aster/core'
-import { renderSceneToDomElement } from '@aster/core/dom'
+import { compileChart, evaluateChart } from '@aster-charts/core'
+import { renderSceneToDomElement } from '@aster-charts/core/dom'
 import { canonicalizeSvg, diffCanonical } from '../src/normalize.js'
 import { gradientSpec, makeRng } from '../scripts/gradient-gen.mts'
 import { scaled } from '../scripts/differential-gen.mts'

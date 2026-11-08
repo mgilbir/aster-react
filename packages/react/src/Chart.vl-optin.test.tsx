@@ -15,7 +15,7 @@ const vlSpec = {
   encoding: { x: { field: 'c', type: 'nominal' }, y: { field: 'v', type: 'quantitative' } },
 } as never
 
-// This file deliberately does NOT import '@aster/react/vl': the base entry must
+// This file deliberately does NOT import '@aster-charts/react/vl': the base entry must
 // keep working for Vega specs and fail loudly (with instructions) for VL ones.
 describe('Vega-Lite is opt-in', () => {
   it('does not have a compiler registered by default', () => {
@@ -24,7 +24,7 @@ describe('Vega-Lite is opt-in', () => {
 
   it('detects VL but explains how to enable it', () => {
     expect(isVegaLiteSpec(vlSpec)).toBe(true)
-    expect(() => normalizeChartSpec(vlSpec)).toThrow(/import '@aster\/react\/vl'/)
+    expect(() => normalizeChartSpec(vlSpec)).toThrow(/import '@aster-charts\/react\/vl'/)
   })
 
   it('leaves Vega specs untouched', () => {
@@ -44,7 +44,7 @@ describe('Vega-Lite is opt-in', () => {
       // the exact import to add rather than rendering a generic failure alert.
       expect(() => {
         act(() => { root.render(<Chart spec={vlSpec} width={200} height={100} a11y={false} />) })
-      }).toThrow(/@aster\/react\/vl/)
+      }).toThrow(/@aster-charts\/react\/vl/)
       container.remove()
     })
   })

@@ -24,9 +24,9 @@ import {
   type StreamOptions,
   type StreamStats,
   type VgSpec,
-} from '@aster/core'
+} from '@aster-charts/core'
 import { mergeBatches } from './batches.js'
-import { loadAddons, missingAddons } from '@aster/core/addons'
+import { loadAddons, missingAddons } from '@aster-charts/core/addons'
 import { normalizeChartSpec, useStableSpec } from './spec.js'
 import {
   errorFromWire,

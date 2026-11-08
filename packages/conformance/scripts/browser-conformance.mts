@@ -52,11 +52,11 @@ const CONTAINER_H = 300
 // Page entry: vega-embed (oracle) + aster, and the canonicalizer, all in-page.
 const entrySrc = `
 import embed from 'vega-embed'
-import { renderSpec, compileChart, evaluateChart } from '@aster/core'
-import { loadSpecData, TRUSTED_LOAD_OPTIONS } from '@aster/core/load'
-import { compile } from '@aster/vl'
-import '@aster/core/geo'
-import '@aster/core/transforms'
+import { renderSpec, compileChart, evaluateChart } from '@aster-charts/core'
+import { loadSpecData, TRUSTED_LOAD_OPTIONS } from '@aster-charts/core/load'
+import { compile } from '@aster-charts/vl'
+import '@aster-charts/core/geo'
+import '@aster-charts/core/transforms'
 import { canonicalizeSvg, diffCanonical } from '../src/normalize.js'
 
 window.__runEntry = async (entry) => {
@@ -104,7 +104,7 @@ await build({
   define: { 'process.env.NODE_ENV': '"production"' },
   logLevel: 'silent',
   // Workspace deps resolve via node_modules symlinks + each package's
-  // "exports" map (which covers the @aster/core subpath addons).
+  // "exports" map (which covers the @aster-charts/core subpath addons).
 })
 
 writeFileSync(join(OUT_DIR, 'index.html'), `<!doctype html><html><body><script src="./page.js"></script></body></html>`)

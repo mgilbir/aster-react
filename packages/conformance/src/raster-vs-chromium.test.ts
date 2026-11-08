@@ -1,5 +1,5 @@
 /**
- * The engine's coverage-only 2D context (`@aster/core` raster.ts, what the `label` transform draws the marks it avoids into) against
+ * The engine's coverage-only 2D context (`@aster-charts/core` raster.ts, what the `label` transform draws the marks it avoids into) against
  * the alpha channel a real browser canvas leaves for the same drawing (`raster-fixtures.json`, recorded in Chromium by
  * `scripts/raster-fixtures.mts` from the drawings of `raster-shapes.ts`). A label is placed where no pixel under it has any
  * alpha, so what matters is which edge pixels have a little: the contexts are not equal bit for bit (Skia's analytic coverage

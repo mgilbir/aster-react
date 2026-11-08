@@ -1,9 +1,9 @@
 /**
  * Fetch the official Vega / Vega-Lite example galleries into the gitignored cache `packages/conformance/.gallery/`.
  *
- *   pnpm --filter @aster/conformance gallery:fetch              download what is missing, verify everything
- *   pnpm --filter @aster/conformance gallery:fetch -- --verify  verify only (no network)
- *   pnpm --filter @aster/conformance gallery:fetch -- --regenerate   rebuild gallery/manifest.json from the pinned commits
+ *   pnpm --filter @aster-charts/conformance gallery:fetch              download what is missing, verify everything
+ *   pnpm --filter @aster-charts/conformance gallery:fetch -- --verify  verify only (no network)
+ *   pnpm --filter @aster-charts/conformance gallery:fetch -- --regenerate   rebuild gallery/manifest.json from the pinned commits
  *
  * The galleries are NOT committed. `gallery/manifest.json` pins each source by tag AND commit SHA and lists every file with its
  * sha256; files are downloaded from raw.githubusercontent.com at the COMMIT (a tag can move, a SHA cannot) and checked against the

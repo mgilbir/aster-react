@@ -1,5 +1,5 @@
 /**
- * Diff the Vega specs upstream vega-lite.compile and @aster/vl emit for
+ * Diff the Vega specs upstream vega-lite.compile and @aster-charts/vl emit for
  * sweep cases. Usage: npx tsx src/diff-vl.ts <family|case-filter> [limit]
  */
 import * as vl from 'vega-lite'
@@ -7,7 +7,7 @@ import { mkdtempSync, readdirSync, symlinkSync, mkdirSync, rmSync } from 'node:f
 import { tmpdir } from 'node:os'
 import { join, dirname } from 'node:path'
 import { createRequire } from 'node:module'
-import { compile as compileOurs } from '@aster/vl'
+import { compile as compileOurs } from '@aster-charts/vl'
 import { cli } from '../../../scripts/lib/cli.mjs'
 
 cli({ url: import.meta.url, args: '<family|case-filter> [limit]' })

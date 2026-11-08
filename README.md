@@ -16,14 +16,14 @@ Not yet published (see above); these are the commands for the packages once they
 in each package).
 
 ```bash
-npm i @aster/react react react-dom   # React charts: <Chart>, useChart; react ^19 is a peer dependency
-npm i @aster/core                    # no React: renderSpec and the engine (no dependencies)
-npm i @aster/vl                      # only to compile Vega-Lite yourself (no dependencies)
+npm i @aster-charts/react react react-dom   # React charts: <Chart>, useChart; react ^19 is a peer dependency
+npm i @aster-charts/core                    # no React: renderSpec and the engine (no dependencies)
+npm i @aster-charts/vl                      # only to compile Vega-Lite yourself (no dependencies)
 ```
 
-`@aster/react` depends on `@aster/core` and `@aster/vl` itself, so a React app needs only the first line. Install `@aster/core`
-as well when the app imports it directly (for example `@aster/core/dom` or `renderSpec`). Vega-Lite in a React app is opt-in with
-`import '@aster/react/vl'`. `react-dom` is not a declared peer of `@aster/react`; a browser app mounts with it, and server
+`@aster-charts/react` depends on `@aster-charts/core` and `@aster-charts/vl` itself, so a React app needs only the first line. Install `@aster-charts/core`
+as well when the app imports it directly (for example `@aster-charts/core/dom` or `renderSpec`). Vega-Lite in a React app is opt-in with
+`import '@aster-charts/react/vl'`. `react-dom` is not a declared peer of `@aster-charts/react`; a browser app mounts with it, and server
 rendering uses `react-dom/server`.
 
 ## Render a first chart
@@ -31,7 +31,7 @@ rendering uses `react-dom/server`.
 ### Minimal Example
 
 ```ts
-import { renderSpec } from '@aster/core'
+import { renderSpec } from '@aster-charts/core'
 
 const spec = {
   $schema: 'https://vega.github.io/schema/vega/v6.json',
@@ -64,11 +64,11 @@ this README against the built packages and runs the first two.
 
 ### A Vega-Lite spec
 
-`@aster/vl` compiles Vega-Lite to Vega; `renderSpec` draws the result.
+`@aster-charts/vl` compiles Vega-Lite to Vega; `renderSpec` draws the result.
 
 ```ts
-import { renderSpec, type VgSpec } from '@aster/core'
-import { compile } from '@aster/vl'
+import { renderSpec, type VgSpec } from '@aster-charts/core'
+import { compile } from '@aster-charts/vl'
 
 const vegaSpec = compile({
   data: { values: [{ a: 'A', b: 28 }, { a: 'B', b: 55 }, { a: 'C', b: 43 }] },
@@ -83,7 +83,7 @@ const svg = renderSpec(vegaSpec)
 
 ```tsx
 import { useState } from 'react'
-import { Chart, useChart } from '@aster/react'
+import { Chart, useChart } from '@aster-charts/react'
 
 declare const spec: Record<string, unknown> // a Vega spec, as above
 
@@ -111,9 +111,9 @@ export function Headless() {
 
 `limits` (and `renderSpec(spec, { limits })`) gives typed `AsterLimitError` budgets for untrusted specs, including
 a wall-clock deadline (`maxTimeMs`); see [docs/LIMITS.md](docs/LIMITS.md). A headless session is exported as
-`createChartSession` from `@aster/core/dom`.
+`createChartSession` from `@aster-charts/core/dom`.
 
-`<Chart>` also accepts Vega-Lite (opt-in: `import '@aster/react/vl'`), a promise spec under `<Suspense>`, a
+`<Chart>` also accepts Vega-Lite (opt-in: `import '@aster-charts/react/vl'`), a promise spec under `<Suspense>`, a
 controlled `view`/`selection`, and an imperative ref (`ChartHandle`). Pan/zoom, keyboard navigation and the accessible scene
 tree work on SVG and canvas. SSR uses `renderChartToStaticMarkup` + `hydrateChart` when the server `<svg>` node must be
 preserved, and `useChartWorker` offloads compile/evaluate/render when a Worker is available. The full surface is in
@@ -125,7 +125,7 @@ When only some rows change, say which: `dataChanges` maps a dataset name to the 
 same-length replacement of that dataset in `data`.
 
 ```tsx
-import { Chart } from '@aster/react'
+import { Chart } from '@aster-charts/react'
 
 declare const spec: Record<string, unknown>          // your Vega spec
 declare const newRows: Array<Record<string, unknown>> // same length as before, row 1 replaced
@@ -139,7 +139,7 @@ For a push-based feed, `createChartStream` adds a bounded queue with `coalesce` 
 backpressure and an explicit `flush()`:
 
 ```ts
-import { createChartStream, type VgSpec } from '@aster/core'
+import { createChartStream, type VgSpec } from '@aster-charts/core'
 
 declare const spec: VgSpec                              // your Vega spec
 declare const newRows: Array<Record<string, unknown>>
@@ -158,7 +158,7 @@ canvas renderer, interaction and accessibility tree as `<Chart>`. Measurements a
 
 | I want to | Read |
 |---|---|
-| see every export and prop of a package | [docs/API.md](docs/API.md) (start with its "Start here" table), and the package READMEs: [`@aster/core`](packages/core/README.md), [`@aster/react`](packages/react/README.md), [`@aster/vl`](packages/vl/README.md) |
+| see every export and prop of a package | [docs/API.md](docs/API.md) (start with its "Start here" table), and the package READMEs: [`@aster-charts/core`](packages/core/README.md), [`@aster-charts/react`](packages/react/README.md), [`@aster-charts/vl`](packages/vl/README.md) |
 | try it next to real Vega in a browser | [apps/demo/README.md](apps/demo/README.md) (the gallery and playground: run, build, deploy) |
 | render specs I did not write | [docs/LIMITS.md](docs/LIMITS.md) (budgets, the URL policy, what a worker guarantees) |
 | understand an error message | [docs/ERRORS.md](docs/ERRORS.md) (every error class and what survives each failure) |
@@ -178,7 +178,7 @@ canvas renderer, interaction and accessibility tree as `<Chart>`. Measurements a
 ## How It Works
 
 The Vega spec is the canonical intermediate representation. A Vega-Lite spec is first compiled to Vega by
-`@aster/vl`. The Vega pipeline has three phases, all implemented in `@aster/core`:
+`@aster-charts/vl`. The Vega pipeline has three phases, all implemented in `@aster-charts/core`:
 
 1. **Compile**: `compileChart(spec)` turns the Vega JSON into a `CompiledChart` IR (data, scales, transforms, marks, axes, legends, signals).
 2. **Evaluate**: `evaluateChart(chart, input)` resolves the IR against runtime inputs (data rows, size, signals): it runs the
@@ -187,7 +187,7 @@ The Vega spec is the canonical intermediate representation. A Vega-Lite spec is 
    equals a fresh evaluation ([docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#incremental-evaluation)).
 3. **Render**: `renderSceneToSvg(scene)` produces an SVG string that has the structure of `vega-scenegraph`'s SVG renderer
    (classes, roles and ARIA labels included, compared by the conformance gate); the
-   `@aster/core/dom` add-on patches a live `<svg>` instead, and `@aster/core/canvas` paints the same scene to a canvas.
+   `@aster-charts/core/dom` add-on patches a live `<svg>` instead, and `@aster-charts/core/canvas` paints the same scene to a canvas.
 
 Everything below the spec language is owned: the expression parser and CSP-safe interpreter (no `new Function`), scales, ticks
 and colour schemes, number and time formatting, time zones, curves and symbols, geo projections, contours, DSV and TopoJSON
@@ -199,11 +199,11 @@ pinned upstream packages ([docs/TESTING.md](docs/TESTING.md#oracle-vectors)); th
 
 | Path | Description |
 |---------|-------------|
-| `packages/core` (`@aster/core`) | Compiler (spec to IR), runtime (IR to scene), SVG renderer, expression engine, limits. Entry points: `.`, `/addons` (which add-ons a spec needs, loaded on demand), `/dom` (incremental DOM, sessions), `/canvas`, `/hit` (hit testing), `/signals` (event loop), `/load` (URL datasets), `/geo`, `/transforms`. [README](packages/core/README.md). |
-| `packages/react` (`@aster/react`) | `<Chart>` (SVG/canvas, incremental DOM patching, selection, pan/zoom, tooltips, accessibility tree), `useChart`, streaming and worker components and hooks, SSR helpers. Entry points: `.`, `/lite` (SVG-only `<SvgChart>`), `/interaction`, `/ssr`, `/worker`, `/worker-entry`, `/vl` (registers the Vega-Lite compiler). [README](packages/react/README.md). |
-| `packages/vl` (`@aster/vl`) | The Vega-Lite to Vega compiler. Throws `VLCompileError` for what it does not support. [README](packages/vl/README.md). |
-| `packages/conformance` (`@aster/conformance`, private) | The oracle harness: corpus, sweeps, vectors, browser gates, fuzzing, and the [official gallery runs](packages/conformance/gallery/README.md). |
-| `packages/benchmarks` (`@aster/benchmarks`, private) | Runtime, memory, bundle and browser performance harness (`<Chart>` vs react-vega and vega-embed) and the bundle-size budgets: [packages/benchmarks/README.md](packages/benchmarks/README.md). |
+| `packages/core` (`@aster-charts/core`) | Compiler (spec to IR), runtime (IR to scene), SVG renderer, expression engine, limits. Entry points: `.`, `/addons` (which add-ons a spec needs, loaded on demand), `/dom` (incremental DOM, sessions), `/canvas`, `/hit` (hit testing), `/signals` (event loop), `/load` (URL datasets), `/geo`, `/transforms`. [README](packages/core/README.md). |
+| `packages/react` (`@aster-charts/react`) | `<Chart>` (SVG/canvas, incremental DOM patching, selection, pan/zoom, tooltips, accessibility tree), `useChart`, streaming and worker components and hooks, SSR helpers. Entry points: `.`, `/lite` (SVG-only `<SvgChart>`), `/interaction`, `/ssr`, `/worker`, `/worker-entry`, `/vl` (registers the Vega-Lite compiler). [README](packages/react/README.md). |
+| `packages/vl` (`@aster-charts/vl`) | The Vega-Lite to Vega compiler. Throws `VLCompileError` for what it does not support. [README](packages/vl/README.md). |
+| `packages/conformance` (`@aster-charts/conformance`, private) | The oracle harness: corpus, sweeps, vectors, browser gates, fuzzing, and the [official gallery runs](packages/conformance/gallery/README.md). |
+| `packages/benchmarks` (`@aster-charts/benchmarks`, private) | Runtime, memory, bundle and browser performance harness (`<Chart>` vs react-vega and vega-embed) and the bundle-size budgets: [packages/benchmarks/README.md](packages/benchmarks/README.md). |
 | `apps/demo` (private) | A gallery and playground that renders Aster next to Vega: [apps/demo/README.md](apps/demo/README.md) (run, build, deploy). |
 | `scripts/` | The gate list (`gates.mjs`), dependency boundary, publish verification, release guards and their tests. |
 | `.github/workflows/` | `ci.yml` (runs `pnpm check`), `nightly.yml` (sweeps, fuzzing, extra browsers), `release.yml` (tag-triggered, see [docs/RELEASE.md](docs/RELEASE.md)). |
@@ -212,7 +212,7 @@ pinned upstream packages ([docs/TESTING.md](docs/TESTING.md#oracle-vectors)); th
 
 Each list lives in one place; this page only points at them.
 
-- **Vega-Lite features `@aster/vl` refuses:** [packages/vl/README.md](packages/vl/README.md#throws-not-supported), held to the compiler by a test. Each is a `VLCompileError` naming the feature and its path.
+- **Vega-Lite features `@aster-charts/vl` refuses:** [packages/vl/README.md](packages/vl/README.md#throws-not-supported), held to the compiler by a test. Each is a `VLCompileError` naming the feature and its path.
 - **Where Aster deliberately differs from Vega** (including the `retained` cases, where a signal written into a running chart renders the fresh result): [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#deviations-from-vega); the differences made for safety are in [docs/LIMITS.md](docs/LIMITS.md#deviations-from-vega-made-for-safety).
 - **Untrusted specs:** `limits` are best-effort budgets and a killable worker is the hard guarantee (a regular expression, for one, cannot be interrupted in-process); a few built-in ceilings hold even without `limits`. Read [docs/LIMITS.md](docs/LIMITS.md) before rendering specs from untrusted sources.
 - **Open work, word clouds, streaming transport and export:** [docs/ROADMAP.md](docs/ROADMAP.md#2-open-work). PNG and PDF export are out of scope; a host can rasterize the SVG or canvas.
@@ -227,7 +227,7 @@ produced it, are in [docs/TESTING.md](docs/TESTING.md#reference-results) and
 
 - the SVG corpus (1059 specs: 387 Vega, 672 Vega-Lite) renders identically to real Vega under a strict
   canonicalizer: `pnpm conformance` (1059/1059);
-- the same 672 Vega-Lite specs compiled by `@aster/vl` render identically to vega-lite's output: `pnpm conformance-vl` (672/672);
+- the same 672 Vega-Lite specs compiled by `@aster-charts/vl` render identically to vega-lite's output: `pnpm conformance-vl` (672/672);
 - the schema sweeps (one chart per property/value of the schema) have no differences: Vega 7538 ok of 7549 (9 both-refused, 2 the oracle itself crashes on), Vega-Lite 27452 ok of 27513 (47 both-refused, 14 oracle crashes),
   signals 103 ok of 166 (60 `retained`, see [Known gaps](#known-gaps-and-differences-from-vega); 0 differ),
   values 500 ok of 500 (the same specification with awkward cells: `null`, `""`, words, lists, `Infinity` written out; 0 differ);

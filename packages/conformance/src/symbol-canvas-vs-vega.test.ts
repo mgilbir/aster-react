@@ -11,8 +11,8 @@
  */
 import { describe, expect, it } from 'vitest'
 import * as vega from 'vega'
-import { compileChart, evaluateChart } from '@aster/core'
-import { renderSceneToCanvas } from '@aster/core/canvas'
+import { compileChart, evaluateChart } from '@aster-charts/core'
+import { renderSceneToCanvas } from '@aster-charts/core/canvas'
 
 type M = [number, number, number, number, number, number]
 interface Painted { op: 'fill' | 'stroke'; style: string; path: number[][] }

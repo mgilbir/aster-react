@@ -4,7 +4,7 @@
  * topojson via the owned topojson-client port) and provides `loadSpecData`, which resolves every `url`
  * dataset in a spec into inline values:
  *
- *   import { loadSpecData } from '@aster/core/load'
+ *   import { loadSpecData } from '@aster-charts/core/load'
  *   renderSpec(await loadSpecData(spec))
  *
  * Inline JSON values and `format.parse` type coercion work without the addon

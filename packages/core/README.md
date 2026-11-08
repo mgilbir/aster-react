@@ -1,4 +1,4 @@
-# @aster/core
+# @aster-charts/core
 
 A TypeScript Vega rendering engine with no `vega-*`, `d3-*` or `topojson-*` dependency: it compiles a Vega spec to an IR,
 evaluates data, scales and encodes into a renderer-neutral scene, and renders it to SVG (or to a canvas, or to a live DOM,
@@ -8,11 +8,11 @@ Install (version 0.1.0 is not yet published to npm; the command works once the f
 no runtime dependencies and no peer dependencies:
 
 ```bash
-npm i @aster/core
+npm i @aster-charts/core
 ```
 
 ```ts
-import { renderSpec } from '@aster/core'
+import { renderSpec } from '@aster-charts/core'
 
 const spec = {
   width: 200, height: 100,
@@ -23,12 +23,12 @@ const spec = {
 const svg = renderSpec(spec, { limits: { maxTimeMs: 2000 } })
 ```
 
-Vega-Lite input goes through `@aster/vl` (`compile(vlSpec)`) or `<Chart>` from `@aster/react`.
+Vega-Lite input goes through `@aster-charts/vl` (`compile(vlSpec)`) or `<Chart>` from `@aster-charts/react`.
 
-Add-ons (each a separate entry, so a chart pays only for what it imports): `@aster/core/dom` (incremental DOM, sessions),
+Add-ons (each a separate entry, so a chart pays only for what it imports): `@aster-charts/core/dom` (incremental DOM, sessions),
 `/canvas`, `/hit` (hit testing), `/signals` (the `signal.on` event loop), `/load` (URL datasets with a URL policy),
-`/geo` (projections, contours), `/transforms` (the transforms listed in `TRANSFORMS_ADDON_TYPES`, exported from `@aster/core/addons`, such as `pie`, `kde` and `treemap`; and the distribution functions).
-`@aster/core/addons` says which of them a spec needs (`addonsNeeded(spec)`) and imports the missing ones on
+`/geo` (projections, contours), `/transforms` (the transforms listed in `TRANSFORMS_ADDON_TYPES`, exported from `@aster-charts/core/addons`, such as `pie`, `kde` and `treemap`; and the distribution functions).
+`@aster-charts/core/addons` says which of them a spec needs (`addonsNeeded(spec)`) and imports the missing ones on
 demand (`loadAddonsFor(spec)`); the React shells use it, so a spec renders with nothing imported
 ([how add-ons load themselves](https://github.com/mgilbir/aster-react/blob/main/docs/ARCHITECTURE.md#geo-projections--the-add-on-boundary)).
 

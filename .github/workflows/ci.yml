@@ -32,7 +32,7 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Install Playwright Chromium
-        run: pnpm --filter @aster/conformance exec playwright install --with-deps chromium
+        run: pnpm --filter @aster-charts/conformance exec playwright install --with-deps chromium
 
       # The gate list lives in scripts/gates.mjs (single source of truth, also
       # what `pnpm check` runs locally). Do not add gates here; edit that file.
@@ -87,7 +87,7 @@ jobs:
       # differentials against vega, src/gallery/react.ts). Node 20 runs only the jsdom-free differentials.
       - name: Install Playwright Chromium
         if: matrix.node != 20
-        run: pnpm --filter @aster/conformance exec playwright install --with-deps chromium
+        run: pnpm --filter @aster-charts/conformance exec playwright install --with-deps chromium
 
       - name: Setup Node.js ${{ matrix.node }} (test runtime)
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7

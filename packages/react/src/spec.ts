@@ -1,6 +1,6 @@
 import * as React from 'react'
-import type { VgSpec } from '@aster/core'
-import { chartSkeleton } from '@aster/core/dom'
+import type { VgSpec } from '@aster-charts/core'
+import { chartSkeleton } from '@aster-charts/core/dom'
 import { compileVegaLite } from './vl-registry.js'
 
 /** True when the value looks like a Vega-Lite grammar rather than a Vega spec. */
@@ -15,7 +15,7 @@ export function isVegaLiteSpec(spec: VgSpec): boolean {
 /**
  * Normalize either grammar to the Vega spec the engine consumes.
  *
- * Vega-Lite needs the opt-in compiler addon (`import '@aster/react/vl'`); when
+ * Vega-Lite needs the opt-in compiler addon (`import '@aster-charts/react/vl'`); when
  * it is missing this throws an actionable error instead of returning a spec the
  * runtime cannot render.
  */

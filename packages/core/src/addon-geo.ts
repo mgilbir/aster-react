@@ -4,8 +4,8 @@
  * the contour engine into the core registry so that projections, projected
  * `geoshape`, and the `contour` transform work:
  *
- *   import '@aster/core/geo'                 // static
- *   await import('@aster/core/geo')          // lazy
+ *   import '@aster-charts/core/geo'                 // static
+ *   await import('@aster-charts/core/geo')          // lazy
  *
  * It also registers the geo functions of the expression language (geoArea, geoBounds,
  * geoCentroid, geoScale).

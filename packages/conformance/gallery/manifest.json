@@ -1,5 +1,5 @@
 {
-  "note": "Pins and checksums of the official galleries (see README.md). Regenerate with `pnpm --filter @aster/conformance gallery:fetch -- --regenerate` after editing a tag/commit.",
+  "note": "Pins and checksums of the official galleries (see README.md). Regenerate with `pnpm --filter @aster-charts/conformance gallery:fetch -- --regenerate` after editing a tag/commit.",
   "vegaDatasets": "3.2.1",
   "sources": {
     "vega": {

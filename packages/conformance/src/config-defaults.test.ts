@@ -1,5 +1,5 @@
 /**
- * @aster/core's default config and merge rule are copies of vega-parser's
+ * @aster-charts/core's default config and merge rule are copies of vega-parser's
  * `config.js` and vega-util's `mergeConfig`. Copies drift, so the copies are
  * compared with the installed originals.
  */

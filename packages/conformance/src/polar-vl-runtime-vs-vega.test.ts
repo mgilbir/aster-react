@@ -1,13 +1,13 @@
 /**
  * The runtime side of vega-lite's polar charts: the Vega vega-lite itself compiles for theta / radius encodings (a stacked
  * theta, a radius on a sqrt scale that starts at a range minimum, a band-scaled theta, polar text with an angle) renders
- * through the runtime exactly as vega renders it. Whatever @aster/vl emits for these charts, the runtime must draw
+ * through the runtime exactly as vega renders it. Whatever @aster-charts/vl emits for these charts, the runtime must draw
  * vega-lite's Vega like vega does; this holds the runtime to that so a compiler difference is not blamed on it.
  */
 import { describe, expect, it } from 'vitest'
 import * as vega from 'vega'
 import * as vl from 'vega-lite'
-import { renderSpec } from '@aster/core'
+import { renderSpec } from '@aster-charts/core'
 import { canonicalizeSvg, diffCanonical } from './normalize.js'
 
 type Spec = Record<string, unknown>

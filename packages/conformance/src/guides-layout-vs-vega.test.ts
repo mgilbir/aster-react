@@ -4,14 +4,14 @@
  * and the corpus-vega-only drain: each block pins one class
  * of defect over the general shape of the problem (every mark type, every
  * channel, every orient), judged by the strict canonicalizer. They run against
- * the built `@aster/core` (the `build` gate precedes `test`).
+ * the built `@aster-charts/core` (the `build` gate precedes `test`).
  */
 import { describe, expect, it } from 'vitest'
 import * as vega from 'vega'
-import '@aster/core/geo'
-import '@aster/core/transforms'
-import { buildA11yTree, compileChart, evaluateChart, getChartInfo, renderSceneToSvg, renderSpec } from '@aster/core'
-import { renderSceneToDomElement } from '@aster/core/dom'
+import '@aster-charts/core/geo'
+import '@aster-charts/core/transforms'
+import { buildA11yTree, compileChart, evaluateChart, getChartInfo, renderSceneToSvg, renderSpec } from '@aster-charts/core'
+import { renderSceneToDomElement } from '@aster-charts/core/dom'
 import { canonicalizeSvg, diffCanonical } from './normalize.js'
 import { parseSvg, type XmlEl } from './svg-parse.js'
 

@@ -143,7 +143,7 @@ describe('the orientation the compiled marks show', () => {
   const settles = (x: string, y: string) => measure(x) !== measure(y) || (measure(x) && measure(y)) || (x !== 'none' && y !== 'none' && (x === 't') !== (y === 't'))
   for (const mark of ['line', 'tick', 'area', 'bar', 'rule']) {
     it(mark, async () => {
-      const { compile } = await import('@aster/vl')
+      const { compile } = await import('@aster-charts/vl')
       const different: string[] = []
       let looked = 0
       for (const [xName, x] of Object.entries(NATURAL)) {
@@ -181,7 +181,7 @@ describe('the compiler reads the channels as the table does', () => {
   ]
   for (const [name, mk] of CASES) {
     it(name, async () => {
-      const { compile } = await import('@aster/vl')
+      const { compile } = await import('@aster-charts/vl')
       const spec = { data: { values: DATA }, ...mk }
       const ours = compile(JSON.parse(JSON.stringify(spec)))
       const theirs = (vl as any).compile(JSON.parse(JSON.stringify(spec)), { logger: { level: () => null, warn() {}, info() {}, debug() {}, error() {} } }).spec

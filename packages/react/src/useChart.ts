@@ -1,7 +1,7 @@
 import * as React from 'react'
-import { checkSvgLength, renderSceneToSvg, type RuntimeInput, type SceneRoot, type VgSpec } from '@aster/core'
-import { createChartSession } from '@aster/core/dom'
-import type { LoadOptions } from '@aster/core/load'
+import { checkSvgLength, renderSceneToSvg, type RuntimeInput, type SceneRoot, type VgSpec } from '@aster-charts/core'
+import { createChartSession } from '@aster-charts/core/dom'
+import type { LoadOptions } from '@aster-charts/core/load'
 import { normalizeChartSpec, useStableContent, useStableSpec } from './spec.js'
 import { useAddons } from './addons.js'
 
@@ -64,7 +64,7 @@ export function useChart(spec: VgSpec, options: UseChartOptions = {}): UseChartR
 // ---------------------------------------------------------------------------
 
 /**
- * Everything `loadSpecData` takes (`@aster/core/load` `LoadOptions`): `fetch`,
+ * Everything `loadSpecData` takes (`@aster-charts/core/load` `LoadOptions`): `fetch`,
  * `baseURL` (needed for relative urls), `protocols`, `allow`, `allowPrivateNetwork`,
  * `signal`, `timeoutMs`, `maxBytes`, `maxConcurrent`, `maxRedirects` and `limits`.
  * The defaults are the safe ones (public http/https hosts only), so a spec you did
@@ -112,7 +112,7 @@ export function loadSpecDataResource(
   const key = optionsKey(options)
   const cached = RESOURCES.get(spec)
   if (cached && cached.key === key) return cached.promise
-  const promise = import('@aster/core/load').then((mod) =>
+  const promise = import('@aster-charts/core/load').then((mod) =>
     mod.loadSpecData(spec, options),
   )
   RESOURCES.set(spec, { key, promise })
@@ -142,11 +142,11 @@ export function useSpecData(spec: VgSpec, options: UseSpecDataOptions = {}): VgS
 
 /**
  * Explicit async loader (the non-Suspense path). Same addon as
- * `@aster/core/load`, imported lazily so URL datasets do not tax the base
+ * `@aster-charts/core/load`, imported lazily so URL datasets do not tax the base
  * bundle.
  */
 export async function loadSpecData(spec: VgSpec, options: UseSpecDataOptions = {}): Promise<VgSpec> {
-  const mod = await import('@aster/core/load')
+  const mod = await import('@aster-charts/core/load')
   return mod.loadSpecData(spec, options)
 }
 

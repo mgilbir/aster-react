@@ -5,13 +5,13 @@
  * shape of the problem — every mark type, every paint channel, every axis
  * property — not just the one value that first failed.
  *
- * These run against the built `@aster/core` (the `build` gate precedes `test`).
+ * These run against the built `@aster-charts/core` (the `build` gate precedes `test`).
  */
 import { describe, expect, it } from 'vitest'
 import * as vega from 'vega'
-import '@aster/core/geo'
-import '@aster/core/transforms'
-import { renderSpec } from '@aster/core'
+import '@aster-charts/core/geo'
+import '@aster-charts/core/transforms'
+import { renderSpec } from '@aster-charts/core'
 import { canonicalizeSvg, diffCanonical } from './normalize.js'
 
 type Spec = Record<string, unknown>

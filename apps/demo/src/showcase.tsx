@@ -1,8 +1,8 @@
 import * as React from 'react'
-import '@aster/react/vl'
-import '@aster/core/geo'
-import { compile } from '@aster/vl'
-import { Chart } from '@aster/react'
+import '@aster-charts/react/vl'
+import '@aster-charts/core/geo'
+import { compile } from '@aster-charts/vl'
+import { Chart } from '@aster-charts/react'
 import linkedBrush from './showcase/vlx-sel-mv-concat-linked-brush.vl.json'
 import legendPoint from './showcase/vlx-sel-point-legend.vl.json'
 import bindRadio from './showcase/vlx-sel-point-bind-radio.vl.json'
@@ -20,7 +20,7 @@ import datumChannels from './showcase/new-datum-channels.vl.json'
 
 /**
  * Specs from the conformance corpus (packages/conformance/corpus), each one checked against real vega / vega-lite by
- * the gates. Vega-Lite specs go to <Chart> as they are (`@aster/react/vl` compiles them, as an app would); the size is
+ * the gates. Vega-Lite specs go to <Chart> as they are (`@aster-charts/react/vl` compiles them, as an app would); the size is
  * the compiled spec's, as in the selections gate.
  */
 type Spec = Record<string, unknown>

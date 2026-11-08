@@ -7,7 +7,7 @@
  */
 import { describe, expect, it } from 'vitest'
 import * as vega from 'vega'
-import { renderSpec } from '@aster/core'
+import { renderSpec } from '@aster-charts/core'
 import { canonicalizeSvg, diffCanonical } from './normalize.js'
 import { compareBounds } from './mark-bounds-oracle.js'
 import { INTERPOLATES, MARK_KINDS, markCase, type MarkKind } from './mark-cases.js'

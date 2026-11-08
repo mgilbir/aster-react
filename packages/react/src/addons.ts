@@ -1,7 +1,7 @@
 /**
  * Add-on auto-load for the React shells and hooks.
  *
- * A spec that needs an opt-in add-on (`@aster/core/transforms`, `/geo`, `/load`; see `@aster/core/addons`) renders with
+ * A spec that needs an opt-in add-on (`@aster-charts/core/transforms`, `/geo`, `/load`; see `@aster-charts/core/addons`) renders with
  * nothing imported by the app. The shells read what the spec needs, import it, and render when it is there.
  *
  * The wait is a React Suspense wait (`use`), the same one an async `spec` and `useSpecData` already use: a <Suspense>
@@ -14,8 +14,8 @@
  * same promise again and a fresh one per ask would never settle (and browsers keep a failed module fetch anyway).
  */
 import * as React from 'react'
-import type { VgSpec } from '@aster/core'
-import { addonsNeeded, loadAddons, notLoaded, type AddonName } from '@aster/core/addons'
+import type { VgSpec } from '@aster-charts/core'
+import { addonsNeeded, loadAddons, notLoaded, type AddonName } from '@aster-charts/core/addons'
 
 /** One promise per set of add-ons: what resolves to `null` (loaded) or the error that stopped it. */
 const settled = new Map<string, Promise<Error | null>>()
@@ -43,4 +43,4 @@ export function useAddons(spec: VgSpec | null): Error | null {
 }
 const NO_ADDONS: readonly AddonName[] = []
 
-export { loadAddonsFor } from '@aster/core/addons'
+export { loadAddonsFor } from '@aster-charts/core/addons'

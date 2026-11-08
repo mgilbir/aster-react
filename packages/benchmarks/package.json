@@ -1,5 +1,5 @@
 {
-  "name": "@aster/benchmarks",
+  "name": "@aster-charts/benchmarks",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -19,8 +19,8 @@
     "bench:browser-stream": "tsx scripts/browser-stream.bench.mjs"
   },
   "dependencies": {
-    "@aster/core": "workspace:*",
-    "@aster/react": "workspace:*"
+    "@aster-charts/core": "workspace:*",
+    "@aster-charts/react": "workspace:*"
   },
   "devDependencies": {
     "@types/jsdom": "^30.0.0",

@@ -53,7 +53,7 @@ export type SvgChartBaseProps = Pick<ChartProps, Shared>
 export type SvgChartInteractionProps = Pick<ChartProps, InteractionOnly>
 
 /**
- * `<SvgChart>` props: a discriminated union on `interaction`. Pass it (from `@aster/react/interaction`)
+ * `<SvgChart>` props: a discriminated union on `interaction`. Pass it (from `@aster-charts/react/interaction`)
  * and every interaction prop is available; omit it and they are `never`, so using one is a compile error.
  */
 export type SvgChartProps = SvgChartBaseProps & (

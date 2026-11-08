@@ -38,8 +38,8 @@ async function main(): Promise<void> {
   const changedPct = Number(arg('changed', '1'))
   const warmup = 2
 
-  const { compileChart, evaluateChart } = await import('@aster/core')
-  const { patchSceneDom, renderSceneToDomElement } = await import('@aster/core/dom')
+  const { compileChart, evaluateChart } = await import('@aster-charts/core')
+  const { patchSceneDom, renderSceneToDomElement } = await import('@aster-charts/core/dom')
   const { setupJsdom } = await import('./jsdom-env.js')
   setupJsdom()
 

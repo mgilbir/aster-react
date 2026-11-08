@@ -1,4 +1,4 @@
-# @aster/demo
+# @aster-charts/demo
 
 A single-page gallery and playground that renders Aster next to the official Vega toolchain. It is the fastest way to see the
 project work. The package is private (`"private": true`) and is not published to npm.
@@ -6,7 +6,7 @@ project work. The package is private (`"private": true`) and is not published to
 ## What it shows
 
 Every comparison card feeds the same spec to both engines: the official `vega-embed` on the left (loaded lazily, so the Aster
-column paints first), `<Chart>` from `@aster/react` on the right. Vega-Lite specs are compiled by `@aster/vl` for both columns.
+column paints first), `<Chart>` from `@aster-charts/react` on the right. Vega-Lite specs are compiled by `@aster-charts/vl` for both columns.
 
 The page (`src/App.tsx`) has these sections:
 
@@ -23,12 +23,12 @@ computed from a run and are not checked by any gate, so treat the repository doc
 
 ## Run it
 
-From the repository root, after `pnpm install`. The demo imports `@aster/core`, `@aster/react` and `@aster/vl` through their
+From the repository root, after `pnpm install`. The demo imports `@aster-charts/core`, `@aster-charts/react` and `@aster-charts/vl` through their
 `exports`, which point at `dist`, so build the packages first:
 
 ```bash
 pnpm build
-pnpm --filter @aster/demo dev
+pnpm --filter @aster-charts/demo dev
 ```
 
 Vite serves the app at <http://localhost:5173/>. After a change to a package source, run `pnpm build` again: the dev server reads
@@ -38,10 +38,10 @@ Other scripts of the package:
 
 | Command | What it does |
 |---|---|
-| `pnpm --filter @aster/demo typecheck` | `tsc -p tsconfig.json --noEmit` |
-| `pnpm --filter @aster/demo build` | rebuilds `@aster/react` (`tsc`), then `vite build` into `apps/demo/dist` (ignored by git) |
+| `pnpm --filter @aster-charts/demo typecheck` | `tsc -p tsconfig.json --noEmit` |
+| `pnpm --filter @aster-charts/demo build` | rebuilds `@aster-charts/react` (`tsc`), then `vite build` into `apps/demo/dist` (ignored by git) |
 
-`build` rebuilds only `@aster/react`; `@aster/core` and `@aster/vl` must already be built (`pnpm build` at the root does all three).
+`build` rebuilds only `@aster-charts/react`; `@aster-charts/core` and `@aster-charts/vl` must already be built (`pnpm build` at the root does all three).
 
 ## Build and deployment
 

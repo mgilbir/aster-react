@@ -1,36 +1,36 @@
-# @aster/vl
+# @aster-charts/vl
 
 A from-scratch Vega-Lite → Vega compiler verified against the vega-lite oracle by
 rendering parity.
 
 Install (version 0.1.0 is not yet published to npm; the command works once the first release is tagged). Node 20 or newer;
-no runtime dependencies and no peer dependencies (render the compiled spec with `@aster/core`, or let `@aster/react` compile it):
+no runtime dependencies and no peer dependencies (render the compiled spec with `@aster-charts/core`, or let `@aster-charts/react` compile it):
 
 ```bash
-npm i @aster/vl
+npm i @aster-charts/vl
 ```
 
 Use it directly:
 
 ```ts
-import { compile } from '@aster/vl'
+import { compile } from '@aster-charts/vl'
 
 const vegaLiteSpec = {
   data: { values: [{ a: 'A', b: 28 }, { a: 'B', b: 55 }] },
   mark: 'bar',
   encoding: { x: { field: 'a', type: 'nominal' }, y: { field: 'b', type: 'quantitative' } },
 }
-const vegaSpec = compile(vegaLiteSpec) // a Vega spec; renderSpec(vegaSpec) from @aster/core draws it
+const vegaSpec = compile(vegaLiteSpec) // a Vega spec; renderSpec(vegaSpec) from @aster-charts/core draws it
 ```
 
 or let `<Chart>`/`useChart` do it by registering the add-on once:
 
 ```ts
-import '@aster/react/vl'
+import '@aster-charts/react/vl'
 ```
 
-`@aster/react` is Vega-only by default; the add-on is the opt-in boundary, mirroring `@aster/core/dom` and
-`@aster/core/transforms` (its size is in [docs/PERFORMANCE.md](https://github.com/mgilbir/aster-react/blob/main/docs/PERFORMANCE.md#bundle-sizes)).
+`@aster-charts/react` is Vega-only by default; the add-on is the opt-in boundary, mirroring `@aster-charts/core/dom` and
+`@aster-charts/core/transforms` (its size is in [docs/PERFORMANCE.md](https://github.com/mgilbir/aster-react/blob/main/docs/PERFORMANCE.md#bundle-sizes)).
 
 ## Contract
 
@@ -76,7 +76,7 @@ an expression or a generated dataset/signal/scale name.
 - Custom format types (`formatType`, `config.customFormatTypes`, `numberFormatType`,
   `normalizedNumberFormatType`, `timeFormatType`): as vega-lite, a call of the expression function of that
   name (`price(datum["v"], "$.2f")`; axes and legends carry it in a labels encode). Register the function
-  with `registerExpressionFunction` from `@aster/core` (and with vega's `expressionFunction` for vega). A
+  with `registerExpressionFunction` from `@aster-charts/core` (and with vega's `expressionFunction` for vega). A
   custom type is dropped, with its `format`, unless `customFormatTypes` is true (a facet header's is not).
 - Explicit scale domains: arrays (numbers, strings, DateTime objects, `{expr}` / `{signal}` entries; a
   temporal field's become `{data: datetime(...)}` signals) with vega-lite's `zero` / `nice` rules, on
@@ -116,7 +116,7 @@ an expression or a generated dataset/signal/scale name.
   (`empty`) and predicates in `test`, `filter` (and, or, not) and `lookup.from`; `scale.domain` as `{param}` /
   `{unionWith}`; variable parameters (`value`, `expr`, `bind`, `react`). Projections over a bin or a time unit work as
   in vega-lite. A selection's state is its `<name>_store` dataset and the `<name>` signal, exactly as in vega-lite.
-  `nearest` needs the transforms add-on (`import '@aster/core/transforms'`) for its voronoi cells. The interaction
+  `nearest` needs the transforms add-on (`import '@aster-charts/core/transforms'`) for its voronoi cells. The interaction
   needs the signal event loop (`<Chart>`, or `<SvgChart interaction>`): see [docs/INTERACTION.md](https://github.com/mgilbir/aster-react/blob/main/docs/INTERACTION.md). In a composition a unit's
   signals are its group mark's (a Vega group scope: one copy per view or facet cell, `push: "outer"` for the signals that
   feed a bound scale, the `facet` signal in a facet's cells), and the named selection, its store and `unit` stay at the root.

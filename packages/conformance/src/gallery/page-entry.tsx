@@ -2,7 +2,7 @@
  * The browser page of the gallery gate (bundled by react.ts). One function, `window.__runGallery(spec)`, which for ONE gallery spec
  *
  *   - renders it with real vega (vega-lite compiles first for Vega-Lite) in this Chromium: the oracle, with live canvas text metrics;
- *   - mounts <Chart> from @aster/react the way an app would: the Vega-Lite compiler registered through `@aster/react/vl`,
+ *   - mounts <Chart> from @aster-charts/react the way an app would: the Vega-Lite compiler registered through `@aster-charts/react/vl`,
  *     NO add-on imported (geo, transforms and the data readers are loaded by <Chart>/`loadSpecData` themselves, on demand, and the
  *     page checks that each spec loaded exactly what it needs), URL data supplied through `loadSpecData`, NO size props unless the
  *     (compiled) spec has numeric top-level width/height (then those exact numbers), in a 600 x 400 host;
@@ -15,9 +15,9 @@ import * as React from 'react'
 import { createRoot } from 'react-dom/client'
 import * as vega from 'vega'
 import * as vl from 'vega-lite'
-import '@aster/react/vl'
-import { Chart, loadSpecData, normalizeChartSpec } from '@aster/react'
-import { addonsNeeded, isAddonLoaded, type AddonName } from '@aster/core/addons'
+import '@aster-charts/react/vl'
+import { Chart, loadSpecData, normalizeChartSpec } from '@aster-charts/react'
+import { addonsNeeded, isAddonLoaded, type AddonName } from '@aster-charts/core/addons'
 import { summarizeDiffs } from './diffs.js'
 import { seededRandom, withOracleRandom } from './seeded.js'
 import { canonicalizeSvg, diffCanonical } from '../normalize.js'
@@ -25,7 +25,7 @@ import { canonicalizeSvg, diffCanonical } from '../normalize.js'
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = false
 
 const BASE = 'https://gallery.invalid/'
-/** The policy of a host that loads its own trusted specs (what `TRUSTED_LOAD_OPTIONS` of `@aster/core/load` says, which a page that imports no add-on does not import). */
+/** The policy of a host that loads its own trusted specs (what `TRUSTED_LOAD_OPTIONS` of `@aster-charts/core/load` says, which a page that imports no add-on does not import). */
 const TRUSTED = { protocols: ['http:', 'https:', 'data:'], allow: () => true, allowPrivateNetwork: true }
 /** What the host gives <Chart> for vega's loader `baseURL`: relative image urls resolve against it (the oracle's loader has the same base). */
 const URL_POLICY = { baseURL: BASE }

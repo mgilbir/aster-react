@@ -11,7 +11,7 @@
 import { describe, it, expect } from 'vitest'
 import * as vega from 'vega'
 import * as vl from 'vega-lite'
-import { compile } from '@aster/vl'
+import { compile } from '@aster-charts/vl'
 import { TIME_DATA, silent } from './vl-time-helpers.js'
 
 type Obj = Record<string, unknown>

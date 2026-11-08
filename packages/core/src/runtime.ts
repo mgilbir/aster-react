@@ -2684,7 +2684,7 @@ function buildDatasetsOf(ctx: EvalContext, inputData: Record<string, unknown[]>)
         // hint why: fail loudly and say how to fix it.
         throw new Error(
           `[aster] dataset "${name}" has a url but no data was loaded for it; resolve url datasets first: ` +
-          `import { loadSpecData } from "@aster/core/load" and render await loadSpecData(spec, { baseURL, ... }), ` +
+          `import { loadSpecData } from "@aster-charts/core/load" and render await loadSpecData(spec, { baseURL, ... }), ` +
           `or pass the rows as input.data["${name}"]`,
         )
       }

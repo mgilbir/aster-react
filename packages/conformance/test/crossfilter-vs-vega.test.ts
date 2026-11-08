@@ -6,8 +6,8 @@
  * and the render of a gallery-shaped chart (group-scoped resolved datasets, binned and aggregated).
  */
 import { describe, it, expect } from 'vitest'
-import '@aster/core/transforms'
-import { renderSpec, evaluateChart, compileChart, datasetsOfScene } from '@aster/core'
+import '@aster-charts/core/transforms'
+import { renderSpec, evaluateChart, compileChart, datasetsOfScene } from '@aster-charts/core'
 import { renderWithVegaChecked } from '../src/render-vega.js'
 import { canonicalizeSvg, diffCanonical } from '../src/normalize.js'
 

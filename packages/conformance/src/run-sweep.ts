@@ -2,7 +2,7 @@
  * Schema-sweep runner (ported from the Go aster project's sweep tests).
  *
  * For every (property, value) pair Vega's own schema declares, render one small
- * chart through upstream vega (oracle) and through @aster/core, and compare the
+ * chart through upstream vega (oracle) and through @aster-charts/core, and compare the
  * SVG. A value upstream refuses is still a case: "both refuse" is agreement.
  *
  * Usage: npx tsx src/run-sweep.ts <sweep-name> --floor N --min-ok N --max-node-error N [--max-retained N] [--filter substr] [--vega-check]
@@ -22,7 +22,7 @@
  * Every generated case carries its chart as `spec` (an object) or `specText` (JSON text, for a chart with a value JSON.stringify
  * cannot write, a negative zero); a case with neither fails the run before anything is rendered.
  *
- * --vega-check (Vega-Lite cases only): additionally render the Vega that @aster/vl EMITS through REAL
+ * --vega-check (Vega-Lite cases only): additionally render the Vega that @aster-charts/vl EMITS through REAL
  * vega; a case where real vega errors, warns (beyond what vega-lite's own output raises) or renders
  * something different from vega-lite's output counts as 'vega-differ' and fails the run. Aster's runtime
  * is lenient, so without this flag an invalid emitted spec can still look "ok".
@@ -33,12 +33,12 @@ import { join, dirname } from 'node:path'
 import { createRequire } from 'node:module'
 import * as vega from 'vega'
 import * as vl from 'vega-lite'
-import '@aster/core/geo'
-import '@aster/core/transforms'
-import { renderSpec, renderSceneToSvg } from '@aster/core'
-import { createChartSession } from '@aster/core/dom'
-import { loadSpecData, TRUSTED_LOAD_OPTIONS } from '@aster/core/load'
-import { compile as compileVL } from '@aster/vl'
+import '@aster-charts/core/geo'
+import '@aster-charts/core/transforms'
+import { renderSpec, renderSceneToSvg } from '@aster-charts/core'
+import { createChartSession } from '@aster-charts/core/dom'
+import { loadSpecData, TRUSTED_LOAD_OPTIONS } from '@aster-charts/core/load'
+import { compile as compileVL } from '@aster-charts/vl'
 import { renderWithVega, renderWithVegaChecked } from './render-vega.js'
 import { canonicalizeSvg, diffCanonical } from './normalize.js'
 import { cli } from '../../../scripts/lib/cli.mjs'
@@ -191,12 +191,12 @@ async function renderOracleFresh(vgSpec: Record<string, unknown>, writes: NonNul
   }
 }
 
-/** --vega-check: also render the Vega @aster/vl EMITS through real vega (see the header). */
+/** --vega-check: also render the Vega @aster-charts/vl EMITS through real vega (see the header). */
 let vegaCheck = false
 
 async function runOneCase(c: SweepCase, nodeModules: string): Promise<'ok' | 'retained' | 'both-refused' | 'node-error' | 'engine-error' | 'differ' | 'nondeterministic' | 'vega-differ'> {
   // Vega-Lite cases compare the compiled Vega: upstream vl.compile vs
-  // @aster/vl, each rendered through its own engine (a VL defect lives in
+  // @aster-charts/vl, each rendered through its own engine (a VL defect lives in
   // the spec it emits — see the sweep's header note).
   let vgSpec = c.spec as Record<string, unknown>
   let ourVgSpec = (c.ourSpec ?? c.spec) as Record<string, unknown>

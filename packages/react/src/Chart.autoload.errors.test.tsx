@@ -16,15 +16,15 @@ import { describe, it, expect, afterEach, vi } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import type { VgSpec } from '@aster/core'
-import { isAddonLoaded, loadAddons } from '@aster/core/addons'
+import type { VgSpec } from '@aster-charts/core'
+import { isAddonLoaded, loadAddons } from '@aster-charts/core/addons'
 import { forEachVariant } from './testing/variants'
 import { ignoreSuspendedActWarning } from './testing/quiet'
 
 ignoreSuspendedActWarning()
 
-vi.mock('@aster/core/addons', async (importOriginal) => {
-  const real = await importOriginal<typeof import('@aster/core/addons')>()
+vi.mock('@aster-charts/core/addons', async (importOriginal) => {
+  const real = await importOriginal<typeof import('@aster-charts/core/addons')>()
   return { ...real, loadAddons: vi.fn(real.loadAddons) }
 })
 
@@ -82,7 +82,7 @@ forEachVariant(['svg'], (Chart) => {
     it('is reported once through onError, after the wait, and the chart does not throw', async () => {
       // geo cannot be loaded for real in this realm yet (it is the premise: nothing registered), so its import is made to fail
       expect(isAddonLoaded('geo')).toBe(false)
-      if (!importAttempted) vi.mocked(loadAddons).mockImplementation(() => Promise.reject(new Error('[aster] could not load the "geo" add-on (@aster/core/geo): offline')))
+      if (!importAttempted) vi.mocked(loadAddons).mockImplementation(() => Promise.reject(new Error('[aster] could not load the "geo" add-on (@aster-charts/core/geo): offline')))
       const { container, errors, settled } = mount(MAP)
       if (!importAttempted) {
         // before the import settles: the fallback, and no error (nothing flashes)
@@ -92,7 +92,7 @@ forEachVariant(['svg'], (Chart) => {
       importAttempted = true
       await settled
       for (let i = 0; i < 20 && errors.length === 0; i++) await act(async () => { await new Promise((r) => setTimeout(r, 5)) })
-      expect(errors.map((e) => e.message)).toEqual(['[aster] could not load the "geo" add-on (@aster/core/geo): offline'])
+      expect(errors.map((e) => e.message)).toEqual(['[aster] could not load the "geo" add-on (@aster-charts/core/geo): offline'])
       expect(container.querySelector('[data-testid="fallback"]')).toBeNull()
       expect(container.querySelector('svg')).toBeNull()
       // a re-render with the same failed spec does not report it again

@@ -11,8 +11,8 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import * as vega from 'vega'
-import '@aster/core/geo'
-import { AsterLimitError, checkSpecLimits, compileChart, renderSpec, SpecParseError } from '@aster/core'
+import '@aster-charts/core/geo'
+import { AsterLimitError, checkSpecLimits, compileChart, renderSpec, SpecParseError } from '@aster-charts/core'
 import { canonicalizeSvg, diffCanonical } from './normalize.js'
 
 type Spec = Record<string, unknown>

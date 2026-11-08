@@ -4,7 +4,7 @@
  * channels paint its box. Both renderers of a scene (SVG string and DOM tree) and the canvas draw it.
  */
 import { describe, it, expect } from 'vitest'
-import { renderSpec } from '@aster/core'
+import { renderSpec } from '@aster-charts/core'
 import { renderWithVegaChecked } from '../src/render-vega.js'
 import { canonicalizeSvg, diffCanonical } from '../src/normalize.js'
 

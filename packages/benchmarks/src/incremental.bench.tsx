@@ -68,7 +68,7 @@ async function main(): Promise<void> {
   const minReplace = floorOf('min-replace', 8)
   const minDom = floorOf('min-dom', 1.6)
 
-  const { compileChart, evaluateChart, createChartStream, renderSceneToSvg } = await import('@aster/core')
+  const { compileChart, evaluateChart, createChartStream, renderSceneToSvg } = await import('@aster-charts/core')
 
   const rows = (n: number, from = 0): Array<{ x: number; y: number }> =>
     Array.from({ length: n }, (_, i) => {
@@ -204,7 +204,7 @@ async function main(): Promise<void> {
   // Whole-array replacement (the `<Chart data={next}>` path): the host passes a
   // brand-new array with no explicit changes, and the session infers the pulse
   // by diffing rows. This is the common React data-prop shape, so gate it too.
-  const { createChartSession } = await import('@aster/core/dom')
+  const { createChartSession } = await import('@aster-charts/core/dom')
   const session = createChartSession()
   let current = rows(points)
   session.evaluate(spec as never, { data: { t: current } })
@@ -270,7 +270,7 @@ async function main(): Promise<void> {
   // DOM path: patch the persistent <svg> vs re-serialize/replace the full SVG.
   // jsdom patching is slower than a browser, but the relative cost is the point.
   const { setupJsdom } = await import('./jsdom-env.js')
-  const { patchSceneDom } = await import('@aster/core/dom')
+  const { patchSceneDom } = await import('@aster-charts/core/dom')
   setupJsdom()
   const domPoints = Math.min(points, 4000)
   const domReps = Math.min(reps, 30)

@@ -1,5 +1,5 @@
 /**
- * LIVE differential for the timer scheduler: `@aster/core`'s port (core/src/timer.ts) and the real d3-timer vega-view
+ * LIVE differential for the timer scheduler: `@aster-charts/core`'s port (core/src/timer.ts) and the real d3-timer vega-view
  * runs its `timer` event streams on, driven through the SAME virtual clock model and the same operations (start a
  * timer / interval with a delay and optional start time, restart it, stop it), must call back at the same instants
  * with the same `elapsed`. The oracle is imported fresh per scenario with the host globals (performance, timeouts,

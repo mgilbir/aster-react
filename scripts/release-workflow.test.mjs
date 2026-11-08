@@ -113,7 +113,7 @@ describe('scripts/check-release-tag.mjs', () => {
     const dir = mkdtempSync(join(tmp, 'r-'))
     for (const [pkg, version] of Object.entries(versions)) {
       mkdirSync(join(dir, 'packages', pkg), { recursive: true })
-      writeFileSync(join(dir, 'packages', pkg, 'package.json'), JSON.stringify({ name: `@aster/${pkg}`, version }))
+      writeFileSync(join(dir, 'packages', pkg, 'package.json'), JSON.stringify({ name: `@aster-charts/${pkg}`, version }))
     }
     return dir
   }

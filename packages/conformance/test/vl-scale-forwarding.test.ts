@@ -12,7 +12,7 @@
  */
 import { describe, it, expect } from 'vitest'
 import * as vl from 'vega-lite'
-import { compile } from '@aster/vl'
+import { compile } from '@aster-charts/vl'
 
 const silent: any = { level: () => silent, warn: () => silent, info: () => silent, debug: () => silent, error: () => silent }
 const DATA = Array.from({ length: 40 }, (_, i) => ({ q: (i * 7) % 13 + 1, q2: (i * 3) % 11 + 2, n: 'ABCD'[i % 4], o: i % 5, t: `2020-0${1 + (i % 9)}-1${i % 9}`, g: 'pq'[i % 2] }))

@@ -6,30 +6,30 @@ The public surface of the three Aster packages: what each entry point exports, w
 
 | I want to | Import | Read |
 |---|---|---|
-| render a Vega spec to an SVG string, with no React | `renderSpec` from `@aster/core` | [Render a Vega spec](#render-a-vega-spec) |
-| show a chart in a React app | `Chart` from `@aster/react` | [`<Chart>`](#chart) |
-| use a Vega-Lite spec | `import '@aster/react/vl'` once (React), or `compile` from `@aster/vl` | [`<Chart>`](#chart), [`@aster/vl`](#astervl) |
-| ship the smallest React bundle | `SvgChart` from `@aster/react/lite` (and `interaction` from `@aster/react/interaction` for tooltips and `signal.on`) | [`<SvgChart>`](#svgchart-and-the-interaction-capability) |
-| get the scene or the SVG without a component | `useChart` from `@aster/react` | [Hooks](#hooks) |
-| update a chart as data arrives | `ChartStream` from `@aster/react`, or `createChartStream` from `@aster/core` | [Streaming and pulses](#streaming-and-pulses), [Streaming components](#streaming-components) |
-| update a chart when only some rows changed | `createChartSession` from `@aster/core/dom`, or the `dataChanges` prop | [Sessions and per-datum updates](#sessions-and-per-datum-updates) |
-| keep rendering off the main thread | `useChartWorker` from `@aster/react`, and `@aster/react/worker-entry` in the worker | [Workers](#workers) |
-| render on the server and hydrate | `renderChartToStaticMarkup`, `hydrateChart` from `@aster/react` (or `@aster/react/ssr`) | [SSR + hydration](#ssr--hydration) |
+| render a Vega spec to an SVG string, with no React | `renderSpec` from `@aster-charts/core` | [Render a Vega spec](#render-a-vega-spec) |
+| show a chart in a React app | `Chart` from `@aster-charts/react` | [`<Chart>`](#chart) |
+| use a Vega-Lite spec | `import '@aster-charts/react/vl'` once (React), or `compile` from `@aster-charts/vl` | [`<Chart>`](#chart), [`@aster-charts/vl`](#aster-chartsvl) |
+| ship the smallest React bundle | `SvgChart` from `@aster-charts/react/lite` (and `interaction` from `@aster-charts/react/interaction` for tooltips and `signal.on`) | [`<SvgChart>`](#svgchart-and-the-interaction-capability) |
+| get the scene or the SVG without a component | `useChart` from `@aster-charts/react` | [Hooks](#hooks) |
+| update a chart as data arrives | `ChartStream` from `@aster-charts/react`, or `createChartStream` from `@aster-charts/core` | [Streaming and pulses](#streaming-and-pulses), [Streaming components](#streaming-components) |
+| update a chart when only some rows changed | `createChartSession` from `@aster-charts/core/dom`, or the `dataChanges` prop | [Sessions and per-datum updates](#sessions-and-per-datum-updates) |
+| keep rendering off the main thread | `useChartWorker` from `@aster-charts/react`, and `@aster-charts/react/worker-entry` in the worker | [Workers](#workers) |
+| render on the server and hydrate | `renderChartToStaticMarkup`, `hydrateChart` from `@aster-charts/react` (or `@aster-charts/react/ssr`) | [SSR + hydration](#ssr--hydration) |
 | render specs from untrusted sources | the `limits` and `urlPolicy` inputs, and a worker | [RuntimeInput](#runtimeinput), [LIMITS.md](LIMITS.md) |
-| load a spec's `url` datasets | `loadSpecData` from `@aster/core/load`, or `useSpecData` in React | [`@aster/core/load`](#astercoreload) |
-| call my own function from an expression | `registerExpressionFunction` from `@aster/core` | [Custom expression functions](#custom-expression-functions) |
+| load a spec's `url` datasets | `loadSpecData` from `@aster-charts/core/load`, or `useSpecData` in React | [`@aster-charts/core/load`](#aster-chartscoreload) |
+| call my own function from an expression | `registerExpressionFunction` from `@aster-charts/core` | [Custom expression functions](#custom-expression-functions) |
 
 ## Contents
 
 - [Packages and entry points](#packages-and-entry-points)
-- [`@aster/core`](#astercore)
+- [`@aster-charts/core`](#aster-chartscore)
   - Guides: [Render a Vega spec](#render-a-vega-spec), [Sessions and per-datum updates](#sessions-and-per-datum-updates), [Custom expression functions](#custom-expression-functions), [Streaming and pulses](#streaming-and-pulses)
   - Reference: [RuntimeInput](#runtimeinput), [The pipeline steps](#the-pipeline-steps), [Locales](#locales), [Text metrics](#text-metrics), [Logger](#logger), [Pointer position and cursor](#pointer-position-and-cursor), [Building blocks](#building-blocks), [Limit checks](#limit-checks), [Typed errors](#typed-errors), [Accessibility tree](#accessibility-tree)
-  - Add-on entry points: [`/hit`](#astercorehit), [`/signals`](#astercoresignals), [`/addons`](#astercoreaddons), [`/dom`](#astercoredom), [`/canvas`](#astercorecanvas), [`/load`](#astercoreload), [`/geo` and `/transforms`](#astercoregeo-and-astercoretransforms), [an example](#example-hit-testing-a-scene)
-- [`@aster/react`](#asterreact)
+  - Add-on entry points: [`/hit`](#aster-chartscorehit), [`/signals`](#aster-chartscoresignals), [`/addons`](#aster-chartscoreaddons), [`/dom`](#aster-chartscoredom), [`/canvas`](#aster-chartscorecanvas), [`/load`](#aster-chartscoreload), [`/geo` and `/transforms`](#aster-chartscoregeo-and-aster-chartscoretransforms), [an example](#example-hit-testing-a-scene)
+- [`@aster-charts/react`](#aster-chartsreact)
   - Components and hooks: [`<Chart>`](#chart), [`<SvgChart>` and the `interaction` capability](#svgchart-and-the-interaction-capability), [Hooks](#hooks), [Streaming components](#streaming-components), [Workers](#workers), [SSR + hydration](#ssr--hydration)
   - Reference: [Registry and session re-exports](#registry-and-session-re-exports), [Pan, zoom and selection helpers](#pan-zoom-and-selection-helpers), [Accessibility keyboard contract](#accessibility-keyboard-contract)
-- [`@aster/vl`](#astervl): [Compile a Vega-Lite spec](#compile-a-vega-lite-spec), [Maps and animation](#maps-and-animation)
+- [`@aster-charts/vl`](#aster-chartsvl): [Compile a Vega-Lite spec](#compile-a-vega-lite-spec), [Maps and animation](#maps-and-animation)
 
 ## Packages and entry points
 
@@ -37,28 +37,28 @@ Aster ships three public packages:
 
 | Package | Entry | Purpose |
 |---|---|---|
-| `@aster/core` | `@aster/core` | compile/evaluate/render a Vega spec to SVG; limits, streams, a11y tree |
-| `@aster/core/…` | `/addons`, `/dom`, `/canvas`, `/hit`, `/signals`, `/load`, `/geo`, `/transforms` | `/addons` says which add-ons a spec needs and loads them on demand; the others are opt-in add-ons (tree-shaking boundaries) |
-| `@aster/react` | `@aster/react` | `<Chart>`, `useChart`, streams, SSR/hydration, worker hooks |
-| `@aster/react/…` | `/lite`, `/interaction`, `/vl`, `/worker`, `/worker-entry`, `/ssr` | `/lite` is the SVG-only `<SvgChart>`; `/interaction` is the `interaction` capability that adds tooltips, point selection and `signal.on` streams to it; `/vl` registers the Vega-Lite compiler (and exports `compile`, `isVegaLiteSpec`, `normalizeChartSpec`); `/worker` has the worker registries and protocol; `/worker-entry` is a ready worker script; `/ssr` is the string/hydration pair |
-| `@aster/vl` | `@aster/vl` | from-scratch Vega-Lite → Vega compiler |
+| `@aster-charts/core` | `@aster-charts/core` | compile/evaluate/render a Vega spec to SVG; limits, streams, a11y tree |
+| `@aster-charts/core/…` | `/addons`, `/dom`, `/canvas`, `/hit`, `/signals`, `/load`, `/geo`, `/transforms` | `/addons` says which add-ons a spec needs and loads them on demand; the others are opt-in add-ons (tree-shaking boundaries) |
+| `@aster-charts/react` | `@aster-charts/react` | `<Chart>`, `useChart`, streams, SSR/hydration, worker hooks |
+| `@aster-charts/react/…` | `/lite`, `/interaction`, `/vl`, `/worker`, `/worker-entry`, `/ssr` | `/lite` is the SVG-only `<SvgChart>`; `/interaction` is the `interaction` capability that adds tooltips, point selection and `signal.on` streams to it; `/vl` registers the Vega-Lite compiler (and exports `compile`, `isVegaLiteSpec`, `normalizeChartSpec`); `/worker` has the worker registries and protocol; `/worker-entry` is a ready worker script; `/ssr` is the string/hydration pair |
+| `@aster-charts/vl` | `@aster-charts/vl` | from-scratch Vega-Lite → Vega compiler |
 
-`@aster/core` takes Vega specs only. Vega-Lite goes through `@aster/vl` (or `@aster/react/vl`).
+`@aster-charts/core` takes Vega specs only. Vega-Lite goes through `@aster-charts/vl` (or `@aster-charts/react/vl`).
 
-Each package also has a README with its install line and a first example: [`@aster/core`](../packages/core/README.md),
-[`@aster/react`](../packages/react/README.md), [`@aster/vl`](../packages/vl/README.md).
+Each package also has a README with its install line and a first example: [`@aster-charts/core`](../packages/core/README.md),
+[`@aster-charts/react`](../packages/react/README.md), [`@aster-charts/vl`](../packages/vl/README.md).
 
 Each package section below has the same order: guides (a task, start to finish, with a runnable example), then the reference
 (what each export does and the rules it follows), then the entry points that are separate imports.
 
-## `@aster/core`
+## `@aster-charts/core`
 
 ### Guides
 
 #### Render a Vega spec
 
 ```ts
-import { renderSpec, type VgSpec } from '@aster/core'
+import { renderSpec, type VgSpec } from '@aster-charts/core'
 
 const vegaSpec: VgSpec = {
   width: 400,
@@ -91,7 +91,7 @@ console.log(svg.startsWith('<svg'))
 
 #### Sessions and per-datum updates
 
-`createChartSession()` (from `@aster/core/dom`, also re-exported by `@aster/react`) caches the IR and the scene across
+`createChartSession()` (from `@aster-charts/core/dom`, also re-exported by `@aster-charts/react`) caches the IR and the scene across
 updates. An evaluation with the same spec content, data array identities, size, signals and limits returns the *same*
 `SceneRoot`. Replaced immutable source arrays are diffed automatically (`autoChanges`, default on; set it to `false`
 to force a full re-encode), explicit per-datum `dataChanges` are supported, and the source/transform pulse of the last
@@ -104,8 +104,8 @@ It is only valid when the array keeps its length and order; the session then reu
 other row. Mutating an array in place without replacing it, and without `dataChanges`, is invisible to the cache.
 
 ```ts
-import { createChartSession } from '@aster/core/dom'
-import type { VgSpec } from '@aster/core'
+import { createChartSession } from '@aster-charts/core/dom'
+import type { VgSpec } from '@aster-charts/core'
 
 const spec: VgSpec = {
   width: 100,
@@ -136,13 +136,13 @@ session.change({ data: { table: [{ x: 1 }, { x: 4 }, { x: 9 }] }, dataChanges: {
 
 `registerExpressionFunction(name, fn)` is the counterpart of vega's `expressionFunction(name, fn)`: expressions
 (`{signal: ...}`, filters, formulas, encodes) may then call `name(...)`. It is how Vega-Lite's custom `formatType`
-works: with `config.customFormatTypes: true`, `{"formatType": "price", "format": "$.2f"}` compiles (`@aster/vl`, as
+works: with `config.customFormatTypes: true`, `{"formatType": "price", "format": "$.2f"}` compiles (`@aster-charts/vl`, as
 vega-lite) to `price(datum["v"], "$.2f")` for text, tooltip, href and description channels and to a
 `price(datum.value, "$.2f")` label encode for axes and legends. Register `price` before rendering, in vega too if
 you compare the two:
 
 ```ts
-import { registerExpressionFunction, renderSpec, type VgSpec } from '@aster/core'
+import { registerExpressionFunction, renderSpec, type VgSpec } from '@aster-charts/core'
 
 const myFormatter = (format: string) => (value: number): string => `${format}:${value}`
 const off = registerExpressionFunction('price', (value: number, format: string) => myFormatter(format)(value))
@@ -170,7 +170,7 @@ produce. A name that is not a plain identifier, or that an expression already me
 function, a constant, `datum`, `event`, ...), or that starts with `_`, is refused with an `[aster]` error. A custom
 `formatType` that is not registered fails like any unknown expression function. Without `customFormatTypes: true`
 vega-lite drops a custom `formatType` and its `format` from field definitions, axes and legends (a facet header keeps
-its own), and so does `@aster/vl`.
+its own), and so does `@aster-charts/vl`.
 
 #### Streaming and pulses
 
@@ -184,7 +184,7 @@ a dataset, `dataPulse` wins for it).
 `createChartStream(spec, options)` wraps a session with a push-based, bounded queue:
 
 ```ts
-import { createChartStream, type VgSpec } from '@aster/core'
+import { createChartStream, type VgSpec } from '@aster-charts/core'
 
 const spec: VgSpec = {
   width: 200,
@@ -352,7 +352,7 @@ vega-format's; compiled formatters are kept per specifier in a bounded least-rec
 - `resetDefaultLocale()` puts both halves back to the built-in locale (a test seam).
 
 ```ts
-import { locale } from '@aster/core'
+import { locale } from '@aster-charts/core'
 
 const de = locale({ decimal: ',', thousands: '.', grouping: [3], currency: ['', ' €'] })
 console.log(de.format(',.2f')(1234.5)) // 1.234,50
@@ -415,10 +415,10 @@ The pieces `renderSpec` and the session are made of are exported for hosts that 
   `flatten`, `pivot`, the layouts...), so a row-wise pulse cannot be applied through it; `isGroupedTransform(type)` is `true` for
   `aggregate`, `joinaggregate`, `window` and `stack`.
 - Registries, filled by the add-ons: `transformRegistry` (`Map<type, TransformFn>`, the rare transforms of
-  `@aster/core/transforms`), `dataFormatRegistry` (`Map<format, reader>`, `json` built in; csv / tsv / dsv / topojson from
-  `@aster/core/load`), `geoRegistry` (the projection and contour hooks of `@aster/core/geo`, `null` fields until loaded).
+  `@aster-charts/core/transforms`), `dataFormatRegistry` (`Map<format, reader>`, `json` built in; csv / tsv / dsv / topojson from
+  `@aster-charts/core/load`), `geoRegistry` (the projection and contour hooks of `@aster-charts/core/geo`, `null` fields until loaded).
   `requireTransform(type)` returns a registered transform or throws the error that names the import to make
-  (`await import("@aster/core/transforms")`, see `docs/ERRORS.md`).
+  (`await import("@aster-charts/core/transforms")`, see `docs/ERRORS.md`).
 
 #### Limit checks
 
@@ -436,7 +436,7 @@ The pieces `renderSpec` and the session are made of are exported for hosts that 
 #### Typed errors
 
 `AsterUrlError` (`code: 'ASTER_URL_DENIED'`, `url`, `reason`) is thrown when the URL policy refuses a request, before any
-request is made; it is exported from `@aster/core` and from `@aster/core/load`. `docs/ERRORS.md` lists every error class.
+request is made; it is exported from `@aster-charts/core` and from `@aster-charts/core/load`. `docs/ERRORS.md` lists every error class.
 
 #### Accessibility tree
 
@@ -448,13 +448,13 @@ focusable elements; non-React hosts can do the same. The keyboard contract is in
 
 ### Add-on entry points
 
-#### `@aster/core/hit`
+#### `@aster-charts/core/hit`
 
 `buildHitIndex(scene)` returns `{ query(x, y), queryMark(x, y), size() }`; `queryMark` returns
 data-bearing mark items only (guides excluded), `query` returns anything painted. Both give a `HitTarget`
 (`{ item, marktype }`) or `null`.
 
-#### `@aster/core/signals`
+#### `@aster-charts/core/signals`
 
 `bindSceneSignals(svg, scene, values, hooks?, { pick?, data?, owner?, containerSize? })`, `stampDatumAttrs`, `setTimerClock`.
 Binds every `signal.on` entry with vega's event-stream semantics: selector strings (`[mousedown, mouseup] > mousemove`,
@@ -498,21 +498,21 @@ pending debounces (vega's `view.finalize()`). `setTimerClock(clock | null)` ([Ma
   every pointer move when none does (the answer is cached per scene). `createCursorTracker({ pick, user, onCursor, eventConfig? })`
   is vega-view's cursor logic without any DOM: `move(x, y)` takes the `cursor` of the item `pick(x, y)` finds and
   `refresh()` re-reads the `cursor` signal; each calls `onCursor(cursor | null)` only when the shown cursor changes (see
-  `resolveCursor` in `@aster/core`). A `config.events.view` rule that blocks `pointermove` stops `move` from looking.
+  `resolveCursor` in `@aster-charts/core`). A `config.events.view` rule that blocks `pointermove` stops `move` from looking.
 
-#### `@aster/core/addons`
+#### `@aster-charts/core/addons`
 
 which add-ons a spec needs, and loading them (the `Chart` shells and hooks do this themselves; use it
 where you cannot wait inside React). `addonsNeeded(spec)` reads the spec's structure (and parses its expressions) and returns the
 needed `AddonName`s (`'transforms' | 'geo' | 'load'`); `missingAddons(spec)` is the subset not loaded yet; `loadAddons(names)`
 imports them (concurrently, each at most once, rejecting with an error that names the add-on); `loadAddonsFor(spec)` (also in
-`@aster/react`) is the last two in one call. `isAddonLoaded(name)` says whether an add-on's registrations are present however they
+`@aster-charts/react`) is the last two in one call. `isAddonLoaded(name)` says whether an add-on's registrations are present however they
 got there, and `notLoaded(names)` filters a list by it. Constants: `TRANSFORMS_ADDON_TYPES` (every transform type the
 transforms add-on registers), `LOAD_ADDON_FORMATS` (`csv`, `tsv`, `dsv`, `topojson`) and `ADDON_FUNCTIONS` (expression function name to the
 add-on that registers it). Test seams: `registeredFunctionNames` lists the expression functions registered beyond the built-ins, and
 `withdrawFunctions(names)` removes some and returns a function that restores them.
 
-#### `@aster/core/dom`
+#### `@aster-charts/core/dom`
 
 `patchSceneDom(svg, scene, options?)` makes an existing `<svg>` element match a scene, touching only changed
 attributes (it throws for a non-`svg` element); `renderSceneToDomElement(scene, document?, options?)` builds the element;
@@ -524,7 +524,7 @@ same chart, so a host can tell "same chart, new rows" from "a different chart" (
 starts afresh for the second); `translatePathData(d, dx, dy)` shifts every absolute coordinate of an SVG path string by `(dx, dy)`,
 copying arguments that do not move (relative deltas, arc radii and flags) verbatim.
 
-#### `@aster/core/canvas`
+#### `@aster-charts/core/canvas`
 
 `renderSceneToCanvas(scene, ctx, { dpr, batchSymbols })` paints a scene on a `CanvasLike` (a real 2D context, an
 OffscreenCanvas context or a recording mock); `batchSymbols` (default `true`) merges long runs of identically painted symbols.
@@ -536,7 +536,7 @@ segments (`PathSeg[]`: `M L H V C S Q T A Z`, relative commands included); `trac
 `PathSink` (the path methods of a 2D context) offset by `(tx, ty)`, with `arcs: 'bezier'` for vega's bezier approximation of an arc;
 `canonicalPath(segments)` is the normalized text of parsed segments, the form in which canvas and SVG geometry are compared.
 
-#### `@aster/core/load`
+#### `@aster-charts/core/load`
 
 `loadSpecData(spec, { baseURL, allow, protocols, timeoutMs, maxBytes, ... })` for URL datasets, with a URL policy (safe defaults, see `docs/LIMITS.md`).
 `LOAD_DEFAULTS` holds the numeric defaults (`timeoutMs`, `maxBytes`, `maxConcurrent`, `maxRedirects`) and `TRUSTED_LOAD_OPTIONS`
@@ -548,7 +548,7 @@ data by a Vega `format` spec (`type`, `parse`, ...) the way vega-loader's `read`
 `utc:<pattern>`, or `'auto'` to infer from the first row) and returns copies. `dataFormatRegistry` and `AsterUrlError` are
 re-exported here.
 
-#### `@aster/core/geo` and `@aster/core/transforms`
+#### `@aster-charts/core/geo` and `@aster-charts/core/transforms`
 
 Importing them registers the projections / rare transforms; load them
 before rendering a spec that needs them (otherwise rendering throws an error naming the import, see `docs/ERRORS.md`).
@@ -556,9 +556,9 @@ before rendering a spec that needs them (otherwise rendering throws an error nam
 #### Example: hit-testing a scene
 
 ```ts
-import { renderSpec, type SceneRoot, type VgSpec } from '@aster/core'
-import { buildHitIndex } from '@aster/core/hit'
-import { createChartSession } from '@aster/core/dom'
+import { renderSpec, type SceneRoot, type VgSpec } from '@aster-charts/core'
+import { buildHitIndex } from '@aster-charts/core/hit'
+import { createChartSession } from '@aster-charts/core/dom'
 
 const spec: VgSpec = {
   width: 100,
@@ -572,7 +572,7 @@ console.log(hit.size(), hit.queryMark(20, 20)?.item.datum, hit.queryMark(90, 90)
 console.log(renderSpec(spec).startsWith('<svg'))
 ```
 
-## `@aster/react`
+## `@aster-charts/react`
 
 ### Components and hooks
 
@@ -580,8 +580,8 @@ console.log(renderSpec(spec).startsWith('<svg'))
 
 ```tsx
 import * as React from 'react'
-import { Chart, type ChartHandle, type SelectValue, type ViewDomain } from '@aster/react'
-import type { VgSpec } from '@aster/core'
+import { Chart, type ChartHandle, type SelectValue, type ViewDomain } from '@aster-charts/react'
+import type { VgSpec } from '@aster-charts/core'
 
 const vegaOrVegaLiteSpec: VgSpec = {
   width: 300,
@@ -629,19 +629,19 @@ export function Example(): React.ReactElement {
 specs:
 
 ```ts
-import '@aster/react/vl'   // side effect: registers the from-scratch VL compiler
+import '@aster-charts/react/vl'   // side effect: registers the from-scratch VL compiler
 ```
 
-**Add-ons load themselves.** A spec that needs an opt-in core add-on (`@aster/core/transforms`, `/geo`, `/load`) renders with nothing
-imported: `<Chart>`, `<SvgChart>`, the hooks and the worker entry import what the spec needs (`addonsNeeded` in `@aster/core/addons`),
+**Add-ons load themselves.** A spec that needs an opt-in core add-on (`@aster-charts/core/transforms`, `/geo`, `/load`) renders with nothing
+imported: `<Chart>`, `<SvgChart>`, the hooks and the worker entry import what the spec needs (`addonsNeeded` in `@aster-charts/core/addons`),
 and the chart suspends meanwhile, so put a `<Suspense fallback>` above it. The synchronous entry points (`renderSpec`,
 `renderChartToStaticMarkup`, `hydrateChart`) cannot wait: `await loadAddonsFor(spec)` before them. The rules, server rendering,
 workers and `url` data are in [ARCHITECTURE.md](ARCHITECTURE.md#geo-projections--the-add-on-boundary).
 
-The base `@aster/react` entry does not include the Vega-Lite compiler; importing `@aster/react/vl` adds about 103 kB
-gzip to the bundle (`<Chart>` 205.3 kB, `<Chart>` + `@aster/react/vl` 308.3 kB eager, measured 2026-11-06 by
-`pnpm --filter @aster/benchmarks run budget`; the budgets and current figures are in [PERFORMANCE.md](PERFORMANCE.md#bundle-sizes)). Passing a VL spec without the add-on throws an error naming the missing
-import. Vega specs need no extra import. Worker hosts must import `@aster/react/vl` in the worker entry as well,
+The base `@aster-charts/react` entry does not include the Vega-Lite compiler; importing `@aster-charts/react/vl` adds about 103 kB
+gzip to the bundle (`<Chart>` 205.3 kB, `<Chart>` + `@aster-charts/react/vl` 308.3 kB eager, measured 2026-11-06 by
+`pnpm --filter @aster-charts/benchmarks run budget`; the budgets and current figures are in [PERFORMANCE.md](PERFORMANCE.md#bundle-sizes)). Passing a VL spec without the add-on throws an error naming the missing
+import. Vega specs need no extra import. Worker hosts must import `@aster-charts/react/vl` in the worker entry as well,
 since compilation happens there.
 
 **Props.** `spec` (compared by content: an equal inline literal does no work; the one exception is a dataset's inline `values` array, which is compared by identity, so a re-created but equal rows array is a new input, which the session's row diff finds unchanged and applies as a no-op; the streaming components keep the full content comparison, so a spec rebuilt every render does not restart a stream), `data`, `dataChanges`, `width`,
@@ -693,9 +693,9 @@ minus what an SVG-only app does not use. It lives in its own entry and never imp
 
 ```tsx
 import * as React from 'react'
-import { SvgChart } from '@aster/react/lite'
-import { interaction } from '@aster/react/interaction'
-import type { VgSpec } from '@aster/core'
+import { SvgChart } from '@aster-charts/react/lite'
+import { interaction } from '@aster-charts/react/interaction'
+import type { VgSpec } from '@aster-charts/core'
 
 const spec: VgSpec = {
   width: 300,
@@ -719,8 +719,8 @@ export function Interactive(): React.ReactElement {
 }
 ```
 
-**The capability.** `interaction` (from `@aster/react/interaction`) is a plain frozen value bundling hit testing
-(`@aster/core/hit`) and the signal event loop (`@aster/core/signals`: `bindSceneSignals`). It is passed as
+**The capability.** `interaction` (from `@aster-charts/react/interaction`) is a plain frozen value bundling hit testing
+(`@aster-charts/core/hit`) and the signal event loop (`@aster-charts/core/signals`: `bindSceneSignals`). It is passed as
 a prop: there is no registry, no global and no side-effect import (`sideEffects` needs no entry), so a bundler drops it
 when it is not imported and `<SvgChart>` without it contains none of that code. `<Chart>` has it built in.
 
@@ -732,9 +732,9 @@ the ref (`SvgChartHandle`) has every `ChartHandle` member; `src/parity.assert.ts
 added to `<Chart>` without a decision about `<SvgChart>` fails `pnpm typecheck`.
 
 ```tsx
-import { SvgChart } from '@aster/react/lite'
-import { interaction } from '@aster/react/interaction'
-import type { VgSpec } from '@aster/core'
+import { SvgChart } from '@aster-charts/react/lite'
+import { interaction } from '@aster-charts/react/interaction'
+import type { VgSpec } from '@aster-charts/core'
 
 declare const spec: VgSpec
 
@@ -754,8 +754,8 @@ missing Vega-Lite compiler, where nothing meaningful can be drawn). The report g
 
 | Situation | Message |
 |---|---|
-| a spec with `signal.on` streams, no `interaction` | `[aster] this spec has event streams (signal.on) but no event loop is bound: pass interaction={interaction} from '@aster/react/interaction'` |
-| `tooltip`, `renderTooltip`, `onPointSelect`, `selection`, `select`, `onSelectionChange` or `preventDefault` without `interaction` (ignored) | `[aster] tooltip, … need hit testing and the signal event loop and are ignored: pass interaction={interaction} from '@aster/react/interaction'` |
+| a spec with `signal.on` streams, no `interaction` | `[aster] this spec has event streams (signal.on) but no event loop is bound: pass interaction={interaction} from '@aster-charts/react/interaction'` |
+| `tooltip`, `renderTooltip`, `onPointSelect`, `selection`, `select`, `onSelectionChange` or `preventDefault` without `interaction` (ignored) | `[aster] tooltip, … need hit testing and the signal event loop and are ignored: pass interaction={interaction} from '@aster-charts/react/interaction'` |
 | `renderer="canvas"` (renders SVG) | `[aster] renderer="canvas" needs <Chart>: <SvgChart> has no canvas renderer, so it renders SVG` |
 
 Without `interaction`, `setSignal` and bound inputs (`signal.bind`) still work as signal overrides, exactly as on
@@ -763,7 +763,7 @@ Without `interaction`, `setSignal` and bound inputs (`signal.bind`) still work a
 `interaction`, and equals vega's: no per-item datum attribute is written (the mark under the pointer is found through the scene
 hit index).
 
-Sizes (gzip, eager, measured 2026-11-06 with `pnpm --filter @aster/benchmarks run budget`): `<Chart>` 205.3 kB,
+Sizes (gzip, eager, measured 2026-11-06 with `pnpm --filter @aster-charts/benchmarks run budget`): `<Chart>` 205.3 kB,
 `<SvgChart>` 182.5 kB, `<SvgChart>` + `interaction` 199.7 kB ([PERFORMANCE.md](PERFORMANCE.md#bundle-sizes) holds the
 current figures). Use `<Chart>` unless that 23 kB
 matters; it is the zero-setup default and its behaviour does not depend on this component.
@@ -772,8 +772,8 @@ matters; it is the zero-setup default and its behaviour does not depend on this 
 
 ```tsx
 import * as React from 'react'
-import { useChart, useChartData, useChartWorker, useSpecData } from '@aster/react'
-import type { VgSpec } from '@aster/core'
+import { useChart, useChartData, useChartWorker, useSpecData } from '@aster-charts/react'
+import type { VgSpec } from '@aster-charts/core'
 
 const spec: VgSpec = { width: 100, height: 60, marks: [{ type: 'rect', encode: { enter: { width: { value: 20 }, height: { value: 20 } } } }] }
 const specWithUrls: VgSpec = { width: 100, height: 60, data: [{ name: 'table', url: 'https://data.example.com/a.csv' }], marks: [] }
@@ -800,7 +800,7 @@ export const loaders = { useSpecData, useChartData, specWithUrls }
 `useChart` takes every `RuntimeInput` field plus `serialize` and returns `{ scene, svg, error, session }`; `error`
 is set (and `scene`/`svg` are `null`) when the evaluation throws, and `maxSvgLength` is checked when it serializes.
 `useSpecData` and `useChartData` take the options of `loadSpecData` (`UseSpecDataOptions`), `loadSpecData` from
-`@aster/react` is the non-Suspense equivalent.
+`@aster-charts/react` is the non-Suspense equivalent.
 `loadSpecDataResource(spec, options?)` is the promise `useSpecData` reads with `React.use`: it is created once per spec object and set
 of options (a repeat call returns the same promise, as Suspense needs) and imports the load add-on lazily, so an app without URL
 datasets never bundles it. A failed load is dropped from the cache so the next render retries. `isPromiseLike(value)` is the
@@ -810,8 +810,8 @@ type guard for a `then`-able (the check `<Chart>` uses to tell an async `spec` f
 
 ```tsx
 import * as React from 'react'
-import { ChartStream, type ChartStreamHandle } from '@aster/react'
-import type { VgSpec } from '@aster/core'
+import { ChartStream, type ChartStreamHandle } from '@aster-charts/react'
+import type { VgSpec } from '@aster-charts/core'
 
 const spec: VgSpec = {
   width: 200,
@@ -868,9 +868,9 @@ evaluates after mount.
 
 ```ts
 // chart.worker.ts: the worker entry (a bundler builds it with `new Worker(new URL(...), { type: 'module' })`)
-import '@aster/react/vl'                       // only if the worker must compile Vega-Lite
-import { registerWorkerTextMetrics, registerWorkerUrlPolicy } from '@aster/react/worker'
-import '@aster/react/worker-entry'             // installs the message handler (self.onmessage)
+import '@aster-charts/react/vl'                       // only if the worker must compile Vega-Lite
+import { registerWorkerTextMetrics, registerWorkerUrlPolicy } from '@aster-charts/react/worker'
+import '@aster-charts/react/worker-entry'             // installs the message handler (self.onmessage)
 
 registerWorkerTextMetrics('inter', { measure: (text, _font, size) => text.length * size * 0.55 })
 registerWorkerUrlPolicy('cdn-only', { allow: (url) => url.hostname === 'cdn.example.com' })
@@ -878,8 +878,8 @@ registerWorkerUrlPolicy('cdn-only', { allow: (url) => url.hostname === 'cdn.exam
 
 ```tsx
 import * as React from 'react'
-import { useChartWorker } from '@aster/react'
-import type { VgSpec } from '@aster/core'
+import { useChartWorker } from '@aster-charts/react'
+import type { VgSpec } from '@aster-charts/core'
 
 const spec: VgSpec = { width: 100, height: 40, marks: [{ type: 'text', encode: { enter: { text: { value: 'hi' } } } }] }
 
@@ -898,7 +898,7 @@ export function Offloaded(): React.ReactElement {
   (pre-flight, meters, scene, SVG length). A violation comes back as a wire error with `code: 'ASTER_LIMIT'`.
 - **`textMetrics` and `urlPolicy` by name.** A provider object or a policy with functions cannot cross `postMessage`.
   Register it in the worker with `registerWorkerTextMetrics(name, provider)` / `registerWorkerUrlPolicy(name,
-  { allow, onDeny })` (both from `@aster/react/worker`, called in the worker entry) and pass the name
+  { allow, onDeny })` (both from `@aster-charts/react/worker`, called in the worker entry) and pass the name
   (`textMetrics: 'inter'`, `urlPolicy: { hooks: 'cdn-only', baseURL, protocols }`). Passing an object while a Worker is
   in use fails the hook with an error that says so; without a Worker an object works as is. An unregistered name fails
   with `[aster] unknown text-metrics provider "<name>" ...`. For streams the same applies to `textMetrics`,
@@ -912,7 +912,7 @@ export function Offloaded(): React.ReactElement {
 - **Protocol.** `handleChartWorkerRequest(request)` and `handleChartWorkerStreamRequest(request, streams)` are the pure
   handlers behind the entry; `cloneableScene(scene)` strips what cannot be structured-cloned; `nextWorkerRequestId()`
   gives ids from the one per-realm counter all the hooks share.
-- **Worker entry internals.** `@aster/react/worker-entry` is built from these, exported from `@aster/react/worker` for a worker script of your own:
+- **Worker entry internals.** `@aster-charts/react/worker-entry` is built from these, exported from `@aster-charts/react/worker` for a worker script of your own:
   `createWorkerDispatcher(streams, post)` returns the message handler (`message => void`; `streams` is the `Map<number, ChartStream>` the stream
   requests share, `post` sends a response). It handles messages in arrival order and imports the add-ons a message's spec needs first, so a stream's
   `flush` never overtakes its `init`. It is made of `handleWorkerMessage(data, streams)`, which validates one message (a recognisable id gets a
@@ -932,8 +932,8 @@ export function Offloaded(): React.ReactElement {
 
 ```tsx
 import { renderToString } from 'react-dom/server'
-import { Chart, hydrateChart, renderChartToStaticMarkup } from '@aster/react'
-import type { VgSpec } from '@aster/core'
+import { Chart, hydrateChart, renderChartToStaticMarkup } from '@aster-charts/react'
+import type { VgSpec } from '@aster-charts/core'
 
 const spec: VgSpec = { width: 100, height: 60, marks: [{ type: 'rect', encode: { enter: { width: { value: 20 }, height: { value: 20 }, fill: { value: 'teal' } } } }] }
 const width = 100
@@ -950,7 +950,7 @@ export function hydrate(container: Element): void {
 console.log(html.includes('<svg'), svg.startsWith('<svg'))
 ```
 
-`renderChartToStaticMarkup` and `hydrateChart` (also exported from `@aster/react/ssr`) accept either grammar and
+`renderChartToStaticMarkup` and `hydrateChart` (also exported from `@aster-charts/react/ssr`) accept either grammar and
 apply `limits` like the client. A `<Chart>` on the server renders its markup in the HTML; the canvas renderer renders
 an empty `<canvas>` there.
 
@@ -958,14 +958,14 @@ an empty `<canvas>` there.
 
 #### Registry and session re-exports
 
-`@aster/react` also exports `registerVegaLiteCompiler(compile)` and `hasVegaLiteCompiler()`, the registry that `@aster/react/vl` fills as a
-side effect (see [`@aster/vl`](#astervl)): a host that bundles `@aster/vl` itself registers `(spec) => vegaSpec` once, and `hasVegaLiteCompiler()`
-says whether one is registered. `createChartSession` is `@aster/core/dom`'s, re-exported for a host that renders through the
+`@aster-charts/react` also exports `registerVegaLiteCompiler(compile)` and `hasVegaLiteCompiler()`, the registry that `@aster-charts/react/vl` fills as a
+side effect (see [`@aster-charts/vl`](#aster-chartsvl)): a host that bundles `@aster-charts/vl` itself registers `(spec) => vegaSpec` once, and `hasVegaLiteCompiler()`
+says whether one is registered. `createChartSession` is `@aster-charts/core/dom`'s, re-exported for a host that renders through the
 session ([Sessions and per-datum updates](#sessions-and-per-datum-updates)).
 
 #### Pan, zoom and selection helpers
 
-The pure functions behind `<Chart>`'s selection, pan and zoom are exported from `@aster/react`, for a host that draws its own
+The pure functions behind `<Chart>`'s selection, pan and zoom are exported from `@aster-charts/react`, for a host that draws its own
 controls or keeps the state outside the component. A `ViewDomain` is `{ x?: [number, number], y?: [number, number] }`, the visible
 domain of the horizontal and vertical continuous scales; a `SelectionInterval` has the same shape; `PixelPoint` is `{ x, y }`.
 `names` is the `PositionalScales` (`{ x?: scaleName, y?: scaleName }`) that says which scales are the horizontal and vertical ones
@@ -995,12 +995,12 @@ A chart is one Tab stop. Without pan or zoom the accessible tree is a roving-tab
 with pan or zoom the container is the stop and `PageDown` / `PageUp` on it enter the tree. The keys, per node kind, are listed in
 `docs/INTERACTION.md#accessibility`.
 
-## `@aster/vl`
+## `@aster-charts/vl`
 
 ### Compile a Vega-Lite spec
 
 ```ts
-import { compile } from '@aster/vl'
+import { compile } from '@aster-charts/vl'
 
 const vegaSpec = compile({
   data: { values: [{ a: 'A', b: 28 }, { a: 'B', b: 55 }] },
@@ -1011,9 +1011,9 @@ console.log(Array.isArray(vegaSpec.marks))
 ```
 
 `<Chart>` and `useChart` use this compiler for Vega-Lite input once
-`@aster/react/vl` is imported, so a fresh app does not need a `vega-lite`
-dependency. Hosts that already bundle `@aster/vl` themselves can instead call
-`registerVegaLiteCompiler` from `@aster/react` with a function `(spec) => vegaSpec`;
+`@aster-charts/react/vl` is imported, so a fresh app does not need a `vega-lite`
+dependency. Hosts that already bundle `@aster-charts/vl` themselves can instead call
+`registerVegaLiteCompiler` from `@aster-charts/react` with a function `(spec) => vegaSpec`;
 `hasVegaLiteCompiler()` reports whether one is registered. `compile` throws `VLCompileError` for
 anything outside the supported subset (see `docs/ERRORS.md`).
 
@@ -1027,7 +1027,7 @@ Vega-Lite maps (`geoshape`, `projection`, `longitude` / `latitude`, `{type: "geo
 channel with a `timer` point selection and `{filter: {param}}`) compile to what vega-lite 6.4.3 emits; what throws is listed in
 [packages/vl/README.md](../packages/vl/README.md#throws-not-supported). Running an animation needs
 the signal event loop (`<Chart>` or `<SvgChart interaction>`): `timer` streams run on one scheduler, with d3-timer's schedule, shared by the page,
-stop on unmount. `setTimerClock(clock | null)`, imported from `@aster/core/signals`, drives the shared scheduler (and so every
+stop on unmount. `setTimerClock(clock | null)`, imported from `@aster-charts/core/signals`, drives the shared scheduler (and so every
 `timer` stream) from `clock` instead of the host's globals; `null` goes back to them. A clock is `{ now, setTimeout,
 clearTimeout, setInterval, clearInterval, requestFrame }`. It is the seam for a test, or a host that steps frames itself. Swap
 it only while no timer is live: a timer's pending wake-up belongs to the clock it was scheduled on. `bindSceneSignals(..)`

@@ -4,7 +4,7 @@
  * the SVG has its (empty) `<g class="mark-group role-scope">` in the place its mark has in the spec.
  */
 import { describe, it, expect } from 'vitest'
-import { renderSpec } from '@aster/core'
+import { renderSpec } from '@aster-charts/core'
 import { renderWithVegaChecked } from '../src/render-vega.js'
 import { canonicalizeSvg, diffCanonical } from '../src/normalize.js'
 

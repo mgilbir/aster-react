@@ -35,13 +35,13 @@ importers:
 
   apps/demo:
     dependencies:
-      '@aster/core':
+      '@aster-charts/core':
         specifier: workspace:*
         version: link:../../packages/core
-      '@aster/react':
+      '@aster-charts/react':
         specifier: workspace:*
         version: link:../../packages/react
-      '@aster/vl':
+      '@aster-charts/vl':
         specifier: workspace:*
         version: link:../../packages/vl
       react:
@@ -78,10 +78,10 @@ importers:
 
   packages/benchmarks:
     dependencies:
-      '@aster/core':
+      '@aster-charts/core':
         specifier: workspace:*
         version: link:../core
-      '@aster/react':
+      '@aster-charts/react':
         specifier: workspace:*
         version: link:../react
     devDependencies:
@@ -130,13 +130,13 @@ importers:
 
   packages/conformance:
     dependencies:
-      '@aster/core':
+      '@aster-charts/core':
         specifier: workspace:*
         version: link:../core
-      '@aster/react':
+      '@aster-charts/react':
         specifier: workspace:*
         version: link:../react
-      '@aster/vl':
+      '@aster-charts/vl':
         specifier: workspace:*
         version: link:../vl
       vega:
@@ -239,10 +239,10 @@ importers:
 
   packages/react:
     dependencies:
-      '@aster/core':
+      '@aster-charts/core':
         specifier: workspace:*
         version: link:../core
-      '@aster/vl':
+      '@aster-charts/vl':
         specifier: workspace:*
         version: link:../vl
     devDependencies:

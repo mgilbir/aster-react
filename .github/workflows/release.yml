@@ -46,7 +46,7 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Install Playwright Chromium
-        run: pnpm --filter @aster/conformance exec playwright install --with-deps chromium
+        run: pnpm --filter @aster-charts/conformance exec playwright install --with-deps chromium
 
       # The full gate list (scripts/gates.mjs), nothing skipped: build, deps boundary, knip, typecheck, unit tests, time-zone
       # matrix, verify-publish, the incremental-append floors, the oracle gates (conformance, conformance-vl, scene-diff,
@@ -97,9 +97,9 @@ jobs:
       - name: Publish public packages
         run: |
           set -euo pipefail
-          # Dependencies first: @aster/react depends on @aster/core and @aster/vl.
+          # Dependencies first: @aster-charts/react depends on @aster-charts/core and @aster-charts/vl.
           for pkg in core vl react; do
-            npm publish release-tarballs/aster-"$pkg"-*.tgz --access public --provenance --ignore-scripts
+            npm publish release-tarballs/aster-charts-"$pkg"-*.tgz --access public --provenance --ignore-scripts
           done
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

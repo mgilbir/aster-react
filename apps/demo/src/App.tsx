@@ -19,13 +19,13 @@ import {
   CompiledGroupedBarSpec,
   CompiledRadarSpec,
 } from './compiled'
-import { compile } from '@aster/vl'
-import { loadSpecData } from '@aster/core/load'
+import { compile } from '@aster-charts/vl'
+import { loadSpecData } from '@aster-charts/core/load'
 // The playground takes any spec, so it loads the opt-in addons an app would (rare transforms such as pie, and maps).
-import '@aster/core/transforms'
-import '@aster/core/geo'
-import { Chart, ChartStream, type ChartStreamHandle } from '@aster/react'
-import type { SelectionInterval } from '@aster/react'
+import '@aster-charts/core/transforms'
+import '@aster-charts/core/geo'
+import { Chart, ChartStream, type ChartStreamHandle } from '@aster-charts/react'
+import type { SelectionInterval } from '@aster-charts/react'
 import {
   LineSpec,
   ParamBoundSpec,
@@ -370,7 +370,7 @@ function SpecPlayground() {
             </div>
           </div>
         )}
-        {!error && <p className="hint">Paste a Vega (<code>$schema</code> vega) or Vega-Lite spec. Relative data URLs like <code>data/stocks.csv</code> resolve to the official Vega dataset host automatically. Both engines compile and render the same input — Vega-Lite goes through <strong>@aster/vl</strong> on the right, the official compiler on the left.</p>}
+        {!error && <p className="hint">Paste a Vega (<code>$schema</code> vega) or Vega-Lite spec. Relative data URLs like <code>data/stocks.csv</code> resolve to the official Vega dataset host automatically. Both engines compile and render the same input — Vega-Lite goes through <strong>@aster-charts/vl</strong> on the right, the official compiler on the left.</p>}
       </div>
     </div>
   )
@@ -571,7 +571,7 @@ export function App() {
         </div>
         <div className="features">
           <div className="feature"><h3>Oracle-verified</h3><p>Geometry diffed against the actual Vega renderer on a 400+ spec conformance corpus.</p></div>
-          <div className="feature"><h3>Own Vega-Lite compiler</h3><p>@aster/vl compiles Vega-Lite to Vega from scratch — no npm vega-lite anywhere in the render path.</p></div>
+          <div className="feature"><h3>Own Vega-Lite compiler</h3><p>@aster-charts/vl compiles Vega-Lite to Vega from scratch — no npm vega-lite anywhere in the render path.</p></div>
           <div className="feature"><h3>Incremental DOM</h3><p>Patches only changed attributes and skips unchanged subtrees on updates.</p></div>
           <div className="feature"><h3>Reactive dataflow</h3><p>Per-datum updates re-derive only the changed rows, reusing unchanged marks, items, and scales.</p></div>
         </div>
