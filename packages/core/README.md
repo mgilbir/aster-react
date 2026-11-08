@@ -4,7 +4,7 @@ A TypeScript Vega rendering engine with no `vega-*`, `d3-*` or `topojson-*` depe
 evaluates data, scales and encodes into a renderer-neutral scene, and renders it to SVG (or to a canvas, or to a live DOM,
 through the add-ons). The real Vega packages are used only as the test oracle.
 
-Install (version 0.1.0 is not yet published to npm; the command works once the first release is tagged). Node 20 or newer;
+Install. Node 20 or newer;
 no runtime dependencies and no peer dependencies:
 
 ```bash
