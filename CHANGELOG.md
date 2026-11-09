@@ -28,6 +28,11 @@ and Fixed, per package. Everything built before the first release is in [Pre-rel
   box, as Vega-Lite's `"container"` does (autosize `fit` containing the padding): the content shrinks so padding and
   guides fit inside. It used to size the plot, with padding and axes added on top, so a chart overflowed the container
   it filled, and a container whose height is the chart's own (a block `<div>`) grew on every measurement (#128).
+- A data update on a view that fits its viewport (`autosize` fit / fit-x / fit-y, Vega-Lite `"container"` sizes, and every
+  `<Chart>` without size props) is incremental in both of the view's layout passes: each pass starts from the same pass of the
+  evaluation before. A one-row update on a 10,000-point chart went from 5.8 to 1.4 ms (Vega spec in a measured container) and
+  from 37 to 4.5 ms (Vega-Lite `"container"`), about the cost of the same update at a fixed size. The scene is unchanged; a fit
+  view now also keeps its first pass's state (and items) between evaluations.
 
 #### Fixed
 

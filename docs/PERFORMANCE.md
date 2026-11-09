@@ -38,6 +38,11 @@ the browser).
   evaluates the spec at its own size and then at the measured container's, pays for the datasets once. Consecutive steps that
   only add fields (`bin`, `formula`, `timeunit`) write onto one set of rows instead of copying every row per step
   ([ARCHITECTURE.md](ARCHITECTURE.md#incremental-evaluation)).
+- **Fit views update incrementally**: a view that fits its viewport (`autosize` fit / fit-x / fit-y, Vega-Lite
+  `"container"` sizes, and every `<Chart>` sized by its measured container) builds its content twice, at the viewport
+  and at the fitted size. Each pass of an update is made from the same pass of the evaluation before, so a one-row
+  update re-encodes one item per pass instead of every item of the first pass. The view keeps both passes' state, so a fit view
+  also retains the first pass's items between updates (not measured here; [ARCHITECTURE.md](ARCHITECTURE.md#incremental-evaluation)).
 - **Auto-pulse inference**: `rowsEqual` compares plain rows with `for...in` instead of two `Object.keys`
   allocations per row, so replacing the whole data array stays cheap even without explicit `dataChanges`.
 - **Per-datum updates**: sessions diff replaced immutable source arrays automatically (`autoChanges`), then
@@ -108,6 +113,27 @@ one row appended per update:
 `pnpm bench:incremental -- --points=100000 --reps=40`: full evaluate 42.1 ms, stream append 0.3 ms
 (163x), vega `view.change` 19.0 ms (13.6 to 34.7 ms across the runs: Aster 54x to 107x cheaper), whole-array
 replacement 37x; dense append patch 1.00 ms vs a 263.3 ms mount (273x).
+
+### One-row updates on a view that fits its viewport (node, no DOM)
+
+Measured 2026-11-09 on perf/fit-incremental against its base (df41263), the two builds run alternately, three rounds each,
+load average 4 to 10. `node perf.mjs <worktree> 1`, a probe kept outside the repository: a 10,000-point symbol chart with two
+axes, `createChartSession().evaluate(spec, { data, dataChanges: { t: [i] }, ...size })`, 40 updates of one row inside the
+domain, median ms per update. `fixed` is the Vega spec at `width/height` 600x300 (autosize pad, the control), `measured` the
+same spec with `measuredSize` (autosize fit containing the padding), `vl-fixed` a Vega-Lite point chart at 600x300 (the
+control for the next row) and `vl-cont` the same chart with `width/height: "container"` and `containerSize`.
+
+| Case | base, rounds 1-3 | this change, rounds 1-3 |
+|---|---|---|
+| fixed (control) | 1.62 / 1.54 / 1.55 | 1.65 / 1.52 / 1.57 |
+| measured (fit) | 6.01 / 5.67 / 5.76 | 1.36 / 1.32 / 1.38 |
+| vl-fixed (control) | 2.45 / 2.38 / 2.49 | 2.42 / 2.47 / 2.42 |
+| vl-cont (fit) | 36.81 / 36.83 / 35.84 | 4.34 / 4.56 / 4.31 |
+
+A fit update now costs about what the fixed-size update of the same chart costs (0.9x for the Vega spec, 1.8x for the
+Vega-Lite one, whose second pass also re-runs the formula and filter steps of its data); it was 3.7x and 15x. The first
+update after a fresh evaluation, after a resize, or after an update that moves the fitted size (a domain change that widens
+the axis labels) re-encodes what reads the size, as a resize of a fixed-size view does.
 
 ### Differential updates (node, no DOM)
 
