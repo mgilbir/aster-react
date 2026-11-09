@@ -94,16 +94,32 @@ chart, giving it another spec, or switching it to the canvas renderer stops the 
 
 The interpolation is its own module, `@aster-charts/core/transition`, and a chart loads it on demand: an app that never sets
 `transition` never fetches it, and a chart that sets it starts loading it at once, so the first change of data can animate. A
-change that arrives before it has loaded is drawn at once. {{BUNDLE}}
+change that arrives before it has loaded is drawn at once. The module is 3.1 kB gzip on top of `@aster-charts/core`; the prop
+handling adds about 1.2 kB gzip to the eager `<Chart>` bundle (`pnpm --filter @aster-charts/benchmarks run budget`, measured
+2026-11-09; the breakdown is in [PERFORMANCE.md](PERFORMANCE.md#bundle-sizes)).
 
-{{PERF}}
+A frame costs about what drawing the new scene at once costs, once per animation frame: every moving item gets a new element
+description and the browser restyles it. `pnpm --filter @aster-charts/benchmarks run bench:transition` (headless Chromium; a
+transition in which every item moves and recolours: one plan, then 30 frames from `requestAnimationFrame`, each `at(t)` +
+`patchSceneDom`; three runs, the range of the per-run medians), measured 2026-11-09:
+
+| scene | planning (once) | script per frame | frame interval | one patch without transition |
+|---|---|---|---|---|
+| 1,000 symbols | 5.4–5.6 ms | 3.6–3.8 ms | 16.7 ms (60 fps) | 4.7–5.4 ms |
+| 10,000 symbols | 28.3–30.3 ms | 31.0–31.2 ms | 66.7 ms (15 fps) | 34.6–35.9 ms |
+| 1,000 rects | 4.0–4.3 ms | 1.7 ms | 16.7 ms (60 fps) | 2.0–2.1 ms |
+| 10,000 rects | 25.5–29.0 ms | 11.7–12.9 ms | 33.3 ms (30 fps) | 16.0–17.0 ms |
+
+A thousand moving items keep 60 frames a second there; ten thousand drop frames (the transition still takes its `duration` and
+ends on the exact scene, in fewer frames). A symbol mark that large is batched by default (`denseMarks`) and is drawn at once.
+For a large chart whose data changes often, prefer a short `duration` or no `transition`.
 
 ## The core API
 
 `@aster-charts/core/transition` works on scenes and has no clock; a non-React host drives it from its own frame loop:
 
 ```ts
-import { createChartSession, patchSceneDom } from '@aster-charts/core/dom'
+import { patchSceneDom } from '@aster-charts/core/dom'
 import { createSceneTransition } from '@aster-charts/core/transition'
 
 const tr = createSceneTransition(shownScene, nextScene, { easing: 'cubic-in-out' })
@@ -118,5 +134,7 @@ else patchSceneDom(svg, nextScene)
 ```
 
 `tr.at(t)` returns one scene object rewritten in place by every call below 1: draw it before asking for the next. To
-interrupt, make the next transition from the frame on screen (`createSceneTransition(tr.at(t), newer)`). `easingFunction(easing)`
-and `EASING_NAMES` resolve and list the named curves.
+interrupt, make the next transition from the frame on screen (`createSceneTransition(tr.at(t), newer)`). `createScenePlayer(paint,
+report, shown?)` is that loop, ready made: `draw(target, scene, { duration, easing } | null)` animates from what is on screen (or,
+with `null`, retargets a running transition or draws at once), `reset(scene)` and `cancel()` stop it; it is what `<Chart>` uses.
+`easingFunction(easing)` and `EASING_NAMES` resolve and list the named curves.
