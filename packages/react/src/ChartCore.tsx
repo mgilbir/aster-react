@@ -11,6 +11,7 @@ import {
   type A11yOptions,
   type ChartInfo,
   type Logger,
+  type SceneItem,
   type SceneRoot,
   type VgSpec,
 } from '@aster-charts/core'
@@ -45,7 +46,6 @@ import {
   type ViewDomain,
 } from './interaction.js'
 
-const num = (x: number): string => (Number.isInteger(x) ? String(x) : String(Math.round(x * 1000) / 1000))
 
 // `getServerSnapshot` runs for SSR *and* for the hydration render on the client,
 // so this is `true` exactly while the tree must match server markup. It flips to
@@ -380,7 +380,7 @@ function ChartView({
 
   // Interaction state
   const [dragRect, setDragRect] = React.useState<{ x: number; y: number; width: number; height: number } | null>(null)
-  const [tooltipInfo, setTooltipInfo] = React.useState<{ datum: Record<string, unknown>; x: number; y: number } | null>(null)
+  const [tooltipInfo, setTooltipInfo] = React.useState<{ datum: Record<string, unknown>; item: SceneItem; x: number; y: number } | null>(null)
   const [internalView, setInternalView] = React.useState<ViewDomain | null>(null)
   const [internalSelection, setInternalSelection] = React.useState<SelectValue | null>(null)
   const [hiddenLegend, setHiddenLegend] = React.useState<Map<string, HiddenLegendEntry>>(() => new Map())
@@ -1223,17 +1223,13 @@ function ChartView({
     }
   }, [])
 
-  /**
-   * Tooltip fields: the datum is the pure source row (encoded channel values are
-   * never written back into it), so every primitive field is shown as-is.
-   * Fields starting with `__` are engine bookkeeping and stay hidden.
-   */
-  const tooltipFields = React.useMemo(() => {
-    if (!tooltipInfo) return [] as Array<[string, string]>
-    return Object.entries(tooltipInfo.datum)
-      .filter(([k, v]) => !k.startsWith('__') && v != null && typeof v !== 'object')
-      .map(([k, v]): [string, string] => [k, typeof v === 'number' ? num(v) : String(v)])
-  }, [tooltipInfo])
+  /** The default tooltip shows the hovered item's `tooltip` channel value, as vega-tooltip does (null: no tooltip). */
+  const tooltipShown = React.useMemo(
+    () => (tooltipInfo != null && renderTooltip == null && interaction != null
+      ? interaction.tooltipContent((tooltipInfo.item as { tooltip?: unknown }).tooltip)
+      : null),
+    [tooltipInfo, renderTooltip, interaction],
+  )
 
   const handleTooltipMove = React.useCallback(
     (e: React.MouseEvent) => {
@@ -1243,9 +1239,13 @@ function ChartView({
       // The mark under the pointer, from the scene hit index, whatever the renderer: the SVG carries no per-item
       // attribute for it (vega's does not either), so SVG, canvas and batched marks all resolve the same way.
       const [sx, sy] = pointerMapper.map(e.clientX, e.clientY)
-      const target = hitIndexFor(displayScene)?.queryMark(sx, sy)
-      const datum = target?.item.datum as Record<string, unknown> | undefined
-      setTooltipInfo(datum != null && typeof datum === 'object' ? { datum, x: e.clientX - rect.left, y: e.clientY - rect.top } : null)
+      const item = hitIndexFor(displayScene)?.queryMark(sx, sy)?.item
+      const datum = item?.datum
+      const hasDatum = datum != null && typeof datum === 'object'
+      const tip = (item as { tooltip?: unknown } | undefined)?.tooltip
+      // vega calls its tooltip handler with `item.tooltip`; a custom renderer also gets items that only have a datum
+      const shows = item != null && (hasDatum || (tip != null && tip !== ''))
+      setTooltipInfo(shows ? { datum: hasDatum ? (datum as Record<string, unknown>) : {}, item, x: e.clientX - rect.left, y: e.clientY - rect.top } : null)
     },
     [tooltipEnabled, displayScene, hitIndexFor, pointerMapper],
   )
@@ -1529,7 +1529,7 @@ function ChartView({
           })}
         </div>
       )}
-      {tooltipInfo != null && (
+      {tooltipInfo != null && (renderTooltip != null || tooltipShown != null) && (
         <div
           data-testid="chart-tooltip"
           style={{
@@ -1549,10 +1549,15 @@ function ChartView({
           }}
         >
           {renderTooltip != null
-            ? renderTooltip(tooltipInfo.datum)
-            : tooltipFields.map(([k, v]) => (
-                <div key={k}><strong>{k}:</strong> {v}</div>
-              ))}
+            ? renderTooltip(tooltipInfo.datum, { tooltip: (tooltipInfo.item as { tooltip?: unknown }).tooltip, item: tooltipInfo.item })
+            : tooltipShown != null && ('text' in tooltipShown
+              ? tooltipShown.text
+              : <>
+                  {tooltipShown.title != null && <div><strong>{tooltipShown.title}</strong></div>}
+                  {tooltipShown.rows.map(([k, v]) => (
+                    <div key={k}><strong>{k}:</strong> {v}</div>
+                  ))}
+                </>)}
         </div>
       )}
     </div>

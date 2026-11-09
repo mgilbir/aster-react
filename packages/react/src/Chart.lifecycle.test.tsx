@@ -32,6 +32,7 @@ function barSpec(rows: Array<{ cat: string; v: number }>, extra: Record<string, 
       encode: { enter: {
         x: { scale: 'x', field: 'cat' }, width: { scale: 'x', band: 1 },
         y: { scale: 'y', field: 'v' }, y2: { scale: 'y', value: 0 }, fill: { value: '#4c78a8' },
+        tooltip: { signal: 'datum' },
       } },
     }],
     ...extra,
@@ -48,7 +49,7 @@ function dotSpec(rows: Array<{ x: number; y: number; k: string }>) {
       { name: 'x', type: 'linear', domain: [0, 400], range: [0, 400] },
       { name: 'y', type: 'linear', domain: [0, 300], range: [0, 300] },
     ],
-    marks: [{ type: 'symbol', from: { data: 't' }, encode: { update: { x: { scale: 'x', field: 'x' }, y: { scale: 'y', field: 'y' }, size: { value: 30 } } } }],
+    marks: [{ type: 'symbol', from: { data: 't' }, encode: { update: { x: { scale: 'x', field: 'x' }, y: { scale: 'y', field: 'y' }, size: { value: 30 }, tooltip: { signal: 'datum' } } } }],
   } as never
 }
 

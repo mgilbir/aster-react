@@ -9,6 +9,7 @@ import {
   CompiledTextLabelSpec,
   CompiledHeatmapSpec,
   CompiledStackedBarSpec,
+  CompiledTooltipBarSpec,
   CompiledLayerSpec,
   CompiledDonutSpec,
   CompiledRegressionSpec,
@@ -401,7 +402,7 @@ function LiveDataChanges() {
 function TooltipDemo() {
   return (
     <div className="chart-container">
-      <Chart spec={CompiledStackedBarSpec} width={440} height={300} tooltip ariaLabel="Bars with tooltips" />
+      <Chart spec={CompiledTooltipBarSpec} width={440} height={300} tooltip ariaLabel="Bars with tooltips" />
     </div>
   )
 }
@@ -590,7 +591,7 @@ export function App() {
           </div>
           <div className="card">
             <h3>Hover tooltips</h3>
-            <p>Hover any mark to read its datum, via <code>tooltip</code>.</p>
+            <p>Hover a bar to read its encoded fields: <code>mark.tooltip: true</code> in the spec, shown by <code>tooltip</code>.</p>
             <TooltipDemo />
           </div>
         </div>

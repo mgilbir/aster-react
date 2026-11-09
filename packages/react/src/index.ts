@@ -1,5 +1,5 @@
 export { Chart } from './Chart.js'
-export type { ChartHandle, ChartProps } from './Chart.js'
+export type { ChartHandle, ChartProps, TooltipInfo } from './Chart.js'
 export {
   ChartStream,
   ChartWorkerStream,

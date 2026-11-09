@@ -110,6 +110,7 @@ const baseSpec = (extra: Record<string, unknown> = {}): Record<string, unknown> 
   marks: [{ type: 'symbol', from: { data: 't' }, encode: { update: {
     x: { scale: 'xscale', field: 'px' }, y: { scale: 'yscale', field: 'py' },
     size: { signal: 'size' }, opacity: { signal: 'show ? 1 : 0.2' }, fill: { value: 'steelblue' },
+    tooltip: { signal: 'datum' },
   } } }],
   ...extra,
 })
