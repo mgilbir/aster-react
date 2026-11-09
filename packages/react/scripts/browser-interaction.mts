@@ -56,11 +56,11 @@ ${imports}
 
 window.__log = []
 const rec = (name) => (...args) => { window.__log.push({ name, args: JSON.parse(JSON.stringify(args.map((a) => (a instanceof Error ? a.message : a)))) }) }
-window.__mount = (spec, props, record, listen) => {
+window.__mount = (spec, props, record, listen, hostCss) => {
   const host = document.getElementById('root')
   const container = document.createElement('div')
   container.id = 'chart-host'
-  container.style.cssText = 'position:relative;width:520px;height:340px'
+  container.style.cssText = hostCss ?? 'position:relative;width:520px;height:340px'
   host.replaceChildren(container)
   window.__log = []
   const p = { ...props }
@@ -697,6 +697,49 @@ const MODULES: Record<VariantName, Array<[RegExp, boolean, string]>> = {
   SvgChart: [[/core\/dist\/canvas\.js$/, false, 'the canvas renderer'], [/src\/canvas-capability\.ts$/, false, 'the canvas capability'], [/core\/dist\/hit\.js$/, false, 'the hit index'], [/core\/dist\/signals\.js$/, false, 'the signal loop'], [/src\/interaction-capability\.ts$/, false, 'the interaction capability']],
 }
 
+/**
+ * Issue #128: a chart without size props fills its container with its whole box (padding, guides and the bound inputs
+ * under it included), so a container whose height is the chart's own (a block <div>) keeps it instead of growing on
+ * every measurement, and a container of fixed size is filled exactly.
+ */
+async function sizingSuite(page: Page): Promise<void> {
+  const heights = async (frames: number): Promise<number[]> => {
+    const out: number[] = []
+    for (let i = 0; i < frames; i++) {
+      out.push(await page.evaluate(() => new Promise<number>((done) => requestAnimationFrame(() => requestAnimationFrame(() => done(document.getElementById('chart-host')!.getBoundingClientRect().height))))))
+    }
+    return out
+  }
+  const pad = spec({ autosize: 'pad' })
+  const unsized = { ariaLabel: 'unsized' }
+  // a block container with no height: its height is the chart's
+  await page.evaluate(([sp, pr]) => (window as never as { __mount: (...a: unknown[]) => void }).__mount(sp, pr, [], [], 'width:520px'), [pad, unsized] as const)
+  await page.waitForSelector('svg .mark-symbol path')
+  const block = await heights(12)
+  check(block[0]! > 0 && block.every((h) => h === block[0]), `a block container with no height keeps the chart's height (${JSON.stringify(block)})`)
+  // a spec that sizes its height from the container (vega-lite's height: "container"), in the same block container
+  // (as vega-lite compiles it: no top-level height, a `height` signal that reads the container)
+  const fromContainer = spec({
+    height: undefined,
+    autosize: { type: 'fit-y', contains: 'padding' },
+    signals: [...(pad.signals as unknown[]), { name: 'height', init: 'isFinite(containerSize()[1]) ? containerSize()[1] : 300' }],
+  })
+  await page.evaluate(([sp, pr]) => (window as never as { __mount: (...a: unknown[]) => void }).__mount(sp, pr, [], [], 'width:520px'), [fromContainer, unsized] as const)
+  await page.waitForSelector('svg .mark-symbol path')
+  const fit = await heights(12)
+  check(fit[0]! > 0 && fit.every((h) => h === fit[0]), `a container-sized height in a block container does not creep (${JSON.stringify(fit)})`)
+  // a container of fixed size: the chart's box is the container's, less the bound inputs under it
+  await page.evaluate(([sp, pr]) => (window as never as { __mount: (...a: unknown[]) => void }).__mount(sp, pr, [], [], 'position:relative;width:520px;height:340px'), [pad, unsized] as const)
+  await page.waitForSelector('svg .mark-symbol path')
+  await heights(4)
+  const box = await page.evaluate(() => {
+    const svg = document.querySelector('#chart-host svg')!.getBoundingClientRect()
+    const binds = document.querySelector('#chart-host [data-aster-binds]')?.getBoundingClientRect().height ?? 0
+    return { w: svg.width, h: svg.height, binds }
+  })
+  check(box.w === 520 && Math.abs(box.h + box.binds - 340) < 1, `a 520x340 container is filled exactly: svg ${box.w}x${box.h} + bound inputs ${box.binds}`)
+}
+
 const browser = await chromium.launch()
 try {
   for (const variant of ['Chart', 'SvgChart+interaction', 'SvgChart'] as const) {
@@ -709,6 +752,7 @@ try {
     page.on('pageerror', (e) => { failures++; console.log(`  FAIL page error: ${e.message}`) })
     await page.setContent('<!doctype html><html><body style="margin:0;font:12px sans-serif"><div id="root"></div></body></html>')
     await page.addScriptTag({ content: code })
+    await sizingSuite(page)
     if (variant === 'SvgChart') await plainSuite(page)
     else { await suite(page); await tabStopSuite(page); await cursorSuite(page, variant === 'Chart' ? ['svg', 'canvas'] : ['svg']) }
     await page.close()

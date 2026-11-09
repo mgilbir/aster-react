@@ -2118,7 +2118,7 @@ function buildContentPass(
   if (layoutError !== undefined && cut === undefined) failPass(ctx, { path: ctx.scope.last ?? [], axis: Infinity, late: true, layout: { items: [[]], at: 0 } }, layoutError.error)
 
   // Top-level title. (A pass that stopped at a failing dataset or signal never made it: it is ranked after them.)
-  const titleGroup = (stopped && !cut!.title && !cut!.labels && !cut!.lateSignal && !cut!.lateScale) || ctx.datasetAborted ? null : withoutLateReads(ctx, () => buildTitleGroup(ctx.chart.title, items, width, height, ctx.rawGuides, ctx, undefined, ctx.chart.autosize === 'fit' || ctx.chart.autosize === 'fit-x' || ctx.chart.autosize === 'fit-y'))
+  const titleGroup = (stopped && !cut!.title && !cut!.labels && !cut!.lateSignal && !cut!.lateScale) || ctx.datasetAborted ? null : withoutLateReads(ctx, () => buildTitleGroup(ctx.chart.title, items, width, height, ctx.rawGuides, ctx, undefined, isFit(autosizeOf(chart, input).type)))
   if (titleGroup) items.push(titleGroup)
   // The root group's width / height are the view's `width` / `height` signals (0
   // for a composition that sizes only its children), whatever the grid inside covers.
@@ -2141,9 +2141,9 @@ function buildContentPass(
     || ctx.postRunLost === true
     || ctx.rawGuides
     || cut !== undefined
-    || ctx.chart.autosize === 'none'
+    || autosizeOf(chart, input).type === 'none'
     ? ctx.chart.padding
-    : computeGuidePadding(items, width, height, ctx.chart.padding, ctx.chart.autosize === 'fit' || ctx.chart.autosize === 'fit-x' || ctx.chart.autosize === 'fit-y')
+    : computeGuidePadding(items, width, height, ctx.chart.padding, isFit(autosizeOf(chart, input).type))
   const ordered = paintOrderOf(items)
   return { record: ctx.passMemory?.cur, items: ordered, padding, ctx, width, height, hasLayout, frame }
 }
@@ -2194,7 +2194,8 @@ export function evaluateOnce(chart: CompiledChart, input: RuntimeInput = {}): Sc
 function evaluateChartImpl(chart: CompiledChart, hostInput: RuntimeInput, txn: EvalTxn, done: { draft?: IncrementalState; failed?: boolean }): SceneRoot {
   // an injected random source is drawn from once per site and run, however many passes and evaluations repeat it (see random-tape.ts)
   const input: RuntimeInput = hostInput.random ? { ...hostInput, random: replayable(hostInput.random) } : hostInput
-  const auto = chart.autosize
+  // (the spec's autosize, or a fit to the container the host measured: see autosizeOf)
+  const { type: auto, contains: autosizeContains } = autosizeOf(chart, input)
   const base = chart.padding
   // Differential-update generation (`txn.gen`): an unchanged (reused) item keeps
   // the generation it was encoded in, so the DOM patcher can skip it.
@@ -2221,7 +2222,7 @@ function evaluateChartImpl(chart: CompiledChart, hostInput: RuntimeInput, txn: E
   let ch = initialH
   let firstPassPadding: BuiltContent['padding'] | undefined
   let built: BuiltContent
-  if (auto === 'none' && chart.autosizeContains === 'padding') {
+  if (auto === 'none' && autosizeContains === 'padding') {
     // autosize `none` with `contains: "padding"`: the view's width / height INCLUDE the padding, so the group (the
     // width / height signals, every scale and expression that reads them) gets what is left (vega-view-transforms
     // viewSizeLayout: `width = viewWidth`, the padding taken out of it), as a resize of the view does.
@@ -2250,8 +2251,8 @@ function evaluateChartImpl(chart: CompiledChart, hostInput: RuntimeInput, txn: E
       // not the current content: content = viewport - overflow. With autosize
       // contains:'padding' the spec'd width/height INCLUDE the padding
       // (viewSizeLayout subtracts it before fitting).
-      const padW = chart.autosizeContains === 'padding' ? base.left + base.right : 0
-      const padH = chart.autosizeContains === 'padding' ? base.top + base.bottom : 0
+      const padW = autosizeContains === 'padding' ? base.left + base.right : 0
+      const padH = autosizeContains === 'padding' ? base.top + base.bottom : 0
       if (auto === 'fit') { nw = Math.max(0, initialW - padW - oL - oR); nh = Math.max(0, initialH - padH - oT - oB) }
       else if (auto === 'fit-x') { nw = Math.max(0, initialW - padW - oL - oR); nh = ch }
       else { nw = cw; nh = Math.max(0, initialH - padH - oT - oB) }
@@ -2275,15 +2276,15 @@ function evaluateChartImpl(chart: CompiledChart, hostInput: RuntimeInput, txn: E
   // is wider than the viewport and the content is squeezed to nothing)
   const fitW = (auto === 'fit' || auto === 'fit-x') && firstPassPadding !== undefined
   const fitH = (auto === 'fit' || auto === 'fit-y') && firstPassPadding !== undefined
-  const contains = chart.autosizeContains === 'padding'
+  const contains = autosizeContains === 'padding'
   const sceneWidth = fitW
     ? initialW + (contains ? 0 : base.left + base.right)
-    : ctx.chart.autosize !== 'none'
+    : auto !== 'none'
       ? width + padding.left + padding.right
       : width + ctx.chart.padding.left + ctx.chart.padding.right
   const sceneHeight = fitH
     ? initialH + (contains ? 0 : base.top + base.bottom)
-    : ctx.chart.autosize !== 'none'
+    : auto !== 'none'
       ? height + padding.top + padding.bottom
       : height + ctx.chart.padding.top + ctx.chart.padding.bottom
 
@@ -2310,7 +2311,7 @@ function evaluateChartImpl(chart: CompiledChart, hostInput: RuntimeInput, txn: E
     frameStrokeDashOffset: ctx.chart.frameStrokeDashOffset,
     frameStrokeCap: ctx.chart.frameStrokeCap,
     frameStrokeJoin: ctx.chart.frameStrokeJoin,
-    padding: ctx.chart.autosize === 'none' ? ctx.chart.padding : padding,
+    padding: auto === 'none' ? ctx.chart.padding : padding,
     items,
     ...(built.frame ? { ...built.frame.paint, ...(built.frame.x !== 0 ? { frameX: built.frame.x } : {}), ...(built.frame.y !== 0 ? { frameY: built.frame.y } : {}), ...(built.frame.aria !== undefined ? { frameAria: built.frame.aria } : {}) } : {}),
   }
@@ -2483,6 +2484,29 @@ function viewOverride(chart: CompiledChart, input: RuntimeInput, dim: 'width' | 
   if (chart.contentSized?.includes(dim)) return undefined
   return drivesSize(chart, 'width') || drivesSize(chart, 'height') ? undefined : measured
 }
+
+/**
+ * The view's autosize. A dimension the measured container sizes (see viewOverride) is the whole chart there, padding and
+ * guides included, as vega-lite's `width` / `height: "container"` is (`fit` that contains the padding): the content
+ * shrinks so the chart's box is the container's. So a chart that fills its container never outgrows it, and a container
+ * whose size is the chart's own (a block <div> with no height) keeps it, where the content grew on every measurement
+ * (issue #128). Every other view keeps the spec's autosize.
+ */
+function autosizeOf(chart: CompiledChart, input: RuntimeInput): { type: CompiledChart['autosize']; contains: string | undefined } {
+  const w = fillsContainer(chart, input, 'width')
+  const h = fillsContainer(chart, input, 'height')
+  if (!w && !h) return { type: chart.autosize, contains: chart.autosizeContains }
+  const own = chart.autosize
+  const type = (w && h) || (w && (own === 'fit' || own === 'fit-y')) || (h && (own === 'fit' || own === 'fit-x')) ? 'fit' : w ? 'fit-x' : 'fit-y'
+  return { type, contains: 'padding' }
+}
+
+/** Whether the view's `dim` is the measured container's (the host fixed no size there and no signal write beats it). */
+function fillsContainer(chart: CompiledChart, input: RuntimeInput, dim: 'width' | 'height'): boolean {
+  return input.measuredSize?.[dim] != null && input[dim] == null && typeof input.signals?.[dim] !== 'number' && viewOverride(chart, input, dim) !== undefined
+}
+
+const isFit = (type: CompiledChart['autosize']): boolean => type === 'fit' || type === 'fit-x' || type === 'fit-y'
 
 /** Whether the spec drives a view dimension itself: a `{signal}` size or a declared `width` / `height` signal. */
 function drivesSize(chart: CompiledChart, dim: 'width' | 'height'): boolean {

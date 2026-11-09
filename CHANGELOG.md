@@ -7,6 +7,11 @@ and Fixed, per package. Everything built before the first release is in [Pre-rel
 
 ### `@aster-charts/react`
 
+#### Fixed
+
+- A chart without size props in a container whose height is its own no longer grows: the bound inputs under the chart
+  are not counted as the chart's, and the inline `<svg>` no longer leaves a descender gap below it (#128).
+
 #### Changed
 
 - `tooltip` shows the hovered item's `tooltip` value, as Vega with vega-tooltip does (the Vega-Lite `tooltip` encoding with
@@ -16,6 +21,13 @@ and Fixed, per package. Everything built before the first release is in [Pre-rel
   scene item (#129).
 
 ### `@aster-charts/core`
+
+#### Changed
+
+- The container a host measured (`measuredSize`, which `<Chart>` passes when it has no size props) sizes the chart's whole
+  box, as Vega-Lite's `"container"` does (autosize `fit` containing the padding): the content shrinks so padding and
+  guides fit inside. It used to size the plot, with padding and axes added on top, so a chart overflowed the container
+  it filled, and a container whose height is the chart's own (a block `<div>`) grew on every measurement (#128).
 
 #### Fixed
 
