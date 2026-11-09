@@ -36,13 +36,18 @@ export interface ResolvedTransition {
   duration: number
   easing: NonNullable<TransitionOptions['easing']>
   reducedMotion: NonNullable<TransitionOptions['reducedMotion']>
+  maxItems: number
 }
+
+/** The default `maxItems`: a change that moves more items than this is drawn at once. */
+export const DEFAULT_MAX_ITEMS = 1000
 
 export function resolveTransition(prop: ChartProps['transition']): ResolvedTransition | null {
   if (prop == null || prop === false) return null
   const o: TransitionOptions = prop === true ? {} : prop
   const duration = typeof o.duration === 'number' && o.duration >= 0 ? o.duration : 300
-  return { duration, easing: o.easing ?? 'cubic-in-out', reducedMotion: o.reducedMotion ?? 'user' }
+  const maxItems = typeof o.maxItems === 'number' && o.maxItems >= 0 ? o.maxItems : DEFAULT_MAX_ITEMS
+  return { duration, easing: o.easing ?? 'cubic-in-out', reducedMotion: o.reducedMotion ?? 'user', maxItems }
 }
 
 const reduced = (o: ResolvedTransition): boolean => o.reducedMotion === 'always'

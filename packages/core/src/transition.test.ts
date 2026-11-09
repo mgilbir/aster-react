@@ -185,6 +185,33 @@ describe('createSceneTransition', () => {
     expect(labels(tr.at(1)).map((l) => l.text)).toEqual(labels(to).map((l) => l.text))
   })
 
+  it('counts the items that move, and with more than maxItems moves nothing: the target is drawn at once', () => {
+    const from = evaluate(bars(A))
+    const to = evaluate(bars(B))
+    // b and c move, d enters, a leaves
+    expect(createSceneTransition(from, to).items).toBe(4)
+    const atLimit = createSceneTransition(from, to, { maxItems: 4 })
+    expect(atLimit.moves).toBe(true)
+    expect(atLimit.at(0.5)).not.toBe(to)
+    const over = createSceneTransition(from, to, { maxItems: 3 })
+    expect(over.moves).toBe(false)
+    expect(over.at(0)).toBe(to)
+    expect(over.at(0.5)).toBe(to)
+    // an item that is the same in both scenes does not count
+    const one = B.map((r) => (r.k === 'c' ? { ...r, v: 9 } : r))
+    expect(createSceneTransition(to, evaluate(bars(one))).items).toBe(1)
+  })
+
+  it('stops planning at the first item past maxItems', () => {
+    const rows = (v: number): Row[] => Array.from({ length: 1500 }, (_, i) => ({ k: `r${i}`, x: i % 100, v: v + (i % 3) }))
+    const from = evaluate(bars(rows(1)))
+    const to = evaluate(bars(rows(4)))
+    expect(createSceneTransition(from, to).items).toBe(1500)
+    const capped = createSceneTransition(from, to, { maxItems: 1000 })
+    expect(capped.moves).toBe(false)
+    expect(capped.items).toBe(1001)
+  })
+
   it('t = 0 draws the first scene, t = 1 is the second scene itself, and neither scene is written', () => {
     const fromSpec = bars([{ k: 'a', x: 0, v: 1 }, { k: 'b', x: 20, v: 2 }])
     const from = evaluate(fromSpec)

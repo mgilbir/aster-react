@@ -20,6 +20,7 @@ before, which is what the conformance gates compare against Vega.
 | `duration` | `300` | milliseconds |
 | `easing` | `'cubic-in-out'` | `'linear'`, `'quad-in'`, `'quad-out'`, `'quad-in-out'`, `'cubic-in'`, `'cubic-out'`, `'cubic-in-out'`, `'sin-in'`, `'sin-out'`, `'sin-in-out'`, or a function from linear progress in [0, 1] to eased progress |
 | `reducedMotion` | `'user'` | `'user'`: no animation when the user prefers reduced motion (`prefers-reduced-motion: reduce`); `'always'`: never animate; `'never'`: animate whatever the preference |
+| `maxItems` | `1000` | the most items a transition animates: a change that would move more (data mark items and axis parts whose position, size, opacity or colour changes; an item that is the same in both scenes does not count) is drawn at once. See [Loading and cost](#loading-and-cost) |
 
 `<SvgChart>` takes the same prop, and `<ChartStream>` / `<ChartWorkerStream>` pass it to the chart they render.
 
@@ -89,12 +90,14 @@ chart, giving it another spec, or switching it to the canvas renderer stops the 
 - The canvas renderer (`renderer="canvas"`) draws the new scene at once.
 - Batched dense marks (`denseMarks`, by default a symbol mark of 512 items or more) are drawn at once.
 - `incremental={false}` (string markup on every update) is drawn at once.
+- A change that would move more than `maxItems` items (default 1,000) is drawn at once. Planning stops at the first item past
+  the limit, so a large change costs little before it is drawn.
 
 ## Loading and cost
 
 The interpolation is its own module, `@aster-charts/core/transition`, and a chart loads it on demand: an app that never sets
 `transition` never fetches it, and a chart that sets it starts loading it at once, so the first change of data can animate. A
-change that arrives before it has loaded is drawn at once. The module is 3.1 kB gzip on top of `@aster-charts/core`; the prop
+change that arrives before it has loaded is drawn at once. The module is 3.3 kB gzip on top of `@aster-charts/core` (with `maxItems`); the prop
 handling adds about 1.2 kB gzip to the eager `<Chart>` bundle (`pnpm --filter @aster-charts/benchmarks run budget`, measured
 2026-11-09; the breakdown is in [PERFORMANCE.md](PERFORMANCE.md#bundle-sizes)).
 
@@ -111,8 +114,13 @@ transition in which every item moves and recolours: one plan, then 30 frames fro
 | 10,000 rects | 25.5–29.0 ms | 11.7–12.9 ms | 33.3 ms (30 fps) | 16.0–17.0 ms |
 
 A thousand moving items keep 60 frames a second there; ten thousand drop frames (the transition still takes its `duration` and
-ends on the exact scene, in fewer frames). A symbol mark that large is batched by default (`denseMarks`) and is drawn at once.
-For a large chart whose data changes often, prefer a short `duration` or no `transition`.
+ends on the exact scene, in fewer frames). That is where the default `maxItems` of 1,000 comes from: past it a change is drawn
+at once. Raise it for a chart that can afford the frames, or lower it for a chart whose data changes often.
+
+Two costs remain inside the limit. A Vega-Lite `time` animation plans its transition again at each clock tick (about 5 ms for
+1,000 moving symbols, by the planning column above). A `<ChartStream>` that brings new data more often than `duration`
+interrupts each transition with the next one, which starts from the frame on screen; the marks keep moving and land on the
+latest data a `duration` after it stops changing. For a fast stream, a short `duration` keeps the picture close to the data.
 
 ## The core API
 

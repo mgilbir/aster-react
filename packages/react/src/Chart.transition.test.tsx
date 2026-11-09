@@ -98,6 +98,32 @@ forEachVariant(['svg'], (Chart, variant) => {
       expect(svgOf(container)).toBe(fresh({ data: { t: B }, transition: LINEAR }))
     })
 
+    variant.it(['svg'], 'a change that moves more than `maxItems` items is drawn at once', () => {
+      // both bars move: two items
+      const capped = { ...LINEAR, maxItems: 1 }
+      const { container, root } = mount(el(Chart, { data: { t: A }, transition: capped }))
+      act(() => { root.render(el(Chart, { data: { t: B }, transition: capped })) })
+      expect(vi.getTimerCount()).toBe(0)
+      expect(svgOf(container)).toBe(fresh({ data: { t: B } }))
+      // with room for both, it animates
+      const room = { ...LINEAR, maxItems: 2 }
+      const again = mount(el(Chart, { data: { t: A }, transition: room }))
+      act(() => { again.root.render(el(Chart, { data: { t: B }, transition: room })) })
+      expect(vi.getTimerCount()).toBeGreaterThan(0)
+      expect(bars(again.container)).toEqual(bars(mount(el(Chart, { data: { t: A } })).container))
+    })
+
+    variant.it(['svg'], 'by default a transition animates up to 1000 moving items, and more are drawn at once', () => {
+      const rows = (n: number, v: number): Row[] => Array.from({ length: n }, (_, i) => ({ k: `r${i}`, x: i % 100, v: v + (i % 3) }))
+      for (const [n, animates] of [[1000, true], [1001, false]] as const) {
+        const { container, root } = mount(el(Chart, { data: { t: rows(n, 1) }, transition: LINEAR }))
+        act(() => { root.render(el(Chart, { data: { t: rows(n, 4) }, transition: LINEAR })) })
+        expect(vi.getTimerCount() > 0, `${n} moving bars`).toBe(animates)
+        advance(400)
+        expect(svgOf(container)).toBe(fresh({ data: { t: rows(n, 4) } }))
+      }
+    })
+
     variant.it(['svg'], '`true` animates with the defaults (300 ms, cubic-in-out)', () => {
       const { container, root } = mount(el(Chart, { data: { t: A }, transition: true }))
       act(() => { root.render(el(Chart, { data: { t: B }, transition: true })) })

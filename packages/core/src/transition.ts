@@ -64,13 +64,21 @@ export function easingFunction(easing: Easing = 'cubic-in-out'): (t: number) => 
 export interface SceneTransitionOptions {
   /** Default `cubic-in-out`. */
   easing?: Easing
+  /**
+   * The most items that may move (data mark items and axis parts that change position, size, opacity or colour; an item that
+   * is the same in both scenes does not count). With more, nothing moves: the transition draws `to` at once (`moves` false,
+   * `items` more than this), and planning stops as soon as it finds one too many. Default: no limit.
+   */
+  maxItems?: number
 }
 
 export interface SceneTransition {
   readonly from: SceneRoot
   readonly to: SceneRoot
-  /** False when nothing would move: every frame draws like `to`, and a host can draw `to` at once. */
+  /** False when nothing would move, or more than `maxItems` would: every frame draws like `to`, and a host can draw `to` at once. */
   readonly moves: boolean
+  /** How many items move (when more than `maxItems` would, `maxItems + 1`: planning stopped there). */
+  readonly items: number
   /**
    * The scene at linear progress `t` (eased here). `t >= 1` is `to` itself. Below 1 every call returns the SAME scene object,
    * rewritten in place: draw it before asking for the next frame, and do not keep it as a value (use it as the `from` of the
@@ -92,7 +100,19 @@ const PAINT = ['fill', 'stroke'] as const
 const CONNECTED = new Set(['line', 'area', 'trail'])
 
 /** The channels of a transition, as flat columns: a frame is one pass over them. */
+/** Thrown by the planner when more items would move than the transition may animate (caught in createSceneTransition). */
+const TOO_MANY: unique symbol = Symbol('too many items')
+
 class Channels {
+  /** The items with a channel that moves (an item's channels are added together, one item after another). */
+  items = 0
+  private last: Rec | null = null
+  constructor(private readonly maxItems: number) {}
+  private moving(obj: Rec): void {
+    if (obj === this.last) return
+    this.last = obj
+    if (++this.items > this.maxItems) throw TOO_MANY
+  }
   readonly objs: Rec[] = []
   readonly keys: string[] = []
   readonly start: number[] = []
@@ -112,6 +132,7 @@ class Channels {
   /** `obj[key]` goes from `a` to `b` (and is `a` until the first frame is drawn). */
   num(obj: Rec, key: string, a: number, b: number): void {
     if (a === b) return
+    this.moving(obj)
     obj[key] = a
     this.objs.push(obj)
     this.keys.push(key)
@@ -124,6 +145,7 @@ class Channels {
     const ca = rgbaOf(a)
     const cb = ca && rgbaOf(b)
     if (!ca || !cb) return false
+    this.moving(obj)
     obj[key] = a
     this.cObjs.push(obj)
     this.cKeys.push(key)
@@ -373,7 +395,8 @@ function signatureOf(n: SceneItem): string {
 
 /** Builds a frame tree once; frames then only rewrite its channels. */
 class Planner {
-  readonly ch = new Channels()
+  readonly ch: Channels
+  constructor(maxItems: number) { this.ch = new Channels(maxItems) }
   private readonly keyReaders = new Map<string, ReturnType<typeof keyReader>>()
 
   private readerOf(fields: readonly string[] | undefined): ReturnType<typeof keyReader> {
@@ -506,11 +529,18 @@ function mergedDefs(to: SceneRoot, from: SceneRoot): SceneDef[] | undefined {
  */
 export function createSceneTransition(from: SceneRoot, to: SceneRoot, options: SceneTransitionOptions = {}): SceneTransition {
   const ease = easingFunction(options.easing)
-  if (from === to) return { from, to, moves: false, at: () => to }
-  const planner = new Planner()
-  const items = planner.list(from.items as SceneItem[], to.items as SceneItem[], null)
+  if (from === to) return { from, to, moves: false, items: 0, at: () => to }
+  const maxItems = options.maxItems ?? Infinity
+  const planner = new Planner(maxItems >= 0 ? maxItems : 0)
+  let items: SceneItem[]
+  try {
+    items = planner.list(from.items as SceneItem[], to.items as SceneItem[], null)
+  } catch (e) {
+    if (e === TOO_MANY) return { from, to, moves: false, items: planner.ch.items, at: () => to }
+    throw e
+  }
   const ch = planner.ch
-  if (ch.size === 0) return { from, to, moves: false, at: () => to }
+  if (ch.size === 0) return { from, to, moves: false, items: 0, at: () => to }
   // (the root's own drawing is `to`'s; the item generation stays `to`'s, so the items of `to` a frame draws unchanged keep
   // their cached descriptors, while the frame's own copies, which have no generation, are always drawn afresh)
   const frame = { ...to, items: items as SceneGroup[] } as SceneRoot
@@ -520,6 +550,7 @@ export function createSceneTransition(from: SceneRoot, to: SceneRoot, options: S
     from,
     to,
     moves: true,
+    items: ch.items,
     at(t: number): SceneRoot {
       if (!(t < 1)) return to
       ch.apply(ease(t > 0 ? t : 0))
@@ -532,6 +563,8 @@ export function createSceneTransition(from: SceneRoot, to: SceneRoot, options: S
 export interface PlayOptions {
   duration: number
   easing?: Easing
+  /** See `SceneTransitionOptions.maxItems`: a change that would move more items is drawn at once. */
+  maxItems?: number
 }
 
 /** Draws the scenes of one chart into its target (an `<svg>`), at once or as a transition from what is on screen. */
@@ -557,6 +590,7 @@ interface Playing<T> {
   t0: number
   duration: number
   easing: Easing | undefined
+  maxItems: number | undefined
 }
 
 /**
@@ -606,9 +640,9 @@ export function createScenePlayer<T>(
     frame = requestAnimationFrame(tick)
   }
   /** The transition, or null when nothing would move (or it cannot be made: reported). */
-  const make = (from: SceneRoot, to: SceneRoot, easing: Easing | undefined): SceneTransition | null => {
+  const make = (from: SceneRoot, to: SceneRoot, easing: Easing | undefined, maxItems: number | undefined): SceneTransition | null => {
     try {
-      const tr = createSceneTransition(from, to, { easing })
+      const tr = createSceneTransition(from, to, { easing, ...(maxItems !== undefined ? { maxItems } : {}) })
       return tr.moves ? tr : null
     } catch (e) {
       report(e instanceof Error ? e : new Error(String(e)))
@@ -624,10 +658,10 @@ export function createScenePlayer<T>(
       if (animate !== null) {
         const from = shown
         if (animate.duration > 0 && from !== null) {
-          const tr = make(from, scene, animate.easing)
+          const tr = make(from, scene, animate.easing, animate.maxItems)
           if (tr !== null) {
             stopFrames()
-            run = { target, from, to: scene, tr, t0: now(), duration: animate.duration, easing: animate.easing }
+            run = { target, from, to: scene, tr, t0: now(), duration: animate.duration, easing: animate.easing, maxItems: animate.maxItems }
             show(run, 0)
             frame = requestAnimationFrame(tick)
             return
@@ -635,7 +669,7 @@ export function createScenePlayer<T>(
         }
       } else if (run !== null && run.target === target) {
         const r = run
-        const tr = make(r.from, scene, r.easing)
+        const tr = make(r.from, scene, r.easing, r.maxItems)
         const t = progress(r)
         if (tr !== null && t < 1) {
           r.tr = tr

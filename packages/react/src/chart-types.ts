@@ -40,6 +40,12 @@ export interface TransitionOptions {
    * never animate; `'never'`: animate whatever the preference.
    */
   reducedMotion?: 'user' | 'always' | 'never'
+  /**
+   * The most items a transition animates. A change that would move more (data mark items and axis parts whose position,
+   * size, opacity or colour changes) is drawn at once. Default 1000: past that, a frame costs more than an animation is worth
+   * (docs/ANIMATION.md has the measured frame costs).
+   */
+  maxItems?: number
 }
 
 export interface ChartProps {

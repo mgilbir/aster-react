@@ -14,14 +14,14 @@ and Fixed, per package. Everything built before the first release is in [Pre-rel
 
 #### Added
 
-- `transition` on `<Chart>` and `<SvgChart>` (`true` or `{ duration, easing, reducedMotion }`, type `TransitionOptions`): a
+- `transition` on `<Chart>` and `<SvgChart>` (`true` or `{ duration, easing, reducedMotion, maxItems }`, type `TransitionOptions`): a
   change of data animates in the SVG from the picture on screen to the new scene, and settles on exactly the scene a chart
   without it draws. Items are matched by the mark's `key` (Vega-Lite's `key` channel), else by index; bars grow from their
   baseline, other new items fade in, axes slide to their new ticks; new data mid-way starts from the frame on screen;
   `prefers-reduced-motion` is honoured by default. Signals, pan / zoom, resizes and legend toggles are drawn at once; hit
   testing, tooltips and the accessible tree answer for the new scene. `<ChartStream>` passes it through, and a Vega-Lite
   `time` animation tweens between its frames. The canvas renderer and batched dense marks draw at once. The interpolation
-  loads on demand ([docs/ANIMATION.md](docs/ANIMATION.md), #127).
+  loads on demand. A change that moves more than `maxItems` items (default 1,000) is drawn at once ([docs/ANIMATION.md](docs/ANIMATION.md), #127).
 
 #### Changed
 
@@ -47,7 +47,7 @@ and Fixed, per package. Everything built before the first release is in [Pre-rel
 
 #### Added
 
-- `@aster-charts/core/transition`: `createSceneTransition(from, to, { easing })` pairs the items of two scenes (by the
+- `@aster-charts/core/transition`: `createSceneTransition(from, to, { easing, maxItems })` pairs the items of two scenes (by the
   mark's `key`, else by index; facet groups by their `groupby`; axis ticks by value) and returns the frames between them
   (`at(t)`, where `at(1)` is `to` itself); `easingFunction` and `EASING_NAMES` for the named curves. Scenes now carry the
   key fields of marks and group items and the tick value of axis leaves, which no renderer draws (#127).

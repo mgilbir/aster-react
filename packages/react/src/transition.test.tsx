@@ -46,8 +46,9 @@ describe('the scene animator', () => {
   it('resolves the prop: off, the defaults, and given options', () => {
     expect(resolveTransition(undefined)).toBeNull()
     expect(resolveTransition(false)).toBeNull()
-    expect(resolveTransition(true)).toEqual({ duration: 300, easing: 'cubic-in-out', reducedMotion: 'user' })
-    expect(resolveTransition({ duration: 120, easing: 'linear', reducedMotion: 'never' })).toEqual({ duration: 120, easing: 'linear', reducedMotion: 'never' })
+    expect(resolveTransition(true)).toEqual({ duration: 300, easing: 'cubic-in-out', reducedMotion: 'user', maxItems: 1000 })
+    expect(resolveTransition({ duration: 120, easing: 'linear', reducedMotion: 'never', maxItems: 50 })).toEqual({ duration: 120, easing: 'linear', reducedMotion: 'never', maxItems: 50 })
+    expect(resolveTransition({ maxItems: -1 })!.maxItems).toBe(1000)
     expect(resolveTransition({ duration: -5 })!.duration).toBe(300)
   })
 })

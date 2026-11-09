@@ -699,7 +699,7 @@ Pan, zoom and brushing are driven through scale `domainRaw`; the gestures, the k
 picks the scales are in `docs/INTERACTION.md`.
 
 `transition` (SVG; off by default) animates a change of data: `true`, or `TransitionOptions` `{ duration?: number /* ms, 300 */,
-easing?: EasingName | ((t) => number) /* 'cubic-in-out' */, reducedMotion?: 'user' | 'always' | 'never' /* 'user' */ }`.
+easing?: EasingName | ((t) => number) /* 'cubic-in-out' */, reducedMotion?: 'user' | 'always' | 'never' /* 'user' */, maxItems?: number /* 1000: a change that moves more items is drawn at once */ }`.
 New `data` rows, new inline rows in an equal spec, a streamed scene and a Vega-Lite `time` animation's next frame are drawn as
 frames from the picture on screen to the new scene, which is the last frame; anything else (signals, pan / zoom, size, legend
 toggles) is drawn at once, or becomes the end of a transition that is running. Items are matched by the mark's `key`, else by
