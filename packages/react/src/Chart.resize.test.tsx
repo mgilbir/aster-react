@@ -124,5 +124,28 @@ forEachVariant(['signals'], (Chart, variant) => {
         for (const [k, d] of [['clientWidth', saved[0]], ['clientHeight', saved[1]]] as const) { if (d) Object.defineProperty(proto, k, d); else delete (proto as unknown as Record<string, unknown>)[k] }
       }
     })
+
+    // Issue #128: `width: "container", height: 200` in a block <div> of no height of its own. The container is as tall
+    // as the chart, so feeding its measured height back into the view grew the chart on every measurement.
+    variant.it(['signals'], 'a spec that sizes only its width from the container keeps its numeric height in a container that grows with it', () => {
+      const widthOnly = compile({
+        width: 'container', height: 200, padding: 5,
+        data: { name: 'table' }, mark: 'line',
+        encoding: { x: { field: 'x', type: 'quantitative' }, y: { field: 'y', type: 'quantitative' } },
+      } as never) as never
+      const box = { current: { width: 640, height: 50 } }
+      const ro = stubResizeObserver(box)
+      try {
+        const live = mount(<Chart spec={widthOnly} data={{ table: rowsAt({}) }} />)
+        const [w0, h0] = size(live)
+        expect(w0).toBe('640')
+        for (const width of [640, 600, 560]) {
+          // the block container hugs the chart (plus an inline descender gap), so it reports the chart's own height back
+          box.current = { width, height: Number(size(live)[1]) + 4 }
+          ro.fire()
+          expect(size(live), `after measuring ${box.current.width}x${box.current.height}`).toEqual([String(width), h0])
+        }
+      } finally { ro.restore() }
+    })
   })
 })

@@ -2468,7 +2468,10 @@ function signedViewSize(size: SizeSpec, override: number | undefined, signals: R
  * autosize, the svg, the signal expressions read -- starts from this, so none can disagree with another). In Vega the
  * size is a signal and the later write wins, so from the strongest: the size the host fixed (`input.width`), a value it
  * wrote to the signal (a bound input, an event handler), and the container it measured, which only sizes a spec that
- * does not drive the signal itself and does not leave the dimension to its layout (a composition's size is its groups').
+ * drives neither `width` nor `height` itself and does not leave the dimension to its layout (a composition's size is its
+ * groups'). A spec that drives one dimension sizes itself, so its other, numeric dimension stays the spec's: vega-lite's
+ * `width: "container", height: 200` is 200 tall whatever the container measures, and a container that grows with the
+ * chart cannot feed its own height back into it (issue #128).
  */
 function viewOverride(chart: CompiledChart, input: RuntimeInput, dim: 'width' | 'height'): number | undefined {
   const fixed = input[dim]
@@ -2478,9 +2481,13 @@ function viewOverride(chart: CompiledChart, input: RuntimeInput, dim: 'width' | 
   const measured = input.measuredSize?.[dim]
   if (measured == null) return undefined
   if (chart.contentSized?.includes(dim)) return undefined
+  return drivesSize(chart, 'width') || drivesSize(chart, 'height') ? undefined : measured
+}
+
+/** Whether the spec drives a view dimension itself: a `{signal}` size or a declared `width` / `height` signal. */
+function drivesSize(chart: CompiledChart, dim: 'width' | 'height'): boolean {
   const size = chart[dim]
-  const drives = (size !== null && typeof size === 'object' && 'signal' in size) || (chart.signalDefs ?? []).some((d) => d.name === dim)
-  return drives ? undefined : measured
+  return (size !== null && typeof size === 'object' && 'signal' in size) || (chart.signalDefs ?? []).some((d) => d.name === dim)
 }
 
 function resolveSize(size: SizeSpec, override: number | undefined, signals: Record<string, unknown>): number {

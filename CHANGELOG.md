@@ -3,6 +3,16 @@
 Version 0.1.0 is the first release. From 0.1.0 on, entries are added per release under Added, Changed
 and Fixed, per package. Everything built before the first release is in [Pre-release history](#pre-release-history) below.
 
+## Unreleased
+
+### `@aster-charts/core`
+
+#### Fixed
+
+- A spec that drives one view dimension itself keeps its other, numeric dimension when a host measures its container. A
+  Vega-Lite spec with `width: "container", height: 200` in `<Chart>` grew on every measurement inside a block `<div>`
+  with no height of its own, because the measured height replaced the 200 and the container grew with the chart (#128).
+
 ## 0.1.0 (2026-11-08): initial release
 
 ### `@aster-charts/core`
