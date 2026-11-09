@@ -98,8 +98,9 @@ jobs:
         run: |
           set -euo pipefail
           # Dependencies first: @aster-charts/react depends on @aster-charts/core and @aster-charts/vl.
+          # The `./` is required: npm reads `release-tarballs/<file>` as GitHub `owner/repo` shorthand and tries git.
           for pkg in core vl react; do
-            npm publish release-tarballs/aster-charts-"$pkg"-*.tgz --access public --provenance --ignore-scripts
+            npm publish ./release-tarballs/aster-charts-"$pkg"-*.tgz --access public --provenance --ignore-scripts
           done
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

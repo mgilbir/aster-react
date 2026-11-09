@@ -85,6 +85,25 @@ describe('release.yml job split', () => {
     expect(at(/pnpm pack/)).toBeGreaterThan(at(/run:\s*pnpm check\s*$/m))
   })
 
+  it('publish hands npm local tarball paths that match what `pnpm pack` writes for every public package', () => {
+    const lines = [...stripComments(J.publish).matchAll(/npm publish\s+(\S+)/g)].map((m) => m[1])
+    expect(lines.length).toBeGreaterThan(0)
+    const loop = /for pkg in ([\w ]+); do/.exec(stripComments(J.publish))?.[1].trim().split(/\s+/) ?? []
+    expect(loop.sort()).toEqual(['core', 'react', 'vl'])
+    for (const arg of lines) {
+      // npm parses `dir/file.tgz` as GitHub `owner/repo` shorthand (it runs `git ls-remote`); only `./`, `../` or `/` make it a file.
+      expect(arg, `npm publish ${arg}`).toMatch(/^(\.\.?\/|\/)/)
+      for (const pkg of loop) {
+        const name = JSON.parse(readFileSync(join(root, 'packages', pkg, 'package.json'), 'utf8')).name
+        const version = JSON.parse(readFileSync(join(root, 'packages', pkg, 'package.json'), 'utf8')).version
+        const packed = `${name.replace(/^@/, '').replace('/', '-')}-${version}.tgz`
+        const glob = arg.replace(/"\$pkg"|\$pkg/g, pkg).replace(/^.*\//, '')
+        const re = new RegExp('^' + glob.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*') + '$')
+        expect(packed, `${glob} must match the tarball pnpm pack writes for ${name}`).toMatch(re)
+      }
+    }
+  })
+
   it('publish runs in a protected environment', () => {
     expect(stripComments(J.publish)).toMatch(/^\s+environment:\s*\S+/m)
     expect(stripComments(J.verify)).not.toMatch(/environment:/)
