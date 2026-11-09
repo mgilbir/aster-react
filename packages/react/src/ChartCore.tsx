@@ -857,7 +857,7 @@ function ChartView({
       },
       // (a timer stream rewrites its store on every tick; only a tick that changes it is the animation's next frame)
       onData: (name, rows, fromTimer) => {
-        const advanced = fromTimer && !sameRows(dataStore.get()[name], rows)
+        const advanced = fromTimer && !sameRows(dataStore.get()[name] as unknown[] | undefined, rows)
         dataStore.merge({ [name]: rows }, advanced ? (snapshot) => timerEdits.add(snapshot) : undefined)
       },
       ...(stableLogger ? { logger: stableLogger } : {}),

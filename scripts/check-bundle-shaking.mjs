@@ -376,7 +376,7 @@ const PATTERNS = [
       [/data-scene="yes"/.test(r.html) && /class="mark-rect/.test(r.html), 'useChart returns the scene and the svg'],
       [/data-w="\d+"/.test(r.headless) && /data-svg="null"/.test(r.headless), 'headless useChart (serialize: false) returns a scene only'],
     ],
-    modules: (m) => [[!hasModule(m.parsed, 'core', 'transition'), 'the transition interpolation (core/transition.js) is not even read']],
+    modules: (m) => [[!hasModule(m.contributing, 'core', 'transition'), 'the transition interpolation (core/transition.js) contributes no code']],
   },
   {
     name: 'react-autoload',

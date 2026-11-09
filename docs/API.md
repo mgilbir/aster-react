@@ -25,7 +25,7 @@ The public surface of the three Aster packages: what each entry point exports, w
 - [`@aster-charts/core`](#aster-chartscore)
   - Guides: [Render a Vega spec](#render-a-vega-spec), [Sessions and per-datum updates](#sessions-and-per-datum-updates), [Custom expression functions](#custom-expression-functions), [Streaming and pulses](#streaming-and-pulses)
   - Reference: [RuntimeInput](#runtimeinput), [The pipeline steps](#the-pipeline-steps), [Locales](#locales), [Text metrics](#text-metrics), [Logger](#logger), [Pointer position and cursor](#pointer-position-and-cursor), [Building blocks](#building-blocks), [Limit checks](#limit-checks), [Typed errors](#typed-errors), [Accessibility tree](#accessibility-tree)
-  - Add-on entry points: [`/hit`](#aster-chartscorehit), [`/signals`](#aster-chartscoresignals), [`/addons`](#aster-chartscoreaddons), [`/dom`](#aster-chartscoredom), [`/canvas`](#aster-chartscorecanvas), [`/load`](#aster-chartscoreload), [`/geo` and `/transforms`](#aster-chartscoregeo-and-aster-chartscoretransforms), [an example](#example-hit-testing-a-scene)
+  - Add-on entry points: [`/hit`](#aster-chartscorehit), [`/signals`](#aster-chartscoresignals), [`/addons`](#aster-chartscoreaddons), [`/dom`](#aster-chartscoredom), [`/transition`](#aster-chartscoretransition), [`/canvas`](#aster-chartscorecanvas), [`/load`](#aster-chartscoreload), [`/geo` and `/transforms`](#aster-chartscoregeo-and-aster-chartscoretransforms), [an example](#example-hit-testing-a-scene)
 - [`@aster-charts/react`](#aster-chartsreact)
   - Components and hooks: [`<Chart>`](#chart), [`<SvgChart>` and the `interaction` capability](#svgchart-and-the-interaction-capability), [Hooks](#hooks), [Streaming components](#streaming-components), [Workers](#workers), [SSR + hydration](#ssr--hydration)
   - Reference: [Registry and session re-exports](#registry-and-session-re-exports), [Pan, zoom and selection helpers](#pan-zoom-and-selection-helpers), [Accessibility keyboard contract](#accessibility-keyboard-contract)
@@ -38,7 +38,7 @@ Aster ships three public packages:
 | Package | Entry | Purpose |
 |---|---|---|
 | `@aster-charts/core` | `@aster-charts/core` | compile/evaluate/render a Vega spec to SVG; limits, streams, a11y tree |
-| `@aster-charts/core/…` | `/addons`, `/dom`, `/canvas`, `/hit`, `/signals`, `/load`, `/geo`, `/transforms` | `/addons` says which add-ons a spec needs and loads them on demand; the others are opt-in add-ons (tree-shaking boundaries) |
+| `@aster-charts/core/…` | `/addons`, `/dom`, `/canvas`, `/hit`, `/signals`, `/transition`, `/load`, `/geo`, `/transforms` | `/addons` says which add-ons a spec needs and loads them on demand; `/transition` interpolates between two scenes; the others are opt-in add-ons (tree-shaking boundaries) |
 | `@aster-charts/react` | `@aster-charts/react` | `<Chart>`, `useChart`, streams, SSR/hydration, worker hooks |
 | `@aster-charts/react/…` | `/lite`, `/interaction`, `/vl`, `/worker`, `/worker-entry`, `/ssr` | `/lite` is the SVG-only `<SvgChart>`; `/interaction` is the `interaction` capability that adds tooltips, point selection and `signal.on` streams to it; `/vl` registers the Vega-Lite compiler (and exports `compile`, `isVegaLiteSpec`, `normalizeChartSpec`); `/worker` has the worker registries and protocol; `/worker-entry` is a ready worker script; `/ssr` is the string/hydration pair |
 | `@aster-charts/vl` | `@aster-charts/vl` | from-scratch Vega-Lite → Vega compiler |
@@ -467,7 +467,7 @@ binding but leaves timer streams and pending debounces running (a host re-binds 
 to the view); call `release()` when the host is done with the svg, which detaches and stops its timer streams and
 pending debounces (vega's `view.finalize()`). `setTimerClock(clock | null)` ([Maps and animation](#maps-and-animation)) swaps the clock the timer streams run on.
 - `hooks.onSignal(name, value, all)` — once per signal that changed while an event was processed.
-- `hooks.onData(name, rows)` — once per dataset that `modify(...)` edited (a Vega-Lite selection's `<name>_store`), with
+- `hooks.onData(name, rows, fromTimer)` — once per dataset that `modify(...)` edited (`fromTimer`: a `timer` stream's tick made the edit) (a Vega-Lite selection's `<name>_store`), with
   its input rows. The host passes them back as `data[name]` to the next evaluation and as `{ data }` to the next
   `bindSceneSignals`, so the dataset is an input like any other (`<Chart>` does this itself). The expression functions
   `vlSelectionTest`, `vlSelectionIdTest`, `vlSelectionResolve`, `vlSelectionTuples`, `modify`, `isTuple`, `panLinear` /
@@ -523,6 +523,16 @@ batching (default 512 items). `options` (`DomRenderOptions`) are `denseMarks` an
 same chart, so a host can tell "same chart, new rows" from "a different chart" (`<Chart>` keeps live state for the first and
 starts afresh for the second); `translatePathData(d, dx, dy)` shifts every absolute coordinate of an SVG path string by `(dx, dy)`,
 copying arguments that do not move (relative deltas, arc radii and flags) verbatim.
+
+#### `@aster-charts/core/transition`
+
+`createSceneTransition(from, to, { easing? })` returns `{ from, to, moves, at(t) }`: `at(t)` is the scene at linear progress
+`t` (eased with `easing`, default `'cubic-in-out'`), `at(1)` (and above) is `to` itself, and below 1 every call returns one scene
+object rewritten in place. `moves` is false when the two scenes draw alike. `from` may be a frame of a running transition (an
+interruption starts from it). Items are paired by the mark's `key` (else by index), facet group items by their `groupby`, axis
+grid lines, ticks and labels by tick value; what moves, enters and leaves, and how, is in [ANIMATION.md](ANIMATION.md).
+`easingFunction(easing?)` resolves a name or returns a function as given (an unknown name throws a `RangeError`);
+`EASING_NAMES` lists the names. No clock: the host drives the frames (`<Chart transition>` does, from `requestAnimationFrame`).
 
 #### `@aster-charts/core/canvas`
 
@@ -646,7 +656,7 @@ since compilation happens there.
 
 **Props.** `spec` (compared by content: an equal inline literal does no work; the one exception is a dataset's inline `values` array, which is compared by identity, so a re-created but equal rows array is a new input, which the session's row diff finds unchanged and applies as a no-op; the streaming components keep the full content comparison, so a spec rebuilt every render does not restart a stream), `data`, `dataChanges`, `width`,
 `height` (each independent; without them the chart measures its container; a given one fixes the view's size, even for a container-sized spec, whose `width` / `height` signals and `window:resize` handlers do not move it. The measured container only sizes a spec that has no `width` / `height` signal of its own, and a dimension the spec gives no value at all stays Vega's 0 grown to the content by autosize. It sizes the chart's whole box, padding, guides and the bound inputs under the chart included, as Vega-Lite's `"container"` does (autosize `fit` containing the padding): the content shrinks to fit, so a chart never overflows the container it fills, and a container whose height is the chart's own (a block `<div>` with no height) keeps the chart's size instead of growing with it; one that drives them (a bound input, a handler, Vega-Lite's `"container"`) keeps doing so, as in Vega where the size is a signal and the later write wins, and sees the container through `containerSize()`), `ariaLabel`, `className`, `style`,
-`signals`, `signalListeners`, `onSignal`, `interactive`, `preventDefault`, `renderer`, `incremental`, `denseMarks`,
+`signals`, `signalListeners`, `onSignal`, `interactive`, `preventDefault`, `renderer`, `incremental`, `denseMarks`, `transition`,
 `tooltip`, `renderTooltip`, `selection`/`select`, `onSelectionChange`, `onSelect`, `onPointSelect`, `brush`, `panZoom`,
 `pan`, `zoom`, `view`, `onViewChange`, `maxZoom`, `a11y`, `limits`, `urlPolicy`, `random`, `logger`, `textMetrics`, `onError`.
 
@@ -684,6 +694,15 @@ point selection and the a11y tree resolve through the scene.
 
 Pan, zoom and brushing are driven through scale `domainRaw`; the gestures, the keyboard contract and the rule that
 picks the scales are in `docs/INTERACTION.md`.
+
+`transition` (SVG; off by default) animates a change of data: `true`, or `TransitionOptions` `{ duration?: number /* ms, 300 */,
+easing?: EasingName | ((t) => number) /* 'cubic-in-out' */, reducedMotion?: 'user' | 'always' | 'never' /* 'user' */ }`.
+New `data` rows, new inline rows in an equal spec, a streamed scene and a Vega-Lite `time` animation's next frame are drawn as
+frames from the picture on screen to the new scene, which is the last frame; anything else (signals, pan / zoom, size, legend
+toggles) is drawn at once, or becomes the end of a transition that is running. Items are matched by the mark's `key`, else by
+index. Hit testing, tooltips and the accessible tree use the new scene throughout. The canvas renderer, batched `denseMarks`
+and `incremental={false}` draw at once; `@aster-charts/core/transition` is loaded on demand once the prop is set. Read when a
+transition starts, so an options literal made anew on every render restarts nothing. Behaviour and costs: [ANIMATION.md](ANIMATION.md).
 
 #### `<SvgChart>` and the `interaction` capability
 

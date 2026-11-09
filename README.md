@@ -163,6 +163,7 @@ canvas renderer, interaction and accessibility tree as `<Chart>`. Measurements a
 | understand an error message | [docs/ERRORS.md](docs/ERRORS.md) (every error class and what survives each failure) |
 | use Vega-Lite and know what it refuses | [packages/vl/README.md](packages/vl/README.md) (what compiles, and the "Throws" list) |
 | add pan, zoom, selection, tooltips or `signal.on` handlers | [docs/INTERACTION.md](docs/INTERACTION.md) |
+| animate a chart when its data changes | [docs/ANIMATION.md](docs/ANIMATION.md) (the `transition` prop) |
 | match Vega's text widths or fix a chart whose labels differ | [docs/FONTS.md](docs/FONTS.md) |
 | keep the bundle small or the chart fast | [docs/PERFORMANCE.md](docs/PERFORMANCE.md) (guidance, bundle sizes, measurements); the harness is [packages/benchmarks/README.md](packages/benchmarks/README.md) |
 | know where Aster differs from Vega on purpose | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#deviations-from-vega) |

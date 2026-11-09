@@ -520,3 +520,133 @@ export function createSceneTransition(from: SceneRoot, to: SceneRoot, options: S
     },
   }
 }
+
+/** How a player animates one change: its duration (ms) and easing. */
+export interface PlayOptions {
+  duration: number
+  easing?: Easing
+}
+
+/** Draws the scenes of one chart into its target (an `<svg>`), at once or as a transition from what is on screen. */
+export interface ScenePlayer<T> {
+  /**
+   * Draw `scene` into `target`. With `animate`, a transition from the picture on screen (the last scene drawn, or the frame of
+   * the transition this one interrupts) to `scene`. Without it, a running transition takes `scene` as its new end on the same
+   * clock (the marks keep moving and land on it); otherwise `scene` is drawn at once.
+   */
+  draw(target: T, scene: SceneRoot, animate: PlayOptions | null): void
+  /** The target shows `scene` (it was drawn some other way): stop any transition; the next one starts from it. */
+  reset(scene: SceneRoot | null): void
+  /** Stop requesting frames (the target keeps the frame it shows). */
+  cancel(): void
+}
+
+interface Playing<T> {
+  target: T
+  /** Where it started: kept, so a change that only retargets it keeps its start and its clock. */
+  from: SceneRoot
+  to: SceneRoot
+  tr: SceneTransition
+  t0: number
+  duration: number
+  easing: Easing | undefined
+}
+
+/**
+ * A frame loop over `requestAnimationFrame` that draws transitions with `paint` (`patchSceneDom` for an `<svg>`). `shown` is
+ * what the target shows now. Where there is no `requestAnimationFrame` (a server), every scene is drawn at once.
+ */
+export function createScenePlayer<T>(
+  paint: (target: T, scene: SceneRoot) => void,
+  report: (error: Error) => void,
+  shown: SceneRoot | null = null,
+): ScenePlayer<T> {
+  let run: Playing<T> | null = null
+  let frame = 0
+  const now = (): number => (typeof performance !== 'undefined' ? performance.now() : Date.now())
+  const stopFrames = (): void => {
+    if (frame !== 0) cancelAnimationFrame(frame)
+    frame = 0
+  }
+  const settle = (target: T, scene: SceneRoot): void => {
+    stopFrames()
+    run = null
+    paint(target, scene)
+    shown = scene
+  }
+  const show = (r: Playing<T>, t: number): void => {
+    const scene = r.tr.at(t)
+    paint(r.target, scene)
+    shown = scene
+  }
+  const progress = (r: Playing<T>): number => (r.duration > 0 ? (now() - r.t0) / r.duration : 1)
+  const tick = (): void => {
+    frame = 0
+    const r = run
+    if (r === null) return
+    const t = progress(r)
+    if (t >= 1) {
+      settle(r.target, r.to)
+      return
+    }
+    try {
+      show(r, t)
+    } catch (e) {
+      report(e instanceof Error ? e : new Error(String(e)))
+      settle(r.target, r.to)
+      return
+    }
+    frame = requestAnimationFrame(tick)
+  }
+  /** The transition, or null when nothing would move (or it cannot be made: reported). */
+  const make = (from: SceneRoot, to: SceneRoot, easing: Easing | undefined): SceneTransition | null => {
+    try {
+      const tr = createSceneTransition(from, to, { easing })
+      return tr.moves ? tr : null
+    } catch (e) {
+      report(e instanceof Error ? e : new Error(String(e)))
+      return null
+    }
+  }
+  return {
+    draw(target, scene, animate) {
+      if (typeof requestAnimationFrame !== 'function') {
+        settle(target, scene)
+        return
+      }
+      if (animate !== null) {
+        const from = shown
+        if (animate.duration > 0 && from !== null) {
+          const tr = make(from, scene, animate.easing)
+          if (tr !== null) {
+            stopFrames()
+            run = { target, from, to: scene, tr, t0: now(), duration: animate.duration, easing: animate.easing }
+            show(run, 0)
+            frame = requestAnimationFrame(tick)
+            return
+          }
+        }
+      } else if (run !== null && run.target === target) {
+        const r = run
+        const tr = make(r.from, scene, r.easing)
+        const t = progress(r)
+        if (tr !== null && t < 1) {
+          r.tr = tr
+          r.to = scene
+          show(r, t)
+          return
+        }
+      }
+      settle(target, scene)
+    },
+    reset(scene) {
+      stopFrames()
+      run = null
+      shown = scene
+    },
+    cancel() {
+      stopFrames()
+      run = null
+    },
+  }
+}

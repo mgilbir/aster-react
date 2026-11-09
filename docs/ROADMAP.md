@@ -66,6 +66,7 @@ The canonicalizer is strict and each normalization is justified in `packages/con
 - SVG string renderer, incremental DOM patcher and canvas renderer over one scene; append painting; dense marks.
 - Hit index, controlled/uncontrolled selection and pan/zoom over scale `domainRaw`, the `signal.on` event loop,
   keyboard navigation and an accessibility tree on both backends ([INTERACTION.md](INTERACTION.md)).
+- Opt-in transitions when a chart's data changes (`transition`, SVG; [ANIMATION.md](ANIMATION.md)).
 - `<Chart>`/`useChart` accept Vega or Vega-Lite; Suspense data; SSR and strict hydration; worker offload with a
   synchronous fallback; streams with bounded queues ([API.md](API.md)).
 - Untrusted-spec bounds and a URL policy ([LIMITS.md](LIMITS.md)), typed errors ([ERRORS.md](ERRORS.md)).
@@ -92,6 +93,8 @@ Each item is something the code or the gates show today; none is a plan that has
   ([INTERACTION.md](INTERACTION.md)).
 - **Probes.** `packages/conformance/probes` holds two probes; both pass today and can be promoted into `corpus/`.
 - **Streaming transport.** The host owns the network and decides when to flush.
+- **Transitions on canvas.** `transition` animates the SVG renderer only; the canvas renderer and batched dense marks
+  draw the new scene at once ([ANIMATION.md](ANIMATION.md#what-does-not-animate)).
 - **Release.** Move publishing from the `NPM_TOKEN` secret to npm trusted publishing now that the packages exist, and
   add required reviewers to the `npm-release` environment ([RELEASE.md](RELEASE.md)).
 
