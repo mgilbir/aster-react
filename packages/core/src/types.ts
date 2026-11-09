@@ -720,6 +720,12 @@ export interface SceneGroup extends SceneItem {
   clipPathD?: string
   /** @internal The mark's source dataset. Written when the group is built; nothing reads it (groups are matched by compiled-mark identity). */
   __source?: string
+  /**
+   * @internal The fields whose values identify items across evaluations (no renderer reads them; `@aster-charts/core/transition`
+   * matches by them). On a data mark: its `key` (the items of the mark are matched by it). On a group item: its mark's `key`,
+   * else the facet's `groupby` (the item is matched among its mark's items by them).
+   */
+  __keyFields?: readonly string[]
   /** Guide orientation (`left`/`right`/`top`/`bottom`) for axes. */
   orient?: string
   /**
@@ -861,6 +867,8 @@ export interface SceneItem {
   _part?: string
   /** Internal: the kind of mark a guide leaf is, when its channels do not say (a text leaf whose text is null is still text). */
   _kind?: 'text' | 'rule' | 'symbol' | 'rect'
+  /** @internal An axis grid line, tick or label: the tick value it stands for (no renderer reads it; transitions match by it). */
+  __tick?: unknown
   // accessibility
   ariaRole?: string
   ariaLabel?: string

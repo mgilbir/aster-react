@@ -12,7 +12,7 @@ import type { InteractionCapability } from './capabilities.js'
 
 /** ChartProps shared with `<SvgChart>`, unchanged. These need neither the canvas nor the interaction capability. */
 export const SVG_CHART_SHARED_PROPS = [
-  'spec', 'sceneOverride', 'data', 'dataChanges', 'width', 'height', 'ariaLabel', 'incremental', 'denseMarks',
+  'spec', 'sceneOverride', 'data', 'dataChanges', 'width', 'height', 'ariaLabel', 'incremental', 'denseMarks', 'transition',
   'className', 'style', 'signals', 'onSelect', 'brush', 'panZoom', 'pan', 'zoom', 'view', 'onViewChange', 'maxZoom',
   'signalListeners', 'onSignal', 'onStreamInput', 'interactive', 'limits', 'urlPolicy', 'random', 'logger', 'textMetrics',
   'a11y', 'onError',

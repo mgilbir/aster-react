@@ -41,6 +41,10 @@
       "types": "./dist/hit.d.ts",
       "default": "./dist/hit.js"
     },
+    "./transition": {
+      "types": "./dist/transition.d.ts",
+      "default": "./dist/transition.js"
+    },
     "./package.json": "./package.json"
   },
   "sideEffects": [

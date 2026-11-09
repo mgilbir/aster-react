@@ -531,6 +531,9 @@ export function buildAxis(inp: AxisBuildInput): AxisBuilt {
     }
     def.seed ??= { _kind: def.type === 'text' ? 'text' : 'rule', _part: part }
     const items = encodeItems(def, rows, group, host, style)
+    // the tick value a grid line, tick or label stands for: what a transition between two scenes matches it by (no renderer
+    // draws it)
+    if (onTicks && items.length === rows.length) for (let i = 0; i < items.length; i++) items[i]!.__tick = rows[i]!.value
     let extent: Bounds | null = def.overlap ? thinOverlaps(items, rows, def.overlap, host, boxOf) : null
     // the layout reads the extent of the ticks, the labels and the title only: a grid of a thousand lines is not measured
     if (!extent && (part === 'tick' || part === 'label' || part === 'title')) {

@@ -3872,6 +3872,7 @@ function evaluateMarkItems(
     ...markClipOf(mark, ctx),
     items,
     __source: mark.from?.data,
+    ...(mark.key !== undefined ? { __keyFields: [mark.key] } : {}),
     ...(encodesHref(mark) ? { hasLinks: true } : {}),
     ...markContainerInfo(mark),
   }
@@ -4054,6 +4055,22 @@ function markIdOf(mark: CompiledMark): number {
   let id = MARK_IDS.get(mark)
   if (id === undefined) MARK_IDS.set(mark, (id = nextMarkId--))
   return id
+}
+
+/**
+ * The fields that identify a group item among its mark's items across evaluations (see `SceneGroup.__keyFields`): the mark's
+ * `key`, else the `groupby` of a facet that partitions by it (vega keeps one item per partition key). One array per mark.
+ */
+const ITEM_KEY_FIELDS = new WeakMap<CompiledMark, readonly string[] | null>()
+function itemKeyFields(mark: CompiledMark): readonly string[] | undefined {
+  let fields = ITEM_KEY_FIELDS.get(mark)
+  if (fields === undefined) {
+    const facet = (mark.from as { facet?: FacetDef } | undefined)?.facet
+    const groupby = facet !== undefined && facet.field === undefined && mark.from?.data === undefined ? ([] as string[]).concat(facet.groupby ?? []) : []
+    fields = mark.key !== undefined ? [mark.key] : groupby.length ? groupby : null
+    ITEM_KEY_FIELDS.set(mark, fields)
+  }
+  return fields ?? undefined
 }
 
 /** What the SVG container of a mark says beyond its type (vega-scenegraph cssClass, ariaMarkAttributes, pointer-events). */
@@ -4517,6 +4534,7 @@ function buildGroupItem(mark: CompiledMark, ctx: EvalContext, entered: EnteredGr
       datum: src.datum,
       _scope: true,
       markIndex: markIdOf(mark),
+      ...(itemKeyFields(mark) !== undefined ? { __keyFields: itemKeyFields(mark) } : {}),
       ...markContainerInfo(mark),
       ...(itemAria !== undefined ? { itemAria } : {}),
       ...(cursorOf(geo) !== undefined ? { cursor: cursorOf(geo) } : {}),
