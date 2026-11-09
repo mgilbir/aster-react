@@ -127,6 +127,26 @@ function sameDatum(a: unknown, b: unknown): boolean {
     || subset(b as Record<string, unknown>, a as Record<string, unknown>)
 }
 
+/**
+ * Whether `data` holds other rows than `prev`: a dataset added, removed, or given another rows array (`dataChanges` comes
+ * with a new array). A `data` object made anew on every render with the same arrays is the same data.
+ */
+function datasetsChanged(data: Record<string, unknown[]> | undefined, prev: Record<string, unknown[]> | undefined): boolean {
+  if (data === prev) return false
+  const a = data ?? {}
+  const b = prev ?? {}
+  const keys = Object.keys(a)
+  if (keys.length !== Object.keys(b).length) return true
+  return keys.some((k) => !Object.hasOwn(b, k) || a[k] !== b[k])
+}
+
+/** Two row lists with the same content (a store's few tuples, compared when a timer rewrote it). */
+function sameRows(a: unknown[] | undefined, b: unknown[]): boolean {
+  if (a === undefined || a.length !== b.length) return false
+  for (let i = 0; i < a.length; i++) if (a[i] !== b[i] && datumKey(a[i] as Record<string, unknown>) !== datumKey(b[i] as Record<string, unknown>)) return false
+  return true
+}
+
 /** True when the spec has `signal.on` event streams. */
 function hasEventStreams(scene: SceneRoot | null): boolean {
   const defs = (scene as { compiled?: { signalDefs?: Array<{ on?: unknown[] }> } } | null)?.compiled?.signalDefs
@@ -731,8 +751,9 @@ function ChartView({
   // unmount (and a spec swap, which is a new chart) ends a running transition: no frame is requested after it
   React.useLayoutEffect(() => () => animator.cancel(), [animator])
   // The inputs of the last commit: a scene is a change of DATA (what a transition animates) when it came with new
-  // `data` / `dataChanges`, new rows in the spec, a streamed scene, or a dataset a `timer` stream edited.
-  const committedInputsRef = React.useRef<{ data: unknown; dataChanges: unknown; sceneOverride: unknown; spec: unknown; edited: unknown } | null>(null)
+  // rows in `data` (another array for a dataset), new rows in the spec, a streamed scene, or a dataset a `timer` stream
+  // moved on (a Vega-Lite `time` animation's next frame).
+  const committedInputsRef = React.useRef<{ data: unknown; sceneOverride: unknown; spec: unknown; edited: unknown } | null>(null)
 
   // Incremental updates: create the <svg> once, then patch changed attributes
   // in place instead of re-serializing and re-parsing the whole markup every render.
@@ -774,7 +795,7 @@ function ChartView({
         if (options !== null && !denseSvg && !domDenseRef.current) {
           const prev = committedInputsRef.current
           const dataChanged = prev !== null && (
-            data !== prev.data || dataChanges !== prev.dataChanges || spec !== prev.spec
+            datasetsChanged(data, prev.data as typeof data) || spec !== prev.spec
             || (sceneOverride !== undefined && sceneOverride !== prev.sceneOverride)
             || (editedData !== prev.edited && timerEdits.has(editedData)))
           animator.draw(existing, displayScene, dataChanged ? options : null)
@@ -791,9 +812,9 @@ function ChartView({
     }
     domSceneRef.current = displayScene
     hasPatchedRef.current = true
-  }, [incremental, renderer, displayScene, sceneOverride, domMarkup, denseSvg, animator, data, dataChanges, spec, editedData, timerEdits])
+  }, [incremental, renderer, displayScene, sceneOverride, domMarkup, denseSvg, animator, data, spec, editedData, timerEdits])
   React.useLayoutEffect(() => {
-    committedInputsRef.current = { data, dataChanges, sceneOverride, spec, edited: editedData }
+    committedInputsRef.current = { data, sceneOverride, spec, edited: editedData }
   })
 
   // The edited rows belong to the chart (compiled spec) they were made under: another one starts from its own. (The
@@ -834,7 +855,11 @@ function ChartView({
         signalListenersRef.current?.[name]?.(name, value)
         onSignalRef.current?.(name, value)
       },
-      onData: (name, rows, fromTimer) => dataStore.merge({ [name]: rows }, fromTimer ? (snapshot) => timerEdits.add(snapshot) : undefined),
+      // (a timer stream rewrites its store on every tick; only a tick that changes it is the animation's next frame)
+      onData: (name, rows, fromTimer) => {
+        const advanced = fromTimer && !sameRows(dataStore.get()[name], rows)
+        dataStore.merge({ [name]: rows }, advanced ? (snapshot) => timerEdits.add(snapshot) : undefined)
+      },
       ...(stableLogger ? { logger: stableLogger } : {}),
       ...(preventDefault != null ? { preventDefault } : {}),
     }, { pick: (x, y) => hitIndexFor(displayScene ?? scene)?.pick(x, y) ?? null, containerSize: liveContainerSize, ...(inputData ? { data: inputData } : {}), ...(host ? { owner: host } : {}) })
