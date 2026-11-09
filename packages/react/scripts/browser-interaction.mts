@@ -687,20 +687,22 @@ async function transitionSuite(page: Page): Promise<void> {
   const transition = { duration: 400, easing: 'linear' }
   await mount2(page, bars, { width: 460, height: 300, data: rows(2, '#ff0000'), transition })
   await page.waitForTimeout(100) // the interpolation module the prop asked for (it is in this bundle: an import, no fetch)
-  // sample the first bar on every frame from the update until the transition is over
-  const seen = await page.evaluate(([next]) => new Promise<{ d: string[]; fill: string[] }>((resolve) => {
-    const out = { d: [] as string[], fill: [] as string[] }
-    const bar = (): Element => document.querySelector('svg .mark-rect path')!
-    ;(window as never as { __set: (p: unknown) => void }).__set(next)
+  // sample the first bar on every frame from the update until the transition is over (a string: the page function must not be
+  // transpiled, whose name helper would not exist in the page)
+  const next = { width: 460, height: 300, data: rows(8, '#0000ff'), transition }
+  const seen = await page.evaluate(`new Promise((resolve) => {
+    const out = { d: [], fill: [] }
+    window.__set(${JSON.stringify(next)})
     const t0 = performance.now()
-    const sample = (): void => {
-      out.d.push(bar().getAttribute('d')!)
-      out.fill.push(bar().getAttribute('fill')!)
+    const sample = () => {
+      const bar = document.querySelector('svg .mark-rect path')
+      out.d.push(bar.getAttribute('d'))
+      out.fill.push(bar.getAttribute('fill'))
       if (performance.now() - t0 < 700) requestAnimationFrame(sample)
       else resolve(out)
     }
     sample()
-  }), [{ width: 460, height: 300, data: rows(8, '#0000ff'), transition }] as const)
+  })`) as { d: string[]; fill: string[] }
   const heights = seen.d.map((d) => Number(/v([-\d.e]+)/.exec(d)?.[1]))
   const distinct = new Set(seen.d)
   check(distinct.size >= 6, `the bar is drawn at ${distinct.size} distinct heights over the frames (at least 6)`)

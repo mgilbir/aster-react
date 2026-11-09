@@ -131,6 +131,7 @@ describe('createSceneTransition', () => {
     const from = evaluate(bars([{ k: 'a', x: 0, v: 1, c: '#ff0000' }, { k: 'b', x: 20, v: 1, c: 'red' }], { fill: 'c' }))
     const to = evaluate(bars([{ k: 'a', x: 0, v: 1, c: '#0000ff' }, { k: 'b', x: 20, v: 1, c: 'none' }], { fill: 'c' }))
     const tr = createSceneTransition(from, to, { easing: 'linear' })
+    expect(byKey(itemsOf(tr.at(0), 'rect'), 'a').fill).toBe('#ff0000') // the first frame draws the colour as it was written
     const mid = itemsOf(tr.at(0.5), 'rect')
     expect(byKey(mid, 'a').fill).toBe('rgb(128,0,128)')
     expect(byKey(mid, 'b').fill).toBe('none')

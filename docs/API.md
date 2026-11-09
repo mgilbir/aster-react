@@ -532,7 +532,10 @@ object rewritten in place. `moves` is false when the two scenes draw alike. `fro
 interruption starts from it). Items are paired by the mark's `key` (else by index), facet group items by their `groupby`, axis
 grid lines, ticks and labels by tick value; what moves, enters and leaves, and how, is in [ANIMATION.md](ANIMATION.md).
 `easingFunction(easing?)` resolves a name or returns a function as given (an unknown name throws a `RangeError`);
-`EASING_NAMES` lists the names. No clock: the host drives the frames (`<Chart transition>` does, from `requestAnimationFrame`).
+`EASING_NAMES` lists the names. `createScenePlayer(paint, report, shown?)` is the frame loop `<Chart transition>` uses
+(`requestAnimationFrame`; at once where there is none): `draw(target, scene, { duration, easing? } | null)` animates from the picture
+on screen to `scene`, or with `null` makes `scene` the end of a running transition (same clock) or draws it at once; `reset(scene)`
+says what the target shows and `cancel()` stops the frames. `paint(target, scene)` draws a scene (`patchSceneDom`).
 
 #### `@aster-charts/core/canvas`
 

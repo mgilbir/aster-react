@@ -99,6 +99,8 @@ class Channels {
   readonly delta: number[] = []
   readonly cObjs: Rec[] = []
   readonly cKeys: string[] = []
+  /** The colour each channel starts at, as written (the frame at 0 draws exactly it). */
+  readonly cFrom: unknown[] = []
   /** r, g, b, alpha per colour channel. */
   readonly cStart: number[] = []
   readonly cDelta: number[] = []
@@ -125,6 +127,7 @@ class Channels {
     obj[key] = a
     this.cObjs.push(obj)
     this.cKeys.push(key)
+    this.cFrom.push(a)
     for (let i = 0; i < 4; i++) {
       this.cStart.push(ca[i]!)
       this.cDelta.push(cb[i]! - ca[i]!)
@@ -135,8 +138,12 @@ class Channels {
   apply(e: number): void {
     const { objs, keys, start, delta } = this
     for (let i = 0; i < objs.length; i++) objs[i]![keys[i]!] = start[i]! + delta[i]! * e
-    const { cObjs, cKeys, cStart, cDelta } = this
+    const { cObjs, cKeys, cStart, cDelta, cFrom } = this
     for (let i = 0, j = 0; i < cObjs.length; i++, j += 4) {
+      if (e === 0) {
+        cObjs[i]![cKeys[i]!] = cFrom[i]
+        continue
+      }
       const r = byte(cStart[j]! + cDelta[j]! * e)
       const g = byte(cStart[j + 1]! + cDelta[j + 1]! * e)
       const b = byte(cStart[j + 2]! + cDelta[j + 2]! * e)
