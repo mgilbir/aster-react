@@ -249,21 +249,25 @@ forEachVariant(['svg'], (Chart, variant) => {
       const xs = (container: HTMLElement): number[] => [...container.querySelectorAll('.mark-symbol path')]
         .map((p) => Number(/translate\(([-\d.e]+)/.exec(p.getAttribute('transform') ?? '')?.[1]))
       const ref = React.createRef<ChartHandle>()
-      const { container } = mount(<Chart ref={ref} spec={vl} width={200} height={100} transition={{ duration: 400, easing: 'linear' }} />)
+      const { container } = mount(<Chart ref={ref} spec={vl} width={200} height={100} transition={{ duration: 300, easing: 'linear' }} />)
+      // the same animation without `transition`, on the same clock: the frames as they are drawn when they step
+      const plain = mount(<Chart spec={vl} width={200} height={100} />).container
       advance(100) // the first frame (1990): the other years leave
       const year = (): unknown => (ref.current!.getSignals().anim_tuple as { values: unknown[] }).values[0]
       expect(year()).toBe(1990)
-      advance(400) // done
+      advance(300) // done
       const at1990 = xs(container)
       expect(at1990).toHaveLength(2)
+      expect(svgOf(container)).toBe(svgOf(plain)) // settled on the frame (the clock ticking on is no change of data)
       // through the switch to 1991 (at ~517 ms after the first tick), then part of its transition
       let steps = 0
       while (year() === 1990 && steps++ < 100) advance(17)
       expect(year()).toBe(1991)
       advance(100)
       const moving = xs(container)
-      advance(400)
+      advance(250) // done, and before the next frame (500 ms after this one)
       const at1991 = xs(container)
+      expect(svgOf(container)).toBe(svgOf(plain))
       expect(at1991[0]).toBeGreaterThan(at1990[0]!)
       // part way between the two frames, where neither frame draws it
       expect(moving[0]).toBeGreaterThan(at1990[0]!)
