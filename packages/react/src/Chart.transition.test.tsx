@@ -152,6 +152,16 @@ forEachVariant(['svg'], (Chart, variant) => {
       expect(vi.getTimerCount()).toBe(0)
     })
 
+    variant.it(['svg'], 'a new spec during a transition is a new chart: the frames stop and it draws at once', () => {
+      const { container, root } = mount(el(Chart, { data: { t: A }, transition: LINEAR }))
+      act(() => { root.render(el(Chart, { data: { t: B }, transition: LINEAR })) })
+      expect(vi.getTimerCount()).toBeGreaterThan(0)
+      const other = { ...(barSpec as object), height: 90 } as never
+      act(() => { root.render(<Chart spec={other} width={100} height={100} data={{ t: B }} transition={LINEAR} />) })
+      expect(vi.getTimerCount()).toBe(0)
+      expect(svgOf(container)).toBe(svgOf(mount(<Chart spec={other} width={100} height={100} data={{ t: B }} />).container))
+    })
+
     variant.it(['svg'], 'strict mode: animates once and settles, and unmount leaves nothing scheduled', () => {
       const strict = (rows: Row[]): React.ReactElement => <React.StrictMode>{el(Chart, { data: { t: rows }, transition: LINEAR })}</React.StrictMode>
       const { container, root } = mount(strict(A))

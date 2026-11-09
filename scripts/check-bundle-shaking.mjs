@@ -68,6 +68,12 @@ const REGRESSION_VG = {
   ],
   marks: [{ type: 'line', from: { data: 't' }, encode: { update: { x: { scale: 'sx', field: 'rx' }, y: { scale: 'sy', field: 'ry' }, stroke: { value: 'red' } } } }],
 }
+/** Keyed bars for the `transition` patterns. */
+const TRANSITION_VG = {
+  width: 100, height: 100, padding: 0, autosize: 'none', data: [{ name: 't' }],
+  scales: [{ name: 'y', type: 'linear', domain: [0, 10], range: 'height' }],
+  marks: [{ type: 'rect', from: { data: 't' }, key: 'k', encode: { update: { x: { signal: "datum.k === 'a' ? 0 : 50" }, width: { value: 40 }, y: { scale: 'y', field: 'v' }, y2: { scale: 'y', value: 0 }, fill: { value: 'steelblue' } } } }],
+}
 /** A spec with a signal handler, for `@aster-charts/core/signals`. */
 const SIGNAL_VG = {
   width: 100, height: 100,
@@ -370,6 +376,7 @@ const PATTERNS = [
       [/data-scene="yes"/.test(r.html) && /class="mark-rect/.test(r.html), 'useChart returns the scene and the svg'],
       [/data-w="\d+"/.test(r.headless) && /data-svg="null"/.test(r.headless), 'headless useChart (serialize: false) returns a scene only'],
     ],
+    modules: (m) => [[!hasModule(m.parsed, 'core', 'transition'), 'the transition interpolation (core/transition.js) is not even read']],
   },
   {
     name: 'react-autoload',
@@ -452,6 +459,55 @@ const PATTERNS = [
       return [
         [geoOut.length === 1 && geoOut[0].initial, 'the geo add-on is in one output, loaded up front with the entry (the dynamic import of it resolves to the same module)'],
         [outputsWith(m, 'core', 'addon-transforms').length + outputsWith(m, 'core', 'transform-extra').filter((o) => o.initial).length === 0, 'and the add-ons it did not import are not loaded up front'],
+      ]
+    },
+  },
+  {
+    name: 'react-transition-unused',
+    why: "<Chart> without `transition`: the interpolation (@aster-charts/core/transition) is no part of what loads up front, and new data is drawn at once",
+    split: true,
+    dom: true,
+    imports: `import * as React from 'react'\nimport { flushSync } from 'react-dom'\nimport { createRoot } from 'react-dom/client'\nimport { Chart } from '@aster-charts/react'`,
+    body: `
+      const el = (v) => React.createElement(Chart, { spec: ${lit(TRANSITION_VG)}, data: { t: [{ k: 'a', v }, { k: 'b', v: 2 }] }, width: 100, height: 100, a11y: false })
+      const mount = (node) => { const host = document.createElement('div'); document.body.appendChild(host); const root = createRoot(host); flushSync(() => root.render(node)); return { host, root } }
+      const { host, root } = mount(el(1))
+      flushSync(() => root.render(el(9)))
+      return { now: host.querySelector('svg').outerHTML, fresh: mount(el(9)).host.querySelector('svg').outerHTML }`,
+    check: (r) => [[r.now === r.fresh, 'the new data is drawn at once, as a fresh chart draws it']],
+    modules: (m) => {
+      const out = outputsWith(m, 'core', 'transition')
+      return [[out.length === 1 && !out[0].initial, 'core/transition.js is only in a chunk fetched on demand (the dynamic import the prop would make)']]
+    },
+  },
+  {
+    name: 'react-transition',
+    why: "<Chart transition>: the interpolation loads on demand once the prop is set, then a change of data is drawn as frames that end on exactly the svg a plain chart draws",
+    split: true,
+    dom: true,
+    imports: `import * as React from 'react'\nimport { flushSync } from 'react-dom'\nimport { createRoot } from 'react-dom/client'\nimport { Chart } from '@aster-charts/react'`,
+    body: `
+      const el = (v, transition) => React.createElement(Chart, { spec: ${lit(TRANSITION_VG)}, data: { t: [{ k: 'a', v }, { k: 'b', v: 2 }] }, width: 100, height: 100, a11y: false, ...(transition ? { transition: { duration: 200, easing: 'linear' } } : {}) })
+      const mount = (node) => { const host = document.createElement('div'); document.body.appendChild(host); const root = createRoot(host); flushSync(() => root.render(node)); return { host, root } }
+      const wait = (ms) => new Promise((r) => setTimeout(r, ms))
+      const svg = (host) => host.querySelector('svg').outerHTML
+      const { host, root } = mount(el(1, true))
+      await wait(200) // the module the prop asked for arrives (a local chunk)
+      const before = svg(host)
+      flushSync(() => root.render(el(9, true)))
+      await wait(80)
+      const mid = svg(host)
+      await wait(400)
+      return { before, mid, end: svg(host), fresh: svg(mount(el(9, false)).host) }`,
+    check: (r) => [
+      [r.mid !== r.before && r.mid !== r.end, 'a frame between the two pictures is drawn'],
+      [r.end === r.fresh, 'and it settles on exactly the svg a chart without `transition` draws'],
+    ],
+    modules: (m) => {
+      const out = outputsWith(m, 'core', 'transition')
+      return [
+        [out.length === 1 && !out[0].initial, 'core/transition.js is in a chunk of its own, fetched on demand (not by the entry)'],
+        [outputsWith(m, 'react', 'transition').length > 0 && outputsWith(m, 'react', 'transition').every((o) => o.initial), 'the prop handling (react/transition.js) is in what loads up front'],
       ]
     },
   },
