@@ -220,8 +220,11 @@ cli({ url: import.meta.url })
 // external: 206.56), and 0.35 is the chunk boundary: util.js and color.js, which the on-demand module shares with core, move to a
 // chunk the entry imports by name (useChart, which never uses the prop, pays only that: 163.98 external, 164.35 bundled). Ceilings
 // are the measured value + 0.5.
+// Transitions stacked on the fit-view work (feat/127-transitions rebased onto perf/fit-incremental), measured on a clean build of
+// the combined tree (kB gzip): core 153.0, useChart 164.6, Chart 207.3, SvgChart 184.4, SvgChart + interaction 201.9, Chart + VL
+// 310.6, + @aster-charts/core/transition 3.1. Ceilings are the measured value + 0.5.
 const BUDGETS = {
-  '@aster-charts/core': 153.4 * 1024,
+  '@aster-charts/core': 153.5 * 1024,
   '+ @aster-charts/core/dom': 11.1 * 1024,
   '+ @aster-charts/core/canvas': 6.4 * 1024,
   '+ @aster-charts/core/hit': 7.0 * 1024,
@@ -230,13 +233,13 @@ const BUDGETS = {
   '+ @aster-charts/core/geo': 16.6 * 1024,
   '+ @aster-charts/core/transforms': 39.7 * 1024,
   '+ @aster-charts/core/transition': 3.6 * 1024,
-  '@aster-charts/react useChart': 164.9 * 1024,
-  '@aster-charts/react Chart': 207.4 * 1024,
+  '@aster-charts/react useChart': 165.1 * 1024,
+  '@aster-charts/react Chart': 207.8 * 1024,
   // The light chart (`@aster-charts/react/lite`): SVG only, no canvas renderer; alone and with the `interaction` capability.
-  '@aster-charts/react SvgChart': 184.5 * 1024,
-  '@aster-charts/react SvgChart + interaction': 202.1 * 1024,
+  '@aster-charts/react SvgChart': 184.9 * 1024,
+  '@aster-charts/react SvgChart + interaction': 202.4 * 1024,
   // Base + the VL compiler (opt-in: `import '@aster-charts/react/vl'`).
-  '@aster-charts/react Chart + VL': 310.7 * 1024,
+  '@aster-charts/react Chart + VL': 311.1 * 1024,
 }
 
 const THIS_DIR = dirname(fileURLToPath(import.meta.url))
