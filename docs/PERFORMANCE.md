@@ -77,6 +77,9 @@ the browser).
   fields or datasets, `domainRaw`) reads the scale's settings again and keeps the scale when they are the same. The marks
   that read it then encode only the rows that changed. A new category, a category gone, or a sort order that moves makes
   the scale, and everything that reads it, again ([ARCHITECTURE.md](ARCHITECTURE.md#incremental-evaluation)).
+- **Marks inside group items**: a line per category, a facet's cells and a concat's views keep the leaf marks inside them by
+  instance (the group item's key), encode only the rows that changed, and keep the group items, with their guides and titles, that
+  did not change ([ARCHITECTURE.md](ARCHITECTURE.md#incremental-evaluation)).
 - **DOM patching**: the first render emits the full SVG for SSR; later updates patch attributes in place.
   The mount commit skips the patcher (the browser just parsed that markup) and an append reuses the previous
   patch's descriptors as an identity prefix, so only the new items are created. Symbol descriptors are cached
@@ -235,7 +238,7 @@ x bands, coloured by category, `line` one line per category. Items kept are coun
 | bar, stream append | 15.00 / 14.64 / 14.96 | 2.55 / 2.50 / 2.55 | the x scale, 5079 of 5080 items |
 | stacked, a row of a category appended | 1.15 / 1.17 / 1.13 | 0.91 / 0.93 / 0.92 | both discrete scales, 49 of 50 bars |
 | stacked, a category edited to another | 2.21 / 2.19 / 2.19 | 2.05 / 2.03 / 1.98 | both discrete scales, 68 of 70 bars |
-| line, a row of a category appended | 17.53 / 17.56 / 17.54 | 18.07 / 17.73 / 18.30 | the colour scale; no item (group marks are made again) |
+| line, a row of a category appended | 17.53 / 17.56 / 17.54 | 18.07 / 17.73 / 18.30 | the colour scale; no item (group marks were made again then: see the next section) |
 | line, a value edited | 16.26 / 16.46 / 16.55 | 17.07 / 17.08 / 16.99 | the colour scale; no item |
 | controls: fixed-size one-row update (`perf.mjs`) | 0.55 / 0.55 / 0.56 | 0.57 / 0.57 / 0.58 | |
 | controls: `time` animation tick (`tick.mjs`) | 0.91 / 1.04 / 0.92 | 0.94 / 0.93 / 0.93 | 3000 of 3000 items, both |
@@ -249,6 +252,38 @@ evaluation 18.11x / 20.13x / 19.46x before, 19.23x / 19.50x / 19.53x after (floo
 15.51x / 16.58x / 16.48x before, 14.74x / 14.29x / 14.76x after, whose session update measured alone (300 updates, alternated
 three times) is 309 / 261 / 263 µs before and 261 / 262 / 262 µs after. `pnpm bench:browser-stream` held every floor before and
 after (`<ChartStream>` on 10,000 points: 16.6 ms median frame before and 16.7 ms after, one mutation per append).
+
+### Marks inside group items over changing rows (node, no DOM)
+
+Measured 2026-11-10 on perf/discrete-scale-appends (11933f5) against the same base (72ffeea), alternated, three rounds each, load
+average 2.9 to 5.3. `node groups.mjs <worktree> 5000 15`, a probe kept outside the repository: Vega-Lite charts of 5,000 rows in five
+categories through `createChartSession().evaluate` (a new array per update), 15 updates per case, median ms. `line` is one line per
+category (a group mark faceted by the category, its line sorted), `facet` a scatter faceted into a column per category (each cell
+with its grid axes), `concat` two views side by side. Items and groups (cells, headers, the groups of guides) are counted by identity
+after the last update. The controls are the earlier sections' probes.
+
+| Case | base, rounds 1-3 | this change, rounds 1-3 | kept after the change |
+|---|---|---|---|
+| line, a row of a category appended | 19.09 / 17.87 / 18.34 | 2.94 / 2.96 / 2.96 | 5014 of 5015 items; 4 of 10 groups |
+| line, a row removed | 17.27 / 17.26 / 17.25 | 3.20 / 3.17 / 3.20 | 4985 of 4985 items |
+| line, a value edited | 16.67 / 16.55 / 16.72 | 1.82 / 1.73 / 1.79 | 4999 of 5000 items |
+| facet, a row of a category appended | 16.51 / 16.77 / 16.85 | 3.50 / 3.61 / 3.93 | 5014 of 5015 items; 36 of 40 groups |
+| facet, a row removed | 17.06 / 17.30 / 17.34 | 4.10 / 4.16 / 4.21 | 4985 of 4985 items |
+| facet, a value edited | 16.94 / 16.45 / 16.99 | 3.42 / 3.60 / 3.49 | 4999 of 5000 items; 38 of 40 groups |
+| concat, a row appended | 25.20 / 25.03 / 25.17 | 4.09 / 3.92 / 3.96 | 10028 of 10030 items; 8 of 11 groups |
+| concat, a row removed | 25.49 / 24.96 / 25.04 | 3.78 / 4.35 / 3.73 | 9970 of 9970 items |
+| concat, a value edited | 24.77 / 25.07 / 24.82 | 3.67 / 3.66 / 3.44 | 9998 of 10000 items |
+| scatter by category, append (the previous section's probe) | 15.61 / 16.43 / 15.89 | 1.69 / 1.68 / 1.72 | |
+| controls: fixed-size one-row update (`perf.mjs`) | 0.57 / 0.56 / 0.58 | 0.58 / 0.59 / 0.58 | |
+| controls: `time` animation tick (`tick.mjs`) | 0.93 / 0.93 / 0.93 | 0.96 / 0.95 / 0.95 | 3000 of 3000 items, both |
+| controls: point / brush, an unread signal (`sel.mjs`) | 0.45 / 0.46 / 0.46, 0.79 / 0.75 / 0.74 | 0.47 / 0.49 / 0.49, 0.77 / 0.76 / 0.78 | |
+
+The groups not kept are the cell (or line) that changed, the groups above it, and the view's own axes and legend, which are made
+again on every evaluation (comparing them would cost every chart without a group mark: a first version that did took the
+fixed-size control from 0.56 to 0.70 ms and the tick from 0.93 to 1.22 ms). A kept or spliced mark compares its rows with its items'
+data, O(rows) per evaluation: most of the 1.3 to 2.5 ms these cases cost beyond the scatter. `pnpm bench:incremental --
+--points=10000 --reps=30`, alternated: append speedup 19.56x before, 18.78x after (floor 8x); `pnpm bench:browser-stream` held every
+floor before and after (`<ChartStream>` on 10,000 points: 16.7 / 16.6 ms median frame).
 
 ### Differential updates (node, no DOM)
 
