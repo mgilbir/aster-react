@@ -14,7 +14,7 @@ import { carryByAlignment, type IdCounter } from './identifier-ids.js'
 import { applyTransforms, applyTransformsToSharedRows, copiesRows, sortOrder, getField, geoJSONPath, type Row, type TransformContext } from './transform.js'
 import { fieldOf } from './transform-agg.js'
 import { atRandomSite, contentKey, mayDrawRandom, normalPairs, replayable } from './random-tape.js'
-import { dependencyKey, fieldsWritten, pipelineReadsOf, reuse, runsOf, stepCounts, stepReadsOf, type StepReads, type StepRecord } from './step-reuse.js'
+import { datasetsReadIn, dependencyKey, fieldsWritten, lexedText, namesIn, pipelineReadsOf, reuse, runsOf, stepCounts, stepReadsOf, type StepReads, type StepRecord } from './step-reuse.js'
 import { activeMeter, withLimits, ceiling, checkRowCount, meterItems, meterTick, AsterLimitError } from './limits.js'
 import { withTextMetricsProvider } from './text-metrics.js'
 import { AsterUrlError } from './url-policy.js'
@@ -105,6 +105,34 @@ export interface DatasetState {
    * hold the fields of the steps after them too. A step compared with such rows leaves those fields out.
    */
   aliased?: Array<ReadonlySet<string> | undefined>
+  /**
+   * What the pipeline read when it was made (see `pipelineKey`): a later evaluation runs a pulse through these steps when it reads
+   * the same, whichever other signals changed. Absent when a step's reads are not known.
+   */
+  key?: string
+  /** The build of the dataset in this pass (see `keptBuild`): a later round of the pass, over the same inputs and reads, keeps it. */
+  built?: BuiltDataset
+}
+
+/**
+ * One build of a dataset with transforms, in one pass of an evaluation. A pass builds its datasets again once the signals they read
+ * resolve (see `prepareChartCtx`), and a view that fits its viewport makes a second pass at another size: a dataset whose inputs
+ * are the same arrays and whose steps read the same is the dataset the round, or the pass, before built -- its rows, the numbers its
+ * `identifier`s drew (a later pass carries the numbers of the one before) and the signals its steps published.
+ */
+interface BuiltDataset {
+  /** The draft of the pass that made it (a state kept from an evaluation before never matches). */
+  pass: IncrementalState
+  inputs: readonly unknown[]
+  key: string
+  rows: Row[]
+  /** The pulse it published, and the state of the evaluation before it is relative to (the rows that state's items were made from). */
+  pulse: StepPulse | null
+  base: DatasetState | undefined
+  /** Where the view's id counter stood before and after the pipeline ran. */
+  ids: readonly [number, number]
+  /** The signals its steps publish, as they stood after it ran (those it left unwritten are absent). */
+  published: ReadonlyArray<readonly [string, unknown]>
 }
 
 /** Min/max census of a continuous data-driven scale domain. */
@@ -575,7 +603,7 @@ interface EvalContext {
   /** Bumped by every dataset (re)build pass; part of the scale-reuse stamp. */
   dsEpoch: number
   /** Census-reuse decisions already taken this evaluation (a census is advanced once). */
-  scaleReuse: Map<string, { stamp: string; entry: ScaleEntry }>
+  scaleReuse: Map<string, { stamp: string; entry: ScaleEntry; rows: readonly unknown[]; epoch: number }>
   /** Distinct-value memo for discrete scale domains (lives for this evaluation only). */
   distinctCache: WeakMap<unknown[], Map<string, unknown[]>>
   /** Wall-clock deadline (performance.now epoch) from `limits.maxTimeMs`. */
@@ -1718,6 +1746,8 @@ function walkStrings(
 const SCALE_FN_EXPR = /\b(scale|bandwidth|bandspace|invert|domain|range|copy|gradient)\s*\(/
 /** Expression functions that read datasets. */
 const DATA_FN_EXPR = /\b(data|indata|vlSelectionTest|vlSelectionIdTest|vlSelectionResolve)\s*\(/
+/** Expression functions that read a dataset's hierarchy (`treePath`, `treeAncestors`). */
+const TREE_FN_EXPR = /\b(treePath|treeAncestors)\s*\(/
 
 /** What a dataset's pipeline reads besides its `source`. */
 interface DatasetDeps { names: Set<string>; allData: boolean }
@@ -1927,15 +1957,19 @@ function affectedDatasets(chart: CompiledChart, changed: Set<string>): Set<strin
   return affected
 }
 
-/** What a mark subtree reads: datasets, scales (by name or through expressions). */
-interface MarkDeps { names: Set<string>; allData: boolean; scales: Set<string>; allScales: boolean }
+/**
+ * What a mark subtree reads: datasets, scales (by name or through expressions). `allData`: it may read any dataset (the items of
+ * another mark, or a dataset an expression reads by a computed name); otherwise `exprData` are the datasets its expressions read by
+ * the names they spell out (`vlSelectionTest("brush_store", datum)`), besides `names`, the datasets it names as a whole string.
+ */
+interface MarkDeps { names: Set<string>; allData: boolean; exprData: readonly string[]; scales: Set<string>; allScales: boolean }
 const MARK_DEPS = new WeakMap<CompiledMark, MarkDeps>()
 
 function markDepsOf(mark: CompiledMark, chart: CompiledChart): MarkDeps {
   let deps = MARK_DEPS.get(mark)
   if (deps) return deps
   const known = new Set(chart.data.map((d) => d.name))
-  const out: MarkDeps = { names: new Set(), allData: false, scales: new Set(), allScales: false }
+  const out: MarkDeps = { names: new Set(), allData: false, exprData: [], scales: new Set(), allScales: false }
   // a mark reading another mark's items (`from: {data: <mark name>}`) depends on whatever that mark depends on
   const readsMarkItems = (m: CompiledMark): boolean => {
     const from = m.from?.data
@@ -1944,15 +1978,22 @@ function markDepsOf(mark: CompiledMark, chart: CompiledChart): MarkDeps {
     return false
   }
   if (readsMarkItems(mark)) out.allData = true
+  const exprData = new Set<string>()
   walkStrings(mark, (str, owner) => {
     if (known.has(str)) out.names.add(str)
-    if (DATA_FN_EXPR.test(str)) out.allData = true
-    if (SCALE_FN_EXPR.test(str)) out.allScales = true
+    // (the text as the lexer reads it: an escaped name is the name it stands for)
+    // (the datasets an expression reads by name, or all of them: see `datasetsReadIn`, which reads the hierarchy functions too)
+    const read = datasetsReadIn(str)
+    if (read === null) out.allData = true
+    else for (const n of read) exprData.add(n)
+    // (the text as the lexer reads it: an escaped name is the name it stands for)
+    if (SCALE_FN_EXPR.test(lexedText(str))) out.allScales = true
     if (owner && typeof owner.scale === 'string' && owner.scale === str) out.scales.add(str)
   }, new Set(), null, (o) => {
     // A scale chosen by a signal/expression object: any scale may be read.
     if (o.scale != null && typeof o.scale === 'object') out.allScales = true
   })
+  out.exprData = [...exprData].sort()
   MARK_DEPS.set(mark, out)
   return out
 }
@@ -1996,8 +2037,9 @@ function namesMentioned(def: object, chart: CompiledChart): readonly string[] | 
   let unnamed = false
   walkStrings(def, (str) => {
     strings.add(str)
-    if (UNNAMED_READ_CALL.test(str)) unnamed = true
-    for (const m of str.matchAll(IDENT)) names.add(m[0])
+    // (as the lexer reads it: `n\u006fw()` calls `now`, and a name may be escaped or past ASCII: see `namesIn`)
+    if (UNNAMED_READ_CALL.test(lexedText(str))) unnamed = true
+    namesIn(str, names)
   })
   for (const p of chart.projections ?? []) if (strings.has(p.name)) unnamed = true
   out = unnamed ? null : [...names].sort()
@@ -2008,7 +2050,9 @@ function namesMentioned(def: object, chart: CompiledChart): readonly string[] | 
 /**
  * The signals a top-level leaf mark may read, or `null` for all of them. A mark with transforms reads all of them: a `label` reads
  * the items of other marks, a `force` or a word cloud may draw from the random source, a geo transform a projection. So does a
- * mark that reads datasets from an expression or the items of another mark (`markDepsOf(...).allData`).
+ * mark that reads the items of another mark, or a dataset by a name an expression computes (`markDepsOf(...).allData`). A mark
+ * whose expressions read datasets by the names they spell out (a selection test) reads the signals it names, and those datasets'
+ * rows (see `markKeyOf`).
  */
 function markReadsOf(mark: CompiledMark, chart: CompiledChart): readonly string[] | null {
   if (mark.transform?.length || markDepsOf(mark, chart).allData) return null
@@ -2023,7 +2067,7 @@ function scaleReadsOf(s: CompiledScale, chart: CompiledChart): readonly string[]
   let reads = SCALE_READS.get(s)
   if (reads === undefined) {
     let any = false
-    walkStrings(s, (str) => { if (DATA_FN_EXPR.test(str) || SCALE_FN_EXPR.test(str)) any = true })
+    walkStrings(s, (str) => { const text = lexedText(str); if (DATA_FN_EXPR.test(text) || SCALE_FN_EXPR.test(text) || TREE_FN_EXPR.test(text)) any = true })
     reads = { signals: any ? null : namesMentioned(s, chart), datasets: datasetsNamed(s, chart) }
     SCALE_READS.set(s, reads)
   }
@@ -2041,15 +2085,21 @@ function datasetsNamed(def: object, chart: CompiledChart): readonly string[] {
 }
 
 /**
- * Whether a scale the previous evaluation made, under signals that have changed since, is the scale this one would make: the
- * signals it reads (`scaleKeyOf`) and the datasets it names are as they were. A scale with bins made in a pass of a view that fits
- * its viewport is made again: what it leaves for the next pass (see `ScaleContext.pass`) is the pass's own.
+ * Whether a scale the previous evaluation made, under signals that have changed since, was made under what this one reads: the
+ * signals it reads (`scaleKeyOf`) are as they were, the caller tells what changed and nothing of this pass failed. It is then the
+ * scale this evaluation makes when the datasets it names are the very arrays it was made from (`sameRows`), or, for the dataset of
+ * its domain, rows a pulse says how they changed (its census advances, as when no signal changed). A scale with bins made in a
+ * pass of a view that fits its viewport is made again: what it leaves for the next pass (see `ScaleContext.pass`) is the pass's own.
  */
-function keepsScale(s: CompiledScale, ctx: EvalContext, prevEntry: ScaleEntry, key: string): boolean {
+function keyedScale(s: CompiledScale, ctx: EvalContext, prevEntry: ScaleEntry, key: string): boolean {
   if (!followsChanges(ctx) || !cleanPass(ctx) || prevEntry.key !== key || scaleReadsOf(s, ctx.chart) === null) return false
-  if (ctx.passMemory !== undefined && (prevEntry.scale as { bins?: unknown }).bins) return false
-  for (const n of SCALE_READS.get(s)!.datasets) if (!sameRows(ctx, n)) return false
-  return true
+  return !(ctx.passMemory !== undefined && (prevEntry.scale as { bins?: unknown }).bins)
+}
+
+/** The arrays of the datasets a scale names, as they are now. */
+const scaleRowsOf = (s: CompiledScale, ctx: EvalContext): unknown[] => {
+  scaleReadsOf(s, ctx.chart)
+  return SCALE_READS.get(s)!.datasets.map((n) => ctx.datasets.get(n))
 }
 
 /**
@@ -2077,12 +2127,20 @@ function readsKey(ctx: EvalContext, names: readonly string[] | null): string {
 
 const VETS_URLS = new WeakMap<CompiledMark, boolean>()
 
-/** A mark's key (see `readsKey`); an image or a link is also made under the host's URL policy, which vets its urls. */
+/**
+ * A mark's key (see `readsKey`); an image or a link is also made under the host's URL policy, which vets its urls. A mark whose
+ * expressions read datasets by name (`markDepsOf(...).exprData`: a selection's store) is also made from their rows: each one's
+ * `datasetKey`, by content (a store is a few rows, a new array whenever the event loop edits it) or, past what a fingerprint takes
+ * in, by the array, when the caller tells every change and did not name it as changed (otherwise equal to no other key).
+ */
 function markKeyOf(mark: CompiledMark, ctx: EvalContext): string {
-  const key = readsKey(ctx, markReadsOf(mark, ctx.chart))
+  let key = readsKey(ctx, markReadsOf(mark, ctx.chart))
   let vets = VETS_URLS.get(mark)
   if (vets === undefined) VETS_URLS.set(mark, (vets = mark.type === 'image' || encodesHref(mark)))
-  return vets ? `${key}\u0003${ctx.urlPolicy === undefined ? '' : dependencyKey(ctx.urlPolicy)}` : key
+  if (vets) key = `${key}\u0003${ctx.urlPolicy === undefined ? '' : dependencyKey(ctx.urlPolicy)}`
+  const deps = markDepsOf(mark, ctx.chart)
+  if (!deps.allData) for (const n of deps.exprData) key += `\u0004${n}=${datasetKey(ctx, n)}`
+  return key
 }
 const scaleKeyOf = (s: CompiledScale, ctx: EvalContext): string => readsKey(ctx, scaleReadsOf(s, ctx.chart))
 
@@ -3029,28 +3087,53 @@ function buildDatasetsOf(ctx: EvalContext, inputData: Record<string, unknown[]>)
         affectedDatasets: ctx.affected,
         ids: ctx.ids,
       }
-      const state: DatasetState = { fp: passFp, inputLength: rows.length, steps: [], stepState: new Map() }
-      // Incremental only when every precondition is provable: the caller named a
-      // pulse, the previous state was built under identical params from an input
-      // of the length the pulse is relative to, and no earlier pass of THIS
-      // evaluation already updated that state in place.
-      // A pass of an evaluation numbers the rows of an `identifier` as the pass before it did (a view that fits its viewport builds its
-      // content twice): whichever route numbered them first, the others carry its numbers, and do not number them again by theirs.
-      const hasIds = d.transform.some((x) => x.type === 'identifier')
-      const earlierDS = hasIds ? ctx.draft.datasets.get(name) ?? ctx.earlier?.datasets.get(name) : undefined
-      const incremental = ctx.incremental && inPulse !== null && !inPulse.full && prevDS !== undefined && earlierDS === undefined
-        && prevDS.fp === passFp && prevDS.steps.length === d.transform.length
-        && prevDS.inputLength === pulseBaseLength(inPulse) && claim(ctx, datasetParts(prevDS))
-      if (incremental) {
-        if (shared) rows = copyRows(rows)
-        const res = ctx.engine!.applyPipelineWithPulse(rows, d.transform, tctx, name, inPulse!, prevDS, state)
-        rows = res.rows
-        outPulse = res.pulse
+      // What the steps read now (null: not known), and the build of an earlier round of this pass, or of the pass before, that read
+      // the same, if any.
+      // (a view whose datasets may draw from a random source the host injected takes a pulse where it always did: the engine's pulse
+      // path draws without a tape, so which build takes a pulse decides which numbers the source hands out; see `drawsInDatasets`)
+      const key = ctx.runtime.random !== undefined && datasetsMayDraw(ctx.chart) ? null : pipelineKey(ctx, d.transform)
+      const before = reuse.on ? keptBuild(ctx, name, inputs, key) : undefined
+      if (before !== undefined) {
+        const kept = before.built!
+        rows = kept.rows
+        // (a pass before this one may have built from another state of the evaluation before: its pulse says how the rows of that
+        // state changed, which are the rows this pass's items were made from only when the two states are one)
+        outPulse = kept.base === prevDS ? kept.pulse : null
+        ctx.ids.value = kept.ids[1]
+        for (const [signal, value] of kept.published) ctx.signalParams[signal] = value
+        ctx.draft.datasets.set(name, before)
+        stepCounts.reused += d.transform.length
       } else {
-        rows = runPipeline(ctx, name, d.transform, tctx, rows, shared, inputs, raw, prevDS, earlierDS, state)
-        outPulse = null
+        const state: DatasetState = { fp: passFp, inputLength: rows.length, steps: [], stepState: new Map() }
+        const idsBefore = ctx.ids.value
+        // Incremental only when every precondition is provable: the caller named a pulse, the previous state was built under the
+        // params the steps read (all of them, or the signals and datasets they name: see `pipelineKey`) from an input of the length
+        // the pulse is relative to, and no earlier pass of THIS evaluation already updated that state in place.
+        // A pass of an evaluation numbers the rows of an `identifier` as the pass before it did (a view that fits its viewport builds its
+        // content twice): whichever route numbered them first, the others carry its numbers, and do not number them again by theirs.
+        const hasIds = d.transform.some((x) => x.type === 'identifier')
+        const earlierDS = hasIds ? ctx.draft.datasets.get(name) ?? ctx.earlier?.datasets.get(name) : undefined
+        const incremental = ctx.incremental && inPulse !== null && !inPulse.full && prevDS !== undefined && earlierDS === undefined
+          && (prevDS.fp === passFp || (key !== null && prevDS.key === key && activeMeter() === null))
+          && prevDS.steps.length === d.transform.length
+          && prevDS.inputLength === pulseBaseLength(inPulse) && claim(ctx, datasetParts(prevDS))
+        if (incremental) {
+          if (shared) rows = copyRows(rows)
+          const res = ctx.engine!.applyPipelineWithPulse(rows, d.transform, tctx, name, inPulse!, prevDS, state)
+          rows = res.rows
+          outPulse = res.pulse
+        } else {
+          rows = runPipeline(ctx, name, d.transform, tctx, rows, shared, inputs, raw, prevDS, earlierDS, state)
+          outPulse = null
+        }
+        if (key !== null) {
+          state.key = key
+          if (inputs !== undefined && !forceLinkDatasets(ctx.chart).has(name)) {
+            state.built = { pass: ctx.draft, inputs, key, rows, pulse: outPulse, base: prevDS, ids: [idsBefore, ctx.ids.value], published: publishedBy(ctx, d.transform) }
+          }
+        }
+        ctx.draft.datasets.set(name, state)
       }
-      ctx.draft.datasets.set(name, state)
     } catch (e) {
       // vega: a transform that throws is logged and the dataset publishes nothing (the rest of
       // its pipeline never runs, so everything downstream of it is empty / never built).
@@ -3123,7 +3206,14 @@ function ingestHostRows(given: readonly Row[], pulse: StepPulse | null): Row[] {
  * would make; a dataset named as changed is copied again.
  */
 function keptCopy(ctx: EvalContext, name: string, inputs: readonly unknown[] | undefined, raw: boolean): Row[] | undefined {
-  if (inputs === undefined || !reuse.on || ctx.affected.has(name)) return undefined
+  if (inputs === undefined || !reuse.on) return undefined
+  // (a later round of this pass, or the pass after another, copies the very arrays the one before copied: its copy, whatever changed
+  // since the evaluation before)
+  for (const pass of [ctx.draft, ctx.earlier]) {
+    const mine = pass?.copies.get(name)
+    if (mine !== undefined && sameArrays(mine.inputs, inputs)) return mine.rows
+  }
+  if (ctx.affected.has(name)) return undefined
   const prev = ctx.prev?.copies.get(name)
   if (prev === undefined || prev.inputs.length !== inputs.length) return undefined
   if (raw) {
@@ -3245,6 +3335,60 @@ function runPipeline(
   return cur
 }
 
+
+const sameArrays = (a: readonly unknown[], b: readonly unknown[]): boolean => a.length === b.length && a.every((x, i) => x === b[i])
+
+const MAY_DRAW = new WeakMap<CompiledChart, boolean>()
+
+/** Whether a dataset of the view may draw from the random source, its expressions read as the lexer reads them (an escaped name too). */
+function datasetsMayDraw(chart: CompiledChart): boolean {
+  let may = MAY_DRAW.get(chart)
+  if (may === undefined) MAY_DRAW.set(chart, (may = mayDrawRandom(chart.data) || mayDrawRandom(lexedText(JSON.stringify(chart.data) ?? ''))))
+  return may
+}
+
+/**
+ * What a dataset's steps read, as it stands now: the keys of every step (see `stepKeys`), or `null` when a step's reads are not known
+ * (see step-reuse.ts) or it draws from the random source. Two builds of the pipeline under the same key over the same input rows make
+ * the same rows; a pulse through its steps is a pulse through what made them.
+ */
+function pipelineKey(ctx: EvalContext, transforms: readonly CompiledTransform[]): string | null {
+  let key = ''
+  for (const t of transforms) {
+    const reads = stepReadsOf(t)
+    if (reads === null || reads.draws) return null
+    for (const k of stepKeys(ctx, reads)) key += `\u0001${k}`
+    key += '\u0002'
+  }
+  return key
+}
+
+/**
+ * The build of dataset `name` an earlier round of this pass, or the pass before this one, made (see {@link BuiltDataset}), when this
+ * one would make it again: the same input arrays, the same reads, and the view's id counter where it stood then (its `identifier`s
+ * draw the same numbers, or carry the numbers that build drew). Not under `limits`: what a kept build made is not counted against
+ * them again.
+ */
+function keptBuild(ctx: EvalContext, name: string, inputs: readonly unknown[] | undefined, key: string | null): DatasetState | undefined {
+  if (key === null || inputs === undefined || activeMeter() !== null) return undefined
+  for (const pass of [ctx.draft, ctx.earlier]) {
+    const state = pass?.datasets.get(name)
+    const built = state?.built
+    if (built === undefined || built.pass !== pass || built.key !== key || built.ids[0] !== ctx.ids.value) continue
+    if (sameArrays(built.inputs, inputs)) return state
+  }
+  return undefined
+}
+
+/** The signals the steps publish, as they stand after the steps ran (one a step left unwritten is absent). */
+function publishedBy(ctx: EvalContext, transforms: readonly CompiledTransform[]): Array<readonly [string, unknown]> {
+  const out: Array<readonly [string, unknown]> = []
+  for (const t of transforms) {
+    const p = stepReadsOf(t)?.publishes
+    if (p !== undefined && Object.hasOwn(ctx.signalParams, p)) out.push([p, ctx.signalParams[p]])
+  }
+  return out
+}
 
 /** What a step reads, as it stands now (see `StepRecord.keys`): the values of its signals, then the rows of the datasets it reads. */
 function stepKeys(ctx: EvalContext, reads: StepReads): string[] {
@@ -3648,18 +3792,8 @@ function buildScales(ctx: EvalContext): void {
   // evaluation (fixed-point rounds, size re-resolution) is harmless.
   const fp = ctxFpOf(ctx)
   const reusable = ctx.incremental && prev !== undefined && prev.fp === fp
-  const stamp = `${fp}#${ctx.dsEpoch}`
   for (const s of ctx.chart.scales) {
     const key = scaleKeyOf(s, ctx)
-    // This scale was already proven reusable under the very same params and
-    // dataset build earlier in this evaluation (the census advances once).
-    const memo = ctx.scaleReuse.get(s.name)
-    if (reusable && memo && memo.stamp === stamp) {
-      ctx.scales.set(s.name, memo.entry.scale)
-      ctx.scaleTypes.set(s.name, s.type)
-      entries.set(s.name, memo.entry)
-      continue
-    }
     // A `{ fields: [...] }` domain (vega-lite's layered charts: several datasets
     // contribute to one shared scale) is resolved by buildScale itself, from the
     // CURRENT datasets, every evaluation: the IR keeps the declared domain.
@@ -3668,29 +3802,48 @@ function buildScales(ctx: EvalContext): void {
     const prevEntry = prev?.scaleEntries.get(s.name)
     const def: CompiledScale = s
     const dom = multi ? null : singleDataDomain(s.domain)
-    if (reusable && prevEntry && prevEntry.multi === multi) {
-      let reuse = !domainReferencesAffected(s.domain, ctx.affected)
-      let entry = prevEntry
+    // Signals changed, but none this scale reads (see `keyedScale`): it is reused as when none changed, over the datasets it reads.
+    const keyed = !reusable && prevEntry !== undefined && prevEntry.multi === multi && keyedScale(s, ctx, prevEntry, key)
+    // What the scale was made from, besides its datasets: the whole context, or what it reads of it.
+    const stamp = reusable ? (prevEntry !== undefined && prevEntry.multi === multi ? `*${fp}` : undefined) : keyed ? key : undefined
+    // This scale was already proven reusable under the very same params and
+    // dataset build earlier in this evaluation (the census advances once): the datasets it names are the very arrays it was proven
+    // over, which nothing writes once a round of this evaluation made them (a scale that reads datasets from an expression also
+    // needs the same build of them all).
+    const memo = ctx.scaleReuse.get(s.name)
+    if (stamp !== undefined && memo !== undefined && memo.stamp === stamp && sameArrays(memo.rows, scaleRowsOf(s, ctx))
+      && (scaleReadsOf(s, ctx.chart) !== null || memo.epoch === ctx.dsEpoch)) {
+      ctx.scales.set(s.name, memo.entry.scale)
+      ctx.scaleTypes.set(s.name, s.type)
+      entries.set(s.name, memo.entry)
+      continue
+    }
+    if (stamp !== undefined) {
+      // (with every signal as it was, a dataset the caller did not name is unchanged; with some changed, a dataset the scale names
+      // must be the very array it was made from, see `sameRows`)
+      let reuse = reusable ? !domainReferencesAffected(s.domain, ctx.affected) : SCALE_READS.get(s)!.datasets.every((n) => sameRows(ctx, n))
+      let entry = prevEntry!
       // An affected single-data-domain scale can still be reused when its domain
       // is provably unchanged (see the census helpers). This skips the O(n)
       // domain re-scan for the common case (few points change, domain holds, or
       // rows are appended inside the current domain).
-      if (!reuse && dom) {
+      // (signals changed: the other datasets the scale names must be the arrays it was made from)
+      if (!reuse && dom && (reusable || SCALE_READS.get(s)!.datasets.every((n) => n === dom.data || sameRows(ctx, n)))) {
         const pulse = ctx.datasetPulses.get(dom.data)
         const rows = ctx.datasets.get(dom.data) ?? []
         if (pulse && !pulse.full) {
-          if (CONTINUOUS_TYPES.has(s.type) && prevEntry.cont && prevEntry.cont.finite
-            && prevEntry.cont.data === dom.data && prevEntry.cont.field === dom.field) {
+          if (CONTINUOUS_TYPES.has(s.type) && entry.cont && entry.cont.finite
+            && entry.cont.data === dom.data && entry.cont.field === dom.field) {
             // The census is updated in place for the append-only form: claim it.
-            if (claim(ctx, censusParts(prevEntry.cont))) {
-              const next = advanceContCensus(prevEntry.cont, rows, pulse)
-              if (next) { reuse = true; entry = { ...prevEntry, cont: next } }
+            if (claim(ctx, censusParts(entry.cont))) {
+              const next = advanceContCensus(entry.cont, rows, pulse)
+              if (next) { reuse = true; entry = { ...entry, cont: next } }
             }
-          } else if (DISCRETE_TYPES.has(s.type) && prevEntry.disc && discreteCensusApplies(dom)
-            && prevEntry.disc.data === dom.data && prevEntry.disc.field === dom.field) {
-            if (claim(ctx, censusParts(prevEntry.disc))) {
-              const next = advanceDiscCensus(prevEntry.disc, rows, pulse)
-              if (next) { reuse = true; entry = { ...prevEntry, disc: next } }
+          } else if (DISCRETE_TYPES.has(s.type) && entry.disc && discreteCensusApplies(dom)
+            && entry.disc.data === dom.data && entry.disc.field === dom.field) {
+            if (claim(ctx, censusParts(entry.disc))) {
+              const next = advanceDiscCensus(entry.disc, rows, pulse)
+              if (next) { reuse = true; entry = { ...entry, disc: next } }
             }
           }
         }
@@ -3700,15 +3853,9 @@ function buildScales(ctx: EvalContext): void {
         ctx.scales.set(s.name, entry.scale)
         ctx.scaleTypes.set(s.name, s.type)
         entries.set(s.name, entry)
-        ctx.scaleReuse.set(s.name, { stamp, entry })
+        ctx.scaleReuse.set(s.name, { stamp, entry, rows: scaleRowsOf(s, ctx), epoch: ctx.dsEpoch })
         continue
       }
-    } else if (!reusable && prevEntry && prevEntry.multi === multi && keepsScale(s, ctx, prevEntry, key)) {
-      // Signals changed, none this scale reads, and the datasets it reads are the same arrays: it is the scale it was.
-      ctx.scales.set(s.name, prevEntry.scale)
-      ctx.scaleTypes.set(s.name, s.type)
-      entries.set(s.name, prevEntry)
-      continue
     }
     let scale: Scale
     try {

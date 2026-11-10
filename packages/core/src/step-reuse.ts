@@ -41,6 +41,9 @@ const DATASET_FUNCTIONS = new Set(['data', 'indata', 'vlSelectionTest', 'vlSelec
 /** The expression functions that draw from the random source (see `mayDrawRandom`). */
 const DRAWING_FUNCTIONS = new Set(['random', 'sampleNormal', 'sampleLogNormal', 'sampleUniform'])
 
+/** What the trees of a step call besides what they read: a function that draws from the random source. */
+interface Calls { draws: boolean }
+
 /** Names an expression means by themselves, not as signals. */
 const KEYWORDS = new Set(['datum'])
 
@@ -71,37 +74,39 @@ function analyse(t: CompiledTransform): StepReads | null {
   if (!READS_ROWS_AND_SIGNALS.has(t.type as string)) return null
   const names = new Set<string>()
   const datasets = new Set<string>()
+  // (a drawing function called by an escaped name is no word the text holds: the trees say it too, see `readTree`)
+  const calls: Calls = { draws: false }
   const params = t as unknown as Record<string, unknown>
   for (const key of Object.keys(params)) {
     // (a string `signal` on the transform itself names the signal it writes; an object one reads a signal)
     if (key === 'type' || (key === 'signal' && typeof params[key] === 'string')) continue
-    if (!walkParam(params[key], names, datasets, key === 'expr', 0)) return null
+    if (!walkParam(params[key], names, datasets, calls, key === 'expr', 0)) return null
   }
   const publishes = typeof params.signal === 'string' ? params.signal : undefined
-  return { signals: [...names].sort(), datasets: [...datasets].sort(), draws: mayDrawRandom(t), publishes }
+  return { signals: [...names].sort(), datasets: [...datasets].sort(), draws: mayDrawRandom(t) || calls.draws, publishes }
 }
 
 /** Collect the signals and datasets a parameter reads; `false`: it reads something the analysis does not cover. */
-function walkParam(v: unknown, names: Set<string>, datasets: Set<string>, isExpr: boolean, depth: number): boolean {
-  if (typeof v === 'string') return isExpr ? readExpression(v, names, datasets) : true
+function walkParam(v: unknown, names: Set<string>, datasets: Set<string>, calls: Calls, isExpr: boolean, depth: number): boolean {
+  if (typeof v === 'string') return isExpr ? readExpression(v, names, datasets, calls) : true
   if (v === null || typeof v !== 'object') return true
   if (depth > 8) return false
   if (Array.isArray(v)) {
-    for (const x of v) if (!walkParam(x, names, datasets, false, depth + 1)) return false
+    for (const x of v) if (!walkParam(x, names, datasets, calls, false, depth + 1)) return false
     return true
   }
   const o = v as Record<string, unknown>
   const keys = Object.keys(o)
   // `{signal: <expression>}` is a signal reference (the engine resolves it before the step runs: see resolveSignalParams)
-  if (keys.length === 1 && keys[0] === 'signal' && typeof o.signal === 'string') return readExpression(o.signal, names, datasets)
-  for (const k of keys) if (!walkParam(o[k], names, datasets, k === 'expr', depth + 1)) return false
+  if (keys.length === 1 && keys[0] === 'signal' && typeof o.signal === 'string') return readExpression(o.signal, names, datasets, calls)
+  for (const k of keys) if (!walkParam(o[k], names, datasets, calls, k === 'expr', depth + 1)) return false
   return true
 }
 
-function readExpression(code: string, names: Set<string>, datasets: Set<string>): boolean {
+function readExpression(code: string, names: Set<string>, datasets: Set<string>, calls: Calls): boolean {
   let tree: Expr
   try { tree = parseExpressionCached(code) } catch { return false }
-  return readTree(tree, names, datasets)
+  return readTree(tree, names, datasets, calls)
 }
 
 /** The node types known to compute from their children alone; any other type (a new or forgotten shape) keeps the step out. */
@@ -113,9 +118,9 @@ const PURE_NODES = new Set(['Literal', 'Identifier', 'MemberExpression', 'CallEx
  * function, which must be a pure or drawing one, or a dataset function whose first argument is a string (the dataset it reads goes to
  * `datasets`). `false`: the tree holds a node of a type not known to be pure, `event`/`item`, or a dataset read by a computed name.
  */
-function readTree(e: unknown, names: Set<string>, datasets: Set<string>): boolean {
+function readTree(e: unknown, names: Set<string>, datasets: Set<string>, calls: Calls): boolean {
   if (e === null || e === undefined) return true
-  if (Array.isArray(e)) return e.every((x) => readTree(x, names, datasets))
+  if (Array.isArray(e)) return e.every((x) => readTree(x, names, datasets, calls))
   if (typeof e !== 'object') return true
   const node = e as { type?: unknown } & Record<string, unknown>
   if (typeof node.type !== 'string' || !PURE_NODES.has(node.type)) return false
@@ -129,8 +134,8 @@ function readTree(e: unknown, names: Set<string>, datasets: Set<string>): boolea
     }
     case 'MemberExpression':
       // (a property name is not a read; a computed property is an expression)
-      return readTree(node.object, names, datasets) && (node.computed !== true || readTree(node.property, names, datasets))
-    case 'Property': return readTree(node.value, names, datasets)
+      return readTree(node.object, names, datasets, calls) && (node.computed !== true || readTree(node.property, names, datasets, calls))
+    case 'Property': return readTree(node.value, names, datasets, calls)
     case 'CallExpression': {
       const f = node.callee as { type?: string; name?: string }
       if (f?.type !== 'Identifier') return false
@@ -138,12 +143,14 @@ function readTree(e: unknown, names: Set<string>, datasets: Set<string>): boolea
         const first = (node.arguments as unknown[] | undefined)?.[0] as { type?: string; value?: unknown } | undefined
         if (first?.type !== 'Literal' || typeof first.value !== 'string') return false
         datasets.add(first.value)
-      } else if (!(PURE_FUNCTIONS.has(f.name!) || DRAWING_FUNCTIONS.has(f.name!))) return false
-      return readTree(node.arguments, names, datasets)
+      } else if (DRAWING_FUNCTIONS.has(f.name!)) {
+        calls.draws = true
+      } else if (!PURE_FUNCTIONS.has(f.name!)) return false
+      return readTree(node.arguments, names, datasets, calls)
     }
     default:
       // every other child of the node, whatever it is called
-      for (const k of Object.keys(node)) if (k !== 'type' && !readTree(node[k], names, datasets)) return false
+      for (const k of Object.keys(node)) if (k !== 'type' && !readTree(node[k], names, datasets, calls)) return false
       return true
   }
 }
@@ -328,4 +335,91 @@ export function pipelineReadsOf(transforms: readonly CompiledTransform[]): reado
     PIPELINES.set(transforms, names)
   }
   return names
+}
+
+// ---------------------------------------------------------------------------
+// The names and the dataset reads of a definition's strings, as the expression lexer reads them
+// ---------------------------------------------------------------------------
+
+
+/** A string the lexer reads as it is written: no escape, no character past ASCII (its names are what an ASCII pattern finds). */
+function lexedAsWritten(str: string): boolean {
+  for (let i = 0; i < str.length; i++) {
+    const c = str.charCodeAt(i)
+    if (c === 92 || c > 127) return false
+  }
+  return true
+}
+
+/** The blanks the lexer skips besides the ASCII ones (see expr-parser.ts `isBlank`). */
+const WIDE_BLANKS = new RegExp(`[${[0xa0, 0x1680, 0x180e, 0x2000, 0x2001, 0x2002, 0x2003, 0x2004, 0x2005, 0x2006, 0x2007, 0x2008, 0x2009, 0x200a, 0x2028, 0x2029, 0x202f, 0x205f, 0x3000, 0xfeff].map((c) => String.fromCharCode(c)).join('')}]`, 'g')
+
+/**
+ * `str` as the expression lexer reads its names: a `\uXXXX` escape is the character it stands for (`data` spelled with an escape is `data`)
+ * and every blank it skips is a space, so the patterns that look for a name or a call in the text find what the lexer finds. Every
+ * escape is decoded, those inside string literals too: that finds more names, never fewer.
+ */
+export function lexedText(str: string): string {
+  if (lexedAsWritten(str)) return str
+  return str.replace(/\\u([0-9a-fA-F]{4})/g, (_, hex: string) => String.fromCharCode(parseInt(hex, 16))).replace(WIDE_BLANKS, ' ')
+}
+
+const ASCII_NAME = /[A-Za-z_$][\w$]*/g
+/** A run of the characters a name is made of, past ASCII too (a superset of the names in the text: digits may lead). */
+const NAME_RUN = new RegExp(`[\\p{ID_Continue}$${String.fromCharCode(0x200c, 0x200d)}]+`, 'gu')
+
+/**
+ * Every name `str` mentions, read as an expression or not: the ASCII names as written, and for a string with escapes or characters
+ * past ASCII, the names of its lexed text (see {@link lexedText}) and, when it is an expression, the identifiers of its tree (the
+ * names the lexer itself makes, in whatever script). A superset of the names an expression in it reads.
+ */
+export function namesIn(str: string, into: Set<string>): void {
+  for (const m of str.matchAll(ASCII_NAME)) into.add(m[0])
+  if (lexedAsWritten(str)) return
+  for (const m of lexedText(str).matchAll(NAME_RUN)) into.add(m[0])
+  let tree: Expr
+  try { tree = parseExpressionCached(str) } catch { return }
+  eachNode(tree, (node) => { if (node.type === 'Identifier' && typeof node.name === 'string') into.add(node.name) })
+}
+
+/** Visit every node of an expression tree, whatever the field a child is in (with a stack of its own: a long `a + b + ...` is deep). */
+function eachNode(tree: unknown, visit: (node: { type: string } & Record<string, unknown>) => void): void {
+  const stack: unknown[] = [tree]
+  while (stack.length) {
+    const e = stack.pop()
+    if (e === null || typeof e !== 'object') continue
+    if (Array.isArray(e)) { for (const x of e) stack.push(x); continue }
+    const node = e as { type?: unknown } & Record<string, unknown>
+    if (typeof node.type === 'string') visit(node as { type: string } & Record<string, unknown>)
+    for (const k of Object.keys(node)) if (k !== 'type') stack.push(node[k])
+  }
+}
+
+/** Expression functions that read a dataset's hierarchy (vega-functions' tree lookups): what they read is not keyed by its rows. */
+const TREE_FUNCTIONS = new Set(['treePath', 'treeAncestors'])
+/** Mentions a call that may read a dataset (see {@link DATASET_FUNCTIONS}, {@link TREE_FUNCTIONS}), in lexed text. */
+const DATASET_CALL_TEXT = /\b(data|indata|vlSelectionTest|vlSelectionIdTest|vlSelectionResolve|treePath|treeAncestors)\s*\(/
+
+/**
+ * The datasets the expression `str` reads by the names it spells out (`data("store")`, `vlSelectionTest("store", datum)`): `[]` when
+ * it reads none, `null` when it reads one by a computed name or a hierarchy (`treePath`), or when it mentions such a call and is no
+ * expression the analysis can read (it is then taken to read every dataset).
+ */
+export function datasetsReadIn(str: string): readonly string[] | null {
+  if (!DATASET_CALL_TEXT.test(lexedText(str))) return []
+  let tree: Expr
+  try { tree = parseExpressionCached(str) } catch { return null }
+  const out = new Set<string>()
+  let computed = false
+  eachNode(tree, (node) => {
+    if (node.type !== 'CallExpression') return
+    const f = node.callee as { type?: string; name?: string } | undefined
+    if (f?.type !== 'Identifier') { computed = true; return }
+    if (TREE_FUNCTIONS.has(f.name!)) { computed = true; return }
+    if (!DATASET_FUNCTIONS.has(f.name!)) return
+    const first = (node.arguments as unknown[] | undefined)?.[0] as { type?: string; value?: unknown } | undefined
+    if (first?.type === 'Literal' && typeof first.value === 'string') out.add(first.value)
+    else computed = true
+  })
+  return computed ? null : [...out].sort()
 }

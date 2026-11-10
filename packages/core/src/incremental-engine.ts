@@ -12,6 +12,7 @@ import { applyTransforms, compileExprTransform, sortOrder, aggregateGroup, type 
 import { fieldsOf, groupKeyFn } from './transform-agg.js'
 import { flattenLength } from './transform-basic.js'
 import { checkRowCount } from './limits.js'
+import { datasetsReadIn, lexedText } from './step-reuse.js'
 import type { CompiledTransform, SortSpec } from './types.js'
 import {
   applyFresh, applyIdentifier, applyOne, DATA_DEPENDENT_EXPR, idField, pulseBaseLength, withCarry,
@@ -797,6 +798,22 @@ function generatingPulse(
  * a lookup into a dataset that changed, a formula calling data()/indata(),
  * ...).
  */
+/** Expression functions that read a scale (see runtime.ts `SCALE_FN_EXPR`). */
+const READS_SCALE = /\b(scale|bandwidth|bandspace|invert|domain|range|copy|gradient)\s*\(/
+
+/**
+ * Whether a filter's verdict on a row is a function of the row (and of what does not change in this evaluation): a row it kept or
+ * dropped before keeps its verdict. Not when its expression reads a scale (which may be another), or a dataset this evaluation
+ * changes (`length(data("t"))` over its own source, a selection's store edited with the rows): every row is judged again.
+ */
+function filterIsRowLocal(t: CompiledTransform, tctx: StepTransformContext): boolean {
+  const expr = (t as { expr?: unknown }).expr
+  if (typeof expr !== 'string') return true
+  if (READS_SCALE.test(lexedText(expr))) return false
+  const read = datasetsReadIn(expr)
+  return read !== null && !read.some((n) => tctx.affectedDatasets?.has(n) === true)
+}
+
 function rowLocal(t: CompiledTransform, tctx: StepTransformContext): boolean {
   const type = String(t.type)
   switch (type) {
@@ -880,7 +897,7 @@ function applyStepWithPulse(
       const fast = identifierAppendPulse(rows, t, tctx, input, prev)
       if (fast) return fast
     } else if (type === 'filter') {
-      const fast = filterAppendPulse(rows, t, tctx, sourceName, input, prev, prevStepState as boolean[] | undefined)
+      const fast = filterIsRowLocal(t, tctx) ? filterAppendPulse(rows, t, tctx, sourceName, input, prev, prevStepState as boolean[] | undefined) : null
       if (fast) return fast
     } else if (type === 'fold') {
       const fast = foldAppendPulse(rows, t, tctx, sourceName, input, prev)
@@ -930,7 +947,7 @@ function applyStepWithPulse(
       return { rows: out, pulse: out.length === rows.length ? input : null }
     }
     case 'filter':
-      return filterPulse(rows, t, tctx, sourceName, input, prev, prevStepState as boolean[] | undefined)
+      return (filterIsRowLocal(t, tctx) ? filterPulse(rows, t, tctx, sourceName, input, prev, prevStepState as boolean[] | undefined) : null)
         ?? { rows: applyOne(rows, t, tctx, sourceName), pulse: null }
     case 'fold':
       return foldPulse(rows, t, tctx, sourceName, input, prev)

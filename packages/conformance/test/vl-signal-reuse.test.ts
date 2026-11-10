@@ -3,10 +3,10 @@
  * Vega-Lite charts whose signals move all the time keep what reads none of them (see packages/core/src/signal-reuse.test.ts):
  *  - a `time` animation: its clock ticks at 60 fps, and the marks read the frame's rows, which change only when the frame's
  *    value does. A tick keeps the mark group, every item and every scale; a new frame makes the marks again;
- *  - interval (brush) and point (hover) selections: the brush's marks and the points test a selection's store (they read datasets
- *    from an expression), so they are made again whenever anything moves. The scales of a brushed chart are made from rows that do
- *    not move, and are kept; a point selection numbers the rows (`identifier`), which a re-evaluation makes again, and the scales
- *    made from them with them.
+ *  - interval (brush) and point (hover) selections: the brush's marks and the points test a selection's store, which they read by
+ *    the name they spell out (`vlSelectionTest("brush_store", datum)`): they are made again when that store's rows or a signal they
+ *    name moves, and kept otherwise. The scales are made from rows that do not move, and are kept, those of a point selection too
+ *    (its `identifier` step is kept with the rows it numbered).
  * Every evaluation is the scene a fresh evaluation of the same inputs makes.
  */
 import { describe, it, expect } from 'vitest'
@@ -126,26 +126,30 @@ describe('vega-lite selections', () => {
 
   it('a brush drag, a hover and a signal no mark reads make the scene a fresh evaluation makes', () => {
     const session = createChartSession()
-    type World = { brush: [number, number] | null; hover: number | null; unused: number }
-    const input = (w: World): RuntimeInput => ({
+    // (`kept`: the brush's two marks, which read its store and `brush_x` / `brush_y`, and the points, which test both stores)
+    type World = { brush: [number, number] | null; hover: number | null; unused: number; kept: { brush: boolean; points: boolean } }
+    const input = (w: Omit<World, 'kept'>): RuntimeInput => ({
       data: { src: rows, brush_store: w.brush ? [brushTuple(w.brush[0], w.brush[1])] : [], hover_store: w.hover !== null ? [hoverTuple(w.hover)] : [] },
       signals: { unused: w.unused, ...(w.brush ? { brush_x: [w.brush[0] * 6, w.brush[1] * 6], brush_y: [0, 100] } : {}) },
     })
     const worlds: World[] = [
-      { brush: [2, 9], hover: null, unused: 1 },
-      { brush: [2, 9], hover: null, unused: 2 },
-      { brush: [3, 12], hover: null, unused: 2 },
-      { brush: [3, 12], hover: 4, unused: 2 },
-      { brush: [3, 12], hover: 4, unused: 3 },
-      { brush: [3, 12], hover: 7, unused: 4 },
-      { brush: null, hover: 7, unused: 4 },
+      { brush: [2, 9], hover: null, unused: 1, kept: { brush: false, points: false } },
+      { brush: [2, 9], hover: null, unused: 2, kept: { brush: true, points: true } },
+      { brush: [3, 12], hover: null, unused: 2, kept: { brush: false, points: false } },
+      { brush: [3, 12], hover: 4, unused: 2, kept: { brush: true, points: false } },
+      { brush: [3, 12], hover: 4, unused: 3, kept: { brush: true, points: true } },
+      { brush: [3, 12], hover: 7, unused: 4, kept: { brush: true, points: false } },
+      { brush: null, hover: 7, unused: 4, kept: { brush: false, points: false } },
     ]
     let prev = session.evaluate(spec as never, input({ brush: null, hover: null, unused: 1 }))
     for (const w of worlds) {
       const scene = session.evaluate(spec as never, input(w))
       const what = JSON.stringify(w)
       expectFresh(spec, scene, input(w), what)
-      for (const mark of ['brush_brush', 'brush_brush_bg', 'marks']) expect(keptMark(prev, scene, mark), `${what}: ${mark} kept`).toBe(false)
+      for (const mark of ['brush_brush', 'brush_brush_bg']) expect(keptMark(prev, scene, mark), `${what}: ${mark} kept`).toBe(w.kept.brush)
+      expect(keptMark(prev, scene, 'marks'), `${what}: marks kept`).toBe(w.kept.points)
+      // (the scales are made from the rows, which no world moves; the point selection's `identifier` keeps them)
+      expect(keptScales(prev, scene), `${what}: scales kept`).toEqual([...scales(scene).keys()].sort())
       prev = scene
     }
   })

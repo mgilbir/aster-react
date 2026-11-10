@@ -8,7 +8,8 @@
  *  - every evaluation (a session, and `evaluateChart` told what changed) makes the scene a fresh evaluation of the same inputs makes,
  *    when the signals that changed are read by nothing drawn, are read, or both;
  *  - the reuse itself: which mark groups, items and scales keep their objects, and how many items the encode makes, per change;
- *  - what keeps a result whatever it names: marks with transforms, marks that read datasets by an expression;
+ *  - what makes a result again whatever it names: marks with transforms, scales that read datasets by an expression; a mark that
+ *    reads a dataset by a name its expression spells out (`length(data('t'))`) is kept while those rows are equal;
  *  - group marks (scopes, facets) and guides are made again, and read the signals as they are now.
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
@@ -72,7 +73,7 @@ const SPEC = {
     { type: 'symbol', name: 'byData', from: { data: 'f' }, encode: { update: { x: { scale: 'x', field: 'v' }, size: counter('byData') } } },
     // the group's width, which no expression names
     { type: 'rect', name: 'byGroup', from: { data: 't' }, encode: { update: { x: { scale: 'x', field: 'v' }, x2: { field: { group: 'width' } }, y: { value: 1 }, height: { value: 2 }, strokeWidth: counter('byGroup') } } },
-    // reads a dataset from an expression: reads every signal (kept only when none changed)
+    // reads a dataset by the name its expression spells out: kept while the rows of `t` are equal and the signals it names are as they were
     { type: 'text', name: 'byDataFn', from: { data: 't' }, encode: { update: { x: { value: 1 }, text: { signal: "length(data('t')) + ':' + srCount('byDataFn')" } } } },
     // a scale that reads every signal
     { type: 'symbol', name: 'byDataScale', from: { data: 't' }, encode: { update: { x: { scale: 'z', field: 'v' }, size: counter('byDataScale') } } },
@@ -162,26 +163,28 @@ const BASE_SIGNALS = { a: 10, b: 5, c: 1, s: 50, fmt: 'd', k: 0, tc: 5, ttl: 'T'
 /** A step: the signals as they become (and the width), what it keeps and what it encodes again. */
 interface Step { what: string; signals: Partial<typeof BASE_SIGNALS>; width?: number; rebuilt: string[]; scales?: string[]; encodes: Record<string, number> }
 const N = ROWS.length
-const ALWAYS = { byDataFn: N, byDataScale: N, withTransform: N, inScope: N, inFacet: N }
+// (`byDataFn` reads the rows of `t` by the name it spells out, and no step changes them: it is kept as the marks that read nothing are)
+const ALWAYS = { byDataScale: N, withTransform: N, inScope: N, inFacet: N }
 // (`z` reads a dataset from an expression: it is made again whenever a signal changes)
 const ALL_SCALES = ['x', 'y', 'color']
 const STEPS: Step[] = [
-  { what: 'a signal nothing drawn reads (the scope does)', signals: { c: 2 }, rebuilt: ['byDataFn', 'byDataScale', 'withTransform'], encodes: ALWAYS },
-  { what: 'a `{signal}` channel', signals: { a: 11 }, rebuilt: ['bySignal', 'byExpr', 'byDataFn', 'byDataScale', 'withTransform'], encodes: { ...ALWAYS, bySignal: N, byExpr: N } },
-  { what: 'a production rule test', signals: { b: 2 }, rebuilt: ['byTest', 'byDataFn', 'byDataScale', 'withTransform'], encodes: { ...ALWAYS, byTest: N } },
-  { what: 'an expression', signals: { fmt: '.1f' }, rebuilt: ['byExpr', 'byDataFn', 'byDataScale', 'withTransform'], encodes: { ...ALWAYS, byExpr: N } },
-  { what: 'a scale domain', signals: { s: 80 }, rebuilt: ['byScale', 'byDataFn', 'byDataScale', 'withTransform'], scales: ['x', 'color'], encodes: { ...ALWAYS, byScale: N } },
+  { what: 'a signal nothing drawn reads (the scope does)', signals: { c: 2 }, rebuilt: ['byDataScale', 'withTransform'], encodes: ALWAYS },
+  { what: 'a `{signal}` channel', signals: { a: 11 }, rebuilt: ['bySignal', 'byExpr', 'byDataScale', 'withTransform'], encodes: { ...ALWAYS, bySignal: N, byExpr: N } },
+  { what: 'a production rule test', signals: { b: 2 }, rebuilt: ['byTest', 'byDataScale', 'withTransform'], encodes: { ...ALWAYS, byTest: N } },
+  { what: 'an expression', signals: { fmt: '.1f' }, rebuilt: ['byExpr', 'byDataScale', 'withTransform'], encodes: { ...ALWAYS, byExpr: N } },
+  { what: 'a scale domain', signals: { s: 80 }, rebuilt: ['byScale', 'byDataScale', 'withTransform'], scales: ['x', 'color'], encodes: { ...ALWAYS, byScale: N } },
   // (the filter runs again and makes rows equal to the ones before: the mark keeps its items)
-  { what: 'a dataset filter whose rows stay', signals: { k: -1 }, rebuilt: ['byDataFn', 'byDataScale', 'withTransform'], encodes: ALWAYS },
-  { what: 'a dataset filter whose rows change', signals: { k: 3 }, rebuilt: ['byData', 'byDataFn', 'byDataScale', 'withTransform'], encodes: { ...ALWAYS, byData: N - 3 } },
-  { what: 'guides only', signals: { tc: 3, ttl: 'U' }, rebuilt: ['byDataFn', 'byDataScale', 'withTransform'], encodes: ALWAYS },
+  { what: 'a dataset filter whose rows stay', signals: { k: -1 }, rebuilt: ['byDataScale', 'withTransform'], encodes: ALWAYS },
+  { what: 'a dataset filter whose rows change', signals: { k: 3 }, rebuilt: ['byData', 'byDataScale', 'withTransform'], encodes: { ...ALWAYS, byData: N - 3 } },
+  { what: 'guides only', signals: { tc: 3, ttl: 'U' }, rebuilt: ['byDataScale', 'withTransform'], encodes: ALWAYS },
   // (every key holds the view's size: a resize makes everything again, as it did)
-  { what: 'the view width', signals: {}, width: 260, rebuilt: LEAF, scales: [], encodes: { ...ALWAYS, plain: N, bySignal: N, byTest: N, byExpr: N, byScale: N, byData: N - 3, byGroup: N } },
-  { what: 'read and unread together', signals: { a: 12, c: 3 }, rebuilt: ['bySignal', 'byExpr', 'byDataFn', 'byDataScale', 'withTransform'], encodes: { ...ALWAYS, bySignal: N, byExpr: N } },
-  // (the session hands back the scene it made; `evaluateChart`, told that a dataset changed, makes what reads datasets again)
+  { what: 'the view width', signals: {}, width: 260, rebuilt: LEAF, scales: [], encodes: { ...ALWAYS, plain: N, bySignal: N, byTest: N, byExpr: N, byScale: N, byData: N - 3, byGroup: N, byDataFn: N } },
+  { what: 'read and unread together', signals: { a: 12, c: 3 }, rebuilt: ['bySignal', 'byExpr', 'byDataScale', 'withTransform'], encodes: { ...ALWAYS, bySignal: N, byExpr: N } },
+  // (the session hands back the scene it made; `evaluateChart`, told that a dataset changed, makes the scopes again, and keeps what
+  // reads `t` by name: its rows are equal to the ones it read)
   { what: 'nothing', signals: {}, rebuilt: [], scales: ['x', 'y', 'color', 'z'], encodes: {} },
 ]
-const NOTHING_TOLD: Pick<Step, 'rebuilt' | 'encodes'> = { rebuilt: ['byDataFn'], encodes: { byDataFn: N, inScope: N, inFacet: N } }
+const NOTHING_TOLD: Pick<Step, 'rebuilt' | 'encodes'> = { rebuilt: [], encodes: { inScope: N, inFacet: N } }
 
 describe('a re-evaluation keeps the marks and scales that read none of the signals that changed', () => {
   // `evaluateChart` keeps a result only when told what changed: here, a dataset nothing reads
@@ -381,10 +384,10 @@ describe('a view that fits its container', () => {
     const input = (c: number, a: number): RuntimeInput => ({ data: { t: ROWS, other: [] }, signals: { ...BASE_SIGNALS, c, a }, width: 300, height: 160 })
     const a = s.evaluate(spec, input(1, 10))
     const b = s.evaluate(spec, input(2, 10))
-    expect(kept(a, b).marks).toEqual(LEAF.filter((n) => !['byDataFn', 'byDataScale', 'withTransform'].includes(n)))
+    expect(kept(a, b).marks).toEqual(LEAF.filter((n) => !['byDataScale', 'withTransform'].includes(n)))
     expectFresh(spec, b, input(2, 10), 'fit: unread')
     const c = s.evaluate(spec, input(2, 14))
-    expect(kept(b, c).marks).toEqual(LEAF.filter((n) => !['bySignal', 'byExpr', 'byDataFn', 'byDataScale', 'withTransform'].includes(n)))
+    expect(kept(b, c).marks).toEqual(LEAF.filter((n) => !['bySignal', 'byExpr', 'byDataScale', 'withTransform'].includes(n)))
     expectFresh(spec, c, input(2, 14), 'fit: read')
   })
 })
