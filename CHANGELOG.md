@@ -93,6 +93,10 @@ and Fixed, per package. Everything built before the first release is in [Pre-rel
 - An `identifier` after a transform that reads a scale numbered its rows again on every evaluation, with numbers another
   dataset's rows held (a point picked in one selected a point of the other, and a picked point was lost on the next signal
   change). Such a dataset is now numbered after the scale it reads, as in Vega, and its rows keep their numbers.
+- An `identifier` after a `filter` gave a row the filter let through again a new number. A row keeps the number of its source
+  row while that row lives, whether the filter passes it or not, as Vega's tuples do. This holds for appends too: they still run
+  from the rows the evaluation before made, and they follow only the rows they add. An append on 10,000 rows takes 0.29 ms
+  (0.28 ms before).
 - Names spelled with escapes in expressions (an escaped `data`, `random` or signal name) were missed wherever the engine read
   what an expression depends on: the order of datasets and signals, what a data change affects, which sites draw from an
   injected `random` and what they read, `setdata`, late signals, a projection's fit, `init` signals that read data or scales, and

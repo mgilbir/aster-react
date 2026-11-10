@@ -13,7 +13,7 @@
 import { describe, expect, it } from 'vitest'
 import * as vega from 'vega'
 import { createChartSession } from '@aster-charts/core/dom'
-import { datasetsOfScene, type RuntimeInput, type SceneRoot } from '@aster-charts/core'
+import { createChartStream, datasetsOfScene, type RuntimeInput, type SceneRoot } from '@aster-charts/core'
 
 type Row = Record<string, unknown>
 type Spec = Record<string, any>
@@ -134,5 +134,93 @@ describe('identifier numbers, against vega', () => {
       { what: 'a point of b picked', store: [{ unit: '', _vgsid_: 1 }] },
       { what: 'a signal nothing reads, again', u: 2 },
     ])
+  })
+})
+
+/**
+ * A stream's updates: rows appended come with a pulse, and a pulse runs the pipeline from the rows the run before made -- an
+ * `identifier` after a filter numbers them as vega does all the same (a source row keeps its number while it lives, through the
+ * filter or not), and the rows that were there stay the rows they were (the pulse was taken). Each step is applied to vega as a
+ * changeset or a signal, and to the stream as an append, a snapshot or a signal; the ids are compared after every step.
+ */
+describe('identifier numbers of a stream, against vega', () => {
+  type Op = { what: string; append?: Row[]; append2?: Row[]; snapshot?: Row[]; cut?: number; pulse?: boolean }
+  const streamSpec = (): Spec => ({
+    width: 100, height: 50, autosize: 'none',
+    signals: [{ name: 'cut', value: 3 }],
+    data: [
+      { name: 't', values: [] },
+      { name: 'a', source: 't', transform: [{ type: 'formula', as: 'w', expr: 'datum.v * 2' }, { type: 'filter', expr: 'datum.v >= cut' }, { type: 'filter', expr: 'datum.v != 9' }, { type: 'identifier', as: 'id' }] },
+      { name: 'b', values: [], transform: [{ type: 'identifier', as: 'id' }] },
+    ],
+    marks: ['a', 'b'].map((name) => ({ type: 'symbol', from: { data: name }, encode: { update: { x: { field: 'id' } } } })),
+  })
+
+  it('appends, a signal that moves the filter, rows removed and changed, each against vega', async () => {
+    const T0 = Array.from({ length: 8 }, (_, i) => ({ v: i }))
+    const ops: Op[] = [
+      { what: 'rows appended, some pass', append: [{ v: 8 }, { v: 1 }, { v: 9 }, { v: 10 }], pulse: true },
+      { what: 'rows of the other dataset appended', append2: [{ w: 1 }, { w: 2 }] },
+      { what: 'rows appended, none pass', append: [{ v: 0 }, { v: 2 }], pulse: true },
+      { what: 'rows leave', cut: 6 },
+      { what: 'rows appended while rows are out', append: [{ v: 7.5 }, { v: 4 }], pulse: true },
+      { what: 'rows come back with their numbers', cut: 0 },
+      { what: 'rows appended after they came back', append: [{ v: 11 }], pulse: true },
+      { what: 'a row removed from the middle', snapshot: 'remove 3' as never },
+      { what: 'a row changed where it stands', snapshot: 'change 5' as never },
+      { what: 'rows appended after that', append: [{ v: 12 }, { v: 3.5 }], pulse: true },
+      { what: 'rows of the other dataset appended, again', append2: [{ w: 3 }] },
+      { what: 'rows appended, the last', append: [{ v: 13 }], pulse: true },
+    ]
+    const spec = streamSpec()
+    const view = new (vega as unknown as { View: new (rt: unknown, o: unknown) => View }).View(vega.parse(structuredClone(spec) as never), { renderer: 'none' })
+    const stream = createChartStream(structuredClone(spec) as never, { capacity: 8 })
+    let t: Row[] = T0.map((r) => ({ ...r }))
+    let b: Row[] = [{ w: 0 }]
+    const ids = (rows: Row[]): string[] => rows.map((r) => `${r.v ?? r.w}:${r.id}`).sort()
+    try {
+      view.change('t', (vega as any).changeset().insert(t.map((r) => ({ ...r }))))
+      view.change('b', (vega as any).changeset().insert(b.map((r) => ({ ...r }))))
+      await view.runAsync()
+      stream.push({ data: { t, b } })
+      let scene = stream.flush()!.scene
+      for (const op of [{ what: 'first' } as Op, ...ops]) {
+        // (a copy: a pulse adds to the arrays the run before made)
+        const before = [...(datasetsOfScene(scene).get('a') ?? [])] as Row[]
+        if (op.append) {
+          view.change('t', (vega as any).changeset().insert(op.append.map((r) => ({ ...r }))))
+          stream.push({ append: { t: op.append } })
+          t = [...t, ...op.append]
+        }
+        if (op.append2) {
+          view.change('b', (vega as any).changeset().insert(op.append2.map((r) => ({ ...r }))))
+          stream.push({ append: { b: op.append2 } })
+          b = [...b, ...op.append2]
+        }
+        if (op.snapshot !== undefined) {
+          const [how, at] = (op.snapshot as unknown as string).split(' ')
+          const v = Number(at)
+          if (how === 'remove') {
+            view.change('t', (vega as any).changeset().remove((d: Row) => d.v === v))
+            t = t.filter((r) => r.v !== v)
+          } else {
+            view.change('t', (vega as any).changeset().modify((d: Row) => d.v === v, 'v', v + 0.25))
+            t = t.map((r) => (r.v === v ? { v: v + 0.25 } : r))
+          }
+          stream.push({ data: { t } })
+        }
+        if (op.cut !== undefined) { view.signal('cut', op.cut); stream.push({ signals: { cut: op.cut } }) }
+        await view.runAsync()
+        if (op.what !== 'first') scene = stream.flush()!.scene
+        const made = datasetsOfScene(scene)
+        for (const name of ['a', 'b']) expect(ids((made.get(name) ?? []) as Row[]), `${op.what}: ids of ${name}`).toEqual(ids(view.data(name)))
+        // (the pulse was taken: the rows that were there are the rows they were)
+        if (op.pulse) {
+          const now = made.get('a') as Row[]
+          expect(before.length, `${op.what}: rows of a before`).toBeGreaterThan(0)
+          expect(before.every((r, i) => now[i] === r), `${op.what}: the rows of a that were there are kept`).toBe(true)
+        }
+      }
+    } finally { view.finalize() }
   })
 })

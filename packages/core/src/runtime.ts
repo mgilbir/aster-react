@@ -9,8 +9,8 @@
 import { compileExpr, expressionRegistryEpoch, ExpressionParseError, type CompiledExpr, type ExpressionRuntime } from './expression.js'
 import { scaleCallFailure, scaleRangeFailure } from './missing-scale.js'
 import { ingestRows, readData, type DataFormatSpec } from './data-format.js'
-import { keepsRows, orderOf, setOrder, setSources, sourcesOf } from './tuple-order.js'
-import { alignIndices, carryByAlignment, type IdCounter } from './identifier-ids.js'
+import { followsSources, numbersSourceRows, orderOf, setOrder, setSources, sourcesAfter, sourcesOf } from './tuple-order.js'
+import { alignIndices, carryByAlignment, carryBySources, sourceNumbersOf, type IdCounter, type SourceNumbers } from './identifier-ids.js'
 import { applyTransforms, applyTransformsToSharedRows, copiesRows, sortOrder, getField, geoJSONPath, type Row, type TransformContext } from './transform.js'
 import { fieldOf } from './transform-agg.js'
 import { atRandomSite, contentKey, mayDrawRandom, normalPairs, replayable } from './random-tape.js'
@@ -3151,7 +3151,8 @@ function buildDatasetsOf(ctx: EvalContext, inputData: Record<string, unknown[]>)
         // (a later round of the same pass too, when the round before gave the step the same rows: see `carriedFrom`).
         const hasIds = d.transform.some((x) => x.type === 'identifier')
         const earlierDS = hasIds ? ctx.draft.datasets.get(name) ?? ctx.earlier?.datasets.get(name) : undefined
-        const incremental = ctx.incremental && inPulse !== null && !inPulse.full && prevDS !== undefined && earlierDS === undefined && !numbersSourceRows(d.transform)
+        const incremental = ctx.incremental && inPulse !== null && !inPulse.full && prevDS !== undefined && earlierDS === undefined
+          && (!numbersSourceRows(d.transform) || followsSources(d.transform))
           && (prevDS.fp === passFp || (key !== null && prevDS.key === key && activeMeter() === null))
           && prevDS.steps.length === d.transform.length
           && prevDS.inputLength === pulseBaseLength(inPulse) && claim(ctx, datasetParts(prevDS))
@@ -3307,6 +3308,16 @@ function runPipeline(
   // the steps before it)
   const sourceList = numbersSourceRows(transforms) ? Int32Array.from({ length: rows.length }, (_, i) => i) : undefined
   if (sourceList !== undefined) setSources(rows, sourceList)
+  // (steps kept from a run before did not run: their rows' source rows are followed from the rows they were given, by the state they
+  // left -- a filter's pass flags)
+  const follow = (from: number, to: number, given: readonly Row[]): void => {
+    let list = sourceList === undefined ? null : sourcesOf(given)
+    for (let j = from; j <= to && list !== null; j++) {
+      const out = state.steps[j]!
+      list = sourcesAfter(transforms[j]!.type, list, j === from ? given.length : state.steps[j - 1]!.length, out.length, state.stepState.get(`${name}#${j}`))
+      if (list !== null) setSources(out, list)
+    }
+  }
   for (let k = 0; k < transforms.length; k++) {
     const end = reuse.on ? ends[k]! : k
     const t = transforms[k]!
@@ -3325,6 +3336,7 @@ function runPipeline(
           if (kept.aliased?.[j] !== undefined) (state.aliased ??= [])[j] = kept.aliased[j]
           records[j] = kept.records![j]
         }
+        follow(k, end, cur)
         cur = out
         stepCounts.reused += unit.length
       } else {
@@ -3349,10 +3361,12 @@ function runPipeline(
     if (kept !== undefined) {
       const out = kept.steps[k]!
       keepStep(ctx, t, reads!, kept.records![k]!, cur.length, out)
+      const given = cur
       cur = out
       state.steps.push(cur)
       const ss = kept.stepState.get(`${name}#${k}`)
       if (ss !== undefined) state.stepState.set(`${name}#${k}`, ss)
+      follow(k, k, given)
       records[k] = kept.records![k]
       stepCounts.reused++
       continue
@@ -3473,52 +3487,28 @@ function carriedFrom(
 }
 
 /**
- * Whether an `identifier` of the pipeline comes after a step that may hold rows back or make new ones (a filter): its rows are then
- * numbered as their source rows (see `sourceNumbers`), and the pipeline is not run from a pulse, whose steps do not say which source
- * row a row is -- every update numbers its rows the one way. (After steps that return every row they are given, a row is its source
- * row, and the rows are found among the identifier's own, from a pulse or not, as they always were.)
- */
-const NUMBERS_SOURCE_ROWS = new WeakMap<readonly CompiledTransform[], boolean>()
-function numbersSourceRows(transforms: readonly CompiledTransform[]): boolean {
-  let out = NUMBERS_SOURCE_ROWS.get(transforms)
-  if (out === undefined) {
-    const at = transforms.findIndex((x) => x.type === 'identifier')
-    out = at > 0 && transforms.slice(0, at).some((x) => !keepsRows(x.type))
-    NUMBERS_SOURCE_ROWS.set(transforms, out)
-  }
-  return out
-}
-
-/** The numbers an `identifier` gave the rows of its pipeline's input (by index), and those rows (a copy of the array). */
-interface SourceNumbers { sourceRows: readonly Row[]; ids: readonly unknown[] }
-
-/**
  * The numbers the rows an `identifier` is given carry, read as vega reads them: a row is a row of the pipeline's input (`source`, the
  * dataset's source or the host's rows; see `sourcesOf`), and a source row keeps the number it was given for as long as it lives, whether
  * the steps before the identifier (a filter) let it through or not, while a source row that was never numbered is numbered anew. The
  * source rows are those of the run the numbers come from (`carriedFrom`), found among the rows now as the session finds rows (see
  * identifier-ids.ts). Undefined when that run left no such numbers or the rows' source rows are not known: the rows are then found
- * among the identifier's own rows of that run, as before.
+ * among the identifier's own rows of that run, as before. (A pulse through the pipeline numbers them the same way: see
+ * `applyPipelineWithPulse`.)
  */
-function sourceNumbers(name: string, k: number, t: CompiledTransform, rows: readonly Row[], source: readonly Row[], run: DatasetState | undefined): { carry: unknown[]; map: number[] | null; before: SourceNumbers } | undefined {
+function sourceNumbers(name: string, k: number, t: CompiledTransform, rows: readonly Row[], source: readonly Row[], run: DatasetState | undefined): { carry: unknown[]; map: number[]; before: SourceNumbers } | undefined {
   const before = run?.stepState.get(`${name}#${k}`) as SourceNumbers | undefined
   const list = sourcesOf(rows)
   if (before === undefined || list === null || !Array.isArray(before.ids)) return undefined
   const map = alignIndices(source, before.sourceRows, idField(t))
-  const carry = Array.from(list, (s) => { const j = map[s]!; return j >= 0 ? before.ids[j] : undefined })
-  return { carry, map, before }
+  return { carry: carryBySources(list, map, before), map, before }
 }
 
 /** What an `identifier` that just ran leaves for the next run to carry numbers from (see `sourceNumbers`). */
 function numbersBySource(t: CompiledTransform, rows: readonly Row[], out: readonly Row[], source: readonly Row[], carried: ReturnType<typeof sourceNumbers>): SourceNumbers | undefined {
   const list = sourcesOf(rows)
   if (list === null || out.length !== rows.length) return undefined
-  const as = idField(t)
-  const ids = new Array<unknown>(source.length)
   // (a source row the steps before held back keeps the number it had)
-  if (carried !== undefined) for (let s = 0; s < source.length; s++) { const j = carried.map![s]!; if (j >= 0) ids[s] = carried.before.ids[j] }
-  for (let i = 0; i < out.length; i++) ids[list[i]!] = out[i]![as]
-  return { sourceRows: source.slice(), ids }
+  return sourceNumbersOf(list, out, source, idField(t), carried?.map, carried?.before)
 }
 
 /** What a step reads, as it stands now (see `StepRecord.keys`): the values of its signals, then the rows of the datasets it reads. */

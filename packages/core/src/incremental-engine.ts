@@ -6,8 +6,10 @@
  * `evaluateChartPending`.
  */
 import { equalCell, rowsEqual } from './pulse.js'
-import { carryOrder, isPlacing } from './tuple-order.js'
-import { carryByAlignment, carryByMapping } from './identifier-ids.js'
+import { carryOrder, isPlacing, numbersSourceRows, sourcesAfter } from './tuple-order.js'
+import {
+  alignIndices, appendedSources, carryByAlignment, carryByMapping, carryBySources, sourceNumbersOf, type SourceNumbers,
+} from './identifier-ids.js'
 import { applyTransforms, compileExprTransform, sortOrder, aggregateGroup, type Row } from './transform.js'
 import { fieldsOf, groupKeyFn } from './transform-agg.js'
 import { flattenLength } from './transform-basic.js'
@@ -882,7 +884,7 @@ function identifierPulse(
  */
 function applyStepWithPulse(
   rows: Row[], t: CompiledTransform, tctx: StepTransformContext, sourceName: string,
-  input: StepPulse, prev: Row[] | undefined, prevStepState: unknown, aliased?: ReadonlySet<string>,
+  input: StepPulse, prev: Row[] | undefined, prevStepState: unknown, aliased?: ReadonlySet<string>, carry?: readonly unknown[],
 ): { rows: Row[]; pulse: StepPulse | null; state?: unknown } {
   const type = String(t.type)
   if ((type === 'aggregate' || type === 'joinaggregate') && !groupwiseIncremental(t)) {
@@ -895,7 +897,8 @@ function applyStepWithPulse(
       const fast = rowLocalAppendPulse(rows, t, tctx, sourceName, input, prev)
       if (fast) return fast
     } else if (type === 'identifier') {
-      const fast = identifierAppendPulse(rows, t, tctx, input, prev)
+      // (rows numbered as their source rows: the appended rows are new source rows, unless a number says otherwise)
+      const fast = carry === undefined || carriesNone(carry, pulseBaseLength(input)) ? identifierAppendPulse(rows, t, tctx, input, prev) : null
       if (fast) return fast
     } else if (type === 'filter') {
       const fast = filterIsRowLocal(t, tctx) ? filterAppendPulse(rows, t, tctx, sourceName, input, prev, prevStepState as boolean[] | undefined) : null
@@ -940,6 +943,10 @@ function applyStepWithPulse(
       return { rows: applyOne(rows, t, tctx, sourceName), pulse: null }
     case 'identifier':
       // The rows that were there keep their numbers (a modified one too), the new ones are numbered from the view's counter.
+      // (rows numbered as their source rows carry the numbers those had: see `applyPipelineWithPulse`)
+      if (carry !== undefined) {
+        return withCarry(tctx, carry, () => rederiveAligned(rows, t, tctx, sourceName, input, prev)) ?? { rows: applyIdentifier(rows, t, tctx, sourceName, carry), pulse: null }
+      }
       return identifierPulse(rows, t, tctx, sourceName, input, prev) ?? { rows: applyIdentifier(rows, t, tctx, sourceName, undefined), pulse: null }
     case 'geojson':
     case 'extent':
@@ -1007,29 +1014,138 @@ function applyPipelineWithPulse(
 ): { rows: Row[]; pulse: StepPulse | null } {
   let cur = rows
   let pulse: StepPulse | null = input
+  // (an `identifier` after a filter numbers rows as their source rows, as `runPipeline` does: which input row each row is rides along
+  // the steps, by what each filter let through -- for every row (`list`), or, while every step has only added rows at the end of
+  // the rows it returns, for the rows it added (`tail`): the others are the rows they were, and their source rows too)
+  let list: Int32Array | null = null
+  let tail: Int32Array | null = null
+  if (numbersSourceRows(transforms)) {
+    if (appendsOnly(input)) tail = indices(pulseBaseLength(input), rows.length)
+    else { list = indices(0, rows.length); sourcesFollowed.all++ }
+  }
   for (let k = 0; k < transforms.length; k++) {
     const t = transforms[k]!
     const key = `${sourceName}#${k}`
+    const stepInput = cur
+    const stepPulse = pulse
+    const before = t.type === 'identifier' && (list !== null || tail !== null) ? numbersOf(prevDS.stepState.get(key)) : undefined
+    // (rows added at the end of the input, all of them new source rows: the identifier numbers them anew and the others keep their
+    // numbers -- what the step's append path does -- and the numbers by source row grow by theirs)
+    const appended = tail !== null && before !== undefined && stepPulse !== null && appendsOnly(stepPulse) && tctx.ids !== undefined
+      && (t as { as?: string }).as !== undefined
+      && before.sourceRows.length === pulseBaseLength(input) && prevDS.steps[k]?.length === pulseBaseLength(stepPulse)
+      && cur.length - pulseBaseLength(stepPulse) === tail.length
+    if (t.type === 'identifier' && tail !== null && !appended) { list = sourcesUpTo(transforms, k, rows.length, state, sourceName); tail = null }
+    const bySource = t.type === 'identifier' && list !== null && before !== undefined ? sourceCarry(t, list, rows, input, before) : undefined
+    // (the run before left no numbers by source row: the rows are found among its identifier's rows, as `runPipeline` finds them)
+    if (t.type === 'identifier' && list !== null && bySource === undefined) pulse = null
     if (!pulse) {
-      const res = applyOneWithState(cur, t, tctx, sourceName, prevDS.steps[k])
+      const res = bySource !== undefined
+        ? { rows: applyIdentifier(cur, t, tctx, sourceName, bySource.carry) }
+        : applyOneWithState(cur, t, tctx, sourceName, prevDS.steps[k])
       cur = res.rows
       checkRowCount(cur.length, `transform ${String(t.type)}`)
       state.steps.push(cur)
       if (res.state !== undefined) state.stepState.set(key, res.state)
-      continue
+    } else {
+      const res = applyStepWithPulse(cur, t, tctx, sourceName, pulse, prevDS.steps[k], prevDS.stepState.get(key), prevDS.aliased?.[k], bySource?.carry)
+      if (prevDS.aliased?.[k] !== undefined) (state.aliased ??= [])[k] = prevDS.aliased[k]
+      cur = res.rows
+      checkRowCount(cur.length, `transform ${String(t.type)}`)
+      pulse = res.pulse
+      state.steps.push(cur)
+      const next = res.state !== undefined ? res.state
+        : keepsStepState(String(t.type)) ? deriveStepState(t, stepInput, cur, tctx) : undefined
+      if (next !== undefined) state.stepState.set(key, next)
     }
-    const stepInput = cur
-    const res = applyStepWithPulse(cur, t, tctx, sourceName, pulse, prevDS.steps[k], prevDS.stepState.get(key), prevDS.aliased?.[k])
-    if (prevDS.aliased?.[k] !== undefined) (state.aliased ??= [])[k] = prevDS.aliased[k]
-    cur = res.rows
-    checkRowCount(cur.length, `transform ${String(t.type)}`)
-    pulse = res.pulse
-    state.steps.push(cur)
-    const next = res.state !== undefined ? res.state
-      : keepsStepState(String(t.type)) ? deriveStepState(t, stepInput, cur, tctx) : undefined
-    if (next !== undefined) state.stepState.set(key, next)
+    if (t.type === 'identifier') {
+      if (tail !== null) {
+        if (appended && pulse !== null && appendsOnly(pulse) && cur.length - pulseBaseLength(pulse) === tail.length) {
+          state.stepState.set(key, grownNumbers(before!, rows, pulseBaseLength(input), tail, cur, pulseBaseLength(pulse), idField(t)))
+        } else { list = sourcesUpTo(transforms, k, rows.length, state, sourceName); tail = null }
+      }
+      if (list !== null && cur.length === list.length) state.stepState.set(key, sourceNumbersOf(list, cur, rows, idField(t), bySource?.map, bySource?.before))
+    } else if (tail !== null) {
+      tail = stepPulse !== null && pulse !== null && appendsOnly(stepPulse) && appendsOnly(pulse)
+        ? sourcesAfter(t.type, tail, stepInput.length - pulseBaseLength(stepPulse), cur.length - pulseBaseLength(pulse), tailOf(state.stepState.get(key), pulseBaseLength(stepPulse), stepInput.length))
+        : null
+      if (tail === null) list = sourcesUpTo(transforms, k + 1, rows.length, state, sourceName)
+    } else if (list !== null) {
+      list = sourcesAfter(t.type, list, stepInput.length, cur.length, state.stepState.get(key))
+    }
   }
   return { rows: cur, pulse }
+}
+
+/** How many times a pulse followed the source row of every row (not only of the rows added at the end); read by tests. */
+export const sourcesFollowed = { all: 0 }
+
+/** Whether a pulse only adds rows at the end, and changes none. */
+const appendsOnly = (p: StepPulse): boolean => p.appendOnly === true && !p.changed.length
+
+/** The numbers `from` .. `to - 1`. */
+function indices(from: number, to: number): Int32Array {
+  const out = new Int32Array(Math.max(0, to - from))
+  for (let i = 0; i < out.length; i++) out[i] = from + i
+  return out
+}
+
+/** The part of a filter's pass flags (the state it leaves) for its rows from `from` on, if it is one and fits `length` rows. */
+function tailOf(pass: unknown, from: number, length: number): unknown {
+  return Array.isArray(pass) && pass.length === length ? pass.slice(from) : undefined
+}
+
+/** The source rows of the rows step `k` is given, followed from the input (`length` rows) through the state the steps before it left. */
+function sourcesUpTo(transforms: readonly CompiledTransform[], k: number, length: number, state: DatasetState, sourceName: string): Int32Array | null {
+  sourcesFollowed.all++
+  let list: Int32Array | null = indices(0, length)
+  for (let j = 0; j < k && list !== null; j++) {
+    const given = j === 0 ? length : state.steps[j - 1]!.length
+    list = sourcesAfter(transforms[j]!.type, list, given, state.steps[j]!.length, state.stepState.get(`${sourceName}#${j}`))
+  }
+  return list
+}
+
+/** The numbers by source row an identifier left, if it left them (see `sourceNumbersOf`). */
+function numbersOf(v: unknown): SourceNumbers | undefined {
+  const n = v as SourceNumbers | undefined
+  return n !== undefined && n !== null && Array.isArray(n.ids) && Array.isArray(n.sourceRows) ? n : undefined
+}
+
+/**
+ * The numbers by source row after rows were added at the end of the input (from `base` on): those of the source rows that were there,
+ * which kept them, then the added rows', the ones the identifier numbered (its rows from `outBase` on are source rows `tail`). What
+ * `sourceNumbersOf` makes from every row, without reading the rows that were there. The numbers before are updated in place, as the
+ * steps' rows and state are (the evaluation claimed them: see `claim` in runtime.ts).
+ */
+function grownNumbers(before: SourceNumbers, source: readonly Row[], base: number, tail: Int32Array, out: readonly Row[], outBase: number, as: string): SourceNumbers {
+  const sourceRows = before.sourceRows as Row[]
+  const ids = before.ids as unknown[]
+  ids.length = base
+  for (let s = base; s < source.length; s++) { sourceRows.push(source[s]!); ids.push(undefined) }
+  for (let j = 0; j < tail.length; j++) ids[tail[j]!] = out[outBase + j]![as]
+  return before
+}
+
+/**
+ * The numbers the rows an `identifier` is given had (row `i` is source row `list[i]` of `source`), read as `runPipeline` reads them
+ * (see `sourceNumbers` there): which source row of the run before each source row is, by the pulse when it only added rows at the end
+ * of the input, else as the session finds rows. Undefined when the run before left no numbers by source row.
+ */
+function sourceCarry(
+  t: CompiledTransform, list: Int32Array, source: readonly Row[], input: StepPulse, before: SourceNumbers,
+): { carry: unknown[]; map: number[]; before: SourceNumbers } {
+  const base = pulseBaseLength(input)
+  const map = appendsOnly(input) && before.sourceRows.length === base && source.length >= base
+    ? appendedSources(base, source.length)
+    : alignIndices(source, before.sourceRows, idField(t))
+  return { carry: carryBySources(list, map, before), map, before }
+}
+
+/** Whether no row from `from` on carries a number. */
+function carriesNone(carry: readonly unknown[], from: number): boolean {
+  for (let i = from; i < carry.length; i++) if (carry[i]) return false
+  return true
 }
 
 export const incrementalEngine: IncrementalEngine = { applyPipelineWithPulse, applyOneWithState }

@@ -65,6 +65,51 @@ function carrySources(type: unknown, input: readonly Row[], output: readonly Row
   }
 }
 
+/**
+ * The source rows of the rows a step returned, from those of the rows it was given (`list`): the same list when the step keeps its
+ * rows, the rows that passed when it is a filter (`pass[i]`: row `i` passed, the state the filter leaves), else null (not known).
+ */
+export function sourcesAfter(type: unknown, list: Int32Array, inputLength: number, outputLength: number, pass: unknown): Int32Array | null {
+  if (KEEPS_ROWS.has(type as string)) return outputLength === inputLength ? list : null
+  if (type !== 'filter' || !Array.isArray(pass) || pass.length !== inputLength) return null
+  const kept = new Int32Array(outputLength)
+  let j = 0
+  for (let i = 0; i < inputLength; i++) {
+    if (!pass[i]) continue
+    if (j === outputLength) return null
+    kept[j++] = list[i]!
+  }
+  return j === outputLength ? kept : null
+}
+
+const NUMBERS_SOURCE_ROWS = new WeakMap<readonly unknown[], boolean>()
+
+/**
+ * Whether an `identifier` of the pipeline comes after a step that may hold rows back or make new ones (a filter): its rows are then
+ * numbered as their source rows (see `sources`). (After steps that return every row they are given, a row is its source row, and the
+ * rows are found among the identifier's own, as they always were.)
+ */
+export function numbersSourceRows(transforms: ReadonlyArray<{ type?: unknown }>): boolean {
+  let out = NUMBERS_SOURCE_ROWS.get(transforms)
+  if (out === undefined) {
+    const at = transforms.findIndex((x) => x.type === 'identifier')
+    out = at > 0 && transforms.slice(0, at).some((x) => !keepsRows(x.type))
+    NUMBERS_SOURCE_ROWS.set(transforms, out)
+  }
+  return out
+}
+
+/**
+ * Whether the source row of every row an `identifier` of the pipeline is given can be followed through the steps before it: they keep
+ * their rows or are filters. A pulse through such a pipeline numbers its rows as a run from scratch does.
+ */
+export function followsSources(transforms: ReadonlyArray<{ type?: unknown }>): boolean {
+  let last = -1
+  for (let k = 0; k < transforms.length; k++) if (transforms[k]!.type === 'identifier') last = k
+  for (let k = 0; k < last; k++) if (!keepsRows(transforms[k]!.type) && transforms[k]!.type !== 'filter') return false
+  return true
+}
+
 /** Carry the order of the rows a transform was given to the rows it returned, if the transform keeps its rows. */
 export function carryOrder(type: unknown, input: readonly Row[], output: readonly Row[]): void {
   carrySources(type, input, output)

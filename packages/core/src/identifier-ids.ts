@@ -151,3 +151,35 @@ function byContent(rows: readonly Row[], previous: readonly Row[], as: string, h
   for (const i of unmatched) if (i < previous.length && !taken[i]) { carry[i] = pick(i); taken[i] = 1 }
   return carry
 }
+
+/** The numbers an `identifier` gave the rows of its pipeline's input (`ids[s]` for source row `s`), and those rows (a copy of the array). */
+export interface SourceNumbers { sourceRows: readonly Row[]; ids: readonly unknown[] }
+
+/**
+ * Which source row of the run before each source row now is (`map[s]`; -1: a new row), when the pipeline's input only had rows added
+ * at its end and none changed: the first `base` rows are the rows they were. This is what {@link alignIndices} finds for such an input,
+ * without reading the rows.
+ */
+export function appendedSources(base: number, length: number): number[] {
+  const map = new Array<number>(length)
+  for (let s = 0; s < length; s++) map[s] = s < base ? s : -1
+  return map
+}
+
+/** The numbers the rows an `identifier` is given had: row `i` is source row `list[i]`, which was source row `map[list[i]]` of `before`. */
+export function carryBySources(list: ArrayLike<number>, map: readonly number[], before: SourceNumbers): unknown[] {
+  const carry = new Array<unknown>(list.length)
+  for (let i = 0; i < list.length; i++) { const j = map[list[i]!]!; if (j >= 0) carry[i] = before.ids[j] }
+  return carry
+}
+
+/**
+ * What an `identifier` that numbered `out` (row `i` is source row `list[i]` of `source`) leaves for the next run: the numbers of its
+ * rows, and of the source rows the steps before it held back, which keep the numbers they had (`map` and `before`, when it carried).
+ */
+export function sourceNumbersOf(list: ArrayLike<number>, out: readonly Row[], source: readonly Row[], as: string, map: readonly number[] | undefined, before: SourceNumbers | undefined): SourceNumbers {
+  const ids = new Array<unknown>(source.length)
+  if (map !== undefined && before !== undefined) for (let s = 0; s < source.length; s++) { const j = map[s]!; if (j >= 0) ids[s] = before.ids[j] }
+  for (let i = 0; i < out.length; i++) ids[list[i]!] = out[i]![as]
+  return { sourceRows: source.slice(), ids }
+}
