@@ -121,10 +121,11 @@ describe('a point selection (click) over a scatter', () => {
       { what: 'a click', input: at(ROWS, picked(5), 2), marks: { marks: false }, scales: 'all', items: { marks: 0 } },
       { what: 'the same store, a new array', input: at(ROWS, picked(5), 2), marks: { marks: true }, scales: 'all' },
       { what: 'a signal nothing reads, a point picked', input: at(ROWS, picked(5), 3), marks: { marks: true }, scales: 'all', items: { marks: N } },
-      // (the color scale is ordinal: its census advances over a same-length change only, so an append makes it again, and the points)
-      { what: 'a row appended and a signal nothing reads', input: at(r1, picked(5), 4), marks: { marks: false }, scales: ['x', 'y'], items: { marks: 0 } },
-      { what: 'a row modified and a signal nothing reads', input: at(r2, picked(5), 5), marks: { marks: false }, scales: ['x', 'y'] },
-      { what: 'a row appended and a click', input: at(r3, picked(5, 9), 5), marks: { marks: false }, scales: ['x', 'y'], items: { marks: 0 } },
+      // (the color scale is ordinal, and every category the rows add is one it has: it is kept, and only the new or changed point is
+      // encoded; a click encodes every point again, which tests the store)
+      { what: 'a row appended and a signal nothing reads', input: at(r1, picked(5), 4), marks: { marks: false }, scales: 'all', items: { marks: N } },
+      { what: 'a row modified and a signal nothing reads', input: at(r2, picked(5), 5), marks: { marks: false }, scales: 'all', items: { marks: N } },
+      { what: 'a row appended and a click', input: at(r3, picked(5, 9), 5), marks: { marks: false }, scales: 'all', items: { marks: 0 } },
       { what: 'a signal the mark reads', input: at(r3, picked(5, 9), 5, 60), marks: { marks: false }, scales: 'all', items: { marks: 0 } },
       { what: 'a signal nothing reads, after it all', input: at(r3, picked(5, 9), 6, 60), marks: { marks: true }, scales: 'all', items: { marks: N + 2 } },
     ], at(ROWS, [], 1))
@@ -204,9 +205,9 @@ describe('a selection bound to the legend', () => {
       { what: 'a category chosen', input: at(ROWS, chosen('k2'), 2), marks: { marks: false }, scales: 'all', items: { marks: 0 } },
       { what: 'a signal nothing reads, a category chosen', input: at(ROWS, chosen('k2'), 3), marks: { marks: true }, scales: 'all' },
       { what: 'another category added', input: at(ROWS, chosen('k2', 'k3'), 3), marks: { marks: false }, scales: 'all' },
-      // (the color scale is ordinal, and the filter of the dataset publishes a pulse with a mapping, over which its census does not
-      // advance: it is made again, and the points with it)
-      { what: 'a row modified and a signal nothing reads', input: at(nudged(ROWS, 9), chosen('k2', 'k3'), 4), marks: { marks: false }, scales: ['x', 'y'], items: { marks: 0 } },
+      // (the filter of the dataset publishes a pulse with a mapping, over which the color scale's census does not advance; the settings
+      // it is made from are the same, so it is kept, and only the modified point is encoded)
+      { what: 'a row modified and a signal nothing reads', input: at(nudged(ROWS, 9), chosen('k2', 'k3'), 4), marks: { marks: false }, scales: 'all', items: { marks: N - 1 } },
     ], at(ROWS, [], 1))
   })
 })

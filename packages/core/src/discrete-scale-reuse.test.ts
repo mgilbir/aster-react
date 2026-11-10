@@ -496,3 +496,58 @@ describe('what the census tells apart', () => {
     }
   })
 })
+
+describe('what else a kept scale reads', () => {
+  /** Each update through a session is the fresh scene, every scale included; returns the scenes. */
+  function steps(spec: VgSpec, inputs: RuntimeInput[]): SceneRoot[] {
+    const s = createChartSession()
+    return inputs.map((input, k) => {
+      const scene = s.evaluate(spec, input)
+      const fresh = evaluateChart(compileChart(spec), input)
+      expect(norm(scene), `step ${k}`).toEqual(norm(fresh))
+      for (const name of (spec as unknown as { scales: Array<{ name: string }> }).scales.map((x) => x.name)) {
+        expect(same(scaleView(scaleOf(scene, name)), scaleView(scaleOf(fresh, name))), `step ${k}: scale ${name}`).toBe(true)
+      }
+      return scene
+    })
+  }
+
+  it('a scale whose domain and range read a dataset and a scale from expressions, while the dataset of its domain stays', () => {
+    const spec = {
+      width: 100, height: 50, autosize: 'none',
+      data: [{ name: 't' }, { name: 'u' }],
+      scales: [
+        { name: 'n', type: 'linear', domain: { signal: "[0, length(data('t'))]" }, range: [0, 100] },
+        { name: 'b', type: 'band', domain: { data: 'u', field: 'g' }, range: [0, { signal: "scale('n', 3)" }] },
+      ],
+      axes: [{ orient: 'bottom', scale: 'b' }],
+      marks: [{ type: 'rect', from: { data: 'u' }, encode: { update: { x: { scale: 'b', field: 'g' }, width: { scale: 'b', band: 1 }, y: { scale: 'n', value: 1 }, height: { value: 2 } } } }],
+    } as unknown as VgSpec
+    const u = [{ g: 'a' }, { g: 'b' }]
+    const t = (n: number): Row[] => Array.from({ length: n }, (_, v) => ({ v }))
+    // (rows of `t` appended, then `u` appended a category it has; then a row of `t` removed while `u` gets one more row)
+    const [, b, c, d] = steps(spec, [{ data: { t: t(2), u } }, { data: { t: t(4), u } }, { data: { t: t(4), u: [...u, { g: 'a' }] } }, { data: { t: t(3), u: [...u, { g: 'a' }, { g: 'b' }] } }])
+    expect(scaleOf(c!, 'n')).toBe(scaleOf(b!, 'n'))
+    expect(scaleOf(c!, 'b')).toBe(scaleOf(b!, 'b'))
+    expect(scaleOf(d!, 'b')).not.toBe(scaleOf(c!, 'b'))
+  })
+
+  it('a discrete scale whose range comes from another dataset, while the dataset of its domain stays', () => {
+    const spec = {
+      width: 100, height: 50, autosize: 'none',
+      data: [{ name: 't' }, { name: 'r' }],
+      scales: [{ name: 's', type: 'ordinal', domain: { data: 't', field: 'g' }, range: { data: 'r', field: 'f' } }],
+      legends: [{ fill: 's' }],
+      marks: [{ type: 'symbol', from: { data: 't' }, encode: { update: { fill: { scale: 's', field: 'g' } } } }],
+    } as unknown as VgSpec
+    const t = [{ g: 'a' }, { g: 'b' }]
+    const [a, b, c] = steps(spec, [
+      { data: { t, r: [{ f: 'red' }, { f: 'blue' }] } },
+      { data: { t, r: [{ f: 'green' }, { f: 'blue' }] } },
+      // (a row of the domain's dataset appended while the range's stays: the census keeps the scale)
+      { data: { t: [...t, { g: 'a' }], r: [{ f: 'green' }, { f: 'blue' }] } },
+    ])
+    expect(scaleOf(b!, 's')).not.toBe(scaleOf(a!, 's'))
+    expect(scaleOf(c!, 's')).toBe(scaleOf(b!, 's'))
+  })
+})
