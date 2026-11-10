@@ -3122,6 +3122,12 @@ function buildDatasetsOf(ctx: EvalContext, inputData: Record<string, unknown[]>)
           const res = ctx.engine!.applyPipelineWithPulse(rows, d.transform, tctx, name, inPulse!, prevDS, state)
           rows = res.rows
           outPulse = res.pulse
+          // (what each step read, as `runPipeline` records it, so a later evaluation that is not driven by a pulse keeps the steps:
+          // a step that publishes a signal another may read in the same run is not recorded, nor the run)
+          if (key !== null && inputs !== undefined && d.transform.every((t) => stepReadsOf(t)!.publishes === undefined)) {
+            state.inputs = inputs
+            state.records = d.transform.map((t) => ({ keys: stepKeys(ctx, stepReadsOf(t)!) }))
+          }
         } else {
           rows = runPipeline(ctx, name, d.transform, tctx, rows, shared, inputs, raw, prevDS, earlierDS, state)
           outPulse = null
