@@ -37,7 +37,7 @@ and Fixed, per package. Everything built before the first release is in [Pre-rel
 
 - `@aster-charts/core/transition`: a running transition given a scene that draws like its end (a Vega-Lite `time`
   animation's clock between two frames, a signal no mark reads) keeps its plan instead of planning again; `drawsSame(a, b)`
-  is exported. On 1,000 keyed rects: 0.18–0.26 ms instead of 1.01–1.13 ms per such scene, and 0.001–0.002 ms when the
+  is exported. On 1,000 keyed rects: 0.18–0.27 ms instead of 1.01–1.13 ms per such scene, and 0.001–0.002 ms when the
   scenes share the mark (`bench:transition-retarget`).
 - The container a host measured (`measuredSize`, which `<Chart>` passes when it has no size props) sizes the chart's whole
   box, as Vega-Lite's `"container"` does (autosize `fit` containing the padding): the content shrinks so padding and

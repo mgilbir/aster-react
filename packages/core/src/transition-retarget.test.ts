@@ -2,6 +2,7 @@
 // (the player draws frames from requestAnimationFrame, which only a DOM environment has)
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
 import { compileChart, evaluateChart } from './index.js'
+import { Bounds } from './bounds.js'
 import { createScenePlayer, drawsSame } from './transition.js'
 import type { SceneGroup, SceneRoot, VgSpec } from './types.js'
 
@@ -46,6 +47,33 @@ describe('drawsSame', () => {
     expect('width' in b).toBe(true)
     expect(drawsSame(fewer as unknown as SceneRoot, b)).toBe(false)
     expect(drawsSame(b, fewer as unknown as SceneRoot)).toBe(false)
+  })
+})
+
+describe('drawsSame: the values a node holds', () => {
+  const withValue = (v: unknown): SceneRoot => ({ ...scene(B), meta: v } as unknown as SceneRoot)
+  const bounds = (x2: number): Bounds => { const b = new Bounds(); b.x1 = 0; b.y1 = 0; b.x2 = x2; b.y2 = 5; return b }
+
+  it('compares nested plain data, class instances and maps by what they hold', () => {
+    const deep = (n: number): unknown => ({ a: [{ b: { c: { d: [n] } } }] })
+    expect(drawsSame(withValue(deep(1)), withValue(deep(1)))).toBe(true)
+    expect(drawsSame(withValue(deep(1)), withValue(deep(2)))).toBe(false)
+    expect(drawsSame(withValue(bounds(3)), withValue(bounds(3)))).toBe(true)
+    expect(drawsSame(withValue(bounds(3)), withValue(bounds(4)))).toBe(false)
+    // the same fields in a plain object are not a Bounds
+    expect(drawsSame(withValue({ x1: 0, y1: 0, x2: 3, y2: 5 }), withValue(bounds(3)))).toBe(false)
+    expect(drawsSame(withValue(new Map([['k', [1]]])), withValue(new Map([['k', [1]]])))).toBe(true)
+    expect(drawsSame(withValue(new Map([['k', [1]]])), withValue(new Map([['k', [2]]])))).toBe(false)
+  })
+
+  it('is not the same for what it cannot look into (a built-in object), for a cycle, or past its budget', () => {
+    expect(drawsSame(withValue(new Date(1)), withValue(new Date(1)))).toBe(false)
+    expect(drawsSame(withValue(new Date(1)), withValue(new Date(2)))).toBe(false)
+    const cyclic = (): Record<string, unknown> => { const o: Record<string, unknown> = { n: 1 }; o.self = o; return o }
+    expect(drawsSame(withValue(cyclic()), withValue(cyclic()))).toBe(false)
+    // 90,000 objects to look into: past the budget
+    const huge = (): Array<Array<{ v: number }>> => Array.from({ length: 300 }, () => Array.from({ length: 300 }, () => ({ v: 1 })))
+    expect(drawsSame(withValue(huge()), withValue(huge()))).toBe(false)
   })
 })
 

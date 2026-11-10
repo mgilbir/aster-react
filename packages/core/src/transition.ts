@@ -597,15 +597,61 @@ interface Playing<T> {
 const UNDRAWN = new Set(['datum', 'runtime', 'signalParams', 'compiled'])
 const drawnKey = (k: string): boolean => !UNDRAWN.has(k) && !k.startsWith('__')
 
-/** Two values a node holds draw the same: the same value, or arrays / plain objects (a padding, a dash) of such values. */
-function sameValue(a: unknown, b: unknown, depth = 0): boolean {
+/** How many objects (nodes, arrays, records) one `drawsSame` may look into before it answers false; a scene of a few thousand items and its guides' metadata stay well inside it. */
+const COMPARE_BUDGET = 50_000
+
+/** One comparison's bookkeeping: the values left to look into, and the objects being looked into (a cycle answers false). */
+interface Compare {
+  budget: number
+  open: Set<object>
+}
+
+/**
+ * Two values a node holds draw the same: the same value; arrays, plain objects and class instances whose own fields hold the
+ * same values (a padding, a guide's parts, a `Bounds`); maps and sets with the same entries. Anything else (a date, a typed
+ * array, a function) only when it is the same object. Out of budget, or in a cycle, the answer is false.
+ */
+function sameValue(a: unknown, b: unknown, c: Compare): boolean {
   if (a === b) return true
-  if (depth > 3 || a === null || b === null || typeof a !== 'object' || typeof b !== 'object') return false
-  if (Array.isArray(a)) return Array.isArray(b) && a.length === b.length && a.every((v, i) => sameValue(v, b[i], depth + 1))
-  if (Array.isArray(b) || Object.getPrototypeOf(a) !== Object.prototype || Object.getPrototypeOf(b) !== Object.prototype) return false
-  const ka = Object.keys(a)
-  if (ka.length !== Object.keys(b).length) return false
-  return ka.every((k) => k in b && sameValue((a as Rec)[k], (b as Rec)[k], depth + 1))
+  if (a === null || b === null || typeof a !== 'object' || typeof b !== 'object') return false
+  if (--c.budget < 0 || c.open.has(a)) return false
+  const proto = Object.getPrototypeOf(a)
+  if (proto !== Object.getPrototypeOf(b)) return false
+  c.open.add(a)
+  try {
+    if (Array.isArray(a)) {
+      const bb = b as unknown[]
+      if (a.length !== bb.length) return false
+      for (let i = 0; i < a.length; i++) if (!sameValue(a[i], bb[i], c)) return false
+      return true
+    }
+    if (a instanceof Map) {
+      const bm = b as Map<unknown, unknown>
+      if (a.size !== bm.size) return false
+      for (const [k, v] of a) if (!bm.has(k) || !sameValue(v, bm.get(k), c)) return false
+      return true
+    }
+    if (a instanceof Set) {
+      const bs = b as Set<unknown>
+      if (a.size !== bs.size) return false
+      for (const v of a) if (!bs.has(v)) return false
+      return true
+    }
+    // a built-in that keeps its state outside its own fields (a date, a regexp, a typed array, a promise...)
+    if (proto !== Object.prototype && proto !== null && isBuiltIn(proto)) return false
+    const ka = Object.keys(a)
+    if (ka.length !== Object.keys(b).length) return false
+    for (const k of ka) if (!Object.prototype.hasOwnProperty.call(b, k) || !sameValue((a as Rec)[k], (b as Rec)[k], c)) return false
+    return true
+  } finally {
+    c.open.delete(a)
+  }
+}
+
+/** A prototype of the language's own objects (not `Object.prototype`, a plain object's, nor a class this code defines). */
+function isBuiltIn(proto: object): boolean {
+  const ctor = (proto as { constructor?: unknown }).constructor
+  return typeof ctor === 'function' && /\{\s*\[native code\]\s*\}\s*$/.test(Function.prototype.toString.call(ctor))
 }
 
 /**
@@ -615,7 +661,12 @@ function sameValue(a: unknown, b: unknown, depth = 0): boolean {
  * that do not.
  */
 export function drawsSame(a: SceneRoot | SceneItem, b: SceneRoot | SceneItem): boolean {
+  return nodeDrawsSame(a, b, { budget: COMPARE_BUDGET, open: new Set() })
+}
+
+function nodeDrawsSame(a: SceneRoot | SceneItem, b: SceneRoot | SceneItem, c: Compare): boolean {
   if (a === b) return true
+  if (--c.budget < 0) return false
   const ra = a as unknown as Rec
   const rb = b as unknown as Rec
   let drawn = 0
@@ -627,10 +678,10 @@ export function drawsSame(a: SceneRoot | SceneItem, b: SceneRoot | SceneItem): b
       const ib = rb.items as readonly SceneItem[] | undefined
       if (ia === ib) continue
       if (!Array.isArray(ia) || !Array.isArray(ib) || ia.length !== ib.length) return false
-      for (let i = 0; i < ia.length; i++) if (!drawsSame(ia[i]!, ib[i]!)) return false
+      for (let i = 0; i < ia.length; i++) if (!nodeDrawsSame(ia[i]!, ib[i]!, c)) return false
       continue
     }
-    if (!(k in rb) || !sameValue(ra[k], rb[k])) return false
+    if (!(k in rb) || !sameValue(ra[k], rb[k], c)) return false
   }
   for (const k in rb) if (drawnKey(k)) drawn--
   return drawn === 0
