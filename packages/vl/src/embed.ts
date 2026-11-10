@@ -7,6 +7,8 @@
  * is never rewritten.
  */
 
+import { nextSolid, prevSolid, tokenize } from './expr-tokens.js'
+
 type Obj = Record<string, unknown>
 const isObj = (v: unknown): v is Obj => v !== null && typeof v === 'object' && !Array.isArray(v)
 
@@ -23,58 +25,38 @@ export interface Renames {
   datasets?: ReadonlyMap<string, string>
 }
 
-/** Rewrite signal identifiers and scale-name arguments in one expression string. */
+/**
+ * Rewrite signal identifiers and scale-name arguments in one expression string, read token by token as vega's lexer reads it (see
+ * expr-tokens.ts): a name is the name it spells (escapes decoded), and a dataset or scale a call names is the value of its string
+ * literal. What is not renamed is given back as it was written.
+ */
 export function renameExpr(expr: string, r: Renames): string {
+  const tokens = tokenize(expr)
   let out = ''
-  let i = 0
-  const n = expr.length
-  let lastIdent: string | null = null // identifier immediately before the current position (whitespace aside)
-  let pendingFn: string | null = null // function whose '(' was just consumed
-  while (i < n) {
-    const c = expr[i]!
-    if (c === '"' || c === "'") {
-      let j = i + 1
-      while (j < n && expr[j] !== c) j += expr[j] === '\\' ? 2 : 1
-      const body = expr.slice(i + 1, j)
-      let text = body
-      if (pendingFn && SCALE_FUNCTIONS.has(pendingFn) && r.scales.has(body)) text = r.scales.get(body)!
-      else if (pendingFn && DATA_FUNCTIONS.has(pendingFn) && r.datasets?.has(body)) text = r.datasets.get(body)!
-      out += c + text + c
-      i = j + 1
-      pendingFn = null
-      lastIdent = null
+  for (let i = 0; i < tokens.length; i++) {
+    const t = tokens[i]!
+    if (t.kind === 'string') {
+      // (the first argument of a call that reads a scale or a dataset by name)
+      const open = prevSolid(tokens, i)
+      const fn = open >= 0 && tokens[open]!.raw === '(' ? tokens[prevSolid(tokens, open)] : undefined
+      const callee = fn?.kind === 'name' ? fn.value! : undefined
+      const to = callee !== undefined && SCALE_FUNCTIONS.has(callee) ? r.scales.get(t.value!)
+        : callee !== undefined && DATA_FUNCTIONS.has(callee) ? r.datasets?.get(t.value!) : undefined
+      out += to !== undefined ? `${t.raw[0]}${to}${t.raw[0]}` : t.raw
       continue
     }
-    if (/[A-Za-z_$]/.test(c)) {
-      let j = i + 1
-      while (j < n && /[\w$]/.test(expr[j]!)) j++
-      const id = expr.slice(i, j)
-      // a member access (`.width`) or a call target (`width(`) is not a signal reference
-      const prev = out.replace(/\s+$/, '').slice(-1)
-      let k = j
-      while (k < n && /\s/.test(expr[k]!)) k++
-      const isMember = prev === '.'
-      const isCall = expr[k] === '('
-      const isKey = expr[k] === ':' && /[{,]/.test(prev)
-      out += !isMember && !isCall && !isKey && r.signals.has(id) ? r.signals.get(id)! : id
-      lastIdent = id
-      pendingFn = null
-      i = j
+    if (t.kind === 'name') {
+      // a member access (`.width`), a call target (`width(`) or an object key (`{width: 1}`) is not a signal reference
+      const before = tokens[prevSolid(tokens, i)]?.raw
+      const after = tokens[nextSolid(tokens, i)]?.raw
+      const isMember = before === '.'
+      const isCall = after === '('
+      const isKey = after === ':' && (before === '{' || before === ',')
+      const to = !isMember && !isCall && !isKey ? r.signals.get(t.value!) : undefined
+      out += to ?? t.raw
       continue
     }
-    if (c === '(') {
-      pendingFn = lastIdent
-      out += c
-      i++
-      lastIdent = null
-      continue
-    }
-    if (!/\s/.test(c)) {
-      pendingFn = null
-      lastIdent = null
-    }
-    out += c
-    i++
+    out += t.raw
   }
   return out
 }
@@ -121,4 +103,33 @@ export function renameDataRefs(node: unknown, map: ReadonlyMap<string, string>):
   if (!isObj(node)) return
   if (typeof node.data === 'string' && map.has(node.data)) node.data = map.get(node.data)
   for (const v of Object.values(node)) if (v !== null && typeof v === 'object') renameDataRefs(v, map)
+}
+
+/** The keys whose strings are Vega expressions in a compiled view. */
+export const EXPRESSION_KEYS: ReadonlySet<string> = new Set(['signal', 'update', 'init', 'expr', 'test'])
+
+/**
+ * Name the units and marks an expression names after a view (`prefix`): the unit a selection's tuple came from (`unit: "x"`,
+ * `unit === "x"`) and the mark a facet's cell is read from (`group("x")`), read token by token, unless `keepUnit` / `keepMark` says
+ * the name is the view's already.
+ */
+export function relabelUnits(expr: string, keepUnit: (unit: string) => boolean, keepMark: (mark: string) => boolean, prefix: string): string {
+  const tokens = tokenize(expr)
+  let out = ''
+  for (let i = 0; i < tokens.length; i++) {
+    const t = tokens[i]!
+    if (t.kind === 'string') {
+      // (the operator before the string: `:`, `(`, or `===` / `==`, whose characters are tokens of their own)
+      let op = prevSolid(tokens, i)
+      let opRaw = op >= 0 ? tokens[op]!.raw : ''
+      while (opRaw.endsWith('=') && op > 0 && tokens[op - 1]!.raw === '=') { op--; opRaw = '=' + opRaw }
+      const name = op >= 0 ? tokens[prevSolid(tokens, op)] : undefined
+      const isUnit = name?.kind === 'name' && name.value === 'unit' && (opRaw === ':' || opRaw === '===' || opRaw === '==')
+      const isGroup = name?.kind === 'name' && name.value === 'group' && opRaw === '(' && tokens[nextSolid(tokens, i)]?.raw === ')'
+      const v = t.value!
+      if ((isUnit && !keepUnit(v)) || (isGroup && !keepMark(v))) { out += JSON.stringify(prefix + v); continue }
+    }
+    out += t.raw
+  }
+  return out
 }

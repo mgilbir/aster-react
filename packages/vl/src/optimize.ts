@@ -12,6 +12,9 @@
  */
 import { renameDataRefs, renameExpr, renameFragment } from './embed.js'
 
+import { EXPRESSION_KEYS } from './embed.js'
+import { tokenize } from './expr-tokens.js'
+
 type Obj = Record<string, unknown>
 const isObj = (v: unknown): v is Obj => v !== null && typeof v === 'object' && !Array.isArray(v)
 
@@ -372,7 +375,16 @@ function removeUnusedDatasets(out: Obj, removable: (name: string) => boolean): v
     // (a name is read when it appears, whole, anywhere in the spec but its own dataset's name: a mark's `from`, a scale's domain, an
     // expression's `data("name")`, a source, a lookup)
     const text = outside + data.map((d) => JSON.stringify({ ...d, name: undefined })).join('\n')
-    const reads = (name: string): boolean => new RegExp(`(?<![\\w$])${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![\\w$])`).test(text)
+    // (and every name and string an expression spells, as vega's lexer reads them: `data("row\\u005fdomain")` reads `row_domain`)
+    const spelled = new Set<string>()
+    const collect = (v: unknown, key: string): void => {
+      if (typeof v === 'string') { if (EXPRESSION_KEYS.has(key)) for (const t of tokenize(v)) if (t.value !== undefined) spelled.add(t.value) }
+      else if (Array.isArray(v)) v.forEach((x) => collect(x, key))
+      else if (isObj(v)) for (const [k, x] of Object.entries(v)) if (k !== 'values') collect(x, k)
+    }
+    collect(rest, '')
+    for (const d of data) collect({ ...d, name: undefined }, '')
+    const reads = (name: string): boolean => spelled.has(name) || new RegExp(`(?<![\\w$])${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![\\w$])`).test(text)
     const keep = data.filter((d) => !(typeof d.name === 'string' && removable(d.name) && !reads(d.name)))
     if (keep.length === data.length) return
     data = keep

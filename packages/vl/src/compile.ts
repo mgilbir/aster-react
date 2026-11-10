@@ -7,8 +7,9 @@
  * oracle's; the rendered output must not.
  */
 
-import { renameDataRefs, renameExpr, renameFragment } from './embed.js'
+import { EXPRESSION_KEYS, relabelUnits, renameDataRefs, renameExpr, renameFragment } from './embed.js'
 import { optimizeData } from './optimize.js'
+import { tokenize } from './expr-tokens.js'
 import { VLCompileError, pushAll, flatField, datumRef as dref, genName, safeKey, splitAccessPath } from './names.js'
 import { validateGeoUnit, validateSpec } from './validate.js'
 import { markChannelCompatible } from './channels.js'
@@ -357,16 +358,13 @@ function nameViewParts(out: Record<string, unknown>, prefix: string, except: rea
   }
   // a selection's tuples say which unit they came from: the unit is named after the view too (`unit: "layer_0"` is `unit: "outer_layer_0"`)
   const root = prefix.slice(0, -1)
-  const unitLabel = /\bunit(: | === )"([^"]+)"/g
-  const relabel = (v: unknown): unknown => {
-    if (typeof v === 'string') {
-      return v
-        .replace(unitLabel, (m, op: string, unit: string) => (unit === root || unit === rawName || unit.startsWith(prefix) || unit.startsWith('child__') || except.some((p) => unit.startsWith(p)) ? m : `unit${op}"${prefix}${unit}"`))
-        // (and the mark a facet's cell is read from is named after the view like every mark)
-        .replace(/\bgroup\("([^"]+)"\)/g, (m, mark: string) => (mark.startsWith(prefix) || except.some((p) => mark.startsWith(p)) ? m : `group("${prefix}${mark}")`))
-    }
-    if (Array.isArray(v)) return v.map(relabel)
-    if (isObject(v)) return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, k === 'values' ? x : relabel(x)]))
+  const keepUnit = (unit: string): boolean => unit === root || unit === rawName || unit.startsWith(prefix) || unit.startsWith('child__') || except.some((p) => unit.startsWith(p))
+  const keepMark = (mark: string): boolean => mark.startsWith(prefix) || except.some((p) => mark.startsWith(p))
+  // (in the expressions of the view, read token by token: `unit: "x"` / `unit === "x"`, and `group("x")`; a title that says so is text)
+  const relabel = (v: unknown, key = ''): unknown => {
+    if (typeof v === 'string') return EXPRESSION_KEYS.has(key) ? relabelUnits(v, keepUnit, keepMark, prefix) : v
+    if (Array.isArray(v)) return v.map((x) => relabel(x, key))
+    if (isObject(v)) return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, k === 'values' ? x : relabel(x, k)]))
     return v
   }
   const relabelAll = (node: Record<string, unknown>): void => {
@@ -1731,6 +1729,42 @@ function compileFacetedComposition(spec: VLSpec, ctx: CompileCtx, nested: string
   return out as VLSpec
 }
 
+/**
+ * Rename the names the compiler generated with a prefix (`child_layer_0_...`) in a compiled view: a whole string that is a name
+ * (a mark's, a dataset's, a signal's, a field the compiler made), and, in an expression, each name and string literal it spells (read
+ * token by token, so a title or any other text that merely contains the prefix is left as it is). A string the user wrote anywhere in
+ * the input spec -- or that one of its expressions spells -- is the user's, not a generated name, and keeps its spelling.
+ */
+function renameGeneratedPrefix(out: unknown, prefix: RegExp, to: (index: string) => string | undefined, input: unknown): unknown {
+  const users = new Set<string>()
+  const collect = (v: unknown): void => {
+    if (typeof v === 'string') { users.add(v); for (const t of tokenize(v)) if (t.value !== undefined) users.add(t.value) }
+    else if (Array.isArray(v)) v.forEach(collect)
+    else if (isObject(v)) for (const [k, x] of Object.entries(v)) { users.add(k); collect(x) }
+  }
+  collect(input)
+  const renamed = (name: string): string | undefined => {
+    if (users.has(name)) return undefined
+    const m = prefix.exec(name)
+    const head = m ? to(m[1]!) : undefined
+    return m && head !== undefined ? head + name.slice(m[0].length) : undefined
+  }
+  const walk = (v: unknown, key: string): unknown => {
+    if (typeof v === 'string') {
+      if (!EXPRESSION_KEYS.has(key)) return renamed(v) ?? v
+      return tokenize(v).map((t) => {
+        if (t.kind !== 'name' && t.kind !== 'string') return t.raw
+        const r = renamed(t.value!)
+        return r === undefined ? t.raw : t.kind === 'string' ? JSON.stringify(r) : r
+      }).join('')
+    }
+    if (Array.isArray(v)) return v.map((x) => walk(x, key))
+    if (isObject(v)) return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, k === 'values' ? x : walk(x, k)]))
+    return v
+  }
+  return walk(out, '')
+}
+
 /** Compile a faceted chart (encoding.facet / top-level facet + spec). */
 function compileFaceted(spec: VLSpec, ctx: CompileCtx, nested = ''): VLSpec {
   if (isObject(spec.facet) && isLayerRepeat(spec.spec)) {
@@ -1751,8 +1785,7 @@ function compileFaceted(spec: VLSpec, ctx: CompileCtx, nested = ''): VLSpec {
     // (vega-lite names each repeated layer after its value: `child__layer_w_marks`)
     const values = (rep.repeat as Record<string, unknown>).layer as unknown[]
     const pre = childModelName(nested, 'child')
-    const text = JSON.stringify(res).replace(new RegExp(`${pre}_layer_(\\d+)_`, 'g'), (m, i: string) => (values[Number(i)] === undefined ? m : `${pre}__layer_${varName(String(values[Number(i)]))}_`))
-    return JSON.parse(text) as VLSpec
+    return renameGeneratedPrefix(res, new RegExp(`^${pre}_layer_(\\d+)_`), (i) => (values[Number(i)] === undefined ? undefined : `${pre}__layer_${varName(String(values[Number(i)]))}_`), spec) as VLSpec
   }
   if (isObject(spec.facet) && isComposition(spec.spec)) return compileFacetedComposition(spec, ctx, nested)
   // (the names of a facet and of everything it makes are its model's: those of a facet inside a facet start with `child`, and its own child
@@ -8761,7 +8794,9 @@ function prepareUnitSelections(
       applyTextualChannels(u, spec, fields)
       const t = u.tooltip as { signal?: string; value?: unknown } | undefined
       if (!t) return {}
-      return { tooltip: t.signal !== undefined ? { signal: t.signal.replace(/\bdatum\b(?!\.datum)/g, 'datum.datum') } : t }
+      // (the voronoi cell's datum is the point's item: the row is its `datum`, read by name, never inside a string -- a field or a
+      // title spelled `datum` is text; vega-lite builds the tooltip with that prefix, `reactiveGeom`)
+      return { tooltip: t.signal !== undefined ? { signal: renameExpr(t.signal, { signals: new Map([['datum', 'datum.datum']]), scales: new Map() }) } : t }
     },
   }
   const cmpts = parseUnitSelections(unit, params, spec.config)
