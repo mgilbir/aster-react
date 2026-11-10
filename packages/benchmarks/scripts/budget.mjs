@@ -237,8 +237,12 @@ cli({ url: import.meta.url })
 // build (kB gzip, before -> after): core 155.7 -> 156.2, useChart 167.4 -> 167.8, Chart 210.0 -> 210.5, SvgChart 187.1 -> 187.6,
 // SvgChart + interaction 204.4 -> 204.9, Chart + VL 313.3 -> 313.9; the marginal rows within their ceilings. Ceilings are the
 // measured value + 0.5.
+// Identifier numbers by source rows and the Vega-Lite compiler's expression tokenizer (the same branch), measured 2026-11-10 on a clean
+// build (kB gzip, before -> after): core 156.2 -> 156.8, useChart 167.8 -> 168.4, Chart 210.5 -> 211.1, SvgChart 187.6 -> 188.1,
+// SvgChart + interaction 204.9 -> 205.5, Chart + VL 313.9 -> 315.6 (the tokenizer, and the renames that read it); the marginal rows
+// within their ceilings. Ceilings are the measured value + 0.5.
 const BUDGETS = {
-  '@aster-charts/core': 156.7 * 1024,
+  '@aster-charts/core': 157.3 * 1024,
   '+ @aster-charts/core/dom': 11.1 * 1024,
   '+ @aster-charts/core/canvas': 6.4 * 1024,
   '+ @aster-charts/core/hit': 7.0 * 1024,
@@ -249,13 +253,13 @@ const BUDGETS = {
   // drawsSame looks into a guide's metadata by its fields (perf/transition-retarget-by-identity), measured 2026-11-10 on a clean
   // build: 3.7 kB gzip (was 3.3), an on-demand chunk only; no eager row moved. Ceiling is the measured value + 0.5.
   '+ @aster-charts/core/transition': 4.2 * 1024,
-  '@aster-charts/react useChart': 168.3 * 1024,
-  '@aster-charts/react Chart': 211.0 * 1024,
+  '@aster-charts/react useChart': 168.9 * 1024,
+  '@aster-charts/react Chart': 211.6 * 1024,
   // The light chart (`@aster-charts/react/lite`): SVG only, no canvas renderer; alone and with the `interaction` capability.
-  '@aster-charts/react SvgChart': 188.1 * 1024,
-  '@aster-charts/react SvgChart + interaction': 205.4 * 1024,
+  '@aster-charts/react SvgChart': 188.6 * 1024,
+  '@aster-charts/react SvgChart + interaction': 206.0 * 1024,
   // Base + the VL compiler (opt-in: `import '@aster-charts/react/vl'`).
-  '@aster-charts/react Chart + VL': 314.4 * 1024,
+  '@aster-charts/react Chart + VL': 316.1 * 1024,
 }
 
 const THIS_DIR = dirname(fileURLToPath(import.meta.url))
