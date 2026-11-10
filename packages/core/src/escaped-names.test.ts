@@ -218,9 +218,10 @@ const CASES: Case[] = [
     random: true, fresh: false,
   },
   {
-    // (a mark's transform that draws is made again with the mark, from the same inputs: the tape replays its numbers)
+    // (a mark's transform that draws is made again with the mark on any signal change, from the same inputs: the tape replays its
+    // numbers, as vega does not run it again)
     what: 'a mark transform that draws',
-    spec: { ...frame, signals: [{ name: 'u', value: 0 }], data: [{ name: 't' }], marks: [{ type: 'symbol', from: { data: 't' }, transform: [{ type: 'formula', as: 'z', expr: 'random() + u * 0' }], encode: { update: { x: { field: 'v' }, y: { value: 5 } } } }] } as unknown as VgSpec,
+    spec: { ...frame, signals: [{ name: 'u', value: 0 }], data: [{ name: 't' }], marks: [{ type: 'symbol', from: { data: 't' }, transform: [{ type: 'formula', as: 'z', expr: 'random()' }], encode: { update: { x: { field: 'v' }, y: { value: 5 } } } }] } as unknown as VgSpec,
     steps: [0, 1, 2].map((u) => ({ data: { t: ROWS }, signals: { u } })),
     random: true, fresh: false,
   },
