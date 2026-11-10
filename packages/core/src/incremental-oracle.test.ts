@@ -1215,6 +1215,16 @@ describe('seeds whose pipeline looks up a data set declared after it', () => {
   }
 })
 
+// Seeds past the default sweep whose `identifier` follows a filter: its rows are numbered as their source rows, the one way whether an
+// update comes with a pulse or not (a pipeline so numbered takes no pulse; one that did numbered the rows of a pulse otherwise).
+describe('seeds whose identifier follows a filter', () => {
+  for (const seed of [136, 290, 356, 384, 387]) {
+    it(`holds for seed ${seed} x ${STEPS} steps`, () => {
+      expect(checkSeed(seed, STEPS) ?? '', `seed ${seed}`).toBe('')
+    }, 600_000)
+  }
+})
+
 describe('incremental === fresh when every scale reads the source dataset (the domain census, scale reuse)', () => {
   it('the generator is deterministic per seed and drives the census ops', () => {
     expect(JSON.stringify(scenarioCensus(7, 6))).toBe(JSON.stringify(scenarioCensus(7, 6)))
