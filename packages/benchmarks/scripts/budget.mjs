@@ -245,8 +245,12 @@ cli({ url: import.meta.url })
 // clean build (kB gzip, before -> after): core 156.8 -> 157.1 (within its ceiling), core/dom 11.3 (its ceiling was 11.1: the
 // incremental engine is in that chunk), useChart 168.4 -> 169.4, Chart 211.1 -> 212.1, SvgChart 188.1 -> 189.1, SvgChart +
 // interaction 205.5 -> 206.5, Chart + VL 315.6 -> 316.7. Ceilings are the measured value + 0.5.
+// Discrete scales kept over row changes (the category census, scales kept for their settings; perf/discrete-scale-appends),
+// measured 2026-11-10 on a clean build against its base 72ffeea (kB gzip, before -> after): core 157.1 -> 157.4 (its ceiling was
+// 157.3: raised to the measured value + 0.5); useChart 169.4 -> 169.8, Chart 212.1 -> 212.4, SvgChart 189.1 -> 189.5, SvgChart +
+// interaction 206.5 -> 206.8, Chart + VL 316.7 -> 317.1, each within its ceiling, which is unchanged; the marginal rows did not move.
 const BUDGETS = {
-  '@aster-charts/core': 157.3 * 1024,
+  '@aster-charts/core': 157.9 * 1024,
   '+ @aster-charts/core/dom': 11.8 * 1024,
   '+ @aster-charts/core/canvas': 6.4 * 1024,
   '+ @aster-charts/core/hit': 7.0 * 1024,

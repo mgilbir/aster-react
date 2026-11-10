@@ -66,6 +66,14 @@ and Fixed, per package. Everything built before the first release is in [Pre-rel
   `"container"` view 47.6 to 1.8 ms; a brush drag through `<Chart>` in Chromium 115 to 82 ms per move. A drag step itself costs
   about what it did (17.2 to 17.3-17.9 ms). Keys now read names as the expression lexer does (an escaped or non-ASCII name is the
   name it spells), and a step that calls `random` by an escaped name is one that draws. The scene is unchanged.
+- A discrete scale over data (ordinal colour, shape, size and strokeDash; band; point) keeps its object when its rows change
+  and its result does not, so the marks that read it encode only the rows that changed. Rows of categories it has, appended or
+  edited, advance a census of the categories (also after Vega-Lite's validity filter); a removal, a reorder, a sort by count or
+  by an aggregate, a domain of several fields or datasets and a `domainRaw` read the scale's settings again and keep the scale
+  when they are the same. A new category, a category gone or a sort order that moves makes it again, with everything that reads
+  it. On 5,000 rows through a chart session: a row appended to a scatter coloured by a category 15.6 to 1.7 ms, a row removed 15.0
+  to 1.8 ms, a `createChartStream` append 14.8 to 0.6 ms; a bar chart with a nominal x 15.0 to 4.2-5.1 ms per append. A line per
+  category keeps its scale but is drawn in a group mark, made again as before. The scene is unchanged.
 
 #### Added
 
@@ -97,6 +105,14 @@ and Fixed, per package. Everything built before the first release is in [Pre-rel
   row while that row lives, whether the filter passes it or not, as Vega's tuples do. This holds for appends too: they still run
   from the rows the evaluation before made, and they follow only the rows they add. An append on 10,000 rows takes 0.29 ms
   (0.28 ms before).
+- A scale was kept after an update with a domain or a range that was no longer right: a scale whose domain or range reads a dataset
+  or a scale from an expression (`{signal: "[0, length(data('t'))]"}`, a range ending at `bandwidth('x')`) when its own domain's
+  dataset did not change, and a scale whose range comes from another dataset (`range: {data: 'r', field: 'f'}`) when that dataset
+  changed. Both are now read again.
+- An ordinal scale that adds the categories it is asked for to its domain (`domainImplicit`, a `domainRaw`, or no domain) was
+  kept from one update to the next, with categories that rows since removed had added. It is made again on every evaluation.
+- A discrete scale was kept when an update told of the change (`dataChanges`) turned a category's first value from `0` into `-0`,
+  which the domain then lists.
 - Names spelled with escapes in expressions (an escaped `data`, `random` or signal name) were missed wherever the engine read
   what an expression depends on: the order of datasets and signals, what a data change affects, which sites draw from an
   injected `random` and what they read, `setdata`, late signals, a projection's fit, `init` signals that read data or scales, and
