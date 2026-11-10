@@ -3833,8 +3833,8 @@ function buildScales(ctx: EvalContext): void {
       // is provably unchanged (see the census helpers). This skips the O(n)
       // domain re-scan for the common case (few points change, domain holds, or
       // rows are appended inside the current domain).
-      // (signals changed: the other datasets the scale names must be the arrays it was made from)
-      if (!reuse && dom && (reusable || SCALE_READS.get(s)!.datasets.every((n) => n === dom.data || sameRows(ctx, n)))) {
+      // (a scale of one dataset's domain reads that dataset's rows alone: see scale-domain.ts)
+      if (!reuse && dom) {
         const pulse = ctx.datasetPulses.get(dom.data)
         const rows = ctx.datasets.get(dom.data) ?? []
         if (pulse && !pulse.full) {

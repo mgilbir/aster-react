@@ -303,15 +303,16 @@ describe('a kept build leaves the id counter where running it again would', () =
 // ---------------------------------------------------------------------------------------------------------------------------------
 
 describe('a build is kept from the round before only over the same inputs and reads', () => {
-  it('a dataset whose source the round before built from a signal that resolved since is copied again', () => {
-    // (`s` reads `picked`, which reads the store: the first round builds `s` under no value, the second under the store's length;
-    // `c` copies `s`, and a copy of the first round's rows is not the copy of the second's)
+  it('a dataset whose source the round before built otherwise is copied again', () => {
+    // (`s` reads a scale: the first round builds it before the scales are, the second after; `c` copies `s`, and a copy of the
+    // first round's rows is not the copy of the second's)
     const spec = {
       width: 100, height: 50, autosize: 'none',
       signals: [{ name: 'u', value: 0 }, { name: 'picked', update: "length(data('store'))" }],
+      scales: [{ name: 'x', type: 'linear', domain: [0, 100], range: [0, 100] }],
       data: [
         { name: 'store' }, { name: 't' },
-        { name: 's', source: 't', transform: [{ type: 'filter', expr: 'datum.v < picked' }] },
+        { name: 's', source: 't', transform: [{ type: 'filter', expr: "scale('x', datum.v) < picked" }] },
         { name: 'c', source: 's' },
         { name: 'e', source: 's', transform: [{ type: 'formula', as: 'w', expr: 'datum.v + 1' }] },
       ],
@@ -514,6 +515,43 @@ describe('a name read by an escape or past ASCII is a name the key holds', () =>
     }
   })
 
+  it('a scale read by a function named by an escape is a scale the mark reads', () => {
+    // (the mark is drawn from rows that do not change; the scale it reads is made from rows that do)
+    const spec = {
+      width: 100, height: 50, autosize: 'none',
+      signals: [{ name: 'u', value: 0 }],
+      data: [{ name: 'pts' }, { name: 'dom' }],
+      scales: [{ name: 'x', type: 'linear', domain: { data: 'dom', field: 'v' }, range: [0, 100] }],
+      marks: [{ type: 'symbol', name: 'm', from: { data: 'pts' }, encode: { update: { x: { signal: `sc${BS}u0061le('x', datum.v)` } } } }],
+    } as unknown as VgSpec
+    const s = createChartSession()
+    const pts = [{ v: 1 }, { v: 2 }]
+    s.evaluate(spec, { data: { pts, dom: [{ v: 0 }, { v: 4 }] }, signals: { u: 0 } })
+    for (const [hi, u] of [[8, 0], [10, 1]] as const) {
+      const input: RuntimeInput = { data: { pts, dom: [{ v: 0 }, { v: hi }] }, signals: { u } }
+      const scene = s.evaluate(spec, input)
+      expectFresh(spec, scene, input, `domain to ${hi}, u ${u}`)
+      expect((groupNamed(scene, 'm')!.items as SceneItem[])[1]!.x).toBe(200 / hi)
+    }
+  })
+
+  it('a scale whose domain reads a dataset or a hierarchy by a function named by an escape is made again', () => {
+    for (const [what, domain] of [['data', `[0, length(d${BS}u0061ta('t'))]`], ['treePath', `[0, length(tr${BS}u0065ePath('tree', 1, 3)) * 10]`]] as const) {
+      const spec = {
+        width: 100, height: 50, autosize: 'none',
+        signals: [{ name: 'u', value: 0 }],
+        data: [{ name: 't' }, { name: 'tree', transform: [{ type: 'stratify', key: 'id', parentKey: 'parent' }] }],
+        scales: [{ name: 'x', type: 'linear', domain: { signal: domain }, range: [0, 100] }],
+        marks: [{ type: 'rect', name: 'r', encode: { update: { x: { scale: 'x', value: 1 }, width: { value: 1 }, height: { value: 1 } } } }],
+      } as unknown as VgSpec
+      const s = createChartSession()
+      const nodes = (deep: boolean): Row[] => [{ id: 1 }, { id: 2, parent: 1 }, { id: 3, parent: deep ? 2 : 1 }]
+      const input = (n: number, deep: boolean, u: number): RuntimeInput => ({ data: { t: Array.from({ length: n }, (_, i) => ({ i })), tree: nodes(deep) }, signals: { u } })
+      s.evaluate(spec, input(2, false, 0))
+      for (const [n, deep, u] of [[4, true, 1], [5, false, 2]] as const) expectFresh(spec, s.evaluate(spec, input(n, deep, u)), input(n, deep, u), `${what}: ${n} rows, deep ${deep}, u ${u}`)
+    }
+  })
+
   it('a step that draws by a name an escape spells is not kept for another source', () => {
     const spec = {
       width: 50, height: 50, autosize: 'none',
@@ -614,10 +652,12 @@ describe('a pulse runs through a pipeline whose reads did not change, whichever 
   })
 
   it('a filter that reads a scale judges every row again', () => {
+    // (`cnt` reads a dataset no row change moves: the first round builds under no value of it, the second under the one the
+    // evaluation before had, and runs the pulse; the scale moved with the rows, and so did the verdict of the rows before)
     const scaled = {
       width: 100, height: 50, autosize: 'none',
-      signals: [{ name: 'u', value: 0 }],
-      data: [{ name: 't' }, { name: 'd', source: 't', transform: [{ type: 'filter', expr: "scale('x', datum.v) > 50" }] }],
+      signals: [{ name: 'u', value: 0 }, { name: 'cnt', update: "length(data('other'))" }],
+      data: [{ name: 't' }, { name: 'other', values: [{ a: 1 }] }, { name: 'd', source: 't', transform: [{ type: 'filter', expr: "scale('x', datum.v) > 50" }] }],
       scales: [{ name: 'x', type: 'linear', domain: { data: 't', field: 'v' }, range: [0, 100] }],
       marks: [{ type: 'symbol', from: { data: 'd' }, encode: { update: { x: { field: 'v' } } } }],
     } as unknown as VgSpec
@@ -655,6 +695,157 @@ describe('a pulse runs through a pipeline whose reads did not change, whichever 
       let want: SceneRoot
       try { want = reference.evaluate(drawn, input(rb)) } finally { reuse.on = true }
       expectSame(got, want, `draw ${i}`)
+    }
+  })
+})
+
+describe('what a kept build or a keyed pulse must not take over', () => {
+  it('a build of the round before whose id counter stood elsewhere is not kept', () => {
+    // (`a` reads a scale, so its rows differ between the two rounds, and so does where the counter stands when `b` is built: `b`
+    // runs again, and the counter ends where running it ends; the reference keeps no build)
+    const spec = {
+      width: 100, height: 50, autosize: 'none',
+      signals: [{ name: 'u', value: 0 }],
+      scales: [{ name: 'x', type: 'linear', domain: { data: 't', field: 'v' }, range: [0, 100] }],
+      data: [
+        { name: 't' },
+        { name: 'a', source: 't', transform: [{ type: 'filter', expr: "scale('x', datum.v) > 50" }, { type: 'identifier', as: 'id' }] },
+        { name: 'b', transform: [{ type: 'identifier', as: 'id' }] },
+      ],
+      marks: [
+        { type: 'symbol', from: { data: 'a' }, encode: { update: { x: { field: 'id' } } } },
+        { type: 'symbol', from: { data: 'b' }, encode: { update: { x: { field: 'id' } } } },
+      ],
+    } as unknown as VgSpec
+    const t = Array.from({ length: 5 }, (_, i) => ({ v: i }))
+    const mine = createChartSession()
+    const reference = createChartSession()
+    let b: Row[] = [{ w: 1 }, { w: 2 }]
+    for (let i = 0; i < 5; i++) {
+      if (i >= 2) b = [...b, { w: 10 + i }]
+      const input: RuntimeInput = { data: { t, b }, signals: { u: i } }
+      const got = mine.evaluate(spec, input)
+      reuse.on = false
+      let want: SceneRoot
+      try { want = reference.evaluate(spec, input) } finally { reuse.on = true }
+      expectSame(got, want, `evaluation ${i}`)
+    }
+  })
+
+  it('a dataset a signal moved, read by name, is read again by a pipeline a pulse runs through', () => {
+    // (`s` is filtered by `k`; `d` keeps the rows of `t2` that `s` holds: `k` and the rows of `t2` change together)
+    const spec = {
+      width: 100, height: 50, autosize: 'none',
+      signals: [{ name: 'k', value: 0 }],
+      data: [
+        { name: 't' }, { name: 't2' },
+        { name: 's', source: 't', transform: [{ type: 'filter', expr: 'datum.v > k' }] },
+        { name: 'd', source: 't2', transform: [{ type: 'filter', expr: "indata('s', 'v', datum.w)" }] },
+      ],
+      marks: [{ type: 'symbol', from: { data: 'd' }, encode: { update: { x: { field: 'w' } } } }],
+    } as unknown as VgSpec
+    const t2 = Array.from({ length: 8 }, (_, i) => ({ w: i }))
+    const s = createChartSession()
+    s.evaluate(spec, { data: { t: ROWS, t2 }, signals: { k: 0 } })
+    const steps: Array<[Row[], number]> = [[[...t2, { w: 9 }], 4], [[...t2, { w: 9 }, { w: 3 }], 2]]
+    for (const [rows, k] of steps) {
+      const input: RuntimeInput = { data: { t: ROWS, t2: rows }, signals: { k } }
+      expectFresh(spec, s.evaluate(spec, input), input, `k ${k}, ${rows.length} rows`)
+    }
+  })
+
+  it('a long dataset a pulse updated in place is not the array it was to what reads it by name', () => {
+    const spec = {
+      width: 100, height: 50, autosize: 'none',
+      signals: [{ name: 'u', value: 0 }],
+      data: [{ name: 't' }, { name: 'big' }, { name: 'big2', source: 'big', transform: [{ type: 'formula', as: 'j', expr: 'datum.i * 2' }] }],
+      marks: [{ type: 'symbol', name: 'long', from: { data: 't' }, encode: { update: { x: { field: 'v' }, size: { signal: `length(data('big2')) + srCount('long2')` } } } }],
+    } as unknown as VgSpec
+    const s = createChartSession()
+    let big = Array.from({ length: 600 }, (_, i) => ({ i }))
+    s.evaluate(spec, { data: { t: ROWS, big }, signals: { u: 0 } })
+    s.evaluate(spec, { data: { t: ROWS, big }, signals: { u: 1 } })
+    big = [...big, { i: 600 }]
+    const input: RuntimeInput = { data: { t: ROWS, big }, signals: { u: 2 } }
+    const { scene, encoded } = encodedBy(() => s.evaluate(spec, input))
+    expectFresh(spec, scene, input, 'in place')
+    expect(encoded).toEqual({ long2: N })
+  })
+
+  it('a view that fits its container hands a pass the pulse of the pass before only over the rows its items were made from', () => {
+    // (`wide` reads the width, which the two passes see apart: under `m` 380 the first pass holds `z` as `v`, the second as 0; under
+    // `m` 100 both hold it as `v`, and the second keeps the first's build -- whose pulse says how the first pass's rows changed)
+    const spec = {
+      width: 400, height: 120, autosize: { type: 'fit', contains: 'padding' },
+      signals: [{ name: 'm', value: 380 }, { name: 'wide', update: 'width > m ? 1 : 0' }],
+      data: [{ name: 't' }, { name: 'd', source: 't', transform: [{ type: 'formula', as: 'z', expr: 'datum.v * wide' }] }],
+      scales: [{ name: 'y', type: 'linear', domain: [0, 1e9], range: 'height' }],
+      axes: [{ orient: 'left', scale: 'y', format: ',.0f' }],
+      marks: [{ type: 'symbol', name: 'z', from: { data: 'd' }, encode: { update: { x: { field: 'z' }, y: { value: 5 } } } }],
+    } as unknown as VgSpec
+    const s = createChartSession()
+    const input = (rows: Row[], m: number): RuntimeInput => ({ data: { t: rows }, signals: { m } })
+    s.evaluate(spec, input(ROWS, 380))
+    const first = s.evaluate(spec, input(ROWS, 380))
+    // (the passes see the width apart: the second pass's rows hold 0)
+    expect(((groupNamed(first, 'z')!.items as SceneItem[])[3]!.datum as Row).z).toBe(0)
+    const next = append(ROWS, 3.5)
+    const scene = s.evaluate(spec, input(next, 100))
+    expectFresh(spec, scene, input(next, 100), 'both passes agree, a row appended')
+  })
+
+  it('under limits a kept build would count its rows once: none is kept, and the limit is where it was', () => {
+    // (each round of the evaluation runs the fold: 10 rows generated twice)
+    const spec = {
+      width: 100, height: 50, autosize: 'none',
+      signals: [{ name: 'u', value: 0 }, { name: 'picked', update: "length(data('store'))" }],
+      data: [{ name: 'store' }, { name: 't' }, { name: 'f', source: 't', transform: [{ type: 'fold', fields: ['a', 'b'] }] }],
+      marks: [{ type: 'symbol', from: { data: 'f' }, encode: { update: { x: { field: 'value' } } } }],
+    } as unknown as VgSpec
+    const t = Array.from({ length: 10 }, (_, i) => ({ a: i, b: i * 2 }))
+    for (const [limit, throws] of [[19, true], [20, false]] as const) {
+      const input = (u: number): RuntimeInput => ({ data: { t, store: [] }, signals: { u }, limits: { maxGeneratedRows: limit } })
+      const s = createChartSession()
+      const first = (): SceneRoot => s.evaluate(spec, input(0))
+      const second = (): SceneRoot => s.evaluate(spec, input(1))
+      if (throws) {
+        expect(first).toThrow(/maxGeneratedRows/)
+        expect(second).toThrow(/maxGeneratedRows/)
+      } else {
+        expect(first).not.toThrow()
+        expect(second).not.toThrow()
+      }
+    }
+  })
+
+  it('a step that draws from no injected source draws again in every round', () => {
+    // (vega's own `random` is the host's: a build that draws is never kept, so each round of each evaluation draws its numbers
+    // again, as a session that keeps nothing does)
+    const spec = {
+      width: 100, height: 50, autosize: 'none',
+      signals: [{ name: 'u', value: 0 }, { name: 'picked', update: "length(data('store'))" }],
+      data: [{ name: 'store' }, { name: 't' }, { name: 'd', source: 't', transform: [{ type: 'formula', as: 'r', expr: 'random()' }] }],
+      marks: [{ type: 'symbol', from: { data: 'd' }, encode: { update: { x: { field: 'r' } } } }],
+    } as unknown as VgSpec
+    const realRandom = Math.random
+    const mine = createChartSession()
+    const reference = createChartSession()
+    try {
+      let rows = ROWS
+      for (let i = 0; i < 4; i++) {
+        if (i === 2) rows = append(rows, 30)
+        const input: RuntimeInput = { data: { t: rows, store: [] }, signals: { u: i } }
+        let n = 0
+        Math.random = () => (++n % 97) / 97
+        const got = mine.evaluate(spec, input)
+        n = 0
+        reuse.on = false
+        let want: SceneRoot
+        try { want = reference.evaluate(spec, input) } finally { reuse.on = true }
+        expectSame(got, want, `evaluation ${i}`)
+      }
+    } finally {
+      Math.random = realRandom
     }
   })
 })
