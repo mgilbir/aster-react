@@ -153,10 +153,19 @@ interface ScaleEntry {
  *   cost first `claim()` it: the committed state is then flagged `stale`, so an
  *   evaluation that dies before committing can never leave a half-updated state
  *   behind (the next evaluation re-derives from scratch).
+ *
+ * A view that fits its viewport makes two passes (see evaluateChartImpl): the first at the viewport, the second at the fitted size.
+ * The committed state is the second's, and it carries the first's (`fitFirst`), so each pass of the next evaluation reuses what the
+ * same pass made before (the same size, usually): the first pass is made from `fitFirst`, the second from the committed state.
  */
 interface IncrementalState {
   /** Evaluation counter; reused items keep the generation they were encoded in. */
   gen: number
+  /**
+   * What the first pass of a view that fits its viewport left, when this state is the second's: the next evaluation's first pass is
+   * made from it. Absent when the evaluation made one pass, or when its first pass failed (it is then made from this state, as before).
+   */
+  fitFirst?: IncrementalState
   /** Fingerprint of the final evaluation context (signals, size, overrides). */
   fp: string
   /** The final top-level scales of the evaluation. */
@@ -191,10 +200,16 @@ const STATES = new WeakMap<CompiledChart, IncrementalState>()
 
 /** One evaluation's view of the committed state (shared across fit-loop passes). */
 interface EvalTxn {
+  /** The committed state: what the evaluation reuses (the second pass of a fit view's), and where the view's id counter stands. */
   prev: IncrementalState | undefined
+  /** The committed state's `fitFirst`, when it can be reused: what the first pass of a view that fits its viewport reuses. */
+  firstPrev?: IncrementalState
   gen: number
-  /** Structures this evaluation already updated in place (not reusable again). */
-  claimed: Set<string>
+  /**
+   * The structures this evaluation already updated in place, by identity (a dataset's state, its steps and their state, a census):
+   * not reusable again, from whichever state holds them.
+   */
+  claimed: WeakSet<object>
   /**
    * The host datasets whose rows are those the committed state was made from, by the array the host gave then (see
    * {@link DataStability}): the steps made from them need not run again.
@@ -234,7 +249,10 @@ function beginTxn(engine: IncrementalEngine, chart: CompiledChart, unchanged?: D
   if (typeof engine?.applyPipelineWithPulse !== 'function') throw new Error('[aster] an evaluation that keeps incremental state needs the incremental engine (incremental-engine.ts)')
   const committed = STATES.get(chart)
   const prev = committed && !committed.stale ? committed : undefined
-  return { prev, gen: (committed?.gen ?? 0) + 1, claimed: new Set(), engine, ...(unchanged ? { unchanged } : {}) }
+  // (a claim flags the committed state stale as well as the state it was made in, so a committed state that is not stale carries a
+  // first-pass state no evaluation has half-updated)
+  const firstPrev = prev?.fitFirst
+  return { prev, ...(firstPrev ? { firstPrev } : {}), gen: (committed?.gen ?? 0) + 1, claimed: new WeakSet(), engine, ...(unchanged ? { unchanged } : {}) }
 }
 
 /**
@@ -513,8 +531,13 @@ interface EvalContext {
   datasetPulses: Map<string, StepPulse | null>
   /** Input pulses for source datasets (from the host/session): `dataChanges` and `dataPulse`. */
   inputPulses?: Map<string, StepPulse>
-  /** The committed state of the previous evaluation (read-only; see IncrementalState). */
+  /**
+   * The state of the previous evaluation this pass reuses (read-only but for what it claims; see IncrementalState): the committed
+   * state, or for the first pass of a view that fits its viewport the committed state's `fitFirst`.
+   */
   prev?: IncrementalState
+  /** The committed state (`EvalTxn.prev`): a claim flags it stale too, whichever state this pass reuses. */
+  committed?: IncrementalState
   /** The host datasets whose rows equal those `prev` was made from (see {@link DataStability}). */
   unchanged?: DataStability
   /** The state the pass before this one left (see `EvalTxn.lastPass`). */
@@ -526,8 +549,8 @@ interface EvalContext {
   idStart: number
   /** Evaluation generation (stamped on newly encoded items). */
   gen: number
-  /** Structures already updated in place during this evaluation. */
-  claimed: Set<string>
+  /** Structures already updated in place during this evaluation (`EvalTxn.claimed`). */
+  claimed: WeakSet<object>
   /** Non-signal inputs that invalidate reuse (domainRaw, text metrics). */
   extraFp: string
   /** Memo for ctxFpOf; cleared whenever signalParams may have changed. */
@@ -655,13 +678,15 @@ export interface ChartInfo {
 function prepareChartCtx(
   chart: CompiledChart,
   input: RuntimeInput = {},
-  txn: EvalTxn = { prev: undefined, gen: 1, claimed: new Set() },
+  txn: EvalTxn = { prev: undefined, gen: 1, claimed: new WeakSet() },
   /** Whether `input.width`/`input.height` is a size someone chose (the host or a fit resize), not just the resolved default. */
   explicitSize: { width: boolean; height: boolean } = { width: input.width != null, height: input.height != null },
   /** The view size signals as written, negative included (see {@link signedViewSize}): the first autosize pass reads them so. */
   signed?: { width?: number; height?: number },
   /** Present when the view makes more than one dataflow pass: what the pass before it left (see `PassMemory`). */
   passMemory?: PassMemory,
+  /** The state of the previous evaluation this pass reuses (see `EvalContext.prev`); the view's id counter is the committed state's. */
+  prev: IncrementalState | undefined = txn.prev,
 ): { ctx: EvalContext; width: number; height: number } {
   // The deadline belongs to the enclosing limits scope (evaluateChart /
   // getChartInfo / renderSpec / session), so one wall clock covers the whole
@@ -739,7 +764,7 @@ function prepareChartCtx(
     ]),
     hierarchies: transformHierarchies, affected: new Set(), incremental: false, ...(txn.engine ? { engine: txn.engine } : {}), deadline, checkDeadline, markItems: new Map(), markContainers: new Map(),
     datasetPulses: new Map(),
-    prev: txn.prev, ...(txn.unchanged ? { unchanged: txn.unchanged } : {}), ...(txn.lastPass ? { earlier: txn.lastPass } : {}), draft: newState(txn.gen), ids: { value: txn.prev?.idCounter ?? 0 }, idStart: txn.prev?.idCounter ?? 0, gen: txn.gen, claimed: txn.claimed, extraFp, dsEpoch: 0, scaleReuse: new Map(), distinctCache: new WeakMap(),
+    prev, committed: txn.prev, ...(txn.unchanged ? { unchanged: txn.unchanged } : {}), ...(txn.lastPass ? { earlier: txn.lastPass } : {}), draft: newState(txn.gen), ids: { value: txn.prev?.idCounter ?? 0 }, idStart: txn.prev?.idCounter ?? 0, gen: txn.gen, claimed: txn.claimed, extraFp, dsEpoch: 0, scaleReuse: new Map(), distinctCache: new WeakMap(),
     domainRaw: input.domainRaw ? new Map(Object.entries(input.domainRaw).map(([k, v]) => [k, v])) : undefined,
     // Image urls are vetted when the host passes a policy, and with the default
     // policy whenever it passes `limits` (limits mean "this spec is untrusted").
@@ -775,7 +800,7 @@ function prepareChartCtx(
   // Incremental reuse needs both a statement of what changed and a previous
   // state to be incremental FROM; otherwise everything re-derives (and the
   // fresh state is still recorded for the next call).
-  ctx.incremental = changedNames.size > 0 && txn.prev !== undefined
+  ctx.incremental = changedNames.size > 0 && prev !== undefined
 
   // Resolve signal `update` expressions, datasets, and scales to a fixed
   // point. Signals can reference data/scales and vice versa (e.g. brush-bounded
@@ -1984,8 +2009,11 @@ function buildContent(
   txn: EvalTxn,
   fitted = false,
   signed?: { width?: number; height?: number },
-  /** Present: this build is a pass of a view that makes another (fit); `prev`: what the pass before it left. */
-  order?: { prev?: PassRecord },
+  /**
+   * Present: this build is a pass of a view that makes another (fit); `prev`: what the pass before it left; `first`: it is the first
+   * pass, made from what the first pass of the previous evaluation left (`EvalTxn.firstPrev`).
+   */
+  order?: { prev?: PassRecord; first?: boolean },
 ): BuiltContent {
   const first = buildContentPass(chart, input, cw, ch, txn, fitted, signed, undefined, order)
   const failures = first.ctx.abort.failures
@@ -2014,6 +2042,15 @@ function buildContent(
   return second
 }
 
+/**
+ * Whether a dataset of the view may draw from a random source the host injected. The first pass of such a fit view keeps starting
+ * from the committed state, as both passes did before each reused its own: the engine's pulse path draws without a tape (see
+ * random-tape.ts), so which pass takes a pulse decides which numbers the source hands out, and the numbers must stay those.
+ */
+function drawsInDatasets(chart: CompiledChart, input: RuntimeInput): boolean {
+  return input.random !== undefined && mayDrawRandom(chart.data)
+}
+
 /** Log the warnings the layouts of the pass that is kept gave, in the order they gave them. */
 function warnOf(ctx: EvalContext): void {
   for (const message of ctx.layoutState.warnings) ctx.logger.warn(message)
@@ -2028,7 +2065,7 @@ function buildContentPass(
   fitted = false,
   signed?: { width?: number; height?: number },
   cut?: AxisAbort['cut'],
-  order?: { prev?: PassRecord },
+  order?: { prev?: PassRecord; first?: boolean },
 ): BuiltContent {
   const prepared = prepareChartCtx(
     // (the first build reads the size from the spec and the host's input itself; only a fit-resize overrides it)
@@ -2036,6 +2073,9 @@ function buildContentPass(
     fitted ? { width: true, height: true } : { width: input.width != null, height: input.height != null },
     signed,
     order !== undefined ? { prev: order.prev, cur: { guides: new Map(), scales: new Map(), places: new Map(), legends: new Map(), inputs: new Map() } } : undefined,
+    // (the first pass of a fit view whose previous evaluation left no first pass reuses the committed state, as the second does: what
+    // the first claims, the second then cannot claim again, see `claim`)
+    order?.first === true && !drawsInDatasets(chart, input) ? txn.firstPrev ?? txn.prev : txn.prev,
   )
   const { ctx } = prepared
   ctx.abort.cut = cut
@@ -2187,7 +2227,7 @@ export function evaluateChartPending(engine: IncrementalEngine, chart: CompiledC
  * engine is not involved (`renderSpec`, `getChartInfo`). The scene is what `evaluateChart` gives a chart evaluated for the first time.
  */
 export function evaluateOnce(chart: CompiledChart, input: RuntimeInput = {}): SceneRoot {
-  const txn: EvalTxn = { prev: undefined, gen: 1, claimed: new Set() }
+  const txn: EvalTxn = { prev: undefined, gen: 1, claimed: new WeakSet() }
   return withLimits(input.limits, () => withTextMetricsProvider(input.textMetrics, () => evaluateChartImpl(chart, input, txn, {})))
 }
 
@@ -2230,7 +2270,7 @@ function evaluateChartImpl(chart: CompiledChart, hostInput: RuntimeInput, txn: E
     ch = Math.max(0, initialH - base.top - base.bottom)
     built = buildContent(chart, input, cw, ch, txn, true)
   } else {
-    built = buildContent(chart, input, cw, ch, txn, false, undefined, fitting ? {} : undefined)
+    built = buildContent(chart, input, cw, ch, txn, false, undefined, fitting ? { first: true } : undefined)
   }
   if (auto === 'fit' || auto === 'fit-x' || auto === 'fit-y') {
     // A `width`/`height` signal (update or init, e.g. vega-lite's
@@ -2261,7 +2301,14 @@ function evaluateChartImpl(chart: CompiledChart, hostInput: RuntimeInput, txn: E
       if (nw !== cw || nh !== ch) {
         cw = nw
         ch = nh
-        built = buildContent(chart, { ...input, changedDatasets: undefined }, cw, ch, txn, true, undefined, built.record !== undefined ? { prev: built.record } : undefined)
+        const first = built.ctx
+        // (the second pass is made from the committed state, the second pass of the previous evaluation, at the fitted size it had:
+        // what changed since is what changed since then, so the pass is told, as the first was)
+        built = buildContent(chart, input, cw, ch, txn, true, undefined, built.record !== undefined ? { prev: built.record } : undefined)
+        // The next evaluation's first pass is made from this one's (see `IncrementalState.fitFirst`), unless it logged a recovered error:
+        // as for the committed state (see `commit()`), the partial result of a failure is not a base (the next first pass is then made
+        // from the committed state).
+        if (!first.failed) built.ctx.draft.fitFirst = first.draft
       }
     }
   }
@@ -2765,9 +2812,8 @@ function buildDatasetsOf(ctx: EvalContext, inputData: Record<string, unknown[]>)
       const earlierDS = hasIds ? ctx.draft.datasets.get(name) ?? ctx.earlier?.datasets.get(name) : undefined
       const incremental = ctx.incremental && inPulse !== null && !inPulse.full && prevDS !== undefined && earlierDS === undefined
         && prevDS.fp === passFp && prevDS.steps.length === d.transform.length
-        && prevDS.inputLength === pulseBaseLength(inPulse) && !ctx.claimed.has(`ds:${name}`)
+        && prevDS.inputLength === pulseBaseLength(inPulse) && claim(ctx, datasetParts(prevDS))
       if (incremental) {
-        claim(ctx, `ds:${name}`)
         if (shared) rows = copyRows(rows)
         const res = ctx.engine!.applyPipelineWithPulse(rows, d.transform, tctx, name, inPulse!, prevDS, state)
         rows = res.rows
@@ -2853,7 +2899,7 @@ function reusableRuns(ctx: EvalContext, name: string, inputs: readonly unknown[]
   const draft = ctx.draft.datasets.get(name)
   if (sameInputs(draft)) runs.push(draft)
   const prev = ctx.prev?.datasets.get(name)
-  if (prev?.records !== undefined && prev.inputs !== undefined && prev.steps.length === steps && !ctx.affected.has(name) && !ctx.claimed.has(`ds:${name}`)) {
+  if (prev?.records !== undefined && prev.inputs !== undefined && prev.steps.length === steps && !ctx.affected.has(name) && !claimed(ctx, datasetParts(prev))) {
     // a host dataset is the rows the previous evaluation was given when the host's session says these are equal to them; a derived one
     // is the rows its sources made, which a kept source hands on as the same arrays
     if (raw ? ctx.unchanged?.has(name) === true && prev.inputs.length === 1 && prev.inputs[0] === ctx.unchanged.get(name) : sameInputs(prev)) runs.push(prev)
@@ -3260,12 +3306,35 @@ function advanceDiscCensus(cen: DiscCensus, rows: Row[], pulse: StepPulse): Disc
   return cen
 }
 
-/** Mark the committed state as updated in place (see IncrementalState). */
-function claim(ctx: EvalContext, key: string): boolean {
-  if (!ctx.prev || ctx.claimed.has(key)) return false
-  ctx.claimed.add(key)
+/**
+ * Claim the structures of the reused state a fast path is about to update in place (see IncrementalState): false when there is no
+ * state to reuse or this evaluation already updated one of them -- by identity, so a structure two states share (the two passes of a
+ * fit view can keep the same steps) is updated once. The reused and the committed states are flagged stale.
+ */
+function claim(ctx: EvalContext, parts: readonly object[]): boolean {
+  if (!ctx.prev || claimed(ctx, parts)) return false
+  for (const part of parts) ctx.claimed.add(part)
   ctx.prev.stale = true
+  if (ctx.committed !== undefined) ctx.committed.stale = true
   return true
+}
+
+/** Whether this evaluation already updated one of `parts` in place (see {@link claim}). */
+function claimed(ctx: EvalContext, parts: readonly object[]): boolean {
+  for (const part of parts) if (ctx.claimed.has(part)) return true
+  return false
+}
+
+/** What a pulse updates in place in a dataset's state: the state, the rows of its steps and the state its steps leave. */
+function datasetParts(ds: DatasetState): object[] {
+  const parts: object[] = [ds, ...ds.steps]
+  for (const v of ds.stepState.values()) if (typeof v === 'object' && v !== null) parts.push(v)
+  return parts
+}
+
+/** What advancing a census updates in place (see advanceContCensus, advanceDiscCensus). */
+function censusParts(cen: ContCensus | DiscCensus): object[] {
+  return 'counts' in cen ? [cen, cen.vals, cen.counts, cen.firstIdx] : [cen, cen.vals]
 }
 
 /** A scale domain / census reads its field through the one shared accessor cache (vega-util `field()` semantics). */
@@ -3335,20 +3404,20 @@ function buildScales(ctx: EvalContext): void {
       // is provably unchanged (see the census helpers). This skips the O(n)
       // domain re-scan for the common case (few points change, domain holds, or
       // rows are appended inside the current domain).
-      if (!reuse && dom && !ctx.claimed.has(`scale:${s.name}`)) {
+      if (!reuse && dom) {
         const pulse = ctx.datasetPulses.get(dom.data)
         const rows = ctx.datasets.get(dom.data) ?? []
         if (pulse && !pulse.full) {
           if (CONTINUOUS_TYPES.has(s.type) && prevEntry.cont && prevEntry.cont.finite
             && prevEntry.cont.data === dom.data && prevEntry.cont.field === dom.field) {
             // The census is updated in place for the append-only form: claim it.
-            if (claim(ctx, `scale:${s.name}`)) {
+            if (claim(ctx, censusParts(prevEntry.cont))) {
               const next = advanceContCensus(prevEntry.cont, rows, pulse)
               if (next) { reuse = true; entry = { ...prevEntry, cont: next } }
             }
           } else if (DISCRETE_TYPES.has(s.type) && prevEntry.disc && discreteCensusApplies(dom)
             && prevEntry.disc.data === dom.data && prevEntry.disc.field === dom.field) {
-            if (claim(ctx, `scale:${s.name}`)) {
+            if (claim(ctx, censusParts(prevEntry.disc))) {
               const next = advanceDiscCensus(prevEntry.disc, rows, pulse)
               if (next) { reuse = true; entry = { ...prevEntry, disc: next } }
             }
