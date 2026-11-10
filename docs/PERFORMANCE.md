@@ -216,6 +216,15 @@ chunk loaded on demand is reported next to the row and is not in the gzip column
 | core + `@aster-charts/core/geo` (marginal) | 16.0 | |
 | core + `@aster-charts/core/transforms` (marginal) | 39.2 | |
 
+Transitions (the `transition` prop, [ANIMATION.md](ANIMATION.md)), measured 2026-11-09 with the same command against the tree
+before them (which read 152.7, 163.9, 205.7, 182.8, 200.1 and 308.8 for the first six rows): `@aster-charts/core` 152.8, `useChart`
+164.4, `<Chart>` 206.9, `<SvgChart>` 184.0, `<SvgChart>` + `interaction` 201.6, `<Chart>` + VL 310.2 kB gzip eager, and the
+on-demand column of the React rows up by 3.4 kB (to 64.5 and 62.5): the animation module, a new marginal row
+`core + @aster-charts/core/transition` of 3.1 kB that an app fetches only when a chart sets the prop. The eager growth is the
+prop handling and the scene stamps (0.85 kB of `<Chart>`'s 1.2) and the chunk boundary the on-demand module draws around the
+colour and field code it shares with core (0.35 kB; `useChart` pays only that). `budget.mjs` keeps the breakdown. With the `maxItems` limit and on top of the fit-view work
+(the combined stack, measured 2026-11-09 with the same command): the transition module is 3.3 kB and `<Chart>` 207.4 kB gzip eager.
+
 The manifests list only the files that really have an import effect (see
 [ARCHITECTURE.md](ARCHITECTURE.md#side-effects-and-tree-shaking)). Without a `sideEffects` field a bundler must assume
 every module has effects, so `import { useChart }` pulled in `Chart`, `ChartStream`, `useChartStream`,

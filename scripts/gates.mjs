@@ -64,7 +64,7 @@ export const GATES = [
   },
   {
     name: 'react-browser', args: ['--filter', '@aster-charts/react', 'run', 'test:browser'], tags: ['browser'],
-    why: '<Chart> and <SvgChart interaction> pointer/keyboard interaction, selection, pan/zoom, signal.on, bound inputs and the a11y overlay in a real Chromium; <SvgChart> without interaction renders and reports the missing event loop',
+    why: '<Chart> and <SvgChart interaction> pointer/keyboard interaction, selection, pan/zoom, signal.on, bound inputs and the a11y overlay in a real Chromium; <SvgChart> without interaction renders and reports the missing event loop; a `transition` draws real frames and settles on the exact final svg',
   },
   {
     name: 'browser-conformance', args: ['conformance:browser'], tags: ['browser'],

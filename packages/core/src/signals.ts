@@ -89,9 +89,10 @@ export interface SignalEventHooks {
    * Called once per dataset that `modify(...)` edited while an event (or `setSignal`) was processed, with the
    * dataset's input rows afterwards. The host keeps them and hands them back as `data[name]` to the next
    * evaluation (and as `SignalBindOptions.data` when it binds again): that evaluation is then the scene vega
-   * would show, the dataset being an input like any other (selection stores are datasets).
+   * would show, the dataset being an input like any other (selection stores are datasets). `fromTimer` is true when
+   * the edit came from a `timer` event stream's tick (a Vega-Lite `time` animation advancing a frame), not from input.
    */
-  onData?: (name: string, rows: unknown[]) => void
+  onData?: (name: string, rows: unknown[], fromTimer: boolean) => void
   /**
    * Where errors and warnings go (vega's logger): a bad selector or expression is
    * reported at bind time, an expression that throws while an event is processed
@@ -804,12 +805,14 @@ function bindSignalEventsDefs(
   // the host re-renders (and binds again) on being told, which must not happen between two scopes' runs of the same event.
   const notified = { changed: new Set<string>(), edited: new Set<string>() }
   let batching = 0
+  /** A `timer` stream's tick is being delivered (what it edits is told to the host as the timer's). */
+  let timerTick = false
   const flushNotified = (): void => {
     const edited = [...notified.edited]
     const changed = [...notified.changed]
     notified.edited.clear()
     notified.changed.clear()
-    for (const name of edited) hooks.onData?.(name, inputRows.get(name)!)
+    for (const name of edited) hooks.onData?.(name, inputRows.get(name)!, timerTick)
     for (const key of changed) hooks.onSignal?.(key, readKey(key), signals)
   }
 
@@ -956,7 +959,10 @@ function bindSignalEventsDefs(
         }, type as number | undefined)
         byDelay.set(key, (st = fresh))
       }
-      const mine = (e: ExtEvent): void => deliverTo(s, e, false, {} as Event)
+      const mine = (e: ExtEvent): void => {
+        timerTick = true
+        try { deliverTo(s, e, false, {} as Event) } finally { timerTick = false }
+      }
       st.deliver = mine
       const owned = st
       detachFns.push(() => { if (owned.deliver === mine) owned.deliver = null })

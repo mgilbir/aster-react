@@ -12,7 +12,8 @@
  *   - `signal.on` mark events fire (and the scene hit index sees the same click),
  *   - bound inputs (range / select / checkbox) can be operated and notify listeners,
  *   - brushing, drag-pan, wheel-zoom and their pointer capture still work,
- *   - a11y nodes are positioned over the marks they describe (padding included).
+ *   - a11y nodes are positioned over the marks they describe (padding included),
+ *   - with `transition`, new data is drawn as real animation frames that settle on the exact svg of a plain chart.
  *
  * Every check runs against both components, each bundled on its own (so the light one is the real light bundle):
  * `<Chart>` from the package entry, and `<SvgChart interaction={interaction}>` from `@aster-charts/react/lite` +
@@ -69,6 +70,13 @@ window.__mount = (spec, props, record, listen, hostCss) => {
   window.__ref = React.createRef()
   if (window.__root) window.__root.unmount()
   window.__root = createRoot(container)
+  window.__spec = spec
+  flushSync(() => window.__root.render(${element}))
+}
+// Render the mounted chart again with other props (the same root: an update, not a new chart).
+window.__set = (props) => {
+  const spec = window.__spec
+  const p = { ...props }
   flushSync(() => window.__root.render(${element}))
 }
 // Several charts on one page between two plain buttons (the sequence a keyboard user tabs through); render again to update.
@@ -659,6 +667,61 @@ async function cursorSuite(page: Page, renderers: Array<'svg' | 'canvas'>): Prom
   await page.evaluate(() => { document.getElementById('pad')!.remove(); document.getElementById('root')!.style.cssText = ''; window.scrollTo(0, 0) })
 }
 
+/**
+ * `transition`: new data is drawn as real frames (requestAnimationFrame in Chromium), and the last one is exactly the svg a
+ * chart without `transition` draws for that data.
+ */
+async function transitionSuite(page: Page): Promise<void> {
+  console.log('[transition] a change of data animates over real frames and settles on the exact final svg')
+  const bars = {
+    $schema: 'https://vega.github.io/schema/vega/v6.json',
+    width: 400, height: 240, padding: 30, autosize: 'none', data: [{ name: 't' }],
+    scales: [{ name: 'y', type: 'linear', domain: [0, 10], range: 'height' }],
+    axes: [{ scale: 'y', orient: 'left' }],
+    marks: [{ type: 'rect', from: { data: 't' }, key: 'k', encode: { update: {
+      x: { signal: "datum.k === 'a' ? 20 : 220" }, width: { value: 100 }, y: { scale: 'y', field: 'v' }, y2: { scale: 'y', value: 0 },
+      fill: { field: 'c' },
+    } } }],
+  }
+  const rows = (va: number, ca: string) => ({ t: [{ k: 'a', v: va, c: ca }, { k: 'b', v: 5, c: 'steelblue' }] })
+  const transition = { duration: 400, easing: 'linear' }
+  await mount2(page, bars, { width: 460, height: 300, data: rows(2, '#ff0000'), transition })
+  await page.waitForTimeout(100) // the interpolation module the prop asked for (it is in this bundle: an import, no fetch)
+  // sample the first bar on every frame from the update until the transition is over (a string: the page function must not be
+  // transpiled, whose name helper would not exist in the page)
+  const next = { width: 460, height: 300, data: rows(8, '#0000ff'), transition }
+  const seen = await page.evaluate(`new Promise((resolve) => {
+    const out = { d: [], fill: [] }
+    window.__set(${JSON.stringify(next)})
+    const t0 = performance.now()
+    const sample = () => {
+      const bar = document.querySelector('svg .mark-rect path')
+      out.d.push(bar.getAttribute('d'))
+      out.fill.push(bar.getAttribute('fill'))
+      if (performance.now() - t0 < 700) requestAnimationFrame(sample)
+      else resolve(out)
+    }
+    sample()
+  })`) as { d: string[]; fill: string[] }
+  const heights = seen.d.map((d) => Number(/v([-\d.e]+)/.exec(d)?.[1]))
+  const distinct = new Set(seen.d)
+  check(distinct.size >= 6, `the bar is drawn at ${distinct.size} distinct heights over the frames (at least 6)`)
+  const first = heights[0]!
+  const last = heights.at(-1)!
+  check(first < last && heights.some((h) => h > first + 1 && h < last - 1), `it grows through intermediate heights (${first} .. ${last})`)
+  check(heights.every((h, i) => i === 0 || h >= heights[i - 1]! - 1e-9), 'monotonically (a linear transition in one direction)')
+  check(seen.fill.some((f) => /^rgb\(/.test(f)) && seen.fill[0] === '#ff0000' && seen.fill.at(-1) === '#0000ff', `its colour is mixed in between (${seen.fill[0]} .. ${seen.fill.at(-1)})`)
+  const settled = await page.evaluate(() => document.querySelector('#chart-host svg')!.outerHTML)
+  await mount2(page, bars, { width: 460, height: 300, data: rows(8, '#0000ff') })
+  const fresh = await page.evaluate(() => document.querySelector('#chart-host svg')!.outerHTML)
+  check(settled === fresh, 'the settled svg is exactly the one a chart without `transition` draws')
+}
+
+const mount2 = async (page: Page, s: Record<string, unknown>, props: Record<string, unknown>): Promise<void> => {
+  await page.evaluate(([sp, pr]) => (window as never as { __mount: (...a: unknown[]) => void }).__mount(sp, pr, [], []), [s, props] as const)
+  await page.waitForSelector('svg .mark-rect path')
+}
+
 /** `<SvgChart>` without `interaction`: renders, keeps what needs no hit testing, reports the rest. */
 async function plainSuite(page: Page): Promise<void> {
   console.log('[SvgChart without interaction] renders, brushes and zooms; reports what it cannot do')
@@ -755,6 +818,7 @@ try {
     await sizingSuite(page)
     if (variant === 'SvgChart') await plainSuite(page)
     else { await suite(page); await tabStopSuite(page); await cursorSuite(page, variant === 'Chart' ? ['svg', 'canvas'] : ['svg']) }
+    await transitionSuite(page)
     await page.close()
   }
 } finally {

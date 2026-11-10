@@ -28,6 +28,7 @@ import type { HitIndex } from '@aster-charts/core/hit'
 import type { CursorTracker, SignalBinding } from '@aster-charts/core/signals'
 import type { CanvasCapability, InteractionCapability } from './capabilities.js'
 import type { ChartHandle, ChartProps } from './chart-types.js'
+import { createSceneAnimator, loadTransitions, resolveTransition, type SceneAnimator } from './transition.js'
 import {
   baseDomainsOf,
   filterLegendScene,
@@ -64,7 +65,8 @@ interface SignalStore {
   get: () => Record<string, unknown>
   subscribe: (listener: () => void) => () => void
   set: (next: Record<string, unknown>) => void
-  merge: (next: Record<string, unknown>) => void
+  /** `tag` sees the new snapshot before the listeners are told of it. */
+  merge: (next: Record<string, unknown>, tag?: (snapshot: Record<string, unknown>) => void) => void
   /** Empty the store without notifying (for a state derived from a render input). */
   reset: () => void
 }
@@ -83,8 +85,9 @@ function createSignalStore(): SignalStore {
       snapshot = { ...next }
       emit()
     },
-    merge(next) {
+    merge(next, tag) {
       snapshot = { ...snapshot, ...next }
+      tag?.(snapshot)
       emit()
     },
     reset() {
@@ -122,6 +125,26 @@ function sameDatum(a: unknown, b: unknown): boolean {
   }
   return subset(a as Record<string, unknown>, b as Record<string, unknown>)
     || subset(b as Record<string, unknown>, a as Record<string, unknown>)
+}
+
+/**
+ * Whether `data` holds other rows than `prev`: a dataset added, removed, or given another rows array (`dataChanges` comes
+ * with a new array). A `data` object made anew on every render with the same arrays is the same data.
+ */
+function datasetsChanged(data: Record<string, unknown[]> | undefined, prev: Record<string, unknown[]> | undefined): boolean {
+  if (data === prev) return false
+  const a = data ?? {}
+  const b = prev ?? {}
+  const keys = Object.keys(a)
+  if (keys.length !== Object.keys(b).length) return true
+  return keys.some((k) => !Object.hasOwn(b, k) || a[k] !== b[k])
+}
+
+/** Two row lists with the same content (a store's few tuples, compared when a timer rewrote it). */
+function sameRows(a: unknown[] | undefined, b: unknown[]): boolean {
+  if (a === undefined || a.length !== b.length) return false
+  for (let i = 0; i < a.length; i++) if (a[i] !== b[i] && datumKey(a[i] as Record<string, unknown>) !== datumKey(b[i] as Record<string, unknown>)) return false
+  return true
 }
 
 /** True when the spec has `signal.on` event streams. */
@@ -344,6 +367,7 @@ function ChartView({
   incremental = true,
   renderer: requestedRenderer = 'svg',
   denseMarks = 'auto',
+  transition,
   signalListeners,
   onSignal,
   onStreamInput,
@@ -480,6 +504,11 @@ function ChartView({
   if (dataStoreRef.current == null) dataStoreRef.current = createSignalStore()
   const dataStore = dataStoreRef.current
   const editedData = React.useSyncExternalStore(dataStore.subscribe, dataStore.get, dataStore.get) as Record<string, unknown[]>
+  // The snapshots of the edited datasets that a `timer` stream made (a Vega-Lite `time` animation's next frame): a scene
+  // they cause is a change of data that a `transition` animates, where an edit by input (a brush) is drawn at once.
+  const timerEditsRef = React.useRef<WeakSet<object> | null>(null)
+  timerEditsRef.current ??= new WeakSet()
+  const timerEdits = timerEditsRef.current
   const inputData = React.useMemo(
     () => (Object.keys(editedData).length ? { ...(data ?? {}), ...editedData } : data),
     [data, editedData],
@@ -699,15 +728,48 @@ function ChartView({
   React.useEffect(() => {
     if (signals) signalStore.merge(signals)
   }, [signals, signalStore])
+  // `transition`: a change of data is drawn as frames from the picture on screen to the new scene (see transition.ts). The
+  // options are read when a transition starts, so a new options object restarts nothing.
+  const transitionOptions = resolveTransition(transition)
+  const transitionRef = React.useRef(transitionOptions)
+  transitionRef.current = transitionOptions
+  const transitionOn = transitionOptions !== null
+  const reportTransitionError = React.useCallback((error: Error): void => {
+    const e = new Error(`[aster] transition: ${error.message}; the chart draws its new scene at once`)
+    if (onErrorRef.current) onErrorRef.current(e)
+    else (loggerRef.current ?? console).warn(e.message)
+  }, [])
+  // The animator draws into the <svg> and knows what it shows. Every draw goes through it (or tells it), so a
+  // `transition` set later starts from the true picture.
+  const animatorRef = React.useRef<SceneAnimator | null>(null)
+  animatorRef.current ??= createSceneAnimator((svg, sc) => patchSceneDom(svg, sc, { denseMarks: false }), reportTransitionError)
+  const animator = animatorRef.current
+  // the interpolation module loads as soon as the prop is set, so the first change of data can animate
+  React.useEffect(() => {
+    if (transitionOn) loadTransitions().catch((e: unknown) => reportTransitionError(e instanceof Error ? e : new Error(String(e))))
+  }, [transitionOn, reportTransitionError])
+  // unmount (and a spec swap, which is a new chart) ends a running transition: no frame is requested after it
+  React.useLayoutEffect(() => () => animator.cancel(), [animator])
+  // The inputs of the last commit: a scene is a change of DATA (what a transition animates) when it came with new
+  // rows in `data` (another array for a dataset), new rows in the spec, a streamed scene, or a dataset a `timer` stream
+  // moved on (a Vega-Lite `time` animation's next frame).
+  const committedInputsRef = React.useRef<{ data: unknown; sceneOverride: unknown; spec: unknown; edited: unknown } | null>(null)
+
   // Incremental updates: create the <svg> once, then patch changed attributes
   // in place instead of re-serializing and re-parsing the whole markup every render.
   // `renderer` is a dependency: switching back from canvas mounts a fresh, empty
   // host element that must be filled even though the scene did not change.
   React.useLayoutEffect(() => {
-    if (!displayScene || renderer === 'canvas') return
+    if (!displayScene || renderer === 'canvas') {
+      animator.reset(null)
+      return
+    }
     // A sceneOverride still needs its DOM created: stream markup is client-owned
     // (no dangerouslySetInnerHTML), so the first frame builds the element here.
-    if (!incremental && sceneOverride === undefined) return
+    if (!incremental && sceneOverride === undefined) {
+      animator.reset(displayScene)
+      return
+    }
     const host = svgHostRef.current
     if (!host) return
     // This commit rendered the full SVG from this exact scene and the browser
@@ -718,6 +780,7 @@ function ChartView({
       hasPatchedRef.current = true
       domSceneRef.current = displayScene
       domDenseRef.current = false // string markup is always per-item
+      animator.reset(displayScene)
       // React has committed the string; never keep a large copy alive (and a
       // later remount of the host starts empty and is filled below).
       if (markupBox != null && incremental) markupBox.__html = ''
@@ -728,16 +791,31 @@ function ChartView({
       // Patch when the scene changed, or when the render mode flipped (e.g. a
       // client-only dense mount, or hydration handing over to batched marks).
       if (domSceneRef.current !== displayScene || domDenseRef.current !== denseSvg) {
-        patchSceneDom(existing, displayScene, { denseMarks: denseSvg })
+        const options = transitionRef.current
+        if (options !== null && !denseSvg && !domDenseRef.current) {
+          const prev = committedInputsRef.current
+          const dataChanged = prev !== null && (
+            datasetsChanged(data, prev.data as typeof data) || spec !== prev.spec
+            || (sceneOverride !== undefined && sceneOverride !== prev.sceneOverride)
+            || (editedData !== prev.edited && timerEdits.has(editedData)))
+          animator.draw(existing, displayScene, dataChanged ? options : null)
+        } else {
+          patchSceneDom(existing, displayScene, { denseMarks: denseSvg })
+          animator.reset(displayScene)
+        }
         domDenseRef.current = denseSvg
       }
     } else {
       host.replaceChildren(renderSceneToDomElement(displayScene, document, { denseMarks: denseSvg }))
       domDenseRef.current = denseSvg
+      animator.reset(displayScene)
     }
     domSceneRef.current = displayScene
     hasPatchedRef.current = true
-  }, [incremental, renderer, displayScene, sceneOverride, domMarkup, denseSvg])
+  }, [incremental, renderer, displayScene, sceneOverride, domMarkup, denseSvg, animator, data, spec, editedData, timerEdits])
+  React.useLayoutEffect(() => {
+    committedInputsRef.current = { data, sceneOverride, spec, edited: editedData }
+  })
 
   // The edited rows belong to the chart (compiled spec) they were made under: another one starts from its own. (The
   // compiled chart is the same object while only data changes, so appending rows or re-rendering an equal spec keeps them.)
@@ -777,7 +855,11 @@ function ChartView({
         signalListenersRef.current?.[name]?.(name, value)
         onSignalRef.current?.(name, value)
       },
-      onData: (name, rows) => dataStore.merge({ [name]: rows }),
+      // (a timer stream rewrites its store on every tick; only a tick that changes it is the animation's next frame)
+      onData: (name, rows, fromTimer) => {
+        const advanced = fromTimer && !sameRows(dataStore.get()[name] as unknown[] | undefined, rows)
+        dataStore.merge({ [name]: rows }, advanced ? (snapshot) => timerEdits.add(snapshot) : undefined)
+      },
       ...(stableLogger ? { logger: stableLogger } : {}),
       ...(preventDefault != null ? { preventDefault } : {}),
     }, { pick: (x, y) => hitIndexFor(displayScene ?? scene)?.pick(x, y) ?? null, containerSize: liveContainerSize, ...(inputData ? { data: inputData } : {}), ...(host ? { owner: host } : {}) })
@@ -790,7 +872,7 @@ function ChartView({
       binding.detach()
       if (signalBindingRef.current === binding) signalBindingRef.current = null
     }
-  }, [interactive, scene, displayScene, renderer, interaction, domMarkup, denseSvg, hasSignalListeners, mergedSignals, signalStore, dataStore, inputData, stableLogger, preventDefault, hitIndexFor, liveContainerSize])
+  }, [interactive, scene, displayScene, renderer, interaction, domMarkup, denseSvg, hasSignalListeners, mergedSignals, signalStore, dataStore, timerEdits, inputData, stableLogger, preventDefault, hitIndexFor, liveContainerSize])
 
   // Canvas backend: size the backing store for devicePixelRatio and redraw the
   // whole scene whenever it changes (cheap relative to SVG serialization for

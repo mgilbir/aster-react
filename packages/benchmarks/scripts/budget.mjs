@@ -211,8 +211,20 @@ cli({ url: import.meta.url })
 // Each pass of a fit view's update made from the same pass of the evaluation before (perf/fit-incremental: the first pass's state kept
 // with the committed one, claims by identity), measured on a clean build (kB gzip): core 152.9 (+0.1 over 152.8), useChart 164.1, Chart
 // 206.1, SvgChart 183.2, SvgChart + interaction 200.5, Chart + VL 309.2. Ceilings are the measured value + 0.5.
+// Transitions (#127, feat/127-transitions: the `transition` prop, @aster-charts/core/transition loaded on demand), measured on a
+// clean build against the branch's base, 0c19489 (kB gzip, before -> after): core 152.7 -> 152.8 (the key fields and tick values the
+// runtime stamps on scenes), useChart 163.9 -> 164.4, Chart 205.7 -> 206.9, SvgChart 182.8 -> 184.0, SvgChart + interaction 200.1 ->
+// 201.6, Chart + VL 308.8 -> 310.2; new marginal row + @aster-charts/core/transition 3.1 (the interpolation and the frame loop: an
+// on-demand chunk of the React rows, which grew from +59.1 to +62.5 in chunks loaded on demand). Of the Chart row's +1.2, 0.85 is
+// the prop handling in ChartCore and react/transition.js plus the core stamps (measured with @aster-charts/core/transition
+// external: 206.56), and 0.35 is the chunk boundary: util.js and color.js, which the on-demand module shares with core, move to a
+// chunk the entry imports by name (useChart, which never uses the prop, pays only that: 163.98 external, 164.35 bundled). Ceilings
+// are the measured value + 0.5.
+// Transitions stacked on the fit-view work (feat/127-transitions rebased onto perf/fit-incremental), measured on a clean build of
+// the combined tree (kB gzip): core 153.0, useChart 164.6, Chart 207.3, SvgChart 184.4, SvgChart + interaction 201.9, Chart + VL
+// 310.6, + @aster-charts/core/transition 3.1. Ceilings are the measured value + 0.5.
 const BUDGETS = {
-  '@aster-charts/core': 153.4 * 1024,
+  '@aster-charts/core': 153.5 * 1024,
   '+ @aster-charts/core/dom': 11.1 * 1024,
   '+ @aster-charts/core/canvas': 6.4 * 1024,
   '+ @aster-charts/core/hit': 7.0 * 1024,
@@ -220,13 +232,14 @@ const BUDGETS = {
   '+ @aster-charts/core/load': 5.9 * 1024,
   '+ @aster-charts/core/geo': 16.6 * 1024,
   '+ @aster-charts/core/transforms': 39.7 * 1024,
-  '@aster-charts/react useChart': 164.6 * 1024,
-  '@aster-charts/react Chart': 206.6 * 1024,
+  '+ @aster-charts/core/transition': 3.6 * 1024,
+  '@aster-charts/react useChart': 165.1 * 1024,
+  '@aster-charts/react Chart': 207.8 * 1024,
   // The light chart (`@aster-charts/react/lite`): SVG only, no canvas renderer; alone and with the `interaction` capability.
-  '@aster-charts/react SvgChart': 183.7 * 1024,
-  '@aster-charts/react SvgChart + interaction': 201.0 * 1024,
+  '@aster-charts/react SvgChart': 184.9 * 1024,
+  '@aster-charts/react SvgChart + interaction': 202.4 * 1024,
   // Base + the VL compiler (opt-in: `import '@aster-charts/react/vl'`).
-  '@aster-charts/react Chart + VL': 309.7 * 1024,
+  '@aster-charts/react Chart + VL': 311.1 * 1024,
 }
 
 const THIS_DIR = dirname(fileURLToPath(import.meta.url))
@@ -304,6 +317,15 @@ export const load = loadSpecData
     file: 'transforms.mjs',
     platform: 'node',
     src: CORE_APP + String.raw`import '@aster-charts/core/transforms'
+`,
+  },
+  {
+    name: '+ @aster-charts/core/transition',
+    base: '@aster-charts/core',
+    file: 'transition.mjs',
+    platform: 'node',
+    src: CORE_APP + String.raw`import { createScenePlayer, createSceneTransition } from '@aster-charts/core/transition'
+export const transition = { createScenePlayer, createSceneTransition }
 `,
   },
   {

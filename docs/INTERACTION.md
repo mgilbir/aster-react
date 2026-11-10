@@ -287,7 +287,9 @@ element is removed from the document, or on `binding.release()` (vega's `view.fi
 for a controlled one (tests, hosts that step frames themselves); `null` restores the host's globals, and it should only be
 swapped while no timer is live. A Vega-Lite
 animation (the `time` channel and its timer selection, see `packages/vl/README.md`) is a timer stream whose clock
-signal feeds `modify` on the selection's store; the store and the other `modify` semantics are described above.
+signal feeds `modify` on the selection's store; the store and the other `modify` semantics are described above. With the
+`transition` prop the chart tweens between the animation's frames instead of stepping ([ANIMATION.md](ANIMATION.md)); a
+signal or a brush is never animated.
 
 The selector form `timer:500` hands d3-timer the string `'500'`, and d3's `interval` then adds the delay to it as text: it ticks once
 (and `event.elapsed` is a string), where `timer{500}` and `{"type": "timer", "throttle": 500}` tick every 500 ms. Aster does the

@@ -10,6 +10,7 @@ import type {
   TextMetricsProvider,
   VgSpec,
 } from '@aster-charts/core'
+import type { EasingName } from '@aster-charts/core/transition'
 import type { SelectValue, SelectionInterval, ViewDomain } from './interaction.js'
 
 // The public prop and handle types of `<Chart>`. They live apart from the component so the
@@ -22,6 +23,29 @@ export interface TooltipInfo {
   tooltip: unknown
   /** The hovered scene item. */
   item: SceneItem
+}
+
+/** How a chart animates a change of its data (see `ChartProps.transition`). */
+export interface TransitionOptions {
+  /** Milliseconds. Default 300. */
+  duration?: number
+  /**
+   * A named curve (`'linear'`, `'quad-in'`, `'quad-out'`, `'quad-in-out'`, `'cubic-in'`, `'cubic-out'`, `'cubic-in-out'`,
+   * `'sin-in'`, `'sin-out'`, `'sin-in-out'`) or a function from linear progress in [0, 1] to eased progress. Default
+   * `'cubic-in-out'`.
+   */
+  easing?: EasingName | ((t: number) => number)
+  /**
+   * `'user'` (default): no animation when the user prefers reduced motion (`prefers-reduced-motion: reduce`); `'always'`:
+   * never animate; `'never'`: animate whatever the preference.
+   */
+  reducedMotion?: 'user' | 'always' | 'never'
+  /**
+   * The most items a transition animates. A change that would move more (data mark items and axis parts whose position,
+   * size, opacity or colour changes) is drawn at once. Default 1000: past that, a frame costs more than an animation is worth
+   * (docs/ANIMATION.md has the measured frame costs).
+   */
+  maxItems?: number
 }
 
 export interface ChartProps {
@@ -103,6 +127,20 @@ export interface ChartProps {
    * per-item markup so hydration matches; a client-only mount batches directly.
    */
   denseMarks?: boolean | 'auto'
+  /**
+   * Animate a change of the chart's data instead of drawing the new scene at once (SVG): `true` for the defaults, or
+   * `{ duration, easing, reducedMotion }`. Off by default. A new `data` (or `dataChanges`), new rows in an otherwise
+   * equal spec, a streamed scene (`<ChartStream>`) and a frame of a Vega-Lite `time` animation move the marks and the
+   * axes from where they are drawn to the new scene, which is exactly what a chart without `transition` draws once it
+   * settles. Items are matched by the mark's `key` (Vega-Lite's `key` channel), else by their order in the mark.
+   *
+   * Interaction (signals, brushes, hover, pan / zoom), a resize, hiding a legend entry and a new spec are drawn at once
+   * (while a transition runs, such a change becomes its new end). Hit testing, tooltips, selection and the accessible
+   * tree answer for the new scene from the start. The canvas renderer, batched dense marks (`denseMarks`) and
+   * `incremental={false}` draw the new scene at once. The animation code loads on demand once this prop is set. Read
+   * when a transition starts: a new options object does not restart one.
+   */
+  transition?: boolean | TransitionOptions
   className?: string
   style?: React.CSSProperties
   /**

@@ -36,6 +36,8 @@ pnpm --filter @aster-charts/benchmarks run budget  # per-import-pattern gzip bud
 pnpm bench:browser-stream # per-frame append: aster <ChartStream> vs vega view.change
                       # SVG/canvas, microtask/raf and run/runAsync
                       # flush policies, long frames + DOM mutations
+pnpm --filter @aster-charts/benchmarks run bench:transition  # Chromium: a `transition`'s planning,
+                      # script per frame and frame interval at 1k / 10k items
 ```
 
 Knobs (all runners): `--points=1000` (dataset size), `--reps=…`, `--kind=line,scatter,bar`
