@@ -41,3 +41,56 @@ describe('relabelUnits', () => {
       .toBe(`${escaped('unit')} === "outer_layer_0" && group("outer_cell") && "unit: \\"x\\""`)
   })
 })
+
+describe('the tokenizer on any text (a spec may be untrusted)', () => {
+  // Termination: every pass of the loop in `tokenize` either moves past at least one character (a blank, a string to its closing quote
+  // or the end, a name of at least one character or the single start character, a number, a regular expression literal of at least
+  // its slash, or one character as punctuation) or the loop ends; `stringValue` moves past at least one character per pass too.
+  const B = String.fromCharCode(92)
+  const ADVERSARIAL: Array<[string, string]> = [
+    ['unterminated strings', `"abc ${B}" 'def`],
+    ['regex-like text', '/a[/b/ / /[/ 1 / 2 /'],
+    ['lone backslashes', `${B}${B} ${B} a${B}`],
+    ['a short unicode escape', `${B}u12 ${B}u "${B}u1" '${B}x1'`],
+    ['an unclosed code point escape', `"${B}u{1234 ${B}u{" ${B}u{110000}`],
+    ['surrogate halves', `${String.fromCharCode(0xd800)}a${String.fromCharCode(0xdc00)} "${String.fromCharCode(0xdbff)}"`],
+    ['NUL', `a${String.fromCharCode(0)}b "${String.fromCharCode(0)}"`],
+    ['names that start with an escape', `${B}u0061 ${B}u00zz ${B}`],
+  ]
+  for (const [what, text] of ADVERSARIAL) {
+    it(`ends, and gives every character back: ${what}`, () => {
+      expect(tokenize(text).map((t) => t.raw).join('')).toBe(text)
+      // (and repeated to a megabyte, in time)
+      const big = text.repeat(Math.ceil(1_000_000 / text.length))
+      const t0 = performance.now()
+      const tokens = tokenize(big)
+      expect(performance.now() - t0).toBeLessThan(5_000)
+      expect(tokens.map((t) => t.raw).join('')).toBe(big)
+    })
+  }
+
+  it('ends on random text, and gives every character back', () => {
+    let seed = 7
+    const next = (): number => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed }
+    const alphabet = [B, '"', "'", '/', '[', ']', 'u', '{', '}', 'x', '0', 'a', ' ', '.', '(', String.fromCharCode(0xd800), String.fromCharCode(0)]
+    for (let n = 0; n < 2000; n++) {
+      const text = Array.from({ length: next() % 40 }, () => alphabet[next() % alphabet.length]).join('')
+      expect(tokenize(text).map((t) => t.raw).join(''), JSON.stringify(text)).toBe(text)
+    }
+  })
+
+  it('costs time linear in the length of the text', () => {
+    const unit = `a + "b${B}u0063" / 2 ${B}u0064(1.5e3) `
+    const time = (n: number): number => {
+      const text = unit.repeat(Math.ceil(n / unit.length))
+      const t0 = performance.now()
+      tokenize(text)
+      return performance.now() - t0
+    }
+    time(100_000)
+    const small = Math.max(time(100_000), 1)
+    const big = time(1_000_000)
+    // (ten times the text: linear is ten times the time; a quadratic cost would be a hundred)
+    expect(big / small).toBeLessThan(40)
+  })
+})

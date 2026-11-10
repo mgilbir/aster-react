@@ -15,7 +15,7 @@ export interface Token { kind: TokenKind; raw: string; value?: string }
 const BLANK = new RegExp(`[\\s${String.fromCharCode(0x180e, 0xfeff)}]`)
 const NAME_START = /[\p{ID_Start}$_]/u
 const NAME_PART = new RegExp(`[\\p{ID_Continue}$${String.fromCharCode(0x200c, 0x200d)}]`, 'u')
-const NUMBER = /^(?:0[xX][0-9a-fA-F]+|0[oO][0-7]+|0[bB][01]+|(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?)/
+const NUMBER = /(?:0[xX][0-9a-fA-F]+|0[oO][0-7]+|0[bB][01]+|(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?)/y
 const HEX4 = /^[0-9a-fA-F]{4}$/
 
 /** The character a `\uXXXX` escape of a name stands for at `i` (the backslash), and where it ends; none when there is no such escape. */
@@ -26,29 +26,41 @@ function nameEscape(text: string, i: number): { ch: string; end: number } | unde
   return { ch: String.fromCharCode(parseInt(hex, 16)), end: i + 6 }
 }
 
-/** The value of a string literal's body (its escapes read as JavaScript reads them). */
+/**
+ * The value of a string literal's body (its escapes read as JavaScript reads them; an escape that is not well formed stands for the
+ * character after the backslash). One pass: every step moves past at least the character it reads.
+ */
 function stringValue(body: string): string {
   let out = ''
-  for (let i = 0; i < body.length; i++) {
+  let i = 0
+  while (i < body.length) {
     const c = body[i]!
-    if (c !== '\\') { out += c; continue }
-    const e = body[++i]
+    if (c !== '\\') { out += c; i++; continue }
+    const e = body[i + 1]
     if (e === undefined) break
-    if (e === 'u' && body[i + 1] === '{') {
-      const close = body.indexOf('}', i)
-      out += String.fromCodePoint(parseInt(body.slice(i + 2, close), 16))
-      i = close
-    } else if (e === 'u') {
-      out += String.fromCharCode(parseInt(body.slice(i + 1, i + 5), 16))
+    if (e === 'u' && body[i + 2] === '{') {
+      const close = body.indexOf('}', i + 3)
+      const hex = close > 0 ? body.slice(i + 3, close) : ''
+      const code = /^[0-9a-fA-F]{1,6}$/.test(hex) ? parseInt(hex, 16) : NaN
+      if (code <= 0x10ffff) { out += String.fromCodePoint(code); i = close + 1; continue }
+    } else if (e === 'u' && HEX4.test(body.slice(i + 2, i + 6))) {
+      out += String.fromCharCode(parseInt(body.slice(i + 2, i + 6), 16))
+      i += 6
+      continue
+    } else if (e === 'x' && /^[0-9a-fA-F]{2}$/.test(body.slice(i + 2, i + 4))) {
+      out += String.fromCharCode(parseInt(body.slice(i + 2, i + 4), 16))
       i += 4
-    } else if (e === 'x') {
-      out += String.fromCharCode(parseInt(body.slice(i + 1, i + 3), 16))
+      continue
+    } else if (e === '\r' && body[i + 2] === '\n') {
+      i += 3
+      continue
+    } else if (e === '\n' || e === '\r' || e === String.fromCharCode(0x2028) || e === String.fromCharCode(0x2029)) {
+      // (a line continuation stands for nothing)
       i += 2
-    } else if (e === '\r' && body[i + 1] === '\n') {
-      i++
-    } else if (e !== '\n' && e !== '\r' && e !== String.fromCharCode(0x2028) && e !== String.fromCharCode(0x2029)) {
-      out += ({ n: '\n', t: '\t', r: '\r', b: '\b', f: '\f', v: '\v', 0: '\0' } as Record<string, string>)[e] ?? e
+      continue
     }
+    out += ({ n: '\n', t: '\t', r: '\r', b: '\b', f: '\f', v: '\v', 0: '\0' } as Record<string, string>)[e] ?? e
+    i += 2
   }
   return out
 }
@@ -98,11 +110,14 @@ export function tokenize(text: string): Token[] {
         value += ch
         j += ch.length
       }
+      // (a start that makes no name -- it cannot happen, the test above being the loop's first -- is one character of its own)
+      if (j === i) { push({ kind: 'punct', raw: c }); i++; continue }
       push({ kind: 'name', raw: text.slice(i, j), value })
       i = j
       continue
     }
-    const num = /[0-9.]/.test(c) ? NUMBER.exec(text.slice(i)) : null
+    NUMBER.lastIndex = i
+    const num = /[0-9.]/.test(c) ? NUMBER.exec(text) : null
     if (num && num[0] !== '.') {
       push({ kind: 'number', raw: num[0] })
       i += num[0].length
