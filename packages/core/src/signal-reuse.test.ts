@@ -164,12 +164,16 @@ const BASE_SIGNALS = { a: 10, b: 5, c: 1, s: 50, fmt: 'd', k: 0, tc: 5, ttl: 'T'
 interface Step { what: string; signals: Partial<typeof BASE_SIGNALS>; width?: number; rebuilt: string[]; scales?: string[]; encodes: Record<string, number> }
 const N = ROWS.length
 // (`byDataFn` reads the rows of `t` by the name it spells out, and no step changes them: it is kept as the marks that read nothing are)
-const ALWAYS = { byDataScale: N, withTransform: N, inScope: N, inFacet: N }
+const ALWAYS = { byDataScale: N, withTransform: N }
+// (the marks inside the scope and the facet are kept by the item they are in, while what they read is as it was: `inScope` reads the
+// scope's `gs`, which `c` makes, and `inFacet` reads `a`; both name the view's size, as every mark does)
+const SCOPE = { inScope: N }
+const FACET = { inFacet: N }
 // (`z` reads a dataset from an expression: it is made again whenever a signal changes)
 const ALL_SCALES = ['x', 'y', 'color']
 const STEPS: Step[] = [
-  { what: 'a signal nothing drawn reads (the scope does)', signals: { c: 2 }, rebuilt: ['byDataScale', 'withTransform'], encodes: ALWAYS },
-  { what: 'a `{signal}` channel', signals: { a: 11 }, rebuilt: ['bySignal', 'byExpr', 'byDataScale', 'withTransform'], encodes: { ...ALWAYS, bySignal: N, byExpr: N } },
+  { what: 'a signal nothing drawn reads (the scope does)', signals: { c: 2 }, rebuilt: ['byDataScale', 'withTransform'], encodes: { ...ALWAYS, ...SCOPE } },
+  { what: 'a `{signal}` channel', signals: { a: 11 }, rebuilt: ['bySignal', 'byExpr', 'byDataScale', 'withTransform'], encodes: { ...ALWAYS, ...FACET, bySignal: N, byExpr: N } },
   { what: 'a production rule test', signals: { b: 2 }, rebuilt: ['byTest', 'byDataScale', 'withTransform'], encodes: { ...ALWAYS, byTest: N } },
   { what: 'an expression', signals: { fmt: '.1f' }, rebuilt: ['byExpr', 'byDataScale', 'withTransform'], encodes: { ...ALWAYS, byExpr: N } },
   { what: 'a scale domain', signals: { s: 80 }, rebuilt: ['byScale', 'byDataScale', 'withTransform'], scales: ['x', 'color'], encodes: { ...ALWAYS, byScale: N } },
@@ -178,13 +182,13 @@ const STEPS: Step[] = [
   { what: 'a dataset filter whose rows change', signals: { k: 3 }, rebuilt: ['byData', 'byDataScale', 'withTransform'], encodes: { ...ALWAYS, byData: N - 3 } },
   { what: 'guides only', signals: { tc: 3, ttl: 'U' }, rebuilt: ['byDataScale', 'withTransform'], encodes: ALWAYS },
   // (every key holds the view's size: a resize makes everything again, as it did)
-  { what: 'the view width', signals: {}, width: 260, rebuilt: LEAF, scales: [], encodes: { ...ALWAYS, plain: N, bySignal: N, byTest: N, byExpr: N, byScale: N, byData: N - 3, byGroup: N, byDataFn: N } },
-  { what: 'read and unread together', signals: { a: 12, c: 3 }, rebuilt: ['bySignal', 'byExpr', 'byDataScale', 'withTransform'], encodes: { ...ALWAYS, bySignal: N, byExpr: N } },
-  // (the session hands back the scene it made; `evaluateChart`, told that a dataset changed, makes the scopes again, and keeps what
-  // reads `t` by name: its rows are equal to the ones it read)
+  { what: 'the view width', signals: {}, width: 260, rebuilt: LEAF, scales: [], encodes: { ...ALWAYS, ...SCOPE, ...FACET, plain: N, bySignal: N, byTest: N, byExpr: N, byScale: N, byData: N - 3, byGroup: N, byDataFn: N } },
+  { what: 'read and unread together', signals: { a: 12, c: 3 }, rebuilt: ['bySignal', 'byExpr', 'byDataScale', 'withTransform'], encodes: { ...ALWAYS, ...SCOPE, ...FACET, bySignal: N, byExpr: N } },
+  // (the session hands back the scene it made; `evaluateChart`, told that a dataset changed, keeps the marks in the scopes too, and
+  // what reads `t` by name: its rows are equal to the ones it read)
   { what: 'nothing', signals: {}, rebuilt: [], scales: ['x', 'y', 'color', 'z'], encodes: {} },
 ]
-const NOTHING_TOLD: Pick<Step, 'rebuilt' | 'encodes'> = { rebuilt: [], encodes: { inScope: N, inFacet: N } }
+const NOTHING_TOLD: Pick<Step, 'rebuilt' | 'encodes'> = { rebuilt: [], encodes: {} }
 
 describe('a re-evaluation keeps the marks and scales that read none of the signals that changed', () => {
   // `evaluateChart` keeps a result only when told what changed: here, a dataset nothing reads
@@ -217,7 +221,7 @@ describe('a re-evaluation keeps the marks and scales that read none of the signa
     })
   }
 
-  it('the scope and the facet read the signals as they are now (they are made again)', () => {
+  it('the scope and the facet read the signals as they are now', () => {
     const s = createChartSession()
     const input = (c: number, a: number): RuntimeInput => ({ data: { t: ROWS, other: [] }, signals: { ...BASE_SIGNALS, c, a } })
     s.evaluate(SPEC, input(1, 10))

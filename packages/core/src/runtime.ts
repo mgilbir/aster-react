@@ -57,7 +57,7 @@ import { compileChart } from './compiler.js'
 import { dict, ownGet, pushAll, sortData, lerp, scopedSignalName, heldSignalName, TUPLE_ID } from './util.js'
 import { applyImageUrlPolicy, applyLinkUrlPolicy, resolveImageUrl, type ImageUrlPolicy } from './url-policy.js'
 import { valueKey, valuesEqual } from './fingerprint.js'
-import { rowsEqual, sourceNames, type PulseChange } from './pulse.js'
+import { diffRows, equalCell, rowsEqual, sourceNames, type PulseChange } from './pulse.js'
 import { aggregateGroups, flatKeyFn, groupKeyFn } from './transform-agg.js'
 import { layoutFacet, type GridPlace } from './trellis.js'
 import { boundAxisGroup, boundGroupItem, boundLeaf, boundTypedMark, Bounds, layoutBounds, eachMarkBounds, hasClippedMark } from './bounds.js'
@@ -240,6 +240,24 @@ interface IncrementalState {
   copies: Map<string, { inputs: readonly unknown[]; rows: Row[] }>
   /** The items of each mark (by instance) whose transforms number them: the numbers an item keeps (see `transformMarkItems`). */
   numbered: Map<string, readonly SceneItem[]>
+  /** The leaf marks made inside group items, by instance (see `evaluateInstanceMark`): what a later evaluation keeps or splices. */
+  instances: Map<string, InstanceMark>
+  /** The content of the view this state's pass made (its root items, laid out): a later pass shares what it makes the same (see `shareScene`). */
+  content?: readonly SceneGroup[]
+}
+
+/** A leaf mark made inside a group item, and what it was made from (see `evaluateInstanceMark`). */
+interface InstanceMark {
+  group: SceneGroup
+  /** its items in the order of its rows (a sorted mark's `items` are in its sort's order) */
+  rowItems: SceneItem[]
+  /** `markKeyOf` in the item's scope */
+  key: string
+  /** the group item it is in: its box, its datum, its `parent` and what its encode gave it */
+  item: Record<string, unknown>
+  /** the scales it read and the other datasets it read, as they were */
+  scales: Array<readonly [string, unknown]>
+  deps: Array<readonly [string, unknown]>
 }
 
 /** One run of a group scope's dataset pipeline: the source arrays it read, what its transforms mentioned, and the rows it made. */
@@ -250,7 +268,7 @@ interface ScopedRun {
 }
 
 function newState(gen: number): IncrementalState {
-  return { gen, fp: '', scales: new Map(), scaleEntries: new Map(), datasets: new Map(), groups: new Map(), markKeys: new Map(), rows: new Map(), stale: false, idCounter: 0, scoped: new Map(), numbered: new Map(), copies: new Map() }
+  return { gen, fp: '', scales: new Map(), scaleEntries: new Map(), datasets: new Map(), groups: new Map(), markKeys: new Map(), rows: new Map(), stale: false, idCounter: 0, scoped: new Map(), numbered: new Map(), copies: new Map(), instances: new Map() }
 }
 
 /** Committed state per compiled chart. Never stored on the IR itself. */
@@ -431,6 +449,11 @@ interface GuideScope {
   counts?: Set<string>
   /** the last instance in this scope's subtree (itself included) that has content of its own: a layout above it is ranked after it */
   last?: number[]
+  /**
+   * The instance by its marks and the keys of its group items, root first (a facet's partition key, a row's index, '' for the one item
+   * of a group with no data): what names the same instance in another evaluation, where `path` counts instances in order.
+   */
+  keyPath?: string
 }
 
 /**
@@ -2205,8 +2228,8 @@ const VETS_URLS = new WeakMap<CompiledMark, boolean>()
  * `datasetKey`, by content (a store is a few rows, a new array whenever the event loop edits it) or, past what a fingerprint takes
  * in, by the array, when the caller tells every change and did not name it as changed (otherwise equal to no other key).
  */
-function markKeyOf(mark: CompiledMark, ctx: EvalContext): string {
-  let key = readsKey(ctx, markReadsOf(mark, ctx.chart))
+function markKeyOf(mark: CompiledMark, ctx: EvalContext, reads: readonly string[] | null = markReadsOf(mark, ctx.chart)): string {
+  let key = readsKey(ctx, reads)
   let vets = VETS_URLS.get(mark)
   if (vets === undefined) VETS_URLS.set(mark, (vets = mark.type === 'image' || encodesHref(mark)))
   if (vets) key = `${key}\u0003${ctx.urlPolicy === undefined ? '' : dependencyKey(ctx.urlPolicy)}`
@@ -2539,8 +2562,96 @@ function buildContentPass(
     ? ctx.chart.padding
     : computeGuidePadding(items, width, height, ctx.chart.padding, isFit(autosizeOf(chart, input).type))
   const ordered = paintOrderOf(items)
-  return { record: ctx.passMemory?.cur, items: ordered, padding, ctx, width, height, hasLayout, frame }
+  // (made and laid out: what is the same as the content of this pass in the evaluation before is that content)
+  const content = ctx.prev?.content !== undefined ? shareContent(ctx.prev.content, ordered) : ordered
+  ctx.draft.content = content
+  return { record: ctx.passMemory?.cur, items: content, padding, ctx, width, height, hasLayout, frame }
 }
+
+/**
+ * The view's content as made, with every node that is the same as the node at its place in the content the evaluation before made
+ * replaced by that node, so an unchanged group item, guide or title (and everything in it) keeps its identity, as a kept mark does.
+ * "The same" is by value, over every own property (`sameNode`); a leaf mark's group is the same only when it is the very group (a mark
+ * kept or not is decided where it is made). Runs on the laid-out content, which nothing writes afterwards. Returns `next` itself
+ * when nothing could be shared.
+ */
+function shareContent(prev: readonly SceneGroup[], next: SceneGroup[]): SceneGroup[] {
+  const out = next.slice()
+  let shared = false
+  for (let i = 0; i < out.length && i < prev.length; i++) {
+    // (the items of group marks, and what they hold: the view's own guides and title are made from what the evaluation reads, and
+    // comparing them on every evaluation would cost a chart with no group mark what it does not gain)
+    if (!isGroupItem(out[i]!) || !isGroupItem(prev[i]!)) continue
+    const node = shareNode(prev[i]!, out[i]!)
+    if (node !== out[i]) { out[i] = node as SceneGroup; shared = true }
+  }
+  return shared ? out : next
+}
+
+/** `next`, or `prev` when it is the same node, or `next` with the children it shares with `prev` (a new node of this evaluation). */
+function shareNode(prev: SceneNode, next: SceneNode): SceneNode {
+  if (prev === next) return prev
+  if (isLeafMark(next) || isLeafMark(prev)) return next
+  if (sameNode(prev, next, 0)) return prev
+  const a = (prev as { items?: unknown }).items
+  const b = (next as { items?: unknown }).items
+  if (Array.isArray(a) && Array.isArray(b)) {
+    // (a node of this evaluation's own: its children list is its own array)
+    for (let i = 0; i < b.length && i < a.length; i++) b[i] = shareNode(a[i] as SceneNode, b[i] as SceneNode)
+  }
+  return next
+}
+
+/** An item of a group mark (a cell, a view of a concat, a header): what `shareContent` shares at the top of the view. */
+const isGroupItem = (n: SceneNode): boolean => (n as { marktype?: unknown }).marktype === 'group' && (n as { markIndex?: unknown }).markIndex !== undefined
+  && (n as { role?: unknown }).role !== 'mark'
+
+/** A leaf mark's group: compared by identity only (its items may be the engine's live array, or a lazy snapshot of an older scene). */
+const isLeafMark = (n: SceneNode): boolean => (n as { role?: unknown }).role === 'mark' && (n as { marktype?: unknown }).marktype !== 'group'
+
+/** How deep `sameNode` compares before it calls two nodes different. */
+const SAME_NODE_DEPTH = 64
+
+/**
+ * Whether two scene nodes are the same by value: the same own keys (symbols and non-enumerable ones included) holding the same values
+ * (`Object.is`; Dates by their instant; plain arrays and objects compared the same way; any other object, a Map, a function, only
+ * when it is the same object), children compared as nodes (a leaf mark's group by identity only).
+ */
+function sameNode(a: unknown, b: unknown, depth: number): boolean {
+  if (Object.is(a, b)) return true
+  if (a === null || b === null || typeof a !== 'object' || typeof b !== 'object' || depth > SAME_NODE_DEPTH) return false
+  if (a instanceof Date || b instanceof Date) return a instanceof Date && b instanceof Date && Object.is(a.getTime(), b.getTime())
+  const proto = Object.getPrototypeOf(a)
+  if (proto !== Object.getPrototypeOf(b)) return false
+  if (proto === Array.prototype) {
+    const x = a as unknown[]
+    const y = b as unknown[]
+    if (x.length !== y.length) return false
+    for (let i = 0; i < x.length; i++) {
+      const u = x[i]
+      const v = y[i]
+      if (u !== v && (isLeafMarkValue(u) || isLeafMarkValue(v) || !sameNode(u, v, depth + 1))) return false
+    }
+    return true
+  }
+  // (a box a guide records, `titleBounds`, is plain data held in a class)
+  if (proto !== Object.prototype && proto !== null && proto !== Bounds.prototype) return false
+  if (isLeafMark(a as SceneNode) || isLeafMark(b as SceneNode)) return false
+  const ka = Reflect.ownKeys(a)
+  const kb = Reflect.ownKeys(b)
+  if (ka.length !== kb.length) return false
+  for (let i = 0; i < ka.length; i++) {
+    const k = ka[i]!
+    if (k !== kb[i]) return false
+    const da = Object.getOwnPropertyDescriptor(a, k)!
+    const db = Object.getOwnPropertyDescriptor(b, k)!
+    if (da.enumerable !== db.enumerable || 'get' in da || 'get' in db) return false
+    if (!sameNode(da.value, db.value, depth + 1)) return false
+  }
+  return true
+}
+
+const isLeafMarkValue = (v: unknown): boolean => v !== null && typeof v === 'object' && !Array.isArray(v) && isLeafMark(v as SceneNode)
 
 /**
  * An evaluation whose incremental state has not been committed yet. The scene is
@@ -4188,6 +4299,7 @@ function evaluateMark(
   mark: CompiledMark,
   ctx: EvalContext,
   prevGroup?: SceneGroup | null,
+  given?: GivenPulse,
 ): SceneGroup | SceneGroup[] | null {
   // (the encode of a mark that reads what a late signal took with it never ran: its items are the join's)
   if (ctx.lateTaint !== undefined && !ctx.bareEncode && readsTaint({ encode: mark.encode, from: mark.from }, ctx)) ctx = { ...ctx, bareEncode: true }
@@ -4198,7 +4310,7 @@ function evaluateMark(
   ctx.markGradients = own
   let built: SceneGroup | SceneGroup[] | null
   try {
-    built = evaluateMarkItems(mark, ctx, prevGroup)
+    built = evaluateMarkItems(mark, ctx, prevGroup, given)
   } finally {
     ctx.markGradients = outer
   }
@@ -4232,6 +4344,7 @@ function evaluateMarkItems(
   mark: CompiledMark,
   ctx: EvalContext,
   prevGroup?: SceneGroup | null,
+  given?: GivenPulse,
 ): SceneGroup | SceneGroup[] | null {
   // a scale or an encode that threw stopped vega's run: the marks after it were never joined, so they are not in the scenegraph
   if (ctx.encodeAborted) return null
@@ -4287,9 +4400,9 @@ function evaluateMarkItems(
     // sample the wall clock inside the encode loops.
     const meter = activeMeter()
     if (meter) meter.items(encodeRows.length, `mark ${mark.type} encoding`)
-    const pulse = reusablePulse(mark, ctx, source, encodeRows.length, prevGroup)
+    const pulse = given !== undefined ? given.pulse : reusablePulse(mark, ctx, source, encodeRows.length, prevGroup)
     if (pulse) {
-      const prevItems = prevGroup!.items as SceneItem[]
+      const prevItems = given !== undefined ? given.items : prevGroup!.items as SceneItem[]
       const gen = ctx.gen
       if (ctx.markGradients) ctx.markGradients.partial = true
       // (an interactive mark's transparent items are marked `_hit` as they are encoded: an update touches only these)
@@ -4402,6 +4515,7 @@ function evaluateMarkItems(
   // vega's SortItems: a mark `sort` orders the ENCODED items by their own
   // properties (`x`, `datum.t`, `datum["t"]`), after the encode and before the
   // bound pass; stable. A sort that throws stops the pass there: the items stay in data order.
+  const rowOrder = items
   if (mark.sort && source && !stoppedAfterEncode && transformed && sortRuns(mark, ctx)) {
     try { items = sortMarkItems(items, mark.sort) } catch (e) {
       failPass(ctx, { axis: Infinity, mark: ctx.scope.mark ?? 0, afterEncode: true }, e)
@@ -4531,7 +4645,113 @@ function evaluateMarkItems(
     GROUP_BOUNDS.set(group, carriedBounds)
   }
   if (pendingUndo && prevGroup) supersedeItems(prevGroup, group, pendingUndo)
+  if (rowOrder !== items) ROW_ITEMS.set(group, rowOrder)
   return group
+}
+
+/** The items of a sorted leaf mark in the order of its rows (the group's `items` are in the sort's order). */
+const ROW_ITEMS = new WeakMap<SceneGroup, SceneItem[]>()
+
+/** A pulse a caller worked out for a mark's rows, and the items (in row order) it is relative to: see `evaluateInstanceMark`. */
+interface GivenPulse { pulse: StepPulse; items: SceneItem[] }
+
+/**
+ * A leaf mark inside a group item (a facet's cell, a concat's view, a line per category). The evaluation before made it in the item of
+ * the same key (`InstanceMark`); it is kept when nothing it reads changed, and only the rows that changed are encoded when its rows
+ * changed. What it reads: its key (`markKeyOf` in the item's scope: the signals it names, the size), the group item (its box, datum,
+ * `parent` and encode, compared by value), the scales it reads and the other datasets it reads (the same objects), and its rows,
+ * compared by value with the data its items were made from (`diffRows` over each item's `datum`, a copy made when it was encoded).
+ * Rows that differ only where they are (an append, an edit, a removal, a move) splice the items; a mark with transforms, one bound to
+ * a force's links, one that reads datasets from expressions, and a pass that failed, under `limits` or cut short, are made in full.
+ * The items it is relative to are never written: a splice makes a new array.
+ */
+function evaluateInstanceMark(mark: CompiledMark, ctx: EvalContext, id: string, itemContext: Record<string, unknown>): SceneGroup | SceneGroup[] | null {
+  const source = mark.from?.data
+  const eligible = mark.type !== 'group' && !mark.transform?.length && source !== undefined && ctx.datasets.has(source)
+    && !forceBound(mark, ctx.chart) && !readsAllDataInScope(mark, ctx.chart)
+  if (!eligible) return evaluateMark(mark, ctx)
+  // (what it reads of the signals: as a top-level mark's, its `from` being a dataset of its scope, see `readsAllDataInScope`)
+  const key = markKeyOf(mark, ctx, namesMentioned(mark, ctx.chart))
+  const scales = markScaleNames(mark, ctx.chart).map((n) => [n, ctx.scales.get(n)] as const)
+  // (the datasets it names, and those its expressions read by name: a selection's store; as arrays, which an edit makes anew)
+  const named = markDepsOf(mark, ctx.chart)
+  const deps = [...new Set([...named.names, ...named.exprData])].filter((n) => n !== source).sort().map((n) => [n, ctx.datasets.get(n)] as const)
+  const rows = ctx.datasets.get(source)!
+  const prev = ctx.prev?.instances.get(id)
+  let given: GivenPulse | undefined
+  if (prev !== undefined && prev.key === key && cleanPass(ctx) && ctx.abort.cut === undefined && activeMeter() === null
+    && ctx.lateTaint === undefined && ctx.bareEncode !== true && !ctx.encodeAborted
+    && prev.scales.length === scales.length && prev.scales.every(([n, sc], i) => scales[i]![0] === n && scales[i]![1] === sc)
+    && prev.deps.length === deps.length && prev.deps.every(([n, d], i) => deps[i]![0] === n && deps[i]![1] === d)
+    && equalCell(prev.item, itemContext)) {
+    const datums = prev.rowItems.map((it) => (it as { datum?: unknown }).datum)
+    const diff = datums.every((d) => d !== null && typeof d === 'object') ? diffRows(datums, rows) : null
+    if (diff !== null && diff.sameLength && diff.changed.length === 0) {
+      // (nothing it reads changed: the mark is the one the evaluation before made)
+      keepInstanceMark(mark, ctx, prev.group)
+      ctx.draft.instances.set(id, { ...prev, item: itemContext })
+      return prev.group
+    }
+    if (diff !== null) given = { pulse: diff.sameLength ? { changed: diff.changed } : { changed: diff.changed, from: diff.from ?? appendMapping(datums.length, rows.length), ...(diff.to ? { to: diff.to } : {}) }, items: prev.rowItems }
+  }
+  const built = evaluateMark(mark, ctx, given !== undefined ? prev!.group : null, given)
+  if (built !== null && !Array.isArray(built)) {
+    ctx.draft.instances.set(id, { group: built, rowItems: ROW_ITEMS.get(built) ?? (built.items as SceneItem[]), key, item: itemContext, scales, deps })
+  }
+  return built
+}
+
+/**
+ * Whether a mark may read the group item it is in beyond its box: a field reference to the group or to the parent (`{field: {group:
+ * "datum.k"}}`, `{field: {parent: "count"}}`), anywhere in it. An expression reads the item's datum as the signal `parent` of the
+ * item's scope, which is in the mark's key by its value (`markKeyOf`); `group()` and `item` are event functions, which an encode
+ * cannot call.
+ */
+const READS_GROUP_ITEM = new WeakMap<CompiledMark, boolean>()
+function readsGroupItem(mark: CompiledMark): boolean {
+  let out = READS_GROUP_ITEM.get(mark)
+  if (out !== undefined) return out
+  out = false
+  const visit = (v: unknown, depth: number): void => {
+    if (out || depth > 64) { out = true; return }
+    if (v === null || typeof v !== 'object') return
+    if (Array.isArray(v)) { for (const x of v) visit(x, depth + 1); return }
+    for (const [k, x] of Object.entries(v)) {
+      if (k === 'group' || k === 'parent') { out = true; return }
+      visit(x, depth + 1)
+    }
+  }
+  visit(mark, 0)
+  READS_GROUP_ITEM.set(mark, out)
+  return out
+}
+
+/**
+ * `markDepsOf(mark).allData`, for a mark inside a group item whose `from` is a dataset of its scope (a facet's partition, a group's
+ * own data): such a name is not one of the view's datasets, which `markDepsOf` takes for a mark's name. Its other reasons stand.
+ */
+const SCOPED_ALL_DATA = new WeakMap<CompiledMark, boolean>()
+function readsAllDataInScope(mark: CompiledMark, chart: CompiledChart): boolean {
+  let out = SCOPED_ALL_DATA.get(mark)
+  if (out === undefined) SCOPED_ALL_DATA.set(mark, (out = markDepsOf({ ...mark, from: undefined }, chart).allData))
+  return out
+}
+
+/** For rows appended to `before` rows (a diff that names no mapping), each row's index among the rows before, or -1 for a new one. */
+function appendMapping(before: number, length: number): number[] {
+  const from = new Array<number>(length)
+  for (let i = 0; i < length; i++) from[i] = i < before ? i : -1
+  return from
+}
+
+/** What a kept leaf mark leaves the evaluation, as `evaluateMark` leaves a mark it makes: its gradients, and its items by its name. */
+function keepInstanceMark(mark: CompiledMark, ctx: EvalContext, group: SceneGroup): void {
+  const kept = GROUP_GRADIENTS.get(group)
+  if (kept !== undefined) addDefs(ctx, kept)
+  if (typeof mark.name === 'string') {
+    ctx.markItems.set(mark.name, (group.items ?? []) as SceneItem[])
+    ctx.markContainers.set(mark.name, group as unknown as { marktype: string; items: SceneItem[] })
+  }
 }
 
 /**
@@ -5107,6 +5327,7 @@ function buildGroupItem(mark: CompiledMark, ctx: EvalContext, entered: EnteredGr
     const scope: GuideScope = {
       parent: ctx.scope, path, nextChild: { n: 0 }, unsettled: late || unsettled || (itemAt >= 0 && itemAt > failing!.at) || holdsFailedLayout(path, failing),
       scales: mark.scales ?? NO_DECLARED, data: mark.data ?? NO_DECLARED, facet: src.facetName,
+      keyPath: `${ctx.scope.keyPath ?? ''}/${markIdOf(mark)}[${src.key ?? ''}]`,
     }
     if (hasContent && !hollow) noteInstance(scope, path)
     const childCtx: EvalContext = {
@@ -5127,10 +5348,15 @@ function buildGroupItem(mark: CompiledMark, ctx: EvalContext, entered: EnteredGr
 
     const content: SceneGroup[] = []
     const children = hollow || order > 0 || (order === 0 && !whole && !madeMarks(ctx.abort.cut!)) ? [] : mark.marks ?? []
+    // (what the marks of this item read of it besides their data and scales: its box, and for a mark that reads its group item or its
+    // `parent` (see `readsGroupItem`), the item's datum, its `parent` and what its encode gave it)
+    const { datum: _datum, ...encoded } = geo
+    const box = { x: gx, y: gy, width: gw, height: gh }
+    const itemContext = { ...box, datum: src.datum, parent: scopeParams.parent, encoded }
     for (let at = 0; at < children.length; at++) {
       const child = children[at]!
       scope.mark = at
-      const r = evaluateMark(child, childCtx)
+      const r = evaluateInstanceMark(child, childCtx, `${scope.keyPath}#${markIdOf(child)}`, readsGroupItem(child) ? itemContext : box)
       if (r) pushAll(content, Array.isArray(r) ? r : [r])
     }
     // (the entries of a symbol legend are instances of their own, after this scope's groups: one the pass never got to

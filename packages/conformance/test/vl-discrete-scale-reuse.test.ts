@@ -66,7 +66,7 @@ function leafMarks(scene: SceneRoot): Group[] {
   const walk = (items: readonly unknown[]): void => {
     for (const it of items) {
       const g = it as Group
-      if (g.role === 'mark' && g.marktype !== 'group' && g.name?.startsWith('marks')) out.push(g)
+      if (g.role === 'mark' && g.marktype !== 'group') out.push(g)
       if (Array.isArray(g.items)) walk(g.items)
     }
   }
@@ -121,7 +121,12 @@ const CHARTS: Record<string, { spec: Spec; rowWise: boolean }> = {
   'bar, nominal x sorted by y': { spec: compile({ width: 300, height: 150, data: { name: 'src' }, mark: 'bar', encoding: { x: { field: 'c', type: 'nominal', sort: '-y' }, y: { field: 'y', type: 'quantitative', aggregate: 'sum' } } } as never), rowWise: false },
   'bar, nominal x by an aggregate of another field': { spec: compile({ width: 300, height: 150, data: { name: 'src' }, mark: 'bar', encoding: { x: { field: 'c', type: 'nominal', sort: { field: 'x', op: 'max', order: 'descending' } }, y: { field: 'y', type: 'quantitative', stack: null, scale: { domain: [0, 50] } } } } as never), rowWise: true },
   'stacked bar': { spec: compile({ width: 300, height: 150, data: { name: 'src' }, transform: [{ calculate: 'datum.t % 5', as: 'b' }], mark: 'bar', encoding: { x: { field: 'b', type: 'ordinal' }, y: { field: 'y', type: 'quantitative', aggregate: 'sum' }, color: { field: 'c', type: 'nominal' } } } as never), rowWise: false },
-  'line per category': { spec: compile({ width: 300, height: 150, data: { name: 'src' }, mark: 'line', encoding: { x: { field: 't', type: 'quantitative' }, y: { field: 'y', type: 'quantitative' }, color: { field: 'c', type: 'nominal' } } } as never), rowWise: false },
+  'line per category': { spec: compile({ width: 300, height: 150, data: { name: 'src' }, mark: 'line', encoding: { x: { field: 't', type: 'quantitative', scale: { domain: [0, 500] } }, y: { field: 'y', type: 'quantitative', scale: { domain: [0, 50] } }, color: { field: 'c', type: 'nominal' } } } as never), rowWise: true },
+  'faceted scatter by category': { spec: compile({ data: { name: 'src' }, facet: { column: { field: 'c', type: 'nominal' } }, spec: { width: 80, height: 80, mark: 'point', encoding: { x: { field: 'x', type: 'quantitative', scale: { domain: [0, 100] } }, y: { field: 'y', type: 'quantitative', scale: { domain: [0, 50] } }, color: { field: 'c', type: 'nominal' } } } } as never), rowWise: true },
+  'two views side by side': { spec: compile({ data: { name: 'src' }, hconcat: [
+    { width: 120, height: 80, mark: 'point', encoding: { x: { field: 'x', type: 'quantitative', scale: { domain: [0, 100] } }, y: { field: 'y', type: 'quantitative', scale: { domain: [0, 50] } }, color: { field: 'c', type: 'nominal' } } },
+    { width: 120, height: 80, mark: 'tick', encoding: { x: { field: 'y', type: 'quantitative', scale: { domain: [0, 50] } }, y: { field: 'c', type: 'nominal' } } },
+  ] } as never), rowWise: true },
   'layered: points and a rule share the colour': { spec: compile({ width: 300, height: 150, data: { name: 'src' }, encoding: { color: { field: 'c', type: 'nominal' } }, layer: [
     { mark: 'point', encoding: { x: { field: 'x', type: 'quantitative', scale: { domain: [0, 100] } }, y: { field: 'y', type: 'quantitative', scale: { domain: [0, 50] } } } },
     { transform: [{ filter: 'datum.y > 20' }], mark: 'rule', encoding: { y: { field: 'y', type: 'quantitative' } } },
@@ -145,9 +150,11 @@ describe('Vega-Lite charts keep their discrete scales exactly when the scales ar
         if (allKept) {
           keptSteps++
           if (rowWise) {
+            // (each mark of the chart encodes the rows the change touched: two views draw each row twice)
+            const marks = new Set(leafMarks(scene).map((g) => g.name)).size
             const was = new Set(itemsOf(prev))
             const items = itemsOf(scene)
-            expect(items.filter((it) => was.has(it)).length, `${what}: items kept`).toBeGreaterThanOrEqual(items.length - change.touches)
+            expect(items.filter((it) => was.has(it)).length, `${what}: items kept`).toBeGreaterThanOrEqual(items.length - change.touches * marks)
           }
         }
         prev = scene

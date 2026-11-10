@@ -49,7 +49,8 @@ the browser).
   nothing until the frame moves. A mark that tests a selection's store keeps its items while the store's rows are as they were;
   a point selection's numbered dataset and the scales over it are kept; and rows appended while a signal moves are a pulse that
   encodes the new items only. Marks with transforms, scales that read datasets or scales from an expression, and datasets with
-  a step outside the kept-step list are made again on any signal change; group marks always are
+  a step outside the kept-step list are made again on any signal change; group marks are made again, and the leaf marks inside
+  their items are kept as on a data change
   ([ARCHITECTURE.md](ARCHITECTURE.md#incremental-evaluation)).
 - **Auto-pulse inference**: `rowsEqual` compares plain rows with `for...in` instead of two `Object.keys`
   allocations per row, so replacing the whole data array stays cheap even without explicit `dataChanges`.
