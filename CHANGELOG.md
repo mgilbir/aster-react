@@ -73,7 +73,7 @@ and Fixed, per package. Everything built before the first release is in [Pre-rel
   when they are the same. A new category, a category gone or a sort order that moves makes it again, with everything that reads
   it. On 5,000 rows through a chart session: a row appended to a scatter coloured by a category 15.6 to 1.7 ms, a row removed 15.0
   to 1.8 ms, a `createChartStream` append 14.8 to 0.6 ms; a bar chart with a nominal x 15.0 to 4.2-5.1 ms per append. A line per
-  category keeps its scale but is drawn in a group mark, made again as before. The scene is unchanged.
+  category is drawn in a group mark: see the next entry. The scene is unchanged.
 - The marks inside group items (a line per category, a facet's cells, a concat's views, a group per row) are kept by the item they
   are in, and encode only the rows that changed; a group item that did not change keeps its identity, with its guides and title.
   On 5,000 rows through a chart session: a row appended to a line per category 18.4 to 3.0 ms, to a column facet 16.7 to 3.7 ms, to
