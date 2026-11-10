@@ -732,6 +732,32 @@ describe('what a kept build or a keyed pulse must not take over', () => {
     }
   })
 
+  it('a later round carries the numbers of the round before when it is given the same rows', () => {
+    // (rows that an aggregate and a filter make again, equal, in the second round: the numbers the first round's pulse gave them --
+    // a group a removal modified keeps its number -- are theirs; the reference keeps no build, and so makes them again)
+    const spec = {
+      width: 100, height: 50, autosize: 'none',
+      signals: [{ name: 'cnt', update: "length(data('t'))" }],
+      data: [{ name: 't', transform: [
+        { type: 'aggregate', groupby: ['g'], fields: ['v'], ops: ['sum'], as: ['s'] },
+        { type: 'filter', expr: 'datum.s >= 0' },
+        { type: 'identifier', as: 'id' },
+      ] }],
+      marks: [{ type: 'symbol', from: { data: 't' }, encode: { update: { x: { field: 's' }, y: { field: 'id' } } } }],
+    } as unknown as VgSpec
+    const rows = Array.from({ length: 12 }, (_, i) => ({ g: i % 4, v: i }))
+    const mine = createChartSession()
+    const reference = createChartSession()
+    for (const [i, t] of [rows, rows.filter((_, j) => j !== 1), rows.filter((_, j) => j !== 1 && j !== 6)].entries()) {
+      const input: RuntimeInput = { data: { t } }
+      const got = mine.evaluate(spec, input)
+      reuse.on = false
+      let want: SceneRoot
+      try { want = reference.evaluate(spec, input) } finally { reuse.on = true }
+      expectSame(got, want, `step ${i}`)
+    }
+  })
+
   it('a dataset a signal moved, read by name, is read again by a pipeline a pulse runs through', () => {
     // (`s` is filtered by `k`; `d` keeps the rows of `t2` that `s` holds: `k` and the rows of `t2` change together)
     const spec = {

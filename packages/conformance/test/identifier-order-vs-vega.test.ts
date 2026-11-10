@@ -90,7 +90,8 @@ describe('identifier numbers, against vega', () => {
       await compare(spec({ data: 't', field: 'v' }, order), STEPS)
     })
     it(`a dataset that reads a scale of a constant domain is numbered in declaration order (${order})`, async () => {
-      await compare(spec([0, 10], order), STEPS)
+      // (`v` of 5 and the 4.5 appended pass the filter)
+      await compare(spec([0, 8], order), STEPS)
     })
   }
 

@@ -113,6 +113,8 @@ export interface DatasetState {
   key?: string
   /** The build of the dataset in this pass (see `keptBuild`): a later round of the pass, over the same inputs and reads, keeps it. */
   built?: BuiltDataset
+  /** Where the view's id counter stood when this build of the dataset began (see `carriedFrom`). */
+  idsStart?: number
 }
 
 /**
@@ -3139,8 +3141,8 @@ function buildDatasetsOf(ctx: EvalContext, inputData: Record<string, unknown[]>)
         ctx.draft.datasets.set(name, before)
         stepCounts.reused += d.transform.length
       } else {
-        const state: DatasetState = { fp: passFp, inputLength: rows.length, steps: [], stepState: new Map() }
         const idsBefore = ctx.ids.value
+        const state: DatasetState = { fp: passFp, inputLength: rows.length, steps: [], stepState: new Map(), idsStart: idsBefore }
         // Incremental only when every precondition is provable: the caller named a pulse, the previous state was built under the
         // params the steps read (all of them, or the signals and datasets they name: see `pipelineKey`) from an input of the length
         // the pulse is relative to, and no earlier pass of THIS evaluation already updated that state in place.
@@ -3359,7 +3361,7 @@ function runPipeline(
     const had = reads?.publishes !== undefined && Object.hasOwn(ctx.signalParams, reads.publishes)
     const published = reads?.publishes === undefined ? undefined : ctx.signalParams[reads.publishes]
     // (a pass of an evaluation numbers an identifier's rows as the pass before it did: that run is the one whose numbers rows carry)
-    const before = carriedFrom(ctx, name, k, from, inputs, earlierDS, prevDS)
+    const before = carriedFrom(ctx, name, k, from, inputs, earlierDS, prevDS, state.idsStart)
     const run = (): { rows: Row[]; state?: unknown } => ctx.engine !== undefined
       ? ctx.engine.applyOneWithState(from, t, tctx, name, before)
       : { rows: applyFresh(from, t, tctx, name, before) }
@@ -3443,10 +3445,13 @@ function publishedBy(ctx: EvalContext, transforms: readonly CompiledTransform[])
  */
 function carriedFrom(
   ctx: EvalContext, name: string, k: number, rows: readonly Row[], inputs: readonly unknown[] | undefined,
-  earlierDS: DatasetState | undefined, prevDS: DatasetState | undefined,
+  earlierDS: DatasetState | undefined, prevDS: DatasetState | undefined, idsStart: number | undefined,
 ): Row[] | undefined {
   if (earlierDS === undefined) return prevDS?.steps[k]
   if (earlierDS !== ctx.draft.datasets.get(name)) return earlierDS.steps[k]
+  // (the counter stood elsewhere when the round before built the dataset: a dataset before it was given other rows, and the numbers
+  // the round drew are not the ones this round draws)
+  if (earlierDS.idsStart !== idsStart) return ctx.earlier?.datasets.get(name)?.steps[k] ?? prevDS?.steps[k]
   const given = k === 0 ? undefined : earlierDS.steps[k - 1]
   const same = k === 0
     ? earlierDS.inputs === undefined || inputs === undefined || sameArrays(earlierDS.inputs, inputs)

@@ -11,7 +11,7 @@ import './addon-geo.js'
 import { compileChart } from './compiler.js'
 import { evaluateChart } from './evaluate.js'
 import { createChartSession } from './session.js'
-import { renderSceneToSvg } from './index.js'
+import { datasetsOfScene, renderSceneToSvg } from './index.js'
 import type { RuntimeInput, SceneRoot, VgSpec } from './types.js'
 
 type Row = Record<string, unknown>
@@ -79,7 +79,7 @@ const view = (s: SceneRoot): unknown => ({ scene: norm(s), svg: renderSceneToSvg
 const mulberry = (seed: number): (() => number) => { let a = seed; return () => { a = (a + 0x6d2b79f5) | 0; let t = Math.imul(a ^ (a >>> 15), 1 | a); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296 } }
 const quiet = { error: () => {}, warn: () => {}, info: () => {}, debug: () => {} }
 
-interface Case { what: string; spec: VgSpec; steps: RuntimeInput[]; random?: boolean; fresh?: boolean; escaped?: VgSpec }
+interface Case { what: string; spec: VgSpec; steps: RuntimeInput[]; random?: boolean; fresh?: boolean; escaped?: VgSpec; check?: (scene: SceneRoot, step: number) => void }
 
 const ROWS: Row[] = Array.from({ length: 8 }, (_, i) => ({ v: i, w: (i * 3) % 8, g: `g${i % 2}` }))
 const frame = { width: 120, height: 60, autosize: 'none' }
@@ -133,6 +133,8 @@ const CASES: Case[] = [
     steps: [
       { data: { tree: [{ id: 1 }, { id: 2, parent: 1 }, { id: 3, parent: 1 }], p: [{ id: 2 }, { id: 3 }] } },
       { data: { tree: [{ id: 1 }, { id: 2, parent: 1 }, { id: 3, parent: 2 }], p: [{ id: 2 }, { id: 3 }] }, dataChanges: { tree: [2] } },
+      // (the rows of `p` change with the tree: the rows that did not change read the new tree too)
+      { data: { tree: [{ id: 1 }, { id: 2, parent: 1 }, { id: 3, parent: 1 }], p: [{ id: 2 }, { id: 3 }, { id: 1 }] }, dataPulse: { tree: { changed: [2] }, p: { appendOnly: true, baseLength: 2, changed: [] } } },
     ],
   },
   {
@@ -174,6 +176,7 @@ const CASES: Case[] = [
     what: 'setdata from a signal that reads the dataset',
     spec: { ...frame, signals: [{ name: 'w', update: "length(data('t')) + setdata('t', [{v: 9}])" }], data: [{ name: 't' }], marks: [dots('t')] } as unknown as VgSpec,
     steps: [{ data: { t: ROWS.slice(0, 3) } }],
+    check: (scene) => expect(datasetsOfScene(scene).get('t')?.length).toBe(3),
   },
   {
     // (a dataset that reads a signal another dataset's extent writes is built after it, wherever it is declared)
@@ -204,6 +207,51 @@ const CASES: Case[] = [
     steps: [{ logger: quiet }],
   },
   {
+    // (a dataset downstream of others draws: which build takes a pulse decides which numbers the source hands out)
+    what: 'a dataset that draws, downstream of a pulse',
+    spec: {
+      ...frame, signals: [{ name: 'u', value: 0 }, { name: 'n', update: "length(data('store'))" }],
+      data: [{ name: 'store' }, { name: 't' }, { name: 'd', source: 't', transform: [{ type: 'formula', as: 'w', expr: 'datum.v * 2' }] }, { name: 'r', source: 'd', transform: [{ type: 'formula', as: 'z', expr: 'random()' }] }],
+      marks: [dots('r', 'datum.z * 100')],
+    } as unknown as VgSpec,
+    steps: [0, 1, 2, 3].map((i) => ({ data: { t: [...ROWS, ...ROWS.slice(0, i)], store: [] }, signals: { u: i } })),
+    random: true, fresh: false,
+  },
+  {
+    // (a mark's transform that draws is made again with the mark, from the same inputs: the tape replays its numbers)
+    what: 'a mark transform that draws',
+    spec: { ...frame, signals: [{ name: 'u', value: 0 }], data: [{ name: 't' }], marks: [{ type: 'symbol', from: { data: 't' }, transform: [{ type: 'formula', as: 'z', expr: 'random() + u * 0' }], encode: { update: { x: { field: 'v' }, y: { value: 5 } } } }] } as unknown as VgSpec,
+    steps: [0, 1, 2].map((u) => ({ data: { t: ROWS }, signals: { u } })),
+    random: true, fresh: false,
+  },
+  {
+    // (signals that draw, resolved in the order of what they read: `b` draws before `a`, which reads it)
+    what: 'signals that draw, in the order they read each other',
+    spec: { ...frame, signals: [{ name: 'a', update: 'random() + b * 0' }, { name: 'b', update: 'random()' }], marks: [{ type: 'rect', encode: { update: { x: { signal: 'a * 100' }, x2: { signal: 'b * 100' }, height: { value: 2 } } } }] } as unknown as VgSpec,
+    steps: [{}],
+    random: true, fresh: false,
+  },
+  {
+    // (a sequence that stops at a signal that reads data is built once the data it reads is)
+    what: 'a sequence that stops at a signal that reads data',
+    spec: { ...frame, signals: [{ name: 'n', update: "length(data('store'))" }], data: [{ name: 'seq', transform: [{ type: 'sequence', start: 0, stop: { signal: 'n' }, as: 'v' }] }, { name: 'store' }], marks: [dots('seq')] } as unknown as VgSpec,
+    steps: [{ data: { store: [{ a: 1 }, { a: 2 }, { a: 3 }] }, logger: quiet }],
+    check: (scene) => expect(datasetsOfScene(scene).get('seq')?.length).toBe(3),
+  },
+  {
+    // (a react: false signal that reads a signal reading the scale it feeds sees that signal's initial value: vega's ranks)
+    what: 'a react: false signal in a cycle through a scale',
+    spec: {
+      ...frame,
+      signals: [{ name: 'computed', update: "domain('c')" }, { name: 'cd', react: false, update: 'computed' }],
+      data: [{ name: 'src', values: [{ o: 'USA' }, { o: 'Japan' }, { o: 'Europe' }] }],
+      scales: [{ name: 'c', type: 'ordinal', domain: { signal: 'cd' }, range: [0, 10, 20] }],
+      marks: [dots('src', "scale('c', datum.o)")],
+    } as unknown as VgSpec,
+    steps: [{}],
+    check: (scene) => expect((scene as unknown as { __scaleMap: Map<string, { domain(): unknown[] }> }).__scaleMap.get('c')!.domain()).toEqual(['USA', 'Japan', 'Europe']),
+  },
+  {
     // (a mark reads a scale by a call: the scale made again from new rows is the one it reads)
     what: 'a mark that reads a scale by a call',
     spec: { ...frame, data: [{ name: 'pts' }, { name: 'dom' }], scales: [{ name: 'x', type: 'linear', domain: { data: 'dom', field: 'v' }, range: [0, 100] }], marks: [dots('pts', "scale('x', datum.v)")] } as unknown as VgSpec,
@@ -225,6 +273,7 @@ describe('names spelled with escapes are the names they spell', () => {
         const b = other.evaluate(escaped, { ...step, ...(c.random ? { random: rb } : {}) })
         expect(view(b), `${c.what}: step ${i}`).toEqual(view(a))
         if (c.fresh !== false) expect(view(a), `${c.what}: step ${i}, fresh`).toEqual(view(evaluateChart(compileChart(c.spec), step)))
+        c.check?.(b, i)
       }
     })
   }
