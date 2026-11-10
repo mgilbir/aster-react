@@ -21,7 +21,9 @@ import { withTextMetricsProvider } from './text-metrics.js'
 import { AsterUrlError } from './url-policy.js'
 import { SpecParseError } from './parse-error.js'
 import { consoleLogger, type Logger } from './logger.js'
-import { buildScale, scaleTicks, type Scale, CONTINUOUS_TYPES, type ScaleContext } from './scales.js'
+import { buildScale, sameSettings, scaleOfSettings, scaleSettings, scaleTicks, type Scale, type Settings, CONTINUOUS_TYPES, type ScaleContext } from './scales.js'
+import { sortReadsCategoriesOnly } from './scale-domain.js'
+import { implicit as implicitCategory } from './scale-discrete.js'
 
 /** Scale types whose domain is an ordered set of discrete values. */
 const DISCRETE_TYPES = new Set(['band', 'point', 'ordinal'])
@@ -153,13 +155,17 @@ interface ContCensus {
   vals: number[]
 }
 
-/** Value census of a discrete data-driven scale domain. */
+/**
+ * Category census of a discrete data-driven scale domain whose sort reads the categories alone (`sortReadsCategoriesOnly`): the
+ * domain is fixed by which categories there are, the order of their first rows and the value of each first row.
+ */
 interface DiscCensus {
   data: string
   field: string
+  /** The value of the field for every row of the dataset, by index. */
   vals: unknown[]
-  counts: Map<unknown, number>
-  firstIdx: Map<unknown, number>
+  /** The index of the first row of each category, by its text (the domain tells categories apart by their text). */
+  first: Map<string, number>
 }
 
 interface ScaleEntry {
@@ -170,6 +176,11 @@ interface ScaleEntry {
   disc?: DiscCensus
   /** What the scale was made under besides its data (see `scaleKeyOf`): a later evaluation under the same key may keep it. */
   key?: string
+  /**
+   * What the scale was made from (`scaleSettings`): a later evaluation under the same key whose settings are the same keeps the
+   * scale (see `buildScales`). Absent when the scale was not made from settings this evaluation can compare.
+   */
+  settings?: Settings
 }
 
 /**
@@ -3701,10 +3712,23 @@ function singleDataDomain(domain: ScaleDomain): { data: string; field: string; s
   return null
 }
 
-/** Discrete domains sorted by an aggregate depend on other fields: never census-reusable. */
+/**
+ * A discrete domain fixed by its categories alone (see `DiscCensus`). A domain sorted by count or by an aggregate of another field
+ * also depends on how many rows each category has or what they hold: it has no census, and a scale over it is kept only when the
+ * settings it is made from are the same (see `buildScales`).
+ */
 function discreteCensusApplies(dom: { sort?: unknown }): boolean {
-  const sort = dom.sort
-  return !(sort && typeof sort === 'object' && !Array.isArray(sort) && 'op' in (sort as object))
+  return sortReadsCategoriesOnly(dom.sort)
+}
+
+/**
+ * An ordinal scale that adds a category it is asked for to its domain (`domainImplicit`, a `domainRaw`, or no domain): the scale is
+ * changed by what reads it, so once read it is not the scale its settings make, and it is never kept (a later evaluation that keeps
+ * it would hand the marks it encodes again a domain grown by rows that are gone, or by marks it does not encode again).
+ */
+function growsOnLookup(scale: Scale): boolean {
+  const unknown = (scale as { unknown?: () => unknown }).unknown
+  return typeof unknown === 'function' && unknown.call(scale) === implicitCategory
 }
 
 /** vega-util toNumber as a number: null / '' / undefined are NaN (skipped by the extent). */
@@ -3730,18 +3754,29 @@ function freshContCensus(dom: { data: string; field: string }, rows: Row[]): Con
   return { data: dom.data, field: dom.field, lo: finite ? lo : 0, hi: finite ? hi : 1, loCount, hiCount, finite, vals }
 }
 
-function freshDiscCensus(dom: { data: string; field: string }, rows: Row[]): DiscCensus {
-  const counts = new Map<unknown, number>()
-  const firstIdx = new Map<unknown, number>()
+/** The text a discrete domain tells a value's category by (`String`, as scale-domain.ts's tally); undefined when it throws. */
+function categoryText(v: unknown): string | undefined {
+  if (typeof v === 'string') return v
+  try {
+    return String(v)
+  } catch {
+    return undefined
+  }
+}
+
+/** The census of the rows a discrete domain was just made from, or undefined when a value has no text. */
+function freshDiscCensus(dom: { data: string; field: string }, rows: Row[]): DiscCensus | undefined {
+  const first = new Map<string, number>()
   const vals: unknown[] = new Array(rows.length)
   const read = scaleFieldOf(dom.field)
   for (let i = 0; i < rows.length; i++) {
     const v = read(rows[i])
     vals[i] = v
-    counts.set(v, (counts.get(v) ?? 0) + 1)
-    if (!firstIdx.has(v)) firstIdx.set(v, i)
+    const text = categoryText(v)
+    if (text === undefined) return undefined
+    if (!first.has(text)) first.set(text, i)
   }
-  return { data: dom.data, field: dom.field, vals, counts, firstIdx }
+  return { data: dom.data, field: dom.field, vals, first }
 }
 
 /**
@@ -3813,30 +3848,39 @@ function advanceContCensus(cen: ContCensus, rows: Row[], pulse: StepPulse): Cont
 }
 
 /**
- * Advance a discrete value census by a SAME-LENGTH pulse. The ordered domain is
- * unchanged iff every changed row swaps its old value for one that already
- * exists with an earlier first occurrence, while the old value keeps both a
- * positive count and its own first occurrence. Anything else rebuilds.
+ * Advance a discrete category census by a pulse that keeps every row's index (rows edited in place, rows appended), in place (the
+ * caller has claimed it), in O(changed + appended); or return null when the domain is not proven unchanged. It is unchanged when no
+ * category's first row moves or changes its value and no category appears or goes: an edited row is not the first of its old
+ * category (which so keeps a row) and joins a category that has a row before it, or keeps its text; an appended row joins a
+ * category that has one. Anything else (a pulse with an index mapping, a new category, a category's first row edited) returns null,
+ * and the scale is kept only if the settings it is made from are the same (see `buildScales`).
  */
 function advanceDiscCensus(cen: DiscCensus, rows: Row[], pulse: StepPulse): DiscCensus | null {
-  const sameLength = pulse.appendOnly ? (pulse.baseLength === cen.vals.length && rows.length === cen.vals.length)
-    : (!pulse.from && !(pulse.added?.length) && !(pulse.removed?.length) && rows.length === cen.vals.length)
-  if (!sameLength) return null
+  const vals = cen.vals
+  const indexed = pulse.appendOnly || (!pulse.from && !(pulse.added?.length) && !(pulse.removed?.length))
+  const base = pulse.appendOnly ? (pulse.baseLength ?? vals.length) : rows.length
+  if (!indexed || base !== vals.length || rows.length < base) return null
   const read = scaleFieldOf(cen.field)
+  const first = cen.first
   for (const i of pulse.changed) {
-    if (i < 0 || i >= rows.length) return null
+    if (i < 0 || i >= base) continue
     const nv = read(rows[i])
-    const ov = cen.vals[i]
-    if (Object.is(ov, nv) || ov === nv) continue
-    const nCount = cen.counts.get(nv)
-    const nFirst = cen.firstIdx.get(nv)
-    if (nCount == null || nCount <= 0 || nFirst == null || nFirst > i) return null
-    const oCount = cen.counts.get(ov)
-    if (oCount == null || oCount <= 1) return null
-    if (cen.firstIdx.get(ov) === i) return null
-    cen.counts.set(ov, oCount - 1)
-    cen.counts.set(nv, nCount + 1)
-    cen.vals[i] = nv
+    const ov = vals[i]
+    if (Object.is(ov, nv)) continue
+    const was = categoryText(ov)!
+    const now = categoryText(nv)
+    if (now === undefined || first.get(was) === i) return null
+    if (now !== was) {
+      const joins = first.get(now)
+      if (joins === undefined || joins > i) return null
+    }
+    vals[i] = nv
+  }
+  for (let i = base; i < rows.length; i++) {
+    const nv = read(rows[i])
+    const now = categoryText(nv)
+    if (now === undefined || !first.has(now)) return null
+    vals.push(nv)
   }
   return cen
 }
@@ -3869,7 +3913,7 @@ function datasetParts(ds: DatasetState): object[] {
 
 /** What advancing a census updates in place (see advanceContCensus, advanceDiscCensus). */
 function censusParts(cen: ContCensus | DiscCensus): object[] {
-  return 'counts' in cen ? [cen, cen.vals, cen.counts, cen.firstIdx] : [cen, cen.vals]
+  return 'first' in cen ? [cen, cen.vals, cen.first] : [cen, cen.vals]
 }
 
 /** A scale domain / census reads its field through the one shared accessor cache (vega-util `field()` semantics). */
@@ -3925,8 +3969,10 @@ function buildScales(ctx: EvalContext): void {
     const dom = multi ? null : singleDataDomain(s.domain)
     // Signals changed, but none this scale reads (see `keyedScale`): it is reused as when none changed, over the datasets it reads.
     const keyed = !reusable && prevEntry !== undefined && prevEntry.multi === multi && keyedScale(s, ctx, prevEntry, key)
-    // What the scale was made from, besides its datasets: the whole context, or what it reads of it.
-    const stamp = reusable ? (prevEntry !== undefined && prevEntry.multi === multi ? `*${fp}` : undefined) : keyed ? key : undefined
+    // What the scale was made from, besides its datasets: the whole context, or what it reads of it. An ordinal scale that adds the
+    // categories it is asked for to its domain is made again every time: what read it before changed it (see `growsOnLookup`).
+    const stamp = prevEntry === undefined || growsOnLookup(prevEntry.scale) ? undefined
+      : reusable ? (prevEntry.multi === multi ? `*${fp}` : undefined) : keyed ? key : undefined
     // This scale was already proven reusable under the very same params and
     // dataset build earlier in this evaluation (the census advances once): the datasets it names are the very arrays it was proven
     // over, which nothing writes once a round of this evaluation made them (a scale that reads datasets from an expression also
@@ -3941,15 +3987,19 @@ function buildScales(ctx: EvalContext): void {
     }
     if (stamp !== undefined) {
       // (with every signal as it was, a dataset the caller did not name is unchanged; with some changed, a dataset the scale names
-      // must be the very array it was made from, see `sameRows`)
-      let reuse = reusable ? !domainReferencesAffected(s.domain, ctx.affected) : SCALE_READS.get(s)!.datasets.every((n) => sameRows(ctx, n))
+      // must be the very array it was made from, see `sameRows`. Every dataset it names, the range's too; and a scale that reads
+      // datasets or scales from an expression, whichever they are, is not kept for its datasets: its settings are read again)
+      const readsAll = scaleReadsOf(s, ctx.chart) === null
+      const named = SCALE_READS.get(s)!.datasets
+      let reuse = reusable ? !readsAll && !named.some((n) => ctx.affected.has(n)) : named.every((n) => sameRows(ctx, n))
       let entry = prevEntry!
       // An affected single-data-domain scale can still be reused when its domain
       // is provably unchanged (see the census helpers). This skips the O(n)
       // domain re-scan for the common case (few points change, domain holds, or
       // rows are appended inside the current domain).
-      // (a scale of one dataset's domain reads that dataset's rows alone: see scale-domain.ts)
-      if (!reuse && dom) {
+      // (a scale of one dataset's domain reads that dataset's rows alone, see scale-domain.ts, when it names no other dataset and
+      // reads none from an expression: a census proves the domain, and nothing else of it)
+      if (!reuse && dom && !readsAll && named.every((n) => n === dom.data)) {
         const pulse = ctx.datasetPulses.get(dom.data)
         const rows = ctx.datasets.get(dom.data) ?? []
         if (pulse && !pulse.full) {
@@ -3979,8 +4029,24 @@ function buildScales(ctx: EvalContext): void {
       }
     }
     let scale: Scale
+    let settings: Settings
+    // Made under the same key (`stamp`) from the same settings, the scale is the one the evaluation before made: keep that object,
+    // so what reads it is kept too. This is what proves a domain unchanged when no census can (a pulse with an index mapping, a
+    // sort by count or by an aggregate, several fields, `domainRaw`): the settings are read in full, as a fresh build reads them,
+    // and only the scale is not made again. Not for a spec with `bins` (a pass of a fit view leaves them for the next, see
+    // `ScaleContext.pass`), nor under `limits` (a scale made again is checked against the ceilings they replace).
+    let kept = false
     try {
-      scale = buildScale(def, scaleContext(ctx, def.name))
+      const sctx = scaleContext(ctx, def.name)
+      settings = scaleSettings(def, sctx)
+      if (stamp !== undefined && prevEntry?.settings !== undefined && def.bins == null && activeMeter() === null
+        && sameScaleSettings(s.type, settings, prevEntry.settings)) {
+        scale = prevEntry.scale
+        settings = prevEntry.settings
+        kept = true
+      } else {
+        scale = scaleOfSettings(settings, sctx)
+      }
     } catch (e) {
       // vega: the Scale operator throws, the dataflow logs it and the run stops there -- this scale
       // and every operator after it (later scales, every encode) are never evaluated.
@@ -3990,7 +4056,7 @@ function buildScales(ctx: EvalContext): void {
     }
     ctx.scales.set(s.name, scale)
     ctx.scaleTypes.set(s.name, s.type)
-    const entry: ScaleEntry = { scale, multi, key }
+    const entry: ScaleEntry = { scale, multi, key, settings }
     // Track the domain census for a single-data-domain scale so a later update
     // can prove the domain unchanged instead of rescanning.
     if (dom) {
@@ -4002,22 +4068,19 @@ function buildScales(ctx: EvalContext): void {
       }
     }
     entries.set(s.name, entry)
+    if (kept) ctx.scaleReuse.set(s.name, { stamp: stamp!, entry, rows: scaleRowsOf(s, ctx), epoch: ctx.dsEpoch })
   }
   ctx.draft.scaleEntries = entries
   ctx.draft.scales = new Map(ctx.scales)
 }
 
-/** True when a scale domain references an affected dataset (data or multi-field). */
-function domainReferencesAffected(domain: ScaleDomain, affected: Set<string>): boolean {
-  if (domain && typeof domain === 'object' && !Array.isArray(domain)) {
-    const d = (domain as { data?: unknown }).data
-    if (typeof d === 'string' && affected.has(d)) return true
-    const fields = (domain as { fields?: Array<{ data?: string }> }).fields
-    if (Array.isArray(fields)) {
-      for (const f of fields) if (f && typeof f.data === 'string' && affected.has(f.data)) return true
-    }
-  }
-  return false
+/**
+ * `sameSettings`, but a band, point or ordinal scale given a domain override (`domainRaw`) reads its own domain nowhere (the override
+ * is the domain, and the scale's family is not chosen by it), so the domain its data would give is left out of the comparison.
+ */
+function sameScaleSettings(type: string, a: Settings, b: Settings): boolean {
+  if (DISCRETE_TYPES.has(type) && a.domainRaw && b.domainRaw) return sameSettings({ ...a, domain: undefined }, { ...b, domain: undefined })
+  return sameSettings(a, b)
 }
 
 /** True for a `{ fields: [...] }` scale domain (several data fields feed one scale). */

@@ -593,15 +593,15 @@ describe('a pulse runs through a pipeline whose reads did not change, whichever 
   type W = { t: Row[]; u: number; k: number; sz: number }
   const input = (w: W): RuntimeInput => ({ data: { t: w.t }, signals: { u: w.u, k: w.k, sz: w.sz } })
   const nudge = (rows: Row[], at: number): Row[] => rows.map((r, i) => (i === at ? { ...r, v: (r.v as number) + 0.25 } : r))
-  // (the ordinal scale `c` advances its census over a same-length pulse with no mapping only, which the filter after the formula never
-  // publishes: any change of the rows makes it again, and the mark that reads it with it, as before this change; the linear `x`
-  // advances over all three kinds)
+  // (the ordinal scale `c` is kept over every kind: an append of a category it has advances its census, and an edit or a removal,
+  // which the filter after the formula publishes with an index mapping, leaves its settings as they were; the linear `x` advances
+  // over all three kinds)
   const steps: Array<{ what: string; to: (w: W) => W; encodes: Record<string, number>; scales: string[] }> = [
-    { what: 'a row appended, a signal nothing reads', to: (w) => ({ ...w, t: [...w.t, { v: 2.5, g: 'g1' }], u: 1 }), encodes: { pulsed: 1, sized: 1, colored: 13 }, scales: ['x'] },
-    { what: 'a row modified, a signal nothing reads', to: (w) => ({ ...w, t: nudge(w.t, 2), u: 2 }), encodes: { pulsed: 1, sized: 1, colored: 13 }, scales: ['x'] },
-    { what: 'a row removed, a signal nothing reads', to: (w) => ({ ...w, t: w.t.filter((_, i) => i !== 4), u: 3 }), encodes: { colored: 12 }, scales: ['x'] },
+    { what: 'a row appended, a signal nothing reads', to: (w) => ({ ...w, t: [...w.t, { v: 2.5, g: 'g1' }], u: 1 }), encodes: { pulsed: 1, sized: 1, colored: 1 }, scales: ['x', 'c'] },
+    { what: 'a row modified, a signal nothing reads', to: (w) => ({ ...w, t: nudge(w.t, 2), u: 2 }), encodes: { pulsed: 1, sized: 1, colored: 1 }, scales: ['x', 'c'] },
+    { what: 'a row removed, a signal nothing reads', to: (w) => ({ ...w, t: w.t.filter((_, i) => i !== 4), u: 3 }), encodes: {}, scales: ['x', 'c'] },
     // (`sz` is read by one mark: it encodes every item, the others their changed row; the dataset keeps its pulse)
-    { what: 'a row modified, a signal one mark reads', to: (w) => ({ ...w, t: nudge(w.t, 5), sz: 40 }), encodes: { pulsed: 1, sized: 12, colored: 12 }, scales: ['x'] },
+    { what: 'a row modified, a signal one mark reads', to: (w) => ({ ...w, t: nudge(w.t, 5), sz: 40 }), encodes: { pulsed: 1, sized: 12, colored: 1 }, scales: ['x', 'c'] },
     // (then no rows: the steps the pulses ran are kept by what they read, and so is everything made from them)
     { what: 'a signal nothing reads, after the pulses', to: (w) => ({ ...w, u: 4 }), encodes: {}, scales: ['x', 'c'] },
     // (`k` is read by the pipeline: the dataset is made again, and what reads it; 11 rows have `v > 0`)

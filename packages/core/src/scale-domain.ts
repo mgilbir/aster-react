@@ -131,6 +131,20 @@ function readOrdering(sort: unknown, severalFields: boolean, ctx: ScaleContext):
   return { op: resolve(written.op) as string | undefined, field: resolve(written.field) as string | undefined, order: resolve(written.order) as string | undefined }
 }
 
+/**
+ * Whether the domain of one field sorted by `sort` is fixed by its categories alone: which texts there are, the order in which
+ * each first appears and the value it first appears as. True with no sort, a sort by key (`true`, or a `field` with no `op`), and
+ * a sort by a column a category does not have (it keeps the order of appearance); false for a sort by `count` or by an aggregate
+ * of another field, and for a sort whose `op` or `field` is not a plain text (a signal is unknown until it is read). The runtime's
+ * census keeps a scale over an update that leaves those three things as they were (see `advanceDiscCensus` in runtime.ts).
+ */
+export function sortReadsCategoriesOnly(sort: unknown): boolean {
+  if (!sort || !isObject(sort) || isArray(sort)) return true
+  const { op, field } = sort as { op?: unknown; field?: unknown }
+  if (op !== undefined || (field !== undefined && !isString(field))) return false
+  return field === undefined || columnName(undefined, field as string) !== 'count'
+}
+
 /** The aggregate `op` over a list of values. */
 function aggregate(op: string, values: unknown[]): unknown {
   return aggregateGroup(values.map((v) => ({ v })), { type: 'aggregate', groupby: [], fields: ['v'], ops: [op], as: ['r'] }).r
