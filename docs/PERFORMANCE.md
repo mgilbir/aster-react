@@ -43,6 +43,11 @@ the browser).
   and at the fitted size. Each pass of an update is made from the same pass of the evaluation before, so a one-row
   update re-encodes one item per pass instead of every item of the first pass. The view keeps both passes' state, so a fit view
   also retains the first pass's items between updates (not measured here; [ARCHITECTURE.md](ARCHITECTURE.md#incremental-evaluation)).
+- **Signal changes keep what does not read them**: a top-level mark keeps its group and its items, and a top-level scale its
+  object, when the signals its definition names, the view's size and the datasets it reads are as they were, whichever other
+  signals changed. A Vega-Lite `time` animation, whose clock ticks at 60 fps while its marks read the frame's rows, re-encodes
+  nothing until the frame moves. Marks with transforms, and marks and scales that read datasets or scales from an expression,
+  are made again on any signal change; group marks always are ([ARCHITECTURE.md](ARCHITECTURE.md#incremental-evaluation)).
 - **Auto-pulse inference**: `rowsEqual` compares plain rows with `for...in` instead of two `Object.keys`
   allocations per row, so replacing the whole data array stays cheap even without explicit `dataChanges`.
 - **Per-datum updates**: sessions diff replaced immutable source arrays automatically (`autoChanges`), then
@@ -135,6 +140,28 @@ Vega-Lite one, whose second pass also re-runs the formula and filter steps of it
 update after a fresh evaluation, after a resize, or after an update that moves the fitted size (a domain change that widens
 the axis labels) re-encodes what reads the size, as a resize of a fixed-size view does.
 
+### Signal changes no mark reads (node, no DOM)
+
+Measured 2026-11-10 on perf/signal-scoped-reuse against its base (main at e31d61c), the two builds run alternately, three
+rounds each, on the shared machine. `node tick.mjs <worktree>`, a probe kept outside the repository: a Vega-Lite `time`
+animation over 3,000 points (`params: [{ name: 'anim', select: { type: 'point', on: 'timer', fields: ['year'] } }]`, a
+`filter` by it, `time: year` over three years), `createChartSession().evaluate(vg, { signals: { anim_clock } })` with only the
+clock advanced by 16 ms per tick and no data change, 30 ticks, median and p90 ms per tick. The control is the fixed-size
+one-row update of the section above (`node perf.mjs <worktree>`, its last run of three), which this change does not touch.
+
+| Case | base, rounds 1-3 | this change, rounds 1-3 |
+|---|---|---|
+| tick, median (p90) | 11.76 (16.87) / 12.07 (17.92) / 11.86 (17.41) | 0.90 (1.01) / 0.91 (1.02) / 0.93 (1.41) |
+| items of the 30th tick kept | 0 of 3000 | 3000 of 3000 |
+| the same inputs again (session cache) | 0.06 / 0.05 / 0.06 | 0.04 / 0.04 / 0.04 |
+| control: fixed-size one-row update | 0.56 / 0.55 / 0.62 | 0.56 / 0.56 / 0.58 |
+
+The tick keeps the mark group, its items and the three scales, and the frame filter's step (it reads the store by name, and
+the store's rows are equal). Keying a result by its reads costs a few microseconds per evaluation: a one-row stream append
+on 10,000 points (`createChartStream`, 500 appends, the same alternation) went from 62 / 63 / 67 to 69 / 69 / 68 µs median.
+`pnpm bench:incremental -- --points=10000 --reps=30`, three runs each: append speedup vs a full evaluation 21.5x / 21.8x /
+20.2x before, 18.9x / 20.0x / 17.2x after (floor 8x); the stream append rounds to 0.1 ms before and 0.1 to 0.2 ms after.
+
 ### Differential updates (node, no DOM)
 
 `pnpm bench:differential` (50,000 points, about 1% of rows changed; `evaluateChart` with a changeset vs a full
@@ -224,6 +251,11 @@ on-demand column of the React rows up by 3.4 kB (to 64.5 and 62.5): the animatio
 prop handling and the scene stamps (0.85 kB of `<Chart>`'s 1.2) and the chunk boundary the on-demand module draws around the
 colour and field code it shares with core (0.35 kB; `useChart` pays only that). `budget.mjs` keeps the breakdown. With the `maxItems` limit and on top of the fit-view work
 (the combined stack, measured 2026-11-09 with the same command): the transition module is 3.3 kB and `<Chart>` 207.4 kB gzip eager.
+
+Signal-scoped reuse (the keys of marks and scales, the kept copies and the steps that read a dataset by name), measured
+2026-11-10 with the same command against main at e31d61c (kB gzip, before -> after): `@aster-charts/core` 153.0 -> 154.5,
+`useChart` 164.6 -> 166.1, `<Chart>` 207.4 -> 208.7, `<SvgChart>` 184.4 -> 185.8, `<SvgChart>` + `interaction` 202.0 -> 203.3,
+`<Chart>` + VL 310.6 -> 312.1; the marginal rows did not move.
 
 The manifests list only the files that really have an import effect (see
 [ARCHITECTURE.md](ARCHITECTURE.md#side-effects-and-tree-shaking)). Without a `sideEffects` field a bundler must assume

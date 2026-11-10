@@ -2,11 +2,12 @@
  * What a dataset's transform step reads, so a later evaluation can keep the rows the step made instead of making them again.
  *
  * A step's output is a function of its input rows, its own parameters, and what its parameters and expressions read: signals
- * (by name, anywhere in an expression or in a `{signal}` parameter), the injected random source, and, for `identifier`, the numbers
- * the previous evaluation gave its rows. The steps listed here read nothing else -- no scale, no dataset, no projection, no
- * container, no clock -- so those are the whole of what a re-evaluation has to compare. A step that mentions anything the analysis
- * cannot account for (a function outside the lists below, `event`, `item`, a malformed expression) is never kept: it runs, as it
- * always has.
+ * (by name, anywhere in an expression or in a `{signal}` parameter), the datasets an expression reads by a name it spells out
+ * (`data("store")`, `vlSelectionTest("store", datum)`), the injected random source, and, for `identifier`, the numbers the previous
+ * evaluation gave its rows. The steps listed here read nothing else -- no scale, no projection, no container, no clock -- so those
+ * are the whole of what a re-evaluation has to compare. A step that mentions anything the analysis cannot account for (a function
+ * outside the lists below, a dataset read by a computed name, `event`, `item`, a malformed expression) is never kept: it runs, as
+ * it always has.
  *
  * The analysis is of the compiled transform alone, so it is made once per transform and kept beside it.
  */
@@ -31,6 +32,12 @@ const PURE_FUNCTIONS = new Set([
   'toBoolean', 'toDate', 'toNumber', 'toString', 'trim', 'truncate', 'upper',
 ])
 
+/**
+ * Expression functions that read the rows of the dataset their first argument names, and compute from those and their other
+ * arguments alone (vega-functions' data functions and vega-selections' tests). Kept only when that argument is a string literal.
+ */
+const DATASET_FUNCTIONS = new Set(['data', 'indata', 'vlSelectionTest', 'vlSelectionIdTest', 'vlSelectionResolve'])
+
 /** The expression functions that draw from the random source (see `mayDrawRandom`). */
 const DRAWING_FUNCTIONS = new Set(['random', 'sampleNormal', 'sampleLogNormal', 'sampleUniform'])
 
@@ -40,6 +47,8 @@ const KEYWORDS = new Set(['datum'])
 export interface StepReads {
   /** The names the step's parameters and expressions mention besides the row: their values (a signal's, or none) are the step's inputs. */
   signals: readonly string[]
+  /** The datasets its expressions read, by the names they spell out: their rows are the step's inputs too. */
+  datasets: readonly string[]
   /** The step can draw from the random source. */
   draws: boolean
   /** The signal the step writes its result to (bin, extent, timeunit, crossfilter). */
@@ -61,37 +70,38 @@ export function stepReadsOf(t: CompiledTransform): StepReads | null {
 function analyse(t: CompiledTransform): StepReads | null {
   if (!READS_ROWS_AND_SIGNALS.has(t.type as string)) return null
   const names = new Set<string>()
+  const datasets = new Set<string>()
   const params = t as unknown as Record<string, unknown>
   for (const key of Object.keys(params)) {
     // (a string `signal` on the transform itself names the signal it writes; an object one reads a signal)
     if (key === 'type' || (key === 'signal' && typeof params[key] === 'string')) continue
-    if (!walkParam(params[key], names, key === 'expr', 0)) return null
+    if (!walkParam(params[key], names, datasets, key === 'expr', 0)) return null
   }
   const publishes = typeof params.signal === 'string' ? params.signal : undefined
-  return { signals: [...names].sort(), draws: mayDrawRandom(t), publishes }
+  return { signals: [...names].sort(), datasets: [...datasets].sort(), draws: mayDrawRandom(t), publishes }
 }
 
-/** Collect the signals a parameter reads; `false`: it reads something the analysis does not cover. */
-function walkParam(v: unknown, names: Set<string>, isExpr: boolean, depth: number): boolean {
-  if (typeof v === 'string') return isExpr ? readExpression(v, names) : true
+/** Collect the signals and datasets a parameter reads; `false`: it reads something the analysis does not cover. */
+function walkParam(v: unknown, names: Set<string>, datasets: Set<string>, isExpr: boolean, depth: number): boolean {
+  if (typeof v === 'string') return isExpr ? readExpression(v, names, datasets) : true
   if (v === null || typeof v !== 'object') return true
   if (depth > 8) return false
   if (Array.isArray(v)) {
-    for (const x of v) if (!walkParam(x, names, false, depth + 1)) return false
+    for (const x of v) if (!walkParam(x, names, datasets, false, depth + 1)) return false
     return true
   }
   const o = v as Record<string, unknown>
   const keys = Object.keys(o)
   // `{signal: <expression>}` is a signal reference (the engine resolves it before the step runs: see resolveSignalParams)
-  if (keys.length === 1 && keys[0] === 'signal' && typeof o.signal === 'string') return readExpression(o.signal, names)
-  for (const k of keys) if (!walkParam(o[k], names, k === 'expr', depth + 1)) return false
+  if (keys.length === 1 && keys[0] === 'signal' && typeof o.signal === 'string') return readExpression(o.signal, names, datasets)
+  for (const k of keys) if (!walkParam(o[k], names, datasets, k === 'expr', depth + 1)) return false
   return true
 }
 
-function readExpression(code: string, names: Set<string>): boolean {
+function readExpression(code: string, names: Set<string>, datasets: Set<string>): boolean {
   let tree: Expr
   try { tree = parseExpressionCached(code) } catch { return false }
-  return readTree(tree, names)
+  return readTree(tree, names, datasets)
 }
 
 /** The node types known to compute from their children alone; any other type (a new or forgotten shape) keeps the step out. */
@@ -100,11 +110,12 @@ const PURE_NODES = new Set(['Literal', 'Identifier', 'MemberExpression', 'CallEx
 /**
  * Every identifier of the tree, found by walking ALL the child nodes of a node whatever its type (not the branches a type is known to
  * have), so that a read in any position is seen. The only names that are not reads are a property key (`a.b`, `{b: 1}`) and a called
- * function, which must be a pure or drawing one. `false`: the tree holds a node of a type not known to be pure, or `event`/`item`.
+ * function, which must be a pure or drawing one, or a dataset function whose first argument is a string (the dataset it reads goes to
+ * `datasets`). `false`: the tree holds a node of a type not known to be pure, `event`/`item`, or a dataset read by a computed name.
  */
-function readTree(e: unknown, names: Set<string>): boolean {
+function readTree(e: unknown, names: Set<string>, datasets: Set<string>): boolean {
   if (e === null || e === undefined) return true
-  if (Array.isArray(e)) return e.every((x) => readTree(x, names))
+  if (Array.isArray(e)) return e.every((x) => readTree(x, names, datasets))
   if (typeof e !== 'object') return true
   const node = e as { type?: unknown } & Record<string, unknown>
   if (typeof node.type !== 'string' || !PURE_NODES.has(node.type)) return false
@@ -118,16 +129,21 @@ function readTree(e: unknown, names: Set<string>): boolean {
     }
     case 'MemberExpression':
       // (a property name is not a read; a computed property is an expression)
-      return readTree(node.object, names) && (node.computed !== true || readTree(node.property, names))
-    case 'Property': return readTree(node.value, names)
+      return readTree(node.object, names, datasets) && (node.computed !== true || readTree(node.property, names, datasets))
+    case 'Property': return readTree(node.value, names, datasets)
     case 'CallExpression': {
       const f = node.callee as { type?: string; name?: string }
-      if (f?.type !== 'Identifier' || !(PURE_FUNCTIONS.has(f.name!) || DRAWING_FUNCTIONS.has(f.name!))) return false
-      return readTree(node.arguments, names)
+      if (f?.type !== 'Identifier') return false
+      if (DATASET_FUNCTIONS.has(f.name!)) {
+        const first = (node.arguments as unknown[] | undefined)?.[0] as { type?: string; value?: unknown } | undefined
+        if (first?.type !== 'Literal' || typeof first.value !== 'string') return false
+        datasets.add(first.value)
+      } else if (!(PURE_FUNCTIONS.has(f.name!) || DRAWING_FUNCTIONS.has(f.name!))) return false
+      return readTree(node.arguments, names, datasets)
     }
     default:
       // every other child of the node, whatever it is called
-      for (const k of Object.keys(node)) if (k !== 'type' && !readTree(node[k], names)) return false
+      for (const k of Object.keys(node)) if (k !== 'type' && !readTree(node[k], names, datasets)) return false
       return true
   }
 }
@@ -273,7 +289,7 @@ export function runsOf(transforms: readonly CompiledTransform[]): readonly numbe
   for (let k = 0; k < transforms.length; k++) {
     const t = transforms[k]!
     const reads = stepReadsOf(t)
-    const f = reads !== null && !reads.draws && reads.publishes === undefined ? footprintOf(t) : null
+    const f = reads !== null && !reads.draws && reads.publishes === undefined && reads.datasets.length === 0 ? footprintOf(t) : null
     if (f !== null && members.length > 0 && admits(f)) {
       members.push(f)
     } else {
@@ -297,7 +313,7 @@ const PIPELINES = new WeakMap<readonly CompiledTransform[], readonly string[] | 
 
 /**
  * The signals a whole pipeline mentions, when every step of it is one whose rows depend on its input rows and those signals alone
- * (no draw, no signal written, no row numbering); `null` otherwise.
+ * (no draw, no signal written, no dataset read, no row numbering); `null` otherwise.
  */
 export function pipelineReadsOf(transforms: readonly CompiledTransform[]): readonly string[] | null {
   let names = PIPELINES.get(transforms)
@@ -305,7 +321,7 @@ export function pipelineReadsOf(transforms: readonly CompiledTransform[]): reado
     const all = new Set<string>()
     names = transforms.every((t) => {
       const reads = stepReadsOf(t)
-      if (reads === null || reads.draws || reads.publishes !== undefined || t.type === 'identifier') return false
+      if (reads === null || reads.draws || reads.publishes !== undefined || reads.datasets.length > 0 || t.type === 'identifier') return false
       for (const n of reads.signals) all.add(n)
       return true
     }) ? [...all].sort() : null

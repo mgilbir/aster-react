@@ -44,6 +44,14 @@ and Fixed, per package. Everything built before the first release is in [Pre-rel
   evaluation before. A one-row update on a 10,000-point chart went from 5.8 to 1.4 ms (Vega spec in a measured container) and
   from 37 to 4.5 ms (Vega-Lite `"container"`), about the cost of the same update at a fixed size. The scene is unchanged; a fit
   view now also keeps its first pass's state (and items) between evaluations.
+- A signal change keeps the top-level marks and scales that do not read it: a mark keeps its group and its items, a scale its
+  object, when the signals its definition names, the view's size and the datasets it reads are as they were. A tick of a
+  Vega-Lite `time` animation on 3,000 points (its clock advanced, its marks reading the frame's rows) went from 11.9 to 0.9 ms,
+  every item kept, until the frame moves. A dataset with no transforms keeps its copy of rows the session says are unchanged,
+  and a transform step that reads a dataset by a name it spells out (`data("store")`, `vlSelectionTest("store", datum)`) is
+  kept while that dataset's rows are equal. Marks with transforms, marks and scales that read datasets or scales from an
+  expression, and group marks are made again on any signal change, as before; so is everything under `limits` or in an
+  `evaluateChart` call without a change description. The scene is unchanged. A one-row stream append costs about 6 µs more.
 
 #### Added
 
@@ -59,6 +67,10 @@ and Fixed, per package. Everything built before the first release is in [Pre-rel
 - A spec that drives one view dimension itself keeps its other, numeric dimension when a host measures its container. A
   Vega-Lite spec with `width: "container", height: 200` in `<Chart>` grew on every measurement inside a block `<div>`
   with no height of its own, because the measured height replaced the 200 and the container grew with the chart (#128).
+- A mark drawn from the items of another mark (`from: {data: <mark name>}`) was empty after an update told that some other
+  dataset changed, when the mark it reads was kept from the evaluation before.
+- A dataset whose transform throws stops the pass before every mark, as in Vega. After an update told that some other
+  dataset changed, a mark kept from the evaluation before was drawn anyway.
 
 ## 0.1.0 (2026-11-08): initial release
 

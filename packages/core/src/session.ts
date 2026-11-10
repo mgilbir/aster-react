@@ -219,7 +219,8 @@ export function createChartSession(): ChartSession {
       if (was === undefined || named.has(name) || pulse.datasets.has(name) || pulse.structural.has(name)) continue
       if (byContent || rows === lastRaw.get(name)) (out ??= new Map()).set(name, was)
     }
-    return out
+    // (empty or not, the map tells the engine that this session describes every change of the rows it hands over: see DataStability)
+    return out ?? new Map()
   }
 
   const withAutoPulse = (spec: VgSpec, input: RuntimeInput, currentRaw: Map<string, unknown>): { input: RuntimeInput; pulse: DataPulse } => {
