@@ -64,6 +64,12 @@ const container: Spec = {
   }),
 }
 
+// vega-lite's `width: "container", height: 200`: only the width reads the container, the height is a number (autosize fit-x)
+const containerWidth: Spec = {
+  ...body, height: 200, autosize: { type: 'fit-x', contains: 'padding' },
+  signals: [{ name: 'width', init: 'isFinite(containerSize()[0]) ? containerSize()[0] : 300', on: [{ events: 'window:resize', update: 'isFinite(containerSize()[0]) ? containerSize()[0] : 300' }] }],
+}
+
 // a composition (what vega-lite makes of a facet / concat / repeat): `layout` at the top, no size of its own. Vega sizes the
 // view from the laid-out groups (the `width` / `height` signals are outputs there, 0 until then), so a container does not
 // size it; a size the host does give (a prop, a signal write) still does
@@ -95,6 +101,8 @@ describe('the view size, against vega (a signal write, the later one wins)', () 
     // vega's container is the element the view is attached to; its size is read when the signals are computed
     ['a container-sized spec: the container is its size', container, () => {}, { containerSize: { width: 600, height: 240 } }, { width: 600, height: 240 }],
     ['a container-sized spec, the container measured', container, () => {}, { measuredSize: { width: 520, height: 200 } }, { width: 520, height: 200 }],
+    // the measured height of a container that grows with the chart must not feed back into it (issue #128)
+    ['a spec that sizes its width from the container keeps its numeric height', containerWidth, () => {}, { measuredSize: { width: 520, height: 900 } }, { width: 520, height: 900 }],
     ['a container-sized spec, a window:resize handler re-ran after the container changed', container, async (v, el) => {
       el.size = { width: 330, height: 210 }
       window.dispatchEvent(new Event('resize'))
