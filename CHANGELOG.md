@@ -90,6 +90,13 @@ and Fixed, per package. Everything built before the first release is in [Pre-rel
   judged only the new and modified rows, so rows a moved scale or store would now drop were drawn. It judges every row again.
 - A mark that reads a dataset's hierarchy (`treePath`, `treeAncestors`) or a scale through an expression that spells the
   function's name with an escape was kept after its data changed.
+- An `identifier` after a transform that reads a scale numbered its rows again on every evaluation, with numbers another
+  dataset's rows held (a point picked in one selected a point of the other, and a picked point was lost on the next signal
+  change). Such a dataset is now numbered after the scale it reads, as in Vega, and its rows keep their numbers.
+- Names spelled with escapes in expressions (an escaped `data`, `random` or signal name) were missed wherever the engine read
+  what an expression depends on: the order of datasets and signals, what a data change affects, which sites draw from an
+  injected `random` and what they read, `setdata`, late signals, a projection's fit, `init` signals that read data or scales, and
+  formulas over a hierarchy (`treePath`), which were also taken as row-local. They are read as the expression lexer reads them.
 
 ## 0.1.0 (2026-11-08): initial release
 
