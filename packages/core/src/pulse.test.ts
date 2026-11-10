@@ -105,3 +105,46 @@ describe('sorted grouped transforms', () => {
     expect(renderSceneToSvg(inc)).toBe(renderSceneToSvg(full))
   })
 })
+
+describe('a row diff sees values as the scene does', () => {
+  it('tells 0 from -0, nested ones too, and Infinity from null; NaN is NaN and two Dates of one instant are one value', () => {
+    const changed = (a: unknown, b: unknown): number[] => diffRows([{ v: a }], [{ v: b }])!.changed
+    expect(changed(0, -0)).toEqual([0])
+    expect(changed(-0, 0)).toEqual([0])
+    expect(changed([0], [-0])).toEqual([0])
+    expect(changed({ p: [Infinity] }, { p: [null] })).toEqual([0])
+    expect(changed(new Map([[1, 2]]), new Map())).toEqual([0])
+    expect(changed(NaN, NaN)).toEqual([])
+    expect(changed([NaN, { q: 'x' }], [NaN, { q: 'x' }])).toEqual([])
+    expect(changed(new Date(5), new Date(5))).toEqual([])
+    expect(changed(new Date(5), new Date(6))).toEqual([0])
+  })
+
+  it('a session that is not told what changed draws a value turned from 0 into -0 as a fresh evaluation does', () => {
+    const shown = {
+      width: 100, height: 50, padding: 0, autosize: 'none',
+      data: [{ name: 't' }],
+      scales: [{ name: 'c', type: 'ordinal', domain: { data: 't', field: 'v' }, range: 'category' }],
+      legends: [{ fill: 'c' }],
+      marks: [{ type: 'text', from: { data: 't' }, encode: { update: { text: { signal: "format(datum.v, '+')" }, fill: { scale: 'c', field: 'v' } } } }],
+    } as unknown as VgSpec
+    const session = createChartSession()
+    session.evaluate(shown, { data: { t: [{ v: 0 }, { v: 2 }] } })
+    const input = { data: { t: [{ v: -0 }, { v: 2 }] } }
+    expect(renderSceneToSvg(session.evaluate(shown, input))).toBe(renderSceneToSvg(evaluateChart(compileChart(shown), input)))
+  })
+  it('a mark kept for its rows after a signal change sees a value turned from 0 into -0', () => {
+    // (the signal `k` moves the formula's output from 0 to -0; the mark reads no signal, only the rows, which it compares with its items)
+    const signed = {
+      width: 100, height: 50, padding: 0, autosize: 'none',
+      signals: [{ name: 'k', value: 1 }],
+      data: [{ name: 't' }, { name: 'd', source: 't', transform: [{ type: 'formula', as: 'w', expr: 'datum.v * k' }] }],
+      marks: [{ type: 'text', from: { data: 'd' }, encode: { update: { text: { signal: "format(datum.w, '+')" } } } }],
+    } as unknown as VgSpec
+    const session = createChartSession()
+    const rows = [{ v: 0 }]
+    session.evaluate(signed, { data: { t: rows }, signals: { k: 1 } })
+    const input = { data: { t: rows }, signals: { k: -1 } }
+    expect(renderSceneToSvg(session.evaluate(signed, input))).toBe(renderSceneToSvg(evaluateChart(compileChart(signed), input)))
+  })
+})

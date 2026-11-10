@@ -2220,7 +2220,7 @@ function sameRows(ctx: EvalContext, name: string): boolean {
 
 /**
  * Whether `rows` are, row by row, the rows the items were made from (each item's `datum` is a copy of its row, made when it was
- * encoded): the same own enumerable fields with the same values (`===`, or both NaN). A row whose prototype is not a plain object's,
+ * encoded): the same own enumerable fields with the same values (`Object.is`: `0` and `-0` differ, `NaN` is `NaN`). A row whose prototype is not a plain object's,
  * or that has symbol-keyed fields, is not compared: it is not the same.
  */
 function sameData(rows: readonly Row[], items: readonly SceneItem[]): boolean {
@@ -2238,7 +2238,7 @@ function sameData(rows: readonly Row[], items: readonly SceneItem[]): boolean {
       if (!Object.hasOwn(b, k)) return false
       const x = a[k]
       const y = b[k]
-      if (x !== y && !(x !== x && y !== y)) return false
+      if (!Object.is(x, y)) return false
     }
     for (const _k in b) n--
     if (n !== 0) return false
