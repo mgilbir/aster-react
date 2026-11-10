@@ -205,6 +205,9 @@ cli({ url: import.meta.url })
 // measured value + 0.5.
 // Guide formats, layout errors and the parse walk (fix/core-parse-format-layout-errors) on main with the sort fix, measured on a clean build
 // (kB gzip): Chart + VL 308.3 (+1.3 over main's 307.0 ceiling; the core growth the lane measured). Ceiling is the measured value + 0.5.
+// The tooltip shows the item's `tooltip` value as vega-tooltip does (fix/129-tooltip-encoding; the formatter ships with the
+// interaction capability), measured on a clean build against main (kB gzip): Chart 205.7 (main 205.4), SvgChart 182.8 (182.7),
+// SvgChart + interaction 200.1 (199.8), Chart + VL 308.8 (308.5). Ceiling is the measured value + 0.5.
 const BUDGETS = {
   '@aster-charts/core': 152.9 * 1024,
   '+ @aster-charts/core/dom': 11.1 * 1024,
@@ -215,12 +218,12 @@ const BUDGETS = {
   '+ @aster-charts/core/geo': 16.6 * 1024,
   '+ @aster-charts/core/transforms': 39.7 * 1024,
   '@aster-charts/react useChart': 164.1 * 1024,
-  '@aster-charts/react Chart': 205.7 * 1024,
+  '@aster-charts/react Chart': 206.2 * 1024,
   // The light chart (`@aster-charts/react/lite`): SVG only, no canvas renderer; alone and with the `interaction` capability.
-  '@aster-charts/react SvgChart': 182.9 * 1024,
-  '@aster-charts/react SvgChart + interaction': 200.1 * 1024,
+  '@aster-charts/react SvgChart': 183.3 * 1024,
+  '@aster-charts/react SvgChart + interaction': 200.6 * 1024,
   // Base + the VL compiler (opt-in: `import '@aster-charts/react/vl'`).
-  '@aster-charts/react Chart + VL': 308.8 * 1024,
+  '@aster-charts/react Chart + VL': 309.3 * 1024,
 }
 
 const THIS_DIR = dirname(fileURLToPath(import.meta.url))

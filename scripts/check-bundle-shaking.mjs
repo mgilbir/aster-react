@@ -73,7 +73,7 @@ const SIGNAL_VG = {
   width: 100, height: 100,
   signals: [{ name: 'clicks', value: 0, on: [{ events: 'click', update: 'clicks + 1' }] }],
   data: [{ name: 'table', values: [{ k: 1 }] }],
-  marks: [{ type: 'rect', from: { data: 'table' }, encode: { enter: { x: { value: 10 }, y: { value: 10 }, width: { value: 30 }, height: { value: 30 }, fill: { value: 'red' } } } }],
+  marks: [{ type: 'rect', from: { data: 'table' }, encode: { enter: { x: { value: 10 }, y: { value: 10 }, width: { value: 30 }, height: { value: 30 }, fill: { value: 'red' }, tooltip: { signal: 'datum' } } } }],
 }
 const lit = (v) => JSON.stringify(v)
 

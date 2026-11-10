@@ -4,6 +4,7 @@ import type {
   ChartInfo,
   ImageUrlPolicy,
   Logger,
+  SceneItem,
   SceneRoot,
   SpecLimits,
   TextMetricsProvider,
@@ -14,6 +15,14 @@ import type { SelectValue, SelectionInterval, ViewDomain } from './interaction.j
 // The public prop and handle types of `<Chart>`. They live apart from the component so the
 // two shells over `ChartCore` (`<Chart>` and `<SvgChart>`) and the parity tests that compare
 // them (`parity.assert.ts`) share one definition.
+
+/** What `renderTooltip` receives besides the datum: the hovered item and its `tooltip` value. */
+export interface TooltipInfo {
+  /** The item's `tooltip` channel value, as the spec encodes it (`undefined` when the mark has none). */
+  tooltip: unknown
+  /** The hovered scene item. */
+  item: SceneItem
+}
 
 export interface ChartProps {
   /**
@@ -172,17 +181,25 @@ export interface ChartProps {
   /** Disable the spec-driven event loop (defaults to on when the spec has signal.on streams). */
   interactive?: boolean
   /**
-   * Show a tooltip on hover over a mark: the datum's fields rendered as
-   * `key: value` at the cursor. Resolved through the scene hit index on every
-   * renderer (SVG, canvas and batched dense marks alike; the SVG carries no
-   * per-item datum attribute, as vega's does not). Off by default.
+   * Show a tooltip on hover over a mark: the hovered item's `tooltip` value,
+   * as Vega with vega-tooltip shows it (the mark's `tooltip` encoding, or
+   * Vega-Lite's `tooltip` channel with its titles and formats). An object is
+   * shown as `key: value` rows under its `title`, an array as `[a, b]`, any
+   * other value as text; an item without a `tooltip` value shows nothing. To
+   * list a datum's fields, encode `tooltip: { signal: 'datum' }` (Vega-Lite:
+   * `mark: { tooltip: { content: 'data' } }`). Resolved through the scene hit
+   * index on every renderer (SVG, canvas and batched dense marks alike). Off by
+   * default.
    */
   tooltip?: boolean
   /**
    * Custom tooltip content rendered inside the chart's React tree (not a
-   * detached overlay). Providing this enables tooltips without `tooltip`.
+   * detached overlay). Providing this enables tooltips without `tooltip`. It is
+   * called for every hovered item that has a datum or a `tooltip` value, with
+   * the datum (`{}` when the item has none) and `info`: the item's `tooltip`
+   * value and the scene item itself. Return `null` to show nothing.
    */
-  renderTooltip?: (datum: Record<string, unknown>) => React.ReactNode
+  renderTooltip?: (datum: Record<string, unknown>, info: TooltipInfo) => React.ReactNode
   /**
    * Budgets for untrusted specs (rows, marks, strings, paths, SVG size, time),
    * applied at every evaluation; a violation renders the error state and calls

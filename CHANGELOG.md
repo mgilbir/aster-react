@@ -5,6 +5,16 @@ and Fixed, per package. Everything built before the first release is in [Pre-rel
 
 ## Unreleased
 
+### `@aster-charts/react`
+
+#### Changed
+
+- `tooltip` shows the hovered item's `tooltip` value, as Vega with vega-tooltip does (the Vega-Lite `tooltip` encoding with
+  its titles and formats), and nothing for a mark without one. It used to list every field of the datum, including
+  Vega-Lite's internal fields. To list a datum, encode `tooltip: { signal: "datum" }` (#129).
+- `renderTooltip` receives a second argument, `{ tooltip, item }` (`TooltipInfo`): the item's `tooltip` value and the
+  scene item (#129).
+
 ### `@aster-charts/core`
 
 #### Fixed

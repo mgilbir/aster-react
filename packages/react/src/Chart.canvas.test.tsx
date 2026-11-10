@@ -105,7 +105,7 @@ forEachVariant(['svg', 'canvas'], (Chart, variant) => {
             enter: {
               x: { scale: 'x', field: 'cat' }, width: { scale: 'x', band: 1 },
               y: { scale: 'y', field: 'v' }, y2: { scale: 'y', value: 0 },
-              fill: { value: '#4c78a8' },
+              fill: { value: '#4c78a8' }, tooltip: { signal: 'datum' },
             },
           },
         }],

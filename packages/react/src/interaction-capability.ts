@@ -1,6 +1,7 @@
 import { buildHitIndex } from '@aster-charts/core/hit'
 import { bindSceneSignals, createCursorTracker, sceneHasCursor } from '@aster-charts/core/signals'
 import type { InteractionCapability } from './capabilities.js'
+import { tooltipContent } from './tooltip-content.js'
 
 export type { InteractionCapability } from './capabilities.js'
 
@@ -19,4 +20,5 @@ export const interaction: InteractionCapability = /* @__PURE__ */ Object.freeze(
   bindSceneSignals,
   createCursorTracker,
   sceneHasCursor,
+  tooltipContent,
 })

@@ -313,10 +313,16 @@ that can only be lowered (`scripts/gates.mjs`).
 
 ## Tooltips
 
-`tooltip` renders the datum's primitive fields (`key: value`, numbers rounded to 3 decimals, fields starting with `__`
-hidden) at the cursor. `renderTooltip(datum)` replaces the content inside the chart's React tree and enables tooltips by
-itself. The hovered mark is resolved through the scene hit index on every renderer (the SVG carries no per-item datum
-attribute, as vega's does not). Tooltips are off by default.
+`tooltip` shows what Vega with vega-tooltip shows: the hovered item's `tooltip` value, which is the mark's `tooltip`
+encoding (Vega-Lite's `tooltip` channel, or `mark.tooltip`, with its titles and formats). An object is a `title` above a
+`key: value` row per defined key (a nested object as JSON), an array is `[a, b]`, any other value is the text, and an item
+without a value (or with `''`) shows no tooltip. To list a datum's fields, encode `tooltip: { signal: "datum" }` (Vega-Lite:
+`mark: { tooltip: { content: "data" } }`). vega-tooltip's `image` key is not shown: a URL from the data would bypass the
+chart's `urlPolicy`. `renderTooltip(datum, { tooltip, item })` replaces the content inside the chart's React tree and
+enables tooltips by itself; it is called for every hovered item that has a datum or a `tooltip` value (the datum is `{}`
+when the item has none) and receives the item's `tooltip` value and the scene item, so a host can restyle Vega's tooltip
+or build its own. The hovered mark is resolved through the scene hit index on every renderer (the SVG carries no per-item
+datum attribute, as vega's does not). Tooltips are off by default.
 
 ## Cursor
 

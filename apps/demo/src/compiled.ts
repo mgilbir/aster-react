@@ -41,6 +41,8 @@ export const CompiledPieSpec = compileSpec(PieSpec)
 export const CompiledTextLabelSpec = compileSpec(TextLabelSpec)
 export const CompiledHeatmapSpec = compileSpec(HeatmapSpec)
 export const CompiledStackedBarSpec = compileSpec(StackedBarSpec)
+// The tooltip shows each bar's `tooltip` value, as vega-tooltip does: `mark.tooltip: true` makes it the encoded fields.
+export const CompiledTooltipBarSpec = compileSpec({ ...StackedBarSpec, mark: { type: 'bar', tooltip: true } })
 export const CompiledLayerSpec = compileSpec(LayerSpec)
 export const CompiledDonutSpec = compileSpec(DonutSpec)
 export const CompiledRegressionSpec = compileSpec(RegressionSpec)

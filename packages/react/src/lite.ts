@@ -11,3 +11,4 @@
 export { SvgChart } from './SvgChart.js'
 export type { SvgChartHandle, SvgChartProps } from './svg-chart-types.js'
 export type { InteractionCapability } from './capabilities.js'
+export type { TooltipInfo } from './chart-types.js'
