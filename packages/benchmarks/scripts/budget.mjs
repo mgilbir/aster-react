@@ -236,7 +236,9 @@ const BUDGETS = {
   '+ @aster-charts/core/load': 5.9 * 1024,
   '+ @aster-charts/core/geo': 16.6 * 1024,
   '+ @aster-charts/core/transforms': 39.7 * 1024,
-  '+ @aster-charts/core/transition': 3.6 * 1024,
+  // drawsSame looks into a guide's metadata by its fields (perf/transition-retarget-by-identity), measured 2026-11-10 on a clean
+  // build: 3.7 kB gzip (was 3.3), an on-demand chunk only; no eager row moved. Ceiling is the measured value + 0.5.
+  '+ @aster-charts/core/transition': 4.2 * 1024,
   '@aster-charts/react useChart': 166.6 * 1024,
   '@aster-charts/react Chart': 209.2 * 1024,
   // The light chart (`@aster-charts/react/lite`): SVG only, no canvas renderer; alone and with the `interaction` capability.

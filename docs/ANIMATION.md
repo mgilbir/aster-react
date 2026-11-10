@@ -97,7 +97,7 @@ chart, giving it another spec, or switching it to the canvas renderer stops the 
 
 The interpolation is its own module, `@aster-charts/core/transition`, and a chart loads it on demand: an app that never sets
 `transition` never fetches it, and a chart that sets it starts loading it at once, so the first change of data can animate. A
-change that arrives before it has loaded is drawn at once. The module is 3.3 kB gzip on top of `@aster-charts/core` (with `maxItems`); the prop
+change that arrives before it has loaded is drawn at once. The module is 3.7 kB gzip on top of `@aster-charts/core` (with `maxItems` and `drawsSame`, measured 2026-11-10); the prop
 handling adds about 1.2 kB gzip to the eager `<Chart>` bundle (`pnpm --filter @aster-charts/benchmarks run budget`, measured
 2026-11-09; the breakdown is in [PERFORMANCE.md](PERFORMANCE.md#bundle-sizes)).
 
