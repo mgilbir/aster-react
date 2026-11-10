@@ -104,13 +104,23 @@ const DRAWING_WORDS = /\b(?:random|sampleNormal|sampleLogNormal|sampleUniform|sa
  * replay, so its inputs need no fingerprint -- which for a transform over 200k rows is most of what an evaluation would cost.
  */
 export function mayDrawRandom(code: unknown): boolean {
-  // (read as the lexer reads names: `random` spelled with escapes calls `random`. The words are ASCII; in the JSON of an object an
-  // escape's backslash is doubled, and `lexedText` still decodes the escape it precedes)
+  // (each string read as the lexer reads names: `random` spelled with escapes calls `random`; the words are ASCII, so the pattern
+  // finds them in the lexed text whatever their spelling)
   if (typeof code === 'string') return DRAWING_WORDS.test(lexedText(code))
   if (code === null || typeof code !== 'object') return false
   let may = DRAW_MEMO.get(code)
-  if (may === undefined) DRAW_MEMO.set(code, (may = DRAWING_WORDS.test(lexedText(JSON.stringify(code)))))
+  if (may === undefined) DRAW_MEMO.set(code, (may = anyString(code, (str) => DRAWING_WORDS.test(lexedText(str)), new Set())))
   return may
+}
+
+/** Whether some string held in `v` (its keys too) passes `test`. */
+function anyString(v: unknown, test: (str: string) => boolean, seen: Set<object>): boolean {
+  if (typeof v === 'string') return test(v)
+  if (v === null || typeof v !== 'object' || seen.has(v)) return false
+  seen.add(v)
+  if (Array.isArray(v)) return v.some((x) => anyString(x, test, seen))
+  for (const [k, x] of Object.entries(v)) if (test(k) || anyString(x, test, seen)) return true
+  return false
 }
 // (a compiled transform is not changed once built; the memo is by object, so a replaced spec is a new entry)
 const DRAW_MEMO = new WeakMap<object, boolean>()
