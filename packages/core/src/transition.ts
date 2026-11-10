@@ -593,6 +593,49 @@ interface Playing<T> {
   maxItems: number | undefined
 }
 
+/** Keys of a scene node that no renderer draws: the datum, the engine's stamps, and the root's handles on the evaluation. */
+const UNDRAWN = new Set(['datum', 'runtime', 'signalParams', 'compiled'])
+const drawnKey = (k: string): boolean => !UNDRAWN.has(k) && !k.startsWith('__')
+
+/** Two values a node holds draw the same: the same value, or arrays / plain objects (a padding, a dash) of such values. */
+function sameValue(a: unknown, b: unknown, depth = 0): boolean {
+  if (a === b) return true
+  if (depth > 3 || a === null || b === null || typeof a !== 'object' || typeof b !== 'object') return false
+  if (Array.isArray(a)) return Array.isArray(b) && a.length === b.length && a.every((v, i) => sameValue(v, b[i], depth + 1))
+  if (Array.isArray(b) || Object.getPrototypeOf(a) !== Object.prototype || Object.getPrototypeOf(b) !== Object.prototype) return false
+  const ka = Object.keys(a)
+  if (ka.length !== Object.keys(b).length) return false
+  return ka.every((k) => k in b && sameValue((a as Rec)[k], (b as Rec)[k], depth + 1))
+}
+
+/**
+ * Whether two scenes (or nodes) draw the same: every key a renderer reads holds the same value, and the children draw the same
+ * pairwise. A subtree that is the same object in both is not looked into, so two evaluations that share their unchanged marks
+ * compare in a few steps. It may answer false for scenes that do draw alike (a value it cannot compare), never true for two
+ * that do not.
+ */
+export function drawsSame(a: SceneRoot | SceneItem, b: SceneRoot | SceneItem): boolean {
+  if (a === b) return true
+  const ra = a as unknown as Rec
+  const rb = b as unknown as Rec
+  let drawn = 0
+  for (const k in ra) {
+    if (!drawnKey(k)) continue
+    drawn++
+    if (k === 'items') {
+      const ia = ra.items as readonly SceneItem[] | undefined
+      const ib = rb.items as readonly SceneItem[] | undefined
+      if (ia === ib) continue
+      if (!Array.isArray(ia) || !Array.isArray(ib) || ia.length !== ib.length) return false
+      for (let i = 0; i < ia.length; i++) if (!drawsSame(ia[i]!, ib[i]!)) return false
+      continue
+    }
+    if (!(k in rb) || !sameValue(ra[k], rb[k])) return false
+  }
+  for (const k in rb) if (drawnKey(k)) drawn--
+  return drawn === 0
+}
+
 /**
  * A frame loop over `requestAnimationFrame` that draws transitions with `paint` (`patchSceneDom` for an `<svg>`). `shown` is
  * what the target shows now. Where there is no `requestAnimationFrame` (a server), every scene is drawn at once.
@@ -669,6 +712,12 @@ export function createScenePlayer<T>(
         }
       } else if (run !== null && run.target === target) {
         const r = run
+        // A scene that draws like the transition's end (a clock tick of a Vega-Lite `time` animation between two frames, a
+        // signal no mark reads) is that end: the transition keeps its plan, and settles on the new scene object.
+        if (drawsSame(r.to, scene)) {
+          r.to = scene
+          return
+        }
         const tr = make(r.from, scene, r.easing, r.maxItems)
         const t = progress(r)
         if (tr !== null && t < 1) {

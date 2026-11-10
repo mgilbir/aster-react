@@ -38,6 +38,8 @@ pnpm bench:browser-stream # per-frame append: aster <ChartStream> vs vega view.c
                       # flush policies, long frames + DOM mutations
 pnpm --filter @aster-charts/benchmarks run bench:transition  # Chromium: a `transition`'s planning,
                       # script per frame and frame interval at 1k / 10k items
+pnpm --filter @aster-charts/benchmarks run bench:transition-retarget  # Node: a running transition given a
+                      # scene that draws like its end: planning again vs drawsSame
 ```
 
 Knobs (all runners): `--points=1000` (dataset size), `--reps=…`, `--kind=line,scatter,bar`

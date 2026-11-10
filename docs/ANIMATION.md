@@ -117,8 +117,14 @@ A thousand moving items keep 60 frames a second there; ten thousand drop frames 
 ends on the exact scene, in fewer frames). That is where the default `maxItems` of 1,000 comes from: past it a change is drawn
 at once. Raise it for a chart that can afford the frames, or lower it for a chart whose data changes often.
 
-Two costs remain inside the limit. A Vega-Lite `time` animation plans its transition again at each clock tick (about 5 ms for
-1,000 moving symbols, by the planning column above). A `<ChartStream>` that brings new data more often than `duration`
+A scene that is not a change of data arriving during a transition (a Vega-Lite `time` animation's clock ticking between two
+frames, a signal no mark reads) is first compared with the transition's end (`drawsSame`): when it draws the same, the
+transition keeps its plan and settles on it, and only a scene that draws differently is planned again. The comparison does
+not look into what the two scenes share by identity. `pnpm --filter @aster-charts/benchmarks run bench:transition-retarget`
+(1,000 keyed rects in Node, median of 40 calls, three rounds, 2026-11-10): planning again 1.01–1.13 ms; the comparison
+0.18–0.26 ms when the scenes share no object, and 0.001–0.002 ms when they share the mark.
+
+A `<ChartStream>` that brings new data more often than `duration`
 interrupts each transition with the next one, which starts from the frame on screen; the marks keep moving and land on the
 latest data a `duration` after it stops changing. For a fast stream, a short `duration` keeps the picture close to the data.
 
