@@ -24,12 +24,18 @@ const resizeWindow = (): void => { act(() => { window.dispatchEvent(new Event('r
 function stubResizeObserver(size: { current: { width: number; height: number } }): { fire(): void; restore(): void } {
   const prev = (globalThis as { ResizeObserver?: unknown }).ResizeObserver
   const live = new Set<() => void>()
+  // (an entry names the element it measured, as a real ResizeObserver's does)
   class FakeResizeObserver {
-    private report: () => void
-    constructor(cb: ResizeObserverCallback) { this.report = () => cb([{ contentRect: { ...size.current } } as ResizeObserverEntry], this as never) }
-    observe(): void { live.add(this.report); this.report() }
-    unobserve(): void { live.delete(this.report) }
-    disconnect(): void { live.delete(this.report) }
+    private readonly reports = new Map<Element, () => void>()
+    constructor(private readonly cb: ResizeObserverCallback) {}
+    observe(target: Element): void {
+      const report = (): void => this.cb([{ target, contentRect: { ...size.current } } as unknown as ResizeObserverEntry], this as never)
+      this.reports.set(target, report)
+      live.add(report)
+      report()
+    }
+    unobserve(target: Element): void { const r = this.reports.get(target); if (r) live.delete(r); this.reports.delete(target) }
+    disconnect(): void { for (const r of this.reports.values()) live.delete(r); this.reports.clear() }
   }
   ;(globalThis as { ResizeObserver?: unknown }).ResizeObserver = FakeResizeObserver
   return {

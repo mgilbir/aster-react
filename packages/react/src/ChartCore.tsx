@@ -398,19 +398,28 @@ function ChartView({
   onStreamInputRef.current = onStreamInput
 
   const needsMeasure = width == null || height == null
+  const hasBinds = ((spec.signals as SignalBindDef[] | undefined) ?? []).some((s) => s && s.bind != null)
   React.useEffect(() => {
     if (!needsMeasure) return
     const el = containerRef.current
     if (!el) return
     if (typeof ResizeObserver !== 'undefined') {
+      // The chart's share of the element: its content box less the bound inputs under the chart, which are inside the
+      // element but not the chart, so a container the chart fills does not count them again on every measurement.
+      let box = { width: 0, height: 0 }
       const observer = new ResizeObserver((entries) => {
-        const { width: w, height: h } = entries[0]?.contentRect ?? {}
-        if (w && h) setMeasured((prev) => (prev && prev.width === w && prev.height === h ? prev : { width: w, height: h }))
+        for (const e of entries) if (e.target === el) box = e.contentRect
+        const w = box.width
+        const h = box.height - bindsHeight(el)
+        if (w && h > 0) setMeasured((prev) => (prev && prev.width === w && prev.height === h ? prev : { width: w, height: h }))
       })
       observer.observe(el)
+      // (bound inputs that wrap to another line change the chart's share without resizing a container of fixed size)
+      const binds = bindsOf(el)
+      if (binds) observer.observe(binds)
       return () => observer.disconnect()
     }
-  }, [needsMeasure])
+  }, [needsMeasure, hasBinds])
 
   // The size props FIX the view; the measured container only sizes a spec that does not drive its own `width` /
   // `height` signals (a bound slider, a handler, vega-lite's `"container"` keep doing so, as in Vega where
@@ -434,7 +443,7 @@ function ChartView({
   const liveSizeRef = React.useRef<() => [number | undefined, number | undefined]>(() => [undefined, undefined])
   liveSizeRef.current = () => {
     const el = containerRef.current
-    return [width ?? (el?.clientWidth || measured?.width), height ?? (el?.clientHeight || measured?.height)]
+    return [width ?? (el?.clientWidth || measured?.width), height ?? ((el ? el.clientHeight - bindsHeight(el) : 0) || measured?.height)]
   }
   const liveContainerSize = React.useCallback(() => liveSizeRef.current(), [])
 
@@ -1464,7 +1473,9 @@ function ChartView({
         <div
           ref={svgHostRef}
           aria-hidden={a11yTree != null ? true : undefined}
-          style={{ position: 'relative', zIndex: 1 }}
+          // (`lineHeight: 0`: the inline <svg> sits on a text baseline, and the descender space under it would make the
+          // element a few pixels taller than the chart, so a container sized by the chart grew on every measurement)
+          style={{ position: 'relative', zIndex: 1, lineHeight: 0 }}
           {...(htmlProp != null ? { dangerouslySetInnerHTML: htmlProp } : {})}
         />
       )}
@@ -1563,6 +1574,11 @@ function ChartView({
     </div>
   )
 }
+
+/** The bound inputs `<Chart>` renders under the chart, inside its element. */
+const bindsOf = (el: HTMLElement): HTMLElement | null => el.querySelector<HTMLElement>(':scope > [data-aster-binds]')
+/** Their height: the part of the element's height that is not the chart's. */
+const bindsHeight = (el: HTMLElement): number => bindsOf(el)?.getBoundingClientRect().height ?? 0
 
 const CONTAINER_FOCUS = Symbol('container')
 /** Where focus is inside a chart: the id of an a11y node, or the container. */

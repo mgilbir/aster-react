@@ -87,14 +87,17 @@ const composed: Spec = {
 }
 
 describe('the view size, against vega (a signal write, the later one wins)', () => {
-  const cases: Array<[string, Spec, (v: View, el: ReturnType<typeof containerEl>) => Promise<void> | void, RuntimeInput, { width: number; height: number }?]> = [
+  // what vega is given for a view that fills the container: the spec with autosize fit (contains padding) on the filled dimensions
+  const fills = (type: 'fit' | 'fit-x' | 'fit-y') => (spec: Spec): Spec => ({ ...spec, autosize: { type, contains: 'padding' } })
+  const cases: Array<[string, Spec, (v: View, el: ReturnType<typeof containerEl>) => Promise<void> | void, RuntimeInput, { width: number; height: number }?, ((s: Spec) => Spec)?]> = [
     ['a spec that sizes itself: its own signal values', driven, () => {}, {}],
     ['a spec that sizes itself, the container measured: only containerSize() sees it', driven, () => {}, { measuredSize: { width: 700, height: 260 } }],
     ['a value written to the signal (a bound input)', driven, (v) => { v.signal('width', 250); v.signal('height', 140) }, { signals: { width: 250, height: 140 } }],
     ['a value written to the signal beats the measured container', driven, (v) => { v.signal('width', 250) }, { measuredSize: { width: 700, height: 260 }, signals: { width: 250 } }],
     ['a fixed size set on the view (view.width / view.height)', driven, (v) => { v.width(480); v.height(260) }, { width: 480, height: 260 }],
-    ['a numeric size, the container measured (the chart fills it)', fixed, (v) => { v.width(700); v.height(260) }, { measuredSize: { width: 700, height: 260 } }],
-    ['a numeric size, then a value written to the signal', fixed, (v) => { v.height(260); v.signal('width', 250) }, { measuredSize: { width: 700, height: 260 }, signals: { width: 250 } }],
+    // the measured container is the whole chart, as vega-lite's "container" is: vega with `fit` containing the padding (issue #128)
+    ['a numeric size, the container measured (the chart fills it, guides and padding included)', fixed, (v) => { v.width(700); v.height(260) }, { measuredSize: { width: 700, height: 260 } }, undefined, fills('fit')],
+    ['a numeric size, then a value written to the signal (only the height fills the container)', fixed, (v) => { v.height(260); v.signal('width', 250) }, { measuredSize: { width: 700, height: 260 }, signals: { width: 250 } }, undefined, fills('fit-y')],
     ['a composition (layout, no size): the container measured does not size it', composed, () => {}, { measuredSize: { width: 600, height: 400 } }],
     ['a composition, the host fixed the height: the width is still the layout\'s', composed, (v) => { v.height(250) }, { height: 250, measuredSize: { width: 600, height: 400 } }],
     ['a composition, a value written to the width signal beats the layout', composed, (v) => { v.signal('width', 520) }, { signals: { width: 520 }, measuredSize: { width: 600, height: 400 } }],
@@ -109,9 +112,9 @@ describe('the view size, against vega (a signal write, the later one wins)', () 
       await v.runAsync()
     }, { containerSize: { width: 330, height: 210 }, signals: { width: 330, height: 210 } }, { width: 600, height: 240 }],
   ]
-  for (const [name, spec, drive, input, el] of cases) {
+  for (const [name, spec, drive, input, el, asVega] of cases) {
     it(name, async () => {
-      expect(same(await vegaSvg(spec, drive, el), asterSvg(spec, input)).slice(0, 4)).toEqual([])
+      expect(same(await vegaSvg(asVega ? asVega(spec) : spec, drive, el), asterSvg(spec, input)).slice(0, 4)).toEqual([])
     })
   }
 })
