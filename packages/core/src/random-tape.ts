@@ -15,6 +15,8 @@
  * same order, as the dataflow's.
  */
 
+import { lexedText } from './expr-text.js'
+
 export type Random = () => number
 
 /** The numbers one run of a site drew, and the Box-Muller carry-over (`sampleNormal`) the run started with. */
@@ -102,10 +104,12 @@ const DRAWING_WORDS = /\b(?:random|sampleNormal|sampleLogNormal|sampleUniform|sa
  * replay, so its inputs need no fingerprint -- which for a transform over 200k rows is most of what an evaluation would cost.
  */
 export function mayDrawRandom(code: unknown): boolean {
-  if (typeof code === 'string') return DRAWING_WORDS.test(code)
+  // (read as the lexer reads names: `random` spelled with escapes calls `random`. The words are ASCII; in the JSON of an object an
+  // escape's backslash is doubled, and `lexedText` still decodes the escape it precedes)
+  if (typeof code === 'string') return DRAWING_WORDS.test(lexedText(code))
   if (code === null || typeof code !== 'object') return false
   let may = DRAW_MEMO.get(code)
-  if (may === undefined) DRAW_MEMO.set(code, (may = DRAWING_WORDS.test(JSON.stringify(code))))
+  if (may === undefined) DRAW_MEMO.set(code, (may = DRAWING_WORDS.test(lexedText(JSON.stringify(code)))))
   return may
 }
 // (a compiled transform is not changed once built; the memo is by object, so a replaced spec is a new entry)

@@ -14,7 +14,8 @@ import { carryByAlignment, type IdCounter } from './identifier-ids.js'
 import { applyTransforms, applyTransformsToSharedRows, copiesRows, sortOrder, getField, geoJSONPath, type Row, type TransformContext } from './transform.js'
 import { fieldOf } from './transform-agg.js'
 import { atRandomSite, contentKey, mayDrawRandom, normalPairs, replayable } from './random-tape.js'
-import { datasetsReadIn, dependencyKey, fieldsWritten, lexedText, namesIn, pipelineReadsOf, reuse, runsOf, stepCounts, stepReadsOf, type StepReads, type StepRecord } from './step-reuse.js'
+import { lexedText } from './expr-text.js'
+import { datasetsReadIn, identifiersIn, scalesReadIn, dependencyKey, fieldsWritten, namesIn, pipelineReadsOf, reuse, runsOf, stepCounts, stepReadsOf, type StepReads, type StepRecord } from './step-reuse.js'
 import { activeMeter, withLimits, ceiling, checkRowCount, meterItems, meterTick, AsterLimitError } from './limits.js'
 import { withTextMetricsProvider } from './text-metrics.js'
 import { AsterUrlError } from './url-policy.js'
@@ -54,7 +55,7 @@ import { compileChart } from './compiler.js'
 import { dict, ownGet, pushAll, sortData, lerp, scopedSignalName, heldSignalName, TUPLE_ID } from './util.js'
 import { applyImageUrlPolicy, applyLinkUrlPolicy, resolveImageUrl, type ImageUrlPolicy } from './url-policy.js'
 import { valueKey, valuesEqual } from './fingerprint.js'
-import { sourceNames, type PulseChange } from './pulse.js'
+import { rowsEqual, sourceNames, type PulseChange } from './pulse.js'
 import { aggregateGroups, flatKeyFn, groupKeyFn } from './transform-agg.js'
 import { layoutFacet, type GridPlace } from './trellis.js'
 import { boundAxisGroup, boundGroupItem, boundLeaf, boundTypedMark, Bounds, layoutBounds, eachMarkBounds, hasClippedMark } from './bounds.js'
@@ -983,7 +984,10 @@ function makeTransformed(
  */
 function randomFingerprint(code: unknown, rows: readonly unknown[] | Record<string, unknown>, signals: Record<string, unknown>): string {
   const text = typeof code === 'string' ? code : JSON.stringify(code)
-  const mentioned = new Set(text.match(IDENT))
+  // (every name the code spells, as the lexer reads it: a signal named by an escape or past ASCII is one it reads)
+  const mentioned = new Set<string>()
+  if (typeof code === 'string') namesIn(code, mentioned)
+  else walkStrings(code, (str) => namesIn(str, mentioned))
   const read: string[] = []
   for (const k of Object.keys(signals).sort()) if (mentioned.has(k)) read.push(`${k}=${contentKey(signals[k])}`)
   return `${text}\u0001${Array.isArray(rows) ? contentKey(rows) : ''}\u0001${read.join('\u0002')}`
@@ -1156,7 +1160,8 @@ function fitDatasets(fit: unknown): string[] {
   const visit = (v: unknown): void => {
     if (Array.isArray(v)) v.forEach(visit)
     else if (v && typeof v === 'object' && typeof (v as { signal?: unknown }).signal === 'string') {
-      for (const m of (v as { signal: string }).signal.matchAll(/\bdata\(\s*(['"])(.*?)\1\s*\)/g)) out.push(m[2]!)
+      // (the datasets its expression reads by name, read off its tree: see `datasetsReadIn`)
+      for (const n of datasetsReadIn((v as { signal: string }).signal) ?? []) out.push(n)
     }
   }
   visit(fit)
@@ -1180,7 +1185,13 @@ export class ProjectionRegistry extends Map<string, unknown> {
 }
 
 /** Expression functions that read datasets or scales (a signal using them cannot resolve before they exist). */
-export const DATA_DEPENDENT_EXPR = /\b(data|indata|domain|range|scale|bandwidth|bandspace|invert|copy|gradient|vlSelectionTest|vlSelectionIdTest|vlSelectionResolve)\s*\(/
+/**
+ * A call that reads a dataset (or its hierarchy) or a scale. Tested against the text as the lexer reads it (`lexedText`): every
+ * function the expression language can call has an ASCII name (the built-ins, and a host's, whose name must be one), which the lexer
+ * spells otherwise only with `\uXXXX` escapes, and the lexer skips the blanks `lexedText` turns into spaces -- so a call is found
+ * whatever its spelling (and a word inside a string literal at worst finds one that is not there).
+ */
+export const DATA_DEPENDENT_EXPR = /\b(data|indata|domain|range|scale|bandwidth|bandspace|invert|copy|gradient|vlSelectionTest|vlSelectionIdTest|vlSelectionResolve|treePath|treeAncestors)\s*\(/
 
 /**
  * Evaluate static signal `update` expressions in declaration order against the
@@ -1318,8 +1329,10 @@ function signalsInDataflowOrder(chart: CompiledChart): CompiledSignalDef[] {
   const reads = defs.map((d, i) => {
     const text = `${d.update ?? ''} ${d.init ?? ''}`
     const deps = new Set<number>()
-    for (const m of text.matchAll(IDENT)) {
-      const j = index.get(m[0])
+    const names = new Set<string>()
+    namesIn(text, names)
+    for (const m of names) {
+      const j = index.get(m)
       if (j !== undefined && j !== i) deps.add(j)
     }
     return deps
@@ -1368,8 +1381,12 @@ function signalRanksAfterDatasetInput(chart: CompiledChart, name: string, datase
       else if (u !== undefined) texts.push(...[u.expr, u.signal].filter((t): t is string => typeof t === 'string'))
     }
     for (const text of texts) {
-      for (const m of text.matchAll(DATA_READ_CALL_ALL)) if (derivesFrom(m[2]!)) return true
-      for (const id of text.match(IDENT) ?? []) if (id !== sig && defs.has(id) && visit(id)) return true
+      // (a dataset read by a name the tree does not spell out is any dataset)
+      const read = datasetsReadIn(text)
+      if (read === null ? chart.data.some((x) => derivesFrom(x.name)) : read.some((n) => derivesFrom(n))) return true
+      const names = new Set<string>()
+      namesIn(text, names)
+      for (const id of names) if (id !== sig && defs.has(id) && visit(id)) return true
     }
     return false
   }
@@ -1392,10 +1409,10 @@ function resolveSignalUpdates(ctx: EvalContext, staticOnly = false): boolean {
     if (def.update !== undefined && def.on?.length && ctx.hostSignals.has(def.name)) continue
     // ... and a derived signal the event loop holds as it was keeps the value the store has (see `heldSignalName`)
     if (def.update !== undefined && ctx.hostSignals.has(heldSignalName(def.name))) continue
-    if (staticOnly && DATA_DEPENDENT_EXPR.test(expr)) continue
+    if (staticOnly && DATA_DEPENDENT_EXPR.test(lexedText(expr))) continue
     // an `init` that reads scales (a selection's initial brush: `[scale("x", 2), scale("x", 4)]`) runs once the scales exist:
     // before that `scale()` of a missing scale is `undefined`, which would be taken for the initial value
-    if (initPending && SCALE_FN_EXPR.test(expr) && !ctx.chart.scales.every((sc) => ctx.scales.has(sc.name))) continue
+    if (initPending && SCALE_FN_EXPR.test(lexedText(expr)) && !ctx.chart.scales.every((sc) => ctx.scales.has(sc.name))) continue
     try {
       // (a `react: false` signal in a cycle through a scale runs before the signals it reads: it sees their initial values)
       const frozen = def.react === false ? frozenReadsOf(ctx.chart).get(def.name) : undefined
@@ -1410,7 +1427,7 @@ function resolveSignalUpdates(ctx: EvalContext, staticOnly = false): boolean {
         : atRandomSite(ctx.runtime.random, `signal:${def.name}`, () => randomFingerprint(expr, [], params), () => ctx.runtime.expr(expr)(undefined, params))
       // An `init` that reads a scale or a dataset is only settled once they exist: until the scales are built,
       // `domain('x')` of a scale that is not there yet is `[]`, which is not the value vega's dataflow computes.
-      const readsScales = DATA_DEPENDENT_EXPR.test(expr) && ctx.scales.size === 0 && ctx.chart.scales.length > 0
+      const readsScales = DATA_DEPENDENT_EXPR.test(lexedText(expr)) && ctx.scales.size === 0 && ctx.chart.scales.length > 0
       if (initPending && value !== undefined && !readsScales) ctx.initDone.add(def.name)
       ctx.setData.caller = undefined
       ctx.signalErrors?.delete(def.name)
@@ -1766,7 +1783,7 @@ function datasetDepsOf(chart: CompiledChart): Map<string, DatasetDeps> {
     // or reads datasets from an expression makes this dataset depend on it.
     walkStrings(d.transform, (str) => {
       if (known.has(str) && str !== d.name) names.add(str)
-      if (DATA_FN_EXPR.test(str)) allData = true
+      if (DATA_FN_EXPR.test(lexedText(str)) || TREE_FN_EXPR.test(lexedText(str))) allData = true
     })
     deps.set(d.name, { names, allData })
   }
@@ -1822,10 +1839,6 @@ function forceLinkDatasets(chart: CompiledChart): Set<string> {
 }
 
 const SIGNAL_PREREQS = new WeakMap<CompiledChart, Map<string, string[]>>()
-/** A call that reads a dataset by the name in its first argument (vega-functions' dataVisitor / selectionVisitor). */
-const DATA_READ_CALL = /\b(data|indata|vlSelectionTest|vlSelectionIdTest|vlSelectionResolve)\s*\(\s*["']/
-const DATA_READ_CALL_ALL = /\b(data|indata|vlSelectionTest|vlSelectionIdTest|vlSelectionResolve)\s*\(\s*["']([^"']+)["']/g
-const IDENT = /[A-Za-z_$][\w$]*/g
 
 function signalPrereqsOf(chart: CompiledChart): Map<string, string[]> {
   let out = SIGNAL_PREREQS.get(chart)
@@ -1838,11 +1851,11 @@ function signalPrereqsOf(chart: CompiledChart): Map<string, string[]> {
       if (typeof sig === 'string') (writers.get(sig) ?? writers.set(sig, []).get(sig)!).push(d.name)
     }
   }
-  if (writers.size || (chart.signalDefs ?? []).some((sd) => DATA_READ_CALL.test(`${sd.update ?? ''} ${sd.init ?? ''}`))) {
+  if (writers.size || (chart.signalDefs ?? []).some((sd) => [sd.update, sd.init].some((x) => typeof x === 'string' && datasetsReadIn(x)?.length !== 0))) {
     const defs = new Map((chart.signalDefs ?? []).map((sd) => [sd.name, sd] as const))
     const datasetNames = new Set(chart.data.map((d) => d.name))
     const identsOf = (v: unknown, into: Set<string>): void => {
-      walkStrings(v, (str) => { for (const m of str.matchAll(IDENT)) into.add(m[0]) })
+      walkStrings(v, (str) => namesIn(str, into))
     }
     for (const d of chart.data) {
       const read = new Set<string>()
@@ -1866,8 +1879,8 @@ function signalPrereqsOf(chart: CompiledChart): Map<string, string[]> {
         if (!sd) continue
         for (const text of [sd.update, sd.init]) {
           if (typeof text !== 'string') continue
-          for (const m of text.matchAll(DATA_READ_CALL_ALL)) {
-            const w = m[2]!
+          // (a dataset read by a name the tree does not spell out is any dataset)
+          for (const w of datasetsReadIn(text) ?? [...datasetNames]) {
             if (datasetNames.has(w) && w !== d.name && !first.includes(w) && !dependsOn(chart, w, d.name)) first.push(w)
           }
         }
@@ -1889,7 +1902,7 @@ function datasetsReadScales(chart: CompiledChart): boolean {
   let out = READS_SCALES.get(chart)
   if (out === undefined) {
     out = false
-    for (const d of chart.data) walkStrings(d.transform, (str) => { if (SCALE_FN_EXPR.test(str)) out = true })
+    for (const d of chart.data) walkStrings(d.transform, (str) => { if (SCALE_FN_EXPR.test(lexedText(str))) out = true })
     READS_SCALES.set(chart, out)
   }
   return out
@@ -1927,6 +1940,28 @@ function datasetRanksOf(chart: CompiledChart): { rank: Map<string, number>; orde
       rank.set(cur, ++counter)
       const list = targets.get(cur)
       if (list) for (let i = list.length; --i >= 0;) queue.push(list[i]!)
+    }
+  }
+  // vega-parser makes the scales' operators before the data and connects their parameters after (parseScope: initScale, parseData,
+  // parseScale): a scale whose parameters read a dataset or anything made after it (see `scaleIsLate`) is reranked past every
+  // operator so far, and with it, depth first, the datasets whose transforms read it by name (in the order they were connected)
+  const scope: GuideScope = { path: [], nextChild: { n: 0 }, scales: chart.scales, data: chart.data }
+  const readers = new Map<string, string[]>()
+  for (const d of chart.data) {
+    const read = new Set<string>()
+    walkStrings(d.transform, (str) => { for (const sc of scalesReadIn(str)) read.add(sc) })
+    for (const sc of read) { const r = readers.get(sc); if (r) r.push(d.name); else readers.set(sc, [d.name]) }
+  }
+  for (const s of chart.scales) {
+    const list = readers.get(s.name)
+    if (list === undefined || !scaleIsLate(s, scope, chart)) continue
+    ++counter
+    const queue = [...list].reverse()
+    for (let pops = 0; queue.length && pops < 4 * n * n + 16; pops++) {
+      const cur = queue.pop()!
+      rank.set(cur, ++counter)
+      const next = targets.get(cur)
+      if (next) for (let i = next.length; --i >= 0;) queue.push(next[i]!)
     }
   }
   out = { rank, order: [...names].sort((a, b) => rank.get(a)! - rank.get(b)!) }
@@ -3110,7 +3145,8 @@ function buildDatasetsOf(ctx: EvalContext, inputData: Record<string, unknown[]>)
         // params the steps read (all of them, or the signals and datasets they name: see `pipelineKey`) from an input of the length
         // the pulse is relative to, and no earlier pass of THIS evaluation already updated that state in place.
         // A pass of an evaluation numbers the rows of an `identifier` as the pass before it did (a view that fits its viewport builds its
-        // content twice): whichever route numbered them first, the others carry its numbers, and do not number them again by theirs.
+        // content twice): whichever route numbered them first, the others carry its numbers, and do not number them again by theirs
+        // (a later round of the same pass too, when the round before gave the step the same rows: see `carriedFrom`).
         const hasIds = d.transform.some((x) => x.type === 'identifier')
         const earlierDS = hasIds ? ctx.draft.datasets.get(name) ?? ctx.earlier?.datasets.get(name) : undefined
         const incremental = ctx.incremental && inPulse !== null && !inPulse.full && prevDS !== undefined && earlierDS === undefined
@@ -3323,7 +3359,7 @@ function runPipeline(
     const had = reads?.publishes !== undefined && Object.hasOwn(ctx.signalParams, reads.publishes)
     const published = reads?.publishes === undefined ? undefined : ctx.signalParams[reads.publishes]
     // (a pass of an evaluation numbers an identifier's rows as the pass before it did: that run is the one whose numbers rows carry)
-    const before = earlierDS?.steps[k] ?? prevDS?.steps[k]
+    const before = carriedFrom(ctx, name, k, from, inputs, earlierDS, prevDS)
     const run = (): { rows: Row[]; state?: unknown } => ctx.engine !== undefined
       ? ctx.engine.applyOneWithState(from, t, tctx, name, before)
       : { rows: applyFresh(from, t, tctx, name, before) }
@@ -3349,7 +3385,7 @@ const MAY_DRAW = new WeakMap<CompiledChart, boolean>()
 /** Whether a dataset of the view may draw from the random source, its expressions read as the lexer reads them (an escaped name too). */
 function datasetsMayDraw(chart: CompiledChart): boolean {
   let may = MAY_DRAW.get(chart)
-  if (may === undefined) MAY_DRAW.set(chart, (may = mayDrawRandom(chart.data) || mayDrawRandom(lexedText(JSON.stringify(chart.data) ?? ''))))
+  if (may === undefined) MAY_DRAW.set(chart, (may = mayDrawRandom(chart.data)))
   return may
 }
 
@@ -3394,6 +3430,29 @@ function publishedBy(ctx: EvalContext, transforms: readonly CompiledTransform[])
     if (p !== undefined && Object.hasOwn(ctx.signalParams, p)) out.push([p, ctx.signalParams[p]])
   }
   return out
+}
+
+/**
+ * The run of step `k` whose rows the step's rows carry the numbers of, when it numbers them (`identifier`): the pass of this
+ * evaluation before this one, or the round of this pass before this one, or the evaluation before. A round before is the run only
+ * when it gave the step the rows it is given now (the same input arrays, or equal rows): every round numbers from where the view's
+ * counter stood when the evaluation began, so its numbers are the ones this round would draw. A round given other rows -- a dataset
+ * that reads a scale is built before the scales exist -- drew numbers that are not these rows': carried, they numbered the rows
+ * anew on every evaluation, with numbers another dataset held. Its rows carry the numbers of the evaluation before, as the first
+ * round's did.
+ */
+function carriedFrom(
+  ctx: EvalContext, name: string, k: number, rows: readonly Row[], inputs: readonly unknown[] | undefined,
+  earlierDS: DatasetState | undefined, prevDS: DatasetState | undefined,
+): Row[] | undefined {
+  if (earlierDS === undefined) return prevDS?.steps[k]
+  if (earlierDS !== ctx.draft.datasets.get(name)) return earlierDS.steps[k]
+  const given = k === 0 ? undefined : earlierDS.steps[k - 1]
+  const same = k === 0
+    ? earlierDS.inputs === undefined || inputs === undefined || sameArrays(earlierDS.inputs, inputs)
+    : given !== undefined && (given === rows || (given.length === rows.length && given.every((r, i) => rowsEqual(r, rows[i]!))))
+  if (same) return earlierDS.steps[k]
+  return ctx.earlier?.datasets.get(name)?.steps[k] ?? prevDS?.steps[k]
 }
 
 /** What a step reads, as it stands now (see `StepRecord.keys`): the values of its signals, then the rows of the datasets it reads. */
@@ -5958,9 +6017,8 @@ const DATAFLOW_FUNCTIONS = new Set([
 ])
 const VIEW_SIGNALS = new Set(['width', 'height', 'padding', 'autosize', 'background', 'cursor', 'origin', 'parent', 'datum', 'event', 'item'])
 
-function expressionIdentifiers(text: string): string[] {
-  return (text.replace(/'(?:[^'\\]|\\.)*'|"(?:[^"\\]|\\.)*"/g, '""').match(/(?<![.\w$])[A-Za-z_$][\w$]*/g)) ?? []
-}
+/** The names an expression reads by themselves, as the lexer reads them (see `identifiersIn`). */
+const expressionIdentifiers = identifiersIn
 
 /**
  * Whether a view signal is ranked after the data and scales (see scaleIsLate): it calls a function that reads data or a scale,
@@ -6015,7 +6073,6 @@ function scaleIsLate(sdef: CompiledScale, scope: GuideScope, chart: CompiledChar
   return late(params)
 }
 
-const SCALE_NAME_CALL = /\b(?:domain|range|scale|bandwidth|bandspace|invert|copy|gradient)\s*\(\s*(?:'([^']*)'|"([^"]*)")/g
 
 interface SpecReads { signals: Set<string>; scales: Set<string>; data: Set<string> }
 const newReads = (): SpecReads => ({ signals: new Set(), scales: new Set(), data: new Set() })
@@ -6028,7 +6085,7 @@ function specReads(node: unknown, out: SpecReads, depth = 0): void {
     if (typeof v === 'string') {
       if (k === 'signal' || k === 'expr' || k === 'update' || k === 'init' || k === 'test') {
         for (const id of expressionIdentifiers(v)) out.signals.add(id)
-        for (const m of v.matchAll(SCALE_NAME_CALL)) out.scales.add((m[1] ?? m[2])!)
+        for (const sc of scalesReadIn(v)) out.scales.add(sc)
       } else if (k === 'data' || k === 'source' || k === 'from') out.data.add(v)
       else if (k === 'scale') out.scales.add(v)
     } else specReads(v, out, depth + 1)

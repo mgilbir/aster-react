@@ -12,7 +12,8 @@ import { applyTransforms, compileExprTransform, sortOrder, aggregateGroup, type 
 import { fieldsOf, groupKeyFn } from './transform-agg.js'
 import { flattenLength } from './transform-basic.js'
 import { checkRowCount } from './limits.js'
-import { datasetsReadIn, lexedText } from './step-reuse.js'
+import { datasetsReadIn } from './step-reuse.js'
+import { lexedText } from './expr-text.js'
 import type { CompiledTransform, SortSpec } from './types.js'
 import {
   applyFresh, applyIdentifier, applyOne, DATA_DEPENDENT_EXPR, idField, pulseBaseLength, withCarry,
@@ -818,7 +819,7 @@ function rowLocal(t: CompiledTransform, tctx: StepTransformContext): boolean {
   const type = String(t.type)
   switch (type) {
     case 'formula':
-      return !DATA_DEPENDENT_EXPR.test((t as { expr?: string }).expr ?? '')
+      return !DATA_DEPENDENT_EXPR.test(lexedText((t as { expr?: string }).expr ?? ''))
     case 'timeunit':
       // without explicit units vega bins the data extent (global); inferUnits looks at every row
       // (a `signal` output is a side effect a skipped re-run would lose, and covers every row)

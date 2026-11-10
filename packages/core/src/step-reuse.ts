@@ -14,6 +14,7 @@
 import { parseExpressionCached, type Expr } from './expr-parser.js'
 import { refId, valueKey } from './fingerprint.js'
 import { mayDrawRandom } from './random-tape.js'
+import { lexedAsWritten, lexedText } from './expr-text.js'
 import type { CompiledTransform } from './types.js'
 
 /** Transform types that read their rows, their parameters and the signals those mention, and nothing else of the view. */
@@ -342,28 +343,6 @@ export function pipelineReadsOf(transforms: readonly CompiledTransform[]): reado
 // ---------------------------------------------------------------------------
 
 
-/** A string the lexer reads as it is written: no escape, no character past ASCII (its names are what an ASCII pattern finds). */
-function lexedAsWritten(str: string): boolean {
-  for (let i = 0; i < str.length; i++) {
-    const c = str.charCodeAt(i)
-    if (c === 92 || c > 127) return false
-  }
-  return true
-}
-
-/** The blanks the lexer skips besides the ASCII ones (see expr-parser.ts `isBlank`). */
-const WIDE_BLANKS = new RegExp(`[${[0xa0, 0x1680, 0x180e, 0x2000, 0x2001, 0x2002, 0x2003, 0x2004, 0x2005, 0x2006, 0x2007, 0x2008, 0x2009, 0x200a, 0x2028, 0x2029, 0x202f, 0x205f, 0x3000, 0xfeff].map((c) => String.fromCharCode(c)).join('')}]`, 'g')
-
-/**
- * `str` as the expression lexer reads its names: a `\uXXXX` escape is the character it stands for (`data` spelled with an escape is `data`)
- * and every blank it skips is a space, so the patterns that look for a name or a call in the text find what the lexer finds. Every
- * escape is decoded, those inside string literals too: that finds more names, never fewer.
- */
-export function lexedText(str: string): string {
-  if (lexedAsWritten(str)) return str
-  return str.replace(/\\u([0-9a-fA-F]{4})/g, (_, hex: string) => String.fromCharCode(parseInt(hex, 16))).replace(WIDE_BLANKS, ' ')
-}
-
 const ASCII_NAME = /[A-Za-z_$][\w$]*/g
 /** A run of the characters a name is made of, past ASCII too (a superset of the names in the text: digits may lead). */
 const NAME_RUN = new RegExp(`[\\p{ID_Continue}$${String.fromCharCode(0x200c, 0x200d)}]+`, 'gu')
@@ -422,4 +401,62 @@ export function datasetsReadIn(str: string): readonly string[] | null {
     else computed = true
   })
   return computed ? null : [...out].sort()
+}
+
+/** Expression functions whose first argument names a scale (vega-functions' scale visitor reads it as a dependency when it is a literal). */
+const SCALE_FUNCTIONS = new Set(['scale', 'invert', 'domain', 'range', 'bandwidth', 'bandspace', 'copy', 'gradient'])
+
+/**
+ * The scales the expression `str` names by a literal in a call that reads one (`scale('x', datum.v)`): the scales its operator is
+ * connected to in vega. A name given otherwise is read when the call runs, with no connection, and is not listed. `[]` for text that
+ * is no expression.
+ */
+export function scalesReadIn(str: string): string[] {
+  let tree: Expr
+  try { tree = parseExpressionCached(str) } catch { return [] }
+  const out = new Set<string>()
+  eachNode(tree, (node) => {
+    if (node.type !== 'CallExpression') return
+    const f = node.callee as { type?: string; name?: string } | undefined
+    if (f?.type !== 'Identifier' || !SCALE_FUNCTIONS.has(f.name!)) return
+    const first = (node.arguments as unknown[] | undefined)?.[0] as { type?: string; value?: unknown } | undefined
+    if (first?.type === 'Literal' && typeof first.value === 'string') out.add(first.value)
+  })
+  return [...out]
+}
+
+const STRING_LITERAL = /'(?:[^'\\]|\\.)*'|"(?:[^"\\]|\\.)*"/g
+/** An ASCII name that is no property of what is before it (`a.b` reads `a`). */
+const FREE_NAME = /(?<![.\w$])[A-Za-z_$][\w$]*/g
+
+/**
+ * The names the expression `text` reads by themselves (signals, and the functions it calls), not the properties it reads off
+ * them: for text the lexer reads as written, the ASCII names outside its string literals; otherwise those and the identifiers of
+ * its tree that are no property key (an escaped name is the name it spells, a name past ASCII is whole). A superset of what the
+ * expression reads by name.
+ */
+export function identifiersIn(text: string): string[] {
+  const out: string[] = [...(text.replace(STRING_LITERAL, '""').match(FREE_NAME) ?? [])]
+  if (lexedAsWritten(text)) return out
+  let tree: Expr
+  try { tree = parseExpressionCached(text) } catch {
+    // (no expression: nothing runs it; its names as the lexer would spell them)
+    return [...out, ...(lexedText(text).replace(STRING_LITERAL, '""').match(FREE_NAME) ?? []), ...[...lexedText(text).matchAll(NAME_RUN)].map((m) => m[0])]
+  }
+  const stack: unknown[] = [tree]
+  while (stack.length) {
+    const e = stack.pop()
+    if (e === null || typeof e !== 'object') continue
+    if (Array.isArray(e)) { for (const x of e) stack.push(x); continue }
+    const node = e as { type?: unknown } & Record<string, unknown>
+    if (node.type === 'Identifier' && typeof node.name === 'string') { out.push(node.name); continue }
+    for (const k of Object.keys(node)) {
+      if (k === 'type') continue
+      // (a property read off an object, or the key of an object literal, is no name the expression reads)
+      if (k === 'property' && node.type === 'MemberExpression' && node.computed !== true) continue
+      if (k === 'key' && node.type === 'Property' && node.computed !== true) continue
+      stack.push(node[k])
+    }
+  }
+  return out
 }
