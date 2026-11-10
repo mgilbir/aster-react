@@ -111,6 +111,13 @@ and Fixed, per package. Everything built before the first release is in [Pre-rel
   changed. Both are now read again.
 - An ordinal scale that adds the categories it is asked for to its domain (`domainImplicit`, a `domainRaw`, or no domain) was
   kept from one update to the next, with categories that rows since removed had added. It is made again on every evaluation.
+- A pulse through a step that publishes a signal (Vega-Lite's `{extent, param}`) kept the rows of the steps after it that read it
+  (a `calculate` over the extent): removing the row of the minimum left every other row normalised by the old extent. The steps
+  after such a step run over every row when the value it publishes moves.
+- After a node of a `force` layout with a `link` force was added or removed, the marks drawn from the link rows kept the paths of
+  the layout before. The force's mark and the marks reading its links are made again together on every evaluation.
+- A session that was not told what changed took `0` and `-0` in a row for one value, and compared nested values by JSON (`Infinity`
+  and `null` were one value, as were any two Maps). Cells compare as the scene sees them (`Object.is`, Dates by their instant).
 - A discrete scale was kept when an update told of the change (`dataChanges`) turned a category's first value from `0` into `-0`,
   which the domain then lists.
 - Names spelled with escapes in expressions (an escaped `data`, `random` or signal name) were missed wherever the engine read

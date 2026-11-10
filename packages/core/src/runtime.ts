@@ -117,6 +117,11 @@ export interface DatasetState {
   built?: BuiltDataset
   /** Where the view's id counter stood when this build of the dataset began (see `carriedFrom`). */
   idsStart?: number
+  /**
+   * `published[k]`: the value of the signal step `k` publishes (an `extent`, a `bin`) as the step left it, boxed (absent when the
+   * step publishes none or left it unwritten). A pulse compares it with the value the step publishes now (see `applyPipelineWithPulse`).
+   */
+  published?: Array<readonly [unknown] | undefined>
 }
 
 /**
@@ -1825,6 +1830,25 @@ function dependsOn(chart: CompiledChart, a: string, b: string): boolean {
   return false
 }
 
+/**
+ * A mark bound to a force layout's links: it lays out nodes with a `link` force, or it reads a dataset a `link` force takes its rows
+ * from. Each run of the force rewrites the link rows of the evaluation (their ends become the nodes it moved), so neither the force's
+ * nodes nor the marks drawn from its links are kept from an evaluation before: they are made again together.
+ */
+const FORCE_BOUND = new WeakMap<CompiledMark, boolean>()
+function forceBound(mark: CompiledMark, chart: CompiledChart): boolean {
+  let out = FORCE_BOUND.get(mark)
+  if (out !== undefined) return out
+  const links = forceLinkDatasets(chart)
+  out = links.size > 0 && (
+    (mark.transform ?? []).some((t) => t.type === 'force' && Array.isArray((t as { forces?: unknown }).forces)
+      && ((t as { forces: Array<{ force?: string } | null> }).forces).some((f) => f?.force === 'link'))
+    || (mark.from?.data !== undefined && links.has(mark.from.data))
+    || [...markDepsOf(mark, chart).names].some((n) => links.has(n)))
+  FORCE_BOUND.set(mark, out)
+  return out
+}
+
 /** The datasets some `force` transform (a dataset's or a mark's) takes link rows from. */
 const FORCE_LINKS = new WeakMap<CompiledChart, Set<string>>()
 function forceLinkDatasets(chart: CompiledChart): Set<string> {
@@ -2262,7 +2286,7 @@ function sameData(rows: readonly Row[], items: readonly SceneItem[]): boolean {
 function canReuseMarkGroup(mark: CompiledMark, ctx: EvalContext, prevGroup: SceneGroup, key: string): boolean {
   // (`key` is `markKeyOf(mark, ctx)`, recorded for the next evaluation by the caller)
   const prev = ctx.prev
-  if (!prev || mark.type === 'group' || !cleanPass(ctx)) return false
+  if (!prev || mark.type === 'group' || !cleanPass(ctx) || forceBound(mark, ctx.chart)) return false
   const deps = markDepsOf(mark, ctx.chart)
   if (prev.markKeys.get(mark) !== key) return false
   if (ctx.incremental && prev.fp === ctx.draft.fp) {
@@ -3379,6 +3403,7 @@ function runPipeline(
       if (ss !== undefined) state.stepState.set(`${name}#${k}`, ss)
       follow(k, k, given)
       records[k] = kept.records![k]
+      notePublished(state, k, t, ctx.signalParams)
       stepCounts.reused++
       continue
     }
@@ -3409,6 +3434,7 @@ function runPipeline(
       if (numbered !== undefined) state.stepState.set(`${name}#${k}`, numbered)
     }
     stepCounts.ran++
+    notePublished(state, k, t, ctx.signalParams)
     if (keys !== undefined) records[k] = recordStep(ctx, reads!, keys, had, published)
   }
   if (shared && cur === rows) cur = copyRows(rows)
@@ -3416,6 +3442,13 @@ function runPipeline(
   return cur
 }
 
+
+/** Record in `state` the value of the signal step `k` (`t`) publishes, as it stands after the step (see `DatasetState.published`). */
+export function notePublished(state: DatasetState, k: number, t: CompiledTransform, signals: Record<string, unknown>): void {
+  const name = (t as { signal?: unknown }).signal
+  if (typeof name !== 'string' || !Object.hasOwn(signals, name)) return
+  ;(state.published ??= [])[k] = [signals[name]]
+}
 
 const sameArrays = (a: readonly unknown[], b: readonly unknown[]): boolean => a.length === b.length && a.every((x, i) => x === b[i])
 
@@ -4127,7 +4160,7 @@ function reusablePulse(
   } else if (rowCount !== prevItems.length) {
     return null
   }
-  if (mark.sort || mark.transform?.length) return null
+  if (mark.sort || mark.transform?.length || forceBound(mark, ctx.chart)) return null
   const deps = markDepsOf(mark, ctx.chart)
   // Reading other datasets from an expression: an unchanged row can still
   // encode differently, and no pulse describes that.

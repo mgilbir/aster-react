@@ -7,6 +7,7 @@
  * property/fuzz oracle (incremental-oracle.test.ts) covers the general shape.
  */
 import { describe, it, expect } from 'vitest'
+import './addon-transforms.js'
 import { compileChart } from './compiler.js'
 import { evaluateChart } from './evaluate.js'
 import { createChartSession } from './session.js'
@@ -535,5 +536,62 @@ describe('gradient paints keep their <defs> through an incremental evaluation', 
     const full2 = fresh(spec, { data: { t: back } })
     expect(gradientIds(inc2)).toEqual(gradientIds(full2))
     expect(svgDefs(inc2)).toBe(svgDefs(full2))
+  })
+})
+
+describe('a pulse past a step that publishes a signal a later step reads', () => {
+  // (Vega-Lite's `{extent: 'y', param: 'yext'}` then `{calculate: '(datum.y - yext[0]) / (yext[1] - yext[0])'}`)
+  const spec = {
+    width: 100, height: 60, padding: 0, autosize: 'none',
+    data: [
+      { name: 't' },
+      { name: 'd', source: 't', transform: [{ type: 'extent', field: 'y', signal: 'yext' }, { type: 'formula', as: 'n', expr: '(datum.y - yext[0]) / (yext[1] - yext[0])' }] },
+    ],
+    scales: [{ name: 'y', type: 'linear', domain: { data: 'd', field: 'n' }, range: 'height' }],
+    marks: [{ type: 'symbol', name: 'pts', from: { data: 'd' }, encode: { update: { x: { field: 'y' }, y: { scale: 'y', field: 'n' } } } }],
+  } as never
+  const rows = [2, 4, 3, 6, 5, 8, 7, 9].map((y) => ({ y }))
+  const items = (s: SceneRoot): SceneItem[] => ((s.items[0] as SceneGroup).items ?? []) as SceneItem[]
+
+  it('rows past a moved extent are made again; past an unmoved one only the changed rows are', () => {
+    for (const [what, next, movesExtent] of [
+      ['the row of the minimum removed', rows.slice(1), true],
+      ['the row of the maximum removed', rows.slice(0, -1), true],
+      ['a middle row removed', rows.filter((_, i) => i !== 3), false],
+      ['a row appended past the maximum', [...rows, { y: 12 }], true],
+    ] as const) {
+      const session = createChartSession()
+      const before = session.evaluate(spec, { data: { t: rows } })
+      const input = { data: { t: next as Array<{ y: number }> } }
+      const after = session.evaluate(spec, input)
+      expect(renderSceneToSvg(after), what).toBe(renderSceneToSvg(evaluateChart(compileChart(spec), input)))
+      const was = new Set(items(before))
+      const kept = items(after).filter((it) => was.has(it)).length
+      if (movesExtent) expect(kept, what).toBe(0)
+      else expect(kept, what).toBe(items(after).length)
+    }
+  })
+})
+
+describe('marks bound to a force layout\'s links', () => {
+  it('a node appended or removed moves every node, and the links drawn between them, as a fresh evaluation does', () => {
+    const nodes = Array.from({ length: 12 }, (_, i) => ({ name: `n${i}`, weight: 3 + (i % 4) }))
+    const links = Array.from({ length: 10 }, (_, i) => ({ source: i, target: (i * 5 + 2) % 12 }))
+    const spec = {
+      width: 200, height: 120, padding: 0, autosize: 'none',
+      data: [{ name: 'node-data' }, { name: 'link-data', values: links }],
+      marks: [
+        { name: 'nodes', type: 'symbol', from: { data: 'node-data' }, encode: { update: { size: { signal: '6 * datum.weight' } } },
+          transform: [{ type: 'force', iterations: 60, static: true, forces: [{ force: 'center', x: 100, y: 60 }, { force: 'nbody', strength: -20 }, { force: 'link', links: 'link-data', distance: 25 }], signal: 'force' }] },
+        { name: 'edges', type: 'path', from: { data: 'link-data' }, encode: { update: { stroke: { value: '#bbb' } } },
+          transform: [{ type: 'linkpath', shape: 'line', sourceX: 'datum.source.x', sourceY: 'datum.source.y', targetX: 'datum.target.x', targetY: 'datum.target.y', require: { signal: 'force' } }] },
+      ],
+    } as never
+    const session = createChartSession()
+    session.evaluate(spec, { data: { 'node-data': nodes } })
+    for (const next of [[...nodes, { ...nodes[3]! }], nodes.slice(0, 11).concat([{ ...nodes[11]!, weight: 9 }]), nodes]) {
+      const input = { data: { 'node-data': next } }
+      expect(renderSceneToSvg(session.evaluate(spec, input))).toBe(renderSceneToSvg(evaluateChart(compileChart(spec), input)))
+    }
   })
 })

@@ -18,7 +18,7 @@ import { datasetsReadIn } from './step-reuse.js'
 import { lexedText } from './expr-text.js'
 import type { CompiledTransform, SortSpec } from './types.js'
 import {
-  applyFresh, applyIdentifier, applyOne, DATA_DEPENDENT_EXPR, idField, pulseBaseLength, withCarry,
+  applyFresh, applyIdentifier, applyOne, DATA_DEPENDENT_EXPR, idField, notePublished, pulseBaseLength, withCarry,
   type DatasetState, type IncrementalEngine, type ProjectionRegistry, type StepPulse, type StepTransformContext,
 } from './runtime.js'
 
@@ -1028,6 +1028,8 @@ function applyPipelineWithPulse(
     const key = `${sourceName}#${k}`
     const stepInput = cur
     const stepPulse = pulse
+    // (a step that publishes a signal, an `extent` or a `bin`: the steps after it may read it)
+    const publishes = typeof (t as { signal?: unknown }).signal === 'string' ? (t as { signal: string }).signal : undefined
     const before = t.type === 'identifier' && (list !== null || tail !== null) ? numbersOf(prevDS.stepState.get(key)) : undefined
     // (rows added at the end of the input, all of them new source rows: the identifier numbers them anew and the others keep their
     // numbers -- what the step's append path does -- and the numbers by source row grow by theirs)
@@ -1057,6 +1059,14 @@ function applyPipelineWithPulse(
       const next = res.state !== undefined ? res.state
         : keepsStepState(String(t.type)) ? deriveStepState(t, stepInput, cur, tctx) : undefined
       if (next !== undefined) state.stepState.set(key, next)
+    }
+    // A published signal that moved since the run the pulse is relative to changes what a later step of this pipeline makes of rows
+    // the pulse does not name (a formula over `extent`'s signal): the steps after it run over every row, as a pipeline with no pulse does.
+    if (publishes !== undefined) {
+      notePublished(state, k, t, tctx.signals)
+      const was = prevDS.published?.[k]
+      const now = state.published?.[k]
+      if (pulse !== null && (was === undefined || now === undefined || !equalCell(was[0], now[0]))) pulse = null
     }
     if (t.type === 'identifier') {
       if (tail !== null) {

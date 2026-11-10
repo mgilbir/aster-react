@@ -82,20 +82,13 @@ function firstTextField(row: Record<string, unknown>, keys: ReadonlySet<string>)
 
 type Rows = Array<Record<string, unknown>>
 
-/**
- * Specs whose row changes do not render as a fresh chart, each for a reason that is not the row changes' (all three mismatched before
- * the row changes were checked here: measured 2026-11-10 against main + #136-#138 at 72ffeea). The list only shrinks: a spec on it
- * that matches fails the gate, so it is taken off.
- */
-const KNOWN_ROW_MISMATCHES: Record<string, string> = {
-  // an identifier numbers rows as the view's counter stands, which depends on the evaluations before (ARCHITECTURE.md, "Incremental
-  // evaluation"): a fresh chart numbers them from the start, and the marks encode the numbers
-  'data-source-list.vg.json': 'identifier numbers depend on how the view got there',
-  // the force simulation draws its start from the random source, whose numbers depend on the draws the evaluations before made
-  'force-layout-marks.vg.json': 'force layout draws from the random source',
-  // an `extent` step publishes a signal that a later `formula` of the same pipeline reads; a pulse that moves the extent keeps the
-  // formula's rows (a dataset-pulse issue, not a scale's)
-  'vlx-tr-extent-param.vl.json': 'a pulse past an extent that publishes the signal a later formula reads',
+/** Whether any `identifier` transform is in the spec (a dataset's or a mark's, at any depth). */
+function numbersRows(node: unknown): boolean {
+  if (Array.isArray(node)) return node.some(numbersRows)
+  if (node === null || typeof node !== 'object') return false
+  const rec = node as Record<string, unknown>
+  if (rec.type === 'identifier') return true
+  return Object.values(rec).some(numbersRows)
 }
 
 /** The row changes, in order, each from the rows the one before left. */
@@ -111,17 +104,30 @@ function rowChanges(rand: () => number, text: string | null): Array<{ what: stri
   ]
 }
 
-/** Whether the scene of each row change through one session renders as a fresh chart renders the same rows; null when a spec throws. */
+/**
+ * Whether the scene of each row change through one session renders as a fresh chart renders the same rows; null when a spec throws.
+ *
+ * An `identifier` numbers rows from the view's counter, so its numbers depend on how the view got there, in Vega as in Aster (the rows
+ * a change adds take the next numbers and the others keep theirs, where a fresh view numbers every row from 1: ARCHITECTURE.md,
+ * "Deviations from Vega"). A spec with one is compared with the incremental-oracle's reference instead: a chart of its own taken
+ * through the same states, each evaluated with no hint of what changed but the rows edited where they stood.
+ */
 function rowChangesMatch(spec: Record<string, unknown>, name: string, values: Rows, rand: () => number, keys: ReadonlySet<string>): string | true | null {
   const session = createChartSession()
+  const history = numbersRows(spec) ? compileChart(spec as never) : undefined
   let rows = values
   try {
     session.evaluate(spec as never, { data: { [name]: rows } })
+    if (history !== undefined) evaluateChart(history, { data: { [name]: rows } })
     for (const change of rowChanges(rand, firstTextField(values[0]!, keys))) {
       if (!rows.length) break
+      const before = rows
       rows = change.to(rows)
       const inc = canonicalizeSvg(renderSceneToSvg(session.evaluate(spec as never, { data: { [name]: rows } })))
-      const full = canonicalizeSvg(renderSceneToSvg(evaluateChart(compileChart(spec as never), { data: { [name]: rows } })))
+      const edited = before.length === rows.length ? rows.flatMap((r, i) => (r === before[i] ? [] : [i])) : undefined
+      const full = canonicalizeSvg(renderSceneToSvg(history !== undefined
+        ? evaluateChart(history, { data: { [name]: rows }, ...(edited !== undefined ? { dataChanges: { [name]: edited } } : {}) })
+        : evaluateChart(compileChart(spec as never), { data: { [name]: rows } })))
       if (inc.root !== full.root || inc.records.join('\u0000') !== full.records.join('\u0000')) return change.what
     }
   } catch {
@@ -193,12 +199,8 @@ async function main(): Promise<void> {
   console.log(`[conformance:diff] ${ran} corpus specs with inline values; ${failed} differential mismatches; ${skipped} skipped (the mutated data made the spec throw)`)
   for (const f of failures) console.log(`  ✗ ${f}`)
   console.log(`[conformance:diff] row changes: ${rowRan} corpus specs; ${rowFailures.length} mismatches; ${rowSkipped} skipped (the changed rows made the spec throw)`)
-  const unexpected = rowFailures.filter((f) => !Object.hasOwn(KNOWN_ROW_MISMATCHES, f.slice(0, f.indexOf(' ('))))
-  const known = new Set(rowFailures.map((f) => f.slice(0, f.indexOf(' ('))))
-  const fixed = Object.keys(KNOWN_ROW_MISMATCHES).filter((f) => !known.has(f))
-  for (const f of rowFailures) console.log(`  ${unexpected.includes(f) ? '✗' : '(known)'} ${f}${unexpected.includes(f) ? '' : `: ${KNOWN_ROW_MISMATCHES[f.slice(0, f.indexOf(' ('))]}`}`)
-  for (const f of fixed) console.log(`  ✗ ${f} is listed as a known mismatch but matches now: take it off KNOWN_ROW_MISMATCHES`)
-  if (failed > 0 || unexpected.length > 0 || fixed.length > 0) process.exit(1)
+  for (const f of rowFailures) console.log(`  ✗ ${f}`)
+  if (failed > 0 || rowFailures.length > 0) process.exit(1)
 }
 
 main().catch((e) => { console.error(e); process.exit(1) })
