@@ -46,8 +46,11 @@ the browser).
 - **Signal changes keep what does not read them**: a top-level mark keeps its group and its items, and a top-level scale its
   object, when the signals its definition names, the view's size and the datasets it reads are as they were, whichever other
   signals changed. A Vega-Lite `time` animation, whose clock ticks at 60 fps while its marks read the frame's rows, re-encodes
-  nothing until the frame moves. Marks with transforms, and marks and scales that read datasets or scales from an expression,
-  are made again on any signal change; group marks always are ([ARCHITECTURE.md](ARCHITECTURE.md#incremental-evaluation)).
+  nothing until the frame moves. A mark that tests a selection's store keeps its items while the store's rows are as they were;
+  a point selection's numbered dataset and the scales over it are kept; and rows appended while a signal moves are a pulse that
+  encodes the new items only. Marks with transforms, scales that read datasets or scales from an expression, and datasets with
+  a step outside the kept-step list are made again on any signal change; group marks always are
+  ([ARCHITECTURE.md](ARCHITECTURE.md#incremental-evaluation)).
 - **Auto-pulse inference**: `rowsEqual` compares plain rows with `for...in` instead of two `Object.keys`
   allocations per row, so replacing the whole data array stays cheap even without explicit `dataChanges`.
 - **Per-datum updates**: sessions diff replaced immutable source arrays automatically (`autoChanges`), then
@@ -162,6 +165,45 @@ on 10,000 points (`createChartStream`, 500 appends, the same alternation) went f
 `pnpm bench:incremental -- --points=10000 --reps=30`, three runs each: append speedup vs a full evaluation 21.5x / 21.8x /
 20.2x before, 18.9x / 20.0x / 17.2x after (floor 8x); the stream append rounds to 0.1 ms before and 0.1 to 0.2 ms after.
 
+### Selections, and rows with a signal change (node, and Chromium)
+
+Measured 2026-11-10 on perf/selection-signal-reuse against its base (perf/transition-retarget-by-identity at 082a700, which holds
+the signal-scoped reuse above), the two builds run alternately, three rounds each, on the shared machine. `node probe.mjs <worktree>`
+and `node fit.mjs <worktree>`, probes kept outside the repository: Vega-Lite scatters of 5,000 points compiled by
+`@aster-charts/vl`, driven through `createChartSession().evaluate` as `<Chart>` drives it (each store handed back as data, a new
+array on every edit), 40 evaluations per case (30 for the fit view, `width: "container"` with a measured 640 x 300), median ms.
+`unread` changes a param no mark reads; `click` / `move` / `drag` put another tuple in the store; `append` adds one row inside the
+domains. In the cases marked `3b` the points' opacity tests the selection (no ordinal color scale, whose census does not advance
+over an append).
+
+| Case | base, rounds 1-3 | this change, rounds 1-3 | kept after the change |
+|---|---|---|---|
+| point (click) selection, unread signal | 22.46 / 22.99 / 23.41 | 0.69 / 0.68 / 0.68 | 3 of 3 scales, 5000 of 5000 items |
+| point (click) selection, a click | 22.27 / 22.08 / 22.04 | 16.72 / 16.97 / 16.79 | 3 of 3 scales (the points are encoded again) |
+| hover selection, the same point | 21.32 / 21.25 / 21.71 | 0.59 / 0.57 / 0.58 | 3 of 3 scales, 5000 of 5000 items |
+| hover selection, another point | 21.23 / 21.22 / 21.24 | 16.59 / 16.10 / 16.01 | 3 of 3 scales |
+| interval brush, unread signal | 17.15 / 17.27 / 17.22 | 0.58 / 0.62 / 0.61 | the brush's marks and 5000 of 5000 items |
+| interval brush, a drag step | 17.37 / 17.18 / 17.16 | 17.67 / 17.31 / 17.90 | the scales (as before) |
+| 3b hover, append + unread | 28.52 / 28.51 / 28.72 | 0.75 / 0.76 / 0.76 | 5040 of 5041 items, 2 of 2 scales |
+| 3b hover, one row modified + unread | 28.07 / 28.57 / 28.51 | 2.28 / 2.18 / 2.13 | 4999 of 5000 items |
+| 3b brush, append | 21.10 / 20.88 / 21.14 | 0.76 / 0.81 / 0.79 | 5040 of 5041 items |
+| 3b brush, append + unread | 26.85 / 27.19 / 27.15 | 0.72 / 0.77 / 0.78 | 5040 of 5041 items |
+| fit view, hover, unread | 47.64 / 47.25 / 48.26 | 1.98 / 1.78 / 1.81 | 2 of 2 scales, 5000 of 5000 items |
+| fit view, hover, append + unread | 56.10 / 55.80 / 55.50 | 2.06 / 2.09 / 2.10 | 5030 of 5031 items |
+| fit view, brush, append + unread | 52.93 / 53.13 / 52.93 | 2.13 / 2.09 / 2.14 | 5030 of 5031 items |
+| controls: fixed-size one-row update (`perf.mjs`, last run of three) | 0.58 / 0.57 / 0.57 | 0.60 / 0.56 / 0.56 | |
+| controls: `time` animation tick (`tick.mjs`) | 0.91 / 0.92 / 0.91 | 0.90 / 0.91 / 0.91 | |
+| controls: one-row stream append, 10,000 rows, no transforms (µs) | 68 / 70 / 68 | 69 / 69 / 70 | |
+| one-row stream append through formula, formula, filter (µs) | 273 / 276 / 317 | 279 / 282 / 282 | |
+
+A drag step costs what it did, a little more (17.2-17.4 ms before, 17.3-17.9 after: the keys of the store the points read are
+made on every step, and the points are encoded again, as they must be). In headless Chromium (`node drag.mjs <worktree> brush|hover
+5000`: `<Chart>` bundled from each worktree, 50 pointer moves, the time from a move to the second animation frame after it, which
+counts whole frames), a brush drag went from 115.1 / 115.2 / 115.3 to 81.8 / 81.8 / 81.8 ms and a hover sweep from 97.8 / 104.5 /
+98.1 to 64.4 / 64.6 / 64.3 ms median. `pnpm bench:incremental -- --points=10000 --reps=30`, three runs each, alternated: append
+speedup vs a full evaluation 19.10x / 19.36x / 19.30x before, 16.86x / 19.09x / 19.06x after (floor 8x); a session's whole-array
+replacement 15.42x / 15.08x / 15.13x before, 16.24x / 16.62x / 16.90x after; the stream append rounds to 0.1-0.2 ms in both.
+
 ### Differential updates (node, no DOM)
 
 `pnpm bench:differential` (50,000 points, about 1% of rows changed; `evaluateChart` with a changeset vs a full
@@ -256,6 +298,12 @@ Signal-scoped reuse (the keys of marks and scales, the kept copies and the steps
 2026-11-10 with the same command against main at e31d61c (kB gzip, before -> after): `@aster-charts/core` 153.0 -> 154.5,
 `useChart` 164.6 -> 166.1, `<Chart>` 207.4 -> 208.7, `<SvgChart>` 184.4 -> 185.8, `<SvgChart>` + `interaction` 202.0 -> 203.3,
 `<Chart>` + VL 310.6 -> 312.1; the marginal rows did not move.
+
+Selections under signal changes (kept dataset builds, marks keyed by the datasets they read by name, pulses with a signal change,
+names read as the expression lexer reads them), measured 2026-11-10 with the same command against its base 082a700 (kB gzip,
+before -> after): `@aster-charts/core` 154.5 -> 155.7, `useChart` 166.1 -> 167.4, `<Chart>` 208.7 -> 210.0, `<SvgChart>` 185.8 ->
+187.1, `<SvgChart>` + `interaction` 203.3 -> 204.4, `<Chart>` + VL 312.1 -> 313.3; `+ @aster-charts/core/dom` 10.6 -> 10.7, the
+other marginal rows did not move.
 
 The manifests list only the files that really have an import effect (see
 [ARCHITECTURE.md](ARCHITECTURE.md#side-effects-and-tree-shaking)). Without a `sideEffects` field a bundler must assume

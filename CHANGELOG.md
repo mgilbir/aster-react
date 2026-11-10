@@ -56,6 +56,16 @@ and Fixed, per package. Everything built before the first release is in [Pre-rel
   kept while that dataset's rows are equal. Marks with transforms, marks and scales that read datasets or scales from an
   expression, and group marks are made again on any signal change, as before; so is everything under `limits` or in an
   `evaluateChart` call without a change description. The scene is unchanged. A one-row stream append costs about 6 µs more.
+- Selections keep what they do not touch. A dataset built again in a later round of an evaluation (once a selection's
+  `vlSelectionResolve` signal resolves) or in the second pass of a fit view is kept when its inputs and what its steps read are
+  as they were, its `identifier` numbers included, so a point selection's dataset, and the scales over it, survive a signal
+  change. A mark that tests a store (`vlSelectionTest("brush_store", datum)`) is keyed by that store's rows and the signals it
+  names, not by every signal. A pulse runs through a pipeline whose reads did not change, whichever other signals did, so rows
+  appended while a hover or a brush moves encode only the new items. On 5,000 points: an unrelated signal 22.5 to 0.7 ms (point
+  selection), 17.2 to 0.6 ms (interval brush); a click 22.2 to 16.8 ms; a row appended while a signal moves 28.5 to 0.8 ms; in a
+  `"container"` view 47.6 to 1.8 ms; a brush drag through `<Chart>` in Chromium 115 to 82 ms per move. A drag step itself costs
+  about what it did (17.2 to 17.3-17.9 ms). Keys now read names as the expression lexer does (an escaped or non-ASCII name is the
+  name it spells), and a step that calls `random` by an escaped name is one that draws. The scene is unchanged.
 
 #### Added
 
@@ -75,6 +85,11 @@ and Fixed, per package. Everything built before the first release is in [Pre-rel
   dataset changed, when the mark it reads was kept from the evaluation before.
 - A dataset whose transform throws stops the pass before every mark, as in Vega. After an update told that some other
   dataset changed, a mark kept from the evaluation before was drawn anyway.
+- A `filter` whose expression reads a scale, or a dataset the same update changed (`length(data("t"))` over its own source; a
+  selection's store edited together with the rows it filters), kept its verdict on the rows that had not changed: a pulse
+  judged only the new and modified rows, so rows a moved scale or store would now drop were drawn. It judges every row again.
+- A mark that reads a dataset's hierarchy (`treePath`, `treeAncestors`) or a scale through an expression that spells the
+  function's name with an escape was kept after its data changed.
 
 ## 0.1.0 (2026-11-08): initial release
 
