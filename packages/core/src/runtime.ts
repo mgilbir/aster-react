@@ -4033,13 +4033,15 @@ function buildScales(ctx: EvalContext): void {
     // Made under the same key (`stamp`) from the same settings, the scale is the one the evaluation before made: keep that object,
     // so what reads it is kept too. This is what proves a domain unchanged when no census can (a pulse with an index mapping, a
     // sort by count or by an aggregate, several fields, `domainRaw`): the settings are read in full, as a fresh build reads them,
-    // and only the scale is not made again. Not for a spec with `bins` (a pass of a fit view leaves them for the next, see
-    // `ScaleContext.pass`), nor under `limits` (a scale made again is checked against the ceilings they replace).
+    // and only the scale is not made again. Not under `limits` (a scale made again is checked against the ceilings they replace).
+    // A spec with `bins` in a view that fits its viewport reads what the pass before left (`ScaleContext.pass`): under the same key
+    // (which holds the pass's size, the viewport and the signals it reads) and the same data, that pass had the same settings in
+    // both evaluations, so what it left is the same too.
     let kept = false
     try {
       const sctx = scaleContext(ctx, def.name)
       settings = scaleSettings(def, sctx)
-      if (stamp !== undefined && prevEntry?.settings !== undefined && def.bins == null && activeMeter() === null
+      if (stamp !== undefined && prevEntry?.settings !== undefined && activeMeter() === null
         && sameScaleSettings(s.type, settings, prevEntry.settings)) {
         scale = prevEntry.scale
         settings = prevEntry.settings

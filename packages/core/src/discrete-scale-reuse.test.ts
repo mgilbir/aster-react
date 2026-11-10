@@ -66,6 +66,15 @@ function norm(v: unknown, depth = 0, skip: ReadonlySet<string> = SKIP_KEYS): unk
 type ScaleFn = ((x: unknown) => unknown) & Record<string, (...a: unknown[]) => unknown>
 const scaleOf = (scene: SceneRoot, name: string): ScaleFn | undefined => (scene as unknown as { __scaleMap: Map<string, ScaleFn> }).__scaleMap.get(name)
 
+/** The scale's value for `x`, or what it throws. */
+function apply(s: ScaleFn, x: unknown): unknown {
+  try {
+    return s(x)
+  } catch (e) {
+    return `[throws ${(e as Error).message}]`
+  }
+}
+
 /** Everything a reader sees of a scale; values kept as they are (a number and its text differ, so do 0 and -0). */
 function scaleView(s: ScaleFn | undefined): unknown {
   if (!s) return undefined
@@ -78,8 +87,8 @@ function scaleView(s: ScaleFn | undefined): unknown {
     type: (s as unknown as { type: string }).type,
     domain,
     range: read('range'),
-    mapped: domain.map((d) => s(d)),
-    stranger: grows ? '[grows]' : s('\u0000not a category'),
+    mapped: domain.map((d) => apply(s, d)),
+    stranger: grows ? '[grows]' : apply(s, '\u0000not a category'),
     bandwidth: read('bandwidth'),
     step: read('step'),
     paddingInner: read('paddingInner'),
@@ -238,13 +247,16 @@ const STEPS: Step[] = [
   { what: 'a row appended that the filter drops', to: (w) => ({ ...w, t: [...w.t, r('new-dropped', null)] }), touches: 1 },
   { what: 'a value edited', to: (w) => ({ ...w, t: at(w.t, 9, { v: 33 }) }), touches: 1 },
   { what: 'a category edited to one that comes before it', to: (w) => ({ ...w, t: at(w.t, 14, { g: 'c' }) }), touches: 1 },
-  { what: 'a category edited to one that first comes after it', to: (w) => ({ ...w, t: at(w.t, 1 + 4, { g: lastG(w.t) }) }), touches: 1 },
+  { what: 'a category edited to the one that first comes last', to: (w) => ({ ...w, t: at(w.t, 1 + 4, { g: lastG(w.t) }) }), touches: 1 },
   { what: 'a row removed that is not its category\'s last', to: (w) => ({ ...w, t: without(w.t, (_, k) => k !== 6) }), touches: 0 },
   { what: 'a new category appended', to: (w) => ({ ...w, t: [...w.t, r('e', 25)] }), touches: 1 },
   { what: 'rows of the new category appended', to: (w) => ({ ...w, t: [...w.t, r('e', 26), r('e', 27)] }), touches: 2 },
   { what: 'the new category removed', to: (w) => ({ ...w, t: without(w.t, (x) => x.g !== 'e') }), touches: 0 },
   { what: 'the new category added again', to: (w) => ({ ...w, t: [...w.t, r('e', 28)] }), touches: 1 },
   { what: 'the last row of a category edited away', to: (w) => ({ ...w, t: at(w.t, lastOf(w.t, 'e'), { g: 'a' }) }), touches: 1 },
+  { what: 'two new categories appended', to: (w) => ({ ...w, t: [...w.t, r('f', 12), r('g', 13)] }), touches: 2 },
+  // (`g` now first appears before `f`: the order of appearance moves)
+  { what: 'an early row edited to the category that first comes last', to: (w) => ({ ...w, t: at(w.t, 4, { g: 'g' }) }), touches: 1 },
   { what: 'many rows of one category appended (a count sort moves)', to: (w) => ({ ...w, t: [...w.t, ...Array.from({ length: 6 }, (_, k) => r('d', 2 + k))] }), touches: 6 },
   { what: 'a large value appended (a sum sort moves)', to: (w) => ({ ...w, t: [...w.t, r('b', 900)] }), touches: 1 },
   { what: 'two rows swapped (the first category moves)', to: (w) => { const t = w.t.slice(); const j = firstOf(t, 'a'); [t[0], t[j]] = [t[j]!, t[0]!]; return { ...w, t } }, touches: 2 },
@@ -532,6 +544,71 @@ describe('what else a kept scale reads', () => {
     expect(scaleOf(d!, 'b')).not.toBe(scaleOf(c!, 'b'))
   })
 
+  it('a continuous colour scale under a domain override, whose domain from an expression changes its length', () => {
+    // (two domain values make a sequential scale and three a diverging one, whatever the override: the domain is read)
+    const spec = {
+      width: 100, height: 50, autosize: 'none',
+      data: [{ name: 't' }],
+      scales: [{ name: 's', type: 'linear', domain: { signal: "pluck(data('t'), 'v')" }, range: { scheme: 'blueorange' } }],
+      legends: [{ fill: 's' }],
+      marks: [{ type: 'symbol', from: { data: 't' }, encode: { update: { fill: { scale: 's', field: 'v' } } } }],
+    } as unknown as VgSpec
+    const raw = { s: [0, 10] }
+    const [a, b, c] = steps(spec, [
+      { data: { t: [{ v: 1 }, { v: 9 }] }, domainRaw: raw },
+      { data: { t: [{ v: 1 }, { v: 5 }, { v: 9 }] }, domainRaw: raw },
+      { data: { t: [{ v: 1 }, { v: 5 }, { v: 9 }].map((x) => ({ ...x, w: 1 })) }, domainRaw: raw },
+    ])
+    expect(scaleOf(b!, 's')).not.toBe(scaleOf(a!, 's'))
+    expect(scaleOf(c!, 's')).toBe(scaleOf(b!, 's'))
+  })
+
+  it('a scale made again under limits that no longer let it be made, from settings that are the same', () => {
+    // (the ceiling on a colour scheme's count is replaced by `maxItems`; a scale kept would not be checked against it again)
+    const spec = {
+      width: 100, height: 50, autosize: 'none',
+      data: [{ name: 't' }],
+      scales: [{ name: 's', type: 'quantize', domain: { data: 't', fields: ['a', 'b'] }, range: { scheme: 'blues', count: 150000 } }],
+      marks: [{ type: 'symbol', from: { data: 't' }, encode: { update: { fill: { scale: 's', field: 'a' } } } }],
+    } as unknown as VgSpec
+    const rows = [{ a: 1, b: 2 }, { a: 5, b: 3 }]
+    const s = createChartSession()
+    const first: RuntimeInput = { data: { t: rows }, limits: { maxItems: 1_000_000 } }
+    expect(norm(s.evaluate(spec, first))).toEqual(norm(evaluateChart(compileChart(spec), first)))
+    // (a row inside the extent: the settings are the same; the limits no longer raise the ceiling, and a fresh evaluation fails)
+    const next: RuntimeInput = { data: { t: [...rows, { a: 3, b: 3 }] }, limits: { maxRows: 1_000_000 } }
+    expect(() => evaluateChart(compileChart(spec), next)).toThrow(/colour scheme count/)
+    expect(() => s.evaluate(spec, next)).toThrow(/colour scheme count/)
+  })
+
+  it('a scale with bins in a view that fits its viewport: kept for its settings in each pass, as a fresh one is made', () => {
+    // (a scale operator keeps its bins between the passes of one evaluation: the second pass leaves the zero out when the first had
+    // bins under other settings, see `ScaleContext.pass`. Kept under the same key, the pass before it had the same settings too)
+    for (const range of ['height', [0, 100]] as const) {
+      const spec = {
+        width: 200, height: 100, padding: 5, autosize: { type: 'fit', contains: 'padding' },
+        data: [{ name: 't' }],
+        scales: [
+          { name: 'y', type: 'linear', domain: { data: 't', fields: ['a', 'b'] }, bins: { step: 5 }, range },
+          { name: 'c', type: 'band', domain: { data: 't', field: 'g', sort: { op: 'count' } }, range: 'width' },
+        ],
+        axes: [{ orient: 'left', scale: 'y', title: 'a long title for the axis' }, { orient: 'bottom', scale: 'c' }],
+        marks: [{ type: 'rect', from: { data: 't' }, encode: { update: { x: { scale: 'c', field: 'g' }, width: { scale: 'c', band: 1 }, y: { scale: 'y', field: 'a' }, y2: { scale: 'y', value: 12 } } } }],
+      } as unknown as VgSpec
+      const rows: Row[] = Array.from({ length: 12 }, (_, i) => ({ a: 12 + (i % 7), b: 13 + (i % 5), g: ['p', 'q', 'r'][i % 3] }))
+      const box = { measuredSize: { width: 260, height: 140 } }
+      const inputs: RuntimeInput[] = [
+        { data: { t: rows }, ...box },
+        { data: { t: [...rows, { a: 14, b: 15, g: 'q' }] }, ...box },
+        { data: { t: rows.filter((_, i) => i !== 4) }, ...box },
+        { data: { t: rows.map((x, i) => (i === 2 ? { ...x, a: 13 } : x)) }, ...box },
+      ]
+      const scenes = steps(spec, inputs)
+      expect(scaleOf(scenes[1]!, 'y'), String(range)).toBe(scaleOf(scenes[0]!, 'y'))
+      expect(scaleOf(scenes[3]!, 'y'), String(range)).toBe(scaleOf(scenes[2]!, 'y'))
+    }
+  })
+
   it('a discrete scale whose range comes from another dataset, while the dataset of its domain stays', () => {
     const spec = {
       width: 100, height: 50, autosize: 'none',
@@ -546,6 +623,8 @@ describe('what else a kept scale reads', () => {
       { data: { t, r: [{ f: 'green' }, { f: 'blue' }] } },
       // (a row of the domain's dataset appended while the range's stays: the census keeps the scale)
       { data: { t: [...t, { g: 'a' }], r: [{ f: 'green' }, { f: 'blue' }] } },
+      // (a row of the domain's dataset appended while the range's changes: the census proves the domain, not the range)
+      { data: { t: [...t, { g: 'a' }, { g: 'b' }], r: [{ f: 'green' }, { f: 'gold' }] } },
     ])
     expect(scaleOf(b!, 's')).not.toBe(scaleOf(a!, 's'))
     expect(scaleOf(c!, 's')).toBe(scaleOf(b!, 's'))
