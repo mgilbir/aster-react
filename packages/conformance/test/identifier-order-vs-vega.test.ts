@@ -58,7 +58,15 @@ async function compare(s: Spec, steps: Step[]): Promise<void> {
   try {
     await view.runAsync()
     for (const step of [{ what: 'first' } as Step, ...steps]) {
-      if (step.t) { view.change('t', (vega as any).changeset().insert(step.t.slice(state.t.length).map((r) => ({ ...r })))); state = { ...state, t: step.t } }
+      if (step.t) {
+        // (rows appended are inserted; rows gone are removed, the tuples vega holds for them)
+        const next = step.t
+        const cs = next.length >= state.t.length
+          ? (vega as any).changeset().insert(next.slice(state.t.length).map((r) => ({ ...r })))
+          : (vega as any).changeset().remove((d: Row) => !next.some((r) => r.v === d.v))
+        view.change('t', cs)
+        state = { ...state, t: next }
+      }
       if (step.b) { view.change('b', (vega as any).changeset().insert(step.b.slice(state.b.length).map((r) => ({ ...r })))); state = { ...state, b: step.b } }
       if (step.store) { view.change('store', (vega as any).changeset().remove(() => true).insert(step.store.map((r) => ({ ...r })))); state = { ...state, store: step.store } }
       if (step.u !== undefined) { view.signal('u', step.u); state = { ...state, u: step.u } }
@@ -81,7 +89,12 @@ const STEPS: Step[] = [
   // (a row of `t` inside the scale's domain: `a` gains a row, numbered from where the counter stands)
   { what: 'a row of t', t: [...T, { v: 4.5 }] },
   { what: 'another row of b', b: [...B, { w: 3 }, { w: 4 }] },
+  // (the scale's domain grows: the rows `a` held fail the filter, the new one passes and is a new tuple, numbered anew; the rows
+  // that left keep their numbers on their tuples)
+  { what: 'a row of t that moves the scale', t: [...T, { v: 4.5 }, { v: 30 }] },
   { what: 'a signal nothing reads, at last', u: 3 },
+  // (the domain shrinks back: the rows that left come back with the numbers they had)
+  { what: 'the row that moved the scale removed', t: [...T, { v: 4.5 }] },
 ]
 
 describe('identifier numbers, against vega', () => {
