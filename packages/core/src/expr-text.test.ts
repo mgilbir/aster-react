@@ -18,11 +18,17 @@ describe('the readers of expression text on any text', () => {
   for (const [name, read] of READERS) {
     it(`${name} ends, in time linear in the length`, () => {
       for (const unit of UNITS) {
+        // the fastest of five runs: one run's time includes whatever else the machine did meanwhile (a collection, another
+        // process), which once put a linear reader at 40.7x for 10x the text; quadratic is ~100x, linear ~10x
         const at = (n: number): number => {
           const text = unit.repeat(Math.ceil(n / unit.length))
-          const t0 = performance.now()
-          read(text)
-          return performance.now() - t0
+          let best = Infinity
+          for (let i = 0; i < 5; i++) {
+            const t0 = performance.now()
+            read(text)
+            best = Math.min(best, performance.now() - t0)
+          }
+          return best
         }
         at(100_000)
         const small = Math.max(at(100_000), 1)
