@@ -1,6 +1,6 @@
 {
   "name": "@aster-charts/vl",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "type": "module",
   "description": "From-scratch Vega-Lite compiler: Vega-Lite -> Vega, verified against the vega-lite oracle by rendering parity.",
   "main": "./dist/index.js",
