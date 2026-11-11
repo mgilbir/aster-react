@@ -4695,7 +4695,8 @@ function evaluateInstanceMark(mark: CompiledMark, ctx: EvalContext, id: string, 
     if (diff !== null) given = { pulse: diff.sameLength ? { changed: diff.changed } : { changed: diff.changed, from: diff.from ?? appendMapping(datums.length, rows.length), ...(diff.to ? { to: diff.to } : {}) }, items: prev.rowItems }
   }
   const built = evaluateMark(mark, ctx, given !== undefined ? prev!.group : null, given)
-  if (built !== null && !Array.isArray(built)) {
+  // (only a mark made whole in a pass that has not failed is a base: one whose encode threw is what the failure left of it)
+  if (built !== null && !Array.isArray(built) && cleanPass(ctx) && ctx.abort.cut === undefined && activeMeter() === null) {
     ctx.draft.instances.set(id, { group: built, rowItems: ROW_ITEMS.get(built) ?? (built.items as SceneItem[]), key, item: itemContext, scales, deps })
   }
   return built
