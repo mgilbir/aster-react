@@ -949,6 +949,11 @@ function compileLayered(spec: VLSpec, ctx: CompileCtx): VLSpec {
     uniquifyLayerMarks(builtMarks, leafName ?? (LEAF_PATHS.get(p.l)?.length ? LEAF_PATHS.get(p.l)!.map((n) => `layer_${n}`).join('_') : i))
     perLayerMarks.push(builtMarks)
     const layerScales = buildScales(p.l, p.fields, p.mark, p.orient, p.scaleName, wSpec, hSpec, p.seriesFields, p.rawName)
+    {
+      const at = LEAF_PATHS.get(p.l)
+      const where = `layer ${at?.length ? at.join('.') : i} (${p.mark})`
+      for (const sc of layerScales) SCALE_SOURCE.set(sc, where)
+    }
     // (shared scales are judged merged, below; an independent y scale is the layer's own)
     if (isObject(spec.resolve) && isObject((spec.resolve as Record<string, unknown>).scale) && ((spec.resolve as Record<string, Record<string, unknown>>).scale as Record<string, unknown>).y === 'independent') showInvalidValues(p.l, p.fields, p.mark, layerScales, builtMarks, (ch) => ch === 'y')
     perLayerScales.push(layerScales)
@@ -1491,6 +1496,18 @@ const compatibleScaleTypes = (a: string, b: string): boolean => {
 /** What a point scale's band padding would be, were its scale a band (a layer that brings none): the unit's mark rule. */
 const POINT_BAND_PADDING = new WeakMap<ScaleSpec, { inner: number; outer: number | undefined }>()
 
+/**
+ * Where a scale was made, for an error that names the layers or views whose scales disagree: `layer 1 (text)` (a nested layer is
+ * `layer 1.0 (text)`), `view concat_0`. Not part of the compiled spec.
+ */
+const SCALE_SOURCE = new WeakMap<ScaleSpec, string>()
+
+/** A domain sort as an error shows it: its JSON, cut at 200 characters (a spec's own values, of any size, end up here). */
+function sortText(sort: unknown): string {
+  const text = JSON.stringify(sort) ?? String(sort)
+  return text.length > 200 ? `${text.slice(0, 200)}…` : text
+}
+
 function mergeLayerScales(perLayer: ScaleSpec[][]): ScaleSpec[] {
   const byName = new Map<string, ScaleSpec[]>()
   for (const ls of perLayer) {
@@ -1580,7 +1597,8 @@ function mergeLayerScales(perLayer: ScaleSpec[][]): ScaleSpec[] {
     // (scale/domain.ts mergeValuesWithExplicit on `domains`: an explicitly specified domain beats the implicit ones; only
     // domains of the same explicitness are unioned)
     const explicitDomains = list.filter((s) => EXPLICIT_SCALE_PROPS.get(s)?.has('domain'))
-    const domains = (explicitDomains.length ? explicitDomains : list).map((s) => s.domain)
+    const domainScales = explicitDomains.length ? explicitDomains : list
+    const domains = domainScales.map((s) => s.domain)
     if (explicitDomains.length) explicitMerged.add('domain')
     if (domains.every((d) => deepEq(d, domains[0]))) merged.domain = domains[0]
     else {
@@ -1590,9 +1608,17 @@ function mergeLayerScales(perLayer: ScaleSpec[][]): ScaleSpec[] {
         if (!e) throw new VLCompileError(`layers give scale "${name}" different explicit or signal-based domains, which cannot be merged`)
         for (const x of e) if (!entries.some((y) => deepEq(x, y))) entries.push(x)
       }
-      const sorts = domains.map((d) => (isObject(d) ? (d as { sort?: unknown }).sort : undefined)).filter((x) => x !== undefined)
+      const sorted = domainScales
+        .map((s) => ({ scale: s, sort: isObject(s.domain) ? (s.domain as { sort?: unknown }).sort : undefined }))
+        .filter((x) => x.sort !== undefined)
+      const sorts = sorted.map((x) => x.sort)
       if (sorts.length && !sorts.every((x) => deepEq(x, sorts[0]))) {
-        throw new VLCompileError(`layers sort the shared scale "${name}" differently`)
+        // which layer (or view) has which sort: a sort the spec writes once, in a shared encoding, can still differ when each layer
+        // fills in its own default `op` (a bar sums, a text takes the minimum)
+        const each = sorted.map((x) => `${SCALE_SOURCE.get(x.scale) ?? 'a layer'} ${sortText(x.sort)}`).join(', ')
+        const opOnly = sorts.every((x) => isObject(x) && isObject(sorts[0]) && deepEq({ ...x, op: undefined }, { ...(sorts[0] as Record<string, unknown>), op: undefined }))
+        const who = sorted.every((x) => SCALE_SOURCE.get(x.scale)?.startsWith('view ')) ? 'views' : 'layers'
+        throw new VLCompileError(`${who} sort the shared scale "${name}" differently: ${each}${opOnly ? '; they differ only in "op": give the sort an explicit "op"' : ''}`)
       }
       const sort = sorts[0]
       const refs = entries.filter((e): e is { data: string; field: string } => !Array.isArray(e) && 'data' in e)
@@ -2848,6 +2874,7 @@ function embedCells(cells: CompositeCell[], parent: VLSpec, ctx: CompileCtx, lay
         if (l) l.push(sc)
         else scaleLists.set(sc.name, [sc])
         sharedNames.push(sc.name)
+        SCALE_SOURCE.set(sc, `view ${prefix.replace(/_$/, '')}`)
       }
     }
     // shared legends: the first child that has a channel defines it; titles join

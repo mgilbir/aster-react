@@ -129,6 +129,15 @@ and Fixed, per package. Everything built before the first release is in [Pre-rel
   injected `random` and what they read, `setdata`, late signals, a projection's fit, `init` signals that read data or scales, and
   formulas over a hierarchy (`treePath`), which were also taken as row-local. They are read as the expression lexer reads them.
 
+### `@aster-charts/vl`
+
+#### Changed
+
+- Layers (or the views of a composition) that sort a shared scale differently are still refused, and the error now says which
+  layer has which sort: `layers sort the shared scale "y" differently: layer 0 (bar) {"op":"sum","field":"order"}, layer 1 (text)
+  {"op":"min","field":"order"}`. A sort written once in a shared encoding can differ per layer through each mark's default `op`;
+  when only the `op` differs, the error says to give the sort an explicit one (#135).
+
 ## 0.1.0 (2026-11-08): initial release
 
 ### `@aster-charts/core`
