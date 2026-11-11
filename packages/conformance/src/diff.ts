@@ -115,23 +115,34 @@ function rowChanges(rand: () => number, text: string | null): Array<{ what: stri
 function rowChangesMatch(spec: Record<string, unknown>, name: string, values: Rows, rand: () => number, keys: ReadonlySet<string>): string | true | null {
   const session = createChartSession()
   const history = numbersRows(spec) ? compileChart(spec as never) : undefined
-  let rows = values
-  try {
-    session.evaluate(spec as never, { data: { [name]: rows } })
-    if (history !== undefined) evaluateChart(history, { data: { [name]: rows } })
-    for (const change of rowChanges(rand, firstTextField(values[0]!, keys))) {
-      if (!rows.length) break
-      const before = rows
-      rows = change.to(rows)
-      const inc = canonicalizeSvg(renderSceneToSvg(session.evaluate(spec as never, { data: { [name]: rows } })))
-      const edited = before.length === rows.length ? rows.flatMap((r, i) => (r === before[i] ? [] : [i])) : undefined
-      const full = canonicalizeSvg(renderSceneToSvg(history !== undefined
-        ? evaluateChart(history, { data: { [name]: rows }, ...(edited !== undefined ? { dataChanges: { [name]: edited } } : {}) })
-        : evaluateChart(compileChart(spec as never), { data: { [name]: rows } })))
-      if (inc.root !== full.root || inc.records.join('\u0000') !== full.records.join('\u0000')) return change.what
+  // Each side is run on its own: a spec is skipped only when BOTH throw on the same rows. When only one does, the session and
+  // a fresh chart disagree (an incremental path that throws where a fresh evaluation does not, or the reverse): a mismatch.
+  const attempt = <T>(f: () => T): { ok: true; value: T } | { ok: false; error: string } => {
+    try {
+      return { ok: true, value: f() }
+    } catch (e) {
+      return { ok: false, error: e instanceof Error ? e.message : String(e) }
     }
-  } catch {
-    return null
+  }
+  const disagree = (what: string, inc: { ok: boolean; error?: string }, full: { ok: boolean; error?: string }): string =>
+    `${what}: only the ${inc.ok ? 'fresh chart' : 'session'} threw (${(inc.ok ? full.error : inc.error)?.slice(0, 120)})`
+  let rows = values
+  const first = attempt(() => session.evaluate(spec as never, { data: { [name]: rows } }))
+  const firstFull = attempt(() => (history !== undefined ? evaluateChart(history, { data: { [name]: rows } }) : evaluateChart(compileChart(spec as never), { data: { [name]: rows } })))
+  if (!first.ok && !firstFull.ok) return null
+  if (first.ok !== firstFull.ok) return disagree('the first evaluation', first, firstFull)
+  for (const change of rowChanges(rand, firstTextField(values[0]!, keys))) {
+    if (!rows.length) break
+    const before = rows
+    rows = change.to(rows)
+    const inc = attempt(() => canonicalizeSvg(renderSceneToSvg(session.evaluate(spec as never, { data: { [name]: rows } }))))
+    const edited = before.length === rows.length ? rows.flatMap((r, i) => (r === before[i] ? [] : [i])) : undefined
+    const full = attempt(() => canonicalizeSvg(renderSceneToSvg(history !== undefined
+      ? evaluateChart(history, { data: { [name]: rows }, ...(edited !== undefined ? { dataChanges: { [name]: edited } } : {}) })
+      : evaluateChart(compileChart(spec as never), { data: { [name]: rows } }))))
+    if (!inc.ok && !full.ok) return null
+    if (!inc.ok || !full.ok) return disagree(change.what, inc, full)
+    if (inc.value.root !== full.value.root || inc.value.records.join('\u0000') !== full.value.records.join('\u0000')) return change.what
   }
   return true
 }
