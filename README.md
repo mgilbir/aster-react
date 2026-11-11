@@ -6,7 +6,7 @@ reimplementation of the Vega and Vega-Lite rendering stack that aims to produce 
 `vega` and `vega-lite` packages are the test oracle only; nothing in the published packages imports them or any `d3-*` /
 `topojson-*` package.
 
-**Pre-alpha. Version 0.1.0 is published to npm** as `@aster-charts/core`, `@aster-charts/react` and `@aster-charts/vl`; to work on
+**Pre-alpha. Version 0.2.0 is published to npm** as `@aster-charts/core`, `@aster-charts/react` and `@aster-charts/vl`; to work on
 the engine itself, build from this repository ([Build from source](#build-from-source)). How closely the output matches Vega is measured by
 the gates, and the results are in [Conformance results](#conformance-results).
 
