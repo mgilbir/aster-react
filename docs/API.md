@@ -526,15 +526,18 @@ copying arguments that do not move (relative deltas, arc radii and flags) verbat
 
 #### `@aster-charts/core/transition`
 
-`createSceneTransition(from, to, { easing? })` returns `{ from, to, moves, at(t) }`: `at(t)` is the scene at linear progress
-`t` (eased with `easing`, default `'cubic-in-out'`), `at(1)` (and above) is `to` itself, and below 1 every call returns one scene
-object rewritten in place. `moves` is false when the two scenes draw alike. `from` may be a frame of a running transition (an
+`createSceneTransition(from, to, { easing?, maxItems? })` returns `{ from, to, moves, items, at(t) }`: `at(t)` is the scene at
+linear progress `t` (eased with `easing`, default `'cubic-in-out'`), `at(1)` (and above) is `to` itself, and below 1 every call
+returns one scene object rewritten in place. `moves` is false when the two scenes draw alike, or when more than `maxItems` items
+would move (no limit by default; planning stops at the first one past it); `items` is how many move. `from` may be a frame of a running transition (an
 interruption starts from it). Items are paired by the mark's `key` (else by index), facet group items by their `groupby`, axis
 grid lines, ticks and labels by tick value; what moves, enters and leaves, and how, is in [ANIMATION.md](ANIMATION.md).
 `easingFunction(easing?)` resolves a name or returns a function as given (an unknown name throws a `RangeError`);
-`EASING_NAMES` lists the names. `createScenePlayer(paint, report, shown?)` is the frame loop `<Chart transition>` uses
+`EASING_NAMES` lists the names. `drawsSame(a, b)` is whether two scenes (or nodes) draw the same: what a renderer reads is equal,
+without looking into what they share by identity (`datum` and the engine's `__` stamps are not drawn); it answers false for what
+it cannot compare, never true for scenes that draw differently. `createScenePlayer(paint, report, shown?)` is the frame loop `<Chart transition>` uses
 (`requestAnimationFrame`; at once where there is none): `draw(target, scene, { duration, easing? } | null)` animates from the picture
-on screen to `scene`, or with `null` makes `scene` the end of a running transition (same clock) or draws it at once; `reset(scene)`
+on screen to `scene`, or with `null` makes `scene` the end of a running transition (same clock; a scene that `drawsSame` as that end keeps the plan) or draws it at once; `reset(scene)`
 says what the target shows and `cancel()` stops the frames. `paint(target, scene)` draws a scene (`patchSceneDom`).
 
 #### `@aster-charts/core/canvas`

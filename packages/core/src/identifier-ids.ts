@@ -63,21 +63,38 @@ const RESYNC = 64
  */
 export function carryByAlignment(rows: readonly Row[], previous: readonly Row[] | undefined, as: string): unknown[] | undefined {
   if (!previous || !previous.length || !rows.length) return undefined
+  return align(rows, previous, as, (j) => previous[j]![as])
+}
+
+/**
+ * Which row of `previous` each row of `rows` is (its index; -1: a new row), by the same reading as {@link carryByAlignment}: the rows
+ * that are as they were at the two ends, then the two lists walked together, or searched by what the rows hold. `ignore` is a field
+ * that is not compared.
+ */
+export function alignIndices(rows: readonly Row[], previous: readonly Row[], ignore: string): number[] {
+  const out = new Array<number>(rows.length).fill(-1)
+  if (!previous.length || !rows.length) return out
+  const found = align(rows, previous, ignore, (j) => j)
+  for (let i = 0; i < rows.length; i++) if (typeof found[i] === 'number') out[i] = found[i] as number
+  return out
+}
+
+function align(rows: readonly Row[], previous: readonly Row[], as: string, pick: (j: number) => unknown): unknown[] {
   const carry = new Array<unknown>(rows.length)
   const most = Math.min(rows.length, previous.length)
   let head = 0
-  while (head < most && sameBut(rows[head]!, previous[head]!, as)) { carry[head] = previous[head]![as]; head++ }
+  while (head < most && sameBut(rows[head]!, previous[head]!, as)) { carry[head] = pick(head); head++ }
   let tail = 0
   while (tail < most - head && sameBut(rows[rows.length - 1 - tail]!, previous[previous.length - 1 - tail]!, as)) {
-    carry[rows.length - 1 - tail] = previous[previous.length - 1 - tail]![as]
+    carry[rows.length - 1 - tail] = pick(previous.length - 1 - tail)
     tail++
   }
   const open = rows.length - tail
   const end = previous.length - tail
   if (head === open) return carry
-  const walked = walk(rows, previous, as, head, open, end)
+  const walked = walk(rows, previous, as, head, open, end, pick)
   if (walked) { for (let i = head; i < open; i++) if (walked[i - head] !== undefined) carry[i] = walked[i - head]; return carry }
-  return byContent(rows, previous, as, head, open, end, carry)
+  return byContent(rows, previous, as, head, open, end, carry, pick)
 }
 
 /** Lists longer than this are not searched by content when they part (see `walk`): that costs more than the lists are worth. */
@@ -87,7 +104,7 @@ const SEARCHABLE = 4096
  * The two lists walked together from `from`; `null` when they part too often for that to mean anything and the lists are short enough
  * to be searched by what the rows hold (a long list that parts that often is read as rows changed where they stood).
  */
-function walk(rows: readonly Row[], previous: readonly Row[], as: string, from: number, open: number, end: number): unknown[] | null {
+function walk(rows: readonly Row[], previous: readonly Row[], as: string, from: number, open: number, end: number, pick: (j: number) => unknown): unknown[] | null {
   const carry = new Array<unknown>(open - from)
   let parted = 0
   const allowed = 16 + ((open - from) >> 3)
@@ -95,7 +112,7 @@ function walk(rows: readonly Row[], previous: readonly Row[], as: string, from: 
   let j = from
   let run = 0
   while (i < open && j < end) {
-    if (sameBut(rows[i]!, previous[j]!, as)) { carry[i - from] = previous[j]![as]; i++; j++; run = 0; continue }
+    if (sameBut(rows[i]!, previous[j]!, as)) { carry[i - from] = pick(j); i++; j++; run = 0; continue }
     let k = 1
     let found = false
     // (rows that keep differing are rows changed where they stood: looking for where the lists meet again is for the first few)
@@ -106,14 +123,14 @@ function walk(rows: readonly Row[], previous: readonly Row[], as: string, from: 
     run++
     // neither list has the row soon: it is the row that stood here, changed
     if (++parted > allowed && open - from <= SEARCHABLE) return null
-    carry[i - from] = previous[j]![as]
+    carry[i - from] = pick(j)
     i++
     j++
   }
   return carry
 }
 
-function byContent(rows: readonly Row[], previous: readonly Row[], as: string, head: number, open: number, end: number, carry: unknown[]): unknown[] {
+function byContent(rows: readonly Row[], previous: readonly Row[], as: string, head: number, open: number, end: number, carry: unknown[], pick: (j: number) => unknown): unknown[] {
   const taken = new Uint8Array(previous.length)
   for (let j = 0; j < head; j++) taken[j] = 1
   for (let j = end; j < previous.length; j++) taken[j] = 1
@@ -128,9 +145,41 @@ function byContent(rows: readonly Row[], previous: readonly Row[], as: string, h
   for (let i = head; i < open; i++) {
     const j = waiting.get(signature(rows[i]!, as))?.shift()
     if (j === undefined) { unmatched.push(i); continue }
-    carry[i] = previous[j]![as]
+    carry[i] = pick(j)
     taken[j] = 1
   }
-  for (const i of unmatched) if (i < previous.length && !taken[i]) { carry[i] = previous[i]![as]; taken[i] = 1 }
+  for (const i of unmatched) if (i < previous.length && !taken[i]) { carry[i] = pick(i); taken[i] = 1 }
   return carry
+}
+
+/** The numbers an `identifier` gave the rows of its pipeline's input (`ids[s]` for source row `s`), and those rows (a copy of the array). */
+export interface SourceNumbers { sourceRows: readonly Row[]; ids: readonly unknown[] }
+
+/**
+ * Which source row of the run before each source row now is (`map[s]`; -1: a new row), when the pipeline's input only had rows added
+ * at its end and none changed: the first `base` rows are the rows they were. This is what {@link alignIndices} finds for such an input,
+ * without reading the rows.
+ */
+export function appendedSources(base: number, length: number): number[] {
+  const map = new Array<number>(length)
+  for (let s = 0; s < length; s++) map[s] = s < base ? s : -1
+  return map
+}
+
+/** The numbers the rows an `identifier` is given had: row `i` is source row `list[i]`, which was source row `map[list[i]]` of `before`. */
+export function carryBySources(list: ArrayLike<number>, map: readonly number[], before: SourceNumbers): unknown[] {
+  const carry = new Array<unknown>(list.length)
+  for (let i = 0; i < list.length; i++) { const j = map[list[i]!]!; if (j >= 0) carry[i] = before.ids[j] }
+  return carry
+}
+
+/**
+ * What an `identifier` that numbered `out` (row `i` is source row `list[i]` of `source`) leaves for the next run: the numbers of its
+ * rows, and of the source rows the steps before it held back, which keep the numbers they had (`map` and `before`, when it carried).
+ */
+export function sourceNumbersOf(list: ArrayLike<number>, out: readonly Row[], source: readonly Row[], as: string, map: readonly number[] | undefined, before: SourceNumbers | undefined): SourceNumbers {
+  const ids = new Array<unknown>(source.length)
+  if (map !== undefined && before !== undefined) for (let s = 0; s < source.length; s++) { const j = map[s]!; if (j >= 0) ids[s] = before.ids[j] }
+  for (let i = 0; i < out.length; i++) ids[list[i]!] = out[i]![as]
+  return { sourceRows: source.slice(), ids }
 }

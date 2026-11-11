@@ -6,21 +6,24 @@
  * transform steps, scales and mark items that cannot have changed; the result is
  * the scene a fresh evaluation would produce.
  */
-import { compileExpr, ExpressionParseError, type CompiledExpr, type ExpressionRuntime } from './expression.js'
+import { compileExpr, expressionRegistryEpoch, ExpressionParseError, type CompiledExpr, type ExpressionRuntime } from './expression.js'
 import { scaleCallFailure, scaleRangeFailure } from './missing-scale.js'
 import { ingestRows, readData, type DataFormatSpec } from './data-format.js'
-import { orderOf, setOrder } from './tuple-order.js'
-import { carryByAlignment, type IdCounter } from './identifier-ids.js'
+import { followsSources, numbersSourceRows, orderOf, setOrder, setSources, sourcesAfter, sourcesOf } from './tuple-order.js'
+import { alignIndices, carryByAlignment, carryBySources, sourceNumbersOf, type IdCounter, type SourceNumbers } from './identifier-ids.js'
 import { applyTransforms, applyTransformsToSharedRows, copiesRows, sortOrder, getField, geoJSONPath, type Row, type TransformContext } from './transform.js'
 import { fieldOf } from './transform-agg.js'
 import { atRandomSite, contentKey, mayDrawRandom, normalPairs, replayable } from './random-tape.js'
-import { dependencyKey, fieldsWritten, pipelineReadsOf, reuse, runsOf, stepCounts, stepReadsOf, type StepReads, type StepRecord } from './step-reuse.js'
+import { lexedText } from './expr-text.js'
+import { datasetsReadIn, identifiersIn, scalesReadIn, dependencyKey, fieldsWritten, namesIn, pipelineReadsOf, reuse, runsOf, stepCounts, stepReadsOf, type StepReads, type StepRecord } from './step-reuse.js'
 import { activeMeter, withLimits, ceiling, checkRowCount, meterItems, meterTick, AsterLimitError } from './limits.js'
 import { withTextMetricsProvider } from './text-metrics.js'
 import { AsterUrlError } from './url-policy.js'
 import { SpecParseError } from './parse-error.js'
 import { consoleLogger, type Logger } from './logger.js'
-import { buildScale, scaleTicks, type Scale, CONTINUOUS_TYPES, type ScaleContext } from './scales.js'
+import { buildScale, sameSettings, scaleOfSettings, scaleSettings, scaleTicks, type Scale, type Settings, CONTINUOUS_TYPES, type ScaleContext } from './scales.js'
+import { sortReadsCategoriesOnly } from './scale-domain.js'
+import { implicit as implicitCategory } from './scale-discrete.js'
 
 /** Scale types whose domain is an ordered set of discrete values. */
 const DISCRETE_TYPES = new Set(['band', 'point', 'ordinal'])
@@ -54,7 +57,7 @@ import { compileChart } from './compiler.js'
 import { dict, ownGet, pushAll, sortData, lerp, scopedSignalName, heldSignalName, TUPLE_ID } from './util.js'
 import { applyImageUrlPolicy, applyLinkUrlPolicy, resolveImageUrl, type ImageUrlPolicy } from './url-policy.js'
 import { valueKey, valuesEqual } from './fingerprint.js'
-import { sourceNames, type PulseChange } from './pulse.js'
+import { diffRows, equalCell, rowsEqual, sourceNames, type PulseChange } from './pulse.js'
 import { aggregateGroups, flatKeyFn, groupKeyFn } from './transform-agg.js'
 import { layoutFacet, type GridPlace } from './trellis.js'
 import { boundAxisGroup, boundGroupItem, boundLeaf, boundTypedMark, Bounds, layoutBounds, eachMarkBounds, hasClippedMark } from './bounds.js'
@@ -105,6 +108,41 @@ export interface DatasetState {
    * hold the fields of the steps after them too. A step compared with such rows leaves those fields out.
    */
   aliased?: Array<ReadonlySet<string> | undefined>
+  /**
+   * What the pipeline read when it was made (see `pipelineKey`): a later evaluation runs a pulse through these steps when it reads
+   * the same, whichever other signals changed. Absent when a step's reads are not known.
+   */
+  key?: string
+  /** The build of the dataset in this pass (see `keptBuild`): a later round of the pass, over the same inputs and reads, keeps it. */
+  built?: BuiltDataset
+  /** Where the view's id counter stood when this build of the dataset began (see `carriedFrom`). */
+  idsStart?: number
+  /**
+   * `published[k]`: the value of the signal step `k` publishes (an `extent`, a `bin`) as the step left it, boxed (absent when the
+   * step publishes none or left it unwritten). A pulse compares it with the value the step publishes now (see `applyPipelineWithPulse`).
+   */
+  published?: Array<readonly [unknown] | undefined>
+}
+
+/**
+ * One build of a dataset with transforms, in one pass of an evaluation. A pass builds its datasets again once the signals they read
+ * resolve (see `prepareChartCtx`), and a view that fits its viewport makes a second pass at another size: a dataset whose inputs
+ * are the same arrays and whose steps read the same is the dataset the round, or the pass, before built -- its rows, the numbers its
+ * `identifier`s drew (a later pass carries the numbers of the one before) and the signals its steps published.
+ */
+interface BuiltDataset {
+  /** The draft of the pass that made it (a state kept from an evaluation before never matches). */
+  pass: IncrementalState
+  inputs: readonly unknown[]
+  key: string
+  rows: Row[]
+  /** The pulse it published, and the state of the evaluation before it is relative to (the rows that state's items were made from). */
+  pulse: StepPulse | null
+  base: DatasetState | undefined
+  /** Where the view's id counter stood before and after the pipeline ran. */
+  ids: readonly [number, number]
+  /** The signals its steps publish, as they stood after it ran (those it left unwritten are absent). */
+  published: ReadonlyArray<readonly [string, unknown]>
 }
 
 /** Min/max census of a continuous data-driven scale domain. */
@@ -122,13 +160,17 @@ interface ContCensus {
   vals: number[]
 }
 
-/** Value census of a discrete data-driven scale domain. */
+/**
+ * Category census of a discrete data-driven scale domain whose sort reads the categories alone (`sortReadsCategoriesOnly`): the
+ * domain is fixed by which categories there are, the order of their first rows and the value of each first row.
+ */
 interface DiscCensus {
   data: string
   field: string
+  /** The value of the field for every row of the dataset, by index. */
   vals: unknown[]
-  counts: Map<unknown, number>
-  firstIdx: Map<unknown, number>
+  /** The index of the first row of each category, by its text (the domain tells categories apart by their text). */
+  first: Map<string, number>
 }
 
 interface ScaleEntry {
@@ -137,6 +179,13 @@ interface ScaleEntry {
   multi: boolean
   cont?: ContCensus
   disc?: DiscCensus
+  /** What the scale was made under besides its data (see `scaleKeyOf`): a later evaluation under the same key may keep it. */
+  key?: string
+  /**
+   * What the scale was made from (`scaleSettings`): a later evaluation under the same key whose settings are the same keeps the
+   * scale (see `buildScales`). Absent when the scale was not made from settings this evaluation can compare.
+   */
+  settings?: Settings
 }
 
 /**
@@ -174,14 +223,41 @@ interface IncrementalState {
   datasets: Map<string, DatasetState>
   /** Top-level mark groups, keyed by compiled-mark identity. */
   groups: Map<CompiledMark, SceneGroup>
+  /** What each top-level leaf mark was made under besides its data and scales (see `markKeyOf`), keyed like `groups`. */
+  markKeys: Map<CompiledMark, string>
+  /**
+   * The view's datasets as the evaluation left them, by name (the arrays themselves): the rows its scales and marks read. A later
+   * evaluation that finds the same array, which no change it was told of touched, reads the same rows (see `sameRows`).
+   */
+  rows: Map<string, Row[]>
   /** True once a fast path updated a structure in place (see above). */
   stale: boolean
   /** Where the view's id counter stood (see identifier-ids.ts): the next evaluation numbers new rows from here. */
   idCounter: number
   /** The datasets of group scopes, by instance and name: what the pipeline read and made (see `runScopedData` below). */
   scoped: Map<string, ScopedRun>
+  /** The copies a dataset with no transforms made of the rows it was given, and what it was given (see `keptCopy`). */
+  copies: Map<string, { inputs: readonly unknown[]; rows: Row[] }>
   /** The items of each mark (by instance) whose transforms number them: the numbers an item keeps (see `transformMarkItems`). */
   numbered: Map<string, readonly SceneItem[]>
+  /** The leaf marks made inside group items, by instance (see `evaluateInstanceMark`): what a later evaluation keeps or splices. */
+  instances: Map<string, InstanceMark>
+  /** The content of the view this state's pass made (its root items, laid out): a later pass shares what it makes the same (see `shareScene`). */
+  content?: readonly SceneGroup[]
+}
+
+/** A leaf mark made inside a group item, and what it was made from (see `evaluateInstanceMark`). */
+interface InstanceMark {
+  group: SceneGroup
+  /** its items in the order of its rows (a sorted mark's `items` are in its sort's order) */
+  rowItems: SceneItem[]
+  /** `markKeyOf` in the item's scope */
+  key: string
+  /** the group item it is in: its box, its datum, its `parent` and what its encode gave it */
+  item: Record<string, unknown>
+  /** the scales it read and the other datasets it read, as they were */
+  scales: Array<readonly [string, unknown]>
+  deps: Array<readonly [string, unknown]>
 }
 
 /** One run of a group scope's dataset pipeline: the source arrays it read, what its transforms mentioned, and the rows it made. */
@@ -192,7 +268,7 @@ interface ScopedRun {
 }
 
 function newState(gen: number): IncrementalState {
-  return { gen, fp: '', scales: new Map(), scaleEntries: new Map(), datasets: new Map(), groups: new Map(), stale: false, idCounter: 0, scoped: new Map(), numbered: new Map() }
+  return { gen, fp: '', scales: new Map(), scaleEntries: new Map(), datasets: new Map(), groups: new Map(), markKeys: new Map(), rows: new Map(), stale: false, idCounter: 0, scoped: new Map(), numbered: new Map(), copies: new Map(), instances: new Map() }
 }
 
 /** Committed state per compiled chart. Never stored on the IR itself. */
@@ -240,7 +316,11 @@ export interface IncrementalEngine {
   ): { rows: Row[]; state?: unknown }
 }
 
-/** Source dataset name -> the rows the previous evaluation was given for it, when this evaluation's are equal to them. */
+/**
+ * Source dataset name -> the rows the previous evaluation was given for it, when this evaluation's are equal to them. Given at all
+ * (even empty), it also says the caller tells every change of the rows it hands over: rows that changed come in a new array or with
+ * a change description (the chart session's contract), so an array the evaluation was given before holds the rows it held then.
+ */
 export type DataStability = ReadonlyMap<string, unknown>
 
 function beginTxn(engine: IncrementalEngine, chart: CompiledChart, unchanged?: DataStability): EvalTxn {
@@ -369,6 +449,11 @@ interface GuideScope {
   counts?: Set<string>
   /** the last instance in this scope's subtree (itself included) that has content of its own: a layout above it is ranked after it */
   last?: number[]
+  /**
+   * The instance by its marks and the keys of its group items, root first (a facet's partition key, a row's index, '' for the one item
+   * of a group with no data): what names the same instance in another evaluation, where `path` counts instances in order.
+   */
+  keyPath?: string
 }
 
 /**
@@ -555,10 +640,12 @@ interface EvalContext {
   extraFp: string
   /** Memo for ctxFpOf; cleared whenever signalParams may have changed. */
   fpMemo?: string
+  /** Memo for readsKey, per list of names, over these signal params; cleared with `fpMemo`. */
+  readsMemo?: { params: Record<string, unknown>; keys: Map<readonly string[], { width: number; height: number; key: string }>; values: Map<string, string> }
   /** Bumped by every dataset (re)build pass; part of the scale-reuse stamp. */
   dsEpoch: number
   /** Census-reuse decisions already taken this evaluation (a census is advanced once). */
-  scaleReuse: Map<string, { stamp: string; entry: ScaleEntry }>
+  scaleReuse: Map<string, { stamp: string; entry: ScaleEntry; rows: readonly unknown[]; epoch: number }>
   /** Distinct-value memo for discrete scale domains (lives for this evaluation only). */
   distinctCache: WeakMap<unknown[], Map<string, unknown[]>>
   /** Wall-clock deadline (performance.now epoch) from `limits.maxTimeMs`. */
@@ -858,6 +945,7 @@ function prepareChartCtx(
           ctx.width = v
           ctx.signalParams.width = v
           ctx.fpMemo = undefined
+          ctx.readsMemo = undefined
           buildScales(ctx)
         }
       } catch { /* leave the default */ }
@@ -873,6 +961,8 @@ function prepareChartCtx(
   // The final context fingerprint: the next evaluation compares its own
   // (scale, mark) inputs against this to decide whether reuse is valid.
   ctx.draft.fp = ctxFpOf(ctx)
+  // (the datasets the scales and marks of this pass read: see `sameRows`)
+  ctx.draft.rows = new Map(ctx.datasets)
   txn.lastPass = ctx.draft
 
   return { ctx, width, height }
@@ -935,7 +1025,10 @@ function makeTransformed(
  */
 function randomFingerprint(code: unknown, rows: readonly unknown[] | Record<string, unknown>, signals: Record<string, unknown>): string {
   const text = typeof code === 'string' ? code : JSON.stringify(code)
-  const mentioned = new Set(text.match(IDENT))
+  // (every name the code spells, as the lexer reads it: a signal named by an escape or past ASCII is one it reads)
+  const mentioned = new Set<string>()
+  if (typeof code === 'string') namesIn(code, mentioned)
+  else walkStrings(code, (str) => namesIn(str, mentioned))
   const read: string[] = []
   for (const k of Object.keys(signals).sort()) if (mentioned.has(k)) read.push(`${k}=${contentKey(signals[k])}`)
   return `${text}\u0001${Array.isArray(rows) ? contentKey(rows) : ''}\u0001${read.join('\u0002')}`
@@ -1108,7 +1201,8 @@ function fitDatasets(fit: unknown): string[] {
   const visit = (v: unknown): void => {
     if (Array.isArray(v)) v.forEach(visit)
     else if (v && typeof v === 'object' && typeof (v as { signal?: unknown }).signal === 'string') {
-      for (const m of (v as { signal: string }).signal.matchAll(/\bdata\(\s*(['"])(.*?)\1\s*\)/g)) out.push(m[2]!)
+      // (the datasets its expression reads by name, read off its tree: see `datasetsReadIn`)
+      for (const n of datasetsReadIn((v as { signal: string }).signal) ?? []) out.push(n)
     }
   }
   visit(fit)
@@ -1132,7 +1226,13 @@ export class ProjectionRegistry extends Map<string, unknown> {
 }
 
 /** Expression functions that read datasets or scales (a signal using them cannot resolve before they exist). */
-export const DATA_DEPENDENT_EXPR = /\b(data|indata|domain|range|scale|bandwidth|bandspace|invert|copy|gradient|vlSelectionTest|vlSelectionIdTest|vlSelectionResolve)\s*\(/
+/**
+ * A call that reads a dataset (or its hierarchy) or a scale. Tested against the text as the lexer reads it (`lexedText`): every
+ * function the expression language can call has an ASCII name (the built-ins, and a host's, whose name must be one), which the lexer
+ * spells otherwise only with `\uXXXX` escapes, and the lexer skips the blanks `lexedText` turns into spaces -- so a call is found
+ * whatever its spelling (and a word inside a string literal at worst finds one that is not there).
+ */
+export const DATA_DEPENDENT_EXPR = /\b(data|indata|domain|range|scale|bandwidth|bandspace|invert|copy|gradient|vlSelectionTest|vlSelectionIdTest|vlSelectionResolve|treePath|treeAncestors)\s*\(/
 
 /**
  * Evaluate static signal `update` expressions in declaration order against the
@@ -1270,8 +1370,10 @@ function signalsInDataflowOrder(chart: CompiledChart): CompiledSignalDef[] {
   const reads = defs.map((d, i) => {
     const text = `${d.update ?? ''} ${d.init ?? ''}`
     const deps = new Set<number>()
-    for (const m of text.matchAll(IDENT)) {
-      const j = index.get(m[0])
+    const names = new Set<string>()
+    namesIn(text, names)
+    for (const m of names) {
+      const j = index.get(m)
       if (j !== undefined && j !== i) deps.add(j)
     }
     return deps
@@ -1320,8 +1422,12 @@ function signalRanksAfterDatasetInput(chart: CompiledChart, name: string, datase
       else if (u !== undefined) texts.push(...[u.expr, u.signal].filter((t): t is string => typeof t === 'string'))
     }
     for (const text of texts) {
-      for (const m of text.matchAll(DATA_READ_CALL_ALL)) if (derivesFrom(m[2]!)) return true
-      for (const id of text.match(IDENT) ?? []) if (id !== sig && defs.has(id) && visit(id)) return true
+      // (a dataset read by a name the tree does not spell out is any dataset)
+      const read = datasetsReadIn(text)
+      if (read === null ? chart.data.some((x) => derivesFrom(x.name)) : read.some((n) => derivesFrom(n))) return true
+      const names = new Set<string>()
+      namesIn(text, names)
+      for (const id of names) if (id !== sig && defs.has(id) && visit(id)) return true
     }
     return false
   }
@@ -1344,10 +1450,10 @@ function resolveSignalUpdates(ctx: EvalContext, staticOnly = false): boolean {
     if (def.update !== undefined && def.on?.length && ctx.hostSignals.has(def.name)) continue
     // ... and a derived signal the event loop holds as it was keeps the value the store has (see `heldSignalName`)
     if (def.update !== undefined && ctx.hostSignals.has(heldSignalName(def.name))) continue
-    if (staticOnly && DATA_DEPENDENT_EXPR.test(expr)) continue
+    if (staticOnly && DATA_DEPENDENT_EXPR.test(lexedText(expr))) continue
     // an `init` that reads scales (a selection's initial brush: `[scale("x", 2), scale("x", 4)]`) runs once the scales exist:
     // before that `scale()` of a missing scale is `undefined`, which would be taken for the initial value
-    if (initPending && SCALE_FN_EXPR.test(expr) && !ctx.chart.scales.every((sc) => ctx.scales.has(sc.name))) continue
+    if (initPending && SCALE_FN_EXPR.test(lexedText(expr)) && !ctx.chart.scales.every((sc) => ctx.scales.has(sc.name))) continue
     try {
       // (a `react: false` signal in a cycle through a scale runs before the signals it reads: it sees their initial values)
       const frozen = def.react === false ? frozenReadsOf(ctx.chart).get(def.name) : undefined
@@ -1362,13 +1468,14 @@ function resolveSignalUpdates(ctx: EvalContext, staticOnly = false): boolean {
         : atRandomSite(ctx.runtime.random, `signal:${def.name}`, () => randomFingerprint(expr, [], params), () => ctx.runtime.expr(expr)(undefined, params))
       // An `init` that reads a scale or a dataset is only settled once they exist: until the scales are built,
       // `domain('x')` of a scale that is not there yet is `[]`, which is not the value vega's dataflow computes.
-      const readsScales = DATA_DEPENDENT_EXPR.test(expr) && ctx.scales.size === 0 && ctx.chart.scales.length > 0
+      const readsScales = DATA_DEPENDENT_EXPR.test(lexedText(expr)) && ctx.scales.size === 0 && ctx.chart.scales.length > 0
       if (initPending && value !== undefined && !readsScales) ctx.initDone.add(def.name)
       ctx.setData.caller = undefined
       ctx.signalErrors?.delete(def.name)
       if (value !== undefined && !valuesEqual(value, ctx.signalParams[def.name])) {
         ctx.signalParams[def.name] = value
         ctx.fpMemo = undefined
+        ctx.readsMemo = undefined
         changed = true
       }
     } catch (e) {
@@ -1697,6 +1804,8 @@ function walkStrings(
 const SCALE_FN_EXPR = /\b(scale|bandwidth|bandspace|invert|domain|range|copy|gradient)\s*\(/
 /** Expression functions that read datasets. */
 const DATA_FN_EXPR = /\b(data|indata|vlSelectionTest|vlSelectionIdTest|vlSelectionResolve)\s*\(/
+/** Expression functions that read a dataset's hierarchy (`treePath`, `treeAncestors`). */
+const TREE_FN_EXPR = /\b(treePath|treeAncestors)\s*\(/
 
 /** What a dataset's pipeline reads besides its `source`. */
 interface DatasetDeps { names: Set<string>; allData: boolean }
@@ -1715,7 +1824,7 @@ function datasetDepsOf(chart: CompiledChart): Map<string, DatasetDeps> {
     // or reads datasets from an expression makes this dataset depend on it.
     walkStrings(d.transform, (str) => {
       if (known.has(str) && str !== d.name) names.add(str)
-      if (DATA_FN_EXPR.test(str)) allData = true
+      if (DATA_FN_EXPR.test(lexedText(str)) || TREE_FN_EXPR.test(lexedText(str))) allData = true
     })
     deps.set(d.name, { names, allData })
   }
@@ -1742,6 +1851,25 @@ function dependsOn(chart: CompiledChart, a: string, b: string): boolean {
     }
   }
   return false
+}
+
+/**
+ * A mark bound to a force layout's links: it lays out nodes with a `link` force, or it reads a dataset a `link` force takes its rows
+ * from. Each run of the force rewrites the link rows of the evaluation (their ends become the nodes it moved), so neither the force's
+ * nodes nor the marks drawn from its links are kept from an evaluation before: they are made again together.
+ */
+const FORCE_BOUND = new WeakMap<CompiledMark, boolean>()
+function forceBound(mark: CompiledMark, chart: CompiledChart): boolean {
+  let out = FORCE_BOUND.get(mark)
+  if (out !== undefined) return out
+  const links = forceLinkDatasets(chart)
+  out = links.size > 0 && (
+    (mark.transform ?? []).some((t) => t.type === 'force' && Array.isArray((t as { forces?: unknown }).forces)
+      && ((t as { forces: Array<{ force?: string } | null> }).forces).some((f) => f?.force === 'link'))
+    || (mark.from?.data !== undefined && links.has(mark.from.data))
+    || [...markDepsOf(mark, chart).names].some((n) => links.has(n)))
+  FORCE_BOUND.set(mark, out)
+  return out
 }
 
 /** The datasets some `force` transform (a dataset's or a mark's) takes link rows from. */
@@ -1771,10 +1899,6 @@ function forceLinkDatasets(chart: CompiledChart): Set<string> {
 }
 
 const SIGNAL_PREREQS = new WeakMap<CompiledChart, Map<string, string[]>>()
-/** A call that reads a dataset by the name in its first argument (vega-functions' dataVisitor / selectionVisitor). */
-const DATA_READ_CALL = /\b(data|indata|vlSelectionTest|vlSelectionIdTest|vlSelectionResolve)\s*\(\s*["']/
-const DATA_READ_CALL_ALL = /\b(data|indata|vlSelectionTest|vlSelectionIdTest|vlSelectionResolve)\s*\(\s*["']([^"']+)["']/g
-const IDENT = /[A-Za-z_$][\w$]*/g
 
 function signalPrereqsOf(chart: CompiledChart): Map<string, string[]> {
   let out = SIGNAL_PREREQS.get(chart)
@@ -1787,11 +1911,11 @@ function signalPrereqsOf(chart: CompiledChart): Map<string, string[]> {
       if (typeof sig === 'string') (writers.get(sig) ?? writers.set(sig, []).get(sig)!).push(d.name)
     }
   }
-  if (writers.size || (chart.signalDefs ?? []).some((sd) => DATA_READ_CALL.test(`${sd.update ?? ''} ${sd.init ?? ''}`))) {
+  if (writers.size || (chart.signalDefs ?? []).some((sd) => [sd.update, sd.init].some((x) => typeof x === 'string' && datasetsReadIn(x)?.length !== 0))) {
     const defs = new Map((chart.signalDefs ?? []).map((sd) => [sd.name, sd] as const))
     const datasetNames = new Set(chart.data.map((d) => d.name))
     const identsOf = (v: unknown, into: Set<string>): void => {
-      walkStrings(v, (str) => { for (const m of str.matchAll(IDENT)) into.add(m[0]) })
+      walkStrings(v, (str) => namesIn(str, into))
     }
     for (const d of chart.data) {
       const read = new Set<string>()
@@ -1815,8 +1939,8 @@ function signalPrereqsOf(chart: CompiledChart): Map<string, string[]> {
         if (!sd) continue
         for (const text of [sd.update, sd.init]) {
           if (typeof text !== 'string') continue
-          for (const m of text.matchAll(DATA_READ_CALL_ALL)) {
-            const w = m[2]!
+          // (a dataset read by a name the tree does not spell out is any dataset)
+          for (const w of datasetsReadIn(text) ?? [...datasetNames]) {
             if (datasetNames.has(w) && w !== d.name && !first.includes(w) && !dependsOn(chart, w, d.name)) first.push(w)
           }
         }
@@ -1838,7 +1962,7 @@ function datasetsReadScales(chart: CompiledChart): boolean {
   let out = READS_SCALES.get(chart)
   if (out === undefined) {
     out = false
-    for (const d of chart.data) walkStrings(d.transform, (str) => { if (SCALE_FN_EXPR.test(str)) out = true })
+    for (const d of chart.data) walkStrings(d.transform, (str) => { if (SCALE_FN_EXPR.test(lexedText(str))) out = true })
     READS_SCALES.set(chart, out)
   }
   return out
@@ -1878,6 +2002,28 @@ function datasetRanksOf(chart: CompiledChart): { rank: Map<string, number>; orde
       if (list) for (let i = list.length; --i >= 0;) queue.push(list[i]!)
     }
   }
+  // vega-parser makes the scales' operators before the data and connects their parameters after (parseScope: initScale, parseData,
+  // parseScale): a scale whose parameters read a dataset or anything made after it (see `scaleIsLate`) is reranked past every
+  // operator so far, and with it, depth first, the datasets whose transforms read it by name (in the order they were connected)
+  const scope: GuideScope = { path: [], nextChild: { n: 0 }, scales: chart.scales, data: chart.data }
+  const readers = new Map<string, string[]>()
+  for (const d of chart.data) {
+    const read = new Set<string>()
+    walkStrings(d.transform, (str) => { for (const sc of scalesReadIn(str)) read.add(sc) })
+    for (const sc of read) { const r = readers.get(sc); if (r) r.push(d.name); else readers.set(sc, [d.name]) }
+  }
+  for (const s of chart.scales) {
+    const list = readers.get(s.name)
+    if (list === undefined || !scaleIsLate(s, scope, chart)) continue
+    ++counter
+    const queue = [...list].reverse()
+    for (let pops = 0; queue.length && pops < 4 * n * n + 16; pops++) {
+      const cur = queue.pop()!
+      rank.set(cur, ++counter)
+      const next = targets.get(cur)
+      if (next) for (let i = next.length; --i >= 0;) queue.push(next[i]!)
+    }
+  }
   out = { rank, order: [...names].sort((a, b) => rank.get(a)! - rank.get(b)!) }
   DATASET_RANKS.set(chart, out)
   return out
@@ -1906,15 +2052,19 @@ function affectedDatasets(chart: CompiledChart, changed: Set<string>): Set<strin
   return affected
 }
 
-/** What a mark subtree reads: datasets, scales (by name or through expressions). */
-interface MarkDeps { names: Set<string>; allData: boolean; scales: Set<string>; allScales: boolean }
+/**
+ * What a mark subtree reads: datasets, scales (by name or through expressions). `allData`: it may read any dataset (the items of
+ * another mark, or a dataset an expression reads by a computed name); otherwise `exprData` are the datasets its expressions read by
+ * the names they spell out (`vlSelectionTest("brush_store", datum)`), besides `names`, the datasets it names as a whole string.
+ */
+interface MarkDeps { names: Set<string>; allData: boolean; exprData: readonly string[]; scales: Set<string>; allScales: boolean }
 const MARK_DEPS = new WeakMap<CompiledMark, MarkDeps>()
 
 function markDepsOf(mark: CompiledMark, chart: CompiledChart): MarkDeps {
   let deps = MARK_DEPS.get(mark)
   if (deps) return deps
   const known = new Set(chart.data.map((d) => d.name))
-  const out: MarkDeps = { names: new Set(), allData: false, scales: new Set(), allScales: false }
+  const out: MarkDeps = { names: new Set(), allData: false, exprData: [], scales: new Set(), allScales: false }
   // a mark reading another mark's items (`from: {data: <mark name>}`) depends on whatever that mark depends on
   const readsMarkItems = (m: CompiledMark): boolean => {
     const from = m.from?.data
@@ -1923,15 +2073,22 @@ function markDepsOf(mark: CompiledMark, chart: CompiledChart): MarkDeps {
     return false
   }
   if (readsMarkItems(mark)) out.allData = true
+  const exprData = new Set<string>()
   walkStrings(mark, (str, owner) => {
     if (known.has(str)) out.names.add(str)
-    if (DATA_FN_EXPR.test(str)) out.allData = true
-    if (SCALE_FN_EXPR.test(str)) out.allScales = true
+    // (the text as the lexer reads it: an escaped name is the name it stands for)
+    // (the datasets an expression reads by name, or all of them: see `datasetsReadIn`, which reads the hierarchy functions too)
+    const read = datasetsReadIn(str)
+    if (read === null) out.allData = true
+    else for (const n of read) exprData.add(n)
+    // (the text as the lexer reads it: an escaped name is the name it stands for)
+    if (SCALE_FN_EXPR.test(lexedText(str))) out.allScales = true
     if (owner && typeof owner.scale === 'string' && owner.scale === str) out.scales.add(str)
   }, new Set(), null, (o) => {
     // A scale chosen by a signal/expression object: any scale may be read.
     if (o.scale != null && typeof o.scale === 'object') out.allScales = true
   })
+  out.exprData = [...exprData].sort()
   MARK_DEPS.set(mark, out)
   return out
 }
@@ -1942,6 +2099,201 @@ function markScaleNames(mark: CompiledMark, chart: CompiledChart): string[] {
   return deps.allScales ? chart.scales.map((s) => s.name) : [...deps.scales]
 }
 
+// ---------------------------------------------------------------------------
+// What a top-level scale or leaf mark reads of the signals
+// ---------------------------------------------------------------------------
+
+/**
+ * The view's own signals. Every key holds them, named or not: a scale's `range: "width"`, a `{field: {group: "width"}}` and the
+ * frame read the view's size without an expression that names it.
+ */
+const KEYED_VIEW_SIGNALS = ['width', 'height', 'padding', 'autosize', 'background']
+
+/**
+ * Calls whose result is not a function of the signals and the data a definition names: the clock, the random source, the host's
+ * window, and the geo functions (a projection is made from signals of its own). A definition that makes one is keyed by every
+ * signal.
+ */
+const UNNAMED_READ_CALL = /\b(now|random|sampleNormal|sampleLogNormal|sampleUniform|windowSize|screen|containerSize|geo[A-Za-z]*)\s*\(/
+
+const NAMES_MENTIONED = new WeakMap<object, readonly string[] | null>()
+
+/**
+ * The names a scale or mark definition mentions: every identifier in every string of it, expression or not, and the view's
+ * signals. A signal is read by an expression by its name and by nothing else (the expression functions are handed the scales, the
+ * datasets and the projections, never the signals), so this holds every signal the definition reads, and more. `null`: the
+ * definition reads more than it names (see {@link UNNAMED_READ_CALL}, or a projection, by name).
+ */
+function namesMentioned(def: object, chart: CompiledChart): readonly string[] | null {
+  let out = NAMES_MENTIONED.get(def)
+  if (out !== undefined) return out
+  const names = new Set<string>(KEYED_VIEW_SIGNALS)
+  const strings = new Set<string>()
+  let unnamed = false
+  walkStrings(def, (str) => {
+    strings.add(str)
+    // (as the lexer reads it: `n\u006fw()` calls `now`, and a name may be escaped or past ASCII: see `namesIn`)
+    if (UNNAMED_READ_CALL.test(lexedText(str))) unnamed = true
+    namesIn(str, names)
+  })
+  for (const p of chart.projections ?? []) if (strings.has(p.name)) unnamed = true
+  out = unnamed ? null : [...names].sort()
+  NAMES_MENTIONED.set(def, out)
+  return out
+}
+
+/**
+ * The signals a top-level leaf mark may read, or `null` for all of them. A mark with transforms reads all of them: a `label` reads
+ * the items of other marks, a `force` or a word cloud may draw from the random source, a geo transform a projection. So does a
+ * mark that reads the items of another mark, or a dataset by a name an expression computes (`markDepsOf(...).allData`). A mark
+ * whose expressions read datasets by the names they spell out (a selection test) reads the signals it names, and those datasets'
+ * rows (see `markKeyOf`).
+ */
+function markReadsOf(mark: CompiledMark, chart: CompiledChart): readonly string[] | null {
+  if (mark.transform?.length || markDepsOf(mark, chart).allData) return null
+  return namesMentioned(mark, chart)
+}
+
+/**
+ * The signals a top-level scale may read, or `null` for all of them: a scale whose parameters read a dataset or another scale from
+ * an expression (`domain: {signal: "domain('x')"}`) depends on more than its definition names.
+ */
+function scaleReadsOf(s: CompiledScale, chart: CompiledChart): readonly string[] | null {
+  let reads = SCALE_READS.get(s)
+  if (reads === undefined) {
+    let any = false
+    walkStrings(s, (str) => { const text = lexedText(str); if (DATA_FN_EXPR.test(text) || SCALE_FN_EXPR.test(text) || TREE_FN_EXPR.test(text)) any = true })
+    reads = { signals: any ? null : namesMentioned(s, chart), datasets: datasetsNamed(s, chart) }
+    SCALE_READS.set(s, reads)
+  }
+  return reads.signals
+}
+
+const SCALE_READS = new WeakMap<CompiledScale, { signals: readonly string[] | null; datasets: readonly string[] }>()
+
+/** The datasets a definition names anywhere (a scale's `domain.data`, `domain.fields[].data`). */
+function datasetsNamed(def: object, chart: CompiledChart): readonly string[] {
+  const known = new Set(chart.data.map((d) => d.name))
+  const out = new Set<string>()
+  walkStrings(def, (str) => { if (known.has(str)) out.add(str) })
+  return [...out]
+}
+
+/**
+ * Whether a scale the previous evaluation made, under signals that have changed since, was made under what this one reads: the
+ * signals it reads (`scaleKeyOf`) are as they were, the caller tells what changed and nothing of this pass failed. It is then the
+ * scale this evaluation makes when the datasets it names are the very arrays it was made from (`sameRows`), or, for the dataset of
+ * its domain, rows a pulse says how they changed (its census advances, as when no signal changed). A scale with bins made in a
+ * pass of a view that fits its viewport is made again: what it leaves for the next pass (see `ScaleContext.pass`) is the pass's own.
+ */
+function keyedScale(s: CompiledScale, ctx: EvalContext, prevEntry: ScaleEntry, key: string): boolean {
+  if (!followsChanges(ctx) || !cleanPass(ctx) || prevEntry.key !== key || scaleReadsOf(s, ctx.chart) === null) return false
+  return !(ctx.passMemory !== undefined && (prevEntry.scale as { bins?: unknown }).bins)
+}
+
+/** The arrays of the datasets a scale names, as they are now. */
+const scaleRowsOf = (s: CompiledScale, ctx: EvalContext): unknown[] => {
+  scaleReadsOf(s, ctx.chart)
+  return SCALE_READS.get(s)!.datasets.map((n) => ctx.datasets.get(n))
+}
+
+/**
+ * What a result that reads the signals `names` is made under besides its data and its scales: those signals' values, the view's
+ * size, the inputs of `extraFp` (domainRaw, text metrics, container size) and the expression functions registered. Read every
+ * signal (`names` null), it is the whole context fingerprint, as it was before a result was keyed by what it reads.
+ */
+function readsKey(ctx: EvalContext, names: readonly string[] | null): string {
+  if (names === null) return `*${ctxFpOf(ctx)}`
+  const params = ctx.signalParams
+  // (the signals' part is the same for every key made between two writes of the params: see the sites that clear `fpMemo`)
+  const memo = ctx.readsMemo?.params === params ? ctx.readsMemo : (ctx.readsMemo = { params, keys: new Map(), values: new Map() })
+  const made = memo.keys.get(names)
+  if (made !== undefined && made.width === ctx.width && made.height === ctx.height) return made.key
+  let key = `${ctx.extraFp}\u0002${ctx.width}x${ctx.height}\u0002${expressionRegistryEpoch()}`
+  for (const n of names) {
+    if (!Object.hasOwn(params, n)) continue
+    let value = memo.values.get(n)
+    if (value === undefined) memo.values.set(n, (value = `\u0001${n}=${dependencyKey(params[n])}`))
+    key += value
+  }
+  memo.keys.set(names, { width: ctx.width, height: ctx.height, key })
+  return key
+}
+
+const VETS_URLS = new WeakMap<CompiledMark, boolean>()
+
+/**
+ * A mark's key (see `readsKey`); an image or a link is also made under the host's URL policy, which vets its urls. A mark whose
+ * expressions read datasets by name (`markDepsOf(...).exprData`: a selection's store) is also made from their rows: each one's
+ * `datasetKey`, by content (a store is a few rows, a new array whenever the event loop edits it) or, past what a fingerprint takes
+ * in, by the array, when the caller tells every change and did not name it as changed (otherwise equal to no other key).
+ */
+function markKeyOf(mark: CompiledMark, ctx: EvalContext, reads: readonly string[] | null = markReadsOf(mark, ctx.chart)): string {
+  let key = readsKey(ctx, reads)
+  let vets = VETS_URLS.get(mark)
+  if (vets === undefined) VETS_URLS.set(mark, (vets = mark.type === 'image' || encodesHref(mark)))
+  if (vets) key = `${key}\u0003${ctx.urlPolicy === undefined ? '' : dependencyKey(ctx.urlPolicy)}`
+  const deps = markDepsOf(mark, ctx.chart)
+  if (!deps.allData) for (const n of deps.exprData) key += `\u0004${n}=${datasetKey(ctx, n)}`
+  return key
+}
+const scaleKeyOf = (s: CompiledScale, ctx: EvalContext): string => readsKey(ctx, scaleReadsOf(s, ctx.chart))
+
+/**
+ * Whether the evaluation may keep what the previous one made when the signals changed: the caller says what changed (`dataChanges`,
+ * `dataPulse`, `changedDatasets`), or follows the session's contract (see {@link DataStability}), so a dataset array it was given
+ * before still holds the rows it held. Not under `limits`: a result that is kept is not counted against them again (as it is when
+ * nothing changed).
+ */
+const followsChanges = (ctx: EvalContext): boolean => (ctx.incremental || ctx.unchanged !== undefined) && activeMeter() === null
+
+/**
+ * Nothing of this pass failed so far: a pass that stopped somewhere (a signal, a dataset, a scale or an encode threw) makes what
+ * vega made before the stop, which is not what a clean pass made before.
+ */
+function cleanPass(ctx: EvalContext): boolean {
+  return ctx.failed !== true && ctx.abort.cut === undefined && ctx.abort.failures.length === 0 && ctx.lateTaint === undefined
+    && ctx.encodeAborted !== true && ctx.datasetAborted !== true && ctx.bareEncode !== true
+}
+
+/**
+ * Whether dataset `name` holds the rows the previous evaluation's scales and marks read: the very array, which no change the caller
+ * named touched (a pulse updates an array in place only for a dataset it names). A dataset re-derived since is a new array: not
+ * the same, whatever its rows (see `sameData`).
+ */
+function sameRows(ctx: EvalContext, name: string): boolean {
+  return !ctx.affected.has(name) && ctx.datasets.get(name) === ctx.prev?.rows.get(name)
+}
+
+/**
+ * Whether `rows` are, row by row, the rows the items were made from (each item's `datum` is a copy of its row, made when it was
+ * encoded): the same own enumerable fields with the same values (`Object.is`: `0` and `-0` differ, `NaN` is `NaN`). A row whose prototype is not a plain object's,
+ * or that has symbol-keyed fields, is not compared: it is not the same.
+ */
+function sameData(rows: readonly Row[], items: readonly SceneItem[]): boolean {
+  if (rows.length !== items.length) return false
+  for (let i = 0; i < rows.length; i++) {
+    const a = rows[i] as Record<string, unknown> | undefined
+    const b = (items[i] as { datum?: Record<string, unknown> } | undefined)?.datum
+    if (a == null || b == null || typeof a !== 'object' || typeof b !== 'object') return false
+    const pa = Object.getPrototypeOf(a)
+    const pb = Object.getPrototypeOf(b)
+    if ((pa !== Object.prototype && pa !== null) || (pb !== Object.prototype && pb !== null)) return false
+    let n = 0
+    for (const k in a) {
+      n++
+      if (!Object.hasOwn(b, k)) return false
+      const x = a[k]
+      const y = b[k]
+      if (!Object.is(x, y)) return false
+    }
+    for (const _k in b) n--
+    if (n !== 0) return false
+    if (Object.getOwnPropertySymbols(a).length !== 0 || Object.getOwnPropertySymbols(b).length !== 0) return false
+  }
+  return true
+}
+
 /**
  * Whole-group reuse (a top-level leaf mark whose output provably equals last
  * evaluation's). Every input the mark reads must be unchanged: the evaluation
@@ -1949,13 +2301,30 @@ function markScaleNames(mark: CompiledMark, chart: CompiledChart): string[] {
  * dependencies), and each scale it reads (by object identity). Group marks
  * (facets, trellises, scoped scopes) are always rebuilt: their layout is
  * written by later passes, so reusing their objects is not sound.
+ *
+ * With the whole context unchanged and the changes told, a dataset the caller did not name is unchanged. Otherwise the signals the
+ * mark reads (`markKeyOf`) must be as they were, and the datasets it reads must be shown to be: the same arrays (`sameRows`), or
+ * for its `from` dataset, rows equal to those its items were made from (`sameData`: a dataset re-derived since is a new array).
  */
-function canReuseMarkGroup(mark: CompiledMark, ctx: EvalContext): boolean {
+function canReuseMarkGroup(mark: CompiledMark, ctx: EvalContext, prevGroup: SceneGroup, key: string): boolean {
+  // (`key` is `markKeyOf(mark, ctx)`, recorded for the next evaluation by the caller)
   const prev = ctx.prev
-  if (!prev || !ctx.incremental || mark.type === 'group') return false
-  if (prev.fp !== ctx.draft.fp) return false
+  if (!prev || mark.type === 'group' || !cleanPass(ctx) || forceBound(mark, ctx.chart)) return false
   const deps = markDepsOf(mark, ctx.chart)
-  if (deps.allData ? ctx.affected.size > 0 : [...deps.names].some((n) => ctx.affected.has(n))) return false
+  if (prev.markKeys.get(mark) !== key) return false
+  if (ctx.incremental && prev.fp === ctx.draft.fp) {
+    if (deps.allData ? ctx.affected.size > 0 : [...deps.names].some((n) => ctx.affected.has(n))) return false
+  } else {
+    if (!followsChanges(ctx) || markReadsOf(mark, ctx.chart) === null) return false
+    const source = mark.from?.data
+    for (const n of deps.names) if (n !== source && !sameRows(ctx, n)) return false
+    if (source !== undefined && !sameRows(ctx, source)) {
+      // (a sort orders the items by what the encode made of them, ties in data order: the rows are compared in the items' order,
+      // which is theirs when the sort left them in place)
+      if (ctx.affected.has(source) || !ctx.datasets.has(source)) return false
+      if (!sameData(ctx.datasets.get(source)!, prevGroup.items as SceneItem[])) return false
+    }
+  }
   for (const name of markScaleNames(mark, ctx.chart)) {
     if (ctx.scales.get(name) !== prev.scales.get(name)) return false
   }
@@ -2098,9 +2467,17 @@ function buildContentPass(
     const mark = marks[at]!
     ctx.scope.mark = at
     const prevGroup = ctx.prev?.groups.get(mark) ?? null
-    if (prevGroup && canReuseMarkGroup(mark, ctx)) {
+    // (what the mark is made under besides its data and scales, for the next evaluation to compare)
+    const markKey = mark.type === 'group' ? undefined : markKeyOf(mark, ctx)
+    if (markKey !== undefined) ctx.draft.markKeys.set(mark, markKey)
+    if (prevGroup && markKey !== undefined && canReuseMarkGroup(mark, ctx, prevGroup, markKey)) {
       items.push(prevGroup)
       ctx.draft.groups.set(mark, prevGroup)
+      // (a named mark's items are what a later mark of `from: {data: <name>}` reads, as `evaluateMark` leaves them)
+      if (typeof mark.name === 'string') {
+        ctx.markItems.set(mark.name, (prevGroup.items ?? []) as SceneItem[])
+        ctx.markContainers.set(mark.name, prevGroup as unknown as { marktype: string; items: SceneItem[] })
+      }
       // (its items are not encoded again: their gradients are the group's)
       const keptGradients = GROUP_GRADIENTS.get(prevGroup)
       if (keptGradients !== undefined) addDefs(ctx, keptGradients)
@@ -2185,8 +2562,96 @@ function buildContentPass(
     ? ctx.chart.padding
     : computeGuidePadding(items, width, height, ctx.chart.padding, isFit(autosizeOf(chart, input).type))
   const ordered = paintOrderOf(items)
-  return { record: ctx.passMemory?.cur, items: ordered, padding, ctx, width, height, hasLayout, frame }
+  // (made and laid out: what is the same as the content of this pass in the evaluation before is that content)
+  const content = ctx.prev?.content !== undefined ? shareContent(ctx.prev.content, ordered) : ordered
+  ctx.draft.content = content
+  return { record: ctx.passMemory?.cur, items: content, padding, ctx, width, height, hasLayout, frame }
 }
+
+/**
+ * The view's content as made, with every node that is the same as the node at its place in the content the evaluation before made
+ * replaced by that node, so an unchanged group item, guide or title (and everything in it) keeps its identity, as a kept mark does.
+ * "The same" is by value, over every own property (`sameNode`); a leaf mark's group is the same only when it is the very group (a mark
+ * kept or not is decided where it is made). Runs on the laid-out content, which nothing writes afterwards. Returns `next` itself
+ * when nothing could be shared.
+ */
+function shareContent(prev: readonly SceneGroup[], next: SceneGroup[]): SceneGroup[] {
+  const out = next.slice()
+  let shared = false
+  for (let i = 0; i < out.length && i < prev.length; i++) {
+    // (the items of group marks, and what they hold: the view's own guides and title are made from what the evaluation reads, and
+    // comparing them on every evaluation would cost a chart with no group mark what it does not gain)
+    if (!isGroupItem(out[i]!) || !isGroupItem(prev[i]!)) continue
+    const node = shareNode(prev[i]!, out[i]!)
+    if (node !== out[i]) { out[i] = node as SceneGroup; shared = true }
+  }
+  return shared ? out : next
+}
+
+/** `next`, or `prev` when it is the same node, or `next` with the children it shares with `prev` (a new node of this evaluation). */
+function shareNode(prev: SceneNode, next: SceneNode): SceneNode {
+  if (prev === next) return prev
+  if (isLeafMark(next) || isLeafMark(prev)) return next
+  if (sameNode(prev, next, 0)) return prev
+  const a = (prev as { items?: unknown }).items
+  const b = (next as { items?: unknown }).items
+  if (Array.isArray(a) && Array.isArray(b)) {
+    // (a node of this evaluation's own: its children list is its own array)
+    for (let i = 0; i < b.length && i < a.length; i++) b[i] = shareNode(a[i] as SceneNode, b[i] as SceneNode)
+  }
+  return next
+}
+
+/** An item of a group mark (a cell, a view of a concat, a header): what `shareContent` shares at the top of the view. */
+const isGroupItem = (n: SceneNode): boolean => (n as { marktype?: unknown }).marktype === 'group' && (n as { markIndex?: unknown }).markIndex !== undefined
+  && (n as { role?: unknown }).role !== 'mark'
+
+/** A leaf mark's group: compared by identity only (its items may be the engine's live array, or a lazy snapshot of an older scene). */
+const isLeafMark = (n: SceneNode): boolean => (n as { role?: unknown }).role === 'mark' && (n as { marktype?: unknown }).marktype !== 'group'
+
+/** How deep `sameNode` compares before it calls two nodes different. */
+const SAME_NODE_DEPTH = 64
+
+/**
+ * Whether two scene nodes are the same by value: the same own keys (symbols and non-enumerable ones included) holding the same values
+ * (`Object.is`; Dates by their instant; plain arrays and objects compared the same way; any other object, a Map, a function, only
+ * when it is the same object), children compared as nodes (a leaf mark's group by identity only).
+ */
+function sameNode(a: unknown, b: unknown, depth: number): boolean {
+  if (Object.is(a, b)) return true
+  if (a === null || b === null || typeof a !== 'object' || typeof b !== 'object' || depth > SAME_NODE_DEPTH) return false
+  if (a instanceof Date || b instanceof Date) return a instanceof Date && b instanceof Date && Object.is(a.getTime(), b.getTime())
+  const proto = Object.getPrototypeOf(a)
+  if (proto !== Object.getPrototypeOf(b)) return false
+  if (proto === Array.prototype) {
+    const x = a as unknown[]
+    const y = b as unknown[]
+    if (x.length !== y.length) return false
+    for (let i = 0; i < x.length; i++) {
+      const u = x[i]
+      const v = y[i]
+      if (u !== v && (isLeafMarkValue(u) || isLeafMarkValue(v) || !sameNode(u, v, depth + 1))) return false
+    }
+    return true
+  }
+  // (a box a guide records, `titleBounds`, is plain data held in a class)
+  if (proto !== Object.prototype && proto !== null && proto !== Bounds.prototype) return false
+  if (isLeafMark(a as SceneNode) || isLeafMark(b as SceneNode)) return false
+  const ka = Reflect.ownKeys(a)
+  const kb = Reflect.ownKeys(b)
+  if (ka.length !== kb.length) return false
+  for (let i = 0; i < ka.length; i++) {
+    const k = ka[i]!
+    if (k !== kb[i]) return false
+    const da = Object.getOwnPropertyDescriptor(a, k)!
+    const db = Object.getOwnPropertyDescriptor(b, k)!
+    if (da.enumerable !== db.enumerable || 'get' in da || 'get' in db) return false
+    if (!sameNode(da.value, db.value, depth + 1)) return false
+  }
+  return true
+}
+
+const isLeafMarkValue = (v: unknown): boolean => v !== null && typeof v === 'object' && !Array.isArray(v) && isLeafMark(v as SceneNode)
 
 /**
  * An evaluation whose incremental state has not been committed yet. The scene is
@@ -2784,7 +3249,11 @@ function buildDatasetsOf(ctx: EvalContext, inputData: Record<string, unknown[]>)
       rows = []
       outPulse = null
     } else if (!d.transform.length) {
-      if (shared) rows = copyRows(rows)
+      if (shared) {
+        // (the copy the evaluation before made of the same rows, when there is one: see keptCopy)
+        rows = keptCopy(ctx, name, inputs, raw) ?? copyRows(rows)
+        if (inputs !== undefined) ctx.draft.copies.set(name, { inputs, rows })
+      }
     } else try {
       const prevDS = ctx.prev?.datasets.get(name)
       const tctx: StepTransformContext = {
@@ -2801,28 +3270,61 @@ function buildDatasetsOf(ctx: EvalContext, inputData: Record<string, unknown[]>)
         affectedDatasets: ctx.affected,
         ids: ctx.ids,
       }
-      const state: DatasetState = { fp: passFp, inputLength: rows.length, steps: [], stepState: new Map() }
-      // Incremental only when every precondition is provable: the caller named a
-      // pulse, the previous state was built under identical params from an input
-      // of the length the pulse is relative to, and no earlier pass of THIS
-      // evaluation already updated that state in place.
-      // A pass of an evaluation numbers the rows of an `identifier` as the pass before it did (a view that fits its viewport builds its
-      // content twice): whichever route numbered them first, the others carry its numbers, and do not number them again by theirs.
-      const hasIds = d.transform.some((x) => x.type === 'identifier')
-      const earlierDS = hasIds ? ctx.draft.datasets.get(name) ?? ctx.earlier?.datasets.get(name) : undefined
-      const incremental = ctx.incremental && inPulse !== null && !inPulse.full && prevDS !== undefined && earlierDS === undefined
-        && prevDS.fp === passFp && prevDS.steps.length === d.transform.length
-        && prevDS.inputLength === pulseBaseLength(inPulse) && claim(ctx, datasetParts(prevDS))
-      if (incremental) {
-        if (shared) rows = copyRows(rows)
-        const res = ctx.engine!.applyPipelineWithPulse(rows, d.transform, tctx, name, inPulse!, prevDS, state)
-        rows = res.rows
-        outPulse = res.pulse
+      // What the steps read now (null: not known), and the build of an earlier round of this pass, or of the pass before, that read
+      // the same, if any.
+      // (a view whose datasets may draw from a random source the host injected takes a pulse where it always did: the engine's pulse
+      // path draws without a tape, so which build takes a pulse decides which numbers the source hands out; see `drawsInDatasets`)
+      const key = ctx.runtime.random !== undefined && datasetsMayDraw(ctx.chart) ? null : pipelineKey(ctx, d.transform)
+      const before = reuse.on ? keptBuild(ctx, name, inputs, key) : undefined
+      if (before !== undefined) {
+        const kept = before.built!
+        rows = kept.rows
+        // (a pass before this one may have built from another state of the evaluation before: its pulse says how the rows of that
+        // state changed, which are the rows this pass's items were made from only when the two states are one)
+        outPulse = kept.base === prevDS ? kept.pulse : null
+        ctx.ids.value = kept.ids[1]
+        for (const [signal, value] of kept.published) ctx.signalParams[signal] = value
+        ctx.draft.datasets.set(name, before)
+        stepCounts.reused += d.transform.length
       } else {
-        rows = runPipeline(ctx, name, d.transform, tctx, rows, shared, inputs, raw, prevDS, earlierDS, state)
-        outPulse = null
+        const idsBefore = ctx.ids.value
+        const state: DatasetState = { fp: passFp, inputLength: rows.length, steps: [], stepState: new Map(), idsStart: idsBefore }
+        // Incremental only when every precondition is provable: the caller named a pulse, the previous state was built under the
+        // params the steps read (all of them, or the signals and datasets they name: see `pipelineKey`) from an input of the length
+        // the pulse is relative to, and no earlier pass of THIS evaluation already updated that state in place.
+        // A pass of an evaluation numbers the rows of an `identifier` as the pass before it did (a view that fits its viewport builds its
+        // content twice): whichever route numbered them first, the others carry its numbers, and do not number them again by theirs
+        // (a later round of the same pass too, when the round before gave the step the same rows: see `carriedFrom`).
+        const hasIds = d.transform.some((x) => x.type === 'identifier')
+        const earlierDS = hasIds ? ctx.draft.datasets.get(name) ?? ctx.earlier?.datasets.get(name) : undefined
+        const incremental = ctx.incremental && inPulse !== null && !inPulse.full && prevDS !== undefined && earlierDS === undefined
+          && (!numbersSourceRows(d.transform) || followsSources(d.transform))
+          && (prevDS.fp === passFp || (key !== null && prevDS.key === key && activeMeter() === null))
+          && prevDS.steps.length === d.transform.length
+          && prevDS.inputLength === pulseBaseLength(inPulse) && claim(ctx, datasetParts(prevDS))
+        if (incremental) {
+          if (shared) rows = copyRows(rows)
+          const res = ctx.engine!.applyPipelineWithPulse(rows, d.transform, tctx, name, inPulse!, prevDS, state)
+          rows = res.rows
+          outPulse = res.pulse
+          // (what each step read, as `runPipeline` records it, so a later evaluation that is not driven by a pulse keeps the steps:
+          // a step that publishes a signal another may read in the same run is not recorded, nor the run)
+          if (key !== null && inputs !== undefined && d.transform.every((t) => stepReadsOf(t)!.publishes === undefined)) {
+            state.inputs = inputs
+            state.records = d.transform.map((t) => ({ keys: stepKeys(ctx, stepReadsOf(t)!) }))
+          }
+        } else {
+          rows = runPipeline(ctx, name, d.transform, tctx, rows, shared, inputs, raw, prevDS, earlierDS, state)
+          outPulse = null
+        }
+        if (key !== null) {
+          state.key = key
+          if (inputs !== undefined && !forceLinkDatasets(ctx.chart).has(name)) {
+            state.built = { pass: ctx.draft, inputs, key, rows, pulse: outPulse, base: prevDS, ids: [idsBefore, ctx.ids.value], published: publishedBy(ctx, d.transform) }
+          }
+        }
+        ctx.draft.datasets.set(name, state)
       }
-      ctx.draft.datasets.set(name, state)
     } catch (e) {
       // vega: a transform that throws is logged and the dataset publishes nothing (the rest of
       // its pipeline never runs, so everything downstream of it is empty / never built).
@@ -2861,6 +3363,7 @@ function buildDatasetsOf(ctx: EvalContext, inputData: Record<string, unknown[]>)
   }
   // Transforms (extent, bin with a signal output) may have written signals.
   ctx.fpMemo = undefined
+  ctx.readsMemo = undefined
 }
 
 const copyRows = (rows: readonly Row[]): Row[] => rows.map((r) => ({ ...r }))
@@ -2884,6 +3387,32 @@ function ingestHostRows(given: readonly Row[], pulse: StepPulse | null): Row[] {
   const rows = ingestRows(given, base, pulse?.changed)
   if (rows === given) objectRowPrefix.set(given, given.length)
   return rows
+}
+
+/**
+ * The copy the previous evaluation made of the rows of dataset `name`, a dataset with no transforms whose rows are copies of the
+ * host's or of its source's, when they were copied from the rows it is given now: the array the host gave then, which the host's
+ * session says holds the rows the host gives now (or which is the very array given again by a caller that names what changed), or
+ * the very arrays of its sources (see `reusableRuns`). Nothing writes to a copy once it is made, so the copy is the copy these rows
+ * would make; a dataset named as changed is copied again.
+ */
+function keptCopy(ctx: EvalContext, name: string, inputs: readonly unknown[] | undefined, raw: boolean): Row[] | undefined {
+  if (inputs === undefined || !reuse.on) return undefined
+  // (a later round of this pass, or the pass after another, copies the very arrays the one before copied: its copy, whatever changed
+  // since the evaluation before)
+  for (const pass of [ctx.draft, ctx.earlier]) {
+    const mine = pass?.copies.get(name)
+    if (mine !== undefined && sameArrays(mine.inputs, inputs)) return mine.rows
+  }
+  if (ctx.affected.has(name)) return undefined
+  const prev = ctx.prev?.copies.get(name)
+  if (prev === undefined || prev.inputs.length !== inputs.length) return undefined
+  if (raw) {
+    const vouched = ctx.unchanged?.has(name) === true ? ctx.unchanged.get(name) : ctx.incremental ? inputs[0] : undefined
+    return vouched !== undefined && prev.inputs[0] === vouched ? prev.rows : undefined
+  }
+  for (let i = 0; i < inputs.length; i++) if (prev.inputs[i] !== inputs[i]) return undefined
+  return prev.rows
 }
 
 /** The earlier runs of dataset `name` whose steps may be kept: those made from the inputs it has now (see {@link DatasetState.inputs}). */
@@ -2921,6 +3450,20 @@ function runPipeline(
   const records = new Array<StepRecord | undefined>(transforms.length)
   const ends = runsOf(transforms)
   let cur = rows
+  // (an `identifier` after a step that may hold rows back numbers rows as their source rows: which input row each row is rides along
+  // the steps before it)
+  const sourceList = numbersSourceRows(transforms) ? Int32Array.from({ length: rows.length }, (_, i) => i) : undefined
+  if (sourceList !== undefined) setSources(rows, sourceList)
+  // (steps kept from a run before did not run: their rows' source rows are followed from the rows they were given, by the state they
+  // left -- a filter's pass flags)
+  const follow = (from: number, to: number, given: readonly Row[]): void => {
+    let list = sourceList === undefined ? null : sourcesOf(given)
+    for (let j = from; j <= to && list !== null; j++) {
+      const out = state.steps[j]!
+      list = sourcesAfter(transforms[j]!.type, list, j === from ? given.length : state.steps[j - 1]!.length, out.length, state.stepState.get(`${name}#${j}`))
+      if (list !== null) setSources(out, list)
+    }
+  }
   for (let k = 0; k < transforms.length; k++) {
     const end = reuse.on ? ends[k]! : k
     const t = transforms[k]!
@@ -2929,7 +3472,7 @@ function runPipeline(
       // consecutive steps that only add fields run as one (the rows are made once; see runsOf)
       const unit = transforms.slice(k, end + 1)
       const unitReads = unit.map((u) => stepReadsOf(u)!)
-      const unitKeys = unitReads.map((r) => r.signals.map((n) => dependencyKey(ctx.signalParams[n])))
+      const unitKeys = unitReads.map((r) => stepKeys(ctx, r))
       const kept = runs.length > 0 ? keptSteps(ctx, name, unit, unitReads, unitKeys, runs, k, cur, earlierDS !== undefined) : undefined
       if (kept !== undefined) {
         const out = kept.steps[end]!
@@ -2939,11 +3482,12 @@ function runPipeline(
           if (kept.aliased?.[j] !== undefined) (state.aliased ??= [])[j] = kept.aliased[j]
           records[j] = kept.records![j]
         }
+        follow(k, end, cur)
         cur = out
         stepCounts.reused += unit.length
       } else {
         // (the unit's first step copies every row it is given, so a source's rows need only be in an array of their own)
-        if (shared && cur === rows) cur = rows.slice()
+        if (shared && cur === rows) { cur = rows.slice(); if (sourceList !== undefined) setSources(cur, sourceList) }
         const out = applyTransforms(cur, unit, tctx, name)
         // (the steps before the last stand for the rows it made, which hold what the steps after them added)
         for (let j = k; j < end; j++) {
@@ -2958,38 +3502,50 @@ function runPipeline(
       k = end
       continue
     }
-    const keys = reads === null ? undefined : reads.signals.map((n) => dependencyKey(ctx.signalParams[n]))
+    const keys = reads === null ? undefined : stepKeys(ctx, reads)
     const kept = keys !== undefined && runs.length > 0 ? keptSteps(ctx, name, [t], [reads!], [keys], runs, k, cur, earlierDS !== undefined) : undefined
     if (kept !== undefined) {
       const out = kept.steps[k]!
       keepStep(ctx, t, reads!, kept.records![k]!, cur.length, out)
+      const given = cur
       cur = out
       state.steps.push(cur)
       const ss = kept.stepState.get(`${name}#${k}`)
       if (ss !== undefined) state.stepState.set(`${name}#${k}`, ss)
+      follow(k, k, given)
       records[k] = kept.records![k]
+      notePublished(state, k, t, ctx.signalParams)
       stepCounts.reused++
       continue
     }
     // (the rows of a step that has to run are this evaluation's own: a source's are copied now, unless the step makes rows of its own
     // and only needs them in an array of their own -- the array a source made carries the order its rows were made in, which a
     // dataset made from it does not inherit)
-    if (shared && cur === rows) cur = copiesRows(t) ? rows.slice() : copyRows(rows)
+    if (shared && cur === rows) { cur = copiesRows(t) ? rows.slice() : copyRows(rows); if (sourceList !== undefined) setSources(cur, sourceList) }
     const from = cur
     const had = reads?.publishes !== undefined && Object.hasOwn(ctx.signalParams, reads.publishes)
     const published = reads?.publishes === undefined ? undefined : ctx.signalParams[reads.publishes]
     // (a pass of an evaluation numbers an identifier's rows as the pass before it did: that run is the one whose numbers rows carry)
-    const before = earlierDS?.steps[k] ?? prevDS?.steps[k]
-    const run = (): { rows: Row[]; state?: unknown } => ctx.engine !== undefined
-      ? ctx.engine.applyOneWithState(from, t, tctx, name, before)
-      : { rows: applyFresh(from, t, tctx, name, before) }
+    const carriedRun = carriedFrom(ctx, name, k, from, inputs, earlierDS, prevDS, state.idsStart)
+    const before = carriedRun?.steps[k]
+    const bySource = t.type === 'identifier' && sourceList !== undefined ? sourceNumbers(name, k, t, from, rows, carriedRun) : undefined
+    const run = (): { rows: Row[]; state?: unknown } => bySource !== undefined
+      ? { rows: applyIdentifier(from, t, tctx, name, bySource.carry) }
+      : ctx.engine !== undefined
+        ? ctx.engine.applyOneWithState(from, t, tctx, name, before)
+        : { rows: applyFresh(from, t, tctx, name, before) }
     const res = ctx.runtime.random === undefined || !mayDrawRandom(t)
       ? run()
       : atRandomSite(ctx.runtime.random, `dataset:${name}#${k}`, () => randomFingerprint(t, from, ctx.signalParams), run)
     cur = res.rows
     state.steps.push(cur)
     if (res.state !== undefined) state.stepState.set(`${name}#${k}`, res.state)
+    if (t.type === 'identifier' && sourceList !== undefined) {
+      const numbered = numbersBySource(t, from, cur, rows, bySource)
+      if (numbered !== undefined) state.stepState.set(`${name}#${k}`, numbered)
+    }
     stepCounts.ran++
+    notePublished(state, k, t, ctx.signalParams)
     if (keys !== undefined) records[k] = recordStep(ctx, reads!, keys, had, published)
   }
   if (shared && cur === rows) cur = copyRows(rows)
@@ -2997,6 +3553,140 @@ function runPipeline(
   return cur
 }
 
+
+/** Record in `state` the value of the signal step `k` (`t`) publishes, as it stands after the step (see `DatasetState.published`). */
+export function notePublished(state: DatasetState, k: number, t: CompiledTransform, signals: Record<string, unknown>): void {
+  const name = (t as { signal?: unknown }).signal
+  if (typeof name !== 'string' || !Object.hasOwn(signals, name)) return
+  ;(state.published ??= [])[k] = [signals[name]]
+}
+
+const sameArrays = (a: readonly unknown[], b: readonly unknown[]): boolean => a.length === b.length && a.every((x, i) => x === b[i])
+
+const MAY_DRAW = new WeakMap<CompiledChart, boolean>()
+
+/** Whether a dataset of the view may draw from the random source, its expressions read as the lexer reads them (an escaped name too). */
+function datasetsMayDraw(chart: CompiledChart): boolean {
+  let may = MAY_DRAW.get(chart)
+  if (may === undefined) MAY_DRAW.set(chart, (may = mayDrawRandom(chart.data)))
+  return may
+}
+
+/**
+ * What a dataset's steps read, as it stands now: the keys of every step (see `stepKeys`), or `null` when a step's reads are not known
+ * (see step-reuse.ts) or it draws from the random source. Two builds of the pipeline under the same key over the same input rows make
+ * the same rows; a pulse through its steps is a pulse through what made them.
+ */
+function pipelineKey(ctx: EvalContext, transforms: readonly CompiledTransform[]): string | null {
+  let key = ''
+  for (const t of transforms) {
+    const reads = stepReadsOf(t)
+    if (reads === null || reads.draws) return null
+    for (const k of stepKeys(ctx, reads)) key += `\u0001${k}`
+    key += '\u0002'
+  }
+  return key
+}
+
+/**
+ * The build of dataset `name` an earlier round of this pass, or the pass before this one, made (see {@link BuiltDataset}), when this
+ * one would make it again: the same input arrays, the same reads, and the view's id counter where it stood then (its `identifier`s
+ * draw the same numbers, or carry the numbers that build drew). Not under `limits`: what a kept build made is not counted against
+ * them again.
+ */
+function keptBuild(ctx: EvalContext, name: string, inputs: readonly unknown[] | undefined, key: string | null): DatasetState | undefined {
+  if (key === null || inputs === undefined || activeMeter() !== null) return undefined
+  for (const pass of [ctx.draft, ctx.earlier]) {
+    const state = pass?.datasets.get(name)
+    const built = state?.built
+    if (built === undefined || built.pass !== pass || built.key !== key || built.ids[0] !== ctx.ids.value) continue
+    if (sameArrays(built.inputs, inputs)) return state
+  }
+  return undefined
+}
+
+/** The signals the steps publish, as they stand after the steps ran (one a step left unwritten is absent). */
+function publishedBy(ctx: EvalContext, transforms: readonly CompiledTransform[]): Array<readonly [string, unknown]> {
+  const out: Array<readonly [string, unknown]> = []
+  for (const t of transforms) {
+    const p = stepReadsOf(t)?.publishes
+    if (p !== undefined && Object.hasOwn(ctx.signalParams, p)) out.push([p, ctx.signalParams[p]])
+  }
+  return out
+}
+
+/**
+ * The run of step `k` whose rows the step's rows carry the numbers of, when it numbers them (`identifier`): the pass of this
+ * evaluation before this one, or the round of this pass before this one, or the evaluation before. A round before is the run only
+ * when it gave the step the rows it is given now (the same input arrays, or equal rows): every round numbers from where the view's
+ * counter stood when the evaluation began, so its numbers are the ones this round would draw. A round given other rows -- a dataset
+ * that reads a scale is built before the scales exist -- drew numbers that are not these rows': carried, they numbered the rows
+ * anew on every evaluation, with numbers another dataset held. Its rows carry the numbers of the evaluation before, as the first
+ * round's did.
+ */
+function carriedFrom(
+  ctx: EvalContext, name: string, k: number, rows: readonly Row[], inputs: readonly unknown[] | undefined,
+  earlierDS: DatasetState | undefined, prevDS: DatasetState | undefined, idsStart: number | undefined,
+): DatasetState | undefined {
+  if (earlierDS === undefined) return prevDS
+  if (earlierDS !== ctx.draft.datasets.get(name)) return earlierDS
+  const other = ctx.earlier?.datasets.get(name) ?? prevDS
+  // (the counter stood elsewhere when the round before built the dataset: a dataset before it was given other rows, and the numbers
+  // the round drew are not the ones this round draws)
+  if (earlierDS.idsStart !== idsStart) return other
+  const given = k === 0 ? undefined : earlierDS.steps[k - 1]
+  const same = k === 0
+    ? earlierDS.inputs === undefined || inputs === undefined || sameArrays(earlierDS.inputs, inputs)
+    : given !== undefined && (given === rows || (given.length === rows.length && given.every((r, i) => rowsEqual(r, rows[i]!))))
+  return same ? earlierDS : other
+}
+
+/**
+ * The numbers the rows an `identifier` is given carry, read as vega reads them: a row is a row of the pipeline's input (`source`, the
+ * dataset's source or the host's rows; see `sourcesOf`), and a source row keeps the number it was given for as long as it lives, whether
+ * the steps before the identifier (a filter) let it through or not, while a source row that was never numbered is numbered anew. The
+ * source rows are those of the run the numbers come from (`carriedFrom`), found among the rows now as the session finds rows (see
+ * identifier-ids.ts). Undefined when that run left no such numbers or the rows' source rows are not known: the rows are then found
+ * among the identifier's own rows of that run, as before. (A pulse through the pipeline numbers them the same way: see
+ * `applyPipelineWithPulse`.)
+ */
+function sourceNumbers(name: string, k: number, t: CompiledTransform, rows: readonly Row[], source: readonly Row[], run: DatasetState | undefined): { carry: unknown[]; map: number[]; before: SourceNumbers } | undefined {
+  const before = run?.stepState.get(`${name}#${k}`) as SourceNumbers | undefined
+  const list = sourcesOf(rows)
+  if (before === undefined || list === null || !Array.isArray(before.ids)) return undefined
+  const map = alignIndices(source, before.sourceRows, idField(t))
+  return { carry: carryBySources(list, map, before), map, before }
+}
+
+/** What an `identifier` that just ran leaves for the next run to carry numbers from (see `sourceNumbers`). */
+function numbersBySource(t: CompiledTransform, rows: readonly Row[], out: readonly Row[], source: readonly Row[], carried: ReturnType<typeof sourceNumbers>): SourceNumbers | undefined {
+  const list = sourcesOf(rows)
+  if (list === null || out.length !== rows.length) return undefined
+  // (a source row the steps before held back keeps the number it had)
+  return sourceNumbersOf(list, out, source, idField(t), carried?.map, carried?.before)
+}
+
+/** What a step reads, as it stands now (see `StepRecord.keys`): the values of its signals, then the rows of the datasets it reads. */
+function stepKeys(ctx: EvalContext, reads: StepReads): string[] {
+  const keys = reads.signals.map((n) => dependencyKey(ctx.signalParams[n]))
+  for (const n of reads.datasets) keys.push(datasetKey(ctx, n))
+  return keys
+}
+
+let unkeyed = 0
+
+/**
+ * The rows of a dataset a step reads by name, as a key: by their content (a selection's store is a few rows, copied afresh by every
+ * evaluation), or, past what a fingerprint takes in, by the array. An array holds the rows it held when the caller tells every change
+ * (see `followsChanges`) and did not name this dataset as changed; otherwise the key is equal to no other. A dataset that is not
+ * built is `-`: the step reads no rows.
+ */
+function datasetKey(ctx: EvalContext, name: string): string {
+  const rows = ctx.datasets.get(name)
+  if (rows === undefined) return '-'
+  const key = dependencyKey(rows)
+  return key.includes('#') && (ctx.affected.has(name) || !(ctx.incremental || ctx.unchanged !== undefined)) ? `!${++unkeyed}` : key
+}
 
 /** `target` stands in the order rows were made in as `rows` does (see tuple-order.ts). */
 function withOrderOf(rows: readonly Row[], target: Row[]): Row[] {
@@ -3166,10 +3856,23 @@ function singleDataDomain(domain: ScaleDomain): { data: string; field: string; s
   return null
 }
 
-/** Discrete domains sorted by an aggregate depend on other fields: never census-reusable. */
+/**
+ * A discrete domain fixed by its categories alone (see `DiscCensus`). A domain sorted by count or by an aggregate of another field
+ * also depends on how many rows each category has or what they hold: it has no census, and a scale over it is kept only when the
+ * settings it is made from are the same (see `buildScales`).
+ */
 function discreteCensusApplies(dom: { sort?: unknown }): boolean {
-  const sort = dom.sort
-  return !(sort && typeof sort === 'object' && !Array.isArray(sort) && 'op' in (sort as object))
+  return sortReadsCategoriesOnly(dom.sort)
+}
+
+/**
+ * An ordinal scale that adds a category it is asked for to its domain (`domainImplicit`, a `domainRaw`, or no domain): the scale is
+ * changed by what reads it, so once read it is not the scale its settings make, and it is never kept (a later evaluation that keeps
+ * it would hand the marks it encodes again a domain grown by rows that are gone, or by marks it does not encode again).
+ */
+function growsOnLookup(scale: Scale): boolean {
+  const unknown = (scale as { unknown?: () => unknown }).unknown
+  return typeof unknown === 'function' && unknown.call(scale) === implicitCategory
 }
 
 /** vega-util toNumber as a number: null / '' / undefined are NaN (skipped by the extent). */
@@ -3195,18 +3898,29 @@ function freshContCensus(dom: { data: string; field: string }, rows: Row[]): Con
   return { data: dom.data, field: dom.field, lo: finite ? lo : 0, hi: finite ? hi : 1, loCount, hiCount, finite, vals }
 }
 
-function freshDiscCensus(dom: { data: string; field: string }, rows: Row[]): DiscCensus {
-  const counts = new Map<unknown, number>()
-  const firstIdx = new Map<unknown, number>()
+/** The text a discrete domain tells a value's category by (`String`, as scale-domain.ts's tally); undefined when it throws. */
+function categoryText(v: unknown): string | undefined {
+  if (typeof v === 'string') return v
+  try {
+    return String(v)
+  } catch {
+    return undefined
+  }
+}
+
+/** The census of the rows a discrete domain was just made from, or undefined when a value has no text. */
+function freshDiscCensus(dom: { data: string; field: string }, rows: Row[]): DiscCensus | undefined {
+  const first = new Map<string, number>()
   const vals: unknown[] = new Array(rows.length)
   const read = scaleFieldOf(dom.field)
   for (let i = 0; i < rows.length; i++) {
     const v = read(rows[i])
     vals[i] = v
-    counts.set(v, (counts.get(v) ?? 0) + 1)
-    if (!firstIdx.has(v)) firstIdx.set(v, i)
+    const text = categoryText(v)
+    if (text === undefined) return undefined
+    if (!first.has(text)) first.set(text, i)
   }
-  return { data: dom.data, field: dom.field, vals, counts, firstIdx }
+  return { data: dom.data, field: dom.field, vals, first }
 }
 
 /**
@@ -3278,30 +3992,39 @@ function advanceContCensus(cen: ContCensus, rows: Row[], pulse: StepPulse): Cont
 }
 
 /**
- * Advance a discrete value census by a SAME-LENGTH pulse. The ordered domain is
- * unchanged iff every changed row swaps its old value for one that already
- * exists with an earlier first occurrence, while the old value keeps both a
- * positive count and its own first occurrence. Anything else rebuilds.
+ * Advance a discrete category census by a pulse that keeps every row's index (rows edited in place, rows appended), in place (the
+ * caller has claimed it), in O(changed + appended); or return null when the domain is not proven unchanged. It is unchanged when no
+ * category's first row moves or changes its value and no category appears or goes: an edited row is not the first of its old
+ * category (which so keeps a row) and joins a category that has a row before it, or keeps its text; an appended row joins a
+ * category that has one. Anything else (a pulse with an index mapping, a new category, a category's first row edited) returns null,
+ * and the scale is kept only if the settings it is made from are the same (see `buildScales`).
  */
 function advanceDiscCensus(cen: DiscCensus, rows: Row[], pulse: StepPulse): DiscCensus | null {
-  const sameLength = pulse.appendOnly ? (pulse.baseLength === cen.vals.length && rows.length === cen.vals.length)
-    : (!pulse.from && !(pulse.added?.length) && !(pulse.removed?.length) && rows.length === cen.vals.length)
-  if (!sameLength) return null
+  const vals = cen.vals
+  const indexed = pulse.appendOnly || (!pulse.from && !(pulse.added?.length) && !(pulse.removed?.length))
+  const base = pulse.appendOnly ? (pulse.baseLength ?? vals.length) : rows.length
+  if (!indexed || base !== vals.length || rows.length < base) return null
   const read = scaleFieldOf(cen.field)
+  const first = cen.first
   for (const i of pulse.changed) {
-    if (i < 0 || i >= rows.length) return null
+    if (i < 0 || i >= base) continue
     const nv = read(rows[i])
-    const ov = cen.vals[i]
-    if (Object.is(ov, nv) || ov === nv) continue
-    const nCount = cen.counts.get(nv)
-    const nFirst = cen.firstIdx.get(nv)
-    if (nCount == null || nCount <= 0 || nFirst == null || nFirst > i) return null
-    const oCount = cen.counts.get(ov)
-    if (oCount == null || oCount <= 1) return null
-    if (cen.firstIdx.get(ov) === i) return null
-    cen.counts.set(ov, oCount - 1)
-    cen.counts.set(nv, nCount + 1)
-    cen.vals[i] = nv
+    const ov = vals[i]
+    if (Object.is(ov, nv)) continue
+    const was = categoryText(ov)!
+    const now = categoryText(nv)
+    if (now === undefined || first.get(was) === i) return null
+    if (now !== was) {
+      const joins = first.get(now)
+      if (joins === undefined || joins > i) return null
+    }
+    vals[i] = nv
+  }
+  for (let i = base; i < rows.length; i++) {
+    const nv = read(rows[i])
+    const now = categoryText(nv)
+    if (now === undefined || !first.has(now)) return null
+    vals.push(nv)
   }
   return cen
 }
@@ -3334,7 +4057,7 @@ function datasetParts(ds: DatasetState): object[] {
 
 /** What advancing a census updates in place (see advanceContCensus, advanceDiscCensus). */
 function censusParts(cen: ContCensus | DiscCensus): object[] {
-  return 'counts' in cen ? [cen, cen.vals, cen.counts, cen.firstIdx] : [cen, cen.vals]
+  return 'first' in cen ? [cen, cen.vals, cen.first] : [cen, cen.vals]
 }
 
 /** A scale domain / census reads its field through the one shared accessor cache (vega-util `field()` semantics). */
@@ -3378,17 +4101,8 @@ function buildScales(ctx: EvalContext): void {
   // evaluation (fixed-point rounds, size re-resolution) is harmless.
   const fp = ctxFpOf(ctx)
   const reusable = ctx.incremental && prev !== undefined && prev.fp === fp
-  const stamp = `${fp}#${ctx.dsEpoch}`
   for (const s of ctx.chart.scales) {
-    // This scale was already proven reusable under the very same params and
-    // dataset build earlier in this evaluation (the census advances once).
-    const memo = ctx.scaleReuse.get(s.name)
-    if (reusable && memo && memo.stamp === stamp) {
-      ctx.scales.set(s.name, memo.entry.scale)
-      ctx.scaleTypes.set(s.name, s.type)
-      entries.set(s.name, memo.entry)
-      continue
-    }
+    const key = scaleKeyOf(s, ctx)
     // A `{ fields: [...] }` domain (vega-lite's layered charts: several datasets
     // contribute to one shared scale) is resolved by buildScale itself, from the
     // CURRENT datasets, every evaluation: the IR keeps the declared domain.
@@ -3397,44 +4111,88 @@ function buildScales(ctx: EvalContext): void {
     const prevEntry = prev?.scaleEntries.get(s.name)
     const def: CompiledScale = s
     const dom = multi ? null : singleDataDomain(s.domain)
-    if (reusable && prevEntry && prevEntry.multi === multi) {
-      let reuse = !domainReferencesAffected(s.domain, ctx.affected)
-      let entry = prevEntry
+    // Signals changed, but none this scale reads (see `keyedScale`): it is reused as when none changed, over the datasets it reads.
+    const keyed = !reusable && prevEntry !== undefined && prevEntry.multi === multi && keyedScale(s, ctx, prevEntry, key)
+    // What the scale was made from, besides its datasets: the whole context, or what it reads of it. An ordinal scale that adds the
+    // categories it is asked for to its domain is made again every time: what read it before changed it (see `growsOnLookup`).
+    const stamp = prevEntry === undefined || growsOnLookup(prevEntry.scale) ? undefined
+      : reusable ? (prevEntry.multi === multi ? `*${fp}` : undefined) : keyed ? key : undefined
+    // This scale was already proven reusable under the very same params and
+    // dataset build earlier in this evaluation (the census advances once): the datasets it names are the very arrays it was proven
+    // over, which nothing writes once a round of this evaluation made them (a scale that reads datasets from an expression also
+    // needs the same build of them all).
+    const memo = ctx.scaleReuse.get(s.name)
+    if (stamp !== undefined && memo !== undefined && memo.stamp === stamp && sameArrays(memo.rows, scaleRowsOf(s, ctx))
+      && (scaleReadsOf(s, ctx.chart) !== null || memo.epoch === ctx.dsEpoch)) {
+      ctx.scales.set(s.name, memo.entry.scale)
+      ctx.scaleTypes.set(s.name, s.type)
+      entries.set(s.name, memo.entry)
+      continue
+    }
+    if (stamp !== undefined) {
+      // (with every signal as it was, a dataset the caller did not name is unchanged; with some changed, a dataset the scale names
+      // must be the very array it was made from, see `sameRows`. Every dataset it names, the range's too; and a scale that reads
+      // datasets or scales from an expression, whichever they are, is not kept for its datasets: its settings are read again)
+      const readsAll = scaleReadsOf(s, ctx.chart) === null
+      const named = SCALE_READS.get(s)!.datasets
+      let reuse = reusable ? !readsAll && !named.some((n) => ctx.affected.has(n)) : named.every((n) => sameRows(ctx, n))
+      let entry = prevEntry!
       // An affected single-data-domain scale can still be reused when its domain
       // is provably unchanged (see the census helpers). This skips the O(n)
       // domain re-scan for the common case (few points change, domain holds, or
       // rows are appended inside the current domain).
-      if (!reuse && dom) {
+      // (a scale of one dataset's domain reads that dataset's rows alone, see scale-domain.ts, when it names no other dataset and
+      // reads none from an expression: a census proves the domain, and nothing else of it)
+      if (!reuse && dom && !readsAll && named.every((n) => n === dom.data)) {
         const pulse = ctx.datasetPulses.get(dom.data)
         const rows = ctx.datasets.get(dom.data) ?? []
         if (pulse && !pulse.full) {
-          if (CONTINUOUS_TYPES.has(s.type) && prevEntry.cont && prevEntry.cont.finite
-            && prevEntry.cont.data === dom.data && prevEntry.cont.field === dom.field) {
+          if (CONTINUOUS_TYPES.has(s.type) && entry.cont && entry.cont.finite
+            && entry.cont.data === dom.data && entry.cont.field === dom.field) {
             // The census is updated in place for the append-only form: claim it.
-            if (claim(ctx, censusParts(prevEntry.cont))) {
-              const next = advanceContCensus(prevEntry.cont, rows, pulse)
-              if (next) { reuse = true; entry = { ...prevEntry, cont: next } }
+            if (claim(ctx, censusParts(entry.cont))) {
+              const next = advanceContCensus(entry.cont, rows, pulse)
+              if (next) { reuse = true; entry = { ...entry, cont: next } }
             }
-          } else if (DISCRETE_TYPES.has(s.type) && prevEntry.disc && discreteCensusApplies(dom)
-            && prevEntry.disc.data === dom.data && prevEntry.disc.field === dom.field) {
-            if (claim(ctx, censusParts(prevEntry.disc))) {
-              const next = advanceDiscCensus(prevEntry.disc, rows, pulse)
-              if (next) { reuse = true; entry = { ...prevEntry, disc: next } }
+          } else if (DISCRETE_TYPES.has(s.type) && entry.disc && discreteCensusApplies(dom)
+            && entry.disc.data === dom.data && entry.disc.field === dom.field) {
+            if (claim(ctx, censusParts(entry.disc))) {
+              const next = advanceDiscCensus(entry.disc, rows, pulse)
+              if (next) { reuse = true; entry = { ...entry, disc: next } }
             }
           }
         }
       }
       if (reuse) {
+        if (entry.key !== key) entry = { ...entry, key }
         ctx.scales.set(s.name, entry.scale)
         ctx.scaleTypes.set(s.name, s.type)
         entries.set(s.name, entry)
-        ctx.scaleReuse.set(s.name, { stamp, entry })
+        ctx.scaleReuse.set(s.name, { stamp, entry, rows: scaleRowsOf(s, ctx), epoch: ctx.dsEpoch })
         continue
       }
     }
     let scale: Scale
+    let settings: Settings
+    // Made under the same key (`stamp`) from the same settings, the scale is the one the evaluation before made: keep that object,
+    // so what reads it is kept too. This is what proves a domain unchanged when no census can (a pulse with an index mapping, a
+    // sort by count or by an aggregate, several fields, `domainRaw`): the settings are read in full, as a fresh build reads them,
+    // and only the scale is not made again. Not under `limits` (a scale made again is checked against the ceilings they replace).
+    // A spec with `bins` in a view that fits its viewport reads what the pass before left (`ScaleContext.pass`): under the same key
+    // (which holds the pass's size, the viewport and the signals it reads) and the same data, that pass had the same settings in
+    // both evaluations, so what it left is the same too.
+    let kept = false
     try {
-      scale = buildScale(def, scaleContext(ctx, def.name))
+      const sctx = scaleContext(ctx, def.name)
+      settings = scaleSettings(def, sctx)
+      if (stamp !== undefined && prevEntry?.settings !== undefined && activeMeter() === null
+        && sameScaleSettings(s.type, settings, prevEntry.settings)) {
+        scale = prevEntry.scale
+        settings = prevEntry.settings
+        kept = true
+      } else {
+        scale = scaleOfSettings(settings, sctx)
+      }
     } catch (e) {
       // vega: the Scale operator throws, the dataflow logs it and the run stops there -- this scale
       // and every operator after it (later scales, every encode) are never evaluated.
@@ -3444,7 +4202,7 @@ function buildScales(ctx: EvalContext): void {
     }
     ctx.scales.set(s.name, scale)
     ctx.scaleTypes.set(s.name, s.type)
-    const entry: ScaleEntry = { scale, multi }
+    const entry: ScaleEntry = { scale, multi, key, settings }
     // Track the domain census for a single-data-domain scale so a later update
     // can prove the domain unchanged instead of rescanning.
     if (dom) {
@@ -3456,22 +4214,19 @@ function buildScales(ctx: EvalContext): void {
       }
     }
     entries.set(s.name, entry)
+    if (kept) ctx.scaleReuse.set(s.name, { stamp: stamp!, entry, rows: scaleRowsOf(s, ctx), epoch: ctx.dsEpoch })
   }
   ctx.draft.scaleEntries = entries
   ctx.draft.scales = new Map(ctx.scales)
 }
 
-/** True when a scale domain references an affected dataset (data or multi-field). */
-function domainReferencesAffected(domain: ScaleDomain, affected: Set<string>): boolean {
-  if (domain && typeof domain === 'object' && !Array.isArray(domain)) {
-    const d = (domain as { data?: unknown }).data
-    if (typeof d === 'string' && affected.has(d)) return true
-    const fields = (domain as { fields?: Array<{ data?: string }> }).fields
-    if (Array.isArray(fields)) {
-      for (const f of fields) if (f && typeof f.data === 'string' && affected.has(f.data)) return true
-    }
-  }
-  return false
+/**
+ * `sameSettings`, but a band, point or ordinal scale given a domain override (`domainRaw`) reads its own domain nowhere (the override
+ * is the domain, and the scale's family is not chosen by it), so the domain its data would give is left out of the comparison.
+ */
+function sameScaleSettings(type: string, a: Settings, b: Settings): boolean {
+  if (DISCRETE_TYPES.has(type) && a.domainRaw && b.domainRaw) return sameSettings({ ...a, domain: undefined }, { ...b, domain: undefined })
+  return sameSettings(a, b)
 }
 
 /** True for a `{ fields: [...] }` scale domain (several data fields feed one scale). */
@@ -3516,12 +4271,18 @@ function reusablePulse(
   } else if (rowCount !== prevItems.length) {
     return null
   }
-  if (mark.sort || mark.transform?.length) return null
+  if (mark.sort || mark.transform?.length || forceBound(mark, ctx.chart)) return null
   const deps = markDepsOf(mark, ctx.chart)
   // Reading other datasets from an expression: an unchanged row can still
   // encode differently, and no pulse describes that.
   if (deps.allData) return null
-  if (prev.fp !== ctx.draft.fp) return null
+  const key = ctx.draft.markKeys.get(mark)
+  if (key === undefined || prev.markKeys.get(mark) !== key) return null
+  if (prev.fp !== ctx.draft.fp) {
+    // (signals changed: none the mark reads, and the other datasets it reads must be as they were; see canReuseMarkGroup)
+    if (!followsChanges(ctx) || !cleanPass(ctx) || markReadsOf(mark, ctx.chart) === null) return null
+    for (const n of deps.names) if (n !== source && !sameRows(ctx, n)) return null
+  }
   for (const name of markScaleNames(mark, ctx.chart)) {
     if (ctx.scales.get(name) !== prev.scales.get(name)) return null
   }
@@ -3538,6 +4299,7 @@ function evaluateMark(
   mark: CompiledMark,
   ctx: EvalContext,
   prevGroup?: SceneGroup | null,
+  given?: GivenPulse,
 ): SceneGroup | SceneGroup[] | null {
   // (the encode of a mark that reads what a late signal took with it never ran: its items are the join's)
   if (ctx.lateTaint !== undefined && !ctx.bareEncode && readsTaint({ encode: mark.encode, from: mark.from }, ctx)) ctx = { ...ctx, bareEncode: true }
@@ -3548,7 +4310,7 @@ function evaluateMark(
   ctx.markGradients = own
   let built: SceneGroup | SceneGroup[] | null
   try {
-    built = evaluateMarkItems(mark, ctx, prevGroup)
+    built = evaluateMarkItems(mark, ctx, prevGroup, given)
   } finally {
     ctx.markGradients = outer
   }
@@ -3582,6 +4344,7 @@ function evaluateMarkItems(
   mark: CompiledMark,
   ctx: EvalContext,
   prevGroup?: SceneGroup | null,
+  given?: GivenPulse,
 ): SceneGroup | SceneGroup[] | null {
   // a scale or an encode that threw stopped vega's run: the marks after it were never joined, so they are not in the scenegraph
   if (ctx.encodeAborted) return null
@@ -3637,9 +4400,9 @@ function evaluateMarkItems(
     // sample the wall clock inside the encode loops.
     const meter = activeMeter()
     if (meter) meter.items(encodeRows.length, `mark ${mark.type} encoding`)
-    const pulse = reusablePulse(mark, ctx, source, encodeRows.length, prevGroup)
+    const pulse = given !== undefined ? given.pulse : reusablePulse(mark, ctx, source, encodeRows.length, prevGroup)
     if (pulse) {
-      const prevItems = prevGroup!.items as SceneItem[]
+      const prevItems = given !== undefined ? given.items : prevGroup!.items as SceneItem[]
       const gen = ctx.gen
       if (ctx.markGradients) ctx.markGradients.partial = true
       // (an interactive mark's transparent items are marked `_hit` as they are encoded: an update touches only these)
@@ -3752,6 +4515,7 @@ function evaluateMarkItems(
   // vega's SortItems: a mark `sort` orders the ENCODED items by their own
   // properties (`x`, `datum.t`, `datum["t"]`), after the encode and before the
   // bound pass; stable. A sort that throws stops the pass there: the items stay in data order.
+  const rowOrder = items
   if (mark.sort && source && !stoppedAfterEncode && transformed && sortRuns(mark, ctx)) {
     try { items = sortMarkItems(items, mark.sort) } catch (e) {
       failPass(ctx, { axis: Infinity, mark: ctx.scope.mark ?? 0, afterEncode: true }, e)
@@ -3881,7 +4645,114 @@ function evaluateMarkItems(
     GROUP_BOUNDS.set(group, carriedBounds)
   }
   if (pendingUndo && prevGroup) supersedeItems(prevGroup, group, pendingUndo)
+  if (rowOrder !== items) ROW_ITEMS.set(group, rowOrder)
   return group
+}
+
+/** The items of a sorted leaf mark in the order of its rows (the group's `items` are in the sort's order). */
+const ROW_ITEMS = new WeakMap<SceneGroup, SceneItem[]>()
+
+/** A pulse a caller worked out for a mark's rows, and the items (in row order) it is relative to: see `evaluateInstanceMark`. */
+interface GivenPulse { pulse: StepPulse; items: SceneItem[] }
+
+/**
+ * A leaf mark inside a group item (a facet's cell, a concat's view, a line per category). The evaluation before made it in the item of
+ * the same key (`InstanceMark`); it is kept when nothing it reads changed, and only the rows that changed are encoded when its rows
+ * changed. What it reads: its key (`markKeyOf` in the item's scope: the signals it names, the size), the group item (its box, datum,
+ * `parent` and encode, compared by value), the scales it reads and the other datasets it reads (the same objects), and its rows,
+ * compared by value with the data its items were made from (`diffRows` over each item's `datum`, a copy made when it was encoded).
+ * Rows that differ only where they are (an append, an edit, a removal, a move) splice the items; a mark with transforms, one bound to
+ * a force's links, one that reads datasets from expressions, and a pass that failed, under `limits` or cut short, are made in full.
+ * The items it is relative to are never written: a splice makes a new array.
+ */
+function evaluateInstanceMark(mark: CompiledMark, ctx: EvalContext, id: string, itemContext: Record<string, unknown>): SceneGroup | SceneGroup[] | null {
+  const source = mark.from?.data
+  const eligible = mark.type !== 'group' && !mark.transform?.length && source !== undefined && ctx.datasets.has(source)
+    && !forceBound(mark, ctx.chart) && !readsAllDataInScope(mark, ctx.chart)
+  if (!eligible) return evaluateMark(mark, ctx)
+  // (what it reads of the signals: as a top-level mark's, its `from` being a dataset of its scope, see `readsAllDataInScope`)
+  const key = markKeyOf(mark, ctx, namesMentioned(mark, ctx.chart))
+  const scales = markScaleNames(mark, ctx.chart).map((n) => [n, ctx.scales.get(n)] as const)
+  // (the datasets it names, and those its expressions read by name: a selection's store; as arrays, which an edit makes anew)
+  const named = markDepsOf(mark, ctx.chart)
+  const deps = [...new Set([...named.names, ...named.exprData])].filter((n) => n !== source).sort().map((n) => [n, ctx.datasets.get(n)] as const)
+  const rows = ctx.datasets.get(source)!
+  const prev = ctx.prev?.instances.get(id)
+  let given: GivenPulse | undefined
+  if (prev !== undefined && prev.key === key && cleanPass(ctx) && ctx.abort.cut === undefined && activeMeter() === null
+    && ctx.lateTaint === undefined && ctx.bareEncode !== true && !ctx.encodeAborted
+    && prev.scales.length === scales.length && prev.scales.every(([n, sc], i) => scales[i]![0] === n && scales[i]![1] === sc)
+    && prev.deps.length === deps.length && prev.deps.every(([n, d], i) => deps[i]![0] === n && deps[i]![1] === d)
+    && equalCell(prev.item, itemContext)) {
+    const datums = prev.rowItems.map((it) => (it as { datum?: unknown }).datum)
+    const diff = datums.every((d) => d !== null && typeof d === 'object') ? diffRows(datums, rows) : null
+    if (diff !== null && diff.sameLength && diff.changed.length === 0) {
+      // (nothing it reads changed: the mark is the one the evaluation before made)
+      keepInstanceMark(mark, ctx, prev.group)
+      ctx.draft.instances.set(id, { ...prev, item: itemContext })
+      return prev.group
+    }
+    if (diff !== null) given = { pulse: diff.sameLength ? { changed: diff.changed } : { changed: diff.changed, from: diff.from ?? appendMapping(datums.length, rows.length), ...(diff.to ? { to: diff.to } : {}) }, items: prev.rowItems }
+  }
+  const built = evaluateMark(mark, ctx, given !== undefined ? prev!.group : null, given)
+  // (only a mark made whole in a pass that has not failed is a base: one whose encode threw is what the failure left of it)
+  if (built !== null && !Array.isArray(built) && cleanPass(ctx) && ctx.abort.cut === undefined && activeMeter() === null) {
+    ctx.draft.instances.set(id, { group: built, rowItems: ROW_ITEMS.get(built) ?? (built.items as SceneItem[]), key, item: itemContext, scales, deps })
+  }
+  return built
+}
+
+/**
+ * Whether a mark may read the group item it is in beyond its box: a field reference to the group or to the parent (`{field: {group:
+ * "datum.k"}}`, `{field: {parent: "count"}}`), anywhere in it. An expression reads the item's datum as the signal `parent` of the
+ * item's scope, which is in the mark's key by its value (`markKeyOf`); `group()` and `item` are event functions, which an encode
+ * cannot call.
+ */
+const READS_GROUP_ITEM = new WeakMap<CompiledMark, boolean>()
+function readsGroupItem(mark: CompiledMark): boolean {
+  let out = READS_GROUP_ITEM.get(mark)
+  if (out !== undefined) return out
+  out = false
+  const visit = (v: unknown, depth: number): void => {
+    if (out || depth > 64) { out = true; return }
+    if (v === null || typeof v !== 'object') return
+    if (Array.isArray(v)) { for (const x of v) visit(x, depth + 1); return }
+    for (const [k, x] of Object.entries(v)) {
+      if (k === 'group' || k === 'parent') { out = true; return }
+      visit(x, depth + 1)
+    }
+  }
+  visit(mark, 0)
+  READS_GROUP_ITEM.set(mark, out)
+  return out
+}
+
+/**
+ * `markDepsOf(mark).allData`, for a mark inside a group item whose `from` is a dataset of its scope (a facet's partition, a group's
+ * own data): such a name is not one of the view's datasets, which `markDepsOf` takes for a mark's name. Its other reasons stand.
+ */
+const SCOPED_ALL_DATA = new WeakMap<CompiledMark, boolean>()
+function readsAllDataInScope(mark: CompiledMark, chart: CompiledChart): boolean {
+  let out = SCOPED_ALL_DATA.get(mark)
+  if (out === undefined) SCOPED_ALL_DATA.set(mark, (out = markDepsOf({ ...mark, from: undefined }, chart).allData))
+  return out
+}
+
+/** For rows appended to `before` rows (a diff that names no mapping), each row's index among the rows before, or -1 for a new one. */
+function appendMapping(before: number, length: number): number[] {
+  const from = new Array<number>(length)
+  for (let i = 0; i < length; i++) from[i] = i < before ? i : -1
+  return from
+}
+
+/** What a kept leaf mark leaves the evaluation, as `evaluateMark` leaves a mark it makes: its gradients, and its items by its name. */
+function keepInstanceMark(mark: CompiledMark, ctx: EvalContext, group: SceneGroup): void {
+  const kept = GROUP_GRADIENTS.get(group)
+  if (kept !== undefined) addDefs(ctx, kept)
+  if (typeof mark.name === 'string') {
+    ctx.markItems.set(mark.name, (group.items ?? []) as SceneItem[])
+    ctx.markContainers.set(mark.name, group as unknown as { marktype: string; items: SceneItem[] })
+  }
 }
 
 /**
@@ -4457,6 +5328,7 @@ function buildGroupItem(mark: CompiledMark, ctx: EvalContext, entered: EnteredGr
     const scope: GuideScope = {
       parent: ctx.scope, path, nextChild: { n: 0 }, unsettled: late || unsettled || (itemAt >= 0 && itemAt > failing!.at) || holdsFailedLayout(path, failing),
       scales: mark.scales ?? NO_DECLARED, data: mark.data ?? NO_DECLARED, facet: src.facetName,
+      keyPath: `${ctx.scope.keyPath ?? ''}/${markIdOf(mark)}[${src.key ?? ''}]`,
     }
     if (hasContent && !hollow) noteInstance(scope, path)
     const childCtx: EvalContext = {
@@ -4477,10 +5349,15 @@ function buildGroupItem(mark: CompiledMark, ctx: EvalContext, entered: EnteredGr
 
     const content: SceneGroup[] = []
     const children = hollow || order > 0 || (order === 0 && !whole && !madeMarks(ctx.abort.cut!)) ? [] : mark.marks ?? []
+    // (what the marks of this item read of it besides their data and scales: its box, and for a mark that reads its group item or its
+    // `parent` (see `readsGroupItem`), the item's datum, its `parent` and what its encode gave it)
+    const { datum: _datum, ...encoded } = geo
+    const box = { x: gx, y: gy, width: gw, height: gh }
+    const itemContext = { ...box, datum: src.datum, parent: scopeParams.parent, encoded }
     for (let at = 0; at < children.length; at++) {
       const child = children[at]!
       scope.mark = at
-      const r = evaluateMark(child, childCtx)
+      const r = evaluateInstanceMark(child, childCtx, `${scope.keyPath}#${markIdOf(child)}`, readsGroupItem(child) ? itemContext : box)
       if (r) pushAll(content, Array.isArray(r) ? r : [r])
     }
     // (the entries of a symbol legend are instances of their own, after this scope's groups: one the pass never got to
@@ -5521,9 +6398,8 @@ const DATAFLOW_FUNCTIONS = new Set([
 ])
 const VIEW_SIGNALS = new Set(['width', 'height', 'padding', 'autosize', 'background', 'cursor', 'origin', 'parent', 'datum', 'event', 'item'])
 
-function expressionIdentifiers(text: string): string[] {
-  return (text.replace(/'(?:[^'\\]|\\.)*'|"(?:[^"\\]|\\.)*"/g, '""').match(/(?<![.\w$])[A-Za-z_$][\w$]*/g)) ?? []
-}
+/** The names an expression reads by themselves, as the lexer reads them (see `identifiersIn`). */
+const expressionIdentifiers = identifiersIn
 
 /**
  * Whether a view signal is ranked after the data and scales (see scaleIsLate): it calls a function that reads data or a scale,
@@ -5578,7 +6454,6 @@ function scaleIsLate(sdef: CompiledScale, scope: GuideScope, chart: CompiledChar
   return late(params)
 }
 
-const SCALE_NAME_CALL = /\b(?:domain|range|scale|bandwidth|bandspace|invert|copy|gradient)\s*\(\s*(?:'([^']*)'|"([^"]*)")/g
 
 interface SpecReads { signals: Set<string>; scales: Set<string>; data: Set<string> }
 const newReads = (): SpecReads => ({ signals: new Set(), scales: new Set(), data: new Set() })
@@ -5591,7 +6466,7 @@ function specReads(node: unknown, out: SpecReads, depth = 0): void {
     if (typeof v === 'string') {
       if (k === 'signal' || k === 'expr' || k === 'update' || k === 'init' || k === 'test') {
         for (const id of expressionIdentifiers(v)) out.signals.add(id)
-        for (const m of v.matchAll(SCALE_NAME_CALL)) out.scales.add((m[1] ?? m[2])!)
+        for (const sc of scalesReadIn(v)) out.scales.add(sc)
       } else if (k === 'data' || k === 'source' || k === 'from') out.data.add(v)
       else if (k === 'scale') out.scales.add(v)
     } else specReads(v, out, depth + 1)

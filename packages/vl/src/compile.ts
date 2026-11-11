@@ -7,8 +7,9 @@
  * oracle's; the rendered output must not.
  */
 
-import { renameDataRefs, renameExpr, renameFragment } from './embed.js'
+import { EXPRESSION_KEYS, relabelUnits, renameDataRefs, renameExpr, renameFragment } from './embed.js'
 import { optimizeData } from './optimize.js'
+import { tokenize } from './expr-tokens.js'
 import { VLCompileError, pushAll, flatField, datumRef as dref, genName, safeKey, splitAccessPath } from './names.js'
 import { validateGeoUnit, validateSpec } from './validate.js'
 import { markChannelCompatible } from './channels.js'
@@ -357,16 +358,13 @@ function nameViewParts(out: Record<string, unknown>, prefix: string, except: rea
   }
   // a selection's tuples say which unit they came from: the unit is named after the view too (`unit: "layer_0"` is `unit: "outer_layer_0"`)
   const root = prefix.slice(0, -1)
-  const unitLabel = /\bunit(: | === )"([^"]+)"/g
-  const relabel = (v: unknown): unknown => {
-    if (typeof v === 'string') {
-      return v
-        .replace(unitLabel, (m, op: string, unit: string) => (unit === root || unit === rawName || unit.startsWith(prefix) || unit.startsWith('child__') || except.some((p) => unit.startsWith(p)) ? m : `unit${op}"${prefix}${unit}"`))
-        // (and the mark a facet's cell is read from is named after the view like every mark)
-        .replace(/\bgroup\("([^"]+)"\)/g, (m, mark: string) => (mark.startsWith(prefix) || except.some((p) => mark.startsWith(p)) ? m : `group("${prefix}${mark}")`))
-    }
-    if (Array.isArray(v)) return v.map(relabel)
-    if (isObject(v)) return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, k === 'values' ? x : relabel(x)]))
+  const keepUnit = (unit: string): boolean => unit === root || unit === rawName || unit.startsWith(prefix) || unit.startsWith('child__') || except.some((p) => unit.startsWith(p))
+  const keepMark = (mark: string): boolean => mark.startsWith(prefix) || except.some((p) => mark.startsWith(p))
+  // (in the expressions of the view, read token by token: `unit: "x"` / `unit === "x"`, and `group("x")`; a title that says so is text)
+  const relabel = (v: unknown, key = ''): unknown => {
+    if (typeof v === 'string') return EXPRESSION_KEYS.has(key) ? relabelUnits(v, keepUnit, keepMark, prefix) : v
+    if (Array.isArray(v)) return v.map((x) => relabel(x, key))
+    if (isObject(v)) return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, k === 'values' ? x : relabel(x, k)]))
     return v
   }
   const relabelAll = (node: Record<string, unknown>): void => {
@@ -951,6 +949,11 @@ function compileLayered(spec: VLSpec, ctx: CompileCtx): VLSpec {
     uniquifyLayerMarks(builtMarks, leafName ?? (LEAF_PATHS.get(p.l)?.length ? LEAF_PATHS.get(p.l)!.map((n) => `layer_${n}`).join('_') : i))
     perLayerMarks.push(builtMarks)
     const layerScales = buildScales(p.l, p.fields, p.mark, p.orient, p.scaleName, wSpec, hSpec, p.seriesFields, p.rawName)
+    {
+      const at = LEAF_PATHS.get(p.l)
+      const where = `layer ${at?.length ? at.join('.') : i} (${p.mark})`
+      for (const sc of layerScales) SCALE_SOURCE.set(sc, where)
+    }
     // (shared scales are judged merged, below; an independent y scale is the layer's own)
     if (isObject(spec.resolve) && isObject((spec.resolve as Record<string, unknown>).scale) && ((spec.resolve as Record<string, Record<string, unknown>>).scale as Record<string, unknown>).y === 'independent') showInvalidValues(p.l, p.fields, p.mark, layerScales, builtMarks, (ch) => ch === 'y')
     perLayerScales.push(layerScales)
@@ -1493,6 +1496,18 @@ const compatibleScaleTypes = (a: string, b: string): boolean => {
 /** What a point scale's band padding would be, were its scale a band (a layer that brings none): the unit's mark rule. */
 const POINT_BAND_PADDING = new WeakMap<ScaleSpec, { inner: number; outer: number | undefined }>()
 
+/**
+ * Where a scale was made, for an error that names the layers or views whose scales disagree: `layer 1 (text)` (a nested layer is
+ * `layer 1.0 (text)`), `view concat_0`. Not part of the compiled spec.
+ */
+const SCALE_SOURCE = new WeakMap<ScaleSpec, string>()
+
+/** A domain sort as an error shows it: its JSON, cut at 200 characters (a spec's own values, of any size, end up here). */
+function sortText(sort: unknown): string {
+  const text = JSON.stringify(sort) ?? String(sort)
+  return text.length > 200 ? `${text.slice(0, 200)}…` : text
+}
+
 function mergeLayerScales(perLayer: ScaleSpec[][]): ScaleSpec[] {
   const byName = new Map<string, ScaleSpec[]>()
   for (const ls of perLayer) {
@@ -1582,7 +1597,8 @@ function mergeLayerScales(perLayer: ScaleSpec[][]): ScaleSpec[] {
     // (scale/domain.ts mergeValuesWithExplicit on `domains`: an explicitly specified domain beats the implicit ones; only
     // domains of the same explicitness are unioned)
     const explicitDomains = list.filter((s) => EXPLICIT_SCALE_PROPS.get(s)?.has('domain'))
-    const domains = (explicitDomains.length ? explicitDomains : list).map((s) => s.domain)
+    const domainScales = explicitDomains.length ? explicitDomains : list
+    const domains = domainScales.map((s) => s.domain)
     if (explicitDomains.length) explicitMerged.add('domain')
     if (domains.every((d) => deepEq(d, domains[0]))) merged.domain = domains[0]
     else {
@@ -1592,9 +1608,17 @@ function mergeLayerScales(perLayer: ScaleSpec[][]): ScaleSpec[] {
         if (!e) throw new VLCompileError(`layers give scale "${name}" different explicit or signal-based domains, which cannot be merged`)
         for (const x of e) if (!entries.some((y) => deepEq(x, y))) entries.push(x)
       }
-      const sorts = domains.map((d) => (isObject(d) ? (d as { sort?: unknown }).sort : undefined)).filter((x) => x !== undefined)
+      const sorted = domainScales
+        .map((s) => ({ scale: s, sort: isObject(s.domain) ? (s.domain as { sort?: unknown }).sort : undefined }))
+        .filter((x) => x.sort !== undefined)
+      const sorts = sorted.map((x) => x.sort)
       if (sorts.length && !sorts.every((x) => deepEq(x, sorts[0]))) {
-        throw new VLCompileError(`layers sort the shared scale "${name}" differently`)
+        // which layer (or view) has which sort: a sort the spec writes once, in a shared encoding, can still differ when each layer
+        // fills in its own default `op` (a bar sums, a text takes the minimum)
+        const each = sorted.map((x) => `${SCALE_SOURCE.get(x.scale) ?? 'a layer'} ${sortText(x.sort)}`).join(', ')
+        const opOnly = sorts.every((x) => isObject(x) && isObject(sorts[0]) && deepEq({ ...x, op: undefined }, { ...(sorts[0] as Record<string, unknown>), op: undefined }))
+        const who = sorted.every((x) => SCALE_SOURCE.get(x.scale)?.startsWith('view ')) ? 'views' : 'layers'
+        throw new VLCompileError(`${who} sort the shared scale "${name}" differently: ${each}${opOnly ? '; they differ only in "op": give the sort an explicit "op"' : ''}`)
       }
       const sort = sorts[0]
       const refs = entries.filter((e): e is { data: string; field: string } => !Array.isArray(e) && 'data' in e)
@@ -1731,6 +1755,42 @@ function compileFacetedComposition(spec: VLSpec, ctx: CompileCtx, nested: string
   return out as VLSpec
 }
 
+/**
+ * Rename the names the compiler generated with a prefix (`child_layer_0_...`) in a compiled view: a whole string that is a name
+ * (a mark's, a dataset's, a signal's, a field the compiler made), and, in an expression, each name and string literal it spells (read
+ * token by token, so a title or any other text that merely contains the prefix is left as it is). A string the user wrote anywhere in
+ * the input spec -- or that one of its expressions spells -- is the user's, not a generated name, and keeps its spelling.
+ */
+function renameGeneratedPrefix(out: unknown, prefix: RegExp, to: (index: string) => string | undefined, input: unknown): unknown {
+  const users = new Set<string>()
+  const collect = (v: unknown): void => {
+    if (typeof v === 'string') { users.add(v); for (const t of tokenize(v)) if (t.value !== undefined) users.add(t.value) }
+    else if (Array.isArray(v)) v.forEach(collect)
+    else if (isObject(v)) for (const [k, x] of Object.entries(v)) { users.add(k); collect(x) }
+  }
+  collect(input)
+  const renamed = (name: string): string | undefined => {
+    if (users.has(name)) return undefined
+    const m = prefix.exec(name)
+    const head = m ? to(m[1]!) : undefined
+    return m && head !== undefined ? head + name.slice(m[0].length) : undefined
+  }
+  const walk = (v: unknown, key: string): unknown => {
+    if (typeof v === 'string') {
+      if (!EXPRESSION_KEYS.has(key)) return renamed(v) ?? v
+      return tokenize(v).map((t) => {
+        if (t.kind !== 'name' && t.kind !== 'string') return t.raw
+        const r = renamed(t.value!)
+        return r === undefined ? t.raw : t.kind === 'string' ? JSON.stringify(r) : r
+      }).join('')
+    }
+    if (Array.isArray(v)) return v.map((x) => walk(x, key))
+    if (isObject(v)) return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, k === 'values' ? x : walk(x, k)]))
+    return v
+  }
+  return walk(out, '')
+}
+
 /** Compile a faceted chart (encoding.facet / top-level facet + spec). */
 function compileFaceted(spec: VLSpec, ctx: CompileCtx, nested = ''): VLSpec {
   if (isObject(spec.facet) && isLayerRepeat(spec.spec)) {
@@ -1751,8 +1811,7 @@ function compileFaceted(spec: VLSpec, ctx: CompileCtx, nested = ''): VLSpec {
     // (vega-lite names each repeated layer after its value: `child__layer_w_marks`)
     const values = (rep.repeat as Record<string, unknown>).layer as unknown[]
     const pre = childModelName(nested, 'child')
-    const text = JSON.stringify(res).replace(new RegExp(`${pre}_layer_(\\d+)_`, 'g'), (m, i: string) => (values[Number(i)] === undefined ? m : `${pre}__layer_${varName(String(values[Number(i)]))}_`))
-    return JSON.parse(text) as VLSpec
+    return renameGeneratedPrefix(res, new RegExp(`^${pre}_layer_(\\d+)_`), (i) => (values[Number(i)] === undefined ? undefined : `${pre}__layer_${varName(String(values[Number(i)]))}_`), spec) as VLSpec
   }
   if (isObject(spec.facet) && isComposition(spec.spec)) return compileFacetedComposition(spec, ctx, nested)
   // (the names of a facet and of everything it makes are its model's: those of a facet inside a facet start with `child`, and its own child
@@ -2815,6 +2874,7 @@ function embedCells(cells: CompositeCell[], parent: VLSpec, ctx: CompileCtx, lay
         if (l) l.push(sc)
         else scaleLists.set(sc.name, [sc])
         sharedNames.push(sc.name)
+        SCALE_SOURCE.set(sc, `view ${prefix.replace(/_$/, '')}`)
       }
     }
     // shared legends: the first child that has a channel defines it; titles join
@@ -8761,7 +8821,9 @@ function prepareUnitSelections(
       applyTextualChannels(u, spec, fields)
       const t = u.tooltip as { signal?: string; value?: unknown } | undefined
       if (!t) return {}
-      return { tooltip: t.signal !== undefined ? { signal: t.signal.replace(/\bdatum\b(?!\.datum)/g, 'datum.datum') } : t }
+      // (the voronoi cell's datum is the point's item: the row is its `datum`, read by name, never inside a string -- a field or a
+      // title spelled `datum` is text; vega-lite builds the tooltip with that prefix, `reactiveGeom`)
+      return { tooltip: t.signal !== undefined ? { signal: renameExpr(t.signal, { signals: new Map([['datum', 'datum.datum']]), scales: new Map() }) } : t }
     },
   }
   const cmpts = parseUnitSelections(unit, params, spec.config)

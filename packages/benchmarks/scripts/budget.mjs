@@ -223,23 +223,56 @@ cli({ url: import.meta.url })
 // Transitions stacked on the fit-view work (feat/127-transitions rebased onto perf/fit-incremental), measured on a clean build of
 // the combined tree (kB gzip): core 153.0, useChart 164.6, Chart 207.3, SvgChart 184.4, SvgChart + interaction 201.9, Chart + VL
 // 310.6, + @aster-charts/core/transition 3.1. Ceilings are the measured value + 0.5.
+// Signal-scoped reuse (perf/signal-scoped-reuse: marks and scales keyed by the signals they read, the datasets' copies and the steps
+// that read a dataset by name kept), measured 2026-11-10 on a clean build against origin/main's e31d61c (kB gzip, before -> after):
+// core 153.0 -> 154.5, useChart 164.6 -> 166.1, Chart 207.4 -> 208.7, SvgChart 184.4 -> 185.8, SvgChart + interaction 202.0 -> 203.3,
+// Chart + VL 310.6 -> 312.1; the marginal rows did not move. Ceilings are the measured value + 0.5.
+// Selections under signal changes (perf/selection-signal-reuse: dataset builds kept between rounds and passes, marks keyed by the
+// datasets they read by name, pulses with a signal change, keys read as the expression lexer reads names), measured 2026-11-10 on a
+// clean build against its base 082a700 (kB gzip, before -> after): core 154.5 -> 155.7, useChart 166.1 -> 167.4, Chart 208.7 ->
+// 210.0, SvgChart 185.8 -> 187.1, SvgChart + interaction 203.3 -> 204.4, Chart + VL 312.1 -> 313.3; + core/dom 10.6 -> 10.7 (within
+// its ceiling), the other marginal rows did not move. Ceilings are the measured value + 0.5.
+// Identifier numbers across rounds and expression names read as the lexer reads them (the same branch: `carriedFrom`, datasets that
+// read a scale ranked after it, the parsed expression at every site that read names with a pattern), measured 2026-11-10 on a clean
+// build (kB gzip, before -> after): core 155.7 -> 156.2, useChart 167.4 -> 167.8, Chart 210.0 -> 210.5, SvgChart 187.1 -> 187.6,
+// SvgChart + interaction 204.4 -> 204.9, Chart + VL 313.3 -> 313.9; the marginal rows within their ceilings. Ceilings are the
+// measured value + 0.5.
+// Identifier numbers by source rows and the Vega-Lite compiler's expression tokenizer (the same branch), measured 2026-11-10 on a clean
+// build (kB gzip, before -> after): core 156.2 -> 156.8, useChart 167.8 -> 168.4, Chart 210.5 -> 211.1, SvgChart 187.6 -> 188.1,
+// SvgChart + interaction 204.9 -> 205.5, Chart + VL 313.9 -> 315.6 (the tokenizer, and the renames that read it); the marginal rows
+// within their ceilings. Ceilings are the measured value + 0.5.
+// A pulse through an identifier after a filter (source rows followed through the steps; the same branch), measured 2026-11-10 on a
+// clean build (kB gzip, before -> after): core 156.8 -> 157.1 (within its ceiling), core/dom 11.3 (its ceiling was 11.1: the
+// incremental engine is in that chunk), useChart 168.4 -> 169.4, Chart 211.1 -> 212.1, SvgChart 188.1 -> 189.1, SvgChart +
+// interaction 205.5 -> 206.5, Chart + VL 315.6 -> 316.7. Ceilings are the measured value + 0.5.
+// Discrete scales kept over row changes (the category census, scales kept for their settings; perf/discrete-scale-appends),
+// measured 2026-11-10 on a clean build against its base 72ffeea (kB gzip, before -> after): core 157.1 -> 157.4 (its ceiling was
+// 157.3: raised to the measured value + 0.5); useChart 169.4 -> 169.8, Chart 212.1 -> 212.4, SvgChart 189.1 -> 189.5, SvgChart +
+// interaction 206.5 -> 206.8, Chart + VL 316.7 -> 317.1, each within its ceiling, which is unchanged; the marginal rows did not move.
+// Marks inside group items kept by instance and unchanged group items shared, published signals recorded per step, force-bound marks,
+// row cells compared as the scene sees them (the same branch), measured 2026-11-10 on a clean build (kB gzip, before -> after): core
+// 157.4 -> 159.4, useChart 169.8 -> 171.4, Chart 212.4 -> 214.0, SvgChart 189.5 -> 191.0, SvgChart + interaction 206.8 -> 208.4,
+// Chart + VL 317.1 -> 318.8; core/dom 11.3 -> 10.9 (the row diff is in the core chunk now, which the runtime calls). Ceilings are the
+// measured value + 0.5; the marginal rows are within theirs.
 const BUDGETS = {
-  '@aster-charts/core': 153.5 * 1024,
-  '+ @aster-charts/core/dom': 11.1 * 1024,
+  '@aster-charts/core': 159.9 * 1024,
+  '+ @aster-charts/core/dom': 11.8 * 1024,
   '+ @aster-charts/core/canvas': 6.4 * 1024,
   '+ @aster-charts/core/hit': 7.0 * 1024,
   '+ @aster-charts/core/signals': 13.4 * 1024,
   '+ @aster-charts/core/load': 5.9 * 1024,
   '+ @aster-charts/core/geo': 16.6 * 1024,
   '+ @aster-charts/core/transforms': 39.7 * 1024,
-  '+ @aster-charts/core/transition': 3.6 * 1024,
-  '@aster-charts/react useChart': 165.1 * 1024,
-  '@aster-charts/react Chart': 207.8 * 1024,
+  // drawsSame looks into a guide's metadata by its fields (perf/transition-retarget-by-identity), measured 2026-11-10 on a clean
+  // build: 3.7 kB gzip (was 3.3), an on-demand chunk only; no eager row moved. Ceiling is the measured value + 0.5.
+  '+ @aster-charts/core/transition': 4.2 * 1024,
+  '@aster-charts/react useChart': 171.9 * 1024,
+  '@aster-charts/react Chart': 214.5 * 1024,
   // The light chart (`@aster-charts/react/lite`): SVG only, no canvas renderer; alone and with the `interaction` capability.
-  '@aster-charts/react SvgChart': 184.9 * 1024,
-  '@aster-charts/react SvgChart + interaction': 202.4 * 1024,
+  '@aster-charts/react SvgChart': 191.5 * 1024,
+  '@aster-charts/react SvgChart + interaction': 208.9 * 1024,
   // Base + the VL compiler (opt-in: `import '@aster-charts/react/vl'`).
-  '@aster-charts/react Chart + VL': 311.1 * 1024,
+  '@aster-charts/react Chart + VL': 319.3 * 1024,
 }
 
 const THIS_DIR = dirname(fileURLToPath(import.meta.url))

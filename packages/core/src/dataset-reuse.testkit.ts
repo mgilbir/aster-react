@@ -43,7 +43,7 @@ interface Shape { numeric: string[]; any: string[] }
 function genStep(r: () => number, shape: Shape, dataset: string, index: number, published: string[], filters: string[], dense: boolean): { t: Record<string, unknown>; shape: Shape; draws?: boolean; publishes?: string; crossfilter?: boolean } {
   const num = (): string => pick(r, shape.numeric)
   const out = (base: string): string => `${base}_${dataset}${index}`
-  const kinds = ['formulaWidth', 'formulaSignal', 'formulaPure', 'filterSignal', 'binFixed', 'binSignal', 'binExtent', 'aggregate', 'collect', 'identifier', 'extent', 'window', 'project', 'stack', 'formulaRandom', 'sample', 'impute', 'crossfilter', 'resolvefilter', 'filterCount', 'formulaPool', 'formulaPool', 'binPool', 'formulaPositions', 'filterPositions']
+  const kinds = ['formulaWidth', 'formulaSignal', 'formulaPure', 'filterSignal', 'binFixed', 'binSignal', 'binExtent', 'aggregate', 'collect', 'identifier', 'extent', 'window', 'project', 'stack', 'formulaRandom', 'sample', 'impute', 'crossfilter', 'resolvefilter', 'filterCount', 'formulaPool', 'formulaPool', 'binPool', 'formulaPositions', 'filterPositions', 'filterData']
   const kind = dense ? pick(r, ['formulaPool', 'binPool', 'formulaPool', 'binPool', 'formulaWidth', 'formulaSignal']) : pick(r, kinds)
   const keep = shape.any
   switch (kind) {
@@ -81,6 +81,11 @@ function genStep(r: () => number, shape: Shape, dataset: string, index: number, 
       return { t: { type: 'formula', as, expr }, shape: { numeric: [...shape.numeric, as], any: [...keep, as] } }
     }
     case 'filterPositions': return { t: { type: 'filter', expr: pick(r, [`datum.${num()} > (sigA > 3 ? thr : 0)`, `datum.${num()} >= (sigB > 1 ? 0 : thr)`, `[thr, sigA][sigB % 2] <= datum.${num()}`]) }, shape }
+    // (a step that reads the rows of the first dataset by name: it is kept while they are equal)
+    case 'filterData': {
+      if (dataset === 't') return { t: { type: 'filter', expr: `datum.${num()} >= 0` }, shape }
+      return { t: { type: 'filter', expr: pick(r, [`datum.${num()} * 4 >= length(data('t'))`, `indata('t', 'x', datum.${num()}) || datum.${num()} > 6`]) }, shape }
+    }
     case 'crossfilter': { const sig = out('xf'); return { t: { type: 'crossfilter', signal: sig, fields: [num(), num()], query: [{ signal: 'rangeA' }, { signal: 'rangeB' }] }, shape, publishes: sig, crossfilter: true } }
     case 'resolvefilter': {
       if (!filters.length) return { t: { type: 'filter', expr: `datum.${num()} >= 0` }, shape }

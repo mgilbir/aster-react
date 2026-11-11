@@ -128,6 +128,79 @@ describe('the engine keeps a step only for rows it can tell are the ones it made
   })
 })
 
+describe('a step that reads a dataset by the name it spells out reads its rows', () => {
+  // (the frame filter of a vega-lite animation: the rows of the store, which every evaluation copies afresh)
+  const spec = {
+    width: 100, height: 100, autosize: 'none',
+    signals: [{ name: 'other', value: 1 }],
+    data: [
+      { name: 'store' },
+      {
+        name: 't', transform: [
+          { type: 'filter', expr: "!length(data('store')) || vlSelectionTest('store', datum)" },
+          { type: 'formula', as: 'n', expr: "indata('store', 'unit', '') ? 1 : 0" },
+        ],
+      },
+    ],
+    marks: [{ type: 'symbol', from: { data: 't' }, encode: { update: { x: { field: 'x' }, y: { field: 'n' } } } }],
+  } as unknown as VgSpec
+  const rows: Row[] = rowsOf(30)
+  const tuple = (v: number): Row => ({ unit: '', fields: [{ field: 'v', type: 'E' }], values: [v] })
+  const input = (store: Row[], other: number): RuntimeInput => ({ data: { t: rows, store }, signals: { other } })
+
+  // (a name it computes is refused when the spec is parsed, as vega does: the analysis keeps such a step out all the same)
+  it('kept while the rows it reads are equal, made again when they are not', () => {
+    const session = createChartSession()
+    session.evaluate(spec, input([], 1))
+    // (another, equal store; a signal the steps do not read)
+    const same = counted(() => session.evaluate(spec, input([], 2)))
+    expect(same.reused).toBe(2)
+    expect(same.ran).toBe(0)
+    expect(made(same.out)).toBe(made(evaluateChart(compileChart(spec), input([], 2))))
+    const moved = counted(() => session.evaluate(spec, input([tuple(3)], 3)))
+    expect(moved.reused).toBe(0)
+    expect(moved.ran).toBe(2)
+    expect(made(moved.out)).toBe(made(evaluateChart(compileChart(spec), input([tuple(3)], 3))))
+    const equal = counted(() => session.evaluate(spec, input([tuple(3)], 4)))
+    expect(equal.reused).toBe(2)
+    expect(made(equal.out)).toBe(made(evaluateChart(compileChart(spec), input([tuple(3)], 4))))
+    const other = counted(() => session.evaluate(spec, input([tuple(5)], 4)))
+    expect(other.reused).toBe(0)
+    expect(made(other.out)).toBe(made(evaluateChart(compileChart(spec), input([tuple(5)], 4))))
+  })
+})
+
+describe('a dataset with no transforms keeps the copy it made of the rows it was given', () => {
+  const spec = {
+    width: 100, height: 100, autosize: 'none',
+    data: [{ name: 't' }, { name: 'copy', source: 't' }, { name: 'd', source: 'copy', transform: [{ type: 'formula', as: 'w', expr: 'datum.x * width' }] }],
+    marks: [{ type: 'symbol', from: { data: 'd' }, encode: { update: { x: { field: 'w' } } } }],
+  } as unknown as VgSpec
+  const rows: Row[] = rowsOf(20)
+  const datasetsOf = (scene: SceneRoot): ReadonlyMap<string, unknown> => datasetsOfScene(scene) as ReadonlyMap<string, unknown>
+
+  it('kept while the session says the rows are the same, and the step made from it with it', () => {
+    const session = createChartSession()
+    const a = session.evaluate(spec, { data: { t: rows } })
+    const b = counted(() => session.evaluate(spec, { data: { t: rows.map((r) => ({ ...r })) }, width: 150 }))
+    expect(datasetsOf(b.out).get('t')).toBe(datasetsOf(a).get('t'))
+    expect(datasetsOf(b.out).get('copy')).toBe(datasetsOf(a).get('copy'))
+    expect(b.ran).toBe(1) // the formula reads the width
+    expect(made(b.out)).toBe(made(evaluateChart(compileChart(spec), { data: { t: rows }, width: 150 })))
+  })
+  it('copied again from other rows, and when not told', () => {
+    const session = createChartSession()
+    const a = session.evaluate(spec, { data: { t: rows } })
+    const next = rows.map((r, i) => (i === 3 ? { ...r, x: 99 } : r))
+    const b = session.evaluate(spec, { data: { t: next }, width: 150 })
+    expect(datasetsOf(b).get('t')).not.toBe(datasetsOf(a).get('t'))
+    expect(made(b)).toBe(made(evaluateChart(compileChart(spec), { data: { t: next }, width: 150 })))
+    const chart = compileChart(spec)
+    const first = evaluateChart(chart, { data: { t: rows } })
+    expect(datasetsOf(evaluateChart(chart, { data: { t: rows }, width: 150 })).get('t')).not.toBe(datasetsOf(first).get('t'))
+  })
+})
+
 describe("a group scope's dataset is kept with the rows it was made from", () => {
   const spec = {
     width: 100, height: 100, autosize: 'none',
@@ -162,6 +235,23 @@ describe("a group scope's dataset is kept with the rows it was made from", () =>
     const pending = evaluateChartPending(incrementalEngine, chart, { data: { t: live }, dataChanges: { t: live.map((_, i) => i) } })
     pending.commit()
     expect(made(pending.scene)).toBe(made(evaluateChart(compileChart(spec), { data: { t: live } })))
+  })
+
+  it('a pipeline that reads a dataset by name is made again (it is kept by the signals it mentions only)', () => {
+    const reads = {
+      width: 100, height: 100, autosize: 'none',
+      data: [{ name: 'store' }, { name: 't' }],
+      marks: [{
+        type: 'group',
+        data: [{ name: 'g', source: 't', transform: [{ type: 'filter', expr: "datum.v >= length(data('store'))" }] }],
+        marks: [{ type: 'symbol', from: { data: 'g' }, encode: { update: { x: { field: 'v' } } } }],
+      }],
+    } as unknown as VgSpec
+    const session = createChartSession()
+    const input = (n: number): RuntimeInput => ({ data: { t: rows, store: Array.from({ length: n }, (_, i) => ({ i })) } })
+    session.evaluate(reads, input(0))
+    const moved = session.evaluate(reads, input(5))
+    expect(made(moved)).toBe(made(evaluateChart(compileChart(reads), input(5))))
   })
 })
 

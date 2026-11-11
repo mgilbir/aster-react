@@ -17,7 +17,8 @@
     "bench:incremental": "tsx src/incremental.bench.tsx",
     "bench:scales": "node scripts/scale-build.bench.mjs",
     "bench:browser-stream": "tsx scripts/browser-stream.bench.mjs",
-    "bench:transition": "tsx scripts/transition.bench.mjs"
+    "bench:transition": "tsx scripts/transition.bench.mjs",
+    "bench:transition-retarget": "tsx scripts/transition-retarget.bench.mjs"
   },
   "dependencies": {
     "@aster-charts/core": "workspace:*",

@@ -89,17 +89,50 @@ function asRows(v: unknown): Record<string, unknown>[] | null {
   return Array.isArray(v) && (v.length === 0 || (v[0] != null && typeof v[0] === 'object')) ? v as Record<string, unknown>[] : null
 }
 
+/**
+ * Whether two cells hold the same value as the scene sees it: `Object.is` for a primitive (so `0` and `-0` differ, as a format or a
+ * scale's domain tells them apart, and `NaN` is `NaN`), the same instant for two Dates, and for plain arrays and objects the same
+ * entries, compared the same way, a bounded number of levels deep. Any other object is the same only when it is the same object.
+ */
 export function equalCell(a: unknown, b: unknown): boolean {
-  if (a === b) return true
+  if (a === b) return a !== 0 || Object.is(a, b)
   if (a == null || b == null || typeof a !== 'object' || typeof b !== 'object') {
     return a !== a && b !== b // NaN
   }
-  // Rows are usually flat. For nested values compare identity, then JSON as a
-  // last resort so a replaced nested array/dataset is still noticed.
-  try { return JSON.stringify(a) === JSON.stringify(b) } catch { return false }
+  return sameNested(a, b, 0)
 }
 
-/** Shallow row equality with a JSON fallback for nested values. */
+/** How deep `equalCell` looks into nested arrays and objects before it calls them different. */
+const NESTED_DEPTH = 32
+
+function sameNested(a: object, b: object, depth: number): boolean {
+  if (a === b) return true
+  if (depth > NESTED_DEPTH) return false
+  if (a instanceof Date || b instanceof Date) return a instanceof Date && b instanceof Date && Object.is(a.getTime(), b.getTime())
+  const proto = Object.getPrototypeOf(a)
+  if (proto !== Object.getPrototypeOf(b)) return false
+  if (proto === Array.prototype) {
+    const x = a as unknown[]
+    const y = b as unknown[]
+    if (x.length !== y.length) return false
+    for (let i = 0; i < x.length; i++) if (!sameValueAt(x[i], y[i], depth + 1)) return false
+    return true
+  }
+  if (proto !== Object.prototype && proto !== null) return false
+  const x = a as Record<string, unknown>
+  const y = b as Record<string, unknown>
+  const keys = Object.keys(x)
+  if (keys.length !== Object.keys(y).length) return false
+  for (const k of keys) if (!Object.hasOwn(y, k) || !sameValueAt(x[k], y[k], depth + 1)) return false
+  return true
+}
+
+function sameValueAt(a: unknown, b: unknown, depth: number): boolean {
+  if (a === null || b === null || typeof a !== 'object' || typeof b !== 'object') return Object.is(a, b)
+  return sameNested(a, b, depth)
+}
+
+/** Row equality: the same own fields, each `equalCell`. */
 export function rowsEqual(a: Record<string, unknown>, b: Record<string, unknown>): boolean {
   if (a === b) return true
   const proto = Object.getPrototypeOf(a)

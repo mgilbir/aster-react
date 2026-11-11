@@ -35,6 +35,10 @@ and Fixed, per package. Everything built before the first release is in [Pre-rel
 
 #### Changed
 
+- `@aster-charts/core/transition`: a running transition given a scene that draws like its end (a Vega-Lite `time`
+  animation's clock between two frames, a signal no mark reads) keeps its plan instead of planning again; `drawsSame(a, b)`
+  is exported. On 1,000 keyed rects: 0.18–0.27 ms instead of 1.01–1.13 ms per such scene, and 0.001–0.002 ms when the
+  scenes share the mark (`bench:transition-retarget`).
 - The container a host measured (`measuredSize`, which `<Chart>` passes when it has no size props) sizes the chart's whole
   box, as Vega-Lite's `"container"` does (autosize `fit` containing the padding): the content shrinks so padding and
   guides fit inside. It used to size the plot, with padding and axes added on top, so a chart overflowed the container
@@ -44,6 +48,36 @@ and Fixed, per package. Everything built before the first release is in [Pre-rel
   evaluation before. A one-row update on a 10,000-point chart went from 5.8 to 1.4 ms (Vega spec in a measured container) and
   from 37 to 4.5 ms (Vega-Lite `"container"`), about the cost of the same update at a fixed size. The scene is unchanged; a fit
   view now also keeps its first pass's state (and items) between evaluations.
+- A signal change keeps the top-level marks and scales that do not read it: a mark keeps its group and its items, a scale its
+  object, when the signals its definition names, the view's size and the datasets it reads are as they were. A tick of a
+  Vega-Lite `time` animation on 3,000 points (its clock advanced, its marks reading the frame's rows) went from 11.9 to 0.9 ms,
+  every item kept, until the frame moves. A dataset with no transforms keeps its copy of rows the session says are unchanged,
+  and a transform step that reads a dataset by a name it spells out (`data("store")`, `vlSelectionTest("store", datum)`) is
+  kept while that dataset's rows are equal. Marks with transforms, marks and scales that read datasets or scales from an
+  expression, and group marks are made again on any signal change, as before; so is everything under `limits` or in an
+  `evaluateChart` call without a change description. The scene is unchanged. A one-row stream append costs about 6 µs more.
+- Selections keep what they do not touch. A dataset built again in a later round of an evaluation (once a selection's
+  `vlSelectionResolve` signal resolves) or in the second pass of a fit view is kept when its inputs and what its steps read are
+  as they were, its `identifier` numbers included, so a point selection's dataset, and the scales over it, survive a signal
+  change. A mark that tests a store (`vlSelectionTest("brush_store", datum)`) is keyed by that store's rows and the signals it
+  names, not by every signal. A pulse runs through a pipeline whose reads did not change, whichever other signals did, so rows
+  appended while a hover or a brush moves encode only the new items. On 5,000 points: an unrelated signal 22.5 to 0.7 ms (point
+  selection), 17.2 to 0.6 ms (interval brush); a click 22.2 to 16.8 ms; a row appended while a signal moves 28.5 to 0.8 ms; in a
+  `"container"` view 47.6 to 1.8 ms; a brush drag through `<Chart>` in Chromium 115 to 82 ms per move. A drag step itself costs
+  about what it did (17.2 to 17.3-17.9 ms). Keys now read names as the expression lexer does (an escaped or non-ASCII name is the
+  name it spells), and a step that calls `random` by an escaped name is one that draws. The scene is unchanged.
+- A discrete scale over data (ordinal colour, shape, size and strokeDash; band; point) keeps its object when its rows change
+  and its result does not, so the marks that read it encode only the rows that changed. Rows of categories it has, appended or
+  edited, advance a census of the categories (also after Vega-Lite's validity filter); a removal, a reorder, a sort by count or
+  by an aggregate, a domain of several fields or datasets and a `domainRaw` read the scale's settings again and keep the scale
+  when they are the same. A new category, a category gone or a sort order that moves makes it again, with everything that reads
+  it. On 5,000 rows through a chart session: a row appended to a scatter coloured by a category 15.6 to 1.7 ms, a row removed 15.0
+  to 1.8 ms, a `createChartStream` append 14.8 to 0.6 ms; a bar chart with a nominal x 15.0 to 4.2-5.1 ms per append. A line per
+  category is drawn in a group mark: see the next entry. The scene is unchanged.
+- The marks inside group items (a line per category, a facet's cells, a concat's views, a group per row) are kept by the item they
+  are in, and encode only the rows that changed; a group item that did not change keeps its identity, with its guides and title.
+  On 5,000 rows through a chart session: a row appended to a line per category 18.4 to 3.0 ms, to a column facet 16.7 to 3.7 ms, to
+  two concatenated views 25.1 to 4.0 ms. The scene is unchanged.
 
 #### Added
 
@@ -59,6 +93,50 @@ and Fixed, per package. Everything built before the first release is in [Pre-rel
 - A spec that drives one view dimension itself keeps its other, numeric dimension when a host measures its container. A
   Vega-Lite spec with `width: "container", height: 200` in `<Chart>` grew on every measurement inside a block `<div>`
   with no height of its own, because the measured height replaced the 200 and the container grew with the chart (#128).
+- A mark drawn from the items of another mark (`from: {data: <mark name>}`) was empty after an update told that some other
+  dataset changed, when the mark it reads was kept from the evaluation before.
+- A dataset whose transform throws stops the pass before every mark, as in Vega. After an update told that some other
+  dataset changed, a mark kept from the evaluation before was drawn anyway.
+- A `filter` whose expression reads a scale, or a dataset the same update changed (`length(data("t"))` over its own source; a
+  selection's store edited together with the rows it filters), kept its verdict on the rows that had not changed: a pulse
+  judged only the new and modified rows, so rows a moved scale or store would now drop were drawn. It judges every row again.
+- A mark that reads a dataset's hierarchy (`treePath`, `treeAncestors`) or a scale through an expression that spells the
+  function's name with an escape was kept after its data changed.
+- An `identifier` after a transform that reads a scale numbered its rows again on every evaluation, with numbers another
+  dataset's rows held (a point picked in one selected a point of the other, and a picked point was lost on the next signal
+  change). Such a dataset is now numbered after the scale it reads, as in Vega, and its rows keep their numbers.
+- An `identifier` after a `filter` gave a row the filter let through again a new number. A row keeps the number of its source
+  row while that row lives, whether the filter passes it or not, as Vega's tuples do. This holds for appends too: they still run
+  from the rows the evaluation before made, and they follow only the rows they add. An append on 10,000 rows takes 0.29 ms
+  (0.28 ms before).
+- A scale was kept after an update with a domain or a range that was no longer right: a scale whose domain or range reads a dataset
+  or a scale from an expression (`{signal: "[0, length(data('t'))]"}`, a range ending at `bandwidth('x')`) when its own domain's
+  dataset did not change, and a scale whose range comes from another dataset (`range: {data: 'r', field: 'f'}`) when that dataset
+  changed. Both are now read again.
+- An ordinal scale that adds the categories it is asked for to its domain (`domainImplicit`, a `domainRaw`, or no domain) was
+  kept from one update to the next, with categories that rows since removed had added. It is made again on every evaluation.
+- A pulse through a step that publishes a signal (Vega-Lite's `{extent, param}`) kept the rows of the steps after it that read it
+  (a `calculate` over the extent): removing the row of the minimum left every other row normalised by the old extent. The steps
+  after such a step run over every row when the value it publishes moves.
+- After a node of a `force` layout with a `link` force was added or removed, the marks drawn from the link rows kept the paths of
+  the layout before. The force's mark and the marks reading its links are made again together on every evaluation.
+- A session that was not told what changed took `0` and `-0` in a row for one value, and compared nested values by JSON (`Infinity`
+  and `null` were one value, as were any two Maps). Cells compare as the scene sees them (`Object.is`, Dates by their instant).
+- A discrete scale was kept when an update told of the change (`dataChanges`) turned a category's first value from `0` into `-0`,
+  which the domain then lists.
+- Names spelled with escapes in expressions (an escaped `data`, `random` or signal name) were missed wherever the engine read
+  what an expression depends on: the order of datasets and signals, what a data change affects, which sites draw from an
+  injected `random` and what they read, `setdata`, late signals, a projection's fit, `init` signals that read data or scales, and
+  formulas over a hierarchy (`treePath`), which were also taken as row-local. They are read as the expression lexer reads them.
+
+### `@aster-charts/vl`
+
+#### Changed
+
+- Layers (or the views of a composition) that sort a shared scale differently are still refused, and the error now says which
+  layer has which sort: `layers sort the shared scale "y" differently: layer 0 (bar) {"op":"sum","field":"order"}, layer 1 (text)
+  {"op":"min","field":"order"}`. A sort written once in a shared encoding can differ per layer through each mark's default `op`;
+  when only the `op` differs, the error says to give the sort an explicit one (#135).
 
 ## 0.1.0 (2026-11-08): initial release
 

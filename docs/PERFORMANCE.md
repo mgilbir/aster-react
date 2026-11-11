@@ -43,6 +43,15 @@ the browser).
   and at the fitted size. Each pass of an update is made from the same pass of the evaluation before, so a one-row
   update re-encodes one item per pass instead of every item of the first pass. The view keeps both passes' state, so a fit view
   also retains the first pass's items between updates (not measured here; [ARCHITECTURE.md](ARCHITECTURE.md#incremental-evaluation)).
+- **Signal changes keep what does not read them**: a top-level mark keeps its group and its items, and a top-level scale its
+  object, when the signals its definition names, the view's size and the datasets it reads are as they were, whichever other
+  signals changed. A Vega-Lite `time` animation, whose clock ticks at 60 fps while its marks read the frame's rows, re-encodes
+  nothing until the frame moves. A mark that tests a selection's store keeps its items while the store's rows are as they were;
+  a point selection's numbered dataset and the scales over it are kept; and rows appended while a signal moves are a pulse that
+  encodes the new items only. Marks with transforms, scales that read datasets or scales from an expression, and datasets with
+  a step outside the kept-step list are made again on any signal change; group marks are made again, and the leaf marks inside
+  their items are kept as on a data change
+  ([ARCHITECTURE.md](ARCHITECTURE.md#incremental-evaluation)).
 - **Auto-pulse inference**: `rowsEqual` compares plain rows with `for...in` instead of two `Object.keys`
   allocations per row, so replacing the whole data array stays cheap even without explicit `dataChanges`.
 - **Per-datum updates**: sessions diff replaced immutable source arrays automatically (`autoChanges`), then
@@ -61,7 +70,16 @@ the browser).
   same-paint symbol runs batch into one fill/stroke, and append-only streamed scenes paint just the new mark
   items.
 - **Incremental scales**: continuous and discrete domains are reused when a changeset provably cannot move
-  them; append-only continuous updates patch the min/max census in O(appended) instead of rescanning.
+  them; append-only continuous updates patch the min/max census in O(appended) instead of rescanning. A discrete
+  scale over data (ordinal colour, shape, size, strokeDash; band; point) keeps its object when its rows change and its
+  result does not: rows of categories it has appended or edited advance a census of the categories in O(changed), also
+  after Vega-Lite's validity filter; any other change (a removal, a reorder, a sort by count or by an aggregate, several
+  fields or datasets, `domainRaw`) reads the scale's settings again and keeps the scale when they are the same. The marks
+  that read it then encode only the rows that changed. A new category, a category gone, or a sort order that moves makes
+  the scale, and everything that reads it, again ([ARCHITECTURE.md](ARCHITECTURE.md#incremental-evaluation)).
+- **Marks inside group items**: a line per category, a facet's cells and a concat's views keep the leaf marks inside them by
+  instance (the group item's key), encode only the rows that changed, and keep the group items, with their guides and titles, that
+  did not change ([ARCHITECTURE.md](ARCHITECTURE.md#incremental-evaluation)).
 - **DOM patching**: the first render emits the full SVG for SSR; later updates patch attributes in place.
   The mount commit skips the patcher (the browser just parsed that markup) and an append reuses the previous
   patch's descriptors as an identity prefix, so only the new items are created. Symbol descriptors are cached
@@ -134,6 +152,138 @@ A fit update now costs about what the fixed-size update of the same chart costs 
 Vega-Lite one, whose second pass also re-runs the formula and filter steps of its data); it was 3.7x and 15x. The first
 update after a fresh evaluation, after a resize, or after an update that moves the fitted size (a domain change that widens
 the axis labels) re-encodes what reads the size, as a resize of a fixed-size view does.
+
+### Signal changes no mark reads (node, no DOM)
+
+Measured 2026-11-10 on perf/signal-scoped-reuse against its base (main at e31d61c), the two builds run alternately, three
+rounds each, on the shared machine. `node tick.mjs <worktree>`, a probe kept outside the repository: a Vega-Lite `time`
+animation over 3,000 points (`params: [{ name: 'anim', select: { type: 'point', on: 'timer', fields: ['year'] } }]`, a
+`filter` by it, `time: year` over three years), `createChartSession().evaluate(vg, { signals: { anim_clock } })` with only the
+clock advanced by 16 ms per tick and no data change, 30 ticks, median and p90 ms per tick. The control is the fixed-size
+one-row update of the section above (`node perf.mjs <worktree>`, its last run of three), which this change does not touch.
+
+| Case | base, rounds 1-3 | this change, rounds 1-3 |
+|---|---|---|
+| tick, median (p90) | 11.76 (16.87) / 12.07 (17.92) / 11.86 (17.41) | 0.90 (1.01) / 0.91 (1.02) / 0.93 (1.41) |
+| items of the 30th tick kept | 0 of 3000 | 3000 of 3000 |
+| the same inputs again (session cache) | 0.06 / 0.05 / 0.06 | 0.04 / 0.04 / 0.04 |
+| control: fixed-size one-row update | 0.56 / 0.55 / 0.62 | 0.56 / 0.56 / 0.58 |
+
+The tick keeps the mark group, its items and the three scales, and the frame filter's step (it reads the store by name, and
+the store's rows are equal). Keying a result by its reads costs a few microseconds per evaluation: a one-row stream append
+on 10,000 points (`createChartStream`, 500 appends, the same alternation) went from 62 / 63 / 67 to 69 / 69 / 68 µs median.
+`pnpm bench:incremental -- --points=10000 --reps=30`, three runs each: append speedup vs a full evaluation 21.5x / 21.8x /
+20.2x before, 18.9x / 20.0x / 17.2x after (floor 8x); the stream append rounds to 0.1 ms before and 0.1 to 0.2 ms after.
+
+### Selections, and rows with a signal change (node, and Chromium)
+
+Measured 2026-11-10 on perf/selection-signal-reuse against its base (perf/transition-retarget-by-identity at 082a700, which holds
+the signal-scoped reuse above), the two builds run alternately, three rounds each, on the shared machine. `node probe.mjs <worktree>`
+and `node fit.mjs <worktree>`, probes kept outside the repository: Vega-Lite scatters of 5,000 points compiled by
+`@aster-charts/vl`, driven through `createChartSession().evaluate` as `<Chart>` drives it (each store handed back as data, a new
+array on every edit), 40 evaluations per case (30 for the fit view, `width: "container"` with a measured 640 x 300), median ms.
+`unread` changes a param no mark reads; `click` / `move` / `drag` put another tuple in the store; `append` adds one row inside the
+domains. In the cases marked `3b` the points' opacity tests the selection (no ordinal color scale, whose census did not advance
+over an append then: see the next section).
+
+| Case | base, rounds 1-3 | this change, rounds 1-3 | kept after the change |
+|---|---|---|---|
+| point (click) selection, unread signal | 22.46 / 22.99 / 23.41 | 0.69 / 0.68 / 0.68 | 3 of 3 scales, 5000 of 5000 items |
+| point (click) selection, a click | 22.27 / 22.08 / 22.04 | 16.72 / 16.97 / 16.79 | 3 of 3 scales (the points are encoded again) |
+| hover selection, the same point | 21.32 / 21.25 / 21.71 | 0.59 / 0.57 / 0.58 | 3 of 3 scales, 5000 of 5000 items |
+| hover selection, another point | 21.23 / 21.22 / 21.24 | 16.59 / 16.10 / 16.01 | 3 of 3 scales |
+| interval brush, unread signal | 17.15 / 17.27 / 17.22 | 0.58 / 0.62 / 0.61 | the brush's marks and 5000 of 5000 items |
+| interval brush, a drag step | 17.37 / 17.18 / 17.16 | 17.67 / 17.31 / 17.90 | the scales (as before) |
+| 3b hover, append + unread | 28.52 / 28.51 / 28.72 | 0.75 / 0.76 / 0.76 | 5040 of 5041 items, 2 of 2 scales |
+| 3b hover, one row modified + unread | 28.07 / 28.57 / 28.51 | 2.28 / 2.18 / 2.13 | 4999 of 5000 items |
+| 3b brush, append | 21.10 / 20.88 / 21.14 | 0.76 / 0.81 / 0.79 | 5040 of 5041 items |
+| 3b brush, append + unread | 26.85 / 27.19 / 27.15 | 0.72 / 0.77 / 0.78 | 5040 of 5041 items |
+| fit view, hover, unread | 47.64 / 47.25 / 48.26 | 1.98 / 1.78 / 1.81 | 2 of 2 scales, 5000 of 5000 items |
+| fit view, hover, append + unread | 56.10 / 55.80 / 55.50 | 2.06 / 2.09 / 2.10 | 5030 of 5031 items |
+| fit view, brush, append + unread | 52.93 / 53.13 / 52.93 | 2.13 / 2.09 / 2.14 | 5030 of 5031 items |
+| controls: fixed-size one-row update (`perf.mjs`, last run of three) | 0.58 / 0.57 / 0.57 | 0.60 / 0.56 / 0.56 | |
+| controls: `time` animation tick (`tick.mjs`) | 0.91 / 0.92 / 0.91 | 0.90 / 0.91 / 0.91 | |
+| controls: one-row stream append, 10,000 rows, no transforms (µs) | 68 / 70 / 68 | 69 / 69 / 70 | |
+| one-row stream append through formula, formula, filter (µs) | 273 / 276 / 317 | 279 / 282 / 282 | |
+
+A drag step costs what it did, a little more (17.2-17.4 ms before, 17.3-17.9 after: the keys of the store the points read are
+made on every step, and the points are encoded again, as they must be). In headless Chromium (`node drag.mjs <worktree> brush|hover
+5000`: `<Chart>` bundled from each worktree, 50 pointer moves, the time from a move to the second animation frame after it, which
+counts whole frames), a brush drag went from 115.1 / 115.2 / 115.3 to 81.8 / 81.8 / 81.8 ms and a hover sweep from 97.8 / 104.5 /
+98.1 to 64.4 / 64.6 / 64.3 ms median. `pnpm bench:incremental -- --points=10000 --reps=30`, three runs each, alternated: append
+speedup vs a full evaluation 19.10x / 19.36x / 19.30x before, 16.86x / 19.09x / 19.06x after (floor 8x); a session's whole-array
+replacement 15.42x / 15.08x / 15.13x before, 16.24x / 16.62x / 16.90x after; the stream append rounds to 0.1-0.2 ms in both.
+
+### Discrete scales over changing rows (node, no DOM)
+
+Measured 2026-11-10 on perf/discrete-scale-appends against its base (72ffeea, which holds #136-#138), the two builds run
+alternately, three rounds each, load average 1.3 to 1.8. `node probe.mjs <worktree> 5000 20`, a probe kept outside the repository:
+Vega-Lite charts of 5,000 rows in five categories compiled by `@aster-charts/vl`, driven through `createChartSession().evaluate` as
+`<Chart>` drives it (a new array per update, which the session diffs), 20 updates per case, median ms; `stream` is a
+`createChartStream` append of one row, as `<ChartStream>` delivers it (80 appends). `scatter` is a point chart coloured by a
+nominal field, `bar` a bar chart with a nominal x (stacked, as Vega-Lite stacks it), `stacked` a bar chart summing y per 50 ordinal
+x bands, coloured by category, `line` one line per category. Items kept are counted by identity after the last update.
+
+| Case | base, rounds 1-3 | this change, rounds 1-3 | kept after the change |
+|---|---|---|---|
+| scatter, a row of a category appended | 15.64 / 15.97 / 15.70 | 1.66 / 1.70 / 1.75 | the colour scale, 5019 of 5020 items |
+| scatter, a row removed | 14.97 / 15.23 / 14.90 | 1.82 / 1.94 / 1.85 | the colour scale, 4980 of 4980 items |
+| scatter, a value edited | 14.51 / 14.82 / 14.73 | 1.75 / 1.86 / 1.77 | the colour scale, 4999 of 5000 items |
+| scatter, a category edited to another | 14.97 / 15.40 / 14.58 | 1.55 / 1.57 / 1.53 | the colour scale, 4999 of 5000 items |
+| scatter, a new category appended | 14.97 / 15.28 / 15.54 | 15.54 / 16.40 / 15.28 | nothing (the domain changed) |
+| scatter, stream append | 14.78 / 14.77 / 14.94 | 0.59 / 0.59 / 0.58 | the colour scale, 5079 of 5080 items |
+| bar, a row of a category appended | 15.03 / 14.91 / 15.07 | 4.21 / 5.13 / 5.01 | the x scale, 5019 of 5020 items |
+| bar, a row removed | 15.17 / 14.61 / 14.73 | 5.26 / 5.17 / 5.37 | the x scale, 4028 of 4980 items (the stack moves the bars above it) |
+| bar, a category edited to another | 15.36 / 14.71 / 15.41 | 9.97 / 9.76 / 10.16 | the x scale, 3169 of 5000 items (two stacks move) |
+| bar, stream append | 15.00 / 14.64 / 14.96 | 2.55 / 2.50 / 2.55 | the x scale, 5079 of 5080 items |
+| stacked, a row of a category appended | 1.15 / 1.17 / 1.13 | 0.91 / 0.93 / 0.92 | both discrete scales, 49 of 50 bars |
+| stacked, a category edited to another | 2.21 / 2.19 / 2.19 | 2.05 / 2.03 / 1.98 | both discrete scales, 68 of 70 bars |
+| line, a row of a category appended | 17.53 / 17.56 / 17.54 | 18.07 / 17.73 / 18.30 | the colour scale; no item (group marks were made again then: see the next section) |
+| line, a value edited | 16.26 / 16.46 / 16.55 | 17.07 / 17.08 / 16.99 | the colour scale; no item |
+| controls: fixed-size one-row update (`perf.mjs`) | 0.55 / 0.55 / 0.56 | 0.57 / 0.57 / 0.58 | |
+| controls: `time` animation tick (`tick.mjs`) | 0.91 / 1.04 / 0.92 | 0.94 / 0.93 / 0.93 | 3000 of 3000 items, both |
+| controls: point / brush, an unread signal (`sel.mjs`) | 0.44 / 0.44 / 0.46, 0.78 / 0.75 / 0.76 | 0.46 / 0.47 / 0.48, 0.79 / 0.77 / 0.75 | |
+
+A new category costs what it did: every item is coloured again, as a fresh evaluation colours it. The line chart keeps its colour
+scale but draws its lines in a group mark, which is made again on every evaluation, so its cost does not move (0.1 to 0.6 ms more in
+these rounds; a CPU profile of 150 edits shows no new hot function, and a separate alternation measured 15.91 / 16.02 before and
+16.27 / 16.11 ms after). `pnpm bench:incremental -- --points=10000 --reps=30`, three runs each, alternated: append speedup vs a full
+evaluation 18.11x / 20.13x / 19.46x before, 19.23x / 19.50x / 19.53x after (floor 8x); a session's whole-array replacement
+15.51x / 16.58x / 16.48x before, 14.74x / 14.29x / 14.76x after, whose session update measured alone (300 updates, alternated
+three times) is 309 / 261 / 263 µs before and 261 / 262 / 262 µs after. `pnpm bench:browser-stream` held every floor before and
+after (`<ChartStream>` on 10,000 points: 16.6 ms median frame before and 16.7 ms after, one mutation per append).
+
+### Marks inside group items over changing rows (node, no DOM)
+
+Measured 2026-11-10 on perf/discrete-scale-appends (11933f5) against the same base (72ffeea), alternated, three rounds each, load
+average 2.9 to 5.3. `node groups.mjs <worktree> 5000 15`, a probe kept outside the repository: Vega-Lite charts of 5,000 rows in five
+categories through `createChartSession().evaluate` (a new array per update), 15 updates per case, median ms. `line` is one line per
+category (a group mark faceted by the category, its line sorted), `facet` a scatter faceted into a column per category (each cell
+with its grid axes), `concat` two views side by side. Items and groups (cells, headers, the groups of guides) are counted by identity
+after the last update. The controls are the earlier sections' probes.
+
+| Case | base, rounds 1-3 | this change, rounds 1-3 | kept after the change |
+|---|---|---|---|
+| line, a row of a category appended | 19.09 / 17.87 / 18.34 | 2.94 / 2.96 / 2.96 | 5014 of 5015 items; 4 of 10 groups |
+| line, a row removed | 17.27 / 17.26 / 17.25 | 3.20 / 3.17 / 3.20 | 4985 of 4985 items |
+| line, a value edited | 16.67 / 16.55 / 16.72 | 1.82 / 1.73 / 1.79 | 4999 of 5000 items |
+| facet, a row of a category appended | 16.51 / 16.77 / 16.85 | 3.50 / 3.61 / 3.93 | 5014 of 5015 items; 36 of 40 groups |
+| facet, a row removed | 17.06 / 17.30 / 17.34 | 4.10 / 4.16 / 4.21 | 4985 of 4985 items |
+| facet, a value edited | 16.94 / 16.45 / 16.99 | 3.42 / 3.60 / 3.49 | 4999 of 5000 items; 38 of 40 groups |
+| concat, a row appended | 25.20 / 25.03 / 25.17 | 4.09 / 3.92 / 3.96 | 10028 of 10030 items; 8 of 11 groups |
+| concat, a row removed | 25.49 / 24.96 / 25.04 | 3.78 / 4.35 / 3.73 | 9970 of 9970 items |
+| concat, a value edited | 24.77 / 25.07 / 24.82 | 3.67 / 3.66 / 3.44 | 9998 of 10000 items |
+| scatter by category, append (the previous section's probe) | 15.61 / 16.43 / 15.89 | 1.69 / 1.68 / 1.72 | |
+| controls: fixed-size one-row update (`perf.mjs`) | 0.57 / 0.56 / 0.58 | 0.58 / 0.59 / 0.58 | |
+| controls: `time` animation tick (`tick.mjs`) | 0.93 / 0.93 / 0.93 | 0.96 / 0.95 / 0.95 | 3000 of 3000 items, both |
+| controls: point / brush, an unread signal (`sel.mjs`) | 0.45 / 0.46 / 0.46, 0.79 / 0.75 / 0.74 | 0.47 / 0.49 / 0.49, 0.77 / 0.76 / 0.78 | |
+
+The groups not kept are the cell (or line) that changed, the groups above it, and the view's own axes and legend, which are made
+again on every evaluation (comparing them would cost every chart without a group mark: a first version that did took the
+fixed-size control from 0.56 to 0.70 ms and the tick from 0.93 to 1.22 ms). A kept or spliced mark compares its rows with its items'
+data, O(rows) per evaluation: most of the 1.3 to 2.5 ms these cases cost beyond the scatter. `pnpm bench:incremental --
+--points=10000 --reps=30`, alternated: append speedup 19.56x before, 18.78x after (floor 8x); `pnpm bench:browser-stream` held every
+floor before and after (`<ChartStream>` on 10,000 points: 16.7 / 16.6 ms median frame).
 
 ### Differential updates (node, no DOM)
 
@@ -224,6 +374,17 @@ on-demand column of the React rows up by 3.4 kB (to 64.5 and 62.5): the animatio
 prop handling and the scene stamps (0.85 kB of `<Chart>`'s 1.2) and the chunk boundary the on-demand module draws around the
 colour and field code it shares with core (0.35 kB; `useChart` pays only that). `budget.mjs` keeps the breakdown. With the `maxItems` limit and on top of the fit-view work
 (the combined stack, measured 2026-11-09 with the same command): the transition module is 3.3 kB and `<Chart>` 207.4 kB gzip eager.
+
+Signal-scoped reuse (the keys of marks and scales, the kept copies and the steps that read a dataset by name), measured
+2026-11-10 with the same command against main at e31d61c (kB gzip, before -> after): `@aster-charts/core` 153.0 -> 154.5,
+`useChart` 164.6 -> 166.1, `<Chart>` 207.4 -> 208.7, `<SvgChart>` 184.4 -> 185.8, `<SvgChart>` + `interaction` 202.0 -> 203.3,
+`<Chart>` + VL 310.6 -> 312.1; the marginal rows did not move.
+
+Selections under signal changes (kept dataset builds, marks keyed by the datasets they read by name, pulses with a signal change,
+names read as the expression lexer reads them), measured 2026-11-10 with the same command against its base 082a700 (kB gzip,
+before -> after): `@aster-charts/core` 154.5 -> 155.7, `useChart` 166.1 -> 167.4, `<Chart>` 208.7 -> 210.0, `<SvgChart>` 185.8 ->
+187.1, `<SvgChart>` + `interaction` 203.3 -> 204.4, `<Chart>` + VL 312.1 -> 313.3; `+ @aster-charts/core/dom` 10.6 -> 10.7, the
+other marginal rows did not move.
 
 The manifests list only the files that really have an import effect (see
 [ARCHITECTURE.md](ARCHITECTURE.md#side-effects-and-tree-shaking)). Without a `sideEffects` field a bundler must assume

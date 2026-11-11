@@ -73,6 +73,16 @@ const padsDomain = (type: string): boolean => !!vs.isContinuous(type) && type !=
 // ---- building ---------------------------------------------------------------------------------------------
 
 export function buildScale(spec: CompiledScale, ctx: ScaleContext): Scale {
+  return scaleOfSettings(scaleSettings(spec, ctx), ctx)
+}
+
+/**
+ * Everything a scale is made from, read from its spec and `ctx`: the settings (`readSettings`) and the host's domain override.
+ * `scaleOfSettings` makes the scale from them and from nothing else of `ctx` but `ctx.pass` (which only a spec with `bins` reads):
+ * two settings that are `sameSettings` make scales that are the same in every respect, except those of a spec with `bins` made in
+ * a pass of a view that makes another.
+ */
+export function scaleSettings(spec: CompiledScale, ctx: ScaleContext): Settings {
   const st = readSettings(spec, ctx)
   // a host override of the domain (pan/zoom, brushing)
   const hostRaw = ctx.domainRaw ?? spec.domainRaw
@@ -80,7 +90,11 @@ export function buildScale(spec: CompiledScale, ctx: ScaleContext): Scale {
     const resolved = isObject(hostRaw) && !isArray(hostRaw) ? plain(hostRaw, ctx) : hostRaw
     if (resolved != null) st.domainRaw = resolved
   }
+  return st
+}
 
+/** The scale `st` describes (see `scaleSettings`). */
+export function scaleOfSettings(st: Settings, ctx: ScaleContext): Scale {
   const name = registryName(st)
   const make = vs.scale(name)
   if (!make) raise(`Unrecognized scale type: ${JSON.stringify(name)}`)
@@ -107,6 +121,41 @@ function settingsKey(st: Settings): string {
   } catch {
     return `#${++unsigned}` // not comparable: the scale is made again
   }
+}
+
+/**
+ * Whether two settings are the same, so the scales made from them are (see `scaleSettings`): the same keys in the same order (the
+ * options are applied in that order), and values that are the same value (`Object.is`: `0` and `-0` differ, and so do two Dates
+ * of one instant) or plain arrays and objects of such values, a few levels deep. Anything else is not known to be the same.
+ */
+export function sameSettings(a: Settings, b: Settings): boolean {
+  return sameSetting(a, b, 0)
+}
+
+const SAME_SETTING_DEPTH = 6
+
+function sameSetting(a: unknown, b: unknown, depth: number): boolean {
+  if (Object.is(a, b)) return true
+  if (depth > SAME_SETTING_DEPTH || a === null || b === null || typeof a !== 'object' || typeof b !== 'object') return false
+  const proto = Object.getPrototypeOf(a)
+  if (proto !== Object.getPrototypeOf(b)) return false
+  if (proto === Array.prototype) {
+    const x = a as unknown[]
+    const y = b as unknown[]
+    if (x.length !== y.length) return false
+    // (a scale reads a list by index or by iterating it: a hole is read as `undefined`, and other keys are not read)
+    for (let i = 0; i < x.length; i++) if (!sameSetting(x[i], y[i], depth + 1)) return false
+    return true
+  }
+  if (proto !== Object.prototype && proto !== null) return false
+  const ka = Object.keys(a)
+  const kb = Object.keys(b)
+  if (ka.length !== kb.length) return false
+  for (let i = 0; i < ka.length; i++) {
+    const k = ka[i]!
+    if (k !== kb[i] || !sameSetting((a as Record<string, unknown>)[k], (b as Record<string, unknown>)[k], depth + 1)) return false
+  }
+  return Object.getOwnPropertySymbols(a).length === 0 && Object.getOwnPropertySymbols(b).length === 0
 }
 
 // ---- the domain -------------------------------------------------------------------------------------------
