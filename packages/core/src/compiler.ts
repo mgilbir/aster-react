@@ -6,7 +6,7 @@
  */
 import { dict, ownGet } from './util.js'
 import { assertSpecDepth } from './limits.js'
-import { normalizeSpecLists } from './spec-structure.js'
+import { dataInputOf, normalizeSpecLists } from './spec-structure.js'
 import { noteWrittenType, transformTypeOf } from './transform-names.js'
 import { checkExpressions } from './spec-expressions.js'
 import { markPlacing } from './tuple-order.js'
@@ -315,10 +315,12 @@ function compileData(d: Record<string, unknown>): CompiledData {
     name: d.name as string,
     transform: [],
   }
-  if (d.values !== undefined) compiled.values = d.values as unknown[]
-  if (d.url !== undefined) compiled.url = d.url as string
+  // only the input vega reads is compiled (values, else url, else source), so every later step agrees with it
+  const input = dataInputOf(d)
+  if (input === 'values') compiled.values = d.values as unknown[]
+  if (input === 'url') compiled.url = d.url as string
   if (d.format !== undefined) compiled.format = d.format as Record<string, unknown>
-  if (d.source !== undefined) compiled.source = (Array.isArray(d.source) ? d.source.map(String) : d.source) as string | string[]
+  if (input === 'source') compiled.source = (Array.isArray(d.source) ? d.source.map(String) : d.source) as string | string[]
   for (const t of (d.transform as Array<Record<string, unknown>>) ?? []) {
     compiled.transform.push(compileTransform(t))
   }

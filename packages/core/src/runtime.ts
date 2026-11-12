@@ -56,6 +56,7 @@ import { timeIntervalFor, utcIntervalFor } from './time.js'
 import { compileChart } from './compiler.js'
 import { dict, ownGet, pushAll, sortData, lerp, scopedSignalName, heldSignalName, TUPLE_ID } from './util.js'
 import { applyImageUrlPolicy, applyLinkUrlPolicy, resolveImageUrl, type ImageUrlPolicy } from './url-policy.js'
+import { checkChartUrlData } from './url-data.js'
 import { valueKey, valuesEqual } from './fingerprint.js'
 import { diffRows, equalCell, rowsEqual, sourceNames, type PulseChange } from './pulse.js'
 import { aggregateGroups, flatKeyFn, groupKeyFn } from './transform-agg.js'
@@ -2671,6 +2672,8 @@ export interface PendingEvaluation {
  * engine the state is made for (see {@link IncrementalEngine}).
  */
 export function evaluateChartPending(engine: IncrementalEngine, chart: CompiledChart, input: RuntimeInput = {}, unchanged?: DataStability): PendingEvaluation {
+  // a refused url dataset fails the evaluation before anything of it starts (no transaction, no state)
+  checkChartUrlData(chart, input.urlData)
   const txn = beginTxn(engine, chart, unchanged)
   const done: { draft?: IncrementalState; failed?: boolean } = {}
   const scene = withLimits(input.limits, () => withTextMetricsProvider(input.textMetrics, () => evaluateChartImpl(chart, input, txn, done)))
@@ -2687,11 +2690,21 @@ export function evaluateChartPending(engine: IncrementalEngine, chart: CompiledC
   }
 }
 
+/** The error for a url dataset whose rows nobody loaded; `hostRows` when the host could also give them as `input.data[name]`. */
+function unloadedUrlError(name: string, hostRows: boolean): Error {
+  return new Error(
+    `[aster] dataset "${name}" has a url but no data was loaded for it; resolve url datasets first: ` +
+    `import { loadSpecData } from "@aster-charts/core/load" and render await loadSpecData(spec, { baseURL, ... })` +
+    (hostRows ? `, or pass the rows as input.data["${name}"]` : ' (it is in a group mark, so loadSpecData is the way: input.data does not reach it)'),
+  )
+}
+
 /**
  * Evaluate a chart once: nothing is read from an earlier evaluation of it and nothing is left for a later one, so the incremental
  * engine is not involved (`renderSpec`, `getChartInfo`). The scene is what `evaluateChart` gives a chart evaluated for the first time.
  */
 export function evaluateOnce(chart: CompiledChart, input: RuntimeInput = {}): SceneRoot {
+  checkChartUrlData(chart, input.urlData)
   const txn: EvalTxn = { prev: undefined, gen: 1, claimed: new WeakSet() }
   return withLimits(input.limits, () => withTextMetricsProvider(input.textMetrics, () => evaluateChartImpl(chart, input, txn, {})))
 }
@@ -3225,11 +3238,7 @@ function buildDatasetsOf(ctx: EvalContext, inputData: Record<string, unknown[]>)
       if (given == null && (d as { url?: unknown }).url != null) {
         // A url dataset nobody resolved would render as an empty chart with no
         // hint why: fail loudly and say how to fix it.
-        throw new Error(
-          `[aster] dataset "${name}" has a url but no data was loaded for it; resolve url datasets first: ` +
-          `import { loadSpecData } from "@aster-charts/core/load" and render await loadSpecData(spec, { baseURL, ... }), ` +
-          `or pass the rows as input.data["${name}"]`,
-        )
+        throw unloadedUrlError(name, true)
       }
       inPulse = ctx.inputPulses?.get(name) ?? null
       rows = ingestHostRows(given ?? [], inPulse)
@@ -5271,6 +5280,8 @@ function buildGroupItem(mark: CompiledMark, ctx: EvalContext, entered: EnteredGr
       const shared = sources.length > 0
       // (the rows of the sources, made when a pipeline has to run: a pipeline that is kept does not need them)
       const gather = (): Row[] => sources.flatMap((n) => ctx.datasets.get(n) ?? [])
+      // (a group's url dataset nobody loaded fails as a top-level one does; host `data` does not reach a group's datasets)
+      if (!shared && d.values == null && d.url != null) throw unloadedUrlError(d.name, false)
       let rows: Row[] | undefined = shared ? undefined : d.values != null ? readData(inlineValues(ctx, d.values), d.format) : []
       checkRowCount(rows?.length ?? sources.reduce((n, s) => n + (ctx.datasets.get(s)?.length ?? 0), 0), `dataset "${d.name}"`)
       const tctx = { runtime: ctx.runtime, signals: scopeParams, hierarchies: ctx.hierarchies, projections: ctx.projections }

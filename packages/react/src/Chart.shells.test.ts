@@ -23,7 +23,7 @@ export const SHELLS = ['Chart.tsx', 'SvgChart.tsx'] as const
 export const MAX_SHELL_LINES = 14
 
 const ALLOWED_VALUE_IMPORTS: Record<(typeof SHELLS)[number], string[]> = {
-  'Chart.tsx': ['react', './ChartCore.js', './canvas-capability.js', './interaction-capability.js'],
+  'Chart.tsx': ['react', './ChartCore.js', './canvas-capability.js', './interaction-capability.js', './png-capability.js'],
   'SvgChart.tsx': ['react', './ChartCore.js'],
 }
 
@@ -81,15 +81,21 @@ describe('<Chart> and <SvgChart> are thin shells over ChartCore', () => {
 
 // ---------------------------------------------------------------------------
 
-const FORBIDDEN_PACKAGES = ['@aster-charts/core/canvas', '@aster-charts/core/hit', '@aster-charts/core/signals']
-const FORBIDDEN_MODULES = ['canvas-capability.ts', 'interaction-capability.ts']
+const FORBIDDEN_PACKAGES = ['@aster-charts/core/canvas', '@aster-charts/core/hit', '@aster-charts/core/signals', '@aster-charts/core/png']
+const FORBIDDEN_MODULES = ['canvas-capability.ts', 'interaction-capability.ts', 'png-capability.ts']
 
-/** Value (non-`import type`) imports and re-exports of a source file. */
+/**
+ * Value (non-`import type`) imports and re-exports of a source file, and its dynamic `import('...')`s: a bundler that does not split
+ * code puts what a dynamic import names in the bundle as surely as a static import.
+ */
 export function valueImports(source: string): string[] {
   const out: string[] = []
-  for (const m of stripComments(source).matchAll(/^(?:import|export)\s+(type\s+)?(?:[^'"]*?from\s+)?'([^']+)'/gm)) {
+  const code = stripComments(source)
+  for (const m of code.matchAll(/^(?:import|export)\s+(type\s+)?(?:[^'"]*?from\s+)?'([^']+)'/gm)) {
     if (!m[1]) out.push(m[2]!)
   }
+  // (`typeof import('...')` in a type position is not a value import)
+  for (const m of code.matchAll(/(?<!typeof\s+)\bimport\(\s*'([^']+)'\s*\)/g)) out.push(m[1]!)
   return out
 }
 
@@ -125,5 +131,11 @@ describe('@aster-charts/react/lite never reaches the canvas renderer, the hit in
   it('the guard bites: a value import of core/hit in ChartCore is reported with its chain', () => {
     const tampered = (f: string): string => (f === 'ChartCore.tsx' ? `import { buildHitIndex } from '@aster-charts/core/hit'\n${fromSrc(f)}` : fromSrc(f))
     expect(chainToForbidden('lite.ts', tampered)).toEqual(['lite.ts', 'SvgChart.tsx', 'ChartCore.tsx', '@aster-charts/core/hit'])
+  })
+  it('the guard bites: a dynamic import of the PNG painter in ChartCore is reported, a `typeof import()` type is not', () => {
+    const dynamic = (f: string): string => (f === 'ChartCore.tsx' ? `${fromSrc(f)}\nexport const loadPng = () => import('@aster-charts/core/png')\n` : fromSrc(f))
+    expect(chainToForbidden('lite.ts', dynamic)).toEqual(['lite.ts', 'SvgChart.tsx', 'ChartCore.tsx', '@aster-charts/core/png'])
+    const typeOnly = (f: string): string => (f === 'ChartCore.tsx' ? `${fromSrc(f)}\nexport type PngModule = typeof import('@aster-charts/core/png')\n` : fromSrc(f))
+    expect(chainToForbidden('lite.ts', typeOnly)).toBeNull()
   })
 })

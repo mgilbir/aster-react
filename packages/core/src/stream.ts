@@ -23,6 +23,7 @@
  */
 import { createChartSession, type ChartSession } from './session.js'
 import { dict } from './util.js'
+import { dataInputOf } from './spec-structure.js'
 import { diffRows, type DataPulse, type DatasetPulse, type PulseRange } from './pulse.js'
 import { AsterLimitError, type SpecLimits } from './limits.js'
 import type { TextMetricsProvider } from './text-metrics.js'
@@ -52,7 +53,8 @@ export interface StreamOptions {
   policy?: StreamPolicy
   /**
    * Initial input (data/signals/size) used for the first flush. `initial.urlPolicy`
-   * (the image-URL policy) applies to every flush; it is fixed for the stream's life.
+   * (the image-URL policy) and `initial.urlData` (whether url datasets are refused) apply to
+   * every flush; they are fixed for the stream's life.
    */
   initial?: RuntimeInput
   /**
@@ -227,7 +229,7 @@ function specSourceRows(spec: VgSpec): Map<string, unknown[]> {
   for (const d of defs) {
     if (!d || typeof d !== 'object') continue
     const rec = d as { name?: unknown; values?: unknown; source?: unknown }
-    if (typeof rec.name !== 'string' || typeof rec.source === 'string') continue
+    if (typeof rec.name !== 'string' || dataInputOf(rec) === 'source') continue
     if (Array.isArray(rec.values)) out.set(rec.name, rec.values)
   }
   return out
@@ -670,6 +672,7 @@ export function createChartStream(spec: VgSpec, options: StreamOptions = {}): Ch
         ...(nextLimits ? { limits: nextLimits } : {}),
         ...(nextTextMetrics ? { textMetrics: nextTextMetrics } : {}),
         ...(options.initial?.urlPolicy ? { urlPolicy: options.initial.urlPolicy } : {}),
+        ...(options.initial?.urlData !== undefined ? { urlData: options.initial.urlData } : {}),
         ...(Object.keys(dataPulse).length ? { dataPulse } : {}),
         ...(Object.keys(dataChanges).length ? { dataChanges } : {}),
         ...(changedDatasets.length ? { changedDatasets } : {}),

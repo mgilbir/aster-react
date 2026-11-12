@@ -2,6 +2,7 @@ import * as React from 'react'
 import { ChartCore } from './ChartCore.js'
 import { canvasCapability } from './canvas-capability.js'
 import { interaction } from './interaction-capability.js'
+import { png } from './png-capability.js'
 import type { ChartHandle, ChartProps } from './chart-types.js'
 
 export type { ChartHandle, ChartProps, ChartStreamInput, TooltipInfo, TransitionOptions } from './chart-types.js'
@@ -12,5 +13,5 @@ export type { ChartHandle, ChartProps, ChartStreamInput, TooltipInfo, Transition
  * with `<SvgChart>`.
  */
 export const Chart = React.forwardRef<ChartHandle, ChartProps>(function Chart(props, ref) {
-  return <ChartCore {...props} canvas={canvasCapability} interaction={interaction} ref={ref} />
+  return <ChartCore {...props} canvas={canvasCapability} interaction={interaction} png={png} ref={ref} />
 })

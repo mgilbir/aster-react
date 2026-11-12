@@ -29,7 +29,7 @@ import { checkExpression } from './expr-check.js'
 import { parseEventSelectorString } from './event-selector.js'
 import { filterCode } from './stream-defs.js'
 import {
-  checkFrom, checkScale, legendType, LEGEND_CHANNELS, Names, need, needDataRef, parseAxisNames, parseLegendNames, parseTitleNames, specList, stringValue,
+  checkFrom, checkScale, dataInputOf, legendType, LEGEND_CHANNELS, Names, need, needDataRef, parseAxisNames, parseLegendNames, parseTitleNames, specList, stringValue,
 } from './spec-structure.js'
 import { transformParams, type ParamKind, type TransformParam } from './transform-params.js'
 import { TUPLE_MAKING_TRANSFORMS, transformTypeOf } from './transform-names.js'
@@ -280,7 +280,7 @@ class Check {
     for (const on of specList(d.on)) if (isRecord(on)) this.trigger(on, String(d.name))
     this.lambdas({ url: d.url, async: d.async, values: Array.isArray(d.values) ? undefined : d.values }, lambdas)
     this.objectProperty(d.format, lambdas)
-    if (!d.values && !d.url && d.source) for (const source of specList(d.source)) need(this.names, source)
+    if (dataInputOf(d) === 'source') for (const source of specList(d.source)) need(this.names, source)
     this.names.declare(d.name)
   }
 

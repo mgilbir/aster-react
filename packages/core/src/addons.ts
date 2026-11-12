@@ -19,9 +19,19 @@ import { ADDON_FUNCTIONS } from './addon-functions.js'
 import { parseExpression } from './expr-parser.js'
 import { parseEventSelectorString } from './event-selector.js'
 import { registeredExpressionFunctionNames, withdrawExpressionFunctions } from './expression.js'
+import { checkUrlData, validateUrlDataMode, type UrlDataMode } from './url-data.js'
 import type { VgSpec } from './types.js'
 
 export type AddonName = 'transforms' | 'geo' | 'load'
+
+/** What the host allows besides the spec itself: `urlData` as in `RuntimeInput`. */
+export interface AddonOptions {
+  /**
+   * `'refuse'`: url datasets will be refused, so the readers their `format` names are not needed
+   * ({@link addonsNeeded}), and {@link loadAddonsFor} rejects a spec that has one before importing anything.
+   */
+  urlData?: UrlDataMode
+}
 
 /** Every transform the `@aster-charts/core/transforms` add-on registers (and `requireTransform` asks it for). */
 export const TRANSFORMS_ADDON_TYPES: readonly string[] = [
@@ -91,11 +101,16 @@ function selectorFilters(selector: string, found: Set<AddonName>): void {
  * carries (a signal's `update` / `init` / `on`, a `formula` / `filter` `expr`, a `{signal}` reference, an event filter, a
  * rule's `test`), found by parsing each expression with the engine's own parser. A walk of the spec each time it is asked (a
  * host that renders again keeps the answer: the React hook memoizes it per spec), so a spec edited in place is read as it is now.
+ * With `urlData: 'refuse'` the `format` of a url dataset (one with a non-empty `url` and no `values`) is not counted: that dataset is
+ * refused, never read, so it needs no reader.
  */
-export function addonsNeeded(spec: VgSpec): readonly AddonName[] {
+export function addonsNeeded(spec: VgSpec, options?: AddonOptions): readonly AddonName[] {
   if (!isObj(spec)) return NONE
+  validateUrlDataMode(options?.urlData)
+  const refuseUrls = options?.urlData === 'refuse'
   const found = new Set<AddonName>()
-  if (Array.isArray(spec.projections) && spec.projections.length > 0) found.add('geo')
+  // (a scope's lists are read as the compiler reads them, vega-util `array()`: a single object is a one-element list)
+  if (spec.projections != null && (!Array.isArray(spec.projections) || spec.projections.length > 0)) found.add('geo')
   // one walk, with a stack (specs nest to any depth), bounded like the rest of the engine's spec walks, and safe on a cyclic object
   const seen = new WeakSet<object>()
   const stack: Array<[unknown, number, string]> = [[spec, 0, '']]
@@ -109,7 +124,7 @@ export function addonsNeeded(spec: VgSpec): readonly AddonName[] {
     if (!isObj(node) || depth > HARD_MAX_SPEC_DEPTH || seen.has(node)) continue
     seen.add(node)
     // the projections of a group mark are built in its scope (the view's are checked above)
-    if (key === 'projections' && Array.isArray(node) && node.length > 0) found.add('geo')
+    if (key === 'projections' && (!Array.isArray(node) || node.length > 0)) found.add('geo')
     if (Array.isArray(node)) {
       for (const x of node) stack.push([x, depth + 1, key])
       continue
@@ -123,8 +138,11 @@ export function addonsNeeded(spec: VgSpec): readonly AddonName[] {
       }
     }
     if (key === 'format' && FORMAT_TYPES.has(node.type as string)) found.add('load')
+    // (a dataset definition is an element of a `data` array; a refused url dataset is never read)
+    const refusedUrl = refuseUrls && key === 'data' && !!node.url && !node.values
     for (const k of Object.keys(node)) {
       if (DATA_KEYS.has(k) && !(k === 'values' && isObj(node[k]) && !Array.isArray(node[k]))) continue
+      if (refusedUrl && k === 'format') continue
       stack.push([node[k], depth + 1, k])
     }
   }
@@ -152,8 +170,8 @@ export function notLoaded(needed: readonly AddonName[]): readonly AddonName[] {
 }
 
 /** The add-ons `spec` needs that are not loaded yet. */
-export function missingAddons(spec: VgSpec): readonly AddonName[] {
-  return notLoaded(addonsNeeded(spec))
+export function missingAddons(spec: VgSpec, options?: AddonOptions): readonly AddonName[] {
+  return notLoaded(addonsNeeded(spec, options))
 }
 
 const importers: Record<AddonName, () => Promise<unknown>> = {
@@ -185,8 +203,17 @@ export function loadAddons(names: readonly AddonName[]): Promise<void> {
   return names.length === 1 ? loadAddon(names[0]!) : Promise.all(names.map(loadAddon)).then(() => undefined)
 }
 
-/** Import whatever `spec` needs and does not have yet. Resolves at once for a plain chart. */
-export function loadAddonsFor(spec: VgSpec): Promise<void> {
-  const missing = missingAddons(spec)
+/**
+ * Import whatever `spec` needs and does not have yet. Resolves at once for a plain chart. With `urlData: 'refuse'` a spec that
+ * has a url dataset rejects with the `AsterUrlError` evaluation would throw, before anything is imported.
+ */
+export function loadAddonsFor(spec: VgSpec, options?: AddonOptions): Promise<void> {
+  let missing: readonly AddonName[]
+  try {
+    checkUrlData(spec, options?.urlData)
+    missing = missingAddons(spec, options)
+  } catch (e) {
+    return Promise.reject(e)
+  }
   return missing.length ? loadAddons(missing) : Promise.resolve()
 }

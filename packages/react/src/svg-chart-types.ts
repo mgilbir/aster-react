@@ -1,5 +1,5 @@
 import type { ChartHandle, ChartProps } from './chart-types.js'
-import type { InteractionCapability } from './capabilities.js'
+import type { InteractionCapability, PngCapability } from './capabilities.js'
 
 /**
  * `<SvgChart>`'s props and handle, derived from `<Chart>`'s by three explicit, exhaustive lists.
@@ -14,7 +14,7 @@ import type { InteractionCapability } from './capabilities.js'
 export const SVG_CHART_SHARED_PROPS = [
   'spec', 'sceneOverride', 'data', 'dataChanges', 'width', 'height', 'ariaLabel', 'incremental', 'denseMarks', 'transition',
   'className', 'style', 'signals', 'onSelect', 'brush', 'panZoom', 'pan', 'zoom', 'view', 'onViewChange', 'maxZoom',
-  'signalListeners', 'onSignal', 'onStreamInput', 'interactive', 'limits', 'urlPolicy', 'random', 'logger', 'textMetrics',
+  'signalListeners', 'onSignal', 'onStreamInput', 'interactive', 'limits', 'urlPolicy', 'urlData', 'random', 'logger', 'textMetrics',
   'a11y', 'onError',
 ] as const
 
@@ -37,7 +37,7 @@ export const SVG_CHART_EXCLUDED_PROPS = {
 
 /** ChartHandle members `<SvgChart>`'s ref has, unchanged (all of them work without `interaction`: `setSignal` applies the value as a signal override when no event loop is bound). */
 export const SVG_CHART_SHARED_HANDLE = [
-  'getScene', 'getSvg', 'getChartInfo', 'getView', 'setView', 'resetView', 'setSignal', 'getSignals',
+  'getScene', 'getSvg', 'getPng', 'getChartInfo', 'getView', 'setView', 'resetView', 'setSignal', 'getSignals',
 ] as const
 
 /** ChartHandle members `<SvgChart>`'s ref does not have, each with the reason. */
@@ -56,7 +56,13 @@ export type SvgChartInteractionProps = Pick<ChartProps, InteractionOnly>
  * `<SvgChart>` props: a discriminated union on `interaction`. Pass it (from `@aster-charts/react/interaction`)
  * and every interaction prop is available; omit it and they are `never`, so using one is a compile error.
  */
-export type SvgChartProps = SvgChartBaseProps & (
+export type SvgChartProps = SvgChartBaseProps & {
+  /**
+   * PNG export (`getPng` on the ref), from `@aster-charts/react/png`. Without it `getPng` rejects: the light chart leaves out the
+   * canvas renderer the export paints with, unless the app asks for it.
+   */
+  png?: PngCapability
+} & (
   | ({ interaction: InteractionCapability } & SvgChartInteractionProps)
   | ({ interaction?: undefined } & { [K in InteractionOnly]?: never })
 )

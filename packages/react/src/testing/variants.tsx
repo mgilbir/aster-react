@@ -15,6 +15,7 @@
  *   canvas       <Chart> only
  *   interaction  hit testing + signal event loop: <Chart> and <SvgChart interaction={interaction}>
  *   signals      the `signal.on` event loop (ships with interaction)
+ *   png          `getPng` on the ref: <Chart> only (<SvgChart> takes it as `png={png}`, which no matrix variant passes)
  * A variant that LACKS a declared capability does not skip: it asserts the documented failure mode
  * (FAILURE_MODES below) in place of the test, so a variant that quietly started to work, or to fail
  * differently, turns the suite red.
@@ -31,8 +32,9 @@ import { SvgChart } from '../SvgChart.js'
 import { interaction } from '../interaction-capability.js'
 import type { ChartHandle, ChartProps } from '../chart-types.js'
 import { SVG_CHART_INTERACTION_PROPS } from '../svg-chart-types.js'
+import { PNG_NEEDS_CAPABILITY } from '../ChartCore.js'
 
-export type Capability = 'svg' | 'canvas' | 'interaction' | 'signals'
+export type Capability = 'svg' | 'canvas' | 'interaction' | 'signals' | 'png'
 export type VariantName = 'Chart' | 'SvgChart' | 'SvgChart+interaction'
 /** What every variant is exercised as: `<Chart>`'s public props and handle. */
 export type ChartComponent = React.ForwardRefExoticComponent<ChartProps & React.RefAttributes<ChartHandle>>
@@ -96,7 +98,7 @@ function makeVariant(
 interface VariantSpec { variant: Variant; component: ChartComponent }
 
 export const VARIANTS: readonly VariantSpec[] = [
-  { component: Chart, variant: makeVariant('Chart', ['svg', 'canvas', 'interaction', 'signals'], (p) => React.createElement(Chart, p as never)) },
+  { component: Chart, variant: makeVariant('Chart', ['svg', 'canvas', 'interaction', 'signals', 'png'], (p) => React.createElement(Chart, p as never)) },
   { component: PlainSvgChartChecked, variant: makeVariant('SvgChart', ['svg'], (p) => React.createElement(SvgChart as never, p)) },
   {
     component: SvgChartWithInteraction,
@@ -147,7 +149,7 @@ function mount(variant: Variant, props: Record<string, unknown>): Mounted {
   return { container, errors, unmount: () => { act(() => root.unmount()); container.remove() } }
 }
 
-type FailureMode = (variant: Variant) => void
+type FailureMode = (variant: Variant) => void | Promise<void>
 
 /** What a variant does when asked for a capability it does not have (documented in API.md / INTERACTION.md). */
 export const FAILURE_MODES: Record<Capability, FailureMode> = {
@@ -178,6 +180,17 @@ export const FAILURE_MODES: Record<Capability, FailureMode> = {
     const m2 = mount(variant, { spec: tinySpec, width: 40, height: 30, tooltip: true, onError: undefined, logger: { error: () => {}, warn: (...a: unknown[]) => { warned.push(String(a[0])) } } })
     try { expect(warned).toEqual([expect.stringMatching(/^\[aster\] tooltip need hit testing/)]) } finally { m2.unmount() }
   },
+  png: (variant) => {
+    // `getPng` is on every chart's ref; without the capability it rejects with the error that names `@aster-charts/react/png`
+    // (synchronously checked, so it rejects with or without a scene, and nothing is loaded).
+    const ref = React.createRef<ChartHandle>()
+    const m = mount(variant, { spec: tinySpec, width: 40, height: 30, ref })
+    try {
+      expect(m.container.querySelector('svg')).not.toBeNull()
+      expect(m.errors).toEqual([])
+      return expect(ref.current!.getPng()).rejects.toThrow(PNG_NEEDS_CAPABILITY)
+    } finally { m.unmount() }
+  },
   signals: (variant) => {
     // A spec with `signal.on` streams still renders, but is reported: never a silently dead chart.
     const m = mount(variant, { spec: eventStreamSpec, width: 40, height: 30 })
@@ -190,6 +203,6 @@ export const FAILURE_MODES: Record<Capability, FailureMode> = {
   },
 }
 
-function assertFailureMode(variant: Variant, missing: readonly Capability[]): void {
-  for (const cap of missing) FAILURE_MODES[cap](variant)
+async function assertFailureMode(variant: Variant, missing: readonly Capability[]): Promise<void> {
+  for (const cap of missing) await FAILURE_MODES[cap](variant)
 }

@@ -74,6 +74,7 @@ export {
   type LimitClock, type LimitMeter, type SpecLimits,
 } from './limits.js'
 export { AsterUrlError, type ImageUrlPolicy } from './url-policy.js'
+export { checkUrlData, urlDatasets, type UrlDataMode } from './url-data.js'
 export {
   setTextMetricsProvider, getTextMetricsProvider, withTextMetricsProvider,
   usingCanvasTextMetrics, measureText, estimateTextWidth, fontString,

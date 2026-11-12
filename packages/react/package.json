@@ -17,6 +17,10 @@
       "types": "./dist/interaction-capability.d.ts",
       "default": "./dist/interaction-capability.js"
     },
+    "./png": {
+      "types": "./dist/png-capability.d.ts",
+      "default": "./dist/png-capability.js"
+    },
     "./ssr": {
       "types": "./dist/ssr.d.ts",
       "default": "./dist/ssr.js"

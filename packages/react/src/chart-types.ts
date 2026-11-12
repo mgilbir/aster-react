@@ -3,6 +3,7 @@ import type {
   A11yOptions,
   ChartInfo,
   ImageUrlPolicy,
+  UrlDataMode,
   Logger,
   SceneItem,
   SceneRoot,
@@ -11,6 +12,7 @@ import type {
   VgSpec,
 } from '@aster-charts/core'
 import type { EasingName } from '@aster-charts/core/transition'
+import type { PngOptions } from '@aster-charts/core/png'
 import type { SelectValue, SelectionInterval, ViewDomain } from './interaction.js'
 
 // The public prop and handle types of `<Chart>`. They live apart from the component so the
@@ -256,6 +258,14 @@ export interface ChartProps {
    */
   urlPolicy?: ImageUrlPolicy
   /**
+   * `'refuse'`: a spec that has a `url` dataset (one with a non-empty `url` and no `values`, at any depth of nested groups) is refused
+   * before any add-on loads and before evaluation, whether or not `data` gives rows under its name: the chart renders its
+   * error state and `onError` receives an `AsterUrlError` (`ASTER_URL_DENIED`) that names the dataset. For an app that
+   * supplies every row through `data` and draws specs it did not write; the data counterpart of `urlPolicy`. Default
+   * `'allow'` (`RuntimeInput.urlData`).
+   */
+  urlData?: UrlDataMode
+  /**
    * The source of random numbers of this chart (`RuntimeInput.random`, the per-chart counterpart of vega's `setRandom`): expression
    * `random()`, `sampleNormal` / `sampleLogNormal` / `sampleUniform`, the `sample` transform and the bootstrap `ci0` / `ci1` draw from
    * it, in vega's order and count. Pass one seeded generator for the life of the chart (memoize it) and the chart is a function of its
@@ -300,6 +310,16 @@ export interface ChartStreamInput {
 export interface ChartHandle {
   getScene(): SceneRoot | null
   getSvg(): string | null
+  /**
+   * The chart as a PNG: `getScene()` (what `getSvg()` serializes) painted by the canvas renderer, which loads on the first call, and
+   * encoded by the browser's canvas. `null` when there is no scene (still loading, or an error). Needs no `blob:` or `data:` image
+   * loading, so it works under a Content-Security-Policy that allows neither in `img-src`. `scale` is pixels per CSS pixel (default
+   * 1; 2 for a sharp image on a high-density screen). Image marks are loaded from their urls with CORS (`crossOrigin="anonymous"`,
+   * as vega's canvas does); one that does not load is left out of the PNG and reported through `onImageError`, by default the
+   * chart's `logger` (a warning). Rejects with a `RangeError` for an invalid `scale` or an image beyond `PNG_MAX_SIDE` /
+   * `PNG_MAX_PIXELS`. On `<SvgChart>` it needs `png={png}` from `@aster-charts/react/png` and rejects without it.
+   */
+  getPng(options?: PngOptions): Promise<Blob | null>
   getChartInfo(): ChartInfo | null
   getView(): ViewDomain | null
   setView(view: ViewDomain | null): void

@@ -33,11 +33,13 @@ flowchart LR
     GEO["/geo"]
     TRX["/transforms"]
     LOAD["/load<br/>loadSpecData"]
+    PNG["/png<br/>renderSceneToPng"]
   end
   subgraph react["@aster-charts/react"]
     R0["@aster-charts/react<br/>Chart, useChart, ChartStream, workers"]
     LITE["/lite<br/>SvgChart"]
     INT["/interaction<br/>interaction capability"]
+    PNGR["/png<br/>png capability"]
     RVL["/vl<br/>registers the compiler"]
     SSR["/ssr"]
     WK["/worker, /worker-entry"]
@@ -47,11 +49,15 @@ flowchart LR
   LITE --> C0 & DOM & ADD
   INT --> HIT & SIG
   LITE -. "interaction prop" .-> INT
+  LITE -. "png prop" .-> PNGR
+  R0 -. "getPng: dynamic import on first call" .-> PNG
+  PNGR -. "dynamic import on first call" .-> PNG
+  PNG --> CAN
   RVL --> VLC
   ADD -. "dynamic import on demand" .-> GEO & TRX & LOAD
 ```
 
-*Package map. Solid arrows are static imports. `<Chart>` imports the canvas and interaction capabilities itself; `<SvgChart>` imports neither and receives the interaction capability only through its `interaction` prop (dotted). The add-on imports are dynamic and happen only when a spec needs them.*
+*Package map. Solid arrows are static imports. `<Chart>` imports the canvas and interaction capabilities itself; `<SvgChart>` imports neither and receives the interaction capability only through its `interaction` prop (dotted), and the PNG export only through its `png` prop. The add-on imports are dynamic and happen only when a spec needs them; the PNG painter (`/png`, with the canvas renderer) is imported by the first `getPng` call.*
 
 **The render lifecycle** of a `<Chart>`: detect the add-ons the spec needs (and suspend until they are loaded), evaluate the spec in a chart session, write the output (full SVG on the first commit, a patch afterwards, or a canvas paint), then bind the signal event loop, whose signal and data changes feed the next evaluation. The sequence is drawn under "ChartCore and the two shells".
 
@@ -265,6 +271,7 @@ Because heavy feature areas are only used by a small fraction of specs, they are
 | `@aster-charts/core/dom` | the incremental DOM patcher (`patchSceneDom`, `sceneToDomDesc`, `createChartSession`); `<Chart>` now defaults to this path |
 | `@aster-charts/core/signals` | the signal→view event loop (`bindSceneSignals`, `stampDatumAttrs`) that binds a spec's `signal.on` streams to the rendered svg, and the timer clock seam (`setTimerClock`) |
 | `@aster-charts/core/canvas` | the canvas renderer (`renderSceneToCanvas`) |
+| `@aster-charts/core/png` | a scene as a PNG (`renderSceneToPng`): the canvas renderer's paint, encoded by the platform canvas, the scene's image marks loaded with CORS first; `getPng` imports it on its first call |
 | `@aster-charts/core/hit` | the hit index (`buildHitIndex`) |
 | `@aster-charts/core/addons` | which add-ons a spec needs and loading them on demand (`addonsNeeded`, `loadAddonsFor`), and `TRANSFORMS_ADDON_TYPES`, the list of transform types the transforms add-on registers |
 
@@ -286,8 +293,9 @@ Because heavy feature areas are only used by a small fraction of specs, they are
 `@aster-charts/react` has one chart implementation, `ChartCore` (`packages/react/src/ChartCore.tsx`: evaluation, the DOM patcher, pan/zoom,
 selection, the a11y tree, the event loop). It receives its optional capabilities as injected values, never imports them:
 the canvas renderer (`CanvasCapability`, `@aster-charts/core/canvas`) and hit testing + the signal loop (`InteractionCapability`,
-`@aster-charts/core/hit`, `@aster-charts/core/signals`). `<Chart>` (`Chart.tsx`) and `<SvgChart>` (`SvgChart.tsx`) are shells that render
-`<ChartCore>`: `<Chart>` injects both capabilities, `<SvgChart>` injects nothing itself and passes through the `interaction`
+`@aster-charts/core/hit`, `@aster-charts/core/signals`), and the PNG export (`PngCapability`, a loader of `@aster-charts/core/png`, which
+`getPng` calls). `<Chart>` (`Chart.tsx`) and `<SvgChart>` (`SvgChart.tsx`) are shells that render
+`<ChartCore>`: `<Chart>` injects every capability, `<SvgChart>` injects nothing itself and passes through the `interaction` and `png`
 its caller gives it. So `@aster-charts/react/lite` (`SvgChart`) never reaches the canvas module, and `@aster-charts/react/interaction`
 (the `interaction` value) is the only way hit and signals enter a bundle that uses `<SvgChart>`. The shell split costs `<Chart>` 0.7 kB gzip
 (the property reads through the capability objects, and the missing-capability report that only `<SvgChart>` can trigger).
@@ -429,7 +437,7 @@ The conformance harness (`packages/conformance`) uses the real Vega and Vega-Lit
 - **Guide captions** (`a11y-parity`), **transform option combinations** (`transform-matrix`), **schema sweeps** (`src/run-sweep.ts`: one generated chart per property/value of the Vega, Vega-Lite and signals schemas, and `src/sweeps/values.mjs`: one fixed chart per journey with a column of awkward values), **differential fuzzing** (`fuzz`), and the **real-browser** gates (Chromium text metrics, canvas pixels, batched-SVG pixels, signal event streams, React interaction).
 - **Oracle vectors**: per-library input/output pairs recorded from the pinned packages and replayed by `pnpm test`.
 
-Most corpus entries set explicit numeric `width`/`height` and `autosize: 'none'` so layout is deterministic, but nothing enforces it: of the 1059 specs, 109 do not set a top-level `autosize: 'none'` and 68 have no numeric top-level `width`/`height` (counted 2026-11-06), so autosize and container sizing are exercised by the gate too. Headless text metrics are matched by reimplementing Vega's estimate (`~~(0.8 * len * fontSize)`, see [FONTS.md](FONTS.md)).
+Most corpus entries set explicit numeric `width`/`height` and `autosize: 'none'` so layout is deterministic, but nothing enforces it: of the 1060 specs, 109 do not set a top-level `autosize: 'none'` and 68 have no numeric top-level `width`/`height` (counted 2026-11-06; the one spec added since, `data-values-over-source`, sets both), so autosize and container sizing are exercised by the gate too. Headless text metrics are matched by reimplementing Vega's estimate (`~~(0.8 * len * fontSize)`, see [FONTS.md](FONTS.md)).
 
 ### Gap probes (`packages/conformance/probes/`)
 

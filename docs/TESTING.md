@@ -157,14 +157,14 @@ result is the summary line it prints. They change with the code: re-run before q
 
 | What | Command | Result |
 |---|---|---|
-| Corpus size | `ls packages/conformance/corpus \| wc -l`; `... \| grep -c '\.vg\.json$'`; `... \| grep -c '\.vl\.json$'` | 1059 specs: 387 raw Vega, 672 Vega-Lite |
+| Corpus size | `ls packages/conformance/corpus \| wc -l`; `... \| grep -c '\.vg\.json$'`; `... \| grep -c '\.vl\.json$'` | 1060 specs: 388 raw Vega, 672 Vega-Lite |
 | Unit, React, script and vector tests | `pnpm test` | 319 files, 33665 tests passed |
 | Time-zone matrix | `pnpm test:tz` | `[tz] all zones passed` (zone-sensitive vitest suites under America/New_York, Asia/Kolkata and Australia/Lord_Howe; `corpus-tz` under UTC and those three) |
-| SVG corpus vs real Vega | `pnpm conformance` | 1059/1059 passed |
+| SVG corpus vs real Vega | `pnpm conformance` | 1060/1060 passed |
 | Vega-Lite corpus through `@aster-charts/vl` | `pnpm conformance-vl` | 672 passed, 0 failed, 0 errored / 672 |
-| Scene differential | `pnpm scene-diff` | 1059/1059 scenes match |
+| Scene differential | `pnpm scene-diff` | 1060/1060 scenes match |
 | Incremental vs fresh evaluation (no oracle) | `pnpm conformance:diff` | 0 differential mismatches, 0 skipped |
-| Guide captions vs Vega `aria-label` | `pnpm a11y-parity` | 1059/1059 caption sets match |
+| Guide captions vs Vega `aria-label` | `pnpm a11y-parity` | 1060/1060 caption sets match |
 | Transform option combinations | `pnpm transform-matrix` | 75/76 match (1 browser-only case skipped here, run by `conformance:browser`) |
 | Vega schema sweep | `pnpm sweep-vega -- --floor 7549 --min-ok 7538 --max-node-error 3` | 7538 ok, 9 both-refused, 2 node-error (the oracle crashes), 0 engine-error, 0 differ / 7549 |
 | Vega-Lite schema sweep | `pnpm sweep-vl -- --floor 27513 --min-ok 27452 --max-node-error 17 --vega-check` | 27452 ok, 47 both-refused, 14 node-error, 0 engine-error, 0 differ, 0 vega-differ / 27513 |
@@ -172,8 +172,8 @@ result is the summary line it prints. They change with the code: re-run before q
 | Signals sweep | `pnpm sweep-signals -- --floor 166 --min-ok 103 --max-node-error 2 --max-retained 60` | 103 ok, 60 retained, 1 both-refused, 2 node-error, 0 differ / 166 |
 | Gap probes (a probe that passes keeps passing; a failing one documents a gap) | `pnpm probe -- --min-pass 2` | 2/2 pass (floor 2) |
 | Fuzz reproducers | `pnpm fuzz:replay` | 2/2 pass |
-| Corpus in Chromium, live text metrics | `pnpm conformance:browser` | 1059/1059 passed |
-| Canvas pixels vs Vega's canvas | `pnpm conformance:canvas` | chromium 1220/1220 passed; append painting vs full repaint: 120 scenarios, 265 append frames, 0 failing |
+| Corpus in Chromium, live text metrics | `pnpm conformance:browser` | 1060/1060 passed |
+| Canvas pixels vs Vega's canvas | `pnpm conformance:canvas` | chromium 1221/1221 passed; append painting vs full repaint: 120 scenarios, 309 append frames, 0 failing |
 | Batched (dense) SVG vs per-item SVG pixels | `pnpm conformance:batch` | 61/61 passed |
 | Signal event streams vs real Vega | `pnpm conformance:signals` | 64/64 cases agree (group scopes among them) |
 | Vega-Lite selections vs real Vega (same native input, signals/stores/SVG compared per step) | `pnpm conformance:selections` | 53/53 cases agree (concat, facet and repeat views and geographic interval selections among them; steps counted as `retained` ([INTERACTION.md](INTERACTION.md#signals)): 13 of them, ceiling 13) |

@@ -215,7 +215,7 @@ Each list lives in one place; this page only points at them.
 - **Vega-Lite features `@aster-charts/vl` refuses:** [packages/vl/README.md](packages/vl/README.md#throws-not-supported), held to the compiler by a test. Each is a `VLCompileError` naming the feature and its path.
 - **Where Aster deliberately differs from Vega** (including the `retained` cases, where a signal written into a running chart renders the fresh result): [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#deviations-from-vega); the differences made for safety are in [docs/LIMITS.md](docs/LIMITS.md#deviations-from-vega-made-for-safety).
 - **Untrusted specs:** `limits` are best-effort budgets and a killable worker is the hard guarantee (a regular expression, for one, cannot be interrupted in-process); a few built-in ceilings hold even without `limits`. Read [docs/LIMITS.md](docs/LIMITS.md) before rendering specs from untrusted sources.
-- **Open work, word clouds, streaming transport and export:** [docs/ROADMAP.md](docs/ROADMAP.md#2-open-work). PNG and PDF export are out of scope; a host can rasterize the SVG or canvas.
+- **Open work, word clouds, streaming transport and export:** [docs/ROADMAP.md](docs/ROADMAP.md#2-open-work). PDF export is out of scope; `getPng()` on a chart's ref encodes a PNG in the browser ([docs/API.md](docs/API.md#png-export)).
 - **Transforms without an incremental fast path** (the global fitters such as `kde`, `regression`, `loess`) re-derive on every append; the result is still exactly a fresh evaluation ([docs/PERFORMANCE.md](docs/PERFORMANCE.md)).
 
 ## Conformance results
@@ -225,13 +225,13 @@ The behaviour is checked against the real packages by the gates in
 produced it, are in [docs/TESTING.md](docs/TESTING.md#reference-results) and
 [docs/PERFORMANCE.md](docs/PERFORMANCE.md#reference-measurements); in short, as measured on this tree:
 
-- the SVG corpus (1059 specs: 387 Vega, 672 Vega-Lite) renders identically to real Vega under a strict
-  canonicalizer: `pnpm conformance` (1059/1059);
+- the SVG corpus (1060 specs: 388 Vega, 672 Vega-Lite) renders identically to real Vega under a strict
+  canonicalizer: `pnpm conformance` (1060/1060);
 - the same 672 Vega-Lite specs compiled by `@aster-charts/vl` render identically to vega-lite's output: `pnpm conformance-vl` (672/672);
 - the schema sweeps (one chart per property/value of the schema) have no differences: Vega 7538 ok of 7549 (9 both-refused, 2 the oracle itself crashes on), Vega-Lite 27452 ok of 27513 (47 both-refused, 14 oracle crashes),
   signals 103 ok of 166 (60 `retained`, see [Known gaps](#known-gaps-and-differences-from-vega); 0 differ),
   values 500 ok of 500 (the same specification with awkward cells: `null`, `""`, words, lists, `Infinity` written out; 0 differ);
-- in real Chromium, the corpus matches Vega's string renderer (1059/1059), the canvas renderer matches Vega's canvas (1220/1220 pixel comparisons),
+- in real Chromium, the corpus matches Vega's string renderer (1060/1060), the canvas renderer matches Vega's canvas (1221/1221 pixel comparisons),
   and signal event streams match Vega (64/64 cases).
 
 ## Build from source
