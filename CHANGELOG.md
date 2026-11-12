@@ -3,6 +3,18 @@
 Version 0.1.0 is the first release. From 0.1.0 on, entries are added per release under Added, Changed
 and Fixed, per package. Everything built before the first release is in [Pre-release history](#pre-release-history) below.
 
+## Unreleased
+
+### `@aster-charts/core`
+
+#### Fixed
+
+- `loadSpecData` loads a `url` dataset given as a single object (`data: { name, url }`, at the top level or in a nested group whose
+  `marks` / `data` is a single object), and evaluates a `{signal}` url against `signals` given as a single object, as the compiler
+  reads those lists (vega's `array()`). It used to skip them, and the render then failed with "has a url but no data was loaded".
+- `addonsNeeded` counts a `projections` given as a single object (at the top level or in a group), so `<Chart>` loads the geo add-on
+  for it instead of failing the render.
+
 ## 0.2.0 (2026-11-11)
 
 ### `@aster-charts/react`

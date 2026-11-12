@@ -95,7 +95,8 @@ function selectorFilters(selector: string, found: Set<AddonName>): void {
 export function addonsNeeded(spec: VgSpec): readonly AddonName[] {
   if (!isObj(spec)) return NONE
   const found = new Set<AddonName>()
-  if (Array.isArray(spec.projections) && spec.projections.length > 0) found.add('geo')
+  // (a scope's lists are read as the compiler reads them, vega-util `array()`: a single object is a one-element list)
+  if (spec.projections != null && (!Array.isArray(spec.projections) || spec.projections.length > 0)) found.add('geo')
   // one walk, with a stack (specs nest to any depth), bounded like the rest of the engine's spec walks, and safe on a cyclic object
   const seen = new WeakSet<object>()
   const stack: Array<[unknown, number, string]> = [[spec, 0, '']]
@@ -109,7 +110,7 @@ export function addonsNeeded(spec: VgSpec): readonly AddonName[] {
     if (!isObj(node) || depth > HARD_MAX_SPEC_DEPTH || seen.has(node)) continue
     seen.add(node)
     // the projections of a group mark are built in its scope (the view's are checked above)
-    if (key === 'projections' && Array.isArray(node) && node.length > 0) found.add('geo')
+    if (key === 'projections' && (!Array.isArray(node) || node.length > 0)) found.add('geo')
     if (Array.isArray(node)) {
       for (const x of node) stack.push([x, depth + 1, key])
       continue
