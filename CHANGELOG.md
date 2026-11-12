@@ -17,10 +17,20 @@ and Fixed, per package. Everything built before the first release is in [Pre-rel
   `'refuse'` a url dataset's readers are not counted, and `loadAddonsFor` rejects with the refusal before importing anything
   ([docs/LIMITS.md](docs/LIMITS.md#refusing-url-datasets-urldata), #143).
 
+- `@aster-charts/core/png`: `renderSceneToPng(scene, { scale, imageTimeoutMs, onImageError })` paints a scene with the canvas
+  renderer and encodes it with the platform canvas as a PNG `Blob`, exactly the pixels `renderSceneToCanvas` paints. It loads no
+  `blob:` or `data:` image, so it works under a Content-Security-Policy that allows neither in `img-src`. Image marks are loaded from
+  their urls with CORS, as vega's canvas loads them; one that does not load is left out and reported (#144).
+
 ### `@aster-charts/react`
 
 #### Added
 
+- `getPng(options?)` on the ref of `<Chart>` (and of `<SvgChart>` given `png={png}` from the new `@aster-charts/react/png`): the
+  chart's scene as a PNG `Blob` (`null` while there is none), with `scale` for high-density output. The painter is imported on the
+  first call, so a chart that never exports does not load it; an image mark that does not load is reported to the chart's `logger`.
+  Raster export was out of scope; this one convenience is in, because the usual recipe (the SVG in an `<img>`) needs `blob:` or
+  `data:` in `img-src` (#144).
 - `urlData` on `<Chart>`, `<SvgChart>`, `<ChartStream>` and `<ChartWorkerStream>`, and in `useChart`, `useChartWorker` and a
   stream's `initial`: `urlData="refuse"` refuses a spec with a url dataset before any add-on loads (the csv readers a url names,
   or anything else the spec needs) and reports the `AsterUrlError` through `onError` / `error`. The worker imports nothing for

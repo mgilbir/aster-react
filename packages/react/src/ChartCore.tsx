@@ -7,6 +7,7 @@ import {
   checkSvgLength,
   createPointMapper,
   resolveCursor,
+  consoleLogger,
   type A11yNode,
   type A11yOptions,
   type ChartInfo,
@@ -26,7 +27,7 @@ import { createChartSession, hasDenseSymbolMarks, patchSceneDom, renderSceneToDo
 import type { CanvasSceneSnapshot } from '@aster-charts/core/canvas'
 import type { HitIndex } from '@aster-charts/core/hit'
 import type { CursorTracker, SignalBinding } from '@aster-charts/core/signals'
-import type { CanvasCapability, InteractionCapability } from './capabilities.js'
+import type { CanvasCapability, InteractionCapability, PngCapability } from './capabilities.js'
 import type { ChartHandle, ChartProps } from './chart-types.js'
 import { createSceneAnimator, loadTransitions, resolveTransition, type SceneAnimator } from './transition.js'
 import {
@@ -295,6 +296,10 @@ function a11yTreeOptions(a11y: ChartProps['a11y'], label: string | undefined, se
   }
 }
 
+/** What `getPng` rejects with on a chart that was not given the PNG capability (`<SvgChart>` without `png`). */
+export const PNG_NEEDS_CAPABILITY =
+  '[aster] getPng needs the png capability: <SvgChart> leaves out the canvas renderer it paints with; import { png } from "@aster-charts/react/png" and pass png={png}'
+
 /**
  * Everything a chart is, with its optional capabilities injected as props. `<Chart>` and
  * `<SvgChart>` are one-line shells over this component (the anti-drift rule: there is no
@@ -308,6 +313,8 @@ export interface ChartCoreProps extends ChartProps {
    * event streams and `preventDefault` are unavailable and each use is reported (never silent).
    */
   interaction?: InteractionCapability
+  /** PNG export (`getPng`). Absent: `getPng` rejects with the error that names `@aster-charts/react/png`. */
+  png?: PngCapability
 }
 
 export const ChartCore = React.forwardRef<ChartHandle, ChartCoreProps>(function ChartCore(props, ref) {
@@ -385,6 +392,7 @@ function ChartView({
   onError,
   canvas: canvasCap,
   interaction,
+  png: pngCap,
   chartRef,
   focusHandoff,
 }: Omit<ChartCoreProps, 'spec'> & { spec: VgSpec; chartRef: React.ForwardedRef<ChartHandle>; focusHandoff: React.MutableRefObject<FocusSpot | null> }) {
@@ -519,6 +527,9 @@ function ChartView({
   // always calls the latest (a changing identity must not re-evaluate the chart).
   const loggerRef = React.useRef(logger)
   loggerRef.current = logger
+  // (read by the handle, whose identity never changes)
+  const pngCapRef = React.useRef(pngCap)
+  pngCapRef.current = pngCap
   const hasLogger = logger != null
   const stableLogger = React.useMemo<Logger | undefined>(
     () => (hasLogger ? { error: (...a) => loggerRef.current?.error(...a), warn: (...a) => loggerRef.current?.warn(...a) } : undefined),
@@ -1432,6 +1443,17 @@ function ChartView({
   React.useImperativeHandle(chartRef, () => ({
     getScene: () => sceneRef.current,
     getSvg: () => (sceneRef.current ? renderSceneToSvg(sceneRef.current) : null),
+    getPng: async (options) => {
+      // the scene of the call, not of whenever the painter has loaded
+      const scene = sceneRef.current
+      const cap = pngCapRef.current
+      if (cap == null) throw new Error(PNG_NEEDS_CAPABILITY)
+      if (scene == null) return null
+      const { renderSceneToPng } = await cap.load()
+      const onImageError = options?.onImageError
+        ?? ((url: string, error: Error) => (loggerRef.current ?? consoleLogger).warn(`[aster] getPng: ${error.message}`, url))
+      return renderSceneToPng(scene, { ...options, onImageError })
+    },
     getChartInfo: () => chartInfoRef.current,
     getView: () => viewRef.current ?? null,
     setView: (next) => applyViewRef.current(next),

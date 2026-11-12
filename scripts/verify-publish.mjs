@@ -173,6 +173,10 @@ import { SvgChart } from '@aster-charts/react/lite'
 import type { SvgChartProps, SvgChartHandle } from '@aster-charts/react/lite'
 import { interaction } from '@aster-charts/react/interaction'
 import type { InteractionCapability } from '@aster-charts/react/interaction'
+import { png } from '@aster-charts/react/png'
+import type { PngCapability } from '@aster-charts/react/png'
+import type { ChartHandle, PngOptions } from '@aster-charts/react'
+import { renderSceneToPng, PNG_MAX_PIXELS } from '@aster-charts/core/png'
 import { createElement, createRef } from 'react'
 
 const spec: VgSpec = { width: 100, height: 50, marks: [] }
@@ -203,6 +207,16 @@ createElement(SvgChart, { spec, onPointSelect: () => {} })
 createElement(SvgChart, { spec, renderer: 'canvas' })
 const fullEl = createElement(Chart, { spec, tooltip: true, renderer: 'canvas' })
 void [liteEl, richEl, fullEl]
+
+// PNG export: on <Chart>'s ref, and on <SvgChart>'s with the png capability.
+const pngCap: PngCapability = png
+const chartRef = createRef<ChartHandle>()
+const pngOptions: PngOptions = { scale: 2, imageTimeoutMs: 5_000, onImageError: (url: string, e: Error) => { void [url, e] } }
+const exported: Promise<Blob | null> | undefined = chartRef.current?.getPng(pngOptions)
+const fromLite: Promise<Blob | null> | undefined = handle.current?.getPng()
+const pngLiteEl = createElement(SvgChart, { spec, png: pngCap, ref: handle })
+const direct: Promise<Blob> = renderSceneToPng(scene, { scale: 1 })
+void [exported, fromLite, pngLiteEl, direct, PNG_MAX_PIXELS]
 `)
   writeFileSync(join(project, 'tsconfig.json'), JSON.stringify({
     compilerOptions: {

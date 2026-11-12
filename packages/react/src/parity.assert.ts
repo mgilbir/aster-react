@@ -40,6 +40,6 @@ export type SharedSameType = Assert<AllTrue<{ [K in Shared]: Equal<SvgChartProps
 export type InteractionSameType = Assert<AllTrue<{ [K in InteractionOnly]: Equal<WithInteraction[K], ChartProps[K]> }>>
 export type InteractionUnavailable = Assert<AllTrue<{ [K in InteractionOnly]: Equal<WithoutInteraction[K], undefined> }>>
 export type HandleSameType = Assert<AllTrue<{ [K in HandleShared]: Equal<SvgChartHandle[K], ChartHandle[K]> }>>
-// `<SvgChart>` has exactly these props besides `interaction`.
-export type NoExtraProps = Assert<Equal<Exclude<keyof SvgChartProps, 'interaction'>, Shared | InteractionOnly>>
+// `<SvgChart>` has exactly these props besides its capabilities, `interaction` and `png`.
+export type NoExtraProps = Assert<Equal<Exclude<keyof SvgChartProps, 'interaction' | 'png'>, Shared | InteractionOnly>>
 export type NoExtraHandle = Assert<Equal<keyof SvgChartHandle, HandleShared>>

@@ -12,6 +12,7 @@ import type {
   VgSpec,
 } from '@aster-charts/core'
 import type { EasingName } from '@aster-charts/core/transition'
+import type { PngOptions } from '@aster-charts/core/png'
 import type { SelectValue, SelectionInterval, ViewDomain } from './interaction.js'
 
 // The public prop and handle types of `<Chart>`. They live apart from the component so the
@@ -309,6 +310,16 @@ export interface ChartStreamInput {
 export interface ChartHandle {
   getScene(): SceneRoot | null
   getSvg(): string | null
+  /**
+   * The chart as a PNG: `getScene()` (what `getSvg()` serializes) painted by the canvas renderer, which loads on the first call, and
+   * encoded by the browser's canvas. `null` when there is no scene (still loading, or an error). Needs no `blob:` or `data:` image
+   * loading, so it works under a Content-Security-Policy that allows neither in `img-src`. `scale` is pixels per CSS pixel (default
+   * 1; 2 for a sharp image on a high-density screen). Image marks are loaded from their urls with CORS (`crossOrigin="anonymous"`,
+   * as vega's canvas does); one that does not load is left out of the PNG and reported through `onImageError`, by default the
+   * chart's `logger` (a warning). Rejects with a `RangeError` for an invalid `scale` or an image beyond `PNG_MAX_SIDE` /
+   * `PNG_MAX_PIXELS`. On `<SvgChart>` it needs `png={png}` from `@aster-charts/react/png` and rejects without it.
+   */
+  getPng(options?: PngOptions): Promise<Blob | null>
   getChartInfo(): ChartInfo | null
   getView(): ViewDomain | null
   setView(view: ViewDomain | null): void

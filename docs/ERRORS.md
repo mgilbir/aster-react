@@ -104,6 +104,24 @@ evaluation: `[aster] url denied: dataset "source_0" loads its rows from a url, a
 "refuse"): <url>` (with several, `datasets "a", "b" load their rows from urls`; `url` is the first one's). An invalid `urlData`
 is a `TypeError` (`[aster] urlData must be "allow" or "refuse", ...`).
 
+## PNG export errors
+
+`getPng` and `renderSceneToPng` (`@aster-charts/core/png`) reject with:
+
+- `RangeError` `[aster] renderSceneToPng: scale must be a finite number above 0, ...`, `... imageTimeoutMs must be a number of
+  milliseconds, ...`, `... the scene has no area ...` / `... has no finite size ...`, and `... a W x H image is too large (at most 32767
+  pixels a side and 268435456 in all); use a smaller scale`.
+- `Error` `[aster] renderSceneToPng: this environment has no canvas ...`, `... no 2D context for a W x H canvas` (a DOM without a canvas
+  implementation, or a canvas the browser would not allocate), `... the W x H canvas could not be read back (an image drawn into it from
+  another origin without CORS makes it unreadable): ...` (a bitmap the host put in the scene; image marks loaded from their urls never
+  cause it), and `... the browser could not encode a W x H canvas as a PNG ...`.
+- On `<SvgChart>` without the `png` capability: `[aster] getPng needs the png capability: <SvgChart> leaves out the canvas renderer it
+  paints with; import { png } from "@aster-charts/react/png" and pass png={png}`.
+
+An image mark that does not load is not an error: it is left out of the PNG and reported to `onImageError(url, error)` (by default,
+on a chart, `logger.warn`) with `[aster] renderSceneToPng: image <url> not drawn: it did not load (a cross-origin image is drawn only
+when its server allows CORS)`, `... within <ms> ms`, `... it has no size` or `... no Image in this environment`.
+
 ## Stream errors
 
 `createChartStream` throws two typed errors, each with a stable `code` (use the code, not `instanceof`, across a

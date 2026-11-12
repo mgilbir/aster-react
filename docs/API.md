@@ -17,6 +17,7 @@ The public surface of the three Aster packages: what each entry point exports, w
 | render on the server and hydrate | `renderChartToStaticMarkup`, `hydrateChart` from `@aster-charts/react` (or `@aster-charts/react/ssr`) | [SSR + hydration](#ssr--hydration) |
 | render specs from untrusted sources | the `limits`, `urlPolicy` and `urlData` inputs, and a worker | [RuntimeInput](#runtimeinput), [LIMITS.md](LIMITS.md) |
 | load a spec's `url` datasets | `loadSpecData` from `@aster-charts/core/load`, or `useSpecData` in React | [`@aster-charts/core/load`](#aster-chartscoreload) |
+| save a chart as a PNG | `getPng()` on the chart's ref (`<SvgChart>` needs `png` from `@aster-charts/react/png`), or `renderSceneToPng` from `@aster-charts/core/png` | [PNG export](#png-export), [`@aster-charts/core/png`](#aster-chartscorepng) |
 | call my own function from an expression | `registerExpressionFunction` from `@aster-charts/core` | [Custom expression functions](#custom-expression-functions) |
 
 ## Contents
@@ -25,9 +26,9 @@ The public surface of the three Aster packages: what each entry point exports, w
 - [`@aster-charts/core`](#aster-chartscore)
   - Guides: [Render a Vega spec](#render-a-vega-spec), [Sessions and per-datum updates](#sessions-and-per-datum-updates), [Custom expression functions](#custom-expression-functions), [Streaming and pulses](#streaming-and-pulses)
   - Reference: [RuntimeInput](#runtimeinput), [The pipeline steps](#the-pipeline-steps), [Locales](#locales), [Text metrics](#text-metrics), [Logger](#logger), [Pointer position and cursor](#pointer-position-and-cursor), [Building blocks](#building-blocks), [Limit checks](#limit-checks), [Typed errors](#typed-errors), [Accessibility tree](#accessibility-tree)
-  - Add-on entry points: [`/hit`](#aster-chartscorehit), [`/signals`](#aster-chartscoresignals), [`/addons`](#aster-chartscoreaddons), [`/dom`](#aster-chartscoredom), [`/transition`](#aster-chartscoretransition), [`/canvas`](#aster-chartscorecanvas), [`/load`](#aster-chartscoreload), [`/geo` and `/transforms`](#aster-chartscoregeo-and-aster-chartscoretransforms), [an example](#example-hit-testing-a-scene)
+  - Add-on entry points: [`/hit`](#aster-chartscorehit), [`/signals`](#aster-chartscoresignals), [`/addons`](#aster-chartscoreaddons), [`/dom`](#aster-chartscoredom), [`/transition`](#aster-chartscoretransition), [`/canvas`](#aster-chartscorecanvas), [`/png`](#aster-chartscorepng), [`/load`](#aster-chartscoreload), [`/geo` and `/transforms`](#aster-chartscoregeo-and-aster-chartscoretransforms), [an example](#example-hit-testing-a-scene)
 - [`@aster-charts/react`](#aster-chartsreact)
-  - Components and hooks: [`<Chart>`](#chart), [`<SvgChart>` and the `interaction` capability](#svgchart-and-the-interaction-capability), [Hooks](#hooks), [Streaming components](#streaming-components), [Workers](#workers), [SSR + hydration](#ssr--hydration)
+  - Components and hooks: [`<Chart>`](#chart), [PNG export](#png-export), [`<SvgChart>` and the `interaction` capability](#svgchart-and-the-interaction-capability), [Hooks](#hooks), [Streaming components](#streaming-components), [Workers](#workers), [SSR + hydration](#ssr--hydration)
   - Reference: [Registry and session re-exports](#registry-and-session-re-exports), [Pan, zoom and selection helpers](#pan-zoom-and-selection-helpers), [Accessibility keyboard contract](#accessibility-keyboard-contract)
 - [`@aster-charts/vl`](#aster-chartsvl): [Compile a Vega-Lite spec](#compile-a-vega-lite-spec), [Maps and animation](#maps-and-animation)
 
@@ -38,9 +39,9 @@ Aster ships three public packages:
 | Package | Entry | Purpose |
 |---|---|---|
 | `@aster-charts/core` | `@aster-charts/core` | compile/evaluate/render a Vega spec to SVG; limits, streams, a11y tree |
-| `@aster-charts/core/…` | `/addons`, `/dom`, `/canvas`, `/hit`, `/signals`, `/transition`, `/load`, `/geo`, `/transforms` | `/addons` says which add-ons a spec needs and loads them on demand; `/transition` interpolates between two scenes; the others are opt-in add-ons (tree-shaking boundaries) |
+| `@aster-charts/core/…` | `/addons`, `/dom`, `/canvas`, `/png`, `/hit`, `/signals`, `/transition`, `/load`, `/geo`, `/transforms` | `/addons` says which add-ons a spec needs and loads them on demand; `/transition` interpolates between two scenes; `/png` encodes a scene as a PNG; the others are opt-in add-ons (tree-shaking boundaries) |
 | `@aster-charts/react` | `@aster-charts/react` | `<Chart>`, `useChart`, streams, SSR/hydration, worker hooks |
-| `@aster-charts/react/…` | `/lite`, `/interaction`, `/vl`, `/worker`, `/worker-entry`, `/ssr` | `/lite` is the SVG-only `<SvgChart>`; `/interaction` is the `interaction` capability that adds tooltips, point selection and `signal.on` streams to it; `/vl` registers the Vega-Lite compiler (and exports `compile`, `isVegaLiteSpec`, `normalizeChartSpec`); `/worker` has the worker registries and protocol; `/worker-entry` is a ready worker script; `/ssr` is the string/hydration pair |
+| `@aster-charts/react/…` | `/lite`, `/interaction`, `/png`, `/vl`, `/worker`, `/worker-entry`, `/ssr` | `/lite` is the SVG-only `<SvgChart>`; `/interaction` is the `interaction` capability that adds tooltips, point selection and `signal.on` streams to it; `/png` is the `png` capability that gives it `getPng`; `/vl` registers the Vega-Lite compiler (and exports `compile`, `isVegaLiteSpec`, `normalizeChartSpec`); `/worker` has the worker registries and protocol; `/worker-entry` is a ready worker script; `/ssr` is the string/hydration pair |
 | `@aster-charts/vl` | `@aster-charts/vl` | from-scratch Vega-Lite → Vega compiler |
 
 `@aster-charts/core` takes Vega specs only. Vega-Lite goes through `@aster-charts/vl` (or `@aster-charts/react/vl`).
@@ -562,6 +563,24 @@ segments (`PathSeg[]`: `M L H V C S Q T A Z`, relative commands included); `trac
 `PathSink` (the path methods of a 2D context) offset by `(tx, ty)`, with `arcs: 'bezier'` for vega's bezier approximation of an arc;
 `canonicalPath(segments)` is the normalized text of parsed segments, the form in which canvas and SVG geometry are compared.
 
+#### `@aster-charts/core/png`
+
+`renderSceneToPng(scene, options?)` paints a scene with the canvas renderer and encodes it with the platform canvas (a `<canvas>`
+element, else an `OffscreenCanvas`), resolving to a `Blob` of type `image/png` of `ceil(width * scale)` x `ceil(height * scale)`
+pixels: the pixels `renderSceneToCanvas` paints at that `dpr`, background included (none: transparent). Nothing is serialized
+to SVG and no `blob:` or `data:` url is loaded into an `<img>`, so it works under a Content-Security-Policy whose `img-src`
+allows neither. It waits for `document.fonts.ready`. `PngOptions`: `scale` (pixels per scene unit, default 1, a finite number
+above 0), `imageTimeoutMs` (default `PNG_IMAGE_TIMEOUT_MS`, 10 000) and `onImageError(url, error)`.
+
+Image marks are drawn from their `url`s (already vetted by the chart's `urlPolicy`; the svg draws the same urls): each url is
+loaded once, as vega's canvas loads images, with `crossOrigin = "anonymous"`, so the canvas stays readable. An image that does
+not load (a network error, a server on another origin that does not allow CORS, the timeout, or no `Image` in a worker) is left
+out of the PNG and reported to `onImageError`. A bitmap the scene already holds (a `heatmap`'s) is drawn as it is. The scene is
+not modified. Rejects with a `RangeError` for an invalid `scale` or `imageTimeoutMs`, a scene without area, or an image wider or
+taller than `PNG_MAX_SIDE` (32 767) or larger than `PNG_MAX_PIXELS` (268 435 456, 16 384 squared) pixels; with an `Error` when
+there is no canvas, when the canvas cannot be read back (a bitmap the host put in the scene from another origin without CORS), or
+when the browser will not encode it (a device may refuse canvases far below the caps).
+
 #### `@aster-charts/core/load`
 
 `loadSpecData(spec, { baseURL, allow, protocols, timeoutMs, maxBytes, ... })` for URL datasets, with a URL policy (safe defaults, see `docs/LIMITS.md`).
@@ -693,8 +712,8 @@ array for a dataset is diffed against the previous one (appends and in-place edi
 unknown dataset, a non-integer or out-of-range index or a changed row count makes the whole changeset be ignored
 (the update is diffed in full, so the chart is still correct) and `onError` receives an `Error` describing it.
 
-**Ref.** The ref (`ChartHandle`) exposes `getScene()`, `getSvg()` (serializes the current scene), `getChartInfo()`,
-`getView()`, `setView()`, `resetView()`, `setSignal(name, value)` and `getSignals()`. `setSignal` runs the spec's
+**Ref.** The ref (`ChartHandle`) exposes `getScene()`, `getSvg()` (serializes the current scene), `getPng(options?)` (see
+[PNG export](#png-export)), `getChartInfo()`, `getView()`, `setView()`, `resetView()`, `setSignal(name, value)` and `getSignals()`. `setSignal` runs the spec's
 dependent signal updates when the SVG event loop is bound; on canvas or with `interactive={false}` it applies the value
 as a signal override. Listeners (`signalListeners`, `onSignal`) are notified either way.
 
@@ -721,6 +740,40 @@ toggles) is drawn at once, or becomes the end of a transition that is running. I
 index. Hit testing, tooltips and the accessible tree use the new scene throughout. The canvas renderer, batched `denseMarks`
 and `incremental={false}` draw at once; `@aster-charts/core/transition` is loaded on demand once the prop is set. Read when a
 transition starts, so an options literal made anew on every render restarts nothing. Behaviour and costs: [ANIMATION.md](ANIMATION.md).
+
+#### PNG export
+
+`getPng(options?)` on the ref resolves to the chart as a PNG `Blob`: `getScene()` (the scene `getSvg()` serializes) painted by
+the canvas renderer and encoded by the browser, or `null` while there is no scene. It takes `PngOptions` (`scale`,
+`imageTimeoutMs`, `onImageError`; see [`@aster-charts/core/png`](#aster-chartscorepng)); an image mark that does not load is left
+out and, without `onImageError`, reported to the chart's `logger` as a warning (the console by default). The painter is
+`@aster-charts/core/png`, imported on the first call, so a bundler that splits code puts it in a chunk only an export fetches.
+It loads no image from a `blob:` or `data:` url, which is what the usual recipe (the svg in an `<img>`, drawn onto a canvas) needs
+and what a strict `img-src` forbids.
+
+```tsx
+import * as React from 'react'
+import { Chart, type ChartHandle } from '@aster-charts/react'
+import type { VgSpec } from '@aster-charts/core'
+
+export function Exportable({ spec }: { spec: VgSpec }): React.ReactElement {
+  const ref = React.useRef<ChartHandle>(null)
+  const save = async (): Promise<void> => {
+    const blob = await ref.current?.getPng({ scale: 2 })
+    if (!blob) return
+    const a = document.createElement('a')
+    a.href = URL.createObjectURL(blob)
+    a.download = 'chart.png'
+    a.click()
+    URL.revokeObjectURL(a.href)
+  }
+  return <><Chart ref={ref} spec={spec} /><button onClick={() => { void save() }}>Save as PNG</button></>
+}
+```
+
+`<SvgChart>` leaves out the canvas renderer, so its `getPng` needs the `png` capability: `import { png } from
+'@aster-charts/react/png'` and pass `png={png}`. Without it `getPng` rejects with `[aster] getPng needs the png capability: ...`.
+With it the painter and the canvas renderer are still loaded only by the first export.
 
 #### `<SvgChart>` and the `interaction` capability
 
@@ -794,6 +847,7 @@ missing Vega-Lite compiler, where nothing meaningful can be drawn). The report g
 | a spec with `signal.on` streams, no `interaction` | `[aster] this spec has event streams (signal.on) but no event loop is bound: pass interaction={interaction} from '@aster-charts/react/interaction'` |
 | `tooltip`, `renderTooltip`, `onPointSelect`, `selection`, `select`, `onSelectionChange` or `preventDefault` without `interaction` (ignored) | `[aster] tooltip, … need hit testing and the signal event loop and are ignored: pass interaction={interaction} from '@aster-charts/react/interaction'` |
 | `renderer="canvas"` (renders SVG) | `[aster] renderer="canvas" needs <Chart>: <SvgChart> has no canvas renderer, so it renders SVG` |
+| `getPng()` without `png` (the promise rejects) | `[aster] getPng needs the png capability: <SvgChart> leaves out the canvas renderer it paints with; import { png } from "@aster-charts/react/png" and pass png={png}` |
 
 Without `interaction`, `setSignal` and bound inputs (`signal.bind`) still work as signal overrides, exactly as on
 `<Chart renderer="canvas">`; the spec's `signal.on` updates do not run. Server markup is identical with or without
