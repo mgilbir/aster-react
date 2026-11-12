@@ -7,6 +7,13 @@ and Fixed, per package. Everything built before the first release is in [Pre-rel
 
 ### `@aster-charts/core`
 
+#### Fixed
+
+- A chart session given a spec whose top-level dataset has lost its inline `values` (or gained them), with nothing else
+  changed, compiled it afresh only if something else differed: it went on with the chart compiled from the other spec, so
+  rows that were no longer in the spec could still be drawn. Whether a dataset has rows is now part of what makes a chart
+  the same; the rows themselves still are not (#143).
+
 #### Added
 
 - `urlData` in the runtime input (`'allow'`, the default, or `'refuse'`; type `UrlDataMode`): with `'refuse'` a spec that has a

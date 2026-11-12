@@ -8,6 +8,7 @@
  */
 import { AsterLimitError, HARD_MAX_SPEC_DEPTH } from './limits.js'
 import { AsterUrlError } from './url-policy.js'
+import { specList } from './spec-structure.js'
 
 /** Whether a spec may name `url` datasets: `'allow'` (the default) or `'refuse'`. */
 export type UrlDataMode = 'allow' | 'refuse'
@@ -34,7 +35,8 @@ const NONE: readonly UrlDataset[] = Object.freeze([])
 
 /**
  * Every `url` dataset of a spec, or of a compiled chart (the same shape: `data`, and `marks` whose `data` and `marks` nest),
- * at any depth of nested marks, in document order. Iterative and safe on a cyclic object; a nesting deeper than
+ * at any depth of nested marks, in document order. `data` and `marks` are read as the compiler reads them (vega-util `array()`:
+ * a single object is a one-element list), so a spec the engine runs cannot hide a url dataset from this walk. Iterative and safe on a cyclic object; a nesting deeper than
  * {@link HARD_MAX_SPEC_DEPTH} is an `AsterLimitError` rather than an answer that skipped what lies below it.
  */
 export function collectUrlDatasets(root: unknown): readonly UrlDataset[] {
@@ -50,14 +52,11 @@ export function collectUrlDatasets(root: unknown): readonly UrlDataset[] {
     if (depth > HARD_MAX_SPEC_DEPTH) {
       throw new AsterLimitError(`maxDepth ${depth} > ${HARD_MAX_SPEC_DEPTH} (mark nesting, while looking for url datasets; a built-in ceiling that applies even without limits)`)
     }
-    if (Array.isArray(node.data)) {
-      for (const def of node.data) if (isUrlDataset(def)) (out ??= []).push({ name: String(def.name), url: def.url })
-    }
-    if (Array.isArray(node.marks)) {
-      for (let i = node.marks.length - 1; i >= 0; i--) {
-        const m = node.marks[i]
-        if (isObj(m) && !Array.isArray(m)) stack.push([m, depth + 1])
-      }
+    for (const def of specList(node.data)) if (isUrlDataset(def)) (out ??= []).push({ name: String(def.name), url: def.url })
+    const marks = specList(node.marks)
+    for (let i = marks.length - 1; i >= 0; i--) {
+      const m = marks[i]
+      if (isObj(m) && !Array.isArray(m)) stack.push([m, depth + 1])
     }
   }
   return out ?? NONE

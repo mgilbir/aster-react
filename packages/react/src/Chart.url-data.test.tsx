@@ -104,6 +104,16 @@ forEachVariant(['svg'], (Chart) => {
       })
     }
 
+    it('refuses a single-object `data` (a one-element list to the compiler) before importing what else the spec needs', async () => {
+      const single = { ...PIE_URL, data: (PIE_URL as unknown as { data: unknown[] }).data[0] } as unknown as VgSpec
+      const errors: Error[] = []
+      const { container } = mount(<Chart spec={single} data={ROWS} urlData="refuse" width={200} height={100} a11y={false} onError={(e) => errors.push(e)} />)
+      expect(container.querySelector('svg')).toBeNull()
+      await settle()
+      expectRefusal(errors[0], 'source_0')
+      nothingLoaded()
+    })
+
     it('applies to a url dataset in a nested group, and follows the prop both ways', async () => {
       const errors: Error[] = []
       const el = (urlData?: 'refuse' | 'allow') => <Chart spec={NESTED_JSON_URL} data={INNER_ROWS} urlData={urlData} width={100} height={60} a11y={false} onError={(e) => errors.push(e)} />
