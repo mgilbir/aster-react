@@ -352,7 +352,8 @@ reported through `onError` (the hook's `error`), and it is remembered for the pa
   JSON data: ...`.
 - **Unloaded `url` dataset** — rendering a spec whose `url` dataset was never loaded throws `[aster] dataset "t" has a
   url but no data was loaded for it; resolve url datasets first: import { loadSpecData } from "@aster-charts/core/load" and
-  render await loadSpecData(spec, { baseURL, ... }), or pass the rows as input.data["t"]`.
+  render await loadSpecData(spec, { baseURL, ... }), or pass the rows as input.data["t"]`. A url dataset in a group mark fails the
+  same way, with `(it is in a group mark, so loadSpecData is the way: input.data does not reach it)` in place of the last clause.
 - **Stratify** — `[aster] stratify: cycle | multiple roots | missing: id | ambiguous: id | no root` (vega's messages
   with the prefix), and `[aster] stratify requires a key field`.
 - **Circular data reference** — named datasets cannot form a cycle: `[aster] circular data reference: <name>`.

@@ -172,3 +172,38 @@ describe('malformed url and data', () => {
     ])
   })
 })
+
+describe('a url dataset in a group mark that nobody loaded fails as a top-level one does', () => {
+  const group = (inner: Record<string, unknown>): VgSpec => ({
+    width: 60, height: 40,
+    data: [{ name: 'facets', values: [{ g: 'a' }, { g: 'b' }] }],
+    marks: [{ type: 'group', ...inner }],
+  } as unknown as VgSpec)
+  const symbolOf = (name: string) => ({ type: 'symbol', from: { data: name }, encode: { update: { x: { field: 'x' }, y: { value: 5 } } } })
+  const nested = group({ data: [{ name: 'inner', url: 'https://data.example/inner.json' }], marks: [symbolOf('inner')] })
+
+  it('throws, naming the dataset and loadSpecData, instead of drawing an empty mark', () => {
+    expect(() => evaluateChart(compileChart(nested), {})).toThrow(/dataset "inner" has a url but no data was loaded for it.*loadSpecData.*in a group mark/)
+    // host rows do not reach a group's dataset, so they do not make it load either
+    expect(() => evaluateChart(compileChart(nested), { data: { inner: [{ x: 1 }] } })).toThrow(/dataset "inner"/)
+  })
+
+  it('in a group of a group, and in every instance of a faceted group', () => {
+    const deep = group({ marks: [{ type: 'group', data: [{ name: 'deep', url: 'https://data.example/d.json' }], marks: [symbolOf('deep')] }] })
+    expect(() => evaluateChart(compileChart(deep), {})).toThrow(/dataset "deep"/)
+    const faceted = group({ from: { facet: { data: 'facets', name: 'f', groupby: 'g' } }, data: [{ name: 'perFacet', url: 'https://data.example/p.json' }], marks: [symbolOf('perFacet')] })
+    expect(() => evaluateChart(compileChart(faceted), {})).toThrow(/dataset "perFacet"/)
+  })
+
+  it('renders once loadSpecData has loaded it', async () => {
+    const fetchStub = (async () => new Response('[{"x":1},{"x":2}]')) as unknown as typeof fetch
+    const loaded = await loadSpecData(nested, { fetch: fetchStub })
+    const scene = evaluateChart(compileChart(loaded), {})
+    expect(JSON.stringify(scene)).toContain('"marktype":"symbol"')
+  })
+
+  it('a group dataset with values or made from another is not a url dataset', () => {
+    expect(() => evaluateChart(compileChart(group({ data: [{ name: 'v', url: 'https://data.example/v.json', values: [{ x: 1 }] }], marks: [symbolOf('v')] })), {})).not.toThrow()
+    expect(() => evaluateChart(compileChart(group({ data: [{ name: 's', source: 'facets' }], marks: [symbolOf('s')] })), {})).not.toThrow()
+  })
+})
