@@ -109,7 +109,7 @@ is a `TypeError` (`[aster] urlData must be "allow" or "refuse", ...`).
 `getPng` and `renderSceneToPng` (`@aster-charts/core/png`) reject with:
 
 - `RangeError` `[aster] renderSceneToPng: scale must be a finite number above 0, ...`, `... imageTimeoutMs must be a number of
-  milliseconds, ...`, `... the scene has no area ...` / `... has no finite size ...`, and `... a W x H image is too large (at most 32767
+  milliseconds from 0 to 2147483647, ...`, `... the scene has no area ...` / `... has no finite size ...`, and `... a W x H image is too large (at most 32767
   pixels a side and 268435456 in all); use a smaller scale`.
 - `Error` `[aster] renderSceneToPng: this environment has no canvas ...`, `... no 2D context for a W x H canvas` (a DOM without a canvas
   implementation, or a canvas the browser would not allocate), `... the W x H canvas could not be read back (an image drawn into it from

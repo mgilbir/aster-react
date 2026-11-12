@@ -570,11 +570,14 @@ element, else an `OffscreenCanvas`), resolving to a `Blob` of type `image/png` o
 pixels: the pixels `renderSceneToCanvas` paints at that `dpr`, background included (none: transparent). Nothing is serialized
 to SVG and no `blob:` or `data:` url is loaded into an `<img>`, so it works under a Content-Security-Policy whose `img-src`
 allows neither. It waits for `document.fonts.ready`. `PngOptions`: `scale` (pixels per scene unit, default 1, a finite number
-above 0), `imageTimeoutMs` (default `PNG_IMAGE_TIMEOUT_MS`, 10 000) and `onImageError(url, error)`.
+above 0), `imageTimeoutMs` (the wait for all the image marks' images together; default `PNG_IMAGE_TIMEOUT_MS`, 10 000, at most
+`PNG_MAX_IMAGE_TIMEOUT_MS`, 2 147 483 647, what a timer can wait) and `onImageError(url, error)`.
 
 Image marks are drawn from their `url`s (already vetted by the chart's `urlPolicy`; the svg draws the same urls): each url is
 loaded once, as vega's canvas loads images, with `crossOrigin = "anonymous"`, so the canvas stays readable; at most
-`PNG_IMAGE_CONCURRENCY` (6) load at a time, each timed from its own start. The canvas is made once they are in. An image that does
+`PNG_IMAGE_CONCURRENCY` (6) load at a time, and when `imageTimeoutMs` has passed the loads still running are abandoned (their
+requests cancelled) and the ones not started are not made, so an export never waits longer than that for images. The canvas is
+made once they are in. An image that does
 not load (a network error, a server on another origin that does not allow CORS, the timeout, or no `Image` in a worker) is left
 out of the PNG and reported to `onImageError`. A bitmap the scene already holds (a `heatmap`'s) is drawn as it is. The scene is
 not modified. Rejects with a `RangeError` for an invalid `scale` or `imageTimeoutMs`, a scene without area, or an image wider or

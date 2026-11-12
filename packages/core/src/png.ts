@@ -18,8 +18,9 @@ export interface PngOptions {
   /** Pixels per scene unit (the device pixel ratio of the image). Default 1. A finite number above 0. */
   scale?: number
   /**
-   * How long to wait for one image mark's image, in milliseconds (default 10 000). An image that has not loaded by then is not
-   * drawn, like one that failed.
+   * How long to wait for the image marks' images, all of them together, in milliseconds (default 10 000, at most
+   * {@link PNG_MAX_IMAGE_TIMEOUT_MS}). An image that has not loaded by then is not drawn, like one that failed, and its request
+   * is abandoned; so the export never waits longer than this for images, however many the scene has.
    */
   imageTimeoutMs?: number
   /**
@@ -35,10 +36,9 @@ export const PNG_MAX_SIDE = 32_767
 export const PNG_MAX_PIXELS = 268_435_456
 /** The default `imageTimeoutMs`. */
 export const PNG_IMAGE_TIMEOUT_MS = 10_000
-/**
- * How many image mark urls are loaded at once. A browser queues requests to one host, so a timer started for every url at once
- * would also count the time an image waits in that queue; each image's `imageTimeoutMs` runs from when its own load starts.
- */
+/** The largest `imageTimeoutMs`: what a timer can wait (2^31 - 1 ms, about 24.8 days). */
+export const PNG_MAX_IMAGE_TIMEOUT_MS = 2_147_483_647
+/** How many image mark urls are loaded at once (a scene with thousands of urls does not make thousands of requests at once). */
 export const PNG_IMAGE_CONCURRENCY = 6
 
 /** A canvas this module can paint and encode: a `<canvas>` element or an `OffscreenCanvas`. */
@@ -65,8 +65,9 @@ export async function renderSceneToPng(scene: SceneRoot, options: PngOptions = {
     throw new RangeError(`[aster] renderSceneToPng: scale must be a finite number above 0, got ${String(scale)}`)
   }
   const timeout = options.imageTimeoutMs ?? PNG_IMAGE_TIMEOUT_MS
-  if (typeof timeout !== 'number' || !(timeout >= 0)) {
-    throw new RangeError(`[aster] renderSceneToPng: imageTimeoutMs must be a number of milliseconds, got ${String(timeout)}`)
+  if (typeof timeout !== 'number' || !(timeout >= 0 && timeout <= PNG_MAX_IMAGE_TIMEOUT_MS)) {
+    // (a timer converts a larger value, Infinity included, to a wait of 0 or a wrapped one: every image would be dropped)
+    throw new RangeError(`[aster] renderSceneToPng: imageTimeoutMs must be a number of milliseconds from 0 to ${PNG_MAX_IMAGE_TIMEOUT_MS}, got ${String(timeout)}`)
   }
   const { width: w, height: h } = pixelSize(scene, scale)
   // (an environment without a canvas fails here, before any image is requested; the canvas itself is made once they are in, so
@@ -182,19 +183,36 @@ async function withImages(scene: SceneRoot, timeout: number, onError: PngOptions
   if (urls.size === 0) return scene
   const loaded = new Map<string, ItemImage>()
   const queue = [...urls]
-  const worker = async (): Promise<void> => {
-    for (let url = queue.shift(); url !== undefined; url = queue.shift()) {
-      try {
-        loaded.set(url, await loadImage(url, timeout))
-      } catch (e) {
-        const error = e instanceof Error ? e : new Error(String(e))
-        if (onError) {
-          try { onError(url, error) } catch { /* a throwing reporter does not stop the export */ }
-        }
-      }
+  const report = (url: string, error: Error): void => {
+    if (onError) {
+      try { onError(url, error) } catch { /* a throwing reporter does not stop the export */ }
     }
   }
-  await Promise.all(Array.from({ length: Math.min(PNG_IMAGE_CONCURRENCY, queue.length) }, worker))
+  const late = (url: string): Error => new Error(`[aster] renderSceneToPng: image ${url} not drawn: it did not load within ${timeout} ms`)
+  // one deadline for all of them: at it, the loads in flight are abandoned and the ones still queued are not started
+  let expired = false
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const deadline = new Promise<void>((resolve) => { timer = setTimeout(() => { expired = true; resolve() }, timeout) })
+  const worker = async (): Promise<void> => {
+    for (let url = queue.shift(); url !== undefined; url = queue.shift()) {
+      if (expired) { report(url, late(url)); continue }
+      const load = loadImage(url)
+      const outcome = await Promise.race([
+        load.promise.then((image) => ({ image }), (error: unknown) => ({ error: error instanceof Error ? error : new Error(String(error)) })),
+        deadline.then(() => null),
+      ])
+      if (outcome === null) {
+        load.abort()
+        report(url, late(url))
+      } else if ('image' in outcome) loaded.set(url, outcome.image)
+      else report(url, outcome.error)
+    }
+  }
+  try {
+    await Promise.all(Array.from({ length: Math.min(PNG_IMAGE_CONCURRENCY, queue.length) }, worker))
+  } finally {
+    clearTimeout(timer)
+  }
   if (loaded.size === 0) return scene
   const mapNodes = (nodes: SceneGroup[]): SceneGroup[] => {
     let changed = false
@@ -236,20 +254,19 @@ type ImageElement = {
   onerror: ((this: unknown) => void) | null
 }
 
-/** Load one image as vega's canvas does (`crossOrigin = "anonymous"`), as the bitmap the canvas renderer draws. */
-function loadImage(url: string, timeout: number): Promise<ItemImage> {
+/**
+ * Load one image as vega's canvas does (`crossOrigin = "anonymous"`), as the bitmap the canvas renderer draws. `abort` gives up on
+ * it: the handlers are dropped and the request is cancelled (an empty `src` fetches nothing and ends the current one).
+ */
+function loadImage(url: string): { promise: Promise<ItemImage>; abort: () => void } {
   const Img = (globalThis as { Image?: new () => ImageElement }).Image
-  if (typeof Img !== 'function') return Promise.reject(new Error(`[aster] renderSceneToPng: image ${url} not drawn: no Image in this environment`))
-  return new Promise<ItemImage>((resolve, reject) => {
-    const img = new Img()
-    let timer: ReturnType<typeof setTimeout> | undefined
-    const done = (): void => {
-      if (timer !== undefined) clearTimeout(timer)
-      img.onload = null
-      img.onerror = null
-    }
+  if (typeof Img !== 'function') {
+    return { promise: Promise.reject(new Error(`[aster] renderSceneToPng: image ${url} not drawn: no Image in this environment`)), abort: () => undefined }
+  }
+  const img = new Img()
+  const promise = new Promise<ItemImage>((resolve, reject) => {
     img.onload = () => {
-      done()
+      img.onload = img.onerror = null
       if (!(img.naturalWidth > 0 && img.naturalHeight > 0)) {
         reject(new Error(`[aster] renderSceneToPng: image ${url} not drawn: it has no size`))
         return
@@ -257,15 +274,18 @@ function loadImage(url: string, timeout: number): Promise<ItemImage> {
       resolve({ width: img.naturalWidth, height: img.naturalHeight, url, complete: true, toCanvasSource: () => img })
     }
     img.onerror = () => {
-      done()
+      img.onload = img.onerror = null
       reject(new Error(`[aster] renderSceneToPng: image ${url} not drawn: it did not load (a cross-origin image is drawn only when its server allows CORS)`))
     }
-    timer = setTimeout(() => {
-      done()
-      reject(new Error(`[aster] renderSceneToPng: image ${url} not drawn: it did not load within ${timeout} ms`))
-    }, timeout)
     img.crossOrigin = 'anonymous'
     img.decoding = 'async'
     img.src = url
   })
+  return {
+    promise,
+    abort: () => {
+      img.onload = img.onerror = null
+      img.src = ''
+    },
+  }
 }
