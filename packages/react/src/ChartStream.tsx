@@ -57,7 +57,8 @@ export interface ChartStreamProps extends CommonStreamProps {
   spec: VgSpec
   /**
    * Stream options: `capacity`, `maxQueuedRows`, `policy`, `autoFlush`, ... The image
-   * `urlPolicy` prop applies to every flush and is read when the stream is created.
+   * `urlPolicy` prop applies to every flush and is read when the stream is created; `urlData`
+   * applies to every flush, and a change of it starts a new stream.
    */
   streamOptions?: UseChartStreamOptions
   onStreamError?: StreamErrorHandler
@@ -200,7 +201,7 @@ function useReportOnce(
 export const ChartStream = React.forwardRef<ChartStreamHandle, ChartStreamProps>(
   function ChartStream({
     spec, streamOptions, onStreamError, width, height, className, style,
-    limits, textMetrics, urlPolicy, signals, view, ...chartProps
+    limits, textMetrics, urlPolicy, urlData, signals, view, ...chartProps
   }, ref) {
     const size = useSizeBatch(width, height)
     const stableLimits = useStableContent(limits)
@@ -214,6 +215,7 @@ export const ChartStream = React.forwardRef<ChartStreamHandle, ChartStreamProps>
         ...(stableLimits ? { limits: stableLimits } : {}),
         ...(textMetrics ? { textMetrics } : {}),
         ...(urlPolicy ? { urlPolicy } : {}),
+        ...(urlData !== undefined ? { urlData } : {}),
         ...initialInput,
       },
     })
@@ -253,7 +255,7 @@ export const ChartStream = React.forwardRef<ChartStreamHandle, ChartStreamProps>
 export const ChartWorkerStream = React.forwardRef<ChartStreamHandle, ChartWorkerStreamProps>(
   function ChartWorkerStream({
     spec, streamOptions, onStreamError, width, height, className, style,
-    limits, textMetrics, urlPolicy, signals, view, ...chartProps
+    limits, textMetrics, urlPolicy, urlData, signals, view, ...chartProps
   }, ref) {
     const size = useSizeBatch(width, height)
     const stableLimits = useStableContent(limits)
@@ -267,6 +269,7 @@ export const ChartWorkerStream = React.forwardRef<ChartStreamHandle, ChartWorker
         ...(stableLimits ? { limits: stableLimits } : {}),
         ...(textMetrics ? { textMetrics } : {}),
         ...(urlPolicy ? { urlPolicy } : {}),
+        ...(urlData !== undefined ? { urlData } : {}),
         ...initialInput,
       },
     })

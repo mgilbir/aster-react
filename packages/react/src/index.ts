@@ -1,5 +1,6 @@
 export { Chart } from './Chart.js'
 export type { ChartHandle, ChartProps, TooltipInfo, TransitionOptions } from './Chart.js'
+export type { PngOptions } from '@aster-charts/core/png'
 export {
   ChartStream,
   ChartWorkerStream,

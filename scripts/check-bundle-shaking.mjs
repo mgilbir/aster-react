@@ -335,8 +335,61 @@ const PATTERNS = [
       [!hasModule(m.parsed, 'core', 'hit'), 'the hit index (core/hit.js) is not even read'],
       [!hasModule(m.parsed, 'core', 'signals'), 'the signal event loop (core/signals.js) is not even read'],
       [!hasModule(m.parsed, 'react', 'canvas-capability') && !hasModule(m.parsed, 'react', 'interaction-capability'), 'neither capability module of @aster-charts/react is read'],
+      [!hasModule(m.parsed, 'core', 'png') && !hasModule(m.parsed, 'react', 'png-capability'), 'nor the PNG export (core/png.js, react/png-capability.js)'],
       [hasModule(m.contributing, 'react', 'ChartCore') && hasModule(m.contributing, 'core', 'dom'), 'ChartCore and the DOM patcher are what it is made of'],
     ],
+  },
+  {
+    name: 'react-chart-png',
+    why: "<Chart>: `getPng` is on the ref, and the PNG painter (@aster-charts/core/png) is in a chunk only an export fetches",
+    split: true,
+    dom: true,
+    imports: `import * as React from 'react'\nimport { flushSync } from 'react-dom'\nimport { createRoot } from 'react-dom/client'\nimport { Chart } from '@aster-charts/react'`,
+    body: `
+      const ref = React.createRef()
+      const host = document.createElement('div'); document.body.appendChild(host)
+      flushSync(() => createRoot(host).render(React.createElement(Chart, { ref, spec: ${lit(BAR_VG)}, width: 300, height: 200, a11y: false })))
+      // the painter loads and runs: this DOM has no 2D context, which is the error it reports
+      const error = await ref.current.getPng({ scale: 2 }).then(() => 'resolved', (e) => e.message)
+      return { error }`,
+    check: (r) => [[/^\[aster\] renderSceneToPng: no 2D context for a 620 x 420 canvas$/.test(r.error), `getPng loaded the painter and ran it, at scale 2 (${r.error})`]],
+    modules: (m) => {
+      const out = outputsWith(m, 'core', 'png')
+      return [
+        [out.length === 1 && !out[0].initial, 'core/png.js is only in a chunk fetched on demand (the dynamic import getPng makes)'],
+        [outputsWith(m, 'react', 'png-capability').every((o) => o.initial), 'the capability (a loader) is in what loads up front'],
+      ]
+    },
+  },
+  {
+    name: 'react-svgchart-png',
+    why: "<SvgChart png={png}>: `getPng` works, and neither the PNG painter nor the canvas renderer it paints with loads up front",
+    split: true,
+    dom: true,
+    imports: `import * as React from 'react'\nimport { flushSync } from 'react-dom'\nimport { createRoot } from 'react-dom/client'\nimport { SvgChart } from '@aster-charts/react/lite'\nimport { png } from '@aster-charts/react/png'`,
+    body: `
+      const ref = React.createRef()
+      const bare = React.createRef()
+      const host = document.createElement('div'); document.body.appendChild(host)
+      flushSync(() => createRoot(host).render(React.createElement('div', null,
+        React.createElement(SvgChart, { ref, png, spec: ${lit(BAR_VG)}, width: 300, height: 200, a11y: false }),
+        React.createElement(SvgChart, { ref: bare, spec: ${lit(BAR_VG)}, width: 300, height: 200, a11y: false }))))
+      const error = await ref.current.getPng().then(() => 'resolved', (e) => e.message)
+      const without = await bare.current.getPng().then(() => 'resolved', (e) => e.message)
+      return { error, without }`,
+    check: (r) => [
+      [/^\[aster\] renderSceneToPng: no 2D context for a 310 x 210 canvas$/.test(r.error), `getPng loaded the painter and ran it (${r.error})`],
+      [/^\[aster\] getPng needs the png capability/.test(r.without) && /@aster-charts\/react\/png/.test(r.without), `without png={png} it says what to import (${r.without})`],
+    ],
+    modules: (m) => {
+      const png = outputsWith(m, 'core', 'png')
+      const canvas = outputsWith(m, 'core', 'canvas')
+      return [
+        [png.length === 1 && !png[0].initial, 'core/png.js is only in a chunk fetched on demand'],
+        [canvas.length >= 1 && canvas.every((o) => !o.initial), 'and so is the canvas renderer: the light chart loads no canvas code up front'],
+        [!hasModule(m.parsed, 'core', 'hit') && !hasModule(m.parsed, 'core', 'signals'), 'nor are the hit index and the signal loop read'],
+      ]
+    },
   },
   {
     name: 'react-svgchart-interaction',

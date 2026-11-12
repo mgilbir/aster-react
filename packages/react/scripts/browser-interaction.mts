@@ -13,7 +13,11 @@
  *   - bound inputs (range / select / checkbox) can be operated and notify listeners,
  *   - brushing, drag-pan, wheel-zoom and their pointer capture still work,
  *   - a11y nodes are positioned over the marks they describe (padding included),
- *   - with `transition`, new data is drawn as real animation frames that settle on the exact svg of a plain chart.
+ *   - with `transition`, new data is drawn as real animation frames that settle on the exact svg of a plain chart,
+ *   - `<Chart renderer="canvas">` draws image marks from their urls (CORS ones), as vega's canvas does,
+ *   - `getPng` (on `<Chart>`, and on `<SvgChart png={png}>`) encodes exactly the pixels the canvas renderer paints, under a
+ *     Content-Security-Policy whose `img-src` allows neither `blob:` nor `data:`, and draws a CORS image mark but not one whose
+ *     server does not allow CORS (reported instead).
  *
  * Every check runs against both components, each bundled on its own (so the light one is the real light bundle):
  * `<Chart>` from the package entry, and `<SvgChart interaction={interaction}>` from `@aster-charts/react/lite` +
@@ -27,6 +31,8 @@
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 import { build } from 'esbuild'
+import { createServer } from 'node:http'
+import type { AddressInfo } from 'node:net'
 import { chromium, type Page } from 'playwright'
 import { compile as compileVl } from '@aster-charts/vl'
 import { cli } from '../../../scripts/lib/cli.mjs'
@@ -36,19 +42,28 @@ cli({ url: import.meta.url })
 const HERE = dirname(fileURLToPath(import.meta.url))
 const PKG = dirname(HERE)
 
-type VariantName = 'Chart' | 'SvgChart+interaction' | 'SvgChart'
+type VariantName = 'Chart' | 'SvgChart+interaction' | 'SvgChart' | 'SvgChart+png'
 
 /** The bundle for one variant: what its imports pull in is exactly what that variant ships. */
 const entryFor = (variant: VariantName): string => {
+  const svgCaps = variant === 'SvgChart+interaction'
+    ? `import { interaction } from ${JSON.stringify(join(PKG, 'src/interaction-capability.ts'))}\nconst png = undefined`
+    : variant === 'SvgChart+png'
+      ? `import { png } from ${JSON.stringify(join(PKG, 'src/png-capability.ts'))}\nconst interaction = undefined`
+      : 'const interaction = undefined\nconst png = undefined'
+  // the variants that carry the canvas renderer anyway also get it on the page, to paint a scene directly (the PNG's reference)
+  const painter = variant === 'Chart' || variant === 'SvgChart+png'
+    ? `import { renderSceneToCanvas } from '@aster-charts/core/canvas'\nwindow.__paint = (scene, dpr) => { const c = document.createElement('canvas'); c.width = Math.ceil(scene.width * dpr); c.height = Math.ceil(scene.height * dpr); renderSceneToCanvas(scene, c.getContext('2d'), { dpr }); return c }`
+    : ''
   const imports = variant === 'Chart'
-    ? `import { Chart } from ${JSON.stringify(join(PKG, 'src/index.ts'))}`
-    : `import { SvgChart } from ${JSON.stringify(join(PKG, 'src/lite.ts'))}\n${variant === 'SvgChart+interaction' ? `import { interaction } from ${JSON.stringify(join(PKG, 'src/interaction-capability.ts'))}` : 'const interaction = undefined'}`
+    ? `import { Chart } from ${JSON.stringify(join(PKG, 'src/index.ts'))}\n${painter}`
+    : `import { SvgChart } from ${JSON.stringify(join(PKG, 'src/lite.ts'))}\n${svgCaps}\n${painter}`
   const element = variant === 'Chart'
     ? 'React.createElement(Chart, { ref: window.__ref, spec, ...p })'
-    : 'React.createElement(SvgChart, { ref: window.__ref, spec, interaction, ...p })'
+    : 'React.createElement(SvgChart, { ref: window.__ref, spec, interaction, png, ...p })'
   const bareElement = variant === 'Chart'
     ? 'React.createElement(Chart, { key: i, spec: it.spec, ...it.props })'
-    : 'React.createElement(SvgChart, { key: i, spec: it.spec, interaction, ...it.props })'
+    : 'React.createElement(SvgChart, { key: i, spec: it.spec, interaction, png, ...it.props })'
   return `
 import * as React from 'react'
 import { createRoot } from 'react-dom/client'
@@ -757,7 +772,9 @@ async function plainSuite(page: Page): Promise<void> {
 const MODULES: Record<VariantName, Array<[RegExp, boolean, string]>> = {
   Chart: [[/core\/dist\/canvas\.js$/, true, 'the canvas renderer'], [/core\/dist\/hit\.js$/, true, 'the hit index'], [/core\/dist\/signals\.js$/, true, 'the signal loop']],
   'SvgChart+interaction': [[/core\/dist\/canvas\.js$/, false, 'the canvas renderer'], [/src\/canvas-capability\.ts$/, false, 'the canvas capability'], [/core\/dist\/hit\.js$/, true, 'the hit index'], [/core\/dist\/signals\.js$/, true, 'the signal loop']],
-  SvgChart: [[/core\/dist\/canvas\.js$/, false, 'the canvas renderer'], [/src\/canvas-capability\.ts$/, false, 'the canvas capability'], [/core\/dist\/hit\.js$/, false, 'the hit index'], [/core\/dist\/signals\.js$/, false, 'the signal loop'], [/src\/interaction-capability\.ts$/, false, 'the interaction capability']],
+  SvgChart: [[/core\/dist\/canvas\.js$/, false, 'the canvas renderer'], [/src\/canvas-capability\.ts$/, false, 'the canvas capability'], [/core\/dist\/hit\.js$/, false, 'the hit index'], [/core\/dist\/signals\.js$/, false, 'the signal loop'], [/src\/interaction-capability\.ts$/, false, 'the interaction capability'], [/core\/dist\/png\.js$/, false, 'the PNG painter']],
+  // asked for: the PNG painter and the canvas renderer it paints with (a bundler that splits code fetches them on the first export)
+  'SvgChart+png': [[/core\/dist\/png\.js$/, true, 'the PNG painter'], [/core\/dist\/canvas\.js$/, true, 'the canvas renderer'], [/src\/canvas-capability\.ts$/, false, 'the canvas capability'], [/core\/dist\/hit\.js$/, false, 'the hit index'], [/core\/dist\/signals\.js$/, false, 'the signal loop']],
 }
 
 /**
@@ -803,8 +820,161 @@ async function sizingSuite(page: Page): Promise<void> {
   check(box.w === 520 && Math.abs(box.h + box.binds - 340) < 1, `a 520x340 container is filled exactly: svg ${box.w}x${box.h} + bound inputs ${box.binds}`)
 }
 
+/**
+ * `getPng` (#144) in a real browser. On a page whose Content-Security-Policy allows no `blob:` and no `data:` image (checked: the
+ * usual recipe, the svg loaded into an `<img>` from a `blob:` url, fails on it), the PNG decodes to exactly the pixels
+ * `renderSceneToCanvas` paints for the chart's scene at that scale. An image mark served with CORS is in the PNG; one whose server
+ * does not send CORS headers is left out (vega's canvas loads images as `crossOrigin = "anonymous"` too) and reported.
+ */
+async function pngSuite(browser: Awaited<ReturnType<typeof chromium.launch>>, variant: VariantName, code: string): Promise<void> {
+  console.log(`[getPng] ${variant}: the PNG is the canvas renderer's pixels, under a strict img-src, with CORS image marks`)
+  const page = await browser.newPage({ viewport: { width: 700, height: 500 } })
+  page.on('pageerror', (e) => { failures++; console.log(`  FAIL page error: ${e.message}`) })
+  // a red and a blue 8x8 PNG, made by this browser on a page of its own
+  const maker = await browser.newPage()
+  const pngOf = async (color: string): Promise<Buffer> => Buffer.from(await maker.evaluate(async (c) => {
+    const k = document.createElement('canvas'); k.width = 8; k.height = 8
+    const g = k.getContext('2d')!; g.fillStyle = c; g.fillRect(0, 0, 8, 8)
+    const blob = await new Promise<Blob>((r) => k.toBlob((b) => r(b!), 'image/png'))
+    return [...new Uint8Array(await blob.arrayBuffer())]
+  }, color))
+  const red = await pngOf('#ff0000')
+  const blue = await pngOf('#0000ff')
+  await maker.close()
+  // The images come from a real server on another origin than the page, so the browser applies CORS itself (a response a route
+  // fulfils is not held to it). The page is served by the same server on a second port: two origins, no interception.
+  const served: string[] = []
+  const server = createServer((req, res) => {
+    served.push(req.url ?? '')
+    if (req.url === '/cors.png') res.writeHead(200, { 'content-type': 'image/png', 'access-control-allow-origin': '*' }).end(red)
+    else if (req.url === '/nocors.png') res.writeHead(200, { 'content-type': 'image/png' }).end(blue)
+    else res.writeHead(404).end()
+  })
+  await new Promise<void>((r) => server.listen(0, '127.0.0.1', r))
+  const imgOrigin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`
+  const pageServer = createServer((_req, res) => {
+    res.writeHead(200, { 'content-type': 'text/html' }).end(
+      `<!doctype html><html><head><meta http-equiv="Content-Security-Policy" content="img-src ${imgOrigin}"></head><body style="margin:0;font:12px sans-serif"><div id="root"></div></body></html>`,
+    )
+  })
+  await new Promise<void>((r) => pageServer.listen(0, '127.0.0.1', r))
+  const close = (): Promise<void> => Promise.all([server, pageServer].map((sv) => new Promise<void>((r) => { sv.closeAllConnections(); sv.close(() => r()) }))).then(() => undefined)
+  try {
+  await page.goto(`http://localhost:${(pageServer.address() as AddressInfo).port}/`)
+  await page.addScriptTag({ content: code })
+
+  // the CSP is in force: the usual recipe (the svg as a blob: url in an <img>) cannot load here
+  const usual = await page.evaluate(() => new Promise<string>((done) => {
+    const img = new Image()
+    img.onload = () => done('loaded')
+    img.onerror = () => done('blocked')
+    img.src = URL.createObjectURL(new Blob(['<svg xmlns="http://www.w3.org/2000/svg" width="4" height="4"/>'], { type: 'image/svg+xml' }))
+  }))
+  check(usual === 'blocked', `${variant}: under img-src ${imgOrigin} a blob: svg in an <img> is blocked (${usual})`)
+
+  const bars = {
+    $schema: 'https://vega.github.io/schema/vega/v6.json',
+    width: 300, height: 160, padding: 12, autosize: 'none', background: 'white',
+    data: [{ name: 't', values: [{ k: 'a', v: 3 }, { k: 'b', v: 7 }, { k: 'c', v: 5 }] }],
+    scales: [
+      { name: 'x', type: 'band', domain: { data: 't', field: 'k' }, range: 'width', padding: 0.2 },
+      { name: 'y', type: 'linear', domain: [0, 8], range: 'height' },
+    ],
+    axes: [{ scale: 'x', orient: 'bottom' }, { scale: 'y', orient: 'left', title: 'value' }],
+    marks: [{ type: 'rect', from: { data: 't' }, encode: { update: {
+      x: { scale: 'x', field: 'k' }, width: { scale: 'x', band: 1 }, y: { scale: 'y', field: 'v' }, y2: { scale: 'y', value: 0 },
+      fill: { value: { gradient: 'linear', stops: [{ offset: 0, color: 'orange' }, { offset: 1, color: 'purple' }] } }, cornerRadius: { value: 3 },
+    } } }],
+  }
+  await mount2(page, bars, { width: 324, height: 184 })
+  for (const scale of [1, 2, 1.5]) {
+    const r = await page.evaluate(async (s) => {
+      const w = window as never as { __ref: { current: { getPng(o: unknown): Promise<Blob | null>; getScene(): { width: number; height: number } } }; __paint(scene: unknown, dpr: number): HTMLCanvasElement }
+      const blob = await w.__ref.current.getPng({ scale: s })
+      if (!blob) return { error: 'no blob' }
+      const bmp = await createImageBitmap(blob)
+      const got = document.createElement('canvas'); got.width = bmp.width; got.height = bmp.height
+      got.getContext('2d')!.drawImage(bmp, 0, 0)
+      const want = w.__paint(w.__ref.current.getScene(), s)
+      const a = got.getContext('2d')!.getImageData(0, 0, got.width, got.height).data
+      const b = want.getContext('2d')!.getImageData(0, 0, want.width, want.height).data
+      let diff = 0
+      for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) diff++
+      const scene = w.__ref.current.getScene()
+      return { type: blob.type, w: bmp.width, h: bmp.height, ww: Math.ceil(scene.width * s), wh: Math.ceil(scene.height * s), same: a.length === b.length, diff, coloured: new Set(Array.from({ length: a.length / 4 }, (_, i) => `${a[i * 4]},${a[i * 4 + 1]},${a[i * 4 + 2]}`)).size }
+    }, scale)
+    if ('error' in r) { check(false, `${variant}: getPng({ scale: ${scale} }) returned a blob (${r.error})`); continue }
+    check(r.type === 'image/png' && r.w === r.ww && r.h === r.wh, `${variant}: scale ${scale}: an image/png of ${r.w} x ${r.h} (the scene's size x ${scale}, rounded up)`)
+    check(r.same && r.diff === 0, `${variant}: scale ${scale}: its pixels are exactly the canvas renderer's (${r.diff} channel values differ)`)
+    check(r.coloured > 20, `${variant}: scale ${scale}: and it is a picture, not a blank (${r.coloured} colours)`)
+  }
+
+  const images = {
+    $schema: 'https://vega.github.io/schema/vega/v6.json',
+    width: 120, height: 40, padding: 0, autosize: 'none', background: 'white',
+    marks: [
+      { type: 'symbol', encode: { update: { x: { value: 100 }, y: { value: 20 }, size: { value: 200 }, fill: { value: 'black' } } } },
+      { type: 'image', encode: { update: { url: { value: `${imgOrigin}/cors.png` }, x: { value: 0 }, y: { value: 0 }, width: { value: 40 }, height: { value: 40 } } } },
+      { type: 'image', encode: { update: { url: { value: `${imgOrigin}/nocors.png` }, x: { value: 50 }, y: { value: 0 }, width: { value: 40 }, height: { value: 40 } } } },
+    ],
+  }
+  await page.evaluate(([sp, pr]) => (window as never as { __mount: (...a: unknown[]) => void }).__mount(sp, pr, [], []), [images, { width: 120, height: 40 }] as const)
+  await page.waitForSelector('svg .mark-image image')
+  // (a string: the page function must not be transpiled, whose name helper would not exist in the page)
+  const shot = await page.evaluate(`(async () => {
+    const failed = []
+    const blob = await window.__ref.current.getPng({ onImageError: function (url) { failed.push(url) } })
+    const bmp = await createImageBitmap(blob)
+    const c = document.createElement('canvas'); c.width = bmp.width; c.height = bmp.height
+    const g = c.getContext('2d'); g.drawImage(bmp, 0, 0)
+    const at = [[20, 20], [70, 20], [100, 20]].map(function (p) { return Array.from(g.getImageData(p[0], p[1], 1, 1).data.slice(0, 3)).join(',') })
+    return { failed, cors: at[0], nocors: at[1], symbol: at[2] }
+  })()`) as { failed: string[]; cors: string; nocors: string; symbol: string }
+  check(shot.cors === '255,0,0', `${variant}: the image served with CORS is in the PNG (${shot.cors})`)
+  check(shot.nocors === '255,255,255', `${variant}: the one served without CORS is left out, the background shows (${shot.nocors})`)
+  check(shot.symbol === '0,0,0', `${variant}: and the rest of the chart is drawn (${shot.symbol})`)
+  check(JSON.stringify(shot.failed) === JSON.stringify([`${imgOrigin}/nocors.png`]), `${variant}: the left-out image is reported (${JSON.stringify(shot.failed)})`)
+  // the svg on screen draws both (it needs no CORS): the PNG differs from it only where the browser forbids reading pixels back
+  const onScreen = await page.evaluate(() => [...document.querySelectorAll('svg .mark-image image')].map((i) => i.getAttribute('href') ?? i.getAttributeNS('http://www.w3.org/1999/xlink', 'href')))
+  check(JSON.stringify(onScreen) === JSON.stringify([`${imgOrigin}/cors.png`, `${imgOrigin}/nocors.png`]), `${variant}: the svg draws both images (${JSON.stringify(onScreen)})`)
+  check(served.includes('/cors.png') && served.includes('/nocors.png'), `${variant}: both images were really requested from the other origin (${JSON.stringify(served)})`)
+  if (variant === 'Chart') {
+    // the on-screen canvas renderer draws them too, as vega's canvas does: the CORS image, not the other (which would taint it)
+    await page.evaluate(([sp, pr]) => (window as never as { __mount: (...a: unknown[]) => void }).__mount(sp, pr, [], []), [images, { width: 120, height: 40, renderer: 'canvas' }] as const)
+    await page.waitForSelector('#chart-host canvas')
+    const onCanvas = await page.evaluate(`new Promise((resolve) => {
+      const t0 = performance.now()
+      const look = () => {
+        const c = document.querySelector('#chart-host canvas')
+        const g = c.getContext('2d')
+        const k = c.width / 120
+        const at = [[20, 20], [70, 20], [100, 20]].map(function (p) { return Array.from(g.getImageData(Math.floor(p[0] * k), Math.floor(p[1] * k), 1, 1).data.slice(0, 3)).join(',') })
+        if (at[0] === '255,0,0' || performance.now() - t0 > 3000) resolve({ cors: at[0], nocors: at[1], symbol: at[2] })
+        else setTimeout(look, 20)
+      }
+      look()
+    })`) as { cors: string; nocors: string; symbol: string }
+    check(onCanvas.cors === '255,0,0', `${variant}: renderer="canvas" draws the CORS image on screen (${onCanvas.cors})`)
+    check(onCanvas.nocors === '255,255,255' && onCanvas.symbol === '0,0,0', `${variant}: and leaves out the other, the rest drawn (${onCanvas.nocors}, ${onCanvas.symbol})`)
+  }
+  } finally {
+    await page.close()
+    await close()
+  }
+}
+
 const browser = await chromium.launch()
 try {
+  {
+    // <SvgChart png={png}>: the export, asked for; the rest of the light chart is unchanged (its own suites run above for SvgChart)
+    const variant = 'SvgChart+png' as const
+    console.log(`\n=== ${variant} ===`)
+    const { code, inputs } = await bundleVariant(variant)
+    for (const [re, wanted, what] of MODULES[variant]) {
+      check(inputs.some((f) => re.test(f)) === wanted, `the ${variant} bundle ${wanted ? 'contains' : 'does not contain'} ${what}`)
+    }
+    await pngSuite(browser, variant, code)
+  }
   for (const variant of ['Chart', 'SvgChart+interaction', 'SvgChart'] as const) {
     console.log(`\n=== ${variant} ===`)
     const { code, inputs } = await bundleVariant(variant)
@@ -819,6 +989,7 @@ try {
     if (variant === 'SvgChart') await plainSuite(page)
     else { await suite(page); await tabStopSuite(page); await cursorSuite(page, variant === 'Chart' ? ['svg', 'canvas'] : ['svg']) }
     await transitionSuite(page)
+    if (variant === 'Chart') await pngSuite(browser, variant, code)
     await page.close()
   }
 } finally {
