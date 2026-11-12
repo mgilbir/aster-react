@@ -9,6 +9,11 @@ and Fixed, per package. Everything built before the first release is in [Pre-rel
 
 #### Fixed
 
+- `loadSpecData` loads a `url` dataset given as a single object (`data: { name, url }`, at the top level or in a nested group whose
+  `marks` / `data` is a single object), and evaluates a `{signal}` url against `signals` given as a single object, as the compiler
+  reads those lists (vega's `array()`). It used to skip them, and the render then failed with "has a url but no data was loaded".
+- `addonsNeeded` counts a `projections` given as a single object (at the top level or in a group), so `<Chart>` loads the geo add-on
+  for it instead of failing the render.
 - A chart session given a spec whose top-level dataset has lost its inline `values` (or gained them), with nothing else
   changed, compiled it afresh only if something else differed: it went on with the chart compiled from the other spec, so
   rows that were no longer in the spec could still be drawn. Whether a dataset has rows is now part of what makes a chart
@@ -50,11 +55,6 @@ and Fixed, per package. Everything built before the first release is in [Pre-rel
   stream's `initial`: `urlData="refuse"` refuses a spec with a url dataset before any add-on loads (the csv readers a url names,
   or anything else the spec needs) and reports the `AsterUrlError` through `onError` / `error`. The worker imports nothing for
   such a spec and answers with the refusal (#143).
-- `loadSpecData` loads a `url` dataset given as a single object (`data: { name, url }`, at the top level or in a nested group whose
-  `marks` / `data` is a single object), and evaluates a `{signal}` url against `signals` given as a single object, as the compiler
-  reads those lists (vega's `array()`). It used to skip them, and the render then failed with "has a url but no data was loaded".
-- `addonsNeeded` counts a `projections` given as a single object (at the top level or in a group), so `<Chart>` loads the geo add-on
-  for it instead of failing the render.
 
 ## 0.2.0 (2026-11-11)
 
