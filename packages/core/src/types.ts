@@ -33,7 +33,7 @@ export interface RuntimeInput {
    */
   urlPolicy?: import('./url-policy.js').ImageUrlPolicy
   /**
-   * Whether the spec may name `url` datasets. `'refuse'`: a spec with a dataset that has a `url` (and no `values`), at the
+   * Whether the spec may name `url` datasets. `'refuse'`: a spec with a dataset that has a non-empty `url` (and no `values`), at the
    * top level or in a nested group, is refused with an `AsterUrlError` (`ASTER_URL_DENIED`) that names it, whether or not
    * `data` supplies rows under that name. For a host that supplies every row itself and draws specs it did not write;
    * the data counterpart of `urlPolicy`. Default `'allow'`: a url dataset renders once its rows are loaded

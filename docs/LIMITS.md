@@ -377,7 +377,7 @@ try {
 }
 ```
 
-- A url dataset is one with a `url` and no `values` (Vega reads `values` first, then `url`, then `source`), at the top level or in
+- A url dataset is one with a non-empty `url` and no `values` (Vega reads `values` first, then `url`, then `source`, each when it is not empty), at the top level or in
   a group mark at any depth. A `{signal}` url counts. The refusal holds whether or not `data` gives rows under its name: what is
   refused is the spec asking for a url.
 - The error is an `AsterUrlError` (`code: 'ASTER_URL_DENIED'`): `url` is the first dataset's url (a `{signal}` url as its JSON), and

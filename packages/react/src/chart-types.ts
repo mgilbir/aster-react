@@ -258,7 +258,7 @@ export interface ChartProps {
    */
   urlPolicy?: ImageUrlPolicy
   /**
-   * `'refuse'`: a spec that has a `url` dataset (one with a `url` and no `values`, at any depth of nested groups) is refused
+   * `'refuse'`: a spec that has a `url` dataset (one with a non-empty `url` and no `values`, at any depth of nested groups) is refused
    * before any add-on loads and before evaluation, whether or not `data` gives rows under its name: the chart renders its
    * error state and `onError` receives an `AsterUrlError` (`ASTER_URL_DENIED`) that names the dataset. For an app that
    * supplies every row through `data` and draws specs it did not write; the data counterpart of `urlPolicy`. Default
