@@ -45,6 +45,10 @@
       "types": "./dist/transition.d.ts",
       "default": "./dist/transition.js"
     },
+    "./png": {
+      "types": "./dist/png.d.ts",
+      "default": "./dist/png.js"
+    },
     "./package.json": "./package.json"
   },
   "sideEffects": [

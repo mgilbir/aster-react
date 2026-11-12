@@ -7,6 +7,7 @@ import {
   checkSvgLength,
   createPointMapper,
   resolveCursor,
+  consoleLogger,
   type A11yNode,
   type A11yOptions,
   type ChartInfo,
@@ -23,10 +24,10 @@ import { SCALE_INFO_KEY, scalesFromSerialized, type SerializedScale } from './se
 // renderer and the hit/signal event loop are NOT imported here: they arrive as the `canvas` and
 // `interaction` props (see capabilities.ts), so `<SvgChart>` bundles neither.
 import { createChartSession, hasDenseSymbolMarks, patchSceneDom, renderSceneToDomElement } from '@aster-charts/core/dom'
-import type { CanvasSceneSnapshot } from '@aster-charts/core/canvas'
+import type { CanvasSceneSnapshot, ItemImage } from '@aster-charts/core/canvas'
 import type { HitIndex } from '@aster-charts/core/hit'
 import type { CursorTracker, SignalBinding } from '@aster-charts/core/signals'
-import type { CanvasCapability, InteractionCapability } from './capabilities.js'
+import type { CanvasCapability, InteractionCapability, PngCapability } from './capabilities.js'
 import type { ChartHandle, ChartProps } from './chart-types.js'
 import { createSceneAnimator, loadTransitions, resolveTransition, type SceneAnimator } from './transition.js'
 import {
@@ -295,6 +296,13 @@ function a11yTreeOptions(a11y: ChartProps['a11y'], label: string | undefined, se
   }
 }
 
+/** How long the canvas renderer waits for the url images of a scene, all together, before it leaves the rest undrawn. */
+const CANVAS_IMAGE_TIMEOUT_MS = 10_000
+
+/** What `getPng` rejects with on a chart that was not given the PNG capability (`<SvgChart>` without `png`). */
+export const PNG_NEEDS_CAPABILITY =
+  '[aster] getPng needs the png capability: <SvgChart> leaves out the canvas renderer it paints with; import { png } from "@aster-charts/react/png" and pass png={png}'
+
 /**
  * Everything a chart is, with its optional capabilities injected as props. `<Chart>` and
  * `<SvgChart>` are one-line shells over this component (the anti-drift rule: there is no
@@ -308,6 +316,8 @@ export interface ChartCoreProps extends ChartProps {
    * event streams and `preventDefault` are unavailable and each use is reported (never silent).
    */
   interaction?: InteractionCapability
+  /** PNG export (`getPng`). Absent: `getPng` rejects with the error that names `@aster-charts/react/png`. */
+  png?: PngCapability
 }
 
 export const ChartCore = React.forwardRef<ChartHandle, ChartCoreProps>(function ChartCore(props, ref) {
@@ -376,6 +386,7 @@ function ChartView({
   renderTooltip,
   limits,
   urlPolicy,
+  urlData,
   random,
   logger,
   preventDefault,
@@ -384,12 +395,14 @@ function ChartView({
   onError,
   canvas: canvasCap,
   interaction,
+  png: pngCap,
   chartRef,
   focusHandoff,
 }: Omit<ChartCoreProps, 'spec'> & { spec: VgSpec; chartRef: React.ForwardedRef<ChartHandle>; focusHandoff: React.MutableRefObject<FocusSpot | null> }) {
   // The opt-in add-ons the spec needs (transforms, geo, load) arrive before the first evaluation: this suspends while
   // they load, so there is no render of the half-ready chart and no error to flash. A failed import is a chart error.
-  const addonError = useAddons(sceneOverride !== undefined ? null : spec)
+  // With `urlData="refuse"` a spec with a url dataset is refused here, before any add-on is imported.
+  const addonError = useAddons(sceneOverride !== undefined ? null : spec, urlData)
   const stableLimits = useStableContent(limits)
   // Which scales `view`/`brush`/`selection`'s `x`/`y` refer to.
   const positional = React.useMemo(() => positionalScales(spec), [spec])
@@ -517,6 +530,9 @@ function ChartView({
   // always calls the latest (a changing identity must not re-evaluate the chart).
   const loggerRef = React.useRef(logger)
   loggerRef.current = logger
+  // (read by the handle, whose identity never changes)
+  const pngCapRef = React.useRef(pngCap)
+  pngCapRef.current = pngCap
   const hasLogger = logger != null
   const stableLogger = React.useMemo<Logger | undefined>(
     () => (hasLogger ? { error: (...a) => loggerRef.current?.error(...a), warn: (...a) => loggerRef.current?.warn(...a) } : undefined),
@@ -539,7 +555,7 @@ function ChartView({
       prevLengthsRef.current = new Map(Object.entries(inputData ?? {}).map(([name, rows]) => [name, rows.length]))
       const sc = sessionRef.current!.evaluate(spec, {
         data: inputData, dataChanges: changes, ...sizeInput,
-        signals: mergedSignals, limits: stableLimits, urlPolicy, domainRaw, textMetrics, logger: stableLogger,
+        signals: mergedSignals, limits: stableLimits, urlPolicy, urlData, domainRaw, textMetrics, logger: stableLogger,
         ...(random ? { random } : {}),
       })
       // `maxSvgLength` bounds the serialized output. The DOM patcher never
@@ -550,7 +566,7 @@ function ChartView({
     } catch (err) {
       return { scene: null, error: err instanceof Error ? err : new Error(String(err)), problems: [] }
     }
-  }, [sceneOverride, addonError, spec, inputData, dataChanges, sizeInput, mergedSignals, stableLimits, urlPolicy, random, domainRaw, textMetrics, stableLogger])
+  }, [sceneOverride, addonError, spec, inputData, dataChanges, sizeInput, mergedSignals, stableLimits, urlPolicy, urlData, random, domainRaw, textMetrics, stableLogger])
   const scene = evaluation.scene
   sceneRef.current = scene
   const renderError = evaluation.error
@@ -639,14 +655,14 @@ function ChartView({
     try {
       if (baseSessionRef.current == null) baseSessionRef.current = createChartSession()
       const baseScene = baseSessionRef.current.evaluate(spec, {
-        data: inputData, ...sizeInput, signals: mergedSignals, limits: stableLimits, urlPolicy, textMetrics, logger: stableLogger,
+        data: inputData, ...sizeInput, signals: mergedSignals, limits: stableLimits, urlPolicy, urlData, textMetrics, logger: stableLogger,
         ...(random ? { random } : {}),
       })
       return baseDomainsOf(chartInfoFromScene(baseScene), positional)
     } catch {
       return null
     }
-  }, [panZoomEnabled, zoomed, fromStream, positional, spec, inputData, sizeInput, mergedSignals, stableLimits, urlPolicy, random, textMetrics, stableLogger])
+  }, [panZoomEnabled, zoomed, fromStream, positional, spec, inputData, sizeInput, mergedSignals, stableLimits, urlPolicy, urlData, random, textMetrics, stableLogger])
   const baseDomains = React.useMemo<ViewDomain>(() => {
     if (!panZoomEnabled || chartInfo == null) return {}
     if (!zoomed) return baseDomainsOf(chartInfo, positional)
@@ -713,6 +729,13 @@ function ChartView({
   const canvasSceneRef = React.useRef<SceneRoot | null>(null)
   // The canvas element those two describe: a remounted element is blank.
   const canvasElRef = React.useRef<HTMLCanvasElement | null>(null)
+  // Image marks drawn from a `url` (the canvas renderer draws a bitmap and never fetches; vega's canvas loads them): the bitmaps
+  // loaded so far by url, kept from one scene to the next so new data does not blank the images (and pruned to the scene's urls),
+  // the urls being loaded, and the ones that failed (reported once, not asked for again while the scene names them). A load that
+  // finishes bumps `canvasImagesEpoch`, which repaints.
+  const canvasImagesRef = React.useRef({ loaded: new Map<string, ItemImage>(), pending: new Set<string>(), failed: new Set<string>() })
+  const [canvasImagesEpoch, setCanvasImagesEpoch] = React.useState(0)
+  const canvasImagesPaintedRef = React.useRef(-1)
   // Hit testing (canvas, batched dense marks, clicks) resolves marks through the
   // scene hit index, rebuilt only when the displayed scene object changes.
   const hitIndexRef = React.useRef<{ scene: SceneRoot | null; index: HitIndex | null }>({ scene: null, index: null })
@@ -896,33 +919,62 @@ function ChartView({
       canvas.height = Math.round(h * dpr)
       resized = true
     }
-    // Identical scene: the canvas already shows it. Re-encoding/painting would
+    // Image marks drawn from a url: paint the bitmaps already loaded, and load the missing ones (each load that ends repaints)
+    const urls = canvasCap.sceneImageUrls(displayScene)
+    let painted = displayScene
+    if (urls.length > 0) {
+      const imgs = canvasImagesRef.current
+      const inScene = new Set(urls)
+      for (const u of imgs.loaded.keys()) if (!inScene.has(u)) imgs.loaded.delete(u)
+      for (const u of imgs.failed) if (!inScene.has(u)) imgs.failed.delete(u)
+      painted = canvasCap.withSceneImages(displayScene, imgs.loaded)
+      const missing = urls.filter((u) => !imgs.loaded.has(u) && !imgs.failed.has(u) && !imgs.pending.has(u))
+      if (missing.length > 0) {
+        for (const u of missing) imgs.pending.add(u)
+        void canvasCap.loadImages(missing, {
+          timeoutMs: CANVAS_IMAGE_TIMEOUT_MS,
+          who: 'canvas',
+          onError: (url, error) => {
+            imgs.failed.add(url)
+            ;(loggerRef.current ?? consoleLogger).warn(error.message)
+          },
+        }).then((loaded) => {
+          for (const [u, bitmap] of loaded) imgs.loaded.set(u, bitmap)
+          for (const u of missing) imgs.pending.delete(u)
+          if (loaded.size > 0) setCanvasImagesEpoch((n) => n + 1)
+        })
+      }
+    }
+    // Identical scene, with the images it had: the canvas already shows it. Re-encoding/painting would
     // be a full repaint for zero visual change (the common no-op re-render).
-    if (!resized && canvasSceneRef.current === displayScene) return
+    if (!resized && canvasSceneRef.current === displayScene && canvasImagesPaintedRef.current === canvasImagesEpoch) return
     const ctx = canvas.getContext('2d')
     if (!ctx) return
     // Append-only frames draw immediately: a handful of new items is cheaper
     // than a frame of latency, and drawing synchronously prevents a later
     // stream mutation from racing a coalesced rAF repaint. Full repaints still
-    // go through rAF so they never block React's commit.
+    // go through rAF so they never block React's commit. (Image marks never take the append path, and a frame repainted because its
+    // images arrived has appended nothing, so it is painted in full.)
     const prev = resized ? null : canvasSnapshotRef.current
     if (prev != null && canvasCap.renderSceneToCanvasAppend(prev, displayScene, ctx, { dpr })) {
       canvasSnapshotRef.current = canvasCap.snapshotCanvasScene(displayScene)
       canvasSceneRef.current = displayScene
+      canvasImagesPaintedRef.current = canvasImagesEpoch
       return
     }
     const draw = (): void => {
       ctx.clearRect(0, 0, canvas.width, canvas.height)
-      canvasCap.renderSceneToCanvas(displayScene, ctx, { dpr })
+      canvasCap.renderSceneToCanvas(painted, ctx, { dpr })
       canvasSnapshotRef.current = canvasCap.snapshotCanvasScene(displayScene)
       canvasSceneRef.current = displayScene
+      canvasImagesPaintedRef.current = canvasImagesEpoch
     }
     if (typeof requestAnimationFrame === 'function') {
       const id = requestAnimationFrame(draw)
       return () => cancelAnimationFrame(id)
     }
     draw()
-  }, [renderer, displayScene, canvasCap])
+  }, [renderer, displayScene, canvasCap, canvasImagesEpoch])
 
   const hasSelection = onSelect != null || brush != null || onPointSelect != null
     || selection !== undefined || onSelectionChange != null
@@ -1430,6 +1482,17 @@ function ChartView({
   React.useImperativeHandle(chartRef, () => ({
     getScene: () => sceneRef.current,
     getSvg: () => (sceneRef.current ? renderSceneToSvg(sceneRef.current) : null),
+    getPng: async (options) => {
+      // the scene of the call, not of whenever the painter has loaded
+      const scene = sceneRef.current
+      const cap = pngCapRef.current
+      if (cap == null) throw new Error(PNG_NEEDS_CAPABILITY)
+      if (scene == null) return null
+      const { renderSceneToPng } = await cap.load()
+      const onImageError = options?.onImageError
+        ?? ((url: string, error: Error) => (loggerRef.current ?? consoleLogger).warn(`[aster] getPng: ${error.message}`, url))
+      return renderSceneToPng(scene, { ...options, onImageError })
+    },
     getChartInfo: () => chartInfoRef.current,
     getView: () => viewRef.current ?? null,
     setView: (next) => applyViewRef.current(next),

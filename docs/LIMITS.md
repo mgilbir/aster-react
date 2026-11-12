@@ -352,6 +352,47 @@ const loaded = await loadSpecData(spec, {
 `format.parse` accepts vega's `date:'%d/%m/%Y'` and `utc:'%Y-%m-%d'` patterns
 (quoted or not), resolved through the default locale like `vega-loader`.
 
+## Refusing url datasets: `urlData`
+
+An app that supplies every row itself (`data`) and draws specs it did not write never wants a spec to load data from a url.
+Aster never fetches data by itself, so such a spec cannot load rows on its own; `urlData: 'refuse'` makes it fail at once, with
+an error that says why, instead of after the add-ons its formats name have loaded and with advice to call `loadSpecData`:
+
+```ts
+import { AsterUrlError, renderSpec, urlDatasets, type VgSpec } from '@aster-charts/core'
+
+const spec: VgSpec = {
+  width: 100,
+  height: 60,
+  data: [{ name: 'source_0', url: 'https://example.org/data.csv', format: { type: 'csv' } }],
+  marks: [],
+}
+
+console.log(urlDatasets(spec)) // ['source_0']
+try {
+  renderSpec(spec, { data: { source_0: [] }, urlData: 'refuse' })
+} catch (e) {
+  // [aster] url denied: dataset "source_0" loads its rows from a url, and url data is not allowed here (urlData: "refuse"): https://example.org/data.csv
+  if (e instanceof AsterUrlError) console.log(e.code, e.message) // ASTER_URL_DENIED ...
+}
+```
+
+- A url dataset is one with a non-empty `url` and no `values` (Vega reads `values` first, then `url`, then `source`, each when it is not empty), at the top level or in
+  a group mark at any depth. A `{signal}` url counts. The refusal holds whether or not `data` gives rows under its name: what is
+  refused is the spec asking for a url.
+- The error is an `AsterUrlError` (`code: 'ASTER_URL_DENIED'`): `url` is the first dataset's url (a `{signal}` url as its JSON), and
+  the message names every url dataset.
+- Nothing is loaded first. `<Chart urlData="refuse">`, `<SvgChart>`, `useChart`, the stream components and hooks, and the worker
+  refuse before importing any add-on (the `load` readers a csv url names, or anything else the spec needs) and report through
+  `onError` / the hook's `error`. `addonsNeeded(spec, { urlData: 'refuse' })` does not count a url dataset's readers, and
+  `loadAddonsFor(spec, { urlData: 'refuse' })` rejects with the refusal.
+- Where to pass it: the runtime input of `renderSpec` / `evaluateChart` / `getChartInfo` / sessions, a stream's `initial` (fixed for
+  its life), `<Chart urlData>` and the other React shells, `useChart`, and the worker hooks (it crosses `postMessage` as is).
+  `urlDatasets(spec)` and `checkUrlData(spec, urlData)` check a spec without rendering it.
+- It is independent of `limits` (a refusal needs no budget) and of `urlPolicy`, which vets image and link urls. Draw an untrusted spec
+  with both closed: `urlData: 'refuse'` and a `urlPolicy` whose `allow` returns `false`.
+- `'allow'` (the default) keeps today's behaviour: resolve url datasets with `loadSpecData`, or give their rows in `data`.
+
 ## Image URLs
 
 Image marks take their `url` from data, so a hostile spec can make the viewer's
@@ -455,6 +496,8 @@ its name, so a dropped one is simply rebuilt.
 - `useSpecData`, `useChartData` and `loadSpecData` from `@aster-charts/react` take the same
   options as `loadSpecData` in `@aster-charts/core/load`, so the URL policy and `limits` apply to
   Suspense loading too.
+- `urlData="refuse"` refuses a spec with a url dataset in every shell, hook and worker, before any add-on is imported
+  (see [Refusing url datasets](#refusing-url-datasets-urldata)).
 - A worker is not a kill switch by itself. To get the hard guarantee described above,
   terminate the Worker you created (`worker.terminate()`) when your own deadline passes.
 - The worker handler serializes the SVG inside the same limits scope as the evaluation (one meter and clock),

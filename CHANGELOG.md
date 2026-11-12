@@ -13,6 +13,54 @@ and Fixed, per package. Everything built before the first release is in [Pre-rel
   drew its source's rows (and one whose `source` named no dataset drew nothing); one with a `url` and a `source` drew the source's
   rows instead of asking for the url to be loaded; and `loadSpecData` tried to fetch an empty `url`. The compile, the session, the
   stream and `loadSpecData` now all read the one vega reads (`dataInputOf`; corpus entry `data-values-over-source`).
+- A `url` dataset in a group mark that was never loaded fails the render with the same error as a top-level one (`has a url but no
+  data was loaded for it`, pointing at `loadSpecData`); it used to be an empty dataset, so its marks silently drew nothing.
+- `loadSpecData` loads a `url` dataset given as a single object (`data: { name, url }`, at the top level or in a nested group whose
+  `marks` / `data` is a single object), and evaluates a `{signal}` url against `signals` given as a single object, as the compiler
+  reads those lists (vega's `array()`). It used to skip them, and the render then failed with "has a url but no data was loaded".
+- `addonsNeeded` counts a `projections` given as a single object (at the top level or in a group), so `<Chart>` loads the geo add-on
+  for it instead of failing the render.
+- A chart session given a spec whose top-level dataset has lost its inline `values` (or gained them), with nothing else
+  changed, compiled it afresh only if something else differed: it went on with the chart compiled from the other spec, so
+  rows that were no longer in the spec could still be drawn. Whether a dataset has rows is now part of what makes a chart
+  the same; the rows themselves still are not (#143).
+
+#### Added
+
+- `urlData` in the runtime input (`'allow'`, the default, or `'refuse'`; type `UrlDataMode`): with `'refuse'` a spec that has a
+  `url` dataset (one with a non-empty `url` and no `values`, at the top level or in a nested group) fails at once with an `AsterUrlError`
+  (`ASTER_URL_DENIED`) that names the dataset, whether or not `data` gives its rows. Sessions and streams (`initial.urlData`)
+  take it too. `urlDatasets(spec)` lists a spec's url datasets and `checkUrlData(spec, urlData)` throws the refusal without
+  rendering. `addonsNeeded`, `missingAddons` and `loadAddonsFor` (`@aster-charts/core/addons`) take `{ urlData }`: under
+  `'refuse'` a url dataset's readers are not counted, and `loadAddonsFor` rejects with the refusal before importing anything
+  ([docs/LIMITS.md](docs/LIMITS.md#refusing-url-datasets-urldata), #143).
+
+- `@aster-charts/core/canvas`: `sceneImageUrls`, `loadImages` and `withSceneImages`, the image-mark loading `<Chart renderer="canvas">`
+  and `renderSceneToPng` share.
+- `@aster-charts/core/png`: `renderSceneToPng(scene, { scale, imageTimeoutMs, onImageError })` paints a scene with the canvas
+  renderer and encodes it with the platform canvas as a PNG `Blob`, exactly the pixels `renderSceneToCanvas` paints. It loads no
+  `blob:` or `data:` image, so it works under a Content-Security-Policy that allows neither in `img-src`. Image marks are loaded from
+  their urls with CORS, as vega's canvas loads them; one that does not load is left out and reported (#144).
+
+### `@aster-charts/react`
+
+#### Fixed
+
+- `<Chart renderer="canvas">` draws image marks that have a `url`, as vega's canvas renderer does: it loads each url (with CORS,
+  `crossOrigin = "anonymous"`) and repaints when it arrives. It used to draw none of them, since the canvas renderer only draws
+  bitmaps it is given. Loaded images are kept when the data changes; one that does not load is reported to `logger.warn` once.
+
+#### Added
+
+- `getPng(options?)` on the ref of `<Chart>` (and of `<SvgChart>` given `png={png}` from the new `@aster-charts/react/png`): the
+  chart's scene as a PNG `Blob` (`null` while there is none), with `scale` for high-density output. The painter is imported on the
+  first call, so a chart that never exports does not load it; an image mark that does not load is reported to the chart's `logger`.
+  Raster export was out of scope; this one convenience is in, because the usual recipe (the SVG in an `<img>`) needs `blob:` or
+  `data:` in `img-src` (#144).
+- `urlData` on `<Chart>`, `<SvgChart>`, `<ChartStream>` and `<ChartWorkerStream>`, and in `useChart`, `useChartWorker` and a
+  stream's `initial`: `urlData="refuse"` refuses a spec with a url dataset before any add-on loads (the csv readers a url names,
+  or anything else the spec needs) and reports the `AsterUrlError` through `onError` / `error`. The worker imports nothing for
+  such a spec and answers with the refusal (#143).
 
 ## 0.2.0 (2026-11-11)
 

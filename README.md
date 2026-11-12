@@ -215,7 +215,7 @@ Each list lives in one place; this page only points at them.
 - **Vega-Lite features `@aster-charts/vl` refuses:** [packages/vl/README.md](packages/vl/README.md#throws-not-supported), held to the compiler by a test. Each is a `VLCompileError` naming the feature and its path.
 - **Where Aster deliberately differs from Vega** (including the `retained` cases, where a signal written into a running chart renders the fresh result): [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#deviations-from-vega); the differences made for safety are in [docs/LIMITS.md](docs/LIMITS.md#deviations-from-vega-made-for-safety).
 - **Untrusted specs:** `limits` are best-effort budgets and a killable worker is the hard guarantee (a regular expression, for one, cannot be interrupted in-process); a few built-in ceilings hold even without `limits`. Read [docs/LIMITS.md](docs/LIMITS.md) before rendering specs from untrusted sources.
-- **Open work, word clouds, streaming transport and export:** [docs/ROADMAP.md](docs/ROADMAP.md#2-open-work). PNG and PDF export are out of scope; a host can rasterize the SVG or canvas.
+- **Open work, word clouds, streaming transport and export:** [docs/ROADMAP.md](docs/ROADMAP.md#2-open-work). PDF export is out of scope; `getPng()` on a chart's ref encodes a PNG in the browser ([docs/API.md](docs/API.md#png-export)).
 - **Transforms without an incremental fast path** (the global fitters such as `kde`, `regression`, `loess`) re-derive on every append; the result is still exactly a fresh evaluation ([docs/PERFORMANCE.md](docs/PERFORMANCE.md)).
 
 ## Conformance results

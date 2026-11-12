@@ -19,6 +19,7 @@ import {
   type StreamFlushFailure,
   type StreamOptions,
   type StreamStats,
+  type UrlDataMode,
   type VgSpec,
 } from '@aster-charts/core'
 import { normalizeChartSpec, useStableSpec } from './spec.js'
@@ -91,9 +92,9 @@ interface TaggedState extends StreamState {
 }
 
 /**
- * The stream is keyed on the spec CONTENT, `capacity`, `policy` and `maxQueuedRows`: a parent
+ * The stream is keyed on the spec CONTENT, `capacity`, `policy`, `maxQueuedRows` and `initial.urlData`: a parent
  * re-render that hands in an equal (but new) inline `spec` keeps the stream and
- * the rows streamed into it. `initial` is read when the stream is created.
+ * the rows streamed into it. The rest of `initial` is read when the stream is created.
  *
  * The first scene is primed synchronously while the stream is created, so a
  * server render (where no effect runs) already contains the chart.
@@ -102,10 +103,13 @@ export function useChartStream(spec: VgSpec, options: UseChartStreamOptions = {}
   const { serialize = true, autoFlush = true, flushPolicy = 'microtask', capacity, policy, initial, maxQueuedRows, limits, textMetrics } = options
   const stableSpec = useStableSpec(spec)
   const normalized = React.useMemo(() => normalizeChartSpec(stableSpec), [stableSpec])
+  // `initial.urlData` decides whether the spec is refused, so unlike the rest of `initial` it is part of the stream's key
+  const urlData = initial?.urlData
   // The add-ons the spec needs load before the stream is created (and primed): suspends meanwhile; a failed import is `error`.
-  const addonError = useAddons(normalized)
+  // With `urlData: 'refuse'` a spec with a url dataset is refused first, before any import.
+  const addonError = useAddons(normalized, urlData)
   const streamRef = React.useRef<ChartStream | null>(null)
-  const streamKey = React.useRef<{ spec: VgSpec; capacity?: number; policy?: StreamOptions['policy']; maxQueuedRows?: number } | null>(null)
+  const streamKey = React.useRef<{ spec: VgSpec; capacity?: number; policy?: StreamOptions['policy']; maxQueuedRows?: number; urlData?: UrlDataMode } | null>(null)
   const primedRef = React.useRef<TaggedState | null>(null)
   if (
     streamRef.current == null
@@ -113,6 +117,7 @@ export function useChartStream(spec: VgSpec, options: UseChartStreamOptions = {}
     || streamKey.current?.capacity !== capacity
     || streamKey.current?.policy !== policy
     || streamKey.current?.maxQueuedRows !== maxQueuedRows
+    || streamKey.current?.urlData !== urlData
   ) {
     const created = createChartStream(normalized, {
       capacity, policy, initial,
@@ -121,7 +126,7 @@ export function useChartStream(spec: VgSpec, options: UseChartStreamOptions = {}
       ...(textMetrics ? { textMetrics } : {}),
     })
     streamRef.current = created
-    streamKey.current = { spec: normalized, capacity, policy, maxQueuedRows }
+    streamKey.current = { spec: normalized, capacity, policy, maxQueuedRows, urlData }
     let primed: StreamState
     try {
       if (addonError) throw addonError
