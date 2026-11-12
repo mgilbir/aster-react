@@ -3,7 +3,7 @@
 Version 0.1.0 is the first release. From 0.1.0 on, entries are added per release under Added, Changed
 and Fixed, per package. Everything built before the first release is in [Pre-release history](#pre-release-history) below.
 
-## Unreleased
+## 0.3.0 (2026-11-12)
 
 ### `@aster-charts/core`
 
