@@ -273,9 +273,9 @@ const BUDGETS = {
   // build: 3.7 kB gzip (was 3.3), an on-demand chunk only; no eager row moved. Ceiling is the measured value + 0.5.
   '+ @aster-charts/core/transition': 4.2 * 1024,
   // The PNG painter (#144: png.ts and the canvas renderer it paints with), an on-demand chunk only (`getPng` imports it on its first
-  // call), measured 2026-11-12 on a clean build: 7.5 kB gzip over the core app (the canvas renderer's 6.0 included). No eager row
-  // grew past what the #143 note above set for the two together. Ceiling is the measured value + 0.5.
-  '+ @aster-charts/core/png': 8.0 * 1024,
+  // call), measured 2026-11-12 on a clean build: 7.7 kB gzip over the core app (the canvas renderer's 6.0 included; 7.5 before the
+  // one image deadline). No eager row grew past what the #143 note above set for the two together. Ceiling is the measured value + 0.5.
+  '+ @aster-charts/core/png': 8.2 * 1024,
   '@aster-charts/react useChart': 172.5 * 1024,
   '@aster-charts/react Chart': 215.4 * 1024,
   // The light chart (`@aster-charts/react/lite`): SVG only, no canvas renderer; alone and with the `interaction` capability.
