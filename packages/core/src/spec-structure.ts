@@ -21,6 +21,15 @@ export function specList(value: unknown): unknown[] {
   return value == null ? [] : Array.isArray(value) ? value : [value]
 }
 
+/**
+ * Where a dataset's rows come from, as vega-parser decides it (parsers/data.js `analyze`): its `values` when it has any, else its
+ * `url`, else its `source`; each is taken when it is truthy, so `values: []` is values and `url: ""` is no url. The others are
+ * ignored: a dataset with `values` and a `source` is the values, and its `source` need not even name a dataset.
+ */
+export function dataInputOf(def: { values?: unknown; url?: unknown; source?: unknown }): 'values' | 'url' | 'source' | 'none' {
+  return def.values ? 'values' : def.url ? 'url' : def.source ? 'source' : 'none'
+}
+
 const SCOPE_LISTS = ['signals', 'projections', 'scales', 'data', 'axes', 'marks', 'legends'] as const
 
 const isRecord = (v: unknown): v is Record<string, unknown> => v !== null && typeof v === 'object' && !Array.isArray(v)

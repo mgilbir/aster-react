@@ -16,6 +16,7 @@ import { feature as topoFeature, mesh as topoMesh } from './topojson.js'
 import { dataFormatRegistry } from './registry.js'
 import { readData, type DataFormatSpec, type inferTypes as _inferTypes } from './data-format.js'
 import type { VgSpec } from './types.js'
+import { dataInputOf } from './spec-structure.js'
 import { compileExpr, type ExpressionRuntime } from './expression.js'
 import { AsterLimitError, checkRowCount, withLimits, type SpecLimits } from './limits.js'
 import { AsterUrlError, DEFAULT_LOAD_PROTOCOLS, checkBasicUrl, type UrlPolicyBase } from './url-policy.js'
@@ -425,7 +426,8 @@ function planLoads(spec: Json, tasks: LoadTask[]): Json {
     let changed = false
     const out = list.map((d) => {
       const def = d as Json | null
-      if (def && typeof def === 'object' && def.url != null && def.values == null) {
+      // (a dataset vega loads from its url: no values, a url; see dataInputOf)
+      if (def && typeof def === 'object' && dataInputOf(def) === 'url') {
         // vega loads a `{signal}` url dynamically (a Load operator re-run when the signal changes); a static spec
         // is loaded for the value the signal has when the view starts
         const url = typeof def.url === 'string' ? def.url : signalString(def.url, (signals ??= initialSignals(spec)))

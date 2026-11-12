@@ -3,6 +3,17 @@
 Version 0.1.0 is the first release. From 0.1.0 on, entries are added per release under Added, Changed
 and Fixed, per package. Everything built before the first release is in [Pre-release history](#pre-release-history) below.
 
+## Unreleased
+
+### `@aster-charts/core`
+
+#### Fixed
+
+- A dataset's rows come from its `values`, else its `url`, else its `source`, as in vega: a dataset with `values` and a `source`
+  drew its source's rows (and one whose `source` named no dataset drew nothing); one with a `url` and a `source` drew the source's
+  rows instead of asking for the url to be loaded; and `loadSpecData` tried to fetch an empty `url`. The compile, the session, the
+  stream and `loadSpecData` now all read the one vega reads (`dataInputOf`; corpus entry `data-values-over-source`).
+
 ## 0.2.0 (2026-11-11)
 
 ### `@aster-charts/react`

@@ -19,6 +19,7 @@
  */
 import { compileChart } from './compiler.js'
 import { dict, ownGet } from './util.js'
+import { dataInputOf } from './spec-structure.js'
 import { evaluateChartPending, type DataStability } from './runtime.js'
 import { incrementalEngine } from './incremental-engine.js'
 import { refId, valueKey } from './fingerprint.js'
@@ -87,13 +88,13 @@ function rawDatasets(spec: VgSpec, input: RuntimeInput): Map<string, unknown> {
     if (typeof d.name !== 'string') continue
     // Derived datasets (source:) are rebuilt from their parent; input overrides
     // for them are ignored by the runtime too.
-    if (typeof d.source === 'string') continue
+    if (dataInputOf(d) === 'source') continue
     const override = ownGet(input.data, d.name)
     const values = override !== undefined ? override : d.values
     if (values != null) out.set(d.name, values)
   }
   for (const [name, rows] of Object.entries(input.data ?? {})) {
-    if (!out.has(name) && !lists.some((d) => d.name === name && typeof d.source === 'string')) out.set(name, rows)
+    if (!out.has(name) && !lists.some((d) => d.name === name && dataInputOf(d) === 'source')) out.set(name, rows)
   }
   return out
 }
