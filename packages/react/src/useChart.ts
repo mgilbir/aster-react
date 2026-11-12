@@ -32,7 +32,7 @@ export function useChart(spec: VgSpec, options: UseChartOptions = {}): UseChartR
   const normalized = React.useMemo(() => normalizeChartSpec(stableSpec), [stableSpec])
   // The opt-in add-ons the spec needs load before the first evaluation: the hook suspends meanwhile (a <Suspense> boundary
   // above shows its fallback), and an import that fails is the result's `error`.
-  const addonError = useAddons(normalized)
+  const addonError = useAddons(normalized, input.urlData)
   const sessionRef = React.useRef<ReturnType<typeof createChartSession> | null>(null)
   if (sessionRef.current == null) sessionRef.current = createChartSession()
   const session = sessionRef.current
@@ -41,7 +41,7 @@ export function useChart(spec: VgSpec, options: UseChartOptions = {}): UseChartR
   // engine input cannot silently leave a stale result the way textMetrics,
   // dataPulse, changedDatasets and autoChanges once did.
   const deps: Required<{ [K in keyof RuntimeInput]: unknown }> = {
-    limits, textMetrics: input.textMetrics, urlPolicy: input.urlPolicy, data: input.data, width: input.width, height: input.height, signals: input.signals,
+    limits, textMetrics: input.textMetrics, urlPolicy: input.urlPolicy, urlData: input.urlData, data: input.data, width: input.width, height: input.height, signals: input.signals,
     changedDatasets: input.changedDatasets, dataChanges: input.dataChanges, dataPulse: input.dataPulse,
     autoChanges: input.autoChanges, domainRaw: input.domainRaw, logger: input.logger, random: input.random, containerSize: input.containerSize, measuredSize: input.measuredSize,
   }

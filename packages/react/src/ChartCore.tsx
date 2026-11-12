@@ -376,6 +376,7 @@ function ChartView({
   renderTooltip,
   limits,
   urlPolicy,
+  urlData,
   random,
   logger,
   preventDefault,
@@ -389,7 +390,8 @@ function ChartView({
 }: Omit<ChartCoreProps, 'spec'> & { spec: VgSpec; chartRef: React.ForwardedRef<ChartHandle>; focusHandoff: React.MutableRefObject<FocusSpot | null> }) {
   // The opt-in add-ons the spec needs (transforms, geo, load) arrive before the first evaluation: this suspends while
   // they load, so there is no render of the half-ready chart and no error to flash. A failed import is a chart error.
-  const addonError = useAddons(sceneOverride !== undefined ? null : spec)
+  // With `urlData="refuse"` a spec with a url dataset is refused here, before any add-on is imported.
+  const addonError = useAddons(sceneOverride !== undefined ? null : spec, urlData)
   const stableLimits = useStableContent(limits)
   // Which scales `view`/`brush`/`selection`'s `x`/`y` refer to.
   const positional = React.useMemo(() => positionalScales(spec), [spec])
@@ -539,7 +541,7 @@ function ChartView({
       prevLengthsRef.current = new Map(Object.entries(inputData ?? {}).map(([name, rows]) => [name, rows.length]))
       const sc = sessionRef.current!.evaluate(spec, {
         data: inputData, dataChanges: changes, ...sizeInput,
-        signals: mergedSignals, limits: stableLimits, urlPolicy, domainRaw, textMetrics, logger: stableLogger,
+        signals: mergedSignals, limits: stableLimits, urlPolicy, urlData, domainRaw, textMetrics, logger: stableLogger,
         ...(random ? { random } : {}),
       })
       // `maxSvgLength` bounds the serialized output. The DOM patcher never
@@ -550,7 +552,7 @@ function ChartView({
     } catch (err) {
       return { scene: null, error: err instanceof Error ? err : new Error(String(err)), problems: [] }
     }
-  }, [sceneOverride, addonError, spec, inputData, dataChanges, sizeInput, mergedSignals, stableLimits, urlPolicy, random, domainRaw, textMetrics, stableLogger])
+  }, [sceneOverride, addonError, spec, inputData, dataChanges, sizeInput, mergedSignals, stableLimits, urlPolicy, urlData, random, domainRaw, textMetrics, stableLogger])
   const scene = evaluation.scene
   sceneRef.current = scene
   const renderError = evaluation.error
@@ -639,14 +641,14 @@ function ChartView({
     try {
       if (baseSessionRef.current == null) baseSessionRef.current = createChartSession()
       const baseScene = baseSessionRef.current.evaluate(spec, {
-        data: inputData, ...sizeInput, signals: mergedSignals, limits: stableLimits, urlPolicy, textMetrics, logger: stableLogger,
+        data: inputData, ...sizeInput, signals: mergedSignals, limits: stableLimits, urlPolicy, urlData, textMetrics, logger: stableLogger,
         ...(random ? { random } : {}),
       })
       return baseDomainsOf(chartInfoFromScene(baseScene), positional)
     } catch {
       return null
     }
-  }, [panZoomEnabled, zoomed, fromStream, positional, spec, inputData, sizeInput, mergedSignals, stableLimits, urlPolicy, random, textMetrics, stableLogger])
+  }, [panZoomEnabled, zoomed, fromStream, positional, spec, inputData, sizeInput, mergedSignals, stableLimits, urlPolicy, urlData, random, textMetrics, stableLogger])
   const baseDomains = React.useMemo<ViewDomain>(() => {
     if (!panZoomEnabled || chartInfo == null) return {}
     if (!zoomed) return baseDomainsOf(chartInfo, positional)

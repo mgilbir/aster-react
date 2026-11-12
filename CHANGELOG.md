@@ -3,6 +3,29 @@
 Version 0.1.0 is the first release. From 0.1.0 on, entries are added per release under Added, Changed
 and Fixed, per package. Everything built before the first release is in [Pre-release history](#pre-release-history) below.
 
+## Unreleased
+
+### `@aster-charts/core`
+
+#### Added
+
+- `urlData` in the runtime input (`'allow'`, the default, or `'refuse'`; type `UrlDataMode`): with `'refuse'` a spec that has a
+  `url` dataset (one with a `url` and no `values`, at the top level or in a nested group) fails at once with an `AsterUrlError`
+  (`ASTER_URL_DENIED`) that names the dataset, whether or not `data` gives its rows. Sessions and streams (`initial.urlData`)
+  take it too. `urlDatasets(spec)` lists a spec's url datasets and `checkUrlData(spec, urlData)` throws the refusal without
+  rendering. `addonsNeeded`, `missingAddons` and `loadAddonsFor` (`@aster-charts/core/addons`) take `{ urlData }`: under
+  `'refuse'` a url dataset's readers are not counted, and `loadAddonsFor` rejects with the refusal before importing anything
+  ([docs/LIMITS.md](docs/LIMITS.md#refusing-url-datasets-urldata), #143).
+
+### `@aster-charts/react`
+
+#### Added
+
+- `urlData` on `<Chart>`, `<SvgChart>`, `<ChartStream>` and `<ChartWorkerStream>`, and in `useChart`, `useChartWorker` and a
+  stream's `initial`: `urlData="refuse"` refuses a spec with a url dataset before any add-on loads (the csv readers a url names,
+  or anything else the spec needs) and reports the `AsterUrlError` through `onError` / `error`. The worker imports nothing for
+  such a spec and answers with the refusal (#143).
+
 ## 0.2.0 (2026-11-11)
 
 ### `@aster-charts/react`

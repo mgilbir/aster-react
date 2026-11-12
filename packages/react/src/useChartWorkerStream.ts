@@ -4,7 +4,7 @@
  * available the same hook falls back to a local stream, so hosts need one code
  * path.
  *
- * Lifecycle: the stream is keyed on the spec CONTENT (plus capacity/policy/maxQueuedRows and
+ * Lifecycle: the stream is keyed on the spec CONTENT (plus capacity/policy/maxQueuedRows, `initial.urlData` and
  * the supplied `worker`). A parent re-render with an equal inline `spec`, a new
  * `workerFactory` arrow, or a changed `serialize` does not restart it and does
  * not discard streamed rows.
@@ -12,6 +12,7 @@
 import * as React from 'react'
 import {
   AsterStreamBackpressureError,
+  checkUrlData,
   createChartStream,
   getStreamFlushFailure,
   renderSceneToSvg,
@@ -26,7 +27,7 @@ import {
   type VgSpec,
 } from '@aster-charts/core'
 import { mergeBatches } from './batches.js'
-import { loadAddons, missingAddons } from '@aster-charts/core/addons'
+import { loadAddons, missingAddons, type AddonName } from '@aster-charts/core/addons'
 import { normalizeChartSpec, useStableSpec } from './spec.js'
 import {
   errorFromWire,
@@ -143,6 +144,8 @@ export function useChartWorkerStream(spec: VgSpec, options: ChartWorkerStreamOpt
   serializeRef.current = serialize
   const initialRef = React.useRef(initial)
   initialRef.current = initial
+  // (unlike the rest of `initial`, whether url datasets are refused restarts the stream when it changes)
+  const urlData = initial?.urlData
   const queueCapacity = Math.max(1, capacity ?? 32)
   const queueMaxRows = Math.max(1, maxQueuedRows ?? 5_000_000)
   const queuePolicy = policy ?? 'coalesce'
@@ -289,7 +292,15 @@ export function useChartWorkerStream(spec: VgSpec, options: ChartWorkerStreamOpt
           recoverLocal(stream, e)
         }
       }
-      const missing = missingAddons(normalized)
+      let missing: readonly AddonName[]
+      try {
+        // with `urlData: 'refuse'` a spec with a url dataset is refused before any add-on is imported
+        checkUrlData(normalized, init?.urlData)
+        missing = missingAddons(normalized, { urlData: init?.urlData })
+      } catch (e) {
+        fail(e instanceof Error ? e : new Error(String(e)))
+        return
+      }
       if (missing.length === 0) start()
       else loadAddons(missing).then(start, (e: unknown) => { if (!cancelled) fail(e instanceof Error ? e : new Error(String(e))) })
       return () => {
@@ -334,7 +345,7 @@ export function useChartWorkerStream(spec: VgSpec, options: ChartWorkerStreamOpt
       stop()
       try { w.postMessage({ kind: 'stream', id: nextWorkerRequestId(), streamId, op: 'close' } satisfies ChartWorkerStreamRequest) } catch { /* terminated */ }
     }
-  }, [normalized, capacity, policy, maxQueuedRows, worker, workerRef, apply, fail, recoverLocal])
+  }, [normalized, capacity, policy, maxQueuedRows, urlData, worker, workerRef, apply, fail, recoverLocal])
 
   const push = React.useCallback((batch: ChartWorkerBatch): boolean => {
     if (closedRef.current) return false

@@ -15,7 +15,7 @@ The public surface of the three Aster packages: what each entry point exports, w
 | update a chart when only some rows changed | `createChartSession` from `@aster-charts/core/dom`, or the `dataChanges` prop | [Sessions and per-datum updates](#sessions-and-per-datum-updates) |
 | keep rendering off the main thread | `useChartWorker` from `@aster-charts/react`, and `@aster-charts/react/worker-entry` in the worker | [Workers](#workers) |
 | render on the server and hydrate | `renderChartToStaticMarkup`, `hydrateChart` from `@aster-charts/react` (or `@aster-charts/react/ssr`) | [SSR + hydration](#ssr--hydration) |
-| render specs from untrusted sources | the `limits` and `urlPolicy` inputs, and a worker | [RuntimeInput](#runtimeinput), [LIMITS.md](LIMITS.md) |
+| render specs from untrusted sources | the `limits`, `urlPolicy` and `urlData` inputs, and a worker | [RuntimeInput](#runtimeinput), [LIMITS.md](LIMITS.md) |
 | load a spec's `url` datasets | `loadSpecData` from `@aster-charts/core/load`, or `useSpecData` in React | [`@aster-charts/core/load`](#aster-chartscoreload) |
 | call my own function from an expression | `registerExpressionFunction` from `@aster-charts/core` | [Custom expression functions](#custom-expression-functions) |
 
@@ -226,7 +226,7 @@ queued and `false` when the policy rejected it, and throws only for `policy: 'er
 (`AsterStreamBackpressureError`) or a malformed batch (`TypeError`). An appended list of any length is fine: rows are
 moved into the stream's base array with a loop at flush time, never by spreading them into a call, so a very large
 `append` cannot hit the engine's call-argument limit. `StreamBatch` fields: `data`, `append`, `pulse`, `signals`,
-`width`, `height`, `domainRaw`, `limits`, `textMetrics`. `initial.urlPolicy` is fixed for the stream's life.
+`width`, `height`, `domainRaw`, `limits`, `textMetrics`. `initial.urlPolicy` and `initial.urlData` are fixed for the stream's life.
 
 An empty first `flush()` primes the scene from the spec/initial snapshot; later empty
 flushes are no-ops. The React bindings are:
@@ -305,9 +305,17 @@ Afterwards `push` returns `false` (not counted as a drop), `flush` returns `null
 #### RuntimeInput
 
 `RuntimeInput` (the second argument of `renderSpec`, `evaluateChart` and the session) has these fields: `limits`,
-`urlPolicy`, `logger`, `random`, `textMetrics`, `data`, `width`, `height`, `signals`, `containerSize`, `measuredSize`, `changedDatasets`,
+`urlPolicy`, `urlData`, `logger`, `random`, `textMetrics`, `data`, `width`, `height`, `signals`, `containerSize`, `measuredSize`, `changedDatasets`,
 `dataChanges`, `dataPulse`, `autoChanges`, `domainRaw`. `data` is a `Record<string, unknown[]>` keyed by dataset
 name; it overrides or supplies the rows of the spec dataset of that name.
+
+`urlData` (`'allow'`, the default, or `'refuse'`; type `UrlDataMode`) says whether the spec may name `url` datasets. With
+`'refuse'` a spec that has a dataset with a `url` and no `values`, at the top level or in a nested group, fails at once with an
+`AsterUrlError` that names the dataset and says url data is not allowed, whether or not `data` gives rows under its name: for a host
+that supplies every row itself and draws specs it did not write (the data counterpart of `urlPolicy`; see
+[LIMITS.md](LIMITS.md#refusing-url-datasets-urldata)). Any other value is a `TypeError`. `urlDatasets(spec)` returns the names of a
+spec's url datasets (top level and nested groups, in document order), and `checkUrlData(spec, urlData)` throws the refusal
+`urlData: 'refuse'` would, for a host that checks a spec before handing it over.
 
 `random` (`RuntimeInput.random`, `() => number` in [0, 1)) is the chart's source of random numbers, the per-chart counterpart of
 vega's `setRandom`: expression `random()`, `sampleNormal` / `sampleLogNormal` / `sampleUniform`, the `sample` transform and the
@@ -436,7 +444,7 @@ The pieces `renderSpec` and the session are made of are exported for hosts that 
 #### Typed errors
 
 `AsterUrlError` (`code: 'ASTER_URL_DENIED'`, `url`, `reason`) is thrown when the URL policy refuses a request, before any
-request is made; it is exported from `@aster-charts/core` and from `@aster-charts/core/load`. `docs/ERRORS.md` lists every error class.
+request is made, and when `urlData: 'refuse'` refuses a url dataset; it is exported from `@aster-charts/core` and from `@aster-charts/core/load`. `docs/ERRORS.md` lists every error class.
 
 #### Accessibility tree
 
@@ -507,7 +515,9 @@ where you cannot wait inside React). `addonsNeeded(spec)` reads the spec's struc
 needed `AddonName`s (`'transforms' | 'geo' | 'load'`); `missingAddons(spec)` is the subset not loaded yet; `loadAddons(names)`
 imports them (concurrently, each at most once, rejecting with an error that names the add-on); `loadAddonsFor(spec)` (also in
 `@aster-charts/react`) is the last two in one call. `isAddonLoaded(name)` says whether an add-on's registrations are present however they
-got there, and `notLoaded(names)` filters a list by it. Constants: `TRANSFORMS_ADDON_TYPES` (every transform type the
+got there, and `notLoaded(names)` filters a list by it. `addonsNeeded`, `missingAddons` and `loadAddonsFor` take an optional second
+argument, `{ urlData }` (`AddonOptions`): with `urlData: 'refuse'` the readers a url dataset's `format` names are not counted (the dataset
+is refused, never read), and `loadAddonsFor` rejects a spec that has a url dataset with the refusal before importing anything. Constants: `TRANSFORMS_ADDON_TYPES` (every transform type the
 transforms add-on registers), `LOAD_ADDON_FORMATS` (`csv`, `tsv`, `dsv`, `topojson`) and `ADDON_FUNCTIONS` (expression function name to the
 add-on that registers it). Test seams: `registeredFunctionNames` lists the expression functions registered beyond the built-ins, and
 `withdrawFunctions(names)` removes some and returns a function that restores them.
@@ -664,7 +674,9 @@ since compilation happens there.
 `height` (each independent; without them the chart measures its container; a given one fixes the view's size, even for a container-sized spec, whose `width` / `height` signals and `window:resize` handlers do not move it. The measured container only sizes a spec that has no `width` / `height` signal of its own, and a dimension the spec gives no value at all stays Vega's 0 grown to the content by autosize. It sizes the chart's whole box, padding, guides and the bound inputs under the chart included, as Vega-Lite's `"container"` does (autosize `fit` containing the padding): the content shrinks to fit, so a chart never overflows the container it fills, and a container whose height is the chart's own (a block `<div>` with no height) keeps the chart's size instead of growing with it; one that drives them (a bound input, a handler, Vega-Lite's `"container"`) keeps doing so, as in Vega where the size is a signal and the later write wins, and sees the container through `containerSize()`), `ariaLabel`, `className`, `style`,
 `signals`, `signalListeners`, `onSignal`, `interactive`, `preventDefault`, `renderer`, `incremental`, `denseMarks`, `transition`,
 `tooltip`, `renderTooltip`, `selection`/`select`, `onSelectionChange`, `onSelect`, `onPointSelect`, `brush`, `panZoom`,
-`pan`, `zoom`, `view`, `onViewChange`, `maxZoom`, `a11y`, `limits`, `urlPolicy`, `random`, `logger`, `textMetrics`, `onError`.
+`pan`, `zoom`, `view`, `onViewChange`, `maxZoom`, `a11y`, `limits`, `urlPolicy`, `urlData`, `random`, `logger`, `textMetrics`, `onError`.
+`urlData="refuse"` refuses a spec with a `url` dataset before any add-on loads and before evaluation: the chart renders its error
+state and `onError` receives the `AsterUrlError` (see `RuntimeInput.urlData`).
 
 **Internal props.** `sceneOverride` and `onStreamInput` are host plumbing for `<ChartStream>` and `<ChartWorkerStream>`, which are
 built on `<Chart>`. They are internal and unstable: their shape can change in any release and they are not covered by semver. Do not
@@ -871,8 +883,8 @@ export function Live(): React.ReactElement {
 `flushPolicy`, `initial`, and for the worker form `worker`/`workerFactory`; `serialize` is forced off because the
 component renders the scene itself) and `onStreamError(error, failure?)`.
 `panZoom`/`pan`/`zoom`/`view`/`onViewChange` and `signals` are routed into the stream as `domainRaw` and `signals`
-batches, so scales, marks and guides recompute inside the stream; `limits`, `textMetrics` and `urlPolicy` configure
-the stream's evaluation; rendering, selection, tooltip, a11y and event props go to the underlying `<Chart>`.
+batches, so scales, marks and guides recompute inside the stream; `limits`, `textMetrics`, `urlPolicy` and `urlData` configure
+the stream's evaluation (a change of `urlData` starts a new stream); rendering, selection, tooltip, a11y and event props go to the underlying `<Chart>`.
 The ref (`ChartStreamHandle`) has `push`, `flush`, `pending`, `pulse`, `stats`, `scene` and `close`.
 The hook form is `useChartStream(spec, options)` (and `useChartWorkerStream` for a worker), described under
 [Streaming and pulses](#streaming-and-pulses).
@@ -921,6 +933,8 @@ export function Offloaded(): React.ReactElement {
 
 - **`limits`** travel in every request and are enforced in the worker, with the same sequence as `renderSpec`
   (pre-flight, meters, scene, SVG length). A violation comes back as a wire error with `code: 'ASTER_LIMIT'`.
+- **`urlData`** (`useChartWorker(spec, { urlData })`, a stream's `initial.urlData`) travels with the request. With `'refuse'` the
+  worker imports no add-on for a spec that has a url dataset and answers with the refusal (`code: 'ASTER_URL_DENIED'`).
 - **`textMetrics` and `urlPolicy` by name.** A provider object or a policy with functions cannot cross `postMessage`.
   Register it in the worker with `registerWorkerTextMetrics(name, provider)` / `registerWorkerUrlPolicy(name,
   { allow, onDeny })` (both from `@aster-charts/react/worker`, called in the worker entry) and pass the name

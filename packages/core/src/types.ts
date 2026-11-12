@@ -33,6 +33,14 @@ export interface RuntimeInput {
    */
   urlPolicy?: import('./url-policy.js').ImageUrlPolicy
   /**
+   * Whether the spec may name `url` datasets. `'refuse'`: a spec with a dataset that has a `url` (and no `values`), at the
+   * top level or in a nested group, is refused with an `AsterUrlError` (`ASTER_URL_DENIED`) that names it, whether or not
+   * `data` supplies rows under that name. For a host that supplies every row itself and draws specs it did not write;
+   * the data counterpart of `urlPolicy`. Default `'allow'`: a url dataset renders once its rows are loaded
+   * (`loadSpecData` from `@aster-charts/core/load`) or given in `data`. Any other value is a `TypeError`. See docs/LIMITS.md.
+   */
+  urlData?: import('./url-data.js').UrlDataMode
+  /**
    * Where the engine reports errors it recovers from, like vega's logger (default: the
    * console). vega logs a failing expression -- a conditional-encode test, a signal in an
    * encode, a transform's predicate, a sort -- and carries on with what the dataflow had

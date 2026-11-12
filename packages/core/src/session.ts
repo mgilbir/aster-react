@@ -170,6 +170,8 @@ function metaKeyOf(skeleton: string, input: RuntimeInput): string {
   if (input.limits) parts.push(`lim=${valueKey(input.limits)}`)
   // image urls are vetted while the scene is built: a different policy can reject a scene a looser one accepted
   if (input.urlPolicy) parts.push(`up=${valueKey(input.urlPolicy)}`)
+  // a refusing input must never be answered with a scene cached under one that allowed url datasets
+  if (input.urlData !== undefined) parts.push(`ud=${valueKey(input.urlData)}`)
   for (const name of Object.keys(input.domainRaw ?? {}).sort()) {
     parts.push(`d ${name}=${valueKey(input.domainRaw![name])}`)
   }

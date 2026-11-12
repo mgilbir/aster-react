@@ -33,7 +33,7 @@ Catch the typed errors by `code` (see "`instanceof` or `code`?" below); everythi
 | You see | It means | You do |
 |---|---|---|
 | `AsterLimitError` (`ASTER_LIMIT`) | a `limits` budget was exceeded: rows, marks, depth, items, output size, or the wall-clock deadline | show an error state; raise the budget only for a spec you trust ([Budget errors](#budget-errors), `docs/LIMITS.md`) |
-| `AsterUrlError` (`ASTER_URL_DENIED`) | the URL policy refused a URL (protocol, credentials, non-public host, relative URL, the `allow` hook) | fix the URL, or widen the policy deliberately ([URL errors](#url-errors)) |
+| `AsterUrlError` (`ASTER_URL_DENIED`) | the URL policy refused a URL (protocol, credentials, non-public host, relative URL, the `allow` hook), or `urlData: 'refuse'` refused a url dataset | fix the URL, or widen the policy deliberately; a refused url dataset is the host's rule, so give the spec inline rows ([URL errors](#url-errors)) |
 | `AsterStreamBackpressureError` (`ASTER_STREAM_BACKPRESSURE`) | a `push` would overflow the queue under `policy: 'error'` | flush before pushing, slow the producer, or choose another policy ([Stream errors](#stream-errors)) |
 | `AsterStreamClosedError` (`ASTER_STREAM_CLOSED`) | `stream.session()` was called after `close()` | stop using the stream after closing it |
 | `SpecParseError` | the spec was refused when it was compiled, as `vega.parse` refuses it | fix the spec; the message is vega's ([Expressions are refused when the spec is compiled](#expressions-are-refused-when-the-spec-is-compiled)) |
@@ -98,6 +98,11 @@ allowed, embedded credentials, non-public host, relative URL without `baseURL`, 
 thrown by `loadSpecData` before the request is made, and by image and `href` marks under `urlPolicy` or `limits`
 (unless `onDeny` is set, which drops the image or link instead). It is never recovered by the `logger` mechanism
 below.
+
+Under `urlData: 'refuse'` a spec with a url dataset is refused with an `AsterUrlError` before any add-on loads and before
+evaluation: `[aster] url denied: dataset "source_0" loads its rows from a url, and url data is not allowed here (urlData:
+"refuse"): <url>` (with several, `datasets "a", "b" load their rows from urls`; `url` is the first one's). An invalid `urlData`
+is a `TypeError` (`[aster] urlData must be "allow" or "refuse", ...`).
 
 ## Stream errors
 
@@ -352,7 +357,8 @@ reported through `onError` (the hook's `error`), and it is remembered for the pa
   JSON data: ...`.
 - **Unloaded `url` dataset** — rendering a spec whose `url` dataset was never loaded throws `[aster] dataset "t" has a
   url but no data was loaded for it; resolve url datasets first: import { loadSpecData } from "@aster-charts/core/load" and
-  render await loadSpecData(spec, { baseURL, ... }), or pass the rows as input.data["t"]`.
+  render await loadSpecData(spec, { baseURL, ... }), or pass the rows as input.data["t"]`. Under `urlData: 'refuse'` the
+  spec is refused before this, with an `AsterUrlError` ([URL errors](#url-errors)).
 - **Stratify** — `[aster] stratify: cycle | multiple roots | missing: id | ambiguous: id | no root` (vega's messages
   with the prefix), and `[aster] stratify requires a key field`.
 - **Circular data reference** — named datasets cannot form a cycle: `[aster] circular data reference: <name>`.

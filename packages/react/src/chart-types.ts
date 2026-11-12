@@ -3,6 +3,7 @@ import type {
   A11yOptions,
   ChartInfo,
   ImageUrlPolicy,
+  UrlDataMode,
   Logger,
   SceneItem,
   SceneRoot,
@@ -255,6 +256,14 @@ export interface ChartProps {
    * Functions are compared by identity, so memoize the object to avoid re-evaluating.
    */
   urlPolicy?: ImageUrlPolicy
+  /**
+   * `'refuse'`: a spec that has a `url` dataset (one with a `url` and no `values`, at any depth of nested groups) is refused
+   * before any add-on loads and before evaluation, whether or not `data` gives rows under its name: the chart renders its
+   * error state and `onError` receives an `AsterUrlError` (`ASTER_URL_DENIED`) that names the dataset. For an app that
+   * supplies every row through `data` and draws specs it did not write; the data counterpart of `urlPolicy`. Default
+   * `'allow'` (`RuntimeInput.urlData`).
+   */
+  urlData?: UrlDataMode
   /**
    * The source of random numbers of this chart (`RuntimeInput.random`, the per-chart counterpart of vega's `setRandom`): expression
    * `random()`, `sampleNormal` / `sampleLogNormal` / `sampleUniform`, the `sample` transform and the bootstrap `ci0` / `ci1` draw from
