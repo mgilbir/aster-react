@@ -310,7 +310,7 @@ Afterwards `push` returns `false` (not counted as a drop), `flush` returns `null
 name; it overrides or supplies the rows of the spec dataset of that name.
 
 `urlData` (`'allow'`, the default, or `'refuse'`; type `UrlDataMode`) says whether the spec may name `url` datasets. With
-`'refuse'` a spec that has a dataset with a `url` and no `values`, at the top level or in a nested group, fails at once with an
+`'refuse'` a spec that has a dataset with a non-empty `url` and no `values`, at the top level or in a nested group, fails at once with an
 `AsterUrlError` that names the dataset and says url data is not allowed, whether or not `data` gives rows under its name: for a host
 that supplies every row itself and draws specs it did not write (the data counterpart of `urlPolicy`; see
 [LIMITS.md](LIMITS.md#refusing-url-datasets-urldata)). Any other value is a `TypeError`. `urlDatasets(spec)` returns the names of a

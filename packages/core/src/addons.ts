@@ -101,7 +101,7 @@ function selectorFilters(selector: string, found: Set<AddonName>): void {
  * carries (a signal's `update` / `init` / `on`, a `formula` / `filter` `expr`, a `{signal}` reference, an event filter, a
  * rule's `test`), found by parsing each expression with the engine's own parser. A walk of the spec each time it is asked (a
  * host that renders again keeps the answer: the React hook memoizes it per spec), so a spec edited in place is read as it is now.
- * With `urlData: 'refuse'` the `format` of a url dataset (one with a `url` and no `values`) is not counted: that dataset is
+ * With `urlData: 'refuse'` the `format` of a url dataset (one with a non-empty `url` and no `values`) is not counted: that dataset is
  * refused, never read, so it needs no reader.
  */
 export function addonsNeeded(spec: VgSpec, options?: AddonOptions): readonly AddonName[] {
@@ -138,7 +138,7 @@ export function addonsNeeded(spec: VgSpec, options?: AddonOptions): readonly Add
     }
     if (key === 'format' && FORMAT_TYPES.has(node.type as string)) found.add('load')
     // (a dataset definition is an element of a `data` array; a refused url dataset is never read)
-    const refusedUrl = refuseUrls && key === 'data' && node.url != null && !node.values
+    const refusedUrl = refuseUrls && key === 'data' && !!node.url && !node.values
     for (const k of Object.keys(node)) {
       if (DATA_KEYS.has(k) && !(k === 'values' && isObj(node[k]) && !Array.isArray(node[k]))) continue
       if (refusedUrl && k === 'format') continue

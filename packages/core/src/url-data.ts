@@ -23,12 +23,11 @@ type Json = Record<string, unknown>
 const isObj = (v: unknown): v is Json => v !== null && typeof v === 'object'
 
 /**
- * A dataset definition that loads its rows from a url: one with a `url` and no `values`. Vega reads `values` first, then
- * `url`, then `source` (vega-parser `parseData`), so a `url` beside a `source` is still a load; `loadSpecData` fetches exactly
- * these.
+ * A dataset definition that loads its rows from a url, as vega decides it (vega-parser `analyze`: its `values`, else its `url`,
+ * else its `source`, each when truthy): a `url` beside a `source` is a load, a `url` beside `values` or an empty `url` is not.
  */
 function isUrlDataset(def: unknown): def is Json {
-  return isObj(def) && !Array.isArray(def) && def.url != null && !def.values
+  return isObj(def) && !Array.isArray(def) && !def.values && !!def.url
 }
 
 const NONE: readonly UrlDataset[] = Object.freeze([])

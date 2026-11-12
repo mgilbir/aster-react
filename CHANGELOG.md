@@ -17,7 +17,7 @@ and Fixed, per package. Everything built before the first release is in [Pre-rel
 #### Added
 
 - `urlData` in the runtime input (`'allow'`, the default, or `'refuse'`; type `UrlDataMode`): with `'refuse'` a spec that has a
-  `url` dataset (one with a `url` and no `values`, at the top level or in a nested group) fails at once with an `AsterUrlError`
+  `url` dataset (one with a non-empty `url` and no `values`, at the top level or in a nested group) fails at once with an `AsterUrlError`
   (`ASTER_URL_DENIED`) that names the dataset, whether or not `data` gives its rows. Sessions and streams (`initial.urlData`)
   take it too. `urlDatasets(spec)` lists a spec's url datasets and `checkUrlData(spec, urlData)` throws the refusal without
   rendering. `addonsNeeded`, `missingAddons` and `loadAddonsFor` (`@aster-charts/core/addons`) take `{ urlData }`: under

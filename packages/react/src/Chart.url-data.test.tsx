@@ -39,7 +39,7 @@ const PIE_URL = {
   data: [{ name: 'source_0', url: CSV_URL, format: { type: 'csv' }, transform: [{ type: 'pie', field: 'b' }] }],
   marks: [{ type: 'arc', from: { data: 'source_0' }, encode: { update: { x: { value: 50 }, y: { value: 50 }, startAngle: { field: 'startAngle' }, endAngle: { field: 'endAngle' }, outerRadius: { value: 40 } } } }],
 } as unknown as VgSpec
-/** A json url dataset in a nested group: needs no add-on, so it renders when url data is allowed (a group's dataset is the group's own: `data` does not reach it, and it draws empty). */
+/** A json url dataset in a nested group: needs no add-on (and `data` does not reach a group's datasets). */
 const NESTED_JSON_URL = {
   width: 100, height: 60,
   marks: [{
@@ -50,6 +50,12 @@ const NESTED_JSON_URL = {
 } as unknown as VgSpec
 const ROWS = { source_0: [{ a: 'x', b: 1 }, { a: 'y', b: 2 }] }
 const INNER_ROWS = { inner: [{ x: 10 }, { x: 40 }] }
+/** A top-level json url dataset of the same name: `data` gives its rows, so it renders when url data is allowed. */
+const TOP_JSON_URL = {
+  width: 100, height: 60,
+  data: [{ name: 'inner', url: 'https://example.org/inner.json' }],
+  marks: [{ type: 'symbol', from: { data: 'inner' }, encode: { update: { x: { field: 'x' }, y: { value: 10 }, size: { value: 30 } } } }],
+} as unknown as VgSpec
 
 const nothingLoaded = (): void => {
   expect(isAddonLoaded('load')).toBe(false)
@@ -114,18 +120,25 @@ forEachVariant(['svg'], (Chart) => {
       nothingLoaded()
     })
 
-    it('applies to a url dataset in a nested group, and follows the prop both ways', async () => {
+    it('applies to a url dataset in a nested group', async () => {
       const errors: Error[] = []
-      const el = (urlData?: 'refuse' | 'allow') => <Chart spec={NESTED_JSON_URL} data={INNER_ROWS} urlData={urlData} width={100} height={60} a11y={false} onError={(e) => errors.push(e)} />
+      mount(<Chart spec={NESTED_JSON_URL} urlData="refuse" width={100} height={60} a11y={false} onError={(e) => errors.push(e)} />)
+      await settle()
+      expectRefusal(errors[0], 'inner')
+    })
+
+    it('follows the prop both ways', async () => {
+      const errors: Error[] = []
+      const el = (urlData?: 'refuse' | 'allow') => <Chart spec={TOP_JSON_URL} data={INNER_ROWS} urlData={urlData} width={100} height={60} a11y={false} onError={(e) => errors.push(e)} />
       const { container, render } = mount(el())
-      expect(container.querySelector('svg .mark-symbol')).not.toBeNull()
+      expect(container.querySelectorAll('svg .mark-symbol path').length).toBe(2)
       render(el('refuse'))
       await settle()
       expect(container.querySelector('svg')).toBeNull()
       expectRefusal(errors.at(-1), 'inner')
       render(el('allow'))
       await settle()
-      expect(container.querySelector('svg .mark-symbol')).not.toBeNull()
+      expect(container.querySelectorAll('svg .mark-symbol path').length).toBe(2)
     })
 
     it('reports an invalid mode instead of allowing', async () => {
@@ -152,7 +165,7 @@ describe('hooks', () => {
   it('useChartStream: the primed state is the refusal, and a change of urlData starts a new stream', () => {
     let result: UseChartStreamResult | null = null
     function Probe({ urlData }: { urlData?: 'refuse' }): null {
-      result = useChartStream(NESTED_JSON_URL, { autoFlush: false, initial: { data: INNER_ROWS, ...(urlData ? { urlData } : {}) } })
+      result = useChartStream(TOP_JSON_URL, { autoFlush: false, initial: { data: INNER_ROWS, ...(urlData ? { urlData } : {}) } })
       return null
     }
     const { render } = mount(<Probe />)
