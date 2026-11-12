@@ -29,6 +29,18 @@ const CSV_URL = 'https://example.org/data.csv'
 const URL_SPEC = BAR([{ name: 'source_0', url: CSV_URL, format: { type: 'csv' } }])
 const ROWS = { source_0: [{ a: 'x', b: 1 }, { a: 'y', b: 2 }] }
 
+/** The items of the symbol mark of a scene. */
+function countItems(scene: { items: unknown[] }): number {
+  let n = 0
+  const walk = (node: unknown): void => {
+    const g = node as { marktype?: string; items?: unknown[] }
+    if (g.marktype === 'symbol') { n += g.items?.length ?? 0; return }
+    for (const c of g.items ?? []) walk(c)
+  }
+  for (const c of scene.items) walk(c)
+  return n
+}
+
 /** The error `fn` throws (fails the test when it does not throw). */
 function thrown(fn: () => unknown): unknown {
   try { fn() } catch (e) { return e }
@@ -55,6 +67,19 @@ describe('urlDatasets', () => {
       ],
     }
     expect(urlDatasets(spec)).toEqual(['a', 'b', 'c', 'd'])
+  })
+
+  it('reads `data` and `marks` as the compiler does: a single object is a one-element list', () => {
+    const single = {
+      data: { name: 'top', url: 'top.json' },
+      marks: { type: 'group', data: { name: 'inner', url: 'inner.json' }, marks: { type: 'group', data: [{ name: 'deep', url: 'deep.json' }] } },
+    }
+    expect(urlDatasets(single)).toEqual(['top', 'inner', 'deep'])
+    expect(() => checkUrlData(single, 'refuse')).toThrow(/datasets "top", "inner", "deep"/)
+    // and the engine agrees (it runs the spec with these lists)
+    const spec = { width: 20, height: 20, data: { name: 's', url: 'https://x/d.json' }, marks: { type: 'symbol', from: { data: 's' } } } as VgSpec
+    expect(() => renderSpec(spec, { data: { s: [] }, urlData: 'refuse' })).toThrow(/dataset "s"/)
+    expect(renderSpec(spec, { data: { s: [{}] } })).toContain('<svg')
   })
 
   it('follows vega: `values` wins over `url`, and `url` over `source`', () => {
@@ -146,6 +171,25 @@ describe('the engine refuses a url dataset under urlData: refuse', () => {
     expect(session.evaluate(URL_SPEC, { data: ROWS }).items.length).toBeGreaterThan(0)
     // `change` re-evaluates the last chart: the refusal holds there too
     expect(() => session.change({ data: ROWS, urlData: 'refuse' })).toThrow(AsterUrlError)
+  })
+
+  it('a session does not reuse a chart compiled from a spec whose dataset had rows for one whose dataset has a url, or back', () => {
+    const base = { width: 50, height: 50, marks: [{ type: 'symbol', from: { data: 't' }, encode: { update: { x: { field: 'a' }, y: { value: 5 } } } }] }
+    const withRows = { ...base, data: [{ name: 't', url: 'u.json', values: [{ a: 1 }, { a: 2 }] }] } as VgSpec
+    const urlOnly = { ...base, data: [{ name: 't', url: 'u.json' }] } as VgSpec
+    const explicitNull = { ...base, data: [{ name: 't', values: null, url: 'u.json' }] } as VgSpec
+    const s = createChartSession()
+    expect(s.evaluate(withRows, { urlData: 'refuse' }).items.length).toBeGreaterThan(0)
+    expect(() => s.evaluate(urlOnly, { urlData: 'refuse' })).toThrow(AsterUrlError)
+    expect(() => s.evaluate(explicitNull, { urlData: 'refuse' })).toThrow(AsterUrlError)
+    const back = createChartSession()
+    back.evaluate(urlOnly, { data: { t: [] } })
+    expect(() => back.evaluate(withRows, { urlData: 'refuse' })).not.toThrow()
+    // (and without urlData: dropping the rows is a new chart, never the old chart's rows drawn again)
+    const plain = createChartSession()
+    const symbols = countItems
+    expect(symbols(plain.evaluate(withRows, {}))).toBe(2)
+    expect(symbols(plain.evaluate(urlOnly, { data: { t: [{ a: 9 }] } }))).toBe(1)
   })
 
   it('a stream with initial.urlData refuses on every flush', () => {
