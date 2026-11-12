@@ -19,6 +19,9 @@ import { parsePathData, tracePath, type PathSeg, type PathSink } from './path-da
 
 // Path-data parsing and replay live in path-data.ts (hit.ts needs them without the renderer); the public surface is unchanged.
 export { parsePathData, tracePath, type PathSeg, type PathSink } from './path-data.js'
+// The bitmaps of image marks: the renderer draws `item.image` and never fetches; a host that shows url images loads them with these.
+export { IMAGE_CONCURRENCY, loadImages, sceneImageUrls, withSceneImages, type ImageLoadOptions } from './image-load.js'
+export type { ItemImage } from './image-box.js'
 
 type SceneDefs = SceneDef
 import {

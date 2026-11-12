@@ -56,6 +56,7 @@ import { timeIntervalFor, utcIntervalFor } from './time.js'
 import { compileChart } from './compiler.js'
 import { dict, ownGet, pushAll, sortData, lerp, scopedSignalName, heldSignalName, TUPLE_ID } from './util.js'
 import { applyImageUrlPolicy, applyLinkUrlPolicy, resolveImageUrl, type ImageUrlPolicy } from './url-policy.js'
+import { checkChartUrlData } from './url-data.js'
 import { valueKey, valuesEqual } from './fingerprint.js'
 import { diffRows, equalCell, rowsEqual, sourceNames, type PulseChange } from './pulse.js'
 import { aggregateGroups, flatKeyFn, groupKeyFn } from './transform-agg.js'
@@ -2671,6 +2672,8 @@ export interface PendingEvaluation {
  * engine the state is made for (see {@link IncrementalEngine}).
  */
 export function evaluateChartPending(engine: IncrementalEngine, chart: CompiledChart, input: RuntimeInput = {}, unchanged?: DataStability): PendingEvaluation {
+  // a refused url dataset fails the evaluation before anything of it starts (no transaction, no state)
+  checkChartUrlData(chart, input.urlData)
   const txn = beginTxn(engine, chart, unchanged)
   const done: { draft?: IncrementalState; failed?: boolean } = {}
   const scene = withLimits(input.limits, () => withTextMetricsProvider(input.textMetrics, () => evaluateChartImpl(chart, input, txn, done)))
@@ -2701,6 +2704,7 @@ function unloadedUrlError(name: string, hostRows: boolean): Error {
  * engine is not involved (`renderSpec`, `getChartInfo`). The scene is what `evaluateChart` gives a chart evaluated for the first time.
  */
 export function evaluateOnce(chart: CompiledChart, input: RuntimeInput = {}): SceneRoot {
+  checkChartUrlData(chart, input.urlData)
   const txn: EvalTxn = { prev: undefined, gen: 1, claimed: new WeakSet() }
   return withLimits(input.limits, () => withTextMetricsProvider(input.textMetrics, () => evaluateChartImpl(chart, input, txn, {})))
 }

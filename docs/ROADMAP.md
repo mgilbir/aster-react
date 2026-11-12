@@ -6,9 +6,11 @@ languages and their rendering from scratch**, so that it draws what upstream dra
 inside a React app. The real `vega` and `vega-lite` packages are the **oracle**: a dev-only reference the tests
 compare against. They do not ship, and neither do their dependencies (`d3-*`, `topojson-client`, ...).
 
-**Scope.** The deliverables are SVG and canvas output and interaction that is idiomatic in React. Raster (PNG) and
-PDF export are out of scope; a browser component composes into a page and a host can rasterize the SVG or canvas
-itself.
+**Scope.** The deliverables are SVG and canvas output and interaction that is idiomatic in React. PDF export is out of
+scope, and so is raster export beyond one convenience: `getPng` on a chart's ref (and `renderSceneToPng` in
+`@aster-charts/core/png`) paints the scene with the canvas renderer and lets the browser encode it, which works where the
+usual recipe (the SVG in an `<img>`) is blocked by a Content-Security-Policy (#144). There is no server-side PNG and no
+image format beyond what the browser's canvas encodes.
 
 This document records what is done, what is open, and how claims are kept honest. It carries no measured numbers:
 corpus counts, sweep results, bundle sizes and benchmark ratios are in [TESTING.md](TESTING.md) and

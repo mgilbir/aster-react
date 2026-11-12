@@ -168,6 +168,14 @@ describe('addonsNeeded reads the structure, not the text', () => {
     expect(only({ data: [{ name: 'd', transform: [{ type: 'contour', size: [1, 1] }] }] })).toBe('geo')
     expect(only({ projections: [{ name: 'p', type: 'mercator' }] })).toBe('geo')
   })
+  it('reads a scope\'s lists as the compiler does: a single projection object is a projection', () => {
+    expect(only({ projections: { name: 'p', type: 'mercator' } } as unknown as VgSpec)).toBe('geo')
+    expect(only({ marks: { type: 'group', projections: { name: 'p', type: 'mercator' } } } as unknown as VgSpec)).toBe('geo')
+    expect(only({ projections: [] } as unknown as VgSpec)).toBe('')
+    expect(only({ projections: null } as unknown as VgSpec)).toBe('')
+    // and the engine does build it: the compiled chart has the projection
+    expect(compileChart({ projections: { name: 'p', type: 'mercator' } } as unknown as VgSpec).projections?.length).toBe(1)
+  })
   it('finds an add-on function in every kind of expression a spec carries, and only there', () => {
     const fn = 'geoArea(null, datum)'
     const sig = (extra: Record<string, unknown>): VgSpec => ({ signals: [{ name: 's', ...extra }] })

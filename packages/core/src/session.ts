@@ -35,6 +35,9 @@ function dataRefKey(v: unknown): string {
   return v !== null && (typeof v === 'object' || typeof v === 'function') ? `#${refId(v as object)}` : valueKey(v)
 }
 
+/** What a top-level dataset's inline rows are reduced to in a skeleton. */
+const ROWS_MARKER = '\u0000rows'
+
 /**
  * Serialize the spec structure, leaving the top-level datasets' inline values out (they're tracked by identity).
  * Two specs with the same skeleton compile to the same chart (a session re-evaluates it with the new rows); a different
@@ -44,10 +47,18 @@ function dataRefKey(v: unknown): string {
 export function skeletonOf(spec: VgSpec): string {
   const data = (spec as { data?: unknown }).data
   let stripped: unknown = data
+  // A dataset's rows are not part of the chart's shape, but whether it HAS rows is: without them it is the dataset's `url`
+  // (or `source`) that supplies them, a different chart (and one `urlData: 'refuse'` refuses). So rows are reduced to a marker,
+  // and a missing or empty `values` is kept as it is.
+  const strip = (d: unknown): unknown => {
+    if (!d || typeof d !== 'object') return d
+    const values = (d as { values?: unknown }).values
+    return values ? { ...(d as object), values: ROWS_MARKER } : d
+  }
   if (Array.isArray(data)) {
-    stripped = data.map((d) => (d && typeof d === 'object' ? { ...(d as object), values: null } : d))
+    stripped = data.map(strip)
   } else if (data && typeof data === 'object') {
-    stripped = { ...(data as object), values: null }
+    stripped = strip(data)
   }
   const copy = { ...(spec as Record<string, unknown>), data: stripped }
   try {
@@ -170,6 +181,8 @@ function metaKeyOf(skeleton: string, input: RuntimeInput): string {
   if (input.limits) parts.push(`lim=${valueKey(input.limits)}`)
   // image urls are vetted while the scene is built: a different policy can reject a scene a looser one accepted
   if (input.urlPolicy) parts.push(`up=${valueKey(input.urlPolicy)}`)
+  // a refusing input must never be answered with a scene cached under one that allowed url datasets
+  if (input.urlData !== undefined) parts.push(`ud=${valueKey(input.urlData)}`)
   for (const name of Object.keys(input.domainRaw ?? {}).sort()) {
     parts.push(`d ${name}=${valueKey(input.domainRaw![name])}`)
   }

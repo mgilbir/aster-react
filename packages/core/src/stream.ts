@@ -52,7 +52,8 @@ export interface StreamOptions {
   policy?: StreamPolicy
   /**
    * Initial input (data/signals/size) used for the first flush. `initial.urlPolicy`
-   * (the image-URL policy) applies to every flush; it is fixed for the stream's life.
+   * (the image-URL policy) and `initial.urlData` (whether url datasets are refused) apply to
+   * every flush; they are fixed for the stream's life.
    */
   initial?: RuntimeInput
   /**
@@ -670,6 +671,7 @@ export function createChartStream(spec: VgSpec, options: StreamOptions = {}): Ch
         ...(nextLimits ? { limits: nextLimits } : {}),
         ...(nextTextMetrics ? { textMetrics: nextTextMetrics } : {}),
         ...(options.initial?.urlPolicy ? { urlPolicy: options.initial.urlPolicy } : {}),
+        ...(options.initial?.urlData !== undefined ? { urlData: options.initial.urlData } : {}),
         ...(Object.keys(dataPulse).length ? { dataPulse } : {}),
         ...(Object.keys(dataChanges).length ? { dataChanges } : {}),
         ...(changedDatasets.length ? { changedDatasets } : {}),

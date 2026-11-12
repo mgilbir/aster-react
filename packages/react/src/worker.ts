@@ -22,11 +22,12 @@
 import * as React from 'react'
 import {
   AsterLimitError,
+  checkUrlData,
   getStreamFlushFailure,
   checkSceneLimits, checkSpecLimits, checkSvgLength, compileChart, createChartStream,
   createLimitClock, evaluateChart, renderSceneToSvg, withLimits,
   type ChartStream, type DataPulse, type ImageUrlPolicy, type SceneRoot, type SpecLimits, type StreamBatch,
-  type StreamOptions, type StreamPolicy, type StreamStats, type TextMetricsProvider, type VgSpec,
+  type StreamOptions, type StreamPolicy, type StreamStats, type TextMetricsProvider, type UrlDataMode, type VgSpec,
 } from '@aster-charts/core'
 import { loadAddons, missingAddons, type AddonName } from '@aster-charts/core/addons'
 import { normalizeChartSpec, useStableContent, useStableSpec } from './spec.js'
@@ -63,6 +64,8 @@ export interface ChartWorkerRequest {
     textMetrics?: WorkerTextMetrics
     /** Image URL policy; its functions travel as a `registerWorkerUrlPolicy` name. */
     urlPolicy?: WorkerUrlPolicyInput
+    /** `'refuse'`: a spec with a url dataset is refused (`RuntimeInput.urlData`), before the worker imports any add-on. */
+    urlData?: UrlDataMode
   }
 }
 
@@ -339,8 +342,10 @@ export function useChartWorker(spec: VgSpec, options: ChartWorkerOptions & {
   textMetrics?: WorkerTextMetrics
   /** Image URL policy; functions need a Worker-registered name (see `WorkerUrlPolicy`). Read at request time like `textMetrics`. */
   urlPolicy?: WorkerUrlPolicyInput
+  /** `'refuse'`: a spec with a url dataset is refused before any add-on loads (`RuntimeInput.urlData`); `error` is the `AsterUrlError`. */
+  urlData?: UrlDataMode
 } = {}): WorkerChartResult {
-  const { worker, workerFactory, width, height, data, signals, domainRaw, limits, textMetrics, urlPolicy } = options
+  const { worker, workerFactory, width, height, data, signals, domainRaw, limits, textMetrics, urlPolicy, urlData } = options
   // (compared by value: an inline `{ width, height }` literal must not re-post the request on every render)
   const csKey = options.containerSize ? `${options.containerSize.width}x${options.containerSize.height}` : ''
   const msKey = options.measuredSize ? `${options.measuredSize.width}x${options.measuredSize.height}` : ''
@@ -388,6 +393,7 @@ export function useChartWorker(spec: VgSpec, options: ChartWorkerOptions & {
           ...(stableLimits ? { limits: stableLimits } : {}),
           ...(textMetrics != null ? { textMetrics: wireTextMetrics(textMetrics, w != null) } : {}),
           ...(urlPolicy != null ? { urlPolicy: wireUrlPolicy(urlPolicy, w != null) } : {}),
+          ...(urlData !== undefined ? { urlData } : {}),
         },
       }
     } catch (e) {
@@ -401,7 +407,9 @@ export function useChartWorker(spec: VgSpec, options: ChartWorkerOptions & {
       try {
         const vega = normalizeChartSpec(request.spec)
         request = { ...request, spec: vega }
-        missing = missingAddons(vega)
+        // a refused url dataset imports nothing: the handler reports the refusal
+        checkUrlData(vega, urlData)
+        missing = missingAddons(vega, { urlData })
       } catch { /* the request handler reports it */ }
       if (missing.length === 0) {
         apply(handleChartWorkerRequest(request))
@@ -427,7 +435,7 @@ export function useChartWorker(spec: VgSpec, options: ChartWorkerOptions & {
       fail(e instanceof Error ? e : new Error(String(e)))
     }
     return stop
-  }, [stableSpec, width, height, csKey, msKey, data, signals, domainRaw, stableLimits, textMetricsKey, urlPolicyKey, worker, workerRef])
+  }, [stableSpec, width, height, csKey, msKey, data, signals, domainRaw, stableLimits, textMetricsKey, urlPolicyKey, urlData, worker, workerRef])
 
   return state
 }
@@ -620,16 +628,28 @@ export function handleWorkerMessage(
 
 /**
  * A worker message with its spec normalized to Vega (compiled once, here, not again by the handler) and the opt-in add-ons that
- * spec needs and this realm has not loaded. A message without a spec, or with an invalid one (the handler reports it), needs none.
+ * spec needs and this realm has not loaded. A message without a spec, or with an invalid one (the handler reports it), needs none;
+ * nor does one whose `urlData: 'refuse'` (a request's `input`, a stream's `options.initial`) refuses its url datasets: nothing is
+ * imported for it, and the handler answers with the refusal.
  */
 export function prepareWorkerMessage(data: unknown): { data: unknown; missing: readonly AddonName[] } {
   if (!isRecord(data) || !isRecord(data.spec) || (data.kind === 'stream' && data.op !== 'init')) return { data, missing: [] }
   try {
     const spec = normalizeChartSpec(data.spec as VgSpec)
-    return { data: { ...data, spec }, missing: missingAddons(spec) }
+    const urlData = urlDataOf(data)
+    checkUrlData(spec, urlData)
+    return { data: { ...data, spec }, missing: missingAddons(spec, { urlData }) }
   } catch {
     return { data, missing: [] }
   }
+}
+
+/** The `urlData` a worker message carries: a one-shot request's `input.urlData`, a stream init's `options.initial.urlData`. */
+function urlDataOf(data: Record<string, unknown>): UrlDataMode | undefined {
+  const holder = data.kind === 'stream'
+    ? (isRecord(data.options) && isRecord(data.options.initial) ? data.options.initial : undefined)
+    : (isRecord(data.input) ? data.input : undefined)
+  return holder?.urlData as UrlDataMode | undefined
 }
 
 /**

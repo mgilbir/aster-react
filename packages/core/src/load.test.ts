@@ -173,6 +173,45 @@ describe('malformed url and data', () => {
   })
 })
 
+describe('loadSpecData reads data, marks and signals as lists, as the compiler does', () => {
+  const fetched: string[] = []
+  const fetchStub = (async (url: string | URL) => {
+    fetched.push(String(url))
+    return new Response(JSON.stringify([{ a: 1 }, { a: 2 }, { a: 3 }]), { headers: { 'content-type': 'application/json' } })
+  }) as typeof fetch
+
+  it('loads a url dataset given as a single object, at the top level and in a single nested group', async () => {
+    fetched.length = 0
+    const spec = {
+      width: 40, height: 40,
+      data: { name: 'top', url: 'https://data.example/top.json' },
+      marks: { type: 'group', data: { name: 'inner', url: 'https://data.example/inner.json' }, marks: { type: 'symbol', from: { data: 'inner' } } },
+    } as unknown as VgSpec
+    const loaded = await loadSpecData(spec, { fetch: fetchStub })
+    expect(fetched.sort()).toEqual(['https://data.example/inner.json', 'https://data.example/top.json'])
+    expect((loaded.data as Array<{ values: unknown[] }>)[0]!.values).toHaveLength(3)
+    // and the loaded spec evaluates: no "has a url but no data was loaded"
+    expect(() => evaluateChart(compileChart(loaded), {})).not.toThrow()
+    // the input is not modified
+    expect((spec.data as { values?: unknown }).values).toBeUndefined()
+  })
+
+  it('evaluates a {signal} url against signals given as a single object', async () => {
+    fetched.length = 0
+    const spec = {
+      signals: { name: 'file', value: 'https://data.example/s.json' },
+      data: [{ name: 't', url: { signal: 'file' } }],
+    } as unknown as VgSpec
+    await loadSpecData(spec, { fetch: fetchStub })
+    expect(fetched).toEqual(['https://data.example/s.json'])
+  })
+
+  it('leaves a spec without url datasets as it is', async () => {
+    const spec = { data: { name: 't', values: [{ a: 1 }] }, marks: { type: 'rect' } } as unknown as VgSpec
+    expect(await loadSpecData(spec, { fetch: fetchStub })).toBe(spec)
+  })
+})
+
 describe('a url dataset in a group mark that nobody loaded fails as a top-level one does', () => {
   const group = (inner: Record<string, unknown>): VgSpec => ({
     width: 60, height: 40,

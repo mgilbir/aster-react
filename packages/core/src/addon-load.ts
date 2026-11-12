@@ -16,6 +16,7 @@ import { feature as topoFeature, mesh as topoMesh } from './topojson.js'
 import { dataFormatRegistry } from './registry.js'
 import { readData, type DataFormatSpec, type inferTypes as _inferTypes } from './data-format.js'
 import type { VgSpec } from './types.js'
+import { specList } from './spec-structure.js'
 import { compileExpr, type ExpressionRuntime } from './expression.js'
 import { AsterLimitError, checkRowCount, withLimits, type SpecLimits } from './limits.js'
 import { AsterUrlError, DEFAULT_LOAD_PROTOCOLS, checkBasicUrl, type UrlPolicyBase } from './url-policy.js'
@@ -388,7 +389,7 @@ const NO_DATA_RUNTIME: ExpressionRuntime = {
 function initialSignals(spec: Json): Record<string, unknown> {
   const out: Record<string, unknown> = Object.create(null) as Record<string, unknown>
   for (const k of ['width', 'height'] as const) if (typeof spec[k] === 'number') out[k] = spec[k]
-  const defs = Array.isArray(spec.signals) ? (spec.signals as Json[]) : []
+  const defs = specList(spec.signals) as Json[]
   for (const def of defs) {
     if (!def || typeof def !== 'object' || typeof def.name !== 'string') continue
     let v: unknown = def.value
@@ -420,10 +421,12 @@ function signalString(url: unknown, signals: Record<string, unknown>): string | 
  */
 function planLoads(spec: Json, tasks: LoadTask[]): Json {
   let signals: Record<string, unknown> | undefined
+  // (the lists are read as the compiler reads them, vega-util `array()`: a single object is a one-element list, and a list made
+  // of one is returned as an array when something in it changed)
   const visitData = (list: unknown): unknown => {
-    if (!Array.isArray(list)) return list
+    if (list == null) return list
     let changed = false
-    const out = list.map((d) => {
+    const out = specList(list).map((d) => {
       const def = d as Json | null
       if (def && typeof def === 'object' && def.url != null && def.values == null) {
         // vega loads a `{signal}` url dynamically (a Load operator re-run when the signal changes); a static spec
@@ -442,9 +445,9 @@ function planLoads(spec: Json, tasks: LoadTask[]): Json {
     return changed ? out : list
   }
   const visitMarks = (marks: unknown): unknown => {
-    if (!Array.isArray(marks)) return marks
+    if (marks == null) return marks
     let changed = false
-    const out = marks.map((m) => {
+    const out = specList(marks).map((m) => {
       if (!m || typeof m !== 'object') return m
       const mark = m as Json
       const data = visitData(mark.data)

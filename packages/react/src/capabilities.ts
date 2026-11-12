@@ -1,9 +1,13 @@
 import type {
+  loadImages,
   renderSceneToCanvas,
   renderSceneToCanvasAppend,
+  sceneImageUrls,
   snapshotCanvasScene,
+  withSceneImages,
 } from '@aster-charts/core/canvas'
 import type { buildHitIndex } from '@aster-charts/core/hit'
+import type * as PngModule from '@aster-charts/core/png'
 import type { bindSceneSignals, createCursorTracker, sceneHasCursor } from '@aster-charts/core/signals'
 import type { tooltipContent } from './tooltip-content.js'
 
@@ -18,6 +22,19 @@ export interface CanvasCapability {
   readonly renderSceneToCanvas: typeof renderSceneToCanvas
   readonly renderSceneToCanvasAppend: typeof renderSceneToCanvasAppend
   readonly snapshotCanvasScene: typeof snapshotCanvasScene
+  /** Image marks drawn from their `url`: the urls without a bitmap, their loading, and a scene copy holding the loaded ones. */
+  readonly sceneImageUrls: typeof sceneImageUrls
+  readonly loadImages: typeof loadImages
+  readonly withSceneImages: typeof withSceneImages
+}
+
+/**
+ * PNG export (`@aster-charts/core/png`, which paints with the canvas renderer), loaded when `getPng` is first called. `<Chart>`
+ * supplies it; `<SvgChart>` takes it as `png={png}` from `@aster-charts/react/png`, so the light chart's bundle has no canvas
+ * renderer unless the app asks for the export.
+ */
+export interface PngCapability {
+  readonly load: () => Promise<typeof PngModule>
 }
 
 /**
