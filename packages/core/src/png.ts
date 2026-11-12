@@ -11,8 +11,8 @@
  * An opt-in entry: it imports the canvas renderer, which a chart that never exports does not need.
  */
 import { renderSceneToCanvas, type CanvasLike } from './canvas.js'
-import { itemImage, type ItemImage } from './image-box.js'
-import type { SceneGroup, SceneItem, SceneRoot } from './types.js'
+import { IMAGE_CONCURRENCY, loadImages, sceneImageUrls, withSceneImages } from './image-load.js'
+import type { SceneRoot } from './types.js'
 
 export interface PngOptions {
   /** Pixels per scene unit (the device pixel ratio of the image). Default 1. A finite number above 0. */
@@ -39,7 +39,7 @@ export const PNG_IMAGE_TIMEOUT_MS = 10_000
 /** The largest `imageTimeoutMs`: what a timer can wait (2^31 - 1 ms, about 24.8 days). */
 export const PNG_MAX_IMAGE_TIMEOUT_MS = 2_147_483_647
 /** How many image mark urls are loaded at once (a scene with thousands of urls does not make thousands of requests at once). */
-export const PNG_IMAGE_CONCURRENCY = 6
+export const PNG_IMAGE_CONCURRENCY = IMAGE_CONCURRENCY
 
 /** A canvas this module can paint and encode: a `<canvas>` element or an `OffscreenCanvas`. */
 interface PngCanvas {
@@ -75,7 +75,8 @@ export async function renderSceneToPng(scene: SceneRoot, options: PngOptions = {
   const makeCanvas = canvasMaker()
   // web fonts still loading would draw text in a fallback face: wait for them, as the page will
   await fontsReady()
-  const painted = await withImages(scene, timeout, options.onImageError)
+  const loaded = await loadImages(sceneImageUrls(scene), { timeoutMs: timeout, onError: options.onImageError, who: 'renderSceneToPng' })
+  const painted = withSceneImages(scene, loaded)
   const canvas = makeCanvas(w, h)
   const ctx = canvas.getContext('2d') as CanvasLike | null
   if (ctx == null) throw new Error(`[aster] renderSceneToPng: no 2D context for a ${w} x ${h} canvas`)
@@ -143,149 +144,4 @@ function encode(canvas: PngCanvas, w: number, h: number): Promise<Blob> {
     )
   }
   return Promise.reject(new Error('[aster] renderSceneToPng: this canvas cannot encode an image (no toBlob, no convertToBlob)'))
-}
-
-// ---------------------------------------------------------------------------
-// Image marks
-// ---------------------------------------------------------------------------
-
-/** An image item the canvas renderer would leave blank: it has a `url` and no loaded bitmap of it. */
-function needsImage(it: SceneItem): it is SceneItem & { url: string } {
-  const url = (it as { url?: unknown }).url
-  if (typeof url !== 'string' || url === '') return false
-  const img = itemImage(it)
-  return img == null || img.complete === false
-}
-
-/** The urls of every image item that needs its image loaded, in scene order (each once). */
-function imageUrls(nodes: readonly SceneGroup[] | undefined, out: Set<string>): Set<string> {
-  for (const node of nodes ?? []) {
-    if (node.marktype === 'image') {
-      for (const it of node.items ?? []) if (needsImage(it)) out.add(it.url)
-    } else {
-      for (const it of node.items ?? []) if (Array.isArray((it as SceneGroup).items)) imageUrls([it as SceneGroup], out)
-    }
-  }
-  return out
-}
-
-/** A copy of `o` with its own properties (non-enumerable ones too) and prototype, and `patch` over them. */
-function copyWith<T extends object>(o: T, patch: Partial<T>): T {
-  return Object.assign(Object.create(Object.getPrototypeOf(o) as object | null, Object.getOwnPropertyDescriptors(o)) as T, patch)
-}
-
-/**
- * `scene` with every image item that needs one given its loaded bitmap, copied along the paths to those items only: the scene
- * the chart holds is never written (its items are shared with the screen and with later evaluations).
- */
-async function withImages(scene: SceneRoot, timeout: number, onError: PngOptions['onImageError']): Promise<SceneRoot> {
-  const urls = imageUrls(scene.items, new Set())
-  if (urls.size === 0) return scene
-  const loaded = new Map<string, ItemImage>()
-  const queue = [...urls]
-  const report = (url: string, error: Error): void => {
-    if (onError) {
-      try { onError(url, error) } catch { /* a throwing reporter does not stop the export */ }
-    }
-  }
-  const late = (url: string): Error => new Error(`[aster] renderSceneToPng: image ${url} not drawn: it did not load within ${timeout} ms`)
-  // one deadline for all of them: at it, the loads in flight are abandoned and the ones still queued are not started
-  let expired = false
-  let timer: ReturnType<typeof setTimeout> | undefined
-  const deadline = new Promise<void>((resolve) => { timer = setTimeout(() => { expired = true; resolve() }, timeout) })
-  const worker = async (): Promise<void> => {
-    for (let url = queue.shift(); url !== undefined; url = queue.shift()) {
-      if (expired) { report(url, late(url)); continue }
-      const load = loadImage(url)
-      const outcome = await Promise.race([
-        load.promise.then((image) => ({ image }), (error: unknown) => ({ error: error instanceof Error ? error : new Error(String(error)) })),
-        deadline.then(() => null),
-      ])
-      if (outcome === null) {
-        load.abort()
-        report(url, late(url))
-      } else if ('image' in outcome) loaded.set(url, outcome.image)
-      else report(url, outcome.error)
-    }
-  }
-  try {
-    await Promise.all(Array.from({ length: Math.min(PNG_IMAGE_CONCURRENCY, queue.length) }, worker))
-  } finally {
-    clearTimeout(timer)
-  }
-  if (loaded.size === 0) return scene
-  const mapNodes = (nodes: SceneGroup[]): SceneGroup[] => {
-    let changed = false
-    const out = nodes.map((node) => {
-      const next = mapNode(node)
-      if (next !== node) changed = true
-      return next
-    })
-    return changed ? out : nodes
-  }
-  const mapNode = (node: SceneGroup): SceneGroup => {
-    const items = node.items
-    if (!items) return node
-    let changed = false
-    const out = items.map((it) => {
-      let next: SceneItem = it
-      if (node.marktype === 'image') {
-        const img = needsImage(it) ? loaded.get(it.url) : undefined
-        if (img) next = copyWith(it, { image: img } as Partial<SceneItem>)
-      } else if (Array.isArray((it as SceneGroup).items)) {
-        next = mapNode(it as SceneGroup)
-      }
-      if (next !== it) changed = true
-      return next
-    })
-    return changed ? copyWith(node, { items: out as SceneGroup['items'] }) : node
-  }
-  const items = mapNodes(scene.items)
-  return items === scene.items ? scene : copyWith(scene, { items })
-}
-
-type ImageElement = {
-  crossOrigin: string | null
-  decoding?: string
-  src: string
-  naturalWidth: number
-  naturalHeight: number
-  onload: ((this: unknown) => void) | null
-  onerror: ((this: unknown) => void) | null
-}
-
-/**
- * Load one image as vega's canvas does (`crossOrigin = "anonymous"`), as the bitmap the canvas renderer draws. `abort` gives up on
- * it: the handlers are dropped and the request is cancelled (an empty `src` fetches nothing and ends the current one).
- */
-function loadImage(url: string): { promise: Promise<ItemImage>; abort: () => void } {
-  const Img = (globalThis as { Image?: new () => ImageElement }).Image
-  if (typeof Img !== 'function') {
-    return { promise: Promise.reject(new Error(`[aster] renderSceneToPng: image ${url} not drawn: no Image in this environment`)), abort: () => undefined }
-  }
-  const img = new Img()
-  const promise = new Promise<ItemImage>((resolve, reject) => {
-    img.onload = () => {
-      img.onload = img.onerror = null
-      if (!(img.naturalWidth > 0 && img.naturalHeight > 0)) {
-        reject(new Error(`[aster] renderSceneToPng: image ${url} not drawn: it has no size`))
-        return
-      }
-      resolve({ width: img.naturalWidth, height: img.naturalHeight, url, complete: true, toCanvasSource: () => img })
-    }
-    img.onerror = () => {
-      img.onload = img.onerror = null
-      reject(new Error(`[aster] renderSceneToPng: image ${url} not drawn: it did not load (a cross-origin image is drawn only when its server allows CORS)`))
-    }
-    img.crossOrigin = 'anonymous'
-    img.decoding = 'async'
-    img.src = url
-  })
-  return {
-    promise,
-    abort: () => {
-      img.onload = img.onerror = null
-      img.src = ''
-    },
-  }
 }

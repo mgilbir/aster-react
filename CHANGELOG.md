@@ -24,12 +24,20 @@ and Fixed, per package. Everything built before the first release is in [Pre-rel
   `'refuse'` a url dataset's readers are not counted, and `loadAddonsFor` rejects with the refusal before importing anything
   ([docs/LIMITS.md](docs/LIMITS.md#refusing-url-datasets-urldata), #143).
 
+- `@aster-charts/core/canvas`: `sceneImageUrls`, `loadImages` and `withSceneImages`, the image-mark loading `<Chart renderer="canvas">`
+  and `renderSceneToPng` share.
 - `@aster-charts/core/png`: `renderSceneToPng(scene, { scale, imageTimeoutMs, onImageError })` paints a scene with the canvas
   renderer and encodes it with the platform canvas as a PNG `Blob`, exactly the pixels `renderSceneToCanvas` paints. It loads no
   `blob:` or `data:` image, so it works under a Content-Security-Policy that allows neither in `img-src`. Image marks are loaded from
   their urls with CORS, as vega's canvas loads them; one that does not load is left out and reported (#144).
 
 ### `@aster-charts/react`
+
+#### Fixed
+
+- `<Chart renderer="canvas">` draws image marks that have a `url`, as vega's canvas renderer does: it loads each url (with CORS,
+  `crossOrigin = "anonymous"`) and repaints when it arrives. It used to draw none of them, since the canvas renderer only draws
+  bitmaps it is given. Loaded images are kept when the data changes; one that does not load is reported to `logger.warn` once.
 
 #### Added
 

@@ -260,6 +260,11 @@ cli({ url: import.meta.url })
 // Chart + VL 319.1 -> 319.8; the marginal rows did not cross theirs. #143 and #144 (getPng) land together, so the ceilings are set
 // here from the larger of #143 alone and the two together (with #144: core 159.9, useChart 171.9, Chart 214.9, SvgChart 192.0,
 // SvgChart + interaction 209.2, Chart + VL 319.6), each + 0.5, so main stays inside them between the two merges.
+// <Chart renderer="canvas"> draws image marks from their urls (image-load.ts, shared with the png chunk, is in the canvas
+// capability <Chart> carries; the effect that loads and repaints), measured 2026-11-12 on a clean build against feat/144-png-export
+// cf0f141 (kB gzip, before -> after): Chart 214.9 -> 216.2, Chart + VL 319.6 -> 320.9, SvgChart 192.0 -> 192.3 and SvgChart +
+// interaction 209.2 -> 209.6 (the effect in ChartCore; within their ceilings), png 7.7 -> 7.8 (within). Ceilings are the measured
+// value + 0.5.
 const BUDGETS = {
   '@aster-charts/core': 160.4 * 1024,
   '+ @aster-charts/core/dom': 11.8 * 1024,
@@ -277,12 +282,12 @@ const BUDGETS = {
   // one image deadline). No eager row grew past what the #143 note above set for the two together. Ceiling is the measured value + 0.5.
   '+ @aster-charts/core/png': 8.2 * 1024,
   '@aster-charts/react useChart': 172.5 * 1024,
-  '@aster-charts/react Chart': 215.4 * 1024,
+  '@aster-charts/react Chart': 216.7 * 1024,
   // The light chart (`@aster-charts/react/lite`): SVG only, no canvas renderer; alone and with the `interaction` capability.
   '@aster-charts/react SvgChart': 192.5 * 1024,
   '@aster-charts/react SvgChart + interaction': 209.7 * 1024,
   // Base + the VL compiler (opt-in: `import '@aster-charts/react/vl'`).
-  '@aster-charts/react Chart + VL': 320.3 * 1024,
+  '@aster-charts/react Chart + VL': 321.4 * 1024,
 }
 
 const THIS_DIR = dirname(fileURLToPath(import.meta.url))

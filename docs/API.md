@@ -562,6 +562,11 @@ items could cover), and the caller repaints in full. Path geometry: `parsePathDa
 segments (`PathSeg[]`: `M L H V C S Q T A Z`, relative commands included); `tracePath(sink, segments, tx?, ty?, arcs?)` replays them onto a
 `PathSink` (the path methods of a 2D context) offset by `(tx, ty)`, with `arcs: 'bezier'` for vega's bezier approximation of an arc;
 `canonicalPath(segments)` is the normalized text of parsed segments, the form in which canvas and SVG geometry are compared.
+The renderer draws an image mark from the bitmap its item holds (`item.image`, an `ItemImage`) and never fetches. For image marks
+drawn from a `url`: `sceneImageUrls(scene)` lists the urls that have no bitmap yet, `loadImages(urls, { timeoutMs, onError, who })`
+loads them as vega's canvas does (`crossOrigin = "anonymous"`, at most `IMAGE_CONCURRENCY` (6) at a time, one deadline for all) and
+resolves with the ones that loaded, and `withSceneImages(scene, bitmaps)` is a copy of the scene with those bitmaps in place (the
+scene itself is not written). `<Chart renderer="canvas">` does this itself.
 
 #### `@aster-charts/core/png`
 

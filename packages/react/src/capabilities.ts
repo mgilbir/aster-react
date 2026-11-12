@@ -1,7 +1,10 @@
 import type {
+  loadImages,
   renderSceneToCanvas,
   renderSceneToCanvasAppend,
+  sceneImageUrls,
   snapshotCanvasScene,
+  withSceneImages,
 } from '@aster-charts/core/canvas'
 import type { buildHitIndex } from '@aster-charts/core/hit'
 import type * as PngModule from '@aster-charts/core/png'
@@ -19,6 +22,10 @@ export interface CanvasCapability {
   readonly renderSceneToCanvas: typeof renderSceneToCanvas
   readonly renderSceneToCanvasAppend: typeof renderSceneToCanvasAppend
   readonly snapshotCanvasScene: typeof snapshotCanvasScene
+  /** Image marks drawn from their `url`: the urls without a bitmap, their loading, and a scene copy holding the loaded ones. */
+  readonly sceneImageUrls: typeof sceneImageUrls
+  readonly loadImages: typeof loadImages
+  readonly withSceneImages: typeof withSceneImages
 }
 
 /**

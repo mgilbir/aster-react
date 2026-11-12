@@ -14,6 +14,7 @@
  *   - brushing, drag-pan, wheel-zoom and their pointer capture still work,
  *   - a11y nodes are positioned over the marks they describe (padding included),
  *   - with `transition`, new data is drawn as real animation frames that settle on the exact svg of a plain chart,
+ *   - `<Chart renderer="canvas">` draws image marks from their urls (CORS ones), as vega's canvas does,
  *   - `getPng` (on `<Chart>`, and on `<SvgChart png={png}>`) encodes exactly the pixels the canvas renderer paints, under a
  *     Content-Security-Policy whose `img-src` allows neither `blob:` nor `data:`, and draws a CORS image mark but not one whose
  *     server does not allow CORS (reported instead).
@@ -937,6 +938,25 @@ async function pngSuite(browser: Awaited<ReturnType<typeof chromium.launch>>, va
   const onScreen = await page.evaluate(() => [...document.querySelectorAll('svg .mark-image image')].map((i) => i.getAttribute('href') ?? i.getAttributeNS('http://www.w3.org/1999/xlink', 'href')))
   check(JSON.stringify(onScreen) === JSON.stringify([`${imgOrigin}/cors.png`, `${imgOrigin}/nocors.png`]), `${variant}: the svg draws both images (${JSON.stringify(onScreen)})`)
   check(served.includes('/cors.png') && served.includes('/nocors.png'), `${variant}: both images were really requested from the other origin (${JSON.stringify(served)})`)
+  if (variant === 'Chart') {
+    // the on-screen canvas renderer draws them too, as vega's canvas does: the CORS image, not the other (which would taint it)
+    await page.evaluate(([sp, pr]) => (window as never as { __mount: (...a: unknown[]) => void }).__mount(sp, pr, [], []), [images, { width: 120, height: 40, renderer: 'canvas' }] as const)
+    await page.waitForSelector('#chart-host canvas')
+    const onCanvas = await page.evaluate(`new Promise((resolve) => {
+      const t0 = performance.now()
+      const look = () => {
+        const c = document.querySelector('#chart-host canvas')
+        const g = c.getContext('2d')
+        const k = c.width / 120
+        const at = [[20, 20], [70, 20], [100, 20]].map(function (p) { return Array.from(g.getImageData(Math.floor(p[0] * k), Math.floor(p[1] * k), 1, 1).data.slice(0, 3)).join(',') })
+        if (at[0] === '255,0,0' || performance.now() - t0 > 3000) resolve({ cors: at[0], nocors: at[1], symbol: at[2] })
+        else setTimeout(look, 20)
+      }
+      look()
+    })`) as { cors: string; nocors: string; symbol: string }
+    check(onCanvas.cors === '255,0,0', `${variant}: renderer="canvas" draws the CORS image on screen (${onCanvas.cors})`)
+    check(onCanvas.nocors === '255,255,255' && onCanvas.symbol === '0,0,0', `${variant}: and leaves out the other, the rest drawn (${onCanvas.nocors}, ${onCanvas.symbol})`)
+  }
   } finally {
     await page.close()
     await close()

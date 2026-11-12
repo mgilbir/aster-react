@@ -24,7 +24,7 @@ import { SCALE_INFO_KEY, scalesFromSerialized, type SerializedScale } from './se
 // renderer and the hit/signal event loop are NOT imported here: they arrive as the `canvas` and
 // `interaction` props (see capabilities.ts), so `<SvgChart>` bundles neither.
 import { createChartSession, hasDenseSymbolMarks, patchSceneDom, renderSceneToDomElement } from '@aster-charts/core/dom'
-import type { CanvasSceneSnapshot } from '@aster-charts/core/canvas'
+import type { CanvasSceneSnapshot, ItemImage } from '@aster-charts/core/canvas'
 import type { HitIndex } from '@aster-charts/core/hit'
 import type { CursorTracker, SignalBinding } from '@aster-charts/core/signals'
 import type { CanvasCapability, InteractionCapability, PngCapability } from './capabilities.js'
@@ -295,6 +295,9 @@ function a11yTreeOptions(a11y: ChartProps['a11y'], label: string | undefined, se
     isSelected: opts.isSelected ?? ((node) => selectedDatum != null && node.kind === 'mark' && sameDatum(node.datum, selectedDatum)),
   }
 }
+
+/** How long the canvas renderer waits for the url images of a scene, all together, before it leaves the rest undrawn. */
+const CANVAS_IMAGE_TIMEOUT_MS = 10_000
 
 /** What `getPng` rejects with on a chart that was not given the PNG capability (`<SvgChart>` without `png`). */
 export const PNG_NEEDS_CAPABILITY =
@@ -726,6 +729,13 @@ function ChartView({
   const canvasSceneRef = React.useRef<SceneRoot | null>(null)
   // The canvas element those two describe: a remounted element is blank.
   const canvasElRef = React.useRef<HTMLCanvasElement | null>(null)
+  // Image marks drawn from a `url` (the canvas renderer draws a bitmap and never fetches; vega's canvas loads them): the bitmaps
+  // loaded so far by url, kept from one scene to the next so new data does not blank the images (and pruned to the scene's urls),
+  // the urls being loaded, and the ones that failed (reported once, not asked for again while the scene names them). A load that
+  // finishes bumps `canvasImagesEpoch`, which repaints.
+  const canvasImagesRef = React.useRef({ loaded: new Map<string, ItemImage>(), pending: new Set<string>(), failed: new Set<string>() })
+  const [canvasImagesEpoch, setCanvasImagesEpoch] = React.useState(0)
+  const canvasImagesPaintedRef = React.useRef(-1)
   // Hit testing (canvas, batched dense marks, clicks) resolves marks through the
   // scene hit index, rebuilt only when the displayed scene object changes.
   const hitIndexRef = React.useRef<{ scene: SceneRoot | null; index: HitIndex | null }>({ scene: null, index: null })
@@ -909,33 +919,62 @@ function ChartView({
       canvas.height = Math.round(h * dpr)
       resized = true
     }
-    // Identical scene: the canvas already shows it. Re-encoding/painting would
+    // Image marks drawn from a url: paint the bitmaps already loaded, and load the missing ones (each load that ends repaints)
+    const urls = canvasCap.sceneImageUrls(displayScene)
+    let painted = displayScene
+    if (urls.length > 0) {
+      const imgs = canvasImagesRef.current
+      const inScene = new Set(urls)
+      for (const u of imgs.loaded.keys()) if (!inScene.has(u)) imgs.loaded.delete(u)
+      for (const u of imgs.failed) if (!inScene.has(u)) imgs.failed.delete(u)
+      painted = canvasCap.withSceneImages(displayScene, imgs.loaded)
+      const missing = urls.filter((u) => !imgs.loaded.has(u) && !imgs.failed.has(u) && !imgs.pending.has(u))
+      if (missing.length > 0) {
+        for (const u of missing) imgs.pending.add(u)
+        void canvasCap.loadImages(missing, {
+          timeoutMs: CANVAS_IMAGE_TIMEOUT_MS,
+          who: 'canvas',
+          onError: (url, error) => {
+            imgs.failed.add(url)
+            ;(loggerRef.current ?? consoleLogger).warn(error.message)
+          },
+        }).then((loaded) => {
+          for (const [u, bitmap] of loaded) imgs.loaded.set(u, bitmap)
+          for (const u of missing) imgs.pending.delete(u)
+          if (loaded.size > 0) setCanvasImagesEpoch((n) => n + 1)
+        })
+      }
+    }
+    // Identical scene, with the images it had: the canvas already shows it. Re-encoding/painting would
     // be a full repaint for zero visual change (the common no-op re-render).
-    if (!resized && canvasSceneRef.current === displayScene) return
+    if (!resized && canvasSceneRef.current === displayScene && canvasImagesPaintedRef.current === canvasImagesEpoch) return
     const ctx = canvas.getContext('2d')
     if (!ctx) return
     // Append-only frames draw immediately: a handful of new items is cheaper
     // than a frame of latency, and drawing synchronously prevents a later
     // stream mutation from racing a coalesced rAF repaint. Full repaints still
-    // go through rAF so they never block React's commit.
+    // go through rAF so they never block React's commit. (Image marks never take the append path, and a frame repainted because its
+    // images arrived has appended nothing, so it is painted in full.)
     const prev = resized ? null : canvasSnapshotRef.current
     if (prev != null && canvasCap.renderSceneToCanvasAppend(prev, displayScene, ctx, { dpr })) {
       canvasSnapshotRef.current = canvasCap.snapshotCanvasScene(displayScene)
       canvasSceneRef.current = displayScene
+      canvasImagesPaintedRef.current = canvasImagesEpoch
       return
     }
     const draw = (): void => {
       ctx.clearRect(0, 0, canvas.width, canvas.height)
-      canvasCap.renderSceneToCanvas(displayScene, ctx, { dpr })
+      canvasCap.renderSceneToCanvas(painted, ctx, { dpr })
       canvasSnapshotRef.current = canvasCap.snapshotCanvasScene(displayScene)
       canvasSceneRef.current = displayScene
+      canvasImagesPaintedRef.current = canvasImagesEpoch
     }
     if (typeof requestAnimationFrame === 'function') {
       const id = requestAnimationFrame(draw)
       return () => cancelAnimationFrame(id)
     }
     draw()
-  }, [renderer, displayScene, canvasCap])
+  }, [renderer, displayScene, canvasCap, canvasImagesEpoch])
 
   const hasSelection = onSelect != null || brush != null || onPointSelect != null
     || selection !== undefined || onSelectionChange != null
