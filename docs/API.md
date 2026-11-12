@@ -573,7 +573,8 @@ allows neither. It waits for `document.fonts.ready`. `PngOptions`: `scale` (pixe
 above 0), `imageTimeoutMs` (default `PNG_IMAGE_TIMEOUT_MS`, 10 000) and `onImageError(url, error)`.
 
 Image marks are drawn from their `url`s (already vetted by the chart's `urlPolicy`; the svg draws the same urls): each url is
-loaded once, as vega's canvas loads images, with `crossOrigin = "anonymous"`, so the canvas stays readable. An image that does
+loaded once, as vega's canvas loads images, with `crossOrigin = "anonymous"`, so the canvas stays readable; at most
+`PNG_IMAGE_CONCURRENCY` (6) load at a time, each timed from its own start. The canvas is made once they are in. An image that does
 not load (a network error, a server on another origin that does not allow CORS, the timeout, or no `Image` in a worker) is left
 out of the PNG and reported to `onImageError`. A bitmap the scene already holds (a `heatmap`'s) is drawn as it is. The scene is
 not modified. Rejects with a `RangeError` for an invalid `scale` or `imageTimeoutMs`, a scene without area, or an image wider or

@@ -11,7 +11,7 @@ import { compileChart } from './compiler.js'
 import { evaluateChart } from './evaluate.js'
 import { renderSceneToCanvas, type CanvasLike } from './canvas.js'
 import { makeRecorder, type PaintRecord } from './canvas-record.testlib.js'
-import { renderSceneToPng, PNG_MAX_PIXELS, PNG_MAX_SIDE } from './png.js'
+import { renderSceneToPng, PNG_IMAGE_CONCURRENCY, PNG_MAX_PIXELS, PNG_MAX_SIDE } from './png.js'
 import type { SceneRoot, VgSpec } from './types.js'
 
 type Draw = { source: unknown; box: number[] }
@@ -47,9 +47,13 @@ function installCanvas(): void {
 
 /** An `Image` whose loads the test decides: by url, `ok` (with a size), `error`, or `never`. */
 const imageOutcome = new Map<string, 'ok' | 'error' | 'never'>()
-const created: Array<{ src: string; crossOrigin: string | null }> = []
-function installImage(): void {
+const created: Array<{ src: string; crossOrigin: string | null; canvases: number }> = []
+/** Loads in flight now, and the most there were at once. */
+const flight = { now: 0, max: 0 }
+function installImage(delay = 1): void {
   created.length = 0
+  flight.now = 0
+  flight.max = 0
   class ImageStub {
     crossOrigin: string | null = null
     decoding = 'auto'
@@ -61,13 +65,15 @@ function installImage(): void {
     get src() { return this._src }
     set src(v: string) {
       this._src = v
-      created.push({ src: v, crossOrigin: this.crossOrigin })
+      created.push({ src: v, crossOrigin: this.crossOrigin, canvases: canvases.length })
       const outcome = imageOutcome.get(v) ?? 'ok'
       if (outcome === 'never') return
+      flight.max = Math.max(flight.max, ++flight.now)
       setTimeout(() => {
+        flight.now--
         if (outcome === 'ok') { this.naturalWidth = 20; this.naturalHeight = 10; this.onload?.() }
         else this.onerror?.()
-      }, 1)
+      }, delay)
     }
   }
   vi.stubGlobal('Image', ImageStub)
@@ -161,8 +167,38 @@ describe('renderSceneToPng', () => {
     await expect(renderSceneToPng({ ...BARS, width: PNG_MAX_SIDE, height: 1 })).resolves.toBeInstanceOf(Blob)
   })
 
-  it('without any canvas it says so', async () => {
+  it('without any canvas it says so, before requesting any image', async () => {
     await expect(renderSceneToPng(BARS)).rejects.toThrow(/no canvas/)
+    installImage()
+    await expect(renderSceneToPng(IMAGES)).rejects.toThrow(/no canvas/)
+    expect(created).toEqual([])
+  })
+
+  it('makes the canvas only once the images are in (its memory is not held while they load)', async () => {
+    installCanvas()
+    installImage()
+    await renderSceneToPng(IMAGES)
+    expect(created.length).toBe(3)
+    expect(created.every((c) => c.canvases === 0)).toBe(true)
+    expect(canvases.length).toBe(1)
+  })
+
+  it(`loads at most ${PNG_IMAGE_CONCURRENCY} images at once, each timed from its own start`, async () => {
+    installCanvas()
+    // each image takes 20 ms; with every timer started at once, the later ones (queued behind the first six) would pass 30 ms
+    installImage(20)
+    const n = PNG_IMAGE_CONCURRENCY * 3 + 1
+    const scene = sceneOf({
+      width: 400, height: 20,
+      data: [{ name: 'i', values: Array.from({ length: n }, (_, i) => ({ u: `https://img.example/${i}.png`, x: i * 20 })) }],
+      marks: [{ type: 'image', from: { data: 'i' }, encode: { update: { url: { field: 'u' }, x: { field: 'x' }, y: { value: 0 }, width: { value: 10 }, height: { value: 10 } } } }],
+    })
+    const errors: string[] = []
+    await renderSceneToPng(scene, { imageTimeoutMs: 30, onImageError: (url) => errors.push(url) })
+    expect(created.length).toBe(n)
+    expect(flight.max).toBe(PNG_IMAGE_CONCURRENCY)
+    expect(errors).toEqual([])
+    expect(canvases[0]!.ctx.draws.length).toBe(n)
   })
 
   it('reports a canvas that cannot be read back (cross-origin without CORS) and one the browser will not encode', async () => {

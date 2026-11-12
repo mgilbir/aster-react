@@ -35,6 +35,11 @@ export const PNG_MAX_SIDE = 32_767
 export const PNG_MAX_PIXELS = 268_435_456
 /** The default `imageTimeoutMs`. */
 export const PNG_IMAGE_TIMEOUT_MS = 10_000
+/**
+ * How many image mark urls are loaded at once. A browser queues requests to one host, so a timer started for every url at once
+ * would also count the time an image waits in that queue; each image's `imageTimeoutMs` runs from when its own load starts.
+ */
+export const PNG_IMAGE_CONCURRENCY = 6
 
 /** A canvas this module can paint and encode: a `<canvas>` element or an `OffscreenCanvas`. */
 interface PngCanvas {
@@ -64,10 +69,13 @@ export async function renderSceneToPng(scene: SceneRoot, options: PngOptions = {
     throw new RangeError(`[aster] renderSceneToPng: imageTimeoutMs must be a number of milliseconds, got ${String(timeout)}`)
   }
   const { width: w, height: h } = pixelSize(scene, scale)
-  const canvas = createCanvas(w, h)
+  // (an environment without a canvas fails here, before any image is requested; the canvas itself is made once they are in, so
+  // its memory is not held while they load)
+  const makeCanvas = canvasMaker()
   // web fonts still loading would draw text in a fallback face: wait for them, as the page will
   await fontsReady()
   const painted = await withImages(scene, timeout, options.onImageError)
+  const canvas = makeCanvas(w, h)
   const ctx = canvas.getContext('2d') as CanvasLike | null
   if (ctx == null) throw new Error(`[aster] renderSceneToPng: no 2D context for a ${w} x ${h} canvas`)
   renderSceneToCanvas(painted, ctx, { dpr: scale })
@@ -91,15 +99,19 @@ function pixelSize(scene: SceneRoot, scale: number): { width: number; height: nu
   return { width, height }
 }
 
-function createCanvas(width: number, height: number): PngCanvas {
+/** How this environment makes a canvas: a `<canvas>` element, else an `OffscreenCanvas`; throws when it has neither. */
+function canvasMaker(): (width: number, height: number) => PngCanvas {
   const g = globalThis as { document?: { createElement?(tag: string): unknown }; OffscreenCanvas?: new (w: number, h: number) => PngCanvas }
-  let canvas: PngCanvas | undefined
-  if (typeof g.document?.createElement === 'function') canvas = g.document.createElement('canvas') as PngCanvas
-  else if (typeof g.OffscreenCanvas === 'function') canvas = new g.OffscreenCanvas(width, height)
-  if (canvas == null) throw new Error('[aster] renderSceneToPng: this environment has no canvas (no document, no OffscreenCanvas)')
-  canvas.width = width
-  canvas.height = height
-  return canvas
+  const sized = (canvas: PngCanvas, width: number, height: number): PngCanvas => {
+    canvas.width = width
+    canvas.height = height
+    return canvas
+  }
+  const doc = g.document
+  if (typeof doc?.createElement === 'function') return (w, h) => sized(doc.createElement!('canvas') as PngCanvas, w, h)
+  const Offscreen = g.OffscreenCanvas
+  if (typeof Offscreen === 'function') return (w, h) => sized(new Offscreen(w, h), w, h)
+  throw new Error('[aster] renderSceneToPng: this environment has no canvas (no document, no OffscreenCanvas)')
 }
 
 async function fontsReady(): Promise<void> {
@@ -169,16 +181,20 @@ async function withImages(scene: SceneRoot, timeout: number, onError: PngOptions
   const urls = imageUrls(scene.items, new Set())
   if (urls.size === 0) return scene
   const loaded = new Map<string, ItemImage>()
-  await Promise.all([...urls].map(async (url) => {
-    try {
-      loaded.set(url, await loadImage(url, timeout))
-    } catch (e) {
-      const error = e instanceof Error ? e : new Error(String(e))
-      if (onError) {
-        try { onError(url, error) } catch { /* a throwing reporter does not stop the export */ }
+  const queue = [...urls]
+  const worker = async (): Promise<void> => {
+    for (let url = queue.shift(); url !== undefined; url = queue.shift()) {
+      try {
+        loaded.set(url, await loadImage(url, timeout))
+      } catch (e) {
+        const error = e instanceof Error ? e : new Error(String(e))
+        if (onError) {
+          try { onError(url, error) } catch { /* a throwing reporter does not stop the export */ }
+        }
       }
     }
-  }))
+  }
+  await Promise.all(Array.from({ length: Math.min(PNG_IMAGE_CONCURRENCY, queue.length) }, worker))
   if (loaded.size === 0) return scene
   const mapNodes = (nodes: SceneGroup[]): SceneGroup[] => {
     let changed = false
