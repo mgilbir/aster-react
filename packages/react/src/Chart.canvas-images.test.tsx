@@ -6,7 +6,6 @@
  * forgotten. jsdom has no 2D context and loads no image, so both are stubbed: the context records `drawImage`, the `Image` settles
  * as the test says. That real pixels match is the browser gate's (scripts/browser-interaction.mts).
  */
-import * as React from 'react'
 import { createRoot } from 'react-dom/client'
 import { act } from 'react'
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
