@@ -88,6 +88,11 @@ describe('urlDatasets', () => {
     expect(urlDatasets({ data: [{ name: 's', url: 'x.json', source: 'v' }] })).toEqual(['s'])
     // a `values` that loads nothing (an empty string) leaves the url to load
     expect(urlDatasets({ data: [{ name: 'e', url: 'x.json', values: '' }] })).toEqual(['e'])
+    // and an empty url is no url: vega loads nothing (it draws the source)
+    expect(urlDatasets({ data: [{ name: 'u', url: '', source: 'v' }] })).toEqual([])
+    const emptyUrl = { width: 20, height: 20, data: [{ name: 'v', values: [{ a: 1 }] }, { name: 'u', url: '', source: 'v' }], marks: [{ type: 'symbol', from: { data: 'u' } }] } as VgSpec
+    expect(() => checkUrlData(emptyUrl, 'refuse')).not.toThrow()
+    expect(() => renderSpec(emptyUrl, { urlData: 'refuse' })).not.toThrow()
   })
 
   it('is empty for a spec without url data, and for things that are not specs', () => {
@@ -157,7 +162,8 @@ describe('the engine refuses a url dataset under urlData: refuse', () => {
     } as VgSpec
     const chart = compileChart(nested)
     expect(() => evaluateChart(chart, { data: { inner: [] }, urlData: 'refuse' })).toThrow(/dataset "inner"/)
-    expect(() => evaluateChart(chart, { data: { inner: [] } })).not.toThrow()
+    // allowed, it is not refused (whatever the engine then makes of a group's url dataset nobody loaded)
+    expect(() => evaluateChart(chart, { data: { inner: [] } })).not.toThrow(AsterUrlError)
     expect(() => getChartInfo(URL_SPEC, { data: ROWS, urlData: 'refuse' })).toThrow(AsterUrlError)
     expect(getChartInfo(URL_SPEC, { data: ROWS })).not.toBeNull()
   })
@@ -216,6 +222,9 @@ describe('add-ons under urlData: refuse', () => {
     expect(addonsNeeded(nested)).toEqual(['load'])
     expect(addonsNeeded(nested, { urlData: 'refuse' })).toEqual([])
     expect(() => addonsNeeded(URL_SPEC, { urlData: 'nope' as never })).toThrow(TypeError)
+    // a dataset that is not refused (an empty url is no url) keeps its readers counted, as without urlData
+    const emptyUrl = { data: [{ name: 'e', url: '', format: { type: 'csv' } }] } as VgSpec
+    expect(addonsNeeded(emptyUrl, { urlData: 'refuse' })).toEqual(addonsNeeded(emptyUrl))
   })
 
   it('loadAddonsFor rejects with the refusal and imports nothing, even what else the spec needs', async () => {
