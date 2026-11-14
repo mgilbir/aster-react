@@ -1,5 +1,5 @@
-// A frozen copy of label-draw.ts as it was before perf/geometry-once was ported onto fix/hover-correctness (bd01e03): the behaviour
-// the geometry differentials (geometry-differential.test.ts) compare the new code against. Test-only; not built, not shipped.
+// A frozen copy of label-draw.ts as it was on stack/3-expr, the base perf/geometry-once lands on: the behaviour the geometry
+// differentials (geometry-differential.test.ts) compare the new code against. Test-only; not built, not shipped.
 // Delete it with the differential once that guard is no longer wanted.
 /**
  * The marks a `label` layout keeps its labels off, drawn onto the coverage-only canvas of `raster.ts`: after this, a pixel with

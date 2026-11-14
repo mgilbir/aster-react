@@ -1,5 +1,5 @@
 /**
- * Test-only (excluded from the published build): the old implementation (the `legacy-*.testlib.ts` copies of fix/hover-correctness, bd01e03) against
+ * Test-only (excluded from the published build): the old implementation (the `legacy-*.testlib.ts` copies of stack/3-expr, the base this lands on) against
  * the current one, consumer by consumer, over one scene. Every consumer of mark geometry is compared on the SAME scene object, so
  * a hit result can be compared by item identity:
  *  - the SVG string (`renderSceneToSvg`), byte for byte;

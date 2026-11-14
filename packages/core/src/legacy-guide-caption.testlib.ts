@@ -1,4 +1,4 @@
-// A copy of guide-caption.ts (bd01e03) that installs its captions into legacy-render.testlib.ts (see geometry-differential.testlib.ts). Test-only.
+// A copy of guide-caption.ts (stack/3-expr) that installs its captions into legacy-render.testlib.ts (see geometry-differential.testlib.ts). Test-only.
 
 /**
  * The captions vega-scenegraph writes as `aria-label` on a guide's SVG container (util/aria.js axisCaption,

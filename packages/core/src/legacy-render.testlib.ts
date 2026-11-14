@@ -1,5 +1,5 @@
-// A frozen copy of render.ts as it was before perf/geometry-once was ported onto fix/hover-correctness (bd01e03): the behaviour
-// the geometry differentials (geometry-differential.test.ts) compare the new code against. Test-only; not built, not shipped.
+// A frozen copy of render.ts as it was on stack/3-expr, the base perf/geometry-once lands on: the behaviour the geometry
+// differentials (geometry-differential.test.ts) compare the new code against. Test-only; not built, not shipped.
 // Delete it with the differential once that guard is no longer wanted.
 /**
  * Scene -> SVG serializer. Mirrors vega-scenegraph's output structure closely
@@ -73,8 +73,11 @@ export function frameBackgroundPath(scene: SceneRoot, plotW0: number, plotH0: nu
   const frameInset = scene.frameStroke && scene.frameStrokeWidth == null ? 0.5 : 0
   return scene.frameCornerRadius != null && scene.frameCornerRadius > 0
     ? roundedFramePath(frameInset, frameInset, plotW, plotH, Math.min(scene.frameCornerRadius, plotW / 2, plotH / 2))
-    : gen(frameInset ? `M0.5,0.5h${num(plotW)}v${num(plotH)}h-${num(plotW)}Z` : `M0,0h${num(plotW)}v${num(plotH)}h-${num(plotW)}Z`)
+    : gen(frameInset ? `M0.5,0.5h${num(plotW)}v${num(plotH)}h${back(plotW)}Z` : `M0,0h${num(plotW)}v${num(plotH)}h${back(plotW)}Z`)
 }
+
+/** The closing `h` of a rectangle path `w` wide: back by `w` (vega's `h${-w}`: a negative width closes forward). */
+const back = (w: number): string => (w < 0 ? num(-w) : `-${num(w)}`)
 
 /**
  * The root frame's paint as an item, so the frame's background path goes through
@@ -1946,7 +1949,7 @@ const el = (tag: 'g' | 'path', attrs: (w: AttrSink) => void, children?: SvgNode[
   (children === undefined ? (link === undefined ? { tag, attrs } : { tag, attrs, link }) : link === undefined ? { tag, attrs, children } : { tag, attrs, children, link })
 const noAttrs = (_w: AttrSink): void => {}
 const EMPTY_BOX = gen('M0,0h0v0h0Z')
-const boxPath = (w: number, h: number): GeneratedPath => gen(`M0,0h${num(w)}v${num(h)}h-${num(w)}Z`)
+const boxPath = (w: number, h: number): GeneratedPath => gen(`M0,0h${num(w)}v${num(h)}h${back(w)}Z`)
 const isGroupNode = (it: SceneItem): it is SceneGroup => isGroup(it) && (it.marktype === undefined || it.marktype === 'group')
 const flag = (it: SceneItem, key: string): boolean => (it as Record<string, unknown>)[key] === true
 
