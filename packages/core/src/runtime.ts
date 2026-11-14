@@ -58,6 +58,7 @@ import { dict, ownGet, pushAll, sortData, lerp, scopedSignalName, heldSignalName
 import { applyImageUrlPolicy, applyLinkUrlPolicy, resolveImageUrl, type ImageUrlPolicy } from './url-policy.js'
 import { checkChartUrlData } from './url-data.js'
 import { valueKey, valuesEqual } from './fingerprint.js'
+import { dataWithoutRows, valuesSignal } from './spec-structure.js'
 import { diffRows, equalCell, rowsEqual, sourceNames, type PulseChange } from './pulse.js'
 import { aggregateGroups, flatKeyFn, groupKeyFn } from './transform-agg.js'
 import { layoutFacet, type GridPlace } from './trellis.js'
@@ -1283,7 +1284,7 @@ function lateTaintOf(chart: CompiledChart, failed: readonly string[]): LateTaint
     changed = false
     for (const d of chart.signalDefs ?? []) if (!t.signals.has(d.name) && ([d.update, d.init].some((x) => typeof x === 'string' && expressionIdentifiers(x).some((id) => t.signals.has(id))) || reads(d.on))) { t.signals.add(d.name); changed = true }
     for (const sc of chart.scales) if (!t.scales.has(sc.name) && reads(sc)) { t.scales.add(sc.name); changed = true }
-    for (const d of chart.data) if (!t.data.has(d.name) && (reads(d) || sourceNames(d).some((n) => t.data.has(n)))) { t.data.add(d.name); changed = true }
+    for (const d of chart.data) if (!t.data.has(d.name) && (reads(dataWithoutRows(d)) || sourceNames(d).some((n) => t.data.has(n)))) { t.data.add(d.name); changed = true }
   }
   return t
 }
@@ -1921,7 +1922,8 @@ function signalPrereqsOf(chart: CompiledChart): Map<string, string[]> {
     for (const d of chart.data) {
       const read = new Set<string>()
       identsOf(d.transform, read)
-      if (d.values !== null && typeof d.values === 'object' && !Array.isArray(d.values)) identsOf(d.values, read)
+      const valuesExpr = valuesSignal(d.values)
+      if (valuesExpr !== undefined) identsOf(valuesExpr, read)
       // a signal computed from other signals reads what they read
       const queue = [...read]
       for (let i = 0; i < queue.length; i++) {
@@ -2418,7 +2420,7 @@ function buildContent(
  * random-tape.ts), so which pass takes a pulse decides which numbers the source hands out, and the numbers must stay those.
  */
 function drawsInDatasets(chart: CompiledChart, input: RuntimeInput): boolean {
-  return input.random !== undefined && mayDrawRandom(chart.data)
+  return input.random !== undefined && datasetsMayDraw(chart)
 }
 
 /** Log the warnings the layouts of the pass that is kept gave, in the order they gave them. */
@@ -3622,7 +3624,8 @@ const MAY_DRAW = new WeakMap<CompiledChart, boolean>()
 /** Whether a dataset of the view may draw from the random source, its expressions read as the lexer reads them (an escaped name too). */
 function datasetsMayDraw(chart: CompiledChart): boolean {
   let may = MAY_DRAW.get(chart)
-  if (may === undefined) MAY_DRAW.set(chart, (may = mayDrawRandom(chart.data)))
+  // (rows draw nothing: only the datasets' transforms and a `{signal}` values are code)
+  if (may === undefined) MAY_DRAW.set(chart, (may = mayDrawRandom(chart.data.map(dataWithoutRows))))
   return may
 }
 

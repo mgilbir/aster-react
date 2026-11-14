@@ -20,6 +20,7 @@ import { parseExpression } from './expr-parser.js'
 import { parseEventSelectorString } from './event-selector.js'
 import { registeredExpressionFunctionNames, withdrawExpressionFunctions } from './expression.js'
 import { checkUrlData, validateUrlDataMode, type UrlDataMode } from './url-data.js'
+import { valuesSignal } from './spec-structure.js'
 import type { VgSpec } from './types.js'
 
 export type AddonName = 'transforms' | 'geo' | 'load'
@@ -141,7 +142,13 @@ export function addonsNeeded(spec: VgSpec, options?: AddonOptions): readonly Add
     // (a dataset definition is an element of a `data` array; a refused url dataset is never read)
     const refusedUrl = refuseUrls && key === 'data' && !!node.url && !node.values
     for (const k of Object.keys(node)) {
-      if (DATA_KEYS.has(k) && !(k === 'values' && isObj(node[k]) && !Array.isArray(node[k]))) continue
+      // (`values` is read only when it is a `{signal}`: rows and GeoJSON are data, whatever their fields are named)
+      if (k === 'values') {
+        const signal = valuesSignal(node[k])
+        if (signal !== undefined) stack.push([signal, depth + 1, 'signal'])
+        continue
+      }
+      if (DATA_KEYS.has(k)) continue
       if (refusedUrl && k === 'format') continue
       stack.push([node[k], depth + 1, k])
     }
