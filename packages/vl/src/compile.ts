@@ -12,6 +12,7 @@ import { optimizeData } from './optimize.js'
 import { tokenize } from './expr-tokens.js'
 import { VLCompileError, pushAll, flatField, datumRef as dref, genName, safeKey, splitAccessPath } from './names.js'
 import { validateGeoUnit, validateSpec } from './validate.js'
+import { cloneSpecStructure, detachRows, isRows, jsonWithRows, sameJson, stringifyWithoutRows, withRows, type RowPayloads } from './rows.js'
 import { markChannelCompatible } from './channels.js'
 import { predicateExpr, domainValueExpr, dateTimeToExpr, isDateTime as isDateTimeValue } from './predicate.js'
 import {
@@ -131,7 +132,16 @@ function isObject(v: unknown): v is Record<string, unknown> {
  * VLCompileError naming the feature; it is never silently degraded.
  */
 export function compile(input: VLSpec): VLSpec {
-  const first = compileOnce(input)
+  const payloads: RowPayloads = new Set()
+  return withRows(payloads, () => {
+    const out = compileTwice(input, payloads)
+    detachRows(out, payloads)
+    return out
+  })
+}
+
+function compileTwice(input: VLSpec, payloads: RowPayloads): VLSpec {
+  const first = compileOnce(input, payloads)
   // model.parse(): every view's selections are parsed BEFORE any view's data, so a predicate may name a selection that a view later in the
   // spec declares (a filter in one concat child, the brush in the next). A first pass finds those names, a second one resolves them.
   // The same goes for a lookup from a selection: the view that declares the selection makes the dataset of its selected rows, and
@@ -139,11 +149,11 @@ export function compile(input: VLSpec): VLSpec {
   const forwardSelections = first.misses.size > 0 && [...first.misses].some((n) => first.selections.has(n)) ? first.selections : undefined
   const forwardLookups = first.lookups.size > 0 ? first.lookups : undefined
   if (!forwardSelections && !forwardLookups) return first.out
-  return compileOnce(input, forwardSelections, forwardLookups).out
+  return compileOnce(input, payloads, forwardSelections, forwardLookups).out
 }
 
-function compileOnce(input: VLSpec, forward?: ReadonlyMap<string, SelCmpt>, forwardLookups?: ReadonlyMap<string, { name: string }>): { out: VLSpec; misses: ReadonlySet<string>; selections: ReadonlyMap<string, SelCmpt>; lookups: ReadonlyMap<string, { name: string }> } {
-  const spec = cloneSpec(input)
+function compileOnce(input: VLSpec, payloads: RowPayloads, forward?: ReadonlyMap<string, SelCmpt>, forwardLookups?: ReadonlyMap<string, { name: string }>): { out: VLSpec; misses: ReadonlySet<string>; selections: ReadonlyMap<string, SelCmpt>; lookups: ReadonlyMap<string, { name: string }> } {
+  const spec = cloneSpecStructure(input, payloads)
   validateSpec(spec)
   const userConfig = isObject(spec.config) ? (spec.config as Record<string, unknown>) : undefined
   normalizeNestedFacetedUnits(spec, false)
@@ -261,7 +271,7 @@ function assembleGuides(node: unknown, scaleTypes: ReadonlyMap<string, unknown> 
       }
     }
   }
-  for (const v of Object.values(node)) if (v !== null && typeof v === 'object') assembleGuides(v, scaleTypes)
+  for (const v of Object.values(node)) if (v !== null && typeof v === 'object' && !isRows(v)) assembleGuides(v, scaleTypes)
 }
 
 /** vega-lite `stack(initMarkdef(markDef, encoding, config), encoding)`: the measure a unit stacks and how. */
@@ -472,15 +482,6 @@ function finalizeData(out: VLSpec, ctx: CompileCtx): VLSpec {
   for (const d of ctx.lookups.values()) if (!have.has(d.name as string)) extra.push(d)
   if (extra.length) out.data = [...extra, ...data]
   return out
-}
-
-function cloneSpec(input: VLSpec): VLSpec {
-  if (!isObject(input)) throw new VLCompileError('a Vega-Lite spec must be a JSON object')
-  try {
-    return structuredClone(input)
-  } catch (e) {
-    throw new VLCompileError(`the spec must be plain JSON-compatible data (${(e as Error).message})`)
-  }
 }
 
 /**
@@ -850,20 +851,19 @@ function compileLayered(spec: VLSpec, ctx: CompileCtx): VLSpec {
 
   // Layers are grouped by the data they read: layers sharing a source share
   // its dataset and one casts dataset; a layer with its own `data` gets its own.
-  const groupKey = (l: VLSpec): string => (l.data === undefined ? '' : JSON.stringify(l.data))
-  const groupKeys: string[] = []
+  // (two layers' data are one source when they write the same JSON: equal-but-distinct rows included, as vega-lite's findSource)
+  const groupData: unknown[] = []
   for (const p of parsed) {
-    const k = groupKey(p.l)
-    let gi = groupKeys.indexOf(k)
+    let gi = groupData.findIndex((d) => (d === undefined || p.l.data === undefined ? d === p.l.data : sameJson(d, p.l.data)))
     if (gi < 0) {
-      groupKeys.push(k)
-      gi = groupKeys.length - 1
+      groupData.push(p.l.data)
+      gi = groupData.length - 1
     }
     p.group = gi
   }
   interface Group { sourceName: string; castDone: Set<string>; casts: Record<string, unknown>[]; source: Record<string, unknown>; castsName: string }
-  const groups: Group[] = groupKeys.map((k, gi) => {
-    const dataDef = k === '' ? undefined : (parsed.find((p) => p.group === gi)!.l.data as Record<string, unknown>)
+  const groups: Group[] = groupData.map((d, gi) => {
+    const dataDef = d === undefined ? undefined : (parsed.find((p) => p.group === gi)!.l.data as Record<string, unknown>)
     const source: Record<string, unknown> = dataDef ? dataSource(dataDef, ctx.datasets) : {}
     // vega-lite preserves a declared source dataset name (data: {name: 'table'})
     // — hosts key data overrides/changesets on it, so renaming to source_0 breaks them.
@@ -1401,7 +1401,7 @@ function rootChrome(out: Record<string, unknown>, spec: VLSpec, kind: 'unit' | '
       if (Array.isArray(o)) o.forEach(hide)
       else if (isObject(o)) {
         for (const k of ['axes', 'legends']) if (Array.isArray(o[k])) for (const g of o[k] as Record<string, unknown>[]) g.aria ??= false
-        Object.values(o).forEach(hide)
+        for (const v of Object.values(o)) if (!isRows(v)) hide(v)
       }
     }
     hide(out)
@@ -1688,9 +1688,9 @@ function compileFacetedComposition(spec: VLSpec, ctx: CompileCtx, nested: string
   {
     const declared: Record<string, unknown>[] = []
     for (const dim of ['width', 'height'] as const) {
-      const before = JSON.stringify(frag)
+      const before = stringifyWithoutRows(frag)
       renameFragment(frag, { signals: new Map([[dim, `${CH}_${dim}`]]), scales: new Map() })
-      if (JSON.stringify(frag) !== before) {
+      if (stringifyWithoutRows(frag) !== before) {
         declared.push({ name: `${CH}_${dim}`, value: 300 })
         sized.add(dim)
       }
@@ -1766,7 +1766,7 @@ function renameGeneratedPrefix(out: unknown, prefix: RegExp, to: (index: string)
   const collect = (v: unknown): void => {
     if (typeof v === 'string') { users.add(v); for (const t of tokenize(v)) if (t.value !== undefined) users.add(t.value) }
     else if (Array.isArray(v)) v.forEach(collect)
-    else if (isObject(v)) for (const [k, x] of Object.entries(v)) { users.add(k); collect(x) }
+    else if (isObject(v)) for (const [k, x] of Object.entries(v)) { users.add(k); if (!isRows(x)) collect(x) }
   }
   collect(input)
   const renamed = (name: string): string | undefined => {
@@ -2705,7 +2705,7 @@ function embedCells(cells: CompositeCell[], parent: VLSpec, ctx: CompileCtx, lay
   // (the counter is the compile's, not this embedding's: a nested composite must not reuse a sibling's source names)
   let nextData = 0
   const data: Record<string, unknown>[] = []
-  const emitted = new Map<string, string>() // source name -> JSON of its definition
+  const emitted = new Map<string, Record<string, unknown>>() // source name -> its definition (less the name)
 
   // 1. children inherit data/transform, then compile
   const frags = cells.map((cell) => {
@@ -2764,12 +2764,12 @@ function embedCells(cells: CompositeCell[], parent: VLSpec, ctx: CompileCtx, lay
     unitData.forEach((d, di) => {
       const name = d.name as string
       if (di === 0) {
-        const def = JSON.stringify({ ...d, name: undefined })
+        const def = { ...d, name: undefined }
         const seen = emitted.get(name)
         if (seen === undefined) {
           emitted.set(name, def)
           data.push(d)
-        } else if (seen !== def) {
+        } else if (!sameJson(seen, def)) {
           throw new VLCompileError(`two children declare different data under the same name "${name}"`)
         }
         return
@@ -3154,7 +3154,7 @@ function compileConcat(spec: VLSpec, ctx: CompileCtx): VLSpec {
 function holdsRepeat(node: unknown): boolean {
   if (Array.isArray(node)) return node.some(holdsRepeat)
   if (!isObject(node)) return false
-  return (node.repeat !== undefined && typeof node.repeat !== 'string' && Object.keys(node).length > 1) || Object.values(node).some(holdsRepeat)
+  return (node.repeat !== undefined && typeof node.repeat !== 'string' && Object.keys(node).length > 1) || Object.values(node).some((v) => !isRows(v) && holdsRepeat(v))
 }
 
 /**
@@ -3162,6 +3162,7 @@ function holdsRepeat(node: unknown): boolean {
  * bind is left for a repeat inside the tree to bind, if there is one.
  */
 function substituteRepeat(node: unknown, repMap: Record<string, unknown>, later = holdsRepeat(node)): unknown {
+  if (isRows(node)) return node
   if (Array.isArray(node)) return node.map((n) => substituteRepeat(n, repMap, later))
   if (!isObject(node)) return node
   const keys = Object.keys(node)
@@ -3974,7 +3975,7 @@ function userDatasetNames(top: VLSpec): Set<string> {
     if (!isObject(n)) return
     if (isObject(n.data) && typeof n.data.name === 'string') names.add(n.data.name)
     if (isObject(n.from) && isObject(n.from.data) && typeof n.from.data.name === 'string') names.add(n.from.data.name)
-    for (const [k, v] of Object.entries(n)) if (k !== 'data' || isObject(v)) visit(v)
+    for (const [k, v] of Object.entries(n)) if ((k !== 'data' || isObject(v)) && !isRows(v)) visit(v)
   }
   visit(top)
   if (isObject(top.datasets)) for (const k of Object.keys(top.datasets)) names.add(k)
@@ -4037,10 +4038,10 @@ function makeCtx(top: VLSpec): CompileCtx {
       const entry = dataSource(def, datasets)
       // a NAMED source keeps its name (hosts key data on it; a bare name is the
       // host-supplied or main dataset of that name); an anonymous one is named by content
-      const name = typeof entry.name === 'string' ? entry.name : `lookup_${hashString(JSON.stringify(entry))}`
+      const name = typeof entry.name === 'string' ? entry.name : `lookup_${hashString(jsonWithRows(entry))}`
       const have = lookups.get(name)
       const next: Record<string, unknown> = { ...entry, name }
-      if (have && JSON.stringify(have) !== JSON.stringify(next) && (have.values !== undefined || have.url !== undefined) && (next.values !== undefined || next.url !== undefined)) {
+      if (have && !sameJson(have, next) && (have.values !== undefined || have.url !== undefined) && (next.values !== undefined || next.url !== undefined)) {
         throw new VLCompileError(`two lookups declare different data under the name "${name}"`)
       }
       if (!have || (have.values === undefined && have.url === undefined)) lookups.set(name, next)
@@ -8382,9 +8383,14 @@ function planLayerProjections(root: VLSpec, parsed: Array<{ l: VLSpec }>): { roo
 
 /** Compile a single unit spec (validated; the input is not mutated). */
 export function compileUnit(input: VLSpec): VLSpec {
-  const spec = cloneSpec(input)
-  validateSpec(spec)
-  return compileUnitView(spec, makeCtx(spec))
+  const payloads: RowPayloads = new Set()
+  return withRows(payloads, () => {
+    const spec = cloneSpecStructure(input, payloads)
+    validateSpec(spec)
+    const out = compileUnitView(spec, makeCtx(spec))
+    detachRows(out, payloads)
+    return out
+  })
 }
 
 /**

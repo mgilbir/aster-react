@@ -8,6 +8,7 @@
  */
 
 import { nextSolid, prevSolid, tokenize } from './expr-tokens.js'
+import { isRows } from './rows.js'
 
 type Obj = Record<string, unknown>
 const isObj = (v: unknown): v is Obj => v !== null && typeof v === 'object' && !Array.isArray(v)
@@ -85,7 +86,7 @@ export function renameFragment(node: unknown, r: Renames): void {
       // group-relative reference: leave alone
     } else if (LEGEND_SCALE_PROPS.has(k) && typeof v === 'string' && r.scales.has(v)) {
       node[k] = r.scales.get(v)!
-    } else if (v !== null && typeof v === 'object') {
+    } else if (v !== null && typeof v === 'object' && !isRows(v)) {
       renameFragment(v, r)
     }
   }
@@ -102,7 +103,7 @@ export function renameDataRefs(node: unknown, map: ReadonlyMap<string, string>):
   }
   if (!isObj(node)) return
   if (typeof node.data === 'string' && map.has(node.data)) node.data = map.get(node.data)
-  for (const v of Object.values(node)) if (v !== null && typeof v === 'object') renameDataRefs(v, map)
+  for (const v of Object.values(node)) if (v !== null && typeof v === 'object' && !isRows(v)) renameDataRefs(v, map)
 }
 
 /** The keys whose strings are Vega expressions in a compiled view. */

@@ -37,8 +37,11 @@ import '@aster-charts/react/vl'
 For every Vega-Lite feature `compile` either produces Vega that renders like
 vega-lite 6.4.3, or throws a `VLCompileError` naming the unsupported feature
 (with the path in the spec, e.g. `encoding.x.scale.domain: ...`). It never
-compiles a wrong chart silently, and it never mutates its input (the spec is
-cloned).
+compiles a wrong chart silently, and it never mutates its input. The spec's
+structure is copied; its rows (an inline `data.values`, the entries of `datasets`)
+are not: compiling reads none of them, so it costs the same for 3 rows as for
+6,000. The compiled spec carries the caller's row objects, in arrays of its own,
+as vega-lite does; nothing in Aster writes to them.
 
 A validation layer runs first and rejects unknown channels,
 transform keys, composition nesting, params and selections, condition and sort

@@ -14,6 +14,7 @@ import { renameDataRefs, renameExpr, renameFragment } from './embed.js'
 
 import { EXPRESSION_KEYS } from './embed.js'
 import { tokenize } from './expr-tokens.js'
+import { isRows, stringifyWithoutRows } from './rows.js'
 
 type Obj = Record<string, unknown>
 const isObj = (v: unknown): v is Obj => v !== null && typeof v === 'object' && !Array.isArray(v)
@@ -359,7 +360,7 @@ function dedupeDomainRefs(node: unknown, merged: ReadonlySet<string>): void {
       else if (unique.length !== refs.length) d.fields = unique
     }
   }
-  for (const v of Object.values(node)) if (v !== null && typeof v === 'object') dedupeDomainRefs(v, merged)
+  for (const v of Object.values(node)) if (v !== null && typeof v === 'object' && !isRows(v)) dedupeDomainRefs(v, merged)
 }
 
 /**
@@ -370,11 +371,12 @@ function removeUnusedDatasets(out: Obj, removable: (name: string) => boolean): v
   let data = (out.data as Obj[] | undefined) ?? []
   const rest = { ...out }
   delete rest.data
-  const outside = JSON.stringify(rest)
+  // (the user's rows name no dataset: they are left out of the text)
+  const outside = stringifyWithoutRows(rest)
   for (;;) {
     // (a name is read when it appears, whole, anywhere in the spec but its own dataset's name: a mark's `from`, a scale's domain, an
     // expression's `data("name")`, a source, a lookup)
-    const text = outside + data.map((d) => JSON.stringify({ ...d, name: undefined })).join('\n')
+    const text = outside + data.map((d) => stringifyWithoutRows({ ...d, name: undefined })).join('\n')
     // (and every name and string an expression spells, as vega's lexer reads them: `data("row\\u005fdomain")` reads `row_domain`)
     const spelled = new Set<string>()
     const collect = (v: unknown, key: string): void => {
