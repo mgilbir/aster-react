@@ -830,9 +830,13 @@ export function buildHitIndex(scene: SceneRoot, cell = DEFAULT_CELL): HitIndex {
     return true
   }
 
+  /** Whether (x, y) is on the entry: its geometry, then the clips around it. */
   function hits(e: Entry, x: number, y: number): boolean {
     if (!(x >= e.x1 && x <= e.x2 && y >= e.y1 && y <= e.y2)) return false
-    if (e.clips && !inClips(e.clips, x, y)) return false
+    return onGeometry(e, x, y) && (e.clips === undefined || inClips(e.clips, x, y))
+  }
+
+  function onGeometry(e: Entry, x: number, y: number): boolean {
     switch (e.kind) {
       case 'box':
         return true
@@ -868,7 +872,7 @@ export function buildHitIndex(scene: SceneRoot, cell = DEFAULT_CELL): HitIndex {
     item,
     marktype: e.marktype,
     kind: e.groupBox ? (e.guide ? 'guide' : 'group') : e.guide || e.pickOnly ? 'guide' : 'mark',
-    ...(e.fromData ? { fromData: true } : {}),
+    fromData: e.fromData === true,
   })
   /** What `query` and `queryMark` report: a line, an area or a trail as its item nearest the point. */
   const nearest = (e: Entry | null, x: number, y: number): HitTarget | null =>
