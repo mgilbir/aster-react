@@ -161,6 +161,19 @@ describe('Chart denseMarks', () => {
       })
     }
 
+    forEachVariant(['svg', 'interaction'], (Chart) => {
+      it('the tooltip is not what keeps a mark per item: the same opaque mark with a tooltip batches', async () => {
+        const container = document.createElement('div')
+        document.body.appendChild(container)
+        const root = createRoot(container)
+        await act(async () => { root.render(<Chart spec={translucent({ tooltip: { signal: 'datum.x' } })} width={400} height={300} tooltip a11y={false} />) })
+        expect(markPaths(container)).toBeLessThanOrEqual(8)
+        expect(subpaths(container)).toBe(1000)
+        await act(async () => { root.unmount() })
+        container.remove()
+      })
+    })
+
     forEachVariant(['svg'], (Chart) => {
       it('per item after hydration too, and an opaque run among translucent items still batches', async () => {
         // the items whose x is a multiple of 3 opaque: each translucent item keeps its element, each run of opaque ones is a path
