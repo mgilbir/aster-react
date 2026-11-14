@@ -5437,6 +5437,9 @@ function buildGroupItem(mark: CompiledMark, ctx: EvalContext, entered: EnteredGr
       ...(cursorOf(geo) !== undefined ? { cursor: cursorOf(geo) } : {}),
       // (what vega's tooltip handler shows for the group item where no mark inside it is hit)
       ...((geo as Record<string, unknown>).tooltip !== undefined ? { tooltip: (geo as Record<string, unknown>).tooltip } : {}),
+      // (vega leaves the box of a group item that says `noBound` out of its bounds: the view's autosize, and its pick, see only
+      // what it holds)
+      ...((geo as Record<string, unknown>).noBound ? { noBound: true } : {}),
       ...(href != null ? { href: href as string } : {}),
       ...(markClip(mark, ctx) ? { markClip: true } : {}),
     } as unknown as SceneGroup

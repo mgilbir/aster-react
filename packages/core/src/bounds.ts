@@ -1046,11 +1046,15 @@ export function layoutBounds(node: SceneNode, out = new Bounds()): Bounds {
       return c.marktype !== undefined && c.marktype !== 'group' && Array.isArray(c.items) ? typedMarkBounds(c) : layoutBounds(child)
     }
     if (hasClippedMark(g.items)) {
-      eachMarkBounds(g.items.filter(countsInBounds), g.width || 0, g.height || 0, measure, (mb) => { b.union(mb) })
+      const noBox = (g as Record<string, unknown>).noBound === true
+      eachMarkBounds(g.items.filter((c) => countsInBounds(c) && !(noBox && (c as Record<string, unknown>).contentClip === true)), g.width || 0, g.height || 0, measure, (mb) => { b.union(mb) })
     } else {
       for (const child of g.items) {
         if (!countsInBounds(child)) continue
         const c = child as SceneGroup
+        // (the clipped content of a group item stands for the item's own clipped box, which `noBound` leaves out: vega bounds a
+        // clipped group by its box alone)
+        if ((g as Record<string, unknown>).noBound && (c as Record<string, unknown>).contentClip === true) continue
         if (c.marktype !== undefined && c.marktype !== 'group' && Array.isArray(c.items)) b.union(typedMarkBounds(c))
         else layoutBounds(child, b)
       }

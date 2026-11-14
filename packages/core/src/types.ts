@@ -758,6 +758,8 @@ export interface SceneGroup extends SceneItem {
    * them back in `RuntimeInput.signals` for the next evaluation.
    */
   scopeSignals?: { id: string; defs: CompiledSignalDef[]; values: Record<string, unknown>; /** false when the group holds no mark, axis, legend or title: vega then has no `context.group`, and `inScope` is false for every item */ hasContent: boolean }
+  /** The group item's encode says `noBound`: its own box is not part of its bounds (vega marks/group.js), only what it holds. */
+  noBound?: boolean
   /** Group items of one mark carry the mark's index in its parent, so consecutive items of a mark share one container. */
   markIndex?: number
   /** A group mark with no items: this node only stands for its (empty) container in the scene; it is no group item. */

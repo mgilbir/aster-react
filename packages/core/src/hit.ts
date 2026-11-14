@@ -29,7 +29,7 @@
  * every cell.
  */
 import type { SceneGroup, SceneItem, SceneRoot } from './types.js'
-import { Bounds, boundText } from './bounds.js'
+import { Bounds, boundText, layoutBounds } from './bounds.js'
 import { textAnchor } from './text-metrics.js'
 import { imageBox } from './image-box.js'
 import { FLATTEN_TOLERANCE, flattenPath, insidePolys, type Poly } from './path-flatten.js'
@@ -415,6 +415,12 @@ export function buildHitIndex(scene: SceneRoot, cell = DEFAULT_CELL): HitIndex {
     try { fn() } finally { clips = outer }
   }
   const rectClip = (x: number, y: number, w: number, h: number): Clip => ({ x1: Math.min(x, x + w), y1: Math.min(y, y + h), x2: Math.max(x, x + w), y2: Math.max(y, y + h) })
+  /** A group item's bounds (vega's: what it holds, its box unless `noBound`, its stroke) in scene coordinates. */
+  const boundsClip = (group: SceneGroup, tx: number, ty: number): Clip => {
+    const b = layoutBounds(group)
+    // (empty bounds: nothing is picked)
+    return b.empty() ? { x1: Infinity, y1: Infinity, x2: -Infinity, y2: -Infinity } : { x1: tx + b.x1, y1: ty + b.y1, x2: tx + b.x2, y2: ty + b.y2 }
+  }
   const pathClip = (d: string, ox: number, oy: number): Clip => {
     const polys = flattenPath(d, (x, y) => [ox + x, oy + y])
     const box = polysBox(polys)
@@ -440,8 +446,11 @@ export function buildHitIndex(scene: SceneRoot, cell = DEFAULT_CELL): HitIndex {
       const h = group.height ?? fh
       // a group item's `clip` (encode) clips what it holds to its box: the content `<g>` of the SVG
       const content = rec(group).contentClip === true ? (group.clipPathD ? pathClip(group.clipPathD, gx, gy) : rectClip(gx, gy, w, h)) : null
+      // vega looks for a group item, its box and what it holds, only within its bounds: they hold all of it, unless its box is
+      // left out of them (`noBound`), where its box takes the pointer only as far as what it holds reaches
+      const bounds = scope && group.noBound === true ? boundsClip(group, tx, ty) : null
       // a group mark's own `clip` clips its items to the frame of the group around them
-      withClip(rec(group).markClip === true ? rectClip(tx, ty, fw, fh) : null, () => {
+      withClip(rec(group).markClip === true ? rectClip(tx, ty, fw, fh) : null, () => withClip(bounds, () => {
         if (box.background) { entries.push(box.background); clipFrom(entries.length - 1) }
         withClip(content, () => {
           for (const item of group.items ?? []) {
@@ -460,7 +469,7 @@ export function buildHitIndex(scene: SceneRoot, cell = DEFAULT_CELL): HitIndex {
           }
         })
         if (box.foreground) { entries.push(box.foreground); clipFrom(entries.length - 1) }
-      })
+      }))
       return
     }
     const e0 = entries.length
