@@ -277,7 +277,10 @@ export function Signals(): React.ReactElement {
     `mouseover` of the one it enters; every `pointermove` is also a `mousemove` (a native mousemove is one more: a
     `mousemove` stream sees each mouse move twice, as on vega's canvas); leaving the canvas is the out of the hovered item.
     A `click` counts only on the item a button went down on. A touch is about the item its `touchstart` picked. Nothing is
-    about an item: `event.item` is `null` (vega's canvas), where the SVG's is `undefined`.
+    about an item: `event.item` is `null` (vega's canvas), where the SVG's is `undefined`. One native event handed over as several
+    types runs each as a delivery of its own, in that order, before the event goes on to the page (so a `consume` in any of them
+    stops it); the first that a stream listens to sees `event.vegaType` as its own type, the later ones as the last type the event
+    is handed over as (`mousemove` for a pointermove), as vega queues them behind the first's run.
   The hovered item outlives the re-render a signal change makes: the new scene's item at the same place (the same mark, the
   same row, else the same position with the same values) stands for it; an item no longer in the scene is not left.
   `pnpm conformance:signals`, `conformance:selections` and `conformance:intersect` drive every case on both renderers against

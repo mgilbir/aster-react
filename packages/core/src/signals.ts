@@ -115,9 +115,10 @@ export interface ViewEventScene {
 export interface ViewEventConnection {
   /**
    * Deliver every event of `type` of the view to `send`, with the item it is about: an item or null (none) as the renderer
-   * resolved it, or undefined to leave it to the loop (the item under the event's point).
+   * resolved it, or undefined to leave it to the loop (the item under the event's point); and the `event.vegaType` the handlers
+   * see (default: `type`).
    */
-  on(type: string, send: (event: Event, item: PickedItem | null | undefined) => void): void
+  on(type: string, send: (event: Event, item: PickedItem | null | undefined, vegaType?: string) => void): void
   /** The binding is over: deliver nothing more to it. */
   disconnect(): void
 }
@@ -1061,7 +1062,7 @@ function bindSignalEventsDefs(
       }
       if (source === 'view') {
         // (vega's handlers say which of the types they listen to an event was handed over as: `event.vegaType`)
-        viewEvents.on(String(type), (e, item) => { defineExt(e, 'vegaType', String(type)); deliver(e as ExtEvent, true, e, item) })
+        viewEvents.on(String(type), (e, item, vegaType) => { defineExt(e, 'vegaType', vegaType ?? String(type)); deliver(e as ExtEvent, true, e, item) })
       } else if (source === 'window') {
         if (typeof window !== 'undefined') addListener(window, String(type), (e) => deliver(e as ExtEvent, false, e))
         else logger.warn('Can not resolve event source: window')

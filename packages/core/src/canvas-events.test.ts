@@ -130,4 +130,21 @@ describe('createCanvasEvents', () => {
     fire(canvas, 'mousemove', 4)
     expect(b.log).toEqual([])
   })
+
+  it('one native event handed over as several types: the first handled type sees its own vegaType, the queued ones the last', () => {
+    const canvas = setup()
+    const events = (canvas as unknown as { __events: ReturnType<typeof createCanvasEvents> }).__events
+    const conn = events.connect(stubScene({ a: {}, b: {} }))
+    const seen: string[] = []
+    for (const t of ['pointerout', 'pointerover', 'mousemove']) conn.on(t, (_e, _item, vegaType) => seen.push(`${t}:${vegaType}`))
+    fire(canvas, 'pointermove', 2)
+    fire(canvas, 'pointermove', 15)
+    fire(canvas, 'pointerout', 15)
+    fire(canvas, 'click', 15)
+    expect(seen).toEqual([
+      'pointerout:pointerout', 'pointerover:mousemove', 'mousemove:mousemove',
+      'pointerout:pointerout', 'pointerover:mousemove', 'mousemove:mousemove',
+      'pointerout:pointerout',
+    ])
+  })
 })

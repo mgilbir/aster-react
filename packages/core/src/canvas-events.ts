@@ -28,7 +28,7 @@ export interface CanvasEvents extends ViewEvents {
   release(): void
 }
 
-type Send = (event: Event, item: PickedItem | null | undefined) => void
+type Send = (event: Event, item: PickedItem | null | undefined, vegaType?: string) => void
 
 /** The listeners the handler always has: they keep the hovered item and the pressed one up to date. */
 const ALWAYS = ['click', 'mousedown', 'pointerdown', 'pointermove', 'pointerout', 'dragleave'] as const
@@ -61,12 +61,21 @@ export function createCanvasEvents(canvas: HTMLCanvasElement): CanvasEvents {
     return scene.resolve(point)
   }
 
+  /**
+   * The native event being handed over: whether a type of it has reached a handler yet, and the type it is handed over as last.
+   * vega hands each type over as a run of its own (`view.runAsync`): the first runs at once, the others are queued behind it and
+   * run once it is done, before the event goes on to the page (the microtasks of a listener run when it returns), so they see
+   * the event as the last type left it: `event.vegaType` is that type.
+   */
+  let handing: { reached: boolean; last: string } = { reached: false, last: '' }
   /** Hand `e` to the handlers of `type`, about the hovered item (or the touched one). */
   const fire = (type: string, e: Event, touch = false): void => {
     const list = handlers.get(type)
     if (!list) return
     const item = touch ? touched : hovered
-    for (const h of list.slice()) h.send(e, item)
+    const vegaType = handing.reached ? handing.last : type
+    handing.reached = true
+    for (const h of list.slice()) h.send(e, item, vegaType)
   }
   const fireAll = (types: readonly string[], e: Event): void => { for (const t of types) fire(t, e) }
 
@@ -122,10 +131,17 @@ export function createCanvasEvents(canvas: HTMLCanvasElement): CanvasEvents {
     DOMMouseScroll: (e) => fire('mousewheel', e),
   }
 
+  /** The type a native event is handed over as last (a move ends on its moves, a leave on its outs). */
+  const LAST: Record<string, string> = { pointermove: 'mousemove', dragover: 'dragover', pointerout: 'mouseout', DOMMouseScroll: 'mousewheel' }
   const listen = (type: string): void => {
     if (released || listening.has(type)) return
-    const f = native[type]
-    const listener = f ?? ((e: Event): void => fire(type, e))
+    const f = native[type] ?? ((e: Event): void => fire(type, e))
+    const last = LAST[type] ?? type
+    const listener = (e: Event): void => {
+      const outer = handing
+      handing = { reached: false, last }
+      try { f(e) } finally { handing = outer }
+    }
     listening.set(type, listener)
     canvas.addEventListener(type, listener)
   }
