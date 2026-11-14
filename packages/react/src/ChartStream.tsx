@@ -81,6 +81,15 @@ function useSizeBatch(width: number | undefined, height: number | undefined): { 
   }), [width, height])
 }
 
+/**
+ * The container the spec is sized to when the size props give both dimensions (`containerSize()` reads the props then, as in
+ * `<Chart>`): known when the stream is created, so its first flush already has it and the chart's report of the same size
+ * changes nothing. A measured container is only known after the mount, and is pushed then.
+ */
+function initialContainer(size: { width?: number; height?: number }): { width: number; height: number } | undefined {
+  return size.width != null && size.height != null ? { width: size.width, height: size.height } : undefined
+}
+
 function useSyncSize(
   push: (batch: StreamBatch) => boolean,
   size: { width?: number; height?: number },
@@ -110,11 +119,13 @@ const sameValues = (a: Record<string, unknown>, b: Record<string, unknown>): boo
 function useStreamInput(
   stream: unknown,
   push: (batch: StreamBatch) => boolean,
+  /** The container size the stream was created with (see `initialContainer`): it is not pushed again. */
+  initialContainerSize?: { width: number; height: number },
 ): (input: ChartStreamInput) => void {
   const latest = React.useRef<ChartStreamInput | null>(null)
   type Size = { width: number; height: number } | undefined
   const sent = React.useRef<{ stream: unknown; domainRaw: Record<string, unknown[]>; signals: Record<string, unknown>; containerSize?: Size; measuredSize?: Size }>(
-    { stream, domainRaw: {}, signals: {} },
+    { stream, domainRaw: {}, signals: {}, containerSize: initialContainerSize },
   )
   const sameSize = (a: Size, b: Size): boolean => a === b || (a != null && b != null && a.width === b.width && a.height === b.height)
   const pushRef = React.useRef(push)
@@ -142,7 +153,7 @@ function useStreamInput(
     if (sent.current.stream === stream) return
     // The stream was rebuilt (spec content changed): it starts from the spec
     // alone, so re-apply the current view/signals.
-    sent.current = { stream, domainRaw: {}, signals: {} }
+    sent.current = { stream, domainRaw: {}, signals: {}, containerSize: initialContainerSize }
     if (latest.current) send(latest.current, true)
   }, [stream, send])
   return React.useCallback((input: ChartStreamInput): void => {
@@ -217,6 +228,7 @@ export const ChartStream = React.forwardRef<ChartStreamHandle, ChartStreamProps>
       initial: {
         ...(streamOptions?.initial ?? {}),
         ...size,
+        ...(initialContainer(size) ? { containerSize: initialContainer(size) } : {}),
         ...(stableLimits ? { limits: stableLimits } : {}),
         ...(textMetrics ? { textMetrics } : {}),
         ...(urlPolicy ? { urlPolicy } : {}),
@@ -226,7 +238,7 @@ export const ChartStream = React.forwardRef<ChartStreamHandle, ChartStreamProps>
     })
     useSyncSize(stream.push, size)
     useStreamConfig(stream.push, stableLimits, textMetrics, stream.stream)
-    const onStreamInput = useStreamInput(stream.stream, stream.push)
+    const onStreamInput = useStreamInput(stream.stream, stream.push, initialContainer(size))
     const { push, flush, pending, pulse, stats, stream: coreStream } = stream
     React.useImperativeHandle(ref, () => ({
       push,
@@ -271,6 +283,7 @@ export const ChartWorkerStream = React.forwardRef<ChartStreamHandle, ChartWorker
       initial: {
         ...(streamOptions?.initial ?? {}),
         ...size,
+        ...(initialContainer(size) ? { containerSize: initialContainer(size) } : {}),
         ...(stableLimits ? { limits: stableLimits } : {}),
         ...(textMetrics ? { textMetrics } : {}),
         ...(urlPolicy ? { urlPolicy } : {}),
@@ -280,7 +293,7 @@ export const ChartWorkerStream = React.forwardRef<ChartStreamHandle, ChartWorker
     })
     useSyncSize(stream.push, size)
     useStreamConfig<WorkerTextMetrics>(stream.push, stableLimits, textMetrics, stream.generation)
-    const onStreamInput = useStreamInput(stream.generation, stream.push)
+    const onStreamInput = useStreamInput(stream.generation, stream.push, initialContainer(size))
     // The handle's `scene()` must read the latest scene without being rebuilt per frame.
     const sceneRef = React.useRef(stream.scene)
     sceneRef.current = stream.scene
