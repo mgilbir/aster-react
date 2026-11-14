@@ -156,6 +156,7 @@ function gen(r: Rng, depth: number): string {
     () => `${r.pick(['upper', 'lower', 'trim', 'length'])}(${str()})`,
     () => `substring(${str()}, ${r.int(4)}${r.chance(0.5) ? `, ${r.int(6)}` : ''})`,
     () => `pad(${str()}, ${r.int(12)}, ${q(r.pick(['*', ' ', '0']))}, ${q(r.pick(['left', 'right', 'center']))})`,
+    () => `pad(${r.pick(['datum.s', 'datum.a', 'datum.n', 'ss'])}, ${r.pick(['0', '3', '7.5', '12', 'datum.z', '"9"'])}, ${r.pick(['5', '0', 'null', '""', '"ab"', '[1]', 'true', 'datum.u'])}${r.chance(0.5) ? `, ${r.pick(['"left"', '"center"', 'null'])}` : ''})`,
     () => `truncate(${str()}, ${r.int(8)}, ${q(r.pick(['left', 'right', 'center']))})`,
     () => `replace(${str()}, ${q(r.pick(['a', 'l', ' ']))}, ${q(r.pick(['', 'Z']))})`,
     () => `indexof(${str()}, ${q(r.pick(['a', 'b', '']))})`,

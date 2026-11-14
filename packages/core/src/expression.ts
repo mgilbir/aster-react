@@ -208,12 +208,13 @@ function copies(text: string, count: number): string {
   return count >= 1 ? text.repeat(count) : ''
 }
 function pad(value: unknown, count: unknown, padchar?: unknown, align?: unknown): string {
-  const fill = (padchar || ' ') as string
+  // (the pad character is any value, made text as the value is; a falsy one is a space)
+  const fill = ((padchar || ' ') as string) + ''
   const str = (value as string) + ''
   const n = (count as number) - str.length
   if (!(n > 0)) return str
   // Deviation (safety): the padded string is bounded by the limits BEFORE it is built.
-  meterBytes(Math.floor(n) * String(fill).length + str.length, 'pad')
+  meterBytes(Math.floor(n) * fill.length + str.length, 'pad')
   if (align === 'left') return copies(fill, n) + str
   if (align === 'center') return copies(fill, ~~(n / 2)) + str + copies(fill, Math.ceil(n / 2))
   return str + copies(fill, n)
