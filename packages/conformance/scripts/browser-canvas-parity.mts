@@ -211,6 +211,8 @@ import '@aster-charts/core/geo'
 import '@aster-charts/core/transforms'
 
 function pixels(canvas) {
+  // (a view of no width or height is a canvas with no pixels: getImageData refuses it; the sizes are still compared)
+  if (canvas.width === 0 || canvas.height === 0) return { data: new Uint8ClampedArray(0), w: canvas.width, h: canvas.height }
   const ctx = canvas.getContext('2d')
   const { data } = ctx.getImageData(0, 0, canvas.width, canvas.height)
   return { data, w: canvas.width, h: canvas.height }
@@ -221,6 +223,7 @@ function pixels(canvas) {
 function diff(a, b) {
   if (a.w !== b.w || a.h !== b.h) return { error: 'size ' + a.w + 'x' + a.h + ' != ' + b.w + 'x' + b.h }
   const count = a.w * a.h
+  if (count === 0) return { ratio: 0, mean: 0 }
   let bad = 0, sum = 0
   for (let i = 0; i < count * 4; i += 4) {
     const d = Math.abs(a.data[i] - b.data[i]) + Math.abs(a.data[i+1] - b.data[i+1]) + Math.abs(a.data[i+2] - b.data[i+2]) + Math.abs(a.data[i+3] - b.data[i+3])
