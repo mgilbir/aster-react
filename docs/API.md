@@ -774,8 +774,8 @@ unknown dataset, a non-integer or out-of-range index or a changed row count make
 
 **Ref.** The ref (`ChartHandle`) exposes `getScene()`, `getSvg()` (serializes the current scene), `getPng(options?)` (see
 [PNG export](#png-export)), `getChartInfo()`, `getView()`, `setView()`, `resetView()`, `setSignal(name, value)` and `getSignals()`. `setSignal` runs the spec's
-dependent signal updates when the SVG event loop is bound; on canvas or with `interactive={false}` it applies the value
-as a signal override. Listeners (`signalListeners`, `onSignal`) are notified either way.
+dependent signal updates when the event loop is bound (SVG or canvas); with `interactive={false}` (or on `<SvgChart>`
+without `interaction`) it applies the value as a signal override. Listeners (`signalListeners`, `onSignal`) are notified either way.
 
 `denseMarks` (SVG only) batches dense symbol marks into chunked `<path>` elements
 instead of one element per datum. Positions are baked into `d`, so the pixels match; tooltips,

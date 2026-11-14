@@ -92,7 +92,10 @@ Each item is something the code or the gates show today; none is a plan that has
   canvas (Node) the words are boxes of their measured width, a cloud no browser draws.
 - **Known interaction limits.** A zoomed stream-fed chart keeps the last unzoomed base extent until the view is
   reset; pan/zoom picks the first continuous scale per orientation in the root scope only
-  ([INTERACTION.md](INTERACTION.md)).
+  ([INTERACTION.md](INTERACTION.md)). Aster's two renderers pick with one hit index: where vega's canvas pick answers
+  otherwise than its SVG renderer (309 of the 87,778 answers of the signals gate's pointer phase, 0.35%: a rotated path, a
+  trail or a group whose box vega's canvas tests first, a rect of opacity 0, an area's edge), Aster's canvas gives the index's
+  answer, which is the SVG's; the gate counts those answers under a ceiling that can only be lowered (`--max-canvas-as-svg`).
 - **Probes.** `packages/conformance/probes` holds two probes; both pass today and can be promoted into `corpus/`.
 - **Streaming transport.** The host owns the network and decides when to flush.
 - **Transitions on canvas.** `transition` animates the SVG renderer only; the canvas renderer and batched dense marks

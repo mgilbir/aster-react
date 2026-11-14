@@ -326,13 +326,13 @@ sequenceDiagram
   else update
     Chart->>DOM: patchSceneDom (changed items only), or a canvas repaint or append paint
   end
-  Chart->>EvLoop: bindSceneSignals(svg, scene, signals, hooks, {pick, owner, data})
+  Chart->>EvLoop: bindSceneSignals(svg or canvas, scene, signals, hooks, {pick, owner, data, events})
   DOM-->>EvLoop: native event
   EvLoop-->>Chart: onSignal and onData (kept in external stores read with useSyncExternalStore)
   Chart->>Session: re-evaluate with the new signals and store rows
 ```
 
-*The event loop is bound for the SVG renderer only, when the chart is `interactive` and has an interaction capability (always for `<Chart>`, only with the `interaction` prop for `<SvgChart>`).*
+*The event loop is bound when the chart is `interactive` and has an interaction capability (always for `<Chart>`, only with the `interaction` prop for `<SvgChart>`), on either renderer. On the canvas the canvas capability hands it `createCanvasEvents(canvas)` (`@aster-charts/core/canvas`), vega's canvas handler: which item an event is about (the item the last pointermove picked), the out / over of an item change, a click only on the item pressed. It lives as long as the canvas, so the hovered item outlives a re-render; `<SvgChart>` never bundles it.*
 
 **Making drift hard.** A second component that mostly copies the first is where a prop gets handled in one and forgotten in
 the other. Six mechanisms, each with a check that fails when the property it protects is broken:

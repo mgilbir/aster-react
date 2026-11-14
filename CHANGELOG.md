@@ -53,10 +53,30 @@ and Fixed, per package. Everything built before the first release is in [Pre-rel
   view: the scales, the grid and the root group's box are laid out on it and the axes placed as on a 0-wide view, in an svg of
   `max(0, size)`; Aster clamped the view to 0 and drew a padding-sized svg without the axes (corpus entry
   `autosize-none-padding-unsized`, promoted from the probes).
+- On the SVG, a `pointerout` / `mouseout` / `dragleave` is about the item the pointer leaves, as vega's (the element it is
+  dispatched to): it was about the item under its new point, so `@bars:mouseout` did not fire when the pointer left a bar for
+  empty space or left the chart. `event.vegaType` is the type the stream listens to, as in vega.
+
+#### Added
+
+- `createCanvasEvents(canvas)` (`@aster-charts/core/canvas`): the canvas renderer's events for the signal event loop
+  (`bindSceneSignals(canvas, scene, signals, hooks, { pick, events })`), resolved as vega's canvas handler resolves them: an
+  event is about the item the last `pointermove` picked, a move that changes item is also the out and over of the two, every
+  `pointermove` is also a `mousemove`, a click counts only on the item pressed, a touch is about the item it started on. The
+  hovered item outlives a re-bind (a new scene's item at the same place stands for it; one gone from the scene is not left).
+  `bindSceneSignals` takes any rendered element (the svg or the canvas).
 
 ### `@aster-charts/react`
 
 #### Fixed
+
+- `<Chart renderer="canvas">` binds the spec's event loop, as vega's canvas renderer does: `signal.on` streams of every form,
+  `event.item` / `item()` / `group()`, Vega-Lite selections (point, interval, nearest, bound scales, legend bindings, bound
+  inputs) and `setSignal` with its dependent updates, which were SVG-only (a chart-bench survival chart, whose tooltip reads a
+  `pointermove` signal, showed no tooltip on canvas). The pointer of the tooltip, the cursor, a click and pan / zoom is read in
+  the canvas's own box (it was the chart container's, a border or padding on the canvas away). At a device pixel ratio of 1
+  the canvas has no CSS size, as vega's: a host's CSS sizes it as an image (`max-width` with `height: auto` keeps its
+  proportions) and the pointer maps by that box.
 
 - A tooltip shows the item vega shows: the topmost item that takes the pointer. A tooltip encoded on a mark without `from` (a
   transparent hover target, the usual way to give a Vega chart's empty plot a tooltip) never showed; a group item's tooltip

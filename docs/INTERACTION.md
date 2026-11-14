@@ -128,8 +128,8 @@ spec's interval brush listen to the same drag.
 What works, and how it differs from Vega, precisely:
 
 - The interaction needs the signal event loop: `<Chart>`, or `<SvgChart interaction={interaction}>`. `nearest` also
-  needs `import '@aster-charts/core/transforms'` (its voronoi cells). `renderer="canvas"` and `interactive={false}` bind no event loop (see [Signals](#signals)), so no spec selection
-  reacts there. On `<ChartStream>` / `<ChartWorkerStream>` the edited store is not an input of the stream's
+  needs `import '@aster-charts/core/transforms'` (its voronoi cells). It works on both renderers: `renderer="canvas"` binds the
+  same event loop (see [Signals](#signals)). `interactive={false}` binds none, so no spec selection reacts there. On `<ChartStream>` / `<ChartWorkerStream>` the edited store is not an input of the stream's
   evaluation (only signals and the view are), so a spec selection does not update the scene there.
 - The state is the one Vega computes for the same input; `pnpm conformance:selections` drives the same native
   mouse, wheel and form-control input through vega-lite + Vega and through `@aster-charts/vl` + `<Chart>` and compares every
@@ -264,11 +264,24 @@ export function Signals(): React.ReactElement {
   the prop changes. `ChartHandle.getSignals()` returns the current store.
 - A signal with a `bind` (`range`, `select`, `checkbox`, `radio`, `color`, `number` or text) renders a form control
   (a `data-aster-binds` element) after the chart and writes through the same path.
-- `ChartHandle.setSignal(name, value)` is portable. With the SVG event loop bound it runs the spec's dependent signal
-  updates, as an event would. On canvas, or with `interactive={false}`, there is no event loop, so the value is applied
-  as a signal override and the listeners are notified.
-- The spec's DOM event streams are bound on the SVG renderer only (`renderer="svg"`, `interactive` not `false`); the
-  canvas renderer does not bind them. Use props, `setSignal`, `tooltip` and the selection props there.
+- `ChartHandle.setSignal(name, value)` is portable. With the event loop bound (SVG or canvas) it runs the spec's dependent
+  signal updates, as an event would. With `interactive={false}`, or on `<SvgChart>` without `interaction`, there is no event
+  loop, so the value is applied as a signal override and the listeners are notified.
+- The spec's DOM event streams are bound on both renderers (`interactive` not `false`). Which item an event is about is the
+  renderer's, as in vega-scenegraph, and both resolve it through the scene hit index (`pick`):
+  - SVG: an event is about the item under its point (the element the browser dispatched it to), except a `pointerout` /
+    `mouseout` / `dragleave`, which is about the item the pointer leaves (under its last position over the svg).
+  - Canvas (vega's canvas handler): there is no element per item, so an event is about the item the last `pointermove`
+    picked, whatever its own position (a click, a wheel, a mouseup, a key). A `pointermove` that finds another item is also
+    the `pointerout` and `mouseout` of the item it leaves (not of one that has left the scene) and the `pointerover` and
+    `mouseover` of the one it enters; every `pointermove` is also a `mousemove` (a native mousemove is one more: a
+    `mousemove` stream sees each mouse move twice, as on vega's canvas); leaving the canvas is the out of the hovered item.
+    A `click` counts only on the item a button went down on. A touch is about the item its `touchstart` picked. Nothing is
+    about an item: `event.item` is `null` (vega's canvas), where the SVG's is `undefined`.
+  The hovered item outlives the re-render a signal change makes: the new scene's item at the same place (the same mark, the
+  same row, else the same position with the same values) stands for it; an item no longer in the scene is not left.
+  `pnpm conformance:signals`, `conformance:selections` and `conformance:intersect` drive every case on both renderers against
+  real vega's svg and canvas renderers.
 - `denseMarks: 'auto'` stays off for a spec with `signal.on` streams, as a conservative default: the event loop is given
   the scene hit index (`pick`), which resolves `event.item` and its datum from the scene, not from per-item DOM nodes, and
   `denseMarks={true}` batches whatever the spec binds. Like vega's view, the chart calls `preventDefault()` on the events of its own surface that a stream listens to, except those
