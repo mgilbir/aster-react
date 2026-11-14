@@ -2,27 +2,34 @@
  * Real-browser signal-event parity gate.
  *
  * The same specs are mounted twice in headless Chromium, each in its own page:
- * once in REAL vega (a `View` with the svg renderer) and once in @aster-charts/core
- * (`renderSceneToDomElement` + `bindSceneSignals`). The same native input
- * (Playwright mouse / wheel / keyboard / touch events, real timing) is driven
- * through both, and the resulting signal values -- and whether an error was
+ * once in REAL vega (a `View`) and once in @aster-charts/core, on each renderer:
+ * vega's svg renderer against `renderSceneToDomElement` + `bindSceneSignals`, and
+ * vega's canvas renderer against `renderSceneToCanvas` + `bindSceneSignals` given the
+ * canvas's events (`createCanvasEvents`, as `<Chart renderer="canvas">` binds it). The
+ * same native input (Playwright mouse / wheel / keyboard / touch events, real timing)
+ * is driven through both, and the resulting signal values -- and whether an error was
  * logged -- must agree. A case that cannot differ (both sides unchanged) would
  * prove nothing, so every case also names the signals that MUST have moved on
- * the vega side (`expectMoved`): a vacuous case fails the run.
+ * the vega side (`expectMoved`): a vacuous case fails the run. The canvas renderer
+ * hands events over differently (a pointermove is also a mousemove, and the pointerout /
+ * pointerover of the items it leaves and enters; a click counts on the item the button
+ * went down on), which the cases see.
  *
  * Animations (Vega-Lite 6 `time` channel, a `timer` event stream and a selection store `modify` writes) run the
  * same way but on a CONTROLLED CLOCK: Playwright's fake clock (Date, performance, timeouts, intervals and animation
  * frames) is installed in both pages, paused at the same instant, and stepped by the same amounts; after each step the
  * rendered frame (canonicalised SVG) and the animation's signals must agree with real vega. Because both pages run the
  * same virtual time, a tick that lands a frame early or late on one side shows up as a different `anim_clock` and
- * a different frame; a case whose vega frames never change would prove nothing, so it fails as vacuous.
+ * a different frame; a case whose vega frames never change would prove nothing, so it fails as vacuous. On the canvas
+ * renderer the frame is the canvas's pixels (the canvas gate's tolerance, canvas-pixels.mts).
  *
  * Pointer phase (browser-signals-pick.mts): which item a pointer position resolves to -- `event.item` and the item vega's tooltip
  * handler is given -- in real vega (SVG renderer: the browser's hit test; canvas renderer: vega's pick) and in Aster (its event
- * loop given the scene hit index's `pick`, as `<Chart>` gives it, and the hit index's `tooltip`, which `<Chart>` shows), over
- * generated scenes of overlapping marks of every type and fixed scenes of the items that have no data row of their own.
+ * loop given the scene hit index's `pick`, as `<Chart>` gives it, and the hit index's `tooltip`, which `<Chart>` shows; and its
+ * canvas, whose loop is given the canvas's events), over generated scenes of overlapping marks of every type and fixed scenes
+ * of the items that have no data row of their own.
  *
- * Run: pnpm conformance:signals [--filter=substr] [--min-cases=N] [--pick-only] [--pick-scenes=N]
+ * Run: pnpm conformance:signals [--filter=substr] [--min-cases=N] [--pick-only] [--pick-scenes=N] [--renderer=svg|canvas]
  */
 import { writeFileSync, rmSync, mkdirSync } from 'node:fs'
 import { join, dirname } from 'node:path'
@@ -32,8 +39,9 @@ import { compile as compileVL } from '../../vl/src/index.ts'
 import { canonicalizeSvg, diffCanonical } from '../src/normalize.ts'
 import { cli } from '../../../scripts/lib/cli.mjs'
 import { PICK_ENTRY, pickScenes, runPickPhase } from './browser-signals-pick.mts'
+import { READ_PIXELS, hasInk, pixelDiff, type Pixels } from './canvas-pixels.mts'
 
-cli({ url: import.meta.url, flags: { filter: 'eq', 'min-cases': 'eq', 'pick-only': 'bool', 'pick-scenes': 'eq' } })
+cli({ url: import.meta.url, flags: { filter: 'eq', 'min-cases': 'eq', 'pick-only': 'bool', 'pick-scenes': 'eq', renderer: 'eq', 'max-canvas-as-svg': 'eq' } })
 
 const THIS_DIR = dirname(fileURLToPath(import.meta.url))
 const CONF_DIR = dirname(THIS_DIR)
@@ -45,6 +53,14 @@ const MIN_CASES = Number(arg('min-cases', '0'))
 const PICK_ONLY = argv.includes('--pick-only')
 /** Generated scenes of the pointer phase (each 150 points, through three mounts). */
 const PICK_SCENES = Number(arg('pick-scenes', '120'))
+/**
+ * Ceiling on the pointer answers of Aster's canvas that are vega's SVG renderer's where vega's canvas renderer answers
+ * otherwise (Aster's renderers share one hit index): a ratchet, like sweep-signals' `--max-retained`.
+ */
+const MAX_CANVAS_AS_SVG = Number(arg('max-canvas-as-svg', '1e9'))
+/** Every case runs on both renderers; `--renderer` keeps one (debugging). */
+type Renderer = 'svg' | 'canvas'
+const RENDERERS: Renderer[] = arg('renderer', '') ? [arg('renderer', '') as Renderer] : ['svg', 'canvas']
 
 // ---- cases ------------------------------------------------------------------------
 
@@ -384,6 +400,60 @@ const CASES: Case[] = [
     expectMoved: ['tap'],
   },
 
+  // --- how a renderer hands events over: vega's canvas renderer has no element per item, its handler says which item an event is
+  // about (the one the last move picked), synthesizes the out / over of the items a move leaves and enters, makes every pointermove
+  // a mousemove too, and counts a click only on the item the button went down on ---
+  {
+    name: 'renderer-click-pressed-on-one-item-released-on-another',
+    spec: chart([sig('clicks', [{ events: 'click', update: 'clicks + 1' }]), sig('downs', [{ events: 'mousedown', update: 'downs + 1' }])]),
+    steps: [...moves(P.barA), { t: 'down' }, ...moves([95, 150], P.barB), { t: 'up' }, { t: 'click', x: P.barC[0], y: P.barC[1] }],
+    expectMoved: ['clicks', 'downs'],
+  },
+  {
+    name: 'renderer-over-and-out-of-every-item-change',
+    spec: chart([
+      sig('overs', [{ events: 'mouseover', update: 'overs + 1' }]), sig('outs', [{ events: 'mouseout', update: 'outs + 1' }]),
+      sig('pover', [{ events: 'pointerover', update: 'pover + 1' }]), sig('pout', [{ events: 'pointerout', update: 'pout + 1' }]),
+      sig('last', [{ events: 'mouseover', update: 'item().mark ? item().mark.name + ":" + datum.k : "none"' }], 'init'),
+    ]),
+    steps: moves([330, 100], P.empty, P.barA, [60, 160], P.empty, P.dotA, P.labelA, [330, 100]),
+    expectMoved: ['overs', 'outs', 'pover', 'pout', 'last'],
+  },
+  {
+    name: 'renderer-wheel-and-dblclick-item',
+    spec: chart([
+      sig('w', [{ events: 'wheel', update: 'item().mark ? item().mark.name + ":" + datum.k : "none"' }], 'init'),
+      sig('d', [{ events: 'dblclick', update: 'item().mark ? item().mark.name + ":" + datum.k : "none"' }], 'init'),
+    ]),
+    steps: [{ t: 'wheel', x: P.barB[0], y: P.barB[1], dy: 10 }, { t: 'dblclick', x: P.dotA[0], y: P.dotA[1] }],
+    expectMoved: ['w', 'd'],
+  },
+  {
+    name: 'renderer-leaving-the-view-is-the-out-of-the-hovered-item',
+    spec: chart([sig('left', [{ events: '@bars:mouseout', update: 'datum.k' }], 'none'), sig('after', [{ events: 'mousemove', update: 'item().mark ? item().mark.name : "none"' }], 'init')]),
+    steps: moves(P.barC, [400, 150]),
+    expectMoved: ['left', 'after'],
+  },
+  {
+    name: 'renderer-event-type-and-no-item',
+    spec: chart([
+      sig('types', [{ events: 'mousemove', update: 'types + event.type + "/" + event.vegaType + ";"' }], ''),
+      sig('none', [{ events: 'pointermove', update: 'event.item === null ? "null" : isDefined(event.item) ? "item" : "undefined"' }], 'init'),
+    ]),
+    steps: moves(P.empty, [96, 101]),
+    expectMoved: ['types', 'none'],
+  },
+  {
+    name: 'renderer-touch-item',
+    spec: chart([
+      sig('ts', [{ events: 'touchstart', update: 'item().mark ? item().mark.name + ":" + datum.k : "none"' }], 'init'),
+      sig('te', [{ events: 'touchend', update: 'item().mark ? item().mark.name + ":" + datum.k : "none"' }], 'init'),
+      sig('n', [{ events: 'touchstart', update: 'n + 1' }]),
+    ]),
+    steps: [{ t: 'tap', x: P.barA[0], y: P.barA[1] }, { t: 'tap', x: P.dotB[0], y: P.dotB[1] }],
+    expectMoved: ['ts', 'te', 'n'],
+  },
+
   // --- group scopes (a group mark's own signals: one copy per group item) ---
   {
     name: 'group-scope-click-counts-per-scope',
@@ -570,6 +640,7 @@ const entrySrc = `
 import * as vega from 'vega'
 import { compileChart, evaluateChart, renderSceneToSvg } from '@aster-charts/core'
 import { renderSceneToDomElement } from '@aster-charts/core/dom'
+import { renderSceneToCanvas, createCanvasEvents } from '@aster-charts/core/canvas'
 import { buildHitIndex } from '@aster-charts/core/hit'
 import { bindSceneSignals } from '@aster-charts/core/signals'
 
@@ -598,8 +669,21 @@ let read = () => ({})
 let readScoped = () => []
 const normv = (v) => JSON.stringify(v, (k, x) => (typeof x === 'number' && !Number.isFinite(x) ? 'NaN/Inf:' + String(x) : x === undefined ? '__undefined__' : x && typeof x === 'object' && !Array.isArray(x) && 'mark' in x && ('x' in x || 'datum' in x) ? '[item]' : x))
 
-window.__mountVega = async (spec) => {
-  const view = new vega.View(vega.parse(spec), { renderer: 'svg', container: holder, logger, hover: false })
+// Aster's canvas, painted and sized as <Chart renderer="canvas"> paints it (the backing store at the device pixel ratio)
+const paintCanvas = (canvas, scene) => {
+  const dpr = window.devicePixelRatio > 0 ? window.devicePixelRatio : 1
+  canvas.width = Math.max(1, Math.round(scene.width * dpr))
+  canvas.height = Math.max(1, Math.round(scene.height * dpr))
+  canvas.style.width = scene.width + 'px'
+  canvas.style.height = scene.height + 'px'
+  const ctx = canvas.getContext('2d')
+  ctx.clearRect(0, 0, canvas.width, canvas.height)
+  renderSceneToCanvas(scene, ctx, { dpr })
+}
+window.__pixels = () => (${READ_PIXELS})(holder.querySelector('canvas'))
+
+window.__mountVega = async (spec, renderer) => {
+  const view = new vega.View(vega.parse(spec), { renderer, container: holder, logger, hover: false })
   await view.runAsync()
   names = (spec.signals || []).map((s) => s.name)
   read = () => Object.fromEntries(names.map((n) => [n, view.signal(n)]))
@@ -613,13 +697,20 @@ window.__mountVega = async (spec) => {
   window.__settle = async () => { await view.runAsync() }
 }
 
-window.__mountAster = async (spec) => {
+window.__mountAster = async (spec, renderer) => {
   const scene = evaluateChart(compileChart(spec))
-  const svg = renderSceneToDomElement(scene)
-  holder.appendChild(svg)
   const store = {}
   const hit = buildHitIndex(scene)
-  bindSceneSignals(svg, scene, store, { logger }, { pick: (x, y) => hit.pick(x, y) })
+  if (renderer === 'canvas') {
+    const canvas = document.createElement('canvas')
+    paintCanvas(canvas, scene)
+    holder.appendChild(canvas)
+    bindSceneSignals(canvas, scene, store, { logger }, { pick: (x, y) => hit.pick(x, y), events: createCanvasEvents(canvas) })
+  } else {
+    const svg = renderSceneToDomElement(scene)
+    holder.appendChild(svg)
+    bindSceneSignals(svg, scene, store, { logger }, { pick: (x, y) => hit.pick(x, y) })
+  }
   names = (spec.signals || []).map((s) => s.name)
   read = () => Object.fromEntries(names.map((n) => [n, Object.hasOwn(store, n) ? store[n] : scene.signalParams[n]]))
   readScoped = () => {
@@ -640,42 +731,47 @@ window.__mountAster = async (spec) => {
 }
 
 // ---- animations: both engines driven by the page's (fake) clock; each exposes the current frame as SVG text ----
-window.__mountVegaAnim = async (spec) => {
-  const view = new vega.View(vega.parse(spec), { renderer: 'none', logger, hover: false })
+window.__mountVegaAnim = async (spec, renderer) => {
+  const view = new vega.View(vega.parse(spec), renderer === 'canvas' ? { renderer, container: holder, logger, hover: false } : { renderer: 'none', logger, hover: false })
   await view.runAsync()
   names = (spec.signals || []).map((s) => s.name)
   read = () => Object.fromEntries(names.map((n) => [n, view.signal(n)]))
   window.__settle = () => view.runAsync()
-  window.__frame = async () => { await view.runAsync(); return view.toSVG() }
+  window.__frame = async () => { await view.runAsync(); return renderer === 'canvas' ? window.__pixels() : view.toSVG() }
   window.__stop = () => { view.finalize() }
 }
 
-window.__mountAsterAnim = async (spec) => {
+window.__mountAsterAnim = async (spec, renderer) => {
   const compiled = compileChart(spec)
   let signals = {}
   let data = {}
   let binding = null
   let scene = null
   let scheduled = false
+  // the canvas, and its events, stay for the life of the chart (a host repaints one canvas); an svg is made for every frame
+  const canvas = renderer === 'canvas' ? document.createElement('canvas') : null
+  const events = canvas ? createCanvasEvents(canvas) : null
+  if (canvas) holder.replaceChildren(canvas)
   const draw = () => {
     scheduled = false
     scene = evaluateChart(compiled, { signals, data })
-    const svg = renderSceneToDomElement(scene)
-    holder.replaceChildren(svg)
+    let el = canvas
+    if (canvas) paintCanvas(canvas, scene)
+    else { el = renderSceneToDomElement(scene); holder.replaceChildren(el) }
     if (binding) binding.detach()
-    binding = bindSceneSignals(svg, scene, { ...signals }, {
+    binding = bindSceneSignals(el, scene, { ...signals }, {
       onSignal: (_n, _v, all) => { signals = { ...all }; schedule() },
       onData: (name, rows) => { data = { ...data, [name]: rows }; schedule() },
       logger,
-    }, { data, owner: holder })
+    }, { data, owner: holder, ...(events ? { events } : {}) })
   }
   const schedule = () => { if (!scheduled) { scheduled = true; queueMicrotask(draw) } }
   draw()
   names = (spec.signals || []).map((s) => s.name)
   read = () => Object.fromEntries(names.map((n) => [n, Object.hasOwn(signals, n) ? signals[n] : scene.signalParams[n]]))
   window.__settle = async () => { for (let i = 0; i < 4; i++) await Promise.resolve() }
-  window.__frame = async () => { for (let i = 0; i < 4; i++) await Promise.resolve(); return renderSceneToSvg(scene) }
-  window.__stop = () => { if (binding) binding.release() }
+  window.__frame = async () => { for (let i = 0; i < 4; i++) await Promise.resolve(); return canvas ? window.__pixels() : renderSceneToSvg(scene) }
+  window.__stop = () => { if (binding) binding.release(); if (events) events.release() }
 }
 
 window.__read = () => {
@@ -720,7 +816,7 @@ const browser = await playwright.chromium.launch({ headless: true, args: ['--dis
 
 interface Observed { signals: Record<string, string>; scoped: string; errors: string[] }
 
-async function drive(engine: 'vega' | 'aster', c: Case): Promise<{ initial: Observed; final: Observed } | { error: string }> {
+async function drive(engine: 'vega' | 'aster', renderer: Renderer, c: Case): Promise<{ initial: Observed; final: Observed } | { error: string }> {
   const context = await browser.newContext({ viewport: { width: 900, height: 600 }, deviceScaleFactor: 1, hasTouch: true })
   const page = await context.newPage()
   const pageErrors: string[] = []
@@ -728,10 +824,10 @@ async function drive(engine: 'vega' | 'aster', c: Case): Promise<{ initial: Obse
   try {
     await page.goto(`file://${join(OUT_DIR, 'index.html')}`)
     await page.waitForFunction(() => '__mountVega' in window, null, { timeout: 30_000 })
-    await page.evaluate(async ([which, spec]) => {
-      const w = window as unknown as Record<string, (s: unknown) => Promise<void>>
-      await (which === 'vega' ? w.__mountVega! : w.__mountAster!)(spec)
-    }, [engine, c.spec] as const)
+    await page.evaluate(async ([which, spec, r]) => {
+      const w = window as unknown as Record<string, (s: unknown, r: string) => Promise<void>>
+      await (which === 'vega' ? w.__mountVega! : w.__mountAster!)(spec, r)
+    }, [engine, c.spec, renderer] as const)
     const read = (): Promise<Observed> => page.evaluate(() => (window as unknown as { __read: () => Observed }).__read())
     const settle = (): Promise<unknown> => page.evaluate(() => (window as unknown as { __settle: () => Promise<unknown> }).__settle())
     const initial = await read()
@@ -808,9 +904,10 @@ const ANIM_CASES: AnimCase[] = [
 
 const animCases = ANIM_CASES.filter((c) => !FILTER || c.name.includes(FILTER))
 
-interface Frame { t: number; svg: string; signals: Record<string, string>; errors: string[] }
+/** A frame: the rendered SVG text (svg renderer), or the canvas's pixels (canvas renderer). */
+interface Frame { t: number; svg: string | Pixels; signals: Record<string, string>; errors: string[] }
 
-async function driveAnim(engine: 'vega' | 'aster', vg: Record<string, unknown>, at: number[]): Promise<Frame[] | { error: string }> {
+async function driveAnim(engine: 'vega' | 'aster', renderer: Renderer, vg: Record<string, unknown>, at: number[]): Promise<Frame[] | { error: string }> {
   const context = await browser.newContext({ viewport: { width: 900, height: 600 }, deviceScaleFactor: 1 })
   const T0 = 1_700_000_000_000
   // the fake clock is installed before the page exists, then paused at the same instant for both engines
@@ -822,16 +919,16 @@ async function driveAnim(engine: 'vega' | 'aster', vg: Record<string, unknown>, 
     await page.goto(`file://${join(OUT_DIR, 'index.html')}`)
     await page.waitForFunction(() => '__mountVegaAnim' in window, null, { timeout: 30_000 })
     await page.clock.pauseAt(T0 + 5000)
-    await page.evaluate(async ([which, spec]) => {
-      const w = window as unknown as Record<string, (s: unknown) => Promise<void>>
-      await (which === 'vega' ? w.__mountVegaAnim! : w.__mountAsterAnim!)(spec)
-    }, [engine, vg] as const)
+    await page.evaluate(async ([which, spec, r]) => {
+      const w = window as unknown as Record<string, (s: unknown, r: string) => Promise<void>>
+      await (which === 'vega' ? w.__mountVegaAnim! : w.__mountAsterAnim!)(spec, r)
+    }, [engine, vg, renderer] as const)
     const frames: Frame[] = []
     let now = 0
     for (const t of at) {
       if (t > now) await page.clock.runFor(t - now)
       now = t
-      const svg = await page.evaluate(() => (window as unknown as { __frame: () => Promise<string> }).__frame())
+      const svg = await page.evaluate(() => (window as unknown as { __frame: () => Promise<string | Pixels> }).__frame())
       const obs = await page.evaluate(() => (window as unknown as { __read: () => Observed }).__read())
       frames.push({ t, svg, signals: obs.signals, errors: obs.errors })
     }
@@ -846,10 +943,12 @@ async function driveAnim(engine: 'vega' | 'aster', vg: Record<string, unknown>, 
 }
 
 let pass = 0
+let runs = 0
 const failures: string[] = []
 const t0 = Date.now()
-for (const c of PICK_ONLY ? [] : cases) {
-  const [v, a] = [await drive('vega', c), await drive('aster', c)]
+for (const c of PICK_ONLY ? [] : cases) for (const renderer of RENDERERS) {
+  runs++
+  const [v, a] = [await drive('vega', renderer, c), await drive('aster', renderer, c)]
   const problems: string[] = []
   if ('error' in v) problems.push(`vega side failed: ${v.error}`)
   else if ('error' in a) problems.push(`aster side failed: ${a.error}`)
@@ -872,13 +971,14 @@ for (const c of PICK_ONLY ? [] : cases) {
       problems.push(`unexpected error log: vega=${JSON.stringify(v.final.errors)} aster=${JSON.stringify(a.final.errors)}`)
     }
   }
-  if (process.env.SIG_PRINT && !('error' in v)) console.log('  vega', c.name, JSON.stringify(v.final.signals), v.final.scoped)
+  if (process.env.SIG_PRINT && !('error' in v)) console.log('  vega', renderer, c.name, JSON.stringify(v.final.signals), v.final.scoped)
   if (problems.length === 0) pass++
-  else failures.push(`${c.name}: ${problems.join('; ')}`)
+  else failures.push(`${c.name} [${renderer}]: ${problems.join('; ')}`)
 }
-for (const c of PICK_ONLY ? [] : animCases) {
+for (const c of PICK_ONLY ? [] : animCases) for (const renderer of RENDERERS) {
+  runs++
   const vg = compileVL(c.vl as never) as Record<string, unknown>
-  const [v, a] = [await driveAnim('vega', vg, c.at), await driveAnim('aster', vg, c.at)]
+  const [v, a] = [await driveAnim('vega', renderer, vg, c.at), await driveAnim('aster', renderer, vg, c.at)]
   const problems: string[] = []
   if ('error' in v) problems.push(`vega side failed: ${v.error}`)
   else if ('error' in a) problems.push(`aster side failed: ${a.error}`)
@@ -886,13 +986,19 @@ for (const c of PICK_ONLY ? [] : animCases) {
     const seen = new Set<string>()
     v.forEach((vf, i) => {
       const af = a[i]!
-      const diffs = diffCanonical(canonicalizeSvg(vf.svg), canonicalizeSvg(af.svg))
-      if (diffs.length) problems.push(`frame at ${vf.t} ms differs: ${String(diffs[0]).slice(0, 160)}`)
+      if (typeof vf.svg === 'string' || typeof af.svg === 'string') {
+        const diffs = diffCanonical(canonicalizeSvg(vf.svg as string), canonicalizeSvg(af.svg as string))
+        if (diffs.length) problems.push(`frame at ${vf.t} ms differs: ${String(diffs[0]).slice(0, 160)}`)
+        seen.add(JSON.stringify(canonicalizeSvg(vf.svg as string).records))
+      } else {
+        const d = pixelDiff(vf.svg, af.svg)
+        if (d) problems.push(`frame at ${vf.t} ms differs: ${d}`)
+        if (hasInk(vf.svg)) seen.add(vf.svg.b64)
+      }
       for (const name of Object.keys(vf.signals)) {
         if (vf.signals[name] !== af.signals[name]) problems.push(`signal ${name} at ${vf.t} ms: vega=${vf.signals[name]} aster=${af.signals[name]}`)
       }
       if (vf.errors.length || af.errors.length) problems.push(`error log at ${vf.t} ms: vega=${JSON.stringify(vf.errors)} aster=${JSON.stringify(af.errors)}`)
-      seen.add(JSON.stringify(canonicalizeSvg(vf.svg).records))
     })
     // a vacuous comparison proves nothing: the clock must have run and the picture must have changed on the vega side
     const last = v[v.length - 1]!
@@ -900,7 +1006,7 @@ for (const c of PICK_ONLY ? [] : animCases) {
     if (seen.size < 2 && !c.name.includes('first-frame-blank')) problems.push('VACUOUS: every vega frame is the same picture')
   }
   if (problems.length === 0) pass++
-  else failures.push(`${c.name}: ${problems.slice(0, 6).join('; ')}`)
+  else failures.push(`${c.name} [${renderer}]: ${problems.slice(0, 6).join('; ')}`)
 }
 // ---- the pointer phase ----
 const scenes = pickScenes(PICK_SCENES).filter((sc) => !FILTER || sc.name.includes(FILTER))
@@ -909,10 +1015,16 @@ const pick = await runPickPhase(browser, `file://${join(OUT_DIR, 'pick.html')}`,
 await browser.close()
 rmSync(OUT_DIR, { recursive: true, force: true })
 
-if (!PICK_ONLY) console.log(`\n[browser-signals] ${pass}/${cases.length + animCases.length} cases agree with real vega (${((Date.now() - t0) / 1000).toFixed(0)}s)`)
+if (!PICK_ONLY) console.log(`\n[browser-signals] ${pass}/${runs} runs agree with real vega (${cases.length + animCases.length} cases on ${RENDERERS.join(' and ')}) (${((Date.now() - t0) / 1000).toFixed(0)}s)`)
 for (const f of failures) console.log(`  FAIL ${f}`)
 console.log(`[browser-signals] pointer: ${pick.agreed}/${pick.points} points of ${pick.scenes} scenes agree with real vega on event.item and the tooltip (${pick.picked} with an item, ${pick.tips} with a tooltip; ${pick.ambiguous} answers where vega's svg and canvas renderers differ; ${pick.edge} answers on an edge, vega's a quarter pixel away) (${((Date.now() - tp) / 1000).toFixed(0)}s)`)
 for (const f of pick.failures) console.log(`  FAIL pointer ${f}`)
+console.log(`[browser-signals] pointer: ${pick.canvasAsSvg} answers of Aster's canvas are vega's svg renderer's where its canvas renderer differs (one hit index serves both), ceiling ${MAX_CANVAS_AS_SVG}`)
+for (const smp of pick.canvasAsSvgSamples) console.log(`  canvas-as-svg ${smp}`)
+if (pick.canvasAsSvg > MAX_CANVAS_AS_SVG) {
+  console.log(`[browser-signals] RATCHET: ${pick.canvasAsSvg} > --max-canvas-as-svg ${MAX_CANVAS_AS_SVG}`)
+  process.exit(1)
+}
 // an edge answer is vega's a quarter of a pixel away: a systematic offset would make many of them
 const MAX_EDGE = Math.ceil(pick.points / 2000)
 if (pick.edge > MAX_EDGE) {

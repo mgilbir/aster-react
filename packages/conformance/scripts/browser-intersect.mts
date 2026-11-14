@@ -5,7 +5,9 @@
  * One Vega spec draws every mark type with an item or two of each (symbols of several shapes, rects, rules, text with an angle,
  * line / area / trail, arcs, paths, images, and a group mark whose items are offset and hold marks of their own); in the same
  * Chromium page real vega and Aster's scene evaluate `intersect()` over a seeded set of boxes -- over the whole scene, by mark
- * name, by mark type, and from a group item's `mark` -- and must return the same items in the same order.
+ * name, by mark type, and from a group item's `mark` -- and must return the same items in the same order. It runs on each
+ * renderer: vega's view on its svg and its canvas renderer, and Aster's through the signal event loop bound to the svg and to
+ * the canvas (`createCanvasEvents`), as `<Chart>` binds it, the box written with `setSignal` and the hits computed by the loop.
  *
  * Run: pnpm --filter @aster-charts/conformance exec tsx scripts/browser-intersect.mts   (after `pnpm build`)
  */
@@ -91,15 +93,38 @@ const SCOPES: Array<{ markname?: string; marktype?: string }> = [
 const entry = `
 import * as vega from 'vega'
 import { compileChart, evaluateChart, compileExpr } from '@aster-charts/core'
-import { sceneIntersect } from '@aster-charts/core/signals'
+import { sceneIntersect, bindSceneSignals } from '@aster-charts/core/signals'
+import { renderSceneToDomElement } from '@aster-charts/core/dom'
+import { renderSceneToCanvas, createCanvasEvents } from '@aster-charts/core/canvas'
+import { buildHitIndex } from '@aster-charts/core/hit'
 import '@aster-charts/core/geo'
 import '@aster-charts/core/transforms'
 
-window.__run = async (spec, boxes, scopes) => {
+window.__run = async (spec, boxes, scopes, renderer) => {
   const errors = []
-  const view = new vega.View(vega.parse(structuredClone(spec)), { renderer: 'none', logger: { level() { return this }, error(...a) { errors.push(a.map(String).join(' ')); return this }, warn() { return this }, info() { return this }, debug() { return this } } })
+  const holder = document.createElement('div')
+  document.body.replaceChildren(holder)
+  const view = new vega.View(vega.parse(structuredClone(spec)), { renderer, container: holder, logger: { level() { return this }, error(...a) { errors.push(a.map(String).join(' ')); return this }, warn() { return this }, info() { return this }, debug() { return this } } })
   await view.runAsync()
   const scene = evaluateChart(compileChart(structuredClone(spec)), {})
+  // Aster's event loop on the same renderer: \`hits\` is a signal it computes when \`box\` is written (setSignal)
+  const mine = document.createElement('div')
+  document.body.appendChild(mine)
+  let el
+  let events
+  if (renderer === 'canvas') {
+    el = document.createElement('canvas')
+    el.width = scene.width; el.height = scene.height
+    renderSceneToCanvas(scene, el.getContext('2d'), { dpr: 1 })
+    events = createCanvasEvents(el)
+  } else {
+    el = renderSceneToDomElement(scene)
+  }
+  mine.appendChild(el)
+  const store = {}
+  const hit = buildHitIndex(scene)
+  const binding = bindSceneSignals(el, scene, store, { logger: { error: (...a) => errors.push('aster: ' + a.map(String).join(' ')), warn() {} } }, { pick: (x, y) => hit.pick(x, y), ...(events ? { events } : {}) })
+  // the expression as written, over the scene (no event loop): the function's own answer
   const runtime = { scale: () => undefined, data: () => undefined, intersect: (b, o, g) => sceneIntersect(scene, b, o, g), expr: (e) => compileExpr(e, runtime) }
   const expr = compileExpr("box ? intersect(box, markname ? {markname: markname} : (marktype ? {marktype: marktype} : null)) : []", runtime)
   // (a group item has no datum of its own at the root: it is named by its mark)
@@ -108,17 +133,24 @@ window.__run = async (spec, boxes, scopes) => {
   let nonEmpty = 0
   for (const sc of scopes) {
     view.signal('markname', sc.markname || '').signal('marktype', sc.marktype || '')
+    binding.setSignal('markname', sc.markname || '')
+    binding.setSignal('marktype', sc.marktype || '')
     for (const b of boxes) {
       errors.length = 0
       await view.signal('box', b).runAsync()
       const want = errors.length ? 'ERR ' + errors[0] : view.signal('hits').map((i) => idOf(i, true))
       let got
       try { got = expr({}, { box: b, markname: sc.markname || '', marktype: sc.marktype || '' }).map((i) => idOf(i, false)) } catch (e) { got = 'ERR ' + e.message }
+      binding.setSignal('box', b)
+      const viaLoop = errors.length ? 'ERR ' + errors[0] : (store.hits || []).map((i) => idOf(i, false))
       if (want.length && typeof want !== 'string') nonEmpty++
       if (JSON.stringify(want) !== JSON.stringify(got)) out.push({ scope: JSON.stringify(sc), box: JSON.stringify(b), want, got })
+      else if (JSON.stringify(want) !== JSON.stringify(viaLoop)) out.push({ scope: JSON.stringify(sc), box: JSON.stringify(b), want, got: { 'through the event loop': viaLoop } })
     }
   }
   view.finalize()
+  binding.release()
+  if (events) events.release()
   return { failures: out, nonEmpty }
 }
 `
@@ -138,14 +170,17 @@ page.on('pageerror', (e) => console.error('[page]', e.message.slice(0, 300)))
 await page.goto(`file://${join(OUT_DIR, 'index.html')}`)
 await page.waitForFunction(() => '__run' in window, null, { timeout: 30_000 })
 const t0 = Date.now()
-const r = await page.evaluate(([s, b, sc]) => (window as unknown as { __run: (...a: unknown[]) => Promise<{ failures: Array<Record<string, unknown>>; nonEmpty: number }> }).__run(s, b, sc), [spec, boxes, SCOPES] as const)
+let failed = false
+for (const renderer of ['svg', 'canvas'] as const) {
+  const r = await page.evaluate(([s, b, sc, rd]) => (window as unknown as { __run: (...a: unknown[]) => Promise<{ failures: Array<Record<string, unknown>>; nonEmpty: number }> }).__run(s, b, sc, rd), [spec, boxes, SCOPES, renderer] as const)
+  const total = boxes.length * SCOPES.length
+  console.log(`[browser-intersect] ${renderer}: ${total - r.failures.length}/${total} (box, scope) pairs agree with real vega, ${r.nonEmpty} of them non-empty (${((Date.now() - t0) / 1000).toFixed(0)}s)`)
+  for (const f of r.failures.slice(0, 12)) console.log(`  FAIL ${renderer} scope=${f.scope} box=${f.box}\n    vega  ${JSON.stringify(f.want)}\n    aster ${JSON.stringify(f.got)}`)
+  // a comparison of empty lists proves nothing: most scopes must have hits somewhere
+  const MIN_NONEMPTY = 300
+  if (r.nonEmpty < MIN_NONEMPTY) { console.log(`[browser-intersect] FLOOR: only ${r.nonEmpty} non-empty results < ${MIN_NONEMPTY} (${renderer})`); failed = true }
+  if (r.failures.length) failed = true
+}
 await browser.close()
 rmSync(OUT_DIR, { recursive: true, force: true })
-
-const total = boxes.length * SCOPES.length
-console.log(`[browser-intersect] ${total - r.failures.length}/${total} (box, scope) pairs agree with real vega, ${r.nonEmpty} of them non-empty (${((Date.now() - t0) / 1000).toFixed(0)}s)`)
-for (const f of r.failures.slice(0, 12)) console.log(`  FAIL scope=${f.scope} box=${f.box}\n    vega  ${JSON.stringify(f.want)}\n    aster ${JSON.stringify(f.got)}`)
-// a comparison of empty lists proves nothing: most scopes must have hits somewhere
-const MIN_NONEMPTY = 300
-if (r.nonEmpty < MIN_NONEMPTY) { console.log(`[browser-intersect] FLOOR: only ${r.nonEmpty} non-empty results < ${MIN_NONEMPTY}`); process.exit(1) }
-process.exit(r.failures.length ? 1 : 0)
+process.exit(failed ? 1 : 0)

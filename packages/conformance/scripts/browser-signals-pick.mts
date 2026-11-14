@@ -1,10 +1,11 @@
 /**
  * The pointer phase of the signal-event gate (`browser-signals.mts`): which item a pointer position resolves to.
  *
- * Every scene is mounted three times in one Chromium page: in real vega with its SVG renderer, in real vega with its canvas
- * renderer, and in Aster (`renderSceneToDomElement` + `bindSceneSignals`, given the scene hit index's `pick` as `<Chart>` gives
- * it). A pointer event is delivered at the same point of each, as the browser delivers it (to the element its own hit test,
- * `elementFromPoint`, finds there; to vega's canvas, whose handler picks), and three things are read:
+ * Every scene is mounted four times in one Chromium page: in real vega with its SVG renderer, in real vega with its canvas
+ * renderer, and in Aster on each (`renderSceneToDomElement` / `renderSceneToCanvas` + `bindSceneSignals`, given the scene hit
+ * index's `pick` as `<Chart>` gives it, and on the canvas the canvas's events). A pointer event is delivered at the same point
+ * of each, as the browser delivers it (to the element its own hit test, `elementFromPoint`, finds there; to a canvas, whose
+ * handler picks), and three things are read:
  *
  *   - vega's `event.item`, through a signal every scene declares (`item()` on `pointermove`: the mark, the item's datum id) --
  *     the SVG renderer resolves it with the browser's own hit test (`elementFromPoint`), the canvas renderer with vega's pick;
@@ -15,7 +16,9 @@
  *
  * Where vega's two renderers agree, Aster must agree with them. Where they do not (the browser tests an SVG text by its
  * glyphs, vega's canvas pick by the text's box...), vega has no single answer and Aster must give one of the two: those points
- * are counted and reported (a scene about what only vega's scenegraph knows, a group's bounds, takes the canvas renderer's
+ * are counted and reported. Aster's two renderers share one hit index, so its canvas gives the SVG renderer's answer where that
+ * is the one the index gives; those points are counted apart (`canvasAsSvg`) and capped by the caller, so the count can only
+ * fall (a scene about what only vega's scenegraph knows, a group's bounds, takes the canvas renderer's
  * answer there). A point within a quarter of a pixel of an edge, where vega's own answer changes, is decided by the
  * geometry its renderers approximate (Skia flattens a stroke's offset curves and arcs): Aster's answer there must be what vega
  * answers a quarter of a pixel away, and such points are counted and capped (`maxEdge`). The scenes are generated (seeded): overlapping marks of every type with
@@ -365,13 +368,14 @@ export const PICK_ENTRY = `
 import * as vega from 'vega'
 import { compileChart, evaluateChart } from '@aster-charts/core'
 import { renderSceneToDomElement } from '@aster-charts/core/dom'
+import { renderSceneToCanvas, createCanvasEvents } from '@aster-charts/core/canvas'
 import { buildHitIndex } from '@aster-charts/core/hit'
 import { bindSceneSignals } from '@aster-charts/core/signals'
 import '@aster-charts/core/geo'
 import '@aster-charts/core/transforms'
 
 const quiet = { level() { return this }, error() { return this }, warn() { return this }, info() { return this }, debug() { return this } }
-const holders = ['vs', 'vc', 'as'].map((id, i) => {
+const holders = ['vs', 'vc', 'as', 'ac'].map((id, i) => {
   const d = document.createElement('div')
   d.id = id
   d.style.cssText = 'position:absolute;top:10px;left:' + (10 + i * 960) + 'px'
@@ -383,7 +387,7 @@ const norm = (v) => (v === undefined || v === null ? null : typeof v === 'object
 const tips = [null, null]
 let state = null
 window.__mountPick = async (spec) => {
-  if (state) { state.views.forEach((v) => v.finalize()); state.binding.release(); holders.forEach((h) => h.replaceChildren()) }
+  if (state) { state.views.forEach((v) => v.finalize()); state.binding.release(); state.canvasBinding.release(); state.events.release(); holders.forEach((h) => h.replaceChildren()) }
   tips[0] = tips[1] = null
   const views = []
   for (const [i, renderer] of [[0, 'svg'], [1, 'canvas']]) {
@@ -400,7 +404,16 @@ window.__mountPick = async (spec) => {
   const store = {}
   const hit = buildHitIndex(scene)
   const binding = bindSceneSignals(svg, scene, store, { logger: quiet }, { pick: (x, y) => hit.pick(x, y) })
-  state = { views, binding, hit, store, canvas: holders[1].querySelector('canvas') }
+  // Aster's canvas, as <Chart renderer="canvas"> paints and binds it
+  const ac = document.createElement('canvas')
+  ac.width = Math.max(1, Math.round(scene.width)); ac.height = Math.max(1, Math.round(scene.height))
+  ac.style.width = scene.width + 'px'; ac.style.height = scene.height + 'px'
+  renderSceneToCanvas(scene, ac.getContext('2d'), { dpr: 1 })
+  holders[3].appendChild(ac)
+  const canvasStore = {}
+  const events = createCanvasEvents(ac)
+  const canvasBinding = bindSceneSignals(ac, scene, canvasStore, { logger: quiet }, { pick: (x, y) => hit.pick(x, y), events })
+  state = { views, binding, hit, store, canvas: holders[1].querySelector('canvas'), ac, canvasBinding, canvasStore, events }
 }
 // A pointermove at (x, y) of each mount, as the browser delivers it: to the element its own hit test finds there (vega's SVG
 // handler reads the item off that element; Aster's loop resolves it through the hit index), and to vega's canvas (whose
@@ -408,19 +421,22 @@ window.__mountPick = async (spec) => {
 // element before had made of it: hidden.
 const move = (target, cx, cy) => target.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, cancelable: true, composed: true, clientX: cx, clientY: cy, pointerType: 'mouse', isPrimary: true, view: window }))
 const readAt = async (x, y) => {
-  const [[sx, sy], [cx, cy], [ax, ay]] = origins
+  const [[sx, sy], [cx, cy], [ax, ay], [kx, ky]] = origins
   tips[0] = null
   const el = document.elementFromPoint(sx + x, sy + y)
   if (el) move(el, sx + x, sy + y)
   move(state.canvas, cx + x, cy + y)
   const ael = document.elementFromPoint(ax + x, ay + y)
   if (ael) move(ael, ax + x, ay + y)
+  move(state.ac, kx + x, ky + y)
   for (const v of state.views) await v.runAsync()
   const t = state.hit.tooltip(x, y)
+  const tip = norm((t ? t.item.tooltip : null) || null)
   return {
     vs: { picked: state.views[0].signal('picked'), tip: tips[0] },
     vc: { picked: state.views[1].signal('picked'), tip: tips[1] },
-    as: { picked: Object.hasOwn(state.store, 'picked') ? state.store.picked : 'none', tip: norm((t ? t.item.tooltip : null) || null) },
+    as: { picked: Object.hasOwn(state.store, 'picked') ? state.store.picked : 'none', tip },
+    ac: { picked: Object.hasOwn(state.canvasStore, 'picked') ? state.canvasStore.picked : 'none', tip },
   }
 }
 // What vega answers a quarter of a pixel around (x, y), in eight directions: where its answer changes that close, the point is
@@ -436,62 +452,65 @@ window.__around = async (x, y) => {
 window.__readPoints = async (points) => {
   const out = []
   for (const [x, y] of points) {
-    const [[sx, sy], [cx, cy], [ax, ay]] = origins
-    tips[0] = null
-    const el = document.elementFromPoint(sx + x, sy + y)
-    if (el) move(el, sx + x, sy + y)
-    move(state.canvas, cx + x, cy + y)
-    const ael = document.elementFromPoint(ax + x, ay + y)
-    if (ael) move(ael, ax + x, ay + y)
-    for (const v of state.views) await v.runAsync()
-    const t = state.hit.tooltip(x, y)
-    out.push({
-      at: el ? el.tagName + '.' + (el.getAttribute('class') || '') + (el.__data__ ? '' : '(no item)') : 'nothing',
-      vs: { picked: state.views[0].signal('picked'), tip: tips[0] },
-      vc: { picked: state.views[1].signal('picked'), tip: tips[1] },
-      as: { picked: Object.hasOwn(state.store, 'picked') ? state.store.picked : 'none', tip: norm((t ? t.item.tooltip : null) || null) },
-    })
+    const el = document.elementFromPoint(origins[0][0] + x, origins[0][1] + y)
+    out.push({ at: el ? el.tagName + '.' + (el.getAttribute('class') || '') + (el.__data__ ? '' : '(no item)') : 'nothing', ...(await readAt(x, y)) })
   }
   return out
 }
 `
 
 interface Read { picked: string; tip: string | null }
-export interface PickResult { scenes: number; points: number; agreed: number; ambiguous: number; edge: number; picked: number; tips: number; failures: string[] }
+type Mount = 'vs' | 'vc' | 'as' | 'ac'
+export interface PickResult {
+  scenes: number; points: number; agreed: number; ambiguous: number; edge: number; picked: number; tips: number; failures: string[]
+  /** Answers of Aster's canvas that are vega's SVG renderer's where its canvas renderer answers otherwise. */
+  canvasAsSvg: number
+  canvasAsSvgSamples: string[]
+}
 
-/** Drive every scene's points through the three mounts in `pageUrl` (a page that loads PICK_ENTRY's bundle). */
+/** Drive every scene's points through the four mounts in `pageUrl` (a page that loads PICK_ENTRY's bundle). */
 export async function runPickPhase(browser: Browser, pageUrl: string, scenes: PickScene[]): Promise<PickResult> {
-  const context = await browser.newContext({ viewport: { width: 2900, height: 640 }, deviceScaleFactor: 1 })
+  const context = await browser.newContext({ viewport: { width: 3860, height: 640 }, deviceScaleFactor: 1 })
   const page = await context.newPage()
   const pageErrors: string[] = []
   page.on('pageerror', (e) => pageErrors.push(e.message.slice(0, 200)))
-  const out: PickResult = { scenes: 0, points: 0, agreed: 0, ambiguous: 0, edge: 0, picked: 0, tips: 0, failures: [] }
+  const out: PickResult = { scenes: 0, points: 0, agreed: 0, ambiguous: 0, edge: 0, picked: 0, tips: 0, failures: [], canvasAsSvg: 0, canvasAsSvgSamples: [] }
   try {
     await page.goto(pageUrl)
     await page.waitForFunction(() => '__mountPick' in window, null, { timeout: 30_000 })
     for (const sc of scenes) {
       await page.evaluate((spec) => (window as unknown as { __mountPick: (s: unknown) => Promise<void> }).__mountPick(spec), sc.spec)
       out.scenes++
-      const reads = await page.evaluate((pts) => (window as unknown as { __readPoints: (p: unknown) => Promise<Array<Record<'vs' | 'vc' | 'as', Read> & { at: string }>> }).__readPoints(pts), sc.points)
+      const reads = await page.evaluate((pts) => (window as unknown as { __readPoints: (p: unknown) => Promise<Array<Record<Mount, Read> & { at: string }>> }).__readPoints(pts), sc.points)
       const failures: string[] = []
       for (const [i, r] of reads.entries()) {
         const [x, y] = sc.points[i]!
         out.points++
         let ok = true
-        let around: Array<Record<'vs' | 'vc' | 'as', Read>> | undefined
+        let around: Array<Record<Mount, Read>> | undefined
         for (const key of ['picked', 'tip'] as const) {
-          const svg = r.vs[key], canvas = r.vc[key], aster = r.as[key]
+          const svg = r.vs[key], canvas = r.vc[key]
           if (svg !== canvas) out.ambiguous++
-          if (svg === canvas ? aster === svg : aster === canvas || (sc.oracle !== 'canvas' && aster === svg)) continue
-          // Aster's answer is what vega answers a quarter of a pixel away: the point is on an edge (counted, and capped below)
-          around ??= await page.evaluate(([px, py]) => (window as unknown as { __around: (x: number, y: number) => Promise<Array<Record<'vs' | 'vc' | 'as', Read>>> }).__around(px!, py!), [x, y])
-          if (around.some((a) => (sc.oracle !== 'canvas' && a.vs[key] === aster) || a.vc[key] === aster)) {
-            out.edge++
-            if (process.env.PICK_DEBUG) console.log(`  edge ${sc.name} (${x},${y}) ${key}: vega svg=${svg} canvas=${canvas} aster=${aster}`)
-            continue
+          // Aster's svg: vega's answer, or either of its renderers' where they differ; Aster's canvas: vega's canvas renderer's
+          for (const [mine, oracle] of [['as', sc.oracle ?? 'either'], ['ac', 'canvas']] as const) {
+            const aster = r[mine][key]
+            if (svg === canvas ? aster === svg : aster === canvas || (oracle !== 'canvas' && aster === svg)) continue
+            // (the shared hit index's answer is the svg renderer's here: counted, capped by the caller)
+            if (mine === 'ac' && svg !== canvas && aster === svg && sc.oracle !== 'canvas') {
+              out.canvasAsSvg++
+              if (out.canvasAsSvgSamples.length < 8) out.canvasAsSvgSamples.push(`${sc.name} (${x},${y}) ${key}: vega svg=${svg} canvas=${canvas}`)
+              continue
+            }
+            // Aster's answer is what vega answers a quarter of a pixel away: the point is on an edge (counted, and capped below)
+            around ??= await page.evaluate(([px, py]) => (window as unknown as { __around: (x: number, y: number) => Promise<Array<Record<Mount, Read>>> }).__around(px!, py!), [x, y])
+            if (around.some((a) => (oracle !== 'canvas' && a.vs[key] === aster) || a.vc[key] === aster)) {
+              out.edge++
+              if (process.env.PICK_DEBUG) console.log(`  edge ${sc.name} (${x},${y}) ${key} ${mine}: vega svg=${svg} canvas=${canvas} aster=${aster}`)
+              continue
+            }
+            ok = false
+            failures.push(`(${x},${y}) ${key} ${mine === 'as' ? 'svg' : 'canvas'}: vega${svg === canvas ? '' : ` svg=${svg} canvas`}=${canvas} aster=${aster}${process.env.PICK_DEBUG ? ` [svg target ${r.at}]` : ''}`)
           }
-          ok = false
-          failures.push(`(${x},${y}) ${key}: vega${svg === canvas ? '' : ` svg=${svg} canvas`}=${canvas} aster=${aster}${process.env.PICK_DEBUG ? ` [svg target ${r.at}]` : ''}`)
         }
         if (ok) out.agreed++
         if (r.vs.picked !== 'none') out.picked++

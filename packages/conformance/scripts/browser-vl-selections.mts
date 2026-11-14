@@ -3,12 +3,22 @@
  *
  * Each case is a Vega-Lite spec (inline data) mounted twice in headless Chromium, each in its own page:
  * vega-lite 6.4.3's compiled spec in a real vega `View`, and Aster's own `@aster-charts/vl` output in `<Chart>`
- * (which brings the signal event loop and hit testing). The SAME native input -- Playwright mouse, wheel,
- * keyboard and form-control events -- is driven through both, and after EVERY step the two must agree on
+ * (which brings the signal event loop and hit testing), on each renderer: vega's svg renderer against
+ * `<Chart renderer="svg">`, vega's canvas renderer against `<Chart renderer="canvas">`. The SAME native input --
+ * Playwright mouse, wheel, keyboard and form-control events -- is driven through both, and after EVERY step the two
+ * must agree on
  *
  *   - the value of every signal of the compiled spec,
  *   - the contents of every selection store (`<param>_store`, after its transforms),
- *   - the rendered SVG (the strict canonicalizer of the conformance gates).
+ *   - the rendered SVG (the strict canonicalizer of the conformance gates), or on the canvas renderer the canvas's
+ *     pixels (the canvas gate's tolerance, canvas-pixels.mts).
+ *
+ * A canvas has no element to aim at: on that renderer each page also holds the SVG of what it shows (vega's `toSVG()`,
+ * Aster's `getSvg()`), hidden and inert, and the marks, frames and legend entries are found there. It is laid where vega reads
+ * the canvas (vega-scenegraph's point() for an element without a screen CTM: the canvas's box, unscaled by its layout size, past
+ * its border), so a position on it is the position of the same view point to vega's canvas, however the host's CSS sizes,
+ * borders or transforms the canvas. (A canvas sized down by CSS is read in CSS pixels by vega: the frames it aims at are then not
+ * where it draws them.)
  *
  * A case that can never differ proves nothing, so each names the steps after which its selection store (or, for
  * bound scales, a scale domain / signal) must have changed on the vega side (`expect`): a vacuous case fails.
@@ -17,7 +27,8 @@
  * index among the group frames in document order), and positions are fractions of that frame. Their signals live in
  * group scopes, which are compared too (vega: the sub-contexts of the view's state).
  *
- * Run: pnpm conformance:selections [--filter=substr] [--min-cases=N] [--max-retained=N]   (after `pnpm build`)
+ * Run: pnpm conformance:selections [--filter=substr] [--min-cases=N] [--max-retained=N] [--max-retained-canvas=N] [--renderer=svg|canvas]
+ *   (after `pnpm build`)
  *
  * Debugging: SEL_DUMP=1 writes the SVGs of one step of every case (the step set by SEL_DUMP_AT, default 0 = the initial render) as
  * sel-vega.svg, sel-aster.svg and sel-vega-fresh.svg into SEL_DUMP_DIR (default `aster-vl-selections-dump` under the OS temp
@@ -32,8 +43,10 @@ import { build } from 'esbuild'
 import type { Page } from 'playwright'
 import { canonicalizeSvg, diffCanonical } from '../src/normalize.js'
 import { cli } from '../../../scripts/lib/cli.mjs'
+import { READ_PIXELS, pixelDiff, type Pixels } from './canvas-pixels.mts'
+import { chartBenchSurvival } from './chart-bench-survival.mts'
 
-cli({ url: import.meta.url, flags: { filter: 'eq', 'min-cases': 'eq', 'max-retained': 'eq' } })
+cli({ url: import.meta.url, flags: { filter: 'eq', 'min-cases': 'eq', 'max-retained': 'eq', 'max-retained-canvas': 'eq', renderer: 'eq' } })
 
 const THIS_DIR = dirname(fileURLToPath(import.meta.url))
 const CONF_DIR = dirname(THIS_DIR)
@@ -46,6 +59,11 @@ const FILTER = arg('filter', '')
 const MIN_CASES = Number(arg('min-cases', '0'))
 /** Ceiling on the steps classified `retained` (Aster == vega's fresh render != vega's retained render), like sweep-signals' --max-retained. */
 const MAX_RETAINED = Number(arg('max-retained', '1e9'))
+/** The same ceiling for the canvas renderer's steps (vega's fresh render painted by its canvas renderer, `toCanvas()`). */
+const MAX_RETAINED_CANVAS = Number(arg('max-retained-canvas', '1e9'))
+type Renderer = 'svg' | 'canvas'
+/** Every case runs on both renderers; `--renderer` keeps one (debugging). */
+const RENDERERS: Renderer[] = arg('renderer', '') ? [arg('renderer', '') as Renderer] : ['svg', 'canvas']
 const require = createRequire(import.meta.url)
 void require
 
@@ -78,6 +96,15 @@ interface Case {
   css?: string
   /** Milliseconds both engines are left running after the mount before the first snapshot (a spec that seeds itself from a timer tick: vega's lands a few frames after the mount). */
   wait?: number
+  /** The spec is a Vega spec (both engines take it as it is), not a Vega-Lite one. */
+  vega?: boolean
+  /**
+   * The tooltip is compared too: the value vega's tooltip handler is given (`item.tooltip || null`) and the one `<Chart>` shows
+   * for the hovered item. vega's handler is called as the pointermove is handed over, before the run the move starts, so the
+   * value it is given is the one the previous pointermove left (a Playwright move is several): a step that reads a tooltip is a
+   * second move to the same x. The indices of the steps after which the tooltips are compared.
+   */
+  tooltipAt?: number[]
 }
 
 const ROWS = [
@@ -377,6 +404,18 @@ const CASES: Case[] = [
   },
   ...geoCases(),
   ...hostedCases(),
+  // The chart-bench survival chart (a Vega spec, heavy data): its tooltip is composed from a pointermove stream, which the study
+  // found dead on `<Chart renderer="canvas">`. The pointer sweeps the plot, then leaves it.
+  {
+    name: 'vega: the chart-bench survival tooltip (hoverX from pointermove)',
+    vega: true,
+    // (off the plot the tooltip is not compared: vega's svg renderer keeps the last one shown when the pointer leaves the rect
+    // for the axis below, where its canvas renderer and Aster's two hide it; the signals are)
+    tooltipAt: [1, 3, 5, 7, 9, 11],
+    spec: chartBenchSurvival(),
+    steps: [0.03, 0.2, 0.41, 0.5, 0.77, 0.93].flatMap((x, i) => [{ t: 'move' as const, x, y: 0.3 + i * 0.07 }, { t: 'move' as const, x, y: 0.31 + i * 0.07 }]).concat([{ t: 'move', x: 0.5, y: 1.3 }]),
+    moves: [0, 2, 4, 6, 8, 10, 12],
+  },
 ]
 
 /**
@@ -531,6 +570,23 @@ binds.style.cssText = 'position:absolute;left:20px;top:420px'
 document.body.appendChild(binds)
 window.__errors = []
 window.__freshErrors = []
+// (canvas renderer) the SVG of what the canvas shows, hidden and inert over it: where the marks, frames and legend entries are
+const geom = document.createElement('div')
+geom.id = 'geom'
+geom.style.cssText = 'position:absolute;left:0;top:0;visibility:hidden;pointer-events:none;transform-origin:0 0'
+// where vega's point() reads the canvas: its box, unscaled by its layout size, past its border
+const placeGeom = () => {
+  const c = holder.querySelector('canvas')
+  const r = c.getBoundingClientRect()
+  const sx = c.offsetWidth ? r.width / c.offsetWidth : 1
+  const sy = c.offsetHeight ? r.height / c.offsetHeight : 1
+  geom.style.left = (r.left + c.clientLeft * sx + window.scrollX) + 'px'
+  geom.style.top = (r.top + c.clientTop * sy + window.scrollY) + 'px'
+  geom.style.transform = 'scale(' + sx + ',' + sy + ')'
+}
+document.body.appendChild(geom)
+const readPixels = ${READ_PIXELS}
+window.__renderer = 'svg'
 
 const norm = (v) => JSON.stringify(v, function (k, x) {
   if (typeof x === 'function') return undefined
@@ -571,13 +627,16 @@ if (${JSON.stringify(Boolean(process.env.SEL_MOD))}) {
   const f0 = vega.expressionFunction('modify')
   vega.expressionFunction('modify', function (...a) { const n = this.context.data[a[0]].input.value.length; const r = f0.apply(this, a); window.__modlog.push((this.context.group ? this.context.group.mark.name : '?') + ' ' + a[0] + ' pre=' + n + ' ins=' + JSON.stringify(a[1]) + ' rem=' + String(a[2]) + ' tog=' + JSON.stringify(a[3]) + ' -> ' + r + ' stamp=' + this.context.dataflow.stamp()); return r }) 
 }
-window.__mountVega = async (specVl) => {
-  const vg = vl.compile(specVl).spec
+window.__tip = null
+window.__mountVega = async (specVl, renderer, opts) => {
+  window.__renderer = renderer
+  const vg = opts.vega ? specVl : vl.compile(specVl).spec
   names = (vg.signals || []).map((s) => s.name)
   stores = (vg.data || []).map((d) => d.name).filter((n) => /_store$/.test(n))
-  const view = new vega.View(vega.parse(vg), { renderer: 'svg', container: holder, bind: binds, hover: false, logger: { level() { return this }, error(...a) { window.__errors.push(a.map(String).join(' ')); return this }, warn() { return this }, info() { return this }, debug() { return this } } })
+  const view = new vega.View(vega.parse(vg), { renderer, container: holder, bind: binds, hover: false, ...(opts.tooltip ? { tooltip: (h, e, item, value) => { window.__tip = value } } : {}), logger: { level() { return this }, error(...a) { window.__errors.push(a.map(String).join(' ')); return this }, warn() { return this }, info() { return this }, debug() { return this } } })
   await view.runAsync()
   window.__read = () => ({
+    ...(opts.tooltip ? { tip: norm(window.__tip) } : {}),
     signals: Object.fromEntries(names.map((n) => [n, norm(view.signal(n))])),
     stores: Object.fromEntries(stores.map((n) => [n, norm(view.data(n))])),
     scoped: (() => {
@@ -589,7 +648,8 @@ window.__mountVega = async (specVl) => {
       return JSON.stringify(out.map((o) => norm(o)).sort())
     })(),
   })
-  window.__svg = () => view.toSVG()
+  window.__svg = () => (renderer === 'canvas' ? readPixels(holder.querySelector('canvas')) : view.toSVG())
+  window.__geom = async () => { geom.innerHTML = await view.toSVG(); placeGeom() }
   window.__settle = async () => { await view.runAsync() }
   // vega's FRESH render of the same spec at the retained view's current signal values and store contents: a new View
   // initialised from the first one's state. Aster renders fresh (docs/INTERACTION.md, "a signal write is a fresh
@@ -608,21 +668,24 @@ window.__mountVega = async (specVl) => {
     const touchEncodes = (ctx) => { for (const sub of ctx.subcontext || []) { for (const op of Object.values(sub.nodes)) if (op instanceof vega.transforms.encode) fresh.touch(op); touchEncodes(sub) } }
     touchEncodes(fresh._runtime)
     await fresh.runAsync()
-    const svg = await fresh.toSVG()
+    const svg = renderer === 'canvas' ? readPixels(await fresh.toCanvas()) : await fresh.toSVG()
     fresh.finalize()
     return svg
   }
 }
 
-window.__mountAster = async (specVl) => {
+window.__mountAster = async (specVl, renderer, opts) => {
+  window.__renderer = renderer
   // (the chart compiles the Vega-Lite spec itself; its numbers are the view size a host gives <Chart>, which otherwise fills its
   // container: a composition has none of its own, so 0 is the view's default size there)
-  const vg = vl.compile(specVl).spec
+  const vg = opts.vega ? specVl : vl.compile(specVl).spec
   names = (vg.signals || []).map((s) => s.name)
   stores = (vg.data || []).map((d) => d.name).filter((n) => /_store$/.test(n))
   window.__ref = React.createRef()
   const root = createRoot(holder)
-  flushSync(() => root.render(React.createElement(Chart, { ref: window.__ref, spec: specVl, width: typeof vg.width === 'number' ? vg.width : 0, height: typeof vg.height === 'number' ? vg.height : 0, onError: (e) => window.__errors.push('onError:' + String(e)), logger: { error: (...a) => window.__errors.push(a.map(String).join(' ')), warn() {} } })))
+  // (the tooltip the chart shows for the hovered item: its \`tooltip\` value, as vega's handler is given it)
+  const tip = opts.tooltip ? { renderTooltip: (d, info) => { window.__tip = info.tooltip || null; return null } } : {}
+  flushSync(() => root.render(React.createElement(Chart, { ref: window.__ref, spec: specVl, renderer, ...tip, width: typeof vg.width === 'number' ? vg.width : 0, height: typeof vg.height === 'number' ? vg.height : 0, onError: (e) => window.__errors.push('onError:' + String(e)), logger: { error: (...a) => window.__errors.push(a.map(String).join(' ')), warn() {} } })))
   for (let i = 0; i < 200 && !(window.__ref.current && window.__ref.current.getScene()); i++) await new Promise((r) => setTimeout(r, 25))
   if (!window.__ref.current) throw new Error('chart did not mount: ' + JSON.stringify(window.__errors) + ' ref=' + String(window.__ref.current) + ' html=' + holder.innerHTML.slice(0, 300))
   window.__read = () => {
@@ -640,13 +703,15 @@ window.__mountAster = async (specVl) => {
     }
     for (const g of scene.items) walk(g)
     return {
+      ...(opts.tooltip ? { tip: norm(holder.querySelector('[data-testid="chart-tooltip"]') ? window.__tip : null) } : {}),
       signals: Object.fromEntries(names.map((n) => [n, norm(params[n])])),
       stores: Object.fromEntries(stores.map((n) => [n, norm(scene.runtime.data(n))])),
       scoped: JSON.stringify(scoped.map((o) => norm(o)).sort()),
     }
   }
   // (data-datum is the stamp the event loop reads the datum from; vega has no such attribute)
-  window.__svg = () => window.__ref.current.getSvg().replace(/ data-datum="[^"]*"/g, '')
+  window.__svg = () => (renderer === 'canvas' ? readPixels(holder.querySelector('canvas')) : window.__ref.current.getSvg().replace(/ data-datum="[^"]*"/g, ''))
+  window.__geom = async () => { geom.innerHTML = window.__ref.current.getSvg(); placeGeom() }
   window.__settle = () => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)))
 }
 `
@@ -675,49 +740,63 @@ void readdirSync
 const playwright = await import('playwright')
 const browser = await playwright.chromium.launch({ headless: true, args: ['--disable-dev-shm-usage'] })
 
-interface Snapshot { signals: Record<string, string>; stores: Record<string, string>; scoped?: string; svg: string; fresh?: string }
+/** What a step left: the signals, the stores, and the picture (the SVG text, or on the canvas renderer the canvas's pixels). */
+interface Snapshot { signals: Record<string, string>; stores: Record<string, string>; scoped?: string; tip?: string; svg: string | Pixels; fresh?: string | Pixels }
 
 async function snapshot(page: Page, withFresh = false): Promise<Snapshot> {
-  const r = await page.evaluate(() => (window as unknown as { __read: () => { signals: Record<string, string>; stores: Record<string, string>; scoped?: string } }).__read())
-  const svg = await page.evaluate(() => Promise.resolve((window as unknown as { __svg: () => string | Promise<string> }).__svg()))
+  const r = await page.evaluate(() => (window as unknown as { __read: () => { signals: Record<string, string>; stores: Record<string, string>; scoped?: string; tip?: string } }).__read())
+  const svg = await page.evaluate(() => Promise.resolve((window as unknown as { __svg: () => string | Pixels | Promise<string> }).__svg()))
   if (!withFresh) return { ...r, svg }
-  const fresh = await page.evaluate(() => (window as unknown as { __fresh: () => Promise<string> }).__fresh())
+  const fresh = await page.evaluate(() => (window as unknown as { __fresh: () => Promise<string | Pixels> }).__fresh())
   return { ...r, svg, fresh }
+}
+
+/** Where the marks are looked for: the chart's svg, or on the canvas renderer the hidden SVG of what the canvas shows. */
+const svgRoot = (renderer: Renderer): string => (renderer === 'canvas' ? '#geom svg' : '#c svg')
+/** On the canvas renderer: the hidden SVG made again from what the canvas shows now. */
+const refreshGeom = async (page: Page, renderer: Renderer): Promise<void> => {
+  if (renderer === 'canvas') await page.evaluate(() => (window as unknown as { __geom: () => Promise<void> }).__geom())
 }
 
 interface Frame { x: number; y: number; w: number; h: number }
 /** The frames of the views, in document order: one per group item that is a view or a cell, else the single view's. */
-async function framesOf(page: Page): Promise<Frame[]> {
-  return page.evaluate(() => {
+async function framesOf(page: Page, renderer: Renderer): Promise<Frame[]> {
+  await refreshGeom(page, renderer)
+  return page.evaluate((root) => {
     // (a composition's views and cells: groups named `<child>_group`, or `cell`; the groups a path mark makes are not views)
-    let els = [...document.querySelectorAll('#c svg g.role-scope.cell > g > path.background, #c svg g.role-scope[class$="_group"] > g > path.background')] as SVGGraphicsElement[]
+    let els = [...document.querySelectorAll(`${root} g.role-scope.cell > g > path.background, ${root} g.role-scope[class$="_group"] > g > path.background`)] as SVGGraphicsElement[]
     if (!els.length) {
       // a single view: its frame is the largest background path (a group mid-update can be empty for a frame)
-      const all = [...document.querySelectorAll('#c svg path.background')] as SVGGraphicsElement[]
+      const all = [...document.querySelectorAll(`${root} path.background`)] as SVGGraphicsElement[]
       let best = -1
       let el: SVGGraphicsElement | null = null
       for (const e of all) { const q = e.getBoundingClientRect(); if (q.width * q.height > best) { best = q.width * q.height; el = e } }
-      els = [(el ?? document.querySelector('#c svg')!) as SVGGraphicsElement]
+      els = [(el ?? document.querySelector(root)!) as SVGGraphicsElement]
     }
     return els.map((e) => { const r = e.getBoundingClientRect(); return { x: r.left, y: r.top, w: r.width, h: r.height } })
-  })
+  }, svgRoot(renderer))
 }
-async function frameOf(page: Page, view = 0): Promise<Frame> {
-  return (await framesOf(page))[view] ?? { x: 0, y: 0, w: 0, h: 0 }
+async function frameOf(page: Page, renderer: Renderer, view = 0): Promise<Frame> {
+  return (await framesOf(page, renderer))[view] ?? { x: 0, y: 0, w: 0, h: 0 }
 }
 
 /** Vega keeps its first layout: the frames of its views are measured once, at the start of the case. */
 const vegaFrames = new WeakMap<Page, Frame[]>()
 
-async function runStep(page: Page, s: Step, engine: 'vega' | 'aster'): Promise<void> {
+/**
+ * Run a step; on the canvas renderer, false when it presses outside the canvas's box: a canvas sized down by the host's CSS is
+ * read in CSS pixels by vega, so part of what it draws is out of the pointer's reach there and such a press cannot move anything.
+ */
+async function runStep(page: Page, s: Step, engine: 'vega' | 'aster', renderer: Renderer): Promise<boolean> {
+  const root = svgRoot(renderer)
   // Vega keeps its first layout, and after a bound-scale pan its frame's background path collapses to 0x0 (the stale group
   // size), so vega's plot origin is measured once, at the start of the case. Aster's moves, so it is measured as needed.
   const viewIdx = ('view' in s ? s.view : undefined) ?? 0
   if (engine === 'vega' && !vegaFrames.has(page)) {
-    const all = await framesOf(page)
+    const all = await framesOf(page, renderer)
     if (all.every((fr) => fr.w > 0)) vegaFrames.set(page, all)
   }
-  let f = engine === 'vega' ? (vegaFrames.get(page)?.[viewIdx] ?? (await frameOf(page, viewIdx))) : await frameOf(page, viewIdx)
+  let f = engine === 'vega' ? (vegaFrames.get(page)?.[viewIdx] ?? (await frameOf(page, renderer, viewIdx))) : await frameOf(page, renderer, viewIdx)
   if (process.env.SEL_DEBUG) console.log('frame', JSON.stringify(f))
   // Positions are fractions of the plot frame AS IT IS WHEN THE EVENT IS SENT. Aster renders fresh after every signal write,
   // so its padding (and with it the frame's place in the page) can move under a drag that pans an axis, where vega keeps
@@ -726,7 +805,7 @@ async function runStep(page: Page, s: Step, engine: 'vega' | 'aster'): Promise<v
     if (engine === 'vega') return // (vega keeps its first layout, so its frame does not move)
     for (let k = 0; k < 20; k++) {
       await page.evaluate(() => (window as unknown as { __settle: () => Promise<unknown> }).__settle())
-      f = await frameOf(page, viewIdx)
+      f = await frameOf(page, renderer, viewIdx)
       if (process.env.SEL_DEBUG) console.log('refresh', k, JSON.stringify(f))
       if (f.w > 0 && f.h > 0) return
       await page.waitForTimeout(25)
@@ -738,21 +817,26 @@ async function runStep(page: Page, s: Step, engine: 'vega' | 'aster'): Promise<v
     try { await fn() } finally { if (on) await page.keyboard.up('Shift') }
   }
   const markBox = async (i: number): Promise<[number, number]> => {
-    const b = await page.evaluate(([idx, view]) => {
+    await refreshGeom(page, renderer)
+    const b = await page.evaluate(([idx, view, rt]) => {
       // (in a composition: the marks inside the view's own group item)
-      const items = [...document.querySelectorAll('#c svg g.role-scope.cell > g, #c svg g.role-scope[class$="_group"] > g')]
-      const roots = items.length ? items : [document.querySelector('#c svg')!]
+      const items = [...document.querySelectorAll(`${rt} g.role-scope.cell > g, ${rt} g.role-scope[class$="_group"] > g`)]
+      const roots = items.length ? items : [document.querySelector(rt)!]
       const el = roots[view]!.querySelectorAll('.mark-symbol.marks path, .mark-rect.marks path, .mark-symbol.layer_0_marks path, .mark-symbol[class*="_marks"] path, .mark-rect[class*="_marks"] path')[idx] as SVGGraphicsElement
       const r = el.getBoundingClientRect()
       return [r.left + r.width / 2, r.top + r.height / 2] as [number, number]
-    }, [i, viewIdx] as const)
+    }, [i, viewIdx, root] as const)
     return b
   }
-  const legendBox = async (part: string, i: number): Promise<[number, number]> => page.evaluate(([p, idx]) => {
-    const els = document.querySelectorAll(`#c svg .${(document.querySelector(`#c svg [class*="_legend_${p}"]`) as Element).getAttribute('class')!.split(' ').find((c) => c.endsWith('_legend_' + p))} ${p === 'entries' ? 'path.background' : p === 'symbols' ? 'path' : 'text'}`)
-    const r = (els[idx as number] as Element).getBoundingClientRect()
-    return [r.left + r.width / 2, r.top + r.height / 2] as [number, number]
-  }, [part, i] as const)
+  const legendBox = async (part: string, i: number): Promise<[number, number]> => {
+    await refreshGeom(page, renderer)
+    return page.evaluate(([p, idx, rt]) => {
+      const els = document.querySelectorAll(`${rt} .${(document.querySelector(`${rt} [class*="_legend_${p}"]`) as Element).getAttribute('class')!.split(' ').find((c) => c.endsWith('_legend_' + p))} ${p === 'entries' ? 'path.background' : p === 'symbols' ? 'path' : 'text'}`)
+      const r = (els[idx as number] as Element).getBoundingClientRect()
+      return [r.left + r.width / 2, r.top + r.height / 2] as [number, number]
+    }, [part, i, root] as const)
+  }
+  let reachable = true
   switch (s.t) {
     case 'move': await page.mouse.move(...at(s.x, s.y), { steps: 3 }); break
     case 'moveMark': {
@@ -785,6 +869,10 @@ async function runStep(page: Page, s: Step, engine: 'vega' | 'aster'): Promise<v
       })
       break
     case 'path':
+      if (renderer === 'canvas') {
+        const [px, py] = at(...s.pts[0]!)
+        reachable = await page.evaluate(([x, y]) => { const r = document.querySelector('#c canvas')!.getBoundingClientRect(); return x >= r.left && x <= r.right && y >= r.top && y <= r.bottom }, [px, py] as const)
+      }
       await shift(s.shift, async () => {
         await page.mouse.move(...at(...s.pts[0]!))
         await page.mouse.down()
@@ -809,28 +897,33 @@ async function runStep(page: Page, s: Step, engine: 'vega' | 'aster'): Promise<v
     }
     case 'key': await page.keyboard.press(s.key); break
   }
+  return reachable
 }
 
-async function drive(engine: 'vega' | 'aster', c: Case): Promise<{ snaps: Snapshot[]; errors: string[]; modlog?: string[] } | { error: string }> {
+/** A host's CSS for the svg, as it reads for the canvas renderer (the hidden SVG the marks are found in is placed by script). */
+const cssFor = (css: string, renderer: Renderer): string => (renderer === 'canvas' ? css.replaceAll('#c svg', '#c canvas') : css)
+
+async function drive(engine: 'vega' | 'aster', renderer: Renderer, c: Case): Promise<{ snaps: Snapshot[]; errors: string[]; modlog?: string[]; unreachable: number[] } | { error: string }> {
   const context = await browser.newContext({ viewport: { width: 900, height: 700 }, deviceScaleFactor: 1 })
   const page = await context.newPage()
   const pageErrors: string[] = []
   page.on('pageerror', (e) => pageErrors.push(e.message.slice(0, 300)))
   try {
     await page.goto(`file://${join(OUT_DIR, 'index.html')}`)
-    if (c.css) await page.addStyleTag({ content: c.css })
+    if (c.css) await page.addStyleTag({ content: cssFor(c.css, renderer) })
     await page.waitForFunction(() => '__mountVega' in window, null, { timeout: 30_000 })
-    await page.evaluate(async ([which, spec]) => {
-      const w = window as unknown as Record<string, (s: unknown) => Promise<void>>
-      await (which === 'vega' ? w.__mountVega! : w.__mountAster!)(spec)
-    }, [engine, c.spec] as const)
+    await page.evaluate(async ([which, spec, r, o]) => {
+      const w = window as unknown as Record<string, (s: unknown, r: string, o: unknown) => Promise<void>>
+      await (which === 'vega' ? w.__mountVega! : w.__mountAster!)(spec, r, o)
+    }, [engine, c.spec, renderer, { vega: c.vega === true, tooltip: c.tooltipAt !== undefined }] as const)
     if (process.env.SEL_DEBUG) console.log(engine, await page.evaluate(() => document.querySelector('#c svg path.background')!.outerHTML + (document.querySelector('#c svg .marks')?.outerHTML.slice(0, 600) ?? '')))
     const settle = (): Promise<unknown> => page.evaluate(() => (window as unknown as { __settle: () => Promise<unknown> }).__settle())
     await settle()
     if (c.wait) { await page.waitForTimeout(c.wait); await settle() }
     const snaps: Snapshot[] = [await snapshot(page, engine === 'vega' && !process.env.SEL_NOFRESH)]
-    for (const s of c.steps) {
-      await runStep(page, s, engine)
+    const unreachable: number[] = []
+    for (const [k, s] of c.steps.entries()) {
+      if (!(await runStep(page, s, engine, renderer))) unreachable.push(k)
       await settle()
       await settle()
       snaps.push(await snapshot(page, engine === 'vega' && !process.env.SEL_NOFRESH))
@@ -839,7 +932,7 @@ async function drive(engine: 'vega' | 'aster', c: Case): Promise<{ snaps: Snapsh
     const errors = await page.evaluate(() => (window as unknown as { __errors: string[] }).__errors)
     if (process.env.SEL_DEBUG) console.log('fresh errors', JSON.stringify(await page.evaluate(() => (window as unknown as { __freshErrors: string[] }).__freshErrors)))
     const modlog = await page.evaluate(() => (window as unknown as { __modlog?: string[] }).__modlog ?? [])
-    return { snaps, errors, modlog }
+    return { snaps, errors, modlog, unreachable }
   } catch (e) {
     if (process.env.SEL_DEBUG) console.log((e as Error).stack, await page.evaluate(() => JSON.stringify((window as unknown as { __errors: string[] }).__errors) + document.body.innerHTML.slice(0, 600)))
     return { error: (e as Error).message.split('\n')[0]! + (pageErrors.length ? ` [page errors: ${pageErrors.join(' | ')}]` : '') }
@@ -849,11 +942,20 @@ async function drive(engine: 'vega' | 'aster', c: Case): Promise<{ snaps: Snapsh
 }
 
 let pass = 0
-const retainedSteps: string[] = []
+let runs = 0
+let unreachableSteps = 0
+const retainedSteps: Record<Renderer, string[]> = { svg: [], canvas: [] }
 const failures: string[] = []
 const t0 = Date.now()
-for (const c of cases) {
-  const [v, a] = [await drive('vega', c), await drive('aster', c)]
+/** How two pictures differ (strict canonical SVG, or pixels within the canvas gate's tolerance), or null. */
+const pictureDiff = (a: string | Pixels, b: string | Pixels): string | null => {
+  if (typeof a !== 'string' || typeof b !== 'string') return typeof a === 'string' || typeof b === 'string' ? 'svg against pixels' : pixelDiff(a, b)
+  const d = diffCanonical(canonicalizeSvg(a), canonicalizeSvg(b))
+  return d.length ? String(d[0]) : null
+}
+for (const c of cases) for (const renderer of RENDERERS) {
+  runs++
+  const [v, a] = [await drive('vega', renderer, c), await drive('aster', renderer, c)]
   const problems: string[] = []
   if ('error' in v) problems.push(`vega side failed: ${v.error}`)
   else if ('error' in a) problems.push(`aster side failed: ${a.error}`)
@@ -878,30 +980,34 @@ for (const c of cases) {
         const where = `${vsc.length} vs ${asc.length} scopes; only in vega: ${String(onlyV).slice(0, 300)}; only in aster: ${String(onlyA).slice(0, 300)}`
         problems.push(`${label}: scoped signals: ${where}`)
       }
+      if (i > 0 && c.tooltipAt?.includes(i - 1) && vs.tip !== as.tip) problems.push(`${label}: tooltip: vega=${String(vs.tip).slice(0, 200)} aster=${String(as.tip).slice(0, 200)}`)
       for (const n of Object.keys(vs.stores)) {
         if (vs.stores[n] !== as.stores[n]) problems.push(`${label}: store ${n}: vega=${vs.stores[n]!.slice(0, 200)} aster=${as.stores[n]!.slice(0, 200)}`)
       }
-      if (process.env.SEL_DUMP && i === Number(process.env.SEL_DUMP_AT ?? 0)) {
+      if (process.env.SEL_DUMP && i === Number(process.env.SEL_DUMP_AT ?? 0) && typeof vs.svg === 'string') {
         const dir = process.env.SEL_DUMP_DIR ?? join(tmpdir(), 'aster-vl-selections-dump')
         mkdirSync(dir, { recursive: true })
         writeFileSync(join(dir, 'sel-vega.svg'), vs.svg)
-        writeFileSync(join(dir, 'sel-aster.svg'), as.svg)
-        writeFileSync(join(dir, 'sel-vega-fresh.svg'), vs.fresh ?? '')
+        writeFileSync(join(dir, 'sel-aster.svg'), String(as.svg))
+        writeFileSync(join(dir, 'sel-vega-fresh.svg'), String(vs.fresh ?? ''))
         console.log(`[browser-vl-selections] SEL_DUMP: ${c.name} / ${label} written to ${dir}`)
       }
-      const retained = canonicalizeSvg(vs.svg)
-      const aster = canonicalizeSvg(as.svg)
-      const diffs = diffCanonical(retained, aster)
-      if (diffs.length) {
+      const diff = pictureDiff(vs.svg, as.svg)
+      if (diff) {
         // The documented deviation: after a signal write Aster renders the FRESH result, vega keeps its first autosize,
         // padding and tick order. Accepted only when Aster equals vega's own fresh render of the same spec at the same
-        // signal and store values EXACTLY, and vega's retained render really differs from that fresh one.
-        const fresh = canonicalizeSvg(vs.fresh ?? vs.svg)
-        if (diffCanonical(fresh, aster).length === 0 && diffCanonical(fresh, retained).length > 0) retainedSteps.push(`${c.name} / ${label}`)
-        else problems.push(`${label}: svg differs from vega's retained render (${String(diffs[0]).slice(0, 160)}) and from vega's fresh render (${String(diffCanonical(fresh, aster)[0]).slice(0, 220)})`)
+        // signal and store values EXACTLY (on the canvas: within the canvas gate's tolerance), and vega's retained render
+        // really differs from that fresh one.
+        const fresh = vs.fresh ?? vs.svg
+        const freshDiff = pictureDiff(fresh, as.svg)
+        if (freshDiff === null && pictureDiff(fresh, vs.svg) !== null) retainedSteps[renderer].push(`${c.name} / ${label}`)
+        else problems.push(`${label}: ${renderer === 'canvas' ? 'canvas' : 'svg'} differs from vega's retained render (${diff.slice(0, 160)}) and from vega's fresh render (${String(freshDiff).slice(0, 220)})`)
       }
     }
+    if (c.tooltipAt && !c.tooltipAt.some((k) => v.snaps[k + 1]?.tip !== 'null')) problems.push('VACUOUS: vega never showed a tooltip')
     for (const i of c.moves) {
+      // (pressed outside vega's canvas: out of the pointer's reach, see runStep; compared, but not required to move)
+      if (v.unreachable.includes(i)) { unreachableSteps++; continue }
       const before = v.snaps[i]!
       const after = v.snaps[i + 1]!
       if (JSON.stringify(before.stores) === JSON.stringify(after.stores) && JSON.stringify(before.signals) === JSON.stringify(after.signals)) {
@@ -910,19 +1016,26 @@ for (const c of cases) {
     }
   }
   if (problems.length === 0) pass++
-  else failures.push(`${c.name}:\n      ${problems.slice(0, Number(process.env.SEL_MAX ?? 6)).join('\n      ')}`)
+  else failures.push(`${c.name} [${renderer}]:\n      ${problems.slice(0, Number(process.env.SEL_MAX ?? 6)).join('\n      ')}`)
 }
 await browser.close()
 rmSync(OUT_DIR, { recursive: true, force: true })
 
-console.log(`\n[browser-vl-selections] ${pass}/${cases.length} cases agree with real vega + vega-lite (${((Date.now() - t0) / 1000).toFixed(0)}s)`)
+console.log(`\n[browser-vl-selections] ${pass}/${runs} runs agree with real vega + vega-lite (${cases.length} cases on ${RENDERERS.join(' and ')}) (${((Date.now() - t0) / 1000).toFixed(0)}s)`)
 for (const f of failures) console.log(`  FAIL ${f}`)
-console.log(`[browser-vl-selections] retained (Aster == vega's fresh render, vega's retained render differs): ${retainedSteps.length} step(s), ceiling ${MAX_RETAINED}`)
-for (const r of retainedSteps) console.log(`  retained ${r}`)
-if (retainedSteps.length > MAX_RETAINED) {
-  console.log(`[browser-vl-selections] RATCHET: ${retainedSteps.length} retained steps > --max-retained ${MAX_RETAINED}`)
-  process.exit(1)
+if (unreachableSteps) console.log(`[browser-vl-selections] ${unreachableSteps} step(s) pressed outside a CSS-scaled canvas, which vega reads in CSS pixels: compared, not required to move`)
+let ratchet = false
+for (const [renderer, ceiling, flag] of [['svg', MAX_RETAINED, '--max-retained'], ['canvas', MAX_RETAINED_CANVAS, '--max-retained-canvas']] as const) {
+  if (!RENDERERS.includes(renderer)) continue
+  const steps = retainedSteps[renderer]
+  console.log(`[browser-vl-selections] retained on ${renderer} (Aster == vega's fresh render, vega's retained render differs): ${steps.length} step(s), ceiling ${ceiling}`)
+  for (const r of steps) console.log(`  retained ${r}`)
+  if (steps.length > ceiling) {
+    console.log(`[browser-vl-selections] RATCHET: ${steps.length} retained steps on ${renderer} > ${flag} ${ceiling}`)
+    ratchet = true
+  }
 }
+if (ratchet) process.exit(1)
 if (MIN_CASES && cases.length < MIN_CASES) {
   console.log(`[browser-vl-selections] FLOOR: ${cases.length} cases < --min-cases ${MIN_CASES}`)
   process.exit(1)

@@ -25,6 +25,7 @@ import { chromium } from 'playwright'
 import * as vega from 'vega'
 import { gradientSpec, makeRng, UNPAINTABLE_KINDS } from './gradient-gen.mts'
 import { cli } from '../../../scripts/lib/cli.mjs'
+import { CANVAS_LIMITS } from './canvas-pixels.mts'
 
 cli({ url: import.meta.url, flags: { limit: 'eq', filter: 'eq', browser: 'eq', pixel: 'eq', ratio: 'eq', mean: 'eq' } })
 
@@ -50,8 +51,9 @@ const BROWSER = arg('browser', 'chromium') as 'chromium' | 'firefox' | 'webkit'
 // WebKit's rasteriser rounds path coverage differently from Skia: its worst measured noise
 // on the same corpus is 0.08% / mean 0.06 (line-curve-cardinal-tension-0-3.vg), so its
 // limits are one step looser; Chromium and Firefox measured the same as above.
-const LIMITS = { chromium: { ratio: 0.0005, mean: 0.05 }, firefox: { ratio: 0.0005, mean: 0.05 }, webkit: { ratio: 0.001, mean: 0.07 } } as const
-const PIXEL = Number(arg('pixel', '48'))
+// (Chromium's numbers are shared with the gates that compare a live canvas after interaction: canvas-pixels.mts)
+const LIMITS = { chromium: { ratio: CANVAS_LIMITS.ratio, mean: CANVAS_LIMITS.mean }, firefox: { ratio: 0.0005, mean: 0.05 }, webkit: { ratio: 0.001, mean: 0.07 } } as const
+const PIXEL = Number(arg('pixel', String(CANVAS_LIMITS.pixel)))
 const RATIO = Number(arg('ratio', String(LIMITS[BROWSER].ratio)))
 const MEAN = Number(arg('mean', String(LIMITS[BROWSER].mean)))
 
