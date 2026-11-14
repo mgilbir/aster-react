@@ -243,6 +243,8 @@ export const ChartStream = React.forwardRef<ChartStreamHandle, ChartStreamProps>
         ...(textMetrics ? { textMetrics } : {}),
         ...(urlPolicy ? { urlPolicy } : {}),
         ...(urlData !== undefined ? { urlData } : {}),
+        // (the stream's evaluations report to the chart's logger, as <Chart>'s do)
+        ...(chartProps.logger ? { logger: chartProps.logger } : {}),
         ...initialInput,
       },
     })
