@@ -454,6 +454,40 @@ const CASES: Case[] = [
     expectMoved: ['ts', 'te', 'n'],
   },
 
+  // --- one native event handed over as several types (vega's canvas): the first handled type runs at once, the others are queued
+  // behind its run (vega-view runAsync), so they read the event as the last type left it ---
+  {
+    name: 'renderer-fanout-vegatype-of-queued-types',
+    spec: chart([
+      sig('log', [
+        { events: 'pointerout', update: 'log + "out:" + event.vegaType + ";"' },
+        { events: 'pointerover', update: 'log + "over:" + event.vegaType + ";"' },
+        { events: 'mousemove', update: 'log + "mm:" + event.type + "/" + event.vegaType + ";"' },
+      ], ''),
+    ]),
+    steps: moves(P.empty, P.barA, P.barB),
+    expectMoved: ['log'],
+  },
+  {
+    name: 'renderer-fanout-consume-in-a-queued-type',
+    spec: chart([
+      sig('outs', [{ events: 'pointerout', update: 'outs + 1' }]),
+      sig('overs', [{ events: 'pointerover!', update: 'overs + 1' }]),
+      sig('leaked', [{ events: 'window:pointermove', update: 'leaked + 1' }]),
+    ]),
+    steps: moves(P.empty, P.barA, P.barB, P.barB, P.empty),
+    expectMoved: ['outs', 'overs', 'leaked'],
+  },
+  {
+    name: 'renderer-fanout-consume-in-the-first-type',
+    spec: chart([
+      sig('outs', [{ events: 'pointerout!', update: 'outs + 1' }]),
+      sig('leaked', [{ events: 'window:pointermove', update: 'leaked + 1' }]),
+    ]),
+    steps: moves(P.empty, P.barA, P.barA, P.barB),
+    expectMoved: ['outs', 'leaked'],
+  },
+
   // --- group scopes (a group mark's own signals: one copy per group item) ---
   {
     name: 'group-scope-click-counts-per-scope',
