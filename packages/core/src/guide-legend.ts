@@ -856,6 +856,11 @@ function symbolEntries(inp: LegendBuildInput, k: Kit, defs: LegendDefs, group: R
     if (lbl === undefined) entryBox._made = sym === undefined ? 0 : 1
     if (k.user.entries?.interactive === true) entryBox._hit = true
     if (g.cursor != null) entryBox.cursor = g.cursor
+    // (what vega's tooltip handler shows for the entry group item)
+    if (g.tooltip !== undefined) entryBox.tooltip = g.tooltip
+    // vega picks a group item only within its bounds: an entry whose box is not part of them (`noBound`, an entry with no
+    // `symbolHeight`... ) takes the pointer only where its symbol and its label reach
+    if (g.noBound && !held.empty()) entryBox._pickBounds = { x1: held.x1, y1: held.y1, x2: held.x2, y2: held.y2 }
     const aria = itemAriaOf(g)
     if (aria) entryBox.itemAria = aria
     if (g.href != null) entryBox.href = g.href
