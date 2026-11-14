@@ -218,3 +218,33 @@ describe('buildHitIndex', () => {
     expect(hitCount).toBeGreaterThan(50)
   })
 })
+
+describe('an index asked many questions answers as one asked once', () => {
+  // (a dense scene: its index answers its first questions by a scan of the boxes, and builds its grid when asked more)
+  const rows = Array.from({ length: 900 }, (_, i) => ({ x: (i * 37) % 300, y: (i * 53) % 200, s: 20 + (i % 7) * 30 }))
+  const scene = evaluateChart(compileChart({
+    width: 300, height: 200, padding: 0, autosize: 'none',
+    data: [{ name: 't', values: rows }],
+    marks: [
+      { type: 'symbol', from: { data: 't' }, encode: { update: { x: { field: 'x' }, y: { field: 'y' }, size: { field: 's' }, fill: { value: 'steelblue' } } } },
+      { type: 'path', from: { data: 't' }, encode: { update: { x: { field: 'y' }, y: { field: 'x' }, path: { value: 'M0,0L6,0L3,5Z' }, scaleX: { value: -1.5 }, fill: { value: 'red' } } } },
+    ],
+  } as never))
+  const points = Array.from({ length: 200 }, (_, i) => [((i * 7919) % 3000) / 10, ((i * 104729) % 2000) / 10] as const)
+
+  it('every query of a long-lived index finds what the first query of a new index finds', () => {
+    const long = buildHitIndex(scene)
+    for (const [x, y] of points) {
+      for (const q of ['query', 'queryMark', 'pick', 'tooltip'] as const) {
+        expect(long[q](x, y)?.item ?? null, `${q} ${x},${y}`).toBe(buildHitIndex(scene)[q](x, y)?.item ?? null)
+      }
+    }
+  })
+
+  it('the target for an item is the same object, before and after the index builds its grid', () => {
+    const index = buildHitIndex(scene)
+    const [x, y] = points.find(([px, py]) => index.query(px, py) !== null)!
+    const first = index.query(x, y)
+    for (let k = 0; k < 40; k++) { expect(index.query(x, y), `query ${k}`).toBe(first); index.pick(x + k, y) }
+  })
+})

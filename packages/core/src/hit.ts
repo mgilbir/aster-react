@@ -719,7 +719,10 @@ export function buildHitIndex(scene: SceneRoot, cell = DEFAULT_CELL, options: Hi
       }
       x1 = a; y1 = b; x2 = cc; y2 = d
     }
-    return { item, marktype, kind: 'geom', ...(polys !== undefined ? { polys } : {}), build, fill, stroke, x1, y1, x2, y2, ...(at ?? {}) }
+    const e: Entry = { item, marktype, kind: 'geom', build, fill, stroke, x1, y1, x2, y2 }
+    if (polys !== undefined) e.polys = polys
+    if (at) { e.cx = at.cx; e.cy = at.cy; e.rot = at.rot }
+    return e
   }
 
   /**
@@ -877,8 +880,13 @@ export function buildHitIndex(scene: SceneRoot, cell = DEFAULT_CELL, options: Hi
     }
   }
 
-  // Linear scan for small scenes; uniform grid above the threshold.
+  // Linear scan for small scenes; uniform grid above the threshold, made once the index has answered `LINEAR_QUERIES` queries by a
+  // scan (a scene that changes on every pointer move is asked a couple of questions: a scan of the flat boxes is cheaper than the
+  // grid; one that stays is asked many). The grid and the scan find the same entry: every entry whose box holds the point is listed
+  // in the point's cell or in `big`, and both take the last such entry, in paint order, that `hits` the point.
   const GRID_THRESHOLD = 400
+  const LINEAR_QUERIES = 8
+  let queries = 0
   let grid: Map<number, number[]> | null = null
   let big: number[] = []
   let gw = 1
@@ -894,8 +902,9 @@ export function buildHitIndex(scene: SceneRoot, cell = DEFAULT_CELL, options: Hi
     gh = Math.max(1, Math.ceil(H / cs))
     grid = new Map()
     big = []
-    // (the flat arrays the scan reads are filled in the same pass)
-    seal(false)
+    // (the flat arrays the scan reads are filled in the same pass; when the first queries scanned them, they are made already, and
+    // so are the targets handed out, which stay the ones handed out)
+    if (boxes === null) seal(false)
     const mx = gw - 1, my = gh - 1
     const bx = boxes!
     const fl = flags!
@@ -1052,7 +1061,7 @@ export function buildHitIndex(scene: SceneRoot, cell = DEFAULT_CELL, options: Hi
   const find = (x: number, y: number, mode: Mode): number => {
     if (entries.length === 0 || !(x === x && y === y)) return -1
     if (surface !== null && !(x >= 0 && x <= surface.w && y >= 0 && y <= surface.h)) return -1
-    if (entries.length <= GRID_THRESHOLD) {
+    if (entries.length <= GRID_THRESHOLD || (grid == null && queries++ < LINEAR_QUERIES)) {
       if (boxes === null) seal()
       return hitLinear(x, y, mode)
     }
