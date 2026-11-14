@@ -31,6 +31,13 @@ and Fixed, per package. Everything built before the first release is in [Pre-rel
 - `HitIndex.tooltip(x, y)` is the item vega's tooltip handler is called with (the topmost item that takes the pointer; a line,
   an area or a trail resolved to one of its items as vega resolves it); `HitTarget` says what was hit (`kind`) and whether the
   item's mark reads a dataset (`fromData`). `queryMark` returns the items of a mark without `from` like any other's.
+- A group item with `noBound` leaves its clipped content out of its bounds, as vega's bound pass does: its children no longer
+  size the view under autosize `pad` or `fit` (corpus entry `group-nobound`), and the pointer picks within the group's bounds.
+- `isTuple` is true for what vega's dataflow made a tuple (a dataset's rows, each transform's rows, a mark's datum and a mark
+  without `from`'s `{}`, the copies of a mark's items another mark is made from, a group item's datum, an axis', a legend's and
+  a title's data) and false for anything else; it was false almost everywhere. Nothing is stamped on a row to say so.
+- `parent` is the datum of the group item around a mark whatever made it: in a group mark without `from` nested in a facet cell
+  it was the cell's datum, where vega gives the plain group's `{}` (corpus entry `group-parent-plain`).
 
 ### `@aster-charts/react`
 
