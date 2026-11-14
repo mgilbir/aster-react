@@ -39,3 +39,28 @@ describe('inline values are data unless they are a {signal}', () => {
     }, 30_000)
   }
 })
+
+/**
+ * A signal that reads data and throws stops vega's pass where it is ranked (after the datasets and the marks that do not read it):
+ * what reads it is left unrun. A row whose field happens to spell the signal's name under an expression key (`signal`, `expr`,
+ * `update`...) does not read it: the dataset's marks run as vega runs them.
+ */
+describe('a row that spells a failed signal\'s name does not read it', () => {
+  for (const key of ['signal', 'expr', 'update', 'test', 'init']) {
+    it(`a row field ${key}: "bad"`, async () => {
+      const s = {
+        $schema: 'https://vega.github.io/schema/vega/v6.json', width: 100, height: 50, padding: 5,
+        signals: [{ name: 'bad', update: 'data("t")[0].nope.x' }],
+        data: [{ name: 't', values: [{ a: 1, [key]: 'bad' }, { a: 2, nested: { [key]: 'bad + 1' } }] }],
+        marks: [{ type: 'rect', from: { data: 't' }, encode: { update: { x: { signal: 'datum.a * 20' }, y: { value: 5 }, width: { value: 10 }, height: { value: 10 }, fill: { value: 'steelblue' } } } }],
+      }
+      const vega = await renderWithVegaChecked(JSON.parse(JSON.stringify(s)))
+      const errors: unknown[] = []
+      const mine = renderSpec(JSON.parse(JSON.stringify(s)), { logger: { error: (e: unknown) => { errors.push(e) }, warn: () => {} } } as never) as string
+      // (both report the signal that threw, once)
+      expect(vega.errors).toHaveLength(1)
+      expect(errors).toHaveLength(1)
+      expect(diffCanonical(canonicalizeSvg(vega.svg), canonicalizeSvg(mine)).slice(0, 3)).toEqual([])
+    }, 30_000)
+  }
+})
