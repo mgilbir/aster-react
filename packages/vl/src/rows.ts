@@ -114,6 +114,8 @@ interface RowScope {
   payloads: RowPayloads
   /** sameRows results: payload -> payload -> equal */
   equal: Map<object, Map<object, boolean>>
+  /** sameData results (vega-lite's deepEqual): payload -> payload -> equal */
+  deep: Map<object, Map<object, boolean>>
   /** rowsJson results */
   json: Map<object, string>
 }
@@ -123,7 +125,7 @@ let scope: RowScope | undefined
 /** Run `f` (a compile) with `payloads` registered as the user's rows. Re-entrant: the previous registration is restored. */
 export function withRows<T>(payloads: RowPayloads, f: () => T): T {
   const saved = scope
-  scope = { payloads, equal: new Map(), json: new Map() }
+  scope = { payloads, equal: new Map(), deep: new Map(), json: new Map() }
   try {
     return f()
   } finally {
@@ -222,4 +224,63 @@ export function jsonWithRows(v: unknown): string {
   if (!found.length) return text
   let i = 0
   return text.replaceAll(JSON.stringify(ROWS_MARK), () => rowsJson(found[i++]!))
+}
+
+/**
+ * Whether two datasets' values are the same data, as vega-lite's findSource decides it (its deepEqual): arrays element by element,
+ * plain objects by their own keys in any order, NaN equal to NaN; an object whose class has a value of its own (a Date) by that
+ * value; values of different classes are different. Two distinct payloads are compared once per compile, stopping at the first
+ * difference.
+ */
+export function sameData(a: unknown, b: unknown): boolean {
+  if (a === b) return true
+  if (a === null || b === null || typeof a !== 'object' || typeof b !== 'object') return deepEqual(a, b)
+  const memo = scope?.deep
+  const known = memo?.get(a)?.get(b)
+  if (known !== undefined) return known
+  const result = deepEqual(a, b)
+  if (memo) {
+    for (const [x, y] of [[a, b], [b, a]] as const) {
+      let m = memo.get(x)
+      if (!m) memo.set(x, (m = new Map()))
+      m.set(y, result)
+    }
+  }
+  return result
+}
+
+function deepEqual(a: unknown, b: unknown): boolean {
+  if (a === b) return true
+  if (a === null || b === null || typeof a !== 'object' || typeof b !== 'object') return a !== a && b !== b
+  const x = a as Record<string, unknown>
+  const y = b as Record<string, unknown>
+  if (x.constructor?.name !== y.constructor?.name) return false
+  if (Array.isArray(x)) {
+    const ys = y as unknown as unknown[]
+    if (x.length !== ys.length) return false
+    for (let i = 0; i < x.length; i++) if (!deepEqual(x[i], ys[i])) return false
+    return true
+  }
+  if (x instanceof Map && y instanceof Map) {
+    if (x.size !== y.size) return false
+    for (const [k, v] of x) if (!y.has(k) || !deepEqual(v, y.get(k))) return false
+    return true
+  }
+  if (x instanceof Set && y instanceof Set) return x.size === y.size && [...x].every((v) => y.has(v))
+  if (ArrayBuffer.isView(x) && ArrayBuffer.isView(y)) {
+    const xs = x as unknown as ArrayLike<unknown>
+    const ys = y as unknown as ArrayLike<unknown>
+    if (xs.length !== ys.length) return false
+    for (let i = 0; i < xs.length; i++) if (xs[i] !== ys[i]) return false
+    return true
+  }
+  if (x instanceof RegExp && y instanceof RegExp) return x.source === y.source && x.flags === y.flags
+  // (an object with a value of its own -- a Date, a boxed primitive -- is that value; one with a text of its own is that text)
+  if (typeof x.valueOf === 'function' && x.valueOf !== Object.prototype.valueOf) return x.valueOf() === (y.valueOf as () => unknown)()
+  if (typeof x.toString === 'function' && x.toString !== Object.prototype.toString) return x.toString() === (y.toString as () => string)()
+  const keys = Object.keys(x)
+  if (keys.length !== Object.keys(y).length) return false
+  for (const k of keys) if (!Object.prototype.hasOwnProperty.call(y, k)) return false
+  for (const k of keys) if (!deepEqual(x[k], y[k])) return false
+  return true
 }

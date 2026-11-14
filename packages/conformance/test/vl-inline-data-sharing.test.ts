@@ -23,6 +23,8 @@ const RELATIONS = {
   'one object': (): [Obj[], Obj[]] => { const r = rows(1); return [r, r] },
   'equal but distinct': (): [Obj[], Obj[]] => [rows(1), rows(1)],
   'equal rows that are one object each': (): [Obj[], Obj[]] => { const r = rows(1); return [r, r.slice()] },
+  'equal, keys in another order': (): [Obj[], Obj[]] => [rows(1), rows(1).map((r) => Object.fromEntries(Object.entries(r).reverse()))],
+  'equal, nested keys in another order': (): [Obj[], Obj[]] => [rows(1).map((r) => ({ ...r, o: { p: 1, q: [1, { s: 2, t: 3 }] } })), rows(1).map((r) => ({ o: { q: [1, { t: 3, s: 2 }], p: 1 }, ...r }))],
   'different (same length)': (): [Obj[], Obj[]] => [rows(1), rows(2)],
   'different (length)': (): [Obj[], Obj[]] => [rows(1), rows(1, 4)],
   'different (last row)': (): [Obj[], Obj[]] => { const a = rows(1); const b = rows(1); b[b.length - 1]!.y = 99; return [a, b] },
@@ -48,11 +50,14 @@ const SHAPES: Record<string, (a: Obj[], b: Obj[]) => Obj> = {
  * Per view (a group's own non-group marks, in order), which of its marks read the same inline dataset in the end: each mark is
  * written `type:n`, n numbering the view's datasets in order of first use. Names are resolved scope by scope, innermost first.
  */
-function sharing(spec: Obj): { views: string[][] } {
+function sharing(spec: Obj): { views: string[][]; global: string[]; sources: number } {
   const views: string[][] = []
+  const global: string[] = []
+  const globalNumbers = new Map<Obj, number>()
+  let sources = 0
   const visit = (node: Obj, scopes: Array<Map<string, Obj | { facet: string }>>): void => {
     const own = new Map<string, Obj | { facet: string }>()
-    for (const d of (node.data as Obj[] | undefined) ?? []) own.set(d.name, d)
+    for (const d of (node.data as Obj[] | undefined) ?? []) { own.set(d.name, d); if (d.values !== undefined || d.url !== undefined) sources++ }
     for (const m of (node.marks as Obj[] | undefined) ?? []) if (m.from?.facet) own.set(m.from.facet.name, { facet: m.from.facet.data })
     const chain = [own, ...scopes]
     const lookup = (name: string, from: number): [Obj | { facet: string } | undefined, number] => {
@@ -80,11 +85,13 @@ function sharing(spec: Obj): { views: string[][] } {
       if (!r) continue
       if (!numbers.has(r)) numbers.set(r, numbers.size)
       view.push(`${m.type}:${numbers.get(r)}`)
+      if (!globalNumbers.has(r)) globalNumbers.set(r, globalNumbers.size)
+      global.push(`${m.type}:${globalNumbers.get(r)}`)
     }
     if (view.length) views.push(view)
   }
   visit(spec, [])
-  return { views }
+  return { views, global, sources }
 }
 
 describe('views with equal inline rows share a dataset where vega-lite shares one', () => {
@@ -96,7 +103,7 @@ describe('views with equal inline rows share a dataset where vega-lite shares on
         const oracle = (vl as any).compile(structuredClone(spec)).spec as Obj
         const ours = compile(spec as never) as Obj
         // whether equal rows are one object or two decides nothing, for vega-lite (deepEqual) and for Aster
-        if (relation.startsWith('equal')) {
+        if (relation.startsWith('equal') && !relation.includes('order')) {
           const [one] = RELATIONS['one object']()
           const same = make(one, one)
           expect(JSON.stringify(ours)).toBe(JSON.stringify(compile({ $schema: spec.$schema, ...same } as never)))
@@ -107,6 +114,9 @@ describe('views with equal inline rows share a dataset where vega-lite shares on
         const got = sharing(ours)
         expect(got.views.flat().length).toBeGreaterThan(0)
         expect(got.views).toEqual(want.views)
+        // and across views: views whose rows vega-lite makes one source read one source, and there are as many sources
+        expect(got.global).toEqual(want.global)
+        expect(got.sources).toBe(want.sources)
         // and the chart is vega-lite's
         const svg = async (s: Obj): Promise<string> => canonicalizeSvg(await renderWithVega(structuredClone(s)))
         expect(diffCanonical(await svg(oracle), await svg(ours)).slice(0, 2)).toEqual([])
@@ -120,4 +130,31 @@ describe('views with equal inline rows share a dataset where vega-lite shares on
     expect(a).toEqual(b)
     expect(a[0]).not.toBe(b[0])
   })
+})
+
+/** The rest of findSource: urls, names, topojson objects, a lookup's data. Compared on the compiled specs (url data is not loaded here). */
+describe('which views share a source: urls, names, topojson objects, lookups', () => {
+  const unit = (data: Obj, extra: Obj = {}): Obj => ({ data, mark: 'point', encoding: xy, ...extra })
+  const CASES: Record<string, Obj> = {
+    'the same url': { hconcat: [unit({ url: 'data/cars.json' }), unit({ url: 'data/cars.json' })] },
+    'different urls': { hconcat: [unit({ url: 'data/cars.json' }), unit({ url: 'data/movies.json' })] },
+    'the same url, different topojson features': { hconcat: [{ data: { url: 'w.json', format: { type: 'topojson', feature: 'a' } }, mark: 'geoshape' }, { data: { url: 'w.json', format: { type: 'topojson', feature: 'b' } }, mark: 'geoshape' }] },
+    'the same url, a feature and a mesh': { hconcat: [{ data: { url: 'w.json', format: { type: 'topojson', feature: 'a' } }, mark: 'geoshape' }, { data: { url: 'w.json', format: { type: 'topojson', mesh: 'a' } }, mark: 'geoshape' }] },
+    'equal rows under two names': { hconcat: [unit({ name: 'one', values: rows(1) }), unit({ name: 'two', values: rows(1) })] },
+    'equal rows, one named': { hconcat: [unit({ values: rows(1) }), unit({ name: 'two', values: rows(1) })] },
+    'equal rows, the same name': { hconcat: [unit({ name: 'one', values: rows(1) }), unit({ name: 'one', values: rows(1) })] },
+    'a lookup whose data are the view\'s rows': unit({ values: rows(1) }, { transform: [{ lookup: 'k', from: { data: { values: rows(1) }, key: 'k', fields: ['y'] }, as: ['y2'] }] }),
+    'a lookup whose data are other rows': unit({ values: rows(1) }, { transform: [{ lookup: 'k', from: { data: { values: rows(2) }, key: 'k', fields: ['y'] }, as: ['y2'] }] }),
+  }
+  for (const [name, body] of Object.entries(CASES)) {
+    it(name, () => {
+      const spec = { $schema: 'https://vega.github.io/schema/vega-lite/v6.json', ...body }
+      const oracle = (vl as any).compile(structuredClone(spec)).spec as Obj
+      const ours = compile(spec as never) as Obj
+      const want = sharing(oracle)
+      const got = sharing(ours)
+      expect(got.global).toEqual(want.global)
+      expect(got.sources).toBe(want.sources)
+    })
+  }
 })

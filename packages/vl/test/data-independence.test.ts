@@ -155,15 +155,34 @@ describe('compiling reads no row', () => {
     })
   }
 
-  it('equal-but-distinct rows are compared once per pair and only as far as the first difference', () => {
-    const c: Counter = { rowReads: 0, slotReads: 0, otherArrayReads: 0, writes: 0 }
-    const a = sample(1000)
-    const b = sample(1000).map((r, i) => (i === 0 ? { ...r, y: -1 } : r)) // differs in its first row
-    const spec = { layer: [{ data: { values: counted(a, c) }, mark: 'point', encoding: xy }, { data: { values: counted(b, c) }, mark: 'rule', encoding: { y: xy.y } }] } as VLSpec
-    const out = compile(spec) as { data: Array<{ values?: unknown }> }
-    expect(out.data.filter((d) => d.values !== undefined)).toHaveLength(2)
-    // (two rows read: the first of each, which differ)
-    expect(c.rowReads).toBeLessThan(50)
+  it('distinct rows are compared only as far as the first difference: the reads do not grow with the rows', () => {
+    const readsFor = (n: number): number => {
+      const c: Counter = { rowReads: 0, slotReads: 0, otherArrayReads: 0, writes: 0 }
+      const a = sample(n)
+      const b = sample(n).map((r, i) => (i === 0 ? { ...r, y: -1 } : r)) // differs in its first row
+      const spec = { layer: [{ data: { values: counted(a, c) }, mark: 'point', encoding: xy }, { data: { values: counted(b, c) }, mark: 'rule', encoding: { y: xy.y } }] } as VLSpec
+      const out = compile(spec) as { data: Array<{ values?: unknown }> }
+      expect(out.data.filter((d) => d.values !== undefined)).toHaveLength(2)
+      return c.rowReads
+    }
+    const small = readsFor(10)
+    expect(small).toBeGreaterThan(0)
+    expect(readsFor(1000)).toBe(small)
+  })
+
+  it('equal-but-distinct rows are compared once per compile, however many views carry them', () => {
+    const readsFor = (views: number): number => {
+      const c: Counter = { rowReads: 0, slotReads: 0, otherArrayReads: 0, writes: 0 }
+      const base = sample(50)
+      const spec = { hconcat: Array.from({ length: views }, () => ({ data: { values: counted(base.map((r) => ({ ...r })), c) }, mark: 'point', encoding: xy })) } as VLSpec
+      const out = compile(spec) as { data: Array<{ values?: unknown }> }
+      expect(out.data.filter((d) => d.values !== undefined)).toHaveLength(1)
+      return c.rowReads
+    }
+    // (each further view's rows are read once, to compare them with the first view's: the work grows by one payload a view)
+    const two = readsFor(2)
+    const three = readsFor(3)
+    expect(three - two).toBeLessThanOrEqual(two)
   })
 })
 

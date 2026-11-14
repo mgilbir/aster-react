@@ -177,7 +177,7 @@ function compileOnce(input: VLSpec, payloads: RowPayloads, forward?: ReadonlyMap
   const selParts = SEL_PARTS.get(compiled)
   if (selParts) compiled.data = [...selParts.data, ...((compiled.data as Record<string, unknown>[] | undefined) ?? [])]
   const out = finalizeData(compiled, ctx)
-  optimizeData(out, (name) => name.startsWith(ctx.dn(0).slice(0, -1)))
+  optimizeData(out, (name) => name.startsWith(ctx.dn(0).slice(0, -1)), (name) => ctx.userDataNames.has(name))
   // a named view names its marks after itself (vega-lite `model.getName`): `chart_marks` (the views of a repeat name themselves)
   if (typeof normalized.name === 'string' && normalized.name !== '' && normalized.repeat === undefined && Array.isArray(out.marks)) {
     out.marks = (out.marks as Record<string, unknown>[]).map((m) => prefixMarkNames(m, `${varName(normalized.name as string)}_`, ctx.namedPrefixes))
@@ -3909,6 +3909,8 @@ interface CompileCtx extends TransformContext {
   takeSource(): string
   /** A generated one-off dataset name (`row_domain`, ...), de-collided from user names. */
   fresh(base: string): string
+  /** The dataset names the user's spec declares or references (a source of one of these names is the user's, not this compiler's). */
+  userDataNames: ReadonlySet<string>
   /** The selection components of the spec, by (sanitized) parameter name. */
   selections: Map<string, SelCmpt>
   /** The selections of views compiled in an earlier pass: a predicate may name a selection a later view declares. */
@@ -4028,6 +4030,7 @@ function makeCtx(top: VLSpec): CompileCtx {
     compositeDepth: 0,
     facetFields: [],
     dn: (i) => `${dataPrefix}_${i}`,
+    userDataNames: userNames,
     takeSource: () => `${sourcePrefix}_${sourceCount++}`,
     fresh: (base) => {
       let n = base
