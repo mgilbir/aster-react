@@ -7,7 +7,7 @@
 import { describe, expect, it } from 'vitest'
 import { createChartStream } from './stream.js'
 import { patchSceneDom, sceneToDomDesc } from './dom.js'
-import { sceneToDomDesc as legacyDomDesc } from './legacy-dom.testlib.js'
+import { renderSceneToDomElement as legacyDomElement, sceneToDomDesc as legacyDomDesc } from './legacy-dom.testlib.js'
 import { renderSceneToCanvasAppend, snapshotCanvasScene } from './canvas.js'
 import { renderSceneToCanvasAppend as legacyAppend, snapshotCanvasScene as legacySnapshot } from './legacy-canvas.testlib.js'
 import { loggingContext } from './geometry-differential.testlib.js'
@@ -33,6 +33,16 @@ function countGenReads(items: readonly SceneItem[]): { n: number } {
   for (const it of items) {
     const value = it.__gen
     Object.defineProperty(it, '__gen', { get: () => { counter.n++; return value }, configurable: true, enumerable: true })
+  }
+  return counter
+}
+
+/** Counts the reads of `key` on every item there is now. */
+function countReads(items: readonly SceneItem[], key: string): { n: number } {
+  const counter = { n: 0 }
+  for (const it of items) {
+    const value = (it as Record<string, unknown>)[key]
+    Object.defineProperty(it, key, { get: () => { counter.n++; return value }, configurable: true, enumerable: true })
   }
   return counter
 }
@@ -66,6 +76,31 @@ describe('an append costs the appended items', () => {
     scene = stream.flush()!.scene
     patchSceneDom(svg, scene, o)
     expect(svg.querySelectorAll('path').length).toBeGreaterThan(0)
+  })
+
+  it('per-item symbols (not batched): no unchanged item is read, the patch appends only the new elements, the DOM matches the old implementation', () => {
+    const stream = createChartStream(spec([symbols('t', '#4c78a8')], ['t']) as never, { capacity: 8 })
+    stream.push({ data: { t: rows(400) } })
+    let scene = stream.flush()!.scene
+    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg')
+    document.body.appendChild(svg)
+    patchSceneDom(svg, scene)
+    for (let k = 0; k < 6; k++) {
+      stream.push({ append: { t: rows(1 + k, 400 + k * 10) } })
+      const before = (markOf(scene, 0).items as SceneItem[]).slice()
+      scene = stream.flush()!.scene
+      const legacy = JSON.stringify(legacyDomDesc(scene, {}))
+      const reads = countGenReads(before)
+      const xReads = countReads(before, 'x')
+      // (the elements already there must stay the very same nodes: an append adds, it does not rebuild)
+      const kept = [...svg.querySelectorAll('path')]
+      patchSceneDom(svg, scene)
+      expect(reads.n).toBe(0)
+      expect(xReads.n).toBe(0)
+      expect(kept.every((el) => el.isConnected)).toBe(true)
+      expect(JSON.stringify(sceneToDomDesc(scene, {}))).toBe(legacy)
+    }
+    expect(svg.outerHTML).toBe(legacyDomElement(scene, document).outerHTML)
   })
 
   it('canvas append: a mark left alone is not read, and the paint matches the old implementation', () => {

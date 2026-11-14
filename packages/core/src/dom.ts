@@ -372,36 +372,81 @@ function symbolItemDesc(it: SceneItem): DomDesc {
   })
 }
 
-interface SymbolItemsCache { items: SceneItem[]; keys: SceneItem[]; descs: DomDesc[] }
+/**
+ * `gen`: the generation it was last built in; `stamped`: every item then carried a generation; `dirty`: the indices whose
+ * descriptor was built for an item of that generation (not clean then: clean from the next generation on); `out`: the array
+ * handed out last.
+ */
+interface SymbolItemsCache { items: SceneItem[]; keys: SceneItem[]; descs: DomDesc[]; gen: number | undefined; stamped: boolean; dirty: number[]; out: DomDesc[] }
 // Per items array; the runtime mutates the items array in place for incremental
 // updates, so an unchanged item keeps its descriptor without rebuilding the
 // 100k-entry array on every append.
 const SYMBOL_ITEMS = new WeakMap<SceneItem[], SymbolItemsCache>()
+/** A mark's children that only append to the ones handed out before (`symbolItems`): what the container's `appendFrom` says. */
+const APPEND_OF = new WeakMap<DomDesc[], { prev: DomDesc[]; count: number }>()
+/**
+ * A container whose first `count` children are the very descriptors of `prev`, the children handed out for it last time: the
+ * patcher appends the rest without walking them. (Beside the descriptor, not on it: a descriptor is plain data.)
+ */
+const APPEND_TO = new WeakMap<DomDesc, { prev: DomDesc[]; count: number }>()
 
-function symbolItems(group: SceneGroup, items: SceneItem[]): DomDesc[] {
+/** The descriptor of a symbol item, noting it in `dirty` when its item is of this generation. */
+function freshSymbolDesc(it: SceneItem, i: number, dirty: number[]): DomDesc {
+  if (!isClean(it)) dirty.push(i)
+  return symbolItemDesc(it)
+}
+
+function symbolItems(group: SceneGroup, items: SceneItem[]): { descs: DomDesc[]; appendFrom?: { prev: DomDesc[]; count: number } } {
   const prev = SYMBOL_ITEMS.get(items)
   const reuse = prev && prev.items === items ? prev : null
+  // An append to an array the engine advances in place, nothing re-encoded since the last build (the dense chunks' proof,
+  // `chunkClean`): the items there are the ones the descriptors were built for, all clean now. Only the appended items are
+  // read; the descriptors built last time for items of that generation are clean from this one on, as the full walk below
+  // would mark them.
+  const a = items as SceneItem[] & { __engineItems?: true; __editGen?: number }
+  if (reuse !== null && a.__engineItems === true && CURRENT_GEN != null && reuse.gen != null && reuse.gen < CURRENT_GEN && reuse.stamped
+    && (a.__editGen === undefined || a.__editGen <= reuse.gen) && items.length >= reuse.keys.length) {
+    const { keys, descs } = reuse
+    for (const i of reuse.dirty) descs[i]!.clean = true
+    const dirty: number[] = []
+    let stamped = true
+    const count = keys.length
+    for (let n = count; n < items.length; n++) {
+      const it = items[n]!
+      if (it.__gen == null) stamped = false
+      keys[n] = it
+      descs[n] = freshSymbolDesc(it, n, dirty)
+    }
+    const out = descs.slice()
+    const appendFrom = { prev: reuse.out, count }
+    SYMBOL_ITEMS.set(items, { items, keys, descs, gen: CURRENT_GEN, stamped, dirty, out })
+    return { descs: out, appendFrom }
+  }
   const keys = reuse ? reuse.keys : []
   const descs = reuse ? reuse.descs : []
+  const dirty: number[] = []
+  let stamped = true
   let n = 0
   for (const it of items) {
+    if (it.__gen == null) stamped = false
     // A null position renders at the origin (like the string renderer).
     if (keys[n] === it && descs[n] != null) {
       if (isClean(it)) descs[n]!.clean = true
-      else { keys[n] = it; descs[n] = symbolItemDesc(it) }
+      else { keys[n] = it; descs[n] = freshSymbolDesc(it, n, dirty) }
     } else {
       keys[n] = it
-      descs[n] = symbolItemDesc(it)
+      descs[n] = freshSymbolDesc(it, n, dirty)
     }
     n++
   }
   keys.length = n
   descs.length = n
-  SYMBOL_ITEMS.set(items, { items, keys, descs })
   // The patcher compares against the previous descriptor *array*, so return a
   // snapshot: exposing the cached array would mean a later in-place append
   // mutates the patcher's "previous" state and every child gets re-walked.
-  return descs.slice()
+  const out = descs.slice()
+  SYMBOL_ITEMS.set(items, { items, keys, descs, gen: CURRENT_GEN, stamped, dirty, out })
+  return { descs: out }
 }
 
 /**
@@ -576,7 +621,9 @@ function markItems(group: SceneGroup, type: string, options?: DomRenderOptions):
       // a hyperlinked mark keeps one element (and <a>) per symbol
       const chunkSize = group.hasLinks === true ? 0 : denseSymbolsEnabled(options, items)
       if (chunkSize > 0) return denseSymbolItems(group, items, chunkSize)
-      return symbolItems(group, items)
+      const { descs, appendFrom } = symbolItems(group, items)
+      if (appendFrom) APPEND_OF.set(descs, appendFrom)
+      return descs
     }
     case 'rect': {
       // vega paints a rect only when it has a fill or stroke, in item order.
@@ -654,7 +701,10 @@ function markDescs(group: SceneGroup, frameW: number, frameH: number, clips: Cli
   const containerAttrs = new PairAttrSink()
   // A mark's clip is the size of the group that contains it (vega: `clip(renderer, scene, scene.group)`), on its container.
   if (!markContainerAttrs(group, containerAttrs, group.clip === true ? groupClipId(group, clips, frameW, frameH) : null, scope)) return []
-  const inner = g('g', containerAttrs.out, markItems(group, type, options))
+  const children = markItems(group, type, options)
+  const inner = g('g', containerAttrs.out, children)
+  const appendFrom = APPEND_OF.get(children)
+  if (appendFrom) APPEND_TO.set(inner, appendFrom)
   if (type === 'symbol' && group.hasLinks !== true && denseSymbolsEnabled(options, group.items ?? []) > 0) inner.dense = true
   return [inner]
 }
@@ -844,6 +894,13 @@ function patchEl(el: Element, desc: DomDesc): void {
   // Without this, an append re-walks every sibling — O(n) per append, which is
   // what kept 100k-point SVG streams off the frame budget.
   const lastChildren = last?.children
+  // The producer's own word that the first `count` children are the ones this element was last patched with (an append to an
+  // engine array, see `symbolItems`): only the tail is new, and the prefix is not even compared.
+  const hint = APPEND_TO.get(desc)
+  if (hint !== undefined && lastChildren === hint.prev && have === hint.count && lastChildren.length === hint.count) {
+    for (let j = hint.count; j < want.length; j++) el.appendChild(createEl(want[j]!, el.ownerDocument))
+    return
+  }
   if (lastChildren != null && have === lastChildren.length && want.length > lastChildren.length) {
     let i = 0
     while (i < lastChildren.length && want[i] === lastChildren[i]) i++
