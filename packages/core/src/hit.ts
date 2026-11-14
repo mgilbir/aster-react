@@ -370,6 +370,29 @@ function inFill(polys: Poly[], x: number, y: number): boolean {
   return false
 }
 
+/** The box of a path's own outline (`pathPolys`), kept with the outline (which the bounded parse cache keeps). */
+const LOCAL_BOXES = new WeakMap<Poly[], [number, number, number, number] | null>()
+function localPathBox(d: string): [number, number, number, number] | null {
+  const polys = pathPolys(d)
+  let box = LOCAL_BOXES.get(polys)
+  if (box === undefined) LOCAL_BOXES.set(polys, (box = polysBox(polys)))
+  return box
+}
+
+/**
+ * The box of an outline placed at (ox, oy) and scaled by (sx, sy) -- each point `ox + sx * x`, `oy + sy * y` -- from the box of the
+ * outline itself: the same numbers `polysBox` gives over the placed points. A point's placed coordinate is a rounded sum and a
+ * rounded product, each monotone in the coordinate (the product turned around for a negative scale), so the placed extremes are
+ * the placed extremes of the outline's. Null where `polysBox` gives null: a box that is not finite.
+ */
+function placedBox(b: [number, number, number, number], ox: number, oy: number, sx: number, sy: number): [number, number, number, number] | null {
+  const xa = ox + sx * b[0], xb = ox + sx * b[2]
+  const ya = oy + sy * b[1], yb = oy + sy * b[3]
+  const x1 = sx < 0 ? xb : xa, x2 = sx < 0 ? xa : xb
+  const y1 = sy < 0 ? yb : ya, y2 = sy < 0 ? ya : yb
+  return Number.isFinite(x1) && Number.isFinite(y1) && Number.isFinite(x2) && Number.isFinite(y2) ? [x1, y1, x2, y2] : null
+}
+
 function polysBox(polys: Poly[]): [number, number, number, number] | null {
   let x1 = Infinity, y1 = Infinity, x2 = -Infinity, y2 = -Infinity
   for (const { pts } of polys) {
@@ -672,12 +695,13 @@ export function buildHitIndex(scene: SceneRoot, cell = DEFAULT_CELL, options: Hi
    * A geometry entry: its outline in scene coordinates (or in the frame `at` places and turns), filled and/or stroked as `paint`
    * says; none when it is neither.
    */
-  function geomEntry(item: SceneItem, marktype: string, build: () => Poly[], paint: SceneItem | Record<string, unknown>, at?: { cx: number; cy: number; rot: number }, painted: Stroke | null = strokeOf(paint)): Entry | null {
+  function geomEntry(item: SceneItem, marktype: string, build: () => Poly[], paint: SceneItem | Record<string, unknown>, at?: { cx: number; cy: number; rot: number }, painted: Stroke | null = strokeOf(paint), known?: [number, number, number, number] | null): Entry | null {
     const stroke = pickStroke(painted, marktype)
     const fill = isFilled(paint)
     if (!fill && !stroke) return null
-    const polys = build()
-    const box = polysBox(polys)
+    // (an outline whose box is known without it is made when a query first needs it: see `hit`)
+    const polys = known === undefined ? build() : undefined
+    const box = known === undefined ? polysBox(polys!) : known
     if (!box) return null
     const reach = reachOf(stroke)
     let x1 = box[0] - reach, y1 = box[1] - reach, x2 = box[2] + reach, y2 = box[3] + reach
@@ -695,7 +719,7 @@ export function buildHitIndex(scene: SceneRoot, cell = DEFAULT_CELL, options: Hi
       }
       x1 = a; y1 = b; x2 = cc; y2 = d
     }
-    return { item, marktype, kind: 'geom', polys, build, fill, stroke, x1, y1, x2, y2, ...(at ?? {}) }
+    return { item, marktype, kind: 'geom', ...(polys !== undefined ? { polys } : {}), build, fill, stroke, x1, y1, x2, y2, ...(at ?? {}) }
   }
 
   /**
@@ -832,10 +856,12 @@ export function buildHitIndex(scene: SceneRoot, cell = DEFAULT_CELL, options: Hi
         const sy = (rec(item).scaleY as number | undefined) || 1
         const path = String(item.path)
         const angle = (rec(item).angle as number | undefined) ?? 0
+        // (the outline is placed when a query first reaches its box: the box is the placed box of the path's own, see `placedBox`)
+        const local = localPathBox(path)
         const e = angle
           // vega draws a path item at translate(x, y) rotate(angle) scale(scaleX, scaleY)
-          ? geomEntry(item, marktype, () => transformPolys(pathPolys(path), (x, y) => [sx * x, sy * y]), item, { cx: tx + (item.x || 0), cy: ty + (item.y || 0), rot: angle * (Math.PI / 180) })
-          : geomEntry(item, marktype, () => transformPolys(pathPolys(path), (x, y) => [tx + (item.x || 0) + sx * x, ty + (item.y || 0) + sy * y]), item)
+          ? geomEntry(item, marktype, () => transformPolys(pathPolys(path), (x, y) => [sx * x, sy * y]), item, { cx: tx + (item.x || 0), cy: ty + (item.y || 0), rot: angle * (Math.PI / 180) }, strokeOf(item), local && placedBox(local, 0, 0, sx, sy))
+          : geomEntry(item, marktype, () => transformPolys(pathPolys(path), (x, y) => [tx + (item.x || 0) + sx * x, ty + (item.y || 0) + sy * y]), item, undefined, strokeOf(item), local && placedBox(local, tx + (item.x || 0), ty + (item.y || 0), sx, sy))
         if (e) entries.push(e)
         return
       }
