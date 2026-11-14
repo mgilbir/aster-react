@@ -958,6 +958,10 @@ export function Live(): React.ReactElement {
 `push({ data | append })`) and add `streamOptions` (`capacity`, `maxQueuedRows`, `policy`, `autoFlush`,
 `flushPolicy`, `initial`, and for the worker form `worker`/`workerFactory`; `serialize` is forced off because the
 component renders the scene itself) and `onStreamError(error, failure?)`.
+`width`/`height` work as on `<Chart>`: without them the component measures its container and sends it into the stream as
+`containerSize` and `measuredSize` batches, so the stream's spec is sized by `<Chart>`'s rule (the container fills a spec with
+no `width` / `height` signal of its own whose autosize is not `none`, a spec with autosize `none` keeps its own size, and
+`containerSize()` reads the container either way).
 `panZoom`/`pan`/`zoom`/`view`/`onViewChange` and `signals` are routed into the stream as `domainRaw` and `signals`
 batches, so scales, marks and guides recompute inside the stream; `limits`, `textMetrics`, `urlPolicy` and `urlData` configure
 the stream's evaluation (a change of `urlData` starts a new stream); rendering, selection, tooltip, a11y and event props go to the underlying `<Chart>`.
