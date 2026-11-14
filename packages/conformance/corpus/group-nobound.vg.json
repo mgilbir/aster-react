@@ -1,0 +1,17 @@
+{
+  "$schema": "https://vega.github.io/schema/vega/v6.json",
+  "description": "Group items whose box is left out of their bounds (noBound), with and without a clip: the view's autosize pad sees only what they hold (and nothing of a clipped one).",
+  "width": 60, "height": 40, "padding": 5,
+  "marks": [
+    {
+      "type": "group",
+      "encode": { "update": { "x": { "value": 10 }, "y": { "value": 10 }, "width": { "value": 200 }, "height": { "value": 150 }, "fill": { "value": "#fee" }, "stroke": { "value": "#c00" }, "noBound": { "value": true } } },
+      "marks": [{ "type": "rect", "encode": { "update": { "x": { "value": 5 }, "width": { "value": 30 }, "y": { "value": 5 }, "height": { "value": 20 }, "fill": { "value": "steelblue" } } } }]
+    },
+    {
+      "type": "group",
+      "encode": { "update": { "x": { "value": 30 }, "y": { "value": 30 }, "width": { "value": 120 }, "height": { "value": 90 }, "fill": { "value": "#efe" }, "noBound": { "value": true }, "clip": { "value": true } } },
+      "marks": [{ "type": "symbol", "encode": { "update": { "x": { "value": 100 }, "y": { "value": 80 }, "size": { "value": 400 }, "fill": { "value": "orange" } } } }]
+    }
+  ]
+}

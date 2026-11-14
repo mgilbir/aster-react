@@ -15,7 +15,8 @@
  *
  * Where vega's two renderers agree, Aster must agree with them. Where they do not (the browser tests an SVG text by its
  * glyphs, vega's canvas pick by the text's box...), vega has no single answer and Aster must give one of the two: those points
- * are counted and reported. A point within a quarter of a pixel of an edge, where vega's own answer changes, is decided by the
+ * are counted and reported (a scene about what only vega's scenegraph knows, a group's bounds, takes the canvas renderer's
+ * answer there). A point within a quarter of a pixel of an edge, where vega's own answer changes, is decided by the
  * geometry its renderers approximate (Skia flattens a stroke's offset curves and arcs): Aster's answer there must be what vega
  * answers a quarter of a pixel away, and such points are counted and capped (`maxEdge`). The scenes are generated (seeded): overlapping marks of every type with
  * every kind of paint (filled, stroked, both, `transparent`, neither), strokes of several widths, caps and joins, rounded
@@ -28,7 +29,11 @@
 import type { Browser } from 'playwright'
 
 type Spec = Record<string, unknown>
-export interface PickScene { name: string; spec: Spec; points: Array<[number, number]> }
+/**
+ * `oracle: 'canvas'`: where vega's renderers disagree, Aster must give the canvas renderer's answer -- for a scene about what only
+ * vega-scenegraph's pick knows (a group's bounds: the browser's hit test of the SVG has no notion of them).
+ */
+export interface PickScene { name: string; spec: Spec; points: Array<[number, number]>; oracle?: 'canvas' }
 
 /** The signal every scene declares: vega's `event.item` as text (its mark, and its datum's id). */
 export const PICKED_SIGNAL = {
@@ -188,6 +193,8 @@ export function genPickScene(seed: number, W = 300, H = 220): PickScene {
       if (chance(0.4)) update.clip = V(true)
       if (chance(0.3)) update.strokeForeground = V(true)
       if (chance(0.2)) update.cornerRadius = V(num(0, 10))
+      // (a group whose box is left out of its bounds: vega picks it only as far as what it holds reaches)
+      if (chance(0.3)) update.noBound = V(true)
       const inner = [leaf(`${name}i0`, true), ...(chance(0.5) ? [leaf(`${name}i1`, true)] : [])]
       marks.push({ type: 'group', name, from: { data: `d_${name}` }, encode: { update }, marks: inner })
     } else {
@@ -198,7 +205,8 @@ export function genPickScene(seed: number, W = 300, H = 220): PickScene {
   for (let i = 0; i < 60; i++) points.push([int(W + 20), int(H + 20)])
   for (let i = 0; i < 90 && anchors.length; i++) {
     const [ax, ay] = pick(anchors)
-    points.push([Math.round(ax + num(-25, 25)), Math.round(ay + num(-25, 25))])
+    // (on the view: a browser delivers no pointer event to a view from a point outside it)
+    points.push([Math.min(W + 19, Math.max(0, Math.round(ax + num(-25, 25)))), Math.min(H + 19, Math.max(0, Math.round(ay + num(-25, 25))))])
   }
   return {
     name: `gen-${seed}`,
@@ -269,6 +277,24 @@ const fixedScenes = (): PickScene[] => {
         marks: [{ type: 'symbol', name: 'dots', from: { data: 't' }, encode: { update: { x: { scale: 'x', field: 'x' }, y: { scale: 'y', field: 'y' }, size: V(300), fill: { scale: 'c', field: 'id' }, tooltip: { signal: "'dot ' + datum.id" } } } }],
       },
       points: grid(390, 210, 3, 1),
+    },
+    {
+      // group items whose box is left out of their bounds (`noBound`): vega looks for such an item, and for what it holds, only
+      // within the bounds of what it holds; clipped as well, it has no bounds and nothing in it is picked
+      name: 'fixed-nobound',
+      spec: {
+        ...base, signals: [PICKED_SIGNAL], data: [{ name: 't', values: rows }],
+        marks: [
+          { type: 'rect', name: 'under', encode: { update: { x: V(0), y: V(0), x2: { signal: 'width' }, y2: { signal: 'height' }, fill: V('#eee'), tooltip: V('under') } } },
+          ...[[10.5, false], [135.5, true]].map(([x, clip]) => ({
+            type: 'group', name: clip ? 'clipped' : 'open',
+            encode: { update: { x: V(x), y: V(10.5), width: V(110), height: V(150), fill: V('#f4f4f4'), stroke: V('#999'), strokeWidth: V(3), noBound: V(true), clip: V(clip), tooltip: V(clip ? 'clipped group' : 'open group') } },
+            marks: [{ type: 'symbol', name: clip ? 'inClipped' : 'inOpen', encode: { update: { x: V(30), y: V(40), size: V(900), fill: V('#4c78a8'), tooltip: V('symbol') } } }],
+          })),
+        ],
+      },
+      points: grid(280, 200, 4),
+      oracle: 'canvas',
     },
     {
       // a line, an area and a trail: vega's tooltip handler resolves each to one of its items
@@ -456,10 +482,14 @@ export async function runPickPhase(browser: Browser, pageUrl: string, scenes: Pi
         for (const key of ['picked', 'tip'] as const) {
           const svg = r.vs[key], canvas = r.vc[key], aster = r.as[key]
           if (svg !== canvas) out.ambiguous++
-          if (aster === svg || aster === canvas) continue
+          if (svg === canvas ? aster === svg : aster === canvas || (sc.oracle !== 'canvas' && aster === svg)) continue
           // Aster's answer is what vega answers a quarter of a pixel away: the point is on an edge (counted, and capped below)
           around ??= await page.evaluate(([px, py]) => (window as unknown as { __around: (x: number, y: number) => Promise<Array<Record<'vs' | 'vc' | 'as', Read>>> }).__around(px!, py!), [x, y])
-          if (around.some((a) => a.vs[key] === aster || a.vc[key] === aster)) { out.edge++; continue }
+          if (around.some((a) => (sc.oracle !== 'canvas' && a.vs[key] === aster) || a.vc[key] === aster)) {
+            out.edge++
+            if (process.env.PICK_DEBUG) console.log(`  edge ${sc.name} (${x},${y}) ${key}: vega svg=${svg} canvas=${canvas} aster=${aster}`)
+            continue
+          }
           ok = false
           failures.push(`(${x},${y}) ${key}: vega${svg === canvas ? '' : ` svg=${svg} canvas`}=${canvas} aster=${aster}${process.env.PICK_DEBUG ? ` [svg target ${r.at}]` : ''}`)
         }
