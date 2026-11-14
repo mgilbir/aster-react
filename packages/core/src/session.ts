@@ -194,9 +194,8 @@ function metaKeyOf(skeleton: string, input: RuntimeInput): string {
 }
 
 /** Fingerprint a spec + input for the no-op cache (skeleton + data refs + size/signals). */
-function fingerprint(spec: VgSpec, input: RuntimeInput): string {
+function fingerprint(spec: VgSpec, input: RuntimeInput, skeleton: string = skeletonOf(spec)): string {
   const parts: string[] = []
-  const skeleton = skeletonOf(spec)
   dataKeyOf(spec, input, parts)
   return `${metaKeyOf(skeleton, input)}\u0000${parts.join('\u0001')}`
 }
@@ -324,7 +323,7 @@ export function createChartSession(): ChartSession {
     clock.check('compile')
     const skeleton = skeletonOf(spec)
     const metaKey = metaKeyOf(skeleton, input)
-    const key = fingerprint(spec, input)
+    const key = fingerprint(spec, input, skeleton)
     const currentRaw = rawDatasets(spec, input)
     const { input: effectiveInput, pulse } = withAutoPulse(spec, input, currentRaw)
     // An explicit change description (per-datum changeset, pulse, or a named
@@ -390,7 +389,7 @@ export function createChartSession(): ChartSession {
     lastScene = pending.scene
     // Every key follows the state that was just committed, or the no-op cache
     // would serve a scene built for different inputs.
-    lastKey = fingerprint(lastSpec, { ...effectiveInput, data: dataInput(currentRaw) })
+    lastKey = fingerprint(lastSpec, { ...effectiveInput, data: dataInput(currentRaw) }, lastSkeleton)
     lastMetaKey = metaKeyOf(lastSkeleton, effectiveInput)
     lastRaw = currentRaw
     lastPulse = pulse
