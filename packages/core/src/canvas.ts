@@ -22,6 +22,8 @@ export { parsePathData, tracePath, type PathSeg, type PathSink } from './path-da
 // The bitmaps of image marks: the renderer draws `item.image` and never fetches; a host that shows url images loads them with these.
 export { IMAGE_CONCURRENCY, loadImages, sceneImageUrls, withSceneImages, type ImageLoadOptions } from './image-load.js'
 export type { ItemImage } from './image-box.js'
+// The canvas renderer's events for the signal event loop (which item an event is about, as vega's canvas handler resolves it).
+export { createCanvasEvents, type CanvasEvents } from './canvas-events.js'
 
 type SceneDefs = SceneDef
 import {
