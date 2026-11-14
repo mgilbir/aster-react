@@ -225,7 +225,25 @@ export interface DomRenderOptions {
 const DENSE_SYMBOL_MIN = 512
 const DENSE_SYMBOL_CHUNK = 256
 
-interface DenseChunk { from: number; to: number; first: SceneItem; last: SceneItem; desc: DomDesc }
+/**
+ * `gen`: the scene generation it was built in; `stamped`: every item in it carried a generation then (an unstamped item is
+ * never clean, see `isClean`); `d`: its path data; `open`: it ended at the end of the items, short of the size bound.
+ */
+interface DenseChunk { from: number; to: number; first: SceneItem; last: SceneItem; desc: DomDesc; gen: number | undefined; stamped: boolean; d: string; open: boolean }
+
+/**
+ * Whether every item of a chunk is clean (`isClean`), proved without reading them when the items array is one the engine
+ * advances in place (it stamps `__editGen` on every in-place replacement): the chunk was built in an earlier generation from
+ * this same array, every item carried a generation, and nothing in the array was replaced since -- so the items are the very
+ * ones it was built from, all encoded at or before that generation, none at this one. Any other array is read item by item.
+ */
+function chunkClean(items: SceneItem[], chunk: DenseChunk, from: number, to: number): boolean {
+  const a = items as SceneItem[] & { __engineItems?: true; __editGen?: number }
+  if (a.__engineItems === true && CURRENT_GEN != null && chunk.gen != null && chunk.gen < CURRENT_GEN && chunk.stamped
+    && (a.__editGen === undefined || a.__editGen <= chunk.gen)) return true
+  for (let j = from; j < to; j++) if (!isClean(items[j]!)) return false
+  return true
+}
 interface DenseCache { items: SceneItem[]; chunkSize: number; chunks: Map<number, DenseChunk> }
 // Cached per items array of a scene group: the runtime reuses the items array for
 // incremental updates, so unchanged chunks keep their descriptor and their DOM.
@@ -292,11 +310,7 @@ function denseSymbolItems(group: SceneGroup, items: SceneItem[], chunkSize: numb
     const full = cachedChunks?.get(from)
     if (full && full.first === first && full.to - from === chunkSize && full.to <= items.length
       && items[full.to - 1] === full.last) {
-      let clean = true
-      for (let j = from; j < full.to; j++) {
-        if (!isClean(items[j]!)) { clean = false; break }
-      }
-      if (clean) {
+      if (chunkClean(items, full, from, full.to)) {
         full.desc.clean = true
         chunks.set(from, full)
         out.push(full.desc)
@@ -304,7 +318,13 @@ function denseSymbolItems(group: SceneGroup, items: SceneItem[], chunkSize: numb
         continue
       }
     }
-    let to = i + 1
+    // An open tail chunk (it ended at the end of the items, short of the size bound) of unchanged items is resumed where it
+    // ended: its own items need neither the batchable / paint scan nor translating again (see the full-chunk case above), so
+    // an append costs the appended items, not the tail chunk.
+    const open = cachedChunks?.get(from)
+    const resume = open !== undefined && open.open && open.first === first && open.to <= items.length && items[open.to - 1] === open.last
+      && chunkClean(items, open, from, open.to) ? open : null
+    let to = resume !== null ? resume.to : i + 1
     while (to < items.length && to - from < chunkSize) {
       const cand = items[to]!
       if (!batchableSymbol(cand) || !samePaint(first, cand)) break
@@ -315,11 +335,7 @@ function denseSymbolItems(group: SceneGroup, items: SceneItem[], chunkSize: numb
     }
     const cached = cachedChunks?.get(from)
     if (cached && cached.to === to && cached.first === first) {
-      let clean = true
-      for (let j = from; j < to; j++) {
-        if (!isClean(items[j]!)) { clean = false; break }
-      }
-      if (clean) {
+      if (resume === cached || chunkClean(items, cached, from, to)) {
         cached.desc.clean = true
         chunks.set(from, cached)
         out.push(cached.desc)
@@ -327,9 +343,11 @@ function denseSymbolItems(group: SceneGroup, items: SceneItem[], chunkSize: numb
         continue
       }
     }
-    let d = ''
-    for (let j = from; j < to; j++) {
+    let d = resume !== null ? resume.d : ''
+    let stamped = resume !== null ? resume.stamped : true
+    for (let j = resume !== null ? resume.to : from; j < to; j++) {
       const it = items[j]!
+      if (it.__gen == null) stamped = false
       if (!batchableSymbol(it)) continue
       const r = Math.sqrt((it.size as number) ?? SYMBOL_DEFAULT_SIZE) / 2
       d += symbolTranslated(symbolGeometry((it as Record<string, unknown>).shape as string | undefined, r), it.x as number, it.y as number, translatePathData)
@@ -337,7 +355,7 @@ function denseSymbolItems(group: SceneGroup, items: SceneItem[], chunkSize: numb
     // A fresh desc object (never mutate a cached one): the patcher compares
     // against the previous descriptor, so reusing the object would hide the write.
     const desc: DomDesc = { tag: 'path', attrs: [['d', d], ...symbolAttrs(first)] }
-    const chunk: DenseChunk = { from, to, first, last: items[to - 1]!, desc }
+    const chunk: DenseChunk = { from, to, first, last: items[to - 1]!, desc, gen: CURRENT_GEN, stamped, d, open: to === items.length && to - from < chunkSize }
     chunks.set(from, chunk)
     out.push(desc)
     i = to

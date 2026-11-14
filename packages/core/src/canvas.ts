@@ -370,7 +370,8 @@ export function renderSceneToCanvasAppend(
       if (nItems.length < oldLen) return false
       // The very same group object is not a superseded one (its items are
       // live): an item re-encoded under it carries a newer `__gen`.
-      if (ng === pg) {
+      // (an array the engine advances in place stamps every in-place re-encode: `editedSince` below sees it without the scan)
+      if (ng === pg && (nItems as SceneItem[] & { __engineItems?: true }).__engineItems !== true) {
         for (let j = 0; j < oldLen; j++) {
           const gen = (nItems[j] as SceneItem & { __gen?: number }).__gen
           if (gen != null && gen > prev.gen) return false

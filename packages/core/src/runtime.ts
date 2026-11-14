@@ -4749,6 +4749,11 @@ function evaluateMarkItems(
     for (const it of items) if ((it as { fill?: unknown }).fill === 'transparent') (it as unknown as Record<string, unknown>)._hit = true
   }
 
+  // The engine's items array: the only in-place writes it ever gets are the append path's (above), which stamps every in-place
+  // replacement with `__editGen`. A consumer may take "the same array, no stamp since" as proof that the items it saw are still
+  // the ones there, without reading them (dom.ts dense chunks, canvas.ts append).
+  ;(items as SceneItem[] & { __engineItems?: true }).__engineItems = true
+
   // Appended items extend the carried union bounds only now, after the mark
   // defaults above ran (they can change an item's stroke and so its bounds).
   const group: SceneGroup = {
