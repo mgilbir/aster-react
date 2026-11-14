@@ -256,13 +256,20 @@ function inStroke(polys: Poly[], x: number, y: number, st: Stroke): boolean {
       const len = Math.hypot(bx - ax, by - ay)
       const dx = (bx - ax) / len, dy = (by - ay) / len
       dir.push(dx, dy)
+      // (a segment whose box, grown by half the width, misses the point cannot hold it: most of a long outline is skipped so)
+      if ((x < ax && x < bx) || (x > ax && x > bx) || (y < ay && y < by) || (y > ay && y > by)) {
+        if (x < Math.min(ax, bx) - st.hw || x > Math.max(ax, bx) + st.hw || y < Math.min(ay, by) - st.hw || y > Math.max(ay, by) + st.hw) continue
+      }
       const along = (x - ax) * dx + (y - ay) * dy
       if (along >= 0 && along <= len && Math.abs((x - ax) * -dy + (y - ay) * dx) <= st.hw) return true
     }
-    // the joins: at every vertex of a closed outline, at the inner ones of an open one
+    // the joins: at every vertex of a closed outline, at the inner ones of an open one (none reaches further than the miter limit)
+    const reach = st.hw * Math.max(1, st.limit)
     for (let i = closed ? 0 : 1; i < (closed ? m : m - 1); i++) {
+      const vx = v[2 * i]!, vy = v[2 * i + 1]!
+      if (Math.abs(x - vx) > reach || Math.abs(y - vy) > reach) continue
       const pi = (i - 1 + segs) % segs
-      if (inJoin(v[2 * i]!, v[2 * i + 1]!, dir[2 * pi]!, dir[2 * pi + 1]!, dir[2 * i]!, dir[2 * i + 1]!, x, y, st)) return true
+      if (inJoin(vx, vy, dir[2 * pi]!, dir[2 * pi + 1]!, dir[2 * i]!, dir[2 * i + 1]!, x, y, st)) return true
     }
     if (!closed) {
       if (inCap(v[0]!, v[1]!, -dir[0]!, -dir[1]!, x, y, st)) return true
@@ -285,6 +292,7 @@ function inFill(polys: Poly[], x: number, y: number): boolean {
     for (let i = 0; i < n; i++) {
       const j = (i + 1) % n
       const ax = pts[2 * i]!, ay = pts[2 * i + 1]!, bx = pts[2 * j]!, by = pts[2 * j + 1]!
+      if (x < Math.min(ax, bx) - FLATTEN_TOLERANCE || x > Math.max(ax, bx) + FLATTEN_TOLERANCE || y < Math.min(ay, by) - FLATTEN_TOLERANCE || y > Math.max(ay, by) + FLATTEN_TOLERANCE) continue
       const dx = bx - ax, dy = by - ay
       const l2 = dx * dx + dy * dy
       const t = l2 === 0 ? 0 : Math.max(0, Math.min(1, ((x - ax) * dx + (y - ay) * dy) / l2))
