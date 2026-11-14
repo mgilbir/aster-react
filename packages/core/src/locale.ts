@@ -261,6 +261,41 @@ export function currentLocale(): Locale {
   return joined.locale
 }
 
+const LOCALE_STAMPS = new WeakMap<object, number>()
+let nextLocaleStamp = 0
+
+/**
+ * A number that names the current default locale (both halves): it changes whenever either default is replaced, and only then.
+ * What an evaluation keeps from the one before was formatted under the locale of then (see `extraFp` in runtime.ts).
+ */
+function localeStamp(): number {
+  const current = currentLocale()
+  let stamp = LOCALE_STAMPS.get(current)
+  if (stamp === undefined) LOCALE_STAMPS.set(current, (stamp = ++nextLocaleStamp))
+  return stamp
+}
+
+/**
+ * The host's time zone: a local date's parts (a `timeFormat`, a local time scale's ticks) are read in it, and a host may change it
+ * while the process runs (Node reads `TZ` again when it is set; a browser follows the system's zone). Named by `TZ` where the host
+ * has one, and by what the clock says at a few instants (the zone's long name and its offsets): reading the zone's name from `Intl`
+ * costs a formatter per evaluation (about 0.1 ms). A zone switched to under a running page that has the same long name and the
+ * same offsets at those instants as the one before is not told apart.
+ */
+function hostTimeZone(): string {
+  const tz = (globalThis as { process?: { env?: Record<string, string | undefined> } }).process?.env?.TZ
+  return `${tz ?? ''}|${new Date(0).toString()}|${new Date(6.6e11).getTimezoneOffset()}|${new Date(1.75e12).getTimezoneOffset()}`
+}
+
+/**
+ * What text and local dates are made under besides the spec and the input: the default locale (`localeStamp`) and the host's time
+ * zone. Whatever is kept from an earlier evaluation (a kept mark, a scene a session hands back unchanged) was made under the key of
+ * then, so it is part of every such key.
+ */
+export function formatEnvironmentKey(): string {
+  return `${localeStamp()}\u0001${hostTimeZone()}`
+}
+
 /** With no arguments, the default locale; with both definitions, replace the defaults. One argument is an error. */
 export function defaultLocale(...definitions: [FormatLocaleDefinition?, TimeLocaleDefinition?]): Locale {
   if (definitions.length && definitions.length !== 2) error('defaultLocale expects either zero or two arguments.')

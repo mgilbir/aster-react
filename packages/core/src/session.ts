@@ -23,6 +23,7 @@ import { dataInputOf, valuesSignal } from './spec-structure.js'
 import { evaluateChartPending, type DataStability } from './runtime.js'
 import { incrementalEngine } from './incremental-engine.js'
 import { refId, valueKey } from './fingerprint.js'
+import { formatEnvironmentKey } from './locale.js'
 import { checkSpecLimits, checkSceneLimits, createLimitClock, withLimits, activeMeter } from './limits.js'
 import { diffRows, type DataPulse } from './pulse.js'
 import { checkChartRows } from './row-watch.js'
@@ -181,6 +182,8 @@ export interface ChartSession {
 function metaKeyOf(skeleton: string, input: RuntimeInput): string {
   const parts: string[] = []
   parts.push(`w=${valueKey(input.width)}`, `h=${valueKey(input.height)}`)
+  // a scene made under another default locale or in another time zone formats its text and dates otherwise
+  parts.push(`fmt=${formatEnvironmentKey()}`)
   // `containerSize()` is read by the spec's width / height signals: a resized container is a different view
   if (input.containerSize) parts.push(`cs=${valueKey(input.containerSize)}`)
   if (input.measuredSize) parts.push(`ms=${valueKey(input.measuredSize)}`)

@@ -29,7 +29,7 @@ import { implicit as implicitCategory } from './scale-discrete.js'
 /** Scale types whose domain is an ordered set of discrete values. */
 const DISCRETE_TYPES = new Set(['band', 'point', 'ordinal'])
 import { ITEM_MARK, geoRegistry, requireGeo } from './registry.js'
-import { locale } from './locale.js'
+import { formatEnvironmentKey, locale } from './locale.js'
 import type {
   CompiledAxis,
   CompiledChart,
@@ -855,7 +855,8 @@ function prepareChartCtx(
   const transformHierarchies = new Map<string, unknown>()
   const defs: SceneDef[] = []
   // Inputs besides the signals that change what a reused scale/item would be.
-  const extraFp = `${input.domainRaw ? valueKey(input.domainRaw) : ''}\u0002${input.textMetrics ? valueKey(input.textMetrics) : ''}\u0002${input.containerSize ? `${input.containerSize.width}x${input.containerSize.height}` : ''}\u0002${input.measuredSize ? `${input.measuredSize.width}x${input.measuredSize.height}` : ''}`
+  // (and what a formatted text or a local date read besides the spec and the input: the default locale, the host's time zone)
+  const extraFp = `${input.domainRaw ? valueKey(input.domainRaw) : ''}\u0002${input.textMetrics ? valueKey(input.textMetrics) : ''}\u0002${input.containerSize ? `${input.containerSize.width}x${input.containerSize.height}` : ''}\u0002${input.measuredSize ? `${input.measuredSize.width}x${input.measuredSize.height}` : ''}\u0002${formatEnvironmentKey()}`
   const ctx: EvalContext = {
     chart, scope: rootScope(chart), abort: { failures: [] }, ...(passMemory !== undefined ? { passMemory } : {}), signalParams, width, height, datasets, setData, scales, scaleTypes, projections: transformProjections, projectionStamp: new Map(), projectionIncomplete: new Set(), geoStale: false, runtime, _defs: defs,
     layoutState: { failed: false, warnings: [] }, initDone: new Set(), hostSignals: new Set([
