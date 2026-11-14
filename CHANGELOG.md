@@ -77,8 +77,8 @@ and Fixed, per package. Everything built before the first release is in [Pre-rel
   before; a mark drawn from another mark's items (Vega-Lite's voronoi) is kept when what it reads of them is as it was. What is
   derived from a scene -- the hit index, the DOM descriptors, the accessible tree's boxes, `event.item`'s parent links, the
   cursor check -- is kept with the engine's nodes and costs what a scene made anew. On the chart-bench heavy survival chart a
-  60-move pointer sweep costs about a third of what it did in the browser (Vega spec) and about a quarter (Vega-Lite spec); see
-  docs/ARCHITECTURE.md for what each reuse reads.
+  60-move pointer sweep in Chromium costs about half the CPU it did with the Vega spec (603 -> 314 ms) and a quarter with the
+  Vega-Lite spec (4,204 -> 1,043 ms); see docs/ARCHITECTURE.md for what each reuse reads.
 - A dense hit index answers its first queries by a scan of the item boxes and builds its grid when asked more; a path item's
   outline is placed when a query first reaches its box.
 
