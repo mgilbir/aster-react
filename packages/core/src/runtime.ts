@@ -15,6 +15,7 @@ import { applyTransforms, applyTransformsToSharedRows, copiesRows, sortOrder, ge
 import { fieldOf } from './transform-agg.js'
 import { atRandomSite, contentKey, mayDrawRandom, normalPairs, replayable } from './random-tape.js'
 import { lexedText } from './expr-text.js'
+import { noteEngineScene } from './scene-registry.js'
 import { datasetsReadIn, identifiersIn, scalesReadIn, dependencyKey, fieldsWritten, namesIn, pipelineReadsOf, reuse, runsOf, stepCounts, stepReadsOf, type StepReads, type StepRecord } from './step-reuse.js'
 import { activeMeter, withLimits, ceiling, checkRowCount, meterItems, meterTick, AsterLimitError } from './limits.js'
 import { withTextMetricsProvider } from './text-metrics.js'
@@ -2920,6 +2921,8 @@ function evaluateChartPass(chart: CompiledChart, hostInput: RuntimeInput, txn: E
   ctx.draft.idCounter = ctx.ids.value
   done.draft = ctx.draft
   done.failed = ctx.failed === true
+  // (what is derived from its nodes may be kept with them from now on: see scene-registry.ts)
+  noteEngineScene(scene)
   return scene
 }
 
