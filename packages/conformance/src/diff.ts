@@ -12,6 +12,10 @@
  * the same SVG as a freshly compiled chart evaluated on the same rows. These are
  * the changes that keep or remake a discrete scale (and a continuous one).
  *
+ * Then signals change (diff-signals.ts): every corpus spec that declares a signal or a Vega-Lite selection store is taken
+ * through a generated sequence of signal and store writes in one session, and after every step everything a host reads of the
+ * scene (SVG, scene, datasets, signals, hit results, accessible tree) equals a fresh evaluation of the same input.
+ *
  * Run: pnpm conformance:diff
  */
 import { readdirSync, readFileSync } from 'node:fs'
@@ -23,6 +27,7 @@ import '@aster-charts/core/transforms'
 import { compileChart, evaluateChart, renderSceneToSvg } from '@aster-charts/core'
 import { createChartSession } from '@aster-charts/core/dom'
 import { canonicalizeSvg } from './normalize.js'
+import { signalChangesMatch } from './diff-signals.js'
 import { cli } from '../../../scripts/lib/cli.mjs'
 
 cli({ url: import.meta.url })
@@ -157,12 +162,25 @@ async function main(): Promise<void> {
   let rowRan = 0
   let rowSkipped = 0
   const rowFailures: string[] = []
+  const signalRand = mulberry32(0x5167)
+  let signalSpecs = 0
+  let signalSteps = 0
+  let signalSkipped = 0
+  const signalFailures: string[] = []
   for (const f of readdirSync(CORPUS_DIR).sort()) {
     if (!f.endsWith('.json')) continue
     const raw = JSON.parse(readFileSync(join(CORPUS_DIR, f), 'utf8'))
     const spec = f.endsWith('.vl.json') ? (vl.compile(raw as never).spec as Record<string, unknown>) : raw
     const data = (spec.data ?? []) as Array<{ name?: string; values?: unknown[] }>
     const dataset = data.find((d) => Array.isArray(d.values) && d.values.length > 0 && typeof d.values[0] === 'object')
+    // the signal changes: every spec that declares a signal or a selection store
+    const signalsMatch = signalChangesMatch(spec, dataset?.name && dataset.values ? { name: dataset.name, rows: dataset.values as Array<Record<string, unknown>> } : null, signalRand)
+    if (signalsMatch !== null) {
+      signalSpecs++
+      signalSteps += signalsMatch.compared
+      signalSkipped += signalsMatch.skipped
+      if (signalsMatch.mismatch !== undefined) signalFailures.push(`${f} (${signalsMatch.mismatch})`)
+    }
     if (!dataset?.name || !dataset.values) continue
     const name = dataset.name
     const values = dataset.values as Array<Record<string, unknown>>
@@ -211,7 +229,9 @@ async function main(): Promise<void> {
   for (const f of failures) console.log(`  ✗ ${f}`)
   console.log(`[conformance:diff] row changes: ${rowRan} corpus specs; ${rowFailures.length} mismatches; ${rowSkipped} skipped (the changed rows made the spec throw)`)
   for (const f of rowFailures) console.log(`  ✗ ${f}`)
-  if (failed > 0 || rowFailures.length > 0) process.exit(1)
+  console.log(`[conformance:diff] signal changes: ${signalSpecs} corpus specs, ${signalSteps} steps compared; ${signalFailures.length} mismatches; ${signalSkipped} steps skipped (both threw)`)
+  for (const f of signalFailures) console.log(`  ✗ ${f}`)
+  if (failed > 0 || rowFailures.length > 0 || signalFailures.length > 0) process.exit(1)
 }
 
 main().catch((e) => { console.error(e); process.exit(1) })
