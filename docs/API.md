@@ -350,7 +350,9 @@ Afterwards `push` returns `false` (not counted as a drop), `flush` returns `null
 `RuntimeInput` (the second argument of `renderSpec`, `evaluateChart` and the session) has these fields: `limits`,
 `urlPolicy`, `urlData`, `logger`, `random`, `textMetrics`, `data`, `width`, `height`, `signals`, `containerSize`, `measuredSize`, `changedDatasets`,
 `dataChanges`, `dataPulse`, `autoChanges`, `domainRaw`. `data` is a `Record<string, unknown[]>` keyed by dataset
-name; it overrides or supplies the rows of the spec dataset of that name.
+name; it overrides or supplies the rows of the spec dataset of that name. A row is an object, or a value (a number, string or boolean is read as `{data: value}`); a row that is `null` or
+`undefined` is an error, where vega fails on one: a `TypeError` naming the dataset, the row and where it came from (see
+`docs/ERRORS.md`, "Rows that are null or undefined").
 
 `urlData` (`'allow'`, the default, or `'refuse'`; type `UrlDataMode`) says whether the spec may name `url` datasets. With
 `'refuse'` a spec that has a dataset with a non-empty `url` and no `values`, at the top level or in a nested group, fails at once with an
@@ -764,7 +766,7 @@ signal values, and the container the chart sizes the spec to and the one it meas
 a stream sizes its spec to the container the chart measures exactly as `<Chart>` sizes its own evaluation.
 
 **`data` and `dataChanges`.** `data` is a `Record<string, unknown[]>`: the key is the *dataset name* in the spec, the
-value its rows. A bare array does not typecheck (`data={newRows}` is an error); write `data={{ table: newRows }}`. A new
+value its rows (objects, or values; a `null` or `undefined` row is an error, as below for `renderSpec`'s `data`). A bare array does not typecheck (`data={newRows}` is an error); write `data={{ table: newRows }}`. A new
 array for a dataset is diffed against the previous one (appends and in-place edits re-encode only the affected rows).
 `dataChanges={{ table: [3, 7] }}` is an optional hint with the same meaning as in the session; it is validated, and an
 unknown dataset, a non-integer or out-of-range index or a changed row count makes the whole changeset be ignored

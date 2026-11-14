@@ -378,6 +378,18 @@ reported through `onError` (the hook's `error`), and it is remembered for the pa
   render await loadSpecData(spec, { baseURL, ... }), or pass the rows as input.data["t"]`. A url dataset in a group mark fails the
   same way, with `(it is in a group mark, so loadSpecData is the way: input.data does not reach it)` in place of the last clause.
   Under `urlData: 'refuse'` the spec is refused before this, with an `AsterUrlError` ([URL errors](#url-errors)).
+- **Rows that are null or undefined** — vega fails on a row that is `null` or `undefined` where it reads the row's tuple id,
+  and so does Aster, at the same points and with the same class of error (`TypeError`, no `code`), with its own message:
+  ``[aster] dataset "t": row 1 of its inline `values` is null; a row must be an object or a value (a number, string or boolean
+  is read as {data: value}), not null or undefined. vega rejects this data too.`` The ``of ...`` part says where the row came from:
+  ``its inline `values` ``, ``the rows the host gave it (`data`)`` (with ``(an index `dataChanges` lists)`` when the host
+  listed it), ``a stream `push` (`append`)`` / ``(`data` snapshot)``, ``the rows its `{signal}` values made``, or
+  ``` `setdata(...)` ```. It is **thrown** for a spec's inline values (by `renderSpec`, `evaluateChart`, a session's `evaluate`
+  and `createChartStream`, where vega's View constructor throws), for the host's rows (`input.data`, the `data` prop,
+  `dataChanges`: where vega's `view.data` throws) and by a stream's `push` (before anything is queued, as `view.insert` throws).
+  It is **logged** (the `logger`), and the pass stops there as vega's does, for a group mark's inline values (the group item
+  is made, nothing inside it), for `setdata`, and for a `{signal}` values: there the mark that joins the row fails (the marks
+  before it are made, it and the ones after it are not), and a dataset no mark joins raises nothing.
 - **Stratify** — `[aster] stratify: cycle | multiple roots | missing: id | ambiguous: id | no root` (vega's messages
   with the prefix), and `[aster] stratify requires a key field`.
 - **Circular data reference** — named datasets cannot form a cycle: `[aster] circular data reference: <name>`.

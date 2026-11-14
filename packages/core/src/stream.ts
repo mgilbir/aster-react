@@ -442,6 +442,12 @@ export function createChartStream(spec: VgSpec, options: StreamOptions = {}): Ch
   const capacity = policy === 'coalesce' ? 1 : batchCapacity
   let session: ChartSession | null = createChartSession()
   const base = new Map<string, unknown[]>(specSourceRows(spec))
+  // (the spec's inline rows are inserted when the chart is made, where vega's View throws for a row that is not a tuple; the stream
+  // then hands them to its session as its own rows, so they are checked here, under their name)
+  for (const [dataset, rows] of base) {
+    const at = rows.findIndex((r) => r == null)
+    if (at >= 0) throw notATuple(rows[at] as null | undefined, { dataset, source: 'values' }, at)
+  }
   if (options.initial?.data) for (const [name, rows] of Object.entries(options.initial.data)) base.set(name, rows)
   const owned = new Set<string>()
   let signals: Record<string, unknown> = dict(options.initial?.signals)
@@ -722,11 +728,12 @@ export function createChartStream(spec: VgSpec, options: StreamOptions = {}): Ch
     push(batch) {
       // (rows enter the datasets as vega inserts them: a `null` or `undefined` row is refused before anything is queued, as
       // `view.insert` throws before it changes anything)
-      for (const set of [batch.data, batch.append]) {
+      for (const [set, source] of [[batch.data, 'snapshot'], [batch.append, 'append']] as const) {
         if (set == null) continue
-        for (const rows of Object.values(set)) {
+        for (const [dataset, rows] of Object.entries(set)) {
           if (!Array.isArray(rows)) continue
-          for (const r of rows) if (r == null) throw notATuple(r)
+          const at = rows.findIndex((r) => r == null)
+          if (at >= 0) throw notATuple(rows[at] as null | undefined, { dataset, source }, at)
         }
       }
       return enqueue(batch)

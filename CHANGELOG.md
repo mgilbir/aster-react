@@ -7,6 +7,16 @@ and Fixed, per package. Everything built before the first release is in [Pre-rel
 
 ### `@aster-charts/core`
 
+#### Changed (breaking)
+
+- **A row that is `null` or `undefined` is an error, as in vega.** 0.3.0 drew such a row: it read it as `{data: null}`
+  (or boxed it, for a `{signal}` values), so it was drawn and counted in aggregates (`count`, a stack, a domain). vega fails
+  on it, and Aster now fails where vega fails, with the same class of error (`TypeError`) and a message of its own that names
+  the dataset, the row and where it came from: thrown for a spec's inline `values`, the host's `data` and `dataChanges`, and by
+  a stream's `push`; logged, with the pass stopped where vega's stops, for a group's inline values, `setdata` and the mark that
+  joins a row a `{signal}` values made. To keep such rows out, filter them before passing the data (`rows.filter((r) => r != null)`).
+  See `docs/ERRORS.md`, "Rows that are null or undefined".
+
 #### Fixed
 
 - Every scene item has the `datum` vega gives it. The item of a mark without `from` had none (vega: a generated `{}`, which its

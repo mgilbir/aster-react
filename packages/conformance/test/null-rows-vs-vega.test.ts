@@ -6,6 +6,10 @@
  * null (reading 'Symbol(vega_id)')`. Its dynamic loader (a `{signal}` values) only ingests, so a `null` goes through and the error is
  * the mark's join's, logged as a dataflow error: the pass stops at that mark (the marks before it are made, it and the ones after it
  * are not). A row that is a number, a string or a boolean is wrapped as `{data}` everywhere, as vega wraps it.
+ *
+ * Aster fails in the same cases, at the same points, with the same class of error (TypeError); its message is its own -- which row
+ * of which dataset, given how -- rather than vega's: compared with vega here are the class and where it is raised (thrown or logged,
+ * how often, what is drawn), and the messages are pinned at the end.
  */
 import { describe, it, expect } from 'vitest'
 import * as vega from 'vega'
@@ -18,21 +22,23 @@ const text = (from: string, x = 5): Spec => ({ type: 'text', from: { data: from 
 const lone: Spec = { type: 'rule', encode: { update: { x: { value: 50 }, y: { value: 0 }, y2: { value: 40 }, stroke: { value: 'black' } } } }
 const frame = (data: unknown[], marks: unknown[], extra: Spec = {}): Spec => ({ width: 100, height: 50, padding: 0, autosize: 'none', data, marks, ...extra })
 
-interface Outcome { thrown?: string; svg?: string; errors: string[] }
+/** What was thrown and logged, by class (vega's message and Aster's differ by design), and Aster's messages. */
+interface Outcome { thrown?: string; svg?: string; errors: string[]; messages?: string[] }
+const classOf = (e: unknown): string => (e instanceof Error ? e.constructor.name : String(e).split(':')[0]!)
 
 async function withVega(spec: Spec, after?: (view: any) => Promise<void> | void): Promise<Outcome> {
   const errors: string[] = []
-  const logger = { level() { return logger }, error: (...a: unknown[]) => { errors.push(String(a[0])); return logger }, warn: () => logger, info: () => logger, debug: () => logger }
+  const logger = { level() { return logger }, error: (...a: unknown[]) => { errors.push(classOf(a[0])); return logger }, warn: () => logger, info: () => logger, debug: () => logger }
   let view: any
   try {
     view = new (vega as any).View(vega.parse(spec as never), { renderer: 'none', logger })
   } catch (e) {
-    return { thrown: `${(e as Error).constructor.name}: ${(e as Error).message}`, errors }
+    return { thrown: classOf(e), errors }
   }
   try {
     await view.runAsync()
     if (after) {
-      try { await after(view) } catch (e) { return { thrown: `${(e as Error).constructor.name}: ${(e as Error).message}`, svg: canonicalizeSvg(await view.toSVG()), errors } }
+      try { await after(view) } catch (e) { return { thrown: classOf(e), svg: canonicalizeSvg(await view.toSVG()), errors } }
     }
     return { svg: canonicalizeSvg(await view.toSVG()), errors }
   } finally {
@@ -42,11 +48,12 @@ async function withVega(spec: Spec, after?: (view: any) => Promise<void> | void)
 
 function withAster(f: (logger: unknown) => string): Outcome {
   const errors: string[] = []
-  const logger = { error: (e: unknown) => { errors.push(String(e)) }, warn: () => {} }
+  const messages: string[] = []
+  const logger = { error: (e: unknown) => { errors.push(classOf(e)); messages.push((e as Error).message) }, warn: () => {} }
   try {
-    return { svg: canonicalizeSvg(f(logger)), errors }
+    return { svg: canonicalizeSvg(f(logger)), errors, messages }
   } catch (e) {
-    return { thrown: `${(e as Error).constructor.name}: ${(e as Error).message}`, errors }
+    return { thrown: classOf(e), errors, messages: [...messages, (e as Error).message] }
   }
 }
 
@@ -168,7 +175,7 @@ describe('a null or undefined row a {signal} values gives: the mark that joins i
     expect(fresh.errors).toEqual(changed.errors)
     for (const path of ['session', 'stream'] as const) {
       const errors: string[] = []
-      const logger = { error: (e: unknown) => { errors.push(String(e)) }, warn: () => {} }
+      const logger = { error: (e: unknown) => { errors.push(classOf(e)) }, warn: () => {} }
       let svg: string
       if (path === 'session') {
         const session = createChartSession()
@@ -188,5 +195,60 @@ describe('a null or undefined row a {signal} values gives: the mark that joins i
       expect(errors, path).toEqual(changed.errors)
       expect(diffCanonical(fresh.svg!, canonicalizeSvg(svg)).slice(0, 3), path).toEqual([])
     }
+  })
+})
+
+describe("Aster's message: which row of which dataset, given how", () => {
+  const SOURCES: Record<string, string> = {
+    values: 'its inline `values`', data: 'the rows the host gave it (`data`)', append: 'a stream `push` (`append`)',
+    snapshot: 'a stream `push` (`data` snapshot)', signal: 'the rows its `{signal}` values made', setdata: '`setdata(...)`',
+  }
+  const message = (dataset: string, row: number, source: string, value: 'null' | 'undefined', listed = false): string =>
+    `[aster] dataset "${dataset}": row ${row} of ${SOURCES[source]} is ${value}${listed ? ' (an index `dataChanges` lists)' : ''}; ` +
+    'a row must be an object or a value (a number, string or boolean is read as {data: value}), not null or undefined. vega rejects this data too.'
+  const caught = (f: () => unknown): Error => { try { f() } catch (e) { return e as Error } throw new Error('did not throw') }
+
+  it('inline values, through renderSpec, a session and a stream (thrown)', () => {
+    for (const [values, row, value] of [[[{ a: 1 }, null], 1, 'null'], [[undefined, { a: 2 }], 0, 'undefined']] as const) {
+      const spec = frame([{ name: 't', values: values as unknown[] }], [text('t')])
+      for (const run of Object.values(PATHS)) {
+        const e = caught(() => run(spec)(undefined))
+        expect(e).toBeInstanceOf(TypeError)
+        expect(e.message).toBe(message('t', row, 'values', value))
+      }
+    }
+  })
+
+  it('host rows, and an index the host listed in dataChanges (thrown)', () => {
+    const spec = frame([{ name: 't', values: [{ a: 9 }] }], [text('t')])
+    expect(caught(() => renderSpec(spec as never, { data: { t: [{ a: 1 }, { a: 2 }, null] } } as never)).message).toBe(message('t', 2, 'data', 'null'))
+    const session = createChartSession()
+    session.evaluate(spec as never, { data: { t: [{ a: 1 }, { a: 2 }] } } as never)
+    const e = caught(() => session.evaluate(spec as never, { data: { t: [{ a: 1 }, undefined] }, dataChanges: { t: [1] } } as never))
+    expect(e).toBeInstanceOf(TypeError)
+    expect(e.message).toBe(message('t', 1, 'data', 'undefined', true))
+  })
+
+  it('a stream push: thrown at the call, naming append or snapshot', () => {
+    const stream = createChartStream(frame([{ name: 't', values: [{ a: 1 }] }], [text('t')]) as never)
+    expect(caught(() => stream.push({ append: { t: [{ a: 2 }, { a: 3 }, null] } })).message).toBe(message('t', 2, 'append', 'null'))
+    expect(caught(() => stream.push({ data: { t: [undefined] } })).message).toBe(message('t', 0, 'snapshot', 'undefined'))
+    stream.close()
+  })
+
+  it('logged: a group\'s inline values, setdata, a {signal} values joined by a mark, and a signal-driven change to one', () => {
+    const logged = (spec: Spec, input: Spec = {}, after?: (s: ReturnType<typeof createChartSession>, logger: unknown) => void): string[] => {
+      const messages: string[] = []
+      const logger = { error: (e: unknown) => { expect(e).toBeInstanceOf(TypeError); messages.push((e as Error).message) }, warn: () => {} }
+      const session = createChartSession()
+      session.evaluate(spec as never, { ...input, logger } as never)
+      after?.(session, logger)
+      return messages
+    }
+    expect(logged(frame([], [{ type: 'group', data: [{ name: 'g', values: [{ a: 1 }, null] }], marks: [text('g')] }]))).toEqual([message('g', 1, 'values', 'null')])
+    expect(logged(frame([{ name: 't', values: [{ a: 1 }] }], [text('t')], { signals: [{ name: 's', update: 'setdata("t", [{a: 7}, null])' }] }))).toEqual([message('t', 1, 'setdata', 'null')])
+    expect(logged(frame([{ name: 't', values: { signal: '[1, null]' } }], [text('t')]))).toEqual([message('t', 1, 'signal', 'null')])
+    const changing = frame([{ name: 't', values: { signal: 'n ? [1, 2, null] : [1, 2]' } }], [text('t')], { signals: [{ name: 'n', value: false }] })
+    expect(logged(changing, {}, (session, logger) => { session.evaluate(changing as never, { signals: { n: true }, logger } as never) })).toEqual([message('t', 2, 'signal', 'null')])
   })
 })

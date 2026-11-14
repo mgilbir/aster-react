@@ -711,6 +711,8 @@ function reportEvalError(ctx: EvalContext, e: unknown): void {
 }
 
 function refuseUnrecoverable(e: unknown): void {
+  // (a row that is not a tuple fails the dataflow where vega's fails, and is logged where vega logs it: see notATuple)
+  if (isNotATupleError(e)) return
   if (e instanceof AsterLimitError || e instanceof AsterUrlError || e instanceof ExpressionParseError || e instanceof SpecParseError || (e instanceof Error && e.message.startsWith('[aster]'))) throw e
 }
 
@@ -999,7 +1001,7 @@ function makeSetdata(chart: CompiledChart, state: SetDataState): NonNullable<Exp
     // vega-dataflow enqueues an operator only once per run: a signal ranked after the dataset's input (it reads the dataset, or
     // something derived from it) calls setdata when the input has already run in this first pass, so its pulse is lost
     if (state.caller !== undefined && signalRanksAfterDatasetInput(chart, state.caller, name)) return 1
-    const rows = ingestRows((Array.isArray(tuples) ? tuples : tuples == null ? [] : [tuples]) as Row[], 0, undefined, true).map((r) => ({ ...r }))
+    const rows = ingestRows((Array.isArray(tuples) ? tuples : tuples == null ? [] : [tuples]) as Row[], 0, undefined, { dataset: name, source: 'setdata' }).map((r) => ({ ...r }))
     const have = state.rows.get(name)
     if (have === undefined || contentKey(have) !== contentKey(rows)) {
       state.rows.set(name, rows)
@@ -3279,7 +3281,7 @@ function buildDatasetsOf(ctx: EvalContext, inputData: Record<string, unknown[]>)
         // topojson feature extraction). The host's current values (input.data)
         // win over the spec's compiled-in ones.
         const given = ownGet(inputData, src)
-        rows = readData(given ?? inlineValues(ctx, srcDef.values), (d as { format?: DataFormatSpec }).format, given === undefined && valuesSignal(srcDef.values) !== undefined)
+        rows = readData(given ?? inlineValues(ctx, srcDef.values), (d as { format?: DataFormatSpec }).format, given === undefined && valuesSignal(srcDef.values) !== undefined, { dataset: src, source: given === undefined ? 'values' : 'data' })
         notePrimitiveTuples(ctx, rows)
         inPulse = ctx.inputPulses?.get(src) ?? null
       } else {
@@ -3297,13 +3299,15 @@ function buildDatasetsOf(ctx: EvalContext, inputData: Record<string, unknown[]>)
       inPulse = ctx.inputPulses?.get(name) ?? null
       if (given) {
         // (rows that readData would pass through as they are -- an array of JSON rows, nothing to parse -- are only ingested)
-        rows = Array.isArray(given) && passesThroughRead(d.format, given) ? ingestHostRows(given as Row[], inPulse) : readData(given, d.format)
+        // (a session hands a dataset its spec's own inline rows this way too: those are named as inline values)
+        const source = given === d.values ? 'values' : 'data'
+        rows = Array.isArray(given) && passesThroughRead(d.format, given) ? ingestHostRows(given as Row[], inPulse, name, source) : readData(given, d.format, false, { dataset: name, source, ...(inPulse?.changed ? { dataChanges: inPulse.changed } : {}) })
         inputs = [given]
         raw = true
       } else {
         // vega-loader read semantics: object arrays pass through format.parse
         // coercion; string values are parsed by the registered reader.
-        rows = readData(inlineValues(ctx, d.values), d.format, valuesSignal(d.values) !== undefined)
+        rows = readData(inlineValues(ctx, d.values), d.format, valuesSignal(d.values) !== undefined, { dataset: name, source: 'values' })
         notePrimitiveTuples(ctx, rows)
       }
     } else {
@@ -3314,7 +3318,7 @@ function buildDatasetsOf(ctx: EvalContext, inputData: Record<string, unknown[]>)
         throw unloadedUrlError(name, true)
       }
       inPulse = ctx.inputPulses?.get(name) ?? null
-      rows = ingestHostRows(given ?? [], inPulse)
+      rows = ingestHostRows(given ?? [], inPulse, name)
       shared = true
       if (given != null) { inputs = [given]; raw = true }
     }
@@ -3471,10 +3475,10 @@ const objectRowPrefix = new WeakMap<readonly unknown[], number>()
  * for the ones it lists as changed (a stream appends to the array it already gave): when those were already all objects, only
  * the appended and the changed rows are looked at, not the whole dataset on every append.
  */
-function ingestHostRows(given: readonly Row[], pulse: StepPulse | null): Row[] {
+function ingestHostRows(given: readonly Row[], pulse: StepPulse | null, dataset: string, source: 'values' | 'data' = 'data'): Row[] {
   const known = objectRowPrefix.get(given) ?? 0
   const base = pulse?.appendOnly && pulse.baseLength !== undefined && pulse.baseLength <= known && pulse.baseLength <= given.length ? pulse.baseLength : 0
-  const rows = ingestRows(given, base, pulse?.changed, true)
+  const rows = ingestRows(given, base, pulse?.changed, { dataset, source, ...(pulse?.changed ? { dataChanges: pulse.changed } : {}) })
   if (rows === given) objectRowPrefix.set(given, given.length)
   return rows
 }
@@ -4481,9 +4485,10 @@ function evaluateMarkItems(
     // (vega's DataJoin reads each tuple's id: a `null` or `undefined` tuple a `{signal}` values gave throws there, before any item is
     // made -- the pass stops at this mark, which is not made)
     if (ctx.primitiveTuples) {
-      const bad = rows.find((r) => PRIMITIVE_TUPLE in r && tupleDatum(r) == null)
-      if (bad !== undefined) {
-        failPass(ctx, { axis: Infinity, mark: ctx.scope.mark ?? 0 }, notATuple(tupleDatum(bad) as null | undefined))
+      const at = rows.findIndex((r) => PRIMITIVE_TUPLE in r && tupleDatum(r) == null)
+      if (at >= 0) {
+        const dataset = (mark.from as { data?: unknown } | undefined)?.data
+        failPass(ctx, { axis: Infinity, mark: ctx.scope.mark ?? 0 }, notATuple(tupleDatum(rows[at]) as null | undefined, { dataset: typeof dataset === 'string' ? dataset : String(dataset), source: 'signal' }, at))
         ctx.encodeAborted = true
         return null
       }
@@ -5395,7 +5400,7 @@ function buildGroupItem(mark: CompiledMark, ctx: EvalContext, entered: EnteredGr
       if (!shared && d.values == null && d.url != null) throw unloadedUrlError(d.name, false)
       let rows: Row[] | undefined
       try {
-        rows = shared ? undefined : d.values != null ? readData(inlineValues(ctx, d.values), d.format, valuesSignal(d.values) !== undefined) : []
+        rows = shared ? undefined : d.values != null ? readData(inlineValues(ctx, d.values), d.format, valuesSignal(d.values) !== undefined, { dataset: d.name, source: 'values' }) : []
       } catch (e) {
         // (vega inserts a group's inline rows into its dataset inside the run: a row that is not a tuple is logged there, not thrown)
         if (!isNotATupleError(e)) throw e
