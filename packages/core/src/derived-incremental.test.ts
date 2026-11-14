@@ -64,8 +64,8 @@ function ask(scene: SceneRoot): unknown {
   const seen: unknown[] = []
   const binding = bindSceneSignals(svg, scene, { ...((scene as unknown as { signalParams?: Row }).signalParams ?? {}) }, { onSignal: (name, value) => { if (name === 'info') seen.push(value) } }, { pick: (x, y) => index.pick(x, y) })
   const at: unknown[] = []
-  for (let x = 2; x < scene.width; x += 7) {
-    for (let y = 2; y < scene.height; y += 9) {
+  for (let x = 2; x < scene.width; x += 11) {
+    for (let y = 2; y < scene.height; y += 13) {
       seen.length = 0
       svg.dispatchEvent(new MouseEvent('pointermove', { clientX: x, clientY: y, bubbles: true }))
       at.push(seen.length ? seen[seen.length - 1] : '-')

@@ -330,11 +330,12 @@ function walk(v: Variant, steps: Step[], start: World = { t: T0, u: U0 }, hinted
     const n = itemCount(scene, 'pts') + itemCount(scene, 'others')
     const e = (encoded.pts ?? 0) + (encoded.others ?? 0)
     if (!isKept) {
-      // (everything that reads the scale is made again, as a fresh evaluation makes it: no item of the marks is the one before; an item
-      // over the same row whose scale-reading channel is not tied to others is the one before with that channel evaluated again, its
-      // counting `opacity` not evaluated, see `reencodeChannels`)
-      expect(keptItems(prev, scene, 'pts') + keptItems(prev, scene, 'others'), `${what}: items kept`).toBe(0)
-      expect(e, `${what}: encoded`).toBeLessThanOrEqual(n)
+      // (everything that reads the scale is made again, as a fresh evaluation makes it -- (a) holds every item to it. An item over the
+      // same row whose scale-reading channel (`shape`, `size`, `strokeDash`) is tied to no other has that channel evaluated again, its counting
+      // `opacity` not evaluated, and is the item before when the channel came out as it was: see `reencodeChannels`. A paint (`fill`)
+      // or a position (`x`, `width`) is encoded whole: every counter runs)
+      if (v.kind === 'shape' || v.kind === 'size' || v.kind === 'strokeDash') expect(e, `${what}: encoded`).toBeLessThanOrEqual(n)
+      else expect(e, `${what}: encoded`).toBe(n)
     } else if (PIPELINES[v.pipeline]!.rowWise && step.touches !== Infinity) {
       expect(e, `${what}: encoded`).toBeLessThanOrEqual(step.touches)
       expect(keptItems(prev, scene, 'pts') + keptItems(prev, scene, 'others'), `${what}: items kept`).toBeGreaterThanOrEqual(n - step.touches)

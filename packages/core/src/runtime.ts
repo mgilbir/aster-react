@@ -2713,13 +2713,16 @@ function keptOverMarkItems(mark: CompiledMark, ctx: EvalContext, prevGroup: Scen
 /**
  * The group a mark drawn from another mark's items makes when what it reads of its rows is as it was but the rows are not the same
  * (see `keptOverMarkItems`): each item is its item before with the datum a fresh evaluation gives it, a copy of the item it is drawn
- * from as it is now (vega's datum there is that item itself, as it is now). Every other property is what it was: made from what it
- * read, which is unchanged. The group is the one before with these items.
+ * from as it is now (vega's datum there is that item itself, as it is now), or the item before itself when it is drawn from the very
+ * item it was (a published item holds what it held). Every other property is what it was: made from what it read, which is
+ * unchanged. The group is the one before with these items.
  */
-function withNewDatums(mark: CompiledMark, ctx: EvalContext, prevGroup: SceneGroup, from: readonly SceneItem[]): SceneGroup {
+function withNewDatums(mark: CompiledMark, ctx: EvalContext, prevGroup: SceneGroup, from: readonly SceneItem[], was: readonly SceneItem[]): SceneGroup {
   const before = prevGroup.items as SceneItem[]
   const items = new Array<SceneItem>(before.length)
   for (let i = 0; i < before.length; i++) {
+    // (drawn from the very item it was drawn from: its datum is a copy of that item, which is as it was -- the item is the one before)
+    if (from[i] === was[i]) { items[i] = before[i]!; continue }
     const datum = { ...(from[i] as unknown as Row) }
     markTuple(datum)
     items[i] = { ...before[i]!, datum, __gen: ctx.gen } as SceneItem
@@ -2899,7 +2902,7 @@ function buildContentPass(
     const keptOver = prevGroup !== null && !reused && overItems !== undefined ? keptOverMarkItems(mark, ctx, prevGroup) : null
     if (prevGroup !== null && (reused || keptOver !== null)) {
       if (overItems !== undefined) recordOverMarkItems(mark, ctx, overItems)
-      const group = keptOver === 'datums' ? withNewDatums(mark, ctx, prevGroup, overItems!) : prevGroup
+      const group = keptOver === 'datums' ? withNewDatums(mark, ctx, prevGroup, overItems!, ctx.prev!.markSources.get(mark)!.items) : prevGroup
       items.push(group)
       ctx.draft.groups.set(mark, group)
       // (its channels read what they read: the mark's key, which holds every name they hold, is as it was)
@@ -4895,15 +4898,22 @@ function reencodeChannels(mark: CompiledMark, ctx: EvalContext, prevGroup: Scene
     for (let i = 0; i < record.items.length; i++) {
       const before = record.items[i]! as unknown as Record<string, unknown>
       const datum = before.datum as Row
-      const copy = { ...before }
-      // (what the DOM patcher kept on the item before for itself: a fresh item has none)
-      if ('__domDesc' in copy) delete copy.__domDesc
       let whole = false
-      for (const k of order) {
+      let copy: Record<string, unknown> | undefined
+      for (let c = 0; c < order.length; c++) {
+        const k = order[c]!
         const v = resolveEncodeProperty(encode[k], datum, ctx, binding)
-        if ((v === undefined) !== (copy[k] === undefined) || (v === undefined) !== !(k in copy)) { whole = true; break }
-        if (v !== undefined) copy[k] = v
+        if ((v === undefined) !== (before[k] === undefined) || (v === undefined) !== !(k in before)) { whole = true; break }
+        if (Object.is(v, before[k])) continue
+        if (copy === undefined) {
+          copy = { ...before }
+          // (what the DOM patcher kept on the item before for itself: a fresh item has none)
+          if ('__domDesc' in copy) delete copy.__domDesc
+        }
+        copy[k] = v
       }
+      // (every channel evaluated again came out as it was: the item is the one before, as a kept item is)
+      if (!whole && copy === undefined) { out[i] = before as unknown as SceneItem; continue }
       if (whole) {
         const row = { ...(rows[i] as Row) }
         markTuple(row)
@@ -4913,7 +4923,7 @@ function reencodeChannels(mark: CompiledMark, ctx: EvalContext, prevGroup: Scene
         out[i] = res
         continue
       }
-      copy.__gen = gen
+      copy!.__gen = gen
       out[i] = copy as unknown as SceneItem
     }
   } catch {
