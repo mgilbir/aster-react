@@ -818,6 +818,20 @@ async function sizingSuite(page: Page): Promise<void> {
     return { w: svg.width, h: svg.height, binds }
   })
   check(box.w === 520 && Math.abs(box.h + box.binds - 340) < 1, `a 520x340 container is filled exactly: svg ${box.w}x${box.h} + bound inputs ${box.binds}`)
+  // a spec whose autosize is `none` fixes its size (the chart-bench frame: a 824 x 536 view and padding that make a 900 x 600 box):
+  // in a measured container larger than the box, without size props, it is drawn at its own size and origin, as vega-embed draws
+  // it, not refitted to the container (#hover-correctness: the plot used to shrink to 786 x 499 at 92,25)
+  const frame = {
+    ...spec({ autosize: 'none' }), width: 824, height: 536, padding: { top: 20, right: 20, bottom: 44, left: 56 },
+  }
+  await page.evaluate(([sp, pr]) => (window as never as { __mount: (...a: unknown[]) => void }).__mount(sp, pr, [], [], 'position:relative;width:1000px;height:700px'), [frame, unsized] as const)
+  await page.waitForSelector('svg .mark-symbol path')
+  await heights(4)
+  const fixedBox = await page.evaluate(() => {
+    const svg = document.querySelector('#chart-host svg')!
+    return { w: svg.getAttribute('width'), h: svg.getAttribute('height'), origin: svg.querySelector(':scope > g')?.getAttribute('transform') }
+  })
+  check(fixedBox.w === '900' && fixedBox.h === '600' && fixedBox.origin === 'translate(56,20)', `an autosize none spec keeps its own 900x600 box and origin in a 1000x700 container (${JSON.stringify(fixedBox)})`)
 }
 
 /**
