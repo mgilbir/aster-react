@@ -272,11 +272,15 @@ cli({ url: import.meta.url })
 // origin/main 4daa104 (kB gzip, before -> after): core/hit 6.3 -> 8.1, core/signals 12.9 -> 13.4, Chart 216.4 -> 218.6, SvgChart
 // 192.4 -> 192.6, SvgChart + interaction 209.7 -> 212.1, Chart + VL 321.0 -> 323.3; core 160.0 -> 160.1 and useChart 172.0 -> 172.2
 // within their ceilings. Ceilings are the measured value + 0.5.
+// Then the follow-up on the same branch (the hit index scans flat boxes and caches its targets, noBound group bounds, isTuple over a
+// tuple registry, a view laid out on a negative range), measured 2026-11-14 on a clean build (kB gzip, previous ceiling note ->
+// now): core 160.1 -> 160.9, core/hit 8.1 -> 8.9, useChart 172.2 -> 172.9, Chart 218.6 -> 220.1, SvgChart 192.6 -> 193.5,
+// SvgChart + interaction 212.1 -> 213.7, Chart + VL 323.3 -> 324.9. Ceilings are the measured value + 0.5.
 const BUDGETS = {
-  '@aster-charts/core': 160.4 * 1024,
+  '@aster-charts/core': 161.4 * 1024,
   '+ @aster-charts/core/dom': 11.8 * 1024,
   '+ @aster-charts/core/canvas': 6.4 * 1024,
-  '+ @aster-charts/core/hit': 8.6 * 1024,
+  '+ @aster-charts/core/hit': 9.4 * 1024,
   '+ @aster-charts/core/signals': 13.9 * 1024,
   '+ @aster-charts/core/load': 5.9 * 1024,
   '+ @aster-charts/core/geo': 16.6 * 1024,
@@ -288,13 +292,13 @@ const BUDGETS = {
   // call), measured 2026-11-12 on a clean build: 7.7 kB gzip over the core app (the canvas renderer's 6.0 included; 7.5 before the
   // one image deadline). No eager row grew past what the #143 note above set for the two together. Ceiling is the measured value + 0.5.
   '+ @aster-charts/core/png': 8.2 * 1024,
-  '@aster-charts/react useChart': 172.5 * 1024,
-  '@aster-charts/react Chart': 219.1 * 1024,
+  '@aster-charts/react useChart': 173.4 * 1024,
+  '@aster-charts/react Chart': 220.6 * 1024,
   // The light chart (`@aster-charts/react/lite`): SVG only, no canvas renderer; alone and with the `interaction` capability.
-  '@aster-charts/react SvgChart': 193.1 * 1024,
-  '@aster-charts/react SvgChart + interaction': 212.6 * 1024,
+  '@aster-charts/react SvgChart': 194.0 * 1024,
+  '@aster-charts/react SvgChart + interaction': 214.2 * 1024,
   // Base + the VL compiler (opt-in: `import '@aster-charts/react/vl'`).
-  '@aster-charts/react Chart + VL': 323.8 * 1024,
+  '@aster-charts/react Chart + VL': 325.4 * 1024,
 }
 
 const THIS_DIR = dirname(fileURLToPath(import.meta.url))
