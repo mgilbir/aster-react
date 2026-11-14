@@ -2757,13 +2757,19 @@ function evaluateChartPass(chart: CompiledChart, hostInput: RuntimeInput, txn: E
   let ch = initialH
   let firstPassPadding: BuiltContent['padding'] | undefined
   let built: BuiltContent
+  // (autosize none containing the padding: the view's width and height, the padding taken out, sign and all)
+  let insidePadding: { width: number; height: number } | undefined
   if (auto === 'none' && autosizeContains === 'padding') {
     // autosize `none` with `contains: "padding"`: the view's width / height INCLUDE the padding, so the group (the
     // width / height signals, every scale and expression that reads them) gets what is left (vega-view-transforms
     // viewSizeLayout: `width = viewWidth`, the padding taken out of it), as a resize of the view does.
-    cw = Math.max(0, initialW - base.left - base.right)
-    ch = Math.max(0, initialH - base.top - base.bottom)
-    built = buildContent(chart, input, cw, ch, txn, true)
+    cw = initialW - base.left - base.right
+    ch = initialH - base.top - base.bottom
+    // A size smaller than the padding (no width at all, say) leaves a negative view: vega keeps it (viewSizeLayout does not clamp
+    // `width = viewWidth` for `none`), so the signals, the scales and the root group's box are laid out on it, the layout reading
+    // it as 0, and the svg is `Math.max(0, view + padding)` (vega-view render-size).
+    insidePadding = { width: cw, height: ch }
+    built = buildContent(chart, input, cw, ch, txn, true, cw < 0 || ch < 0 ? { width: cw < 0 ? cw : undefined, height: ch < 0 ? ch : undefined } : undefined)
   } else {
     built = buildContent(chart, input, cw, ch, txn, false, undefined, fitting ? { first: true } : undefined)
   }
@@ -2819,12 +2825,16 @@ function evaluateChartPass(chart: CompiledChart, hostInput: RuntimeInput, txn: E
   const fitW = (auto === 'fit' || auto === 'fit-x') && firstPassPadding !== undefined
   const fitH = (auto === 'fit' || auto === 'fit-y') && firstPassPadding !== undefined
   const contains = autosizeContains === 'padding'
-  const sceneWidth = fitW
+  const sceneWidth = insidePadding !== undefined
+    ? Math.max(0, insidePadding.width + base.left + base.right)
+    : fitW
     ? initialW + (contains ? 0 : base.left + base.right)
     : auto !== 'none'
       ? width + padding.left + padding.right
       : width + ctx.chart.padding.left + ctx.chart.padding.right
-  const sceneHeight = fitH
+  const sceneHeight = insidePadding !== undefined
+    ? Math.max(0, insidePadding.height + base.top + base.bottom)
+    : fitH
     ? initialH + (contains ? 0 : base.top + base.bottom)
     : auto !== 'none'
       ? height + padding.top + padding.bottom
@@ -2835,8 +2845,8 @@ function evaluateChartPass(chart: CompiledChart, hostInput: RuntimeInput, txn: E
     height: sceneHeight,
     // the frame background is the root group's own box: the view's width x height
     // (a composition's is the degenerate M0,0h0v0h0Z)
-    plotWidth: ctx.rootUnsized ? 0 : width,
-    plotHeight: ctx.rootUnsized ? 0 : height,
+    plotWidth: ctx.rootUnsized ? 0 : insidePadding !== undefined && insidePadding.width < 0 ? insidePadding.width : width,
+    plotHeight: ctx.rootUnsized ? 0 : insidePadding !== undefined && insidePadding.height < 0 ? insidePadding.height : height,
     // (`background` is a view signal: a spec that declares one sets the background through it; one with no value leaves the spec's)
     background: ctx.signalParams.background !== undefined && (chart.signalDefs ?? []).some((d) => d.name === 'background') ? (ctx.signalParams.background as string | null) : ctx.chart.background,
     frameStroke: ctx.chart.frameStroke,
@@ -2887,9 +2897,10 @@ export function chartInfoFromScene(scene: SceneRoot): ChartInfo {
   return {
     // `ChartInfo` carries the plot (content) size — pan/zoom and brushing map
     // pixels against it — not the padded document size.
-    width: (scene as { plotWidth?: number }).plotWidth
+    // (a view laid out on a negative range, autosize none containing more padding than size, has no plot)
+    width: Math.max(0, (scene as { plotWidth?: number }).plotWidth ?? 0)
       || Math.max(0, scene.width - padding.left - padding.right),
-    height: (scene as { plotHeight?: number }).plotHeight
+    height: Math.max(0, (scene as { plotHeight?: number }).plotHeight ?? 0)
       || Math.max(0, scene.height - padding.top - padding.bottom),
     padding,
     // Reconstruct from the live map when a scene came from a worker/SSR clone.

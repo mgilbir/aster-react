@@ -554,7 +554,9 @@ export function buildAxis(inp: AxisBuildInput): AxisBuilt {
   const userAxis = inp.encode.axis
   partMeta.axis = { name: userAxis?.name ? String(userAxis.name) : undefined, interactive: !!userAxis?.interactive }
 
-  const bounds = inp.raw ? new Bounds() : layoutAxis(group, titleItem, extents, inp.width, inp.height)
+  // (vega-view-transforms lays a group's axes out on its size as `Math.max(0, width)`: a view laid out on a negative range keeps its
+  // right and bottom axes at 0)
+  const bounds = inp.raw ? new Bounds() : layoutAxis(group, titleItem, extents, Math.max(0, inp.width), Math.max(0, inp.height))
 
   // the leaves were made in the group's frame; the scene holds them in the view's
   const gx = (group.x as number) || 0
