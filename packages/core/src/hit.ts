@@ -100,7 +100,7 @@ interface Entry {
   /** Part of an axis, a legend or a title. */
   guide?: true
   /** The item's mark reads a dataset. */
-  fromData?: true
+  fromData?: true | undefined
   /** Not interactive (its mark / guide part says `pointer-events: none`): `pick` looks through it. */
   inert?: true
   /** A guide part the other queries never saw (an interactive legend entry, symbol path, gradient, tick...): only `pick` finds it. */
@@ -373,6 +373,8 @@ function nearestOf(items: SceneItem[], tx: number, ty: number, x: number, y: num
 
 export function buildHitIndex(scene: SceneRoot, cell = DEFAULT_CELL): HitIndex {
   const entries: Entry[] = []
+  /** The mark being indexed reads a dataset: its entries say so when they are made. */
+  let markFromData: true | undefined
   /** The clips around what is being indexed (outermost first). */
   let clips: Clip[] | undefined
   /** Put every entry made since `from` that has no clips of its own under the current ones. */
@@ -437,23 +439,22 @@ export function buildHitIndex(scene: SceneRoot, cell = DEFAULT_CELL): HitIndex {
       return
     }
     const e0 = entries.length
+    const guidePart = group.role === 'title-text' || group.role === 'title-subtitle'
+    // (an item of a mark that reads a dataset has a row for its datum; a title's text is a guide's part)
+    markFromData = group.__source !== undefined && !guidePart ? true : undefined
     // a mark's `clip`: its items are clipped to the frame of the group they are in (or to its rounded outline)
     const clip = group.clip === true ? (group.clipPathD ? pathClip(group.clipPathD, tx, ty) : rectClip(tx, ty, fw, fh)) : null
-    withClip(clip, () => {
-      addMark(group, type, gx, gy)
-      clipFrom(e0)
-    })
-    const inert = isInert(group)
-    const guidePart = group.role === 'title-text' || group.role === 'title-subtitle'
-    const fromData = group.__source !== undefined
-    for (let i = e0; i < entries.length; i++) {
-      const e = entries[i]!
-      // a mark that is not interactive takes no pointer (its container says `pointer-events: none`)
-      if (inert) e.inert = true
-      // a title's text is a guide's part; an item of a mark that reads a dataset has a row for its datum
-      if (guidePart) e.guide = true
-      else if (fromData) e.fromData = true
+    try {
+      withClip(clip, () => {
+        addMark(group, type, gx, gy)
+        clipFrom(e0)
+      })
+    } finally {
+      markFromData = undefined
     }
+    // a mark that is not interactive takes no pointer (its container says `pointer-events: none`)
+    if (isInert(group)) for (let i = e0; i < entries.length; i++) entries[i]!.inert = true
+    if (guidePart) for (let i = e0; i < entries.length; i++) entries[i]!.guide = true
   }
   const addMark = (group: SceneGroup, type: string, gx: number, gy: number): void => {
     if (type === 'line' || type === 'area' || type === 'trail') { addMulti(group, type, gx, gy); return }
@@ -519,7 +520,7 @@ export function buildHitIndex(scene: SceneRoot, cell = DEFAULT_CELL): HitIndex {
       if (ry > y2) y2 = ry
     }
     if (!Number.isFinite(x1 + y1 + x2 + y2)) return null
-    return { item, marktype, kind: 'text', cx: x, cy: y, rot, box, x1, y1, x2, y2 }
+    return { item, marktype, kind: 'text', cx: x, cy: y, rot, box, x1, y1, x2, y2, fromData: markFromData }
   }
 
   /** A leaf of a group: an axis or legend label or title (text), or a symbol leaf of a hand-built scene. */
@@ -597,7 +598,7 @@ export function buildHitIndex(scene: SceneRoot, cell = DEFAULT_CELL): HitIndex {
       }
       x1 = a; y1 = b; x2 = cc; y2 = d
     }
-    return { item, marktype, kind: 'geom', polys, build, fill, stroke, x1, y1, x2, y2, ...(at ?? {}) }
+    return { item, marktype, kind: 'geom', polys, build, fill, stroke, x1, y1, x2, y2, fromData: markFromData, ...(at ?? {}) }
   }
 
   /** A line, an area or a trail: one painted path, styled by the mark's first item. */
@@ -649,13 +650,13 @@ export function buildHitIndex(scene: SceneRoot, cell = DEFAULT_CELL): HitIndex {
     if (shape == null || shape === 'circle') {
       // (the circle is one arc closed on itself: no caps, no joins)
       const out = r + (stroke ? stroke.hw : 0)
-      entries.push({ item, marktype, kind: 'circle', cx, cy, r, fill, stroke, x1: cx - out, y1: cy - out, x2: cx + out, y2: cy + out })
+      entries.push({ item, marktype, kind: 'circle', cx, cy, r, fill, stroke, x1: cx - out, y1: cy - out, x2: cx + out, y2: cy + out, fromData: markFromData })
       return
     }
     const outline = shapeOutline(shape, r)
     const span = outline.reach + reachOf(stroke)
     const rot = ((rec(item).angle as number | undefined) ?? 0) * (Math.PI / 180)
-    entries.push({ item, marktype, kind: 'geom', cx, cy, rot, fill, stroke, polys: outline.polys, x1: cx - span, y1: cy - span, x2: cx + span, y2: cy + span })
+    entries.push({ item, marktype, kind: 'geom', cx, cy, rot, fill, stroke, polys: outline.polys, x1: cx - span, y1: cy - span, x2: cx + span, y2: cy + span, fromData: markFromData })
   }
 
   function addMarkItem(item: SceneItem, marktype: string, tx: number, ty: number): void {
@@ -682,7 +683,7 @@ export function buildHitIndex(scene: SceneRoot, cell = DEFAULT_CELL): HitIndex {
         }
         if (!stroke) {
           // the common case: a filled rectangle is its box
-          entries.push({ item, marktype, kind: 'box', fill, stroke: null, x1: Math.min(x0, x0 + w), y1: Math.min(y0, y0 + h), x2: Math.max(x0, x0 + w), y2: Math.max(y0, y0 + h) })
+          entries.push({ item, marktype, kind: 'box', fill, stroke: null, x1: Math.min(x0, x0 + w), y1: Math.min(y0, y0 + h), x2: Math.max(x0, x0 + w), y2: Math.max(y0, y0 + h), fromData: markFromData })
           return
         }
         const e = geomEntry(item, marktype, () => [{ pts: [x0, y0, x0 + w, y0, x0 + w, y0 + h, x0, y0 + h], closed: true }], item, undefined, stroke)
@@ -736,7 +737,7 @@ export function buildHitIndex(scene: SceneRoot, cell = DEFAULT_CELL): HitIndex {
       case 'image': {
         if (item.x == null || item.y == null) return
         const b = imageBox(item)
-        entries.push({ item, marktype, kind: 'box', fill: true, stroke: null, x1: tx + Math.min(b.x, b.x + b.w), y1: ty + Math.min(b.y, b.y + b.h), x2: tx + Math.max(b.x, b.x + b.w), y2: ty + Math.max(b.y, b.y + b.h) })
+        entries.push({ item, marktype, kind: 'box', fill: true, stroke: null, x1: tx + Math.min(b.x, b.x + b.w), y1: ty + Math.min(b.y, b.y + b.h), x2: tx + Math.max(b.x, b.x + b.w), y2: ty + Math.max(b.y, b.y + b.h), fromData: markFromData })
         return
       }
       default:
