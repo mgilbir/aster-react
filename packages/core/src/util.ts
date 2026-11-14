@@ -475,6 +475,41 @@ export const one = /* @__PURE__ */ accessor(() => 1, [], 'one')
 
 // --- expression helpers ------------------------------------------------------
 
+/** Accessors `pluck` remembers; the least recently used is dropped past it. */
+export const PLUCK_CACHE_MAX = 1024
+
+/**
+ * `make`, remembered per `String(key)` in a table of at most `max` entries that drops the least recently used. For the tables an
+ * expression reads per call (a formatter per specifier, an accessor per field name): their keys come from a spec or its data, so
+ * the table must be bounded, and a hit must cost a lookup alone.
+ *
+ * Every entry carries the tick of its last move to the young end of the table (a Map iterates in insertion order, so the entry
+ * dropped past the bound is the first one). A hit on an entry moved within the last `max / 2` ticks is not moved again: it is in
+ * the young half and is not next to go. So a loop over one or a few keys reads the table without rewriting it, and an entry used
+ * within the last `max / 2` distinct keys is never dropped (recency among the young half is not kept). `size` is for the tests.
+ */
+export function recentlyUsed<A, T>(max: number, make: (key: A) => T): ((key: A) => T) & { size: () => number } {
+  const table = new Map<string, { value: T; moved: number }>()
+  let tick = 0
+  const get = (key: A): T => {
+    const id = String(key)
+    const known = table.get(id)
+    if (known !== undefined) {
+      if (tick - known.moved >= max / 2) {
+        table.delete(id)
+        table.set(id, known)
+        known.moved = ++tick
+      }
+      return known.value
+    }
+    const value = make(key)
+    table.set(id, { value, moved: ++tick })
+    if (table.size > max) table.delete(table.keys().next().value as string)
+    return value
+  }
+  return Object.assign(get, { size: () => table.size })
+}
+
 /**
  * Memoized `field` accessors, keyed by the *stringified* name — upstream
  * memoizes in a plain object, so `pluck(d, 0)` and `pluck(d, '0')` share one
@@ -483,9 +518,7 @@ export const one = /* @__PURE__ */ accessor(() => 1, [], 'one')
  * so the table keeps only the most recently used {@link PLUCK_CACHE_MAX} (an
  * accessor is a pure function of its name: a dropped one is simply rebuilt).
  */
-const pluckAccessors = new Map<string, Accessor>()
-/** Accessors `pluck` remembers; the least recently used is dropped past it. */
-export const PLUCK_CACHE_MAX = 1024
+const pluckAccessors = recentlyUsed(PLUCK_CACHE_MAX, (name: unknown) => field(name))
 
 /**
  * Read `name` off a datum, or off every datum of an array — the upstream
@@ -498,22 +531,11 @@ export function pluck(data: unknown, name: unknown): unknown {
 
 /** The accessor of a field name an expression function was given (a path: `a.b`, `a\\.b`, `a[0]`), built once per name. */
 export function memoField(name: unknown): Accessor {
-  const key = String(name)
-  let f = pluckAccessors.get(key)
-  if (f) {
-    // a Map iterates in insertion order: re-inserting on a hit keeps the oldest entry first
-    pluckAccessors.delete(key)
-    pluckAccessors.set(key, f)
-  } else {
-    f = field(name)
-    pluckAccessors.set(key, f)
-    if (pluckAccessors.size > PLUCK_CACHE_MAX) pluckAccessors.delete(pluckAccessors.keys().next().value as string)
-  }
-  return f
+  return pluckAccessors(name)
 }
 
 /** Accessors `pluck` currently remembers (for tests). @internal */
-export const pluckCacheSize = (): number => pluckAccessors.size
+export const pluckCacheSize = (): number => pluckAccessors.size()
 
 /** vega-scenegraph `shapes.js` `sz`: an item without `size` is a 64px² symbol. */
 export const SYMBOL_DEFAULT_SIZE = 64

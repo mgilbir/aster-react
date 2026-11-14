@@ -17,7 +17,7 @@ import { selectionIdTest, selectionResolve, selectionTest, selectionTuples } fro
 import { parseExpressionCached } from './expr-parser.js'
 import { PRIMITIVE_TUPLE, tupleDatum } from './util.js'
 import { ADDON_FUNCTIONS } from './addon-functions.js'
-import { compileExpression, DefaultFunctions, ExpressionConstants, EventFunctions, FIRST_ARGUMENT_ONLY } from './expr-interpreter.js'
+import { compileExpression, DefaultFunctions, ExpressionConstants, EventFunctions, FIRST_ARGUMENT_ONLY, markThisless } from './expr-interpreter.js'
 import {
   timeOffset, utcOffset, timeSequence, utcSequence,
   dayofyear, utcdayofyear, week, utcweek, timeUnitSpecifier,
@@ -263,9 +263,27 @@ const REGISTERED_BOUND = new Map<string, (runtime: ExpressionRuntime) => (...arg
 
 function createFunctionContext(runtime: ExpressionRuntime): Record<string, unknown> {
   const fns = createBuiltinFunctions(runtime)
+  // (the built-ins never read `this`: the interpreter calls them directly; what is registered below is called as a host function)
+  markThisless(fns)
   for (const [name, make] of REGISTERED_BOUND) fns[name] = make(runtime)
   for (const [name, fn] of REGISTERED) fns[name] = fn
   return fns
+}
+
+/**
+ * The function table of a runtime, made once per runtime and registry version (every expression compiled against the runtime reads
+ * the same table). Sound because nothing in a table is fixed when it is made but the registry, which `registryEpoch` versions: the
+ * built-ins and the add-ons' bound functions read the runtime's members (`scale`, `data`, `random`, ...) when they are called, and
+ * no table is written after it is made. Keyed weakly by the runtime: a runtime is one evaluation's, and its table goes with it.
+ */
+const CONTEXTS = new WeakMap<ExpressionRuntime, { epoch: number; functions: Record<string, unknown> }>()
+function functionContextOf(runtime: ExpressionRuntime): Record<string, unknown> {
+  let made = CONTEXTS.get(runtime)
+  if (made === undefined || made.epoch !== registryEpoch) {
+    made = { epoch: registryEpoch, functions: createFunctionContext(runtime) }
+    CONTEXTS.set(runtime, made)
+  }
+  return made.functions
 }
 
 /**
@@ -647,7 +665,7 @@ export function compileExpr(expr: string, runtime: ExpressionRuntime): CompiledE
     throw new ExpressionParseError('Expression parse error: ' + expr, expr, { cause: e })
   }
   // vega refuses an unknown function when it parses and generates code ("Unrecognized function: x"), not when it is called
-  const functions = createFunctionContext(runtime)
+  const functions = functionContextOf(runtime)
   assertKnownFunctions(ast, functions, expr)
   const compiledEpoch = registryEpoch
   const evaluate = compileExpression(functions, ast)

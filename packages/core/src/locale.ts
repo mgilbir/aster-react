@@ -33,34 +33,14 @@ import {
   DATE, DAY, HOURS, MILLISECONDS, MINUTES, MONTH, QUARTER, SECONDS, WEEK, YEAR,
   timeIntervalFor, utcIntervalFor, type TimeInterval,
 } from './time.js'
-import { error, isObject, isString } from './util.js'
+import { error, isObject, isString, recentlyUsed } from './util.js'
 
 /** Entries kept per formatter table; the least recently used is dropped past it. */
 export const FORMATTER_CACHE_MAX = 512
 
-/** `make`, remembered per `String(key)`, keeping the most recently used `FORMATTER_CACHE_MAX` results. */
+/** `make`, remembered per `String(key)`, keeping the most recently used `FORMATTER_CACHE_MAX` results (see `recentlyUsed`). */
 function remember<A, T>(make: (key: A) => T): (key: A) => T {
-  // a Map iterates in insertion order, so re-inserting on a hit keeps the oldest entry first
-  const table = new Map<string, T>()
-  let latest: string | undefined
-  return (key) => {
-    const id = String(key)
-    const known = table.get(id)
-    if (known !== undefined) {
-      // asking again for the entry just used (a label loop) needs no reordering
-      if (id !== latest) {
-        table.delete(id)
-        table.set(id, known)
-        latest = id
-      }
-      return known
-    }
-    const made = make(key)
-    table.set(id, made)
-    latest = id
-    if (table.size > FORMATTER_CACHE_MAX) table.delete(table.keys().next().value as string)
-    return made
-  }
+  return recentlyUsed(FORMATTER_CACHE_MAX, make)
 }
 
 // --- the number half --------------------------------------------------------------------------

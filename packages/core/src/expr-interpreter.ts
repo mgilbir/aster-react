@@ -165,6 +165,22 @@ export const FIRST_ARGUMENT_ONLY: ReadonlySet<string> = new Set([
 /** Calls whose arguments the generated code evaluates out of order: `clamp(v, lo, hi)` is `Math.max(lo, Math.min(hi, v))`. */
 const ARGUMENT_ORDER: Readonly<Record<string, readonly number[]>> = { clamp: [1, 2, 0] }
 
+/**
+ * Functions of Aster's own tables that never read `this` (the defaults below and the engine's built-ins): a call that resolves to
+ * one is made directly, with its arguments, instead of through `apply` with the `this` object a host function receives. Which
+ * function a call resolves to is read on every call, as before; only the `this` it is handed differs, and these never look.
+ */
+const THISLESS = new WeakSet<object>()
+
+/** Mark the functions of a table as never reading `this` (see `THISLESS`). Only for tables Aster itself writes. */
+export function markThisless(table: Record<string, unknown>): void {
+  for (const k in table) {
+    const v = table[k]
+    if (typeof v === 'function') THISLESS.add(v)
+  }
+}
+markThisless(DefaultFunctions)
+
 /** `event.vega[f](...args)`; the names are the oracle's, as V8 puts them in the "is not a function" message. */
 function callEventFunction(event: unknown, f: string, args: unknown[]): unknown {
   return (event as { vega: Record<string, (...a: unknown[]) => unknown> }).vega[f]!(...args)
@@ -221,6 +237,15 @@ function unary(op: string, a: Run): Run {
   }
 }
 
+/** `o[key]` for a key that names no `Object.prototype` member: the plain read, with the dangerous-function check. */
+function plainMember(object: Run, key: string | number): Run {
+  return (f) => {
+    const v = (object(f) as Record<string | number, unknown>)[key]
+    if (typeof v === 'function' && DisallowedMethods.has(v)) { prevented('member', key); return undefined }
+    return v
+  }
+}
+
 function member(object: Run, property: Expr, computed: Run | undefined): Run {
   const read = (o: unknown, key: unknown): unknown => {
     // a risky key on a *function* (`Object.constructor` is `Function`) is never resolved; on a plain object the
@@ -229,14 +254,16 @@ function member(object: Run, property: Expr, computed: Run | undefined): Run {
     if (typeof v === 'function' && DisallowedMethods.has(v)) { prevented('member', key); return undefined }
     return v
   }
-  if (computed) return (f) => read(object(f), computed(f))
+  if (computed) {
+    // `o["name"]`, `o[0]`: a literal key that names no Object.prototype member reads exactly as the named form does (`safeGet`
+    // only differs on a risky key), so it is compiled as that, without the per-call key coercion and function test
+    const key = property.type === 'Literal' ? (property as { value: unknown }).value : undefined
+    if ((typeof key === 'string' && !DisallowedObjectProperties.has(key)) || typeof key === 'number') return plainMember(object, key)
+    return (f) => read(object(f), computed(f))
+  }
   const name = (property as { name: string }).name
   if (DisallowedObjectProperties.has(name)) return (f) => read(object(f), name)
-  return (f) => {
-    const v = (object(f) as Record<string, unknown>)[name]
-    if (typeof v === 'function' && DisallowedMethods.has(v)) { prevented('member', name); return undefined }
-    return v
-  }
+  return plainMember(object, name)
 }
 
 const refuse = (name: string): never => { throw new Error(`Function argument refused: ${name}`) }
@@ -287,7 +314,52 @@ function call(node: Extract<Expr, { type: 'CallExpression' }>, host: Record<stri
     return apply.call(fn, f.self ??= makeSelf(host, f.event), vals)
   }
 
-  return (f) => general(f, lookup())
+  // What the name resolves to now: when it is one of Aster's own functions (which never read `this`), a call that still resolves
+  // to it is made directly. The resolution is read on every call all the same: a table changed since falls back to `general`.
+  const known = lookup()
+  const direct = typeof known === 'function' && THISLESS.has(known) ? known as (...a: unknown[]) => unknown : undefined
+  if (direct === undefined) return (f) => general(f, lookup())
+  if (order !== undefined || count > 3) {
+    return (f) => {
+      const fn = lookup()
+      return fn === direct ? direct(...values(f)) : general(f, fn)
+    }
+  }
+  const [a0, a1, a2] = argv as [Run, Run, Run]
+  switch (count) {
+    case 0:
+      return (f) => {
+        const fn = lookup()
+        return fn === direct ? direct() : general(f, fn)
+      }
+    case 1:
+      return (f) => {
+        const fn = lookup()
+        if (fn !== direct) return general(f, fn)
+        const v0 = a0(f)
+        if (guardArgs && typeof v0 === 'function') refuse(name)
+        return direct(v0)
+      }
+    case 2:
+      return (f) => {
+        const fn = lookup()
+        if (fn !== direct) return general(f, fn)
+        const v0 = a0(f)
+        const v1 = a1(f)
+        if (guardArgs && (typeof v0 === 'function' || typeof v1 === 'function')) refuse(name)
+        return direct(v0, v1)
+      }
+    default:
+      return (f) => {
+        const fn = lookup()
+        if (fn !== direct) return general(f, fn)
+        const v0 = a0(f)
+        const v1 = a1(f)
+        const v2 = a2(f)
+        if (guardArgs && (typeof v0 === 'function' || typeof v1 === 'function' || typeof v2 === 'function')) refuse(name)
+        return direct(v0, v1, v2)
+      }
+  }
 }
 
 function objectLiteral(node: Extract<Expr, { type: 'ObjectExpression' }>, host: Record<string, unknown>, mode: Mode): Run {
