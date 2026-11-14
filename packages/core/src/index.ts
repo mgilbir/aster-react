@@ -122,3 +122,6 @@ export function renderSpec(spec: VgSpec, input: RuntimeInput = {}): string {
     return svg
   })
 }
+
+/** @internal Development builds: the watch for rows changed in place between renders (see row-watch.ts), for the React shells. */
+export { checkChartRows, shareRowWatch } from './row-watch.js'

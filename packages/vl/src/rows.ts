@@ -16,6 +16,9 @@
 
 import { VLCompileError } from './names.js'
 
+/** The build's environment, as bundlers write it in (`process.env.NODE_ENV`); `process` may not exist at all (an unbundled import). */
+declare const process: { env: { NODE_ENV?: string } }
+
 type Obj = Record<string, unknown>
 
 /** The user's row payloads a copy carries by reference. */
@@ -98,7 +101,13 @@ export function detachRows(out: Obj, payloads: RowPayloads): void {
       if (v === null || typeof v !== 'object') continue
       if (payloads.has(v)) {
         let copy = copies.get(v)
-        if (copy === undefined) copies.set(v, (copy = Array.isArray(v) ? v.slice() : { ...v }))
+        if (copy === undefined) {
+          copies.set(v, (copy = Array.isArray(v) ? v.slice() : { ...v }))
+          // (development builds: the chart's watch for rows changed in place looks at the user's array, not at this copy)
+          if (typeof process !== 'undefined') {
+            if (process.env.NODE_ENV !== 'production' && Array.isArray(v)) registerRowOrigin(copy as unknown[], v)
+          }
+        }
         ;(node as Record<string | number, unknown>)[k] = copy
       } else {
         visit(v)
@@ -283,4 +292,17 @@ function deepEqual(a: unknown, b: unknown): boolean {
   for (const k of keys) if (!Object.prototype.hasOwnProperty.call(y, k)) return false
   for (const k of keys) if (!deepEqual(x[k], y[k])) return false
   return true
+}
+
+/**
+ * Development builds only: that `copy` holds the rows of the user's `origin` array, for @aster-charts/core's watch for rows
+ * changed in place (row-watch.ts): an edit, a push or a splice on the user's array is one on the chart's rows. A WeakMap on a
+ * registered global symbol, so the two packages need not import each other.
+ */
+function registerRowOrigin(copy: unknown[], origin: unknown[]): void {
+  const key = Symbol.for('@aster-charts/row-origins')
+  const g = globalThis as { [k: symbol]: WeakMap<object, unknown[]> | undefined }
+  let origins = g[key]
+  if (origins === undefined) Object.defineProperty(globalThis, key, { value: (origins = new WeakMap()), configurable: true })
+  origins.set(copy, origin)
 }

@@ -25,7 +25,12 @@ import { incrementalEngine } from './incremental-engine.js'
 import { refId, valueKey } from './fingerprint.js'
 import { checkSpecLimits, checkSceneLimits, createLimitClock, withLimits, activeMeter } from './limits.js'
 import { diffRows, type DataPulse } from './pulse.js'
+import { checkChartRows } from './row-watch.js'
 import type { CompiledChart, RuntimeInput, SceneRoot, VgSpec } from './types.js'
+
+/** The build's environment, as bundlers write it in (`process.env.NODE_ENV`); `process` may not exist at all (an unbundled import). */
+declare const process: { env: { NODE_ENV?: string } }
+
 
 /**
  * Fingerprint of a dataset value: object/array values by IDENTITY (the caveat in
@@ -323,6 +328,10 @@ export function createChartSession(): ChartSession {
   const evaluateOnce = (spec: VgSpec, input: RuntimeInput = {}): SceneRoot => {
     const clock = activeMeter()?.clock ?? createLimitClock(input.limits)
     if (input.limits) checkSpecLimits(spec as unknown as Record<string, unknown>, input.limits, input)
+    // (development builds: rows changed in place since the last evaluation are warned about, see row-watch.ts)
+    if (typeof process !== 'undefined') {
+      if (process.env.NODE_ENV !== 'production') checkChartRows(session, spec, input as never)
+    }
     clock.check('compile')
     const skeleton = skeletonOf(spec)
     const metaKey = metaKeyOf(skeleton, input)
@@ -381,6 +390,9 @@ export function createChartSession(): ChartSession {
     // Start from the data the last evaluation (or change) left behind; the
     // host's `data` overrides win. A datum the host does not mention keeps its
     // current value rather than reverting to the spec's original one.
+    if (typeof process !== 'undefined') {
+      if (process.env.NODE_ENV !== 'production') checkChartRows(session, lastSpec, input as never)
+    }
     const currentRaw = new Map(lastRaw)
     for (const [name, rows] of Object.entries(input.data ?? {})) currentRaw.set(name, rows)
     const { input: effectiveInput, pulse } = withAutoPulse(lastSpec, input, currentRaw)
@@ -399,10 +411,11 @@ export function createChartSession(): ChartSession {
     return lastScene
   }
 
-  return {
+  const session: ChartSession = {
     evaluate: (spec, input = {}) => withLimits(input.limits, () => evaluateOnce(spec, input)),
     change: (input = {}) => withLimits(input.limits, () => changeOnce(input)),
     last: () => (lastChart && lastScene ? { chart: lastChart, scene: lastScene } : null),
     pulse: () => lastPulse,
   }
+  return session
 }

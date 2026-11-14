@@ -41,7 +41,11 @@ compiles a wrong chart silently, and it never mutates its input. The spec's
 structure is copied; its rows (an inline `data.values`, the entries of `datasets`)
 are not: compiling reads none of them, so it costs the same for 3 rows as for
 6,000. The compiled spec carries the caller's row objects, in arrays of its own,
-as vega-lite does; nothing in Aster writes to them.
+as vega-lite does; nothing in Aster writes to them. Treat them as immutable too: to
+change the data, pass new arrays (a chart that gets the same array again assumes
+the same rows, so an in-place edit is seen only by what happens to re-evaluate; in
+development builds `@aster-charts/react` and core's sessions warn when they see one,
+see [Rows are treated as immutable](https://github.com/mgilbir/aster-react/blob/main/docs/API.md#rows-are-treated-as-immutable)).
 
 A validation layer runs first and rejects unknown channels,
 transform keys, composition nesting, params and selections, condition and sort

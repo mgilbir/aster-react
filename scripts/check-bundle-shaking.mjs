@@ -722,6 +722,11 @@ async function viteBuild(p, entry, out) {  // (no module report: the metafile is
   })
 }
 
+/** Strings only the development-only code holds (its warning and the global it registers origins under). */
+const DEV_ONLY_MARKERS = ['were changed in place since the last render', '@aster-charts/row-origins']
+/** Per pattern: the output files that carry development-only code (none, in a production bundle). */
+const devOnlyFound = new Map()
+
 async function bundle(p, dir) {
   const entry = join(dir, 'app.mjs')
   writeFileSync(entry, `${p.imports}\nexport default async function run(env) {${p.body}\n}\n`)
@@ -729,6 +734,10 @@ async function bundle(p, dir) {
   let modules = null
   if (BUNDLER === 'vite') await viteBuild(p, entry, out)
   else modules = await esbuildBuild(p, entry, out)
+  // Development-only code (the watch for rows changed in place: core's row-watch.ts, vl's registerRowOrigin) sits behind
+  // `process.env.NODE_ENV !== 'production'`: a production bundle must not carry a byte of it, whichever pattern it is.
+  devOnlyFound.set(p.name, readdirSync(out, { recursive: true }).filter((f) => String(f).endsWith('.js'))
+    .filter((f) => DEV_ONLY_MARKERS.some((m) => readFileSync(join(out, String(f)), 'utf8').includes(m))).map(String))
   // Runner: optional jsdom globals, then the bundle, then one JSON line.
   const runner = join(dir, 'runner.mjs')
   writeFileSync(runner, `
@@ -796,7 +805,9 @@ try {
     if (argv.includes('--verbose')) console.log(JSON.stringify(outcome.result).slice(0, 600))
     // `p.modules(m)`: assertions on what the bundle is made of (esbuild only; skipped under --bundler vite)
     if (argv.includes('--outputs') && outcome.modules?.outputs) for (const o of outcome.modules.outputs) console.log('  out', o.file, o.entry ? 'ENTRY' : '', o.inputs.filter((f) => /addon|transform-extra/.test(f)).join(','))
-    const checks = [...p.check(outcome.result), ...(p.modules && outcome.modules ? p.modules(outcome.modules) : [])]
+    const devOnly = devOnlyFound.get(p.name) ?? []
+    const checks = [...p.check(outcome.result), ...(p.modules && outcome.modules ? p.modules(outcome.modules) : []),
+      [devOnly.length === 0, `no development-only code in the production bundle (found in ${devOnly.join(', ')})`]]
     const bad = checks.filter(([ok]) => !ok).map(([, what]) => what)
     if (bad.length) {
       failures++

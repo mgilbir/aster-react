@@ -22,6 +22,7 @@
 import * as React from 'react'
 import {
   AsterLimitError,
+  checkChartRows,
   checkUrlData,
   getStreamFlushFailure,
   checkSceneLimits, checkSpecLimits, checkSvgLength, compileChart, createChartStream,
@@ -32,6 +33,10 @@ import {
 import { loadAddons, missingAddons, type AddonName } from '@aster-charts/core/addons'
 import { normalizeChartSpec, useStableContent, useStableSpec } from './spec.js'
 import { SCALE_INFO_KEY, serializeScales } from './serialScales.js'
+
+/** The build's environment, as bundlers write it in (`process.env.NODE_ENV`); `process` may not exist at all (an unbundled import). */
+declare const process: { env: { NODE_ENV?: string } }
+
 
 /** Text metrics as named on the wire, or as an object for in-realm handling. */
 export type WorkerTextMetrics = string | TextMetricsProvider
@@ -363,6 +368,13 @@ export function useChartWorker(spec: VgSpec, options: ChartWorkerOptions & {
   const [state, setState] = React.useState<WorkerChartResult>({ svg: null, scene: null, error: null, pending: true })
   const workerRef = useWorkerInstance(worker, workerFactory)
   const idRef = React.useRef(0)
+  // (development builds: the rows this hook holds across renders are checked for in-place changes, see core's row-watch.ts; the
+  // worker itself cannot see one -- each request hands it a structured clone and it keeps nothing -- and a render with the same
+  // arrays posts nothing, so an in-place change would never reach it: the warning says why the chart did not follow)
+  // (its owner is this hook's own ref: no hook of its own, nothing in a production build)
+  if (typeof process !== 'undefined') {
+    if (process.env.NODE_ENV !== 'production') checkChartRows(idRef, localSpec ?? stableSpec, { data })
+  }
   const textMetricsRef = React.useRef(textMetrics)
   textMetricsRef.current = textMetrics
   const urlPolicyRef = React.useRef(urlPolicy)

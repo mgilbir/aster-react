@@ -15,6 +15,7 @@ import {
   type SceneItem,
   type SceneRoot,
   type VgSpec,
+  checkChartRows, shareRowWatch,
 } from '@aster-charts/core'
 import { isPromiseLike, normalizeChartSpec, useChartEpoch, useStableContent, useStableSpecRows } from './spec.js'
 import { useAddons } from './addons.js'
@@ -47,6 +48,10 @@ import {
   type SelectValue,
   type ViewDomain,
 } from './interaction.js'
+
+/** The build's environment, as bundlers write it in (`process.env.NODE_ENV`); `process` may not exist at all (an unbundled import). */
+declare const process: { env: { NODE_ENV?: string } }
+
 
 
 // `getServerSnapshot` runs for SSR *and* for the hydration render on the client,
@@ -543,6 +548,12 @@ function ChartView({
     [spec],
   )
 
+  // (development builds: the rows of a render that re-evaluates nothing -- the same arrays -- are checked for in-place changes too;
+  // a stream's scene is the stream's, whose rows its own session checks at each flush)
+  if (typeof process !== 'undefined') {
+    if (process.env.NODE_ENV !== 'production' && sceneOverride === undefined) checkChartRows(sessionRef.current, spec, { data: inputData, dataChanges, logger: stableLogger })
+  }
+
   // Row counts of the previously evaluated `data`, to validate `dataChanges`.
   const prevLengthsRef = React.useRef<Map<string, number>>(new Map())
   const evaluation = React.useMemo<{ scene: SceneRoot | null; error: Error | null; problems: string[] }>(() => {
@@ -653,7 +664,13 @@ function ChartView({
   const unzoomedDomains = React.useMemo<ViewDomain | null>(() => {
     if (!panZoomEnabled || !zoomed || fromStream) return null
     try {
-      if (baseSessionRef.current == null) baseSessionRef.current = createChartSession()
+      if (baseSessionRef.current == null) {
+        baseSessionRef.current = createChartSession()
+        // (development builds: the chart's two sessions keep one watch, so an in-place change is reported once)
+        if (typeof process !== 'undefined') {
+          if (process.env.NODE_ENV !== 'production') shareRowWatch(sessionRef.current!, baseSessionRef.current)
+        }
+      }
       const baseScene = baseSessionRef.current.evaluate(spec, {
         data: inputData, ...sizeInput, signals: mergedSignals, limits: stableLimits, urlPolicy, urlData, textMetrics, logger: stableLogger,
         ...(random ? { random } : {}),

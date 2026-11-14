@@ -24,7 +24,7 @@ The public surface of the three Aster packages: what each entry point exports, w
 
 - [Packages and entry points](#packages-and-entry-points)
 - [`@aster-charts/core`](#aster-chartscore)
-  - Guides: [Render a Vega spec](#render-a-vega-spec), [Sessions and per-datum updates](#sessions-and-per-datum-updates), [Custom expression functions](#custom-expression-functions), [Streaming and pulses](#streaming-and-pulses)
+  - Guides: [Render a Vega spec](#render-a-vega-spec), [Sessions and per-datum updates](#sessions-and-per-datum-updates), [Rows are treated as immutable](#rows-are-treated-as-immutable), [Custom expression functions](#custom-expression-functions), [Streaming and pulses](#streaming-and-pulses)
   - Reference: [RuntimeInput](#runtimeinput), [The pipeline steps](#the-pipeline-steps), [Locales](#locales), [Text metrics](#text-metrics), [Logger](#logger), [Pointer position and cursor](#pointer-position-and-cursor), [Building blocks](#building-blocks), [Limit checks](#limit-checks), [Typed errors](#typed-errors), [Accessibility tree](#accessibility-tree)
   - Add-on entry points: [`/hit`](#aster-chartscorehit), [`/signals`](#aster-chartscoresignals), [`/addons`](#aster-chartscoreaddons), [`/dom`](#aster-chartscoredom), [`/transition`](#aster-chartscoretransition), [`/canvas`](#aster-chartscorecanvas), [`/png`](#aster-chartscorepng), [`/load`](#aster-chartscoreload), [`/geo` and `/transforms`](#aster-chartscoregeo-and-aster-chartscoretransforms), [an example](#example-hit-testing-a-scene)
 - [`@aster-charts/react`](#aster-chartsreact)
@@ -102,7 +102,42 @@ structure directly.
 
 `dataChanges` is `Record<string, number[]>`: per dataset, the indices (into the NEW row array) whose values changed.
 It is only valid when the array keeps its length and order; the session then reuses the previous scene items of every
-other row. Mutating an array in place without replacing it, and without `dataChanges`, is invisible to the cache.
+other row. Mutating an array in place without replacing it, and without `dataChanges`, is invisible to the cache: see
+[Rows are treated as immutable](#rows-are-treated-as-immutable).
+
+#### Rows are treated as immutable
+
+The rows you give a chart are yours, and Aster treats them as immutable: a spec's inline `values`, a Vega-Lite spec's
+`datasets`, the `data` prop / `input.data`, the rows `dataChanges` describes, and what you `push` into a stream. Aster
+never writes to them (it copies a row before it changes anything), and it compares them by identity: a compiled
+Vega-Lite spec holds your row objects, in arrays of its own, and a chart that is given the same array again assumes the
+same rows.
+
+So to change the data, pass a **new array**, or say what changed: `dataChanges` (same-length edits, by index), `dataPulse`
+or `changedDatasets` for sessions, `append` / a `data` snapshot for a stream. If you change an array in place (edit a row,
+replace one, `push`, `splice`) and hand the same array back, only what happens to evaluate again sees the change, so the
+chart can be inconsistent -- one mark updated and the next not, a scale's domain from the old rows -- as in vega.
+
+**Development warning.** In development builds a chart notices that: when it evaluates or renders again with the very
+same array and the array was changed in place, it warns once per chart and dataset through its logger (`logger` prop /
+`input.logger`, else the console): `[aster] the rows of dataset "table" were changed in place since the last render ...`,
+naming the dataset and what to do instead. It looks at a bounded, deterministic sample (16 rows, evenly spaced, the first
+and last included; the first 8 fields of each) and the array's length, so it costs O(sample) per dataset, not O(rows), and
+a change outside that sample (a row between the sampled ones, a field past the eighth) in an array of the same length can go
+unnoticed. A dataset the same evaluation names as changed (`dataChanges`, `dataPulse`, `changedDatasets`; a stream's own
+appends) is expected to change and is not reported. A field that is a getter is never called (only its presence counts);
+a Proxy row is read through its `ownKeys` and `getOwnPropertyDescriptor` traps, never `get`. Where it checks: sessions
+(`createChartSession`, and so `<Chart>`, `<SvgChart>`, `useChart`, streams at each flush) and every render of `<Chart>` /
+`<SvgChart>` / `useChart` / `useChartWorker` that evaluates nothing new. A worker never sees an in-place change at all
+(each request carries a copy, and a render with the same arrays sends nothing), so `useChartWorker` warns on the main
+thread; the worker streams copy each batch as it is posted, so there is nothing to watch.
+
+The warning exists only in development: every check sits behind `process.env.NODE_ENV !== 'production'`, which
+bundlers (Vite, webpack, esbuild, Rollup with the usual replace plugin) replace, so a production build carries none of
+its code and reads no row (`scripts/check-bundle-shaking.mjs` asserts it for every documented import pattern). Where there
+is no `process` at all -- the packages imported unbundled, as ES modules, from a CDN -- nothing is checked either.
+(`checkChartRows` and `shareRowWatch`, exported by `@aster-charts/core`, are how the React shells reach the watch. They are
+internal: not part of the supported API, and called only in development builds.)
 
 ```ts
 import { createChartSession } from '@aster-charts/core/dom'
@@ -182,7 +217,9 @@ Pass the long form as `dataPulse` (per source dataset) to `evaluateChart`/`sessi
 you already know the delta; `dataChanges` remains the compact same-length form (when both name
 a dataset, `dataPulse` wins for it).
 
-`createChartStream(spec, options)` wraps a session with a push-based, bounded queue:
+`createChartStream(spec, options)` wraps a session with a push-based, bounded queue (the rows you `push` are treated as
+immutable, see [Rows are treated as immutable](#rows-are-treated-as-immutable); `initial.logger` receives the dataflow
+errors and development warnings of every flush):
 
 ```ts
 import { createChartStream, type VgSpec } from '@aster-charts/core'
@@ -704,7 +741,7 @@ gzip to the bundle (`<Chart>` 205.3 kB, `<Chart>` + `@aster-charts/react/vl` 308
 import. Vega specs need no extra import. Worker hosts must import `@aster-charts/react/vl` in the worker entry as well,
 since compilation happens there.
 
-**Props.** `spec` (compared by content: an equal inline literal does no work; the one exception is a dataset's inline `values` array, which is compared by identity, so a re-created but equal rows array is a new input, which the session's row diff finds unchanged and applies as a no-op; the streaming components keep the full content comparison, so a spec rebuilt every render does not restart a stream), `data`, `dataChanges`, `width`,
+**Props.** `spec` (compared by content: an equal inline literal does no work; the one exception is a dataset's inline `values` array, which is compared by identity, so a re-created but equal rows array is a new input, which the session's row diff finds unchanged and applies as a no-op; the streaming components keep the full content comparison, so a spec rebuilt every render does not restart a stream), `data` and `dataChanges` (the rows are treated as immutable: pass a new array, or the same one with `dataChanges` naming what changed; see [Rows are treated as immutable](#rows-are-treated-as-immutable)), `width`,
 `height` (each independent; without them the chart measures its container; a given one fixes the view's size, even for a container-sized spec, whose `width` / `height` signals and `window:resize` handlers do not move it. The measured container only sizes a spec that has no `width` / `height` signal of its own and whose autosize is not `none` (Vega's `none` means the chart's whole size is its `width`, `height` and `padding`: such a spec is drawn at that size in any container, as vega-embed draws it), and a dimension the spec gives no value at all stays Vega's 0 grown to the content by autosize. It sizes the chart's whole box, padding, guides and the bound inputs under the chart included, as Vega-Lite's `"container"` does (autosize `fit` containing the padding): the content shrinks to fit, so a chart never overflows the container it fills, and a container whose height is the chart's own (a block `<div>` with no height) keeps the chart's size instead of growing with it; one that drives them (a bound input, a handler, Vega-Lite's `"container"`) keeps doing so, as in Vega where the size is a signal and the later write wins, and sees the container through `containerSize()`), `ariaLabel`, `className`, `style`,
 `signals`, `signalListeners`, `onSignal`, `interactive`, `preventDefault`, `renderer`, `incremental`, `denseMarks`, `transition`,
 `tooltip`, `renderTooltip`, `selection`/`select`, `onSelectionChange`, `onSelect`, `onPointSelect`, `brush`, `panZoom`,
@@ -1128,6 +1165,10 @@ const vegaSpec = compile({
 })
 console.log(Array.isArray(vegaSpec.marks))
 ```
+
+The compiled spec carries your inline rows by reference (in arrays of its own): compiling reads none of them, so it costs
+the same for 3 rows as for 6,000, and the rows are treated as immutable
+([Rows are treated as immutable](#rows-are-treated-as-immutable)).
 
 `<Chart>` and `useChart` use this compiler for Vega-Lite input once
 `@aster-charts/react/vl` is imported, so a fresh app does not need a `vega-lite`
