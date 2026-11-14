@@ -13,9 +13,8 @@ import { act } from 'react'
 import { describe, expect, it, afterEach } from 'vitest'
 import { renderSpec } from '@aster-charts/core'
 import { compile } from '@aster-charts/vl'
-import { ChartStream, ChartWorkerStream } from './ChartStream'
+import { ChartStream, ChartWorkerStream, type ChartStreamHandle } from './ChartStream'
 import type { ChartHandle } from './chart-types'
-import type { ChartStreamHandle } from './useChartStream'
 import { forEachVariant } from './testing/variants'
 
 const BOX = { width: 900, height: 600 }

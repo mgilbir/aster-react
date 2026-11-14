@@ -165,7 +165,7 @@ describe('the measured container, over autosize types, contains and the ways a s
   it('Vega-Lite `width: "container"`: the measured container sizes it as a container element of that size does vega\'s', async () => {
     const vl = await import('vega-lite')
     for (const [w, h] of [['container', 'container'], ['container', 180], [260, 'container']] as const) {
-      const vg = (vl.compile as (s: unknown) => { spec: Spec })({
+      const vg = (vl.compile as unknown as (s: unknown) => { spec: Spec })({
         width: w, height: h, padding: 5, data: { values: ROWS }, mark: 'bar',
         encoding: { x: { field: 'k', type: 'nominal' }, y: { field: 'v', type: 'quantitative' } },
       }).spec
