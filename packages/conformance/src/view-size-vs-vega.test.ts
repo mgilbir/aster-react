@@ -139,10 +139,6 @@ describe('the measured container, over autosize types, contains and the ways a s
   for (const type of TYPES) {
     for (const contains of CONTAINS) {
       for (const size of SIZES) {
-        // (autosize none containing the padding with no size at all is a view smaller than its padding: vega lays it out on a
-        // negative range, Aster clamps it, with or without a container -- a known gap of the engine, kept by the probe
-        // gate as probes/autosize-none-padding-unsized.vg.json; that the container does not size it is asserted below)
-        if (type === 'none' && contains === 'padding' && size === 'unsized') continue
         const spec: Spec = {
           ...body, padding: { left: 40, top: 12, right: 18, bottom: 30 }, autosize: { type, contains },
           ...(size === 'number' ? { width: 420, height: 200 } : {}),

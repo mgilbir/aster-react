@@ -1,6 +1,6 @@
 {
   "$schema": "https://vega.github.io/schema/vega/v6.json",
-  "description": "Known gap: autosize none containing the padding, with no width or height. Vega's view is then the size less the padding, negative here (0 - 58 wide), and it lays the axes out on that negative range in a 0 x 0 svg; Aster clamps the view to 0 and draws a padding-sized svg without them.",
+  "description": "Autosize none containing the padding, with no width or height: the view is the size less the padding, negative here (0 - 58 wide). Vega keeps it: the scales, the grid and the root group's box are laid out on the negative range, the axes placed as on a 0-wide view, in a 0 x 0 svg.",
   "padding": { "left": 40, "top": 12, "right": 18, "bottom": 30 },
   "autosize": { "type": "none", "contains": "padding" },
   "data": [{ "name": "t", "values": [{ "k": "a", "v": 28 }, { "k": "b", "v": 55 }, { "k": "c", "v": 43 }, { "k": "d", "v": 91 }] }],
