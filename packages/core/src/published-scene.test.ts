@@ -29,6 +29,11 @@ type Row = Record<string, unknown>
 /** What a renderer leaves on an item for itself (the DOM descriptor, a canvas gradient's id): a cache, not the scene's content. */
 const RENDERER_CACHES = new Set(['__domDesc', '__gradId'])
 
+/** Every object a snapshot met, by a number of its own: a node replaced by an equal one is a change too (what is kept with a node is keyed by it). */
+const IDS = new WeakMap<object, number>()
+let nextId = 0
+const idOf = (o: object): number => { let id = IDS.get(o); if (id === undefined) IDS.set(o, (id = ++nextId)); return id }
+
 function snapshot(v: unknown, seen = new Map<object, string>(), path = 'scene'): unknown {
   if (v === null || typeof v !== 'object') {
     if (typeof v === 'number' && Number.isNaN(v)) return '[NaN]'
@@ -39,7 +44,7 @@ function snapshot(v: unknown, seen = new Map<object, string>(), path = 'scene'):
   seen.set(v, path)
   if (v instanceof Map || v instanceof Set) return '[collection]'
   if (Array.isArray(v)) return v.map((x, i) => snapshot(x, seen, `${path}.${i}`))
-  const out: Record<string, unknown> = {}
+  const out: Record<string, unknown> = { '#': idOf(v) }
   for (const k of Object.keys(v)) {
     if (RENDERER_CACHES.has(k) || k === 'runtime' || k === 'compiled' || k === '__scaleMap' || k === 'signalParams') continue
     out[k] = snapshot((v as Row)[k], seen, `${path}.${k}`)
@@ -182,6 +187,31 @@ describe('a scene the engine returned never changes afterwards', () => {
     stream.push({ data: { table: rows(35, 2) } })
     rec.take(stream.flush()!.scene, 'snapshot')
     stream.close()
+  })
+
+  it('when a kept group mark moves in the content (a group mark before it gains items)', () => {
+    const rec = new Recorder()
+    const spec = {
+      width: 300, height: 200, autosize: 'none',
+      data: [{ name: 'u', values: [{ c: 'p' }] }, { name: 't', values: rows(12) }],
+      scales: [{ name: 'x', type: 'linear', domain: [0, 12], range: [0, 90] }],
+      marks: [
+        // (cells that look like the kept mark's: their boxes are equal by value to the kept cells' boxes)
+        { type: 'group', from: { facet: { name: 'uu', data: 'u', groupby: 'c' } }, encode: { update: { width: { value: 90 }, height: { value: 90 }, stroke: { value: 'grey' } } } },
+        { type: 'group', from: { facet: { name: 'part', data: 't', groupby: 'k' } }, encode: { update: { x: { signal: "indexof(['a','b','c'], datum.k) * 100" }, width: { value: 90 }, height: { value: 90 }, stroke: { value: 'grey' } } },
+          marks: [{ type: 'symbol', from: { data: 'part' }, encode: { update: { x: { scale: 'x', field: 'x' }, y: { value: 10 } } } }] },
+      ],
+    } as unknown as VgSpec
+    const s = createChartSession()
+    const t = rows(12)
+    let u: Row[] = [{ c: 'p' }]
+    rec.take(s.evaluate(spec, { data: { u, t } }), 'first')
+    for (const c of ['q', 'r', 's']) {
+      u = [...u, { c }]
+      rec.take(s.evaluate(spec, { data: { u, t } }), `u gains ${c}`)
+    }
+    u = u.slice(2)
+    rec.take(s.evaluate(spec, { data: { u, t } }), 'u loses two')
   })
 
   it('a planted write into a kept node is caught', () => {

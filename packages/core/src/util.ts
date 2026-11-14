@@ -640,6 +640,11 @@ export function withTuples<T>(on: boolean, fn: () => T): T {
   try { return fn() } finally { registering = outer }
 }
 
+/** Whether the evaluation running now registers the tuples it makes (see `withTuples`). */
+export function tuplesRegistering(): boolean {
+  return registering
+}
+
 /** Register a tuple the engine made (a row, a datum), while registering is on. */
 export function markTuple(t: object): void {
   if (registering) TUPLES.add(t)
