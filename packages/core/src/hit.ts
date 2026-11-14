@@ -76,7 +76,7 @@ interface Entry {
   y1: number
   x2: number
   y2: number
-  kind: 'circle' | 'box' | 'text' | 'geom'
+  kind: 'disc' | 'circle' | 'box' | 'text' | 'geom'
   /** circle: the center; text and an outline in a frame of its own: the frame's origin */
   cx?: number
   cy?: number
@@ -99,14 +99,13 @@ interface Entry {
   groupBox?: true
   /** Part of an axis, a legend or a title. */
   guide?: true
-  /** The item's mark reads a dataset. */
-  fromData?: true | undefined
   /** Not interactive (its mark / guide part says `pointer-events: none`): `pick` looks through it. */
   inert?: true
   /** A guide part the other queries never saw (an interactive legend entry, symbol path, gradient, tick...): only `pick` finds it. */
   pickOnly?: true
 }
 
+/** A target is read-only: the index hands out the same object for the same item each time it is hit. */
 export interface HitIndex {
   /** The topmost painted item at (x, y), whether it takes the pointer or not (a line, an area, a trail: its item nearest the point). */
   query(x: number, y: number): HitTarget | null
@@ -227,17 +226,44 @@ function inCap(ex: number, ey: number, dx: number, dy: number, x: number, y: num
   return along >= 0 && along <= st.hw && Math.abs(across) <= st.hw
 }
 
+/**
+ * An outline as its stroke is tested: the vertices without repeats (a segment of no length has no direction), and each segment's
+ * length and unit direction. Made once per outline (a symbol's is shared by every symbol of its shape and size).
+ */
+interface StrokePath { v: Float64Array; m: number; segs: number; len: Float64Array; dir: Float64Array; closed: boolean }
+const STROKE_PATHS = new WeakMap<Poly, StrokePath>()
+
+function strokePath(poly: Poly): StrokePath {
+  let sp = STROKE_PATHS.get(poly)
+  if (sp !== undefined) return sp
+  const { pts, closed } = poly
+  const v: number[] = []
+  for (let i = 0; i < pts.length; i += 2) {
+    const px = pts[i]!, py = pts[i + 1]!
+    if (v.length === 0 || px !== v[v.length - 2] || py !== v[v.length - 1]) v.push(px, py)
+  }
+  let m = v.length / 2
+  if (closed && m > 1 && v[0] === v[2 * m - 2] && v[1] === v[2 * m - 1]) { v.length -= 2; m-- }
+  const segs = m < 2 ? 0 : closed ? m : m - 1
+  const len = new Float64Array(segs)
+  const dir = new Float64Array(2 * segs)
+  for (let i = 0; i < segs; i++) {
+    const j = (i + 1) % m
+    const dx = v[2 * j]! - v[2 * i]!, dy = v[2 * j + 1]! - v[2 * i + 1]!
+    const l = Math.hypot(dx, dy)
+    len[i] = l
+    dir[2 * i] = dx / l
+    dir[2 * i + 1] = dy / l
+  }
+  sp = { v: Float64Array.from(v), m, segs, len, dir, closed }
+  STROKE_PATHS.set(poly, sp)
+  return sp
+}
+
 /** Whether (x, y) is within the stroke of an outline: the band along each segment, the joins between them, the caps of open ends. */
 function inStroke(polys: Poly[], x: number, y: number, st: Stroke): boolean {
-  for (const { pts, closed } of polys) {
-    // the vertices without repeats (a segment of no length has no direction)
-    const v: number[] = []
-    for (let i = 0; i < pts.length; i += 2) {
-      const px = pts[i]!, py = pts[i + 1]!
-      if (v.length === 0 || px !== v[v.length - 2] || py !== v[v.length - 1]) v.push(px, py)
-    }
-    let m = v.length / 2
-    if (closed && m > 1 && v[0] === v[2 * m - 2] && v[1] === v[2 * m - 1]) { v.length -= 2; m-- }
+  for (const poly of polys) {
+    const { v, m, segs, len, dir, closed } = strokePath(poly)
     if (m === 0) continue
     if (m === 1) {
       // a subpath of one point paints only its caps: a round one is a dot, a square one an upright square
@@ -247,21 +273,17 @@ function inStroke(polys: Poly[], x: number, y: number, st: Stroke): boolean {
       if (st.cap === 'square' && Math.abs(dx) <= st.hw && Math.abs(dy) <= st.hw) return true
       continue
     }
-    const segs = closed ? m : m - 1
-    const dir: number[] = []
     for (let i = 0; i < segs; i++) {
       const ax = v[2 * i]!, ay = v[2 * i + 1]!
       const j = (i + 1) % m
       const bx = v[2 * j]!, by = v[2 * j + 1]!
-      const len = Math.hypot(bx - ax, by - ay)
-      const dx = (bx - ax) / len, dy = (by - ay) / len
-      dir.push(dx, dy)
       // (a segment whose box, grown by half the width, misses the point cannot hold it: most of a long outline is skipped so)
       if ((x < ax && x < bx) || (x > ax && x > bx) || (y < ay && y < by) || (y > ay && y > by)) {
         if (x < Math.min(ax, bx) - st.hw || x > Math.max(ax, bx) + st.hw || y < Math.min(ay, by) - st.hw || y > Math.max(ay, by) + st.hw) continue
       }
+      const dx = dir[2 * i]!, dy = dir[2 * i + 1]!
       const along = (x - ax) * dx + (y - ay) * dy
-      if (along >= 0 && along <= len && Math.abs((x - ax) * -dy + (y - ay) * dx) <= st.hw) return true
+      if (along >= 0 && along <= len[i]! && Math.abs((x - ax) * -dy + (y - ay) * dx) <= st.hw) return true
     }
     // the joins: at every vertex of a closed outline, at the inner ones of an open one (none reaches further than the miter limit)
     const reach = st.hw * Math.max(1, st.limit)
@@ -317,13 +339,16 @@ function polysBox(polys: Poly[]): [number, number, number, number] | null {
   return Number.isFinite(x1) && Number.isFinite(y1) && Number.isFinite(x2) && Number.isFinite(y2) ? [x1, y1, x2, y2] : null
 }
 
-/** (x, y) in the frame of an entry that has one of its own (a text box, a symbol outline, a rotated path). */
-function local(e: Entry, x: number, y: number): [number, number] {
+/** (x, y) in the frame of an entry that has one of its own (a text box, a symbol outline, a rotated path), left in (localX, localY). */
+let localX = 0
+let localY = 0
+function toLocal(e: Entry, x: number, y: number): void {
   const dx = x - e.cx!
   const dy = y - e.cy!
-  if (!e.rot) return [dx, dy]
+  if (!e.rot) { localX = dx; localY = dy; return }
   const c = Math.cos(e.rot), s = Math.sin(e.rot)
-  return [dx * c + dy * s, -dx * s + dy * c]
+  localX = dx * c + dy * s
+  localY = -dx * s + dy * c
 }
 
 // ---------------------------------------------------------------------------
@@ -373,8 +398,8 @@ function nearestOf(items: SceneItem[], tx: number, ty: number, x: number, y: num
 
 export function buildHitIndex(scene: SceneRoot, cell = DEFAULT_CELL): HitIndex {
   const entries: Entry[] = []
-  /** The mark being indexed reads a dataset: its entries say so when they are made. */
-  let markFromData: true | undefined
+  /** The runs of entries `[from, to)` made for a mark that reads a dataset (their items' datums are rows), in order. */
+  const dataRuns: number[] = []
   /** The clips around what is being indexed (outermost first). */
   let clips: Clip[] | undefined
   /** Put every entry made since `from` that has no clips of its own under the current ones. */
@@ -440,18 +465,14 @@ export function buildHitIndex(scene: SceneRoot, cell = DEFAULT_CELL): HitIndex {
     }
     const e0 = entries.length
     const guidePart = group.role === 'title-text' || group.role === 'title-subtitle'
-    // (an item of a mark that reads a dataset has a row for its datum; a title's text is a guide's part)
-    markFromData = group.__source !== undefined && !guidePart ? true : undefined
     // a mark's `clip`: its items are clipped to the frame of the group they are in (or to its rounded outline)
     const clip = group.clip === true ? (group.clipPathD ? pathClip(group.clipPathD, tx, ty) : rectClip(tx, ty, fw, fh)) : null
-    try {
-      withClip(clip, () => {
-        addMark(group, type, gx, gy)
-        clipFrom(e0)
-      })
-    } finally {
-      markFromData = undefined
-    }
+    withClip(clip, () => {
+      addMark(group, type, gx, gy)
+      clipFrom(e0)
+    })
+    // (an item of a mark that reads a dataset has a row for its datum; a title's text is a guide's part)
+    if (group.__source !== undefined && !guidePart && entries.length > e0) dataRuns.push(e0, entries.length)
     // a mark that is not interactive takes no pointer (its container says `pointer-events: none`)
     if (isInert(group)) for (let i = e0; i < entries.length; i++) entries[i]!.inert = true
     if (guidePart) for (let i = e0; i < entries.length; i++) entries[i]!.guide = true
@@ -520,7 +541,7 @@ export function buildHitIndex(scene: SceneRoot, cell = DEFAULT_CELL): HitIndex {
       if (ry > y2) y2 = ry
     }
     if (!Number.isFinite(x1 + y1 + x2 + y2)) return null
-    return { item, marktype, kind: 'text', cx: x, cy: y, rot, box, x1, y1, x2, y2, fromData: markFromData }
+    return { item, marktype, kind: 'text', cx: x, cy: y, rot, box, x1, y1, x2, y2 }
   }
 
   /** A leaf of a group: an axis or legend label or title (text), or a symbol leaf of a hand-built scene. */
@@ -598,7 +619,7 @@ export function buildHitIndex(scene: SceneRoot, cell = DEFAULT_CELL): HitIndex {
       }
       x1 = a; y1 = b; x2 = cc; y2 = d
     }
-    return { item, marktype, kind: 'geom', polys, build, fill, stroke, x1, y1, x2, y2, fromData: markFromData, ...(at ?? {}) }
+    return { item, marktype, kind: 'geom', polys, build, fill, stroke, x1, y1, x2, y2, ...(at ?? {}) }
   }
 
   /** A line, an area or a trail: one painted path, styled by the mark's first item. */
@@ -639,8 +660,8 @@ export function buildHitIndex(scene: SceneRoot, cell = DEFAULT_CELL): HitIndex {
   /** A symbol: a disc when it is a circle, else its shape's outline in its own frame, turned by its angle. */
   function addSymbol(item: SceneItem, marktype: string, tx: number, ty: number, radius?: number): void {
     if (item.x == null || item.y == null) return
-    const fill = isFilled(item)
-    const stroke = strokeOf(item)
+    const fill = !!item.fill
+    const stroke = item.stroke ? strokeOf(item) : null
     if (!fill && !stroke) return
     const size = (item.size as number) ?? SYMBOL_DEFAULT_SIZE
     const r = radius != null ? radius : Math.sqrt(size) / 2
@@ -648,15 +669,16 @@ export function buildHitIndex(scene: SceneRoot, cell = DEFAULT_CELL): HitIndex {
     const cy = ty + item.y
     const shape = marktype === 'symbol' ? (rec(item).shape as string | undefined) : undefined
     if (shape == null || shape === 'circle') {
-      // (the circle is one arc closed on itself: no caps, no joins)
-      const out = r + (stroke ? stroke.hw : 0)
-      entries.push({ item, marktype, kind: 'circle', cx, cy, r, fill, stroke, x1: cx - out, y1: cy - out, x2: cx + out, y2: cy + out, fromData: markFromData })
+      // (the circle is one arc closed on itself: no caps, no joins; a filled one with no stroke, the common symbol, is a disc)
+      if (!stroke) { entries.push({ item, marktype, kind: 'disc', cx, cy, r, x1: cx - r, y1: cy - r, x2: cx + r, y2: cy + r }); return }
+      const out = r + stroke.hw
+      entries.push({ item, marktype, kind: 'circle', cx, cy, r, fill, stroke, x1: cx - out, y1: cy - out, x2: cx + out, y2: cy + out })
       return
     }
     const outline = shapeOutline(shape, r)
     const span = outline.reach + reachOf(stroke)
     const rot = ((rec(item).angle as number | undefined) ?? 0) * (Math.PI / 180)
-    entries.push({ item, marktype, kind: 'geom', cx, cy, rot, fill, stroke, polys: outline.polys, x1: cx - span, y1: cy - span, x2: cx + span, y2: cy + span, fromData: markFromData })
+    entries.push({ item, marktype, kind: 'geom', cx, cy, rot, fill, stroke, polys: outline.polys, x1: cx - span, y1: cy - span, x2: cx + span, y2: cy + span })
   }
 
   function addMarkItem(item: SceneItem, marktype: string, tx: number, ty: number): void {
@@ -683,7 +705,7 @@ export function buildHitIndex(scene: SceneRoot, cell = DEFAULT_CELL): HitIndex {
         }
         if (!stroke) {
           // the common case: a filled rectangle is its box
-          entries.push({ item, marktype, kind: 'box', fill, stroke: null, x1: Math.min(x0, x0 + w), y1: Math.min(y0, y0 + h), x2: Math.max(x0, x0 + w), y2: Math.max(y0, y0 + h), fromData: markFromData })
+          entries.push({ item, marktype, kind: 'box', fill, stroke: null, x1: Math.min(x0, x0 + w), y1: Math.min(y0, y0 + h), x2: Math.max(x0, x0 + w), y2: Math.max(y0, y0 + h) })
           return
         }
         const e = geomEntry(item, marktype, () => [{ pts: [x0, y0, x0 + w, y0, x0 + w, y0 + h, x0, y0 + h], closed: true }], item, undefined, stroke)
@@ -737,7 +759,7 @@ export function buildHitIndex(scene: SceneRoot, cell = DEFAULT_CELL): HitIndex {
       case 'image': {
         if (item.x == null || item.y == null) return
         const b = imageBox(item)
-        entries.push({ item, marktype, kind: 'box', fill: true, stroke: null, x1: tx + Math.min(b.x, b.x + b.w), y1: ty + Math.min(b.y, b.y + b.h), x2: tx + Math.max(b.x, b.x + b.w), y2: ty + Math.max(b.y, b.y + b.h), fromData: markFromData })
+        entries.push({ item, marktype, kind: 'box', fill: true, stroke: null, x1: tx + Math.min(b.x, b.x + b.w), y1: ty + Math.min(b.y, b.y + b.h), x2: tx + Math.max(b.x, b.x + b.w), y2: ty + Math.max(b.y, b.y + b.h) })
         return
       }
       default:
@@ -763,17 +785,27 @@ export function buildHitIndex(scene: SceneRoot, cell = DEFAULT_CELL): HitIndex {
     gh = Math.max(1, Math.ceil(H / cs))
     grid = new Map()
     big = []
-    const clampX = (v: number): number => (v >= gw ? gw - 1 : v < 0 ? 0 : v)
-    const clampY = (v: number): number => (v >= gh ? gh - 1 : v < 0 ? 0 : v)
+    // (the flat arrays the scan reads are filled in the same pass)
+    seal(false)
+    const mx = gw - 1, my = gh - 1
+    const bx = boxes!
+    const fl = flags!
     for (let i = 0; i < entries.length; i++) {
       const e = entries[i]!
-      if (!(e.x1 <= e.x2 && e.y1 <= e.y2)) continue // NaN bounds can never be hit
+      const x1 = e.x1, y1 = e.y1, x2 = e.x2, y2 = e.y2
+      bx[4 * i] = x1
+      bx[4 * i + 1] = y1
+      bx[4 * i + 2] = x2
+      bx[4 * i + 3] = y2
+      fl[i] = flagsOf(e)
+      if (!(x1 <= x2 && y1 <= y2)) continue // NaN bounds can never be hit
       // Clamp to the grid (queries clamp the same way), so an item far outside
       // the view or an enormous one covers at most the whole grid, never more.
-      const c0x = clampX(Math.floor(e.x1 / cs))
-      const c1x = clampX(Math.floor(e.x2 / cs))
-      const c0y = clampY(Math.floor(e.y1 / cs))
-      const c1y = clampY(Math.floor(e.y2 / cs))
+      let c0x = Math.floor(x1 / cs), c1x = Math.floor(x2 / cs), c0y = Math.floor(y1 / cs), c1y = Math.floor(y2 / cs)
+      c0x = c0x > mx ? mx : c0x < 0 ? 0 : c0x
+      c1x = c1x > mx ? mx : c1x < 0 ? 0 : c1x
+      c0y = c0y > my ? my : c0y < 0 ? 0 : c0y
+      c1y = c1y > my ? my : c1y < 0 ? 0 : c1y
       if ((c1x - c0x + 1) * (c1y - c0y + 1) > MAX_CELLS_PER_ENTRY) { big.push(i); continue }
       for (let cy = c0y; cy <= c1y; cy++) {
         for (let cx = c0x; cx <= c1x; cx++) {
@@ -786,41 +818,75 @@ export function buildHitIndex(scene: SceneRoot, cell = DEFAULT_CELL): HitIndex {
     }
   }
 
-  // what a query looks at: `ALL` the painted items the guides and marks have, `DATA` the items of interactive marks, `PICK` what
-  // takes the pointer
+  // What a query looks at: `ALL` the painted items the guides and marks have, `DATA` the items of interactive marks, `PICK` what
+  // takes the pointer. The scan reads each candidate's box and what it is from flat arrays (`seal`), and touches the entry only
+  // when the box holds the point.
   type Mode = 0 | 1 | 2
   const ALL = 0, DATA = 1, PICK = 2
-  const skipped = (e: Entry, mode: Mode): boolean =>
-    mode === PICK ? e.inert === true : e.pickOnly === true || (mode === DATA && (e.inert === true || e.groupBox === true || e.guide === true))
+  const INERT = 1, PICK_ONLY = 2, GROUP_BOX = 4, GUIDE = 8
+  /** The entries a query of each mode passes over. */
+  const SKIP = [PICK_ONLY, PICK_ONLY | INERT | GROUP_BOX | GUIDE, INERT]
+  let boxes: Float64Array | null = null
+  let flags: Uint8Array | null = null
+  /** The target reported for each entry's own item, made the first time it is hit (a hover asks for the same item over and over). */
+  let targets: Array<HitTarget | undefined> = []
+  /** Make the flat arrays the scan reads, and fill them (`full`), or leave that to the grid's pass. */
+  const seal = (full = true): void => {
+    const n = entries.length
+    boxes = new Float64Array(4 * n)
+    flags = new Uint8Array(n)
+    targets = []
+    if (full) for (let i = 0; i < n; i++) flatten(i)
+  }
+  /** Entry `i`'s box and what it is, into the flat arrays. */
+  const flatten = (i: number): void => {
+    const e = entries[i]!
+    const b = boxes!
+    b[4 * i] = e.x1
+    b[4 * i + 1] = e.y1
+    b[4 * i + 2] = e.x2
+    b[4 * i + 3] = e.y2
+    flags![i] = flagsOf(e)
+  }
+  const flagsOf = (e: Entry): number => (e.inert ? INERT : 0) | (e.pickOnly ? PICK_ONLY : 0) | (e.groupBox ? GROUP_BOX : 0) | (e.guide ? GUIDE : 0)
 
-  const hitLinear = (x: number, y: number, mode: Mode): Entry | null => {
-    // Reverse scan: later entries paint on top (entries are kept in paint order).
-    for (let i = entries.length - 1; i >= 0; i--) {
-      const e = entries[i]!
-      if (skipped(e, mode)) continue
-      if (hits(e, x, y)) return e
-    }
-    return null
+  /** Whether entry `i` is under (x, y): its box (NaN never is), then its geometry, then the clips around it. */
+  const hits = (i: number, x: number, y: number): boolean => {
+    const b = boxes!
+    const o = 4 * i
+    if (!(x >= b[o]! && x <= b[o + 2]! && y >= b[o + 1]! && y <= b[o + 3]!)) return false
+    const e = entries[i]!
+    return onGeometry(e, x, y) && (e.clips === undefined || inClips(e.clips, x, y))
   }
 
-  const hitGrid = (x: number, y: number, mode: Mode): Entry | null => {
+  const hitLinear = (x: number, y: number, mode: Mode): number => {
+    // Reverse scan: later entries paint on top (entries are kept in paint order).
+    const skip = SKIP[mode]!
+    const f = flags!
+    for (let i = entries.length - 1; i >= 0; i--) {
+      if ((f[i]! & skip) === 0 && hits(i, x, y)) return i
+    }
+    return -1
+  }
+
+  const hitGrid = (x: number, y: number, mode: Mode): number => {
     // Draw order matters for overlapping marks: the topmost painted item is
     // the one with the highest index. Merge the cell's list and the big list
     // (both ascending) from their ends.
     const cx = Math.min(gw - 1, Math.max(0, Math.floor(x / cs)))
     const cy = Math.min(gh - 1, Math.max(0, Math.floor(y / cs)))
     const list = grid!.get(cy * gw + cx)
+    const skip = SKIP[mode]!
+    const f = flags!
     let a = list ? list.length - 1 : -1
     let b = big.length - 1
     while (a >= 0 || b >= 0) {
       let idx: number
       if (b < 0 || (a >= 0 && list![a]! > big[b]!)) idx = list![a--]!
       else idx = big[b--]!
-      const e = entries[idx]!
-      if (skipped(e, mode)) continue
-      if (hits(e, x, y)) return e
+      if ((f[idx]! & skip) === 0 && hits(idx, x, y)) return idx
     }
-    return null
+    return -1
   }
 
   function inClips(cl: Clip[], x: number, y: number): boolean {
@@ -831,16 +897,14 @@ export function buildHitIndex(scene: SceneRoot, cell = DEFAULT_CELL): HitIndex {
     return true
   }
 
-  /** Whether (x, y) is on the entry: its geometry, then the clips around it. */
-  function hits(e: Entry, x: number, y: number): boolean {
-    if (!(x >= e.x1 && x <= e.x2 && y >= e.y1 && y <= e.y2)) return false
-    return onGeometry(e, x, y) && (e.clips === undefined || inClips(e.clips, x, y))
-  }
-
   function onGeometry(e: Entry, x: number, y: number): boolean {
     switch (e.kind) {
       case 'box':
         return true
+      case 'disc': {
+        const dx = x - e.cx!, dy = y - e.cy!
+        return dx * dx + dy * dy <= e.r! * e.r!
+      }
       case 'circle': {
         const dx = x - e.cx!, dy = y - e.cy!
         const d2 = dx * dx + dy * dy
@@ -849,49 +913,74 @@ export function buildHitIndex(scene: SceneRoot, cell = DEFAULT_CELL): HitIndex {
       }
       case 'text': {
         // into the text's own frame: about the anchor, undoing the rotation
-        const [lx, ly] = local(e, x, y)
+        toLocal(e, x, y)
         const b = e.box!
-        return lx >= b[0] && lx <= b[2] && ly >= b[1] && ly <= b[3]
+        return localX >= b[0] && localX <= b[2] && localY >= b[1] && localY <= b[3]
       }
       case 'geom': {
         const polys = e.polys ?? (e.polys = e.build!())
-        const [px, py] = e.cx !== undefined ? local(e, x, y) : [x, y]
+        let px = x, py = y
+        if (e.cx !== undefined) { toLocal(e, x, y); px = localX; py = localY }
         if (e.fill && inFill(polys, px, py)) return true
         return e.stroke != null && inStroke(polys, px, py, e.stroke)
       }
     }
   }
 
-  const find = (x: number, y: number, mode: Mode): Entry | null => {
-    if (entries.length === 0 || !(x === x && y === y)) return null
-    if (surface !== null && !(x >= 0 && x <= surface.w && y >= 0 && y <= surface.h)) return null
-    if (entries.length <= GRID_THRESHOLD) return hitLinear(x, y, mode)
+  /** The index of the topmost entry under (x, y) a query of `mode` reports, or -1. */
+  const find = (x: number, y: number, mode: Mode): number => {
+    if (entries.length === 0 || !(x === x && y === y)) return -1
+    if (surface !== null && !(x >= 0 && x <= surface.w && y >= 0 && y <= surface.h)) return -1
+    if (entries.length <= GRID_THRESHOLD) {
+      if (boxes === null) seal()
+      return hitLinear(x, y, mode)
+    }
     if (grid == null) buildGrid()
     return hitGrid(x, y, mode)
   }
-  const target = (e: Entry, item: SceneItem): HitTarget => ({
+  /** Whether entry `i` was made for a mark that reads a dataset (a binary search of the runs). */
+  const inDataRun = (i: number): boolean => {
+    let lo = 0, hi = dataRuns.length / 2
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1
+      if (dataRuns[2 * mid + 1]! <= i) lo = mid + 1
+      else hi = mid
+    }
+    return lo < dataRuns.length / 2 && dataRuns[2 * lo]! <= i
+  }
+  const kindOf = (e: Entry): HitTarget['kind'] => (e.groupBox ? (e.guide ? 'guide' : 'group') : e.guide || e.pickOnly ? 'guide' : 'mark')
+  const describe = (i: number, item: SceneItem): HitTarget => ({
     item,
-    marktype: e.marktype,
-    kind: e.groupBox ? (e.guide ? 'guide' : 'group') : e.guide || e.pickOnly ? 'guide' : 'mark',
-    fromData: e.fromData === true,
+    marktype: entries[i]!.marktype,
+    kind: kindOf(entries[i]!),
+    fromData: inDataRun(i),
   })
+  /** The target of entry `i`'s own item (made once), or of another item of its line, area or trail. */
+  const target = (i: number, item: SceneItem): HitTarget => {
+    if (item !== entries[i]!.item) return describe(i, item)
+    return targets[i] ??= Object.freeze(describe(i, item))
+  }
   /** What `query` and `queryMark` report: a line, an area or a trail as its item nearest the point. */
-  const nearest = (e: Entry | null, x: number, y: number): HitTarget | null =>
-    e === null ? null : target(e, e.multi ? nearestOf(e.multi.items, e.multi.tx, e.multi.ty, x, y) : e.item)
+  const nearest = (i: number, x: number, y: number): HitTarget | null => {
+    if (i < 0) return null
+    const m = entries[i]!.multi
+    return target(i, m ? nearestOf(m.items, m.tx, m.ty, x, y) : entries[i]!.item)
+  }
 
   return {
     query: (x, y) => nearest(find(x, y, ALL), x, y),
     queryMark: (x, y) => nearest(find(x, y, DATA), x, y),
     pick(x: number, y: number): HitTarget | null {
-      const e = find(x, y, PICK)
-      return e === null ? null : target(e, e.item)
+      const i = find(x, y, PICK)
+      return i < 0 ? null : target(i, entries[i]!.item)
     },
     tooltip(x: number, y: number): HitTarget | null {
-      const e = find(x, y, PICK)
-      if (e === null) return null
-      if (!e.multi) return target(e, e.item)
-      const it = tipOf(e.multi.type, e.multi.items, x - e.multi.tx, y - e.multi.ty)
-      return it === null ? null : target(e, it)
+      const i = find(x, y, PICK)
+      if (i < 0) return null
+      const m = entries[i]!.multi
+      if (!m) return target(i, entries[i]!.item)
+      const it = tipOf(m.type, m.items, x - m.tx, y - m.ty)
+      return it === null ? null : target(i, it)
     },
     size(): number {
       let n = 0
