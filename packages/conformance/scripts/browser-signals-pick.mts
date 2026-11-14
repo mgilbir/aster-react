@@ -286,7 +286,7 @@ const fixedScenes = (): PickScene[] => {
   ]
 }
 
-// ---- the dense scatter of the chart-bench study (apps/bench/src/arms/vgspec/vega.ts `scatterSpec`, data/generate.ts) --------
+// ---- the dense scatter of the chart-bench study (its `scatterSpec` and `generateScatter`, heavy dataset: seed 4) --------------
 
 function scatterScene(): PickScene {
   // splitmix32, as the study generates its data (heavy: seed 4, 10,000 points, 5 groups)
