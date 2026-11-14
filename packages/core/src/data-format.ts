@@ -128,8 +128,11 @@ export function readData(data: unknown, format?: DataFormatSpec): Record<string,
   } else {
     rows = []
   }
-  // vega-loader.read deletes the d3-dsv `columns` annotation before returning
-  if (Object.hasOwn(rows, 'columns')) delete (rows as { columns?: unknown }).columns
+  // vega-loader.read deletes the d3-dsv `columns` annotation before returning (from a copy when the array is the caller's)
+  if (Object.hasOwn(rows, 'columns')) {
+    if (rows === data) rows = rows.slice()
+    else delete (rows as { columns?: unknown }).columns
+  }
   if (schema.parse) rows = coerceRows(rows, schema.parse)
   return ingestRows(rows)
 }
