@@ -2,8 +2,8 @@
  * The signal phase of the incremental-diff gate: a generated sequence of signal writes through one chart session, as `<Chart>`
  * drives it on every pointer move, a bound input or a selection, compared after every step with a chart compiled and evaluated
  * afresh with the same input. What is compared is everything a host can read of an evaluation: the SVG, the scene itself
- * (normalised: every own property of every node, the generation stamps aside), the datasets and the signal values the scene
- * carries, what the hit index finds on a grid of points (query, queryMark, pick and tooltip, by the item's place in the scene)
+ * (normalised: every own property of every node, the generation stamps aside, and the order of each node's keys), the datasets and
+ * the signal values the scene carries, what the hit index finds on a grid of points (query, queryMark, pick and tooltip, by the item's place in the scene)
  * and the accessible tree (as it is, and with every mark of more than two items summarised as one node).
  *
  * The writes: every top-level signal the spec declares (but the view's own size, padding, autosize and background), each given
@@ -159,6 +159,17 @@ function hits(scene: SceneRoot, points: ReadonlyArray<readonly [number, number]>
   return points.map(([x, y]) => [index.query(x, y), index.queryMark(x, y), index.pick(x, y), index.tooltip(x, y)].map(name).join(' '))
 }
 
+/** The order of every node's own keys (the generation stamps and the renderers' caches aside): a host that lists them sees it. */
+function keyOrders(v: unknown, out: string[], depth = 0): string[] {
+  // (an object held in two places is listed in both: which objects a scene shares is not what this compares; a cycle ends at the depth)
+  if (v === null || typeof v !== 'object' || depth > 40) return out
+  if (Array.isArray(v)) { for (const x of v) keyOrders(x, out, depth + 1); return out }
+  const keys = Object.keys(v).filter((k) => !VOLATILE.has(k))
+  out.push(keys.join(','))
+  for (const k of keys) keyOrders((v as Record<string, unknown>)[k], out, depth + 1)
+  return out
+}
+
 /** What a host reads of an evaluation, normalised. */
 function readOf(scene: SceneRoot, points: ReadonlyArray<readonly [number, number]>): Record<string, string> {
   const svg = canonicalizeSvg(renderSceneToSvg(scene))
@@ -167,6 +178,7 @@ function readOf(scene: SceneRoot, points: ReadonlyArray<readonly [number, number
   return {
     svg: `${svg.root}\u0000${svg.records.join('\u0000')}`,
     scene: JSON.stringify(normalise(scene)),
+    keys: keyOrders(scene.items, []).join('\n'),
     datasets: JSON.stringify(datasets),
     signals: JSON.stringify(normalise((scene as unknown as { signalParams?: unknown }).signalParams)),
     hits: hits(scene, points).join('\n'),
@@ -174,6 +186,16 @@ function readOf(scene: SceneRoot, points: ReadonlyArray<readonly [number, number
     // (a mark of more items than the threshold is one node, its box the union of its items')
     a11ySummary: JSON.stringify(normalise(buildA11yTree(scene, new Map(), { summaryThreshold: 2 }))),
   }
+}
+
+/** Where two texts first differ, line by line, for the report: the session's line and the fresh chart's. */
+function firstDifference(inc: string, fresh: string): string {
+  const a = inc.split('\n')
+  const b = fresh.split('\n')
+  for (let i = 0; i < Math.max(a.length, b.length); i++) {
+    if (a[i] !== b[i]) return ` (line ${i + 1}: session ${JSON.stringify((a[i] ?? '').slice(0, 160))}, fresh ${JSON.stringify((b[i] ?? '').slice(0, 160))})`
+  }
+  return ''
 }
 
 interface SignalPhaseResult { compared: number; skipped: number; mismatch?: string }
@@ -257,7 +279,7 @@ function signalSteps(spec: Record<string, unknown>, data: { name: string; rows: 
     if (!inc.ok && !full.ok) { skipped++; continue }
     if (!inc.ok || !full.ok) return { compared, skipped, mismatch: `${what}: only the ${inc.ok ? 'fresh chart' : 'session'} threw (${(inc.ok ? (full as { error: string }).error : inc.error).slice(0, 120)})` }
     for (const key of Object.keys(full.value)) {
-      if (inc.value[key] !== full.value[key]) return { compared, skipped, mismatch: `${what}: the ${key} differs` }
+      if (inc.value[key] !== full.value[key]) return { compared, skipped, mismatch: `${what}: the ${key} differs${firstDifference(inc.value[key]!, full.value[key]!)}` }
     }
     compared++
   }
