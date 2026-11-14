@@ -26,6 +26,7 @@ import { dict } from './util.js'
 import { dataInputOf } from './spec-structure.js'
 import { diffRows, type DataPulse, type DatasetPulse, type PulseRange } from './pulse.js'
 import { AsterLimitError, type SpecLimits } from './limits.js'
+import { notATuple } from './data-format.js'
 import type { TextMetricsProvider } from './text-metrics.js'
 import type { RuntimeInput, SceneRoot, VgSpec } from './types.js'
 
@@ -53,8 +54,9 @@ export interface StreamOptions {
   policy?: StreamPolicy
   /**
    * Initial input (data/signals/size) used for the first flush. `initial.urlPolicy`
-   * (the image-URL policy) and `initial.urlData` (whether url datasets are refused) apply to
-   * every flush; they are fixed for the stream's life.
+   * (the image-URL policy), `initial.urlData` (whether url datasets are refused) and
+   * `initial.logger` (where the dataflow errors of an evaluation go) apply to every flush;
+   * they are fixed for the stream's life.
    */
   initial?: RuntimeInput
   /**
@@ -687,6 +689,7 @@ export function createChartStream(spec: VgSpec, options: StreamOptions = {}): Ch
         ...(nextTextMetrics ? { textMetrics: nextTextMetrics } : {}),
         ...(options.initial?.urlPolicy ? { urlPolicy: options.initial.urlPolicy } : {}),
         ...(options.initial?.urlData !== undefined ? { urlData: options.initial.urlData } : {}),
+        ...(options.initial?.logger ? { logger: options.initial.logger } : {}),
         ...(Object.keys(dataPulse).length ? { dataPulse } : {}),
         ...(Object.keys(dataChanges).length ? { dataChanges } : {}),
         ...(changedDatasets.length ? { changedDatasets } : {}),
@@ -717,6 +720,15 @@ export function createChartStream(spec: VgSpec, options: StreamOptions = {}): Ch
 
   const stream: ChartStream = {
     push(batch) {
+      // (rows enter the datasets as vega inserts them: a `null` or `undefined` row is refused before anything is queued, as
+      // `view.insert` throws before it changes anything)
+      for (const set of [batch.data, batch.append]) {
+        if (set == null) continue
+        for (const rows of Object.values(set)) {
+          if (!Array.isArray(rows)) continue
+          for (const r of rows) if (r == null) throw notATuple(r)
+        }
+      }
       return enqueue(batch)
     },
     flush() {

@@ -8,7 +8,7 @@
  */
 import { compileExpr, expressionRegistryEpoch, ExpressionParseError, type CompiledExpr, type ExpressionRuntime } from './expression.js'
 import { scaleCallFailure, scaleRangeFailure } from './missing-scale.js'
-import { ingestRows, readData, type DataFormatSpec } from './data-format.js'
+import { ingestRows, isNotATupleError, notATuple, readData, type DataFormatSpec } from './data-format.js'
 import { followsSources, numbersSourceRows, orderOf, setOrder, setSources, sourcesAfter, sourcesOf } from './tuple-order.js'
 import { alignIndices, carryByAlignment, carryBySources, sourceNumbersOf, type IdCounter, type SourceNumbers } from './identifier-ids.js'
 import { applyTransforms, applyTransformsToSharedRows, copiesRows, sortOrder, getField, geoJSONPath, type Row, type TransformContext } from './transform.js'
@@ -497,6 +497,12 @@ interface AbortPoint {
   signals?: true
   /** a scale of the instance's scope could not be made (the scales come before everything else of it but its signals and projections) */
   scales?: true
+  /**
+   * a dataset of the instance's scope could not take its rows (a `null` or `undefined` row of its inline values: vega reads the
+   * tuple id inserting it): the datasets come after the scope's signals and projections, before its scales, so nothing else of it
+   * was made
+   */
+  data?: true
   /** a signal of the view that reads data or a scale threw: it is ranked after every other operator of the view's scope (see `abortAtThrowingSignal`) */
   lateSignal?: true
   /**
@@ -725,6 +731,7 @@ function failPass(ctx: EvalContext, point: Omit<AbortPoint, 'path'> & { path?: n
  */
 function stepOf(p: AbortPoint): number {
   if (p.signals) return -2
+  if (p.data) return -0.75
   if (p.scales) return -0.5
   if (p.labels) return 4e9 + (p.legend ?? 0)
   if (p.projection) return -1
@@ -992,7 +999,7 @@ function makeSetdata(chart: CompiledChart, state: SetDataState): NonNullable<Exp
     // vega-dataflow enqueues an operator only once per run: a signal ranked after the dataset's input (it reads the dataset, or
     // something derived from it) calls setdata when the input has already run in this first pass, so its pulse is lost
     if (state.caller !== undefined && signalRanksAfterDatasetInput(chart, state.caller, name)) return 1
-    const rows = ingestRows((Array.isArray(tuples) ? tuples : tuples == null ? [] : [tuples]) as Row[]).map((r) => ({ ...r }))
+    const rows = ingestRows((Array.isArray(tuples) ? tuples : tuples == null ? [] : [tuples]) as Row[], 0, undefined, true).map((r) => ({ ...r }))
     const have = state.rows.get(name)
     if (have === undefined || contentKey(have) !== contentKey(rows)) {
       state.rows.set(name, rows)
@@ -3467,7 +3474,7 @@ const objectRowPrefix = new WeakMap<readonly unknown[], number>()
 function ingestHostRows(given: readonly Row[], pulse: StepPulse | null): Row[] {
   const known = objectRowPrefix.get(given) ?? 0
   const base = pulse?.appendOnly && pulse.baseLength !== undefined && pulse.baseLength <= known && pulse.baseLength <= given.length ? pulse.baseLength : 0
-  const rows = ingestRows(given, base, pulse?.changed)
+  const rows = ingestRows(given, base, pulse?.changed, true)
   if (rows === given) objectRowPrefix.set(given, given.length)
   return rows
 }
@@ -4471,6 +4478,16 @@ function evaluateMarkItems(
 
     // Keep dataset order for rect items: vega's scene keeps data order and
     // every renderer paints the array front to back (later datum on top).
+    // (vega's DataJoin reads each tuple's id: a `null` or `undefined` tuple a `{signal}` values gave throws there, before any item is
+    // made -- the pass stops at this mark, which is not made)
+    if (ctx.primitiveTuples) {
+      const bad = rows.find((r) => PRIMITIVE_TUPLE in r && tupleDatum(r) == null)
+      if (bad !== undefined) {
+        failPass(ctx, { axis: Infinity, mark: ctx.scope.mark ?? 0 }, notATuple(tupleDatum(bad) as null | undefined))
+        ctx.encodeAborted = true
+        return null
+      }
+    }
     const encodeRows = ctx.primitiveTuples ? joinPrimitiveTuples(rows) : rows
 
     const update = mark.encode?.update ?? mark.encode?.enter ?? {}
@@ -5376,7 +5393,15 @@ function buildGroupItem(mark: CompiledMark, ctx: EvalContext, entered: EnteredGr
       const gather = (): Row[] => sources.flatMap((n) => ctx.datasets.get(n) ?? [])
       // (a group's url dataset nobody loaded fails as a top-level one does; host `data` does not reach a group's datasets)
       if (!shared && d.values == null && d.url != null) throw unloadedUrlError(d.name, false)
-      let rows: Row[] | undefined = shared ? undefined : d.values != null ? readData(inlineValues(ctx, d.values), d.format, valuesSignal(d.values) !== undefined) : []
+      let rows: Row[] | undefined
+      try {
+        rows = shared ? undefined : d.values != null ? readData(inlineValues(ctx, d.values), d.format, valuesSignal(d.values) !== undefined) : []
+      } catch (e) {
+        // (vega inserts a group's inline rows into its dataset inside the run: a row that is not a tuple is logged there, not thrown)
+        if (!isNotATupleError(e)) throw e
+        failPass(ctx, { axis: -0.75, data: true, path }, e)
+        break
+      }
       if (rows !== undefined) notePrimitiveTuples(ctx, rows)
       checkRowCount(rows?.length ?? sources.reduce((n, s) => n + (ctx.datasets.get(s)?.length ?? 0), 0), `dataset "${d.name}"`)
       const tctx = { runtime: ctx.runtime, signals: scopeParams, hierarchies: ctx.hierarchies, projections: ctx.projections }

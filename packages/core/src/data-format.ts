@@ -135,7 +135,7 @@ export function readData(data: unknown, format?: DataFormatSpec, dynamic = false
   }
   if (schema.parse) rows = coerceRows(rows, schema.parse)
   // (rows a signal makes are ingested as vega's dynamic loader does: a primitive stays the primitive, see PRIMITIVE_TUPLE)
-  return dynamic ? boxPrimitiveRows(rows) : ingestRows(rows)
+  return dynamic ? boxPrimitiveRows(rows) : ingestRows(rows, 0, undefined, true)
 }
 
 function boxPrimitiveRows(rows: readonly unknown[]): Record<string, unknown>[] {
@@ -150,8 +150,12 @@ const isPrimitiveRow = (v: unknown): boolean => v === null || (typeof v !== 'obj
  * `{data: 12}`, `{data: 23}`). Returns the input array when every row is already an object, so the common case
  * costs one scan and no copy. The rows before `from` are known to be objects already, but for the ones listed in
  * `changed`: only the others are looked at (an append to a long dataset looks at what was appended).
+ *
+ * `inserted`: the rows enter a dataset as vega inserts them into one (a changeset: a spec's inline values, the host's rows,
+ * `setdata`), which reads each row's tuple id first, so a `null` or `undefined` row throws there (see `notATuple`). The rows a
+ * facet takes from a field are only ingested, as vega's PreFacet does: there such a row is wrapped like any other value.
  */
-export function ingestRows<T>(rows: readonly T[], from = 0, changed?: readonly number[]): Record<string, unknown>[] {
+export function ingestRows<T>(rows: readonly T[], from = 0, changed?: readonly number[], inserted = false): Record<string, unknown>[] {
   const n = rows.length
   let found = false
   for (let i = from; i < n && !found; ++i) found = isPrimitiveRow(rows[i])
@@ -160,9 +164,27 @@ export function ingestRows<T>(rows: readonly T[], from = 0, changed?: readonly n
   const out: Record<string, unknown>[] = new Array(n)
   for (let j = 0; j < n; ++j) {
     const r = rows[j]
+    if (inserted && r == null) throw notATuple(r as null | undefined)
     out[j] = isPrimitiveRow(r) ? { data: r } : (r as Record<string, unknown>)
   }
   return out
+}
+
+/**
+ * What vega throws for a row that is `null` or `undefined` where it reads the row's tuple id (inserting it into a dataset, or a
+ * mark joining it): JavaScript's own TypeError for reading a property of that value.
+ */
+export function notATuple(row: null | undefined): TypeError {
+  const e = new TypeError(`Cannot read properties of ${row === null ? 'null' : 'undefined'} (reading 'Symbol(vega_id)')`)
+  NOT_A_TUPLE.add(e)
+  return e
+}
+
+const NOT_A_TUPLE = new WeakSet<object>()
+
+/** Whether `e` is the error `notATuple` made (a row that is not a tuple), as opposed to anything else thrown while reading rows. */
+export function isNotATupleError(e: unknown): boolean {
+  return e !== null && typeof e === 'object' && NOT_A_TUPLE.has(e)
 }
 
 // Built-in JSON reader (no dependencies; `property` is a field path: `a.b`, `a\.b`, `a[0]`, `a["b"]`).
