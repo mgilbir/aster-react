@@ -99,12 +99,16 @@ interface Case {
   /** The spec is a Vega spec (both engines take it as it is), not a Vega-Lite one. */
   vega?: boolean
   /**
-   * The tooltip is compared too: the value vega's tooltip handler is given (`item.tooltip || null`) and the one `<Chart>` shows
-   * for the hovered item. vega's handler is called as the pointermove is handed over, before the run the move starts, so the
-   * value it is given is the one the previous pointermove left (a Playwright move is several): a step that reads a tooltip is a
-   * second move to the same x. The indices of the steps after which the tooltips are compared.
+   * The tooltip after a step, by the step's index: the value vega's tooltip handler is given (`item.tooltip || null`) against the
+   * one `<Chart>` shows for the hovered item. Two differences from vega are Aster's by choice (docs/API.md, "Tooltips"):
+   *  - `equal`: the same value;
+   *  - `current`: vega's handler is called as the pointermove is handed over, before the run the move starts, so it is given the
+   *    value the previous pointermove left (one move behind on a signal-driven tooltip); Aster shows the value for the move's own
+   *    signals, which is vega's after one more move to the same point (the next step's);
+   *  - `hidden`: the pointer has left the marks for an axis: Aster hides the tooltip on both renderers (so does vega's canvas;
+   *    vega's svg keeps the last one, a mouseout it does not see).
    */
-  tooltipAt?: number[]
+  tooltip?: Record<number, 'equal' | 'current' | 'hidden'>
 }
 
 const ROWS = [
@@ -409,11 +413,11 @@ const CASES: Case[] = [
   {
     name: 'vega: the chart-bench survival tooltip (hoverX from pointermove)',
     vega: true,
-    // (off the plot the tooltip is not compared: vega's svg renderer keeps the last one shown when the pointer leaves the rect
-    // for the axis below, where its canvas renderer and Aster's two hide it; the signals are)
-    tooltipAt: [1, 3, 5, 7, 9, 11],
+    // every move to a new x shows that x's values at once (vega: one move later), the second move to it equals vega; the last
+    // move leaves the plot for the x axis below it, where the tooltip hides
+    tooltip: { 0: 'current', 1: 'equal', 2: 'current', 3: 'equal', 4: 'current', 5: 'equal', 6: 'current', 7: 'equal', 8: 'current', 9: 'equal', 10: 'current', 11: 'equal', 12: 'hidden' },
     spec: chartBenchSurvival(),
-    steps: [0.03, 0.2, 0.41, 0.5, 0.77, 0.93].flatMap((x, i) => [{ t: 'move' as const, x, y: 0.3 + i * 0.07 }, { t: 'move' as const, x, y: 0.31 + i * 0.07 }]).concat([{ t: 'move', x: 0.5, y: 1.3 }]),
+    steps: [0.03, 0.2, 0.41, 0.5, 0.77, 0.93].flatMap((x, i) => [{ t: 'move' as const, x, y: 0.3 + i * 0.07 }, { t: 'move' as const, x, y: 0.31 + i * 0.07 }]).concat([{ t: 'move', x: 0.5, y: 1.04 }]),
     moves: [0, 2, 4, 6, 8, 10, 12],
   },
 ]
@@ -915,7 +919,7 @@ async function drive(engine: 'vega' | 'aster', renderer: Renderer, c: Case): Pro
     await page.evaluate(async ([which, spec, r, o]) => {
       const w = window as unknown as Record<string, (s: unknown, r: string, o: unknown) => Promise<void>>
       await (which === 'vega' ? w.__mountVega! : w.__mountAster!)(spec, r, o)
-    }, [engine, c.spec, renderer, { vega: c.vega === true, tooltip: c.tooltipAt !== undefined }] as const)
+    }, [engine, c.spec, renderer, { vega: c.vega === true, tooltip: c.tooltip !== undefined }] as const)
     if (process.env.SEL_DEBUG) console.log(engine, await page.evaluate(() => document.querySelector('#c svg path.background')!.outerHTML + (document.querySelector('#c svg .marks')?.outerHTML.slice(0, 600) ?? '')))
     const settle = (): Promise<unknown> => page.evaluate(() => (window as unknown as { __settle: () => Promise<unknown> }).__settle())
     await settle()
@@ -980,7 +984,9 @@ for (const c of cases) for (const renderer of RENDERERS) {
         const where = `${vsc.length} vs ${asc.length} scopes; only in vega: ${String(onlyV).slice(0, 300)}; only in aster: ${String(onlyA).slice(0, 300)}`
         problems.push(`${label}: scoped signals: ${where}`)
       }
-      if (i > 0 && c.tooltipAt?.includes(i - 1) && vs.tip !== as.tip) problems.push(`${label}: tooltip: vega=${String(vs.tip).slice(0, 200)} aster=${String(as.tip).slice(0, 200)}`)
+      const how = i > 0 ? c.tooltip?.[i - 1] : undefined
+      const want = how === 'equal' ? vs.tip : how === 'current' ? v.snaps[i + 1]?.tip : how === 'hidden' ? 'null' : undefined
+      if (want !== undefined && as.tip !== want) problems.push(`${label}: tooltip (${how}): want ${String(want).slice(0, 200)}, aster=${String(as.tip).slice(0, 200)} (vega now ${String(vs.tip).slice(0, 120)})`)
       for (const n of Object.keys(vs.stores)) {
         if (vs.stores[n] !== as.stores[n]) problems.push(`${label}: store ${n}: vega=${vs.stores[n]!.slice(0, 200)} aster=${as.stores[n]!.slice(0, 200)}`)
       }
@@ -1004,7 +1010,17 @@ for (const c of cases) for (const renderer of RENDERERS) {
         else problems.push(`${label}: ${renderer === 'canvas' ? 'canvas' : 'svg'} differs from vega's retained render (${diff.slice(0, 160)}) and from vega's fresh render (${String(freshDiff).slice(0, 220)})`)
       }
     }
-    if (c.tooltipAt && !c.tooltipAt.some((k) => v.snaps[k + 1]?.tip !== 'null')) problems.push('VACUOUS: vega never showed a tooltip')
+    if (c.tooltip) {
+      const steps = Object.entries(c.tooltip).map(([k, how]) => [Number(k), how] as const)
+      if (!steps.some(([k, how]) => how === 'equal' && v.snaps[k + 1]?.tip !== 'null')) problems.push('VACUOUS: vega never showed a tooltip')
+      // the differences are real: vega lags on a move to a new x, and its svg keeps the tooltip off the marks where its canvas does not
+      if (!steps.some(([k, how]) => how === 'current' && v.snaps[k + 1]?.tip !== v.snaps[k + 2]?.tip)) problems.push('VACUOUS: vega\'s tooltip never lagged a move')
+      for (const [k, how] of steps) {
+        if (how !== 'hidden') continue
+        const vegaKeeps = v.snaps[k + 1]?.tip !== 'null'
+        if (vegaKeeps !== (renderer === 'svg')) problems.push(`step ${k}: vega's ${renderer} renderer ${vegaKeeps ? 'kept' : 'hid'} the tooltip off the marks (its svg keeps it, its canvas hides it)`)
+      }
+    }
     for (const i of c.moves) {
       // (pressed outside vega's canvas: out of the pointer's reach, see runStep; compared, but not required to move)
       if (v.unreachable.includes(i)) { unreachableSteps++; continue }
