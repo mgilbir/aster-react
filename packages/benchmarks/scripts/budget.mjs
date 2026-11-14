@@ -277,7 +277,8 @@ cli({ url: import.meta.url })
 // now): core 160.1 -> 160.9, core/hit 8.1 -> 8.9, useChart 172.2 -> 172.9, Chart 218.6 -> 220.1, SvgChart 192.6 -> 193.5,
 // SvgChart + interaction 212.1 -> 213.7, Chart + VL 323.3 -> 324.9. Ceilings are the measured value + 0.5.
 const BUDGETS = {
-  '@aster-charts/core': 161.4 * 1024,
+  // stack layer 2 (perf/vl-compile-data-independent on fix/hover-correctness: rows.ts, the row watch, signal-valued values, findSource): measured 2026-11-14 on a clean build at 161.5 kB gzip (ceiling was 161.4); ceiling is the measured value + 0.5.
+  '@aster-charts/core': 162.0 * 1024,
   '+ @aster-charts/core/dom': 11.8 * 1024,
   '+ @aster-charts/core/canvas': 6.4 * 1024,
   '+ @aster-charts/core/hit': 9.4 * 1024,
@@ -292,13 +293,18 @@ const BUDGETS = {
   // call), measured 2026-11-12 on a clean build: 7.7 kB gzip over the core app (the canvas renderer's 6.0 included; 7.5 before the
   // one image deadline). No eager row grew past what the #143 note above set for the two together. Ceiling is the measured value + 0.5.
   '+ @aster-charts/core/png': 8.2 * 1024,
-  '@aster-charts/react useChart': 173.4 * 1024,
-  '@aster-charts/react Chart': 220.6 * 1024,
+  // stack layer 2 (perf/vl-compile-data-independent on fix/hover-correctness: rows.ts, the row watch, signal-valued values, findSource): measured 2026-11-14 on a clean build at 173.7 kB gzip (ceiling was 173.4); ceiling is the measured value + 0.5.
+  '@aster-charts/react useChart': 174.2 * 1024,
+  // stack layer 2 (perf/vl-compile-data-independent on fix/hover-correctness: rows.ts, the row watch, signal-valued values, findSource): measured 2026-11-14 on a clean build at 220.8 kB gzip (ceiling was 220.6); ceiling is the measured value + 0.5.
+  '@aster-charts/react Chart': 221.3 * 1024,
   // The light chart (`@aster-charts/react/lite`): SVG only, no canvas renderer; alone and with the `interaction` capability.
-  '@aster-charts/react SvgChart': 194.0 * 1024,
-  '@aster-charts/react SvgChart + interaction': 214.2 * 1024,
+  // stack layer 2 (perf/vl-compile-data-independent on fix/hover-correctness: rows.ts, the row watch, signal-valued values, findSource): measured 2026-11-14 on a clean build at 194.2 kB gzip (ceiling was 194.0); ceiling is the measured value + 0.5.
+  '@aster-charts/react SvgChart': 194.7 * 1024,
+  // stack layer 2 (perf/vl-compile-data-independent on fix/hover-correctness: rows.ts, the row watch, signal-valued values, findSource): measured 2026-11-14 on a clean build at 214.5 kB gzip (ceiling was 214.2); ceiling is the measured value + 0.5.
+  '@aster-charts/react SvgChart + interaction': 215.0 * 1024,
   // Base + the VL compiler (opt-in: `import '@aster-charts/react/vl'`).
-  '@aster-charts/react Chart + VL': 325.4 * 1024,
+  // stack layer 2 (perf/vl-compile-data-independent on fix/hover-correctness: rows.ts, the row watch, signal-valued values, findSource): measured 2026-11-14 on a clean build at 327.5 kB gzip (ceiling was 325.4); ceiling is the measured value + 0.5.
+  '@aster-charts/react Chart + VL': 328.0 * 1024,
 }
 
 const THIS_DIR = dirname(fileURLToPath(import.meta.url))
