@@ -617,6 +617,11 @@ drawn from a `url`: `sceneImageUrls(scene)` lists the urls that have no bitmap y
 loads them as vega's canvas does (`crossOrigin = "anonymous"`, at most `IMAGE_CONCURRENCY` (6) at a time, one deadline for all) and
 resolves with the ones that loaded, and `withSceneImages(scene, bitmaps)` is a copy of the scene with those bitmaps in place (the
 scene itself is not written). `<Chart renderer="canvas">` does this itself.
+`createCanvasEvents(canvas)` is the canvas renderer's events for the signal event loop (`CanvasEvents`): pass it, with the scene
+hit index's `pick`, as `bindSceneSignals(canvas, scene, signals, hooks, { pick, events })`, keep it for as long as the canvas is
+shown, and call its `release()` when the canvas goes. Events are resolved as vega's canvas handler resolves them: about the item
+the last `pointermove` picked, with the out / over of an item change, a click only on the item pressed (see
+[INTERACTION.md](INTERACTION.md#signals)). `<Chart renderer="canvas">` does this itself.
 
 #### `@aster-charts/core/png`
 
