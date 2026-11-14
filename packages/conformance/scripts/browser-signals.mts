@@ -17,7 +17,12 @@
  * same virtual time, a tick that lands a frame early or late on one side shows up as a different `anim_clock` and
  * a different frame; a case whose vega frames never change would prove nothing, so it fails as vacuous.
  *
- * Run: pnpm conformance:signals [--filter=substr] [--min-cases=N]
+ * Pointer phase (browser-signals-pick.mts): which item a pointer position resolves to -- `event.item` and the item vega's tooltip
+ * handler is given -- in real vega (SVG renderer: the browser's hit test; canvas renderer: vega's pick) and in Aster (its event
+ * loop given the scene hit index's `pick`, as `<Chart>` gives it, and the hit index's `tooltip`, which `<Chart>` shows), over
+ * generated scenes of overlapping marks of every type and fixed scenes of the items that have no data row of their own.
+ *
+ * Run: pnpm conformance:signals [--filter=substr] [--min-cases=N] [--pick-only] [--pick-scenes=N]
  */
 import { writeFileSync, rmSync, mkdirSync } from 'node:fs'
 import { join, dirname } from 'node:path'
@@ -26,8 +31,9 @@ import { build } from 'esbuild'
 import { compile as compileVL } from '../../vl/src/index.ts'
 import { canonicalizeSvg, diffCanonical } from '../src/normalize.ts'
 import { cli } from '../../../scripts/lib/cli.mjs'
+import { PICK_ENTRY, pickScenes, runPickPhase } from './browser-signals-pick.mts'
 
-cli({ url: import.meta.url, flags: { filter: 'eq', 'min-cases': 'eq' } })
+cli({ url: import.meta.url, flags: { filter: 'eq', 'min-cases': 'eq', 'pick-only': 'bool', 'pick-scenes': 'eq' } })
 
 const THIS_DIR = dirname(fileURLToPath(import.meta.url))
 const CONF_DIR = dirname(THIS_DIR)
@@ -36,6 +42,9 @@ const argv = process.argv.slice(2)
 const arg = (n: string, d: string): string => argv.find((a) => a.startsWith(`--${n}=`))?.split('=')[1] ?? d
 const FILTER = arg('filter', '')
 const MIN_CASES = Number(arg('min-cases', '0'))
+const PICK_ONLY = argv.includes('--pick-only')
+/** Generated scenes of the pointer phase (each 150 points, through three mounts). */
+const PICK_SCENES = Number(arg('pick-scenes', '120'))
 
 // ---- cases ------------------------------------------------------------------------
 
@@ -610,7 +619,7 @@ window.__mountAster = async (spec) => {
   holder.appendChild(svg)
   const store = {}
   const hit = buildHitIndex(scene)
-  bindSceneSignals(svg, scene, store, { logger }, { pick: (x, y) => hit.query(x, y) })
+  bindSceneSignals(svg, scene, store, { logger }, { pick: (x, y) => hit.pick(x, y) })
   names = (spec.signals || []).map((s) => s.name)
   read = () => Object.fromEntries(names.map((n) => [n, Object.hasOwn(store, n) ? store[n] : scene.signalParams[n]]))
   readScoped = () => {
@@ -690,6 +699,19 @@ await build({
   absWorkingDir: CONF_DIR,
 })
 writeFileSync(join(OUT_DIR, 'index.html'), '<!doctype html><html><body style="margin:0;width:900px;height:600px"><script src="./page.js"></script></body></html>')
+writeFileSync(join(OUT_DIR, 'pick-entry.ts'), PICK_ENTRY)
+await build({
+  entryPoints: [join(OUT_DIR, 'pick-entry.ts')],
+  bundle: true,
+  format: 'iife',
+  platform: 'browser',
+  outfile: join(OUT_DIR, 'pick.js'),
+  define: { 'process.env.NODE_ENV': '"production"' },
+  banner: { js: 'var process = { env: { NODE_ENV: "production" } };' },
+  logLevel: 'silent',
+  absWorkingDir: CONF_DIR,
+})
+writeFileSync(join(OUT_DIR, 'pick.html'), '<!doctype html><html><body style="margin:0"><script src="./pick.js"></script></body></html>')
 
 // ---- driver -----------------------------------------------------------------------
 
@@ -826,7 +848,7 @@ async function driveAnim(engine: 'vega' | 'aster', vg: Record<string, unknown>, 
 let pass = 0
 const failures: string[] = []
 const t0 = Date.now()
-for (const c of cases) {
+for (const c of PICK_ONLY ? [] : cases) {
   const [v, a] = [await drive('vega', c), await drive('aster', c)]
   const problems: string[] = []
   if ('error' in v) problems.push(`vega side failed: ${v.error}`)
@@ -854,7 +876,7 @@ for (const c of cases) {
   if (problems.length === 0) pass++
   else failures.push(`${c.name}: ${problems.join('; ')}`)
 }
-for (const c of animCases) {
+for (const c of PICK_ONLY ? [] : animCases) {
   const vg = compileVL(c.vl as never) as Record<string, unknown>
   const [v, a] = [await driveAnim('vega', vg, c.at), await driveAnim('aster', vg, c.at)]
   const problems: string[] = []
@@ -880,11 +902,30 @@ for (const c of animCases) {
   if (problems.length === 0) pass++
   else failures.push(`${c.name}: ${problems.slice(0, 6).join('; ')}`)
 }
+// ---- the pointer phase ----
+const scenes = pickScenes(PICK_SCENES).filter((sc) => !FILTER || sc.name.includes(FILTER))
+const tp = Date.now()
+const pick = await runPickPhase(browser, `file://${join(OUT_DIR, 'pick.html')}`, scenes)
 await browser.close()
 rmSync(OUT_DIR, { recursive: true, force: true })
 
-console.log(`\n[browser-signals] ${pass}/${cases.length + animCases.length} cases agree with real vega (${((Date.now() - t0) / 1000).toFixed(0)}s)`)
+if (!PICK_ONLY) console.log(`\n[browser-signals] ${pass}/${cases.length + animCases.length} cases agree with real vega (${((Date.now() - t0) / 1000).toFixed(0)}s)`)
 for (const f of failures) console.log(`  FAIL ${f}`)
+console.log(`[browser-signals] pointer: ${pick.agreed}/${pick.points} points of ${pick.scenes} scenes agree with real vega on event.item and the tooltip (${pick.picked} with an item, ${pick.tips} with a tooltip; ${pick.ambiguous} answers where vega's svg and canvas renderers differ; ${pick.edge} answers on an edge, vega's a quarter pixel away) (${((Date.now() - tp) / 1000).toFixed(0)}s)`)
+for (const f of pick.failures) console.log(`  FAIL pointer ${f}`)
+// an edge answer is vega's a quarter of a pixel away: a systematic offset would make many of them
+const MAX_EDGE = Math.ceil(pick.points / 2000)
+if (pick.edge > MAX_EDGE) {
+  console.log(`[browser-signals] CEILING: ${pick.edge} answers on an edge > ${MAX_EDGE} (one in 2000 points)`)
+  process.exit(1)
+}
+// a comparison of empty answers proves nothing: a fifth of the points must meet an item, a tenth a tooltip
+if (scenes.length > 0 && (pick.picked < pick.points / 5 || pick.tips < pick.points / 10)) {
+  console.log(`[browser-signals] FLOOR: the pointer phase is vacuous (${pick.picked} items, ${pick.tips} tooltips over ${pick.points} points)`)
+  process.exit(1)
+}
+if (pick.failures.length) process.exit(1)
+if (PICK_ONLY) process.exit(scenes.length === 0 ? 1 : 0)
 if (MIN_CASES && cases.length + animCases.length < MIN_CASES) {
   console.log(`[browser-signals] FLOOR: ${cases.length + animCases.length} cases < --min-cases ${MIN_CASES}`)
   process.exit(1)
