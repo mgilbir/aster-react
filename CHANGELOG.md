@@ -35,9 +35,14 @@ and Fixed, per package. Everything built before the first release is in [Pre-rel
   size the view under autosize `pad` or `fit` (corpus entry `group-nobound`), and the pointer picks within the group's bounds.
 - `isTuple` is true for what vega's dataflow made a tuple (a dataset's rows, each transform's rows, a mark's datum and a mark
   without `from`'s `{}`, the copies of a mark's items another mark is made from, a group item's datum, an axis', a legend's and
-  a title's data) and false for anything else; it was false almost everywhere. Nothing is stamped on a row to say so.
+  a title's data) and false for anything else; it was false almost everywhere. Nothing is stamped on a row to say so, and only
+  a chart that asks `isTuple` of something other than Vega-Lite's `group()` and `facet` keeps track of them.
 - `parent` is the datum of the group item around a mark whatever made it: in a group mark without `from` nested in a facet cell
   it was the cell's datum, where vega gives the plain group's `{}` (corpus entry `group-parent-plain`).
+- Autosize `none` containing the padding with a size smaller than the padding (no `width` at all, say) keeps vega's negative
+  view: the scales, the grid and the root group's box are laid out on it and the axes placed as on a 0-wide view, in an svg of
+  `max(0, size)`; Aster clamped the view to 0 and drew a padding-sized svg without the axes (corpus entry
+  `autosize-none-padding-unsized`, promoted from the probes).
 
 ### `@aster-charts/react`
 
