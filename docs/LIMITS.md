@@ -145,16 +145,20 @@ functions (they are exported from `@aster-charts/core`).
 
 The pre-flight reads the spec's lists the way the compiler does (vega-util `array()`: a lone `data` object counts as a one-element list), so `checkSpecLimits` and the runtime agree on what is a dataset.
 
-- **Pre-flight**: the sum of all inline `values` arrays (top level and nested group
-  `data`) plus every array in the host's `input.data`. Two datasets of 6 rows fail a
-  `maxRows` of 10.
+- **Pre-flight**: the sum of the rows the chart is given, each counted once: for every
+  top-level dataset its host rows (`input.data` under its name, which replace its inline
+  `values` rather than add to them), else its inline `values`; the inline `values` of nested
+  group `data`; and every host array under a name no top-level dataset has. A dataset derived
+  from others (`source`) is given no rows of its own, and host rows under its name are not
+  used. Two datasets of 6 rows fail a `maxRows` of 10; a dataset of 6 inline rows whose host
+  rows are 4 counts 4.
 - **During evaluation**: each dataset on its own, after load, `source` and every
   transform step (not a sum). Datasets produced by `sequence`, `cross`, `fold` and the
   like count, so generated rows are covered. The cumulative total of generated rows is
   `maxGeneratedRows`.
-- **`createChartStream`**: additionally the rows the stream holds (base snapshot plus what
-  the flush will add), because those arrive through `input.data` after the session's
-  pre-flight.
+- **`createChartStream`**: the rows the stream holds (base snapshot plus what the flush will
+  add), checked before the flush is materialised; they reach the session as its host rows, so
+  its pre-flight counts them once, in place of the spec's inline rows they started from.
 - **`loadSpecData`**: rows of each loaded dataset (`limits.maxRows`), and decoded topojson
   coordinates (against `maxGeneratedRows`, else `maxRows`).
 
@@ -188,7 +192,7 @@ that shares the one wall clock:
 
 | Where | What is metered |
 |---|---|
-| Pre-flight (`checkSpecLimits`) | every string in the spec (`maxStringLength`), object depth (`maxDepth`, ceiling 1000), mark definitions (`maxMarks`), summed inline rows (top level, nested group `data`, host `input.data`). Iterative: a 200 000-deep or cyclic spec is an `AsterLimitError`, never a `RangeError` |
+| Pre-flight (`checkSpecLimits`) | every string in the spec (`maxStringLength`), object depth (`maxDepth`, ceiling 1000), mark definitions (`maxMarks`), summed rows the chart is given, each once (see "What `maxRows` counts"). Iterative: a 200 000-deep or cyclic spec is an `AsterLimitError`, never a `RangeError` |
 | Every dataset | rows after load/`source`/transforms must be `<= maxRows` |
 | Transforms and row emitters | `sequence`, `fold` (rows x fields), `flatten`, `cross` (n x n), `impute`, `kde`/`quantile`/`regression`/`loess`/`countpattern` row counts, contour grid cells and thresholds, label bitmap, `range`: checked **before** the output is allocated; `aggregate`, `joinaggregate`, `pivot`, `bootstrap`, `stack`, `window`, `loess`, `kde`, `wordcloud`, `pack`, `voronoi`, `cross` with a filter and `indata()` sample the clock **inside** their loops |
 | Encode loop | one item per row: `maxItems` is checked before the mark is encoded; the clock is sampled every 1024 items. Group items are metered the same way |

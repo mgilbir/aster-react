@@ -222,7 +222,7 @@ export function handleChartWorkerRequest(request: ChartWorkerRequest): ChartWork
     // (its path-length checks included), and a violation a defensive catch swallowed still fails the request.
     const { svg, scene } = withLimits(limits, (meter) => {
       const clock = meter?.clock ?? createLimitClock(limits)
-      if (limits) checkSpecLimits(spec as unknown as Record<string, unknown>, limits)
+      if (limits) checkSpecLimits(spec as unknown as Record<string, unknown>, limits, input)
       clock.check('compile')
       const chart = compileChart(spec)
       clock.check('evaluate')

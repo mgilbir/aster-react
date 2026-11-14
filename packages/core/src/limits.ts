@@ -486,7 +486,8 @@ export function guardedRegExp(pattern: string, flags?: string): RegExp {
 }
 
 import { regexHazard } from './regex-screen.js'
-import { specList } from './spec-structure.js'
+import { dataInputOf, specList } from './spec-structure.js'
+import { ownGet } from './util.js'
 
 /** Pre-flight checks, run before compilation/evaluation allocates the scene. */
 export function checkSpecLimits(
@@ -529,8 +530,10 @@ export function checkSpecLimits(
     }
   }
 
-  // Rows: inline values of the top-level data AND of every nested group's data,
-  // plus the host's `input.data`. Safe to recurse now: depth and cycles are bounded.
+  // Rows: the rows the evaluation will ingest, each once. A top-level dataset's are the host's (`input.data` under its name), else its
+  // inline `values`: a host array replaces the inline rows, it does not add to them. A dataset derived from others (`source`) takes
+  // neither. Nested groups' inline rows, and host arrays under a name no top-level dataset has, count as they are.
+  // Safe to recurse now: depth and cycles are bounded.
   let rows = 0
   const maxRows = limits.maxRows
   const addRows = (n: number): void => {
@@ -557,11 +560,21 @@ export function checkSpecLimits(
       }
     }
   }
-  countData((spec as { data?: unknown }).data)
+  const hostData = input?.data && typeof input.data === 'object' ? input.data : undefined
+  const topNames = new Set<string>()
+  for (const d of specList((spec as { data?: unknown }).data)) {
+    if (!d || typeof d !== 'object') continue
+    const def = d as { name?: unknown; values?: unknown; url?: unknown; source?: unknown }
+    const name = typeof def.name === 'string' ? def.name : undefined
+    if (name !== undefined) topNames.add(name)
+    if (dataInputOf(def) === 'source') continue
+    const given = name !== undefined && hostData ? ownGet(hostData, name) : undefined
+    const rows = given !== undefined ? given : def.values
+    if (Array.isArray(rows)) addRows(rows.length)
+  }
   walkMarks((spec as { marks?: unknown }).marks)
-  const hostData = input?.data
-  if (hostData && typeof hostData === 'object') {
-    for (const v of Object.values(hostData)) if (Array.isArray(v)) addRows(v.length)
+  if (hostData) {
+    for (const [name, v] of Object.entries(hostData)) if (!topNames.has(name) && Array.isArray(v)) addRows(v.length)
   }
 }
 
