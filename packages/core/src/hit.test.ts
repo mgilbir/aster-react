@@ -32,7 +32,8 @@ describe('buildHitIndex', () => {
       marktype: 'group', role: 'scope', _scope: true, x, y: 0, width: 50, height: 50, datum: { c: 'cell' }, ...extra,
       items: [{ marktype: 'symbol', items: [{ x: 25, y: 25, size: 100, fill: '#4c78a8', datum: { v: 1 } }] }],
     })
-    const scene = { width: 180, height: 60, items: [cell(0, { stroke: '#ddd' }), cell(60, {}), cell(120, { fill: '#eee', interactive: false }), cell(180, { fill: '#eee' })] } as unknown as SceneRoot
+    // (the view holds the four cells: nothing outside it is picked)
+    const scene = { width: 240, height: 60, items: [cell(0, { stroke: '#ddd' }), cell(60, {}), cell(120, { fill: '#eee', interactive: false }), cell(180, { fill: '#eee' })] } as unknown as SceneRoot
     const index = buildHitIndex(scene)
     // a cell with a stroke and no fill: the stroke along its edge (half a stroke width outside the box too), not the inside
     expect(index.query(0.2, 25)?.marktype).toBe('group')
@@ -61,7 +62,7 @@ describe('buildHitIndex', () => {
         { marktype: 'symbol', items: [{ x: 50, y: 10, size: 100, fill: '#4c78a8', datum: { v: 'live' } }] },
         { marktype: 'group', role: 'axis', partMeta: { label: { interactive: false }, tick: { interactive: true } }, items: [
           { _part: 'label', text: 'a', x: 10, y: 60, fill: '#000', fontSize: 10 },
-          { _part: 'tick', shape: 'circle', radius: 3, x: 50, y: 60 },
+          { _part: 'tick', shape: 'circle', radius: 3, x: 50, y: 60, fill: '#000' },
         ] },
       ],
     } as unknown as SceneRoot
@@ -102,7 +103,7 @@ describe('buildHitIndex', () => {
     expect(index.query(97.5, 30)).toBeNull()
   })
 
-  it('resolves symbols within radius + slack', () => {
+  it('resolves a symbol inside its circle exactly, and its stroke only when it has one (vega pick: no pointing slack)', () => {
     const scene = {
       width: 100,
       height: 100,
@@ -110,17 +111,27 @@ describe('buildHitIndex', () => {
         marktype: 'symbol',
         items: [
           { x: 50, y: 50, size: 100, fill: '#4c78a8', datum: { v: 1 } },
+          { x: 20, y: 20, size: 100, stroke: '#000', strokeWidth: 2, datum: { v: 'ring' } },
+          { x: 80, y: 20, size: 100, datum: { v: 'unpainted' } },
         ],
       }],
     } as unknown as SceneRoot
     const index = buildHitIndex(scene)
+    // r = sqrt(100)/2 = 5: inside it, on its edge; a hair outside it is nothing
     expect(index.query(50, 50)?.item.datum).toEqual({ v: 1 })
-    // r = sqrt(100)/2 = 5; + strokeWidth/2 + 2 = 7.5
-    expect(index.query(56, 50)?.item.datum).toEqual({ v: 1 })
-    expect(index.query(60, 50)).toBeNull()
+    expect(index.query(55, 50)?.item.datum).toEqual({ v: 1 })
+    expect(index.query(55.2, 50)).toBeNull()
+    expect(index.query(56, 50)).toBeNull()
+    // a symbol with only a stroke is its ring: r +- strokeWidth / 2, not its middle
+    expect(index.query(25.9, 20)?.item.datum).toEqual({ v: 'ring' })
+    expect(index.query(24.1, 20)?.item.datum).toEqual({ v: 'ring' })
+    expect(index.query(26.2, 20)).toBeNull()
+    expect(index.query(20, 20)).toBeNull()
+    // neither a fill nor a stroke: nothing to hit
+    expect(index.query(80, 20)).toBeNull()
   })
 
-  it('resolves rules by distance to the segment', () => {
+  it('resolves a rule within its stroke: half its width either side of the segment, butt ends', () => {
     const scene = {
       width: 100,
       height: 100,
@@ -130,7 +141,10 @@ describe('buildHitIndex', () => {
       }],
     } as unknown as SceneRoot
     const index = buildHitIndex(scene)
-    expect(index.query(50, 51)?.item.datum).toEqual({ axis: 'y' })
+    // a 1px stroke: half a pixel either side of the segment, and butt ends
+    expect(index.query(50, 50.4)?.item.datum).toEqual({ axis: 'y' })
+    expect(index.query(50, 51)).toBeNull()
+    expect(index.query(100.3, 50)).toBeNull()
     expect(index.query(50, 60)).toBeNull()
   })
 

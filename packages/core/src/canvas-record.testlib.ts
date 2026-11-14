@@ -19,6 +19,10 @@ export interface PaintRecord {
   polys?: Array<{ pts: number[]; closed: boolean }>
   /** Device-space stroke width (stroke). */
   lineWidth?: number
+  /** The stroke's caps, joins and miter limit (stroke). */
+  lineCap?: string
+  lineJoin?: string
+  miterLimit?: number
 }
 
 type M = [number, number, number, number, number, number]
@@ -118,7 +122,7 @@ export function makeRecorder(): { ctx: CanvasLike; records: PaintRecord[] } {
     },
     clip() { st.clip.push(path.join('')) },
     fill() { records.push({ op: 'fill', geom: path.join(''), style: styleKey('fill'), polys: polys.map((p) => ({ pts: p.pts.slice(), closed: p.closed })) }) },
-    stroke() { records.push({ op: 'stroke', geom: path.join(''), style: styleKey('stroke'), polys: polys.map((p) => ({ pts: p.pts.slice(), closed: p.closed })), lineWidth: st.lineWidth * Math.hypot(st.m[0], st.m[1]) }) },
+    stroke() { records.push({ op: 'stroke', geom: path.join(''), style: styleKey('stroke'), polys: polys.map((p) => ({ pts: p.pts.slice(), closed: p.closed })), lineWidth: st.lineWidth * Math.hypot(st.m[0], st.m[1]), lineCap: st.lineCap, lineJoin: st.lineJoin, miterLimit: st.miterLimit }) },
     fillRect(x, y, w, h) { records.push({ op: 'fill', geom: `R${pt(x, y)},${pt(x + w, y)},${pt(x + w, y + h)},${pt(x, y + h)}`, style: styleKey('fill') }) },
     setLineDash(d) { st.dash = [...d] },
     fillText(text, x, y) { records.push({ op: 'text', geom: `${JSON.stringify(text)}@${pt(x, y)}`, style: styleKey('text') }) },
