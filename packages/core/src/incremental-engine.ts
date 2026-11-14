@@ -14,6 +14,7 @@ import { applyTransforms, compileExprTransform, sortOrder, aggregateGroup, type 
 import { fieldsOf, groupKeyFn } from './transform-agg.js'
 import { flattenLength } from './transform-basic.js'
 import { checkRowCount } from './limits.js'
+import { markTuples } from './util.js'
 import { datasetsReadIn } from './step-reuse.js'
 import { lexedText } from './expr-text.js'
 import type { CompiledTransform, SortSpec } from './types.js'
@@ -1046,6 +1047,7 @@ function applyPipelineWithPulse(
         ? { rows: applyIdentifier(cur, t, tctx, sourceName, bySource.carry) }
         : applyOneWithState(cur, t, tctx, sourceName, prevDS.steps[k])
       cur = res.rows
+      markTuples(cur)
       checkRowCount(cur.length, `transform ${String(t.type)}`)
       state.steps.push(cur)
       if (res.state !== undefined) state.stepState.set(key, res.state)
@@ -1053,6 +1055,8 @@ function applyPipelineWithPulse(
       const res = applyStepWithPulse(cur, t, tctx, sourceName, pulse, prevDS.steps[k], prevDS.stepState.get(key), prevDS.aliased?.[k], bySource?.carry)
       if (prevDS.aliased?.[k] !== undefined) (state.aliased ??= [])[k] = prevDS.aliased[k]
       cur = res.rows
+      // (each step's rows are tuples to the next step, as in runPipeline)
+      markTuples(cur)
       checkRowCount(cur.length, `transform ${String(t.type)}`)
       pulse = res.pulse
       state.steps.push(cur)

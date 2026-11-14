@@ -3274,6 +3274,9 @@ function buildDatasetsOf(ctx: EvalContext, inputData: Record<string, unknown[]>)
         if (inputs !== undefined) ctx.draft.copies.set(name, { inputs, rows })
       }
     } else try {
+      // (the rows the first step is given are tuples to it, as vega's ingested rows are: a host's or the spec's rows are only
+      // registered, never written)
+      markTuples(rows)
       const prevDS = ctx.prev?.datasets.get(name)
       const tctx: StepTransformContext = {
         runtime: ctx.runtime,
