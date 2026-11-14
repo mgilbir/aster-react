@@ -768,14 +768,17 @@ function ChartView({
   const [canvasImagesEpoch, setCanvasImagesEpoch] = React.useState(0)
   const canvasImagesPaintedRef = React.useRef(-1)
   // Hit testing (canvas, batched dense marks, clicks) resolves marks through the
-  // scene hit index, rebuilt only when the displayed scene object changes.
-  const hitIndexRef = React.useRef<{ scene: SceneRoot | null; index: HitIndex | null }>({ scene: null, index: null })
+  // scene hit index, rebuilt only when the displayed scene object (or the renderer) changes. It picks as the renderer
+  // shown does: vega's canvas pick tests the bounds it measured, the browser's hit test of the SVG does not.
+  const hitIndexRef = React.useRef<{ scene: SceneRoot | null; renderer: string; index: HitIndex | null }>({ scene: null, renderer: '', index: null })
   const hitIndexFor = React.useCallback((target: SceneRoot | null): HitIndex | null => {
     if (target == null) return null
     if (interaction == null) return null
-    if (hitIndexRef.current.scene !== target) hitIndexRef.current = { scene: target, index: interaction.buildHitIndex(target) }
+    if (hitIndexRef.current.scene !== target || hitIndexRef.current.renderer !== renderer) {
+      hitIndexRef.current = { scene: target, renderer, index: interaction.buildHitIndex(target, undefined, renderer === 'canvas' ? { renderer } : undefined) }
+    }
     return hitIndexRef.current.index
-  }, [interaction])
+  }, [interaction, renderer])
   // Signal state lives in an external store consumed with useSyncExternalStore:
   // an event is a normal, synchronous state transition with a stable snapshot,
   // so concurrent renders never observe a half-applied signal set.
