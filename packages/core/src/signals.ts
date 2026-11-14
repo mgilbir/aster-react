@@ -584,6 +584,19 @@ function bindSignalEventsDefs(
   const datasets = new Map(dataDefs.map((d) => [d.name, d]))
   const inputRows = new Map<string, Array<Record<string, unknown>>>()
   const liveRows = new Map<string, unknown[]>()
+  // The rows a dataset starts from are the spec's or the host's: a modified tuple is written to a copy the loop owns, and a
+  // handler that still holds the original (a signal kept it) reaches the copy through it, as one tuple is one tuple in vega.
+  const ownCopies = new WeakMap<object, Record<string, unknown>>()
+  const owned = new WeakSet<object>()
+  const writable = (t: Record<string, unknown>): Record<string, unknown> => {
+    if (owned.has(t)) return t
+    const copy = { ...t }
+    owned.add(copy)
+    ownCopies.set(t, copy)
+    return copy
+  }
+  const current = (t: unknown): unknown => (t !== null && typeof t === 'object' ? (ownCopies.get(t) ?? t) : t)
+  const currentAll = (v: unknown): unknown => (Array.isArray(v) ? v.map(current) : current(v))
   const rawOf = (name: string): Array<Record<string, unknown>> =>
     inputRows.get(name) ?? (opts.data?.[name] as Array<Record<string, unknown>> | undefined) ?? (datasets.get(name)?.values as Array<Record<string, unknown>> | undefined) ?? []
   const dataOf = (name: string): unknown[] | undefined => {
@@ -636,7 +649,7 @@ function bindSignalEventsDefs(
         }, 1)
       }
       return m.cs
-    }, insert, remove, toggle, modifyTuple, values)
+    }, currentAll(insert), currentAll(remove), toggle, current(modifyTuple), values)
   }
   /** vega-functions data.js setdata: `df.pulse(input, changeset().remove(truthy).insert(tuples))`, applied when the dataset's operator runs. */
   const setData = (name: string, tuples: unknown): number => {
@@ -1182,7 +1195,7 @@ function bindSignalEventsDefs(
         const cs = pulsed.get(name)
         if (!cs) return
         pulsed.delete(name)
-        inputRows.set(name, applyChangeset(rawOf(name), cs))
+        inputRows.set(name, applyChangeset(rawOf(name), cs, writable))
         liveRows.delete(name)
         notified.edited.add(name)
       })
