@@ -3,7 +3,7 @@
  * renderer, the hit index, bounds, the label transform's painter and `intersect()`.
  *
  * Design. (What reads the geometry as numbers -- segments, polygons, the canvas replay -- is in geometry-read.ts.)
- *  - An {@link Outline} is a generator's drawing calls (moveTo, lineTo, bezierCurveTo, quadraticCurveTo, arc, closePath)
+ *  - An {@link Outline} is a generator's drawing calls (moveTo, lineTo, bezierCurveTo, arc, closePath)
  *    recorded once, at full precision. Replaying it into a sink makes the same calls, with the same numbers in the same
  *    order (the arity of `arc` included), as running the generator on that sink: the canvas, the bounds pen and the label
  *    painter get exactly what they got before.
@@ -62,13 +62,12 @@ export interface OutlineSink {
   moveTo(x: number, y: number): void
   lineTo(x: number, y: number): void
   bezierCurveTo(x1: number, y1: number, x2: number, y2: number, x: number, y: number): void
-  quadraticCurveTo(x1: number, y1: number, x: number, y: number): void
   arc(x: number, y: number, r: number, a0: number, a1: number, ccw?: boolean): void
   closePath(): void
 }
 
-const MOVE = 0, LINE = 1, CUBIC = 2, QUAD = 3, ARC = 4, ARC_CW = 5, ARC_CCW = 6, CLOSE = 7
-const ARGS = [2, 2, 6, 4, 5, 5, 5, 0]
+const MOVE = 0, LINE = 1, CUBIC = 2, ARC = 3, ARC_CW = 4, ARC_CCW = 5, CLOSE = 6
+const ARGS = [2, 2, 6, 5, 5, 5, 0]
 
 /** A generator's drawing calls, recorded at full precision. */
 export class Outline implements OutlineSink {
@@ -81,7 +80,6 @@ export class Outline implements OutlineSink {
   bezierCurveTo(x1: number, y1: number, x2: number, y2: number, x: number, y: number): void {
     this.ops.push(CUBIC); this.args.push(x1, y1, x2, y2, x, y); this.drawn = true
   }
-  quadraticCurveTo(x1: number, y1: number, x: number, y: number): void { this.ops.push(QUAD); this.args.push(x1, y1, x, y); this.drawn = true }
   arc(x: number, y: number, r: number, a0: number, a1: number, ccw?: boolean): void {
     this.ops.push(ccw === undefined ? ARC : ccw ? ARC_CCW : ARC_CW); this.args.push(x, y, r, a0, a1); this.drawn = true
   }
@@ -96,7 +94,6 @@ export class Outline implements OutlineSink {
         case MOVE: s.moveTo!(a[k]!, a[k + 1]!); break
         case LINE: s.lineTo!(a[k]!, a[k + 1]!); break
         case CUBIC: s.bezierCurveTo!(a[k]!, a[k + 1]!, a[k + 2]!, a[k + 3]!, a[k + 4]!, a[k + 5]!); break
-        case QUAD: s.quadraticCurveTo!(a[k]!, a[k + 1]!, a[k + 2]!, a[k + 3]!); break
         case ARC: s.arc!(a[k]!, a[k + 1]!, a[k + 2]!, a[k + 3]!, a[k + 4]!); break
         case ARC_CW: s.arc!(a[k]!, a[k + 1]!, a[k + 2]!, a[k + 3]!, a[k + 4]!, false); break
         case ARC_CCW: s.arc!(a[k]!, a[k + 1]!, a[k + 2]!, a[k + 3]!, a[k + 4]!, true); break

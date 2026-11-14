@@ -11,7 +11,7 @@
 import { ArcPathWriter, ArcSegWriter } from './shape.js'
 import { parsePathData, tracePath, type PathSeg } from './path-data.js'
 import { Flattener, type Poly } from './path-flatten.js'
-import type { ArcGeometry, CurveGeometry, Outline, PathData, SymbolGeometry } from './geometry.js'
+import type { ArcGeometry, CurveGeometry, PathData, SymbolGeometry } from './geometry.js'
 
 /** The four calls a line or an area makes (`PathWriter`'s commands). */
 interface CurveSink {
@@ -21,63 +21,18 @@ interface CurveSink {
   closePath(): void
 }
 
-// (the outline's op codes: geometry.ts)
-const MOVE = 0, LINE = 1, CUBIC = 2, CLOSE = 7
-const ARGS = [2, 2, 6, 4, 5, 5, 5, 0]
-
 /**
- * Replays a line or area outline as the text a `PathWriter(digits)` writes for it, read back by `parsePathData` and traced by
- * `tracePath`, would draw: every number rounded (`scale` 0: not), then `+ 0`; `Z` only once something was written. The
- * outline must be finite at that scale.
- */
-function replayAsText(o: Outline, s: CurveSink, scale: number): void {
-  const a = o.args
-  const ops = o.ops
-  let k = 0
-  let drawn = false
-  if (scale === 0) {
-    for (let i = 0; i < ops.length; i++) {
-      switch (ops[i]) {
-        case MOVE: s.moveTo(a[k]! + 0, a[k + 1]! + 0); drawn = true; break
-        case LINE: s.lineTo(a[k]! + 0, a[k + 1]! + 0); drawn = true; break
-        case CUBIC: s.bezierCurveTo(a[k]! + 0, a[k + 1]! + 0, a[k + 2]! + 0, a[k + 3]! + 0, a[k + 4]! + 0, a[k + 5]! + 0); drawn = true; break
-        case CLOSE: if (drawn) s.closePath(); break
-      }
-      k += ARGS[ops[i]!]!
-    }
-    return
-  }
-  const r = (v: number): number => Math.round(v * scale) / scale + 0
-  for (let i = 0; i < ops.length; i++) {
-    switch (ops[i]) {
-      case MOVE: s.moveTo(r(a[k]!), r(a[k + 1]!)); drawn = true; break
-      case LINE: s.lineTo(r(a[k]!), r(a[k + 1]!)); drawn = true; break
-      case CUBIC: s.bezierCurveTo(r(a[k]!), r(a[k + 1]!), r(a[k + 2]!), r(a[k + 3]!), r(a[k + 4]!), r(a[k + 5]!)); drawn = true; break
-      case CLOSE: if (drawn) s.closePath(); break
-    }
-    k += ARGS[ops[i]!]!
-  }
-}
-
-/** Every number of the outline, rounded at `scale` (0: not), is finite: its text reads back as numbers. */
-function outlineFinite(o: Outline, scale: number): boolean {
-  for (const v of o.args) if (!Number.isFinite(scale ? Math.round(v * scale) / scale : v)) return false
-  return true
-}
-
-/**
- * A sink that receives a curve as the text a `PathWriter(digits)` would write for it, read back and traced, would draw it on
- * `s`. `finite` turns false when a number that is not finite passes (its text would not read back as a number).
+ * A sink that receives a curve as its full-precision text, read back by `parsePathData` and traced by `tracePath`, would draw
+ * it on `s`: every number `+ 0` (the text has no negative zero), `Z` only once something was drawn. `finite` turns false when a
+ * number that is not finite passes (its text would not read back as a number).
  */
 class AsText implements CurveSink {
   drawn = false
   finite = true
-  constructor(private readonly s: CurveSink, private readonly scale: number) {}
+  constructor(private readonly s: CurveSink) {}
   private r(v: number): number {
-    const k = this.scale
-    const x = k ? Math.round(v * k) / k + 0 : v + 0
-    if (!Number.isFinite(x)) this.finite = false
-    return x
+    if (!Number.isFinite(v)) this.finite = false
+    return v + 0
   }
   moveTo(x: number, y: number): void { this.s.moveTo(this.r(x), this.r(y)); this.drawn = true }
   lineTo(x: number, y: number): void { this.s.lineTo(this.r(x), this.r(y)); this.drawn = true }
@@ -137,25 +92,25 @@ function placed(e: { hitLocal?: Poly[]; hitPlacement?: Placement }, local: () =>
 
 // --- lines and areas -----------------------------------------------------------------------------------------------------
 
-/** The recorded numbers are all finite (then so are they rounded: rounding to 3 digits overflows only beyond 1e305). */
-const curveFinite = (g: CurveGeometry): boolean => (g.finiteCache ??= outlineFinite(g.outline, 0) && outlineFinite(g.outline, 1000))
+/** The recorded numbers are all finite: its text reads back as numbers (rounding is not involved: these readers are full precision). */
+const curveFinite = (g: CurveGeometry): boolean => (g.finiteCache ??= g.outline.args.every(Number.isFinite))
 
 /** The segments of a line's or area's full-precision text (a gradient's box is measured on them). */
 export function curveExactSegs(g: CurveGeometry): PathSeg[] {
   if (!curveFinite(g)) return parsePathData(g.exactText())
   const segs: PathSeg[] = []
-  replayAsText(g.outline, {
+  g.outline.replay(new AsText({
     moveTo: (x, y) => { segs.push({ cmd: 'M', x, y }) },
     lineTo: (x, y) => { segs.push({ cmd: 'L', x, y }) },
     bezierCurveTo: (c1x, c1y, c2x, c2y, x, y) => { segs.push({ cmd: 'C', c1x, c1y, c2x, c2y, x, y }) },
     closePath: () => { segs.push({ cmd: 'Z' }) },
-  }, 0)
+  }))
   return segs
 }
 
 /** What the canvas draws for a line or area: its full-precision text's segments traced on `s` (the recording replayed). */
 export function drawCurveExact(g: CurveGeometry, s: CurveSink): void {
-  if (curveFinite(g)) replayAsText(g.outline, s, 0)
+  if (curveFinite(g)) g.outline.replay(new AsText(s))
   else tracePath(s as never, parsePathData(g.exactText()))
 }
 
@@ -163,7 +118,7 @@ export function drawCurveExact(g: CurveGeometry, s: CurveSink): void {
 export function curvePolys(g: CurveGeometry, tx: number, ty: number): Poly[] {
   return placed(g, () => {
     const f = new Flattener(IDENTITY)
-    const t = new AsText(f, 0)
+    const t = new AsText(f)
     g.draw(t)
     if (t.finite) return f.polys
     return flattenSegs(parsePathData(g.exactText()))
