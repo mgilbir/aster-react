@@ -104,3 +104,18 @@ export interface Outcome {
 
 export const trunc = (s: string, n = 240): string => (s.length > n ? s.slice(0, n) + '...' : s)
 export { basename }
+
+/**
+ * Whether what vega logged says it needed a canvas Node does not have: a null canvas surfaces as `Cannot set properties of null` or
+ * `reading 'getContext'`, from a function called getContext. The message and the names of the functions on the stack are read,
+ * never where those functions live: a checkout whose path holds the word "canvas" (a worktree named after it) must not turn every
+ * oracle error into one.
+ */
+export function needsCanvas(message: string): boolean {
+  const withoutLocations = message
+    .split('\n')
+    // (a frame `at name (location)` keeps its name; a frame `at location` has none)
+    .map((line) => (/^\s*at\s/.test(line) ? line.replace(/\s*\(.*\)\s*$/, '').replace(/^\s*at\s+(?:async\s+)?(?:file:|node:|\/|[A-Za-z]:\\).*$/, '') : line))
+    .join('\n')
+  return /getContext|canvas/i.test(withoutLocations)
+}

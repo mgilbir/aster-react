@@ -21,6 +21,7 @@ const collector = {
 }
 export const settle = (): Promise<void> => new Promise((r) => setTimeout(r, 0))
 
+
 export async function vegaSvg(spec: Record<string, unknown>): Promise<string> {
   // vega-loader's Node build requests through the GLOBAL fetch (the network), whatever options say; serve the gallery from disk instead
   // (mode 'http': with a baseURL a relative uri would otherwise still be read as a FILE on Node)
