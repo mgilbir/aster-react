@@ -466,13 +466,12 @@ export function buildHitIndex(scene: SceneRoot, cell = DEFAULT_CELL): HitIndex {
   const padY = (scene.padding?.top ?? 0) + (scene.frameY ?? 0)
   const plotW = scene.plotWidth ?? scene.width
   const plotH = scene.plotHeight ?? scene.height
-  // nothing is picked outside the view's surface (vega's SVG clips what overflows it, its canvas ends there), nor outside the
-  // plot when the view clips to it
-  withClip(scene.width >= 0 && scene.height >= 0 ? rectClip(0, 0, scene.width, scene.height) : null, () => {
-    withClip(scene.frameClip ? rectClip(padX, padY, plotW, plotH) : null, () => {
-      for (const node of scene.items) walk(node, padX, padY, plotW, plotH)
-    })
+  // nothing is picked outside the plot when the view clips to it (nor outside the view's surface: see `find`)
+  withClip(scene.frameClip ? rectClip(padX, padY, plotW, plotH) : null, () => {
+    for (const node of scene.items) walk(node, padX, padY, plotW, plotH)
   })
+  // the view's surface: vega's SVG clips what overflows it, its canvas ends there (a scene that gives no size is not bounded)
+  const surface = scene.width >= 0 && scene.height >= 0 ? { w: scene.width, h: scene.height } : null
 
   /** The entries of a group item's background and foreground rectangles, at (gx, gy). */
   function groupBoxFaces(group: SceneGroup, gx: number, gy: number): { background: Entry | null; foreground: Entry | null } {
@@ -838,8 +837,10 @@ export function buildHitIndex(scene: SceneRoot, cell = DEFAULT_CELL): HitIndex {
       case 'box':
         return true
       case 'circle': {
-        const d = Math.hypot(x - e.cx!, y - e.cy!)
-        return (e.fill === true && d <= e.r!) || (e.stroke != null && Math.abs(d - e.r!) <= e.stroke.hw)
+        const dx = x - e.cx!, dy = y - e.cy!
+        const d2 = dx * dx + dy * dy
+        if (e.fill === true && d2 <= e.r! * e.r!) return true
+        return e.stroke != null && Math.abs(Math.sqrt(d2) - e.r!) <= e.stroke.hw
       }
       case 'text': {
         // into the text's own frame: about the anchor, undoing the rotation
@@ -858,6 +859,7 @@ export function buildHitIndex(scene: SceneRoot, cell = DEFAULT_CELL): HitIndex {
 
   const find = (x: number, y: number, mode: Mode): Entry | null => {
     if (entries.length === 0 || !(x === x && y === y)) return null
+    if (surface !== null && !(x >= 0 && x <= surface.w && y >= 0 && y <= surface.h)) return null
     if (entries.length <= GRID_THRESHOLD) return hitLinear(x, y, mode)
     if (grid == null) buildGrid()
     return hitGrid(x, y, mode)
