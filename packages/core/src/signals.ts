@@ -40,6 +40,7 @@
  * resolves events as vega's canvas handler does (`ViewEvents`).
  */
 import type { CompiledChart, CompiledData, CompiledSignalDef, SceneGroup, SceneItem, SceneNode, SceneRoot, SignalOnDef } from './types.js'
+import { isEngineNode } from './scene-registry.js'
 import { compileExpr, type CompiledExpr, type ExpressionRuntime } from './expression.js'
 import { applyChangeset, newChangeset, planModify, type Changeset } from './modify.js'
 import { parseExpression, type AstNode } from './expr-parser.js'
@@ -297,18 +298,28 @@ export function createCursorTracker(opts: CursorTrackerOptions): CursorTracker {
 export function sceneHasCursor(scene: SceneRoot): boolean {
   let known = cursorScenes.get(scene)
   if (known === undefined) {
-    const walk = (nodes: readonly SceneNode[] | undefined): boolean => {
+    const walk = (nodes: readonly SceneNode[] | undefined, depth: number): boolean => {
       for (const n of nodes ?? []) {
         if ((n as SceneItem).cursor != null) return true
-        if (walk((n as SceneGroup).items)) return true
+        const items = (n as SceneGroup).items
+        if (!Array.isArray(items)) continue
+        // (a node of a scene the engine returned holds what it held: whether it holds a cursor is kept with it)
+        const engine = isEngineNode(n)
+        let has = engine ? cursorNodes.get(n) : undefined
+        if (has === undefined) {
+          has = depth < 256 && walk(items, depth + 1)
+          if (engine) cursorNodes.set(n, has)
+        }
+        if (has) return true
       }
       return false
     }
-    cursorScenes.set(scene, (known = walk(scene.items)))
+    cursorScenes.set(scene, (known = walk(scene.items, 0)))
   }
   return known
 }
 const cursorScenes = new WeakMap<SceneRoot, boolean>()
+const cursorNodes = new WeakMap<object, boolean>()
 
 // --- event streams ---------------------------------------------------------
 
@@ -1563,6 +1574,56 @@ function sceneIndex(scene: SceneRoot): SceneIndex {
   return idx
 }
 
+/** A group node's children split by kind: the groups among them, and the leaves (kept with an engine node: see scene-registry.ts). */
+interface NodeShape { groups: SceneGroup[]; leaves: ReadonlySet<object> | null }
+const NODE_SHAPES = new WeakMap<object, NodeShape>()
+function shapeOf(g: SceneGroup): NodeShape {
+  let shape = NODE_SHAPES.get(g)
+  if (shape !== undefined) return shape
+  const groups: SceneGroup[] = []
+  let leaves: Set<object> | null = null
+  for (const c of g.items ?? []) {
+    if (c === null || typeof c !== 'object') continue
+    if (Array.isArray((c as SceneGroup).items)) groups.push(c as SceneGroup)
+    else (leaves ??= new Set()).add(c)
+  }
+  shape = { groups, leaves }
+  if (isEngineNode(g)) NODE_SHAPES.set(g, shape)
+  return shape
+}
+
+/**
+ * The parent of a node of the scene (the group whose `items` hold it), found without walking the leaves of every mark: the scene's
+ * group nodes are walked once (they are few), and a leaf is looked up in the leaf sets of the groups that hold leaves, which an
+ * engine node keeps for its lifetime. What a pointer event needs of a scene costs what the scene made anew, not what it holds.
+ */
+function parentFinder(scene: SceneRoot): (node: object) => SceneGroup | undefined {
+  const groupParent = new Map<object, SceneGroup>()
+  const holders: SceneGroup[] = []
+  const walk = (g: SceneGroup, depth: number): void => {
+    const shape = shapeOf(g)
+    if (shape.leaves !== null) holders.push(g)
+    if (depth > 256) return
+    for (const c of shape.groups) {
+      if (!groupParent.has(c)) groupParent.set(c, g)
+      walk(c, depth + 1)
+
+
+    }
+  }
+  for (const r of scene.items) walk(r, 0)
+  const found = new Map<object, SceneGroup | undefined>()
+  return (node) => {
+    const g = groupParent.get(node)
+    if (g !== undefined) return g
+    if (found.has(node)) return found.get(node)
+    let out: SceneGroup | undefined
+    for (const h of holders) if (shapeOf(h).leaves!.has(node)) { out = h; break }
+    found.set(node, out)
+    return out
+  }
+}
+
 interface SceneIndex {
   describe: (p: PickedItem) => PickedItem
   root: () => PickedItem
@@ -1574,18 +1635,10 @@ interface SceneIndex {
 }
 
 function buildSceneIndex(scene: SceneRoot): SceneIndex {
-  let parents: WeakMap<object, SceneGroup> | null = null
-  const ensure = (): WeakMap<object, SceneGroup> => {
+  let parents: { get: (node: object) => SceneGroup | undefined } | null = null
+  const ensure = (): { get: (node: object) => SceneGroup | undefined } => {
     if (parents) return parents
-    const map = new WeakMap<object, SceneGroup>()
-    const walk = (g: SceneGroup): void => {
-      for (const c of g.items ?? []) {
-        map.set(c, g)
-        if (Array.isArray((c as SceneGroup).items)) walk(c as SceneGroup)
-      }
-    }
-    for (const r of scene.items) walk(r)
-    return (parents = map)
+    return (parents = { get: parentFinder(scene) })
   }
   const isMark = (g: SceneGroup): boolean => g.marktype !== undefined && g.marktype !== 'group'
   /** The name the spec gave a mark: vega's `item.mark.name` (the scene calls a mark the spec did not name `marks`). */

@@ -23,6 +23,7 @@ import { textAnchor } from './text-metrics.js'
 import type { SceneGroup, SceneItem, SceneNode, SceneRoot } from './types.js'
 import { axisLabel, guideTitleText, legendLabel, scalesFromSnapshots } from './guide-caption.js'
 import { pushAll } from './util.js'
+import { isEngineNode } from './scene-registry.js'
 
 export type A11yKind = 'mark' | 'axis' | 'legend' | 'legend-entry' | 'title' | 'group'
 
@@ -133,6 +134,27 @@ function union(b: Bounds[]): Bounds | null {
   }))
 }
 
+/**
+ * The box of a node at (tx, ty), kept with the node when it is a node of a scene the engine returned: such a node holds what it held
+ * (scene-registry.ts), so the box at the same offset is the same numbers. The offset is compared as it is (`Object.is`), and the box
+ * is computed afresh at another: the offset enters the arithmetic before the radii and the rounding do, so a box is not moved.
+ */
+function kept(cache: WeakMap<object, { tx: number; ty: number; b: Bounds }>, node: object, tx: number, ty: number, make: () => Bounds): Bounds {
+  if (!isEngineNode(node)) return make()
+  const hit = cache.get(node)
+  if (hit !== undefined && Object.is(hit.tx, tx) && Object.is(hit.ty, ty)) return hit.b
+  const b = make()
+  cache.set(node, { tx, ty, b })
+  return b
+}
+const GUIDE_BOXES = new WeakMap<object, { tx: number; ty: number; b: Bounds }>()
+const SUMMARY_BOXES = new WeakMap<object, { tx: number; ty: number; b: Bounds }>()
+
+/** The box of a mark summarised as one node: the union of its items' boxes (kept with an engine node, see `kept`). */
+function summaryBox(group: SceneGroup, items: SceneItem[], gx: number, gy: number): Bounds {
+  return kept(SUMMARY_BOXES, group, gx, gy, () => union(items.map((it) => itemBounds(it, gx, gy))) ?? { x1: gx, y1: gy, x2: gx + 2, y2: gy + 2 })
+}
+
 function primitiveDatumLabel(datum: unknown): string | undefined {
   if (datum == null || typeof datum !== 'object') return undefined
   const parts: string[] = []
@@ -190,8 +212,11 @@ function guideNode(group: SceneGroup, id: string, tx: number, ty: number, scales
     }
     absolute.push(itemBounds(node as SceneItem, ax, ay))
   }
-  collect(group, tx, ty)
-  const b = union(absolute) ?? { x1: gx, y1: gy, x2: gx + (group.width ?? 2), y2: gy + (group.height ?? 2) }
+  // (the box of a node of a scene the engine returned, at the same place, is the box it had: see `kept`)
+  const b = kept(GUIDE_BOXES, group, tx, ty, () => {
+    collect(group, tx, ty)
+    return union(absolute) ?? { x1: gx, y1: gy, x2: gx + (group.width ?? 2), y2: gy + (group.height ?? 2) }
+  })
   const allText = textOf((group.items ?? []).flatMap((x) => (Array.isArray((x as SceneGroup).items) ? (x as SceneGroup).items as SceneItem[] : [x as SceneItem])))
   if (role === 'title') {
     const label = group.description ? String(group.description) : allText ?? 'Title'
@@ -385,7 +410,7 @@ export function buildA11yTree(
     if (role === 'mark' && marktype && marktype !== 'group') {
       const items = kids as SceneItem[]
       if (items.length > threshold) {
-        const b = union(items.map((it) => itemBounds(it, gx, gy))) ?? { x1: gx, y1: gy, x2: gx + 2, y2: gy + 2 }
+        const b = summaryBox(group, items, gx, gy)
         nodes.push({
           id: `mark-${seq++}`, kind: 'mark', marktype, role: 'graphics-symbol',
           roleDescription: `${marktype} mark container`,

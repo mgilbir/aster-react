@@ -4,7 +4,7 @@
  * afresh with the same input. What is compared is everything a host can read of an evaluation: the SVG, the scene itself
  * (normalised: every own property of every node, the generation stamps aside), the datasets and the signal values the scene
  * carries, what the hit index finds on a grid of points (query, queryMark, pick and tooltip, by the item's place in the scene)
- * and the accessible tree.
+ * and the accessible tree (as it is, and with every mark of more than two items summarised as one node).
  *
  * The writes: every top-level signal the spec declares (but the view's own size, padding, autosize and background), each given
  * values of its own kind -- a number near its value (a range binding's range), a boolean, a binding's option, a pair for a pair,
@@ -171,6 +171,8 @@ function readOf(scene: SceneRoot, points: ReadonlyArray<readonly [number, number
     signals: JSON.stringify(normalise((scene as unknown as { signalParams?: unknown }).signalParams)),
     hits: hits(scene, points).join('\n'),
     a11y: JSON.stringify(normalise(buildA11yTree(scene))),
+    // (a mark of more items than the threshold is one node, its box the union of its items')
+    a11ySummary: JSON.stringify(normalise(buildA11yTree(scene, new Map(), { summaryThreshold: 2 }))),
   }
 }
 
