@@ -76,7 +76,7 @@ export function Selectable(): React.ReactElement {
       selection={selection}                 // controlled; omit it to keep the value internally
       onSelectionChange={setSelection}      // { type: 'interval', interval: { x?, y? } } | { type: 'point', datum } | null
       onSelect={setLast}                    // legacy interval callback: the dragged interval, null for a click
-      onPointSelect={(datum) => { console.log(datum) }}   // click: the datum under the pointer, null on empty space
+      onPointSelect={(datum) => { console.log(datum) }}   // click: the datum of the mark item under the pointer, null elsewhere
     />
   )
 }
@@ -94,8 +94,10 @@ above (an orientation whose scale is not invertible is omitted).
   and `onSelect(interval)` / `onSelectionChange({ type: 'interval', ... })` fire on release. A movement of less than
   3 px is a click: `onPointSelect(datum)` gets the datum under the pointer (or `null`), `onSelect(null)` fires, and
   `onSelectionChange({ type: 'point', datum })` fires when `onPointSelect` or `onSelectionChange` is present.
-- A click resolves through the scene hit index (`queryMark`), so SVG and canvas behave identically and guide labels are
-  never selected.
+- A click resolves through the scene hit index (`pick`, vega's `event.item`: the topmost item that takes the pointer), so SVG
+  and canvas behave identically. It selects that item's datum when it is an item of a mark (its row, or the `{}` vega gives a
+  mark without `from`); a group item's box and a guide's part select nothing (`null`), and neither does a mark drawn under
+  another item.
 - `Escape` clears the selection (`onSelectionChange(null)`, `onSelect(null)`, `onPointSelect(null)`), from the chart
   container or from any focused accessibility node that does not handle the key itself.
 - Keyboard selection: `Enter` or `Space` on a focused mark node selects that mark's datum the same way (see
@@ -165,9 +167,9 @@ and is checked against it (`pnpm conformance:signals`, the group-scope cases):
   scopes each have their own, and each stream is one DOM listener delivering as one dataflow run, in the order the
   streams were made. What an event changed is told to the host once, after all of them have run;
 - `group()`, `group("cell")`, `x(group())`... resolve to the scope's group items; a picked group item that has a fill or
-  a stroke (a facet cell, a nested view) is an event item where no mark inside is hit (never a data mark: tooltips and
-  `onClick` do not see it); a facet cell's datum is a tuple that carries the partition's `count`, like Vega's facet
-  aggregate;
+  a stroke (a facet cell, a nested view) is an event item where no mark inside is hit (and, as in vega, the item a tooltip
+  shows, from the group's own `tooltip` encoding; never a data mark: `onPointSelect` does not report it); a facet cell's datum
+  is a tuple that carries the partition's `count`, like Vega's facet aggregate;
 - `scale()` in a scope's handlers sees the scales its group (and the groups around it) declare.
 
 **Deviation:** Vega swallows the first firing of a `{signal}` handler that a scope declares on a signal of an enclosing
@@ -320,11 +322,17 @@ encoding (Vega-Lite's `tooltip` channel, or `mark.tooltip`, with its titles and 
 `key: value` row per defined key (a nested object as JSON), an array is `[a, b]`, any other value is the text, and an item
 without a value (or with `''`) shows no tooltip. To list a datum's fields, encode `tooltip: { signal: "datum" }` (Vega-Lite:
 `mark: { tooltip: { content: "data" } }`). vega-tooltip's `image` key is not shown: a URL from the data would bypass the
-chart's `urlPolicy`. `renderTooltip(datum, { tooltip, item })` replaces the content inside the chart's React tree and
-enables tooltips by itself; it is called for every hovered item that has a datum or a `tooltip` value (the datum is `{}`
-when the item has none) and receives the item's `tooltip` value and the scene item, so a host can restyle Vega's tooltip
-or build its own. The hovered mark is resolved through the scene hit index on every renderer (the SVG carries no per-item
-datum attribute, as vega's does not). Tooltips are off by default.
+chart's `urlPolicy`. The hovered item is the one vega's tooltip handler is called with: the topmost item that takes the
+pointer, whatever it is (an item of a mark without `from`, whose datum is vega's `{}`; a group item with a fill or a stroke where
+no mark inside it is hit; an axis, legend or title part the spec made `interactive`), with a line, an area or a trail resolved
+to one of its items as vega resolves it (an area: the item nearest along it; a line: an item within its stroke width of the
+pointer; a trail: within the item's size). An item drawn over another hides it, a mark with `interactive: false` does not, and
+a falsy value (`''`, `0`, `false`) shows nothing, as vega hands it over as none. `renderTooltip(datum, { tooltip, item })`
+replaces the content inside the chart's React tree and enables tooltips by itself; it is called for the hovered item when it
+has a `tooltip` value or is an item of a mark that reads a dataset (its datum is the row; for an item whose only datum is
+vega's generated `{}` it is called only with a `tooltip` value), and receives the item's `tooltip` value and the scene item,
+so a host can restyle Vega's tooltip or build its own. The hovered item is resolved through the scene hit index on every
+renderer (the SVG carries no per-item datum attribute, as vega's does not). Tooltips are off by default.
 
 ## Cursor
 

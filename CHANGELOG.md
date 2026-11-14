@@ -3,6 +3,34 @@
 Version 0.1.0 is the first release. From 0.1.0 on, entries are added per release under Added, Changed
 and Fixed, per package. Everything built before the first release is in [Pre-release history](#pre-release-history) below.
 
+## Unreleased
+
+### `@aster-charts/core`
+
+#### Fixed
+
+- Every scene item has the `datum` vega gives it. The item of a mark without `from` had none (vega: a generated `{}`, which its
+  encode already read); an axis' ticks, labels and grid lines now carry their tick tuple and its domain and title the axis datum,
+  a legend's symbols, labels and bands their entry, its title and gradient the legend datum, a title's texts the title's `{}`, and
+  the axis, legend and title group items their own datum; a legend entry's box is vega's entry group item (`{index, count}`, and
+  `item().items` holds its symbol and label, as vega's legend click handlers read them). A group item keeps its `tooltip`.
+  `event.item.mark.name` is the name the spec gave the mark (a mark it did not name has none, so `@marks:click` no longer
+  matches it), and an axis or legend part's `mark.role` is vega's (`axis-label`, `legend-symbol`...).
+- `HitIndex.tooltip(x, y)` is the item vega's tooltip handler is called with (the topmost item that takes the pointer; a line,
+  an area or a trail resolved to one of its items as vega resolves it); `HitTarget` says what was hit (`kind`) and whether the
+  item's mark reads a dataset (`fromData`). `queryMark` returns the items of a mark without `from` like any other's.
+
+### `@aster-charts/react`
+
+#### Fixed
+
+- A tooltip shows the item vega shows: the topmost item that takes the pointer. A tooltip encoded on a mark without `from` (a
+  transparent hover target, the usual way to give a Vega chart's empty plot a tooltip) never showed; a group item's tooltip
+  (a facet cell) and an interactive axis, legend or title part's never showed either; a data mark drawn under a mark without
+  `from` showed through it; a falsy tooltip value (`0`, `false`) showed, where vega shows none. `renderTooltip` is called for
+  an item with a `tooltip` value or made from a data row. A click (`onPointSelect`, a point `SelectValue`) selects vega's event
+  item when it is an item of a mark (a mark without `from` gives `{}`), and nothing under it.
+
 ## 0.3.0 (2026-11-12)
 
 ### `@aster-charts/core`

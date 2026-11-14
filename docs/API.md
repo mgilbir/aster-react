@@ -459,9 +459,15 @@ focusable elements; non-React hosts can do the same. The keyboard contract is in
 
 #### `@aster-charts/core/hit`
 
-`buildHitIndex(scene)` returns `{ query(x, y), queryMark(x, y), size() }`; `queryMark` returns
-data-bearing mark items only (guides excluded), `query` returns anything painted. Both give a `HitTarget`
-(`{ item, marktype }`) or `null`.
+`buildHitIndex(scene)` returns `{ query(x, y), queryMark(x, y), pick(x, y), tooltip(x, y), size() }`. `query` returns anything
+painted; `queryMark` the items of interactive marks only (guides and group items' boxes excluded); `pick` is vega's `event.item`,
+the topmost item that takes the pointer (it looks through a mark with `interactive: false` and a guide part the spec did not make
+interactive, and finds the parts it did); `tooltip` is the item vega's tooltip handler is called with: the item `pick` finds, a
+line, an area or a trail resolved to one of its items as vega resolves it (or `null`). Each gives a `HitTarget`
+(`{ item, marktype, kind, fromData }`: `kind` is `'mark'`, `'group'` for a group item's own box, or `'guide'` for a part of an
+axis, a legend or a title; `fromData` is true for an item of a mark that reads a dataset) or `null`. Every item has a `datum`, as
+in vega: its row, the generated `{}` of a mark without `from` or of a title, a group item's facet tuple, a guide part's tick or
+entry, the axis or legend datum for a guide's own group, domain and title.
 
 #### `@aster-charts/core/signals`
 
@@ -492,7 +498,7 @@ pending debounces (vega's `view.finalize()`). `setTimerClock(clock | null)` ([Ma
 - `hooks.preventDefault` — vega's `view.preventDefault()` (default `false`): whether events of the chart's own surface are
   prevented when `config.events.defaults` names neither `prevent` nor `allow`. The config decides first (vega's default is
   `{allow: ['wheel']}`, so every listened view event but `wheel` is prevented); a `consume`d stream always prevents.
-- `{ pick }` — `(x, y) => HitTarget | null`, e.g. `buildHitIndex(scene).query`: resolves `event.item` (mark type, name, role,
+- `{ pick }` — `(x, y) => HitTarget | null`, e.g. `buildHitIndex(scene).pick`: resolves `event.item` (mark type, name, role,
   datum, enclosing group). Without it, or when it finds nothing, the item is read from the DOM (the `mark-*`/`role-*`
   classes, and a `data-datum` stamp if `stampDatumAttrs` was called), where mark names are not available. `<Chart>` passes its own hit index.
 - Lower-level pieces of the same module. `bindSignalEvents(svg, chart, runtime, signalParams, signals, hooks?, options?)` is
