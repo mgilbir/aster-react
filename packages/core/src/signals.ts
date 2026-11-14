@@ -80,6 +80,8 @@ export interface PickedItem {
   group?: PickedItem | null
   /** The scene node of the item's mark (what `item.mark.items` is in vega): `intersect(..., unit.mark)` walks it. */
   node?: object
+  /** A group item's marks (`item.items`), for a picked item the scene holds as a leaf: a legend entry's box. */
+  items?: object[]
 }
 
 export interface SignalEventHooks {
@@ -843,6 +845,8 @@ function bindSignalEventsDefs(
         const hit = opts.pick(p[0] + originX, p[1] + originY)
         if (hit && (hit.item as { datum?: unknown }).datum != null) picked.item = hit.item
       }
+      // vega's entry is a group item holding its symbol and its label (`item().items[0].items[0].datum.value`)
+      if (picked && sceneInfo && (picked.item as SceneItem)._part === 'entry') picked.items = sceneInfo.entryMarks(picked.item as SceneItem)
     }
     if (!picked && opts.pick) {
       const p = pointOf(e)
@@ -1341,7 +1345,11 @@ function itemFacade(p: PickedItem): object {
     get group(): object | null { return p.group ? itemFacade(p.group) : null },
     ...(p.node ? { [MARK_NODE]: p.node } : {}),
   }
-  return Object.create(p.item, { mark: { value: mark, enumerable: true }, [TUPLE_ID]: { value: true } }) as object
+  return Object.create(p.item, {
+    mark: { value: mark, enumerable: true },
+    [TUPLE_ID]: { value: true },
+    ...(p.items !== undefined ? { items: { value: p.items, enumerable: true } } : {}),
+  }) as object
 }
 
 /** `event.item` recovered from the DOM: the `data-datum` stamp and the mark container's classes. */
@@ -1383,7 +1391,7 @@ function sceneIndex(scene: SceneRoot): ReturnType<typeof buildSceneIndex> {
   return idx
 }
 
-function buildSceneIndex(scene: SceneRoot): { describe: (p: PickedItem) => PickedItem; root: () => PickedItem } {
+function buildSceneIndex(scene: SceneRoot): { describe: (p: PickedItem) => PickedItem; root: () => PickedItem; entryMarks: (box: SceneItem) => object[] } {
   let parents: WeakMap<object, SceneGroup> | null = null
   const ensure = (): WeakMap<object, SceneGroup> => {
     if (parents) return parents
@@ -1398,9 +1406,11 @@ function buildSceneIndex(scene: SceneRoot): { describe: (p: PickedItem) => Picke
     return (parents = map)
   }
   const isMark = (g: SceneGroup): boolean => g.marktype !== undefined && g.marktype !== 'group'
+  /** The name the spec gave a mark: vega's `item.mark.name` (the scene calls a mark the spec did not name `marks`). */
+  const specName = (g: SceneGroup): string | undefined => g.cssName
   /** The group mark a group item belongs to, as vega has it: a mark holding the group items of that name (the cells of a facet). The scene keeps no such wrapper. */
   const groupMarkOf = (g: SceneGroup, parent: SceneGroup | undefined): object => {
-    const mark = { marktype: 'group', name: g.name, role: g.role } as { items?: unknown[] }
+    const mark = { marktype: 'group', name: specName(g), role: g.role } as { items?: unknown[] }
     Object.defineProperty(mark, 'items', {
       enumerable: true,
       get: () => ((parent ? parent.items : scene.items) ?? []).filter((i) => (i as SceneGroup).marktype === 'group' && (i as SceneGroup).name === g.name),
@@ -1411,7 +1421,7 @@ function buildSceneIndex(scene: SceneRoot): { describe: (p: PickedItem) => Picke
   const groupPick = (g: SceneGroup): PickedItem => ({
     item: g,
     marktype: 'group',
-    name: g.name,
+    name: specName(g),
     role: g.role,
     get group(): PickedItem | null { return enclosing(g) },
   } as PickedItem)
@@ -1423,8 +1433,23 @@ function buildSceneIndex(scene: SceneRoot): { describe: (p: PickedItem) => Picke
     while (p && isMark(p)) p = map.get(p)
     return p ? groupPick(p) : rootGroup
   }
+  /**
+   * The marks of the legend entry a box stands for, as vega's entry group holds them: its symbol mark, then its label mark, each
+   * with the entry's one item. The scene keeps an entry's leaves after its box, in that order.
+   */
+  const entryMarks = (box: SceneItem): object[] => {
+    const leaves = (ensure().get(box)?.items ?? []) as SceneItem[]
+    const symbols: SceneItem[] = []
+    const labels: SceneItem[] = []
+    for (let i = leaves.indexOf(box) + 1; i > 0 && i < leaves.length && leaves[i]!._part !== 'entry'; i++) {
+      if (leaves[i]!._part === 'symbol') symbols.push(leaves[i]!)
+      else if (leaves[i]!._part === 'label') labels.push(leaves[i]!)
+    }
+    return [{ marktype: 'symbol', role: 'legend-symbol', items: symbols }, { marktype: 'text', role: 'legend-label', items: labels }]
+  }
   return {
     root: () => rootGroup,
+    entryMarks,
     describe: (p) => {
       const map = ensure()
       const container = map.get(p.item)
@@ -1432,17 +1457,35 @@ function buildSceneIndex(scene: SceneRoot): { describe: (p: PickedItem) => Picke
       const m = (p.item as SceneItem).mark
       // a picked group item (a facet cell, a nested view) names its own mark: vega's `item.mark.name` / `.role`
       const own = markGroup === undefined && (p.item as SceneGroup).marktype === 'group' ? (p.item as SceneGroup) : undefined
+      // a part of an axis or a legend: vega's mark of that part (`axis-label`, `legend-symbol`...), named as the spec named it
+      const part = markGroup === undefined && container !== undefined ? guidePart(container, p.item as SceneItem) : undefined
       return {
         item: p.item,
         marktype: markGroup?.marktype ?? p.marktype,
-        name: markGroup?.name ?? m?.name ?? own?.name,
-        role: markGroup?.role ?? m?.role ?? own?.role,
+        name: markGroup ? specName(markGroup) : part ? part.name : m?.name ?? (own ? specName(own) : undefined),
+        role: markGroup?.role ?? part?.role ?? m?.role ?? own?.role,
         // (a group item's mark: vega's group mark holds it and its siblings of the same name)
         ...((p.item as SceneGroup).marktype === 'group' ? { node: groupMarkOf(p.item as SceneGroup, container) } : {}),
         get group(): PickedItem | null { return enclosing(markGroup ?? p.item) },
       } as PickedItem
     },
   }
+}
+
+/** vega's roles of the marks of a guide's parts (vega-parser guides): an entry box stands for the entry's group item (`scope`). */
+const GUIDE_PART_ROLES: Record<string, Record<string, string>> = {
+  axis: { tick: 'axis-tick', label: 'axis-label', grid: 'axis-grid', domain: 'axis-domain', title: 'axis-title', bg: 'axis' },
+  legend: { symbol: 'legend-symbol', label: 'legend-label', title: 'legend-title', entry: 'scope', gradient: 'legend-gradient', band: 'legend-band', bg: 'legend' },
+}
+
+/** The role and the spec's name of the guide mark a leaf of an axis or a legend belongs to, or undefined for any other leaf. */
+function guidePart(guide: SceneGroup, leaf: SceneItem): { role: string; name: string | undefined } | undefined {
+  if ((guide as { _scope?: boolean })._scope === true || (guide.role !== 'axis' && guide.role !== 'legend')) return undefined
+  const part = leaf._part
+  const role = part !== undefined ? GUIDE_PART_ROLES[guide.role]![part] : undefined
+  if (role === undefined) return undefined
+  const key = part === 'entry' ? 'entries' : part === 'bg' ? guide.role : part!
+  return { role, name: guide.partMeta?.[key]?.name }
 }
 
 /**

@@ -2964,6 +2964,8 @@ function buildTitleGroup(
   const out = {
     marktype: 'group',
     role: 'title',
+    // (the title group item's own datum, a generated `{}`: vega-parser title.js)
+    datum: built.datum,
     x: (g.x as number) ?? 0,
     y: (g.y as number) ?? 0,
     items: children,
@@ -2977,6 +2979,7 @@ function buildTitleGroup(
     ...(built.partMeta.group?.interactive ? { interactive: true } : {}),
     ...(itemAriaOf(g) ? { itemAria: itemAriaOf(g) } : {}),
     ...(cursorOf(g) !== undefined ? { cursor: cursorOf(g) } : {}),
+    ...(g.tooltip !== undefined ? { tooltip: g.tooltip } : {}),
     ...(g.href != null ? { href: g.href } : {}),
   } as unknown as SceneGroup
   vetGuideLinks(out, ctx)
@@ -4499,8 +4502,12 @@ function evaluateMarkItems(
       }
     }
   } else {
+    // vega-parser marks/data.js: a mark without `from` is made from a generated singleton `{}`, which its encode reads and its
+    // item carries as `datum` (what `event.item.datum`, a tooltip handler and the scene expose)
     const update = mark.encode?.update ?? mark.encode?.enter ?? {}
-    const res = resolveEncodeSet(update, {}, ctx, mark.type)
+    const datum: Row = {}
+    const res = resolveEncodeSet(update, datum, ctx, mark.type)
+    res.datum = datum
     res.__gen = ctx.gen
     items = [res]
   }
@@ -5426,6 +5433,8 @@ function buildGroupItem(mark: CompiledMark, ctx: EvalContext, entered: EnteredGr
       ...markContainerInfo(mark),
       ...(itemAria !== undefined ? { itemAria } : {}),
       ...(cursorOf(geo) !== undefined ? { cursor: cursorOf(geo) } : {}),
+      // (what vega's tooltip handler shows for the group item where no mark inside it is hit)
+      ...((geo as Record<string, unknown>).tooltip !== undefined ? { tooltip: (geo as Record<string, unknown>).tooltip } : {}),
       ...(href != null ? { href: href as string } : {}),
       ...(markClip(mark, ctx) ? { markClip: true } : {}),
     } as unknown as SceneGroup
@@ -6239,6 +6248,8 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext, index: number): S
     width: built.width,
     height: built.height,
     items: built.leaves,
+    // (the legend group item's own datum: vega-parser legend.js)
+    datum: built.datum,
     partMeta: built.partMeta,
     ...(built.partMeta.legend?.name ? { cssName: built.partMeta.legend.name } : {}),
     legendBounds: built.bounds,
@@ -6249,6 +6260,7 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext, index: number): S
     ...(isUnencoded(g) ? { unencoded: true } : {}),
     ...(g.strokeWidth !== undefined ? { strokeWidth: g.strokeWidth } : {}),
     ...(cursorOf(g) !== undefined ? { cursor: cursorOf(g) } : {}),
+    ...(g.tooltip !== undefined ? { tooltip: g.tooltip } : {}),
     ...(g.href != null ? { href: g.href } : {}),
     ...(built.madeMarks !== undefined ? { madeMarks: built.madeMarks, _entriesPending: true } : {}),
   } as unknown as SceneGroup
@@ -6773,6 +6785,8 @@ function buildAxis(axis: CompiledAxis, ctx: EvalContext, index: number): SceneGr
     marktype: 'group',
     role: 'axis',
     items: built.leaves,
+    // (the axis group item's own datum: vega-parser axis.js)
+    datum: built.datum,
     box: gb.background,
     ...(gb.foreground ? { boxFg: gb.foreground } : {}),
     // the marks vega-parser's axis builds (grid, ticks, labels, domain, title; axis.js `datum`): the SVG draws a
@@ -6782,6 +6796,7 @@ function buildAxis(axis: CompiledAxis, ctx: EvalContext, index: number): SceneGr
     ...(built.partMeta.axis?.name ? { cssName: built.partMeta.axis.name } : {}),
     ...(itemAriaOf(built.group) ? { itemAria: itemAriaOf(built.group) } : {}),
     ...(cursorOf(built.group) !== undefined ? { cursor: cursorOf(built.group) } : {}),
+    ...(built.group.tooltip !== undefined ? { tooltip: built.group.tooltip } : {}),
     // (a group item whose encode never ran has no orient: the caption calls it an X-axis, and reads no format off it)
     axis: { orient, itemOrient: isUnencoded(g) ? '' : typeof g.orient === 'string' ? g.orient : orient, format: g.format, formatType: g.formatType, ...(isUnencoded(g) ? { unencoded: true } : {}), range: axisRangeSpan, baseline: 0, translate: ctx.rawGuides ? 0 : (typeof g.translate === 'number' ? g.translate : 0.5), position, bounds: built.bounds, ...(knownOrient ? {} : { noLayout: true }) },
     ...(href != null ? { href } : {}),

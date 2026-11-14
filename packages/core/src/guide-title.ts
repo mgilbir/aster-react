@@ -33,6 +33,8 @@ export interface TitleBuilt {
   title?: SceneItem & Rec
   subtitle?: SceneItem & Rec
   partMeta: Record<string, { name?: string; interactive: boolean }>
+  /** The title's generated datum (`{}`), which its group item and its texts carry. */
+  datum: Row
   /** The group's bounds in its parent's frame as the layout left them, when it laid the group out: the title and the subtitle where they were measured, moved with the group. */
   bounds?: Bounds
 }
@@ -104,7 +106,10 @@ export function buildTitle(inp: TitleBuildInput): TitleBuilt {
     partMeta.subtitle = { name: subtitleDef.name, interactive: subtitleDef.interactive }
   }
   const bounds = inp.raw || title === undefined ? undefined : placeTitle(group, title, subtitle, inp.viewBounds, inp.width, inp.height)
-  return { group, title, subtitle, partMeta, ...(bounds ? { bounds } : {}) }
+  // (the group item and its texts carry the title's generated datum, as vega's do)
+  if (title !== undefined) title.datum = datum
+  if (subtitle !== undefined) subtitle.datum = datum
+  return { group, title, subtitle, partMeta, datum, ...(bounds ? { bounds } : {}) }
 }
 
 /**

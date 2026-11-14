@@ -474,6 +474,9 @@ export function buildLegend(inp: LegendBuildInput): LegendBuilt {
     const it = encodeItem(def, d, group, host, style) as SceneItem & Rec
     it._kind = def.type
     it._part = part
+    // (the item carries the tuple it was made from, as vega's do: the legend datum for the title and a gradient, an entry for a
+    // band or a label)
+    it.datum = d
     return it
   }
 
@@ -840,8 +843,10 @@ function symbolEntries(inp: LegendBuildInput, k: Kit, defs: LegendDefs, group: R
 
   for (const i of order) {
     const { e, g, sym, lbl, held } = made[i]!
-    // an item's datum is the entry it shows (what `datum.value` reads in a legend's click handlers)
-    const entryDatum = { value: e.value, label: e.label, index: e.index }
+    // The symbol and the label carry the entry they show, as vega's do. The entry's box stands for vega's entry group item, whose
+    // datum is the facet tuple `{index, count}` (a legend click handler reads the value off the entry's symbol instead,
+    // `item().items[0].items[0].datum.value`: the event loop gives the box those marks, see `entryMarks` in signals.ts).
+    const entryDatum = { index: e.index, count: 1 }
     const here = place[i]!
     const width = widths.get(columnOf(i)) ?? 0
     // the entry's box is as wide as its column and as tall as what it holds
@@ -860,12 +865,12 @@ function symbolEntries(inp: LegendBuildInput, k: Kit, defs: LegendDefs, group: R
       drawn.x = ((sym.x as number) || 0) + here.x
       drawn.y = ((sym.y as number) || 0) + here.y
       if (clipped) drawn._clip = { x: here.x, y: here.y, w: width, h: held.y2, corners: cornersOf(g) }
-      drawn.datum = entryDatum
+      drawn.datum = e
       if (k.user.symbols?.interactive === true && drawn.fill === 'transparent') drawn._hit = true
       out.push(drawn)
     }
     if (lbl !== undefined) {
-      lbl.datum = entryDatum
+      lbl.datum = e
       lbl.x = ((lbl.x as number) || 0) + here.x
       lbl.y = ((lbl.y as number) || 0) + here.y
       out.push(lbl)
