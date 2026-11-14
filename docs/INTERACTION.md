@@ -347,7 +347,9 @@ a falsy value (`''`, `0`, `false`) shows nothing, as vega hands it over as none.
 replaces the content inside the chart's React tree and enables tooltips by itself; it is called for the hovered item when it
 has a `tooltip` value or is an item of a mark that reads a dataset (its datum is the row; for an item whose only datum is
 vega's generated `{}` it is called only with a `tooltip` value), and receives the item's `tooltip` value and the scene item,
-so a host can restyle Vega's tooltip or build its own. The hovered item is resolved through the scene hit index on every
+so a host can restyle Vega's tooltip or build its own. Two differences from vega are deliberate ([ARCHITECTURE.md](ARCHITECTURE.md#deviations-from-vega)): a tooltip that reads a
+signal a pointermove sets shows the value for that move (vega's shows the previous move's), and moving off the marks onto an axis
+hides the tooltip on both renderers (vega's SVG keeps it there; its canvas hides it). The hovered item is resolved through the scene hit index on every
 renderer (the SVG carries no per-item datum attribute, as vega's does not). Tooltips are off by default.
 
 ## Cursor
