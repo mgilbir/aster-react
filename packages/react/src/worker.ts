@@ -352,6 +352,11 @@ export function useChartWorker(spec: VgSpec, options: ChartWorkerOptions & {
   const sizesRef = React.useRef({ containerSize: options.containerSize, measuredSize: options.measuredSize })
   sizesRef.current = { containerSize: options.containerSize, measuredSize: options.measuredSize }
   const stableSpec = useStableSpec(spec)
+  // The Vega spec a request handled here (no Worker) compiles to: once per spec, not once per request (a new size or data is a new
+  // request for the same spec). A spec that does not compile is left to the request handler, which reports the error.
+  const localSpec = React.useMemo(() => {
+    try { return normalizeChartSpec(stableSpec) } catch { return undefined }
+  }, [stableSpec])
   // Budgets are compared by content: an inline `limits={{...}}` must not
   // re-post the request on every render.
   const stableLimits = useStableContent(limits)
@@ -405,7 +410,8 @@ export function useChartWorker(spec: VgSpec, options: ChartWorkerOptions & {
       // needs none (the common case) is handled in this very effect, as before; one that does applies when they arrive.
       let missing: readonly AddonName[] = []
       try {
-        const vega = normalizeChartSpec(request.spec)
+        if (localSpec === undefined) throw new Error('the spec does not compile')
+        const vega = localSpec
         request = { ...request, spec: vega }
         // a refused url dataset imports nothing: the handler reports the refusal
         checkUrlData(vega, urlData)
@@ -435,7 +441,7 @@ export function useChartWorker(spec: VgSpec, options: ChartWorkerOptions & {
       fail(e instanceof Error ? e : new Error(String(e)))
     }
     return stop
-  }, [stableSpec, width, height, csKey, msKey, data, signals, domainRaw, stableLimits, textMetricsKey, urlPolicyKey, urlData, worker, workerRef])
+  }, [stableSpec, localSpec, width, height, csKey, msKey, data, signals, domainRaw, stableLimits, textMetricsKey, urlPolicyKey, urlData, worker, workerRef])
 
   return state
 }

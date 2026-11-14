@@ -6,7 +6,7 @@ import { describe, it, expect, afterEach } from 'vitest'
 import '@aster-charts/core/transforms'
 import { createChartStream } from '@aster-charts/core'
 import './vl'
-import { Chart } from './Chart'
+import { forEachVariant } from './testing/variants'
 import { normalizeChartSpec } from './spec'
 import { useChart } from './useChart'
 import { renderChartToStaticMarkup } from './ssr'
@@ -94,11 +94,11 @@ const vlSpecs = (data: Array<Record<string, unknown>>): Record<string, Record<st
   },
 })
 
-describe('every path leaves a deep-frozen spec\'s rows alone', () => {
+forEachVariant(['svg'], (Chart, variant) => describe('every path leaves a deep-frozen spec\'s rows alone', () => {
   afterEach(() => { document.body.innerHTML = '' })
 
   for (const name of Object.keys(vlSpecs([]))) {
-    it(`${name}: <Chart> renders, updates and handles events on a frozen Vega-Lite spec as on an unfrozen copy`, () => {
+    variant.it(['signals'], `${name}: <Chart> renders, updates and handles events on a frozen Vega-Lite spec as on an unfrozen copy`, () => {
       const errors: unknown[] = []
       const logger = { error: (...a: unknown[]) => { errors.push(a) }, warn: () => {} }
       const onError = (e: Error): void => { errors.push(e) }
@@ -141,7 +141,7 @@ describe('every path leaves a deep-frozen spec\'s rows alone', () => {
     })
   }
 
-  it('a frozen named dataset takes `data` overrides and `dataChanges` changesets', () => {
+  variant.it(['signals'], 'a frozen named dataset takes `data` overrides and `dataChanges` changesets', () => {
     const errors: unknown[] = []
     const onError = (e: Error): void => { errors.push(e) }
     const logger = { error: (...a: unknown[]) => { errors.push(a) }, warn: () => {} }
@@ -158,7 +158,7 @@ describe('every path leaves a deep-frozen spec\'s rows alone', () => {
     act(() => { root.unmount() })
   })
 
-  it('a Vega spec\'s frozen inline rows survive a `modify` from an event handler', () => {
+  variant.it(['signals'], 'a Vega spec\'s frozen inline rows survive a `modify` from an event handler', () => {
     const errors: unknown[] = []
     const logger = { error: (...a: unknown[]) => { errors.push(a) }, warn: () => {} }
     const spec = deepFreeze({
@@ -177,7 +177,9 @@ describe('every path leaves a deep-frozen spec\'s rows alone', () => {
     expect(container.querySelector('path, rect.mark, g.role-mark')).not.toBeNull()
     act(() => { root.unmount() })
   })
+}))
 
+describe('the paths outside <Chart> leave a deep-frozen spec\'s rows alone', () => {
   it('the headless hook, SSR, the worker handler and a stream read frozen rows without writing them', () => {
     const errors: unknown[] = []
     for (const [name, spec] of Object.entries(vlSpecs(rows(16)))) {

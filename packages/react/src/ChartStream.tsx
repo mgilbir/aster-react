@@ -14,7 +14,7 @@ import * as React from 'react'
 import type { SceneRoot, SpecLimits, StreamBatch, VgSpec } from '@aster-charts/core'
 import { Chart, type ChartProps, type ChartStreamInput } from './Chart.js'
 import { positionalScales, viewToDomainRaw } from './interaction.js'
-import { useStableContent } from './spec.js'
+import { normalizeChartSpec, useStableContent, useStableSpec } from './spec.js'
 import {
   useChartStream,
   type StreamFlushFailureInfo,
@@ -214,6 +214,15 @@ function useReportOnce(
   }, [error])
 }
 
+/**
+ * The Vega spec a stream component's spec is, compiled once per change of its content: the stream hook and the chart the stream
+ * draws into both take it, so a Vega-Lite spec is compiled once and not by each of them.
+ */
+function useNormalizedSpec(spec: VgSpec): VgSpec {
+  const stable = useStableSpec(spec)
+  return React.useMemo(() => normalizeChartSpec(stable), [stable])
+}
+
 export const ChartStream = React.forwardRef<ChartStreamHandle, ChartStreamProps>(
   function ChartStream({
     spec, streamOptions, onStreamError, width, height, className, style,
@@ -222,7 +231,8 @@ export const ChartStream = React.forwardRef<ChartStreamHandle, ChartStreamProps>
     const size = useSizeBatch(width, height)
     const stableLimits = useStableContent(limits)
     const initialInput = useInitialInput(spec, signals, view)
-    const stream = useChartStream(spec, {
+    const vgSpec = useNormalizedSpec(spec)
+    const stream = useChartStream(vgSpec, {
       ...streamOptions,
       serialize: false,
       initial: {
@@ -261,7 +271,7 @@ export const ChartStream = React.forwardRef<ChartStreamHandle, ChartStreamProps>
     return (
       <Chart
         {...chartProps}
-        spec={spec} width={width} height={height} className={className} style={style}
+        spec={vgSpec} width={width} height={height} className={className} style={style}
         signals={signals} view={view}
         sceneOverride={stream.scene} onStreamInput={onStreamInput}
       />
@@ -277,7 +287,8 @@ export const ChartWorkerStream = React.forwardRef<ChartStreamHandle, ChartWorker
     const size = useSizeBatch(width, height)
     const stableLimits = useStableContent(limits)
     const initialInput = useInitialInput(spec, signals, view)
-    const stream = useChartWorkerStream(spec, {
+    const vgSpec = useNormalizedSpec(spec)
+    const stream = useChartWorkerStream(vgSpec, {
       ...streamOptions,
       serialize: false,
       initial: {
@@ -319,7 +330,7 @@ export const ChartWorkerStream = React.forwardRef<ChartStreamHandle, ChartWorker
     return (
       <Chart
         {...chartProps}
-        spec={spec} width={width} height={height} className={className} style={style}
+        spec={vgSpec} width={width} height={height} className={className} style={style}
         signals={signals} view={view}
         sceneOverride={stream.scene} onStreamInput={onStreamInput}
       />
