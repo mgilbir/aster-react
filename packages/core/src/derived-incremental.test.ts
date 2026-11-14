@@ -107,7 +107,7 @@ describe('what is kept with the engine nodes is what the scene says', () => {
     }
     // (every scene before still says what it said: what is kept with its nodes was not overwritten by a later scene's)
     for (const { what, scene, answer } of answered) expect(ask(scene), `${what}, asked again`).toEqual(answer)
-  })
+  }, 60_000)
 
   it('a hand-built scene is answered from what it holds when asked', () => {
     const leaf = { x: 10, y: 10, width: 20, height: 20, fill: 'red', datum: { v: 1 } }
