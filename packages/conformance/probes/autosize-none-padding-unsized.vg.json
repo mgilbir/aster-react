@@ -1,0 +1,18 @@
+{
+  "$schema": "https://vega.github.io/schema/vega/v6.json",
+  "description": "Known gap: autosize none containing the padding, with no width or height. Vega's view is then the size less the padding, negative here (0 - 58 wide), and it lays the axes out on that negative range in a 0 x 0 svg; Aster clamps the view to 0 and draws a padding-sized svg without them.",
+  "padding": { "left": 40, "top": 12, "right": 18, "bottom": 30 },
+  "autosize": { "type": "none", "contains": "padding" },
+  "data": [{ "name": "t", "values": [{ "k": "a", "v": 28 }, { "k": "b", "v": 55 }, { "k": "c", "v": 43 }, { "k": "d", "v": 91 }] }],
+  "scales": [
+    { "name": "x", "type": "band", "domain": { "data": "t", "field": "k" }, "range": "width", "padding": 0.1 },
+    { "name": "y", "type": "linear", "domain": { "data": "t", "field": "v" }, "range": "height", "nice": true, "zero": true }
+  ],
+  "axes": [{ "orient": "bottom", "scale": "x", "grid": false }, { "orient": "left", "scale": "y", "grid": true }],
+  "marks": [
+    {
+      "type": "rect", "from": { "data": "t" },
+      "encode": { "update": { "x": { "scale": "x", "field": "k" }, "width": { "scale": "x", "band": 1 }, "y": { "scale": "y", "field": "v" }, "y2": { "scale": "y", "value": 0 }, "fill": { "value": "steelblue" } } }
+    }
+  ]
+}
