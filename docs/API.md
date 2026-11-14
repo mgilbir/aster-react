@@ -740,6 +740,12 @@ point selection and the a11y tree resolve through the scene.
   `signal.on` event streams (a conservative default: the event loop resolves `event.item` through the scene hit index, not per-item DOM nodes). Each path holds up to
   256 symbols, so 100,000 points become 391 paths.
 - `true` always batches (still only marks with at least 512 items), `false` disables.
+- Only opaque, unrotated symbols batch: an item whose `opacity`, `fillOpacity` or `strokeOpacity` is below 1, that has a
+  `blend` mode or an `angle` keeps its own element, and consecutive items with the same paint share a path. One path is
+  composited once where separate elements are composited at every overlap, so a translucent symbol drawn in a batch would
+  change the pixels (`pnpm conformance:batch` holds batched and per-item drawings to the same pixels). A mark whose items
+  are all translucent, such as a scatter with `fillOpacity: 0.7`, is therefore drawn one element per item in every shell,
+  whatever `denseMarks` says.
 - Client-only mounts batch directly. SSR/hydrated pages emit the per-item markup on
   the server (so hydration matches) and switch to batched in place after hydration.
 - A mark with `href` links is never batched.

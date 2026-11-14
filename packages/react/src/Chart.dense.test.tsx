@@ -128,4 +128,81 @@ describe('Chart denseMarks', () => {
     await act(async () => { root.unmount() })
     container.remove()
   })
+
+  // Only opaque, unrotated symbols batch: one path composites once where separate elements composite at every overlap, so a
+  // translucent symbol keeps its own element (the batch gate holds batched and per-item drawings to the same pixels). A
+  // mark whose items are all translucent -- the chart-bench scatter, `fillOpacity: 0.7` and a tooltip -- is drawn per item
+  // in every shell and on every path to the DOM, whatever `denseMarks` says.
+  describe('a translucent or rotated symbol keeps its own element', () => {
+    const translucent = (extra: Record<string, unknown>): Record<string, unknown> => {
+      const spec = makeSpec(values(1000)) as Record<string, unknown> & { marks: Array<{ encode: { update: Record<string, unknown> } }> }
+      Object.assign(spec.marks[0]!.encode.update, extra)
+      return spec
+    }
+    const cases: Array<[string, Record<string, unknown>]> = [
+      ['fillOpacity', { fillOpacity: { value: 0.7 }, tooltip: { signal: 'datum.x' } }],
+      ['opacity', { opacity: { value: 0.5 } }],
+      ['strokeOpacity', { stroke: { value: '#000' }, strokeOpacity: { value: 0.5 } }],
+      ['angle', { shape: { value: 'square' }, angle: { value: 30 } }],
+    ]
+    for (const [name, extra] of cases) {
+      forEachVariant(['svg', 'interaction'], (Chart) => {
+        it(`${name}: per item on a client-only mount, with denseMarks auto and true`, async () => {
+          for (const dense of ['auto', true] as const) {
+            const container = document.createElement('div')
+            document.body.appendChild(container)
+            const root = createRoot(container)
+            await act(async () => { root.render(<Chart spec={translucent(extra)} width={400} height={300} denseMarks={dense} tooltip a11y={false} />) })
+            expect(markPaths(container)).toBe(1000)
+            await act(async () => { root.unmount() })
+            container.remove()
+          }
+        })
+      })
+    }
+
+    forEachVariant(['svg'], (Chart) => {
+      it('per item after hydration too, and an opaque run among translucent items still batches', async () => {
+        // the items whose x is a multiple of 3 opaque: each translucent item keeps its element, each run of opaque ones is a path
+        const rows = values(1000)
+        let expected = 0
+        rows.forEach((r, i) => { if (r.x % 3 !== 0 || i === 0 || rows[i - 1]!.x % 3 !== 0) expected++ })
+        const spec = makeSpec(values(1000)) as Record<string, unknown> & { marks: Array<{ encode: { update: Record<string, unknown> } }> }
+        spec.marks[0]!.encode.update.fillOpacity = { signal: 'datum.x % 3 === 0 ? 1 : 0.7' }
+        const markup = renderToString(<Chart spec={spec} width={400} height={300} a11y={false} />)
+        const container = document.createElement('div')
+        container.innerHTML = markup
+        document.body.appendChild(container)
+        let root: ReturnType<typeof hydrateRoot> | null = null
+        await act(async () => { root = hydrateRoot(container, <Chart spec={spec} width={400} height={300} a11y={false} />) })
+        await act(async () => { await new Promise((r) => setTimeout(r, 0)) })
+        expect(subpaths(container)).toBe(1000)
+        expect(markPaths(container)).toBe(expected)
+        expect(expected).toBeLessThan(1000)
+        await act(async () => { root!.unmount() })
+        container.remove()
+        // an opaque mark of the same size batches, so the difference is the opacity alone
+        const opaque = document.createElement('div')
+        document.body.appendChild(opaque)
+        const r2 = createRoot(opaque)
+        await act(async () => { r2.render(<Chart spec={makeSpec(values(1000))} width={400} height={300} a11y={false} />) })
+        expect(markPaths(opaque)).toBeLessThanOrEqual(8)
+        await act(async () => { r2.unmount() })
+        opaque.remove()
+      })
+    })
+
+    it('per item in a stream', async () => {
+      const container = document.createElement('div')
+      document.body.appendChild(container)
+      const root = createRoot(container)
+      await act(async () => {
+        root.render(<ChartStream spec={translucent({ fillOpacity: { value: 0.7 } }) as never} width={400} height={300} a11y={false} />)
+      })
+      await act(async () => { await new Promise((r) => setTimeout(r, 0)) })
+      expect(markPaths(container)).toBe(1000)
+      await act(async () => { root.unmount() })
+      container.remove()
+    })
+  })
 })
