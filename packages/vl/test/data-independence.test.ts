@@ -118,9 +118,14 @@ describe('compiling reads no row', () => {
     }
   }
 
-  it('every corpus spec with inline rows compiles reading none of them, unless two views carry equal-but-distinct rows or a lookup names its source after them', () => {
-    let checked = 0
-    for (const [name, spec] of corpus) {
+  // every corpus spec with inline rows compiles reading none of them, unless two views carry equal-but-distinct rows (same length)
+  // or a lookup names its source after them
+  const withRows = corpus.filter(([, spec]) => /"values"\s*:\s*\[\s*\{|"datasets"/.test(JSON.stringify(spec)))
+  it('found the corpus specs with inline rows', () => {
+    expect(withRows.length).toBeGreaterThan(400)
+  })
+  for (const [name, spec] of withRows) {
+    it(`corpus ${name}: compiles without writing a row or reading one it need not, to what a plain copy compiles to`, () => {
       const c: Counter = { rowReads: 0, slotReads: 0, otherArrayReads: 0, writes: 0 }
       const payloads: Array<Array<Record<string, unknown>>> = []
       const walk = (v: unknown, parentKey: string, key: string): unknown => {
@@ -133,21 +138,22 @@ describe('compiling reads no row', () => {
         return v
       }
       const traced = walk(spec, '', '')
-      if (!payloads.length) continue
       const lengths = payloads.map((p) => p.length)
       const sameLength = new Set(lengths).size < lengths.length
       const anonymousLookup = JSON.stringify(spec).includes('"lookup"')
-      let out: unknown
-      try { out = compile(traced as VLSpec) } catch { continue }
-      expect(c.writes, name).toBe(0)
-      expect(c.otherArrayReads, name).toBe(0)
-      if (!sameLength && !anonymousLookup) expect(c.rowReads, name).toBe(0)
-      // the output is what compiling a plain copy gives
-      expect(JSON.stringify(out), name).toBe(JSON.stringify(compile(JSON.parse(JSON.stringify(spec)))))
-      checked++
-    }
-    expect(checked).toBeGreaterThan(400)
-  })
+      let plain: string
+      try { plain = JSON.stringify(compile(JSON.parse(JSON.stringify(spec)))) } catch (e) {
+        // (a spec the compiler refuses is refused the same way with counted rows)
+        expect(() => compile(traced as VLSpec)).toThrow((e as Error).message)
+        return
+      }
+      const out = compile(traced as VLSpec)
+      expect(c.writes).toBe(0)
+      expect(c.otherArrayReads).toBe(0)
+      if (!sameLength && !anonymousLookup) expect(c.rowReads).toBe(0)
+      expect(JSON.stringify(out)).toBe(plain)
+    })
+  }
 
   it('equal-but-distinct rows are compared once per pair and only as far as the first difference', () => {
     const c: Counter = { rowReads: 0, slotReads: 0, otherArrayReads: 0, writes: 0 }
