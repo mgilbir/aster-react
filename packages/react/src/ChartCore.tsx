@@ -25,7 +25,7 @@ import { SCALE_INFO_KEY, scalesFromSerialized, type SerializedScale } from './se
 // renderer and the hit/signal event loop are NOT imported here: they arrive as the `canvas` and
 // `interaction` props (see capabilities.ts), so `<SvgChart>` bundles neither.
 import { createChartSession, hasDenseSymbolMarks, patchSceneDom, renderSceneToDomElement } from '@aster-charts/core/dom'
-import type { CanvasSceneSnapshot, ItemImage } from '@aster-charts/core/canvas'
+import type { CanvasEvents, CanvasSceneSnapshot, ItemImage } from '@aster-charts/core/canvas'
 import type { HitIndex } from '@aster-charts/core/hit'
 import type { CursorTracker, SignalBinding } from '@aster-charts/core/signals'
 import type { CanvasCapability, InteractionCapability, PngCapability } from './capabilities.js'
@@ -61,6 +61,9 @@ declare const process: { env: { NODE_ENV?: string } }
 const subscribeNothing = (): (() => void) => () => {}
 const clientOnly = (): boolean => false
 const serverOrHydrating = (): boolean => true
+/** The device pixel ratio (1 on the server and while hydrating, so the markup matches). */
+const devicePixelRatio = (): number => (typeof window !== 'undefined' && window.devicePixelRatio > 0 ? window.devicePixelRatio : 1)
+const serverPixelRatio = (): number => 1
 
 
 // ---------------------------------------------------------------------------
@@ -601,6 +604,7 @@ function ChartView({
   }, [denseRequested, denseMarks, scene])
   const denseSvg = denseAllowed && renderer === 'svg' && (scene != null ? hasDenseSymbolMarks(scene) : false)
   const hydrating = React.useSyncExternalStore(subscribeNothing, clientOnly, serverOrHydrating)
+  const pixelRatio = React.useSyncExternalStore(subscribeNothing, devicePixelRatio, serverPixelRatio)
 
   // One report per evaluation, however often the component re-renders while
   // the same error persists (an inline `onError` must not refire).
@@ -613,7 +617,7 @@ function ChartView({
   // and every unavailable feature is REPORTED, like a rejected `dataChanges` changeset, never silently dead.
   // Types make the props a compile error; this is the net for JS callers and for specs whose event streams
   // are only known after evaluation. Reported through `onError`, else the logger, else the console.
-  const eventStreamsUnbound = interaction == null && interactive && renderer !== 'canvas' && scene != null && hasEventStreams(scene)
+  const eventStreamsUnbound = interaction == null && interactive && scene != null && hasEventStreams(scene)
   const interactionPropsUsed = interaction == null
     ? Object.entries({ tooltip: tooltip === true, renderTooltip, onPointSelect, selection, select, onSelectionChange, preventDefault: preventDefault === true })
       .filter(([, v]) => v !== undefined && v !== false).map(([k]) => k).join(', ')
@@ -876,20 +880,45 @@ function ChartView({
     if (storeOwnerRef.current !== undefined && storeOwnerRef.current !== compiled && Object.keys(dataStore.get()).length) dataStore.set({})
     storeOwnerRef.current = compiled
   }, [scene, dataStore])
-  // Spec-driven signal event loop (SVG only). Rebinds when the DOM, the scene
+  // Spec-driven signal event loop, on the SVG and on the canvas renderer. Rebinds when the DOM, the scene
   // or the signal values change — not on unrelated renders.
   const signalBindingRef = React.useRef<SignalBinding | null>(null)
   /** The most recent binding and the host element whose timers it keeps: they outlive a re-bind and end at unmount (or a new host). */
   const lastBindingRef = React.useRef<{ host: Element | null; release: () => void } | null>(null)
+  /**
+   * The canvas's events (vega's canvas handler: the hovered item, the one a button went down on), for as long as that canvas is
+   * shown: they outlive the bindings, as the canvas does.
+   */
+  const canvasEventsRef = React.useRef<{ canvas: HTMLCanvasElement; events: CanvasEvents } | null>(null)
   const hasSignalListeners = signalListeners != null || onSignal != null
   React.useEffect(() => () => {
     lastBindingRef.current?.release()
     lastBindingRef.current = null
+    canvasEventsRef.current?.events.release()
+    canvasEventsRef.current = null
   }, [])
   React.useLayoutEffect(() => {
-    if (!interactive || !scene || renderer === 'canvas' || interaction == null) return
-    const host = svgHostRef.current
-    const svg = (host?.firstElementChild as SVGSVGElement | null) ?? null
+    // the events of a canvas that is no longer shown (another canvas, or the SVG renderer) are done
+    const shownCanvas = renderer === 'canvas' ? canvasRef.current : null
+    if (canvasEventsRef.current && canvasEventsRef.current.canvas !== shownCanvas) {
+      canvasEventsRef.current.events.release()
+      canvasEventsRef.current = null
+    }
+    if (!interactive || !scene || interaction == null) return
+    // The element the view is drawn in: the svg (its DOM events are about the item under their point), or the canvas, whose
+    // events are resolved as vega's canvas renderer resolves them (see `createCanvasEvents`). The canvas is its own host.
+    let host: Element | null
+    let svg: Element | null
+    let events: CanvasEvents | undefined
+    if (renderer === 'canvas') {
+      if (shownCanvas == null || canvasCap == null) return
+      host = svg = shownCanvas
+      if (canvasEventsRef.current == null) canvasEventsRef.current = { canvas: shownCanvas, events: canvasCap.createCanvasEvents(shownCanvas) }
+      events = canvasEventsRef.current.events
+    } else {
+      host = svgHostRef.current
+      svg = host?.firstElementChild ?? null
+    }
     if (!svg) return
     const signalDefs = (scene as unknown as { compiled?: { signalDefs?: Array<{ on?: unknown[] }> } }).compiled?.signalDefs
     const hasStreams = signalDefs?.some((d) => d.on?.length) ?? false
@@ -912,7 +941,10 @@ function ChartView({
       },
       ...(stableLogger ? { logger: stableLogger } : {}),
       ...(preventDefault != null ? { preventDefault } : {}),
-    }, { pick: (x, y) => hitIndexFor(displayScene ?? scene)?.pick(x, y) ?? null, containerSize: liveContainerSize, ...(inputData ? { data: inputData } : {}), ...(host ? { owner: host } : {}) })
+    }, {
+      pick: (x, y) => hitIndexFor(displayScene ?? scene)?.pick(x, y) ?? null, containerSize: liveContainerSize,
+      ...(inputData ? { data: inputData } : {}), ...(host ? { owner: host } : {}), ...(events ? { events } : {}),
+    })
     signalBindingRef.current = binding
     // a binding on a different host than the last one: the old host's timer streams are done
     const prev = lastBindingRef.current
@@ -922,7 +954,7 @@ function ChartView({
       binding.detach()
       if (signalBindingRef.current === binding) signalBindingRef.current = null
     }
-  }, [interactive, scene, displayScene, renderer, interaction, domMarkup, denseSvg, hasSignalListeners, mergedSignals, signalStore, dataStore, timerEdits, inputData, stableLogger, preventDefault, hitIndexFor, liveContainerSize])
+  }, [interactive, scene, displayScene, renderer, interaction, canvasCap, domMarkup, denseSvg, hasSignalListeners, mergedSignals, signalStore, dataStore, timerEdits, inputData, stableLogger, preventDefault, hitIndexFor, liveContainerSize])
 
   // Canvas backend: size the backing store for devicePixelRatio and redraw the
   // whole scene whenever it changes (cheap relative to SVG serialization for
@@ -1037,11 +1069,11 @@ function ChartView({
   const pointersRef = React.useRef<Map<number, { x: number; y: number }>>(new Map())
   const pinchRef = React.useRef<{ dist: number; cx: number; cy: number } | null>(null)
 
-  // The pointer in the chart's own coordinates (the svg's user space; vega-scenegraph point()), read through the svg's screen
-  // CTM so a CSS-scaled, bordered or transformed chart maps right. Measured once and reused (no layout read per move); forgotten
-  // by `invalidatePointer` on anything that can change it.
+  // The pointer in the chart's own coordinates (the svg's user space, or the canvas's pixels; vega-scenegraph point()), read
+  // through the svg's screen CTM, or the canvas's box past its border, so a CSS-scaled, bordered or transformed chart maps right.
+  // Measured once and reused (no layout read per move); forgotten by `invalidatePointer` on anything that can change it.
   const pointerMapper = React.useMemo(
-    () => createPointMapper(() => svgHostRef.current?.querySelector('svg, canvas') ?? containerRef.current),
+    () => createPointMapper(() => canvasRef.current ?? svgHostRef.current?.querySelector('svg') ?? containerRef.current),
     [],
   )
 
@@ -1534,9 +1566,10 @@ function ChartView({
     getView: () => viewRef.current ?? null,
     setView: (next) => applyViewRef.current(next),
     resetView: () => applyViewRef.current(null),
-    // Portable: with the SVG event loop bound it runs the spec's dependent
-    // signal updates; otherwise (canvas, `interactive={false}`) the value is
-    // applied as a signal override. Listeners are notified either way.
+    // Portable: with the event loop bound (SVG or canvas) it runs the spec's
+    // dependent signal updates; otherwise (`interactive={false}`, `<SvgChart>`
+    // without `interaction`) the value is applied as a signal override.
+    // Listeners are notified either way.
     setSignal: (name, value) => {
       const binding = signalBindingRef.current
       if (binding) {
@@ -1649,7 +1682,10 @@ function ChartView({
           ref={canvasRef}
           data-testid="chart-canvas"
           aria-hidden={a11yTree != null ? true : undefined}
-          style={{ position: 'relative', zIndex: 1, width: scene.width, height: scene.height, display: 'block' }}
+          // (as vega's canvas renderer: at a pixel ratio of 1 the backing store is the canvas's size, and a host's CSS sizes it as it
+          // sizes any image -- `max-width` with `height: auto` keeps its proportions, and the pointer maps by that box; at another
+          // ratio the store is larger and the CSS size says how large the canvas is)
+          style={pixelRatio === 1 ? canvasStyle : { ...canvasStyle, width: scene.width, height: scene.height }}
         />
       ) : (
         <div
@@ -1765,6 +1801,8 @@ const bindsHeight = (el: HTMLElement): number => bindsOf(el)?.getBoundingClientR
 const CONTAINER_FOCUS = Symbol('container')
 /** Where focus is inside a chart: the id of an a11y node, or the container. */
 type FocusSpot = string | typeof CONTAINER_FOCUS
+
+const canvasStyle: React.CSSProperties = { position: 'relative', zIndex: 1, display: 'block' }
 
 const srOnly: React.CSSProperties = {
   position: 'absolute', width: 1, height: 1, padding: 0, margin: -1,

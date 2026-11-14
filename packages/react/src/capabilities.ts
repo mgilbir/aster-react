@@ -1,4 +1,5 @@
 import type {
+  createCanvasEvents,
   loadImages,
   renderSceneToCanvas,
   renderSceneToCanvasAppend,
@@ -19,6 +20,8 @@ import type { tooltipContent } from './tooltip-content.js'
 
 /** The canvas renderer (`@aster-charts/core/canvas`). Only `<Chart>` supplies it. */
 export interface CanvasCapability {
+  /** The canvas's events for the signal event loop: which item each is about, as vega's canvas renderer resolves it. */
+  readonly createCanvasEvents: typeof createCanvasEvents
   readonly renderSceneToCanvas: typeof renderSceneToCanvas
   readonly renderSceneToCanvasAppend: typeof renderSceneToCanvasAppend
   readonly snapshotCanvasScene: typeof snapshotCanvasScene

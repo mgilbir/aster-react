@@ -111,8 +111,10 @@ export interface ChartProps {
    * Rendering backend: `'svg'` (default, SSR-safe) or `'canvas'`. Both render
    * the same scene through the shared geometry engine. Canvas handles
    * devicePixelRatio and redraws on every scene change. The spec-driven signal
-   * event loop (`signal.on` DOM event streams) is SVG-only; tooltips (hit
-   * index), selection brushing, pan/zoom and `ChartHandle.setSignal` work in both.
+   * event loop (`signal.on` event streams, Vega-Lite selections), tooltips (hit
+   * index), selection brushing, pan/zoom and `ChartHandle.setSignal` work in both;
+   * on the canvas an event is about the item the pointer last moved onto, as in
+   * vega's canvas renderer (docs/INTERACTION.md).
    */
   renderer?: 'svg' | 'canvas'
   /**
