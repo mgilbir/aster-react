@@ -372,8 +372,10 @@ export function useChartWorker(spec: VgSpec, options: ChartWorkerOptions & {
   // worker itself cannot see one -- each request hands it a structured clone and it keeps nothing -- and a render with the same
   // arrays posts nothing, so an in-place change would never reach it: the warning says why the chart did not follow)
   // (its owner is this hook's own ref: no hook of its own, nothing in a production build)
-  if (typeof process !== 'undefined') {
+  try {
     if (process.env.NODE_ENV !== 'production') checkChartRows(idRef, localSpec ?? stableSpec, { data })
+  } catch (e) {
+    if (typeof process !== 'undefined') throw e
   }
   const textMetricsRef = React.useRef(textMetrics)
   textMetricsRef.current = textMetrics

@@ -104,8 +104,10 @@ export function detachRows(out: Obj, payloads: RowPayloads): void {
         if (copy === undefined) {
           copies.set(v, (copy = Array.isArray(v) ? v.slice() : { ...v }))
           // (development builds: the chart's watch for rows changed in place looks at the user's array, not at this copy)
-          if (typeof process !== 'undefined') {
+          try {
             if (process.env.NODE_ENV !== 'production' && Array.isArray(v)) registerRowOrigin(copy as unknown[], v)
+          } catch (e) {
+            if (typeof process !== 'undefined') throw e
           }
         }
         ;(node as Record<string | number, unknown>)[k] = copy

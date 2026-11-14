@@ -15,9 +15,22 @@
  * `ownKeys` and `getOwnPropertyDescriptor` traps, never `get`. The cost is O(sample) per dataset, not O(rows), and a change outside
  * the sample (in a field past the first SAMPLE_FIELDS, or a row between the sampled ones, of an array of the same length) is not seen.
  *
- * None of this exists in a production build: every caller sits behind `process.env.NODE_ENV !== 'production'`, which bundlers
- * replace, so the calls, this module and its strings are removed (scripts/check-bundle-shaking.mjs asserts it). Where there is no
- * `process` at all (an unbundled ESM import from a CDN) nothing is checked either.
+ * None of this exists in a production build. Every caller is written
+ *
+ *   try { if (process.env.NODE_ENV !== 'production') check() } catch (e) { if (typeof process !== 'undefined') throw e }
+ *
+ * - Bundlers replace `process.env.NODE_ENV` in development as in production (Vite's dev server and builds, webpack, esbuild's
+ *   `define`), so in a development bundle the check runs even though the page has no `process` object; it must not be gated on
+ *   `typeof process`, which is false there (an earlier form was, and never ran under Vite).
+ * - In a production bundle the test folds to `false` and the whole statement to nothing: the calls, this module and its strings
+ *   are removed (scripts/check-bundle-shaking.mjs asserts it for every documented import pattern). Rollup is the exception when it
+ *   writes a classic script or runs without a minifier: it keeps any call written inside a `try` (its try/catch deoptimization),
+ *   so this module stays in the bundle as dead code behind a `false` guard. No guard both runs under Vite's dev server and leaves
+ *   Rollup nothing to keep: a `typeof process` test is false there, and the plain test throws where there is no `process`.
+ * - Imported unbundled (ES modules from a CDN) there is no `process`: reading it throws a ReferenceError, caught there, so nothing
+ *   is checked. Wherever `process` exists (Node, tests) an error of the check itself is rethrown, not hidden.
+ * scripts/dev-warning-bundlers.test.mjs bundles a real app with the published dist in esbuild's and Vite's development modes and
+ * runs it in a window with no `process`.
  */
 
 import { consoleLogger, type Logger } from './logger.js'

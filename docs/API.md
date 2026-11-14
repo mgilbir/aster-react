@@ -132,10 +132,15 @@ a Proxy row is read through its `ownKeys` and `getOwnPropertyDescriptor` traps, 
 (each request carries a copy, and a render with the same arrays sends nothing), so `useChartWorker` warns on the main
 thread; the worker streams copy each batch as it is posted, so there is nothing to watch.
 
-The warning exists only in development: every check sits behind `process.env.NODE_ENV !== 'production'`, which
-bundlers (Vite, webpack, esbuild, Rollup with the usual replace plugin) replace, so a production build carries none of
-its code and reads no row (`scripts/check-bundle-shaking.mjs` asserts it for every documented import pattern). Where there
-is no `process` at all -- the packages imported unbundled, as ES modules, from a CDN -- nothing is checked either.
+The warning exists only in development builds: it is keyed on `process.env.NODE_ENV`, which bundlers replace (Vite's dev
+server and builds, webpack, esbuild's `define`, Rollup with the usual replace plugin). A development bundle runs it even
+though the page has no `process` object; a production build (`NODE_ENV=production`) carries none of its code and reads no
+row (`scripts/check-bundle-shaking.mjs` asserts it for every documented import pattern; checked by hand with Vite's default
+build, webpack 5, esbuild and Next.js 15). One exception: Rollup keeps a call written inside a `try` -- as the guard is -- when it
+writes a classic script (`iife`) or runs without a minifier, so such a production build carries the check's code as dead code:
+its guard is `false`, so it never runs and reads no row. Imported unbundled -- ES modules
+from a CDN, with no `process` -- nothing is checked, and nothing throws. In Node (SSR, tests) it follows `NODE_ENV` at
+run time.
 (`checkChartRows` and `shareRowWatch`, exported by `@aster-charts/core`, are how the React shells reach the watch. They are
 internal: not part of the supported API, and called only in development builds.)
 

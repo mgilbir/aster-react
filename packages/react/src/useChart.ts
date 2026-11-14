@@ -41,8 +41,10 @@ export function useChart(spec: VgSpec, options: UseChartOptions = {}): UseChartR
   if (sessionRef.current == null) sessionRef.current = createChartSession()
   const session = sessionRef.current
   // (development builds: the rows of a render that re-evaluates nothing are checked for in-place changes too, see row-watch.ts)
-  if (typeof process !== 'undefined') {
+  try {
     if (process.env.NODE_ENV !== 'production') checkChartRows(session, normalized, input)
+  } catch (e) {
+    if (typeof process !== 'undefined') throw e
   }
   // Every `RuntimeInput` field is a dependency. The record below must name each
   // key of `RuntimeInput` (the type makes a missing one a compile error), so a new

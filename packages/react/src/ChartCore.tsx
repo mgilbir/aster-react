@@ -550,8 +550,10 @@ function ChartView({
 
   // (development builds: the rows of a render that re-evaluates nothing -- the same arrays -- are checked for in-place changes too;
   // a stream's scene is the stream's, whose rows its own session checks at each flush)
-  if (typeof process !== 'undefined') {
+  try {
     if (process.env.NODE_ENV !== 'production' && sceneOverride === undefined) checkChartRows(sessionRef.current, spec, { data: inputData, dataChanges, logger: stableLogger })
+  } catch (e) {
+    if (typeof process !== 'undefined') throw e
   }
 
   // Row counts of the previously evaluated `data`, to validate `dataChanges`.
@@ -667,8 +669,10 @@ function ChartView({
       if (baseSessionRef.current == null) {
         baseSessionRef.current = createChartSession()
         // (development builds: the chart's two sessions keep one watch, so an in-place change is reported once)
-        if (typeof process !== 'undefined') {
+        try {
           if (process.env.NODE_ENV !== 'production') shareRowWatch(sessionRef.current!, baseSessionRef.current)
+        } catch (e) {
+          if (typeof process !== 'undefined') throw e
         }
       }
       const baseScene = baseSessionRef.current.evaluate(spec, {

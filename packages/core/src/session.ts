@@ -329,8 +329,10 @@ export function createChartSession(): ChartSession {
     const clock = activeMeter()?.clock ?? createLimitClock(input.limits)
     if (input.limits) checkSpecLimits(spec as unknown as Record<string, unknown>, input.limits, input)
     // (development builds: rows changed in place since the last evaluation are warned about, see row-watch.ts)
-    if (typeof process !== 'undefined') {
+    try {
       if (process.env.NODE_ENV !== 'production') checkChartRows(session, spec, input as never)
+    } catch (e) {
+      if (typeof process !== 'undefined') throw e
     }
     clock.check('compile')
     const skeleton = skeletonOf(spec)
@@ -390,8 +392,10 @@ export function createChartSession(): ChartSession {
     // Start from the data the last evaluation (or change) left behind; the
     // host's `data` overrides win. A datum the host does not mention keeps its
     // current value rather than reverting to the spec's original one.
-    if (typeof process !== 'undefined') {
+    try {
       if (process.env.NODE_ENV !== 'production') checkChartRows(session, lastSpec, input as never)
+    } catch (e) {
+      if (typeof process !== 'undefined') throw e
     }
     const currentRaw = new Map(lastRaw)
     for (const [name, rows] of Object.entries(input.data ?? {})) currentRaw.set(name, rows)
