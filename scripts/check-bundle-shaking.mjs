@@ -307,7 +307,7 @@ const PATTERNS = [
       [/<svg/.test(r.client) && /class="mark-rect/.test(r.client), 'client mount'],
       [/aria-label="[XY]-axis/.test(r.html), 'axis caption'],
     ],
-    modules: (m) => [[hasModule(m.contributing, 'core', 'canvas') && hasModule(m.contributing, 'core', 'hit') && hasModule(m.contributing, 'core', 'signals'), '<Chart> carries the canvas renderer, the hit index and the signal loop (the module check can see them)']],
+    modules: (m) => [[hasModule(m.contributing, 'core', 'canvas') && hasModule(m.contributing, 'core', 'canvas-events') && hasModule(m.contributing, 'core', 'hit') && hasModule(m.contributing, 'core', 'signals'), '<Chart> carries the canvas renderer and its events, the hit index and the signal loop (the module check can see them)']],
   },
   {
     name: 'react-svgchart',
@@ -331,7 +331,7 @@ const PATTERNS = [
       [/<svg/.test(r.streamSvg), 'and still renders'],
     ],
     modules: (m) => [
-      [!hasModule(m.parsed, 'core', 'canvas'), 'the canvas renderer (core/canvas.js) is not even read'],
+      [!hasModule(m.parsed, 'core', 'canvas') && !hasModule(m.parsed, 'core', 'canvas-events'), 'the canvas renderer and its events (core/canvas.js, core/canvas-events.js) are not even read'],
       [!hasModule(m.parsed, 'core', 'hit'), 'the hit index (core/hit.js) is not even read'],
       [!hasModule(m.parsed, 'core', 'signals'), 'the signal event loop (core/signals.js) is not even read'],
       [!hasModule(m.parsed, 'react', 'canvas-capability') && !hasModule(m.parsed, 'react', 'interaction-capability'), 'neither capability module of @aster-charts/react is read'],
@@ -414,7 +414,7 @@ const PATTERNS = [
     ],
     modules: (m) => [
       [hasModule(m.contributing, 'core', 'hit') && hasModule(m.contributing, 'core', 'signals'), 'hit.js and signals.js contribute code'],
-      [!hasModule(m.parsed, 'core', 'canvas') && !hasModule(m.parsed, 'react', 'canvas-capability'), 'the canvas renderer is not even read'],
+      [!hasModule(m.parsed, 'core', 'canvas') && !hasModule(m.parsed, 'core', 'canvas-events') && !hasModule(m.parsed, 'react', 'canvas-capability'), 'the canvas renderer and its events are not even read'],
     ],
   },
   {

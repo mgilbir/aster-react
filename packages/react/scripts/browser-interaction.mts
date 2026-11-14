@@ -9,7 +9,7 @@
  *
  *   - the element under the pointer is the mark (not an overlay),
  *   - tooltips show,
- *   - `signal.on` mark events fire (and the scene hit index sees the same click),
+ *   - `signal.on` mark events fire (and the scene hit index sees the same click), on the SVG and the canvas renderer,
  *   - bound inputs (range / select / checkbox) can be operated and notify listeners,
  *   - brushing, drag-pan, wheel-zoom and their pointer capture still work,
  *   - a11y nodes are positioned over the marks they describe (padding included),
@@ -21,7 +21,8 @@
  *
  * Every check runs against both components, each bundled on its own (so the light one is the real light bundle):
  * `<Chart>` from the package entry, and `<SvgChart interaction={interaction}>` from `@aster-charts/react/lite` +
- * `@aster-charts/react/interaction`. A third pass covers `<SvgChart>` WITHOUT interaction: it renders, it works for what
+ * `@aster-charts/react/interaction`; on `<Chart>` the interaction checks run again on `renderer="canvas"`, where the marks,
+ * having no element, are found from the scene and the pointer maps as vega maps it onto a canvas. A third pass covers `<SvgChart>` WITHOUT interaction: it renders, it works for what
  * needs no hit testing (pan/zoom, brush), and an event-stream spec reports the documented error instead of going
  * silently dead. The light bundles are asserted (esbuild metafile) not to contain the canvas renderer, and the one
  * without `interaction` not to contain the hit index or the signal loop either.
@@ -71,6 +72,40 @@ import { flushSync } from 'react-dom'
 ${imports}
 
 window.__log = []
+// A point of the view (padding included) in client coordinates, whatever renders it: through the svg's screen CTM, or onto a
+// canvas as vega-scenegraph's point() reads one (its bounding box, unscaled by its layout size, past its border).
+window.__toClient = (vx, vy) => {
+  const host = document.getElementById('chart-host')
+  const canvas = host.querySelector('canvas')
+  if (canvas) {
+    const r = canvas.getBoundingClientRect()
+    const sx = canvas.offsetWidth ? r.width / canvas.offsetWidth : 1
+    const sy = canvas.offsetHeight ? r.height / canvas.offsetHeight : 1
+    return { x: r.left + (vx + canvas.clientLeft) * sx, y: r.top + (vy + canvas.clientTop) * sy }
+  }
+  const p = new DOMPoint(vx, vy).matrixTransform(host.querySelector('svg').getScreenCTM())
+  return { x: p.x, y: p.y }
+}
+// The centre of the i-th item of the top-level marks of a type: its element on the SVG renderer, from the scene on the canvas.
+window.__markCenter = (marktype, i) => {
+  const host = document.getElementById('chart-host')
+  if (!host.querySelector('canvas')) {
+    const r = host.querySelectorAll('svg .mark-' + marktype + ' path')[i].getBoundingClientRect()
+    return { x: r.left + r.width / 2, y: r.top + r.height / 2 }
+  }
+  const scene = window.__ref.current.getScene()
+  const items = []
+  for (const n of scene.items) if (n.marktype === marktype && Array.isArray(n.items)) items.push(...n.items)
+  const it = items[i]
+  const pad = scene.padding || { left: 0, top: 0 }
+  return window.__toClient(pad.left + it.x + (marktype === 'rect' ? it.width / 2 : 0), pad.top + it.y + (marktype === 'rect' ? it.height / 2 : 0))
+}
+// What the chart shows: its svg markup, or the canvas's pixels (after the frame it paints in)
+window.__picture = () => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(() => {
+  const host = document.getElementById('chart-host')
+  const canvas = host.querySelector('canvas')
+  done(canvas ? canvas.toDataURL() : host.querySelector('svg').outerHTML)
+})))
 const rec = (name) => (...args) => { window.__log.push({ name, args: JSON.parse(JSON.stringify(args.map((a) => (a instanceof Error ? a.message : a)))) }) }
 window.__mount = (spec, props, record, listen, hostCss) => {
   const host = document.getElementById('root')
@@ -156,12 +191,17 @@ const check = (ok: boolean, message: string): void => {
 }
 
 interface Pt { x: number; y: number }
-const markCenter = (page: Page, index: number): Promise<Pt> => page.evaluate((i) => {
-  const r = document.querySelectorAll('svg .mark-symbol path')[i]!.getBoundingClientRect()
-  return { x: r.left + r.width / 2, y: r.top + r.height / 2 }
-}, index)
+type Renderer = 'svg' | 'canvas'
+/** The centre of the i-th item of the top-level marks of a type (symbols by default), on either renderer. */
+const markCenter = (page: Page, index: number, marktype = 'symbol'): Promise<Pt> =>
+  page.evaluate(([t, i]) => (window as never as { __markCenter: (t: string, i: number) => Pt }).__markCenter(t, i), [marktype, index] as const)
+/** A view point (padding included) in client coordinates, on either renderer. */
+const toClient = (page: Page, vx: number, vy: number): Promise<Pt> =>
+  page.evaluate(([x, y]) => (window as never as { __toClient: (x: number, y: number) => Pt }).__toClient(x, y), [vx, vy] as const)
+/** What the chart shows now (svg markup, or the canvas's pixels as a data URL). */
+const picture = (page: Page): Promise<string> => page.evaluate(() => (window as never as { __picture: () => Promise<string> }).__picture())
 const log = (page: Page): Promise<Array<{ name: string; args: unknown[] }>> => page.evaluate(() => (window as never as { __log: Array<{ name: string; args: unknown[] }> }).__log)
-const mount = async (page: Page, s: Record<string, unknown>, props: Record<string, unknown>, record: string[] = [], listen: string[] = []): Promise<void> => {
+const mountChart = async (page: Page, s: Record<string, unknown>, props: Record<string, unknown>, record: string[] = [], listen: string[] = []): Promise<void> => {
   await page.evaluate(([sp, pr, rc, ls]) => (window as never as { __mount: (...a: unknown[]) => void }).__mount(sp, pr, rc, ls), [s, props, record, listen] as const)
   await page.waitForSelector(props.renderer === 'canvas' ? '#chart-host canvas' : 'svg .mark-symbol path')
 }
@@ -192,8 +232,9 @@ const tabStopsPerChart = (page: Page): Promise<number[]> => page.evaluate(() => 
 const press = async (page: Page, key: string, times = 1): Promise<void> => { for (let i = 0; i < times; i++) await page.keyboard.press(key) }
 
 /** A chart is one tab stop: the real Tab key through a page of charts, in every configuration (it used to be two stops per chart). */
-async function tabStopSuite(page: Page): Promise<void> {
-  const base = { width: 400, height: 240 }
+async function tabStopSuite(page: Page, renderer: Renderer): Promise<void> {
+  const base = { width: 400, height: 240, ...(renderer === 'canvas' ? { renderer } : {}) }
+  const tag = renderer === 'canvas' ? ' (canvas)' : ''
   const items = (): Array<{ spec: Record<string, unknown>; props: Record<string, unknown> }> => [
     { spec: spec({ signals: [] }), props: { ...base } },
     { spec: spec({ signals: [] }), props: { ...base, panZoom: true } },
@@ -203,9 +244,9 @@ async function tabStopSuite(page: Page): Promise<void> {
   const run = (mountAgain: boolean, its: ReturnType<typeof items>): Promise<void> =>
     page.evaluate(([a, again]) => (window as never as { __page: (...x: unknown[]) => void }).__page(a, again), [its, mountAgain] as const)
 
-  console.log('[tab] a page of four charts: Tab visits exactly one element per chart')
+  console.log(`[tab] a page of four charts: Tab visits exactly one element per chart${tag}`)
   await run(false, items())
-  await page.waitForSelector('svg .mark-symbol path')
+  await page.waitForSelector(renderer === 'canvas' ? '[data-slot] canvas' : 'svg .mark-symbol path')
   check((await tabStopsPerChart(page)).every((n) => n === 1), `one element per chart is in the tab order (${JSON.stringify(await tabStopsPerChart(page))})`)
   await page.focus('#before')
   const seen: string[] = []
@@ -217,7 +258,7 @@ async function tabStopSuite(page: Page): Promise<void> {
   for (let i = 0; i < 4; i++) { await page.keyboard.press('Shift+Tab'); back.push(await focusSpot(page)) }
   check(JSON.stringify(back) === JSON.stringify(['chart3:container', 'chart2:node', 'chart1:container', 'chart0:node']), `Shift+Tab walks back one stop per chart (${JSON.stringify(back)})`)
 
-  console.log('[tab] pan/zoom: the container takes the pan/zoom keys; PageDown enters the nodes, arrows rove, Tab leaves')
+  console.log(`[tab] pan/zoom: the container takes the pan/zoom keys; PageDown enters the nodes, arrows rove, Tab leaves${tag}`)
   await page.focus('#before')
   await press(page, 'Tab', 2)
   check(await focusSpot(page) === 'chart1:container', `the zoomable chart is focused as a container (${await focusSpot(page)})`)
@@ -232,7 +273,7 @@ async function tabStopSuite(page: Page): Promise<void> {
   await page.keyboard.press('Tab')
   check(await focusSpot(page) === 'chart2:node', `Tab from a node leaves the chart (${await focusSpot(page)})`)
 
-  console.log('[tab] re-render, resize and spec swap keep one stop and never drop focus')
+  console.log(`[tab] re-render, resize and spec swap keep one stop and never drop focus${tag}`)
   await page.focus('#before')
   await press(page, 'Tab', 2)
   await page.keyboard.press('PageDown')
@@ -253,7 +294,7 @@ async function tabStopSuite(page: Page): Promise<void> {
   check((await tabStopsPerChart(page)).every((n) => n === 1), `pan/zoom off: roving mark stop, one per chart (${JSON.stringify(await tabStopsPerChart(page))})`)
   await run(true, swapped)
   check((await tabStopsPerChart(page)).every((n) => n === 1), `pan/zoom on again: one per chart (${JSON.stringify(await tabStopsPerChart(page))})`)
-  console.log('[tab] a click on the page body is not undone by a re-render')
+  console.log(`[tab] a click on the page body is not undone by a re-render${tag}`)
   await page.focus('#before')
   await press(page, 'Tab', 2)
   await page.mouse.click(690, 5)
@@ -263,8 +304,13 @@ async function tabStopSuite(page: Page): Promise<void> {
   check(await focusSpot(page) === 'body', `a deliberate click elsewhere keeps focus off the chart (${await focusSpot(page)})`)
 }
 
-/** Every interaction check, against whichever component the page was bundled with. */
-async function suite(page: Page): Promise<void> {
+/** Every interaction check, against whichever component the page was bundled with, on one renderer. */
+async function suite(page: Page, renderer: Renderer): Promise<void> {
+  // (`renderer` is passed only for the canvas: `<SvgChart>` has no such prop)
+  const R: Record<string, unknown> = renderer === 'canvas' ? { renderer } : {}
+  const tag = renderer === 'canvas' ? ' (canvas)' : ''
+  const mount = (p: Page, s: Record<string, unknown>, props: Record<string, unknown>, record: string[] = [], listen: string[] = []): Promise<void> =>
+    mountChart(p, s, { ...props, ...R }, record, listen)
   // ---- 1. marks stay reachable with every interaction prop --------------------------------
   const variants: Array<[string, Record<string, unknown>, string[]]> = [
     ['onSelect', {}, ['onSelect']],
@@ -278,14 +324,14 @@ async function suite(page: Page): Promise<void> {
     ['everything', { panZoom: true }, ['onSelect', 'onPointSelect', 'onSelectionChange', 'onViewChange']],
   ]
   for (const [label, props, record] of variants) {
-    console.log(`[reach] ${label}`)
+    console.log(`[reach] ${label}${tag}`)
     await mount(page, spec(), { width: 400, height: 240, tooltip: true, ...props }, record)
     const c = await markCenter(page, 1)
     const hit = await page.evaluate(({ x, y }) => {
       const el = document.elementFromPoint(x, y)
-      return { inSvg: el?.closest('svg') != null, tag: el?.tagName, overlay: el?.closest('[data-testid="chart-brush-overlay"]') != null }
+      return { inChart: el?.closest('svg') != null || el?.tagName === 'CANVAS', tag: el?.tagName, overlay: el?.closest('[data-testid="chart-brush-overlay"]') != null }
     }, c)
-    check(hit.inSvg && !hit.overlay, `element under the pointer is the mark (got <${hit.tag}>, overlay=${hit.overlay})`)
+    check(hit.inChart && !hit.overlay, `element under the pointer is the mark${renderer === 'canvas' ? "'s canvas" : ''} (got <${hit.tag}>, overlay=${hit.overlay})`)
     await page.mouse.move(c.x, c.y)
     await page.waitForTimeout(30)
     const tip = await page.locator('[data-testid="chart-tooltip"]').textContent({ timeout: 500 }).catch(() => null)
@@ -293,7 +339,7 @@ async function suite(page: Page): Promise<void> {
   }
 
   // ---- 2. signal.on mark events + hit-index click ----------------------------------------
-  console.log('[signal.on] click on a mark with onSelect/onPointSelect set')
+  console.log(`[signal.on] click on a mark with onSelect/onPointSelect set${tag}`)
   await mount(page, spec(), { width: 400, height: 240, panZoom: true }, ['onSelect', 'onPointSelect'], ['picked'])
   const c = await markCenter(page, 2)
   await page.mouse.click(c.x, c.y)
@@ -306,7 +352,7 @@ async function suite(page: Page): Promise<void> {
   check(!entries.some((e) => e.name === 'onSelect' && e.args[0] !== null), 'a click is not reported as an interval')
 
   // ---- 2b. mark-scoped selectors resolve through the scene hit index (no tooltip, so no data-datum stamps) ---
-  console.log('[signal.on] @name:click, symbol:click, rect:click and click[filter] in <Chart>')
+  console.log(`[signal.on] @name:click, symbol:click, rect:click and click[filter] in <Chart>${tag}`)
   const scoped = spec({
     signals: [
       { name: 'byName', value: 'none', on: [{ events: '@dots:click', update: 'datum.cat' }] },
@@ -329,10 +375,7 @@ async function suite(page: Page): Promise<void> {
   await page.waitForTimeout(30)
   await page.mouse.click(dot.x, dot.y)
   await page.waitForTimeout(30)
-  const bar = await page.evaluate(() => {
-    const r = document.querySelector('svg .mark-rect path')!.getBoundingClientRect()
-    return { x: r.left + r.width / 2, y: r.top + r.height / 2 }
-  })
+  const bar = await markCenter(page, 0, 'rect')
   await page.mouse.click(bar.x, bar.y)
   await page.keyboard.down('Shift')
   await page.mouse.click(bar.x, bar.y)
@@ -350,57 +393,73 @@ async function suite(page: Page): Promise<void> {
   // ---- 2c. the pointer maps to view units whatever the host does to the svg ----------------------------------
   // (vega-scenegraph point(): the inverse of the svg's screen CTM; the oracle here is the browser's own DOMMatrix inverse, so
   // agreement is to a thousandth of a pixel; exact agreement with vega is the selections gate's)
-  console.log('[pointer] x() / y() in a CSS-scaled, bordered, transformed svg')
+  // (on the canvas the oracle is vega-scenegraph's point() for an element without a screen CTM: its bounding box, unscaled by its
+  // layout size, past its border. A canvas sized down by CSS (max-width) is read in CSS pixels by it, as by vega: the case runs)
+  console.log(`[pointer] x() / y() in a CSS-scaled, bordered, transformed ${renderer}`)
   const pointerSpec = spec({ signals: [{ name: 'at', value: null, on: [{ events: 'pointermove', update: '[x(), y()]' }] }] })
+  const el = `#chart-host ${renderer}`
   for (const [label, css] of [
     ['unstyled', ''],
-    ['max-width (scaled by its viewBox)', '#chart-host svg { max-width: 300px; height: auto }'],
-    ['bordered and padded svg', '#chart-host svg { border: 7px solid #888; padding: 11px }'],
+    ['max-width', `${el} { max-width: 300px; height: auto }`],
+    [`bordered and padded ${renderer}`, `${el} { border: 7px solid #888; padding: 11px }`],
     ['under a CSS transform', '#chart-host { transform: scale(0.75); transform-origin: 20px 10px }'],
   ] as const) {
     await mount(page, pointerSpec, { width: 400, height: 240 }, [], ['at'])
     await page.evaluate((c) => { let st = document.getElementById('host-css'); if (!st) { st = document.createElement('style'); st.id = 'host-css'; document.head.appendChild(st) } st.textContent = c }, css)
-    const pbox0 = await page.evaluate(() => { const r = document.querySelector('#chart-host svg')!.getBoundingClientRect(); return { x: r.left, y: r.top, w: r.width, h: r.height } })
+    const pbox0 = await page.evaluate((sel) => { const r = document.querySelector(sel)!.getBoundingClientRect(); return { x: r.left, y: r.top, w: r.width, h: r.height } }, el)
     for (const [fx, fy] of [[0.3, 0.4], [0.8, 0.7]] as const) {
       const cx = pbox0.x + fx * pbox0.w
       const cy = pbox0.y + fy * pbox0.h
       await page.mouse.move(cx, cy)
       await page.waitForTimeout(30)
-      const expected = await page.evaluate(({ cx, cy }) => {
-        const svg = document.querySelector('#chart-host svg') as unknown as SVGSVGElement
-        const p = new DOMPoint(cx, cy).matrixTransform(svg.getScreenCTM()!.inverse())
+      const expected = await page.evaluate(({ cx, cy, sel }) => {
+        const node = document.querySelector(sel) as HTMLElement
+        if (node.tagName === 'CANVAS') {
+          const r = node.getBoundingClientRect()
+          const sx = node.offsetWidth ? r.width / node.offsetWidth : 1
+          const sy = node.offsetHeight ? r.height / node.offsetHeight : 1
+          return [(cx - r.left) / sx - node.clientLeft - 30, (cy - r.top) / sy - node.clientTop - 30]
+        }
+        const p = new DOMPoint(cx, cy).matrixTransform((node as unknown as SVGSVGElement).getScreenCTM()!.inverse())
         return [p.x - 30, p.y - 30]
-      }, { cx, cy })
+      }, { cx, cy, sel: el })
       const got = (await log(page)).filter((e) => e.name === 'signal:at').at(-1)?.args[1] as number[] | undefined
-      check(got != null && Math.abs(got[0]! - expected[0]!) < 1e-3 && Math.abs(got[1]! - expected[1]!) < 1e-3, `${label}: x(), y() at (${fx}, ${fy}) of the svg are ${JSON.stringify(expected.map((v) => +v.toFixed(3)))} (got ${JSON.stringify(got?.map((v) => +v.toFixed(3)))})`)
+      check(got != null && Math.abs(got[0]! - expected[0]!) < 1e-3 && Math.abs(got[1]! - expected[1]!) < 1e-3, `${label}: x(), y() at (${fx}, ${fy}) of the ${renderer} are ${JSON.stringify(expected.map((v) => +v.toFixed(3)))} (got ${JSON.stringify(got?.map((v) => +v.toFixed(3)))})`)
     }
   }
 
   // ---- 2d. tooltip and pan/zoom in a CSS-scaled / transformed svg ---------------------------------------------
   // (they read the pointer in the chart's own units, not in the container's pixels)
-  console.log('[host css] tooltip finds the hovered mark, drag-pan moves by the right amount')
+  console.log(`[host css] tooltip finds the hovered mark, drag-pan moves by the right amount${tag}`)
   const setCss = (css: string): Promise<void> => page.evaluate((c) => { let st = document.getElementById('host-css'); if (!st) { st = document.createElement('style'); st.id = 'host-css'; document.head.appendChild(st) } st.textContent = c }, css)
-  for (const [label, css] of [
+  // (a canvas sized down by CSS is read in CSS pixels, by vega as by Aster, so the marks are not where the pointer lands on it:
+  // the canvas takes a CSS transform and a border instead)
+  for (const [label, css] of renderer === 'canvas' ? [
+    ['bordered canvas', '#chart-host canvas { border: 9px solid #888 }'],
+    ['CSS transform', '#chart-host { transform: scale(0.7); transform-origin: 30px 20px }'],
+  ] as const : [
     ['max-width', '#chart-host svg { max-width: 300px; height: auto }'],
     ['CSS transform', '#chart-host { transform: scale(0.7); transform-origin: 30px 20px }'],
   ] as const) {
-    // (batched svg marks: >= 512 symbols in one mark, so the tooltip resolves through the scene hit index, queryMark)
+    // (batched svg marks: >= 512 symbols in one mark, so the tooltip resolves through the scene hit index, queryMark; the canvas
+    // renderer has no such mode, it batches its own paint)
     const dense = spec({ signals: [], data: [{ name: 't', values: [{ px: 8, py: 8, cat: 'c' }, ...Array.from({ length: 600 }, (_, i) => ({ px: 0.2 + (i % 5) * 0.05, py: 0.2, cat: 'z' + i }))] }] })
     await mount(page, dense, { width: 400, height: 240, tooltip: true, denseMarks: true }, [])
-    await page.waitForSelector('#chart-host svg')
+    await page.waitForSelector(`#chart-host ${renderer}`)
     await setCss(css)
-    const at = await page.evaluate(() => {
-      const svg = document.querySelector('#chart-host svg') as unknown as SVGSVGElement
-      // (x: 8 of [0, 10] over 400 units, y: 8 of [0, 10] over 240 units, upwards; the padding is 30)
-      return new DOMPoint(30 + 0.8 * 400, 30 + 0.2 * 240).matrixTransform(svg.getScreenCTM()!)
-    })
+    // (x: 8 of [0, 10] over 400 units, y: 8 of [0, 10] over 240 units, upwards; the padding is 30)
+    const at = await toClient(page, 30 + 0.8 * 400, 30 + 0.2 * 240)
     await page.mouse.move(at.x, at.y)
     await page.waitForTimeout(40)
     const tip2 = await page.locator('[data-testid="chart-tooltip"]').textContent({ timeout: 500 }).catch(() => null)
     check(tip2 != null && tip2.includes('cat') && tip2.includes('c'), `${label}: the tooltip over a mark shows that mark (${JSON.stringify(tip2)})`)
     await mount(page, spec({ signals: [] }), { width: 400, height: 240, pan: true }, ['onViewChange'])
     await setCss(css)
-    const sc = await page.evaluate(() => { const svg = document.querySelector('#chart-host svg') as unknown as SVGSVGElement; return svg.getScreenCTM()!.a })
+    const sc = await page.evaluate(() => {
+      const c = document.querySelector('#chart-host canvas') as HTMLCanvasElement | null
+      if (c) return c.getBoundingClientRect().width / c.offsetWidth
+      return (document.querySelector('#chart-host svg') as unknown as SVGSVGElement).getScreenCTM()!.a
+    })
     const pb = await page.locator('#chart-host').boundingBox()
     await page.mouse.move(pb!.x + 100, pb!.y + 100)
     await page.mouse.down()
@@ -415,9 +474,9 @@ async function suite(page: Page): Promise<void> {
   await page.evaluate(() => { document.getElementById('host-css')?.remove() })
 
   // ---- 3. bound inputs ----------------------------------------------------------------------
-  console.log('[binds] range / select / checkbox with brush + pan/zoom enabled')
+  console.log(`[binds] range / select / checkbox with brush + pan/zoom enabled${tag}`)
   await mount(page, spec(), { width: 400, height: 240, panZoom: true }, ['onSelect', 'onPointSelect'], ['size', 'mode', 'show'])
-  const sizeBefore = await page.evaluate(() => document.querySelector('svg .mark-symbol path')!.getAttribute('d'))
+  const sizeBefore = await picture(page)
   await page.locator('input[type="range"]').fill('700')
   await page.locator('select').selectOption({ index: 2 })
   await page.locator('input[type="checkbox"]').click()
@@ -427,12 +486,12 @@ async function suite(page: Page): Promise<void> {
   check(sig('size').includes(700), `range input notified listeners (${JSON.stringify(sig('size'))})`)
   check(sig('mode').includes(3), `select keeps the numeric option value (${JSON.stringify(sig('mode'))})`)
   check(sig('show').includes(false), `checkbox notified listeners (${JSON.stringify(sig('show'))})`)
-  const sizeAfter = await page.evaluate(() => document.querySelector('svg .mark-symbol path')!.getAttribute('d'))
+  const sizeAfter = await picture(page)
   check(sizeBefore !== sizeAfter, 'the chart re-rendered with the new signal values')
   check(!entries.some((e) => e.name === 'onSelect' || e.name === 'onPointSelect'), 'operating the inputs did not start a brush/click gesture on the chart')
 
   // ---- 4. brush ---------------------------------------------------------------------------------
-  console.log('[brush] drag selects an interval on xscale/yscale')
+  console.log(`[brush] drag selects an interval on xscale/yscale${tag}`)
   await mount(page, spec({ signals: [] }), { width: 400, height: 240 }, ['onSelect', 'onSelectionChange'])
   const box = await page.locator('#chart-host').boundingBox()
   await page.mouse.move(box!.x + 80, box!.y + 60)
@@ -449,7 +508,7 @@ async function suite(page: Page): Promise<void> {
   check(interval != null && interval.x != null && interval.y != null && interval.x[1]! > interval.x[0]!, `onSelect interval on named scales (${JSON.stringify(interval)})`)
 
   // ---- 5. pan / zoom --------------------------------------------------------------------------
-  console.log('[pan/zoom] named scales; pointer capture; no stuck gesture')
+  console.log(`[pan/zoom] named scales; pointer capture; no stuck gesture${tag}`)
   await mount(page, spec({ signals: [] }), { width: 400, height: 240, panZoom: true }, ['onViewChange'])
   const pbox = await page.locator('#chart-host').boundingBox()
   await page.mouse.move(pbox!.x + 150, pbox!.y + 100)
@@ -472,22 +531,22 @@ async function suite(page: Page): Promise<void> {
   check(stuck === 0, 'releasing the button outside the chart does not leave a gesture stuck on')
 
   // ---- 6. a11y nodes sit on their marks (padding included) ------------------------
-  console.log('[a11y] nodes overlay the rendered marks')
+  console.log(`[a11y] nodes overlay the rendered marks${tag}`)
   await mount(page, spec({ signals: [] }), { width: 400, height: 240 })
-  const offsets = await page.evaluate(() => {
-    const marks = [...document.querySelectorAll('svg .mark-symbol path')].map((p) => p.getBoundingClientRect())
+  const marks = [await markCenter(page, 0), await markCenter(page, 1), await markCenter(page, 2)]
+  const offsets = await page.evaluate((ms) => {
     const nodes = [...document.querySelectorAll('[data-a11y-kind="mark"]')].map((n) => n.getBoundingClientRect())
-    return marks.map((m, i) => {
+    return ms.map((m, i) => {
       const n = nodes[i]!
-      return Math.hypot((m.left + m.width / 2) - (n.left + n.width / 2), (m.top + m.height / 2) - (n.top + n.height / 2))
+      return Math.hypot(m.x - (n.left + n.width / 2), m.y - (n.top + n.height / 2))
     })
-  })
+  }, marks)
   check(offsets.length === 3 && offsets.every((d) => d < 4), `a11y mark nodes are centred on their symbols (offsets ${offsets.map((d) => d.toFixed(1)).join(', ')} px)`)
   const stops = await page.evaluate(() => [...document.querySelectorAll('[data-a11y-id]')].filter((n) => (n as HTMLElement).tabIndex >= 0).length)
   check(stops === 1, `exactly one a11y tab stop (${stops})`)
 
   // ---- 7. a11y roving focus and keyboard selection ---------------------------------------------
-  console.log('[a11y] roving tabindex, PageDown/ArrowRight move focus, Enter selects, Escape clears')
+  console.log(`[a11y] roving tabindex, PageDown/ArrowRight move focus, Enter selects, Escape clears${tag}`)
   await mount(page, spec({ signals: [] }), { width: 400, height: 240 }, ['onPointSelect', 'onSelectionChange'])
   const firstNode = await page.evaluate(() => {
     const n = [...document.querySelectorAll('[data-a11y-id]')].find((e) => (e as HTMLElement).tabIndex >= 0) as HTMLElement
@@ -514,7 +573,7 @@ async function suite(page: Page): Promise<void> {
   check(entries.filter((e) => e.name === 'onSelectionChange').at(-1)?.args[0] === null, 'Escape clears the selection')
 
   // ---- 8. selection values -------------------------------------------------------------------
-  console.log('[selection] a click reports a point, a drag an interval, both through onSelectionChange')
+  console.log(`[selection] a click reports a point, a drag an interval, both through onSelectionChange${tag}`)
   await mount(page, spec({ signals: [] }), { width: 400, height: 240 }, ['onSelectionChange'])
   const bx = await page.locator('#chart-host').boundingBox()
   const m0 = await markCenter(page, 0)
@@ -536,7 +595,7 @@ async function suite(page: Page): Promise<void> {
   // vega's view prevents the default action of the view events a stream listens to (all but `wheel`, config.events.defaults
   // {allow: ['wheel']}). Without it the drag of an interval brush also drags a text selection over the axis labels and the
   // page around the chart, and a mouse wheel over a chart that does not zoom must still scroll the page.
-  console.log('[default actions] an interval-selection drag selects no text; a wheel over a non-zoomable chart scrolls the page')
+  console.log(`[default actions] an interval-selection drag selects no text; a wheel over a non-zoomable chart scrolls the page${tag}`)
   const brushSpec = compileVl({
     $schema: 'https://vega.github.io/schema/vega-lite/v5.json',
     width: 300, height: 160,
@@ -622,7 +681,7 @@ async function cursorSuite(page: Page, renderers: Array<'svg' | 'canvas'>): Prom
   } as never) as Record<string, unknown>
   const cursorOf = (): Promise<string> => page.evaluate(() => getComputedStyle(document.querySelector('#chart-host > div')!).cursor)
   // where the legend's parts are, measured on the SVG rendition (the canvas has no elements to measure)
-  await mount(page, legendSpec, { width: 520, height: 240 })
+  await mountChart(page, legendSpec, { width: 520, height: 240 })
   // (no named inner functions: the page function is serialized, and a bundler's name helper would not exist there)
   const parts = await page.evaluate(() => {
     const symbol = document.querySelectorAll('svg .role-legend-symbol path')[1]!.getBoundingClientRect()
@@ -638,7 +697,7 @@ async function cursorSuite(page: Page, renderers: Array<'svg' | 'canvas'>): Prom
   })
   for (const renderer of renderers) {
     console.log(`[cursor] a legend-bound selection shows the pointer over the legend and not off it (${renderer})`)
-    await mount(page, legendSpec, { width: 520, height: 240, renderer })
+    await mountChart(page, legendSpec, { width: 520, height: 240, renderer })
     await page.mouse.move(parts.plain.x, parts.plain.y)
     check((await cursorOf()) === 'default', `${renderer}: off the legend the cursor is the default (${await cursorOf()})`)
     for (const [what, pt] of [['symbol', parts.symbol], ['label', parts.label], ['entry', parts.entry]] as const) {
@@ -664,13 +723,13 @@ async function cursorSuite(page: Page, renderers: Array<'svg' | 'canvas'>): Prom
   for (const [name, setup] of layouts) {
     await page.evaluate(setup)
     for (const renderer of renderers) {
-      await mount(page, legendSpec, { width: 520, height: 240 })
+      await mountChart(page, legendSpec, { width: 520, height: 240 })
       const at = await page.evaluate(() => {
         const sym = document.querySelectorAll('svg .role-legend-symbol path')[1]!.getBoundingClientRect()
         const host = document.querySelector('#chart-host')!.getBoundingClientRect()
         return { sx: sym.left + sym.width / 2, sy: sym.top + sym.height / 2, hx: host.left + 8, hy: host.top + 8 }
       })
-      await mount(page, legendSpec, { width: 520, height: 240, renderer })
+      await mountChart(page, legendSpec, { width: 520, height: 240, renderer })
       await page.mouse.move(at.hx, at.hy)
       check((await cursorOf()) === 'default', `${renderer}, ${name}: off the legend the cursor is the default (${await cursorOf()})`)
       await page.mouse.move(at.sx, at.sy)
@@ -740,7 +799,7 @@ const mount2 = async (page: Page, s: Record<string, unknown>, props: Record<stri
 /** `<SvgChart>` without `interaction`: renders, keeps what needs no hit testing, reports the rest. */
 async function plainSuite(page: Page): Promise<void> {
   console.log('[SvgChart without interaction] renders, brushes and zooms; reports what it cannot do')
-  await mount(page, spec({ signals: [] }), { width: 400, height: 240, panZoom: true }, ['onSelect', 'onViewChange'])
+  await mountChart(page, spec({ signals: [] }), { width: 400, height: 240, panZoom: true }, ['onSelect', 'onViewChange'])
   const c = await markCenter(page, 1)
   const hit = await page.evaluate(({ x, y }) => document.elementFromPoint(x, y)?.closest('svg') != null, c)
   check(hit, 'the marks are reachable')
@@ -759,7 +818,7 @@ async function plainSuite(page: Page): Promise<void> {
   check(interval != null && interval.x != null, `interval brush (onSelect) works without interaction (${JSON.stringify(interval)})`)
 
   const streams = spec({ signals: [{ name: 'picked', value: null, on: [{ events: 'click', update: 'datum.cat' }] }] })
-  await mount(page, streams, { width: 400, height: 240 }, ['onError'])
+  await mountChart(page, streams, { width: 400, height: 240 }, ['onError'])
   const rendered = await page.evaluate(() => document.querySelectorAll('svg .mark-symbol path').length)
   check(rendered === 3, 'an event-stream spec still renders its marks')
   entries = await log(page)
@@ -770,8 +829,8 @@ async function plainSuite(page: Page): Promise<void> {
 }
 
 const MODULES: Record<VariantName, Array<[RegExp, boolean, string]>> = {
-  Chart: [[/core\/dist\/canvas\.js$/, true, 'the canvas renderer'], [/core\/dist\/hit\.js$/, true, 'the hit index'], [/core\/dist\/signals\.js$/, true, 'the signal loop']],
-  'SvgChart+interaction': [[/core\/dist\/canvas\.js$/, false, 'the canvas renderer'], [/src\/canvas-capability\.ts$/, false, 'the canvas capability'], [/core\/dist\/hit\.js$/, true, 'the hit index'], [/core\/dist\/signals\.js$/, true, 'the signal loop']],
+  Chart: [[/core\/dist\/canvas\.js$/, true, 'the canvas renderer'], [/core\/dist\/canvas-events\.js$/, true, 'the canvas events'], [/core\/dist\/hit\.js$/, true, 'the hit index'], [/core\/dist\/signals\.js$/, true, 'the signal loop']],
+  'SvgChart+interaction': [[/core\/dist\/canvas\.js$/, false, 'the canvas renderer'], [/core\/dist\/canvas-events\.js$/, false, 'the canvas events'], [/src\/canvas-capability\.ts$/, false, 'the canvas capability'], [/core\/dist\/hit\.js$/, true, 'the hit index'], [/core\/dist\/signals\.js$/, true, 'the signal loop']],
   SvgChart: [[/core\/dist\/canvas\.js$/, false, 'the canvas renderer'], [/src\/canvas-capability\.ts$/, false, 'the canvas capability'], [/core\/dist\/hit\.js$/, false, 'the hit index'], [/core\/dist\/signals\.js$/, false, 'the signal loop'], [/src\/interaction-capability\.ts$/, false, 'the interaction capability'], [/core\/dist\/png\.js$/, false, 'the PNG painter']],
   // asked for: the PNG painter and the canvas renderer it paints with (a bundler that splits code fetches them on the first export)
   'SvgChart+png': [[/core\/dist\/png\.js$/, true, 'the PNG painter'], [/core\/dist\/canvas\.js$/, true, 'the canvas renderer'], [/src\/canvas-capability\.ts$/, false, 'the canvas capability'], [/core\/dist\/hit\.js$/, false, 'the hit index'], [/core\/dist\/signals\.js$/, false, 'the signal loop']],
@@ -1001,7 +1060,14 @@ try {
     await page.addScriptTag({ content: code })
     await sizingSuite(page)
     if (variant === 'SvgChart') await plainSuite(page)
-    else { await suite(page); await tabStopSuite(page); await cursorSuite(page, variant === 'Chart' ? ['svg', 'canvas'] : ['svg']) }
+    else {
+      // (the canvas renderer is <Chart>'s: every interaction check runs on it too)
+      for (const renderer of variant === 'Chart' ? ['svg', 'canvas'] as const : ['svg'] as const) {
+        await suite(page, renderer)
+        await tabStopSuite(page, renderer)
+      }
+      await cursorSuite(page, variant === 'Chart' ? ['svg', 'canvas'] : ['svg'])
+    }
     await transitionSuite(page)
     if (variant === 'Chart') await pngSuite(browser, variant, code)
     await page.close()
