@@ -54,7 +54,7 @@ import { gradientDefOf, hash53, isGradientPaint } from './svg-defs.js'
 import { tickFormat, scaleGradient, scaleGradientStops, tickCount, validTicks } from './scale.js'
 import { timeIntervalFor, utcIntervalFor } from './time.js'
 import { compileChart } from './compiler.js'
-import { dict, ownGet, pushAll, sortData, lerp, scopedSignalName, heldSignalName, isTuple, markTuple, markTuples, markTupleAlways, withTuples } from './util.js'
+import { dict, ownGet, pushAll, sortData, lerp, scopedSignalName, heldSignalName, isTuple, markTuple, markTuples, markTupleAlways, withTuples, PRIMITIVE_TUPLE, tupleDatum } from './util.js'
 import { applyImageUrlPolicy, applyLinkUrlPolicy, resolveImageUrl, type ImageUrlPolicy } from './url-policy.js'
 import { checkChartUrlData } from './url-data.js'
 import { valueKey, valuesEqual } from './fingerprint.js'
@@ -676,6 +676,8 @@ interface EvalContext {
   postRunLost?: boolean
   /** a late signal of the view threw: what was ranked after it did not run (see `abortAtThrowingSignal`) */
   lateTaint?: LateTaint
+  /** a dataset a `{signal}` values made holds primitive tuples (see PRIMITIVE_TUPLE): the marks join them as vega does */
+  primitiveTuples?: boolean
   /** the encode of the mark being made did not run: its items are the join's, bare */
   bareEncode?: boolean
   /** the pass stopped before the root group's size was encoded (a signal threw): the frame is 0 x 0 */
@@ -1041,6 +1043,32 @@ function inlineValues(ctx: Pick<EvalContext, 'runtime' | 'signalParams'>, values
   const expr = values !== null && typeof values === 'object' && !Array.isArray(values) ? (values as { signal?: unknown }).signal : undefined
   if (typeof expr !== 'string') return values
   return ctx.runtime.expr(expr)(undefined, ctx.signalParams)
+}
+
+/** Say that the rows a `{signal}` values made hold primitive tuples (once per such dataset, only when they do). */
+function notePrimitiveTuples(ctx: EvalContext, rows: readonly Row[]): void {
+  if (!ctx.primitiveTuples && rows.some((r) => PRIMITIVE_TUPLE in r)) ctx.primitiveTuples = true
+}
+
+/**
+ * The tuples a mark makes items of, as vega's DataJoin does: items are keyed by tuple id, which a primitive tuple does not have, so
+ * every primitive tuple is the one item of the `undefined` key -- made where the first of them is, its datum the last of them.
+ */
+function joinPrimitiveTuples(rows: readonly Row[]): readonly Row[] {
+  let first = -1
+  let last: Row | undefined
+  for (let i = 0; i < rows.length; i++) {
+    if (!(PRIMITIVE_TUPLE in rows[i]!)) continue
+    if (first < 0) first = i
+    last = rows[i]
+  }
+  if (first < 0) return rows
+  const out: Row[] = []
+  for (let i = 0; i < rows.length; i++) {
+    if (i === first) out.push(last!)
+    else if (!(PRIMITIVE_TUPLE in rows[i]!)) out.push(rows[i]!)
+  }
+  return out
 }
 
 /** An item without the bookkeeping of the engine (`__gen` and the like): what a transform of the mark can read of it. */
@@ -3243,7 +3271,9 @@ function buildDatasetsOf(ctx: EvalContext, inputData: Record<string, unknown[]>)
         // source's raw values (e.g. source = inline Topology, format =
         // topojson feature extraction). The host's current values (input.data)
         // win over the spec's compiled-in ones.
-        rows = readData(ownGet(inputData, src) ?? inlineValues(ctx, srcDef.values), (d as { format?: DataFormatSpec }).format)
+        const given = ownGet(inputData, src)
+        rows = readData(given ?? inlineValues(ctx, srcDef.values), (d as { format?: DataFormatSpec }).format, given === undefined && valuesSignal(srcDef.values) !== undefined)
+        notePrimitiveTuples(ctx, rows)
         inPulse = ctx.inputPulses?.get(src) ?? null
       } else {
         const from = build(src, seen)
@@ -3266,7 +3296,8 @@ function buildDatasetsOf(ctx: EvalContext, inputData: Record<string, unknown[]>)
       } else {
         // vega-loader read semantics: object arrays pass through format.parse
         // coercion; string values are parsed by the registered reader.
-        rows = readData(inlineValues(ctx, d.values), d.format)
+        rows = readData(inlineValues(ctx, d.values), d.format, valuesSignal(d.values) !== undefined)
+        notePrimitiveTuples(ctx, rows)
       }
     } else {
       const given = ownGet(inputData, name) as Row[] | undefined
@@ -4440,7 +4471,7 @@ function evaluateMarkItems(
 
     // Keep dataset order for rect items: vega's scene keeps data order and
     // every renderer paints the array front to back (later datum on top).
-    const encodeRows = rows
+    const encodeRows = ctx.primitiveTuples ? joinPrimitiveTuples(rows) : rows
 
     const update = mark.encode?.update ?? mark.encode?.enter ?? {}
     ctx.encodeBinding = encodeBindingFor(update, ctx)
@@ -4457,7 +4488,8 @@ function evaluateMarkItems(
     // sample the wall clock inside the encode loops.
     const meter = activeMeter()
     if (meter) meter.items(encodeRows.length, `mark ${mark.type} encoding`)
-    const pulse = given !== undefined ? given.pulse : reusablePulse(mark, ctx, source, encodeRows.length, prevGroup)
+    // (joined primitive tuples are fewer items than rows: the per-row pulse does not apply to them)
+    const pulse = encodeRows !== rows ? undefined : given !== undefined ? given.pulse : reusablePulse(mark, ctx, source, encodeRows.length, prevGroup)
     if (pulse) {
       const prevItems = given !== undefined ? given.items : prevGroup!.items as SceneItem[]
       const gen = ctx.gen
@@ -4532,8 +4564,9 @@ function evaluateMarkItems(
         for (let i = 0; i < encodeRows.length; i++) {
           const copy = { ...encodeRows[i]! }
           markTuple(copy)
-          const res = resolveEncodeSet(update, copy, ctx, mark.type)
-          res.datum = copy
+          const datum = PRIMITIVE_TUPLE in copy ? tupleDatum(copy) as Row : copy
+          const res = resolveEncodeSet(update, datum, ctx, mark.type)
+          res.datum = datum
           res.__gen = gen
           items[i] = res
           meter.tick('mark encoding')
@@ -4542,8 +4575,10 @@ function evaluateMarkItems(
         items = encodeRows.map((row) => {
           const copy = { ...row }
           markTuple(copy)
-          const res = resolveEncodeSet(update, copy, ctx, mark.type)
-          res.datum = copy
+          // (a primitive tuple is the primitive itself to its item, as in vega)
+          const datum = PRIMITIVE_TUPLE in copy ? tupleDatum(copy) as Row : copy
+          const res = resolveEncodeSet(update, datum, ctx, mark.type)
+          res.datum = datum
           res.__gen = gen
           return res
         })
@@ -5341,7 +5376,8 @@ function buildGroupItem(mark: CompiledMark, ctx: EvalContext, entered: EnteredGr
       const gather = (): Row[] => sources.flatMap((n) => ctx.datasets.get(n) ?? [])
       // (a group's url dataset nobody loaded fails as a top-level one does; host `data` does not reach a group's datasets)
       if (!shared && d.values == null && d.url != null) throw unloadedUrlError(d.name, false)
-      let rows: Row[] | undefined = shared ? undefined : d.values != null ? readData(inlineValues(ctx, d.values), d.format) : []
+      let rows: Row[] | undefined = shared ? undefined : d.values != null ? readData(inlineValues(ctx, d.values), d.format, valuesSignal(d.values) !== undefined) : []
+      if (rows !== undefined) notePrimitiveTuples(ctx, rows)
       checkRowCount(rows?.length ?? sources.reduce((n, s) => n + (ctx.datasets.get(s)?.length ?? 0), 0), `dataset "${d.name}"`)
       const tctx = { runtime: ctx.runtime, signals: scopeParams, hierarchies: ctx.hierarchies, projections: ctx.projections }
       if (d.transform?.length) rows = runScopedData(ctx, `${markIdOf(mark)}/${path.join('.')}/${d.name}`, d.name, d.transform, sources, rows ?? gather, shared, tctx, scopeParams)

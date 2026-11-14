@@ -657,3 +657,16 @@ export const scopedSignalName = (scopeId: string, name: string): string => `${sc
  * so the evaluation must not recompute it from what it reads now. Never a name an expression can read.
  */
 export const heldSignalName = (name: string): string => `\u0000held:${name}`
+
+/**
+ * A dataset tuple that is a primitive. vega's dynamic loader (a `values` that is a `{signal}`) ingests its rows without keeping the
+ * `{data}` wrapper it gives a primitive elsewhere, so the tuple is the number or string itself. The engine's rows are objects: such a
+ * tuple is a box with no field of its own (a field read gives `undefined`, as on a primitive) holding the value under this symbol,
+ * which object spreads carry along; `tupleDatum` is what vega's `datum` is.
+ */
+export const PRIMITIVE_TUPLE: unique symbol = Symbol('aster.primitiveTuple')
+
+/** The datum a tuple is: the primitive a box holds, else the tuple itself. */
+export function tupleDatum(t: unknown): unknown {
+  return t !== null && typeof t === 'object' && PRIMITIVE_TUPLE in t ? (t as { [PRIMITIVE_TUPLE]: unknown })[PRIMITIVE_TUPLE] : t
+}

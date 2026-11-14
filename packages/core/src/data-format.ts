@@ -7,7 +7,7 @@
  */
 import { dataFormatRegistry } from './registry.js'
 import { currentLocale } from './locale.js'
-import { field, toBoolean, toDate, toNumber, toString } from './util.js'
+import { field, toBoolean, toDate, toNumber, toString, PRIMITIVE_TUPLE } from './util.js'
 
 /** The converter for each column type a `parse` entry can name. */
 export const typeParsers: Record<string, (v: unknown) => unknown> = {
@@ -107,7 +107,7 @@ export function inferTypes(data: unknown[], fields: string[]): Record<string, st
  * parsed by the registered reader for the type (json is built in; csv/tsv/
  * dsv/topojson come from the `@aster-charts/core/load` addon).
  */
-export function readData(data: unknown, format?: DataFormatSpec): Record<string, unknown>[] {
+export function readData(data: unknown, format?: DataFormatSpec, dynamic = false): Record<string, unknown>[] {
   const schema = format ?? {}
   const type = schema.type || 'json'
   // vega-loader.read always dispatches by format.type; the readers themselves
@@ -134,7 +134,13 @@ export function readData(data: unknown, format?: DataFormatSpec): Record<string,
     else delete (rows as { columns?: unknown }).columns
   }
   if (schema.parse) rows = coerceRows(rows, schema.parse)
-  return ingestRows(rows)
+  // (rows a signal makes are ingested as vega's dynamic loader does: a primitive stays the primitive, see PRIMITIVE_TUPLE)
+  return dynamic ? boxPrimitiveRows(rows) : ingestRows(rows)
+}
+
+function boxPrimitiveRows(rows: readonly unknown[]): Record<string, unknown>[] {
+  if (!rows.some(isPrimitiveRow)) return rows as Record<string, unknown>[]
+  return rows.map((r) => (isPrimitiveRow(r) ? ({ [PRIMITIVE_TUPLE]: r } as unknown as Record<string, unknown>) : (r as Record<string, unknown>)))
 }
 
 const isPrimitiveRow = (v: unknown): boolean => v === null || (typeof v !== 'object' && typeof v !== 'function')

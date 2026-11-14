@@ -19,7 +19,7 @@
  *    function reachable through a member read (a scale, a method) cannot be invoked by one;
  *  - the regular expressions the built-ins run are screened and their input length-capped under limits.
  */
-import { ascending, DisallowedObjectProperties, safeGet, sortSlice } from './util.js'
+import { ascending, DisallowedObjectProperties, safeGet, sortSlice, tupleDatum } from './util.js'
 import type { AstNode, Expr } from './expr-parser.js'
 import { guardedRegExp, checkRegexInput, checkRegexObject } from './limits.js'
 
@@ -282,7 +282,7 @@ function compile(node: Expr, host: Record<string, unknown>): Run {
     }
     case 'Identifier': {
       const name = node.name
-      if (name === 'datum') return (f) => f.datum
+      if (name === 'datum') return (f) => tupleDatum(f.datum)
       if (name === 'event') return (f) => f.event
       if (name === 'item') return (f) => f.item
       const constant = Object.hasOwn(ExpressionConstants, name) ? ExpressionConstants[name] : undefined

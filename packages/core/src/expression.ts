@@ -15,6 +15,7 @@ import { boundedCount, ceiling, meterBytes, meterTick, guardedRegExp, checkRegex
 import { bandSpace, scaleGradient, type Scale } from './scale.js'
 import { selectionIdTest, selectionResolve, selectionTest, selectionTuples } from './selections.js'
 import { parseExpressionCached } from './expr-parser.js'
+import { PRIMITIVE_TUPLE, tupleDatum } from './util.js'
 import { ADDON_FUNCTIONS } from './addon-functions.js'
 import { compileExpression, DefaultFunctions, ExpressionConstants, EventFunctions } from './expr-interpreter.js'
 import {
@@ -525,7 +526,7 @@ function createBuiltinFunctions(runtime: ExpressionRuntime): Record<string, unkn
     luminance,
     contrast: contrastRatio,
     // data & scale functions
-    data: (name: string) => runtime.data(name) ?? [],
+    data: (name: string) => tupleData(runtime.data(name) ?? []),
     indata: (name: string, field: string, value: unknown) => {
       const rows = runtime.data(name) ?? []
       // O(rows) per call and usually called per row: charge the scan so the
@@ -632,4 +633,14 @@ export function compileExpr(expr: string, runtime: ExpressionRuntime): CompiledE
     return evaluate(datum, params as Record<string, unknown> | undefined, event)
   }
   return compiled as CompiledExpr
+}
+/** What `data(name)` gives an expression: the dataset's tuples as vega has them (a primitive tuple is the primitive). Once per array. */
+const TUPLE_DATA = new WeakMap<readonly unknown[], readonly unknown[]>()
+function tupleData(rows: readonly unknown[]): readonly unknown[] {
+  let out = TUPLE_DATA.get(rows)
+  if (out === undefined) {
+    out = rows.some((r) => r !== null && typeof r === 'object' && PRIMITIVE_TUPLE in r) ? rows.map(tupleDatum) : rows
+    TUPLE_DATA.set(rows, out)
+  }
+  return out
 }

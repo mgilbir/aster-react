@@ -19,7 +19,7 @@
  */
 import { compileChart } from './compiler.js'
 import { dict, ownGet } from './util.js'
-import { dataInputOf } from './spec-structure.js'
+import { dataInputOf, valuesSignal } from './spec-structure.js'
 import { evaluateChartPending, type DataStability } from './runtime.js'
 import { incrementalEngine } from './incremental-engine.js'
 import { refId, valueKey } from './fingerprint.js'
@@ -54,7 +54,8 @@ export function skeletonOf(spec: VgSpec): string {
   const strip = (d: unknown): unknown => {
     if (!d || typeof d !== 'object') return d
     const values = (d as { values?: unknown }).values
-    return values ? { ...(d as object), values: ROWS_MARKER } : d
+    // (a `{signal}` values is code, part of the chart: it stays as it is)
+    return values && valuesSignal(values) === undefined ? { ...(d as object), values: ROWS_MARKER } : d
   }
   if (Array.isArray(data)) {
     stripped = data.map(strip)
@@ -80,7 +81,8 @@ function dataKeyOf(spec: VgSpec, input: RuntimeInput, out: string[]): void {
   for (const d of lists) {
     if (typeof d.name !== 'string') continue
     const override = ownGet(input.data, d.name)
-    const vals = override ?? d.values
+    // (rows a `{signal}` values makes follow the signals, which the key has already)
+    const vals = override ?? (valuesSignal(d.values) === undefined ? d.values : undefined)
     if (vals == null) continue
     out.push(`${d.name}:${dataRefKey(vals)}`)
   }
@@ -101,7 +103,8 @@ function rawDatasets(spec: VgSpec, input: RuntimeInput): Map<string, unknown> {
     // for them are ignored by the runtime too.
     if (dataInputOf(d) === 'source') continue
     const override = ownGet(input.data, d.name)
-    const values = override !== undefined ? override : d.values
+    // (a `{signal}` values is not rows: the evaluation makes them from the signal, as vega's dynamic loader does)
+    const values = override !== undefined ? override : valuesSignal(d.values) === undefined ? d.values : undefined
     if (values != null) out.set(d.name, values)
   }
   for (const [name, rows] of Object.entries(input.data ?? {})) {
