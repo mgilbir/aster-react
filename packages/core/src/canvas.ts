@@ -5,10 +5,10 @@
  *
  * The renderer accepts a minimal 2D-context interface (`CanvasLike`), so it
  * runs against a real `CanvasRenderingContext2D`, an OffscreenCanvas context,
- * or a recording mock in tests. Geometry is traced by replaying SVG path data
- * (`parsePathData` + `tracePath`), which keeps canvas output bit-identical to
- * the SVG path by construction (line and area marks excepted: they are traced
- * from full-precision coordinates like vega's canvas; see `computeLinePath(group, exact)`).
+ * or a recording mock in tests. Geometry comes from the marks' shared geometry (geometry.ts), computed once and drawn as
+ * the segments of the path the SVG renderer writes (rects, symbols, trails: the same numbers as that text read back) or at
+ * full precision (lines and areas, like vega's canvas; arcs, drawn by the generator's own calls). Only path strings that come
+ * with the scene (a path mark's, a shape's, a legend leaf's, a group's clip) are parsed, once per distinct string.
  */
 import { SYMBOL_DEFAULT_SIZE } from './util.js'
 import type { SceneDef, SceneGroup, SceneItem, SceneRoot } from './types.js'
@@ -25,17 +25,15 @@ export type { ItemImage } from './image-box.js'
 
 type SceneDefs = SceneDef
 import {
-  computeAreaPath,
-  computeLinePath,
+  lineStrokeWidth,
   num,
-  rectItemPath,
-  symbolPathExact,
   textItemDesc,
-  trailPath,
-  frameBackgroundPath,
+  frameBackgroundData,
   frameItem,
-  itemArcInto,
+  itemArcGeometry,
 } from './render.js'
+import { areaGeometry, lineGeometry, rectData, symbolGeometry, trailGeometry } from './geometry.js'
+import { arcSegs, curveExactSegs, drawCurveExact, segsOf, symbolExactSegs } from './geometry-read.js'
 
 /** Minimal 2D context surface used by the renderer. */
 export interface CanvasLike {
@@ -89,18 +87,8 @@ export interface GradientLike {
   addColorStop(offset: number, color: string): void
 }
 
-const SYMBOL_CACHE = new Map<string, string>()
-
-function cachedSymbolPath(shape: string | undefined, r: number): string {
-  const key = `${shape ?? 'circle'}|${r}`
-  let d = SYMBOL_CACHE.get(key)
-  if (d == null) {
-    d = symbolPathExact(shape, r)
-    if (SYMBOL_CACHE.size > 1024) SYMBOL_CACHE.clear()
-    SYMBOL_CACHE.set(key, d)
-  }
-  return d
-}
+/** The segments of a symbol shape at radius r, at full precision (what vega's canvas draws); cached per shape and radius. */
+const symbolSegs = (shape: string | undefined, r: number): PathSeg[] => symbolExactSegs(symbolGeometry(shape, r))
 
 /** Canonical form of parsed segments (shared by both parity sides). */
 export function canonicalPath(segs: PathSeg[]): string {
@@ -157,7 +145,7 @@ export function renderSceneToCanvas(scene: SceneRoot, ctx: CanvasLike, opts: Ren
   // Root frame background path: fill, stroke, dash, opacity and rounded
   // corners, from the same path the SVG renderer emits.
   ctx.beginPath()
-  const frameSegs = parsePathData(frameBackgroundPath(scene, plotW, plotH))
+  const frameSegs = segsOf(frameBackgroundData(scene, plotW, plotH))
   tracePath(ctx, frameSegs)
   paintPath(ctx, frameSegs, frameItem(scene), scene.defs, 'auto')
 
@@ -631,7 +619,7 @@ function segsBbox(segs: PathSeg[]): Bbox {
  */
 function paintPath(
   ctx: CanvasLike,
-  segs: PathSeg[],
+  segs: PathSeg[] | (() => PathSeg[]),
   it: SceneItem,
   defs: SceneDefs[] | undefined,
   op: 'auto' | 'fill' | 'stroke',
@@ -646,7 +634,7 @@ function paintPath(
     (typeof p === 'string' && p.startsWith('url(#')) || (p != null && typeof p === 'object' && 'gradient' in (p as object))
   // Gradient resolution is the only consumer of the bbox; skip the segment walk
   // for the common solid-paint case (thousands of symbols per frame).
-  const bb = bbox ?? (isGradient(fill) || isGradient(stroke) ? segsBbox(segs) : null)
+  const bb = bbox ?? (isGradient(fill) || isGradient(stroke) ? segsBbox(typeof segs === 'function' ? segs() : segs) : null)
   const rec = it as unknown as Record<string, unknown>
   if (rec.blend != null) ctx.globalCompositeOperation = String(rec.blend)
   // (vega's canvas draws a paint only when it is truthy: an empty string is none, while its SVG writes the attribute)
@@ -734,25 +722,22 @@ function renderLeafItem(it: SceneItem, ctx: CanvasLike, scene: SceneRoot, box?: 
   // `M{r},0A{r},{r}…` translated by (x, y) — trace the same path so records
   // match exactly (including gradient bboxes).
   if (it.shape != null && it.radius != null) {
-    const r = it.radius
-    const rNum = Number.isInteger(r) ? String(r) : String(Math.round(r * 1000) / 1000)
-    const d = `M${rNum},0A${rNum},${rNum},0,1,1,${-rNum},0A${rNum},${rNum},0,1,1,${rNum},0`
+    const segs = leafCircleSegs(it.radius)
     if (itemAngle(it)) {
-      const segs = parsePathData(d)
       buildInItemFrame(ctx, it.x ?? 0, it.y ?? 0, itemAngle(it)!, 1, 1, () => tracePath(ctx, segs))
       paintPath(ctx, segs, it, defs, 'auto')
       return
     }
     ctx.beginPath()
-    const segs = parsePathData(d).map((s) => {
+    const moved = segs.map((s) => {
       if (s.cmd === 'Z') return s
       const o = { ...s } as unknown as Record<string, number>
       if (typeof o.x === 'number') o.x += it.x ?? 0
       if (typeof o.y === 'number') o.y += it.y ?? 0
       return o as unknown as typeof s
     })
-    tracePath(ctx, segs)
-    paintPath(ctx, segs, it, defs, 'auto')
+    tracePath(ctx, moved)
+    paintPath(ctx, moved, it, defs, 'auto')
     return
   }
   if (it._kind === 'text' || (it._kind === undefined && it.text != null)) {
@@ -769,6 +754,25 @@ function renderLeafItem(it: SceneItem, ctx: CanvasLike, scene: SceneRoot, box?: 
   ctx.moveTo(x, y)
   ctx.lineTo(x2, y2)
   paintPath(ctx, [{ cmd: 'M', x, y }, { cmd: 'L', x: x2, y: y2 }] as PathSeg[], it, defs, 'stroke')
+}
+
+/**
+ * A guide leaf symbol's outline, as the SVG leaf renderer writes it about the origin: `M r,0 A r,r,0,1,1,-r,0 A r,r,0,1,1,r,0`
+ * with r printed whole when it is an integer and to 3 digits otherwise; these are the segments that text reads back as. (A
+ * radius that does not print as a number is read from the text, as it always was.)
+ */
+function leafCircleSegs(r: number): PathSeg[] {
+  const rNum = Number.isInteger(r) ? r : Math.round(r * 1000) / 1000
+  if (!Number.isFinite(rNum)) {
+    const t = String(rNum)
+    return parsePathData(`M${t},0A${t},${t},0,1,1,${-t},0A${t},${t},0,1,1,${t},0`)
+  }
+  const v = rNum + 0
+  return [
+    { cmd: 'M', x: v, y: 0 },
+    { cmd: 'A', rx: v, ry: v, rot: 0, large: 1, sweep: 1, x: -v + 0, y: 0 },
+    { cmd: 'A', rx: v, ry: v, rot: 0, large: 1, sweep: 1, x: v, y: 0 },
+  ]
 }
 
 /** Paint for arc-drawn symbols (bbox computed analytically). */
@@ -908,8 +912,7 @@ function renderSymbolRuns(items: SceneItem[], ctx: CanvasLike, defs: SceneDefs[]
         const x = it.x || 0
         const y = it.y || 0
         const r = Math.sqrt((it.size as number) ?? SYMBOL_DEFAULT_SIZE) / 2
-        const d = cachedSymbolPath((it as Record<string, unknown>).shape as string | undefined, r)
-        const segs = parsePathData(d)
+        const segs = symbolSegs((it as Record<string, unknown>).shape as string | undefined, r)
         buildInItemFrame(ctx, x, y, ((it as Record<string, unknown>).angle as number) || 0, 1, 1, () => tracePath(ctx, segs))
         paintPath(ctx, segs, it, defs, 'auto', gradientBox(it))
       }
@@ -918,13 +921,6 @@ function renderSymbolRuns(items: SceneItem[], ctx: CanvasLike, defs: SceneDefs[]
     }
     const first = run[0]!
     const shape0 = (first as Record<string, unknown>).shape as string | undefined
-    // (the symbols of a run share a shape and a size, so one parse serves them all; `lastR` guards a size that is not a number)
-    let segs: PathSeg[] | null = null
-    let lastR = NaN
-    const symbolSegs = (shape: string | undefined, r: number): PathSeg[] => {
-      if (segs === null || r !== lastR) { segs = parsePathData(cachedSymbolPath(shape, r)); lastR = r }
-      return segs
-    }
     const radiusOf = (it: SceneItem): number => Math.sqrt((it.size as number) ?? SYMBOL_DEFAULT_SIZE) / 2
     const closed = shape0 != null && shape0 !== 'circle' && symbolSegs(shape0, radiusOf(first)).some((sg) => sg.cmd === 'Z' || sg.cmd === 'z')
     const whole = closed ? runPath(ctx) : null
@@ -967,24 +963,22 @@ function renderMark(type: string, group: SceneGroup, ctx: CanvasLike, scene: Sce
   const defs = scene.defs
   switch (type) {
     case 'line': {
-      const info = computeLinePath(group, true)
-      if (!info) return
+      const geometry = lineGeometry(group.items ?? [])
+      if (geometry === null || geometry.empty) return
       ctx.beginPath()
-      const segs = parsePathData(info.path)
-      tracePath(ctx, segs)
+      drawCurveExact(geometry, ctx)
       // vega draws a line mark from its first item with the full fill + stroke
       // paint (closed lines can be filled); stroke width defaults to 2 with a stroke.
-      const first = { ...group.items![0]!, strokeWidth: info.sw ?? group.items![0]!.strokeWidth } as SceneItem
-      paintPath(ctx, segs, first, defs, 'auto', gradientBox(first, group))
+      const first = { ...group.items![0]!, strokeWidth: lineStrokeWidth(group.items![0]!) ?? group.items![0]!.strokeWidth } as SceneItem
+      paintPath(ctx, () => curveExactSegs(geometry), first, defs, 'auto', gradientBox(first, group))
       return
     }
     case 'area': {
-      const info = computeAreaPath(group, true)
-      if (!info) return
+      const geometry = areaGeometry(group.items ?? [])
+      if (geometry === null || geometry.empty) return
       ctx.beginPath()
-      const segs = parsePathData(info.path)
-      tracePath(ctx, segs)
-      paintPath(ctx, segs, group.items![0]!, defs, 'auto', gradientBox(group.items![0]!, group))
+      drawCurveExact(geometry, ctx)
+      paintPath(ctx, () => curveExactSegs(geometry), group.items![0]!, defs, 'auto', gradientBox(group.items![0]!, group))
       return
     }
     case 'symbol': {
@@ -999,8 +993,7 @@ function renderMark(type: string, group: SceneGroup, ctx: CanvasLike, scene: Sce
           const size = (it.size as number) ?? SYMBOL_DEFAULT_SIZE
           const r = Math.sqrt(size) / 2
           const shape = (it as Record<string, unknown>).shape as string | undefined
-          const d = cachedSymbolPath(shape, r)
-          const segs = parsePathData(d)
+          const segs = symbolSegs(shape, r)
           const angle = ((it as Record<string, unknown>).angle as number) || 0
           if (shape == null || shape === 'circle') {
             // (vega draws a circle as one full-turn arc about the item's origin: the same curve as two half turns, rasterized
@@ -1027,10 +1020,8 @@ function renderMark(type: string, group: SceneGroup, ctx: CanvasLike, scene: Sce
       // vega paints rects in item (data) order and skips unpainted items
       for (const it of group.items ?? []) {
         if (it.fill == null && it.stroke == null) continue
-        const d = rectItemPath(it)
-        if (d == null) continue
         ctx.beginPath()
-        const segs = parsePathData(d)
+        const segs = segsOf(rectData(it))
         tracePath(ctx, segs)
         paintPath(ctx, segs, it, defs, 'auto', gradientBox(it, undefined, false))
       }
@@ -1060,11 +1051,11 @@ function renderMark(type: string, group: SceneGroup, ctx: CanvasLike, scene: Sce
     case 'trail': {
       const items = group.items ?? []
       if (items.length <= 1) return
-      const d = trailPath(items)
-      if (!d) return
+      const geometry = trailGeometry(items)!
+      if (!geometry.outline.drawn) return
       const first = items[0]!
       ctx.beginPath()
-      const segs = parsePathData(d)
+      const segs = arcSegs(geometry)
       tracePath(ctx, segs)
       // The trail polygon carries the FIRST item's full paint set, fill included
       // (Vega-Lite encodes a trail's colour as `fill`).
@@ -1103,7 +1094,7 @@ function renderMark(type: string, group: SceneGroup, ctx: CanvasLike, scene: Sce
         ctx.translate(ax, ay)
         if (angle) ctx.rotate((angle * Math.PI) / 180)
         ctx.beginPath()
-        itemArcInto(ctx, it)
+        itemArcGeometry(it).outline.replay(ctx)
         if (angle) ctx.rotate((-angle * Math.PI) / 180)
         ctx.translate(-ax, -ay)
         paintPath(ctx, [], it, defs, 'auto', gradientBox(it))

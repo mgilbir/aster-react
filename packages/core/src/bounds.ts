@@ -7,7 +7,8 @@
  */
 import { SYMBOL_DEFAULT_SIZE, pushAll } from './util.js'
 import type { SceneGroup, SceneItem, SceneNode } from './types.js'
-import { areaInto, itemArcInto, lineInto, symbolPathExact, trailInto } from './render.js'
+import { itemArcGeometry } from './render.js'
+import { areaGeometry, lineGeometry, symbolGeometry, trailGeometry, type CurveGeometry } from './geometry.js'
 import { BoundsPen, cubicAt, cubicTurns } from './bounds-pen.js'
 import { parseSvgPath, renderSvgPath } from './svg-path.js'
 import { itemTextWidth, textAnchor, truncateToLimit } from './text-metrics.js'
@@ -229,7 +230,7 @@ export function baselineOffset(item: SceneItem): number {
 
 /** The extent of an arc item: its sector traced through the same generator that draws it (corner radius and padding included), turned by the item's angle, stroked, and moved to the item. */
 export function boundArcItem(bounds: Bounds, it: SceneItem): Bounds {
-  itemArcInto(new BoundsPen(bounds, +((it as Record<string, unknown>).angle as number) || 0), it)
+  itemArcGeometry(it).outline.replay(new BoundsPen(bounds, +((it as Record<string, unknown>).angle as number) || 0))
   return boundStroke(bounds, it, true).translate(it.x || 0, it.y || 0)
 }
 
@@ -296,12 +297,12 @@ function boundImage(bounds: Bounds, item: SceneItem): Bounds {
  * (Adding the two corners of the extent to the box is adding every point of the path to it.)
  */
 const SHAPE_EXTENTS = new Map<string, [number, number, number, number]>()
-function addShapeExtent(bounds: Bounds, shape: string, r: number, pathOf: (shape: string, r: number) => unknown, angle = 0): void {
-  const key = shape + '|' + r + '|' + (pathOf === symbolPathExact ? 'e' : 'p') + (angle ? '|' + angle : '')
+function addShapeExtent(bounds: Bounds, shape: string, r: number, angle = 0): void {
+  const key = shape + '|' + r + '|e' + (angle ? '|' + angle : '')
   let ext = SHAPE_EXTENTS.get(key)
   if (ext === undefined) {
     const b = new Bounds()
-    boundsFromPath(b, angle ? rotatePath(String(pathOf(shape, r)), angle) : String(pathOf(shape, r)))
+    boundsFromTokens(b, shapeTokens(shape, r, angle))
     ext = [b.x1, b.y1, b.x2, b.y2]
     if (SHAPE_EXTENTS.size > 256) SHAPE_EXTENTS.clear()
     SHAPE_EXTENTS.set(key, ext)
@@ -309,12 +310,28 @@ function addShapeExtent(bounds: Bounds, shape: string, r: number, pathOf: (shape
   if (ext[0] <= ext[2] && ext[1] <= ext[3]) bounds.add(ext[0], ext[1]).add(ext[2], ext[3])
 }
 
+/**
+ * The tokens of a symbol shape's full-precision path, turned by `angle` degrees: the commands and numbers of its path data
+ * (geometry.ts), never its text read back. A path holding a number that does not print as one (`NaN`, `Infinity`) is
+ * tokenized from its text, as it always was.
+ */
+function shapeTokens(shape: string, r: number, angle: number): PathToken[] {
+  const data = symbolGeometry(shape, r).exact()
+  const tokens = data.finite ? data.tokens() : pathTokens(data.text())
+  if (!angle) return tokens
+  const turned = rotateTokens(tokens, angle)
+  return turned.every((t) => t.n.every(Number.isFinite)) ? turned : pathTokens(tokensText(turned))
+}
+
 const PATH_TOKEN = /([MmLlHhVvCcSsQqTtAaZz])|(-?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?)/g
 
+/** A command of path data with the numbers that follow its letter (however many there are). */
+type PathToken = { c: string; n: number[] }
+
 /** Path data as its commands, each with the numbers that follow its letter (however many there are). */
-function pathTokens(d: string): Array<{ c: string; n: number[] }> {
-  const tokens: Array<{ c: string; n: number[] }> = []
-  let current: { c: string; n: number[] } | null = null
+function pathTokens(d: string): PathToken[] {
+  const tokens: PathToken[] = []
+  let current: PathToken | null = null
   PATH_TOKEN.lastIndex = 0
   for (let m = PATH_TOKEN.exec(d); m; m = PATH_TOKEN.exec(d)) {
     if (m[1]) tokens.push((current = { c: m[1], n: [] }))
@@ -323,22 +340,30 @@ function pathTokens(d: string): Array<{ c: string; n: number[] }> {
   return tokens
 }
 
+/** Path text of tokens: each letter followed by its numbers, comma separated. */
+function tokensText(tokens: readonly PathToken[]): string {
+  let out = ''
+  for (const t of tokens) out += t.c + t.n.join(',')
+  return out
+}
+
 /**
- * A path with every point rotated about the origin, in absolute commands. The bounds of a rotated shape come from its rotated
+ * Path data with every point rotated about the origin, in absolute commands. The bounds of a rotated shape come from its rotated
  * points (control points too) and the extrema of the curves they make, which are not those of its unrotated box turned; an arc
- * keeps its radii and takes the turn on its x-axis rotation.
+ * keeps its radii and takes the turn on its x-axis rotation. Each number is `v + 0`: what the text of the rotated path would read
+ * back as.
  */
-export function rotatePath(d: string, deg: number): string {
+function rotateTokens(tokens: readonly PathToken[], deg: number): PathToken[] {
   const rot = deg * (Math.PI / 180)
   const cos = Math.cos(rot)
   const sin = Math.sin(rot)
-  const px = (x: number, y: number): string => `${cos * x - sin * y},${sin * x + cos * y}`
+  const out: PathToken[] = []
+  const px = (x: number, y: number): [number, number] => [cos * x - sin * y + 0, sin * x + cos * y + 0]
   let x = 0
   let y = 0
   let sx = 0
   let sy = 0
-  let out = ''
-  for (const t of pathTokens(d)) {
+  for (const t of tokens) {
     const rel = t.c === t.c.toLowerCase()
     const n = t.n
     switch (t.c.toUpperCase()) {
@@ -346,22 +371,22 @@ export function rotatePath(d: string, deg: number): string {
         for (let i = 0; i + 1 < n.length; i += 2) {
           x = n[i]! + (rel ? x : 0); y = n[i + 1]! + (rel ? y : 0)
           if (i === 0) { sx = x; sy = y }
-          out += (i === 0 ? 'M' : 'L') + px(x, y)
+          out.push({ c: i === 0 ? 'M' : 'L', n: px(x, y) })
         }
         break
       case 'L':
-        for (let i = 0; i + 1 < n.length; i += 2) { x = n[i]! + (rel ? x : 0); y = n[i + 1]! + (rel ? y : 0); out += 'L' + px(x, y) }
+        for (let i = 0; i + 1 < n.length; i += 2) { x = n[i]! + (rel ? x : 0); y = n[i + 1]! + (rel ? y : 0); out.push({ c: 'L', n: px(x, y) }) }
         break
       case 'H':
-        for (const v of n) { x = v + (rel ? x : 0); out += 'L' + px(x, y) }
+        for (const v of n) { x = v + (rel ? x : 0); out.push({ c: 'L', n: px(x, y) }) }
         break
       case 'V':
-        for (const v of n) { y = v + (rel ? y : 0); out += 'L' + px(x, y) }
+        for (const v of n) { y = v + (rel ? y : 0); out.push({ c: 'L', n: px(x, y) }) }
         break
       case 'C':
         for (let i = 0; i + 5 < n.length; i += 6) {
           const o = rel ? [x, y] : [0, 0]
-          out += `C${px(n[i]! + o[0]!, n[i + 1]! + o[1]!)},${px(n[i + 2]! + o[0]!, n[i + 3]! + o[1]!)},${px(n[i + 4]! + o[0]!, n[i + 5]! + o[1]!)}`
+          out.push({ c: 'C', n: [...px(n[i]! + o[0]!, n[i + 1]! + o[1]!), ...px(n[i + 2]! + o[0]!, n[i + 3]! + o[1]!), ...px(n[i + 4]! + o[0]!, n[i + 5]! + o[1]!)] })
           x = n[i + 4]! + o[0]!; y = n[i + 5]! + o[1]!
         }
         break
@@ -369,14 +394,14 @@ export function rotatePath(d: string, deg: number): string {
         // (the control point the tracer assumes without a previous curve: the current point)
         for (let i = 0; i + 3 < n.length; i += 4) {
           const o = rel ? [x, y] : [0, 0]
-          out += `C${px(x, y)},${px(n[i]! + o[0]!, n[i + 1]! + o[1]!)},${px(n[i + 2]! + o[0]!, n[i + 3]! + o[1]!)}`
+          out.push({ c: 'C', n: [...px(x, y), ...px(n[i]! + o[0]!, n[i + 1]! + o[1]!), ...px(n[i + 2]! + o[0]!, n[i + 3]! + o[1]!)] })
           x = n[i + 2]! + o[0]!; y = n[i + 3]! + o[1]!
         }
         break
       case 'Q':
         for (let i = 0; i + 3 < n.length; i += 4) {
           const o = rel ? [x, y] : [0, 0]
-          out += `Q${px(n[i]! + o[0]!, n[i + 1]! + o[1]!)},${px(n[i + 2]! + o[0]!, n[i + 3]! + o[1]!)}`
+          out.push({ c: 'Q', n: [...px(n[i]! + o[0]!, n[i + 1]! + o[1]!), ...px(n[i + 2]! + o[0]!, n[i + 3]! + o[1]!)] })
           x = n[i + 2]! + o[0]!; y = n[i + 3]! + o[1]!
         }
         break
@@ -384,19 +409,19 @@ export function rotatePath(d: string, deg: number): string {
         for (let i = 0; i + 1 < n.length; i += 2) {
           const nx = n[i]! + (rel ? x : 0)
           const ny = n[i + 1]! + (rel ? y : 0)
-          out += `Q${px(x, y)},${px(nx, ny)}`
+          out.push({ c: 'Q', n: [...px(x, y), ...px(nx, ny)] })
           x = nx; y = ny
         }
         break
       case 'A':
         for (let i = 0; i + 6 < n.length; i += 7) {
           x = n[i + 5]! + (rel ? x : 0); y = n[i + 6]! + (rel ? y : 0)
-          out += `A${n[i]},${n[i + 1]},${n[i + 2]! + deg},${n[i + 3]},${n[i + 4]},${px(x, y)}`
+          out.push({ c: 'A', n: [n[i]! + 0, n[i + 1]! + 0, n[i + 2]! + deg + 0, n[i + 3]! + 0, n[i + 4]! + 0, ...px(x, y)] })
         }
         break
       case 'Z':
         x = sx; y = sy
-        out += 'Z'
+        out.push({ c: 'Z', n: [] })
         break
     }
   }
@@ -425,6 +450,15 @@ function cubicExtremes(p0: number, p1: number, p2: number, p3: number): number[]
 export function boundsFromPath(
   bounds: Bounds,
   d: string,
+  transform?: (x: number, y: number) => [number, number],
+): Bounds {
+  return boundsFromTokens(bounds, pathTokens(d), transform)
+}
+
+/** {@link boundsFromPath} on the tokens of path data. */
+function boundsFromTokens(
+  bounds: Bounds,
+  tokens: readonly PathToken[],
   transform?: (x: number, y: number) => [number, number],
 ): Bounds {
   // the pen's place in path coordinates; where the current subpath began (a close returns there); and its place where the bounds are
@@ -558,7 +592,7 @@ export function boundsFromPath(
   let read = 0
   // the next number of the command: a command that runs out of numbers gets NaN
   const next = (): number => nums[read++] as number
-  for (const token of pathTokens(d)) {
+  for (const token of tokens) {
     const cmd = token.c
     nums.length = 0
     pushAll(nums, token.n)
@@ -661,6 +695,22 @@ export function boundsFromPath(
 // Marks and groups
 // ---------------------------------------------------------------------------
 
+/** The box a line's or area's curve covers (control points and curve extremes included), measured once per geometry. */
+const CURVE_EXTENTS = new WeakMap<CurveGeometry, [number, number, number, number]>()
+function curveExtent(geometry: CurveGeometry | null): Bounds {
+  const b = new Bounds()
+  if (geometry === null) return b
+  let e = CURVE_EXTENTS.get(geometry)
+  if (e === undefined) {
+    geometry.draw(new BoundsPen(b))
+    CURVE_EXTENTS.set(geometry, (e = [b.x1, b.y1, b.x2, b.y2]))
+    return b
+  }
+  // (the fields as measured: `set` would reorder an empty box's infinities)
+  b.x1 = e[0]; b.y1 = e[1]; b.x2 = e[2]; b.y2 = e[3]
+  return b
+}
+
 /** Bound a typed (non-group) mark: per-type geometry. */
 export function boundTypedMark(bounds: Bounds, mark: SceneGroup, miterPaths = false): Bounds {
   const items = (mark.items ?? []) as SceneItem[]
@@ -670,10 +720,7 @@ export function boundTypedMark(bounds: Bounds, mark: SceneGroup, miterPaths = fa
       // an area is bounded by its filled polygon (top edge AND baseline), a line
       // by its polyline: computeLinePath on an area dropped the baseline, so
       // autosize:pad clipped areas that extend below/above their top edge
-      const drawn = new Bounds()
-      const pen = new BoundsPen(drawn)
-      if (mark.marktype === 'area') areaInto(pen, items)
-      else lineInto(pen, items)
+      const drawn = curveExtent(mark.marktype === 'area' ? areaGeometry(items) : lineGeometry(items))
       if (!drawn.empty()) {
         // the renderer resolves vega's default line strokeWidth=2 at
         // draw time; the bound must measure the same geometry
@@ -686,7 +733,7 @@ export function boundTypedMark(bounds: Bounds, mark: SceneGroup, miterPaths = fa
     case 'trail': {
       if (items.length > 1) {
         const drawn = new Bounds()
-        trailInto(new BoundsPen(drawn), items)
+        trailGeometry(items)?.outline.replay(new BoundsPen(drawn))
         if (!drawn.empty()) boundStroke(drawn, items[0] ?? {}, true)
         bounds.union(drawn)
       }
@@ -889,7 +936,7 @@ function boundIsolated(it: SceneItem, miterPaths = false, kind?: string): Bounds
       bounds.add(-r, -r)
       bounds.add(r, r)
     } else {
-      addShapeExtent(bounds, String(it.shape), r, symbolPathExact, angle)
+      addShapeExtent(bounds, String(it.shape), r, angle)
     }
     boundStroke(bounds, it, true)
     return bounds.translate(x, y)
@@ -923,7 +970,7 @@ function boundIsolated(it: SceneItem, miterPaths = false, kind?: string): Bounds
       bounds.add(-r, -r)
       bounds.add(r, r)
     } else {
-      addShapeExtent(bounds, shape, r, symbolPathExact, angle)
+      addShapeExtent(bounds, shape, r, angle)
     }
     boundStroke(bounds, it, true)
     return bounds.translate(x, y)

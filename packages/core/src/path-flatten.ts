@@ -1,8 +1,8 @@
 /**
- * SVG path data as polylines, and the non-zero point-in-path test over them (canvas `isPointInPath`): what the hit index and the
- * scene `intersect()` test items against. Curves and arcs are flattened to short segments.
+ * Paths as polylines, and the non-zero point-in-path test over them (canvas `isPointInPath`): what the hit index and the
+ * scene `intersect()` test items against. Curves and arcs are flattened to short segments (geometry.ts feeds the flattener).
  */
-import { parsePathData, tracePath, type PathSink } from './path-data.js'
+import type { PathSink } from './path-data.js'
 
 /**
  * Flattened outline: a flat [x0,y0,x1,y1,...] polyline, `closed` when it ended with a close. `curved[i]` is set when the segment
@@ -22,7 +22,7 @@ const MAX_STEPS = 1024
 const steps = (n: number): number => (n >= 1 ? Math.min(MAX_STEPS, Math.ceil(n)) : 1)
 
 /** Collects a path as polylines; curves and arcs are flattened to short segments. */
-class Flattener implements PathSink {
+export class Flattener implements PathSink {
   polys: Poly[] = []
   private cur: number[] | null = null
   private x = 0
@@ -91,13 +91,6 @@ class Flattener implements PathSink {
     this.cur = null
     this.x = this.startX; this.y = this.startY
   }
-}
-
-/** Flatten SVG path data under `t` (local -> scene). */
-export function flattenPath(d: string, t: (x: number, y: number) => [number, number]): Poly[] {
-  const f = new Flattener(t)
-  tracePath(f, parsePathData(d))
-  return f.polys
 }
 
 /** Non-zero winding number of (x, y) over every polygon, each implicitly closed (canvas `fill()`). */

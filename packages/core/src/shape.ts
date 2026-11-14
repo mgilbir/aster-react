@@ -90,6 +90,9 @@ export class PathWriter implements PathSink {
  * to it), and writes an arc as SVG `A` commands: the large-arc flag is set for a sweep of half a turn or more, and a
  * full turn is drawn as two half arcs. Radii and end points are rounded like the other coordinates; `digits` is as for
  * {@link PathWriter}, and the default is full precision.
+ *
+ * What it decides (which commands, with which rounded numbers) is apart from how it writes them (`put*`): the text here,
+ * the parsed segments in {@link ArcSegWriter}, so the two cannot disagree.
  */
 export class ArcPathWriter {
   /** The path text so far. */
@@ -113,18 +116,29 @@ export class ArcPathWriter {
     return k ? Math.round(v * k) / k : v
   }
 
+  /** Writes `M x,y` (numbers already rounded). */
+  protected putMove(x: number, y: number): void { this.d += 'M' + x + ',' + y }
+  /** Writes `L x,y`. */
+  protected putLine(x: number, y: number): void { this.d += 'L' + x + ',' + y }
+  /** Writes `A r,r,0,large,sweep,x,y`. */
+  protected putArc(r: number, large: 0 | 1, sweep: 0 | 1, x: number, y: number): void {
+    this.d += 'A' + r + ',' + r + ',0,' + large + ',' + sweep + ',' + x + ',' + y
+  }
+  /** Writes `Z`. */
+  protected putClose(): void { this.d += 'Z' }
+
   moveTo(x: number, y: number): void {
     this.sx = this.cx = x
     this.sy = this.cy = y
     this.hasStart = this.hasPoint = true
-    this.d += 'M' + this.round(x) + ',' + this.round(y)
+    this.putMove(this.round(x), this.round(y))
   }
 
   lineTo(x: number, y: number): void {
     this.cx = x
     this.cy = y
     this.hasPoint = true
-    this.d += 'L' + this.round(x) + ',' + this.round(y)
+    this.putLine(this.round(x), this.round(y))
   }
 
   closePath(): void {
@@ -132,7 +146,7 @@ export class ArcPathWriter {
     this.cx = this.sx
     this.cy = this.sy
     this.hasPoint = this.hasStart
-    this.d += 'Z'
+    this.putClose()
   }
 
   /**
@@ -147,28 +161,56 @@ export class ArcPathWriter {
     const dy = radius * Math.sin(a0)
     const x0 = x + dx
     const y0 = y + dy
-    if (!this.hasPoint) this.d += 'M' + this.round(x0) + ',' + this.round(y0)
-    else if (Math.abs(this.cx - x0) > ARC_EPSILON || Math.abs(this.cy - y0) > ARC_EPSILON) this.d += 'L' + this.round(x0) + ',' + this.round(y0)
+    if (!this.hasPoint) this.putMove(this.round(x0), this.round(y0))
+    else if (Math.abs(this.cx - x0) > ARC_EPSILON || Math.abs(this.cy - y0) > ARC_EPSILON) this.putLine(this.round(x0), this.round(y0))
     if (!radius) return
     let sweep = ccw ? a0 - a1 : a1 - a0
     if (sweep < 0) sweep = (sweep % TAU) + TAU
     const r = this.round(radius)
-    const head = 'A' + r + ',' + r + ',0,'
-    const side = ccw ? ',0,' : ',1,'
+    const side = ccw ? 0 : 1
     if (sweep > TAU - ARC_EPSILON) {
-      this.d += head + '1' + side + this.round(x - dx) + ',' + this.round(y - dy) + head + '1' + side + this.round(x0) + ',' + this.round(y0)
+      this.putArc(r, 1, side, this.round(x - dx), this.round(y - dy))
+      this.putArc(r, 1, side, this.round(x0), this.round(y0))
       this.cx = x0
       this.cy = y0
       this.hasPoint = true
     } else if (sweep > ARC_EPSILON) {
       const ex = x + radius * Math.cos(a1)
       const ey = y + radius * Math.sin(a1)
-      this.d += head + (sweep >= Math.PI ? '1' : '0') + side + this.round(ex) + ',' + this.round(ey)
+      this.putArc(r, sweep >= Math.PI ? 1 : 0, side, this.round(ex), this.round(ey))
       this.cx = ex
       this.cy = ey
       this.hasPoint = true
     }
   }
+}
+
+/** One command of parsed SVG path data, absolute (the shape `parsePathData` gives; declared here so this module needs no parser). */
+export type ArcSeg =
+  | { cmd: 'M' | 'L'; x: number; y: number }
+  | { cmd: 'A'; rx: number; ry: number; rot: number; large: number; sweep: number; x: number; y: number }
+  | { cmd: 'Z' }
+
+/**
+ * The commands an {@link ArcPathWriter} writes, as the segments `parsePathData` reads back from its text: each number as
+ * the text prints it and the parser reads it (`v + 0`: the text has no negative zero). `finite` is false once a number
+ * that is not finite was written (its text, `NaN` or `Infinity`, does not read back as a number: such a path has to be
+ * read from the text).
+ */
+export class ArcSegWriter extends ArcPathWriter {
+  readonly segs: ArcSeg[] = []
+  finite = true
+  private n(v: number): number {
+    if (!Number.isFinite(v)) this.finite = false
+    return v + 0
+  }
+  protected override putMove(x: number, y: number): void { this.segs.push({ cmd: 'M', x: this.n(x), y: this.n(y) }) }
+  protected override putLine(x: number, y: number): void { this.segs.push({ cmd: 'L', x: this.n(x), y: this.n(y) }) }
+  protected override putArc(r: number, large: 0 | 1, sweep: 0 | 1, x: number, y: number): void {
+    const rr = this.n(r)
+    this.segs.push({ cmd: 'A', rx: rr, ry: rr, rot: 0, large, sweep, x: this.n(x), y: this.n(y) })
+  }
+  protected override putClose(): void { this.segs.push({ cmd: 'Z' }) }
 }
 
 // --- runs ----------------------------------------------------------------------------------------

@@ -15,6 +15,7 @@
 import { SYMBOL_DEFAULT_SIZE, pushAll } from './util.js'
 import type { SceneGroup, SceneItem, SceneRoot } from './types.js'
 import { ClipCollector } from './svg-defs.js'
+import { symbolGeometry, type PathData, type SymbolGeometry } from './geometry.js'
 import {
   PairAttrSink,
   areaMarkAttrs,
@@ -55,7 +56,6 @@ import {
   svgRootAttrs,
   symbolElementAttrs,
   symbolMarkPath,
-  symbolPath,
   textAttrs,
   trailAttrs,
   trailPath,
@@ -175,6 +175,36 @@ export function translatePathData(d: string, dx: number, dy: number): string {
     argi++
   }
   return out
+}
+
+/**
+ * The text with every absolute coordinate moved by (dx, dy) and rounded to 3 digits, the other arguments (radii, flags,
+ * relative deltas) as written: what `translatePathData(d.text(), dx, dy)` makes of it. Requires `d.finite`.
+ */
+function dataTranslated(d: PathData, dx: number, dy: number): string {
+  if (dx === 0 && dy === 0) return d.text()
+  let out = ''
+  let k = 0
+  for (let c = 0; c < d.letters.length; c++) {
+    const letter = d.letters[c]!
+    out += letter
+    const n = d.counts[c]!
+    const relative = letter === 'h' || letter === 'v'
+    for (let j = 0; j < n; j++, k++) {
+      const value = d.values[k]!
+      // (an arc's end point moves, its radii and flags do not; every other absolute argument alternates x, y)
+      const axis = relative ? 0 : letter === 'A' ? (j === 5 ? 1 : j === 6 ? 2 : 0) : j % 2 === 0 ? 1 : 2
+      const text = axis === 0 ? (d.odd?.get(k) ?? String(value)) : round3(axis === 1 ? value + dx : value + dy)
+      out += j ? ',' + text : text
+    }
+  }
+  return out
+}
+
+/** A symbol shape's 3-digit text moved to (dx, dy) (a dense batch's piece); `translateText` reads a text that is not finite. */
+function symbolTranslated(g: SymbolGeometry, dx: number, dy: number, translateText: (d: string, dx: number, dy: number) => string): string {
+  const d = g.rounded()
+  return d.finite ? dataTranslated(d, dx, dy) : translateText(g.text(), dx, dy)
 }
 
 /** Opt-in DOM rendering options. */
@@ -302,11 +332,7 @@ function denseSymbolItems(group: SceneGroup, items: SceneItem[], chunkSize: numb
       const it = items[j]!
       if (!batchableSymbol(it)) continue
       const r = Math.sqrt((it.size as number) ?? SYMBOL_DEFAULT_SIZE) / 2
-      d += translatePathData(
-        symbolPath((it as Record<string, unknown>).shape as string | undefined, r),
-        it.x as number,
-        it.y as number,
-      )
+      d += symbolTranslated(symbolGeometry((it as Record<string, unknown>).shape as string | undefined, r), it.x as number, it.y as number, translatePathData)
     }
     // A fresh desc object (never mutate a cached one): the patcher compares
     // against the previous descriptor, so reusing the object would hide the write.
@@ -540,9 +566,8 @@ function markItems(group: SceneGroup, type: string, options?: DomRenderOptions):
       for (let i = 0; i < items.length; i++) {
         const it = items[i]!
         if (!rectIsPainted(it)) continue
-        const d = rectItemPath(it)
-        if (d == null) continue
-        out.push(cachedDesc(it, () => linked(it, { tag: 'path', attrs: pairs((w) => rectPathAttrs(it, d, w)), clean: isClean(it) })))
+        // (the path is built only for an item whose descriptor is rebuilt: a clean item's is reused as it is)
+        out.push(cachedDesc(it, () => linked(it, { tag: 'path', attrs: pairs((w) => rectPathAttrs(it, rectItemPath(it)!, w)), clean: isClean(it) })))
       }
       return out
     }

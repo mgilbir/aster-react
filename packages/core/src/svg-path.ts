@@ -246,26 +246,17 @@ const parsedCache = new Map<string, PathCommand[]>()
 const PARSE_CACHE_LIMIT = 256
 
 /**
- * The path data of a custom symbol: `shape` parsed as SVG path data and drawn
- * scaled by the symbol radius `r = sqrt(size) / 2` about the origin, serialized
- * the way d3-path does (`num3` rounds to 3 decimals). Throws vega's own error
- * for an invalid path.
+ * A custom symbol shape (vega `symbols(name)` for a name that is not a built-in shape) parsed as SVG path data, once per
+ * distinct shape (bounded). Throws vega's own error for an invalid path. Drawn scaled by the symbol radius
+ * `r = sqrt(size) / 2` about the origin (`renderSvgPath(sink, commands, 0, 0, r)`).
  */
-export function customSymbolPathData(shape: string, r: number, num3: (v: number) => string): string {
+export function customSymbolCommands(shape: string): PathCommand[] {
   let parsed = parsedCache.get(shape)
   if (!parsed) {
     parsed = parseSvgPath(shape)
     if (parsedCache.size >= PARSE_CACHE_LIMIT) parsedCache.clear()
     parsedCache.set(shape, parsed)
   }
-  let d = ''
-  let open = false // d3-path closePath only emits Z after a point exists
-  renderSvgPath({
-    moveTo: (x, y) => { d += `M${num3(x)},${num3(y)}`; open = true },
-    lineTo: (x, y) => { d += `L${num3(x)},${num3(y)}`; open = true },
-    bezierCurveTo: (a, b, c, e, x, y) => { d += `C${num3(a)},${num3(b)},${num3(c)},${num3(e)},${num3(x)},${num3(y)}`; open = true },
-    quadraticCurveTo: (a, b, x, y) => { d += `Q${num3(a)},${num3(b)},${num3(x)},${num3(y)}`; open = true },
-    closePath: () => { if (open) d += 'Z' },
-  }, parsed, 0, 0, r)
-  return d
+  return parsed
 }
+

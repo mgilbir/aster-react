@@ -32,9 +32,11 @@ import type { SceneGroup, SceneItem, SceneRoot } from './types.js'
 import { Bounds, boundText, layoutBounds } from './bounds.js'
 import { textAnchor } from './text-metrics.js'
 import { imageBox } from './image-box.js'
-import { FLATTEN_TOLERANCE, flattenPath, insidePolys, type Poly } from './path-flatten.js'
+import { FLATTEN_TOLERANCE, insidePolys, type Poly } from './path-flatten.js'
 import { SYMBOL_DEFAULT_SIZE } from './util.js'
-import { computeAreaPath, computeLinePath, isInert, itemArcPath, rectItemPath, symbolPathExact, trailPath } from './render.js'
+import { isInert, itemArcGeometry, lineStrokeWidth } from './render.js'
+import { areaGeometry, lineGeometry, rectData, symbolGeometry, trailGeometry } from './geometry.js'
+import { arcExactSegs, arcPolys, curvePolys, flattenSegs, pathPolys, segsOf, symbolOutline, transformPolys } from './geometry-read.js'
 
 export interface HitTarget {
   item: SceneItem
@@ -422,7 +424,7 @@ export function buildHitIndex(scene: SceneRoot, cell = DEFAULT_CELL): HitIndex {
     return b.empty() ? { x1: Infinity, y1: Infinity, x2: -Infinity, y2: -Infinity } : { x1: tx + b.x1, y1: ty + b.y1, x2: tx + b.x2, y2: ty + b.y2 }
   }
   const pathClip = (d: string, ox: number, oy: number): Clip => {
-    const polys = flattenPath(d, (x, y) => [ox + x, oy + y])
+    const polys = transformPolys(pathPolys(d), (x, y) => [ox + x, oy + y])
     const box = polysBox(polys)
     // (an outline with no point clips everything away)
     return box ? { x1: box[0], y1: box[1], x2: box[2], y2: box[3], polys } : { x1: Infinity, y1: Infinity, x2: -Infinity, y2: -Infinity }
@@ -509,7 +511,7 @@ export function buildHitIndex(scene: SceneRoot, cell = DEFAULT_CELL): HitIndex {
     const items = (group.items ?? []) as SceneItem[]
     const isBox = (it: SceneItem | undefined): it is SceneItem => it !== undefined && rec(it)._bg === true && typeof it.path === 'string'
     const face = (paint: SceneItem, path: string): Entry | null => {
-      const e = geomEntry(group, 'group', () => flattenPath(path, (x, y) => [gx + x, gy + y]), paint)
+      const e = geomEntry(group, 'group', () => transformPolys(pathPolys(path), (x, y) => [gx + x, gy + y]), paint)
       if (e) e.groupBox = true
       return e
     }
@@ -586,8 +588,8 @@ export function buildHitIndex(scene: SceneRoot, cell = DEFAULT_CELL): HitIndex {
       const angle = (rec(item).angle as number | undefined) ?? 0
       const e = angle
         // a turned symbol: its outline in its own frame
-        ? geomEntry(item, marktype, () => flattenPath(path, (x, y) => [x, y]), item, { cx: tx + (item.x || 0), cy: ty + (item.y || 0), rot: angle * (Math.PI / 180) })
-        : geomEntry(part === 'bg' ? guide : item, marktype, () => flattenPath(path, (x, y) => [tx + (item.x || 0) + x, ty + (item.y || 0) + y]), item)
+        ? geomEntry(item, marktype, () => pathPolys(path), item, { cx: tx + (item.x || 0), cy: ty + (item.y || 0), rot: angle * (Math.PI / 180) })
+        : geomEntry(part === 'bg' ? guide : item, marktype, () => transformPolys(pathPolys(path), (x, y) => [tx + (item.x || 0) + x, ty + (item.y || 0) + y]), item)
       if (e) entries.push(e)
     }
     // a clipped legend symbol (clipHeight): the clip is in the frame of the legend's leaves; an entry box that is not part of its
@@ -635,31 +637,30 @@ export function buildHitIndex(scene: SceneRoot, cell = DEFAULT_CELL): HitIndex {
   function addMulti(group: SceneGroup, type: Multi, tx: number, ty: number): void {
     const items = (group.items ?? []) as SceneItem[]
     if (!items.length) return
-    let d: string
+    let build: () => Poly[]
     let paint: Record<string, unknown>
     let stroke: Stroke | null
-    if (type === 'line') {
-      const info = computeLinePath(group, true)
-      if (!info) return
-      d = String(info.path)
-      paint = { fill: info.fill }
-      // (vega draws a line 2 wide unless its first item says otherwise: see computeLinePath)
-      stroke = strokeOf(info.first, info.sw ?? 1)
-    } else if (type === 'area') {
-      const info = computeAreaPath(group, true)
-      if (!info) return
-      d = String(info.path)
-      paint = info.first as Record<string, unknown>
-      stroke = strokeOf(info.first)
+    const first = items[0]!
+    if (type === 'line' || type === 'area') {
+      // (the mark's cached geometry: its full-precision outline, flattened once and placed at (tx, ty))
+      const geometry = type === 'line' ? lineGeometry(items) : areaGeometry(items)
+      if (geometry === null || geometry.empty) return
+      build = () => curvePolys(geometry, tx, ty)
+      // (vega draws a line 2 wide unless its first item says otherwise: see lineStrokeWidth)
+      paint = type === 'line' ? { fill: first.fill } : first as Record<string, unknown>
+      stroke = type === 'line' ? strokeOf(first, lineStrokeWidth(first) ?? 1) : strokeOf(first)
     } else {
       if (items.length <= 1) return
-      d = String(trailPath(items))
+      const geometry = trailGeometry(items)!
+      if (!geometry.outline.drawn) return
+      // (its text is written here, as it always was: a negative width throws now, not when the index is queried)
+      arcExactSegs(geometry)
+      build = () => arcPolys(geometry, tx, ty)
       // (vega paints a trail's outline with its first item's fill and stroke, like any path)
-      paint = items[0] as Record<string, unknown>
-      stroke = strokeOf(items[0]!)
+      paint = first as Record<string, unknown>
+      stroke = strokeOf(first)
     }
-    if (!d) return
-    const e = geomEntry(items[0]!, type, () => flattenPath(d, (x, y) => [tx + x, ty + y]), paint, undefined, stroke)
+    const e = geomEntry(first, type, build, paint, undefined, stroke)
     if (e) {
       e.multi = { type, items, tx, ty }
       entries.push(e)
@@ -705,12 +706,9 @@ export function buildHitIndex(scene: SceneRoot, cell = DEFAULT_CELL): HitIndex {
           || rec(item).cornerRadiusTopRight !== undefined || rec(item).cornerRadiusBottomLeft !== undefined || rec(item).cornerRadiusBottomRight !== undefined
         if (rounded) {
           // a rounded rect: its own outline, so the corners outside it are not hits
-          const d = rectItemPath(item)
-          if (d != null) {
-            const e = geomEntry(item, marktype, () => flattenPath(String(d), (x, y) => [tx + x, ty + y]), item, undefined, stroke)
-            if (e) entries.push(e)
-            return
-          }
+          const e = geomEntry(item, marktype, () => flattenSegs(segsOf(rectData(item)), (x, y) => [tx + x, ty + y]), item, undefined, stroke)
+          if (e) entries.push(e)
+          return
         }
         if (!stroke) {
           // the common case: a filled rectangle is its box
@@ -743,10 +741,12 @@ export function buildHitIndex(scene: SceneRoot, cell = DEFAULT_CELL): HitIndex {
         return
       }
       case 'arc': {
-        const d = String(itemArcPath(item, null))
+        const geometry = itemArcGeometry(item)
+        // (its text is written here, as it always was: a negative radius throws now, not when the index is queried)
+        arcExactSegs(geometry)
         const ox = tx + (item.x ?? 0)
         const oy = ty + (item.y ?? 0)
-        const e = geomEntry(item, marktype, () => flattenPath(d, (x, y) => [ox + x, oy + y]), item)
+        const e = geomEntry(item, marktype, () => arcPolys(geometry, ox, oy), item)
         if (e) entries.push(e)
         return
       }
@@ -760,8 +760,8 @@ export function buildHitIndex(scene: SceneRoot, cell = DEFAULT_CELL): HitIndex {
         const angle = (rec(item).angle as number | undefined) ?? 0
         const e = angle
           // vega draws a path item at translate(x, y) rotate(angle) scale(scaleX, scaleY)
-          ? geomEntry(item, marktype, () => flattenPath(path, (x, y) => [sx * x, sy * y]), item, { cx: tx + (item.x || 0), cy: ty + (item.y || 0), rot: angle * (Math.PI / 180) })
-          : geomEntry(item, marktype, () => flattenPath(path, (x, y) => [tx + (item.x || 0) + sx * x, ty + (item.y || 0) + sy * y]), item)
+          ? geomEntry(item, marktype, () => transformPolys(pathPolys(path), (x, y) => [sx * x, sy * y]), item, { cx: tx + (item.x || 0), cy: ty + (item.y || 0), rot: angle * (Math.PI / 180) })
+          : geomEntry(item, marktype, () => transformPolys(pathPolys(path), (x, y) => [tx + (item.x || 0) + sx * x, ty + (item.y || 0) + sy * y]), item)
         if (e) entries.push(e)
         return
       }
@@ -999,18 +999,7 @@ export function buildHitIndex(scene: SceneRoot, cell = DEFAULT_CELL): HitIndex {
   }
 }
 
-// Symbol outlines are shared by every symbol of a shape and size.
-const OUTLINES = new Map<string, { polys: Poly[]; reach: number }>()
-
+/** A symbol shape's outline at radius r (its full-precision path's polygons), shared by every symbol of that shape and size. */
 function shapeOutline(shape: string, r: number): { polys: Poly[]; reach: number } {
-  const key = `${shape}|${r}`
-  let o = OUTLINES.get(key)
-  if (o) return o
-  const polys = flattenPath(symbolPathExact(shape, r), (x, y) => [x, y])
-  let reach = 0
-  for (const { pts } of polys) for (let i = 0; i < pts.length; i += 2) reach = Math.max(reach, Math.hypot(pts[i]!, pts[i + 1]!))
-  o = { polys, reach }
-  if (OUTLINES.size > 256) OUTLINES.clear()
-  OUTLINES.set(key, o)
-  return o
+  return symbolOutline(symbolGeometry(shape, r))
 }

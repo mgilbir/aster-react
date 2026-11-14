@@ -142,7 +142,8 @@ export function randomScene(r: Rnd, finite = false): SceneRoot {
     ] } as unknown as SceneItem] } as SceneGroup)
   }
   return {
-    width: 320, height: 240, padding: { top: 5, left: 7, right: 3, bottom: 2 },
+    // (now and then a view narrower than its padding: the frame's closing edge for a negative width)
+    width: r() < 0.08 ? 4 : 320, height: 240, padding: { top: 5, left: 7, right: 3, bottom: 2 },
     frameCornerRadius: r() < 0.2 ? 6 : undefined, frameStroke: r() < 0.3 ? '#ccc' : undefined,
     items: marks,
   } as unknown as SceneRoot

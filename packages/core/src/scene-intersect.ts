@@ -19,8 +19,9 @@
  */
 import { Bounds, DEG_TO_RAD, boundGroupItem, boundText, boundTypedMark } from './bounds.js'
 import { textAnchor } from './text-metrics.js'
-import { itemArcPath } from './render.js'
-import { flattenPath, insidePolys } from './path-flatten.js'
+import { itemArcGeometry } from './render.js'
+import { insidePolys, type Poly } from './path-flatten.js'
+import { arcLocalPolys, pathPolys, transformPolys } from './geometry-read.js'
 import { MARK_NODE } from './util.js'
 import type { SceneGroup, SceneItem, SceneRoot } from './types.js'
 
@@ -86,7 +87,7 @@ function intersectText(item: SceneItem, box: Bounds): boolean {
 }
 
 /** The outline of an arc, shape or path item, in the frame of its group. */
-function outlineOf(marktype: string, item: SceneItem): ReturnType<typeof flattenPath> {
+function outlineOf(marktype: string, item: SceneItem): Poly[] {
   const it = item as Rec
   const x = (it.x as number) || 0
   const y = (it.y as number) || 0
@@ -95,12 +96,11 @@ function outlineOf(marktype: string, item: SceneItem): ReturnType<typeof flatten
   const sin = Math.sin(rot)
   const place = (px: number, py: number): [number, number] => [x + px * cos - py * sin, y + px * sin + py * cos]
   if (marktype === 'arc') {
-    const d = itemArcPath(it as SceneItem)
-    return flattenPath(d, place)
+    return transformPolys(arcLocalPolys(itemArcGeometry(it as SceneItem)), place)
   }
   const sx = (it.scaleX as number) || 1
   const sy = (it.scaleY as number) || 1
-  return flattenPath(String(it.path ?? ''), (px, py) => place(px * sx, py * sy))
+  return transformPolys(pathPolys(String(it.path ?? '')), (px, py) => place(px * sx, py * sy))
 }
 
 function intersectPath(marktype: string, item: SceneItem, bounds: Bounds, box: Bounds): boolean {

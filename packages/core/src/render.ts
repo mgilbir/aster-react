@@ -10,12 +10,12 @@ import { checkPathLength, metering } from './limits.js'
 export { baselineOffset }
 import { textAnchor, truncateToLimit } from './text-metrics.js'
 import { ClipCollector, gradientRef, isGradientPaint, type ClipDef } from './svg-defs.js'
-import { customSymbolPathData } from './svg-path.js'
 import { sanitizeHref } from './url-policy.js'
 import { imageBox, imageHref, itemImage } from './image-box.js'
 import type { ScaleSnapshots } from './guide-caption.js'
 export { ClipCollector, type ClipDef }
-import { areaPath, ArcPathWriter, linePath, resolveCurve, traceArea, traceLine, type PathSink } from './shape.js'
+import { ArcPathWriter } from './shape.js'
+import { areaGeometry, arcGeometry, DIGITS3, EXACT, lineGeometry, PathData, rectData, symbolGeometry, trailGeometry } from './geometry.js'
 
 /**
  * Path data built only from `num`/`num3` output (or a `PathWriter`, which writes
@@ -33,18 +33,10 @@ const gen = (s: string): GeneratedPath => s as GeneratedPath
 // it is produced. With no limits scope active it is one boolean load.
 const genD = (d: GeneratedPath): string => { if (metering) checkPathLength(d); return d }
 
-// A line or area mark draws one path through its items, in the curve the first item's `interpolate` names (see
-// `resolveCurve`). Item columns: `x` and `y` are `item.x || 0` and `item.y || 0`, and an item with
-// `defined === false` is a gap (it splits the path, it is not a point).
-function itemCurve(first: Record<string, unknown> | undefined): ReturnType<typeof resolveCurve> {
-  return resolveCurve(first?.interpolate as string | undefined, first?.orient as string | undefined, first?.tension as number | undefined)
-}
-
-/** Vega-scenegraph's rounded-rect path (C = 0.448084975506 bezier circle). */
-function roundedFramePath(x: number, y: number, w: number, h: number, r: number): GeneratedPath {
+/** Vega-scenegraph's rounded-rect path (C = 0.448084975506 bezier circle), to 3 digits. */
+function roundedFrameData(x: number, y: number, w: number, h: number, r: number): PathData {
   const c = 0.448084975506
   const kr1 = r * (1 - c)
-  const f = (v: number) => String(Math.round(v * 1000) / 1000)
   const x1 = x + r, y1 = y
   const x2 = x + w - r, y2 = y
   const x3 = x + w, y3 = y + r
@@ -53,24 +45,29 @@ function roundedFramePath(x: number, y: number, w: number, h: number, r: number)
   const x6 = x + r, y6 = y + h
   const x7 = x, y7 = y + h - r
   const x8 = x, y8 = y + r
-  return gen(`M${f(x1)},${f(y1)}L${f(x2)},${f(y2)}C${f(x2 + kr1)},${f(y2)},${f(x3)},${f(y3 - kr1)},${f(x3)},${f(y3)}`
-    + `L${f(x4)},${f(y4)}C${f(x4)},${f(y4 + kr1)},${f(x5 + kr1)},${f(y5)},${f(x5)},${f(y5)}`
-    + `L${f(x6)},${f(y6)}C${f(x6 - kr1)},${f(y6)},${f(x7)},${f(y7 + kr1)},${f(x7)},${f(y7)}`
-    + `L${f(x8)},${f(y8)}C${f(x8)},${f(y8 - kr1)},${f(x1 - kr1)},${f(y1)},${f(x1)},${f(y1)}Z`)
+  return new PathData(DIGITS3).M(x1, y1).L(x2, y2).C(x2 + kr1, y2, x3, y3 - kr1, x3, y3)
+    .L(x4, y4).C(x4, y4 + kr1, x5 + kr1, y5, x5, y5)
+    .L(x6, y6).C(x6 - kr1, y6, x7, y7 + kr1, x7, y7)
+    .L(x8, y8).C(x8, y8 - kr1, x1 - kr1, y1, x1, y1).Z()
 }
 
 /**
  * The root frame's background path. Shared by the SVG, DOM and canvas painters
  * so the frame's fill, stroke and rounded corners cannot drift between them.
  */
-export function frameBackgroundPath(scene: SceneRoot, plotW0: number, plotH0: number): GeneratedPath {
+export function frameBackgroundData(scene: SceneRoot, plotW0: number, plotH0: number): PathData {
   // vega's rectangle path reads `item.width || 0` / `item.height || 0`: a view size that is NaN draws a zero-size frame
   const plotW = plotW0 || 0
   const plotH = plotH0 || 0
   const frameInset = scene.frameStroke && scene.frameStrokeWidth == null ? 0.5 : 0
   return scene.frameCornerRadius != null && scene.frameCornerRadius > 0
-    ? roundedFramePath(frameInset, frameInset, plotW, plotH, Math.min(scene.frameCornerRadius, plotW / 2, plotH / 2))
-    : gen(frameInset ? `M0.5,0.5h${num(plotW)}v${num(plotH)}h${back(plotW)}Z` : `M0,0h${num(plotW)}v${num(plotH)}h${back(plotW)}Z`)
+    ? roundedFrameData(frameInset, frameInset, plotW, plotH, Math.min(scene.frameCornerRadius, plotW / 2, plotH / 2))
+    : new PathData(EXACT).M(frameInset ? 0.5 : 0, frameInset ? 0.5 : 0).h(plotW).v(plotH).hBack(plotW).Z()
+}
+
+/** The root frame's background path text (see {@link frameBackgroundData}). */
+export function frameBackgroundPath(scene: SceneRoot, plotW0: number, plotH0: number): GeneratedPath {
+  return gen(frameBackgroundData(scene, plotW0, plotH0).text())
 }
 
 /** The closing `h` of a rectangle path `w` wide: back by `w` (vega's `h${-w}`: a negative width closes forward). */
@@ -245,60 +242,6 @@ function itemsOf(group: SceneGroup): SceneItem[] {
   return group.items ?? []
 }
 
-/** The columns a line is drawn from: a gap (`defined === false`) ends the current run of the curve, it is not a closed sub-path. */
-function lineColumns(items: SceneItem[]): { curve: ReturnType<typeof resolveCurve>; xs: Float64Array; ys: Float64Array; live: Uint8Array } {
-  const n = items.length
-  const xs = new Float64Array(n)
-  const ys = new Float64Array(n)
-  const live = new Uint8Array(n)
-  for (let i = 0; i < n; i++) {
-    const it = items[i]!
-    if (it.defined === false) continue
-    live[i] = 1
-    xs[i] = (it.x as number) || 0
-    ys[i] = (it.y as number) || 0
-  }
-  return { curve: itemCurve(items[0] as Record<string, unknown> | undefined), xs, ys, live }
-}
-
-/** The top and bottom boundaries of an area: the top is the items' (x, y), the bottom at `y + height` (a horizontal area: `x + width`). */
-function areaColumns(items: SceneItem[]): { curve: ReturnType<typeof resolveCurve>; topX: Float64Array; topY: Float64Array; baseX: Float64Array; baseY: Float64Array; live: Uint8Array } {
-  const first = items[0] as Record<string, unknown> | undefined
-  const horizontal = first?.orient === 'horizontal'
-  const n = items.length
-  const topX = new Float64Array(n)
-  const topY = new Float64Array(n)
-  const baseX = horizontal ? new Float64Array(n) : topX
-  const baseY = horizontal ? topY : new Float64Array(n)
-  const live = new Uint8Array(n)
-  for (let i = 0; i < n; i++) {
-    const it = items[i]!
-    if (it.defined === false) continue
-    live[i] = 1
-    const x = (it.x as number) || 0
-    const y = (it.y as number) || 0
-    topX[i] = x
-    topY[i] = y
-    if (horizontal) baseX[i] = x + ((it.width as number) || 0)
-    else baseY[i] = y + ((it.height as number) || 0)
-  }
-  return { curve: itemCurve(first), topX, topY, baseX, baseY, live }
-}
-
-/** A line mark's curve drawn into any sink, at full precision. */
-export function lineInto(sink: PathSink, items: SceneItem[]): void {
-  if (!items.length) return
-  const g = lineColumns(items)
-  traceLine(sink, g.curve, g.xs, g.ys, g.live)
-}
-
-/** An area mark's outline drawn into any sink, at full precision. */
-export function areaInto(sink: PathSink, items: SceneItem[]): void {
-  if (!items.length) return
-  const g = areaColumns(items)
-  traceArea(sink, g.curve, g.topX, g.topY, g.baseX, g.baseY, g.live)
-}
-
 function renderLine(group: SceneGroup, open: string): string {
   const items = itemsOf(group)
   let out = open
@@ -336,20 +279,17 @@ export function computeLinePath(group: SceneGroup, exact = false): {
   /** Vega styles a line from `items[0]`: its paint is the path's paint. */
   first: SceneItem
 } | null {
-  const digits = exact ? null : 3
   const items = itemsOf(group)
-  if (!items.length) return null
-  const geometry = lineColumns(items)
-  const path = linePath(geometry.curve, geometry.xs, geometry.ys, geometry.live, digits)
+  const geometry = lineGeometry(items)
+  if (geometry === null) return null
+  const path = exact ? geometry.exactText() : geometry.text()
+  if (path === '') return null
 
-  if (!path) return null
   const stroke = group.items?.[0]?.stroke as string | undefined
-  const strokeWidth = group.items?.[0]?.strokeWidth as number | undefined
   const opacity = group.items?.[0]?.opacity as number | undefined
   const strokeDash = group.items?.[0]?.strokeDash as number[] | undefined
   const fillOpacity = group.items?.[0]?.fillOpacity as number | undefined
-  // Vega default: line marks have strokeWidth=2
-  const sw = strokeWidth ?? (stroke != null ? 2 : undefined)
+  const sw = lineStrokeWidth(items[0]!)
   return {
     path: gen(path),
     stroke,
@@ -360,6 +300,11 @@ export function computeLinePath(group: SceneGroup, exact = false): {
     fill: (items[0] as Record<string, unknown> | undefined)?.fill as string | undefined,
     first: items[0]!,
   }
+}
+
+/** The width a line mark is stroked with, from its first item: vega's default is 2 when it has a stroke and no width. */
+export function lineStrokeWidth(first: SceneItem): number | undefined {
+  return (first.strokeWidth as number | undefined) ?? (first.stroke != null ? 2 : undefined)
 }
 
 /** Shared area-path geometry for the string renderer and the DOM patcher; `exact` as for {@link computeLinePath}. */
@@ -375,12 +320,12 @@ export function computeAreaPath(group: SceneGroup, exact = false): {
   /** Vega styles an area from `items[0]`: its paint is the path's paint. */
   first: SceneItem
 } | null {
-  const digits = exact ? null : 3
   const items = itemsOf(group)
-  const g = areaColumns(items)
-  const path = areaPath(g.curve, g.topX, g.topY, g.baseX, g.baseY, g.live, digits)
+  const geometry = areaGeometry(items)
+  if (geometry === null) return null
+  const path = exact ? geometry.exactText() : geometry.text()
+  if (path === '') return null
 
-  if (!path) return null
   return {
     path: gen(path),
     fill: items[0]?.fill as string | { gradient: string } | undefined,
@@ -412,106 +357,11 @@ function renderArea(group: SceneGroup, open: string): string {
   return out
 }
 
-/** Generate an SVG path d attribute for a given symbol shape and radius. */
-export const symbolPath = ((shape: string | undefined, r: number) => symbolPathImpl(shape, r)) as (shape: string | undefined, r: number) => GeneratedPath
-
 /**
- * The same symbol geometry with full-precision coordinates. vega's Bound pass
- * traces the shape's draw calls exactly (the 3-decimal rounding belongs to the
- * serialized `d` only), so anything that measures a symbol must use this.
+ * The SVG `d` of a symbol shape at radius r: d3-path's 3-digit text (vega routes its symbols through `Path(3)`), cached per
+ * shape and radius (geometry.ts). A custom shape is an SVG path scaled by r; an invalid one throws vega's "Invalid SVG path".
  */
-export function symbolPathExact(shape: string | undefined, r: number): string {
-  return symbolPathImpl(shape, r, String)
-}
-
-const HALF_SQRT3 = Math.sqrt(3) / 2 // vega util/constants HalfSqrt3
-
-function symbolPathImpl(shape: string | undefined, r: number, num: (x: number) => string = num3): string {
-  // vega symbols serialize through d3-path Path(3) — coordinates round to 3
-  // (the bound pass traces the same shape unrounded: see symbolPathExact).
-  // vega: `symbols(item.shape || 'circle')`
-  switch (shape || 'circle') {
-    case 'square':
-      return `M${num(-r)},${num(-r)}h${num(2 * r)}v${num(2 * r)}h${num(-2 * r)}Z`
-    case 'cross': {
-      const s = r / 2.5
-      return [
-        `M${num(-r)},${num(-s)}`,
-        `L${num(-r)},${num(s)}`,
-        `L${num(-s)},${num(s)}`,
-        `L${num(-s)},${num(r)}`,
-        `L${num(s)},${num(r)}`,
-        `L${num(s)},${num(s)}`,
-        `L${num(r)},${num(s)}`,
-        `L${num(r)},${num(-s)}`,
-        `L${num(s)},${num(-s)}`,
-        `L${num(s)},${num(-r)}`,
-        `L${num(-s)},${num(-r)}`,
-        `L${num(-s)},${num(-s)}`,
-        'Z',
-      ].join('')
-    }
-    case 'diamond':
-      return `M${num(-r)},0L0,${num(-r)}L${num(r)},0L0,${num(r)}Z`
-    case 'triangle-up': {
-      const h = r * HALF_SQRT3
-      return `M0,${num(-h)}L${num(-r)},${num(h)}L${num(r)},${num(h)}Z`
-    }
-    case 'triangle-down': {
-      const h = r * HALF_SQRT3
-      return `M0,${num(h)}L${num(-r)},${num(-h)}L${num(r)},${num(-h)}Z`
-    }
-    case 'triangle-right': {
-      const h = r * HALF_SQRT3
-      return `M${num(h)},0L${num(-h)},${num(-r)}L${num(-h)},${num(r)}Z`
-    }
-    case 'triangle-left': {
-      const h = r * HALF_SQRT3
-      return `M${num(-h)},0L${num(h)},${num(-r)}L${num(h)},${num(r)}Z`
-    }
-    case 'stroke':
-      return `M${num(-r)},0L${num(r)},0`
-    case 'arrow': {
-      const st = r / 7
-      const t = r / 2.5
-      const v = r / 8
-      return [
-        `M${num(-st)},${num(r)}`,
-        `L${num(st)},${num(r)}`,
-        `L${num(st)},${num(-v)}`,
-        `L${num(t)},${num(-v)}`,
-        'L0,' + num(-r),
-        `L${num(-t)},${num(-v)}`,
-        `L${num(-st)},${num(-v)}`,
-        'Z',
-      ].join('')
-    }
-    case 'wedge': {
-      const h = r * Math.sqrt(3) / 2
-      const o = h - r * (Math.sqrt(3) / 3)
-      const b = r / 4
-      return `M0,${num(-h - o)}L${num(-b)},${num(h - o)}L${num(b)},${num(h - o)}Z`
-    }
-    case 'triangle': {
-      const h = r * Math.sqrt(3) / 2
-      const o = h - r * (Math.sqrt(3) / 3)
-      return `M0,${num(-h - o)}L${num(-r)},${num(h - o)}L${num(r)},${num(h - o)}Z`
-    }
-    case 'circle':
-      // d3-symbol's circle through a canvas arc: the arcs only render for a
-      // truthy radius, so with r=0 the path degenerates to its moveTo
-      // ('M0,0') and with r=NaN to 'MNaN,0' — matching vega's renderer.
-      return r > 0
-        ? `M${num(r)},0A${num(r)},${num(r)},0,1,1,${num(-r)},0A${num(r)},${num(r)},0,1,1,${num(r)},0`
-        : r === 0 ? 'M0,0' : `M${num(r)},0`
-    default:
-      // vega `symbols(name)`: any other name is a custom SVG path, parsed and
-      // scaled by sqrt(size)/2 (svg-path.ts); the result is built from numbers
-      // and command letters only, so no input text reaches the document.
-      // An invalid path throws vega's "Invalid SVG path" error, like vega.
-      return customSymbolPathData(shape!, r, num)
-  }
-}
+export const symbolPath = ((shape: string | undefined, r: number) => symbolGeometry(shape, r).text()) as (shape: string | undefined, r: number) => GeneratedPath
 
 function renderSymbols(group: SceneGroup, open: string): string {
   const links = group.hasLinks === true
@@ -653,56 +503,7 @@ function renderRects(group: SceneGroup, open: string): string {
  * Vega renders rect marks as path elements (with optional cornerRadius).
  * Never null for a rect item: an unsized one is a zero-size path (vega).
  */
-export const rectItemPath = rectItemPathImpl as (it: SceneItem) => GeneratedPath | null
-
-function rectItemPathImpl(it: SceneItem): string | null {
-  let w = it.width
-  let h = it.height
-  // Vega-scenegraph renders rects with undefined positions at (0,0)
-  // (`item.x || 0`, `item.y || 0`), so default missing x/y to 0 rather than
-  // dropping the rect.
-  const x0 = (it.x as number | undefined) || 0
-  const y0 = (it.y as number | undefined) || 0
-  // The extent is the item's own width and height: the encode turned x2/y2 into them (adjustSpatial, which normalizes the rect so
-  // x is the min edge and the extent positive), and an item whose encode threw before that never had them -- a zero-size path.
-  // vega draws every rect item, an unsized one as a zero-size path at its origin
-  // (`item.width || 0`, `item.height || 0`), e.g. a scale that returned nothing for y2
-  if (w == null) w = 0
-  if (h == null) h = 0
-  // Vega's rectangle path builders read `item.width || 0` and `item.height || 0`:
-  // a NaN scale result (a degenerate range, e.g. `range: "symbol"` on a band
-  // scale) renders a zero-size rect at the origin, not a `NaN` path.
-  if (!Number.isFinite(w)) w = 0
-  if (!Number.isFinite(h)) h = 0
-  // Vega's rounded-rect path builder (vega-scenegraph/path/rectangle.js):
-  // per-corner radii clamped to min(w,h)/2, quarter arcs approximated by
-  // cubics with C = 0.448084975506.
-  const rec = it as Record<string, unknown>
-  const cr = rec.cornerRadius
-  const s = Math.min(w, h) / 2
-  // vega (marks' `tl`..`bl` accessors, then `clamp(+radius, 0, s)`): a corner falls back to
-  // `cornerRadius`, a falsy radius is 0, anything else is read with unary plus -- so a non-numeric
-  // radius ("round") is NaN, which is NOT "no corner": the path is the rounded one, in NaNs.
-  const clampR = (v: unknown) => Math.max(0, Math.min(+(((v ?? cr) as number) || 0), s))
-  const tl = clampR(rec.cornerRadiusTopLeft)
-  const tr = clampR(rec.cornerRadiusTopRight)
-  const br = clampR(rec.cornerRadiusBottomRight)
-  const bl = clampR(rec.cornerRadiusBottomLeft)
-  if (!(tl <= 0 && tr <= 0 && bl <= 0 && br <= 0)) {
-    const C = 0.448084975506
-    const x2 = x0 + w
-    const y2 = y0 + h
-    return `M${num(x0 + tl)},${num(y0)}L${num(x2 - tr)},${num(y0)}`
-      + `C${num(x2 - C * tr)},${num(y0)},${num(x2)},${num(y0 + C * tr)},${num(x2)},${num(y0 + tr)}`
-      + `L${num(x2)},${num(y2 - br)}`
-      + `C${num(x2)},${num(y2 - C * br)},${num(x2 - C * br)},${num(y2)},${num(x2 - br)},${num(y2)}`
-      + `L${num(x0 + bl)},${num(y2)}`
-      + `C${num(x0 + C * bl)},${num(y2)},${num(x0)},${num(y2 - C * bl)},${num(x0)},${num(y2 - bl)}`
-      + `L${num(x0)},${num(y0 + tl)}`
-      + `C${num(x0)},${num(y0 + C * tl)},${num(x0 + C * tl)},${num(y0)},${num(x0 + tl)},${num(y0)}Z`
-  }
-  return `M${num(x0)},${num(y0)}h${num(w)}v${num(h)}h${num(-w)}Z`
-}
+export const rectItemPath = ((it: SceneItem) => rectData(it).text()) as (it: SceneItem) => GeneratedPath | null
 
 function renderRules(group: SceneGroup, open: string): string {
   const links = group.hasLinks === true
@@ -865,58 +666,9 @@ function renderTrail(group: SceneGroup, open: string): string {
   return out
 }
 
-/** The path of a trail: one capsule per segment of a run of items, at full precision. */
+/** The path of a trail: one capsule per segment of a run of items, at full precision (the mark's cached geometry). */
 export function trailPath(items: SceneItem[]): GeneratedPath {
-  const context = new ArcPathWriter()
-  trailInto(context, items)
-  return gen(context.d)
-}
-
-/**
- * The capsules of a trail drawn into any sink (the path text and the bounds both take them from here). Each segment between
- * consecutive items is a capsule (round caps of the items' widths). x and y are `item.x || 0`, the size `item.size || 1`;
- * an item with `defined === false` ends the run.
- */
-export function trailInto(context: ArcSink, items: SceneItem[]): void {
-  let ready = false
-  let x1 = 0, y1 = 0, r1 = 0
-  const point = (x2: number, y2: number, w2: number): void => {
-    const r2 = w2 / 2
-    if (ready) {
-      let ux = y1 - y2
-      let uy = x2 - x1
-      if (ux || uy) {
-        // get normal vector
-        const ud = Math.hypot(ux, uy)
-        const rx = (ux /= ud) * r1
-        const ry = (uy /= ud) * r1
-        const t = Math.atan2(uy, ux)
-        // draw segment
-        context.moveTo(x1 - rx, y1 - ry)
-        context.lineTo(x2 - ux * r2, y2 - uy * r2)
-        context.arc(x2, y2, r2, t - Math.PI, t)
-        context.lineTo(x1 + rx, y1 + ry)
-        context.arc(x1, y1, r1, t, t + Math.PI)
-      } else {
-        context.arc(x2, y2, r2, 0, 2 * Math.PI)
-      }
-      context.closePath()
-    } else {
-      ready = true
-    }
-    x1 = x2
-    y1 = y2
-    r1 = r2
-  }
-  const n = items.length
-  let defined0 = false
-  for (let i = 0; i <= n; ++i) {
-    const it = items[i]
-    if (!(i < n && !(it!.defined === false)) === defined0) {
-      if (defined0 = !defined0) ready = false
-    }
-    if (defined0) point(+((it!.x as number) || 0), +((it!.y as number) || 0), +((it!.size as number) || 1))
-  }
+  return gen(trailGeometry(items)?.text() ?? '')
 }
 
 function renderImages(group: SceneGroup, open: string): string {
@@ -1172,18 +924,18 @@ export function arcPath(outerRadius: number, innerRadius: number, startAngle: nu
   return gen(writer.d)
 }
 
-/**
- * The outline of an arc item's sector on `sink` (about the origin: the item's position is the caller's to apply). A radius,
- * angle, corner radius or pad angle that is missing, null, NaN or 0 reads as 0, as the arc mark's accessors read them
- * (`outerRadius` standing in with the older `radius`); anything else is taken as a number.
- */
-export function itemArcInto(sink: ArcSink, it: SceneItem): void {
-  const rec = it as Record<string, unknown>
-  arcInto(sink, +((it.outerRadius ?? it.radius) as number || 0), +(it.innerRadius as number || 0), +(it.startAngle as number || 0), +(it.endAngle as number || 0), +(rec.cornerRadius as number || 0), +(rec.padAngle as number || 0))
-}
+/** An arc item's sector traced from its six numbers (`arcNumbers`). */
+const traceArc = (sink: ArcSink, n: Float64Array): void => arcInto(sink, n[0]!, n[1]!, n[2]!, n[3]!, n[4]!, n[5]!)
 
-/** The path text of an arc item's sector (see {@link itemArcInto}), rounded to `digits` decimals (`null` for none). */
+/**
+ * An arc item's cached geometry: its sector about the origin (the item's position is the caller's to apply) -- the outline the
+ * canvas, the bounds pen and the label painter replay, its 3-digit text, segments and polygons.
+ */
+export const itemArcGeometry = (it: SceneItem): ReturnType<typeof arcGeometry> => arcGeometry(it, traceArc)
+
+/** The path text of an arc item's sector (see {@link itemArcGeometry}), rounded to `digits` decimals (`null` for none). */
 export function itemArcPath(it: SceneItem, digits: number | null = 3): GeneratedPath {
+  if (digits === 3) return gen(itemArcGeometry(it).text())
   const rec = it as Record<string, unknown>
   return arcPath(+((it.outerRadius ?? it.radius) as number || 0), +(it.innerRadius as number || 0), +(it.startAngle as number || 0), +(it.endAngle as number || 0), +(rec.cornerRadius as number || 0), +(rec.padAngle as number || 0), digits)
 }
@@ -2172,14 +1924,3 @@ export function gradientAttrs(def: SceneDef, w: AttrSink): void {
  */
 export const num = (x: number): string => String(Number(x))
 
-/**
- * d3-path rounding with `digits = 3` (d3-shape's `withPath` default).
- * Vega routes d3-shape-based mark shapes (symbol, arc, line, area) through a
- * d3-path buffer constructed with digits=3, so every path coordinate in those
- * marks is serialized rounded to 3 decimals. Vega's own rect/frame builders
- * (path/rectangle.js, trail.js via a digits-less d3-path) emit raw doubles.
- */
-function num3(x: number): string {
-  // `x * 1000` coerces like Number(x), so a non-number cannot survive as itself
-  return String(Math.round(x * 1000) / 1000)
-}
