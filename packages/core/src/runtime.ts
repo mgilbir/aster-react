@@ -3000,7 +3000,9 @@ function signedViewSize(size: SizeSpec, override: number | undefined, signals: R
  * drives neither `width` nor `height` itself and does not leave the dimension to its layout (a composition's size is its
  * groups'). A spec that drives one dimension sizes itself, so its other, numeric dimension stays the spec's: vega-lite's
  * `width: "container", height: 200` is 200 tall whatever the container measures, and a container that grows with the
- * chart cannot feed its own height back into it (issue #128).
+ * chart cannot feed its own height back into it (issue #128). A spec whose autosize is `none` fixes its size: in Vega its
+ * whole size is its `width`, `height` and `padding` and nothing else, so a container does not size it either (vega-embed
+ * draws it at that size in any container).
  */
 function viewOverride(chart: CompiledChart, input: RuntimeInput, dim: 'width' | 'height'): number | undefined {
   const fixed = input[dim]
@@ -3009,7 +3011,7 @@ function viewOverride(chart: CompiledChart, input: RuntimeInput, dim: 'width' | 
   if (typeof written === 'number') return written
   const measured = input.measuredSize?.[dim]
   if (measured == null) return undefined
-  if (chart.contentSized?.includes(dim)) return undefined
+  if (chart.contentSized?.includes(dim) || chart.autosize === 'none') return undefined
   return drivesSize(chart, 'width') || drivesSize(chart, 'height') ? undefined : measured
 }
 

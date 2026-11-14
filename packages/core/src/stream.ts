@@ -96,6 +96,10 @@ export interface StreamBatch {
   signals?: Record<string, unknown>
   width?: number
   height?: number
+  /** The container the spec is sized to (`containerSize()`), as `RuntimeInput.containerSize`; the later value wins. */
+  containerSize?: { width: number; height: number }
+  /** The element the chart fills, as `RuntimeInput.measuredSize`; the later value wins. */
+  measuredSize?: { width: number; height: number }
   /**
    * Scale-domain overrides, merged into the stream's current overrides. A
    * `null` value clears that scale's override (back to the data-derived
@@ -300,6 +304,8 @@ interface Fold {
   signals?: Record<string, unknown>
   width?: number
   height?: number
+  containerSize?: { width: number; height: number }
+  measuredSize?: { width: number; height: number }
   /** `null` clears that scale's override. */
   domainRaw?: Record<string, unknown[] | null>
   limits?: SpecLimits
@@ -419,6 +425,8 @@ function foldBatch(fold: Fold, batch: StreamBatch, baseLenOf: (name: string) => 
   if (batch.signals) fold.signals = dict(fold.signals, batch.signals)
   if (batch.width != null) fold.width = batch.width
   if (batch.height != null) fold.height = batch.height
+  if (batch.containerSize != null) fold.containerSize = batch.containerSize
+  if (batch.measuredSize != null) fold.measuredSize = batch.measuredSize
   if (batch.domainRaw) fold.domainRaw = dict(fold.domainRaw, batch.domainRaw)
   if (batch.limits) fold.limits = batch.limits
   if (batch.textMetrics) fold.textMetrics = batch.textMetrics
@@ -437,6 +445,8 @@ export function createChartStream(spec: VgSpec, options: StreamOptions = {}): Ch
   let signals: Record<string, unknown> = dict(options.initial?.signals)
   let width = options.initial?.width
   let height = options.initial?.height
+  let containerSize = options.initial?.containerSize
+  let measuredSize = options.initial?.measuredSize
   let domainRaw: Record<string, unknown[]> | undefined = options.initial?.domainRaw
   let limits = options.limits ?? options.initial?.limits
   let textMetrics = options.textMetrics ?? options.initial?.textMetrics
@@ -615,6 +625,8 @@ export function createChartStream(spec: VgSpec, options: StreamOptions = {}): Ch
     const nextSignals = f.signals ? dict(signals, f.signals) : signals
     const nextWidth = f.width ?? width
     const nextHeight = f.height ?? height
+    const nextContainerSize = f.containerSize ?? containerSize
+    const nextMeasuredSize = f.measuredSize ?? measuredSize
     const nextDomainRaw = applyDomainRaw(domainRaw, f.domainRaw)
     const nextLimits = f.limits ?? limits
     const nextTextMetrics = f.textMetrics ?? textMetrics
@@ -668,6 +680,8 @@ export function createChartStream(spec: VgSpec, options: StreamOptions = {}): Ch
         ...(Object.keys(nextSignals).length ? { signals: nextSignals } : {}),
         ...(nextWidth != null ? { width: nextWidth } : {}),
         ...(nextHeight != null ? { height: nextHeight } : {}),
+        ...(nextContainerSize != null ? { containerSize: nextContainerSize } : {}),
+        ...(nextMeasuredSize != null ? { measuredSize: nextMeasuredSize } : {}),
         ...(nextDomainRaw ? { domainRaw: nextDomainRaw } : {}),
         ...(nextLimits ? { limits: nextLimits } : {}),
         ...(nextTextMetrics ? { textMetrics: nextTextMetrics } : {}),
@@ -686,6 +700,8 @@ export function createChartStream(spec: VgSpec, options: StreamOptions = {}): Ch
     signals = nextSignals
     width = nextWidth
     height = nextHeight
+    containerSize = nextContainerSize
+    measuredSize = nextMeasuredSize
     domainRaw = nextDomainRaw
     limits = nextLimits
     textMetrics = nextTextMetrics
