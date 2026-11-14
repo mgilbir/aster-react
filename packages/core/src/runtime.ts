@@ -16,6 +16,7 @@ import { fieldOf } from './transform-agg.js'
 import { atRandomSite, contentKey, mayDrawRandom, normalPairs, replayable } from './random-tape.js'
 import { lexedText } from './expr-text.js'
 import { isEngineNode, noteEngineScene } from './scene-registry.js'
+import { parseExpressionCached, type Expr } from './expr-parser.js'
 import { datasetsReadIn, identifiersIn, scalesReadIn, dependencyKey, fieldsWritten, namesIn, pipelineReadsOf, reuse, runsOf, stepCounts, stepReadsOf, type StepReads, type StepRecord } from './step-reuse.js'
 import { activeMeter, withLimits, ceiling, checkRowCount, meterItems, meterTick, AsterLimitError } from './limits.js'
 import { withTextMetricsProvider } from './text-metrics.js'
@@ -247,6 +248,10 @@ interface IncrementalState {
   instances: Map<string, InstanceMark>
   /** Top-level group marks made whole in a clean pass, and what making them left in the evaluation (see `keptGroupMark`). */
   groupMarks: Map<CompiledMark, GroupMarkRecord>
+  /** What each channel of a top-level leaf mark was encoded under, and over which rows (see `reencodeChannels`). */
+  channels: Map<CompiledMark, ChannelRecord>
+  /** A top-level leaf mark drawn from another mark's items: what it was made under and the items it was made from (see `keptOverMarkItems`). */
+  markSources: Map<CompiledMark, { key: string; items: readonly SceneItem[]; tuples: boolean }>
   /** The content of the view this state's pass made (its root items, laid out): a later pass shares what it makes the same (see `shareScene`). */
   content?: readonly SceneGroup[]
 }
@@ -273,7 +278,16 @@ interface ScopedRun {
 }
 
 function newState(gen: number): IncrementalState {
-  return { gen, fp: '', scales: new Map(), scaleEntries: new Map(), datasets: new Map(), groups: new Map(), markKeys: new Map(), rows: new Map(), stale: false, idCounter: 0, scoped: new Map(), numbered: new Map(), copies: new Map(), instances: new Map(), groupMarks: new Map() }
+  return { gen, fp: '', scales: new Map(), scaleEntries: new Map(), datasets: new Map(), groups: new Map(), markKeys: new Map(), rows: new Map(), stale: false, idCounter: 0, scoped: new Map(), numbered: new Map(), copies: new Map(), instances: new Map(), groupMarks: new Map(), channels: new Map(), markSources: new Map() }
+}
+
+/** A top-level leaf mark's items as an encode made them: the encode, the rows, the items in row order and each channel's key. */
+interface ChannelRecord {
+  encode: object
+  rows: readonly Row[]
+  items: readonly SceneItem[]
+  /** per channel of `encode` (its own keys, in order): what it is evaluated under besides the row (`channelKeyOf`), null when that is unknown */
+  keys: Array<string | null>
 }
 
 /**
@@ -2562,6 +2576,170 @@ function recordGroupMark(mark: CompiledMark, ctx: EvalContext, key: string, make
 }
 
 /**
+ * The fields of its row an expression reads: `datum.f` and `datum["f"]`, or null when it reads the row some other way (passes `datum`
+ * on, indexes it by a computed name) or cannot be parsed.
+ */
+function rowFieldsIn(code: string, out: Set<string>): boolean {
+  let tree: Expr
+  try { tree = parseExpressionCached(code) } catch { return false }
+  let whole = false
+  const visit = (n: Expr | null | undefined, depth: number): void => {
+    if (whole || n == null) return
+    if (depth > 256) { whole = true; return }
+    switch (n.type) {
+      case 'Identifier': if (n.name === 'datum') whole = true; return
+      case 'MemberExpression':
+        if (n.object.type === 'Identifier' && n.object.name === 'datum') {
+          if (!n.computed && n.property.type === 'Identifier') { out.add(n.property.name); return }
+          if (n.computed && n.property.type === 'Literal' && (typeof n.property.value === 'string' || typeof n.property.value === 'number')) { out.add(String(n.property.value)); return }
+          whole = true
+          return
+        }
+        visit(n.object, depth + 1)
+        if (n.computed) visit(n.property, depth + 1)
+        return
+      case 'CallExpression': visit(n.callee, depth + 1); for (const a of n.arguments) visit(a, depth + 1); return
+      case 'UnaryExpression': visit(n.argument, depth + 1); return
+      case 'BinaryExpression': case 'LogicalExpression': visit(n.left, depth + 1); visit(n.right, depth + 1); return
+      case 'ConditionalExpression': visit(n.test, depth + 1); visit(n.consequent, depth + 1); visit(n.alternate, depth + 1); return
+      case 'ArrayExpression': for (const e of n.elements) visit(e, depth + 1); return
+      case 'ObjectExpression': for (const p of n.properties) visit(p.value, depth + 1); return
+      default: return
+    }
+  }
+  visit(tree, 0)
+  return !whole
+}
+
+/** A field path that names one field of the row as a whole (`x`, not `a.b` or `a[0]`), or null. */
+const plainField = (f: unknown): string | null => (typeof f === 'string' && /^[A-Za-z_$][\w$]*$/.test(f) ? f : null)
+
+/** The parameters of the transforms whose reads of their rows are all spelled in these parameters (see `rowFieldsOfMark`). */
+const ROW_READING_TRANSFORMS: Record<string, readonly string[]> = { voronoi: ['type', 'x', 'y', 'size', 'extent', 'as'] }
+
+/**
+ * The fields of its rows a leaf mark reads -- through its encode (fields of the entries, expressions in `signal` and `test`) and its
+ * transforms -- or null when it may read others (a field by a path or a computed name, the row passed on whole, a transform whose
+ * reads are not all spelled in parameters this knows, a sort or a key).
+ */
+const ROW_FIELDS = new WeakMap<CompiledMark, ReadonlySet<string> | null>()
+function rowFieldsOfMark(mark: CompiledMark): ReadonlySet<string> | null {
+  if (ROW_FIELDS.has(mark)) return ROW_FIELDS.get(mark)!
+  const out = new Set<string>()
+  let known = mark.sort === undefined && mark.key === undefined
+  const entry = (v: unknown, depth: number): void => {
+    if (!known || v === null || typeof v !== 'object') return
+    if (depth > 64) { known = false; return }
+    if (Array.isArray(v)) { for (const x of v) entry(x, depth + 1); return }
+    const o = v as Record<string, unknown>
+    for (const [k, x] of Object.entries(o)) {
+      if (k === 'field') {
+        if (typeof x === 'string') { const f = plainField(x); if (f === null) known = false; else out.add(f) }
+        else if (x !== null && typeof x === 'object') {
+          const ref = x as Record<string, unknown>
+          // (a field of the group or of its parent is not the row's; a field named by a signal may be any of them)
+          if ('datum' in ref) { const f = plainField(ref.datum); if (f === null) known = false; else out.add(f) } else if (!('group' in ref) && !('parent' in ref)) known = false
+          else entry(x, depth + 1)
+        }
+      } else if ((k === 'signal' || k === 'test' || k === 'expr') && typeof x === 'string') {
+        if (!rowFieldsIn(x, out)) known = false
+      } else entry(x, depth + 1)
+    }
+  }
+  entry(mark.encode, 0)
+  for (const t of (mark.transform ?? []) as unknown as Array<Record<string, unknown>>) {
+    const params = typeof t.type === 'string' ? ROW_READING_TRANSFORMS[t.type] : undefined
+    if (params === undefined || Object.keys(t).some((k) => !params.includes(k))) { known = false; break }
+    for (const k of ['x', 'y']) {
+      const v = t[k]
+      if (typeof v === 'string') { const f = plainField(v); if (f === null) known = false; else out.add(f) } else entry(v, 0)
+    }
+  }
+  const result = known ? out : null
+  ROW_FIELDS.set(mark, result)
+  return result
+}
+
+/** What a leaf mark drawn from another mark's items is made under besides those items (see `keptOverMarkItems`). */
+function overMarkItemsKey(mark: CompiledMark, ctx: EvalContext): string | null {
+  const names = namesMentioned(mark, ctx.chart)
+  if (names === null) return null
+  let key = readsKey(ctx, names)
+  if (mark.type === 'image' || encodesHref(mark)) key = `${key}\u0003${ctx.urlPolicy === undefined ? '' : dependencyKey(ctx.urlPolicy)}`
+  for (const n of markDepsOf(mark, ctx.chart).exprData) key += `\u0004${n}=${datasetKey(ctx, n)}`
+  return key
+}
+
+/**
+ * Whether a top-level leaf mark drawn from another mark's items (`from: {data: <mark name>}`: its rows are copies of those items, a
+ * Vega-Lite voronoi over a rule's items) makes the group it made in the evaluation before: what it reads of its rows is what it read
+ * then, and so is everything else it reads. Its rows are read only through the fields `rowFieldsOfMark` finds (refused when it cannot
+ * tell), so item by item those fields of the items it is drawn from must hold the same values (`Object.is`: an object, such as an
+ * item's datum, by identity) -- an item kept by its mark is the same item. Besides: the signals it names (with the view size,
+ * `extraFp` and the registry), the content of the datasets its expressions read by name and the URL policy (`overMarkItemsKey`); the
+ * datasets it names (`sameRows`); the scales it reads (the same objects); whether tuples are registered. Refused: a mark that reads a
+ * dataset by a computed name or other marks' items through a lookup, a pass that is not clean, under `limits`, a view that fits its
+ * viewport.
+ */
+function keptOverMarkItems(mark: CompiledMark, ctx: EvalContext, prevGroup: SceneGroup): 'same' | 'datums' | null {
+  const prev = ctx.prev
+  const source = mark.from?.data
+  const record = prev?.markSources.get(mark)
+  if (prev === undefined || record === undefined || typeof source !== 'string' || ctx.datasets.has(source)) return null
+  const items = ctx.markItems.get(source)
+  if (items === undefined || items.length !== record.items.length || (prevGroup.items?.length ?? -1) !== items.length || record.tuples !== tuplesRegistering()) return null
+  if (!cleanPass(ctx) || !(followsChanges(ctx) || (ctx.incremental && prev.fp === ctx.draft.fp)) || ctx.passMemory !== undefined || forceBound(mark, ctx.chart) || mark.sort !== undefined) return null
+  if (record.key !== overMarkItemsKey(mark, ctx) || prev.markKeys.get(mark) === undefined) return null
+  if (((mark.transform ?? []) as Array<{ type?: unknown; from?: unknown }>).some((t) => t.type === 'lookup')) return null
+  let computed = false
+  walkStrings(mark, (str) => { if (datasetsReadIn(str) === null) computed = true })
+  if (computed) return null
+  const deps = markDepsOf(mark, ctx.chart)
+  for (const n of deps.names) if (!sameRows(ctx, n)) return null
+  for (const name of markScaleNames(mark, ctx.chart)) if (ctx.scales.get(name) !== prev.scales.get(name)) return null
+  const fields = rowFieldsOfMark(mark)
+  let same = true
+  for (let i = 0; i < items.length; i++) {
+    const a = record.items[i] as unknown as Record<string, unknown>
+    const b = items[i] as unknown as Record<string, unknown>
+    if (a === b) continue
+    same = false
+    if (fields === null) return null
+    for (const f of fields) if (!Object.is(a[f], b[f])) return null
+  }
+  return same ? 'same' : 'datums'
+}
+
+/**
+ * The group a mark drawn from another mark's items makes when what it reads of its rows is as it was but the rows are not the same
+ * (see `keptOverMarkItems`): each item is its item before with the datum a fresh evaluation gives it, a copy of the item it is drawn
+ * from as it is now (vega's datum there is that item itself, as it is now). Every other property is what it was: made from what it
+ * read, which is unchanged. The group is the one before with these items.
+ */
+function withNewDatums(mark: CompiledMark, ctx: EvalContext, prevGroup: SceneGroup, from: readonly SceneItem[]): SceneGroup {
+  const before = prevGroup.items as SceneItem[]
+  const items = new Array<SceneItem>(before.length)
+  for (let i = 0; i < before.length; i++) {
+    const datum = { ...(from[i] as unknown as Row) }
+    markTuple(datum)
+    items[i] = { ...before[i]!, datum, __gen: ctx.gen } as SceneItem
+  }
+  ;(items as SceneItem[] & { __engineItems?: true }).__engineItems = true
+  const group = { ...prevGroup, items } as SceneGroup
+  const gradients = GROUP_GRADIENTS.get(prevGroup)
+  if (gradients !== undefined) GROUP_GRADIENTS.set(group, gradients)
+  void mark
+  return group
+}
+
+/** Record what a top-level leaf mark drawn from another mark's items was made from (see `keptOverMarkItems`), when made whole and clean. */
+function recordOverMarkItems(mark: CompiledMark, ctx: EvalContext, items: readonly SceneItem[] | undefined): void {
+  const key = overMarkItemsKey(mark, ctx)
+  if (key === null || items === undefined || !cleanPass(ctx) || activeMeter() !== null || ctx.passMemory !== undefined) return
+  ctx.draft.markSources.set(mark, { key, items, tuples: tuplesRegistering() })
+}
+
+/**
  * Vega's renderers visit a group's items in dataflow order: axes (including
  * grid axes) first, then marks/scopes, then legends, then the title. Our
  * builders create marks first (guides need their bounds to anchor), so sort
@@ -2715,16 +2893,25 @@ function buildContentPass(
     // (what the mark is made under besides its data and scales, for the next evaluation to compare)
     const markKey = markKeyOf(mark, ctx)
     ctx.draft.markKeys.set(mark, markKey)
-    if (prevGroup && canReuseMarkGroup(mark, ctx, prevGroup, markKey)) {
-      items.push(prevGroup)
-      ctx.draft.groups.set(mark, prevGroup)
+    // (a mark drawn from another mark's items: the items it is drawn from now, before it is made or kept)
+    const overItems = typeof mark.from?.data === 'string' && !ctx.datasets.has(mark.from.data) ? ctx.markItems.get(mark.from.data) : undefined
+    const reused = prevGroup !== null && canReuseMarkGroup(mark, ctx, prevGroup, markKey)
+    const keptOver = prevGroup !== null && !reused && overItems !== undefined ? keptOverMarkItems(mark, ctx, prevGroup) : null
+    if (prevGroup !== null && (reused || keptOver !== null)) {
+      if (overItems !== undefined) recordOverMarkItems(mark, ctx, overItems)
+      const group = keptOver === 'datums' ? withNewDatums(mark, ctx, prevGroup, overItems!) : prevGroup
+      items.push(group)
+      ctx.draft.groups.set(mark, group)
+      // (its channels read what they read: the mark's key, which holds every name they hold, is as it was)
+      const channels = ctx.prev?.channels.get(mark)
+      if (channels !== undefined) ctx.draft.channels.set(mark, channels)
       // (a named mark's items are what a later mark of `from: {data: <name>}` reads, as `evaluateMark` leaves them)
       if (typeof mark.name === 'string') {
-        ctx.markItems.set(mark.name, (prevGroup.items ?? []) as SceneItem[])
-        ctx.markContainers.set(mark.name, prevGroup as unknown as { marktype: string; items: SceneItem[] })
+        ctx.markItems.set(mark.name, (group.items ?? []) as SceneItem[])
+        ctx.markContainers.set(mark.name, group as unknown as { marktype: string; items: SceneItem[] })
       }
       // (its items are not encoded again: their gradients are the group's)
-      const keptGradients = GROUP_GRADIENTS.get(prevGroup)
+      const keptGradients = GROUP_GRADIENTS.get(group)
       if (keptGradients !== undefined) addDefs(ctx, keptGradients)
       // (the numbers its items hold are kept with them)
       const key = numberedKey(mark, ctx)
@@ -2733,6 +2920,7 @@ function buildContentPass(
       continue
     }
     const result = evaluateMark(mark, ctx, prevGroup)
+    if (overItems !== undefined && result && !Array.isArray(result)) recordOverMarkItems(mark, ctx, overItems)
     if (result) {
       for (const g of Array.isArray(result) ? result : [result]) {
         if (mark.zindex) (g as unknown as { zindex?: number }).zindex = mark.zindex
@@ -4610,6 +4798,137 @@ function itemBoundsOf(container: { marktype: string }, item: SceneItem): { x1: n
   return { x1: b.x1, y1: b.y1, x2: b.x2, y2: b.y2 }
 }
 
+/** What one channel's definition reads besides the row: the signals it names, the datasets its expressions read by name, its scales. */
+interface ChannelReads { names: readonly string[] | null; data: readonly string[] | null; scales: readonly string[] | null }
+const CHANNEL_READS = new WeakMap<object, ChannelReads>()
+function channelReadsOf(spec: object, chart: CompiledChart): ChannelReads {
+  let out = CHANNEL_READS.get(spec)
+  if (out !== undefined) return out
+  const data = new Set<string>()
+  const scales = new Set<string>()
+  let anyData = false
+  let anyScale = false
+  walkStrings(spec, (str, owner) => {
+    const read = datasetsReadIn(str)
+    if (read === null) anyData = true
+    else for (const n of read) data.add(n)
+    if (SCALE_FN_EXPR.test(lexedText(str))) anyScale = true
+    if (owner && owner.scale === str) scales.add(str)
+  }, new Set(), null, (o) => { if (o.scale != null && typeof o.scale === 'object') anyScale = true })
+  out = { names: namesMentioned(spec, chart), data: anyData ? null : [...data].sort(), scales: anyScale ? null : [...scales].sort() }
+  CHANNEL_READS.set(spec, out)
+  return out
+}
+
+/** A number per scale object, so a key can say which scale a channel read. */
+const SCALE_IDS = new WeakMap<object, number>()
+let nextScaleId = 0
+const scaleIdOf = (sc: unknown): string => {
+  // (a scale is a function object; a name no scale has is `-`)
+  if (sc === null || (typeof sc !== 'object' && typeof sc !== 'function')) return '-'
+  let id = SCALE_IDS.get(sc)
+  if (id === undefined) SCALE_IDS.set(sc, (id = ++nextScaleId))
+  return String(id)
+}
+
+/**
+ * What one channel of a leaf mark is evaluated under besides its row: the signals it names (with the view size, `extraFp` and the
+ * registry, see `readsKey`), the content of the datasets its expressions read by name, and the scale objects it reads; null when it
+ * reads more than it names (the clock, the random source, a dataset or a scale by a computed name).
+ */
+function channelKeyOf(spec: object, ctx: EvalContext): string | null {
+  const reads = channelReadsOf(spec, ctx.chart)
+  if (reads.names === null || reads.data === null || reads.scales === null) return null
+  let key = readsKey(ctx, reads.names)
+  for (const n of reads.data) key += `\u0004${n}=${datasetKey(ctx, n)}`
+  for (const n of reads.scales) key += `\u0005${n}=${scaleIdOf(ctx.scales.get(n))}`
+  return key
+}
+
+/**
+ * Channels whose value takes part in what the encode derives from several of them (`adjustSpatial` makes x/y/width/height from the
+ * edges; a paint may be a gradient whose definition joins the scene's), or that is read before the others (`defined`): when one of
+ * them changed, the item is encoded whole.
+ */
+const COUPLED_CHANNELS = new Set(['x', 'x2', 'xc', 'width', 'y', 'y2', 'yc', 'height', 'fill', 'stroke', 'defined'])
+
+/**
+ * The items of a top-level leaf mark whose rows are the ones its items were made from, when only some of its channels read what
+ * changed: each item is a copy of the item before (its keys in the same order, its datum the same copy of the row) with only those
+ * channels evaluated again, or null when the mark is to be encoded whole.
+ *
+ * An item is a function of its row and of what each channel reads besides it (`channelKeyOf`), channel by channel: `resolveEncodeSet`
+ * evaluates each channel on its own, and only the `COUPLED_CHANNELS` combine (refused when one of them changed). The rows are the very
+ * array the items before were made from, untouched by any change the caller told (`sameRows`), so row `i` holds what item `i`'s datum
+ * holds. A channel evaluated again that comes out undefined where it had a value, or the reverse, would change the item's keys: that
+ * item is encoded whole. Refused: a mark with transforms or a sort (they read the encoded values), an image (its url is vetted after
+ * the encode), a mark that reads any dataset, a channel that reads more than it names, a pass that is not clean, under `limits`; an
+ * error in a channel encodes the mark whole, which reports it where a whole encode does.
+ */
+function reencodeChannels(mark: CompiledMark, ctx: EvalContext, prevGroup: SceneGroup | null | undefined, source: string, rows: readonly Row[], encode: Record<string, EncodeValue | EncodeValue[]>): SceneItem[] | null {
+  const prev = ctx.prev
+  const record = prev?.channels.get(mark)
+  if (prev === undefined || record === undefined || prevGroup == null || record.encode !== encode || record.rows !== rows || record.items.length !== rows.length) return null
+  if (!cleanPass(ctx) || !followsChanges(ctx) || !sameRows(ctx, source) || mark.transform?.length || mark.sort || mark.type === 'image' || forceBound(mark, ctx.chart)) return null
+  const deps = markDepsOf(mark, ctx.chart)
+  if (deps.allData) return null
+  for (const n of deps.names) if (n !== source && !sameRows(ctx, n)) return null
+  const channels = Object.keys(encode)
+  if (channels.length !== record.keys.length) return null
+  const changed: string[] = []
+  for (let c = 0; c < channels.length; c++) {
+    const key = channelKeyOf(encode[channels[c]!] as object, ctx)
+    if (key === null || record.keys[c] === null) return null
+    if (key !== record.keys[c]) {
+      if (COUPLED_CHANNELS.has(channels[c]!)) return null
+      changed.push(channels[c]!)
+    }
+  }
+  if (!changed.length) return null
+  // (in the order a whole encode evaluates them: the plain channels, then the signal ones)
+  const plan = encodePlan(encode)
+  const order = [...plan.plainKeys, ...plan.signalKeys].filter((k) => changed.includes(k))
+  const binding = ctx.encodeBinding
+  const gen = ctx.gen
+  const out = new Array<SceneItem>(record.items.length)
+  try {
+    for (let i = 0; i < record.items.length; i++) {
+      const before = record.items[i]! as unknown as Record<string, unknown>
+      const datum = before.datum as Row
+      const copy = { ...before }
+      // (what the DOM patcher kept on the item before for itself: a fresh item has none)
+      if ('__domDesc' in copy) delete copy.__domDesc
+      let whole = false
+      for (const k of order) {
+        const v = resolveEncodeProperty(encode[k], datum, ctx, binding)
+        if ((v === undefined) !== (copy[k] === undefined) || (v === undefined) !== !(k in copy)) { whole = true; break }
+        if (v !== undefined) copy[k] = v
+      }
+      if (whole) {
+        const row = { ...(rows[i] as Row) }
+        markTuple(row)
+        const res = resolveEncodeSet(encode, row, ctx, mark.type)
+        res.datum = row
+        res.__gen = gen
+        out[i] = res
+        continue
+      }
+      copy.__gen = gen
+      out[i] = copy as unknown as SceneItem
+    }
+  } catch {
+    return null
+  }
+  if (ctx.markGradients) ctx.markGradients.partial = true
+  return out
+}
+
+/** Record what each channel of a top-level leaf mark was encoded under (see `reencodeChannels`), when the pass made it whole and clean. */
+function recordChannels(mark: CompiledMark, ctx: EvalContext, encode: Record<string, EncodeValue | EncodeValue[]>, rows: readonly Row[], items: readonly SceneItem[]): void {
+  if (!cleanPass(ctx) || activeMeter() !== null || mark.transform?.length || mark.sort) return
+  ctx.draft.channels.set(mark, { encode, rows, items, keys: Object.keys(encode).map((k) => channelKeyOf(encode[k] as object, ctx)) })
+}
+
 function evaluateMark(
   mark: CompiledMark,
   ctx: EvalContext,
@@ -4668,6 +4987,8 @@ function evaluateMarkItems(
   }
   const source = mark.from?.data
   if (source && ctx.failedDatasets?.has(source)) return null
+  // (a mark of the view's own scope, made by the evaluation's loop over its marks: `prevGroup` is its group of the evaluation before)
+  const topLevel = ctx.scope.path.length === 0 && given === undefined
 
   let items: SceneItem[]
   // a transform of the mark threw (see `failPass`): what ranks after it is not made
@@ -4796,7 +5117,11 @@ function evaluateMarkItems(
       }
     } else {
       const gen = ctx.gen
-      if (meter) {
+      // (a top-level mark over the rows its items were made from, only some of whose channels read what changed: see `reencodeChannels`)
+      const reencoded = topLevel && encodeRows === rows && !meter ? reencodeChannels(mark, ctx, prevGroup, source, rows, update) : null
+      if (reencoded !== null) {
+        items = reencoded
+      } else if (meter) {
         // Same loop with the clock sampled every 1024 items (limits ON only).
         items = new Array<SceneItem>(encodeRows.length)
         for (let i = 0; i < encodeRows.length; i++) {
@@ -4821,6 +5146,7 @@ function evaluateMarkItems(
           return res
         })
       }
+      if (topLevel && encodeRows === rows) recordChannels(mark, ctx, update, rows, items)
     }
   } else {
     // vega-parser marks/data.js: a mark without `from` is made from a generated singleton `{}`, which its encode reads and its
