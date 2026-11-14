@@ -2,9 +2,9 @@
  * `intersect()` over arc and path outlines on regions of any size. A spec reaches it with numbers of its choosing: the
  * `intersect(box, opt, group)` expression function is open to every signal handler (signals.ts) and its box is any
  * expression value, and an arc's radii or a path are any encode value. Testing every lattice point of the box/bounds region, as
- * vega does, never ends for an infinite region and takes hours for a few million pixels squared. The region's rows are now
- * tested crossing by crossing (the same answer: the winding test only changes at crossings), with a budget past which the
- * item is taken as intersecting (vega's own answer without a canvas).
+ * vega does, never ends past 2^52 or for an infinite region and takes hours for a few million pixels squared. The region's
+ * rows are now tested crossing by crossing (the same answer: the winding test only changes at crossings); a region past 2^52,
+ * or work past the built-in `latticeTests` ceiling, is refused with an AsterLimitError (docs/LIMITS.md).
  */
 import { describe, expect, it, vi } from 'vitest'
 
@@ -19,6 +19,7 @@ const { sceneIntersect: legacyIntersect } = await import('./legacy-scene-interse
 const { compileChart } = await import('./compiler.js')
 const { evaluateChart } = await import('./evaluate.js')
 const { mulberry32 } = await import('./scene-fuzz.testlib.js')
+const { AsterLimitError } = await import('./limits.js')
 const { randomScene } = await import('./geometry-scenes.testlib.js')
 const { probePoints } = await import('./geometry-differential.testlib.js')
 type SceneRoot = import('./types.js').SceneRoot
@@ -35,7 +36,17 @@ describe('intersect() terminates on any region, and agrees with the lattice test
     probePoints(scene, r)
     const boxes: number[][][] = []
     for (let i = 0; i < 6; i++) { const x = r() * scene.width, y = r() * scene.height; boxes.push([[x, y], [x + r() * scene.width * 0.6, y + r() * scene.height * 0.6]]) }
-    for (const box of boxes) expect(Array.isArray(sceneIntersect(scene, box, null, null))).toBe(true)
+    let refused = 0
+    for (const box of boxes) {
+      try {
+        expect(Array.isArray(sceneIntersect(scene, box, null, null))).toBe(true)
+      } catch (e) {
+        expect(e).toBeInstanceOf(AsterLimitError)
+        expect(String((e as Error).message)).toContain('intersect() lattice tests (a region beyond 2^52)')
+        refused++
+      }
+    }
+    expect(refused).toBeGreaterThan(0)
     // an infinite box and infinite radii end too
     const inf = sceneOf([arc({ outerRadius: { signal: '1e309' }, startAngle: { value: 0 }, endAngle: { value: 1 } })])
     expect(sceneIntersect(inf, [[-Infinity, -Infinity], [Infinity, Infinity]], null, null)).toEqual(legacyIntersect(inf, [[-Infinity, -Infinity], [Infinity, Infinity]], null, null))
@@ -47,6 +58,12 @@ describe('intersect() terminates on any region, and agrees with the lattice test
     calls.n = 0
     expect(sceneIntersect(scene, [[1, 0], [3000, 3001]], null, null)).toHaveLength(0)
     expect(calls.n).toBeLessThan(100_000)
+  })
+
+  it('work past the built-in ceiling is refused, the same with limits as without', () => {
+    // (a fine outline of ~2,000 edges over ~40,000 rows: 8e7 edge tests for the rows' crossings alone)
+    const scene = sceneOf([arc({ x: { value: 0 }, y: { value: 0 }, outerRadius: { value: 20000 }, innerRadius: { value: 19999.5 }, startAngle: { value: 0 }, endAngle: { value: 6.2 } })])
+    expect(() => sceneIntersect(scene, [[-20001, -20001], [-19990, 20001]], null, null)).toThrow(/intersect\(\) lattice tests [0-9]+ > 50000000/)
   })
 
   it('agrees with the point-by-point test on random arcs, paths and boxes it can finish', () => {

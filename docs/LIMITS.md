@@ -72,6 +72,7 @@ unrelated limits (`limits: {}`, `{ maxStringLength }`) leaves it in force. They 
 | `items` | 100 000 | counts a spec sets: `tickCount` of axes and legends (and so the ticks made), axis ticks drawn, trellis `layout.columns`, `contour` / `isocontour` `levels`, a quantized colour scheme `count` | `maxItems` | 165 axis ticks, 30 facet columns, 40 thresholds |
 | `bytes` | 1 000 000 | one string an expression builtin builds: `pad`, number-format width | `maxStringLength`, `maxGeneratedBytes` | 5 000 (`pad`), 982 (format width) |
 | `coords` | 2 000 000 | positions one topojson decode produces (an arc referenced by many geometries counts every time) | `maxRows`, `maxGeneratedRows` | 101 000 (the gallery's largest map: 55 713) |
+| `latticeTests` | 50 000 000 | the point-in-outline work of one `intersect()` of an arc, path, shape or geoshape item (vega-lite interval selections over geo marks, or the expression in any signal handler): the rows the item's outline spans inside the box, times its edges, plus each candidate point times its edges. A region beyond 2^52 is refused outright | none (`maxTimeMs` also bounds the walk, cooperatively) | 1 098 884 (the largest in the core test suites: a 3 000-row strip; not measured over the corpus, gallery or the intersect-browser gate) |
 | spec depth | 1 000 (`HARD_MAX_SPEC_DEPTH`) | nesting of the spec object, checked iteratively when it is compiled (`values` data arrays are not walked); a deeper or cyclic spec is an `AsterLimitError` instead of a raw `RangeError` | `maxDepth` can only lower it | 12 |
 | spec size | 5 000 000 objects | objects and arrays visited by that walk (a spec that shares sub-objects can otherwise make it exponential) | none | a few thousand |
 
@@ -80,6 +81,13 @@ corpus and the test suites is in the last column; every ceiling is 1 to 3 orders
 it. The upper end is set by memory, not by taste: on Node a million generated rows costs about
 150 MB, a 2-million-position topojson decode about 250 MB, and 5 million rows already fails with
 `--max-old-space-size=512`. A real chart does not draw a million marks; a host that does can raise the matching limit.
+
+`latticeTests` is the one ceiling on work rather than memory. vega answers `intersect()` for an arc or path item by testing
+every lattice point of the item's bounds within the box with `isPointInPath`; Aster gives the same answer row by row (the
+winding test only changes where an edge crosses the row), so the work follows the rows the outline spans and its edges, not the
+region's area. Past the ceiling, or for a region beyond 2^52 (where `x + 1` stops moving), `intersect()` throws an
+`AsterLimitError` instead of answering. vega would not terminate on those inputs: its walk is over a region of more than
+10^15 points, or never ends.
 
 Not covered by a ceiling, deliberately: input that is large in itself (inline `values`, host `data`,
 loaded files: they are data, not amplification; budget them with `maxRows`, `maxBytes`), and the

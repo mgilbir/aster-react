@@ -23,6 +23,7 @@ import { itemArcGeometry } from './render.js'
 import { insidePolys, type Poly } from './path-flatten.js'
 import { arcLocalPolys, pathPolys, transformPolys } from './geometry-read.js'
 import { MARK_NODE } from './util.js'
+import { ceiling, HARD_CAPS, meterTick } from './limits.js'
 import type { SceneGroup, SceneItem, SceneRoot } from './types.js'
 
 type Rec = Record<string, unknown>
@@ -103,13 +104,8 @@ function outlineOf(marktype: string, item: SceneItem): Poly[] {
   return transformPolys(pathPolys(String(it.path ?? '')), (px, py) => place(px * sx, py * sy))
 }
 
-/**
- * Lattice points a region may have before the exact test gives up: past it, the item is taken as intersecting (its bounds meet
- * the box), which is vega's own answer when it has no canvas to test with. Vega tests every lattice point of the region with
- * `isPointInPath`, so a huge region (a radius or a brush of millions of pixels, or an infinite one) never ends there.
- */
-const ROW_BUDGET = 4_000_000
 const SAFE = 2 ** 52
+const EPS = 2 ** -52
 
 function intersectPath(marktype: string, item: SceneItem, bounds: Bounds, box: Bounds): boolean {
   const polys = outlineOf(marktype, item)
@@ -124,29 +120,52 @@ function intersectPath(marktype: string, item: SceneItem, bounds: Bounds, box: B
 }
 
 /**
- * Whether `insidePolys` holds at some integer (x, y) of [x1, x2] x [y1, y2], without testing every point. On a row the
- * winding test changes only where an edge crosses the row (each edge's side test is linear in x, so it flips once), so the
- * inside points of a row are runs between crossings: testing the integers around each crossing and one inside each gap
- * between crossings tests every run. Rows the outline does not reach have no crossing and nothing inside.
+ * Whether `insidePolys` holds at some integer (x, y) of [x1, x2] x [y1, y2] -- vega's answer, which it finds by testing every
+ * lattice point of the region -- without testing every point. On a row the winding test changes only where an edge crosses the
+ * row (each edge's side test is linear in x, so it flips once, within a few float steps of the true crossing: `window`), so the
+ * inside points of a row are runs between crossings, and testing the integers around each crossing, one inside each gap and
+ * the region's ends tests every run. Rows the outline does not reach have no crossing and nothing inside.
+ *
+ * The work is the rows the outline spans times its edges, and each candidate point tested against every edge, whatever the
+ * region's area. A region past 2^52 (where `x + 1` no longer
+ * moves: vega's walk never ends there) or work past the built-in `latticeTests` ceiling is refused with an `AsterLimitError`
+ * (docs/LIMITS.md); under `limits`, the walk also counts against `maxTimeMs`.
  */
 function latticeInside(polys: Poly[], x1: number, y1: number, x2: number, y2: number): boolean {
-  let minY = Infinity, maxY = -Infinity, edges = 0
+  let minY = Infinity, maxY = -Infinity
+  let edges = 0
   for (const { pts } of polys) {
     const n = pts.length / 2
     if (n < 3) continue
     edges += n
-    for (let i = 1; i < pts.length; i += 2) { const y = pts[i]!; if (y < minY) minY = y; if (y > maxY) maxY = y }
+    for (let i = 0; i < n; i++) {
+      const y = pts[2 * i + 1]!
+      if (y < minY) minY = y
+      if (y > maxY) maxY = y
+    }
   }
   const r0 = Math.max(y1, Math.ceil(minY))
   const r1 = Math.min(y2, Math.floor(maxY))
   if (!(r0 <= r1)) return false
-  // (beyond 2^52 a float step `x + 1` stops moving, so no row or column there can be walked -- vega's walk never ends -- and a
-  // region of more rows than the budget is not walked either: both are taken as intersecting, as vega does without a canvas)
-  if ((r1 - r0 + 1) * edges > ROW_BUDGET || !(Math.abs(x1) <= SAFE && Math.abs(x2) <= SAFE && Math.abs(r0) <= SAFE && Math.abs(r1) <= SAFE)) return true
+  // (the work: each row's crossings, then each candidate point tested against every edge; counted as it is done, after a
+  // check that the rows' crossings alone fit)
+  let work = (r1 - r0 + 1) * edges
+  if (!(Math.abs(x1) <= SAFE && Math.abs(x2) <= SAFE && Math.abs(r0) <= SAFE && Math.abs(r1) <= SAFE)) ceiling('latticeTests', Infinity, 'intersect() lattice tests (a region beyond 2^52)')
+  ceiling('latticeTests', work, 'intersect() lattice tests')
+  work = 0
   const xs: number[] = []
-  const test = (x: number, y: number): boolean => x >= x1 && x <= x2 && insidePolys(polys, x, y)
+  const ws: number[] = []
+  const order: number[] = []
+  const test = (x: number, y: number): boolean => {
+    if (!(x >= x1 && x <= x2)) return false
+    if ((work += edges) > HARD_CAPS.latticeTests) ceiling('latticeTests', work, 'intersect() lattice tests')
+    return insidePolys(polys, x, y)
+  }
   for (let y = r0; y <= r1; y++) {
+    meterTick('intersect() lattice rows')
+    if ((work += edges) > HARD_CAPS.latticeTests) ceiling('latticeTests', work, 'intersect() lattice tests')
     xs.length = 0
+    ws.length = 0
     for (const { pts } of polys) {
       const n = pts.length / 2
       if (n < 3) continue
@@ -156,25 +175,38 @@ function latticeInside(polys: Poly[], x1: number, y1: number, x2: number, y2: nu
         if ((ay <= y && by > y) || (by <= y && ay > y)) {
           // (an edge whose crossing is not a finite number never flips the test at a point of the region)
           const xc = ax + ((bx - ax) * (y - ay)) / (by - ay)
-          if (Number.isFinite(xc)) xs.push(xc)
+          if (Number.isFinite(xc)) { xs.push(xc); ws.push(crossingSlack(ax, bx)) }
         }
         ax = bx; ay = by
       }
     }
     if (xs.length === 0) continue
-    xs.sort((a, c) => a - c)
-    for (let k = 0; k < xs.length; k++) {
-      const f = Math.floor(xs[k]!)
-      // (a crossing beyond 2^52 is outside the region, which is within it)
-      if (Math.abs(f) <= SAFE) for (let x = f - 1; x <= f + 2; x++) if (test(x, y)) return true
-      if (k + 1 < xs.length) {
-        const m = Math.floor((xs[k]! + xs[k + 1]!) / 2)
+    order.length = 0
+    for (let k = 0; k < xs.length; k++) order.push(k)
+    order.sort((a, c) => xs[a]! - xs[c]!)
+    for (let k = 0; k < order.length; k++) {
+      const xc = xs[order[k]!]!
+      const w = ws[order[k]!]!
+      const f = Math.floor(xc)
+      // (only the integers of the region: a slack wider than it -- an edge of enormous coordinates -- is the row itself)
+      for (let x = Math.max(x1, f - w), end = Math.min(x2, f + w + 1); x <= end; x++) if (test(x, y)) return true
+      if (k + 1 < order.length) {
+        const m = Math.floor((xc + xs[order[k + 1]!]!) / 2)
         if (test(m, y) || test(Math.max(x1, Math.min(x2, m)), y)) return true
       }
     }
     if (test(x1, y) || test(x2, y)) return true
   }
   return false
+}
+
+/**
+ * How many float steps an edge's crossing -- the estimate here and the point where `insidePolys`'s side test flips -- may lie
+ * from the true one: both are a few roundings of terms no larger than the edge's coordinates.
+ */
+function crossingSlack(ax: number, bx: number): number {
+  const w = 2 + Math.ceil(16 * EPS * (Math.abs(ax) + 2 * Math.abs(bx - ax)))
+  return Number.isFinite(w) ? w : 2
 }
 
 function test(marktype: string, item: SceneItem, bounds: Bounds, box: Bounds): boolean {
