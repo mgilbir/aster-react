@@ -304,6 +304,10 @@ export interface ChartStreamInput {
   domainRaw?: Record<string, unknown[]>
   /** Merged signal values (props + events). */
   signals: Record<string, unknown>
+  /** The container the spec is sized to (`containerSize()`): the size props where given, the measured element for the rest. */
+  containerSize?: { width: number; height: number }
+  /** The element the chart measured, when a size prop is missing (`RuntimeInput.measuredSize`). */
+  measuredSize?: { width: number; height: number }
 }
 
 /** Imperative handle exposed by `<Chart ref={…}>`. */

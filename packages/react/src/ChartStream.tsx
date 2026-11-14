@@ -112,9 +112,11 @@ function useStreamInput(
   push: (batch: StreamBatch) => boolean,
 ): (input: ChartStreamInput) => void {
   const latest = React.useRef<ChartStreamInput | null>(null)
-  const sent = React.useRef<{ stream: unknown; domainRaw: Record<string, unknown[]>; signals: Record<string, unknown> }>(
+  type Size = { width: number; height: number } | undefined
+  const sent = React.useRef<{ stream: unknown; domainRaw: Record<string, unknown[]>; signals: Record<string, unknown>; containerSize?: Size; measuredSize?: Size }>(
     { stream, domainRaw: {}, signals: {} },
   )
+  const sameSize = (a: Size, b: Size): boolean => a === b || (a != null && b != null && a.width === b.width && a.height === b.height)
   const pushRef = React.useRef(push)
   pushRef.current = push
   const send = React.useCallback((input: ChartStreamInput, force: boolean): void => {
@@ -130,8 +132,11 @@ function useStreamInput(
     }
     const signals = input.signals
     if (!sameValues(signals, last.signals) || (force && Object.keys(signals).length)) batch.signals = signals
-    sent.current = { stream: last.stream, domainRaw, signals }
-    if (batch.domainRaw || batch.signals) pushRef.current(batch)
+    // the container the inner chart measured: the stream sizes the spec to it as <Chart> sizes its own evaluation
+    if (input.containerSize && (force || !sameSize(input.containerSize, last.containerSize))) batch.containerSize = input.containerSize
+    if (input.measuredSize && (force || !sameSize(input.measuredSize, last.measuredSize))) batch.measuredSize = input.measuredSize
+    sent.current = { stream: last.stream, domainRaw, signals, containerSize: input.containerSize, measuredSize: input.measuredSize }
+    if (batch.domainRaw || batch.signals || batch.containerSize || batch.measuredSize) pushRef.current(batch)
   }, [])
   React.useEffect(() => {
     if (sent.current.stream === stream) return

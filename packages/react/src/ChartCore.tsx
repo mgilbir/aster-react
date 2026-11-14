@@ -684,8 +684,14 @@ function ChartView({
   // A stream-fed chart hands its view/signals to the stream, which re-evaluates.
   const streamInput = sceneOverride !== undefined
   React.useEffect(() => {
-    if (streamInput) onStreamInputRef.current?.({ ...(domainRaw ? { domainRaw } : {}), signals: mergedSignals })
-  }, [streamInput, domainRaw, mergedSignals])
+    if (streamInput) {
+      onStreamInputRef.current?.({
+        ...(domainRaw ? { domainRaw } : {}), signals: mergedSignals,
+        // the stream sizes its evaluations as this chart sizes its own: the props it fixes, and the container it measured
+        ...(containerSize ? { containerSize } : {}), ...(measured ? { measuredSize: measured } : {}),
+      })
+    }
+  }, [streamInput, domainRaw, mergedSignals, containerSize, measured])
 
   // Incremental is the default: we still serialize the full SVG for the first
   // render (so server output and client hydration carry the markup), then the
