@@ -91,7 +91,9 @@ function randomItems(r: Rnd, type: string, n: number): SceneItem[] {
         if (r() < 0.1) it.clip = true
         break
       case 'symbol':
-        Object.assign(it, i === 0 || r() < 0.3 ? paint(r) : shared, { x: wild(r, 300), y: wild(r, 200) })
+        // (a dense mark -- what the DOM batches -- is mostly one opaque paint, with a few odd ones out)
+        if (n >= 512) Object.assign(it, r() < 0.92 ? { fill: '#4c78a8', stroke: r() < 0.5 ? '#000' : undefined } : paint(r), { x: wild(r, 300), y: wild(r, 200) })
+        else Object.assign(it, i === 0 || r() < 0.3 ? paint(r) : shared, { x: wild(r, 300), y: wild(r, 200) })
         it.shape = r() < 0.85 ? shape : pick(r, SHAPES)
         it.size = r() < 0.7 ? size : wild(r, 200)
         if (r() < 0.1) it.angle = wild(r, 90)
@@ -124,7 +126,7 @@ export function randomScene(r: Rnd, finite = false): SceneRoot {
   const nMarks = int(r, 1, 6)
   for (let m = 0; m < nMarks; m++) {
     const type = pick(r, TYPES)
-    const n = type === 'symbol' && r() < 0.25 ? int(r, 256, 400) : int(r, 0, 30)
+    const n = type === 'symbol' && r() < 0.25 ? (r() < 0.5 ? int(r, 256, 400) : int(r, 512, 700)) : int(r, 0, 30)
     const mark: SceneGroup = { marktype: type, role: 'mark', items: randomItems(r, type, n) } as SceneGroup
     if (r() < 0.15) mark.clip = true
     if (r() < 0.3) {

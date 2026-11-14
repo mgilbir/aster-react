@@ -139,9 +139,9 @@ export function probePoints(scene: SceneRoot, r: Rnd, random = 40, max = 160): A
   }
   // a fixed budget per scene, spread over everything collected
   const out: Array<[number, number]> = []
-  if (pts.length <= max) out.push(...pts)
+  if (pts.length <= max) for (const p of pts) out.push(p)
   else for (let i = 0; i < max; i++) out.push(pts[Math.floor((i * pts.length) / max)]!)
-  if (edge.length <= max) out.push(...edge)
+  if (edge.length <= max) for (const p of edge) out.push(p)
   else for (let i = 0; i < max; i++) out.push(edge[Math.floor((i * edge.length) / max)]!)
   return out
 }
