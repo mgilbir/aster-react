@@ -1194,8 +1194,10 @@ function ChartView({
         // nothing to resolve (the props are a type error then), so no point is reported rather than a false `null`.
         const pointSelect = interaction != null && (g.onPointSelect || g.onSelectionChange != null)
         if (pointSelect) {
-          const target = hitIndexFor(g.displayScene)?.queryMark(x, y)
-          const raw = target?.item.datum
+          // vega's event item (the topmost item that takes the pointer); a click selects it when it is an item of a mark, whose
+          // datum is its row (or the `{}` of a mark without `from`, as in vega), never a group's box or a guide's part
+          const target = hitIndexFor(g.displayScene)?.pick(x, y)
+          const raw = target?.kind === 'mark' ? target.item.datum : undefined
           datum = raw != null && typeof raw === 'object' ? raw as Record<string, unknown> : null
           g.onPointSelect?.(datum)
         }
@@ -1366,10 +1368,13 @@ function ChartView({
     }
   }, [])
 
-  /** The default tooltip shows the hovered item's `tooltip` channel value, as vega-tooltip does (null: no tooltip). */
+  /**
+   * The default tooltip shows the hovered item's `tooltip` channel value, as vega-tooltip does (null: no tooltip). vega-view hands
+   * the handler `item.tooltip || null`, so a falsy value shows nothing.
+   */
   const tooltipShown = React.useMemo(
     () => (tooltipInfo != null && renderTooltip == null && interaction != null
-      ? interaction.tooltipContent((tooltipInfo.item as { tooltip?: unknown }).tooltip)
+      ? interaction.tooltipContent((tooltipInfo.item as { tooltip?: unknown }).tooltip || null)
       : null),
     [tooltipInfo, renderTooltip, interaction],
   )
@@ -1379,18 +1384,23 @@ function ChartView({
       if (!tooltipEnabled) return
       const rect = containerRef.current?.getBoundingClientRect()
       if (!rect) return
-      // The mark under the pointer, from the scene hit index, whatever the renderer: the SVG carries no per-item
-      // attribute for it (vega's does not either), so SVG, canvas and batched marks all resolve the same way.
+      // The item under the pointer, from the scene hit index, whatever the renderer: the SVG carries no per-item
+      // attribute for it (vega's does not either), so SVG, canvas and batched marks all resolve the same way. It is the item
+      // vega's tooltip handler is called with: the topmost item that takes the pointer (a mark without `from`, a group's box and
+      // an interactive guide part included, as in vega), a line, an area or a trail resolved to one of its items.
       const [sx, sy] = pointerMapper.map(e.clientX, e.clientY)
-      const item = hitIndexFor(displayScene)?.queryMark(sx, sy)?.item
+      const target = hitIndexFor(displayScene)?.tooltip(sx, sy)
+      const item = target?.item
       const datum = item?.datum
       const hasDatum = datum != null && typeof datum === 'object'
       const tip = (item as { tooltip?: unknown } | undefined)?.tooltip
-      // vega calls its tooltip handler with `item.tooltip`; a custom renderer also gets items that only have a datum
-      const shows = item != null && (hasDatum || (tip != null && tip !== ''))
+      // vega shows the item's `tooltip`; a custom renderer is also called for an item of a mark that reads a dataset (the row
+      // is the datum), not for one whose only datum is vega's generated `{}` (a mark without `from`, a group, a guide part)
+      // (vega hands its tooltip handler `item.tooltip || null`: a falsy value -- '', 0, false, NaN -- is no tooltip)
+      const shows = item != null && (!!tip || (renderTooltip != null && target!.kind === 'mark' && target!.fromData === true))
       setTooltipInfo(shows ? { datum: hasDatum ? (datum as Record<string, unknown>) : {}, item, x: e.clientX - rect.left, y: e.clientY - rect.top } : null)
     },
-    [tooltipEnabled, displayScene, hitIndexFor, pointerMapper],
+    [tooltipEnabled, displayScene, hitIndexFor, pointerMapper, renderTooltip],
   )
 
   const handleTooltipLeave = React.useCallback(() => {

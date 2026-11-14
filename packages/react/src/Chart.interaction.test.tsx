@@ -189,5 +189,39 @@ forEachVariant(['svg'], (Chart, variant) => {
       expect(onSelect).toHaveBeenCalledWith(null)
       await act(async () => { root.unmount() })
     })
+
+    // a click selects what vega's event item is (the topmost item that takes the pointer): an item of a mark without `from` is
+    // selected with vega's `{}`, a group's box and what lies under another item are not
+    variant.it(['interaction'], 'selects the event item: a mark without `from` gives `{}`, a group box gives null', async () => {
+      const onPointSelect = vi.fn()
+      const box = (x: number, extra: Record<string, unknown>): Record<string, unknown> => ({ x: { value: x }, width: { value: 30 }, y: { value: 0 }, height: { value: 100 }, ...extra })
+      const spec = {
+        width: 100, height: 100, padding: 0, autosize: 'none',
+        data: [{ name: 't', values: [{ id: 'under' }] }],
+        marks: [
+          { type: 'rect', from: { data: 't' }, encode: { update: box(0, { width: { value: 60 }, fill: { value: 'red' } }) } },
+          { type: 'rect', encode: { update: box(30, { fill: { value: 'transparent' } }) } },
+          { type: 'group', encode: { update: box(70, { fill: { value: '#eee' } }) } },
+        ],
+      }
+      const container = document.createElement('div')
+      document.body.appendChild(container)
+      const root = createRoot(container)
+      await act(async () => { root.render(<Chart spec={spec} width={100} height={100} onPointSelect={onPointSelect} />) })
+      const overlay = container.querySelector('[data-testid="chart-brush-overlay"]')!
+      const rect = { left: 0, top: 0, width: 100, height: 100, right: 100, bottom: 100, x: 0, y: 0, toJSON: () => ({}) } as DOMRect
+      overlay.getBoundingClientRect = () => rect
+      ;(container as HTMLElement).getBoundingClientRect = () => rect
+      const click = async (x: number): Promise<unknown> => {
+        await act(async () => { overlay.dispatchEvent(new PointerEvent('pointerdown', { clientX: x, clientY: 50, pointerId: 1, bubbles: true })) })
+        await act(async () => { overlay.dispatchEvent(new PointerEvent('pointerup', { clientX: x, clientY: 50, pointerId: 1, bubbles: true })) })
+        return onPointSelect.mock.calls.at(-1)![0]
+      }
+      expect(await click(10)).toEqual({ id: 'under' })
+      // the transparent rect without `from` is drawn over the red one
+      expect(await click(45)).toEqual({})
+      expect(await click(85)).toBeNull()
+      await act(async () => { root.unmount() })
+    })
   })
 })
