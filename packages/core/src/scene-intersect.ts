@@ -103,6 +103,14 @@ function outlineOf(marktype: string, item: SceneItem): Poly[] {
   return transformPolys(pathPolys(String(it.path ?? '')), (px, py) => place(px * sx, py * sy))
 }
 
+/**
+ * Lattice points a region may have before the exact test gives up: past it, the item is taken as intersecting (its bounds meet
+ * the box), which is vega's own answer when it has no canvas to test with. Vega tests every lattice point of the region with
+ * `isPointInPath`, so a huge region (a radius or a brush of millions of pixels, or an infinite one) never ends there.
+ */
+const ROW_BUDGET = 4_000_000
+const SAFE = 2 ** 52
+
 function intersectPath(marktype: string, item: SceneItem, bounds: Bounds, box: Bounds): boolean {
   const polys = outlineOf(marktype, item)
   const b = new Bounds().union(bounds).intersect(box)
@@ -110,7 +118,62 @@ function intersectPath(marktype: string, item: SceneItem, bounds: Bounds, box: B
   const y1 = Math.floor(b.y1)
   const x2 = Math.ceil(b.x2)
   const y2 = Math.ceil(b.y2)
-  for (let y = y1; y <= y2; ++y) for (let x = x1; x <= x2; ++x) if (insidePolys(polys, x, y)) return true
+  // (vega: is any lattice point of the region inside the outline? A region that is empty or NaN has none)
+  if (!(x1 <= x2 && y1 <= y2)) return false
+  return latticeInside(polys, x1, y1, x2, y2)
+}
+
+/**
+ * Whether `insidePolys` holds at some integer (x, y) of [x1, x2] x [y1, y2], without testing every point. On a row the
+ * winding test changes only where an edge crosses the row (each edge's side test is linear in x, so it flips once), so the
+ * inside points of a row are runs between crossings: testing the integers around each crossing and one inside each gap
+ * between crossings tests every run. Rows the outline does not reach have no crossing and nothing inside.
+ */
+function latticeInside(polys: Poly[], x1: number, y1: number, x2: number, y2: number): boolean {
+  let minY = Infinity, maxY = -Infinity, edges = 0
+  for (const { pts } of polys) {
+    const n = pts.length / 2
+    if (n < 3) continue
+    edges += n
+    for (let i = 1; i < pts.length; i += 2) { const y = pts[i]!; if (y < minY) minY = y; if (y > maxY) maxY = y }
+  }
+  const r0 = Math.max(y1, Math.ceil(minY))
+  const r1 = Math.min(y2, Math.floor(maxY))
+  if (!(r0 <= r1)) return false
+  // (beyond 2^52 a float step `x + 1` stops moving, so no row or column there can be walked -- vega's walk never ends -- and a
+  // region of more rows than the budget is not walked either: both are taken as intersecting, as vega does without a canvas)
+  if ((r1 - r0 + 1) * edges > ROW_BUDGET || !(Math.abs(x1) <= SAFE && Math.abs(x2) <= SAFE && Math.abs(r0) <= SAFE && Math.abs(r1) <= SAFE)) return true
+  const xs: number[] = []
+  const test = (x: number, y: number): boolean => x >= x1 && x <= x2 && insidePolys(polys, x, y)
+  for (let y = r0; y <= r1; y++) {
+    xs.length = 0
+    for (const { pts } of polys) {
+      const n = pts.length / 2
+      if (n < 3) continue
+      let ax = pts[2 * n - 2]!, ay = pts[2 * n - 1]!
+      for (let i = 0; i < n; i++) {
+        const bx = pts[2 * i]!, by = pts[2 * i + 1]!
+        if ((ay <= y && by > y) || (by <= y && ay > y)) {
+          // (an edge whose crossing is not a finite number never flips the test at a point of the region)
+          const xc = ax + ((bx - ax) * (y - ay)) / (by - ay)
+          if (Number.isFinite(xc)) xs.push(xc)
+        }
+        ax = bx; ay = by
+      }
+    }
+    if (xs.length === 0) continue
+    xs.sort((a, c) => a - c)
+    for (let k = 0; k < xs.length; k++) {
+      const f = Math.floor(xs[k]!)
+      // (a crossing beyond 2^52 is outside the region, which is within it)
+      if (Math.abs(f) <= SAFE) for (let x = f - 1; x <= f + 2; x++) if (test(x, y)) return true
+      if (k + 1 < xs.length) {
+        const m = Math.floor((xs[k]! + xs[k + 1]!) / 2)
+        if (test(m, y) || test(Math.max(x1, Math.min(x2, m)), y)) return true
+      }
+    }
+    if (test(x1, y) || test(x2, y)) return true
+  }
   return false
 }
 

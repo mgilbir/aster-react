@@ -52,7 +52,9 @@ interface Piece {
 function dashed(s: Piece, pattern: number[], offset: number): Piece[] {
   const out: Piece[] = []
   const total = pattern.reduce((p, q) => p + q, 0)
-  if (!(total > 0)) return [s]
+  // a canvas ignores a dash list with a negative or non-finite entry (setLineDash), and the stroke stays solid; walking one
+  // would never end (a negative dash moves backwards)
+  if (!(total > 0) || pattern.some((q) => !(q >= 0) || !Number.isFinite(q))) return [s]
   const pts = s.closed && s.pts.length > 1 ? [...s.pts, s.pts[0]!] : s.pts
   let idx = 0
   let into = ((offset % total) + total) % total

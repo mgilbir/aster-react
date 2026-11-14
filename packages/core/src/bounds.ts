@@ -546,8 +546,11 @@ function boundsFromTokens(
       let sa = theta1
       let ea = theta1
       let delta = theta2 - theta1
-      if (ccw) while (delta > 0) delta -= Tau
-      else while (delta < 0) delta += Tau
+      // (a sweep that is not finite never comes round: the loops below would not end)
+      if (Number.isFinite(delta)) {
+        if (ccw) while (delta > 0) delta -= Tau
+        else while (delta < 0) delta += Tau
+      }
       ea = theta1 + delta
       at(sa)
       at(ea)
