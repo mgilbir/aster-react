@@ -5,7 +5,8 @@
  * mark made from another mark's items, a facet cell and a plain group (their datum, and `parent` inside them), an axis' ticks,
  * labels and title, a legend's symbols, labels, entries and title, a title -- and of what is not a tuple (a row's nested
  * object, an object an expression makes, `data()` rows, an aggregate's `values`). Run through the pinned vega and through Aster
- * in the same process; every item's channels must agree. Nothing a tuple carries may show on the scene's objects.
+ * in the same process, with the rows in the spec and with the same (frozen) rows given by the host; every item's channels must
+ * agree. Nothing a tuple carries may show on the scene's objects.
  */
 import { describe, expect, it } from 'vitest'
 import * as vega from 'vega'
@@ -27,13 +28,19 @@ const DERIVED: Array<[string, unknown[], string]> = [
   ['window', [{ type: 'window', ops: ['rank'], as: ['r'] }], 'isTuple(datum)'],
   ['fold', [{ type: 'fold', fields: ['v', 'u'] }], 'isTuple(datum)'],
   ['lookup', [{ type: 'lookup', from: 'other', key: 'k', fields: ['k'], as: ['o'] }], "isTuple(datum) + ',' + isTuple(datum.o)"],
+  ['first formula', [{ type: 'formula', expr: "isTuple(datum) ? 'y' : 'n'", as: 'w' }], "datum.w + ',' + isTuple(datum)"],
+  ['first filter', [{ type: 'filter', expr: 'isTuple(datum)' }], "'kept,' + isTuple(datum)"],
+  ['formulas', [{ type: 'formula', expr: 'datum.v * 2', as: 'w' }, { type: 'formula', expr: "isTuple(datum) ? 'y' : 'n'", as: 'w2' }, { type: 'filter', expr: 'isTuple(datum)' }], "datum.w2 + ',' + isTuple(datum)"],
   ['chain', [{ type: 'formula', expr: 'datum.v + 1', as: 'w' }, { type: 'filter', expr: 'isTuple(datum)' }, { type: 'aggregate', groupby: ['k'], ops: ['values'], fields: ['w'], as: ['vals'] }], "isTuple(datum) + ',' + isTuple(datum.vals[0])"],
 ]
+
+// the first step over a dataset's own rows (what the spec or the host gave): its expressions see them as tuples
+const FIRST: Spec[] = [{ type: 'formula', expr: "isTuple(datum) ? 'y' : 'n'", as: 'it' }, { type: 'filter', expr: 'isTuple(datum)' }]
 
 function genSpec(i: number): Spec {
   const [, transform, probe] = pick(DERIVED)
   const marks: Spec[] = [
-    { type: 'text', name: 'rows', from: { data: 't' }, encode: { update: { text: T("isTuple(datum) + ',' + isTuple(datum.obj) + ',' + isTuple({a: 1}) + ',' + isTuple(data('t')[0])") } } },
+    { type: 'text', name: 'rows', from: { data: 't' }, encode: { update: { text: T("datum.it + ',' + isTuple(datum) + ',' + isTuple(datum.obj) + ',' + isTuple({a: 1}) + ',' + isTuple(data('t')[0])") } } },
     { type: 'text', name: 'derived', from: { data: 'd' }, encode: { update: { text: T(probe) } } },
     { type: 'text', name: 'solo', encode: { update: { text: T('isTuple(datum)') } } },
     { type: 'symbol', name: 'ofmark', from: { data: 'rows' }, encode: { update: { description: T("isTuple(datum) + ',' + isTuple(datum.datum)") } } },
@@ -49,7 +56,7 @@ function genSpec(i: number): Spec {
   const spec: Spec = {
     width: 100, height: 60, padding: 5,
     data: [
-      { name: 't', values: [{ k: 'a', v: 1, u: 4, obj: { z: 1 } }, { k: 'b', v: 2, u: 5, obj: { z: 2 } }, { k: 'a', v: 3, u: 6, obj: { z: 3 } }] },
+      { name: 't', values: [{ k: 'a', v: 1, u: 4, obj: { z: 1 } }, { k: 'b', v: 2, u: 5, obj: { z: 2 } }, { k: 'a', v: 3, u: 6, obj: { z: 3 } }], ...(rnd() < 0.5 ? { transform: [pick(FIRST)] } : {}) },
       { name: 'other', values: [{ k: 'a', note: 'x' }, { k: 'b', note: 'y' }] },
       { name: 'd', source: 't', transform },
     ],
@@ -119,11 +126,19 @@ describe('isTuple, against vega, for every kind of item', () => {
       const want = normalize(vegaSays(view.scenegraph().root))
       const wantSignal = view.signal('s')
       view.finalize()
+      // the rows in the spec, and the same rows given by the host (`input.data`): vega's ingested rows either way
+      const hosted = structuredClone(spec) as { data: Array<{ name: string; values?: unknown[] }> }
+      const t = hosted.data.find((d) => d.name === 't')!
+      const hostRows = Object.freeze(t.values!.map((r) => Object.freeze(r)))
+      t.values = []
       const scene = evaluateChart(compileChart(structuredClone(spec) as never)) as unknown as { items: unknown[]; signalParams: Record<string, unknown> }
-      const got = normalize(asterSays(scene))
-      compared += want.length
-      if (JSON.stringify(got) !== JSON.stringify(want)) failures.push(`case ${i}: vega=${JSON.stringify(want.filter((w) => !got.includes(w)))} aster=${JSON.stringify(got.filter((g) => !want.includes(g)))}`)
-      if (scene.signalParams.s !== wantSignal) failures.push(`case ${i}: signal vega=${String(wantSignal)} aster=${String(scene.signalParams.s)}`)
+      const hostScene = evaluateChart(compileChart(hosted as never), { data: { t: hostRows as unknown[] } }) as unknown as typeof scene
+      for (const [how, sc] of [['spec rows', scene], ['host rows', hostScene]] as const) {
+        const got = normalize(asterSays(sc))
+        compared += want.length
+        if (JSON.stringify(got) !== JSON.stringify(want)) failures.push(`case ${i} (${how}): vega=${JSON.stringify(want.filter((w) => !got.includes(w)))} aster=${JSON.stringify(got.filter((g) => !want.includes(g)))}`)
+        if (sc.signalParams.s !== wantSignal) failures.push(`case ${i} (${how}): signal vega=${String(wantSignal)} aster=${String(sc.signalParams.s)}`)
+      }
       // nothing a tuple carries shows on the scene's objects
       const walk = (n: { datum?: unknown; items?: unknown[] }): void => {
         if (n.datum !== null && typeof n.datum === 'object') expect(Object.getOwnPropertySymbols(n.datum)).toEqual([])
