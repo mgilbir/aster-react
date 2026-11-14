@@ -54,7 +54,7 @@ import { gradientDefOf, hash53, isGradientPaint } from './svg-defs.js'
 import { tickFormat, scaleGradient, scaleGradientStops, tickCount, validTicks } from './scale.js'
 import { timeIntervalFor, utcIntervalFor } from './time.js'
 import { compileChart } from './compiler.js'
-import { dict, ownGet, pushAll, sortData, lerp, scopedSignalName, heldSignalName, markTuple, markTuples, markTupleAlways, withTuples } from './util.js'
+import { dict, ownGet, pushAll, sortData, lerp, scopedSignalName, heldSignalName, isTuple, markTuple, markTuples, markTupleAlways, withTuples } from './util.js'
 import { applyImageUrlPolicy, applyLinkUrlPolicy, resolveImageUrl, type ImageUrlPolicy } from './url-policy.js'
 import { checkChartUrlData } from './url-data.js'
 import { valueKey, valuesEqual } from './fingerprint.js'
@@ -2710,8 +2710,20 @@ export function evaluateOnce(chart: CompiledChart, input: RuntimeInput = {}): Sc
 }
 
 function evaluateChartImpl(chart: CompiledChart, hostInput: RuntimeInput, txn: EvalTxn, done: { draft?: IncrementalState; failed?: boolean }): SceneRoot {
-  // (the tuples it makes are registered only for a chart whose expressions call `isTuple`: nothing else can ask)
-  return withTuples(chart.callsIsTuple === true, () => evaluateChartPass(chart, hostInput, txn, done))
+  // (the tuples it makes are registered only for a chart whose expressions may ask `isTuple` of one: nothing else can ask)
+  return withTuples(registersTuples(chart, hostInput), () => evaluateChartPass(chart, hostInput, txn, done))
+}
+
+/**
+ * Whether an evaluation registers the tuples it makes (see `CompiledChart.callsIsTuple`). A chart that only asks of Vega-Lite's
+ * `facet` signal does when the host sets that signal to an object not known to be a tuple: one of the rows it hands the chart, say,
+ * which the evaluation registers as vega ingests it.
+ */
+function registersTuples(chart: CompiledChart, input: RuntimeInput): boolean {
+  if (chart.callsIsTuple === true) return true
+  if (chart.callsIsTuple !== 'facet' || input.signals === undefined || !Object.hasOwn(input.signals, 'facet')) return false
+  const v = input.signals.facet
+  return v !== null && typeof v === 'object' && !isTuple(v)
 }
 
 function evaluateChartPass(chart: CompiledChart, hostInput: RuntimeInput, txn: EvalTxn, done: { draft?: IncrementalState; failed?: boolean }): SceneRoot {
