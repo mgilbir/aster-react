@@ -16,6 +16,14 @@ and Fixed, per package. Everything built before the first release is in [Pre-rel
   `item().items` holds its symbol and label, as vega's legend click handlers read them). A group item keeps its `tooltip`.
   `event.item.mark.name` is the name the spec gave the mark (a mark it did not name has none, so `@marks:click` no longer
   matches it), and an axis or legend part's `mark.role` is vega's (`axis-label`, `legend-symbol`...).
+- The hit index picks what vega picks: the topmost item whose painted geometry contains the point, with no pointing slack. A
+  2px tolerance around every item made a dense chart report a point drawn later whose edge was a fraction of a pixel away instead
+  of the point under the pointer (on a 10,000-point scatter, the circle 0.19px away). A stroke is hit as it is painted (half its
+  width, its caps and joins), a symbol with only a stroke by its ring, an item with neither a fill nor a stroke not at all, a
+  transparent stroke like a transparent fill; a rect no longer wins over the marks drawn after it in a group; clips and the view's
+  own edge bound what is picked; a stroked trail takes the pointer along its stroke; and `pick` (vega's `event.item`) reports a
+  line, an area or a trail as its first item, as vega does. With a picker, the event loop takes `event.item` from it alone, not
+  from the DOM element under the pointer.
 - `HitIndex.tooltip(x, y)` is the item vega's tooltip handler is called with (the topmost item that takes the pointer; a line,
   an area or a trail resolved to one of its items as vega resolves it); `HitTarget` says what was hit (`kind`) and whether the
   item's mark reads a dataset (`fromData`). `queryMark` returns the items of a mark without `from` like any other's.
