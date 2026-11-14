@@ -243,20 +243,25 @@ function scaleCommand(current: PathCommand, sX: number, sY: number): PathCommand
 }
 
 const parsedCache = new Map<string, PathCommand[]>()
-const PARSE_CACHE_LIMIT = 256
+const PARSE_CACHE_LIMIT = 4096
 
 /**
- * A custom symbol shape (vega `symbols(name)` for a name that is not a built-in shape) parsed as SVG path data, once per
- * distinct shape (bounded). Throws vega's own error for an invalid path. Drawn scaled by the symbol radius
- * `r = sqrt(size) / 2` about the origin (`renderSvgPath(sink, commands, 0, 0, r)`).
+ * SVG path data parsed once per distinct string (a bounded cache, cleared when full; an invalid path is not cached and throws
+ * vega's own error every time). The commands are shared: never write them.
  */
-export function customSymbolCommands(shape: string): PathCommand[] {
-  let parsed = parsedCache.get(shape)
+export function svgPathCommands(d: string): PathCommand[] {
+  let parsed = parsedCache.get(d)
   if (!parsed) {
-    parsed = parseSvgPath(shape)
+    parsed = parseSvgPath(d)
     if (parsedCache.size >= PARSE_CACHE_LIMIT) parsedCache.clear()
-    parsedCache.set(shape, parsed)
+    parsedCache.set(d, parsed)
   }
   return parsed
 }
 
+/**
+ * A custom symbol shape (vega `symbols(name)` for a name that is not a built-in shape) parsed as SVG path data. Throws vega's
+ * own error for an invalid path. Drawn scaled by the symbol radius `r = sqrt(size) / 2` about the origin
+ * (`renderSvgPath(sink, commands, 0, 0, r)`).
+ */
+export const customSymbolCommands = (shape: string): PathCommand[] => svgPathCommands(shape)
