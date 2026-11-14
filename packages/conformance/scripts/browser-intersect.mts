@@ -122,7 +122,7 @@ window.__run = async (spec, boxes, scopes, renderer) => {
   }
   mine.appendChild(el)
   const store = {}
-  const hit = buildHitIndex(scene)
+  const hit = buildHitIndex(scene, undefined, renderer === 'canvas' ? { renderer: 'canvas' } : {})
   const binding = bindSceneSignals(el, scene, store, { logger: { error: (...a) => errors.push('aster: ' + a.map(String).join(' ')), warn() {} } }, { pick: (x, y) => hit.pick(x, y), ...(events ? { events } : {}) })
   // the expression as written, over the scene (no event loop): the function's own answer
   const runtime = { scale: () => undefined, data: () => undefined, intersect: (b, o, g) => sceneIntersect(scene, b, o, g), expr: (e) => compileExpr(e, runtime) }

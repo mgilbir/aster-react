@@ -705,7 +705,8 @@ window.__mountAster = async (spec, renderer) => {
     const canvas = document.createElement('canvas')
     paintCanvas(canvas, scene)
     holder.appendChild(canvas)
-    bindSceneSignals(canvas, scene, store, { logger }, { pick: (x, y) => hit.pick(x, y), events: createCanvasEvents(canvas) })
+    const hitc = buildHitIndex(scene, undefined, { renderer: 'canvas' })
+    bindSceneSignals(canvas, scene, store, { logger }, { pick: (x, y) => hitc.pick(x, y), events: createCanvasEvents(canvas) })
   } else {
     const svg = renderSceneToDomElement(scene)
     holder.appendChild(svg)

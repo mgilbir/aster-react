@@ -412,8 +412,10 @@ window.__mountPick = async (spec) => {
   holders[3].appendChild(ac)
   const canvasStore = {}
   const events = createCanvasEvents(ac)
-  const canvasBinding = bindSceneSignals(ac, scene, canvasStore, { logger: quiet }, { pick: (x, y) => hit.pick(x, y), events })
-  state = { views, binding, hit, store, canvas: holders[1].querySelector('canvas'), ac, canvasBinding, canvasStore, events }
+  // (the index <Chart renderer="canvas"> builds: it picks as vega's canvas renderer picks)
+  const hitc = buildHitIndex(scene, undefined, { renderer: 'canvas' })
+  const canvasBinding = bindSceneSignals(ac, scene, canvasStore, { logger: quiet }, { pick: (x, y) => hitc.pick(x, y), events })
+  state = { views, binding, hit, hitc, store, canvas: holders[1].querySelector('canvas'), ac, canvasBinding, canvasStore, events }
 }
 // A pointermove at (x, y) of each mount, as the browser delivers it: to the element its own hit test finds there (vega's SVG
 // handler reads the item off that element; Aster's loop resolves it through the hit index), and to vega's canvas (whose
@@ -432,11 +434,12 @@ const readAt = async (x, y) => {
   for (const v of state.views) await v.runAsync()
   const t = state.hit.tooltip(x, y)
   const tip = norm((t ? t.item.tooltip : null) || null)
+  const tc = state.hitc.tooltip(x, y)
   return {
     vs: { picked: state.views[0].signal('picked'), tip: tips[0] },
     vc: { picked: state.views[1].signal('picked'), tip: tips[1] },
     as: { picked: Object.hasOwn(state.store, 'picked') ? state.store.picked : 'none', tip },
-    ac: { picked: Object.hasOwn(state.canvasStore, 'picked') ? state.canvasStore.picked : 'none', tip },
+    ac: { picked: Object.hasOwn(state.canvasStore, 'picked') ? state.canvasStore.picked : 'none', tip: norm((tc ? tc.item.tooltip : null) || null) },
   }
 }
 // What vega answers a quarter of a pixel around (x, y), in eight directions: where its answer changes that close, the point is
