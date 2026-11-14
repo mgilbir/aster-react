@@ -41,7 +41,7 @@ import { applyChangeset, newChangeset, planModify, type Changeset } from './modi
 import { parseExpression, type AstNode } from './expr-parser.js'
 import { normalizeEvents, filterCode } from './stream-defs.js'
 import { parseEventSelectorString, type StreamDef } from './event-selector.js'
-import { array, dict, heldSignalName, ownGet, setOwn, TUPLE_ID, MARK_NODE, scopedSignalName } from './util.js'
+import { array, dict, heldSignalName, ownGet, setOwn, markTupleAlways, MARK_NODE, scopedSignalName } from './util.js'
 import { follow, node, Propagation, type SignalNode } from './signal-propagation.js'
 import { sceneIntersect } from './scene-intersect.js'
 import { consoleLogger, type Logger } from './logger.js'
@@ -1340,11 +1340,12 @@ function itemFacade(p: PickedItem): object {
     get group(): object | null { return p.group ? itemFacade(p.group) : null },
     ...(p.node ? { [MARK_NODE]: p.node } : {}),
   }
-  return Object.create(p.item, {
+  const facade = Object.create(p.item, {
     mark: { value: mark, enumerable: true },
-    [TUPLE_ID]: { value: true },
     ...(p.items !== undefined ? { items: { value: p.items, enumerable: true } } : {}),
   }) as object
+  markTupleAlways(facade)
+  return facade
 }
 
 /** `event.item` recovered from the DOM: the `data-datum` stamp and the mark container's classes. */

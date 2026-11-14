@@ -4,6 +4,7 @@
  * placed against each other from the bounds of what was drawn, and the legend is sized to hold them. See guide-encode.ts for how a
  * property becomes a channel of an item.
  */
+import { markTuple, markTuples } from './util.js'
 import type { EncodeValue, SceneGroup, SceneItem } from './types.js'
 import { Bounds, boundLeaf, boundLegendGroup, boundStroke, multiLineOffset } from './bounds.js'
 import { placeGrid } from './trellis.js'
@@ -459,6 +460,7 @@ export function buildLegend(inp: LegendBuildInput): LegendBuilt {
   const scales: Rec = {}
   for (const [channel, name] of inp.channels) scales[channel] = name
   const datum: Row = { title: spec.title != null, scales, type, vgrad: type !== SymbolLegend && vertical }
+  markTuple(datum)
   const groupDef = markOf(defs, 'group', () => ({ type: 'rule', role: 'legend', style: inp.encode.legend?.style, encode: groupEncode(k), interactive: false }))
   const group = encodeItem(groupDef, datum, {}, host, style) as unknown as Rec
   const partMeta: LegendBuilt['partMeta'] = {
@@ -535,6 +537,7 @@ export function buildLegend(inp: LegendBuildInput): LegendBuilt {
     const labelsDef = markOf(defs, 'gradient-labels', () => stripLabels(k))
     // bands and labels are keyed by value: entries with one value make one item
     const keyed = joinByValue(entries as unknown as Row[])
+    markTuples(keyed)
     let strips: Array<SceneItem & Rec> = []
     let labels: Array<SceneItem & Rec> = []
     stage('strip', () => {
@@ -752,6 +755,7 @@ function symbolEntries(inp: LegendBuildInput, k: Kit, defs: LegendDefs, group: R
     type: entriesType, scale: inp.scale, count: inp.count, limit: inp.limit, values: inp.values, minstep: inp.minstep, size: roomOf,
     formatSpecifier: inp.formatSpecifier, formatType: inp.formatType, locale: inp.locale, warn: (m) => host.warn(m),
   })
+  markTuples(entries as unknown as Row[])
 
   // The entries are made by three operators each, ranked: the boxes of all the entries (one mark), then for every entry, in its own
   // instance, its symbol and its label. One that throws stops the pass: what comes after it is never made (see `EntryHost.stopped`).
@@ -759,7 +763,9 @@ function symbolEntries(inp: LegendBuildInput, k: Kit, defs: LegendDefs, group: R
     host.at = 'entry'
     host.entryIndex = i
     // the entry group's datum is the facet tuple `{index, count}`
-    return encodeItem(entryDef, { index: e.index, count: 1 }, group, host, style) as SceneItem & Rec
+    const facet: Row = { index: e.index, count: 1 }
+    markTuple(facet)
+    return encodeItem(entryDef, facet, group, host, style) as SceneItem & Rec
   })
   const made = entries.map((e, i) => {
     const g = boxes[i]!
@@ -847,6 +853,7 @@ function symbolEntries(inp: LegendBuildInput, k: Kit, defs: LegendDefs, group: R
     // datum is the facet tuple `{index, count}` (a legend click handler reads the value off the entry's symbol instead,
     // `item().items[0].items[0].datum.value`: the event loop gives the box those marks, see `entryMarks` in signals.ts).
     const entryDatum = { index: e.index, count: 1 }
+    markTuple(entryDatum)
     const here = place[i]!
     const width = widths.get(columnOf(i)) ?? 0
     // the entry's box is as wide as its column and as tall as what it holds

@@ -116,6 +116,7 @@ export function compileChart(givenSpec: VgSpec): CompiledChart {
   }
 
   return {
+    ...(callsIsTuple(spec) ? { callsIsTuple: true as const } : {}),
     autosize,
     width,
     height,
@@ -173,6 +174,27 @@ function compileProjection(pr: Record<string, unknown>, config?: Record<string, 
     if (out[k] == null && v != null) out[k] = v
   }
   return out as unknown as CompiledProjection
+}
+
+/**
+ * Whether an expression of the spec (or its config) calls `isTuple`: only then does an evaluation register the tuples it makes (see
+ * `withTuples`). The words of the spec are looked at, not the rows of its inline data (`values` arrays), so a large dataset costs
+ * nothing; a mention outside an expression only makes the evaluation register what it need not.
+ */
+function callsIsTuple(spec: unknown): boolean {
+  const seen = new Set<unknown>()
+  const walk = (v: unknown): boolean => {
+    if (typeof v === 'string') return v.includes('isTuple')
+    if (v === null || typeof v !== 'object' || seen.has(v)) return false
+    seen.add(v)
+    if (Array.isArray(v)) return v.some(walk)
+    for (const [k, x] of Object.entries(v as Record<string, unknown>)) {
+      if (k === 'values' && Array.isArray(x)) continue
+      if (walk(x)) return true
+    }
+    return false
+  }
+  return walk(spec)
 }
 
 function resolveAutosize(value: unknown): string | undefined {

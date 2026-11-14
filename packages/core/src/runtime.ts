@@ -54,7 +54,7 @@ import { gradientDefOf, hash53, isGradientPaint } from './svg-defs.js'
 import { tickFormat, scaleGradient, scaleGradientStops, tickCount, validTicks } from './scale.js'
 import { timeIntervalFor, utcIntervalFor } from './time.js'
 import { compileChart } from './compiler.js'
-import { dict, ownGet, pushAll, sortData, lerp, scopedSignalName, heldSignalName, TUPLE_ID } from './util.js'
+import { dict, ownGet, pushAll, sortData, lerp, scopedSignalName, heldSignalName, markTuple, markTuples, markTupleAlways, withTuples } from './util.js'
 import { applyImageUrlPolicy, applyLinkUrlPolicy, resolveImageUrl, type ImageUrlPolicy } from './url-policy.js'
 import { checkChartUrlData } from './url-data.js'
 import { valueKey, valuesEqual } from './fingerprint.js'
@@ -2710,6 +2710,11 @@ export function evaluateOnce(chart: CompiledChart, input: RuntimeInput = {}): Sc
 }
 
 function evaluateChartImpl(chart: CompiledChart, hostInput: RuntimeInput, txn: EvalTxn, done: { draft?: IncrementalState; failed?: boolean }): SceneRoot {
+  // (the tuples it makes are registered only for a chart whose expressions call `isTuple`: nothing else can ask)
+  return withTuples(chart.callsIsTuple === true, () => evaluateChartPass(chart, hostInput, txn, done))
+}
+
+function evaluateChartPass(chart: CompiledChart, hostInput: RuntimeInput, txn: EvalTxn, done: { draft?: IncrementalState; failed?: boolean }): SceneRoot {
   // an injected random source is drawn from once per site and run, however many passes and evaluations repeat it (see random-tape.ts)
   const input: RuntimeInput = hostInput.random ? { ...hostInput, random: replayable(hostInput.random) } : hostInput
   // (the spec's autosize, or a fit to the container the host measured: see autosizeOf)
@@ -3351,6 +3356,7 @@ function buildDatasetsOf(ctx: EvalContext, inputData: Record<string, unknown[]>)
     // a dataset a `force` link force reads gets its link rows rewritten (their ends become the nodes): they are this
     // evaluation's own copies, never the spec's
     if (forceLinkDatasets(ctx.chart).has(name)) rows = rows.map((r) => ({ ...r }))
+    markTuples(rows)
     ctx.datasets.set(name, rows)
     ctx.datasetPulses.set(name, outPulse)
     return rows
@@ -3380,7 +3386,11 @@ function buildDatasetsOf(ctx: EvalContext, inputData: Record<string, unknown[]>)
   ctx.readsMemo = undefined
 }
 
-const copyRows = (rows: readonly Row[]): Row[] => rows.map((r) => ({ ...r }))
+const copyRows = (rows: readonly Row[]): Row[] => {
+  const out = rows.map((r) => ({ ...r }))
+  markTuples(out)
+  return out
+}
 
 /** Whether `readData(rows, format)` returns `ingestRows(rows)`: JSON rows already parsed, nothing to coerce, no d3-dsv `columns`. */
 function passesThroughRead(format: DataFormatSpec | undefined, rows: readonly unknown[]): boolean {
@@ -3498,6 +3508,7 @@ function runPipeline(
         }
         follow(k, end, cur)
         cur = out
+        markTuples(cur)
         stepCounts.reused += unit.length
       } else {
         // (the unit's first step copies every row it is given, so a source's rows need only be in an array of their own)
@@ -3511,6 +3522,7 @@ function runPipeline(
         state.steps.push(out)
         for (let j = 0; j < unit.length; j++) records[k + j] = recordStep(ctx, unitReads[j]!, unitKeys[j]!, false, undefined)
         cur = out
+        markTuples(cur)
         stepCounts.ran += unit.length
       }
       k = end
@@ -3523,6 +3535,7 @@ function runPipeline(
       keepStep(ctx, t, reads!, kept.records![k]!, cur.length, out)
       const given = cur
       cur = out
+      markTuples(cur)
       state.steps.push(cur)
       const ss = kept.stepState.get(`${name}#${k}`)
       if (ss !== undefined) state.stepState.set(`${name}#${k}`, ss)
@@ -3552,6 +3565,7 @@ function runPipeline(
       ? run()
       : atRandomSite(ctx.runtime.random, `dataset:${name}#${k}`, () => randomFingerprint(t, from, ctx.signalParams), run)
     cur = res.rows
+    markTuples(cur)
     state.steps.push(cur)
     if (res.state !== undefined) state.stepState.set(`${name}#${k}`, res.state)
     if (t.type === 'identifier' && sourceList !== undefined) {
@@ -4379,7 +4393,7 @@ function evaluateMarkItems(
   let hitMarked = false
   if (source) {
     // (a source that is no dataset but the name of a mark built before: that mark's items, shallow-copied as vega's tuples)
-    const rawRows = ctx.datasets.get(source) ?? ctx.markItems.get(source)?.map((it) => ({ ...(it as unknown as Row) })) ?? []
+    const rawRows = ctx.datasets.get(source) ?? ctx.markItems.get(source)?.map((it) => { const r = { ...(it as unknown as Row) }; markTuple(r); return r }) ?? []
     // (a `label` transform reads the mark an item is in, and its bounds, off the item it labels: see `ITEM_MARK`)
     if (!ctx.datasets.has(source) && mark.transform?.some((t) => t.type === 'label')) {
       const container = ctx.markContainers.get(source)
@@ -4425,6 +4439,7 @@ function evaluateMarkItems(
       const encodeAt = (i: number): SceneItem => {
         if (meter) meter.tick('mark encoding')
         const row = { ...(rows[i] as Row) }
+        markTuple(row)
         const res = resolveEncodeSet(update, row, ctx, mark.type)
         res.datum = row
         res.__gen = gen
@@ -4487,6 +4502,7 @@ function evaluateMarkItems(
         items = new Array<SceneItem>(encodeRows.length)
         for (let i = 0; i < encodeRows.length; i++) {
           const copy = { ...encodeRows[i]! }
+          markTuple(copy)
           const res = resolveEncodeSet(update, copy, ctx, mark.type)
           res.datum = copy
           res.__gen = gen
@@ -4496,6 +4512,7 @@ function evaluateMarkItems(
       } else {
         items = encodeRows.map((row) => {
           const copy = { ...row }
+          markTuple(copy)
           const res = resolveEncodeSet(update, copy, ctx, mark.type)
           res.datum = copy
           res.__gen = gen
@@ -4508,6 +4525,7 @@ function evaluateMarkItems(
     // item carries as `datum` (what `event.item.datum`, a tooltip handler and the scene expose)
     const update = mark.encode?.update ?? mark.encode?.enter ?? {}
     const datum: Row = {}
+    markTuple(datum)
     const res = resolveEncodeSet(update, datum, ctx, mark.type)
     res.datum = datum
     res.__gen = ctx.gen
@@ -4915,7 +4933,7 @@ function groupSources(mark: CompiledMark, ctx: EvalContext): GroupSource[] | nul
     })
     items.forEach((item, i) => {
       // (the aggregate's output is a tuple: `isTuple(group().datum)`)
-      Object.defineProperty(item.datum, TUPLE_ID, { value: true, enumerable: false })
+      markTupleAlways(item.datum)
       item.rows = content[i]!.rows
       item.parent = content[i]!.parent
     })
@@ -4923,7 +4941,9 @@ function groupSources(mark: CompiledMark, ctx: EvalContext): GroupSource[] | nul
   }
   const data = mark.from?.data
   if (data) return (ctx.datasets.get(data) ?? []).map((row, i) => ({ datum: row, key: String(i) }))
-  return [{ datum: {} }]
+  const datum: Row = {}
+  markTuple(datum)
+  return [{ datum }]
 }
 
 /**

@@ -3,6 +3,7 @@
  * `anchor`, `frame` and `offset`, with the subtitle beside or below the title. See guide-encode.ts for how a property becomes a
  * channel of an item.
  */
+import { markTuple } from './util.js'
 import type { SceneItem } from './types.js'
 import { Bounds, boundLeaf } from './bounds.js'
 import {
@@ -82,6 +83,7 @@ export function buildTitle(inp: TitleBuildInput): TitleBuilt {
   })
   mergeUserEncode(groupEncode, groupUser)
   const datum: Row = {}
+  markTuple(datum)
   const group = encodeItem({ type: 'rule', role: 'title', style: groupUser.style, encode: groupEncode, interactive: false }, datum, {}, host, style) as unknown as Rec
 
   // the text is styled by `encode.title`; a spec that still puts its blocks at the top of `encode` styles it from there

@@ -219,6 +219,8 @@ export interface CompiledChart {
    * 0 and the autosize pass grows it to what is drawn (a composition's laid-out groups, text hanging below an axis), so a
    * host's container does not size it.
    */
+  /** An expression of the spec calls `isTuple`: its evaluations register the tuples they make (util `withTuples`). */
+  callsIsTuple?: true
   contentSized?: ReadonlyArray<'width' | 'height'>
 }
 

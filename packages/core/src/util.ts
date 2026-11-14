@@ -601,11 +601,38 @@ export const zoomSymlog = (domain: readonly number[], anchor: Anchor, scale: num
 // --- tuples ------------------------------------------------------------------
 
 /**
- * Marks an object as a data tuple (vega-dataflow's `Symbol('vega_id')`): the scene items the event loop
- * hands to expressions (`item()`, `group()`) carry it, so `isTuple(group())` is true for a group item and
- * false for the `{}` that `group()` returns when there is none.
+ * The data tuples, as vega-dataflow's `isTuple` knows them (vega stamps each with a `Symbol('vega_id')`). Aster keeps no mark on
+ * the objects themselves -- nothing a tuple carries shows in a scene, its JSON, a tooltip or what a host is handed -- but holds them
+ * here. A dataset's rows, a mark item's datum, a guide part's data, a facet cell's and a group item's datum are tuples; the
+ * objects an expression makes, a row's nested objects and the `{}` that `group()` gives when there is none are not. The facades the
+ * event loop hands out (`item()`, `group()`) are registered when they are made; the engine's tuples only while a chart whose
+ * expressions call `isTuple` is evaluated (see `withTuples`), since nothing else can ask.
  */
-export const TUPLE_ID: unique symbol = Symbol.for('aster.tuple') as never
+const TUPLES = new WeakSet<object>()
+let registering = false
+
+/** Run `fn` registering the tuples it makes when `on` (an evaluation of a chart whose expressions call `isTuple`). */
+export function withTuples<T>(on: boolean, fn: () => T): T {
+  const outer = registering
+  registering = on
+  try { return fn() } finally { registering = outer }
+}
+
+/** Register a tuple the engine made (a row, a datum), while registering is on. */
+export function markTuple(t: object): void {
+  if (registering) TUPLES.add(t)
+}
+
+/** Register every row of `rows` as a tuple, while registering is on. */
+export function markTuples(rows: readonly unknown[]): void {
+  if (!registering) return
+  for (const r of rows) if (r !== null && typeof r === 'object') TUPLES.add(r)
+}
+
+/** Register a tuple whatever the evaluation (the event loop's item facades, a facet cell's datum). */
+export function markTupleAlways(t: object): void {
+  TUPLES.add(t)
+}
 
 /**
  * On the `mark` of a picked item's facade: the scene node (the mark container, or the group mark for a group item) it stands for,
@@ -615,7 +642,7 @@ export const MARK_NODE: unique symbol = Symbol.for('aster.markNode') as never
 
 /** vega-dataflow `isTuple`: whether the value is a registered tuple. */
 export function isTuple(t: unknown): boolean {
-  return !!(t && (typeof t === 'object' || typeof t === 'function') && (t as Record<symbol, unknown>)[TUPLE_ID])
+  return t !== null && typeof t === 'object' && TUPLES.has(t)
 }
 
 /**
