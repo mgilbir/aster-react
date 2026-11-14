@@ -20,22 +20,23 @@ const { compileChart } = await import('./compiler.js')
 const { evaluateChart } = await import('./evaluate.js')
 const { mulberry32 } = await import('./scene-fuzz.testlib.js')
 const { AsterLimitError } = await import('./limits.js')
-const { randomScene } = await import('./geometry-scenes.testlib.js')
-const { probePoints } = await import('./geometry-differential.testlib.js')
+const { readFileSync } = await import('node:fs')
+const { dirname, join } = await import('node:path')
+const { fileURLToPath } = await import('node:url')
+const here = dirname(fileURLToPath(import.meta.url))
 type SceneRoot = import('./types.js').SceneRoot
 
 const sceneOf = (marks: unknown[]): SceneRoot => evaluateChart(compileChart({ width: 400, height: 300, padding: 0, autosize: 'none', marks } as never), {})
 const arc = (encode: Record<string, unknown>): unknown => ({ type: 'arc', encode: { enter: { x: { value: 0 }, y: { value: 0 }, fill: { value: 'red' }, ...encode } } })
 
 describe('intersect() terminates on any region, and agrees with the lattice test where that ends', () => {
-  it('the scene that stalled the old walk ends: a NaN group offset (a NaN box) over an arc whose bounds reach Number.MAX_VALUE', () => {
-    // (randomScene(112): a group item at x NaN, and an arc with a negative inner radius and a 5px stroke, whose bounds run from
-    // MAX_VALUE to Infinity in x: `x++` never moves past MAX_VALUE, so the old walk -- and vega's -- never ended)
-    const r = mulberry32(112)
-    const scene = randomScene(r)
-    probePoints(scene, r)
-    const boxes: number[][][] = []
-    for (let i = 0; i < 6; i++) { const x = r() * scene.width, y = r() * scene.height; boxes.push([[x, y], [x + r() * scene.width * 0.6, y + r() * scene.height * 0.6]]) }
+  it('the scene that stalled the old walk ends: an arc whose bounds reach Number.MAX_VALUE, under a group item at x Infinity', () => {
+    // (a group item at x Infinity, and an arc with a negative inner radius and a 5px stroke, whose bounds run from MAX_VALUE to
+    // Infinity in x: `x++` never moves past MAX_VALUE, so the old walk -- and vega's -- never ended)
+    // (a hand-built scene once drawn by the random generator, frozen in testdata with its non-finite numbers as "#Infinity"...)
+    const { box, scene } = JSON.parse(readFileSync(join(here, '../testdata/intersect-stall-scene.json'), 'utf8'), (_k, v) =>
+      (v === '#Infinity' ? Infinity : v === '#-Infinity' ? -Infinity : v === '#NaN' ? NaN : v === '#-0' ? -0 : v)) as { box: number[][]; scene: SceneRoot }
+    const boxes = [box]
     let refused = 0
     for (const box of boxes) {
       try {
