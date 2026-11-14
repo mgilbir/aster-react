@@ -39,6 +39,13 @@ export interface HitTarget {
   item: SceneItem
   /** The enclosing mark group (marktype), for role/type checks. */
   marktype: string
+  /**
+   * What was hit: an item of a `mark`, a `group` item's own box (a facet cell, a nested view), or a part of a `guide` (an axis, a
+   * legend or a title, including their boxes).
+   */
+  kind?: 'mark' | 'group' | 'guide'
+  /** An item of a mark that reads a dataset (`from.data`): its datum is a data row, not the `{}` vega makes for a mark without `from`. */
+  fromData?: boolean
 }
 
 interface Entry {
@@ -69,6 +76,12 @@ interface Entry {
   tol?: number
   /** line/area/trail: the item to report for a hit at (x, y) */
   resolve?: (x: number, y: number) => SceneItem
+  /** line/area/trail: the item vega's tooltip handler resolves a hit at (x, y) to, or null */
+  tip?: (x: number, y: number) => SceneItem | null
+  /** Part of an axis, a legend or a title. */
+  guide?: true
+  /** The item's mark reads a dataset. */
+  fromData?: true
   /** A group item's own box (vega picks a group that has a fill or a stroke where no mark inside it is hit): never a data mark. */
   groupBox?: true
   /** Not interactive (its mark / guide part says `pointer-events: none`): `pick` looks through it. */
@@ -80,8 +93,9 @@ interface Entry {
 export interface HitIndex {
   query(x: number, y: number): HitTarget | null
   /**
-   * Like `query`, but only data-bearing mark items. Guides (axis/legend text)
-   * paint above marks and must not swallow clicks/tooltips.
+   * Like `query`, but only the items of interactive marks (not a guide's parts, not a group item's box). Guides (axis/legend
+   * text) paint above marks and must not swallow clicks/tooltips. A mark without `from` is a mark like any other: its item's
+   * datum is vega's `{}`.
    */
   queryMark(x: number, y: number): HitTarget | null
   /**
@@ -90,6 +104,12 @@ export interface HitIndex {
    * (a legend's entry boxes, symbols and labels, an axis' ticks...), which is where the item's `cursor` channel is read.
    */
   pick(x: number, y: number): HitTarget | null
+  /**
+   * The item vega's tooltip handler is called with at (x, y): the item `pick` finds, with a line, an area or a trail resolved
+   * to one of its items as vega-scenegraph resolves it (an area: the defined item nearest along its orientation; a line: the
+   * last defined item within its stroke width of the point; a trail: within the item's size), or `null` when that finds none.
+   */
+  tooltip(x: number, y: number): HitTarget | null
   /** Number of indexed mark items. */
   size(): number
 }
@@ -155,6 +175,37 @@ const strokeTol = (it: { stroke?: unknown; strokeWidth?: unknown }, slack = SLAC
   (isStroked(it) ? (((it.strokeWidth as number | undefined) ?? 1) / 2) : 0) + slack
 
 // ---------------------------------------------------------------------------
+// vega-scenegraph's tooltip resolution of a line, an area and a trail (resolveItem + the marks' `tip`), in the mark's frame
+// ---------------------------------------------------------------------------
+
+function tipOf(type: 'line' | 'area' | 'trail', items: SceneItem[], px: number, py: number): SceneItem | null {
+  if (type === 'area') {
+    // the defined item nearest along the area's orientation (the last of equals: the scan runs backwards)
+    const horizontal = rec(items[0]!).orient === 'horizontal'
+    const v = horizontal ? py : px
+    let best: SceneItem | null = null
+    let min = Infinity
+    for (let i = items.length - 1; i >= 0; i--) {
+      const it = items[i]!
+      if (rec(it).defined === false) continue
+      const d = Math.abs(((horizontal ? it.y : it.x) as number) - v)
+      if (d < min) { min = d; best = it }
+    }
+    return best
+  }
+  // a line: the last defined item within its first item's stroke width; a trail: within the item's own size
+  const lineReach = ((items[0]!.strokeWidth as number | undefined) || 1) ** 2
+  for (let i = items.length - 1; i >= 0; i--) {
+    const it = items[i]!
+    if (rec(it).defined === false) continue
+    const dx = (it.x as number) - px
+    const dy = (it.y as number) - py
+    if (dx * dx + dy * dy < (type === 'line' ? lineReach : ((rec(it).size as number) || 1) ** 2)) return it
+  }
+  return null
+}
+
+// ---------------------------------------------------------------------------
 
 export function buildHitIndex(scene: SceneRoot, cell = DEFAULT_CELL): HitIndex {
   const entries: Entry[] = []
@@ -176,14 +227,17 @@ export function buildHitIndex(scene: SceneRoot, cell = DEFAULT_CELL): HitIndex {
       const meta = guide ? (outer?.partMeta ?? guide.partMeta) : undefined
       for (const item of group.items ?? []) {
         if (isGroup(item)) { walk(item, gx, gy, guide ?? outer); continue }
-        if (!guide) { addLeaf(item, type ?? 'group', gx, gy); continue }
         const before = entries.length
-        addLeaf(item, 'group', gx, gy)
-        if (!partInteractive(guide, meta, item)) {
-          for (let i = before; i < entries.length; i++) entries[i]!.inert = true
-        } else if (entries.length === before) {
-          addGuidePart(item, gx, gy, guide)
+        if (!guide) addLeaf(item, type ?? 'group', gx, gy)
+        else {
+          addLeaf(item, 'group', gx, gy)
+          if (!partInteractive(guide, meta, item)) {
+            for (let i = before; i < entries.length; i++) entries[i]!.inert = true
+          } else if (entries.length === before) {
+            addGuidePart(item, gx, gy, guide)
+          }
         }
+        for (let i = before; i < entries.length; i++) entries[i]!.guide = true
       }
       if (box.foreground) entries.push(box.foreground)
       return
@@ -191,11 +245,15 @@ export function buildHitIndex(scene: SceneRoot, cell = DEFAULT_CELL): HitIndex {
     const e0 = entries.length
     const r0 = rectOrder.length
     addMark(group, type, gx, gy)
-    // a mark that is not interactive takes no pointer (its container says `pointer-events: none`)
-    if (isInert(group)) {
-      for (let i = e0; i < entries.length; i++) entries[i]!.inert = true
-      for (let i = r0; i < rectOrder.length; i++) rectOrder[i]!.inert = true
+    const tag = (e: Entry): void => {
+      // a mark that is not interactive takes no pointer (its container says `pointer-events: none`)
+      if (isInert(group)) e.inert = true
+      // a title's text is a guide's part; an item of a mark that reads a dataset has a row for its datum
+      if (group.role === 'title-text' || group.role === 'title-subtitle') e.guide = true
+      else if (group.__source !== undefined) e.fromData = true
     }
+    for (let i = e0; i < entries.length; i++) tag(entries[i]!)
+    for (let i = r0; i < rectOrder.length; i++) tag(rectOrder[i]!)
   }
   const addMark = (group: SceneGroup, type: string, gx: number, gy: number): void => {
     switch (type) {
@@ -350,7 +408,7 @@ export function buildHitIndex(scene: SceneRoot, cell = DEFAULT_CELL): HitIndex {
     const paint = { fill: info.fill, stroke: info.stroke, strokeWidth: info.sw }
     const e = geomEntry(first, 'line', () => flattenPath(info.path, (x, y) => [tx + x, ty + y]), paint, nearestItem(items, tx, ty))
     // an open polyline is only a fillable region when the line is filled (closed polygons, radar)
-    if (e) entries.push(e)
+    if (e) { e.tip = (x, y) => tipOf('line', items, x - tx, y - ty); entries.push(e) }
   }
 
   function addArea(group: SceneGroup, tx: number, ty: number): void {
@@ -358,7 +416,7 @@ export function buildHitIndex(scene: SceneRoot, cell = DEFAULT_CELL): HitIndex {
     const info = computeAreaPath(group)
     if (!info || !items.length) return
     const e = geomEntry(items[0]!, 'area', () => flattenPath(info.path, (x, y) => [tx + x, ty + y]), info, nearestItem(items, tx, ty))
-    if (e) entries.push(e)
+    if (e) { e.tip = (x, y) => tipOf('area', items, x - tx, y - ty); entries.push(e) }
   }
 
   function addTrail(group: SceneGroup, tx: number, ty: number): void {
@@ -367,7 +425,7 @@ export function buildHitIndex(scene: SceneRoot, cell = DEFAULT_CELL): HitIndex {
     const d = trailPath(items)
     if (!d) return
     const e = geomEntry(items[0]!, 'trail', () => flattenPath(d, (x, y) => [tx + x, ty + y]), items[0]!, nearestItem(items, tx, ty))
-    if (e) entries.push(e)
+    if (e) { e.tip = (x, y) => tipOf('trail', items, x - tx, y - ty); entries.push(e) }
   }
 
   function addMarkItem(item: SceneItem, marktype: string, tx: number, ty: number): void {
@@ -548,16 +606,24 @@ export function buildHitIndex(scene: SceneRoot, cell = DEFAULT_CELL): HitIndex {
   type Mode = 0 | 1 | 2
   const ALL = 0, DATA = 1, PICK = 2
   const skipped = (e: Entry, mode: Mode): boolean =>
-    mode === PICK ? e.inert === true : e.pickOnly === true || (mode === DATA && (e.inert === true || e.item.datum == null || e.groupBox === true))
+    mode === PICK ? e.inert === true : e.pickOnly === true || (mode === DATA && (e.inert === true || e.groupBox === true || e.guide === true))
 
-  const found = (e: Entry, x: number, y: number): HitTarget => ({ item: e.resolve ? e.resolve(x, y) : e.item, marktype: e.marktype })
+  const targetOf = (e: Entry, item: SceneItem): HitTarget => ({
+    item,
+    marktype: e.marktype,
+    kind: e.groupBox ? (e.guide ? 'guide' : 'group') : e.guide || e.pickOnly ? 'guide' : 'mark',
+    ...(e.fromData ? { fromData: true } : {}),
+  })
+  const found = (e: Entry, x: number, y: number): HitTarget => targetOf(e, e.resolve ? e.resolve(x, y) : e.item)
+  // (the entry, for `tooltip`: the item it resolves to is vega's tooltip handler's, not `found`'s)
+  let last: Entry | null = null
 
   const hitLinear = (x: number, y: number, mode: Mode = ALL): HitTarget | null => {
     // Reverse scan: later entries paint on top (entries are kept in paint order).
     for (let i = entries.length - 1; i >= 0; i--) {
       const e = entries[i]!
       if (skipped(e, mode)) continue
-      if (hits(e, x, y)) return found(e, x, y)
+      if (hits(e, x, y)) { last = e; return found(e, x, y) }
     }
     return null
   }
@@ -578,7 +644,7 @@ export function buildHitIndex(scene: SceneRoot, cell = DEFAULT_CELL): HitIndex {
       else idx = big[b--]!
       const e = entries[idx]!
       if (skipped(e, mode)) continue
-      if (hits(e, x, y)) return found(e, x, y)
+      if (hits(e, x, y)) { last = e; return found(e, x, y) }
     }
     return null
   }
@@ -628,6 +694,13 @@ export function buildHitIndex(scene: SceneRoot, cell = DEFAULT_CELL): HitIndex {
     return true
   }
 
+  function pickAt(x: number, y: number): HitTarget | null {
+    if (entries.length === 0) return null
+    if (entries.length <= GRID_THRESHOLD) return hitLinear(x, y, PICK)
+    if (grid == null) buildGrid()
+    return hitGrid(x, y, PICK)
+  }
+
   return {
     query(x: number, y: number): HitTarget | null {
       if (entries.length === 0) return null
@@ -641,11 +714,14 @@ export function buildHitIndex(scene: SceneRoot, cell = DEFAULT_CELL): HitIndex {
       if (grid == null) buildGrid()
       return hitGrid(x, y, DATA)
     },
-    pick(x: number, y: number): HitTarget | null {
-      if (entries.length === 0) return null
-      if (entries.length <= GRID_THRESHOLD) return hitLinear(x, y, PICK)
-      if (grid == null) buildGrid()
-      return hitGrid(x, y, PICK)
+    pick: pickAt,
+    tooltip(x: number, y: number): HitTarget | null {
+      last = null
+      const hit = pickAt(x, y)
+      const e = last as Entry | null
+      if (hit === null || e === null || !e.tip) return hit
+      const it = e.tip(x, y)
+      return it === null ? null : targetOf(e, it)
     },
     size(): number {
       let n = 0
