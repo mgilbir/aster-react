@@ -22,6 +22,14 @@
  * A line, an area or a trail is one painted path: `pick` reports the mark's first item (vega's `event.item`), `tooltip`
  * resolves it as vega's tooltip handler does, `query` and `queryMark` report the item nearest the point.
  *
+ * vega's two renderers pick differently where an item's painted geometry reaches past the bounds vega measured for it (a rotated
+ * path, a trail, a group whose content overflows its box, a stroke past a measured corner): the browser's hit test of the SVG
+ * finds what is painted, vega's canvas pick tests the bounds first (marks/group.js, util/canvas/pick.js and markMultiItemPath.js:
+ * a group item's `bounds`, a mark's `bounds`, an item's `bounds`) and finds nothing there. An index built for the canvas
+ * renderer (`{ renderer: 'canvas' }`) tests them too: the bounds of every group item around an entry (the bounds the layout
+ * reads, `layoutBounds`), and the entry's own -- its item's (`boundLeaf`, as the bounds pass measures each item), or for a line,
+ * an area or a trail its mark's. The geometry is the same; only the test differs.
+ *
  * A uniform grid buckets entries by bounding box; everything is also
  * resolvable by a linear scan for small scenes. Cell ranges are clamped to the
  * grid and an entry spanning too many cells (a huge item, a full-view
@@ -29,7 +37,7 @@
  * every cell.
  */
 import type { SceneGroup, SceneItem, SceneRoot } from './types.js'
-import { Bounds, boundText, layoutBounds } from './bounds.js'
+import { Bounds, boundLeaf, boundText, boundTypedMark, layoutBounds } from './bounds.js'
 import { textAnchor } from './text-metrics.js'
 import { imageBox } from './image-box.js'
 import { FLATTEN_TOLERANCE, insidePolys, type Poly } from './path-flatten.js'
@@ -105,6 +113,20 @@ interface Entry {
   inert?: true
   /** A guide part the other queries never saw (an interactive legend entry, symbol path, gradient, tick...): only `pick` finds it. */
   pickOnly?: true
+  /**
+   * (canvas index) What vega measured the entry's bounds from, in the frame at (ox, oy): its item as a mark of `bk`'s type (a
+   * mark item; `leaf` for a guide's part), or its mark (`multi`: a line, an area or a trail); the box, once measured.
+   */
+  bk?: string
+  ox?: number
+  oy?: number
+  bmark?: SceneGroup
+  vb?: Float64Array
+}
+
+/** How an index picks: as the browser hit-tests vega's SVG (the default), or as vega's canvas renderer picks. */
+export interface HitIndexOptions {
+  renderer?: 'svg' | 'canvas'
 }
 
 /** A target is read-only: the index hands out the same object for the same item each time it is hit. */
@@ -231,21 +253,35 @@ function inCap(ex: number, ey: number, dx: number, dy: number, x: number, y: num
 /**
  * An outline as its stroke is tested: the vertices without repeats (a segment of no length has no direction), and each segment's
  * length and unit direction. Made once per outline (a symbol's is shared by every symbol of its shape and size).
+ *
+ * For vega's canvas pick (`stroker`), as the canvas's stroker builds the stroke `isPointInStroke` tests: a segment shorter than
+ * its degenerate length (Skia's SK_ScalarNearlyZero, 1/4096 px, below which it cannot normalize a direction) is no segment, so
+ * no join (a closing segment the arithmetic left a hair long would otherwise turn the outline back on itself and miter a spike);
+ * and where two chords of curves meet there is no corner: it joins curves along their own tangents, which meet there (a spline is
+ * smooth through its points) or turn right back (a cusp, which it bevels), so the join is a bevel. (The SVG's pick keeps the
+ * outline as the browser's hit test of vega's SVG was measured against: those vertices have no effect there that the pointer
+ * phase finds, and the geometry differential pins it.)
  */
-interface StrokePath { v: Float64Array; m: number; segs: number; len: Float64Array; dir: Float64Array; closed: boolean }
+const DEGENERATE = 1 / 4096
+interface StrokePath { v: Float64Array; m: number; segs: number; len: Float64Array; dir: Float64Array; closed: boolean; smooth: Uint8Array | null }
 const STROKE_PATHS = new WeakMap<Poly, StrokePath>()
+const STROKER_PATHS = new WeakMap<Poly, StrokePath>()
 
-function strokePath(poly: Poly): StrokePath {
-  let sp = STROKE_PATHS.get(poly)
+function strokePath(poly: Poly, stroker: boolean): StrokePath {
+  const cache = stroker ? STROKER_PATHS : STROKE_PATHS
+  let sp = cache.get(poly)
   if (sp !== undefined) return sp
-  const { pts, closed } = poly
+  const tol = stroker ? DEGENERATE : 0
+  const { pts, closed, curved } = poly
   const v: number[] = []
+  /** per kept vertex: whether the segment that ends there is a chord of a curve */
+  const chord: boolean[] = []
   for (let i = 0; i < pts.length; i += 2) {
     const px = pts[i]!, py = pts[i + 1]!
-    if (v.length === 0 || px !== v[v.length - 2] || py !== v[v.length - 1]) v.push(px, py)
+    if (v.length === 0 || (tol === 0 ? px !== v[v.length - 2] || py !== v[v.length - 1] : Math.hypot(px - v[v.length - 2]!, py - v[v.length - 1]!) >= tol)) { v.push(px, py); chord.push(curved?.[i / 2] === true) }
   }
   let m = v.length / 2
-  if (closed && m > 1 && v[0] === v[2 * m - 2] && v[1] === v[2 * m - 1]) { v.length -= 2; m-- }
+  if (closed && m > 1 && (tol === 0 ? v[0] === v[2 * m - 2] && v[1] === v[2 * m - 1] : Math.hypot(v[0]! - v[2 * m - 2]!, v[1]! - v[2 * m - 1]!) < tol)) { chord[0] = chord[m - 1]!; v.length -= 2; chord.length--; m-- }
   const segs = m < 2 ? 0 : closed ? m : m - 1
   const len = new Float64Array(segs)
   const dir = new Float64Array(2 * segs)
@@ -257,15 +293,22 @@ function strokePath(poly: Poly): StrokePath {
     dir[2 * i] = dx / l
     dir[2 * i + 1] = dy / l
   }
-  sp = { v: Float64Array.from(v), m, segs, len, dir, closed }
-  STROKE_PATHS.set(poly, sp)
+  // a vertex between two chords of curves is no corner of the path: the stroker joins curves along their own tangents, which
+  // meet there (a spline is smooth through its points) or turn right back (a cusp, which it bevels)
+  let smooth: Uint8Array | null = null
+  if (stroker) {
+    smooth = new Uint8Array(m)
+    for (let i = 0; i < m; i++) smooth[i] = chord[i] && chord[(i + 1) % m] && (closed || (i > 0 && i < m - 1)) ? 1 : 0
+  }
+  sp = { v: Float64Array.from(v), m, segs, len, dir, closed, smooth }
+  cache.set(poly, sp)
   return sp
 }
 
 /** Whether (x, y) is within the stroke of an outline: the band along each segment, the joins between them, the caps of open ends. */
-function inStroke(polys: Poly[], x: number, y: number, st: Stroke): boolean {
+function inStroke(polys: Poly[], x: number, y: number, st: Stroke, stroker = false): boolean {
   for (const poly of polys) {
-    const { v, m, segs, len, dir, closed } = strokePath(poly)
+    const { v, m, segs, len, dir, closed, smooth } = strokePath(poly, stroker)
     if (m === 0) continue
     if (m === 1) {
       // a subpath of one point paints only its caps: a round one is a dot, a square one an upright square
@@ -293,7 +336,7 @@ function inStroke(polys: Poly[], x: number, y: number, st: Stroke): boolean {
       const vx = v[2 * i]!, vy = v[2 * i + 1]!
       if (Math.abs(x - vx) > reach || Math.abs(y - vy) > reach) continue
       const pi = (i - 1 + segs) % segs
-      if (inJoin(vx, vy, dir[2 * pi]!, dir[2 * pi + 1]!, dir[2 * i]!, dir[2 * i + 1]!, x, y, st)) return true
+      if (inJoin(vx, vy, dir[2 * pi]!, dir[2 * pi + 1]!, dir[2 * i]!, dir[2 * i + 1]!, x, y, smooth?.[i] ? { ...st, join: 'bevel' } : st)) return true
     }
     if (!closed) {
       if (inCap(v[0]!, v[1]!, -dir[0]!, -dir[1]!, x, y, st)) return true
@@ -398,7 +441,8 @@ function nearestOf(items: SceneItem[], tx: number, ty: number, x: number, y: num
 
 // ---------------------------------------------------------------------------
 
-export function buildHitIndex(scene: SceneRoot, cell = DEFAULT_CELL): HitIndex {
+export function buildHitIndex(scene: SceneRoot, cell = DEFAULT_CELL, options: HitIndexOptions = {}): HitIndex {
+  const canvas = options.renderer === 'canvas'
   const entries: Entry[] = []
   /** The runs of entries `[from, to)` made for a mark that reads a dataset (their items' datums are rows), in order. */
   const dataRuns: number[] = []
@@ -450,9 +494,16 @@ export function buildHitIndex(scene: SceneRoot, cell = DEFAULT_CELL): HitIndex {
       const content = rec(group).contentClip === true ? (group.clipPathD ? pathClip(group.clipPathD, gx, gy) : rectClip(gx, gy, w, h)) : null
       // vega looks for a group item, its box and what it holds, only within its bounds: they hold all of it, unless its box is
       // left out of them (`noBound`), where its box takes the pointer only as far as what it holds reaches
-      const bounds = scope && group.noBound === true ? boundsClip(group, tx, ty) : null
+      // (vega's canvas pick tests every group item's bounds first, an axis' and a legend's too: they bound what it finds there)
+      const bounds = (scope && group.noBound === true) || canvas ? boundsClip(group, tx, ty) : null
       // a group mark's own `clip` clips its items to the frame of the group around them
-      withClip(rec(group).markClip === true ? rectClip(tx, ty, fw, fh) : null, () => withClip(bounds, () => {
+      // (vega's canvas pick looks for a clipped group item, its box included, only inside the box -- and inside its rounded
+      // outline when it has corners: marks/group.js `hitCorner` -- where the browser also finds the stroke past it)
+      // (the scene keeps a clipped group item's content in a child group that clips it: on the canvas its clip bounds the whole item)
+      const clipped = canvas && scope ? ((group.items ?? []) as SceneGroup[]).find((c) => isGroup(c as SceneItem) && rec(c).contentClip === true) : undefined
+      const itemClip = clipped === undefined ? null
+        : clipped.clipPathD ? pathClip(clipped.clipPathD, gx + (clipped.x ?? 0), gy + (clipped.y ?? 0)) : rectClip(gx + (clipped.x ?? 0), gy + (clipped.y ?? 0), clipped.width ?? w, clipped.height ?? h)
+      withClip(rec(group).markClip === true ? rectClip(tx, ty, fw, fh) : null, () => withClip(bounds, () => withClip(itemClip, () => {
         if (box.background) { entries.push(box.background); clipFrom(entries.length - 1) }
         withClip(content, () => {
           for (const item of group.items ?? []) {
@@ -467,11 +518,12 @@ export function buildHitIndex(scene: SceneRoot, cell = DEFAULT_CELL): HitIndex {
               }
               for (let i = before; i < entries.length; i++) entries[i]!.guide = true
             }
+            if (canvas) measuredBy(before, 'leaf', gx, gy)
             clipFrom(before)
           }
         })
         if (box.foreground) { entries.push(box.foreground); clipFrom(entries.length - 1) }
-      }))
+      })))
       return
     }
     const e0 = entries.length
@@ -480,6 +532,7 @@ export function buildHitIndex(scene: SceneRoot, cell = DEFAULT_CELL): HitIndex {
     const clip = group.clip === true ? (group.clipPathD ? pathClip(group.clipPathD, tx, ty) : rectClip(tx, ty, fw, fh)) : null
     withClip(clip, () => {
       addMark(group, type, gx, gy)
+      if (canvas) measuredBy(e0, type, gx, gy, type === 'line' || type === 'area' || type === 'trail' ? group : undefined)
       clipFrom(e0)
     })
     // (an item of a mark that reads a dataset has a row for its datum; a title's text is a guide's part)
@@ -487,6 +540,17 @@ export function buildHitIndex(scene: SceneRoot, cell = DEFAULT_CELL): HitIndex {
     // a mark that is not interactive takes no pointer (its container says `pointer-events: none`)
     if (isInert(group)) for (let i = e0; i < entries.length; i++) entries[i]!.inert = true
     if (guidePart) for (let i = e0; i < entries.length; i++) entries[i]!.guide = true
+  }
+  /** (canvas index) The entries made since `from` are measured as vega's bounds pass measures `kind`, in the frame at (ox, oy). */
+  const measuredBy = (from: number, kind: string, ox: number, oy: number, mark?: SceneGroup): void => {
+    for (let i = from; i < entries.length; i++) {
+      const e = entries[i]!
+      if (e.groupBox) continue
+      e.bk = kind
+      e.ox = ox
+      e.oy = oy
+      if (mark) e.bmark = mark
+    }
   }
   const addMark = (group: SceneGroup, type: string, gx: number, gy: number): void => {
     if (type === 'line' || type === 'area' || type === 'trail') { addMulti(group, type, gx, gy); return }
@@ -608,7 +672,8 @@ export function buildHitIndex(scene: SceneRoot, cell = DEFAULT_CELL): HitIndex {
    * A geometry entry: its outline in scene coordinates (or in the frame `at` places and turns), filled and/or stroked as `paint`
    * says; none when it is neither.
    */
-  function geomEntry(item: SceneItem, marktype: string, build: () => Poly[], paint: SceneItem | Record<string, unknown>, at?: { cx: number; cy: number; rot: number }, stroke: Stroke | null = strokeOf(paint)): Entry | null {
+  function geomEntry(item: SceneItem, marktype: string, build: () => Poly[], paint: SceneItem | Record<string, unknown>, at?: { cx: number; cy: number; rot: number }, painted: Stroke | null = strokeOf(paint)): Entry | null {
+    const stroke = pickStroke(painted, marktype)
     const fill = isFilled(paint)
     if (!fill && !stroke) return null
     const polys = build()
@@ -631,6 +696,15 @@ export function buildHitIndex(scene: SceneRoot, cell = DEFAULT_CELL): HitIndex {
       x1 = a; y1 = b; x2 = cc; y2 = d
     }
     return { item, marktype, kind: 'geom', polys, build, fill, stroke, x1, y1, x2, y2, ...(at ?? {}) }
+  }
+
+  /**
+   * The stroke a pick tests. vega's canvas pick sets only the width and the cap on its context (util/canvas/pick.js `hitPath`): the
+   * join and the miter limit are the context's own, a miter limited at 10, whatever the item says. A rule is the exception: its
+   * pick strokes it as it is drawn (marks/rule.js `hit`).
+   */
+  function pickStroke(st: Stroke | null, marktype: string): Stroke | null {
+    return canvas && st !== null && marktype !== 'rule' ? { ...st, join: 'miter', limit: 10 } : st
   }
 
   /** A line, an area or a trail: one painted path, styled by the mark's first item. */
@@ -671,7 +745,7 @@ export function buildHitIndex(scene: SceneRoot, cell = DEFAULT_CELL): HitIndex {
   function addSymbol(item: SceneItem, marktype: string, tx: number, ty: number, radius?: number): void {
     if (item.x == null || item.y == null) return
     const fill = !!item.fill
-    const stroke = item.stroke ? strokeOf(item) : null
+    const stroke = item.stroke ? pickStroke(strokeOf(item), marktype) : null
     if (!fill && !stroke) return
     const size = (item.size as number) ?? SYMBOL_DEFAULT_SIZE
     const r = radius != null ? radius : Math.sqrt(size) / 2
@@ -859,13 +933,25 @@ export function buildHitIndex(scene: SceneRoot, cell = DEFAULT_CELL): HitIndex {
   }
   const flagsOf = (e: Entry): number => (e.inert ? INERT : 0) | (e.pickOnly ? PICK_ONLY : 0) | (e.groupBox ? GROUP_BOX : 0) | (e.guide ? GUIDE : 0)
 
-  /** Whether entry `i` is under (x, y): its box (NaN never is), then its geometry, then the clips around it. */
+  /** Whether entry `i` is under (x, y): its box (NaN never is), then its geometry, then the clips around it (and on the canvas its bounds). */
   const hits = (i: number, x: number, y: number): boolean => {
     const b = boxes!
     const o = 4 * i
     if (!(x >= b[o]! && x <= b[o + 2]! && y >= b[o + 1]! && y <= b[o + 3]!)) return false
     const e = entries[i]!
-    return onGeometry(e, x, y) && (e.clips === undefined || inClips(e.clips, x, y))
+    return onGeometry(e, x, y) && (e.clips === undefined || inClips(e.clips, x, y)) && (e.bk === undefined || inMeasured(e, x, y))
+  }
+
+  /** (canvas index) Whether (x, y) is inside the bounds vega measured for the entry (its item's, or its line's, area's or trail's). */
+  function inMeasured(e: Entry, x: number, y: number): boolean {
+    let vb = e.vb
+    if (vb === undefined) {
+      const m = new Bounds()
+      if (e.bmark !== undefined) boundTypedMark(m, e.bmark)
+      else measureItem(m, e.item, e.bk!)
+      vb = e.vb = m.empty() ? new Float64Array([Infinity, Infinity, -Infinity, -Infinity]) : new Float64Array([e.ox! + m.x1, e.oy! + m.y1, e.ox! + m.x2, e.oy! + m.y2])
+    }
+    return x >= vb[0]! && x <= vb[2]! && y >= vb[1]! && y <= vb[3]!
   }
 
   const hitLinear = (x: number, y: number, mode: Mode): number => {
@@ -931,7 +1017,7 @@ export function buildHitIndex(scene: SceneRoot, cell = DEFAULT_CELL): HitIndex {
         let px = x, py = y
         if (e.cx !== undefined) { toLocal(e, x, y); px = localX; py = localY }
         if (e.fill && inFill(polys, px, py)) return true
-        return e.stroke != null && inStroke(polys, px, py, e.stroke)
+        return e.stroke != null && inStroke(polys, px, py, e.stroke, canvas)
       }
     }
   }
@@ -997,6 +1083,18 @@ export function buildHitIndex(scene: SceneRoot, cell = DEFAULT_CELL): HitIndex {
       return n
     },
   }
+}
+
+/**
+ * The bounds vega's bounds pass gives one item of a mark of type `kind` (as `boundTypedMark` measures each item of the mark; `leaf`:
+ * a guide's part, measured as its own kind).
+ */
+function measureItem(b: Bounds, it: SceneItem, kind: string): void {
+  if (kind === 'leaf') { boundLeaf(b, it); return }
+  if (kind === 'text') { b.union(boundText(new Bounds(), { ...it, _kind: 'text' } as SceneItem)); return }
+  if (kind === 'path' && it.path == null) { b.add(0, 0); return }
+  const miter = kind === 'arc' || kind === 'path' || kind === 'symbol' || kind === 'shape' || kind === 'geoshape'
+  boundLeaf(b, it, miter, kind === 'rect' || kind === 'rule' || kind === 'symbol' || kind === 'image' ? kind : undefined)
 }
 
 /** A symbol shape's outline at radius r (its full-precision path's polygons), shared by every symbol of that shape and size. */
