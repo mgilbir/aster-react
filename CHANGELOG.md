@@ -24,6 +24,10 @@ and Fixed, per package. Everything built before the first release is in [Pre-rel
   own edge bound what is picked; a stroked trail takes the pointer along its stroke; and `pick` (vega's `event.item`) reports a
   line, an area or a trail as its first item, as vega does. With a picker, the event loop takes `event.item` from it alone, not
   from the DOM element under the pointer.
+- A spec whose autosize is `none` keeps its own size when a host passes the container it measured (`measuredSize`): in Vega its
+  whole size is its `width`, `height` and `padding`, and vega-embed draws it so in any container; it was filled to the container
+  with autosize `fit`, which shrank its plot to make room for the guides (the chart-bench frame, 824 x 536 at 56,20 in a 900 x 600
+  box, was drawn 786 x 499 at 92,25). `StreamBatch` takes `containerSize` and `measuredSize`.
 - `HitIndex.tooltip(x, y)` is the item vega's tooltip handler is called with (the topmost item that takes the pointer; a line,
   an area or a trail resolved to one of its items as vega resolves it); `HitTarget` says what was hit (`kind`) and whether the
   item's mark reads a dataset (`fromData`). `queryMark` returns the items of a mark without `from` like any other's.
@@ -38,6 +42,10 @@ and Fixed, per package. Everything built before the first release is in [Pre-rel
   `from` showed through it; a falsy tooltip value (`0`, `false`) showed, where vega shows none. `renderTooltip` is called for
   an item with a `tooltip` value or made from a data row. A click (`onPointSelect`, a point `SelectValue`) selects vega's event
   item when it is an item of a mark (a mark without `from` gives `{}`), and nothing under it.
+- `<ChartStream>` and `<ChartWorkerStream>` without size props size the stream to the container they measure, as `<Chart>` sizes
+  its own evaluation (they drew the spec at its own size, and Vega-Lite's `"container"` at its fallback size).
+- docs: `denseMarks` batches only opaque, unrotated symbols (a translucent symbol keeps its own element: one path composites
+  once where separate elements composite at every overlap), which is why a scatter with `fillOpacity` below 1 stays per item.
 
 ## 0.3.0 (2026-11-12)
 

@@ -227,7 +227,7 @@ queued and `false` when the policy rejected it, and throws only for `policy: 'er
 (`AsterStreamBackpressureError`) or a malformed batch (`TypeError`). An appended list of any length is fine: rows are
 moved into the stream's base array with a loop at flush time, never by spreading them into a call, so a very large
 `append` cannot hit the engine's call-argument limit. `StreamBatch` fields: `data`, `append`, `pulse`, `signals`,
-`width`, `height`, `domainRaw`, `limits`, `textMetrics`. `initial.urlPolicy` and `initial.urlData` are fixed for the stream's life.
+`width`, `height`, `containerSize`, `measuredSize` (as in `RuntimeInput`; the later value wins), `domainRaw`, `limits`, `textMetrics`. `initial.urlPolicy` and `initial.urlData` are fixed for the stream's life.
 
 An empty first `flush()` primes the scene from the spec/initial snapshot; later empty
 flushes are no-ops. The React bindings are:
@@ -705,7 +705,7 @@ import. Vega specs need no extra import. Worker hosts must import `@aster-charts
 since compilation happens there.
 
 **Props.** `spec` (compared by content: an equal inline literal does no work; the one exception is a dataset's inline `values` array, which is compared by identity, so a re-created but equal rows array is a new input, which the session's row diff finds unchanged and applies as a no-op; the streaming components keep the full content comparison, so a spec rebuilt every render does not restart a stream), `data`, `dataChanges`, `width`,
-`height` (each independent; without them the chart measures its container; a given one fixes the view's size, even for a container-sized spec, whose `width` / `height` signals and `window:resize` handlers do not move it. The measured container only sizes a spec that has no `width` / `height` signal of its own, and a dimension the spec gives no value at all stays Vega's 0 grown to the content by autosize. It sizes the chart's whole box, padding, guides and the bound inputs under the chart included, as Vega-Lite's `"container"` does (autosize `fit` containing the padding): the content shrinks to fit, so a chart never overflows the container it fills, and a container whose height is the chart's own (a block `<div>` with no height) keeps the chart's size instead of growing with it; one that drives them (a bound input, a handler, Vega-Lite's `"container"`) keeps doing so, as in Vega where the size is a signal and the later write wins, and sees the container through `containerSize()`), `ariaLabel`, `className`, `style`,
+`height` (each independent; without them the chart measures its container; a given one fixes the view's size, even for a container-sized spec, whose `width` / `height` signals and `window:resize` handlers do not move it. The measured container only sizes a spec that has no `width` / `height` signal of its own and whose autosize is not `none` (Vega's `none` means the chart's whole size is its `width`, `height` and `padding`: such a spec is drawn at that size in any container, as vega-embed draws it), and a dimension the spec gives no value at all stays Vega's 0 grown to the content by autosize. It sizes the chart's whole box, padding, guides and the bound inputs under the chart included, as Vega-Lite's `"container"` does (autosize `fit` containing the padding): the content shrinks to fit, so a chart never overflows the container it fills, and a container whose height is the chart's own (a block `<div>` with no height) keeps the chart's size instead of growing with it; one that drives them (a bound input, a handler, Vega-Lite's `"container"`) keeps doing so, as in Vega where the size is a signal and the later write wins, and sees the container through `containerSize()`), `ariaLabel`, `className`, `style`,
 `signals`, `signalListeners`, `onSignal`, `interactive`, `preventDefault`, `renderer`, `incremental`, `denseMarks`, `transition`,
 `tooltip`, `renderTooltip`, `selection`/`select`, `onSelectionChange`, `onSelect`, `onPointSelect`, `brush`, `panZoom`,
 `pan`, `zoom`, `view`, `onViewChange`, `maxZoom`, `a11y`, `limits`, `urlPolicy`, `urlData`, `random`, `logger`, `textMetrics`, `onError`.
@@ -717,8 +717,9 @@ built on `<Chart>`. They are internal and unstable: their shape can change in an
 use them in an application. `sceneOverride` (`SceneRoot | null`) makes the chart render that pre-evaluated scene instead of evaluating
 `spec` (`undefined` keeps the normal path, `null` renders the loading or error state), so a streamed scene goes through the same
 DOM patcher, canvas renderer, interaction and accessibility tree. `onStreamInput(input)` receives what the chart derives from its props and
-gestures, `{ domainRaw?, signals }` (`ChartStreamInput`: the `domainRaw` of the pan/zoom view and the merged signal values), so the
-stream can re-evaluate with them.
+gestures, `{ domainRaw?, signals, containerSize?, measuredSize? }` (`ChartStreamInput`: the `domainRaw` of the pan/zoom view, the merged
+signal values, and the container the chart sizes the spec to and the one it measured), so the stream can re-evaluate with them:
+a stream sizes its spec to the container the chart measures exactly as `<Chart>` sizes its own evaluation.
 
 **`data` and `dataChanges`.** `data` is a `Record<string, unknown[]>`: the key is the *dataset name* in the spec, the
 value its rows. A bare array does not typecheck (`data={newRows}` is an error); write `data={{ table: newRows }}`. A new
