@@ -37,6 +37,7 @@
  * every cell.
  */
 import type { SceneGroup, SceneItem, SceneRoot } from './types.js'
+import { isEngineNode, keptInto } from './scene-registry.js'
 import { Bounds, boundLeaf, boundText, boundTypedMark, layoutBounds } from './bounds.js'
 import { textAnchor } from './text-metrics.js'
 import { imageBox } from './image-box.js'
@@ -464,8 +465,21 @@ function nearestOf(items: SceneItem[], tx: number, ty: number, x: number, y: num
 
 // ---------------------------------------------------------------------------
 
+/**
+ * The entries a leaf mark of a scene the engine returned made at a place (`gx`, `gy`: its frame in scene coordinates), before the
+ * clips and flags of the index it was made in were written on them, for each renderer (an index for the canvas picks its strokes
+ * and measures its bounds as vega's canvas does: its entries are its own). Such a mark holds what it held (scene-registry.ts), and
+ * what `addMark` (and, on the canvas, `measuredBy`) makes of a mark reads the mark and the place alone -- but for a text item, whose
+ * box is measured by the text metrics in use when the index is built, so a text mark is not kept. An index takes copies; the clips
+ * around the mark, its `inert` and `guide` flags and its data runs are written as for a mark made anew. Used for a later scene that
+ * kept the mark (`keptInto`).
+ */
+const MARK_ENTRIES = { svg: new WeakMap<SceneGroup, KeptEntries>(), canvas: new WeakMap<SceneGroup, KeptEntries>() }
+interface KeptEntries { gx: number; gy: number; entries: Entry[]; root: object }
+
 export function buildHitIndex(scene: SceneRoot, cell = DEFAULT_CELL, options: HitIndexOptions = {}): HitIndex {
   const canvas = options.renderer === 'canvas'
+  const keptEntries = canvas ? MARK_ENTRIES.canvas : MARK_ENTRIES.svg
   const entries: Entry[] = []
   /** The runs of entries `[from, to)` made for a mark that reads a dataset (their items' datums are rows), in order. */
   const dataRuns: number[] = []
@@ -554,8 +568,16 @@ export function buildHitIndex(scene: SceneRoot, cell = DEFAULT_CELL, options: Hi
     // a mark's `clip`: its items are clipped to the frame of the group they are in (or to its rounded outline)
     const clip = group.clip === true ? (group.clipPathD ? pathClip(group.clipPathD, tx, ty) : rectClip(tx, ty, fw, fh)) : null
     withClip(clip, () => {
-      addMark(group, type, gx, gy)
-      if (canvas) measuredBy(e0, type, gx, gy, type === 'line' || type === 'area' || type === 'trail' ? group : undefined)
+      // (a mark of a scene the engine returned holds what it held: at the same place, its entries are the ones made before, see
+      // `MARK_ENTRIES`; each index takes copies, which the clips and flags below are written onto)
+      const kept = type !== 'text' && isEngineNode(group) ? keptEntries.get(group) : undefined
+      if (kept !== undefined && keptInto(kept.root, scene) && Object.is(kept.gx, gx) && Object.is(kept.gy, gy)) {
+        for (const t of kept.entries) entries.push({ ...t })
+      } else {
+        addMark(group, type, gx, gy)
+        if (canvas) measuredBy(e0, type, gx, gy, type === 'line' || type === 'area' || type === 'trail' ? group : undefined)
+        if (type !== 'text' && isEngineNode(group)) keptEntries.set(group, { gx, gy, entries: entries.slice(e0).map((e) => ({ ...e })), root: scene })
+      }
       clipFrom(e0)
     })
     // (an item of a mark that reads a dataset has a row for its datum; a title's text is a guide's part)

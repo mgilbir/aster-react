@@ -1,14 +1,14 @@
 /**
  * The group nodes of the scenes the engine returned.
  *
- * A scene the engine returns is read-only, to the host and to the engine: an evaluation after it keeps its nodes (a kept mark, a
- * kept group item, a node `shareContent` finds equal) and never writes into them. The one in-place write the engine makes, the
+ * The engine never writes into a scene it returned: an evaluation after it keeps its nodes (a kept mark, a kept group item, a node
+ * `shareContent` finds equal) and builds on what they hold. The one in-place write the engine makes, the
  * append path's push onto its own items array, first turns the group that held the array into a snapshot that reads what it held
  * (`supersedeItems`), so no node's content changes once returned (published-scene.test.ts holds this over sessions, streams and
  * pulses). What is derived from a node -- its hit entries, its accessible box, which items it holds, whether one has a cursor --
  * is therefore a function of the node's identity, for the nodes recorded here, and may be kept with it (WeakMap-keyed: it lives
- * as long as the node). A node a host built, or a clone of a scene (a worker's), is not recorded: nothing derived from it is
- * kept.
+ * as long as the node) and used for a later scene that kept the node (`keptInto`). A node a host built, or a clone of a scene (a
+ * worker's), is not recorded: nothing derived from it is kept.
  */
 import type { SceneGroup, SceneNode, SceneRoot } from './types.js'
 
@@ -17,6 +17,16 @@ const ENGINE_NODES = new WeakSet<object>()
 /** Whether `node` is a group node of a scene the engine returned (see the module comment). */
 export function isEngineNode(node: object): boolean {
   return ENGINE_NODES.has(node)
+}
+
+/**
+ * Whether what was derived from an engine node while a scene `made` was read may be used while reading scene `now`: only in another
+ * scene, one that kept the node. A host may write into a scene it was given and draw that scene again (the renderers then draw what it
+ * wrote, as they always have): what was derived from it is made afresh whenever the same scene is read again. A scene the engine
+ * makes after such a write is made from what was written, which no reuse of the engine promises to draw.
+ */
+export function keptInto(made: object, now: object): boolean {
+  return made !== now
 }
 
 /**

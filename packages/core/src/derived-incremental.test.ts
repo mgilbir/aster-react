@@ -6,8 +6,8 @@
  * A chart is taken through signal writes, in-place appends (the engine pushes onto its own items array, and the group that held it
  * becomes a snapshot) and edits; after each step the scene the chain of evaluations made and a fresh evaluation of the same input
  * (whose nodes are all new, so nothing is kept) are asked the same questions, which must get the same answers: what an event's item
- * says of itself and the groups around it at every point of a grid, the cursor check, and the accessible tree with and without
- * summaries. A hand-built scene, written between two questions, is answered from what it holds then.
+ * says of itself and the groups around it at every point of a grid (from the hit index), the cursor check, and the accessible tree
+ * with and without summaries; and one SVG element patched with every scene of the chain shows what a fresh rendering shows. A hand-built scene, written between two questions, is answered from what it holds then.
  */
 import { describe, expect, it } from 'vitest'
 import { compileChart } from './compiler.js'
@@ -15,6 +15,7 @@ import { evaluateChart } from './evaluate.js'
 import { renderSceneToSvg } from './index.js'
 import { buildA11yTree } from './a11y.js'
 import { buildHitIndex } from './hit.js'
+import { patchSceneDom, renderSceneToDomElement } from './dom.js'
 import { bindSceneSignals, sceneHasCursor } from './signals.js'
 import type { RuntimeInput, SceneGroup, SceneRoot, VgSpec } from './types.js'
 
@@ -92,11 +93,16 @@ describe('what is kept with the engine nodes is what the scene says', () => {
     steps.push(['edit', { data: { t }, dataChanges: { t: [4] }, signals: { hv: 12 } }])
     steps.push(['cur default', { data: { t }, dataChanges: { t: [] }, signals: { hv: 12, cur: 'default' } }])
     const answered: Array<{ what: string; scene: SceneRoot; answer: unknown }> = []
+    // (one SVG element patched with every scene of the chain, as <Chart> patches its own: it shows what a fresh one shows)
+    let patched: Element | null = null
     for (const [what, input] of steps) {
       const scene = evaluateChart(chart, input)
       const fresh = evaluateChart(compileChart(SPEC), { ...input, dataChanges: undefined, dataPulse: undefined } as RuntimeInput)
       const answer = ask(scene)
       expect(answer, what).toEqual(ask(fresh))
+      if (patched === null) patched = renderSceneToDomElement(scene, document)
+      else patchSceneDom(patched, scene)
+      expect(patched.outerHTML, `${what}: the patched SVG`).toBe(renderSceneToDomElement(fresh, document).outerHTML)
       answered.push({ what, scene, answer })
     }
     // (every scene before still says what it said: what is kept with its nodes was not overwritten by a later scene's)

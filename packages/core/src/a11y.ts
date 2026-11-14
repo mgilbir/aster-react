@@ -23,7 +23,7 @@ import { textAnchor } from './text-metrics.js'
 import type { SceneGroup, SceneItem, SceneNode, SceneRoot } from './types.js'
 import { axisLabel, guideTitleText, legendLabel, scalesFromSnapshots } from './guide-caption.js'
 import { pushAll } from './util.js'
-import { isEngineNode } from './scene-registry.js'
+import { isEngineNode, keptInto } from './scene-registry.js'
 
 export type A11yKind = 'mark' | 'axis' | 'legend' | 'legend-entry' | 'title' | 'group'
 
@@ -136,19 +136,22 @@ function union(b: Bounds[]): Bounds | null {
 
 /**
  * The box of a node at (tx, ty), kept with the node when it is a node of a scene the engine returned: such a node holds what it held
- * (scene-registry.ts), so the box at the same offset is the same numbers. The offset is compared as it is (`Object.is`), and the box
+ * (scene-registry.ts), so the box at the same offset is the same numbers, in a later scene that kept it (`keptInto`). The offset is compared as it is (`Object.is`), and the box
  * is computed afresh at another: the offset enters the arithmetic before the radii and the rounding do, so a box is not moved.
  */
-function kept(cache: WeakMap<object, { tx: number; ty: number; b: Bounds }>, node: object, tx: number, ty: number, make: () => Bounds): Bounds {
+function kept(cache: WeakMap<object, KeptBox>, node: object, tx: number, ty: number, make: () => Bounds): Bounds {
   if (!isEngineNode(node)) return make()
   const hit = cache.get(node)
-  if (hit !== undefined && Object.is(hit.tx, tx) && Object.is(hit.ty, ty)) return hit.b
+  if (hit !== undefined && keptInto(hit.root, reading) && Object.is(hit.tx, tx) && Object.is(hit.ty, ty)) return hit.b
   const b = make()
-  cache.set(node, { tx, ty, b })
+  cache.set(node, { tx, ty, b, root: reading })
   return b
 }
-const GUIDE_BOXES = new WeakMap<object, { tx: number; ty: number; b: Bounds }>()
-const SUMMARY_BOXES = new WeakMap<object, { tx: number; ty: number; b: Bounds }>()
+interface KeptBox { tx: number; ty: number; b: Bounds; root: object }
+const GUIDE_BOXES = new WeakMap<object, KeptBox>()
+const SUMMARY_BOXES = new WeakMap<object, KeptBox>()
+/** The scene `buildA11yTree` is reading (see `keptInto`). */
+let reading: object = {}
 
 /** The box of a mark summarised as one node: the union of its items' boxes (kept with an engine node, see `kept`). */
 function summaryBox(group: SceneGroup, items: SceneItem[], gx: number, gy: number): Bounds {
@@ -364,6 +367,7 @@ export function buildA11yTree(
   options: A11yOptions = {},
 ): A11yTree {
   const threshold = options.summaryThreshold ?? 150
+  reading = scene
   let total = 0
   const count = (node: SceneNode): void => {
     const kids = (node as SceneGroup).items

@@ -15,6 +15,7 @@
 import { SYMBOL_DEFAULT_SIZE, pushAll } from './util.js'
 import type { SceneGroup, SceneItem, SceneRoot } from './types.js'
 import { ClipCollector } from './svg-defs.js'
+import { isEngineNode, keptInto } from './scene-registry.js'
 import { symbolGeometry, type PathData, type SymbolGeometry } from './geometry.js'
 import {
   PairAttrSink,
@@ -700,13 +701,36 @@ function markDescs(group: SceneGroup, frameW: number, frameH: number, clips: Cli
 
   const containerAttrs = new PairAttrSink()
   // A mark's clip is the size of the group that contains it (vega: `clip(renderer, scene, scene.group)`), on its container.
-  if (!markContainerAttrs(group, containerAttrs, group.clip === true ? groupClipId(group, clips, frameW, frameH) : null, scope)) return []
+  // (registered whether or not the descriptor is the one before: the clip joins this render's defs)
+  const clipId = group.clip === true ? groupClipId(group, clips, frameW, frameH) : null
+  const keep = keepsDesc(group, type)
+  if (keep) {
+    const kept = MARK_DESCS.get(group)
+    if (kept !== undefined && keptInto(kept.root, describing) && kept.clipId === clipId) return [kept.desc]
+  }
+  if (!markContainerAttrs(group, containerAttrs, clipId, scope)) return []
   const children = markItems(group, type, options)
   const inner = g('g', containerAttrs.out, children)
   const appendFrom = APPEND_OF.get(children)
   if (appendFrom) APPEND_TO.set(inner, appendFrom)
   if (type === 'symbol' && group.hasLinks !== true && denseSymbolsEnabled(options, group.items ?? []) > 0) inner.dense = true
+  if (keep) MARK_DESCS.set(group, { clipId, desc: inner, root: describing })
   return [inner]
+}
+
+/**
+ * The descriptor of a data mark of a scene the engine returned, as it was made: such a mark holds what it held (scene-registry.ts),
+ * so its container and items describe as before, given the same clip, in a later scene that kept it (`keptInto`). The descriptors
+ * are the ones before: the patcher compares them with what it last wrote, and skips the clean items in them. Not kept: a text mark
+ * (its descriptor reads the text metrics in use), a mark whose role is a guide's (its caption reads the scales around it), a symbol
+ * mark (its descriptors follow an engine items array across groups, and batch by the options: see `symbolItems`).
+ */
+const MARK_DESCS = new WeakMap<SceneGroup, { clipId: string | null; desc: DomDesc; root: object }>()
+/** The scene `sceneToDomDesc` is describing (see `keptInto`). */
+let describing: object = {}
+const GUIDE_ROLES = new Set(['axis', 'legend', 'title-text', 'title-subtitle'])
+function keepsDesc(group: SceneGroup, type: string): boolean {
+  return type !== 'text' && type !== 'symbol' && group.role === 'mark' && !GUIDE_ROLES.has(String(group.markRole)) && isEngineNode(group)
 }
 
 /** The descriptors of a structure tree (render.ts `childNodes`), attributes before children as the string renderer writes them. */
@@ -736,6 +760,7 @@ function nodeDescs(nodes: readonly SvgNode[], clips: ClipCollector, options: Dom
 
 export function sceneToDomDesc(scene: SceneRoot, options: DomRenderOptions = {}): DomDesc {
   CURRENT_GEN = (scene as unknown as { __itemGen?: number }).__itemGen
+  describing = scene
   const { plotW, plotH } = scenePlotSize(scene)
   // Clip regions are registered while building; ids are content-addressed (svg-defs.ts).
   const clips = new ClipCollector()

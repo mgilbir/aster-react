@@ -40,7 +40,7 @@
  * resolves events as vega's canvas handler does (`ViewEvents`).
  */
 import type { CompiledChart, CompiledData, CompiledSignalDef, SceneGroup, SceneItem, SceneNode, SceneRoot, SignalOnDef } from './types.js'
-import { isEngineNode } from './scene-registry.js'
+import { isEngineNode, keptInto } from './scene-registry.js'
 import { compileExpr, type CompiledExpr, type ExpressionRuntime } from './expression.js'
 import { applyChangeset, newChangeset, planModify, type Changeset } from './modify.js'
 import { parseExpression, type AstNode } from './expr-parser.js'
@@ -305,10 +305,11 @@ export function sceneHasCursor(scene: SceneRoot): boolean {
         if (!Array.isArray(items)) continue
         // (a node of a scene the engine returned holds what it held: whether it holds a cursor is kept with it)
         const engine = isEngineNode(n)
-        let has = engine ? cursorNodes.get(n) : undefined
+        const kept = engine ? cursorNodes.get(n) : undefined
+        let has = kept !== undefined && keptInto(kept.root, scene) ? kept.has : undefined
         if (has === undefined) {
           has = depth < 256 && walk(items, depth + 1)
-          if (engine) cursorNodes.set(n, has)
+          if (engine) cursorNodes.set(n, { has, root: scene })
         }
         if (has) return true
       }
@@ -319,7 +320,7 @@ export function sceneHasCursor(scene: SceneRoot): boolean {
   return known
 }
 const cursorScenes = new WeakMap<SceneRoot, boolean>()
-const cursorNodes = new WeakMap<object, boolean>()
+const cursorNodes = new WeakMap<object, { has: boolean; root: object }>()
 
 // --- event streams ---------------------------------------------------------
 
@@ -1576,10 +1577,10 @@ function sceneIndex(scene: SceneRoot): SceneIndex {
 
 /** A group node's children split by kind: the groups among them, and the leaves (kept with an engine node: see scene-registry.ts). */
 interface NodeShape { groups: SceneGroup[]; leaves: ReadonlySet<object> | null }
-const NODE_SHAPES = new WeakMap<object, NodeShape>()
-function shapeOf(g: SceneGroup): NodeShape {
-  let shape = NODE_SHAPES.get(g)
-  if (shape !== undefined) return shape
+const NODE_SHAPES = new WeakMap<object, { shape: NodeShape; root: object }>()
+function shapeOf(g: SceneGroup, root: object): NodeShape {
+  const kept = NODE_SHAPES.get(g)
+  if (kept !== undefined && keptInto(kept.root, root)) return kept.shape
   const groups: SceneGroup[] = []
   let leaves: Set<object> | null = null
   for (const c of g.items ?? []) {
@@ -1587,22 +1588,23 @@ function shapeOf(g: SceneGroup): NodeShape {
     if (Array.isArray((c as SceneGroup).items)) groups.push(c as SceneGroup)
     else (leaves ??= new Set()).add(c)
   }
-  shape = { groups, leaves }
-  if (isEngineNode(g)) NODE_SHAPES.set(g, shape)
+  const shape = { groups, leaves }
+  if (isEngineNode(g)) NODE_SHAPES.set(g, { shape, root })
   return shape
 }
 
 /**
  * The parent of a node of the scene (the group whose `items` hold it), found without walking the leaves of every mark: the scene's
  * group nodes are walked once (they are few), and a leaf is looked up in the leaf sets of the groups that hold leaves, which an
- * engine node keeps for its lifetime. What a pointer event needs of a scene costs what the scene made anew, not what it holds.
+ * engine node keeps for its lifetime (for the later scenes that keep it, see `keptInto`). What a pointer event needs of a scene
+ * costs what the scene made anew, not what it holds.
  */
 function parentFinder(scene: SceneRoot): (node: object) => SceneGroup | undefined {
   const groupParent = new Map<object, SceneGroup>()
-  const holders: SceneGroup[] = []
+  const holders: Array<[SceneGroup, ReadonlySet<object>]> = []
   const walk = (g: SceneGroup, depth: number): void => {
-    const shape = shapeOf(g)
-    if (shape.leaves !== null) holders.push(g)
+    const shape = shapeOf(g, scene)
+    if (shape.leaves !== null) holders.push([g, shape.leaves])
     if (depth > 256) return
     for (const c of shape.groups) {
       if (!groupParent.has(c)) groupParent.set(c, g)
@@ -1618,7 +1620,7 @@ function parentFinder(scene: SceneRoot): (node: object) => SceneGroup | undefine
     if (g !== undefined) return g
     if (found.has(node)) return found.get(node)
     let out: SceneGroup | undefined
-    for (const h of holders) if (shapeOf(h).leaves!.has(node)) { out = h; break }
+    for (const [h, leaves] of holders) if (leaves.has(node)) { out = h; break }
     found.set(node, out)
     return out
   }
