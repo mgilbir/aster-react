@@ -156,9 +156,10 @@ describe('only what reads what changed is evaluated again', () => {
   it('a channel that throws for a row in a step is reported as a whole encode reports it', () => {
     const errors: unknown[][] = []
     const logger = { error: (...a: unknown[]) => { errors.push(a) }, warn: () => {}, info: () => {}, debug: () => {} }
+    const rule = (SPEC as unknown as { marks: Array<{ encode: { update: Record<string, unknown> } }> }).marks[0]!
     const spec = {
       ...SPEC,
-      marks: [{ ...(SPEC.marks![0] as object), encode: { update: { ...((SPEC.marks![0] as { encode: { update: object } }).encode.update), opacity: { signal: "w > 2 && datum.x > 40 ? datum.nope.deeper : w / 10" } } } }],
+      marks: [{ ...rule, encode: { update: { ...rule.encode.update, opacity: { signal: 'w > 2 && datum.x > 40 ? datum.nope.deeper : w / 10' } } } }],
     } as unknown as VgSpec
     const s = createChartSession()
     s.evaluate(spec, { data: { t: ROWS, store: [] }, signals: { w: 1 }, logger })
