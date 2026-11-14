@@ -278,7 +278,8 @@ cli({ url: import.meta.url })
 // SvgChart + interaction 212.1 -> 213.7, Chart + VL 323.3 -> 324.9. Ceilings are the measured value + 0.5.
 const BUDGETS = {
   // stack layer 2 (perf/vl-compile-data-independent on fix/hover-correctness: rows.ts, the row watch, signal-valued values, findSource): measured 2026-11-14 on a clean build at 161.5 kB gzip (ceiling was 161.4); ceiling is the measured value + 0.5.
-  '@aster-charts/core': 162.0 * 1024,
+  // stack layer 3 (perf/expr-encode: direct built-in calls, the shared function table, the format fast path): measured 2026-11-14 on a clean build at 162.4 kB gzip (ceiling was 162.0); ceiling is the measured value + 0.5.
+  '@aster-charts/core': 162.9 * 1024,
   '+ @aster-charts/core/dom': 11.8 * 1024,
   '+ @aster-charts/core/canvas': 6.4 * 1024,
   '+ @aster-charts/core/hit': 9.4 * 1024,
@@ -294,17 +295,22 @@ const BUDGETS = {
   // one image deadline). No eager row grew past what the #143 note above set for the two together. Ceiling is the measured value + 0.5.
   '+ @aster-charts/core/png': 8.2 * 1024,
   // stack layer 2 (perf/vl-compile-data-independent on fix/hover-correctness: rows.ts, the row watch, signal-valued values, findSource): measured 2026-11-14 on a clean build at 173.7 kB gzip (ceiling was 173.4); ceiling is the measured value + 0.5.
-  '@aster-charts/react useChart': 174.2 * 1024,
+  // stack layer 3 (perf/expr-encode: direct built-in calls, the shared function table, the format fast path): measured 2026-11-14 on a clean build at 174.6 kB gzip (ceiling was 174.2); ceiling is the measured value + 0.5.
+  '@aster-charts/react useChart': 175.1 * 1024,
   // stack layer 2 (perf/vl-compile-data-independent on fix/hover-correctness: rows.ts, the row watch, signal-valued values, findSource): measured 2026-11-14 on a clean build at 220.8 kB gzip (ceiling was 220.6); ceiling is the measured value + 0.5.
-  '@aster-charts/react Chart': 221.3 * 1024,
+  // stack layer 3 (perf/expr-encode: direct built-in calls, the shared function table, the format fast path): measured 2026-11-14 on a clean build at 221.9 kB gzip (ceiling was 221.3); ceiling is the measured value + 0.5.
+  '@aster-charts/react Chart': 222.4 * 1024,
   // The light chart (`@aster-charts/react/lite`): SVG only, no canvas renderer; alone and with the `interaction` capability.
   // stack layer 2 (perf/vl-compile-data-independent on fix/hover-correctness: rows.ts, the row watch, signal-valued values, findSource): measured 2026-11-14 on a clean build at 194.2 kB gzip (ceiling was 194.0); ceiling is the measured value + 0.5.
-  '@aster-charts/react SvgChart': 194.7 * 1024,
+  // stack layer 3 (perf/expr-encode: direct built-in calls, the shared function table, the format fast path): measured 2026-11-14 on a clean build at 195.2 kB gzip (ceiling was 194.7); ceiling is the measured value + 0.5.
+  '@aster-charts/react SvgChart': 195.7 * 1024,
   // stack layer 2 (perf/vl-compile-data-independent on fix/hover-correctness: rows.ts, the row watch, signal-valued values, findSource): measured 2026-11-14 on a clean build at 214.5 kB gzip (ceiling was 214.2); ceiling is the measured value + 0.5.
-  '@aster-charts/react SvgChart + interaction': 215.0 * 1024,
+  // stack layer 3 (perf/expr-encode: direct built-in calls, the shared function table, the format fast path): measured 2026-11-14 on a clean build at 215.6 kB gzip (ceiling was 215.0); ceiling is the measured value + 0.5.
+  '@aster-charts/react SvgChart + interaction': 216.1 * 1024,
   // Base + the VL compiler (opt-in: `import '@aster-charts/react/vl'`).
   // stack layer 2 (perf/vl-compile-data-independent on fix/hover-correctness: rows.ts, the row watch, signal-valued values, findSource): measured 2026-11-14 on a clean build at 327.5 kB gzip (ceiling was 325.4); ceiling is the measured value + 0.5.
-  '@aster-charts/react Chart + VL': 328.0 * 1024,
+  // stack layer 3 (perf/expr-encode: direct built-in calls, the shared function table, the format fast path): measured 2026-11-14 on a clean build at 328.5 kB gzip (ceiling was 328.0); ceiling is the measured value + 0.5.
+  '@aster-charts/react Chart + VL': 329.0 * 1024,
 }
 
 const THIS_DIR = dirname(fileURLToPath(import.meta.url))
