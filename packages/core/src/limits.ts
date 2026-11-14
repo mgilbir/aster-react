@@ -485,6 +485,19 @@ export function guardedRegExp(pattern: string, flags?: string): RegExp {
   return new RegExp(pattern, flags)
 }
 
+/**
+ * `RegExp(pattern, flags)` as an expression calls it (vega's `regexp` and `test`), under the regex guard: a regular expression
+ * with no flags given is itself, one with flags is copied with them, and anything else is made text (`undefined` is the empty
+ * pattern; flags given as anything but `undefined` are text too, so `null` is the invalid flags "null").
+ */
+export function regExpOf(pattern?: unknown, flags?: unknown): RegExp {
+  if (pattern instanceof RegExp) {
+    if (flags === undefined) { checkRegexObject(pattern); return pattern }
+    return guardedRegExp(pattern.source, String(flags))
+  }
+  return guardedRegExp(pattern === undefined ? '' : String(pattern), flags === undefined ? undefined : String(flags))
+}
+
 import { regexHazard } from './regex-screen.js'
 import { dataInputOf, specList } from './spec-structure.js'
 import { ownGet } from './util.js'

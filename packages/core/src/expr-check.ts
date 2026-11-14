@@ -21,7 +21,7 @@
 import { SpecParseError } from './parse-error.js'
 import { parseExpressionCached, type Expr } from './expr-parser.js'
 import { expressionRegistryEpoch, isExpressionFunction } from './expression.js'
-import { ExpressionConstants } from './expr-interpreter.js'
+import { ExpressionConstants, FIRST_ARGUMENT_ONLY as EVALUATED_FIRST_ONLY } from './expr-interpreter.js'
 import { DisallowedObjectProperties } from './util.js'
 import { stringValue } from './spec-structure.js'
 
@@ -42,11 +42,7 @@ const SCALE_CALLS: ReadonlySet<string> = new Set([
  * Calls of which only the first argument is read: the date parts, the length, the case and trim of a string, and the two internal
  * scale calls that take a name alone. The others are read whole, in order.
  */
-const FIRST_ARGUMENT_ONLY: ReadonlySet<string> = new Set([
-  'date', 'day', 'year', 'month', 'hours', 'minutes', 'seconds', 'milliseconds', 'time', 'timezoneoffset',
-  'utcdate', 'utcday', 'utcyear', 'utcmonth', 'utchours', 'utcminutes', 'utcseconds', 'utcmilliseconds',
-  'length', 'upper', 'lower', 'trim', '_bandwidth', '_range',
-])
+const FIRST_ARGUMENT_ONLY: ReadonlySet<string> = new Set([...EVALUATED_FIRST_ONLY, '_bandwidth', '_range'])
 /** Calls that read their first argument, then the rest. */
 const FIRST_ARGUMENT_THEN_REST: ReadonlySet<string> = new Set(['substring', 'split', 'test', '_scale'])
 /** Calls that take exactly three arguments. */
@@ -151,8 +147,9 @@ class Reader {
         else if (FIRST_ARGUMENT_ONLY.has(name)) to = 1
       }
     }
+    // (a call the code generator does not read has none of its arguments read either)
     for (let i = 0; i < args.length; i++) {
-      const refused = this.walk(args[i]!, i < to)
+      const refused = this.walk(args[i]!, live && i < to)
       if (refused) return refused
     }
     return null

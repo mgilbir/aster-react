@@ -21,7 +21,7 @@
  */
 import { ascending, DisallowedObjectProperties, safeGet, sortSlice, tupleDatum } from './util.js'
 import type { AstNode, Expr } from './expr-parser.js'
-import { guardedRegExp, checkRegexInput, checkRegexObject } from './limits.js'
+import { checkRegexInput, checkRegexObject, regExpOf } from './limits.js'
 
 // --- the default function table ---------------------------------------------------------------------
 
@@ -83,12 +83,12 @@ export const DefaultFunctions: Record<string, Fn> = {
   btoa: ((x: string) => btoa(x)) as Fn,
   atob: ((x: string) => atob(x)) as Fn,
 
-  regexp: ((pattern: string, flags?: string) => guardedRegExp(String(pattern), flags)) as Fn,
-  test: ((r: unknown, text: string) => {
-    const re = r instanceof RegExp ? r : guardedRegExp(String(r))
-    if (r instanceof RegExp) checkRegexObject(r)
-    checkRegexInput(String(text))
-    return re.test(text)
+  regexp: ((pattern?: unknown, flags?: unknown) => regExpOf(pattern, flags)) as Fn,
+  test: ((r: unknown, text: unknown) => {
+    const re = regExpOf(r)
+    const input = String(text)
+    checkRegexInput(input)
+    return re.test(input)
   }) as Fn,
 }
 for (const m of MATH) DefaultFunctions[m] = Math[m] as Fn
@@ -135,14 +135,35 @@ type Params = Record<string, unknown>
 /** What one evaluation sees. `self` is the `this` handed to host functions, made on first use. */
 interface Frame {
   params: Params
-  /** the parameters are the signals by their own names (the engine's), not vega's `$`-prefixed ones */
-  plain: boolean
   datum: unknown
   event: unknown
   item: unknown
   self: object | undefined
 }
 type Run = (f: Frame) => unknown
+
+/**
+ * Which reading of the language a tree is compiled under. The engine's own entry (`compileExpression`) means what an expression
+ * in a Vega spec means, which is what vega's code generator makes of it: the signals are the parameters by their own names, `NaN`
+ * is the number, and a call has the shape the generator writes for it (see `FIRST_ARGUMENT_ONLY`, `ARGUMENT_ORDER`). The entry
+ * points shaped like vega-interpreter's (`expressionInterpreter`, `interpret`) read the parameters `$`-prefixed and keep
+ * vega-interpreter's own reading of those details (`NaN` is a parameter name there, and every argument is evaluated in order).
+ */
+interface Mode {
+  engine: boolean
+}
+
+/**
+ * The calls vega's code generator writes as a method of their first argument alone (`new Date(x).getDate()`, `x.length`,
+ * `String(x).toUpperCase()`): any argument after the first is never evaluated.
+ */
+export const FIRST_ARGUMENT_ONLY: ReadonlySet<string> = new Set([
+  'date', 'day', 'year', 'month', 'hours', 'minutes', 'seconds', 'milliseconds', 'time', 'timezoneoffset',
+  'utcdate', 'utcday', 'utcyear', 'utcmonth', 'utchours', 'utcminutes', 'utcseconds', 'utcmilliseconds',
+  'length', 'upper', 'lower', 'trim',
+])
+/** Calls whose arguments the generated code evaluates out of order: `clamp(v, lo, hi)` is `Math.max(lo, Math.min(hi, v))`. */
+const ARGUMENT_ORDER: Readonly<Record<string, readonly number[]>> = { clamp: [1, 2, 0] }
 
 /** `event.vega[f](...args)`; the names are the oracle's, as V8 puts them in the "is not a function" message. */
 function callEventFunction(event: unknown, f: string, args: unknown[]): unknown {
@@ -218,13 +239,15 @@ function member(object: Run, property: Expr, computed: Run | undefined): Run {
   }
 }
 
-function call(node: Extract<Expr, { type: 'CallExpression' }>, host: Record<string, unknown>): Run {
+const refuse = (name: string): never => { throw new Error(`Function argument refused: ${name}`) }
+
+function call(node: Extract<Expr, { type: 'CallExpression' }>, host: Record<string, unknown>, mode: Mode): Run {
   const callee = node.callee
   // only a bare name is callable; anything else reads `.startsWith` off the missing name, as the oracle does
   if (callee.type !== 'Identifier') return () => (undefined as unknown as string).startsWith('_')
   // `_name` is the encoders' spelling of `name`
   const name = callee.name.startsWith('_') ? callee.name.slice(1) : callee.name
-  const argv = node.arguments.map((a) => compile(a, host))
+  let argv = node.arguments.map((a) => compile(a, host, mode))
 
   // `if` evaluates only the branch it takes
   if (name === 'if') {
@@ -232,39 +255,51 @@ function call(node: Extract<Expr, { type: 'CallExpression' }>, host: Record<stri
     return (f) => (test(f) ? yes(f) : no(f))
   }
 
+  // the shapes of vega's generated calls (see `Mode`)
+  if (mode.engine && FIRST_ARGUMENT_ONLY.has(name)) argv = argv.slice(0, 1)
+  const order = mode.engine && argv.length === 3 && Object.hasOwn(ARGUMENT_ORDER, name) ? ARGUMENT_ORDER[name] : undefined
+
   // Names inherited from Object.prototype are never functions here; `toString` alone is a real table entry.
   const blocked = name !== 'toString' && DisallowedObjectProperties.has(name)
   // A built-in must not be able to invoke a function a spec reaches by a member read (a scale, a method);
   // the `is*` inspectors only look at the value and are exempt.
   const guardArgs = !name.startsWith('is')
   const count = argv.length
-  const isEvent = EventFunctions.includes(name)
 
-  return (f) => {
-    // The event functions are the loop's, whatever the host table holds under their names.
-    const fn = isEvent ? undefined : blocked ? undefined : (host[name] || DefaultFunctions[name])
-    // read before the arguments are evaluated: an unknown name fails here, whatever its arguments would do
-    const apply = isEvent ? undefined : (fn as { apply: (self: unknown, args: unknown[]) => unknown }).apply
-    const vals: unknown[] = []
-    for (let i = 0; i < count; i++) vals.push((argv[i] as Run)(f))
-    if (guardArgs) {
-      for (let i = 0; i < count; i++) {
-        if (typeof vals[i] === 'function') throw new Error(`Function argument refused: ${name}`)
-      }
-    }
-    if (isEvent) return callEventFunction(f.event, name, vals)
-    return (apply as (self: unknown, args: unknown[]) => unknown).call(fn, f.self ??= makeSelf(host, f.event), vals)
+  /** The arguments' values in the call's order; then, when the callee is not an inspector, a function among them is refused. */
+  const values = (f: Frame): unknown[] => {
+    const vals: unknown[] = new Array(count)
+    if (order) for (const i of order) vals[i] = (argv[i] as Run)(f)
+    else for (let i = 0; i < count; i++) vals[i] = (argv[i] as Run)(f)
+    if (guardArgs) for (let i = 0; i < count; i++) if (typeof vals[i] === 'function') refuse(name)
+    return vals
   }
+
+  // The event functions are the loop's, whatever the host table holds under their names.
+  if (EventFunctions.includes(name)) return (f) => callEventFunction(f.event, name, values(f))
+
+  const lookup = (): unknown => (blocked ? undefined : (host[name] || DefaultFunctions[name]))
+  /** A host function: `this` is the host table with the event functions, the arguments an array. */
+  const general = (f: Frame, fn: unknown): unknown => {
+    // read before the arguments are evaluated: an unknown name fails here, whatever its arguments would do
+    const apply = (fn as { apply: (self: unknown, args: unknown[]) => unknown }).apply
+    const vals = values(f)
+    return apply.call(fn, f.self ??= makeSelf(host, f.event), vals)
+  }
+
+  return (f) => general(f, lookup())
 }
 
-function objectLiteral(node: Extract<Expr, { type: 'ObjectExpression' }>, host: Record<string, unknown>): Run {
+function objectLiteral(node: Extract<Expr, { type: 'ObjectExpression' }>, host: Record<string, unknown>, mode: Mode): Run {
   const props = node.properties.map((p) => {
     const key = (p.key.type === 'Identifier' ? p.key.name : (p.key as { value: string | number }).value)
-    return { key, blocked: DisallowedObjectProperties.has(key as string), value: compile(p.value, host) }
+    return { key, blocked: DisallowedObjectProperties.has(key as string), value: compile(p.value, host, mode) }
   })
+  const n = props.length
   return (f) => {
     const out: Record<string, unknown> = {}
-    for (const p of props) {
+    for (let i = 0; i < n; i++) {
+      const p = props[i]!
       const v = p.value(f)
       if (p.blocked) prevented('property', p.key)
       else if (typeof v === 'function' && DisallowedMethods.has(v)) prevented('method', p.key)
@@ -274,7 +309,7 @@ function objectLiteral(node: Extract<Expr, { type: 'ObjectExpression' }>, host: 
   }
 }
 
-function compile(node: Expr, host: Record<string, unknown>): Run {
+function compile(node: Expr, host: Record<string, unknown>, mode: Mode): Run {
   switch (node.type) {
     case 'Literal': {
       const v = node.value
@@ -285,18 +320,21 @@ function compile(node: Expr, host: Record<string, unknown>): Run {
       if (name === 'datum') return (f) => tupleDatum(f.datum)
       if (name === 'event') return (f) => f.event
       if (name === 'item') return (f) => f.item
-      const constant = Object.hasOwn(ExpressionConstants, name) ? ExpressionConstants[name] : undefined
-      if (constant) return () => constant
-      const param = '$' + name
+      const own = Object.hasOwn(ExpressionConstants, name)
+      const constant = own ? ExpressionConstants[name] : undefined
+      // (vega-interpreter reads a constant through `||`, so its falsy `NaN` falls through to a parameter of that name)
+      if (constant || (own && mode.engine)) return () => constant
       // (a signal by its own name is an own property only: no name reaches the prototype)
-      return (f) => (f.plain ? (Object.hasOwn(f.params, name) ? f.params[name] : undefined) : f.params[param])
+      if (mode.engine) return (f) => (Object.hasOwn(f.params, name) ? f.params[name] : undefined)
+      const param = '$' + name
+      return (f) => f.params[param]
     }
     case 'MemberExpression':
-      return member(compile(node.object, host), node.property, node.computed ? compile(node.property, host) : undefined)
+      return member(compile(node.object, host, mode), node.property, node.computed ? compile(node.property, host, mode) : undefined)
     case 'CallExpression':
-      return call(node, host)
+      return call(node, host, mode)
     case 'ArrayExpression': {
-      const els = node.elements.map((e) => (e === null ? HOLE : compile(e, host)))
+      const els = node.elements.map((e) => (e === null ? HOLE : compile(e, host, mode)))
       return (f) => {
         const out: unknown[] = new Array(els.length)
         for (let i = 0; i < els.length; i++) out[i] = (els[i] as Run)(f)
@@ -304,31 +342,33 @@ function compile(node: Expr, host: Record<string, unknown>): Run {
       }
     }
     case 'BinaryExpression':
-      return binary(node.operator, compile(node.left, host), compile(node.right, host))
+      return binary(node.operator, compile(node.left, host, mode), compile(node.right, host, mode))
     case 'UnaryExpression':
-      return unary(node.operator, compile(node.argument, host))
+      return unary(node.operator, compile(node.argument, host, mode))
     case 'ConditionalExpression': {
-      const [test, yes, no] = [compile(node.test, host), compile(node.consequent, host), compile(node.alternate, host)]
+      const [test, yes, no] = [compile(node.test, host, mode), compile(node.consequent, host, mode), compile(node.alternate, host, mode)]
       return (f) => (test(f) ? yes(f) : no(f))
     }
     case 'LogicalExpression': {
-      const [l, r] = [compile(node.left, host), compile(node.right, host)]
+      const [l, r] = [compile(node.left, host, mode), compile(node.right, host, mode)]
       return node.operator === '&&' ? (f) => l(f) && r(f) : (f) => l(f) || r(f)
     }
     case 'ObjectExpression':
-      return objectLiteral(node, host)
+      return objectLiteral(node, host, mode)
   }
 }
 
 const NO_PARAMS: Params = Object.freeze({}) as Params
+const INTERPRETER: Mode = { engine: false }
+const ENGINE: Mode = { engine: true }
 
 /**
  * Bind a tree to a host function table. The closures are made on the first evaluation: an expression is
  * bound for several roles (a parameter, an event handler) of which one is usually all that runs.
  */
-function compileFor(ast: AstNode, fn: Record<string, unknown>, plain = false): (params: Params | undefined, datum: unknown, event: unknown, item: unknown) => unknown {
+function compileFor(ast: AstNode, fn: Record<string, unknown>, mode: Mode): (params: Params | undefined, datum: unknown, event: unknown, item: unknown) => unknown {
   let run: Run | undefined
-  return (params, datum, event, item) => (run ??= compile(ast as Expr, fn))({ params: params ?? NO_PARAMS, plain, datum, event, item, self: undefined })
+  return (params, datum, event, item) => (run ??= compile(ast as Expr, fn, mode))({ params: params ?? NO_PARAMS, datum, event, item, self: undefined })
 }
 
 /** Evaluate a parsed expression against a host function table (compiles on every call; bind with `expressionInterpreter` to reuse). */
@@ -340,7 +380,7 @@ export function interpret(
   event?: unknown,
   item?: unknown,
 ): unknown {
-  return compileFor(ast, fn)(params, datum, event, item)
+  return compileFor(ast, fn, INTERPRETER)(params, datum, event, item)
 }
 
 /**
@@ -351,33 +391,38 @@ export function interpret(
 export const expressionInterpreter = {
   /** An expression that updates an operator value. */
   operator(ctx: { functions: Record<string, unknown> }, expr: { ast: AstNode }) {
-    const run = compileFor(expr.ast, ctx.functions)
+    const run = compileFor(expr.ast, ctx.functions, INTERPRETER)
     return (params: Record<string, unknown>) => run(params, undefined, undefined, undefined)
   },
   /** An expression given as an operator parameter value. */
   parameter(ctx: { functions: Record<string, unknown> }, expr: { ast: AstNode }) {
-    const run = compileFor(expr.ast, ctx.functions)
+    const run = compileFor(expr.ast, ctx.functions, INTERPRETER)
     return (datum: unknown, params: Record<string, unknown>) => run(params, datum, undefined, undefined)
   },
   /** An expression applied to an event stream. */
   event(ctx: { functions: Record<string, unknown> }, expr: { ast: AstNode }) {
-    const run = compileFor(expr.ast, ctx.functions)
+    const run = compileFor(expr.ast, ctx.functions, INTERPRETER)
     return (event: unknown) => run(undefined, undefined, event, undefined)
   },
   /** An expression that handles an event-driven operator update (its datum is the event's item's). */
   handler(ctx: { functions: Record<string, unknown> }, expr: { ast: AstNode }) {
-    const run = compileFor(expr.ast, ctx.functions)
+    const run = compileFor(expr.ast, ctx.functions, INTERPRETER)
     return (params: Record<string, unknown>, event: unknown) =>
       run(params, (event as { item?: { datum?: unknown } } | undefined)?.item?.datum, event, undefined)
   },
 }
 
 /**
- * The engine's own entry: the parameters are the signals by their own names, read where they are (vega's entry points above take
- * them `$`-prefixed, which would mean copying every signal on every evaluation).
+ * The engine's own entry: an expression of a Vega spec (see `Mode`). The parameters are the signals by their own names, read where
+ * they are (vega's entry points above take them `$`-prefixed, which would mean copying every signal on every evaluation).
  */
 export function compileExpression(functions: Record<string, unknown>, ast: AstNode): (datum: unknown, params: Record<string, unknown> | undefined, event: unknown) => unknown {
-  const run = compileFor(ast, functions, true)
-  return (datum, params, event) =>
-    event != null ? run(params, (event as { item?: { datum?: unknown } } | undefined)?.item?.datum, event, undefined) : run(params, datum, undefined, undefined)
+  let run: Run | undefined
+  return (datum, params, event) => {
+    run ??= compile(ast as Expr, functions, ENGINE)
+    // (an event's datum is its item's)
+    return run(event != null
+      ? { params: params ?? NO_PARAMS, datum: (event as { item?: { datum?: unknown } }).item?.datum, event, item: undefined, self: undefined }
+      : { params: params ?? NO_PARAMS, datum, event: undefined, item: undefined, self: undefined })
+  }
 }
