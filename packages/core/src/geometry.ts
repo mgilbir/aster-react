@@ -46,6 +46,15 @@ import type { Placement } from './geometry-read.js'
 import { customSymbolCommands, renderSvgPath } from './svg-path.js'
 import type { SceneItem } from './types.js'
 
+/**
+ * A path text the writers built piece by piece is a rope of thousands of pieces; a kept one would hold them all in the old
+ * generation, where every collection marks them again. Reading a character makes the engine flatten it into one string.
+ */
+function flat(s: string): string {
+  s.charCodeAt(0)
+  return s
+}
+
 // --- the recording ---------------------------------------------------------------------------------------------------------
 
 /** Every call a generator can make on its sink (a canvas context has them all). */
@@ -177,7 +186,7 @@ export class CurveGeometry {
     if (this.text3 === undefined) {
       const w = new PathWriter(3)
       this.draw(w)
-      this.text3 = w.d
+      this.text3 = flat(w.d)
     }
     return this.text3
   }
@@ -309,7 +318,7 @@ export class ArcGeometry {
     if (this.textCache === undefined) {
       const w = new ArcPathWriter(this.digits)
       this.outline.replay(w)
-      this.textCache = w.d
+      this.textCache = flat(w.d)
     }
     return this.textCache
   }
