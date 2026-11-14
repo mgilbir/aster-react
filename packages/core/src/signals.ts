@@ -834,28 +834,23 @@ function bindSignalEventsDefs(
 
   const resolveItem = (e: ExtEvent): object | undefined => {
     let picked: PickedItem | null | undefined
-    // a legend's marks are named by the spec (`<field>_legend_symbols`...) and carry their entry as datum: the DOM says so
-    const inLegend = typeof (e.target as Element | null)?.closest === 'function' && (e.target as Element).closest('.role-legend') != null
-    if (inLegend) {
-      picked = domPick(svg, e.target)
-      if (picked && !picked.group && sceneInfo) picked.group = sceneInfo.root()
-      // the entry (the datum) is the scene item under the pointer: the rendered markup carries no stamp of it
-      if (picked && opts.pick) {
-        const p = pointOf(e)
-        const hit = opts.pick(p[0] + originX, p[1] + originY)
-        if (hit && (hit.item as { datum?: unknown }).datum != null) picked.item = hit.item
-      }
-      // vega's entry is a group item holding its symbol and its label (`item().items[0].items[0].datum.value`)
-      if (picked && sceneInfo && (picked.item as SceneItem)._part === 'entry') picked.items = sceneInfo.entryMarks(picked.item as SceneItem)
-    }
-    if (!picked && opts.pick) {
+    if (opts.pick) {
+      // the scene hit index decides what the item is, as vega's pick does: the rendered markup carries no stamp of it, and a
+      // DOM element the browser finds where the scene's geometry has nothing (a glyph past the text's box) is not an item
       const p = pointOf(e)
       const hit = opts.pick(p[0] + originX, p[1] + originY)
       picked = hit ? { marktype: hit.marktype, ...hit } as PickedItem : null
-      if (picked && sceneInfo) picked = sceneInfo.describe(picked)
+      if (picked && sceneInfo) {
+        picked = sceneInfo.describe(picked)
+        // vega's legend entry is a group item holding its symbol and its label (`item().items[0].items[0].datum.value`)
+        if ((picked.item as SceneItem)._part === 'entry') picked.items = sceneInfo.entryMarks(picked.item as SceneItem)
+      }
+    } else {
+      // no picker: what the DOM under the event says (a legend's marks are named by the spec, `<field>_legend_symbols`...)
+      picked = domPick(svg, e.target)
+      const inLegend = typeof (e.target as Element | null)?.closest === 'function' && (e.target as Element).closest('.role-legend') != null
+      if (picked && inLegend && !picked.group && sceneInfo) picked.group = sceneInfo.root()
     }
-    // no picker, or it found nothing under the pointer (e.g. no layout): what the DOM under the event says
-    if (!picked) picked = domPick(svg, e.target)
     // the painted frame of the view is the root group's background: vega picks it, so over the empty plot the item is the root group
     if (!picked && opts.scene && sceneInfo && (opts.scene.frameFill || opts.scene.frameStroke || opts.scene.frameFillTransparent)) {
       const [px, py] = pointOf(e)
