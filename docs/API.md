@@ -100,6 +100,12 @@ evaluation is `session.pulse()`. `session.change(input)` re-evaluates the chart 
 without passing the spec again. `buildPulseGraph(chart)` / `propagatePulse(graph, sources)` expose the dataflow
 structure directly.
 
+A signal change re-does only what reads it: a group mark (a facet) whose subtree reads nothing that changed keeps its group
+items, a mark re-evaluates only the channels that read what changed, and what the renderers and the hit index derive from a
+mark is kept with it. A scene the session returns is the engine's: the next evaluation keeps the nodes it can and never
+writes into them. You may write into a scene you were given and draw that scene again (every renderer draws what you wrote),
+but a later evaluation builds on what its nodes held when they were made, so draw its scene, not the one you wrote into.
+
 `dataChanges` is `Record<string, number[]>`: per dataset, the indices (into the NEW row array) whose values changed.
 It is only valid when the array keeps its length and order; the session then reuses the previous scene items of every
 other row. Mutating an array in place without replacing it, and without `dataChanges`, is invisible to the cache: see

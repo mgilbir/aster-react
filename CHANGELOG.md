@@ -56,6 +56,9 @@ and Fixed, per package. Everything built before the first release is in [Pre-rel
 - On the SVG, a `pointerout` / `mouseout` / `dragleave` is about the item the pointer leaves, as vega's (the element it is
   dispatched to): it was about the item under its new point, so `@bars:mouseout` did not fire when the pointer left a bar for
   empty space or left the chart. `event.vegaType` is the type the stream listens to, as in vega.
+- A scene a session hands back unchanged, and every mark or scale kept from an earlier evaluation, is formatted under the
+  default locale and in the time zone in use: after `defaultLocale(...)`, or a change of the host's time zone, the next
+  evaluation formats afresh (it kept showing the old text until the data or signals changed).
 
 #### Added
 
@@ -65,6 +68,19 @@ and Fixed, per package. Everything built before the first release is in [Pre-rel
   `pointermove` is also a `mousemove`, a click counts only on the item pressed, a touch is about the item it started on. The
   hovered item outlives a re-bind (a new scene's item at the same place stands for it; one gone from the scene is not left).
   `bindSceneSignals` takes any rendered element (the svg or the canvas).
+
+#### Performance
+
+- **A signal change re-does only the work downstream of it.** A top-level group mark (a facet, Vega-Lite's colour-grouped lines
+  and areas) whose subtree reads nothing that changed is kept whole; a mark over the rows its items were made from evaluates
+  again only the channels that read what changed, and an item whose re-evaluated channels come out as they were is the item
+  before; a mark drawn from another mark's items (Vega-Lite's voronoi) is kept when what it reads of them is as it was. What is
+  derived from a scene -- the hit index, the DOM descriptors, the accessible tree's boxes, `event.item`'s parent links, the
+  cursor check -- is kept with the engine's nodes and costs what a scene made anew. On the chart-bench heavy survival chart a
+  60-move pointer sweep costs about a third of what it did in the browser (Vega spec) and about a quarter (Vega-Lite spec); see
+  docs/ARCHITECTURE.md for what each reuse reads.
+- A dense hit index answers its first queries by a scan of the item boxes and builds its grid when asked more; a path item's
+  outline is placed when a query first reaches its box.
 
 ### `@aster-charts/react`
 
