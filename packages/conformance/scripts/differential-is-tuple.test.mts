@@ -149,4 +149,40 @@ describe('isTuple, against vega, for every kind of item', () => {
     expect(compared).toBeGreaterThan(400)
     expect(failures.slice(0, 8)).toEqual([])
   })
+
+  // Vega-Lite asks `isTuple(group())` and `isTuple(facet)` in every selection; neither needs the evaluation to register its tuples,
+  // so such a chart does not pay for it -- unless the host sets `facet` to something that may be one
+  const VL_FACET = { name: 'facet', value: {}, on: [{ events: [{ source: 'scope', type: 'pointermove' }], update: 'isTuple(facet) ? facet : group("cell").datum' }] }
+  const facetSpec = (extra: Spec[] = []): Spec => ({
+    width: 100, height: 60, data: [{ name: 't', values: [{ k: 'a' }, { k: 'b' }] }],
+    signals: [VL_FACET, ...extra, { name: 'unit', value: {}, on: [{ events: 'pointermove', update: 'isTuple(group()) ? group() : unit' }] }],
+    marks: [{ type: 'text', name: 'probe', from: { data: 't' }, encode: { update: { text: T("isTuple(facet) + ',' + datum.k") } } }],
+  })
+  it('a chart that only asks of group() and Vega-Lite\'s facet registers nothing, and answers as vega', async () => {
+    expect(compileChart(facetSpec() as never).callsIsTuple).toBe('facet')
+    expect(compileChart({ signals: [{ name: 'u', value: {}, on: [{ events: 'click', update: 'isTuple( group() ) ? group() : u' }] }] } as never).callsIsTuple).toBeUndefined()
+    // another write to `facet`, or another question, needs the tuples
+    expect(compileChart({ ...facetSpec(), signals: [{ ...VL_FACET, on: [...VL_FACET.on, { events: 'click', update: 'datum' }] }] } as never).callsIsTuple).toBe(true)
+    expect(compileChart({ ...facetSpec(), signals: [{ ...VL_FACET, value: [] }] } as never).callsIsTuple).toBe(true)
+    expect(compileChart({ signals: [{ name: 'u', update: 'isTuple(data("t")[0])' }] } as never).callsIsTuple).toBe(true)
+    // the host sets `facet`: to one of the rows it gives (an ingested row, a tuple to vega), and to an object of its own
+    for (const which of ['row', 'object'] as const) {
+      const spec = facetSpec()
+      const rows = (spec.data as Array<{ values: object[] }>)[0]!.values.map((r) => Object.freeze({ ...r }))
+      const hosted = structuredClone(spec) as { data: Array<{ values: unknown[] }> }
+      hosted.data[0]!.values = []
+      const view = new vega.View(vega.parse(structuredClone(hosted) as never), { renderer: 'none' })
+      // (vega stamps its id on the rows it ingests: it is given copies; Aster the frozen rows)
+      view.data('t', rows.map((r) => ({ ...r })) as never)
+      await view.runAsync()
+      const value = which === 'row' ? view.data('t')[0] : { k: 'z' }
+      view.signal('facet', value)
+      await view.runAsync()
+      const want = vegaSays(view.scenegraph().root)
+      view.finalize()
+      const scene = evaluateChart(compileChart(hosted as never), { data: { t: rows as unknown[] }, signals: { facet: which === 'row' ? rows[0] : { k: 'z' } } }) as unknown as { items: unknown[] }
+      expect(normalize(asterSays(scene)), which).toEqual(normalize(want))
+      expect(want.some((w) => w.includes(which === 'row' ? 'true' : 'false')), which).toBe(true)
+    }
+  })
 })
