@@ -1,0 +1,19 @@
+{
+  "$schema": "https://vega.github.io/schema/vega/v6.json",
+  "description": "`parent` inside a group mark without `from` nested in a facet cell is that group item's own datum ({}), not the cell's.",
+  "width": 80, "height": 50, "padding": 5,
+  "data": [{ "name": "t", "values": [{ "k": "a" }, { "k": "b" }] }],
+  "marks": [
+    {
+      "type": "group", "from": { "facet": { "data": "t", "name": "f", "groupby": "k" } },
+      "encode": { "update": { "y": { "signal": "datum.k === 'a' ? 0 : 25" } } },
+      "marks": [
+        { "type": "text", "encode": { "update": { "y": { "value": 10 }, "text": { "signal": "'cell ' + parent.k" } } } },
+        {
+          "type": "group",
+          "marks": [{ "type": "text", "encode": { "update": { "x": { "value": 40 }, "y": { "value": 10 }, "text": { "signal": "'inner ' + parent.k" }, "description": { "field": { "parent": "k" } } } } }]
+        }
+      ]
+    }
+  ]
+}

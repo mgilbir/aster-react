@@ -5266,9 +5266,10 @@ function buildGroupItem(mark: CompiledMark, ctx: EvalContext, entered: EnteredGr
   let restoreScaleFns: (() => void) | undefined
   let restoreProjectionFns: (() => void) | undefined
   try {
-    // this item's signal scope (its own signals, over the enclosing ones; a facet's `parent` is its datum)
-    const hasParent = src.facetName !== undefined || mark.from?.data !== undefined
-    const outerParams = hasParent ? { ...ctx.signalParams, parent: src.parent ?? src.datum } : ctx.signalParams
+    // this item's signal scope (its own signals, over the enclosing ones). `parent` is this group item's datum, whatever made it: a
+    // facet's partition key, a row of `from.data`, or the `{}` of a group mark without `from` (in vega, a plain group nested in a
+    // facet cell gives what it holds its own `{}`, not the cell's datum)
+    const outerParams = { ...ctx.signalParams, parent: src.parent ?? src.datum }
     const scopeId = mark.signalDefs?.length ? `${ctx.scopeId ? ctx.scopeId + '/' : ''}${mark.userName ?? ''}@${markIdOf(mark)}${src.key !== undefined && src.key !== '' ? `[${src.key}]` : ''}` : undefined
     // vega builds the instances of nested scopes level by level: what an aborted pass did not reach is not made
     const scoped = scopeId !== undefined ? scopeSignalValues(mark, ctx, scopeId, outerParams, path) : undefined
