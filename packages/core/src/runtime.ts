@@ -19,7 +19,7 @@ import { isEngineNode, noteEngineScene } from './scene-registry.js'
 import { parseExpressionCached, type Expr } from './expr-parser.js'
 import { datasetsReadIn, identifiersIn, scalesReadIn, dependencyKey, fieldsWritten, namesIn, pipelineReadsOf, reuse, runsOf, stepCounts, stepReadsOf, type StepReads, type StepRecord } from './step-reuse.js'
 import { activeMeter, withLimits, ceiling, checkRowCount, meterItems, meterTick, AsterLimitError } from './limits.js'
-import { withTextMetricsProvider } from './text-metrics.js'
+import { getTextMetricsProvider, withTextMetricsProvider } from './text-metrics.js'
 import { AsterUrlError } from './url-policy.js'
 import { SpecParseError } from './parse-error.js'
 import { consoleLogger, type Logger } from './logger.js'
@@ -252,6 +252,8 @@ interface IncrementalState {
   channels: Map<CompiledMark, ChannelRecord>
   /** A top-level leaf mark drawn from another mark's items: what it was made under and the items it was made from (see `keptOverMarkItems`). */
   markSources: Map<CompiledMark, { key: string; items: readonly SceneItem[]; tuples: boolean }>
+  /** The view's own axes and legends as a clean pass made them, by definition, with what they were made under (see `keptGuide`). */
+  guides: Map<object, GuideRecord>
   /** The content of the view this state's pass made (its root items, laid out): a later pass shares what it makes the same (see `shareScene`). */
   content?: readonly SceneGroup[]
 }
@@ -278,7 +280,7 @@ interface ScopedRun {
 }
 
 function newState(gen: number): IncrementalState {
-  return { gen, fp: '', scales: new Map(), scaleEntries: new Map(), datasets: new Map(), groups: new Map(), markKeys: new Map(), rows: new Map(), stale: false, idCounter: 0, scoped: new Map(), numbered: new Map(), copies: new Map(), instances: new Map(), groupMarks: new Map(), channels: new Map(), markSources: new Map() }
+  return { gen, fp: '', scales: new Map(), scaleEntries: new Map(), datasets: new Map(), groups: new Map(), markKeys: new Map(), rows: new Map(), stale: false, idCounter: 0, scoped: new Map(), numbered: new Map(), copies: new Map(), instances: new Map(), groupMarks: new Map(), channels: new Map(), markSources: new Map(), guides: new Map() }
 }
 
 /** A top-level leaf mark's items as an encode made them: the encode, the rows, the items in row order and each channel's key. */
@@ -622,6 +624,8 @@ interface EvalContext {
   layoutThrew?: true
   /** The guide host of this context (see guideHost). */
   guideHost?: { ctx: EvalContext; host: GuideHost }
+  /** How many gradient definitions the evaluation was asked for so far (`addDefs`, a guide's gradient), shared with the contexts made from this one: see `keptGuide`. */
+  defsAsked: { n: number }
   scales: Map<string, Scale>
   scaleTypes: Map<string, string>
   /** Per-mark, per-eval encode bindings (scale fn + type) so the per-row encode
@@ -908,7 +912,7 @@ function prepareChartCtx(
     ]),
     hierarchies: transformHierarchies, affected: new Set(), incremental: false, ...(txn.engine ? { engine: txn.engine } : {}), deadline, checkDeadline, markItems: new Map(), markContainers: new Map(),
     datasetPulses: new Map(),
-    prev, committed: txn.prev, ...(txn.unchanged ? { unchanged: txn.unchanged } : {}), ...(txn.lastPass ? { earlier: txn.lastPass } : {}), draft: newState(txn.gen), ids: { value: txn.prev?.idCounter ?? 0 }, idStart: txn.prev?.idCounter ?? 0, gen: txn.gen, claimed: txn.claimed, extraFp, dsEpoch: 0, scaleReuse: new Map(), distinctCache: new WeakMap(),
+    prev, committed: txn.prev, ...(txn.unchanged ? { unchanged: txn.unchanged } : {}), ...(txn.lastPass ? { earlier: txn.lastPass } : {}), draft: newState(txn.gen), ids: { value: txn.prev?.idCounter ?? 0 }, idStart: txn.prev?.idCounter ?? 0, gen: txn.gen, claimed: txn.claimed, extraFp, dsEpoch: 0, scaleReuse: new Map(), distinctCache: new WeakMap(), defsAsked: { n: 0 },
     domainRaw: input.domainRaw ? new Map(Object.entries(input.domainRaw).map(([k, v]) => [k, v])) : undefined,
     // Image urls are vetted when the host passes a policy, and with the default
     // policy whenever it passes `limits` (limits mean "this spec is untrusted").
@@ -1618,11 +1622,140 @@ function guideTitle(ctx: EvalContext, title: unknown): string | undefined {
 /** vega-view-transforms layoutGroup: the child roles whose bounds union into BOTH anchor bounds of the guide layout. */
 const VIEW_ROLES: ReadonlySet<string> = new Set(['frame', 'scope', 'row-header', 'row-footer', 'row-title', 'column-header', 'column-footer', 'column-title'])
 
+/** Make one of a view's axes: its group, with what the accessible tree and the caption read of it. */
+function buildAxisGroup(ctx: EvalContext, axis0: CompiledAxis, axisIndex: number): SceneGroup | null {
+  const axis = resolveAxisOrient(axis0, ctx)
+  const group = buildAxis(axis, ctx, axisIndex)
+  if (group) {
+    // Carry guide identity for the accessible tree without changing
+    // the serialized SVG: the fields are scene metadata only.
+    const meta = group as unknown as { zindex?: number; orient?: string; scale?: string; title?: string; aria?: boolean; grid?: boolean; format?: unknown; formatType?: unknown }
+    // (the mark definition reads these as written -- vega-parser marks/definition.js: `+zindex || undefined`, `aria`,
+    // `description` -- so a signal object is not looked into: its zindex is none, its description is the object)
+    const zindex = +(axis.zindex as number) || undefined
+    if (zindex) meta.zindex = zindex
+    // (the caption reads the axis group item's own orient, which a user encode may have changed)
+    meta.orient = (typeof axis.orient === 'string' ? ((group as unknown as { axis?: { itemOrient?: string } }).axis?.itemOrient ?? axis.orient) : axis.orient)
+    meta.scale = axis.scale
+    meta.aria = axis.aria
+    meta.grid = guideScalar(ctx, axis.grid) === true
+    const unencoded = (group as unknown as { axis?: { unencoded?: boolean } }).axis?.unencoded === true
+    // (the caption reads the format and its type off the axis's group item, as its encode left them: a literal object is an
+    // encode entry there, a signal is what it holds whatever its type, and an `encode.axis` may set them)
+    const item = (group as unknown as { axis?: { format?: unknown; formatType?: unknown } }).axis
+    meta.format = unencoded ? undefined : item?.format
+    meta.formatType = unencoded ? undefined : item?.formatType
+    const at = guideTitle(ctx, axis.title)
+    if (at) meta.title = at
+    // the axis' `description` is the aria-label of its container (vega-scenegraph ariaGuide: mark.description first)
+    const adesc = (axis as { description?: unknown }).description
+    if (adesc) group.description = adesc as string
+  }
+  return group
+}
+
+/** One of the view's own axes or legends as a clean pass made it, and what it was made under (see `keptGuide`). */
+interface GuideRecord {
+  /** `guideKeyOf` the definition when it was made */
+  key: string
+  /** the guide's group as made (a legend's before the legends were placed: see `placeLegends`) */
+  group: SceneGroup
+  /** every scale of the view, as the guide was made among them */
+  scales: ReadonlyArray<readonly [string, unknown]>
+  /** whether tuples were registered (the datums of its parts are tuples then) */
+  tuples: boolean
+}
+
+/** What a guide definition reads besides the scales: the signals it names (null: more than it names), the datasets its expressions read by name (null: a computed name). */
+interface GuideDeps { names: readonly string[] | null; data: readonly string[] | null }
+const GUIDE_DEPS = new WeakMap<object, GuideDeps>()
+function guideDepsOf(def: object, chart: CompiledChart): GuideDeps {
+  let deps = GUIDE_DEPS.get(def)
+  if (deps !== undefined) return deps
+  const data = new Set<string>(datasetsNamed(def, chart))
+  let computed = false
+  walkStrings(def, (str) => {
+    const read = datasetsReadIn(str)
+    if (read === null) computed = true
+    else for (const n of read) data.add(n)
+  })
+  deps = { names: namesMentioned(def, chart), data: computed ? null : [...data].sort() }
+  GUIDE_DEPS.set(def, deps)
+  return deps
+}
+
+/**
+ * What one of the view's own axes or legends is made under besides the scales: the signals its definition names, the view's size,
+ * `extraFp` (overrides, text metrics given with the input, container sizes, locale, time zone) and the registered functions
+ * (`readsKey`); the rows of the datasets its expressions read by name (`datasetKey`); the URL policy its links are vetted under;
+ * the text measurer set for every chart; whether the guides are laid out at all. Null: it reads more than that (a signal it does
+ * not name, a dataset by a computed name).
+ */
+function guideKeyOf(def: object, ctx: EvalContext): string | null {
+  const deps = guideDepsOf(def, ctx.chart)
+  if (deps.names === null || deps.data === null) return null
+  let key = `${readsKey(ctx, deps.names)}\u0003${ctx.urlPolicy === undefined ? '' : dependencyKey(ctx.urlPolicy)}\u0003${valueKey(getTextMetricsProvider())}\u0003${ctx.rawGuides ? 1 : 0}`
+  for (const n of deps.data) key += `\u0004${n}=${datasetKey(ctx, n)}`
+  return key
+}
+
+/**
+ * The group the evaluation before made of guide `def` (an axis or a legend of the view, not of a group mark), when this evaluation
+ * would make the same: nothing it was made from changed. A guide's group is a function of its definition (the compiled chart's own
+ * object, with the config and styles folded in), of what `guideKeyOf` holds, of the view's scales -- each the very object it was
+ * made with (a scale is made again whenever anything it is made from changes) -- and of whether tuples are registered. The pass
+ * must be clean (a pass that stopped makes what vega made before the stop), not counted against `limits` (a kept guide is not
+ * counted again), not one of a view that fits its viewport (each pass makes its own, the second from the first) and not one whose
+ * layout failed. What making it wrote into the evaluation besides its group is nothing, or it was not recorded (see `recordGuide`).
+ */
+function keptGuide(def: object, ctx: EvalContext, key: string | null): SceneGroup | undefined {
+  const record = ctx.prev?.guides.get(def)
+  if (record === undefined || key === null || record.key !== key || record.tuples !== tuplesRegistering()) return undefined
+  if (!guidesKeepable(ctx) || !sameScales(ctx, record.scales)) return undefined
+  ctx.draft.guides.set(def, record)
+  return record.group
+}
+
+/** Whether this pass may keep or record the view's guides (see `keptGuide`). */
+const guidesKeepable = (ctx: EvalContext): boolean => cleanPass(ctx) && activeMeter() === null && ctx.passMemory === undefined
+  && !ctx.layoutState.failed && ctx.layoutThrew !== true
+
+function sameScales(ctx: EvalContext, scales: ReadonlyArray<readonly [string, unknown]>): boolean {
+  if (scales.length !== ctx.scales.size) return false
+  for (const [name, scale] of scales) if (ctx.scales.get(name) !== scale) return false
+  return true
+}
+
+/**
+ * Make guide `def` (`make`) and record it for a later evaluation to keep, when the pass is clean before and after, and making it
+ * wrote nothing into the evaluation but its group: it logged nothing (a warning is logged by every evaluation that makes the guide)
+ * and asked for no gradient definition (the scene's definitions are those its parts ask for, in order).
+ */
+function recordGuide(def: object, ctx: EvalContext, key: string | null, make: () => SceneGroup | null): SceneGroup | null {
+  if (key === null || !guidesKeepable(ctx)) return make()
+  const logger = ctx.logger
+  let logged = 0
+  ctx.logger = { error: (...a) => { logged++; logger.error(...a) }, warn: (...a) => { logged++; logger.warn(...a) } }
+  const asked = ctx.defsAsked.n
+  let group: SceneGroup | null
+  try {
+    group = make()
+  } finally {
+    ctx.logger = logger
+  }
+  if (group !== null && logged === 0 && ctx.defsAsked.n === asked && guidesKeepable(ctx)) {
+    ctx.draft.guides.set(def, { key, group, scales: [...ctx.scales], tuples: tuplesRegistering() })
+  }
+  return group
+}
+
 function buildAxisAndLegend(
   ctx: EvalContext,
   contentItems: SceneGroup[],
   axes: CompiledAxis[] = ctx.chart.axes,
   legends: CompiledLegend[] = ctx.chart.legends,
+  /** the view's own guides (not a group mark's): they may be kept from the evaluation before (see `keptGuide`) */
+  keep = false,
 ): { groups: SceneGroup[] } {
   const groups: SceneGroup[] = []
   // (the pass stopped at a failing dataset: no axis or legend was made)
@@ -1632,32 +1765,9 @@ function buildAxisAndLegend(
   const anchorItems = [...contentItems]
 
   for (const [axisIndex, axis0] of axes.entries()) {
-    const axis = resolveAxisOrient(axis0, ctx)
-    const group = buildAxis(axis, ctx, axisIndex)
+    const key = keep ? guideKeyOf(axis0, ctx) : null
+    const group = (keep ? keptGuide(axis0, ctx, key) : undefined) ?? recordGuide(axis0, ctx, key, () => buildAxisGroup(ctx, axis0, axisIndex))
     if (group) {
-      // Carry guide identity for the accessible tree without changing
-      // the serialized SVG: the fields are scene metadata only.
-      const meta = group as unknown as { zindex?: number; orient?: string; scale?: string; title?: string; aria?: boolean; grid?: boolean; format?: unknown; formatType?: unknown }
-      // (the mark definition reads these as written -- vega-parser marks/definition.js: `+zindex || undefined`, `aria`,
-      // `description` -- so a signal object is not looked into: its zindex is none, its description is the object)
-      const zindex = +(axis.zindex as number) || undefined
-      if (zindex) meta.zindex = zindex
-      // (the caption reads the axis group item's own orient, which a user encode may have changed)
-      meta.orient = (typeof axis.orient === 'string' ? ((group as unknown as { axis?: { itemOrient?: string } }).axis?.itemOrient ?? axis.orient) : axis.orient)
-      meta.scale = axis.scale
-      meta.aria = axis.aria
-      meta.grid = guideScalar(ctx, axis.grid) === true
-      const unencoded = (group as unknown as { axis?: { unencoded?: boolean } }).axis?.unencoded === true
-      // (the caption reads the format and its type off the axis's group item, as its encode left them: a literal object is an
-      // encode entry there, a signal is what it holds whatever its type, and an `encode.axis` may set them)
-      const item = (group as unknown as { axis?: { format?: unknown; formatType?: unknown } }).axis
-      meta.format = unencoded ? undefined : item?.format
-      meta.formatType = unencoded ? undefined : item?.formatType
-      const at = guideTitle(ctx, axis.title)
-      if (at) meta.title = at
-      // the axis' `description` is the aria-label of its container (vega-scenegraph ariaGuide: mark.description first)
-      const adesc = (axis as { description?: unknown }).description
-      if (adesc) group.description = adesc as string
       groups.push(group)
       anchorItems.push(group)
     }
@@ -2964,8 +3074,8 @@ function buildContentPass(
     }
   }
   const { groups: guideGroups } = withoutLateReads(ctx, () => stopped
-    ? buildAxisAndLegend(ctx, items, ctx.chart.axes.slice(0, madeAxes(cut!)), ctx.chart.legends.slice(0, madeLegends(cut!)))
-    : buildAxisAndLegend(ctx, items))
+    ? buildAxisAndLegend(ctx, items, ctx.chart.axes.slice(0, madeAxes(cut!)), ctx.chart.legends.slice(0, madeLegends(cut!)), true)
+    : buildAxisAndLegend(ctx, items, ctx.chart.axes, ctx.chart.legends, true))
   for (const g of guideGroups) items.push(g)
   // (the view's layout is ranked after every instance with content, the entries of its legends included: known once they are made)
   if (layoutError !== undefined && cut === undefined) failPass(ctx, { path: ctx.scope.last ?? [], axis: Infinity, late: true, layout: { items: [[]], at: 0 } }, layoutError.error)
@@ -6298,6 +6408,7 @@ function registerGradient(paint: object, ctx: EvalContext): void {
 
 /** The scene's defs take `defs` in order, each once. */
 function addDefs(ctx: EvalContext, defs: readonly SceneDef[]): void {
+  ctx.defsAsked.n += defs.length
   if (ctx.defsLog !== undefined && defs.length) ctx.defsLog.push(defs.slice())
   for (const def of defs) if (!ctx._defs.some((d) => d.id === def.id)) ctx._defs.push(def)
 }
@@ -6995,6 +7106,7 @@ function makeGuideHost(ctx: EvalContext): GuideHost {
       host.stopped ??= { error: e instanceof ExpressionFailure ? e.error : e, ...(host.at !== undefined ? { at: host.at, entryIndex: host.entryIndex } : {}) }
     },
     gradient: (name, vertical) => {
+      ctx.defsAsked.n++
       // vega-functions gradient(): stops from the scale's ticks (see scaleGradientStops); the definition is the
       // renderer's, content-addressed by direction and stops
       const stops = scaleGradientStops(ctx.scales.get(name) as never)
