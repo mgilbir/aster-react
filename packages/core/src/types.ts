@@ -754,6 +754,11 @@ export interface SceneGroup extends SceneItem {
    * `title` is the guide's group.
    */
   partMeta?: Record<string, { name?: string; interactive: boolean }>
+  /**
+   * A mark whose bounds the pass stopped in (see bound-failure.ts): its items from this index on were never measured, and vega's
+   * canvas, which draws an item only where its bounds meet the view, draws none of them.
+   */
+  unmeasuredFrom?: number
   /** A guide's group item as a box: its background (and, with `strokeForeground`, foreground) leaves (vega draws every group item's). */
   box?: SceneItem
   boxFg?: SceneItem

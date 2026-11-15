@@ -626,7 +626,11 @@ export function buildHitIndex(scene: SceneRoot, cell = DEFAULT_CELL, options: Hi
     }
   }
   const addMark = (group: SceneGroup, type: string, gx: number, gy: number): void => {
-    if (type === 'line' || type === 'area' || type === 'trail') { addMulti(group, type, gx, gy); return }
+    // (the items a pass that stopped in their mark's bounds never measured have no bounds, where vega looks for an item first: they
+    // take no pointer, see `SceneGroup.unmeasuredFrom`)
+    const from = group.unmeasuredFrom
+    if (from !== undefined) group = { ...group, items: (group.items ?? []).slice(0, from) } as SceneGroup
+    if (type === 'line' || type === 'area' || type === 'trail') { if (group.items?.length) addMulti(group, type, gx, gy); return }
     for (const item of group.items ?? []) addMarkItem(item, type, gx, gy)
   }
   // Scene items live in plot coordinates; pointer queries arrive in viewport

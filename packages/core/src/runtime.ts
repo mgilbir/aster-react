@@ -66,6 +66,7 @@ import { aggregateGroups, flatKeyFn, groupKeyFn } from './transform-agg.js'
 import type { GridPlace } from './trellis.js'
 import { boundAxisGroup, boundGroupItem, boundLeaf, boundTypedMark, Bounds, layoutBounds, eachMarkBounds, hasClippedMark } from './bounds.js'
 import { rectItemPath } from './render.js'
+import { boundFailure } from './bound-failure.js'
 import { buildAxis as buildAxisGuide, tickPlacement } from './guide-axis.js'
 import { buildTitle as buildTitleGuide } from './guide-title.js'
 import type { GuideHost, Sides } from './guide-legend.js'
@@ -5466,6 +5467,21 @@ function evaluateMarkItems(
       stoppedAfterEncode = true
     }
   }
+  // vega's Bound: the items are measured after the transforms and the sort. A value that cannot be drawn (path text vega's reader
+  // refuses, a custom symbol shape likewise, a curve that is not there, a clip path: see bound-failure.ts) stops the pass there,
+  // the mark made in full: the marks after it are never made, and the view is not laid out.
+  let unmeasuredFrom: number | undefined
+  if (!stoppedAfterEncode && transformed && ctx.bareEncode !== true) {
+    const failure = boundFailure(mark.type, items, markClipPath(mark, ctx), mark.type === 'shape' && !shapeIsLiteral(mark))
+    if (failure !== undefined) {
+      failPass(ctx, { axis: Infinity, mark: ctx.scope.mark ?? 0, afterEncode: true }, failure.error)
+      stoppedAfterEncode = true
+      unmeasuredFrom = failure.from
+      // (a shape mark's item holds no shape of vega's to write: its SVG renderers fail on it, where the others' fail drawing their
+      // geometry themselves)
+      if (mark.type === 'shape' && failure.from !== undefined && items[failure.from] !== undefined) (items[failure.from] as unknown as Record<string, unknown>)._drawError = failure.error
+    }
+  }
   // (the marks after it are never made)
   if (stoppedAfterEncode) ctx.encodeAborted = true
 
@@ -5534,16 +5550,6 @@ function evaluateMarkItems(
     }
   }
 
-  // Path marks whose `path` channel resolves to a GeoJSON object (e.g. the
-  // output of a `contour` transform) render that geometry in pixel space,
-  // matching vega's path-mark geo handling.
-  if (mark.type === 'path') {
-    for (const it of items) {
-      const p = it.path as unknown
-      if (p && typeof p === 'object') it.path = geoJSONPath(p) ?? undefined
-    }
-  }
-
   // Image URLs are spec-controlled: vet each through the URL policy so a
   // hostile spec cannot make the viewer's browser request arbitrary URLs.
   // Applied here, on the scene, so the string renderer, the DOM path and canvas
@@ -5588,6 +5594,7 @@ function evaluateMarkItems(
     ...(mark.key !== undefined ? { __keyFields: [mark.key] } : {}),
     ...(encodesHref(mark) ? { hasLinks: true } : {}),
     ...markContainerInfo(mark),
+    ...(unmeasuredFrom !== undefined ? { unmeasuredFrom } : {}),
   }
   if (carriedBounds) {
     for (const it of addedItems) carriedBounds.union(boundLeaf(new Bounds(), it))
@@ -6136,6 +6143,24 @@ function markClipOf(mark: CompiledMark, ctx: EvalContext): { clip: boolean; clip
     shape = projection && geoRegistry.projectedPath ? geoRegistry.projectedPath(projection, { type: 'Sphere' }) : ''
   } else return { clip: !!c }
   return shape !== undefined ? { clip: true, ...(shape !== '' ? { clipPathD: shape } : {}) } : { clip: truthy }
+}
+
+/** A mark's clip when it is an SVG path (`{path}`, or a `{signal}` that holds a path shape): what vega's bounds draw it with. */
+function markClipPath(mark: CompiledMark, ctx: EvalContext): string | undefined {
+  const c = (mark as { clip?: unknown }).clip
+  if (c === null || typeof c !== 'object' || (c as { sphere?: unknown }).sphere) return undefined
+  return markClipOf(mark, ctx).clipPathD
+}
+
+/**
+ * Whether a shape mark's items take their `shape` from a literal of the encode: a literal is never a shape (vega's are functions, a
+ * geoshape transform's or a data field's), so vega's bounds cannot draw it. (What a field or a transform gives, the engine holds as
+ * path text of its own: it is not judged here.)
+ */
+function shapeIsLiteral(mark: CompiledMark): boolean {
+  if (mark.transform?.some((t) => (t as { type?: unknown }).type === 'geoshape')) return false
+  const channel = (mark.encode?.update?.shape ?? mark.encode?.enter?.shape) as { value?: unknown } | undefined
+  return channel !== undefined && channel !== null && typeof channel === 'object' && 'value' in channel
 }
 
 /** Whether a mark is clipped to the frame of its group (see {@link markClipOf}). */

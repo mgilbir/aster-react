@@ -10,6 +10,7 @@ import { Bounds, boundLeaf, boundLegendGroup, boundStroke, multiLineOffset } fro
 import { placeGrid } from './trellis.js'
 import { LEGEND_SCALES } from './legend-scales.js'
 import { rectItemPath, symbolPath } from './render.js'
+import { boundFailure } from './bound-failure.js'
 import type { Locale } from './locale.js'
 import {
   DiscreteLegend, GradientLegend, SymbolLegend, isContinuous, isDiscretizing, labelFormat, labelFraction, labelValues, scaleFraction, tickCount,
@@ -722,7 +723,9 @@ function drawnSymbol(sym: SceneItem & Rec): SceneItem & Rec {
   const leaf: Rec = {}
   // (copied without `size` and `shape`: a `delete` would turn the leaf into a dictionary-mode object)
   for (const key in sym) if (key !== 'size' && key !== 'shape') leaf[key] = sym[key]
-  leaf.path = String(symbolPath(sym.shape as string | undefined, Math.sqrt(size) / 2))
+  // (a shape vega could not measure is not drawn here either: its renderers fail on it, and its canvas never reaches it)
+  if (sym._drawError !== undefined) leaf._unmeasured = true
+  else leaf.path = String(symbolPath(sym.shape as string | undefined, Math.sqrt(size) / 2))
   leaf._part = 'symbol'
   leaf._kind = 'symbol'
   return leaf as SceneItem & Rec
@@ -786,6 +789,13 @@ function symbolEntries(inp: LegendBuildInput, k: Kit, defs: LegendDefs, group: R
       sym = encodeItem(symbols, e as unknown as Row, group, host, style) as SceneItem & Rec
       sym._kind = 'symbol'
       sym._part = 'symbol'
+      // the symbol mark's bounds: a shape vega cannot draw (a custom shape its path reader refuses) stops the pass there, the
+      // symbol made and its label not (see bound-failure.ts); its renderers fail on it as vega's do
+      const failure = host.stopped === undefined ? boundFailure('symbol', [sym]) : undefined
+      if (failure !== undefined) {
+        host.stopped = { error: failure.error, at: 'symbol', entryIndex: i }
+        sym._drawError = failure.error
+      }
       if (host.stopped === undefined) {
         host.at = 'label'
         lbl = encodeItem(labels, e as unknown as Row, group, host, style) as SceneItem & Rec
@@ -795,7 +805,7 @@ function symbolEntries(inp: LegendBuildInput, k: Kit, defs: LegendDefs, group: R
     }
     // what an entry holds: its symbol, its label, and its own box when it has a clip or a size
     const held = new Bounds()
-    if (sym !== undefined) {
+    if (sym !== undefined && sym._drawError === undefined) {
       const symbolBox = boundLeaf(new Bounds(), symbolForBounds(sym))
       // (the symbol item's own bounds, in its own frame: what a gradient on it is laid over on a canvas, at full precision -- the path
       // it is drawn with is printed rounded)

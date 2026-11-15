@@ -39,6 +39,7 @@ import {
   leafClipId,
   leafLineEnds,
   leafPathAttrs,
+  failOnUnmeasured,
   leafSymbolPath,
   lineElementAttrs,
   lineMarkAttrs,
@@ -528,6 +529,7 @@ function pairs(fill: (w: AttrSink) => void): Pairs {
 const FOREGROUND: Pairs = [['class', 'foreground'], ['aria-hidden', 'true'], ['d', ''], ['display', 'none']]
 
 function leafDesc(it: SceneItem): DomDesc {
+  failOnUnmeasured(it)
   const w = new PairAttrSink()
   if (it.path != null) {
     leafPathAttrs(it, w)

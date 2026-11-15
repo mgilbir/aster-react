@@ -211,8 +211,15 @@ function isGroup(item: SceneItem): item is SceneGroup {
   return (item as SceneGroup).marktype !== undefined || Array.isArray((item as SceneGroup).items)
 }
 
+/** A leaf whose shape vega could not measure (see bound-failure.ts): vega's SVG renderers fail writing it, with the same error. */
+export function failOnUnmeasured(it: SceneItem): void {
+  const failed = recOf(it)._drawError
+  if (failed !== undefined) throw failed
+}
+
 /** Render an anchor leaf shape (path, symbol, text, line). */
 function renderLeaf(it: SceneItem, clips?: ClipCollector, wrapClip = true): string {
+  failOnUnmeasured(it)
   const w = new StringAttrSink()
   // Path items
   if (it.path != null) {
@@ -1368,6 +1375,7 @@ export const rectIsPainted = (it: SceneItem): boolean => !(it.fill === null && i
 
 /** A `path`/`shape`/`geoshape` item: vega path mark attr `[vector-effect] transform d`. */
 export function pathItemAttrs(it: SceneItem, w: AttrSink, marktype = 'path'): void {
+  failOnUnmeasured(it)
   if (pathVectorEffect(it)) w.v('vector-effect', 'non-scaling-stroke')
   w.t('transform', transformItemTransform(it))
   itemDatumAttr(it, w)

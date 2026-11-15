@@ -529,6 +529,17 @@ function laterExtent(group: SceneGroup, scene: SceneRoot, plotW: number, plotH: 
   return box
 }
 
+/**
+ * A mark as vega's canvas draws it: without the items a pass that stopped in their mark's bounds never measured (`unmeasuredFrom`:
+ * the item that failed and those after it; a line's or an area's, all of it). vega draws an item only where its bounds meet the view,
+ * and an item never measured has none.
+ */
+function measured(group: SceneGroup): SceneGroup {
+  const from = group.unmeasuredFrom
+  if (from === undefined) return group
+  return { ...group, items: (group.items ?? []).slice(0, from) } as SceneGroup
+}
+
 function renderGroup(group: SceneGroup, ctx: CanvasLike, scene: SceneRoot, plotW: number, plotH: number, opts: RenderCanvasOptions = {}): void {
   const type = group.marktype
   if (!type || type === 'group') {
@@ -569,6 +580,8 @@ function renderGroup(group: SceneGroup, ctx: CanvasLike, scene: SceneRoot, plotW
     if (box !== undefined) renderLeafItem(box, ctx, scene, guideBox, 0, outer)
     for (const item of group.items ?? []) {
       if (isGroup(item)) renderGroup(item, ctx, scene, gw, gh, opts)
+      // (a leaf whose bounds the pass never measured: vega's canvas draws only what meets the view's bounds, see `_unmeasured`)
+      else if ((item as { _unmeasured?: boolean })._unmeasured === true) continue
       else if ((item as { _bg?: boolean })._bg === true) renderLeafItem(item, ctx, scene, bgBox, bake, (item as { _frame?: Frame })._frame ?? (item === group.items![0] || item === group.items![group.items!.length - 1] ? outer : undefined))
       else renderLeafItem(item, ctx, scene, undefined, bake, (item as { _frame?: Frame })._frame ?? leafFrame)
     }
@@ -582,11 +595,11 @@ function renderGroup(group: SceneGroup, ctx: CanvasLike, scene: SceneRoot, plotW
     if (group.clipPathD) tracePath(ctx, parsePathData(group.clipPathD), group.x ?? 0, group.y ?? 0)
     else ctx.rect(0, 0, plotW, plotH)
     ctx.clip()
-    renderMark(type, group, ctx, scene, opts)
+    renderMark(type, measured(group), ctx, scene, opts)
     ctx.restore()
     return
   }
-  renderMark(type, group, ctx, scene, opts)
+  renderMark(type, measured(group), ctx, scene, opts)
 }
 
 /** Resolve a paint value; `{gradient: id}` resolves through scene defs. */

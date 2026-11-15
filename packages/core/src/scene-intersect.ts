@@ -253,7 +253,8 @@ type Filter = ((mark: { marktype?: string; name?: string }) => boolean) | null
 const isLeafMark = (n: Rec): boolean => typeof n.marktype === 'string' && n.marktype !== 'group'
 
 function intersectMark(mark: SceneGroup, box: Bounds, filter: Filter, hits: SceneItem[]): void {
-  const items = (mark.items ?? []) as SceneItem[]
+  // (the items a pass that stopped in their mark's bounds never measured have no bounds to meet the box: see `SceneGroup.unmeasuredFrom`)
+  const items = (mark.unmeasuredFrom === undefined ? mark.items ?? [] : (mark.items ?? []).slice(0, mark.unmeasuredFrom)) as SceneItem[]
   const type = mark.marktype
   if (items.length === 0) return
   const mb = markBounds(mark, items)

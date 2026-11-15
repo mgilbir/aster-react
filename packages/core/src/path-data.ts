@@ -144,7 +144,14 @@ function cached<T>(limit: number, make: (d: string) => T): (d: string) => T {
  * A spec's path text as vega's parser reads it: its commands, or vega's error (not cached, thrown every time). Shared: never write
  * the commands.
  */
-export const svgPathCommands: (d: string) => PathCommand[] = cached(4096, (d) => readCommands(d, 'throw', false))
+const readSpecPath = cached(4096, (d) => readCommands(d, 'throw', false))
+export const svgPathCommands = (path: string): PathCommand[] => {
+  // (vega reads the text with `path.match(...)`: a value that is no text -- a number, an object -- throws the TypeError the engine
+  // gives that call)
+  if (typeof path !== 'string') (path as { match(pattern: RegExp): unknown }).match(COMMAND_LETTERS)
+  return readSpecPath(path)
+}
+const COMMAND_LETTERS = /[mlhvzcsqta]/gi
 
 /** A spec's path text as far as it reads (see the module's note): what a canvas, the hit index and `intersect()` draw. Shared. */
 export const drawnPathCommands: (d: string) => PathCommand[] = cached(4096, (d) => readCommands(d, 'stop', false))
