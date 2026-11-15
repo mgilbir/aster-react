@@ -324,6 +324,15 @@ export interface ChartCoreProps extends ChartProps {
   png?: PngCapability
 }
 
+
+/**
+ * A scene the renderer cannot draw -- an item vega's renderers fail on too (see core bound-failure.ts) -- is logged, as vega's view
+ * logs an error of its renderer; the chart shows what it could draw.
+ */
+function reportRenderError(logger: Logger | undefined, e: unknown): void {
+  (logger ?? console).error(e)
+}
+
 export const ChartCore = React.forwardRef<ChartHandle, ChartCoreProps>(function ChartCore(props, ref) {
   if (isPromiseLike<VgSpec>(props.spec)) {
     // Let the host's <Suspense> boundary own the fallback: an internal boundary
@@ -744,7 +753,12 @@ function ChartView({
     if (sceneOverride !== undefined && !hydrating) return null
     if (denseSvg && !hydrating) return null
     if (incremental && hasPatchedRef.current) return null
-    return { __html: renderSceneToSvg(displayScene) }
+    try {
+      return { __html: renderSceneToSvg(displayScene) }
+    } catch (e) {
+      reportRenderError(loggerRef.current, e)
+      return { __html: '' }
+    }
   }, [incremental, renderer, displayScene, sceneOverride, denseSvg, hydrating])
   const lastBoxRef = React.useRef<{ __html: string } | null>(null)
   if (markupBox != null) lastBoxRef.current = markupBox
@@ -850,28 +864,32 @@ function ChartView({
       return
     }
     const existing = host.firstElementChild
-    if (incremental && existing && existing.tagName.toLowerCase() === 'svg') {
-      // Patch when the scene changed, or when the render mode flipped (e.g. a
-      // client-only dense mount, or hydration handing over to batched marks).
-      if (domSceneRef.current !== displayScene || domDenseRef.current !== denseSvg) {
-        const options = transitionRef.current
-        if (options !== null && !denseSvg && !domDenseRef.current) {
-          const prev = committedInputsRef.current
-          const dataChanged = prev !== null && (
-            datasetsChanged(data, prev.data as typeof data) || spec !== prev.spec
-            || (sceneOverride !== undefined && sceneOverride !== prev.sceneOverride)
-            || (editedData !== prev.edited && timerEdits.has(editedData)))
-          animator.draw(existing, displayScene, dataChanged ? options : null)
-        } else {
-          patchSceneDom(existing, displayScene, { denseMarks: denseSvg })
-          animator.reset(displayScene)
+    try {
+      if (incremental && existing && existing.tagName.toLowerCase() === 'svg') {
+        // Patch when the scene changed, or when the render mode flipped (e.g. a
+        // client-only dense mount, or hydration handing over to batched marks).
+        if (domSceneRef.current !== displayScene || domDenseRef.current !== denseSvg) {
+          const options = transitionRef.current
+          if (options !== null && !denseSvg && !domDenseRef.current) {
+            const prev = committedInputsRef.current
+            const dataChanged = prev !== null && (
+              datasetsChanged(data, prev.data as typeof data) || spec !== prev.spec
+              || (sceneOverride !== undefined && sceneOverride !== prev.sceneOverride)
+              || (editedData !== prev.edited && timerEdits.has(editedData)))
+            animator.draw(existing, displayScene, dataChanged ? options : null)
+          } else {
+            patchSceneDom(existing, displayScene, { denseMarks: denseSvg })
+            animator.reset(displayScene)
+          }
+          domDenseRef.current = denseSvg
         }
+      } else {
+        host.replaceChildren(renderSceneToDomElement(displayScene, document, { denseMarks: denseSvg }))
         domDenseRef.current = denseSvg
+        animator.reset(displayScene)
       }
-    } else {
-      host.replaceChildren(renderSceneToDomElement(displayScene, document, { denseMarks: denseSvg }))
-      domDenseRef.current = denseSvg
-      animator.reset(displayScene)
+    } catch (e) {
+      reportRenderError(loggerRef.current, e)
     }
     domSceneRef.current = displayScene
     hasPatchedRef.current = true
@@ -1038,7 +1056,11 @@ function ChartView({
     }
     const draw = (): void => {
       ctx.clearRect(0, 0, canvas.width, canvas.height)
-      canvasCap.renderSceneToCanvas(painted, ctx, { dpr })
+      try {
+        canvasCap.renderSceneToCanvas(painted, ctx, { dpr })
+      } catch (e) {
+        reportRenderError(loggerRef.current, e)
+      }
       canvasSnapshotRef.current = canvasCap.snapshotCanvasScene(displayScene)
       canvasSceneRef.current = displayScene
       canvasImagesPaintedRef.current = canvasImagesEpoch
