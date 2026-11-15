@@ -7,21 +7,20 @@
  * counterpart of the core `createChartStream` primitive.
  */
 import * as React from 'react'
-import {
-  createChartStream,
-  getStreamFlushFailure,
-  renderSceneToSvg,
-  type ChartStream,
-  type DataPulse,
-  type SceneRoot,
-  type StreamBatch,
-  type StreamFlush,
-  type StreamFlushFailure,
-  type StreamOptions,
-  type StreamStats,
-  type UrlDataMode,
-  type VgSpec,
+import type {
+  ChartStream,
+  DataPulse,
+  SceneRoot,
+  StreamBatch,
+  StreamFlush,
+  StreamFlushFailure,
+  StreamOptions,
+  StreamStats,
+  UrlDataMode,
+  VgSpec,
 } from '@aster-charts/core'
+import { renderSceneToSvg } from '@aster-charts/core/lean'
+import { createChartStream, getStreamFlushFailure } from '@aster-charts/core/lean/stream'
 import { normalizeChartSpec, useStableSpec } from './spec.js'
 import { useAddons } from './addons.js'
 
@@ -107,7 +106,7 @@ export function useChartStream(spec: VgSpec, options: UseChartStreamOptions = {}
   const urlData = initial?.urlData
   // The add-ons the spec needs load before the stream is created (and primed): suspends meanwhile; a failed import is `error`.
   // With `urlData: 'refuse'` a spec with a url dataset is refused first, before any import.
-  const addonError = useAddons(normalized, urlData)
+  const addonError = useAddons(normalized, urlData, { limits: limits != null })
   const streamRef = React.useRef<ChartStream | null>(null)
   const streamKey = React.useRef<{ spec: VgSpec; capacity?: number; policy?: StreamOptions['policy']; maxQueuedRows?: number; urlData?: UrlDataMode } | null>(null)
   const primedRef = React.useRef<TaggedState | null>(null)

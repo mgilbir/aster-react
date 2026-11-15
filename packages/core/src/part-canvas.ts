@@ -5,12 +5,12 @@
  */
 import { installPart, partLoaded, type EngineParts } from './engine-parts.js'
 import {
-  createCanvasEvents, loadImages, renderSceneToCanvas, renderSceneToCanvasAppend, sceneImageUrls, snapshotCanvasScene, withSceneImages,
+  createCanvasEvents, loadImages, paintsSameAs, renderSceneToCanvas, renderSceneToCanvasAppend, sceneImageUrls, snapshotCanvasScene, withSceneImages,
 } from './canvas.js'
 import './part-svgpath.js' // (its symbols can be custom paths)
 
 export const part: EngineParts['canvas'] = {
-  createCanvasEvents, renderSceneToCanvas, renderSceneToCanvasAppend, snapshotCanvasScene, sceneImageUrls, loadImages, withSceneImages,
+  createCanvasEvents, renderSceneToCanvas, renderSceneToCanvasAppend, paintsSameAs, snapshotCanvasScene, sceneImageUrls, loadImages, withSceneImages,
 }
 installPart('canvas', part)
 

@@ -24,7 +24,7 @@ import type { applyChangeset, newChangeset, planModify } from './modify.js'
 import type { Timers } from './timer.js'
 import type { IncrementalEngine } from './runtime.js'
 import type {
-  createCanvasEvents, loadImages, renderSceneToCanvas, renderSceneToCanvasAppend, sceneImageUrls, snapshotCanvasScene, withSceneImages,
+  createCanvasEvents, loadImages, paintsSameAs, renderSceneToCanvas, renderSceneToCanvasAppend, sceneImageUrls, snapshotCanvasScene, withSceneImages,
 } from './canvas.js'
 
 export interface EngineParts {
@@ -49,7 +49,7 @@ export interface EngineParts {
   /** The canvas renderer (canvas.ts) as `<Chart renderer="canvas">` uses it: asked for by the renderer prop, never by a spec. */
   canvas: {
     createCanvasEvents: typeof createCanvasEvents; renderSceneToCanvas: typeof renderSceneToCanvas
-    renderSceneToCanvasAppend: typeof renderSceneToCanvasAppend; snapshotCanvasScene: typeof snapshotCanvasScene
+    renderSceneToCanvasAppend: typeof renderSceneToCanvasAppend; paintsSameAs: typeof paintsSameAs; snapshotCanvasScene: typeof snapshotCanvasScene
     sceneImageUrls: typeof sceneImageUrls; loadImages: typeof loadImages; withSceneImages: typeof withSceneImages
   }
 }

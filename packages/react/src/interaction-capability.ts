@@ -1,5 +1,5 @@
-import { buildHitIndex } from '@aster-charts/core/hit'
-import { bindSceneSignals, createCursorTracker, sceneHasCursor } from '@aster-charts/core/signals'
+import { buildHitIndex } from '@aster-charts/core/lean/hit'
+import { bindSceneSignals, createCursorTracker, sceneHasCursor } from '@aster-charts/core/lean/signals'
 import type { InteractionCapability } from './capabilities.js'
 import { tooltipContent } from './tooltip-content.js'
 

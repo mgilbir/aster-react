@@ -1,4 +1,7 @@
 import * as React from 'react'
+import type { A11yNode, A11yOptions, ChartInfo, Logger, SceneItem, SceneRoot, VgSpec } from '@aster-charts/core'
+// The engine as the shells use it: without the parts most charts never run, which `useAddons` loads for a spec that needs them
+// (see `@aster-charts/core/lean`).
 import {
   buildA11yTree,
   chartInfoFromScene,
@@ -8,15 +11,8 @@ import {
   createPointMapper,
   resolveCursor,
   consoleLogger,
-  type A11yNode,
-  type A11yOptions,
-  type ChartInfo,
-  type Logger,
-  type SceneItem,
-  type SceneRoot,
-  type VgSpec,
   checkChartRows, shareRowWatch,
-} from '@aster-charts/core'
+} from '@aster-charts/core/lean'
 import { isPromiseLike, normalizeChartSpec, useChartEpoch, useStableContent, useStableSpecRows } from './spec.js'
 import { useAddons } from './addons.js'
 import { validateDataChanges } from './dataChanges.js'
@@ -24,7 +20,7 @@ import { SCALE_INFO_KEY, scalesFromSerialized, type SerializedScale } from './se
 // The incremental DOM patcher ships as the `@aster-charts/core/dom` addon, which every chart needs. The canvas
 // renderer and the hit/signal event loop are NOT imported here: they arrive as the `canvas` and
 // `interaction` props (see capabilities.ts), so `<SvgChart>` bundles neither.
-import { createChartSession, hasDenseSymbolMarks, patchSceneDom, renderSceneToDomElement } from '@aster-charts/core/dom'
+import { createChartSession, hasDenseSymbolMarks, patchSceneDom, renderSceneToDomElement } from '@aster-charts/core/lean'
 import type { CanvasEvents, CanvasSceneSnapshot, ItemImage } from '@aster-charts/core/canvas'
 import type { HitIndex } from '@aster-charts/core/hit'
 import type { CursorTracker, SignalBinding } from '@aster-charts/core/signals'
@@ -410,7 +406,8 @@ function ChartView({
   // The opt-in add-ons the spec needs (transforms, geo, load) arrive before the first evaluation: this suspends while
   // they load, so there is no render of the half-ready chart and no error to flash. A failed import is a chart error.
   // With `urlData="refuse"` a spec with a url dataset is refused here, before any add-on is imported.
-  const addonError = useAddons(sceneOverride !== undefined ? null : spec, urlData)
+  // (and the parts of the engine it needs: the legend builder, the canvas renderer for renderer="canvas"... see `useAddons`)
+  const addonError = useAddons(sceneOverride !== undefined ? null : spec, urlData, { limits: limits != null, random: random != null, canvas: requestedRenderer === 'canvas' ? canvasCap : undefined })
   const stableLimits = useStableContent(limits)
   // Which scales `view`/`brush`/`selection`'s `x`/`y` refer to.
   const positional = React.useMemo(() => positionalScales(spec), [spec])
