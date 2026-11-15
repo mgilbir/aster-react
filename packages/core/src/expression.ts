@@ -17,7 +17,7 @@ import { part } from './engine-parts.js'
 import { parseExpressionCached } from './expr-parser.js'
 import { PRIMITIVE_TUPLE, tupleDatum } from './util.js'
 import { ADDON_FUNCTIONS } from './addon-functions.js'
-import { compileExpression, DefaultFunctions, ExpressionConstants, EventFunctions, FIRST_ARGUMENT_ONLY, markThisless } from './expr-interpreter.js'
+import { compileExpression, DefaultFunctions, ExpressionConstants, EventFunctions, FIRST_ARGUMENT_ONLY, markParamSafe, markThisless } from './expr-interpreter.js'
 import {
   timeOffset, utcOffset, timeSequence, utcSequence,
   dayofyear, utcdayofyear, week, utcweek, timeUnitSpecifier,
@@ -262,10 +262,30 @@ export const expressionRegistryEpoch = (): number => registryEpoch
 /** Functions an addon contributes that read the view they run in (a projection by name): built per runtime. */
 const REGISTERED_BOUND = new Map<string, (runtime: ExpressionRuntime) => (...args: never[]) => unknown>()
 
+/**
+ * The built-ins that never write a signal (see `markParamSafe`): they read their arguments, the locale, the clock, the random
+ * source, the container size or a scale, and nothing that can run a transform. Left out: whatever reads a dataset (`data`, `indata`,
+ * the `vlSelection*` reads: a dataset may be derived when first read, and deriving one may write a signal), the edits (`modify`,
+ * `setdata`) and what reads the drawn scene (`intersect`, `inScope`). A name missing here only costs a row pass its hoisting.
+ */
+const PARAM_SAFE_BUILTINS: readonly string[] = [
+  'isValid', 'isDefined', 'isArray', 'isBoolean', 'isDate', 'isNumber', 'isObject', 'isRegExp', 'isString',
+  'toBoolean', 'toNumber', 'toDate', 'toString', 'if', 'test', 'hypot', 'containerSize', 'windowSize', 'clamp',
+  'extent', 'clampRange', 'inrange', 'join', 'lerp', 'length', 'indexof', 'lastindexof', 'peek', 'reverse', 'sequence', 'slice', 'sort',
+  'merge', 'vlSelectionTuples', 'isTuple', 'panLinear', 'panLog', 'panPow', 'panSymlog', 'zoomLinear', 'zoomLog', 'zoomPow', 'zoomSymlog',
+  'pinchDistance', 'pinchAngle', 'span', 'pluck', 'pad', 'parseFloat', 'parseInt', 'replace', 'split', 'substring', 'truncate',
+  'encodeURIComponent', 'regexp', 'now', 'random', 'datetime', 'timeOffset', 'utcOffset', 'timeSequence', 'utcSequence',
+  'quarter', 'week', 'dayofyear', 'utcquarter', 'utcweek', 'utcdayofyear',
+  'format', 'timeFormat', 'utcFormat', 'timeParse', 'utcParse', 'timeUnitSpecifier', 'monthFormat', 'monthAbbrevFormat', 'dayFormat',
+  'dayAbbrevFormat', 'rgb', 'hsl', 'lab', 'hcl', 'luminance', 'contrast',
+  'scale', 'invert', 'domain', 'range', 'bandwidth', 'bandspace', 'copy', 'gradient',
+]
+
 function createFunctionContext(runtime: ExpressionRuntime): Record<string, unknown> {
   const fns = createBuiltinFunctions(runtime)
   // (the built-ins never read `this`: the interpreter calls them directly; what is registered below is called as a host function)
   markThisless(fns)
+  markParamSafe(fns, PARAM_SAFE_BUILTINS)
   for (const [name, make] of REGISTERED_BOUND) fns[name] = make(runtime)
   for (const [name, fn] of REGISTERED) fns[name] = fn
   return fns
@@ -656,6 +676,32 @@ function assertKnownFunctions(ast: AstNode, functions: Record<string, unknown>, 
   visit(ast)
 }
 
+/** The row passes of the expressions `compileExpr` made (see `exprRows`). Keyed by the function: it holds nothing else alive. */
+const ROW_PASSES = new WeakMap<CompiledExpr, (params: Record<string, unknown> | undefined) => (datum: unknown) => unknown>()
+
+/**
+ * The evaluation of each row of a pass over many rows in which the parameters stay as they are: a transform's loop over its rows,
+ * where nothing that runs writes a signal. The values are those of `fn(datum, params)` per row; for an expression `compileExpr`
+ * made, what every row reads alike is read once (see `EngineExpression.rows`). Prepare one per pass: the function returned is not to
+ * be kept past it.
+ */
+export function exprRows(fn: CompiledExpr, params: Record<string, unknown> | undefined): (datum: unknown) => unknown {
+  const rows = ROW_PASSES.get(fn)
+  return rows !== undefined && params !== undefined && ENGINE_PARAMS.has(params) ? rows(params) : (datum) => fn(datum, params)
+}
+
+/**
+ * The parameter objects the engine made itself (see `engineParams`): their signals are own data properties that only the engine
+ * writes, so reading one once at the start of a pass gives what every row would read. A host's object (the public `applyTransforms`
+ * takes any) may hold a getter or be a proxy, and is read per row, as before.
+ */
+const ENGINE_PARAMS = new WeakSet<object>()
+/** Mark the engine's own signal parameters as such (see `ENGINE_PARAMS`); returns them. */
+export function engineParams<T extends Record<string, unknown>>(params: T): T {
+  ENGINE_PARAMS.add(params)
+  return params
+}
+
 /** Compile an expression string to an evaluable function bound to a runtime. */
 export function compileExpr(expr: string, runtime: ExpressionRuntime): CompiledExpr {
   let ast: AstNode
@@ -680,6 +726,12 @@ export function compileExpr(expr: string, runtime: ExpressionRuntime): CompiledE
     // (the signals are read by their own names off the parameters: an event's datum is its item's)
     return evaluate(datum, params as Record<string, unknown> | undefined, event)
   }
+  ROW_PASSES.set(compiled, (params) => {
+    if (registryEpoch !== compiledEpoch) return (datum) => compiled(datum, params)
+    const row = evaluate.rows(params)
+    // (a registry change in the middle of the pass: every later row is evaluated as `compiled` evaluates it)
+    return (datum) => (registryEpoch === compiledEpoch ? row(datum) : compiled(datum, params))
+  })
   return compiled as CompiledExpr
 }
 /** What `data(name)` gives an expression: the dataset's tuples as vega has them (a primitive tuple is the primitive). Once per array. */

@@ -5,7 +5,7 @@
  * changes (engine-parts.ts). The two share the state's shapes, defined here.
  */
 import { carryOrder } from './tuple-order.js'
-import { compileExprTransform, sortOrder, type Row } from './transform.js'
+import { exprRowPass, sortOrder, type Row } from './transform.js'
 import { fieldsOf, groupKeyFn } from './transform-agg.js'
 import { flattenLength } from './transform-basic.js'
 import type { CompiledTransform, SortSpec } from './types.js'
@@ -98,7 +98,7 @@ export function keepsStepState(type: string): boolean {
 export function deriveStepState(t: CompiledTransform, input: Row[], output: Row[], tctx: StepTransformContext): unknown {
   switch (t.type) {
     case 'filter': {
-      const fn = compileExprTransform((t as { expr?: string }).expr ?? '', tctx)
+      const fn = exprRowPass((t as { expr?: string }).expr ?? '', tctx)
       return input.map((r) => Boolean(fn(r)))
     }
     case 'flatten': {
@@ -125,7 +125,7 @@ export function applyOneWithState(
   if (t.type === 'filter') {
     // Predicate flags and output in one pass (same function, same errors as the
     // plain transform).
-    const fn = compileExprTransform((t as { expr?: string }).expr ?? '', tctx)
+    const fn = exprRowPass((t as { expr?: string }).expr ?? '', tctx)
     const pass = new Array<boolean>(rows.length)
     const out: Row[] = []
     for (let i = 0; i < rows.length; i++) {

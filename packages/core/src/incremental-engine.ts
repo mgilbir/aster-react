@@ -11,7 +11,7 @@ import { isPlacing, numbersSourceRows, sourcesAfter } from './tuple-order.js'
 import {
   alignIndices, appendedSources, carryByAlignment, carryByMapping, carryBySources, sourceNumbersOf, type SourceNumbers,
 } from './identifier-ids.js'
-import { applyTransforms, compileExprTransform, sortOrder, aggregateGroup, type Row } from './transform.js'
+import { applyTransforms, exprRowPass, sortOrder, aggregateGroup, type Row } from './transform.js'
 import { checkRowCount } from './limits.js'
 import { markTuples } from './util.js'
 import { datasetsReadIn } from './step-reuse.js'
@@ -154,7 +154,7 @@ function filterAppendPulse(
   const base = pulseBaseLength(input)
   if (input.changed.length || !prev || !prevPass || prevPass.length !== base) return null
   const expr = (t as { expr?: string }).expr ?? ''
-  const exprFn = compileExprTransform(expr, tctx)
+  const exprFn = exprRowPass(expr, tctx)
   const fn = (row: Row): boolean => Boolean(exprFn(row))
   const outBase = prev.length
   for (let i = base; i < rows.length; i++) {
@@ -246,7 +246,7 @@ function filterPulse(
   let acc = 0
   for (let i = 0; i < oldLen; i++) if (prevPass[i]) oldOut[i] = acc++
   const expr = (t as { expr?: string }).expr ?? ''
-  const exprFn = compileExprTransform(expr, tctx)
+  const exprFn = exprRowPass(expr, tctx)
   const fn = (row: Row): boolean => Boolean(exprFn(row))
   const modified = isModified(input)
   const pass = new Array<boolean>(rows.length)

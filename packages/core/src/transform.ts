@@ -8,7 +8,7 @@
  */
 import type { CompiledTransform, SortSpec } from './types.js'
 import type { IdCounter } from './identifier-ids.js'
-import type { ExpressionRuntime } from './expression.js'
+import { exprRows, type ExpressionRuntime } from './expression.js'
 import { type ContourFeature, SHAPE_BOUNDS, geoRegistry, requireGeo, requireTransform } from './registry.js'
 import { isArray, sortData } from './util.js'
 import { densityGrid, placeContours } from './raster-grid.js'
@@ -223,7 +223,7 @@ function applyTransform(rows: Row[], t0: CompiledTransform, ctx: TransformContex
   switch (t.type) {
     case 'formula': {
       required('formula', t, 'expr', 'as')
-      const expr = compileExprTransform(t.expr as string, ctx)
+      const expr = exprRowPass(t.expr as string, ctx)
       const as = t.as as string
       if (owned && as !== '__proto__') {
         const out = rows.slice()
@@ -234,7 +234,7 @@ function applyTransform(rows: Row[], t0: CompiledTransform, ctx: TransformContex
     }
     case 'filter': {
       required('filter', t, 'expr')
-      const expr = compileExprTransform(t.expr as string, ctx)
+      const expr = exprRowPass(t.expr as string, ctx)
       return rows.filter((r) => expr(r))
     }
     case 'collect':
@@ -404,6 +404,15 @@ export function geoPointRadius(param: unknown, ctx: TransformContext): unknown {
 export function compileExprTransform(expr: string, ctx: TransformContext) {
   const fn = ctx.runtime.expr(expr)
   return (datum: Row): unknown => fn(datum, ctx.signals)
+}
+
+/**
+ * An expression evaluated over a transform's rows in one loop that the caller runs now, in which nothing writes a signal (the
+ * loop only evaluates, and what the expression calls is checked: see `exprRows`). What every row reads alike is read once. Not
+ * to be kept past that loop: the next pass prepares its own.
+ */
+export function exprRowPass(expr: string, ctx: TransformContext): (datum: Row) => unknown {
+  return exprRows(ctx.runtime.expr(expr), ctx.signals)
 }
 
 /**

@@ -9,6 +9,9 @@
  * own names, datum paths, and object literals shaped like a tooltip; each compiled expression is evaluated over many rows, so a
  * call site sees a sequence of different values, specifiers and types.
  *
+ * Each expression is evaluated as a formula and as a filter predicate over the same rows: both are row passes in Aster (the signals
+ * read once per pass), and the rows a filter keeps are compared too.
+ *
  * Also held: a compiled expression follows a change of the default locale between two evaluations (anything an evaluation keeps
  * for the next one must miss when the locale changes), and a locale change between Views.
  *
@@ -178,12 +181,16 @@ function gen(r: Rng, depth: number): string {
 // --- the two sides ----------------------------------------------------------------------------------
 
 const SIGNALS = { sx: 2.5, sn: null, ss: 'sig', sspec: ',.2f' }
+// (each expression is also a filter predicate: Aster evaluates both steps' rows as one pass each, reading the signals once per pass)
 const specOf = (expr: string, rows: unknown[]): Record<string, unknown> => ({
   signals: Object.entries(SIGNALS).map(([name, value]) => ({ name, value })),
-  data: [{ name: 'src', values: rows, transform: [{ type: 'formula', expr, as: 'r' }] }],
+  data: [
+    { name: 'src', values: rows, transform: [{ type: 'formula', expr, as: 'r' }] },
+    { name: 'kept', source: 'src', transform: [{ type: 'filter', expr }] },
+  ],
 })
 
-type Outcome = { rows: unknown } | { error: string }
+type Outcome = { rows: unknown; kept?: unknown } | { error: string }
 const errorText = (e: unknown): string => {
   const err = e as { name?: string; message?: string }
   if (err instanceof TypeError || err?.name === 'TypeError') return 'TypeError'
@@ -205,7 +212,7 @@ function onVega(expr: string, rows: unknown[]): Outcome {
   }
   try {
     if (errors.length) return { error: errorText(errors[0]) }
-    return { rows: enc(view.data('src').map((d: { r: unknown }) => d.r)) }
+    return { rows: enc(view.data('src').map((d: { r: unknown }) => d.r)), kept: view.data('kept').map((d: { i: number }) => d.i) }
   } finally {
     view.finalize()
   }
@@ -218,7 +225,8 @@ function onAster(expr: string, rows: unknown[]): Outcome {
     const scene = evaluateChart(compileChart(specOf(expr, structuredClone(rows)) as never), { logger } as never)
     if (errors.length) return { error: errorText(errors[0]) }
     const got = datasetsOfScene(scene).get('src') as Array<{ r: unknown }> | null
-    return { rows: enc(got?.map((d) => d.r)) }
+    const kept = datasetsOfScene(scene).get('kept') as Array<{ i: number }> | null
+    return { rows: enc(got?.map((d) => d.r)), kept: kept?.map((d) => d.i) }
   } catch (e) {
     return { error: errorText(e) }
   }

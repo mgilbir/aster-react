@@ -6,7 +6,7 @@
  * transform steps, scales and mark items that cannot have changed; the result is
  * the scene a fresh evaluation would produce.
  */
-import { compileExpr, expressionRegistryEpoch, ExpressionParseError, type CompiledExpr, type ExpressionRuntime } from './expression.js'
+import { compileExpr, engineParams, expressionRegistryEpoch, ExpressionParseError, type CompiledExpr, type ExpressionRuntime } from './expression.js'
 import { scaleCallFailure, scaleRangeFailure } from './missing-scale.js'
 import { ingestRows, isNotATupleError, notATuple, readData, type DataFormatSpec } from './data-format.js'
 import { followsSources, numbersSourceRows, orderOf, setOrder, setSources, sourcesAfter, sourcesOf } from './tuple-order.js'
@@ -1091,7 +1091,7 @@ function makeTransformed(
     const d = chart.data.find((x) => x.name === name)
     const rows = d?.values != null ? readData(raw as never, d.format) : ingestRows(raw as Row[]).map((r) => ({ ...r }))
     if (!d?.transform.length) return rows
-    return applyTransforms(rows, d.transform, { runtime, signals: signalParams, hierarchies, projections }, name)
+    return applyTransforms(rows, d.transform, { runtime, signals: engineParams(signalParams), hierarchies, projections }, name)
   }
 }
 
@@ -3884,7 +3884,7 @@ function buildDatasetsOf(ctx: EvalContext, inputData: Record<string, unknown[]>)
       const prevDS = ctx.prev?.datasets.get(name)
       const tctx: StepTransformContext = {
         runtime: ctx.runtime,
-        signals: ctx.signalParams,
+        signals: engineParams(ctx.signalParams),
         // Cross-dataset access for the `lookup` transform. Build the referenced
         // dataset on demand (it may be declared after this one in the spec).
         datasets: (n) => {
@@ -5888,7 +5888,7 @@ function transformMarkItems(mark: CompiledMark, items: readonly SceneItem[], ctx
   const before = numbers !== undefined ? ctx.prev?.numbered.get(numbers) : undefined
   for (const it of own) it[ITEM_OF] = it
   const tctx: TransformContext = {
-    runtime: ctx.runtime, signals: ctx.signalParams, hierarchies: ctx.hierarchies, projections: ctx.projections, ids: ctx.ids,
+    runtime: ctx.runtime, signals: engineParams(ctx.signalParams), hierarchies: ctx.hierarchies, projections: ctx.projections, ids: ctx.ids,
     // (`lookup` `from` is a dataset, or the name of a mark: its items; `label` avoids the marks it names)
     datasets: (n) => ctx.datasets.get(n) ?? (ctx.markItems.get(n) as unknown as Row[] | undefined),
     marks: (n) => ctx.markContainers.get(n),

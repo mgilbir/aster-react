@@ -139,8 +139,36 @@ interface Frame {
   event: unknown
   item: unknown
   self: object | undefined
+  /** The row pass this evaluation is one row of (see `RowPass`); undefined for a single evaluation. */
+  pass: RowPass | undefined
 }
 type Run = (f: Frame) => unknown
+
+/**
+ * One pass of an expression over many rows with the same parameters (a filter's or a formula's rows). Made only for a tree whose
+ * evaluation cannot change a parameter (see `Compiling.pure`): each signal the tree names is read once, when the pass starts, as a
+ * single evaluation reads it (an own property of the parameters, else undefined), into `sig` (by `Compiling.signals` index), and
+ * that is the value every row would read.
+ */
+interface RowPass {
+  sig: unknown[]
+}
+
+/** What compiling one tree carries: the host table, the language reading, and what a row pass needs to know of the tree. */
+interface Compiling {
+  host: Record<string, unknown>
+  mode: Mode
+  /** The signals the tree names (engine reading), in `RowPass.sig` order. */
+  signals: string[]
+  /**
+   * Whether evaluating the tree can never write a parameter: it calls nothing but the default functions and the engine's functions
+   * marked param-safe (`markParamSafe`). Any other call might (`data(...)` may derive another dataset, whose transforms may write a
+   * signal; a host function may do anything), and a row pass then reads every signal live, as a single evaluation does.
+   */
+  pure: boolean
+  /** One check per call: whether its name still resolves to the function it resolved to when compiled. */
+  resolved: Array<() => boolean>
+}
 
 /**
  * Which reading of the language a tree is compiled under. The engine's own entry (`compileExpression`) means what an expression
@@ -180,6 +208,27 @@ export function markThisless(table: Record<string, unknown>): void {
   }
 }
 markThisless(DefaultFunctions)
+
+/**
+ * The default functions as this module made them: none of them reaches the engine (a dataset, a scale, a signal), so a call that
+ * resolves to one of them leaves every parameter as it was (`Compiling.pure`). Their identities, so a table entry replaced since is
+ * not taken for one.
+ */
+const PURE: ReadonlySet<unknown> = new Set(Object.values(DefaultFunctions))
+/** Functions of the engine's own table that never write a parameter either (see `markParamSafe`). */
+const PARAM_SAFE = new WeakSet<object>()
+
+/**
+ * Mark the named functions of a table as never writing a parameter (a signal), directly or through anything they reach: a row pass
+ * of a tree that calls only these and the default functions reads each signal once (see `Compiling.pure`). Only for tables Aster
+ * itself writes, and only for functions that read nothing that can run a transform.
+ */
+export function markParamSafe(table: Record<string, unknown>, names: readonly string[]): void {
+  for (const name of names) {
+    const v = Object.hasOwn(table, name) ? table[name] : undefined
+    if (typeof v === 'function') PARAM_SAFE.add(v)
+  }
+}
 
 /** `event.vega[f](...args)`; the names are the oracle's, as V8 puts them in the "is not a function" message. */
 function callEventFunction(event: unknown, f: string, args: unknown[]): unknown {
@@ -268,13 +317,13 @@ function member(object: Run, property: Expr, computed: Run | undefined): Run {
 
 const refuse = (name: string): never => { throw new Error(`Function argument refused: ${name}`) }
 
-function call(node: Extract<Expr, { type: 'CallExpression' }>, host: Record<string, unknown>, mode: Mode): Run {
+function call(node: Extract<Expr, { type: 'CallExpression' }>, c: Compiling): Run {
   const callee = node.callee
   // only a bare name is callable; anything else reads `.startsWith` off the missing name, as the oracle does
   if (callee.type !== 'Identifier') return () => (undefined as unknown as string).startsWith('_')
   // `_name` is the encoders' spelling of `name`
   const name = callee.name.startsWith('_') ? callee.name.slice(1) : callee.name
-  let argv = node.arguments.map((a) => compile(a, host, mode))
+  let argv = node.arguments.map((a) => compile(a, c))
 
   // `if` evaluates only the branch it takes
   if (name === 'if') {
@@ -283,8 +332,8 @@ function call(node: Extract<Expr, { type: 'CallExpression' }>, host: Record<stri
   }
 
   // the shapes of vega's generated calls (see `Mode`)
-  if (mode.engine && FIRST_ARGUMENT_ONLY.has(name)) argv = argv.slice(0, 1)
-  const order = mode.engine && argv.length === 3 && Object.hasOwn(ARGUMENT_ORDER, name) ? ARGUMENT_ORDER[name] : undefined
+  if (c.mode.engine && FIRST_ARGUMENT_ONLY.has(name)) argv = argv.slice(0, 1)
+  const order = c.mode.engine && argv.length === 3 && Object.hasOwn(ARGUMENT_ORDER, name) ? ARGUMENT_ORDER[name] : undefined
 
   // Names inherited from Object.prototype are never functions here; `toString` alone is a real table entry.
   const blocked = name !== 'toString' && DisallowedObjectProperties.has(name)
@@ -303,8 +352,12 @@ function call(node: Extract<Expr, { type: 'CallExpression' }>, host: Record<stri
   }
 
   // The event functions are the loop's, whatever the host table holds under their names.
-  if (EventFunctions.includes(name)) return (f) => callEventFunction(f.event, name, values(f))
+  if (EventFunctions.includes(name)) {
+    c.pure = false
+    return (f) => callEventFunction(f.event, name, values(f))
+  }
 
+  const host = c.host
   const lookup = (): unknown => (blocked ? undefined : (host[name] || DefaultFunctions[name]))
   /** A host function: `this` is the host table with the event functions, the arguments an array. */
   const general = (f: Frame, fn: unknown): unknown => {
@@ -317,6 +370,9 @@ function call(node: Extract<Expr, { type: 'CallExpression' }>, host: Record<stri
   // What the name resolves to now: when it is one of Aster's own functions (which never read `this`), a call that still resolves
   // to it is made directly. The resolution is read on every call all the same: a table changed since falls back to `general`.
   const known = lookup()
+  if (!PURE.has(known) && !(typeof known === 'function' && PARAM_SAFE.has(known))) c.pure = false
+  // (a row pass is made only while every call still resolves to what it did here: see `compileExpression`)
+  c.resolved.push(() => lookup() === known)
   const direct = typeof known === 'function' && THISLESS.has(known) ? known as (...a: unknown[]) => unknown : undefined
   if (direct === undefined) return (f) => general(f, lookup())
   if (order !== undefined || count > 3) {
@@ -362,10 +418,10 @@ function call(node: Extract<Expr, { type: 'CallExpression' }>, host: Record<stri
   }
 }
 
-function objectLiteral(node: Extract<Expr, { type: 'ObjectExpression' }>, host: Record<string, unknown>, mode: Mode): Run {
+function objectLiteral(node: Extract<Expr, { type: 'ObjectExpression' }>, c: Compiling): Run {
   const props = node.properties.map((p) => {
     const key = (p.key.type === 'Identifier' ? p.key.name : (p.key as { value: string | number }).value)
-    return { key, blocked: DisallowedObjectProperties.has(key as string), value: compile(p.value, host, mode) }
+    return { key, blocked: DisallowedObjectProperties.has(key as string), value: compile(p.value, c) }
   })
   const n = props.length
   return (f) => {
@@ -381,7 +437,19 @@ function objectLiteral(node: Extract<Expr, { type: 'ObjectExpression' }>, host: 
   }
 }
 
-function compile(node: Expr, host: Record<string, unknown>, mode: Mode): Run {
+/** A signal read (engine reading): in a row pass the value read at its start, else the own property, read now. */
+function signalRead(name: string, c: Compiling): Run {
+  let i = c.signals.indexOf(name)
+  if (i < 0) i = c.signals.push(name) - 1
+  const slot = i
+  return (f) => {
+    const p = f.pass
+    if (p !== undefined) return p.sig[slot]
+    return Object.hasOwn(f.params, name) ? f.params[name] : undefined
+  }
+}
+
+function compile(node: Expr, c: Compiling): Run {
   switch (node.type) {
     case 'Literal': {
       const v = node.value
@@ -395,18 +463,18 @@ function compile(node: Expr, host: Record<string, unknown>, mode: Mode): Run {
       const own = Object.hasOwn(ExpressionConstants, name)
       const constant = own ? ExpressionConstants[name] : undefined
       // (vega-interpreter reads a constant through `||`, so its falsy `NaN` falls through to a parameter of that name)
-      if (constant || (own && mode.engine)) return () => constant
+      if (constant || (own && c.mode.engine)) return () => constant
       // (a signal by its own name is an own property only: no name reaches the prototype)
-      if (mode.engine) return (f) => (Object.hasOwn(f.params, name) ? f.params[name] : undefined)
+      if (c.mode.engine) return signalRead(name, c)
       const param = '$' + name
       return (f) => f.params[param]
     }
     case 'MemberExpression':
-      return member(compile(node.object, host, mode), node.property, node.computed ? compile(node.property, host, mode) : undefined)
+      return member(compile(node.object, c), node.property, node.computed ? compile(node.property, c) : undefined)
     case 'CallExpression':
-      return call(node, host, mode)
+      return call(node, c)
     case 'ArrayExpression': {
-      const els = node.elements.map((e) => (e === null ? HOLE : compile(e, host, mode)))
+      const els = node.elements.map((e) => (e === null ? HOLE : compile(e, c)))
       return (f) => {
         const out: unknown[] = new Array(els.length)
         for (let i = 0; i < els.length; i++) out[i] = (els[i] as Run)(f)
@@ -414,20 +482,26 @@ function compile(node: Expr, host: Record<string, unknown>, mode: Mode): Run {
       }
     }
     case 'BinaryExpression':
-      return binary(node.operator, compile(node.left, host, mode), compile(node.right, host, mode))
+      return binary(node.operator, compile(node.left, c), compile(node.right, c))
     case 'UnaryExpression':
-      return unary(node.operator, compile(node.argument, host, mode))
+      return unary(node.operator, compile(node.argument, c))
     case 'ConditionalExpression': {
-      const [test, yes, no] = [compile(node.test, host, mode), compile(node.consequent, host, mode), compile(node.alternate, host, mode)]
+      const [test, yes, no] = [compile(node.test, c), compile(node.consequent, c), compile(node.alternate, c)]
       return (f) => (test(f) ? yes(f) : no(f))
     }
     case 'LogicalExpression': {
-      const [l, r] = [compile(node.left, host, mode), compile(node.right, host, mode)]
+      const [l, r] = [compile(node.left, c), compile(node.right, c)]
       return node.operator === '&&' ? (f) => l(f) && r(f) : (f) => l(f) || r(f)
     }
     case 'ObjectExpression':
-      return objectLiteral(node, host, mode)
+      return objectLiteral(node, c)
   }
+}
+
+/** Compile a whole tree. */
+function compileTree(ast: AstNode, host: Record<string, unknown>, mode: Mode): { run: Run; c: Compiling } {
+  const c: Compiling = { host, mode, signals: [], pure: true, resolved: [] }
+  return { run: compile(ast as Expr, c), c }
 }
 
 const NO_PARAMS: Params = Object.freeze({}) as Params
@@ -440,7 +514,7 @@ const ENGINE: Mode = { engine: true }
  */
 function compileFor(ast: AstNode, fn: Record<string, unknown>, mode: Mode): (params: Params | undefined, datum: unknown, event: unknown, item: unknown) => unknown {
   let run: Run | undefined
-  return (params, datum, event, item) => (run ??= compile(ast as Expr, fn, mode))({ params: params ?? NO_PARAMS, datum, event, item, self: undefined })
+  return (params, datum, event, item) => (run ??= compileTree(ast, fn, mode).run)({ params: params ?? NO_PARAMS, datum, event, item, self: undefined, pass: undefined })
 }
 
 /** Evaluate a parsed expression against a host function table (compiles on every call; bind with `expressionInterpreter` to reuse). */
@@ -484,17 +558,40 @@ export const expressionInterpreter = {
   },
 }
 
+/** An expression compiled for the engine: one evaluation, or a pass over many rows with the same parameters. */
+export interface EngineExpression {
+  (datum: unknown, params: Record<string, unknown> | undefined, event: unknown): unknown
+  /**
+   * The evaluation of each row of a pass in which the parameters stay as they are (a transform's loop over its rows): the same
+   * values as one evaluation per row, with what every row reads alike read once (see `RowPass`). The returned function is for that
+   * pass only: once anything may have written a parameter, prepare another.
+   */
+  rows(params: Record<string, unknown> | undefined): (datum: unknown) => unknown
+}
+
 /**
  * The engine's own entry: an expression of a Vega spec (see `Mode`). The parameters are the signals by their own names, read where
  * they are (vega's entry points above take them `$`-prefixed, which would mean copying every signal on every evaluation).
  */
-export function compileExpression(functions: Record<string, unknown>, ast: AstNode): (datum: unknown, params: Record<string, unknown> | undefined, event: unknown) => unknown {
-  let run: Run | undefined
-  return (datum, params, event) => {
-    run ??= compile(ast as Expr, functions, ENGINE)
+export function compileExpression(functions: Record<string, unknown>, ast: AstNode): EngineExpression {
+  let tree: { run: Run; c: Compiling } | undefined
+  const evaluate = ((datum, params, event) => {
+    const run = (tree ??= compileTree(ast, functions, ENGINE)).run
     // (an event's datum is its item's)
     return run(event != null
-      ? { params: params ?? NO_PARAMS, datum: (event as { item?: { datum?: unknown } }).item?.datum, event, item: undefined, self: undefined }
-      : { params: params ?? NO_PARAMS, datum, event: undefined, item: undefined, self: undefined })
+      ? { params: params ?? NO_PARAMS, datum: (event as { item?: { datum?: unknown } }).item?.datum, event, item: undefined, self: undefined, pass: undefined }
+      : { params: params ?? NO_PARAMS, datum, event: undefined, item: undefined, self: undefined, pass: undefined })
+  }) as EngineExpression
+  evaluate.rows = (params0) => {
+    const { run, c } = (tree ??= compileTree(ast, functions, ENGINE))
+    const params = params0 ?? NO_PARAMS
+    let pass: RowPass | undefined
+    if (c.pure && c.resolved.every((still) => still())) {
+      // each signal read as a single evaluation reads it
+      pass = { sig: c.signals.map((name) => (Object.hasOwn(params, name) ? params[name] : undefined)) }
+    }
+    // (a frame per row, as a single evaluation makes one: measured cheaper than one frame whose datum is rewritten per row)
+    return (datum) => run({ params, datum, event: undefined, item: undefined, self: undefined, pass })
   }
+  return evaluate
 }
