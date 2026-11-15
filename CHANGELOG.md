@@ -97,6 +97,15 @@ and Fixed, per package. Everything built before the first release is in [Pre-rel
   only a tooltip): the chart-bench survival chart's canvas sweep costs 247 ms where it cost 692 (vega's canvas: 537).
 - A pointer move that only moves the tooltip renders the tooltip, not the chart; a scene that leaves the accessible tree as it
   was renders none of the accessible overlay.
+- **A chart loads only the parts of the engine it uses.** The legend builder, the grid layout, the SVG path reader (custom
+  symbol shapes, path marks), vega-selections' functions, the regular-expression screen (under `limits`), the pulse path
+  of the incremental engine (once a chart's data changes), `intersect()`, `modify()` / `setdata()`, `timer` streams and,
+  for `renderer="canvas"`, the canvas renderer are chunks the shells import when a spec needs them, suspending meanwhile as
+  for the add-ons (the first commit is the `<Suspense>` fallback, never a half-made chart). In a browser build `<Chart>`
+  is 207.6 kB gzip up front (233.0 before), `useChart` 165.3 (180.2), `<SvgChart>` 186.7 (201.9); the chart-bench `<Chart>`
+  app's library cost (Vite) is 202.3 kB (225.4). A chart that needs none of these fetches nothing; mount CPU is within 3%
+  either way. Outside a browser build (the `browser` export condition) every part is there, so a server render draws what it
+  drew; `@aster-charts/core`'s synchronous API carries every part as before.
 
 #### Fixed
 
