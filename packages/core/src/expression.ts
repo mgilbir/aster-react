@@ -17,7 +17,7 @@ import { part } from './engine-parts.js'
 import { parseExpressionCached } from './expr-parser.js'
 import { PRIMITIVE_TUPLE, tupleDatum } from './util.js'
 import { ADDON_FUNCTIONS } from './addon-functions.js'
-import { compileExpression, DefaultFunctions, ExpressionConstants, EventFunctions, FIRST_ARGUMENT_ONLY, markParamSafe, markThisless } from './expr-interpreter.js'
+import { compileExpression, DefaultFunctions, ExpressionConstants, EventFunctions, FIRST_ARGUMENT_ONLY, markBuiltinTable } from './expr-interpreter.js'
 import {
   timeOffset, utcOffset, timeSequence, utcSequence,
   dayofyear, utcdayofyear, week, utcweek, timeUnitSpecifier,
@@ -268,7 +268,7 @@ const REGISTERED_BOUND = new Map<string, (runtime: ExpressionRuntime) => (...arg
  * the `vlSelection*` reads: a dataset may be derived when first read, and deriving one may write a signal), the edits (`modify`,
  * `setdata`) and what reads the drawn scene (`intersect`, `inScope`). A name missing here only costs a row pass its hoisting.
  */
-const PARAM_SAFE_BUILTINS: readonly string[] = [
+const PARAM_SAFE_BUILTINS: ReadonlySet<string> = new Set([
   'isValid', 'isDefined', 'isArray', 'isBoolean', 'isDate', 'isNumber', 'isObject', 'isRegExp', 'isString',
   'toBoolean', 'toNumber', 'toDate', 'toString', 'if', 'test', 'hypot', 'containerSize', 'windowSize', 'clamp',
   'extent', 'clampRange', 'inrange', 'join', 'lerp', 'length', 'indexof', 'lastindexof', 'peek', 'reverse', 'sequence', 'slice', 'sort',
@@ -279,15 +279,15 @@ const PARAM_SAFE_BUILTINS: readonly string[] = [
   'format', 'timeFormat', 'utcFormat', 'timeParse', 'utcParse', 'timeUnitSpecifier', 'monthFormat', 'monthAbbrevFormat', 'dayFormat',
   'dayAbbrevFormat', 'rgb', 'hsl', 'lab', 'hcl', 'luminance', 'contrast',
   'scale', 'invert', 'domain', 'range', 'bandwidth', 'bandspace', 'copy', 'gradient',
-]
+])
 
 function createFunctionContext(runtime: ExpressionRuntime): Record<string, unknown> {
-  const fns = createBuiltinFunctions(runtime)
+  const builtins = createBuiltinFunctions(runtime)
   // (the built-ins never read `this`: the interpreter calls them directly; what is registered below is called as a host function)
-  markThisless(fns)
-  markParamSafe(fns, PARAM_SAFE_BUILTINS)
+  const fns = { ...builtins }
   for (const [name, make] of REGISTERED_BOUND) fns[name] = make(runtime)
   for (const [name, fn] of REGISTERED) fns[name] = fn
+  markBuiltinTable(fns, builtins, PARAM_SAFE_BUILTINS)
   return fns
 }
 

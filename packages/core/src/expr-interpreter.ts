@@ -194,40 +194,29 @@ export const FIRST_ARGUMENT_ONLY: ReadonlySet<string> = new Set([
 const ARGUMENT_ORDER: Readonly<Record<string, readonly number[]>> = { clamp: [1, 2, 0] }
 
 /**
- * Functions of Aster's own tables that never read `this` (the defaults below and the engine's built-ins): a call that resolves to
- * one is made directly, with its arguments, instead of through `apply` with the `this` object a host function receives. Which
- * function a call resolves to is read on every call, as before; only the `this` it is handed differs, and these never look.
- */
-const THISLESS = new WeakSet<object>()
-
-/** Mark the functions of a table as never reading `this` (see `THISLESS`). Only for tables Aster itself writes. */
-export function markThisless(table: Record<string, unknown>): void {
-  for (const k in table) {
-    const v = table[k]
-    if (typeof v === 'function') THISLESS.add(v)
-  }
-}
-markThisless(DefaultFunctions)
-
-/**
- * The default functions as this module made them: none of them reaches the engine (a dataset, a scale, a signal), so a call that
- * resolves to one of them leaves every parameter as it was (`Compiling.pure`). Their identities, so a table entry replaced since is
- * not taken for one.
+ * The default functions, which never read `this`: a call that resolves to one is made directly, with its arguments, instead of
+ * through `apply` with the `this` object a host function receives (as is a call that resolves to a built-in of an engine table:
+ * see `BUILTIN_TABLES`). Which function a call resolves to is read on every call, as before; only the `this` it is handed differs,
+ * and these never look. None of them reaches the engine (a dataset, a scale, a signal) either, so a call that resolves to one
+ * leaves every parameter as it was (`Compiling.pure`). Their identities, so a table entry replaced since is not taken for one.
  */
 const PURE: ReadonlySet<unknown> = new Set(Object.values(DefaultFunctions))
-/** Functions of the engine's own table that never write a parameter either (see `markParamSafe`). */
-const PARAM_SAFE = new WeakSet<object>()
 
 /**
- * Mark the named functions of a table as never writing a parameter (a signal), directly or through anything they reach: a row pass
- * of a tree that calls only these and the default functions reads each signal once (see `Compiling.pure`). Only for tables Aster
- * itself writes, and only for functions that read nothing that can run a transform.
+ * The function tables the engine makes (see `markBuiltinTable`): for each, the built-in functions it was made with (which never read
+ * `this`) and the names of those that never write a parameter. One entry per table, so making a table costs no work per function.
  */
-export function markParamSafe(table: Record<string, unknown>, names: readonly string[]): void {
-  for (const name of names) {
-    const v = Object.hasOwn(table, name) ? table[name] : undefined
-    if (typeof v === 'function') PARAM_SAFE.add(v)
-  }
+const BUILTIN_TABLES = new WeakMap<object, { builtins: Readonly<Record<string, unknown>>; paramSafe: ReadonlySet<string> }>()
+
+/**
+ * Record a function table the engine made: `builtins` are its own built-ins (the object they were made in, not the table, which may
+ * hold more), none of which reads `this`; `paramSafe` names those that never write a parameter (a signal), directly or through
+ * anything they reach, so that a row pass of a tree that calls only these and the default functions reads each signal once (see
+ * `Compiling.pure`). A call counts as one of them only while the table resolves its name to that very function. Only for tables
+ * Aster itself writes.
+ */
+export function markBuiltinTable(table: object, builtins: Readonly<Record<string, unknown>>, paramSafe: ReadonlySet<string>): void {
+  BUILTIN_TABLES.set(table, { builtins, paramSafe })
 }
 
 /** `event.vega[f](...args)`; the names are the oracle's, as V8 puts them in the "is not a function" message. */
@@ -370,10 +359,12 @@ function call(node: Extract<Expr, { type: 'CallExpression' }>, c: Compiling): Ru
   // What the name resolves to now: when it is one of Aster's own functions (which never read `this`), a call that still resolves
   // to it is made directly. The resolution is read on every call all the same: a table changed since falls back to `general`.
   const known = lookup()
-  if (!PURE.has(known) && !(typeof known === 'function' && PARAM_SAFE.has(known))) c.pure = false
+  const table = BUILTIN_TABLES.get(host)
+  const builtin = table !== undefined && typeof known === 'function' && Object.hasOwn(table.builtins, name) && table.builtins[name] === known
+  if (!PURE.has(known) && !(builtin && table.paramSafe.has(name))) c.pure = false
   // (a row pass is made only while every call still resolves to what it did here: see `compileExpression`)
   c.resolved.push(() => lookup() === known)
-  const direct = typeof known === 'function' && THISLESS.has(known) ? known as (...a: unknown[]) => unknown : undefined
+  const direct = PURE.has(known) || builtin ? known as (...a: unknown[]) => unknown : undefined
   if (direct === undefined) return (f) => general(f, lookup())
   if (order !== undefined || count > 3) {
     return (f) => {
