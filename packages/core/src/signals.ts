@@ -369,6 +369,7 @@ function releaseOwner(owner: EventTarget): void {
     persistedTimers.delete(owner)
   }
   persistedHandlers.delete(owner)
+  shells.delete(owner)
   const streams = persisted.get(owner)
   if (streams) {
     for (const st of streams.values()) {
@@ -382,6 +383,58 @@ function releaseOwner(owner: EventTarget): void {
 type EventDefaults = { prevent?: unknown; allow?: unknown }
 
 /** vega-view `initializeEventConfig`: `config.events.defaults`, with a `prevent` / `allow` list read as a set of types. */
+/**
+ * What a binding of a view keeps for the next binding of the same view on the same element (one per owner, see
+ * SignalBindOptions.owner): the expressions of its handlers and filters, compiled. A host binds again for every scene it shows, and
+ * each binding builds its own runtime (the scene's datasets and scales, its own dataset edits), so compiling against that runtime
+ * compiled every expression again, for every scene. They are compiled once instead, against a runtime of the shell's that forwards
+ * every member to the runtime of the binding now live (`forwarding`), so an expression of the shell does exactly what the same
+ * expression compiled by the live binding would.
+ *
+ * A binding takes the owner's shell only when no other binding uses it (the last one was detached or released), on the same element
+ * and for the same signal and dataset definitions (the same compiled chart); else it starts a shell of its own. Everything else a
+ * binding is made of (the dataflow, the streams, the scopes, the baselines of its handlers) is built for each binding, as before.
+ */
+interface BindingShell {
+  el: Element
+  defs: CompiledSignalDef[]
+  dataDefs: CompiledData[]
+  /** The binding that uses the shell (a token of it), or null. */
+  live: object | null
+  /** The runtimes of the binding that uses the shell, by scope (`''`: the view's). */
+  current: Map<string, ExpressionRuntime>
+  forwarders: Map<string, ExpressionRuntime>
+  compiled: Map<string, Map<string, CompiledExpr>>
+}
+const shells = new WeakMap<EventTarget, BindingShell>()
+
+/** Every member an expression runtime may have (the type checks the list is complete). */
+const RUNTIME_KEYS = Object.keys({
+  scale: true, data: true, expr: true, projection: true, tree: true, modify: true, transformed: true, inScope: true, containerSize: true,
+  random: true, setdata: true, intersect: true,
+} satisfies Record<keyof ExpressionRuntime, true>) as Array<keyof ExpressionRuntime>
+
+/** The key of a scope's runtime in a shell (`''` is the view's, which no scope id can collide with). */
+const scopeKey = (scope: Scope): string => '\u0000' + scope.id
+
+/** A runtime each member of which is the member of `target()` when it is read (present or not, as there). */
+function forwarding(target: () => ExpressionRuntime): ExpressionRuntime {
+  const rt = {} as ExpressionRuntime
+  for (const key of RUNTIME_KEYS) Object.defineProperty(rt, key, { enumerable: true, get: () => target()[key] })
+  return rt
+}
+
+/** The parsed `events` of a signal's `on` entry, per default source: a pure function of the spec, parsed once. */
+const PARSED_EVENTS = new WeakMap<object, Map<string, ReturnType<typeof normalizeEvents>>>()
+function eventsOf(on: SignalOnDef, defaultSource: 'view' | 'scope'): ReturnType<typeof normalizeEvents> {
+  let bySource = PARSED_EVENTS.get(on)
+  if (bySource === undefined) PARSED_EVENTS.set(on, (bySource = new Map()))
+  let got = bySource.get(defaultSource)
+  // (a malformed selector throws here every time, as it did when parsed for each binding)
+  if (got === undefined) bySource.set(defaultSource, (got = normalizeEvents(on.events, defaultSource)))
+  return got
+}
+
 function eventDefaults(config: CompiledChart['eventConfig']): EventDefaults {
   const d = { ...(config?.defaults ?? {}) } as EventDefaults
   for (const k of ['prevent', 'allow'] as const) if (Array.isArray(d[k])) d[k] = new Set(d[k] as unknown[])
@@ -632,6 +685,16 @@ function bindSignalEventsDefs(
   const detachFns: Array<() => void> = []
   /** what outlives a binding is kept per owner (see SignalBindOptions.owner) */
   const owner: EventTarget = opts.owner ?? el
+  let shell = shells.get(owner)
+  if (shell === undefined || shell.live !== null || shell.el !== el || shell.defs !== defs || shell.dataDefs !== dataDefs) {
+    shell = { el, defs, dataDefs, live: null, current: new Map(), forwarders: new Map(), compiled: new Map() }
+    shells.set(owner, shell)
+  }
+  const liveToken = {}
+  const myShell = shell
+  myShell.live = liveToken
+  myShell.current = new Map()
+  detachFns.push(() => { if (myShell.live === liveToken) myShell.live = null })
   const rootStreams = new Map<string, Stream>()
   /** `{scale}`-source handlers: run when a scale they name has changed since the scene the loop was last bound to. */
   const scaleHandlers: Array<{ scales: Set<string>; run: () => void }> = []
@@ -732,14 +795,19 @@ function bindSignalEventsDefs(
     },
     ...(opts.containerSize ? { containerSize: opts.containerSize } : {}),
     intersect: (box, opt, group) => part('intersect').sceneIntersect(opts.scene, box, opt, group),
-    expr: (code) => compileIn(bindRuntime, code),
+    expr: (code) => compileIn('', code),
   }
-  const compiledExprs = new WeakMap<ExpressionRuntime, Map<string, CompiledExpr>>()
-  const compileIn = (rt: ExpressionRuntime, code: string): CompiledExpr => {
-    let cache = compiledExprs.get(rt)
-    if (!cache) compiledExprs.set(rt, (cache = new Map()))
+  myShell.current.set('', bindRuntime)
+  /** An expression of the scope `key` (`''`: the view's), compiled once per shell against the shell's runtime of that scope. */
+  const compileIn = (key: string, code: string): CompiledExpr => {
+    let cache = myShell.compiled.get(key)
+    if (!cache) myShell.compiled.set(key, (cache = new Map()))
     let f = cache.get(code)
-    if (!f) cache.set(code, (f = compileExpr(code, rt)))
+    if (!f) {
+      let rt = myShell.forwarders.get(key)
+      if (!rt) myShell.forwarders.set(key, (rt = forwarding(() => myShell.current.get(key)!)))
+      cache.set(code, (f = compileExpr(code, rt)))
+    }
     return f
   }
   /** A scale as a handler of `scope` sees it: the scales its group (and the groups around it) declare, then the view's. */
@@ -760,9 +828,10 @@ function bindSignalEventsDefs(
         ...bindRuntime,
         inScope: (item) => scope.hasContent && itemWithin(item, scope.group),
         scale: (name) => scaleIn(scope, name),
-        expr: (code) => compileIn(made, code),
+        expr: (code) => compileIn(scopeKey(scope), code),
       }
       scopeRuntimes.set(scope, (rt = made))
+      myShell.current.set(scopeKey(scope), made)
     }
     return rt
   }
@@ -1189,7 +1258,7 @@ function bindSignalEventsDefs(
             if (!target && !rootNames.has(signal.name)) throw new Error(`No prior signal definition for "outer" push: "${signal.name}"`)
           }
           const upd = updateOf(on)
-          const { streams, sources } = normalizeEvents(on.events, scope ? 'scope' : 'view')
+          const { streams, sources } = eventsOf(on, scope ? 'scope' : 'view')
           const force = on.force === true
           const keyBase = `${scope ? scope.id : ''}|${si}:${signal.name}:${oi}:${JSON.stringify(on.events)}`
           const rt = runtimeFor(scope)
