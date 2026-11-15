@@ -88,6 +88,15 @@ and Fixed, per package. Everything built before the first release is in [Pre-rel
   median) the Vega spec's sweep costs 245 ms where it cost 295, the Vega-Lite spec's 875 where it cost 976; the vega arms moved
   by 3 % or less.
 - `paintsSameAs(snapshot, scene)` (`@aster-charts/core/canvas`): whether a scene paints exactly the pixels already on the canvas.
+- **Less again per pointer move.** A filter's or a formula's loop over its rows reads each signal its expression names once per
+  pass, when nothing in the pass can write one (the interpreted predicate `hoverX != null && datum.x <= hoverX` went from about
+  27 to 8-13 ns a row); the state an aggregate, joinaggregate, collect or flatten leaves for the next pulse is made of what the
+  step computed as it ran instead of reading every row again; binding the event loop again on the same element for the same
+  chart compiles no expression again; and the view's legends and title, and every guide of a group mark, are kept from the
+  evaluation before when nothing they are made from, or placed against, changed. On the chart-bench heavy survival chart (five
+  alternating pairs, Chromium, one 60-move sweep each, CPU-busy median) `<Chart>`'s sweep costs 229 ms where it cost 246, the
+  canvas renderer's 230 where it cost 239; the Vega-Lite spec, the scatter chart, every mount and the vega control moved by 2 %
+  or less.
 
 ### `@aster-charts/react`
 

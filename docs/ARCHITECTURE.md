@@ -178,14 +178,33 @@ phase of the incremental-diff gate.
   sort, a key or another transform refuses) hold the same values item by item (Object.is: a datum by identity), and its own key,
   datasets and scales hold; when the items it is drawn from are new objects its items get the datum a fresh evaluation gives them.
 
-- **The view's axes** (`keptGuide`). An axis of the view (not of a group mark) is the axis group before when its key holds
-  (`guideKeyOf`: the signals its definition names with the view size, `extraFp` and the registry, the rows of the datasets its
-  expressions read by name, the URL policy, the text measurer set for every chart, whether guides are laid out), every scale of the
-  view is the object it was, and tuple registration is as it was. Refused: a definition that reads more than it names or a dataset
-  by a computed name, a pass that is not clean, `limits`, a fit view, a failed layout; an axis whose making logged anything or
-  asked for a gradient is not recorded. The scene's scale snapshots (`__scales`) are the array before when every scale is.
-  `conformance:diff` writes signals every axis and legend of the view reads (`withGuideProbes`). Legends and titles are made by
-  every evaluation: their place is written after they are made, from the bounds of the content around them.
+- **Guides** (`keptGuide`): the view's axes, legends and title, and a group mark's axes, legends and title in each of its cells.
+  A guide is its group before when its key holds (`guideKeyOf`: the signals its definition names as its scope sees them, with the
+  scope's size, `extraFp` and the registry, the rows of the datasets its expressions read by name, the URL policy, the text measurer
+  set for every chart, whether guides are laid out), every scale of its scope is the object it was, and tuple registration is as it
+  was. Records are per scope instance (the group item's key path, `''` for the view) and a record is kept at most once per
+  evaluation. A legend is placed after it is made, so the legends of a scope are kept together, only when each is kept and the
+  anchors they are placed against (the bounds of the content and the axes beside the plot), the plot size and the raw mode are what
+  they were placed against (`keptLegends`); a kept symbol legend takes its instance slot again. A title's key adds the bounds it
+  sits against, the size, the raw and fit modes and a group title's datum. Refused: a definition that reads more than it names or a
+  dataset by a computed name, a pass that is not clean, `limits`, a fit view, a failed layout; a guide whose making (or a legend
+  whose placing) logged anything or asked for a gradient is not recorded. The scene's scale snapshots (`__scales`) are the array
+  before when every scale is. `conformance:diff` writes signals every guide reads, at every depth, and an axis tick count that moves
+  what legends and titles are placed against (`withGuideProbes`).
+
+**Around an evaluation.** Three more savings, each a function of inputs it checks:
+
+- **Row passes** (`exprRows`, `expr-interpreter.ts`). A filter's or a formula's loop over its rows reads each signal its expression
+  names once, at the start of the pass, when nothing in the pass can write a signal: the expression calls only the default functions
+  and the built-ins marked param-safe, every call still resolves to the function it did when compiled, and the parameters are the
+  engine's own object (`engineParams`); otherwise every row reads them as one evaluation does.
+- **Step state from the step** (`step-byproduct.ts`). The state an aggregate, joinaggregate, collect or flatten leaves for the next
+  pulse is made of what the step computed as it ran (a key per row and the rows of each group, the sort order, a count per row),
+  never derived later from rows a host may change in place; a step that read signal-resolved parameters or a custom `key` derives it
+  as before.
+- **The binding shell** (`signals.ts`). A binding again on the same element for the same chart takes the expressions the last binding
+  compiled, against a runtime that forwards each member to the runtime of the binding now live; the rest of a binding is built for
+  each binding.
 
 **Derived structures are kept with the engine's nodes.** `scene-registry.ts` records the group nodes of every scene the engine
 returns. What the hit index (a mark's entries at a place), the DOM patcher (a data mark's descriptor for a clip), the accessible
