@@ -553,14 +553,17 @@ function renderGroup(group: SceneGroup, ctx: CanvasLike, scene: SceneRoot, plotW
     const bgBox = (group.items ?? []).some((it) => (it as { _bg?: boolean })._bg === true && (isGradientPaint(it.fill) || isGradientPaint(it.stroke)))
       ? groupGradientBox(group)
       : undefined
-    // (a guide's group item -- an axis's, a title's -- is held as its box: drawn before what the guide holds, its stroke in front after)
-    const guideBox = group.box !== undefined && (isGradientPaint(group.box.fill) || isGradientPaint(group.box.stroke) || (group.boxFg !== undefined && isGradientPaint(group.boxFg.stroke))) ? groupGradientBox(group) : undefined
-    if (group.box !== undefined) renderLeafItem(group.box, ctx, scene, guideBox)
+    // (a guide's group item -- an axis's, a title's -- is held as its box: drawn before what the guide holds, its stroke in front
+    // after; as vega draws a group item's box, only when it has a fill or a stroke)
+    const box = group.box !== undefined && (group.box.fill || group.box.stroke) ? group.box : undefined
+    const boxFg = group.boxFg !== undefined && group.boxFg.stroke ? group.boxFg : undefined
+    const guideBox = box !== undefined && (isGradientPaint(box.fill) || isGradientPaint(box.stroke) || (boxFg !== undefined && isGradientPaint(boxFg.stroke))) ? groupGradientBox(group) : undefined
+    if (box !== undefined) renderLeafItem(box, ctx, scene, guideBox)
     for (const item of group.items ?? []) {
       if (isGroup(item)) renderGroup(item, ctx, scene, gw, gh, opts)
       else renderLeafItem(item, ctx, scene, (item as { _bg?: boolean })._bg === true ? bgBox : undefined)
     }
-    if (group.boxFg !== undefined) renderLeafItem(group.boxFg, ctx, scene, guideBox)
+    if (boxFg !== undefined) renderLeafItem(boxFg, ctx, scene, guideBox)
     ctx.restore()
     return
   }
