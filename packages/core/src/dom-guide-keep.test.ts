@@ -1,11 +1,13 @@
 // @vitest-environment jsdom
 /**
- * The DOM patcher keeps what it made of a guide (an axis, a legend, a title) the engine kept, and the scene's scale snapshots are the
- * array the scene before carried when every scale is the one before: a pointer move that keeps both axes describes neither again.
+ * The DOM patcher keeps what it made of a guide (an axis, a legend, a title) or of the group items of a mark (facet cells) the engine
+ * kept, and the scene's scale snapshots are the array the scene before carried when every scale is the one before: a pointer move
+ * that keeps both axes and the cells describes none of them again.
  *
  * What describing a guide reads besides the group is changed in turn, on a scene that holds the very same guide groups (a host's
  * scene made of the engine's nodes), and each change must describe the guide again: the scale snapshots, the text measurer set for
- * every chart, the default locale, the batching options; a guide whose descriptor asked for a clip is never kept. One SVG element
+ * every chart, the default locale, the batching options, the frame around the groups, which groups are in the run; a run whose
+ * descriptor asked for a clip is never kept. One SVG element
  * patched with every scene equals a fresh rendering of it, and the descriptors equal a fresh scene's.
  */
 import { afterEach, describe, expect, it } from 'vitest'
@@ -141,3 +143,71 @@ describe('the DOM patcher keeps what it made of a kept guide', () => {
     expect(drawn(again)).toBe(drawn(root))
   })
 })
+
+describe('the DOM patcher keeps what it made of the group items of a kept mark', () => {
+  const FACETS = {
+    width: 300, height: 200, padding: 5, autosize: 'none',
+    signals: [{ name: 'hoverX', value: null }],
+    data: [{ name: 't', values: Array.from({ length: 60 }, (_, i) => ({ g: `s${i % 3}`, x: i % 20, y: (i * 7) % 11 })) }],
+    scales: [{ name: 'x', type: 'linear', domain: [0, 20], range: 'width' }, { name: 'y', type: 'linear', domain: [0, 11], range: 'height' }],
+    marks: [
+      { type: 'group', from: { facet: { name: 'one', data: 't', groupby: 'g' } }, marks: [{ type: 'line', from: { data: 'one' }, encode: { enter: { x: { scale: 'x', field: 'x' }, y: { scale: 'y', field: 'y' }, stroke: { value: 'black' } } } }] },
+      { type: 'rect', encode: { update: { x: { value: 0 }, x2: { signal: 'width' }, y: { value: 0 }, y2: { signal: 'height' }, fill: { value: 'transparent' }, tooltip: { signal: 'hoverX' } } } },
+    ],
+  } as unknown as VgSpec
+  /** The descriptor of the facet cells' container (the first mark of the frame). */
+  const cells = (root: DomDesc): DomDesc => {
+    let found: DomDesc | undefined
+    const visit = (d: DomDesc): void => {
+      if (found) return
+      if (/mark-group role-scope/.test(d.attrs.find(([k]) => k === 'class')?.[1] ?? '')) { found = d; return }
+      for (const c of d.children ?? []) visit(c)
+    }
+    visit(root)
+    return found!
+  }
+
+  it('a pointer move that keeps the cells describes them once; the patched SVG equals a fresh rendering', () => {
+    const session = createChartSession()
+    let scene = session.evaluate(FACETS, {})
+    const svg = renderSceneToDomElement(scene, document)
+    const first = cells(sceneToDomDesc(scene))
+    expect(first).toBeDefined()
+    for (let i = 0; i < 6; i++) {
+      scene = session.evaluate(FACETS, { signals: { hoverX: i } })
+      expect(cells(sceneToDomDesc(scene))).toBe(first)
+      patchSceneDom(svg, scene)
+      expect(html(svg)).toBe(fresh(evaluateChart(compileChart(FACETS), { signals: { hoverX: i } })))
+    }
+  })
+
+  it('another frame, or a run with another group in it, describes the cells again', () => {
+    const scene = createChartSession().evaluate(FACETS, {})
+    const first = cells(sceneToDomDesc(scene))
+    expect(cells(sceneToDomDesc(rewrapped(scene)))).toBe(first)
+    const narrower = rewrapped(scene, { plotWidth: 250 } as Partial<SceneRoot>)
+    const got = sceneToDomDesc(narrower)
+    expect(cells(got)).not.toBe(first)
+    expect(drawn(got)).toBe(drawn(sceneToDomDesc(copiedNodes(narrower))))
+    // (the cells after the first are copies: the run is not the one described)
+    const scene2 = createChartSession().evaluate(FACETS, {})
+    const first2 = cells(sceneToDomDesc(scene2))
+    const items = scene2.items.slice()
+    const run = items.findIndex((g) => g.role === 'scope')
+    for (let k = run + 1; k < items.length && items[k]!.markIndex === items[run]!.markIndex; k++) items[k] = { ...items[k]! }
+    const other = rewrapped(scene2, { items })
+    const again = sceneToDomDesc(other)
+    expect(cells(again)).not.toBe(first2)
+    expect(drawn(again)).toBe(drawn(sceneToDomDesc(copiedNodes(other))))
+  })
+})
+
+/** The scene with every node a copy of its own: nothing the patcher made of them is kept. */
+function copiedNodes(scene: SceneRoot): SceneRoot {
+  const copy = (n: unknown): unknown => {
+    const out = { ...(n as object) } as { items?: unknown[] }
+    if (Array.isArray(out.items)) out.items = out.items.map(copy)
+    return out
+  }
+  return rewrapped(scene, { items: scene.items.map((g) => copy(g)) as SceneRoot['items'] })
+}

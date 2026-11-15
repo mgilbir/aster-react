@@ -45,7 +45,7 @@ import {
   markContainerAttrs,
   childNodes,
   type GuideScope,
-  type SvgGuide,
+  type SvgRun,
   type SvgNode,
   paintAttrs,
   pathItemAttrs,
@@ -737,32 +737,42 @@ function keepsDesc(group: SceneGroup, type: string): boolean {
 }
 
 /**
- * The descriptor of one of a scene's guides (an axis, a legend, a title), or the one made of it for an earlier scene that kept it
- * (`keptInto`). A guide group the engine returned holds what it held, its parts included (scene-registry.ts), so it describes as
- * before but for what describing it reads besides the group: the scale snapshots its caption reads (`snaps`, the scene's own
- * array, which the engine hands on from the scene before only when every scale is the one before), the text measurer set for
- * every chart (a label's `limit` is measured when it is described), the default locale and the time zone (the caption formats
- * numbers and dates), and the options (batching). A descriptor that asked for a
- * clip is not kept: a clip it asked for joins the defs of the render that asks for it.
+ * The descriptor of the group items of one mark, or of a guide (an axis, a legend, a title), or the one made of the same groups for
+ * an earlier scene that kept them (`keptInto`). A group the engine returned holds what it held, what is inside it included
+ * (scene-registry.ts), so the groups describe as before but for what describing them reads besides the groups: the frame of the
+ * group that holds them (a mark's `clip` and a group's default size), the scale snapshots their captions read (`snaps`, the scene's
+ * own array, which the engine hands on from the scene before only when every scale is the one before), the text measurer set for
+ * every chart (a label's `limit` is measured when it is described), the default locale and the time zone (a caption formats numbers
+ * and dates), and the options (batching). A descriptor that asked for a clip is not kept: a clip it asked for joins the defs of the
+ * render that asks for it.
  */
-const GUIDE_DESCS = new WeakMap<SceneGroup, { desc: DomDesc; root: object; snaps: unknown; measurer: unknown; format: string; dense: unknown; chunk: unknown }>()
-function guideDesc(n: SvgGuide, clips: ClipCollector, options: DomRenderOptions | undefined): DomDesc {
+const RUN_DESCS = new WeakMap<SceneGroup, {
+  run: readonly SceneGroup[]; desc: DomDesc; root: object; frameW: number; frameH: number; snaps: unknown; measurer: unknown; format: string; dense: unknown; chunk: unknown
+}>()
+function runDesc(n: SvgRun, clips: ClipCollector, options: DomRenderOptions | undefined): DomDesc {
   const measurer = getTextMetricsProvider()
-  // (the caption formats numbers and dates: under the default locale, in the host's time zone)
+  // (a caption formats numbers and dates: under the default locale, in the host's time zone)
   const format = formatEnvironmentKey()
-  const kept = GUIDE_DESCS.get(n.guide)
-  if (kept !== undefined && keptInto(kept.root, describing) && kept.snaps === n.snaps && kept.measurer === measurer && kept.format === format
-    && kept.dense === options?.denseMarks && kept.chunk === options?.denseChunkSize) {
+  const first = n.run[0]!
+  const kept = RUN_DESCS.get(first)
+  if (kept !== undefined && keptInto(kept.root, describing) && sameRun(kept.run, n.run) && Object.is(kept.frameW, n.frameW) && Object.is(kept.frameH, n.frameH)
+    && kept.snaps === n.snaps && kept.measurer === measurer && kept.format === format && kept.dense === options?.denseMarks && kept.chunk === options?.denseChunkSize) {
     // (the patcher compares it with what it last wrote, and skips it whole when that is it)
     kept.desc.clean = true
     return kept.desc
   }
   const asked = clips.asked
   const desc = nodeDescs([n.make()], clips, options)[0]!
-  if (isEngineNode(n.guide) && clips.asked === asked) {
-    GUIDE_DESCS.set(n.guide, { desc, root: describing, snaps: n.snaps, measurer, format, dense: options?.denseMarks, chunk: options?.denseChunkSize })
+  if (clips.asked === asked && n.run.every(isEngineNode)) {
+    RUN_DESCS.set(first, { run: n.run, desc, root: describing, frameW: n.frameW, frameH: n.frameH, snaps: n.snaps, measurer, format, dense: options?.denseMarks, chunk: options?.denseChunkSize })
   }
   return desc
+}
+
+function sameRun(a: readonly SceneGroup[], b: readonly SceneGroup[]): boolean {
+  if (a.length !== b.length) return false
+  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false
+  return true
 }
 
 /** The descriptors of a structure tree (render.ts `childNodes`), attributes before children as the string renderer writes them. */
@@ -781,8 +791,8 @@ function nodeDescs(nodes: readonly SvgNode[], clips: ClipCollector, options: Dom
       out.push(linked(item, d))
     } else if ('mark' in n) {
       pushAll(out, markDescs(n.mark, n.frameW, n.frameH, clips, options, n.scope))
-    } else if ('guide' in n) {
-      out.push(guideDesc(n, clips, options))
+    } else if ('run' in n) {
+      out.push(runDesc(n, clips, options))
     } else {
       const attrs = pairs(n.attrs)
       const desc: DomDesc = n.children === undefined ? { tag: n.tag, attrs } : g(n.tag, attrs, nodeDescs(n.children, clips, options))

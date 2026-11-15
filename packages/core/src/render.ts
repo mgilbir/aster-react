@@ -1693,16 +1693,18 @@ export interface SvgMark {
   scope: GuideScope
 }
 /**
- * One of the view's guides (an axis, a legend, a title: a group of its own, alone in its container), its elements made when they are
- * asked for (`make`): the DOM patcher keeps what it made of a guide the engine kept, so a later scene need not make them again.
- * `snaps` are the scale snapshots its caption reads.
+ * The group items of one mark (or a guide: an axis, a legend, a title), in their container, its elements made when they are asked for
+ * (`make`): the DOM patcher keeps what it made of groups the engine kept, so a later scene need not make them again. `snaps` are the
+ * scale snapshots the captions inside read, `frameW`/`frameH` the frame of the group that holds them.
  */
-export interface SvgGuide {
-  guide: SceneGroup
+export interface SvgRun {
+  run: readonly SceneGroup[]
   snaps: ScaleSnapshots | undefined
+  frameW: number
+  frameH: number
   make: () => SvgEl
 }
-export type SvgNode = SvgEl | SvgLeaf | SvgMark | SvgGuide
+export type SvgNode = SvgEl | SvgLeaf | SvgMark | SvgRun
 
 const el = (tag: 'g' | 'path', attrs: (w: AttrSink) => void, children?: SvgNode[], link?: SceneItem): SvgEl =>
   (children === undefined ? (link === undefined ? { tag, attrs } : { tag, attrs, link }) : link === undefined ? { tag, attrs, children } : { tag, attrs, children, link })
@@ -1734,17 +1736,12 @@ export function childNodes(items: readonly SceneItem[] | undefined, frameW: numb
       }
     }
     const run = items.slice(i, j) as SceneGroup[]
-    // (a guide of its own: its elements are made when they are asked for, see SvgGuide)
-    if (run.length === 1 && GUIDE_ITEM_ROLES.has(it.role as string) && !flag(it, '_scope') && !flag(it, 'emptyMark')) {
-      out.push({ guide: it, snaps: scope.snaps, make: () => groupContainer(run, frameW, frameH, scope, clips) })
-    } else out.push(groupContainer(run, frameW, frameH, scope, clips))
+    // (its elements are made when they are asked for: see SvgRun)
+    out.push({ run, snaps: scope.snaps, frameW, frameH, make: () => groupContainer(run, frameW, frameH, scope, clips) })
     i = j - 1
   }
   return out
 }
-
-/** The roles of the group items `groupItem` draws as guides. */
-const GUIDE_ITEM_ROLES: ReadonlySet<string> = new Set(['axis', 'legend', 'title'])
 
 function groupContainer(run: SceneGroup[], frameW: number, frameH: number, scope: GuideScope, clips: ClipCollector): SvgEl {
   const first = run[0]!
@@ -1898,7 +1895,7 @@ export function serializeNodes(nodes: readonly SvgNode[], clips: ClipCollector):
   for (const n of nodes) {
     if ('leaf' in n) { out += withLink(n.leaf, renderLeaf(n.leaf, clips, n.wrapClip)); continue }
     if ('mark' in n) { out += renderMark(n.mark, n.frameW, n.frameH, clips); continue }
-    if ('guide' in n) { out += serializeNodes([n.make()], clips); continue }
+    if ('run' in n) { out += serializeNodes([n.make()], clips); continue }
     const w = new StringAttrSink()
     n.attrs(w)
     let el = n.children === undefined ? `<${n.tag}${w.s}/>` : `<${n.tag}${w.s}>${serializeNodes(n.children, clips)}</${n.tag}>`
