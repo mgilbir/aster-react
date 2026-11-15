@@ -289,13 +289,15 @@ const BUDGETS = {
   // stack layer 8 (perf/lazy-features: the engine's parts in slots the barrel fills): measured 2026-11-15 on a clean build, base stack/7-hover-finish -> branch (kB gzip): 168.5 -> 169.6 (the registry and slot reads +0.6, the parts' modules coming last in the bundle +0.5); ceiling is the measured value + 0.5.
   // row passes, step state from the step, the binding shell and kept legends/titles/group guides: measured 2026-11-15 on a clean build at 171.1 kB gzip (ceiling was 170.1); ceiling is the measured value + 0.5.
   // strokeForeground on legends (stack/11-legend-stroke: legend and entry front strokes, the hit index's guide boxes): measured 2026-11-15 on a clean build, previous branch -> branch (kB gzip): 171.5 -> 171.6; ceiling is the measured value + 0.5.
-  '@aster-charts/core': 172.1 * 1024,
+  // guide gradients on canvas (stack/12-guide-gradient-canvas: item bounds for guide boxes and leaves, pattern frames): measured 2026-11-15 on a clean build, previous branch -> branch (kB gzip): 171.6 -> 171.8; ceiling is the measured value + 0.5.
+  '@aster-charts/core': 172.3 * 1024,
   // signal-change reuse (group marks, channels, marks drawn from marks, derived structures kept with engine nodes) on the canvas layer: measured 2026-11-15 on a clean build at 11.8 kB gzip (ceiling was 11.8); ceiling is the measured value + 0.5.
   // row passes, step state from the step, the binding shell and kept legends/titles/group guides: measured 2026-11-15 on a clean build at 12.5 kB gzip (ceiling was 12.3); ceiling is the measured value + 0.5.
   '+ @aster-charts/core/dom': 13.0 * 1024,
   // stack layer 8 (perf/lazy-features: the shells load the engine's parts and the canvas renderer on demand; module boundaries): measured 2026-11-15 on a clean build, base stack/7-hover-finish -> branch (kB gzip): 6.6 -> 6.3; ceiling is the measured value + 0.5.
   // followups (stack/10-followups-correctness: one SVG path reader, eager through the hit index; the signal loop on demand; guide gradients): measured 2026-11-15 on a clean build, base stack/9-followups-speed -> branch (kB gzip): 6.4 -> 5.6; ceiling is the measured value + 0.5.
-  '+ @aster-charts/core/canvas': 6.1 * 1024,
+  // guide gradients on canvas (stack/12-guide-gradient-canvas: item bounds for guide boxes and leaves, pattern frames): measured 2026-11-15 on a clean build, previous branch -> branch (kB gzip): 5.6 -> 6.2; ceiling is the measured value + 0.5.
+  '+ @aster-charts/core/canvas': 6.7 * 1024,
   // stack layer 5 (stack/5-canvas: the event loop bound on canvas, the canvas renderer's events and hit index, the svg's pointer leaving): measured 2026-11-14 on a clean build, base stack/4-geometry -> branch (kB gzip): 9.8 -> 10.3; ceiling is the measured value + 0.5.
   // hover finish (kept axes, kept run descriptors and guide hit entries, deferred source copies, canvas frames that paint nothing): measured 2026-11-15 on a clean build at 10.9 kB gzip (ceiling was 10.8); ceiling is the measured value + 0.5.
   // stack layer 8 (perf/lazy-features: the shells load the engine's parts and the canvas renderer on demand; module boundaries): measured 2026-11-15 on a clean build, base stack/7-hover-finish -> branch (kB gzip): 10.9 -> 10.5; ceiling is the measured value + 0.5.
@@ -321,7 +323,8 @@ const BUDGETS = {
   // one image deadline). No eager row grew past what the #143 note above set for the two together. Ceiling is the measured value + 0.5.
   // stack layer 8 (perf/lazy-features: the shells load the engine's parts and the canvas renderer on demand; module boundaries): measured 2026-11-15 on a clean build, base stack/7-hover-finish -> branch (kB gzip): 8.5 -> 8.2; ceiling is the measured value + 0.5.
   // followups (stack/10-followups-correctness: one SVG path reader, eager through the hit index; the signal loop on demand; guide gradients): measured 2026-11-15 on a clean build, base stack/9-followups-speed -> branch (kB gzip): 8.2 -> 7.4; ceiling is the measured value + 0.5.
-  '+ @aster-charts/core/png': 7.9 * 1024,
+  // guide gradients on canvas (stack/12-guide-gradient-canvas: item bounds for guide boxes and leaves, pattern frames): measured 2026-11-15 on a clean build, previous branch -> branch (kB gzip): 7.4 -> 8.0; ceiling is the measured value + 0.5.
+  '+ @aster-charts/core/png': 8.5 * 1024,
   // stack layer 2 (perf/vl-compile-data-independent on fix/hover-correctness: rows.ts, the row watch, signal-valued values, findSource): measured 2026-11-14 on a clean build at 173.7 kB gzip (ceiling was 173.4); ceiling is the measured value + 0.5.
   // stack layer 3 (perf/expr-encode: direct built-in calls, the shared function table, the format fast path): measured 2026-11-14 on a clean build at 174.6 kB gzip (ceiling was 174.2); ceiling is the measured value + 0.5.
   // signal-change reuse (group marks, channels, marks drawn from marks, derived structures kept with engine nodes) on the canvas layer: measured 2026-11-15 on a clean build at 180.2 kB gzip (ceiling was 177.1); ceiling is the measured value + 0.5.
