@@ -5472,7 +5472,11 @@ function evaluateMarkItems(
   // the mark made in full: the marks after it are never made, and the view is not laid out.
   let unmeasuredFrom: number | undefined
   if (!stoppedAfterEncode && transformed && ctx.bareEncode !== true) {
-    const failure = boundFailure(mark.type, items, markClipPath(mark, ctx), mark.type === 'shape' && !shapeIsLiteral(mark))
+    // (a channel that no encode set defines and no transform of the mark writes -- a geopath writes each item's path -- holds one
+    // value on every item: the first item is judged for all; see boundFailure)
+    const judged = mark.type === 'path' ? 'path' : 'shape'
+    const uniform = !(mark.transform?.length) && !Object.values(mark.encode ?? {}).some((set) => set != null && Object.prototype.hasOwnProperty.call(set, judged))
+    const failure = boundFailure(mark.type, items, markClipPath(mark, ctx), mark.type === 'shape' && !shapeIsLiteral(mark), uniform)
     if (failure !== undefined) {
       failPass(ctx, { axis: Infinity, mark: ctx.scope.mark ?? 0, afterEncode: true }, failure.error)
       stoppedAfterEncode = true
