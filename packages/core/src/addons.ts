@@ -96,6 +96,8 @@ const BUILTIN_SHAPES = new Set(['circle', 'square', 'cross', 'diamond', 'triangl
 interface Found {
   addons: Set<AddonName>
   parts: Set<EnginePart>
+  /** a scope declares signals */
+  eventLoop: boolean
 }
 
 /** The add-ons and parts called by one expression string; an expression that does not parse calls nothing (the engine reports it). */
@@ -151,7 +153,7 @@ function customShape(v: unknown): boolean {
  * object: what `addonsNeeded` and `partsNeeded` report.
  */
 function walkSpec(spec: Json, refuseUrls: boolean): Found {
-  const found: Found = { addons: new Set(), parts: new Set() }
+  const found: Found = { addons: new Set(), parts: new Set(), eventLoop: false }
   // (a scope's lists are read as the compiler reads them, vega-util `array()`: a single object is a one-element list)
   if (spec.projections != null && (!Array.isArray(spec.projections) || spec.projections.length > 0)) found.addons.add('geo')
   if (spec.layout != null) found.parts.add('layout')
@@ -172,6 +174,8 @@ function walkSpec(spec: Json, refuseUrls: boolean): Found {
     // the projections of a group mark are built in its scope (the view's are checked above)
     if (key === 'projections' && (!Array.isArray(node) || node.length > 0)) found.addons.add('geo')
     if (key === 'legends' && (!Array.isArray(node) || node.length > 0)) found.parts.add('legend')
+    // (a scope that declares signals: the view's, a group mark's)
+    if (key === 'signals' && (!Array.isArray(node) || node.length > 0)) found.eventLoop = true
     // (an object-form event stream: `{type: 'timer', ...}`, or one that merges or windows another)
     if (key === 'events' && JSON.stringify(node).includes('timer')) found.parts.add('timer')
     if (Array.isArray(node)) {
@@ -229,6 +233,12 @@ export function addonsNeeded(spec: VgSpec, options?: AddonOptions): readonly Add
 export interface SpecNeeds {
   addons: readonly AddonName[]
   parts: readonly EnginePart[]
+  /**
+   * Whether an interactive host binds the signal event loop for it (the `signals` part, which no evaluation reads): the view or a
+   * group mark declares signals (`on` streams, a selection's, or values a host may set). A host that listens to signals binds it
+   * whatever the spec says.
+   */
+  eventLoop: boolean
 }
 
 /** What the host gives an evaluation besides the spec that decides which parts it may need. */
@@ -240,7 +250,7 @@ export interface PartOptions extends AddonOptions {
 }
 
 const NO_PARTS: readonly EnginePart[] = Object.freeze([])
-const NO_NEEDS: SpecNeeds = Object.freeze({ addons: NONE, parts: NO_PARTS })
+const NO_NEEDS: SpecNeeds = Object.freeze({ addons: NONE, parts: NO_PARTS, eventLoop: false })
 
 /** The add-ons and the parts of the engine `spec` needs, from one walk of it (see `addonsNeeded` and `partsNeeded`). */
 export function specNeeds(spec: VgSpec, options?: PartOptions): SpecNeeds {
@@ -260,9 +270,9 @@ export function specNeeds(spec: VgSpec, options?: PartOptions): SpecNeeds {
   // without a tape: runtime.ts `datasetsMayDraw`), so a chart whose datasets may draw has the pulse path from its first evaluation.
   if (options?.random && mayDrawRandom(collectData(spec))) parts.add('pulse')
   const partList = ENGINE_PARTS.filter((p) => parts.has(p))
-  return addons.length === 0 && partList.length === 0
+  return addons.length === 0 && partList.length === 0 && !found.eventLoop
     ? NO_NEEDS
-    : { addons: addons.length ? Object.freeze(addons) : NONE, parts: partList.length ? Object.freeze(partList) : NO_PARTS }
+    : { addons: addons.length ? Object.freeze(addons) : NONE, parts: partList.length ? Object.freeze(partList) : NO_PARTS, eventLoop: found.eventLoop }
 }
 
 /** Every dataset definition of a spec, at any depth of nesting, without its rows (what may draw from a random source). */
@@ -365,8 +375,11 @@ export function partsNotLoaded(needed: readonly EnginePart[]): readonly EnginePa
 }
 
 type PartModule = { part: unknown }
-/** (the canvas part is loaded by `<Chart>`'s canvas capability, through `@aster-charts/core/lean/canvas`: no spec asks for it) */
-const partImporters: Record<Exclude<EnginePart, 'canvas'>, () => Promise<PartModule>> = {
+/**
+ * (the canvas part is loaded by `<Chart>`'s canvas capability, through `@aster-charts/core/lean/canvas`, and the signal loop by the
+ * interaction capability, through `@aster-charts/core/lean/signals`: no evaluation reads either)
+ */
+const partImporters: Record<Exclude<EnginePart, 'canvas' | 'signals'>, () => Promise<PartModule>> = {
   legend: () => import('./part-legend.js'),
   layout: () => import('./part-layout.js'),
   pulse: () => import('./part-pulse.js'),
@@ -382,6 +395,7 @@ const partsLoading = new Map<EnginePart, Promise<void>>()
 function loadPart(name: EnginePart): Promise<void> {
   if (partLoaded(name)) return Promise.resolve()
   if (name === 'canvas') return Promise.reject(new Error('[aster] the canvas part is loaded by the canvas capability (@aster-charts/core/lean/canvas)'))
+  if (name === 'signals') return Promise.reject(new Error('[aster] the signals part is loaded by the interaction capability (@aster-charts/core/lean/signals)'))
   let p = partsLoading.get(name)
   if (!p) {
     p = partImporters[name]().then(

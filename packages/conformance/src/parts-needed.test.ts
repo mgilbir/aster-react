@@ -22,12 +22,15 @@ import {
   createChartSession, renderSceneToSvg, specNeeds, loadParts, partLoaded, withdrawParts, ENGINE_PARTS, type EnginePart,
 } from '@aster-charts/core/lean'
 import { buildHitIndex } from '@aster-charts/core/lean/hit'
-import type { RuntimeInput, SceneRoot, SpecLimits, VgSpec } from '@aster-charts/core'
+import { compileChart, type RuntimeInput, type SceneRoot, type SpecLimits, type VgSpec } from '@aster-charts/core'
 
 const CORPUS = join(dirname(fileURLToPath(import.meta.url)), '..', 'corpus')
 const CORPUS_VEGA_ONLY = join(dirname(fileURLToPath(import.meta.url)), '..', 'corpus-vega-only')
-/** The parts a spec can ask for (the canvas renderer is asked for by `renderer="canvas"`, not by a spec). */
-const SPEC_PARTS = ENGINE_PARTS.filter((p) => p !== 'canvas')
+/**
+ * The parts an evaluation can read (the canvas renderer is asked for by `renderer="canvas"`, the signal loop by a chart that binds it:
+ * `specNeeds(...).eventLoop`, checked below).
+ */
+const SPEC_PARTS = ENGINE_PARTS.filter((p) => p !== 'canvas' && p !== 'signals')
 const MISSING = /the "(\w+)" part of the engine is not loaded/
 /** Generous limits: the screen runs, nothing a corpus spec does is refused for its size. */
 const LIMITS: SpecLimits = { maxRows: 10_000_000, maxTimeMs: 600_000 }
@@ -91,6 +94,28 @@ describe('specNeeds names every part the engine reads, over the whole corpus', a
   }
 
   it('covers the corpus', () => { expect(specs.length).toBeGreaterThan(900) })
+
+  it('names the signal loop for every chart an interactive shell binds it for, and for few others', () => {
+    // (ChartCore binds the loop when the compiled view has a signal -- any `on` stream is a signal's -- or the host listens to signals,
+    // which `useAddons` adds itself: what the spec alone must say is the first)
+    const missed: string[] = []
+    let bound = 0
+    let named = 0
+    for (const { name, spec } of specs) {
+      let signals: number
+      try { signals = compileChart(spec as never).signalDefs?.length ?? 0 } catch { continue }
+      const eventLoop = specNeeds(spec).eventLoop
+      if (signals > 0) bound++
+      if (eventLoop) named++
+      if (signals > 0 && !eventLoop) missed.push(name)
+    }
+    console.log(`[parts-needed] signal loop: bound for ${bound} specs, named for ${named} of ${specs.length}`)
+    expect(missed.slice(0, 12)).toEqual([])
+    // not vacuous, and the loop stays out of most charts: what is named beyond what is bound is a group mark's signals
+    expect(bound).toBeGreaterThan(100)
+    expect(named).toBeLessThanOrEqual(bound * 1.1 + 5)
+    expect(specs.length - named).toBeGreaterThan(300)
+  })
 
   for (const [mode, input] of [['without limits', {}], ['under limits', { limits: LIMITS }]] as const) {
     it(`${mode}: names every part the evaluation reads, and draws with just those what it draws with all`, async () => {

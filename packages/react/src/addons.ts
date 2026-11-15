@@ -28,11 +28,11 @@ import {
  */
 const settled = new Map<string, Promise<Error | null>>()
 
-function settle(addons: readonly AddonName[], parts: readonly EnginePart[], loadCanvas: (() => Promise<void>) | undefined): Promise<Error | null> {
-  const key = [...addons, ...parts.map((p) => `part:${p}`), ...(loadCanvas ? ['part:canvas'] : [])].join('+')
+function settle(addons: readonly AddonName[], parts: readonly EnginePart[], loadCanvas: (() => Promise<void>) | undefined, loadLoop?: () => Promise<void>): Promise<Error | null> {
+  const key = [...addons, ...parts.map((p) => `part:${p}`), ...(loadCanvas ? ['part:canvas'] : []), ...(loadLoop ? ['part:signals'] : [])].join('+')
   let p = settled.get(key)
   if (!p) {
-    p = Promise.all([loadAddons(addons), loadParts(parts), loadCanvas?.()]).then(
+    p = Promise.all([loadAddons(addons), loadParts(parts), loadCanvas?.(), loadLoop?.()]).then(
       () => { settled.delete(key); return null },
       (e: unknown) => (e instanceof Error ? e : new Error(String(e))),
     )
@@ -49,6 +49,12 @@ export interface AddonInput {
   random?: boolean
   /** The canvas renderer to load first, when the chart draws on a canvas (`renderer="canvas"` with the canvas capability). */
   canvas?: { load: () => Promise<void> }
+  /**
+   * The signal event loop of an interactive chart (the interaction capability's `loadSignals`), loaded when the chart binds it: the
+   * spec declares signals (`SpecNeeds.eventLoop`), the host listens to signals (`listeners`), or the scene comes from outside and
+   * is not read here (`always`).
+   */
+  eventLoop?: { load: () => Promise<void>; listeners: boolean; always?: boolean }
 }
 
 /**
@@ -63,6 +69,7 @@ export function useAddons(spec: VgSpec | null, urlData?: UrlDataMode, input?: Ad
   const limits = input?.limits === true
   const random = input?.random === true
   const canvas = input?.canvas
+  const eventLoop = input?.eventLoop
   // what the spec needs is a walk of the spec: once per spec, not once per render (a signal event re-renders the chart often)
   const needed = React.useMemo((): SpecNeeds | Error => {
     if (spec === null) return NOTHING
@@ -78,8 +85,9 @@ export function useAddons(spec: VgSpec | null, urlData?: UrlDataMode, input?: Ad
   const addons = notLoaded(needed.addons)
   const parts = partsNotLoaded(needed.parts)
   const loadCanvas = canvas !== undefined && !partLoaded('canvas') ? canvas.load : undefined
-  return addons.length === 0 && parts.length === 0 && loadCanvas === undefined ? null : React.use(settle(addons, parts, loadCanvas))
+  const loadLoop = eventLoop !== undefined && (needed.eventLoop || eventLoop.listeners || eventLoop.always === true) && !partLoaded('signals') ? eventLoop.load : undefined
+  return addons.length === 0 && parts.length === 0 && loadCanvas === undefined && loadLoop === undefined ? null : React.use(settle(addons, parts, loadCanvas, loadLoop))
 }
-const NOTHING: SpecNeeds = { addons: [], parts: [] }
+const NOTHING: SpecNeeds = { addons: [], parts: [], eventLoop: false }
 
 export { loadAddonsFor } from '@aster-charts/core/lean'

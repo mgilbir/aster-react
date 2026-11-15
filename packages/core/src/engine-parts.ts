@@ -23,6 +23,7 @@ import type { sceneIntersect } from './scene-intersect.js'
 import type { applyChangeset, newChangeset, planModify } from './modify.js'
 import type { Timers } from './timer.js'
 import type { IncrementalEngine } from './runtime.js'
+import type { bindSceneSignals } from './signals.js'
 import type {
   createCanvasEvents, loadImages, paintsSameAs, renderSceneToCanvas, renderSceneToCanvasAppend, sceneImageUrls, snapshotCanvasScene, withSceneImages,
 } from './canvas.js'
@@ -52,12 +53,17 @@ export interface EngineParts {
     renderSceneToCanvasAppend: typeof renderSceneToCanvasAppend; paintsSameAs: typeof paintsSameAs; snapshotCanvasScene: typeof snapshotCanvasScene
     sceneImageUrls: typeof sceneImageUrls; loadImages: typeof loadImages; withSceneImages: typeof withSceneImages
   }
+  /**
+   * The signal event loop (signals.ts) as the React shells bind it: asked for by a chart that binds it (a spec that declares signals,
+   * or a host that listens to them: `specNeeds(...).eventLoop`), never read by an evaluation.
+   */
+  signals: { bindSceneSignals: typeof bindSceneSignals }
 }
 
 export type EnginePart = keyof EngineParts
 
 /** Every part, in the order `partsNeeded` lists them. */
-export const ENGINE_PARTS: readonly EnginePart[] = Object.freeze(['legend', 'layout', 'pulse', 'selections', 'regex', 'svgpath', 'intersect', 'modify', 'timer', 'canvas'])
+export const ENGINE_PARTS: readonly EnginePart[] = Object.freeze(['legend', 'layout', 'pulse', 'selections', 'regex', 'svgpath', 'intersect', 'modify', 'timer', 'canvas', 'signals'])
 
 const slots: Partial<EngineParts> = {}
 

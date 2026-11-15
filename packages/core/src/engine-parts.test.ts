@@ -17,7 +17,7 @@ import { setTimerClock } from './timer.js'
 import { FakeClock } from './timer.testlib.js'
 import type { VgSpec } from './types.js'
 
-const SPEC_PARTS = ENGINE_PARTS.filter((p) => p !== 'canvas')
+const SPEC_PARTS = ENGINE_PARTS.filter((p) => p !== 'canvas' && p !== 'signals')
 const MISSING = /the "(\w+)" part of the engine is not loaded/
 const parts = (spec: unknown, options?: Parameters<typeof specNeeds>[1]): string => [...specNeeds(spec as VgSpec, options).parts].join()
 

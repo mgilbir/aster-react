@@ -407,7 +407,12 @@ function ChartView({
   // they load, so there is no render of the half-ready chart and no error to flash. A failed import is a chart error.
   // With `urlData="refuse"` a spec with a url dataset is refused here, before any add-on is imported.
   // (and the parts of the engine it needs: the legend builder, the canvas renderer for renderer="canvas"... see `useAddons`)
-  const addonError = useAddons(sceneOverride !== undefined ? null : spec, urlData, { limits: limits != null, random: random != null, canvas: requestedRenderer === 'canvas' ? canvasCap : undefined })
+  // (and the signal event loop of an interactive chart that binds it: see the binding below, and `useAddons`)
+  const loadLoop = interactive && interaction?.loadSignals !== undefined ? interaction.loadSignals : undefined
+  const addonError = useAddons(sceneOverride !== undefined ? null : spec, urlData, {
+    limits: limits != null, random: random != null, canvas: requestedRenderer === 'canvas' ? canvasCap : undefined,
+    eventLoop: loadLoop !== undefined ? { load: loadLoop, listeners: signalListeners != null || onSignal != null, always: sceneOverride !== undefined } : undefined,
+  })
   const stableLimits = useStableContent(limits)
   // Which scales `view`/`brush`/`selection`'s `x`/`y` refer to.
   const positional = React.useMemo(() => positionalScales(spec), [spec])

@@ -580,7 +580,7 @@ add-on that registers it). Test seams: `registeredFunctionNames` lists the expre
 `withdrawFunctions(names)` removes some and returns a function that restores them.
 
 The same module reads which *parts of the engine* a spec may need (see "The parts of the engine most charts never run" in
-docs/ARCHITECTURE.md): `specNeeds(spec, options?)` returns `{ addons, parts }` from one walk, `partsNeeded(spec, options?)` the parts
+docs/ARCHITECTURE.md): `specNeeds(spec, options?)` returns `{ addons, parts, eventLoop }` from one walk (`eventLoop`: a scope declares signals, so an interactive shell binds the signal loop), `partsNeeded(spec, options?)` the parts
 alone (`EnginePart`: `'legend' | 'layout' | 'pulse' | 'selections' | 'regex' | 'svgpath' | 'intersect' | 'modify' | 'timer'`), with
 `PartOptions` adding `{ limits, random }` to `{ urlData }`; `partsNotLoaded(names)` filters a list by what is loaded, `loadParts(names)`
 imports parts, and `loadPartsFor(spec, options?)` loads every add-on and part a spec needs. The tables they read: `PART_FUNCTIONS`
@@ -590,15 +590,17 @@ never needs these; they are what the React shells use.
 
 **`@aster-charts/core/lean`, `/lean/hit`, `/lean/signals`, `/lean/canvas`, `/lean/stream` (internal).** The engine as `@aster-charts/react`'s shells use it, not covered by semver: under the `browser` export condition the parts of the
 engine are left out and loaded on demand, anywhere else every part is there. `/lean` re-exports `buildA11yTree`, `chartInfoFromScene`,
-`renderSceneToSvg`, `AsterLimitError`, `checkSvgLength`, `createPointMapper`, `resolveCursor`, `consoleLogger`, `checkChartRows`,
+`renderSceneToSvg`, `AsterLimitError`, `checkSvgLength`, `createPointMapper`, `resolveCursor`, `createCursorTracker`, `sceneHasCursor`, `consoleLogger`, `checkChartRows`,
 `shareRowWatch`, `checkUrlData`, `createChartSession`, `chartSkeleton`, `hasDenseSymbolMarks`, `patchSceneDom`,
 `renderSceneToDomElement`, the add-on and part functions above (`addonsNeeded`, `loadAddons`, `loadAddonsFor`, `missingAddons`,
 `notLoaded`, `specNeeds`, `partsNeeded`, `partsNotLoaded`, `loadParts`, `loadPartsFor`), and `ENGINE_PARTS`, `part(name)` (a loaded
 part; throws for an empty slot), `partLoaded(name)`, `withdrawParts(names)` (a test seam that empties slots and returns a function
 that fills them again) and `setUpShell()` (what the shells call once: the guide captions and the loader of the pulse path).
-`/lean/hit` and `/lean/signals` are `@aster-charts/core/hit` and `/signals`; `/lean/canvas` exports `loadCanvasPart()`, which loads the
-canvas renderer for `<Chart renderer="canvas">` (and, outside a browser build, `part`, the renderer itself); `/lean/stream` is the
-chart stream (`createChartStream`, `getStreamFlushFailure`).
+`/lean/hit` is `@aster-charts/core/hit`; `/lean/canvas` exports `loadCanvasPart()`, which loads the canvas renderer for
+`<Chart renderer="canvas">` (and, outside a browser build, `part`, the renderer itself); `/lean/signals` exports `loadSignalsPart()`,
+which loads the signal event loop (the `signals` part: `bindSceneSignals`) for a chart the shells bind it for, a spec that declares
+signals (`specNeeds(spec).eventLoop`) or a host that listens to them; `/lean/stream` is the chart stream (`createChartStream`,
+`getStreamFlushFailure`).
 
 #### `@aster-charts/core/dom`
 

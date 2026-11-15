@@ -6,8 +6,9 @@
  *
  * What must hold: a chart that needs no part renders at once and fetches nothing; one that needs a part suspends until it is loaded
  * and then draws exactly what it draws with every part (no intermediate render of a half-made chart); `renderer="canvas"` waits for
- * the canvas renderer; new data is drawn as before while the pulse path is fetched for the next change; and a server render made
- * with every part hydrates with no mismatch.
+ * the canvas renderer; an interactive chart whose spec declares signals, or whose host listens to them, waits for the signal loop and
+ * binds it, and a chart with neither never loads it; new data is drawn as before while the pulse path is fetched for the next change;
+ * and a server render made with every part hydrates with no mismatch.
  */
 import * as React from 'react'
 import { act } from 'react'
@@ -21,7 +22,10 @@ import type { VgSpec } from '@aster-charts/core'
 
 vi.mock('@aster-charts/core/lean', async () => await import('../../core/dist/lean.js'))
 vi.mock('@aster-charts/core/lean/hit', async () => await import('../../core/dist/hit.js'))
-vi.mock('@aster-charts/core/lean/signals', async () => await import('../../core/dist/signals.js'))
+// (the same for the signal loop: the browser variant, signals-deferred.ts, loads part-signals.js when a chart first binds it)
+vi.mock('@aster-charts/core/lean/signals', async () => ({
+  loadSignalsPart: async () => (await import('../../core/dist/part-signals.js')).loadSignalsPart(),
+}))
 // (outside a browser build `/lean/canvas` IS part-canvas.js, the module the browser variant defers: mocked here by what the deferred
 // module does, loading the real one when a chart first asks for a canvas)
 vi.mock('@aster-charts/core/lean/canvas', async (importOriginal) => ({
@@ -31,12 +35,19 @@ vi.mock('@aster-charts/core/lean/canvas', async (importOriginal) => ({
 const { forEachVariant } = await import('./testing/variants')
 const { ENGINE_PARTS, loadParts, partLoaded, withdrawParts } = await import('@aster-charts/core/lean')
 const { loadCanvasPart } = await vi.importActual<{ loadCanvasPart: () => Promise<void> }>('@aster-charts/core/lean/canvas')
+const { loadSignalsPart } = await import('@aster-charts/core/lean/signals')
 
 const CORPUS = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'conformance', 'corpus')
 const corpus = (name: string): VgSpec => JSON.parse(readFileSync(join(CORPUS, name), 'utf8')) as VgSpec
 const PLAIN = corpus('bar-bands.vg.json')
 const LEGEND = corpus('bar-color-blues-reversed-legend.vg.json')
-const SPEC_PARTS = ENGINE_PARTS.filter((p) => p !== 'canvas')
+const SPEC_PARTS = ENGINE_PARTS.filter((p) => p !== 'canvas' && p !== 'signals')
+/** A spec whose signal a click on its view sets, shown by a text mark: what the signal loop drives. */
+const CLICKS: VgSpec = {
+  width: 120, height: 60, padding: 0, autosize: 'none',
+  signals: [{ name: 'clicks', value: 0, on: [{ events: 'click', update: 'clicks + 1' }] }],
+  marks: [{ type: 'text', encode: { update: { x: { value: 10 }, y: { value: 20 }, text: { signal: "'clicks ' + clicks" } } } }],
+} as VgSpec
 
 /** Let pending imports land and React reveal what they unblocked (it throttles revealing a boundary's content, by up to 300 ms). */
 const settle = async (): Promise<void> => {
@@ -60,7 +71,7 @@ function mount(el: React.ReactElement): HTMLDivElement {
   return c
 }
 /** Every part in its slot: what a chart draws with the whole engine. */
-async function full(): Promise<void> { await loadParts(SPEC_PARTS); await loadCanvasPart() }
+async function full(): Promise<void> { await loadParts(SPEC_PARTS); await loadCanvasPart(); await loadSignalsPart() }
 /** What `el` draws with every part, as markup. */
 async function drawnWithEveryPart(el: React.ReactElement): Promise<string> {
   await full()
@@ -86,6 +97,38 @@ forEachVariant(['svg'], (Chart, variant) => describe(`${variant.name} on the lea
     expect(c.querySelector('svg')).not.toBeNull()
     expect(c.querySelector('#fb')).toBeNull()
     expect(ENGINE_PARTS.filter(partLoaded)).toEqual([])
+  })
+
+  variant.it(['interaction'], 'a chart whose spec declares signals waits for the signal loop, draws what it draws with every part, and binds it', async () => {
+    const expected = await drawnWithEveryPart(<Chart spec={CLICKS} width={120} height={60} />)
+    for (const p of pending.splice(0)) await p
+    act(() => { for (const r of roots) r.unmount() })
+    roots = []
+    withdrawParts(ENGINE_PARTS)
+    const c = mount(<Chart spec={CLICKS} width={120} height={60} />)
+    expect(c.innerHTML).toBe('<i id="fb"></i>')
+    await settle()
+    expect(ENGINE_PARTS.filter(partLoaded)).toEqual(['signals'])
+    expect(c.innerHTML).toBe(expected)
+    // bound: a click on the view runs the stream
+    act(() => { c.querySelector('svg')!.dispatchEvent(new MouseEvent('click', { bubbles: true, clientX: 30, clientY: 30 })) })
+    await settle()
+    expect(c.querySelector('.mark-text text')?.textContent).toBe('clicks 1')
+  })
+
+  variant.it(['interaction'], 'a host listening to signals loads the loop for a spec that declares none; a chart that does neither, or is not interactive, never does', async () => {
+    const quiet = mount(<Chart spec={PLAIN} width={300} height={200} />)
+    const inert = mount(<Chart spec={CLICKS} width={120} height={60} interactive={false} />)
+    await settle()
+    expect(quiet.querySelector('svg')).not.toBeNull()
+    expect(inert.querySelector('svg')).not.toBeNull()
+    expect(partLoaded('signals')).toBe(false)
+    const heard: string[] = []
+    const c = mount(<Chart spec={PLAIN} width={300} height={200} onSignal={(name) => heard.push(name)} />)
+    expect(c.innerHTML).toBe('<i id="fb"></i>')
+    await settle()
+    expect(partLoaded('signals')).toBe(true)
+    expect(c.querySelector('svg')).not.toBeNull()
   })
 
   it('a chart with a legend suspends until the legend builder is there, then draws what it draws with every part', async () => {

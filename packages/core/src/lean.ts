@@ -10,7 +10,7 @@
  *
  * Every function here is one of the public entries' functions; the public entries themselves (`@aster-charts/core`, `/dom`,
  * `/signals`, `/hit`, `/canvas`, `/png`) carry their parts, so their synchronous API works for every spec with nothing to load. The hit
- * index and the signal loop are `@aster-charts/core/lean/hit` and `/lean/signals`, so that a chart without interaction (`<SvgChart>`)
+ * index and the loader of the signal loop are `@aster-charts/core/lean/hit` and `/lean/signals`, so that a chart without interaction (`<SvgChart>`)
  * can be seen, from its imports alone, not to reach them; the chart stream is `/lean/stream`, so that the pulse path it carries is not
  * reached through this module by a chart that does not stream.
  */
@@ -19,7 +19,7 @@ export { chartInfoFromScene } from './runtime.js'
 export { renderSceneToSvg } from './render.js'
 export { AsterLimitError, checkSvgLength } from './limits.js'
 export { createPointMapper } from './pointer.js'
-export { resolveCursor } from './cursor.js'
+export { createCursorTracker, resolveCursor, sceneHasCursor } from './cursor.js'
 export { consoleLogger } from './logger.js'
 export { checkChartRows, shareRowWatch } from './row-watch.js'
 export { checkUrlData } from './url-data.js'

@@ -60,9 +60,9 @@
       "default": "./dist/entry-hit.js"
     },
     "./lean/signals": {
-      "types": "./dist/signals.d.ts",
-      "browser": "./dist/signals.js",
-      "default": "./dist/entry-signals.js"
+      "types": "./dist/signals-deferred.d.ts",
+      "browser": "./dist/signals-deferred.js",
+      "default": "./dist/lean-signals-full.js"
     },
     "./lean/canvas": {
       "types": "./dist/canvas-deferred.d.ts",
@@ -102,7 +102,9 @@
     "./dist/part-intersect.js",
     "./dist/part-modify.js",
     "./dist/part-timer.js",
-    "./dist/part-canvas.js"
+    "./dist/part-canvas.js",
+    "./dist/part-signals.js",
+    "./dist/lean-signals-full.js"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.build.json",

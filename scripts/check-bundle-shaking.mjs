@@ -95,7 +95,7 @@ const PARTS_VG = {
   } } }],
 }
 /** The engine parts a browser build of the shells loads on demand, by the module each brings (core/dist/<module>.js). */
-const PART_MODULES = ['guide-legend', 'trellis', 'incremental-engine', 'selections', 'regex-screen', 'part-svgpath', 'scene-intersect', 'modify', 'timer', 'canvas']
+const PART_MODULES = ['guide-legend', 'trellis', 'incremental-engine', 'selections', 'regex-screen', 'part-svgpath', 'scene-intersect', 'modify', 'timer', 'canvas', 'signals']
 
 /**
  * Each pattern: an app (its source), whether it needs jsdom, the assertions on the JSON it returns, and optionally
@@ -727,9 +727,9 @@ const PATTERNS = [
       [r.plainSync === true && r.afterPlain === '', 'a plain chart renders in the first commit and loads no part'],
       [r.legendFallback === true && r.afterLegend === 'legend,svgpath', 'a legend: the fallback shows, then the legend builder and the path reader load, nothing else'],
       [r.legendSame === true, 'and the legend chart is what the full engine draws'],
-      [r.partsFallback === true && r.afterParts === 'legend,selections,svgpath', 'a custom path and a selection test: their parts load (the regex screen does not: no limits)'],
+      [r.partsFallback === true && r.afterParts === 'legend,selections,svgpath,signals', 'a custom path, a selection test and a signal: their parts and the signal loop load (the regex screen does not: no limits)'],
       [r.partsSame === true, 'and that chart is what the full engine draws'],
-      [r.canvasFallback === true && r.afterCanvas === 'legend,selections,svgpath,canvas', 'renderer="canvas": the fallback shows, then the canvas renderer loads'],
+      [r.canvasFallback === true && r.afterCanvas === 'legend,selections,svgpath,canvas,signals', 'renderer="canvas": the fallback shows, then the canvas renderer loads'],
       [r.dataSync === true && r.afterData.includes('pulse') && r.dataRects === 3, 'new data is drawn at once, and the pulse path loads for the next change'],
     ],
     modules: (m) => PART_MODULES.map((name) => {

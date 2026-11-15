@@ -57,6 +57,11 @@ export interface PngCapability {
 export interface InteractionCapability {
   readonly buildHitIndex: typeof buildHitIndex
   readonly bindSceneSignals: typeof bindSceneSignals
+  /**
+   * Load the event loop before a chart binds it (`ChartCore` waits for it, a Suspense wait like the add-ons', for a spec that
+   * declares signals or a host that listens to them). Resolves at once once it is loaded. Absent: `bindSceneSignals` is there already.
+   */
+  readonly loadSignals?: () => Promise<void>
   readonly createCursorTracker: typeof createCursorTracker
   readonly sceneHasCursor: typeof sceneHasCursor
   /** The default tooltip's content for an item's `tooltip` value, as vega-tooltip shows it. */

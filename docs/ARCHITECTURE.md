@@ -385,7 +385,10 @@ Their callers read them from slots (`engine-parts.ts`) instead of importing them
   `modify` / `setdata`; a `timer` event stream; under limits, `test`, `regexp`, a regular expression literal, or `replace` / `split`
   with an argument that may be one; with a random source, datasets that may draw from it (whose draws depend on which evaluation takes
   a pulse, so the pulse path is there from the first). `useAddons` loads them with the add-ons, through the same Suspense wait;
-  `renderer="canvas"` adds the canvas renderer (`CanvasCapability.load`).
+  `renderer="canvas"` adds the canvas renderer (`CanvasCapability.load`), and an interactive chart that binds the signal loop adds it
+  (`InteractionCapability.loadSignals`, the `signals` part): a scope of the spec declares signals (`specNeeds(...).eventLoop`), or the
+  host listens to signals. The item cursor (`createCursorTracker`, `sceneHasCursor`, in `cursor.ts`) is read on every render of a
+  chart with or without signals, so it is outside the loop and loaded up front.
 - **The pulse path** is the one part an evaluation goes on without: a re-evaluation that could have taken a pulse derives the dataset
   in full (the same rows and the same state for the next pulse) and asks for the part (`requestPart`), which `setUpShell` loads; the
   following evaluations are incremental.
