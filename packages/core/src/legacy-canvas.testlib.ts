@@ -16,7 +16,7 @@
 import { SYMBOL_DEFAULT_SIZE } from './util.js'
 import type { SceneDef, SceneGroup, SceneItem, SceneRoot } from './types.js'
 import { gradientDefOf, isGradientPaint as isGradientObject } from './svg-defs.js'
-import { Bounds, boundLeaf, boundTypedMark } from './legacy-bounds.testlib.js'
+import { Bounds, boundLeaf, boundStroke, boundTypedMark } from './legacy-bounds.testlib.js'
 import { imageBox, itemImage } from './image-box.js'
 import { parsePathData, tracePath, type PathSeg, type PathSink } from './legacy-path-data.testlib.js'
 import { drawnPathCommands, renderSvgPath } from './path-data.js'
@@ -600,6 +600,29 @@ function groupGradientBox(group: SceneGroup): Bbox | undefined {
   return b.empty() ? undefined : { x1: b.x1, y1: b.y1, x2: b.x2, y2: b.y2 }
 }
 
+/**
+ * (The intended change of the guide gradient work, which gradient-canvas-bounds-vs-vega pins: a gradient on a guide's leaf lies over
+ * the bounds of the item it stands for -- a box's own `_itemBounds`, a strip or band as a rect, a rule as a rule, a symbol with its
+ * miter -- not over its untranslated path. The rest of this copy is unchanged.)
+ */
+function leafGradientBox(it: SceneItem): Bbox | undefined {
+  if (!(isGradientPaint(it.fill) || isGradientPaint(it.stroke))) return undefined
+  const own = (it as unknown as Record<string, unknown>)._itemBounds as Bbox | undefined
+  const x = it.x ?? 0
+  const y = it.y ?? 0
+  if (own !== undefined) return { x1: own.x1 + x, y1: own.y1 + y, x2: own.x2 + x, y2: own.y2 + y }
+  const part = it._part
+  let b: Bounds
+  if (part === 'gradient' || part === 'band') {
+    const w = Number(it.width) || 0
+    const h = Number(it.height) || 0
+    b = boundStroke(new Bounds().set(Math.min(x, x + w), Math.min(y, y + h), Math.max(x, x + w), Math.max(y, y + h)), it)
+  } else if (it.path == null && it.text == null && it.shape == null) b = boundLeaf(new Bounds(), { ...it, _kind: 'rule' } as SceneItem, false, 'rule')
+  else if (part === 'symbol') b = boundLeaf(new Bounds(), it, true, 'symbol')
+  else b = boundLeaf(new Bounds(), it, true)
+  return b.empty() ? undefined : { x1: b.x1, y1: b.y1, x2: b.x2, y2: b.y2 }
+}
+
 /** Compute the bbox of parsed segments (for objectBoundingBox gradients). */
 function segsBbox(segs: PathSeg[]): Bbox {
   const bb: Bbox = { x1: Infinity, y1: Infinity, x2: -Infinity, y2: -Infinity }
@@ -730,7 +753,7 @@ function renderLeafItem(it: SceneItem, ctx: CanvasLike, scene: SceneRoot, box?: 
       ctx.beginPath()
       tracePath(ctx, segs, tx, ty)
     }
-    paintPath(ctx, segs, it, defs, 'auto', box)
+    paintPath(ctx, segs, it, defs, 'auto', box ?? leafGradientBox(it))
     if (clip) ctx.restore()
     return
   }
@@ -756,7 +779,7 @@ function renderLeafItem(it: SceneItem, ctx: CanvasLike, scene: SceneRoot, box?: 
       return o as unknown as typeof s
     })
     tracePath(ctx, segs)
-    paintPath(ctx, segs, it, defs, 'auto')
+    paintPath(ctx, segs, it, defs, 'auto', leafGradientBox(it))
     return
   }
   if (it._kind === 'text' || (it._kind === undefined && it.text != null)) {
@@ -772,7 +795,7 @@ function renderLeafItem(it: SceneItem, ctx: CanvasLike, scene: SceneRoot, box?: 
   ctx.beginPath()
   ctx.moveTo(x, y)
   ctx.lineTo(x2, y2)
-  paintPath(ctx, [{ cmd: 'M', x, y }, { cmd: 'L', x: x2, y: y2 }] as PathSeg[], it, defs, 'stroke')
+  paintPath(ctx, [{ cmd: 'M', x, y }, { cmd: 'L', x: x2, y: y2 }] as PathSeg[], it, defs, 'stroke', leafGradientBox(it))
 }
 
 /** Paint for arc-drawn symbols (bbox computed analytically). */
