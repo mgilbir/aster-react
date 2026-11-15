@@ -872,6 +872,19 @@ function paintsPattern(p: unknown, defs: SceneDefs[] | undefined): boolean {
   return (def.x1 ?? 0) !== (def.x2 ?? 1) && (def.y1 ?? 0) !== (def.y2 ?? 0)
 }
 
+/**
+ * Build the path of a symbol of `shape` and radius `r` at (x, y), turned by `angle` degrees, at full precision, as vega's canvas draws a
+ * symbol: a circle as one full-turn arc about the item's origin (the same curve as two half turns, rasterized a pixel or two
+ * differently by WebKit), any other shape from its own segments. Returns the segments the paint reads.
+ */
+function traceSymbol(ctx: CanvasLike, shape: string | undefined, r: number, x: number, y: number, angle: number): PathSeg[] {
+  const segs = symbolSegs(shape, r)
+  if (shape == null || shape === 'circle') buildInItemFrame(ctx, x, y, angle, 1, 1, () => { ctx.moveTo(r, 0); ctx.arc(0, 0, r, 0, 2 * Math.PI, false) })
+  else if (angle) buildInItemFrame(ctx, x, y, angle, 1, 1, () => tracePath(ctx, segs))
+  else { ctx.beginPath(); tracePath(ctx, segs, x, y) }
+  return segs
+}
+
 function renderLeafItem(it: SceneItem, ctx: CanvasLike, scene: SceneRoot, box?: Bbox, bake = 0, frame?: Frame): void {
   const defs = scene.defs
   if (frame !== undefined && (frame.x !== 0 || frame.y !== 0) && (paintsPattern(it.fill, defs) || paintsPattern(it.stroke, defs))) {
@@ -895,7 +908,11 @@ function renderLeafItem(it: SceneItem, ctx: CanvasLike, scene: SceneRoot, box?: 
     const ty = it.y ?? 0
     ctx.beginPath()
     // (a group item's box stroked in front is filled where the stroked box is: see `_canvasPath`)
-    const segs = parsePathData(((it as unknown as Record<string, unknown>)._canvasPath as string | undefined) ?? it.path)
+    const rec = it as unknown as Record<string, unknown>
+    // a guide's symbol (a legend's): drawn from its shape and radius, as vega's canvas draws it, not from the rounded SVG text
+    const symbolRadius = rec._symbolRadius as number | undefined
+    const segs = symbolRadius !== undefined ? symbolSegs(rec._symbolShape as string | undefined, symbolRadius)
+      : parsePathData((rec._canvasPath as string | undefined) ?? it.path)
     // A clipped legend symbol (clipHeight): clip to the entry's laid-out
     // rect (0,0,w,h) in the item's local frame, matching the SVG renderer's
     // clipPath defs.
@@ -906,7 +923,9 @@ function renderLeafItem(it: SceneItem, ctx: CanvasLike, scene: SceneRoot, box?: 
       ctx.rect(clip.x ?? 0, clip.y ?? 0, clip.w, clip.h)
       ctx.clip()
     }
-    if (itemAngle(it)) {
+    if (symbolRadius !== undefined) {
+      traceSymbol(ctx, rec._symbolShape as string | undefined, symbolRadius, tx, ty, itemAngle(it) ?? 0)
+    } else if (itemAngle(it)) {
       // the SVG element carries translate(x,y) rotate(angle): build in that frame
       buildInItemFrame(ctx, tx, ty, itemAngle(it)!, 1, 1, () => tracePath(ctx, segs))
     } else {
@@ -1192,14 +1211,7 @@ function renderMark(type: string, group: SceneGroup, ctx: CanvasLike, scene: Sce
           const size = (it.size as number) ?? SYMBOL_DEFAULT_SIZE
           const r = Math.sqrt(size) / 2
           const shape = (it as Record<string, unknown>).shape as string | undefined
-          const segs = symbolSegs(shape, r)
-          const angle = ((it as Record<string, unknown>).angle as number) || 0
-          if (shape == null || shape === 'circle') {
-            // (vega draws a circle as one full-turn arc about the item's origin: the same curve as two half turns, rasterized
-            // a pixel or two differently by WebKit)
-            buildInItemFrame(ctx, x, y, angle, 1, 1, () => { ctx.moveTo(r, 0); ctx.arc(0, 0, r, 0, 2 * Math.PI, false) })
-          } else if (angle) buildInItemFrame(ctx, x, y, angle, 1, 1, () => tracePath(ctx, segs))
-          else { ctx.beginPath(); tracePath(ctx, segs, x, y) }
+          const segs = traceSymbol(ctx, shape, r, x, y, ((it as Record<string, unknown>).angle as number) || 0)
           paintPath(ctx, segs, it, defs, 'auto', gradientBox(it))
         }
       }

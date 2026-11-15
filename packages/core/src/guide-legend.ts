@@ -725,7 +725,13 @@ function drawnSymbol(sym: SceneItem & Rec): SceneItem & Rec {
   for (const key in sym) if (key !== 'size' && key !== 'shape') leaf[key] = sym[key]
   // (a shape vega could not measure is not drawn here either: its renderers fail on it, and its canvas never reaches it)
   if (sym._drawError !== undefined) leaf._unmeasured = true
-  else leaf.path = String(symbolPath(sym.shape as string | undefined, Math.sqrt(size) / 2))
+  else {
+    leaf.path = String(symbolPath(sym.shape as string | undefined, Math.sqrt(size) / 2))
+    // (the canvas draws the shape itself, at full precision, as vega's canvas draws a legend's symbols with its symbol mark: the path
+    // text above is rounded to three decimals for the SVG)
+    leaf._symbolShape = sym.shape as string | undefined
+    leaf._symbolRadius = Math.sqrt(size) / 2
+  }
   leaf._part = 'symbol'
   leaf._kind = 'symbol'
   return leaf as SceneItem & Rec
