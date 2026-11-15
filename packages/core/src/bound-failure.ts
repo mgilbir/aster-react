@@ -54,15 +54,21 @@ function measureShape(item: { mark: { shape?: unknown }; shape?: unknown }): voi
  * when they all measure. `clipPath` is the mark's clip, when it is an SVG path: vega bounds it after the items, which are measured by
  * then. `shaped`, whether a transform gave the mark a shape (a shape mark's).
  */
-export function boundFailure(type: string, items: readonly SceneItem[], clipPath?: string, shaped = false): { error: unknown; from: number | undefined } | undefined {
+/**
+ * `uniform`: no encode set of the mark defines the channel judged here (`path` for a path mark, `shape` for a symbol or shape mark), so
+ * every item carries the same value (a default or the config's) and the first item answers for all of them, at the same index (0). A
+ * mark whose channel is encoded is judged item by item.
+ */
+export function boundFailure(type: string, items: readonly SceneItem[], clipPath?: string, shaped = false, uniform = false): { error: unknown; from: number | undefined } | undefined {
   let at = 0
+  const n = uniform ? Math.min(1, items.length) : items.length
   try {
     switch (type) {
       case 'path':
-        for (; at < items.length; at++) if (items[at]!.path != null) measurePath(items[at]!.path)
+        for (; at < n; at++) if (items[at]!.path != null) measurePath(items[at]!.path)
         break
       case 'symbol':
-        for (; at < items.length; at++) {
+        for (; at < n; at++) {
           const shape = (items[at] as { shape?: unknown }).shape || 'circle'
           if (typeof shape !== 'string' || !SYMBOLS.has(shape)) measurePath(shape)
         }
@@ -76,7 +82,7 @@ export function boundFailure(type: string, items: readonly SceneItem[], clipPath
         }
         break
       case 'shape':
-        if (!shaped) for (; at < items.length; at++) measureShape({ mark: {}, shape: (items[at] as { shape?: unknown }).shape })
+        if (!shaped) for (; at < n; at++) measureShape({ mark: {}, shape: (items[at] as { shape?: unknown }).shape })
         break
     }
   } catch (error) {
