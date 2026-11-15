@@ -1824,7 +1824,8 @@ function legendItem(g: SceneGroup, clips: ClipCollector): SvgEl {
   const meta = g.partMeta
   const leaf = (it: SceneItem, wrapClip = true): SvgLeaf => ({ leaf: it, wrapClip })
   let bg: SceneItem | null = null
-  const entries: Array<{ box: SceneItem | null; symbols: SceneItem[]; labels: SceneItem[] }> = []
+  let fg: SceneItem | null = null
+  const entries: Array<{ box: SceneItem | null; symbols: SceneItem[]; labels: SceneItem[]; fg?: SceneItem }> = []
   const gradients: SceneItem[] = []
   const bands: SceneItem[] = []
   const labels: SceneItem[] = []
@@ -1837,6 +1838,8 @@ function legendItem(g: SceneGroup, clips: ClipCollector): SvgEl {
   for (const it of leaves) {
     switch (it._part) {
       case 'bg': bg ??= it; break
+      case 'fg': fg ??= it; break
+      case 'entryFg': if (cur) cur.fg = it; break
       case 'entry': entries.push((cur = { box: it, symbols: [], labels: [] })); break
       case 'symbol': (cur ??= entries[entries.push({ box: null, symbols: [], labels: [] }) - 1]!).symbols.push(it); break
       case 'label': if (symbolStyle) (cur ??= entries[entries.push({ box: null, symbols: [], labels: [] }) - 1]!).labels.push(it); else labels.push(it); break
@@ -1863,7 +1866,7 @@ function legendItem(g: SceneGroup, clips: ClipCollector): SvgEl {
           ...(parts >= 1 ? [el('g', (w) => guidePartAttrs('legend', 'symbol', e.symbols.length ? leafClipId(e.symbols[0]!, clips) : null, w, meta), e.symbols.map((s) => leaf(s, false)))] : []),
           ...(parts >= 2 ? [el('g', (w) => guidePartAttrs('legend', 'label', null, w, meta), e.labels.map((l) => leaf(l)))] : []),
         ]),
-        el('path', (w) => groupForegroundAttrs(null, inert, w)),
+        el('path', (w) => groupForegroundAttrs(e.fg ?? null, inert, w)),
       ], e.box && recOf(e.box).href !== undefined ? e.box : undefined)
     })
     // (a legend whose entries failed to build has no entry scope at all: vega's subflow never ran)
@@ -1876,7 +1879,7 @@ function legendItem(g: SceneGroup, clips: ClipCollector): SvgEl {
   }
   const marks: SvgEl[] = made('entry') ? [col(entryMarks)] : []
   if (titles.length) marks.push(el('g', (w) => guidePartAttrs('legend', 'title', null, w, meta), titles.map((t) => leaf(t))))
-  return guideItem(g.x ?? 0, g.y ?? 0, bg, marks, boxPath(g.width ?? 0, g.height ?? 0), loose, !meta?.legend?.interactive, g.itemAria, g.href !== undefined ? g : undefined)
+  return guideItem(g.x ?? 0, g.y ?? 0, bg, marks, boxPath(g.width ?? 0, g.height ?? 0), loose, !meta?.legend?.interactive, g.itemAria, g.href !== undefined ? g : undefined, fg)
 }
 
 function titleItem(g: SceneGroup, frameW: number, frameH: number, scope: GuideScope): SvgEl {

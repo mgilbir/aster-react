@@ -633,6 +633,8 @@ export function buildLegend(inp: LegendBuildInput): LegendBuilt {
     titleItem._legendTitle = true
     leaves.push(titleItem)
   }
+  // (stroked in front: the legend's stroke, drawn after all it holds)
+  if (frame.foreground) leaves.push({ ...frame.foreground, _part: 'fg' } as SceneItem)
   return { leaves, legendType: type, width, height, bounds, group, partMeta, datum, ...(cutShort || host.stopped !== undefined ? { madeMarks } : {}), ...(failed.grid !== undefined ? { gridError: failed.grid } : {}) }
 }
 
@@ -887,6 +889,8 @@ function symbolEntries(inp: LegendBuildInput, k: Kit, defs: LegendDefs, group: R
       lbl.y = ((lbl.y as number) || 0) + here.y
       out.push(lbl)
     }
+    // (stroked in front: the entry's stroke, drawn after its symbol and its label; it belongs to the entry box before it)
+    if (frame.foreground) out.push({ ...frame.foreground, _part: 'entryFg', x: here.x, y: here.y } as SceneItem)
   }
   return all
 }

@@ -125,6 +125,11 @@ interface Entry {
   vb?: Float64Array
 }
 
+/** The outline of a group item's box as the pointer meets it (the canvas's, where a box stroked in front differs: see `_canvasPath`). */
+function boxPathOf(item: SceneItem): string {
+  return ((item as unknown as Record<string, unknown>)._canvasPath as string | undefined) ?? String(item.path)
+}
+
 /** How an index picks: as the browser hit-tests vega's SVG (the default), or as vega's canvas renderer picks. */
 export interface HitIndexOptions {
   renderer?: 'svg' | 'canvas'
@@ -553,18 +558,25 @@ export function buildHitIndex(scene: SceneRoot, cell = DEFAULT_CELL, options: Hi
       const clipped = canvas && scope ? ((group.items ?? []) as SceneGroup[]).find((c) => isGroup(c as SceneItem) && rec(c).contentClip === true) : undefined
       const itemClip = clipped === undefined ? null
         : clipped.clipPathD ? pathClip(clipped.clipPathD, gx + (clipped.x ?? 0), gy + (clipped.y ?? 0)) : rectClip(gx + (clipped.x ?? 0), gy + (clipped.y ?? 0), clipped.width ?? w, clipped.height ?? h)
+      // an axis's or a title's group item, held as its box: picked where it is painted when the spec made it `interactive`
+      const held = !scope ? guideBoxFaces(group, gx, gy, outer) : null
       withClip(rec(group).markClip === true ? rectClip(tx, ty, fw, fh) : null, () => withClip(bounds, () => withClip(itemClip, () => {
         if (box.background) { entries.push(box.background); clipFrom(entries.length - 1) }
+        if (held?.background) { entries.push(held.background); clipFrom(entries.length - 1) }
         withClip(content, () => {
+          // (a legend entry's front stroke belongs to the entry box before it)
+          let entryBox: SceneItem | undefined
           for (const item of group.items ?? []) {
             if (isGroup(item)) { walk(item, gx, gy, w, h, guide ?? outer); continue }
+            const part = (item as SceneItem)._part
+            if (part === 'entry') entryBox = item
             const before = entries.length
             addLeaf(item, gx, gy)
             if (guide) {
               if (!partInteractive(guide, meta, item)) {
                 for (let i = before; i < entries.length; i++) entries[i]!.inert = true
               } else if (entries.length === before) {
-                addGuidePart(item, gx, gy, guide)
+                addGuidePart(item, gx, gy, guide, part === 'entryFg' ? entryBox : undefined)
               }
               for (let i = before; i < entries.length; i++) entries[i]!.guide = true
             }
@@ -573,6 +585,7 @@ export function buildHitIndex(scene: SceneRoot, cell = DEFAULT_CELL, options: Hi
           }
         })
         if (box.foreground) { entries.push(box.foreground); clipFrom(entries.length - 1) }
+        if (held?.foreground) { entries.push(held.foreground); clipFrom(entries.length - 1) }
       })))
       return
     }
@@ -603,7 +616,9 @@ export function buildHitIndex(scene: SceneRoot, cell = DEFAULT_CELL, options: Hi
   const measuredBy = (from: number, kind: string, ox: number, oy: number, mark?: SceneGroup): void => {
     for (let i = from; i < entries.length; i++) {
       const e = entries[i]!
-      if (e.groupBox) continue
+      // (a group item's box -- a guide's, a legend entry's, its stroke in front too -- lies within the group item's bounds, which
+      // vega's pick tests and the clips around the entry already hold: it is not measured as a leaf)
+      if (e.groupBox || isGroup(e.item) || e.item._part === 'entry') continue
       e.bk = kind
       e.ox = ox
       e.oy = oy
@@ -656,12 +671,31 @@ export function buildHitIndex(scene: SceneRoot, cell = DEFAULT_CELL, options: Hi
     }
     if (isBox(items[0])) {
       const fg = items.length > 1 ? items[items.length - 1] : undefined
-      return { background: face(items[0], items[0].path as string), foreground: isBox(fg) ? face(fg, fg.path as string) : null }
+      return { background: face(items[0], boxPathOf(items[0])), foreground: isBox(fg) ? face(fg, boxPathOf(fg)) : null }
     }
     // a scene without the boxes the runtime draws: the group's own rectangle
     const w = Number(group.width ?? 0)
     const h = Number(group.height ?? 0)
     return { background: w > 0 && h > 0 ? face(group as SceneItem, `M0,0h${w}v${h}h${-w}Z`) : null, foreground: null }
+  }
+
+  /**
+   * The entries of the box of an axis's or a title's group item (`SceneGroup.box`, `boxFg`, in the group's frame at (gx, gy)), when
+   * the spec made that group item `interactive`: the guide's part only `pick` finds, as a legend's own box is.
+   */
+  function guideBoxFaces(group: SceneGroup, gx: number, gy: number, outer: SceneGroup | undefined): { background: Entry | null; foreground: Entry | null } | null {
+    if (group.box === undefined) return null
+    const interactive = group.role === 'axis' ? (outer?.partMeta ?? group.partMeta)?.axis?.interactive === true : group.role === 'title' && group.interactive === true
+    if (!interactive) return null
+    const face = (paint: SceneItem | undefined): Entry | null => {
+      if (paint === undefined || typeof paint.path !== 'string') return null
+      const ox = gx + (paint.x || 0)
+      const oy = gy + (paint.y || 0)
+      const e = geomEntry(group, 'group', () => transformPolys(pathPolys(boxPathOf(paint)), (x, y) => [ox + x, oy + y]), paint)
+      if (e) { e.pickOnly = true; e.guide = true }
+      return e
+    }
+    return { background: face(group.box), foreground: face(group.boxFg) }
   }
 
   /** Text entry from the layout's own text bounds, rotated about the anchor. */
@@ -708,33 +742,35 @@ export function buildHitIndex(scene: SceneRoot, cell = DEFAULT_CELL, options: Hi
   function partInteractive(guide: SceneGroup, meta: SceneGroup['partMeta'], leaf: SceneItem): boolean {
     const part = leaf._part
     if (part === undefined) return true
-    const key = part === 'entry' ? 'entries' : part === 'bg' ? guide.role! : part
+    const key = part === 'entry' || part === 'entryFg' ? 'entries' : part === 'bg' || part === 'fg' ? guide.role! : part
     return meta?.[key]?.interactive === true
   }
 
   /**
    * An interactive guide part drawn as a path or a rule (a legend's entry box, symbol, gradient or band; an axis' tick, grid
-   * line or domain): found by `pick` only. The entry box is the entry's group item, the guide's own `bg` is the guide's group item.
+   * line or domain): found by `pick` only. The entry box is the entry's group item, the guide's own `bg` is the guide's group item;
+   * a front stroke (`fg`, `entryFg`: `strokeForeground`) is the stroke of the guide's or of the entry's (`entry`) group item.
    */
-  function addGuidePart(item: SceneItem, tx: number, ty: number, guide: SceneGroup): void {
+  function addGuidePart(item: SceneItem, tx: number, ty: number, guide: SceneGroup, entry?: SceneItem): void {
     const before = entries.length
     const part = item._part
     if (item._kind === 'rule' || (item.path == null && item.x2 != null)) {
       addMarkItem(item, 'rule', tx, ty)
     } else if (typeof item.path === 'string') {
-      const path = item.path
-      const marktype = part === 'entry' || part === 'bg' ? 'group' : part === 'gradient' || part === 'band' ? 'rect' : item._kind ?? 'symbol'
+      const path = boxPathOf(item)
+      const own = part === 'bg' || part === 'fg' ? guide : part === 'entryFg' ? entry ?? item : item
+      const marktype = part === 'entry' || own !== item ? 'group' : part === 'gradient' || part === 'band' ? 'rect' : item._kind ?? 'symbol'
       const angle = (rec(item).angle as number | undefined) ?? 0
       const e = angle
         // a turned symbol: its outline in its own frame
         ? geomEntry(item, marktype, () => pathPolys(path), item, { cx: tx + (item.x || 0), cy: ty + (item.y || 0), rot: angle * (Math.PI / 180) })
-        : geomEntry(part === 'bg' ? guide : item, marktype, () => transformPolys(pathPolys(path), (x, y) => [tx + (item.x || 0) + x, ty + (item.y || 0) + y]), item)
+        : geomEntry(own, marktype, () => transformPolys(pathPolys(path), (x, y) => [tx + (item.x || 0) + x, ty + (item.y || 0) + y]), item)
       if (e) entries.push(e)
     }
     // a clipped legend symbol (clipHeight): the clip is in the frame of the legend's leaves; an entry box that is not part of its
     // group item's bounds: vega's pick looks for the group item only within them
     const c = rec(item)._clip as { x?: number; y?: number; w: number; h: number; d?: string } | undefined
-    const b = rec(item)._pickBounds as { x1: number; y1: number; x2: number; y2: number } | undefined
+    const b = rec(part === 'entryFg' && entry !== undefined ? entry : item)._pickBounds as { x1: number; y1: number; x2: number; y2: number } | undefined
     const clip = c ? (c.d ? pathClip(c.d, tx, ty) : rectClip(tx + (c.x ?? 0), ty + (c.y ?? 0), c.w, c.h))
       : b ? rectClip(tx + (item.x || 0) + b.x1, ty + (item.y || 0) + b.y1, b.x2 - b.x1, b.y2 - b.y1) : null
     for (let i = before; i < entries.length; i++) {

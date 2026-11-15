@@ -803,7 +803,8 @@ function renderLeafItem(it: SceneItem, ctx: CanvasLike, scene: SceneRoot, box?: 
     const tx = it.x ?? 0
     const ty = it.y ?? 0
     ctx.beginPath()
-    const segs = parsePathData(it.path)
+    // (a group item's box stroked in front is filled where the stroked box is: see `_canvasPath`)
+    const segs = parsePathData(((it as unknown as Record<string, unknown>)._canvasPath as string | undefined) ?? it.path)
     // A clipped legend symbol (clipHeight): clip to the entry's laid-out
     // rect (0,0,w,h) in the item's local frame, matching the SVG renderer's
     // clipPath defs.

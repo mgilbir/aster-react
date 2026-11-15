@@ -4,9 +4,11 @@
  * with it (or after, with `strokeForeground`). Compared with vega-scenegraph's own canvas drawing of the same scene, every paint as
  * its device-space path and its style (a gradient: its coordinates and stops).
  *
- * Not here, because Aster does not match it yet (both renderers for the first): `strokeForeground` on a legend's or an entry's box
- * (vega strokes it after the contents, Aster not at all), and the coordinates of a gradient on an axis's, a legend's or an entry's
- * box (vega lays it over the item's bounds, its stroke and contents included; Aster over the box).
+ * `strokeForeground` on every kind of group item, the legend's and the entries' included, is held to vega in
+ * stroke-foreground-vs-vega.test.ts (SVG, canvas, pick, bounds).
+ *
+ * Not here, because Aster does not match it yet: the coordinates of a gradient on an axis's, a legend's or an entry's box (vega lays
+ * it over the item's bounds, its stroke and contents included; Aster over the box).
  */
 import { describe, expect, it } from 'vitest'
 import * as vega from 'vega'

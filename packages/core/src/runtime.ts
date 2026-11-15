@@ -6074,6 +6074,13 @@ function groupBackground(geo: SceneItem, w: number, h: number): { background: Sc
   for (const k of GROUP_PAINT_KEYS) if (rec[k] != null && !(fore && k === 'stroke')) own[k] = rec[k]
   const background = { path, x: 0, y: 0, _bg: true, ...own } as unknown as SceneItem
   if (!fore || !rec.stroke) return { background, path, paint, corners }
+  // A box stroked in front: vega's SVG document writes the background as the box of an unstroked item (no half-pixel inset), while
+  // its canvas fills it where the stroked box is. The SVG renderers write `path`; the canvas draws (and its pick reads) `_canvasPath`.
+  if (rec.strokeOffset == null && off !== 0) {
+    const bg = background as unknown as Record<string, unknown>
+    bg.path = String(rectItemPath({ ...shape, x: 0, y: 0 } as SceneItem))
+    bg._canvasPath = path
+  }
   const strokePaint: Record<string, unknown> = {}
   for (const k of GROUP_PAINT_KEYS) if (rec[k] != null && k !== 'fill' && k !== 'fillOpacity') strokePaint[k] = rec[k]
   return { background, foreground: { path, x: 0, y: 0, _bg: true, ...strokePaint } as unknown as SceneItem, path, paint, corners }

@@ -879,7 +879,8 @@ export interface SceneItem {
   /**
    * Internal: which vega mark of its guide a leaf item belongs to (the SVG draws one container per mark).
    * Axis: `grid` `tick` `label` `domain` `title`. Legend: `bg` (the legend's own box), `col` (the entry
-   * column's box), `entry` (one entry's box), `symbol` `label` `gradient` `band` `title`.
+   * column's box), `entry` (one entry's box), `symbol` `label` `gradient` `band` `title`; with `strokeForeground`, `fg` (the
+   * legend's stroke, after all it holds) and `entryFg` (an entry's stroke, after its symbol and label: the entry box before it).
    */
   _part?: string
   /** Internal: the kind of mark a guide leaf is, when its channels do not say (a text leaf whose text is null is still text). */
