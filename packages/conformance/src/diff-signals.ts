@@ -3,7 +3,8 @@
  * drives it on every pointer move, a bound input or a selection, compared after every step with a chart compiled and evaluated
  * afresh with the same input. What is compared is everything a host can read of an evaluation: the SVG, the scene itself
  * (normalised: every own property of every node, the generation stamps aside, and the order of each node's keys), the datasets and
- * the signal values the scene carries, what the hit index finds on a grid of points (query, queryMark, pick and tooltip, by the item's place in the scene)
+ * the signal values the scene carries, what each renderer's hit index (SVG and canvas) finds on a grid of points (query, queryMark,
+ * pick and tooltip, by the item's place in the scene)
  * and the accessible tree (as it is, and with every mark of more than two items summarised as one node).
  *
  * The writes: every top-level signal the spec declares (but the view's own size, padding, autosize and background), each given
@@ -151,8 +152,8 @@ function placesOf(scene: SceneRoot): Map<object, string> {
 }
 
 /** What the hit index finds at a grid of points and a few random ones, by place. */
-function hits(scene: SceneRoot, points: ReadonlyArray<readonly [number, number]>): string[] {
-  const index = buildHitIndex(scene)
+function hits(scene: SceneRoot, points: ReadonlyArray<readonly [number, number]>, renderer: 'svg' | 'canvas' = 'svg'): string[] {
+  const index = buildHitIndex(scene, undefined, { renderer })
   const places = placesOf(scene)
   const name = (t: { item: object; marktype: string; kind?: string; fromData?: boolean } | null): string =>
     t === null ? '-' : `${places.get(t.item) ?? '?'}/${t.marktype}/${t.kind ?? ''}/${t.fromData === true ? 'd' : ''}`
@@ -182,6 +183,8 @@ function readOf(scene: SceneRoot, points: ReadonlyArray<readonly [number, number
     datasets: JSON.stringify(datasets),
     signals: JSON.stringify(normalise((scene as unknown as { signalParams?: unknown }).signalParams)),
     hits: hits(scene, points).join('\n'),
+    // (the canvas renderer's index picks as vega's canvas does: its own entries)
+    canvasHits: hits(scene, points, 'canvas').join('\n'),
     a11y: JSON.stringify(normalise(buildA11yTree(scene))),
     // (a mark of more items than the threshold is one node, its box the union of its items')
     a11ySummary: JSON.stringify(normalise(buildA11yTree(scene, new Map(), { summaryThreshold: 2 }))),
