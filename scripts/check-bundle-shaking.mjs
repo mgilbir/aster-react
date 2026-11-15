@@ -82,6 +82,20 @@ const SIGNAL_VG = {
   marks: [{ type: 'rect', from: { data: 'table' }, encode: { enter: { x: { value: 10 }, y: { value: 10 }, width: { value: 30 }, height: { value: 30 }, fill: { value: 'red' }, tooltip: { signal: 'datum' } } } }],
 }
 const lit = (v) => JSON.stringify(v)
+/** A legend (the legend builder, the path reader it draws with), for the parts of the engine. */
+const LEGEND_VG = corpus('bar-color-blues-reversed-legend.vg.json')
+/** A symbol whose shape is a custom path, a vega-selections test and a regular expression: the other parts an evaluation reads. */
+const PARTS_VG = {
+  width: 100, height: 60, padding: 0, autosize: 'none',
+  signals: [{ name: 'r', update: "test('^a+$', 'aaa') ? 1 : 0" }],
+  data: [{ name: 'store' }, { name: 't', values: [{ x: 10, k: 'a' }, { x: 50, k: 'b' }] }],
+  marks: [{ type: 'symbol', from: { data: 't' }, encode: { update: {
+    x: { field: 'x' }, y: { value: 30 }, size: { value: 200 }, shape: { value: 'M-1,-1L1,-1L0,1Z' },
+    opacity: [{ test: '!length(data("store")) || vlSelectionTest("store", datum)', value: 1 }, { value: 0.2 }],
+  } } }],
+}
+/** The engine parts a browser build of the shells loads on demand, by the module each brings (core/dist/<module>.js). */
+const PART_MODULES = ['guide-legend', 'trellis', 'incremental-engine', 'selections', 'regex-screen', 'svg-path', 'scene-intersect', 'modify', 'timer', 'canvas']
 
 /**
  * Each pattern: an app (its source), whether it needs jsdom, the assertions on the JSON it returns, and optionally
@@ -628,6 +642,101 @@ const PATTERNS = [
       [r.installed && r.sent.length === 1 && r.sent[0].id === 7 && /class="mark-rect/.test(r.sent[0].svg ?? ''), 'a request is answered with the svg'],
     ],
   },
+  {
+    name: 'core-parts',
+    why: "import { renderSpec } from '@aster-charts/core' (and /dom, /hit, /signals): every part of the engine the synchronous API reads is carried (a legend, a custom symbol path, a vega-selections test, the regular-expression screen under limits, the pulse path of a session, a handler's modify), with nothing to load",
+    dom: true,
+    imports: `import { renderSpec } from '@aster-charts/core'\nimport { createChartSession } from '@aster-charts/core/dom'\nimport { buildHitIndex } from '@aster-charts/core/hit'\nimport { bindSceneSignals } from '@aster-charts/core/signals'`,
+    body: `
+      const out = {}
+      out.legend = renderSpec(${lit(LEGEND_VG)})
+      out.parts = renderSpec(${lit(PARTS_VG)})
+      try { renderSpec({ signals: [{ name: 'r', update: "test('^(a+)+$', 'aaa')" }] }, { limits: { maxTimeMs: 10000 } }); out.refused = null } catch (e) { out.refused = String(e.message) }
+      const session = createChartSession()
+      const spec = { width: 60, height: 40, data: [{ name: 't', transform: [{ type: 'filter', expr: 'datum.v > 0' }] }], marks: [{ type: 'rect', from: { data: 't' }, encode: { update: { x: { field: 'v' }, width: { value: 2 }, y: { value: 0 }, height: { value: 5 } } } }] }
+      const a = session.evaluate(spec, { data: { t: [{ v: 1 }, { v: 2 }] } })
+      const b = session.evaluate(spec, { data: { t: [{ v: 1 }, { v: 2 }, { v: 3 }] } })
+      out.grew = b.items.length > 0
+      const scene = session.evaluate(${lit(PARTS_VG)}, {})
+      out.picked = buildHitIndex(scene).pick(10, 30)?.marktype ?? null
+      const host = document.createElement('div'); document.body.appendChild(host); host.innerHTML = renderSpec(${lit({ width: 60, height: 40, signals: [{ name: 'go', value: 0, on: [{ events: 'click', update: 'modify("store", {"a": 1})' }] }], data: [{ name: 'store' }] })})
+      const svg = host.querySelector('svg'); const errors = []; let edited = null
+      const s2 = createChartSession().evaluate(${lit({ width: 60, height: 40, signals: [{ name: 'go', value: 0, on: [{ events: 'click', update: 'modify("store", {"a": 1})' }] }], data: [{ name: 'store' }] })}, {})
+      const binding = bindSceneSignals(svg, s2, {}, { logger: { error: (m) => errors.push(String(m)), warn: () => {} }, onData: (name, rows) => { edited = rows } })
+      svg.dispatchEvent(new window.MouseEvent('click', { bubbles: true })); binding.release()
+      out.modify = { errors, edited }
+      return out`,
+    check: (r) => [
+      [/role-legend/.test(r.legend) || /class="[^"]*legend/.test(r.legend), 'a legend is drawn (the legend builder is carried)'],
+      [/<path[^>]*d="M-?\d/.test(r.parts) && !/not loaded/.test(r.parts), 'a custom symbol path, a selection test and a regular expression evaluate'],
+      [/regexSafety/.test(r.refused ?? ''), 'under limits the screen refuses a dangerous pattern (it is carried, not skipped)'],
+      [r.grew === true, 'a session re-evaluates with new rows'],
+      [r.picked === 'symbol', 'the hit index outlines a custom symbol path'],
+      [r.modify.errors.length === 0 && Array.isArray(r.modify.edited) && r.modify.edited.length === 1, 'a handler modifies a dataset (the event-loop parts are carried by @aster-charts/core/signals)'],
+    ],
+  },
+  {
+    name: 'react-lean',
+    why: "<Chart> in a browser build (`browser` condition: @aster-charts/core/lean): a plain chart loads no part of the engine; a legend, a custom path, a selection test, a canvas and a change of data load theirs on demand, from chunks the entry does not contain, and draw what the full engine draws",
+    split: true,
+    dom: true,
+    browser: true,
+    imports: `import * as React from 'react'\nimport { flushSync } from 'react-dom'\nimport { createRoot } from 'react-dom/client'\nimport { Chart } from '@aster-charts/react'\nimport { ENGINE_PARTS, createChartSession, partLoaded, renderSceneToSvg } from '@aster-charts/core/lean'`,
+    body: `
+      const loaded = () => ENGINE_PARTS.filter(partLoaded).join()
+      const roots = []
+      const mount = (props) => {
+        const host = document.createElement('div'); document.body.appendChild(host)
+        const root = createRoot(host); roots.push([root, host])
+        flushSync(() => root.render(React.createElement(React.Suspense, { fallback: React.createElement('i', { id: 'fb' }) }, React.createElement(Chart, { width: 300, height: 200, a11y: false, ...props }))))
+        return host
+      }
+      const until = async (f) => { for (let i = 0; i < 400 && !f(); i++) await new Promise((r) => setTimeout(r, 10)) }
+      const out = {}
+      const plain = mount({ spec: ${lit(BAR_VG)} })
+      out.plainSync = !!plain.querySelector('svg') && !plain.querySelector('#fb')
+      out.afterPlain = loaded()
+      const legend = mount({ spec: ${lit(LEGEND_VG)} })
+      out.legendFallback = !!legend.querySelector('#fb')
+      await until(() => legend.querySelector('svg'))
+      out.afterLegend = loaded()
+      const parts = mount({ spec: ${lit(PARTS_VG)} })
+      out.partsFallback = !!parts.querySelector('#fb')
+      await until(() => parts.querySelector('svg'))
+      out.afterParts = loaded()
+      const canvas = mount({ spec: ${lit(BAR_VG)}, renderer: 'canvas' })
+      out.canvasFallback = !!canvas.querySelector('#fb')
+      await until(() => canvas.querySelector('canvas'))
+      out.afterCanvas = loaded()
+      const spec = { width: 60, height: 40, data: [{ name: 't', transform: [{ type: 'filter', expr: 'datum.v > 0' }] }], marks: [{ type: 'rect', from: { data: 't' }, encode: { update: { x: { field: 'v' }, width: { value: 2 }, y: { value: 0 }, height: { value: 5 } } } }] }
+      const data = mount({ spec, data: { t: [{ v: 1 }] } })
+      out.dataSync = !!data.querySelector('svg')
+      const [root] = roots[roots.length - 1]
+      for (const n of [2, 3]) flushSync(() => root.render(React.createElement(React.Suspense, { fallback: null }, React.createElement(Chart, { width: 300, height: 200, a11y: false, spec, data: { t: Array.from({ length: n }, (_, i) => ({ v: i + 1 })) } }))))
+      await until(() => partLoaded('pulse'))
+      out.afterData = loaded()
+      out.dataRects = data.querySelectorAll('.mark-rect path').length
+      const lean = { legend: legend.querySelector('svg').outerHTML, parts: parts.querySelector('svg').outerHTML }
+      // what the full engine draws: importing an entry that carries every part fills every slot (done last)
+      await import('@aster-charts/core/dom')
+      const staticSvg = (s) => { const h = document.createElement('div'); h.innerHTML = renderSceneToSvg(createChartSession().evaluate(s, { width: 300, height: 200 })); return h.firstElementChild.outerHTML }
+      out.legendSame = lean.legend === staticSvg(${lit(LEGEND_VG)})
+      out.partsSame = lean.parts === staticSvg(${lit(PARTS_VG)})
+      return out`,
+    check: (r) => [
+      [r.plainSync === true && r.afterPlain === '', 'a plain chart renders in the first commit and loads no part'],
+      [r.legendFallback === true && r.afterLegend === 'legend,svgpath', 'a legend: the fallback shows, then the legend builder and the path reader load, nothing else'],
+      [r.legendSame === true, 'and the legend chart is what the full engine draws'],
+      [r.partsFallback === true && r.afterParts === 'legend,selections,svgpath', 'a custom path and a selection test: their parts load (the regex screen does not: no limits)'],
+      [r.partsSame === true, 'and that chart is what the full engine draws'],
+      [r.canvasFallback === true && r.afterCanvas === 'legend,selections,svgpath,canvas', 'renderer="canvas": the fallback shows, then the canvas renderer loads'],
+      [r.dataSync === true && r.afterData.includes('pulse') && r.dataRects === 3, 'new data is drawn at once, and the pulse path loads for the next change'],
+    ],
+    modules: (m) => PART_MODULES.map((name) => {
+      const outs = outputsWith(m, 'core', name)
+      return [outs.length > 0 && outs.every((o) => !o.initial), `${name}: only in chunks loaded on demand`]
+    }),
+  },
 ]
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -654,6 +763,8 @@ async function esbuildBuild(p, entry, out) {
     treeShaking: true,
     format: 'esm',
     platform: 'node',
+    // a pattern of a browser app resolves the `browser` export condition, as a browser build does (`@aster-charts/core/lean`)
+    ...(p.browser ? { conditions: ['browser'] } : {}),
     splitting: !!p.split,
     // React is a peer dependency of the consumer's app, not part of what is being shaken.
     external: ['react', 'react-dom', 'react-dom/*', 'react/jsx-runtime'],
@@ -710,7 +821,7 @@ async function viteBuild(p, entry, out) {  // (no module report: the metafile is
     configFile: false,
     logLevel: 'silent',
     define: { 'process.env.NODE_ENV': '"production"' },
-    ssr: { noExternal: [/^@aster-charts\//], external: ['react', 'react-dom'] },
+    ssr: { noExternal: [/^@aster-charts\//], external: ['react', 'react-dom'], ...(p.browser ? { resolve: { conditions: ['browser', 'import', 'module', 'default'] } } : {}) },
     build: {
       ssr: entry,
       outDir: out,
