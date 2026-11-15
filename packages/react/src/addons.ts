@@ -86,8 +86,15 @@ export function useAddons(spec: VgSpec | null, urlData?: UrlDataMode, input?: Ad
   const parts = partsNotLoaded(needed.parts)
   const loadCanvas = canvas !== undefined && !partLoaded('canvas') ? canvas.load : undefined
   const loadLoop = eventLoop !== undefined && (needed.eventLoop || eventLoop.listeners || eventLoop.always === true) && !partLoaded('signals') ? eventLoop.load : undefined
-  return addons.length === 0 && parts.length === 0 && loadCanvas === undefined && loadLoop === undefined ? null : React.use(settle(addons, parts, loadCanvas, loadLoop))
+  // `React.use` is called on EVERY render, with a promise React already knows is fulfilled when nothing is left to load. A render that
+  // suspended here is replayed by React once its promise settles; by then the part may be loaded, and a replay that skipped `use` would
+  // call the hooks after this one in other slots than the attempt it replays ("Update hook called on initial render").
+  return React.use(addons.length === 0 && parts.length === 0 && loadCanvas === undefined && loadLoop === undefined
+    ? NOTHING_TO_LOAD
+    : settle(addons, parts, loadCanvas, loadLoop))
 }
+/** A promise `React.use` reads synchronously: it is marked fulfilled the way React marks the thenables it has seen settle. */
+const NOTHING_TO_LOAD: Promise<Error | null> = Object.assign(Promise.resolve(null), { status: 'fulfilled', value: null })
 const NOTHING: SpecNeeds = { addons: [], parts: [], eventLoop: false }
 
 export { loadAddonsFor } from '@aster-charts/core/lean'
