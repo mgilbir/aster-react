@@ -284,8 +284,10 @@ cli({ url: import.meta.url })
 const BUDGETS = {
   // stack layer 2 (perf/vl-compile-data-independent on fix/hover-correctness: rows.ts, the row watch, signal-valued values, findSource): measured 2026-11-14 on a clean build at 161.5 kB gzip (ceiling was 161.4); ceiling is the measured value + 0.5.
   // stack layer 3 (perf/expr-encode: direct built-in calls, the shared function table, the format fast path): measured 2026-11-14 on a clean build at 162.4 kB gzip (ceiling was 162.0); ceiling is the measured value + 0.5.
-  '@aster-charts/core': 164.8 * 1024,
-  '+ @aster-charts/core/dom': 11.8 * 1024,
+  // signal-change reuse (group marks, channels, marks drawn from marks, derived structures kept with engine nodes) on the canvas layer: measured 2026-11-15 on a clean build at 167.8 kB gzip (ceiling was 164.8); ceiling is the measured value + 0.5.
+  '@aster-charts/core': 168.3 * 1024,
+  // signal-change reuse (group marks, channels, marks drawn from marks, derived structures kept with engine nodes) on the canvas layer: measured 2026-11-15 on a clean build at 11.8 kB gzip (ceiling was 11.8); ceiling is the measured value + 0.5.
+  '+ @aster-charts/core/dom': 12.3 * 1024,
   '+ @aster-charts/core/canvas': 7.1 * 1024,
   // stack layer 5 (stack/5-canvas: the event loop bound on canvas, the canvas renderer's events and hit index, the svg's pointer leaving): measured 2026-11-14 on a clean build, base stack/4-geometry -> branch (kB gzip): 9.8 -> 10.3; ceiling is the measured value + 0.5.
   '+ @aster-charts/core/hit': 10.8 * 1024,
@@ -303,24 +305,29 @@ const BUDGETS = {
   '+ @aster-charts/core/png': 8.9 * 1024,
   // stack layer 2 (perf/vl-compile-data-independent on fix/hover-correctness: rows.ts, the row watch, signal-valued values, findSource): measured 2026-11-14 on a clean build at 173.7 kB gzip (ceiling was 173.4); ceiling is the measured value + 0.5.
   // stack layer 3 (perf/expr-encode: direct built-in calls, the shared function table, the format fast path): measured 2026-11-14 on a clean build at 174.6 kB gzip (ceiling was 174.2); ceiling is the measured value + 0.5.
-  '@aster-charts/react useChart': 177.1 * 1024,
+  // signal-change reuse (group marks, channels, marks drawn from marks, derived structures kept with engine nodes) on the canvas layer: measured 2026-11-15 on a clean build at 180.2 kB gzip (ceiling was 177.1); ceiling is the measured value + 0.5.
+  '@aster-charts/react useChart': 180.7 * 1024,
   // stack layer 2 (perf/vl-compile-data-independent on fix/hover-correctness: rows.ts, the row watch, signal-valued values, findSource): measured 2026-11-14 on a clean build at 220.8 kB gzip (ceiling was 220.6); ceiling is the measured value + 0.5.
   // stack layer 3 (perf/expr-encode: direct built-in calls, the shared function table, the format fast path): measured 2026-11-14 on a clean build at 221.9 kB gzip (ceiling was 221.3); ceiling is the measured value + 0.5.
   // stack layer 5 (stack/5-canvas: the event loop bound on canvas, the canvas renderer's events and hit index, the svg's pointer leaving): measured 2026-11-14 on a clean build, base stack/4-geometry -> branch (kB gzip): 226.2 -> 228.6; ceiling is the measured value + 0.5.
-  '@aster-charts/react Chart': 229.1 * 1024,
+  // signal-change reuse (group marks, channels, marks drawn from marks, derived structures kept with engine nodes) on the canvas layer: measured 2026-11-15 on a clean build at 233.0 kB gzip (ceiling was 229.1); ceiling is the measured value + 0.5.
+  '@aster-charts/react Chart': 233.5 * 1024,
   // The light chart (`@aster-charts/react/lite`): SVG only, no canvas renderer; alone and with the `interaction` capability.
   // stack layer 2 (perf/vl-compile-data-independent on fix/hover-correctness: rows.ts, the row watch, signal-valued values, findSource): measured 2026-11-14 on a clean build at 194.2 kB gzip (ceiling was 194.0); ceiling is the measured value + 0.5.
   // stack layer 3 (perf/expr-encode: direct built-in calls, the shared function table, the format fast path): measured 2026-11-14 on a clean build at 195.2 kB gzip (ceiling was 194.7); ceiling is the measured value + 0.5.
-  '@aster-charts/react SvgChart': 198.3 * 1024,
+  // signal-change reuse (group marks, channels, marks drawn from marks, derived structures kept with engine nodes) on the canvas layer: measured 2026-11-15 on a clean build at 201.9 kB gzip (ceiling was 198.3); ceiling is the measured value + 0.5.
+  '@aster-charts/react SvgChart': 202.4 * 1024,
   // stack layer 2 (perf/vl-compile-data-independent on fix/hover-correctness: rows.ts, the row watch, signal-valued values, findSource): measured 2026-11-14 on a clean build at 214.5 kB gzip (ceiling was 214.2); ceiling is the measured value + 0.5.
   // stack layer 3 (perf/expr-encode: direct built-in calls, the shared function table, the format fast path): measured 2026-11-14 on a clean build at 215.6 kB gzip (ceiling was 215.0); ceiling is the measured value + 0.5.
   // stack layer 5 (stack/5-canvas: the event loop bound on canvas, the canvas renderer's events and hit index, the svg's pointer leaving): measured 2026-11-14 on a clean build, base stack/4-geometry -> branch (kB gzip): 219.6 -> 221.1; ceiling is the measured value + 0.5.
-  '@aster-charts/react SvgChart + interaction': 221.6 * 1024,
+  // signal-change reuse (group marks, channels, marks drawn from marks, derived structures kept with engine nodes) on the canvas layer: measured 2026-11-15 on a clean build at 225.6 kB gzip (ceiling was 221.6); ceiling is the measured value + 0.5.
+  '@aster-charts/react SvgChart + interaction': 226.1 * 1024,
   // Base + the VL compiler (opt-in: `import '@aster-charts/react/vl'`).
   // stack layer 2 (perf/vl-compile-data-independent on fix/hover-correctness: rows.ts, the row watch, signal-valued values, findSource): measured 2026-11-14 on a clean build at 327.5 kB gzip (ceiling was 325.4); ceiling is the measured value + 0.5.
   // stack layer 3 (perf/expr-encode: direct built-in calls, the shared function table, the format fast path): measured 2026-11-14 on a clean build at 328.5 kB gzip (ceiling was 328.0); ceiling is the measured value + 0.5.
   // stack layer 5 (stack/5-canvas: the event loop bound on canvas, the canvas renderer's events and hit index, the svg's pointer leaving): measured 2026-11-14 on a clean build, base stack/4-geometry -> branch (kB gzip): 332.7 -> 335.0; ceiling is the measured value + 0.5.
-  '@aster-charts/react Chart + VL': 335.5 * 1024,
+  // signal-change reuse (group marks, channels, marks drawn from marks, derived structures kept with engine nodes) on the canvas layer: measured 2026-11-15 on a clean build at 339.5 kB gzip (ceiling was 335.5); ceiling is the measured value + 0.5.
+  '@aster-charts/react Chart + VL': 340.0 * 1024,
 }
 
 const THIS_DIR = dirname(fileURLToPath(import.meta.url))
