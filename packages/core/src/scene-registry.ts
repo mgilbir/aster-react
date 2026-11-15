@@ -14,6 +14,9 @@ import type { SceneGroup, SceneNode, SceneRoot } from './types.js'
 
 const ENGINE_NODES = new WeakSet<object>()
 
+/** How many times something derived from a node was made anew where it may be kept (the hit entries of a guide), since read. For the tests. */
+export const derivedCounts = { guideEntries: 0 }
+
 /** Whether `node` is a group node of a scene the engine returned (see the module comment). */
 export function isEngineNode(node: object): boolean {
   return ENGINE_NODES.has(node)

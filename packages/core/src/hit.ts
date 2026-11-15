@@ -37,9 +37,9 @@
  * every cell.
  */
 import type { SceneGroup, SceneItem, SceneRoot } from './types.js'
-import { isEngineNode, keptInto } from './scene-registry.js'
+import { derivedCounts, isEngineNode, keptInto } from './scene-registry.js'
 import { Bounds, boundLeaf, boundText, boundTypedMark, layoutBounds } from './bounds.js'
-import { textAnchor } from './text-metrics.js'
+import { getTextMetricsProvider, textAnchor } from './text-metrics.js'
 import { imageBox } from './image-box.js'
 import { FLATTEN_TOLERANCE, insidePolys, type Poly } from './path-flatten.js'
 import { SYMBOL_DEFAULT_SIZE } from './util.js'
@@ -477,6 +477,18 @@ function nearestOf(items: SceneItem[], tx: number, ty: number, x: number, y: num
 const MARK_ENTRIES = { svg: new WeakMap<SceneGroup, KeptEntries>(), canvas: new WeakMap<SceneGroup, KeptEntries>() }
 interface KeptEntries { gx: number; gy: number; entries: Entry[]; root: object }
 
+/**
+ * The entries one of the view's own guides (an axis, a legend, a title: a group of the scene's top level) made, flags and clips
+ * written, for each renderer, with the runs of them that are data's (relative to the first). Such a group holds what it held, its
+ * parts included (scene-registry.ts), so what indexing it makes reads besides the group only: where the view's frame is and how
+ * large (`frame`: the padding, the plot's size, whether the view clips to it, which is the one clip around a guide of the top
+ * level), and the text measurer set for every chart (its labels' and titles' boxes are measured when the index is built). Used for a
+ * later scene that kept the group (`keptInto`); an index takes copies.
+ */
+const GUIDE_ENTRIES = { svg: new WeakMap<SceneGroup, KeptGuide>(), canvas: new WeakMap<SceneGroup, KeptGuide>() }
+interface KeptGuide { frame: string; measurer: unknown; entries: Entry[]; runs: number[]; root: object }
+const TOP_GUIDE_ROLES: ReadonlySet<string> = new Set(['axis', 'legend', 'title'])
+
 export function buildHitIndex(scene: SceneRoot, cell = DEFAULT_CELL, options: HitIndexOptions = {}): HitIndex {
   const canvas = options.renderer === 'canvas'
   const keptEntries = canvas ? MARK_ENTRIES.canvas : MARK_ENTRIES.svg
@@ -609,8 +621,25 @@ export function buildHitIndex(scene: SceneRoot, cell = DEFAULT_CELL, options: Hi
   const plotW = scene.plotWidth ?? scene.width
   const plotH = scene.plotHeight ?? scene.height
   // nothing is picked outside the plot when the view clips to it (nor outside the view's surface: see `find`)
+  const keptGuides = canvas ? GUIDE_ENTRIES.canvas : GUIDE_ENTRIES.svg
+  const frame = `${padX},${padY},${plotW},${plotH},${scene.frameClip ? 1 : 0}`
+  const measurer = getTextMetricsProvider()
   withClip(scene.frameClip ? rectClip(padX, padY, plotW, plotH) : null, () => {
-    for (const node of scene.items) walk(node, padX, padY, plotW, plotH)
+    for (const node of scene.items) {
+      if (!TOP_GUIDE_ROLES.has(node.role as string) || rec(node)._scope === true || !isEngineNode(node)) { walk(node, padX, padY, plotW, plotH); continue }
+      const kept = keptGuides.get(node)
+      if (kept !== undefined && keptInto(kept.root, scene) && kept.frame === frame && kept.measurer === measurer) {
+        const base = entries.length
+        for (const e of kept.entries) entries.push({ ...e })
+        for (const r of kept.runs) dataRuns.push(base + r)
+        continue
+      }
+      const e0 = entries.length
+      const r0 = dataRuns.length
+      derivedCounts.guideEntries++
+      walk(node, padX, padY, plotW, plotH)
+      keptGuides.set(node, { frame, measurer, entries: entries.slice(e0).map((e) => ({ ...e })), runs: dataRuns.slice(r0).map((r) => r - e0), root: scene })
+    }
   })
   // the view's surface: vega's SVG clips what overflows it, its canvas ends there (a scene that gives no size is not bounded)
   const surface = scene.width >= 0 && scene.height >= 0 ? { w: scene.width, h: scene.height } : null
