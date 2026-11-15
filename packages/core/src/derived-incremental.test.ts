@@ -17,6 +17,7 @@ import { buildA11yTree } from './a11y.js'
 import { buildHitIndex } from './hit.js'
 import { patchSceneDom, renderSceneToDomElement } from './dom.js'
 import { bindSceneSignals, sceneHasCursor } from './signals.js'
+import { createCanvasEvents, type CanvasEvents } from './canvas-events.js'
 import type { RuntimeInput, SceneGroup, SceneRoot, VgSpec } from './types.js'
 
 type Row = Record<string, unknown>
@@ -50,35 +51,57 @@ const SPEC: VgSpec = {
     },
     // (a top-level mark over the dataset: an append pushes onto its items array in place)
     { type: 'symbol', name: 'top', from: { data: 't' }, encode: { enter: { x: { scale: 'x', field: 'x' }, y: { value: 150 }, size: { value: 120 }, fill: { value: 'green' }, cursor: { value: 'crosshair' } } } },
+    // (a stroked path with a sharp bevel-joined corner: vega's canvas pick strokes it with the context's miter join, the SVG as drawn,
+    // so the two renderers' indexes find different items past the corner)
+    { type: 'path', name: 'wedge', encode: { update: { x: { value: 150 }, y: { value: 40 }, path: { value: 'M0,0L40,10L0,20' }, stroke: { value: 'purple' }, strokeWidth: { value: 12 }, strokeJoin: { value: 'bevel' }, fill: { value: null } } } },
     { type: 'rect', name: 'band', encode: { update: { x: { scale: 'x', signal: 'hv' }, width: { value: 10 }, y: { value: 0 }, height: { value: 40 }, fill: { value: 'orange' }, cursor: { signal: 'cur' } } } },
   ],
 } as unknown as VgSpec
 
-/** Ask a scene everything: the item info at each point of a grid, the cursor check, the accessible trees. */
-function ask(scene: SceneRoot): unknown {
+/** A renderer's surface: the SVG, or one canvas with its renderer's events, kept across the scenes of a chain as <Chart> keeps it. */
+type Surface = { renderer: 'svg' } | { renderer: 'canvas'; canvas: HTMLCanvasElement; events: CanvasEvents }
+const canvasSurface = (): Surface => { const canvas = document.createElement('canvas'); return { renderer: 'canvas', canvas, events: createCanvasEvents(canvas) } }
+
+/**
+ * Ask a scene everything: the item info at each point of a grid (the event loop bound on the renderer's surface, picking with that
+ * renderer's hit index), the cursor check, the accessible trees.
+ */
+function ask(scene: SceneRoot, surface: Surface = { renderer: 'svg' }): unknown {
   const host = document.createElement('div')
-  host.innerHTML = renderSceneToSvg(scene)
+  let el: Element
+  if (surface.renderer === 'svg') {
+    host.innerHTML = renderSceneToSvg(scene)
+    el = host.querySelector('svg') as SVGSVGElement
+  } else {
+    el = surface.canvas
+    host.appendChild(el)
+  }
   document.body.appendChild(host)
-  const svg = host.querySelector('svg') as SVGSVGElement
-  svg.getBoundingClientRect = () => ({ left: 0, top: 0, right: scene.width, bottom: scene.height, width: scene.width, height: scene.height } as DOMRect)
-  const index = buildHitIndex(scene)
+  el.getBoundingClientRect = () => ({ left: 0, top: 0, right: scene.width, bottom: scene.height, width: scene.width, height: scene.height } as DOMRect)
+  const index = buildHitIndex(scene, undefined, { renderer: surface.renderer })
   const seen: unknown[] = []
-  const binding = bindSceneSignals(svg, scene, { ...((scene as unknown as { signalParams?: Row }).signalParams ?? {}) }, { onSignal: (name, value) => { if (name === 'info') seen.push(value) } }, { pick: (x, y) => index.pick(x, y) })
+  const binding = bindSceneSignals(el as SVGSVGElement, scene, { ...((scene as unknown as { signalParams?: Row }).signalParams ?? {}) }, { onSignal: (name, value) => { if (name === 'info') seen.push(value) } }, { pick: (x, y) => index.pick(x, y), ...(surface.renderer === 'canvas' ? { events: surface.events } : {}) })
   const at: unknown[] = []
+  // (a fine grid past the wedge's corner, and a coarse one over the view)
+  for (let x = 190; x < 216; x += 2) for (let y = 44; y < 57; y += 2) {
+    seen.length = 0
+    el.dispatchEvent(new MouseEvent('pointermove', { clientX: x, clientY: y, bubbles: true }))
+    at.push(seen.length ? seen[seen.length - 1] : '-')
+  }
   for (let x = 2; x < scene.width; x += 11) {
     for (let y = 2; y < scene.height; y += 13) {
       seen.length = 0
-      svg.dispatchEvent(new MouseEvent('pointermove', { clientX: x, clientY: y, bubbles: true }))
+      el.dispatchEvent(new MouseEvent('pointermove', { clientX: x, clientY: y, bubbles: true }))
       at.push(seen.length ? seen[seen.length - 1] : '-')
     }
   }
-  binding.release()
+  binding.detach()
   host.remove()
   return { at, cursor: sceneHasCursor(scene), a11y: buildA11yTree(scene), summary: buildA11yTree(scene, new Map(), { summaryThreshold: 2 }) }
 }
 
 describe('what is kept with the engine nodes is what the scene says', () => {
-  it('through signal writes, appends and edits', () => {
+  for (const renderer of ['svg', 'canvas'] as const) it(`through signal writes, appends and edits (${renderer})`, () => {
     const chart = compileChart(SPEC)
     let t = rows(30)
     const steps: Array<[string, RuntimeInput]> = [['first', { data: { t } }]]
@@ -93,20 +116,25 @@ describe('what is kept with the engine nodes is what the scene says', () => {
     steps.push(['edit', { data: { t }, dataChanges: { t: [4] }, signals: { hv: 12 } }])
     steps.push(['cur default', { data: { t }, dataChanges: { t: [] }, signals: { hv: 12, cur: 'default' } }])
     const answered: Array<{ what: string; scene: SceneRoot; answer: unknown }> = []
+    // (the chain's surface and a fresh chart's: each keeps its own events, as two charts on a page do)
+    const chainSurface: Surface = renderer === 'svg' ? { renderer } : canvasSurface()
+    const freshSurface: Surface = renderer === 'svg' ? { renderer } : canvasSurface()
     // (one SVG element patched with every scene of the chain, as <Chart> patches its own: it shows what a fresh one shows)
     let patched: Element | null = null
     for (const [what, input] of steps) {
       const scene = evaluateChart(chart, input)
       const fresh = evaluateChart(compileChart(SPEC), { ...input, dataChanges: undefined, dataPulse: undefined } as RuntimeInput)
-      const answer = ask(scene)
-      expect(answer, what).toEqual(ask(fresh))
+      const answer = ask(scene, chainSurface)
+      // (the same scene read by the other renderer's index too: what each index keeps of a mark is its own, see the next scene)
+      if (renderer === 'canvas') ask(scene)
+      expect(answer, what).toEqual(ask(fresh, freshSurface))
       if (patched === null) patched = renderSceneToDomElement(scene, document)
       else patchSceneDom(patched, scene)
       expect(patched.outerHTML, `${what}: the patched SVG`).toBe(renderSceneToDomElement(fresh, document).outerHTML)
       answered.push({ what, scene, answer })
     }
     // (every scene before still says what it said: what is kept with its nodes was not overwritten by a later scene's)
-    for (const { what, scene, answer } of answered) expect(ask(scene), `${what}, asked again`).toEqual(answer)
+    for (const { what, scene, answer } of answered) expect(ask(scene, renderer === 'svg' ? chainSurface : canvasSurface()), `${what}, asked again`).toEqual(answer)
   }, 60_000)
 
   it('a hand-built scene is answered from what it holds when asked', () => {
