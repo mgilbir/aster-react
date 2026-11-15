@@ -3606,10 +3606,27 @@ function getChartInfoImpl(spec: VgSpec, input: RuntimeInput): ChartInfo {
 }
 
 /**
+ * A title (or a group's title) as a scene group, with the definitions of the gradients it paints with (see `withGuideGradients`).
+ */
+function buildTitleGroup(
+  title0: CompiledTitle | undefined,
+  items: SceneNode[],
+  width: number,
+  height: number,
+  raw = false,
+  ctx?: EvalContext,
+  parent?: Row,
+  fitting = false,
+): SceneGroup | null {
+  const group = makeTitleGroup(title0, items, width, height, raw, ctx, parent, fitting)
+  return ctx === undefined ? group : withGuideGradients(ctx, group)
+}
+
+/**
  * A title (or a group's title) as a scene group: the title text at (0,0) and the subtitle where the title layout put it, the group
  * itself outside the bounds of everything laid out so far.
  */
-function buildTitleGroup(
+function makeTitleGroup(
   title0: CompiledTitle | undefined,
   items: SceneNode[],
   width: number,
@@ -6555,6 +6572,38 @@ function registerGradient(paint: object, ctx: EvalContext): void {
   if (!into.some((d) => d.id === def.id)) into.push(def)
 }
 
+/**
+ * A guide (an axis, a legend, a title) whose items paint with a gradient object -- written in a part's encode, held by a signal, set
+ * in the config -- brings the gradient's definition to the scene's defs, as a data mark's item does (`registerGradient`): the
+ * renderers write the paint as a reference to it. A guide's items are made by the guide encoder (guide-encode.ts), so they are read
+ * here once the guide is made, every item of every part, the guide's own group item included. Through `addDefs`: counted as asked
+ * for, so a guide that paints with one is made again by every evaluation rather than kept (`recordGuide`), and logged, so a group
+ * mark kept whole brings them back (`keptGroupMark`).
+ */
+function withGuideGradients(ctx: EvalContext, group: SceneGroup | null): SceneGroup | null {
+  if (group === null) return group
+  const defs: SceneDef[] = []
+  const paints = (it: Record<string, unknown>): void => {
+    for (const paint of [it['fill'], it['stroke']]) {
+      if (!isGradientPaint(paint)) continue
+      const def = gradientDefOf(paint)
+      if (!defs.some((d) => d.id === def.id)) defs.push(def)
+    }
+  }
+  // (a group item of a guide is drawn as its box: the background and foreground leaves, `SceneGroup.box` / `boxFg`)
+  const visit = (node: { items?: unknown; box?: unknown; boxFg?: unknown }): void => {
+    for (const leaf of [node.box, node.boxFg]) if (leaf != null && typeof leaf === 'object') paints(leaf as Record<string, unknown>)
+    if (!Array.isArray(node.items)) return
+    for (const it of node.items as Array<Record<string, unknown>>) {
+      paints(it)
+      visit(it)
+    }
+  }
+  visit(group as unknown as { items?: unknown })
+  if (defs.length > 0) addDefs(ctx, defs)
+  return group
+}
+
 /** The scene's defs take `defs` in order, each once. */
 function addDefs(ctx: EvalContext, defs: readonly SceneDef[]): void {
   ctx.defsAsked.n += defs.length
@@ -7080,6 +7129,10 @@ function takeLegendSlot(ctx: EvalContext): number {
 }
 
 function buildLegend(legend: CompiledLegend, ctx: EvalContext, index: number): SceneGroup | null {
+  return withGuideGradients(ctx, makeLegend(legend, ctx, index))
+}
+
+function makeLegend(legend: CompiledLegend, ctx: EvalContext, index: number): SceneGroup | null {
   const spec = (legend.own ?? NO_PROPS) as Record<string, unknown>
   const config = (legend.cfg ?? NO_PROPS) as Record<string, unknown>
   // vega-parser legend.js: the channels the legend maps, in LegendScales order; the first is the canonical scale
@@ -7263,12 +7316,13 @@ function makeGuideHost(ctx: EvalContext): GuideHost {
       host.stopped ??= { error: e instanceof ExpressionFailure ? e.error : e, ...(host.at !== undefined ? { at: host.at, entryIndex: host.entryIndex } : {}) }
     },
     gradient: (name, vertical) => {
-      ctx.defsAsked.n++
       // vega-functions gradient(): stops from the scale's ticks (see scaleGradientStops); the definition is the
-      // renderer's, content-addressed by direction and stops
+      // renderer's, content-addressed by direction and stops. Through `addDefs`, as every definition a guide asks for: a group
+      // mark kept whole brings it back from its log.
       const stops = scaleGradientStops(ctx.scales.get(name) as never)
       const id = gradientDefId(vertical ? 'vertical' : 'horizontal', stops)
-      if (stops.length && !ctx._defs.some((d) => d.id === id)) ctx._defs.push(vertical ? { id, colorStops: stops } : { id, colorStops: stops, direction: 'horizontal' })
+      if (stops.length) addDefs(ctx, [vertical ? { id, colorStops: stops } : { id, colorStops: stops, direction: 'horizontal' }])
+      else ctx.defsAsked.n++
       return `url(#${id})`
     },
     groupBox: (geo, w, h) => groupBackground(geo, w, h),
@@ -7658,6 +7712,10 @@ function axisTicksReadLate(own: Record<string, unknown>, cfg: Record<string, unk
 }
 
 function buildAxis(axis: CompiledAxis, ctx: EvalContext, index: number): SceneGroup | null {
+  return withGuideGradients(ctx, makeAxis(axis, ctx, index))
+}
+
+function makeAxis(axis: CompiledAxis, ctx: EvalContext, index: number): SceneGroup | null {
   const scale = ctx.scales.get(axis.scale)
   if (!scale) return null
   const orient = String(axis.orient)
