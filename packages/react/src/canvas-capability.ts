@@ -1,5 +1,5 @@
 import {
-  createCanvasEvents, loadImages, renderSceneToCanvas, renderSceneToCanvasAppend, sceneImageUrls, snapshotCanvasScene, withSceneImages,
+  createCanvasEvents, loadImages, renderSceneToCanvas, renderSceneToCanvasAppend, paintsSameAs, sceneImageUrls, snapshotCanvasScene, withSceneImages,
 } from '@aster-charts/core/canvas'
 import type { CanvasCapability } from './capabilities.js'
 
@@ -8,6 +8,7 @@ export const canvasCapability: CanvasCapability = {
   createCanvasEvents,
   renderSceneToCanvas,
   renderSceneToCanvasAppend,
+  paintsSameAs,
   snapshotCanvasScene,
   sceneImageUrls,
   loadImages,

@@ -423,6 +423,103 @@ export function renderSceneToCanvasAppend(
   return true
 }
 
+// ---------------------------------------------------------------------------
+// Dirty-region repaint
+// ---------------------------------------------------------------------------
+
+/**
+ * Keys of a scene item the canvas renderer never reads: what the item says to a pointer or a reader, not what it paints (its
+ * tooltip, link, cursor, description and ARIA). Two items that differ only in these paint the same pixels.
+ */
+const UNPAINTED_KEYS = new Set(['tooltip', 'href', 'cursor', 'description', 'aria', 'ariaRole', 'ariaRoleDescription'])
+
+/** `samePaint` over what the canvas renderer reads of two values (`UNPAINTED_KEYS` aside), with a visit budget. */
+function samePixels(a: unknown, b: unknown, budget: { n: number }, depth = 0): boolean {
+  if (Object.is(a, b)) return true
+  if (a == null || b == null || typeof a !== 'object' || typeof b !== 'object') return false
+  if (depth > 8 || --budget.n < 0) return false
+  if (Array.isArray(a) || Array.isArray(b)) {
+    if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false
+    for (let i = 0; i < a.length; i++) if (!samePixels(a[i], b[i], budget, depth + 1)) return false
+    return true
+  }
+  const ra = a as Record<string, unknown>
+  const rb = b as Record<string, unknown>
+  const counted = (r: Record<string, unknown>, k: string): boolean =>
+    Object.hasOwn(r, k) && !k.startsWith('__') && !NON_PAINT_KEYS.has(k) && !UNPAINTED_KEYS.has(k) && typeof r[k] !== 'function'
+  let na = 0
+  for (const k in ra) {
+    if (!counted(ra, k)) continue
+    na++
+    if (!samePixels(ra[k], rb[k], budget, depth + 1)) return false
+  }
+  let nb = 0
+  for (const k in rb) if (counted(rb, k)) nb++
+  return na === nb
+}
+
+/** The scene's own paint (size, background, padding, frame, gradient definitions): every key but its content and bookkeeping. */
+const ROOT_CONTENT = new Set(['items', 'signalParams', 'runtime', 'compiled'])
+function sameRootPaint(a: SceneRoot, b: SceneRoot): boolean {
+  const ra = a as unknown as Record<string, unknown>
+  const rb = b as unknown as Record<string, unknown>
+  const keys = new Set([...Object.keys(ra), ...Object.keys(rb)])
+  for (const k of keys) {
+    if (ROOT_CONTENT.has(k) || k.startsWith('__')) continue
+    if (!samePixels(ra[k], rb[k], { n: 10_000 })) return false
+  }
+  return true
+}
+
+/** A mark group's own paint: every key of the group but its items. */
+function sameMarkFrame(a: SceneGroup, b: SceneGroup): boolean {
+  const ra = a as unknown as Record<string, unknown>
+  const rb = b as unknown as Record<string, unknown>
+  const keys = new Set([...Object.keys(ra), ...Object.keys(rb)])
+  for (const k of keys) {
+    if (k === 'items' || k.startsWith('__') || NON_PAINT_KEYS.has(k) || UNPAINTED_KEYS.has(k)) continue
+    if (!samePixels(ra[k], rb[k], { n: 10_000 })) return false
+  }
+  return true
+}
+
+/**
+ * Whether the scene paints exactly the pixels of the frame on the canvas (`prev`, the snapshot of the scene painted last): every
+ * top-level group the very one painted, or one that paints the same -- in a mark, item by item, what the canvas renderer reads of it
+ * being the same (an item whose tooltip alone changed paints the same) -- with the same size, background, padding, frame and
+ * gradient definitions. Such a scene needs no paint at all: the canvas already shows it.
+ *
+ * A scene that paints anything differently is repainted in full. A repaint of the changed region alone, clipped to it, is not
+ * always what a full repaint draws: Chromium rasterises the anti-aliased edge of a path cut by the clip differently from the same
+ * path uncut (a pixel or two along the clip's edges; the dirty-region oracle, browser-canvas-dirty.mts, found it in about half the
+ * region repaints it tried), so the canvas never paints a region of its own.
+ */
+export function paintsSameAs(prev: CanvasSceneSnapshot, next: SceneRoot): boolean {
+  const a = prev.scene
+  if (a === next) return true
+  if (a.items.length !== next.items.length || !sameRootPaint(a, next)) return false
+  for (let i = 0; i < next.items.length; i++) {
+    const ng = next.items[i]!
+    const pg = a.items[i]!
+    if (ng === pg) continue
+    if (ng.role === 'mark' && pg.role === 'mark' && ng.marktype === pg.marktype && ng.marktype !== undefined && ng.marktype !== 'group' && sameMarkFrame(pg, ng)) {
+      const ni = (ng.items as SceneItem[] | undefined) ?? []
+      // (the array painted, which an append or an in-place edit of the engine's advances: never read the superseded group's items,
+      // a lazy snapshot whose reading copies them; see renderSceneToCanvasAppend)
+      if (ni === prev.markArrays.get(pg)) {
+        if (ni.length !== prev.markLengths.get(pg) || editedSince(ni, prev.gen)) return false
+        continue
+      }
+      const pi = (pg.items as SceneItem[] | undefined) ?? []
+      if (ni.length !== pi.length) return false
+      for (let j = 0; j < ni.length; j++) if (ni[j] !== pi[j] && !samePixels(pi[j], ni[j], { n: 10_000 })) return false
+      continue
+    }
+    if (!samePixels(pg, ng, { n: 50_000 })) return false
+  }
+  return true
+}
+
 /** Painted extent of an unchanged group after the appended one, cached per group object. */
 const LATER_EXTENT = new WeakMap<SceneGroup, Box | null>()
 function laterExtent(group: SceneGroup, scene: SceneRoot, plotW: number, plotH: number, opts: RenderCanvasOptions): Box | null {

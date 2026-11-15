@@ -963,9 +963,8 @@ function ChartView({
     }
   }, [interactive, scene, displayScene, renderer, interaction, canvasCap, domMarkup, denseSvg, hasSignalListeners, mergedSignals, signalStore, dataStore, timerEdits, inputData, stableLogger, preventDefault, hitIndexFor, liveContainerSize])
 
-  // Canvas backend: size the backing store for devicePixelRatio and redraw the
-  // whole scene whenever it changes (cheap relative to SVG serialization for
-  // dense marks; no listeners to leak — every redraw is a full repaint).
+  // Canvas backend: size the backing store for devicePixelRatio and paint the scene whenever it changes: the appended marks of an
+  // append-only scene, nothing for a scene that paints the same pixels, else all of it.
   React.useLayoutEffect(() => {
     if (renderer !== 'canvas' || !displayScene || canvasCap == null) return
     const canvas = canvasRef.current
@@ -1026,6 +1025,13 @@ function ChartView({
       canvasSnapshotRef.current = canvasCap.snapshotCanvasScene(displayScene)
       canvasSceneRef.current = displayScene
       canvasImagesPaintedRef.current = canvasImagesEpoch
+      return
+    }
+    // A scene that paints exactly the pixels on the canvas (a signal that changed only a tooltip) paints nothing. (Not for image
+    // marks: their bitmaps are the chart's, not the scene's.)
+    if (prev != null && urls.length === 0 && canvasImagesPaintedRef.current === canvasImagesEpoch && canvasCap.paintsSameAs(prev, displayScene)) {
+      canvasSnapshotRef.current = canvasCap.snapshotCanvasScene(displayScene)
+      canvasSceneRef.current = displayScene
       return
     }
     const draw = (): void => {

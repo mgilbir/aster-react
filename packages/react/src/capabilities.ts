@@ -3,6 +3,7 @@ import type {
   loadImages,
   renderSceneToCanvas,
   renderSceneToCanvasAppend,
+  paintsSameAs,
   sceneImageUrls,
   snapshotCanvasScene,
   withSceneImages,
@@ -24,6 +25,8 @@ export interface CanvasCapability {
   readonly createCanvasEvents: typeof createCanvasEvents
   readonly renderSceneToCanvas: typeof renderSceneToCanvas
   readonly renderSceneToCanvasAppend: typeof renderSceneToCanvasAppend
+  /** Whether a scene paints exactly the pixels of the frame on the canvas (then nothing is painted). */
+  readonly paintsSameAs: typeof paintsSameAs
   readonly snapshotCanvasScene: typeof snapshotCanvasScene
   /** Image marks drawn from their `url`: the urls without a bitmap, their loading, and a scene copy holding the loaded ones. */
   readonly sceneImageUrls: typeof sceneImageUrls

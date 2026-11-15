@@ -14,6 +14,8 @@
  * A second phase (browser-canvas-append.mts) checks that incremental append painting
  * equals a full repaint, pixel for pixel.
  * A third phase (browser-canvas-symbols.mts) checks that batched symbol runs paint the plain path's pixels, in time.
+ * A fourth phase (browser-canvas-dirty.mts) checks that a signal-driven scene <Chart> paints nothing for (it paints the same pixels)
+ * leaves the canvas showing exactly a full repaint of it, at device pixel ratios 1 and 2.
  *
  * Run: npx tsx scripts/browser-canvas-parity.mts [--limit=N] [--filter=substr]
  */
@@ -392,4 +394,10 @@ const { runSymbolRunOracle } = await import('./browser-canvas-symbols.mts')
 const symbols = await runSymbolRunOracle(BROWSER)
 console.log(`[browser-canvas] symbol-runs ${BROWSER}: ${symbols.cases} cases (${symbols.withInk} with ink), ${symbols.failures.length} failing; 100k scatter ms: ${symbols.timings.map((t) => `${t.shape}=${t.ms}`).join(' ')}`)
 for (const f of symbols.failures.slice(0, 20)) console.log(`  ${f}`)
-process.exit(failures.length || append.failures.length || symbols.failures.length ? 1 : 0)
+
+// Phase 4: signal moves; a frame that paints nothing (the same pixels) must show what a full repaint shows, pixel for pixel.
+const { runDirtyPixelOracle } = await import('./browser-canvas-dirty.mts')
+const dirty = await runDirtyPixelOracle(BROWSER, 80, 14)
+console.log(`[browser-canvas] signal-moves-vs-full-repaint ${BROWSER}: ${dirty.runs} scenarios, ${dirty.untouched} frames that painted nothing, ${dirty.repainted} full repaints, ${dirty.failures.length} failing`)
+for (const f of dirty.failures.slice(0, 20)) console.log(`  ${f}`)
+process.exit(failures.length || append.failures.length || symbols.failures.length || dirty.failures.length ? 1 : 0)
