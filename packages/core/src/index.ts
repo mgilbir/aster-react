@@ -125,3 +125,6 @@ export function renderSpec(spec: VgSpec, input: RuntimeInput = {}): string {
 
 /** @internal Development builds: the watch for rows changed in place between renders (see row-watch.ts), for the React shells. */
 export { checkChartRows, shareRowWatch } from './row-watch.js'
+
+// (every part of the engine an evaluation can use, so that the functions here work for every spec: engine-parts.ts)
+import './parts-evaluate.js'

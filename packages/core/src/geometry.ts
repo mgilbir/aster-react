@@ -43,7 +43,7 @@ import { ArcPathWriter, PathWriter, resolveCurve, traceArea, traceLine, type Cur
 import type { PathSeg } from './path-data.js'
 import type { Poly } from './path-flatten.js'
 import type { Placement } from './geometry-read.js'
-import { customSymbolCommands, renderSvgPath } from './svg-path.js'
+import { part } from './engine-parts.js'
 import type { SceneItem } from './types.js'
 
 /**
@@ -588,7 +588,9 @@ export function symbolData(shape: string | undefined, r: number, fmt: NumberForm
     default: {
       // d3-path's closePath only writes Z after a point exists
       let open = false
-      const commands = customSymbolCommands(shape!)
+      // (the path reader is a part the React shells load on demand, engine-parts.ts: a spec whose symbols may have a custom shape needs it)
+      const { svgPathCommands, renderSvgPath } = part('svgpath')
+      const commands = svgPathCommands(shape!)
       renderSvgPath({
         moveTo: (x, y) => { p.M(x, y); open = true },
         lineTo: (x, y) => { p.L(x, y); open = true },

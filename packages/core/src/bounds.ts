@@ -10,7 +10,7 @@ import type { SceneGroup, SceneItem, SceneNode } from './types.js'
 import { itemArcGeometry } from './render.js'
 import { areaGeometry, lineGeometry, symbolGeometry, trailGeometry, type CurveGeometry } from './geometry.js'
 import { BoundsPen, cubicAt, cubicTurns } from './bounds-pen.js'
-import { renderSvgPath, svgPathCommands } from './svg-path.js'
+import { part } from './engine-parts.js'
 import { itemTextWidth, textAnchor, truncateToLimit } from './text-metrics.js'
 import { SHAPE_BOUNDS } from './registry.js'
 import { imageBox } from './image-box.js'
@@ -917,6 +917,8 @@ function boundIsolated(it: SceneItem, miterPaths = false, kind?: string): Bounds
     } else {
       // the path as it is drawn: scaled about its own origin, moved to the item, then turned by the item's angle (the turn is the
       // pen's); the same replay, arcs as bezier approximations included, that draws a custom symbol
+      // (the path reader is a part the React shells load on demand, engine-parts.ts: a spec with path marks needs it)
+      const { svgPathCommands, renderSvgPath } = part('svgpath')
       let commands: ReturnType<typeof svgPathCommands> | null = null
       try { commands = svgPathCommands(it.path) } catch { /* a path that does not parse is measured as far as it reads */ }
       if (commands) renderSvgPath(new BoundsPen(bounds, +(rec.angle as number) || 0), commands, it.x || 0, it.y || 0, (rec.scaleX as number) || 1, (rec.scaleY as number) || 1)

@@ -8,6 +8,7 @@ import { markTuple, markTuples } from './util.js'
 import type { EncodeValue, SceneGroup, SceneItem } from './types.js'
 import { Bounds, boundLeaf, boundLegendGroup, boundStroke, multiLineOffset } from './bounds.js'
 import { placeGrid } from './trellis.js'
+import { LEGEND_SCALES } from './legend-scales.js'
 import { rectItemPath, symbolPath } from './render.js'
 import type { Locale } from './locale.js'
 import {
@@ -24,8 +25,7 @@ import {
 type Rec = Record<string, unknown>
 type Scale = ((v: unknown) => unknown) & Rec
 
-/** The channels a legend can describe, in priority order: the first one the spec names gives the legend its scale. */
-export const LEGEND_SCALES = ['size', 'shape', 'fill', 'stroke', 'strokeWidth', 'strokeDash', 'opacity'] as const
+export { LEGEND_SCALES }
 
 /**
  * What kind of legend a spec makes: as it says, or from its scale. A legend for one color channel with no `type` is a gradient on a

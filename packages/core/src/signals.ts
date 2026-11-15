@@ -42,15 +42,15 @@
 import type { CompiledChart, CompiledData, CompiledSignalDef, SceneGroup, SceneItem, SceneNode, SceneRoot, SignalOnDef } from './types.js'
 import { isEngineNode, keptInto } from './scene-registry.js'
 import { compileExpr, type CompiledExpr, type ExpressionRuntime } from './expression.js'
-import { applyChangeset, newChangeset, planModify, type Changeset } from './modify.js'
+import type { Changeset } from './modify.js'
 import { parseExpression, type AstNode } from './expr-parser.js'
 import { normalizeEvents, filterCode } from './stream-defs.js'
 import { parseEventSelectorString, type StreamDef } from './event-selector.js'
 import { array, dict, heldSignalName, ownGet, setOwn, markTupleAlways, MARK_NODE, scopedSignalName } from './util.js'
 import { follow, node, Propagation, type SignalNode } from './signal-propagation.js'
-import { sceneIntersect } from './scene-intersect.js'
 import { consoleLogger, type Logger } from './logger.js'
-import { timers, type Timer } from './timer.js'
+import type { Timer } from './timer.js'
+import { part } from './engine-parts.js'
 import { resolveCursor } from './cursor.js'
 import { clientToSvg } from './pointer.js'
 
@@ -696,6 +696,7 @@ function bindSignalEventsDefs(
   const modifyData = (name: string, insert: unknown, remove: unknown, toggle: unknown, modifyTuple: unknown, values: unknown): number => {
     if (!datasets.has(name)) throw new Error(`Cannot modify the unknown data set "${name}"`)
     if (!handling) throw new Error('modify() is only available while an event is being handled')
+    const { planModify, newChangeset } = part('modify')
     return planModify(rawOf(name), () => {
       let m = modifying.get(name)
       if (!m || m.stamp < flow.clock) {
@@ -712,7 +713,7 @@ function bindSignalEventsDefs(
   }
   /** vega-functions data.js setdata: `df.pulse(input, changeset().remove(truthy).insert(tuples))`, applied when the dataset's operator runs. */
   const setData = (name: string, tuples: unknown): number => {
-    const cs = newChangeset()
+    const cs = part('modify').newChangeset()
     cs.remp.push(() => true)
     for (const t of array(tuples)) cs.add.push(t)
     pulsed.set(name, cs)
@@ -730,7 +731,7 @@ function bindSignalEventsDefs(
       return setData(name, tuples)
     },
     ...(opts.containerSize ? { containerSize: opts.containerSize } : {}),
-    intersect: (box, opt, group) => sceneIntersect(opts.scene, box, opt, group),
+    intersect: (box, opt, group) => part('intersect').sceneIntersect(opts.scene, box, opt, group),
     expr: (code) => compileIn(bindRuntime, code),
   }
   const compiledExprs = new WeakMap<ExpressionRuntime, Map<string, CompiledExpr>>()
@@ -1039,7 +1040,7 @@ function bindSignalEventsDefs(
       if (!st) {
         const fresh: TimerState = { timer: undefined as unknown as Timer, deliver: null }
         let wasConnected = false
-        fresh.timer = timers.interval((elapsed) => {
+        fresh.timer = part('timer').timers.interval((elapsed) => {
           // an owner that has left the document no longer ticks (a host that forgot `release`)
           const connected = (owner as Partial<Node>).isConnected ?? el.isConnected
           if (connected) wasConnected = true
@@ -1279,7 +1280,7 @@ function bindSignalEventsDefs(
         const cs = pulsed.get(name)
         if (!cs) return
         pulsed.delete(name)
-        inputRows.set(name, applyChangeset(rawOf(name), cs, writable))
+        inputRows.set(name, part('modify').applyChangeset(rawOf(name), cs, writable))
         liveRows.delete(name)
         notified.edited.add(name)
       })
@@ -1816,13 +1817,3 @@ export function bindSceneSignals(
     { originX: scene.padding?.left ?? 0, originY: scene.padding?.top ?? 0, scene, ...opts },
   )
 }
-
-/** @internal vega-scenegraph's intersect over the scene (the `intersect()` expression function's body); exported for the conformance gate. */
-export { sceneIntersect } from './scene-intersect.js'
-
-/**
- * Drive the shared scheduler, and so every `timer` event stream, from `clock` instead of the host's globals; `null` goes
- * back to them. The determinism seam: a test, or a host that steps frames itself, installs a controlled clock. Swap it
- * only while no timer is live: a timer's pending wake-up belongs to the clock it was scheduled on.
- */
-export { setTimerClock, type TimerClock } from './timer.js'

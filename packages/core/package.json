@@ -30,24 +30,48 @@
       "default": "./dist/addon-load.js"
     },
     "./signals": {
-      "types": "./dist/signals.d.ts",
-      "default": "./dist/signals.js"
+      "types": "./dist/entry-signals.d.ts",
+      "default": "./dist/entry-signals.js"
     },
     "./canvas": {
-      "types": "./dist/canvas.d.ts",
-      "default": "./dist/canvas.js"
+      "types": "./dist/entry-canvas.d.ts",
+      "default": "./dist/entry-canvas.js"
     },
     "./hit": {
-      "types": "./dist/hit.d.ts",
-      "default": "./dist/hit.js"
+      "types": "./dist/entry-hit.d.ts",
+      "default": "./dist/entry-hit.js"
     },
     "./transition": {
       "types": "./dist/transition.d.ts",
       "default": "./dist/transition.js"
     },
     "./png": {
-      "types": "./dist/png.d.ts",
-      "default": "./dist/png.js"
+      "types": "./dist/entry-png.d.ts",
+      "default": "./dist/entry-png.js"
+    },
+    "./lean": {
+      "types": "./dist/lean.d.ts",
+      "browser": "./dist/lean.js",
+      "default": "./dist/lean-full.js"
+    },
+    "./lean/hit": {
+      "types": "./dist/hit.d.ts",
+      "browser": "./dist/hit.js",
+      "default": "./dist/entry-hit.js"
+    },
+    "./lean/signals": {
+      "types": "./dist/signals.d.ts",
+      "browser": "./dist/signals.js",
+      "default": "./dist/entry-signals.js"
+    },
+    "./lean/canvas": {
+      "types": "./dist/canvas-deferred.d.ts",
+      "browser": "./dist/canvas-deferred.js",
+      "default": "./dist/part-canvas.js"
+    },
+    "./lean/stream": {
+      "types": "./dist/stream.d.ts",
+      "default": "./dist/stream.js"
     },
     "./package.json": "./package.json"
   },
@@ -58,7 +82,27 @@
     "./dist/addon-load.js",
     "./dist/addon-transforms.js",
     "./dist/stats-functions.js",
-    "./dist/transform-extra.js"
+    "./dist/transform-extra.js",
+    "./dist/index.js",
+    "./dist/addon-dom.js",
+    "./dist/entry-signals.js",
+    "./dist/entry-hit.js",
+    "./dist/entry-canvas.js",
+    "./dist/entry-png.js",
+    "./dist/lean-full.js",
+    "./dist/parts-evaluate.js",
+    "./dist/parts-signals.js",
+    "./dist/parts-all.js",
+    "./dist/part-legend.js",
+    "./dist/part-layout.js",
+    "./dist/part-pulse.js",
+    "./dist/part-selections.js",
+    "./dist/part-regex.js",
+    "./dist/part-svgpath.js",
+    "./dist/part-intersect.js",
+    "./dist/part-modify.js",
+    "./dist/part-timer.js",
+    "./dist/part-canvas.js"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.build.json",

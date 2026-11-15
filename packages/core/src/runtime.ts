@@ -63,15 +63,25 @@ import { valueKey, valuesEqual } from './fingerprint.js'
 import { dataWithoutRows, valuesSignal } from './spec-structure.js'
 import { diffRows, equalCell, rowsEqual, sourceNames, type PulseChange } from './pulse.js'
 import { aggregateGroups, flatKeyFn, groupKeyFn } from './transform-agg.js'
-import { layoutFacet, type GridPlace } from './trellis.js'
+import type { GridPlace } from './trellis.js'
 import { boundAxisGroup, boundGroupItem, boundLeaf, boundTypedMark, Bounds, layoutBounds, eachMarkBounds, hasClippedMark } from './bounds.js'
 import { rectItemPath } from './render.js'
 import { buildAxis as buildAxisGuide, tickPlacement } from './guide-axis.js'
 import { buildTitle as buildTitleGuide } from './guide-title.js'
-import { buildLegend as buildLegendGuide, entriesRefusal, legendType, placeLegendStack, LEGEND_SCALES, type GuideHost, type Sides } from './guide-legend.js'
+import type { GuideHost, Sides } from './guide-legend.js'
+import { LEGEND_SCALES } from './legend-scales.js'
+import { part, requestPart } from './engine-parts.js'
 import { guideReading, type GuideKind } from './guide-model.js'
 import { ExpressionFailure, isSignal, isUnencoded, itemAriaOf, propsOf, type GuideStyles, type UserEncode } from './guide-encode.js'
 import { defaultMergedConfig } from './config-defaults.js'
+
+// The legend builder and the grid layout are parts the React shells load on demand (engine-parts.ts): read from their slots when a
+// spec has a legend or a layout, which every entry that evaluates fills.
+const buildLegendGuide: typeof import('./guide-legend.js').buildLegend = (inp) => part('legend').buildLegend(inp)
+const entriesRefusal: typeof import('./guide-legend.js').entriesRefusal = (p) => part('legend').entriesRefusal(p)
+const legendType: typeof import('./guide-legend.js').legendType = (spec, scaleType) => part('legend').legendType(spec, scaleType)
+const placeLegendStack: typeof import('./guide-legend.js').placeLegendStack = (...args) => part('legend').placeLegendStack(...args)
+const layoutFacet: typeof import('./trellis.js').layoutFacet = (...args) => part('layout').layoutFacet(...args)
 
 const DEFAULT_SIZE = 500
 
@@ -352,8 +362,12 @@ interface EvalTxn {
  * of that path imports it.
  */
 export interface IncrementalEngine {
-  /** A transform chain driven by `input`, reading the committed steps `prevDS` and recording this evaluation's into `state`. */
-  applyPipelineWithPulse(
+  /**
+   * A transform chain driven by `input`, reading the committed steps `prevDS` and recording this evaluation's into `state`. The pulse
+   * path: absent while it is not loaded (the React shells load it once a chart's data changes; see engine-parts.ts), and then a
+   * dataset that could have taken a pulse is derived in full, which makes the same rows and leaves the same state.
+   */
+  applyPipelineWithPulse?(
     rows: Row[], transforms: CompiledTransform[], tctx: StepTransformContext, sourceName: string,
     input: StepPulse, prevDS: DatasetState, state: DatasetState,
   ): { rows: Row[]; pulse: StepPulse | null }
@@ -373,7 +387,7 @@ export type DataStability = ReadonlyMap<string, unknown>
 function beginTxn(engine: IncrementalEngine, chart: CompiledChart, unchanged?: DataStability): EvalTxn {
   // (an evaluation that keeps state without the engine would leave a state the next pulse cannot start from, and answer with
   // another evaluation: it does not run)
-  if (typeof engine?.applyPipelineWithPulse !== 'function') throw new Error('[aster] an evaluation that keeps incremental state needs the incremental engine (incremental-engine.ts)')
+  if (typeof engine?.applyOneWithState !== 'function') throw new Error('[aster] an evaluation that keeps incremental state needs the incremental engine (incremental-engine.ts)')
   const committed = STATES.get(chart)
   const prev = committed && !committed.stale ? committed : undefined
   // (a claim flags the committed state stale as well as the state it was made in, so a committed state that is not stale carries a
@@ -3913,10 +3927,10 @@ function buildDatasetsOf(ctx: EvalContext, inputData: Record<string, unknown[]>)
           && (!numbersSourceRows(d.transform) || followsSources(d.transform))
           && (prevDS.fp === passFp || (key !== null && prevDS.key === key && activeMeter() === null))
           && prevDS.steps.length === d.transform.length
-          && prevDS.inputLength === pulseBaseLength(inPulse) && claim(ctx, datasetParts(prevDS))
+          && prevDS.inputLength === pulseBaseLength(inPulse) && pulsePath(ctx) && claim(ctx, datasetParts(prevDS))
         if (incremental) {
           if (shared) rows = copyRows(rows)
-          const res = ctx.engine!.applyPipelineWithPulse(rows, d.transform, tctx, name, inPulse!, prevDS, state)
+          const res = ctx.engine!.applyPipelineWithPulse!(rows, d.transform, tctx, name, inPulse!, prevDS, state)
           rows = res.rows
           outPulse = res.pulse
           // (what each step read, as `runPipeline` records it, so a later evaluation that is not driven by a pulse keeps the steps:
@@ -4196,6 +4210,17 @@ const sameArrays = (a: readonly unknown[], b: readonly unknown[]): boolean => a.
 const MAY_DRAW = new WeakMap<CompiledChart, boolean>()
 
 /** Whether a dataset of the view may draw from the random source, its expressions read as the lexer reads them (an escaped name too). */
+/**
+ * Whether the pulse path is there to take a pulse every other condition allows. When it is not (the React shells load it on demand,
+ * engine-parts.ts) the dataset is derived in full -- the same rows, the same state left for the next pulse -- and the part is asked
+ * for, so that the evaluations after this one are incremental.
+ */
+function pulsePath(ctx: EvalContext): boolean {
+  if (ctx.engine?.applyPipelineWithPulse !== undefined) return true
+  requestPart('pulse')
+  return false
+}
+
 function datasetsMayDraw(chart: CompiledChart): boolean {
   let may = MAY_DRAW.get(chart)
   // (rows draw nothing: only the datasets' transforms and a `{signal}` values are code)

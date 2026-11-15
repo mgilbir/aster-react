@@ -14,6 +14,8 @@ vi.mock('./path-flatten.js', async (importOriginal) => {
   return { ...real, insidePolys: (...a: Parameters<typeof real.insidePolys>) => { calls.n++; return real.insidePolys(...a) } }
 })
 
+// (the parts of the engine the public entries carry, imported after the mock: see scripts/vitest-core-parts.setup.mjs)
+await import('./parts-all.js')
 const { sceneIntersect } = await import('./scene-intersect.js')
 const { sceneIntersect: legacyIntersect } = await import('./legacy-scene-intersect.testlib.js')
 const { compileChart } = await import('./compiler.js')

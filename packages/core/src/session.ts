@@ -20,14 +20,26 @@
 import { compileChart } from './compiler.js'
 import { dict, ownGet } from './util.js'
 import { dataInputOf, valuesSignal } from './spec-structure.js'
-import { evaluateChartPending, type DataStability } from './runtime.js'
-import { incrementalEngine } from './incremental-engine.js'
+import { evaluateChartPending, type DataStability, type IncrementalEngine } from './runtime.js'
+import { applyOneWithState } from './incremental-state.js'
+import { optionalPart } from './engine-parts.js'
 import { refId, valueKey } from './fingerprint.js'
 import { formatEnvironmentKey } from './locale.js'
 import { checkSpecLimits, checkSceneLimits, createLimitClock, withLimits, activeMeter } from './limits.js'
 import { diffRows, type DataPulse } from './pulse.js'
 import { checkChartRows } from './row-watch.js'
 import type { CompiledChart, RuntimeInput, SceneRoot, VgSpec } from './types.js'
+
+/**
+ * The incremental engine a session evaluates with: the step that runs from scratch, and the pulse path from its slot, which the
+ * entry that makes sessions (`@aster-charts/core/dom`) fills and the React shells fill on demand (engine-parts.ts). Read at each
+ * evaluation, so the evaluation after the pulse path arrives takes it.
+ */
+function sessionEngine(): IncrementalEngine {
+  const pulse = optionalPart('pulse')
+  return pulse ? { applyOneWithState, applyPipelineWithPulse: pulse.applyPipelineWithPulse } : WITHOUT_PULSE
+}
+const WITHOUT_PULSE: IncrementalEngine = { applyOneWithState }
 
 /** The build's environment, as bundlers write it in (`process.env.NODE_ENV`); `process` may not exist at all (an unbundled import). */
 declare const process: { env: { NODE_ENV?: string } }
@@ -370,7 +382,7 @@ export function createChartSession(): ChartSession {
     const chart = recompile ? compileChart(spec) : lastChart!
     clock.check('compile')
     // (a chart compiled anew has no state to keep steps from)
-    const pending = evaluateChartPending(incrementalEngine, chart, { ...effectiveInput, data: dataInput(currentRaw) }, recompile ? undefined : stableData(input, currentRaw, pulse))
+    const pending = evaluateChartPending(sessionEngine(), chart, { ...effectiveInput, data: dataInput(currentRaw) }, recompile ? undefined : stableData(input, currentRaw, pulse))
     clock.check('evaluate')
     if (input.limits) checkSceneLimits(pending.scene, input.limits)
     pending.commit()
@@ -403,7 +415,7 @@ export function createChartSession(): ChartSession {
     const currentRaw = new Map(lastRaw)
     for (const [name, rows] of Object.entries(input.data ?? {})) currentRaw.set(name, rows)
     const { input: effectiveInput, pulse } = withAutoPulse(lastSpec, input, currentRaw)
-    const pending = evaluateChartPending(incrementalEngine, lastChart, { ...effectiveInput, data: dataInput(currentRaw) }, stableData(input, currentRaw, pulse))
+    const pending = evaluateChartPending(sessionEngine(), lastChart, { ...effectiveInput, data: dataInput(currentRaw) }, stableData(input, currentRaw, pulse))
     clock.check('change')
     if (input.limits) checkSceneLimits(pending.scene, input.limits)
     pending.commit()

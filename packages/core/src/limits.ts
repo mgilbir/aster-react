@@ -465,8 +465,9 @@ export function checkRegexPattern(pattern: string, flags = ''): void {
   const cap = Math.min(REGEX_MAX_PATTERN, active.limits.maxStringLength ?? REGEX_MAX_PATTERN)
   if (pattern.length > cap) over('maxStringLength', pattern.length, cap, 'regular expression pattern')
   // Static screen for catastrophic-backtracking shapes (heuristic; docs/LIMITS.md).
-  // Applied to every pattern, including RegExp objects a spec built or wrote as literals.
-  const hazard = regexHazard(pattern, flags)
+  // Applied to every pattern, including RegExp objects a spec built or wrote as literals. The screen is a part the React shells load
+  // on demand (engine-parts.ts): reading its slot throws when it is not loaded, so a pattern is refused, never run unscreened.
+  const hazard = part('regex').regexHazard(pattern, flags)
   if (hazard) {
     const shown = pattern.length > 80 ? pattern.slice(0, 80) + '...' : pattern
     throw limitViolation(`regexSafety: ${hazard}: /${shown}/`)
@@ -504,7 +505,7 @@ export function regExpOf(pattern?: unknown, flags?: unknown): RegExp {
   return guardedRegExp(pattern === undefined ? '' : String(pattern), flags === undefined ? undefined : String(flags))
 }
 
-import { regexHazard } from './regex-screen.js'
+import { part } from './engine-parts.js'
 import { dataInputOf, specList } from './spec-structure.js'
 import { ownGet } from './util.js'
 

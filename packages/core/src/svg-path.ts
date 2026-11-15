@@ -258,10 +258,3 @@ export function svgPathCommands(d: string): PathCommand[] {
   }
   return parsed
 }
-
-/**
- * A custom symbol shape (vega `symbols(name)` for a name that is not a built-in shape) parsed as SVG path data. Throws vega's
- * own error for an invalid path. Drawn scaled by the symbol radius `r = sqrt(size) / 2` about the origin
- * (`renderSvgPath(sink, commands, 0, 0, r)`).
- */
-export const customSymbolCommands = (shape: string): PathCommand[] => svgPathCommands(shape)

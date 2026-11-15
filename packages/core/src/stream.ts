@@ -22,6 +22,8 @@
  * The stream owns a `ChartSession` and a spec. It never mutates the spec.
  */
 import { createChartSession, type ChartSession } from './session.js'
+import { installPart, partLoaded } from './engine-parts.js'
+import { applyPipelineWithPulse } from './incremental-engine.js'
 import { dict } from './util.js'
 import { dataInputOf } from './spec-structure.js'
 import { diffRows, type DataPulse, type DatasetPulse, type PulseRange } from './pulse.js'
@@ -435,6 +437,8 @@ function foldBatch(fold: Fold, batch: StreamBatch, baseLenOf: (name: string) => 
 }
 
 export function createChartStream(spec: VgSpec, options: StreamOptions = {}): ChartStream {
+  // a stream is a chart whose data changes: its session takes every batch as a pulse, so it carries the pulse path (engine-parts.ts)
+  if (!partLoaded('pulse')) installPart('pulse', { applyPipelineWithPulse })
   const policy: StreamPolicy = options.policy ?? 'coalesce'
   const batchCapacity = Math.max(1, options.capacity ?? DEFAULT_CAPACITY)
   const maxQueuedRows = Math.max(1, options.maxQueuedRows ?? DEFAULT_MAX_QUEUED_ROWS)

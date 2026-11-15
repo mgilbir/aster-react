@@ -13,7 +13,7 @@
 import { currentLocale } from './locale.js'
 import { boundedCount, ceiling, meterBytes, meterTick, checkRegexInput, checkRegexObject, regExpOf } from './limits.js'
 import { bandSpace, scaleGradient, type Scale } from './scale.js'
-import { selectionIdTest, selectionResolve, selectionTest, selectionTuples } from './selections.js'
+import { part } from './engine-parts.js'
 import { parseExpressionCached } from './expr-parser.js'
 import { PRIMITIVE_TUPLE, tupleDatum } from './util.js'
 import { ADDON_FUNCTIONS } from './addon-functions.js'
@@ -481,10 +481,11 @@ function createBuiltinFunctions(runtime: ExpressionRuntime): Record<string, unkn
     modify: (name: unknown, insert?: unknown, remove?: unknown, toggle?: unknown, modifyTuple?: unknown, values?: unknown) =>
       runtime.modify ? runtime.modify(String(name), insert, remove, toggle, modifyTuple, values) : 0,
     // vega-selections
-    vlSelectionTest: (name: unknown, datum: unknown, op?: unknown) => selectionTest(runtime.data(String(name)) as never, datum, op),
-    vlSelectionIdTest: (name: unknown, datum: unknown, op?: unknown) => selectionIdTest(runtime.data(String(name)) as never, datum, op),
-    vlSelectionResolve: (name: unknown, op?: unknown, isMulti?: unknown, vl5?: unknown) => selectionResolve(runtime.data(String(name)) as never, op, isMulti, vl5),
-    vlSelectionTuples: (items: unknown, base: unknown) => selectionTuples(items, base),
+    // (vega-selections' functions are a part the React shells load on demand: engine-parts.ts)
+    vlSelectionTest: (name: unknown, datum: unknown, op?: unknown) => part('selections').selectionTest(runtime.data(String(name)) as never, datum, op),
+    vlSelectionIdTest: (name: unknown, datum: unknown, op?: unknown) => part('selections').selectionIdTest(runtime.data(String(name)) as never, datum, op),
+    vlSelectionResolve: (name: unknown, op?: unknown, isMulti?: unknown, vl5?: unknown) => part('selections').selectionResolve(runtime.data(String(name)) as never, op, isMulti, vl5),
+    vlSelectionTuples: (items: unknown, base: unknown) => part('selections').selectionTuples(items, base),
     isTuple: (t: unknown) => isTuple(t),
     // vega-functions intersect.js: the items of the drawn scene inside a box
     intersect: (b: unknown, opt?: unknown, group?: unknown) => (runtime.intersect ? runtime.intersect(b, opt, group) : []),

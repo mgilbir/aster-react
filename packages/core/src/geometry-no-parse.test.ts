@@ -16,6 +16,9 @@ vi.mock('./path-data.js', async (importOriginal) => {
   return { ...real, parsePathData: (d: string) => { parsed.push(d); return real.parsePathData(d) } }
 })
 
+// (the parts of the engine the public entries carry, imported after the mock: see scripts/vitest-core-parts.setup.mjs)
+await import('./parts-all.js')
+await import('./part-canvas.js')
 const { compileChart } = await import('./compiler.js')
 const { evaluateChart } = await import('./evaluate.js')
 const { renderSceneToCanvas } = await import('./canvas.js')
