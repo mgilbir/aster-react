@@ -13,7 +13,7 @@
 import { SYMBOL_DEFAULT_SIZE } from './util.js'
 import type { SceneDef, SceneGroup, SceneItem, SceneRoot } from './types.js'
 import { gradientDefOf, isGradientPaint as isGradientObject } from './svg-defs.js'
-import { Bounds, boundLeaf, boundTypedMark } from './bounds.js'
+import { Bounds, boundLeaf, boundStroke, boundTypedMark } from './bounds.js'
 import { imageBox, itemImage } from './image-box.js'
 import { drawnPathCommands, parsePathData, renderSvgPath, tracePath, type PathSeg, type PathSink } from './path-data.js'
 
@@ -549,21 +549,30 @@ function renderGroup(group: SceneGroup, ctx: CanvasLike, scene: SceneRoot, plotW
       else ctx.rect(0, 0, gw, gh)
       ctx.clip()
     }
-    // (a gradient on the group's own box is laid over the group's bounds -- the box, the stroke, what it holds -- as vega's canvas does)
-    const bgBox = (group.items ?? []).some((it) => (it as { _bg?: boolean })._bg === true && (isGradientPaint(it.fill) || isGradientPaint(it.stroke)))
+    // (a gradient on the group's own box is laid over the group's bounds -- the box, the stroke, what it holds -- as vega's canvas does;
+    // a guide's box carries the bounds of its group item, see `leafGradientBox`)
+    const bgBox = (group.items ?? []).some((it) => (it as { _bg?: boolean; _itemBounds?: unknown })._bg === true && (it as { _itemBounds?: unknown })._itemBounds === undefined && (isGradientPaint(it.fill) || isGradientPaint(it.stroke)))
       ? groupGradientBox(group)
       : undefined
+    // (an axis's leaves hold the half-pixel shift its group item has in vega; vega draws them in the frame of its group item, which the
+    // scene keeps as where the axis's box is)
+    const axis = group.role === 'axis' ? (group as unknown as { axis?: { translate?: number } }).axis : undefined
+    const bake = axis?.translate ?? 0
+    const leafFrame = axis !== undefined && group.box !== undefined ? { x: group.box.x ?? 0, y: group.box.y ?? 0 } : undefined
     // (a guide's group item -- an axis's, a title's -- is held as its box: drawn before what the guide holds, its stroke in front
     // after; as vega draws a group item's box, only when it has a fill or a stroke)
     const box = group.box !== undefined && (group.box.fill || group.box.stroke) ? group.box : undefined
     const boxFg = group.boxFg !== undefined && group.boxFg.stroke ? group.boxFg : undefined
-    const guideBox = box !== undefined && (isGradientPaint(box.fill) || isGradientPaint(box.stroke) || (boxFg !== undefined && isGradientPaint(boxFg.stroke))) ? groupGradientBox(group) : undefined
-    if (box !== undefined) renderLeafItem(box, ctx, scene, guideBox)
+    const guideBox = box !== undefined && (box as { _itemBounds?: unknown })._itemBounds === undefined && (isGradientPaint(box.fill) || isGradientPaint(box.stroke) || (boxFg !== undefined && isGradientPaint(boxFg.stroke))) ? groupGradientBox(group) : undefined
+    // (vega draws a group item's box in the frame of the group around it, which is where a gradient it paints as a pattern sits)
+    const outer = { x: -(group.x ?? 0), y: -(group.y ?? 0) }
+    if (box !== undefined) renderLeafItem(box, ctx, scene, guideBox, 0, outer)
     for (const item of group.items ?? []) {
       if (isGroup(item)) renderGroup(item, ctx, scene, gw, gh, opts)
-      else renderLeafItem(item, ctx, scene, (item as { _bg?: boolean })._bg === true ? bgBox : undefined)
+      else if ((item as { _bg?: boolean })._bg === true) renderLeafItem(item, ctx, scene, bgBox, bake, (item as { _frame?: Frame })._frame ?? (item === group.items![0] || item === group.items![group.items!.length - 1] ? outer : undefined))
+      else renderLeafItem(item, ctx, scene, undefined, bake, (item as { _frame?: Frame })._frame ?? leafFrame)
     }
-    if (boxFg !== undefined) renderLeafItem(boxFg, ctx, scene, guideBox)
+    if (boxFg !== undefined) renderLeafItem(boxFg, ctx, scene, guideBox, 0, outer)
     ctx.restore()
     return
   }
@@ -691,6 +700,40 @@ function groupGradientBox(group: SceneGroup): Bbox | undefined {
   return b.empty() ? undefined : { x1: b.x1, y1: b.y1, x2: b.x2, y2: b.y2 }
 }
 
+/**
+ * The box a gradient on a guide's leaf is laid over: vega's `item.bounds` of the item the leaf stands for, in the frame the leaf is
+ * drawn in. A group item's box carries its item's bounds (`_itemBounds`, in its own frame: a legend's, an entry's, an axis's); a
+ * legend's strip or band is a rect item, a rule (an axis's tick, grid line or domain) a rule item, a symbol a symbol item (its
+ * stroke's miter included). `bake` is the shift the scene baked into an axis's leaves, which vega's bounds do not hold: for a turned
+ * leaf, whose gradient is laid in its turned frame, it comes back out.
+ */
+function leafGradientBox(it: SceneItem, bake = 0): Bbox | undefined {
+  if (!(isGradientPaint(it.fill) || isGradientPaint(it.stroke))) return undefined
+  const own = (it as unknown as Record<string, unknown>)._itemBounds as Bbox | undefined
+  if (own !== undefined) {
+    const x = it.x ?? 0
+    const y = it.y ?? 0
+    return { x1: own.x1 + x, y1: own.y1 + y, x2: own.x2 + x, y2: own.y2 + y }
+  }
+  const part = it._part
+  const b = part === 'gradient' || part === 'band' ? stripBounds(it)
+    : it.path == null && it.text == null && it.shape == null ? boundLeaf(new Bounds(), { ...it, _kind: 'rule' } as SceneItem, false, 'rule')
+    : part === 'symbol' ? boundLeaf(new Bounds(), it, true, 'symbol')
+    : boundLeaf(new Bounds(), it, true)
+  if (b.empty()) return undefined
+  if (bake && itemAngle(it)) b.translate(-bake, -bake)
+  return { x1: b.x1, y1: b.y1, x2: b.x2, y2: b.y2 }
+}
+
+/** A legend's strip or band, a rect item (drawn as the path of its box at its position): its box and its stroke, no miter. */
+function stripBounds(it: SceneItem): Bounds {
+  const x = it.x ?? 0
+  const y = it.y ?? 0
+  const w = Number(it.width) || 0
+  const h = Number(it.height) || 0
+  return boundStroke(new Bounds().set(Math.min(x, x + w), Math.min(y, y + h), Math.max(x, x + w), Math.max(y, y + h)), it)
+}
+
 /** Compute the bbox of parsed segments (for objectBoundingBox gradients). */
 function segsBbox(segs: PathSeg[]): Bbox {
   const bb: Bbox = { x1: Infinity, y1: Infinity, x2: -Infinity, y2: -Infinity }
@@ -796,8 +839,43 @@ function fontString(it: SceneItem): string {
 
 const itemAngle = (it: SceneItem): number | undefined => (it as Record<string, unknown>).angle as number | undefined
 
-function renderLeafItem(it: SceneItem, ctx: CanvasLike, scene: SceneRoot, box?: Bbox): void {
+/** The origin of the frame vega draws a leaf in, in the frame the scene holds the leaf in. */
+interface Frame { x: number; y: number }
+
+/**
+ * Whether a paint is a gradient vega's canvas draws as a pattern (a linear one that is not axis aligned): a pattern sits at the origin
+ * of the frame it is painted in, so such a leaf is painted in the frame vega paints it in.
+ */
+function paintsPattern(p: unknown, defs: SceneDefs[] | undefined): boolean {
+  if (p == null || (typeof p !== 'object' && typeof p !== 'string')) return false
+  let def: SceneDef | undefined
+  if (isGradientObject(p)) def = gradientDefOf(p)
+  else if (typeof p === 'string') {
+    const m = /^url\(#(?:p_)?([^)]+)\)$/.exec(p)
+    if (m === null) return false
+    def = defs?.find((d) => d.id === m[1])
+  }
+  if (def === undefined || def.kind === 'radial' || (def.x1 == null && def.y1 == null && def.x2 == null && def.y2 == null)) return false
+  return (def.x1 ?? 0) !== (def.x2 ?? 1) && (def.y1 ?? 0) !== (def.y2 ?? 0)
+}
+
+function renderLeafItem(it: SceneItem, ctx: CanvasLike, scene: SceneRoot, box?: Bbox, bake = 0, frame?: Frame): void {
   const defs = scene.defs
+  if (frame !== undefined && (frame.x !== 0 || frame.y !== 0) && (paintsPattern(it.fill, defs) || paintsPattern(it.stroke, defs))) {
+    // the same leaf, at the same place, in vega's frame
+    const fx = frame.x
+    const fy = frame.y
+    const moved = { ...it, x: (it.x ?? 0) - fx, y: (it.y ?? 0) - fy, ...(it.x2 != null ? { x2: it.x2 - fx } : {}), ...(it.y2 != null ? { y2: it.y2 - fy } : {}) } as SceneItem
+    const clip = (it as unknown as Record<string, unknown>)._clip as { x?: number; y?: number } | undefined
+    if (clip) (moved as unknown as Record<string, unknown>)._clip = { ...clip, x: (clip.x ?? 0) - fx, y: (clip.y ?? 0) - fy }
+    // (the box of a group it stands for, as given, is in the scene's frame; its own bounds move with it)
+    const bbox = box ?? leafGradientBox(it, bake)
+    ctx.save()
+    ctx.translate(fx, fy)
+    renderLeafItem(moved, ctx, scene, bbox && { x1: bbox.x1 - fx, y1: bbox.y1 - fy, x2: bbox.x2 - fx, y2: bbox.y2 - fy }, bake)
+    ctx.restore()
+    return
+  }
   // Path items (legend entries, tick labels' misc paths)
   if (it.path != null) {
     const tx = it.x ?? 0
@@ -822,7 +900,7 @@ function renderLeafItem(it: SceneItem, ctx: CanvasLike, scene: SceneRoot, box?: 
       ctx.beginPath()
       tracePath(ctx, segs, tx, ty)
     }
-    paintPath(ctx, segs, it, defs, 'auto', box)
+    paintPath(ctx, segs, it, defs, 'auto', box ?? leafGradientBox(it))
     if (clip) ctx.restore()
     return
   }
@@ -845,11 +923,11 @@ function renderLeafItem(it: SceneItem, ctx: CanvasLike, scene: SceneRoot, box?: 
       return o as unknown as typeof s
     })
     tracePath(ctx, moved)
-    paintPath(ctx, moved, it, defs, 'auto')
+    paintPath(ctx, moved, it, defs, 'auto', leafGradientBox(it))
     return
   }
   if (it._kind === 'text' || (it._kind === undefined && it.text != null)) {
-    renderTextItem(it, ctx, defs)
+    renderTextItem(it, ctx, defs, bake)
     return
   }
   // Line items (rules)
@@ -861,7 +939,7 @@ function renderLeafItem(it: SceneItem, ctx: CanvasLike, scene: SceneRoot, box?: 
   ctx.beginPath()
   ctx.moveTo(x, y)
   ctx.lineTo(x2, y2)
-  paintPath(ctx, [{ cmd: 'M', x, y }, { cmd: 'L', x: x2, y: y2 }] as PathSeg[], it, defs, 'stroke')
+  paintPath(ctx, [{ cmd: 'M', x, y }, { cmd: 'L', x: x2, y: y2 }] as PathSeg[], it, defs, 'stroke', leafGradientBox(it))
 }
 
 /**
@@ -898,7 +976,7 @@ function paintPathArc(ctx: CanvasLike, it: SceneItem, defs: SceneDefs[] | undefi
  * geometry the SVG `transform` is built from); `textAlign` is the item's align
  * or `left`; fill AND stroke are painted (text can be outlined).
  */
-function renderTextItem(it: SceneItem, ctx: CanvasLike, defs: SceneDefs[] | undefined): void {
+function renderTextItem(it: SceneItem, ctx: CanvasLike, defs: SceneDefs[] | undefined, bake = 0): void {
   const opacity = it.opacity == null ? 1 : (it.opacity as number)
   if (opacity === 0 || (it as Record<string, unknown>).fontSize as number <= 0) return
   const d = textItemDesc(it)
@@ -920,7 +998,7 @@ function renderTextItem(it: SceneItem, ctx: CanvasLike, defs: SceneDefs[] | unde
   const fillOk = it.fill != null && (it.fill as unknown) !== false && it.fill !== 'transparent'
   const strokeOk = it.stroke != null && (it.stroke as unknown) !== false && it.stroke !== 'transparent'
   // (a gradient is laid over the item's bounds, as vega's canvas does: the text's box)
-  const box = gradientBox(it) ?? null
+  const box = leafGradientBox(it, bake) ?? null
   for (let i = 0; i < d.lines.length; i++) {
     const str = d.lines[i]!
     const ly = i === 0 ? y : y + i * d.lineHeight

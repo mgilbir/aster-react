@@ -606,12 +606,18 @@ export function buildLegend(inp: LegendBuildInput): LegendBuilt {
 
   // the legend's own box, painted as a group item's background (a legend whose layout never ran has no size)
   const frame = host.groupBox(group as SceneItem, inp.raw ? 0 : width, inp.raw ? 0 : height)
-  const leaves: SceneItem[] = [{ ...frame.background, _part: 'bg' } as SceneItem]
+  // (the legend group item's bounds, what a gradient on its box is laid over on a canvas: its box and its stroke)
+  const legendBounds = bounds.empty() ? {} : { _itemBounds: { x1: bounds.x1, y1: bounds.y1, x2: bounds.x2, y2: bounds.y2 } }
+  const leaves: SceneItem[] = [{ ...frame.background, _part: 'bg', ...legendBounds } as SceneItem]
   // the entries were made in the entry group's frame; the scene holds them in the legend's
   for (const it of entryLeaves) {
     const r = it as Rec
     r.x = ((r.x as number) || 0) + entry.x
     r.y = ((r.y as number) || 0) + entry.y
+    // (vega draws what the entry group holds in that group's frame, an entry's symbol and label in the entry's: where a gradient
+    // painted as a pattern sits, see canvas.ts `Frame`)
+    const inner = r._frame as { x: number; y: number } | undefined
+    r._frame = { x: (inner?.x ?? 0) + entry.x, y: (inner?.y ?? 0) + entry.y }
     // the clip of a clipped symbol is its entry's box
     const clip = r._clip as { x: number; y: number; w: number; h: number; corners?: Rec; d?: string } | undefined
     if (clip) {
@@ -634,7 +640,7 @@ export function buildLegend(inp: LegendBuildInput): LegendBuilt {
     leaves.push(titleItem)
   }
   // (stroked in front: the legend's stroke, drawn after all it holds)
-  if (frame.foreground) leaves.push({ ...frame.foreground, _part: 'fg' } as SceneItem)
+  if (frame.foreground) leaves.push({ ...frame.foreground, _part: 'fg', ...legendBounds } as SceneItem)
   return { leaves, legendType: type, width, height, bounds, group, partMeta, datum, ...(cutShort || host.stopped !== undefined ? { madeMarks } : {}), ...(failed.grid !== undefined ? { gridError: failed.grid } : {}) }
 }
 
@@ -791,6 +797,13 @@ function symbolEntries(inp: LegendBuildInput, k: Kit, defs: LegendDefs, group: R
     const held = new Bounds()
     if (sym !== undefined) {
       const symbolBox = boundLeaf(new Bounds(), symbolForBounds(sym))
+      // (the symbol item's own bounds, in its own frame: what a gradient on it is laid over on a canvas, at full precision -- the path
+      // it is drawn with is printed rounded)
+      if (!symbolBox.empty()) {
+        const sx = (sym.x as number) || 0
+        const sy = (sym.y as number) || 0
+        sym._itemBounds = { x1: symbolBox.x1 - sx, y1: symbolBox.y1 - sy, x2: symbolBox.x2 - sx, y2: symbolBox.y2 - sy }
+      }
       // a clipped symbol has its bounds cut to the clip region: the entry group's box, whose width is still 0 at that point
       if (clipped) symbolBox.intersect(new Bounds().set(0, 0, 0, +(g.height as number)))
       held.union(symbolBox)
@@ -860,7 +873,10 @@ function symbolEntries(inp: LegendBuildInput, k: Kit, defs: LegendDefs, group: R
     const width = widths.get(columnOf(i)) ?? 0
     // the entry's box is as wide as its column and as tall as what it holds
     const frame = host.groupBox({ ...(g as SceneItem) } as SceneItem, inp.raw ? 0 : width, inp.raw ? 0 : held.y2)
-    const entryBox = { ...frame.background, _part: 'entry', x: here.x, y: here.y, datum: entryDatum } as SceneItem & Rec
+    // (the entry group item's bounds -- what it holds, its box only when it had a size then, its stroke -- are what a gradient on
+    // its box is laid over on a canvas)
+    const entryBounds = held.empty() ? {} : { _itemBounds: { x1: held.x1, y1: held.y1, x2: held.x2, y2: held.y2 } }
+    const entryBox = { ...frame.background, _part: 'entry', x: here.x, y: here.y, datum: entryDatum, ...entryBounds } as SceneItem & Rec
     // (the marks of the entry's instance the pass made: the symbol's, then the label's)
     if (lbl === undefined) entryBox._made = sym === undefined ? 0 : 1
     if (k.user.entries?.interactive === true) entryBox._hit = true
@@ -880,6 +896,7 @@ function symbolEntries(inp: LegendBuildInput, k: Kit, defs: LegendDefs, group: R
       drawn.y = ((sym.y as number) || 0) + here.y
       if (clipped) drawn._clip = { x: here.x, y: here.y, w: width, h: held.y2, corners: cornersOf(g) }
       drawn.datum = e
+      drawn._frame = { x: here.x, y: here.y }
       if (k.user.symbols?.interactive === true && drawn.fill === 'transparent') drawn._hit = true
       out.push(drawn)
     }
@@ -887,10 +904,11 @@ function symbolEntries(inp: LegendBuildInput, k: Kit, defs: LegendDefs, group: R
       lbl.datum = e
       lbl.x = ((lbl.x as number) || 0) + here.x
       lbl.y = ((lbl.y as number) || 0) + here.y
+      lbl._frame = { x: here.x, y: here.y }
       out.push(lbl)
     }
     // (stroked in front: the entry's stroke, drawn after its symbol and its label; it belongs to the entry box before it)
-    if (frame.foreground) out.push({ ...frame.foreground, _part: 'entryFg', x: here.x, y: here.y } as SceneItem)
+    if (frame.foreground) out.push({ ...frame.foreground, _part: 'entryFg', x: here.x, y: here.y, ...entryBounds } as SceneItem)
   }
   return all
 }

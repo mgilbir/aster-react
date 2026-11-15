@@ -5,10 +5,8 @@
  * its device-space path and its style (a gradient: its coordinates and stops).
  *
  * `strokeForeground` on every kind of group item, the legend's and the entries' included, is held to vega in
- * stroke-foreground-vs-vega.test.ts (SVG, canvas, pick, bounds).
- *
- * Not here, because Aster does not match it yet: the coordinates of a gradient on an axis's, a legend's or an entry's box (vega lays
- * it over the item's bounds, its stroke and contents included; Aster over the box).
+ * stroke-foreground-vs-vega.test.ts (SVG, canvas, pick, bounds); a gradient on every kind of box, and on every other item a canvas
+ * paints with one, in gradient-canvas-bounds-vs-vega.test.ts.
  */
 import { describe, expect, it } from 'vitest'
 import * as vega from 'vega'

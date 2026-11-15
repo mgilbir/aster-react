@@ -140,6 +140,31 @@ for (const [name, d] of PATH_ARCS) {
     },
   })
 }
+// A gradient on a guide's box (an axis's, a legend's, an entry's, a title's), on a legend's strip and on its symbols: vega lays it over
+// the item's bounds (gradient-canvas-bounds-vs-vega.test.ts holds the axis-aligned and radial ones to vega's coordinates in Node). A
+// diagonal one vega draws into an image of the bounds' size, which only a browser can; the stops are hard edges, so a gradient laid
+// a pixel off shows.
+{
+  const edge = (x1: number, y1: number, x2: number, y2: number): object => ({ gradient: 'linear', x1, y1, x2, y2, stops: [{ offset: 0, color: 'black' }, { offset: 0.5, color: 'black' }, { offset: 0.5, color: 'gold' }, { offset: 1, color: 'gold' }] })
+  const ring = { gradient: 'radial', stops: [{ offset: 0, color: 'navy' }, { offset: 0.5, color: 'navy' }, { offset: 0.5, color: 'white' }, { offset: 1, color: 'white' }] }
+  const diag = edge(0, 0, 1, 0.7)
+  const box = (paint: object): object => ({ update: { width: { value: 40 }, height: { value: 20 }, strokeWidth: { value: 3 }, ...paint } })
+  const base = { $schema: 'https://vega.github.io/schema/vega/v6.json', width: 160, height: 100, padding: 5, autosize: 'pad', background: 'white',
+    scales: [{ name: 'x', type: 'linear', domain: [0, 10], range: 'width' }, { name: 'c', type: 'ordinal', domain: ['a', 'b'], range: ['red', 'blue'] }, { name: 'q', type: 'linear', domain: [0, 10], range: ['white', 'navy'] }] }
+  const guides: Array<[string, object]> = [
+    ['axis', { axes: [{ orient: 'bottom', scale: 'x', title: 'X', encode: { axis: box({ fill: { value: diag }, stroke: { value: edge(0, 0, 0, 1) } }) } }] }],
+    ['legend', { legends: [{ fill: 'c', title: 'C', encode: { legend: box({ fill: { value: edge(0, 0, 1, 0) }, stroke: { value: diag }, strokeForeground: { value: true } }) } }] }],
+    ['entries', { legends: [{ fill: 'c', encode: { entries: box({ fill: { value: diag }, stroke: { value: 'teal' } }), symbols: { update: { fill: { value: ring }, size: { value: 200 } } } } }] }],
+    ['title', { title: { text: 'Title', subtitle: 'Sub', encode: { group: box({ fill: { value: ring }, stroke: { value: diag } }) } } }],
+    ['strip', { legends: [{ fill: 'q', type: 'gradient', title: 'Q', gradientStrokeColor: 'black', gradientStrokeWidth: 3, encode: { gradient: { update: { stroke: { value: edge(1, 0, 1, 1) } } } } }] }],
+    // (a diagonal gradient is a pattern, which sits at the origin of the frame vega paints in: a group's, an entry's, an axis's)
+    ['legend-parts', { legends: [{ fill: 'c', title: 'Title above', encode: { entries: box({ fill: { value: diag } }), symbols: { update: { fill: { value: diag }, size: { value: 300 } } }, labels: { update: { fill: { value: diag }, fontSize: { value: 16 } } } } }] }],
+    ['gradient-legend-labels', { legends: [{ fill: 'q', type: 'gradient', title: 'Q', encode: { labels: { update: { fill: { value: diag }, fontSize: { value: 16 } } }, gradient: { update: { stroke: { value: diag }, strokeWidth: { value: 4 } } } } }] }],
+    ['axis-parts', { axes: [{ orient: 'bottom', scale: 'x', title: 'Bottom', encode: { labels: { update: { fill: { value: diag }, fontSize: { value: 16 } } }, ticks: { update: { stroke: { value: diag }, strokeWidth: { value: 4 } } }, title: { update: { fill: { value: diag }, fontSize: { value: 20 } } } } }] }],
+    ['group-mark', { marks: [{ type: 'group', encode: { update: { x: { value: 37 }, y: { value: 23 }, width: { value: 70 }, height: { value: 40 }, fill: { value: diag }, stroke: { value: diag }, strokeWidth: { value: 5 }, strokeForeground: { value: true } } }, marks: [{ type: 'rect', encode: { update: { x: { value: 10 }, y: { value: 10 }, width: { value: 30 }, height: { value: 20 }, fill: { value: diag } } } }] }] }],
+  ]
+  for (const [name, guide] of guides) synthetic.push({ name: `canvas-guide-gradient-${name}`, spec: { ...base, ...guide } })
+}
 const CUSTOM_SHAPES: Array<[string, string]> = [
   ['ring', 'M-1,0 A1,1 0 1,1 1,0 A1,1 0 1,1 -1,0 M0.5,0 A0.5,0.5 0 0,0 -0.5,0 Z'],
   ['ellipse', 'M0,-1 A1.2,0.5 30 1,1 1,0.4 L0,1 Z'],

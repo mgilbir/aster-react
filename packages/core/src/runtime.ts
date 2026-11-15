@@ -7788,6 +7788,13 @@ function makeAxis(axis: CompiledAxis, ctx: EvalContext, index: number): SceneGro
   gb.background.x = gx
   gb.background.y = gy
   if (gb.foreground) { gb.foreground.x = gx; gb.foreground.y = gy }
+  // (the axis group item's bounds, as its layout left them -- what it holds, its stroke; not its box -- are what a gradient on its
+  // box is laid over on a canvas: in the box's own frame)
+  if (!built.bounds.empty()) {
+    const own = { x1: built.bounds.x1 - gx, y1: built.bounds.y1 - gy, x2: built.bounds.x2 - gx, y2: built.bounds.y2 - gy }
+    ;(gb.background as unknown as Record<string, unknown>)._itemBounds = own
+    if (gb.foreground) (gb.foreground as unknown as Record<string, unknown>)._itemBounds = own
+  }
   const out = {
     marktype: 'group',
     role: 'axis',
