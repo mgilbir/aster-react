@@ -425,7 +425,11 @@ function ChartView({
 
   // Interaction state
   const [dragRect, setDragRect] = React.useState<{ x: number; y: number; width: number; height: number } | null>(null)
-  const [tooltipInfo, setTooltipInfo] = React.useState<{ datum: Record<string, unknown>; item: SceneItem; x: number; y: number } | null>(null)
+  // The tooltip under the pointer: a store of its own, read by <ChartTooltip>, so a pointer move that only moves the tooltip renders
+  // the tooltip and not the chart.
+  const tooltipStoreRef = React.useRef<TooltipStore | null>(null)
+  tooltipStoreRef.current ??= createTooltipStore()
+  const tooltipStore = tooltipStoreRef.current
   const [internalView, setInternalView] = React.useState<ViewDomain | null>(null)
   const [internalSelection, setInternalSelection] = React.useState<SelectValue | null>(null)
   const [hiddenLegend, setHiddenLegend] = React.useState<Map<string, HiddenLegendEntry>>(() => new Map())
@@ -1430,17 +1434,6 @@ function ChartView({
     }
   }, [])
 
-  /**
-   * The default tooltip shows the hovered item's `tooltip` channel value, as vega-tooltip does (null: no tooltip). vega-view hands
-   * the handler `item.tooltip || null`, so a falsy value shows nothing.
-   */
-  const tooltipShown = React.useMemo(
-    () => (tooltipInfo != null && renderTooltip == null && interaction != null
-      ? interaction.tooltipContent((tooltipInfo.item as { tooltip?: unknown }).tooltip || null)
-      : null),
-    [tooltipInfo, renderTooltip, interaction],
-  )
-
   const handleTooltipMove = React.useCallback(
     (e: React.MouseEvent) => {
       if (!tooltipEnabled) return
@@ -1460,14 +1453,14 @@ function ChartView({
       // is the datum), not for one whose only datum is vega's generated `{}` (a mark without `from`, a group, a guide part)
       // (vega hands its tooltip handler `item.tooltip || null`: a falsy value -- '', 0, false, NaN -- is no tooltip)
       const shows = item != null && (!!tip || (renderTooltip != null && target!.kind === 'mark' && target!.fromData === true))
-      setTooltipInfo(shows ? { datum: hasDatum ? (datum as Record<string, unknown>) : {}, item, x: e.clientX - rect.left, y: e.clientY - rect.top } : null)
+      tooltipStore.set(shows ? { datum: hasDatum ? (datum as Record<string, unknown>) : {}, item, x: e.clientX - rect.left, y: e.clientY - rect.top } : null)
     },
-    [tooltipEnabled, displayScene, hitIndexFor, pointerMapper, renderTooltip],
+    [tooltipEnabled, displayScene, hitIndexFor, pointerMapper, renderTooltip, tooltipStore],
   )
 
   const handleTooltipLeave = React.useCallback(() => {
-    if (tooltipEnabled) setTooltipInfo(null)
-  }, [tooltipEnabled])
+    if (tooltipEnabled) tooltipStore.set(null)
+  }, [tooltipEnabled, tooltipStore])
 
   // --- the cursor (vega-view cursor.js) -------------------------------------
   // The cursor the container shows is state, rendered through its `style` like any other style: the hovered item's `cursor`
@@ -1761,37 +1754,86 @@ function ChartView({
           })}
         </div>
       )}
-      {tooltipInfo != null && (renderTooltip != null || tooltipShown != null) && (
-        <div
-          data-testid="chart-tooltip"
-          style={{
-            position: 'absolute',
-            left: tooltipInfo.x + 12,
-            top: tooltipInfo.y + 12,
-            zIndex: 40,
-            pointerEvents: 'none',
-            background: 'rgba(0,0,0,0.85)',
-            color: '#fff',
-            padding: '4px 8px',
-            borderRadius: 4,
-            fontSize: 12,
-            fontFamily: 'system-ui, sans-serif',
-            maxWidth: 240,
-            whiteSpace: 'nowrap',
-          }}
-        >
-          {renderTooltip != null
-            ? renderTooltip(tooltipInfo.datum, { tooltip: (tooltipInfo.item as { tooltip?: unknown }).tooltip, item: tooltipInfo.item })
-            : tooltipShown != null && ('text' in tooltipShown
-              ? tooltipShown.text
-              : <>
-                  {tooltipShown.title != null && <div><strong>{tooltipShown.title}</strong></div>}
-                  {tooltipShown.rows.map(([k, v]) => (
-                    <div key={k}><strong>{k}:</strong> {v}</div>
-                  ))}
-                </>)}
-        </div>
-      )}
+      <ChartTooltip store={tooltipStore} renderTooltip={renderTooltip} interaction={interaction} />
+    </div>
+  )
+}
+
+/** What the tooltip shows: the item under the pointer, its datum, and where the pointer is in the chart's element. */
+interface TooltipInfo { datum: Record<string, unknown>; item: SceneItem; x: number; y: number }
+
+/** The tooltip under the pointer (see `ChartTooltip`): told only of a tooltip that is not the one it holds. */
+interface TooltipStore {
+  get: () => TooltipInfo | null
+  subscribe: (listener: () => void) => () => void
+  set: (next: TooltipInfo | null) => void
+}
+
+function createTooltipStore(): TooltipStore {
+  let current: TooltipInfo | null = null
+  const listeners = new Set<() => void>()
+  return {
+    get: () => current,
+    subscribe(listener) {
+      listeners.add(listener)
+      return () => listeners.delete(listener)
+    },
+    set(next) {
+      const was = current
+      if (was === next || (was !== null && next !== null && was.item === next.item && was.datum === next.datum && was.x === next.x && was.y === next.y)) return
+      current = next
+      for (const l of listeners) l()
+    },
+  }
+}
+
+/**
+ * The tooltip of the item under the pointer, beside the chart in its element. It reads the tooltip store on its own, so a pointer
+ * move renders it and not the chart. The default tooltip shows the hovered item's `tooltip` channel value, as vega-tooltip does
+ * (null: no tooltip); vega-view hands the handler `item.tooltip || null`, so a falsy value shows nothing.
+ */
+function ChartTooltip({ store, renderTooltip, interaction }: {
+  store: TooltipStore
+  renderTooltip: ChartProps['renderTooltip']
+  interaction: InteractionCapability | undefined
+}): React.ReactElement | null {
+  const tooltipInfo = React.useSyncExternalStore(store.subscribe, store.get, store.get)
+  const tooltipShown = React.useMemo(
+    () => (tooltipInfo != null && renderTooltip == null && interaction != null
+      ? interaction.tooltipContent((tooltipInfo.item as { tooltip?: unknown }).tooltip || null)
+      : null),
+    [tooltipInfo, renderTooltip, interaction],
+  )
+  if (tooltipInfo == null || (renderTooltip == null && tooltipShown == null)) return null
+  return (
+    <div
+      data-testid="chart-tooltip"
+      style={{
+        position: 'absolute',
+        left: tooltipInfo.x + 12,
+        top: tooltipInfo.y + 12,
+        zIndex: 40,
+        pointerEvents: 'none',
+        background: 'rgba(0,0,0,0.85)',
+        color: '#fff',
+        padding: '4px 8px',
+        borderRadius: 4,
+        fontSize: 12,
+        fontFamily: 'system-ui, sans-serif',
+        maxWidth: 240,
+        whiteSpace: 'nowrap',
+      }}
+    >
+      {renderTooltip != null
+        ? renderTooltip(tooltipInfo.datum, { tooltip: (tooltipInfo.item as { tooltip?: unknown }).tooltip, item: tooltipInfo.item })
+        : tooltipShown != null && ('text' in tooltipShown
+          ? tooltipShown.text
+          : <>
+              {tooltipShown.title != null && <div><strong>{tooltipShown.title}</strong></div>}
+              {tooltipShown.rows.map(([k, v]) => (
+                <div key={k}><strong>{k}:</strong> {v}</div>
+              ))}
+            </>)}
     </div>
   )
 }
