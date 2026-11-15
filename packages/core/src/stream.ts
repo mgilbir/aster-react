@@ -22,10 +22,13 @@
  * The stream owns a `ChartSession` and a spec. It never mutates the spec.
  */
 import { createChartSession, type ChartSession } from './session.js'
+import { installPart, partLoaded } from './engine-parts.js'
+import { applyPipelineWithPulse } from './incremental-engine.js'
 import { dict } from './util.js'
 import { dataInputOf } from './spec-structure.js'
 import { diffRows, type DataPulse, type DatasetPulse, type PulseRange } from './pulse.js'
 import { AsterLimitError, type SpecLimits } from './limits.js'
+import { notATuple } from './data-format.js'
 import type { TextMetricsProvider } from './text-metrics.js'
 import type { RuntimeInput, SceneRoot, VgSpec } from './types.js'
 
@@ -53,8 +56,9 @@ export interface StreamOptions {
   policy?: StreamPolicy
   /**
    * Initial input (data/signals/size) used for the first flush. `initial.urlPolicy`
-   * (the image-URL policy) and `initial.urlData` (whether url datasets are refused) apply to
-   * every flush; they are fixed for the stream's life.
+   * (the image-URL policy), `initial.urlData` (whether url datasets are refused) and
+   * `initial.logger` (where the dataflow errors of an evaluation go) apply to every flush;
+   * they are fixed for the stream's life.
    */
   initial?: RuntimeInput
   /**
@@ -96,6 +100,10 @@ export interface StreamBatch {
   signals?: Record<string, unknown>
   width?: number
   height?: number
+  /** The container the spec is sized to (`containerSize()`), as `RuntimeInput.containerSize`; the later value wins. */
+  containerSize?: { width: number; height: number }
+  /** The element the chart fills, as `RuntimeInput.measuredSize`; the later value wins. */
+  measuredSize?: { width: number; height: number }
   /**
    * Scale-domain overrides, merged into the stream's current overrides. A
    * `null` value clears that scale's override (back to the data-derived
@@ -300,6 +308,8 @@ interface Fold {
   signals?: Record<string, unknown>
   width?: number
   height?: number
+  containerSize?: { width: number; height: number }
+  measuredSize?: { width: number; height: number }
   /** `null` clears that scale's override. */
   domainRaw?: Record<string, unknown[] | null>
   limits?: SpecLimits
@@ -419,12 +429,16 @@ function foldBatch(fold: Fold, batch: StreamBatch, baseLenOf: (name: string) => 
   if (batch.signals) fold.signals = dict(fold.signals, batch.signals)
   if (batch.width != null) fold.width = batch.width
   if (batch.height != null) fold.height = batch.height
+  if (batch.containerSize != null) fold.containerSize = batch.containerSize
+  if (batch.measuredSize != null) fold.measuredSize = batch.measuredSize
   if (batch.domainRaw) fold.domainRaw = dict(fold.domainRaw, batch.domainRaw)
   if (batch.limits) fold.limits = batch.limits
   if (batch.textMetrics) fold.textMetrics = batch.textMetrics
 }
 
 export function createChartStream(spec: VgSpec, options: StreamOptions = {}): ChartStream {
+  // a stream is a chart whose data changes: its session takes every batch as a pulse, so it carries the pulse path (engine-parts.ts)
+  if (!partLoaded('pulse')) installPart('pulse', { applyPipelineWithPulse })
   const policy: StreamPolicy = options.policy ?? 'coalesce'
   const batchCapacity = Math.max(1, options.capacity ?? DEFAULT_CAPACITY)
   const maxQueuedRows = Math.max(1, options.maxQueuedRows ?? DEFAULT_MAX_QUEUED_ROWS)
@@ -432,11 +446,19 @@ export function createChartStream(spec: VgSpec, options: StreamOptions = {}): Ch
   const capacity = policy === 'coalesce' ? 1 : batchCapacity
   let session: ChartSession | null = createChartSession()
   const base = new Map<string, unknown[]>(specSourceRows(spec))
+  // (the spec's inline rows are inserted when the chart is made, where vega's View throws for a row that is not a tuple; the stream
+  // then hands them to its session as its own rows, so they are checked here, under their name)
+  for (const [dataset, rows] of base) {
+    const at = rows.findIndex((r) => r == null)
+    if (at >= 0) throw notATuple(rows[at] as null | undefined, { dataset, source: 'values' }, at)
+  }
   if (options.initial?.data) for (const [name, rows] of Object.entries(options.initial.data)) base.set(name, rows)
   const owned = new Set<string>()
   let signals: Record<string, unknown> = dict(options.initial?.signals)
   let width = options.initial?.width
   let height = options.initial?.height
+  let containerSize = options.initial?.containerSize
+  let measuredSize = options.initial?.measuredSize
   let domainRaw: Record<string, unknown[]> | undefined = options.initial?.domainRaw
   let limits = options.limits ?? options.initial?.limits
   let textMetrics = options.textMetrics ?? options.initial?.textMetrics
@@ -615,6 +637,8 @@ export function createChartStream(spec: VgSpec, options: StreamOptions = {}): Ch
     const nextSignals = f.signals ? dict(signals, f.signals) : signals
     const nextWidth = f.width ?? width
     const nextHeight = f.height ?? height
+    const nextContainerSize = f.containerSize ?? containerSize
+    const nextMeasuredSize = f.measuredSize ?? measuredSize
     const nextDomainRaw = applyDomainRaw(domainRaw, f.domainRaw)
     const nextLimits = f.limits ?? limits
     const nextTextMetrics = f.textMetrics ?? textMetrics
@@ -668,11 +692,14 @@ export function createChartStream(spec: VgSpec, options: StreamOptions = {}): Ch
         ...(Object.keys(nextSignals).length ? { signals: nextSignals } : {}),
         ...(nextWidth != null ? { width: nextWidth } : {}),
         ...(nextHeight != null ? { height: nextHeight } : {}),
+        ...(nextContainerSize != null ? { containerSize: nextContainerSize } : {}),
+        ...(nextMeasuredSize != null ? { measuredSize: nextMeasuredSize } : {}),
         ...(nextDomainRaw ? { domainRaw: nextDomainRaw } : {}),
         ...(nextLimits ? { limits: nextLimits } : {}),
         ...(nextTextMetrics ? { textMetrics: nextTextMetrics } : {}),
         ...(options.initial?.urlPolicy ? { urlPolicy: options.initial.urlPolicy } : {}),
         ...(options.initial?.urlData !== undefined ? { urlData: options.initial.urlData } : {}),
+        ...(options.initial?.logger ? { logger: options.initial.logger } : {}),
         ...(Object.keys(dataPulse).length ? { dataPulse } : {}),
         ...(Object.keys(dataChanges).length ? { dataChanges } : {}),
         ...(changedDatasets.length ? { changedDatasets } : {}),
@@ -686,6 +713,8 @@ export function createChartStream(spec: VgSpec, options: StreamOptions = {}): Ch
     signals = nextSignals
     width = nextWidth
     height = nextHeight
+    containerSize = nextContainerSize
+    measuredSize = nextMeasuredSize
     domainRaw = nextDomainRaw
     limits = nextLimits
     textMetrics = nextTextMetrics
@@ -701,6 +730,16 @@ export function createChartStream(spec: VgSpec, options: StreamOptions = {}): Ch
 
   const stream: ChartStream = {
     push(batch) {
+      // (rows enter the datasets as vega inserts them: a `null` or `undefined` row is refused before anything is queued, as
+      // `view.insert` throws before it changes anything)
+      for (const [set, source] of [[batch.data, 'snapshot'], [batch.append, 'append']] as const) {
+        if (set == null) continue
+        for (const [dataset, rows] of Object.entries(set)) {
+          if (!Array.isArray(rows)) continue
+          const at = rows.findIndex((r) => r == null)
+          if (at >= 0) throw notATuple(rows[at] as null | undefined, { dataset, source }, at)
+        }
+      }
       return enqueue(batch)
     },
     flush() {

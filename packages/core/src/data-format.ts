@@ -7,7 +7,7 @@
  */
 import { dataFormatRegistry } from './registry.js'
 import { currentLocale } from './locale.js'
-import { field, toBoolean, toDate, toNumber, toString } from './util.js'
+import { field, toBoolean, toDate, toNumber, toString, PRIMITIVE_TUPLE } from './util.js'
 
 /** The converter for each column type a `parse` entry can name. */
 export const typeParsers: Record<string, (v: unknown) => unknown> = {
@@ -107,7 +107,7 @@ export function inferTypes(data: unknown[], fields: string[]): Record<string, st
  * parsed by the registered reader for the type (json is built in; csv/tsv/
  * dsv/topojson come from the `@aster-charts/core/load` addon).
  */
-export function readData(data: unknown, format?: DataFormatSpec): Record<string, unknown>[] {
+export function readData(data: unknown, format?: DataFormatSpec, dynamic = false, origin?: RowOrigin): Record<string, unknown>[] {
   const schema = format ?? {}
   const type = schema.type || 'json'
   // vega-loader.read always dispatches by format.type; the readers themselves
@@ -128,10 +128,19 @@ export function readData(data: unknown, format?: DataFormatSpec): Record<string,
   } else {
     rows = []
   }
-  // vega-loader.read deletes the d3-dsv `columns` annotation before returning
-  if (Object.hasOwn(rows, 'columns')) delete (rows as { columns?: unknown }).columns
+  // vega-loader.read deletes the d3-dsv `columns` annotation before returning (from a copy when the array is the caller's)
+  if (Object.hasOwn(rows, 'columns')) {
+    if (rows === data) rows = rows.slice()
+    else delete (rows as { columns?: unknown }).columns
+  }
   if (schema.parse) rows = coerceRows(rows, schema.parse)
-  return ingestRows(rows)
+  // (rows a signal makes are ingested as vega's dynamic loader does: a primitive stays the primitive, see PRIMITIVE_TUPLE)
+  return dynamic ? boxPrimitiveRows(rows) : ingestRows(rows, 0, undefined, origin)
+}
+
+function boxPrimitiveRows(rows: readonly unknown[]): Record<string, unknown>[] {
+  if (!rows.some(isPrimitiveRow)) return rows as Record<string, unknown>[]
+  return rows.map((r) => (isPrimitiveRow(r) ? ({ [PRIMITIVE_TUPLE]: r } as unknown as Record<string, unknown>) : (r as Record<string, unknown>)))
 }
 
 const isPrimitiveRow = (v: unknown): boolean => v === null || (typeof v !== 'object' && typeof v !== 'function')
@@ -141,8 +150,12 @@ const isPrimitiveRow = (v: unknown): boolean => v === null || (typeof v !== 'obj
  * `{data: 12}`, `{data: 23}`). Returns the input array when every row is already an object, so the common case
  * costs one scan and no copy. The rows before `from` are known to be objects already, but for the ones listed in
  * `changed`: only the others are looked at (an append to a long dataset looks at what was appended).
+ *
+ * `inserted`: the rows enter that dataset as vega inserts them into one (a changeset: a spec's inline values, the host's rows,
+ * `setdata`), which reads each row's tuple id first, so a `null` or `undefined` row throws there (see `notATuple`). The rows a
+ * facet takes from a field are only ingested, as vega's PreFacet does: there such a row is wrapped like any other value.
  */
-export function ingestRows<T>(rows: readonly T[], from = 0, changed?: readonly number[]): Record<string, unknown>[] {
+export function ingestRows<T>(rows: readonly T[], from = 0, changed?: readonly number[], inserted?: RowOrigin): Record<string, unknown>[] {
   const n = rows.length
   let found = false
   for (let i = from; i < n && !found; ++i) found = isPrimitiveRow(rows[i])
@@ -151,9 +164,52 @@ export function ingestRows<T>(rows: readonly T[], from = 0, changed?: readonly n
   const out: Record<string, unknown>[] = new Array(n)
   for (let j = 0; j < n; ++j) {
     const r = rows[j]
+    if (inserted && r == null) throw notATuple(r as null | undefined, inserted, j)
     out[j] = isPrimitiveRow(r) ? { data: r } : (r as Record<string, unknown>)
   }
   return out
+}
+
+/** Where rows came from, for the message about one that is not a row: the dataset and how it was given them. */
+export interface RowOrigin {
+  dataset: string
+  source: RowSource
+  /** the indices the host said changed (`dataChanges`), when it said so */
+  dataChanges?: readonly number[]
+}
+
+export type RowSource = 'values' | 'data' | 'append' | 'snapshot' | 'signal' | 'setdata'
+
+const ROW_SOURCES: Record<RowSource, string> = {
+  values: 'its inline `values`',
+  data: 'the rows the host gave it (`data`)',
+  append: 'a stream `push` (`append`)',
+  snapshot: 'a stream `push` (`data` snapshot)',
+  signal: 'the rows its `{signal}` values made',
+  setdata: '`setdata(...)`',
+}
+
+/**
+ * The error for a row that is `null` or `undefined`, where vega fails on one -- where it reads the row's tuple id, inserting it into
+ * a dataset or joining it in a mark -- and of the same class as vega's (a TypeError), with a message that says which row of which
+ * dataset, given how, rather than vega's (JavaScript's own `Cannot read properties of null (reading 'Symbol(vega_id)')`).
+ */
+export function notATuple(row: null | undefined, origin: RowOrigin, index: number): TypeError {
+  const listed = origin.dataChanges?.includes(index) ? ' (an index `dataChanges` lists)' : ''
+  const e = new TypeError(
+    `[aster] dataset "${origin.dataset}": row ${index} of ${ROW_SOURCES[origin.source]} is ${row === null ? 'null' : 'undefined'}${listed}; ` +
+    'a row must be an object or a value (a number, string or boolean is read as {data: value}), not null or undefined. ' +
+    'vega rejects this data too.',
+  )
+  NOT_A_TUPLE.add(e)
+  return e
+}
+
+const NOT_A_TUPLE = new WeakSet<object>()
+
+/** Whether `e` is the error `notATuple` made (a row that is not a tuple), as opposed to anything else thrown while reading rows. */
+export function isNotATupleError(e: unknown): boolean {
+  return e !== null && typeof e === 'object' && NOT_A_TUPLE.has(e)
 }
 
 // Built-in JSON reader (no dependencies; `property` is a field path: `a.b`, `a\.b`, `a[0]`, `a["b"]`).

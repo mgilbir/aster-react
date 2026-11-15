@@ -19,9 +19,11 @@
  */
 import { Bounds, DEG_TO_RAD, boundGroupItem, boundText, boundTypedMark } from './bounds.js'
 import { textAnchor } from './text-metrics.js'
-import { itemArcPath } from './render.js'
-import { flattenPath, insidePolys } from './path-flatten.js'
+import { itemArcGeometry } from './render.js'
+import { insidePolys, type Poly } from './path-flatten.js'
+import { arcLocalPolys, pathMarkPolys, pathPolys, transformPolys } from './geometry-read.js'
 import { MARK_NODE } from './util.js'
+import { ceiling, HARD_CAPS, meterTick } from './limits.js'
 import type { SceneGroup, SceneItem, SceneRoot } from './types.js'
 
 type Rec = Record<string, unknown>
@@ -86,7 +88,7 @@ function intersectText(item: SceneItem, box: Bounds): boolean {
 }
 
 /** The outline of an arc, shape or path item, in the frame of its group. */
-function outlineOf(marktype: string, item: SceneItem): ReturnType<typeof flattenPath> {
+function outlineOf(marktype: string, item: SceneItem): Poly[] {
   const it = item as Rec
   const x = (it.x as number) || 0
   const y = (it.y as number) || 0
@@ -95,13 +97,17 @@ function outlineOf(marktype: string, item: SceneItem): ReturnType<typeof flatten
   const sin = Math.sin(rot)
   const place = (px: number, py: number): [number, number] => [x + px * cos - py * sin, y + px * sin + py * cos]
   if (marktype === 'arc') {
-    const d = itemArcPath(it as SceneItem)
-    return flattenPath(d, place)
+    return transformPolys(arcLocalPolys(itemArcGeometry(it as SceneItem)), place)
   }
   const sx = (it.scaleX as number) || 1
   const sy = (it.scaleY as number) || 1
-  return flattenPath(String(it.path ?? ''), (px, py) => place(px * sx, py * sy))
+  // (a path mark's text as vega draws it, the scale in its numbers; a shape's, the engine's own, scaled as it is drawn)
+  if (marktype === 'path') return transformPolys(pathMarkPolys(String(it.path ?? ''), sx, sy), place)
+  return transformPolys(pathPolys(String(it.path ?? '')), (px, py) => place(px * sx, py * sy))
 }
+
+const SAFE = 2 ** 52
+const EPS = 2 ** -52
 
 function intersectPath(marktype: string, item: SceneItem, bounds: Bounds, box: Bounds): boolean {
   const polys = outlineOf(marktype, item)
@@ -110,8 +116,99 @@ function intersectPath(marktype: string, item: SceneItem, bounds: Bounds, box: B
   const y1 = Math.floor(b.y1)
   const x2 = Math.ceil(b.x2)
   const y2 = Math.ceil(b.y2)
-  for (let y = y1; y <= y2; ++y) for (let x = x1; x <= x2; ++x) if (insidePolys(polys, x, y)) return true
+  // (vega: is any lattice point of the region inside the outline? A region that is empty or NaN has none)
+  if (!(x1 <= x2 && y1 <= y2)) return false
+  return latticeInside(polys, x1, y1, x2, y2)
+}
+
+/**
+ * Whether `insidePolys` holds at some integer (x, y) of [x1, x2] x [y1, y2] -- vega's answer, which it finds by testing every
+ * lattice point of the region -- without testing every point. On a row the winding test changes only where an edge crosses the
+ * row (each edge's side test is linear in x, so it flips once, within a few float steps of the true crossing: `window`), so the
+ * inside points of a row are runs between crossings, and testing the integers around each crossing, one inside each gap and
+ * the region's ends tests every run. Rows the outline does not reach have no crossing and nothing inside.
+ *
+ * The work is the rows the outline spans times its edges, and each candidate point tested against every edge, whatever the
+ * region's area. A region past 2^52 (where `x + 1` no longer
+ * moves: vega's walk never ends there) or work past the built-in `latticeTests` ceiling is refused with an `AsterLimitError`
+ * (docs/LIMITS.md); under `limits`, the walk also counts against `maxTimeMs`.
+ */
+function latticeInside(polys: Poly[], x1: number, y1: number, x2: number, y2: number): boolean {
+  let minY = Infinity, maxY = -Infinity
+  let edges = 0
+  for (const { pts } of polys) {
+    const n = pts.length / 2
+    if (n < 3) continue
+    edges += n
+    for (let i = 0; i < n; i++) {
+      const y = pts[2 * i + 1]!
+      if (y < minY) minY = y
+      if (y > maxY) maxY = y
+    }
+  }
+  const r0 = Math.max(y1, Math.ceil(minY))
+  const r1 = Math.min(y2, Math.floor(maxY))
+  if (!(r0 <= r1)) return false
+  // (the work: each row's crossings, then each candidate point tested against every edge; counted as it is done, after a
+  // check that the rows' crossings alone fit)
+  let work = (r1 - r0 + 1) * edges
+  if (!(Math.abs(x1) <= SAFE && Math.abs(x2) <= SAFE && Math.abs(r0) <= SAFE && Math.abs(r1) <= SAFE)) ceiling('latticeTests', Infinity, 'intersect() lattice tests (a region beyond 2^52)')
+  ceiling('latticeTests', work, 'intersect() lattice tests')
+  work = 0
+  const xs: number[] = []
+  const ws: number[] = []
+  const order: number[] = []
+  const test = (x: number, y: number): boolean => {
+    if (!(x >= x1 && x <= x2)) return false
+    if ((work += edges) > HARD_CAPS.latticeTests) ceiling('latticeTests', work, 'intersect() lattice tests')
+    return insidePolys(polys, x, y)
+  }
+  for (let y = r0; y <= r1; y++) {
+    meterTick('intersect() lattice rows')
+    if ((work += edges) > HARD_CAPS.latticeTests) ceiling('latticeTests', work, 'intersect() lattice tests')
+    xs.length = 0
+    ws.length = 0
+    for (const { pts } of polys) {
+      const n = pts.length / 2
+      if (n < 3) continue
+      let ax = pts[2 * n - 2]!, ay = pts[2 * n - 1]!
+      for (let i = 0; i < n; i++) {
+        const bx = pts[2 * i]!, by = pts[2 * i + 1]!
+        if ((ay <= y && by > y) || (by <= y && ay > y)) {
+          // (an edge whose crossing is not a finite number never flips the test at a point of the region)
+          const xc = ax + ((bx - ax) * (y - ay)) / (by - ay)
+          if (Number.isFinite(xc)) { xs.push(xc); ws.push(crossingSlack(ax, bx)) }
+        }
+        ax = bx; ay = by
+      }
+    }
+    if (xs.length === 0) continue
+    order.length = 0
+    for (let k = 0; k < xs.length; k++) order.push(k)
+    order.sort((a, c) => xs[a]! - xs[c]!)
+    for (let k = 0; k < order.length; k++) {
+      const xc = xs[order[k]!]!
+      const w = ws[order[k]!]!
+      const f = Math.floor(xc)
+      // (only the integers of the region: a slack wider than it -- an edge of enormous coordinates -- is the row itself)
+      for (let x = Math.max(x1, f - w), end = Math.min(x2, f + w + 1); x <= end; x++) if (test(x, y)) return true
+      if (k + 1 < order.length) {
+        const m = Math.floor((xc + xs[order[k + 1]!]!) / 2)
+        if (test(m, y) || test(Math.max(x1, Math.min(x2, m)), y)) return true
+      }
+    }
+    if (test(x1, y) || test(x2, y)) return true
+  }
   return false
+}
+
+/**
+ * How many float steps an edge's crossing -- the estimate here and the point where `insidePolys`'s side test flips -- may lie
+ * from the true one: both are a few roundings of terms no larger than the edge's coordinates.
+ */
+function crossingSlack(ax: number, bx: number): number {
+  const w = 2 + Math.ceil(16 * EPS * (Math.abs(ax) + 2 * Math.abs(bx - ax)))
+  return Number.isFinite(w) ? w : 2
 }
 
 function test(marktype: string, item: SceneItem, bounds: Bounds, box: Bounds): boolean {
@@ -156,7 +253,8 @@ type Filter = ((mark: { marktype?: string; name?: string }) => boolean) | null
 const isLeafMark = (n: Rec): boolean => typeof n.marktype === 'string' && n.marktype !== 'group'
 
 function intersectMark(mark: SceneGroup, box: Bounds, filter: Filter, hits: SceneItem[]): void {
-  const items = (mark.items ?? []) as SceneItem[]
+  // (the items a pass that stopped in their mark's bounds never measured have no bounds to meet the box: see `SceneGroup.unmeasuredFrom`)
+  const items = (mark.unmeasuredFrom === undefined ? mark.items ?? [] : (mark.items ?? []).slice(0, mark.unmeasuredFrom)) as SceneItem[]
   const type = mark.marktype
   if (items.length === 0) return
   const mb = markBounds(mark, items)

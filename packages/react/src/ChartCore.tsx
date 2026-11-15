@@ -1,4 +1,7 @@
 import * as React from 'react'
+import type { A11yNode, A11yOptions, ChartInfo, Logger, SceneItem, SceneRoot, VgSpec } from '@aster-charts/core'
+// The engine as the shells use it: without the parts most charts never run, which `useAddons` loads for a spec that needs them
+// (see `@aster-charts/core/lean`).
 import {
   buildA11yTree,
   chartInfoFromScene,
@@ -8,14 +11,8 @@ import {
   createPointMapper,
   resolveCursor,
   consoleLogger,
-  type A11yNode,
-  type A11yOptions,
-  type ChartInfo,
-  type Logger,
-  type SceneItem,
-  type SceneRoot,
-  type VgSpec,
-} from '@aster-charts/core'
+  checkChartRows, shareRowWatch,
+} from '@aster-charts/core/lean'
 import { isPromiseLike, normalizeChartSpec, useChartEpoch, useStableContent, useStableSpecRows } from './spec.js'
 import { useAddons } from './addons.js'
 import { validateDataChanges } from './dataChanges.js'
@@ -23,8 +20,8 @@ import { SCALE_INFO_KEY, scalesFromSerialized, type SerializedScale } from './se
 // The incremental DOM patcher ships as the `@aster-charts/core/dom` addon, which every chart needs. The canvas
 // renderer and the hit/signal event loop are NOT imported here: they arrive as the `canvas` and
 // `interaction` props (see capabilities.ts), so `<SvgChart>` bundles neither.
-import { createChartSession, hasDenseSymbolMarks, patchSceneDom, renderSceneToDomElement } from '@aster-charts/core/dom'
-import type { CanvasSceneSnapshot, ItemImage } from '@aster-charts/core/canvas'
+import { createChartSession, hasDenseSymbolMarks, patchSceneDom, renderSceneToDomElement } from '@aster-charts/core/lean'
+import type { CanvasEvents, CanvasSceneSnapshot, ItemImage } from '@aster-charts/core/canvas'
 import type { HitIndex } from '@aster-charts/core/hit'
 import type { CursorTracker, SignalBinding } from '@aster-charts/core/signals'
 import type { CanvasCapability, InteractionCapability, PngCapability } from './capabilities.js'
@@ -48,6 +45,10 @@ import {
   type ViewDomain,
 } from './interaction.js'
 
+/** The build's environment, as bundlers write it in (`process.env.NODE_ENV`); `process` may not exist at all (an unbundled import). */
+declare const process: { env: { NODE_ENV?: string } }
+
+
 
 // `getServerSnapshot` runs for SSR *and* for the hydration render on the client,
 // so this is `true` exactly while the tree must match server markup. It flips to
@@ -56,6 +57,9 @@ import {
 const subscribeNothing = (): (() => void) => () => {}
 const clientOnly = (): boolean => false
 const serverOrHydrating = (): boolean => true
+/** The device pixel ratio (1 on the server and while hydrating, so the markup matches). */
+const devicePixelRatio = (): number => (typeof window !== 'undefined' && window.devicePixelRatio > 0 ? window.devicePixelRatio : 1)
+const serverPixelRatio = (): number => 1
 
 
 // ---------------------------------------------------------------------------
@@ -320,6 +324,15 @@ export interface ChartCoreProps extends ChartProps {
   png?: PngCapability
 }
 
+
+/**
+ * A scene the renderer cannot draw -- an item vega's renderers fail on too (see core bound-failure.ts) -- is logged, as vega's view
+ * logs an error of its renderer; the chart shows what it could draw.
+ */
+function reportRenderError(logger: Logger | undefined, e: unknown): void {
+  (logger ?? console).error(e)
+}
+
 export const ChartCore = React.forwardRef<ChartHandle, ChartCoreProps>(function ChartCore(props, ref) {
   if (isPromiseLike<VgSpec>(props.spec)) {
     // Let the host's <Suspense> boundary own the fallback: an internal boundary
@@ -402,7 +415,13 @@ function ChartView({
   // The opt-in add-ons the spec needs (transforms, geo, load) arrive before the first evaluation: this suspends while
   // they load, so there is no render of the half-ready chart and no error to flash. A failed import is a chart error.
   // With `urlData="refuse"` a spec with a url dataset is refused here, before any add-on is imported.
-  const addonError = useAddons(sceneOverride !== undefined ? null : spec, urlData)
+  // (and the parts of the engine it needs: the legend builder, the canvas renderer for renderer="canvas"... see `useAddons`)
+  // (and the signal event loop of an interactive chart that binds it: see the binding below, and `useAddons`)
+  const loadLoop = interactive && interaction?.loadSignals !== undefined ? interaction.loadSignals : undefined
+  const addonError = useAddons(sceneOverride !== undefined ? null : spec, urlData, {
+    limits: limits != null, random: random != null, canvas: requestedRenderer === 'canvas' ? canvasCap : undefined,
+    eventLoop: loadLoop !== undefined ? { load: loadLoop, listeners: signalListeners != null || onSignal != null, always: sceneOverride !== undefined } : undefined,
+  })
   const stableLimits = useStableContent(limits)
   // Which scales `view`/`brush`/`selection`'s `x`/`y` refer to.
   const positional = React.useMemo(() => positionalScales(spec), [spec])
@@ -417,7 +436,11 @@ function ChartView({
 
   // Interaction state
   const [dragRect, setDragRect] = React.useState<{ x: number; y: number; width: number; height: number } | null>(null)
-  const [tooltipInfo, setTooltipInfo] = React.useState<{ datum: Record<string, unknown>; item: SceneItem; x: number; y: number } | null>(null)
+  // The tooltip under the pointer: a store of its own, read by <ChartTooltip>, so a pointer move that only moves the tooltip renders
+  // the tooltip and not the chart.
+  const tooltipStoreRef = React.useRef<TooltipStore | null>(null)
+  tooltipStoreRef.current ??= createTooltipStore()
+  const tooltipStore = tooltipStoreRef.current
   const [internalView, setInternalView] = React.useState<ViewDomain | null>(null)
   const [internalSelection, setInternalSelection] = React.useState<SelectValue | null>(null)
   const [hiddenLegend, setHiddenLegend] = React.useState<Map<string, HiddenLegendEntry>>(() => new Map())
@@ -543,6 +566,14 @@ function ChartView({
     [spec],
   )
 
+  // (development builds: the rows of a render that re-evaluates nothing -- the same arrays -- are checked for in-place changes too;
+  // a stream's scene is the stream's, whose rows its own session checks at each flush)
+  try {
+    if (process.env.NODE_ENV !== 'production' && sceneOverride === undefined) checkChartRows(sessionRef.current, spec, { data: inputData, dataChanges, logger: stableLogger })
+  } catch (e) {
+    if (typeof process !== 'undefined') throw e
+  }
+
   // Row counts of the previously evaluated `data`, to validate `dataChanges`.
   const prevLengthsRef = React.useRef<Map<string, number>>(new Map())
   const evaluation = React.useMemo<{ scene: SceneRoot | null; error: Error | null; problems: string[] }>(() => {
@@ -588,6 +619,7 @@ function ChartView({
   }, [denseRequested, denseMarks, scene])
   const denseSvg = denseAllowed && renderer === 'svg' && (scene != null ? hasDenseSymbolMarks(scene) : false)
   const hydrating = React.useSyncExternalStore(subscribeNothing, clientOnly, serverOrHydrating)
+  const pixelRatio = React.useSyncExternalStore(subscribeNothing, devicePixelRatio, serverPixelRatio)
 
   // One report per evaluation, however often the component re-renders while
   // the same error persists (an inline `onError` must not refire).
@@ -600,7 +632,7 @@ function ChartView({
   // and every unavailable feature is REPORTED, like a rejected `dataChanges` changeset, never silently dead.
   // Types make the props a compile error; this is the net for JS callers and for specs whose event streams
   // are only known after evaluation. Reported through `onError`, else the logger, else the console.
-  const eventStreamsUnbound = interaction == null && interactive && renderer !== 'canvas' && scene != null && hasEventStreams(scene)
+  const eventStreamsUnbound = interaction == null && interactive && scene != null && hasEventStreams(scene)
   const interactionPropsUsed = interaction == null
     ? Object.entries({ tooltip: tooltip === true, renderTooltip, onPointSelect, selection, select, onSelectionChange, preventDefault: preventDefault === true })
       .filter(([, v]) => v !== undefined && v !== false).map(([k]) => k).join(', ')
@@ -653,7 +685,15 @@ function ChartView({
   const unzoomedDomains = React.useMemo<ViewDomain | null>(() => {
     if (!panZoomEnabled || !zoomed || fromStream) return null
     try {
-      if (baseSessionRef.current == null) baseSessionRef.current = createChartSession()
+      if (baseSessionRef.current == null) {
+        baseSessionRef.current = createChartSession()
+        // (development builds: the chart's two sessions keep one watch, so an in-place change is reported once)
+        try {
+          if (process.env.NODE_ENV !== 'production') shareRowWatch(sessionRef.current!, baseSessionRef.current)
+        } catch (e) {
+          if (typeof process !== 'undefined') throw e
+        }
+      }
       const baseScene = baseSessionRef.current.evaluate(spec, {
         data: inputData, ...sizeInput, signals: mergedSignals, limits: stableLimits, urlPolicy, urlData, textMetrics, logger: stableLogger,
         ...(random ? { random } : {}),
@@ -684,8 +724,14 @@ function ChartView({
   // A stream-fed chart hands its view/signals to the stream, which re-evaluates.
   const streamInput = sceneOverride !== undefined
   React.useEffect(() => {
-    if (streamInput) onStreamInputRef.current?.({ ...(domainRaw ? { domainRaw } : {}), signals: mergedSignals })
-  }, [streamInput, domainRaw, mergedSignals])
+    if (streamInput) {
+      onStreamInputRef.current?.({
+        ...(domainRaw ? { domainRaw } : {}), signals: mergedSignals,
+        // the stream sizes its evaluations as this chart sizes its own: the props it fixes, and the container it measured
+        ...(containerSize ? { containerSize } : {}), ...(measured ? { measuredSize: measured } : {}),
+      })
+    }
+  }, [streamInput, domainRaw, mergedSignals, containerSize, measured])
 
   // Incremental is the default: we still serialize the full SVG for the first
   // render (so server output and client hydration carry the markup), then the
@@ -707,7 +753,12 @@ function ChartView({
     if (sceneOverride !== undefined && !hydrating) return null
     if (denseSvg && !hydrating) return null
     if (incremental && hasPatchedRef.current) return null
-    return { __html: renderSceneToSvg(displayScene) }
+    try {
+      return { __html: renderSceneToSvg(displayScene) }
+    } catch (e) {
+      reportRenderError(loggerRef.current, e)
+      return { __html: '' }
+    }
   }, [incremental, renderer, displayScene, sceneOverride, denseSvg, hydrating])
   const lastBoxRef = React.useRef<{ __html: string } | null>(null)
   if (markupBox != null) lastBoxRef.current = markupBox
@@ -737,14 +788,17 @@ function ChartView({
   const [canvasImagesEpoch, setCanvasImagesEpoch] = React.useState(0)
   const canvasImagesPaintedRef = React.useRef(-1)
   // Hit testing (canvas, batched dense marks, clicks) resolves marks through the
-  // scene hit index, rebuilt only when the displayed scene object changes.
-  const hitIndexRef = React.useRef<{ scene: SceneRoot | null; index: HitIndex | null }>({ scene: null, index: null })
+  // scene hit index, rebuilt only when the displayed scene object (or the renderer) changes. It picks as the renderer
+  // shown does: vega's canvas pick tests the bounds it measured, the browser's hit test of the SVG does not.
+  const hitIndexRef = React.useRef<{ scene: SceneRoot | null; renderer: string; index: HitIndex | null }>({ scene: null, renderer: '', index: null })
   const hitIndexFor = React.useCallback((target: SceneRoot | null): HitIndex | null => {
     if (target == null) return null
     if (interaction == null) return null
-    if (hitIndexRef.current.scene !== target) hitIndexRef.current = { scene: target, index: interaction.buildHitIndex(target) }
+    if (hitIndexRef.current.scene !== target || hitIndexRef.current.renderer !== renderer) {
+      hitIndexRef.current = { scene: target, renderer, index: interaction.buildHitIndex(target, undefined, renderer === 'canvas' ? { renderer } : undefined) }
+    }
     return hitIndexRef.current.index
-  }, [interaction])
+  }, [interaction, renderer])
   // Signal state lives in an external store consumed with useSyncExternalStore:
   // an event is a normal, synchronous state transition with a stable snapshot,
   // so concurrent renders never observe a half-applied signal set.
@@ -810,28 +864,32 @@ function ChartView({
       return
     }
     const existing = host.firstElementChild
-    if (incremental && existing && existing.tagName.toLowerCase() === 'svg') {
-      // Patch when the scene changed, or when the render mode flipped (e.g. a
-      // client-only dense mount, or hydration handing over to batched marks).
-      if (domSceneRef.current !== displayScene || domDenseRef.current !== denseSvg) {
-        const options = transitionRef.current
-        if (options !== null && !denseSvg && !domDenseRef.current) {
-          const prev = committedInputsRef.current
-          const dataChanged = prev !== null && (
-            datasetsChanged(data, prev.data as typeof data) || spec !== prev.spec
-            || (sceneOverride !== undefined && sceneOverride !== prev.sceneOverride)
-            || (editedData !== prev.edited && timerEdits.has(editedData)))
-          animator.draw(existing, displayScene, dataChanged ? options : null)
-        } else {
-          patchSceneDom(existing, displayScene, { denseMarks: denseSvg })
-          animator.reset(displayScene)
+    try {
+      if (incremental && existing && existing.tagName.toLowerCase() === 'svg') {
+        // Patch when the scene changed, or when the render mode flipped (e.g. a
+        // client-only dense mount, or hydration handing over to batched marks).
+        if (domSceneRef.current !== displayScene || domDenseRef.current !== denseSvg) {
+          const options = transitionRef.current
+          if (options !== null && !denseSvg && !domDenseRef.current) {
+            const prev = committedInputsRef.current
+            const dataChanged = prev !== null && (
+              datasetsChanged(data, prev.data as typeof data) || spec !== prev.spec
+              || (sceneOverride !== undefined && sceneOverride !== prev.sceneOverride)
+              || (editedData !== prev.edited && timerEdits.has(editedData)))
+            animator.draw(existing, displayScene, dataChanged ? options : null)
+          } else {
+            patchSceneDom(existing, displayScene, { denseMarks: denseSvg })
+            animator.reset(displayScene)
+          }
+          domDenseRef.current = denseSvg
         }
+      } else {
+        host.replaceChildren(renderSceneToDomElement(displayScene, document, { denseMarks: denseSvg }))
         domDenseRef.current = denseSvg
+        animator.reset(displayScene)
       }
-    } else {
-      host.replaceChildren(renderSceneToDomElement(displayScene, document, { denseMarks: denseSvg }))
-      domDenseRef.current = denseSvg
-      animator.reset(displayScene)
+    } catch (e) {
+      reportRenderError(loggerRef.current, e)
     }
     domSceneRef.current = displayScene
     hasPatchedRef.current = true
@@ -849,20 +907,45 @@ function ChartView({
     if (storeOwnerRef.current !== undefined && storeOwnerRef.current !== compiled && Object.keys(dataStore.get()).length) dataStore.set({})
     storeOwnerRef.current = compiled
   }, [scene, dataStore])
-  // Spec-driven signal event loop (SVG only). Rebinds when the DOM, the scene
+  // Spec-driven signal event loop, on the SVG and on the canvas renderer. Rebinds when the DOM, the scene
   // or the signal values change — not on unrelated renders.
   const signalBindingRef = React.useRef<SignalBinding | null>(null)
   /** The most recent binding and the host element whose timers it keeps: they outlive a re-bind and end at unmount (or a new host). */
   const lastBindingRef = React.useRef<{ host: Element | null; release: () => void } | null>(null)
+  /**
+   * The canvas's events (vega's canvas handler: the hovered item, the one a button went down on), for as long as that canvas is
+   * shown: they outlive the bindings, as the canvas does.
+   */
+  const canvasEventsRef = React.useRef<{ canvas: HTMLCanvasElement; events: CanvasEvents } | null>(null)
   const hasSignalListeners = signalListeners != null || onSignal != null
   React.useEffect(() => () => {
     lastBindingRef.current?.release()
     lastBindingRef.current = null
+    canvasEventsRef.current?.events.release()
+    canvasEventsRef.current = null
   }, [])
   React.useLayoutEffect(() => {
-    if (!interactive || !scene || renderer === 'canvas' || interaction == null) return
-    const host = svgHostRef.current
-    const svg = (host?.firstElementChild as SVGSVGElement | null) ?? null
+    // the events of a canvas that is no longer shown (another canvas, or the SVG renderer) are done
+    const shownCanvas = renderer === 'canvas' ? canvasRef.current : null
+    if (canvasEventsRef.current && canvasEventsRef.current.canvas !== shownCanvas) {
+      canvasEventsRef.current.events.release()
+      canvasEventsRef.current = null
+    }
+    if (!interactive || !scene || interaction == null) return
+    // The element the view is drawn in: the svg (its DOM events are about the item under their point), or the canvas, whose
+    // events are resolved as vega's canvas renderer resolves them (see `createCanvasEvents`). The canvas is its own host.
+    let host: Element | null
+    let svg: Element | null
+    let events: CanvasEvents | undefined
+    if (renderer === 'canvas') {
+      if (shownCanvas == null || canvasCap == null) return
+      host = svg = shownCanvas
+      if (canvasEventsRef.current == null) canvasEventsRef.current = { canvas: shownCanvas, events: canvasCap.createCanvasEvents(shownCanvas) }
+      events = canvasEventsRef.current.events
+    } else {
+      host = svgHostRef.current
+      svg = host?.firstElementChild ?? null
+    }
     if (!svg) return
     const signalDefs = (scene as unknown as { compiled?: { signalDefs?: Array<{ on?: unknown[] }> } }).compiled?.signalDefs
     const hasStreams = signalDefs?.some((d) => d.on?.length) ?? false
@@ -885,7 +968,10 @@ function ChartView({
       },
       ...(stableLogger ? { logger: stableLogger } : {}),
       ...(preventDefault != null ? { preventDefault } : {}),
-    }, { pick: (x, y) => hitIndexFor(displayScene ?? scene)?.pick(x, y) ?? null, containerSize: liveContainerSize, ...(inputData ? { data: inputData } : {}), ...(host ? { owner: host } : {}) })
+    }, {
+      pick: (x, y) => hitIndexFor(displayScene ?? scene)?.pick(x, y) ?? null, containerSize: liveContainerSize,
+      ...(inputData ? { data: inputData } : {}), ...(host ? { owner: host } : {}), ...(events ? { events } : {}),
+    })
     signalBindingRef.current = binding
     // a binding on a different host than the last one: the old host's timer streams are done
     const prev = lastBindingRef.current
@@ -895,11 +981,10 @@ function ChartView({
       binding.detach()
       if (signalBindingRef.current === binding) signalBindingRef.current = null
     }
-  }, [interactive, scene, displayScene, renderer, interaction, domMarkup, denseSvg, hasSignalListeners, mergedSignals, signalStore, dataStore, timerEdits, inputData, stableLogger, preventDefault, hitIndexFor, liveContainerSize])
+  }, [interactive, scene, displayScene, renderer, interaction, canvasCap, domMarkup, denseSvg, hasSignalListeners, mergedSignals, signalStore, dataStore, timerEdits, inputData, stableLogger, preventDefault, hitIndexFor, liveContainerSize])
 
-  // Canvas backend: size the backing store for devicePixelRatio and redraw the
-  // whole scene whenever it changes (cheap relative to SVG serialization for
-  // dense marks; no listeners to leak — every redraw is a full repaint).
+  // Canvas backend: size the backing store for devicePixelRatio and paint the scene whenever it changes: the appended marks of an
+  // append-only scene, nothing for a scene that paints the same pixels, else all of it.
   React.useLayoutEffect(() => {
     if (renderer !== 'canvas' || !displayScene || canvasCap == null) return
     const canvas = canvasRef.current
@@ -962,9 +1047,20 @@ function ChartView({
       canvasImagesPaintedRef.current = canvasImagesEpoch
       return
     }
+    // A scene that paints exactly the pixels on the canvas (a signal that changed only a tooltip) paints nothing. (Not for image
+    // marks: their bitmaps are the chart's, not the scene's.)
+    if (prev != null && urls.length === 0 && canvasImagesPaintedRef.current === canvasImagesEpoch && canvasCap.paintsSameAs(prev, displayScene)) {
+      canvasSnapshotRef.current = canvasCap.snapshotCanvasScene(displayScene)
+      canvasSceneRef.current = displayScene
+      return
+    }
     const draw = (): void => {
       ctx.clearRect(0, 0, canvas.width, canvas.height)
-      canvasCap.renderSceneToCanvas(painted, ctx, { dpr })
+      try {
+        canvasCap.renderSceneToCanvas(painted, ctx, { dpr })
+      } catch (e) {
+        reportRenderError(loggerRef.current, e)
+      }
       canvasSnapshotRef.current = canvasCap.snapshotCanvasScene(displayScene)
       canvasSceneRef.current = displayScene
       canvasImagesPaintedRef.current = canvasImagesEpoch
@@ -1010,11 +1106,11 @@ function ChartView({
   const pointersRef = React.useRef<Map<number, { x: number; y: number }>>(new Map())
   const pinchRef = React.useRef<{ dist: number; cx: number; cy: number } | null>(null)
 
-  // The pointer in the chart's own coordinates (the svg's user space; vega-scenegraph point()), read through the svg's screen
-  // CTM so a CSS-scaled, bordered or transformed chart maps right. Measured once and reused (no layout read per move); forgotten
-  // by `invalidatePointer` on anything that can change it.
+  // The pointer in the chart's own coordinates (the svg's user space, or the canvas's pixels; vega-scenegraph point()), read
+  // through the svg's screen CTM, or the canvas's box past its border, so a CSS-scaled, bordered or transformed chart maps right.
+  // Measured once and reused (no layout read per move); forgotten by `invalidatePointer` on anything that can change it.
   const pointerMapper = React.useMemo(
-    () => createPointMapper(() => svgHostRef.current?.querySelector('svg, canvas') ?? containerRef.current),
+    () => createPointMapper(() => canvasRef.current ?? svgHostRef.current?.querySelector('svg') ?? containerRef.current),
     [],
   )
 
@@ -1194,8 +1290,10 @@ function ChartView({
         // nothing to resolve (the props are a type error then), so no point is reported rather than a false `null`.
         const pointSelect = interaction != null && (g.onPointSelect || g.onSelectionChange != null)
         if (pointSelect) {
-          const target = hitIndexFor(g.displayScene)?.queryMark(x, y)
-          const raw = target?.item.datum
+          // vega's event item (the topmost item that takes the pointer); a click selects it when it is an item of a mark, whose
+          // datum is its row (or the `{}` of a mark without `from`, as in vega), never a group's box or a guide's part
+          const target = hitIndexFor(g.displayScene)?.pick(x, y)
+          const raw = target?.kind === 'mark' ? target.item.datum : undefined
           datum = raw != null && typeof raw === 'object' ? raw as Record<string, unknown> : null
           g.onPointSelect?.(datum)
         }
@@ -1338,6 +1436,16 @@ function ChartView({
     }
   }, [moveA11yFocus])
 
+  const handleA11yFocus = React.useCallback((node: A11yNode, e: React.FocusEvent<HTMLDivElement>) => {
+    setActiveA11yId(node.id)
+    focusSpotRef.current = node.id
+    e.currentTarget.style.opacity = '0.001'
+  }, [])
+  const handleA11yBlur = React.useCallback((e: React.FocusEvent<HTMLDivElement>) => {
+    e.currentTarget.style.opacity = '0'
+    releaseFocusSpot(e.currentTarget, e.relatedTarget)
+  }, [releaseFocusSpot])
+
   const handleChartKeyDown = React.useCallback((e: React.KeyboardEvent) => {
     if (e.defaultPrevented) return
     const g = gestureInputsRef.current
@@ -1366,36 +1474,33 @@ function ChartView({
     }
   }, [])
 
-  /** The default tooltip shows the hovered item's `tooltip` channel value, as vega-tooltip does (null: no tooltip). */
-  const tooltipShown = React.useMemo(
-    () => (tooltipInfo != null && renderTooltip == null && interaction != null
-      ? interaction.tooltipContent((tooltipInfo.item as { tooltip?: unknown }).tooltip)
-      : null),
-    [tooltipInfo, renderTooltip, interaction],
-  )
-
   const handleTooltipMove = React.useCallback(
     (e: React.MouseEvent) => {
       if (!tooltipEnabled) return
       const rect = containerRef.current?.getBoundingClientRect()
       if (!rect) return
-      // The mark under the pointer, from the scene hit index, whatever the renderer: the SVG carries no per-item
-      // attribute for it (vega's does not either), so SVG, canvas and batched marks all resolve the same way.
+      // The item under the pointer, from the scene hit index, whatever the renderer: the SVG carries no per-item
+      // attribute for it (vega's does not either), so SVG, canvas and batched marks all resolve the same way. It is the item
+      // vega's tooltip handler is called with: the topmost item that takes the pointer (a mark without `from`, a group's box and
+      // an interactive guide part included, as in vega), a line, an area or a trail resolved to one of its items.
       const [sx, sy] = pointerMapper.map(e.clientX, e.clientY)
-      const item = hitIndexFor(displayScene)?.queryMark(sx, sy)?.item
+      const target = hitIndexFor(displayScene)?.tooltip(sx, sy)
+      const item = target?.item
       const datum = item?.datum
       const hasDatum = datum != null && typeof datum === 'object'
       const tip = (item as { tooltip?: unknown } | undefined)?.tooltip
-      // vega calls its tooltip handler with `item.tooltip`; a custom renderer also gets items that only have a datum
-      const shows = item != null && (hasDatum || (tip != null && tip !== ''))
-      setTooltipInfo(shows ? { datum: hasDatum ? (datum as Record<string, unknown>) : {}, item, x: e.clientX - rect.left, y: e.clientY - rect.top } : null)
+      // vega shows the item's `tooltip`; a custom renderer is also called for an item of a mark that reads a dataset (the row
+      // is the datum), not for one whose only datum is vega's generated `{}` (a mark without `from`, a group, a guide part)
+      // (vega hands its tooltip handler `item.tooltip || null`: a falsy value -- '', 0, false, NaN -- is no tooltip)
+      const shows = item != null && (!!tip || (renderTooltip != null && target!.kind === 'mark' && target!.fromData === true))
+      tooltipStore.set(shows ? { datum: hasDatum ? (datum as Record<string, unknown>) : {}, item, x: e.clientX - rect.left, y: e.clientY - rect.top } : null)
     },
-    [tooltipEnabled, displayScene, hitIndexFor, pointerMapper],
+    [tooltipEnabled, displayScene, hitIndexFor, pointerMapper, renderTooltip, tooltipStore],
   )
 
   const handleTooltipLeave = React.useCallback(() => {
-    if (tooltipEnabled) setTooltipInfo(null)
-  }, [tooltipEnabled])
+    if (tooltipEnabled) tooltipStore.set(null)
+  }, [tooltipEnabled, tooltipStore])
 
   // --- the cursor (vega-view cursor.js) -------------------------------------
   // The cursor the container shows is state, rendered through its `style` like any other style: the hovered item's `cursor`
@@ -1497,9 +1602,10 @@ function ChartView({
     getView: () => viewRef.current ?? null,
     setView: (next) => applyViewRef.current(next),
     resetView: () => applyViewRef.current(null),
-    // Portable: with the SVG event loop bound it runs the spec's dependent
-    // signal updates; otherwise (canvas, `interactive={false}`) the value is
-    // applied as a signal override. Listeners are notified either way.
+    // Portable: with the event loop bound (SVG or canvas) it runs the spec's
+    // dependent signal updates; otherwise (`interactive={false}`, `<SvgChart>`
+    // without `interaction`) the value is applied as a signal override.
+    // Listeners are notified either way.
     setSignal: (name, value) => {
       const binding = signalBindingRef.current
       if (binding) {
@@ -1612,7 +1718,10 @@ function ChartView({
           ref={canvasRef}
           data-testid="chart-canvas"
           aria-hidden={a11yTree != null ? true : undefined}
-          style={{ position: 'relative', zIndex: 1, width: scene.width, height: scene.height, display: 'block' }}
+          // (as vega's canvas renderer: at a pixel ratio of 1 the backing store is the canvas's size, and a host's CSS sizes it as it
+          // sizes any image -- `max-width` with `height: auto` keeps its proportions, and the pointer maps by that box; at another
+          // ratio the store is larger and the CSS size says how large the canvas is)
+          style={pixelRatio === 1 ? canvasStyle : { ...canvasStyle, width: scene.width, height: scene.height }}
         />
       ) : (
         <div
@@ -1632,90 +1741,179 @@ function ChartView({
         />
       )}
       {a11yTree != null && (
-        <div
-          className="aster-a11y"
-          data-testid="chart-a11y"
-          role="group"
-          aria-label={a11yTree.label}
-          style={{ position: 'absolute', inset: 0, zIndex: 30, pointerEvents: 'none' }}
-        >
-          {a11yTree.summary != null && <span className="sr-only" style={srOnly}>{a11yTree.summary}</span>}
-          {a11yTree.nodes.map((node) => {
-            const slider = node.role === 'slider'
-            const domRole = node.kind === 'title' ? 'heading'
-              : slider ? 'slider'
-                : node.kind === 'mark' || node.kind === 'legend-entry' ? 'button'
-                  : 'img'
-            return (
-              <div
-                key={node.id}
-                data-a11y-id={node.id}
-                data-a11y-kind={node.kind}
-                role={domRole}
-                aria-level={node.kind === 'title' ? 2 : undefined}
-                aria-roledescription={node.roleDescription}
-                aria-label={node.label}
-                aria-pressed={node.kind === 'legend-entry' ? !!node.pressed
-                  : node.kind === 'mark' && node.selected != null ? node.selected : undefined}
-                aria-valuemin={slider ? node.domain?.[0] : undefined}
-                aria-valuemax={slider ? node.domain?.[1] : undefined}
-                aria-valuenow={slider && node.domain ? (node.domain[0] + node.domain[1]) / 2 : undefined}
-                tabIndex={node.id === tabStopId ? 0 : -1}
-                onKeyDown={(e) => handleA11yKeyDown(node, e)}
-                style={{
-                  position: 'absolute',
-                  left: Math.max(0, node.x),
-                  top: Math.max(0, node.y),
-                  width: Math.max(1, node.width),
-                  height: Math.max(1, node.height),
-                  opacity: 0,
-                  // Focusable by Tab/keyboard, but never steals pointer input from
-                  // the marks underneath (selection, pan, tooltips).
-                  pointerEvents: 'none',
-                  borderRadius: 2,
-                  outline: 'none',
-                }}
-                onFocus={(e) => { setActiveA11yId(node.id); focusSpotRef.current = node.id; e.currentTarget.style.opacity = '0.001' }}
-                onBlur={(e) => {
-                  e.currentTarget.style.opacity = '0'
-                  releaseFocusSpot(e.currentTarget, e.relatedTarget)
-                }}
-              />
-            )
-          })}
-        </div>
+        <A11yOverlay tree={a11yTree} tabStopId={tabStopId} onNodeKeyDown={handleA11yKeyDown} onNodeFocus={handleA11yFocus} onNodeBlur={handleA11yBlur} />
       )}
-      {tooltipInfo != null && (renderTooltip != null || tooltipShown != null) && (
-        <div
-          data-testid="chart-tooltip"
-          style={{
-            position: 'absolute',
-            left: tooltipInfo.x + 12,
-            top: tooltipInfo.y + 12,
-            zIndex: 40,
-            pointerEvents: 'none',
-            background: 'rgba(0,0,0,0.85)',
-            color: '#fff',
-            padding: '4px 8px',
-            borderRadius: 4,
-            fontSize: 12,
-            fontFamily: 'system-ui, sans-serif',
-            maxWidth: 240,
-            whiteSpace: 'nowrap',
-          }}
-        >
-          {renderTooltip != null
-            ? renderTooltip(tooltipInfo.datum, { tooltip: (tooltipInfo.item as { tooltip?: unknown }).tooltip, item: tooltipInfo.item })
-            : tooltipShown != null && ('text' in tooltipShown
-              ? tooltipShown.text
-              : <>
-                  {tooltipShown.title != null && <div><strong>{tooltipShown.title}</strong></div>}
-                  {tooltipShown.rows.map(([k, v]) => (
-                    <div key={k}><strong>{k}:</strong> {v}</div>
-                  ))}
-                </>)}
-        </div>
-      )}
+      <ChartTooltip store={tooltipStore} renderTooltip={renderTooltip} interaction={interaction} />
+    </div>
+  )
+}
+
+interface A11yOverlayProps {
+  tree: { label: string; summary?: string; nodes: readonly A11yNode[] }
+  tabStopId: string | null
+  onNodeKeyDown: (node: A11yNode, e: React.KeyboardEvent) => void
+  onNodeFocus: (node: A11yNode, e: React.FocusEvent<HTMLDivElement>) => void
+  onNodeBlur: (e: React.FocusEvent<HTMLDivElement>) => void
+}
+
+/**
+ * The accessible overlay: a focusable, invisible element over every node of the accessible tree. A scene that leaves the tree as it
+ * was (every node holding what it held: the same values, the same datum) renders nothing of it again (see `sameOverlay`).
+ */
+const A11yOverlay = React.memo(function A11yOverlay({ tree, tabStopId, onNodeKeyDown, onNodeFocus, onNodeBlur }: A11yOverlayProps): React.ReactElement {
+  return (
+    <div
+      className="aster-a11y"
+      data-testid="chart-a11y"
+      role="group"
+      aria-label={tree.label}
+      style={{ position: 'absolute', inset: 0, zIndex: 30, pointerEvents: 'none' }}
+    >
+      {tree.summary != null && <span className="sr-only" style={srOnly}>{tree.summary}</span>}
+      {tree.nodes.map((node) => {
+        const slider = node.role === 'slider'
+        const domRole = node.kind === 'title' ? 'heading'
+          : slider ? 'slider'
+            : node.kind === 'mark' || node.kind === 'legend-entry' ? 'button'
+              : 'img'
+        return (
+          <div
+            key={node.id}
+            data-a11y-id={node.id}
+            data-a11y-kind={node.kind}
+            role={domRole}
+            aria-level={node.kind === 'title' ? 2 : undefined}
+            aria-roledescription={node.roleDescription}
+            aria-label={node.label}
+            aria-pressed={node.kind === 'legend-entry' ? !!node.pressed
+              : node.kind === 'mark' && node.selected != null ? node.selected : undefined}
+            aria-valuemin={slider ? node.domain?.[0] : undefined}
+            aria-valuemax={slider ? node.domain?.[1] : undefined}
+            aria-valuenow={slider && node.domain ? (node.domain[0] + node.domain[1]) / 2 : undefined}
+            tabIndex={node.id === tabStopId ? 0 : -1}
+            onKeyDown={(e) => onNodeKeyDown(node, e)}
+            style={{
+              position: 'absolute',
+              left: Math.max(0, node.x),
+              top: Math.max(0, node.y),
+              width: Math.max(1, node.width),
+              height: Math.max(1, node.height),
+              opacity: 0,
+              // Focusable by Tab/keyboard, but never steals pointer input from
+              // the marks underneath (selection, pan, tooltips).
+              pointerEvents: 'none',
+              borderRadius: 2,
+              outline: 'none',
+            }}
+            onFocus={(e) => onNodeFocus(node, e)}
+            onBlur={onNodeBlur}
+          />
+        )
+      })}
+    </div>
+  )
+}, sameOverlay)
+
+/** Two overlays render the same: the same handlers, tab stop, label and summary, and nodes that hold the same values (`Object.is`). */
+function sameOverlay(a: A11yOverlayProps, b: A11yOverlayProps): boolean {
+  if (a.tabStopId !== b.tabStopId || a.onNodeKeyDown !== b.onNodeKeyDown || a.onNodeFocus !== b.onNodeFocus || a.onNodeBlur !== b.onNodeBlur) return false
+  if (a.tree === b.tree) return true
+  if (a.tree.label !== b.tree.label || a.tree.summary !== b.tree.summary || a.tree.nodes.length !== b.tree.nodes.length) return false
+  for (let i = 0; i < a.tree.nodes.length; i++) if (!sameNode(a.tree.nodes[i]!, b.tree.nodes[i]!)) return false
+  return true
+}
+
+/** Every own property of the two nodes is the same value (a `domain` pair by its two numbers). */
+function sameNode(a: A11yNode, b: A11yNode): boolean {
+  if (a === b) return true
+  const ka = Object.keys(a)
+  if (ka.length !== Object.keys(b).length) return false
+  for (const k of ka) {
+    if (!Object.hasOwn(b, k)) return false
+    const x = (a as unknown as Record<string, unknown>)[k]
+    const y = (b as unknown as Record<string, unknown>)[k]
+    if (Object.is(x, y)) continue
+    if (k === 'domain' && Array.isArray(x) && Array.isArray(y) && x.length === y.length && x.every((v, i) => Object.is(v, y[i]))) continue
+    return false
+  }
+  return true
+}
+
+/** What the tooltip shows: the item under the pointer, its datum, and where the pointer is in the chart's element. */
+interface TooltipInfo { datum: Record<string, unknown>; item: SceneItem; x: number; y: number }
+
+/** The tooltip under the pointer (see `ChartTooltip`): told only of a tooltip that is not the one it holds. */
+interface TooltipStore {
+  get: () => TooltipInfo | null
+  subscribe: (listener: () => void) => () => void
+  set: (next: TooltipInfo | null) => void
+}
+
+function createTooltipStore(): TooltipStore {
+  let current: TooltipInfo | null = null
+  const listeners = new Set<() => void>()
+  return {
+    get: () => current,
+    subscribe(listener) {
+      listeners.add(listener)
+      return () => listeners.delete(listener)
+    },
+    set(next) {
+      const was = current
+      if (was === next || (was !== null && next !== null && was.item === next.item && was.datum === next.datum && was.x === next.x && was.y === next.y)) return
+      current = next
+      for (const l of listeners) l()
+    },
+  }
+}
+
+/**
+ * The tooltip of the item under the pointer, beside the chart in its element. It reads the tooltip store on its own, so a pointer
+ * move renders it and not the chart. The default tooltip shows the hovered item's `tooltip` channel value, as vega-tooltip does
+ * (null: no tooltip); vega-view hands the handler `item.tooltip || null`, so a falsy value shows nothing.
+ */
+function ChartTooltip({ store, renderTooltip, interaction }: {
+  store: TooltipStore
+  renderTooltip: ChartProps['renderTooltip']
+  interaction: InteractionCapability | undefined
+}): React.ReactElement | null {
+  const tooltipInfo = React.useSyncExternalStore(store.subscribe, store.get, store.get)
+  const tooltipShown = React.useMemo(
+    () => (tooltipInfo != null && renderTooltip == null && interaction != null
+      ? interaction.tooltipContent((tooltipInfo.item as { tooltip?: unknown }).tooltip || null)
+      : null),
+    [tooltipInfo, renderTooltip, interaction],
+  )
+  if (tooltipInfo == null || (renderTooltip == null && tooltipShown == null)) return null
+  return (
+    <div
+      data-testid="chart-tooltip"
+      style={{
+        position: 'absolute',
+        left: tooltipInfo.x + 12,
+        top: tooltipInfo.y + 12,
+        zIndex: 40,
+        pointerEvents: 'none',
+        background: 'rgba(0,0,0,0.85)',
+        color: '#fff',
+        padding: '4px 8px',
+        borderRadius: 4,
+        fontSize: 12,
+        fontFamily: 'system-ui, sans-serif',
+        maxWidth: 240,
+        whiteSpace: 'nowrap',
+      }}
+    >
+      {renderTooltip != null
+        ? renderTooltip(tooltipInfo.datum, { tooltip: (tooltipInfo.item as { tooltip?: unknown }).tooltip, item: tooltipInfo.item })
+        : tooltipShown != null && ('text' in tooltipShown
+          ? tooltipShown.text
+          : <>
+              {tooltipShown.title != null && <div><strong>{tooltipShown.title}</strong></div>}
+              {tooltipShown.rows.map(([k, v]) => (
+                <div key={k}><strong>{k}:</strong> {v}</div>
+              ))}
+            </>)}
     </div>
   )
 }
@@ -1728,6 +1926,8 @@ const bindsHeight = (el: HTMLElement): number => bindsOf(el)?.getBoundingClientR
 const CONTAINER_FOCUS = Symbol('container')
 /** Where focus is inside a chart: the id of an a11y node, or the container. */
 type FocusSpot = string | typeof CONTAINER_FOCUS
+
+const canvasStyle: React.CSSProperties = { position: 'relative', zIndex: 1, display: 'block' }
 
 const srOnly: React.CSSProperties = {
   position: 'absolute', width: 1, height: 1, padding: 0, margin: -1,

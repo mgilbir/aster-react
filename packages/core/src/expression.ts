@@ -11,27 +11,36 @@
  * and the format layer (`./locale.js`).
  */
 import { currentLocale } from './locale.js'
-import { boundedCount, ceiling, meterBytes, meterTick, guardedRegExp, checkRegexInput, checkRegexObject } from './limits.js'
+import { boundedCount, ceiling, meterBytes, meterTick, checkRegexInput, checkRegexObject, regExpOf } from './limits.js'
 import { bandSpace, scaleGradient, type Scale } from './scale.js'
-import { selectionIdTest, selectionResolve, selectionTest, selectionTuples } from './selections.js'
+import { part } from './engine-parts.js'
 import { parseExpressionCached } from './expr-parser.js'
+import { PRIMITIVE_TUPLE, tupleDatum } from './util.js'
 import { ADDON_FUNCTIONS } from './addon-functions.js'
-import { compileExpression, DefaultFunctions, ExpressionConstants, EventFunctions } from './expr-interpreter.js'
+import { compileExpression, DefaultFunctions, ExpressionConstants, EventFunctions, FIRST_ARGUMENT_ONLY, markBuiltinTable } from './expr-interpreter.js'
 import {
   timeOffset, utcOffset, timeSequence, utcSequence,
   dayofyear, utcdayofyear, week, utcweek, timeUnitSpecifier,
 } from './time.js'
 
-/** d3-array's range: arithmetic sequence [start, stop) by step. */
-function numericSequence(start: number, stop?: number, step?: number): number[] {
-  if (stop === undefined) { stop = start; start = 0 }
-  step = step ?? (stop < start ? -1 : 1)
-  const len = Math.max(0, Math.ceil((stop - start) / step))
+/**
+ * `sequence(...)`: the arithmetic sequence [start, stop) by step, as vega's (d3-array's `range`) reads its arguments: by how many
+ * were given (one is the stop from 0; two step by 1, whatever their order; a third, even `undefined`, is the step), each coerced to
+ * a number, and a count that is not positive (or not a number) is an empty sequence.
+ */
+function numericSequence(args: readonly unknown[]): number[] {
+  const n = args.length
+  let start = +(args[0] as number)
+  let stop = +(args[1] as number)
+  let step = 1
+  if (n < 2) { stop = start; start = 0 } else if (n > 2) step = +(args[2] as number)
+  const count = Math.max(0, Math.ceil((stop - start) / step))
   // Deviation from d3/vega (safety): under limits the length is bounded BEFORE
   // the allocation (sequence(0, 5e7) would otherwise build a 400 MB array in
   // one uninterruptible call), and the clock is sampled while filling.
-  ceiling('rows', len, 'sequence')
-  boundedCount(len, 'sequence', 'rows')
+  ceiling('rows', count, 'sequence')
+  boundedCount(count, 'sequence', 'rows')
+  const len = count | 0
   const out = new Array(len)
   for (let i = 0; i < len; i++) {
     out[i] = start + i * step
@@ -119,13 +128,17 @@ function isValid(value: unknown): boolean {
   return value != null && value === value
 }
 
-// vega-functions monthFormat / dayFormat: a non-integer month or day is the empty string; the date is formatted
-// through the dataflow's locale (the upstream reuses one Date object across calls; a fresh one each time
-// is the same unless a day beyond 28 was set by an earlier call).
+// `monthFormat` / `dayFormat` (and the abbreviated forms): a non-integer month or day is the empty string; otherwise one Date, kept
+// for every call in the process as vega keeps it, is moved to year 2000, the month, then the day, and formatted through the default
+// locale. That the Date is kept is observable: a day past the end of a month (`dayFormat(30)` is January 32nd) carries the next
+// month name over to the following month, and a midnight the time zone skips moves the date back an hour into the day before.
+const nameDate = new Date(2000, 0, 1)
 function nameFormat(month: unknown, day: unknown, spec: string): string {
   if (!Number.isInteger(month) || !Number.isInteger(day)) return ''
-  const date = new Date(2000, month as number, day as number)
-  return L.timeFormat(spec)(date)
+  nameDate.setFullYear(2000)
+  nameDate.setMonth(month as number)
+  nameDate.setDate(day as number)
+  return L.timeFormat(spec)(nameDate)
 }
 const monthFormatValue = (month: unknown): string => nameFormat(month, 1, '%B')
 const dayFormatValue = (day: unknown): string => nameFormat(0, 2 + (day as number), '%A')
@@ -167,47 +180,56 @@ const utcOffsetFn = (unit: unknown, date: unknown, step?: unknown): Date | undef
   utcOffset(unit as string, date, step as number)
 
 // --- string/array utilities (vega semantics) --------------------------------
+//
+// What vega does with each argument is the contract, odd inputs included: a value is made text with `+ ''` (null is "null"), a
+// sequence function reads only an array, a typed array or a string (anything else fails as reading a member of null), and every
+// argument after the ones a function names reaches the method it calls.
 
-function lengthOf(value: unknown): number {
-  return value == null ? 0 : (value as { length: number }).length
+/** The array a sequence function reads (an array or a typed array), or null: a member read off it then fails. */
+function asArray(value: unknown): { slice(...a: unknown[]): unknown[]; join(...a: unknown[]): string } {
+  return (Array.isArray(value) || ArrayBuffer.isView(value) ? value : null) as never
 }
-function sliceFn(value: unknown, start?: number, end?: number): unknown {
-  const e = end == null ? undefined : end < 0 ? lengthOf(value) + end : end
-  return (value as { slice(a?: number, b?: number): unknown }).slice(start, e)
+/** The sequence a search or slice reads: an array, a typed array or a string, or null. */
+function asSequence(value: unknown): { indexOf(...a: unknown[]): number; lastIndexOf(...a: unknown[]): number; slice(...a: unknown[]): unknown } {
+  return (Array.isArray(value) || ArrayBuffer.isView(value) || typeof value === 'string' ? value : null) as never
 }
-function truncate(value: unknown, count: number, align = 'right', ellipsis = '\u2026'): string {
-  const str = value == null ? '' : String(value)
-  if (str.length <= count) return str
-  const len = Math.max(0, count - ellipsis.length)
-  const half = Math.floor(len / 2)
-  if (align === 'left') return ellipsis + str.slice(str.length - len)
-  if (align === 'center') return str.slice(0, half) + ellipsis + str.slice(str.length - (len - half))
-  return str.slice(0, len) + ellipsis
+function truncate(value: unknown, count: unknown, align?: unknown, ellipsis?: unknown): string {
+  const mark = (ellipsis != null ? ellipsis : '\u2026') as string
+  const str = (value as string) + ''
+  const n = str.length
+  const keep = Math.max(0, (count as number) - mark.length)
+  if (n <= (count as number)) return str
+  if (align === 'left') return mark + str.slice(n - keep)
+  if (align === 'center') return str.slice(0, Math.ceil(keep / 2)) + mark + str.slice(n - ~~(keep / 2))
+  return str.slice(0, keep) + mark
 }
-function pad(value: unknown, count: number, char = ' ', align = 'right'): string {
-  const str = value == null ? '' : String(value)
-  const len = Math.max(0, count - str.length)
+/** `count` copies of `text` (a count that is not a positive number is none; a fraction rounds down). */
+function copies(text: string, count: number): string {
+  return count >= 1 ? text.repeat(count) : ''
+}
+function pad(value: unknown, count: unknown, padchar?: unknown, align?: unknown): string {
+  // (the pad character is any value, made text as the value is; a falsy one is a space)
+  const fill = ((padchar || ' ') as string) + ''
+  const str = (value as string) + ''
+  const n = (count as number) - str.length
+  if (!(n > 0)) return str
   // Deviation (safety): the padded string is bounded by the limits BEFORE it is built.
-  meterBytes(len + str.length, 'pad')
-  if (align === 'left') return char.repeat(len) + str
-  if (align === 'center') {
-    const left = len >> 1
-    return char.repeat(left) + str + char.repeat(len - left)
-  }
-  return str + char.repeat(len)
+  meterBytes(Math.floor(n) * fill.length + str.length, 'pad')
+  if (align === 'left') return copies(fill, n) + str
+  if (align === 'center') return copies(fill, ~~(n / 2)) + str + copies(fill, Math.ceil(n / 2))
+  return str + copies(fill, n)
 }
 function mergeObj(...objs: unknown[]): unknown {
   // Like vega's merge (extend into {}), but an own `__proto__` key (JSON data)
   // must not leave the result with a foreign prototype: restore it.
   return Object.setPrototypeOf(Object.assign({}, ...objs), Object.prototype)
 }
-function testRe(reg: unknown, value: unknown): boolean {
-  if (value == null) return false
+/** `test(pattern, text)`: `RegExp(pattern).test(text)`, the text made a string as `test` makes it. */
+function testRe(pattern: unknown, text: unknown): boolean {
   // Regex guard (safety deviation): pattern and input lengths are capped under
   // limits. This does NOT stop catastrophic backtracking (docs/LIMITS.md).
-  const re = isRegExp(reg) ? (reg as RegExp) : guardedRegExp(String(reg))
-  if (isRegExp(reg)) checkRegexObject(reg as RegExp)
-  const input = String(value)
+  const re = regExpOf(pattern)
+  const input = String(text)
   checkRegexInput(input)
   return re.test(input)
 }
@@ -240,11 +262,49 @@ export const expressionRegistryEpoch = (): number => registryEpoch
 /** Functions an addon contributes that read the view they run in (a projection by name): built per runtime. */
 const REGISTERED_BOUND = new Map<string, (runtime: ExpressionRuntime) => (...args: never[]) => unknown>()
 
+/**
+ * The built-ins that never write a signal (see `markParamSafe`): they read their arguments, the locale, the clock, the random
+ * source, the container size or a scale, and nothing that can run a transform. Left out: whatever reads a dataset (`data`, `indata`,
+ * the `vlSelection*` reads: a dataset may be derived when first read, and deriving one may write a signal), the edits (`modify`,
+ * `setdata`) and what reads the drawn scene (`intersect`, `inScope`). A name missing here only costs a row pass its hoisting.
+ */
+const PARAM_SAFE_BUILTINS: ReadonlySet<string> = new Set([
+  'isValid', 'isDefined', 'isArray', 'isBoolean', 'isDate', 'isNumber', 'isObject', 'isRegExp', 'isString',
+  'toBoolean', 'toNumber', 'toDate', 'toString', 'if', 'test', 'hypot', 'containerSize', 'windowSize', 'clamp',
+  'extent', 'clampRange', 'inrange', 'join', 'lerp', 'length', 'indexof', 'lastindexof', 'peek', 'reverse', 'sequence', 'slice', 'sort',
+  'merge', 'vlSelectionTuples', 'isTuple', 'panLinear', 'panLog', 'panPow', 'panSymlog', 'zoomLinear', 'zoomLog', 'zoomPow', 'zoomSymlog',
+  'pinchDistance', 'pinchAngle', 'span', 'pluck', 'pad', 'parseFloat', 'parseInt', 'replace', 'split', 'substring', 'truncate',
+  'encodeURIComponent', 'regexp', 'now', 'random', 'datetime', 'timeOffset', 'utcOffset', 'timeSequence', 'utcSequence',
+  'quarter', 'week', 'dayofyear', 'utcquarter', 'utcweek', 'utcdayofyear',
+  'format', 'timeFormat', 'utcFormat', 'timeParse', 'utcParse', 'timeUnitSpecifier', 'monthFormat', 'monthAbbrevFormat', 'dayFormat',
+  'dayAbbrevFormat', 'rgb', 'hsl', 'lab', 'hcl', 'luminance', 'contrast',
+  'scale', 'invert', 'domain', 'range', 'bandwidth', 'bandspace', 'copy', 'gradient',
+])
+
 function createFunctionContext(runtime: ExpressionRuntime): Record<string, unknown> {
-  const fns = createBuiltinFunctions(runtime)
+  const builtins = createBuiltinFunctions(runtime)
+  // (the built-ins never read `this`: the interpreter calls them directly; what is registered below is called as a host function)
+  const fns = { ...builtins }
   for (const [name, make] of REGISTERED_BOUND) fns[name] = make(runtime)
   for (const [name, fn] of REGISTERED) fns[name] = fn
+  markBuiltinTable(fns, builtins, PARAM_SAFE_BUILTINS)
   return fns
+}
+
+/**
+ * The function table of a runtime, made once per runtime and registry version (every expression compiled against the runtime reads
+ * the same table). Sound because nothing in a table is fixed when it is made but the registry, which `registryEpoch` versions: the
+ * built-ins and the add-ons' bound functions read the runtime's members (`scale`, `data`, `random`, ...) when they are called, and
+ * no table is written after it is made. Keyed weakly by the runtime: a runtime is one evaluation's, and its table goes with it.
+ */
+const CONTEXTS = new WeakMap<ExpressionRuntime, { epoch: number; functions: Record<string, unknown> }>()
+function functionContextOf(runtime: ExpressionRuntime): Record<string, unknown> {
+  let made = CONTEXTS.get(runtime)
+  if (made === undefined || made.epoch !== registryEpoch) {
+    made = { epoch: registryEpoch, functions: createFunctionContext(runtime) }
+    CONTEXTS.set(runtime, made)
+  }
+  return made.functions
 }
 
 /**
@@ -420,31 +480,32 @@ function createBuiltinFunctions(runtime: ExpressionRuntime): Record<string, unkn
     // its own default size (vega-lite: `isFinite(containerSize()[0]) ? ... : 300`).
     containerSize: () => runtime.containerSize?.() ?? [undefined, undefined],
     windowSize: () => [undefined, undefined],
-    clamp: (value: number, lo: number, hi: number) => Math.min(Math.max(value, lo), hi),
+    // (vega writes `clamp(v, lo, hi)` as `Math.max(lo, Math.min(hi, v))`: a range given upside down clamps to `lo`)
+    clamp: (value: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, value)),
     // arrays
     extent: (arr: unknown) => extent(arr as ArrayLike<unknown>), // unary: no accessor callable
     clampRange: (r: unknown, lo: unknown, hi: unknown) => clampRange(r as number[], lo as number, hi as number),
     inrange: (value: unknown, range: unknown, left?: unknown, right?: unknown) => inrange(value, range as unknown[], left as boolean | undefined, right as boolean | undefined),
-    join: (seq: unknown, sep?: unknown) => (seq as unknown[]).join(sep as string | undefined),
+    join: (seq: unknown, ...rest: unknown[]) => asArray(seq).join(...rest),
     lerp: (arr: unknown, t: unknown) => lerpOf(arr as number[], t),
-    length: lengthOf,
-    indexof: (seq: unknown, v: unknown) => (seq as { indexOf: (v: unknown) => number }).indexOf(v),
-    lastindexof: (seq: unknown, v: unknown) => (seq as { lastIndexOf: (v: unknown) => number }).lastIndexOf(v),
-    peek: (arr: unknown) => ((arr as unknown[]) ?? []).slice(-1)[0],
-    reverse: (seq: unknown) => (seq as unknown[]).slice().reverse(),
-    sequence: (start: number, stop?: number, step?: number) =>
-      stop === undefined ? numericSequence(start) : step === undefined ? numericSequence(start, stop) : numericSequence(start, stop, step),
-    slice: sliceFn,
-    sort: (seq: unknown) => sortSlice(seq as unknown[], (a, b) => ascending(a as never, b as never)),
+    length: (value: unknown) => (value as { length: unknown }).length,
+    indexof: (seq: unknown, ...rest: unknown[]) => asSequence(seq).indexOf(...rest),
+    lastindexof: (seq: unknown, ...rest: unknown[]) => asSequence(seq).lastIndexOf(...rest),
+    peek: (arr: unknown) => (arr as unknown[])[(arr as unknown[]).length - 1],
+    reverse: (seq: unknown) => asArray(seq).slice().reverse(),
+    sequence: (...args: unknown[]) => numericSequence(args),
+    slice: (seq: unknown, ...rest: unknown[]) => asSequence(seq).slice(...rest),
+    sort: (seq: unknown) => sortSlice(asArray(seq), (a, b) => ascending(a as never, b as never)),
     merge: mergeObj,
     // dataset edits happen inside the signal event loop, which supplies runtime.modify; elsewhere there is nothing to edit
     modify: (name: unknown, insert?: unknown, remove?: unknown, toggle?: unknown, modifyTuple?: unknown, values?: unknown) =>
       runtime.modify ? runtime.modify(String(name), insert, remove, toggle, modifyTuple, values) : 0,
     // vega-selections
-    vlSelectionTest: (name: unknown, datum: unknown, op?: unknown) => selectionTest(runtime.data(String(name)) as never, datum, op),
-    vlSelectionIdTest: (name: unknown, datum: unknown, op?: unknown) => selectionIdTest(runtime.data(String(name)) as never, datum, op),
-    vlSelectionResolve: (name: unknown, op?: unknown, isMulti?: unknown, vl5?: unknown) => selectionResolve(runtime.data(String(name)) as never, op, isMulti, vl5),
-    vlSelectionTuples: (items: unknown, base: unknown) => selectionTuples(items, base),
+    // (vega-selections' functions are a part the React shells load on demand: engine-parts.ts)
+    vlSelectionTest: (name: unknown, datum: unknown, op?: unknown) => part('selections').selectionTest(runtime.data(String(name)) as never, datum, op),
+    vlSelectionIdTest: (name: unknown, datum: unknown, op?: unknown) => part('selections').selectionIdTest(runtime.data(String(name)) as never, datum, op),
+    vlSelectionResolve: (name: unknown, op?: unknown, isMulti?: unknown, vl5?: unknown) => part('selections').selectionResolve(runtime.data(String(name)) as never, op, isMulti, vl5),
+    vlSelectionTuples: (items: unknown, base: unknown) => part('selections').selectionTuples(items, base),
     isTuple: (t: unknown) => isTuple(t),
     // vega-functions intersect.js: the items of the drawn scene inside a box
     intersect: (b: unknown, opt?: unknown, group?: unknown) => (runtime.intersect ? runtime.intersect(b, opt, group) : []),
@@ -478,19 +539,22 @@ function createBuiltinFunctions(runtime: ExpressionRuntime): Record<string, unkn
     parseFloat: (value: unknown) => parseFloat(String(value)),
     parseInt: (value: unknown, radix?: unknown) => parseInt(String(value), radix == null ? undefined : Number(radix)),
     replace: (value: unknown, pattern: unknown, repl: unknown) => {
+      // (vega-functions replace: the pattern must be a string or a regular expression; the replacement is passed as given)
+      if (!isString(pattern) && !isRegExp(pattern)) throw new Error('Please pass a string or RegExp argument to replace.')
       const str = String(value)
       if (isRegExp(pattern)) { checkRegexObject(pattern as RegExp); checkRegexInput(str) }
-      return str.replace(pattern as string | RegExp, String(repl))
+      return str.replace(pattern as string | RegExp, repl as string)
     },
-    split: (value: unknown, sep: unknown, limit?: unknown) => {
+    // `split` and `substring` are the string methods called on `String(value)` with the remaining arguments as given
+    split: (value: unknown, ...rest: unknown[]) => {
       const str = String(value)
-      if (isRegExp(sep)) { checkRegexObject(sep as RegExp); checkRegexInput(str) }
-      return str.split(sep as string, limit == null ? undefined : Number(limit))
+      if (isRegExp(rest[0])) { checkRegexObject(rest[0] as RegExp); checkRegexInput(str) }
+      return (str.split as (...a: unknown[]) => string[])(...rest)
     },
-    substring: (value: unknown, start?: number, end?: number) => String(value).substring(start ?? 0, end),
+    substring: (value: unknown, ...rest: unknown[]) => (String(value).substring as (...a: unknown[]) => string)(...rest),
     truncate,
     encodeURIComponent: (value: unknown) => encodeURIComponent(String(value)),
-    regexp: (pattern: unknown, flags?: unknown) => guardedRegExp(String(pattern), flags == null ? undefined : String(flags)),
+    regexp: (...args: unknown[]) => regExpOf(...args),
     // date-time
     // (read when called, not when this module loaded: a host or a test that replaces `Date.now` -- the deterministic clock -- is heard)
     now: () => Date.now(),
@@ -525,7 +589,7 @@ function createBuiltinFunctions(runtime: ExpressionRuntime): Record<string, unkn
     luminance,
     contrast: contrastRatio,
     // data & scale functions
-    data: (name: string) => runtime.data(name) ?? [],
+    data: (name: string) => tupleData(runtime.data(name) ?? []),
     indata: (name: string, field: string, value: unknown) => {
       const rows = runtime.data(name) ?? []
       // O(rows) per call and usually called per row: charge the scan so the
@@ -602,9 +666,40 @@ function assertKnownFunctions(ast: AstNode, functions: Record<string, unknown>, 
           : `Unrecognized function: ${name}`, expr)
       }
     }
+    // (an argument vega's code generator never reads is never refused: `upper(x, foo())` is `String(x).toUpperCase()`)
+    if (node.type === 'CallExpression' && node.callee?.type === 'Identifier' && FIRST_ARGUMENT_ONLY.has(node.callee.name ?? '')) {
+      visit((node.arguments as unknown[])[0])
+      return
+    }
     for (const k of Object.keys(node)) if (k !== 'type') visit(node[k])
   }
   visit(ast)
+}
+
+/** The row passes of the expressions `compileExpr` made (see `exprRows`). Keyed by the function: it holds nothing else alive. */
+const ROW_PASSES = new WeakMap<CompiledExpr, (params: Record<string, unknown> | undefined) => (datum: unknown) => unknown>()
+
+/**
+ * The evaluation of each row of a pass over many rows in which the parameters stay as they are: a transform's loop over its rows,
+ * where nothing that runs writes a signal. The values are those of `fn(datum, params)` per row; for an expression `compileExpr`
+ * made, what every row reads alike is read once (see `EngineExpression.rows`). Prepare one per pass: the function returned is not to
+ * be kept past it.
+ */
+export function exprRows(fn: CompiledExpr, params: Record<string, unknown> | undefined): (datum: unknown) => unknown {
+  const rows = ROW_PASSES.get(fn)
+  return rows !== undefined && params !== undefined && ENGINE_PARAMS.has(params) ? rows(params) : (datum) => fn(datum, params)
+}
+
+/**
+ * The parameter objects the engine made itself (see `engineParams`): their signals are own data properties that only the engine
+ * writes, so reading one once at the start of a pass gives what every row would read. A host's object (the public `applyTransforms`
+ * takes any) may hold a getter or be a proxy, and is read per row, as before.
+ */
+const ENGINE_PARAMS = new WeakSet<object>()
+/** Mark the engine's own signal parameters as such (see `ENGINE_PARAMS`); returns them. */
+export function engineParams<T extends Record<string, unknown>>(params: T): T {
+  ENGINE_PARAMS.add(params)
+  return params
 }
 
 /** Compile an expression string to an evaluable function bound to a runtime. */
@@ -618,7 +713,7 @@ export function compileExpr(expr: string, runtime: ExpressionRuntime): CompiledE
     throw new ExpressionParseError('Expression parse error: ' + expr, expr, { cause: e })
   }
   // vega refuses an unknown function when it parses and generates code ("Unrecognized function: x"), not when it is called
-  const functions = createFunctionContext(runtime)
+  const functions = functionContextOf(runtime)
   assertKnownFunctions(ast, functions, expr)
   const compiledEpoch = registryEpoch
   const evaluate = compileExpression(functions, ast)
@@ -631,5 +726,21 @@ export function compileExpr(expr: string, runtime: ExpressionRuntime): CompiledE
     // (the signals are read by their own names off the parameters: an event's datum is its item's)
     return evaluate(datum, params as Record<string, unknown> | undefined, event)
   }
+  ROW_PASSES.set(compiled, (params) => {
+    if (registryEpoch !== compiledEpoch) return (datum) => compiled(datum, params)
+    const row = evaluate.rows(params)
+    // (a registry change in the middle of the pass: every later row is evaluated as `compiled` evaluates it)
+    return (datum) => (registryEpoch === compiledEpoch ? row(datum) : compiled(datum, params))
+  })
   return compiled as CompiledExpr
+}
+/** What `data(name)` gives an expression: the dataset's tuples as vega has them (a primitive tuple is the primitive). Once per array. */
+const TUPLE_DATA = new WeakMap<readonly unknown[], readonly unknown[]>()
+function tupleData(rows: readonly unknown[]): readonly unknown[] {
+  let out = TUPLE_DATA.get(rows)
+  if (out === undefined) {
+    out = rows.some((r) => r !== null && typeof r === 'object' && PRIMITIVE_TUPLE in r) ? rows.map(tupleDatum) : rows
+    TUPLE_DATA.set(rows, out)
+  }
+  return out
 }

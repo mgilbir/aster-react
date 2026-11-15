@@ -24,7 +24,7 @@ The public surface of the three Aster packages: what each entry point exports, w
 
 - [Packages and entry points](#packages-and-entry-points)
 - [`@aster-charts/core`](#aster-chartscore)
-  - Guides: [Render a Vega spec](#render-a-vega-spec), [Sessions and per-datum updates](#sessions-and-per-datum-updates), [Custom expression functions](#custom-expression-functions), [Streaming and pulses](#streaming-and-pulses)
+  - Guides: [Render a Vega spec](#render-a-vega-spec), [Sessions and per-datum updates](#sessions-and-per-datum-updates), [Rows are treated as immutable](#rows-are-treated-as-immutable), [Custom expression functions](#custom-expression-functions), [Streaming and pulses](#streaming-and-pulses)
   - Reference: [RuntimeInput](#runtimeinput), [The pipeline steps](#the-pipeline-steps), [Locales](#locales), [Text metrics](#text-metrics), [Logger](#logger), [Pointer position and cursor](#pointer-position-and-cursor), [Building blocks](#building-blocks), [Limit checks](#limit-checks), [Typed errors](#typed-errors), [Accessibility tree](#accessibility-tree)
   - Add-on entry points: [`/hit`](#aster-chartscorehit), [`/signals`](#aster-chartscoresignals), [`/addons`](#aster-chartscoreaddons), [`/dom`](#aster-chartscoredom), [`/transition`](#aster-chartscoretransition), [`/canvas`](#aster-chartscorecanvas), [`/png`](#aster-chartscorepng), [`/load`](#aster-chartscoreload), [`/geo` and `/transforms`](#aster-chartscoregeo-and-aster-chartscoretransforms), [an example](#example-hit-testing-a-scene)
 - [`@aster-charts/react`](#aster-chartsreact)
@@ -100,9 +100,55 @@ evaluation is `session.pulse()`. `session.change(input)` re-evaluates the chart 
 without passing the spec again. `buildPulseGraph(chart)` / `propagatePulse(graph, sources)` expose the dataflow
 structure directly.
 
+A signal change re-does only what reads it: a group mark (a facet) whose subtree reads nothing that changed keeps its group
+items, a mark re-evaluates only the channels that read what changed, and what the renderers and the hit index derive from a
+mark is kept with it. A scene the session returns is the engine's: the next evaluation keeps the nodes it can and never
+writes into them. You may write into a scene you were given and draw that scene again (every renderer draws what you wrote),
+but a later evaluation builds on what its nodes held when they were made, so draw its scene, not the one you wrote into.
+
 `dataChanges` is `Record<string, number[]>`: per dataset, the indices (into the NEW row array) whose values changed.
 It is only valid when the array keeps its length and order; the session then reuses the previous scene items of every
-other row. Mutating an array in place without replacing it, and without `dataChanges`, is invisible to the cache.
+other row. Mutating an array in place without replacing it, and without `dataChanges`, is invisible to the cache: see
+[Rows are treated as immutable](#rows-are-treated-as-immutable).
+
+#### Rows are treated as immutable
+
+The rows you give a chart are yours, and Aster treats them as immutable: a spec's inline `values`, a Vega-Lite spec's
+`datasets`, the `data` prop / `input.data`, the rows `dataChanges` describes, and what you `push` into a stream. Aster
+never writes to them (it copies a row before it changes anything), and it compares them by identity: a compiled
+Vega-Lite spec holds your row objects, in arrays of its own, and a chart that is given the same array again assumes the
+same rows.
+
+So to change the data, pass a **new array**, or say what changed: `dataChanges` (same-length edits, by index), `dataPulse`
+or `changedDatasets` for sessions, `append` / a `data` snapshot for a stream. If you change an array in place (edit a row,
+replace one, `push`, `splice`) and hand the same array back, only what happens to evaluate again sees the change, so the
+chart can be inconsistent -- one mark updated and the next not, a scale's domain from the old rows -- as in vega.
+
+**Development warning.** In development builds a chart notices that: when it evaluates or renders again with the very
+same array and the array was changed in place, it warns once per chart and dataset through its logger (`logger` prop /
+`input.logger`, else the console): `[aster] the rows of dataset "table" were changed in place since the last render ...`,
+naming the dataset and what to do instead. It looks at a bounded, deterministic sample (16 rows, evenly spaced, the first
+and last included; the first 8 fields of each) and the array's length, so it costs O(sample) per dataset, not O(rows), and
+a change outside that sample (a row between the sampled ones, a field past the eighth) in an array of the same length can go
+unnoticed. A dataset the same evaluation names as changed (`dataChanges`, `dataPulse`, `changedDatasets`; a stream's own
+appends) is expected to change and is not reported. A field that is a getter is never called (only its presence counts);
+a Proxy row is read through its `ownKeys` and `getOwnPropertyDescriptor` traps, never `get`. Where it checks: sessions
+(`createChartSession`, and so `<Chart>`, `<SvgChart>`, `useChart`, streams at each flush) and every render of `<Chart>` /
+`<SvgChart>` / `useChart` / `useChartWorker` that evaluates nothing new. A worker never sees an in-place change at all
+(each request carries a copy, and a render with the same arrays sends nothing), so `useChartWorker` warns on the main
+thread; the worker streams copy each batch as it is posted, so there is nothing to watch.
+
+The warning exists only in development builds: it is keyed on `process.env.NODE_ENV`, which bundlers replace (Vite's dev
+server and builds, webpack, esbuild's `define`, Rollup with the usual replace plugin). A development bundle runs it even
+though the page has no `process` object; a production build (`NODE_ENV=production`) carries none of its code and reads no
+row (`scripts/check-bundle-shaking.mjs` asserts it for every documented import pattern; checked by hand with Vite's default
+build, webpack 5, esbuild and Next.js 15). One exception: Rollup keeps a call written inside a `try` -- as the guard is -- when it
+writes a classic script (`iife`) or runs without a minifier, so such a production build carries the check's code as dead code:
+its guard is `false`, so it never runs and reads no row. Imported unbundled -- ES modules
+from a CDN, with no `process` -- nothing is checked, and nothing throws. In Node (SSR, tests) it follows `NODE_ENV` at
+run time.
+(`checkChartRows` and `shareRowWatch`, exported by `@aster-charts/core`, are how the React shells reach the watch. They are
+internal: not part of the supported API, and called only in development builds.)
 
 ```ts
 import { createChartSession } from '@aster-charts/core/dom'
@@ -182,7 +228,9 @@ Pass the long form as `dataPulse` (per source dataset) to `evaluateChart`/`sessi
 you already know the delta; `dataChanges` remains the compact same-length form (when both name
 a dataset, `dataPulse` wins for it).
 
-`createChartStream(spec, options)` wraps a session with a push-based, bounded queue:
+`createChartStream(spec, options)` wraps a session with a push-based, bounded queue (the rows you `push` are treated as
+immutable, see [Rows are treated as immutable](#rows-are-treated-as-immutable); `initial.logger` receives the dataflow
+errors and development warnings of every flush):
 
 ```ts
 import { createChartStream, type VgSpec } from '@aster-charts/core'
@@ -227,7 +275,7 @@ queued and `false` when the policy rejected it, and throws only for `policy: 'er
 (`AsterStreamBackpressureError`) or a malformed batch (`TypeError`). An appended list of any length is fine: rows are
 moved into the stream's base array with a loop at flush time, never by spreading them into a call, so a very large
 `append` cannot hit the engine's call-argument limit. `StreamBatch` fields: `data`, `append`, `pulse`, `signals`,
-`width`, `height`, `domainRaw`, `limits`, `textMetrics`. `initial.urlPolicy` and `initial.urlData` are fixed for the stream's life.
+`width`, `height`, `containerSize`, `measuredSize` (as in `RuntimeInput`; the later value wins), `domainRaw`, `limits`, `textMetrics`. `initial.urlPolicy` and `initial.urlData` are fixed for the stream's life.
 
 An empty first `flush()` primes the scene from the spec/initial snapshot; later empty
 flushes are no-ops. The React bindings are:
@@ -308,7 +356,9 @@ Afterwards `push` returns `false` (not counted as a drop), `flush` returns `null
 `RuntimeInput` (the second argument of `renderSpec`, `evaluateChart` and the session) has these fields: `limits`,
 `urlPolicy`, `urlData`, `logger`, `random`, `textMetrics`, `data`, `width`, `height`, `signals`, `containerSize`, `measuredSize`, `changedDatasets`,
 `dataChanges`, `dataPulse`, `autoChanges`, `domainRaw`. `data` is a `Record<string, unknown[]>` keyed by dataset
-name; it overrides or supplies the rows of the spec dataset of that name.
+name; it overrides or supplies the rows of the spec dataset of that name. A row is an object, or a value (a number, string or boolean is read as `{data: value}`); a row that is `null` or
+`undefined` is an error, where vega fails on one: a `TypeError` naming the dataset, the row and where it came from (see
+`docs/ERRORS.md`, "Rows that are null or undefined").
 
 `urlData` (`'allow'`, the default, or `'refuse'`; type `UrlDataMode`) says whether the spec may name `url` datasets. With
 `'refuse'` a spec that has a dataset with a non-empty `url` and no `values`, at the top level or in a nested group, fails at once with an
@@ -459,9 +509,15 @@ focusable elements; non-React hosts can do the same. The keyboard contract is in
 
 #### `@aster-charts/core/hit`
 
-`buildHitIndex(scene)` returns `{ query(x, y), queryMark(x, y), size() }`; `queryMark` returns
-data-bearing mark items only (guides excluded), `query` returns anything painted. Both give a `HitTarget`
-(`{ item, marktype }`) or `null`.
+`buildHitIndex(scene)` returns `{ query(x, y), queryMark(x, y), pick(x, y), tooltip(x, y), size() }`. `query` returns anything
+painted; `queryMark` the items of interactive marks only (guides and group items' boxes excluded); `pick` is vega's `event.item`,
+the topmost item that takes the pointer (it looks through a mark with `interactive: false` and a guide part the spec did not make
+interactive, and finds the parts it did); `tooltip` is the item vega's tooltip handler is called with: the item `pick` finds, a
+line, an area or a trail resolved to one of its items as vega resolves it (or `null`). Each gives a `HitTarget`
+(`{ item, marktype, kind, fromData }`: `kind` is `'mark'`, `'group'` for a group item's own box, or `'guide'` for a part of an
+axis, a legend or a title; `fromData` is true for an item of a mark that reads a dataset) or `null`. Every item has a `datum`, as
+in vega: its row, the generated `{}` of a mark without `from` or of a title, a group item's facet tuple, a guide part's tick or
+entry, the axis or legend datum for a guide's own group, domain and title.
 
 #### `@aster-charts/core/signals`
 
@@ -492,7 +548,7 @@ pending debounces (vega's `view.finalize()`). `setTimerClock(clock | null)` ([Ma
 - `hooks.preventDefault` — vega's `view.preventDefault()` (default `false`): whether events of the chart's own surface are
   prevented when `config.events.defaults` names neither `prevent` nor `allow`. The config decides first (vega's default is
   `{allow: ['wheel']}`, so every listened view event but `wheel` is prevented); a `consume`d stream always prevents.
-- `{ pick }` — `(x, y) => HitTarget | null`, e.g. `buildHitIndex(scene).query`: resolves `event.item` (mark type, name, role,
+- `{ pick }` — `(x, y) => HitTarget | null`, e.g. `buildHitIndex(scene).pick`: resolves `event.item` (mark type, name, role,
   datum, enclosing group). Without it, or when it finds nothing, the item is read from the DOM (the `mark-*`/`role-*`
   classes, and a `data-datum` stamp if `stampDatumAttrs` was called), where mark names are not available. `<Chart>` passes its own hit index.
 - Lower-level pieces of the same module. `bindSignalEvents(svg, chart, runtime, signalParams, signals, hooks?, options?)` is
@@ -522,6 +578,29 @@ is refused, never read), and `loadAddonsFor` rejects a spec that has a url datas
 transforms add-on registers), `LOAD_ADDON_FORMATS` (`csv`, `tsv`, `dsv`, `topojson`) and `ADDON_FUNCTIONS` (expression function name to the
 add-on that registers it). Test seams: `registeredFunctionNames` lists the expression functions registered beyond the built-ins, and
 `withdrawFunctions(names)` removes some and returns a function that restores them.
+
+The same module reads which *parts of the engine* a spec may need (see "The parts of the engine most charts never run" in
+docs/ARCHITECTURE.md): `specNeeds(spec, options?)` returns `{ addons, parts, eventLoop }` from one walk (`eventLoop`: a scope declares signals, so an interactive shell binds the signal loop), `partsNeeded(spec, options?)` the parts
+alone (`EnginePart`: `'legend' | 'layout' | 'pulse' | 'selections' | 'regex' | 'svgpath' | 'intersect' | 'modify' | 'timer'`), with
+`PartOptions` adding `{ limits, random }` to `{ urlData }`; `partsNotLoaded(names)` filters a list by what is loaded, `loadParts(names)`
+imports parts, and `loadPartsFor(spec, options?)` loads every add-on and part a spec needs. The tables they read: `PART_FUNCTIONS`
+(an expression function to the part it needs) and `REGEX_ARGUMENT_FUNCTIONS` (the functions that screen an argument that is a regular
+expression). Every public entry of `@aster-charts/core` already carries the parts its functions read, so a host of the synchronous API
+never needs these; they are what the React shells use.
+
+**`@aster-charts/core/lean`, `/lean/hit`, `/lean/signals`, `/lean/canvas`, `/lean/stream` (internal).** The engine as `@aster-charts/react`'s shells use it, not covered by semver: under the `browser` export condition the parts of the
+engine are left out and loaded on demand, anywhere else every part is there. `/lean` re-exports `buildA11yTree`, `chartInfoFromScene`,
+`renderSceneToSvg`, `AsterLimitError`, `checkSvgLength`, `createPointMapper`, `resolveCursor`, `createCursorTracker`, `sceneHasCursor`, `consoleLogger`, `checkChartRows`,
+`shareRowWatch`, `checkUrlData`, `createChartSession`, `chartSkeleton`, `hasDenseSymbolMarks`, `patchSceneDom`,
+`renderSceneToDomElement`, the add-on and part functions above (`addonsNeeded`, `loadAddons`, `loadAddonsFor`, `missingAddons`,
+`notLoaded`, `specNeeds`, `partsNeeded`, `partsNotLoaded`, `loadParts`, `loadPartsFor`), and `ENGINE_PARTS`, `part(name)` (a loaded
+part; throws for an empty slot), `partLoaded(name)`, `withdrawParts(names)` (a test seam that empties slots and returns a function
+that fills them again) and `setUpShell()` (what the shells call once: the guide captions and the loader of the pulse path).
+`/lean/hit` is `@aster-charts/core/hit`; `/lean/canvas` exports `loadCanvasPart()`, which loads the canvas renderer for
+`<Chart renderer="canvas">` (and, outside a browser build, `part`, the renderer itself); `/lean/signals` exports `loadSignalsPart()`,
+which loads the signal event loop (the `signals` part: `bindSceneSignals`) for a chart the shells bind it for, a spec that declares
+signals (`specNeeds(spec).eventLoop`) or a host that listens to them; `/lean/stream` is the chart stream (`createChartStream`,
+`getStreamFlushFailure`).
 
 #### `@aster-charts/core/dom`
 
@@ -558,7 +637,9 @@ OffscreenCanvas context or a recording mock); `batchSymbols` (default `true`) me
 For streams: `snapshotCanvasScene(scene)` records what was drawn (`CanvasSceneSnapshot`) and `renderSceneToCanvasAppend(snapshot, nextScene, ctx, options?)`
 paints only the appended items of the next scene on top of it; it returns `false`, having drawn nothing, when the
 result would not equal a full repaint (anything but one mark group gained items at its end, a changed guide, a later group the new
-items could cover), and the caller repaints in full. Path geometry: `parsePathData(d)` parses an SVG path string into absolute-command
+items could cover), and the caller repaints in full. `paintsSameAs(snapshot, nextScene)` is whether the next scene paints exactly
+the pixels of the snapshot's frame (every group the one painted or painting the same, over what the renderer reads: an item's
+tooltip, link, cursor, description and ARIA are not painted); `<Chart renderer="canvas">` then paints nothing. Path geometry: `parsePathData(d)` parses an SVG path string into absolute-command
 segments (`PathSeg[]`: `M L H V C S Q T A Z`, relative commands included); `tracePath(sink, segments, tx?, ty?, arcs?)` replays them onto a
 `PathSink` (the path methods of a 2D context) offset by `(tx, ty)`, with `arcs: 'bezier'` for vega's bezier approximation of an arc;
 `canonicalPath(segments)` is the normalized text of parsed segments, the form in which canvas and SVG geometry are compared.
@@ -567,6 +648,11 @@ drawn from a `url`: `sceneImageUrls(scene)` lists the urls that have no bitmap y
 loads them as vega's canvas does (`crossOrigin = "anonymous"`, at most `IMAGE_CONCURRENCY` (6) at a time, one deadline for all) and
 resolves with the ones that loaded, and `withSceneImages(scene, bitmaps)` is a copy of the scene with those bitmaps in place (the
 scene itself is not written). `<Chart renderer="canvas">` does this itself.
+`createCanvasEvents(canvas)` is the canvas renderer's events for the signal event loop (`CanvasEvents`): pass it, with the scene
+hit index's `pick`, as `bindSceneSignals(canvas, scene, signals, hooks, { pick, events })`, keep it for as long as the canvas is
+shown, and call its `release()` when the canvas goes. Events are resolved as vega's canvas handler resolves them: about the item
+the last `pointermove` picked, with the out / over of an item change, a click only on the item pressed (see
+[INTERACTION.md](INTERACTION.md#signals)). `<Chart renderer="canvas">` does this itself.
 
 #### `@aster-charts/core/png`
 
@@ -698,8 +784,8 @@ gzip to the bundle (`<Chart>` 205.3 kB, `<Chart>` + `@aster-charts/react/vl` 308
 import. Vega specs need no extra import. Worker hosts must import `@aster-charts/react/vl` in the worker entry as well,
 since compilation happens there.
 
-**Props.** `spec` (compared by content: an equal inline literal does no work; the one exception is a dataset's inline `values` array, which is compared by identity, so a re-created but equal rows array is a new input, which the session's row diff finds unchanged and applies as a no-op; the streaming components keep the full content comparison, so a spec rebuilt every render does not restart a stream), `data`, `dataChanges`, `width`,
-`height` (each independent; without them the chart measures its container; a given one fixes the view's size, even for a container-sized spec, whose `width` / `height` signals and `window:resize` handlers do not move it. The measured container only sizes a spec that has no `width` / `height` signal of its own, and a dimension the spec gives no value at all stays Vega's 0 grown to the content by autosize. It sizes the chart's whole box, padding, guides and the bound inputs under the chart included, as Vega-Lite's `"container"` does (autosize `fit` containing the padding): the content shrinks to fit, so a chart never overflows the container it fills, and a container whose height is the chart's own (a block `<div>` with no height) keeps the chart's size instead of growing with it; one that drives them (a bound input, a handler, Vega-Lite's `"container"`) keeps doing so, as in Vega where the size is a signal and the later write wins, and sees the container through `containerSize()`), `ariaLabel`, `className`, `style`,
+**Props.** `spec` (compared by content: an equal inline literal does no work; the one exception is a dataset's inline `values` array, which is compared by identity, so a re-created but equal rows array is a new input, which the session's row diff finds unchanged and applies as a no-op; the streaming components keep the full content comparison, so a spec rebuilt every render does not restart a stream), `data` and `dataChanges` (the rows are treated as immutable: pass a new array, or the same one with `dataChanges` naming what changed; see [Rows are treated as immutable](#rows-are-treated-as-immutable)), `width`,
+`height` (each independent; without them the chart measures its container; a given one fixes the view's size, even for a container-sized spec, whose `width` / `height` signals and `window:resize` handlers do not move it. The measured container only sizes a spec that has no `width` / `height` signal of its own and whose autosize is not `none` (Vega's `none` means the chart's whole size is its `width`, `height` and `padding`: such a spec is drawn at that size in any container, as vega-embed draws it), and a dimension the spec gives no value at all stays Vega's 0 grown to the content by autosize. It sizes the chart's whole box, padding, guides and the bound inputs under the chart included, as Vega-Lite's `"container"` does (autosize `fit` containing the padding): the content shrinks to fit, so a chart never overflows the container it fills, and a container whose height is the chart's own (a block `<div>` with no height) keeps the chart's size instead of growing with it; one that drives them (a bound input, a handler, Vega-Lite's `"container"`) keeps doing so, as in Vega where the size is a signal and the later write wins, and sees the container through `containerSize()`), `ariaLabel`, `className`, `style`,
 `signals`, `signalListeners`, `onSignal`, `interactive`, `preventDefault`, `renderer`, `incremental`, `denseMarks`, `transition`,
 `tooltip`, `renderTooltip`, `selection`/`select`, `onSelectionChange`, `onSelect`, `onPointSelect`, `brush`, `panZoom`,
 `pan`, `zoom`, `view`, `onViewChange`, `maxZoom`, `a11y`, `limits`, `urlPolicy`, `urlData`, `random`, `logger`, `textMetrics`, `onError`.
@@ -711,11 +797,12 @@ built on `<Chart>`. They are internal and unstable: their shape can change in an
 use them in an application. `sceneOverride` (`SceneRoot | null`) makes the chart render that pre-evaluated scene instead of evaluating
 `spec` (`undefined` keeps the normal path, `null` renders the loading or error state), so a streamed scene goes through the same
 DOM patcher, canvas renderer, interaction and accessibility tree. `onStreamInput(input)` receives what the chart derives from its props and
-gestures, `{ domainRaw?, signals }` (`ChartStreamInput`: the `domainRaw` of the pan/zoom view and the merged signal values), so the
-stream can re-evaluate with them.
+gestures, `{ domainRaw?, signals, containerSize?, measuredSize? }` (`ChartStreamInput`: the `domainRaw` of the pan/zoom view, the merged
+signal values, and the container the chart sizes the spec to and the one it measured), so the stream can re-evaluate with them:
+a stream sizes its spec to the container the chart measures exactly as `<Chart>` sizes its own evaluation.
 
 **`data` and `dataChanges`.** `data` is a `Record<string, unknown[]>`: the key is the *dataset name* in the spec, the
-value its rows. A bare array does not typecheck (`data={newRows}` is an error); write `data={{ table: newRows }}`. A new
+value its rows (objects, or values; a `null` or `undefined` row is an error, as below for `renderSpec`'s `data`). A bare array does not typecheck (`data={newRows}` is an error); write `data={{ table: newRows }}`. A new
 array for a dataset is diffed against the previous one (appends and in-place edits re-encode only the affected rows).
 `dataChanges={{ table: [3, 7] }}` is an optional hint with the same meaning as in the session; it is validated, and an
 unknown dataset, a non-integer or out-of-range index or a changed row count makes the whole changeset be ignored
@@ -723,8 +810,8 @@ unknown dataset, a non-integer or out-of-range index or a changed row count make
 
 **Ref.** The ref (`ChartHandle`) exposes `getScene()`, `getSvg()` (serializes the current scene), `getPng(options?)` (see
 [PNG export](#png-export)), `getChartInfo()`, `getView()`, `setView()`, `resetView()`, `setSignal(name, value)` and `getSignals()`. `setSignal` runs the spec's
-dependent signal updates when the SVG event loop is bound; on canvas or with `interactive={false}` it applies the value
-as a signal override. Listeners (`signalListeners`, `onSignal`) are notified either way.
+dependent signal updates when the event loop is bound (SVG or canvas); with `interactive={false}` (or on `<SvgChart>`
+without `interaction`) it applies the value as a signal override. Listeners (`signalListeners`, `onSignal`) are notified either way.
 
 `denseMarks` (SVG only) batches dense symbol marks into chunked `<path>` elements
 instead of one element per datum. Positions are baked into `d`, so the pixels match; tooltips,
@@ -734,6 +821,12 @@ point selection and the a11y tree resolve through the scene.
   `signal.on` event streams (a conservative default: the event loop resolves `event.item` through the scene hit index, not per-item DOM nodes). Each path holds up to
   256 symbols, so 100,000 points become 391 paths.
 - `true` always batches (still only marks with at least 512 items), `false` disables.
+- Only opaque, unrotated symbols batch: an item whose `opacity`, `fillOpacity` or `strokeOpacity` is below 1, that has a
+  `blend` mode or an `angle` keeps its own element, and consecutive items with the same paint share a path. One path is
+  composited once where separate elements are composited at every overlap, so a translucent symbol drawn in a batch would
+  change the pixels (`pnpm conformance:batch` holds batched and per-item drawings to the same pixels). A mark whose items
+  are all translucent, such as a scatter with `fillOpacity: 0.7`, is therefore drawn one element per item in every shell,
+  whatever `denseMarks` says.
 - Client-only mounts batch directly. SSR/hydrated pages emit the per-item markup on
   the server (so hydration matches) and switch to batched in place after hydration.
 - A mark with `href` links is never batched.
@@ -945,6 +1038,10 @@ export function Live(): React.ReactElement {
 `push({ data | append })`) and add `streamOptions` (`capacity`, `maxQueuedRows`, `policy`, `autoFlush`,
 `flushPolicy`, `initial`, and for the worker form `worker`/`workerFactory`; `serialize` is forced off because the
 component renders the scene itself) and `onStreamError(error, failure?)`.
+`width`/`height` work as on `<Chart>`: without them the component measures its container and sends it into the stream as
+`containerSize` and `measuredSize` batches, so the stream's spec is sized by `<Chart>`'s rule (the container fills a spec with
+no `width` / `height` signal of its own whose autosize is not `none`, a spec with autosize `none` keeps its own size, and
+`containerSize()` reads the container either way).
 `panZoom`/`pan`/`zoom`/`view`/`onViewChange` and `signals` are routed into the stream as `domainRaw` and `signals`
 batches, so scales, marks and guides recompute inside the stream; `limits`, `textMetrics`, `urlPolicy` and `urlData` configure
 the stream's evaluation (a change of `urlData` starts a new stream); rendering, selection, tooltip, a11y and event props go to the underlying `<Chart>`.
@@ -1111,6 +1208,10 @@ const vegaSpec = compile({
 })
 console.log(Array.isArray(vegaSpec.marks))
 ```
+
+The compiled spec carries your inline rows by reference (in arrays of its own): compiling reads none of them, so it costs
+the same for 3 rows as for 6,000, and the rows are treated as immutable
+([Rows are treated as immutable](#rows-are-treated-as-immutable)).
 
 `<Chart>` and `useChart` use this compiler for Vega-Lite input once
 `@aster-charts/react/vl` is imported, so a fresh app does not need a `vega-lite`

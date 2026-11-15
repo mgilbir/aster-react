@@ -14,6 +14,8 @@
  * A second phase (browser-canvas-append.mts) checks that incremental append painting
  * equals a full repaint, pixel for pixel.
  * A third phase (browser-canvas-symbols.mts) checks that batched symbol runs paint the plain path's pixels, in time.
+ * A fourth phase (browser-canvas-dirty.mts) checks that a signal-driven scene <Chart> paints nothing for (it paints the same pixels)
+ * leaves the canvas showing exactly a full repaint of it, at device pixel ratios 1 and 2.
  *
  * Run: npx tsx scripts/browser-canvas-parity.mts [--limit=N] [--filter=substr]
  */
@@ -25,6 +27,7 @@ import { chromium } from 'playwright'
 import * as vega from 'vega'
 import { gradientSpec, makeRng, UNPAINTABLE_KINDS } from './gradient-gen.mts'
 import { cli } from '../../../scripts/lib/cli.mjs'
+import { CANVAS_LIMITS } from './canvas-pixels.mts'
 
 cli({ url: import.meta.url, flags: { limit: 'eq', filter: 'eq', browser: 'eq', pixel: 'eq', ratio: 'eq', mean: 'eq' } })
 
@@ -50,8 +53,9 @@ const BROWSER = arg('browser', 'chromium') as 'chromium' | 'firefox' | 'webkit'
 // WebKit's rasteriser rounds path coverage differently from Skia: its worst measured noise
 // on the same corpus is 0.08% / mean 0.06 (line-curve-cardinal-tension-0-3.vg), so its
 // limits are one step looser; Chromium and Firefox measured the same as above.
-const LIMITS = { chromium: { ratio: 0.0005, mean: 0.05 }, firefox: { ratio: 0.0005, mean: 0.05 }, webkit: { ratio: 0.001, mean: 0.07 } } as const
-const PIXEL = Number(arg('pixel', '48'))
+// (Chromium's numbers are shared with the gates that compare a live canvas after interaction: canvas-pixels.mts)
+const LIMITS = { chromium: { ratio: CANVAS_LIMITS.ratio, mean: CANVAS_LIMITS.mean }, firefox: { ratio: 0.0005, mean: 0.05 }, webkit: { ratio: 0.001, mean: 0.07 } } as const
+const PIXEL = Number(arg('pixel', String(CANVAS_LIMITS.pixel)))
 const RATIO = Number(arg('ratio', String(LIMITS[BROWSER].ratio)))
 const MEAN = Number(arg('mean', String(LIMITS[BROWSER].mean)))
 
@@ -136,6 +140,31 @@ for (const [name, d] of PATH_ARCS) {
     },
   })
 }
+// A gradient on a guide's box (an axis's, a legend's, an entry's, a title's), on a legend's strip and on its symbols: vega lays it over
+// the item's bounds (gradient-canvas-bounds-vs-vega.test.ts holds the axis-aligned and radial ones to vega's coordinates in Node). A
+// diagonal one vega draws into an image of the bounds' size, which only a browser can; the stops are hard edges, so a gradient laid
+// a pixel off shows.
+{
+  const edge = (x1: number, y1: number, x2: number, y2: number): object => ({ gradient: 'linear', x1, y1, x2, y2, stops: [{ offset: 0, color: 'black' }, { offset: 0.5, color: 'black' }, { offset: 0.5, color: 'gold' }, { offset: 1, color: 'gold' }] })
+  const ring = { gradient: 'radial', stops: [{ offset: 0, color: 'navy' }, { offset: 0.5, color: 'navy' }, { offset: 0.5, color: 'white' }, { offset: 1, color: 'white' }] }
+  const diag = edge(0, 0, 1, 0.7)
+  const box = (paint: object): object => ({ update: { width: { value: 40 }, height: { value: 20 }, strokeWidth: { value: 3 }, ...paint } })
+  const base = { $schema: 'https://vega.github.io/schema/vega/v6.json', width: 160, height: 100, padding: 5, autosize: 'pad', background: 'white',
+    scales: [{ name: 'x', type: 'linear', domain: [0, 10], range: 'width' }, { name: 'c', type: 'ordinal', domain: ['a', 'b'], range: ['red', 'blue'] }, { name: 'q', type: 'linear', domain: [0, 10], range: ['white', 'navy'] }] }
+  const guides: Array<[string, object]> = [
+    ['axis', { axes: [{ orient: 'bottom', scale: 'x', title: 'X', encode: { axis: box({ fill: { value: diag }, stroke: { value: edge(0, 0, 0, 1) } }) } }] }],
+    ['legend', { legends: [{ fill: 'c', title: 'C', encode: { legend: box({ fill: { value: edge(0, 0, 1, 0) }, stroke: { value: diag }, strokeForeground: { value: true } }) } }] }],
+    ['entries', { legends: [{ fill: 'c', encode: { entries: box({ fill: { value: diag }, stroke: { value: 'teal' } }), symbols: { update: { fill: { value: ring }, size: { value: 200 } } } } }] }],
+    ['title', { title: { text: 'Title', subtitle: 'Sub', encode: { group: box({ fill: { value: ring }, stroke: { value: diag } }) } } }],
+    ['strip', { legends: [{ fill: 'q', type: 'gradient', title: 'Q', gradientStrokeColor: 'black', gradientStrokeWidth: 3, encode: { gradient: { update: { stroke: { value: edge(1, 0, 1, 1) } } } } }] }],
+    // (a diagonal gradient is a pattern, which sits at the origin of the frame vega paints in: a group's, an entry's, an axis's)
+    ['legend-parts', { legends: [{ fill: 'c', title: 'Title above', encode: { entries: box({ fill: { value: diag } }), symbols: { update: { fill: { value: diag }, size: { value: 300 } } }, labels: { update: { fill: { value: diag }, fontSize: { value: 16 } } } } }] }],
+    ['gradient-legend-labels', { legends: [{ fill: 'q', type: 'gradient', title: 'Q', encode: { labels: { update: { fill: { value: diag }, fontSize: { value: 16 } } }, gradient: { update: { stroke: { value: diag }, strokeWidth: { value: 4 } } } } }] }],
+    ['axis-parts', { axes: [{ orient: 'bottom', scale: 'x', title: 'Bottom', encode: { labels: { update: { fill: { value: diag }, fontSize: { value: 16 } } }, ticks: { update: { stroke: { value: diag }, strokeWidth: { value: 4 } } }, title: { update: { fill: { value: diag }, fontSize: { value: 20 } } } } }] }],
+    ['group-mark', { marks: [{ type: 'group', encode: { update: { x: { value: 37 }, y: { value: 23 }, width: { value: 70 }, height: { value: 40 }, fill: { value: diag }, stroke: { value: diag }, strokeWidth: { value: 5 }, strokeForeground: { value: true } } }, marks: [{ type: 'rect', encode: { update: { x: { value: 10 }, y: { value: 10 }, width: { value: 30 }, height: { value: 20 }, fill: { value: diag } } } }] }] }],
+  ]
+  for (const [name, guide] of guides) synthetic.push({ name: `canvas-guide-gradient-${name}`, spec: { ...base, ...guide } })
+}
 const CUSTOM_SHAPES: Array<[string, string]> = [
   ['ring', 'M-1,0 A1,1 0 1,1 1,0 A1,1 0 1,1 -1,0 M0.5,0 A0.5,0.5 0 0,0 -0.5,0 Z'],
   ['ellipse', 'M0,-1 A1.2,0.5 30 1,1 1,0.4 L0,1 Z'],
@@ -211,6 +240,8 @@ import '@aster-charts/core/geo'
 import '@aster-charts/core/transforms'
 
 function pixels(canvas) {
+  // (a view of no width or height is a canvas with no pixels: getImageData refuses it; the sizes are still compared)
+  if (canvas.width === 0 || canvas.height === 0) return { data: new Uint8ClampedArray(0), w: canvas.width, h: canvas.height }
   const ctx = canvas.getContext('2d')
   const { data } = ctx.getImageData(0, 0, canvas.width, canvas.height)
   return { data, w: canvas.width, h: canvas.height }
@@ -221,6 +252,7 @@ function pixels(canvas) {
 function diff(a, b) {
   if (a.w !== b.w || a.h !== b.h) return { error: 'size ' + a.w + 'x' + a.h + ' != ' + b.w + 'x' + b.h }
   const count = a.w * a.h
+  if (count === 0) return { ratio: 0, mean: 0 }
   let bad = 0, sum = 0
   for (let i = 0; i < count * 4; i += 4) {
     const d = Math.abs(a.data[i] - b.data[i]) + Math.abs(a.data[i+1] - b.data[i+1]) + Math.abs(a.data[i+2] - b.data[i+2]) + Math.abs(a.data[i+3] - b.data[i+3])
@@ -387,4 +419,10 @@ const { runSymbolRunOracle } = await import('./browser-canvas-symbols.mts')
 const symbols = await runSymbolRunOracle(BROWSER)
 console.log(`[browser-canvas] symbol-runs ${BROWSER}: ${symbols.cases} cases (${symbols.withInk} with ink), ${symbols.failures.length} failing; 100k scatter ms: ${symbols.timings.map((t) => `${t.shape}=${t.ms}`).join(' ')}`)
 for (const f of symbols.failures.slice(0, 20)) console.log(`  ${f}`)
-process.exit(failures.length || append.failures.length || symbols.failures.length ? 1 : 0)
+
+// Phase 4: signal moves; a frame that paints nothing (the same pixels) must show what a full repaint shows, pixel for pixel.
+const { runDirtyPixelOracle } = await import('./browser-canvas-dirty.mts')
+const dirty = await runDirtyPixelOracle(BROWSER, 80, 14)
+console.log(`[browser-canvas] signal-moves-vs-full-repaint ${BROWSER}: ${dirty.runs} scenarios, ${dirty.untouched} frames that painted nothing, ${dirty.repainted} full repaints, ${dirty.failures.length} failing`)
+for (const f of dirty.failures.slice(0, 20)) console.log(`  ${f}`)
+process.exit(failures.length || append.failures.length || symbols.failures.length || dirty.failures.length ? 1 : 0)

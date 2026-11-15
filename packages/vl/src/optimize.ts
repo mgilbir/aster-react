@@ -14,6 +14,7 @@ import { renameDataRefs, renameExpr, renameFragment } from './embed.js'
 
 import { EXPRESSION_KEYS } from './embed.js'
 import { tokenize } from './expr-tokens.js'
+import { isRows, sameData, stringifyWithoutRows } from './rows.js'
 
 type Obj = Record<string, unknown>
 const isObj = (v: unknown): v is Obj => v !== null && typeof v === 'object' && !Array.isArray(v)
@@ -359,7 +360,7 @@ function dedupeDomainRefs(node: unknown, merged: ReadonlySet<string>): void {
       else if (unique.length !== refs.length) d.fields = unique
     }
   }
-  for (const v of Object.values(node)) if (v !== null && typeof v === 'object') dedupeDomainRefs(v, merged)
+  for (const v of Object.values(node)) if (v !== null && typeof v === 'object' && !isRows(v)) dedupeDomainRefs(v, merged)
 }
 
 /**
@@ -370,11 +371,12 @@ function removeUnusedDatasets(out: Obj, removable: (name: string) => boolean): v
   let data = (out.data as Obj[] | undefined) ?? []
   const rest = { ...out }
   delete rest.data
-  const outside = JSON.stringify(rest)
+  // (the user's rows name no dataset: they are left out of the text)
+  const outside = stringifyWithoutRows(rest)
   for (;;) {
     // (a name is read when it appears, whole, anywhere in the spec but its own dataset's name: a mark's `from`, a scale's domain, an
     // expression's `data("name")`, a source, a lookup)
-    const text = outside + data.map((d) => JSON.stringify({ ...d, name: undefined })).join('\n')
+    const text = outside + data.map((d) => stringifyWithoutRows({ ...d, name: undefined })).join('\n')
     // (and every name and string an expression spells, as vega's lexer reads them: `data("row\\u005fdomain")` reads `row_domain`)
     const spelled = new Set<string>()
     const collect = (v: unknown, key: string): void => {
@@ -392,9 +394,70 @@ function removeUnusedDatasets(out: Obj, removable: (name: string) => boolean): v
   }
 }
 
+/**
+ * compile/data/parse.ts findSource: the views of a spec share one list of sources, and a view's data is an existing source when it
+ * is the same data -- equal inline values (deepEqual: keys in any order), the same url, the same name -- unless the two are named
+ * differently or extract different topojson objects. On the assembled spec: a later source dataset that is an earlier one is merged
+ * into it (formats merged, the earlier's keys winning; a name the earlier lacks taken from the later) and every reference follows.
+ * `named` tells a name the user gave a dataset from one this compiler made.
+ */
+function mergeIdenticalSources(out: Obj, named: (name: string) => boolean): void {
+  const data = (out.data as Obj[] | undefined) ?? []
+  const isSource = (d: Obj): boolean => d.source === undefined && (d.transform === undefined || (Array.isArray(d.transform) && d.transform.length === 0)) && (d.values !== undefined || typeof d.url === 'string')
+  const fmt = (d: Obj): Obj => (isObj(d.format) ? d.format : {})
+  const sameSource = (d: Obj, other: Obj): boolean => {
+    const dn = named(d.name as string)
+    const on = named(other.name as string)
+    if (dn && on && d.name !== other.name) return false
+    const mesh = fmt(d).mesh
+    const feature = fmt(d).feature
+    const otherMesh = fmt(other).mesh
+    const otherFeature = fmt(other).feature
+    if (mesh && otherFeature) return false
+    if ((feature || otherFeature) && feature !== otherFeature) return false
+    if ((mesh || otherMesh) && mesh !== otherMesh) return false
+    if (d.values !== undefined && other.values !== undefined) return sameData(d.values, other.values)
+    if (typeof d.url === 'string' && typeof other.url === 'string') return d.url === other.url
+    return false
+  }
+  const sources: Obj[] = []
+  const renames = new Map<string, string>()
+  const kept: Obj[] = []
+  for (const d of data) {
+    if (!isSource(d)) { kept.push(d); continue }
+    const into = sources.find((s) => sameSource(d, s))
+    if (into === undefined) { sources.push(d); kept.push(d); continue }
+    into.format = mergeFormats(fmt(d), fmt(into))
+    if (Object.keys(into.format as Obj).length === 0 && d.format === undefined) delete into.format
+    if (!named(into.name as string) && named(d.name as string)) {
+      // (the earlier source takes the later's name: what read the earlier one reads it under that name)
+      for (const [from, to] of renames) if (to === into.name) renames.set(from, d.name as string)
+      renames.set(into.name as string, d.name as string)
+      into.name = d.name
+    } else {
+      renames.set(d.name as string, into.name as string)
+    }
+  }
+  if (renames.size === 0) return
+  out.data = kept
+  renameDatasetRefs(out, renames)
+  dedupeDomainRefs(out, new Set(renames.values()))
+}
+
+/** vega-lite mergeDeep({}, later, earlier): the earlier's keys win, nested objects merged. */
+function mergeFormats(later: Obj, earlier: Obj): Obj {
+  const out: Obj = { ...later }
+  for (const [k, v] of Object.entries(earlier)) {
+    const value = isObj(v) && isObj(out[k]) ? mergeFormats(out[k] as Obj, v) : v
+    Object.defineProperty(out, k, { value, writable: true, enumerable: true, configurable: true })
+  }
+  return out
+}
+
 /** Run the cross-view optimizations on an assembled spec (in place). `generated` tells the datasets this compiler numbered from the user's. */
-export function optimizeData(out: Obj, generated: (name: string) => boolean): void {
+export function optimizeData(out: Obj, generated: (name: string) => boolean, named: (name: string) => boolean = () => true): void {
   if (!Array.isArray(out.data) || out.data.length < 2) return
+  mergeIdenticalSources(out, named)
   mergeBins(out)
   mergeIdenticalDatasets(out, generated)
   mergeAggregates(out, generated)

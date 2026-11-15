@@ -19,13 +19,31 @@
  */
 import { compileChart } from './compiler.js'
 import { dict, ownGet } from './util.js'
-import { dataInputOf } from './spec-structure.js'
-import { evaluateChartPending, type DataStability } from './runtime.js'
-import { incrementalEngine } from './incremental-engine.js'
+import { dataInputOf, valuesSignal } from './spec-structure.js'
+import { evaluateChartPending, type DataStability, type IncrementalEngine } from './runtime.js'
+import { applyOneWithState } from './incremental-state.js'
+import { optionalPart } from './engine-parts.js'
 import { refId, valueKey } from './fingerprint.js'
+import { formatEnvironmentKey } from './locale.js'
 import { checkSpecLimits, checkSceneLimits, createLimitClock, withLimits, activeMeter } from './limits.js'
 import { diffRows, type DataPulse } from './pulse.js'
+import { checkChartRows } from './row-watch.js'
 import type { CompiledChart, RuntimeInput, SceneRoot, VgSpec } from './types.js'
+
+/**
+ * The incremental engine a session evaluates with: the step that runs from scratch, and the pulse path from its slot, which the
+ * entry that makes sessions (`@aster-charts/core/dom`) fills and the React shells fill on demand (engine-parts.ts). Read at each
+ * evaluation, so the evaluation after the pulse path arrives takes it.
+ */
+function sessionEngine(): IncrementalEngine {
+  const pulse = optionalPart('pulse')
+  return pulse ? { applyOneWithState, applyPipelineWithPulse: pulse.applyPipelineWithPulse } : WITHOUT_PULSE
+}
+const WITHOUT_PULSE: IncrementalEngine = { applyOneWithState }
+
+/** The build's environment, as bundlers write it in (`process.env.NODE_ENV`); `process` may not exist at all (an unbundled import). */
+declare const process: { env: { NODE_ENV?: string } }
+
 
 /**
  * Fingerprint of a dataset value: object/array values by IDENTITY (the caveat in
@@ -54,7 +72,8 @@ export function skeletonOf(spec: VgSpec): string {
   const strip = (d: unknown): unknown => {
     if (!d || typeof d !== 'object') return d
     const values = (d as { values?: unknown }).values
-    return values ? { ...(d as object), values: ROWS_MARKER } : d
+    // (a `{signal}` values is code, part of the chart: it stays as it is)
+    return values && valuesSignal(values) === undefined ? { ...(d as object), values: ROWS_MARKER } : d
   }
   if (Array.isArray(data)) {
     stripped = data.map(strip)
@@ -80,7 +99,8 @@ function dataKeyOf(spec: VgSpec, input: RuntimeInput, out: string[]): void {
   for (const d of lists) {
     if (typeof d.name !== 'string') continue
     const override = ownGet(input.data, d.name)
-    const vals = override ?? d.values
+    // (rows a `{signal}` values makes follow the signals, which the key has already)
+    const vals = override ?? (valuesSignal(d.values) === undefined ? d.values : undefined)
     if (vals == null) continue
     out.push(`${d.name}:${dataRefKey(vals)}`)
   }
@@ -101,7 +121,8 @@ function rawDatasets(spec: VgSpec, input: RuntimeInput): Map<string, unknown> {
     // for them are ignored by the runtime too.
     if (dataInputOf(d) === 'source') continue
     const override = ownGet(input.data, d.name)
-    const values = override !== undefined ? override : d.values
+    // (a `{signal}` values is not rows: the evaluation makes them from the signal, as vega's dynamic loader does)
+    const values = override !== undefined ? override : valuesSignal(d.values) === undefined ? d.values : undefined
     if (values != null) out.set(d.name, values)
   }
   for (const [name, rows] of Object.entries(input.data ?? {})) {
@@ -173,6 +194,8 @@ export interface ChartSession {
 function metaKeyOf(skeleton: string, input: RuntimeInput): string {
   const parts: string[] = []
   parts.push(`w=${valueKey(input.width)}`, `h=${valueKey(input.height)}`)
+  // a scene made under another default locale or in another time zone formats its text and dates otherwise
+  parts.push(`fmt=${formatEnvironmentKey()}`)
   // `containerSize()` is read by the spec's width / height signals: a resized container is a different view
   if (input.containerSize) parts.push(`cs=${valueKey(input.containerSize)}`)
   if (input.measuredSize) parts.push(`ms=${valueKey(input.measuredSize)}`)
@@ -194,9 +217,8 @@ function metaKeyOf(skeleton: string, input: RuntimeInput): string {
 }
 
 /** Fingerprint a spec + input for the no-op cache (skeleton + data refs + size/signals). */
-function fingerprint(spec: VgSpec, input: RuntimeInput): string {
+function fingerprint(spec: VgSpec, input: RuntimeInput, skeleton: string = skeletonOf(spec)): string {
   const parts: string[] = []
-  const skeleton = skeletonOf(spec)
   dataKeyOf(spec, input, parts)
   return `${metaKeyOf(skeleton, input)}\u0000${parts.join('\u0001')}`
 }
@@ -321,10 +343,16 @@ export function createChartSession(): ChartSession {
   const evaluateOnce = (spec: VgSpec, input: RuntimeInput = {}): SceneRoot => {
     const clock = activeMeter()?.clock ?? createLimitClock(input.limits)
     if (input.limits) checkSpecLimits(spec as unknown as Record<string, unknown>, input.limits, input)
+    // (development builds: rows changed in place since the last evaluation are warned about, see row-watch.ts)
+    try {
+      if (process.env.NODE_ENV !== 'production') checkChartRows(session, spec, input as never)
+    } catch (e) {
+      if (typeof process !== 'undefined') throw e
+    }
     clock.check('compile')
     const skeleton = skeletonOf(spec)
     const metaKey = metaKeyOf(skeleton, input)
-    const key = fingerprint(spec, input)
+    const key = fingerprint(spec, input, skeleton)
     const currentRaw = rawDatasets(spec, input)
     const { input: effectiveInput, pulse } = withAutoPulse(spec, input, currentRaw)
     // An explicit change description (per-datum changeset, pulse, or a named
@@ -354,7 +382,7 @@ export function createChartSession(): ChartSession {
     const chart = recompile ? compileChart(spec) : lastChart!
     clock.check('compile')
     // (a chart compiled anew has no state to keep steps from)
-    const pending = evaluateChartPending(incrementalEngine, chart, { ...effectiveInput, data: dataInput(currentRaw) }, recompile ? undefined : stableData(input, currentRaw, pulse))
+    const pending = evaluateChartPending(sessionEngine(), chart, { ...effectiveInput, data: dataInput(currentRaw) }, recompile ? undefined : stableData(input, currentRaw, pulse))
     clock.check('evaluate')
     if (input.limits) checkSceneLimits(pending.scene, input.limits)
     pending.commit()
@@ -379,10 +407,15 @@ export function createChartSession(): ChartSession {
     // Start from the data the last evaluation (or change) left behind; the
     // host's `data` overrides win. A datum the host does not mention keeps its
     // current value rather than reverting to the spec's original one.
+    try {
+      if (process.env.NODE_ENV !== 'production') checkChartRows(session, lastSpec, input as never)
+    } catch (e) {
+      if (typeof process !== 'undefined') throw e
+    }
     const currentRaw = new Map(lastRaw)
     for (const [name, rows] of Object.entries(input.data ?? {})) currentRaw.set(name, rows)
     const { input: effectiveInput, pulse } = withAutoPulse(lastSpec, input, currentRaw)
-    const pending = evaluateChartPending(incrementalEngine, lastChart, { ...effectiveInput, data: dataInput(currentRaw) }, stableData(input, currentRaw, pulse))
+    const pending = evaluateChartPending(sessionEngine(), lastChart, { ...effectiveInput, data: dataInput(currentRaw) }, stableData(input, currentRaw, pulse))
     clock.check('change')
     if (input.limits) checkSceneLimits(pending.scene, input.limits)
     pending.commit()
@@ -390,17 +423,18 @@ export function createChartSession(): ChartSession {
     lastScene = pending.scene
     // Every key follows the state that was just committed, or the no-op cache
     // would serve a scene built for different inputs.
-    lastKey = fingerprint(lastSpec, { ...effectiveInput, data: dataInput(currentRaw) })
+    lastKey = fingerprint(lastSpec, { ...effectiveInput, data: dataInput(currentRaw) }, lastSkeleton)
     lastMetaKey = metaKeyOf(lastSkeleton, effectiveInput)
     lastRaw = currentRaw
     lastPulse = pulse
     return lastScene
   }
 
-  return {
+  const session: ChartSession = {
     evaluate: (spec, input = {}) => withLimits(input.limits, () => evaluateOnce(spec, input)),
     change: (input = {}) => withLimits(input.limits, () => changeOnce(input)),
     last: () => (lastChart && lastScene ? { chart: lastChart, scene: lastScene } : null),
     pulse: () => lastPulse,
   }
+  return session
 }

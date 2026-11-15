@@ -30,6 +30,22 @@ export function dataInputOf(def: { values?: unknown; url?: unknown; source?: unk
   return def.values ? 'values' : def.url ? 'url' : def.source ? 'source' : 'none'
 }
 
+/**
+ * The expression a dataset's `values` is, when it is one: a `{signal}` (vega-parser's `isSignal(data.values)`, what the runtime
+ * evaluates). Anything else -- rows, a GeoJSON object -- is data, never read as an expression, however its fields are named.
+ */
+export function valuesSignal(values: unknown): string | undefined {
+  const signal = values !== null && typeof values === 'object' && !Array.isArray(values) ? (values as { signal?: unknown }).signal : undefined
+  return typeof signal === 'string' ? signal : undefined
+}
+
+/** A dataset definition as far as it can be code: its rows (`values` that are not a `{signal}`) left out. */
+export function dataWithoutRows<T extends { values?: unknown }>(d: T): T {
+  if (d.values === undefined) return d
+  const signal = valuesSignal(d.values)
+  return { ...d, values: signal === undefined ? undefined : { signal } }
+}
+
 const SCOPE_LISTS = ['signals', 'projections', 'scales', 'data', 'axes', 'marks', 'legends'] as const
 
 const isRecord = (v: unknown): v is Record<string, unknown> => v !== null && typeof v === 'object' && !Array.isArray(v)

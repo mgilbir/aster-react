@@ -202,7 +202,9 @@ describe('a selection bound to the legend', () => {
   it('keeps the points and the scales while the legend selection stays', () => {
     walk(spec, [
       { what: 'a signal nothing reads', input: at(ROWS, [], 2), marks: { marks: true }, scales: 'all', items: { marks: N } },
-      { what: 'a category chosen', input: at(ROWS, chosen('k2'), 2), marks: { marks: false }, scales: 'all', items: { marks: 0 } },
+      // (the mark is made again over the same rows with only its opacity evaluated again: a point of the chosen category keeps its
+      // opacity, 1, and is the point before; the others are new)
+      { what: 'a category chosen', input: at(ROWS, chosen('k2'), 2), marks: { marks: false }, scales: 'all', items: { marks: ROWS.filter((r) => r.c === 'k2').length } },
       { what: 'a signal nothing reads, a category chosen', input: at(ROWS, chosen('k2'), 3), marks: { marks: true }, scales: 'all' },
       { what: 'another category added', input: at(ROWS, chosen('k2', 'k3'), 3), marks: { marks: false }, scales: 'all' },
       // (the filter of the dataset publishes a pulse with a mapping, over which the color scale's census does not advance; the settings

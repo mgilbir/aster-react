@@ -3,6 +3,140 @@
 Version 0.1.0 is the first release. From 0.1.0 on, entries are added per release under Added, Changed
 and Fixed, per package. Everything built before the first release is in [Pre-release history](#pre-release-history) below.
 
+## Unreleased
+
+### `@aster-charts/core`
+
+#### Changed (breaking)
+
+- **A row that is `null` or `undefined` is an error, as in vega.** 0.3.0 drew such a row: it read it as `{data: null}`
+  (or boxed it, for a `{signal}` values), so it was drawn and counted in aggregates (`count`, a stack, a domain). vega fails
+  on it, and Aster now fails where vega fails, with the same class of error (`TypeError`) and a message of its own that names
+  the dataset, the row and where it came from: thrown for a spec's inline `values`, the host's `data` and `dataChanges`, and by
+  a stream's `push`; logged, with the pass stopped where vega's stops, for a group's inline values, `setdata` and the mark that
+  joins a row a `{signal}` values made. To keep such rows out, filter them before passing the data (`rows.filter((r) => r != null)`).
+  See `docs/ERRORS.md`, "Rows that are null or undefined".
+
+#### Fixed
+
+- Every scene item has the `datum` vega gives it. The item of a mark without `from` had none (vega: a generated `{}`, which its
+  encode already read); an axis' ticks, labels and grid lines now carry their tick tuple and its domain and title the axis datum,
+  a legend's symbols, labels and bands their entry, its title and gradient the legend datum, a title's texts the title's `{}`, and
+  the axis, legend and title group items their own datum; a legend entry's box is vega's entry group item (`{index, count}`, and
+  `item().items` holds its symbol and label, as vega's legend click handlers read them). A group item keeps its `tooltip`.
+  `event.item.mark.name` is the name the spec gave the mark (a mark it did not name has none, so `@marks:click` no longer
+  matches it), and an axis or legend part's `mark.role` is vega's (`axis-label`, `legend-symbol`...).
+- The hit index picks what vega picks: the topmost item whose painted geometry contains the point, with no pointing slack. A
+  2px tolerance around every item made a dense chart report a point drawn later whose edge was a fraction of a pixel away instead
+  of the point under the pointer (on a 10,000-point scatter, the circle 0.19px away). A stroke is hit as it is painted (half its
+  width, its caps and joins), a symbol with only a stroke by its ring, an item with neither a fill nor a stroke not at all, a
+  transparent stroke like a transparent fill; a rect no longer wins over the marks drawn after it in a group; clips and the view's
+  own edge bound what is picked; a stroked trail takes the pointer along its stroke; and `pick` (vega's `event.item`) reports a
+  line, an area or a trail as its first item, as vega does. With a picker, the event loop takes `event.item` from it alone, not
+  from the DOM element under the pointer.
+- A spec whose autosize is `none` keeps its own size when a host passes the container it measured (`measuredSize`): in Vega its
+  whole size is its `width`, `height` and `padding`, and vega-embed draws it so in any container; it was filled to the container
+  with autosize `fit`, which shrank its plot to make room for the guides (the chart-bench frame, 824 x 536 at 56,20 in a 900 x 600
+  box, was drawn 786 x 499 at 92,25). `StreamBatch` takes `containerSize` and `measuredSize`.
+- `HitIndex.tooltip(x, y)` is the item vega's tooltip handler is called with (the topmost item that takes the pointer; a line,
+  an area or a trail resolved to one of its items as vega resolves it); `HitTarget` says what was hit (`kind`) and whether the
+  item's mark reads a dataset (`fromData`). `queryMark` returns the items of a mark without `from` like any other's.
+- A group item with `noBound` leaves its clipped content out of its bounds, as vega's bound pass does: its children no longer
+  size the view under autosize `pad` or `fit` (corpus entry `group-nobound`), and the pointer picks within the group's bounds.
+- `isTuple` is true for what vega's dataflow made a tuple (a dataset's rows, each transform's rows, a mark's datum and a mark
+  without `from`'s `{}`, the copies of a mark's items another mark is made from, a group item's datum, an axis', a legend's and
+  a title's data) and false for anything else; it was false almost everywhere. Nothing is stamped on a row to say so, and only
+  a chart that asks `isTuple` of something other than Vega-Lite's `group()` and `facet` keeps track of them.
+- `parent` is the datum of the group item around a mark whatever made it: in a group mark without `from` nested in a facet cell
+  it was the cell's datum, where vega gives the plain group's `{}` (corpus entry `group-parent-plain`).
+- Autosize `none` containing the padding with a size smaller than the padding (no `width` at all, say) keeps vega's negative
+  view: the scales, the grid and the root group's box are laid out on it and the axes placed as on a 0-wide view, in an svg of
+  `max(0, size)`; Aster clamped the view to 0 and drew a padding-sized svg without the axes (corpus entry
+  `autosize-none-padding-unsized`, promoted from the probes).
+- On the SVG, a `pointerout` / `mouseout` / `dragleave` is about the item the pointer leaves, as vega's (the element it is
+  dispatched to): it was about the item under its new point, so `@bars:mouseout` did not fire when the pointer left a bar for
+  empty space or left the chart. `event.vegaType` is the type the stream listens to, as in vega.
+- A scene a session hands back unchanged, and every mark or scale kept from an earlier evaluation, is formatted under the
+  default locale and in the time zone in use: after `defaultLocale(...)`, or a change of the host's time zone, the next
+  evaluation formats afresh (it kept showing the old text until the data or signals changed).
+
+#### Added
+
+- `createCanvasEvents(canvas)` (`@aster-charts/core/canvas`): the canvas renderer's events for the signal event loop
+  (`bindSceneSignals(canvas, scene, signals, hooks, { pick, events })`), resolved as vega's canvas handler resolves them: an
+  event is about the item the last `pointermove` picked, a move that changes item is also the out and over of the two, every
+  `pointermove` is also a `mousemove`, a click counts only on the item pressed, a touch is about the item it started on. The
+  hovered item outlives a re-bind (a new scene's item at the same place stands for it; one gone from the scene is not left).
+  `bindSceneSignals` takes any rendered element (the svg or the canvas).
+
+#### Performance
+
+- **A signal change re-does only the work downstream of it.** A top-level group mark (a facet, Vega-Lite's colour-grouped lines
+  and areas) whose subtree reads nothing that changed is kept whole; a mark over the rows its items were made from evaluates
+  again only the channels that read what changed, and an item whose re-evaluated channels come out as they were is the item
+  before; a mark drawn from another mark's items (Vega-Lite's voronoi) is kept when what it reads of them is as it was. What is
+  derived from a scene -- the hit index, the DOM descriptors, the accessible tree's boxes, `event.item`'s parent links, the
+  cursor check -- is kept with the engine's nodes and costs what a scene made anew. On the chart-bench heavy survival chart a
+  60-move pointer sweep in Chromium costs about half the CPU it did with the Vega spec (603 -> 314 ms) and a quarter with the
+  Vega-Lite spec (4,204 -> 1,043 ms); see docs/ARCHITECTURE.md for what each reuse reads.
+- A dense hit index answers its first queries by a scan of the item boxes and builds its grid when asked more; a path item's
+  outline is placed when a query first reaches its box.
+- **A pointer move re-does less around the scene too.** The view's axes are kept from the evaluation before when nothing they are
+  made from changed, and the DOM patcher and the hit index keep what they made of a kept axis and of a mark's kept group items; a
+  filter or a sort over another dataset's rows copies only the rows it returns; binding the event loop no longer reads every point
+  of every leaf mark. On the chart-bench heavy survival chart (five alternating pairs, Chromium, one 60-move sweep each, CPU-busy
+  median) the Vega spec's sweep costs 245 ms where it cost 295, the Vega-Lite spec's 875 where it cost 976; the vega arms moved
+  by 3 % or less.
+- `paintsSameAs(snapshot, scene)` (`@aster-charts/core/canvas`): whether a scene paints exactly the pixels already on the canvas.
+- **Less again per pointer move.** A filter's or a formula's loop over its rows reads each signal its expression names once per
+  pass, when nothing in the pass can write one (the interpreted predicate `hoverX != null && datum.x <= hoverX` went from about
+  27 to 8-13 ns a row); the state an aggregate, joinaggregate, collect or flatten leaves for the next pulse is made of what the
+  step computed as it ran instead of reading every row again; binding the event loop again on the same element for the same
+  chart compiles no expression again; and the view's legends and title, and every guide of a group mark, are kept from the
+  evaluation before when nothing they are made from, or placed against, changed. On the chart-bench heavy survival chart (five
+  alternating pairs, Chromium, one 60-move sweep each, CPU-busy median) `<Chart>`'s sweep costs 229 ms where it cost 246, the
+  canvas renderer's 230 where it cost 239; the Vega-Lite spec, the scatter chart, every mount and the vega control moved by 2 %
+  or less.
+
+### `@aster-charts/react`
+
+#### Performance
+
+- `<Chart renderer="canvas">` paints nothing for a scene that paints the pixels already on the canvas (a pointer move that changes
+  only a tooltip): the chart-bench survival chart's canvas sweep costs 247 ms where it cost 692 (vega's canvas: 537).
+- A pointer move that only moves the tooltip renders the tooltip, not the chart; a scene that leaves the accessible tree as it
+  was renders none of the accessible overlay.
+- **A chart loads only the parts of the engine it uses.** The legend builder, the grid layout, the SVG path reader (custom
+  symbol shapes, path marks), vega-selections' functions, the regular-expression screen (under `limits`), the pulse path
+  of the incremental engine (once a chart's data changes), `intersect()`, `modify()` / `setdata()`, `timer` streams and,
+  for `renderer="canvas"`, the canvas renderer are chunks the shells import when a spec needs them, suspending meanwhile as
+  for the add-ons (the first commit is the `<Suspense>` fallback, never a half-made chart). In a browser build `<Chart>`
+  is 209.1 kB gzip up front (235.0 before), `useChart` 165.9 (180.8), `<SvgChart>` 188.0 (203.2); the chart-bench `<Chart>`
+  app's library cost (Vite) is 202.3 kB (225.4, measured on the layer below the hover finish). A chart that needs none of these fetches nothing; mount CPU is within 3%
+  either way. Outside a browser build (the `browser` export condition) every part is there, so a server render draws what it
+  drew; `@aster-charts/core`'s synchronous API carries every part as before.
+
+#### Fixed
+
+- `<Chart renderer="canvas">` binds the spec's event loop, as vega's canvas renderer does: `signal.on` streams of every form,
+  `event.item` / `item()` / `group()`, Vega-Lite selections (point, interval, nearest, bound scales, legend bindings, bound
+  inputs) and `setSignal` with its dependent updates, which were SVG-only (a chart-bench survival chart, whose tooltip reads a
+  `pointermove` signal, showed no tooltip on canvas). The pointer of the tooltip, the cursor, a click and pan / zoom is read in
+  the canvas's own box (it was the chart container's, a border or padding on the canvas away). At a device pixel ratio of 1
+  the canvas has no CSS size, as vega's: a host's CSS sizes it as an image (`max-width` with `height: auto` keeps its
+  proportions) and the pointer maps by that box.
+
+- A tooltip shows the item vega shows: the topmost item that takes the pointer. A tooltip encoded on a mark without `from` (a
+  transparent hover target, the usual way to give a Vega chart's empty plot a tooltip) never showed; a group item's tooltip
+  (a facet cell) and an interactive axis, legend or title part's never showed either; a data mark drawn under a mark without
+  `from` showed through it; a falsy tooltip value (`0`, `false`) showed, where vega shows none. `renderTooltip` is called for
+  an item with a `tooltip` value or made from a data row. A click (`onPointSelect`, a point `SelectValue`) selects vega's event
+  item when it is an item of a mark (a mark without `from` gives `{}`), and nothing under it.
+- `<ChartStream>` and `<ChartWorkerStream>` without size props size the stream to the container they measure, as `<Chart>` sizes
+  its own evaluation (they drew the spec at its own size, and Vega-Lite's `"container"` at its fallback size).
+- docs: `denseMarks` batches only opaque, unrotated symbols (a translucent symbol keeps its own element: one path composites
+  once where separate elements composite at every overlap), which is why a scatter with `fillOpacity` below 1 stays per item.
+
 ## 0.3.0 (2026-11-12)
 
 ### `@aster-charts/core`

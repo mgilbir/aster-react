@@ -1,17 +1,33 @@
 /**
- * SVG path-data parsing and replay, shared by the canvas renderer (canvas.ts) and the hit index (hit.ts).
+ * The one reader of SVG path text, and the replays of what it reads.
+ *
+ * Path text reaches the engine two ways, and the reader serves both with one grammar (vega-scenegraph `path/parse.js`'s, the
+ * observable one: what a number may look like, a one-digit arc flag, the error a malformed path throws):
+ *  - text a spec writes: a path mark's `path`, a custom symbol `shape` (a legend's symbols too). Vega reads it with that grammar,
+ *    so does `svgPathCommands`, which throws vega's `Invalid SVG path, ...` errors where vega's parser does. A canvas, the hit
+ *    index, `intersect()` and the label transform's occupancy draw a path mark's text as far as it reads (`drawnPathCommands`):
+ *    the commands before the first error, which is what a browser shows of the same text in vega's SVG, where the attribute is
+ *    the text as written.
+ *  - text the engine writes (an arc's, a rect's, a guide's, a geo shape's) and reads back to draw it on a canvas or to hit it
+ *    (`parsePathData`): the same grammar, and the words JavaScript prints for a number that is not finite (`NaN`, `Infinity`,
+ *    `-Infinity`) read as NaN where they stand. Vega draws those shapes into the canvas directly, which ignores a call with a
+ *    number that is not finite; read as NaN, the call is ignored the same way, and the flattener and the hit index leave the
+ *    point out of a box as the canvas leaves it out of the path (an infinite coordinate would make the box infinite).
+ *
+ * Two replays: `renderSvgPath` is vega-scenegraph `path/render.js` (what vega draws a spec's path text with: arcs as cubic
+ * beziers, a smooth curve after a straight segment reflecting the last control point it kept, scale and offset applied to the
+ * numbers before the arcs are computed); `tracePath` replays absolute segments (`parsePathData`) by the SVG rules, an arc as a
+ * canvas arc (vega draws the engine's own shapes through the canvas directly) or, asked, as vega's beziers.
  *
  * It lives apart from canvas.ts so that hit testing does not pull the renderer into a bundle: an app that uses
  * `@aster-charts/core/hit` (tooltips, point selection) but never draws to a canvas must not contain `@aster-charts/core/canvas`.
- * `@aster-charts/core/canvas` re-exports these names, so its public surface is unchanged.
+ * `@aster-charts/core/canvas` re-exports `parsePathData`, `tracePath`, `PathSeg` and `PathSink`, so its public surface is unchanged.
  */
 
-// ---------------------------------------------------------------------------
-// Path-data parsing: our geometry helpers emit SVG path data; the canvas
-// renderer replays the same commands so both backends share one geometry
-// source. Supports the subset vega/d3-shape emit: M L H V C S Q T A Z (+relative).
-// ---------------------------------------------------------------------------
+/** A command as written: its letter (upper case absolute, lower case relative) and its numbers. */
+export type PathCommand = [string, ...number[]]
 
+/** A command of `parsePathData`: absolute, a moveto's extra pairs as linetos. */
 export type PathSeg =
   | { cmd: 'M' | 'm'; x: number; y: number }
   | { cmd: 'L' | 'l'; x: number; y: number }
@@ -24,154 +40,152 @@ export type PathSeg =
   | { cmd: 'A' | 'a'; rx: number; ry: number; rot: number; large: number; sweep: number; x: number; y: number }
   | { cmd: 'Z' | 'z' }
 
-const ARG_COUNT: Record<string, number> = {
-  M: 2, L: 2, H: 1, V: 1, C: 6, S: 4, Q: 4, T: 2, A: 7, Z: 0,
-}
+// --- the grammar ------------------------------------------------------------------------------------------------------------
 
-/** Bounded cache: many marks reuse one path string (symbols, axes, legends). */
-const PATH_CACHE = new Map<string, PathSeg[]>()
-const PATH_CACHE_MAX = 4096
+/** How many numbers each command takes. */
+const ARITY: Readonly<Record<string, number>> = { m: 2, l: 2, h: 1, v: 1, z: 0, c: 6, s: 4, q: 4, t: 2, a: 7 }
+const NUMBER = /^[+-]?(([0-9]*\.[0-9]+)|([0-9]+\.)|([0-9]+))([eE][+-]?[0-9]+)?/
+/** What JavaScript prints for a number that is not finite (the engine's text may hold one; a spec's never reads as one). */
+const JS_WORD = /^(NaN|[+-]?Infinity)/
+const SEPARATOR = /^((\s+,?\s*)|(,\s*))/
+const FLAG = /^[01]/
 
+const isCommandLetter = (c: string): boolean => Object.hasOwn(ARITY, c.toLowerCase()) && c.length === 1
 
-/** Parse an SVG path `d` string into absolute-command segments. */
-export function parsePathData(d: string): PathSeg[] {
-  const cached = PATH_CACHE.get(d)
-  if (cached) return cached
-  const segs = parsePathDataUncached(d)
-  if (PATH_CACHE.size >= PATH_CACHE_MAX) PATH_CACHE.clear()
-  PATH_CACHE.set(d, segs)
-  return segs
-}
+/** How a malformed path is read: refused with vega's error, or read as far as it goes. */
+type OnError = 'throw' | 'stop'
 
-function parsePathDataUncached(d: string): PathSeg[] {
-  const segs: PathSeg[] = []
-  const re = /([MmLlHhVvCcSsQqTtAaZz])|(-?(?:\d*\.\d+|\d+)(?:[eE][+-]?\d+)?)/g
-  let m: RegExpExecArray | null
-  const tokens: string[] = []
-  while ((m = re.exec(d))) tokens.push(m[0] as string)
+/**
+ * Read path text into its commands. Text before the first command letter is not read; a command's numbers are everything up to the
+ * next command letter, read in groups of its arity (a group the text ends inside, or anything that is not a number, a separator or
+ * an arc flag where one goes, is an error: "incorrect parameter type"; a command with no numbers that needs some: "incorrect
+ * parameter count"). A moveto's extra groups are linetos, any other command's are the command again. With `onError: 'stop'` the
+ * reading ends at the first error, with every command read before it. `jsNumbers` reads `NaN` and `±Infinity` as NaN.
+ */
+function readCommands(d: string, onError: OnError, jsNumbers: boolean): PathCommand[] {
+  const out: PathCommand[] = []
+  const n = d.length
   let i = 0
-  let cmd = ''
-  const next = (): number => {
-    const t = tokens[i++]
-    return t == null ? NaN : Number(t)
-  }
-  while (i < tokens.length) {
-    const t = tokens[i] as string
-    if (/^[MmLlHhVvCcSsQqTtAaZz]$/.test(t)) {
-      cmd = t
-      i++
-      if (cmd === 'Z' || cmd === 'z') {
-        segs.push({ cmd: 'Z' })
-        continue
-      }
-    } else if (!cmd) {
-      i++
-      continue
+  while (i < n && !isCommandLetter(d[i]!)) i = skipWord(d, i, jsNumbers)
+  while (i < n) {
+    const cmd = d[i]!
+    let end = i + 1
+    while (end < n && !isCommandLetter(d[end]!)) end = skipWord(d, end, jsNumbers)
+    const type = cmd.toLowerCase()
+    const arity = ARITY[type]!
+    const read = readNumbers(type, arity, d.slice(i + 1, end).trim(), jsNumbers)
+    i = end
+    const count = read.numbers.length
+    if (read.failed || count < arity) {
+      if (onError === 'throw') throw new Error(read.failed ? 'Invalid SVG path, incorrect parameter type' : 'Invalid SVG path, incorrect parameter count')
+      // (as far as it reads: the groups before the error)
+      pushGroups(out, cmd, type, arity, read.numbers, count - (count % (arity || 1)))
+      break
     }
-    const up = cmd.toUpperCase()
-    const n = (Object.hasOwn(ARG_COUNT, up) ? ARG_COUNT[up] : undefined) ?? 0
-    const a: number[] = []
-    for (let k = 0; k < n; k++) a.push(next())
-    const rel = cmd !== cmd.toUpperCase()
-    const U = cmd.toUpperCase()
-    switch (U) {
-      case 'M':
-      case 'L': {
-        let x = a[0]!, y = a[1]!
-        if (rel && segs.length) {
-          const p = lastPoint(segs)
-          x += p.x; y += p.y
-        }
-        segs.push({ cmd: U === 'M' ? 'M' : 'L', x, y })
-        // implicit LineTo continuation for M
-        if (U === 'M') cmd = rel ? 'l' : 'L'
-        break
-      }
-      case 'H': {
-        let x = a[0]!
-        if (rel) x += lastPoint(segs).x
-        segs.push({ cmd: 'H', x })
-        break
-      }
-      case 'V': {
-        let y = a[0]!
-        if (rel) y += lastPoint(segs).y
-        segs.push({ cmd: 'V', y })
-        break
-      }
-      case 'C': {
-        let [c1x, c1y, c2x, c2y, x, y] = a as [number, number, number, number, number, number]
-        if (rel) {
-          const p = lastPoint(segs)
-          c1x += p.x; c1y += p.y; c2x += p.x; c2y += p.y; x += p.x; y += p.y
-        }
-        segs.push({ cmd: 'C', c1x, c1y, c2x, c2y, x, y })
-        break
-      }
-      case 'S': {
-        let [c2x, c2y, x, y] = a as [number, number, number, number]
-        if (rel) {
-          const p = lastPoint(segs)
-          c2x += p.x; c2y += p.y; x += p.x; y += p.y
-        }
-        segs.push({ cmd: 'S', c2x, c2y, x, y })
-        break
-      }
-      case 'Q': {
-        let [cx, cy, x, y] = a as [number, number, number, number]
-        if (rel) {
-          const p = lastPoint(segs)
-          cx += p.x; cy += p.y; x += p.x; y += p.y
-        }
-        segs.push({ cmd: 'Q', cx, cy, x, y })
-        break
-      }
-      case 'T': {
-        let x = a[0]!, y = a[1]!
-        if (rel) {
-          const p = lastPoint(segs)
-          x += p.x; y += p.y
-        }
-        segs.push({ cmd: 'T', x, y })
-        break
-      }
-      case 'A': {
-        let [rx, ry, rot, large, sweep, x, y] = a as [number, number, number, number, number, number, number]
-        if (rel) {
-          const p = lastPoint(segs)
-          x += p.x; y += p.y
-        }
-        segs.push({ cmd: 'A', rx, ry, rot, large, sweep, x, y })
-        break
-      }
+    pushGroups(out, cmd, type, arity, read.numbers, count)
+  }
+  return out
+}
+
+/** The next index to look at from `i`: past a JavaScript number word when those are read (its letters are not commands), else `i + 1`. */
+function skipWord(d: string, i: number, jsNumbers: boolean): number {
+  if (jsNumbers) {
+    const m = JS_WORD.exec(d.slice(i, i + 9))
+    if (m !== null) return i + m[0].length
+  }
+  return i + 1
+}
+
+/** The commands of `count` numbers of command `cmd`: the first group as written, the rest as linetos after a moveto, else repeats. */
+function pushGroups(out: PathCommand[], cmd: string, type: string, arity: number, numbers: number[], count: number): void {
+  if (arity === 0) { out.push([cmd]); return }
+  if (count === 0) return
+  out.push([cmd, ...numbers.slice(0, arity)])
+  const again = type === 'm' ? (cmd === 'M' ? 'L' : 'l') : cmd
+  for (let k = arity; k < count; k += arity) out.push([again, ...numbers.slice(k, k + arity)])
+}
+
+/** The numbers of one command's text, group by group; `failed` when something in it is not what goes there. */
+function readNumbers(type: string, arity: number, text: string, jsNumbers: boolean): { numbers: number[]; failed: boolean } {
+  const numbers: number[] = []
+  for (let at = 0; arity && at < text.length;) {
+    for (let k = 0; k < arity; ++k) {
+      const rest = text.slice(at)
+      const m = (type === 'a' && (k === 3 || k === 4) ? FLAG : NUMBER).exec(rest) ?? (jsNumbers ? JS_WORD.exec(rest) : null)
+      if (m === null) return { numbers, failed: true }
+      at += m[0].length
+      // (in the engine's text a number that is not finite is NaN: see the module's note)
+      const v = +m[0]
+      numbers.push(jsNumbers && !Number.isFinite(v) ? NaN : v)
+      const sep = SEPARATOR.exec(text.slice(at))
+      if (sep !== null) at += sep[0].length
     }
   }
-  return segs
+  return { numbers, failed: false }
+}
+
+// --- what reads it, cached --------------------------------------------------------------------------------------------------
+
+/** A bounded cache (cleared when full): many items share one path text (symbols, axes, legends). */
+function cached<T>(limit: number, make: (d: string) => T): (d: string) => T {
+  const cache = new Map<string, T>()
+  return (d) => {
+    let v = cache.get(d)
+    if (v === undefined) {
+      v = make(d)
+      if (cache.size >= limit) cache.clear()
+      cache.set(d, v)
+    }
+    return v
+  }
 }
 
 /**
- * Current point after a sequence of parsed segments. H/V carry only one
- * coordinate, so the other must be carried forward from the previous segment —
- * returning `{x, y: 0}` for an H (or `{x: 0, y}` for a V) makes the next
- * relative command jump to the origin (rect paths are `M…h…v…h…Z`).
+ * A spec's path text as vega's parser reads it: its commands, or vega's error (not cached, thrown every time). Shared: never write
+ * the commands.
  */
-function lastPoint(segs: PathSeg[]): { x: number; y: number } {
-  let x = 0
-  let y = 0
-  let startX = 0
-  let startY = 0
-  for (const s of segs) {
-    switch (s.cmd) {
-      case 'M': x = s.x; y = s.y; startX = x; startY = y; break
-      case 'L': case 'T': x = s.x; y = s.y; break
-      case 'H': x = s.x; break
-      case 'V': y = s.y; break
-      case 'C': case 'S': case 'Q': case 'A': x = s.x; y = s.y; break
-      case 'Z': x = startX; y = startY; break
+const readSpecPath = cached(4096, (d) => readCommands(d, 'throw', false))
+export const svgPathCommands = (path: string): PathCommand[] => {
+  // (vega reads the text with `path.match(...)`: a value that is no text -- a number, an object -- throws the TypeError the engine
+  // gives that call)
+  if (typeof path !== 'string') (path as { match(pattern: RegExp): unknown }).match(COMMAND_LETTERS)
+  return readSpecPath(path)
+}
+const COMMAND_LETTERS = /[mlhvzcsqta]/gi
+
+/** A spec's path text as far as it reads (see the module's note): what a canvas, the hit index and `intersect()` draw. Shared. */
+export const drawnPathCommands: (d: string) => PathCommand[] = cached(4096, (d) => readCommands(d, 'stop', false))
+
+/** Parse an SVG path `d` string (the engine's own text) into absolute segments. Shared: never write them. */
+export const parsePathData: (d: string) => PathSeg[] = cached(4096, (d) => segmentsOf(readCommands(d, 'stop', true)))
+
+/** Commands as absolute segments: a relative command is offset by the current point (a close returns it to its subpath's start). */
+function segmentsOf(commands: readonly PathCommand[]): PathSeg[] {
+  const segs: PathSeg[] = []
+  let x = 0, y = 0, startX = 0, startY = 0
+  for (const c of commands) {
+    const letter = c[0]
+    const rel = letter !== letter.toUpperCase()
+    const ox = rel ? x : 0
+    const oy = rel ? y : 0
+    const a = c as unknown as number[]
+    switch (letter.toUpperCase()) {
+      case 'M': x = a[1]! + ox; y = a[2]! + oy; startX = x; startY = y; segs.push({ cmd: 'M', x, y }); break
+      case 'L': x = a[1]! + ox; y = a[2]! + oy; segs.push({ cmd: 'L', x, y }); break
+      case 'H': x = a[1]! + ox; segs.push({ cmd: 'H', x }); break
+      case 'V': y = a[1]! + oy; segs.push({ cmd: 'V', y }); break
+      case 'C': segs.push({ cmd: 'C', c1x: a[1]! + ox, c1y: a[2]! + oy, c2x: a[3]! + ox, c2y: a[4]! + oy, x: (x = a[5]! + ox), y: (y = a[6]! + oy) }); break
+      case 'S': segs.push({ cmd: 'S', c2x: a[1]! + ox, c2y: a[2]! + oy, x: (x = a[3]! + ox), y: (y = a[4]! + oy) }); break
+      case 'Q': segs.push({ cmd: 'Q', cx: a[1]! + ox, cy: a[2]! + oy, x: (x = a[3]! + ox), y: (y = a[4]! + oy) }); break
+      case 'T': x = a[1]! + ox; y = a[2]! + oy; segs.push({ cmd: 'T', x, y }); break
+      case 'A': x = a[6]! + ox; y = a[7]! + oy; segs.push({ cmd: 'A', rx: a[1]!, ry: a[2]!, rot: a[3]!, large: a[4]!, sweep: a[5]!, x, y }); break
+      case 'Z': x = startX; y = startY; segs.push({ cmd: 'Z' }); break
     }
   }
-  return { x, y }
+  return segs
 }
+
+// --- replays ----------------------------------------------------------------------------------------------------------------
 
 /** The part of a 2D context that path tracing needs (so geometry consumers can flatten a path without a canvas). */
 export interface PathSink {
@@ -183,13 +197,17 @@ export interface PathSink {
   closePath(): void
 }
 
+/** What `renderSvgPath` draws on: a path sink without arcs (they are drawn as beziers). */
+export type BezierSink = Omit<PathSink, 'arc'>
+
+const DEG_TO_RAD = Math.PI / 180
+
 /**
- * vega-scenegraph path/arc.js (Inkscape svgtopdf): an SVG endpoint arc as cubic beziers of at most a quarter turn each. vega's canvas
- * draws an arc of a path string -- a path mark, a custom symbol shape -- this way, so does `tracePath` with `arcs: 'bezier'`.
- * Returns six numbers per bezier (c1x, c1y, c2x, c2y, x, y), absolute.
+ * vega-scenegraph path/arc.js (Inkscape svgtopdf): the SVG endpoint arc from (ox, oy) to (x, y) as cubic beziers of at most a
+ * quarter turn each, handed to `to` (absolute). The floating-point steps are vega's, in its order: the beziers are its, bit for bit.
  */
-export function arcBeziers(ox: number, oy: number, rx: number, ry: number, rotateX: number, large: number, sweep: number, x: number, y: number): number[] {
-  const th = (rotateX * Math.PI) / 180
+function arcBeziersTo(to: (c1x: number, c1y: number, c2x: number, c2y: number, x: number, y: number) => void, ox: number, oy: number, rx: number, ry: number, rotateX: number, large: number, sweep: number, x: number, y: number): void {
+  const th = rotateX * DEG_TO_RAD
   const sinTh = Math.sin(th)
   const cosTh = Math.cos(th)
   rx = Math.abs(rx)
@@ -214,6 +232,7 @@ export function arcBeziers(ox: number, oy: number, rx: number, ry: number, rotat
   let sfactorSq = 1 / d - 0.25
   if (sfactorSq < 0) sfactorSq = 0
   let sfactor = Math.sqrt(sfactorSq)
+  // (a flag compares by value, as vega's `==`: a parsed flag is a number, a hand-built segment may hold another type)
   // eslint-disable-next-line eqeqeq
   if (sweep == large) sfactor = -sfactor
   const xc = 0.5 * (x0 + x1) - sfactor * (y1 - y0)
@@ -221,11 +240,9 @@ export function arcBeziers(ox: number, oy: number, rx: number, ry: number, rotat
   const th0 = Math.atan2(y0 - yc, x0 - xc)
   const th1 = Math.atan2(y1 - yc, x1 - xc)
   let thArc = th1 - th0
-  const Tau = 2 * Math.PI
-  if (thArc < 0 && sweep === 1) thArc += Tau
-  else if (thArc > 0 && sweep === 0) thArc -= Tau
+  if (thArc < 0 && sweep === 1) thArc += 2 * Math.PI
+  else if (thArc > 0 && sweep === 0) thArc -= 2 * Math.PI
   const segs = Math.ceil(Math.abs(thArc / (Math.PI / 2 + 0.001)))
-  const out: number[] = []
   const b00 = cosTh * rx
   const b01 = -sinTh * ry
   const b10 = sinTh * rx
@@ -243,7 +260,132 @@ export function arcBeziers(ox: number, oy: number, rx: number, ry: number, rotat
     const by3 = yc + sin1
     const bx2 = bx3 + t * sin1
     const by2 = by3 - t * cos1
-    out.push(b00 * bx1 + b01 * by1, b10 * bx1 + b11 * by1, b00 * bx2 + b01 * by2, b10 * bx2 + b11 * by2, b00 * bx3 + b01 * by3, b10 * bx3 + b11 * by3)
+    to(b00 * bx1 + b01 * by1, b10 * bx1 + b11 * by1, b00 * bx2 + b01 * by2, b10 * bx2 + b11 * by2, b00 * bx3 + b01 * by3, b10 * bx3 + b11 * by3)
+  }
+}
+
+/**
+ * The beziers vega draws an SVG endpoint arc with (see `arcBeziersTo`): six numbers per bezier (c1x, c1y, c2x, c2y, x, y), absolute.
+ */
+export function arcBeziers(ox: number, oy: number, rx: number, ry: number, rotateX: number, large: number, sweep: number, x: number, y: number): number[] {
+  const out: number[] = []
+  arcBeziersTo((a, b, c, d, e, f) => { out.push(a, b, c, d, e, f) }, ox, oy, rx, ry, rotateX, large, sweep, x, y)
+  return out
+}
+
+/**
+ * Draw commands as vega-scenegraph `path/render.js` draws them, scaled by (sX, sY) and moved by (l, t). Forced by what vega draws,
+ * to the bit: every number of a command is scaled first (an arc's radii and end, not its rotation or flags); a relative command
+ * is offset by the current point and an absolute one is taken as it is; the offset is added last; an arc is its beziers
+ * computed from the moved points. A smooth curve reflects the control point the replay last kept, whatever the command before
+ * it was (`S`, `s` and `T`); only `t` looks at the command before it, which in a scaled replay is always read as a `t`, and
+ * which a path cannot start without (vega reads the letter of a command that is not there).
+ */
+export function renderSvgPath(sink: BezierSink, path: readonly PathCommand[], l = 0, t = 0, sX = 1, sY = sX): void {
+  const scaledReplay = sX !== 1 || sY !== 1
+  let previous: string | null = null
+  let x = 0, y = 0
+  // the control point kept for a smooth curve; the one a `t` made; the start of the subpath
+  let cx = 0, cy = 0
+  // (vega's starts unset: a `t` read as following a `t` before any did reflects nothing, NaN)
+  let tcx = NaN, tcy = NaN
+  let ax = 0, ay = 0
+  let ex: number, ey: number
+  const curve = (c1x: number, c1y: number, c2x: number, c2y: number, x3: number, y3: number): void => { sink.bezierCurveTo(c1x, c1y, c2x, c2y, x3, y3) }
+  for (const cmd of path) {
+    const c = (scaledReplay ? scaled(cmd, sX, sY) : cmd) as unknown as number[]
+    const letter = cmd[0]
+    switch (letter) {
+      case 'l': x += c[1]!; y += c[2]!; sink.lineTo(x + l, y + t); break
+      case 'L': x = c[1]!; y = c[2]!; sink.lineTo(x + l, y + t); break
+      case 'h': x += c[1]!; sink.lineTo(x + l, y + t); break
+      case 'H': x = c[1]!; sink.lineTo(x + l, y + t); break
+      case 'v': y += c[1]!; sink.lineTo(x + l, y + t); break
+      case 'V': y = c[1]!; sink.lineTo(x + l, y + t); break
+      case 'm': x += c[1]!; y += c[2]!; ax = x; ay = y; sink.moveTo(x + l, y + t); break
+      case 'M': x = c[1]!; y = c[2]!; ax = x; ay = y; sink.moveTo(x + l, y + t); break
+      case 'c':
+        ex = x + c[5]!; ey = y + c[6]!
+        cx = x + c[3]!; cy = y + c[4]!
+        sink.bezierCurveTo(x + c[1]! + l, y + c[2]! + t, cx + l, cy + t, ex + l, ey + t)
+        x = ex; y = ey
+        break
+      case 'C':
+        x = c[5]!; y = c[6]!
+        cx = c[3]!; cy = c[4]!
+        sink.bezierCurveTo(c[1]! + l, c[2]! + t, cx + l, cy + t, x + l, y + t)
+        break
+      case 's':
+        ex = x + c[3]!; ey = y + c[4]!
+        cx = 2 * x - cx; cy = 2 * y - cy
+        sink.bezierCurveTo(cx + l, cy + t, x + c[1]! + l, y + c[2]! + t, ex + l, ey + t)
+        cx = x + c[1]!; cy = y + c[2]!
+        x = ex; y = ey
+        break
+      case 'S':
+        ex = c[3]!; ey = c[4]!
+        cx = 2 * x - cx; cy = 2 * y - cy
+        sink.bezierCurveTo(cx + l, cy + t, c[1]! + l, c[2]! + t, ex + l, ey + t)
+        x = ex; y = ey
+        cx = c[1]!; cy = c[2]!
+        break
+      case 'q':
+        ex = x + c[3]!; ey = y + c[4]!
+        cx = x + c[1]!; cy = y + c[2]!
+        sink.quadraticCurveTo(cx + l, cy + t, ex + l, ey + t)
+        x = ex; y = ey
+        break
+      case 'Q':
+        ex = c[3]!; ey = c[4]!
+        sink.quadraticCurveTo(c[1]! + l, c[2]! + t, ex + l, ey + t)
+        x = ex; y = ey
+        cx = c[1]!; cy = c[2]!
+        break
+      case 't': {
+        ex = x + c[1]!; ey = y + c[2]!
+        if (previous === null) throw new TypeError("Cannot read properties of null (reading '0')")
+        const before = scaledReplay ? 't' : previous
+        if (!/[QqTt]/.test(before)) { cx = x; cy = y }
+        else if (before === 't') { cx = 2 * x - tcx; cy = 2 * y - tcy }
+        else if (before === 'q') { cx = 2 * x - cx; cy = 2 * y - cy }
+        tcx = cx; tcy = cy
+        sink.quadraticCurveTo(cx + l, cy + t, ex + l, ey + t)
+        x = ex; y = ey
+        cx = x + c[1]!; cy = y + c[2]!
+        break
+      }
+      case 'T':
+        ex = c[1]!; ey = c[2]!
+        cx = 2 * x - cx; cy = 2 * y - cy
+        sink.quadraticCurveTo(cx + l, cy + t, ex + l, ey + t)
+        x = ex; y = ey
+        break
+      case 'a':
+        arcBeziersTo(curve, x + l, y + t, c[1]!, c[2]!, c[3]!, c[4]!, c[5]!, c[6]! + x + l, c[7]! + y + t)
+        x += c[6]!; y += c[7]!
+        break
+      case 'A':
+        arcBeziersTo(curve, x + l, y + t, c[1]!, c[2]!, c[3]!, c[4]!, c[5]!, c[6]! + l, c[7]! + t)
+        x = c[6]!; y = c[7]!
+        break
+      case 'z': case 'Z': x = ax; y = ay; sink.closePath(); break
+    }
+    previous = letter
+  }
+}
+
+/** A command with its coordinates scaled (an arc's radii and end; its rotation and flags as they are). */
+function scaled(cmd: PathCommand, sX: number, sY: number): PathCommand {
+  const out: PathCommand = [cmd[0], 0, 0, 0, 0, 0, 0, 0]
+  const c = cmd as unknown as number[]
+  const o = out as unknown as number[]
+  switch (cmd[0]) {
+    case 'a': case 'A':
+      o[1] = sX * c[1]!; o[2] = sY * c[2]!; o[3] = c[3]!; o[4] = c[4]!; o[5] = c[5]!; o[6] = sX * c[6]!; o[7] = sY * c[7]!
+      break
+    case 'h': case 'H': o[1] = sX * c[1]!; break
+    case 'v': case 'V': o[1] = sY * c[1]!; break
+    default: for (let i = 1; i < cmd.length; ++i) o[i] = (i % 2 === 1 ? sX : sY) * c[i]!
   }
   return out
 }

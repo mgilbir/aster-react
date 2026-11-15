@@ -17,11 +17,11 @@ afterEach(() => {
   document.body.innerHTML = ''
 })
 
-function mount(signals: unknown[], data: unknown[] = [{ name: 'store' }]): { svg: SVGSVGElement; scene: ReturnType<typeof evaluateChart> } {
+function mount(signals: unknown[], data: unknown[] = [{ name: 'store' }], input: Parameters<typeof evaluateChart>[1] = {}): { svg: SVGSVGElement; scene: ReturnType<typeof evaluateChart> } {
   const spec = { width: 100, height: 60, signals, data: [...data, { name: 't', values: [{ x: 1 }] }], marks: [] } as unknown as VgSpec
   const host = document.createElement('div')
   document.body.appendChild(host)
-  const scene = evaluateChart(compileChart(spec))
+  const scene = evaluateChart(compileChart(spec), input)
   host.innerHTML = renderSceneToSvg(scene)
   return { svg: host.querySelector('svg') as SVGSVGElement, scene }
 }
@@ -114,6 +114,34 @@ describe('modify in the signal event loop', () => {
     expect(rows).toEqual([{ c: 7 }, { c: 3 }])
     b2.detach()
   })
+
+  // The rows a dataset is given -- a spec's inline `values` (a compiled Vega-Lite spec hands the user's own rows through) or
+  // the host's `data` -- belong to the caller: modify edits the loop's own copy of a tuple, never the caller's object. A tuple
+  // the handlers still hold (a signal kept the row) goes on standing for its copy, as one tuple does in vega.
+  for (const where of ['inline values', 'host data'] as const) {
+    it(`modify never writes the caller's rows (${where}), and a held tuple keeps standing for its copy`, () => {
+      const given = Object.freeze([Object.freeze({ k: 1, v: 0 }), Object.freeze({ k: 2, v: 0 })])
+      const store = where === 'inline values' ? { name: 'store', values: given } : { name: 'store' }
+      const { svg, scene } = mount([
+        { name: 'held', init: 'data("store")[0]' },
+        { name: 'n', value: 0, on: [{ events: 'click', update: 'n + 1' }] },
+        on('modify("store", null, null, null, held, {"v": n * 10 + 5})'),
+      ], [store], where === 'host data' ? { data: { store: given as unknown as unknown[] } } : {})
+      const errors: unknown[] = []
+      let rows: unknown[] = []
+      const b = bind(svg, scene, {}, { logger: { error: (...a) => errors.push(a), warn: () => {} }, onData: (_n, r) => { rows = r } }, where === 'host data' ? { data: { store: given as unknown as unknown[] } } : {})
+      click(svg)
+      expect(errors).toEqual([])
+      expect(rows).toEqual([{ k: 1, v: 15 }, { k: 2, v: 0 }]) // (n is 1 when the modify runs: its handler comes first)
+      click(svg)
+      expect(errors).toEqual([])
+      // (with inline values `held` is the dataset's own first row, which the first click copied; with host data it is the scene's
+      // row, which stood for the host's equal row once and matches nothing after the edit -- what the engine did before)
+      expect(rows).toEqual([{ k: 1, v: where === 'inline values' ? 25 : 15 }, { k: 2, v: 0 }])
+      expect(given).toEqual([{ k: 1, v: 0 }, { k: 2, v: 0 }])
+      b.detach()
+    })
+  }
 
   it('outside the event loop modify is inert (a dataset transform cannot write a store)', () => {
     const spec = { width: 10, height: 10, signals: [{ name: 'r', update: 'modify("store", {"a": 1})' }], data: [{ name: 'store' }], marks: [] } as unknown as VgSpec

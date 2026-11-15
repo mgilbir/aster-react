@@ -4,10 +4,13 @@
  * placed against each other from the bounds of what was drawn, and the legend is sized to hold them. See guide-encode.ts for how a
  * property becomes a channel of an item.
  */
+import { markTuple, markTuples } from './util.js'
 import type { EncodeValue, SceneGroup, SceneItem } from './types.js'
 import { Bounds, boundLeaf, boundLegendGroup, boundStroke, multiLineOffset } from './bounds.js'
 import { placeGrid } from './trellis.js'
+import { LEGEND_SCALES } from './legend-scales.js'
 import { rectItemPath, symbolPath } from './render.js'
+import { boundFailure } from './bound-failure.js'
 import type { Locale } from './locale.js'
 import {
   DiscreteLegend, GradientLegend, SymbolLegend, isContinuous, isDiscretizing, labelFormat, labelFraction, labelValues, scaleFraction, tickCount,
@@ -23,8 +26,7 @@ import {
 type Rec = Record<string, unknown>
 type Scale = ((v: unknown) => unknown) & Rec
 
-/** The channels a legend can describe, in priority order: the first one the spec names gives the legend its scale. */
-export const LEGEND_SCALES = ['size', 'shape', 'fill', 'stroke', 'strokeWidth', 'strokeDash', 'opacity'] as const
+export { LEGEND_SCALES }
 
 /**
  * What kind of legend a spec makes: as it says, or from its scale. A legend for one color channel with no `type` is a gradient on a
@@ -459,6 +461,7 @@ export function buildLegend(inp: LegendBuildInput): LegendBuilt {
   const scales: Rec = {}
   for (const [channel, name] of inp.channels) scales[channel] = name
   const datum: Row = { title: spec.title != null, scales, type, vgrad: type !== SymbolLegend && vertical }
+  markTuple(datum)
   const groupDef = markOf(defs, 'group', () => ({ type: 'rule', role: 'legend', style: inp.encode.legend?.style, encode: groupEncode(k), interactive: false }))
   const group = encodeItem(groupDef, datum, {}, host, style) as unknown as Rec
   const partMeta: LegendBuilt['partMeta'] = {
@@ -474,6 +477,9 @@ export function buildLegend(inp: LegendBuildInput): LegendBuilt {
     const it = encodeItem(def, d, group, host, style) as SceneItem & Rec
     it._kind = def.type
     it._part = part
+    // (the item carries the tuple it was made from, as vega's do: the legend datum for the title and a gradient, an entry for a
+    // band or a label)
+    it.datum = d
     return it
   }
 
@@ -532,6 +538,7 @@ export function buildLegend(inp: LegendBuildInput): LegendBuilt {
     const labelsDef = markOf(defs, 'gradient-labels', () => stripLabels(k))
     // bands and labels are keyed by value: entries with one value make one item
     const keyed = joinByValue(entries as unknown as Row[])
+    markTuples(keyed)
     let strips: Array<SceneItem & Rec> = []
     let labels: Array<SceneItem & Rec> = []
     stage('strip', () => {
@@ -600,12 +607,18 @@ export function buildLegend(inp: LegendBuildInput): LegendBuilt {
 
   // the legend's own box, painted as a group item's background (a legend whose layout never ran has no size)
   const frame = host.groupBox(group as SceneItem, inp.raw ? 0 : width, inp.raw ? 0 : height)
-  const leaves: SceneItem[] = [{ ...frame.background, _part: 'bg' } as SceneItem]
+  // (the legend group item's bounds, what a gradient on its box is laid over on a canvas: its box and its stroke)
+  const legendBounds = bounds.empty() ? {} : { _itemBounds: { x1: bounds.x1, y1: bounds.y1, x2: bounds.x2, y2: bounds.y2 } }
+  const leaves: SceneItem[] = [{ ...frame.background, _part: 'bg', ...legendBounds } as SceneItem]
   // the entries were made in the entry group's frame; the scene holds them in the legend's
   for (const it of entryLeaves) {
     const r = it as Rec
     r.x = ((r.x as number) || 0) + entry.x
     r.y = ((r.y as number) || 0) + entry.y
+    // (vega draws what the entry group holds in that group's frame, an entry's symbol and label in the entry's: where a gradient
+    // painted as a pattern sits, see canvas.ts `Frame`)
+    const inner = r._frame as { x: number; y: number } | undefined
+    r._frame = { x: (inner?.x ?? 0) + entry.x, y: (inner?.y ?? 0) + entry.y }
     // the clip of a clipped symbol is its entry's box
     const clip = r._clip as { x: number; y: number; w: number; h: number; corners?: Rec; d?: string } | undefined
     if (clip) {
@@ -627,6 +640,8 @@ export function buildLegend(inp: LegendBuildInput): LegendBuilt {
     titleItem._legendTitle = true
     leaves.push(titleItem)
   }
+  // (stroked in front: the legend's stroke, drawn after all it holds)
+  if (frame.foreground) leaves.push({ ...frame.foreground, _part: 'fg', ...legendBounds } as SceneItem)
   return { leaves, legendType: type, width, height, bounds, group, partMeta, datum, ...(cutShort || host.stopped !== undefined ? { madeMarks } : {}), ...(failed.grid !== undefined ? { gridError: failed.grid } : {}) }
 }
 
@@ -708,7 +723,9 @@ function drawnSymbol(sym: SceneItem & Rec): SceneItem & Rec {
   const leaf: Rec = {}
   // (copied without `size` and `shape`: a `delete` would turn the leaf into a dictionary-mode object)
   for (const key in sym) if (key !== 'size' && key !== 'shape') leaf[key] = sym[key]
-  leaf.path = String(symbolPath(sym.shape as string | undefined, Math.sqrt(size) / 2))
+  // (a shape vega could not measure is not drawn here either: its renderers fail on it, and its canvas never reaches it)
+  if (sym._drawError !== undefined) leaf._unmeasured = true
+  else leaf.path = String(symbolPath(sym.shape as string | undefined, Math.sqrt(size) / 2))
   leaf._part = 'symbol'
   leaf._kind = 'symbol'
   return leaf as SceneItem & Rec
@@ -749,6 +766,7 @@ function symbolEntries(inp: LegendBuildInput, k: Kit, defs: LegendDefs, group: R
     type: entriesType, scale: inp.scale, count: inp.count, limit: inp.limit, values: inp.values, minstep: inp.minstep, size: roomOf,
     formatSpecifier: inp.formatSpecifier, formatType: inp.formatType, locale: inp.locale, warn: (m) => host.warn(m),
   })
+  markTuples(entries as unknown as Row[])
 
   // The entries are made by three operators each, ranked: the boxes of all the entries (one mark), then for every entry, in its own
   // instance, its symbol and its label. One that throws stops the pass: what comes after it is never made (see `EntryHost.stopped`).
@@ -756,7 +774,9 @@ function symbolEntries(inp: LegendBuildInput, k: Kit, defs: LegendDefs, group: R
     host.at = 'entry'
     host.entryIndex = i
     // the entry group's datum is the facet tuple `{index, count}`
-    return encodeItem(entryDef, { index: e.index, count: 1 }, group, host, style) as SceneItem & Rec
+    const facet: Row = { index: e.index, count: 1 }
+    markTuple(facet)
+    return encodeItem(entryDef, facet, group, host, style) as SceneItem & Rec
   })
   const made = entries.map((e, i) => {
     const g = boxes[i]!
@@ -769,6 +789,13 @@ function symbolEntries(inp: LegendBuildInput, k: Kit, defs: LegendDefs, group: R
       sym = encodeItem(symbols, e as unknown as Row, group, host, style) as SceneItem & Rec
       sym._kind = 'symbol'
       sym._part = 'symbol'
+      // the symbol mark's bounds: a shape vega cannot draw (a custom shape its path reader refuses) stops the pass there, the
+      // symbol made and its label not (see bound-failure.ts); its renderers fail on it as vega's do
+      const failure = host.stopped === undefined ? boundFailure('symbol', [sym]) : undefined
+      if (failure !== undefined) {
+        host.stopped = { error: failure.error, at: 'symbol', entryIndex: i }
+        sym._drawError = failure.error
+      }
       if (host.stopped === undefined) {
         host.at = 'label'
         lbl = encodeItem(labels, e as unknown as Row, group, host, style) as SceneItem & Rec
@@ -778,8 +805,15 @@ function symbolEntries(inp: LegendBuildInput, k: Kit, defs: LegendDefs, group: R
     }
     // what an entry holds: its symbol, its label, and its own box when it has a clip or a size
     const held = new Bounds()
-    if (sym !== undefined) {
+    if (sym !== undefined && sym._drawError === undefined) {
       const symbolBox = boundLeaf(new Bounds(), symbolForBounds(sym))
+      // (the symbol item's own bounds, in its own frame: what a gradient on it is laid over on a canvas, at full precision -- the path
+      // it is drawn with is printed rounded)
+      if (!symbolBox.empty()) {
+        const sx = (sym.x as number) || 0
+        const sy = (sym.y as number) || 0
+        sym._itemBounds = { x1: symbolBox.x1 - sx, y1: symbolBox.y1 - sy, x2: symbolBox.x2 - sx, y2: symbolBox.y2 - sy }
+      }
       // a clipped symbol has its bounds cut to the clip region: the entry group's box, whose width is still 0 at that point
       if (clipped) symbolBox.intersect(new Bounds().set(0, 0, 0, +(g.height as number)))
       held.union(symbolBox)
@@ -840,17 +874,28 @@ function symbolEntries(inp: LegendBuildInput, k: Kit, defs: LegendDefs, group: R
 
   for (const i of order) {
     const { e, g, sym, lbl, held } = made[i]!
-    // an item's datum is the entry it shows (what `datum.value` reads in a legend's click handlers)
-    const entryDatum = { value: e.value, label: e.label, index: e.index }
+    // The symbol and the label carry the entry they show, as vega's do. The entry's box stands for vega's entry group item, whose
+    // datum is the facet tuple `{index, count}` (a legend click handler reads the value off the entry's symbol instead,
+    // `item().items[0].items[0].datum.value`: the event loop gives the box those marks, see `entryMarks` in signals.ts).
+    const entryDatum = { index: e.index, count: 1 }
+    markTuple(entryDatum)
     const here = place[i]!
     const width = widths.get(columnOf(i)) ?? 0
     // the entry's box is as wide as its column and as tall as what it holds
     const frame = host.groupBox({ ...(g as SceneItem) } as SceneItem, inp.raw ? 0 : width, inp.raw ? 0 : held.y2)
-    const entryBox = { ...frame.background, _part: 'entry', x: here.x, y: here.y, datum: entryDatum } as SceneItem & Rec
+    // (the entry group item's bounds -- what it holds, its box only when it had a size then, its stroke -- are what a gradient on
+    // its box is laid over on a canvas)
+    const entryBounds = held.empty() ? {} : { _itemBounds: { x1: held.x1, y1: held.y1, x2: held.x2, y2: held.y2 } }
+    const entryBox = { ...frame.background, _part: 'entry', x: here.x, y: here.y, datum: entryDatum, ...entryBounds } as SceneItem & Rec
     // (the marks of the entry's instance the pass made: the symbol's, then the label's)
     if (lbl === undefined) entryBox._made = sym === undefined ? 0 : 1
     if (k.user.entries?.interactive === true) entryBox._hit = true
     if (g.cursor != null) entryBox.cursor = g.cursor
+    // (what vega's tooltip handler shows for the entry group item)
+    if (g.tooltip !== undefined) entryBox.tooltip = g.tooltip
+    // vega picks a group item only within its bounds: an entry whose box is not part of them (`noBound`, an entry with no
+    // `symbolHeight`... ) takes the pointer only where its symbol and its label reach
+    if (g.noBound && !held.empty()) entryBox._pickBounds = { x1: held.x1, y1: held.y1, x2: held.x2, y2: held.y2 }
     const aria = itemAriaOf(g)
     if (aria) entryBox.itemAria = aria
     if (g.href != null) entryBox.href = g.href
@@ -860,16 +905,20 @@ function symbolEntries(inp: LegendBuildInput, k: Kit, defs: LegendDefs, group: R
       drawn.x = ((sym.x as number) || 0) + here.x
       drawn.y = ((sym.y as number) || 0) + here.y
       if (clipped) drawn._clip = { x: here.x, y: here.y, w: width, h: held.y2, corners: cornersOf(g) }
-      drawn.datum = entryDatum
+      drawn.datum = e
+      drawn._frame = { x: here.x, y: here.y }
       if (k.user.symbols?.interactive === true && drawn.fill === 'transparent') drawn._hit = true
       out.push(drawn)
     }
     if (lbl !== undefined) {
-      lbl.datum = entryDatum
+      lbl.datum = e
       lbl.x = ((lbl.x as number) || 0) + here.x
       lbl.y = ((lbl.y as number) || 0) + here.y
+      lbl._frame = { x: here.x, y: here.y }
       out.push(lbl)
     }
+    // (stroked in front: the entry's stroke, drawn after its symbol and its label; it belongs to the entry box before it)
+    if (frame.foreground) out.push({ ...frame.foreground, _part: 'entryFg', x: here.x, y: here.y, ...entryBounds } as SceneItem)
   }
   return all
 }

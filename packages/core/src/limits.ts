@@ -157,6 +157,8 @@ export const HARD_CAPS = Object.freeze({
   bytes: 1_000_000,
   /** Positions one topology decode produces (an arc referenced by many geometries counts every time). */
   coords: 2_000_000,
+  /** Point-in-outline tests one `intersect()` of an arc or path item needs: the rows the outline spans in the region times its edges (vega tests every lattice point of the region instead). */
+  latticeTests: 50_000_000,
 })
 
 /** Which limits replace each ceiling: when one of them is set the caller's own budget governs. */
@@ -166,6 +168,8 @@ const CEILING_KEYS: Record<keyof typeof HARD_CAPS, ReadonlyArray<keyof SpecLimit
   items: ['maxItems'],
   bytes: ['maxStringLength', 'maxGeneratedBytes'],
   coords: ['maxRows', 'maxGeneratedRows'],
+  // (no limit stands for it: `maxTimeMs` bounds the walk too, but cooperatively)
+  latticeTests: [],
 }
 
 /** Whether the active scope carries a limit that replaces the built-in ceiling of `kind`. */
@@ -183,8 +187,10 @@ export function ceiling(kind: keyof typeof HARD_CAPS, n: number, what: string): 
   const cap = HARD_CAPS[kind]
   // (a count from 2^32 up already fails natively and at once, `Invalid array length`, before anything is allocated; the
   // ceiling keeps to the counts that would otherwise be allocated)
-  if (!(n > cap) || n >= 4294967296 || ceilingReplaced(kind, active?.limits)) return
-  throw limitViolation(`${what} ${n} > ${cap} (built-in ceiling that applies even without limits; raise it with limits.${CEILING_KEYS[kind][0]})`)
+  // (a work count is not allocated: it is refused at any size)
+  if (!(n > cap) || (kind !== 'latticeTests' && n >= 4294967296) || ceilingReplaced(kind, active?.limits)) return
+  const raise = CEILING_KEYS[kind][0]
+  throw limitViolation(`${what} ${n} > ${cap} (built-in ceiling that applies even without limits${raise ? `; raise it with limits.${raise}` : ''})`)
 }
 
 /** Ceiling on the objects and arrays one spec walk visits, so a spec that shares sub-objects (a DAG, built in code) cannot make the walk exponential. */
@@ -459,8 +465,9 @@ export function checkRegexPattern(pattern: string, flags = ''): void {
   const cap = Math.min(REGEX_MAX_PATTERN, active.limits.maxStringLength ?? REGEX_MAX_PATTERN)
   if (pattern.length > cap) over('maxStringLength', pattern.length, cap, 'regular expression pattern')
   // Static screen for catastrophic-backtracking shapes (heuristic; docs/LIMITS.md).
-  // Applied to every pattern, including RegExp objects a spec built or wrote as literals.
-  const hazard = regexHazard(pattern, flags)
+  // Applied to every pattern, including RegExp objects a spec built or wrote as literals. The screen is a part the React shells load
+  // on demand (engine-parts.ts): reading its slot throws when it is not loaded, so a pattern is refused, never run unscreened.
+  const hazard = part('regex').regexHazard(pattern, flags)
   if (hazard) {
     const shown = pattern.length > 80 ? pattern.slice(0, 80) + '...' : pattern
     throw limitViolation(`regexSafety: ${hazard}: /${shown}/`)
@@ -485,8 +492,22 @@ export function guardedRegExp(pattern: string, flags?: string): RegExp {
   return new RegExp(pattern, flags)
 }
 
-import { regexHazard } from './regex-screen.js'
-import { specList } from './spec-structure.js'
+/**
+ * `RegExp(pattern, flags)` as an expression calls it (vega's `regexp` and `test`), under the regex guard: a regular expression
+ * with no flags given is itself, one with flags is copied with them, and anything else is made text (`undefined` is the empty
+ * pattern; flags given as anything but `undefined` are text too, so `null` is the invalid flags "null").
+ */
+export function regExpOf(pattern?: unknown, flags?: unknown): RegExp {
+  if (pattern instanceof RegExp) {
+    if (flags === undefined) { checkRegexObject(pattern); return pattern }
+    return guardedRegExp(pattern.source, String(flags))
+  }
+  return guardedRegExp(pattern === undefined ? '' : String(pattern), flags === undefined ? undefined : String(flags))
+}
+
+import { part } from './engine-parts.js'
+import { dataInputOf, specList } from './spec-structure.js'
+import { ownGet } from './util.js'
 
 /** Pre-flight checks, run before compilation/evaluation allocates the scene. */
 export function checkSpecLimits(
@@ -529,8 +550,10 @@ export function checkSpecLimits(
     }
   }
 
-  // Rows: inline values of the top-level data AND of every nested group's data,
-  // plus the host's `input.data`. Safe to recurse now: depth and cycles are bounded.
+  // Rows: the rows the evaluation will ingest, each once. A top-level dataset's are the host's (`input.data` under its name), else its
+  // inline `values`: a host array replaces the inline rows, it does not add to them. A dataset derived from others (`source`) takes
+  // neither. Nested groups' inline rows, and host arrays under a name no top-level dataset has, count as they are.
+  // Safe to recurse now: depth and cycles are bounded.
   let rows = 0
   const maxRows = limits.maxRows
   const addRows = (n: number): void => {
@@ -557,11 +580,21 @@ export function checkSpecLimits(
       }
     }
   }
-  countData((spec as { data?: unknown }).data)
+  const hostData = input?.data && typeof input.data === 'object' ? input.data : undefined
+  const topNames = new Set<string>()
+  for (const d of specList((spec as { data?: unknown }).data)) {
+    if (!d || typeof d !== 'object') continue
+    const def = d as { name?: unknown; values?: unknown; url?: unknown; source?: unknown }
+    const name = typeof def.name === 'string' ? def.name : undefined
+    if (name !== undefined) topNames.add(name)
+    if (dataInputOf(def) === 'source') continue
+    const given = name !== undefined && hostData ? ownGet(hostData, name) : undefined
+    const rows = given !== undefined ? given : def.values
+    if (Array.isArray(rows)) addRows(rows.length)
+  }
   walkMarks((spec as { marks?: unknown }).marks)
-  const hostData = input?.data
-  if (hostData && typeof hostData === 'object') {
-    for (const v of Object.values(hostData)) if (Array.isArray(v)) addRows(v.length)
+  if (hostData) {
+    for (const [name, v] of Object.entries(hostData)) if (!topNames.has(name) && Array.isArray(v)) addRows(v.length)
   }
 }
 

@@ -9,7 +9,12 @@
  *   await import('@aster-charts/core/dom')     // lazy
  *
  * A string-mode host (renderSpec → SVG string) never needs it.
+ *
+ * It carries every part of the engine an evaluation can use, and the pulse path the session's re-evaluations take (engine-parts.ts),
+ * so that a session works for every spec with nothing else to load.
  */
+import './parts-evaluate.js'
+import './part-pulse.js'
 export {
   hasDenseSymbolMarks,
   patchSceneDom,

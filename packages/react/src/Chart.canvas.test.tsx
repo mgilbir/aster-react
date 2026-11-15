@@ -44,13 +44,39 @@ forEachVariant(['svg', 'canvas'], (Chart, variant) => {
       })
       const canvas = container.querySelector('canvas')
       expect(canvas).not.toBeNull()
-      // Scene size = spec size + padding (autosize pad)
+      // Scene size = spec size + padding (autosize pad). At a pixel ratio of 1 the backing store is the canvas's size, as in
+      // vega's canvas renderer (no CSS size, so a host's CSS sizes it as an image)
       expect(Number(canvas!.getAttribute('width'))).toBe(210)
       expect(Number(canvas!.getAttribute('height'))).toBe(110)
-      expect(canvas!.style.width).toBe('210px')
+      expect(canvas!.style.width).toBe('')
+      expect(canvas!.style.height).toBe('')
       await act(async () => {
         root.unmount()
       })
+    })
+
+    it('at a pixel ratio of 2, a backing store twice the size and the scene size in CSS pixels', async () => {
+      const before = Object.getOwnPropertyDescriptor(window, 'devicePixelRatio')
+      Object.defineProperty(window, 'devicePixelRatio', { value: 2, configurable: true })
+      try {
+        const container = document.createElement('div')
+        document.body.appendChild(container)
+        const root = createRoot(container)
+        await act(async () => {
+          root.render(<Chart spec={makeSpec()} width={200} height={100} renderer="canvas" />)
+        })
+        const canvas = container.querySelector('canvas')!
+        expect(Number(canvas.getAttribute('width'))).toBe(420)
+        expect(Number(canvas.getAttribute('height'))).toBe(220)
+        expect(canvas.style.width).toBe('210px')
+        expect(canvas.style.height).toBe('110px')
+        await act(async () => {
+          root.unmount()
+        })
+      } finally {
+        if (before) Object.defineProperty(window, 'devicePixelRatio', before)
+        else delete (window as { devicePixelRatio?: number }).devicePixelRatio
+      }
     })
 
     it('emits no SVG markup in canvas mode', async () => {

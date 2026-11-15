@@ -5,37 +5,37 @@
  *
  * The renderer accepts a minimal 2D-context interface (`CanvasLike`), so it
  * runs against a real `CanvasRenderingContext2D`, an OffscreenCanvas context,
- * or a recording mock in tests. Geometry is traced by replaying SVG path data
- * (`parsePathData` + `tracePath`), which keeps canvas output bit-identical to
- * the SVG path by construction (line and area marks excepted: they are traced
- * from full-precision coordinates like vega's canvas; see `computeLinePath(group, exact)`).
+ * or a recording mock in tests. Geometry comes from the marks' shared geometry (geometry.ts), computed once and drawn as
+ * the segments of the path the SVG renderer writes (rects, symbols, trails: the same numbers as that text read back) or at
+ * full precision (lines and areas, like vega's canvas; arcs, drawn by the generator's own calls). Only path strings that come
+ * with the scene (a path mark's, a shape's, a legend leaf's, a group's clip) are parsed, once per distinct string.
  */
 import { SYMBOL_DEFAULT_SIZE } from './util.js'
 import type { SceneDef, SceneGroup, SceneItem, SceneRoot } from './types.js'
 import { gradientDefOf, isGradientPaint as isGradientObject } from './svg-defs.js'
-import { Bounds, boundLeaf, boundTypedMark } from './bounds.js'
+import { Bounds, boundLeaf, boundStroke, boundTypedMark } from './bounds.js'
 import { imageBox, itemImage } from './image-box.js'
-import { parsePathData, tracePath, type PathSeg, type PathSink } from './path-data.js'
+import { drawnPathCommands, parsePathData, renderSvgPath, tracePath, type PathSeg, type PathSink } from './path-data.js'
 
 // Path-data parsing and replay live in path-data.ts (hit.ts needs them without the renderer); the public surface is unchanged.
 export { parsePathData, tracePath, type PathSeg, type PathSink } from './path-data.js'
 // The bitmaps of image marks: the renderer draws `item.image` and never fetches; a host that shows url images loads them with these.
 export { IMAGE_CONCURRENCY, loadImages, sceneImageUrls, withSceneImages, type ImageLoadOptions } from './image-load.js'
 export type { ItemImage } from './image-box.js'
+// The canvas renderer's events for the signal event loop (which item an event is about, as vega's canvas handler resolves it).
+export { createCanvasEvents, type CanvasEvents } from './canvas-events.js'
 
 type SceneDefs = SceneDef
 import {
-  computeAreaPath,
-  computeLinePath,
+  lineStrokeWidth,
   num,
-  rectItemPath,
-  symbolPathExact,
   textItemDesc,
-  trailPath,
-  frameBackgroundPath,
+  frameBackgroundData,
   frameItem,
-  itemArcInto,
+  itemArcGeometry,
 } from './render.js'
+import { areaGeometry, lineGeometry, rectData, symbolGeometry, trailGeometry } from './geometry.js'
+import { arcSegs, curveExactSegs, drawCurveExact, segsOf, symbolExactSegs } from './geometry-read.js'
 
 /** Minimal 2D context surface used by the renderer. */
 export interface CanvasLike {
@@ -89,18 +89,8 @@ export interface GradientLike {
   addColorStop(offset: number, color: string): void
 }
 
-const SYMBOL_CACHE = new Map<string, string>()
-
-function cachedSymbolPath(shape: string | undefined, r: number): string {
-  const key = `${shape ?? 'circle'}|${r}`
-  let d = SYMBOL_CACHE.get(key)
-  if (d == null) {
-    d = symbolPathExact(shape, r)
-    if (SYMBOL_CACHE.size > 1024) SYMBOL_CACHE.clear()
-    SYMBOL_CACHE.set(key, d)
-  }
-  return d
-}
+/** The segments of a symbol shape at radius r, at full precision (what vega's canvas draws); cached per shape and radius. */
+const symbolSegs = (shape: string | undefined, r: number): PathSeg[] => symbolExactSegs(symbolGeometry(shape, r))
 
 /** Canonical form of parsed segments (shared by both parity sides). */
 export function canonicalPath(segs: PathSeg[]): string {
@@ -157,7 +147,7 @@ export function renderSceneToCanvas(scene: SceneRoot, ctx: CanvasLike, opts: Ren
   // Root frame background path: fill, stroke, dash, opacity and rounded
   // corners, from the same path the SVG renderer emits.
   ctx.beginPath()
-  const frameSegs = parsePathData(frameBackgroundPath(scene, plotW, plotH))
+  const frameSegs = segsOf(frameBackgroundData(scene, plotW, plotH))
   tracePath(ctx, frameSegs)
   paintPath(ctx, frameSegs, frameItem(scene), scene.defs, 'auto')
 
@@ -382,7 +372,8 @@ export function renderSceneToCanvasAppend(
       if (nItems.length < oldLen) return false
       // The very same group object is not a superseded one (its items are
       // live): an item re-encoded under it carries a newer `__gen`.
-      if (ng === pg) {
+      // (an array the engine advances in place stamps every in-place re-encode: `editedSince` below sees it without the scan)
+      if (ng === pg && (nItems as SceneItem[] & { __engineItems?: true }).__engineItems !== true) {
         for (let j = 0; j < oldLen; j++) {
           const gen = (nItems[j] as SceneItem & { __gen?: number }).__gen
           if (gen != null && gen > prev.gen) return false
@@ -432,6 +423,103 @@ export function renderSceneToCanvasAppend(
   return true
 }
 
+// ---------------------------------------------------------------------------
+// Dirty-region repaint
+// ---------------------------------------------------------------------------
+
+/**
+ * Keys of a scene item the canvas renderer never reads: what the item says to a pointer or a reader, not what it paints (its
+ * tooltip, link, cursor, description and ARIA). Two items that differ only in these paint the same pixels.
+ */
+const UNPAINTED_KEYS = new Set(['tooltip', 'href', 'cursor', 'description', 'aria', 'ariaRole', 'ariaRoleDescription'])
+
+/** `samePaint` over what the canvas renderer reads of two values (`UNPAINTED_KEYS` aside), with a visit budget. */
+function samePixels(a: unknown, b: unknown, budget: { n: number }, depth = 0): boolean {
+  if (Object.is(a, b)) return true
+  if (a == null || b == null || typeof a !== 'object' || typeof b !== 'object') return false
+  if (depth > 8 || --budget.n < 0) return false
+  if (Array.isArray(a) || Array.isArray(b)) {
+    if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false
+    for (let i = 0; i < a.length; i++) if (!samePixels(a[i], b[i], budget, depth + 1)) return false
+    return true
+  }
+  const ra = a as Record<string, unknown>
+  const rb = b as Record<string, unknown>
+  const counted = (r: Record<string, unknown>, k: string): boolean =>
+    Object.hasOwn(r, k) && !k.startsWith('__') && !NON_PAINT_KEYS.has(k) && !UNPAINTED_KEYS.has(k) && typeof r[k] !== 'function'
+  let na = 0
+  for (const k in ra) {
+    if (!counted(ra, k)) continue
+    na++
+    if (!samePixels(ra[k], rb[k], budget, depth + 1)) return false
+  }
+  let nb = 0
+  for (const k in rb) if (counted(rb, k)) nb++
+  return na === nb
+}
+
+/** The scene's own paint (size, background, padding, frame, gradient definitions): every key but its content and bookkeeping. */
+const ROOT_CONTENT = new Set(['items', 'signalParams', 'runtime', 'compiled'])
+function sameRootPaint(a: SceneRoot, b: SceneRoot): boolean {
+  const ra = a as unknown as Record<string, unknown>
+  const rb = b as unknown as Record<string, unknown>
+  const keys = new Set([...Object.keys(ra), ...Object.keys(rb)])
+  for (const k of keys) {
+    if (ROOT_CONTENT.has(k) || k.startsWith('__')) continue
+    if (!samePixels(ra[k], rb[k], { n: 10_000 })) return false
+  }
+  return true
+}
+
+/** A mark group's own paint: every key of the group but its items. */
+function sameMarkFrame(a: SceneGroup, b: SceneGroup): boolean {
+  const ra = a as unknown as Record<string, unknown>
+  const rb = b as unknown as Record<string, unknown>
+  const keys = new Set([...Object.keys(ra), ...Object.keys(rb)])
+  for (const k of keys) {
+    if (k === 'items' || k.startsWith('__') || NON_PAINT_KEYS.has(k) || UNPAINTED_KEYS.has(k)) continue
+    if (!samePixels(ra[k], rb[k], { n: 10_000 })) return false
+  }
+  return true
+}
+
+/**
+ * Whether the scene paints exactly the pixels of the frame on the canvas (`prev`, the snapshot of the scene painted last): every
+ * top-level group the very one painted, or one that paints the same -- in a mark, item by item, what the canvas renderer reads of it
+ * being the same (an item whose tooltip alone changed paints the same) -- with the same size, background, padding, frame and
+ * gradient definitions. Such a scene needs no paint at all: the canvas already shows it.
+ *
+ * A scene that paints anything differently is repainted in full. A repaint of the changed region alone, clipped to it, is not
+ * always what a full repaint draws: Chromium rasterises the anti-aliased edge of a path cut by the clip differently from the same
+ * path uncut (a pixel or two along the clip's edges; the dirty-region oracle, browser-canvas-dirty.mts, found it in about half the
+ * region repaints it tried), so the canvas never paints a region of its own.
+ */
+export function paintsSameAs(prev: CanvasSceneSnapshot, next: SceneRoot): boolean {
+  const a = prev.scene
+  if (a === next) return true
+  if (a.items.length !== next.items.length || !sameRootPaint(a, next)) return false
+  for (let i = 0; i < next.items.length; i++) {
+    const ng = next.items[i]!
+    const pg = a.items[i]!
+    if (ng === pg) continue
+    if (ng.role === 'mark' && pg.role === 'mark' && ng.marktype === pg.marktype && ng.marktype !== undefined && ng.marktype !== 'group' && sameMarkFrame(pg, ng)) {
+      const ni = (ng.items as SceneItem[] | undefined) ?? []
+      // (the array painted, which an append or an in-place edit of the engine's advances: never read the superseded group's items,
+      // a lazy snapshot whose reading copies them; see renderSceneToCanvasAppend)
+      if (ni === prev.markArrays.get(pg)) {
+        if (ni.length !== prev.markLengths.get(pg) || editedSince(ni, prev.gen)) return false
+        continue
+      }
+      const pi = (pg.items as SceneItem[] | undefined) ?? []
+      if (ni.length !== pi.length) return false
+      for (let j = 0; j < ni.length; j++) if (ni[j] !== pi[j] && !samePixels(pi[j], ni[j], { n: 10_000 })) return false
+      continue
+    }
+    if (!samePixels(pg, ng, { n: 50_000 })) return false
+  }
+  return true
+}
+
 /** Painted extent of an unchanged group after the appended one, cached per group object. */
 const LATER_EXTENT = new WeakMap<SceneGroup, Box | null>()
 function laterExtent(group: SceneGroup, scene: SceneRoot, plotW: number, plotH: number, opts: RenderCanvasOptions): Box | null {
@@ -439,6 +527,17 @@ function laterExtent(group: SceneGroup, scene: SceneRoot, plotW: number, plotH: 
   const box = paintExtent(group, scene, plotW, plotH, opts)
   LATER_EXTENT.set(group, box)
   return box
+}
+
+/**
+ * A mark as vega's canvas draws it: without the items a pass that stopped in their mark's bounds never measured (`unmeasuredFrom`:
+ * the item that failed and those after it; a line's or an area's, all of it). vega draws an item only where its bounds meet the view,
+ * and an item never measured has none.
+ */
+function measured(group: SceneGroup): SceneGroup {
+  const from = group.unmeasuredFrom
+  if (from === undefined) return group
+  return { ...group, items: (group.items ?? []).slice(0, from) } as SceneGroup
 }
 
 function renderGroup(group: SceneGroup, ctx: CanvasLike, scene: SceneRoot, plotW: number, plotH: number, opts: RenderCanvasOptions = {}): void {
@@ -461,14 +560,32 @@ function renderGroup(group: SceneGroup, ctx: CanvasLike, scene: SceneRoot, plotW
       else ctx.rect(0, 0, gw, gh)
       ctx.clip()
     }
-    // (a gradient on the group's own box is laid over the group's bounds -- the box, the stroke, what it holds -- as vega's canvas does)
-    const bgBox = (group.items ?? []).some((it) => (it as { _bg?: boolean })._bg === true && (isGradientPaint(it.fill) || isGradientPaint(it.stroke)))
+    // (a gradient on the group's own box is laid over the group's bounds -- the box, the stroke, what it holds -- as vega's canvas does;
+    // a guide's box carries the bounds of its group item, see `leafGradientBox`)
+    const bgBox = (group.items ?? []).some((it) => (it as { _bg?: boolean; _itemBounds?: unknown })._bg === true && (it as { _itemBounds?: unknown })._itemBounds === undefined && (isGradientPaint(it.fill) || isGradientPaint(it.stroke)))
       ? groupGradientBox(group)
       : undefined
+    // (an axis's leaves hold the half-pixel shift its group item has in vega; vega draws them in the frame of its group item, which the
+    // scene keeps as where the axis's box is)
+    const axis = group.role === 'axis' ? (group as unknown as { axis?: { translate?: number } }).axis : undefined
+    const bake = axis?.translate ?? 0
+    const leafFrame = axis !== undefined && group.box !== undefined ? { x: group.box.x ?? 0, y: group.box.y ?? 0 } : undefined
+    // (a guide's group item -- an axis's, a title's -- is held as its box: drawn before what the guide holds, its stroke in front
+    // after; as vega draws a group item's box, only when it has a fill or a stroke)
+    const box = group.box !== undefined && (group.box.fill || group.box.stroke) ? group.box : undefined
+    const boxFg = group.boxFg !== undefined && group.boxFg.stroke ? group.boxFg : undefined
+    const guideBox = box !== undefined && (box as { _itemBounds?: unknown })._itemBounds === undefined && (isGradientPaint(box.fill) || isGradientPaint(box.stroke) || (boxFg !== undefined && isGradientPaint(boxFg.stroke))) ? groupGradientBox(group) : undefined
+    // (vega draws a group item's box in the frame of the group around it, which is where a gradient it paints as a pattern sits)
+    const outer = { x: -(group.x ?? 0), y: -(group.y ?? 0) }
+    if (box !== undefined) renderLeafItem(box, ctx, scene, guideBox, 0, outer)
     for (const item of group.items ?? []) {
       if (isGroup(item)) renderGroup(item, ctx, scene, gw, gh, opts)
-      else renderLeafItem(item, ctx, scene, (item as { _bg?: boolean })._bg === true ? bgBox : undefined)
+      // (a leaf whose bounds the pass never measured: vega's canvas draws only what meets the view's bounds, see `_unmeasured`)
+      else if ((item as { _unmeasured?: boolean })._unmeasured === true) continue
+      else if ((item as { _bg?: boolean })._bg === true) renderLeafItem(item, ctx, scene, bgBox, bake, (item as { _frame?: Frame })._frame ?? (item === group.items![0] || item === group.items![group.items!.length - 1] ? outer : undefined))
+      else renderLeafItem(item, ctx, scene, undefined, bake, (item as { _frame?: Frame })._frame ?? leafFrame)
     }
+    if (boxFg !== undefined) renderLeafItem(boxFg, ctx, scene, guideBox, 0, outer)
     ctx.restore()
     return
   }
@@ -478,11 +595,11 @@ function renderGroup(group: SceneGroup, ctx: CanvasLike, scene: SceneRoot, plotW
     if (group.clipPathD) tracePath(ctx, parsePathData(group.clipPathD), group.x ?? 0, group.y ?? 0)
     else ctx.rect(0, 0, plotW, plotH)
     ctx.clip()
-    renderMark(type, group, ctx, scene, opts)
+    renderMark(type, measured(group), ctx, scene, opts)
     ctx.restore()
     return
   }
-  renderMark(type, group, ctx, scene, opts)
+  renderMark(type, measured(group), ctx, scene, opts)
 }
 
 /** Resolve a paint value; `{gradient: id}` resolves through scene defs. */
@@ -596,6 +713,40 @@ function groupGradientBox(group: SceneGroup): Bbox | undefined {
   return b.empty() ? undefined : { x1: b.x1, y1: b.y1, x2: b.x2, y2: b.y2 }
 }
 
+/**
+ * The box a gradient on a guide's leaf is laid over: vega's `item.bounds` of the item the leaf stands for, in the frame the leaf is
+ * drawn in. A group item's box carries its item's bounds (`_itemBounds`, in its own frame: a legend's, an entry's, an axis's); a
+ * legend's strip or band is a rect item, a rule (an axis's tick, grid line or domain) a rule item, a symbol a symbol item (its
+ * stroke's miter included). `bake` is the shift the scene baked into an axis's leaves, which vega's bounds do not hold: for a turned
+ * leaf, whose gradient is laid in its turned frame, it comes back out.
+ */
+function leafGradientBox(it: SceneItem, bake = 0): Bbox | undefined {
+  if (!(isGradientPaint(it.fill) || isGradientPaint(it.stroke))) return undefined
+  const own = (it as unknown as Record<string, unknown>)._itemBounds as Bbox | undefined
+  if (own !== undefined) {
+    const x = it.x ?? 0
+    const y = it.y ?? 0
+    return { x1: own.x1 + x, y1: own.y1 + y, x2: own.x2 + x, y2: own.y2 + y }
+  }
+  const part = it._part
+  const b = part === 'gradient' || part === 'band' ? stripBounds(it)
+    : it.path == null && it.text == null && it.shape == null ? boundLeaf(new Bounds(), { ...it, _kind: 'rule' } as SceneItem, false, 'rule')
+    : part === 'symbol' ? boundLeaf(new Bounds(), it, true, 'symbol')
+    : boundLeaf(new Bounds(), it, true)
+  if (b.empty()) return undefined
+  if (bake && itemAngle(it)) b.translate(-bake, -bake)
+  return { x1: b.x1, y1: b.y1, x2: b.x2, y2: b.y2 }
+}
+
+/** A legend's strip or band, a rect item (drawn as the path of its box at its position): its box and its stroke, no miter. */
+function stripBounds(it: SceneItem): Bounds {
+  const x = it.x ?? 0
+  const y = it.y ?? 0
+  const w = Number(it.width) || 0
+  const h = Number(it.height) || 0
+  return boundStroke(new Bounds().set(Math.min(x, x + w), Math.min(y, y + h), Math.max(x, x + w), Math.max(y, y + h)), it)
+}
+
 /** Compute the bbox of parsed segments (for objectBoundingBox gradients). */
 function segsBbox(segs: PathSeg[]): Bbox {
   const bb: Bbox = { x1: Infinity, y1: Infinity, x2: -Infinity, y2: -Infinity }
@@ -631,7 +782,7 @@ function segsBbox(segs: PathSeg[]): Bbox {
  */
 function paintPath(
   ctx: CanvasLike,
-  segs: PathSeg[],
+  segs: PathSeg[] | (() => PathSeg[]),
   it: SceneItem,
   defs: SceneDefs[] | undefined,
   op: 'auto' | 'fill' | 'stroke',
@@ -646,7 +797,7 @@ function paintPath(
     (typeof p === 'string' && p.startsWith('url(#')) || (p != null && typeof p === 'object' && 'gradient' in (p as object))
   // Gradient resolution is the only consumer of the bbox; skip the segment walk
   // for the common solid-paint case (thousands of symbols per frame).
-  const bb = bbox ?? (isGradient(fill) || isGradient(stroke) ? segsBbox(segs) : null)
+  const bb = bbox ?? (isGradient(fill) || isGradient(stroke) ? segsBbox(typeof segs === 'function' ? segs() : segs) : null)
   const rec = it as unknown as Record<string, unknown>
   if (rec.blend != null) ctx.globalCompositeOperation = String(rec.blend)
   // (vega's canvas draws a paint only when it is truthy: an empty string is none, while its SVG writes the attribute)
@@ -701,14 +852,50 @@ function fontString(it: SceneItem): string {
 
 const itemAngle = (it: SceneItem): number | undefined => (it as Record<string, unknown>).angle as number | undefined
 
-function renderLeafItem(it: SceneItem, ctx: CanvasLike, scene: SceneRoot, box?: Bbox): void {
+/** The origin of the frame vega draws a leaf in, in the frame the scene holds the leaf in. */
+interface Frame { x: number; y: number }
+
+/**
+ * Whether a paint is a gradient vega's canvas draws as a pattern (a linear one that is not axis aligned): a pattern sits at the origin
+ * of the frame it is painted in, so such a leaf is painted in the frame vega paints it in.
+ */
+function paintsPattern(p: unknown, defs: SceneDefs[] | undefined): boolean {
+  if (p == null || (typeof p !== 'object' && typeof p !== 'string')) return false
+  let def: SceneDef | undefined
+  if (isGradientObject(p)) def = gradientDefOf(p)
+  else if (typeof p === 'string') {
+    const m = /^url\(#(?:p_)?([^)]+)\)$/.exec(p)
+    if (m === null) return false
+    def = defs?.find((d) => d.id === m[1])
+  }
+  if (def === undefined || def.kind === 'radial' || (def.x1 == null && def.y1 == null && def.x2 == null && def.y2 == null)) return false
+  return (def.x1 ?? 0) !== (def.x2 ?? 1) && (def.y1 ?? 0) !== (def.y2 ?? 0)
+}
+
+function renderLeafItem(it: SceneItem, ctx: CanvasLike, scene: SceneRoot, box?: Bbox, bake = 0, frame?: Frame): void {
   const defs = scene.defs
+  if (frame !== undefined && (frame.x !== 0 || frame.y !== 0) && (paintsPattern(it.fill, defs) || paintsPattern(it.stroke, defs))) {
+    // the same leaf, at the same place, in vega's frame
+    const fx = frame.x
+    const fy = frame.y
+    const moved = { ...it, x: (it.x ?? 0) - fx, y: (it.y ?? 0) - fy, ...(it.x2 != null ? { x2: it.x2 - fx } : {}), ...(it.y2 != null ? { y2: it.y2 - fy } : {}) } as SceneItem
+    const clip = (it as unknown as Record<string, unknown>)._clip as { x?: number; y?: number } | undefined
+    if (clip) (moved as unknown as Record<string, unknown>)._clip = { ...clip, x: (clip.x ?? 0) - fx, y: (clip.y ?? 0) - fy }
+    // (the box of a group it stands for, as given, is in the scene's frame; its own bounds move with it)
+    const bbox = box ?? leafGradientBox(it, bake)
+    ctx.save()
+    ctx.translate(fx, fy)
+    renderLeafItem(moved, ctx, scene, bbox && { x1: bbox.x1 - fx, y1: bbox.y1 - fy, x2: bbox.x2 - fx, y2: bbox.y2 - fy }, bake)
+    ctx.restore()
+    return
+  }
   // Path items (legend entries, tick labels' misc paths)
   if (it.path != null) {
     const tx = it.x ?? 0
     const ty = it.y ?? 0
     ctx.beginPath()
-    const segs = parsePathData(it.path)
+    // (a group item's box stroked in front is filled where the stroked box is: see `_canvasPath`)
+    const segs = parsePathData(((it as unknown as Record<string, unknown>)._canvasPath as string | undefined) ?? it.path)
     // A clipped legend symbol (clipHeight): clip to the entry's laid-out
     // rect (0,0,w,h) in the item's local frame, matching the SVG renderer's
     // clipPath defs.
@@ -726,7 +913,7 @@ function renderLeafItem(it: SceneItem, ctx: CanvasLike, scene: SceneRoot, box?: 
       ctx.beginPath()
       tracePath(ctx, segs, tx, ty)
     }
-    paintPath(ctx, segs, it, defs, 'auto', box)
+    paintPath(ctx, segs, it, defs, 'auto', box ?? leafGradientBox(it))
     if (clip) ctx.restore()
     return
   }
@@ -734,29 +921,26 @@ function renderLeafItem(it: SceneItem, ctx: CanvasLike, scene: SceneRoot, box?: 
   // `M{r},0A{r},{r}…` translated by (x, y) — trace the same path so records
   // match exactly (including gradient bboxes).
   if (it.shape != null && it.radius != null) {
-    const r = it.radius
-    const rNum = Number.isInteger(r) ? String(r) : String(Math.round(r * 1000) / 1000)
-    const d = `M${rNum},0A${rNum},${rNum},0,1,1,${-rNum},0A${rNum},${rNum},0,1,1,${rNum},0`
+    const segs = leafCircleSegs(it.radius)
     if (itemAngle(it)) {
-      const segs = parsePathData(d)
       buildInItemFrame(ctx, it.x ?? 0, it.y ?? 0, itemAngle(it)!, 1, 1, () => tracePath(ctx, segs))
       paintPath(ctx, segs, it, defs, 'auto')
       return
     }
     ctx.beginPath()
-    const segs = parsePathData(d).map((s) => {
+    const moved = segs.map((s) => {
       if (s.cmd === 'Z') return s
       const o = { ...s } as unknown as Record<string, number>
       if (typeof o.x === 'number') o.x += it.x ?? 0
       if (typeof o.y === 'number') o.y += it.y ?? 0
       return o as unknown as typeof s
     })
-    tracePath(ctx, segs)
-    paintPath(ctx, segs, it, defs, 'auto')
+    tracePath(ctx, moved)
+    paintPath(ctx, moved, it, defs, 'auto', leafGradientBox(it))
     return
   }
   if (it._kind === 'text' || (it._kind === undefined && it.text != null)) {
-    renderTextItem(it, ctx, defs)
+    renderTextItem(it, ctx, defs, bake)
     return
   }
   // Line items (rules)
@@ -768,7 +952,26 @@ function renderLeafItem(it: SceneItem, ctx: CanvasLike, scene: SceneRoot, box?: 
   ctx.beginPath()
   ctx.moveTo(x, y)
   ctx.lineTo(x2, y2)
-  paintPath(ctx, [{ cmd: 'M', x, y }, { cmd: 'L', x: x2, y: y2 }] as PathSeg[], it, defs, 'stroke')
+  paintPath(ctx, [{ cmd: 'M', x, y }, { cmd: 'L', x: x2, y: y2 }] as PathSeg[], it, defs, 'stroke', leafGradientBox(it))
+}
+
+/**
+ * A guide leaf symbol's outline, as the SVG leaf renderer writes it about the origin: `M r,0 A r,r,0,1,1,-r,0 A r,r,0,1,1,r,0`
+ * with r printed whole when it is an integer and to 3 digits otherwise; these are the segments that text reads back as. (A
+ * radius that does not print as a number is read from the text, as it always was.)
+ */
+function leafCircleSegs(r: number): PathSeg[] {
+  const rNum = Number.isInteger(r) ? r : Math.round(r * 1000) / 1000
+  if (!Number.isFinite(rNum)) {
+    const t = String(rNum)
+    return parsePathData(`M${t},0A${t},${t},0,1,1,${-t},0A${t},${t},0,1,1,${t},0`)
+  }
+  const v = rNum + 0
+  return [
+    { cmd: 'M', x: v, y: 0 },
+    { cmd: 'A', rx: v, ry: v, rot: 0, large: 1, sweep: 1, x: -v + 0, y: 0 },
+    { cmd: 'A', rx: v, ry: v, rot: 0, large: 1, sweep: 1, x: v, y: 0 },
+  ]
 }
 
 /** Paint for arc-drawn symbols (bbox computed analytically). */
@@ -786,7 +989,7 @@ function paintPathArc(ctx: CanvasLike, it: SceneItem, defs: SceneDefs[] | undefi
  * geometry the SVG `transform` is built from); `textAlign` is the item's align
  * or `left`; fill AND stroke are painted (text can be outlined).
  */
-function renderTextItem(it: SceneItem, ctx: CanvasLike, defs: SceneDefs[] | undefined): void {
+function renderTextItem(it: SceneItem, ctx: CanvasLike, defs: SceneDefs[] | undefined, bake = 0): void {
   const opacity = it.opacity == null ? 1 : (it.opacity as number)
   if (opacity === 0 || (it as Record<string, unknown>).fontSize as number <= 0) return
   const d = textItemDesc(it)
@@ -808,7 +1011,7 @@ function renderTextItem(it: SceneItem, ctx: CanvasLike, defs: SceneDefs[] | unde
   const fillOk = it.fill != null && (it.fill as unknown) !== false && it.fill !== 'transparent'
   const strokeOk = it.stroke != null && (it.stroke as unknown) !== false && it.stroke !== 'transparent'
   // (a gradient is laid over the item's bounds, as vega's canvas does: the text's box)
-  const box = gradientBox(it) ?? null
+  const box = leafGradientBox(it, bake) ?? null
   for (let i = 0; i < d.lines.length; i++) {
     const str = d.lines[i]!
     const ly = i === 0 ? y : y + i * d.lineHeight
@@ -908,8 +1111,7 @@ function renderSymbolRuns(items: SceneItem[], ctx: CanvasLike, defs: SceneDefs[]
         const x = it.x || 0
         const y = it.y || 0
         const r = Math.sqrt((it.size as number) ?? SYMBOL_DEFAULT_SIZE) / 2
-        const d = cachedSymbolPath((it as Record<string, unknown>).shape as string | undefined, r)
-        const segs = parsePathData(d)
+        const segs = symbolSegs((it as Record<string, unknown>).shape as string | undefined, r)
         buildInItemFrame(ctx, x, y, ((it as Record<string, unknown>).angle as number) || 0, 1, 1, () => tracePath(ctx, segs))
         paintPath(ctx, segs, it, defs, 'auto', gradientBox(it))
       }
@@ -918,13 +1120,6 @@ function renderSymbolRuns(items: SceneItem[], ctx: CanvasLike, defs: SceneDefs[]
     }
     const first = run[0]!
     const shape0 = (first as Record<string, unknown>).shape as string | undefined
-    // (the symbols of a run share a shape and a size, so one parse serves them all; `lastR` guards a size that is not a number)
-    let segs: PathSeg[] | null = null
-    let lastR = NaN
-    const symbolSegs = (shape: string | undefined, r: number): PathSeg[] => {
-      if (segs === null || r !== lastR) { segs = parsePathData(cachedSymbolPath(shape, r)); lastR = r }
-      return segs
-    }
     const radiusOf = (it: SceneItem): number => Math.sqrt((it.size as number) ?? SYMBOL_DEFAULT_SIZE) / 2
     const closed = shape0 != null && shape0 !== 'circle' && symbolSegs(shape0, radiusOf(first)).some((sg) => sg.cmd === 'Z' || sg.cmd === 'z')
     const whole = closed ? runPath(ctx) : null
@@ -967,24 +1162,22 @@ function renderMark(type: string, group: SceneGroup, ctx: CanvasLike, scene: Sce
   const defs = scene.defs
   switch (type) {
     case 'line': {
-      const info = computeLinePath(group, true)
-      if (!info) return
+      const geometry = lineGeometry(group.items ?? [])
+      if (geometry === null || geometry.empty) return
       ctx.beginPath()
-      const segs = parsePathData(info.path)
-      tracePath(ctx, segs)
+      drawCurveExact(geometry, ctx)
       // vega draws a line mark from its first item with the full fill + stroke
       // paint (closed lines can be filled); stroke width defaults to 2 with a stroke.
-      const first = { ...group.items![0]!, strokeWidth: info.sw ?? group.items![0]!.strokeWidth } as SceneItem
-      paintPath(ctx, segs, first, defs, 'auto', gradientBox(first, group))
+      const first = { ...group.items![0]!, strokeWidth: lineStrokeWidth(group.items![0]!) ?? group.items![0]!.strokeWidth } as SceneItem
+      paintPath(ctx, () => curveExactSegs(geometry), first, defs, 'auto', gradientBox(first, group))
       return
     }
     case 'area': {
-      const info = computeAreaPath(group, true)
-      if (!info) return
+      const geometry = areaGeometry(group.items ?? [])
+      if (geometry === null || geometry.empty) return
       ctx.beginPath()
-      const segs = parsePathData(info.path)
-      tracePath(ctx, segs)
-      paintPath(ctx, segs, group.items![0]!, defs, 'auto', gradientBox(group.items![0]!, group))
+      drawCurveExact(geometry, ctx)
+      paintPath(ctx, () => curveExactSegs(geometry), group.items![0]!, defs, 'auto', gradientBox(group.items![0]!, group))
       return
     }
     case 'symbol': {
@@ -999,8 +1192,7 @@ function renderMark(type: string, group: SceneGroup, ctx: CanvasLike, scene: Sce
           const size = (it.size as number) ?? SYMBOL_DEFAULT_SIZE
           const r = Math.sqrt(size) / 2
           const shape = (it as Record<string, unknown>).shape as string | undefined
-          const d = cachedSymbolPath(shape, r)
-          const segs = parsePathData(d)
+          const segs = symbolSegs(shape, r)
           const angle = ((it as Record<string, unknown>).angle as number) || 0
           if (shape == null || shape === 'circle') {
             // (vega draws a circle as one full-turn arc about the item's origin: the same curve as two half turns, rasterized
@@ -1027,10 +1219,8 @@ function renderMark(type: string, group: SceneGroup, ctx: CanvasLike, scene: Sce
       // vega paints rects in item (data) order and skips unpainted items
       for (const it of group.items ?? []) {
         if (it.fill == null && it.stroke == null) continue
-        const d = rectItemPath(it)
-        if (d == null) continue
         ctx.beginPath()
-        const segs = parsePathData(d)
+        const segs = segsOf(rectData(it))
         tracePath(ctx, segs)
         paintPath(ctx, segs, it, defs, 'auto', gradientBox(it, undefined, false))
       }
@@ -1060,31 +1250,48 @@ function renderMark(type: string, group: SceneGroup, ctx: CanvasLike, scene: Sce
     case 'trail': {
       const items = group.items ?? []
       if (items.length <= 1) return
-      const d = trailPath(items)
-      if (!d) return
+      const geometry = trailGeometry(items)!
+      if (!geometry.outline.drawn) return
       const first = items[0]!
       ctx.beginPath()
-      const segs = parsePathData(d)
+      const segs = arcSegs(geometry)
       tracePath(ctx, segs)
       // The trail polygon carries the FIRST item's full paint set, fill included
       // (Vega-Lite encodes a trail's colour as `fill`).
       paintPath(ctx, segs, first, defs, 'auto', gradientBox(first, group))
       return
     }
-    case 'path':
-    case 'shape':
-    case 'geoshape': {
-      // (only a path mark parses a path string: vega draws its arcs as beziers; a shape's geo path goes to the context directly)
-      const arcs = type === 'path' ? 'bezier' : 'exact'
+    case 'path': {
+      // a path mark's text, as far as it reads, drawn as vega draws it (path-data.ts `renderSvgPath`): scaled by (scaleX||1,
+      // scaleY||1) and moved to the item in the replay's numbers, or, turned, at the origin of the item's turned frame
       for (const it of group.items ?? []) {
         if (!it.path) continue
-        // vega path mark: translate, rotate, then the path scaled by (scaleX||1, scaleY||1)
+        const rec = it as Record<string, unknown>
+        const angle = (rec.angle as number) || 0
+        const sx = (rec.scaleX as number) || 1
+        const sy = (rec.scaleY as number) || 1
+        const commands = drawnPathCommands(it.path)
+        if (angle) buildInItemFrame(ctx, it.x || 0, it.y || 0, angle, 1, 1, () => renderSvgPath(ctx, commands, 0, 0, sx, sy))
+        else {
+          ctx.beginPath()
+          renderSvgPath(ctx, commands, it.x || 0, it.y || 0, sx, sy)
+        }
+        const path = it.path
+        paintPath(ctx, () => parsePathData(path), it, defs, 'auto', gradientBox(it))
+      }
+      return
+    }
+    case 'shape':
+    case 'geoshape': {
+      // (a shape's geo path, the engine's own text, goes to the context as it is, its arcs as arcs)
+      for (const it of group.items ?? []) {
+        if (!it.path) continue
         const rec = it as Record<string, unknown>
         const angle = (rec.angle as number) || 0
         const sx = (rec.scaleX as number) || 1
         const sy = (rec.scaleY as number) || 1
         const segs = parsePathData(it.path)
-        buildInItemFrame(ctx, it.x || 0, it.y || 0, angle, sx, sy, () => tracePath(ctx, segs, 0, 0, arcs))
+        buildInItemFrame(ctx, it.x || 0, it.y || 0, angle, sx, sy, () => tracePath(ctx, segs))
         paintPath(ctx, segs, it, defs, 'auto', gradientBox(it))
       }
       return
@@ -1103,7 +1310,7 @@ function renderMark(type: string, group: SceneGroup, ctx: CanvasLike, scene: Sce
         ctx.translate(ax, ay)
         if (angle) ctx.rotate((angle * Math.PI) / 180)
         ctx.beginPath()
-        itemArcInto(ctx, it)
+        itemArcGeometry(it).outline.replay(ctx)
         if (angle) ctx.rotate((-angle * Math.PI) / 180)
         ctx.translate(-ax, -ay)
         paintPath(ctx, [], it, defs, 'auto', gradientBox(it))

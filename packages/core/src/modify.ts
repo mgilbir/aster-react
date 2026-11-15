@@ -123,10 +123,13 @@ const ingest = (d: unknown): Tuple => (d === Object(d) ? (d as Tuple) : { data: 
 
 /**
  * The dataset's input after the changeset is pulsed into it: the surviving tuples in their order, then the
- * inserted ones. Tuples are modified in place, as vega's `modify` does. Returns the new array (a new
- * array even when nothing changed, as the caller replaces the input).
+ * inserted ones. Returns the new array (a new array even when nothing changed, as the caller replaces the input).
+ *
+ * vega modifies a tuple in place. Here a modified tuple is written through `writable`, which gives the tuple to
+ * write to: the tuple itself when the caller owns it, else the caller's copy of it (a dataset's rows are the
+ * spec's or the host's objects, which the engine never writes). The copy takes the tuple's place in the output.
  */
-export function applyChangeset(rows: readonly Tuple[], cs: Changeset): Tuple[] {
+export function applyChangeset(rows: readonly Tuple[], cs: Changeset, writable: (t: Tuple) => Tuple = (t) => t): Tuple[] {
   // flag: 1 resident, -1 resident and to be removed
   const cur = new Map<unknown, number>()
   for (const t of rows) cur.set(t, 1)
@@ -144,12 +147,16 @@ export function applyChangeset(rows: readonly Tuple[], cs: Changeset): Tuple[] {
     }
   }
 
+  const written = new Map<Tuple, Tuple>()
   for (const m of cs.mod) {
-    if ((cur.get(m.tuple) ?? 0) > 0) m.tuple[m.field] = m.value
+    if ((cur.get(m.tuple) ?? 0) <= 0) continue
+    let w = written.get(m.tuple)
+    if (w === undefined) written.set(m.tuple, (w = writable(m.tuple)))
+    w[m.field] = m.value
   }
 
   const out: Tuple[] = []
-  for (const t of rows) if ((cur.get(t) ?? 0) >= 0) out.push(t)
+  for (const t of rows) if ((cur.get(t) ?? 0) >= 0) out.push(written.get(t) ?? t)
   for (const t of added) out.push(t)
   return out
 }

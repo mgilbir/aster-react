@@ -2,7 +2,7 @@
 import * as React from 'react'
 import { createRoot } from 'react-dom/client'
 import { act } from 'react'
-import { describe, it, expect, afterEach } from 'vitest'
+import { describe, it, expect, afterEach, vi } from 'vitest'
 import { ChartStream, ChartWorkerStream, type ChartStreamHandle } from './ChartStream'
 import { handleChartWorkerStreamRequest, type ChartWorkerStreamRequest } from './worker'
 import { compile } from '@aster-charts/vl'
@@ -38,6 +38,26 @@ const wait = (): Promise<void> => new Promise((r) => setTimeout(r, 20))
 
 describe('streaming chart components', () => {
   afterEach(() => { document.body.innerHTML = '' })
+
+  it('the logger prop receives what the stream\'s evaluations log (a dataflow error), not the console', async () => {
+    const errors: unknown[] = []
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const throwing = { ...(spec as Record<string, unknown>), marks: [{ type: 'symbol', from: { data: 't' }, encode: { update: { x: { signal: 'datum.o.p' }, size: { value: 20 } } } }] } as never
+    const ref = React.createRef<ChartStreamHandle>()
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    const root = createRoot(host)
+    await act(async () => {
+      root.render(<ChartStream ref={ref} spec={throwing} width={200} height={100} logger={{ error: (e) => { errors.push(e) }, warn: () => {} }} />)
+      await wait()
+    })
+    await act(async () => { ref.current!.push({ append: { t: [{ x: 2, y: 3 }] } }); ref.current!.flush(); await wait() })
+    expect(errors.length).toBeGreaterThan(0)
+    expect(String(errors[0])).toMatch(/Cannot read properties of undefined/)
+    expect(consoleError.mock.calls.some((c) => /Cannot read properties/.test(String(c[0])))).toBe(false)
+    consoleError.mockRestore()
+    act(() => { root.unmount() })
+  })
 
   it('patches the same SVG element for an append', async () => {
     const ref = React.createRef<ChartStreamHandle>()

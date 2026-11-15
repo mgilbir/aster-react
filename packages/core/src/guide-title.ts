@@ -3,6 +3,7 @@
  * `anchor`, `frame` and `offset`, with the subtitle beside or below the title. See guide-encode.ts for how a property becomes a
  * channel of an item.
  */
+import { markTuple } from './util.js'
 import type { SceneItem } from './types.js'
 import { Bounds, boundLeaf } from './bounds.js'
 import {
@@ -33,6 +34,8 @@ export interface TitleBuilt {
   title?: SceneItem & Rec
   subtitle?: SceneItem & Rec
   partMeta: Record<string, { name?: string; interactive: boolean }>
+  /** The title's generated datum (`{}`), which its group item and its texts carry. */
+  datum: Row
   /** The group's bounds in its parent's frame as the layout left them, when it laid the group out: the title and the subtitle where they were measured, moved with the group. */
   bounds?: Bounds
 }
@@ -80,6 +83,7 @@ export function buildTitle(inp: TitleBuildInput): TitleBuilt {
   })
   mergeUserEncode(groupEncode, groupUser)
   const datum: Row = {}
+  markTuple(datum)
   const group = encodeItem({ type: 'rule', role: 'title', style: groupUser.style, encode: groupEncode, interactive: false }, datum, {}, host, style) as unknown as Rec
 
   // the text is styled by `encode.title`; a spec that still puts its blocks at the top of `encode` styles it from there
@@ -104,7 +108,10 @@ export function buildTitle(inp: TitleBuildInput): TitleBuilt {
     partMeta.subtitle = { name: subtitleDef.name, interactive: subtitleDef.interactive }
   }
   const bounds = inp.raw || title === undefined ? undefined : placeTitle(group, title, subtitle, inp.viewBounds, inp.width, inp.height)
-  return { group, title, subtitle, partMeta, ...(bounds ? { bounds } : {}) }
+  // (the group item and its texts carry the title's generated datum, as vega's do)
+  if (title !== undefined) title.datum = datum
+  if (subtitle !== undefined) subtitle.datum = datum
+  return { group, title, subtitle, partMeta, datum, ...(bounds ? { bounds } : {}) }
 }
 
 /**

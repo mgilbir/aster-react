@@ -6,18 +6,20 @@
  * transform steps, scales and mark items that cannot have changed; the result is
  * the scene a fresh evaluation would produce.
  */
-import { compileExpr, expressionRegistryEpoch, ExpressionParseError, type CompiledExpr, type ExpressionRuntime } from './expression.js'
+import { compileExpr, engineParams, expressionRegistryEpoch, ExpressionParseError, type CompiledExpr, type ExpressionRuntime } from './expression.js'
 import { scaleCallFailure, scaleRangeFailure } from './missing-scale.js'
-import { ingestRows, readData, type DataFormatSpec } from './data-format.js'
+import { ingestRows, isNotATupleError, notATuple, readData, type DataFormatSpec } from './data-format.js'
 import { followsSources, numbersSourceRows, orderOf, setOrder, setSources, sourcesAfter, sourcesOf } from './tuple-order.js'
 import { alignIndices, carryByAlignment, carryBySources, sourceNumbersOf, type IdCounter, type SourceNumbers } from './identifier-ids.js'
-import { applyTransforms, applyTransformsToSharedRows, copiesRows, sortOrder, getField, geoJSONPath, type Row, type TransformContext } from './transform.js'
+import { applyTransforms, applyTransformsToSharedRows, copiesRows, rowUseOf, sortOrder, getField, geoJSONPath, type Row, type TransformContext } from './transform.js'
 import { fieldOf } from './transform-agg.js'
 import { atRandomSite, contentKey, mayDrawRandom, normalPairs, replayable } from './random-tape.js'
 import { lexedText } from './expr-text.js'
+import { isEngineNode, noteEngineScene } from './scene-registry.js'
+import { parseExpressionCached, type Expr } from './expr-parser.js'
 import { datasetsReadIn, identifiersIn, scalesReadIn, dependencyKey, fieldsWritten, namesIn, pipelineReadsOf, reuse, runsOf, stepCounts, stepReadsOf, type StepReads, type StepRecord } from './step-reuse.js'
 import { activeMeter, withLimits, ceiling, checkRowCount, meterItems, meterTick, AsterLimitError } from './limits.js'
-import { withTextMetricsProvider } from './text-metrics.js'
+import { getTextMetricsProvider, withTextMetricsProvider } from './text-metrics.js'
 import { AsterUrlError } from './url-policy.js'
 import { SpecParseError } from './parse-error.js'
 import { consoleLogger, type Logger } from './logger.js'
@@ -28,7 +30,7 @@ import { implicit as implicitCategory } from './scale-discrete.js'
 /** Scale types whose domain is an ordered set of discrete values. */
 const DISCRETE_TYPES = new Set(['band', 'point', 'ordinal'])
 import { ITEM_MARK, geoRegistry, requireGeo } from './registry.js'
-import { locale } from './locale.js'
+import { formatEnvironmentKey, locale } from './locale.js'
 import type {
   CompiledAxis,
   CompiledChart,
@@ -54,21 +56,33 @@ import { gradientDefOf, hash53, isGradientPaint } from './svg-defs.js'
 import { tickFormat, scaleGradient, scaleGradientStops, tickCount, validTicks } from './scale.js'
 import { timeIntervalFor, utcIntervalFor } from './time.js'
 import { compileChart } from './compiler.js'
-import { dict, ownGet, pushAll, sortData, lerp, scopedSignalName, heldSignalName, TUPLE_ID } from './util.js'
+import { dict, ownGet, pushAll, sortData, lerp, scopedSignalName, heldSignalName, isTuple, markTuple, markTuples, markTupleAlways, withTuples, tuplesRegistering, PRIMITIVE_TUPLE, tupleDatum } from './util.js'
 import { applyImageUrlPolicy, applyLinkUrlPolicy, resolveImageUrl, type ImageUrlPolicy } from './url-policy.js'
 import { checkChartUrlData } from './url-data.js'
 import { valueKey, valuesEqual } from './fingerprint.js'
+import { dataWithoutRows, valuesSignal } from './spec-structure.js'
 import { diffRows, equalCell, rowsEqual, sourceNames, type PulseChange } from './pulse.js'
 import { aggregateGroups, flatKeyFn, groupKeyFn } from './transform-agg.js'
-import { layoutFacet, type GridPlace } from './trellis.js'
+import type { GridPlace } from './trellis.js'
 import { boundAxisGroup, boundGroupItem, boundLeaf, boundTypedMark, Bounds, layoutBounds, eachMarkBounds, hasClippedMark } from './bounds.js'
 import { rectItemPath } from './render.js'
+import { boundFailure } from './bound-failure.js'
 import { buildAxis as buildAxisGuide, tickPlacement } from './guide-axis.js'
 import { buildTitle as buildTitleGuide } from './guide-title.js'
-import { buildLegend as buildLegendGuide, entriesRefusal, legendType, placeLegendStack, LEGEND_SCALES, type GuideHost, type Sides } from './guide-legend.js'
+import type { GuideHost, Sides } from './guide-legend.js'
+import { LEGEND_SCALES } from './legend-scales.js'
+import { part, requestPart } from './engine-parts.js'
 import { guideReading, type GuideKind } from './guide-model.js'
 import { ExpressionFailure, isSignal, isUnencoded, itemAriaOf, propsOf, type GuideStyles, type UserEncode } from './guide-encode.js'
 import { defaultMergedConfig } from './config-defaults.js'
+
+// The legend builder and the grid layout are parts the React shells load on demand (engine-parts.ts): read from their slots when a
+// spec has a legend or a layout, which every entry that evaluates fills.
+const buildLegendGuide: typeof import('./guide-legend.js').buildLegend = (inp) => part('legend').buildLegend(inp)
+const entriesRefusal: typeof import('./guide-legend.js').entriesRefusal = (p) => part('legend').entriesRefusal(p)
+const legendType: typeof import('./guide-legend.js').legendType = (spec, scaleType) => part('legend').legendType(spec, scaleType)
+const placeLegendStack: typeof import('./guide-legend.js').placeLegendStack = (...args) => part('legend').placeLegendStack(...args)
+const layoutFacet: typeof import('./trellis.js').layoutFacet = (...args) => part('layout').layoutFacet(...args)
 
 const DEFAULT_SIZE = 500
 
@@ -243,6 +257,16 @@ interface IncrementalState {
   numbered: Map<string, readonly SceneItem[]>
   /** The leaf marks made inside group items, by instance (see `evaluateInstanceMark`): what a later evaluation keeps or splices. */
   instances: Map<string, InstanceMark>
+  /** Top-level group marks made whole in a clean pass, and what making them left in the evaluation (see `keptGroupMark`). */
+  groupMarks: Map<CompiledMark, GroupMarkRecord>
+  /** What each channel of a top-level leaf mark was encoded under, and over which rows (see `reencodeChannels`). */
+  channels: Map<CompiledMark, ChannelRecord>
+  /** A top-level leaf mark drawn from another mark's items: what it was made under and the items it was made from (see `keptOverMarkItems`). */
+  markSources: Map<CompiledMark, { key: string; items: readonly SceneItem[]; tuples: boolean }>
+  /** The view's own axes and legends as a clean pass made them, by definition, with what they were made under (see `keptGuide`). */
+  guides: Map<object, Map<string, GuideRecord>>
+  /** The snapshots of the view's scales the scene carries, and the scales they were taken of (see `sceneSnapshots`). */
+  snapshots?: { scales: ReadonlyArray<readonly [string, unknown]>; snaps: ReturnType<typeof snapshotScales> }
   /** The content of the view this state's pass made (its root items, laid out): a later pass shares what it makes the same (see `shareScene`). */
   content?: readonly SceneGroup[]
 }
@@ -269,7 +293,40 @@ interface ScopedRun {
 }
 
 function newState(gen: number): IncrementalState {
-  return { gen, fp: '', scales: new Map(), scaleEntries: new Map(), datasets: new Map(), groups: new Map(), markKeys: new Map(), rows: new Map(), stale: false, idCounter: 0, scoped: new Map(), numbered: new Map(), copies: new Map(), instances: new Map() }
+  return { gen, fp: '', scales: new Map(), scaleEntries: new Map(), datasets: new Map(), groups: new Map(), markKeys: new Map(), rows: new Map(), stale: false, idCounter: 0, scoped: new Map(), numbered: new Map(), copies: new Map(), instances: new Map(), groupMarks: new Map(), channels: new Map(), markSources: new Map(), guides: new Map() }
+}
+
+/** A top-level leaf mark's items as an encode made them: the encode, the rows, the items in row order and each channel's key. */
+interface ChannelRecord {
+  encode: object
+  rows: readonly Row[]
+  items: readonly SceneItem[]
+  /** per channel of `encode` (its own keys, in order): what it is evaluated under besides the row (`channelKeyOf`), null when that is unknown */
+  keys: Array<string | null>
+}
+
+/**
+ * A top-level group mark as a clean pass made it, with everything making it wrote into the evaluation besides its items, so that a
+ * later evaluation that keeps the items can leave the evaluation as making them would have (see `keptGroupMark`).
+ */
+interface GroupMarkRecord {
+  /** `markKeyOf` the group mark (every signal its subtree names, the view size, `extraFp`, the registry), as it was made */
+  key: string
+  /** its group items, in the order they were returned */
+  items: SceneGroup[]
+  /** where the view scope's instance counter stood before the mark, and how far making it moved it */
+  instanceFrom: number
+  instances: number
+  /** the last instance with content below it (`noteInstance`), when it made one */
+  last?: number[]
+  /** every list of gradient definitions it registered, in order (`addDefs` dedupes) */
+  defs: SceneDef[][]
+  /** what it named among the marks (`markItems`, `markContainers`): the group mark itself and the named marks inside it */
+  named: Array<[string, SceneItem[], { marktype: string; items: SceneItem[] } | undefined]>
+  /** the keys it added to the state's maps of group scopes (`scoped`, `numbered`, `instances`) */
+  keys: { scoped: string[]; numbered: string[]; instances: string[] }
+  /** whether the tuples it made were registered (`isTuple`) */
+  tuples: boolean
 }
 
 /** Committed state per compiled chart. Never stored on the IR itself. */
@@ -306,8 +363,12 @@ interface EvalTxn {
  * of that path imports it.
  */
 export interface IncrementalEngine {
-  /** A transform chain driven by `input`, reading the committed steps `prevDS` and recording this evaluation's into `state`. */
-  applyPipelineWithPulse(
+  /**
+   * A transform chain driven by `input`, reading the committed steps `prevDS` and recording this evaluation's into `state`. The pulse
+   * path: absent while it is not loaded (the React shells load it once a chart's data changes; see engine-parts.ts), and then a
+   * dataset that could have taken a pulse is derived in full, which makes the same rows and leaves the same state.
+   */
+  applyPipelineWithPulse?(
     rows: Row[], transforms: CompiledTransform[], tctx: StepTransformContext, sourceName: string,
     input: StepPulse, prevDS: DatasetState, state: DatasetState,
   ): { rows: Row[]; pulse: StepPulse | null }
@@ -327,7 +388,7 @@ export type DataStability = ReadonlyMap<string, unknown>
 function beginTxn(engine: IncrementalEngine, chart: CompiledChart, unchanged?: DataStability): EvalTxn {
   // (an evaluation that keeps state without the engine would leave a state the next pulse cannot start from, and answer with
   // another evaluation: it does not run)
-  if (typeof engine?.applyPipelineWithPulse !== 'function') throw new Error('[aster] an evaluation that keeps incremental state needs the incremental engine (incremental-engine.ts)')
+  if (typeof engine?.applyOneWithState !== 'function') throw new Error('[aster] an evaluation that keeps incremental state needs the incremental engine (incremental-engine.ts)')
   const committed = STATES.get(chart)
   const prev = committed && !committed.stale ? committed : undefined
   // (a claim flags the committed state stale as well as the state it was made in, so a committed state that is not stale carries a
@@ -496,6 +557,12 @@ interface AbortPoint {
   signals?: true
   /** a scale of the instance's scope could not be made (the scales come before everything else of it but its signals and projections) */
   scales?: true
+  /**
+   * a dataset of the instance's scope could not take its rows (a `null` or `undefined` row of its inline values: vega reads the
+   * tuple id inserting it): the datasets come after the scope's signals and projections, before its scales, so nothing else of it
+   * was made
+   */
+  data?: true
   /** a signal of the view that reads data or a scale threw: it is ranked after every other operator of the view's scope (see `abortAtThrowingSignal`) */
   lateSignal?: true
   /**
@@ -574,6 +641,8 @@ interface EvalContext {
   layoutThrew?: true
   /** The guide host of this context (see guideHost). */
   guideHost?: { ctx: EvalContext; host: GuideHost }
+  /** How many gradient definitions the evaluation was asked for so far (`addDefs`, a guide's gradient), shared with the contexts made from this one: see `keptGuide`. */
+  defsAsked: { n: number }
   scales: Map<string, Scale>
   scaleTypes: Map<string, string>
   /** Per-mark, per-eval encode bindings (scale fn + type) so the per-row encode
@@ -675,6 +744,8 @@ interface EvalContext {
   postRunLost?: boolean
   /** a late signal of the view threw: what was ranked after it did not run (see `abortAtThrowingSignal`) */
   lateTaint?: LateTaint
+  /** a dataset a `{signal}` values made holds primitive tuples (see PRIMITIVE_TUPLE): the marks join them as vega does */
+  primitiveTuples?: boolean
   /** the encode of the mark being made did not run: its items are the join's, bare */
   bareEncode?: boolean
   /** the pass stopped before the root group's size was encoded (a signal threw): the frame is 0 x 0 */
@@ -685,6 +756,8 @@ interface EvalContext {
   markItems: Map<string, SceneItem[]>
   /** The container of each named mark built so far (its type and items; a group mark's are its group items): what a `label` transform avoids or labels. */
   markContainers: Map<string, { marktype: string; items: SceneItem[] }>
+  /** While a top-level group mark is made: every list of gradient definitions registered, in order (see `GroupMarkRecord.defs`). */
+  defsLog?: SceneDef[][]
   /** The gradient definitions the leaf mark being made registers (merged into the scene's defs when the mark is done: see `evaluateMark`). */
   markGradients?: { defs: SceneDef[]; /** only some of the mark's items were encoded (a pulse): the rest bring their gradients from the previous group */ partial: boolean }
 }
@@ -702,6 +775,8 @@ function reportEvalError(ctx: EvalContext, e: unknown): void {
 }
 
 function refuseUnrecoverable(e: unknown): void {
+  // (a row that is not a tuple fails the dataflow where vega's fails, and is logged where vega logs it: see notATuple)
+  if (isNotATupleError(e)) return
   if (e instanceof AsterLimitError || e instanceof AsterUrlError || e instanceof ExpressionParseError || e instanceof SpecParseError || (e instanceof Error && e.message.startsWith('[aster]'))) throw e
 }
 
@@ -722,6 +797,7 @@ function failPass(ctx: EvalContext, point: Omit<AbortPoint, 'path'> & { path?: n
  */
 function stepOf(p: AbortPoint): number {
   if (p.signals) return -2
+  if (p.data) return -0.75
   if (p.scales) return -0.5
   if (p.labels) return 4e9 + (p.legend ?? 0)
   if (p.projection) return -1
@@ -842,7 +918,8 @@ function prepareChartCtx(
   const transformHierarchies = new Map<string, unknown>()
   const defs: SceneDef[] = []
   // Inputs besides the signals that change what a reused scale/item would be.
-  const extraFp = `${input.domainRaw ? valueKey(input.domainRaw) : ''}\u0002${input.textMetrics ? valueKey(input.textMetrics) : ''}\u0002${input.containerSize ? `${input.containerSize.width}x${input.containerSize.height}` : ''}\u0002${input.measuredSize ? `${input.measuredSize.width}x${input.measuredSize.height}` : ''}`
+  // (and what a formatted text or a local date read besides the spec and the input: the default locale, the host's time zone)
+  const extraFp = `${input.domainRaw ? valueKey(input.domainRaw) : ''}\u0002${input.textMetrics ? valueKey(input.textMetrics) : ''}\u0002${input.containerSize ? `${input.containerSize.width}x${input.containerSize.height}` : ''}\u0002${input.measuredSize ? `${input.measuredSize.width}x${input.measuredSize.height}` : ''}\u0002${formatEnvironmentKey()}`
   const ctx: EvalContext = {
     chart, scope: rootScope(chart), abort: { failures: [] }, ...(passMemory !== undefined ? { passMemory } : {}), signalParams, width, height, datasets, setData, scales, scaleTypes, projections: transformProjections, projectionStamp: new Map(), projectionIncomplete: new Set(), geoStale: false, runtime, _defs: defs,
     layoutState: { failed: false, warnings: [] }, initDone: new Set(), hostSignals: new Set([
@@ -852,7 +929,7 @@ function prepareChartCtx(
     ]),
     hierarchies: transformHierarchies, affected: new Set(), incremental: false, ...(txn.engine ? { engine: txn.engine } : {}), deadline, checkDeadline, markItems: new Map(), markContainers: new Map(),
     datasetPulses: new Map(),
-    prev, committed: txn.prev, ...(txn.unchanged ? { unchanged: txn.unchanged } : {}), ...(txn.lastPass ? { earlier: txn.lastPass } : {}), draft: newState(txn.gen), ids: { value: txn.prev?.idCounter ?? 0 }, idStart: txn.prev?.idCounter ?? 0, gen: txn.gen, claimed: txn.claimed, extraFp, dsEpoch: 0, scaleReuse: new Map(), distinctCache: new WeakMap(),
+    prev, committed: txn.prev, ...(txn.unchanged ? { unchanged: txn.unchanged } : {}), ...(txn.lastPass ? { earlier: txn.lastPass } : {}), draft: newState(txn.gen), ids: { value: txn.prev?.idCounter ?? 0 }, idStart: txn.prev?.idCounter ?? 0, gen: txn.gen, claimed: txn.claimed, extraFp, dsEpoch: 0, scaleReuse: new Map(), distinctCache: new WeakMap(), defsAsked: { n: 0 },
     domainRaw: input.domainRaw ? new Map(Object.entries(input.domainRaw).map(([k, v]) => [k, v])) : undefined,
     // Image urls are vetted when the host passes a policy, and with the default
     // policy whenever it passes `limits` (limits mean "this spec is untrusted").
@@ -989,7 +1066,7 @@ function makeSetdata(chart: CompiledChart, state: SetDataState): NonNullable<Exp
     // vega-dataflow enqueues an operator only once per run: a signal ranked after the dataset's input (it reads the dataset, or
     // something derived from it) calls setdata when the input has already run in this first pass, so its pulse is lost
     if (state.caller !== undefined && signalRanksAfterDatasetInput(chart, state.caller, name)) return 1
-    const rows = ingestRows((Array.isArray(tuples) ? tuples : tuples == null ? [] : [tuples]) as Row[]).map((r) => ({ ...r }))
+    const rows = ingestRows((Array.isArray(tuples) ? tuples : tuples == null ? [] : [tuples]) as Row[], 0, undefined, { dataset: name, source: 'setdata' }).map((r) => ({ ...r }))
     const have = state.rows.get(name)
     if (have === undefined || contentKey(have) !== contentKey(rows)) {
       state.rows.set(name, rows)
@@ -1015,7 +1092,7 @@ function makeTransformed(
     const d = chart.data.find((x) => x.name === name)
     const rows = d?.values != null ? readData(raw as never, d.format) : ingestRows(raw as Row[]).map((r) => ({ ...r }))
     if (!d?.transform.length) return rows
-    return applyTransforms(rows, d.transform, { runtime, signals: signalParams, hierarchies, projections }, name)
+    return applyTransforms(rows, d.transform, { runtime, signals: engineParams(signalParams), hierarchies, projections }, name)
   }
 }
 
@@ -1040,6 +1117,32 @@ function inlineValues(ctx: Pick<EvalContext, 'runtime' | 'signalParams'>, values
   const expr = values !== null && typeof values === 'object' && !Array.isArray(values) ? (values as { signal?: unknown }).signal : undefined
   if (typeof expr !== 'string') return values
   return ctx.runtime.expr(expr)(undefined, ctx.signalParams)
+}
+
+/** Say that the rows a `{signal}` values made hold primitive tuples (once per such dataset, only when they do). */
+function notePrimitiveTuples(ctx: EvalContext, rows: readonly Row[]): void {
+  if (!ctx.primitiveTuples && rows.some((r) => PRIMITIVE_TUPLE in r)) ctx.primitiveTuples = true
+}
+
+/**
+ * The tuples a mark makes items of, as vega's DataJoin does: items are keyed by tuple id, which a primitive tuple does not have, so
+ * every primitive tuple is the one item of the `undefined` key -- made where the first of them is, its datum the last of them.
+ */
+function joinPrimitiveTuples(rows: readonly Row[]): readonly Row[] {
+  let first = -1
+  let last: Row | undefined
+  for (let i = 0; i < rows.length; i++) {
+    if (!(PRIMITIVE_TUPLE in rows[i]!)) continue
+    if (first < 0) first = i
+    last = rows[i]
+  }
+  if (first < 0) return rows
+  const out: Row[] = []
+  for (let i = 0; i < rows.length; i++) {
+    if (i === first) out.push(last!)
+    else if (!(PRIMITIVE_TUPLE in rows[i]!)) out.push(rows[i]!)
+  }
+  return out
 }
 
 /** An item without the bookkeeping of the engine (`__gen` and the like): what a transform of the mark can read of it. */
@@ -1283,7 +1386,7 @@ function lateTaintOf(chart: CompiledChart, failed: readonly string[]): LateTaint
     changed = false
     for (const d of chart.signalDefs ?? []) if (!t.signals.has(d.name) && ([d.update, d.init].some((x) => typeof x === 'string' && expressionIdentifiers(x).some((id) => t.signals.has(id))) || reads(d.on))) { t.signals.add(d.name); changed = true }
     for (const sc of chart.scales) if (!t.scales.has(sc.name) && reads(sc)) { t.scales.add(sc.name); changed = true }
-    for (const d of chart.data) if (!t.data.has(d.name) && (reads(d) || sourceNames(d).some((n) => t.data.has(n)))) { t.data.add(d.name); changed = true }
+    for (const d of chart.data) if (!t.data.has(d.name) && (reads(dataWithoutRows(d)) || sourceNames(d).some((n) => t.data.has(n)))) { t.data.add(d.name); changed = true }
   }
   return t
 }
@@ -1536,11 +1639,181 @@ function guideTitle(ctx: EvalContext, title: unknown): string | undefined {
 /** vega-view-transforms layoutGroup: the child roles whose bounds union into BOTH anchor bounds of the guide layout. */
 const VIEW_ROLES: ReadonlySet<string> = new Set(['frame', 'scope', 'row-header', 'row-footer', 'row-title', 'column-header', 'column-footer', 'column-title'])
 
+/** Make one of a view's axes: its group, with what the accessible tree and the caption read of it. */
+function buildAxisGroup(ctx: EvalContext, axis0: CompiledAxis, axisIndex: number): SceneGroup | null {
+  const axis = resolveAxisOrient(axis0, ctx)
+  const group = buildAxis(axis, ctx, axisIndex)
+  if (group) {
+    // Carry guide identity for the accessible tree without changing
+    // the serialized SVG: the fields are scene metadata only.
+    const meta = group as unknown as { zindex?: number; orient?: string; scale?: string; title?: string; aria?: boolean; grid?: boolean; format?: unknown; formatType?: unknown }
+    // (the mark definition reads these as written -- vega-parser marks/definition.js: `+zindex || undefined`, `aria`,
+    // `description` -- so a signal object is not looked into: its zindex is none, its description is the object)
+    const zindex = +(axis.zindex as number) || undefined
+    if (zindex) meta.zindex = zindex
+    // (the caption reads the axis group item's own orient, which a user encode may have changed)
+    meta.orient = (typeof axis.orient === 'string' ? ((group as unknown as { axis?: { itemOrient?: string } }).axis?.itemOrient ?? axis.orient) : axis.orient)
+    meta.scale = axis.scale
+    meta.aria = axis.aria
+    meta.grid = guideScalar(ctx, axis.grid) === true
+    const unencoded = (group as unknown as { axis?: { unencoded?: boolean } }).axis?.unencoded === true
+    // (the caption reads the format and its type off the axis's group item, as its encode left them: a literal object is an
+    // encode entry there, a signal is what it holds whatever its type, and an `encode.axis` may set them)
+    const item = (group as unknown as { axis?: { format?: unknown; formatType?: unknown } }).axis
+    meta.format = unencoded ? undefined : item?.format
+    meta.formatType = unencoded ? undefined : item?.formatType
+    const at = guideTitle(ctx, axis.title)
+    if (at) meta.title = at
+    // the axis' `description` is the aria-label of its container (vega-scenegraph ariaGuide: mark.description first)
+    const adesc = (axis as { description?: unknown }).description
+    if (adesc) group.description = adesc as string
+  }
+  return group
+}
+
+/** One of the view's own axes or legends as a clean pass made it, and what it was made under (see `keptGuide`). */
+interface GuideRecord {
+  /** `guideKeyOf` the definition when it was made (with what its placement reads, for a title: see `buildTitleGroup`) */
+  key: string
+  /** the guide's group as made (a legend's as placed, once the legends of its scope were: see `buildAxisAndLegend`) */
+  group: SceneGroup
+  /** every scale of the scope, as the guide was made among them */
+  scales: ReadonlyArray<readonly [string, unknown]>
+  /** whether tuples were registered (the datums of its parts are tuples then) */
+  tuples: boolean
+  /** a legend's: whether making it took an instance slot of its scope (a symbol legend's entries: see `takeLegendSlot`) */
+  slotted?: boolean
+  /** a legend's: what the legends of its scope were placed against (see `legendPlacementKey`); unset until they are placed */
+  placement?: string
+}
+
+/** Run `fn`, counting what it logs through the context's logger (which it still logs to). */
+function countingLogs<T>(ctx: EvalContext, fn: () => T): { result: T; logged: number } {
+  const logger = ctx.logger
+  let logged = 0
+  const counted = (f: (...a: unknown[]) => void) => (...a: unknown[]): void => { logged++; f.apply(logger, a) }
+  ctx.logger = {
+    error: counted(logger.error), warn: counted(logger.warn),
+    ...(logger.info ? { info: counted(logger.info) } : {}), ...(logger.debug ? { debug: counted(logger.debug) } : {}),
+  }
+  try {
+    return { result: fn(), logged }
+  } finally {
+    ctx.logger = logger
+  }
+}
+
+/** The scope instance a guide belongs to: `''` for the view's, the group item's key path for a group mark's (a facet cell's). */
+const guideInstance = (ctx: EvalContext): string => ctx.scope.keyPath ?? ''
+
+function guideRecordOf(state: IncrementalState | undefined, def: object, instance: string): GuideRecord | undefined {
+  return state?.guides.get(def)?.get(instance)
+}
+function setGuideRecord(state: IncrementalState, def: object, instance: string, record: GuideRecord): void {
+  let byInstance = state.guides.get(def)
+  if (byInstance === undefined) state.guides.set(def, (byInstance = new Map()))
+  byInstance.set(instance, record)
+}
+
+/** What a guide definition reads besides the scales: the signals it names (null: more than it names), the datasets its expressions read by name (null: a computed name). */
+interface GuideDeps { names: readonly string[] | null; data: readonly string[] | null }
+const GUIDE_DEPS = new WeakMap<object, GuideDeps>()
+function guideDepsOf(def: object, chart: CompiledChart): GuideDeps {
+  let deps = GUIDE_DEPS.get(def)
+  if (deps !== undefined) return deps
+  const data = new Set<string>(datasetsNamed(def, chart))
+  let computed = false
+  walkStrings(def, (str) => {
+    const read = datasetsReadIn(str)
+    if (read === null) computed = true
+    else for (const n of read) data.add(n)
+  })
+  deps = { names: namesMentioned(def, chart), data: computed ? null : [...data].sort() }
+  GUIDE_DEPS.set(def, deps)
+  return deps
+}
+
+/**
+ * What one of the view's own axes or legends is made under besides the scales: the signals its definition names, the view's size,
+ * `extraFp` (overrides, text metrics given with the input, container sizes, locale, time zone) and the registered functions
+ * (`readsKey`); the rows of the datasets its expressions read by name (`datasetKey`); the URL policy its links are vetted under;
+ * the text measurer set for every chart; whether the guides are laid out at all. Null: it reads more than that (a signal it does
+ * not name, a dataset by a computed name).
+ */
+function guideKeyOf(def: object, ctx: EvalContext): string | null {
+  const deps = guideDepsOf(def, ctx.chart)
+  if (deps.names === null || deps.data === null) return null
+  let key = `${readsKey(ctx, deps.names)}\u0003${ctx.urlPolicy === undefined ? '' : dependencyKey(ctx.urlPolicy)}\u0003${valueKey(getTextMetricsProvider())}\u0003${ctx.rawGuides ? 1 : 0}`
+  for (const n of deps.data) key += `\u0004${n}=${datasetKey(ctx, n)}`
+  return key
+}
+
+/**
+ * The record of what the evaluation before made of guide `def` (an axis, a legend or a title, of the view or of a group mark's
+ * instance), when this evaluation would make the same: nothing it was made from changed. A guide's group is a function of its
+ * definition (the compiled chart's own object, with the config and styles folded in), of what `guideKeyOf` holds (in a group, the
+ * group's size and the signals as its scope sees them), of its scope's scales -- each the very object it was made with (a scale is
+ * made again whenever anything it is made from changes) -- and of whether tuples are registered. The pass must be clean (a pass that
+ * stopped makes what vega made before the stop), not counted against `limits` (a kept guide is not counted again), not one of a view
+ * that fits its viewport (each pass makes its own, the second from the first) and not one whose layout failed. What making it wrote
+ * into the evaluation besides its group is nothing, or it was not recorded (see `recordGuide`), or it is written again by the caller
+ * (a legend's instance slot). A record is kept once per evaluation: two instances of one key path never share a group.
+ * Not committed: the caller keeps it with `keepGuide`.
+ */
+function keptGuideRecord(def: object, ctx: EvalContext, key: string | null): GuideRecord | undefined {
+  if (key === null) return undefined
+  const instance = guideInstance(ctx)
+  const record = guideRecordOf(ctx.prev, def, instance)
+  if (record === undefined || record.key !== key || record.tuples !== tuplesRegistering()) return undefined
+  if (!guidesKeepable(ctx) || !sameScales(ctx, record.scales) || guideRecordOf(ctx.draft, def, instance) !== undefined) return undefined
+  return record
+}
+/** Keep `record` (see `keptGuideRecord`): this evaluation's group of `def` is the one before. */
+function keepGuide(def: object, ctx: EvalContext, record: GuideRecord): SceneGroup {
+  setGuideRecord(ctx.draft, def, guideInstance(ctx), record)
+  return record.group
+}
+function keptGuide(def: object, ctx: EvalContext, key: string | null): SceneGroup | undefined {
+  const record = keptGuideRecord(def, ctx, key)
+  return record === undefined ? undefined : keepGuide(def, ctx, record)
+}
+
+/** Whether this pass may keep or record the view's guides (see `keptGuide`). */
+const guidesKeepable = (ctx: EvalContext): boolean => cleanPass(ctx) && activeMeter() === null && ctx.passMemory === undefined
+  && !ctx.layoutState.failed && ctx.layoutThrew !== true
+
+function sameScales(ctx: EvalContext, scales: ReadonlyArray<readonly [string, unknown]>): boolean {
+  if (scales.length !== ctx.scales.size) return false
+  for (const [name, scale] of scales) if (ctx.scales.get(name) !== scale) return false
+  return true
+}
+
+/**
+ * Make guide `def` (`make`) and record it for a later evaluation to keep, when the pass is clean before and after, and making it
+ * wrote nothing into the evaluation but its group: it logged nothing (a warning is logged by every evaluation that makes the guide)
+ * and asked for no gradient definition (the scene's definitions are those its parts ask for, in order).
+ */
+function recordGuide(def: object, ctx: EvalContext, key: string | null, make: () => SceneGroup | null): SceneGroup | null {
+  if (key === null || !guidesKeepable(ctx) || guideRecordOf(ctx.draft, def, guideInstance(ctx)) !== undefined) return make()
+  const slotsBefore = ctx.scope.nextChild.n
+  const asked = ctx.defsAsked.n
+  const { result: group, logged } = countingLogs(ctx, make)
+  const slots = ctx.scope.nextChild.n - slotsBefore
+  // (a legend still waiting for its entries is only made in a pass that stopped; one slot at most is what a legend takes)
+  if (group !== null && logged === 0 && ctx.defsAsked.n === asked && guidesKeepable(ctx) && slots <= 1
+    && (group as unknown as { _entriesPending?: boolean })._entriesPending !== true) {
+    setGuideRecord(ctx.draft, def, guideInstance(ctx), { key, group, scales: [...ctx.scales], tuples: tuplesRegistering(), ...(slots === 1 ? { slotted: true } : {}) })
+  }
+  return group
+}
+
 function buildAxisAndLegend(
   ctx: EvalContext,
   contentItems: SceneGroup[],
   axes: CompiledAxis[] = ctx.chart.axes,
   legends: CompiledLegend[] = ctx.chart.legends,
+  /** the view's own guides (not a group mark's): they may be kept from the evaluation before (see `keptGuide`) */
+  keep = false,
 ): { groups: SceneGroup[] } {
   const groups: SceneGroup[] = []
   // (the pass stopped at a failing dataset: no axis or legend was made)
@@ -1550,32 +1823,9 @@ function buildAxisAndLegend(
   const anchorItems = [...contentItems]
 
   for (const [axisIndex, axis0] of axes.entries()) {
-    const axis = resolveAxisOrient(axis0, ctx)
-    const group = buildAxis(axis, ctx, axisIndex)
+    const key = keep ? guideKeyOf(axis0, ctx) : null
+    const group = (keep ? keptGuide(axis0, ctx, key) : undefined) ?? recordGuide(axis0, ctx, key, () => buildAxisGroup(ctx, axis0, axisIndex))
     if (group) {
-      // Carry guide identity for the accessible tree without changing
-      // the serialized SVG: the fields are scene metadata only.
-      const meta = group as unknown as { zindex?: number; orient?: string; scale?: string; title?: string; aria?: boolean; grid?: boolean; format?: unknown; formatType?: unknown }
-      // (the mark definition reads these as written -- vega-parser marks/definition.js: `+zindex || undefined`, `aria`,
-      // `description` -- so a signal object is not looked into: its zindex is none, its description is the object)
-      const zindex = +(axis.zindex as number) || undefined
-      if (zindex) meta.zindex = zindex
-      // (the caption reads the axis group item's own orient, which a user encode may have changed)
-      meta.orient = (typeof axis.orient === 'string' ? ((group as unknown as { axis?: { itemOrient?: string } }).axis?.itemOrient ?? axis.orient) : axis.orient)
-      meta.scale = axis.scale
-      meta.aria = axis.aria
-      meta.grid = guideScalar(ctx, axis.grid) === true
-      const unencoded = (group as unknown as { axis?: { unencoded?: boolean } }).axis?.unencoded === true
-      // (the caption reads the format and its type off the axis's group item, as its encode left them: a literal object is an
-      // encode entry there, a signal is what it holds whatever its type, and an `encode.axis` may set them)
-      const item = (group as unknown as { axis?: { format?: unknown; formatType?: unknown } }).axis
-      meta.format = unencoded ? undefined : item?.format
-      meta.formatType = unencoded ? undefined : item?.formatType
-      const at = guideTitle(ctx, axis.title)
-      if (at) meta.title = at
-      // the axis' `description` is the aria-label of its container (vega-scenegraph ariaGuide: mark.description first)
-      const adesc = (axis as { description?: unknown }).description
-      if (adesc) group.description = adesc as string
       groups.push(group)
       anchorItems.push(group)
     }
@@ -1585,49 +1835,13 @@ function buildAxisAndLegend(
   // placeLegendStack). A legend is never dropped by the config: `disable` is a Vega-Lite key that the VL compiler has already
   // resolved by leaving the legend out, so one that is here stays.
   type LegendProps = { orient?: unknown; offset?: unknown; x?: unknown; y?: unknown }
-  const built = legends
-    .map((legend, legendIndex) => {
-      const group = buildLegend(legend, ctx, legendIndex)
-      if (group) {
-        // (these are read as written, so a signal object is not looked into)
-        const zindex = +(legend.zindex as number) || undefined
-        if (zindex) (group as unknown as { zindex?: number }).zindex = zindex
-        // `aria: false` removes the legend from the accessibility tree (and marks it aria-hidden)
-        ;(group as unknown as { aria?: boolean }).aria = (legend as { aria?: boolean }).aria
-        const lt = guideTitle(ctx, legend.title)
-        if (lt) (group as unknown as { title?: string }).title = lt
-        const ldesc = (legend as { description?: unknown }).description
-        if (ldesc) group.description = ldesc as string
-        const g = group as unknown as {
-          legendScale?: string; legendChannels?: string[]; legendType?: string
-          legendFormat?: unknown; legendFormatType?: unknown
-        }
-        // the channels the legend describes, in priority order (the first gives the legend its scale)
-        const own = (legend.own ?? {}) as Record<string, unknown>
-        g.legendChannels = LEGEND_SCALES.filter((k) => !!own[k])
-        g.legendScale = g.legendChannels.map((k) => String(own[k]))[0]
-        // (a legend group item whose encode never ran has no format for the caption to read)
-        const unencoded = (group as unknown as { unencoded?: boolean }).unencoded === true
-        // (read off the legend's group item, as for an axis)
-        const item = (group as unknown as { legendItemFormat?: { format?: unknown; formatType?: unknown } }).legendItemFormat
-        g.legendFormat = unencoded ? undefined : item?.format
-        g.legendFormatType = unencoded ? undefined : item?.formatType
-        // (the legend type is the kind of legend the builder drew: gradient, discrete bands or symbols)
-      }
-      return { legend, group, props: ((group as unknown as { legendProps?: LegendProps } | null)?.legendProps ?? {}) as LegendProps }
-    })
-    .filter((x): x is { legend: CompiledLegend; group: SceneGroup; props: LegendProps } => x.group !== null)
-    // A legend whose entries failed to build (an invalid tickCount interval
-    // string) degenerates to a zero-size group with no items: vega still
-    // creates it, but it renders nothing and takes no layout space.
-    // (a legend only waiting for its entries is a group like any other)
-    .filter((x) => (x.group as unknown as { _entriesPending?: boolean })._entriesPending === true || !(x.group.width === 0 && x.group.height === 0 && (x.group.items?.length ?? 0) === 0))
-
-  if (built.length) {
-    const layoutW = Math.max(0, ctx.width)
-    const layoutH = Math.max(0, ctx.height)
-    // what the legends anchor against: the plot widened by the guides beside it. Legends on the left and right clear the
-    // vertical axes (xb), those above and below clear the horizontal ones (yb); a mark's group counts for both.
+  const layoutW = Math.max(0, ctx.width)
+  const layoutH = Math.max(0, ctx.height)
+  // what the legends anchor against: the plot widened by the guides beside it. Legends on the left and right clear the
+  // vertical axes (xb), those above and below clear the horizontal ones (yb); a mark's group counts for both.
+  let anchors: { xb: Sides; yb: Sides } | undefined
+  const anchorsOf = (): { xb: Sides; yb: Sides } => {
+    if (anchors !== undefined) return anchors
     const xb: Sides = { x1: 0, y1: 0, x2: layoutW, y2: layoutH }
     const yb: Sides = { x1: 0, y1: 0, x2: layoutW, y2: layoutH }
     const widen = (to: Sides, b: Bounds): void => {
@@ -1649,7 +1863,30 @@ function buildAxisAndLegend(
         widen(orient === 'left' || orient === 'right' ? xb : yb, boundAxisGroup(g))
       }
     }
+    return (anchors = { xb, yb })
+  }
+  // What placing the legends reads besides the legends themselves: the anchors, the plot's size and whether they are laid out.
+  const placement = keep && legends.length > 0 && guidesKeepable(ctx) ? legendPlacementKey(anchorsOf(), layoutW, layoutH, ctx.rawGuides === true) : null
+  // Every legend of the scope kept as the evaluation before placed it, when each is kept and they are placed against the same: the
+  // placement of one depends on the others of its orient, so they are kept together or made again together (see `keptLegends`).
+  const keptGroups = placement !== null ? keptLegends(ctx, legends, placement) : undefined
+  const made = keptGroups ?? legends.map((legend, legendIndex) => {
+    const key = keep ? guideKeyOf(legend, ctx) : null
+    return recordGuide(legend, ctx, key, () => describedLegend(buildLegend(legend, ctx, legendIndex), legend, ctx))
+  })
+  const built = made
+    .map((group, i) => ({ legend: legends[i]!, group, props: ((group as unknown as { legendProps?: LegendProps } | null)?.legendProps ?? {}) as LegendProps }))
+    .filter((x): x is { legend: CompiledLegend; group: SceneGroup; props: LegendProps } => x.group !== null)
+    // A legend whose entries failed to build (an invalid tickCount interval
+    // string) degenerates to a zero-size group with no items: vega still
+    // creates it, but it renders nothing and takes no layout space.
+    // (a legend only waiting for its entries is a group like any other)
+    .filter((x) => (x.group as unknown as { _entriesPending?: boolean })._entriesPending === true || !(x.group.width === 0 && x.group.height === 0 && (x.group.items?.length ?? 0) === 0))
 
+  // (placing a legend logs nothing it could log again: an `orient: none` legend's x and y are read, and logged, as it is placed, so
+  // a placement that logged is not recorded)
+  const placeLegends = (): void => {
+    const { xb, yb } = anchorsOf()
     // group legends by orient ('none' skips the grid: vega leaves the item
     // at its unlayouted position, which is the origin)
     const byOrient = new Map<string, { legend: CompiledLegend; group: SceneGroup; props: LegendProps }[]>()
@@ -1677,11 +1914,76 @@ function buildAxisAndLegend(
       if (ctx.rawGuides) continue
       placeLegendStack(orient, list.map((x) => x.group), list.map((x) => x.props.offset), (ctx.chart.legendLayout ?? {}) as Record<string, unknown>, xb, yb, layoutW, layoutH)
     }
-
-    for (const x of built) groups.push(x.group)
   }
+  const placed = built.length && keptGroups === undefined ? countingLogs(ctx, placeLegends).logged === 0 : true
+  // (the legends this pass made and recorded are placed now: what they were placed against goes with them)
+  if (placement !== null && keptGroups === undefined && placed && guidesKeepable(ctx)) {
+    const instance = guideInstance(ctx)
+    legends.forEach((legend, i) => {
+      const record = guideRecordOf(ctx.draft, legend, instance)
+      if (record !== undefined && record.group === made[i]) record.placement = placement
+    })
+  }
+  for (const x of built) groups.push(x.group)
 
   return { groups }
+}
+
+/** What the legends of a scope are placed against (see `buildAxisAndLegend`), as a key: the anchors, the plot's size, the raw mode. */
+function legendPlacementKey(anchors: { xb: Sides; yb: Sides }, w: number, h: number, raw: boolean): string {
+  const { xb, yb } = anchors
+  return `${xb.x1},${xb.y1},${xb.x2},${xb.y2}\u0001${yb.x1},${yb.y1},${yb.x2},${yb.y2}\u0001${w}x${h}\u0001${raw ? 1 : 0}`
+}
+
+/**
+ * The groups of every legend of the scope as the evaluation before made and placed them, when each is kept (`keptGuideRecord`) and
+ * was placed against what the legends are placed against now: the same anchors (the bounds of the content and the axes beside the
+ * plot), plot size and raw mode, beside the same other legends (each kept too). A legend's place is then the place it has, and
+ * nothing is placed. What making a legend wrote besides its group is written again: the instance slot of a symbol legend.
+ * Undefined: they are all made again (and placed), every one of them.
+ */
+function keptLegends(ctx: EvalContext, legends: readonly CompiledLegend[], placement: string): SceneGroup[] | undefined {
+  const records: GuideRecord[] = []
+  for (const legend of legends) {
+    const record = keptGuideRecord(legend, ctx, guideKeyOf(legend, ctx))
+    if (record === undefined || record.placement !== placement) return undefined
+    records.push(record)
+  }
+  return legends.map((legend, i) => {
+    const record = records[i]!
+    if (record.slotted === true) takeLegendSlot(ctx)
+    return keepGuide(legend, ctx, record)
+  })
+}
+
+/** A legend's group with what the accessible tree and the caption read of it (scene metadata only: the SVG does not change). */
+function describedLegend(group: SceneGroup | null, legend: CompiledLegend, ctx: EvalContext): SceneGroup | null {
+  if (group === null) return null
+  // (these are read as written, so a signal object is not looked into)
+  const zindex = +(legend.zindex as number) || undefined
+  if (zindex) (group as unknown as { zindex?: number }).zindex = zindex
+  // `aria: false` removes the legend from the accessibility tree (and marks it aria-hidden)
+  ;(group as unknown as { aria?: boolean }).aria = (legend as { aria?: boolean }).aria
+  const lt = guideTitle(ctx, legend.title)
+  if (lt) (group as unknown as { title?: string }).title = lt
+  const ldesc = (legend as { description?: unknown }).description
+  if (ldesc) group.description = ldesc as string
+  const g = group as unknown as {
+    legendScale?: string; legendChannels?: string[]; legendType?: string
+    legendFormat?: unknown; legendFormatType?: unknown
+  }
+  // the channels the legend describes, in priority order (the first gives the legend its scale)
+  const own = (legend.own ?? {}) as Record<string, unknown>
+  g.legendChannels = LEGEND_SCALES.filter((k) => !!own[k])
+  g.legendScale = g.legendChannels.map((k) => String(own[k]))[0]
+  // (a legend group item whose encode never ran has no format for the caption to read)
+  const unencoded = (group as unknown as { unencoded?: boolean }).unencoded === true
+  // (read off the legend's group item, as for an axis)
+  const item = (group as unknown as { legendItemFormat?: { format?: unknown; formatType?: unknown } }).legendItemFormat
+  g.legendFormat = unencoded ? undefined : item?.format
+  g.legendFormatType = unencoded ? undefined : item?.formatType
+  // (the legend type is the kind of legend the builder drew: gradient, discrete bands or symbols)
+  return group
 }
 
 /**
@@ -1921,7 +2223,8 @@ function signalPrereqsOf(chart: CompiledChart): Map<string, string[]> {
     for (const d of chart.data) {
       const read = new Set<string>()
       identsOf(d.transform, read)
-      if (d.values !== null && typeof d.values === 'object' && !Array.isArray(d.values)) identsOf(d.values, read)
+      const valuesExpr = valuesSignal(d.values)
+      if (valuesExpr !== undefined) identsOf(valuesExpr, read)
       // a signal computed from other signals reads what they read
       const queue = [...read]
       for (let i = 0; i < queue.length; i++) {
@@ -2333,6 +2636,333 @@ function canReuseMarkGroup(mark: CompiledMark, ctx: EvalContext, prevGroup: Scen
 }
 
 /**
+ * What a top-level group mark is made under besides its data and its scales (`markKeyOf` over the whole group definition: every
+ * signal any mark, scale, dataset, axis, legend, title or layout inside it names, the view size, `extraFp` and the registry), and the
+ * host's URL policy when something inside it is an image or a link.
+ */
+function groupMarkKeyOf(mark: CompiledMark, ctx: EvalContext): string {
+  const deps = groupDepsOf(mark, ctx.chart)
+  let key = readsKey(ctx, mark.transform?.length || deps.allData ? null : namesMentioned(mark, ctx.chart))
+  if (subtreeOf(mark).vets) key = `${key}\u0003${ctx.urlPolicy === undefined ? '' : dependencyKey(ctx.urlPolicy)}`
+  // (the datasets its expressions read by name, by content: a selection's store; see `markKeyOf`)
+  if (!deps.allData) for (const n of deps.exprData) key += `\u0004${n}=${datasetKey(ctx, n)}`
+  return key
+}
+
+/**
+ * `markDepsOf` for a group mark: what its subtree reads, where a mark inside it reading a dataset of a scope inside the subtree (a
+ * facet's partition, a group's own `data`) reads that dataset, not the items of a mark of that name. `allData` stays for a mark that
+ * reads a name no scope around it declares (another mark's items), and for an expression that reads a dataset by a computed name.
+ */
+const GROUP_DEPS = new WeakMap<CompiledMark, MarkDeps>()
+function groupDepsOf(mark: CompiledMark, chart: CompiledChart): MarkDeps {
+  let out = GROUP_DEPS.get(mark)
+  if (out !== undefined) return out
+  const base = markDepsOf(mark, chart)
+  if (!base.allData) out = base
+  else {
+    let computed = false
+    walkStrings(mark, (str) => { if (datasetsReadIn(str) === null) computed = true })
+    out = { ...base, allData: computed || readsMarksIn(mark, new Set(chart.data.map((d) => d.name)), new Set(), 0) }
+  }
+  GROUP_DEPS.set(mark, out)
+  return out
+}
+
+/** Whether a mark of the subtree reads a name that is neither a dataset of the view nor one a scope around it declares. */
+function readsMarksIn(m: CompiledMark, known: ReadonlySet<string>, scoped: ReadonlySet<string>, depth: number): boolean {
+  if (depth > 64) return true
+  const visible = (n: unknown): boolean => typeof n !== 'string' || known.has(n) || scoped.has(n)
+  const facet = (m.from as { facet?: FacetDef } | undefined)?.facet
+  if (!visible(m.from?.data) || (facet !== undefined && !visible(facet.data))) return true
+  const lookups = [...(m.transform ?? []), ...(m.data ?? []).flatMap((d) => d.transform ?? [])] as Array<{ type?: unknown; from?: unknown }>
+  if (lookups.some((t) => t?.type === 'lookup' && !visible(t.from))) return true
+  if (!m.marks?.length) return false
+  const inner = new Set(scoped)
+  if (facet !== undefined && typeof facet.name === 'string') inner.add(facet.name)
+  for (const d of m.data ?? []) inner.add(d.name)
+  // (a group's own datasets read each other in order, and `source` names one of the view's or of a scope around it)
+  for (const d of m.data ?? []) for (const n of sourceNames(d)) if (!visible(n) && !inner.has(n)) return true
+  return m.marks.some((c) => readsMarksIn(c, known, inner, depth + 1))
+}
+
+/** What a group mark's subtree holds that decides whether it may be kept (see `keptGroupMark`). */
+interface GroupSubtree { vets: boolean; refused: boolean }
+const GROUP_SUBTREES = new WeakMap<CompiledMark, GroupSubtree>()
+/**
+ * Transforms whose run writes what the evaluation shares beyond the subtree, or reads other marks: `identifier` numbers from the
+ * view's counter, `force` rewrites the link rows of the evaluation, `stratify` and `nest` make the hierarchies tree functions read,
+ * `label` reads the marks it avoids.
+ */
+const SHARED_STATE_TRANSFORMS = new Set(['identifier', 'force', 'stratify', 'nest', 'label'])
+function subtreeOf(mark: CompiledMark): GroupSubtree {
+  let out = GROUP_SUBTREES.get(mark)
+  if (out !== undefined) return out
+  out = { vets: false, refused: false }
+  const visit = (m: CompiledMark, depth: number): void => {
+    if (depth > 64) { out!.refused = true; return }
+    if (m.type === 'image' || encodesHref(m)) out!.vets = true
+    // (a scope with signals of its own: their values are held under the scope's id, which no definition names)
+    if (m.signalDefs?.length) out!.refused = true
+    for (const t of [...(m.transform ?? []), ...(m.data ?? []).flatMap((d) => d.transform ?? [])] as Array<{ type?: unknown }>) {
+      if (typeof t?.type !== 'string' || SHARED_STATE_TRANSFORMS.has(t.type)) out!.refused = true
+    }
+    for (const c of m.marks ?? []) visit(c, depth + 1)
+  }
+  visit(mark, 0)
+  GROUP_SUBTREES.set(mark, out)
+  return out
+}
+
+/**
+ * The group items a top-level group mark made in the evaluation before, kept whole, or null when it is to be made.
+ *
+ * A group mark's items are a function of: its definition; the signals its subtree names and the view size, `extraFp` (overrides,
+ * text metrics, container sizes, locale, time zone) and the registered functions (all in `key`); the datasets the subtree names or
+ * reads by name from expressions (each the very array the evaluation before read, which no change told touched: `sameRows`); the
+ * top-level scales it reads (the same objects); the URL policy (in `key` when something inside it is vetted); whether tuples are
+ * registered. A subtree that reads more than it names is never kept: one that may read any dataset (another mark's items, a computed
+ * name), declares signals of its own, may draw random numbers, or runs a transform that writes what the evaluation shares (see
+ * `SHARED_STATE_TRANSFORMS`). Nor is one in a pass that is not clean, under `limits` (as a kept leaf mark), in a view that fits its
+ * viewport (each pass makes its own) or one with a `layout` (it writes the items' places after they are made).
+ *
+ * Making the mark also writes into the evaluation; a kept mark writes the same (`GroupMarkRecord`): the view scope's instance
+ * counter and its last instance, the gradient definitions in order, the marks it names, and the state of its group scopes is carried
+ * into the draft for the evaluation after.
+ */
+function keptGroupMark(mark: CompiledMark, ctx: EvalContext, key: string): SceneGroup[] | null {
+  const prev = ctx.prev
+  const record = prev?.groupMarks.get(mark)
+  if (prev === undefined || record === undefined || record.key !== key || prev.markKeys.get(mark) !== key) return null
+  if (!cleanPass(ctx) || ctx.passMemory !== undefined || ctx.chart.layout != null || forceBound(mark, ctx.chart) || mayDrawRandom(mark)) return null
+  if (subtreeOf(mark).refused || record.tuples !== tuplesRegistering() || ctx.scope.nextChild.n !== record.instanceFrom) return null
+  const deps = groupDepsOf(mark, ctx.chart)
+  if (deps.allData || mark.transform?.length || namesMentioned(mark, ctx.chart) === null) return null
+  if (!(ctx.incremental && prev.fp === ctx.draft.fp) && !followsChanges(ctx)) return null
+  for (const n of [...deps.names, ...deps.exprData]) {
+    if (!sameRows(ctx, n) || ctx.failedDatasets?.has(n)) return null
+  }
+  for (const name of deps.allScales ? ctx.chart.scales.map((sc) => sc.name) : deps.scales) {
+    if (ctx.scales.get(name) !== prev.scales.get(name)) return null
+  }
+  ctx.scope.nextChild.n += record.instances
+  if (record.last !== undefined) noteInstance(ctx.scope, record.last)
+  for (const defs of record.defs) addDefs(ctx, defs)
+  for (const [name, its, container] of record.named) {
+    ctx.markItems.set(name, its)
+    if (container !== undefined) ctx.markContainers.set(name, container)
+  }
+  const carry = <T>(from: Map<string, T>, to: Map<string, T>, keys: readonly string[]): void => {
+    for (const k of keys) { const v = from.get(k); if (v !== undefined) to.set(k, v) }
+  }
+  carry(prev.scoped, ctx.draft.scoped, record.keys.scoped)
+  carry(prev.numbered, ctx.draft.numbered, record.keys.numbered)
+  carry(prev.instances, ctx.draft.instances, record.keys.instances)
+  ctx.draft.groupMarks.set(mark, record)
+  return record.items
+}
+
+/** Make a top-level group mark (`make`) and, when it was made whole in a clean pass, record it for a later evaluation to keep. */
+function recordGroupMark(mark: CompiledMark, ctx: EvalContext, key: string, make: () => SceneGroup | SceneGroup[] | null): SceneGroup | SceneGroup[] | null {
+  const instanceFrom = ctx.scope.nextChild.n
+  const lastBefore = ctx.scope.last
+  const named = new Map([...ctx.markItems].map(([k, v]) => [k, v] as const))
+  const sizes = { scoped: ctx.draft.scoped.size, numbered: ctx.draft.numbered.size, instances: ctx.draft.instances.size }
+  const outerLog = ctx.defsLog
+  const log: SceneDef[][] = []
+  ctx.defsLog = log
+  let made: SceneGroup | SceneGroup[] | null
+  try {
+    made = make()
+  } finally {
+    ctx.defsLog = outerLog
+    if (outerLog !== undefined) pushAll(outerLog, log)
+  }
+  if (!Array.isArray(made) || !cleanPass(ctx) || activeMeter() !== null || ctx.passMemory !== undefined) return made
+  const after = <T>(m: Map<string, T>, from: number): string[] => [...m.keys()].slice(from)
+  const record: GroupMarkRecord = {
+    key,
+    items: made,
+    instanceFrom,
+    instances: ctx.scope.nextChild.n - instanceFrom,
+    ...(ctx.scope.last !== lastBefore && ctx.scope.last !== undefined ? { last: ctx.scope.last } : {}),
+    defs: log,
+    named: [...ctx.markItems].filter(([k, v]) => named.get(k) !== v).map(([k, v]) => [k, v, ctx.markContainers.get(k)]),
+    keys: { scoped: after(ctx.draft.scoped, sizes.scoped), numbered: after(ctx.draft.numbered, sizes.numbered), instances: after(ctx.draft.instances, sizes.instances) },
+    tuples: tuplesRegistering(),
+  }
+  ctx.draft.groupMarks.set(mark, record)
+  return made
+}
+
+/**
+ * The fields of its row an expression reads: `datum.f` and `datum["f"]`, or null when it reads the row some other way (passes `datum`
+ * on, indexes it by a computed name) or cannot be parsed.
+ */
+function rowFieldsIn(code: string, out: Set<string>): boolean {
+  let tree: Expr
+  try { tree = parseExpressionCached(code) } catch { return false }
+  let whole = false
+  const visit = (n: Expr | null | undefined, depth: number): void => {
+    if (whole || n == null) return
+    if (depth > 256) { whole = true; return }
+    switch (n.type) {
+      case 'Identifier': if (n.name === 'datum') whole = true; return
+      case 'MemberExpression':
+        if (n.object.type === 'Identifier' && n.object.name === 'datum') {
+          if (!n.computed && n.property.type === 'Identifier') { out.add(n.property.name); return }
+          if (n.computed && n.property.type === 'Literal' && (typeof n.property.value === 'string' || typeof n.property.value === 'number')) { out.add(String(n.property.value)); return }
+          whole = true
+          return
+        }
+        visit(n.object, depth + 1)
+        if (n.computed) visit(n.property, depth + 1)
+        return
+      case 'CallExpression': visit(n.callee, depth + 1); for (const a of n.arguments) visit(a, depth + 1); return
+      case 'UnaryExpression': visit(n.argument, depth + 1); return
+      case 'BinaryExpression': case 'LogicalExpression': visit(n.left, depth + 1); visit(n.right, depth + 1); return
+      case 'ConditionalExpression': visit(n.test, depth + 1); visit(n.consequent, depth + 1); visit(n.alternate, depth + 1); return
+      case 'ArrayExpression': for (const e of n.elements) visit(e, depth + 1); return
+      case 'ObjectExpression': for (const p of n.properties) visit(p.value, depth + 1); return
+      default: return
+    }
+  }
+  visit(tree, 0)
+  return !whole
+}
+
+/** A field path that names one field of the row as a whole (`x`, not `a.b` or `a[0]`), or null. */
+const plainField = (f: unknown): string | null => (typeof f === 'string' && /^[A-Za-z_$][\w$]*$/.test(f) ? f : null)
+
+/** The parameters of the transforms whose reads of their rows are all spelled in these parameters (see `rowFieldsOfMark`). */
+const ROW_READING_TRANSFORMS: Record<string, readonly string[]> = { voronoi: ['type', 'x', 'y', 'size', 'extent', 'as'] }
+
+/**
+ * The fields of its rows a leaf mark reads -- through its encode (fields of the entries, expressions in `signal` and `test`) and its
+ * transforms -- or null when it may read others (a field by a path or a computed name, the row passed on whole, a transform whose
+ * reads are not all spelled in parameters this knows, a sort or a key).
+ */
+const ROW_FIELDS = new WeakMap<CompiledMark, ReadonlySet<string> | null>()
+function rowFieldsOfMark(mark: CompiledMark): ReadonlySet<string> | null {
+  if (ROW_FIELDS.has(mark)) return ROW_FIELDS.get(mark)!
+  const out = new Set<string>()
+  let known = mark.sort === undefined && mark.key === undefined
+  const entry = (v: unknown, depth: number): void => {
+    if (!known || v === null || typeof v !== 'object') return
+    if (depth > 64) { known = false; return }
+    if (Array.isArray(v)) { for (const x of v) entry(x, depth + 1); return }
+    const o = v as Record<string, unknown>
+    for (const [k, x] of Object.entries(o)) {
+      if (k === 'field') {
+        if (typeof x === 'string') { const f = plainField(x); if (f === null) known = false; else out.add(f) }
+        else if (x !== null && typeof x === 'object') {
+          const ref = x as Record<string, unknown>
+          // (a field of the group or of its parent is not the row's; a field named by a signal may be any of them)
+          if ('datum' in ref) { const f = plainField(ref.datum); if (f === null) known = false; else out.add(f) } else if (!('group' in ref) && !('parent' in ref)) known = false
+          else entry(x, depth + 1)
+        }
+      } else if ((k === 'signal' || k === 'test' || k === 'expr') && typeof x === 'string') {
+        if (!rowFieldsIn(x, out)) known = false
+      } else entry(x, depth + 1)
+    }
+  }
+  entry(mark.encode, 0)
+  for (const t of (mark.transform ?? []) as unknown as Array<Record<string, unknown>>) {
+    const params = typeof t.type === 'string' ? ROW_READING_TRANSFORMS[t.type] : undefined
+    if (params === undefined || Object.keys(t).some((k) => !params.includes(k))) { known = false; break }
+    for (const k of ['x', 'y']) {
+      const v = t[k]
+      if (typeof v === 'string') { const f = plainField(v); if (f === null) known = false; else out.add(f) } else entry(v, 0)
+    }
+  }
+  const result = known ? out : null
+  ROW_FIELDS.set(mark, result)
+  return result
+}
+
+/** What a leaf mark drawn from another mark's items is made under besides those items (see `keptOverMarkItems`). */
+function overMarkItemsKey(mark: CompiledMark, ctx: EvalContext): string | null {
+  const names = namesMentioned(mark, ctx.chart)
+  if (names === null) return null
+  let key = readsKey(ctx, names)
+  if (mark.type === 'image' || encodesHref(mark)) key = `${key}\u0003${ctx.urlPolicy === undefined ? '' : dependencyKey(ctx.urlPolicy)}`
+  for (const n of markDepsOf(mark, ctx.chart).exprData) key += `\u0004${n}=${datasetKey(ctx, n)}`
+  return key
+}
+
+/**
+ * Whether a top-level leaf mark drawn from another mark's items (`from: {data: <mark name>}`: its rows are copies of those items, a
+ * Vega-Lite voronoi over a rule's items) makes the group it made in the evaluation before: what it reads of its rows is what it read
+ * then, and so is everything else it reads. Its rows are read only through the fields `rowFieldsOfMark` finds (refused when it cannot
+ * tell), so item by item those fields of the items it is drawn from must hold the same values (`Object.is`: an object, such as an
+ * item's datum, by identity) -- an item kept by its mark is the same item. Besides: the signals it names (with the view size,
+ * `extraFp` and the registry), the content of the datasets its expressions read by name and the URL policy (`overMarkItemsKey`); the
+ * datasets it names (`sameRows`); the scales it reads (the same objects); whether tuples are registered. Refused: a mark that reads a
+ * dataset by a computed name or other marks' items through a lookup, a pass that is not clean, under `limits`, a view that fits its
+ * viewport.
+ */
+function keptOverMarkItems(mark: CompiledMark, ctx: EvalContext, prevGroup: SceneGroup): 'same' | 'datums' | null {
+  const prev = ctx.prev
+  const source = mark.from?.data
+  const record = prev?.markSources.get(mark)
+  if (prev === undefined || record === undefined || typeof source !== 'string' || ctx.datasets.has(source)) return null
+  const items = ctx.markItems.get(source)
+  if (items === undefined || items.length !== record.items.length || (prevGroup.items?.length ?? -1) !== items.length || record.tuples !== tuplesRegistering()) return null
+  if (!cleanPass(ctx) || !(followsChanges(ctx) || (ctx.incremental && prev.fp === ctx.draft.fp)) || ctx.passMemory !== undefined || forceBound(mark, ctx.chart) || mark.sort !== undefined) return null
+  if (record.key !== overMarkItemsKey(mark, ctx) || prev.markKeys.get(mark) === undefined) return null
+  if (((mark.transform ?? []) as Array<{ type?: unknown; from?: unknown }>).some((t) => t.type === 'lookup')) return null
+  let computed = false
+  walkStrings(mark, (str) => { if (datasetsReadIn(str) === null) computed = true })
+  if (computed) return null
+  const deps = markDepsOf(mark, ctx.chart)
+  for (const n of deps.names) if (!sameRows(ctx, n)) return null
+  for (const name of markScaleNames(mark, ctx.chart)) if (ctx.scales.get(name) !== prev.scales.get(name)) return null
+  const fields = rowFieldsOfMark(mark)
+  let same = true
+  for (let i = 0; i < items.length; i++) {
+    const a = record.items[i] as unknown as Record<string, unknown>
+    const b = items[i] as unknown as Record<string, unknown>
+    if (a === b) continue
+    same = false
+    if (fields === null) return null
+    for (const f of fields) if (!Object.is(a[f], b[f])) return null
+  }
+  return same ? 'same' : 'datums'
+}
+
+/**
+ * The group a mark drawn from another mark's items makes when what it reads of its rows is as it was but the rows are not the same
+ * (see `keptOverMarkItems`): each item is its item before with the datum a fresh evaluation gives it, a copy of the item it is drawn
+ * from as it is now (vega's datum there is that item itself, as it is now), or the item before itself when it is drawn from the very
+ * item it was (a published item holds what it held). Every other property is what it was: made from what it read, which is
+ * unchanged. The group is the one before with these items.
+ */
+function withNewDatums(mark: CompiledMark, ctx: EvalContext, prevGroup: SceneGroup, from: readonly SceneItem[], was: readonly SceneItem[]): SceneGroup {
+  const before = prevGroup.items as SceneItem[]
+  const items = new Array<SceneItem>(before.length)
+  for (let i = 0; i < before.length; i++) {
+    // (drawn from the very item it was drawn from: its datum is a copy of that item, which is as it was -- the item is the one before)
+    if (from[i] === was[i]) { items[i] = before[i]!; continue }
+    const datum = { ...(from[i] as unknown as Row) }
+    markTuple(datum)
+    items[i] = { ...before[i]!, datum, __gen: ctx.gen } as SceneItem
+  }
+  ;(items as SceneItem[] & { __engineItems?: true }).__engineItems = true
+  const group = { ...prevGroup, items } as SceneGroup
+  const gradients = GROUP_GRADIENTS.get(prevGroup)
+  if (gradients !== undefined) GROUP_GRADIENTS.set(group, gradients)
+  void mark
+  return group
+}
+
+/** Record what a top-level leaf mark drawn from another mark's items was made from (see `keptOverMarkItems`), when made whole and clean. */
+function recordOverMarkItems(mark: CompiledMark, ctx: EvalContext, items: readonly SceneItem[] | undefined): void {
+  const key = overMarkItemsKey(mark, ctx)
+  if (key === null || items === undefined || !cleanPass(ctx) || activeMeter() !== null || ctx.passMemory !== undefined) return
+  ctx.draft.markSources.set(mark, { key, items, tuples: tuplesRegistering() })
+}
+
+/**
  * Vega's renderers visit a group's items in dataflow order: axes (including
  * grid axes) first, then marks/scopes, then legends, then the title. Our
  * builders create marks first (guides need their bounds to anchor), so sort
@@ -2418,7 +3048,7 @@ function buildContent(
  * random-tape.ts), so which pass takes a pulse decides which numbers the source hands out, and the numbers must stay those.
  */
 function drawsInDatasets(chart: CompiledChart, input: RuntimeInput): boolean {
-  return input.random !== undefined && mayDrawRandom(chart.data)
+  return input.random !== undefined && datasetsMayDraw(chart)
 }
 
 /** Log the warnings the layouts of the pass that is kept gave, in the order they gave them. */
@@ -2468,19 +3098,43 @@ function buildContentPass(
     const mark = marks[at]!
     ctx.scope.mark = at
     const prevGroup = ctx.prev?.groups.get(mark) ?? null
+    if (mark.type === 'group') {
+      // (a group mark: kept whole when nothing its subtree reads changed, else made, and recorded when made whole)
+      const key = groupMarkKeyOf(mark, ctx)
+      ctx.draft.markKeys.set(mark, key)
+      const kept = keptGroupMark(mark, ctx, key)
+      if (kept !== null) { pushAll(items, kept); continue }
+      const made = recordGroupMark(mark, ctx, key, () => evaluateMark(mark, ctx, prevGroup))
+      if (made) {
+        for (const g of Array.isArray(made) ? made : [made]) {
+          if (mark.zindex) (g as unknown as { zindex?: number }).zindex = mark.zindex
+          items.push(g)
+        }
+      }
+      continue
+    }
     // (what the mark is made under besides its data and scales, for the next evaluation to compare)
-    const markKey = mark.type === 'group' ? undefined : markKeyOf(mark, ctx)
-    if (markKey !== undefined) ctx.draft.markKeys.set(mark, markKey)
-    if (prevGroup && markKey !== undefined && canReuseMarkGroup(mark, ctx, prevGroup, markKey)) {
-      items.push(prevGroup)
-      ctx.draft.groups.set(mark, prevGroup)
+    const markKey = markKeyOf(mark, ctx)
+    ctx.draft.markKeys.set(mark, markKey)
+    // (a mark drawn from another mark's items: the items it is drawn from now, before it is made or kept)
+    const overItems = typeof mark.from?.data === 'string' && !ctx.datasets.has(mark.from.data) ? ctx.markItems.get(mark.from.data) : undefined
+    const reused = prevGroup !== null && canReuseMarkGroup(mark, ctx, prevGroup, markKey)
+    const keptOver = prevGroup !== null && !reused && overItems !== undefined ? keptOverMarkItems(mark, ctx, prevGroup) : null
+    if (prevGroup !== null && (reused || keptOver !== null)) {
+      if (overItems !== undefined) recordOverMarkItems(mark, ctx, overItems)
+      const group = keptOver === 'datums' ? withNewDatums(mark, ctx, prevGroup, overItems!, ctx.prev!.markSources.get(mark)!.items) : prevGroup
+      items.push(group)
+      ctx.draft.groups.set(mark, group)
+      // (its channels read what they read: the mark's key, which holds every name they hold, is as it was)
+      const channels = ctx.prev?.channels.get(mark)
+      if (channels !== undefined) ctx.draft.channels.set(mark, channels)
       // (a named mark's items are what a later mark of `from: {data: <name>}` reads, as `evaluateMark` leaves them)
       if (typeof mark.name === 'string') {
-        ctx.markItems.set(mark.name, (prevGroup.items ?? []) as SceneItem[])
-        ctx.markContainers.set(mark.name, prevGroup as unknown as { marktype: string; items: SceneItem[] })
+        ctx.markItems.set(mark.name, (group.items ?? []) as SceneItem[])
+        ctx.markContainers.set(mark.name, group as unknown as { marktype: string; items: SceneItem[] })
       }
       // (its items are not encoded again: their gradients are the group's)
-      const keptGradients = GROUP_GRADIENTS.get(prevGroup)
+      const keptGradients = GROUP_GRADIENTS.get(group)
       if (keptGradients !== undefined) addDefs(ctx, keptGradients)
       // (the numbers its items hold are kept with them)
       const key = numberedKey(mark, ctx)
@@ -2489,6 +3143,7 @@ function buildContentPass(
       continue
     }
     const result = evaluateMark(mark, ctx, prevGroup)
+    if (overItems !== undefined && result && !Array.isArray(result)) recordOverMarkItems(mark, ctx, overItems)
     if (result) {
       for (const g of Array.isArray(result) ? result : [result]) {
         if (mark.zindex) (g as unknown as { zindex?: number }).zindex = mark.zindex
@@ -2529,14 +3184,14 @@ function buildContentPass(
     }
   }
   const { groups: guideGroups } = withoutLateReads(ctx, () => stopped
-    ? buildAxisAndLegend(ctx, items, ctx.chart.axes.slice(0, madeAxes(cut!)), ctx.chart.legends.slice(0, madeLegends(cut!)))
-    : buildAxisAndLegend(ctx, items))
+    ? buildAxisAndLegend(ctx, items, ctx.chart.axes.slice(0, madeAxes(cut!)), ctx.chart.legends.slice(0, madeLegends(cut!)), true)
+    : buildAxisAndLegend(ctx, items, ctx.chart.axes, ctx.chart.legends, true))
   for (const g of guideGroups) items.push(g)
   // (the view's layout is ranked after every instance with content, the entries of its legends included: known once they are made)
   if (layoutError !== undefined && cut === undefined) failPass(ctx, { path: ctx.scope.last ?? [], axis: Infinity, late: true, layout: { items: [[]], at: 0 } }, layoutError.error)
 
   // Top-level title. (A pass that stopped at a failing dataset or signal never made it: it is ranked after them.)
-  const titleGroup = (stopped && !cut!.title && !cut!.labels && !cut!.lateSignal && !cut!.lateScale) || ctx.datasetAborted ? null : withoutLateReads(ctx, () => buildTitleGroup(ctx.chart.title, items, width, height, ctx.rawGuides, ctx, undefined, isFit(autosizeOf(chart, input).type)))
+  const titleGroup = (stopped && !cut!.title && !cut!.labels && !cut!.lateSignal && !cut!.lateScale) || ctx.datasetAborted ? null : withoutLateReads(ctx, () => buildTitleGroup(ctx.chart.title, items, width, height, ctx.rawGuides, ctx, undefined, isFit(autosizeOf(chart, input).type), true))
   if (titleGroup) items.push(titleGroup)
   // The root group's width / height are the view's `width` / `height` signals (0
   // for a composition that sizes only its children), whatever the grid inside covers.
@@ -2566,6 +3221,14 @@ function buildContentPass(
   // (made and laid out: what is the same as the content of this pass in the evaluation before is that content)
   const content = ctx.prev?.content !== undefined ? shareContent(ctx.prev.content, ordered) : ordered
   ctx.draft.content = content
+  // (a group mark recorded in this pass keeps the nodes the scene holds: the ones `shareContent` put in place of its own)
+  if (content !== ordered && ctx.draft.groupMarks.size) {
+    const shared = new Map<SceneGroup, SceneGroup>()
+    for (let i = 0; i < ordered.length; i++) if (content[i] !== ordered[i]) shared.set(ordered[i]!, content[i]!)
+    for (const record of ctx.draft.groupMarks.values()) {
+      if (record.items.some((g) => shared.has(g))) record.items = record.items.map((g) => shared.get(g) ?? g)
+    }
+  }
   return { record: ctx.passMemory?.cur, items: content, padding, ctx, width, height, hasLayout, frame }
 }
 
@@ -2592,7 +3255,8 @@ function shareContent(prev: readonly SceneGroup[], next: SceneGroup[]): SceneGro
 /** `next`, or `prev` when it is the same node, or `next` with the children it shares with `prev` (a new node of this evaluation). */
 function shareNode(prev: SceneNode, next: SceneNode): SceneNode {
   if (prev === next) return prev
-  if (isLeafMark(next) || isLeafMark(prev)) return next
+  // (a node an earlier evaluation returned, kept whole by this one -- a kept group mark's item: it is read-only, see scene-registry.ts)
+  if (isLeafMark(next) || isLeafMark(prev) || isEngineNode(next)) return next
   if (sameNode(prev, next, 0)) return prev
   const a = (prev as { items?: unknown }).items
   const b = (next as { items?: unknown }).items
@@ -2710,6 +3374,23 @@ export function evaluateOnce(chart: CompiledChart, input: RuntimeInput = {}): Sc
 }
 
 function evaluateChartImpl(chart: CompiledChart, hostInput: RuntimeInput, txn: EvalTxn, done: { draft?: IncrementalState; failed?: boolean }): SceneRoot {
+  // (the tuples it makes are registered only for a chart whose expressions may ask `isTuple` of one: nothing else can ask)
+  return withTuples(registersTuples(chart, hostInput), () => evaluateChartPass(chart, hostInput, txn, done))
+}
+
+/**
+ * Whether an evaluation registers the tuples it makes (see `CompiledChart.callsIsTuple`). A chart that only asks of Vega-Lite's
+ * `facet` signal does when the host sets that signal to an object not known to be a tuple: one of the rows it hands the chart, say,
+ * which the evaluation registers as vega ingests it.
+ */
+function registersTuples(chart: CompiledChart, input: RuntimeInput): boolean {
+  if (chart.callsIsTuple === true) return true
+  if (chart.callsIsTuple !== 'facet' || input.signals === undefined || !Object.hasOwn(input.signals, 'facet')) return false
+  const v = input.signals.facet
+  return v !== null && typeof v === 'object' && !isTuple(v)
+}
+
+function evaluateChartPass(chart: CompiledChart, hostInput: RuntimeInput, txn: EvalTxn, done: { draft?: IncrementalState; failed?: boolean }): SceneRoot {
   // an injected random source is drawn from once per site and run, however many passes and evaluations repeat it (see random-tape.ts)
   const input: RuntimeInput = hostInput.random ? { ...hostInput, random: replayable(hostInput.random) } : hostInput
   // (the spec's autosize, or a fit to the container the host measured: see autosizeOf)
@@ -2740,13 +3421,19 @@ function evaluateChartImpl(chart: CompiledChart, hostInput: RuntimeInput, txn: E
   let ch = initialH
   let firstPassPadding: BuiltContent['padding'] | undefined
   let built: BuiltContent
+  // (autosize none containing the padding: the view's width and height, the padding taken out, sign and all)
+  let insidePadding: { width: number; height: number } | undefined
   if (auto === 'none' && autosizeContains === 'padding') {
     // autosize `none` with `contains: "padding"`: the view's width / height INCLUDE the padding, so the group (the
     // width / height signals, every scale and expression that reads them) gets what is left (vega-view-transforms
     // viewSizeLayout: `width = viewWidth`, the padding taken out of it), as a resize of the view does.
-    cw = Math.max(0, initialW - base.left - base.right)
-    ch = Math.max(0, initialH - base.top - base.bottom)
-    built = buildContent(chart, input, cw, ch, txn, true)
+    cw = initialW - base.left - base.right
+    ch = initialH - base.top - base.bottom
+    // A size smaller than the padding (no width at all, say) leaves a negative view: vega keeps it (viewSizeLayout does not clamp
+    // `width = viewWidth` for `none`), so the signals, the scales and the root group's box are laid out on it, the layout reading
+    // it as 0, and the svg is `Math.max(0, view + padding)` (vega-view render-size).
+    insidePadding = { width: cw, height: ch }
+    built = buildContent(chart, input, cw, ch, txn, true, cw < 0 || ch < 0 ? { width: cw < 0 ? cw : undefined, height: ch < 0 ? ch : undefined } : undefined)
   } else {
     built = buildContent(chart, input, cw, ch, txn, false, undefined, fitting ? { first: true } : undefined)
   }
@@ -2802,12 +3489,16 @@ function evaluateChartImpl(chart: CompiledChart, hostInput: RuntimeInput, txn: E
   const fitW = (auto === 'fit' || auto === 'fit-x') && firstPassPadding !== undefined
   const fitH = (auto === 'fit' || auto === 'fit-y') && firstPassPadding !== undefined
   const contains = autosizeContains === 'padding'
-  const sceneWidth = fitW
+  const sceneWidth = insidePadding !== undefined
+    ? Math.max(0, insidePadding.width + base.left + base.right)
+    : fitW
     ? initialW + (contains ? 0 : base.left + base.right)
     : auto !== 'none'
       ? width + padding.left + padding.right
       : width + ctx.chart.padding.left + ctx.chart.padding.right
-  const sceneHeight = fitH
+  const sceneHeight = insidePadding !== undefined
+    ? Math.max(0, insidePadding.height + base.top + base.bottom)
+    : fitH
     ? initialH + (contains ? 0 : base.top + base.bottom)
     : auto !== 'none'
       ? height + padding.top + padding.bottom
@@ -2818,8 +3509,8 @@ function evaluateChartImpl(chart: CompiledChart, hostInput: RuntimeInput, txn: E
     height: sceneHeight,
     // the frame background is the root group's own box: the view's width x height
     // (a composition's is the degenerate M0,0h0v0h0Z)
-    plotWidth: ctx.rootUnsized ? 0 : width,
-    plotHeight: ctx.rootUnsized ? 0 : height,
+    plotWidth: ctx.rootUnsized ? 0 : insidePadding !== undefined && insidePadding.width < 0 ? insidePadding.width : width,
+    plotHeight: ctx.rootUnsized ? 0 : insidePadding !== undefined && insidePadding.height < 0 ? insidePadding.height : height,
     // (`background` is a view signal: a spec that declares one sets the background through it; one with no value leaves the spec's)
     background: ctx.signalParams.background !== undefined && (chart.signalDefs ?? []).some((d) => d.name === 'background') ? (ctx.signalParams.background as string | null) : ctx.chart.background,
     frameStroke: ctx.chart.frameStroke,
@@ -2845,7 +3536,7 @@ function evaluateChartImpl(chart: CompiledChart, hostInput: RuntimeInput, txn: E
   ;(scene as unknown as { signalParams?: Record<string, unknown> }).signalParams = ctx.signalParams
   ;(scene as unknown as { compiled?: unknown }).compiled = ctx.chart
   ;(scene as unknown as { __itemGen?: number }).__itemGen = txn.gen
-  ;(scene as unknown as { __scales?: unknown }).__scales = snapshotScales(ctx.scales)
+  ;(scene as unknown as { __scales?: unknown }).__scales = sceneSnapshots(ctx)
   ;(scene as unknown as { __scaleMap?: unknown }).__scaleMap = ctx.scales
   Object.defineProperty(scene, '__datasets', { value: { rows: ctx.datasets, failed: ctx.failedDatasets }, enumerable: false, configurable: true })
   if (ctx._defs.length) scene.defs = ctx._defs
@@ -2854,6 +3545,8 @@ function evaluateChartImpl(chart: CompiledChart, hostInput: RuntimeInput, txn: E
   ctx.draft.idCounter = ctx.ids.value
   done.draft = ctx.draft
   done.failed = ctx.failed === true
+  // (what is derived from its nodes may be kept with them from now on: see scene-registry.ts)
+  noteEngineScene(scene)
   return scene
 }
 
@@ -2870,9 +3563,10 @@ export function chartInfoFromScene(scene: SceneRoot): ChartInfo {
   return {
     // `ChartInfo` carries the plot (content) size — pan/zoom and brushing map
     // pixels against it — not the padded document size.
-    width: (scene as { plotWidth?: number }).plotWidth
+    // (a view laid out on a negative range, autosize none containing more padding than size, has no plot)
+    width: Math.max(0, (scene as { plotWidth?: number }).plotWidth ?? 0)
       || Math.max(0, scene.width - padding.left - padding.right),
-    height: (scene as { plotHeight?: number }).plotHeight
+    height: Math.max(0, (scene as { plotHeight?: number }).plotHeight ?? 0)
       || Math.max(0, scene.height - padding.top - padding.bottom),
     padding,
     // Reconstruct from the live map when a scene came from a worker/SSR clone.
@@ -2927,6 +3621,8 @@ function buildTitleGroup(
   parent?: Row,
   /** The view fits its viewport: what a legend adds to the bounds the title sits against is cut (see `shareOfView`). */
   fitting = false,
+  /** the title may be kept from the evaluation before (see `keptGuide`) */
+  keep = false,
 ): SceneGroup | null {
   if (!title0 || !ctx) return null
   // What the title sits against: the view's frame, the marks and the bounds of the axes and legends (axes measured in their own
@@ -2936,6 +3632,18 @@ function buildTitleGroup(
   // (a clipped mark -- an interval selection's brush -- has its bounds cut to the frame: Bound's boundClip)
   if (hasClippedMark(measured)) eachMarkBounds(measured, width, height, (n) => measureGuideGroup(n as SceneGroup), (mb, n) => { b.union(shareOfView(mb, n as SceneGroup, fitting)) })
   else for (const g of measured) b.union(shareOfView(measureGuideGroup(g), g, fitting))
+  // A title is a function of what `guideKeyOf` holds, its scope's scales, the bounds it sits against, the size and the raw mode, and
+  // a group title's datum (`parent`)
+  const reads = keep ? guideKeyOf(title0, ctx) : null
+  const key = reads === null ? null
+    : `${reads}\u0005${width}x${height}\u0005${raw ? 1 : 0}${fitting ? 1 : 0}\u0005${b.x1},${b.y1},${b.x2},${b.y2}${parent !== undefined ? `\u0005${dependencyKey(parent)}` : ''}`
+  // (the definitions of the gradients it paints with are registered as it is made: such a title is made by every evaluation, see
+  // `withGuideGradients`)
+  return keptGuide(title0, ctx, key) ?? recordGuide(title0, ctx, key, () => withGuideGradients(ctx, makeTitleGroup(title0, b, width, height, raw, ctx, parent)))
+}
+
+/** Make a title's group against the bounds `b` (see `buildTitleGroup`). */
+function makeTitleGroup(title0: CompiledTitle, b: Bounds, width: number, height: number, raw: boolean, ctx: EvalContext, parent: Row | undefined): SceneGroup {
   // (a group title reads its facet datum as `parent`)
   const hostCtx = parent !== undefined ? { ...ctx, signalParams: { ...ctx.signalParams, parent } } : ctx
   const titleHost = guideHost(hostCtx)
@@ -2964,6 +3672,8 @@ function buildTitleGroup(
   const out = {
     marktype: 'group',
     role: 'title',
+    // (the title group item's own datum, a generated `{}`: vega-parser title.js)
+    datum: built.datum,
     x: (g.x as number) ?? 0,
     y: (g.y as number) ?? 0,
     items: children,
@@ -2977,6 +3687,7 @@ function buildTitleGroup(
     ...(built.partMeta.group?.interactive ? { interactive: true } : {}),
     ...(itemAriaOf(g) ? { itemAria: itemAriaOf(g) } : {}),
     ...(cursorOf(g) !== undefined ? { cursor: cursorOf(g) } : {}),
+    ...(g.tooltip !== undefined ? { tooltip: g.tooltip } : {}),
     ...(g.href != null ? { href: g.href } : {}),
   } as unknown as SceneGroup
   vetGuideLinks(out, ctx)
@@ -2997,7 +3708,9 @@ function signedViewSize(size: SizeSpec, override: number | undefined, signals: R
  * drives neither `width` nor `height` itself and does not leave the dimension to its layout (a composition's size is its
  * groups'). A spec that drives one dimension sizes itself, so its other, numeric dimension stays the spec's: vega-lite's
  * `width: "container", height: 200` is 200 tall whatever the container measures, and a container that grows with the
- * chart cannot feed its own height back into it (issue #128).
+ * chart cannot feed its own height back into it (issue #128). A spec whose autosize is `none` fixes its size: in Vega its
+ * whole size is its `width`, `height` and `padding` and nothing else, so a container does not size it either (vega-embed
+ * draws it at that size in any container).
  */
 function viewOverride(chart: CompiledChart, input: RuntimeInput, dim: 'width' | 'height'): number | undefined {
   const fixed = input[dim]
@@ -3006,7 +3719,7 @@ function viewOverride(chart: CompiledChart, input: RuntimeInput, dim: 'width' | 
   if (typeof written === 'number') return written
   const measured = input.measuredSize?.[dim]
   if (measured == null) return undefined
-  if (chart.contentSized?.includes(dim)) return undefined
+  if (chart.contentSized?.includes(dim) || chart.autosize === 'none') return undefined
   return drivesSize(chart, 'width') || drivesSize(chart, 'height') ? undefined : measured
 }
 
@@ -3208,7 +3921,9 @@ function buildDatasetsOf(ctx: EvalContext, inputData: Record<string, unknown[]>)
         // source's raw values (e.g. source = inline Topology, format =
         // topojson feature extraction). The host's current values (input.data)
         // win over the spec's compiled-in ones.
-        rows = readData(ownGet(inputData, src) ?? inlineValues(ctx, srcDef.values), (d as { format?: DataFormatSpec }).format)
+        const given = ownGet(inputData, src)
+        rows = readData(given ?? inlineValues(ctx, srcDef.values), (d as { format?: DataFormatSpec }).format, given === undefined && valuesSignal(srcDef.values) !== undefined, { dataset: src, source: given === undefined ? 'values' : 'data' })
+        notePrimitiveTuples(ctx, rows)
         inPulse = ctx.inputPulses?.get(src) ?? null
       } else {
         const from = build(src, seen)
@@ -3225,13 +3940,16 @@ function buildDatasetsOf(ctx: EvalContext, inputData: Record<string, unknown[]>)
       inPulse = ctx.inputPulses?.get(name) ?? null
       if (given) {
         // (rows that readData would pass through as they are -- an array of JSON rows, nothing to parse -- are only ingested)
-        rows = Array.isArray(given) && passesThroughRead(d.format, given) ? ingestHostRows(given as Row[], inPulse) : readData(given, d.format)
+        // (a session hands a dataset its spec's own inline rows this way too: those are named as inline values)
+        const source = given === d.values ? 'values' : 'data'
+        rows = Array.isArray(given) && passesThroughRead(d.format, given) ? ingestHostRows(given as Row[], inPulse, name, source) : readData(given, d.format, false, { dataset: name, source, ...(inPulse?.changed ? { dataChanges: inPulse.changed } : {}) })
         inputs = [given]
         raw = true
       } else {
         // vega-loader read semantics: object arrays pass through format.parse
         // coercion; string values are parsed by the registered reader.
-        rows = readData(inlineValues(ctx, d.values), d.format)
+        rows = readData(inlineValues(ctx, d.values), d.format, valuesSignal(d.values) !== undefined, { dataset: name, source: 'values' })
+        notePrimitiveTuples(ctx, rows)
       }
     } else {
       const given = ownGet(inputData, name) as Row[] | undefined
@@ -3241,7 +3959,7 @@ function buildDatasetsOf(ctx: EvalContext, inputData: Record<string, unknown[]>)
         throw unloadedUrlError(name, true)
       }
       inPulse = ctx.inputPulses?.get(name) ?? null
-      rows = ingestHostRows(given ?? [], inPulse)
+      rows = ingestHostRows(given ?? [], inPulse, name)
       shared = true
       if (given != null) { inputs = [given]; raw = true }
     }
@@ -3264,10 +3982,13 @@ function buildDatasetsOf(ctx: EvalContext, inputData: Record<string, unknown[]>)
         if (inputs !== undefined) ctx.draft.copies.set(name, { inputs, rows })
       }
     } else try {
+      // (the rows the first step is given are tuples to it, as vega's ingested rows are: a host's or the spec's rows are only
+      // registered, never written)
+      markTuples(rows)
       const prevDS = ctx.prev?.datasets.get(name)
       const tctx: StepTransformContext = {
         runtime: ctx.runtime,
-        signals: ctx.signalParams,
+        signals: engineParams(ctx.signalParams),
         // Cross-dataset access for the `lookup` transform. Build the referenced
         // dataset on demand (it may be declared after this one in the spec).
         datasets: (n) => {
@@ -3310,10 +4031,10 @@ function buildDatasetsOf(ctx: EvalContext, inputData: Record<string, unknown[]>)
           && (!numbersSourceRows(d.transform) || followsSources(d.transform))
           && (prevDS.fp === passFp || (key !== null && prevDS.key === key && activeMeter() === null))
           && prevDS.steps.length === d.transform.length
-          && prevDS.inputLength === pulseBaseLength(inPulse) && claim(ctx, datasetParts(prevDS))
+          && prevDS.inputLength === pulseBaseLength(inPulse) && pulsePath(ctx) && claim(ctx, datasetParts(prevDS))
         if (incremental) {
           if (shared) rows = copyRows(rows)
-          const res = ctx.engine!.applyPipelineWithPulse(rows, d.transform, tctx, name, inPulse!, prevDS, state)
+          const res = ctx.engine!.applyPipelineWithPulse!(rows, d.transform, tctx, name, inPulse!, prevDS, state)
           rows = res.rows
           outPulse = res.pulse
           // (what each step read, as `runPipeline` records it, so a later evaluation that is not driven by a pulse keeps the steps:
@@ -3346,6 +4067,7 @@ function buildDatasetsOf(ctx: EvalContext, inputData: Record<string, unknown[]>)
     // a dataset a `force` link force reads gets its link rows rewritten (their ends become the nodes): they are this
     // evaluation's own copies, never the spec's
     if (forceLinkDatasets(ctx.chart).has(name)) rows = rows.map((r) => ({ ...r }))
+    markTuples(rows)
     ctx.datasets.set(name, rows)
     ctx.datasetPulses.set(name, outPulse)
     return rows
@@ -3375,7 +4097,12 @@ function buildDatasetsOf(ctx: EvalContext, inputData: Record<string, unknown[]>)
   ctx.readsMemo = undefined
 }
 
-const copyRows = (rows: readonly Row[]): Row[] => rows.map((r) => ({ ...r }))
+const copyRows = (rows: readonly Row[]): Row[] => {
+  stepCounts.copied += rows.length
+  const out = rows.map((r) => ({ ...r }))
+  markTuples(out)
+  return out
+}
 
 /** Whether `readData(rows, format)` returns `ingestRows(rows)`: JSON rows already parsed, nothing to coerce, no d3-dsv `columns`. */
 function passesThroughRead(format: DataFormatSpec | undefined, rows: readonly unknown[]): boolean {
@@ -3390,10 +4117,10 @@ const objectRowPrefix = new WeakMap<readonly unknown[], number>()
  * for the ones it lists as changed (a stream appends to the array it already gave): when those were already all objects, only
  * the appended and the changed rows are looked at, not the whole dataset on every append.
  */
-function ingestHostRows(given: readonly Row[], pulse: StepPulse | null): Row[] {
+function ingestHostRows(given: readonly Row[], pulse: StepPulse | null, dataset: string, source: 'values' | 'data' = 'data'): Row[] {
   const known = objectRowPrefix.get(given) ?? 0
   const base = pulse?.appendOnly && pulse.baseLength !== undefined && pulse.baseLength <= known && pulse.baseLength <= given.length ? pulse.baseLength : 0
-  const rows = ingestRows(given, base, pulse?.changed)
+  const rows = ingestRows(given, base, pulse?.changed, { dataset, source, ...(pulse?.changed ? { dataChanges: pulse.changed } : {}) })
   if (rows === given) objectRowPrefix.set(given, given.length)
   return rows
 }
@@ -3493,6 +4220,7 @@ function runPipeline(
         }
         follow(k, end, cur)
         cur = out
+        markTuples(cur)
         stepCounts.reused += unit.length
       } else {
         // (the unit's first step copies every row it is given, so a source's rows need only be in an array of their own)
@@ -3506,6 +4234,7 @@ function runPipeline(
         state.steps.push(out)
         for (let j = 0; j < unit.length; j++) records[k + j] = recordStep(ctx, unitReads[j]!, unitKeys[j]!, false, undefined)
         cur = out
+        markTuples(cur)
         stepCounts.ran += unit.length
       }
       k = end
@@ -3518,6 +4247,7 @@ function runPipeline(
       keepStep(ctx, t, reads!, kept.records![k]!, cur.length, out)
       const given = cur
       cur = out
+      markTuples(cur)
       state.steps.push(cur)
       const ss = kept.stepState.get(`${name}#${k}`)
       if (ss !== undefined) state.stepState.set(`${name}#${k}`, ss)
@@ -3530,7 +4260,15 @@ function runPipeline(
     // (the rows of a step that has to run are this evaluation's own: a source's are copied now, unless the step makes rows of its own
     // and only needs them in an array of their own -- the array a source made carries the order its rows were made in, which a
     // dataset made from it does not inherit)
-    if (shared && cur === rows) { cur = copiesRows(t) ? rows.slice() : copyRows(rows); if (sourceList !== undefined) setSources(cur, sourceList) }
+    // A step that only picks rows (`rowUseOf`: a filter, a collect) writes none of them, so it reads the source's rows where they are
+    // and only the rows it returns are copied: a filter whose predicate moves on every pointer move copies what passes, not the source.
+    // (The rows it returns are copies, as they were when the whole source was copied before it: what a step leaves is the evaluation's
+    // own, which the pulse path splices and the dataset hands on. Rows numbered by source row keep the copy before the step.)
+    let copyAfter = false
+    if (shared && cur === rows) {
+      if (sourceList === undefined && rowUseOf(t) === 'subset') { cur = rows.slice(); copyAfter = true }
+      else { cur = copiesRows(t) ? rows.slice() : copyRows(rows); if (sourceList !== undefined) setSources(cur, sourceList) }
+    }
     const from = cur
     const had = reads?.publishes !== undefined && Object.hasOwn(ctx.signalParams, reads.publishes)
     const published = reads?.publishes === undefined ? undefined : ctx.signalParams[reads.publishes]
@@ -3546,7 +4284,8 @@ function runPipeline(
     const res = ctx.runtime.random === undefined || !mayDrawRandom(t)
       ? run()
       : atRandomSite(ctx.runtime.random, `dataset:${name}#${k}`, () => randomFingerprint(t, from, ctx.signalParams), run)
-    cur = res.rows
+    cur = copyAfter ? withOrderOf(res.rows, copyRows(res.rows)) : res.rows
+    markTuples(cur)
     state.steps.push(cur)
     if (res.state !== undefined) state.stepState.set(`${name}#${k}`, res.state)
     if (t.type === 'identifier' && sourceList !== undefined) {
@@ -3575,9 +4314,21 @@ const sameArrays = (a: readonly unknown[], b: readonly unknown[]): boolean => a.
 const MAY_DRAW = new WeakMap<CompiledChart, boolean>()
 
 /** Whether a dataset of the view may draw from the random source, its expressions read as the lexer reads them (an escaped name too). */
+/**
+ * Whether the pulse path is there to take a pulse every other condition allows. When it is not (the React shells load it on demand,
+ * engine-parts.ts) the dataset is derived in full -- the same rows, the same state left for the next pulse -- and the part is asked
+ * for, so that the evaluations after this one are incremental.
+ */
+function pulsePath(ctx: EvalContext): boolean {
+  if (ctx.engine?.applyPipelineWithPulse !== undefined) return true
+  requestPart('pulse')
+  return false
+}
+
 function datasetsMayDraw(chart: CompiledChart): boolean {
   let may = MAY_DRAW.get(chart)
-  if (may === undefined) MAY_DRAW.set(chart, (may = mayDrawRandom(chart.data)))
+  // (rows draw nothing: only the datasets' transforms and a `{signal}` values are code)
+  if (may === undefined) MAY_DRAW.set(chart, (may = mayDrawRandom(chart.data.map(dataWithoutRows))))
   return may
 }
 
@@ -3813,6 +4564,23 @@ function onDemandBuilder(ctx: EvalContext, sources: ReadonlyMap<string, unknown>
 }
 
 /** Snapshot resolved scales into plain data for the scene differential. */
+/**
+ * The snapshots of the view's scales (what a guide's caption and a worker's clone read of them), the array the scene before carried
+ * when every scale is the object it was then: a snapshot is read off the scale objects alone (their domain, range, bandwidth,
+ * quantiles, thresholds, bins and the colours at the domain's ends), and a scale is made again whenever anything it is made from
+ * changes. The DOM patcher keeps what it made of a guide for the same array (see `guideDesc` in dom.ts).
+ */
+function sceneSnapshots(ctx: EvalContext): ReturnType<typeof snapshotScales> {
+  const prev = ctx.prev?.snapshots
+  if (prev !== undefined && sameScales(ctx, prev.scales)) {
+    ctx.draft.snapshots = prev
+    return prev.snaps
+  }
+  const snaps = snapshotScales(ctx.scales)
+  ctx.draft.snapshots = { scales: [...ctx.scales], snaps }
+  return snaps
+}
+
 function snapshotScales(scales: Map<string, Scale>): Array<{ name: string; type: string; domain: unknown[]; range: unknown[]; bandwidth?: number; samples?: [unknown, unknown] }> {
   const out: Array<{ name: string; type: string; domain: unknown[]; range: unknown[]; bandwidth?: number; samples?: [unknown, unknown] }> = []
   for (const [name, scale] of scales) {
@@ -4304,6 +5072,144 @@ function itemBoundsOf(container: { marktype: string }, item: SceneItem): { x1: n
   return { x1: b.x1, y1: b.y1, x2: b.x2, y2: b.y2 }
 }
 
+/** What one channel's definition reads besides the row: the signals it names, the datasets its expressions read by name, its scales. */
+interface ChannelReads { names: readonly string[] | null; data: readonly string[] | null; scales: readonly string[] | null }
+const CHANNEL_READS = new WeakMap<object, ChannelReads>()
+function channelReadsOf(spec: object, chart: CompiledChart): ChannelReads {
+  let out = CHANNEL_READS.get(spec)
+  if (out !== undefined) return out
+  const data = new Set<string>()
+  const scales = new Set<string>()
+  let anyData = false
+  let anyScale = false
+  walkStrings(spec, (str, owner) => {
+    const read = datasetsReadIn(str)
+    if (read === null) anyData = true
+    else for (const n of read) data.add(n)
+    if (SCALE_FN_EXPR.test(lexedText(str))) anyScale = true
+    if (owner && owner.scale === str) scales.add(str)
+  }, new Set(), null, (o) => { if (o.scale != null && typeof o.scale === 'object') anyScale = true })
+  out = { names: namesMentioned(spec, chart), data: anyData ? null : [...data].sort(), scales: anyScale ? null : [...scales].sort() }
+  CHANNEL_READS.set(spec, out)
+  return out
+}
+
+/** A number per scale object, so a key can say which scale a channel read. */
+const SCALE_IDS = new WeakMap<object, number>()
+let nextScaleId = 0
+const scaleIdOf = (sc: unknown): string => {
+  // (a scale is a function object; a name no scale has is `-`)
+  if (sc === null || (typeof sc !== 'object' && typeof sc !== 'function')) return '-'
+  let id = SCALE_IDS.get(sc)
+  if (id === undefined) SCALE_IDS.set(sc, (id = ++nextScaleId))
+  return String(id)
+}
+
+/**
+ * What one channel of a leaf mark is evaluated under besides its row: the signals it names (with the view size, `extraFp` and the
+ * registry, see `readsKey`), the content of the datasets its expressions read by name, and the scale objects it reads; null when it
+ * reads more than it names (the clock, the random source, a dataset or a scale by a computed name).
+ */
+function channelKeyOf(spec: object, ctx: EvalContext): string | null {
+  const reads = channelReadsOf(spec, ctx.chart)
+  if (reads.names === null || reads.data === null || reads.scales === null) return null
+  let key = readsKey(ctx, reads.names)
+  for (const n of reads.data) key += `\u0004${n}=${datasetKey(ctx, n)}`
+  for (const n of reads.scales) key += `\u0005${n}=${scaleIdOf(ctx.scales.get(n))}`
+  return key
+}
+
+/**
+ * Channels whose value takes part in what the encode derives from several of them (`adjustSpatial` makes x/y/width/height from the
+ * edges; a paint may be a gradient whose definition joins the scene's), or that is read before the others (`defined`): when one of
+ * them changed, the item is encoded whole.
+ */
+const COUPLED_CHANNELS = new Set(['x', 'x2', 'xc', 'width', 'y', 'y2', 'yc', 'height', 'fill', 'stroke', 'defined'])
+
+/**
+ * The items of a top-level leaf mark whose rows are the ones its items were made from, when only some of its channels read what
+ * changed: each item is a copy of the item before (its keys in the same order, its datum the same copy of the row) with only those
+ * channels evaluated again, or null when the mark is to be encoded whole.
+ *
+ * An item is a function of its row and of what each channel reads besides it (`channelKeyOf`), channel by channel: `resolveEncodeSet`
+ * evaluates each channel on its own, and only the `COUPLED_CHANNELS` combine (refused when one of them changed). The rows are the very
+ * array the items before were made from, untouched by any change the caller told (`sameRows`), so row `i` holds what item `i`'s datum
+ * holds. A channel evaluated again that comes out undefined where it had a value, or the reverse, would change the item's keys: that
+ * item is encoded whole. Refused: a mark with transforms or a sort (they read the encoded values), an image (its url is vetted after
+ * the encode), a mark that reads any dataset, a channel that reads more than it names, a pass that is not clean, under `limits`; an
+ * error in a channel encodes the mark whole, which reports it where a whole encode does.
+ */
+function reencodeChannels(mark: CompiledMark, ctx: EvalContext, prevGroup: SceneGroup | null | undefined, source: string, rows: readonly Row[], encode: Record<string, EncodeValue | EncodeValue[]>): SceneItem[] | null {
+  const prev = ctx.prev
+  const record = prev?.channels.get(mark)
+  if (prev === undefined || record === undefined || prevGroup == null || record.encode !== encode || record.rows !== rows || record.items.length !== rows.length) return null
+  if (!cleanPass(ctx) || !followsChanges(ctx) || !sameRows(ctx, source) || mark.transform?.length || mark.sort || mark.type === 'image' || forceBound(mark, ctx.chart)) return null
+  const deps = markDepsOf(mark, ctx.chart)
+  if (deps.allData) return null
+  for (const n of deps.names) if (n !== source && !sameRows(ctx, n)) return null
+  const channels = Object.keys(encode)
+  if (channels.length !== record.keys.length) return null
+  const changed: string[] = []
+  for (let c = 0; c < channels.length; c++) {
+    const key = channelKeyOf(encode[channels[c]!] as object, ctx)
+    if (key === null || record.keys[c] === null) return null
+    if (key !== record.keys[c]) {
+      if (COUPLED_CHANNELS.has(channels[c]!)) return null
+      changed.push(channels[c]!)
+    }
+  }
+  if (!changed.length) return null
+  // (in the order a whole encode evaluates them: the plain channels, then the signal ones)
+  const plan = encodePlan(encode)
+  const order = [...plan.plainKeys, ...plan.signalKeys].filter((k) => changed.includes(k))
+  const binding = ctx.encodeBinding
+  const gen = ctx.gen
+  const out = new Array<SceneItem>(record.items.length)
+  try {
+    for (let i = 0; i < record.items.length; i++) {
+      const before = record.items[i]! as unknown as Record<string, unknown>
+      const datum = before.datum as Row
+      let whole = false
+      let copy: Record<string, unknown> | undefined
+      for (let c = 0; c < order.length; c++) {
+        const k = order[c]!
+        const v = resolveEncodeProperty(encode[k], datum, ctx, binding)
+        if ((v === undefined) !== (before[k] === undefined) || (v === undefined) !== !(k in before)) { whole = true; break }
+        if (Object.is(v, before[k])) continue
+        if (copy === undefined) {
+          copy = { ...before }
+          // (what the DOM patcher kept on the item before for itself: a fresh item has none)
+          if ('__domDesc' in copy) delete copy.__domDesc
+        }
+        copy[k] = v
+      }
+      // (every channel evaluated again came out as it was: the item is the one before, as a kept item is)
+      if (!whole && copy === undefined) { out[i] = before as unknown as SceneItem; continue }
+      if (whole) {
+        const row = { ...(rows[i] as Row) }
+        markTuple(row)
+        const res = resolveEncodeSet(encode, row, ctx, mark.type)
+        res.datum = row
+        res.__gen = gen
+        out[i] = res
+        continue
+      }
+      copy!.__gen = gen
+      out[i] = copy as unknown as SceneItem
+    }
+  } catch {
+    return null
+  }
+  if (ctx.markGradients) ctx.markGradients.partial = true
+  return out
+}
+
+/** Record what each channel of a top-level leaf mark was encoded under (see `reencodeChannels`), when the pass made it whole and clean. */
+function recordChannels(mark: CompiledMark, ctx: EvalContext, encode: Record<string, EncodeValue | EncodeValue[]>, rows: readonly Row[], items: readonly SceneItem[]): void {
+  if (!cleanPass(ctx) || activeMeter() !== null || mark.transform?.length || mark.sort) return
+  ctx.draft.channels.set(mark, { encode, rows, items, keys: Object.keys(encode).map((k) => channelKeyOf(encode[k] as object, ctx)) })
+}
+
 function evaluateMark(
   mark: CompiledMark,
   ctx: EvalContext,
@@ -4362,6 +5268,8 @@ function evaluateMarkItems(
   }
   const source = mark.from?.data
   if (source && ctx.failedDatasets?.has(source)) return null
+  // (a mark of the view's own scope, made by the evaluation's loop over its marks: `prevGroup` is its group of the evaluation before)
+  const topLevel = ctx.scope.path.length === 0 && given === undefined
 
   let items: SceneItem[]
   // a transform of the mark threw (see `failPass`): what ranks after it is not made
@@ -4374,7 +5282,7 @@ function evaluateMarkItems(
   let hitMarked = false
   if (source) {
     // (a source that is no dataset but the name of a mark built before: that mark's items, shallow-copied as vega's tuples)
-    const rawRows = ctx.datasets.get(source) ?? ctx.markItems.get(source)?.map((it) => ({ ...(it as unknown as Row) })) ?? []
+    const rawRows = ctx.datasets.get(source) ?? ctx.markItems.get(source)?.map((it) => { const r = { ...(it as unknown as Row) }; markTuple(r); return r }) ?? []
     // (a `label` transform reads the mark an item is in, and its bounds, off the item it labels: see `ITEM_MARK`)
     if (!ctx.datasets.has(source) && mark.transform?.some((t) => t.type === 'label')) {
       const container = ctx.markContainers.get(source)
@@ -4392,7 +5300,18 @@ function evaluateMarkItems(
 
     // Keep dataset order for rect items: vega's scene keeps data order and
     // every renderer paints the array front to back (later datum on top).
-    const encodeRows = rows
+    // (vega's DataJoin reads each tuple's id: a `null` or `undefined` tuple a `{signal}` values gave throws there, before any item is
+    // made -- the pass stops at this mark, which is not made)
+    if (ctx.primitiveTuples) {
+      const at = rows.findIndex((r) => PRIMITIVE_TUPLE in r && tupleDatum(r) == null)
+      if (at >= 0) {
+        const dataset = (mark.from as { data?: unknown } | undefined)?.data
+        failPass(ctx, { axis: Infinity, mark: ctx.scope.mark ?? 0 }, notATuple(tupleDatum(rows[at]) as null | undefined, { dataset: typeof dataset === 'string' ? dataset : String(dataset), source: 'signal' }, at))
+        ctx.encodeAborted = true
+        return null
+      }
+    }
+    const encodeRows = ctx.primitiveTuples ? joinPrimitiveTuples(rows) : rows
 
     const update = mark.encode?.update ?? mark.encode?.enter ?? {}
     ctx.encodeBinding = encodeBindingFor(update, ctx)
@@ -4409,7 +5328,8 @@ function evaluateMarkItems(
     // sample the wall clock inside the encode loops.
     const meter = activeMeter()
     if (meter) meter.items(encodeRows.length, `mark ${mark.type} encoding`)
-    const pulse = given !== undefined ? given.pulse : reusablePulse(mark, ctx, source, encodeRows.length, prevGroup)
+    // (joined primitive tuples are fewer items than rows: the per-row pulse does not apply to them)
+    const pulse = encodeRows !== rows ? undefined : given !== undefined ? given.pulse : reusablePulse(mark, ctx, source, encodeRows.length, prevGroup)
     if (pulse) {
       const prevItems = given !== undefined ? given.items : prevGroup!.items as SceneItem[]
       const gen = ctx.gen
@@ -4420,6 +5340,7 @@ function evaluateMarkItems(
       const encodeAt = (i: number): SceneItem => {
         if (meter) meter.tick('mark encoding')
         const row = { ...(rows[i] as Row) }
+        markTuple(row)
         const res = resolveEncodeSet(update, row, ctx, mark.type)
         res.datum = row
         res.__gen = gen
@@ -4477,13 +5398,19 @@ function evaluateMarkItems(
       }
     } else {
       const gen = ctx.gen
-      if (meter) {
+      // (a top-level mark over the rows its items were made from, only some of whose channels read what changed: see `reencodeChannels`)
+      const reencoded = topLevel && encodeRows === rows && !meter ? reencodeChannels(mark, ctx, prevGroup, source, rows, update) : null
+      if (reencoded !== null) {
+        items = reencoded
+      } else if (meter) {
         // Same loop with the clock sampled every 1024 items (limits ON only).
         items = new Array<SceneItem>(encodeRows.length)
         for (let i = 0; i < encodeRows.length; i++) {
           const copy = { ...encodeRows[i]! }
-          const res = resolveEncodeSet(update, copy, ctx, mark.type)
-          res.datum = copy
+          markTuple(copy)
+          const datum = PRIMITIVE_TUPLE in copy ? tupleDatum(copy) as Row : copy
+          const res = resolveEncodeSet(update, datum, ctx, mark.type)
+          res.datum = datum
           res.__gen = gen
           items[i] = res
           meter.tick('mark encoding')
@@ -4491,16 +5418,25 @@ function evaluateMarkItems(
       } else {
         items = encodeRows.map((row) => {
           const copy = { ...row }
-          const res = resolveEncodeSet(update, copy, ctx, mark.type)
-          res.datum = copy
+          markTuple(copy)
+          // (a primitive tuple is the primitive itself to its item, as in vega)
+          const datum = PRIMITIVE_TUPLE in copy ? tupleDatum(copy) as Row : copy
+          const res = resolveEncodeSet(update, datum, ctx, mark.type)
+          res.datum = datum
           res.__gen = gen
           return res
         })
       }
+      if (topLevel && encodeRows === rows) recordChannels(mark, ctx, update, rows, items)
     }
   } else {
+    // vega-parser marks/data.js: a mark without `from` is made from a generated singleton `{}`, which its encode reads and its
+    // item carries as `datum` (what `event.item.datum`, a tooltip handler and the scene expose)
     const update = mark.encode?.update ?? mark.encode?.enter ?? {}
-    const res = resolveEncodeSet(update, {}, ctx, mark.type)
+    const datum: Row = {}
+    markTuple(datum)
+    const res = resolveEncodeSet(update, datum, ctx, mark.type)
+    res.datum = datum
     res.__gen = ctx.gen
     items = [res]
   }
@@ -4529,6 +5465,21 @@ function evaluateMarkItems(
     try { items = sortMarkItems(items, mark.sort) } catch (e) {
       failPass(ctx, { axis: Infinity, mark: ctx.scope.mark ?? 0, afterEncode: true }, e)
       stoppedAfterEncode = true
+    }
+  }
+  // vega's Bound: the items are measured after the transforms and the sort. A value that cannot be drawn (path text vega's reader
+  // refuses, a custom symbol shape likewise, a curve that is not there, a clip path: see bound-failure.ts) stops the pass there,
+  // the mark made in full: the marks after it are never made, and the view is not laid out.
+  let unmeasuredFrom: number | undefined
+  if (!stoppedAfterEncode && transformed && ctx.bareEncode !== true) {
+    const failure = boundFailure(mark.type, items, markClipPath(mark, ctx), mark.type === 'shape' && !shapeIsLiteral(mark))
+    if (failure !== undefined) {
+      failPass(ctx, { axis: Infinity, mark: ctx.scope.mark ?? 0, afterEncode: true }, failure.error)
+      stoppedAfterEncode = true
+      unmeasuredFrom = failure.from
+      // (a shape mark's item holds no shape of vega's to write: its SVG renderers fail on it, where the others' fail drawing their
+      // geometry themselves)
+      if (mark.type === 'shape' && failure.from !== undefined && items[failure.from] !== undefined) (items[failure.from] as unknown as Record<string, unknown>)._drawError = failure.error
     }
   }
   // (the marks after it are never made)
@@ -4599,16 +5550,6 @@ function evaluateMarkItems(
     }
   }
 
-  // Path marks whose `path` channel resolves to a GeoJSON object (e.g. the
-  // output of a `contour` transform) render that geometry in pixel space,
-  // matching vega's path-mark geo handling.
-  if (mark.type === 'path') {
-    for (const it of items) {
-      const p = it.path as unknown
-      if (p && typeof p === 'object') it.path = geoJSONPath(p) ?? undefined
-    }
-  }
-
   // Image URLs are spec-controlled: vet each through the URL policy so a
   // hostile spec cannot make the viewer's browser request arbitrary URLs.
   // Applied here, on the scene, so the string renderer, the DOM path and canvas
@@ -4636,6 +5577,11 @@ function evaluateMarkItems(
     for (const it of items) if ((it as { fill?: unknown }).fill === 'transparent') (it as unknown as Record<string, unknown>)._hit = true
   }
 
+  // The engine's items array: the only in-place writes it ever gets are the append path's (above), which stamps every in-place
+  // replacement with `__editGen`. A consumer may take "the same array, no stamp since" as proof that the items it saw are still
+  // the ones there, without reading them (dom.ts dense chunks, canvas.ts append).
+  ;(items as SceneItem[] & { __engineItems?: true }).__engineItems = true
+
   // Appended items extend the carried union bounds only now, after the mark
   // defaults above ran (they can change an item's stroke and so its bounds).
   const group: SceneGroup = {
@@ -4648,6 +5594,7 @@ function evaluateMarkItems(
     ...(mark.key !== undefined ? { __keyFields: [mark.key] } : {}),
     ...(encodesHref(mark) ? { hasLinks: true } : {}),
     ...markContainerInfo(mark),
+    ...(unmeasuredFrom !== undefined ? { unmeasuredFrom } : {}),
   }
   if (carriedBounds) {
     for (const it of addedItems) carriedBounds.union(boundLeaf(new Bounds(), it))
@@ -4906,7 +5853,7 @@ function groupSources(mark: CompiledMark, ctx: EvalContext): GroupSource[] | nul
     })
     items.forEach((item, i) => {
       // (the aggregate's output is a tuple: `isTuple(group().datum)`)
-      Object.defineProperty(item.datum, TUPLE_ID, { value: true, enumerable: false })
+      markTupleAlways(item.datum)
       item.rows = content[i]!.rows
       item.parent = content[i]!.parent
     })
@@ -4914,7 +5861,9 @@ function groupSources(mark: CompiledMark, ctx: EvalContext): GroupSource[] | nul
   }
   const data = mark.from?.data
   if (data) return (ctx.datasets.get(data) ?? []).map((row, i) => ({ datum: row, key: String(i) }))
-  return [{ datum: {} }]
+  const datum: Row = {}
+  markTuple(datum)
+  return [{ datum }]
 }
 
 /**
@@ -5049,7 +5998,7 @@ function transformMarkItems(mark: CompiledMark, items: readonly SceneItem[], ctx
   const before = numbers !== undefined ? ctx.prev?.numbered.get(numbers) : undefined
   for (const it of own) it[ITEM_OF] = it
   const tctx: TransformContext = {
-    runtime: ctx.runtime, signals: ctx.signalParams, hierarchies: ctx.hierarchies, projections: ctx.projections, ids: ctx.ids,
+    runtime: ctx.runtime, signals: engineParams(ctx.signalParams), hierarchies: ctx.hierarchies, projections: ctx.projections, ids: ctx.ids,
     // (`lookup` `from` is a dataset, or the name of a mark: its items; `label` avoids the marks it names)
     datasets: (n) => ctx.datasets.get(n) ?? (ctx.markItems.get(n) as unknown as Row[] | undefined),
     marks: (n) => ctx.markContainers.get(n),
@@ -5132,6 +6081,13 @@ function groupBackground(geo: SceneItem, w: number, h: number): { background: Sc
   for (const k of GROUP_PAINT_KEYS) if (rec[k] != null && !(fore && k === 'stroke')) own[k] = rec[k]
   const background = { path, x: 0, y: 0, _bg: true, ...own } as unknown as SceneItem
   if (!fore || !rec.stroke) return { background, path, paint, corners }
+  // A box stroked in front: vega's SVG document writes the background as the box of an unstroked item (no half-pixel inset), while
+  // its canvas fills it where the stroked box is. The SVG renderers write `path`; the canvas draws (and its pick reads) `_canvasPath`.
+  if (rec.strokeOffset == null && off !== 0) {
+    const bg = background as unknown as Record<string, unknown>
+    bg.path = String(rectItemPath({ ...shape, x: 0, y: 0 } as SceneItem))
+    bg._canvasPath = path
+  }
   const strokePaint: Record<string, unknown> = {}
   for (const k of GROUP_PAINT_KEYS) if (rec[k] != null && k !== 'fill' && k !== 'fillOpacity') strokePaint[k] = rec[k]
   return { background, foreground: { path, x: 0, y: 0, _bg: true, ...strokePaint } as unknown as SceneItem, path, paint, corners }
@@ -5187,6 +6143,24 @@ function markClipOf(mark: CompiledMark, ctx: EvalContext): { clip: boolean; clip
     shape = projection && geoRegistry.projectedPath ? geoRegistry.projectedPath(projection, { type: 'Sphere' }) : ''
   } else return { clip: !!c }
   return shape !== undefined ? { clip: true, ...(shape !== '' ? { clipPathD: shape } : {}) } : { clip: truthy }
+}
+
+/** A mark's clip when it is an SVG path (`{path}`, or a `{signal}` that holds a path shape): what vega's bounds draw it with. */
+function markClipPath(mark: CompiledMark, ctx: EvalContext): string | undefined {
+  const c = (mark as { clip?: unknown }).clip
+  if (c === null || typeof c !== 'object' || (c as { sphere?: unknown }).sphere) return undefined
+  return markClipOf(mark, ctx).clipPathD
+}
+
+/**
+ * Whether a shape mark's items take their `shape` from a literal of the encode: a literal is never a shape (vega's are functions, a
+ * geoshape transform's or a data field's), so vega's bounds cannot draw it. (What a field or a transform gives, the engine holds as
+ * path text of its own: it is not judged here.)
+ */
+function shapeIsLiteral(mark: CompiledMark): boolean {
+  if (mark.transform?.some((t) => (t as { type?: unknown }).type === 'geoshape')) return false
+  const channel = (mark.encode?.update?.shape ?? mark.encode?.enter?.shape) as { value?: unknown } | undefined
+  return channel !== undefined && channel !== null && typeof channel === 'object' && 'value' in channel
 }
 
 /** Whether a mark is clipped to the frame of its group (see {@link markClipOf}). */
@@ -5257,9 +6231,10 @@ function buildGroupItem(mark: CompiledMark, ctx: EvalContext, entered: EnteredGr
   let restoreScaleFns: (() => void) | undefined
   let restoreProjectionFns: (() => void) | undefined
   try {
-    // this item's signal scope (its own signals, over the enclosing ones; a facet's `parent` is its datum)
-    const hasParent = src.facetName !== undefined || mark.from?.data !== undefined
-    const outerParams = hasParent ? { ...ctx.signalParams, parent: src.parent ?? src.datum } : ctx.signalParams
+    // this item's signal scope (its own signals, over the enclosing ones). `parent` is this group item's datum, whatever made it: a
+    // facet's partition key, a row of `from.data`, or the `{}` of a group mark without `from` (in vega, a plain group nested in a
+    // facet cell gives what it holds its own `{}`, not the cell's datum)
+    const outerParams = { ...ctx.signalParams, parent: src.parent ?? src.datum }
     const scopeId = mark.signalDefs?.length ? `${ctx.scopeId ? ctx.scopeId + '/' : ''}${mark.userName ?? ''}@${markIdOf(mark)}${src.key !== undefined && src.key !== '' ? `[${src.key}]` : ''}` : undefined
     // vega builds the instances of nested scopes level by level: what an aborted pass did not reach is not made
     const scoped = scopeId !== undefined ? scopeSignalValues(mark, ctx, scopeId, outerParams, path) : undefined
@@ -5282,7 +6257,16 @@ function buildGroupItem(mark: CompiledMark, ctx: EvalContext, entered: EnteredGr
       const gather = (): Row[] => sources.flatMap((n) => ctx.datasets.get(n) ?? [])
       // (a group's url dataset nobody loaded fails as a top-level one does; host `data` does not reach a group's datasets)
       if (!shared && d.values == null && d.url != null) throw unloadedUrlError(d.name, false)
-      let rows: Row[] | undefined = shared ? undefined : d.values != null ? readData(inlineValues(ctx, d.values), d.format) : []
+      let rows: Row[] | undefined
+      try {
+        rows = shared ? undefined : d.values != null ? readData(inlineValues(ctx, d.values), d.format, valuesSignal(d.values) !== undefined, { dataset: d.name, source: 'values' }) : []
+      } catch (e) {
+        // (vega inserts a group's inline rows into its dataset inside the run: a row that is not a tuple is logged there, not thrown)
+        if (!isNotATupleError(e)) throw e
+        failPass(ctx, { axis: -0.75, data: true, path }, e)
+        break
+      }
+      if (rows !== undefined) notePrimitiveTuples(ctx, rows)
       checkRowCount(rows?.length ?? sources.reduce((n, s) => n + (ctx.datasets.get(s)?.length ?? 0), 0), `dataset "${d.name}"`)
       const tctx = { runtime: ctx.runtime, signals: scopeParams, hierarchies: ctx.hierarchies, projections: ctx.projections }
       if (d.transform?.length) rows = runScopedData(ctx, `${markIdOf(mark)}/${path.join('.')}/${d.name}`, d.name, d.transform, sources, rows ?? gather, shared, tctx, scopeParams)
@@ -5399,10 +6383,10 @@ function buildGroupItem(mark: CompiledMark, ctx: EvalContext, entered: EnteredGr
     const { groups: guides } = hollow || order > 0
       ? { groups: [] }
       : order === 0 && !whole
-        ? buildAxisAndLegend(guideCtx, content, (mark.axes ?? []).slice(0, madeAxes(ctx.abort.cut!)), (mark.legends ?? []).slice(0, madeLegends(ctx.abort.cut!)))
-        : buildAxisAndLegend(guideCtx, content, mark.axes ?? [], mark.legends ?? [])
+        ? buildAxisAndLegend(guideCtx, content, (mark.axes ?? []).slice(0, madeAxes(ctx.abort.cut!)), (mark.legends ?? []).slice(0, madeLegends(ctx.abort.cut!)), true)
+        : buildAxisAndLegend(guideCtx, content, mark.axes ?? [], mark.legends ?? [], true)
     const siblings: SceneGroup[] = [...content, ...guides]
-    const title = hollow || order > 0 || (order === 0 && !whole && !ctx.abort.cut!.title && !ctx.abort.cut!.labels && !ctx.abort.cut!.lateSignal) ? null : buildTitleGroup(mark.groupTitle, siblings, gw, gh, !laidOut, guideCtx, src.datum)
+    const title = hollow || order > 0 || (order === 0 && !whole && !ctx.abort.cut!.title && !ctx.abort.cut!.labels && !ctx.abort.cut!.lateSignal) ? null : buildTitleGroup(mark.groupTitle, siblings, gw, gh, !laidOut, guideCtx, src.datum, false, true)
     if (title) siblings.push(title)
     const ordered = paintOrderOf(siblings)
 
@@ -5426,6 +6410,11 @@ function buildGroupItem(mark: CompiledMark, ctx: EvalContext, entered: EnteredGr
       ...markContainerInfo(mark),
       ...(itemAria !== undefined ? { itemAria } : {}),
       ...(cursorOf(geo) !== undefined ? { cursor: cursorOf(geo) } : {}),
+      // (what vega's tooltip handler shows for the group item where no mark inside it is hit)
+      ...((geo as Record<string, unknown>).tooltip !== undefined ? { tooltip: (geo as Record<string, unknown>).tooltip } : {}),
+      // (vega leaves the box of a group item that says `noBound` out of its bounds: the view's autosize, and its pick, see only
+      // what it holds)
+      ...((geo as Record<string, unknown>).noBound ? { noBound: true } : {}),
       ...(href != null ? { href: href as string } : {}),
       ...(markClip(mark, ctx) ? { markClip: true } : {}),
     } as unknown as SceneGroup
@@ -5600,8 +6589,42 @@ function registerGradient(paint: object, ctx: EvalContext): void {
   if (!into.some((d) => d.id === def.id)) into.push(def)
 }
 
+/**
+ * A guide (an axis, a legend, a title) whose items paint with a gradient object -- written in a part's encode, held by a signal, set
+ * in the config -- brings the gradient's definition to the scene's defs, as a data mark's item does (`registerGradient`): the
+ * renderers write the paint as a reference to it. A guide's items are made by the guide encoder (guide-encode.ts), so they are read
+ * here once the guide is made, every item of every part, the guide's own group item included. Through `addDefs`: counted as asked
+ * for, so a guide that paints with one is made again by every evaluation rather than kept (`recordGuide`), and logged, so a group
+ * mark kept whole brings them back (`keptGroupMark`).
+ */
+function withGuideGradients(ctx: EvalContext, group: SceneGroup | null): SceneGroup | null {
+  if (group === null) return group
+  const defs: SceneDef[] = []
+  const paints = (it: Record<string, unknown>): void => {
+    for (const paint of [it['fill'], it['stroke']]) {
+      if (!isGradientPaint(paint)) continue
+      const def = gradientDefOf(paint)
+      if (!defs.some((d) => d.id === def.id)) defs.push(def)
+    }
+  }
+  // (a group item of a guide is drawn as its box: the background and foreground leaves, `SceneGroup.box` / `boxFg`)
+  const visit = (node: { items?: unknown; box?: unknown; boxFg?: unknown }): void => {
+    for (const leaf of [node.box, node.boxFg]) if (leaf != null && typeof leaf === 'object') paints(leaf as Record<string, unknown>)
+    if (!Array.isArray(node.items)) return
+    for (const it of node.items as Array<Record<string, unknown>>) {
+      paints(it)
+      visit(it)
+    }
+  }
+  visit(group as unknown as { items?: unknown })
+  if (defs.length > 0) addDefs(ctx, defs)
+  return group
+}
+
 /** The scene's defs take `defs` in order, each once. */
 function addDefs(ctx: EvalContext, defs: readonly SceneDef[]): void {
+  ctx.defsAsked.n += defs.length
+  if (ctx.defsLog !== undefined && defs.length) ctx.defsLog.push(defs.slice())
   for (const def of defs) if (!ctx._defs.some((d) => d.id === def.id)) ctx._defs.push(def)
 }
 
@@ -6112,7 +7135,21 @@ function symbolLegendsOf(legends: readonly CompiledLegend[] | undefined, ctx: Ev
   return out
 }
 
+/**
+ * The instance slot a symbol legend's entries take in its scope (after the scope's groups), noted as the scope's last instance so
+ * far: its last entry's is the last a layout above it is ranked after. A kept legend takes it again (see `keptLegends`).
+ */
+function takeLegendSlot(ctx: EvalContext): number {
+  const slot = ctx.scope.nextChild.n++
+  noteInstance(ctx.scope, [...ctx.scope.path, slot, Infinity])
+  return slot
+}
+
 function buildLegend(legend: CompiledLegend, ctx: EvalContext, index: number): SceneGroup | null {
+  return withGuideGradients(ctx, makeLegend(legend, ctx, index))
+}
+
+function makeLegend(legend: CompiledLegend, ctx: EvalContext, index: number): SceneGroup | null {
   const spec = (legend.own ?? NO_PROPS) as Record<string, unknown>
   const config = (legend.cfg ?? NO_PROPS) as Record<string, unknown>
   // vega-parser legend.js: the channels the legend maps, in LegendScales order; the first is the canonical scale
@@ -6143,9 +7180,7 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext, index: number): S
   // the entries in the first, a symbol and a label per entry in the next. They are the legend's children there, after the
   // instances of the scope's groups. A pass that stopped before an instance never made what it holds.
   const symbols = legendType(spec, scaleType) === 'symbol'
-  const slot = symbols ? ctx.scope.nextChild.n++ : undefined
-  // (its last instance, that of its last entry, is the last a layout above it is ranked after)
-  if (slot !== undefined) noteInstance(ctx.scope, [...ctx.scope.path, slot, Infinity])
+  const slot = symbols ? takeLegendSlot(ctx) : undefined
   const cut = ctx.abort.cut
   // (a gradient's labels are ranked after every other operator of the scope: made only where the pass went past them)
   let lateLabels = false
@@ -6239,6 +7274,8 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext, index: number): S
     width: built.width,
     height: built.height,
     items: built.leaves,
+    // (the legend group item's own datum: vega-parser legend.js)
+    datum: built.datum,
     partMeta: built.partMeta,
     ...(built.partMeta.legend?.name ? { cssName: built.partMeta.legend.name } : {}),
     legendBounds: built.bounds,
@@ -6249,6 +7286,7 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext, index: number): S
     ...(isUnencoded(g) ? { unencoded: true } : {}),
     ...(g.strokeWidth !== undefined ? { strokeWidth: g.strokeWidth } : {}),
     ...(cursorOf(g) !== undefined ? { cursor: cursorOf(g) } : {}),
+    ...(g.tooltip !== undefined ? { tooltip: g.tooltip } : {}),
     ...(g.href != null ? { href: g.href } : {}),
     ...(built.madeMarks !== undefined ? { madeMarks: built.madeMarks, _entriesPending: true } : {}),
   } as unknown as SceneGroup
@@ -6296,10 +7334,12 @@ function makeGuideHost(ctx: EvalContext): GuideHost {
     },
     gradient: (name, vertical) => {
       // vega-functions gradient(): stops from the scale's ticks (see scaleGradientStops); the definition is the
-      // renderer's, content-addressed by direction and stops
+      // renderer's, content-addressed by direction and stops. Through `addDefs`, as every definition a guide asks for: a group
+      // mark kept whole brings it back from its log.
       const stops = scaleGradientStops(ctx.scales.get(name) as never)
       const id = gradientDefId(vertical ? 'vertical' : 'horizontal', stops)
-      if (stops.length && !ctx._defs.some((d) => d.id === id)) ctx._defs.push(vertical ? { id, colorStops: stops } : { id, colorStops: stops, direction: 'horizontal' })
+      if (stops.length) addDefs(ctx, [vertical ? { id, colorStops: stops } : { id, colorStops: stops, direction: 'horizontal' }])
+      else ctx.defsAsked.n++
       return `url(#${id})`
     },
     groupBox: (geo, w, h) => groupBackground(geo, w, h),
@@ -6689,6 +7729,10 @@ function axisTicksReadLate(own: Record<string, unknown>, cfg: Record<string, unk
 }
 
 function buildAxis(axis: CompiledAxis, ctx: EvalContext, index: number): SceneGroup | null {
+  return withGuideGradients(ctx, makeAxis(axis, ctx, index))
+}
+
+function makeAxis(axis: CompiledAxis, ctx: EvalContext, index: number): SceneGroup | null {
   const scale = ctx.scales.get(axis.scale)
   if (!scale) return null
   const orient = String(axis.orient)
@@ -6769,10 +7813,19 @@ function buildAxis(axis: CompiledAxis, ctx: EvalContext, index: number): SceneGr
   gb.background.x = gx
   gb.background.y = gy
   if (gb.foreground) { gb.foreground.x = gx; gb.foreground.y = gy }
+  // (the axis group item's bounds, as its layout left them -- what it holds, its stroke; not its box -- are what a gradient on its
+  // box is laid over on a canvas: in the box's own frame)
+  if (!built.bounds.empty()) {
+    const own = { x1: built.bounds.x1 - gx, y1: built.bounds.y1 - gy, x2: built.bounds.x2 - gx, y2: built.bounds.y2 - gy }
+    ;(gb.background as unknown as Record<string, unknown>)._itemBounds = own
+    if (gb.foreground) (gb.foreground as unknown as Record<string, unknown>)._itemBounds = own
+  }
   const out = {
     marktype: 'group',
     role: 'axis',
     items: built.leaves,
+    // (the axis group item's own datum: vega-parser axis.js)
+    datum: built.datum,
     box: gb.background,
     ...(gb.foreground ? { boxFg: gb.foreground } : {}),
     // the marks vega-parser's axis builds (grid, ticks, labels, domain, title; axis.js `datum`): the SVG draws a
@@ -6782,6 +7835,7 @@ function buildAxis(axis: CompiledAxis, ctx: EvalContext, index: number): SceneGr
     ...(built.partMeta.axis?.name ? { cssName: built.partMeta.axis.name } : {}),
     ...(itemAriaOf(built.group) ? { itemAria: itemAriaOf(built.group) } : {}),
     ...(cursorOf(built.group) !== undefined ? { cursor: cursorOf(built.group) } : {}),
+    ...(built.group.tooltip !== undefined ? { tooltip: built.group.tooltip } : {}),
     // (a group item whose encode never ran has no orient: the caption calls it an X-axis, and reads no format off it)
     axis: { orient, itemOrient: isUnencoded(g) ? '' : typeof g.orient === 'string' ? g.orient : orient, format: g.format, formatType: g.formatType, ...(isUnencoded(g) ? { unencoded: true } : {}), range: axisRangeSpan, baseline: 0, translate: ctx.rawGuides ? 0 : (typeof g.translate === 'number' ? g.translate : 0.5), position, bounds: built.bounds, ...(knownOrient ? {} : { noLayout: true }) },
     ...(href != null ? { href } : {}),

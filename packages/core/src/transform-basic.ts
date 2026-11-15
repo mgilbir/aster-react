@@ -19,6 +19,7 @@ import {
 import { AsterLimitError, activeMeter, checkRowCount, meterRows, meterTick } from './limits.js'
 import type { IdCounter } from './identifier-ids.js'
 import { orderOf } from './tuple-order.js'
+import { recorded, recordingFor } from './step-byproduct.js'
 
 type Params = Record<string, unknown>
 type Read = (d: unknown) => unknown
@@ -59,7 +60,13 @@ export function numberRange(start: number, stop: number, step: number): number[]
 
 /** `collect`: a stable sort by the `sort` spec (ties keep input order); the rows as they are without one. */
 export function collectRows(rows: Row[], p: Params, leaveOrder = false): Row[] {
-  return sortBySpec(rows, p.sort, leaveOrder) ?? rows
+  const record = recordingFor(rows)
+  if (record === undefined) return sortBySpec(rows, p.sort, leaveOrder) ?? rows
+  // (the order the step state of a collect is: see step-byproduct.ts)
+  let order: readonly number[] | undefined
+  const sorted = sortBySpec(rows, p.sort, leaveOrder, (o) => { order = o })
+  recorded(record, { kind: 'order', sort: p.sort, order: order !== undefined ? [...order] : rows.map((_, i) => i) })
+  return sorted ?? rows
 }
 
 /**
@@ -125,9 +132,13 @@ export function flattenRows(rows: Row[], p: Params): Row[] {
   const names = fields.map((f, i) => (given[i] || accessorName(f)) as string)
   const indexName = (p.index as string | undefined) || null
   const out: Row[] = []
-  for (const row of rows) {
+  const record = recordingFor(rows)
+  const sizes = record !== undefined ? new Array<number>(rows.length) : undefined
+  for (let r = 0; r < rows.length; r++) {
+    const row = rows[r]!
     const arrays = fields.map((f) => f(row)) as ArrayLike<unknown>[]
     const length = flattenLength(arrays)
+    if (sizes !== undefined) sizes[r] = length > 0 ? length : 0
     // the length comes from the data: bound it before the loop
     checkRowCount(out.length + (length > 0 ? length : 0), 'flatten')
     for (let i = 0; i < length; ++i) {
@@ -141,6 +152,7 @@ export function flattenRows(rows: Row[], p: Params): Row[] {
     }
     meterTick('flatten', 1)
   }
+  if (record !== undefined) recorded(record, { kind: 'flatten', fields: p.fields, sizes: sizes! })
   return out
 }
 

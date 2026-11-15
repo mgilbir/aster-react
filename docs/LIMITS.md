@@ -72,6 +72,7 @@ unrelated limits (`limits: {}`, `{ maxStringLength }`) leaves it in force. They 
 | `items` | 100 000 | counts a spec sets: `tickCount` of axes and legends (and so the ticks made), axis ticks drawn, trellis `layout.columns`, `contour` / `isocontour` `levels`, a quantized colour scheme `count` | `maxItems` | 165 axis ticks, 30 facet columns, 40 thresholds |
 | `bytes` | 1 000 000 | one string an expression builtin builds: `pad`, number-format width | `maxStringLength`, `maxGeneratedBytes` | 5 000 (`pad`), 982 (format width) |
 | `coords` | 2 000 000 | positions one topojson decode produces (an arc referenced by many geometries counts every time) | `maxRows`, `maxGeneratedRows` | 101 000 (the gallery's largest map: 55 713) |
+| `latticeTests` | 50 000 000 | the point-in-outline work of one `intersect()` of an arc, path, shape or geoshape item (vega-lite interval selections over geo marks, or the expression in any signal handler): the rows the item's outline spans inside the box, times its edges, plus each candidate point times its edges. A region beyond 2^52 is refused outright | none (`maxTimeMs` also bounds the walk, cooperatively) | 1 098 884 (the largest in the core test suites: a 3 000-row strip; not measured over the corpus, gallery or the intersect-browser gate) |
 | spec depth | 1 000 (`HARD_MAX_SPEC_DEPTH`) | nesting of the spec object, checked iteratively when it is compiled (`values` data arrays are not walked); a deeper or cyclic spec is an `AsterLimitError` instead of a raw `RangeError` | `maxDepth` can only lower it | 12 |
 | spec size | 5 000 000 objects | objects and arrays visited by that walk (a spec that shares sub-objects can otherwise make it exponential) | none | a few thousand |
 
@@ -80,6 +81,13 @@ corpus and the test suites is in the last column; every ceiling is 1 to 3 orders
 it. The upper end is set by memory, not by taste: on Node a million generated rows costs about
 150 MB, a 2-million-position topojson decode about 250 MB, and 5 million rows already fails with
 `--max-old-space-size=512`. A real chart does not draw a million marks; a host that does can raise the matching limit.
+
+`latticeTests` is the one ceiling on work rather than memory. vega answers `intersect()` for an arc or path item by testing
+every lattice point of the item's bounds within the box with `isPointInPath`; Aster gives the same answer row by row (the
+winding test only changes where an edge crosses the row), so the work follows the rows the outline spans and its edges, not the
+region's area. Past the ceiling, or for a region beyond 2^52 (where `x + 1` stops moving), `intersect()` throws an
+`AsterLimitError` instead of answering. vega would not terminate on those inputs: its walk is over a region of more than
+10^15 points, or never ends.
 
 Not covered by a ceiling, deliberately: input that is large in itself (inline `values`, host `data`,
 loaded files: they are data, not amplification; budget them with `maxRows`, `maxBytes`), and the
@@ -145,16 +153,20 @@ functions (they are exported from `@aster-charts/core`).
 
 The pre-flight reads the spec's lists the way the compiler does (vega-util `array()`: a lone `data` object counts as a one-element list), so `checkSpecLimits` and the runtime agree on what is a dataset.
 
-- **Pre-flight**: the sum of all inline `values` arrays (top level and nested group
-  `data`) plus every array in the host's `input.data`. Two datasets of 6 rows fail a
-  `maxRows` of 10.
+- **Pre-flight**: the sum of the rows the chart is given, each counted once: for every
+  top-level dataset its host rows (`input.data` under its name, which replace its inline
+  `values` rather than add to them), else its inline `values`; the inline `values` of nested
+  group `data`; and every host array under a name no top-level dataset has. A dataset derived
+  from others (`source`) is given no rows of its own, and host rows under its name are not
+  used. Two datasets of 6 rows fail a `maxRows` of 10; a dataset of 6 inline rows whose host
+  rows are 4 counts 4.
 - **During evaluation**: each dataset on its own, after load, `source` and every
   transform step (not a sum). Datasets produced by `sequence`, `cross`, `fold` and the
   like count, so generated rows are covered. The cumulative total of generated rows is
   `maxGeneratedRows`.
-- **`createChartStream`**: additionally the rows the stream holds (base snapshot plus what
-  the flush will add), because those arrive through `input.data` after the session's
-  pre-flight.
+- **`createChartStream`**: the rows the stream holds (base snapshot plus what the flush will
+  add), checked before the flush is materialised; they reach the session as its host rows, so
+  its pre-flight counts them once, in place of the spec's inline rows they started from.
 - **`loadSpecData`**: rows of each loaded dataset (`limits.maxRows`), and decoded topojson
   coordinates (against `maxGeneratedRows`, else `maxRows`).
 
@@ -188,7 +200,7 @@ that shares the one wall clock:
 
 | Where | What is metered |
 |---|---|
-| Pre-flight (`checkSpecLimits`) | every string in the spec (`maxStringLength`), object depth (`maxDepth`, ceiling 1000), mark definitions (`maxMarks`), summed inline rows (top level, nested group `data`, host `input.data`). Iterative: a 200 000-deep or cyclic spec is an `AsterLimitError`, never a `RangeError` |
+| Pre-flight (`checkSpecLimits`) | every string in the spec (`maxStringLength`), object depth (`maxDepth`, ceiling 1000), mark definitions (`maxMarks`), summed rows the chart is given, each once (see "What `maxRows` counts"). Iterative: a 200 000-deep or cyclic spec is an `AsterLimitError`, never a `RangeError` |
 | Every dataset | rows after load/`source`/transforms must be `<= maxRows` |
 | Transforms and row emitters | `sequence`, `fold` (rows x fields), `flatten`, `cross` (n x n), `impute`, `kde`/`quantile`/`regression`/`loess`/`countpattern` row counts, contour grid cells and thresholds, label bitmap, `range`: checked **before** the output is allocated; `aggregate`, `joinaggregate`, `pivot`, `bootstrap`, `stack`, `window`, `loess`, `kde`, `wordcloud`, `pack`, `voronoi`, `cross` with a filter and `indata()` sample the clock **inside** their loops |
 | Encode loop | one item per row: `maxItems` is checked before the mark is encoded; the clock is sampled every 1024 items. Group items are metered the same way |
@@ -469,7 +481,7 @@ applies. A host that has a DOM element to fill passes its `clientWidth` / `clien
 
 `measuredSize: { width, height }` is the element a host lets the chart fill. It is the view size of a
 spec with no `width` / `height` signal; a spec that drives those signals keeps doing so (the container
-reaches it through `containerSize()`, which falls back to `measuredSize`); nor does it size a dimension the spec gives no value at all (no number, no signal): in Vega that is 0 and the autosize pass grows it to the content. The view size has one value
+reaches it through `containerSize()`, which falls back to `measuredSize`); nor does it size a dimension the spec gives no value at all (no number, no signal): in Vega that is 0 and the autosize pass grows it to the content; nor a spec whose autosize is `none`, whose whole size in Vega is its `width`, `height` and `padding`. The view size has one value
 for every consumer (scales, layout, marks and expressions); from the strongest: a fixed `width` /
 `height`, a value written to the `width` / `height` signal (`signals`), then `measuredSize`.
 

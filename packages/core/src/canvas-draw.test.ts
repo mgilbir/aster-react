@@ -158,11 +158,16 @@ describe('shapes follow vega markItemPath / path / image', () => {
     expect(log.slice(rotIdx, fillIdx).some((e) => e.op === 'restore')).toBe(true)
   })
 
-  it('a path mark scales and rotates in its frame', () => {
+  it('a path mark rotates in its frame and is scaled in its numbers (vega\'s path mark: pathRender(context, path, 0, 0, sx, sy))', () => {
     const { ctx, log } = spy()
     renderSceneToCanvas(scene([mark('path', { x: 10, y: 10, path: 'M0,0L10,0L10,10Z', scaleX: 2, scaleY: 3, angle: 90, fill: '#0f0' })]), ctx)
-    expect(log.some((e) => e.op === 'scale' && e.args[0] === 2 && e.args[1] === 3)).toBe(true)
-    expect(log.some((e) => e.op === 'rotate')).toBe(true)
+    // (the scale is in the numbers the path is drawn with, not in the context's transform: a stroke is not scaled either way)
+    expect(log.some((e) => e.op === 'scale')).toBe(false)
+    const rotIdx = log.findIndex((e) => e.op === 'rotate')
+    expect(Math.abs((log[rotIdx]!.args[0] as number) - Math.PI / 2)).toBeLessThan(1e-12)
+    const restoreIdx = log.findIndex((e, i) => i > rotIdx && e.op === 'restore')
+    expect(log.slice(rotIdx, restoreIdx).filter((e) => e.op === 'moveTo' || e.op === 'lineTo').map((e) => [e.op, ...e.args])).toEqual([['moveTo', 0, 0], ['lineTo', 20, 0], ['lineTo', 20, 30]])
+    expect(restoreIdx).toBeLessThan(log.findIndex((e, i) => i > rotIdx && e.op === 'fill'))
   })
 
   it('an image draws from a host-supplied bitmap, letterboxed to its aspect ratio', () => {

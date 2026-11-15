@@ -14,7 +14,7 @@ import * as React from 'react'
 import type { SceneRoot, SpecLimits, StreamBatch, VgSpec } from '@aster-charts/core'
 import { Chart, type ChartProps, type ChartStreamInput } from './Chart.js'
 import { positionalScales, viewToDomainRaw } from './interaction.js'
-import { useStableContent } from './spec.js'
+import { normalizeChartSpec, useStableContent, useStableSpec } from './spec.js'
 import {
   useChartStream,
   type StreamFlushFailureInfo,
@@ -81,6 +81,15 @@ function useSizeBatch(width: number | undefined, height: number | undefined): { 
   }), [width, height])
 }
 
+/**
+ * The container the spec is sized to when the size props give both dimensions (`containerSize()` reads the props then, as in
+ * `<Chart>`): known when the stream is created, so its first flush already has it and the chart's report of the same size
+ * changes nothing. A measured container is only known after the mount, and is pushed then.
+ */
+function initialContainer(size: { width?: number; height?: number }): { width: number; height: number } | undefined {
+  return size.width != null && size.height != null ? { width: size.width, height: size.height } : undefined
+}
+
 function useSyncSize(
   push: (batch: StreamBatch) => boolean,
   size: { width?: number; height?: number },
@@ -110,11 +119,15 @@ const sameValues = (a: Record<string, unknown>, b: Record<string, unknown>): boo
 function useStreamInput(
   stream: unknown,
   push: (batch: StreamBatch) => boolean,
+  /** The container size the stream was created with (see `initialContainer`): it is not pushed again. */
+  initialContainerSize?: { width: number; height: number },
 ): (input: ChartStreamInput) => void {
   const latest = React.useRef<ChartStreamInput | null>(null)
-  const sent = React.useRef<{ stream: unknown; domainRaw: Record<string, unknown[]>; signals: Record<string, unknown> }>(
-    { stream, domainRaw: {}, signals: {} },
+  type Size = { width: number; height: number } | undefined
+  const sent = React.useRef<{ stream: unknown; domainRaw: Record<string, unknown[]>; signals: Record<string, unknown>; containerSize?: Size; measuredSize?: Size }>(
+    { stream, domainRaw: {}, signals: {}, containerSize: initialContainerSize },
   )
+  const sameSize = (a: Size, b: Size): boolean => a === b || (a != null && b != null && a.width === b.width && a.height === b.height)
   const pushRef = React.useRef(push)
   pushRef.current = push
   const send = React.useCallback((input: ChartStreamInput, force: boolean): void => {
@@ -130,14 +143,17 @@ function useStreamInput(
     }
     const signals = input.signals
     if (!sameValues(signals, last.signals) || (force && Object.keys(signals).length)) batch.signals = signals
-    sent.current = { stream: last.stream, domainRaw, signals }
-    if (batch.domainRaw || batch.signals) pushRef.current(batch)
+    // the container the inner chart measured: the stream sizes the spec to it as <Chart> sizes its own evaluation
+    if (input.containerSize && (force || !sameSize(input.containerSize, last.containerSize))) batch.containerSize = input.containerSize
+    if (input.measuredSize && (force || !sameSize(input.measuredSize, last.measuredSize))) batch.measuredSize = input.measuredSize
+    sent.current = { stream: last.stream, domainRaw, signals, containerSize: input.containerSize, measuredSize: input.measuredSize }
+    if (batch.domainRaw || batch.signals || batch.containerSize || batch.measuredSize) pushRef.current(batch)
   }, [])
   React.useEffect(() => {
     if (sent.current.stream === stream) return
     // The stream was rebuilt (spec content changed): it starts from the spec
     // alone, so re-apply the current view/signals.
-    sent.current = { stream, domainRaw: {}, signals: {} }
+    sent.current = { stream, domainRaw: {}, signals: {}, containerSize: initialContainerSize }
     if (latest.current) send(latest.current, true)
   }, [stream, send])
   return React.useCallback((input: ChartStreamInput): void => {
@@ -198,6 +214,15 @@ function useReportOnce(
   }, [error])
 }
 
+/**
+ * The Vega spec a stream component's spec is, compiled once per change of its content: the stream hook and the chart the stream
+ * draws into both take it, so a Vega-Lite spec is compiled once and not by each of them.
+ */
+function useNormalizedSpec(spec: VgSpec): VgSpec {
+  const stable = useStableSpec(spec)
+  return React.useMemo(() => normalizeChartSpec(stable), [stable])
+}
+
 export const ChartStream = React.forwardRef<ChartStreamHandle, ChartStreamProps>(
   function ChartStream({
     spec, streamOptions, onStreamError, width, height, className, style,
@@ -206,22 +231,26 @@ export const ChartStream = React.forwardRef<ChartStreamHandle, ChartStreamProps>
     const size = useSizeBatch(width, height)
     const stableLimits = useStableContent(limits)
     const initialInput = useInitialInput(spec, signals, view)
-    const stream = useChartStream(spec, {
+    const vgSpec = useNormalizedSpec(spec)
+    const stream = useChartStream(vgSpec, {
       ...streamOptions,
       serialize: false,
       initial: {
         ...(streamOptions?.initial ?? {}),
         ...size,
+        ...(initialContainer(size) ? { containerSize: initialContainer(size) } : {}),
         ...(stableLimits ? { limits: stableLimits } : {}),
         ...(textMetrics ? { textMetrics } : {}),
         ...(urlPolicy ? { urlPolicy } : {}),
         ...(urlData !== undefined ? { urlData } : {}),
+        // (the stream's evaluations report to the chart's logger, as <Chart>'s do)
+        ...(chartProps.logger ? { logger: chartProps.logger } : {}),
         ...initialInput,
       },
     })
     useSyncSize(stream.push, size)
     useStreamConfig(stream.push, stableLimits, textMetrics, stream.stream)
-    const onStreamInput = useStreamInput(stream.stream, stream.push)
+    const onStreamInput = useStreamInput(stream.stream, stream.push, initialContainer(size))
     const { push, flush, pending, pulse, stats, stream: coreStream } = stream
     React.useImperativeHandle(ref, () => ({
       push,
@@ -244,7 +273,7 @@ export const ChartStream = React.forwardRef<ChartStreamHandle, ChartStreamProps>
     return (
       <Chart
         {...chartProps}
-        spec={spec} width={width} height={height} className={className} style={style}
+        spec={vgSpec} width={width} height={height} className={className} style={style}
         signals={signals} view={view}
         sceneOverride={stream.scene} onStreamInput={onStreamInput}
       />
@@ -260,12 +289,14 @@ export const ChartWorkerStream = React.forwardRef<ChartStreamHandle, ChartWorker
     const size = useSizeBatch(width, height)
     const stableLimits = useStableContent(limits)
     const initialInput = useInitialInput(spec, signals, view)
-    const stream = useChartWorkerStream(spec, {
+    const vgSpec = useNormalizedSpec(spec)
+    const stream = useChartWorkerStream(vgSpec, {
       ...streamOptions,
       serialize: false,
       initial: {
         ...(streamOptions?.initial ?? {}),
         ...size,
+        ...(initialContainer(size) ? { containerSize: initialContainer(size) } : {}),
         ...(stableLimits ? { limits: stableLimits } : {}),
         ...(textMetrics ? { textMetrics } : {}),
         ...(urlPolicy ? { urlPolicy } : {}),
@@ -275,7 +306,7 @@ export const ChartWorkerStream = React.forwardRef<ChartStreamHandle, ChartWorker
     })
     useSyncSize(stream.push, size)
     useStreamConfig<WorkerTextMetrics>(stream.push, stableLimits, textMetrics, stream.generation)
-    const onStreamInput = useStreamInput(stream.generation, stream.push)
+    const onStreamInput = useStreamInput(stream.generation, stream.push, initialContainer(size))
     // The handle's `scene()` must read the latest scene without being rebuilt per frame.
     const sceneRef = React.useRef(stream.scene)
     sceneRef.current = stream.scene
@@ -301,7 +332,7 @@ export const ChartWorkerStream = React.forwardRef<ChartStreamHandle, ChartWorker
     return (
       <Chart
         {...chartProps}
-        spec={spec} width={width} height={height} className={className} style={style}
+        spec={vgSpec} width={width} height={height} className={className} style={style}
         signals={signals} view={view}
         sceneOverride={stream.scene} onStreamInput={onStreamInput}
       />

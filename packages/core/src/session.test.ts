@@ -226,7 +226,9 @@ describe('one view size: scales, layout, svg and the width signal never disagree
   it('without a fixed width the signal is the size, and the measured container only sizes a spec that has no such signal', () => {
     expect(sizes(withSignal, {})).toEqual([300, 300, 300, 300])
     expect(sizes(withSignal, { measuredSize: { width: 700, height: 200 } })).toEqual([300, 300, 300, 300])
-    expect(sizes(numeric, { measuredSize: { width: 700, height: 200 } })).toEqual([700, 700, 700, 700])
+    // (a spec whose autosize is `none` fixes its size: in vega its whole size is its width, height and padding)
+    expect(sizes(numeric, { measuredSize: { width: 700, height: 200 } })).toEqual([400, 400, 400, 400])
+    expect(sizes({ ...(numeric as object), autosize: 'pad' } as unknown as VgSpec, { measuredSize: { width: 700, height: 200 } })).toEqual([700, 700, 700, 700])
   })
 
   it('a value written to the signal (a bound input, a handler) beats the measured container, and is the one every consumer reads', () => {

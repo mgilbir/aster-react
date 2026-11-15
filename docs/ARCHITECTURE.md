@@ -116,7 +116,7 @@ import { renderSpec, compileChart, evaluateChart, renderSceneToSvg,
 - A claim is by identity: the structures a fast path writes (a dataset's state, its steps' rows and step state, a domain census) go into the evaluation's `claimed` set, and a fast path that finds one of its structures there runs from scratch instead. Two states can hold the same structure (kept steps are shared, not copied), so a structure is updated in place at most once per evaluation, whichever state it was reached through.
 - A view that fits its viewport (`autosize` fit / fit-x / fit-y, and a view sized by a measured container) makes two passes: the first at the viewport finds the overflow, the second builds the content at the viewport less it. The committed state is the second pass's, and it carries the first pass's draft (`fitFirst`). The next evaluation makes its first pass from `fitFirst` and its second from the committed state, each told what changed, so both passes are incremental against a pass of the same size. When the fitted size moved, the second pass finds a state of another size: its fingerprints differ and it re-derives what reads the size, as any resize does. A first pass with nothing of its own to start from (the evaluation before made one pass, or its first pass logged an error) starts from the committed state, as the second does. A view with an injected `random` source and a dataset that may draw from it is the one exception: its first pass keeps starting from the committed state, because the engine's pulse path draws without a tape, so which pass takes a pulse decides which numbers the source hands out. Keeping both passes' state costs memory: a fit view retains the first pass's scene items as well as the second's. The view's id counter is always the committed state's. Pinned by `fit-incremental.test.ts` and the container scenario of `incremental-oracle.test.ts`.
 - Reuse is keyed by what a result actually depends on: the evaluation context (signals incl. `width`/`height`, `domainRaw`, text metrics; typed and structural, so an unchanged `[0, width]` derived signal is unchanged), every dataset the unit reads (closed over `source` chains, `lookup.from` and `data()`/`indata()` expressions), and each scale it reads (by object identity).
-- Mark groups are matched to the previous scene by compiled-mark identity, never by source dataset or name. Group marks (facets, trellises, scoped groups) are made again on every evaluation; the leaf marks inside their items are matched by instance (see "Marks inside group items"), and what the evaluation makes the same as before is the node it made before (`shareContent`).
+- Mark groups are matched to the previous scene by compiled-mark identity, never by source dataset or name. A top-level group mark is kept whole when nothing its subtree reads changed (see "Kept group marks, channels and marks drawn from marks"); otherwise it is made again, the leaf marks inside its items are matched by instance (see "Marks inside group items"), and what the evaluation makes the same as before is the node it made before (`shareContent`).
 - **Signal-scoped reuse.** A top-level scale and a top-level leaf mark are keyed by the signals they read, not by every signal, so a signal that changes keeps everything that does not read it (a Vega-Lite `time` animation's clock ticks without re-encoding its marks).
   - **What a result reads.** Its key (`readsKey` in `runtime.ts`) holds the values of every name its definition mentions (every identifier in every string of the scale or mark, expression or not, read as the expression lexer reads it: an escaped name is the name it stands for, a name past ASCII is whole -- `namesIn` / `lexedText` in `step-reuse.ts`; a superset of the signals it reads, since an expression reads a signal by its name and the expression functions are never handed the signals), the view's `width` / `height` / `padding` / `autosize` / `background` and the view's size (read without being named: `range: "width"`, `{field: {group: "width"}}`), the inputs of the context fingerprint (`domainRaw`, text metrics, container size), the registered expression functions, and for an image or a link the URL policy.
   - **What reads every signal.** These keep the whole context fingerprint, as every result did before: a mark with transforms (a `label` reads other marks, a `force` or a word cloud may draw, a geo transform reads a projection), a mark that reads the items of another mark or a dataset's hierarchy (`treePath`, `treeAncestors`), a scale or mark that calls `now`, `random`, the window or a geo function, or names a projection, and a scale whose parameters read a dataset, a hierarchy or a scale from an expression.
@@ -125,7 +125,7 @@ import { renderSpec, compileChart, evaluateChart, renderSceneToSvg,
   - **When.** Only when the caller says what changed or follows the session's contract (`DataStability`: an array it gave before holds the rows it held), not under `limits` (a kept result is not counted against them again), and only in a pass where nothing failed so far (a dataset or a scale that throws stops vega's run before the marks). With the whole context unchanged, the rule is the one before: a dataset the caller did not name is unchanged.
   - **Builds of a dataset kept between rounds and passes.** A pass builds its datasets again once the signals that read data resolve (`prepareChartCtx`: every Vega-Lite selection has one, `vlSelectionResolve`), and a view that fits its viewport makes a second pass. A dataset with transforms whose input arrays are the same and whose steps read the same (`pipelineKey`: every step's keys, its signals and the datasets it reads by name) is the build the round, or the pass, before made (`keptBuild`): its rows, the numbers its `identifier`s drew (the view's id counter is set where that build left it, and the build is kept only from where it started), the signals its steps published, and its pulse -- handed to another pass only when that pass's items were made from the same state of the evaluation before (`BuiltDataset.base`). A dataset with no transforms keeps the copy the round or pass before made of the same arrays. A Vega-Lite point selection's dataset (an `identifier` step) is therefore the array it was across a signal change, and the scales over it are kept. Not under `limits` (each round's rows count against them, as when it ran), not for a step that draws, and not in a view with an injected `random` source and a dataset that may draw (which build takes a pulse decides which numbers the source hands out).
   - **A pulse with a signal change.** A dataset runs a pulse through its steps when they read what they read when its state was made (its `pipelineKey`), whichever other signals changed; it used to need the whole context unchanged. A scale whose key is unchanged advances its census over the pulse, and a mark whose key is unchanged splices its items, so a row appended while a hover moves encodes one item. After a pulse, the state records what each step read (unless a step publishes a signal), so a later evaluation that is not driven by a pulse keeps the steps. A filter whose expression reads a scale, or a dataset the update changed (`length(data("t"))` over its own source, a selection's store edited with the rows), judges every row again: its verdict on a row is not the row's alone.
-  - **What stays conservative.** Group marks (facets, concat cells, scoped groups) and guides are made again on every evaluation (the leaf marks inside group items are kept as "Marks inside group items" says, and unchanged nodes are shared); a scale with a `{signal}` domain or range that reads a dataset or a scale; a mark with transforms; a dataset with a step outside `step-reuse.ts`'s list (lookup, geo, hierarchy, label, force, ...), whose builds are run again in every round and whose pulse needs the whole context unchanged. An ordinal scale that adds the categories it is asked for to its domain (`domainImplicit`, a `domainRaw`, or no domain) is made again on every evaluation, and so are the marks that read it. A mark that lays out nodes with a `force` that has a `link` force, and every mark drawn from or reading that force's link dataset, is made again on every evaluation (`forceBound`): each run of the force rewrites the link rows. A scale is not kept under `limits` for its settings alone (see "Discrete scales over changing rows").
+  - **What stays conservative.** Group marks nested in a view with a `layout` (concat cells, a Vega-Lite facet's cells), group marks whose subtree declares signals, may draw random numbers or runs `identifier`, `force`, `stratify`, `nest` or `label`, and guides are made again on every evaluation (the leaf marks inside group items are kept as "Marks inside group items" says, and unchanged nodes are shared); a scale with a `{signal}` domain or range that reads a dataset or a scale; a mark with transforms; a dataset with a step outside `step-reuse.ts`'s list (lookup, geo, hierarchy, label, force, ...), whose builds are run again in every round and whose pulse needs the whole context unchanged. An ordinal scale that adds the categories it is asked for to its domain (`domainImplicit`, a `domainRaw`, or no domain) is made again on every evaluation, and so are the marks that read it. A mark that lays out nodes with a `force` that has a `link` force, and every mark drawn from or reading that force's link dataset, is made again on every evaluation (`forceBound`): each run of the force rewrites the link rows. A scale is not kept under `limits` for its settings alone (see "Discrete scales over changing rows").
   - **Pinned by.** `signal-reuse.test.ts` (fresh equality and the reuse itself, by identity and by the items encoded, per kind of read; scopes, facets, guides, a fit view, failures), `selection-reuse.test.ts` (point selections over numbered rows, selection tests, kept builds, the id counter, pulses with a signal change, escaped names, limits, drawing steps), `packages/conformance/test/vl-signal-reuse.test.ts` and `vl-selection-reuse.test.ts` (a Vega-Lite `time` animation, a point selection also in a container-fit view, an interval brush, a legend-bound selection, a brush filtering a concat view and a point selection in a facet, end to end), besides the oracle and the incremental differential.
 - **Marks inside group items.** A leaf mark inside a group item (a facet's cell, a concat's view, a line per category, a group per row of a dataset) is recorded by its instance: the marks and the keys of the group items above it (`GuideScope.keyPath`: a facet's partition key, a row's index), not their order (`evaluateInstanceMark`).
   - **Kept.** The evaluation after keeps it when its key (`markKeyOf` in the item's scope, over the names it mentions: a facet's partition is a dataset of the scope, not a mark's name, `readsAllDataInScope`), the scales it reads, the other datasets it names or reads by name (as arrays), and the item's box (and, for a mark with a `{group}` or `{parent}` field reference, the item's datum, `parent` and encode, by value) are as they were, and its rows are equal, by value, to the data its items were made from (`diffRows` over the items' `datum`, in row order: a sorted mark keeps its row order apart, `ROW_ITEMS`).
@@ -152,6 +152,71 @@ stateDiagram-v2
 ```
 
 *The committed state of one compiled chart. An evaluation reads it only while it is `Committed`; from `Empty` and `Stale` it starts from nothing. A draft belongs to one evaluation and is not a state of the chart: an evaluation that throws before it claims anything leaves `Committed` as it was.*
+
+**Kept group marks, channels and marks drawn from marks.** Three reuses beyond a kept leaf mark (`runtime.ts`); each is pinned
+by a test that plants the input it reads and must miss (`group-mark-keep.test.ts`, `channel-reuse.test.ts`), and by the signal
+phase of the incremental-diff gate.
+
+- **A top-level group mark** (`keptGroupMark`) is its group items of the evaluation before, the same objects, when: its key holds
+  (`groupMarkKeyOf`: every signal its subtree names, the view size, `extraFp` -- overrides, text metrics, container sizes, the
+  default locale, the time zone -- the registry, the URL policy when something inside it is vetted, the content of datasets its
+  expressions read by name), every dataset its subtree names is the very array the evaluation before read (`sameRows`; a mark
+  reading a facet partition or a group's own `data` reads that dataset, `groupDepsOf`), its top-level scales are the same objects,
+  and tuples are registered as before. Refused: a subtree that may read any dataset, declares signals, may draw random numbers or
+  runs a transform that writes what the evaluation shares; a pass that is not clean; `limits`; a fit view; a view `layout`; moved
+  instances. Making the mark writes into the evaluation and keeping it writes the same (`GroupMarkRecord`: the instance counter
+  and last instance, every gradient definition list, the marks it names, its scopes' state carried into the draft).
+- **Channels** (`reencodeChannels`). A top-level leaf mark over the very rows its items were made from records each channel's key
+  (`channelKeyOf`: the signals it names with the view size, `extraFp` and the registry, the content of the datasets it reads by
+  name, the scale objects it reads). When only some differ, an item is the item before with those channels evaluated again (a copy,
+  its keys in the same order), or the item before itself when they come out as they were; an item whose re-evaluated channel
+  appears or disappears is encoded whole. The mark is encoded whole when a changed channel is coupled to others (x/x2/xc/width,
+  y/y2/yc/height, a paint that may be a gradient, `defined`), a channel reads more than it names, the mark has transforms or a sort,
+  is an image, may read any dataset, a channel throws (the whole encode reports it), the pass is not clean, under `limits`.
+- **A mark drawn from another mark's items** (`keptOverMarkItems`, Vega-Lite's voronoi) is its group before when the fields of its
+  rows it reads (`rowFieldsOfMark`: entry fields and `datum.f` in its expressions, voronoi's parameters; anything else of `datum`, a
+  sort, a key or another transform refuses) hold the same values item by item (Object.is: a datum by identity), and its own key,
+  datasets and scales hold; when the items it is drawn from are new objects its items get the datum a fresh evaluation gives them.
+
+- **Guides** (`keptGuide`): the view's axes, legends and title, and a group mark's axes, legends and title in each of its cells.
+  A guide is its group before when its key holds (`guideKeyOf`: the signals its definition names as its scope sees them, with the
+  scope's size, `extraFp` and the registry, the rows of the datasets its expressions read by name, the URL policy, the text measurer
+  set for every chart, whether guides are laid out), every scale of its scope is the object it was, and tuple registration is as it
+  was. Records are per scope instance (the group item's key path, `''` for the view) and a record is kept at most once per
+  evaluation. A legend is placed after it is made, so the legends of a scope are kept together, only when each is kept and the
+  anchors they are placed against (the bounds of the content and the axes beside the plot), the plot size and the raw mode are what
+  they were placed against (`keptLegends`); a kept symbol legend takes its instance slot again. A title's key adds the bounds it
+  sits against, the size, the raw and fit modes and a group title's datum. Refused: a definition that reads more than it names or a
+  dataset by a computed name, a pass that is not clean, `limits`, a fit view, a failed layout; a guide whose making (or a legend
+  whose placing) logged anything or asked for a gradient is not recorded. The scene's scale snapshots (`__scales`) are the array
+  before when every scale is. `conformance:diff` writes signals every guide reads, at every depth, and an axis tick count that moves
+  what legends and titles are placed against (`withGuideProbes`).
+
+**Around an evaluation.** Three more savings, each a function of inputs it checks:
+
+- **Row passes** (`exprRows`, `expr-interpreter.ts`). A filter's or a formula's loop over its rows reads each signal its expression
+  names once, at the start of the pass, when nothing in the pass can write a signal: the expression calls only the default functions
+  and the built-ins marked param-safe, every call still resolves to the function it did when compiled, and the parameters are the
+  engine's own object (`engineParams`); otherwise every row reads them as one evaluation does.
+- **Step state from the step** (`step-byproduct.ts`). The state an aggregate, joinaggregate, collect or flatten leaves for the next
+  pulse is made of what the step computed as it ran (a key per row and the rows of each group, the sort order, a count per row),
+  never derived later from rows a host may change in place; a step that read signal-resolved parameters or a custom `key` derives it
+  as before.
+- **The binding shell** (`signals.ts`). A binding again on the same element for the same chart takes the expressions the last binding
+  compiled, against a runtime that forwards each member to the runtime of the binding now live; the rest of a binding is built for
+  each binding.
+
+**Derived structures are kept with the engine's nodes.** `scene-registry.ts` records the group nodes of every scene the engine
+returns. What the hit index (a mark's entries at a place), the DOM patcher (a data mark's descriptor for a clip), the accessible
+tree (a summarised mark's or a guide's box at an offset), `event.item` (a group's child groups and leaf set) and `sceneHasCursor`
+derive from such a node is kept with it in a WeakMap and used for a later scene that kept the node (`keptInto`), never for the
+scene it was made from (a host may write into a scene and draw it again). What reads more than the node is kept only with what it
+reads in its key, or not at all: the DOM descriptor of a run of group items (a mark's items or a guide, `RUN_DESCS`) with the frame
+around it, the scale snapshots, the text measurer, the locale and time zone and the options (not when it asked for a clip); the hit
+entries of a guide of the top level with the view's frame and the text measurer; a data mark's text boxes and the selection and
+legend callbacks of the accessible tree are not kept. Pinned by
+`derived-incremental.test.ts` and `published-scene.test.ts` (no scene the engine returned changes afterwards, node identity
+included, over sessions, streams, pulses and in-place appends).
 
 **Scenes are never observably mutated after they are returned.**
 
@@ -196,9 +261,17 @@ stateDiagram-v2
 
 **The DOM patcher** matches children by position. A reused item keeps its cached descriptor (`clean`), and a clean descriptor is only skipped when the element it lands on was last patched with that very descriptor; after a removal or reorder it is compared and written like any other (`dom-oracle.test.ts` checks patched DOM against a freshly built one over random insert/remove/reorder sequences, per-item and dense).
 
+**Canvas frames that paint nothing** (`paintsSameAs`): a scene whose every top-level group is the one painted, or paints the same
+over what the canvas renderer reads (an item's tooltip, link, cursor, description and ARIA are never read), with the same size,
+background, padding, frame and gradient definitions, is not painted at all; any other scene is painted in full. A region repaint
+(clear and repaint, clipped, the union of the changed items' painted extents) is not used: Chromium rasterises the anti-aliased edge
+of a path the clip cuts differently from the same path uncut, so it is not always what a full repaint draws. The fourth phase of
+`pnpm conformance:canvas` (browser-canvas-dirty.mts) checks every frame of random signal walks against a full repaint, pixel for
+pixel, at device pixel ratios 1 and 2.
+
 **Canvas append painting** (`renderSceneToCanvasAppend`) paints only appended marks over the previous frame and returns `false` (caller repaints in full) unless the result equals a full repaint: every existing item is untouched (same array lineage, no `__editGen` stamp, no newer `__gen` under a reused group object), every guide is unchanged (the context has no clear, so a changed guide would ghost), and the appended marks cannot land on paint a full repaint draws above them. `canvas-append-oracle.test.ts` (recorded paint) and the second phase of `pnpm conformance:canvas` (real Chromium pixels) check it over random session and stream sequences.
 
-**The hit index** (`@aster-charts/core/hit`) picks against the geometry the renderers paint: the flattened fill/stroke outline of arcs, paths, shapes, geoshapes, areas, lines and trails, the symbol's own shape and rotation, the rounded rect outline, and text from the layout's text bounds rotated about its anchor. Points within 2px of painted geometry count as hits (pointing slack). Cell ranges are clamped to the grid and entries covering many cells are kept in a short side list, so no item can make the index allocate without bound. `hit-geometry.test.ts` checks it against geometry taken from the canvas renderer.
+**The hit index** (`@aster-charts/core/hit`) picks what vega's renderers pick: the topmost item, in paint order, whose painted geometry contains the point exactly, as vega-scenegraph's canvas pick (`isPointInPath`, `isPointInStroke`) and the browser's hit test of vega's SVG do. The geometry is the flattened fill outline (non-zero winding, the edge included) of rects, arcs, paths, shapes, geoshapes, areas, lines and trails and the symbol's own shape and rotation, and the stroke as the canvas strokes it (half the width either side, the item's caps and joins: butt and miter with a limit of 4 unless set); text is its layout box rotated about its anchor, an image its box, and a group item its foreground stroke, then its content, then its background. There is no pointing slack: the former 2px tolerance made a dense scatter report a later-drawn point whose edge was 0.19px from the pointer instead of the point under it. Clips (the view's, a mark's, a group item's, a clipped legend symbol, an entry outside its group's bounds) and the view's own surface bound what can be picked; a mark with `interactive: false` and a guide part the spec did not make interactive are looked through. A line, an area and a trail are one path: `pick` reports the mark's first item (vega's `event.item`), `tooltip` resolves it as vega's tooltip handler does. Curves and arcs are flattened to within 0.01px (at most 1024 chords per segment). Cell ranges are clamped to the grid and entries covering many cells are kept in a short side list, so no item can make the index allocate without bound. `hit-geometry.test.ts` checks it against geometry taken from the canvas renderer, and the pointer phase of `pnpm conformance:signals` against real vega in Chromium (its SVG renderer through `elementFromPoint`, its canvas renderer through its pick), point by point over generated scenes of overlapping marks of every type. Built for the canvas renderer (`buildHitIndex(scene, cell, { renderer: 'canvas' })`, what `<Chart renderer="canvas">` builds), it picks as vega's canvas pick does where that differs from the browser's hit test of the SVG: a point must also lie within the bounds vega measured (every group item's around the entry, the item's own, a line's, area's or trail's mark's), a clipped group item takes the pointer only inside its box (and its rounded outline), a stroke is tested with a miter join limited at 10 whatever the item says (vega's `hitPath` sets only the width and the cap; a rule keeps its own), a segment shorter than 1/4096 px is no corner and two chords of curves meet with no corner (the canvas stroker's joins). The geometry is shared; only the test differs.
 
 ## Expression Engine
 
@@ -288,6 +361,46 @@ Because heavy feature areas are only used by a small fraction of specs, they are
 
 `@aster-charts/react/vl` is the same pattern at the grammar level: the Vega-Lite compiler (`@aster-charts/vl`) is registered by `import '@aster-charts/react/vl'`, so Vega-only hosts do not pay for it. A spec that needs a gated feature without its add-on loaded gets an actionable error naming what to import first. `packages/benchmarks/scripts/budget.mjs` gates one bundle per import pattern (core `renderSpec`, `useChart`, `<Chart>`, `<Chart>` + VL, and each core add-on as its marginal cost on top of core); the measured sizes are in [PERFORMANCE.md](PERFORMANCE.md#bundle-sizes).
 
+### The parts of the engine most charts never run
+
+Some modules of the engine are read only by specs that use a feature most charts do not: the legend builder (`guide-legend.ts`), the
+grid layout (`trellis.ts`), the SVG path reader for custom symbol shapes and path marks (`svg-path.ts`), vega-selections' functions
+(`selections.ts`), the regular-expression screen (`regex-screen.ts`, which runs only under `limits`), the pulse path of the incremental
+engine (`incremental-engine.ts`, needed only once a chart's data changes), and in the signal loop `intersect()` (`scene-intersect.ts`),
+`modify()` / `setdata()` (`modify.ts`) and `timer` streams (`timer.ts`); and the canvas renderer, which only `renderer="canvas"` uses.
+Their callers read them from slots (`engine-parts.ts`) instead of importing them.
+
+- **The synchronous API is unchanged.** Every public entry fills the slots its functions can read, by importing the `part-*.ts`
+  modules: `@aster-charts/core` (compile, evaluate, `renderSpec`), `/dom` (with the pulse path its sessions take), `/signals` (with the
+  loop's parts), `/hit`, `/canvas` and `/png` (with the path reader); `createChartStream` installs the pulse path when it is called. So
+  `renderSpec`, `createChartSession().evaluate`, `renderChartToStaticMarkup` and `hydrateChart` work for every spec they accepted, with
+  nothing to load first.
+- **The React shells use `@aster-charts/core/lean`** (`/lean/hit`, `/lean/signals`, `/lean/canvas`, `/lean/stream`; internal), the
+  same functions with the slots left empty. Under the `browser` export condition that is what a React app's charts load up front;
+  anywhere else (a server, a test runner) the subpath resolves to `lean-full.ts`, which fills every slot, so a synchronous server render
+  draws what it always drew.
+- **Detection and the wait.** `specNeeds(spec, { limits, random })` (`addons.ts`, one walk with the add-on detector) names the parts a
+  spec may read: `legends` in any scope; a `layout` on the view or a group mark; a path mark, or a `shape` / `symbolType` that may not be
+  a built-in symbol (a field, a signal, a rule, a custom path, in marks or in the config); a call of `vlSelection*`, `intersect`,
+  `modify` / `setdata`; a `timer` event stream; under limits, `test`, `regexp`, a regular expression literal, or `replace` / `split`
+  with an argument that may be one; with a random source, datasets that may draw from it (whose draws depend on which evaluation takes
+  a pulse, so the pulse path is there from the first). `useAddons` loads them with the add-ons, through the same Suspense wait;
+  `renderer="canvas"` adds the canvas renderer (`CanvasCapability.load`), and an interactive chart that binds the signal loop adds it
+  (`InteractionCapability.loadSignals`, the `signals` part): a scope of the spec declares signals (`specNeeds(...).eventLoop`), or the
+  host listens to signals. The item cursor (`createCursorTracker`, `sceneHasCursor`, in `cursor.ts`) is read on every render of a
+  chart with or without signals, so it is outside the loop and loaded up front.
+- **The pulse path** is the one part an evaluation goes on without: a re-evaluation that could have taken a pulse derives the dataset
+  in full (the same rows and the same state for the next pulse) and asks for the part (`requestPart`), which `setUpShell` loads; the
+  following evaluations are incremental.
+- **An empty slot never changes a result.** Reading one throws (`[aster] the "legend" part of the engine is not loaded`), so a missed
+  detection refuses a chart instead of drawing it differently, and the regular-expression screen cannot be skipped: under limits a
+  pattern is refused before it is compiled.
+- Tests: `packages/conformance/src/parts-needed.test.ts` (over the corpus, with and without limits: the parts the engine reads, found
+  one failure at a time from empty slots, are all named, and a render with just the named parts draws and picks as with all);
+  `packages/core/src/engine-parts.test.ts` (every expression function that reads a part is named, the signal loop's parts, the screen
+  failing closed, the pulse path's fallback); `packages/react/src/Chart.lean.test.tsx` (the shells on the browser variant: the wait,
+  the canvas, new data, hydration); the `core-parts` and `react-lean` patterns of the bundle-shaking gate.
+
 ## ChartCore and the two shells
 
 `@aster-charts/react` has one chart implementation, `ChartCore` (`packages/react/src/ChartCore.tsx`: evaluation, the DOM patcher, pan/zoom,
@@ -326,13 +439,13 @@ sequenceDiagram
   else update
     Chart->>DOM: patchSceneDom (changed items only), or a canvas repaint or append paint
   end
-  Chart->>EvLoop: bindSceneSignals(svg, scene, signals, hooks, {pick, owner, data})
+  Chart->>EvLoop: bindSceneSignals(svg or canvas, scene, signals, hooks, {pick, owner, data, events})
   DOM-->>EvLoop: native event
   EvLoop-->>Chart: onSignal and onData (kept in external stores read with useSyncExternalStore)
   Chart->>Session: re-evaluate with the new signals and store rows
 ```
 
-*The event loop is bound for the SVG renderer only, when the chart is `interactive` and has an interaction capability (always for `<Chart>`, only with the `interaction` prop for `<SvgChart>`).*
+*The event loop is bound when the chart is `interactive` and has an interaction capability (always for `<Chart>`, only with the `interaction` prop for `<SvgChart>`), on either renderer. On the canvas the canvas capability hands it `createCanvasEvents(canvas)` (`@aster-charts/core/canvas`), vega's canvas handler: which item an event is about (the item the last pointermove picked), the out / over of an item change, a click only on the item pressed. It lives as long as the canvas, so the hovered item outlives a re-render; `<SvgChart>` never bundles it.*
 
 **Making drift hard.** A second component that mostly copies the first is where a prop gets handled in one and forgotten in
 the other. Six mechanisms, each with a check that fails when the property it protects is broken:
@@ -366,6 +479,8 @@ Everything else that runs at import time only fills the module's own tables (`sc
 | core `stats-functions.js` | a top-level loop of `registerExpressionFunction` for the distribution functions (`sampleNormal`, `quantileNormal`, ...) | imported bare by `addon-transforms.js` (and by `transform-stats.ts` for its values); a bundler that drops it as side-effect free loses the functions from the expression language |
 | core `addon-load.js` | `dataFormatRegistry.set('csv' \| 'tsv' \| 'dsv' \| 'topojson')` | `import '@aster-charts/core/load'` for the readers alone must register them |
 | core `guide-caption.js` | `installGuideCaptions(...)` into `render.ts` | imported bare by `index.ts` and `dom.ts`; without it axis/legend `aria-label` captions vanish. Canvas and hit never import it, so they do not pay for it |
+| core `part-*.js`, `parts-evaluate.js`, `parts-signals.js`, `parts-all.js` | `installPart(...)` into `engine-parts.ts`'s slots | imported bare by the entries that carry the parts (below) |
+| core `index.js`, `addon-dom.js`, `entry-signals.js`, `entry-hit.js`, `entry-canvas.js`, `entry-png.js`, `lean-full.js` | bare imports of the parts their functions read | the entries re-export their implementation modules; a bundler that sees a module with no code of its own as side-effect free drops its bare imports, and the synchronous API loses its parts. (A React module never re-exports one of them: `@aster-charts/react`'s `createChartSession` is a function of its own, so an app that does not call it does not carry the parts) |
 | react `vl.js` | `registerVegaLiteCompiler(...)` (a `globalThis` registry under `Symbol.for('@aster-charts/react/vega-lite-compiler')`) | `import '@aster-charts/react/vl'` |
 | react `worker-entry.js` | `globalThis.onmessage = ...` | `import '@aster-charts/react/worker-entry'` is the worker's whole body |
 
@@ -459,6 +574,8 @@ Aster matches Vega's output wherever the oracle can be run; where it deliberatel
 | The numbers an `identifier` gives after the rows change (`data-source-list.vg.json`: a row of `a` appended) | a kept row keeps its number and an added row takes the next of the view's counter, as in Vega (`k:i0` 1:1 1:8 3:2 4:3 1:4 2:5 1:9 1:6 2:7 1:10); the added rows sit where their source rows are | the same numbers; the added tuples come after the others (1:1 3:2 4:3 1:4 2:5 1:6 2:7 1:8 1:9 1:10); a fresh view numbers every row from 1 (1:1 1:2 3:3 ...) | the numbers are the running view's in both, so this is the one result an incremental session does not share with a fresh evaluation of the same rows; the incremental oracle and `pnpm conformance:diff` compare such specs with a chart taken through the same states |
 | `modify(name, ..., tuple)` / `remove` with a tuple read back from `data()` | the tuple is compared by value | the tuple is compared by identity | the evaluation does not hand out its input rows |
 | The first firing of a `{signal}` handler that a scope declares on a signal of an enclosing scope that never pulsed | fires | swallowed (an internal flag of the operator) | no Vega-Lite output relies on it |
+| A tooltip whose value reads a signal a pointermove sets (`hoverX` from `invert('x', x())`) | shows the value for the move's own signals, re-resolved on the scene the move renders | shows the value the previous pointermove left: its tooltip handler is called as the move is handed over, before the dataflow run the move starts (one move behind, on both renderers) | the user's decision: the tooltip shows what the chart says at the pointer; a lag has no use. Pinned by `pnpm conformance:selections` (the chart-bench survival case: each move to a new x shows that x at once, and equals vega one move later) |
+| The pointer leaving the marks for an axis (a part with no `tooltip`) | hides the tooltip, on both renderers | its canvas hides it; its SVG keeps the last one shown (its handler only acts on an item with a `tooltip`, and the mouseout of the item left does not reach it there) | the user's decision: a tooltip belongs to the item under the pointer; vega's two renderers disagree and Aster takes the canvas's on both. Pinned by the same case (and the gate checks vega's svg still keeps it) |
 | Unsupported or unknown features | throw a typed error naming the feature | some are silently ignored | no silent wrong charts; see [ERRORS.md](ERRORS.md) |
 | SVG output of dense marks (`denseMarks`) | batched `<path>` chunks; pixel parity gated by `pnpm conformance:batch` | one element per item | node cost of large SVG; opt-out with `denseMarks={false}` |
 | `force` that keeps running (`static: false`, `restart`) | the layout of the first tick, a pure function of its inputs; no animation | the simulation keeps ticking on a timer, the picture at the first frame is the first tick | the engine renders a snapshot; a spec that animates needs the event loop's timers |

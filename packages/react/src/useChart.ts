@@ -1,9 +1,13 @@
 import * as React from 'react'
-import { checkSvgLength, renderSceneToSvg, type RuntimeInput, type SceneRoot, type VgSpec } from '@aster-charts/core'
-import { createChartSession } from '@aster-charts/core/dom'
+import type { RuntimeInput, SceneRoot, VgSpec } from '@aster-charts/core'
+import { checkChartRows, checkSvgLength, createChartSession, renderSceneToSvg } from '@aster-charts/core/lean'
 import type { LoadOptions } from '@aster-charts/core/load'
 import { normalizeChartSpec, useStableContent, useStableSpec } from './spec.js'
 import { useAddons } from './addons.js'
+
+/** The build's environment, as bundlers write it in (`process.env.NODE_ENV`); `process` may not exist at all (an unbundled import). */
+declare const process: { env: { NODE_ENV?: string } }
+
 
 export interface UseChartOptions extends RuntimeInput {
   /** Skip SVG serialization when the host renders the scene itself. */
@@ -32,10 +36,16 @@ export function useChart(spec: VgSpec, options: UseChartOptions = {}): UseChartR
   const normalized = React.useMemo(() => normalizeChartSpec(stableSpec), [stableSpec])
   // The opt-in add-ons the spec needs load before the first evaluation: the hook suspends meanwhile (a <Suspense> boundary
   // above shows its fallback), and an import that fails is the result's `error`.
-  const addonError = useAddons(normalized, input.urlData)
+  const addonError = useAddons(normalized, input.urlData, { limits: limits != null, random: input.random != null })
   const sessionRef = React.useRef<ReturnType<typeof createChartSession> | null>(null)
   if (sessionRef.current == null) sessionRef.current = createChartSession()
   const session = sessionRef.current
+  // (development builds: the rows of a render that re-evaluates nothing are checked for in-place changes too, see row-watch.ts)
+  try {
+    if (process.env.NODE_ENV !== 'production') checkChartRows(session, normalized, input)
+  } catch (e) {
+    if (typeof process !== 'undefined') throw e
+  }
   // Every `RuntimeInput` field is a dependency. The record below must name each
   // key of `RuntimeInput` (the type makes a missing one a compile error), so a new
   // engine input cannot silently leave a stale result the way textMetrics,

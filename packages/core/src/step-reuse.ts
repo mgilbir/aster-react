@@ -191,8 +191,11 @@ export interface StepRecord {
   random?: { source: unknown; carry: number | undefined }
 }
 
-/** How many steps ran and how many were kept, since the counters were last read. For the tests; nothing reads them in a build. */
-export const stepCounts = { ran: 0, reused: 0 }
+/**
+ * How many steps ran and how many were kept, and how many rows of another dataset a pipeline copied to make rows of its own, since
+ * the counters were last read. For the tests; nothing reads them in a build.
+ */
+export const stepCounts = { ran: 0, reused: 0, copied: 0 }
 
 /**
  * Whether a step may be kept at all. On unless a test turns it off: the differential that pins the kept steps to the ones the

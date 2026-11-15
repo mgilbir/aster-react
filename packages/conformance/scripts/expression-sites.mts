@@ -33,6 +33,8 @@ export const SEMANTIC = [
   '{__proto__: 1}', '{a: nosuch, constructor: 1}', '{toString: 1}', "{'__proto__': 1}", '{valueOf: foo()}',
   // arguments it never reads, and ones it reads whole
   'date(1, foo())', 'date(foo())', 'length(1, foo())', 'upper(1, foo())', "substring('a', foo())", 'test(1, foo())', 'trim(1, nosuch)', 'abs(1, foo())',
+  // ... and the arguments of a call the code generator never reads, however deep
+  'upper(1, lower(2, nosuch))', 'date(1, trim(foo(), nosuch))', 'length("a", upper(nosuch))', 'abs(upper(1, lower(foo())))',
   // the first argument it needs and does not have
   'upper()', 'date()', 'length()', 'test()', 'trim()', 'utcyear()', "_scale('x')", '_range()', '_bandwidth()', 'scale()', 'bandwidth()',
   // the calls that name a data set or a scale

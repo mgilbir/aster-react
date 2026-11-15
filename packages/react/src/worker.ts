@@ -22,6 +22,7 @@
 import * as React from 'react'
 import {
   AsterLimitError,
+  checkChartRows,
   checkUrlData,
   getStreamFlushFailure,
   checkSceneLimits, checkSpecLimits, checkSvgLength, compileChart, createChartStream,
@@ -32,6 +33,10 @@ import {
 import { loadAddons, missingAddons, type AddonName } from '@aster-charts/core/addons'
 import { normalizeChartSpec, useStableContent, useStableSpec } from './spec.js'
 import { SCALE_INFO_KEY, serializeScales } from './serialScales.js'
+
+/** The build's environment, as bundlers write it in (`process.env.NODE_ENV`); `process` may not exist at all (an unbundled import). */
+declare const process: { env: { NODE_ENV?: string } }
+
 
 /** Text metrics as named on the wire, or as an object for in-realm handling. */
 export type WorkerTextMetrics = string | TextMetricsProvider
@@ -222,7 +227,7 @@ export function handleChartWorkerRequest(request: ChartWorkerRequest): ChartWork
     // (its path-length checks included), and a violation a defensive catch swallowed still fails the request.
     const { svg, scene } = withLimits(limits, (meter) => {
       const clock = meter?.clock ?? createLimitClock(limits)
-      if (limits) checkSpecLimits(spec as unknown as Record<string, unknown>, limits)
+      if (limits) checkSpecLimits(spec as unknown as Record<string, unknown>, limits, input)
       clock.check('compile')
       const chart = compileChart(spec)
       clock.check('evaluate')
@@ -352,12 +357,26 @@ export function useChartWorker(spec: VgSpec, options: ChartWorkerOptions & {
   const sizesRef = React.useRef({ containerSize: options.containerSize, measuredSize: options.measuredSize })
   sizesRef.current = { containerSize: options.containerSize, measuredSize: options.measuredSize }
   const stableSpec = useStableSpec(spec)
+  // The Vega spec a request handled here (no Worker) compiles to: once per spec, not once per request (a new size or data is a new
+  // request for the same spec). A spec that does not compile is left to the request handler, which reports the error.
+  const localSpec = React.useMemo(() => {
+    try { return normalizeChartSpec(stableSpec) } catch { return undefined }
+  }, [stableSpec])
   // Budgets are compared by content: an inline `limits={{...}}` must not
   // re-post the request on every render.
   const stableLimits = useStableContent(limits)
   const [state, setState] = React.useState<WorkerChartResult>({ svg: null, scene: null, error: null, pending: true })
   const workerRef = useWorkerInstance(worker, workerFactory)
   const idRef = React.useRef(0)
+  // (development builds: the rows this hook holds across renders are checked for in-place changes, see core's row-watch.ts; the
+  // worker itself cannot see one -- each request hands it a structured clone and it keeps nothing -- and a render with the same
+  // arrays posts nothing, so an in-place change would never reach it: the warning says why the chart did not follow)
+  // (its owner is this hook's own ref: no hook of its own, nothing in a production build)
+  try {
+    if (process.env.NODE_ENV !== 'production') checkChartRows(idRef, localSpec ?? stableSpec, { data })
+  } catch (e) {
+    if (typeof process !== 'undefined') throw e
+  }
   const textMetricsRef = React.useRef(textMetrics)
   textMetricsRef.current = textMetrics
   const urlPolicyRef = React.useRef(urlPolicy)
@@ -405,7 +424,8 @@ export function useChartWorker(spec: VgSpec, options: ChartWorkerOptions & {
       // needs none (the common case) is handled in this very effect, as before; one that does applies when they arrive.
       let missing: readonly AddonName[] = []
       try {
-        const vega = normalizeChartSpec(request.spec)
+        if (localSpec === undefined) throw new Error('the spec does not compile')
+        const vega = localSpec
         request = { ...request, spec: vega }
         // a refused url dataset imports nothing: the handler reports the refusal
         checkUrlData(vega, urlData)
@@ -435,7 +455,7 @@ export function useChartWorker(spec: VgSpec, options: ChartWorkerOptions & {
       fail(e instanceof Error ? e : new Error(String(e)))
     }
     return stop
-  }, [stableSpec, width, height, csKey, msKey, data, signals, domainRaw, stableLimits, textMetricsKey, urlPolicyKey, urlData, worker, workerRef])
+  }, [stableSpec, localSpec, width, height, csKey, msKey, data, signals, domainRaw, stableLimits, textMetricsKey, urlPolicyKey, urlData, worker, workerRef])
 
   return state
 }

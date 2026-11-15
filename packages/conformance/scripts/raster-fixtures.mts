@@ -8,6 +8,8 @@ import { writeFileSync } from 'node:fs'
 import { chromium } from 'playwright'
 import { GENERATED_SHAPES, SHAPES } from '../src/raster-shapes.js'
 import { AlphaCanvas } from '../../core/src/raster.js'
+// (the shapes drawn read the path reader from a slot the public entries fill: core's own modules, so the part is imported too)
+import '../../core/src/part-svgpath.js'
 import { cli } from '../../../scripts/lib/cli.mjs'
 
 cli({ url: import.meta.url })

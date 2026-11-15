@@ -1,7 +1,9 @@
 import type {
+  createCanvasEvents,
   loadImages,
   renderSceneToCanvas,
   renderSceneToCanvasAppend,
+  paintsSameAs,
   sceneImageUrls,
   snapshotCanvasScene,
   withSceneImages,
@@ -19,8 +21,17 @@ import type { tooltipContent } from './tooltip-content.js'
 
 /** The canvas renderer (`@aster-charts/core/canvas`). Only `<Chart>` supplies it. */
 export interface CanvasCapability {
+  /**
+   * Load the renderer before the first canvas render: `ChartCore` waits for it (a Suspense wait, like the add-ons') when the chart
+   * asks for `renderer="canvas"`, so an SVG chart never fetches it. Resolves at once once it is loaded.
+   */
+  readonly load: () => Promise<void>
+  /** The canvas's events for the signal event loop: which item each is about, as vega's canvas renderer resolves it. */
+  readonly createCanvasEvents: typeof createCanvasEvents
   readonly renderSceneToCanvas: typeof renderSceneToCanvas
   readonly renderSceneToCanvasAppend: typeof renderSceneToCanvasAppend
+  /** Whether a scene paints exactly the pixels of the frame on the canvas (then nothing is painted). */
+  readonly paintsSameAs: typeof paintsSameAs
   readonly snapshotCanvasScene: typeof snapshotCanvasScene
   /** Image marks drawn from their `url`: the urls without a bitmap, their loading, and a scene copy holding the loaded ones. */
   readonly sceneImageUrls: typeof sceneImageUrls
@@ -46,6 +57,11 @@ export interface PngCapability {
 export interface InteractionCapability {
   readonly buildHitIndex: typeof buildHitIndex
   readonly bindSceneSignals: typeof bindSceneSignals
+  /**
+   * Load the event loop before a chart binds it (`ChartCore` waits for it, a Suspense wait like the add-ons', for a spec that
+   * declares signals or a host that listens to them). Resolves at once once it is loaded. Absent: `bindSceneSignals` is there already.
+   */
+  readonly loadSignals?: () => Promise<void>
   readonly createCursorTracker: typeof createCursorTracker
   readonly sceneHasCursor: typeof sceneHasCursor
   /** The default tooltip's content for an item's `tooltip` value, as vega-tooltip shows it. */

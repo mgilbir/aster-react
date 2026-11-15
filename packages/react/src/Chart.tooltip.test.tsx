@@ -182,6 +182,101 @@ forEachVariant(['svg', 'interaction'], (Chart, variant) => {
       })
     })
 
+    // The item a tooltip shows is the one vega's tooltip handler is called with: the topmost item that takes the pointer, whatever
+    // its datum (vega gives a mark without `from` the datum `{}`, a group item its facet tuple, a guide part its tick or entry).
+    // The Chromium pointer phase of `pnpm conformance:signals` compares this rule with real vega point by point.
+    describe('resolves the hovered item as vega does', () => {
+      const plain = { width: 200, height: 100, padding: 0, autosize: 'none' }
+      const mount = (s: Record<string, unknown>, props: Record<string, unknown> = { tooltip: true }): { container: HTMLElement; root: { unmount(): void } } => {
+        const container = document.createElement('div')
+        document.body.appendChild(container)
+        const root = createRoot(container)
+        act(() => { root.render(<Chart spec={s} width={200} height={100} {...props} />) })
+        return { container, root }
+      }
+      const at = (container: HTMLElement, x: number, y: number): Element | null => {
+        const svg = container.querySelector('svg')!
+        act(() => { svg.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: x, clientY: y })) })
+        return container.querySelector('[data-testid="chart-tooltip"]')
+      }
+      const rect = (name: string, x: number, w: number, extra: Record<string, unknown>, from?: string): Record<string, unknown> => ({
+        type: 'rect', name, ...(from ? { from: { data: from } } : {}),
+        encode: { update: { x: { value: x }, width: { value: w }, y: { value: 0 }, height: { value: 100 }, ...extra } },
+      })
+
+      it('a mark without `from` shows its tooltip (its datum is `{}`)', () => {
+        const { container } = mount({ ...plain, marks: [rect('hover', 0, 200, { fill: { value: 'transparent' }, tooltip: { signal: "'datum ' + toString(datum)" } })] })
+        expect(at(container, 50, 50)?.textContent).toBe('datum [object Object]')
+      })
+
+      it('the topmost item wins: a mark without `from` drawn over a data mark hides it, as in vega; one drawn under it does not', () => {
+        const s = {
+          ...plain, data: [{ name: 't', values: [{ id: 'a' }] }],
+          marks: [
+            rect('under', 0, 200, { fill: { value: '#eee' }, tooltip: { value: 'under' } }),
+            rect('bar', 20, 60, { fill: { value: 'steelblue' }, tooltip: { signal: "'bar ' + datum.id" } }, 't'),
+            rect('over', 50, 150, { fill: { value: 'transparent' }, tooltip: { value: 'over' } }),
+          ],
+        }
+        const { container } = mount(s)
+        expect(at(container, 30, 50)?.textContent).toBe('bar a')
+        expect(at(container, 60, 50)?.textContent).toBe('over')
+        expect(at(container, 10, 50)?.textContent).toBe('under')
+      })
+
+      it('a group item with a fill shows its tooltip where nothing inside it is hit; vega hands a falsy tooltip over as none', () => {
+        const s = {
+          ...plain, data: [{ name: 't', values: [{ k: 'p' }] }],
+          marks: [
+            {
+              type: 'group', from: { facet: { data: 't', name: 'f', groupby: 'k' } },
+              encode: { update: { x: { value: 0 }, width: { value: 100 }, height: { value: 100 }, fill: { value: '#f4f4f4' }, tooltip: { signal: "'cell ' + datum.k + ' ' + datum.count" } } },
+              marks: [rect('inner', 10, 20, { fill: { value: 'red' }, tooltip: { value: 'inner' } })],
+            },
+            rect('zero', 120, 40, { fill: { value: 'green' }, tooltip: { value: 0 } }),
+          ],
+        }
+        const { container } = mount(s)
+        expect(at(container, 50, 50)?.textContent).toBe('cell p 1')
+        expect(at(container, 15, 50)?.textContent).toBe('inner')
+        expect(at(container, 130, 50)).toBeNull()
+      })
+
+      it('renderTooltip is called for an item made from a data row or with a tooltip value, not for a bare mark without `from`', () => {
+        const seen: unknown[] = []
+        const s = {
+          ...plain, data: [{ name: 't', values: [{ id: 'a' }] }],
+          marks: [rect('bg', 0, 200, { fill: { value: '#eee' } }), rect('bar', 20, 60, { fill: { value: 'steelblue' } }, 't'), rect('tip', 150, 30, { fill: { value: 'red' }, tooltip: { value: 'solo' } })],
+        }
+        const { container } = mount(s, { renderTooltip: (d: Record<string, unknown>, info: TooltipInfo) => { seen.push([d, info.tooltip]); return <span>x</span> } })
+        expect(at(container, 10, 50)).toBeNull()
+        expect(seen).toEqual([])
+        expect(at(container, 30, 50)).not.toBeNull()
+        expect(seen.at(-1)).toEqual([{ id: 'a' }, undefined])
+        expect(at(container, 160, 50)).not.toBeNull()
+        expect(seen.at(-1)).toEqual([{}, 'solo'])
+      })
+
+      it('an interactive axis label shows its tooltip, a label that is not interactive does not', () => {
+        const s = {
+          width: 200, height: 100, padding: { left: 30, top: 5, right: 5, bottom: 30 }, autosize: 'none',
+          scales: [{ name: 'x', type: 'linear', domain: [0, 10], range: 'width' }, { name: 'y', type: 'linear', domain: [0, 10], range: 'height' }],
+          axes: [
+            { scale: 'x', orient: 'bottom', values: [5], encode: { labels: { interactive: true, update: { tooltip: { signal: "'label ' + datum.label" } } } } },
+            { scale: 'y', orient: 'left', values: [5], encode: { labels: { update: { tooltip: { value: 'inert' } } } } },
+          ],
+        }
+        const container = document.createElement('div')
+        document.body.appendChild(container)
+        const root = createRoot(container)
+        act(() => { root.render(<Chart spec={s} width={200} height={100} tooltip />) })
+        // the x label sits centred under x = 5 (30 + 100), below the 6px tick and its 2px padding; the y label left of y = 5
+        expect(at(container, 130, 5 + 100 + 13)?.textContent).toBe('label 5')
+        expect(at(container, 30 - 14, 5 + 50)).toBeNull()
+        act(() => { root.unmount() })
+      })
+    })
+
     afterEach(() => { document.body.innerHTML = '' })
   })
 })

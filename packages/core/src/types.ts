@@ -75,9 +75,10 @@ export interface RuntimeInput {
   containerSize?: { width: number; height: number }
   /**
    * The measured size of the element the chart fills, when the host lets the chart fill it. It is the view size of a
-   * spec that does not size itself (no `width` / `height` signal): the same as an explicit `width` / `height`
-   * for such a spec, but a spec that drives those signals itself (a bound slider, a handler, vega-lite's
-   * `"container"`) keeps doing so and only sees the container through `containerSize()`. As in Vega, where
+   * spec that does not size itself (no `width` / `height` signal, autosize other than `none`): the same as an explicit
+   * `width` / `height` for such a spec, but a spec that drives those signals itself (a bound slider, a handler,
+   * vega-lite's `"container"`) keeps doing so and only sees the container through `containerSize()`, and a spec whose
+   * autosize is `none` keeps its own size (in Vega its whole size is its `width`, `height` and `padding`). As in Vega, where
    * `view.width(w)` is a signal write, the later write wins: a `width` / `height` in `signals` beats it, and an
    * explicit `width` / `height` beats both. Without `containerSize` it is also what `containerSize()` returns.
    */
@@ -218,6 +219,12 @@ export interface CompiledChart {
    * 0 and the autosize pass grows it to what is drawn (a composition's laid-out groups, text hanging below an axis), so a
    * host's container does not size it.
    */
+  /**
+   * An expression of the spec asks `isTuple` of what may be an engine tuple: its evaluations register the tuples they make (util
+   * `withTuples`). `'facet'`: it only asks of Vega-Lite's `facet` signal, so an evaluation registers them only when the value it is
+   * given for that signal is not a known tuple.
+   */
+  callsIsTuple?: true | 'facet'
   contentSized?: ReadonlyArray<'width' | 'height'>
 }
 
@@ -747,6 +754,11 @@ export interface SceneGroup extends SceneItem {
    * `title` is the guide's group.
    */
   partMeta?: Record<string, { name?: string; interactive: boolean }>
+  /**
+   * A mark whose bounds the pass stopped in (see bound-failure.ts): its items from this index on were never measured, and vega's
+   * canvas, which draws an item only where its bounds meet the view, draws none of them.
+   */
+  unmeasuredFrom?: number
   /** A guide's group item as a box: its background (and, with `strokeForeground`, foreground) leaves (vega draws every group item's). */
   box?: SceneItem
   boxFg?: SceneItem
@@ -757,6 +769,8 @@ export interface SceneGroup extends SceneItem {
    * them back in `RuntimeInput.signals` for the next evaluation.
    */
   scopeSignals?: { id: string; defs: CompiledSignalDef[]; values: Record<string, unknown>; /** false when the group holds no mark, axis, legend or title: vega then has no `context.group`, and `inScope` is false for every item */ hasContent: boolean }
+  /** The group item's encode says `noBound`: its own box is not part of its bounds (vega marks/group.js), only what it holds. */
+  noBound?: boolean
   /** Group items of one mark carry the mark's index in its parent, so consecutive items of a mark share one container. */
   markIndex?: number
   /** A group mark with no items: this node only stands for its (empty) container in the scene; it is no group item. */
@@ -870,7 +884,8 @@ export interface SceneItem {
   /**
    * Internal: which vega mark of its guide a leaf item belongs to (the SVG draws one container per mark).
    * Axis: `grid` `tick` `label` `domain` `title`. Legend: `bg` (the legend's own box), `col` (the entry
-   * column's box), `entry` (one entry's box), `symbol` `label` `gradient` `band` `title`.
+   * column's box), `entry` (one entry's box), `symbol` `label` `gradient` `band` `title`; with `strokeForeground`, `fg` (the
+   * legend's stroke, after all it holds) and `entryFg` (an entry's stroke, after its symbol and label: the entry box before it).
    */
   _part?: string
   /** Internal: the kind of mark a guide leaf is, when its channels do not say (a text leaf whose text is null is still text). */

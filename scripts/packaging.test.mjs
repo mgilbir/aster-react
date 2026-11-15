@@ -17,12 +17,15 @@ describe.each(PUBLIC)('@aster-charts/%s manifest', (name) => {
     for (const k of pkg.keywords) expect(typeof k === 'string' && k.trim() === k && k.length > 0, String(k)).toBe(true)
   })
 
-  it('every export entry uses the same conditions: types then default', () => {
+  it('every export entry uses the same conditions: types then default (the internal lean entries: types, browser, default)', () => {
     for (const [sub, target] of Object.entries(pkg.exports)) {
       if (sub === './package.json') continue
-      expect(Object.keys(target), sub).toEqual(['types', 'default'])
+      // (@aster-charts/core/lean*: the engine the React shells use, without its on-demand parts in a browser build; docs/ARCHITECTURE.md)
+      const lean = name === 'core' && /^\.\/lean(\/|$)/.test(sub)
+      expect(Object.keys(target), sub).toEqual(lean && 'browser' in target ? ['types', 'browser', 'default'] : ['types', 'default'])
       expect(target.types, sub).toMatch(/^\.\/dist\/.+\.d\.ts$/)
       expect(target.default, sub).toMatch(/^\.\/dist\/.+\.js$/)
+      if (lean && 'browser' in target) expect(target.browser, sub).toMatch(/^\.\/dist\/.+\.js$/)
     }
   })
 

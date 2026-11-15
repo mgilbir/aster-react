@@ -116,6 +116,7 @@ export function compileChart(givenSpec: VgSpec): CompiledChart {
   }
 
   return {
+    ...((q) => (q === undefined ? {} : { callsIsTuple: q }))(tupleQuestions(spec)),
     autosize,
     width,
     height,
@@ -173,6 +174,58 @@ function compileProjection(pr: Record<string, unknown>, config?: Record<string, 
     if (out[k] == null && v != null) out[k] = v
   }
   return out as unknown as CompiledProjection
+}
+
+/**
+ * Whether an evaluation of the spec must register the tuples it makes (see `withTuples`): an expression of the spec (or its config)
+ * asks `isTuple` of something that may be one of them. The words of the spec are looked at, not the rows of its inline data
+ * (`values` arrays), so a large dataset costs nothing; a mention outside an expression only makes the evaluation register what it
+ * need not. Two questions Vega-Lite asks in every selection need no registration, and do not count:
+ * - `isTuple(group())`: `group()` is only defined in an event handler (vega throws without an event), where it gives the event
+ *   loop's item facade, registered whatever the evaluation;
+ * - `isTuple(facet)`, when every signal named `facet` is Vega-Lite's (`{}`, then `isTuple(facet) ? facet : group(...).datum` on
+ *   events): its value is then `{}` or a facet cell's datum, registered whatever the evaluation. A host can still set the signal;
+ *   `'facet'` says the evaluation looks at the value it is given (see `registersTuples` in runtime.ts).
+ */
+function tupleQuestions(spec: unknown): true | 'facet' | undefined {
+  const seen = new Set<unknown>()
+  let facet = false
+  let facetSignalsVl = true
+  let all = false
+  const VL_FACET = /^isTuple\(facet\) \? facet : group\((?:"[^"\\]*"|'[^'\\]*')?\)\.datum$/
+  const ask = (text: string): void => {
+    for (let i = text.indexOf('isTuple'); i >= 0 && !all; i = text.indexOf('isTuple', i + 7)) {
+      const arg = /^isTuple\s*\(\s*(group\s*\(\s*\)|facet)\s*\)/.exec(text.slice(i))?.[1]
+      if (arg === undefined) all = true
+      else if (arg === 'facet') facet = true
+    }
+  }
+  const signal = (sig: Record<string, unknown>): void => {
+    if (sig.name !== 'facet') return
+    const on = Array.isArray(sig.on) ? sig.on as Array<Record<string, unknown>> : []
+    const value = sig.value
+    const valueOk = value === undefined || (value !== null && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).length === 0)
+    const updates = on.map((h) => h.update)
+    if (!valueOk || sig.init !== undefined || sig.update !== undefined || sig.bind !== undefined || sig.push !== undefined
+      || on.some((h) => h.encode !== undefined) || !updates.every((u) => typeof u === 'string' && VL_FACET.test(u.trim()))) facetSignalsVl = false
+  }
+  const walk = (v: unknown, inSignals: boolean): void => {
+    if (all) return
+    if (typeof v === 'string') { if (v.includes('isTuple')) ask(v); return }
+    if (v === null || typeof v !== 'object' || seen.has(v)) return
+    seen.add(v)
+    if (Array.isArray(v)) {
+      for (const x of v) { if (inSignals && x !== null && typeof x === 'object') signal(x as Record<string, unknown>); walk(x, false) }
+      return
+    }
+    for (const [k, x] of Object.entries(v as Record<string, unknown>)) {
+      if (k === 'values' && Array.isArray(x)) continue
+      walk(x, k === 'signals' && Array.isArray(x))
+    }
+  }
+  walk(spec, false)
+  if (all || (facet && !facetSignalsVl)) return true
+  return facet ? 'facet' : undefined
 }
 
 function resolveAutosize(value: unknown): string | undefined {

@@ -1,3 +1,6 @@
+// A frozen copy of svg-path.ts as it was on stack/3-expr, the base perf/geometry-once lands on: the behaviour the geometry
+// differentials (geometry-differential.test.ts) compare the new code against. Test-only; not built, not shipped.
+// Delete it with the differential once that guard is no longer wanted.
 /**
  * Port of vega-scenegraph's SVG path machinery (`path/parse.js`, `path/render.js`,
  * `path/arc.js`), used for symbols whose `shape` is a custom SVG path string

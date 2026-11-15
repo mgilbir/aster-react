@@ -18,7 +18,7 @@ import { canonicalizeSvg, diffCanonical } from '../normalize.js'
 import { summarizeDiffs } from './diffs.js'
 import { logged, settle, stray, vegaSvg } from './oracle.js'
 import { seededRandom, withFrozenClock, withOracleRandom } from './seeded.js'
-import { BASE_URL, fileFetch, readSpec, trunc, type GallerySpec, type Outcome } from './lib.js'
+import { BASE_URL, fileFetch, needsCanvas, readSpec, trunc, type GallerySpec, type Outcome } from './lib.js'
 
 /** Static hints for WHY an oracle is not deterministic (the decision itself is made by rendering twice). */
 function nondeterminismHint(spec: Record<string, unknown>): string {
@@ -44,13 +44,13 @@ export async function runStatic(g: GallerySpec): Promise<Outcome> {
     if (stray.length) throw new Error(stray[0])
     // a transform that draws into a canvas (heatmap, label, wordcloud) fails in Node, which has none: vega logs the error and carries
     // on without its output, so the document it renders is not the one the spec describes (the react path, in Chromium, compares them)
-    const noCanvas = logged.find((m) => /getContext|canvas/i.test(m))
+    const noCanvas = logged.find(needsCanvas)
     if (noCanvas !== undefined) return done({ status: 'unverifiable', reason: 'oracle-needs-canvas (Node has none)', first: trunc(noCanvas.split('\n')[0]!) })
   } catch (e) {
     // a view that failed mid-run still has a redraw queued that throws a moment later; let it fire here, not inside the next spec
     await new Promise((r) => setTimeout(r, 60))
     stray.length = 0
-    const noCanvas = logged.find((m) => /getContext|canvas/i.test(m))
+    const noCanvas = logged.find(needsCanvas)
     if (noCanvas !== undefined) return done({ status: 'unverifiable', reason: 'oracle-needs-canvas (Node has none)', first: trunc(noCanvas.split('\n')[0]!) })
     return done({ status: 'unverifiable', reason: 'oracle-error', first: trunc(e instanceof Error ? e.message : String(e)) })
   }

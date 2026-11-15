@@ -118,3 +118,55 @@ describe('the view size, against vega (a signal write, the later one wins)', () 
     })
   }
 })
+
+/**
+ * The measured container over every autosize type and `contains`, and the spec's size given as a number, as a signal, or not
+ * at all, and Vega-Lite's `"container"`. Vega's counterpart of each:
+ *   - a spec whose autosize is `none` and whose size is a number: the spec as it is (vega: "the total size is determined solely
+ *     by the provided width, height and padding"; vega-embed draws it at that size in any container);
+ *   - a number with any other autosize: the host writes the container's size to the view and the chart fills it, padding and
+ *     guides included (`fit` containing the padding, issue #128);
+ *   - a signal, or no size at all: the spec as it is (it drives its size, or vega's 0 is grown to the content), the container
+ *     reaching it only through `containerSize()`;
+ *   - Vega-Lite's `"container"`: the spec as vega-lite compiles it, in a container element of the measured size.
+ * Judged with the strict canonicalizer, against vega in the same process.
+ */
+describe('the measured container, over autosize types, contains and the ways a spec gives its size (vs vega)', () => {
+  const measured = { width: 640, height: 300 }
+  const TYPES = ['pad', 'fit', 'fit-x', 'fit-y', 'none'] as const
+  const CONTAINS = ['content', 'padding'] as const
+  const SIZES = ['number', 'signal', 'unsized'] as const
+  for (const type of TYPES) {
+    for (const contains of CONTAINS) {
+      for (const size of SIZES) {
+        const spec: Spec = {
+          ...body, padding: { left: 40, top: 12, right: 18, bottom: 30 }, autosize: { type, contains },
+          ...(size === 'number' ? { width: 420, height: 200 } : {}),
+          ...(size === 'signal' ? { signals: [{ name: 'width', value: 360 }, { name: 'height', value: 170 }] } : {}),
+        }
+        it(`autosize ${type}, contains ${contains}, size ${size}`, async () => {
+          const fillsContainer = size === 'number' && type !== 'none'
+          const want = fillsContainer
+            ? await vegaSvg({ ...spec, autosize: { type: 'fit', contains: 'padding' } }, (v) => { v.width(measured.width); v.height(measured.height) })
+            : await vegaSvg(spec, () => {}, measured)
+          expect(same(want, asterSvg(spec, { measuredSize: measured })).slice(0, 4)).toEqual([])
+        })
+      }
+    }
+  }
+  it('autosize none containing the padding, with no size: the container does not size it', () => {
+    const spec: Spec = { ...body, padding: { left: 40, top: 12, right: 18, bottom: 30 }, autosize: { type: 'none', contains: 'padding' } }
+    expect(same(asterSvg(spec, {}), asterSvg(spec, { measuredSize: measured }))).toEqual([])
+  })
+  it('Vega-Lite `width: "container"`: the measured container sizes it as a container element of that size does vega\'s', async () => {
+    const vl = await import('vega-lite')
+    for (const [w, h] of [['container', 'container'], ['container', 180], [260, 'container']] as const) {
+      const vg = (vl.compile as unknown as (s: unknown) => { spec: Spec })({
+        width: w, height: h, padding: 5, data: { values: ROWS }, mark: 'bar',
+        encoding: { x: { field: 'k', type: 'nominal' }, y: { field: 'v', type: 'quantitative' } },
+      }).spec
+      const want = await vegaSvg(vg, () => {}, measured)
+      expect(same(want, asterSvg(vg, { measuredSize: measured })).slice(0, 4), `width ${w}, height ${h}`).toEqual([])
+    }
+  })
+})

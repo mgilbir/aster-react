@@ -15,6 +15,10 @@
 import { SYMBOL_DEFAULT_SIZE, pushAll } from './util.js'
 import type { SceneGroup, SceneItem, SceneRoot } from './types.js'
 import { ClipCollector } from './svg-defs.js'
+import { isEngineNode, keptInto } from './scene-registry.js'
+import { getTextMetricsProvider } from './text-metrics.js'
+import { formatEnvironmentKey } from './locale.js'
+import { symbolGeometry, type PathData, type SymbolGeometry } from './geometry.js'
 import {
   PairAttrSink,
   areaMarkAttrs,
@@ -35,12 +39,14 @@ import {
   leafClipId,
   leafLineEnds,
   leafPathAttrs,
+  failOnUnmeasured,
   leafSymbolPath,
   lineElementAttrs,
   lineMarkAttrs,
   markContainerAttrs,
   childNodes,
   type GuideScope,
+  type SvgRun,
   type SvgNode,
   paintAttrs,
   pathItemAttrs,
@@ -55,7 +61,6 @@ import {
   svgRootAttrs,
   symbolElementAttrs,
   symbolMarkPath,
-  symbolPath,
   textAttrs,
   trailAttrs,
   trailPath,
@@ -177,6 +182,36 @@ export function translatePathData(d: string, dx: number, dy: number): string {
   return out
 }
 
+/**
+ * The text with every absolute coordinate moved by (dx, dy) and rounded to 3 digits, the other arguments (radii, flags,
+ * relative deltas) as written: what `translatePathData(d.text(), dx, dy)` makes of it. Requires `d.finite`.
+ */
+function dataTranslated(d: PathData, dx: number, dy: number): string {
+  if (dx === 0 && dy === 0) return d.text()
+  let out = ''
+  let k = 0
+  for (let c = 0; c < d.letters.length; c++) {
+    const letter = d.letters[c]!
+    out += letter
+    const n = d.counts[c]!
+    const relative = letter === 'h' || letter === 'v'
+    for (let j = 0; j < n; j++, k++) {
+      const value = d.values[k]!
+      // (an arc's end point moves, its radii and flags do not; every other absolute argument alternates x, y)
+      const axis = relative ? 0 : letter === 'A' ? (j === 5 ? 1 : j === 6 ? 2 : 0) : j % 2 === 0 ? 1 : 2
+      const text = axis === 0 ? (d.odd?.get(k) ?? String(value)) : round3(axis === 1 ? value + dx : value + dy)
+      out += j ? ',' + text : text
+    }
+  }
+  return out
+}
+
+/** A symbol shape's 3-digit text moved to (dx, dy) (a dense batch's piece); `translateText` reads a text that is not finite. */
+function symbolTranslated(g: SymbolGeometry, dx: number, dy: number, translateText: (d: string, dx: number, dy: number) => string): string {
+  const d = g.rounded()
+  return d.finite ? dataTranslated(d, dx, dy) : translateText(g.text(), dx, dy)
+}
+
 /** Opt-in DOM rendering options. */
 export interface DomRenderOptions {
   /**
@@ -195,7 +230,25 @@ export interface DomRenderOptions {
 const DENSE_SYMBOL_MIN = 512
 const DENSE_SYMBOL_CHUNK = 256
 
-interface DenseChunk { from: number; to: number; first: SceneItem; last: SceneItem; desc: DomDesc }
+/**
+ * `gen`: the scene generation it was built in; `stamped`: every item in it carried a generation then (an unstamped item is
+ * never clean, see `isClean`); `d`: its path data; `open`: it ended at the end of the items, short of the size bound.
+ */
+interface DenseChunk { from: number; to: number; first: SceneItem; last: SceneItem; desc: DomDesc; gen: number | undefined; stamped: boolean; d: string; open: boolean }
+
+/**
+ * Whether every item of a chunk is clean (`isClean`), proved without reading them when the items array is one the engine
+ * advances in place (it stamps `__editGen` on every in-place replacement): the chunk was built in an earlier generation from
+ * this same array, every item carried a generation, and nothing in the array was replaced since -- so the items are the very
+ * ones it was built from, all encoded at or before that generation, none at this one. Any other array is read item by item.
+ */
+function chunkClean(items: SceneItem[], chunk: DenseChunk, from: number, to: number): boolean {
+  const a = items as SceneItem[] & { __engineItems?: true; __editGen?: number }
+  if (a.__engineItems === true && CURRENT_GEN != null && chunk.gen != null && chunk.gen < CURRENT_GEN && chunk.stamped
+    && (a.__editGen === undefined || a.__editGen <= chunk.gen)) return true
+  for (let j = from; j < to; j++) if (!isClean(items[j]!)) return false
+  return true
+}
 interface DenseCache { items: SceneItem[]; chunkSize: number; chunks: Map<number, DenseChunk> }
 // Cached per items array of a scene group: the runtime reuses the items array for
 // incremental updates, so unchanged chunks keep their descriptor and their DOM.
@@ -262,11 +315,7 @@ function denseSymbolItems(group: SceneGroup, items: SceneItem[], chunkSize: numb
     const full = cachedChunks?.get(from)
     if (full && full.first === first && full.to - from === chunkSize && full.to <= items.length
       && items[full.to - 1] === full.last) {
-      let clean = true
-      for (let j = from; j < full.to; j++) {
-        if (!isClean(items[j]!)) { clean = false; break }
-      }
-      if (clean) {
+      if (chunkClean(items, full, from, full.to)) {
         full.desc.clean = true
         chunks.set(from, full)
         out.push(full.desc)
@@ -274,7 +323,13 @@ function denseSymbolItems(group: SceneGroup, items: SceneItem[], chunkSize: numb
         continue
       }
     }
-    let to = i + 1
+    // An open tail chunk (it ended at the end of the items, short of the size bound) of unchanged items is resumed where it
+    // ended: its own items need neither the batchable / paint scan nor translating again (see the full-chunk case above), so
+    // an append costs the appended items, not the tail chunk.
+    const open = cachedChunks?.get(from)
+    const resume = open !== undefined && open.open && open.first === first && open.to <= items.length && items[open.to - 1] === open.last
+      && chunkClean(items, open, from, open.to) ? open : null
+    let to = resume !== null ? resume.to : i + 1
     while (to < items.length && to - from < chunkSize) {
       const cand = items[to]!
       if (!batchableSymbol(cand) || !samePaint(first, cand)) break
@@ -285,11 +340,7 @@ function denseSymbolItems(group: SceneGroup, items: SceneItem[], chunkSize: numb
     }
     const cached = cachedChunks?.get(from)
     if (cached && cached.to === to && cached.first === first) {
-      let clean = true
-      for (let j = from; j < to; j++) {
-        if (!isClean(items[j]!)) { clean = false; break }
-      }
-      if (clean) {
+      if (resume === cached || chunkClean(items, cached, from, to)) {
         cached.desc.clean = true
         chunks.set(from, cached)
         out.push(cached.desc)
@@ -297,21 +348,19 @@ function denseSymbolItems(group: SceneGroup, items: SceneItem[], chunkSize: numb
         continue
       }
     }
-    let d = ''
-    for (let j = from; j < to; j++) {
+    let d = resume !== null ? resume.d : ''
+    let stamped = resume !== null ? resume.stamped : true
+    for (let j = resume !== null ? resume.to : from; j < to; j++) {
       const it = items[j]!
+      if (it.__gen == null) stamped = false
       if (!batchableSymbol(it)) continue
       const r = Math.sqrt((it.size as number) ?? SYMBOL_DEFAULT_SIZE) / 2
-      d += translatePathData(
-        symbolPath((it as Record<string, unknown>).shape as string | undefined, r),
-        it.x as number,
-        it.y as number,
-      )
+      d += symbolTranslated(symbolGeometry((it as Record<string, unknown>).shape as string | undefined, r), it.x as number, it.y as number, translatePathData)
     }
     // A fresh desc object (never mutate a cached one): the patcher compares
     // against the previous descriptor, so reusing the object would hide the write.
     const desc: DomDesc = { tag: 'path', attrs: [['d', d], ...symbolAttrs(first)] }
-    const chunk: DenseChunk = { from, to, first, last: items[to - 1]!, desc }
+    const chunk: DenseChunk = { from, to, first, last: items[to - 1]!, desc, gen: CURRENT_GEN, stamped, d, open: to === items.length && to - from < chunkSize }
     chunks.set(from, chunk)
     out.push(desc)
     i = to
@@ -328,36 +377,81 @@ function symbolItemDesc(it: SceneItem): DomDesc {
   })
 }
 
-interface SymbolItemsCache { items: SceneItem[]; keys: SceneItem[]; descs: DomDesc[] }
+/**
+ * `gen`: the generation it was last built in; `stamped`: every item then carried a generation; `dirty`: the indices whose
+ * descriptor was built for an item of that generation (not clean then: clean from the next generation on); `out`: the array
+ * handed out last.
+ */
+interface SymbolItemsCache { items: SceneItem[]; keys: SceneItem[]; descs: DomDesc[]; gen: number | undefined; stamped: boolean; dirty: number[]; out: DomDesc[] }
 // Per items array; the runtime mutates the items array in place for incremental
 // updates, so an unchanged item keeps its descriptor without rebuilding the
 // 100k-entry array on every append.
 const SYMBOL_ITEMS = new WeakMap<SceneItem[], SymbolItemsCache>()
+/** A mark's children that only append to the ones handed out before (`symbolItems`): what the container's `appendFrom` says. */
+const APPEND_OF = new WeakMap<DomDesc[], { prev: DomDesc[]; count: number }>()
+/**
+ * A container whose first `count` children are the very descriptors of `prev`, the children handed out for it last time: the
+ * patcher appends the rest without walking them. (Beside the descriptor, not on it: a descriptor is plain data.)
+ */
+const APPEND_TO = new WeakMap<DomDesc, { prev: DomDesc[]; count: number }>()
 
-function symbolItems(group: SceneGroup, items: SceneItem[]): DomDesc[] {
+/** The descriptor of a symbol item, noting it in `dirty` when its item is of this generation. */
+function freshSymbolDesc(it: SceneItem, i: number, dirty: number[]): DomDesc {
+  if (!isClean(it)) dirty.push(i)
+  return symbolItemDesc(it)
+}
+
+function symbolItems(group: SceneGroup, items: SceneItem[]): { descs: DomDesc[]; appendFrom?: { prev: DomDesc[]; count: number } } {
   const prev = SYMBOL_ITEMS.get(items)
   const reuse = prev && prev.items === items ? prev : null
+  // An append to an array the engine advances in place, nothing re-encoded since the last build (the dense chunks' proof,
+  // `chunkClean`): the items there are the ones the descriptors were built for, all clean now. Only the appended items are
+  // read; the descriptors built last time for items of that generation are clean from this one on, as the full walk below
+  // would mark them.
+  const a = items as SceneItem[] & { __engineItems?: true; __editGen?: number }
+  if (reuse !== null && a.__engineItems === true && CURRENT_GEN != null && reuse.gen != null && reuse.gen < CURRENT_GEN && reuse.stamped
+    && (a.__editGen === undefined || a.__editGen <= reuse.gen) && items.length >= reuse.keys.length) {
+    const { keys, descs } = reuse
+    for (const i of reuse.dirty) descs[i]!.clean = true
+    const dirty: number[] = []
+    let stamped = true
+    const count = keys.length
+    for (let n = count; n < items.length; n++) {
+      const it = items[n]!
+      if (it.__gen == null) stamped = false
+      keys[n] = it
+      descs[n] = freshSymbolDesc(it, n, dirty)
+    }
+    const out = descs.slice()
+    const appendFrom = { prev: reuse.out, count }
+    SYMBOL_ITEMS.set(items, { items, keys, descs, gen: CURRENT_GEN, stamped, dirty, out })
+    return { descs: out, appendFrom }
+  }
   const keys = reuse ? reuse.keys : []
   const descs = reuse ? reuse.descs : []
+  const dirty: number[] = []
+  let stamped = true
   let n = 0
   for (const it of items) {
+    if (it.__gen == null) stamped = false
     // A null position renders at the origin (like the string renderer).
     if (keys[n] === it && descs[n] != null) {
       if (isClean(it)) descs[n]!.clean = true
-      else { keys[n] = it; descs[n] = symbolItemDesc(it) }
+      else { keys[n] = it; descs[n] = freshSymbolDesc(it, n, dirty) }
     } else {
       keys[n] = it
-      descs[n] = symbolItemDesc(it)
+      descs[n] = freshSymbolDesc(it, n, dirty)
     }
     n++
   }
   keys.length = n
   descs.length = n
-  SYMBOL_ITEMS.set(items, { items, keys, descs })
   // The patcher compares against the previous descriptor *array*, so return a
   // snapshot: exposing the cached array would mean a later in-place append
   // mutates the patcher's "previous" state and every child gets re-walked.
-  return descs.slice()
+  const out = descs.slice()
+  SYMBOL_ITEMS.set(items, { items, keys, descs, gen: CURRENT_GEN, stamped, dirty, out })
+  return { descs: out }
 }
 
 /**
@@ -435,6 +529,7 @@ function pairs(fill: (w: AttrSink) => void): Pairs {
 const FOREGROUND: Pairs = [['class', 'foreground'], ['aria-hidden', 'true'], ['d', ''], ['display', 'none']]
 
 function leafDesc(it: SceneItem): DomDesc {
+  failOnUnmeasured(it)
   const w = new PairAttrSink()
   if (it.path != null) {
     leafPathAttrs(it, w)
@@ -532,7 +627,9 @@ function markItems(group: SceneGroup, type: string, options?: DomRenderOptions):
       // a hyperlinked mark keeps one element (and <a>) per symbol
       const chunkSize = group.hasLinks === true ? 0 : denseSymbolsEnabled(options, items)
       if (chunkSize > 0) return denseSymbolItems(group, items, chunkSize)
-      return symbolItems(group, items)
+      const { descs, appendFrom } = symbolItems(group, items)
+      if (appendFrom) APPEND_OF.set(descs, appendFrom)
+      return descs
     }
     case 'rect': {
       // vega paints a rect only when it has a fill or stroke, in item order.
@@ -540,9 +637,8 @@ function markItems(group: SceneGroup, type: string, options?: DomRenderOptions):
       for (let i = 0; i < items.length; i++) {
         const it = items[i]!
         if (!rectIsPainted(it)) continue
-        const d = rectItemPath(it)
-        if (d == null) continue
-        out.push(cachedDesc(it, () => linked(it, { tag: 'path', attrs: pairs((w) => rectPathAttrs(it, d, w)), clean: isClean(it) })))
+        // (the path is built only for an item whose descriptor is rebuilt: a clean item's is reused as it is)
+        out.push(cachedDesc(it, () => linked(it, { tag: 'path', attrs: pairs((w) => rectPathAttrs(it, rectItemPath(it)!, w)), clean: isClean(it) })))
       }
       return out
     }
@@ -610,10 +706,75 @@ function markDescs(group: SceneGroup, frameW: number, frameH: number, clips: Cli
 
   const containerAttrs = new PairAttrSink()
   // A mark's clip is the size of the group that contains it (vega: `clip(renderer, scene, scene.group)`), on its container.
-  if (!markContainerAttrs(group, containerAttrs, group.clip === true ? groupClipId(group, clips, frameW, frameH) : null, scope)) return []
-  const inner = g('g', containerAttrs.out, markItems(group, type, options))
+  // (registered whether or not the descriptor is the one before: the clip joins this render's defs)
+  const clipId = group.clip === true ? groupClipId(group, clips, frameW, frameH) : null
+  const keep = keepsDesc(group, type)
+  if (keep) {
+    const kept = MARK_DESCS.get(group)
+    if (kept !== undefined && keptInto(kept.root, describing) && kept.clipId === clipId) return [kept.desc]
+  }
+  if (!markContainerAttrs(group, containerAttrs, clipId, scope)) return []
+  const children = markItems(group, type, options)
+  const inner = g('g', containerAttrs.out, children)
+  const appendFrom = APPEND_OF.get(children)
+  if (appendFrom) APPEND_TO.set(inner, appendFrom)
   if (type === 'symbol' && group.hasLinks !== true && denseSymbolsEnabled(options, group.items ?? []) > 0) inner.dense = true
+  if (keep) MARK_DESCS.set(group, { clipId, desc: inner, root: describing })
   return [inner]
+}
+
+/**
+ * The descriptor of a data mark of a scene the engine returned, as it was made: such a mark holds what it held (scene-registry.ts),
+ * so its container and items describe as before, given the same clip, in a later scene that kept it (`keptInto`). The descriptors
+ * are the ones before: the patcher compares them with what it last wrote, and skips the clean items in them. Not kept: a text mark
+ * (its descriptor reads the text metrics in use), a mark whose role is a guide's (its caption reads the scales around it), a symbol
+ * mark (its descriptors follow an engine items array across groups, and batch by the options: see `symbolItems`).
+ */
+const MARK_DESCS = new WeakMap<SceneGroup, { clipId: string | null; desc: DomDesc; root: object }>()
+/** The scene `sceneToDomDesc` is describing (see `keptInto`). */
+let describing: object = {}
+const GUIDE_ROLES = new Set(['axis', 'legend', 'title-text', 'title-subtitle'])
+function keepsDesc(group: SceneGroup, type: string): boolean {
+  return type !== 'text' && type !== 'symbol' && group.role === 'mark' && !GUIDE_ROLES.has(String(group.markRole)) && isEngineNode(group)
+}
+
+/**
+ * The descriptor of the group items of one mark, or of a guide (an axis, a legend, a title), or the one made of the same groups for
+ * an earlier scene that kept them (`keptInto`). A group the engine returned holds what it held, what is inside it included
+ * (scene-registry.ts), so the groups describe as before but for what describing them reads besides the groups: the frame of the
+ * group that holds them (a mark's `clip` and a group's default size), the scale snapshots their captions read (`snaps`, the scene's
+ * own array, which the engine hands on from the scene before only when every scale is the one before), the text measurer set for
+ * every chart (a label's `limit` is measured when it is described), the default locale and the time zone (a caption formats numbers
+ * and dates), and the options (batching). A descriptor that asked for a clip is not kept: a clip it asked for joins the defs of the
+ * render that asks for it.
+ */
+const RUN_DESCS = new WeakMap<SceneGroup, {
+  run: readonly SceneGroup[]; desc: DomDesc; root: object; frameW: number; frameH: number; snaps: unknown; measurer: unknown; format: string; dense: unknown; chunk: unknown
+}>()
+function runDesc(n: SvgRun, clips: ClipCollector, options: DomRenderOptions | undefined): DomDesc {
+  const measurer = getTextMetricsProvider()
+  // (a caption formats numbers and dates: under the default locale, in the host's time zone)
+  const format = formatEnvironmentKey()
+  const first = n.run[0]!
+  const kept = RUN_DESCS.get(first)
+  if (kept !== undefined && keptInto(kept.root, describing) && sameRun(kept.run, n.run) && Object.is(kept.frameW, n.frameW) && Object.is(kept.frameH, n.frameH)
+    && kept.snaps === n.snaps && kept.measurer === measurer && kept.format === format && kept.dense === options?.denseMarks && kept.chunk === options?.denseChunkSize) {
+    // (the patcher compares it with what it last wrote, and skips it whole when that is it)
+    kept.desc.clean = true
+    return kept.desc
+  }
+  const asked = clips.asked
+  const desc = nodeDescs([n.make()], clips, options)[0]!
+  if (clips.asked === asked && n.run.every(isEngineNode)) {
+    RUN_DESCS.set(first, { run: n.run, desc, root: describing, frameW: n.frameW, frameH: n.frameH, snaps: n.snaps, measurer, format, dense: options?.denseMarks, chunk: options?.denseChunkSize })
+  }
+  return desc
+}
+
+function sameRun(a: readonly SceneGroup[], b: readonly SceneGroup[]): boolean {
+  if (a.length !== b.length) return false
+  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false
+  return true
 }
 
 /** The descriptors of a structure tree (render.ts `childNodes`), attributes before children as the string renderer writes them. */
@@ -632,6 +793,8 @@ function nodeDescs(nodes: readonly SvgNode[], clips: ClipCollector, options: Dom
       out.push(linked(item, d))
     } else if ('mark' in n) {
       pushAll(out, markDescs(n.mark, n.frameW, n.frameH, clips, options, n.scope))
+    } else if ('run' in n) {
+      out.push(runDesc(n, clips, options))
     } else {
       const attrs = pairs(n.attrs)
       const desc: DomDesc = n.children === undefined ? { tag: n.tag, attrs } : g(n.tag, attrs, nodeDescs(n.children, clips, options))
@@ -643,6 +806,7 @@ function nodeDescs(nodes: readonly SvgNode[], clips: ClipCollector, options: Dom
 
 export function sceneToDomDesc(scene: SceneRoot, options: DomRenderOptions = {}): DomDesc {
   CURRENT_GEN = (scene as unknown as { __itemGen?: number }).__itemGen
+  describing = scene
   const { plotW, plotH } = scenePlotSize(scene)
   // Clip regions are registered while building; ids are content-addressed (svg-defs.ts).
   const clips = new ClipCollector()
@@ -801,6 +965,13 @@ function patchEl(el: Element, desc: DomDesc): void {
   // Without this, an append re-walks every sibling — O(n) per append, which is
   // what kept 100k-point SVG streams off the frame budget.
   const lastChildren = last?.children
+  // The producer's own word that the first `count` children are the ones this element was last patched with (an append to an
+  // engine array, see `symbolItems`): only the tail is new, and the prefix is not even compared.
+  const hint = APPEND_TO.get(desc)
+  if (hint !== undefined && lastChildren === hint.prev && have === hint.count && lastChildren.length === hint.count) {
+    for (let j = hint.count; j < want.length; j++) el.appendChild(createEl(want[j]!, el.ownerDocument))
+    return
+  }
   if (lastChildren != null && have === lastChildren.length && want.length > lastChildren.length) {
     let i = 0
     while (i < lastChildren.length && want[i] === lastChildren[i]) i++

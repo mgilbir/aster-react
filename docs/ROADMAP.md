@@ -92,7 +92,11 @@ Each item is something the code or the gates show today; none is a plan that has
   canvas (Node) the words are boxes of their measured width, a cloud no browser draws.
 - **Known interaction limits.** A zoomed stream-fed chart keeps the last unzoomed base extent until the view is
   reset; pan/zoom picks the first continuous scale per orientation in the root scope only
-  ([INTERACTION.md](INTERACTION.md)).
+  ([INTERACTION.md](INTERACTION.md)). The canvas renderer's hit index picks as vega's canvas does (the bounds it measured, a
+  clipped group's box, a miter limited at 10, the canvas stroker's joins), except where Chromium's stroker approximates the
+  offset of a canvas `arc()` by up to about 0.4 px past the true stroke (measured: 0.16 px out of a 52.7 px radius at width 1):
+  one point of the signals gate's pointer phase (2 of 87,778 answers) falls there, counted under a ceiling that can only be
+  lowered (`--max-canvas-as-svg`).
 - **Probes.** `packages/conformance/probes` holds two probes; both pass today and can be promoted into `corpus/`.
 - **Streaming transport.** The host owns the network and decides when to flush.
 - **Transitions on canvas.** `transition` animates the SVG renderer only; the canvas renderer and batched dense marks

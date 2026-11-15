@@ -148,9 +148,11 @@ const modify = (rows: Row[], at: number): Row[] => rows.map((r, i) => (i === at 
 const POINT_STEPS: PointStep[] = [
   { what: 'a signal nothing reads', to: (w) => ({ ...w, u: w.u + 1 }), encodes: {}, kept: BOTH, scales: SCALES, sameRows: true },
   { what: 'the store, equal rows in a new array', to: (w) => ({ ...w, store: w.store.map((r) => ({ ...r })) }), encodes: {}, kept: BOTH, scales: SCALES, sameRows: true },
-  { what: 'a point picked', to: (w) => ({ ...w, store: pick(4) }), encodes: { tested: N }, kept: ['plain'], scales: SCALES, sameRows: true },
+  // (the tested mark is made again, but over the same rows only its `opacity` reads the store or `op`: each item is the one before with
+  // that channel evaluated again, and its counting `size` is not evaluated)
+  { what: 'a point picked', to: (w) => ({ ...w, store: pick(4) }), encodes: {}, kept: ['plain'], scales: SCALES, sameRows: true },
   { what: 'a signal nothing reads, a point picked', to: (w) => ({ ...w, u: w.u + 1 }), encodes: {}, kept: BOTH, scales: SCALES, sameRows: true },
-  { what: 'a signal the tested mark reads', to: (w) => ({ ...w, op: 0.8 }), encodes: { tested: N }, kept: ['plain'], scales: SCALES, sameRows: true },
+  { what: 'a signal the tested mark reads', to: (w) => ({ ...w, op: 0.8 }), encodes: {}, kept: ['plain'], scales: SCALES, sameRows: true },
   // (the pulse runs through the pipeline whatever `u` is, and the census keeps the scales: only the new row is encoded)
   { what: 'a row appended and a signal nothing reads', to: (w) => ({ ...w, t: append(w.t, 5.5), u: w.u + 1 }), encodes: { plain: 1, tested: 1 }, kept: [], scales: SCALES },
   { what: 'a row modified and a signal nothing reads', to: (w) => ({ ...w, t: modify(w.t, 3), u: w.u + 1 }), encodes: { plain: 1, tested: 1 }, kept: [], scales: SCALES },

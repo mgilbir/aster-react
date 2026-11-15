@@ -9,8 +9,9 @@
  * rounded rects, every symbol shape, rotated symbols. Text is checked against
  * the layout's text box, rotated.
  *
- * Points within the 2px pointing slack of painted geometry are not asserted
- * (either answer is fine there).
+ * There is no pointing slack (vega's pick has none): a point more than a hair (MARGIN) inside what is painted must find
+ * the item, and one more than a hair outside everything painted must find nothing. A stroke is painted as the canvas
+ * strokes it: a band along each segment, the joins between them, and the caps (a butt end paints nothing past the end).
  */
 import { describe, it, expect } from 'vitest'
 import { spawnSync } from 'node:child_process'
@@ -67,10 +68,55 @@ function distToPolys(polys: Polys, px: number, py: number, closeAll: boolean): n
   return best
 }
 
-/** 'in': certainly painted; 'out': certainly beyond the pointing slack; 'edge': don't care. */
+/**
+ * Where (x, y) is against a stroke: how far inside it (negative) or outside it (positive) the point is, from below and from
+ * above. `inner` counts only what is surely painted (each segment's band, a disc of half the width at a join, a round cap);
+ * `outer` everything that may be (a miter can reach `miterLimit` half-widths out of a join, a square cap a half-width past an
+ * end). A butt end paints nothing past the end.
+ */
+function strokeDistance(r: PaintRecord, x: number, y: number): { inner: number; outer: number } {
+  const half = (r.lineWidth ?? 1) / 2
+  const cap = r.lineCap ?? 'butt'
+  const reach = half * (r.lineJoin === 'miter' ? Math.max(1, r.miterLimit ?? 10) : 1)
+  let inner = Infinity
+  let outer = Infinity
+  for (const { pts, closed } of r.polys!) {
+    const n = pts.length / 2
+    const segs = closed ? n : n - 1
+    for (let i = 0; i < segs; i++) {
+      const j = (i + 1) % n
+      const ax = pts[2 * i]!, ay = pts[2 * i + 1]!, bx = pts[2 * j]!, by = pts[2 * j + 1]!
+      const len = Math.hypot(bx - ax, by - ay)
+      if (len === 0) continue
+      const dx = (bx - ax) / len, dy = (by - ay) / len
+      const a = (x - ax) * dx + (y - ay) * dy
+      const c = Math.abs((x - ax) * -dy + (y - ay) * dx)
+      // the band: inside by the least of its margins, or outside by the distance to it
+      const inside = a >= 0 && a <= len && c <= half
+      const d = inside ? -Math.min(half - c, closed || i > 0 ? Infinity : a, closed || i < segs - 1 ? Infinity : len - a) : Math.hypot(Math.max(0, -a, a - len), Math.max(0, c - half))
+      inner = Math.min(inner, d)
+      outer = Math.min(outer, d)
+    }
+    for (let i = 0; i < n; i++) {
+      const end = !closed && (i === 0 || i === n - 1)
+      const dv = Math.hypot(x - pts[2 * i]!, y - pts[2 * i + 1]!)
+      if (!end) {
+        inner = Math.min(inner, dv - half)
+        outer = Math.min(outer, dv - reach)
+      } else if (cap === 'round') {
+        inner = Math.min(inner, dv - half)
+        outer = Math.min(outer, dv - half)
+      } else if (cap === 'square') {
+        outer = Math.min(outer, dv - half * Math.SQRT2)
+      }
+    }
+  }
+  return { inner, outer }
+}
+
+/** 'in': certainly painted; 'out': certainly not painted; 'edge': within a hair of the edge, don't care. */
 function classify(records: PaintRecord[], x: number, y: number): 'in' | 'out' | 'edge' {
   const MARGIN = 0.4
-  const SLACK_OUT = 2 + 1.5
   let minOut = Infinity
   for (const r of records) {
     if (!r.polys) continue
@@ -81,13 +127,12 @@ function classify(records: PaintRecord[], x: number, y: number): 'in' | 'out' | 
         minOut = Math.min(minOut, 0)
       } else minOut = Math.min(minOut, d)
     } else if (r.op === 'stroke') {
-      const d = distToPolys(r.polys, x, y, false)
-      const half = (r.lineWidth ?? 1) / 2
-      if (d <= half - MARGIN) return 'in'
-      minOut = Math.min(minOut, Math.max(0, d - half))
+      const { inner, outer } = strokeDistance(r, x, y)
+      if (inner <= -MARGIN) return 'in'
+      minOut = Math.min(minOut, Math.max(0, outer))
     }
   }
-  return minOut > SLACK_OUT ? 'out' : 'edge'
+  return minOut > MARGIN ? 'out' : 'edge'
 }
 
 // ---------------------------------------------------------------------------
@@ -236,9 +281,11 @@ describe('hit index finds what is painted, and only that', () => {
 })
 
 describe('text hits follow the layout text box, rotated', () => {
+  // (a view big enough that the text, and the points around it, stay on it at every angle and alignment: nothing outside the
+  // view is picked)
   const textScene = (update: Record<string, unknown>): SceneRoot => evaluateChart(compileChart(base([
     mk('text', { x: { value: 120 }, y: { value: 80 }, text: { value: 'Hello world' }, fontSize: { value: 16 }, fill: { value: '#000' }, ...update }),
-  ], { data: dataset([{ k: 1 }]) }) as never))
+  ], { data: dataset([{ k: 1 }]), padding: { left: 180, top: 180, right: 180, bottom: 180 } }) as never))
 
   for (const angle of [0, 30, 90, -45, 180]) {
     for (const align of ['left', 'center', 'right'] as const) {
@@ -251,7 +298,7 @@ describe('text hits follow the layout text box, rotated', () => {
         const a = (angle * Math.PI) / 180
         const c = Math.cos(a), s = Math.sin(a)
         // a point in the text's own frame -> viewport
-        const at = (lx: number, ly: number): [number, number] => [7 + 120 + lx * c - ly * s, 7 + 80 + lx * s + ly * c]
+        const at = (lx: number, ly: number): [number, number] => [180 + 120 + lx * c - ly * s, 180 + 80 + lx * s + ly * c]
         const left = align === 'left' ? 0 : align === 'right' ? -w : -w / 2
         const midY = baselineOffset(item) - 0.3 * fs
         // inside: the middle of the box, and near both ends along the baseline
@@ -273,9 +320,9 @@ describe('text hits follow the layout text box, rotated', () => {
     const item = (markGroups(scene)[0]!.items as SceneItem[])[0]!
     expect(textLines(item)).toHaveLength(3)
     const index = buildHitIndex(scene)
-    const y3 = 7 + 80 + 2 * lineHeight(item) - 4
-    expect(index.query(7 + 120 + 4, y3)?.item).toBe(item)
-    expect(index.query(7 + 120 + 4, 7 + 80 + 3 * lineHeight(item) + 12)).toBeNull()
+    const y3 = 180 + 80 + 2 * lineHeight(item) - 4
+    expect(index.query(180 + 120 + 4, y3)?.item).toBe(item)
+    expect(index.query(180 + 120 + 4, 180 + 80 + 3 * lineHeight(item) + 12)).toBeNull()
   })
 
   it('rotated axis labels (guide leaves) are found along their rotation', () => {
@@ -330,7 +377,9 @@ describe('hit grid memory', () => {
         console.log(JSON.stringify([
           index.queryMark(4, 4)?.item.datum.i,            // a small rect paints above the backdrop
           index.queryMark(700, 500)?.item.datum.i,         // only the backdrop is there
-          index.queryMark(5000, 5000)?.item.datum.i,       // outside the view, still inside the backdrop
+          // outside the view nothing is picked, as in vega (its SVG clips what overflows it, its canvas ends there): not the
+          // backdrop that reaches there, not the far-away item
+          index.queryMark(5000, 5000)?.item.datum.i ?? null,
           index.queryMark(1e12 + 2, 1e12 + 2)?.item.datum.i ?? null,
           index.queryMark(NaN, 3) ?? null,
         ]));
@@ -341,6 +390,6 @@ describe('hit grid memory', () => {
     }
     expect(String(res.stderr), 'child stderr').not.toMatch(/heap limit|out of memory/i)
     expect(res.status, `child exit (${res.signal ?? ''}) ${String(res.stderr).slice(0, 300)}`).toBe(0)
-    expect(JSON.parse(String(res.stdout).trim().split('\n').pop()!)).toEqual([0, 'huge', 'huge', 'far', null])
+    expect(JSON.parse(String(res.stdout).trim().split('\n').pop()!)).toEqual([0, 'huge', null, null, null])
   }, 90_000)
 })

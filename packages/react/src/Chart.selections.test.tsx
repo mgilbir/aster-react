@@ -88,7 +88,10 @@ forEachVariant(['svg'], (Chart, variant) => {
       const spec = {
         $schema: 'https://vega.github.io/schema/vega-lite/v6.json',
         data: { values: [{ a: 1, b: 3, c: 'x' }, { a: 2, b: 5, c: 'y' }, { a: 3, b: 2, c: 'z' }] },
-        padding: 10, autosize: 'none',
+        // (autosize `pad`, Vega-Lite's default: with `none` a concat's view is only its 20px of padding wide, and its marks lie
+        // outside the view's surface, where no pointer reaches them -- the browser clips an svg's overflow, and the hit index
+        // picks nothing there)
+        padding: 10,
         hconcat: [unit({ params: [{ name: 'pick', select: 'point' }] }), unit({})],
       } as never
       act(() => { root.render(<Chart ref={ref} spec={spec} signalListeners={{ pick: listener }} />) })

@@ -23,11 +23,11 @@
     "a11y-parity": "tsx scripts/a11y-parity.mts",
     "conformance:canvas": "tsx scripts/browser-canvas-parity.mts",
     "conformance:batch": "tsx scripts/browser-svg-batch-parity.mts",
-    "conformance:signals": "tsx scripts/browser-signals.mts --min-cases=64",
+    "conformance:signals": "tsx scripts/browser-signals.mts --min-cases=73 --max-canvas-as-svg=2",
     "gallery:fetch": "tsx scripts/gallery-fetch.mts",
     "conformance:gallery": "tsx src/gallery/run.ts",
     "conformance:intersect": "tsx scripts/browser-intersect.mts",
-    "conformance:selections": "tsx scripts/browser-vl-selections.mts --min-cases=53 --max-retained=13"
+    "conformance:selections": "tsx scripts/browser-vl-selections.mts --min-cases=54 --max-retained=13 --max-retained-canvas=10"
   },
   "dependencies": {
     "@aster-charts/core": "workspace:*",

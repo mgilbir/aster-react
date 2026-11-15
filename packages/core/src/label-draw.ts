@@ -8,8 +8,11 @@
  * must not hold it, and this module is reached through the lazily loaded transforms add-on.
  */
 import type { AlphaCanvas } from './raster.js'
-import { parsePathData, tracePath } from './path-data.js'
-import { computeAreaPath, computeLinePath, itemArcInto, rectItemPath, symbolPath, textItemDesc, trailPath } from './render.js'
+import { drawnPathCommands, parsePathData, renderSvgPath, tracePath } from './path-data.js'
+import { itemArcGeometry, lineStrokeWidth, textItemDesc } from './render.js'
+import { areaGeometry, lineGeometry, rectData, symbolGeometry, trailGeometry } from './geometry.js'
+import { arcSegs, drawCurveExact, segsOf, symbolRoundedSegs } from './geometry-read.js'
+import type { PathSeg } from './path-data.js'
 import { fontString } from './text-metrics.js'
 import type { SceneGroup, SceneItem } from './types.js'
 import { SYMBOL_DEFAULT_SIZE } from './util.js'
@@ -68,33 +71,39 @@ function inFrame(pen: AlphaCanvas, x: number, y: number, degrees: number, sx: nu
 /** A mark painter: draws the `items` of `group` (a mark's container). */
 type Painter = (pen: AlphaCanvas, items: Drawn[], group: SceneGroup) => void
 
-/** A path string as a path on the pen, and the item painted over it. */
-function inkPath(pen: AlphaCanvas, d: string, item: Drawn, opts?: { fill?: boolean; width?: number }): void {
+/** Parsed path segments as a path on the pen, and the item painted over it. */
+function inkSegs(pen: AlphaCanvas, segs: PathSeg[], item: Drawn, opts?: { fill?: boolean; width?: number }): void {
   pen.beginPath()
-  tracePath(pen, parsePathData(d))
+  tracePath(pen, segs)
   ink(pen, item, opts)
 }
 
 const byType: Record<string, Painter> = {
   // one path for the whole mark, painted as its first item is
-  line: (pen, items, group) => {
-    const line = computeLinePath(group, true)
+  line: (pen, items) => {
+    const geometry = lineGeometry(items)
+    if (geometry === null || geometry.empty) return
     // (a line with a stroke and no width strokes 2 wide)
-    if (line) inkPath(pen, line.path, items[0]!, { width: line.sw ?? items[0]!.strokeWidth })
+    pen.beginPath()
+    drawCurveExact(geometry, pen)
+    ink(pen, items[0]!, { width: lineStrokeWidth(items[0]!) ?? items[0]!.strokeWidth })
   },
-  area: (pen, items, group) => {
-    const area = computeAreaPath(group, true)
-    if (area) inkPath(pen, area.path, items[0]!)
+  area: (pen, items) => {
+    const geometry = areaGeometry(items)
+    if (geometry === null || geometry.empty) return
+    pen.beginPath()
+    drawCurveExact(geometry, pen)
+    ink(pen, items[0]!)
   },
   trail: (pen, items) => {
-    const d = items.length > 1 ? trailPath(items) : ''
-    if (d) inkPath(pen, d, items[0]!)
+    const geometry = items.length > 1 ? trailGeometry(items) : null
+    if (geometry?.outline.drawn) inkSegs(pen, arcSegs(geometry), items[0]!)
   },
 
   symbol: (pen, items) => {
     for (const it of items) {
       const half = Math.sqrt(it.size ?? SYMBOL_DEFAULT_SIZE) / 2
-      const segs = parsePathData(symbolPath(it.shape, half))
+      const segs = symbolRoundedSegs(symbolGeometry(it.shape, half))
       const x = it.x || 0
       const y = it.y || 0
       if (it.angle) inFrame(pen, x, y, it.angle, 1, 1, () => tracePath(pen, segs))
@@ -116,8 +125,7 @@ const byType: Record<string, Painter> = {
   rect: (pen, items) => {
     for (const it of items) {
       if (it.fill == null && it.stroke == null) continue
-      const d = rectItemPath(it)
-      if (d != null) inkPath(pen, d, it)
+      inkSegs(pen, segsOf(rectData(it)), it)
     }
   },
   rule: (pen, items) => {
@@ -139,7 +147,7 @@ const byType: Record<string, Painter> = {
       pen.translate(x, y)
       if (degrees) pen.rotate((degrees * Math.PI) / 180)
       pen.beginPath()
-      itemArcInto(pen, it)
+      itemArcGeometry(it).outline.replay(pen)
       if (degrees) pen.rotate((-degrees * Math.PI) / 180)
       pen.translate(-x, -y)
       ink(pen, it)
@@ -150,17 +158,30 @@ const byType: Record<string, Painter> = {
   },
 }
 
-/** A path mark's arcs are cubic beziers, as a canvas draws them; the path of a shape or a geoshape goes to the canvas as it is. */
-const pathPainter = (arcs: 'bezier' | 'exact'): Painter => (pen, items) => {
+/** A path mark's text as vega draws it (path-data.ts `renderSvgPath`, as on the canvas renderer: see canvas.ts). */
+byType.path = (pen, items) => {
   for (const it of items) {
     if (!it.path) continue
-    const segs = parsePathData(it.path)
-    inFrame(pen, it.x || 0, it.y || 0, it.angle || 0, it.scaleX || 1, it.scaleY || 1, () => tracePath(pen, segs, 0, 0, arcs))
+    const commands = drawnPathCommands(it.path)
+    const sx = it.scaleX || 1
+    const sy = it.scaleY || 1
+    if (it.angle) inFrame(pen, it.x || 0, it.y || 0, it.angle, 1, 1, () => renderSvgPath(pen, commands, 0, 0, sx, sy))
+    else {
+      pen.beginPath()
+      renderSvgPath(pen, commands, it.x || 0, it.y || 0, sx, sy)
+    }
     ink(pen, it)
   }
 }
-byType.path = pathPainter('bezier')
-byType.shape = byType.geoshape = pathPainter('exact')
+/** The path of a shape or a geoshape (the engine's own text) goes to the canvas as it is, its arcs as arcs. */
+byType.shape = byType.geoshape = (pen, items) => {
+  for (const it of items) {
+    if (!it.path) continue
+    const segs = parsePathData(it.path)
+    inFrame(pen, it.x || 0, it.y || 0, it.angle || 0, it.scaleX || 1, it.scaleY || 1, () => tracePath(pen, segs))
+    ink(pen, it)
+  }
+}
 const painters = new Map(Object.entries(byType))
 
 /** A text item: the box of each of its lines (glyph coverage is not modelled, see `AlphaCanvas.fillText`). */

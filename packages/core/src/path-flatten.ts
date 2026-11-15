@@ -1,14 +1,28 @@
 /**
- * SVG path data as polylines, and the non-zero point-in-path test over them (canvas `isPointInPath`): what the hit index and the
- * scene `intersect()` test items against. Curves and arcs are flattened to short segments.
+ * Paths as polylines, and the non-zero point-in-path test over them (canvas `isPointInPath`): what the hit index and the
+ * scene `intersect()` test items against. Curves and arcs are flattened to short segments (geometry.ts feeds the flattener).
  */
-import { parsePathData, tracePath, type PathSink } from './path-data.js'
+import type { PathSink } from './path-data.js'
 
-/** Flattened outline: a flat [x0,y0,x1,y1,...] polyline, `closed` when it ended with a close. */
-export interface Poly { pts: number[]; closed: boolean }
+/**
+ * Flattened outline: a flat [x0,y0,x1,y1,...] polyline, `closed` when it ended with a close. `curved[i]` is set when the segment
+ * that ends at point i is a chord of a curve or an arc (it may lie off the true outline by the flattening tolerance), not a
+ * straight segment of the path.
+ */
+export interface Poly { pts: number[]; closed: boolean; curved?: boolean[] }
+
+/**
+ * How far a flattened curve or arc may stray from the true one, in path units: the hit index tests a point against the painted
+ * outline, so the flattening must not move an edge by a visible amount. A segment is cut into at most MAX_STEPS chords whatever
+ * its size, so an enormous radius in an untrusted spec cannot make the outline unbounded.
+ */
+export const FLATTEN_TOLERANCE = 0.01
+const TOLERANCE = FLATTEN_TOLERANCE
+const MAX_STEPS = 1024
+const steps = (n: number): number => (n >= 1 ? Math.min(MAX_STEPS, Math.ceil(n)) : 1)
 
 /** Collects a path as polylines; curves and arcs are flattened to short segments. */
-class Flattener implements PathSink {
+export class Flattener implements PathSink {
   polys: Poly[] = []
   private cur: number[] | null = null
   private x = 0
@@ -22,17 +36,23 @@ class Flattener implements PathSink {
     this.polys.push({ pts: this.cur, closed: false })
     this.x = x; this.y = y; this.startX = x; this.startY = y
   }
-  private push(x: number, y: number): void {
+  private push(x: number, y: number, curved = true): void {
     if (!this.cur) { this.start(x, y); return }
     const [tx, ty] = this.t(x, y)
     this.cur.push(tx, ty)
+    if (curved) {
+      const poly = this.polys[this.polys.length - 1]!
+      ;(poly.curved ??= [])[this.cur.length / 2 - 1] = true
+    }
     this.x = x; this.y = y
   }
   moveTo(x: number, y: number): void { this.start(x, y) }
-  lineTo(x: number, y: number): void { this.push(x, y) }
+  lineTo(x: number, y: number): void { this.push(x, y, false) }
   bezierCurveTo(c1x: number, c1y: number, c2x: number, c2y: number, x: number, y: number): void {
     const x0 = this.x, y0 = this.y
-    const N = 12
+    // a cubic's chords stray from it by at most 3/4 of its largest second difference over N^2
+    const dd = Math.max(Math.hypot(x0 - 2 * c1x + c2x, y0 - 2 * c1y + c2y), Math.hypot(c1x - 2 * c2x + x, c1y - 2 * c2y + y))
+    const N = steps(Math.sqrt((0.75 * dd) / TOLERANCE))
     for (let i = 1; i <= N; i++) {
       const t = i / N, u = 1 - t
       this.push(
@@ -43,7 +63,8 @@ class Flattener implements PathSink {
   }
   quadraticCurveTo(cx: number, cy: number, x: number, y: number): void {
     const x0 = this.x, y0 = this.y
-    const N = 10
+    // ... and a quadratic's by a quarter of its second difference over N^2
+    const N = steps(Math.sqrt(Math.hypot(x0 - 2 * cx + x, y0 - 2 * cy + y) / (4 * TOLERANCE)))
     for (let i = 1; i <= N; i++) {
       const t = i / N, u = 1 - t
       this.push(u * u * x0 + 2 * u * t * cx + t * t * x, u * u * y0 + 2 * u * t * cy + t * t * y)
@@ -53,8 +74,11 @@ class Flattener implements PathSink {
     let da = a1 - a0
     if (ccw) { if (da > 0) da = (da % (2 * Math.PI)) - 2 * Math.PI } else if (da < 0) da = (da % (2 * Math.PI)) + 2 * Math.PI
     if (Math.abs(da) > 2 * Math.PI) da = Math.sign(da) * 2 * Math.PI
-    const N = Math.max(4, Math.ceil(Math.abs(da) / (Math.PI / 24)))
-    this.push(cx + r * Math.cos(a0), cy + r * Math.sin(a0))
+    // a chord of angle `a` strays from the circle by r (1 - cos(a / 2))
+    const r0 = Math.abs(r)
+    const N = Math.max(4, steps(r0 > TOLERANCE ? Math.abs(da) / (2 * Math.acos(1 - TOLERANCE / r0)) : 1))
+    // (the line to the arc's start is straight)
+    this.push(cx + r * Math.cos(a0), cy + r * Math.sin(a0), false)
     for (let i = 1; i <= N; i++) {
       const a = a0 + (da * i) / N
       this.push(cx + r * Math.cos(a), cy + r * Math.sin(a))
@@ -67,13 +91,6 @@ class Flattener implements PathSink {
     this.cur = null
     this.x = this.startX; this.y = this.startY
   }
-}
-
-/** Flatten SVG path data under `t` (local -> scene). */
-export function flattenPath(d: string, t: (x: number, y: number) => [number, number]): Poly[] {
-  const f = new Flattener(t)
-  tracePath(f, parsePathData(d))
-  return f.polys
 }
 
 /** Non-zero winding number of (x, y) over every polygon, each implicitly closed (canvas `fill()`). */

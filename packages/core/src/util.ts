@@ -475,6 +475,41 @@ export const one = /* @__PURE__ */ accessor(() => 1, [], 'one')
 
 // --- expression helpers ------------------------------------------------------
 
+/** Accessors `pluck` remembers; the least recently used is dropped past it. */
+export const PLUCK_CACHE_MAX = 1024
+
+/**
+ * `make`, remembered per `String(key)` in a table of at most `max` entries that drops the least recently used. For the tables an
+ * expression reads per call (a formatter per specifier, an accessor per field name): their keys come from a spec or its data, so
+ * the table must be bounded, and a hit must cost a lookup alone.
+ *
+ * Every entry carries the tick of its last move to the young end of the table (a Map iterates in insertion order, so the entry
+ * dropped past the bound is the first one). A hit on an entry moved within the last `max / 2` ticks is not moved again: it is in
+ * the young half and is not next to go. So a loop over one or a few keys reads the table without rewriting it, and an entry used
+ * within the last `max / 2` distinct keys is never dropped (recency among the young half is not kept). `size` is for the tests.
+ */
+export function recentlyUsed<A, T>(max: number, make: (key: A) => T): ((key: A) => T) & { size: () => number } {
+  const table = new Map<string, { value: T; moved: number }>()
+  let tick = 0
+  const get = (key: A): T => {
+    const id = String(key)
+    const known = table.get(id)
+    if (known !== undefined) {
+      if (tick - known.moved >= max / 2) {
+        table.delete(id)
+        table.set(id, known)
+        known.moved = ++tick
+      }
+      return known.value
+    }
+    const value = make(key)
+    table.set(id, { value, moved: ++tick })
+    if (table.size > max) table.delete(table.keys().next().value as string)
+    return value
+  }
+  return Object.assign(get, { size: () => table.size })
+}
+
 /**
  * Memoized `field` accessors, keyed by the *stringified* name — upstream
  * memoizes in a plain object, so `pluck(d, 0)` and `pluck(d, '0')` share one
@@ -483,9 +518,7 @@ export const one = /* @__PURE__ */ accessor(() => 1, [], 'one')
  * so the table keeps only the most recently used {@link PLUCK_CACHE_MAX} (an
  * accessor is a pure function of its name: a dropped one is simply rebuilt).
  */
-const pluckAccessors = new Map<string, Accessor>()
-/** Accessors `pluck` remembers; the least recently used is dropped past it. */
-export const PLUCK_CACHE_MAX = 1024
+const pluckAccessors = recentlyUsed(PLUCK_CACHE_MAX, (name: unknown) => field(name))
 
 /**
  * Read `name` off a datum, or off every datum of an array — the upstream
@@ -498,22 +531,11 @@ export function pluck(data: unknown, name: unknown): unknown {
 
 /** The accessor of a field name an expression function was given (a path: `a.b`, `a\\.b`, `a[0]`), built once per name. */
 export function memoField(name: unknown): Accessor {
-  const key = String(name)
-  let f = pluckAccessors.get(key)
-  if (f) {
-    // a Map iterates in insertion order: re-inserting on a hit keeps the oldest entry first
-    pluckAccessors.delete(key)
-    pluckAccessors.set(key, f)
-  } else {
-    f = field(name)
-    pluckAccessors.set(key, f)
-    if (pluckAccessors.size > PLUCK_CACHE_MAX) pluckAccessors.delete(pluckAccessors.keys().next().value as string)
-  }
-  return f
+  return pluckAccessors(name)
 }
 
 /** Accessors `pluck` currently remembers (for tests). @internal */
-export const pluckCacheSize = (): number => pluckAccessors.size
+export const pluckCacheSize = (): number => pluckAccessors.size()
 
 /** vega-scenegraph `shapes.js` `sz`: an item without `size` is a 64px² symbol. */
 export const SYMBOL_DEFAULT_SIZE = 64
@@ -601,11 +623,43 @@ export const zoomSymlog = (domain: readonly number[], anchor: Anchor, scale: num
 // --- tuples ------------------------------------------------------------------
 
 /**
- * Marks an object as a data tuple (vega-dataflow's `Symbol('vega_id')`): the scene items the event loop
- * hands to expressions (`item()`, `group()`) carry it, so `isTuple(group())` is true for a group item and
- * false for the `{}` that `group()` returns when there is none.
+ * The data tuples, as vega-dataflow's `isTuple` knows them (vega stamps each with a `Symbol('vega_id')`). Aster keeps no mark on
+ * the objects themselves -- nothing a tuple carries shows in a scene, its JSON, a tooltip or what a host is handed -- but holds them
+ * here. A dataset's rows, a mark item's datum, a guide part's data, a facet cell's and a group item's datum are tuples; the
+ * objects an expression makes, a row's nested objects and the `{}` that `group()` gives when there is none are not. The facades the
+ * event loop hands out (`item()`, `group()`) are registered when they are made; the engine's tuples only while a chart whose
+ * expressions call `isTuple` is evaluated (see `withTuples`), since nothing else can ask.
  */
-export const TUPLE_ID: unique symbol = Symbol.for('aster.tuple') as never
+const TUPLES = new WeakSet<object>()
+let registering = false
+
+/** Run `fn` registering the tuples it makes when `on` (an evaluation of a chart whose expressions call `isTuple`). */
+export function withTuples<T>(on: boolean, fn: () => T): T {
+  const outer = registering
+  registering = on
+  try { return fn() } finally { registering = outer }
+}
+
+/** Whether the evaluation running now registers the tuples it makes (see `withTuples`). */
+export function tuplesRegistering(): boolean {
+  return registering
+}
+
+/** Register a tuple the engine made (a row, a datum), while registering is on. */
+export function markTuple(t: object): void {
+  if (registering) TUPLES.add(t)
+}
+
+/** Register every row of `rows` as a tuple, while registering is on. */
+export function markTuples(rows: readonly unknown[]): void {
+  if (!registering) return
+  for (const r of rows) if (r !== null && typeof r === 'object') TUPLES.add(r)
+}
+
+/** Register a tuple whatever the evaluation (the event loop's item facades, a facet cell's datum). */
+export function markTupleAlways(t: object): void {
+  TUPLES.add(t)
+}
 
 /**
  * On the `mark` of a picked item's facade: the scene node (the mark container, or the group mark for a group item) it stands for,
@@ -615,7 +669,7 @@ export const MARK_NODE: unique symbol = Symbol.for('aster.markNode') as never
 
 /** vega-dataflow `isTuple`: whether the value is a registered tuple. */
 export function isTuple(t: unknown): boolean {
-  return !!(t && (typeof t === 'object' || typeof t === 'function') && (t as Record<symbol, unknown>)[TUPLE_ID])
+  return t !== null && typeof t === 'object' && TUPLES.has(t)
 }
 
 /**
@@ -630,3 +684,16 @@ export const scopedSignalName = (scopeId: string, name: string): string => `${sc
  * so the evaluation must not recompute it from what it reads now. Never a name an expression can read.
  */
 export const heldSignalName = (name: string): string => `\u0000held:${name}`
+
+/**
+ * A dataset tuple that is a primitive. vega's dynamic loader (a `values` that is a `{signal}`) ingests its rows without keeping the
+ * `{data}` wrapper it gives a primitive elsewhere, so the tuple is the number or string itself. The engine's rows are objects: such a
+ * tuple is a box with no field of its own (a field read gives `undefined`, as on a primitive) holding the value under this symbol,
+ * which object spreads carry along; `tupleDatum` is what vega's `datum` is.
+ */
+export const PRIMITIVE_TUPLE: unique symbol = Symbol('aster.primitiveTuple')
+
+/** The datum a tuple is: the primitive a box holds, else the tuple itself. */
+export function tupleDatum(t: unknown): unknown {
+  return t !== null && typeof t === 'object' && PRIMITIVE_TUPLE in t ? (t as { [PRIMITIVE_TUPLE]: unknown })[PRIMITIVE_TUPLE] : t
+}

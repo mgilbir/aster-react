@@ -340,11 +340,18 @@ function compile(spec: FormatSpecifier, symbols: Symbols, affixes?: Affixes): Fo
 
   const prefix = symbol === '$' ? symbols.currencyPrefix : symbol === '#' && /[boxX]/.test(type) ? '0' + type.toLowerCase() : ''
   const suffix = (symbol === '$' ? symbols.currencySuffix : /[%p]/.test(type) ? symbols.percent : '') + (affixes?.suffix !== undefined ? affixes.suffix : '')
-  const render = RENDERERS[type]!
   const splitsTail = HAS_FRACTION_OR_EXPONENT.test(type)
   const digitsAfter = precision === undefined ? 6
     : SIGNIFICANT_TYPES.test(type) ? Math.max(1, Math.min(21, precision))
     : Math.max(0, Math.min(20, precision))
+  // `g` trimmed (`~g`, and `''`, the default): a safe integer (below 2^53, where `String` prints every digit, as `toPrecision`
+  // does) below 10^precision has no digit to round, and `toPrecision` only pads it with a point and zeros that the trim removes
+  // again, so its plain digits are the same text, made directly. (Past 2^53 `String` prints the shortest digits that read back,
+  // `toPrecision` the exact ones: not the same.)
+  const below = 10 ** digitsAfter
+  const render = type === 'g' && trim
+    ? (x: number, p: number): string => (Number.isSafeInteger(x) && x < below ? String(x) : x.toPrecision(p))
+    : RENDERERS[type]!
   const { group, minus, nan, decimal, numerals } = symbols
   const label = spec + ''
 

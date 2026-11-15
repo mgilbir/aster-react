@@ -350,6 +350,44 @@ describe('signal event streams', () => {
     binding.detach()
   })
 
+  it('on the svg, the pointer leaving an item is about the item it leaves (vega: the element the out is dispatched to)', () => {
+    const spec = {
+      width: 100, height: 60, padding: 0, autosize: 'none',
+      signals: [
+        { name: 'left', value: 'none', on: [{ events: '@bars:mouseout', update: 'datum.tag' }] },
+        { name: 'pout', value: 'none', on: [{ events: 'pointerout', update: 'item().mark ? datum.tag : "-"' }] },
+        { name: 'over', value: 'none', on: [{ events: 'mouseover', update: 'item().mark ? datum.tag : "-"' }] },
+      ],
+      data: [{ name: 't', values: [{ tag: 'A', x: 0 }, { tag: 'B', x: 50 }] }],
+      marks: [{ type: 'rect', name: 'bars', from: { data: 't' }, encode: { update: { x: { field: 'x' }, y: { value: 0 }, width: { value: 40 }, height: { value: 40 } } } }],
+    } as unknown as VgSpec
+    const scene = evaluateChart(compileChart(spec))
+    const host = document.createElement('div')
+    host.innerHTML = renderSceneToSvg(scene)
+    document.body.appendChild(host)
+    const svg = host.querySelector('svg') as SVGSVGElement
+    svg.getBoundingClientRect = () => ({ left: 0, top: 0, right: 100, bottom: 60, width: 100, height: 60 } as DOMRect)
+    const items = (scene.items.find((n) => n.marktype === 'rect') as unknown as { items: object[] }).items
+    // (the scene's bars: A at x 0..40, B at 50..90, y 0..40)
+    const pick = (x: number, y: number): { item: object; marktype: string } | null => (y > 40 ? null : x >= 0 && x <= 40 ? { item: items[0]!, marktype: 'rect' } : x >= 50 && x <= 90 ? { item: items[1]!, marktype: 'rect' } : null)
+    const store: Record<string, unknown> = {}
+    const binding = bindSceneSignals(svg, scene, store, {}, { pick })
+    const bar = host.querySelectorAll('.mark-rect path')
+    // over A, then off it to the empty space below: the out is A's, though nothing is under its point
+    fire(bar[0]!, 'pointermove', { clientX: 20, clientY: 20 })
+    fire(bar[0]!, 'pointerout', { clientX: 20, clientY: 50 })
+    fire(bar[0]!, 'mouseout', { clientX: 20, clientY: 50 })
+    fire(svg, 'pointermove', { clientX: 20, clientY: 50 })
+    expect(store.left).toBe('A')
+    expect(store.pout).toBe('A')
+    // from the space onto B: the over is B's (the item under its point), and the out of the svg background is about no item
+    fire(svg, 'pointerout', { clientX: 70, clientY: 20 })
+    fire(bar[1]!, 'mouseover', { clientX: 70, clientY: 20 })
+    expect(store.pout).toBe('-')
+    expect(store.over).toBe('B')
+    binding.release()
+  })
+
   describe('{scale} event sources and edited datasets', () => {
     const specFor = (lim: number): VgSpec => ({
       width: 100, height: 100,

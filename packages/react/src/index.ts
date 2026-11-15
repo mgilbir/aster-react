@@ -79,5 +79,5 @@ export {
   type HydrateChartOptions,
   type HydratedChart,
 } from './ssr.js'
-export { createChartSession } from '@aster-charts/core/dom'
+export { createChartSession } from './session.js'
 export type { ChartSession } from '@aster-charts/core/dom'

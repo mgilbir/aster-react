@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { compileChart, evaluateChart, renderSceneToSvg, renderSpec } from './index.js'
 import { patchSceneDom, renderSceneToDomElement } from './addon-dom.js'
-import { parseSvgPath } from './svg-path.js'
+import { svgPathCommands } from './path-data.js'
 import type { SceneRoot } from './types.js'
 
 // Regression + property suite for SVG string escaping.
@@ -122,7 +122,7 @@ function withChannel(channel: string, value: unknown): SceneRoot {
 function hostileFor(kind: Kind, h: string): unknown {
   if (kind === 'shape') {
     // an invalid custom path is refused (dedicated test); only paths that parse can render
-    try { parseSvgPath(h); return h } catch { return BENIGN_KIND.shape }
+    try { svgPathCommands(h); return h } catch { return BENIGN_KIND.shape }
   }
   return kind === 'dash' ? [h, h] : h
 }
@@ -296,10 +296,12 @@ describe('SVG string renderer escapes every attribute and text value', () => {
         { type: 'symbol', from: { data: 't' }, encode: { update: { x: { field: 'v' }, y: { value: 5 }, fill: { field: 'v' }, stroke: { field: 'v' } } } },
         { type: 'rect', from: { data: 't' }, encode: { update: { x: { field: 'v' }, y: { value: 5 }, width: { value: 4 }, height: { value: 4 }, fill: { field: 'v' } } } },
         { type: 'text', from: { data: 't' }, encode: { update: { x: { field: 'v' }, y: { value: 5 }, text: { field: 'v' }, fill: { field: 'v' } } } },
-        { type: 'path', from: { data: 't' }, encode: { update: { path: { field: 'v' }, fill: { field: 'v' } } } },
         { type: 'line', from: { data: 't' }, encode: { update: { x: { value: 1 }, y: { value: 1 }, stroke: { field: 'v' } } } },
         { type: 'area', from: { data: 't' }, encode: { update: { x: { value: 1 }, y: { value: 1 }, fill: { field: 'v' } } } },
         { type: 'image', from: { data: 't' }, encode: { update: { url: { field: 'v' }, x: { field: 'v' }, y: { value: 1 } } } },
+        // (last: hostile path text is text vega's reader refuses, which stops the pass at this mark -- as vega's bounds do -- so the
+        // marks after it would not be made; its `d` is still written as given, and escaped)
+        { type: 'path', from: { data: 't' }, encode: { update: { path: { field: 'v' }, fill: { field: 'v' } } } },
       ],
     }) as never
     const benign = skeletonOfSvg(renderSpec(mk('5')))

@@ -1,6 +1,6 @@
 import * as React from 'react'
 import type { VgSpec } from '@aster-charts/core'
-import { chartSkeleton } from '@aster-charts/core/dom'
+import { chartSkeleton } from '@aster-charts/core/lean'
 import { compileVegaLite } from './vl-registry.js'
 
 /** True when the value looks like a Vega-Lite grammar rather than a Vega spec. */

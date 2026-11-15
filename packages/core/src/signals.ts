@@ -33,20 +33,24 @@
  *   listener and nothing is swallowed silently.
  *
  * The host (React `<Chart>`, or any embedder) calls `bindSceneSignals` on the
- * rendered SVG and re-renders when `onSignal` fires.
+ * rendered SVG or canvas and re-renders when `onSignal` fires. Which item an event of
+ * the view is about is the renderer's business, as in vega-scenegraph: on the SVG it is
+ * the item under the event's point (the browser's hit test of the element); a canvas has
+ * no element per item, and its renderer (`createCanvasEvents` from `@aster-charts/core/canvas`)
+ * resolves events as vega's canvas handler does (`ViewEvents`).
  */
 import type { CompiledChart, CompiledData, CompiledSignalDef, SceneGroup, SceneItem, SceneNode, SceneRoot, SignalOnDef } from './types.js'
+import { isEngineNode, keptInto } from './scene-registry.js'
 import { compileExpr, type CompiledExpr, type ExpressionRuntime } from './expression.js'
-import { applyChangeset, newChangeset, planModify, type Changeset } from './modify.js'
+import type { Changeset } from './modify.js'
 import { parseExpression, type AstNode } from './expr-parser.js'
 import { normalizeEvents, filterCode } from './stream-defs.js'
 import { parseEventSelectorString, type StreamDef } from './event-selector.js'
-import { array, dict, heldSignalName, ownGet, setOwn, TUPLE_ID, MARK_NODE, scopedSignalName } from './util.js'
+import { array, dict, heldSignalName, ownGet, setOwn, markTupleAlways, MARK_NODE, scopedSignalName } from './util.js'
 import { follow, node, Propagation, type SignalNode } from './signal-propagation.js'
-import { sceneIntersect } from './scene-intersect.js'
 import { consoleLogger, type Logger } from './logger.js'
-import { timers, type Timer } from './timer.js'
-import { resolveCursor } from './cursor.js'
+import type { Timer } from './timer.js'
+import { part } from './engine-parts.js'
 import { clientToSvg } from './pointer.js'
 
 export interface BoundEvent {
@@ -80,6 +84,43 @@ export interface PickedItem {
   group?: PickedItem | null
   /** The scene node of the item's mark (what `item.mark.items` is in vega): `intersect(..., unit.mark)` walks it. */
   node?: object
+  /** A group item's marks (`item.items`), for a picked item the scene holds as a leaf: a legend entry's box. */
+  items?: object[]
+}
+
+/**
+ * How the events of the view reach the loop and which item each one is about: vega-scenegraph's renderer handler. The
+ * default is the SVG's (every DOM event of the rendered element, about the item under its point); `createCanvasEvents` from
+ * `@aster-charts/core/canvas` is the canvas renderer's. A host keeps one for as long as it shows the element: what it holds
+ * (the item under the pointer, the one a button went down on) outlives a binding, as vega's handler outlives a render.
+ */
+export interface ViewEvents {
+  /** A binding starts: `scene` answers for the scene it was made for. */
+  connect(scene: ViewEventScene): ViewEventConnection
+}
+
+/** What a binding tells its `ViewEvents` about its scene. */
+export interface ViewEventScene {
+  /** The item under a pointer position (client coordinates), or null. */
+  resolve(point: { clientX: number; clientY: number }): PickedItem | null
+  /**
+   * The item of this scene that an item an earlier binding resolved stands for (vega's items persist from one render to the
+   * next), or null when it is gone from the scene (vega: an exit): in the mark at the same place, the item of the same row, else
+   * the item at the same position whose row holds the same values.
+   */
+  relocate(item: PickedItem): PickedItem | null
+}
+
+/** One binding's subscription to its `ViewEvents`. */
+export interface ViewEventConnection {
+  /**
+   * Deliver every event of `type` of the view to `send`, with the item it is about: an item or null (none) as the renderer
+   * resolved it, or undefined to leave it to the loop (the item under the event's point); and the `event.vegaType` the handlers
+   * see (default: `type`).
+   */
+  on(type: string, send: (event: Event, item: PickedItem | null | undefined, vegaType?: string) => void): void
+  /** The binding is over: deliver nothing more to it. */
+  disconnect(): void
 }
 
 export interface SignalEventHooks {
@@ -117,6 +158,12 @@ export interface SignalBindOptions {
    * (the `mark-*`/`role-*` classes, and the `data-datum` stamp when `stampDatumAttrs` was called).
    */
   pick?: (x: number, y: number) => { item: object; marktype?: string } | null
+  /**
+   * How the view's events arrive and which item each is about (the renderer's event handler). Default: the DOM events of
+   * the element, each about the item under its point (the SVG renderer's). A canvas passes `createCanvasEvents(canvas)` from
+   * `@aster-charts/core/canvas`, kept for as long as the canvas is shown.
+   */
+  events?: ViewEvents
   /** The scene, so a picked item's enclosing groups and mark name/role can be found. */
   scene?: SceneRoot
   /**
@@ -127,9 +174,9 @@ export interface SignalBindOptions {
   data?: Record<string, unknown[]>
   /**
    * What the state that outlives a binding (timer streams, throttle and debounce clocks, `between` windows) is kept
-   * for: an object that stays the same across the host's re-renders. Default: the svg element, which a host that
-   * patches its DOM keeps; a host that REPLACES the svg on every render passes its container (or any stable object),
-   * or each render would restart its timers.
+   * for: an object that stays the same across the host's re-renders. Default: the rendered element (svg or canvas), which
+   * a host that patches its DOM keeps; a host that REPLACES the element on every render passes its container (or any
+   * stable object), or each render would restart its timers.
    */
   owner?: EventTarget
   /**
@@ -144,12 +191,12 @@ export interface SignalBinding {
   /**
    * Stop delivering events to this binding. Timer streams (and pending debounces) are NOT stopped: a host
    * re-binds after every render, and a timer is the view's, not one binding's (stopping it per render
-   * would restart the schedule every frame). Call `release` when the host is done with the svg.
+   * would restart the schedule every frame). Call `release` when the host is done with the element.
    */
   detach: () => void
   /**
-   * `detach`, and stop everything the svg keeps running between bindings: its timer streams and pending
-   * debounces (vega's `view.finalize()`). Idempotent. A timer whose svg has left the document stops itself
+   * `detach`, and stop everything the element keeps running between bindings: its timer streams and pending
+   * debounces (vega's `view.finalize()`). Idempotent. A timer whose element has left the document stops itself
    * at its next tick even if the host never gets here.
    */
   release: () => void
@@ -174,94 +221,9 @@ export function parseEventSelector(selector: unknown): string[] {
   return out
 }
 
-// --- the cursor (vega-view cursor.js) ------------------------------------------------
+// --- the cursor (vega-view cursor.js): cursor.ts, which a host loads without the loop ----------------------------------
 
-/** What the cursor tracker needs from its host. */
-export interface CursorTrackerOptions {
-  /**
-   * The item under the point `move` was given (`HitIndex.pick` of the view-space position: the topmost item that takes the
-   * pointer), or null. The point is the host's to define: a host that knows no item has a cursor answers null without
-   * converting it.
-   */
-  pick: (x: number, y: number) => { item: object } | null
-  /** The value of the spec's `cursor` signal now (a string; undefined when the spec has none). Read at every move and refresh. */
-  user: () => unknown
-  /** Told the cursor to show whenever it changes (null: none). Never told the same value twice in a row. */
-  onCursor: (cursor: string | null) => void
-  /** `config.events`: a `view` rule that blocks `pointermove` stops the tracker from ever looking (vega's `permit`). */
-  eventConfig?: CompiledChart['eventConfig']
-}
-
-export interface CursorTracker {
-  /** The pointer moved to this point (vega: a `pointermove` of the view): read the `cursor` of the item `pick` finds there, report the result. */
-  move: (x: number, y: number) => void
-  /** The `cursor` signal changed (vega: its operator re-runs): report the cursor with the item the pointer was last over. */
-  refresh: () => void
-}
-
-/**
- * vega-view `cursor.js`: the item cursor is taken at every pointermove (`event.item && event.item.cursor || null`, so
- * moving off the items resets it), the visible cursor is `resolveCursor(user, item)`. The host owns where it is shown.
- * Framework-agnostic: nothing here touches the DOM.
- */
-export function createCursorTracker(opts: CursorTrackerOptions): CursorTracker {
-  // `opts` is read afresh at every call: a host that re-renders updates it in place, the tracker (and the item it holds) stays
-  const blocked = (): boolean => {
-    // vega-view events.js `permit(view, 'view', 'pointermove')`: `false`, or a list / object of types that lacks it, blocks it
-    const rule = opts.eventConfig?.view
-    return rule === false || (rule != null && typeof rule === 'object' && !(Array.isArray(rule) ? rule.includes('pointermove') : (rule as Record<string, unknown>).pointermove))
-  }
-  let item: string | null = null
-  // vega rewrites the signal as `{user, item}` at a pointermove (user: its value, or 'default' when that is falsy): until the
-  // host changes the value, that is what the signal holds
-  let hasMoved = false
-  let movedRaw: unknown
-  let movedUser: unknown
-  const signal = (): unknown => {
-    const raw = opts.user()
-    if (!hasMoved || movedRaw !== raw) return raw
-    return typeof movedUser === 'string' ? movedUser : { user: movedUser, item }
-  }
-  let shown: string | null = resolveCursor(opts.user(), null)
-  const report = (): void => {
-    const next = resolveCursor(signal(), item)
-    if (next === shown) return
-    shown = next
-    opts.onCursor(next)
-  }
-  return {
-    move(x, y) {
-      if (blocked()) return
-      const raw = opts.user()
-      if (!hasMoved || movedRaw !== raw) {
-        hasMoved = true
-        movedRaw = raw
-        movedUser = raw ? (typeof raw === 'string' ? raw : (raw as { user?: unknown }).user) : 'default'
-      }
-      const c = (opts.pick(x, y)?.item as { cursor?: unknown } | undefined)?.cursor
-      item = typeof c === 'string' && c !== '' ? c : null
-      report()
-    },
-    refresh: report,
-  }
-}
-
-/** Whether any item of the scene has a `cursor` channel (so a host can skip picking on every pointermove when none does). */
-export function sceneHasCursor(scene: SceneRoot): boolean {
-  let known = cursorScenes.get(scene)
-  if (known === undefined) {
-    const walk = (nodes: readonly SceneNode[] | undefined): boolean => {
-      for (const n of nodes ?? []) {
-        if ((n as SceneItem).cursor != null) return true
-        if (walk((n as SceneGroup).items)) return true
-      }
-      return false
-    }
-    cursorScenes.set(scene, (known = walk(scene.items)))
-  }
-  return known
-}
-const cursorScenes = new WeakMap<SceneRoot, boolean>()
+export { createCursorTracker, sceneHasCursor, type CursorTracker, type CursorTrackerOptions } from './cursor.js'
 
 // --- event streams ---------------------------------------------------------
 
@@ -310,6 +272,7 @@ function releaseOwner(owner: EventTarget): void {
     persistedTimers.delete(owner)
   }
   persistedHandlers.delete(owner)
+  shells.delete(owner)
   const streams = persisted.get(owner)
   if (streams) {
     for (const st of streams.values()) {
@@ -323,6 +286,58 @@ function releaseOwner(owner: EventTarget): void {
 type EventDefaults = { prevent?: unknown; allow?: unknown }
 
 /** vega-view `initializeEventConfig`: `config.events.defaults`, with a `prevent` / `allow` list read as a set of types. */
+/**
+ * What a binding of a view keeps for the next binding of the same view on the same element (one per owner, see
+ * SignalBindOptions.owner): the expressions of its handlers and filters, compiled. A host binds again for every scene it shows, and
+ * each binding builds its own runtime (the scene's datasets and scales, its own dataset edits), so compiling against that runtime
+ * compiled every expression again, for every scene. They are compiled once instead, against a runtime of the shell's that forwards
+ * every member to the runtime of the binding now live (`forwarding`), so an expression of the shell does exactly what the same
+ * expression compiled by the live binding would.
+ *
+ * A binding takes the owner's shell only when no other binding uses it (the last one was detached or released), on the same element
+ * and for the same signal and dataset definitions (the same compiled chart); else it starts a shell of its own. Everything else a
+ * binding is made of (the dataflow, the streams, the scopes, the baselines of its handlers) is built for each binding, as before.
+ */
+interface BindingShell {
+  el: Element
+  defs: CompiledSignalDef[]
+  dataDefs: CompiledData[]
+  /** The binding that uses the shell (a token of it), or null. */
+  live: object | null
+  /** The runtimes of the binding that uses the shell, by scope (`''`: the view's). */
+  current: Map<string, ExpressionRuntime>
+  forwarders: Map<string, ExpressionRuntime>
+  compiled: Map<string, Map<string, CompiledExpr>>
+}
+const shells = new WeakMap<EventTarget, BindingShell>()
+
+/** Every member an expression runtime may have (the type checks the list is complete). */
+const RUNTIME_KEYS = Object.keys({
+  scale: true, data: true, expr: true, projection: true, tree: true, modify: true, transformed: true, inScope: true, containerSize: true,
+  random: true, setdata: true, intersect: true,
+} satisfies Record<keyof ExpressionRuntime, true>) as Array<keyof ExpressionRuntime>
+
+/** The key of a scope's runtime in a shell (`''` is the view's, which no scope id can collide with). */
+const scopeKey = (scope: Scope): string => '\u0000' + scope.id
+
+/** A runtime each member of which is the member of `target()` when it is read (present or not, as there). */
+function forwarding(target: () => ExpressionRuntime): ExpressionRuntime {
+  const rt = {} as ExpressionRuntime
+  for (const key of RUNTIME_KEYS) Object.defineProperty(rt, key, { enumerable: true, get: () => target()[key] })
+  return rt
+}
+
+/** The parsed `events` of a signal's `on` entry, per default source: a pure function of the spec, parsed once. */
+const PARSED_EVENTS = new WeakMap<object, Map<string, ReturnType<typeof normalizeEvents>>>()
+function eventsOf(on: SignalOnDef, defaultSource: 'view' | 'scope'): ReturnType<typeof normalizeEvents> {
+  let bySource = PARSED_EVENTS.get(on)
+  if (bySource === undefined) PARSED_EVENTS.set(on, (bySource = new Map()))
+  let got = bySource.get(defaultSource)
+  // (a malformed selector throws here every time, as it did when parsed for each binding)
+  if (got === undefined) bySource.set(defaultSource, (got = normalizeEvents(on.events, defaultSource)))
+  return got
+}
+
 function eventDefaults(config: CompiledChart['eventConfig']): EventDefaults {
   const d = { ...(config?.defaults ?? {}) } as EventDefaults
   for (const k of ['prevent', 'allow'] as const) if (Array.isArray(d[k])) d[k] = new Set(d[k] as unknown[])
@@ -481,6 +496,8 @@ function collectScopes(scene: SceneRoot | undefined): Scope[] {
       here = { id: sc.id, defs: sc.defs, names: new Set(sc.defs.filter((d) => d.push !== 'outer').map((d) => d.name)), values: sc.values, group: g, hasContent: sc.hasContent, parent }
       out.push(here)
     }
+    // (a leaf mark's items are leaves: they hold no group, as scene-registry.ts reads a scene)
+    if (g.role === 'mark' && g.marktype !== 'group') return
     for (const c of g.items ?? []) if (Array.isArray((c as SceneGroup).items)) walk(c as SceneGroup, here)
   }
   for (const r of scene.items) walk(r, null)
@@ -509,13 +526,13 @@ function updateOf(on: SignalOnDef): Update {
 }
 
 /**
- * Bind every `signal.on` event stream in the compiled chart to DOM events on
- * `svg` (and `window` / CSS-selected elements / timers for those sources). See
- * the file header for the semantics. Returns a binding with `detach` + an
- * imperative `setSignal`.
+ * Bind every `signal.on` event stream in the compiled chart to the events of the
+ * view rendered as `el` (an svg, or a canvas with `opts.events`; and `window` /
+ * CSS-selected elements / timers for those sources). See the file header for the
+ * semantics. Returns a binding with `detach` + an imperative `setSignal`.
  */
 export function bindSignalEvents(
-  svg: SVGSVGElement,
+  el: Element,
   chart: CompiledChart,
   runtime: ExpressionRuntime,
   signalParams: Record<string, unknown>,
@@ -523,7 +540,7 @@ export function bindSignalEvents(
   hooks: SignalEventHooks = {},
   opts: SignalBindOptions = {},
 ): SignalBinding {
-  return bindSignalEventsDefs(svg, chart.signalDefs ?? [], chart.data ?? [], runtime, signalParams, signals, hooks, opts, chart.eventConfig)
+  return bindSignalEventsDefs(el, chart.signalDefs ?? [], chart.data ?? [], runtime, signalParams, signals, hooks, opts, chart.eventConfig)
 }
 
 /** One `{signal}` event source of a `signal.on` entry, as parsed. */
@@ -544,7 +561,7 @@ interface HandlerSpec {
 }
 
 function bindSignalEventsDefs(
-  svg: SVGSVGElement,
+  el: Element,
   defs: CompiledSignalDef[],
   dataDefs: CompiledData[],
   sceneRuntime: ExpressionRuntime,
@@ -570,7 +587,17 @@ function bindSignalEventsDefs(
   const originY = opts.originY ?? 0
   const detachFns: Array<() => void> = []
   /** what outlives a binding is kept per owner (see SignalBindOptions.owner) */
-  const owner: EventTarget = opts.owner ?? svg
+  const owner: EventTarget = opts.owner ?? el
+  let shell = shells.get(owner)
+  if (shell === undefined || shell.live !== null || shell.el !== el || shell.defs !== defs || shell.dataDefs !== dataDefs) {
+    shell = { el, defs, dataDefs, live: null, current: new Map(), forwarders: new Map(), compiled: new Map() }
+    shells.set(owner, shell)
+  }
+  const liveToken = {}
+  const myShell = shell
+  myShell.live = liveToken
+  myShell.current = new Map()
+  detachFns.push(() => { if (myShell.live === liveToken) myShell.live = null })
   const rootStreams = new Map<string, Stream>()
   /** `{scale}`-source handlers: run when a scale they name has changed since the scene the loop was last bound to. */
   const scaleHandlers: Array<{ scales: Set<string>; run: () => void }> = []
@@ -582,6 +609,19 @@ function bindSignalEventsDefs(
   const datasets = new Map(dataDefs.map((d) => [d.name, d]))
   const inputRows = new Map<string, Array<Record<string, unknown>>>()
   const liveRows = new Map<string, unknown[]>()
+  // The rows a dataset starts from are the spec's or the host's: a modified tuple is written to a copy the loop owns, and a
+  // handler that still holds the original (a signal kept it) reaches the copy through it, as one tuple is one tuple in vega.
+  const ownCopies = new WeakMap<object, Record<string, unknown>>()
+  const owned = new WeakSet<object>()
+  const writable = (t: Record<string, unknown>): Record<string, unknown> => {
+    if (owned.has(t)) return t
+    const copy = { ...t }
+    owned.add(copy)
+    ownCopies.set(t, copy)
+    return copy
+  }
+  const current = (t: unknown): unknown => (t !== null && typeof t === 'object' ? (ownCopies.get(t) ?? t) : t)
+  const currentAll = (v: unknown): unknown => (Array.isArray(v) ? v.map(current) : current(v))
   const rawOf = (name: string): Array<Record<string, unknown>> =>
     inputRows.get(name) ?? (opts.data?.[name] as Array<Record<string, unknown>> | undefined) ?? (datasets.get(name)?.values as Array<Record<string, unknown>> | undefined) ?? []
   const dataOf = (name: string): unknown[] | undefined => {
@@ -622,6 +662,7 @@ function bindSignalEventsDefs(
   const modifyData = (name: string, insert: unknown, remove: unknown, toggle: unknown, modifyTuple: unknown, values: unknown): number => {
     if (!datasets.has(name)) throw new Error(`Cannot modify the unknown data set "${name}"`)
     if (!handling) throw new Error('modify() is only available while an event is being handled')
+    const { planModify, newChangeset } = part('modify')
     return planModify(rawOf(name), () => {
       let m = modifying.get(name)
       if (!m || m.stamp < flow.clock) {
@@ -634,11 +675,11 @@ function bindSignalEventsDefs(
         }, 1)
       }
       return m.cs
-    }, insert, remove, toggle, modifyTuple, values)
+    }, currentAll(insert), currentAll(remove), toggle, current(modifyTuple), values)
   }
   /** vega-functions data.js setdata: `df.pulse(input, changeset().remove(truthy).insert(tuples))`, applied when the dataset's operator runs. */
   const setData = (name: string, tuples: unknown): number => {
-    const cs = newChangeset()
+    const cs = part('modify').newChangeset()
     cs.remp.push(() => true)
     for (const t of array(tuples)) cs.add.push(t)
     pulsed.set(name, cs)
@@ -656,15 +697,20 @@ function bindSignalEventsDefs(
       return setData(name, tuples)
     },
     ...(opts.containerSize ? { containerSize: opts.containerSize } : {}),
-    intersect: (box, opt, group) => sceneIntersect(opts.scene, box, opt, group),
-    expr: (code) => compileIn(bindRuntime, code),
+    intersect: (box, opt, group) => part('intersect').sceneIntersect(opts.scene, box, opt, group),
+    expr: (code) => compileIn('', code),
   }
-  const compiledExprs = new WeakMap<ExpressionRuntime, Map<string, CompiledExpr>>()
-  const compileIn = (rt: ExpressionRuntime, code: string): CompiledExpr => {
-    let cache = compiledExprs.get(rt)
-    if (!cache) compiledExprs.set(rt, (cache = new Map()))
+  myShell.current.set('', bindRuntime)
+  /** An expression of the scope `key` (`''`: the view's), compiled once per shell against the shell's runtime of that scope. */
+  const compileIn = (key: string, code: string): CompiledExpr => {
+    let cache = myShell.compiled.get(key)
+    if (!cache) myShell.compiled.set(key, (cache = new Map()))
     let f = cache.get(code)
-    if (!f) cache.set(code, (f = compileExpr(code, rt)))
+    if (!f) {
+      let rt = myShell.forwarders.get(key)
+      if (!rt) myShell.forwarders.set(key, (rt = forwarding(() => myShell.current.get(key)!)))
+      cache.set(code, (f = compileExpr(code, rt)))
+    }
     return f
   }
   /** A scale as a handler of `scope` sees it: the scales its group (and the groups around it) declare, then the view's. */
@@ -685,9 +731,10 @@ function bindSignalEventsDefs(
         ...bindRuntime,
         inScope: (item) => scope.hasContent && itemWithin(item, scope.group),
         scale: (name) => scaleIn(scope, name),
-        expr: (code) => compileIn(made, code),
+        expr: (code) => compileIn(scopeKey(scope), code),
       }
       scopeRuntimes.set(scope, (rt = made))
+      myShell.current.set(scopeKey(scope), made)
     }
     return rt
   }
@@ -819,56 +866,70 @@ function bindSignalEventsDefs(
   // ---- event extension (vega-view events-extend.js) ----------------------------
   const viewFacade = {
     signal: (name: string) => read(name),
-    width: () => svg.clientWidth,
-    height: () => svg.clientHeight,
+    width: () => el.clientWidth,
+    height: () => el.clientHeight,
   }
-  const pointOf = (e: ExtEvent): [number, number] => {
-    const t = (e as unknown as { changedTouches?: ArrayLike<{ clientX: number; clientY: number }> }).changedTouches
-    const src = t ? t[0]! : (e as unknown as { clientX: number; clientY: number })
-    const [x, y] = clientToSvg(svg, src.clientX, src.clientY)
+  /** A client point in view coordinates (the view's origin, inside its padding). */
+  const viewPoint = (src: { clientX: number; clientY: number }): [number, number] => {
+    const [x, y] = clientToSvg(el, src.clientX, src.clientY)
     return [x - originX, y - originY]
   }
+  const clientPoint = (e: ExtEvent): { clientX: number; clientY: number } => {
+    const t = (e as unknown as { changedTouches?: ArrayLike<{ clientX: number; clientY: number }> }).changedTouches
+    return t ? t[0]! : (e as unknown as { clientX: number; clientY: number })
+  }
+  const pointOf = (e: ExtEvent): [number, number] => viewPoint(clientPoint(e))
   const sceneInfo = opts.scene ? sceneIndex(opts.scene) : null
 
-  const resolveItem = (e: ExtEvent): object | undefined => {
-    let picked: PickedItem | null | undefined
-    // a legend's marks are named by the spec (`<field>_legend_symbols`...) and carry their entry as datum: the DOM says so
-    const inLegend = typeof (e.target as Element | null)?.closest === 'function' && (e.target as Element).closest('.role-legend') != null
-    if (inLegend) {
-      picked = domPick(svg, e.target)
-      if (picked && !picked.group && sceneInfo) picked.group = sceneInfo.root()
-      // the entry (the datum) is the scene item under the pointer: the rendered markup carries no stamp of it
-      if (picked && opts.pick) {
-        const p = pointOf(e)
-        const hit = opts.pick(p[0] + originX, p[1] + originY)
-        if (hit && (hit.item as { datum?: unknown }).datum != null) picked.item = hit.item
-      }
-    }
-    if (!picked && opts.pick) {
-      const p = pointOf(e)
+  /** The scene item under a client point (described: its mark, its groups), from the scene hit index; null for none. */
+  const resolveAt = (src: { clientX: number; clientY: number }): PickedItem | null => {
+    let picked: PickedItem | null = null
+    const p = viewPoint(src)
+    if (opts.pick) {
+      // the scene hit index decides what the item is, as vega's pick does: the rendered markup carries no stamp of it, and a
+      // DOM element the browser finds where the scene's geometry has nothing (a glyph past the text's box) is not an item
       const hit = opts.pick(p[0] + originX, p[1] + originY)
       picked = hit ? { marktype: hit.marktype, ...hit } as PickedItem : null
-      if (picked && sceneInfo) picked = sceneInfo.describe(picked)
+      if (picked && sceneInfo) picked = describeIn(sceneInfo, picked)
     }
-    // no picker, or it found nothing under the pointer (e.g. no layout): what the DOM under the event says
-    if (!picked) picked = domPick(svg, e.target)
-    // the painted frame of the view is the root group's background: vega picks it, so over the empty plot the item is the root group
-    if (!picked && opts.scene && sceneInfo && (opts.scene.frameFill || opts.scene.frameStroke || opts.scene.frameFillTransparent)) {
-      const [px, py] = pointOf(e)
-      const w = opts.scene.plotWidth ?? opts.scene.width
-      const h = opts.scene.plotHeight ?? opts.scene.height
-      if (px >= 0 && py >= 0 && px <= w && py <= h) picked = sceneInfo.root()
-    }
-    return picked ? itemFacade(picked) : undefined
+    picked ??= frameAt(p)
+    if (picked && opts.scene) pickedFrom.set(picked, opts.scene)
+    return picked
+  }
+  /** The painted frame of the view is the root group's background: vega picks it, so over the empty plot the item is the root group. */
+  const frameAt = (p: [number, number]): PickedItem | null => {
+    const sc = opts.scene
+    if (!sc || !sceneInfo || !(sc.frameFill || sc.frameStroke || sc.frameFillTransparent)) return null
+    const w = sc.plotWidth ?? sc.width
+    const h = sc.plotHeight ?? sc.height
+    return p[0] >= 0 && p[1] >= 0 && p[0] <= w && p[1] <= h ? sceneInfo.root() : null
   }
 
-  /** The events already extended: several scopes' streams receive the same event, which is resolved (item, coordinates) once. */
-  const extendedEvents = new WeakSet<object>()
-  const extend = (e: ExtEvent, withItem: boolean): ExtEvent => {
-    if (extendedEvents.has(e)) return e
-    extendedEvents.add(e)
+  /** `event.item` of an event the renderer left to the loop: the item under its point (no picker: what the DOM under it says). */
+  const resolveItem = (e: ExtEvent): PickedItem | null => {
+    if (opts.pick) return resolveAt(clientPoint(e))
+    // no picker: what the DOM under the event says (a legend's marks are named by the spec, `<field>_legend_symbols`...)
+    const picked = domPick(el, e.target)
+    const inLegend = typeof (e.target as Element | null)?.closest === 'function' && (e.target as Element).closest('.role-legend') != null
+    if (picked && inLegend && !picked.group && sceneInfo) picked.group = sceneInfo.root()
+    return picked ?? frameAt(pointOf(e))
+  }
+
+  /**
+   * The events already extended, with the item they were extended with: several scopes' streams receive the same event, which
+   * is resolved (item, coordinates) once. A canvas hands one native event over several times (a pointermove is also the
+   * pointerout of the item it leaves and the pointerover of the one it enters), each time about its own item: vega extends
+   * it again each time.
+   */
+  const extendedEvents = new WeakMap<object, PickedItem | null | undefined>()
+  const extend = (e: ExtEvent, withItem: boolean, given?: PickedItem | null): ExtEvent => {
+    if (extendedEvents.has(e) && extendedEvents.get(e) === given) return e
+    extendedEvents.set(e, given)
     const point = pointOf(e)
-    const item = withItem ? resolveItem(e) : undefined
+    const picked = withItem ? (given !== undefined ? given : resolveItem(e)) : undefined
+    // (vega hands its handlers the renderer's answer as it is: a canvas that picked nothing says `null`, an svg element without
+    // an item `undefined`)
+    const item = picked ? itemFacade(picked) : given === null && opts.events ? null : undefined
     const itemGroup = item
       ? (item as { mark: { marktype: string; group: object | null } }).mark.marktype === 'group' ? item : (item as { mark: { group: object | null } }).mark.group
       : null
@@ -900,6 +961,13 @@ function bindSignalEventsDefs(
     return e
   }
 
+  // The view's events, as the renderer hands them over (the SVG's by default: each about the item under its point).
+  const viewEvents = (opts.events ?? domViewEvents(el, opts.pick != null)).connect({
+    resolve: resolveAt,
+    relocate: (item) => (sceneInfo && opts.scene ? relocateIn(opts.scene, sceneInfo, item) : null),
+  })
+  detachFns.push(() => viewEvents.disconnect())
+
   // ---- stream construction (vega-parser parseStream + vega-runtime stream.js) ---
   const filterFn = (code: string, scope: Scope | null): ((e: ExtEvent) => boolean) => {
     const f = runtimeFor(scope).expr(code)
@@ -929,10 +997,10 @@ function bindSignalEventsDefs(
     const s = new Stream()
     rootStreams.set(key, s)
     /** The one run a delivery of `e` to this root stream is. */
-    const deliverTo = (stream: Stream, e: ExtEvent, viaView: boolean, native: Event): void => {
+    const deliverTo = (stream: Stream, e: ExtEvent, viaView: boolean, native: Event, item?: PickedItem | null): void => {
       run(() => {
         if (viaView && preventsEvent(preventDefaults, hooks.preventDefault === true, String(type))) native.preventDefault?.()
-        stream.receive(extend(e, viaView))
+        stream.receive(extend(e, viaView, item))
       })
     }
     if (source === 'timer') {
@@ -944,9 +1012,9 @@ function bindSignalEventsDefs(
       if (!st) {
         const fresh: TimerState = { timer: undefined as unknown as Timer, deliver: null }
         let wasConnected = false
-        fresh.timer = timers.interval((elapsed) => {
+        fresh.timer = part('timer').timers.interval((elapsed) => {
           // an owner that has left the document no longer ticks (a host that forgot `release`)
-          const connected = (owner as Partial<Node>).isConnected ?? svg.isConnected
+          const connected = (owner as Partial<Node>).isConnected ?? el.isConnected
           if (connected) wasConnected = true
           else if (wasConnected) {
             releaseOwner(owner)
@@ -975,12 +1043,13 @@ function bindSignalEventsDefs(
     if (!streams) {
       const list: Stream[] = (streams = [])
       domStreams.set(listenKey, list)
-      const deliver = (e: ExtEvent, viaView: boolean, native: Event): void => {
+      const deliver = (e: ExtEvent, viaView: boolean, native: Event, item?: PickedItem | null): void => {
         batching++
-        try { for (const stream of list) deliverTo(stream, e, viaView, native) } finally { if (--batching === 0) flushNotified() }
+        try { for (const stream of list) deliverTo(stream, e, viaView, native, item) } finally { if (--batching === 0) flushNotified() }
       }
       if (source === 'view') {
-        addListener(svg, String(type), (e) => deliver(e as ExtEvent, true, e))
+        // (vega's handlers say which of the types they listen to an event was handed over as: `event.vegaType`)
+        viewEvents.on(String(type), (e, item, vegaType) => { defineExt(e, 'vegaType', vegaType ?? String(type)); deliver(e as ExtEvent, true, e, item) })
       } else if (source === 'window') {
         if (typeof window !== 'undefined') addListener(window, String(type), (e) => deliver(e as ExtEvent, false, e))
         else logger.warn('Can not resolve event source: window')
@@ -1092,7 +1161,7 @@ function bindSignalEventsDefs(
             if (!target && !rootNames.has(signal.name)) throw new Error(`No prior signal definition for "outer" push: "${signal.name}"`)
           }
           const upd = updateOf(on)
-          const { streams, sources } = normalizeEvents(on.events, scope ? 'scope' : 'view')
+          const { streams, sources } = eventsOf(on, scope ? 'scope' : 'view')
           const force = on.force === true
           const keyBase = `${scope ? scope.id : ''}|${si}:${signal.name}:${oi}:${JSON.stringify(on.events)}`
           const rt = runtimeFor(scope)
@@ -1183,7 +1252,7 @@ function bindSignalEventsDefs(
         const cs = pulsed.get(name)
         if (!cs) return
         pulsed.delete(name)
-        inputRows.set(name, applyChangeset(rawOf(name), cs))
+        inputRows.set(name, part('modify').applyChangeset(rawOf(name), cs, writable))
         liveRows.delete(name)
         notified.edited.add(name)
       })
@@ -1290,8 +1359,8 @@ function bindSignalEventsDefs(
   // A scale event is a scale that was recomputed. The host binds again after every render, so the scales of this
   // scene are compared with those the loop saw last: a scale that differs fires its handlers, as one run.
   if (scaleHandlers.length) {
-    const seen = scaleSnapshots.get(svg) ?? new Map<string, string>()
-    scaleSnapshots.set(svg, seen)
+    const seen = scaleSnapshots.get(el) ?? new Map<string, string>()
+    scaleSnapshots.set(el, seen)
     const changed = new Set<string>()
     for (const name of new Set(scaleHandlers.flatMap((h) => [...h.scales]))) {
       const now = scaleImage(sceneRuntime.scale(name))
@@ -1341,11 +1410,109 @@ function itemFacade(p: PickedItem): object {
     get group(): object | null { return p.group ? itemFacade(p.group) : null },
     ...(p.node ? { [MARK_NODE]: p.node } : {}),
   }
-  return Object.create(p.item, { mark: { value: mark, enumerable: true }, [TUPLE_ID]: { value: true } }) as object
+  const facade = Object.create(p.item, {
+    mark: { value: mark, enumerable: true },
+    ...(p.items !== undefined ? { items: { value: p.items, enumerable: true } } : {}),
+  }) as object
+  markTupleAlways(facade)
+  return facade
+}
+
+/**
+ * The SVG renderer's events: every DOM event of the element, about the item of the element the browser dispatched it to, which
+ * is the item under its point (the loop resolves it), except for the events of the pointer leaving an element: those are about
+ * the element left, which the scene hit index (`picked`) finds under the pointer's last position over the svg. (Without a picker
+ * the loop reads the item off the element an event is dispatched to, which is the one left.)
+ */
+function domViewEvents(target: Element, picked: boolean): ViewEvents {
+  if (picked) trackPointer(target)
+  return {
+    connect: (scene) => {
+      const off: Array<() => void> = []
+      return {
+        on(type, send) {
+          const left = picked && LEAVING.has(type)
+          const listener = (e: Event): void => {
+            const last = left ? lastPointer.get(target) : undefined
+            send(e, last ? scene.resolve(last) : undefined)
+          }
+          target.addEventListener(type, listener)
+          off.push(() => target.removeEventListener(type, listener))
+        },
+        disconnect() { for (const f of off.splice(0)) f() },
+      }
+    },
+  }
+}
+/** The events a pointer leaving an element is dispatched as (to the element it leaves). */
+const LEAVING = new Set(['pointerout', 'mouseout', 'dragleave'])
+/** Where the pointer last was over an svg (client coordinates): a pointer that leaves an item left the item there. */
+const lastPointer = new WeakMap<Element, { clientX: number; clientY: number }>()
+const tracked = new WeakSet<Element>()
+function trackPointer(target: Element): void {
+  if (tracked.has(target)) return
+  tracked.add(target)
+  const keep = (e: Event): void => {
+    const m = e as MouseEvent
+    lastPointer.set(target, { clientX: m.clientX, clientY: m.clientY })
+  }
+  // (the boundary events of a move, pointer and mouse ones, are dispatched before its pointermove: what this holds then is the
+  // position before the move)
+  for (const t of ['pointermove', 'pointerdown', 'mousemove']) target.addEventListener(t, keep, { passive: true })
+}
+
+/** The scene a resolved item belongs to, so a later binding can find what stands for it in its own scene. */
+const pickedFrom = new WeakMap<PickedItem, SceneRoot>()
+
+/** A hit, described as `event.item` needs it: its mark's type, name and role, its enclosing groups (and a legend entry's marks). */
+function describeIn(info: SceneIndex, hit: PickedItem): PickedItem {
+  const picked = info.describe(hit)
+  // vega's legend entry is a group item holding its symbol and its label (`item().items[0].items[0].datum.value`)
+  if ((picked.item as SceneItem)._part === 'entry') picked.items = info.entryMarks(picked.item as SceneItem)
+  return picked
+}
+
+/**
+ * The item of `scene` that `old` (resolved by an earlier binding) stands for, or null when it is gone. vega's items persist across
+ * renders, an item being its mark's item for the same tuple, and a removed one exits; Aster evaluates each scene afresh, with no
+ * tuple ids, so the item is looked for where it was: in the mark at the same place in the scene (the same marks and groups down to
+ * it, of the same type, name and role), the item with the same datum (the same row object), else the item at the same position
+ * whose datum holds the same values (a row the evaluation copied).
+ */
+function relocateIn(scene: SceneRoot, info: SceneIndex, old: PickedItem): PickedItem | null {
+  const from = pickedFrom.get(old)
+  if (from === undefined) return null
+  if (from === scene) return old
+  const before = sceneIndex(from)
+  if (old === before.root()) return info.root()
+  const path = before.pathOf(old.item)
+  if (!path) return null
+  const index = path[path.length - 1]!
+  const siblings = (path.length > 1 ? (info.at(path.slice(0, -1)) as SceneGroup | undefined)?.items : scene.items) as readonly SceneItem[] | undefined
+  if (!siblings) return null
+  const datum = (old.item as SceneItem).datum
+  let node: SceneItem | undefined
+  if (datum !== null && typeof datum === 'object') for (const it of siblings) if (it.datum === datum) { node = it; break }
+  if (node === undefined && sameValues(siblings[index]?.datum, datum)) node = siblings[index]
+  if (node === undefined) return null
+  const now = describeIn(info, { item: node, marktype: old.marktype })
+  if (now.marktype !== old.marktype || now.name !== old.name || now.role !== old.role) return null
+  pickedFrom.set(now, scene)
+  return now
+}
+
+/** Two datums of the same row: the same value, or objects whose own fields hold the same values. */
+function sameValues(a: unknown, b: unknown): boolean {
+  if (a === b) return true
+  if (a === null || b === null || typeof a !== 'object' || typeof b !== 'object') return false
+  const ka = Object.keys(a)
+  if (ka.length !== Object.keys(b).length) return false
+  for (const k of ka) if (!Object.is((a as Record<string, unknown>)[k], (b as Record<string, unknown>)[k]) || !Object.hasOwn(b, k)) return false
+  return true
 }
 
 /** `event.item` recovered from the DOM: the `data-datum` stamp and the mark container's classes. */
-function domPick(svg: SVGSVGElement, target: EventTarget | null): PickedItem | null {
+function domPick(svg: Element, target: EventTarget | null): PickedItem | null {
   let el = target as Element | null
   let datum: unknown
   let found = false
@@ -1376,31 +1543,86 @@ function domPick(svg: SVGSVGElement, target: EventTarget | null): PickedItem | n
 }
 
 /** Parent links of a scene, so a picked item can report its mark and enclosing groups (built once, lazily). */
-const sceneIndexes = new WeakMap<SceneRoot, ReturnType<typeof buildSceneIndex>>()
-function sceneIndex(scene: SceneRoot): ReturnType<typeof buildSceneIndex> {
+const sceneIndexes = new WeakMap<SceneRoot, SceneIndex>()
+function sceneIndex(scene: SceneRoot): SceneIndex {
   let idx = sceneIndexes.get(scene)
   if (!idx) sceneIndexes.set(scene, (idx = buildSceneIndex(scene)))
   return idx
 }
 
-function buildSceneIndex(scene: SceneRoot): { describe: (p: PickedItem) => PickedItem; root: () => PickedItem } {
-  let parents: WeakMap<object, SceneGroup> | null = null
-  const ensure = (): WeakMap<object, SceneGroup> => {
-    if (parents) return parents
-    const map = new WeakMap<object, SceneGroup>()
-    const walk = (g: SceneGroup): void => {
-      for (const c of g.items ?? []) {
-        map.set(c, g)
-        if (Array.isArray((c as SceneGroup).items)) walk(c as SceneGroup)
-      }
+/** A group node's children split by kind: the groups among them, and the leaves (kept with an engine node: see scene-registry.ts). */
+interface NodeShape { groups: SceneGroup[]; leaves: ReadonlySet<object> | null }
+const NODE_SHAPES = new WeakMap<object, { shape: NodeShape; root: object }>()
+function shapeOf(g: SceneGroup, root: object): NodeShape {
+  const kept = NODE_SHAPES.get(g)
+  if (kept !== undefined && keptInto(kept.root, root)) return kept.shape
+  const groups: SceneGroup[] = []
+  let leaves: Set<object> | null = null
+  for (const c of g.items ?? []) {
+    if (c === null || typeof c !== 'object') continue
+    if (Array.isArray((c as SceneGroup).items)) groups.push(c as SceneGroup)
+    else (leaves ??= new Set()).add(c)
+  }
+  const shape = { groups, leaves }
+  if (isEngineNode(g)) NODE_SHAPES.set(g, { shape, root })
+  return shape
+}
+
+/**
+ * The parent of a node of the scene (the group whose `items` hold it), found without walking the leaves of every mark: the scene's
+ * group nodes are walked once (they are few), and a leaf is looked up in the leaf sets of the groups that hold leaves, which an
+ * engine node keeps for its lifetime (for the later scenes that keep it, see `keptInto`). What a pointer event needs of a scene
+ * costs what the scene made anew, not what it holds.
+ */
+function parentFinder(scene: SceneRoot): (node: object) => SceneGroup | undefined {
+  const groupParent = new Map<object, SceneGroup>()
+  const holders: Array<[SceneGroup, ReadonlySet<object>]> = []
+  const walk = (g: SceneGroup, depth: number): void => {
+    const shape = shapeOf(g, scene)
+    if (shape.leaves !== null) holders.push([g, shape.leaves])
+    if (depth > 256) return
+    for (const c of shape.groups) {
+      if (!groupParent.has(c)) groupParent.set(c, g)
+      walk(c, depth + 1)
+
+
     }
-    for (const r of scene.items) walk(r)
-    return (parents = map)
+  }
+  for (const r of scene.items) walk(r, 0)
+  const found = new Map<object, SceneGroup | undefined>()
+  return (node) => {
+    const g = groupParent.get(node)
+    if (g !== undefined) return g
+    if (found.has(node)) return found.get(node)
+    let out: SceneGroup | undefined
+    for (const [h, leaves] of holders) if (leaves.has(node)) { out = h; break }
+    found.set(node, out)
+    return out
+  }
+}
+
+interface SceneIndex {
+  describe: (p: PickedItem) => PickedItem
+  root: () => PickedItem
+  entryMarks: (box: SceneItem) => object[]
+  /** Where a node sits: its index in the scene's items, then in each group's items down to it; null when it is not in the scene. */
+  pathOf: (node: object) => number[] | null
+  /** The node at a place `pathOf` gave (of this scene or another), or undefined. */
+  at: (path: readonly number[]) => object | undefined
+}
+
+function buildSceneIndex(scene: SceneRoot): SceneIndex {
+  let parents: { get: (node: object) => SceneGroup | undefined } | null = null
+  const ensure = (): { get: (node: object) => SceneGroup | undefined } => {
+    if (parents) return parents
+    return (parents = { get: parentFinder(scene) })
   }
   const isMark = (g: SceneGroup): boolean => g.marktype !== undefined && g.marktype !== 'group'
+  /** The name the spec gave a mark: vega's `item.mark.name` (the scene calls a mark the spec did not name `marks`). */
+  const specName = (g: SceneGroup): string | undefined => g.cssName
   /** The group mark a group item belongs to, as vega has it: a mark holding the group items of that name (the cells of a facet). The scene keeps no such wrapper. */
   const groupMarkOf = (g: SceneGroup, parent: SceneGroup | undefined): object => {
-    const mark = { marktype: 'group', name: g.name, role: g.role } as { items?: unknown[] }
+    const mark = { marktype: 'group', name: specName(g), role: g.role } as { items?: unknown[] }
     Object.defineProperty(mark, 'items', {
       enumerable: true,
       get: () => ((parent ? parent.items : scene.items) ?? []).filter((i) => (i as SceneGroup).marktype === 'group' && (i as SceneGroup).name === g.name),
@@ -1411,7 +1633,7 @@ function buildSceneIndex(scene: SceneRoot): { describe: (p: PickedItem) => Picke
   const groupPick = (g: SceneGroup): PickedItem => ({
     item: g,
     marktype: 'group',
-    name: g.name,
+    name: specName(g),
     role: g.role,
     get group(): PickedItem | null { return enclosing(g) },
   } as PickedItem)
@@ -1423,8 +1645,47 @@ function buildSceneIndex(scene: SceneRoot): { describe: (p: PickedItem) => Picke
     while (p && isMark(p)) p = map.get(p)
     return p ? groupPick(p) : rootGroup
   }
+  /**
+   * The marks of the legend entry a box stands for, as vega's entry group holds them: its symbol mark, then its label mark, each
+   * with the entry's one item. The scene keeps an entry's leaves after its box, in that order.
+   */
+  const entryMarks = (box: SceneItem): object[] => {
+    const leaves = (ensure().get(box)?.items ?? []) as SceneItem[]
+    const symbols: SceneItem[] = []
+    const labels: SceneItem[] = []
+    for (let i = leaves.indexOf(box) + 1; i > 0 && i < leaves.length && leaves[i]!._part !== 'entry'; i++) {
+      if (leaves[i]!._part === 'symbol') symbols.push(leaves[i]!)
+      else if (leaves[i]!._part === 'label') labels.push(leaves[i]!)
+    }
+    return [{ marktype: 'symbol', role: 'legend-symbol', items: symbols }, { marktype: 'text', role: 'legend-label', items: labels }]
+  }
+  const pathOf = (node: object): number[] | null => {
+    const map = ensure()
+    const path: number[] = []
+    for (let n = node; ;) {
+      const parent = map.get(n)
+      const i = ((parent ? parent.items : scene.items) as readonly object[] | undefined)?.indexOf(n) ?? -1
+      if (i < 0) return null
+      path.push(i)
+      if (!parent) return path.reverse()
+      n = parent
+    }
+  }
+  const at = (path: readonly number[]): object | undefined => {
+    let list: readonly object[] | undefined = scene.items
+    let node: object | undefined
+    for (const i of path) {
+      node = list?.[i]
+      if (node === undefined) return undefined
+      list = (node as SceneGroup).items
+    }
+    return node
+  }
   return {
     root: () => rootGroup,
+    entryMarks,
+    pathOf,
+    at,
     describe: (p) => {
       const map = ensure()
       const container = map.get(p.item)
@@ -1432,17 +1693,35 @@ function buildSceneIndex(scene: SceneRoot): { describe: (p: PickedItem) => Picke
       const m = (p.item as SceneItem).mark
       // a picked group item (a facet cell, a nested view) names its own mark: vega's `item.mark.name` / `.role`
       const own = markGroup === undefined && (p.item as SceneGroup).marktype === 'group' ? (p.item as SceneGroup) : undefined
+      // a part of an axis or a legend: vega's mark of that part (`axis-label`, `legend-symbol`...), named as the spec named it
+      const part = markGroup === undefined && container !== undefined ? guidePart(container, p.item as SceneItem) : undefined
       return {
         item: p.item,
         marktype: markGroup?.marktype ?? p.marktype,
-        name: markGroup?.name ?? m?.name ?? own?.name,
-        role: markGroup?.role ?? m?.role ?? own?.role,
+        name: markGroup ? specName(markGroup) : part ? part.name : m?.name ?? (own ? specName(own) : undefined),
+        role: markGroup?.role ?? part?.role ?? m?.role ?? own?.role,
         // (a group item's mark: vega's group mark holds it and its siblings of the same name)
         ...((p.item as SceneGroup).marktype === 'group' ? { node: groupMarkOf(p.item as SceneGroup, container) } : {}),
         get group(): PickedItem | null { return enclosing(markGroup ?? p.item) },
       } as PickedItem
     },
   }
+}
+
+/** vega's roles of the marks of a guide's parts (vega-parser guides): an entry box stands for the entry's group item (`scope`). */
+const GUIDE_PART_ROLES: Record<string, Record<string, string>> = {
+  axis: { tick: 'axis-tick', label: 'axis-label', grid: 'axis-grid', domain: 'axis-domain', title: 'axis-title', bg: 'axis' },
+  legend: { symbol: 'legend-symbol', label: 'legend-label', title: 'legend-title', entry: 'scope', gradient: 'legend-gradient', band: 'legend-band', bg: 'legend' },
+}
+
+/** The role and the spec's name of the guide mark a leaf of an axis or a legend belongs to, or undefined for any other leaf. */
+function guidePart(guide: SceneGroup, leaf: SceneItem): { role: string; name: string | undefined } | undefined {
+  if ((guide as { _scope?: boolean })._scope === true || (guide.role !== 'axis' && guide.role !== 'legend')) return undefined
+  const part = leaf._part
+  const role = part !== undefined ? GUIDE_PART_ROLES[guide.role]![part] : undefined
+  if (role === undefined) return undefined
+  const key = part === 'entry' ? 'entries' : part === 'bg' ? guide.role : part!
+  return { role, name: guide.partMeta?.[key]?.name }
 }
 
 /**
@@ -1483,14 +1762,15 @@ export function stampDatumAttrs(items: SceneNode[]): void {
 /**
  * High-level helper for hosts: bind the event loop for an evaluated scene.
  * Uses the scene's own runtime/compiled-chart/signal metadata, so the caller
- * only needs the svg element, the scene, the signal store, and hooks.
+ * only needs the rendered element (the svg, or the canvas with `opts.events`
+ * from `createCanvasEvents`), the scene, the signal store, and hooks.
  */
 export function bindSceneSignals(
-  svg: SVGSVGElement,
+  el: Element,
   scene: SceneRoot,
   signals: Record<string, unknown>,
   hooks: SignalEventHooks = {},
-  opts: Pick<SignalBindOptions, 'pick' | 'data' | 'owner' | 'containerSize'> = {},
+  opts: Pick<SignalBindOptions, 'pick' | 'data' | 'owner' | 'containerSize' | 'events'> = {},
 ): SignalBinding {
   const chart = (scene as unknown as { compiled?: CompiledChart }).compiled
   const runtime = scene.runtime as ExpressionRuntime | undefined
@@ -1500,7 +1780,7 @@ export function bindSceneSignals(
     return { detach: () => {}, release: () => {}, setSignal: () => {} }
   }
   return bindSignalEvents(
-    svg,
+    el,
     chart,
     runtime,
     signalParams,
@@ -1509,13 +1789,3 @@ export function bindSceneSignals(
     { originX: scene.padding?.left ?? 0, originY: scene.padding?.top ?? 0, scene, ...opts },
   )
 }
-
-/** @internal vega-scenegraph's intersect over the scene (the `intersect()` expression function's body); exported for the conformance gate. */
-export { sceneIntersect } from './scene-intersect.js'
-
-/**
- * Drive the shared scheduler, and so every `timer` event stream, from `clock` instead of the host's globals; `null` goes
- * back to them. The determinism seam: a test, or a host that steps frames itself, installs a controlled clock. Swap it
- * only while no timer is live: a timer's pending wake-up belongs to the clock it was scheduled on.
- */
-export { setTimerClock, type TimerClock } from './timer.js'

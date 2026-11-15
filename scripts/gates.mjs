@@ -52,19 +52,19 @@ export const GATES = [
   { name: 'batch', args: ['conformance:batch'], tags: ['browser'], why: 'batched-SVG pixel parity (denseMarks vs per-item)' },
   {
     name: 'signals-browser', args: ['conformance:signals'], tags: ['browser'],
-    why: 'signal event streams (selectors, between, filters, throttle, consume, native event) vs real vega in Chromium',
+    why: 'signal event streams (selectors, between, filters, throttle, consume, native event, the item an event is about) vs real vega in Chromium, on its svg and its canvas renderer',
   },
   {
     name: 'selections-browser', args: ['conformance:selections'], tags: ['browser'],
-    why: 'Vega-Lite selections: the same native input (click, shift-click, drag, wheel, legend click, bound inputs, nearest, bound scales) through vega-lite + real vega and through @aster-charts/vl + <Chart>; signals, selection stores and SVG compared after every step',
+    why: 'Vega-Lite selections: the same native input (click, shift-click, drag, wheel, legend click, bound inputs, nearest, bound scales) through vega-lite + real vega and through @aster-charts/vl + <Chart>, on the svg and the canvas renderer; signals, selection stores and SVG (or canvas pixels) compared after every step',
   },
   {
     name: 'intersect-browser', args: ['conformance:intersect'], tags: ['browser'],
-    why: 'the intersect() expression function (vega-lite geo interval selections) over every mark type, boxes and filters vs real vega in Chromium (arc and path outlines need a canvas context)',
+    why: 'the intersect() expression function (vega-lite geo interval selections) over every mark type, boxes and filters vs real vega in Chromium (arc and path outlines need a canvas context), directly and through the event loop on each renderer',
   },
   {
     name: 'react-browser', args: ['--filter', '@aster-charts/react', 'run', 'test:browser'], tags: ['browser'],
-    why: '<Chart> and <SvgChart interaction> pointer/keyboard interaction, selection, pan/zoom, signal.on, bound inputs and the a11y overlay in a real Chromium; <SvgChart> without interaction renders and reports the missing event loop; a `transition` draws real frames and settles on the exact final svg',
+    why: '<Chart> (svg and canvas) and <SvgChart interaction> pointer/keyboard interaction, selection, pan/zoom, signal.on, bound inputs and the a11y overlay in a real Chromium; <SvgChart> without interaction renders and reports the missing event loop; a `transition` draws real frames and settles on the exact final svg',
   },
   {
     name: 'browser-conformance', args: ['conformance:browser'], tags: ['browser'],

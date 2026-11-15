@@ -9,7 +9,7 @@
  * it) instead of by orientation.
  */
 import type { EncodeValue, SceneItem } from './types.js'
-import { lerp, sortData } from './util.js'
+import { lerp, markTuple, markTuples, sortData } from './util.js'
 import { Bounds, boundLeaf, boundStroke, multiLineOffset } from './bounds.js'
 import {
   ONE, ZERO, contentKey, customize, encodeItem, encodeItems, encodes, entryOf, isShareable, isSignal, joinByValue, keyPart, mergeUserEncode,
@@ -510,6 +510,7 @@ export function buildAxis(inp: AxisBuildInput): AxisBuilt {
   const { host, style } = inp
   const defs = axisDefs(inp)
   const datum: Row = { scale: inp.scale, ...defs.flags }
+  markTuple(datum)
   const group = encodeItem(defs.groupDef, datum, {}, host, style) as unknown as Rec
 
   const leaves: SceneItem[] = []
@@ -529,11 +530,15 @@ export function buildAxis(inp: AxisBuildInput): AxisBuilt {
       joined ??= inp.distinctTicks ? inp.ticks : joinByValue(inp.ticks)
       rows = joined
     }
+    markTuples(rows)
     def.seed ??= { _kind: def.type === 'text' ? 'text' : 'rule', _part: part }
     const items = encodeItems(def, rows, group, host, style)
     // the tick value a grid line, tick or label stands for: what a transition between two scenes matches it by (no renderer
     // draws it)
     if (onTicks && items.length === rows.length) for (let i = 0; i < items.length; i++) items[i]!.__tick = rows[i]!.value
+    // the item carries the tuple it was made from (vega's tick tuple, or the axis datum for the domain and the title): what
+    // `event.item.datum` and a tooltip handler see when the part is interactive
+    if (items.length === rows.length) for (let i = 0; i < items.length; i++) items[i]!.datum = rows[i]
     let extent: Bounds | null = def.overlap ? thinOverlaps(items, rows, def.overlap, host, boxOf) : null
     // the layout reads the extent of the ticks, the labels and the title only: a grid of a thousand lines is not measured
     if (!extent && (part === 'tick' || part === 'label' || part === 'title')) {
@@ -549,7 +554,9 @@ export function buildAxis(inp: AxisBuildInput): AxisBuilt {
   const userAxis = inp.encode.axis
   partMeta.axis = { name: userAxis?.name ? String(userAxis.name) : undefined, interactive: !!userAxis?.interactive }
 
-  const bounds = inp.raw ? new Bounds() : layoutAxis(group, titleItem, extents, inp.width, inp.height)
+  // (vega-view-transforms lays a group's axes out on its size as `Math.max(0, width)`: a view laid out on a negative range keeps its
+  // right and bottom axes at 0)
+  const bounds = inp.raw ? new Bounds() : layoutAxis(group, titleItem, extents, Math.max(0, inp.width), Math.max(0, inp.height))
 
   // the leaves were made in the group's frame; the scene holds them in the view's
   const gx = (group.x as number) || 0
