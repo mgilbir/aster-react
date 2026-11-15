@@ -21,7 +21,7 @@ import { Bounds, DEG_TO_RAD, boundGroupItem, boundText, boundTypedMark } from '.
 import { textAnchor } from './text-metrics.js'
 import { itemArcGeometry } from './render.js'
 import { insidePolys, type Poly } from './path-flatten.js'
-import { arcLocalPolys, pathPolys, transformPolys } from './geometry-read.js'
+import { arcLocalPolys, pathMarkPolys, pathPolys, transformPolys } from './geometry-read.js'
 import { MARK_NODE } from './util.js'
 import { ceiling, HARD_CAPS, meterTick } from './limits.js'
 import type { SceneGroup, SceneItem, SceneRoot } from './types.js'
@@ -101,6 +101,8 @@ function outlineOf(marktype: string, item: SceneItem): Poly[] {
   }
   const sx = (it.scaleX as number) || 1
   const sy = (it.scaleY as number) || 1
+  // (a path mark's text as vega draws it, the scale in its numbers; a shape's, the engine's own, scaled as it is drawn)
+  if (marktype === 'path') return transformPolys(pathMarkPolys(String(it.path ?? ''), sx, sy), place)
   return transformPolys(pathPolys(String(it.path ?? '')), (px, py) => place(px * sx, py * sy))
 }
 

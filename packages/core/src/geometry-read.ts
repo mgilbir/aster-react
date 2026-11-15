@@ -9,7 +9,7 @@
  * from its text, exactly as before; what is computed is kept on the geometry object.
  */
 import { ArcPathWriter, ArcSegWriter } from './shape.js'
-import { parsePathData, tracePath, type PathSeg } from './path-data.js'
+import { drawnPathCommands, parsePathData, renderSvgPath, tracePath, type PathCommand, type PathSeg } from './path-data.js'
 import { Flattener, type Poly } from './path-flatten.js'
 import type { ArcGeometry, CurveGeometry, PathData, SymbolGeometry } from './geometry.js'
 
@@ -217,10 +217,32 @@ export function symbolOutline(g: SymbolGeometry): { polys: Poly[]; reach: number
 /** Untransformed polygons of a parsed path, kept as long as the parse cache keeps the segments. */
 const PATH_POLYS = new WeakMap<PathSeg[], Poly[]>()
 
-/** The polygons of a path string (a path mark's, a shape's, a scene-carried one), untransformed; parsed once per distinct string. */
+/** The polygons of a path string the engine wrote (a shape's, a guide's, a scene-carried one), untransformed; parsed once per distinct string. */
 export function pathPolys(d: string): Poly[] {
   const segs = parsePathData(d)
   let polys = PATH_POLYS.get(segs)
   if (polys === undefined) PATH_POLYS.set(segs, (polys = flattenSegs(segs)))
+  return polys
+}
+
+/** A path mark's polygons by scale (`${scaleX},${scaleY}`), kept as long as the parse cache keeps the commands. */
+const PATH_MARK_POLYS = new WeakMap<PathCommand[], Map<string, Poly[]>>()
+
+/**
+ * The polygons of a path mark's text, scaled by (sx, sy) about its origin as vega draws it (path-data.ts `renderSvgPath`: the scale
+ * is in the numbers the arcs are computed from, so a turned ellipse scaled unevenly is not the unscaled outline scaled), as far as
+ * the text reads; not moved or turned. Read once per distinct text, flattened once per scale.
+ */
+export function pathMarkPolys(d: string, sx: number, sy: number): Poly[] {
+  const commands = drawnPathCommands(d)
+  let byScale = PATH_MARK_POLYS.get(commands)
+  if (byScale === undefined) PATH_MARK_POLYS.set(commands, (byScale = new Map()))
+  const key = `${sx},${sy}`
+  let polys = byScale.get(key)
+  if (polys === undefined) {
+    const f = new Flattener(IDENTITY)
+    renderSvgPath(f, commands, 0, 0, sx, sy)
+    byScale.set(key, (polys = f.polys))
+  }
   return polys
 }

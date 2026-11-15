@@ -19,6 +19,7 @@ import { gradientDefOf, isGradientPaint as isGradientObject } from './svg-defs.j
 import { Bounds, boundLeaf, boundTypedMark } from './legacy-bounds.testlib.js'
 import { imageBox, itemImage } from './image-box.js'
 import { parsePathData, tracePath, type PathSeg, type PathSink } from './legacy-path-data.testlib.js'
+import { drawnPathCommands, renderSvgPath } from './path-data.js'
 
 // Path-data parsing and replay live in path-data.ts (hit.ts needs them without the renderer); the public surface is unchanged.
 export { parsePathData, tracePath, type PathSeg, type PathSink } from './legacy-path-data.testlib.js'
@@ -1074,11 +1075,28 @@ function renderMark(type: string, group: SceneGroup, ctx: CanvasLike, scene: Sce
       paintPath(ctx, segs, first, defs, 'auto', gradientBox(first, group))
       return
     }
-    case 'path':
+    case 'path': {
+      // (a path mark's text: what the reader and replay that vega's own parser and replay pin draw (path-reader-vs-vega.test.ts in the conformance suite), not this copy's reading of it, which drew a path mark's text by the SVG rules)
+      for (const it of group.items ?? []) {
+        if (!it.path) continue
+        const rec = it as Record<string, unknown>
+        const angle = (rec.angle as number) || 0
+        const sx = (rec.scaleX as number) || 1
+        const sy = (rec.scaleY as number) || 1
+        const commands = drawnPathCommands(it.path)
+        if (angle) buildInItemFrame(ctx, it.x || 0, it.y || 0, angle, 1, 1, () => renderSvgPath(ctx, commands, 0, 0, sx, sy))
+        else {
+          ctx.beginPath()
+          renderSvgPath(ctx, commands, it.x || 0, it.y || 0, sx, sy)
+        }
+        paintPath(ctx, parsePathData(it.path), it, defs, 'auto', gradientBox(it))
+      }
+      return
+    }
     case 'shape':
     case 'geoshape': {
-      // (only a path mark parses a path string: vega draws its arcs as beziers; a shape's geo path goes to the context directly)
-      const arcs = type === 'path' ? 'bezier' : 'exact'
+      // (a shape's geo path goes to the context directly, its arcs as arcs)
+      const arcs = 'exact'
       for (const it of group.items ?? []) {
         if (!it.path) continue
         // vega path mark: translate, rotate, then the path scaled by (scaleX||1, scaleY||1)

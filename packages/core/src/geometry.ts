@@ -532,7 +532,7 @@ const HALF_SQRT3 = Math.sqrt(3) / 2 // vega util/constants HalfSqrt3
 
 /**
  * A symbol's shape at radius `r` about the origin, as path data. vega: `symbols(item.shape || 'circle')`; any name that is not
- * a built-in shape is a custom SVG path, parsed and scaled by r (svg-path.ts), which throws vega's "Invalid SVG path" error
+ * a built-in shape is a custom SVG path, parsed and scaled by r (path-data.ts), which throws vega's "Invalid SVG path" error
  * for an invalid one.
  */
 export function symbolData(shape: string | undefined, r: number, fmt: NumberFormat): PathData {

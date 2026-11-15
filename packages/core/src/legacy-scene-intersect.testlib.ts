@@ -24,6 +24,7 @@ import { Bounds, DEG_TO_RAD, boundGroupItem, boundText, boundTypedMark } from '.
 import { textAnchor } from './text-metrics.js'
 import { itemArcPath } from './legacy-render.testlib.js'
 import { flattenPath, insidePolys } from './legacy-path-flatten.testlib.js'
+import { pathMarkPolys, transformPolys } from './geometry-read.js'
 import { MARK_NODE } from './util.js'
 import type { SceneGroup, SceneItem, SceneRoot } from './types.js'
 
@@ -103,6 +104,8 @@ function outlineOf(marktype: string, item: SceneItem): ReturnType<typeof flatten
   }
   const sx = (it.scaleX as number) || 1
   const sy = (it.scaleY as number) || 1
+  // (a path mark's text: what the reader and replay that vega's own parser and replay pin draw (path-reader-vs-vega.test.ts in the conformance suite), not this copy's reading of it, which drew a path mark's text by the SVG rules)
+  if (marktype === 'path') return transformPolys(pathMarkPolys(String(it.path ?? ''), sx, sy), place)
   return flattenPath(String(it.path ?? ''), (px, py) => place(px * sx, py * sy))
 }
 

@@ -48,10 +48,12 @@ export function parsePathData(d: string): PathSeg[] {
 
 function parsePathDataUncached(d: string): PathSeg[] {
   const segs: PathSeg[] = []
-  const re = /([MmLlHhVvCcSsQqTtAaZz])|(-?(?:\d*\.\d+|\d+)(?:[eE][+-]?\d+)?)/g
+  // (changed from the frozen copy with the merge of the path readers, core path-data.ts: a word JavaScript prints for a number that is
+  // not finite -- NaN, Infinity, -Infinity -- is read as NaN where it stands, where this copy read its letters as commands)
+  const re = /(NaN|[+-]?Infinity)|([MmLlHhVvCcSsQqTtAaZz])|(-?(?:\d*\.\d+|\d+)(?:[eE][+-]?\d+)?)/g
   let m: RegExpExecArray | null
   const tokens: string[] = []
-  while ((m = re.exec(d))) tokens.push(m[0] as string)
+  while ((m = re.exec(d))) tokens.push(m[1] !== undefined ? 'NaN' : (m[0] as string))
   let i = 0
   let cmd = ''
   const next = (): number => {

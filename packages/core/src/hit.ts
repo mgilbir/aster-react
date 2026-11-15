@@ -45,7 +45,7 @@ import { FLATTEN_TOLERANCE, insidePolys, type Poly } from './path-flatten.js'
 import { SYMBOL_DEFAULT_SIZE } from './util.js'
 import { isInert, itemArcGeometry, lineStrokeWidth } from './render.js'
 import { areaGeometry, lineGeometry, rectData, symbolGeometry, trailGeometry } from './geometry.js'
-import { arcExactSegs, arcPolys, curvePolys, flattenSegs, pathPolys, segsOf, symbolOutline, transformPolys } from './geometry-read.js'
+import { arcExactSegs, arcPolys, curvePolys, flattenSegs, pathMarkPolys, pathPolys, segsOf, symbolOutline, transformPolys } from './geometry-read.js'
 
 export interface HitTarget {
   item: SceneItem
@@ -371,14 +371,15 @@ function inFill(polys: Poly[], x: number, y: number): boolean {
   return false
 }
 
-/** The box of a path's own outline (`pathPolys`), kept with the outline (which the bounded parse cache keeps). */
+/** The box of a path's own outline (`pathPolys`, `pathMarkPolys`), kept with the outline (which the bounded parse cache keeps). */
 const LOCAL_BOXES = new WeakMap<Poly[], [number, number, number, number] | null>()
-function localPathBox(d: string): [number, number, number, number] | null {
-  const polys = pathPolys(d)
+function polysLocalBox(polys: Poly[]): [number, number, number, number] | null {
   let box = LOCAL_BOXES.get(polys)
   if (box === undefined) LOCAL_BOXES.set(polys, (box = polysBox(polys)))
   return box
 }
+const localPathBox = (d: string): [number, number, number, number] | null => polysLocalBox(pathPolys(d))
+const localPathMarkBox = (d: string, sx: number, sy: number): [number, number, number, number] | null => polysLocalBox(pathMarkPolys(d, sx, sy))
 
 /**
  * The box of an outline placed at (ox, oy) and scaled by (sx, sy) -- each point `ox + sx * x`, `oy + sy * y` -- from the box of the
@@ -902,7 +903,20 @@ export function buildHitIndex(scene: SceneRoot, cell = DEFAULT_CELL, options: Hi
         if (e) entries.push(e)
         return
       }
-      case 'path':
+      case 'path': {
+        if (!item.path) return
+        const sx = (rec(item).scaleX as number | undefined) || 1
+        const sy = (rec(item).scaleY as number | undefined) || 1
+        const path = String(item.path)
+        const angle = (rec(item).angle as number | undefined) ?? 0
+        // a path mark's text as vega draws it, the scale in the replay's numbers (`pathMarkPolys`), then moved (and turned)
+        const local = localPathMarkBox(path, sx, sy)
+        const e = angle
+          ? geomEntry(item, marktype, () => pathMarkPolys(path, sx, sy), item, { cx: tx + (item.x || 0), cy: ty + (item.y || 0), rot: angle * (Math.PI / 180) }, strokeOf(item), local && placedBox(local, 0, 0, 1, 1))
+          : geomEntry(item, marktype, () => transformPolys(pathMarkPolys(path, sx, sy), (x, y) => [tx + (item.x || 0) + x, ty + (item.y || 0) + y]), item, undefined, strokeOf(item), local && placedBox(local, tx + (item.x || 0), ty + (item.y || 0), 1, 1))
+        if (e) entries.push(e)
+        return
+      }
       case 'shape':
       case 'geoshape': {
         if (!item.path) return
@@ -913,7 +927,7 @@ export function buildHitIndex(scene: SceneRoot, cell = DEFAULT_CELL, options: Hi
         // (the outline is placed when a query first reaches its box: the box is the placed box of the path's own, see `placedBox`)
         const local = localPathBox(path)
         const e = angle
-          // vega draws a path item at translate(x, y) rotate(angle) scale(scaleX, scaleY)
+          // vega draws a shape item at translate(x, y) rotate(angle) scale(scaleX, scaleY)
           ? geomEntry(item, marktype, () => transformPolys(pathPolys(path), (x, y) => [sx * x, sy * y]), item, { cx: tx + (item.x || 0), cy: ty + (item.y || 0), rot: angle * (Math.PI / 180) }, strokeOf(item), local && placedBox(local, 0, 0, sx, sy))
           : geomEntry(item, marktype, () => transformPolys(pathPolys(path), (x, y) => [tx + (item.x || 0) + sx * x, ty + (item.y || 0) + sy * y]), item, undefined, strokeOf(item), local && placedBox(local, tx + (item.x || 0), ty + (item.y || 0), sx, sy))
         if (e) entries.push(e)

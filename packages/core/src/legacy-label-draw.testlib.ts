@@ -12,6 +12,7 @@
  */
 import type { AlphaCanvas } from './raster.js'
 import { parsePathData, tracePath } from './legacy-path-data.testlib.js'
+import { drawnPathCommands, renderSvgPath } from './path-data.js'
 import { computeAreaPath, computeLinePath, itemArcInto, rectItemPath, symbolPath, textItemDesc, trailPath } from './legacy-render.testlib.js'
 import { fontString } from './text-metrics.js'
 import type { SceneGroup, SceneItem } from './types.js'
@@ -162,7 +163,21 @@ const pathPainter = (arcs: 'bezier' | 'exact'): Painter => (pen, items) => {
     ink(pen, it)
   }
 }
-byType.path = pathPainter('bezier')
+// (a path mark's text: what the reader and replay that vega's own parser and replay pin draw (path-reader-vs-vega.test.ts in the conformance suite), not this copy's reading of it, which drew a path mark's text by the SVG rules)
+byType.path = (pen, items) => {
+  for (const it of items) {
+    if (!it.path) continue
+    const commands = drawnPathCommands(it.path)
+    const sx = it.scaleX || 1
+    const sy = it.scaleY || 1
+    if (it.angle) inFrame(pen, it.x || 0, it.y || 0, it.angle, 1, 1, () => renderSvgPath(pen, commands, 0, 0, sx, sy))
+    else {
+      pen.beginPath()
+      renderSvgPath(pen, commands, it.x || 0, it.y || 0, sx, sy)
+    }
+    ink(pen, it)
+  }
+}
 byType.shape = byType.geoshape = pathPainter('exact')
 const painters = new Map(Object.entries(byType))
 

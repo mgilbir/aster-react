@@ -36,6 +36,7 @@ import { Bounds, boundText, layoutBounds } from './legacy-bounds.testlib.js'
 import { textAnchor } from './text-metrics.js'
 import { imageBox } from './image-box.js'
 import { FLATTEN_TOLERANCE, flattenPath, insidePolys, type Poly } from './legacy-path-flatten.testlib.js'
+import { pathMarkPolys, transformPolys } from './geometry-read.js'
 import { SYMBOL_DEFAULT_SIZE } from './util.js'
 import { computeAreaPath, computeLinePath, isInert, itemArcPath, rectItemPath, symbolPathExact, trailPath } from './legacy-render.testlib.js'
 
@@ -753,7 +754,19 @@ export function buildHitIndex(scene: SceneRoot, cell = DEFAULT_CELL): HitIndex {
         if (e) entries.push(e)
         return
       }
-      case 'path':
+      case 'path': {
+        // (a path mark's text: what the reader and replay that vega's own parser and replay pin draw (path-reader-vs-vega.test.ts in the conformance suite), not this copy's reading of it, which drew a path mark's text by the SVG rules)
+        if (!item.path) return
+        const sx = (rec(item).scaleX as number | undefined) || 1
+        const sy = (rec(item).scaleY as number | undefined) || 1
+        const path = String(item.path)
+        const angle = (rec(item).angle as number | undefined) ?? 0
+        const e = angle
+          ? geomEntry(item, marktype, () => pathMarkPolys(path, sx, sy), item, { cx: tx + (item.x || 0), cy: ty + (item.y || 0), rot: angle * (Math.PI / 180) })
+          : geomEntry(item, marktype, () => transformPolys(pathMarkPolys(path, sx, sy), (x, y) => [tx + (item.x || 0) + x, ty + (item.y || 0) + y]), item)
+        if (e) entries.push(e)
+        return
+      }
       case 'shape':
       case 'geoshape': {
         if (!item.path) return

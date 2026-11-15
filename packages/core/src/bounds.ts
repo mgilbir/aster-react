@@ -312,40 +312,16 @@ function addShapeExtent(bounds: Bounds, shape: string, r: number, angle = 0): vo
 
 /**
  * The tokens of a symbol shape's full-precision path, turned by `angle` degrees: the commands and numbers of its path data
- * (geometry.ts), never its text read back. A path holding a number that does not print as one (`NaN`, `Infinity`) is
- * tokenized from its text, as it always was.
+ * (geometry.ts), never its text read back, a number that is not finite (a shape at a radius of NaN, a custom shape whose replay
+ * reflects nothing) included: the bounds take what the shape is drawn with, as vega's bound context does.
  */
 function shapeTokens(shape: string, r: number, angle: number): PathToken[] {
-  const data = symbolGeometry(shape, r).exact()
-  const tokens = data.finite ? data.tokens() : pathTokens(data.text())
-  if (!angle) return tokens
-  const turned = rotateTokens(tokens, angle)
-  return turned.every((t) => t.n.every(Number.isFinite)) ? turned : pathTokens(tokensText(turned))
+  const tokens = symbolGeometry(shape, r).exact().tokens()
+  return angle ? rotateTokens(tokens, angle) : tokens
 }
-
-const PATH_TOKEN = /([MmLlHhVvCcSsQqTtAaZz])|(-?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?)/g
 
 /** A command of path data with the numbers that follow its letter (however many there are). */
 type PathToken = { c: string; n: number[] }
-
-/** Path data as its commands, each with the numbers that follow its letter (however many there are). */
-function pathTokens(d: string): PathToken[] {
-  const tokens: PathToken[] = []
-  let current: PathToken | null = null
-  PATH_TOKEN.lastIndex = 0
-  for (let m = PATH_TOKEN.exec(d); m; m = PATH_TOKEN.exec(d)) {
-    if (m[1]) tokens.push((current = { c: m[1], n: [] }))
-    else if (current) current.n.push(parseFloat(m[2]!))
-  }
-  return tokens
-}
-
-/** Path text of tokens: each letter followed by its numbers, comma separated. */
-function tokensText(tokens: readonly PathToken[]): string {
-  let out = ''
-  for (const t of tokens) out += t.c + t.n.join(',')
-  return out
-}
 
 /**
  * Path data with every point rotated about the origin, in absolute commands. The bounds of a rotated shape come from its rotated
@@ -452,7 +428,9 @@ export function boundsFromPath(
   d: string,
   transform?: (x: number, y: number) => [number, number],
 ): Bounds {
-  return boundsFromTokens(bounds, pathTokens(d), transform)
+  // (the path reader is a part the React shells load on demand, engine-parts.ts: a spec with path marks needs it)
+  const tokens = part('svgpath').drawnPathCommands(d).map((c): PathToken => ({ c: c[0], n: c.slice(1) as number[] }))
+  return boundsFromTokens(bounds, tokens, transform)
 }
 
 /** {@link boundsFromPath} on the tokens of path data. */

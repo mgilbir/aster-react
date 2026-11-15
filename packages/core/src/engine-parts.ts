@@ -18,7 +18,7 @@ import type { buildLegend, entriesRefusal, legendType, placeLegendStack } from '
 import type { layoutFacet } from './trellis.js'
 import type { selectionIdTest, selectionResolve, selectionTest, selectionTuples } from './selections.js'
 import type { regexHazard } from './regex-screen.js'
-import type { renderSvgPath, svgPathCommands } from './svg-path.js'
+import type { drawnPathCommands, renderSvgPath, svgPathCommands } from './path-data.js'
 import type { sceneIntersect } from './scene-intersect.js'
 import type { applyChangeset, newChangeset, planModify } from './modify.js'
 import type { Timers } from './timer.js'
@@ -38,8 +38,8 @@ export interface EngineParts {
   selections: { selectionTest: typeof selectionTest; selectionIdTest: typeof selectionIdTest; selectionResolve: typeof selectionResolve; selectionTuples: typeof selectionTuples }
   /** The static screen of regular expressions (regex-screen.ts), run under limits before any pattern is compiled. */
   regex: { regexHazard: typeof regexHazard }
-  /** The SVG path reader (svg-path.ts): custom symbol shapes and the bounds of path strings. */
-  svgpath: { svgPathCommands: typeof svgPathCommands; renderSvgPath: typeof renderSvgPath }
+  /** The SVG path reader and vega's replay of it (path-data.ts): custom symbol shapes and the bounds of path strings. */
+  svgpath: { svgPathCommands: typeof svgPathCommands; drawnPathCommands: typeof drawnPathCommands; renderSvgPath: typeof renderSvgPath }
   /** The scene intersection behind the `intersect()` expression function (scene-intersect.ts). */
   intersect: { sceneIntersect: typeof sceneIntersect }
   /** The dataset edits of `modify()` and `setdata()` (modify.ts). */

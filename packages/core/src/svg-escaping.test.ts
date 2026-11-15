@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { compileChart, evaluateChart, renderSceneToSvg, renderSpec } from './index.js'
 import { patchSceneDom, renderSceneToDomElement } from './addon-dom.js'
-import { parseSvgPath } from './svg-path.js'
+import { svgPathCommands } from './path-data.js'
 import type { SceneRoot } from './types.js'
 
 // Regression + property suite for SVG string escaping.
@@ -122,7 +122,7 @@ function withChannel(channel: string, value: unknown): SceneRoot {
 function hostileFor(kind: Kind, h: string): unknown {
   if (kind === 'shape') {
     // an invalid custom path is refused (dedicated test); only paths that parse can render
-    try { parseSvgPath(h); return h } catch { return BENIGN_KIND.shape }
+    try { svgPathCommands(h); return h } catch { return BENIGN_KIND.shape }
   }
   return kind === 'dash' ? [h, h] : h
 }

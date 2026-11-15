@@ -312,7 +312,10 @@ function addShapeExtent(bounds: Bounds, shape: string, r: number, pathOf: (shape
   if (ext[0] <= ext[2] && ext[1] <= ext[3]) bounds.add(ext[0], ext[1]).add(ext[2], ext[3])
 }
 
-const PATH_TOKEN = /([MmLlHhVvCcSsQqTtAaZz])|(-?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?)/g
+// (changed from the frozen copy with the merge of the path readers, core path-data.ts: a word JavaScript prints for a number that is
+// not finite -- NaN, Infinity, -Infinity -- is read as that number where it stands, as the bounds now take a shape's numbers rather
+// than its text, where this copy read its letters as commands)
+const PATH_TOKEN = /(NaN|[+-]?Infinity)|([MmLlHhVvCcSsQqTtAaZz])|(-?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?)/g
 
 /** Path data as its commands, each with the numbers that follow its letter (however many there are). */
 function pathTokens(d: string): Array<{ c: string; n: number[] }> {
@@ -320,8 +323,9 @@ function pathTokens(d: string): Array<{ c: string; n: number[] }> {
   let current: { c: string; n: number[] } | null = null
   PATH_TOKEN.lastIndex = 0
   for (let m = PATH_TOKEN.exec(d); m; m = PATH_TOKEN.exec(d)) {
-    if (m[1]) tokens.push((current = { c: m[1], n: [] }))
-    else if (current) current.n.push(parseFloat(m[2]!))
+    if (m[1]) { if (current) current.n.push(Number(m[1])) }
+    else if (m[2]) tokens.push((current = { c: m[2], n: [] }))
+    else if (current) current.n.push(parseFloat(m[3]!))
   }
   return tokens
 }

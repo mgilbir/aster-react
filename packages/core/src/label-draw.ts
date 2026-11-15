@@ -8,7 +8,7 @@
  * must not hold it, and this module is reached through the lazily loaded transforms add-on.
  */
 import type { AlphaCanvas } from './raster.js'
-import { parsePathData, tracePath } from './path-data.js'
+import { drawnPathCommands, parsePathData, renderSvgPath, tracePath } from './path-data.js'
 import { itemArcGeometry, lineStrokeWidth, textItemDesc } from './render.js'
 import { areaGeometry, lineGeometry, rectData, symbolGeometry, trailGeometry } from './geometry.js'
 import { arcSegs, drawCurveExact, segsOf, symbolRoundedSegs } from './geometry-read.js'
@@ -158,17 +158,30 @@ const byType: Record<string, Painter> = {
   },
 }
 
-/** A path mark's arcs are cubic beziers, as a canvas draws them; the path of a shape or a geoshape goes to the canvas as it is. */
-const pathPainter = (arcs: 'bezier' | 'exact'): Painter => (pen, items) => {
+/** A path mark's text as vega draws it (path-data.ts `renderSvgPath`, as on the canvas renderer: see canvas.ts). */
+byType.path = (pen, items) => {
   for (const it of items) {
     if (!it.path) continue
-    const segs = parsePathData(it.path)
-    inFrame(pen, it.x || 0, it.y || 0, it.angle || 0, it.scaleX || 1, it.scaleY || 1, () => tracePath(pen, segs, 0, 0, arcs))
+    const commands = drawnPathCommands(it.path)
+    const sx = it.scaleX || 1
+    const sy = it.scaleY || 1
+    if (it.angle) inFrame(pen, it.x || 0, it.y || 0, it.angle, 1, 1, () => renderSvgPath(pen, commands, 0, 0, sx, sy))
+    else {
+      pen.beginPath()
+      renderSvgPath(pen, commands, it.x || 0, it.y || 0, sx, sy)
+    }
     ink(pen, it)
   }
 }
-byType.path = pathPainter('bezier')
-byType.shape = byType.geoshape = pathPainter('exact')
+/** The path of a shape or a geoshape (the engine's own text) goes to the canvas as it is, its arcs as arcs. */
+byType.shape = byType.geoshape = (pen, items) => {
+  for (const it of items) {
+    if (!it.path) continue
+    const segs = parsePathData(it.path)
+    inFrame(pen, it.x || 0, it.y || 0, it.angle || 0, it.scaleX || 1, it.scaleY || 1, () => tracePath(pen, segs))
+    ink(pen, it)
+  }
+}
 const painters = new Map(Object.entries(byType))
 
 /** A text item: the box of each of its lines (glyph coverage is not modelled, see `AlphaCanvas.fillText`). */

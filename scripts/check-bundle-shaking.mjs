@@ -95,7 +95,7 @@ const PARTS_VG = {
   } } }],
 }
 /** The engine parts a browser build of the shells loads on demand, by the module each brings (core/dist/<module>.js). */
-const PART_MODULES = ['guide-legend', 'trellis', 'incremental-engine', 'selections', 'regex-screen', 'svg-path', 'scene-intersect', 'modify', 'timer', 'canvas']
+const PART_MODULES = ['guide-legend', 'trellis', 'incremental-engine', 'selections', 'regex-screen', 'part-svgpath', 'scene-intersect', 'modify', 'timer', 'canvas']
 
 /**
  * Each pattern: an app (its source), whether it needs jsdom, the assertions on the JSON it returns, and optionally
