@@ -11,7 +11,7 @@ import { scaleCallFailure, scaleRangeFailure } from './missing-scale.js'
 import { ingestRows, isNotATupleError, notATuple, readData, type DataFormatSpec } from './data-format.js'
 import { followsSources, numbersSourceRows, orderOf, setOrder, setSources, sourcesAfter, sourcesOf } from './tuple-order.js'
 import { alignIndices, carryByAlignment, carryBySources, sourceNumbersOf, type IdCounter, type SourceNumbers } from './identifier-ids.js'
-import { applyTransforms, applyTransformsToSharedRows, copiesRows, sortOrder, getField, geoJSONPath, type Row, type TransformContext } from './transform.js'
+import { applyTransforms, applyTransformsToSharedRows, copiesRows, rowUseOf, sortOrder, getField, geoJSONPath, type Row, type TransformContext } from './transform.js'
 import { fieldOf } from './transform-agg.js'
 import { atRandomSite, contentKey, mayDrawRandom, normalPairs, replayable } from './random-tape.js'
 import { lexedText } from './expr-text.js'
@@ -3864,6 +3864,7 @@ function buildDatasetsOf(ctx: EvalContext, inputData: Record<string, unknown[]>)
 }
 
 const copyRows = (rows: readonly Row[]): Row[] => {
+  stepCounts.copied += rows.length
   const out = rows.map((r) => ({ ...r }))
   markTuples(out)
   return out
@@ -4025,7 +4026,15 @@ function runPipeline(
     // (the rows of a step that has to run are this evaluation's own: a source's are copied now, unless the step makes rows of its own
     // and only needs them in an array of their own -- the array a source made carries the order its rows were made in, which a
     // dataset made from it does not inherit)
-    if (shared && cur === rows) { cur = copiesRows(t) ? rows.slice() : copyRows(rows); if (sourceList !== undefined) setSources(cur, sourceList) }
+    // A step that only picks rows (`rowUseOf`: a filter, a collect) writes none of them, so it reads the source's rows where they are
+    // and only the rows it returns are copied: a filter whose predicate moves on every pointer move copies what passes, not the source.
+    // (The rows it returns are copies, as they were when the whole source was copied before it: what a step leaves is the evaluation's
+    // own, which the pulse path splices and the dataset hands on. Rows numbered by source row keep the copy before the step.)
+    let copyAfter = false
+    if (shared && cur === rows) {
+      if (sourceList === undefined && rowUseOf(t) === 'subset') { cur = rows.slice(); copyAfter = true }
+      else { cur = copiesRows(t) ? rows.slice() : copyRows(rows); if (sourceList !== undefined) setSources(cur, sourceList) }
+    }
     const from = cur
     const had = reads?.publishes !== undefined && Object.hasOwn(ctx.signalParams, reads.publishes)
     const published = reads?.publishes === undefined ? undefined : ctx.signalParams[reads.publishes]
@@ -4041,7 +4050,7 @@ function runPipeline(
     const res = ctx.runtime.random === undefined || !mayDrawRandom(t)
       ? run()
       : atRandomSite(ctx.runtime.random, `dataset:${name}#${k}`, () => randomFingerprint(t, from, ctx.signalParams), run)
-    cur = res.rows
+    cur = copyAfter ? withOrderOf(res.rows, copyRows(res.rows)) : res.rows
     markTuples(cur)
     state.steps.push(cur)
     if (res.state !== undefined) state.stepState.set(`${name}#${k}`, res.state)
