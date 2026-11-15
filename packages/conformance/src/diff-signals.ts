@@ -207,28 +207,48 @@ interface SignalPhaseResult { compared: number; skipped: number; mismatch?: stri
 const GUIDE_PROBES = { paint: 'asterGuideProbePaint', ticks: 'asterGuideProbeTicks' }
 
 /**
- * The spec with every axis and legend of the view reading a signal of its own: an axis's or a legend's labels are painted with an
- * opacity that reads one, an axis's tick count is another. The signal phase then writes those signals too, so a guide kept from the
- * evaluation before is checked against what a fresh chart makes of every signal it reads. Null for a spec with no guide of the view.
+ * The spec with every guide reading a signal of its own: the view's axes, legends and title, and those of every group mark at any
+ * depth. An axis's or a legend's labels, and a title's text, are painted with an opacity that reads one; an axis's tick count is
+ * another (it moves the axis's extent, which the legends are placed against and the titles sit against). The signal phase then writes
+ * those signals too, so a guide kept from the evaluation before is checked against what a fresh chart makes of every signal it reads,
+ * and of every place it is put at. Null for a spec with no guide.
  */
 export function withGuideProbes(spec: Record<string, unknown>): Record<string, unknown> | null {
-  const axes = Array.isArray(spec.axes) ? (spec.axes as Array<Record<string, unknown>>) : []
-  const legends = Array.isArray(spec.legends) ? (spec.legends as Array<Record<string, unknown>>) : []
-  if (!axes.length && !legends.length) return null
   const signals = Array.isArray(spec.signals) ? (spec.signals as Array<Record<string, unknown>>) : []
   if (signals.some((s) => s.name === GUIDE_PROBES.paint || s.name === GUIDE_PROBES.ticks)) return null
-  const paintLabels = (g: Record<string, unknown>): Record<string, unknown> => {
+  const paint = { fillOpacity: { signal: `0.25 + ${GUIDE_PROBES.paint} / 4` } }
+  const painted = (g: Record<string, unknown>, part: string): Record<string, unknown> => {
     const encode = (g.encode ?? {}) as Record<string, Record<string, unknown>>
-    const labels = encode.labels ?? {}
-    const update = (labels.update ?? {}) as Record<string, unknown>
-    return { ...g, encode: { ...encode, labels: { ...labels, update: { ...update, fillOpacity: { signal: `0.25 + ${GUIDE_PROBES.paint} / 4` } } } } }
+    const own = encode[part] ?? {}
+    const update = (own.update ?? {}) as Record<string, unknown>
+    return { ...g, encode: { ...encode, [part]: { ...own, update: { ...update, ...paint } } } }
   }
-  return {
-    ...spec,
-    signals: [...signals, { name: GUIDE_PROBES.paint, value: 1 }, { name: GUIDE_PROBES.ticks, value: 5 }],
-    axes: axes.map((a) => ({ ...paintLabels(a), tickCount: { signal: GUIDE_PROBES.ticks } })),
-    legends: legends.map(paintLabels),
+  let guides = 0
+  /** A scope (the view, or a group mark) with each of its guides probed, and its group marks' in turn. */
+  const probed = (scope: Record<string, unknown>): Record<string, unknown> => {
+    const out: Record<string, unknown> = { ...scope }
+    if (Array.isArray(scope.axes) && scope.axes.length) {
+      guides += scope.axes.length
+      out.axes = (scope.axes as Array<Record<string, unknown>>).map((a) => ({ ...painted(a, 'labels'), tickCount: { signal: GUIDE_PROBES.ticks } }))
+    }
+    if (Array.isArray(scope.legends) && scope.legends.length) {
+      guides += scope.legends.length
+      out.legends = (scope.legends as Array<Record<string, unknown>>).map((l) => painted(l, 'labels'))
+    }
+    const title = scope.title
+    if (title != null && title !== '' && (typeof title === 'string' || Array.isArray(title) || typeof title === 'object')) {
+      guides++
+      const t = typeof title === 'string' || Array.isArray(title) || (title as { signal?: unknown }).signal !== undefined ? { text: title } : (title as Record<string, unknown>)
+      out.title = painted(t, 'title')
+    }
+    if (Array.isArray(scope.marks)) {
+      out.marks = (scope.marks as Array<Record<string, unknown>>).map((m) => (m && m.type === 'group' ? probed(m) : m))
+    }
+    return out
   }
+  const out = probed(spec)
+  if (guides === 0) return null
+  return { ...out, signals: [...signals, { name: GUIDE_PROBES.paint, value: 1 }, { name: GUIDE_PROBES.ticks, value: 5 }] }
 }
 
 /**

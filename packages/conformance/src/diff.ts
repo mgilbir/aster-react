@@ -15,8 +15,9 @@
  * Then signals change (diff-signals.ts): every corpus spec that declares a signal or a Vega-Lite selection store is taken
  * through a generated sequence of signal and store writes in one session, and after every step everything a host reads of the
  * scene (SVG, scene, datasets, signals, hit results, accessible tree) equals a fresh evaluation of the same input.
- * Every spec with an axis or a legend of the view is taken through the same again with each guide reading signals of its own (its
- * labels' opacity, an axis's tick count; see `withGuideProbes`), so a guide kept from the evaluation before is checked too.
+ * Every spec with a guide (an axis, a legend or a title, of the view or of a group mark) is taken through the same again with each
+ * guide reading signals of its own (its labels' or its text's opacity, an axis's tick count, which moves what legends and titles are
+ * placed against; see `withGuideProbes`), so a guide kept from the evaluation before is checked too.
  *
  * Run: pnpm conformance:diff
  */
@@ -187,7 +188,7 @@ async function main(): Promise<void> {
       signalSkipped += signalsMatch.skipped
       if (signalsMatch.mismatch !== undefined) signalFailures.push(`${f} (${signalsMatch.mismatch})`)
     }
-    // the same with every guide of the view reading signals of its own, which the steps write too (see withGuideProbes)
+    // the same with every guide reading signals of its own, which the steps write too (see withGuideProbes)
     const probed = withGuideProbes(spec)
     const guidesMatch = probed === null ? null : signalChangesMatch(probed, dataset?.name && dataset.values ? { name: dataset.name, rows: dataset.values as Array<Record<string, unknown>> } : null, guideRand)
     if (guidesMatch !== null) {

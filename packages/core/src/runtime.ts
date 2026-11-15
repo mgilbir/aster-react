@@ -263,7 +263,7 @@ interface IncrementalState {
   /** A top-level leaf mark drawn from another mark's items: what it was made under and the items it was made from (see `keptOverMarkItems`). */
   markSources: Map<CompiledMark, { key: string; items: readonly SceneItem[]; tuples: boolean }>
   /** The view's own axes and legends as a clean pass made them, by definition, with what they were made under (see `keptGuide`). */
-  guides: Map<object, GuideRecord>
+  guides: Map<object, Map<string, GuideRecord>>
   /** The snapshots of the view's scales the scene carries, and the scales they were taken of (see `sceneSnapshots`). */
   snapshots?: { scales: ReadonlyArray<readonly [string, unknown]>; snaps: ReturnType<typeof snapshotScales> }
   /** The content of the view this state's pass made (its root items, laid out): a later pass shares what it makes the same (see `shareScene`). */
@@ -1672,14 +1672,46 @@ function buildAxisGroup(ctx: EvalContext, axis0: CompiledAxis, axisIndex: number
 
 /** One of the view's own axes or legends as a clean pass made it, and what it was made under (see `keptGuide`). */
 interface GuideRecord {
-  /** `guideKeyOf` the definition when it was made */
+  /** `guideKeyOf` the definition when it was made (with what its placement reads, for a title: see `buildTitleGroup`) */
   key: string
-  /** the guide's group as made (a legend's before the legends were placed: see `placeLegends`) */
+  /** the guide's group as made (a legend's as placed, once the legends of its scope were: see `buildAxisAndLegend`) */
   group: SceneGroup
-  /** every scale of the view, as the guide was made among them */
+  /** every scale of the scope, as the guide was made among them */
   scales: ReadonlyArray<readonly [string, unknown]>
   /** whether tuples were registered (the datums of its parts are tuples then) */
   tuples: boolean
+  /** a legend's: whether making it took an instance slot of its scope (a symbol legend's entries: see `takeLegendSlot`) */
+  slotted?: boolean
+  /** a legend's: what the legends of its scope were placed against (see `legendPlacementKey`); unset until they are placed */
+  placement?: string
+}
+
+/** Run `fn`, counting what it logs through the context's logger (which it still logs to). */
+function countingLogs<T>(ctx: EvalContext, fn: () => T): { result: T; logged: number } {
+  const logger = ctx.logger
+  let logged = 0
+  const counted = (f: (...a: unknown[]) => void) => (...a: unknown[]): void => { logged++; f.apply(logger, a) }
+  ctx.logger = {
+    error: counted(logger.error), warn: counted(logger.warn),
+    ...(logger.info ? { info: counted(logger.info) } : {}), ...(logger.debug ? { debug: counted(logger.debug) } : {}),
+  }
+  try {
+    return { result: fn(), logged }
+  } finally {
+    ctx.logger = logger
+  }
+}
+
+/** The scope instance a guide belongs to: `''` for the view's, the group item's key path for a group mark's (a facet cell's). */
+const guideInstance = (ctx: EvalContext): string => ctx.scope.keyPath ?? ''
+
+function guideRecordOf(state: IncrementalState | undefined, def: object, instance: string): GuideRecord | undefined {
+  return state?.guides.get(def)?.get(instance)
+}
+function setGuideRecord(state: IncrementalState, def: object, instance: string, record: GuideRecord): void {
+  let byInstance = state.guides.get(def)
+  if (byInstance === undefined) state.guides.set(def, (byInstance = new Map()))
+  byInstance.set(instance, record)
 }
 
 /** What a guide definition reads besides the scales: the signals it names (null: more than it names), the datasets its expressions read by name (null: a computed name). */
@@ -1716,20 +1748,33 @@ function guideKeyOf(def: object, ctx: EvalContext): string | null {
 }
 
 /**
- * The group the evaluation before made of guide `def` (an axis or a legend of the view, not of a group mark), when this evaluation
- * would make the same: nothing it was made from changed. A guide's group is a function of its definition (the compiled chart's own
- * object, with the config and styles folded in), of what `guideKeyOf` holds, of the view's scales -- each the very object it was
- * made with (a scale is made again whenever anything it is made from changes) -- and of whether tuples are registered. The pass
- * must be clean (a pass that stopped makes what vega made before the stop), not counted against `limits` (a kept guide is not
- * counted again), not one of a view that fits its viewport (each pass makes its own, the second from the first) and not one whose
- * layout failed. What making it wrote into the evaluation besides its group is nothing, or it was not recorded (see `recordGuide`).
+ * The record of what the evaluation before made of guide `def` (an axis, a legend or a title, of the view or of a group mark's
+ * instance), when this evaluation would make the same: nothing it was made from changed. A guide's group is a function of its
+ * definition (the compiled chart's own object, with the config and styles folded in), of what `guideKeyOf` holds (in a group, the
+ * group's size and the signals as its scope sees them), of its scope's scales -- each the very object it was made with (a scale is
+ * made again whenever anything it is made from changes) -- and of whether tuples are registered. The pass must be clean (a pass that
+ * stopped makes what vega made before the stop), not counted against `limits` (a kept guide is not counted again), not one of a view
+ * that fits its viewport (each pass makes its own, the second from the first) and not one whose layout failed. What making it wrote
+ * into the evaluation besides its group is nothing, or it was not recorded (see `recordGuide`), or it is written again by the caller
+ * (a legend's instance slot). A record is kept once per evaluation: two instances of one key path never share a group.
+ * Not committed: the caller keeps it with `keepGuide`.
  */
-function keptGuide(def: object, ctx: EvalContext, key: string | null): SceneGroup | undefined {
-  const record = ctx.prev?.guides.get(def)
-  if (record === undefined || key === null || record.key !== key || record.tuples !== tuplesRegistering()) return undefined
-  if (!guidesKeepable(ctx) || !sameScales(ctx, record.scales)) return undefined
-  ctx.draft.guides.set(def, record)
+function keptGuideRecord(def: object, ctx: EvalContext, key: string | null): GuideRecord | undefined {
+  if (key === null) return undefined
+  const instance = guideInstance(ctx)
+  const record = guideRecordOf(ctx.prev, def, instance)
+  if (record === undefined || record.key !== key || record.tuples !== tuplesRegistering()) return undefined
+  if (!guidesKeepable(ctx) || !sameScales(ctx, record.scales) || guideRecordOf(ctx.draft, def, instance) !== undefined) return undefined
+  return record
+}
+/** Keep `record` (see `keptGuideRecord`): this evaluation's group of `def` is the one before. */
+function keepGuide(def: object, ctx: EvalContext, record: GuideRecord): SceneGroup {
+  setGuideRecord(ctx.draft, def, guideInstance(ctx), record)
   return record.group
+}
+function keptGuide(def: object, ctx: EvalContext, key: string | null): SceneGroup | undefined {
+  const record = keptGuideRecord(def, ctx, key)
+  return record === undefined ? undefined : keepGuide(def, ctx, record)
 }
 
 /** Whether this pass may keep or record the view's guides (see `keptGuide`). */
@@ -1748,23 +1793,15 @@ function sameScales(ctx: EvalContext, scales: ReadonlyArray<readonly [string, un
  * and asked for no gradient definition (the scene's definitions are those its parts ask for, in order).
  */
 function recordGuide(def: object, ctx: EvalContext, key: string | null, make: () => SceneGroup | null): SceneGroup | null {
-  if (key === null || !guidesKeepable(ctx)) return make()
-  const logger = ctx.logger
-  let logged = 0
-  const counted = (f: (...a: unknown[]) => void) => (...a: unknown[]): void => { logged++; f.apply(logger, a) }
-  ctx.logger = {
-    error: counted(logger.error), warn: counted(logger.warn),
-    ...(logger.info ? { info: counted(logger.info) } : {}), ...(logger.debug ? { debug: counted(logger.debug) } : {}),
-  }
+  if (key === null || !guidesKeepable(ctx) || guideRecordOf(ctx.draft, def, guideInstance(ctx)) !== undefined) return make()
+  const slotsBefore = ctx.scope.nextChild.n
   const asked = ctx.defsAsked.n
-  let group: SceneGroup | null
-  try {
-    group = make()
-  } finally {
-    ctx.logger = logger
-  }
-  if (group !== null && logged === 0 && ctx.defsAsked.n === asked && guidesKeepable(ctx)) {
-    ctx.draft.guides.set(def, { key, group, scales: [...ctx.scales], tuples: tuplesRegistering() })
+  const { result: group, logged } = countingLogs(ctx, make)
+  const slots = ctx.scope.nextChild.n - slotsBefore
+  // (a legend still waiting for its entries is only made in a pass that stopped; one slot at most is what a legend takes)
+  if (group !== null && logged === 0 && ctx.defsAsked.n === asked && guidesKeepable(ctx) && slots <= 1
+    && (group as unknown as { _entriesPending?: boolean })._entriesPending !== true) {
+    setGuideRecord(ctx.draft, def, guideInstance(ctx), { key, group, scales: [...ctx.scales], tuples: tuplesRegistering(), ...(slots === 1 ? { slotted: true } : {}) })
   }
   return group
 }
@@ -1797,49 +1834,13 @@ function buildAxisAndLegend(
   // placeLegendStack). A legend is never dropped by the config: `disable` is a Vega-Lite key that the VL compiler has already
   // resolved by leaving the legend out, so one that is here stays.
   type LegendProps = { orient?: unknown; offset?: unknown; x?: unknown; y?: unknown }
-  const built = legends
-    .map((legend, legendIndex) => {
-      const group = buildLegend(legend, ctx, legendIndex)
-      if (group) {
-        // (these are read as written, so a signal object is not looked into)
-        const zindex = +(legend.zindex as number) || undefined
-        if (zindex) (group as unknown as { zindex?: number }).zindex = zindex
-        // `aria: false` removes the legend from the accessibility tree (and marks it aria-hidden)
-        ;(group as unknown as { aria?: boolean }).aria = (legend as { aria?: boolean }).aria
-        const lt = guideTitle(ctx, legend.title)
-        if (lt) (group as unknown as { title?: string }).title = lt
-        const ldesc = (legend as { description?: unknown }).description
-        if (ldesc) group.description = ldesc as string
-        const g = group as unknown as {
-          legendScale?: string; legendChannels?: string[]; legendType?: string
-          legendFormat?: unknown; legendFormatType?: unknown
-        }
-        // the channels the legend describes, in priority order (the first gives the legend its scale)
-        const own = (legend.own ?? {}) as Record<string, unknown>
-        g.legendChannels = LEGEND_SCALES.filter((k) => !!own[k])
-        g.legendScale = g.legendChannels.map((k) => String(own[k]))[0]
-        // (a legend group item whose encode never ran has no format for the caption to read)
-        const unencoded = (group as unknown as { unencoded?: boolean }).unencoded === true
-        // (read off the legend's group item, as for an axis)
-        const item = (group as unknown as { legendItemFormat?: { format?: unknown; formatType?: unknown } }).legendItemFormat
-        g.legendFormat = unencoded ? undefined : item?.format
-        g.legendFormatType = unencoded ? undefined : item?.formatType
-        // (the legend type is the kind of legend the builder drew: gradient, discrete bands or symbols)
-      }
-      return { legend, group, props: ((group as unknown as { legendProps?: LegendProps } | null)?.legendProps ?? {}) as LegendProps }
-    })
-    .filter((x): x is { legend: CompiledLegend; group: SceneGroup; props: LegendProps } => x.group !== null)
-    // A legend whose entries failed to build (an invalid tickCount interval
-    // string) degenerates to a zero-size group with no items: vega still
-    // creates it, but it renders nothing and takes no layout space.
-    // (a legend only waiting for its entries is a group like any other)
-    .filter((x) => (x.group as unknown as { _entriesPending?: boolean })._entriesPending === true || !(x.group.width === 0 && x.group.height === 0 && (x.group.items?.length ?? 0) === 0))
-
-  if (built.length) {
-    const layoutW = Math.max(0, ctx.width)
-    const layoutH = Math.max(0, ctx.height)
-    // what the legends anchor against: the plot widened by the guides beside it. Legends on the left and right clear the
-    // vertical axes (xb), those above and below clear the horizontal ones (yb); a mark's group counts for both.
+  const layoutW = Math.max(0, ctx.width)
+  const layoutH = Math.max(0, ctx.height)
+  // what the legends anchor against: the plot widened by the guides beside it. Legends on the left and right clear the
+  // vertical axes (xb), those above and below clear the horizontal ones (yb); a mark's group counts for both.
+  let anchors: { xb: Sides; yb: Sides } | undefined
+  const anchorsOf = (): { xb: Sides; yb: Sides } => {
+    if (anchors !== undefined) return anchors
     const xb: Sides = { x1: 0, y1: 0, x2: layoutW, y2: layoutH }
     const yb: Sides = { x1: 0, y1: 0, x2: layoutW, y2: layoutH }
     const widen = (to: Sides, b: Bounds): void => {
@@ -1861,7 +1862,30 @@ function buildAxisAndLegend(
         widen(orient === 'left' || orient === 'right' ? xb : yb, boundAxisGroup(g))
       }
     }
+    return (anchors = { xb, yb })
+  }
+  // What placing the legends reads besides the legends themselves: the anchors, the plot's size and whether they are laid out.
+  const placement = keep && legends.length > 0 && guidesKeepable(ctx) ? legendPlacementKey(anchorsOf(), layoutW, layoutH, ctx.rawGuides === true) : null
+  // Every legend of the scope kept as the evaluation before placed it, when each is kept and they are placed against the same: the
+  // placement of one depends on the others of its orient, so they are kept together or made again together (see `keptLegends`).
+  const keptGroups = placement !== null ? keptLegends(ctx, legends, placement) : undefined
+  const made = keptGroups ?? legends.map((legend, legendIndex) => {
+    const key = keep ? guideKeyOf(legend, ctx) : null
+    return recordGuide(legend, ctx, key, () => describedLegend(buildLegend(legend, ctx, legendIndex), legend, ctx))
+  })
+  const built = made
+    .map((group, i) => ({ legend: legends[i]!, group, props: ((group as unknown as { legendProps?: LegendProps } | null)?.legendProps ?? {}) as LegendProps }))
+    .filter((x): x is { legend: CompiledLegend; group: SceneGroup; props: LegendProps } => x.group !== null)
+    // A legend whose entries failed to build (an invalid tickCount interval
+    // string) degenerates to a zero-size group with no items: vega still
+    // creates it, but it renders nothing and takes no layout space.
+    // (a legend only waiting for its entries is a group like any other)
+    .filter((x) => (x.group as unknown as { _entriesPending?: boolean })._entriesPending === true || !(x.group.width === 0 && x.group.height === 0 && (x.group.items?.length ?? 0) === 0))
 
+  // (placing a legend logs nothing it could log again: an `orient: none` legend's x and y are read, and logged, as it is placed, so
+  // a placement that logged is not recorded)
+  const placeLegends = (): void => {
+    const { xb, yb } = anchorsOf()
     // group legends by orient ('none' skips the grid: vega leaves the item
     // at its unlayouted position, which is the origin)
     const byOrient = new Map<string, { legend: CompiledLegend; group: SceneGroup; props: LegendProps }[]>()
@@ -1889,11 +1913,76 @@ function buildAxisAndLegend(
       if (ctx.rawGuides) continue
       placeLegendStack(orient, list.map((x) => x.group), list.map((x) => x.props.offset), (ctx.chart.legendLayout ?? {}) as Record<string, unknown>, xb, yb, layoutW, layoutH)
     }
-
-    for (const x of built) groups.push(x.group)
   }
+  const placed = built.length && keptGroups === undefined ? countingLogs(ctx, placeLegends).logged === 0 : true
+  // (the legends this pass made and recorded are placed now: what they were placed against goes with them)
+  if (placement !== null && keptGroups === undefined && placed && guidesKeepable(ctx)) {
+    const instance = guideInstance(ctx)
+    legends.forEach((legend, i) => {
+      const record = guideRecordOf(ctx.draft, legend, instance)
+      if (record !== undefined && record.group === made[i]) record.placement = placement
+    })
+  }
+  for (const x of built) groups.push(x.group)
 
   return { groups }
+}
+
+/** What the legends of a scope are placed against (see `buildAxisAndLegend`), as a key: the anchors, the plot's size, the raw mode. */
+function legendPlacementKey(anchors: { xb: Sides; yb: Sides }, w: number, h: number, raw: boolean): string {
+  const { xb, yb } = anchors
+  return `${xb.x1},${xb.y1},${xb.x2},${xb.y2}\u0001${yb.x1},${yb.y1},${yb.x2},${yb.y2}\u0001${w}x${h}\u0001${raw ? 1 : 0}`
+}
+
+/**
+ * The groups of every legend of the scope as the evaluation before made and placed them, when each is kept (`keptGuideRecord`) and
+ * was placed against what the legends are placed against now: the same anchors (the bounds of the content and the axes beside the
+ * plot), plot size and raw mode, beside the same other legends (each kept too). A legend's place is then the place it has, and
+ * nothing is placed. What making a legend wrote besides its group is written again: the instance slot of a symbol legend.
+ * Undefined: they are all made again (and placed), every one of them.
+ */
+function keptLegends(ctx: EvalContext, legends: readonly CompiledLegend[], placement: string): SceneGroup[] | undefined {
+  const records: GuideRecord[] = []
+  for (const legend of legends) {
+    const record = keptGuideRecord(legend, ctx, guideKeyOf(legend, ctx))
+    if (record === undefined || record.placement !== placement) return undefined
+    records.push(record)
+  }
+  return legends.map((legend, i) => {
+    const record = records[i]!
+    if (record.slotted === true) takeLegendSlot(ctx)
+    return keepGuide(legend, ctx, record)
+  })
+}
+
+/** A legend's group with what the accessible tree and the caption read of it (scene metadata only: the SVG does not change). */
+function describedLegend(group: SceneGroup | null, legend: CompiledLegend, ctx: EvalContext): SceneGroup | null {
+  if (group === null) return null
+  // (these are read as written, so a signal object is not looked into)
+  const zindex = +(legend.zindex as number) || undefined
+  if (zindex) (group as unknown as { zindex?: number }).zindex = zindex
+  // `aria: false` removes the legend from the accessibility tree (and marks it aria-hidden)
+  ;(group as unknown as { aria?: boolean }).aria = (legend as { aria?: boolean }).aria
+  const lt = guideTitle(ctx, legend.title)
+  if (lt) (group as unknown as { title?: string }).title = lt
+  const ldesc = (legend as { description?: unknown }).description
+  if (ldesc) group.description = ldesc as string
+  const g = group as unknown as {
+    legendScale?: string; legendChannels?: string[]; legendType?: string
+    legendFormat?: unknown; legendFormatType?: unknown
+  }
+  // the channels the legend describes, in priority order (the first gives the legend its scale)
+  const own = (legend.own ?? {}) as Record<string, unknown>
+  g.legendChannels = LEGEND_SCALES.filter((k) => !!own[k])
+  g.legendScale = g.legendChannels.map((k) => String(own[k]))[0]
+  // (a legend group item whose encode never ran has no format for the caption to read)
+  const unencoded = (group as unknown as { unencoded?: boolean }).unencoded === true
+  // (read off the legend's group item, as for an axis)
+  const item = (group as unknown as { legendItemFormat?: { format?: unknown; formatType?: unknown } }).legendItemFormat
+  g.legendFormat = unencoded ? undefined : item?.format
+  g.legendFormatType = unencoded ? undefined : item?.formatType
+  // (the legend type is the kind of legend the builder drew: gradient, discrete bands or symbols)
+  return group
 }
 
 /**
@@ -3101,7 +3190,7 @@ function buildContentPass(
   if (layoutError !== undefined && cut === undefined) failPass(ctx, { path: ctx.scope.last ?? [], axis: Infinity, late: true, layout: { items: [[]], at: 0 } }, layoutError.error)
 
   // Top-level title. (A pass that stopped at a failing dataset or signal never made it: it is ranked after them.)
-  const titleGroup = (stopped && !cut!.title && !cut!.labels && !cut!.lateSignal && !cut!.lateScale) || ctx.datasetAborted ? null : withoutLateReads(ctx, () => buildTitleGroup(ctx.chart.title, items, width, height, ctx.rawGuides, ctx, undefined, isFit(autosizeOf(chart, input).type)))
+  const titleGroup = (stopped && !cut!.title && !cut!.labels && !cut!.lateSignal && !cut!.lateScale) || ctx.datasetAborted ? null : withoutLateReads(ctx, () => buildTitleGroup(ctx.chart.title, items, width, height, ctx.rawGuides, ctx, undefined, isFit(autosizeOf(chart, input).type), true))
   if (titleGroup) items.push(titleGroup)
   // The root group's width / height are the view's `width` / `height` signals (0
   // for a composition that sizes only its children), whatever the grid inside covers.
@@ -3531,6 +3620,8 @@ function buildTitleGroup(
   parent?: Row,
   /** The view fits its viewport: what a legend adds to the bounds the title sits against is cut (see `shareOfView`). */
   fitting = false,
+  /** the title may be kept from the evaluation before (see `keptGuide`) */
+  keep = false,
 ): SceneGroup | null {
   if (!title0 || !ctx) return null
   // What the title sits against: the view's frame, the marks and the bounds of the axes and legends (axes measured in their own
@@ -3540,6 +3631,16 @@ function buildTitleGroup(
   // (a clipped mark -- an interval selection's brush -- has its bounds cut to the frame: Bound's boundClip)
   if (hasClippedMark(measured)) eachMarkBounds(measured, width, height, (n) => measureGuideGroup(n as SceneGroup), (mb, n) => { b.union(shareOfView(mb, n as SceneGroup, fitting)) })
   else for (const g of measured) b.union(shareOfView(measureGuideGroup(g), g, fitting))
+  // A title is a function of what `guideKeyOf` holds, its scope's scales, the bounds it sits against, the size and the raw mode, and
+  // a group title's datum (`parent`)
+  const reads = keep ? guideKeyOf(title0, ctx) : null
+  const key = reads === null ? null
+    : `${reads}\u0005${width}x${height}\u0005${raw ? 1 : 0}${fitting ? 1 : 0}\u0005${b.x1},${b.y1},${b.x2},${b.y2}${parent !== undefined ? `\u0005${dependencyKey(parent)}` : ''}`
+  return keptGuide(title0, ctx, key) ?? recordGuide(title0, ctx, key, () => makeTitleGroup(title0, b, width, height, raw, ctx, parent))
+}
+
+/** Make a title's group against the bounds `b` (see `buildTitleGroup`). */
+function makeTitleGroup(title0: CompiledTitle, b: Bounds, width: number, height: number, raw: boolean, ctx: EvalContext, parent: Row | undefined): SceneGroup {
   // (a group title reads its facet datum as `parent`)
   const hostCtx = parent !== undefined ? { ...ctx, signalParams: { ...ctx.signalParams, parent } } : ctx
   const titleHost = guideHost(hostCtx)
@@ -6248,10 +6349,10 @@ function buildGroupItem(mark: CompiledMark, ctx: EvalContext, entered: EnteredGr
     const { groups: guides } = hollow || order > 0
       ? { groups: [] }
       : order === 0 && !whole
-        ? buildAxisAndLegend(guideCtx, content, (mark.axes ?? []).slice(0, madeAxes(ctx.abort.cut!)), (mark.legends ?? []).slice(0, madeLegends(ctx.abort.cut!)))
-        : buildAxisAndLegend(guideCtx, content, mark.axes ?? [], mark.legends ?? [])
+        ? buildAxisAndLegend(guideCtx, content, (mark.axes ?? []).slice(0, madeAxes(ctx.abort.cut!)), (mark.legends ?? []).slice(0, madeLegends(ctx.abort.cut!)), true)
+        : buildAxisAndLegend(guideCtx, content, mark.axes ?? [], mark.legends ?? [], true)
     const siblings: SceneGroup[] = [...content, ...guides]
-    const title = hollow || order > 0 || (order === 0 && !whole && !ctx.abort.cut!.title && !ctx.abort.cut!.labels && !ctx.abort.cut!.lateSignal) ? null : buildTitleGroup(mark.groupTitle, siblings, gw, gh, !laidOut, guideCtx, src.datum)
+    const title = hollow || order > 0 || (order === 0 && !whole && !ctx.abort.cut!.title && !ctx.abort.cut!.labels && !ctx.abort.cut!.lateSignal) ? null : buildTitleGroup(mark.groupTitle, siblings, gw, gh, !laidOut, guideCtx, src.datum, false, true)
     if (title) siblings.push(title)
     const ordered = paintOrderOf(siblings)
 
@@ -6968,6 +7069,16 @@ function symbolLegendsOf(legends: readonly CompiledLegend[] | undefined, ctx: Ev
   return out
 }
 
+/**
+ * The instance slot a symbol legend's entries take in its scope (after the scope's groups), noted as the scope's last instance so
+ * far: its last entry's is the last a layout above it is ranked after. A kept legend takes it again (see `keptLegends`).
+ */
+function takeLegendSlot(ctx: EvalContext): number {
+  const slot = ctx.scope.nextChild.n++
+  noteInstance(ctx.scope, [...ctx.scope.path, slot, Infinity])
+  return slot
+}
+
 function buildLegend(legend: CompiledLegend, ctx: EvalContext, index: number): SceneGroup | null {
   const spec = (legend.own ?? NO_PROPS) as Record<string, unknown>
   const config = (legend.cfg ?? NO_PROPS) as Record<string, unknown>
@@ -6999,9 +7110,7 @@ function buildLegend(legend: CompiledLegend, ctx: EvalContext, index: number): S
   // the entries in the first, a symbol and a label per entry in the next. They are the legend's children there, after the
   // instances of the scope's groups. A pass that stopped before an instance never made what it holds.
   const symbols = legendType(spec, scaleType) === 'symbol'
-  const slot = symbols ? ctx.scope.nextChild.n++ : undefined
-  // (its last instance, that of its last entry, is the last a layout above it is ranked after)
-  if (slot !== undefined) noteInstance(ctx.scope, [...ctx.scope.path, slot, Infinity])
+  const slot = symbols ? takeLegendSlot(ctx) : undefined
   const cut = ctx.abort.cut
   // (a gradient's labels are ranked after every other operator of the scope: made only where the pass went past them)
   let lateLabels = false

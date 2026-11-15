@@ -91,13 +91,13 @@ afterEach(() => setTextMetricsProvider(null))
 
 describe('the hit index keeps the entries of a kept guide', () => {
   for (const renderer of ['svg', 'canvas'] as const) {
-    it(`${renderer}: a pointer move that keeps the axes indexes neither again`, () => {
+    it(`${renderer}: a pointer move that keeps the guides indexes none again`, () => {
       const session = createChartSession()
       expect(walked(session.evaluate(SPEC, {}), renderer, {})).toBe(4)
       for (let i = 0; i < 6; i++) {
         const input = { signals: { hoverX: i * 9 } }
-        // (the legend and the title are made again by every evaluation)
-        expect(walked(session.evaluate(SPEC, input), renderer, input)).toBe(2)
+        // (the legend and the title are kept too: no guide is indexed again)
+        expect(walked(session.evaluate(SPEC, input), renderer, input)).toBe(0)
       }
     })
 

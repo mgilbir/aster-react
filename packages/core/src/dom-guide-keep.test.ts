@@ -62,7 +62,7 @@ afterEach(() => {
 })
 
 describe('the DOM patcher keeps what it made of a kept guide', () => {
-  it('a pointer move that keeps the axes describes neither again; the patched SVG equals a fresh rendering', () => {
+  it('a pointer move that keeps the guides describes none again; the patched SVG equals a fresh rendering', () => {
     const session = createChartSession()
     let scene = session.evaluate(SPEC, {})
     const svg = renderSceneToDomElement(scene, document)
@@ -75,8 +75,8 @@ describe('the DOM patcher keeps what it made of a kept guide', () => {
       patchSceneDom(svg, scene)
       expect(html(svg)).toBe(fresh(evaluateChart(compileChart(SPEC), { signals: { hoverX: i * 9 } })))
       const now = guideDescs(sceneToDomDesc(scene))
-      // (the axes are the engine's kept groups; the legend and the title are made again by every evaluation)
-      expect(now.map((d, k) => d === before[k])).toEqual([true, true, false, false])
+      // (the axes, the legend and the title are the engine's kept groups)
+      expect(now.map((d, k) => d === before[k])).toEqual([true, true, true, true])
       before = now
     }
   })
