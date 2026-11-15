@@ -19,6 +19,7 @@
 import { orderOf, setOrder } from './tuple-order.js'
 import { accessor, accessorFields, accessorName, array, ascending, error, field, sortData, type Accessor } from './util.js'
 import { meterTick } from './limits.js'
+import { recorded, recordingFor, type GroupsByproduct } from './step-byproduct.js'
 import { ascending as numericAscending, quantileSorted } from './arr.js'
 
 export type Row = Record<string, unknown>
@@ -101,9 +102,9 @@ function sortKeys(spec: unknown): SortKeys | null {
  * per item, not twice per comparison, and the positions are what gets sorted: ties keep input order whatever the comparison does
  * with values (NaN, mixed types) that no ordering is consistent over. With `leaveOrder` the sorted copy also carries the order its
  * rows were made in (see tuple-order.ts), for the sorts that come after it to break their ties by; the request is an argument of
- * this one call, so it cannot reach any other sort.
+ * this one call, so it cannot reach any other sort. `onOrder` is handed the input position of each sorted item.
  */
-export function sortBySpec<T>(items: readonly T[], spec: unknown, leaveOrder = false): T[] | null {
+export function sortBySpec<T>(items: readonly T[], spec: unknown, leaveOrder = false, onOrder?: (order: readonly number[]) => void): T[] | null {
   const keys = sortKeys(spec)
   if (keys === null) return null
   const n = items.length
@@ -130,6 +131,7 @@ export function sortBySpec<T>(items: readonly T[], spec: unknown, leaveOrder = f
     })
   }
   const sorted = order.map((i) => items[i]!)
+  onOrder?.(order)
   if (leaveOrder) {
     const made = new Float64Array(n)
     for (let i = 0; i < n; i++) made[i] = places ? places[order[i]!]! : order[i]!
@@ -748,6 +750,8 @@ export function partitionRows(rows: readonly Row[], groupby: unknown, order: Flo
 interface Cell {
   /** The string the group is known by ({@link Grouping.keyOf} of its rows). */
   key: string
+  /** The input indices of its rows, when the grouping is recorded (see step-byproduct.ts). */
+  members?: number[]
   group: MeasureGroup
   /** The group's output row: its group-by values (from the row that opened it), then the measures. */
   tuple: Row
@@ -843,6 +847,11 @@ function groupingFor(p: AggregateParams, random: () => number): Grouping {
   return newGrouping(p.groupby, p.key, set, random)
 }
 
+/** What a grouping records of its rows (see step-byproduct.ts): every cell so far is a group made of rows. */
+function groupsRecorded(g: Grouping, p: AggregateParams, rowKey: string[]): GroupsByproduct {
+  return { kind: 'groups', groupby: p.groupby, key: p.key, rowKey, keys: g.order.map((c) => c.key), members: g.order.map((c) => c.members!) }
+}
+
 /** vega `aggregate`: one output row per group, in order of first appearance. */
 export function aggregateRows(rows: readonly Row[], p: AggregateParams, random: () => number = lcg(SEED)): Row[] {
   return aggregateGroups(rows, p, random).tuples
@@ -856,11 +865,18 @@ export function aggregateRows(rows: readonly Row[], p: AggregateParams, random: 
  */
 export function aggregateGroups(rows: readonly Row[], p: AggregateParams, random: () => number = lcg(SEED)): { tuples: Row[]; keys: string[] } {
   const g = groupingFor(p, random)
+  const record = recordingFor(rows)
+  const rowKey = record !== undefined ? new Array<string>(rows.length) : undefined
   for (let i = 0; i < rows.length; i++) {
     const row = rows[i]!
-    cellAt(g, g.keyOf(row), row).group.add(row)
+    const key = g.keyOf(row)
+    const cell = cellAt(g, key, row)
+    cell.group.add(row)
+    if (rowKey !== undefined) { rowKey[i] = key; (cell.members ??= []).push(i) }
     if ((i & 255) === 255) meterTick('aggregate', 256)
   }
+  // (the groups made of rows, before a cross adds the empty ones)
+  if (record !== undefined) recorded(record, groupsRecorded(g, p, rowKey!))
   if (p.cross && g.dims.length > 1) crossFill(g)
   return { tuples: g.order.map(finishCell), keys: g.order.map((cell) => cell.key) }
 }
@@ -873,11 +889,17 @@ export function joinAggregateRows(rows: readonly Row[], p: AggregateParams, rand
   const out = owned ? rows.slice() : rows.map((r) => ({ ...r }))
   // Vega's JoinAggregate declares no `aggregate_params`, `drop` or `cross`: they are not read (an exponential gets no ratio)
   const g = groupingFor({ groupby: p.groupby, fields: p.fields, ops: p.ops, as: p.as, key: p.key }, random)
+  const record = recordingFor(rows)
+  const rowKey = record !== undefined ? new Array<string>(out.length) : undefined
   for (let i = 0; i < out.length; i++) {
     const row = out[i]!
-    cellAt(g, g.keyOf(row), row).group.add(row)
+    const key = g.keyOf(row)
+    const cell = cellAt(g, key, row)
+    cell.group.add(row)
+    if (rowKey !== undefined) { rowKey[i] = key; (cell.members ??= []).push(i) }
     if ((i & 255) === 255) meterTick('joinaggregate', 256)
   }
+  if (record !== undefined) recorded(record, groupsRecorded(g, p, rowKey!))
   for (const cell of g.order) finishCell(cell)
   for (const row of out) {
     const cell = g.cells[g.keyOf(row)]!

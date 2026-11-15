@@ -10,6 +10,7 @@ import { fieldsOf, groupKeyFn } from './transform-agg.js'
 import { flattenLength } from './transform-basic.js'
 import type { CompiledTransform, SortSpec } from './types.js'
 import { applyFresh, type StepTransformContext } from './runtime.js'
+import { recordByproduct, type GroupsByproduct, type StepByproduct } from './step-byproduct.js'
 
 /** Persistent per-group index for incremental group transforms. */
 export interface AggState {
@@ -136,7 +137,56 @@ export function applyOneWithState(
     carryOrder('filter', rows, out)
     return { rows: out, state: pass }
   }
-  const out = applyFresh(rows, t, tctx, sourceName, previous)
-  return keepsStepState(String(t.type)) ? { rows: out, state: deriveStepState(t, rows, out, tctx) } : { rows: out }
+  if (!keepsStepState(String(t.type))) return { rows: applyFresh(rows, t, tctx, sourceName, previous) }
+  // The state is made of what the step itself computed of its rows when it can be (see step-byproduct.ts): read as the output was
+  // made, never again later (a row may be the host's, and change in place before the next pulse), and not a second time now.
+  const { result: out, byproduct } = recordByproduct(rows, () => applyFresh(rows, t, tctx, sourceName, previous))
+  return { rows: out, state: (byproduct !== undefined ? stateOf(t, byproduct, out) : undefined) ?? deriveStepState(t, rows, out, tctx) }
+}
+
+/**
+ * The step state `deriveStepState` would derive, made of what the step recorded instead, or undefined when the record is not the
+ * one it would derive: the step read parameters other than the spec's own (a signal resolved into a new object), or grouped by a
+ * custom `key` (the state groups by `groupby`).
+ */
+function stateOf(t: CompiledTransform, b: StepByproduct, out: Row[]): unknown {
+  const p = t as { groupby?: string[]; key?: unknown; sort?: unknown; fields?: unknown }
+  switch (b.kind) {
+    case 'groups':
+      if ((t.type !== 'aggregate' && t.type !== 'joinaggregate') || b.groupby !== p.groupby || b.key != null) return undefined
+      return aggStateOf(p.groupby ?? [], b, out)
+    case 'order':
+      return t.type === 'collect' && b.sort === p.sort ? { order: b.order } : undefined
+    case 'flatten':
+      return t.type === 'flatten' && b.fields === p.fields ? flattenStateOf(b.sizes) : undefined
+  }
+}
+
+/** `buildAggState` of a grouping already made (the same keys, groups and order: it partitions as the aggregate does). */
+function aggStateOf(groupby: string[], g: GroupsByproduct, out: Row[]): AggState {
+  const keyToIdx = new Map<string, number[]>()
+  const outIdx = new Map<string, number>()
+  const outByKey = new Map<string, Row>()
+  const groupStart = new Map<string, number>()
+  const groupSize = new Map<string, number>()
+  let pos = 0
+  for (let idx = 0; idx < g.keys.length; idx++) {
+    const k = g.keys[idx]!
+    const members = g.members[idx]!
+    keyToIdx.set(k, members)
+    outIdx.set(k, idx)
+    outByKey.set(k, out[idx]!)
+    groupStart.set(k, pos)
+    groupSize.set(k, members.length)
+    pos += members.length
+  }
+  return { groupby, rowKey: g.rowKey, keyToIdx, outOrder: g.keys.slice(), outIdx, outByKey, groupStart, groupSize, out }
+}
+
+function flattenStateOf(sizes: number[]): FlattenState {
+  const offsets = new Array<number>(sizes.length)
+  let p = 0
+  for (let i = 0; i < sizes.length; i++) { offsets[i] = p; p += sizes[i]! }
+  return { sizes, offsets }
 }
 
