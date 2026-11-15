@@ -164,6 +164,13 @@ for (const [name, d] of PATH_ARCS) {
     ['group-mark', { marks: [{ type: 'group', encode: { update: { x: { value: 37 }, y: { value: 23 }, width: { value: 70 }, height: { value: 40 }, fill: { value: diag }, stroke: { value: diag }, strokeWidth: { value: 5 }, strokeForeground: { value: true } } }, marks: [{ type: 'rect', encode: { update: { x: { value: 10 }, y: { value: 10 }, width: { value: 30 }, height: { value: 20 }, fill: { value: diag } } } }] }] }],
   ]
   for (const [name, guide] of guides) synthetic.push({ name: `canvas-guide-gradient-${name}`, spec: { ...base, ...guide } })
+  // A legend's symbols, compared call by call (a `canvas-gradient-` entry): vega's canvas draws them with its symbol mark, a circle as one
+  // full-turn arc and every shape at full precision; drawn from the SVG's three-decimal path text, a hard-edged radial fill showed
+  // the difference in WebKit (canvas-guide-gradient-entries).
+  synthetic.push({ name: 'canvas-gradient-legend-symbols', spec: { ...base, legends: [
+    { fill: 'c', encode: { symbols: { update: { fill: { value: ring }, size: { value: 200 } } } } },
+    { fill: 'c', orient: 'left', encode: { symbols: { update: { shape: { value: 'diamond' }, fill: { value: ring }, stroke: { value: 'teal' }, strokeWidth: { value: 2 }, size: { value: 150 } } } } },
+  ] } })
 }
 const CUSTOM_SHAPES: Array<[string, string]> = [
   ['ring', 'M-1,0 A1,1 0 1,1 1,0 A1,1 0 1,1 -1,0 M0.5,0 A0.5,0.5 0 0,0 -0.5,0 Z'],

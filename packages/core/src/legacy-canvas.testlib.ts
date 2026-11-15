@@ -735,7 +735,12 @@ function renderLeafItem(it: SceneItem, ctx: CanvasLike, scene: SceneRoot, box?: 
     const tx = it.x ?? 0
     const ty = it.y ?? 0
     ctx.beginPath()
-    const segs = parsePathData(it.path)
+    // (the fix that draws a guide's symbol from its shape and radius, as vega's canvas does, applies here too: the differential compares
+    // the rest; canvas-gradient-legend-symbols in browser-canvas-parity.mts holds these calls to vega's)
+    const rec = it as unknown as Record<string, unknown>
+    const symbolRadius = rec._symbolRadius as number | undefined
+    const symbolShape = rec._symbolShape as string | undefined
+    const segs = symbolRadius !== undefined ? parsePathData(cachedSymbolPath(symbolShape, symbolRadius)) : parsePathData(it.path)
     // A clipped legend symbol (clipHeight): clip to the entry's laid-out
     // rect (0,0,w,h) in the item's local frame, matching the SVG renderer's
     // clipPath defs.
@@ -746,7 +751,9 @@ function renderLeafItem(it: SceneItem, ctx: CanvasLike, scene: SceneRoot, box?: 
       ctx.rect(clip.x ?? 0, clip.y ?? 0, clip.w, clip.h)
       ctx.clip()
     }
-    if (itemAngle(it)) {
+    if (symbolRadius !== undefined && (symbolShape == null || symbolShape === 'circle')) {
+      buildInItemFrame(ctx, tx, ty, itemAngle(it) ?? 0, 1, 1, () => { ctx.moveTo(symbolRadius, 0); ctx.arc(0, 0, symbolRadius, 0, 2 * Math.PI, false) })
+    } else if (itemAngle(it)) {
       // the SVG element carries translate(x,y) rotate(angle): build in that frame
       buildInItemFrame(ctx, tx, ty, itemAngle(it)!, 1, 1, () => tracePath(ctx, segs))
     } else {
