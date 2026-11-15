@@ -540,6 +540,8 @@ function collectScopes(scene: SceneRoot | undefined): Scope[] {
       here = { id: sc.id, defs: sc.defs, names: new Set(sc.defs.filter((d) => d.push !== 'outer').map((d) => d.name)), values: sc.values, group: g, hasContent: sc.hasContent, parent }
       out.push(here)
     }
+    // (a leaf mark's items are leaves: they hold no group, as scene-registry.ts reads a scene)
+    if (g.role === 'mark' && g.marktype !== 'group') return
     for (const c of g.items ?? []) if (Array.isArray((c as SceneGroup).items)) walk(c as SceneGroup, here)
   }
   for (const r of scene.items) walk(r, null)
