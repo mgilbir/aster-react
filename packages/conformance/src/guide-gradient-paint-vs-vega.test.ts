@@ -89,7 +89,7 @@ describe('gradient paints on guides vs vega', () => {
     for (const [kind, part, channels] of PARTS) {
       for (const [paintName, paint] of PAINTS) {
         it(`${where}: ${kind} ${part}, ${channels.join(' and ')} ${paintName}, in an encode block`, async () => {
-          const update = Object.fromEntries(channels.map((c) => [c, { value: paint }]))
+          const update: Record<string, { value: unknown }> = Object.fromEntries(channels.map((c) => [c, { value: paint }]))
           // (a stroke draws with a width: the guide's group and a legend's symbols have none by default)
           if (channels.includes('stroke')) update.strokeWidth = { value: 2 }
           // (a guide's group item has no size of its own to paint: it is given one)
