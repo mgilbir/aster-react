@@ -290,7 +290,8 @@ const BUDGETS = {
   // row passes, step state from the step, the binding shell and kept legends/titles/group guides: measured 2026-11-15 on a clean build at 171.1 kB gzip (ceiling was 170.1); ceiling is the measured value + 0.5.
   // strokeForeground on legends (stack/11-legend-stroke: legend and entry front strokes, the hit index's guide boxes): measured 2026-11-15 on a clean build, previous branch -> branch (kB gzip): 171.5 -> 171.6; ceiling is the measured value + 0.5.
   // guide gradients on canvas (stack/12-guide-gradient-canvas: item bounds for guide boxes and leaves, pattern frames): measured 2026-11-15 on a clean build, previous branch -> branch (kB gzip): 171.6 -> 171.8; ceiling is the measured value + 0.5.
-  '@aster-charts/core': 172.3 * 1024,
+  // mark bound failures (stack/13-invalid-path: the pass stops where vega's bounds fail; <Chart> logs render errors): measured 2026-11-15 on a clean build, previous branch -> branch (kB gzip): 171.8 -> 172.6; ceiling is the measured value + 0.5.
+  '@aster-charts/core': 173.1 * 1024,
   // signal-change reuse (group marks, channels, marks drawn from marks, derived structures kept with engine nodes) on the canvas layer: measured 2026-11-15 on a clean build at 11.8 kB gzip (ceiling was 11.8); ceiling is the measured value + 0.5.
   // row passes, step state from the step, the binding shell and kept legends/titles/group guides: measured 2026-11-15 on a clean build at 12.5 kB gzip (ceiling was 12.3); ceiling is the measured value + 0.5.
   '+ @aster-charts/core/dom': 13.0 * 1024,
@@ -332,7 +333,8 @@ const BUDGETS = {
   // stack layer 8 (perf/lazy-features: the shells load the engine's parts and the canvas renderer on demand; module boundaries): measured 2026-11-15 on a clean build, base stack/7-hover-finish -> branch (kB gzip): 180.8 -> 165.9; ceiling is the measured value + 0.5.
   // row passes, step state from the step, the binding shell and kept legends/titles/group guides: measured 2026-11-15 on a clean build at 167.7 kB gzip (ceiling was 166.4); ceiling is the measured value + 0.5.
   // followups (stack/10-followups-correctness): measured 2026-11-15 on a clean build, base stack/9-followups-speed -> branch (kB gzip): 167.7 -> 168.2 (at the ceiling, 168.2). The hook does not use the signal loop; it moved out of the eager graph into an on-demand chunk (part-signals), and esbuild puts the code that chunk shares with the eager graph (stream-defs, util, pointer, addons) into a shared chunk the entry imports statically. Ceiling is the measured value + 0.5.
-  '@aster-charts/react useChart': 168.7 * 1024,
+  // mark bound failures (stack/13-invalid-path: the pass stops where vega's bounds fail; <Chart> logs render errors): measured 2026-11-15 on a clean build, previous branch -> branch (kB gzip): 168.3 -> 168.8; ceiling is the measured value + 0.5.
+  '@aster-charts/react useChart': 169.3 * 1024,
   // stack layer 2 (perf/vl-compile-data-independent on fix/hover-correctness: rows.ts, the row watch, signal-valued values, findSource): measured 2026-11-14 on a clean build at 220.8 kB gzip (ceiling was 220.6); ceiling is the measured value + 0.5.
   // stack layer 3 (perf/expr-encode: direct built-in calls, the shared function table, the format fast path): measured 2026-11-14 on a clean build at 221.9 kB gzip (ceiling was 221.3); ceiling is the measured value + 0.5.
   // stack layer 5 (stack/5-canvas: the event loop bound on canvas, the canvas renderer's events and hit index, the svg's pointer leaving): measured 2026-11-14 on a clean build, base stack/4-geometry -> branch (kB gzip): 226.2 -> 228.6; ceiling is the measured value + 0.5.
@@ -342,7 +344,8 @@ const BUDGETS = {
   // row passes, step state from the step, the binding shell and kept legends/titles/group guides: measured 2026-11-15 on a clean build at 211.3 kB gzip (ceiling was 209.6); ceiling is the measured value + 0.5.
   // followups (stack/10-followups-correctness: one SVG path reader, eager through the hit index; the signal loop on demand; guide gradients): measured 2026-11-15 on a clean build, base stack/9-followups-speed -> branch (kB gzip): 211.3 -> 203.2; ceiling is the measured value + 0.5.
   // strokeForeground on legends (stack/11-legend-stroke: legend and entry front strokes, the hit index's guide boxes): measured 2026-11-15 on a clean build, previous branch -> branch (kB gzip): 203.2 -> 203.5; ceiling is the measured value + 0.5.
-  '@aster-charts/react Chart': 204.0 * 1024,
+  // mark bound failures (stack/13-invalid-path: the pass stops where vega's bounds fail; <Chart> logs render errors): measured 2026-11-15 on a clean build, previous branch -> branch (kB gzip): 203.6 -> 204.4; ceiling is the measured value + 0.5.
+  '@aster-charts/react Chart': 204.9 * 1024,
   // The light chart (`@aster-charts/react/lite`): SVG only, no canvas renderer; alone and with the `interaction` capability.
   // stack layer 2 (perf/vl-compile-data-independent on fix/hover-correctness: rows.ts, the row watch, signal-valued values, findSource): measured 2026-11-14 on a clean build at 194.2 kB gzip (ceiling was 194.0); ceiling is the measured value + 0.5.
   // stack layer 3 (perf/expr-encode: direct built-in calls, the shared function table, the format fast path): measured 2026-11-14 on a clean build at 195.2 kB gzip (ceiling was 194.7); ceiling is the measured value + 0.5.
@@ -350,7 +353,8 @@ const BUDGETS = {
   // hover finish (kept axes, kept run descriptors and guide hit entries, deferred source copies, canvas frames that paint nothing): measured 2026-11-15 on a clean build at 203.2 kB gzip (ceiling was 202.4); ceiling is the measured value + 0.5.
   // stack layer 8 (perf/lazy-features: the shells load the engine's parts and the canvas renderer on demand; module boundaries): measured 2026-11-15 on a clean build, base stack/7-hover-finish -> branch (kB gzip): 203.2 -> 188.0; ceiling is the measured value + 0.5.
   // row passes, step state from the step, the binding shell and kept legends/titles/group guides: measured 2026-11-15 on a clean build at 189.8 kB gzip (ceiling was 188.5); ceiling is the measured value + 0.5.
-  '@aster-charts/react SvgChart': 190.3 * 1024,
+  // mark bound failures (stack/13-invalid-path: the pass stops where vega's bounds fail; <Chart> logs render errors): measured 2026-11-15 on a clean build, previous branch -> branch (kB gzip): 190.0 -> 190.6; ceiling is the measured value + 0.5.
+  '@aster-charts/react SvgChart': 191.1 * 1024,
   // stack layer 2 (perf/vl-compile-data-independent on fix/hover-correctness: rows.ts, the row watch, signal-valued values, findSource): measured 2026-11-14 on a clean build at 214.5 kB gzip (ceiling was 214.2); ceiling is the measured value + 0.5.
   // stack layer 3 (perf/expr-encode: direct built-in calls, the shared function table, the format fast path): measured 2026-11-14 on a clean build at 215.6 kB gzip (ceiling was 215.0); ceiling is the measured value + 0.5.
   // stack layer 5 (stack/5-canvas: the event loop bound on canvas, the canvas renderer's events and hit index, the svg's pointer leaving): measured 2026-11-14 on a clean build, base stack/4-geometry -> branch (kB gzip): 219.6 -> 221.1; ceiling is the measured value + 0.5.
@@ -360,7 +364,8 @@ const BUDGETS = {
   // row passes, step state from the step, the binding shell and kept legends/titles/group guides: measured 2026-11-15 on a clean build at 211.1 kB gzip (ceiling was 209.3); ceiling is the measured value + 0.5.
   // followups (stack/10-followups-correctness: one SVG path reader, eager through the hit index; the signal loop on demand; guide gradients): measured 2026-11-15 on a clean build, base stack/9-followups-speed -> branch (kB gzip): 211.1 -> 202.9; ceiling is the measured value + 0.5.
   // strokeForeground on legends (stack/11-legend-stroke: legend and entry front strokes, the hit index's guide boxes): measured 2026-11-15 on a clean build, previous branch -> branch (kB gzip): 202.9 -> 203.2; ceiling is the measured value + 0.5.
-  '@aster-charts/react SvgChart + interaction': 203.7 * 1024,
+  // mark bound failures (stack/13-invalid-path: the pass stops where vega's bounds fail; <Chart> logs render errors): measured 2026-11-15 on a clean build, previous branch -> branch (kB gzip): 203.3 -> 204.1; ceiling is the measured value + 0.5.
+  '@aster-charts/react SvgChart + interaction': 204.6 * 1024,
   // Base + the VL compiler (opt-in: `import '@aster-charts/react/vl'`).
   // stack layer 2 (perf/vl-compile-data-independent on fix/hover-correctness: rows.ts, the row watch, signal-valued values, findSource): measured 2026-11-14 on a clean build at 327.5 kB gzip (ceiling was 325.4); ceiling is the measured value + 0.5.
   // stack layer 3 (perf/expr-encode: direct built-in calls, the shared function table, the format fast path): measured 2026-11-14 on a clean build at 328.5 kB gzip (ceiling was 328.0); ceiling is the measured value + 0.5.
@@ -371,7 +376,8 @@ const BUDGETS = {
   // row passes, step state from the step, the binding shell and kept legends/titles/group guides: measured 2026-11-15 on a clean build at 317.9 kB gzip (ceiling was 316.0); ceiling is the measured value + 0.5.
   // followups (stack/10-followups-correctness: one SVG path reader, eager through the hit index; the signal loop on demand; guide gradients): measured 2026-11-15 on a clean build, base stack/9-followups-speed -> branch (kB gzip): 317.9 -> 309.8; ceiling is the measured value + 0.5.
   // strokeForeground on legends (stack/11-legend-stroke: legend and entry front strokes, the hit index's guide boxes): measured 2026-11-15 on a clean build, previous branch -> branch (kB gzip): 309.8 -> 310.2; ceiling is the measured value + 0.5.
-  '@aster-charts/react Chart + VL': 310.7 * 1024,
+  // mark bound failures (stack/13-invalid-path: the pass stops where vega's bounds fail; <Chart> logs render errors): measured 2026-11-15 on a clean build, previous branch -> branch (kB gzip): 310.2 -> 311.0; ceiling is the measured value + 0.5.
+  '@aster-charts/react Chart + VL': 311.5 * 1024,
 }
 
 const THIS_DIR = dirname(fileURLToPath(import.meta.url))
