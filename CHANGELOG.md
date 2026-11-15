@@ -102,8 +102,8 @@ and Fixed, per package. Everything built before the first release is in [Pre-rel
   of the incremental engine (once a chart's data changes), `intersect()`, `modify()` / `setdata()`, `timer` streams and,
   for `renderer="canvas"`, the canvas renderer are chunks the shells import when a spec needs them, suspending meanwhile as
   for the add-ons (the first commit is the `<Suspense>` fallback, never a half-made chart). In a browser build `<Chart>`
-  is 207.6 kB gzip up front (233.0 before), `useChart` 165.3 (180.2), `<SvgChart>` 186.7 (201.9); the chart-bench `<Chart>`
-  app's library cost (Vite) is 202.3 kB (225.4). A chart that needs none of these fetches nothing; mount CPU is within 3%
+  is 209.1 kB gzip up front (235.0 before), `useChart` 165.9 (180.8), `<SvgChart>` 188.0 (203.2); the chart-bench `<Chart>`
+  app's library cost (Vite) is 202.3 kB (225.4, measured on the layer below the hover finish). A chart that needs none of these fetches nothing; mount CPU is within 3%
   either way. Outside a browser build (the `browser` export condition) every part is there, so a server render draws what it
   drew; `@aster-charts/core`'s synchronous API carries every part as before.
 
