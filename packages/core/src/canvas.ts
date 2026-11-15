@@ -553,10 +553,14 @@ function renderGroup(group: SceneGroup, ctx: CanvasLike, scene: SceneRoot, plotW
     const bgBox = (group.items ?? []).some((it) => (it as { _bg?: boolean })._bg === true && (isGradientPaint(it.fill) || isGradientPaint(it.stroke)))
       ? groupGradientBox(group)
       : undefined
+    // (a guide's group item -- an axis's, a title's -- is held as its box: drawn before what the guide holds, its stroke in front after)
+    const guideBox = group.box !== undefined && (isGradientPaint(group.box.fill) || isGradientPaint(group.box.stroke) || (group.boxFg !== undefined && isGradientPaint(group.boxFg.stroke))) ? groupGradientBox(group) : undefined
+    if (group.box !== undefined) renderLeafItem(group.box, ctx, scene, guideBox)
     for (const item of group.items ?? []) {
       if (isGroup(item)) renderGroup(item, ctx, scene, gw, gh, opts)
       else renderLeafItem(item, ctx, scene, (item as { _bg?: boolean })._bg === true ? bgBox : undefined)
     }
+    if (group.boxFg !== undefined) renderLeafItem(group.boxFg, ctx, scene, guideBox)
     ctx.restore()
     return
   }
