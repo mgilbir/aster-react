@@ -1406,6 +1406,16 @@ function ChartView({
     }
   }, [moveA11yFocus])
 
+  const handleA11yFocus = React.useCallback((node: A11yNode, e: React.FocusEvent<HTMLDivElement>) => {
+    setActiveA11yId(node.id)
+    focusSpotRef.current = node.id
+    e.currentTarget.style.opacity = '0.001'
+  }, [])
+  const handleA11yBlur = React.useCallback((e: React.FocusEvent<HTMLDivElement>) => {
+    e.currentTarget.style.opacity = '0'
+    releaseFocusSpot(e.currentTarget, e.relatedTarget)
+  }, [releaseFocusSpot])
+
   const handleChartKeyDown = React.useCallback((e: React.KeyboardEvent) => {
     if (e.defaultPrevented) return
     const g = gestureInputsRef.current
@@ -1701,62 +1711,102 @@ function ChartView({
         />
       )}
       {a11yTree != null && (
-        <div
-          className="aster-a11y"
-          data-testid="chart-a11y"
-          role="group"
-          aria-label={a11yTree.label}
-          style={{ position: 'absolute', inset: 0, zIndex: 30, pointerEvents: 'none' }}
-        >
-          {a11yTree.summary != null && <span className="sr-only" style={srOnly}>{a11yTree.summary}</span>}
-          {a11yTree.nodes.map((node) => {
-            const slider = node.role === 'slider'
-            const domRole = node.kind === 'title' ? 'heading'
-              : slider ? 'slider'
-                : node.kind === 'mark' || node.kind === 'legend-entry' ? 'button'
-                  : 'img'
-            return (
-              <div
-                key={node.id}
-                data-a11y-id={node.id}
-                data-a11y-kind={node.kind}
-                role={domRole}
-                aria-level={node.kind === 'title' ? 2 : undefined}
-                aria-roledescription={node.roleDescription}
-                aria-label={node.label}
-                aria-pressed={node.kind === 'legend-entry' ? !!node.pressed
-                  : node.kind === 'mark' && node.selected != null ? node.selected : undefined}
-                aria-valuemin={slider ? node.domain?.[0] : undefined}
-                aria-valuemax={slider ? node.domain?.[1] : undefined}
-                aria-valuenow={slider && node.domain ? (node.domain[0] + node.domain[1]) / 2 : undefined}
-                tabIndex={node.id === tabStopId ? 0 : -1}
-                onKeyDown={(e) => handleA11yKeyDown(node, e)}
-                style={{
-                  position: 'absolute',
-                  left: Math.max(0, node.x),
-                  top: Math.max(0, node.y),
-                  width: Math.max(1, node.width),
-                  height: Math.max(1, node.height),
-                  opacity: 0,
-                  // Focusable by Tab/keyboard, but never steals pointer input from
-                  // the marks underneath (selection, pan, tooltips).
-                  pointerEvents: 'none',
-                  borderRadius: 2,
-                  outline: 'none',
-                }}
-                onFocus={(e) => { setActiveA11yId(node.id); focusSpotRef.current = node.id; e.currentTarget.style.opacity = '0.001' }}
-                onBlur={(e) => {
-                  e.currentTarget.style.opacity = '0'
-                  releaseFocusSpot(e.currentTarget, e.relatedTarget)
-                }}
-              />
-            )
-          })}
-        </div>
+        <A11yOverlay tree={a11yTree} tabStopId={tabStopId} onNodeKeyDown={handleA11yKeyDown} onNodeFocus={handleA11yFocus} onNodeBlur={handleA11yBlur} />
       )}
       <ChartTooltip store={tooltipStore} renderTooltip={renderTooltip} interaction={interaction} />
     </div>
   )
+}
+
+interface A11yOverlayProps {
+  tree: { label: string; summary?: string; nodes: readonly A11yNode[] }
+  tabStopId: string | null
+  onNodeKeyDown: (node: A11yNode, e: React.KeyboardEvent) => void
+  onNodeFocus: (node: A11yNode, e: React.FocusEvent<HTMLDivElement>) => void
+  onNodeBlur: (e: React.FocusEvent<HTMLDivElement>) => void
+}
+
+/**
+ * The accessible overlay: a focusable, invisible element over every node of the accessible tree. A scene that leaves the tree as it
+ * was (every node holding what it held: the same values, the same datum) renders nothing of it again (see `sameOverlay`).
+ */
+const A11yOverlay = React.memo(function A11yOverlay({ tree, tabStopId, onNodeKeyDown, onNodeFocus, onNodeBlur }: A11yOverlayProps): React.ReactElement {
+  return (
+    <div
+      className="aster-a11y"
+      data-testid="chart-a11y"
+      role="group"
+      aria-label={tree.label}
+      style={{ position: 'absolute', inset: 0, zIndex: 30, pointerEvents: 'none' }}
+    >
+      {tree.summary != null && <span className="sr-only" style={srOnly}>{tree.summary}</span>}
+      {tree.nodes.map((node) => {
+        const slider = node.role === 'slider'
+        const domRole = node.kind === 'title' ? 'heading'
+          : slider ? 'slider'
+            : node.kind === 'mark' || node.kind === 'legend-entry' ? 'button'
+              : 'img'
+        return (
+          <div
+            key={node.id}
+            data-a11y-id={node.id}
+            data-a11y-kind={node.kind}
+            role={domRole}
+            aria-level={node.kind === 'title' ? 2 : undefined}
+            aria-roledescription={node.roleDescription}
+            aria-label={node.label}
+            aria-pressed={node.kind === 'legend-entry' ? !!node.pressed
+              : node.kind === 'mark' && node.selected != null ? node.selected : undefined}
+            aria-valuemin={slider ? node.domain?.[0] : undefined}
+            aria-valuemax={slider ? node.domain?.[1] : undefined}
+            aria-valuenow={slider && node.domain ? (node.domain[0] + node.domain[1]) / 2 : undefined}
+            tabIndex={node.id === tabStopId ? 0 : -1}
+            onKeyDown={(e) => onNodeKeyDown(node, e)}
+            style={{
+              position: 'absolute',
+              left: Math.max(0, node.x),
+              top: Math.max(0, node.y),
+              width: Math.max(1, node.width),
+              height: Math.max(1, node.height),
+              opacity: 0,
+              // Focusable by Tab/keyboard, but never steals pointer input from
+              // the marks underneath (selection, pan, tooltips).
+              pointerEvents: 'none',
+              borderRadius: 2,
+              outline: 'none',
+            }}
+            onFocus={(e) => onNodeFocus(node, e)}
+            onBlur={onNodeBlur}
+          />
+        )
+      })}
+    </div>
+  )
+}, sameOverlay)
+
+/** Two overlays render the same: the same handlers, tab stop, label and summary, and nodes that hold the same values (`Object.is`). */
+function sameOverlay(a: A11yOverlayProps, b: A11yOverlayProps): boolean {
+  if (a.tabStopId !== b.tabStopId || a.onNodeKeyDown !== b.onNodeKeyDown || a.onNodeFocus !== b.onNodeFocus || a.onNodeBlur !== b.onNodeBlur) return false
+  if (a.tree === b.tree) return true
+  if (a.tree.label !== b.tree.label || a.tree.summary !== b.tree.summary || a.tree.nodes.length !== b.tree.nodes.length) return false
+  for (let i = 0; i < a.tree.nodes.length; i++) if (!sameNode(a.tree.nodes[i]!, b.tree.nodes[i]!)) return false
+  return true
+}
+
+/** Every own property of the two nodes is the same value (a `domain` pair by its two numbers). */
+function sameNode(a: A11yNode, b: A11yNode): boolean {
+  if (a === b) return true
+  const ka = Object.keys(a)
+  if (ka.length !== Object.keys(b).length) return false
+  for (const k of ka) {
+    if (!Object.hasOwn(b, k)) return false
+    const x = (a as unknown as Record<string, unknown>)[k]
+    const y = (b as unknown as Record<string, unknown>)[k]
+    if (Object.is(x, y)) continue
+    if (k === 'domain' && Array.isArray(x) && Array.isArray(y) && x.length === y.length && x.every((v, i) => Object.is(v, y[i]))) continue
+    return false
+  }
+  return true
 }
 
 /** What the tooltip shows: the item under the pointer, its datum, and where the pointer is in the chart's element. */
