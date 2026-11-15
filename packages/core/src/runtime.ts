@@ -3606,27 +3606,10 @@ function getChartInfoImpl(spec: VgSpec, input: RuntimeInput): ChartInfo {
 }
 
 /**
- * A title (or a group's title) as a scene group, with the definitions of the gradients it paints with (see `withGuideGradients`).
- */
-function buildTitleGroup(
-  title0: CompiledTitle | undefined,
-  items: SceneNode[],
-  width: number,
-  height: number,
-  raw = false,
-  ctx?: EvalContext,
-  parent?: Row,
-  fitting = false,
-): SceneGroup | null {
-  const group = makeTitleGroup(title0, items, width, height, raw, ctx, parent, fitting)
-  return ctx === undefined ? group : withGuideGradients(ctx, group)
-}
-
-/**
  * A title (or a group's title) as a scene group: the title text at (0,0) and the subtitle where the title layout put it, the group
  * itself outside the bounds of everything laid out so far.
  */
-function makeTitleGroup(
+function buildTitleGroup(
   title0: CompiledTitle | undefined,
   items: SceneNode[],
   width: number,
@@ -3653,7 +3636,9 @@ function makeTitleGroup(
   const reads = keep ? guideKeyOf(title0, ctx) : null
   const key = reads === null ? null
     : `${reads}\u0005${width}x${height}\u0005${raw ? 1 : 0}${fitting ? 1 : 0}\u0005${b.x1},${b.y1},${b.x2},${b.y2}${parent !== undefined ? `\u0005${dependencyKey(parent)}` : ''}`
-  return keptGuide(title0, ctx, key) ?? recordGuide(title0, ctx, key, () => makeTitleGroup(title0, b, width, height, raw, ctx, parent))
+  // (the definitions of the gradients it paints with are registered as it is made: such a title is made by every evaluation, see
+  // `withGuideGradients`)
+  return keptGuide(title0, ctx, key) ?? recordGuide(title0, ctx, key, () => withGuideGradients(ctx, makeTitleGroup(title0, b, width, height, raw, ctx, parent)))
 }
 
 /** Make a title's group against the bounds `b` (see `buildTitleGroup`). */
