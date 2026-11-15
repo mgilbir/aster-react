@@ -342,6 +342,43 @@ Because heavy feature areas are only used by a small fraction of specs, they are
 
 `@aster-charts/react/vl` is the same pattern at the grammar level: the Vega-Lite compiler (`@aster-charts/vl`) is registered by `import '@aster-charts/react/vl'`, so Vega-only hosts do not pay for it. A spec that needs a gated feature without its add-on loaded gets an actionable error naming what to import first. `packages/benchmarks/scripts/budget.mjs` gates one bundle per import pattern (core `renderSpec`, `useChart`, `<Chart>`, `<Chart>` + VL, and each core add-on as its marginal cost on top of core); the measured sizes are in [PERFORMANCE.md](PERFORMANCE.md#bundle-sizes).
 
+### The parts of the engine most charts never run
+
+Some modules of the engine are read only by specs that use a feature most charts do not: the legend builder (`guide-legend.ts`), the
+grid layout (`trellis.ts`), the SVG path reader for custom symbol shapes and path marks (`svg-path.ts`), vega-selections' functions
+(`selections.ts`), the regular-expression screen (`regex-screen.ts`, which runs only under `limits`), the pulse path of the incremental
+engine (`incremental-engine.ts`, needed only once a chart's data changes), and in the signal loop `intersect()` (`scene-intersect.ts`),
+`modify()` / `setdata()` (`modify.ts`) and `timer` streams (`timer.ts`); and the canvas renderer, which only `renderer="canvas"` uses.
+Their callers read them from slots (`engine-parts.ts`) instead of importing them.
+
+- **The synchronous API is unchanged.** Every public entry fills the slots its functions can read, by importing the `part-*.ts`
+  modules: `@aster-charts/core` (compile, evaluate, `renderSpec`), `/dom` (with the pulse path its sessions take), `/signals` (with the
+  loop's parts), `/hit`, `/canvas` and `/png` (with the path reader); `createChartStream` installs the pulse path when it is called. So
+  `renderSpec`, `createChartSession().evaluate`, `renderChartToStaticMarkup` and `hydrateChart` work for every spec they accepted, with
+  nothing to load first.
+- **The React shells use `@aster-charts/core/lean`** (`/lean/hit`, `/lean/signals`, `/lean/canvas`, `/lean/stream`; internal), the
+  same functions with the slots left empty. Under the `browser` export condition that is what a React app's charts load up front;
+  anywhere else (a server, a test runner) the subpath resolves to `lean-full.ts`, which fills every slot, so a synchronous server render
+  draws what it always drew.
+- **Detection and the wait.** `specNeeds(spec, { limits, random })` (`addons.ts`, one walk with the add-on detector) names the parts a
+  spec may read: `legends` in any scope; a `layout` on the view or a group mark; a path mark, or a `shape` / `symbolType` that may not be
+  a built-in symbol (a field, a signal, a rule, a custom path, in marks or in the config); a call of `vlSelection*`, `intersect`,
+  `modify` / `setdata`; a `timer` event stream; under limits, `test`, `regexp`, a regular expression literal, or `replace` / `split`
+  with an argument that may be one; with a random source, datasets that may draw from it (whose draws depend on which evaluation takes
+  a pulse, so the pulse path is there from the first). `useAddons` loads them with the add-ons, through the same Suspense wait;
+  `renderer="canvas"` adds the canvas renderer (`CanvasCapability.load`).
+- **The pulse path** is the one part an evaluation goes on without: a re-evaluation that could have taken a pulse derives the dataset
+  in full (the same rows and the same state for the next pulse) and asks for the part (`requestPart`), which `setUpShell` loads; the
+  following evaluations are incremental.
+- **An empty slot never changes a result.** Reading one throws (`[aster] the "legend" part of the engine is not loaded`), so a missed
+  detection refuses a chart instead of drawing it differently, and the regular-expression screen cannot be skipped: under limits a
+  pattern is refused before it is compiled.
+- Tests: `packages/conformance/src/parts-needed.test.ts` (over the corpus, with and without limits: the parts the engine reads, found
+  one failure at a time from empty slots, are all named, and a render with just the named parts draws and picks as with all);
+  `packages/core/src/engine-parts.test.ts` (every expression function that reads a part is named, the signal loop's parts, the screen
+  failing closed, the pulse path's fallback); `packages/react/src/Chart.lean.test.tsx` (the shells on the browser variant: the wait,
+  the canvas, new data, hydration); the `core-parts` and `react-lean` patterns of the bundle-shaking gate.
+
 ## ChartCore and the two shells
 
 `@aster-charts/react` has one chart implementation, `ChartCore` (`packages/react/src/ChartCore.tsx`: evaluation, the DOM patcher, pan/zoom,
@@ -420,6 +457,8 @@ Everything else that runs at import time only fills the module's own tables (`sc
 | core `stats-functions.js` | a top-level loop of `registerExpressionFunction` for the distribution functions (`sampleNormal`, `quantileNormal`, ...) | imported bare by `addon-transforms.js` (and by `transform-stats.ts` for its values); a bundler that drops it as side-effect free loses the functions from the expression language |
 | core `addon-load.js` | `dataFormatRegistry.set('csv' \| 'tsv' \| 'dsv' \| 'topojson')` | `import '@aster-charts/core/load'` for the readers alone must register them |
 | core `guide-caption.js` | `installGuideCaptions(...)` into `render.ts` | imported bare by `index.ts` and `dom.ts`; without it axis/legend `aria-label` captions vanish. Canvas and hit never import it, so they do not pay for it |
+| core `part-*.js`, `parts-evaluate.js`, `parts-signals.js`, `parts-all.js` | `installPart(...)` into `engine-parts.ts`'s slots | imported bare by the entries that carry the parts (below) |
+| core `index.js`, `addon-dom.js`, `entry-signals.js`, `entry-hit.js`, `entry-canvas.js`, `entry-png.js`, `lean-full.js` | bare imports of the parts their functions read | the entries re-export their implementation modules; a bundler that sees a module with no code of its own as side-effect free drops its bare imports, and the synchronous API loses its parts. (A React module never re-exports one of them: `@aster-charts/react`'s `createChartSession` is a function of its own, so an app that does not call it does not carry the parts) |
 | react `vl.js` | `registerVegaLiteCompiler(...)` (a `globalThis` registry under `Symbol.for('@aster-charts/react/vega-lite-compiler')`) | `import '@aster-charts/react/vl'` |
 | react `worker-entry.js` | `globalThis.onmessage = ...` | `import '@aster-charts/react/worker-entry'` is the worker's whole body |
 
