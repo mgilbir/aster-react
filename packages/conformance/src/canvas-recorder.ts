@@ -162,3 +162,27 @@ function invert(m: M): M | null {
   if (!det) return null
   return [m[3] / det, -m[1] / det, -m[2] / det, m[0] / det, (m[2] * m[5] - m[3] * m[4]) / det, (m[1] * m[4] - m[0] * m[5]) / det]
 }
+
+type VegaMarks = Record<string, { draw(this: unknown, ctx: unknown, scene: unknown, bounds: unknown, markTypes?: unknown): void }>
+
+/**
+ * Draw a vega scenegraph (its root mark) on `ctx` as vega's canvas renderer does: each mark drawn by its own mark type, under its
+ * mark-level clip (vega-scenegraph CanvasRenderer.draw), the group items moving the context as they go.
+ */
+export function vegaDraw(Marks: VegaMarks, ctx: never, root: unknown): void {
+  const c = ctx as unknown as { save(): void; restore(): void; beginPath(): void; rect(x: number, y: number, w: number, h: number): void; clip(): void }
+  const renderer = {
+    draw(context: unknown, scene: { marktype: string; clip?: unknown; group?: { width?: number; height?: number } }, bounds: unknown, markTypes?: unknown): void {
+      if (scene.clip) {
+        c.save()
+        c.beginPath()
+        if (typeof scene.clip === 'function') (scene.clip as (x: unknown) => void)(context)
+        else c.rect(0, 0, scene.group?.width ?? 0, scene.group?.height ?? 0)
+        c.clip()
+      }
+      Marks[scene.marktype]!.draw.call(renderer, context, scene, bounds, markTypes)
+      if (scene.clip) c.restore()
+    },
+  }
+  renderer.draw(ctx, root as never, null)
+}

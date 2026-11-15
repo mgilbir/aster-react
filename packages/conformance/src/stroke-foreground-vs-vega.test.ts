@@ -17,7 +17,7 @@ import { renderSceneToDomElement } from '@aster-charts/core/dom'
 import { renderSceneToCanvas } from '@aster-charts/core/canvas'
 import { buildHitIndex } from '@aster-charts/core/hit'
 import { canonicalizeSvg, diffCanonical } from './normalize.js'
-import { recorder, type Painted } from './canvas-recorder.js'
+import { recorder, vegaDraw, type Painted } from './canvas-recorder.js'
 
 type Spec = Record<string, unknown>
 const V = (value: unknown): { value: unknown } => ({ value })
@@ -115,7 +115,7 @@ async function vegaCanvas(spec: Spec): Promise<string[]> {
     const { ctx, painted } = recorder()
     const { ox, oy } = await frameOf(view)
     ;(ctx as unknown as { translate(x: number, y: number): void }).translate(ox, oy)
-    ;(vega as unknown as { Marks: Record<string, { draw(c: unknown, s: unknown, b: unknown): void }> }).Marks.group!.draw(ctx, (view.scenegraph() as unknown as { root: unknown }).root, null)
+    vegaDraw((vega as unknown as { Marks: Parameters<typeof vegaDraw>[0] }).Marks, ctx, (view.scenegraph() as unknown as { root: unknown }).root)
     return sequence(painted)
   })
 }
