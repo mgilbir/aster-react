@@ -1737,7 +1737,11 @@ function recordGuide(def: object, ctx: EvalContext, key: string | null, make: ()
   if (key === null || !guidesKeepable(ctx)) return make()
   const logger = ctx.logger
   let logged = 0
-  ctx.logger = { error: (...a) => { logged++; logger.error(...a) }, warn: (...a) => { logged++; logger.warn(...a) } }
+  const counted = (f: (...a: unknown[]) => void) => (...a: unknown[]): void => { logged++; f.apply(logger, a) }
+  ctx.logger = {
+    error: counted(logger.error), warn: counted(logger.warn),
+    ...(logger.info ? { info: counted(logger.info) } : {}), ...(logger.debug ? { debug: counted(logger.debug) } : {}),
+  }
   const asked = ctx.defsAsked.n
   let group: SceneGroup | null
   try {
