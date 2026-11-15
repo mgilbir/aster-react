@@ -37,9 +37,12 @@ export class ClipCollector {
   /** id -> definition, in first-use order. */
   readonly defs = new Map<string, ClipDef>()
   private readonly keys = new Map<string, string>()
+  /** How many ids were asked for, registered or not (what is drawn between two readings asked for a clip when it moved). */
+  asked = 0
 
   /** The id of `def`, registering it on first use. */
   id(def: ClipDef): string {
+    this.asked++
     const key = 'd' in def ? `p${def.d}` : `r${def.x},${def.y},${def.w},${def.h}`
     let id = `clip${hash53(key)}`
     for (let n = 1; ; n++) {

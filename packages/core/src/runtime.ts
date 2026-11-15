@@ -254,6 +254,8 @@ interface IncrementalState {
   markSources: Map<CompiledMark, { key: string; items: readonly SceneItem[]; tuples: boolean }>
   /** The view's own axes and legends as a clean pass made them, by definition, with what they were made under (see `keptGuide`). */
   guides: Map<object, GuideRecord>
+  /** The snapshots of the view's scales the scene carries, and the scales they were taken of (see `sceneSnapshots`). */
+  snapshots?: { scales: ReadonlyArray<readonly [string, unknown]>; snaps: ReturnType<typeof snapshotScales> }
   /** The content of the view this state's pass made (its root items, laid out): a later pass shares what it makes the same (see `shareScene`). */
   content?: readonly SceneGroup[]
 }
@@ -3426,7 +3428,7 @@ function evaluateChartPass(chart: CompiledChart, hostInput: RuntimeInput, txn: E
   ;(scene as unknown as { signalParams?: Record<string, unknown> }).signalParams = ctx.signalParams
   ;(scene as unknown as { compiled?: unknown }).compiled = ctx.chart
   ;(scene as unknown as { __itemGen?: number }).__itemGen = txn.gen
-  ;(scene as unknown as { __scales?: unknown }).__scales = snapshotScales(ctx.scales)
+  ;(scene as unknown as { __scales?: unknown }).__scales = sceneSnapshots(ctx)
   ;(scene as unknown as { __scaleMap?: unknown }).__scaleMap = ctx.scales
   Object.defineProperty(scene, '__datasets', { value: { rows: ctx.datasets, failed: ctx.failedDatasets }, enumerable: false, configurable: true })
   if (ctx._defs.length) scene.defs = ctx._defs
@@ -4429,6 +4431,23 @@ function onDemandBuilder(ctx: EvalContext, sources: ReadonlyMap<string, unknown>
 }
 
 /** Snapshot resolved scales into plain data for the scene differential. */
+/**
+ * The snapshots of the view's scales (what a guide's caption and a worker's clone read of them), the array the scene before carried
+ * when every scale is the object it was then: a snapshot is read off the scale objects alone (their domain, range, bandwidth,
+ * quantiles, thresholds, bins and the colours at the domain's ends), and a scale is made again whenever anything it is made from
+ * changes. The DOM patcher keeps what it made of a guide for the same array (see `guideDesc` in dom.ts).
+ */
+function sceneSnapshots(ctx: EvalContext): ReturnType<typeof snapshotScales> {
+  const prev = ctx.prev?.snapshots
+  if (prev !== undefined && sameScales(ctx, prev.scales)) {
+    ctx.draft.snapshots = prev
+    return prev.snaps
+  }
+  const snaps = snapshotScales(ctx.scales)
+  ctx.draft.snapshots = { scales: [...ctx.scales], snaps }
+  return snaps
+}
+
 function snapshotScales(scales: Map<string, Scale>): Array<{ name: string; type: string; domain: unknown[]; range: unknown[]; bandwidth?: number; samples?: [unknown, unknown] }> {
   const out: Array<{ name: string; type: string; domain: unknown[]; range: unknown[]; bandwidth?: number; samples?: [unknown, unknown] }> = []
   for (const [name, scale] of scales) {
