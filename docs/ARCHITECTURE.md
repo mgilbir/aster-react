@@ -178,12 +178,24 @@ phase of the incremental-diff gate.
   sort, a key or another transform refuses) hold the same values item by item (Object.is: a datum by identity), and its own key,
   datasets and scales hold; when the items it is drawn from are new objects its items get the datum a fresh evaluation gives them.
 
+- **The view's axes** (`keptGuide`). An axis of the view (not of a group mark) is the axis group before when its key holds
+  (`guideKeyOf`: the signals its definition names with the view size, `extraFp` and the registry, the rows of the datasets its
+  expressions read by name, the URL policy, the text measurer set for every chart, whether guides are laid out), every scale of the
+  view is the object it was, and tuple registration is as it was. Refused: a definition that reads more than it names or a dataset
+  by a computed name, a pass that is not clean, `limits`, a fit view, a failed layout; an axis whose making logged anything or
+  asked for a gradient is not recorded. The scene's scale snapshots (`__scales`) are the array before when every scale is.
+  `conformance:diff` writes signals every axis and legend of the view reads (`withGuideProbes`). Legends and titles are made by
+  every evaluation: their place is written after they are made, from the bounds of the content around them.
+
 **Derived structures are kept with the engine's nodes.** `scene-registry.ts` records the group nodes of every scene the engine
 returns. What the hit index (a mark's entries at a place), the DOM patcher (a data mark's descriptor for a clip), the accessible
 tree (a summarised mark's or a guide's box at an offset), `event.item` (a group's child groups and leaf set) and `sceneHasCursor`
 derive from such a node is kept with it in a WeakMap and used for a later scene that kept the node (`keptInto`), never for the
-scene it was made from (a host may write into a scene and draw it again). What reads more than the node is not kept: text boxes
-(the text metrics in use), guide captions (the scales), the selection and legend callbacks of the accessible tree. Pinned by
+scene it was made from (a host may write into a scene and draw it again). What reads more than the node is kept only with what it
+reads in its key, or not at all: the DOM descriptor of a run of group items (a mark's items or a guide, `RUN_DESCS`) with the frame
+around it, the scale snapshots, the text measurer, the locale and time zone and the options (not when it asked for a clip); the hit
+entries of a guide of the top level with the view's frame and the text measurer; a data mark's text boxes and the selection and
+legend callbacks of the accessible tree are not kept. Pinned by
 `derived-incremental.test.ts` and `published-scene.test.ts` (no scene the engine returned changes afterwards, node identity
 included, over sessions, streams, pulses and in-place appends).
 
@@ -229,6 +241,14 @@ included, over sessions, streams, pulses and in-place appends).
 - The canvas painter still has its own paint code; `canvas.test.ts` and the Chromium canvas gate compare it with the SVG output.
 
 **The DOM patcher** matches children by position. A reused item keeps its cached descriptor (`clean`), and a clean descriptor is only skipped when the element it lands on was last patched with that very descriptor; after a removal or reorder it is compared and written like any other (`dom-oracle.test.ts` checks patched DOM against a freshly built one over random insert/remove/reorder sequences, per-item and dense).
+
+**Canvas frames that paint nothing** (`paintsSameAs`): a scene whose every top-level group is the one painted, or paints the same
+over what the canvas renderer reads (an item's tooltip, link, cursor, description and ARIA are never read), with the same size,
+background, padding, frame and gradient definitions, is not painted at all; any other scene is painted in full. A region repaint
+(clear and repaint, clipped, the union of the changed items' painted extents) is not used: Chromium rasterises the anti-aliased edge
+of a path the clip cuts differently from the same path uncut, so it is not always what a full repaint draws. The fourth phase of
+`pnpm conformance:canvas` (browser-canvas-dirty.mts) checks every frame of random signal walks against a full repaint, pixel for
+pixel, at device pixel ratios 1 and 2.
 
 **Canvas append painting** (`renderSceneToCanvasAppend`) paints only appended marks over the previous frame and returns `false` (caller repaints in full) unless the result equals a full repaint: every existing item is untouched (same array lineage, no `__editGen` stamp, no newer `__gen` under a reused group object), every guide is unchanged (the context has no clear, so a changed guide would ghost), and the appended marks cannot land on paint a full repaint draws above them. `canvas-append-oracle.test.ts` (recorded paint) and the second phase of `pnpm conformance:canvas` (real Chromium pixels) check it over random session and stream sequences.
 

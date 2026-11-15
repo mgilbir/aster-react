@@ -614,7 +614,9 @@ OffscreenCanvas context or a recording mock); `batchSymbols` (default `true`) me
 For streams: `snapshotCanvasScene(scene)` records what was drawn (`CanvasSceneSnapshot`) and `renderSceneToCanvasAppend(snapshot, nextScene, ctx, options?)`
 paints only the appended items of the next scene on top of it; it returns `false`, having drawn nothing, when the
 result would not equal a full repaint (anything but one mark group gained items at its end, a changed guide, a later group the new
-items could cover), and the caller repaints in full. Path geometry: `parsePathData(d)` parses an SVG path string into absolute-command
+items could cover), and the caller repaints in full. `paintsSameAs(snapshot, nextScene)` is whether the next scene paints exactly
+the pixels of the snapshot's frame (every group the one painted or painting the same, over what the renderer reads: an item's
+tooltip, link, cursor, description and ARIA are not painted); `<Chart renderer="canvas">` then paints nothing. Path geometry: `parsePathData(d)` parses an SVG path string into absolute-command
 segments (`PathSeg[]`: `M L H V C S Q T A Z`, relative commands included); `tracePath(sink, segments, tx?, ty?, arcs?)` replays them onto a
 `PathSink` (the path methods of a 2D context) offset by `(tx, ty)`, with `arcs: 'bezier'` for vega's bezier approximation of an arc;
 `canonicalPath(segments)` is the normalized text of parsed segments, the form in which canvas and SVG geometry are compared.
