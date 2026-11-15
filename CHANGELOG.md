@@ -81,8 +81,22 @@ and Fixed, per package. Everything built before the first release is in [Pre-rel
   Vega-Lite spec (4,204 -> 1,043 ms); see docs/ARCHITECTURE.md for what each reuse reads.
 - A dense hit index answers its first queries by a scan of the item boxes and builds its grid when asked more; a path item's
   outline is placed when a query first reaches its box.
+- **A pointer move re-does less around the scene too.** The view's axes are kept from the evaluation before when nothing they are
+  made from changed, and the DOM patcher and the hit index keep what they made of a kept axis and of a mark's kept group items; a
+  filter or a sort over another dataset's rows copies only the rows it returns; binding the event loop no longer reads every point
+  of every leaf mark. On the chart-bench heavy survival chart (five alternating pairs, Chromium, one 60-move sweep each, CPU-busy
+  median) the Vega spec's sweep costs 245 ms where it cost 295, the Vega-Lite spec's 875 where it cost 976; the vega arms moved
+  by 3 % or less.
+- `paintsSameAs(snapshot, scene)` (`@aster-charts/core/canvas`): whether a scene paints exactly the pixels already on the canvas.
 
 ### `@aster-charts/react`
+
+#### Performance
+
+- `<Chart renderer="canvas">` paints nothing for a scene that paints the pixels already on the canvas (a pointer move that changes
+  only a tooltip): the chart-bench survival chart's canvas sweep costs 247 ms where it cost 692 (vega's canvas: 537).
+- A pointer move that only moves the tooltip renders the tooltip, not the chart; a scene that leaves the accessible tree as it
+  was renders none of the accessible overlay.
 
 #### Fixed
 
