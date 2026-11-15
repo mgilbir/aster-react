@@ -37,8 +37,9 @@ export async function runSymbolRunOracle(browserName: 'chromium' | 'firefox' | '
   rmSync(OUT_DIR, { recursive: true, force: true })
   mkdirSync(OUT_DIR, { recursive: true })
   const entry = `
-// (the canvas renderer reads the path reader from a slot the public entries fill: this page imports the module, so the part too)
-import ${JSON.stringify(join(CORE_SRC, 'part-svgpath.ts'))}
+// (the canvas renderer reads the path reader from a slot the public entries fill: this page imports the module, so the parts too)
+import { installAllParts } from ${JSON.stringify(join(CORE_SRC, 'install-parts.testlib.ts'))}
+installAllParts()
 import { renderSceneToCanvas } from ${JSON.stringify(join(CORE_SRC, 'canvas.ts'))}
 
 const W = 400, H = 300

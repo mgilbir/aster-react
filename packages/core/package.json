@@ -102,9 +102,7 @@
     "./dist/part-intersect.js",
     "./dist/part-modify.js",
     "./dist/part-timer.js",
-    "./dist/part-canvas.js",
-    "./src/part-*.ts",
-    "./src/parts-*.ts"
+    "./dist/part-canvas.js"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.build.json",

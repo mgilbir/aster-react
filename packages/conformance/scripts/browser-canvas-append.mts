@@ -37,7 +37,8 @@ export async function runAppendPixelOracle(
   mkdirSync(OUT_DIR, { recursive: true })
   const entry = `
 // (core's modules read the parts of the engine from slots the public entries fill: this page imports the modules, so the parts too)
-import ${JSON.stringify(join(CORE_SRC, 'parts-all.ts'))}
+import { installAllParts } from ${JSON.stringify(join(CORE_SRC, 'install-parts.testlib.ts'))}
+installAllParts()
 import { canvasScenario } from ${JSON.stringify(join(CORE_SRC, 'canvas-append-scenario.testlib.ts'))}
 import { renderSceneToCanvas, renderSceneToCanvasAppend, snapshotCanvasScene } from ${JSON.stringify(join(CORE_SRC, 'canvas.ts'))}
 
