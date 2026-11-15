@@ -6,6 +6,8 @@
 import * as vega from 'vega'
 import { compileChart, evaluateChart, type SceneGroup, type SceneItem } from '@aster-charts/core'
 import { Bounds, boundGroupItem, boundTypedMark } from '../../core/src/bounds.js'
+// (the bounds of a path read the path reader from a slot the public entries fill: these are core's own modules, so the part is imported too)
+import '../../core/src/part-svgpath.js'
 
 type Box = [number, number, number, number]
 interface VegaNode { marktype?: string; role?: string; items?: VegaNode[]; bounds?: { x1: number; y1: number; x2: number; y2: number } }
