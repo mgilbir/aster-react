@@ -576,7 +576,9 @@ try {
       plugins: IGNORE_SIDE_EFFECTS ? [ignoreSideEffects] : [],
     })
     const outputs = built.metafile.outputs
-    const entryOut = Object.keys(outputs).find((o) => outputs[o].entryPoint)
+    // (esbuild gives every chunk that a dynamic import() starts an entryPoint too: the app is the output built from its own file)
+    const entryOut = Object.keys(outputs).find((o) => outputs[o].entryPoint !== undefined && join(MONOREPO_ROOT, outputs[o].entryPoint) === entryPath)
+    if (entryOut === undefined) throw new Error(`no output of ${entry.file} is its entry point`)
     const initial = new Set()
     const visit = (o) => {
       if (initial.has(o)) return
