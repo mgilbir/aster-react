@@ -271,12 +271,12 @@ function walkSpec(spec: Json, refuseUrls: boolean): Found {
     }
     // a facet that partitions by `groupby` (not one over an array `field`) makes its group items with the aggregation engine
     if (key === 'facet' && isObj(node) && !Array.isArray(node) && node.field === undefined) found.parts.add('aggregate')
-    if (key === 'scales') { scaleNeeds(node, found); found.scales.push(node) }
     if (key === 'signals' && typeof node.name === 'string') {
       const list = found.signals.get(node.name)
       if (list) list.push(node)
       else found.signals.set(node.name, [node])
     }
+    if (key === 'scales') { scaleNeeds(node, found); found.scales.push(node) }
     // a line or an area drawn with a curve besides `linear` (an encode set's channel, or a config default); a scale's `interpolate` is
     // its colour space (the colour part)
     else if (node.interpolate != null && namesCurve(node.interpolate)) found.parts.add('curves')
