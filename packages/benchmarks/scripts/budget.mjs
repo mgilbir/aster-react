@@ -291,7 +291,11 @@ const BUDGETS = {
   // strokeForeground on legends (stack/11-legend-stroke: legend and entry front strokes, the hit index's guide boxes): measured 2026-11-15 on a clean build, previous branch -> branch (kB gzip): 171.5 -> 171.6; ceiling is the measured value + 0.5.
   // guide gradients on canvas (stack/12-guide-gradient-canvas: item bounds for guide boxes and leaves, pattern frames): measured 2026-11-15 on a clean build, previous branch -> branch (kB gzip): 171.6 -> 171.8; ceiling is the measured value + 0.5.
   // mark bound failures (stack/13-invalid-path: the pass stops where vega's bounds fail; <Chart> logs render errors): measured 2026-11-15 on a clean build, previous branch -> branch (kB gzip): 171.8 -> 172.6; ceiling is the measured value + 0.5.
-  '@aster-charts/core': 173.1 * 1024,
+  // parts on demand (perf/parts-on-demand-2: the transform, time, curve, colour and rare-scale families as parts of the engine, read from
+  // slots): measured 2026-11-16 on a clean build, base origin/main a078891 -> branch (kB gzip): 172.7 -> 174.7. The entry carries every
+  // part, as before; what it adds is the slot reads and the part objects that name each family's functions (+1.5 kB min), and the
+  // modules moving into their families' files. Ceiling is the measured value + 0.5.
+  '@aster-charts/core': 175.2 * 1024,
   // signal-change reuse (group marks, channels, marks drawn from marks, derived structures kept with engine nodes) on the canvas layer: measured 2026-11-15 on a clean build at 11.8 kB gzip (ceiling was 11.8); ceiling is the measured value + 0.5.
   // row passes, step state from the step, the binding shell and kept legends/titles/group guides: measured 2026-11-15 on a clean build at 12.5 kB gzip (ceiling was 12.3); ceiling is the measured value + 0.5.
   '+ @aster-charts/core/dom': 13.0 * 1024,
@@ -378,6 +382,9 @@ const BUDGETS = {
   // strokeForeground on legends (stack/11-legend-stroke: legend and entry front strokes, the hit index's guide boxes): measured 2026-11-15 on a clean build, previous branch -> branch (kB gzip): 309.8 -> 310.2; ceiling is the measured value + 0.5.
   // mark bound failures (stack/13-invalid-path: the pass stops where vega's bounds fail; <Chart> logs render errors): measured 2026-11-15 on a clean build, previous branch -> branch (kB gzip): 310.2 -> 311.0; ceiling is the measured value + 0.5.
   '@aster-charts/react Chart + VL': 311.5 * 1024,
+  // The opt-in import of every part of the engine up front (`import '@aster-charts/react/all'`): what an app that prefers no first-render
+  // wait pays. Measured 2026-11-16 on a clean build at 246.4 kB gzip (`<Chart>` alone: 180.5); ceiling is the measured value + 0.5.
+  '@aster-charts/react Chart + all': 246.9 * 1024,
 }
 
 const THIS_DIR = dirname(fileURLToPath(import.meta.url))
@@ -510,6 +517,16 @@ export default SvgChart
     src: String.raw`import { SvgChart } from '@aster-charts/react/lite'
 import { interaction } from '@aster-charts/react/interaction'
 export { SvgChart, interaction }
+`,
+  },
+  {
+    name: '@aster-charts/react Chart + all',
+    file: 'react-all.tsx',
+    platform: 'browser',
+    external: ['react', 'react-dom', 'react/jsx-runtime'],
+    src: String.raw`import '@aster-charts/react/all'
+import { Chart } from '@aster-charts/react'
+export default Chart
 `,
   },
   {
