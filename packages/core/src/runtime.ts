@@ -12,7 +12,7 @@ import { ingestRows, isNotATupleError, notATuple, readData, type DataFormatSpec 
 import { followsSources, numbersSourceRows, orderOf, setOrder, setSources, sourcesAfter, sourcesOf } from './tuple-order.js'
 import { alignIndices, carryByAlignment, carryBySources, sourceNumbersOf, type IdCounter, type SourceNumbers } from './identifier-ids.js'
 import { applyTransforms, applyTransformsToSharedRows, copiesRows, rowUseOf, sortOrder, getField, geoJSONPath, type Row, type TransformContext } from './transform.js'
-import { fieldOf } from './transform-agg.js'
+import { fieldOf, flatKeyFn, groupKeyFn } from './row-keys.js'
 import { atRandomSite, contentKey, mayDrawRandom, normalPairs, replayable } from './random-tape.js'
 import { lexedText } from './expr-text.js'
 import { isEngineNode, noteEngineScene } from './scene-registry.js'
@@ -54,7 +54,6 @@ import type {
 } from './types.js'
 import { gradientDefOf, hash53, isGradientPaint } from './svg-defs.js'
 import { tickFormat, scaleGradient, scaleGradientStops, tickCount, validTicks } from './scale.js'
-import { timeIntervalFor, utcIntervalFor } from './time.js'
 import { compileChart } from './compiler.js'
 import { dict, ownGet, pushAll, sortData, lerp, scopedSignalName, heldSignalName, isTuple, markTuple, markTuples, markTupleAlways, withTuples, tuplesRegistering, PRIMITIVE_TUPLE, tupleDatum } from './util.js'
 import { applyImageUrlPolicy, applyLinkUrlPolicy, resolveImageUrl, type ImageUrlPolicy } from './url-policy.js'
@@ -62,7 +61,7 @@ import { checkChartUrlData } from './url-data.js'
 import { valueKey, valuesEqual } from './fingerprint.js'
 import { dataWithoutRows, valuesSignal } from './spec-structure.js'
 import { diffRows, equalCell, rowsEqual, sourceNames, type PulseChange } from './pulse.js'
-import { aggregateGroups, flatKeyFn, groupKeyFn } from './transform-agg.js'
+import type { aggregateGroups } from './transform-agg.js'
 import type { GridPlace } from './trellis.js'
 import { boundAxisGroup, boundGroupItem, boundLeaf, boundTypedMark, Bounds, layoutBounds, eachMarkBounds, hasClippedMark } from './bounds.js'
 import { rectItemPath } from './render.js'
@@ -5826,7 +5825,7 @@ function groupSources(mark: CompiledMark, ctx: EvalContext): GroupSource[] | nul
     const as = ag?.as ?? (ag?.ops ? ag.ops.map((op, i) => `${op}_${ag.fields?.[i]}`) : undefined)
     let grouped: ReturnType<typeof aggregateGroups>
     try {
-      grouped = aggregateGroups(rows, { groupby: keys, ...(ag?.ops ? { fields: ag.fields, ops: ag.ops, as } : {}), ...(ag?.cross ? { cross: true } : {}) })
+      grouped = part('aggregate').aggregateGroups(rows, { groupby: keys, ...(ag?.ops ? { fields: ag.fields, ops: ag.ops, as } : {}), ...(ag?.cross ? { cross: true } : {}) })
     } catch (e) {
       // (a cross-product over a nested path reads a path from a row that has only the name: the aggregate throws, the run stops
       // there, and the mark is never made)
@@ -7961,7 +7960,7 @@ function axisTicks(axis: CompiledAxis, scale: Scale, ctx: EvalContext): unknown[
     if (raw === 'hour' || raw === 'minute' || raw === 'second' || raw === 'millisecond') {
       count = undefined
     } else {
-      const ival = scale.type === 'time' ? timeIntervalFor(raw) : utcIntervalFor(raw)
+      const ival = scale.type === 'time' ? part('time').timeIntervalFor(raw) : part('time').utcIntervalFor(raw)
       if (!ival) throw new Error(`[aster] unknown time interval: ${raw}`)
       count = (step != null ? (ival as { every?: (n: number) => unknown }).every?.(step as number) : ival) as unknown as number
     }

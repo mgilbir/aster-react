@@ -7,7 +7,7 @@
  * This module supplies the *function context* — the semantics of
  * `vega-functions` that our runtime needs — bound to our scales/data, plus
  * owned, oracle-vector-tested ports: the type/array/string/math utilities
- * (`./util.js`), the colour spaces (`./color.js`), the calendar (`./time.js`)
+ * (`./util.js`), the colour spaces (`./color.js`, the engine's colour part), the calendar (`./time.js`, the engine's time part: engine-parts.ts)
  * and the format layer (`./locale.js`).
  */
 import { currentLocale } from './locale.js'
@@ -18,10 +18,6 @@ import { parseExpressionCached } from './expr-parser.js'
 import { PRIMITIVE_TUPLE, tupleDatum } from './util.js'
 import { ADDON_FUNCTIONS } from './addon-functions.js'
 import { compileExpression, DefaultFunctions, ExpressionConstants, EventFunctions, FIRST_ARGUMENT_ONLY, markBuiltinTable } from './expr-interpreter.js'
-import {
-  timeOffset, utcOffset, timeSequence, utcSequence,
-  dayofyear, utcdayofyear, week, utcweek, timeUnitSpecifier,
-} from './time.js'
 
 /**
  * `sequence(...)`: the arithmetic sequence [start, stop) by step, as vega's (d3-array's `range`) reads its arguments: by how many
@@ -48,7 +44,6 @@ function numericSequence(args: readonly unknown[]): number[] {
   }
   return out
 }
-import { rgb, hsl, lab, hcl } from './color.js'
 import type { AstNode } from './expr-parser.js'
 import {
   ascending, extent, lerp as lerpOf, isArray, isBoolean, isDate, isNumber, isObject,
@@ -165,19 +160,19 @@ function fmtUtc(value: unknown, spec?: string): string {
 const D = (value: unknown): Date => new Date(value as number)
 
 const quarterFn = (v: unknown): number => 1 + ~~(D(v).getMonth() / 3)
-const weekFn = (v: unknown): number => week(v)
-const dayofyearFn = (v: unknown): number => dayofyear(v)
+const weekFn = (v: unknown): number => part('time').week(v)
+const dayofyearFn = (v: unknown): number => part('time').dayofyear(v)
 
 const utcQuarterFn = (v: unknown): number => 1 + ~~(D(v).getUTCMonth() / 3)
-const utcWeekFn = (v: unknown): number => utcweek(v)
-const utcDayofyearFn = (v: unknown): number => utcdayofyear(v)
+const utcWeekFn = (v: unknown): number => part('time').utcweek(v)
+const utcDayofyearFn = (v: unknown): number => part('time').utcdayofyear(v)
 
 // `datetime` is `new Date(...)` with the arguments as given; `utc` is `Date.UTC(...)`.
 const datetime = (...args: unknown[]): Date => new (Date as unknown as new (...a: unknown[]) => Date)(...args)
 const timeOffsetFn = (unit: unknown, date: unknown, step?: unknown): Date | undefined =>
-  timeOffset(unit as string, date, step as number)
+  part('time').timeOffset(unit as string, date, step as number)
 const utcOffsetFn = (unit: unknown, date: unknown, step?: unknown): Date | undefined =>
-  utcOffset(unit as string, date, step as number)
+  part('time').utcOffset(unit as string, date, step as number)
 
 // --- string/array utilities (vega semantics) --------------------------------
 //
@@ -232,22 +227,6 @@ function testRe(pattern: unknown, text: unknown): boolean {
   const input = String(text)
   checkRegexInput(input)
   return re.test(input)
-}
-
-// --- WCAG luminance / contrast -----------------------------------------------
-
-function channelLum(c: number): number {
-  const val = c / 255
-  return val <= 0.03928 ? val / 12.92 : Math.pow((val + 0.055) / 1.055, 2.4)
-}
-function luminance(spec: unknown): number {
-  const c = rgb(spec as string)
-  return 0.2126 * channelLum(c.r) + 0.7152 * channelLum(c.g) + 0.0722 * channelLum(c.b)
-}
-function contrastRatio(c1: unknown, c2: unknown): number {
-  const l1 = luminance(c1)
-  const l2 = luminance(c2)
-  return (Math.max(l1, l2) + 0.05) / (Math.min(l1, l2) + 0.05)
 }
 
 // -----------------------------------------------------------------------------
@@ -565,9 +544,9 @@ function createBuiltinFunctions(runtime: ExpressionRuntime): Record<string, unkn
     timeOffset: (unit: unknown, date: unknown, step?: unknown) => timeOffsetFn(unit, date, step),
     utcOffset: (unit: unknown, date: unknown, step?: unknown) => utcOffsetFn(unit, date, step),
     timeSequence: (unit: unknown, start: unknown, stop: unknown, step?: unknown) =>
-      timeSequence(unit as string, start, stop, step as number),
+      part('time').timeSequence(unit as string, start, stop, step as number),
     utcSequence: (unit: unknown, start: unknown, stop: unknown, step?: unknown) =>
-      utcSequence(unit as string, start, stop, step as number),
+      part('time').utcSequence(unit as string, start, stop, step as number),
     quarter: quarterFn, week: weekFn, dayofyear: dayofyearFn,
     utcquarter: utcQuarterFn, utcweek: utcWeekFn, utcdayofyear: utcDayofyearFn,
     // formatting
@@ -576,18 +555,19 @@ function createBuiltinFunctions(runtime: ExpressionRuntime): Record<string, unkn
     utcFormat: (value: unknown, spec?: string) => fmtUtc(value, spec),
     timeParse: (value: unknown, spec: string) => (value === null ? 'null' : L.timeParse(spec)(value as string)),
     utcParse: (value: unknown, spec: string) => (value === null ? 'null' : L.utcParse(spec)(value as string)),
-    timeUnitSpecifier: (units: unknown, specs?: unknown) => timeUnitSpecifier(units as never, specs as never),
+    timeUnitSpecifier: (units: unknown, specs?: unknown) => part('time').timeUnitSpecifier(units as never, specs as never),
     monthFormat: monthFormatValue,
     monthAbbrevFormat: (month: unknown) => nameFormat(month, 1, '%b'),
     dayFormat: dayFormatValue,
     dayAbbrevFormat: (day: unknown) => nameFormat(0, 2 + (day as number), '%a'),
     // colors
-    rgb: (...args: number[] | [string]) => (rgb as unknown as (...a: unknown[]) => unknown)(...args),
-    hsl: (...args: number[] | [string]) => (hsl as unknown as (...a: unknown[]) => unknown)(...args),
-    lab: (...args: number[] | [string]) => (lab as unknown as (...a: unknown[]) => unknown)(...args),
-    hcl: (...args: number[] | [string]) => (hcl as unknown as (...a: unknown[]) => unknown)(...args),
-    luminance,
-    contrast: contrastRatio,
+    // (the colour spaces are the engine's colour part: engine-parts.ts)
+    rgb: (...args: number[] | [string]) => (part('color').rgb as unknown as (...a: unknown[]) => unknown)(...args),
+    hsl: (...args: number[] | [string]) => (part('color').hsl as unknown as (...a: unknown[]) => unknown)(...args),
+    lab: (...args: number[] | [string]) => (part('color').lab as unknown as (...a: unknown[]) => unknown)(...args),
+    hcl: (...args: number[] | [string]) => (part('color').hcl as unknown as (...a: unknown[]) => unknown)(...args),
+    luminance: (spec: unknown) => part('color').luminance(spec),
+    contrast: (c1: unknown, c2: unknown) => part('color').contrastRatio(c1, c2),
     // data & scale functions
     data: (name: string) => tupleData(runtime.data(name) ?? []),
     indata: (name: string, field: string, value: unknown) => {

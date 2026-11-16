@@ -32,7 +32,13 @@ const lean = (): void => { restore = withdrawParts(SPEC_PARTS) }
 
 describe('an expression function that reads a part is one the detector names', () => {
   const RE = /a+/
-  const argLists: unknown[][] = [[], ['a'], ['abc', RE], ['abc', RE, 'x'], [['a', 'b'], RE], ['store', { a: 1 }], ['store', { a: 1 }, 'union']]
+  // (and the arguments the calendar and colour functions read: a month or a day, a date and a format, a unit, a colour)
+  // (small instants: a date also reaches the functions that take a count, and as a number it must stay a small one)
+  const DAY = new Date(5)
+  const argLists: unknown[][] = [
+    [], ['a'], ['abc', RE], ['abc', RE, 'x'], [['a', 'b'], RE], ['store', { a: 1 }], ['store', { a: 1 }, 'union'],
+    [1], [DAY], [DAY, '%Y'], ['2020', '%Y'], ['day', DAY, 2], ['day', DAY, new Date(3 * 86_400_000)], [['year', 'month']], ['#f00'], ['#f00', '#0f0'],
+  ]
   const runtime: ExpressionRuntime = { scale: () => undefined, data: () => [{ unit: 'u', fields: [], values: [] }], expr: (e) => compileExpr(e, runtime) }
 
   it('calling every function of the table with a regular expression argument, under limits, from empty slots', () => {
@@ -219,7 +225,8 @@ describe('the pulse path: a re-evaluation without it derives in full, the same s
     const drawing = { width: 10, height: 10, data: [{ name: 't', transform: [{ type: 'formula', expr: 'random()', as: 'r' }] }], marks: [{ type: 'text', from: { data: 't' }, encode: { update: { text: { field: 'r' } } } }] } as unknown as VgSpec
     expect(parts(drawing, { random: true })).toBe('pulse')
     expect(parts(drawing)).toBe('')
-    expect(parts(spec, { random: true })).toBe('')
+    // (the transforms of `spec` are parts of their own; the pulse path is not among them: its datasets draw nothing)
+    expect(parts(spec, { random: true })).toBe('aggregate,window,reshape')
     const draws = (): string[] => {
       let n = 0
       const random = (): number => ((n++ * 37) % 101) / 101

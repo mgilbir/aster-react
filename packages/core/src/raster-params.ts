@@ -7,7 +7,7 @@
  * bandwidth, with the messages `invalid size`, `invalid cell size` and `invalid bandwidth`.
  */
 import { array } from './util.js'
-import { fieldOf, type Row } from './transform-agg.js'
+import { fieldOf, type Row } from './row-keys.js'
 
 type Params = Record<string, unknown>
 export type Get = (d: Row) => unknown

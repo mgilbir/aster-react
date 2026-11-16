@@ -160,8 +160,8 @@ forEachVariant(['svg'], (Chart, variant) => describe(`${variant.name} on the lea
 
   it('new data is drawn at once, as with every part, while the pulse path loads for the next change', async () => {
     const rows = (n: number): Array<{ x: string; y: number }> => Array.from({ length: n }, (_, i) => ({ x: `k${i}`, y: (i * 7) % 11 }))
-    // (a dataset with steps: a change of its rows is what the pulse path re-derives)
-    const spec = (): VgSpec => ({ ...PLAIN, data: [{ name: 'table', transform: [{ type: 'filter', expr: 'datum.y >= 0' }, { type: 'collect', sort: { field: 'x' } }] }] } as VgSpec)
+    // (a dataset with steps: a change of its rows is what the pulse path re-derives; row-local steps, which need no part of their own)
+    const spec = (): VgSpec => ({ ...PLAIN, data: [{ name: 'table', transform: [{ type: 'filter', expr: 'datum.y >= 0' }, { type: 'formula', expr: 'datum.y * 2', as: 'y2' }] }] } as VgSpec)
     const draw = async (n: number): Promise<string[]> => {
       const c = document.createElement('div')
       document.body.appendChild(c)

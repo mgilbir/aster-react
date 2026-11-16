@@ -527,3 +527,19 @@ function cubehelixConvert(input: unknown): Cubehelix {
 }
 
 export const cubehelix = colorFactory(cubehelixConvert, (h, s, l, o) => new Cubehelix(h, s, l, o))
+
+// --- WCAG luminance / contrast -----------------------------------------------
+
+function channelLum(c: number): number {
+  const val = c / 255
+  return val <= 0.03928 ? val / 12.92 : Math.pow((val + 0.055) / 1.055, 2.4)
+}
+export function luminance(spec: unknown): number {
+  const c = rgb(spec as string)
+  return 0.2126 * channelLum(c.r) + 0.7152 * channelLum(c.g) + 0.0722 * channelLum(c.b)
+}
+export function contrastRatio(c1: unknown, c2: unknown): number {
+  const l1 = luminance(c1)
+  const l2 = luminance(c2)
+  return (Math.max(l1, l2) + 0.05) / (Math.min(l1, l2) + 0.05)
+}

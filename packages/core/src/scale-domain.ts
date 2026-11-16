@@ -15,7 +15,7 @@
 import { SpecParseError } from './parse-error.js'
 import { isDiscrete, isQuantile } from './scale.js'
 import { aggregateGroup } from './transform.js'
-import { aggregateRows } from './transform-agg.js'
+import { part } from './engine-parts.js'
 import { ascending, error as raise, isArray, isObject, isString, pushAll, sortData } from './util.js'
 
 export interface ScaleContext {
@@ -184,7 +184,7 @@ function categoriesOf(ctx: ScaleContext, data: string, field: string, ordering: 
   const measured = columnValues(ctx, data, ordering.field)
   const rows = keys.map((group, i) => ({ group, value: measured[i] }))
   const column = columnName(ordering.op, ordering.field)
-  return aggregateRows(rows, { groupby: ['group'], fields: [null, 'value'], ops: ['count', ordering.op], as: ['count', 'measure'] }).map((r) => ({
+  return part('aggregate').aggregateRows(rows, { groupby: ['group'], fields: [null, 'value'], ops: ['count', ordering.op], as: ['count', 'measure'] }).map((r) => ({
     key: r.group,
     count: r.count as number,
     [column]: r.measure,

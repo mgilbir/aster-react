@@ -24,11 +24,81 @@ import type { applyChangeset, newChangeset, planModify } from './modify.js'
 import type { Timers } from './timer.js'
 import type { IncrementalEngine } from './runtime.js'
 import type { bindSceneSignals } from './signals.js'
+import type { aggregateGroups, aggregateRows, joinAggregateRows, pivotRows } from './transform-agg.js'
+import type { windowRows } from './transform-window.js'
+import type {
+  binRows, collectRows, extentOfField, flattenRows, foldRows, identifierRows, imputeRows, lookupRows, projectRows, sampleRows, sequenceRows, stackRows,
+} from './transform-basic.js'
+import type { timeunitRows } from './transform-timeunit.js'
+import type { time, utcTime } from './scale-calendar.js'
+import type { dayofyear, timeIntervalFor, timeOffset, timeSequence, timeUnitSpecifier, utcdayofyear, utcIntervalFor, utcOffset, utcSequence, utcweek, week } from './time.js'
+import type { defaultTimeLocale, timeFormatLocale } from './locale-time.js'
+import type { FAMILIES } from './curves.js'
+import type { contrastRatio, hcl, hsl, lab, luminance, rgb } from './color.js'
+import type { interpolateRgb, interpolateText, isColor } from './interp-color.js'
+import type { rampScheme } from './color-schemes.js'
+import type {
+  diverging, divergingLog, divergingPow, divergingSqrt, divergingSymlog, identityScale, log, pow, sequential, sequentialLog, sequentialPow,
+  sequentialSqrt, sequentialSymlog, sqrt, symlog,
+} from './scale-warped.js'
+import type { binOrdinal, quantileScale, quantize, threshold } from './scale-classes.js'
 import type {
   createCanvasEvents, loadImages, paintsSameAs, renderSceneToCanvas, renderSceneToCanvasAppend, sceneImageUrls, snapshotCanvasScene, withSceneImages,
 } from './canvas.js'
 
 export interface EngineParts {
+  /**
+   * The aggregation engine (transform-agg.ts): the `aggregate`, `joinaggregate` and `pivot` transforms, a facet's `groupby` (its group
+   * items are an aggregate), and a scale domain sorted by an aggregate of another field (`sort: {op, field}`).
+   */
+  aggregate: { aggregateRows: typeof aggregateRows; aggregateGroups: typeof aggregateGroups; joinAggregateRows: typeof joinAggregateRows; pivotRows: typeof pivotRows }
+  /** The `window` transform (transform-window.ts). */
+  window: { windowRows: typeof windowRows }
+  /**
+   * The row transforms of transform-basic.ts: `collect`, `sample`, `fold`, `flatten`, `project`, `extent`, `sequence`, `lookup`,
+   * `impute`, `stack`, `identifier` and `bin`.
+   */
+  reshape: {
+    collectRows: typeof collectRows; sampleRows: typeof sampleRows; foldRows: typeof foldRows; flattenRows: typeof flattenRows; projectRows: typeof projectRows
+    extentOfField: typeof extentOfField; sequenceRows: typeof sequenceRows; lookupRows: typeof lookupRows; imputeRows: typeof imputeRows
+    stackRows: typeof stackRows; identifierRows: typeof identifierRows; binRows: typeof binRows
+  }
+  /**
+   * The calendar and the time formats (time.ts, time-format.ts, locale-time.ts): the `time` and `utc` scales, the `timeunit` transform,
+   * a date formatted or parsed (a time scale's labels, `formatType: 'time' | 'utc'`, a `date:` / `utc:` parse of a dataset, a time
+   * locale in the config) and the expression functions that read the calendar (`timeFormat`, `utcParse`, `timeOffset`, `week`...).
+   */
+  time: {
+    timeunitRows: typeof timeunitRows; time: typeof time; utcTime: typeof utcTime
+    timeIntervalFor: typeof timeIntervalFor; utcIntervalFor: typeof utcIntervalFor; timeOffset: typeof timeOffset; utcOffset: typeof utcOffset
+    timeSequence: typeof timeSequence; utcSequence: typeof utcSequence; dayofyear: typeof dayofyear; utcdayofyear: typeof utcdayofyear
+    week: typeof week; utcweek: typeof utcweek; timeUnitSpecifier: typeof timeUnitSpecifier
+    defaultTimeLocale: typeof defaultTimeLocale; timeFormatLocale: typeof timeFormatLocale
+  }
+  /** The curves of a line or an area besides `linear` (curves.ts): an `interpolate` that names one, or that is not a literal. */
+  curves: { families: typeof FAMILIES }
+  /**
+   * Colours (color.ts, interp-color.ts, color-schemes.ts): a scale that blends colours (a scheme that is a ramp, a range of texts on
+   * a continuous scale, a named `interpolate`), and the expression functions `rgb`, `hsl`, `lab`, `hcl`, `luminance`, `contrast`.
+   */
+  color: {
+    rgb: typeof rgb; hsl: typeof hsl; lab: typeof lab; hcl: typeof hcl; luminance: typeof luminance; contrastRatio: typeof contrastRatio
+    interpolateText: typeof interpolateText; interpolateRgb: typeof interpolateRgb; isColor: typeof isColor
+    /** The colour interpolators a scale's `interpolate` names, by the key scale.ts makes of the name (`Hcl`, `RgbBasis`...). */
+    interpolators: ReadonlyMap<string, unknown>
+    rampScheme: typeof rampScheme
+  }
+  /**
+   * The scale types besides linear, ordinal, band, point and the calendar ones (scale-warped.ts, scale-classes.ts): log, pow, sqrt,
+   * symlog, identity, sequential and diverging (a continuous scale over colours is one), quantile, quantize, threshold, bin-ordinal.
+   */
+  scales: {
+    log: typeof log; pow: typeof pow; sqrt: typeof sqrt; symlog: typeof symlog; identityScale: typeof identityScale
+    sequential: typeof sequential; sequentialLog: typeof sequentialLog; sequentialPow: typeof sequentialPow; sequentialSqrt: typeof sequentialSqrt
+    sequentialSymlog: typeof sequentialSymlog; diverging: typeof diverging; divergingLog: typeof divergingLog; divergingPow: typeof divergingPow
+    divergingSqrt: typeof divergingSqrt; divergingSymlog: typeof divergingSymlog
+    quantileScale: typeof quantileScale; quantize: typeof quantize; threshold: typeof threshold; binOrdinal: typeof binOrdinal
+  }
   /** The legend builder (guide-legend.ts): a spec with `legends`. */
   legend: { buildLegend: typeof buildLegend; entriesRefusal: typeof entriesRefusal; legendType: typeof legendType; placeLegendStack: typeof placeLegendStack }
   /** The grid layout of a group's children (trellis.ts): a spec with a `layout`. */
@@ -63,7 +133,10 @@ export interface EngineParts {
 export type EnginePart = keyof EngineParts
 
 /** Every part, in the order `partsNeeded` lists them. */
-export const ENGINE_PARTS: readonly EnginePart[] = Object.freeze(['legend', 'layout', 'pulse', 'selections', 'regex', 'svgpath', 'intersect', 'modify', 'timer', 'canvas', 'signals'])
+export const ENGINE_PARTS: readonly EnginePart[] = Object.freeze([
+  'aggregate', 'window', 'reshape', 'time', 'curves', 'color', 'scales',
+  'legend', 'layout', 'pulse', 'selections', 'regex', 'svgpath', 'intersect', 'modify', 'timer', 'canvas', 'signals',
+])
 
 const slots: Partial<EngineParts> = {}
 

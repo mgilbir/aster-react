@@ -6,8 +6,7 @@
  */
 import { carryOrder } from './tuple-order.js'
 import { exprRowPass, sortOrder, type Row } from './transform.js'
-import { fieldsOf, groupKeyFn } from './transform-agg.js'
-import { flattenLength } from './transform-basic.js'
+import { fieldsOf, flattenLength, groupKeyFn } from './row-keys.js'
 import type { CompiledTransform, SortSpec } from './types.js'
 import { applyFresh, type StepTransformContext } from './runtime.js'
 import { recordByproduct, type GroupsByproduct, type StepByproduct } from './step-byproduct.js'
