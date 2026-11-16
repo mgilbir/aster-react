@@ -37,11 +37,16 @@
     "./vl": {
       "types": "./dist/vl.d.ts",
       "default": "./dist/vl.js"
+    },
+    "./all": {
+      "types": "./dist/all.d.ts",
+      "default": "./dist/all.js"
     }
   },
   "sideEffects": [
     "./dist/vl.js",
-    "./dist/worker-entry.js"
+    "./dist/worker-entry.js",
+    "./dist/all.js"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.build.json",

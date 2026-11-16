@@ -31,6 +31,10 @@ Add-ons (each a separate entry, so a chart pays only for what it imports): `@ast
 `@aster-charts/core/addons` says which of them a spec needs (`addonsNeeded(spec)`) and imports the missing ones on
 demand (`loadAddonsFor(spec)`); the React shells use it, so a spec renders with nothing imported
 ([how add-ons load themselves](https://github.com/mgilbir/aster-react/blob/main/docs/ARCHITECTURE.md#geo-projections--the-add-on-boundary)).
+Every entry carries the whole engine, so `renderSpec` and the other synchronous functions draw any spec with nothing to load. The
+same module also names the *parts* of the engine a spec needs (`specNeeds(spec).parts`: the rarer transforms, time, curves, colour
+ramps, rare scale types, legends, ...), which `@aster-charts/react` loads on demand in a browser build, and `preloadParts(names?)`
+fetches them ahead of time.
 
 Specs from untrusted sources need `limits`; see [LIMITS](https://github.com/mgilbir/aster-react/blob/main/docs/LIMITS.md). See also the
 [repository documentation](https://github.com/mgilbir/aster-react#readme), especially the [API reference](https://github.com/mgilbir/aster-react/blob/main/docs/API.md),

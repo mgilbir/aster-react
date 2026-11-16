@@ -41,7 +41,7 @@ Aster ships three public packages:
 | `@aster-charts/core` | `@aster-charts/core` | compile/evaluate/render a Vega spec to SVG; limits, streams, a11y tree |
 | `@aster-charts/core/…` | `/addons`, `/dom`, `/canvas`, `/png`, `/hit`, `/signals`, `/transition`, `/load`, `/geo`, `/transforms` | `/addons` says which add-ons a spec needs and loads them on demand; `/transition` interpolates between two scenes; `/png` encodes a scene as a PNG; the others are opt-in add-ons (tree-shaking boundaries) |
 | `@aster-charts/react` | `@aster-charts/react` | `<Chart>`, `useChart`, streams, SSR/hydration, worker hooks |
-| `@aster-charts/react/…` | `/lite`, `/interaction`, `/png`, `/vl`, `/worker`, `/worker-entry`, `/ssr` | `/lite` is the SVG-only `<SvgChart>`; `/interaction` is the `interaction` capability that adds tooltips, point selection and `signal.on` streams to it; `/png` is the `png` capability that gives it `getPng`; `/vl` registers the Vega-Lite compiler (and exports `compile`, `isVegaLiteSpec`, `normalizeChartSpec`); `/worker` has the worker registries and protocol; `/worker-entry` is a ready worker script; `/ssr` is the string/hydration pair |
+| `@aster-charts/react/…` | `/lite`, `/interaction`, `/png`, `/vl`, `/all`, `/worker`, `/worker-entry`, `/ssr` | `/lite` is the SVG-only `<SvgChart>`; `/interaction` is the `interaction` capability that adds tooltips, point selection and `signal.on` streams to it; `/png` is the `png` capability that gives it `getPng`; `/vl` registers the Vega-Lite compiler (and exports `compile`, `isVegaLiteSpec`, `normalizeChartSpec`); `/all` puts every part of the engine in the app's bundle, so no chart waits for one; `/worker` has the worker registries and protocol; `/worker-entry` is a ready worker script; `/ssr` is the string/hydration pair |
 | `@aster-charts/vl` | `@aster-charts/vl` | from-scratch Vega-Lite → Vega compiler |
 
 `@aster-charts/core` takes Vega specs only. Vega-Lite goes through `@aster-charts/vl` (or `@aster-charts/react/vl`).
@@ -581,26 +581,29 @@ add-on that registers it). Test seams: `registeredFunctionNames` lists the expre
 
 The same module reads which *parts of the engine* a spec may need (see "The parts of the engine most charts never run" in
 docs/ARCHITECTURE.md): `specNeeds(spec, options?)` returns `{ addons, parts, eventLoop }` from one walk (`eventLoop`: a scope declares signals, so an interactive shell binds the signal loop), `partsNeeded(spec, options?)` the parts
-alone (`EnginePart`: `'legend' | 'layout' | 'pulse' | 'selections' | 'regex' | 'svgpath' | 'intersect' | 'modify' | 'timer'`), with
+alone (`EnginePart`: `'aggregate' | 'window' | 'reshape' | 'time' | 'curves' | 'color' | 'scales' | 'legend' | 'layout' | 'pulse' |
+'selections' | 'regex' | 'svgpath' | 'intersect' | 'modify' | 'timer'`, besides `'canvas'` and `'signals'`, which no spec names), with
 `PartOptions` adding `{ limits, random }` to `{ urlData }`; `partsNotLoaded(names)` filters a list by what is loaded, `loadParts(names)`
-imports parts, and `loadPartsFor(spec, options?)` loads every add-on and part a spec needs. The tables they read: `PART_FUNCTIONS`
+imports parts, and `loadPartsFor(spec, options?)` loads every add-on and part a spec needs. `preloadParts(names?)` loads parts ahead of
+time (every part, the canvas renderer and the signal loop included, when no names are given; a name that is not a part rejects with a
+`TypeError`), for an app that would rather fetch the families its charts use before the first chart than when it renders. The tables they read: `PART_FUNCTIONS`
 (an expression function to the part it needs) and `REGEX_ARGUMENT_FUNCTIONS` (the functions that screen an argument that is a regular
 expression). Every public entry of `@aster-charts/core` already carries the parts its functions read, so a host of the synchronous API
 never needs these; they are what the React shells use.
 
-**`@aster-charts/core/lean`, `/lean/hit`, `/lean/signals`, `/lean/canvas`, `/lean/stream` (internal).** The engine as `@aster-charts/react`'s shells use it, not covered by semver: under the `browser` export condition the parts of the
+**`@aster-charts/core/lean`, `/lean/hit`, `/lean/signals`, `/lean/canvas`, `/lean/stream`, `/lean/all` (internal).** The engine as `@aster-charts/react`'s shells use it, not covered by semver: under the `browser` export condition the parts of the
 engine are left out and loaded on demand, anywhere else every part is there. `/lean` re-exports `buildA11yTree`, `chartInfoFromScene`,
 `renderSceneToSvg`, `AsterLimitError`, `checkSvgLength`, `createPointMapper`, `resolveCursor`, `createCursorTracker`, `sceneHasCursor`, `consoleLogger`, `checkChartRows`,
 `shareRowWatch`, `checkUrlData`, `createChartSession`, `chartSkeleton`, `hasDenseSymbolMarks`, `patchSceneDom`,
 `renderSceneToDomElement`, the add-on and part functions above (`addonsNeeded`, `loadAddons`, `loadAddonsFor`, `missingAddons`,
-`notLoaded`, `specNeeds`, `partsNeeded`, `partsNotLoaded`, `loadParts`, `loadPartsFor`), and `ENGINE_PARTS`, `part(name)` (a loaded
+`notLoaded`, `specNeeds`, `partsNeeded`, `partsNotLoaded`, `loadParts`, `loadPartsFor`, `preloadParts`), and `ENGINE_PARTS`, `part(name)` (a loaded
 part; throws for an empty slot), `partLoaded(name)`, `withdrawParts(names)` (a test seam that empties slots and returns a function
 that fills them again) and `setUpShell()` (what the shells call once: the guide captions and the loader of the pulse path).
 `/lean/hit` is `@aster-charts/core/hit`; `/lean/canvas` exports `loadCanvasPart()`, which loads the canvas renderer for
 `<Chart renderer="canvas">` (and, outside a browser build, `part`, the renderer itself); `/lean/signals` exports `loadSignalsPart()`,
 which loads the signal event loop (the `signals` part: `bindSceneSignals`) for a chart the shells bind it for, a spec that declares
 signals (`specNeeds(spec).eventLoop`) or a host that listens to them; `/lean/stream` is the chart stream (`createChartStream`,
-`getStreamFlushFailure`).
+`getStreamFlushFailure`); `/lean/all` exports nothing: importing it puts every part in its slot (what `@aster-charts/react/all` imports).
 
 #### `@aster-charts/core/dom`
 
@@ -777,6 +780,26 @@ imported: `<Chart>`, `<SvgChart>`, the hooks and the worker entry import what th
 and the chart suspends meanwhile, so put a `<Suspense fallback>` above it. The synchronous entry points (`renderSpec`,
 `renderChartToStaticMarkup`, `hydrateChart`) cannot wait: `await loadAddonsFor(spec)` before them. The rules, server rendering,
 workers and `url` data are in [ARCHITECTURE.md](ARCHITECTURE.md#geo-projections--the-add-on-boundary).
+
+**Parts of the engine load themselves too, or all up front.** In a browser build the shells bundle only the engine every chart runs.
+The families most charts never run are parts loaded the first time a chart on the page needs one: the aggregating (`aggregate`,
+`joinaggregate`, `pivot`, a facet's groups), `window` and reshaping (`stack`, `bin`, `impute`, `lookup`, `fold`, ...) transforms; time
+scales, `timeunit` and date formats; the curves besides `linear`; colour ramps and blending; the scale types besides linear, ordinal,
+band, point, time and utc; legends, grid layouts, the vega-selections functions, the signal loop and the canvas renderer. `specNeeds`
+(`@aster-charts/core/addons`) reads which ones a spec needs, and the chart suspends while they load, as for an add-on: put a
+`<Suspense fallback>` above it. A chart that needs none fetches nothing. The trade-off is one round trip the first time a page shows a
+chart that needs a rare family, against the bytes of every family in every app's bundle. An app that prefers no first-render wait at
+all imports every part up front:
+
+```ts
+import '@aster-charts/react/all'   // side effect: every part of the engine in the bundle, no chart ever waits for one
+```
+
+This costs the bytes of the whole engine (the `<Chart>` + `/all` row of [PERFORMANCE.md](PERFORMANCE.md#bundle-sizes)) whether or not
+the app's charts use them; the add-ons stay opt-in (`import '@aster-charts/core/geo'` and the like for no wait on those). In between,
+`preloadParts(names?)` (exported here and by `@aster-charts/core/addons`) fetches the families an app knows it uses ahead of time, without
+adding them to the bundle: `preloadParts(['time', 'color'])` at start-up, or `preloadParts()` for every part. Outside a browser build
+(a server render, a test runner) every part is always there and none of this changes anything.
 
 The base `@aster-charts/react` entry does not include the Vega-Lite compiler; importing `@aster-charts/react/vl` adds about 103 kB
 gzip to the bundle (`<Chart>` 205.3 kB, `<Chart>` + `@aster-charts/react/vl` 308.3 kB eager, measured 2026-11-06 by

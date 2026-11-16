@@ -73,6 +73,10 @@
       "types": "./dist/stream.d.ts",
       "default": "./dist/stream.js"
     },
+    "./lean/all": {
+      "types": "./dist/lean-all.d.ts",
+      "default": "./dist/lean-all.js"
+    },
     "./package.json": "./package.json"
   },
   "sideEffects": [
@@ -111,7 +115,8 @@
     "./dist/part-timer.js",
     "./dist/part-canvas.js",
     "./dist/part-signals.js",
-    "./dist/lean-signals-full.js"
+    "./dist/lean-signals-full.js",
+    "./dist/lean-all.js"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.build.json",

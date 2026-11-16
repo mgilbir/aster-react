@@ -33,6 +33,10 @@ export {
 // The opt-in core add-ons a spec needs (transforms, geo, load) are imported on demand by the shells and hooks; this is the
 // same step for hosts that cannot wait inside React (a server that calls renderChartToStaticMarkup, a prefetch).
 export { loadAddonsFor } from './addons.js'
+// The parts of the engine a browser build loads on demand (a legend, a time scale, a colour ramp...), fetched ahead of time by an app
+// that knows its charts need them (`import '@aster-charts/react/all'` bundles every part instead).
+export { preloadParts } from './addons.js'
+export type { EnginePart } from '@aster-charts/core/lean'
 export {
   useChart,
   useSpecData,

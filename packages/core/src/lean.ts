@@ -27,7 +27,7 @@ export { createChartSession, skeletonOf as chartSkeleton } from './session.js'
 export { hasDenseSymbolMarks, patchSceneDom, renderSceneToDomElement } from './dom.js'
 export {
   addonsNeeded, loadAddons, loadAddonsFor, missingAddons, notLoaded,
-  specNeeds, partsNeeded, partsNotLoaded, loadParts, loadPartsFor,
+  specNeeds, partsNeeded, partsNotLoaded, loadParts, loadPartsFor, preloadParts,
   type AddonName, type PartOptions, type SpecNeeds,
 } from './addons.js'
 export { ENGINE_PARTS, part, partLoaded, withdrawParts, type EngineParts, type EnginePart } from './engine-parts.js'
