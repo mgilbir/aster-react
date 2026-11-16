@@ -35,7 +35,7 @@ export {
 export { loadAddonsFor } from './addons.js'
 // The parts of the engine a browser build loads on demand (a legend, a time scale, a colour ramp...), fetched ahead of time by an app
 // that knows its charts need them (`import '@aster-charts/react/all'` bundles every part instead).
-export { preloadParts } from './addons.js'
+export { preloadParts } from './preload.js'
 export type { EnginePart } from '@aster-charts/core/lean'
 export {
   useChart,

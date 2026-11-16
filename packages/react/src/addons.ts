@@ -97,4 +97,4 @@ export function useAddons(spec: VgSpec | null, urlData?: UrlDataMode, input?: Ad
 const NOTHING_TO_LOAD: Promise<Error | null> = Object.assign(Promise.resolve(null), { status: 'fulfilled', value: null })
 const NOTHING: SpecNeeds = { addons: [], parts: [], eventLoop: false }
 
-export { loadAddonsFor, preloadParts } from '@aster-charts/core/lean'
+export { loadAddonsFor } from '@aster-charts/core/lean'

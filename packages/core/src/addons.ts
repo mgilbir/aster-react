@@ -650,21 +650,21 @@ export function loadPartsFor(spec: VgSpec, options?: PartOptions): Promise<void>
   return Promise.all([loadAddons(addons), loadParts(parts)]).then(() => undefined)
 }
 
+/** The parts a spec's evaluation can read: every part but the canvas renderer and the signal loop (the React capabilities load those). */
+const SPEC_PARTS: readonly EnginePart[] = ENGINE_PARTS.filter((p) => p !== 'canvas' && p !== 'signals')
+
 /**
- * Load parts of the engine ahead of time (every part when no names are given): for an app on `@aster-charts/core/lean` (the React shells
- * in a browser build) that knows which families its charts use and would rather fetch them before the first chart than when it
- * renders. Resolves once they are all loaded; rejects, naming the part, when an import fails, and with a TypeError for a name that is
- * not a part (`ENGINE_PARTS` lists them). A part already loaded is not fetched again. (`import '@aster-charts/react/all'` instead puts
+ * Load parts of the engine ahead of time (every part a spec can name when no names are given): for an app on
+ * `@aster-charts/core/lean` (the React shells in a browser build) that knows which families its charts use and would rather fetch them
+ * before the first chart than when it renders. Resolves once they are all loaded; rejects, naming the part, when an import fails, and
+ * with a TypeError for a name that is not such a part (`'canvas'` and `'signals'` are the React capabilities' to load: `preloadParts`
+ * of `@aster-charts/react` takes them too). A part already loaded is not fetched again. (`import '@aster-charts/react/all'` instead puts
  * every part in the app's bundle, so that none is ever fetched.)
  */
-export function preloadParts(names: readonly EnginePart[] = ENGINE_PARTS): Promise<void> {
-  const unknown = names.filter((n) => !ENGINE_PARTS.includes(n))
-  if (unknown.length) return Promise.reject(new TypeError(`[aster] not a part of the engine: ${unknown.map((n) => JSON.stringify(n)).join(', ')} (the parts are ${ENGINE_PARTS.join(', ')})`))
-  const wanted = names.filter((n) => !partLoaded(n))
-  // (the canvas renderer and the signal loop are loaded by their capabilities in a chart; ahead of time, by the same modules)
-  return Promise.all([
-    loadParts(wanted.filter((n) => n !== 'canvas' && n !== 'signals')),
-    wanted.includes('canvas') ? import('./part-canvas.js').then((m) => m.loadCanvasPart()) : undefined,
-    wanted.includes('signals') ? import('./part-signals.js').then((m) => m.loadSignalsPart()) : undefined,
-  ]).then(() => undefined)
+export function preloadParts(names: readonly EnginePart[] = SPEC_PARTS): Promise<void> {
+  const refused = names.filter((n) => !SPEC_PARTS.includes(n))
+  if (refused.length) {
+    return Promise.reject(new TypeError(`[aster] not a part of the engine a spec reads: ${refused.map((n) => JSON.stringify(n)).join(', ')} (they are ${SPEC_PARTS.join(', ')}; the canvas renderer and the signal loop are preloaded by preloadParts of @aster-charts/react)`))
+  }
+  return loadParts(names.filter((n) => !partLoaded(n)))
 }

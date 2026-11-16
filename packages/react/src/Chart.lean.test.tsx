@@ -42,7 +42,8 @@ vi.mock('@aster-charts/core/lean/canvas', async (importOriginal) => ({
 }))
 
 const { forEachVariant } = await import('./testing/variants')
-const { ENGINE_PARTS, loadParts, partLoaded, preloadParts, specNeeds, withdrawParts } = await import('@aster-charts/core/lean')
+const { ENGINE_PARTS, loadParts, partLoaded, specNeeds, withdrawParts } = await import('@aster-charts/core/lean')
+const { preloadParts } = await import('./preload')
 const { loadCanvasPart } = await vi.importActual<{ loadCanvasPart: () => Promise<void> }>('@aster-charts/core/lean/canvas')
 const { loadSignalsPart } = await import('@aster-charts/core/lean/signals')
 

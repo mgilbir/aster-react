@@ -585,8 +585,9 @@ alone (`EnginePart`: `'aggregate' | 'window' | 'reshape' | 'time' | 'curves' | '
 'selections' | 'regex' | 'svgpath' | 'intersect' | 'modify' | 'timer'`, besides `'canvas'` and `'signals'`, which no spec names), with
 `PartOptions` adding `{ limits, random }` to `{ urlData }`; `partsNotLoaded(names)` filters a list by what is loaded, `loadParts(names)`
 imports parts, and `loadPartsFor(spec, options?)` loads every add-on and part a spec needs. `preloadParts(names?)` loads parts ahead of
-time (every part, the canvas renderer and the signal loop included, when no names are given; a name that is not a part rejects with a
-`TypeError`), for an app that would rather fetch the families its charts use before the first chart than when it renders. The tables they read: `PART_FUNCTIONS`
+time (every part a spec can name when no names are given; a name that is not one rejects with a `TypeError`: `'canvas'` and `'signals'`
+are `@aster-charts/react`'s capabilities' to load, and its `preloadParts` takes them too), for an app that would rather fetch the
+families its charts use before the first chart than when it renders. The tables they read: `PART_FUNCTIONS`
 (an expression function to the part it needs) and `REGEX_ARGUMENT_FUNCTIONS` (the functions that screen an argument that is a regular
 expression). Every public entry of `@aster-charts/core` already carries the parts its functions read, so a host of the synchronous API
 never needs these; they are what the React shells use.
@@ -797,8 +798,9 @@ import '@aster-charts/react/all'   // side effect: every part of the engine in t
 
 This costs the bytes of the whole engine (the `<Chart>` + `/all` row of [PERFORMANCE.md](PERFORMANCE.md#bundle-sizes)) whether or not
 the app's charts use them; the add-ons stay opt-in (`import '@aster-charts/core/geo'` and the like for no wait on those). In between,
-`preloadParts(names?)` (exported here and by `@aster-charts/core/addons`) fetches the families an app knows it uses ahead of time, without
-adding them to the bundle: `preloadParts(['time', 'color'])` at start-up, or `preloadParts()` for every part. Outside a browser build
+`preloadParts(names?)` fetches the families an app knows it uses ahead of time, without adding them to the bundle:
+`preloadParts(['time', 'color'])` at start-up, or `preloadParts()` for every part (the canvas renderer and the signal loop included; a
+name that is not a part rejects with a `TypeError`). Outside a browser build
 (a server render, a test runner) every part is always there and none of this changes anything.
 
 The base `@aster-charts/react` entry does not include the Vega-Lite compiler; importing `@aster-charts/react/vl` adds about 103 kB
