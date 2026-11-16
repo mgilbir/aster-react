@@ -21,9 +21,9 @@ import { meterTick } from './limits.js'
 import { recorded, recordingFor, type GroupsByproduct } from './step-byproduct.js'
 import { quantileSorted } from './arr.js'
 
-export { SEED, lcg, fieldOf, fieldsOf, sortBySpec, compareOf, stableSortBy, groupKeyFn, flatKeyFn, type Row, type Compare } from './row-keys.js'
+export { SEED, lcg, fieldOf, fieldsOf, sortBySpec, compareOf, stableSortBy, type Row, type Compare } from './row-keys.js'
 import { SEED, lcg, fieldOf, fieldsOf, groupKeyOf, numbersOf, quartiles, type Row } from './row-keys.js'
-export { quantiles, quartiles } from './row-keys.js'
+export { quantiles } from './row-keys.js'
 type Get = (d: unknown) => unknown
 
 // ---------------------------------------------------------------------------
