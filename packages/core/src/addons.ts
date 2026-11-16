@@ -219,7 +219,7 @@ function customShape(v: unknown): boolean {
  * One walk of `spec`, with a stack (specs nest to any depth), bounded like the rest of the engine's spec walks, and safe on a cyclic
  * object: what `addonsNeeded` and `partsNeeded` report.
  */
-function walkSpec(spec: Json, refuseUrls: boolean): Found {
+function walkSpec(spec: Json, refuseUrls: boolean, hostSignals?: Readonly<Record<string, unknown>>): Found {
   const found: Found = { addons: new Set(), parts: new Set(), eventLoop: false, scales: [], signals: new Map() }
   // (a scope's lists are read as the compiler reads them, vega-util `array()`: a single object is a one-element list)
   if (spec.projections != null && (!Array.isArray(spec.projections) || spec.projections.length > 0)) found.addons.add('geo')
@@ -300,7 +300,7 @@ function walkSpec(spec: Json, refuseUrls: boolean): Found {
   }
   // the colours a scale blends, once every signal it may read is known
   const ranges = isObj(spec.config) && isObj(spec.config.range) && !Array.isArray(spec.config.range) ? spec.config.range : undefined
-  const numeric = numericReader(found.signals)
+  const numeric = numericReader(found.signals, hostSignals)
   for (const scale of found.scales) {
     if (!scaleBlendsColors(scale, ranges, numeric)) continue
     found.parts.add('color')
@@ -378,15 +378,17 @@ const NUMERIC_CONSTANTS = new Set(['NaN', 'E', 'LN2', 'LN10', 'LOG2E', 'LOG10E',
  * above, `containerSize()[i]`, the view's `width` and `height`, and a signal whose every definition (value, init, update, handlers)
  * is such a value and that no input binds. Anything else (a text, a field of a datum, an object) may be anything.
  */
-function numericReader(signals: Map<string, Json[]>): NumericReader {
+function numericReader(signals: Map<string, Json[]>, host?: Readonly<Record<string, unknown>>): NumericReader {
   const known = new Map<string, boolean>()
+  const plain = (v: unknown): boolean => v == null || typeof v === 'number' || typeof v === 'boolean'
   const signal = (name: string): boolean => {
     const cached = known.get(name)
     if (cached !== undefined) return cached
+    // (a value the host sets is the signal's value, whatever the spec says)
+    if (host !== undefined && Object.hasOwn(host, name) && !plain(host[name])) return false
     const defs = signals.get(name)
     if (!defs) return name === 'width' || name === 'height' || NUMERIC_CONSTANTS.has(name)
     known.set(name, false) // (a definition that reads itself is not taken to be a number)
-    const plain = (v: unknown): boolean => v == null || typeof v === 'number' || typeof v === 'boolean'
     const ok = defs.every((d) =>
       d.bind == null && d.push == null && plain(d.value) && (d.init == null || expr(d.init)) && (d.update == null || expr(d.update)) &&
       (d.on == null || (Array.isArray(d.on) && d.on.every((h) => isObj(h) && (h.update == null || expr(h.update)) && h.encode == null))))
@@ -452,6 +454,11 @@ export interface PartOptions extends AddonOptions {
   limits?: boolean
   /** Whether the host injects a random source (`RuntimeInput.random`). */
   random?: boolean
+  /**
+   * The values the host sets on the spec's signals (`RuntimeInput.signals`, `<Chart signals>`): a value that is not a number (nor a
+   * boolean, null or undefined) may reach a scale's range, where the colour part reads it, whatever the spec declares.
+   */
+  signals?: Readonly<Record<string, unknown>>
 }
 
 const NO_PARTS: readonly EnginePart[] = Object.freeze([])
@@ -461,7 +468,7 @@ const NO_NEEDS: SpecNeeds = Object.freeze({ addons: NONE, parts: NO_PARTS, event
 export function specNeeds(spec: VgSpec, options?: PartOptions): SpecNeeds {
   if (!isObj(spec)) return NO_NEEDS
   validateUrlDataMode(options?.urlData)
-  const found = walkSpec(spec, options?.urlData === 'refuse')
+  const found = walkSpec(spec, options?.urlData === 'refuse', options?.signals)
   const addons: AddonName[] = []
   if (found.addons.has('transforms')) addons.push('transforms')
   if (found.addons.has('geo')) addons.push('geo')

@@ -318,6 +318,13 @@ describe('the detector reads the families of the engine from the structure', () 
     expect(parts({ scales: [{ name: 'c', type: { signal: 't' } }] })).toBe('time,color,scales')
     expect(parts({ signals: [{ name: 's', update: "luminance('red')" }] })).toBe('color')
   })
+  it("a host's signal value that is not a number decides for the colour part, whatever the spec declares", () => {
+    const spec = { signals: [{ name: 'w', value: 10 }], scales: [{ name: 'c', type: 'linear', range: [0, { signal: 'w' }] }] }
+    expect(parts(spec)).toBe('')
+    expect(parts(spec, { signals: { w: 20 } })).toBe('')
+    expect(parts(spec, { signals: { w: 'red' } })).toBe('color,scales')
+    expect(parts({ scales: [{ name: 'c', type: 'linear', range: [0, { signal: 'width' }] }] }, { signals: { width: 'red' } })).toBe('color,scales')
+  })
 })
 
 describe('a missed detection is refused, naming the part, never drawn differently', () => {

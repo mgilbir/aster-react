@@ -47,6 +47,8 @@ export interface AddonInput {
   limits?: boolean
   /** Whether the chart has a `random` source. */
   random?: boolean
+  /** The values the host sets on the spec's signals (`signals`): one that is not a number may need the colour part (see `specNeeds`). */
+  signals?: Readonly<Record<string, unknown>>
   /** The canvas renderer to load first, when the chart draws on a canvas (`renderer="canvas"` with the canvas capability). */
   canvas?: { load: () => Promise<void> }
   /**
@@ -70,17 +72,19 @@ export function useAddons(spec: VgSpec | null, urlData?: UrlDataMode, input?: Ad
   const random = input?.random === true
   const canvas = input?.canvas
   const eventLoop = input?.eventLoop
+  // (of the host's signal values only those that are not numbers matter to the walk, by name: a cheap key, read each render)
+  const textual = nonNumericSignals(input?.signals)
   // what the spec needs is a walk of the spec: once per spec, not once per render (a signal event re-renders the chart often)
   const needed = React.useMemo((): SpecNeeds | Error => {
     if (spec === null) return NOTHING
     try {
       checkUrlData(spec, urlData)
-      const options: PartOptions = { urlData, limits, random }
+      const options: PartOptions = { urlData, limits, random, ...(textual ? { signals: Object.fromEntries(textual.split('\u0001').map((n) => [n, ''])) } : {}) }
       return specNeeds(spec, options)
     } catch (e) {
       return e instanceof Error ? e : new Error(String(e))
     }
-  }, [spec, urlData, limits, random])
+  }, [spec, urlData, limits, random, textual])
   if (needed instanceof Error) return needed
   const addons = notLoaded(needed.addons)
   const parts = partsNotLoaded(needed.parts)
@@ -93,6 +97,17 @@ export function useAddons(spec: VgSpec | null, urlData?: UrlDataMode, input?: Ad
     ? NOTHING_TO_LOAD
     : settle(addons, parts, loadCanvas, loadLoop))
 }
+/** The names of the host's signal values that are not numbers (nor booleans, null or undefined), joined: '' when there are none. */
+function nonNumericSignals(signals: Readonly<Record<string, unknown>> | undefined): string {
+  if (!signals) return ''
+  let out = ''
+  for (const name of Object.keys(signals)) {
+    const v = signals[name]
+    if (v != null && typeof v !== 'number' && typeof v !== 'boolean') out += (out ? '\u0001' : '') + name
+  }
+  return out
+}
+
 /** A promise `React.use` reads synchronously: it is marked fulfilled the way React marks the thenables it has seen settle. */
 const NOTHING_TO_LOAD: Promise<Error | null> = Object.assign(Promise.resolve(null), { status: 'fulfilled', value: null })
 const NOTHING: SpecNeeds = { addons: [], parts: [], eventLoop: false }

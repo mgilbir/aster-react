@@ -326,4 +326,25 @@ forEachVariant(['svg'], (Chart, variant) => describe(`${variant.name} on the lea
     await preloadParts()
     expect(ENGINE_PARTS.filter(partLoaded)).toEqual(ENGINE_PARTS)
   })
+
+  it("a host's signal value that is not a number loads the colour part the spec alone does not name", async () => {
+    // (a continuous scale whose range reads a signal the spec declares a number: the host sets it to colours)
+    const spec = { ...PLAIN, signals: [{ name: 'hi', value: 200 }], scales: [...(PLAIN.scales as object[]), { name: 'shade', type: 'linear', domain: [0, 30], range: [{ signal: 'lo' }, { signal: 'hi' }] }],
+      marks: [{ type: 'rect', from: { data: 'table' }, encode: { update: { x: { value: 0 }, width: { value: 4 }, y: { value: 0 }, height: { value: 4 }, fill: { scale: 'shade', field: 'val' } } } }] } as VgSpec
+    ;(spec.signals as object[]).push({ name: 'lo', value: 0 })
+    const host = { lo: '#000', hi: '#fff' }
+    const expected = await drawnWithEveryPart(<Chart spec={spec} signals={host} width={300} height={200} />)
+    for (const p of pending.splice(0)) await p
+    act(() => { for (const r of roots) r.unmount() })
+    roots = []
+    withdrawParts(ENGINE_PARTS)
+    expect(specNeeds(spec).parts).toEqual([])
+    const errors: Error[] = []
+    const c = mount(<Chart spec={spec} signals={host} width={300} height={200} onError={(e) => errors.push(e)} />)
+    await settle()
+    expect(errors).toEqual([])
+    // (and the signal loop, for a shell that binds it: the spec declares signals)
+    expect(ENGINE_PARTS.filter(partLoaded).filter((p) => p !== 'signals')).toEqual(['color', 'scales'])
+    expect(c.innerHTML).toBe(expected)
+  })
 }))

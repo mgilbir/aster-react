@@ -583,7 +583,7 @@ The same module reads which *parts of the engine* a spec may need (see "The part
 docs/ARCHITECTURE.md): `specNeeds(spec, options?)` returns `{ addons, parts, eventLoop }` from one walk (`eventLoop`: a scope declares signals, so an interactive shell binds the signal loop), `partsNeeded(spec, options?)` the parts
 alone (`EnginePart`: `'aggregate' | 'window' | 'reshape' | 'time' | 'curves' | 'color' | 'scales' | 'legend' | 'layout' | 'pulse' |
 'selections' | 'regex' | 'svgpath' | 'intersect' | 'modify' | 'timer'`, besides `'canvas'` and `'signals'`, which no spec names), with
-`PartOptions` adding `{ limits, random }` to `{ urlData }`; `partsNotLoaded(names)` filters a list by what is loaded, `loadParts(names)`
+`PartOptions` adding `{ limits, random, signals }` to `{ urlData }` (`signals`: the values the host sets on the spec's signals, one of which, when it is not a number, may reach a scale's range and so needs the colour part); `partsNotLoaded(names)` filters a list by what is loaded, `loadParts(names)`
 imports parts, and `loadPartsFor(spec, options?)` loads every add-on and part a spec needs. `preloadParts(names?)` loads parts ahead of
 time (every part a spec can name when no names are given; a name that is not one rejects with a `TypeError`: `'canvas'` and `'signals'`
 are `@aster-charts/react`'s capabilities' to load, and its `preloadParts` takes them too), for an app that would rather fetch the
