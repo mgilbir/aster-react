@@ -3,6 +3,35 @@
 Version 0.1.0 is the first release. From 0.1.0 on, entries are added per release under Added, Changed
 and Fixed, per package. Everything built before the first release is in [Pre-release history](#pre-release-history) below.
 
+## 0.4.1 (2026-11-16)
+
+### `@aster-charts/react`
+
+#### Added
+
+- **`import '@aster-charts/react/all'`** loads every part of the engine up front, so no chart ever waits for one: for apps that
+  prefer bytes up front to a round trip the first time a chart uses a rarer feature (`<Chart>` with it: 246.4 kB gzip).
+- **`preloadParts(names?)`** fetches chosen parts ahead of time (every part when called without names).
+
+#### Performance
+
+- **More of the engine loads on demand.** The aggregate transforms (aggregate, joinaggregate, pivot, facet groups, domains
+  sorted by an aggregate), `window`, the reshaping transforms (collect, sample, fold, flatten, project, extent, sequence,
+  lookup, impute, stack, identifier, bin), time scales, formats and parsing, every curve but `linear`, colour spaces,
+  interpolators and schemes, and the rarer scale types are parts the shells load when a spec needs them, read from the spec
+  and its parsed expressions; a property a signal drives loads its whole family. Nothing is declared: any spec renders as
+  before. In a browser build `<Chart>` is 180.5 kB gzip up front (204.5 before), `<SvgChart>` 166.9 (190.7), `useChart`
+  145.0 (168.9), `<Chart>` + Vega-Lite 287.0 (311.1); the chart-bench `<Chart>` app's library cost is 180.2 kB (202.5).
+  Mount time is within 10% of 0.4.0. A part the engine reads that was not loaded is an error naming it, never a different
+  drawing (see docs/PERFORMANCE.md and docs/API.md).
+
+### `@aster-charts/core`
+
+#### Changed
+
+- The synchronous entry (`renderSpec`, sessions, `renderChartToStaticMarkup`, `hydrateChart`, the worker) still carries every
+  part, and is 174.7 kB gzip (172.7 in 0.4.0) for the slots the parts are read from.
+
 ## 0.4.0 (2026-11-15)
 
 ### `@aster-charts/core`
