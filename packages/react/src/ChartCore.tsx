@@ -419,7 +419,7 @@ function ChartView({
   // (and the signal event loop of an interactive chart that binds it: see the binding below, and `useAddons`)
   const loadLoop = interactive && interaction?.loadSignals !== undefined ? interaction.loadSignals : undefined
   const addonError = useAddons(sceneOverride !== undefined ? null : spec, urlData, {
-    limits: limits != null, random: random != null, canvas: requestedRenderer === 'canvas' ? canvasCap : undefined,
+    limits: limits != null, random: random != null, signals, canvas: requestedRenderer === 'canvas' ? canvasCap : undefined,
     eventLoop: loadLoop !== undefined ? { load: loadLoop, listeners: signalListeners != null || onSignal != null, always: sceneOverride !== undefined } : undefined,
   })
   const stableLimits = useStableContent(limits)

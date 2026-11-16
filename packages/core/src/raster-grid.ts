@@ -17,7 +17,7 @@
  * THIRD_PARTY_NOTICES.md.
  */
 import { meterRows } from './limits.js'
-import { quartiles } from './transform-agg.js'
+import { quartiles } from './row-keys.js'
 
 /** A raster of `width` x `height` cells, row-major; `[x1, x2) x [y1, y2)` is the part inside the blur padding. */
 export interface RasterGrid {

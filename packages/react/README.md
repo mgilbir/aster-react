@@ -27,9 +27,22 @@ a spec needs them: the chart suspends meanwhile (wrap it in `<Suspense>` for a f
 imported ([how add-ons load themselves](https://github.com/mgilbir/aster-react/blob/main/docs/ARCHITECTURE.md#geo-projections--the-add-on-boundary)). Without `@aster-charts/react/vl`, a Vega-Lite spec throws an error naming the missing
 import; if you compile Vega-Lite specs in a worker, import the add-on in the worker entry too.
 
-For a smaller bundle there is an SVG-only chart: `<SvgChart>` from `@aster-charts/react/lite` (182.5 kB gzip against 205.3 kB for
-`<Chart>`, measured 2026-11-06 with `pnpm --filter @aster-charts/benchmarks run budget`; it never imports the canvas renderer). Tooltips, point selection and `signal.on` event streams come with the
-`interaction` capability, passed as a prop (199.7 kB gzip with it; current figures in [docs/PERFORMANCE.md](https://github.com/mgilbir/aster-react/blob/main/docs/PERFORMANCE.md#bundle-sizes)):
+The engine loads the same way. In a browser build the families most charts never run (the aggregating, window and reshaping
+transforms, time scales and date formats, the curves besides `linear`, colour ramps and blending, the rarer scale types, legends,
+grid layouts, selections, the signal loop and the canvas renderer) are chunks fetched the first time a chart on the page needs one:
+that chart suspends once, then renders, and a chart that needs none fetches nothing. The trade-off is one round trip on the first
+use of a rare feature against the bytes of every family in your bundle. For no first-render wait at all, import everything up front
+(the bundle grows by the whole engine; figures in [docs/PERFORMANCE.md](https://github.com/mgilbir/aster-react/blob/main/docs/PERFORMANCE.md#bundle-sizes)):
+
+```ts
+import '@aster-charts/react/all'
+```
+
+or fetch the families you know you need ahead of time, without bundling them: `preloadParts(['time', 'color'])` (`preloadParts()` for all).
+
+For a smaller bundle there is an SVG-only chart: `<SvgChart>` from `@aster-charts/react/lite` (166.9 kB gzip against 180.5 kB for
+`<Chart>`, measured 2026-11-16 with `pnpm --filter @aster-charts/benchmarks run budget`; it never imports the canvas renderer). Tooltips, point selection and `signal.on` event streams come with the
+`interaction` capability, passed as a prop (180.2 kB gzip with it; current figures in [docs/PERFORMANCE.md](https://github.com/mgilbir/aster-react/blob/main/docs/PERFORMANCE.md#bundle-sizes)):
 
 ```tsx
 import { SvgChart } from '@aster-charts/react/lite'

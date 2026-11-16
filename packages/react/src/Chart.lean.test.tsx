@@ -20,7 +20,16 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { VgSpec } from '@aster-charts/core'
 
-vi.mock('@aster-charts/core/lean', async () => await import('../../core/dist/lean.js'))
+/** A detection miss planted in `specNeeds` (the part it leaves out), for the test that the engine refuses rather than misdraws. */
+const planted = vi.hoisted(() => ({ drop: null as string | null }))
+vi.mock('@aster-charts/core/lean', async () => {
+  const lean = await import('../../core/dist/lean.js')
+  const specNeeds: typeof lean.specNeeds = (spec, options) => {
+    const needs = lean.specNeeds(spec, options)
+    return planted.drop === null ? needs : { ...needs, parts: needs.parts.filter((p) => p !== planted.drop) }
+  }
+  return { ...lean, specNeeds }
+})
 vi.mock('@aster-charts/core/lean/hit', async () => await import('../../core/dist/hit.js'))
 // (the same for the signal loop: the browser variant, signals-deferred.ts, loads part-signals.js when a chart first binds it)
 vi.mock('@aster-charts/core/lean/signals', async () => ({
@@ -33,7 +42,8 @@ vi.mock('@aster-charts/core/lean/canvas', async (importOriginal) => ({
 }))
 
 const { forEachVariant } = await import('./testing/variants')
-const { ENGINE_PARTS, loadParts, partLoaded, withdrawParts } = await import('@aster-charts/core/lean')
+const { ENGINE_PARTS, loadParts, partLoaded, specNeeds, withdrawParts } = await import('@aster-charts/core/lean')
+const { preloadParts } = await import('./preload')
 const { loadCanvasPart } = await vi.importActual<{ loadCanvasPart: () => Promise<void> }>('@aster-charts/core/lean/canvas')
 const { loadSignalsPart } = await import('@aster-charts/core/lean/signals')
 
@@ -48,6 +58,30 @@ const CLICKS: VgSpec = {
   signals: [{ name: 'clicks', value: 0, on: [{ events: 'click', update: 'clicks + 1' }] }],
   marks: [{ type: 'text', encode: { update: { x: { value: 10 }, y: { value: 20 }, text: { signal: "'clicks ' + clicks" } } } }],
 } as VgSpec
+
+/**
+ * A chart that needs the parts most charts never run: a time scale, an aggregate and a window, a monotone curve, a colour ramp on a
+ * sequential scale and its legend (`specNeeds` names aggregate, window, time, curves, color, scales, legend and the path reader).
+ */
+const RARE = (title = 'Rare'): VgSpec => ({
+  width: 300, height: 160, padding: 4, title,
+  data: [{ name: 't', values: Array.from({ length: 24 }, (_, i) => ({ d: Date.UTC(2021, i % 12, 1 + i), g: ['a', 'b'][i % 2], v: (i * 7) % 13 })), transform: [
+    { type: 'aggregate', groupby: ['d', 'g'], fields: ['v'], ops: ['sum'], as: ['v'] },
+    { type: 'window', sort: { field: 'd' }, groupby: ['g'], ops: ['sum'], fields: ['v'], as: ['run'] },
+  ] }],
+  scales: [
+    { name: 'x', type: 'time', domain: { data: 't', field: 'd' }, range: 'width' },
+    { name: 'y', type: 'linear', domain: { data: 't', field: 'run' }, range: 'height' },
+    { name: 'c', type: 'sequential', domain: { data: 't', field: 'run' }, range: { scheme: 'viridis' } },
+  ],
+  axes: [{ scale: 'x', orient: 'bottom' }, { scale: 'y', orient: 'left' }],
+  legends: [{ fill: 'c' }],
+  marks: [
+    { type: 'line', from: { data: 't' }, encode: { update: { x: { scale: 'x', field: 'd' }, y: { scale: 'y', field: 'run' }, stroke: { value: '#999' }, interpolate: { value: 'monotone' } } } },
+    { type: 'symbol', from: { data: 't' }, encode: { update: { x: { scale: 'x', field: 'd' }, y: { scale: 'y', field: 'run' }, fill: { scale: 'c', field: 'run' } } } },
+  ],
+} as VgSpec)
+const RARE_PARTS = ['aggregate', 'window', 'time', 'curves', 'color', 'scales', 'legend', 'svgpath']
 
 /** Let pending imports land and React reveal what they unblocked (it throttles revealing a boundary's content, by up to 300 ms). */
 const settle = async (): Promise<void> => {
@@ -82,7 +116,7 @@ async function drawnWithEveryPart(el: React.ReactElement): Promise<string> {
   return html
 }
 
-beforeEach(() => { withdrawParts(ENGINE_PARTS) })
+beforeEach(() => { planted.drop = null; withdrawParts(ENGINE_PARTS) })
 afterEach(async () => {
   for (const p of pending.splice(0)) await p
   act(() => { for (const r of roots) r.unmount() })
@@ -160,8 +194,8 @@ forEachVariant(['svg'], (Chart, variant) => describe(`${variant.name} on the lea
 
   it('new data is drawn at once, as with every part, while the pulse path loads for the next change', async () => {
     const rows = (n: number): Array<{ x: string; y: number }> => Array.from({ length: n }, (_, i) => ({ x: `k${i}`, y: (i * 7) % 11 }))
-    // (a dataset with steps: a change of its rows is what the pulse path re-derives)
-    const spec = (): VgSpec => ({ ...PLAIN, data: [{ name: 'table', transform: [{ type: 'filter', expr: 'datum.y >= 0' }, { type: 'collect', sort: { field: 'x' } }] }] } as VgSpec)
+    // (a dataset with steps: a change of its rows is what the pulse path re-derives; row-local steps, which need no part of their own)
+    const spec = (): VgSpec => ({ ...PLAIN, data: [{ name: 'table', transform: [{ type: 'filter', expr: 'datum.y >= 0' }, { type: 'formula', expr: 'datum.y * 2', as: 'y2' }] }] } as VgSpec)
     const draw = async (n: number): Promise<string[]> => {
       const c = document.createElement('div')
       document.body.appendChild(c)
@@ -203,5 +237,114 @@ forEachVariant(['svg'], (Chart, variant) => describe(`${variant.name} on the lea
     expect(partLoaded('legend')).toBe(true)
     expect(errors).toEqual([])
     expect(c.querySelector('svg')).not.toBeNull()
+  })
+
+  it('a chart that needs the parts most charts never run suspends until exactly those are there, then draws what it draws with every part', async () => {
+    expect(specNeeds(RARE()).parts).toEqual(RARE_PARTS)
+    const expected = await drawnWithEveryPart(<Chart spec={RARE()} width={300} height={160} />)
+    for (const p of pending.splice(0)) await p
+    act(() => { for (const r of roots) r.unmount() })
+    roots = []
+    withdrawParts(ENGINE_PARTS)
+    const c = mount(<Chart spec={RARE()} width={300} height={160} />)
+    expect(c.innerHTML).toBe('<i id="fb"></i>')
+    await settle()
+    expect(ENGINE_PARTS.filter(partLoaded)).toEqual(RARE_PARTS)
+    expect(c.innerHTML).toBe(expected)
+  })
+
+  it('a spec swap that needs new parts suspends once, and a swap to another chart of those parts does not', async () => {
+    const expected = await drawnWithEveryPart(<Chart spec={RARE('Second')} width={300} height={160} />)
+    for (const p of pending.splice(0)) await p
+    act(() => { for (const r of roots) r.unmount() })
+    roots = []
+    withdrawParts(ENGINE_PARTS)
+    let shown = 0
+    const Fallback = (): React.ReactElement => { React.useEffect(() => { shown++ }, []); return <i id="fb" /> }
+    const c = document.createElement('div')
+    document.body.appendChild(c)
+    const root = createRoot(c)
+    roots.push(root)
+    const render = (spec: VgSpec): void => { pending.push(act(() => { root.render(<React.Suspense fallback={<Fallback />}><Chart spec={spec} width={300} height={160} /></React.Suspense>) }) as unknown as PromiseLike<void>) }
+    render(PLAIN)
+    await settle()
+    expect(c.querySelector('svg')).not.toBeNull()
+    expect(shown).toBe(0)
+    render(RARE())
+    await settle()
+    expect(shown).toBe(1)
+    expect(ENGINE_PARTS.filter(partLoaded)).toEqual(RARE_PARTS)
+    render(RARE('Second'))
+    await settle()
+    expect(shown).toBe(1)
+    expect(c.innerHTML).toBe(expected)
+  })
+
+  it('server markup of a chart that needs parts, made with every part, hydrates on the lean engine with no mismatch', async () => {
+    await full()
+    const html = renderToString(<Chart spec={RARE()} width={300} height={160} />)
+    expect(html).toContain('<svg')
+    withdrawParts(ENGINE_PARTS)
+    const c = document.createElement('div')
+    c.innerHTML = html
+    document.body.appendChild(c)
+    const before = c.innerHTML
+    const errors: unknown[] = []
+    let root!: ReturnType<typeof hydrateRoot>
+    act(() => { root = hydrateRoot(c, <Chart spec={RARE()} width={300} height={160} />, { onRecoverableError: (e) => errors.push(e) }) })
+    roots.push(root)
+    // while the parts load, the server's markup stays; once they are there it is still what the server drew
+    expect(c.innerHTML).toBe(before)
+    await settle()
+    expect(ENGINE_PARTS.filter(partLoaded)).toEqual(expect.arrayContaining(RARE_PARTS))
+    expect(errors).toEqual([])
+    expect(c.querySelector('svg')!.outerHTML).toBe(new DOMParser().parseFromString(before, 'text/html').querySelector('svg')!.outerHTML)
+  })
+
+  it('a part the detector misses is refused, naming the part: the chart reports an error and draws nothing in its place', async () => {
+    for (const drop of ['time', 'aggregate', 'color', 'curves']) {
+      withdrawParts(ENGINE_PARTS)
+      planted.drop = drop
+      const errors: Error[] = []
+      const c = mount(<Chart spec={RARE()} width={300} height={160} onError={(e) => errors.push(e)} />)
+      await settle()
+      expect(partLoaded(drop as never), drop).toBe(false)
+      expect(errors.map((e) => e.message).join('\n'), drop).toMatch(new RegExp(`the "${drop}" part of the engine is not loaded`))
+      expect(c.querySelector('.mark-symbol, .mark-line'), drop).toBeNull()
+    }
+  })
+
+  it('preloadParts loads the named parts ahead of time, after which a chart that needs only those does not suspend', async () => {
+    await preloadParts(['time', 'curves'])
+    expect(ENGINE_PARTS.filter(partLoaded)).toEqual(['time', 'curves'])
+    const spec = { ...PLAIN, scales: [...(PLAIN.scales as object[]), { name: 'when', type: 'utc', domain: [0, 1e10], range: 'width' }], axes: [...((PLAIN.axes as object[]) ?? []), { scale: 'when', orient: 'top' }] } as VgSpec
+    expect(specNeeds(spec).parts).toEqual(['time'])
+    const c = mount(<Chart spec={spec} width={300} height={200} />)
+    expect(c.querySelector('#fb')).toBeNull()
+    expect(c.querySelector('svg')).not.toBeNull()
+    await expect(preloadParts(['time', 'nope' as never])).rejects.toThrow(/not a part of the engine: "nope"/)
+    await preloadParts()
+    expect(ENGINE_PARTS.filter(partLoaded)).toEqual(ENGINE_PARTS)
+  })
+
+  it("a host's signal value that is not a number loads the colour part the spec alone does not name", async () => {
+    // (a continuous scale whose range reads a signal the spec declares a number: the host sets it to colours)
+    const spec = { ...PLAIN, signals: [{ name: 'hi', value: 200 }], scales: [...(PLAIN.scales as object[]), { name: 'shade', type: 'linear', domain: [0, 30], range: [{ signal: 'lo' }, { signal: 'hi' }] }],
+      marks: [{ type: 'rect', from: { data: 'table' }, encode: { update: { x: { value: 0 }, width: { value: 4 }, y: { value: 0 }, height: { value: 4 }, fill: { scale: 'shade', field: 'val' } } } }] } as VgSpec
+    ;(spec.signals as object[]).push({ name: 'lo', value: 0 })
+    const host = { lo: '#000', hi: '#fff' }
+    const expected = await drawnWithEveryPart(<Chart spec={spec} signals={host} width={300} height={200} />)
+    for (const p of pending.splice(0)) await p
+    act(() => { for (const r of roots) r.unmount() })
+    roots = []
+    withdrawParts(ENGINE_PARTS)
+    expect(specNeeds(spec).parts).toEqual([])
+    const errors: Error[] = []
+    const c = mount(<Chart spec={spec} signals={host} width={300} height={200} onError={(e) => errors.push(e)} />)
+    await settle()
+    expect(errors).toEqual([])
+    // (and the signal loop, for a shell that binds it: the spec declares signals)
+    expect(ENGINE_PARTS.filter(partLoaded).filter((p) => p !== 'signals')).toEqual(['color', 'scales'])
+    expect(c.innerHTML).toBe(expected)
   })
 }))

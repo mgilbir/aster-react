@@ -26,6 +26,9 @@ import { checkUrlData, validateUrlDataMode, type UrlDataMode } from './url-data.
 import { dataWithoutRows, valuesSignal } from './spec-structure.js'
 import { mayDrawRandom } from './random-tape.js'
 import { ENGINE_PARTS, installPart, partLoaded, type EnginePart } from './engine-parts.js'
+import { CURVE_NAMES } from './shape.js'
+import { discretePalettes } from './scale-schemes.js'
+import { vegaDefaultConfig } from './config-defaults.js'
 import type { VgSpec } from './types.js'
 
 export type AddonName = 'transforms' | 'geo' | 'load'
@@ -79,6 +82,12 @@ export const PART_FUNCTIONS: Readonly<Record<string, EnginePart>> = Object.freez
   intersect: 'intersect',
   modify: 'modify', setdata: 'modify',
   test: 'regex', regexp: 'regex',
+  // (the calendar, and the dates the default locale formats and parses)
+  timeFormat: 'time', utcFormat: 'time', timeParse: 'time', utcParse: 'time', timeOffset: 'time', utcOffset: 'time',
+  timeSequence: 'time', utcSequence: 'time', week: 'time', utcweek: 'time', dayofyear: 'time', utcdayofyear: 'time',
+  timeUnitSpecifier: 'time', monthFormat: 'time', monthAbbrevFormat: 'time', dayFormat: 'time', dayAbbrevFormat: 'time',
+  // (the colour spaces)
+  rgb: 'color', hsl: 'color', lab: 'color', hcl: 'color', luminance: 'color', contrast: 'color',
 })
 /**
  * The string functions that screen an argument that is a regular expression (limits.ts): one only a regular expression literal,
@@ -89,6 +98,21 @@ export const PART_FUNCTIONS: Readonly<Record<string, EnginePart>> = Object.freez
 export const REGEX_ARGUMENT_FUNCTIONS: ReadonlySet<string> = new Set(['replace', 'split'])
 /** The transforms whose parameters are regular expressions (the transforms add-on's `countpattern`; `wordcloud` counts with one too). */
 const REGEX_TRANSFORMS = new Set(['countpattern', 'wordcloud'])
+/** The transforms each part of the engine runs (engine-parts.ts); a transform's `type` is always a literal in a spec. */
+const PART_TRANSFORMS: ReadonlyMap<string, EnginePart> = new Map<string, EnginePart>([
+  ['aggregate', 'aggregate'], ['joinaggregate', 'aggregate'], ['pivot', 'aggregate'],
+  ['window', 'window'],
+  ...['collect', 'sample', 'fold', 'flatten', 'project', 'extent', 'sequence', 'lookup', 'impute', 'stack', 'identifier', 'bin'].map((t) => [t, 'reshape'] as [string, EnginePart]),
+  ['timeunit', 'time'],
+])
+/** The scale types the time part makes. */
+const TIME_SCALES = new Set(['time', 'utc'])
+/** The scale types the `scales` part makes (scale.ts registers the rest itself: linear, ordinal, band, point). */
+const RARE_SCALES = new Set([
+  'identity', 'log', 'pow', 'sqrt', 'symlog', 'sequential', 'sequential-linear', 'sequential-log', 'sequential-pow', 'sequential-sqrt',
+  'sequential-symlog', 'diverging-linear', 'diverging-log', 'diverging-pow', 'diverging-sqrt', 'diverging-symlog',
+  'quantile', 'quantize', 'threshold', 'bin-ordinal',
+])
 /** The symbol shapes that are drawn without reading a path (geometry.ts `symbolData`); any other name is an SVG path. */
 const BUILTIN_SHAPES = new Set(['circle', 'square', 'cross', 'diamond', 'triangle-up', 'triangle-down', 'triangle-right', 'triangle-left', 'stroke', 'arrow', 'wedge', 'triangle'])
 
@@ -98,6 +122,10 @@ interface Found {
   parts: Set<EnginePart>
   /** a scope declares signals */
   eventLoop: boolean
+  /** the scale definitions met, read once the walk is over (with the signals and the config ranges they may read) */
+  scales: Json[]
+  /** every signal definition of any scope, by name */
+  signals: Map<string, Json[]>
 }
 
 /** The add-ons and parts called by one expression string; an expression that does not parse calls nothing (the engine reports it). */
@@ -140,6 +168,45 @@ function selectorFilters(selector: string, found: Found): void {
   visit(streams)
 }
 
+/** What one scale definition needs: the calendar scales (time), a domain ordered by an aggregate (aggregate). */
+function scaleNeeds(scale: Json, found: Found): void {
+  // (a type that is not a literal could be anything)
+  if (scale.type != null && typeof scale.type !== 'string') { found.parts.add('time'); found.parts.add('scales') }
+  if (typeof scale.type === 'string') {
+    if (TIME_SCALES.has(scale.type)) found.parts.add('time')
+    // (a type the registry does not have is an error before any scale is made)
+    else if (RARE_SCALES.has(scale.type.toLowerCase())) found.parts.add('scales')
+  }
+  for (const key of ['domain', 'range']) {
+    const d = scale[key]
+    // (scale-domain.ts: a sorted domain over several fields merges each key's measure with an aggregate; one field is measured by an
+    // aggregate when the sort names an `op`, a signal's included)
+    if (isObj(d) && !Array.isArray(d) && d.sort && (d.fields != null || (isObj(d.sort) && d.sort.op != null))) found.parts.add('aggregate')
+  }
+}
+
+/**
+ * Whether an `interpolate` value may name a curve besides `linear`: a literal name of one (`'monotone'`, `{value: 'step'}`), a rule
+ * whose value may, or anything that is not a literal (a signal, a field, a scale: any curve at all).
+ */
+function namesCurve(v: unknown): boolean {
+  if (typeof v === 'string') return CURVE_NAMES.has(v)
+  if (Array.isArray(v)) return v.some((rule) => !isObj(rule) || namesCurve(Object.fromEntries(Object.entries(rule).filter(([k]) => k !== 'test'))))
+  if (isObj(v)) {
+    const keys = Object.keys(v).filter((k) => v[k] !== undefined)
+    if (keys.length === 0) return false
+    if (keys.length === 1 && keys[0] === 'value') return typeof v.value === 'string' && CURVE_NAMES.has(v.value)
+  }
+  return v != null
+}
+
+/** Whether a dataset's `parse` may read a column with a date pattern (anything but `'auto'` or a table of plain types). */
+function parsesDates(parse: unknown): boolean {
+  if (parse == null || parse === 'auto') return false
+  if (!isObj(parse) || Array.isArray(parse)) return true
+  return Object.values(parse).some((t) => typeof t !== 'string' || /^\s*(date|utc)\s*:/i.test(t))
+}
+
 /** Whether a `shape` / `symbolType` value can name anything but a built-in symbol: a field, a signal, a scale, a rule, a custom path. */
 function customShape(v: unknown): boolean {
   if (v == null) return false
@@ -152,8 +219,8 @@ function customShape(v: unknown): boolean {
  * One walk of `spec`, with a stack (specs nest to any depth), bounded like the rest of the engine's spec walks, and safe on a cyclic
  * object: what `addonsNeeded` and `partsNeeded` report.
  */
-function walkSpec(spec: Json, refuseUrls: boolean): Found {
-  const found: Found = { addons: new Set(), parts: new Set(), eventLoop: false }
+function walkSpec(spec: Json, refuseUrls: boolean, hostSignals?: Readonly<Record<string, unknown>>): Found {
+  const found: Found = { addons: new Set(), parts: new Set(), eventLoop: false, scales: [], signals: new Map() }
   // (a scope's lists are read as the compiler reads them, vega-util `array()`: a single object is a one-element list)
   if (spec.projections != null && (!Array.isArray(spec.projections) || spec.projections.length > 0)) found.addons.add('geo')
   if (spec.layout != null) found.parts.add('layout')
@@ -198,6 +265,25 @@ function walkSpec(spec: Json, refuseUrls: boolean): Found {
       if (REGEX_TRANSFORMS.has(node.type)) found.parts.add('regex')
     }
     if (key === 'format' && FORMAT_TYPES.has(node.type as string)) found.addons.add('load')
+    if (key === 'transform' && Object.hasOwn(node, 'type')) {
+      const p = typeof node.type === 'string' ? PART_TRANSFORMS.get(node.type) : undefined
+      if (p) found.parts.add(p)
+    }
+    // a facet that partitions by `groupby` (not one over an array `field`) makes its group items with the aggregation engine
+    if (key === 'facet' && isObj(node) && !Array.isArray(node) && node.field === undefined) found.parts.add('aggregate')
+    if (key === 'signals' && typeof node.name === 'string') {
+      const list = found.signals.get(node.name)
+      if (list) list.push(node)
+      else found.signals.set(node.name, [node])
+    }
+    if (key === 'scales') { scaleNeeds(node, found); found.scales.push(node) }
+    // a line or an area drawn with a curve besides `linear` (an encode set's channel, or a config default); a scale's `interpolate` is
+    // its colour space (the colour part)
+    else if (node.interpolate != null && namesCurve(node.interpolate)) found.parts.add('curves')
+    // a label or legend formatted as a date (`formatType` 'time' or 'utc', or one from a signal)
+    if (node.formatType != null && node.formatType !== 'number') found.parts.add('time')
+    // a dataset whose columns are parsed with a date pattern (`date:'%Y'`, `utc:'...'`)
+    if (key === 'format' && parsesDates(node.parse)) found.parts.add('time')
     // (a dataset definition is an element of a `data` array; a refused url dataset is never read)
     const refusedUrl = refuseUrls && key === 'data' && !!node.url && !node.values
     for (const k of Object.keys(node)) {
@@ -212,7 +298,128 @@ function walkSpec(spec: Json, refuseUrls: boolean): Found {
       stack.push([node[k], depth + 1, k])
     }
   }
+  // the colours a scale blends, once every signal it may read is known
+  const ranges = isObj(spec.config) && isObj(spec.config.range) && !Array.isArray(spec.config.range) ? spec.config.range : undefined
+  const numeric = numericReader(found.signals, hostSignals)
+  for (const scale of found.scales) {
+    if (!scaleBlendsColors(scale, ranges, numeric)) continue
+    found.parts.add('color')
+    // a linear scale over colours is made as a sequential (or diverging) one (scales.ts `registryName`)
+    if (scale.type == null || scale.type === 'linear') found.parts.add('scales')
+  }
   return found
+}
+
+/** The scale types that never blend their range: it is a list of classes (or positions, for band and point). */
+const CLASS_SCALES = new Set(['ordinal', 'band', 'point', 'quantize', 'quantile', 'threshold', 'bin-ordinal'])
+/** The colour lists of the scheme registry (scale-schemes.ts), by lower-case name: any other scheme is a ramp of the colour part. */
+const COLOR_LISTS = new Set(Object.keys(discretePalettes).map((n) => n.toLowerCase()))
+const BUILT_IN_RANGES = vegaDefaultConfig().range as Json
+const MAX_RANGE_CHAIN = 32
+
+/**
+ * Whether a scale blends colours (the colour part: scales.ts `fitRange`): a named `interpolate`, a scheme that is a ramp or a list
+ * blended for a continuous scale, a continuous scale over values that may not all be numbers. A type that is not a literal could
+ * be any.
+ */
+function scaleBlendsColors(scale: Json, ranges: Json | undefined, numeric: NumericReader): boolean {
+  if (scale.interpolate != null) return true
+  const type = scale.type ?? 'linear'
+  if (typeof type !== 'string') return true
+  const classes = CLASS_SCALES.has(type)
+  // (a scheme may be a property of the scale itself, as every key a scale has but its own is: scales.ts `readSettings`)
+  if (scale.scheme != null && schemeBlends(scale.scheme, classes)) return true
+  return scale.range != null && rangeBlendsColors(scale.range, classes, ranges, numeric, 0)
+}
+
+/** Whether a scheme is read through the colour part: anything but a list of colours (scale-schemes.ts) taken as classes. */
+function schemeBlends(scheme: unknown, classes: boolean): boolean {
+  return !(classes && typeof scheme === 'string' && COLOR_LISTS.has(scheme.toLowerCase()))
+}
+
+function rangeBlendsColors(range: unknown, classes: boolean, ranges: Json | undefined, numeric: NumericReader, depth: number): boolean {
+  if (depth > MAX_RANGE_CHAIN) return true
+  if (typeof range === 'string') {
+    // (a named range: the config's, else vega's default; anything else is width, height or an error)
+    const entry = ranges && Object.hasOwn(ranges, range) ? ranges[range] : Object.hasOwn(BUILT_IN_RANGES, range) ? BUILT_IN_RANGES[range] : undefined
+    return entry !== undefined && rangeBlendsColors(entry, classes, ranges, numeric, depth + 1)
+  }
+  if (!isObj(range)) return false
+  if (!Array.isArray(range)) {
+    // (a list of colours taken as classes needs nothing; a ramp, a list blended, a scheme from a signal need the colour part)
+    if (range.scheme != null) return schemeBlends(range.scheme, classes)
+    // (a step, a dataset's values for a discrete scale; a signal's value is the range itself)
+    if (range.signal == null || classes) return false
+    return !numeric.list(range.signal)
+  }
+  // a class scale takes its range as it is; a continuous one blends it, through the colour part unless every value is a number
+  return !classes && !range.every((v) => typeof v === 'number' || (isObj(v) && !Array.isArray(v) && typeof v.signal === 'string' && Object.keys(v).length === 1 && numeric.value(v.signal)))
+}
+
+interface NumericReader {
+  /** whether an expression's value can only be a number, a boolean, null or undefined */
+  value(expr: unknown): boolean
+  /** whether an expression is a list of such values written out (`[0, width]`) */
+  list(expr: unknown): boolean
+}
+
+/** Functions whose value is a number (or a boolean) whatever their arguments: Math's, and vega's that measure. */
+const NUMERIC_FUNCTIONS = new Set([
+  'abs', 'acos', 'asin', 'atan', 'atan2', 'ceil', 'cos', 'exp', 'floor', 'hypot', 'log', 'max', 'min', 'pow', 'random', 'round', 'sin',
+  'sqrt', 'tan', 'clamp', 'bandspace', 'isNaN', 'isFinite', 'isValid', 'isNumber', 'isString', 'isBoolean', 'isDate', 'isArray',
+  'isObject', 'isRegExp', 'inrange', 'length', 'span', 'toNumber', 'toBoolean', 'now', 'utc', 'indexof', 'lastindexof',
+])
+/** The numeric constants of the expression language (expr-interpreter.ts). */
+const NUMERIC_CONSTANTS = new Set(['NaN', 'E', 'LN2', 'LN10', 'LOG2E', 'LOG10E', 'PI', 'SQRT1_2', 'SQRT2', 'MIN_VALUE', 'MAX_VALUE'])
+
+/**
+ * A reader of whether an expression's value can only be a number, a boolean, null or undefined (what a continuous scale maps without
+ * the colour part: interp.ts reads it for a text or an object): the arithmetic, comparison and logic of such values, the functions
+ * above, `containerSize()[i]`, the view's `width` and `height`, and a signal whose every definition (value, init, update, handlers)
+ * is such a value and that no input binds. Anything else (a text, a field of a datum, an object) may be anything.
+ */
+function numericReader(signals: Map<string, Json[]>, host?: Readonly<Record<string, unknown>>): NumericReader {
+  const known = new Map<string, boolean>()
+  const plain = (v: unknown): boolean => v == null || typeof v === 'number' || typeof v === 'boolean'
+  const signal = (name: string): boolean => {
+    const cached = known.get(name)
+    if (cached !== undefined) return cached
+    // (a value the host sets is the signal's value, whatever the spec says)
+    if (host !== undefined && Object.hasOwn(host, name) && !plain(host[name])) return false
+    const defs = signals.get(name)
+    if (!defs) return name === 'width' || name === 'height' || NUMERIC_CONSTANTS.has(name)
+    known.set(name, false) // (a definition that reads itself is not taken to be a number)
+    const ok = defs.every((d) =>
+      d.bind == null && d.push == null && plain(d.value) && (d.init == null || expr(d.init)) && (d.update == null || expr(d.update)) &&
+      (d.on == null || (Array.isArray(d.on) && d.on.every((h) => isObj(h) && (h.update == null || expr(h.update)) && h.encode == null))))
+    known.set(name, ok)
+    return ok
+  }
+  const node = (n: unknown): boolean => {
+    if (!isObj(n)) return false
+    switch (n.type) {
+      case 'Literal': return n.value == null || typeof n.value === 'number' || typeof n.value === 'boolean'
+      case 'Identifier': return typeof n.name === 'string' && signal(n.name)
+      case 'UnaryExpression': return n.operator !== 'typeof'
+      case 'BinaryExpression': return n.operator !== '+' || (node(n.left) && node(n.right))
+      case 'LogicalExpression': return node(n.left) && node(n.right)
+      case 'ConditionalExpression': return node(n.consequent) && node(n.alternate)
+      case 'CallExpression': return isObj(n.callee) && n.callee.type === 'Identifier' && NUMERIC_FUNCTIONS.has(n.callee.name as string)
+      case 'MemberExpression':
+        return isObj(n.object) && n.object.type === 'CallExpression' && isObj(n.object.callee) && n.object.callee.name === 'containerSize' && !!n.computed
+      default: return false
+    }
+  }
+  const parsed = (e: string): unknown => { try { return parseExpression(e) } catch { return undefined } }
+  const expr = (e: unknown): boolean => {
+    if (typeof e === 'number' || typeof e === 'boolean' || e == null) return true
+    return typeof e === 'string' && node(parsed(e))
+  }
+  const list = (e: unknown): boolean => {
+    const n = typeof e === 'string' ? parsed(e) : undefined
+    return isObj(n) && n.type === 'ArrayExpression' && Array.isArray(n.elements) && n.elements.every(node)
+  }
+  return { value: expr, list }
 }
 
 /**
@@ -247,6 +454,11 @@ export interface PartOptions extends AddonOptions {
   limits?: boolean
   /** Whether the host injects a random source (`RuntimeInput.random`). */
   random?: boolean
+  /**
+   * The values the host sets on the spec's signals (`RuntimeInput.signals`, `<Chart signals>`): a value that is not a number (nor a
+   * boolean, null or undefined) may reach a scale's range, where the colour part reads it, whatever the spec declares.
+   */
+  signals?: Readonly<Record<string, unknown>>
 }
 
 const NO_PARTS: readonly EnginePart[] = Object.freeze([])
@@ -256,7 +468,7 @@ const NO_NEEDS: SpecNeeds = Object.freeze({ addons: NONE, parts: NO_PARTS, event
 export function specNeeds(spec: VgSpec, options?: PartOptions): SpecNeeds {
   if (!isObj(spec)) return NO_NEEDS
   validateUrlDataMode(options?.urlData)
-  const found = walkSpec(spec, options?.urlData === 'refuse')
+  const found = walkSpec(spec, options?.urlData === 'refuse', options?.signals)
   const addons: AddonName[] = []
   if (found.addons.has('transforms')) addons.push('transforms')
   if (found.addons.has('geo')) addons.push('geo')
@@ -380,6 +592,13 @@ type PartModule = { part: unknown }
  * interaction capability, through `@aster-charts/core/lean/signals`: no evaluation reads either)
  */
 const partImporters: Record<Exclude<EnginePart, 'canvas' | 'signals'>, () => Promise<PartModule>> = {
+  aggregate: () => import('./part-aggregate.js'),
+  window: () => import('./part-window.js'),
+  reshape: () => import('./part-reshape.js'),
+  time: () => import('./part-time.js'),
+  curves: () => import('./part-curves.js'),
+  color: () => import('./part-color.js'),
+  scales: () => import('./part-scales.js'),
   legend: () => import('./part-legend.js'),
   layout: () => import('./part-layout.js'),
   pulse: () => import('./part-pulse.js'),
@@ -436,4 +655,23 @@ export function loadPartsFor(spec: VgSpec, options?: PartOptions): Promise<void>
   const parts = partsNotLoaded(needs.parts)
   if (addons.length === 0 && parts.length === 0) return Promise.resolve()
   return Promise.all([loadAddons(addons), loadParts(parts)]).then(() => undefined)
+}
+
+/** The parts a spec's evaluation can read: every part but the canvas renderer and the signal loop (the React capabilities load those). */
+const SPEC_PARTS: readonly EnginePart[] = ENGINE_PARTS.filter((p) => p !== 'canvas' && p !== 'signals')
+
+/**
+ * Load parts of the engine ahead of time (every part a spec can name when no names are given): for an app on
+ * `@aster-charts/core/lean` (the React shells in a browser build) that knows which families its charts use and would rather fetch them
+ * before the first chart than when it renders. Resolves once they are all loaded; rejects, naming the part, when an import fails, and
+ * with a TypeError for a name that is not such a part (`'canvas'` and `'signals'` are the React capabilities' to load: `preloadParts`
+ * of `@aster-charts/react` takes them too). A part already loaded is not fetched again. (`import '@aster-charts/react/all'` instead puts
+ * every part in the app's bundle, so that none is ever fetched.)
+ */
+export function preloadParts(names: readonly EnginePart[] = SPEC_PARTS): Promise<void> {
+  const refused = names.filter((n) => !SPEC_PARTS.includes(n))
+  if (refused.length) {
+    return Promise.reject(new TypeError(`[aster] not a part of the engine a spec reads: ${refused.map((n) => JSON.stringify(n)).join(', ')} (they are ${SPEC_PARTS.join(', ')}; the canvas renderer and the signal loop are preloaded by preloadParts of @aster-charts/react)`))
+  }
+  return loadParts(names.filter((n) => !partLoaded(n)))
 }

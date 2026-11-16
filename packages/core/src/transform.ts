@@ -18,17 +18,14 @@ import { tickStep } from './arr.js'
 import { carryOrder, orderOf, placesAt } from './tuple-order.js'
 import { activeMeter, boundedCount, ceiling } from './limits.js'
 import { walkPostOrder, walkPreOrder } from './tree-walk.js'
-import { aggregateRows, type AggregateParams, compareOf, fieldOf, joinAggregateRows, pivotRows, sortBySpec } from './transform-agg.js'
-import { windowRows } from './transform-window.js'
-import {
-  binRows, collectRows, numberRange, extentOfField, flattenRows, foldRows, identifierRows, imputeRows,
-  lookupRows, projectRows, required, sampleRows, sequenceRows, stackRows, timeunitRows,
-} from './transform-basic.js'
+import { compareOf, fieldOf, numberRange, required, sortBySpec } from './row-keys.js'
+import type { AggregateParams } from './transform-agg.js'
+import { part } from './engine-parts.js'
 
 
 /** One group's aggregate tuple (the incremental aggregate re-derives only dirty groups). */
 export function aggregateGroup(group: Row[], t: CompiledTransform, random?: () => number): Row {
-  return aggregateRows(group, t as AggregateParams, random)[0]!
+  return part('aggregate').aggregateRows(group, t as AggregateParams, random)[0]!
 }
 
 export interface TransformContext {
@@ -238,29 +235,29 @@ function applyTransform(rows: Row[], t0: CompiledTransform, ctx: TransformContex
       return rows.filter((r) => expr(r))
     }
     case 'collect':
-      return collectRows(rows, t, leaveOrder)
+      return part('reshape').collectRows(rows, t, leaveOrder)
     case 'sample':
-      return sampleRows(rows, t, ctx.runtime.random)
+      return part('reshape').sampleRows(rows, t, ctx.runtime.random)
     case 'fold':
-      return foldRows(rows, t)
+      return part('reshape').foldRows(rows, t)
     case 'flatten':
-      return flattenRows(rows, t)
+      return part('reshape').flattenRows(rows, t)
     case 'bin':
-      return binRows(rows, t, (b) => {
+      return part('reshape').binRows(rows, t, (b) => {
         if (t.signal) ctx.signals[t.signal as string] = b
       }, owned)
     case 'impute':
-      return imputeRows(rows, t)
+      return part('reshape').imputeRows(rows, t)
     case 'aggregate':
-      return aggregateRows(rows, t, ctx.runtime.random)
+      return part('aggregate').aggregateRows(rows, t, ctx.runtime.random)
     case 'joinaggregate':
-      return joinAggregateRows(rows, t, ctx.runtime.random, owned)
+      return part('aggregate').joinAggregateRows(rows, t, ctx.runtime.random, owned)
     case 'window':
-      return windowRows(rows, t, ctx.runtime.random, owned)
+      return part('window').windowRows(rows, t, ctx.runtime.random, owned)
     case 'stack':
-      return stackRows(rows, t, owned)
+      return part('reshape').stackRows(rows, t, owned)
     case 'extent': {
-      const ext = extentOfField(rows, t)
+      const ext = part('reshape').extentOfField(rows, t)
       if (t.signal) ctx.signals[t.signal as string] = ext
       return rows
     }
@@ -315,7 +312,7 @@ function applyTransform(rows: Row[], t0: CompiledTransform, ctx: TransformContex
     case 'linkpath':
       return requireTransform('linkpath')(rows, t as Record<string, unknown>, ctx, sourceName)
     case 'project':
-      return projectRows(rows, t)
+      return part('reshape').projectRows(rows, t)
     case 'quantile':
       return requireTransform('quantile')(rows, t as Record<string, unknown>, ctx, sourceName)
     case 'regression':
@@ -325,7 +322,7 @@ function applyTransform(rows: Row[], t0: CompiledTransform, ctx: TransformContex
     case 'density':
       return requireTransform('density')(rows, t as Record<string, unknown>, ctx, sourceName)
     case 'lookup':
-      return lookupRows(rows, t, (ctx.datasets?.(t.from as string) ?? []) as Row[], owned)
+      return part('reshape').lookupRows(rows, t, (ctx.datasets?.(t.from as string) ?? []) as Row[], owned)
     case 'stratify': {
       // Vega's Stratify transform builds a hierarchy from flat parent/child
       // data but emits the ORIGINAL tuples unchanged: depth/height/y layout
@@ -364,7 +361,7 @@ function applyTransform(rows: Row[], t0: CompiledTransform, ctx: TransformContex
     case 'sequence':
       // Vega appends generated tuples to the current pulse (a sequence on a
       // non-empty source keeps the source rows first).
-      return rows.length ? [...rows, ...sequenceRows(t)] : sequenceRows(t)
+      return rows.length ? [...rows, ...part('reshape').sequenceRows(t)] : part('reshape').sequenceRows(t)
     case 'graticule':
       return graticuleRows(t as Record<string, unknown>)
     case 'contour':
@@ -382,13 +379,13 @@ function applyTransform(rows: Row[], t0: CompiledTransform, ctx: TransformContex
     case 'label':
       return requireTransform('label')(rows, t as Record<string, unknown>, ctx, sourceName)
     case 'timeunit':
-      return timeunitRows(rows, t, (info) => {
+      return part('time').timeunitRows(rows, t, (info) => {
         if (t.signal) ctx.signals[t.signal as string] = info
       }, owned)
     case 'identifier':
-      return identifierRows(rows, t, owned, ctx.ids)
+      return part('reshape').identifierRows(rows, t, owned, ctx.ids)
     case 'pivot':
-      return pivotRows(rows, t as { field?: unknown; value?: unknown }, ctx.runtime.random)
+      return part('aggregate').pivotRows(rows, t as { field?: unknown; value?: unknown }, ctx.runtime.random)
     default:
       throw new Error(`[aster] unsupported transform type "${(t as { type: string }).type}"`)
   }

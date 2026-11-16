@@ -1,7 +1,8 @@
 /**
  * Interpolators: functions that take two values and return a function of t that moves from the first to the
- * second, for numbers, strings with numbers inside, dates, arrays, objects, colours in six spaces, splines and
- * camera paths. A scale's range is walked through one of these, and a colour scheme is a spline of colours.
+ * second, for numbers, strings with numbers inside, dates, arrays, objects, splines and camera paths. A scale's range is
+ * walked through one of these. The colours (six spaces, colour splines: interp-color.ts) are the engine's colour part
+ * (engine-parts.ts), which a text or a colour handed to `interpolateValue` reads.
  *
  * What the callers observe, and so what is fixed here: the arithmetic of every channel (`a + t * d`,
  * `a * (1 - t) + b * t`, `pow(a + t * (b - a), 1 / gamma)`) is evaluated in exactly that form, because the last bit of a
@@ -9,26 +10,26 @@
  * returns the same container on every call, so a consumer that keeps results sees the latest; a colour that cannot be
  * parsed contributes NaN channels and a NaN channel yields to the other end's.
  */
-import { color, Color, Cubehelix, cubehelix, Hcl, hcl, Hsl, hsl, Lab, lab, Rgb, rgbConvert } from './color.js'
+import { optionalPart, part } from './engine-parts.js'
 
 export type Ramp<T = unknown> = (t: number) => T
-type Blend<T = unknown> = (a: unknown, b: unknown) => Ramp<T>
+export type Blend<T = unknown> = (a: unknown, b: unknown) => Ramp<T>
 
 // ---- single channels --------------------------------------------------------------------------------------
 
 /** A channel that does not move: the start's value, or the end's when the start is NaN. */
-function hold(a: number, b: number): Ramp<number> {
+export function hold(a: number, b: number): Ramp<number> {
   const value = isNaN(a) ? b : a
   return () => value
 }
 
-function straight(a: number, b: number): Ramp<number> {
+export function straight(a: number, b: number): Ramp<number> {
   const d = b - a
   return d ? along(a, d) : hold(a, b)
 }
 
 /** The channel blended in a power space: the colour-correct way to mix light. */
-function inGamma(y: number): (a: number, b: number) => Ramp<number> {
+export function inGamma(y: number): (a: number, b: number) => Ramp<number> {
   y = +y
   if (y === 1) return straight
   return (a, b) => {
@@ -41,12 +42,12 @@ function inGamma(y: number): (a: number, b: number) => Ramp<number> {
 }
 
 /** a + t * d. */
-function along(a: number, d: number): Ramp<number> {
+export function along(a: number, d: number): Ramp<number> {
   return (t) => a + t * d
 }
 
 /** Hue takes the short way round the circle. */
-function shortestHue(a: number, b: number): Ramp<number> {
+export function shortestHue(a: number, b: number): Ramp<number> {
   const d = b - a
   return d ? along(a, d > 180 || d < -180 ? d - 360 * Math.round(d / 360) : d) : hold(a, b)
 }
@@ -162,11 +163,9 @@ export function interpolateValue(a: unknown, b: unknown): Ramp {
   const kind = typeof b
   if (b == null || kind === 'boolean') return interpolateConstant(b)
   if (kind === 'number') return interpolateNumber(a as number, b as number)
-  if (kind === 'string') {
-    const parsed = color(b)
-    return parsed ? interpolateRgb(a, parsed) : interpolateString(a as string, b as string)
-  }
-  if (b instanceof Color) return interpolateRgb(a, b)
+  // (whether a text is a colour is the colour part's to say: engine-parts.ts; a colour object exists only once that part is loaded)
+  if (kind === 'string') return part('color').interpolateText(a, b as string)
+  if (optionalPart('color')?.isColor(b)) return part('color').interpolateRgb(a, b)
   if (b instanceof Date) return interpolateDate(a as Date, b)
   if (isNumberArray(b)) return interpolateNumberArray(a as ArrayLike<number>, b)
   if (Array.isArray(b)) return interpolateArray(a as unknown[], b)
@@ -195,76 +194,6 @@ export function piecewise(...args: unknown[]): Ramp {
     return I[i]!(scaled - i)
   }
 }
-
-// ---- colours ----------------------------------------------------------------------------------------------
-
-type RgbBlend = Blend<string> & { gamma(y: number): RgbBlend }
-
-function rgbInGamma(y: number): RgbBlend {
-  const channel = inGamma(y)
-  const blend = ((from: unknown, to: unknown) => {
-    const a = rgbConvert(from)
-    const b = rgbConvert(to)
-    const r = channel(a.r, b.r)
-    const g = channel(a.g, b.g)
-    const bl = channel(a.b, b.b)
-    const alpha = straight(a.opacity, b.opacity)
-    return (t: number) => new Rgb(r(t), g(t), bl(t), alpha(t)) + ''
-  }) as RgbBlend
-  blend.gamma = rgbInGamma
-  return blend
-}
-
-export const interpolateRgb = rgbInGamma(1)
-
-type Triple = readonly [number, number, number]
-type Channel = (a: number, b: number) => Ramp<number>
-
-/**
- * Blend two colours in a space of three channels plus opacity. `lift` is the power the position is raised to before
- * it drives the third channel (the cubehelix gamma); 1 leaves it be.
- */
-function blendIn<C extends Color>(
-  convert: (v: unknown) => C,
-  read: (c: C) => Triple,
-  make: (c0: number, c1: number, c2: number, opacity: number) => C,
-  channels: readonly [Channel, Channel, Channel],
-  lift = 1,
-): Blend<string> {
-  return (from, to) => {
-    const a = convert(from)
-    const b = convert(to)
-    const [a0, a1, a2] = read(a)
-    const [b0, b1, b2] = read(b)
-    const r0 = channels[0](a0, b0)
-    const r1 = channels[1](a1, b1)
-    const r2 = channels[2](a2, b2)
-    const alpha = straight(a.opacity, b.opacity)
-    return (t) => make(r0(t), r1(t), r2(lift === 1 ? t : Math.pow(t, lift)), alpha(t)) + ''
-  }
-}
-
-const hslBlend = (hue: Channel): Blend<string> =>
-  blendIn(hsl as (v: unknown) => Hsl, (c) => [c.h, c.s, c.l], (h, s, l, o) => new Hsl(h, s, l, o), [hue, straight, straight])
-
-const hclBlend = (hue: Channel): Blend<string> =>
-  blendIn(hcl as (v: unknown) => Hcl, (c) => [c.h, c.c, c.l], (h, c, l, o) => new Hcl(h, c, l, o), [hue, straight, straight])
-
-type CubehelixBlend = Blend<string> & { gamma(y: number): CubehelixBlend }
-
-function cubehelixBlend(hue: Channel, y = 1): CubehelixBlend {
-  const blend = blendIn(cubehelix as (v: unknown) => Cubehelix, (c) => [c.h, c.s, c.l], (h, s, l, o) => new Cubehelix(h, s, l, o), [hue, straight, straight], +y) as CubehelixBlend
-  blend.gamma = (next) => cubehelixBlend(hue, next)
-  return blend
-}
-
-export const interpolateHsl = hslBlend(shortestHue)
-export const interpolateHslLong = hslBlend(straight)
-export const interpolateHcl = hclBlend(shortestHue)
-export const interpolateHclLong = hclBlend(straight)
-export const interpolateCubehelix = cubehelixBlend(shortestHue)
-export const interpolateCubehelixLong = cubehelixBlend(straight)
-export const interpolateLab: Blend<string> = blendIn(lab as (v: unknown) => Lab, (c) => [c.l, c.a, c.b], (l, a, b, o) => new Lab(l, a, b, o), [straight, straight, straight])
 
 /** A hue (degrees) blended the short way and wrapped into [0, 360). */
 export function interpolateHue(a: unknown, b: unknown): Ramp<number> {
@@ -305,32 +234,6 @@ export function interpolateBasisClosed(values: ArrayLike<number>): Ramp<number> 
     return cubicBasis((t - i / n) * n, values[(i + n - 1) % n]!, values[i % n]!, values[(i + 1) % n]!, values[(i + 2) % n]!)
   }
 }
-
-/** A spline through the red, green and blue of a list of colours. The result is opaque, and an empty list is an error. */
-function rgbSpline(spline: (values: ArrayLike<number>) => Ramp<number>): (colors: ArrayLike<unknown>) => Ramp<string> {
-  return (colors) => {
-    const n = colors.length
-    const reds = new Array<number>(n)
-    const greens = new Array<number>(n)
-    const blues = new Array<number>(n)
-    let last: Rgb | undefined
-    for (let i = 0; i < n; ++i) {
-      last = rgbConvert(colors[i])
-      reds[i] = last.r || 0
-      greens[i] = last.g || 0
-      blues[i] = last.b || 0
-    }
-    const r = spline(reds)
-    const g = spline(greens)
-    const b = spline(blues)
-    // (a spline has no fourth channel: the output is opaque; an empty list has no colour to take that from)
-    ;(last as { opacity: number }).opacity = 1
-    return (t) => new Rgb(r(t), g(t), b(t), 1) + ''
-  }
-}
-
-export const interpolateRgbBasis = rgbSpline(interpolateBasis)
-export const interpolateRgbBasisClosed = rgbSpline(interpolateBasisClosed)
 
 /** Steps through the items of a list, each holding an equal share of [0, 1]. */
 export function interpolateDiscrete<T>(items: ArrayLike<T>): Ramp<T> {

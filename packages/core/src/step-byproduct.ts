@@ -7,7 +7,7 @@
  * A recording is for one input array: only the first step run on exactly that array records (a step may run others on rows of its
  * own: a nested aggregate is not the one asked about). Nothing is kept past the call that asked.
  */
-import type { Row } from './transform-agg.js'
+import type { Row } from './row-keys.js'
 
 /** An aggregate's or joinaggregate's grouping: the parameters it read, the key of each input row and the rows of each group. */
 export interface GroupsByproduct {

@@ -386,6 +386,16 @@ before -> after): `@aster-charts/core` 154.5 -> 155.7, `useChart` 166.1 -> 167.4
 187.1, `<SvgChart>` + `interaction` 203.3 -> 204.4, `<Chart>` + VL 312.1 -> 313.3; `+ @aster-charts/core/dom` 10.6 -> 10.7, the
 other marginal rows did not move.
 
+Parts on demand (the aggregating, window and reshaping transforms, time scales and formats, the curves besides `linear`, colour
+ramps and blending, and the scale types besides linear, ordinal, band, point, time and utc, loaded by the shells in a browser build
+the first time a chart needs them: [ARCHITECTURE.md](ARCHITECTURE.md#the-parts-of-the-engine-most-charts-never-run)), measured
+2026-11-16 with the same command against origin/main at a078891 (kB gzip eager, before -> after): `useChart` 168.9 -> 145.0,
+`<Chart>` 204.5 -> 180.5, `<SvgChart>` 190.7 -> 166.9, `<SvgChart>` + `interaction` 204.2 -> 180.2, `<Chart>` + VL 311.1 -> 287.0;
+the families moved to the on-demand column (`<Chart>` 107.2 -> 137.1). `@aster-charts/core` 172.7 -> 174.7: its entry carries every
+part, as before, and pays the slot reads and the part objects. A new row, `import '@aster-charts/react/all'` + `<Chart>`, is what an app
+that wants no first-render wait pays: 246.4 kB gzip, every part of the engine up front (67.5 kB stay on demand: the add-ons and the
+transition module).
+
 The manifests list only the files that really have an import effect (see
 [ARCHITECTURE.md](ARCHITECTURE.md#side-effects-and-tree-shaking)). Without a `sideEffects` field a bundler must assume
 every module has effects, so `import { useChart }` pulled in `Chart`, `ChartStream`, `useChartStream`,

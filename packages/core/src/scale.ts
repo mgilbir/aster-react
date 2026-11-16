@@ -23,52 +23,23 @@ import {
   interpolateArray,
   interpolateBasis,
   interpolateBasisClosed,
-  interpolateCubehelix,
-  interpolateCubehelixLong,
   interpolateDate,
   interpolateDiscrete,
-  interpolateHcl,
-  interpolateHclLong,
-  interpolateHsl,
-  interpolateHslLong,
   interpolateHue,
-  interpolateLab,
   interpolateNumber,
   interpolateNumberArray,
   interpolateObject,
-  interpolateRgb,
-  interpolateRgbBasis,
-  interpolateRgbBasisClosed,
   interpolateRound,
   interpolateString,
   interpolateZoom,
   piecewise,
 } from './interp.js'
 import type { Locale } from './locale.js'
-import {
-  diverging,
-  divergingLog,
-  divergingPow,
-  divergingSqrt,
-  divergingSymlog,
-  identityScale,
-  linear,
-  log,
-  pow,
-  sequential,
-  sequentialLog,
-  sequentialPow,
-  sequentialSqrt,
-  sequentialSymlog,
-  sqrt,
-  symlog,
-  time,
-  utcTime,
-  type ScaleObject,
-} from './scale-continuous.js'
-import { band, binOrdinal, ordinal, point, quantileScale, quantize, threshold } from './scale-discrete.js'
-import { continuousPalettes, discretePalettes } from './scale-schemes.js'
-import { timeIntervalFor, utcIntervalFor, type TimeInterval } from './time.js'
+import { linear, type ScaleObject } from './scale-continuous.js'
+import { band, ordinal, point } from './scale-discrete.js'
+import { discretePalettes } from './scale-schemes.js'
+import type { TimeInterval } from './time.js'
+import { part, type EngineParts } from './engine-parts.js'
 import { error, isNumber, isObject, isString } from './util.js'
 
 export { bandSpace } from './scale-discrete.js'
@@ -177,29 +148,32 @@ function register(type: string, make: () => ScaleObject, ...kinds: string[]): vo
 }
 
 const NUMERIC = [Continuous, Interpolating]
-register(Identity, identityScale)
+/** A constructor of the engine's `scales` part (scale-warped.ts, scale-classes.ts: engine-parts.ts), read when a spec makes one. */
+const rare = (name: keyof EngineParts['scales']) => (): ScaleObject => part('scales')[name]()
+register(Identity, rare('identityScale'))
 register(Linear, linear, Continuous)
-register(Log, log, Continuous, Log)
-register(Pow, pow, Continuous)
-register(Sqrt, sqrt, Continuous)
-register(Symlog, symlog, Continuous)
-register(Time, time, Continuous, Temporal)
-register(UTC, utcTime, Continuous, Temporal)
-register(Sequential, sequential, ...NUMERIC) // the name before sequential scales had a warp
-register(`${Sequential}-${Linear}`, sequential, ...NUMERIC)
-register(`${Sequential}-${Log}`, sequentialLog, ...NUMERIC, Log)
-register(`${Sequential}-${Pow}`, sequentialPow, ...NUMERIC)
-register(`${Sequential}-${Sqrt}`, sequentialSqrt, ...NUMERIC)
-register(`${Sequential}-${Symlog}`, sequentialSymlog, ...NUMERIC)
-register(`${Diverging}-${Linear}`, diverging, ...NUMERIC)
-register(`${Diverging}-${Log}`, divergingLog, ...NUMERIC, Log)
-register(`${Diverging}-${Pow}`, divergingPow, ...NUMERIC)
-register(`${Diverging}-${Sqrt}`, divergingSqrt, ...NUMERIC)
-register(`${Diverging}-${Symlog}`, divergingSymlog, ...NUMERIC)
-register(Quantile, quantileScale, Discretizing, Quantile)
-register(Quantize, quantize, Discretizing)
-register(Threshold, threshold, Discretizing)
-register(BinOrdinal, binOrdinal, Discrete, Discretizing)
+register(Log, rare('log'), Continuous, Log)
+register(Pow, rare('pow'), Continuous)
+register(Sqrt, rare('sqrt'), Continuous)
+register(Symlog, rare('symlog'), Continuous)
+// (the calendar scales are the engine's time part, read when a spec makes one)
+register(Time, () => part('time').time(), Continuous, Temporal)
+register(UTC, () => part('time').utcTime(), Continuous, Temporal)
+register(Sequential, rare('sequential'), ...NUMERIC) // the name before sequential scales had a warp
+register(`${Sequential}-${Linear}`, rare('sequential'), ...NUMERIC)
+register(`${Sequential}-${Log}`, rare('sequentialLog'), ...NUMERIC, Log)
+register(`${Sequential}-${Pow}`, rare('sequentialPow'), ...NUMERIC)
+register(`${Sequential}-${Sqrt}`, rare('sequentialSqrt'), ...NUMERIC)
+register(`${Sequential}-${Symlog}`, rare('sequentialSymlog'), ...NUMERIC)
+register(`${Diverging}-${Linear}`, rare('diverging'), ...NUMERIC)
+register(`${Diverging}-${Log}`, rare('divergingLog'), ...NUMERIC, Log)
+register(`${Diverging}-${Pow}`, rare('divergingPow'), ...NUMERIC)
+register(`${Diverging}-${Sqrt}`, rare('divergingSqrt'), ...NUMERIC)
+register(`${Diverging}-${Symlog}`, rare('divergingSymlog'), ...NUMERIC)
+register(Quantile, rare('quantileScale'), Discretizing, Quantile)
+register(Quantize, rare('quantize'), Discretizing)
+register(Threshold, rare('threshold'), Discretizing)
+register(BinOrdinal, rare('binOrdinal'), Discrete, Discretizing)
 register(Ordinal, ordinal, Discrete)
 register(Band, band, Discrete)
 register(Point, point, Discrete)
@@ -262,9 +236,9 @@ export function tickCount(scale: Scale, count: unknown, minStep?: number): unkno
   if (isString(count)) {
     count =
       scale.type === Time
-        ? timeIntervalFor(count as string)!
+        ? part('time').timeIntervalFor(count as string)!
         : scale.type === UTC
-          ? utcIntervalFor(count as string)!
+          ? part('time').utcIntervalFor(count as string)!
           : error('Only time and utc scales accept interval strings.')
     if (step) count = (count as TimeInterval).every!(step as number)
   }
@@ -433,33 +407,27 @@ export function labelFraction(scale: Scale): (value: unknown) => number {
 
 // ---- interpolators by name ---------------------------------------------------------------------------------
 
-/** The interpolators a spec can name, keyed by the capitalised, dash-joined form of the name. */
+/**
+ * The interpolators a spec can name, keyed by the capitalised, dash-joined form of the name: these, and the colour ones
+ * (`COLOR_INTERPOLATORS`), which are the engine's colour part (interp-color.ts, read from engine-parts.ts when one is named).
+ */
 const INTERPOLATORS = new Map<string, unknown>(
   Object.entries({
     Array: interpolateArray,
     Basis: interpolateBasis,
     BasisClosed: interpolateBasisClosed,
-    Cubehelix: interpolateCubehelix,
-    CubehelixLong: interpolateCubehelixLong,
     Date: interpolateDate,
     Discrete: interpolateDiscrete,
-    Hcl: interpolateHcl,
-    HclLong: interpolateHclLong,
-    Hsl: interpolateHsl,
-    HslLong: interpolateHslLong,
     Hue: interpolateHue,
-    Lab: interpolateLab,
     Number: interpolateNumber,
     NumberArray: interpolateNumberArray,
     Object: interpolateObject,
-    Rgb: interpolateRgb,
-    RgbBasis: interpolateRgbBasis,
-    RgbBasisClosed: interpolateRgbBasisClosed,
     Round: interpolateRound,
     String: interpolateString,
     Zoom: interpolateZoom,
   }),
 )
+export const COLOR_INTERPOLATORS: ReadonlySet<string> = new Set(['Cubehelix', 'CubehelixLong', 'Hcl', 'HclLong', 'Hsl', 'HslLong', 'Lab', 'Rgb', 'RgbBasis', 'RgbBasisClosed'])
 
 /** The interpolator named by a spec (with a gamma, when it takes one); undefined for a name that is not one. */
 export function interpolate(type?: string, gamma?: number): unknown {
@@ -468,7 +436,7 @@ export function interpolate(type?: string, gamma?: number): unknown {
     .split('-')
     .map((word) => word[0]!.toUpperCase() + word.slice(1))
     .join('')
-  const blend = INTERPOLATORS.get(key) as { gamma?: (g: number) => unknown } | undefined
+  const blend = (COLOR_INTERPOLATORS.has(key) ? part('color').interpolators.get(key) : INTERPOLATORS.get(key)) as { gamma?: (g: number) => unknown } | undefined
   return gamma != null && blend && blend.gamma ? blend.gamma(gamma) : blend
 }
 
@@ -576,16 +544,19 @@ export function scaleGradientStops(source: Scale, count?: number): Array<{ offse
 const schemes = new Map<string, unknown>()
 
 /** The colours of a palette given as a run of six-digit hex colours. */
-function paletteColors(hex: string): string[] {
+export function paletteColors(hex: string): string[] {
   const colors: string[] = []
   for (let i = 0; i + 6 <= hex.length; i += 6) colors.push('#' + hex.slice(i, i + 6))
   return colors
 }
 
 for (const [name, palette] of Object.entries(discretePalettes)) schemes.set(name.toLowerCase(), paletteColors(palette))
-for (const [name, palette] of Object.entries(continuousPalettes)) schemes.set(name.toLowerCase(), interpolateColors(paletteColors(palette)))
 
-/** The named scheme (a colour list or a ramp over [0, 1]), or undefined. */
+/**
+ * The named scheme (a colour list or a ramp over [0, 1]), or undefined. The lists are here; any other name is looked up among the
+ * ramps, which are the engine's colour part (color-schemes.ts, read from engine-parts.ts).
+ */
 export function scheme(name: string): unknown {
-  return schemes.get(name && name.toLowerCase())
+  const key = name && name.toLowerCase()
+  return schemes.get(key) ?? (key ? part('color').rampScheme(key) : undefined)
 }

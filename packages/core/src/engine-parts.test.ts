@@ -32,7 +32,13 @@ const lean = (): void => { restore = withdrawParts(SPEC_PARTS) }
 
 describe('an expression function that reads a part is one the detector names', () => {
   const RE = /a+/
-  const argLists: unknown[][] = [[], ['a'], ['abc', RE], ['abc', RE, 'x'], [['a', 'b'], RE], ['store', { a: 1 }], ['store', { a: 1 }, 'union']]
+  // (and the arguments the calendar and colour functions read: a month or a day, a date and a format, a unit, a colour)
+  // (small instants: a date also reaches the functions that take a count, and as a number it must stay a small one)
+  const DAY = new Date(5)
+  const argLists: unknown[][] = [
+    [], ['a'], ['abc', RE], ['abc', RE, 'x'], [['a', 'b'], RE], ['store', { a: 1 }], ['store', { a: 1 }, 'union'],
+    [1], [DAY], [DAY, '%Y'], ['2020', '%Y'], ['day', DAY, 2], ['day', DAY, new Date(3 * 86_400_000)], [['year', 'month']], ['#f00'], ['#f00', '#0f0'],
+  ]
   const runtime: ExpressionRuntime = { scale: () => undefined, data: () => [{ unit: 'u', fields: [], values: [] }], expr: (e) => compileExpr(e, runtime) }
 
   it('calling every function of the table with a regular expression argument, under limits, from empty slots', () => {
@@ -219,7 +225,8 @@ describe('the pulse path: a re-evaluation without it derives in full, the same s
     const drawing = { width: 10, height: 10, data: [{ name: 't', transform: [{ type: 'formula', expr: 'random()', as: 'r' }] }], marks: [{ type: 'text', from: { data: 't' }, encode: { update: { text: { field: 'r' } } } }] } as unknown as VgSpec
     expect(parts(drawing, { random: true })).toBe('pulse')
     expect(parts(drawing)).toBe('')
-    expect(parts(spec, { random: true })).toBe('')
+    // (the transforms of `spec` are parts of their own; the pulse path is not among them: its datasets draw nothing)
+    expect(parts(spec, { random: true })).toBe('aggregate,window,reshape')
     const draws = (): string[] => {
       let n = 0
       const random = (): number => ((n++ * 37) % 101) / 101
@@ -257,4 +264,96 @@ describe('the detector reads the structure', () => {
     expect(parts({ signals: [{ name: 's', on: [{ events: 'click', update: 'modify("d", datum)' }] }] })).toBe('modify')
     expect(parts({ signals: [{ name: 's', on: [{ events: 'click', update: '1' }] }] })).toBe('')
   })
+})
+
+describe('the detector reads the families of the engine from the structure', () => {
+  const x = { name: 'x', type: 'linear', domain: [0, 1], range: 'width' }
+  it('a transform names its part by its literal type; a facet by its groupby; a domain sorted by an aggregate', () => {
+    expect(parts({ data: [{ name: 'd', transform: [{ type: 'aggregate', groupby: ['a'] }] }] })).toBe('aggregate')
+    expect(parts({ data: [{ name: 'd', transform: [{ type: 'pivot', field: 'k', value: 'v' }, { type: 'window', ops: ['rank'] }] }] })).toBe('aggregate,window')
+    expect(parts({ data: [{ name: 'd', transform: [{ type: 'stack', field: 'v' }, { type: 'filter', expr: 'true' }, { type: 'formula', expr: '1', as: 'o' }] }] })).toBe('reshape')
+    expect(parts({ data: [{ name: 'd', transform: [{ type: 'timeunit', field: 'd' }] }] })).toBe('time')
+    expect(parts({ marks: [{ type: 'group', from: { facet: { name: 'f', data: 'd', groupby: 'a' } } }] })).toBe('aggregate')
+    expect(parts({ marks: [{ type: 'group', from: { facet: { name: 'f', data: 'd', field: 'rows' } } }] })).toBe('')
+    expect(parts({ scales: [{ name: 's', type: 'band', domain: { data: 'd', field: 'a', sort: true } }] })).toBe('')
+    expect(parts({ scales: [{ name: 's', type: 'band', domain: { data: 'd', field: 'a', sort: { op: 'mean', field: 'v' } } }] })).toBe('aggregate')
+    expect(parts({ scales: [{ name: 's', type: 'band', domain: { data: 'd', fields: ['a', 'b'], sort: true } }] })).toBe('aggregate')
+  })
+  it('time: a calendar scale, a date format type, a date parse pattern, a calendar function', () => {
+    expect(parts({ scales: [{ name: 't', type: 'utc' }] })).toBe('time')
+    expect(parts({ axes: [{ scale: 'x', formatType: 'time' }], scales: [x] })).toBe('time')
+    expect(parts({ axes: [{ scale: 'x', formatType: 'number' }], scales: [x] })).toBe('')
+    expect(parts({ axes: [{ scale: 'x', formatType: { signal: 'ft' } }], scales: [x] })).toBe('time')
+    expect(parts({ data: [{ name: 'd', format: { parse: { a: 'date:%Y' } } }] })).toBe('time')
+    expect(parts({ data: [{ name: 'd', format: { parse: { a: 'date', b: 'number' } } }] })).toBe('')
+    expect(parts({ data: [{ name: 'd', format: { parse: 'auto' } }] })).toBe('')
+    expect(parts({ signals: [{ name: 's', update: "timeFormat(now(), '%Y')" }] })).toBe('time')
+    expect(parts({ signals: [{ name: 's', update: 'year(now())' }] })).toBe('')
+  })
+  it('curves: a literal curve besides linear, or anything that is not a literal', () => {
+    const line = (interpolate: unknown): object => ({ marks: [{ type: 'line', encode: { update: { interpolate } } }] })
+    expect(parts(line({ value: 'linear' }))).toBe('')
+    expect(parts(line({ value: 'nonsense' }))).toBe('')
+    expect(parts(line({ value: 'monotone' }))).toBe('curves')
+    expect(parts(line({ signal: 'i' }))).toBe('curves')
+    expect(parts(line([{ test: 'datum.a', value: 'linear' }, { value: 'step' }]))).toBe('curves')
+    expect(parts({ config: { line: { interpolate: 'basis' } } })).toBe('curves')
+    // (a scale's `interpolate` is its colour space, not a curve)
+    expect(parts({ scales: [{ name: 'c', type: 'ordinal', interpolate: 'step' }] })).toBe('color')
+  })
+  it('colours and rare scales: what a scale blends, by its type, scheme, range and interpolate', () => {
+    expect(parts({ scales: [{ name: 'c', type: 'ordinal', range: { scheme: 'category10' } }] })).toBe('')
+    expect(parts({ scales: [{ name: 'c', type: 'ordinal', range: 'category' }] })).toBe('')
+    expect(parts({ scales: [{ name: 'c', type: 'ordinal', range: 'ordinal' }] })).toBe('color')
+    expect(parts({ scales: [{ name: 'c', type: 'ordinal', range: 'category' }], config: { range: { category: { scheme: 'blues' } } } })).toBe('color')
+    expect(parts({ scales: [{ name: 'c', type: 'quantize', range: { scheme: 'tableau10' } }] })).toBe('scales')
+    expect(parts({ scales: [{ name: 'c', type: 'linear', range: ['red', 'blue'] }] })).toBe('color,scales')
+    expect(parts({ scales: [{ name: 'c', type: 'linear', range: [0, { signal: 'width' }] }] })).toBe('')
+    expect(parts({ signals: [{ name: 'w', value: 10, update: 'containerSize()[0] * 2' }], scales: [{ name: 'c', type: 'linear', range: [0, { signal: 'w' }] }] })).toBe('')
+    expect(parts({ signals: [{ name: 'w', value: 'red' }], scales: [{ name: 'c', type: 'linear', range: [0, { signal: 'w' }] }] })).toBe('color,scales')
+    expect(parts({ signals: [{ name: 'w', value: 1, bind: { input: 'text' } }], scales: [{ name: 'c', type: 'linear', range: [0, { signal: 'w' }] }] })).toBe('color,scales')
+    expect(parts({ scales: [{ name: 'c', type: 'linear', range: { signal: '[0, width]' } }] })).toBe('')
+    expect(parts({ scales: [{ name: 'c', type: 'sequential', scheme: 'viridis' }] })).toBe('color,scales')
+    expect(parts({ scales: [{ name: 'c', type: 'log', range: 'height' }] })).toBe('scales')
+    expect(parts({ scales: [{ name: 'c', type: { signal: 't' } }] })).toBe('time,color,scales')
+    expect(parts({ signals: [{ name: 's', update: "luminance('red')" }] })).toBe('color')
+  })
+  it("a host's signal value that is not a number decides for the colour part, whatever the spec declares", () => {
+    const spec = { signals: [{ name: 'w', value: 10 }], scales: [{ name: 'c', type: 'linear', range: [0, { signal: 'w' }] }] }
+    expect(parts(spec)).toBe('')
+    expect(parts(spec, { signals: { w: 20 } })).toBe('')
+    expect(parts(spec, { signals: { w: 'red' } })).toBe('color,scales')
+    expect(parts({ scales: [{ name: 'c', type: 'linear', range: [0, { signal: 'width' }] }] }, { signals: { width: 'red' } })).toBe('color,scales')
+  })
+})
+
+describe('a missed detection is refused, naming the part, never drawn differently', () => {
+  const view = { width: 60, height: 40, padding: 0, autosize: 'none' }
+  const rows = [{ a: 'x', v: 1, d: Date.UTC(2020, 0, 1) }, { a: 'y', v: 3, d: Date.UTC(2020, 5, 1) }, { a: 'x', v: 2, d: Date.UTC(2021, 0, 1) }]
+  const marks = (field: string, more: object = {}): object[] => [{ type: 'line', from: { data: 'd' }, encode: { update: { x: { field: 'v' }, y: { field }, ...more } } }]
+  const CASES: Array<[EnginePart, object]> = [
+    ['aggregate', { data: [{ name: 'd', values: rows, transform: [{ type: 'aggregate', groupby: ['a'], fields: ['v'], ops: ['sum'], as: ['s'] }] }], marks: marks('s') }],
+    ['window', { data: [{ name: 'd', values: rows, transform: [{ type: 'window', ops: ['rank'], as: ['r'] }] }], marks: marks('r') }],
+    ['reshape', { data: [{ name: 'd', values: rows, transform: [{ type: 'stack', field: 'v' }] }], marks: marks('y0') }],
+    ['time', { data: [{ name: 'd', values: rows }], scales: [{ name: 't', type: 'time', domain: { data: 'd', field: 'd' }, range: 'width' }], marks: marks('v', { x: { scale: 't', field: 'd' } }) }],
+    ['time', { data: [{ name: 'd', values: rows, transform: [{ type: 'formula', as: 'l', expr: "timeFormat(datum.d, '%Y')" }] }], marks: [{ type: 'text', from: { data: 'd' }, encode: { update: { text: { field: 'l' } } } }] }],
+    ['curves', { data: [{ name: 'd', values: rows }], marks: marks('v', { interpolate: { value: 'monotone' } }) }],
+    ['color', { data: [{ name: 'd', values: rows }], scales: [{ name: 'c', type: 'ordinal', domain: { data: 'd', field: 'a' }, range: { scheme: 'blues' } }], marks: marks('v', { stroke: { scale: 'c', field: 'a' } }) }],
+    ['color', { data: [{ name: 'd', values: rows }], marks: marks('v', { stroke: { signal: "rgb('red') + ''" } }) }],
+    ['scales', { data: [{ name: 'd', values: rows }], scales: [{ name: 'y', type: 'log', domain: [1, 10], range: 'height' }], marks: marks('v', { y: { scale: 'y', field: 'v' } }) }],
+  ]
+  for (const [p, body] of CASES) {
+    it(`${p}: ${JSON.stringify(body).slice(0, 90)}`, () => {
+      const spec = { ...view, ...body } as unknown as VgSpec
+      expect(specNeeds(spec).parts, 'the detector names it (the test plants the miss by emptying the slot)').toContain(p)
+      const full = renderSceneToSvg(createChartSession().evaluate(spec, {}))
+      restore = withdrawParts([p])
+      let drawn: string | undefined
+      expect(() => { drawn = renderSceneToSvg(createChartSession().evaluate(spec, {})) }).toThrow(new RegExp(`\\[aster\\] the "${p}" part of the engine is not loaded`))
+      expect(drawn).toBeUndefined()
+      restore()
+      restore = null
+      expect(renderSceneToSvg(createChartSession().evaluate(spec, {}))).toBe(full)
+    })
+  }
 })

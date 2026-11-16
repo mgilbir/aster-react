@@ -73,6 +73,10 @@
       "types": "./dist/stream.d.ts",
       "default": "./dist/stream.js"
     },
+    "./lean/all": {
+      "types": "./dist/lean-all.d.ts",
+      "default": "./dist/lean-all.js"
+    },
     "./package.json": "./package.json"
   },
   "sideEffects": [
@@ -93,6 +97,13 @@
     "./dist/parts-evaluate.js",
     "./dist/parts-signals.js",
     "./dist/parts-all.js",
+    "./dist/part-aggregate.js",
+    "./dist/part-window.js",
+    "./dist/part-reshape.js",
+    "./dist/part-time.js",
+    "./dist/part-curves.js",
+    "./dist/part-color.js",
+    "./dist/part-scales.js",
     "./dist/part-legend.js",
     "./dist/part-layout.js",
     "./dist/part-pulse.js",
@@ -104,7 +115,8 @@
     "./dist/part-timer.js",
     "./dist/part-canvas.js",
     "./dist/part-signals.js",
-    "./dist/lean-signals-full.js"
+    "./dist/lean-signals-full.js",
+    "./dist/lean-all.js"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.build.json",

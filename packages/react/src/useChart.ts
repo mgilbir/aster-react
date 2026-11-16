@@ -36,7 +36,7 @@ export function useChart(spec: VgSpec, options: UseChartOptions = {}): UseChartR
   const normalized = React.useMemo(() => normalizeChartSpec(stableSpec), [stableSpec])
   // The opt-in add-ons the spec needs load before the first evaluation: the hook suspends meanwhile (a <Suspense> boundary
   // above shows its fallback), and an import that fails is the result's `error`.
-  const addonError = useAddons(normalized, input.urlData, { limits: limits != null, random: input.random != null })
+  const addonError = useAddons(normalized, input.urlData, { limits: limits != null, random: input.random != null, signals: input.signals })
   const sessionRef = React.useRef<ReturnType<typeof createChartSession> | null>(null)
   if (sessionRef.current == null) sessionRef.current = createChartSession()
   const session = sessionRef.current

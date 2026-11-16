@@ -4,6 +4,13 @@
  * imports. See engine-parts.ts.
  */
 import { installPart } from './engine-parts.js'
+import { part as aggregate } from './part-aggregate.js'
+import { part as window } from './part-window.js'
+import { part as reshape } from './part-reshape.js'
+import { part as time } from './part-time.js'
+import { part as curves } from './part-curves.js'
+import { part as color } from './part-color.js'
+import { part as scales } from './part-scales.js'
 import { part as legend } from './part-legend.js'
 import { part as layout } from './part-layout.js'
 import { part as pulse } from './part-pulse.js'
@@ -16,6 +23,13 @@ import { part as timer } from './part-timer.js'
 import { part as canvas } from './part-canvas.js'
 
 export function installAllParts(): void {
+  installPart('aggregate', aggregate)
+  installPart('window', window)
+  installPart('reshape', reshape)
+  installPart('time', time)
+  installPart('curves', curves)
+  installPart('color', color)
+  installPart('scales', scales)
   installPart('legend', legend)
   installPart('layout', layout)
   installPart('pulse', pulse)

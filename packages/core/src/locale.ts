@@ -2,7 +2,8 @@
  * Locales: the number and time formatters a chart reads text through, as one object.
  *
  * A locale offers `format`, `formatPrefix`, `formatFloat`, `formatSpan` (numbers) and `timeFormat`, `utcFormat`,
- * `timeParse`, `utcParse` (dates), built over the engines in `format.ts` and `time-format.ts`. Axis labels and
+ * `timeParse`, `utcParse` (dates), built over the engines in `format.ts` and `time-format.ts` (the date half through locale-time.ts,
+ * the `time` part of the engine, which it reads when a date is first formatted or parsed). Axis labels and
  * expression functions format thousands of values through a handful of specifiers, so compiled formatters are kept per
  * specifier in a bounded least-recently-used table (a specifier is spec- or data-supplied text, and an unbounded table
  * would be a retention vector in a long-lived process).
@@ -24,22 +25,15 @@ import {
   precisionFixed, precisionPrefix, precisionRound, tickStep,
   type FormatLocaleDefinition, type FormatSpecifier,
 } from './format.js'
-import {
-  timeFormat as defaultTimeFormat, timeFormatLocale as makeTimeLocale, timeParse as defaultTimeParse,
-  utcFormat as defaultUtcFormat, utcParse as defaultUtcParse,
-  type TimeLocaleDefinition,
-} from './time-format.js'
-import {
-  DATE, DAY, HOURS, MILLISECONDS, MINUTES, MONTH, QUARTER, SECONDS, WEEK, YEAR,
-  timeIntervalFor, utcIntervalFor, type TimeInterval,
-} from './time.js'
-import { error, isObject, isString, recentlyUsed } from './util.js'
+import type { TimeLocaleDefinition } from './time-format.js'
+import { error, recentlyUsed } from './util.js'
+import { part, type EngineParts } from './engine-parts.js'
 
 /** Entries kept per formatter table; the least recently used is dropped past it. */
 export const FORMATTER_CACHE_MAX = 512
 
 /** `make`, remembered per `String(key)`, keeping the most recently used `FORMATTER_CACHE_MAX` results (see `recentlyUsed`). */
-function remember<A, T>(make: (key: A) => T): (key: A) => T {
+export function remember<A, T>(make: (key: A) => T): (key: A) => T {
   return recentlyUsed(FORMATTER_CACHE_MAX, make)
 }
 
@@ -160,76 +154,46 @@ export function numberFormatDefaultLocale(...definition: [FormatLocaleDefinition
 
 // --- the time half --------------------------------------------------------------------------------
 
-type TimeFormat = (specifier: string) => (value: unknown) => string
+/**
+ * The time half of a locale: the four functions a chart formats and parses dates through. Their engine (the calendar, the time
+ * formats, the multi-format of a time axis: locale-time.ts) is the `time` part of the engine (engine-parts.ts), read when one of them
+ * is first called, so a chart that formats no date never needs it.
+ */
+export interface TimeLocale {
+  timeFormat(spec: unknown): (value: unknown) => string
+  utcFormat(spec: unknown): (value: unknown) => string
+  timeParse(spec: string): (text: string) => Date | null
+  utcParse(spec: string): (text: string) => Date | null
+}
 
 /**
- * The formatter a time axis uses by default: one function that prints a date with the format of the coarsest unit the
- * date starts exactly on. `spec` overrides the format per unit name (`milliseconds`, `seconds`, `minutes`, `hours`,
- * `date`/`day`, `week`, `month`, `quarter`, `year`).
+ * A time locale made by `make` on its first use (the same one from then on). The part is read on every use, made or not: a slot that
+ * is empty is refused however the locale got made (a chart that formats a date needs the time part, whatever ran before it).
  */
-function multiFormat(format: TimeFormat, intervalOf: (unit: string) => TimeInterval | undefined, spec: unknown): (date: unknown) => string {
-  const formats = (spec || {}) as Record<string, string | undefined>
-  if (!isObject(formats)) error(`Invalid time multi-format specifier: ${formats}`)
-  const pick = (fallback: string, ...units: string[]): ((value: unknown) => string) => {
-    for (const unit of units) if (formats[unit]) return format(formats[unit]!)
-    return format(fallback)
+function lazyTimeLocale(make: (time: EngineParts['time']) => TimeLocale): TimeLocale {
+  let made: TimeLocale | undefined
+  const get = (): TimeLocale => {
+    const time = part('time')
+    return (made ??= make(time))
   }
-  const [second, minute, hour, day, week, month, quarter, year] =
-    [SECONDS, MINUTES, HOURS, DATE, WEEK, MONTH, QUARTER, YEAR].map((unit) => intervalOf(unit)!)
-  const millis = pick('.%L', MILLISECONDS)
-  const seconds = pick(':%S', SECONDS)
-  const minutes = pick('%I:%M', MINUTES)
-  const hours = pick('%I %p', HOURS)
-  const days = pick('%a %d', DATE, DAY)
-  const weeks = pick('%b %d', WEEK)
-  const months = pick('%B', MONTH)
-  const quarters = pick('%B', QUARTER)
-  const years = pick('%Y', YEAR)
-  const isOff = (floor: TimeInterval, date: unknown): boolean => floor(date) < (date as Date)
-  return (date) => (
-    isOff(second!, date) ? millis
-    : isOff(minute!, date) ? seconds
-    : isOff(hour!, date) ? minutes
-    : isOff(day!, date) ? hours
-    : isOff(month!, date) ? (isOff(week!, date) ? days : weeks)
-    : isOff(year!, date) ? (isOff(quarter!, date) ? months : quarters)
-    : years
-  )(date)
-}
-
-interface TimeEngine {
-  format: TimeFormat
-  parse(specifier: string): (text: string) => Date | null
-  utcFormat: TimeFormat
-  utcParse(specifier: string): (text: string) => Date | null
-}
-
-function timeLocale(engine: TimeEngine) {
-  const local = remember(engine.format)
-  const utc = remember(engine.utcFormat)
   return {
-    timeFormat: (spec: unknown) => (isString(spec) ? local(spec) : multiFormat(local, timeIntervalFor, spec)),
-    utcFormat: (spec: unknown) => (isString(spec) ? utc(spec) : multiFormat(utc, utcIntervalFor, spec)),
-    timeParse: remember(engine.parse),
-    utcParse: remember(engine.utcParse),
+    timeFormat: (spec) => get().timeFormat(spec),
+    utcFormat: (spec) => get().utcFormat(spec),
+    timeParse: (spec) => get().timeParse(spec),
+    utcParse: (spec) => get().utcParse(spec),
   }
 }
 
-type TimeLocale = ReturnType<typeof timeLocale>
+const defaultTimeLocale = (): TimeLocale => lazyTimeLocale((time) => time.defaultTimeLocale())
 
-function defaultTimeEngine(): TimeEngine {
-  // read at the call: the engine's defaults are live bindings that `timeFormatDefaultLocale` of time-format.ts replaces
-  return { format: defaultTimeFormat, parse: defaultTimeParse, utcFormat: defaultUtcFormat, utcParse: defaultUtcParse }
-}
-
-let currentTime: TimeLocale = timeLocale(defaultTimeEngine())
+let currentTime: TimeLocale = defaultTimeLocale()
 
 export function resetTimeFormatDefaultLocale(): TimeLocale {
-  return (currentTime = timeLocale(defaultTimeEngine()))
+  return (currentTime = defaultTimeLocale())
 }
 
 export function timeFormatLocale(definition: TimeLocaleDefinition): TimeLocale {
-  return timeLocale(makeTimeLocale(definition))
+  return part('time').timeFormatLocale(definition)
 }
 
 /** With no argument, the default time locale; with one, replace it. */
