@@ -27,7 +27,7 @@ import {
 } from './format.js'
 import type { TimeLocaleDefinition } from './time-format.js'
 import { error, recentlyUsed } from './util.js'
-import { part } from './engine-parts.js'
+import { part, type EngineParts } from './engine-parts.js'
 
 /** Entries kept per formatter table; the least recently used is dropped past it. */
 export const FORMATTER_CACHE_MAX = 512
@@ -166,10 +166,16 @@ export interface TimeLocale {
   utcParse(spec: string): (text: string) => Date | null
 }
 
-/** A time locale made by `make` on its first use (the same one from then on). */
-function lazyTimeLocale(make: () => TimeLocale): TimeLocale {
+/**
+ * A time locale made by `make` on its first use (the same one from then on). The part is read on every use, made or not: a slot that
+ * is empty is refused however the locale got made (a chart that formats a date needs the time part, whatever ran before it).
+ */
+function lazyTimeLocale(make: (time: EngineParts['time']) => TimeLocale): TimeLocale {
   let made: TimeLocale | undefined
-  const get = (): TimeLocale => (made ??= make())
+  const get = (): TimeLocale => {
+    const time = part('time')
+    return (made ??= make(time))
+  }
   return {
     timeFormat: (spec) => get().timeFormat(spec),
     utcFormat: (spec) => get().utcFormat(spec),
@@ -178,7 +184,7 @@ function lazyTimeLocale(make: () => TimeLocale): TimeLocale {
   }
 }
 
-const defaultTimeLocale = (): TimeLocale => lazyTimeLocale(() => part('time').defaultTimeLocale())
+const defaultTimeLocale = (): TimeLocale => lazyTimeLocale((time) => time.defaultTimeLocale())
 
 let currentTime: TimeLocale = defaultTimeLocale()
 
