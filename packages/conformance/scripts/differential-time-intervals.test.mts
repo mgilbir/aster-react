@@ -7,13 +7,13 @@
  * d3-time: every interval's floor / ceil / round / offset / range / count / every(k) / filter, with odd steps
  * (fractions, NaN, strings, negatives) and non-Date inputs. vega-time: timeUnits, timeUnitSpecifier, timeFloor and
  * utcFloor over generated unit lists and steps, timeInterval / timeOffset / timeSequence (and utc), dayofyear / week,
- * and timeBin (which lives in `transform-basic.ts`).
+ * and timeBin (which lives in `transform-timeunit.ts`).
  */
 import * as d3 from 'd3-time'
 import * as vt from 'vega-time'
 import { describe, expect, it, vi } from 'vitest'
 import * as aster from '../../core/src/time.ts'
-import { timeBin as asterTimeBin } from '../../core/src/transform-basic.ts'
+import { timeBin as asterTimeBin } from '../../core/src/transform-timeunit.ts'
 import { compareCases, makeRng, scaled, type Rng } from './differential-gen.mts'
 import { withTz } from './differential-util.mts'
 import { ZONES, genInstant, offsetChanges } from './differential-zones.mts'

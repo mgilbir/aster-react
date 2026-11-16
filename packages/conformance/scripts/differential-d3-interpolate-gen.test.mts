@@ -20,7 +20,9 @@ import { createRequire } from 'node:module'
 import { pathToFileURL } from 'node:url'
 import { describe, expect, it, vi } from 'vitest'
 import * as asterColor from '../../core/src/color.ts'
-import * as aster from '../../core/src/interp.ts'
+import * as interp from '../../core/src/interp.ts'
+// (the colour interpolators are the engine's colour part, interp-color.ts: the same library as d3-interpolate's, split in two)
+import * as interpColor from '../../core/src/interp-color.ts'
 import { enc } from './differential-util.mts'
 import { compareCases, makeRng, scaled, type Rng } from './differential-gen.mts'
 
@@ -36,7 +38,8 @@ interface Side {
   colors: Record<string, any>
 }
 const D3: Side = { name: 'd3', lib: { ...d3, interpolateValue: d3.interpolate }, colors: d3c as unknown as Record<string, any> }
-const ASTER: Side = { name: 'aster', lib: aster as unknown as Record<string, any>, colors: asterColor as unknown as Record<string, any> }
+const aster: Record<string, any> = { ...interp, ...interpColor }
+const ASTER: Side = { name: 'aster', lib: aster, colors: asterColor as unknown as Record<string, any> }
 
 /** A value that is built per side (colour objects and Dates are not shared between libraries or calls). */
 type Recipe = (s: Side) => unknown
