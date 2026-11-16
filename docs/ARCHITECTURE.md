@@ -363,7 +363,13 @@ Because heavy feature areas are only used by a small fraction of specs, they are
 
 ### The parts of the engine most charts never run
 
-Some modules of the engine are read only by specs that use a feature most charts do not: the legend builder (`guide-legend.ts`), the
+Some modules of the engine are read only by specs that use a feature most charts do not: the aggregating transforms (`aggregate`,
+`joinaggregate`, `pivot`, a facet's groups, a domain sorted by an aggregate: `transform-agg.ts`), `window` (`transform-window.ts`), the
+reshaping transforms (`collect`, `sample`, `fold`, `flatten`, `project`, `extent`, `sequence`, `lookup`, `impute`, `stack`, `identifier`,
+`bin`: `transform-basic.ts`), the calendar and the time formats (`time.ts`, `time-format.ts`, `locale-time.ts`, the calendar scales of
+`scale-calendar.ts` and `timeunit`), the curves besides `linear` (`curves.ts`), colours (`color.ts`, `interp-color.ts`, the scheme ramps of
+`color-schemes.ts`), the scale types besides linear, ordinal, band, point and the calendar ones (`scale-warped.ts`, `scale-classes.ts`),
+the legend builder (`guide-legend.ts`), the
 grid layout (`trellis.ts`), the SVG path reader for custom symbol shapes and path marks (`svg-path.ts`), vega-selections' functions
 (`selections.ts`), the regular-expression screen (`regex-screen.ts`, which runs only under `limits`), the pulse path of the incremental
 engine (`incremental-engine.ts`, needed only once a chart's data changes), and in the signal loop `intersect()` (`scene-intersect.ts`),
@@ -380,7 +386,13 @@ Their callers read them from slots (`engine-parts.ts`) instead of importing them
   anywhere else (a server, a test runner) the subpath resolves to `lean-full.ts`, which fills every slot, so a synchronous server render
   draws what it always drew.
 - **Detection and the wait.** `specNeeds(spec, { limits, random })` (`addons.ts`, one walk with the add-on detector) names the parts a
-  spec may read: `legends` in any scope; a `layout` on the view or a group mark; a path mark, or a `shape` / `symbolType` that may not be
+  spec may read: a transform's `type` (always a literal); a facet that partitions by `groupby`; a domain sorted by an `op`, or over
+  several fields with a sort (aggregate); a `time` / `utc` scale, a `formatType` other than `number`, a `date:` / `utc:` parse pattern
+  (time); an `interpolate` that names a curve besides `linear`, or is not a literal (curves); a scale with an `interpolate`, a scheme that
+  is not a list of colours taken as classes, or a continuous scale over values that may not all be numbers (color: a signal in a range is
+  read by a conservative inference of numeric expressions in `addons.ts`); a rare scale type, or a linear one over colours, which is made
+  as a sequential one (scales); a scale type that is not a literal names every scale family; the expression functions of a family
+  (`PART_FUNCTIONS`: `timeFormat`, `utcParse`, `week`..., `rgb`, `hcl`, `luminance`...), found in the parsed expressions; `legends` in any scope; a `layout` on the view or a group mark; a path mark, or a `shape` / `symbolType` that may not be
   a built-in symbol (a field, a signal, a rule, a custom path, in marks or in the config); a call of `vlSelection*`, `intersect`,
   `modify` / `setdata`; a `timer` event stream; under limits, `test`, `regexp`, a regular expression literal, or `replace` / `split`
   with an argument that may be one; with a random source, datasets that may draw from it (whose draws depend on which evaluation takes
@@ -395,11 +407,21 @@ Their callers read them from slots (`engine-parts.ts`) instead of importing them
 - **An empty slot never changes a result.** Reading one throws (`[aster] the "legend" part of the engine is not loaded`), so a missed
   detection refuses a chart instead of drawing it differently, and the regular-expression screen cannot be skipped: under limits a
   pattern is refused before it is compiled.
-- Tests: `packages/conformance/src/parts-needed.test.ts` (over the corpus, with and without limits: the parts the engine reads, found
-  one failure at a time from empty slots, are all named, and a render with just the named parts draws and picks as with all);
+- **All up front.** `import '@aster-charts/react/all'` (`@aster-charts/core/lean/all`, `lean-all.ts`) puts every part in its slot by a
+  call when it runs, so an app that prefers no wait bundles the whole engine and never suspends for a part; `preloadParts(names?)`
+  fetches parts ahead of time without bundling them.
+- **The path reader stays up front** for `<Chart>`: the hit index parses the shapes the engine writes (geoshapes, guides) and any
+  geometry with a coordinate that is not finite, which no spec names, so it is imported by the hit index, not read from a slot.
+- Tests: `packages/conformance/src/parts-needed.test.ts` (over the corpus, with and without limits: the parts the engine reads while it
+  evaluates, draws an SVG and a canvas, picks, and answers a user's pointer through the signal loop, found one failure at a time from
+  empty slots, are all named, and a drawing with just the named parts equals one with all); `gallery/parts-needed.gallery.test.ts` (the
+  same over the vendored galleries, in the gallery gate); `parts-signal-driven.test.ts` (families chosen by a signal, by the host or by
+  a handler, for every value of the signal);
   `packages/core/src/engine-parts.test.ts` (every expression function that reads a part is named, the signal loop's parts, the screen
   failing closed, the pulse path's fallback); `packages/react/src/Chart.lean.test.tsx` (the shells on the browser variant: the wait,
-  the canvas, new data, hydration); the `core-parts` and `react-lean` patterns of the bundle-shaking gate.
+  exactly the named parts, a spec swap waiting once, the canvas, new data, hydration, a planted detection miss refused, `preloadParts`);
+  `Chart.lean-all.test.tsx` (the opt-in import: no chart waits); the `core-parts`, `react-lean` and `react-lean-all` patterns of the
+  bundle-shaking gate.
 
 ## ChartCore and the two shells
 

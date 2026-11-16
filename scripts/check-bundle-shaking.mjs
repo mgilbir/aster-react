@@ -94,8 +94,34 @@ const PARTS_VG = {
     opacity: [{ test: '!length(data("store")) || vlSelectionTest("store", datum)', value: 1 }, { value: 0.2 }],
   } } }],
 }
-/** The engine parts a browser build of the shells loads on demand, by the module each brings (core/dist/<module>.js). */
-const PART_MODULES = ['guide-legend', 'trellis', 'incremental-engine', 'selections', 'regex-screen', 'part-svgpath', 'scene-intersect', 'modify', 'timer', 'canvas', 'signals']
+/** The engine parts a browser build of the shells loads on demand, by the modules each brings (core/dist/<module>.js). */
+const PART_MODULES = [
+  'transform-agg', 'transform-window', 'transform-basic', 'transform-timeunit', 'time', 'time-format', 'locale-time', 'scale-calendar',
+  'curves', 'color', 'interp-color', 'color-schemes', 'scale-warped', 'scale-classes',
+  'guide-legend', 'trellis', 'incremental-engine', 'selections', 'regex-screen', 'part-svgpath', 'scene-intersect', 'modify', 'timer', 'canvas', 'signals',
+]
+/**
+ * A chart that needs the families most charts never run: a time scale, an aggregate, a window and a stack, a step curve, a colour
+ * ramp on a sequential scale and a log scale (the aggregate, window, reshape, time, curves, color and scales parts).
+ */
+const RARE_VG = {
+  width: 160, height: 80, padding: 2, autosize: 'none',
+  data: [{ name: 't', values: Array.from({ length: 12 }, (_, i) => ({ d: Date.UTC(2021, i, 1), g: ['a', 'b'][i % 2], v: 1 + ((i * 7) % 13) })), transform: [
+    { type: 'aggregate', groupby: ['d', 'g'], fields: ['v'], ops: ['sum'], as: ['v'] },
+    { type: 'window', sort: { field: 'd' }, groupby: ['g'], ops: ['sum'], fields: ['v'], as: ['run'] },
+    { type: 'stack', groupby: ['d'], field: 'v' },
+  ] }],
+  scales: [
+    { name: 'x', type: 'time', domain: { data: 't', field: 'd' }, range: 'width' },
+    { name: 'y', type: 'log', domain: [1, 200], range: 'height' },
+    { name: 'c', type: 'sequential', domain: [0, 100], range: { scheme: 'viridis' } },
+  ],
+  axes: [{ scale: 'x', orient: 'bottom' }],
+  marks: [
+    { type: 'line', from: { data: 't' }, encode: { update: { x: { scale: 'x', field: 'd' }, y: { scale: 'y', field: 'run' }, stroke: { value: '#777' }, interpolate: { value: 'step-after' } } } },
+    { type: 'symbol', from: { data: 't' }, encode: { update: { x: { scale: 'x', field: 'd' }, y: { scale: 'y', field: 'run' }, fill: { scale: 'c', field: 'run' } } } },
+  ],
+}
 
 /**
  * Each pattern: an app (its source), whether it needs jsdom, the assertions on the JSON it returns, and optionally
@@ -708,6 +734,10 @@ const PATTERNS = [
       out.canvasFallback = !!canvas.querySelector('#fb')
       await until(() => canvas.querySelector('canvas'))
       out.afterCanvas = loaded()
+      const rare = mount({ spec: ${lit(RARE_VG)} })
+      out.rareFallback = !!rare.querySelector('#fb')
+      await until(() => rare.querySelector('svg'))
+      out.afterRare = loaded()
       const spec = { width: 60, height: 40, data: [{ name: 't', transform: [{ type: 'filter', expr: 'datum.v > 0' }] }], marks: [{ type: 'rect', from: { data: 't' }, encode: { update: { x: { field: 'v' }, width: { value: 2 }, y: { value: 0 }, height: { value: 5 } } } }] }
       const data = mount({ spec, data: { t: [{ v: 1 }] } })
       out.dataSync = !!data.querySelector('svg')
@@ -716,25 +746,52 @@ const PATTERNS = [
       await until(() => partLoaded('pulse'))
       out.afterData = loaded()
       out.dataRects = data.querySelectorAll('.mark-rect path').length
-      const lean = { legend: legend.querySelector('svg').outerHTML, parts: parts.querySelector('svg').outerHTML }
+      const lean = { legend: legend.querySelector('svg').outerHTML, parts: parts.querySelector('svg').outerHTML, rare: rare.querySelector('svg').outerHTML }
       // what the full engine draws: importing an entry that carries every part fills every slot (done last)
       await import('@aster-charts/core/dom')
       const staticSvg = (s) => { const h = document.createElement('div'); h.innerHTML = renderSceneToSvg(createChartSession().evaluate(s, { width: 300, height: 200 })); return h.firstElementChild.outerHTML }
       out.legendSame = lean.legend === staticSvg(${lit(LEGEND_VG)})
       out.partsSame = lean.parts === staticSvg(${lit(PARTS_VG)})
+      out.rareSame = lean.rare === staticSvg(${lit(RARE_VG)})
       return out`,
     check: (r) => [
       [r.plainSync === true && r.afterPlain === '', 'a plain chart renders in the first commit and loads no part'],
-      [r.legendFallback === true && r.afterLegend === 'legend,svgpath', 'a legend: the fallback shows, then the legend builder and the path reader load, nothing else'],
+      [r.legendFallback === true && r.afterLegend === 'color,scales,legend,svgpath', 'a legend of a colour ramp: the fallback shows, then the colour part, the sequential scale, the legend builder and the path reader load, nothing else'],
       [r.legendSame === true, 'and the legend chart is what the full engine draws'],
-      [r.partsFallback === true && r.afterParts === 'legend,selections,svgpath,signals', 'a custom path, a selection test and a signal: their parts and the signal loop load (the regex screen does not: no limits)'],
+      [r.partsFallback === true && r.afterParts === 'color,scales,legend,selections,svgpath,signals', 'a custom path, a selection test and a signal: their parts and the signal loop load (the regex screen does not: no limits)'],
       [r.partsSame === true, 'and that chart is what the full engine draws'],
-      [r.canvasFallback === true && r.afterCanvas === 'legend,selections,svgpath,canvas,signals', 'renderer="canvas": the fallback shows, then the canvas renderer loads'],
+      [r.canvasFallback === true && r.afterCanvas === 'color,scales,legend,selections,svgpath,canvas,signals', 'renderer="canvas": the fallback shows, then the canvas renderer loads'],
+      [r.rareFallback === true && r.afterRare === 'aggregate,window,reshape,time,curves,color,scales,legend,selections,svgpath,canvas,signals', 'a time scale, an aggregate, a window, a stack, a step curve, a colour ramp and a log scale: the fallback shows, then exactly their parts load'],
+      [r.rareSame === true, 'and that chart is what the full engine draws'],
       [r.dataSync === true && r.afterData.includes('pulse') && r.dataRects === 3, 'new data is drawn at once, and the pulse path loads for the next change'],
     ],
     modules: (m) => PART_MODULES.map((name) => {
       const outs = outputsWith(m, 'core', name)
       return [outs.length > 0 && outs.every((o) => !o.initial), `${name}: only in chunks loaded on demand`]
+    }),
+  },
+  {
+    name: 'react-lean-all',
+    why: "import '@aster-charts/react/all' in a browser build: every part of the engine is in the entry's bundle and in its slot before the first render, so no chart waits for one (the first commit is the chart)",
+    split: true,
+    dom: true,
+    browser: true,
+    imports: `import '@aster-charts/react/all'\nimport * as React from 'react'\nimport { flushSync } from 'react-dom'\nimport { createRoot } from 'react-dom/client'\nimport { Chart } from '@aster-charts/react'\nimport { ENGINE_PARTS, partLoaded } from '@aster-charts/core/lean'`,
+    body: `
+      const out = { missing: ENGINE_PARTS.filter((p) => !partLoaded(p)).join(), first: {} }
+      for (const [name, spec, props] of [['legend', ${lit(LEGEND_VG)}, {}], ['parts', ${lit(PARTS_VG)}, {}], ['rare', ${lit(RARE_VG)}, {}], ['canvas', ${lit(RARE_VG)}, { renderer: 'canvas' }]]) {
+        const host = document.createElement('div'); document.body.appendChild(host)
+        flushSync(() => createRoot(host).render(React.createElement(React.Suspense, { fallback: React.createElement('i', { id: 'fb' }) }, React.createElement(Chart, { width: 300, height: 200, a11y: false, spec, ...props }))))
+        out.first[name] = host.querySelector('#fb') ? 'fallback' : host.querySelector(props.renderer === 'canvas' ? 'canvas' : 'svg') ? 'chart' : 'nothing'
+      }
+      return out`,
+    check: (r) => [
+      [r.missing === '', 'every part is in its slot before any chart renders'],
+      [Object.values(r.first).every((f) => f === 'chart'), `no chart waits: the first commit is the chart (${JSON.stringify(r.first)})`],
+    ],
+    modules: (m) => PART_MODULES.map((name) => {
+      const outs = outputsWith(m, 'core', name)
+      return [outs.length > 0 && outs.some((o) => o.initial), `${name}: in the bundle the entry loads up front`]
     }),
   },
 ]

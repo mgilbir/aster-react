@@ -29,6 +29,9 @@ export const MISSING = /the "(\w+)" part of the engine is not loaded/
 
 /** What the host gives each drawing: made fresh per drawing (a random source must start over each time). */
 export type InputOf = () => RuntimeInput
+/** What each drawing runs inside (a frozen clock, for a spec that reads the time). */
+export type Around = <T>(draw: () => T) => T
+const plainly: Around = (draw) => draw()
 
 const replacer = (k: string, v: unknown): unknown => (k === 'runtime' || k === 'compiled' ? undefined : typeof v === 'function' ? '[fn]' : v)
 const text = (v: unknown): string => { try { return JSON.stringify(v, replacer) ?? 'undefined' } catch { return '[cyclic]' } }
@@ -115,13 +118,13 @@ export async function restoreAll(): Promise<void> {
 }
 
 /** The parts the engine reads for `spec`, found one failure at a time from empty slots. */
-export async function discovered(spec: VgSpec, inputOf: InputOf): Promise<{ read: Set<EnginePart>; out: string } | { error: string }> {
+export async function discovered(spec: VgSpec, inputOf: InputOf, around: Around = plainly): Promise<{ read: Set<EnginePart>; out: string } | { error: string }> {
   const read = new Set<EnginePart>()
   withdrawParts(SPEC_PARTS)
   try {
     for (;;) {
       try {
-        return { read, out: drawn(spec, inputOf) }
+        return { read, out: around(() => drawn(spec, inputOf)) }
       } catch (e) {
         const m = MISSING.exec(e instanceof Error ? e.message : String(e))
         if (!m || read.has(m[1] as EnginePart)) return { error: e instanceof Error ? e.message : String(e) }
@@ -148,16 +151,18 @@ export interface PartsReport {
  * The check over a list of specs: for each one that draws with every part, the parts it reads must all be named by `specNeeds`, and
  * drawing with just the parts read, and with just the parts named, must equal drawing with all of them.
  */
-export async function checkParts(specs: ReadonlyArray<{ name: string; spec: VgSpec }>, inputOf: InputOf, options: { limits?: boolean; random?: boolean }): Promise<PartsReport> {
+export async function checkParts(specs: ReadonlyArray<{ name: string; spec: VgSpec }>, inputOf: InputOf, options: { limits?: boolean; random?: boolean }, around: Around = plainly): Promise<PartsReport> {
   const wrong: string[] = []
   const read = Object.fromEntries(SPEC_PARTS.map((p) => [p, 0])) as Record<EnginePart, number>
   const named = { ...read }
   let compared = 0
   for (const { name, spec } of specs) {
+    // (a turn of the event loop per spec: a long check must not starve the test runner's own messages)
+    await new Promise((resolve) => setImmediate(resolve))
     let all: string
-    try { all = drawn(spec, inputOf) } catch { continue } // a spec that does not draw at all says nothing about parts
+    try { all = around(() => drawn(spec, inputOf)) } catch { continue } // a spec that does not draw at all says nothing about parts
     const needs = new Set(specNeeds(spec, options).parts)
-    const found = await discovered(spec, inputOf)
+    const found = await discovered(spec, inputOf, around)
     if ('error' in found) { wrong.push(`${name}: draws with every part but not by loading them one at a time: ${found.error.slice(0, 160)}`); continue }
     compared++
     for (const p of found.read) read[p]++
@@ -169,7 +174,7 @@ export async function checkParts(specs: ReadonlyArray<{ name: string; spec: VgSp
     withdrawParts(SPEC_PARTS)
     try {
       await loadParts([...needs])
-      if (drawn(spec, inputOf) !== all) wrong.push(`${name}: drawing with the parts specNeeds names differs from drawing with every part`)
+      if (around(() => drawn(spec, inputOf)) !== all) wrong.push(`${name}: drawing with the parts specNeeds names differs from drawing with every part`)
     } catch (e) {
       wrong.push(`${name}: does not draw with the parts specNeeds names: ${String(e).slice(0, 160)}`)
     } finally {
