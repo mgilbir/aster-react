@@ -11,6 +11,7 @@ export { baselineOffset }
 import { textAnchor, truncateToLimit } from './text-metrics.js'
 import { ClipCollector, gradientRef, isGradientPaint, type ClipDef } from './svg-defs.js'
 import { sanitizeHref } from './url-policy.js'
+import { BLEND_MODES, blendMode } from './blend-mode.js'
 import { imageBox, imageHref, itemImage } from './image-box.js'
 import type { ScaleSnapshots } from './guide-caption.js'
 export { ClipCollector, type ClipDef }
@@ -1174,10 +1175,13 @@ export function paintAttrs(it: SceneItem, w: AttrSink, styles?: readonly string[
   if ((v = it.opacity) != null) w.a('opacity', v)
   // a transparent fill that has to take the pointer (an interactive mark; see runtime.ts `_hit`)
   if (recOf(it)._hit === true) w.v('pointer-events', 'visible')
-  // vega: stylesCss.blend -> style="mix-blend-mode: <blend>;" (after any mark styles)
-  const blend = it.blend
-  if (styles !== undefined) w.v('style', styles.join(' ') + (blend != null ? ` mix-blend-mode: ${String(blend)};` : ''))
-  else if (blend != null) w.v('style', `mix-blend-mode: ${String(blend)};`)
+  // vega: stylesCss.blend -> style="mix-blend-mode: <blend>;" (after any mark styles). Only a keyword of the
+  // property is written: anything else could add declarations of its own to the style (blend-mode.ts).
+  // (the common keyword is checked here: a call per item measurably slowed a mark of 20k blended items)
+  const b = it.blend
+  const blend = b == null ? null : typeof b === 'string' && BLEND_MODES.has(b) ? b : blendMode(b)
+  if (styles !== undefined) w.v('style', styles.join(' ') + (blend !== null ? ` mix-blend-mode: ${blend};` : ''))
+  else if (blend !== null) w.v('style', `mix-blend-mode: ${blend};`)
 }
 
 /** True when two items paint identically (every `paintAttrs` property, and blend). */
