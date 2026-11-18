@@ -12,6 +12,7 @@ import { textAnchor, truncateToLimit } from './text-metrics.js'
 import { ClipCollector, gradientRef, isGradientPaint, type ClipDef } from './svg-defs.js'
 import { sanitizeHref } from './url-policy.js'
 import { BLEND_MODES, blendMode } from './blend-mode.js'
+import { canNameNoUrl, paintText } from './paint-url.js'
 import { imageBox, imageHref, itemImage } from './image-box.js'
 import type { ScaleSnapshots } from './guide-caption.js'
 export { ClipCollector, type ClipDef }
@@ -1140,8 +1141,25 @@ export function pathVectorEffect(it: SceneItem): boolean {
   return ((rec.scaleX as number) || 1) !== 1 || ((rec.scaleY as number) || 1) !== 1
 }
 
-/** A fill or stroke as it is written: a gradient object is the reference to its definition. */
-const paintOf = (v: unknown): unknown => (typeof v === 'object' && isGradientPaint(v) ? gradientRef(v) : v)
+/**
+ * A fill or stroke as it is written: a gradient object is the reference to its definition; a text never references
+ * another document (paint-url.ts: such a `url()` draws its fallback, or nothing, and a text with one elsewhere is no
+ * paint; null writes no attribute). The common colour is written without the check (`canNameNoUrl`).
+ */
+function paintOf(v: unknown): unknown {
+  if (typeof v === 'string') return canNameNoUrl(v) ? v : paintText(v)
+  return typeof v === 'object' && v !== null && isGradientPaint(v) ? gradientRef(v) : checkedPaint(v)
+}
+
+/** A paint value that is not a gradient, as `paintOf` writes it (the text a list or an object is written as, checked). */
+function checkedPaint(v: unknown): unknown {
+  if (typeof v === 'string') return paintText(v)
+  if (typeof v !== 'object' || v === null) return v
+  const text = attrValue('fill', v)
+  if (text === null) return null
+  const out = paintText(text)
+  return out === text ? v : out
+}
 
 /**
  * vega-scenegraph's `stylesAttr` (util/svg/styles.js): the item property ->
@@ -1444,7 +1462,8 @@ export function svgRootAttrs(scene: SceneRoot, w: AttrSink): void {
 export function backgroundRectAttrs(scene: SceneRoot, w: AttrSink): void {
   w.n('width', scene.width)
   w.n('height', scene.height)
-  w.v('fill', scene.background)
+  // (the background is paint too, a colour: `checkedPaint`)
+  w.v('fill', checkedPaint(scene.background))
 }
 
 export function viewGroupAttrs(scene: SceneRoot, w: AttrSink): void {

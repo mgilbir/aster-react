@@ -248,6 +248,7 @@ deliberate difference; each applies only where noted.
 | `topojson` object names are looked up as own properties (`constructor`, `__proto__` are "not found") | the name is spec-controlled |
 | `loadSpecData` and its URL policy: only public `http(s)` by default, no credentials, redirects re-vetted, timeout and size caps | a spec's `url` is a request made on the host's behalf |
 | Image and `href` URLs go through the same policy **when `limits` or `urlPolicy` is given** (without either: vega parity) | a spec can name any URL |
+| A paint (`fill`, `stroke`, the background) never references another document in SVG output (string and DOM), always: a leading `url(...)` naming one draws its fallback colour, else `none`; a `url(...)` anywhere else drops the attribute. `url(#id)` (within the page) is kept (see "Paint references" below) | vega's SVG renderers write paint as given, and Chromium fetches a paint server from another document, a request no URL policy sees |
 | A mark's `blend` reaches SVG output (string and DOM) only as a `mix-blend-mode` keyword, always; any other value draws as if no blend were set (see "Blend modes" below) | vega's string renderer writes the value into the `style` attribute as given, where a value from the data can add CSS declarations of its own |
 
 Differences that are **not** about safety (unsupported-feature errors, strict
@@ -488,6 +489,26 @@ element. Those could load a resource that the URL policy and `urlData: 'refuse'`
 mark anywhere on the page. A CSS escape (`\75 rl(`) hides `url(` from a text check, so the keyword list is the rule,
 not a filter for bad text. The canvas renderer passes the value to `globalCompositeOperation`, which ignores names it
 does not know, as vega's canvas renderer does.
+
+## Paint references (`fill`, `stroke`, background)
+
+SVG paint is a colour, `none`, or `url(<reference>)` with an optional fallback colour. A reference to another
+document (`url(https://host/a.svg#g)`) makes Chromium fetch that document, a request the URL policy and
+`urlData: 'refuse'` never see; Firefox and WebKit load nothing. Paint often comes from the data (a field, a scale
+over a data column, `scale: null` in Vega-Lite), so Aster never writes such a reference, in the string renderer,
+the DOM renderer and its patches, with or without `limits`:
+
+- `url(...)` naming another document at the start of a paint is replaced by its fallback colour, or `none` when
+  there is none. This is what Firefox and WebKit draw for vega's output.
+- `url(...)` naming another document anywhere else makes the value no paint at all, so the attribute is not
+  written, as a browser ignores an invalid value.
+- A reference within the page, `url(#pattern)`, is written as given (a pattern or gradient the page defines). It
+  loads nothing, also under a `<base href>`.
+- CSS escapes are decoded before the check, so `\75 rl(` is a `url(`, while an escaped colour name such as
+  `r\65 d` is still written as it is.
+
+Gradients from the spec are written as references to their own definitions, as before. A gradient stop's colour
+takes colours only. The canvas renderer ignores a `url()` paint.
 
 ## Container size
 

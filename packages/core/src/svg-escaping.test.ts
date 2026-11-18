@@ -544,3 +544,107 @@ describe('a style attribute holds only constant declarations and a mix-blend-mod
     }
   })
 })
+
+// Paint (`fill`, `stroke`, the background) is CSS too: `url(<another document>)` there makes Chromium fetch it, a
+// request no URL policy sees, and a paint can come from the data. No attribute any render writes names another
+// document after CSS escapes are decoded (paint-url.ts); a reference within the page and a fallback colour are kept.
+describe('no attribute paints from another document', () => {
+  const OTHER = /url\((?![ \t\n\r\f]*["']?#)/i
+  const unescape = (s: string): string =>
+    s.replace(/\\(?:([0-9a-fA-F]{1,6})[ \t\n\r\f]?|([\s\S]))/g, (_, h: string | undefined, c: string | undefined) => (h ? String.fromCodePoint(parseInt(h, 16) || 0xfffd) : c!))
+  // text, not CSS: links and images are the URL policy's (see the url-policy tests); the rest are labels and data
+  const NOT_CSS = new Set(['xlink:href', 'href', 'aria-label', 'aria-roledescription', 'data-datum', 'class', 'role', 'id', 'd'])
+  const PAINT_HOSTILE = [
+    'url(http://example.invalid/a.svg#g)',
+    'url(//example.invalid/a.svg#g)',
+    'URL( "http://example.invalid/a.svg#g" )',
+    'url(http://example.invalid/a.svg#g) red',
+    '\\75 rl(http://example.invalid/a.svg#g)',
+    'u\\72l(http://example.invalid/a.svg#g)',
+    'red url(http://example.invalid/a.svg#g)',
+    'url(#a) url(http://example.invalid/a.svg#g)',
+    'url(data:image/svg+xml,%3Csvg%3E%3C/svg%3E)',
+  ]
+  const badAttrs = (root: Element): string[] =>
+    [root, ...root.querySelectorAll('*')].flatMap((e) => [...e.attributes]
+      .filter((a) => !NOT_CSS.has(a.name) && OTHER.test(unescape(a.value)))
+      .map((a) => `<${e.localName} ${a.name}="${a.value}">`))
+  const paintScene = (v: unknown): SceneRoot => {
+    const s = baseScene()
+    for (const n of nodes(s)) { n.fill = v; n.stroke = v }
+    s.background = v as string
+    s.frameFill = v as string
+    s.frameStroke = v as string
+    return s
+  }
+
+  it('the check sees a planted reference (guards the checks below)', () => {
+    const doc = parseXml('<svg xmlns="http://www.w3.org/2000/svg"><rect fill="\\75 rl(http://example.invalid/a)"/></svg>')
+    expect(badAttrs(doc)).toHaveLength(1)
+  })
+
+  it('string renderer, DOM fresh and DOM patched: every paint channel, the frame and the background', () => {
+    const benign = paintScene('#336699')
+    for (const h of PAINT_HOSTILE) {
+      const scene = paintScene(h)
+      const str = parseXml(renderSceneToSvg(scene))
+      const fresh = renderSceneToDomElement(scene, document) as Element
+      const patched = renderSceneToDomElement(benign, document) as Element
+      patchSceneDom(patched as unknown as SVGSVGElement, scene)
+      for (const [what, el] of [['string', str], ['fresh', fresh], ['patched', patched]] as const) {
+        expect(badAttrs(el), `${what} ${JSON.stringify(h)}`).toEqual([])
+        // something was painted: every mark kind is still there
+        expect(el.querySelectorAll('[class~="mark-rect"] > *').length, `${what} ${JSON.stringify(h)}`).toBeGreaterThan(0)
+      }
+    }
+  })
+
+  it('what is written instead: the fallback, none, or no attribute; a reference within the page is kept', () => {
+    const fills = (v: string): string[] => [...parseXml(renderSceneToSvg(paintScene(v))).querySelectorAll('.mark-rect [fill]')].map((e) => e.getAttribute('fill')!)
+    expect(new Set(fills('url(http://example.invalid/a) red'))).toEqual(new Set(['red']))
+    expect(new Set(fills('url(http://example.invalid/a)'))).toEqual(new Set(['none']))
+    expect(fills('red url(http://example.invalid/a)')).toEqual([])
+    expect(new Set(fills('url(#hatch)'))).toEqual(new Set(['url(#hatch)']))
+    expect(new Set(fills('r\\65 d'))).toEqual(new Set(['r\\65 d']))
+    // the background rect
+    const bg = (v: string): string | null => parseXml(renderSceneToSvg(paintScene(v))).querySelector(':scope > rect')!.getAttribute('fill')
+    expect(bg('url(http://example.invalid/a) #fff')).toBe('#fff')
+    expect(bg('url(#hatch)')).toBe('url(#hatch)')
+    expect(bg('#eeeeee')).toBe('#eeeeee')
+  })
+
+  it('end to end from a Vega spec: paint from a literal, a field, an expression, and the background', () => {
+    const mk = (v: string, enc: (v: string) => Record<string, unknown>): never => ({
+      width: 100, height: 100, autosize: 'none', background: v,
+      data: [{ name: 't', values: [{ v, a: 10 }, { v, a: 50 }] }],
+      marks: ['symbol', 'rect', 'text', 'rule', 'line', 'area', 'arc', 'trail', 'path'].map((type) => ({
+        type, from: { data: 't' },
+        encode: { update: {
+          x: { field: 'a' }, y: { value: 5 }, ...enc(v),
+          ...(type === 'rect' ? { width: { value: 4 }, height: { value: 4 } } : {}),
+          ...(type === 'rule' ? { x2: { value: 90 } } : {}),
+          ...(type === 'text' ? { text: { value: 't' } } : {}),
+          ...(type === 'path' ? { path: { value: 'M0,0L5,5' } } : {}),
+          ...(type === 'arc' ? { startAngle: { value: 0 }, endAngle: { value: 1 }, outerRadius: { value: 9 } } : {}),
+          ...(type === 'trail' ? { size: { value: 3 } } : {}),
+        } },
+      })),
+    }) as never
+    const ENCODINGS: Array<[string, (v: string) => Record<string, unknown>]> = [
+      ['literal', (v) => ({ fill: { value: v }, stroke: { value: v } })],
+      ['field', () => ({ fill: { field: 'v' }, stroke: { field: 'v' } })],
+      ['expression', () => ({ fill: { signal: 'datum.v' }, stroke: { signal: "'' + datum.v" } })],
+    ]
+    for (const h of PAINT_HOSTILE) {
+      for (const [what, enc] of ENCODINGS) {
+        const spec = mk(h, enc)
+        const svg = renderSpec(spec)
+        expect(badAttrs(parseXml(svg)), `${what} ${JSON.stringify(h)}`).toEqual([])
+        // the background reached the document (as itself, its fallback, `none`, or no fill)
+        expect(svg, `${what} ${JSON.stringify(h)}`).toMatch(/^<svg[^>]*><rect width="100" height="100"/)
+        expect(svg, `${what} ${JSON.stringify(h)}`).not.toContain('example.invalid/a.svg#g)"')
+        expect(badAttrs(renderSceneToDomElement(evaluateChart(compileChart(spec), {}), document) as Element), `dom ${what} ${JSON.stringify(h)}`).toEqual([])
+      }
+    }
+  })
+})
