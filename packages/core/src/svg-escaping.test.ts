@@ -42,6 +42,8 @@ const BENIGN_KIND = {
   // a symbol `shape` is a name or a custom SVG path (vega symbols()): it has its own
   // kind because a valid path is re-serialized (scaled by the radius), see below
   shape: 'circle',
+  // a mark's `blend`: written into the `style` attribute (a CSS declaration list), see the CSS suite below
+  blend: 'multiply',
 } as const
 
 type Kind = keyof typeof BENIGN_KIND
@@ -61,6 +63,7 @@ const CHANNELS: Record<string, Kind> = {
   lineBreak: 'str', aspect: 'str',
   path: 'path', clipPathD: 'path',
   url: 'url',
+  blend: 'blend',
 }
 
 const SPEC = {
@@ -396,5 +399,148 @@ describe('SVG string renderer escapes every attribute and text value', () => {
     for (const n of nodes(dash)) n.strokeDash = ['x&y', 'z"w']
     const doc2 = new DOMParser().parseFromString(renderSceneToSvg(dash), 'image/svg+xml')
     expect([...doc2.querySelectorAll('[stroke-dasharray]')].map((e) => e.getAttribute('stroke-dasharray'))).toContain('x&y,z"w')
+  })
+})
+
+// The `style` attribute is a CSS declaration list: XML escaping keeps a value inside the attribute, but not inside
+// one declaration, so a value written there could add declarations of its own (`url(...)` loads, restyling and
+// moving the element). The only item value written there is `blend`, and only as a `mix-blend-mode` keyword
+// (blend-mode.ts); the rest of a style is constant. Checked over every style of every render: string, DOM fresh,
+// DOM patched, and end to end from Vega and Vega-Lite specs whose blend comes from the data or an expression.
+describe('a style attribute holds only constant declarations and a mix-blend-mode keyword', () => {
+  const KEYWORDS = [
+    'normal', 'multiply', 'screen', 'overlay', 'darken', 'lighten', 'color-dodge', 'color-burn', 'hard-light',
+    'soft-light', 'difference', 'exclusion', 'hue', 'saturation', 'color', 'luminosity', 'plus-darker', 'plus-lighter',
+  ]
+  const ALLOWED = new Set(['image-rendering: optimizeSpeed;', 'image-rendering: pixelated;', ...KEYWORDS.map((k) => `mix-blend-mode: ${k};`)])
+  const CSS_HOSTILE = [
+    'multiply; fill: red',
+    'multiply;background:url(https://example.invalid/x)',
+    // a CSS escape: `\75 rl(` is `url(`, so a check for the text `url(` misses it
+    'multiply;background:\\75 rl(https://example.invalid/x)',
+    'multiply; transform: translate(-9999px, 0)',
+    'normal } * { color: red',
+    'MULTIPLY;x:y',
+    'multiply !important',
+    ...HOSTILE,
+  ]
+
+  /** The declarations of a style, each with its `;`, or a reason it is not a list of allowed ones. */
+  const badStyle = (style: string): string | null => {
+    const decls = style.split(/(?<=;) /)
+    for (const d of decls) if (!ALLOWED.has(d)) return `declaration ${JSON.stringify(d)} in style ${JSON.stringify(style)}`
+    return null
+  }
+  const stylesOfEl = (root: Element): string[] =>
+    [root, ...root.querySelectorAll('*')].flatMap((e) => (e.hasAttribute('style') ? [e.getAttribute('style')!] : []))
+  const stylesOfSvg = (svg: string): string[] => stylesOfEl(parseXml(svg))
+  const expectClean = (styles: string[], what: string): void => {
+    for (const st of styles) expect(badStyle(st), what).toBeNull()
+  }
+
+  /** The base scene with `blend` on every node, and the image marks pixelated (their constant styles precede the blend). */
+  const blended = (blend: unknown): SceneRoot => {
+    const scene = withChannel('blend', blend)
+    for (const n of nodes(scene)) if (n.marktype === 'image') for (const it of n.items as Array<Record<string, unknown>>) it.smooth = false
+    return scene
+  }
+
+  it('a keyword reaches every mark kind and the pixelated image style (guards the checks below)', () => {
+    const styles = stylesOfSvg(renderSceneToSvg(blended('multiply')))
+    // every mark kind of the base scene carries it
+    expect(styles.filter((st) => st.endsWith('mix-blend-mode: multiply;')).length).toBeGreaterThan(10)
+    expect(styles).toContain('image-rendering: optimizeSpeed; image-rendering: pixelated; mix-blend-mode: multiply;')
+    expectClean(styles, 'multiply')
+    // the check itself refuses an injected declaration
+    expect(badStyle('mix-blend-mode: multiply; fill: red;')).not.toBeNull()
+    expect(badStyle('mix-blend-mode: multiply;')).toBeNull()
+  })
+
+  it('every keyword is written as the keyword; case and surrounding whitespace are matched as CSS does', () => {
+    for (const k of KEYWORDS) {
+      expect(stylesOfSvg(renderSceneToSvg(blended(k))), k).toContain(`mix-blend-mode: ${k};`)
+      expect(stylesOfSvg(renderSceneToSvg(blended(` ${k.toUpperCase()}\n`))), k).toContain(`mix-blend-mode: ${k};`)
+    }
+  })
+
+  it('string renderer: a value that is not a keyword writes no mix-blend-mode, and adds no declaration', () => {
+    for (const h of CSS_HOSTILE) {
+      const svg = renderSceneToSvg(blended(h))
+      const styles = stylesOfSvg(svg)
+      expectClean(styles, JSON.stringify(h))
+      expect(svg, JSON.stringify(h)).not.toContain('mix-blend-mode')
+      // the pixelated image keeps its own (constant) style
+      expect(styles, JSON.stringify(h)).toContain('image-rendering: optimizeSpeed; image-rendering: pixelated;')
+      expect(svg, JSON.stringify(h)).not.toMatch(/example\.invalid|fill: red|translate\(-9999px/)
+    }
+  })
+
+  it('DOM renderer, fresh and patched: same', () => {
+    const benign = blended('multiply')
+    for (const h of CSS_HOSTILE) {
+      const hostile = blended(h)
+      const fresh = renderSceneToDomElement(hostile, document) as Element
+      const patched = renderSceneToDomElement(benign, document) as Element
+      expect(stylesOfEl(patched).some((st) => st.includes('mix-blend-mode: multiply;'))).toBe(true)
+      patchSceneDom(patched as unknown as SVGSVGElement, hostile)
+      for (const [what, el] of [['fresh', fresh], ['patched', patched]] as const) {
+        const styles = stylesOfEl(el)
+        expectClean(styles, `${what} ${JSON.stringify(h)}`)
+        expect(styles.some((st) => st.includes('mix-blend-mode')), `${what} ${JSON.stringify(h)}`).toBe(false)
+        expect(styles, `${what} ${JSON.stringify(h)}`).toContain('image-rendering: optimizeSpeed; image-rendering: pixelated;')
+      }
+    }
+  })
+
+  const MARK_TYPES = ['symbol', 'rect', 'text', 'rule', 'trail', 'arc', 'image', 'path', 'line', 'area'] as const
+  /** Every mark kind (and a group) with `blend` encoded as given, over rows whose `b` holds `rowBlend`. */
+  const blendSpec = (blend: Record<string, unknown>, rowBlend: unknown): never => ({
+    width: 100, height: 100, autosize: 'none',
+    data: [{ name: 't', values: [{ a: 10, b: rowBlend }, { a: 50, b: rowBlend }] }],
+    marks: [
+      ...MARK_TYPES.map((type) => ({
+        type, from: { data: 't' },
+        encode: { update: {
+          x: { field: 'a' }, y: { value: 5 }, blend,
+          ...(type === 'rect' || type === 'image' ? { width: { value: 4 }, height: { value: 4 } } : {}),
+          ...(type === 'rule' ? { x2: { value: 90 } } : {}),
+          ...(type === 'text' ? { text: { value: 't' } } : {}),
+          ...(type === 'image' ? { url: { value: 'a.png' } } : {}),
+          ...(type === 'path' ? { path: { value: 'M0,0L5,5' } } : {}),
+          ...(type === 'arc' ? { startAngle: { value: 0 }, endAngle: { value: 1 }, outerRadius: { value: 9 } } : {}),
+          ...(type === 'trail' ? { size: { value: 3 } } : {}),
+          fill: { value: '#336699' }, stroke: { value: '#000000' },
+        } },
+      })),
+      { type: 'group', encode: { update: { x: { value: 0 }, y: { value: 0 }, width: { value: 20 }, height: { value: 20 }, fill: { value: '#eeeeee' }, blend } } },
+    ],
+  }) as never
+  const ENCODINGS = (h: string): Array<[string, Record<string, unknown>]> => [
+    ['a literal', { value: h }],
+    ['a data field', { field: 'b' }],
+    ['an expression', { signal: `datum.b` }],
+    ['an expression building the value', { signal: `'multiply' + ${JSON.stringify(h.replace(/^multiply/, ''))}` }],
+  ]
+
+  it('end to end from a Vega spec: a keyword from a literal, a field or an expression is written', () => {
+    for (const [what, blend] of ENCODINGS('multiply').slice(0, 3)) {
+      const svg = renderSpec(blendSpec(blend, 'multiply'))
+      // one per mark kind plus the group
+      expect((svg.match(/mix-blend-mode: multiply;/g) ?? []).length, what).toBeGreaterThanOrEqual(MARK_TYPES.length + 1)
+      expectClean(stylesOfSvg(svg), what)
+    }
+  })
+
+  it('end to end from a Vega spec: a value that is not a keyword writes nothing, in the string and the DOM renderers', () => {
+    for (const h of CSS_HOSTILE) {
+      for (const [what, blend] of ENCODINGS(h)) {
+        const spec = blendSpec(blend, h)
+        const svg = renderSpec(spec)
+        expect(svg, `${what} ${JSON.stringify(h)}`).not.toContain('mix-blend-mode')
+        expectClean(stylesOfSvg(svg), `${what} ${JSON.stringify(h)}`)
+        const dom = renderSceneToDomElement(evaluateChart(compileChart(spec), {}), document) as Element
+        expect(stylesOfEl(dom), `dom ${what} ${JSON.stringify(h)}`).toEqual([])
+      }
+    }
   })
 })

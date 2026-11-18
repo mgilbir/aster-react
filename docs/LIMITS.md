@@ -248,6 +248,7 @@ deliberate difference; each applies only where noted.
 | `topojson` object names are looked up as own properties (`constructor`, `__proto__` are "not found") | the name is spec-controlled |
 | `loadSpecData` and its URL policy: only public `http(s)` by default, no credentials, redirects re-vetted, timeout and size caps | a spec's `url` is a request made on the host's behalf |
 | Image and `href` URLs go through the same policy **when `limits` or `urlPolicy` is given** (without either: vega parity) | a spec can name any URL |
+| A mark's `blend` reaches SVG output (string and DOM) only as a `mix-blend-mode` keyword, always; any other value draws as if no blend were set (see "Blend modes" below) | vega's string renderer writes the value into the `style` attribute as given, where a value from the data can add CSS declarations of its own |
 
 Differences that are **not** about safety (unsupported-feature errors, strict
 Vega-Lite validation, vega errors Aster does not raise) are listed in `docs/ERRORS.md`.
@@ -471,6 +472,22 @@ link through their first item). Two checks apply to the value:
 - Under `limits` or an explicit `urlPolicy`, the URL policy above applies with the link
   protocols `http:`, `https:`, `mailto:`, `tel:` (and relative URLs): anything else throws
   `AsterUrlError`, or is dropped (the item is drawn without its link) when `onDeny` is set.
+
+## Blend modes (`blend`)
+
+A mark's `blend` is drawn in SVG as vega draws it, `style="mix-blend-mode: <blend>;"`, but only when the value is a
+`mix-blend-mode` keyword: `normal`, `multiply`, `screen`, `overlay`, `darken`, `lighten`, `color-dodge`, `color-burn`,
+`hard-light`, `soft-light`, `difference`, `exclusion`, `hue`, `saturation`, `color`, `luminosity`, `plus-darker` or
+`plus-lighter`. Matching is the browser's: CSS whitespace around the keyword is ignored, ASCII case is ignored, and the
+lower-case keyword is written. Any other value, whether a literal, a field or an expression, writes nothing: the
+mark is drawn with no blend, as a browser draws vega's DOM renderer when it rejects a value. The check applies in the
+string renderer, the DOM renderer and its patches, with or without `limits`.
+
+Without the check, a value from the data such as `multiply; background: url(...)` would add CSS declarations to the
+element. Those could load a resource that the URL policy and `urlData: 'refuse'` never see, or restyle and move the
+mark anywhere on the page. A CSS escape (`\75 rl(`) hides `url(` from a text check, so the keyword list is the rule,
+not a filter for bad text. The canvas renderer passes the value to `globalCompositeOperation`, which ignores names it
+does not know, as vega's canvas renderer does.
 
 ## Container size
 
