@@ -131,3 +131,38 @@ describe("limits.regex: 'refuse' reaches evaluation", () => {
     expect(onStreamError.mock.calls[0]![0]).toBeInstanceOf(AsterLimitError)
   })
 })
+
+describe('the event loop runs under <Chart limits>', () => {
+  // a handler that runs a pattern the regex screen refuses (unscreened, it blocks for seconds on this input)
+  const handlerSpec = (input: string) => ({
+    width: 80, height: 40, padding: 0, autosize: 'none',
+    signals: [{ name: 'out', value: null, on: [{ events: 'mousedown', update: `test('(a+)+$', '${input}')` }] }],
+    marks: [{ type: 'rect', encode: { update: { width: { value: 80 }, height: { value: 40 }, fill: { value: 'red' } } } }],
+  }) as never
+
+  forEachVariant(['svg'], (Chart, variant) => {
+    const pressed = async (spec: unknown, limits: Record<string, unknown> | undefined) => {
+      const errors: string[] = []
+      const logger = { error: (...a: unknown[]) => { errors.push(String(a[0])) }, warn: () => {} }
+      const ref = React.createRef<ChartHandle>()
+      const { container } = mount(<Chart ref={ref} spec={spec as never} width={80} height={40} logger={logger as never} {...(limits ? { limits } : {})} />)
+      // (the event loop may be loaded on demand: wait until it is bound)
+      await act(async () => { await new Promise((r) => setTimeout(r, 30)) })
+      const svg = container.querySelector('svg')!
+      const started = performance.now()
+      await act(async () => { svg.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, clientX: 5, clientY: 5 })) })
+      return { errors, out: ref.current!.getSignals().out, ms: performance.now() - started }
+    }
+    variant.it(['signals'], 'a handler meets the regex screen of the limits', async () => {
+      const r = await pressed(handlerSpec('aaaaaaaaaaaaaaaaaaaaaaaaa!'), {})
+      expect(r.errors.some((e) => /regexSafety: a repeated group/.test(e))).toBe(true)
+      expect(r.out ?? null).toBeNull() // never written: the handler did not run
+      expect(r.ms).toBeLessThan(1000)
+    })
+    variant.it(['signals'], 'without limits the handler runs (vega parity)', async () => {
+      const r = await pressed(handlerSpec('aaaa!'), undefined)
+      expect(r.errors).toEqual([])
+      expect(r.out).toBe(false)
+    })
+  })
+})

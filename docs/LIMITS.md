@@ -144,12 +144,22 @@ checks are separate calls.
 | `useChart` | yes (session) | yes | yes | yes when `serialize` is on (the default) |
 | `<Chart limits>` | yes (session) | yes | yes | SVG renderer only: the scene is serialized once per evaluation to measure it, and only when `maxSvgLength` is set |
 | `evaluateChart`, `getChartInfo` | no | yes | no | no |
+| The event loop (`signal.on` handlers: `bindSceneSignals`, `<Chart>` interaction) | no | yes, per event | no | no |
 
 So `evaluateChart` and `getChartInfo` do not apply `maxMarks`, `maxDepth`, the
 spec-string check or the summed pre-flight row count, and they never check
 `maxSvgLength` or the scene's `path`/`text` lengths. Call `checkSpecLimits`,
 `checkSceneLimits` and `checkSvgLength` yourself if you build on the lower-level
 functions (they are exported from `@aster-charts/core`).
+
+The event loop runs each event under the limits its scene was evaluated with, so a
+host passes nothing more: one scope and one wall clock per event, for the handlers'
+expressions, the event-stream filters and what they re-evaluate. They meet the same
+meters and the same regex screen (and `regex: 'refuse'`) as the evaluation. A
+violation ends that event's run and is logged, as vega logs any handler error. The
+loop keeps working, and the scene the handlers' signals lead to is evaluated under the
+limits again. (Before 0.4.2 the loop ran without limits: a backtracking pattern in a
+handler ran unscreened.)
 
 ## What `maxRows` counts
 

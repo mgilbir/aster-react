@@ -3538,6 +3538,9 @@ function evaluateChartPass(chart: CompiledChart, hostInput: RuntimeInput, txn: E
   ;(scene as unknown as { runtime?: unknown }).runtime = ctx.runtime
   ;(scene as unknown as { signalParams?: Record<string, unknown> }).signalParams = ctx.signalParams
   ;(scene as unknown as { compiled?: unknown }).compiled = ctx.chart
+  // the limits the scene was evaluated under: the event loop runs the scene's handlers under them (signals.ts `bindSceneSignals`)
+  const evaluatedUnder = activeMeter()?.limits
+  if (evaluatedUnder) (scene as unknown as { __limits?: unknown }).__limits = evaluatedUnder
   ;(scene as unknown as { __itemGen?: number }).__itemGen = txn.gen
   ;(scene as unknown as { __scales?: unknown }).__scales = sceneSnapshots(ctx)
   ;(scene as unknown as { __scaleMap?: unknown }).__scaleMap = ctx.scales
