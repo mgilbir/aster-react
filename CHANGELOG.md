@@ -38,8 +38,10 @@ and Fixed, per package. Everything built before the first release is in [Pre-rel
   gradients are written as before.
 
 The `blend` and paint fixes apply to the string renderer, the DOM renderer and its patches, with or without `limits`; the
-canvas renderer was not affected. See docs/LIMITS.md ("Blend modes", "Paint references"). The synchronous entry is 175.3 kB gzip (175.0 before
-these fixes); string rendering is no slower.
+canvas renderer was not affected. See docs/LIMITS.md ("Blend modes", "Paint references").
+
+The synchronous entry is 175.7 kB gzip (175.0 in 0.4.1), `<Chart>` 181.7 kB (180.9); string rendering and event handling are
+no slower.
 
 ## 0.4.1 (2026-11-16)
 
