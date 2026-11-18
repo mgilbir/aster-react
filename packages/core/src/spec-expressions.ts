@@ -138,7 +138,7 @@ class Check {
 
   /**
    * Where the spec makes a regular expression, in the order met (each an expression's text, or a transform that brings its own
-   * pattern): what `limits.regex: 'refuse'` refuses it for (regex-policy.ts).
+   * pattern): what `limits.regex: 'refuse'` refuses it for (limits.ts `checkChartRegex`).
    */
   readonly regexSites: string[] = []
 

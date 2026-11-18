@@ -213,7 +213,7 @@ const REGEX_FUNCTIONS: ReadonlySet<string> = new Set(['test', 'regexp'])
 /**
  * Whether a parsed expression makes a regular expression anywhere in it, read or not: a regex literal, or a call of `test` or
  * `regexp`, named as the interpreter resolves a call (a leading `_` dropped; the parser has already dropped any brackets around
- * the name, so `(test)(...)` is a call of `test`). What `limits.regex: 'refuse'` refuses a spec for (regex-policy.ts).
+ * the name, so `(test)(...)` is a call of `test`). What `limits.regex: 'refuse'` refuses a spec for (limits.ts `checkChartRegex`).
  */
 export function makesRegex(tree: unknown): boolean {
   const stack: unknown[] = [tree]
