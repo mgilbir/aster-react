@@ -295,7 +295,8 @@ const BUDGETS = {
   // slots): measured 2026-11-16 on a clean build, base origin/main a078891 -> branch (kB gzip): 172.7 -> 174.7. The entry carries every
   // part, as before; what it adds is the slot reads and the part objects that name each family's functions (+1.5 kB min), and the
   // modules moving into their families' files. Ceiling is the measured value + 0.5.
-  '@aster-charts/core': 175.2 * 1024,
+  // paint never references another document (fix/paint-url: paint-url.ts, the CSS-escape decoder and the url() check on every fill, stroke and background; with #170's blend keywords): measured 2026-11-18 on a clean build, base origin/main 1345ae9 -> branch (kB gzip): 175.0 -> 175.3; ceiling is the measured value + 0.5.
+  '@aster-charts/core': 175.8 * 1024,
   // signal-change reuse (group marks, channels, marks drawn from marks, derived structures kept with engine nodes) on the canvas layer: measured 2026-11-15 on a clean build at 11.8 kB gzip (ceiling was 11.8); ceiling is the measured value + 0.5.
   // row passes, step state from the step, the binding shell and kept legends/titles/group guides: measured 2026-11-15 on a clean build at 12.5 kB gzip (ceiling was 12.3); ceiling is the measured value + 0.5.
   // parts on demand (perf/parts-on-demand-2: the transform, time, curve, colour and rare-scale families loaded on demand by the shells): measured 2026-11-16 on clean builds, base origin/main a078891 -> branch (kB gzip): 12.5 -> 12.2; the ceiling follows it down to the measured value + 0.5.
@@ -340,7 +341,8 @@ const BUDGETS = {
   // followups (stack/10-followups-correctness): measured 2026-11-15 on a clean build, base stack/9-followups-speed -> branch (kB gzip): 167.7 -> 168.2 (at the ceiling, 168.2). The hook does not use the signal loop; it moved out of the eager graph into an on-demand chunk (part-signals), and esbuild puts the code that chunk shares with the eager graph (stream-defs, util, pointer, addons) into a shared chunk the entry imports statically. Ceiling is the measured value + 0.5.
   // mark bound failures (stack/13-invalid-path: the pass stops where vega's bounds fail; <Chart> logs render errors): measured 2026-11-15 on a clean build, previous branch -> branch (kB gzip): 168.3 -> 168.8; ceiling is the measured value + 0.5.
   // parts on demand (perf/parts-on-demand-2: the transform, time, curve, colour and rare-scale families loaded on demand by the shells): measured 2026-11-16 on clean builds, base origin/main a078891 -> branch (kB gzip): 168.9 -> 145.0; the ceiling follows it down to the measured value + 0.5.
-  '@aster-charts/react useChart': 145.5 * 1024,
+  // paint never references another document (fix/paint-url: paint-url.ts, the CSS-escape decoder and the url() check on every fill, stroke and background; with #170's blend keywords): measured 2026-11-18 on a clean build, base origin/main 1345ae9 -> branch (kB gzip): 145.3 -> 145.7; ceiling is the measured value + 0.5.
+  '@aster-charts/react useChart': 146.2 * 1024,
   // stack layer 2 (perf/vl-compile-data-independent on fix/hover-correctness: rows.ts, the row watch, signal-valued values, findSource): measured 2026-11-14 on a clean build at 220.8 kB gzip (ceiling was 220.6); ceiling is the measured value + 0.5.
   // stack layer 3 (perf/expr-encode: direct built-in calls, the shared function table, the format fast path): measured 2026-11-14 on a clean build at 221.9 kB gzip (ceiling was 221.3); ceiling is the measured value + 0.5.
   // stack layer 5 (stack/5-canvas: the event loop bound on canvas, the canvas renderer's events and hit index, the svg's pointer leaving): measured 2026-11-14 on a clean build, base stack/4-geometry -> branch (kB gzip): 226.2 -> 228.6; ceiling is the measured value + 0.5.
@@ -352,7 +354,8 @@ const BUDGETS = {
   // strokeForeground on legends (stack/11-legend-stroke: legend and entry front strokes, the hit index's guide boxes): measured 2026-11-15 on a clean build, previous branch -> branch (kB gzip): 203.2 -> 203.5; ceiling is the measured value + 0.5.
   // mark bound failures (stack/13-invalid-path: the pass stops where vega's bounds fail; <Chart> logs render errors): measured 2026-11-15 on a clean build, previous branch -> branch (kB gzip): 203.6 -> 204.4; ceiling is the measured value + 0.5.
   // parts on demand (perf/parts-on-demand-2: the transform, time, curve, colour and rare-scale families loaded on demand by the shells): measured 2026-11-16 on clean builds, base origin/main a078891 -> branch (kB gzip): 204.5 -> 180.5; the ceiling follows it down to the measured value + 0.5.
-  '@aster-charts/react Chart': 181.0 * 1024,
+  // paint never references another document (fix/paint-url: paint-url.ts, the CSS-escape decoder and the url() check on every fill, stroke and background; with #170's blend keywords): measured 2026-11-18 on a clean build, base origin/main 1345ae9 -> branch (kB gzip): 180.9 -> 181.3; ceiling is the measured value + 0.5.
+  '@aster-charts/react Chart': 181.8 * 1024,
   // The light chart (`@aster-charts/react/lite`): SVG only, no canvas renderer; alone and with the `interaction` capability.
   // stack layer 2 (perf/vl-compile-data-independent on fix/hover-correctness: rows.ts, the row watch, signal-valued values, findSource): measured 2026-11-14 on a clean build at 194.2 kB gzip (ceiling was 194.0); ceiling is the measured value + 0.5.
   // stack layer 3 (perf/expr-encode: direct built-in calls, the shared function table, the format fast path): measured 2026-11-14 on a clean build at 195.2 kB gzip (ceiling was 194.7); ceiling is the measured value + 0.5.
@@ -362,7 +365,8 @@ const BUDGETS = {
   // row passes, step state from the step, the binding shell and kept legends/titles/group guides: measured 2026-11-15 on a clean build at 189.8 kB gzip (ceiling was 188.5); ceiling is the measured value + 0.5.
   // mark bound failures (stack/13-invalid-path: the pass stops where vega's bounds fail; <Chart> logs render errors): measured 2026-11-15 on a clean build, previous branch -> branch (kB gzip): 190.0 -> 190.6; ceiling is the measured value + 0.5.
   // parts on demand (perf/parts-on-demand-2: the transform, time, curve, colour and rare-scale families loaded on demand by the shells): measured 2026-11-16 on clean builds, base origin/main a078891 -> branch (kB gzip): 190.7 -> 166.9; the ceiling follows it down to the measured value + 0.5.
-  '@aster-charts/react SvgChart': 167.4 * 1024,
+  // paint never references another document (fix/paint-url: paint-url.ts, the CSS-escape decoder and the url() check on every fill, stroke and background; with #170's blend keywords): measured 2026-11-18 on a clean build, base origin/main 1345ae9 -> branch (kB gzip): 167.3 -> 167.7; ceiling is the measured value + 0.5.
+  '@aster-charts/react SvgChart': 168.2 * 1024,
   // stack layer 2 (perf/vl-compile-data-independent on fix/hover-correctness: rows.ts, the row watch, signal-valued values, findSource): measured 2026-11-14 on a clean build at 214.5 kB gzip (ceiling was 214.2); ceiling is the measured value + 0.5.
   // stack layer 3 (perf/expr-encode: direct built-in calls, the shared function table, the format fast path): measured 2026-11-14 on a clean build at 215.6 kB gzip (ceiling was 215.0); ceiling is the measured value + 0.5.
   // stack layer 5 (stack/5-canvas: the event loop bound on canvas, the canvas renderer's events and hit index, the svg's pointer leaving): measured 2026-11-14 on a clean build, base stack/4-geometry -> branch (kB gzip): 219.6 -> 221.1; ceiling is the measured value + 0.5.
@@ -374,7 +378,8 @@ const BUDGETS = {
   // strokeForeground on legends (stack/11-legend-stroke: legend and entry front strokes, the hit index's guide boxes): measured 2026-11-15 on a clean build, previous branch -> branch (kB gzip): 202.9 -> 203.2; ceiling is the measured value + 0.5.
   // mark bound failures (stack/13-invalid-path: the pass stops where vega's bounds fail; <Chart> logs render errors): measured 2026-11-15 on a clean build, previous branch -> branch (kB gzip): 203.3 -> 204.1; ceiling is the measured value + 0.5.
   // parts on demand (perf/parts-on-demand-2: the transform, time, curve, colour and rare-scale families loaded on demand by the shells): measured 2026-11-16 on clean builds, base origin/main a078891 -> branch (kB gzip): 204.2 -> 180.2; the ceiling follows it down to the measured value + 0.5.
-  '@aster-charts/react SvgChart + interaction': 180.7 * 1024,
+  // paint never references another document (fix/paint-url: paint-url.ts, the CSS-escape decoder and the url() check on every fill, stroke and background; with #170's blend keywords): measured 2026-11-18 on a clean build, base origin/main 1345ae9 -> branch (kB gzip): 180.6 -> 181.0; ceiling is the measured value + 0.5.
+  '@aster-charts/react SvgChart + interaction': 181.5 * 1024,
   // Base + the VL compiler (opt-in: `import '@aster-charts/react/vl'`).
   // stack layer 2 (perf/vl-compile-data-independent on fix/hover-correctness: rows.ts, the row watch, signal-valued values, findSource): measured 2026-11-14 on a clean build at 327.5 kB gzip (ceiling was 325.4); ceiling is the measured value + 0.5.
   // stack layer 3 (perf/expr-encode: direct built-in calls, the shared function table, the format fast path): measured 2026-11-14 on a clean build at 328.5 kB gzip (ceiling was 328.0); ceiling is the measured value + 0.5.
@@ -387,10 +392,12 @@ const BUDGETS = {
   // strokeForeground on legends (stack/11-legend-stroke: legend and entry front strokes, the hit index's guide boxes): measured 2026-11-15 on a clean build, previous branch -> branch (kB gzip): 309.8 -> 310.2; ceiling is the measured value + 0.5.
   // mark bound failures (stack/13-invalid-path: the pass stops where vega's bounds fail; <Chart> logs render errors): measured 2026-11-15 on a clean build, previous branch -> branch (kB gzip): 310.2 -> 311.0; ceiling is the measured value + 0.5.
   // parts on demand (perf/parts-on-demand-2: the transform, time, curve, colour and rare-scale families loaded on demand by the shells): measured 2026-11-16 on clean builds, base origin/main a078891 -> branch (kB gzip): 311.1 -> 287.0; the ceiling follows it down to the measured value + 0.5.
-  '@aster-charts/react Chart + VL': 287.5 * 1024,
+  // paint never references another document (fix/paint-url: paint-url.ts, the CSS-escape decoder and the url() check on every fill, stroke and background; with #170's blend keywords): measured 2026-11-18 on a clean build, base origin/main 1345ae9 -> branch (kB gzip): 287.4 -> 287.8; ceiling is the measured value + 0.5.
+  '@aster-charts/react Chart + VL': 288.3 * 1024,
   // The opt-in import of every part of the engine up front (`import '@aster-charts/react/all'`): what an app that prefers no first-render
   // wait pays. Measured 2026-11-16 on a clean build at 246.4 kB gzip (`<Chart>` alone: 180.5); ceiling is the measured value + 0.5.
-  '@aster-charts/react Chart + all': 246.9 * 1024,
+  // paint never references another document (fix/paint-url: paint-url.ts, the CSS-escape decoder and the url() check on every fill, stroke and background; with #170's blend keywords): measured 2026-11-18 on a clean build, base origin/main 1345ae9 -> branch (kB gzip): 246.8 -> 247.2; ceiling is the measured value + 0.5.
+  '@aster-charts/react Chart + all': 247.7 * 1024,
 }
 
 const THIS_DIR = dirname(fileURLToPath(import.meta.url))
