@@ -437,8 +437,12 @@ export function countpatternRows(rows: Row[], p: Params): Row[] {
   const tcase = (p.case as string | undefined) || 'mixed'
   // Regex guard (safety deviation): pattern and per-row input lengths are capped
   // under limits; catastrophic backtracking itself cannot be interrupted.
-  const match = guardedRegExp(((p.pattern as string | undefined) || '[\\w\']+'), 'g')
-  const stop = guardedRegExp('^' + ((p.stopwords as string | undefined) || '') + '$', 'i')
+  // (an absent or empty pattern / stopwords is vega's fixed default: the engine's own, not a pattern of the spec, so it is not
+  // screened, nor refused under `limits.regex: 'refuse'`)
+  const pattern = p.pattern as string | undefined
+  const stopwords = p.stopwords as string | undefined
+  const match = pattern ? guardedRegExp(pattern, 'g') : /[\w']+/g
+  const stop = stopwords ? guardedRegExp('^' + stopwords + '$', 'i') : /^$/i
   const as = (p.as ?? ['text', 'count']) as string[]
   // own-key table (a token such as `constructor` is data, not an inherited member)
   const counts = new Map<string, number>()

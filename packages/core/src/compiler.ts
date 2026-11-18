@@ -47,7 +47,7 @@ export function compileChart(givenSpec: VgSpec): CompiledChart {
     ? defaultMergedConfig()
     : mergeVegaConfig(vegaDefaultConfig(), userConfig)) as Record<string, unknown>
   // (one walk, in vega-parser's order: the data sets and scales a spec names, the parameters of its transforms, its expressions)
-  checkExpressions(rawSpec, mergedConfig)
+  const regexSites = checkExpressions(rawSpec, mergedConfig)
   markSeq = 0
   const spec: VgSpec = { ...rawSpec, config: mergedConfig as VgSpec['config'] }
 
@@ -117,6 +117,7 @@ export function compileChart(givenSpec: VgSpec): CompiledChart {
 
   return {
     ...((q) => (q === undefined ? {} : { callsIsTuple: q }))(tupleQuestions(spec)),
+    ...(regexSites.length ? { regexSites } : {}),
     autosize,
     width,
     height,

@@ -159,6 +159,11 @@ export interface CompiledProjection {
 
 export interface CompiledChart {
   autosize?: string
+  /**
+   * Where the spec makes regular expressions (an expression's text, or `countpattern pattern` / `countpattern stopwords`), found
+   * when it is compiled; absent when nowhere. `limits.regex: 'refuse'` refuses the chart for them before anything runs.
+   */
+  regexSites?: readonly string[]
   /** `config.range` — named range lookup for scales. */
   configRange?: Record<string, unknown>
   /** vega autosize `contains` (viewSizeLayout's contains: 'padding' makes the

@@ -6,6 +6,8 @@ These are suggestions (a judgement, not measured defaults).
 
 - **Public dashboard:** 100k rows, 50k items, 8 MB SVG, 2 s wall clock, and `maxGeneratedRows: 500_000`.
 - **Unknown spec on a server:** use smaller numbers (10k rows, 250 ms), a `loadSpecData` allowlist, and a **killable worker** for the render.
+- **Specs that need no regular expressions:** add `regex: 'refuse'` (any of the above). The screen below is a heuristic; refusing is
+  the only way to rule out a pattern that blocks the thread (see "Refusing every regular expression").
 
 For an untrusted spec you need all three of these; `limits` alone is best-effort (see the two layers below):
 
@@ -18,7 +20,7 @@ import { renderSpec, type SpecLimits, type VgSpec } from '@aster-charts/core'
 import { loadSpecData } from '@aster-charts/core/load'
 
 // Run this inside the Worker you can terminate().
-const limits: SpecLimits = { maxRows: 10_000, maxItems: 50_000, maxSvgLength: 8_000_000, maxTimeMs: 250 }
+const limits: SpecLimits = { maxRows: 10_000, maxItems: 50_000, maxSvgLength: 8_000_000, maxTimeMs: 250, regex: 'refuse' }
 
 async function render(untrusted: VgSpec): Promise<string> {
   const loaded = await loadSpecData(untrusted, {
@@ -248,6 +250,7 @@ deliberate difference; each applies only where noted.
 | `topojson` object names are looked up as own properties (`constructor`, `__proto__` are "not found") | the name is spec-controlled |
 | `loadSpecData` and its URL policy: only public `http(s)` by default, no credentials, redirects re-vetted, timeout and size caps | a spec's `url` is a request made on the host's behalf |
 | Image and `href` URLs go through the same policy **when `limits` or `urlPolicy` is given** (without either: vega parity) | a spec can name any URL |
+| With `limits.regex: 'refuse'`, a spec that makes a regular expression is refused before it runs | no limit can stop a regular expression once it runs, and the screen is a heuristic |
 | A paint (`fill`, `stroke`, the background) never references another document in SVG output (string and DOM), always: a leading `url(...)` naming one draws its fallback colour, else `none`; a `url(...)` anywhere else drops the attribute. `url(#id)` (within the page) is kept (see "Paint references" below) | vega's SVG renderers write paint as given, and Chromium fetches a paint server from another document, a request no URL policy sees |
 | A mark's `blend` reaches SVG output (string and DOM) only as a `mix-blend-mode` keyword, always; any other value draws as if no blend were set (see "Blend modes" below) | vega's string renderer writes the value into the `style` attribute as given, where a value from the data can add CSS declarations of its own |
 
@@ -292,6 +295,28 @@ syntax error then surfaces). Without limits nothing is screened (vega parity).
 timeout) and treat the worker's deadline as the hard guarantee. `maxTimeMs` then
 produces friendly errors in the common case, the screen stops the known
 shapes, and the kill covers the rest.
+
+### Refusing every regular expression: `limits.regex: 'refuse'`
+
+A host that draws specs which need no regular expressions can refuse them all. With `limits: { regex: 'refuse' }` a spec
+that makes one is refused with an `AsterLimitError` (`regexSafety: regular expressions are disabled (limits.regex:
+'refuse')`, naming the first place) before anything of it runs; the default, `'screen'`, is the screen above. What makes one:
+
+- a regex literal anywhere in an expression (`/a+/`, `replace(datum.s, / a+/, '')`);
+- a call of `test` or `regexp`, however it is written (`(test)(...)` is a call of `test`);
+- a `countpattern` with its own `pattern` or `stopwords` (one without either uses the engine's fixed default and is allowed).
+
+It does not depend on the data: the expressions are read when the spec is compiled (every one, also those in branches that
+never run, in event handlers and event-stream filters, and in marks over empty data sets), and every evaluation under the
+option refuses a chart that has any, so a spec is refused for what it is, not for what one dataset makes it do. The same
+holds for a chart compiled earlier, a session or a stream whose limits change. A regular expression that reaches the engine
+at run time instead (a `RegExp` object in host data or in a signal value given to `replace` / `split`) is refused where it
+would run. What stays allowed: `replace` and `split` with text (text is literal, not a pattern), and the engine's own
+parsing of numbers, dates, colours and CSV. A value other than `'screen'` or `'refuse'` is a `TypeError`, never read as
+permission.
+
+Over the official Vega and Vega-Lite example galleries (720 specs) the option refuses three, each for a regular expression it
+makes: two filter on a search box with `test(regexp(...))`, and the word cloud counts words with its own `countpattern`.
 
 ## Loading URL data: `loadSpecData(spec, options)`
 

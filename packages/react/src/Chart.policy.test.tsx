@@ -3,7 +3,7 @@ import * as React from 'react'
 import { createRoot } from 'react-dom/client'
 import { act } from 'react'
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { AsterUrlError } from '@aster-charts/core'
+import { AsterLimitError, AsterUrlError } from '@aster-charts/core'
 import type { ChartHandle } from './Chart'
 import { ChartStream, type ChartStreamHandle } from './ChartStream'
 import { useChart, type UseChartResult } from './useChart'
@@ -87,5 +87,47 @@ describe('urlPolicy reaches evaluation', () => {
     onDeny.mockClear()
     await act(async () => { ref.current!.push({ append: { t: [{ u: 'https://evil.example/c.png', x: 40 }] } }); await new Promise((r) => setTimeout(r, 30)) })
     expect(onDeny.mock.calls.map((c) => c[0])).toContain('https://evil.example/c.png')
+  })
+})
+
+describe("limits.regex: 'refuse' reaches evaluation", () => {
+  // a spec that makes a regular expression from row data (an expression, as an untrusted spec would write one)
+  const regexSpec = {
+    width: 80, height: 40, padding: 0, autosize: 'none',
+    data: [{ name: 't', values: [{ s: 'aab' }], transform: [{ type: 'formula', expr: "test('a+', datum.s) ? 'y' : 'n'", as: 'r' }] }],
+    marks: [{ type: 'text', from: { data: 't' }, encode: { update: { text: { field: 'r' } } } }],
+  } as never
+
+  forEachVariant(['svg'], (Chart) => {
+    it('<Chart>: the error state, reported once as an AsterLimitError; without the option it draws', () => {
+      const onError = vi.fn<(e: Error) => void>()
+      const { container } = mount(<Chart spec={regexSpec} width={80} height={40} limits={{ regex: 'refuse' }} onError={onError} />)
+      expect(container.querySelector('[role="alert"]')).not.toBeNull()
+      expect(onError).toHaveBeenCalledTimes(1)
+      expect(onError.mock.calls[0]![0]).toBeInstanceOf(AsterLimitError)
+      expect(onError.mock.calls[0]![0].message).toContain("limits.regex: 'refuse'")
+      document.body.innerHTML = ''
+      const drawn = mount(<Chart spec={regexSpec} width={80} height={40} limits={{}} onError={onError} />)
+      expect(drawn.container.querySelector('[role="alert"]')).toBeNull()
+      expect(drawn.container.querySelector('text')?.textContent).toBe('y')
+    })
+  })
+
+  it('useChart', () => {
+    let result: UseChartResult | null = null
+    function Probe(): React.ReactElement {
+      result = useChart(regexSpec, { limits: { regex: 'refuse' }, width: 80, height: 40 })
+      return <div />
+    }
+    mount(<Probe />)
+    expect(result!.error).toBeInstanceOf(AsterLimitError)
+  })
+
+  it('<ChartStream>', async () => {
+    const onStreamError = vi.fn()
+    mount(<ChartStream spec={regexSpec} width={80} height={40} limits={{ regex: 'refuse' }} onStreamError={onStreamError} />)
+    await act(async () => { await new Promise((r) => setTimeout(r, 30)) })
+    expect(onStreamError).toHaveBeenCalled()
+    expect(onStreamError.mock.calls[0]![0]).toBeInstanceOf(AsterLimitError)
   })
 })

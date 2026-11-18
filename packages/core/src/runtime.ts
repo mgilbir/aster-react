@@ -18,7 +18,7 @@ import { lexedText } from './expr-text.js'
 import { isEngineNode, noteEngineScene } from './scene-registry.js'
 import { parseExpressionCached, type Expr } from './expr-parser.js'
 import { datasetsReadIn, identifiersIn, scalesReadIn, dependencyKey, fieldsWritten, namesIn, pipelineReadsOf, reuse, runsOf, stepCounts, stepReadsOf, type StepReads, type StepRecord } from './step-reuse.js'
-import { activeMeter, withLimits, ceiling, checkRowCount, meterItems, meterTick, AsterLimitError } from './limits.js'
+import { activeMeter, withLimits, ceiling, checkRowCount, checkChartRegex, meterItems, meterTick, AsterLimitError } from './limits.js'
 import { getTextMetricsProvider, withTextMetricsProvider } from './text-metrics.js'
 import { AsterUrlError } from './url-policy.js'
 import { SpecParseError } from './parse-error.js'
@@ -3337,6 +3337,8 @@ export interface PendingEvaluation {
 export function evaluateChartPending(engine: IncrementalEngine, chart: CompiledChart, input: RuntimeInput = {}, unchanged?: DataStability): PendingEvaluation {
   // a refused url dataset fails the evaluation before anything of it starts (no transaction, no state)
   checkChartUrlData(chart, input.urlData)
+  // a spec that makes regular expressions, under `limits.regex: 'refuse'`: refused for its spec, before anything runs
+  checkChartRegex(chart, input.limits)
   const txn = beginTxn(engine, chart, unchanged)
   const done: { draft?: IncrementalState; failed?: boolean } = {}
   const scene = withLimits(input.limits, () => withTextMetricsProvider(input.textMetrics, () => evaluateChartImpl(chart, input, txn, done)))
@@ -3368,6 +3370,8 @@ function unloadedUrlError(name: string, hostRows: boolean): Error {
  */
 export function evaluateOnce(chart: CompiledChart, input: RuntimeInput = {}): SceneRoot {
   checkChartUrlData(chart, input.urlData)
+  // a spec that makes regular expressions, under `limits.regex: 'refuse'`: refused for its spec, before anything runs
+  checkChartRegex(chart, input.limits)
   const txn: EvalTxn = { prev: undefined, gen: 1, claimed: new WeakSet() }
   return withLimits(input.limits, () => withTextMetricsProvider(input.textMetrics, () => evaluateChartImpl(chart, input, txn, {})))
 }
