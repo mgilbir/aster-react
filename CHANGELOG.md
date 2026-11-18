@@ -7,8 +7,25 @@ and Fixed, per package. Everything built before the first release is in [Pre-rel
 
 ### `@aster-charts/core`
 
+#### Added
+
+- **`limits: { regex: 'refuse' }`** (#174) refuses every spec that makes a regular expression, before anything of it runs: a
+  regex literal, a call of `test` or `regexp` however it is written, or a `countpattern` with its own `pattern` /
+  `stopwords`. The expressions are read when the spec is compiled (also branches that never run, event handlers and
+  filters), so a spec is refused for what it is, whatever its data; a `RegExp` that reaches the engine at run time (host
+  data, a signal value) is refused where it would run. For hosts that draw specs which need no regular expressions: the
+  regex screen is a heuristic, and no limit can stop a regular expression once it runs (`.*a.*a.*a.*c` passes the screen
+  and blocked for seconds on a few hundred characters). The default, `'screen'`, is unchanged. See docs/LIMITS.md
+  ("Refusing every regular expression").
+
 #### Fixed (security)
 
+- **The event loop runs `signal.on` handlers under the chart's `limits`.** `<Chart>` interaction (and
+  `bindSceneSignals`) ran the handlers' expressions, the event-stream filters and what they re-evaluate with no limits at
+  all, even when the host passed them: a click handler ran a backtracking pattern the regex screen refuses everywhere else
+  (`test('(a+)+$', ...)` blocked for seconds on 26 characters), and `maxTimeMs` and the string and row caps did not
+  apply. Each event now runs under the limits its scene was evaluated with (one wall clock per event); a violation ends
+  that event's run and is logged, as any handler error. Hosts pass nothing new.
 - **A mark's `blend` reaches SVG output only as a `mix-blend-mode` keyword** (#170). It was written into the `style`
   attribute as given, so a value from the data or an expression such as `multiply; background: url(...)` added CSS
   declarations of its own: it loaded resources the URL policy and `urlData: 'refuse'` never see (also when written with
@@ -20,8 +37,8 @@ and Fixed, per package. Everything built before the first release is in [Pre-rel
   WebKit draw for it; one anywhere else drops the attribute. A reference within the page (`url(#pattern)`), colours and
   gradients are written as before.
 
-Both apply to the string renderer, the DOM renderer and its patches, with or without `limits`; the canvas renderer was not
-affected. See docs/LIMITS.md ("Blend modes", "Paint references"). The synchronous entry is 175.3 kB gzip (175.0 before
+The `blend` and paint fixes apply to the string renderer, the DOM renderer and its patches, with or without `limits`; the
+canvas renderer was not affected. See docs/LIMITS.md ("Blend modes", "Paint references"). The synchronous entry is 175.3 kB gzip (175.0 before
 these fixes); string rendering is no slower.
 
 ## 0.4.1 (2026-11-16)
