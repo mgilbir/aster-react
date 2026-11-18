@@ -161,6 +161,8 @@ interface Verdict {
   readonly names: readonly string[]
   /** the registry of expression functions this was read under */
   readonly registry: number
+  /** whether the expression makes a regular expression: a regex literal, or a call of `test` or `regexp` (see `makesRegex`) */
+  readonly regex: boolean
 }
 
 /**
@@ -188,18 +190,44 @@ function verdictOf(text: string): Verdict {
   }
   const reader = new Reader()
   const refusal = reader.walk(tree, true) ?? reader.codegen
-  verdict = { refusal, names: refusal ? NO_NAMES : reader.names, registry }
+  verdict = { refusal, names: refusal ? NO_NAMES : reader.names, registry, regex: refusal ? false : makesRegex(tree) }
   if (young.size >= GENERATION) { old = young; young = new Map() }
   young.set(text, verdict)
   return verdict
 }
 
 /**
- * Refuse `text` as vega's parser does, or return. `isSignal` says whether a name is a signal of the scope the expression is read
- * in. An engine limit (an expression too deep) keeps its own error type.
+ * Refuse `text` as vega's parser does, or return whether it makes a regular expression (`makesRegex`). `isSignal` says whether a
+ * name is a signal of the scope the expression is read in. An engine limit (an expression too deep) keeps its own error type.
  */
-export function checkExpression(text: string, isSignal: (name: string) => boolean): void {
-  const { refusal, names } = verdictOf(text)
+export function checkExpression(text: string, isSignal: (name: string) => boolean): boolean {
+  const { refusal, names, regex } = verdictOf(text)
   if (refusal) throw refusal.engine ? new TypeError(refusal.message) : new SpecParseError(refusal.message)
   for (const name of names) if (!isSignal(name)) throw new SpecParseError('Unrecognized signal name: ' + stringValue(name))
+  return regex
+}
+
+/** The functions of the language that make a regular expression from their argument (`test(pattern, text)`, `regexp(pattern)`). */
+const REGEX_FUNCTIONS: ReadonlySet<string> = new Set(['test', 'regexp'])
+
+/**
+ * Whether a parsed expression makes a regular expression anywhere in it, read or not: a regex literal, or a call of `test` or
+ * `regexp`, named as the interpreter resolves a call (a leading `_` dropped; the parser has already dropped any brackets around
+ * the name, so `(test)(...)` is a call of `test`). What `limits.regex: 'refuse'` refuses a spec for (limits.ts `checkChartRegex`).
+ */
+export function makesRegex(tree: unknown): boolean {
+  const stack: unknown[] = [tree]
+  while (stack.length) {
+    const n = stack.pop()
+    if (n === null || typeof n !== 'object') continue
+    if (n instanceof RegExp) return true
+    if (Array.isArray(n)) { for (const x of n) stack.push(x); continue }
+    const node = n as { type?: unknown; callee?: { type?: unknown; name?: unknown } } & Record<string, unknown>
+    if (node.type === 'CallExpression' && node.callee?.type === 'Identifier' && typeof node.callee.name === 'string') {
+      const name = node.callee.name.startsWith('_') ? node.callee.name.slice(1) : node.callee.name
+      if (REGEX_FUNCTIONS.has(name)) return true
+    }
+    for (const k of Object.keys(node)) if (k !== 'type') stack.push(node[k])
+  }
+  return false
 }

@@ -75,7 +75,7 @@ The canonicalizer is strict and each normalization is justified in `packages/con
 - Three publishable packages with a verified tarball ([RELEASE.md](RELEASE.md)); licence, contributing guide,
   changelog and third-party notices.
 
-**Published.** 0.4.1 is on npm under the `aster-charts` org (`@aster-charts/core`, `@aster-charts/react`,
+**Published.** 0.4.2 is on npm under the `aster-charts` org (`@aster-charts/core`, `@aster-charts/react`,
 `@aster-charts/vl`), published with provenance by the tag-triggered release workflow ([RELEASE.md](RELEASE.md)).
 
 ---
