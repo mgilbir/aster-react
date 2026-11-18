@@ -49,6 +49,7 @@ import { parseEventSelectorString, type StreamDef } from './event-selector.js'
 import { array, dict, heldSignalName, ownGet, setOwn, markTupleAlways, MARK_NODE, scopedSignalName } from './util.js'
 import { follow, node, Propagation, type SignalNode } from './signal-propagation.js'
 import { consoleLogger, type Logger } from './logger.js'
+import { AsterLimitError, withLimits, type SpecLimits } from './limits.js'
 import type { Timer } from './timer.js'
 import { part } from './engine-parts.js'
 import { clientToSvg } from './pointer.js'
@@ -151,6 +152,13 @@ export interface SignalEventHooks {
 export interface SignalBindOptions {
   originX?: number
   originY?: number
+  /**
+   * The budgets every delivery runs under (one scope, one wall clock per event): the handlers' expressions, the event filters
+   * and what they re-evaluate meet the same limits as the evaluation (the regex screen, `limits.regex`, `maxTimeMs`, the
+   * string and row caps). A violation abandons the delivery and is logged, as any handler error. `bindSceneSignals` takes
+   * them from the scene: the limits it was evaluated under.
+   */
+  limits?: SpecLimits
   /**
    * Resolve a view-space position (page coords minus the svg origin, padding
    * included) to the scene item under it -- `buildHitIndex(scene).query` from
@@ -601,7 +609,15 @@ function bindSignalEventsDefs(
   const rootStreams = new Map<string, Stream>()
   /** `{scale}`-source handlers: run when a scale they name has changed since the scene the loop was last bound to. */
   const scaleHandlers: Array<{ scales: Set<string>; run: () => void }> = []
-  const fail = (what: string, e: unknown): void => logger.error(`signal event handler${what}: ${e instanceof Error ? e.message : String(e)}`)
+  /** the errors already logged (a limit violation is also re-thrown when its delivery's scope ends: it is logged once) */
+  const logged = new WeakSet<object>()
+  const fail = (what: string, e: unknown): void => {
+    if (typeof e === 'object' && e !== null) {
+      if (logged.has(e)) return
+      logged.add(e)
+    }
+    logger.error(`signal event handler${what}: ${e instanceof Error ? e.message : String(e)}`)
+  }
 
   // ---- datasets the handlers edit (`modify`) -------------------------------------------------
   // A dataset an event handler modifies lives here, as its input rows; the rest of the datasets are the
@@ -838,9 +854,16 @@ function bindSignalEventsDefs(
     }
     handling++
     try {
-      assigned.clear()
-      flow.evaluate(fn)
-      holdStale()
+      // one delivery is one pass under the limits the scene was evaluated with (`SignalBindOptions.limits`): a violation the
+      // dataflow caught (and logged) is re-thrown when the scope ends, and ends the delivery here
+      withLimits(opts.limits, () => {
+        assigned.clear()
+        flow.evaluate(fn)
+        holdStale()
+      })
+    } catch (e) {
+      if (!(e instanceof AsterLimitError)) throw e
+      fail('', e)
     } finally {
       handling--
       for (const h of handlerOps) h.state.skip = h.op.skip
@@ -1786,6 +1809,11 @@ export function bindSceneSignals(
     signalParams,
     signals,
     hooks,
-    { originX: scene.padding?.left ?? 0, originY: scene.padding?.top ?? 0, scene, ...opts },
+    {
+      originX: scene.padding?.left ?? 0, originY: scene.padding?.top ?? 0, scene,
+      // the limits the scene was evaluated under (runtime.ts `__limits`)
+      limits: (scene as unknown as { __limits?: SpecLimits }).__limits,
+      ...opts,
+    },
   )
 }

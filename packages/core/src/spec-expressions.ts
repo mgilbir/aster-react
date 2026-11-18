@@ -136,6 +136,12 @@ class Check {
   /** the data sets the scope being read knows (see spec-structure.ts `Names`) */
   private names = new Names()
 
+  /**
+   * Where the spec makes a regular expression, in the order met (each an expression's text, or a transform that brings its own
+   * pattern): what `limits.regex: 'refuse'` refuses it for (limits.ts `checkChartRegex`).
+   */
+  readonly regexSites: string[] = []
+
   constructor(private readonly config: Rec) {}
 
   private get env(): GuideEnv {
@@ -154,7 +160,10 @@ class Check {
   /** An expression that stands alone. */
   expression(value: unknown): void {
     if (this.collecting) this.collecting.push(textOf(value))
-    else checkExpression(textOf(value), this.isSignal)
+    else {
+      const text = textOf(value)
+      if (checkExpression(text, this.isSignal)) this.regexSites.push(text)
+    }
   }
 
   /** while set, the expressions that are met are kept, not checked: what a selector holds is worked out once */
@@ -287,6 +296,11 @@ class Check {
   /** `parseTransform`: the parameters in the order of the definition, each read whole; then the transform's own signal. */
   private transform(t: Rec, lambdas: string[]): void {
     this.parameters(t, transformParams(t.type), lambdas)
+    // countpattern makes its own regular expressions of `pattern` and `stopwords` (an absent or empty one is the engine's
+    // fixed default, which is not the spec's: transform-stats.ts)
+    if (transformTypeOf(t.type) === 'countpattern') {
+      for (const k of ['pattern', 'stopwords'] as const) if (t[k]) this.regexSites.push(`countpattern ${k}`)
+    }
     // (the transform's own signal is a signal of its scope from here on)
     if (t.signal) this.scope.addSignal(t.signal)
   }
@@ -699,8 +713,11 @@ function ruleText(rules: unknown[]): string | null {
  * Check every expression of a spec the way vega parses them (see the head of this file). Throws `SpecParseError` for the first
  * one, in vega's order, that is not an expression.
  */
-export function checkExpressions(spec: Rec, config: Rec = {}): void {
-  new Check(config).view(spec, config)
+/** Check every expression of `spec` (see the file header); returns where it makes regular expressions (`Check.regexSites`). */
+export function checkExpressions(spec: Rec, config: Rec = {}): readonly string[] {
+  const check = new Check(config)
+  check.view(spec, config)
+  return check.regexSites
 }
 
 /** vega-parser's `propertyLambda`: an object or array written out as an expression, a `{signal}` in it standing for its text. */

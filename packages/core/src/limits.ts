@@ -46,6 +46,15 @@ export interface SpecLimits {
    * untrusted spec needs a killable worker for a hard guarantee (docs/LIMITS.md).
    */
   maxTimeMs?: number
+  /**
+   * Regular expressions a spec makes. `'screen'` (the default): run them, refusing patterns of a few backtracking shapes and long
+   * patterns or inputs (heuristic: a pattern that backtracks polynomially passes, and no limit can stop it once it runs).
+   * `'refuse'`: a spec that makes any is refused with an AsterLimitError before anything runs: a regex literal, `test(...)`,
+   * `regexp(...)` (however the call is written), or a `countpattern` with its own `pattern` / `stopwords`; and any regular
+   * expression that reaches the engine at run time (a RegExp object in host data or a signal) is refused where it would run.
+   * Strings given to `replace` / `split` are literal text, not patterns, and stay allowed. See docs/LIMITS.md.
+   */
+  regex?: 'screen' | 'refuse'
 }
 
 /** Typed limit violation; hosts can distinguish it from a render bug. */
@@ -462,6 +471,7 @@ export function checkGeneratedRows(n: number, what: string): void {
  */
 export function checkRegexPattern(pattern: string, flags = ''): void {
   if (!active) return
+  if (active.limits.regex === 'refuse') throw limitViolation(REGEX_REFUSED)
   const cap = Math.min(REGEX_MAX_PATTERN, active.limits.maxStringLength ?? REGEX_MAX_PATTERN)
   if (pattern.length > cap) over('maxStringLength', pattern.length, cap, 'regular expression pattern')
   // Static screen for catastrophic-backtracking shapes (heuristic; docs/LIMITS.md).
@@ -473,6 +483,30 @@ export function checkRegexPattern(pattern: string, flags = ''): void {
     throw limitViolation(`regexSafety: ${hazard}: /${shown}/`)
   }
   active.clock.check('regular expression')
+}
+
+/** The refusal of `limits.regex: 'refuse'`. */
+const REGEX_REFUSED = "regexSafety: regular expressions are disabled (limits.regex: 'refuse')"
+
+/** The `limits.regex` values (anything else is a host error, never read as permission). */
+function regexMode(limits: SpecLimits): 'screen' | 'refuse' {
+  const mode = limits.regex
+  if (mode === undefined || mode === 'screen' || mode === 'refuse') return mode ?? 'screen'
+  throw new TypeError(`[aster] limits.regex must be 'screen' or 'refuse', got ${JSON.stringify(mode)}`)
+}
+
+/**
+ * `limits.regex: 'refuse'`: refuse a compiled chart that makes regular expressions (`CompiledChart.regexSites`, found when the
+ * spec is compiled), before anything of the evaluation runs, so a chart is refused for its spec whatever its data. Every
+ * evaluation entry calls this; an invalid `regex` value throws a TypeError.
+ */
+export function checkChartRegex(chart: { regexSites?: readonly string[] }, limits: SpecLimits | undefined): void {
+  if (!limits || regexMode(limits) !== 'refuse') return
+  const site = chart.regexSites?.[0]
+  if (site === undefined) return
+  const shown = site.length > 80 ? site.slice(0, 80) + '...' : site
+  // (thrown at once, before any scope opens: no defensive catch is in between to swallow it, and nothing is left recorded)
+  throw new AsterLimitError(`${REGEX_REFUSED}: ${shown}`)
 }
 
 /** Screen a RegExp object (a literal in an expression, or one built by `regexp()`); no-op without limits. */
