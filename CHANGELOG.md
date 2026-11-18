@@ -3,6 +3,27 @@
 Version 0.1.0 is the first release. From 0.1.0 on, entries are added per release under Added, Changed
 and Fixed, per package. Everything built before the first release is in [Pre-release history](#pre-release-history) below.
 
+## 0.4.2 (2026-11-18)
+
+### `@aster-charts/core`
+
+#### Fixed (security)
+
+- **A mark's `blend` reaches SVG output only as a `mix-blend-mode` keyword** (#170). It was written into the `style`
+  attribute as given, so a value from the data or an expression such as `multiply; background: url(...)` added CSS
+  declarations of its own: it loaded resources the URL policy and `urlData: 'refuse'` never see (also when written with
+  a CSS escape, `\75 rl(`), and could restyle or move the mark. Now only a keyword is written, matched as CSS matches it
+  (surrounding whitespace and ASCII case ignored); anything else draws as if no blend were set.
+- **Paint never references another document in SVG output.** A `fill`, `stroke` or background of
+  `url(<another document>)`, which can come from the data, made Chromium fetch that document, again past the URL policy.
+  Such a reference at the start of a paint is now replaced by its fallback colour, or `none`, which is what Firefox and
+  WebKit draw for it; one anywhere else drops the attribute. A reference within the page (`url(#pattern)`), colours and
+  gradients are written as before.
+
+Both apply to the string renderer, the DOM renderer and its patches, with or without `limits`; the canvas renderer was not
+affected. See docs/LIMITS.md ("Blend modes", "Paint references"). The synchronous entry is 175.3 kB gzip (175.0 before
+these fixes); string rendering is no slower.
+
 ## 0.4.1 (2026-11-16)
 
 ### `@aster-charts/react`
