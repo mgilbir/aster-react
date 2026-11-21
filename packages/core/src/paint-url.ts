@@ -9,18 +9,27 @@
  * output): a paint that starts with such a `url()` draws its fallback colour, else nothing (`none`); a text with a
  * `url()` anywhere else is not a paint at all, so the attribute is dropped, as the browser drops an invalid value.
  *
- * CSS escapes are decoded before the check (`\75 rl(` is `url(`), so an escaped name cannot hide one; a text with
- * no escape and no `l(` / `L(` cannot name a `url()` and is returned at once (`canNameNoUrl`).
+ * CSS escapes are decoded before the check (`\75 rl(` is `url(`, `url(\23 a)` is `url(#a)`), so an escaped name cannot
+ * hide one; a text with no escape and no `l(` / `L(` cannot name a `url()` and is returned at once (`canNameNoUrl`).
+ * An escaped quote or whitespace is a character of the URL, not syntax (`url(\"#a\")` names `"#a"`, a relative URL to
+ * another document, and `url(\20#a)` names ` #a`, which resolves against the page's base), so it decodes to a character
+ * that is neither: the reference then does not start with `#` and counts as another document.
  */
 
-/** CSS escapes decoded (CSS Syntax 4.3.7): `\` + 1-6 hex digits + one optional whitespace, or `\` + any other character. */
+/** The characters that are syntax around a URL (a quote, whitespace): escaped, each is a character of the URL instead. */
+const URL_SYNTAX = /["' \t\n\r\f]/
+
+/**
+ * CSS escapes decoded (CSS Syntax 4.3.7): `\` + 1-6 hex digits + one optional whitespace, or `\` + any other character.
+ * An escaped quote or whitespace decodes to U+FFFD, so the check below cannot read it as the quote or the whitespace
+ * around a URL (see the file comment).
+ */
 function unescapeCss(s: string): string {
   return s.replace(/\\(?:([0-9a-fA-F]{1,6})[ \t\n\r\f]?|([\s\S]))/g, (_, hex: string | undefined, ch: string | undefined) => {
-    if (hex === undefined) return ch!
-    // (CSS reads 0, a surrogate and anything past U+10FFFF as U+FFFD; only the letters of `url(` matter here, and
-    // fromCodePoint throws only past U+10FFFF)
-    const cp = parseInt(hex, 16)
-    return cp > 0x10ffff ? '�' : String.fromCodePoint(cp)
+    // (CSS reads 0, a surrogate and anything past U+10FFFF as U+FFFD; only the letters of `url(`, a `#`, the quotes and
+    // whitespace matter here, and fromCodePoint throws only past U+10FFFF)
+    const c = hex === undefined ? ch! : parseInt(hex, 16) > 0x10ffff ? '\ufffd' : String.fromCodePoint(parseInt(hex, 16))
+    return URL_SYNTAX.test(c) ? '\ufffd' : c
   })
 }
 

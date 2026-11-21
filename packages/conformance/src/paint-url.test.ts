@@ -13,6 +13,7 @@ import * as vega from 'vega'
 import { compile } from '@aster-charts/vl'
 import { renderSpec } from '@aster-charts/core'
 import { canonicalizeSvg, diffCanonical } from './normalize.js'
+import { namesAnotherDocument } from '../../core/src/css-url.testlib.js'
 
 type Obj = Record<string, unknown>
 
@@ -27,13 +28,10 @@ async function oracleSvg(spec: Obj): Promise<string> {
   }
 }
 
-const OTHER = /url\((?![ \t\n\r\f]*["']?#)/i
-const unescape = (s: string): string =>
-  s.replace(/\\(?:([0-9a-fA-F]{1,6})[ \t\n\r\f]?|([\s\S]))/g, (_, h: string | undefined, c: string | undefined) => (h ? String.fromCodePoint(parseInt(h, 16) || 0xfffd) : c!))
 /** Every fill / stroke / style value of a document that names another document. */
 const references = (svg: string): string[] =>
   [...svg.matchAll(/ (fill|stroke|style|stop-color)="([^"]*)"/g)].map((m) => m[2]!.replace(/&quot;/g, '"').replace(/&amp;/g, '&'))
-    .filter((v) => OTHER.test(unescape(v)))
+    .filter(namesAnotherDocument)
 
 describe('paint that names no other document renders as vega renders it', () => {
   const SAFE = ['#336699', 'steelblue', 'rgb(10, 20, 30)', 'hsl(120, 50%, 40%)', 'none', 'url(#hatch)', 'url(#hatch) red', 'r\\65 d']
@@ -58,6 +56,8 @@ describe('Vega-Lite: paint never names another document', () => {
     'url(http://example.invalid/a.svg#g) red',
     '\\75 rl(http://example.invalid/a.svg#g)',
     'red url(http://example.invalid/a.svg#g)',
+    // #178: an escaped quote or space is a character of the URL, so these name another document too
+    'url(\\"#g\\")', 'url(\\"#g\\") red', 'url(\\20#g)',
   ]
   const DATA = { values: HOSTILE.map((h, i) => ({ x: i, y: i + 1, h })) }
   const unit = (mark: Obj | string, extra: Obj = {}, encoding: Obj = {}): Obj => ({

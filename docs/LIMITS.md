@@ -539,8 +539,12 @@ the DOM renderer and its patches, with or without `limits`:
   written, as a browser ignores an invalid value.
 - A reference within the page, `url(#pattern)`, is written as given (a pattern or gradient the page defines). It
   loads nothing, also under a `<base href>`.
-- CSS escapes are decoded before the check, so `\75 rl(` is a `url(`, while an escaped colour name such as
-  `r\65 d` is still written as it is.
+- CSS escapes are decoded before the check, so `\75 rl(` is a `url(` and `url(\23 a)` is `url(#a)`, while an escaped
+  colour name such as `r\65 d` is still written as it is. An escaped quote or whitespace is a character of the
+  reference, as the browser reads it, not the quote or the space around it: `url(\"#a\")` names `"#a"`, a relative URL
+  Chromium fetches from the page's directory, and `url(\20#a)` or `url(" #a")` resolves against the page's base, so
+  each counts as another document (#178). `packages/conformance/src/paint-url-browser.test.ts` checks this reading
+  against the requests Chromium makes.
 
 Gradients from the spec are written as references to their own definitions, as before. A gradient stop's colour
 takes colours only. The canvas renderer ignores a `url()` paint.
