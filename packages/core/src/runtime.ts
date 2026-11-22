@@ -3919,11 +3919,12 @@ function drivesSize(chart: CompiledChart, dim: 'width' | 'height'): boolean {
   return (size !== null && typeof size === 'object' && 'signal' in size) || (chart.signalDefs ?? []).some((d) => d.name === dim)
 }
 
-/** A view size as the root group takes it from its signal (vega-view-transforms: `Math.max(0, group.width || 0)`); undefined: no value yet. */
+/**
+ * A view size as the root group takes it from its signal (vega-view-transforms: `Math.max(0, group.width || 0)`, so a numeric string
+ * is its number and any other string NaN, as in vega); undefined: no value yet.
+ */
 function viewSizeValue(v: unknown): number | undefined {
-  if (v === undefined) return undefined
-  const n = +(v as number)
-  return Number.isFinite(n) ? Math.max(0, n) : 0
+  return v === undefined ? undefined : Math.max(0, (v as number) || 0)
 }
 
 /**
@@ -3953,7 +3954,7 @@ function viewSizeChange(
 ): number | undefined {
   if (!sizeFollowsSignal(chart, input, explicitSize, signed, ctx, dim)) return undefined
   const v = viewSizeValue(value)
-  return v === undefined || v === current ? undefined : v
+  return v === undefined || Object.is(v, current) ? undefined : v
 }
 
 /** Whether view signal `name` reads data or a scale, directly or through other signals (see `signalReadsDataflow`), once per chart. */
