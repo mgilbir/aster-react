@@ -12,6 +12,7 @@ import { checkExpressions } from './spec-expressions.js'
 import { markPlacing } from './tuple-order.js'
 import { markShareable } from './guide-encode.js'
 import { defaultMergedConfig, mergeVegaConfig, vegaDefaultConfig } from './config-defaults.js'
+import { isSignalRef, paddingOf, staticAutosize, viewProperty, viewSignals } from './view-props.js'
 import type {
   CompiledAxis,
   CompiledChart,
@@ -51,24 +52,36 @@ export function compileChart(givenSpec: VgSpec): CompiledChart {
   markSeq = 0
   const spec: VgSpec = { ...rawSpec, config: mergedConfig as VgSpec['config'] }
 
-  const signalDefs = compileSignalDefs(spec.signals as Array<Record<string, unknown>> | undefined)
-  const signals = resolveSignals(signalDefs)
   const cfg = (spec.config ?? {}) as Record<string, unknown>
+  // The view's own properties are signals of the view (vega-parser `collectSignals`, see view-props.ts): the spec's property, else
+  // the config's; a `{signal}` there is the signal's update, and a signal the spec declares by the same name is merged over it.
+  // The signals are the spec's in that order, then the config's the spec does not declare.
+  const viewSignalList = viewSignals(spec as Record<string, unknown>, cfg)
+  const signalDefs = compileSignalDefs(viewSignalList)
+  const signals = resolveSignals(signalDefs)
   const cfgStyle = (cfg.style ?? {}) as Record<string, Record<string, unknown>>
-  const background = (spec.background as string | null | undefined) ?? (cfg.background as string | null | undefined) ?? null
-  const padding = normalizePadding(spec.padding as unknown)
-  // Collect signal names before resolving them
-  const sigNames = (spec.signals as Array<Record<string, unknown>> | undefined)?.map(s => (s as any)?.name || '').filter(Boolean) ?? []
-  // We don't have the resolved signal values yet, so just use raw width/height
-  // A view with no size of its own has vega's `width` / `height` signal value, 0 (vega-parser: `spec.width || 0`) -
-  // unless a signal supplies it.
-  // A `width` / `height` signal the spec declares IS the view size (vega: it is the signal), so the size reads it: its
-  // literal `value` where it has one, and the default only while an `init` / `update` is still to be computed.
-  const defaultSize = (name: 'width' | 'height'): SizeSpec =>
-    sigNames.includes(name) ? { signal: name } : 0
-  const width = typeof spec.width === 'number' ? spec.width : (typeof spec.width === 'object' ? spec.width as SizeSpec : defaultSize('width'))
-  const height = typeof spec.height === 'number' ? spec.height : (typeof spec.height === 'object' ? spec.height as SizeSpec : defaultSize('height'))
-  const contentSized = (['width', 'height'] as const).filter((d) => spec[d] == null && !sigNames.includes(d))
+  const sigNames = signalDefs.map((d) => d.name).filter(Boolean)
+  // (a view property that is a signal is read from the signal's value when the chart is evaluated: the static value here is what a
+  // view whose signal never computes one shows)
+  const viewValue = (name: 'background' | 'autosize' | 'padding' | 'width' | 'height'): unknown => {
+    const v = viewProperty(spec as Record<string, unknown>, cfg, name)
+    return isSignalRef(v) ? undefined : v
+  }
+  const bg = viewValue('background')
+  // (vega-scenegraph writes a truthy background as the attribute's text: a number is its digits)
+  const background = bg ? String(bg) : null
+  const padding = paddingOf(viewValue('padding'))
+  // A view size is its `width` / `height` signal (vega: the root group's size is `{signal: 'width'}`): one the spec declares or a
+  // `{signal}` property makes is read from the signal's value when the chart is evaluated (its static `value` until it computes
+  // one); otherwise the size is the property (spec, else config) as vega-parser makes it the signal's value, `|| 0`.
+  const sizeOf = (name: 'width' | 'height'): SizeSpec => {
+    if (sigNames.includes(name)) return { signal: name }
+    const v = viewValue(name)
+    return typeof v === 'number' ? v : (+(v as number) || 0)
+  }
+  const width = sizeOf('width')
+  const height = sizeOf('height')
+  const contentSized = (['width', 'height'] as const).filter((d) => viewProperty(spec as Record<string, unknown>, cfg, d) == null && !sigNames.includes(d))
   const frameStroke = resolveFrameStroke(spec)
   const frameFill = resolveFrameFill(spec)
   const frameFillTransparent = frameStyleValue(spec, 'fill') === 'transparent'
@@ -83,11 +96,9 @@ export function compileChart(givenSpec: VgSpec): CompiledChart {
   const frameStrokeDashOffset = resolveFrameNumber(spec, 'strokeDashOffset')
   const frameStrokeCap = resolveFrameString(spec, 'strokeCap')
   const frameStrokeJoin = resolveFrameString(spec, 'strokeJoin')
-  const autosize = resolveAutosize(spec.autosize)
+  // (an `autosize` signal is read when the chart is evaluated; this is the property as vega-parser makes it the signal's value)
+  const { type: autosize, contains: autosizeContains } = staticAutosize(viewValue('autosize'))
   const configRange = (cfg as { range?: Record<string, unknown> }).range
-  const autosizeContains = spec.autosize && typeof spec.autosize === 'object'
-    ? ((spec.autosize as Record<string, unknown>).contains as string) || undefined
-    : undefined
 
   const data: CompiledData[] = []
   for (const d of (spec.data as Array<Record<string, unknown>>) ?? []) {
@@ -229,15 +240,6 @@ function tupleQuestions(spec: unknown): true | 'facet' | undefined {
   return facet ? 'facet' : undefined
 }
 
-function resolveAutosize(value: unknown): string | undefined {
-  if (value == null) return undefined
-  if (typeof value === 'string') return value || undefined
-  if (value && typeof value === 'object') {
-    return ((value as Record<string, unknown>).type as string) || undefined
-  }
-  return undefined
-}
-
 /**
  * The root frame's style value for `prop`, resolved the way vega-parser's
  * `applyDefaults` does for the frame role: `config.group` first, then each
@@ -348,20 +350,6 @@ function resolveSignals(defs: CompiledSignalDef[]): Record<string, unknown> {
     if (s.value !== undefined) out[s.name] = s.value
   }
   return out
-}
-
-function normalizePadding(padding?: unknown): { top: number; right: number; bottom: number; left: number } {
-  if (typeof padding === 'number') return { top: padding, right: padding, bottom: padding, left: padding }
-  if (padding && typeof padding === 'object') {
-    const p = padding as Record<string, number>
-    return {
-      top: p.top ?? 0,
-      right: p.right ?? 0,
-      bottom: p.bottom ?? 0,
-      left: p.left ?? 0,
-    }
-  }
-  return { top: 0, right: 0, bottom: 0, left: 0 }
 }
 
 function compileData(d: Record<string, unknown>): CompiledData {

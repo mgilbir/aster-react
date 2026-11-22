@@ -707,7 +707,7 @@ window.__mountAster = async (specVl, renderer, opts) => {
     }
     for (const g of scene.items) walk(g)
     return {
-      ...(opts.tooltip ? { tip: norm(holder.querySelector('[data-testid="chart-tooltip"]') ? window.__tip : null) } : {}),
+      ...(opts.tooltip ? { tip: norm(document.querySelector('[data-testid="chart-tooltip"]') ? window.__tip : null) } : {}),
       signals: Object.fromEntries(names.map((n) => [n, norm(params[n])])),
       stores: Object.fromEntries(stores.map((n) => [n, norm(scene.runtime.data(n))])),
       scoped: JSON.stringify(scoped.map((o) => norm(o)).sort()),

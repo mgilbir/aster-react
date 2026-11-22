@@ -1,4 +1,5 @@
 import * as React from 'react'
+import { createPortal } from 'react-dom'
 import type { A11yNode, A11yOptions, ChartInfo, Logger, SceneItem, SceneRoot, VgSpec } from '@aster-charts/core'
 // The engine as the shells use it: without the parts most charts never run, which `useAddons` loads for a spec that needs them
 // (see `@aster-charts/core/lean`).
@@ -397,6 +398,7 @@ function ChartView({
   interactive = true,
   tooltip = false,
   renderTooltip,
+  tooltipContainer,
   limits,
   urlPolicy,
   urlData,
@@ -634,7 +636,7 @@ function ChartView({
   // are only known after evaluation. Reported through `onError`, else the logger, else the console.
   const eventStreamsUnbound = interaction == null && interactive && scene != null && hasEventStreams(scene)
   const interactionPropsUsed = interaction == null
-    ? Object.entries({ tooltip: tooltip === true, renderTooltip, onPointSelect, selection, select, onSelectionChange, preventDefault: preventDefault === true })
+    ? Object.entries({ tooltip: tooltip === true, renderTooltip, tooltipContainer, onPointSelect, selection, select, onSelectionChange, preventDefault: preventDefault === true })
       .filter(([, v]) => v !== undefined && v !== false).map(([k]) => k).join(', ')
     : ''
   const canvasUnavailable = requestedRenderer === 'canvas' && canvasCap == null
@@ -1477,8 +1479,6 @@ function ChartView({
   const handleTooltipMove = React.useCallback(
     (e: React.MouseEvent) => {
       if (!tooltipEnabled) return
-      const rect = containerRef.current?.getBoundingClientRect()
-      if (!rect) return
       // The item under the pointer, from the scene hit index, whatever the renderer: the SVG carries no per-item
       // attribute for it (vega's does not either), so SVG, canvas and batched marks all resolve the same way. It is the item
       // vega's tooltip handler is called with: the topmost item that takes the pointer (a mark without `from`, a group's box and
@@ -1493,13 +1493,18 @@ function ChartView({
       // is the datum), not for one whose only datum is vega's generated `{}` (a mark without `from`, a group, a guide part)
       // (vega hands its tooltip handler `item.tooltip || null`: a falsy value -- '', 0, false, NaN -- is no tooltip)
       const shows = item != null && (!!tip || (renderTooltip != null && target!.kind === 'mark' && target!.fromData === true))
-      tooltipStore.set(shows ? { datum: hasDatum ? (datum as Record<string, unknown>) : {}, item, x: e.clientX - rect.left, y: e.clientY - rect.top } : null)
+      // (the pointer's client point: the tooltip is a fixed box placed in the viewport, wherever the chart and its page are scrolled)
+      tooltipStore.set(shows ? { datum: hasDatum ? (datum as Record<string, unknown>) : {}, item, x: e.clientX, y: e.clientY, doc: e.currentTarget.ownerDocument } : null)
     },
     [tooltipEnabled, displayScene, hitIndexFor, pointerMapper, renderTooltip, tooltipStore],
   )
 
   const handleTooltipLeave = React.useCallback(() => {
     if (tooltipEnabled) tooltipStore.set(null)
+  }, [tooltipEnabled, tooltipStore])
+  // Tooltips turned off while one shows: it goes, and turning them on again does not bring back the item hovered before.
+  React.useEffect(() => {
+    if (!tooltipEnabled) tooltipStore.set(null)
   }, [tooltipEnabled, tooltipStore])
 
   // --- the cursor (vega-view cursor.js) -------------------------------------
@@ -1637,9 +1642,9 @@ function ChartView({
     return <div role="alert" style={style} title={renderError?.message}>{message}</div>
   }
 
-  // Absolute-positioned children (tooltip, brush overlays, a11y nodes) need a
-  // positioned ancestor even on a non-interactive chart. Without this the
-  // tooltip positions against <body> and lands off-screen after scrolling.
+  // Absolute-positioned children (brush overlays, a11y nodes) need a positioned
+  // ancestor even on a non-interactive chart. (The tooltip is a fixed box placed in
+  // the viewport, see ChartTooltip; a chart with tooltips keeps the style it had.)
   const needsPositioning = hasInteraction || tooltipEnabled || a11yTree != null
   const baseStyle: React.CSSProperties = needsPositioning
     ? { ...style, position: 'relative', width: '100%', height: '100%', ...(panZoomEnabled ? { touchAction: 'none' } : {}) }
@@ -1743,7 +1748,7 @@ function ChartView({
       {a11yTree != null && (
         <A11yOverlay tree={a11yTree} tabStopId={tabStopId} onNodeKeyDown={handleA11yKeyDown} onNodeFocus={handleA11yFocus} onNodeBlur={handleA11yBlur} />
       )}
-      <ChartTooltip store={tooltipStore} renderTooltip={renderTooltip} interaction={interaction} />
+      {tooltipEnabled && <ChartTooltip store={tooltipStore} renderTooltip={renderTooltip} interaction={interaction} container={tooltipContainer} />}
     </div>
   )
 }
@@ -1839,8 +1844,8 @@ function sameNode(a: A11yNode, b: A11yNode): boolean {
   return true
 }
 
-/** What the tooltip shows: the item under the pointer, its datum, and where the pointer is in the chart's element. */
-interface TooltipInfo { datum: Record<string, unknown>; item: SceneItem; x: number; y: number }
+/** What the tooltip shows: the item under the pointer, its datum, the pointer's client point and the chart's document. */
+interface TooltipInfo { datum: Record<string, unknown>; item: SceneItem; x: number; y: number; doc: Document }
 
 /** The tooltip under the pointer (see `ChartTooltip`): told only of a tooltip that is not the one it holds. */
 interface TooltipStore {
@@ -1860,39 +1865,117 @@ function createTooltipStore(): TooltipStore {
     },
     set(next) {
       const was = current
-      if (was === next || (was !== null && next !== null && was.item === next.item && was.datum === next.datum && was.x === next.x && was.y === next.y)) return
+      if (was === next || (was !== null && next !== null && was.item === next.item && was.datum === next.datum && was.x === next.x && was.y === next.y && was.doc === next.doc)) return
       current = next
       for (const l of listeners) l()
     },
   }
 }
 
+/** How far the tooltip sits from the pointer, across and down (vega-tooltip's `offsetX` / `offsetY`), in CSS pixels. */
+const TOOLTIP_OFFSET = 10
+
 /**
- * The tooltip of the item under the pointer, beside the chart in its element. It reads the tooltip store on its own, so a pointer
- * move renders it and not the chart. The default tooltip shows the hovered item's `tooltip` channel value, as vega-tooltip does
- * (null: no tooltip); vega-view hands the handler `item.tooltip || null`, so a falsy value shows nothing.
+ * The room the tooltip has: the viewport, less a classic scrollbar (the document element's client box, where a document in
+ * standards mode has one; a quirks-mode document's is the whole page, and a document with no layout reports 0).
  */
-function ChartTooltip({ store, renderTooltip, interaction }: {
+function viewportOf(doc: Document): { width: number; height: number } {
+  const root = doc.documentElement
+  const win = doc.defaultView
+  const innerWidth = win?.innerWidth ?? root.clientWidth
+  const innerHeight = win?.innerHeight ?? root.clientHeight
+  return {
+    width: root.clientWidth > 0 ? Math.min(root.clientWidth, innerWidth) : innerWidth,
+    height: root.clientHeight > 0 ? Math.min(root.clientHeight, innerHeight) : innerHeight,
+  }
+}
+
+/**
+ * Where the tooltip's box goes for a pointer at the client point (x, y), as vega-tooltip places it (its `anchor: 'cursor'`): the
+ * first of below-right, below-left, above-right and above-left of the pointer, at the offset, where the whole box is in the
+ * viewport; above-left when it fits nowhere.
+ */
+function tooltipPlacement(
+  x: number, y: number, box: { width: number; height: number }, viewport: { width: number; height: number },
+): { left: number; top: number } {
+  const right = x + TOOLTIP_OFFSET
+  const left = x - TOOLTIP_OFFSET - box.width
+  const below = y + TOOLTIP_OFFSET
+  const above = y - TOOLTIP_OFFSET - box.height
+  const fits = (l: number, t: number): boolean => l >= 0 && t >= 0 && l + box.width <= viewport.width && t + box.height <= viewport.height
+  for (const [l, t] of [[right, below], [left, below], [right, above]] as const) {
+    if (fits(l, t)) return { left: l, top: t }
+  }
+  return { left, top: above }
+}
+
+/**
+ * The tooltip of the item under the pointer. It reads the tooltip store on its own, so a pointer move renders it and not the chart.
+ * The default tooltip shows the hovered item's `tooltip` channel value, as vega-tooltip does (null: no tooltip); vega-view hands the
+ * handler `item.tooltip || null`, so a falsy value shows nothing.
+ *
+ * Where it renders, as vega-tooltip's element: a `position: fixed` box in the document's body (the fullscreen element while there is
+ * one), through a portal, so the chart's ancestors neither clip it nor grow their scroll area with it; `container` puts it in another
+ * element, and `null` in the chart's own element. The content stays in the chart's React tree (context reaches `renderTooltip`'s).
+ * Each move renders it hidden at the origin of its containing block, measures it there (one measurement, full width available to
+ * it) and renders it where it goes, both before the browser paints.
+ */
+function ChartTooltip({ store, renderTooltip, interaction, container }: {
   store: TooltipStore
   renderTooltip: ChartProps['renderTooltip']
   interaction: InteractionCapability | undefined
+  container: HTMLElement | null | undefined
 }): React.ReactElement | null {
   const tooltipInfo = React.useSyncExternalStore(store.subscribe, store.get, store.get)
+  const item = tooltipInfo?.item
+  const datum = tooltipInfo?.datum
+  // (the content depends on the item and its datum, not on where the pointer is: a move over the same item renders none of it again)
   const tooltipShown = React.useMemo(
-    () => (tooltipInfo != null && renderTooltip == null && interaction != null
-      ? interaction.tooltipContent((tooltipInfo.item as { tooltip?: unknown }).tooltip || null)
+    () => (item != null && renderTooltip == null && interaction != null
+      ? interaction.tooltipContent((item as { tooltip?: unknown }).tooltip || null)
       : null),
-    [tooltipInfo, renderTooltip, interaction],
+    [item, renderTooltip, interaction],
   )
+  const content = React.useMemo(
+    () => (item == null || datum == null ? null
+      : renderTooltip != null
+        ? renderTooltip(datum, { tooltip: (item as { tooltip?: unknown }).tooltip, item })
+        : tooltipShown != null && ('text' in tooltipShown
+          ? tooltipShown.text
+          : <>
+              {tooltipShown.title != null && <div><strong>{tooltipShown.title}</strong></div>}
+              {tooltipShown.rows.map(([k, v]) => (
+                <div key={k}><strong>{k}:</strong> {v}</div>
+              ))}
+            </>)),
+    [item, datum, renderTooltip, tooltipShown],
+  )
+  const target = tooltipInfo == null ? null
+    : container === undefined ? (tooltipInfo.doc.fullscreenElement ?? tooltipInfo.doc.body) : container
+  const boxRef = React.useRef<HTMLDivElement>(null)
+  // Where the box goes, for the pointer, content and container it was measured with.
+  const [placed, setPlaced] = React.useState<{ info: TooltipInfo; content: React.ReactNode; target: Element | null; left: number; top: number } | null>(null)
+  const at = placed != null && placed.info === tooltipInfo && placed.content === content && placed.target === target ? placed : null
+  React.useLayoutEffect(() => {
+    const box = boxRef.current
+    if (tooltipInfo == null || box == null || at != null) return
+    // Rendered hidden at left 0, top 0: its rect is its size and where its containing block starts (the viewport's origin, or a
+    // transformed ancestor's, which the placement is then made up for).
+    const rect = box.getBoundingClientRect()
+    const p = tooltipPlacement(tooltipInfo.x, tooltipInfo.y, rect, viewportOf(box.ownerDocument))
+    setPlaced({ info: tooltipInfo, content, target, left: p.left - rect.left, top: p.top - rect.top })
+  }, [tooltipInfo, content, target, at])
   if (tooltipInfo == null || (renderTooltip == null && tooltipShown == null)) return null
-  return (
+  const box = (
     <div
+      ref={boxRef}
       data-testid="chart-tooltip"
       style={{
-        position: 'absolute',
-        left: tooltipInfo.x + 12,
-        top: tooltipInfo.y + 12,
-        zIndex: 40,
+        position: 'fixed',
+        left: at?.left ?? 0,
+        top: at?.top ?? 0,
+        ...(at == null ? { visibility: 'hidden' } : {}),
+        zIndex: 1000,
         pointerEvents: 'none',
         background: 'rgba(0,0,0,0.85)',
         color: '#fff',
@@ -1901,21 +1984,15 @@ function ChartTooltip({ store, renderTooltip, interaction }: {
         fontSize: 12,
         fontFamily: 'system-ui, sans-serif',
         maxWidth: 240,
-        whiteSpace: 'nowrap',
+        // (long values wrap inside the box: a list with no spaces breaks anywhere rather than run past the background)
+        whiteSpace: 'normal',
+        overflowWrap: 'anywhere',
       }}
     >
-      {renderTooltip != null
-        ? renderTooltip(tooltipInfo.datum, { tooltip: (tooltipInfo.item as { tooltip?: unknown }).tooltip, item: tooltipInfo.item })
-        : tooltipShown != null && ('text' in tooltipShown
-          ? tooltipShown.text
-          : <>
-              {tooltipShown.title != null && <div><strong>{tooltipShown.title}</strong></div>}
-              {tooltipShown.rows.map(([k, v]) => (
-                <div key={k}><strong>{k}:</strong> {v}</div>
-              ))}
-            </>)}
+      {content}
     </div>
   )
+  return target == null ? box : createPortal(box, target)
 }
 
 /** The bound inputs `<Chart>` renders under the chart, inside its element. */

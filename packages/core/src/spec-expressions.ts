@@ -35,14 +35,12 @@ import { transformParams, type ParamKind, type TransformParam } from './transfor
 import { TUPLE_MAKING_TRANSFORMS, transformTypeOf } from './transform-names.js'
 import { guideReading, legendLayout, legendSizeExpression, type GuideEnv, type GuideKind } from './guide-model.js'
 import { splitAccessPath } from './util.js'
+import { isSignalRef as isSignalObject, VIEW_SIGNALS, viewSignals } from './view-props.js'
 
 type Rec = Record<string, unknown>
 
 const isRecord = (v: unknown): v is Rec => v !== null && typeof v === 'object' && !Array.isArray(v)
 const isObject = (v: unknown): v is Rec => v !== null && typeof v === 'object'
-
-/** The signals a view has without declaring them (vega-parser's `collectSignals`), in the order it parses their updates. */
-const VIEW_SIGNALS = ['background', 'autosize', 'padding', 'width', 'height']
 
 /**
  * What a scope of vega-parser knows by name when its expressions are read: its signals and scales (projections are scales) and
@@ -83,42 +81,6 @@ class Scope {
     }
     return undefined
   }
-}
-
-const isSignalObject = (v: unknown): boolean => isObject(v) && !!(v as Rec).signal
-
-/**
- * The signals of the view that have something to read, in the order vega-parser parses their updates (`collectSignals`): the five
- * every view has (when the author declared one, or a property of the view is a `{signal}`, which is its `update`), then the other
- * signals the spec declares, then those its config does.
- */
-function viewSignals(spec: Rec, config: Rec): Rec[] {
-  const declared = specList(spec.signals)
-  // the author's declaration of each of the five, merged where there are several; the other signals as they come
-  let own: Array<Rec | undefined> | undefined
-  const others: Rec[] = []
-  for (const s of declared) {
-    if (!isRecord(s)) continue
-    const at = VIEW_SIGNALS.indexOf(String(s.name))
-    if (at < 0) others.push(s)
-    else (own ??= [])[at] = own[at] ? { ...own[at], ...s } : s
-  }
-  const out: Rec[] = []
-  for (let i = 0; i < 5; i++) {
-    const name = VIEW_SIGNALS[i]!
-    // (`width` and `height` are 0 where nothing says otherwise: a number is no signal)
-    const value = spec[name] != null ? spec[name] : config[name]
-    const update = isObject(value) && (value as Rec).signal ? { name, update: (value as Rec).signal } : null
-    const mine = own?.[i]
-    if (update || mine) out.push(update && mine ? { ...update, ...mine } : (update ?? mine)!)
-  }
-  for (const s of others) out.push(s)
-  const fromConfig = specList(config.signals)
-  if (fromConfig.length) {
-    const named = new Set(declared.map((d) => (isRecord(d) ? String(d.name) : '')))
-    for (const s of fromConfig) if (isRecord(s) && !VIEW_SIGNALS.includes(String(s.name)) && !named.has(String(s.name))) out.push(s)
-  }
-  return out
 }
 
 /**

@@ -6,6 +6,7 @@ import { compileChart, evaluateChart, renderSceneToSvg, renderSpec } from './ind
 import { patchSceneDom, renderSceneToDomElement } from './addon-dom.js'
 import { svgPathCommands } from './path-data.js'
 import type { SceneRoot } from './types.js'
+import { namesAnotherDocument } from './css-url.testlib.js'
 
 // Regression + property suite for SVG string escaping.
 //
@@ -547,11 +548,8 @@ describe('a style attribute holds only constant declarations and a mix-blend-mod
 
 // Paint (`fill`, `stroke`, the background) is CSS too: `url(<another document>)` there makes Chromium fetch it, a
 // request no URL policy sees, and a paint can come from the data. No attribute any render writes names another
-// document after CSS escapes are decoded (paint-url.ts); a reference within the page and a fallback colour are kept.
+// document as a browser's tokenizer reads it (css-url.testlib.ts); a reference within the page and a fallback colour are kept.
 describe('no attribute paints from another document', () => {
-  const OTHER = /url\((?![ \t\n\r\f]*["']?#)/i
-  const unescape = (s: string): string =>
-    s.replace(/\\(?:([0-9a-fA-F]{1,6})[ \t\n\r\f]?|([\s\S]))/g, (_, h: string | undefined, c: string | undefined) => (h ? String.fromCodePoint(parseInt(h, 16) || 0xfffd) : c!))
   // text, not CSS: links and images are the URL policy's (see the url-policy tests); the rest are labels and data
   const NOT_CSS = new Set(['xlink:href', 'href', 'aria-label', 'aria-roledescription', 'data-datum', 'class', 'role', 'id', 'd'])
   const PAINT_HOSTILE = [
@@ -564,10 +562,12 @@ describe('no attribute paints from another document', () => {
     'red url(http://example.invalid/a.svg#g)',
     'url(#a) url(http://example.invalid/a.svg#g)',
     'url(data:image/svg+xml,%3Csvg%3E%3C/svg%3E)',
+    // #178: an escaped quote or space is a character of the URL (Chromium fetches `<page dir>/%22`)
+    'url(\\"#g\\")', "url(\\'#g\\') red", 'url("\\"#g")', 'url(\\20#g)',
   ]
   const badAttrs = (root: Element): string[] =>
     [root, ...root.querySelectorAll('*')].flatMap((e) => [...e.attributes]
-      .filter((a) => !NOT_CSS.has(a.name) && OTHER.test(unescape(a.value)))
+      .filter((a) => !NOT_CSS.has(a.name) && namesAnotherDocument(a.value))
       .map((a) => `<${e.localName} ${a.name}="${a.value}">`))
   const paintScene = (v: unknown): SceneRoot => {
     const s = baseScene()

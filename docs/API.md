@@ -812,7 +812,7 @@ since compilation happens there.
 **Props.** `spec` (compared by content: an equal inline literal does no work; the one exception is a dataset's inline `values` array, which is compared by identity, so a re-created but equal rows array is a new input, which the session's row diff finds unchanged and applies as a no-op; the streaming components keep the full content comparison, so a spec rebuilt every render does not restart a stream), `data` and `dataChanges` (the rows are treated as immutable: pass a new array, or the same one with `dataChanges` naming what changed; see [Rows are treated as immutable](#rows-are-treated-as-immutable)), `width`,
 `height` (each independent; without them the chart measures its container; a given one fixes the view's size, even for a container-sized spec, whose `width` / `height` signals and `window:resize` handlers do not move it. The measured container only sizes a spec that has no `width` / `height` signal of its own and whose autosize is not `none` (Vega's `none` means the chart's whole size is its `width`, `height` and `padding`: such a spec is drawn at that size in any container, as vega-embed draws it), and a dimension the spec gives no value at all stays Vega's 0 grown to the content by autosize. It sizes the chart's whole box, padding, guides and the bound inputs under the chart included, as Vega-Lite's `"container"` does (autosize `fit` containing the padding): the content shrinks to fit, so a chart never overflows the container it fills, and a container whose height is the chart's own (a block `<div>` with no height) keeps the chart's size instead of growing with it; one that drives them (a bound input, a handler, Vega-Lite's `"container"`) keeps doing so, as in Vega where the size is a signal and the later write wins, and sees the container through `containerSize()`), `ariaLabel`, `className`, `style`,
 `signals`, `signalListeners`, `onSignal`, `interactive`, `preventDefault`, `renderer`, `incremental`, `denseMarks`, `transition`,
-`tooltip`, `renderTooltip`, `selection`/`select`, `onSelectionChange`, `onSelect`, `onPointSelect`, `brush`, `panZoom`,
+`tooltip`, `renderTooltip`, `tooltipContainer`, `selection`/`select`, `onSelectionChange`, `onSelect`, `onPointSelect`, `brush`, `panZoom`,
 `pan`, `zoom`, `view`, `onViewChange`, `maxZoom`, `a11y`, `limits`, `urlPolicy`, `urlData`, `random`, `logger`, `textMetrics`, `onError`.
 `urlData="refuse"` refuses a spec with a `url` dataset before any add-on loads and before evaluation: the chart renders its error
 state and `onError` receives the `AsterUrlError` (see `RuntimeInput.urlData`).
@@ -942,7 +942,7 @@ a prop: there is no registry, no global and no side-effect import (`sideEffects`
 when it is not imported and `<SvgChart>` without it contains none of that code. `<Chart>` has it built in.
 
 **Typing.** `SvgChartProps` is a union on `interaction`. These props exist only with it, and passing one without it is a
-compile error: `tooltip`, `renderTooltip`, `onPointSelect`, `selection`, `select`, `onSelectionChange` (a click resolves
+compile error: `tooltip`, `renderTooltip`, `tooltipContainer`, `onPointSelect`, `selection`, `select`, `onSelectionChange` (a click resolves
 the mark under the pointer through the hit index) and `preventDefault` (it acts on the `signal.on` event loop).
 `renderer` does not exist on `<SvgChart>` (it is always SVG). Every other `ChartProps` key is shared with the SAME type, and
 the ref (`SvgChartHandle`) has every `ChartHandle` member; `src/parity.assert.ts` makes the compiler enforce both, so a prop
@@ -972,7 +972,7 @@ missing Vega-Lite compiler, where nothing meaningful can be drawn). The report g
 | Situation | Message |
 |---|---|
 | a spec with `signal.on` streams, no `interaction` | `[aster] this spec has event streams (signal.on) but no event loop is bound: pass interaction={interaction} from '@aster-charts/react/interaction'` |
-| `tooltip`, `renderTooltip`, `onPointSelect`, `selection`, `select`, `onSelectionChange` or `preventDefault` without `interaction` (ignored) | `[aster] tooltip, … need hit testing and the signal event loop and are ignored: pass interaction={interaction} from '@aster-charts/react/interaction'` |
+| `tooltip`, `renderTooltip`, `tooltipContainer`, `onPointSelect`, `selection`, `select`, `onSelectionChange` or `preventDefault` without `interaction` (ignored) | `[aster] tooltip, … need hit testing and the signal event loop and are ignored: pass interaction={interaction} from '@aster-charts/react/interaction'` |
 | `renderer="canvas"` (renders SVG) | `[aster] renderer="canvas" needs <Chart>: <SvgChart> has no canvas renderer, so it renders SVG` |
 | `getPng()` without `png` (the promise rejects) | `[aster] getPng needs the png capability: <SvgChart> leaves out the canvas renderer it paints with; import { png } from "@aster-charts/react/png" and pass png={png}` |
 

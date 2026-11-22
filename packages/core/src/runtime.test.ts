@@ -197,8 +197,8 @@ describe('autosize compilation', () => {
     expect(compileChart({ autosize: { type: 'none' } } as never).autosize).toBe('none')
   })
 
-  it('missing autosize -> undefined', () => {
-    expect(compileChart({} as never).autosize).toBeUndefined()
+  it("missing autosize -> 'pad' (vega's default config)", () => {
+    expect(compileChart({} as never).autosize).toBe('pad')
   })
 })
 

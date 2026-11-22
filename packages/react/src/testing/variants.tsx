@@ -33,6 +33,7 @@ import { interaction } from '../interaction-capability.js'
 import type { ChartHandle, ChartProps } from '../chart-types.js'
 import { SVG_CHART_INTERACTION_PROPS } from '../svg-chart-types.js'
 import { PNG_NEEDS_CAPABILITY } from '../ChartCore.js'
+import { chartTooltip } from './tooltip.js'
 
 export type Capability = 'svg' | 'canvas' | 'interaction' | 'signals' | 'png'
 export type VariantName = 'Chart' | 'SvgChart' | 'SvgChart+interaction'
@@ -172,7 +173,7 @@ export const FAILURE_MODES: Record<Capability, FailureMode> = {
       ])
       const rect = m.container.querySelector('svg path')!
       rect.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: 5, clientY: 5 }))
-      expect(m.container.querySelector('[data-testid="chart-tooltip"]')).toBeNull()
+      expect(chartTooltip()).toBeNull()
       expect(m.container.querySelector('[data-datum]')).toBeNull()
     } finally { m.unmount() }
     // Without `onError` the same report goes to the logger.

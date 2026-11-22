@@ -8,6 +8,7 @@ import './vl' // the Vega-Lite `time` animation below
 import type { ChartHandle, ChartProps } from './Chart'
 import { loadTransitions } from './transition'
 import { forEachVariant, type ChartComponent } from './testing/variants'
+import { chartTooltip } from './testing/tooltip'
 
 type Row = { k: string; x: number; v: number }
 
@@ -265,7 +266,7 @@ forEachVariant(['svg'], (Chart, variant) => {
       const host = container.firstElementChild as HTMLElement
       const tip = (x: number, y: number): string | null => {
         act(() => { host.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: x, clientY: y })) })
-        return container.querySelector('[data-testid="chart-tooltip"]')?.textContent ?? null
+        return chartTooltip()?.textContent ?? null
       }
       expect(tip(25, 80)).toBeNull()
       expect(tip(65, 80)).toBe('b')

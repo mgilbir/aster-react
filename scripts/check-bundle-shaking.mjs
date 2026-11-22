@@ -446,7 +446,7 @@ const PATTERNS = [
       const rect = host.querySelector('.mark-rect path')
       rect.dispatchEvent(new window.MouseEvent('mousemove', { bubbles: true, clientX: 15, clientY: 15 }))
       await new Promise((r) => setTimeout(r, 30)) // a continuous event: React renders it on the next tick
-      return { before: before ?? null, after: ref.current.getSignals().clicks, errors, stamped: host.querySelector('[data-datum]') !== null, tooltip: !!host.querySelector('[data-testid="chart-tooltip"]') }`,
+      return { before: before ?? null, after: ref.current.getSignals().clicks, errors, stamped: host.querySelector('[data-datum]') !== null, tooltip: !!document.querySelector('[data-testid="chart-tooltip"]') }`,
     check: (r) => [
       [r.after === 1, 'the click ran the spec\'s signal.on handler (the event loop is bound)'],
       [r.errors.length === 0, 'no capability is reported missing'],
