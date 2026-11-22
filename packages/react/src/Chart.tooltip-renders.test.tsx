@@ -10,6 +10,7 @@ import { createRoot } from 'react-dom/client'
 import { act } from 'react'
 import { describe, it, expect, vi } from 'vitest'
 import { forEachVariant } from './testing/variants'
+import { chartTooltip } from './testing/tooltip'
 
 const renders = vi.hoisted(() => ({ count: 0 }))
 vi.mock('@aster-charts/core', async (importOriginal) => {
@@ -37,7 +38,7 @@ forEachVariant(['interaction'], (Chart) => {
       const root = createRoot(container)
       act(() => { root.render(<Chart spec={spec} width={400} height={300} tooltip />) })
       const svg = container.querySelector('svg')!
-      const tip = (): string | null => container.querySelector('[data-testid="chart-tooltip"]')?.textContent ?? null
+      const tip = (): string | null => chartTooltip()?.textContent ?? null
       const at = renders.count
       const move = (x: number, y: number): void => {
         act(() => { svg.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: x, clientY: y })) })

@@ -15,6 +15,7 @@ vi.mock('@aster-charts/core/hit', async (importOriginal) => {
 import type { ChartHandle } from './Chart'
 import { ChartStream, type ChartStreamHandle } from './ChartStream'
 import { forEachVariant } from './testing/variants'
+import { chartTooltip } from './testing/tooltip'
 
 const RECT = { left: 0, top: 0, width: 400, height: 300, right: 400, bottom: 300, x: 0, y: 0, toJSON: () => ({}) } as DOMRect
 
@@ -116,7 +117,7 @@ describe('tooltips read the current scene', () => {
       const { host, rerender } = mount(<Chart spec={barSpec([{ cat: 'a', v: 5 }, { cat: 'b', v: 7 }])} width={100} height={100} renderer="canvas" tooltip />)
       const hover = (): string | undefined => {
         act(() => { host.dispatchEvent(new MouseEvent('mousemove', { clientX: 20, clientY: 80, bubbles: true })) })
-        return host.querySelector('[data-testid="chart-tooltip"]')?.textContent ?? undefined
+        return chartTooltip()?.textContent ?? undefined
       }
       expect(hover()).toContain('a')
       rerender(<Chart spec={barSpec([{ cat: 'zzz', v: 5 }, { cat: 'b', v: 7 }])} width={100} height={100} renderer="canvas" tooltip />)
@@ -131,7 +132,7 @@ describe('tooltips read the current scene', () => {
         // Per-item DOM: the pointer is over the mark element. Batched DOM: it is over the svg.
         const target = host.querySelector('svg g.mark-symbol path') ?? host
         act(() => { target.dispatchEvent(new MouseEvent('mousemove', { clientX: x, clientY: y, bubbles: true })) })
-        return host.querySelector('[data-testid="chart-tooltip"]')?.textContent ?? undefined
+        return chartTooltip()?.textContent ?? undefined
       }
       expect(hoverAt(10, 10)).toContain('p0')
       // The second scene shares NO key with the first: a hit index or tooltip read from the stale scene

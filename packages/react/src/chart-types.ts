@@ -232,16 +232,42 @@ export interface ChartProps {
    * `mark: { tooltip: { content: 'data' } }`). Resolved through the scene hit
    * index on every renderer (SVG, canvas and batched dense marks alike). Off by
    * default.
+   *
+   * The tooltip is placed as vega-tooltip places it: a `position: fixed` box
+   * rendered through a React portal into the document's body (into the
+   * fullscreen element while one is shown), 10px right of and below the
+   * pointer, flipped to the left and/or above the pointer where it would leave
+   * the viewport (above-left when it fits on no side). So an ancestor that
+   * scrolls or clips (`overflow: auto` / `hidden`) neither cuts it off nor grows
+   * its scroll area. Long values wrap inside the box (at most 240px wide, plus
+   * its padding). The box keeps `data-testid="chart-tooltip"` and
+   * `pointer-events: none`. See `tooltipContainer` to render it elsewhere.
    */
   tooltip?: boolean
   /**
    * Custom tooltip content rendered inside the chart's React tree (not a
-   * detached overlay). Providing this enables tooltips without `tooltip`. It is
+   * detached overlay: the portal keeps it in the tree, so context reaches it).
+   * It goes in the same placed box as the default content (see `tooltip`).
+   * Providing this enables tooltips without `tooltip`. It is
    * called for every hovered item that has a datum or a `tooltip` value, with
    * the datum (`{}` when the item has none) and `info`: the item's `tooltip`
    * value and the scene item itself. Return `null` to show nothing.
    */
   renderTooltip?: (datum: Record<string, unknown>, info: TooltipInfo) => React.ReactNode
+  /**
+   * Where the tooltip's box is rendered. Omitted (`undefined`): in the
+   * document's body, or the fullscreen element while there is one, as
+   * vega-tooltip does. An element: portalled into it, for a chart whose
+   * tooltip must share a layer or a style scope the body does not have, such
+   * as a modal `<dialog>` or a popover (the top layer covers the body) or a
+   * shadow root (its styles do not reach the body). `null`: inside the chart's
+   * own element. The box is `position: fixed` and placed in the viewport in
+   * every case; a transformed ancestor of the container (which makes it the
+   * fixed box's containing block) is measured and made up for when it
+   * translates, not when it scales or rotates. Needs `tooltip` or
+   * `renderTooltip` to do anything.
+   */
+  tooltipContainer?: HTMLElement | null
   /**
    * Budgets for untrusted specs (rows, marks, strings, paths, SVG size, time),
    * applied at every evaluation; a violation renders the error state and calls

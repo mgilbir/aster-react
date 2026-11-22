@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client'
 import { act } from 'react'
 import { describe, it, expect } from 'vitest'
 import { forEachVariant } from './testing/variants'
+import { chartTooltip } from './testing/tooltip'
 
 // The matrix runs every test below on <Chart>, <SvgChart> and <SvgChart interaction={interaction}>;
 // `Chart` is the variant's component (see testing/variants.tsx).
@@ -148,7 +149,7 @@ forEachVariant(['svg', 'canvas'], (Chart, variant) => {
       await act(async () => {
         canvas.dispatchEvent(new MouseEvent('mousemove', { clientX: 20, clientY: 80, bubbles: true }))
       })
-      const tip = container.querySelector('[data-testid="chart-tooltip"]')
+      const tip = chartTooltip()
       expect(tip?.textContent).toContain('cat')
       expect(tip?.textContent).toContain('a')
       await act(async () => {

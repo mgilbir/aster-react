@@ -16,7 +16,7 @@ full contract; in short:
 | interval brush (`onSelect`, `brush`) | yes | yes | yes |
 | bound inputs (`signal.bind`), `setSignal`, `signalListeners` | yes | yes (as signal overrides) | yes |
 | accessible tree, roving focus, legend toggling | yes | yes | yes |
-| tooltips (`tooltip`, `renderTooltip`) | yes | compile error; reported at runtime | yes |
+| tooltips (`tooltip`, `renderTooltip`, `tooltipContainer`) | yes | compile error; reported at runtime | yes |
 | point selection (`onPointSelect`, `selection`, `select`, `onSelectionChange`) | yes | compile error; reported at runtime | yes |
 | `signal.on` event streams, `preventDefault` | yes | reported: the chart renders but does not respond | yes |
 | `renderer="canvas"` | yes | compile error; renders SVG and reports | compile error; renders SVG and reports |
@@ -352,6 +352,22 @@ so a host can restyle Vega's tooltip or build its own. Two differences from vega
 signal a pointermove sets shows the value for that move (vega's shows the previous move's), and moving off the marks onto an axis
 hides the tooltip on both renderers (vega's SVG keeps it there; its canvas hides it). The hovered item is resolved through the scene hit index on every
 renderer (the SVG carries no per-item datum attribute, as vega's does not). Tooltips are off by default.
+
+**Where the tooltip shows.** As vega-tooltip's: a `position: fixed` box (`data-testid="chart-tooltip"`, `pointer-events: none`)
+rendered through a React portal into the document's body, or into the fullscreen element while one is shown, so an ancestor
+that scrolls or clips (`overflow: auto`, `overflow: hidden`, a `max-height` box) neither cuts it off nor grows its scroll area.
+It opens 10px right of and below the pointer's client point, and where the whole box would not fit in the viewport there, it
+opens below-left, then above-right, then above-left of the pointer (above-left when it fits on no side), as vega-tooltip's
+`anchor: 'cursor'` placement does; the viewport leaves out a classic scrollbar. It follows the pointer on a scrolled page and in a
+scrolled box. Long values wrap inside the box (at most 240px wide plus its padding; a value with no spaces breaks anywhere), for
+the default content and `renderTooltip`'s alike. The box is placed before the browser paints: each move renders it hidden,
+measures it once and moves it into place, and a move renders the tooltip, not the chart. Nothing is rendered on the server: the
+tooltip exists only after a hover. `tooltipContainer` chooses another place: an element to portal the box into (a modal
+`<dialog>` or a popover, whose top layer covers the body; a shadow root, whose styles do not reach the body), or `null` for
+inside the chart's own element. The box stays `position: fixed` and placed in the viewport; a transformed ancestor of the
+container (it becomes the fixed box's containing block) is made up for when it translates, not when it scales or rotates.
+`pnpm --filter @aster-charts/react test:browser` checks in Chromium, on `<Chart>` (SVG and canvas) and `<SvgChart interaction>`,
+the scroll box and the clipping card, the viewport's edges, long values inside the box and the scrolled page and box.
 
 ## Cursor
 

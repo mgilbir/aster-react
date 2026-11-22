@@ -5,6 +5,7 @@ import { describe, it, expect, afterEach } from 'vitest'
 import { compile } from '@aster-charts/vl'
 import { forEachVariant } from './testing/variants'
 import type { TooltipInfo } from './chart-types'
+import { chartTooltip } from './testing/tooltip'
 
 // The matrix runs every test below on <Chart>, <SvgChart> and <SvgChart interaction={interaction}>;
 // `Chart` is the variant's component (see testing/variants.tsx).
@@ -40,7 +41,7 @@ forEachVariant(['svg', 'interaction'], (Chart, variant) => {
       act(() => {
         sym.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: rect.left + 45, clientY: rect.top + 245 }))
       })
-      const tip = container.querySelector('[data-testid="chart-tooltip"]')
+      const tip = chartTooltip()
       expect(tip).not.toBeNull()
       expect(tip!.textContent).toContain('x:')
       expect(tip!.textContent).toContain('y:')
@@ -68,7 +69,7 @@ forEachVariant(['svg', 'interaction'], (Chart, variant) => {
       act(() => {
         sym.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: 45, clientY: 245 }))
       })
-      const tip = container.querySelector('[data-testid="chart-tooltip"]')!
+      const tip = chartTooltip()!
       expect(tip.querySelector('[data-testid="custom-tip"]')?.textContent).toBe('point a')
       act(() => { root.unmount() })
     })
@@ -88,7 +89,7 @@ forEachVariant(['svg', 'interaction'], (Chart, variant) => {
         act(() => { root.render(<Chart spec={dataSpec} width={400} height={300} tooltip />) })
         const sym = container.querySelector('svg .mark-symbol path') as Element
         act(() => { sym.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: 45, clientY: 245 })) })
-        const text = container.querySelector('[data-testid="chart-tooltip"]')!.textContent!
+        const text = chartTooltip()!.textContent!
         for (const [k, v] of Object.entries(row)) expect(text).toContain(`${k}: ${v}`)
         act(() => { root.render(<Chart spec={dataSpec} width={400} height={300} renderTooltip={(d) => { seen.push(d); return null }} />) })
         const sym2 = container.querySelector('svg .mark-symbol path') as Element
@@ -105,14 +106,18 @@ forEachVariant(['svg', 'interaction'], (Chart, variant) => {
         host.getBoundingClientRect = () => rect
         // symbol at x=1,y=2 on 0..10 scales over 400x300 + 5 padding
         act(() => { host.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: 5 + 40, clientY: 5 + 300 - 60 })) })
-        const text = container.querySelector('[data-testid="chart-tooltip"]')?.textContent ?? ''
+        const text = chartTooltip()?.textContent ?? ''
         for (const [k, v] of Object.entries(row)) expect(text).toContain(`${k}: ${v}`)
       })
     })
 
     // Issue #129: vega (with vega-tooltip) shows the item's `tooltip` value, not the datum.
     describe("shows the item's tooltip value, as vega-tooltip does", () => {
+      // (each hover mounts a chart of its own; the one before goes, with its tooltip, so the page shows one tooltip at a time)
+      let previous: { unmount(): void } | null = null
+      afterEach(() => { if (previous) act(() => { previous!.unmount() }); previous = null })
       const hover = (tooltipEncode: Record<string, unknown> | null, props: Record<string, unknown> = { tooltip: true }): { tip: Element | null; root: { unmount(): void } } => {
+        if (previous) act(() => { previous!.unmount() })
         const update: Record<string, unknown> = { ...spec.marks[0]!.encode.update }
         delete update.tooltip
         if (tooltipEncode) update.tooltip = tooltipEncode
@@ -123,7 +128,8 @@ forEachVariant(['svg', 'interaction'], (Chart, variant) => {
         act(() => { root.render(<Chart spec={tipSpec} width={400} height={300} {...props} />) })
         const sym = container.querySelector('svg .mark-symbol path') as Element
         act(() => { sym.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: 45, clientY: 245 })) })
-        return { tip: container.querySelector('[data-testid="chart-tooltip"]'), root }
+        previous = root
+        return { tip: chartTooltip(), root }
       }
 
       it('a mark without a tooltip channel shows no tooltip', () => {
@@ -176,7 +182,7 @@ forEachVariant(['svg', 'interaction'], (Chart, variant) => {
         const ox = Number(/translate\(([\d.]+),([\d.]+)\)/.exec(container.querySelector('svg > g')!.getAttribute('transform')!)![1])
         const oy = Number(/translate\(([\d.]+),([\d.]+)\)/.exec(container.querySelector('svg > g')!.getAttribute('transform')!)![2])
         act(() => { bar.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: ox + box[0]! + 2, clientY: oy + 98 })) })
-        const lines = [...container.querySelector('[data-testid="chart-tooltip"]')!.children].map((c) => c.textContent)
+        const lines = [...chartTooltip()!.children].map((c) => c.textContent)
         expect(lines).toEqual(['Date: Jan 01, 2026', 'Count: 29'])
         act(() => { root.unmount() })
       })
@@ -197,7 +203,7 @@ forEachVariant(['svg', 'interaction'], (Chart, variant) => {
       const at = (container: HTMLElement, x: number, y: number): Element | null => {
         const svg = container.querySelector('svg')!
         act(() => { svg.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: x, clientY: y })) })
-        return container.querySelector('[data-testid="chart-tooltip"]')
+        return chartTooltip()
       }
       const rect = (name: string, x: number, w: number, extra: Record<string, unknown>, from?: string): Record<string, unknown> => ({
         type: 'rect', name, ...(from ? { from: { data: from } } : {}),

@@ -8,7 +8,8 @@
  * mouse input and checks that, with each interaction prop enabled,
  *
  *   - the element under the pointer is the mark (not an overlay),
- *   - tooltips show,
+ *   - tooltips show, and are never clipped or misplaced by where the chart sits (a scroll box, an overflow-hidden card, the
+ *     viewport's edges, a scrolled page), with long values inside their box,
  *   - `signal.on` mark events fire (and the scene hit index sees the same click), on the SVG and the canvas renderer,
  *   - bound inputs (range / select / checkbox) can be operated and notify listeners,
  *   - brushing, drag-pan, wheel-zoom and their pointer capture still work,
@@ -116,6 +117,8 @@ window.__mount = (spec, props, record, listen, hostCss) => {
   window.__log = []
   const p = { ...props }
   for (const r of record || []) p[r] = rec(r)
+  // a renderTooltip given as '__long' renders the datum's long value (a function cannot cross from the test to the page)
+  if (p.renderTooltip === '__long') p.renderTooltip = (d) => React.createElement('span', { 'data-custom': '' }, 'custom ' + d.list + ' ' + d.words)
   if (listen && listen.length) p.signalListeners = Object.fromEntries(listen.map((n) => [n, rec('signal:' + n)]))
   window.__ref = React.createRef()
   if (window.__root) window.__root.unmount()
@@ -742,6 +745,182 @@ async function cursorSuite(page: Page, renderers: Array<'svg' | 'canvas'>): Prom
 }
 
 /**
+ * Where the tooltip shows (#152): never clipped or misplaced by where the chart sits. A fixed box outside the chart's ancestors, so a
+ * scroll box or an `overflow: hidden` card neither cuts it off nor grows its scroll area; flipped to the other side of the pointer
+ * at the viewport's right and bottom edges; long values wrap inside its background; next to the pointer on a scrolled page and in
+ * a scrolled box.
+ */
+async function tooltipPlacementSuite(page: Page, renderer: Renderer): Promise<void> {
+  const R: Record<string, unknown> = renderer === 'canvas' ? { renderer } : {}
+  const tag = renderer === 'canvas' ? ' (canvas)' : ''
+  const list = Array.from({ length: 40 }, (_, i) => `item${i}`).join(',')
+  const words = Array.from({ length: 30 }, (_, i) => `word${i}`).join(' ')
+  const rows = Array.from({ length: 30 }, (_, i) => ({ k: `row${i}`, v: 96, list, words }))
+  // 30 horizontal bars, 20px a row, each reaching the right of the plot: a tall chart, as in the issue
+  const tall = {
+    $schema: 'https://vega.github.io/schema/vega/v6.json',
+    width: 360, height: 600, padding: 5, autosize: 'none',
+    data: [{ name: 't', values: rows }],
+    scales: [
+      { name: 'y', type: 'band', domain: { data: 't', field: 'k' }, range: 'height', padding: 0.1 },
+      { name: 'x', type: 'linear', domain: [0, 100], range: 'width' },
+    ],
+    marks: [{ type: 'rect', from: { data: 't' }, encode: { update: {
+      y: { scale: 'y', field: 'k' }, height: { scale: 'y', band: 1 }, x: { value: 0 }, x2: { scale: 'x', field: 'v' }, fill: { value: 'steelblue' },
+      tooltip: { signal: '{title: datum.k, list: datum.list, words: datum.words}' },
+    } } }],
+  }
+  const hostCss = 'position:relative;width:370px;height:610px'
+  const mountIn = async (rootCss: string, props: Record<string, unknown> = { tooltip: true }): Promise<void> => {
+    await page.mouse.move(1, 1)
+    await page.evaluate(([css, sp, pr, hc]) => {
+      const root = document.getElementById('root')!
+      root.style.cssText = css as string
+      root.scrollTop = 0
+      root.scrollLeft = 0
+      ;(window as never as { __mount: (...a: unknown[]) => void }).__mount(sp, pr, [], [], hc)
+    }, [rootCss, tall, { width: 370, height: 610, ...props, ...R }, hostCss] as const)
+    await page.waitForSelector(renderer === 'canvas' ? '#chart-host canvas' : '#chart-host svg .mark-rect path')
+  }
+  /** The client point of the i-th bar, `fromRight` px in from its right end (from the scene: the canvas has no elements). */
+  const barPoint = (i: number, fromRight = 4): Promise<Pt> => page.evaluate(([i, fr]) => {
+    const w = window as never as { __ref: { current: { getScene(): { items: Array<{ marktype: string; items: Array<{ x: number; y: number; width: number; height: number }> }>; padding: { left: number; top: number } } } }; __toClient(x: number, y: number): Pt }
+    const scene = w.__ref.current.getScene()
+    const it = scene.items.find((n) => n.marktype === 'rect')!.items[i]!
+    return w.__toClient(scene.padding.left + it.x + it.width - fr, scene.padding.top + it.y + it.height / 2)
+  }, [i, fromRight] as const)
+  /** The bar whose row is nearest above a client y (the rows are 20px apart). */
+  const barAt = async (clientY: number): Promise<number> => {
+    const top = (await barPoint(0)).y
+    return Math.max(0, Math.min(29, Math.floor((clientY - top) / 20)))
+  }
+  interface Seen {
+    text: string | null; box: { left: number; top: number; right: number; bottom: number }; vw: number; vh: number
+    inRoot: boolean; clippers: string[]; scroll: [number, number]; textOut: string[]; lines: number
+  }
+  const look = (): Promise<Seen | null> => page.evaluate(() => {
+    const tip = document.querySelector('[data-testid="chart-tooltip"]')
+    const root = document.getElementById('root')!
+    if (!tip) return null
+    const r = tip.getBoundingClientRect()
+    // every ancestor that clips its overflow, up to the body (the viewport clips everything: that is the bounds check)
+    const clippers: string[] = []
+    for (let el = tip.parentElement; el && el !== document.documentElement; el = el.parentElement) {
+      const cs = getComputedStyle(el)
+      if (cs.overflowX !== 'visible' || cs.overflowY !== 'visible') clippers.push(`${el.tagName.toLowerCase()}#${el.id}(${cs.overflowX}/${cs.overflowY})`)
+    }
+    // every text node's line boxes must lie inside the tooltip's background
+    const textOut: string[] = []
+    let lines = 0
+    const walker = document.createTreeWalker(tip, NodeFilter.SHOW_TEXT)
+    for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+      const range = document.createRange()
+      range.selectNodeContents(n)
+      for (const q of range.getClientRects()) {
+        lines++
+        if (q.width === 0) continue
+        if (q.left < r.left - 0.5 || q.right > r.right + 0.5 || q.top < r.top - 0.5 || q.bottom > r.bottom + 0.5) {
+          textOut.push(`${JSON.stringify(n.textContent!.slice(0, 12))} [${q.left.toFixed(0)}..${q.right.toFixed(0)}] x [${q.top.toFixed(0)}..${q.bottom.toFixed(0)}]`)
+        }
+      }
+    }
+    return {
+      text: tip.textContent, box: { left: r.left, top: r.top, right: r.right, bottom: r.bottom },
+      vw: document.documentElement.clientWidth, vh: document.documentElement.clientHeight,
+      inRoot: root.contains(tip), clippers, scroll: [root.scrollWidth, root.scrollHeight] as [number, number], textOut, lines,
+    }
+  })
+  const scrollOf = (): Promise<[number, number]> => page.evaluate(() => { const r = document.getElementById('root')!; return [r.scrollWidth, r.scrollHeight] as [number, number] })
+  const hover = async (pt: Pt, row: number): Promise<Seen | null> => {
+    await page.mouse.move(pt.x, pt.y)
+    await page.waitForFunction((k) => document.querySelector('[data-testid="chart-tooltip"]')?.textContent?.startsWith(k) === true
+      && (document.querySelector('[data-testid="chart-tooltip"]') as HTMLElement).style.visibility !== 'hidden', `row${row}`, { timeout: 1000 }).catch(() => null)
+    return look()
+  }
+  const inViewport = (s: Seen): boolean => s.box.left >= 0 && s.box.top >= 0 && s.box.right <= s.vw + 0.5 && s.box.bottom <= s.vh + 0.5
+  const fmt = (s: Seen | null): string => s == null ? 'no tooltip' : `box [${s.box.left.toFixed(1)}, ${s.box.top.toFixed(1)}, ${s.box.right.toFixed(1)}, ${s.box.bottom.toFixed(1)}] in ${s.vw} x ${s.vh}`
+  /** Beside the pointer, at vega-tooltip's 10px, on whichever side it opened. */
+  const besidePointer = (s: Seen, pt: Pt): boolean =>
+    (Math.abs(s.box.left - (pt.x + 10)) < 1 || Math.abs(s.box.right - (pt.x - 10)) < 1) && (Math.abs(s.box.top - (pt.y + 10)) < 1 || Math.abs(s.box.bottom - (pt.y - 10)) < 1)
+
+  // (a) and (b): a chart in a scroll box, and in an overflow-hidden card; the bar at the box's bottom edge, at its right end
+  for (const [what, css] of [
+    ['a max-height, overflow-y: auto scroll box', 'max-height:200px;overflow-y:auto;width:380px;margin:40px 0 0 40px'],
+    ['an overflow: hidden card', 'overflow:hidden;width:380px;height:200px;margin:40px 0 0 40px'],
+  ] as const) {
+    console.log(`[tooltip placement] in ${what}${tag}`)
+    await mountIn(css)
+    const before = await scrollOf()
+    const rootBottom = await page.evaluate(() => document.getElementById('root')!.getBoundingClientRect().bottom)
+    const row = await barAt(rootBottom - 12)
+    const pt = await barPoint(row)
+    const s = await hover(pt, row)
+    check(s != null && s.text!.startsWith(`row${row}`), `${what}${tag}: hovering row ${row} at the box's bottom right shows its tooltip (${JSON.stringify(s?.text?.slice(0, 20))})`)
+    if (s == null) continue
+    check(!s.inRoot && s.clippers.length === 0, `${what}${tag}: the tooltip is not inside the box, nor in any ancestor that clips (${s.inRoot ? 'inside the box; ' : ''}${s.clippers.join(', ')})`)
+    check(inViewport(s), `${what}${tag}: the whole tooltip is in the viewport (${fmt(s)})`)
+    check(s.scroll[0] === before[0] && s.scroll[1] === before[1], `${what}${tag}: the box's scroll size is unchanged while it shows (${before.join(' x ')} -> ${s.scroll.join(' x ')})`)
+    check(besidePointer(s, pt), `${what}${tag}: it is 10px from the pointer at (${pt.x.toFixed(1)}, ${pt.y.toFixed(1)}) (${fmt(s)})`)
+  }
+
+  // (c) a chart at the right and bottom edges of the viewport: the tooltip opens above and to the left of the pointer
+  console.log(`[tooltip placement] at the bottom-right edge of the viewport${tag}`)
+  await mountIn('position:fixed;right:0;bottom:0;width:370px;height:610px')
+  {
+    const pt = await barPoint(29)
+    const s = await hover(pt, 29)
+    check(s != null && s.text!.startsWith('row29'), `viewport edge${tag}: the last bar shows its tooltip (${JSON.stringify(s?.text?.slice(0, 20))})`)
+    if (s != null) {
+      check(inViewport(s), `viewport edge${tag}: the whole tooltip is in the viewport (${fmt(s)})`)
+      check(Math.abs(s.box.right - (pt.x - 10)) < 1 && Math.abs(s.box.bottom - (pt.y - 10)) < 1,
+        `viewport edge${tag}: it flipped above and left of the pointer at (${pt.x.toFixed(1)}, ${pt.y.toFixed(1)}), 10px off (${fmt(s)})`)
+    }
+    // the right edge alone: the first row on screen, near the top of the viewport, opens below and to the left
+    const top = await page.evaluate(() => document.getElementById('chart-host')!.getBoundingClientRect().top)
+    const row = await barAt(Math.max(top, 0) + 40)
+    const pt2 = await barPoint(row)
+    const s2 = await hover(pt2, row)
+    check(s2 != null && inViewport(s2) && Math.abs(s2.box.right - (pt2.x - 10)) < 1 && Math.abs(s2.box.top - (pt2.y + 10)) < 1,
+      `viewport right edge${tag}: row ${row} opens below and left of the pointer, inside the viewport (${fmt(s2)})`)
+  }
+
+  // (d) long values: a comma-separated list with no spaces and a run of words, in the default content and in renderTooltip's
+  for (const [what, props] of [['the default content', { tooltip: true }], ['renderTooltip content', { renderTooltip: '__long' }]] as const) {
+    console.log(`[tooltip placement] long values stay inside the box: ${what}${tag}`)
+    await mountIn('margin:20px 0 0 20px', props)
+    const pt = await barPoint(3, 300)
+    await page.mouse.move(pt.x, pt.y)
+    await page.waitForFunction(() => { const t = document.querySelector('[data-testid="chart-tooltip"]') as HTMLElement | null; return t != null && t.style.visibility !== 'hidden' && (t.textContent ?? '').includes('item39') }, null, { timeout: 1000 }).catch(() => null)
+    const s = await look()
+    check(s != null && s.text!.includes('item39') && s.text!.includes('word29'), `${what}${tag}: the tooltip shows both long values`)
+    if (s == null) continue
+    check(s.textOut.length === 0 && s.lines > 2, `${what}${tag}: every text line (${s.lines}) lies inside the tooltip's background ${fmt(s)}${s.textOut.length ? `; outside: ${s.textOut.slice(0, 3).join('; ')}` : ''}`)
+    check(inViewport(s) && besidePointer(s, pt), `${what}${tag}: and the box is beside the pointer, in the viewport (${fmt(s)})`)
+  }
+
+  // (e) the page scrolled, and the chart in a scrolled box: the tooltip is next to the pointer
+  for (const [what, css, scroll] of [
+    ['a scrolled page', 'padding:900px 0 900px 30px', 'window.scrollTo(0, 820)'],
+    ['a scrolled box', 'max-height:300px;overflow:auto;width:400px;margin:30px', 'document.getElementById("root").scrollTop = 230'],
+  ] as const) {
+    console.log(`[tooltip placement] beside the pointer on ${what}${tag}`)
+    await mountIn(css)
+    await page.evaluate(scroll)
+    await page.waitForTimeout(20)
+    const rootTop = await page.evaluate(() => Math.max(0, document.getElementById('root')!.getBoundingClientRect().top))
+    const row = await barAt(rootTop + 100)
+    const pt = await barPoint(row, 200)
+    const s = await hover(pt, row)
+    check(s != null && s.text!.startsWith(`row${row}`) && besidePointer(s, pt) && Math.abs(s.box.left - (pt.x + 10)) < 1 && Math.abs(s.box.top - (pt.y + 10)) < 1,
+      `${what}${tag}: row ${row}'s tooltip opens 10px below and right of the pointer at (${pt.x.toFixed(1)}, ${pt.y.toFixed(1)}) (${fmt(s)})`)
+    await page.evaluate(() => window.scrollTo(0, 0))
+  }
+
+  await page.mouse.move(1, 1)
+  await page.evaluate(() => { document.getElementById('root')!.style.cssText = ''; window.scrollTo(0, 0) })
+}
+
+/**
  * `transition`: new data is drawn as real frames (requestAnimationFrame in Chromium), and the last one is exactly the svg a
  * chart without `transition` draws for that data.
  */
@@ -1064,6 +1243,7 @@ try {
       // (the canvas renderer is <Chart>'s: every interaction check runs on it too)
       for (const renderer of variant === 'Chart' ? ['svg', 'canvas'] as const : ['svg'] as const) {
         await suite(page, renderer)
+        await tooltipPlacementSuite(page, renderer)
         await tabStopSuite(page, renderer)
       }
       await cursorSuite(page, variant === 'Chart' ? ['svg', 'canvas'] : ['svg'])
