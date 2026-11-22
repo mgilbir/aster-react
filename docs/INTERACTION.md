@@ -326,7 +326,8 @@ every mark that reads a signal included): Aster runs them in the order they were
 **Deviation from Vega: a signal write is a fresh render.** Aster is a pure function of (spec, data, signals): the scene
 after a write equals the scene a fresh chart renders with those signal values. Vega's own second render can differ from
 its own fresh render of the same signals, because it retains dataflow state: autosize runs once and again only when
-width/height/padding/autosize change, so a chart whose content outgrows the view keeps its first size. The signals sweep
+width, height or padding change (vega-view `initializeResize`; a new `autosize` value waits for one of them), so a chart whose
+content outgrows the view keeps its first size. The signals sweep
 (`pnpm sweep-signals`, 166 cases) counts those cases as `retained` when Aster equals Vega's fresh render and Vega's
 incremental render differs: 103 ok, 60 retained, 1 both-refused, 2 node-error, 0 differ, with a ceiling on `retained`
 that can only be lowered (`scripts/gates.mjs`).

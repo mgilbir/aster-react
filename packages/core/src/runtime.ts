@@ -14,6 +14,7 @@ import { alignIndices, carryByAlignment, carryBySources, sourceNumbersOf, type I
 import { applyTransforms, applyTransformsToSharedRows, copiesRows, rowUseOf, sortOrder, getField, geoJSONPath, type Row, type TransformContext } from './transform.js'
 import { fieldOf, flatKeyFn, groupKeyFn } from './row-keys.js'
 import { atRandomSite, contentKey, mayDrawRandom, normalPairs, replayable } from './random-tape.js'
+import { autosizeOf as autosizeValueOf, paddingOf, type Autosize, type AutosizeType, type Padding } from './view-props.js'
 import { lexedText } from './expr-text.js'
 import { isEngineNode, noteEngineScene } from './scene-registry.js'
 import { parseExpressionCached, type Expr } from './expr-parser.js'
@@ -224,6 +225,11 @@ interface ScaleEntry {
 interface IncrementalState {
   /** Evaluation counter; reused items keep the generation they were encoded in. */
   gen: number
+  /**
+   * The padding and autosize the view's signals gave this evaluation, when one of them reads data or a scale (see
+   * `evaluateChartPass`): the next evaluation lays its view out with them first.
+   */
+  viewLayout?: ViewLayout
   /**
    * What the first pass of a view that fits its viewport left, when this state is the second's: the next evaluation's first pass is
    * made from it. Absent when the evaluation made one pass, or when its first pass failed (it is then made from this state, as before).
@@ -850,6 +856,8 @@ function prepareChartCtx(
   passMemory?: PassMemory,
   /** The state of the previous evaluation this pass reuses (see `EvalContext.prev`); the view's id counter is the committed state's. */
   prev: IncrementalState | undefined = txn.prev,
+  /** Stop once the signals that read no data or scale are resolved: what they hold is all the caller reads (see `evaluateChartPass`). */
+  signalsOnly = false,
 ): { ctx: EvalContext; width: number; height: number } {
   // The deadline belongs to the enclosing limits scope (evaluateChart /
   // getChartInfo / renderSpec / session), so one wall clock covers the whole
@@ -861,7 +869,7 @@ function prepareChartCtx(
     if (meter) meter.clock.check(phase)
   }
   checkDeadline('startup')
-  const signals = dict(chart.signals, input.signals)
+  const signals = sizeSignals(chart, input)
   let width = signed?.width ?? resolveSize(chart.width, viewOverride(chart, input, 'width'), signals)
   // A Vega spec can define the chart height as a `height` signal (a special
   // signal that doubles as the view size), e.g. `signals:[{name:'height',
@@ -976,6 +984,19 @@ function prepareChartCtx(
   // also make the first pass's params differ from the previous evaluation's, so
   // it could never be incremental.
   for (let i = 0; i < 3 && resolveSignalUpdates(ctx, true); i++) { /* to a fixed point */ }
+  if (signalsOnly) return { ctx, width, height }
+  // A view size that is its signal's is what the signal holds (vega: the root group's size is `{signal: 'width'}`), as soon as it is
+  // known: the datasets and scales built from here on read it. One that reads the dataflow is settled below.
+  // (no closure here: one made in this function that reads `ctx` would keep it, and the evaluations before it, alive through the
+  // closures `runtime` holds -- they share this function's context)
+  for (const dim of ['width', 'height'] as const) {
+    if (viewSignalReadsDataflow(chart, dim)) continue
+    const v = viewSizeChange(chart, input, explicitSize, signed, ctx, dim, ctx.signalParams[dim], dim === 'width' ? width : height)
+    if (v === undefined) continue
+    if (dim === 'width') { width = v; ctx.width = v } else { height = v; ctx.height = v }
+    ctx.fpMemo = undefined
+    ctx.readsMemo = undefined
+  }
   buildDatasets(ctx, input.data ?? {})
   const readsScales = datasetsReadScales(chart)
   let changed = true
@@ -996,37 +1017,23 @@ function prepareChartCtx(
   }
   resolveSignalUpdates(ctx)
   buildScales(ctx)
-  // A Vega spec can define the chart height as a `height` signal (a special
-  // signal that doubles as the view size), e.g. `signals:[{name:'height',
-  // update: ...}]`, without a top-level numeric height. Honor it now that the
-  // signal is resolved so the content is not defaulted to 500.
-  const hasHeightSignal = (chart.signalDefs ?? []).some((s) => s.name === 'height')
-  if (height === DEFAULT_SIZE && hasHeightSignal && typeof ctx.signalParams.height === 'number') {
-    height = ctx.signalParams.height
-    ctx.height = height
-    buildScales(ctx)
-  }
-  // A `width` signal whose update references a scale domain (vega-lite's
-  // step-sized band dimensions: bandspace(domain('x').length, ...) * x_step)
-  // must be re-evaluated now that the scales — and their domains — exist.
-  if (width === DEFAULT_SIZE && (chart.signalDefs ?? []).some((s) => s.name === 'width')) {
-    const def = (chart.signalDefs ?? []).find((s) => s.name === 'width')
-    const update = (def?.update ?? def?.init) as string | undefined
-    // a width the host set (setSignal / input.signals) is the signal's value; its init never runs over it
-    const hosted = ctx.hostSignals.has('width') ? ctx.signalParams.width : undefined
-    if (typeof update === 'string' || typeof hosted === 'number') {
-      try {
-        const v = typeof hosted === 'number' ? hosted : ctx.runtime.expr(update as string)({}, ctx.signalParams) as unknown
-        if (typeof v === 'number' && Number.isFinite(v)) {
-          width = v
-          ctx.width = v
-          ctx.signalParams.width = v
-          ctx.fpMemo = undefined
-          ctx.readsMemo = undefined
-          buildScales(ctx)
-        }
-      } catch { /* leave the default */ }
+  // A view size that is its signal's, now that everything the signal reads exists: vega-lite's step-sized band dimensions
+  // (`bandspace(domain('x').length, ...) * x_step`) read a scale domain, so the update runs again once the scales are built.
+  for (const dim of ['width', 'height'] as const) {
+    if (!sizeFollowsSignal(chart, input, explicitSize, signed, ctx, dim)) continue
+    const def = (chart.signalDefs ?? []).find((s) => s.name === dim)
+    const update = def?.update ?? def?.init
+    let value = ctx.signalParams[dim]
+    if (typeof update === 'string') {
+      try { value = ctx.runtime.expr(update)({}, ctx.signalParams) } catch { continue }
     }
+    const v = viewSizeChange(chart, input, explicitSize, signed, ctx, dim, value, dim === 'width' ? width : height)
+    if (v === undefined) continue
+    if (dim === 'width') { width = v; ctx.width = v } else { height = v; ctx.height = v }
+    ctx.signalParams[dim] = v
+    ctx.fpMemo = undefined
+    ctx.readsMemo = undefined
+    buildScales(ctx)
   }
   buildProjections(ctx)
   // (a view size that is the signal that threw is the signal's value, none: 0)
@@ -3214,8 +3221,10 @@ function buildContentPass(
     || ctx.rawGuides
     || cut !== undefined
     || autosizeOf(chart, input).type === 'none'
-    ? ctx.chart.padding
-    : computeGuidePadding(items, width, height, ctx.chart.padding, isFit(autosizeOf(chart, input).type))
+    // (no autosize type at all: the layout returns before it measures anything)
+    || autosizeOf(chart, input).type === 'skip'
+    ? viewLayout(chart, input).padding
+    : computeGuidePadding(items, width, height, viewLayout(chart, input).padding, isFit(autosizeOf(chart, input).type))
   const ordered = paintOrderOf(items)
   // (made and laid out: what is the same as the content of this pass in the evaluation before is that content)
   const content = ctx.prev?.content !== undefined ? shareContent(ctx.prev.content, ordered) : ordered
@@ -3393,15 +3402,120 @@ function registersTuples(chart: CompiledChart, input: RuntimeInput): boolean {
   return v !== null && typeof v === 'object' && !isTuple(v)
 }
 
+/** The background a value of the `background` signal draws: a truthy one as its text (vega-scenegraph writes it as the fill), else none. */
+const backgroundText = (v: unknown): string | null => (v ? (typeof v === 'string' ? v : String(v)) : null)
+
+/** What of the view's layout is a signal: which of its signals the spec has (declared, or made by a `{signal}` property). */
+interface ViewSignalUse {
+  padding: boolean
+  autosize: boolean
+  /** `width` / `height` signals with an `update` or an `init` */
+  sizes: Array<'width' | 'height'>
+  /** the view signals whose value is known before anything is built: they read no data, no scale, and no signal that does */
+  early: ReadonlySet<string>
+  /** a view signal with an `update` or an `init` that is early: the signals are resolved before the evaluation */
+  resolve: boolean
+}
+const VIEW_SIGNAL_USE = new WeakMap<CompiledChart, ViewSignalUse | null>()
+
+function viewSignalUse(chart: CompiledChart): ViewSignalUse | null {
+  let use = VIEW_SIGNAL_USE.get(chart)
+  if (use !== undefined) return use
+  const defs = chart.signalDefs ?? []
+  const index = signalIndex(chart)
+  const def = (name: string): CompiledSignalDef | undefined => (index.has(name) ? defs[index.get(name)!] : undefined)
+  const computed = (name: string): boolean => { const d = def(name); return d !== undefined && (d.update !== undefined || d.init !== undefined) }
+  const sizes = (['width', 'height'] as const).filter(computed)
+  const padding = def('padding') !== undefined
+  const autosize = def('autosize') !== undefined
+  if (!padding && !autosize && !sizes.length) use = null
+  else {
+    const early = new Set<string>()
+    for (const name of ['padding', 'autosize', 'width', 'height']) if (def(name) !== undefined && !viewSignalReadsDataflow(chart, name)) early.add(name)
+    // (a view that fits its viewport reads its size off its first pass, see evaluateViewPass: its sizes need not be known before)
+    const sizesBefore = !isFit((chart.autosize ?? 'pad') as AutosizeType) || autosize
+    const resolve = ['padding', 'autosize'].some((n) => computed(n) && early.has(n)) || (sizesBefore && sizes.some((n) => early.has(n)))
+    use = { padding, autosize, sizes, early, resolve }
+  }
+  VIEW_SIGNAL_USE.set(chart, use)
+  return use
+}
+
+/**
+ * An evaluation of a view whose padding, autosize or size is a signal (a `{signal}` property, or a signal of that name the spec
+ * declares). vega lays the view out with what those signals hold: the padding read by vega-view (padding.js), the autosize by its
+ * `type` and `contains`, the size as the root group's. The layout is decided before the content is built (the size the content is
+ * built at depends on it), so the signals that read nothing of the dataflow are resolved first, exactly as the evaluation resolves
+ * them (its signals-only start). One that reads data or a scale is only known once the evaluation has run: the view is laid out with
+ * what it held in the evaluation before (or the static value) and, when the evaluation finds another value, laid out again with it.
+ */
 function evaluateChartPass(chart: CompiledChart, hostInput: RuntimeInput, txn: EvalTxn, done: { draft?: IncrementalState; failed?: boolean }): SceneRoot {
+  const use = viewSignalUse(chart)
+  if (use === null) return evaluateViewPass(chart, hostInput, txn, done)
+  // (the same replayable source for the signals resolved first and for the evaluation: a site draws once, see random-tape.ts)
+  const input: RuntimeInput = hostInput.random ? { ...hostInput, random: replayable(hostInput.random) } : hostInput
+  const known = use.resolve ? prepareChartCtx(chart, input, txn, undefined, undefined, undefined, txn.prev, true).ctx.signalParams : dict(chart.signals, input.signals)
+  const fallback = txn.prev?.viewLayout ?? staticViewLayout(chart)
+  // (a signal the host wrote is known whatever it reads)
+  const isKnown = (name: string): boolean => use.early.has(name) || (input.signals !== undefined && Object.hasOwn(input.signals, name))
+  const layoutFrom = (values: Record<string, unknown>, guess: ViewLayout): ViewLayout => ({
+    padding: !use.padding ? chart.padding : values.padding !== undefined ? paddingOf(values.padding) : guess.padding,
+    autosize: !use.autosize ? staticViewLayout(chart).autosize : values.autosize !== undefined ? autosizeValueOf(values.autosize) : guess.autosize,
+  })
+  const first = layoutFrom(known, fallback)
+  // (what is not known yet keeps the guess)
+  if (use.padding && !isKnown('padding')) first.padding = fallback.padding
+  if (use.autosize && !isKnown('autosize')) first.autosize = fallback.autosize
+  const sizes = dict<unknown>()
+  for (const dim of use.sizes) if (isKnown(dim) && known[dim] !== undefined) sizes[dim] = known[dim]
+  const settled = (use.padding ? isKnown('padding') : true) && (use.autosize ? isKnown('autosize') : true)
+  if (settled) return evaluateViewPass(chart, { ...input, [VIEW_BEFORE]: { ...first, sizes } } as ViewInput, txn, done)
+  // A padding or autosize that reads the dataflow: the evaluation tells what it is. What it logs is held until it is known to be
+  // kept (then logged, and what it logs later goes straight through), or dropped with it.
+  const { logger: holding, settle } = heldLogger(input.logger ?? consoleLogger)
+  let scene = evaluateViewPass(chart, { ...input, logger: holding, [VIEW_BEFORE]: { ...first, sizes } } as ViewInput, txn, done)
+  const found = layoutFrom((scene as unknown as { signalParams: Record<string, unknown> }).signalParams, first)
+  const kept = sameLayout(found, first)
+  settle(kept)
+  if (!kept) scene = evaluateViewPass(chart, { ...input, [VIEW_BEFORE]: { ...found, sizes } } as ViewInput, txn, done)
+  // (the next evaluation starts from the layout this one found)
+  if (done.draft) done.draft.viewLayout = found
+  return scene
+}
+
+/** A logger that holds what it is given until `settle`: kept, it logs it to `logger` and passes everything after; dropped, it drops it all. */
+function heldLogger(logger: Logger): { logger: Logger; settle(keep: boolean): void } {
+  type Level = 'error' | 'warn' | 'info' | 'debug'
+  let held: Array<{ level: Level; args: unknown[] }> | null = []
+  let keep = false
+  const at = (level: Level) => (...args: unknown[]): void => {
+    if (held !== null) held.push({ level, args })
+    else if (keep) logger[level]?.(...args)
+  }
+  return {
+    logger: { error: at('error'), warn: at('warn'), info: at('info'), debug: at('debug') },
+    settle(k) {
+      const was = held ?? []
+      held = null
+      keep = k
+      if (k) for (const { level, args } of was) logger[level]?.(...args)
+    },
+  }
+}
+
+const sameLayout = (a: ViewLayout, b: ViewLayout): boolean =>
+  a.autosize.type === b.autosize.type && a.autosize.contains === b.autosize.contains
+  && a.padding.top === b.padding.top && a.padding.right === b.padding.right && a.padding.bottom === b.padding.bottom && a.padding.left === b.padding.left
+
+function evaluateViewPass(chart: CompiledChart, hostInput: RuntimeInput, txn: EvalTxn, done: { draft?: IncrementalState; failed?: boolean }): SceneRoot {
   // an injected random source is drawn from once per site and run, however many passes and evaluations repeat it (see random-tape.ts)
   const input: RuntimeInput = hostInput.random ? { ...hostInput, random: replayable(hostInput.random) } : hostInput
   // (the spec's autosize, or a fit to the container the host measured: see autosizeOf)
   const { type: auto, contains: autosizeContains } = autosizeOf(chart, input)
-  const base = chart.padding
+  const base = viewLayout(chart, input).padding
   // Differential-update generation (`txn.gen`): an unchanged (reused) item keeps
   // the generation it was encoded in, so the DOM patcher can skip it.
-  const signals = dict(chart.signals, input.signals)
+  const signals = sizeSignals(chart, input)
   let initialW = resolveSize(chart.width, viewOverride(chart, input, 'width'), signals)
   let initialH = resolveSize(chart.height, viewOverride(chart, input, 'height'), signals)
   // A negative view size: vega's first pass lays out content ranged on the signal as written (a scale over
@@ -3410,7 +3524,7 @@ function evaluateChartPass(chart: CompiledChart, hostInput: RuntimeInput, txn: E
   // the first pass. So the padding comes from a build with the signed sizes and the content from the clamped one.
   const signedW = signedViewSize(chart.width, viewOverride(chart, input, 'width'), signals)
   const signedH = signedViewSize(chart.height, viewOverride(chart, input, 'height'), signals)
-  const signedPadding = (signedW !== undefined || signedH !== undefined) && (auto === undefined || auto === 'pad')
+  const signedPadding = (signedW !== undefined || signedH !== undefined) && auto === 'pad'
     ? buildContent(chart, input, signedW ?? initialW, signedH ?? initialH, txn, false, { width: signedW, height: signedH }).padding
     : undefined
 
@@ -3430,6 +3544,14 @@ function evaluateChartPass(chart: CompiledChart, hostInput: RuntimeInput, txn: E
     // autosize `none` with `contains: "padding"`: the view's width / height INCLUDE the padding, so the group (the
     // width / height signals, every scale and expression that reads them) gets what is left (vega-view-transforms
     // viewSizeLayout: `width = viewWidth`, the padding taken out of it), as a resize of the view does.
+    // (a size that is a signal reading the dataflow is only known once a pass has run: one unfitted pass finds it, as vega's first
+    // dataflow run does before its layout resizes the view)
+    if (sizeReadsDataflow(chart, input, 'width') || sizeReadsDataflow(chart, input, 'height')) {
+      const quiet = { error: () => undefined, warn: () => undefined, info: () => undefined, debug: () => undefined }
+      const found = buildContent(chart, { ...input, logger: quiet }, initialW, initialH, txn, false)
+      initialW = found.width
+      initialH = found.height
+    }
     cw = initialW - base.left - base.right
     ch = initialH - base.top - base.bottom
     // A size smaller than the padding (no width at all, say) leaves a negative view: vega keeps it (viewSizeLayout does not clamp
@@ -3492,20 +3614,27 @@ function evaluateChartPass(chart: CompiledChart, hostInput: RuntimeInput, txn: E
   const fitW = (auto === 'fit' || auto === 'fit-x') && firstPassPadding !== undefined
   const fitH = (auto === 'fit' || auto === 'fit-y') && firstPassPadding !== undefined
   const contains = autosizeContains === 'padding'
+  // (no layout, or one of no known type, leaves the view the size its signals and padding give it -- the padding taken out of it
+  // first when the size contains it (vega-view `viewWidth`) -- and the content the size of its `width` / `height`)
+  const unlaid = auto === 'skip' || auto === 'shift'
   const sceneWidth = insidePadding !== undefined
     ? Math.max(0, insidePadding.width + base.left + base.right)
     : fitW
     ? initialW + (contains ? 0 : base.left + base.right)
-    : auto !== 'none'
-      ? width + padding.left + padding.right
-      : width + ctx.chart.padding.left + ctx.chart.padding.right
+    : unlaid
+      ? Math.max(0, width + (contains ? 0 : base.left + base.right))
+      : auto !== 'none'
+        ? width + padding.left + padding.right
+        : width + base.left + base.right
   const sceneHeight = insidePadding !== undefined
     ? Math.max(0, insidePadding.height + base.top + base.bottom)
     : fitH
     ? initialH + (contains ? 0 : base.top + base.bottom)
-    : auto !== 'none'
-      ? height + padding.top + padding.bottom
-      : height + ctx.chart.padding.top + ctx.chart.padding.bottom
+    : unlaid
+      ? Math.max(0, height + (contains ? 0 : base.top + base.bottom))
+      : auto !== 'none'
+        ? height + padding.top + padding.bottom
+        : height + base.top + base.bottom
 
   const scene: SceneRoot = {
     width: sceneWidth,
@@ -3515,7 +3644,7 @@ function evaluateChartPass(chart: CompiledChart, hostInput: RuntimeInput, txn: E
     plotWidth: ctx.rootUnsized ? 0 : insidePadding !== undefined && insidePadding.width < 0 ? insidePadding.width : width,
     plotHeight: ctx.rootUnsized ? 0 : insidePadding !== undefined && insidePadding.height < 0 ? insidePadding.height : height,
     // (`background` is a view signal: a spec that declares one sets the background through it; one with no value leaves the spec's)
-    background: ctx.signalParams.background !== undefined && (chart.signalDefs ?? []).some((d) => d.name === 'background') ? (ctx.signalParams.background as string | null) : ctx.chart.background,
+    background: ctx.signalParams.background !== undefined && (chart.signalDefs ?? []).some((d) => d.name === 'background') ? backgroundText(ctx.signalParams.background) : ctx.chart.background,
     frameStroke: ctx.chart.frameStroke,
     frameFill: (ctx.chart as unknown as { frameFill?: string }).frameFill,
     ...(ctx.chart.frameFillTransparent ? { frameFillTransparent: true as const } : {}),
@@ -3530,7 +3659,9 @@ function evaluateChartPass(chart: CompiledChart, hostInput: RuntimeInput, txn: E
     frameStrokeDashOffset: ctx.chart.frameStrokeDashOffset,
     frameStrokeCap: ctx.chart.frameStrokeCap,
     frameStrokeJoin: ctx.chart.frameStrokeJoin,
-    padding: auto === 'none' ? ctx.chart.padding : padding,
+    // (a layout of no known type moves the view's origin by what the content overflows, and nothing else: vega-view's offset is the
+    // padding plus the origin)
+    padding: auto === 'none' || auto === 'skip' ? base : auto === 'shift' ? { top: padding.top, right: base.right, bottom: base.bottom, left: padding.left } : padding,
     items,
     ...(built.frame ? { ...built.frame.paint, ...(built.frame.x !== 0 ? { frameX: built.frame.x } : {}), ...(built.frame.y !== 0 ? { frameY: built.frame.y } : {}), ...(built.frame.aria !== undefined ? { frameAria: built.frame.aria } : {}) } : {}),
   }
@@ -3725,8 +3856,37 @@ function viewOverride(chart: CompiledChart, input: RuntimeInput, dim: 'width' | 
   if (typeof written === 'number') return written
   const measured = input.measuredSize?.[dim]
   if (measured == null) return undefined
-  if (chart.contentSized?.includes(dim) || chart.autosize === 'none') return undefined
+  if (chart.contentSized?.includes(dim) || keepsOwnSize(viewLayout(chart, input).autosize.type)) return undefined
   return drivesSize(chart, 'width') || drivesSize(chart, 'height') ? undefined : measured
+}
+
+/** An autosize that never resizes the view: its size is its `width`, `height` and padding (`none`, and no layout at all). */
+const keepsOwnSize = (type: AutosizeType): boolean => type === 'none' || type === 'skip' || type === 'shift'
+
+/** The view's padding and autosize, as one evaluation lays the view out. */
+interface ViewLayout { padding: Padding; autosize: Autosize }
+
+/**
+ * What the view's signals hold before an evaluation runs, when its padding, autosize or size is a signal (see `evaluateChartPass`):
+ * the layout the evaluation uses, and the values of the `width` / `height` signals that are known before anything is built.
+ */
+interface ViewBefore extends ViewLayout { sizes: Record<string, unknown> }
+const VIEW_BEFORE = Symbol('viewBefore')
+type ViewInput = RuntimeInput & { [VIEW_BEFORE]?: ViewBefore }
+
+/** The view's layout in an evaluation: what its signals gave it (`evaluateChartPass`), else the spec's (or config's) properties. */
+function viewLayout(chart: CompiledChart, input: RuntimeInput): ViewLayout {
+  return (input as ViewInput)[VIEW_BEFORE] ?? staticViewLayout(chart)
+}
+
+function staticViewLayout(chart: CompiledChart): ViewLayout {
+  return { padding: chart.padding, autosize: { type: (chart.autosize ?? 'pad') as AutosizeType, contains: chart.autosizeContains } }
+}
+
+/** The signals the view size is read from before an evaluation runs: the static ones, those known before it (see `ViewBefore`), the host's. */
+function sizeSignals(chart: CompiledChart, input: RuntimeInput): Record<string, unknown> {
+  const before = (input as ViewInput)[VIEW_BEFORE]
+  return dict(chart.signals, before?.sizes, input.signals)
 }
 
 /**
@@ -3736,11 +3896,12 @@ function viewOverride(chart: CompiledChart, input: RuntimeInput, dim: 'width' | 
  * whose size is the chart's own (a block <div> with no height) keeps it, where the content grew on every measurement
  * (issue #128). Every other view keeps the spec's autosize.
  */
-function autosizeOf(chart: CompiledChart, input: RuntimeInput): { type: CompiledChart['autosize']; contains: string | undefined } {
+function autosizeOf(chart: CompiledChart, input: RuntimeInput): Autosize {
   const w = fillsContainer(chart, input, 'width')
   const h = fillsContainer(chart, input, 'height')
-  if (!w && !h) return { type: chart.autosize, contains: chart.autosizeContains }
-  const own = chart.autosize
+  const { autosize } = viewLayout(chart, input)
+  if (!w && !h) return autosize
+  const own = autosize.type
   const type = (w && h) || (w && (own === 'fit' || own === 'fit-y')) || (h && (own === 'fit' || own === 'fit-x')) ? 'fit' : w ? 'fit-x' : 'fit-y'
   return { type, contains: 'padding' }
 }
@@ -3750,12 +3911,71 @@ function fillsContainer(chart: CompiledChart, input: RuntimeInput, dim: 'width' 
   return input.measuredSize?.[dim] != null && input[dim] == null && typeof input.signals?.[dim] !== 'number' && viewOverride(chart, input, dim) !== undefined
 }
 
-const isFit = (type: CompiledChart['autosize']): boolean => type === 'fit' || type === 'fit-x' || type === 'fit-y'
+const isFit = (type: AutosizeType): boolean => type === 'fit' || type === 'fit-x' || type === 'fit-y'
 
 /** Whether the spec drives a view dimension itself: a `{signal}` size or a declared `width` / `height` signal. */
 function drivesSize(chart: CompiledChart, dim: 'width' | 'height'): boolean {
   const size = chart[dim]
   return (size !== null && typeof size === 'object' && 'signal' in size) || (chart.signalDefs ?? []).some((d) => d.name === dim)
+}
+
+/** A view size as the root group takes it from its signal (vega-view-transforms: `Math.max(0, group.width || 0)`); undefined: no value yet. */
+function viewSizeValue(v: unknown): number | undefined {
+  if (v === undefined) return undefined
+  const n = +(v as number)
+  return Number.isFinite(n) ? Math.max(0, n) : 0
+}
+
+/**
+ * Whether the view's `dim` is read from its signal in this pass: the size is the signal (a `{signal}` property, or a signal the spec
+ * declares by that name) and nothing fixes it -- the host's size or write, a measured container, a fit resize, the signed first pass.
+ */
+function sizeFollowsSignal(
+  chart: CompiledChart, input: RuntimeInput, explicitSize: { width: boolean; height: boolean }, signed: { width?: number; height?: number } | undefined,
+  ctx: EvalContext, dim: 'width' | 'height',
+): boolean {
+  const size = chart[dim]
+  return size !== null && typeof size === 'object' && 'signal' in size && size.signal === dim && !explicitSize[dim] && signed?.[dim] === undefined
+    && !ctx.hostSignals.has(dim) && viewOverride(chart, input, dim) === undefined
+}
+
+/** Whether the view's `dim` is a signal that reads data or a scale (known only once a pass has run), and nothing fixes it. */
+function sizeReadsDataflow(chart: CompiledChart, input: RuntimeInput, dim: 'width' | 'height'): boolean {
+  const size = chart[dim]
+  return size !== null && typeof size === 'object' && 'signal' in size && size.signal === dim && viewOverride(chart, input, dim) === undefined
+    && !(input.signals !== undefined && Object.hasOwn(input.signals, dim)) && viewSignalReadsDataflow(chart, dim)
+}
+
+/** The view's `dim` the signal value `value` gives, when the size follows the signal and that is not the size it has (`current`). */
+function viewSizeChange(
+  chart: CompiledChart, input: RuntimeInput, explicitSize: { width: boolean; height: boolean }, signed: { width?: number; height?: number } | undefined,
+  ctx: EvalContext, dim: 'width' | 'height', value: unknown, current: number,
+): number | undefined {
+  if (!sizeFollowsSignal(chart, input, explicitSize, signed, ctx, dim)) return undefined
+  const v = viewSizeValue(value)
+  return v === undefined || v === current ? undefined : v
+}
+
+/** Whether view signal `name` reads data or a scale, directly or through other signals (see `signalReadsDataflow`), once per chart. */
+const VIEW_READS_DATAFLOW = new WeakMap<CompiledChart, Map<string, boolean>>()
+function viewSignalReadsDataflow(chart: CompiledChart, name: string): boolean {
+  let memo = VIEW_READS_DATAFLOW.get(chart)
+  if (memo === undefined) VIEW_READS_DATAFLOW.set(chart, (memo = new Map()))
+  let reads = memo.get(name)
+  if (reads === undefined) memo.set(name, (reads = signalReadsDataflow(chart, signalIndex(chart), name, new Set())))
+  return reads
+}
+
+/** The index of each signal the view declares (its first declaration). */
+const SIGNAL_INDEX = new WeakMap<CompiledChart, Map<string, number>>()
+function signalIndex(chart: CompiledChart): Map<string, number> {
+  let index = SIGNAL_INDEX.get(chart)
+  if (index === undefined) {
+    index = new Map()
+    ;(chart.signalDefs ?? []).forEach((d, i) => { if (!index!.has(d.name)) index!.set(d.name, i) })
+    SIGNAL_INDEX.set(chart, index)
+  }
+  return index
 }
 
 function resolveSize(size: SizeSpec, override: number | undefined, signals: Record<string, unknown>): number {
