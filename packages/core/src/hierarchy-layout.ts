@@ -10,6 +10,7 @@ import { packSiblings } from './circle-pack.js'
 import { layoutRandom } from './layout-random.js'
 import { GOLDEN_RATIO, TILINGS, tileColumns } from './treemap-tiling.js'
 import { walkPostOrder, walkPreOrder } from './tree-walk.js'
+import { orderOf } from './tuple-order.js'
 
 // -- shared by every layout -----------------------------------------------------------------------------------------
 
@@ -44,9 +45,12 @@ function prepareTree(root: HierNode, rows: Row[], p: Record<string, unknown>): v
   }
   const compare = compareOf(p.sort) as unknown as ((a: unknown, b: unknown) => number) | null
   if (!compare) return
+  // Ties go by the order the rows were made in (vega's stable comparison, by tuple id): where they sit now, unless a `collect`
+  // that sorted them moved them, which leaves that order beside the rows (tuple-order.ts).
+  const made = orderOf(rows)
   const position = new Map<Row, number>()
   // (a row listed twice, as `nest` with `generate` does a row that is a node, keeps the place of its first listing)
-  rows.forEach((r, i) => { if (!position.has(r)) position.set(r, i) })
+  rows.forEach((r, i) => { if (!position.has(r)) position.set(r, made !== null ? made[i]! : i) })
   // the comparator reads the hierarchy NODES (`value`, `depth`, `data.size`, ...), not the rows: a plain row field such as
   // `size` ties everywhere and leaves the stratify order
   const byRow = (a: HierNode, b: HierNode): number => compare(a, b) || (position.get(a.data) ?? 0) - (position.get(b.data) ?? 0)
@@ -73,6 +77,7 @@ function writeLayout(rows: Row[], root: HierNode, fields: string[], as: string[]
       copy = byData.get(node.data)
       if (!copy) byData.set(node.data, (copy = { ...node.data }))
     }
+    // bounded: the spec's output fields (a fixed few per layout)
     for (let k = 0; k < last; ++k) copy[as[k]!] = (node as unknown as Record<string, unknown>)[fields[k]!]
     copy[as[last]!] = node.children.length
   })
@@ -85,6 +90,7 @@ function writeLayout(rows: Row[], root: HierNode, fields: string[], as: string[]
     if (own) return own
     if (!written) {
       written = new Map()
+      // bounded: one pass over the rows, made once
       for (let j = 0; j < rows.length; j++) if (out[j]) written.set(rows[j]!, out[j]!)
     }
     return written.get(r) ?? r
