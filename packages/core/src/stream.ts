@@ -320,6 +320,13 @@ const newFold = (): Fold => ({ targets: new Map(), rows: 0 })
 
 const has = (o: object | undefined, k: string): boolean => !!o && Object.prototype.hasOwnProperty.call(o, k)
 
+/** A stream bound as given: a number (not NaN; `Infinity` is no bound), or a TypeError, never read as no bound by accident. */
+function streamBound(v: unknown, name: string): number | undefined {
+  if (v === undefined) return undefined
+  if (typeof v !== 'number' || v !== v) throw new TypeError(`[aster] stream ${name} must be a number, got ${typeof v === 'number' ? 'NaN' : JSON.stringify(v) ?? typeof v}`)
+  return v
+}
+
 function checkBatch(batch: StreamBatch): void {
   if (batch == null || typeof batch !== 'object') throw new TypeError('[aster] stream batch must be an object')
   for (const [field, rec] of [['data', batch.data], ['append', batch.append]] as const) {
@@ -349,10 +356,13 @@ function compose(t: Target, p: StreamPulse, preLen: number): boolean {
   if (p.from) {
     if (p.from.length !== newLen) return false
     const nf = new Array<number>(newLen)
+    // (each old row is at most one new row: a mapping that names one twice is inconsistent, and the dataset is re-derived)
+    const taken = new Uint8Array(preLen)
     for (let i = 0; i < newLen; i++) {
       const q = p.from[i]!
       if (q < 0) { nf[i] = -1; continue }
-      if (q >= preLen) return false
+      if (!(q < preLen) || q !== Math.floor(q) || taken[q]) return false
+      taken[q] = 1
       nf[i] = t.from ? t.from[q]! : q < t.baseLen ? q : -1
     }
     const nc = new Set<number>()
@@ -440,8 +450,8 @@ export function createChartStream(spec: VgSpec, options: StreamOptions = {}): Ch
   // a stream is a chart whose data changes: its session takes every batch as a pulse, so it carries the pulse path (engine-parts.ts)
   if (!partLoaded('pulse')) installPart('pulse', { applyPipelineWithPulse })
   const policy: StreamPolicy = options.policy ?? 'coalesce'
-  const batchCapacity = Math.max(1, options.capacity ?? DEFAULT_CAPACITY)
-  const maxQueuedRows = Math.max(1, options.maxQueuedRows ?? DEFAULT_MAX_QUEUED_ROWS)
+  const batchCapacity = Math.max(1, streamBound(options.capacity, 'capacity') ?? DEFAULT_CAPACITY)
+  const maxQueuedRows = Math.max(1, streamBound(options.maxQueuedRows, 'maxQueuedRows') ?? DEFAULT_MAX_QUEUED_ROWS)
   // Under coalesce the whole queue is one folded batch: that is its real bound.
   const capacity = policy === 'coalesce' ? 1 : batchCapacity
   let session: ChartSession | null = createChartSession()
@@ -452,7 +462,16 @@ export function createChartStream(spec: VgSpec, options: StreamOptions = {}): Ch
     const at = rows.findIndex((r) => r == null)
     if (at >= 0) throw notATuple(rows[at] as null | undefined, { dataset, source: 'values' }, at)
   }
-  if (options.initial?.data) for (const [name, rows] of Object.entries(options.initial.data)) base.set(name, rows)
+  if (options.initial?.data) {
+    for (const [name, rows] of Object.entries(options.initial.data)) {
+      // (the host's first rows are its rows from the start, checked as a snapshot pushed later is)
+      if (Array.isArray(rows)) {
+        const at = rows.findIndex((r) => r == null)
+        if (at >= 0) throw notATuple(rows[at] as null | undefined, { dataset: name, source: 'snapshot' }, at)
+      }
+      base.set(name, rows)
+    }
+  }
   const owned = new Set<string>()
   let signals: Record<string, unknown> = dict(options.initial?.signals)
   let width = options.initial?.width
@@ -464,6 +483,8 @@ export function createChartStream(spec: VgSpec, options: StreamOptions = {}): Ch
   let textMetrics = options.textMetrics ?? options.initial?.textMetrics
   /** coalesce: the single folded batch. */
   let fold: Fold | null = null
+  /** coalesce, while a flush runs: the batches pushed meanwhile (put back after the flushed ones if the flush fails). */
+  let meanwhile: StreamBatch[] | null = null
   /** other policies: whole batches in push order. */
   let queue: Array<{ batch: StreamBatch; rows: number }> = []
   let queuedRows = 0
@@ -477,10 +498,12 @@ export function createChartStream(spec: VgSpec, options: StreamOptions = {}): Ch
   const depth = (): number => (policy === 'coalesce' ? (fold ? 1 : 0) : queue.length)
   const rowsQueued = (): number => (policy === 'coalesce' ? fold?.rows ?? 0 : queuedRows)
 
-  const cloneAppend = (append: Record<string, unknown[]> | undefined): Record<string, unknown[]> | undefined => {
-    if (!append) return undefined
+  // (a batch's row lists are copied when it is queued: rows the host adds to its arrays after `push` are not in the batch, and the
+  // row counts the queue was checked with stay what is flushed)
+  const cloneLists = (lists: Record<string, unknown[]> | undefined): Record<string, unknown[]> | undefined => {
+    if (!lists) return undefined
     const out = dict<unknown[]>()
-    for (const [name, list] of Object.entries(append)) out[name] = list.slice()
+    for (const [name, list] of Object.entries(lists)) out[name] = list.slice()
     return out
   }
   const batchRows = (b: StreamBatch): number => {
@@ -507,11 +530,12 @@ export function createChartStream(spec: VgSpec, options: StreamOptions = {}): Ch
   const enqueue = (batch: StreamBatch): boolean => {
     if (closed) return false
     checkBatch(batch)
-    const owned_ = { ...batch, append: cloneAppend(batch.append) }
+    const owned_ = { ...batch, data: cloneLists(batch.data), append: cloneLists(batch.append) }
     if (policy === 'coalesce') {
       if (rowDelta(fold, owned_) + (fold?.rows ?? 0) > maxQueuedRows) return reject('rows', maxQueuedRows)
       if (fold) stats.coalesced++
       foldBatch((fold ??= newFold()), owned_, baseLenOf)
+      meanwhile?.push(owned_)
       return true
     }
     const rows = batchRows(owned_)
@@ -616,6 +640,29 @@ export function createChartStream(spec: VgSpec, options: StreamOptions = {}): Ch
     if (closed || (!hasQueue() && lastScene)) return null
     const f = currentFold()
     const consumed = depth()
+    // (coalesce: the fold being flushed is taken off the queue while the evaluation runs, so a push made meanwhile -- from a logger,
+    // an expression function -- starts a fold of its own, which the next flush delivers; on failure the taken fold is put back
+    // with what was pushed meanwhile folded after it)
+    const taken = fold
+    if (policy === 'coalesce') {
+      fold = null
+      meanwhile = []
+    }
+    try {
+      return flushFold(f, consumed)
+    } catch (err) {
+      if (policy === 'coalesce') {
+        const pushed = meanwhile ?? []
+        fold = taken
+        for (const b of pushed) foldBatch((fold ??= newFold()), b, baseLenOf)
+      }
+      throw err
+    } finally {
+      meanwhile = null
+    }
+  }
+
+  const flushFold = (f: Fold, consumed: number): StreamFlush => {
     const { pulse, lengths } = planPulse(f)
     const changedDatasets = [...pulse.structural]
     const dataPulse: NonNullable<RuntimeInput['dataPulse']> = {}
@@ -720,8 +767,8 @@ export function createChartStream(spec: VgSpec, options: StreamOptions = {}): Ch
     domainRaw = nextDomainRaw
     limits = nextLimits
     textMetrics = nextTextMetrics
-    if (policy === 'coalesce') { if (fold === f) fold = null }
-    else { const gone = queue.splice(0, consumed); for (const e of gone) queuedRows -= e.rows }
+    // (coalesce: the flushed fold was taken off the queue when the flush began; what is queued now was pushed meanwhile)
+    if (policy !== 'coalesce') { const gone = queue.splice(0, consumed); for (const e of gone) queuedRows -= e.rows }
     const delivered = pulse
     const noop = !delivered.datasets.size && !delivered.structural.size && scene === lastScene
     lastScene = scene
@@ -732,6 +779,8 @@ export function createChartStream(spec: VgSpec, options: StreamOptions = {}): Ch
 
   const stream: ChartStream = {
     push(batch) {
+      // (a closed stream takes nothing, whatever it is given: `push` returns false)
+      if (closed) return false
       // (rows enter the datasets as vega inserts them: a `null` or `undefined` row is refused before anything is queued, as
       // `view.insert` throws before it changes anything)
       for (const [set, source] of [[batch.data, 'snapshot'], [batch.append, 'append']] as const) {
