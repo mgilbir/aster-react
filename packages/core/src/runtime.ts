@@ -63,7 +63,7 @@ import { copyTuple, withTupleOrigins, dict, ownGet, pushAll, sortData, lerp, sco
 import { applyImageUrlPolicy, applyLinkUrlPolicy, bindSceneUrlPolicy, resolveImageUrl, type ImageUrlPolicy } from './url-policy.js'
 import { checkChartUrlData } from './url-data.js'
 import { publishRows, valueKey, valuesEqual } from './fingerprint.js'
-import { idOf, pin, pinAll, samePin, samePins, stampKey, wrote, type Pin } from './content-stamp.js'
+import { historical, idOf, keepHistory, pin, pinAll, samePin, samePins, stampKey, wrote, type History, type Pin } from './content-stamp.js'
 import { dataWithoutRows, valuesSignal } from './spec-structure.js'
 import { diffRows, equalCell, pulseChangeOf, rowsEqual, sourceNames, type PulseChange } from './pulse.js'
 import type { aggregateGroups } from './transform-agg.js'
@@ -4058,7 +4058,10 @@ function evaluateViewPass(chart: CompiledChart, hostInput: RuntimeInput, txn: Ev
   // (the captions of the guides format with the chart's locale)
   if (ctx.chart.locale) scene.__locale = ctx.chart.locale
   ;(scene as unknown as { __scaleMap?: unknown }).__scaleMap = ctx.scales
-  Object.defineProperty(scene, '__datasets', { value: { rows: ctx.datasets, failed: ctx.failedDatasets }, enumerable: false, configurable: true })
+  // (each dataset's rows as this scene has them: a later pulse that advances an array in place leaves this scene its copy, Q14)
+  const histories = new Map<string, History>()
+  for (const [name, rows] of ctx.datasets) histories.set(name, keepHistory(rows))
+  Object.defineProperty(scene, '__datasets', { value: { rows: histories, failed: ctx.failedDatasets }, enumerable: false, configurable: true })
   if (ctx._defs.length) scene.defs = ctx._defs
   // The state the next incremental evaluation starts from; committed by the
   // caller once the scene is accepted.
@@ -4109,7 +4112,7 @@ export function datasetsOfScene(scene: SceneRoot): ReadonlyMap<string, readonly 
   const made = scene.__datasets
   if (!made) return new Map()
   const out = new Map<string, readonly unknown[] | null>()
-  for (const [name, rows] of made.rows) out.set(name, made.failed?.has(name) ? null : rows)
+  for (const [name, rows] of made.rows) out.set(name, made.failed?.has(name) ? null : historical(rows))
   return out
 }
 
