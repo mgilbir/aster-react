@@ -4,7 +4,8 @@
  * Core's modules read the parts most charts never run (the legend builder, the path reader, the regular-expression screen, the
  * pulse path, ...) from slots that the public entries fill (packages/core/src/engine-parts.ts). A unit test that imports a module
  * of packages/core/src directly (core's own, and the conformance differentials, which import core's sources too) is given them filled
- * the same way, so that it tests what the public entries run. A test of the lean path itself empties the slots it needs empty
+ * the same way, so that it tests what the public entries run: every part of the engine, the canvas renderer and the signal loop (which
+ * the shells load per capability) included (packages/core/src/engine-parts-setup.test.ts). A test of the lean path itself empties the slots it needs empty
  * (`withdrawParts`). Tests that use core's dist only get them from its entries.
  *
  * A test file that mocks a module (`vi.mock`) is left alone: importing the parts here would load the modules it mocks before its
@@ -17,4 +18,5 @@ const testPath = expect.getState().testPath ?? ''
 if (/[\\/]packages[\\/](core[\\/]src|conformance)[\\/]/.test(testPath) && !/\bvi\.mock\(/.test(readFileSync(testPath, 'utf8'))) {
   await import('../packages/core/src/parts-all.ts')
   await import('../packages/core/src/part-canvas.ts')
+  await import('../packages/core/src/part-signals.ts')
 }

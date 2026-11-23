@@ -21,6 +21,7 @@ import { part as intersect } from './part-intersect.js'
 import { part as modify } from './part-modify.js'
 import { part as timer } from './part-timer.js'
 import { part as canvas } from './part-canvas.js'
+import { part as signals } from './part-signals.js'
 
 export function installAllParts(): void {
   installPart('aggregate', aggregate)
@@ -40,4 +41,5 @@ export function installAllParts(): void {
   installPart('modify', modify)
   installPart('timer', timer)
   installPart('canvas', canvas)
+  installPart('signals', signals)
 }
