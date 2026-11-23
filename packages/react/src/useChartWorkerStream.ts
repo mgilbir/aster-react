@@ -28,7 +28,7 @@ import {
 } from '@aster-charts/core'
 import { mergeBatches } from './batches.js'
 import { loadAddons, missingAddons, type AddonName } from '@aster-charts/core/addons'
-import { normalizeChartSpec, useStableSpec } from './spec.js'
+import { normalizeSpecResult, useStableSpec } from './spec.js'
 import {
   errorFromWire,
   listenToWorker,
@@ -122,7 +122,11 @@ export function useChartWorkerStream(spec: VgSpec, options: ChartWorkerStreamOpt
     serialize = true, autoFlush = true, flushPolicy = 'microtask',
   } = options
   const stableSpec = useStableSpec(spec)
-  const normalized = React.useMemo(() => normalizeChartSpec(stableSpec), [stableSpec])
+  // Normalized inside the guard: a value that is not a spec, a Vega-Lite spec without the compiler or one it refuses is the
+  // result's `error` (and `<ChartWorkerStream>`'s `onStreamError`), never a throw from render; no stream starts for it.
+  const normalizedResult = React.useMemo(() => normalizeSpecResult(stableSpec), [stableSpec])
+  const specError = normalizedResult.error
+  const normalized = React.useMemo(() => normalizedResult.spec ?? ({} as VgSpec), [normalizedResult])
   const [state, setState] = React.useState<StreamUiState>({ scene: null, svg: null, error: null, flushFailure: null, pending: true, generation: 0 })
   const workerRef = useWorkerInstance(worker, workerFactory)
   const localRef = React.useRef<ChartStream | null>(null)
@@ -258,6 +262,12 @@ export function useChartWorkerStream(spec: VgSpec, options: ChartWorkerStreamOpt
     lastApplied.current = id
     batchesRef.current = []
     bufferedRowsRef.current = 0
+    if (specError) {
+      // nothing to stream: pushes are refused (`false`) until the spec changes
+      setState((s) => ({ scene: null, svg: null, error: specError, flushFailure: null, pending: false, generation: s.generation + 1 }))
+      closedRef.current = true
+      return
+    }
     setState((s) => ({ scene: null, svg: null, error: null, flushFailure: null, pending: true, generation: s.generation + 1 }))
     closedRef.current = false
     const w = workerRef.current
@@ -345,7 +355,7 @@ export function useChartWorkerStream(spec: VgSpec, options: ChartWorkerStreamOpt
       stop()
       try { w.postMessage({ kind: 'stream', id: nextWorkerRequestId(), streamId, op: 'close' } satisfies ChartWorkerStreamRequest) } catch { /* terminated */ }
     }
-  }, [normalized, capacity, policy, maxQueuedRows, urlData, worker, workerRef, apply, fail, recoverLocal])
+  }, [normalized, specError, capacity, policy, maxQueuedRows, urlData, worker, workerRef, apply, fail, recoverLocal])
 
   const push = React.useCallback((batch: ChartWorkerBatch): boolean => {
     if (closedRef.current) return false
