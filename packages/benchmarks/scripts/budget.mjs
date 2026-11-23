@@ -421,7 +421,8 @@ const BUDGETS = {
 
 const THIS_DIR = dirname(fileURLToPath(import.meta.url))
 const MONOREPO_ROOT = dirname(dirname(dirname(THIS_DIR)))
-const TMP = join(MONOREPO_ROOT, 'packages', 'benchmarks', '.tmp')
+// one directory per process: a run by hand must not delete the files of the one `pnpm test` or the gate has going
+const TMP = join(MONOREPO_ROOT, 'packages', 'benchmarks', `.tmp-budget-${process.pid}`)
 
 const CORE_APP = String.raw`import { renderSpec } from '@aster-charts/core'
 const spec = { width: 400, height: 300, data: [{ name: 't', values: [{ x: 0, y: 10 }] }], scales: [{ name: 'x', type: 'linear', domain: { data: 't', field: 'x' }, range: 'width' }], marks: [] }

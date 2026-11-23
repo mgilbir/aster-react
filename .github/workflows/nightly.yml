@@ -93,7 +93,7 @@ jobs:
       - id: bench-browser
         name: Browser mount/update/no-op benchmark
         if: ${{ !cancelled() && steps.build.outcome == 'success' && steps.playwright.outcome == 'success' }}
-        run: pnpm bench:browser -- --points=1000 --memory=false
+        run: pnpm bench:browser -- --points=1000 --memory=true
 
       - id: bench-dense
         name: Dense-SVG streaming benchmark

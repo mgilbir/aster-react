@@ -20,7 +20,8 @@
  *   node scripts/check-bundle-shaking.mjs --verbose        print each pattern's result object (first 600 characters)
  *   node scripts/check-bundle-shaking.mjs --outputs        print, per pattern with module assertions, each output file (ENTRY marks the app entry) and the add-on inputs it carries
  *
- * Exit codes: 0 every pattern passed, 1 a pattern failed, 2 bad usage (an unknown option) or a package whose dist is missing (run `pnpm build`).
+ * Exit codes: 0 every pattern passed, 1 a pattern failed, 2 bad usage (an unknown option, an unknown `--only` pattern or `--bundler`
+ * value, or no pattern selected) or a package whose dist is missing (run `pnpm build`).
  *
  * Needs `pnpm build` (it bundles the packages' dist, like a consumer does).
  */
@@ -35,12 +36,18 @@ import { cli } from './lib/cli.mjs'
 cli({ url: import.meta.url, flags: { 'blanket-false': 'bool', bundler: 'value', only: 'value', verbose: 'bool', outputs: 'bool' } })
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)))
-const TMP = join(ROOT, 'packages', 'react', '.tmp-shaking') // under packages/react so `react` and `react-dom` resolve
+// Under packages/react so `react` and `react-dom` resolve; one directory per process, so a run started by hand while `pnpm test` runs
+// this script does not delete the other run's files.
+const TMP = join(ROOT, 'packages', 'react', `.tmp-shaking-${process.pid}`)
 const CORPUS = join(ROOT, 'packages', 'conformance', 'corpus')
 const argv = process.argv.slice(2)
 const BLANKET_FALSE = argv.includes('--blanket-false')
 const BUNDLER = argv.includes('--bundler') ? argv[argv.indexOf('--bundler') + 1] : 'esbuild'
-const only = argv.includes('--only') ? new Set(argv[argv.indexOf('--only') + 1].split(',')) : null
+const only = argv.includes('--only') ? new Set((argv[argv.indexOf('--only') + 1] ?? '').split(',').filter(Boolean)) : null
+if (BUNDLER !== 'esbuild' && BUNDLER !== 'vite') {
+  console.error(`[bundle-shaking] --bundler must be esbuild or vite, got ${JSON.stringify(BUNDLER)}`)
+  process.exit(2)
+}
 
 for (const pkg of ['core', 'react', 'vl']) {
   if (!existsSync(join(ROOT, 'packages', pkg, 'dist', 'index.js'))) {
@@ -952,6 +959,17 @@ const server = createServer((req, res) => {
 })
 await new Promise((r) => server.listen(0, '127.0.0.1', r))
 const env = { url: `http://127.0.0.1:${server.address().port}/data.csv` }
+
+if (only) {
+  // A name that matches no pattern selected nothing and "all patterns passed": refuse it, like scripts/gates.mjs refuses an unknown gate.
+  const known = new Set(PATTERNS.map((p) => p.name))
+  const unknown = [...only].filter((n) => !known.has(n))
+  if (only.size === 0 || unknown.length) {
+    console.error(`[bundle-shaking] unknown pattern${unknown.length === 1 ? '' : 's'} for --only: ${unknown.length ? unknown.join(', ') : '(none given)'}; known: ${[...known].join(', ')}`)
+    server.close()
+    process.exit(2)
+  }
+}
 
 rmSync(TMP, { recursive: true, force: true })
 mkdirSync(TMP, { recursive: true })
