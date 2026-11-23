@@ -124,8 +124,8 @@ describe('the signal loop reads its parts where the detector looks for them', ()
     document.body.innerHTML = ''
     setTimerClock(null)
   })
-  function mount(signals: unknown[]): { spec: VgSpec; svg: SVGSVGElement; scene: ReturnType<typeof evaluateChart> } {
-    const spec = { width: 100, height: 60, signals, data: [{ name: 'store' }, { name: 't', values: [{ x: 1 }] }], marks: [{ type: 'rect', from: { data: 't' }, encode: { update: { x: { value: 1 }, y: { value: 1 }, width: { value: 50 }, height: { value: 50 } } } }] } as unknown as VgSpec
+  function mount(signals: unknown[], storeOn?: unknown[]): { spec: VgSpec; svg: SVGSVGElement; scene: ReturnType<typeof evaluateChart> } {
+    const spec = { width: 100, height: 60, signals, data: [{ name: 'store', ...(storeOn ? { on: storeOn } : {}) }, { name: 't', values: [{ x: 1 }] }], marks: [{ type: 'rect', from: { data: 't' }, encode: { update: { x: { value: 1 }, y: { value: 1 }, width: { value: 50 }, height: { value: 50 } } } }] } as unknown as VgSpec
     const host = document.createElement('div')
     document.body.appendChild(host)
     const scene = evaluateChart(compileChart(spec))
@@ -133,8 +133,8 @@ describe('the signal loop reads its parts where the detector looks for them', ()
     return { spec, svg: host.querySelector('svg') as SVGSVGElement, scene }
   }
   /** What the loop logs while it binds and handles one click, with `loaded` the only event-loop parts in their slots. */
-  function clickWith(signals: unknown[], loaded: EnginePart[]): string[] {
-    const { svg, scene } = mount(signals)
+  function clickWith(signals: unknown[], loaded: EnginePart[], storeOn?: unknown[]): string[] {
+    const { svg, scene } = mount(signals, storeOn)
     const errors: string[] = []
     restore = withdrawParts(['intersect', 'modify', 'timer'].filter((p) => !loaded.includes(p as EnginePart)) as EnginePart[])
     const b = bindSceneSignals(svg, scene, {}, { logger: { error: (...a) => errors.push(a.map(String).join(' ')), warn: () => {} }, onData: () => {} })
@@ -142,17 +142,19 @@ describe('the signal loop reads its parts where the detector looks for them', ()
     svg.dispatchEvent(new MouseEvent('click', { bubbles: true }))
     return errors
   }
-  const cases: Array<[EnginePart, unknown[]]> = [
+  const cases: Array<[EnginePart, unknown[], unknown[]?]> = [
     ['modify', [{ name: 'go', value: 0, on: [{ events: 'click', update: 'modify("store", {"a": 1})' }] }]],
     ['modify', [{ name: 'go', value: 0, on: [{ events: 'click', update: 'setdata("store", [{"a": 1}])' }] }]],
     ['intersect', [{ name: 'go', value: 0, on: [{ events: 'click', update: 'length(intersect([0, 0, 100, 60]))' }] }]],
+    // a dataset's own trigger edits it as modify() does
+    ['modify', [{ name: 'go', value: 0, on: [{ events: 'click', update: 'go + 1' }] }], [{ trigger: 'go', insert: '{a: go}' }]],
   ]
-  it.each(cases)('%s: read by the handler, named by the detector, and enough on its own', (p, signals) => {
-    expect(parts({ signals })).toContain(p)
-    expect(clickWith(signals, []).join('\n')).toMatch(new RegExp(`the "${p}" part of the engine is not loaded`))
+  it.each(cases)('%s: read by the handler, named by the detector, and enough on its own', (p, signals, storeOn) => {
+    expect(parts({ signals, data: [{ name: 'store', ...(storeOn ? { on: storeOn } : {}) }] })).toContain(p)
+    expect(clickWith(signals, [], storeOn).join('\n')).toMatch(new RegExp(`the "${p}" part of the engine is not loaded`))
     restore?.()
     restore = null
-    expect(clickWith(signals, [p])).toEqual([])
+    expect(clickWith(signals, [p], storeOn)).toEqual([])
   })
   it('timer: a timer stream reads the scheduler when the loop binds it; the detector names it in every form a stream takes', () => {
     setTimerClock(new FakeClock())
