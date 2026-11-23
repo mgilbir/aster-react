@@ -75,9 +75,11 @@ function slide(input: HTMLInputElement, value: number): void {
 
 forEachVariant(['svg'], (Chart) => {
   describe('signals: controlled by content, the latest writer wins', () => {
-    it('agrees with the model over generated sequences of prop changes, re-renders, setSignal and input edits', () => {
+    // (60 seeds, in groups so that each test stays well inside the per-test timeout on a loaded machine)
+    for (let group = 0; group < 6; group++) {
+    it(`agrees with the model over generated sequences of prop changes, re-renders, setSignal and input edits (seeds ${group * 10 + 1}-${group * 10 + 10})`, () => {
       ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
-      for (let seed = 1; seed <= 60; seed++) {
+      for (let seed = group * 10 + 1; seed <= group * 10 + 10; seed++) {
         const random = rng(seed)
         const pick = <T,>(xs: readonly T[]): T => xs[Math.floor(random() * xs.length)]!
         const el = document.createElement('div')
@@ -133,7 +135,11 @@ forEachVariant(['svg'], (Chart) => {
             expect(el.querySelector<HTMLInputElement>(`[data-signal="${k}"] input`)!.value, `${where} input ${k}`).toBe(String(model.value(k)))
           }
         }
+        act(() => root.unmount())
+        el.remove()
+        roots = roots.filter((r) => r.root !== root)
       }
     })
+    }
   })
 })
