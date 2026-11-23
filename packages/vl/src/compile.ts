@@ -209,6 +209,7 @@ function compileValidated(spec: VLSpec, forward?: ReadonlyMap<string, SelCmpt>, 
   const selParts = SEL_PARTS.get(compiled)
   if (selParts) compiled.data = [...selParts.data, ...((compiled.data as Record<string, unknown>[] | undefined) ?? [])]
   const out = finalizeData(compiled, ctx)
+  dropSelfSizeSignals(out)
   optimizeData(out, (name) => name.startsWith(ctx.dn(0).slice(0, -1)), (name) => ctx.userDataNames.has(name))
   // a named view names its marks after itself (vega-lite `model.getName`): `chart_marks` (the views of a repeat name themselves)
   if (typeof normalized.name === 'string' && normalized.name !== '' && normalized.repeat === undefined && Array.isArray(out.marks)) {
@@ -3126,8 +3127,8 @@ function embedCells(cells: CompositeCell[], parent: VLSpec, ctx: CompileCtx, lay
 
   frags.forEach(({ cell, vg }) => {
     const { prefix } = cell
-    // (a repeat names its children itself, `child__column_x`: a composite around it does not put its own name in front)
-    const ownNamed = (name: string): boolean => cell.spec.repeat !== undefined && name.startsWith('child__')
+    // (a repeat names its children itself, `child__column_x`: no composite around it, however deep, puts its own name in front)
+    const ownNamed = (name: string): boolean => name.startsWith('child__')
     const prefixed = (name: string): string => (ownNamed(name) ? name : `${prefix}${name}`)
     const dnames = new Map<string, string>()
     const unitData = (vg.data as Record<string, unknown>[]) ?? []
@@ -3369,8 +3370,8 @@ function embedCells(cells: CompositeCell[], parent: VLSpec, ctx: CompileCtx, lay
 function prefixMarkNames(m: Record<string, unknown>, prefix: string, except: readonly string[] = []): Record<string, unknown> {
   const out: Record<string, unknown> = { ...m }
   if (isSelectionMark(m)) return out
-  // (a view the user named names itself)
-  if (typeof m.name === 'string' && except.some((p) => (m.name as string).startsWith(p))) return out
+  // (a view the user named names itself; a repeat names its views itself, `child__x`, whatever composition holds it, however deep)
+  if (typeof m.name === 'string' && (except.some((p) => (m.name as string).startsWith(p)) || m.name.startsWith('child__'))) return out
   // (the facet header titles are named `row-title` / `column-title` / `facet-title` whatever the model)
   if (typeof m.name === 'string' && m.name !== 'row-title' && m.name !== 'column-title' && m.name !== 'facet-title') out.name = `${prefix}${m.name}`
   if (Array.isArray(m.marks)) out.marks = (m.marks as Record<string, unknown>[]).map((c) => prefixMarkNames(c, prefix, except))
@@ -8874,9 +8875,24 @@ function axisSizeSignals(axes: ReadonlyArray<Record<string, unknown>> | undefine
     if (positionChannels.has(horizontal ? 'y' : 'x')) continue
     if (!(axes ?? []).some((a) => (a.orient === 'bottom' || a.orient === 'top') === horizontal)) continue
     const [name, update] = horizontal ? ['height', heightRef] : ['width', widthRef]
-    if (update !== name) out.push({ name, update })
+    // (a view whose size is its composition's own `height` reads it as it is - unless a composition around that one renames it, as
+    // vega-lite's `concat_0_height`: the signal stands until the root, which drops it if it still reads itself)
+    out.push({ name, update })
   }
   return out
+}
+
+/** The size signals of axisSizeSignals that still read themselves at the root: the view reads its composition's size as it is. */
+function dropSelfSizeSignals(node: Record<string, unknown>): void {
+  for (const m of (node.marks as unknown[] | undefined) ?? []) {
+    if (!isObject(m)) continue
+    if (Array.isArray(m.signals)) {
+      const kept = (m.signals as Record<string, unknown>[]).filter((sg) => !((sg.name === 'width' || sg.name === 'height') && sg.update === sg.name))
+      if (kept.length) m.signals = kept
+      else delete m.signals
+    }
+    dropSelfSizeSignals(m)
+  }
 }
 
 /** The projection component a compiled view fragment owns at its root (a composite may merge it with its siblings'). */
