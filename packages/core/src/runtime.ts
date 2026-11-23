@@ -66,7 +66,7 @@ import { dataWithoutRows, valuesSignal } from './spec-structure.js'
 import { diffRows, equalCell, rowsEqual, sourceNames, type PulseChange } from './pulse.js'
 import type { aggregateGroups } from './transform-agg.js'
 import type { GridPlace } from './trellis.js'
-import { boundAxisGroup, boundGroupItem, boundLeaf, boundTypedMark, Bounds, layoutBounds, eachMarkBounds, hasClippedMark } from './bounds.js'
+import { boundAxisGroup, boundGroupItem, boundTypedMark, Bounds, layoutBounds, eachMarkBounds, hasClippedMark } from './bounds.js'
 import { rectItemPath } from './render.js'
 import { boundFailure } from './bound-failure.js'
 import { buildAxis as buildAxisGuide, tickPlacement } from './guide-axis.js'
@@ -254,6 +254,8 @@ interface IncrementalState {
    * evaluation that finds the same array, which no change it was told of touched, reads the same rows (see `sameRows`).
    */
   rows: Map<string, Pin<Row[]>>
+  /** The arrays the host gave the datasets (see `hostPulse`: a pulse is taken relative to these). */
+  hostRows: Map<string, readonly unknown[]>
   /** True once a fast path updated a structure in place (see above). */
   stale: boolean
   /** Where the view's id counter stood (see identifier-ids.ts): the next evaluation numbers new rows from here. */
@@ -302,7 +304,7 @@ interface ScopedRun {
 }
 
 function newState(gen: number): IncrementalState {
-  return { gen, fp: '', scales: new Map(), scaleEntries: new Map(), datasets: new Map(), groups: new Map(), markKeys: new Map(), rows: new Map(), stale: false, idCounter: 0, scoped: new Map(), numbered: new Map(), copies: new Map(), instances: new Map(), groupMarks: new Map(), channels: new Map(), markSources: new Map(), guides: new Map() }
+  return { gen, fp: '', scales: new Map(), scaleEntries: new Map(), datasets: new Map(), groups: new Map(), markKeys: new Map(), rows: new Map(), hostRows: new Map(), stale: false, idCounter: 0, scoped: new Map(), numbered: new Map(), copies: new Map(), instances: new Map(), groupMarks: new Map(), channels: new Map(), markSources: new Map(), guides: new Map() }
 }
 
 /** A top-level leaf mark's items as an encode made them: the encode, the rows, the items in row order and each channel's key. */
@@ -962,6 +964,9 @@ function prepareChartCtx(
   // Normalise every caller-supplied change description into one pulse per
   // source dataset. `dataChanges` is the same-length form (`{changed}`);
   // `dataPulse` carries the full mapping and wins when both name a dataset.
+  // (each named dataset is one the chart or the host has, a pulse names a dataset given rows of its own, and every index is a row
+  // index: see `checkHints`)
+  checkHints(chart, input)
   const inputPulses = new Map<string, StepPulse>()
   for (const [name, idxs] of Object.entries(input.dataChanges ?? {})) inputPulses.set(name, { changed: [...idxs] })
   for (const [name, p] of Object.entries(input.dataPulse ?? {})) {
@@ -980,7 +985,9 @@ function prepareChartCtx(
   // Incremental reuse needs both a statement of what changed and a previous
   // state to be incremental FROM; otherwise everything re-derives (and the
   // fresh state is still recorded for the next call).
-  ctx.incremental = changedNames.size > 0 && prev !== undefined
+  // (a hint given empty -- `changedDatasets: []` -- says that nothing changed: it is a statement of what changed too)
+  const told = changedNames.size > 0 || input.changedDatasets !== undefined || input.dataChanges !== undefined || input.dataPulse !== undefined
+  ctx.incremental = told && prev !== undefined
 
   // Resolve signal `update` expressions, datasets, and scales to a fixed
   // point. Signals can reference data/scales and vice versa (e.g. brush-bounded
@@ -1083,6 +1090,50 @@ class PublishedDatasets extends Map<string, Row[]> {
   override set(name: string, rows: Row[]): this {
     publishRows(rows)
     return super.set(name, rows)
+  }
+}
+
+/**
+ * Refuse a change hint that cannot be what it says (a usage error, thrown before anything is evaluated): a name that is no dataset
+ * of the chart and no dataset the host gives (`changedDatasets`, `dataChanges`, `dataPulse`) -- a typo would otherwise be a chart
+ * that silently keeps its old rows; a `dataChanges` / `dataPulse` for a dataset derived from others (`source`: the change is its
+ * source's to describe); a change list that is not an array, or an index that is not a whole number (`1.5`, `NaN`, `'2'`); a
+ * `dataPulse` that says nothing (no `changed`, `from` or `appendOnly`). An index past the rows is no row and is left alone, as before.
+ */
+function checkHints(chart: CompiledChart, input: RuntimeInput): void {
+  if (input.changedDatasets === undefined && input.dataChanges === undefined && input.dataPulse === undefined) return
+  checkHintShapes(input)
+  const defs = new Map(chart.data.map((d) => [d.name, d] as const))
+  const known = (name: string): boolean => defs.has(name) || (input.data !== undefined && Object.hasOwn(input.data, name))
+  for (const name of input.changedDatasets ?? []) if (!known(name)) refuseHint('changedDatasets', name, 'which is no dataset of the chart and none the host gives')
+  for (const [what, hints] of [['dataChanges', input.dataChanges], ['dataPulse', input.dataPulse]] as const) {
+    for (const name of Object.keys(hints ?? {})) {
+      if (!known(name)) refuseHint(what, name, 'which is no dataset of the chart and none the host gives')
+      const def = defs.get(name)
+      if (def !== undefined && sourceNames(def).length) refuseHint(what, name, 'which is derived from other datasets (`source`): describe the change of its source')
+    }
+  }
+}
+
+const refuseHint = (what: string, name: string, why: string): never => {
+  throw new TypeError(`[aster] ${what} names dataset "${name}", ${why}`)
+}
+
+/**
+ * The part of `checkHints` that needs no chart (the session checks it before it reads the hints): every change list is a list of
+ * whole numbers (an array, or another iterable such as a Set), every pulse an object that says something.
+ */
+export function checkHintShapes(input: RuntimeInput): void {
+  const indices = (what: string, name: string, list: unknown, field: string): void => {
+    if (list === null || typeof list !== 'object' || typeof (list as Iterable<unknown>)[Symbol.iterator] !== 'function') refuseHint(what, name, `but its ${field} is not a list of row indices`)
+    for (const i of list as Iterable<unknown>) if (!Number.isInteger(i)) refuseHint(what, name, `but ${typeof i === 'number' ? String(i) : JSON.stringify(i) ?? String(i)} in its ${field} is not a row index (a whole number)`)
+  }
+  for (const [name, list] of Object.entries(input.dataChanges ?? {})) indices('dataChanges', name, list, 'list')
+  for (const [name, p] of Object.entries(input.dataPulse ?? {})) {
+    if (p === null || typeof p !== 'object') refuseHint('dataPulse', name, 'but its pulse is not an object')
+    if (p.changed === undefined && p.from === undefined && !p.appendOnly) refuseHint('dataPulse', name, 'but its pulse says nothing (no `changed`, `from` or `appendOnly`)')
+    if (p.changed !== undefined) indices('dataPulse', name, p.changed, '`changed`')
+    if (p.from !== undefined && !Array.isArray(p.from)) refuseHint('dataPulse', name, 'but its `from` is not an array')
   }
 }
 
@@ -4333,6 +4384,39 @@ export function withCarry<T>(tctx: Pick<TransformContext, 'ids'>, carry: readonl
  * and that appends nothing, so ONE set of per-transform fast paths serves both
  * (there used to be a second, same-length-only engine with separate state).
  */
+/**
+ * The pulse the caller gave for host dataset `name`, when it describes how the rows the state this pass reuses was made from became
+ * `given`; else null (the dataset is derived in full). A hint is relative to the caller's own previous rows, which the state need
+ * not have been made from: one compiled chart may be evaluated by several callers (DECISIONS Q16), each with its own data. So the
+ * pulse is taken only for the very array the state was given (the caller changed it in place and says how), or for an array whose
+ * rows the pulse says are unchanged are the rows of that array where it says they are: the same objects (a host's immutable update
+ * hands them for the rows it did not touch: one pass over the references), or rows equal to them field by field.
+ */
+function hostPulse(ctx: EvalContext, name: string, given: unknown): StepPulse | null {
+  if (Array.isArray(given)) ctx.draft.hostRows.set(name, given)
+  const p = ctx.inputPulses?.get(name)
+  if (p === undefined) return null
+  const before = ctx.prev?.hostRows.get(name)
+  if (before === undefined || !Array.isArray(given)) return null
+  if (before === given) return p
+  const changed = new Set(p.changed)
+  if (p.from !== undefined) {
+    if (p.from.length !== given.length) return null
+    for (let i = 0; i < given.length; i++) {
+      const old = p.from[i]!
+      if (old >= 0 && !changed.has(i) && (old >= before.length || !sameHostRow(given[i], before[old]))) return null
+    }
+    return p
+  }
+  const base = p.appendOnly ? p.baseLength ?? before.length : given.length
+  if (base !== before.length || base > given.length) return null
+  for (let i = 0; i < base; i++) if (!changed.has(i) && !sameHostRow(given[i], before[i])) return null
+  return p
+}
+
+/** A row the pulse says is unchanged: the same row object, or one equal to it field by field (`rowsEqual`: a host may re-create it). */
+const sameHostRow = (a: unknown, b: unknown): boolean => a === b || rowsEqual(a as Row, b as Row)
+
 function normalizePulse(p: StepPulse, rowCount: number): StepPulse {
   if (p.from || p.appendOnly || p.added?.length || p.removed?.length) return p
   return { ...p, appendOnly: true, baseLength: rowCount }
@@ -4377,7 +4461,7 @@ function buildDatasetsOf(ctx: EvalContext, inputData: Record<string, unknown[]>)
     if (!d) {
       const rows = (ownGet(inputData, name) as Row[] | undefined) ?? []
       ctx.datasets.set(name, rows)
-      const given = ctx.inputPulses?.get(name)
+      const given = hostPulse(ctx, name, ownGet(inputData, name))
       ctx.datasetPulses.set(name, given ? normalizePulse(given, rows.length) : null)
       return rows
     }
@@ -4423,17 +4507,8 @@ function buildDatasetsOf(ctx: EvalContext, inputData: Record<string, unknown[]>)
       }
     } else if (srcNames.length === 1) {
       const src = srcNames[0]!
-      const srcDef = ctx.chart.data.find((sd) => sd.name === src)
-      if ((d as { format?: DataFormatSpec }).format && srcDef?.values != null) {
-        // Vega applies a derived dataset's `format` when (re-)parsing its
-        // source's raw values (e.g. source = inline Topology, format =
-        // topojson feature extraction). The host's current values (input.data)
-        // win over the spec's compiled-in ones.
-        const given = ownGet(inputData, src)
-        rows = readData(given ?? inlineValues(ctx, srcDef.values), (d as { format?: DataFormatSpec }).format, given === undefined && valuesSignal(srcDef.values) !== undefined, { dataset: src, source: given === undefined ? 'values' : 'data' })
-        notePrimitiveTuples(ctx, rows)
-        inPulse = ctx.inputPulses?.get(src) ?? null
-      } else {
+      // (a dataset derived by `source` is its source's tuples: vega reads no `format` there -- the rows were parsed by the source)
+      {
         const from = build(src, seen)
         rows = from
         shared = true
@@ -4445,7 +4520,7 @@ function buildDatasetsOf(ctx: EvalContext, inputData: Record<string, unknown[]>)
       }
     } else if (d.values != null) {
       const given = ownGet(inputData, name)
-      inPulse = ctx.inputPulses?.get(name) ?? null
+      inPulse = hostPulse(ctx, name, given)
       if (given) {
         // (rows that readData would pass through as they are -- an array of JSON rows, nothing to parse -- are only ingested)
         // (a session hands a dataset its spec's own inline rows this way too: those are named as inline values)
@@ -4466,7 +4541,7 @@ function buildDatasetsOf(ctx: EvalContext, inputData: Record<string, unknown[]>)
         // hint why: fail loudly and say how to fix it.
         throw unloadedUrlError(name, true)
       }
-      inPulse = ctx.inputPulses?.get(name) ?? null
+      inPulse = hostPulse(ctx, name, given)
       rows = ingestHostRows(given ?? [], inPulse, name)
       shared = true
       if (given != null) { inputs = [given]; raw = true }
@@ -4723,7 +4798,7 @@ function runPipeline(
       if (kept !== undefined) {
         const out = kept.steps[end]!
         for (let j = k; j <= end; j++) {
-          keepStep(ctx, transforms[j]!, unitReads[j - k]!, kept.records![j]!, cur.length, out)
+          keepStep(ctx, transforms[j]!, unitReads[j - k]!, kept.records![j]!, out)
           state.steps.push(kept.steps[j]!)
           if (kept.aliased?.[j] !== undefined) (state.aliased ??= [])[j] = kept.aliased[j]
           records[j] = kept.records![j]
@@ -4754,7 +4829,7 @@ function runPipeline(
     const kept = keys !== undefined && runs.length > 0 ? keptSteps(ctx, name, [t], [reads!], [keys], runs, k, cur, earlierDS !== undefined) : undefined
     if (kept !== undefined) {
       const out = kept.steps[k]!
-      keepStep(ctx, t, reads!, kept.records![k]!, cur.length, out)
+      keepStep(ctx, t, reads!, kept.records![k]!, out)
       const given = cur
       cur = out
       markTuples(cur)
@@ -4996,12 +5071,13 @@ function keptSteps(
 
 
 /** Everything running the step would have done besides making its rows: the limits it counts against and what it leaves behind. */
-function keepStep(ctx: EvalContext, t: CompiledTransform, reads: StepReads, rec: StepRecord, rowsIn: number, out: Row[]): void {
+function keepStep(ctx: EvalContext, t: CompiledTransform, reads: StepReads, rec: StepRecord, out: Row[]): void {
   const meter = activeMeter()
   if (meter) {
     meter.clock.check(`transform ${t.type}`)
     meter.checkRows(out.length, `transform ${t.type}`)
-    meter.generated(out.length - rowsIn, `transform ${t.type}`)
+    // (`maxGeneratedRows` meters the rows an evaluation's transforms produce (LIMITS.md): a kept step produced none in it -- its
+    // rows are bounded by `maxRows`, checked above, as a pulse's are)
   }
   checkRowCount(out.length, `transform ${t.type}`)
   if (reads.publishes !== undefined && rec.published !== undefined) ctx.signalParams[reads.publishes] = rec.published.value
@@ -5542,7 +5618,9 @@ function reusablePulse(
   prevGroup: SceneGroup | null | undefined,
 ): StepPulse | null {
   const prev = ctx.prev
-  if (!prevGroup || !prev || !ctx.incremental) return null
+  // (a pass cut short by a failure -- an encode that threw, in this mark or before it -- makes what vega's first run of the dataflow
+  // makes, which a pulse over the items of a clean evaluation is not: the items after the failing one stay unencoded)
+  if (!prevGroup || !prev || !ctx.incremental || !cleanPass(ctx)) return null
   // The output pulse of the source dataset. `null` means it was fully
   // re-derived without a trustworthy mapping.
   const pulse = ctx.datasetPulses.get(source) ?? null
@@ -6113,7 +6191,8 @@ function evaluateMarkItems(
     ...(unmeasuredFrom !== undefined ? { unmeasuredFrom } : {}),
   }
   if (carriedBounds) {
-    for (const it of addedItems) carriedBounds.union(boundLeaf(new Bounds(), it))
+    // (each added item measured as a fresh evaluation measures it: by the mark's type -- a text's own box, a rect's or a rule's miter)
+    for (const it of addedItems) carriedBounds.union(boundTypedMark(new Bounds(), { marktype: mark.type, items: [it] } as unknown as SceneGroup))
     GROUP_BOUNDS.set(group, carriedBounds)
   }
   if (pendingUndo && prevGroup) supersedeItems(prevGroup, group, pendingUndo)

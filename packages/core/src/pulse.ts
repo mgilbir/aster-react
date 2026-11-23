@@ -135,6 +135,9 @@ function sameValueAt(a: unknown, b: unknown, depth: number): boolean {
 /** Row equality: the same own fields, each `equalCell`. */
 export function rowsEqual(a: Record<string, unknown>, b: Record<string, unknown>): boolean {
   if (a === b) return true
+  // (a row that is no object -- `null`, a number -- is equal only to itself: the evaluation refuses it with the message of the dataset
+  // it is in, as a fresh evaluation does)
+  if (a === null || b === null || typeof a !== 'object' || typeof b !== 'object') return false
   const proto = Object.getPrototypeOf(a)
   if (proto === Object.prototype || proto === null) {
     // `for...in` avoids the two Object.keys() allocations per row that made

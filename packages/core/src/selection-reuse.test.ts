@@ -169,14 +169,15 @@ describe('a point selection over numbered rows: its dataset, scales and marks ac
   const START: PointWorld = { t: ROWS, store: [], u: 0, k: -1, op: 1 }
   const routes: Array<[string, (spec: VgSpec) => (w: PointWorld) => SceneRoot]> = [
     ['a session', (spec) => { const s = createChartSession(); return (w) => s.evaluate(spec, pointInput(w)) }],
-    // (told what changed: the rows of `t` when they changed, a dataset nothing reads otherwise)
+    // (told what changed: the rows of `t` when they changed, and otherwise that nothing did -- an empty list; a name that is no
+    // dataset is refused since C232)
     ['evaluateChart told what changed', (spec) => {
       const chart = compileChart(spec)
       let was: PointWorld | undefined
       return (w) => {
         const changed = was === undefined ? [] : [...(was.t !== w.t ? ['t'] : []), ...(was.store !== w.store ? ['store'] : [])]
         was = w
-        return evaluateChart(chart, pointInput(w, { changedDatasets: changed.length ? changed : ['nothing'] }))
+        return evaluateChart(chart, pointInput(w, { changedDatasets: changed }))
       }
     }],
   ]
