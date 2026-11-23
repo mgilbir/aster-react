@@ -95,21 +95,27 @@ function arcSlot(index: unknown, count: number): number {
 }
 
 /**
- * A reader of the arcs by signed index: each arc a list of at least two positions. (Each position is checked where it is
- * read, by {@link position}: a second pass over the arc would cost as much as decoding it.)
+ * A reader of the arcs by signed index: each arc a list (of positions; a list of fewer than two decodes as upstream decodes it,
+ * and only the mesh's stitching, which reads an arc's second position, needs two). Each position is checked where it is read
+ * ({@link position}): a second pass over the arc would cost as much as decoding it.
  */
-function arcReader(arcs: readonly unknown[]): (index: unknown) => Position[] {
+function arcReader(arcs: readonly unknown[], minLength = 0): (index: unknown) => Position[] {
   return (index) => {
     const slot = arcSlot(index, arcs.length)
     const arc = arcs[slot]
-    if (!Array.isArray(arc) || arc.length < 2) throw malformed(`arc ${slot} must be a list of at least two positions`)
+    if (!Array.isArray(arc) || arc.length < minLength) {
+      throw malformed(minLength ? `arc ${slot} must be a list of at least ${minLength} positions` : `arc ${slot} must be a list`)
+    }
     return arc as Position[]
   }
 }
 
-/** A position as read from an arc: an object (a list); anything else is a malformed-topology error. */
-function position(p: unknown): Position {
-  if (typeof p !== 'object' || p === null) throw malformed(`a position must be a list, got ${JSON.stringify(p) ?? String(p)}`)
+/**
+ * A position as read from an arc. A delta-encoded one is read by index, so anything but null or undefined decodes (a value that
+ * is not a list to NaN, as upstream); a plain one is copied, so it must be a list.
+ */
+function position(p: unknown, copied = false): Position {
+  if (p == null || (copied && !Array.isArray(p))) throw malformed(`a position must be a list, got ${JSON.stringify(p) ?? String(p)}`)
   return p as Position
 }
 
@@ -131,7 +137,7 @@ function decodePositions(positions: readonly Position[], transform: Transform | 
   const n = positions.length
   const out = new Array<Position>(n)
   if (!transform) {
-    for (let i = 0; i < n; i++) out[i] = position(positions[i]).slice()
+    for (let i = 0; i < n; i++) out[i] = position(positions[i], true).slice()
     return out
   }
   const kx = transform.scale[0]
@@ -189,7 +195,7 @@ function decoder(topology: Topology) {
     meterCoords(raw.length, 'topojson arcs', (decoded += raw.length))
     const first = points.length
     if (transform) appendTransformed(points, raw, transform)
-    else for (let i = 0; i < raw.length; i++) points.push(position(raw[i]).slice())
+    else for (let i = 0; i < raw.length; i++) points.push(position(raw[i], true).slice())
     if (index < 0) reverseTail(points, first)
   }
 
@@ -319,7 +325,7 @@ const keyOf = (p: ArrayLike<number>): string =>
  * to the back), then those found only by start, then any arc that ended up in none as a run of its own.
  */
 function stitch(topology: Topology, indices: number[]): number[][] {
-  const dataOf = arcReader(arcsOfTopology(topology))
+  const dataOf = arcReader(arcsOfTopology(topology), 2)
   const transform = transformOf(topology)
 
   // arcs of one or two positions with no movement go first, since another arc may subsume them
