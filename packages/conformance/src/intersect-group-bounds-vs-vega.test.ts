@@ -68,7 +68,7 @@ async function both(marks: Obj[], box: number[][]): Promise<{ aster: string[]; v
   const view = new vega.View(vega.parse(structuredClone(spec) as never), { renderer: 'none' })
   await view.runAsync()
   const bounds = new vega.Bounds().set(box[0]![0]!, box[0]![1]!, box[1]![0]!, box[1]![1]!)
-  const got = fillsOf((vega as unknown as { intersect(scene: unknown, b: unknown): unknown[] }).intersect(view.scenegraph().root, bounds))
+  const got = fillsOf((vega as unknown as { intersect(scene: unknown, b: unknown): unknown[] }).intersect((view.scenegraph() as unknown as { root: unknown }).root, bounds))
   view.finalize()
   return { aster, vega: got }
 }
