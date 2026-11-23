@@ -39,8 +39,13 @@ vega-lite 6.4.3, or throws a `VLCompileError` naming the unsupported feature
 (with the path in the spec, e.g. `encoding.x.scale.domain: ...`). It never
 compiles a wrong chart silently, and it never mutates its input. The spec's
 structure is copied; its rows (an inline `data.values`, the entries of `datasets`)
-are not: compiling reads none of them, so it costs the same for 3 rows as for
-6,000. The compiled spec carries the caller's row objects, in arrays of its own,
+are not, and compiling one view over them reads none of them: it costs the same for 3 rows as for 6,000. Three
+things do read rows, to share a dataset as vega-lite does: two views whose `data.values` are *distinct but equal*
+arrays have their rows compared (passing the same array costs nothing), a `lookup` from anonymous inline rows reads
+them, and an inline CSV / JSON text is compared as text; a large `params[].value` or `usermeta` is copied. (At
+400,000 rows, measured on 2026-11-23: one unit 2.9 ms, two layers over equal distinct arrays 58 ms, four such
+concat views 123 ms, a lookup from inline rows 100 ms, a 3.9 MB CSV text 20 ms, a 400,000-element parameter value
+40 ms.) The compiled spec carries the caller's row objects, in arrays of its own,
 as vega-lite does; nothing in Aster writes to them. Treat them as immutable too: to
 change the data, pass new arrays (a chart that gets the same array again assumes
 the same rows, so an in-place edit is seen only by what happens to re-evaluate; in
@@ -131,8 +136,18 @@ an expression or a generated dataset/signal/scale name.
 ## Throws (not supported)
 
 Everything below throws a `VLCompileError` naming the feature and its path; nothing is silently
-ignored. (The list is what `compile` refuses today, checked one spec per line against the build; a feature that
-vega-lite supports and is not here compiles to the same Vega.)
+ignored. Two refusals are general, and name what they refuse by path rather than by feature:
+
+- **A property the compiler does not read.** Every property of the spec has to be read by the compile, or be one
+  vega-lite itself ignores (each such rule is pinned against vega-lite by a test); any other is refused at the end of
+  the compile as `<path>: is valid Vega-Lite but @aster-charts/vl does not implement it here, so it would be ignored`.
+  So a feature the list below does not name is either compiled to what vega-lite draws, or refused by this message.
+- **Names that collide in the compiled Vega**: a parameter named as a name the compiler makes (`unit` beside a
+  selection, `x_step`), one selection name in two layers, two views of one `name`. Vega refuses the output (as it
+  refuses vega-lite's), so the compile does, naming the duplicate.
+
+The list below is the features refused by name, each checked by `test/readme-refusals.test.ts` against the build
+(the spec is refused, and for that reason).
 
 - Params and selections that vega-lite itself compiles to a Vega spec that Vega rejects or that has no well-defined meaning:
   on a layer spec itself, or on a concat / facet / repeat that has a layer or a composite mark (boxplot, errorbar,
@@ -174,6 +189,11 @@ vega-lite supports and is not here compiles to the same Vega.)
   layer (the Vega-Lite schema forbids it), layer repeats combined with row / column, layers whose scales are
   incompatible or conflict, a facet of layers over different data, `argmax` / `argmin` as an op of a `window`
   transform, sort arrays of DateTime objects.
+- Layer resolution where vega-lite 6.4.3's output is broken: independent x / y scales over layers sized
+  differently (by steps, or by different widths / heights: vega-lite gives the view no size and draws nothing, or,
+  in a nested layer, draws the layer past the view); `axis: null` on a layer after one that draws the axis
+  (vega-lite crashes); a layer in a facet that keeps its own x / y scales unless the facet resolves them
+  independent too (vega-lite reads a scale it never defines).
 
 ## Where it matches vega-lite on purpose, rather than the specification
 

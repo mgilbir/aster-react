@@ -10,7 +10,8 @@ import { describe, it, expect } from 'vitest'
 import { compile, VLCompileError } from '../src/index.js'
 
 const README = readFileSync(new URL('../README.md', import.meta.url), 'utf8')
-const LIST = README.slice(README.indexOf('## Throws (not supported)'), README.indexOf('## Known runtime gaps'))
+// (the section itself, up to the next heading: a phrase in a later section does not count)
+const LIST = README.slice(README.indexOf('## Throws (not supported)'), README.indexOf('\n## ', README.indexOf('## Throws (not supported)') + 1))
 
 const data = { values: [{ a: 'A', b: 1, c: 2, d: '2020-01-01', lon: 1, lat: 2, t: 1 }] }
 const q = (field: string): Record<string, unknown> => ({ field, type: 'quantitative' })
@@ -22,46 +23,51 @@ const frame = [{ filter: { param: 'anim' } }]
 const lonlat = { longitude: q('lon'), latitude: q('lat') }
 const proj = { projection: { type: 'mercator' } }
 
-/** [the words the README uses, a spec that exercises it] */
-const REFUSED: Array<[string, Record<string, unknown>]> = [
-  ['on a layer spec itself', { data, params: [sel], layer: [unit('point', { x: q('b') }), unit('line', { x: q('b') })].map(({ data: _d, ...u }) => u) }],
-  ['on a composition whose units have params of their own', { data, params: [sel], hconcat: [{ params: [{ name: 'q', select: 'point' }], mark: 'point', encoding: { x: q('b') } }] }],
-  ['`views`', { data, params: [{ ...sel, views: ['a'] }], hconcat: [{ name: 'a', mark: 'point', encoding: { x: q('b') } }] }],
-  ['`bin.extent` as anything but a `[min, max]` pair', unit('bar', { x: { field: 'b', type: 'quantitative', bin: { extent: { expr: 'ext' } } }, y: { aggregate: 'count' } }, { params: [{ name: 'ext', value: [0, 5] }] })],
-  ['a lookup from a selection of the same\n  unit', unit('point', { x: q('b') }, { params: [{ name: 'p', select: 'point' }], transform: [{ lookup: 'a', from: { param: 'p', key: 'a' } }] })],
-  ['`scale.domain.unionWith` in a layered spec', { data, layer: [{ params: [sel], mark: 'point', encoding: { x: { ...q('b'), scale: { domain: { unionWith: [0, 100] } } } } }, { mark: 'point', encoding: { x: q('b') } }] }],
-  ['a parameter\'s `push`', unit('point', { x: q('b') }, { params: [{ ...sel, push: 'outer' }] })],
-  ['a geoshape without a GeoJSON `shape` field inside a facet', { data: { values: [{ type: 'Feature', geometry: { type: 'Point', coordinates: [0, 0] }, properties: { a: 'A' } }] }, facet: { row: { field: 'properties.a' } }, spec: { ...proj, mark: 'geoshape' } }],
-  ['positions on marks other than point', unit('bar', lonlat, proj)],
-  ['a half pair', unit('point', { longitude: q('lon') }, proj)],
-  ['one of a pair given as a value or a condition alone', unit('point', { longitude: { value: 1 }, latitude: q('lat') }, proj)],
-  ['a count of records (`aggregate: "count"` with no field)', unit('point', { longitude: { aggregate: 'count', type: 'quantitative' }, latitude: q('lat') }, proj)],
-  ['a longitude / latitude datum that is not a number', unit('point', { longitude: { datum: 'east', type: 'nominal' }, latitude: q('lat') }, proj)],
-  ['a `time` channel needs a single\n  top-level unit', { data, hconcat: [{ params: [timer], transform: frame, mark: 'point', encoding: { x: q('b'), time: q('t') } }] }],
-  ['composite marks', unit('boxplot', { x: n('a'), y: q('b'), time: q('t') }, { params: [timer], transform: frame })],
-  ['`bind` / `value` on the timer', unit('point', { x: q('b'), time: q('t') }, { params: [{ ...timer, bind: { input: 'range' } }], transform: frame })],
-  ['`timeUnit.maxbins`', unit('bar', { x: { field: 'd', type: 'temporal', timeUnit: { maxbins: 5 } }, y: q('c') })],
-  ['errorbar / errorband over a binned channel', unit('errorbar', { x: { field: 'b', type: 'quantitative', bin: 'binned' }, y: q('c') })],
-  ['`timeUnitBandPosition`', unit({ type: 'bar', timeUnitBandPosition: 0.5 }, { x: { field: 'd', type: 'temporal', timeUnit: 'month' } })],
-  ['a `datum`\n  condition on fillOpacity', unit('point', { x: q('b'), fillOpacity: { condition: { test: 'datum.b > 1', datum: 2 }, value: 1 } })],
-  ['a field condition that reads a field other than the\n  channel\'s own', unit('point', { x: q('b'), color: { condition: { test: 'datum.b > 1', field: 'c', type: 'quantitative' }, field: 'b', type: 'quantitative' } })],
-  ['an array of conditions that holds a field condition', unit('point', { x: q('b'), color: { condition: [{ test: 'datum.b > 1', field: 'a', type: 'nominal' }], value: 'g' } })],
-  ['`impute` or\n  pre-binned data (`binned`) on a channel other than x and y', unit('line', { x: q('b'), y: q('c'), color: { ...n('a'), impute: { value: 0 } } })],
-  ['the `geojson` type on a channel other than shape', unit('point', { x: q('b'), color: { field: 'a', type: 'geojson' } })],
-  ['a GeoJSON shape on any other mark', unit('point', { x: q('b'), shape: { field: 'g', type: 'geojson' } })],
-  ['channel-level `band`', unit('bar', { x: { field: 'd', type: 'temporal', timeUnit: 'month', band: 0.5 } })],
-  ['a condition that gives a field or a datum on a position channel', unit('point', { x: { condition: { test: 'datum.b > 1', field: 'c', type: 'quantitative' }, value: 1 }, y: q('b') })],
-  ['the positional mark-def constants', unit({ type: 'bar', x: 5 }, { y: q('b') })],
-  ['`width` / `height: "container"` on a composition', { data, width: 'container', hconcat: [{ mark: 'point', encoding: { x: q('b') } }] }],
-  ['`data: null`', { data: null, mark: 'point' }],
-  ['config keys\n  outside the supported list', unit('point', { x: q('b') }, { config: { nonsense: 1 } })],
-  ['a wrapped facet', { data, facet: { row: { field: 'a' } }, spec: { facet: { field: 'b', type: 'nominal' }, spec: { mark: 'point', encoding: { x: q('b') } } } }],
-  ['a concat in a\n  layer', { data, layer: [{ hconcat: [{ mark: 'point' }] }] }],
-  ['layer repeats combined with row / column', { data, repeat: { layer: ['b', 'c'], row: ['b'] }, spec: { mark: 'point', encoding: { x: { field: { repeat: 'layer' }, type: 'quantitative' } } } }],
-  ['layers whose scales are\n  incompatible or conflict', { data, layer: [{ mark: 'point', encoding: { x: n('a') } }, { mark: 'point', encoding: { x: q('b') } }] }],
-  ['a facet of layers over different data', { facet: { row: { field: 'a' } }, spec: { layer: [{ data, mark: 'point' }, { data: { values: [{ a: 1 }] }, mark: 'line' }] } }],
-  ['`argmax` / `argmin` as an op of a `window`', unit('point', { x: q('b') }, { transform: [{ window: [{ op: 'argmax', field: 'b', as: 'm' }] }] })],
-  ['sort arrays of DateTime objects', unit('point', { x: { field: 'd', type: 'temporal', sort: [{ year: 2020 }] } })],
+/** [the words the README uses, a spec that exercises it, what the refusal says (not a refusal for another reason)] */
+const REFUSED: Array<[string, Record<string, unknown>, RegExp]> = [
+  ['on a layer spec itself', { data, params: [sel], layer: [unit('point', { x: q('b') }), unit('line', { x: q('b') })].map(({ data: _d, ...u }) => u) }, /on a layer spec itself/],
+  ['on a composition whose units have params of their own', { data, params: [sel], hconcat: [{ params: [{ name: 'q', select: 'point' }], mark: 'point', encoding: { x: q('b') } }] }, /replaces the parameters of a uni/],
+  ['`views`', { data, params: [{ ...sel, views: ['a'] }], hconcat: [{ name: 'a', mark: 'point', encoding: { x: q('b') } }] }, /`views`/],
+  ['`bin.extent` as anything but a `[min, max]` pair', unit('bar', { x: { field: 'b', type: 'quantitative', bin: { extent: { expr: 'ext' } } }, y: { aggregate: 'count' } }, { params: [{ name: 'ext', value: [0, 5] }] }), /bin\.extent/],
+  ['a lookup from a selection of the same\n  unit', unit('point', { x: q('b') }, { params: [{ name: 'p', select: 'point' }], transform: [{ lookup: 'a', from: { param: 'p', key: 'a' } }] }), /in the unit that declares it/],
+  ['`scale.domain.unionWith` in a layered spec', { data, layer: [{ params: [sel], mark: 'point', encoding: { x: { ...q('b'), scale: { domain: { unionWith: [0, 100] } } } } }, { mark: 'point', encoding: { x: q('b') } }] }, /unionWith/],
+  ['a parameter\'s `push`', unit('point', { x: q('b') }, { params: [{ ...sel, push: 'outer' }] }), /push/],
+  ['a geoshape without a GeoJSON `shape` field inside a facet', { data: { values: [{ type: 'Feature', geometry: { type: 'Point', coordinates: [0, 0] }, properties: { a: 'A' } }] }, facet: { row: { field: 'properties.a' } }, spec: { ...proj, mark: 'geoshape' } }, /geoshape with no `shape` field inside a facet/],
+  ['positions on marks other than point', unit('bar', lonlat, proj), /only implemented for the point/],
+  ['a half pair', unit('point', { longitude: q('lon') }, proj), /needs its pair/],
+  ['one of a pair given as a value or a condition alone', unit('point', { longitude: { value: 1 }, latitude: q('lat') }, proj), /needs its pair/],
+  ['a count of records (`aggregate: "count"` with no field)', unit('point', { longitude: { aggregate: 'count', type: 'quantitative' }, latitude: q('lat') }, proj), /count of records/],
+  ['a longitude / latitude datum that is not a number', unit('point', { longitude: { datum: 'east', type: 'nominal' }, latitude: q('lat') }, proj), /must be a finite number/],
+  ['a `time` channel needs a single\n  top-level unit', { data, hconcat: [{ params: [timer], transform: frame, mark: 'point', encoding: { x: q('b'), time: q('t') } }] }, /single top-level unit/],
+  ['composite marks', unit('boxplot', { x: n('a'), y: q('b'), time: q('t') }, { params: [timer], transform: frame }), /animating it is not supported/],
+  ['`bind` / `value` on the timer', unit('point', { x: q('b'), time: q('t') }, { params: [{ ...timer, bind: { input: 'range' } }], transform: frame }), /bound timer selection/],
+  ['`timeUnit.maxbins`', unit('bar', { x: { field: 'd', type: 'temporal', timeUnit: { maxbins: 5 } }, y: q('c') }), /timeUnit\.maxbins/],
+  ['errorbar / errorband over a binned channel', unit('errorbar', { x: { field: 'b', type: 'quantitative', bin: 'binned' }, y: q('c') }), /over a binned/],
+  ['`timeUnitBandPosition`', unit({ type: 'bar', timeUnitBandPosition: 0.5 }, { x: { field: 'd', type: 'temporal', timeUnit: 'month' } }), /timeUnitBandPosition/],
+  ['a `datum`\n  condition on fillOpacity', unit('point', { x: q('b'), fillOpacity: { condition: { test: 'datum.b > 1', datum: 2 }, value: 1 } }), /datum conditions/],
+  ['a field condition that reads a field other than the\n  channel\'s own', unit('point', { x: q('b'), color: { condition: { test: 'datum.b > 1', field: 'c', type: 'quantitative' }, field: 'b', type: 'quantitative' } }), /channel's own field/],
+  ['an array of conditions that holds a field condition', unit('point', { x: q('b'), color: { condition: [{ test: 'datum.b > 1', field: 'a', type: 'nominal' }], value: 'g' } }), /must be value conditions/],
+  ['`impute` or\n  pre-binned data (`binned`) on a channel other than x and y', unit('line', { x: q('b'), y: q('c'), color: { ...n('a'), impute: { value: 0 } } }), /`impute` only applies/],
+  ['the `geojson` type on a channel other than shape', unit('point', { x: q('b'), color: { field: 'a', type: 'geojson' } }), /geojson type only applies/],
+  ['a GeoJSON shape on any other mark', unit('point', { x: q('b'), shape: { field: 'g', type: 'geojson' } }), /only applies to the geoshape mark/],
+  ['channel-level `band`', unit('bar', { x: { field: 'd', type: 'temporal', timeUnit: 'month', band: 0.5 } }), /`band` is not supported/],
+  ['a condition that gives a field or a datum on a position channel', unit('point', { x: { condition: { test: 'datum.b > 1', field: 'c', type: 'quantitative' }, value: 1 }, y: q('b') }), /on a position channel/],
+  ['the positional mark-def constants', unit({ type: 'bar', x: 5 }, { y: q('b') }), /positional mark-def constants/],
+  ['`width` / `height: "container"` on a composition', { data, width: 'container', hconcat: [{ mark: 'point', encoding: { x: q('b') } }] }, /"container" is only supported/],
+  ['`data: null`', { data: null, mark: 'point' }, /data: null/],
+  ['config keys\n  outside the supported list', unit('point', { x: q('b') }, { config: { nonsense: 1 } }), /config property/],
+  ['a wrapped facet', { data, facet: { row: { field: 'a' } }, spec: { facet: { field: 'b', type: 'nominal' }, spec: { mark: 'point', encoding: { x: q('b') } } } }, /wrapped facet/],
+  ['a concat in a\n  layer', { data, layer: [{ hconcat: [{ mark: 'point' }] }] }, /not allowed inside `layer`/],
+  ['layer repeats combined with row / column', { data, repeat: { layer: ['b', 'c'], row: ['b'] }, spec: { mark: 'point', encoding: { x: { field: { repeat: 'layer' }, type: 'quantitative' } } } }, /layer repeats combined/],
+  ['layers whose scales are\n  incompatible or conflict', { data, layer: [{ mark: 'point', encoding: { x: n('a') } }, { mark: 'point', encoding: { x: q('b') } }] }, /independent x scales over layers sized differently/],
+  ['a facet of layers over different data', { facet: { row: { field: 'a' } }, spec: { layer: [{ data, mark: 'point' }, { data: { values: [{ a: 1 }] }, mark: 'line' }] } }, /different data sources/],
+  ['`argmax` / `argmin` as an op of a `window`', unit('point', { x: q('b') }, { transform: [{ window: [{ op: 'argmax', field: 'b', as: 'm' }] }] }), /window op "argmax"/],
+  ['sort arrays of DateTime objects', unit('point', { x: { field: 'd', type: 'temporal', sort: [{ year: 2020 }] } }), /DateTime objects/],
+  ['is valid Vega-Lite but @aster-charts/vl does not implement it here, so it would be ignored', unit('point', { x: q('b'), color: { ...n('a'), header: { title: 'h' } } }), /encoding\.color\.header\.title: is valid Vega-Lite but/],
+  ['a parameter named as a name the compiler makes', unit('bar', { x: n('a'), y: q('b') }, { params: [{ name: 'x_step', value: 1 }] }), /declares the Vega signal "x_step" twice/],
+  ['independent x / y scales over layers sized\n  differently', { data, layer: [{ mark: 'bar', encoding: { x: n('a'), y: q('b') } }, { mark: 'point', encoding: { x: q('c'), y: q('b') } }], resolve: { scale: { x: 'independent' } } }, /independent x scales over layers sized differently/],
+  ['`axis: null` on a layer after one that draws the axis', { data, layer: [{ mark: 'bar', encoding: { x: n('a'), y: q('b') } }, { mark: 'line', encoding: { x: n('a'), y: { ...q('c'), axis: null } } }] }, /`axis: null` on a layer after one that draws/],
+  ['a layer in a facet that keeps its own x / y scales', { data, facet: { column: n('a') }, spec: { layer: [{ mark: 'point', encoding: { x: q('b'), y: q('b') } }, { mark: 'point', encoding: { x: q('b'), y: q('c') } }], resolve: { scale: { y: 'independent' } } } }, /a layer in a facet that keeps its own y scales/],
 ]
 
 /** Features the README used to list as refused, that compile now. */
@@ -94,13 +100,18 @@ const COMPILES: Array<[string, Record<string, unknown>]> = [
   ['a time unit and any data type on a longitude / latitude (it was refused as "quantitative only")', unit('point', { longitude: { field: 'lon', type: 'nominal' }, latitude: { field: 'lat', type: 'temporal', timeUnit: 'year' } }, proj)],
   ['`impute`, pre-binned data and `band` on a longitude / latitude (vega-lite ignores them)', unit('point', { longitude: { ...q('lon'), impute: { value: 0 }, band: 0.5 }, latitude: { ...q('lat'), bin: 'binned' } }, proj)],
   ['a selection on a named view', { data, params: [sel], hconcat: [{ name: 'v', mark: 'point', encoding: { x: q('b') } }] }],
+  ['`header: null` on a facet', { data, facet: { row: { field: 'a', type: 'nominal', header: null } }, spec: { mark: 'point', encoding: { x: q('b') } } }],
+  ['a nested view\'s background, padding and autosize (vega-lite ignores them)', { data, hconcat: [{ background: 'red', padding: 5, autosize: 'none', mark: 'point', encoding: { x: q('b') } }] }],
+  ['`view` on a concat, and view.clip', { data, view: { fill: 'red' }, hconcat: [{ view: { clip: true }, mark: 'point', encoding: { x: q('b') } }] }],
+  ['resolve on a layer, at every level', { data, layer: [{ layer: [unit('bar', { x: n('a'), y: q('b') }), unit('line', { x: n('a'), y: q('c') })].map(({ data: _d, ...u }) => u), resolve: { scale: { y: 'independent' } } }, { mark: 'rule', encoding: { y: q('b') } }], resolve: { legend: { color: 'independent' } } }],
 ]
 
 describe('packages/vl/README.md "Throws (not supported)" matches the compiler', () => {
-  for (const [words, spec] of REFUSED) {
+  for (const [words, spec, says] of REFUSED) {
     it(`names, and the compiler refuses: ${words.replace(/\s+/g, ' ')}`, () => {
       expect(LIST, 'the README does not say this').toContain(words)
       expect(() => compile(spec as never)).toThrow(VLCompileError)
+      expect(() => compile(spec as never)).toThrow(says)
     })
   }
 
