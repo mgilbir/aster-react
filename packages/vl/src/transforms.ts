@@ -11,6 +11,12 @@ import { pushAll, genSignal, safeKey, splitAccessPath, VLCompileError, datumPath
 import { predicateExpr, paramLeaves } from './predicate.js'
 import { normalizeTimeUnit, timeUnitTransform } from './timeunit.js'
 
+/**
+ * The `extent` transforms that publish a parameter (`{extent, param}`): the signal is the user's parameter, global to the spec, so a
+ * composition never renames it as a view's own (vega-lite ExtentTransformNode assembles `signal: param`).
+ */
+export const PARAM_EXTENTS = new WeakSet<object>()
+
 type Obj = Record<string, unknown>
 const isObj = (v: unknown): v is Obj => v !== null && typeof v === 'object' && !Array.isArray(v)
 
@@ -419,7 +425,9 @@ export function translateTransform(t: Obj, ctx: TransformContext, st: TranslateS
     out.push(qt)
     derived(as)
   } else if (t.extent !== undefined) {
-    out.push({ type: 'extent', field: t.extent, signal: t.param })
+    const extent = { type: 'extent', field: t.extent, signal: t.param }
+    PARAM_EXTENTS.add(extent)
+    out.push(extent)
   } else {
     throw new VLCompileError(`unsupported transform ${JSON.stringify(Object.keys(t))}`)
   }
