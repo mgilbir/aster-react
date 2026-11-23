@@ -150,11 +150,34 @@ export function partLoaded(name: EnginePart): boolean {
   return slots[name] !== undefined
 }
 
+/**
+ * The public entry that carries each part (importing it fills the slot), `null` for a part no entry fills: the pulse part (the
+ * incremental engine asks for it in the background, `loadParts`), and the canvas renderer and the signal loop, which the React shells
+ * load for the capability that uses them (no evaluation reads either). Typed per part, so a new part must say where it is carried; the
+ * test (engine-parts-entries.test.ts) imports each entry in a fresh module registry and checks the claim both ways.
+ */
+export const CARRIED_BY: Readonly<Record<EnginePart, '@aster-charts/core' | '@aster-charts/core/signals' | null>> = {
+  aggregate: '@aster-charts/core', window: '@aster-charts/core', reshape: '@aster-charts/core', time: '@aster-charts/core',
+  curves: '@aster-charts/core', color: '@aster-charts/core', scales: '@aster-charts/core', legend: '@aster-charts/core',
+  layout: '@aster-charts/core', pulse: null, selections: '@aster-charts/core', regex: '@aster-charts/core', svgpath: '@aster-charts/core',
+  intersect: '@aster-charts/core/signals', modify: '@aster-charts/core/signals', timer: '@aster-charts/core/signals',
+  canvas: null, signals: null,
+}
+
+/** What to do about an empty slot: the entry that carries the part, or how else it gets loaded. */
+function howToLoad(name: EnginePart): string {
+  const entry = CARRIED_BY[name]
+  if (entry !== null) return `load it before evaluating (loadPartsFor in @aster-charts/core/addons), or import ${entry}, which carries it`
+  if (name === 'canvas') return 'it belongs to the canvas renderer, which <Chart renderer="canvas"> loads (the canvas capability); no entry of @aster-charts/core carries it'
+  if (name === 'signals') return 'it belongs to the signal loop, which <Chart> loads for a chart that binds events (the interaction capability); no entry of @aster-charts/core carries it'
+  return 'load it with loadParts in @aster-charts/core/addons; no entry of @aster-charts/core carries it'
+}
+
 /** A part, which must be loaded: reading an empty slot throws (see the file header). */
 export function part<K extends EnginePart>(name: K): EngineParts[K] {
   const impl = slots[name]
   if (impl === undefined) {
-    throw new Error(`[aster] the "${name}" part of the engine is not loaded: load it before evaluating (loadPartsFor in @aster-charts/core/addons), or import @aster-charts/core, which carries it`)
+    throw new Error(`[aster] the "${name}" part of the engine is not loaded: ${howToLoad(name)}`)
   }
   return impl
 }
