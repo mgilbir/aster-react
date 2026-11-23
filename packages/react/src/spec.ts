@@ -26,13 +26,18 @@ export function isVegaLiteSpec(spec: unknown): boolean {
   return ['mark', 'encoding', 'layer', 'facet', 'repeat', 'concat', 'hconcat', 'vconcat'].some((k) => own(spec, k) != null)
 }
 
-/** What a value that is not a spec object is, for the error that refuses it. */
-function describe(value: unknown): string {
-  if (value === null) return 'null'
-  if (Array.isArray(value)) return 'an array'
-  if (typeof value === 'string') return 'a string (parse JSON text with JSON.parse first)'
-  if (typeof value === 'object') return `an instance of ${(value as object).constructor?.name ?? 'a class'}`
-  return typeof value
+/**
+ * A value a prop was given, as an error that refuses it names it: a number, a string (quoted), `null` or `undefined` as written,
+ * a short array of such values as a list, anything else by its kind.
+ */
+export function describeValue(value: unknown): string {
+  if (typeof value === 'string') return JSON.stringify(value)
+  if (value === null || typeof value !== 'object') return String(value)
+  if (Array.isArray(value)) {
+    return value.length <= 4 && value.every((v) => v == null || typeof v !== 'object') ? `[${value.map(describeValue).join(',')}]` : 'an array'
+  }
+  const proto = Object.getPrototypeOf(value) as unknown
+  return proto === Object.prototype || proto === null ? 'an object' : `an instance of ${(value as object).constructor?.name ?? 'a class'}`
 }
 
 /**
@@ -44,7 +49,10 @@ function describe(value: unknown): string {
  * error state and `onError` / `error` like any other failure.
  */
 export function normalizeChartSpec(spec: VgSpec): VgSpec {
-  if (!isPlainObject(spec)) throw new TypeError(`[aster] spec must be a Vega or Vega-Lite spec object; got ${describe(spec)}`)
+  if (!isPlainObject(spec)) {
+    const hint = typeof spec === 'string' ? ' (parse JSON text with JSON.parse first)' : ''
+    throw new TypeError(`[aster] spec must be a Vega or Vega-Lite spec object; got ${typeof spec === 'string' ? 'a string' : describeValue(spec)}${hint}`)
+  }
   return isVegaLiteSpec(spec) ? compileVegaLite(spec) : spec
 }
 
