@@ -28,6 +28,9 @@
  * their own (a mark without `from` over data marks, facet cells, interactive axis labels, legend entries, a title), and the
  * dense scatter of the chart-bench study (10,000 overlapping circles in a 900 x 600 chart) at the point where Aster used to
  * report a circle whose edge is 0.19 px away from the pointer.
+ *
+ * Environment: PICK_DEBUG=1 prints every edge answer and the SVG target of every difference (diagnostics only: the verdict is
+ * the same with or without it).
  */
 import type { Browser } from 'playwright'
 
