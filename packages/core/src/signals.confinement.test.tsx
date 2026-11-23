@@ -148,8 +148,8 @@ describe('C4: a handler expression reaches nothing of the page', () => {
     // what the facade does carry: the values vega's expressions read
     expect((m.store.wheel as Record<string, unknown>).deltaY).toBe(3)
     expect((m.store.key as Record<string, unknown>).key).toBe('k')
-    expect(((m.store.touch as Record<string, unknown[]>).touches[0] as Record<string, unknown>).clientX).toBe(4)
-    expect(((m.store.click as Record<string, { datum: unknown }>).item.datum as Record<string, unknown>).v).toBe(1)
+    expect((m.store.touch as { touches: Array<Record<string, unknown>> }).touches[0]!.clientX).toBe(4)
+    expect((m.store.click as { item: { datum: Record<string, unknown> } }).item.datum.v).toBe(1)
     expect(typeof (m.store.tick as Record<string, unknown>).elapsed).toBe('number')
     expect(Object.isFrozen(m.store.click)).toBe(true)
   })
@@ -243,7 +243,7 @@ describe('C40: what outlives a binding is the chart\'s', () => {
   })
 
   it('timers of earlier charts on an owner stop when another chart binds to it; release forgets the streams', () => {
-    const clock = useClock(16)
+    useClock(16)
     const host = document.createElement('div')
     document.body.appendChild(host)
     for (let i = 1; i <= 6; i++) {
