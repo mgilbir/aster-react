@@ -80,8 +80,8 @@ await runGate({
   name: 'scene-diff',
   counters: {
     specs: { floor: 1063, what: "corpus specs whose resolved scene was compared with vega's scenegraph" },
-    items: { floor: 1, what: 'scene items compared' },
-    scales: { floor: 1, what: 'scales compared' },
+    items: { floor: 5524, what: 'scene items compared' },
+    scales: { floor: 2164, what: 'scales compared' },
   },
   partial: Boolean(filter) || scalesOnly,
   run: main,

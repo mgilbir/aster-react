@@ -22,6 +22,7 @@
  *   pnpm fuzz                 # 200 seeds from 0
  *   pnpm fuzz -- --seeds 500 --start 200
  *   pnpm fuzz:replay          # every committed reproducer (gate `fuzz-replay`)
+ *   [--repro-dir=<path>]      # read and write the reproducers there instead of fuzz-repro/
  *
  * Run after `pnpm build` (it renders through @aster-charts/core's dist).
  */
@@ -35,10 +36,11 @@ import { plantSvg } from '../src/gate-plant.js'
 import { cli } from '../../../scripts/lib/cli.mjs'
 import { GATE_FLAGS, intOption, runGate, type Gate } from '../../../scripts/lib/run-gate.mjs'
 
-cli({ url: import.meta.url, flags: { replay: 'bool', clean: 'bool', seeds: 'value', start: 'value', ...GATE_FLAGS } })
+cli({ url: import.meta.url, flags: { replay: 'bool', clean: 'bool', seeds: 'value', start: 'value', 'repro-dir': 'eq', ...GATE_FLAGS } })
 
 const HERE = dirname(fileURLToPath(import.meta.url))
-const REPRO = join(HERE, '..', 'fuzz-repro')
+/** `--repro-dir=<path>` reads (and writes) the reproducers elsewhere (the self-test points replay at an empty directory). */
+const REPRO = process.argv.slice(2).find((a) => a.startsWith('--repro-dir='))?.slice('--repro-dir='.length) ?? join(HERE, '..', 'fuzz-repro')
 
 function mulberry32(seed: number): () => number {
   let a = seed >>> 0
