@@ -61,7 +61,7 @@ import { copyTuple, withTupleOrigins, dict, ownGet, pushAll, sortData, lerp, sco
 import { applyImageUrlPolicy, applyLinkUrlPolicy, resolveImageUrl, type ImageUrlPolicy } from './url-policy.js'
 import { checkChartUrlData } from './url-data.js'
 import { publishRows, valueKey, valuesEqual } from './fingerprint.js'
-import { historical, idOf, keepHistory, pin, pinAll, samePin, samePins, stampKey, wrote, type History, type Pin } from './content-stamp.js'
+import { beginWrite, endWrite, historical, idOf, keepHistory, pin, pinAll, samePin, samePins, stampKey, wrote, type History, type Pin } from './content-stamp.js'
 import { dataWithoutRows, valuesSignal } from './spec-structure.js'
 import { diffRows, equalCell, rowsEqual, sourceNames, type PulseChange } from './pulse.js'
 import type { aggregateGroups } from './transform-agg.js'
@@ -4432,18 +4432,22 @@ function hostPulse(ctx: EvalContext, name: string, given: unknown): StepPulse | 
   if (before === undefined || !Array.isArray(given)) return null
   // (the very array, or the array the caller says its pulse is relative to: a session diffs against the rows it handed over last)
   if (before === given || ctx.pulseBases?.get(name) === before) return p
-  const changed = new Set(p.changed)
+  // (the references first, in one tight pass; the changed indices and the field comparison only for a row that is another object)
+  let changed: Set<number> | undefined
+  const accountedFor = (i: number, a: unknown, b: unknown): boolean => (changed ??= new Set(p.changed)).has(i) || sameHostRow(a, b)
   if (p.from !== undefined) {
     if (p.from.length !== given.length) return null
     for (let i = 0; i < given.length; i++) {
       const old = p.from[i]!
-      if (old >= 0 && !changed.has(i) && (old >= before.length || !sameHostRow(given[i], before[old]))) return null
+      if (old < 0) continue
+      if (old >= before.length) { if (!(changed ??= new Set(p.changed)).has(i)) return null; continue }
+      if (given[i] !== before[old] && !accountedFor(i, given[i], before[old])) return null
     }
     return p
   }
   const base = p.appendOnly ? p.baseLength ?? before.length : given.length
   if (base !== before.length || base > given.length) return null
-  for (let i = 0; i < base; i++) if (!changed.has(i) && !sameHostRow(given[i], before[i])) return null
+  for (let i = 0; i < base; i++) if (given[i] !== before[i] && !accountedFor(i, given[i], before[i])) return null
   return p
 }
 
@@ -4654,9 +4658,9 @@ function buildDatasetsOf(ctx: EvalContext, inputData: Record<string, unknown[]>)
           if (shared) rows = copyRows(rows)
           const res = ctx.engine!.applyPipelineWithPulse!(rows, d.transform, tctx, name, inPulse!, prevDS, state)
           // (the pulse advanced the claimed steps in place: whatever pinned them before the claim, or while the pulse ran, is stale)
-          for (const part of datasetParts(prevDS)) wrote(part)
-          for (const part of state.steps) wrote(part)
-          wrote(res.rows)
+          for (const part of datasetParts(prevDS)) endWrite(part)
+          for (const part of state.steps) endWrite(part)
+          endWrite(res.rows)
           rows = res.rows
           outPulse = res.pulse
           // (what each step read, as `runPipeline` records it, so a later evaluation that is not driven by a pulse keeps the steps:
@@ -5436,7 +5440,8 @@ function advanceDiscCensus(cen: DiscCensus, rows: Row[], pulse: StepPulse): Disc
  */
 function claim(ctx: EvalContext, parts: readonly object[]): boolean {
   if (!ctx.prev || claimed(ctx, parts)) return false
-  for (const part of parts) { ctx.claimed.add(part); wrote(part) }
+  // (a journalled write: see content-stamp.ts; closed by `endWrite` once the pulse ran)
+  for (const part of parts) { ctx.claimed.add(part); beginWrite(part) }
   ctx.prev.stale = true
   if (ctx.committed !== undefined) ctx.committed.stale = true
   return true
