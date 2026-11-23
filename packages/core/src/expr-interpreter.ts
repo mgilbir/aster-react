@@ -25,7 +25,7 @@
  *  - the regular expressions the built-ins run are screened and their input length-capped under limits, and a string `+`
  *    builds under limits no string longer than `maxStringLength`.
  */
-import { ascending, DisallowedObjectProperties, safeGet, sortSlice, tupleDatum } from './util.js'
+import { ascending, DisallowedObjectProperties, safeGet, sortSlice, tupleDatum, sameTuple } from './util.js'
 import type { AstNode, Expr } from './expr-parser.js'
 import { activeMeter, checkRegexObject, checkRegexRun, freshRegExp, limitViolation, metering, regExpOf } from './limits.js'
 
@@ -303,11 +303,12 @@ function binary(op: string, l: Run, r: Run, mode: Mode): Run {
     case '>': return (f) => (l(f) as any) > (r(f) as any)
     case '<=': return (f) => (l(f) as any) <= (r(f) as any)
     case '>=': return (f) => (l(f) as any) >= (r(f) as any)
-    case '==': return (f) => l(f) == r(f)
-    case '!=': return (f) => l(f) != r(f)
+    case '==': return (f) => { const a = l(f), b = r(f); return a == b || sameTuple(a, b) }
+    case '!=': return (f) => { const a = l(f), b = r(f); return a != b && !sameTuple(a, b) }
     /* eslint-enable @typescript-eslint/no-explicit-any, eqeqeq */
-    case '===': return (f) => l(f) === r(f)
-    case '!==': return (f) => l(f) !== r(f)
+    // (two objects are one when they stand for one tuple: the engine's copies of a row, see `sameTuple`)
+    case '===': return (f) => sameTuple(l(f), r(f))
+    case '!==': return (f) => !sameTuple(l(f), r(f))
     case '&': return (f) => (l(f) as number) & (r(f) as number)
     case '|': return (f) => (l(f) as number) | (r(f) as number)
     case '^': return (f) => (l(f) as number) ^ (r(f) as number)

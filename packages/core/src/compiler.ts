@@ -6,6 +6,7 @@
  */
 import { namedSetsOf } from './encode-handlers.js'
 import { dict, ownGet } from './util.js'
+import { parseExpressionCached } from './expr-parser.js'
 import { assertSpecDepth } from './limits.js'
 import { dataInputOf, normalizeSpecLists, VEGA_MARK_TYPES } from './spec-structure.js'
 import { SpecParseError } from './parse-error.js'
@@ -133,6 +134,7 @@ export function compileChart(givenSpec: VgSpec): CompiledChart {
 
   return {
     ...((q) => (q === undefined ? {} : { callsIsTuple: q }))(tupleQuestions(spec)),
+    ...(comparesTuples(spec) ? { comparesTuples: true as const } : {}),
     ...(regexSites.length ? { regexSites } : {}),
     ...(unitIndexed.length ? { unitIndexed } : {}),
     autosize,
@@ -209,6 +211,44 @@ function compileProjection(pr: Record<string, unknown>, config?: Record<string, 
  *   events): its value is then `{}` or a facet cell's datum, registered whatever the evaluation. A host can still set the signal;
  *   `'facet'` says the evaluation looks at the value it is given (see `registersTuples` in runtime.ts).
  */
+/**
+ * Whether an expression of the spec compares two values that may be objects: an equality operator neither of whose operands is a
+ * literal, one of them a bare name (`datum === src`, `item != hovered`). Over-counting costs only the bookkeeping of
+ * `withTupleOrigins`; a comparison it misses would compare copies of one row as different objects.
+ */
+const EQUALITY = new Set(['==', '!=', '===', '!=='])
+const NOT_OBJECTS = new Set(['undefined', 'NaN', 'Infinity'])
+function comparesTuples(spec: unknown): boolean {
+  const seen = new Set<unknown>()
+  const isName = (n: { type?: unknown; name?: unknown }): boolean => n.type === 'Identifier' && !NOT_OBJECTS.has(n.name as string)
+  const compares = (tree: unknown): boolean => {
+    const stack: unknown[] = [tree]
+    while (stack.length) {
+      const e = stack.pop()
+      if (e === null || typeof e !== 'object') continue
+      if (Array.isArray(e)) { for (const x of e) stack.push(x); continue }
+      const node = e as { type?: unknown; operator?: unknown; left?: { type?: unknown; name?: unknown }; right?: { type?: unknown; name?: unknown } }
+      if (node.type === 'BinaryExpression' && EQUALITY.has(node.operator as string) && node.left && node.right
+        && node.left.type !== 'Literal' && node.right.type !== 'Literal' && (isName(node.left) || isName(node.right))) return true
+      for (const v of Object.values(node)) if (v !== null && typeof v === 'object') stack.push(v)
+    }
+    return false
+  }
+  const walk = (v: unknown): boolean => {
+    if (typeof v === 'string') {
+      if (!/[=!]=/.test(v)) return false
+      let tree: unknown
+      try { tree = parseExpressionCached(v) } catch { return false }
+      return compares(tree)
+    }
+    if (v === null || typeof v !== 'object' || seen.has(v)) return false
+    seen.add(v)
+    if (Array.isArray(v)) return v.some(walk)
+    return Object.values(v as Record<string, unknown>).some(walk)
+  }
+  return walk(spec)
+}
+
 function tupleQuestions(spec: unknown): true | 'facet' | undefined {
   const seen = new Set<unknown>()
   let facet = false

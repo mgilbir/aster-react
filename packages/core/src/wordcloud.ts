@@ -440,7 +440,7 @@ export function wordcloudRows(rows: Row[], t: Record<string, unknown>, ctx: Tran
   if (size && !(size[0] && size[1])) throw new Error('Wordcloud size dimensions must be non-zero.')
 
   const as = (t.as as string[] | undefined) ?? Output
-  const data = (ctx.inPlace ? rows : copiedRows(rows, 'wordcloud')) as Rec[]
+  const data = (ctx.inPlace ? rows : copiedRows(rows, 'wordcloud', true)) as Rec[]
 
   let fontSize: unknown = param(t.fontSize) || 14
   let range: readonly number[] | null | undefined

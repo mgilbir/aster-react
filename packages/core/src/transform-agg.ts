@@ -680,7 +680,7 @@ export function aggregateGroups(rows: readonly Row[], p: AggregateParams, random
  * `values`, `argmin` and `argmax` return), or the rows themselves when the pipeline owns them.
  */
 export function joinAggregateRows(rows: readonly Row[], p: AggregateParams, random: () => number = lcg(SEED), owned = false): Row[] {
-  const out = owned ? rows.slice() : copiedRows(rows, 'joinaggregate')
+  const out = owned ? rows.slice() : copiedRows(rows, 'joinaggregate', true)
   // Vega's JoinAggregate declares no `aggregate_params`, `drop` or `cross`: they are not read (an exponential gets no ratio)
   const g = groupingFor({ groupby: p.groupby, fields: p.fields, ops: p.ops, as: p.as, key: p.key }, random)
   const record = recordingFor(rows)

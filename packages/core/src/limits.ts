@@ -623,17 +623,19 @@ export function meterTick(what: string, cost = 1): void {
 /**
  * A writable copy of each row (`{ ...row }`), ticking the clock every 1024 rows. Copying the rows a host gave, or a transform's
  * input before it writes, is a pass over data the size of the input with an allocation per row: about a millisecond per thousand
- * rows, so a time budget must be able to stop it inside (C514). Every copy of a row array goes through here.
+ * rows, so a time budget must be able to stop it inside (C514). Every copy of a row array goes through here. With `tuple`, each copy
+ * stands for the row it copies (util `copyTuple`: where vega keeps the tuple, `datum === src` holds).
  */
-export function copiedRows<T extends object>(rows: readonly T[], what: string): T[] {
+export function copiedRows<T extends object>(rows: readonly T[], what: string, tuple = false): T[] {
+  const copy = tuple ? copyTuple : (r: T): T => ({ ...r })
   const n = rows.length
   const out = new Array<T>(n)
   if (!active) {
-    for (let i = 0; i < n; i++) out[i] = { ...rows[i]! }
+    for (let i = 0; i < n; i++) out[i] = copy(rows[i]!)
     return out
   }
   for (let i = 0; i < n; i++) {
-    out[i] = { ...rows[i]! }
+    out[i] = copy(rows[i]!)
     if ((i & 1023) === 1023) active.tick(what, 1024)
   }
   return out
@@ -647,7 +649,7 @@ let rowsWritten = 0
  */
 export function writableRow<T extends object>(row: T, owned: boolean, what: string): T {
   if (active && (++rowsWritten & 1023) === 0) active.tick(what, 1024)
-  return owned ? row : { ...row }
+  return owned ? row : copyTuple(row)
 }
 
 /**
@@ -834,7 +836,7 @@ export function regExpOf(pattern?: unknown, flags?: unknown): RegExp {
 
 import { part } from './engine-parts.js'
 import { dataInputOf, specList } from './spec-structure.js'
-import { ownGet, sortData } from './util.js'
+import { ownGet, sortData, copyTuple } from './util.js'
 
 /** What a node of the pre-flight walk is: the spec's own structure, a `values` array, one of its rows, or inside a row. */
 const SPEC = 0
