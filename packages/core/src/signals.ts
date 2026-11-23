@@ -46,7 +46,7 @@ import type { Changeset } from './modify.js'
 import { parseExpression, type AstNode } from './expr-parser.js'
 import { normalizeEvents, filterCode } from './stream-defs.js'
 import { parseEventSelectorString, type StreamDef } from './event-selector.js'
-import { array, dict, heldSignalName, ownGet, setOwn, markTupleAlways, MARK_NODE, scopedSignalName } from './util.js'
+import { array, dict, heldSignalName, ownGet, setOwn, markTupleAlways, MARK_NODE, scopedSignalName, TextTable } from './util.js'
 import { follow, node, Propagation, type SignalNode } from './signal-propagation.js'
 import { consoleLogger, type Logger } from './logger.js'
 import { AsterLimitError, withLimits, type SpecLimits } from './limits.js'
@@ -431,14 +431,11 @@ const DATA_READERS = new Set(['data', 'indata', 'vlSelectionTest', 'vlSelectionI
 const dataKey = (name: string): string => `data:${name}`
 
 /** The identifiers an expression reads (signal references, among them), and `data:NAME` for every dataset it reads. */
-const identifiers = new Map<string, Set<string>>()
+const identifiers = new TextTable<Set<string>>('handler identifiers', 2048, 2_000_000)
 function identifiersOf(code: string): Set<string> {
   // (a host binds again after every render, to the same expressions)
   let have = identifiers.get(code)
-  if (have === undefined) {
-    if (identifiers.size >= 2048) identifiers.clear()
-    identifiers.set(code, (have = parseIdentifiers(code)))
-  }
+  if (have === undefined) identifiers.set(code, (have = parseIdentifiers(code)))
   return have
 }
 function parseIdentifiers(code: string): Set<string> {

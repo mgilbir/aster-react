@@ -5,7 +5,7 @@
  * (engine-parts.ts), so what all of them share lives here, outside those parts.
  */
 import { orderOf, setOrder } from './tuple-order.js'
-import { accessor, accessorFields, array, ascending, error, field, sortData, type Accessor } from './util.js'
+import { accessor, accessorFields, array, ascending, error, field, sortData, TextTable, type Accessor } from './util.js'
 import { AsterLimitError, activeMeter, meterRows } from './limits.js'
 import { ascending as numericAscending, quantileSorted } from './arr.js'
 
@@ -28,15 +28,13 @@ export function lcg(seed: number): () => number {
 // field access
 // ---------------------------------------------------------------------------
 
-const accessors = new Map<string, Accessor>()
-const ACCESSOR_CACHE_LIMIT = 4096
+const accessors = new TextTable<Accessor>('field accessors', 4096, 1_000_000)
 
 /** The accessor of a field spec (`a.b`, `a[0]`, `a\.b`), parsed once per distinct string. */
 export function fieldOf(spec: unknown): Accessor {
   if (typeof spec !== 'string') return field(spec)
   let found = accessors.get(spec)
   if (found === undefined) {
-    if (accessors.size >= ACCESSOR_CACHE_LIMIT) accessors.clear()
     found = field(spec)
     accessors.set(spec, found)
   }

@@ -34,6 +34,8 @@
  * `(a|a){2}` or `.{1,100}.{1,100}x`); the hard guarantee for untrusted input remains a killable worker (docs/LIMITS.md).
  */
 
+import { TextTable } from './util.js'
+
 // --- character sets ---------------------------------------------------------------------------------
 
 /** Sorted, disjoint, non-adjacent inclusive code point ranges. */
@@ -1031,8 +1033,7 @@ function analyse(tree: RNode, unanchored: boolean, budget: { steps: number }): s
   return null
 }
 
-const CACHE = new Map<string, string | null>()
-const CACHE_MAX = 256
+const CACHE = new TextTable<string | null>('regex verdicts', 256, 1_000_000)
 
 /**
  * The reason a pattern is refused under limits, or null. A pattern the RegExp constructor rejects is null (its SyntaxError is
@@ -1057,7 +1058,6 @@ export function regexHazard(source: string, flags = ''): string | null {
     else if (e instanceof TooComplex) reason = 'the pattern is too complex to screen'
     else throw e
   }
-  if (CACHE.size >= CACHE_MAX) CACHE.delete(CACHE.keys().next().value as string)
   CACHE.set(key, reason)
   return reason
 }

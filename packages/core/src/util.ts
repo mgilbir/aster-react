@@ -473,6 +473,45 @@ export function pushAll<T>(target: T[], src: ArrayLike<T>): void {
 
 export const one = /* @__PURE__ */ accessor(() => 1, [], 'one')
 
+// --- process-wide tables keyed by text ----------------------------------------------------------------
+
+/** Every {@link TextTable} and {@link recentlyUsed} table, by name, with what it holds (for the test that bounds them all). */
+const TEXT_TABLES = new Map<string, () => { entries: number; chars: number; maxEntries: number; maxChars: number }>()
+/** Record a table bounded as a TextTable is but kept otherwise (expr-check.ts's two generations). */
+export function registerTextTable(name: string, stats: () => { entries: number; chars: number; maxEntries: number; maxChars: number }): void {
+  TEXT_TABLES.set(name, stats)
+}
+/** @internal what each process-wide text-keyed table holds now, against its bounds. */
+export const textTableStats = (): Array<{ name: string; entries: number; chars: number; maxEntries: number; maxChars: number }> =>
+  [...TEXT_TABLES].map(([name, stats]) => ({ name, ...stats() }))
+
+/**
+ * A process-wide table keyed by text that a spec or its data chooses (an expression, a selector, a field name, a path): bounded by
+ * its number of entries AND by the total length of its keys, since what an entry holds grows with its key (a tree, a path's
+ * numbers) and a count alone lets a few huge keys hold the process's memory. The oldest entries leave first; a key longer than a
+ * quarter of the character budget is not kept at all (it is made again when it is met again).
+ */
+export class TextTable<V> {
+  private readonly map = new Map<string, V>()
+  private chars = 0
+  constructor(name: string, readonly maxEntries: number, readonly maxChars: number) {
+    TEXT_TABLES.set(name, () => ({ entries: this.map.size, chars: this.chars, maxEntries, maxChars }))
+  }
+  get size(): number { return this.map.size }
+  get(key: string): V | undefined { return this.map.get(key) }
+  set(key: string, value: V): void {
+    if (key.length > this.maxChars / 4) return
+    if (this.map.has(key)) this.map.delete(key)
+    else this.chars += key.length
+    this.map.set(key, value)
+    while (this.map.size > this.maxEntries || this.chars > this.maxChars) {
+      const first = this.map.keys().next().value as string
+      this.map.delete(first)
+      this.chars -= first.length
+    }
+  }
+}
+
 // --- expression helpers ------------------------------------------------------
 
 /** Accessors `pluck` remembers; the least recently used is dropped past it. */
@@ -488,9 +527,12 @@ export const PLUCK_CACHE_MAX = 1024
  * the young half and is not next to go. So a loop over one or a few keys reads the table without rewriting it, and an entry used
  * within the last `max / 2` distinct keys is never dropped (recency among the young half is not kept). `size` is for the tests.
  */
-export function recentlyUsed<A, T>(max: number, make: (key: A) => T): ((key: A) => T) & { size: () => number } {
+export function recentlyUsed<A, T>(max: number, make: (key: A) => T, name = 'recentlyUsed', maxChars = 1 << 20): ((key: A) => T) & { size: () => number } {
   const table = new Map<string, { value: T; moved: number }>()
   let tick = 0
+  // (bounded by the length of the keys too, as a TextTable is: a key longer than a quarter of the budget is made each time)
+  let chars = 0
+  TEXT_TABLES.set(name, () => ({ entries: table.size, chars, maxEntries: max, maxChars }))
   const get = (key: A): T => {
     const id = String(key)
     const known = table.get(id)
@@ -503,8 +545,14 @@ export function recentlyUsed<A, T>(max: number, make: (key: A) => T): ((key: A) 
       return known.value
     }
     const value = make(key)
+    if (id.length > maxChars / 4) return value
     table.set(id, { value, moved: ++tick })
-    if (table.size > max) table.delete(table.keys().next().value as string)
+    chars += id.length
+    while (table.size > max || chars > maxChars) {
+      const first = table.keys().next().value as string
+      table.delete(first)
+      chars -= first.length
+    }
     return value
   }
   return Object.assign(get, { size: () => table.size })
@@ -518,7 +566,7 @@ export function recentlyUsed<A, T>(max: number, make: (key: A) => T): ((key: A) 
  * so the table keeps only the most recently used {@link PLUCK_CACHE_MAX} (an
  * accessor is a pure function of its name: a dropped one is simply rebuilt).
  */
-const pluckAccessors = recentlyUsed(PLUCK_CACHE_MAX, (name: unknown) => field(name))
+const pluckAccessors = recentlyUsed(PLUCK_CACHE_MAX, (name: unknown) => field(name), 'pluck accessors')
 
 /**
  * Read `name` off a datum, or off every datum of an array — the upstream

@@ -24,6 +24,8 @@
  * `@aster-charts/core/canvas` re-exports `parsePathData`, `tracePath`, `PathSeg` and `PathSink`, so its public surface is unchanged.
  */
 
+import { TextTable } from './util.js'
+
 /** A command as written: its letter (upper case absolute, lower case relative) and its numbers. */
 export type PathCommand = [string, ...number[]]
 
@@ -126,14 +128,16 @@ function readNumbers(type: string, arity: number, text: string, jsNumbers: boole
 
 // --- what reads it, cached --------------------------------------------------------------------------------------------------
 
-/** A bounded cache (cleared when full): many items share one path text (symbols, axes, legends). */
-function cached<T>(limit: number, make: (d: string) => T): (d: string) => T {
-  const cache = new Map<string, T>()
+/**
+ * A bounded cache: many items share one path text (symbols, axes, legends). Bounded by count and by the length of the texts, since
+ * what it keeps of a path grows with the path and the texts come from data.
+ */
+function cached<T>(name: string, limit: number, make: (d: string) => T): (d: string) => T {
+  const cache = new TextTable<T>(name, limit, 8_000_000)
   return (d) => {
     let v = cache.get(d)
     if (v === undefined) {
       v = make(d)
-      if (cache.size >= limit) cache.clear()
       cache.set(d, v)
     }
     return v
@@ -144,7 +148,7 @@ function cached<T>(limit: number, make: (d: string) => T): (d: string) => T {
  * A spec's path text as vega's parser reads it: its commands, or vega's error (not cached, thrown every time). Shared: never write
  * the commands.
  */
-const readSpecPath = cached(4096, (d) => readCommands(d, 'throw', false))
+const readSpecPath = cached('spec paths', 4096, (d) => readCommands(d, 'throw', false))
 export const svgPathCommands = (path: string): PathCommand[] => {
   // (vega reads the text with `path.match(...)`: a value that is no text -- a number, an object -- throws the TypeError the engine
   // gives that call)
@@ -154,10 +158,10 @@ export const svgPathCommands = (path: string): PathCommand[] => {
 const COMMAND_LETTERS = /[mlhvzcsqta]/gi
 
 /** A spec's path text as far as it reads (see the module's note): what a canvas, the hit index and `intersect()` draw. Shared. */
-export const drawnPathCommands: (d: string) => PathCommand[] = cached(4096, (d) => readCommands(d, 'stop', false))
+export const drawnPathCommands: (d: string) => PathCommand[] = cached('drawn path commands', 4096, (d) => readCommands(d, 'stop', false))
 
 /** Parse an SVG path `d` string (the engine's own text) into absolute segments. Shared: never write them. */
-export const parsePathData: (d: string) => PathSeg[] = cached(4096, (d) => segmentsOf(readCommands(d, 'stop', true)))
+export const parsePathData: (d: string) => PathSeg[] = cached('path segments', 4096, (d) => segmentsOf(readCommands(d, 'stop', true)))
 
 /** Commands as absolute segments: a relative command is offset by the current point (a close returns it to its subpath's start). */
 function segmentsOf(commands: readonly PathCommand[]): PathSeg[] {
