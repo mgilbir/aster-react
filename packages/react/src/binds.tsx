@@ -11,6 +11,7 @@
  * honoured (reported once through the logger).
  */
 import * as React from 'react'
+import { tickStep } from '@aster-charts/core/lean'
 
 export interface SignalBindDef {
   name?: unknown
@@ -33,19 +34,7 @@ const valuesEqual = (a: unknown, b: unknown): boolean => a === b || String(a) ==
 /** An option's text: its label, else the option (vega: `(labels[i] || option) + ''`). */
 const optionLabel = (options: readonly unknown[], labels: readonly unknown[], i: number): string => String(labels[i] || options[i])
 
-/** d3-array's `tickStep(start, stop, count)`: the step vega gives a slider without one (`count` 100). */
-function tickStep(start: number, stop: number, count: number): number {
-  const reverse = stop < start
-  const [lo, hi] = reverse ? [stop, start] : [start, stop]
-  const step = (hi - lo) / Math.max(0, count)
-  const power = Math.floor(Math.log10(step))
-  const error = step / Math.pow(10, power)
-  const factor = error >= Math.sqrt(50) ? 10 : error >= Math.sqrt(10) ? 5 : error >= Math.sqrt(2) ? 2 : 1
-  const inc = power < 0 ? 1 / (Math.pow(10, -power) / factor) : Math.pow(10, power) * factor
-  return (reverse ? -1 : 1) * inc
-}
-
-/** Calls `fn` `ms` after the last call (vega-util's `debounce`), or at once without a delay; pending calls end with the control. */
+/** Calls `fn` `ms` after the last call (as vega's `debounce` binding option), or at once without a delay; pending calls end with the control. */
 function useDebounced(ms: number, fn: (value: unknown) => void): (value: unknown) => void {
   const timer = React.useRef<ReturnType<typeof setTimeout> | null>(null)
   const latest = React.useRef(fn)

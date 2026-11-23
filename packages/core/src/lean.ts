@@ -32,3 +32,5 @@ export {
 } from './addons.js'
 export { ENGINE_PARTS, part, partLoaded, withdrawParts, type EngineParts, type EnginePart } from './engine-parts.js'
 export { setUpShell } from './shell-setup.js'
+export { scaleSpace, panIn, zoomIn, type ScaleSpace } from './util.js'
+export { tickStep } from './arr.js'
