@@ -472,7 +472,8 @@ export function wordcloudRows(rows: Row[], t: Record<string, unknown>, ctx: Tran
 
   const functor = (p: unknown): ((d: Rec) => any) => (typeof p === 'function' ? (p as (d: Rec) => any) : () => p) // eslint-disable-line @typescript-eslint/no-explicit-any
   const spiralName = (t.spiral as string | undefined) || 'archimedean'
-  const spiral = spirals[spiralName]
+  // (an own entry only: `constructor` or `toString` is no spiral)
+  const spiral = Object.hasOwn(spirals, spiralName) ? spirals[spiralName as keyof typeof spirals] : undefined
   if (spiral === undefined) throw new Error(`Wordcloud spiral "${spiralName}" is not archimedean or rectangular.`)
   const layoutSize: [number, number] = [+(size?.[0] ?? 500), +(size?.[1] ?? 500)]
   const random = ctx.runtime.random ?? Math.random
