@@ -925,8 +925,9 @@ function prepareChartCtx(
   const transformHierarchies = new Map<string, unknown>()
   const defs: SceneDef[] = []
   // Inputs besides the signals that change what a reused scale/item would be.
-  // (and what a formatted text or a local date read besides the spec and the input: the default locale, the host's time zone)
-  const extraFp = `${input.domainRaw ? valueKey(input.domainRaw) : ''}\u0002${input.textMetrics ? valueKey(input.textMetrics) : ''}\u0002${input.containerSize ? `${input.containerSize.width}x${input.containerSize.height}` : ''}\u0002${input.measuredSize ? `${input.measuredSize.width}x${input.measuredSize.height}` : ''}\u0002${formatEnvironmentKey()}`
+  // (and what a formatted text or a local date read besides the spec and the input: the default locale, the host's time zone;
+  // and what a text is measured by: the provider in force for this evaluation, `input.textMetrics` or the one set for every chart)
+  const extraFp = `${input.domainRaw ? valueKey(input.domainRaw) : ''}\u0002${valueKey(getTextMetricsProvider())}\u0002${input.containerSize ? `${input.containerSize.width}x${input.containerSize.height}` : ''}\u0002${input.measuredSize ? `${input.measuredSize.width}x${input.measuredSize.height}` : ''}\u0002${formatEnvironmentKey()}`
   const ctx: EvalContext = {
     chart, scope: rootScope(chart), abort: { failures: [] }, ...(passMemory !== undefined ? { passMemory } : {}), signalParams, width, height, datasets, setData, scales, scaleTypes, projections: transformProjections, projectionStamp: new Map(), projectionIncomplete: new Set(), geoStale: false, runtime, _defs: defs,
     layoutState: { failed: false, warnings: [] }, initDone: new Set(), hostSignals: new Set([
@@ -1742,15 +1743,15 @@ function guideDepsOf(def: object, chart: CompiledChart): GuideDeps {
 
 /**
  * What one of the view's own axes or legends is made under besides the scales: the signals its definition names, the view's size,
- * `extraFp` (overrides, text metrics given with the input, container sizes, locale, time zone) and the registered functions
+ * `extraFp` (overrides, the text measurer, container sizes, locale, time zone) and the registered functions
  * (`readsKey`); the rows of the datasets its expressions read by name (`datasetKey`); the URL policy its links are vetted under;
- * the text measurer set for every chart; whether the guides are laid out at all. Null: it reads more than that (a signal it does
+ * whether the guides are laid out at all. Null: it reads more than that (a signal it does
  * not name, a dataset by a computed name).
  */
 function guideKeyOf(def: object, ctx: EvalContext): string | null {
   const deps = guideDepsOf(def, ctx.chart)
   if (deps.names === null || deps.data === null) return null
-  let key = `${readsKey(ctx, deps.names)}\u0003${ctx.urlPolicy === undefined ? '' : dependencyKey(ctx.urlPolicy)}\u0003${valueKey(getTextMetricsProvider())}\u0003${ctx.rawGuides ? 1 : 0}`
+  let key = `${readsKey(ctx, deps.names)}\u0003${ctx.urlPolicy === undefined ? '' : dependencyKey(ctx.urlPolicy)}\u0003${ctx.rawGuides ? 1 : 0}`
   for (const n of deps.data) key += `\u0004${n}=${datasetKey(ctx, n)}`
   return key
 }
@@ -2510,7 +2511,7 @@ const scaleRowsOf = (s: CompiledScale, ctx: EvalContext): unknown[] => {
 
 /**
  * What a result that reads the signals `names` is made under besides its data and its scales: those signals' values, the view's
- * size, the inputs of `extraFp` (domainRaw, text metrics, container size) and the expression functions registered. Read every
+ * size, the inputs of `extraFp` (domainRaw, the text measurer, container size) and the expression functions registered. Read every
  * signal (`names` null), it is the whole context fingerprint, as it was before a result was keyed by what it reads.
  */
 function readsKey(ctx: EvalContext, names: readonly string[] | null): string {

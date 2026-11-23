@@ -25,6 +25,7 @@ import { applyOneWithState } from './incremental-state.js'
 import { optionalPart } from './engine-parts.js'
 import { refId, valueKey } from './fingerprint.js'
 import { formatEnvironmentKey } from './locale.js'
+import { getTextMetricsProvider } from './text-metrics.js'
 import { checkSpecLimits, checkSceneLimits, createLimitClock, withLimits, activeMeter } from './limits.js'
 import { diffRows, type DataPulse } from './pulse.js'
 import { checkChartRows } from './row-watch.js'
@@ -199,7 +200,9 @@ function metaKeyOf(skeleton: string, input: RuntimeInput): string {
   // `containerSize()` is read by the spec's width / height signals: a resized container is a different view
   if (input.containerSize) parts.push(`cs=${valueKey(input.containerSize)}`)
   if (input.measuredSize) parts.push(`ms=${valueKey(input.measuredSize)}`)
-  if (input.textMetrics) parts.push(`tm=#${refId(input.textMetrics)}`)
+  // (what measures the text: the host's for this call, else the one set for every chart: a scene measured by another is another scene)
+  const measurer = input.textMetrics ?? getTextMetricsProvider()
+  if (measurer) parts.push(`tm=#${refId(measurer)}`)
   // another random source is another stream: the numbers a scene was drawn with belong to the one it was evaluated with
   if (input.random) parts.push(`rnd=#${refId(input.random)}`)
   if (input.limits) parts.push(`lim=${valueKey(input.limits)}`)
