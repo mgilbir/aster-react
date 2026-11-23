@@ -124,5 +124,23 @@ forEachVariant(['svg'], (Chart, variant) => {
         expect(error.mock.calls.map((c) => String(c[0])).filter((m) => /hydrat/i.test(m))).toEqual([])
       })
     }
+
+    it('the accessible overlay is laid over the client scene, not the server\'s (text measurer)', () => {
+      ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
+      const html = renderToString(<Chart spec={textSpec as never} textMetrics={narrow} />)
+      const node = <Chart spec={textSpec as never} textMetrics={wide} />
+      const el = document.createElement('div')
+      document.body.appendChild(el)
+      const root = createRoot(el)
+      act(() => { root.render(node) })
+      const client = el.querySelector('[data-testid="chart-a11y"]')!.outerHTML
+      act(() => root.unmount())
+      el.remove()
+      expect(html).not.toContain(client)
+      const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+      cleanups.push(() => error.mockRestore())
+      const hydrated = hydratedSvg(html, node)
+      expect(hydrated.el.querySelector('[data-testid="chart-a11y"]')!.outerHTML).toBe(client)
+    })
   })
 })

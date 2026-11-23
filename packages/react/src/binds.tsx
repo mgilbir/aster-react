@@ -164,14 +164,15 @@ function BoundInput({ def, value, groupId, onChange }: {
  * The bound inputs of the spec's root signals. `values` are the signal values the chart drew with (the scene's), so an input
  * shows what the chart shows, `null` included.
  */
-export function SignalBinds({ signals, values, onChange, onUnsupported }: {
+export function SignalBinds({ signals, values, idPrefix, onChange, onUnsupported }: {
   signals: readonly SignalBindDef[]
+  /** The chart's own id (`useId`): a radio group is named with it, so two charts on a page do not share one. */
+  idPrefix: string
   values: Readonly<Record<string, unknown>>
   onChange: (name: string, value: unknown) => void
   /** Told once of each signal whose `bind` asks for what is not honoured (`bind.element`). */
   onUnsupported: (message: string) => void
 }): React.ReactElement | null {
-  const id = React.useId()
   const defs = signals.filter((s) => typeof s.name === 'string' && s.bind != null)
   const placed = defs.filter((d) => {
     const bind = d.bind as Record<string, unknown> | null
@@ -198,7 +199,7 @@ export function SignalBinds({ signals, values, onChange, onUnsupported }: {
       {drawn.map((def) => {
         const name = String(def.name)
         const value = Object.hasOwn(values, name) ? values[name] : def.value
-        return <BoundInput key={name} def={def} value={value} groupId={`${id}${name}`} onChange={onChange} />
+        return <BoundInput key={name} def={def} value={value} groupId={`${idPrefix}${name}`} onChange={onChange} />
       })}
     </div>
   )

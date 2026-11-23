@@ -416,6 +416,8 @@ function ChartView({
   // Whether the chart is mounted: a handle the host keeps past unmount is inert (C489): it notifies no listener and returns
   // no scene. (A layout effect, so it is set before the handle is attached and before a parent's layout effect can use it.)
   const mountedRef = React.useRef(false)
+  // The chart's id on the page (the server's, kept through hydration): it names the chart's radio groups.
+  const chartId = React.useId()
   React.useLayoutEffect(() => {
     mountedRef.current = true
     return () => { mountedRef.current = false }
@@ -1802,6 +1804,10 @@ function ChartView({
       )}
       {!failed && bindDefs.length > 0 && (
         <SignalBinds
+          // (React keeps the server's attributes where a hydrated element's differ, and does not patch them: the parts drawn
+          // from the scene are made anew once hydration is over, from the client's scene; see the svg's patch, C45)
+          key={hydrating ? 'server' : 'client'}
+          idPrefix={chartId}
           signals={bindDefs}
           values={boundValues}
           onChange={setBoundSignal}
@@ -1809,7 +1815,7 @@ function ChartView({
         />
       )}
       {!failed && a11yTree != null && (
-        <A11yOverlay tree={a11yTree} tabStopId={tabStopId} onNodeKeyDown={handleA11yKeyDown} onNodeFocus={handleA11yFocus} onNodeBlur={handleA11yBlur} />
+        <A11yOverlay key={hydrating ? 'server' : 'client'} tree={a11yTree} tabStopId={tabStopId} onNodeKeyDown={handleA11yKeyDown} onNodeFocus={handleA11yFocus} onNodeBlur={handleA11yBlur} />
       )}
       {tooltipEnabled && <ChartTooltip store={tooltipStore} renderTooltip={renderTooltip} interaction={interaction} container={tooltipContainer} />}
     </div>
