@@ -23,7 +23,7 @@ corpus, and the command that re-runs one spec of each:
 | `conformance` | canonical SVG of real vega against Aster (`.vg.json` and `.vl.json`, the latter compiled by `vega-lite`) | `ASTER_CORPUS_FILTER='^bar-basic$' pnpm conformance` |
 | `conformance-vl` | `.vl.json` only: `@aster-charts/vl` against `vega-lite`, see 1.4 | `pnpm conformance-vl bar-basic` (a substring; no `--`) |
 | `scene-diff` | resolved scales, groups and items per scope, before any SVG is written | `pnpm scene-diff -- --filter bar-basic` (add `--scales-only`) |
-| `incremental-diff` | an incremental evaluation (random per-datum changeset) against a fresh one of the same data, over the inline-data specs; it does not involve vega | `pnpm conformance:diff` (all specs, about 5 s; it takes no filter) |
+| `incremental-diff` | an incremental evaluation (random per-datum changeset) against a fresh one of the same data, over the inline-data specs; it does not involve vega | `pnpm conformance:diff -- --filter=bar-basic` |
 | `a11y-parity` | guide captions against vega-scenegraph's `aria-label` | `pnpm a11y-parity -- --filter bar-basic` |
 | `transform-matrix` | transform option combinations (not per spec: cases are generated) | `pnpm transform-matrix -- --filter aggregate` |
 | `browser-conformance` | vega-embed and Aster in Chromium with live canvas text metrics | `pnpm conformance:browser -- --filter=bar-basic` |
@@ -32,14 +32,16 @@ corpus, and the command that re-runs one spec of each:
 
 The filters differ on purpose of the script that owns them: `ASTER_CORPUS_FILTER` is a regular expression, `conformance-vl` takes
 a positional substring, `scene-diff`, `a11y-parity` and `transform-matrix` take `--filter <substring>`, the browser scripts
-`--filter=<substring>`. `conformance-vl bar-basic` works; `conformance-vl -- bar-basic` passes the `--` as the filter and runs zero
-specs.
+`--filter=<substring>`. `conformance-vl bar-basic` works; `conformance-vl -- bar-basic` passes the `--` as the filter, runs zero
+specs and fails: every gate fails a run that compared nothing (`[<gate>] FLOOR ...`), and a narrowed run applies no floors.
 
 ### 1.2 Rule out a stale build first
 
 The harness imports `@aster-charts/core`, `@aster-charts/react` and `@aster-charts/vl` by package name, which resolves to each package's **`dist`**, not
 its `src`. If you edited a source file and did not rebuild, the conformance run is checking the old code and says nothing about
-your edit. See section 2. When in doubt: `pnpm build`, then re-run.
+your edit. See section 2. The gates check it: a gate refuses to run when a package's compiled sources are newer than its
+`dist` (`[<gate>] ERROR packages/core/src was edited after packages/core/dist was built`, scripts/lib/dist-fresh.mjs).
+When in doubt: `pnpm build`, then re-run.
 
 ### 1.3 Reproduce with one spec
 
@@ -110,7 +112,7 @@ the same spec in `packages/conformance/corpus` with the other marks removed is t
 `pnpm conformance:browser -- --filter=<name>` renders in Chromium with vega-embed and with Aster, with live canvas text metrics
 instead of the headless estimate (`docs/FONTS.md`). A spec that is green in Node and red here is measuring text differently. Install
 the browser once with the command in CONTRIBUTING.md. For the interaction gates (`conformance:signals`, `conformance:selections`,
-`conformance:intersect`) the debugging variables are in the table of section 3 (`SIG_PRINT`, `SEL_*`). With a filter, run the selections script
+`conformance:intersect`) the debugging variables are in the table of section 3 (`--print-vega`, `PICK_DEBUG`, `SEL_*`). With a filter, run the selections script
 directly, because the package script also passes `--min-cases` and `--max-retained`, which a filtered run cannot meet:
 
 ```bash
@@ -230,11 +232,11 @@ substitute; nothing reads it.
 
 | Variable | Script | Default | Effect |
 |---|---|---|---|
-| `SIG_PRINT` | `scripts/browser-signals.mts` (`pnpm conformance:signals`) | unset | Any non-empty value prints vega's final signal values for every case where vega did not error. |
+| `--print-vega` (a flag) | `scripts/browser-signals.mts` (`pnpm conformance:signals`) | off | Prints vega's final signal values for every case where vega did not error. |
+| `PICK_DEBUG` | `scripts/browser-signals-pick.mts` (the pointer phase of `pnpm conformance:signals`) | unset | Any non-empty value prints every edge answer and the SVG target of every pointer difference. |
 | `SEL_DEBUG` | `scripts/browser-vl-selections.mts` (`pnpm conformance:selections`) | unset | Any non-empty value logs each case's frame rectangle, pointer targets, the mounted markup and the signals at each step. Verbose: use it with `--filter=`. |
 | `SEL_TRACE` | same | unset | Logs the `grid_translate_anchor`, `grid_translate_delta` and `unit` signals around each drag step. |
 | `SEL_MOD` | same | unset | Wraps vega's `modify` expression function, logs each call (group, dataset, row count before/after) and prints the `modlog` per case. |
-| `SEL_NOFRESH` | same | unset | Skips vega's fresh-render snapshot, so a difference cannot be classified as `retained` and shows as a failure. |
 | `SEL_MAX` | same | 6 | How many problems are printed per failing case. |
 | `SEL_DUMP`, `SEL_DUMP_AT`, `SEL_DUMP_DIR` | same | unset, 0, `<os tmpdir>/aster-vl-selections-dump` | `SEL_DUMP` (any value) writes `sel-vega.svg`, `sel-aster.svg` and `sel-vega-fresh.svg` for step `SEL_DUMP_AT` into `SEL_DUMP_DIR`, which is created if missing; the script prints the directory. Each case overwrites the previous one's files, so combine it with `--filter`. |
 
