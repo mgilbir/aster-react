@@ -846,8 +846,12 @@ function run(target: 'chart' | 'session', g: GenSpec, world0: World, steps: Step
     let scene: SceneRoot | Error
     if (s.via === 'change') {
       // `change()` re-evaluates the last compiled chart: it must be handed the
-      // complete state (data, signals, size), exactly like a host would.
-      const input = { ...sessionInput(world, extra), data: { t: clone(world.t), u: clone(world.u), ...(g.store ? { sel: clone(world.sel) } : {}) } }
+      // complete state (data, signals, size), exactly like a host would. What it is not given it keeps from the last
+      // evaluation, so a size the world no longer has is given as `undefined` (which removes it).
+      const input = {
+        width: undefined, height: undefined, containerSize: undefined, measuredSize: undefined,
+        ...sessionInput(world, extra), data: { t: clone(world.t), u: clone(world.u), ...(g.store ? { sel: clone(world.sel) } : {}) },
+      }
       scene = attempt(() => session.change(input))
     } else {
       scene = attempt(() => session.evaluate(specFor(world) as never, sessionInput(world, extra)))
