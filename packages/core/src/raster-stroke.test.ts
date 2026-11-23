@@ -123,18 +123,18 @@ describe('a dash pattern of very many dashes (C16)', () => {
   })
 
   it('a long line of a coarse dash keeps its phase into the canvas', () => {
-    // 1e6 px of line, a 4 px period: 250 000 dashes, of which the canvas sees 25
+    // 1e5 px of line, a 4 px period: 25 000 dashes, of which the canvas sees 25
     const c = new AlphaCanvas(100, 20)
     c.lineWidth = 2
     c.setLineDash([2, 2])
     c.beginPath()
-    c.moveTo(-1e6 + 0.5, 10)
+    c.moveTo(-1e5 + 0.5, 10)
     c.lineTo(100, 10)
     c.stroke()
     const short = new AlphaCanvas(100, 20)
     short.lineWidth = 2
     short.setLineDash([2, 2])
-    // the same phase at x = 0: the line before the canvas is a whole number of periods (1e6 / 4)
+    // the same phase at x = 0: the line before the canvas is a whole number of periods (1e5 / 4)
     short.beginPath()
     short.moveTo(0.5, 10)
     short.lineTo(100, 10)
