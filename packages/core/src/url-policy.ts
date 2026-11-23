@@ -222,6 +222,17 @@ const PLAIN_HTTP = /^https?:\/\/[^@]*$/
  */
 export function outputUrl(kind: OutputUrlKind, raw: unknown, policy: ImageUrlPolicy | undefined): string | null {
   if (typeof raw !== 'string' || raw === '') return null
+  // (the last answer: a link is judged where its element is chosen and again where it is written, and a mark's items often
+  // share one url; the answer is a function of these three, an allow hook's included -- see PERMITTED)
+  if (raw === last.raw && kind === last.kind && policy === last.policy) return last.out
+  const out = judgeUrl(kind, raw, policy)
+  last.raw = raw; last.kind = kind; last.policy = policy; last.out = out
+  return out
+}
+
+const last: { raw: string | undefined; kind: OutputUrlKind | undefined; policy: ImageUrlPolicy | undefined; out: string | null } = { raw: undefined, kind: undefined, policy: undefined, out: null }
+
+function judgeUrl(kind: OutputUrlKind, raw: string, policy: ImageUrlPolicy | undefined): string | null {
   const uri = raw.startsWith('file://') ? raw.slice('file://'.length) : raw.startsWith('//') ? 'http:' + raw : raw
   if (uri === '') return null
   const defaults = kind === 'link' ? DEFAULT_LINK_PROTOCOLS : DEFAULT_IMAGE_PROTOCOLS
