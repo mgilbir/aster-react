@@ -859,7 +859,7 @@ function prepareChartCtx(
   input: RuntimeInput = {},
   txn: EvalTxn = { prev: undefined, gen: 1, claimed: new WeakSet() },
   /** Whether `input.width`/`input.height` is a size someone chose (the host or a fit resize), not just the resolved default. */
-  explicitSize: { width: boolean; height: boolean } = { width: input.width != null, height: input.height != null },
+  explicitSize: { width: boolean; height: boolean } = { width: hostSize(chart, input, 'width') != null, height: hostSize(chart, input, 'height') != null },
   /** The view size signals as written, negative included (see {@link signedViewSize}): the first autosize pass reads them so. */
   signed?: { width?: number; height?: number },
   /** Present when the view makes more than one dataflow pass: what the pass before it left (see `PassMemory`). */
@@ -3408,8 +3408,8 @@ function buildContentPass(
 ): BuiltContent {
   const prepared = prepareChartCtx(
     // (the first build reads the size from the spec and the host's input itself; only a fit-resize overrides it)
-    chart, fitted ? { ...input, width: cw, height: ch } : input, txn,
-    fitted ? { width: true, height: true } : { width: input.width != null, height: input.height != null },
+    chart, fitted ? fitResize({ ...input, width: cw, height: ch }) : input, txn,
+    fitted ? { width: true, height: true } : { width: hostSize(chart, input, 'width') != null, height: hostSize(chart, input, 'height') != null },
     signed,
     order !== undefined ? { prev: order.prev, cur: { guides: new Map(), scales: new Map(), places: new Map(), legends: new Map(), inputs: new Map() } } : undefined,
     // (the first pass of a fit view whose previous evaluation left no first pass reuses the committed state, as the second does: what
@@ -4193,15 +4193,36 @@ function signedViewSize(size: SizeSpec, override: number | undefined, signals: R
  * draws it at that size in any container).
  */
 function viewOverride(chart: CompiledChart, input: RuntimeInput, dim: 'width' | 'height'): number | undefined {
-  const fixed = input[dim]
+  const fixed = hostSize(chart, input, dim)
   if (fixed != null) return fixed
   const written = input.signals?.[dim]
-  if (typeof written === 'number') return written
+  if (typeof written === 'number' && !specComputesSize(chart, dim)) return written
   const measured = input.measuredSize?.[dim]
   if (measured == null) return undefined
   if (chart.contentSized?.includes(dim) || keepsOwnSize(viewLayout(chart, input).autosize.type)) return undefined
   return drivesSize(chart, 'width') || drivesSize(chart, 'height') ? undefined : measured
 }
+
+/**
+ * The size the host gives the view's `dim` (`input.width` / `input.height`), unless the spec computes it: a `width` / `height` signal
+ * with an `update` and no handlers is what vega sizes the view by -- `view.height(499)` or `view.signal('height', 499)` pulses the
+ * signal, whose update runs and gives its own value again, frame and signal alike (C112). A view that fits its viewport resizes
+ * itself (`fitResize`): that size is the view's.
+ */
+function hostSize(chart: CompiledChart, input: RuntimeInput, dim: 'width' | 'height'): number | undefined {
+  const fixed = input[dim]
+  return fixed == null || (specComputesSize(chart, dim) && !FIT_RESIZES.has(input)) ? undefined : fixed
+}
+
+/** The spec computes the view's `dim`: its signal of that name has an `update` and no handlers (a value written for it is overwritten). */
+function specComputesSize(chart: CompiledChart, dim: 'width' | 'height'): boolean {
+  const def = (chart.signalDefs ?? []).find((d) => d.name === dim)
+  return def !== undefined && typeof def.update === 'string' && !def.on?.length
+}
+
+/** The inputs of the passes a view that fits its viewport makes at the size it fitted (not a size the host gave). */
+const FIT_RESIZES = new WeakSet<RuntimeInput>()
+const fitResize = (input: RuntimeInput): RuntimeInput => { FIT_RESIZES.add(input); return input }
 
 /** An autosize that never resizes the view: its size is its `width`, `height` and padding (`none`, and no layout at all). */
 const keepsOwnSize = (type: AutosizeType): boolean => type === 'none' || type === 'skip' || type === 'shift'
@@ -4280,7 +4301,7 @@ function sizeFollowsSignal(
 ): boolean {
   const size = chart[dim]
   return size !== null && typeof size === 'object' && 'signal' in size && size.signal === dim && !explicitSize[dim] && signed?.[dim] === undefined
-    && !ctx.hostSignals.has(dim) && viewOverride(chart, input, dim) === undefined
+    && (!ctx.hostSignals.has(dim) || specComputesSize(chart, dim)) && viewOverride(chart, input, dim) === undefined
 }
 
 /** Whether the view's `dim` is a signal that reads data or a scale (known only once a pass has run), and nothing fixes it. */
