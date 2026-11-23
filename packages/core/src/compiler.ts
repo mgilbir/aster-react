@@ -405,6 +405,8 @@ function compileData(d: Record<string, unknown>): CompiledData {
     compiled.transform.push(compileTransform(t))
   }
   markPlacing(compiled.transform as ReadonlyArray<{ type?: unknown; sort?: unknown }>)
+  const on = (Array.isArray(d.on) ? d.on : d.on != null ? [d.on] : []).filter((x): x is Record<string, unknown> => x !== null && typeof x === 'object')
+  if (on.length) compiled.on = on
   return compiled
 }
 

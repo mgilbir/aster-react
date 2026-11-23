@@ -301,6 +301,8 @@ interface OwnerState {
   scales: Map<string, string>
   warned: Set<string>
   shell: BindingShell | undefined
+  /** whether the data triggers have had the run vega gives them when the view is built */
+  triggered: boolean
 }
 const owners = new WeakMap<EventTarget, OwnerState>()
 
@@ -312,7 +314,7 @@ function ownerStateFor(owner: EventTarget, chart: object): OwnerState {
     st = undefined
   }
   if (st === undefined) {
-    st = { chart, streams: new Map(), timers: new Map(), handlers: new Map(), scales: new Map(), warned: new Set(), shell: undefined }
+    st = { chart, streams: new Map(), timers: new Map(), handlers: new Map(), scales: new Map(), warned: new Set(), shell: undefined, triggered: false }
     owners.set(owner, st)
   }
   return st
@@ -705,6 +707,8 @@ function bindSignalEventsDefs(
   const evaluatedAt = new Map<string, number>()
   /** handling an event (or `setSignal`): `modify` is available */
   let handling = 0
+  /** the operators of the data sets' triggers (vega-parser parseTrigger) */
+  const triggerOps: SignalNode[] = []
   /** the edits `setdata` / `modify` pulse into a dataset, applied when its operator runs */
   const pulsed = new Map<string, Changeset>()
   /** vega-functions modify.js `data.changes`: the changeset of the stamp a dataset is being modified in */
@@ -1338,6 +1342,7 @@ function bindSignalEventsDefs(
       make(op, deps, d.react !== false && typeof d.update === 'string')
     }
     for (const d of defs) signalOp(null, d)
+    const declaredBefore = new Set<string>()
     for (const d of dataDefs) {
       if (dataOps.has(d.name)) continue
       const name = d.name
@@ -1354,6 +1359,23 @@ function bindSignalEventsDefs(
       })
       dataOps.set(name, op)
       make(op, new Set(), false)
+      // vega-parser parseTrigger: each trigger of the data set is an operator that runs, as vega's runs, when what it reads changes
+      // (and once when the view is built, see below), and edits the data set through `modify`
+      for (const on of d.on ?? []) {
+        const arg = (v: unknown): string => (v == null ? 'null' : `${v as string}`)
+        const text = 'if(' + `${on.trigger as string}` + ',modify(' + JSON.stringify(name) + ',' + [on.insert, on.remove, on.toggle, on.modify, on.values].map(arg).join(',') + '),0)'
+        let deps = new Set<string>()
+        try { deps = depKeys(null, text) } catch { /* refused when the spec was compiled */ }
+        // (vega parses a trigger before its data set is registered, and vega-functions' dataVisitor tracks only data sets that
+        // exist: a read of its own data set, or of one declared after it, does not make the trigger run again)
+        for (const k of [...deps]) if (k.startsWith('data:') && !declaredBefore.has(k.slice(5))) deps.delete(k)
+        const trigger = node(`trigger of data "${name}"`, () => {
+          try { runtimeFor(null).expr(text)(undefined, params(null)) } catch (e) { fail(` (trigger of data "${name}")`, e); throw new Logged() }
+        })
+        triggerOps.push(trigger)
+        make(trigger, deps, true)
+      }
+      declaredBefore.add(name)
     }
 
     // the source operator of each entry, and the handler that follows it
@@ -1450,6 +1472,13 @@ function bindSignalEventsDefs(
       try { flow.connect(targetOp, [h]) } catch (e) { once('error', `signal event handler${spec.where}: ${e instanceof Error ? e.message : String(e)}`) }
       handlerOps.push({ op: h, state: hs })
     }
+  }
+
+  // vega runs every operator once when the view is built: a data trigger whose trigger is already true edits its data set then
+  // (the gallery's global-development tracks a country from the start). Here that is the first binding of the chart on its owner.
+  if (triggerOps.length && !state.triggered) {
+    state.triggered = true
+    run(() => { for (const t of triggerOps) flow.touch(t) })
   }
 
   // A scale event is a scale that was recomputed. The host binds again after every render, so the scales of this
