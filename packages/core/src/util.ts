@@ -667,6 +667,53 @@ export function markTupleAlways(t: object): void {
  */
 export const MARK_NODE: unique symbol = Symbol.for('aster.markNode') as never
 
+/**
+ * Tuple identity across the engine's copies. vega hands every mark item, every transform that writes onto rows (a formula, a
+ * stack, a window) and every dataset derived by `source` the very tuple object, so an expression may compare rows by identity --
+ * `datum === src`, where an event put an item's `datum` in `src` (vega/reorderable-matrix). The engine copies a row where vega
+ * writes onto it, and a mark item's datum is a copy of its row: each such copy records the tuple it stands for (its origin), and
+ * the equality operators of the expression language compare two objects by the tuples they stand for (`sameTuple`). An origin
+ * outlives an evaluation as long as the rows it was copied from do (the host's rows, the spec's, the rows a kept step made).
+ * Recorded only while a chart whose expressions compare two objects is evaluated (see `CompiledChart.comparesTuples`).
+ */
+const ORIGINS = new WeakMap<object, object>()
+let linking = false
+
+/** Run `fn` recording the origin of the copies it makes when `on` (see above). */
+export function withTupleOrigins<T>(on: boolean, fn: () => T): T {
+  const outer = linking
+  linking = on
+  try { return fn() } finally { linking = outer }
+}
+
+/** Record that `copy` stands for the tuple `of` stands for (a copy the engine made where vega keeps the tuple). */
+export function sameTupleAs(copy: object, of: object): void {
+  if (linking) ORIGINS.set(copy, ORIGINS.get(of) ?? of)
+}
+
+/** A copy of row `r` that stands for the same tuple (see above). */
+export function copyTuple<T extends object>(r: T): T {
+  const c = { ...r }
+  if (linking) ORIGINS.set(c, ORIGINS.get(r) ?? r)
+  return c
+}
+
+/** A copy of row `r` with more fields (`{...r, ...more}`) that stands for the same tuple: a transform that writes onto it in vega. */
+export function copyTupleWith<T extends object>(r: T, more: Record<string, unknown>): T {
+  const c = { ...r, ...more }
+  if (linking) ORIGINS.set(c, ORIGINS.get(r) ?? r)
+  return c
+}
+
+/** Whether `a` and `b` stand for one tuple: the same object, or copies of one (the expression language's `===` on objects). */
+export function sameTuple(a: unknown, b: unknown): boolean {
+  if (a === b) return true
+  if (a === null || b === null || typeof a !== 'object' || typeof b !== 'object') return false
+  const ra = ORIGINS.get(a)
+  const rb = ORIGINS.get(b)
+  return (ra !== undefined || rb !== undefined) && (ra ?? a) === (rb ?? b)
+}
+
 /** vega-dataflow `isTuple`: whether the value is a registered tuple. */
 export function isTuple(t: unknown): boolean {
   return t !== null && typeof t === 'object' && TUPLES.has(t)

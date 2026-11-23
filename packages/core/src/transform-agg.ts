@@ -16,7 +16,7 @@
  * Deviations from Vega, both on purpose: the input rows are never written (the transforms that write onto their rows in Vega write
  * onto copies, or onto rows the pipeline owns), and group tables hold no inherited names, so a group called `constructor` is a group.
  */
-import { accessor, accessorFields, accessorName, array, ascending, error, sortData, type Accessor } from './util.js'
+import { accessor, accessorFields, accessorName, array, ascending, error, sortData, type Accessor, copyTuple } from './util.js'
 import { meterTick } from './limits.js'
 import { recorded, recordingFor, type GroupsByproduct } from './step-byproduct.js'
 import { quantileSorted } from './arr.js'
@@ -666,7 +666,7 @@ export function aggregateGroups(rows: readonly Row[], p: AggregateParams, random
  * `values`, `argmin` and `argmax` return), or the rows themselves when the pipeline owns them.
  */
 export function joinAggregateRows(rows: readonly Row[], p: AggregateParams, random: () => number = lcg(SEED), owned = false): Row[] {
-  const out = owned ? rows.slice() : rows.map((r) => ({ ...r }))
+  const out = owned ? rows.slice() : rows.map(copyTuple)
   // Vega's JoinAggregate declares no `aggregate_params`, `drop` or `cross`: they are not read (an exponential gets no ratio)
   const g = groupingFor({ groupby: p.groupby, fields: p.fields, ops: p.ops, as: p.as, key: p.key }, random)
   const record = recordingFor(rows)

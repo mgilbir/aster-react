@@ -54,6 +54,7 @@ OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF
 ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 
+import { copyTuple } from './util.js'
 import { AlphaCanvas } from './raster.js'
 import { meterTick } from './limits.js'
 import { createHostCanvas, estimateTextWidth, measureText, usingCanvasTextMetrics } from './text-metrics.js'
@@ -428,7 +429,7 @@ export function wordcloudRows(rows: Row[], t: Record<string, unknown>, ctx: Tran
   if (size && !(size[0] && size[1])) throw new Error('Wordcloud size dimensions must be non-zero.')
 
   const as = (t.as as string[] | undefined) ?? Output
-  const data = (ctx.inPlace ? rows : rows.map((r) => ({ ...r }))) as Rec[]
+  const data = (ctx.inPlace ? rows : rows.map(copyTuple)) as Rec[]
 
   let fontSize: unknown = param(t.fontSize, ctx) || 14
   let range: readonly number[] | null | undefined

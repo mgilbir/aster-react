@@ -9,6 +9,7 @@
  *  - the placement of a node that has no position (a phyllotaxis spiral by its index).
  * Everything else here (the force objects, how the parameters reach them) is free.
  */
+import { copyTuple } from './util.js'
 import { fieldOf } from './transform-agg.js'
 import type { Row, TransformContext } from './transform.js'
 import { compileExprTransform } from './transform.js'
@@ -472,7 +473,7 @@ function buildForce(spec: Record<string, unknown>, ctx: TransformContext): Force
  * vega's tuples are.
  */
 export function forceRows(rows: Row[], t: Record<string, unknown>, ctx: TransformContext & { dynamicParams?: ReadonlySet<string> }): Row[] {
-  const nodes = (ctx.inPlace ? rows : rows.map((r) => ({ ...r }))) as Node[]
+  const nodes = (ctx.inPlace ? rows : rows.map(copyTuple)) as Node[]
   const specs = ([] as Array<Record<string, unknown>>).concat((t.forces as Array<Record<string, unknown>> | undefined) ?? [])
   const sim = new Simulation(nodes)
   let iters = (t.iterations as number | undefined) || 300

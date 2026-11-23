@@ -57,7 +57,7 @@ import type {
 import { gradientDefOf, hash53, isGradientPaint } from './svg-defs.js'
 import { tickFormat, scaleGradient, scaleGradientStops, tickCount, validTicks } from './scale.js'
 import { compileChart } from './compiler.js'
-import { dict, ownGet, pushAll, sortData, lerp, scopedSignalName, heldSignalName, isTuple, markTuple, markTuples, markTupleAlways, withTuples, tuplesRegistering, PRIMITIVE_TUPLE, tupleDatum } from './util.js'
+import { copyTuple, withTupleOrigins, dict, ownGet, pushAll, sortData, lerp, scopedSignalName, heldSignalName, isTuple, markTuple, markTuples, markTupleAlways, withTuples, tuplesRegistering, PRIMITIVE_TUPLE, tupleDatum } from './util.js'
 import { applyImageUrlPolicy, applyLinkUrlPolicy, resolveImageUrl, type ImageUrlPolicy } from './url-policy.js'
 import { checkChartUrlData } from './url-data.js'
 import { publishRows, valueKey, valuesEqual } from './fingerprint.js'
@@ -3668,7 +3668,7 @@ export function evaluateOnce(chart: CompiledChart, input: RuntimeInput = {}): Sc
 
 function evaluateChartImpl(chart: CompiledChart, hostInput: RuntimeInput, txn: EvalTxn, done: { draft?: IncrementalState; failed?: boolean }): SceneRoot {
   // (the tuples it makes are registered only for a chart whose expressions may ask `isTuple` of one: nothing else can ask)
-  return withTuples(registersTuples(chart, hostInput), () => evaluateChartPass(chart, hostInput, txn, done))
+  return withTupleOrigins(chart.comparesTuples === true, () => withTuples(registersTuples(chart, hostInput), () => evaluateChartPass(chart, hostInput, txn, done)))
 }
 
 /**
@@ -4419,7 +4419,7 @@ function buildDatasetsOf(ctx: EvalContext, inputData: Record<string, unknown[]>)
       for (const n of srcNames) {
         const from = build(n, seen)
         inputs.push(from)
-        for (const r of from) rows.push({ ...r })
+        for (const r of from) rows.push(copyTuple(r))
       }
     } else if (srcNames.length === 1) {
       const src = srcNames[0]!
@@ -4579,7 +4579,7 @@ function buildDatasetsOf(ctx: EvalContext, inputData: Record<string, unknown[]>)
     }
     // a dataset a `force` link force reads gets its link rows rewritten (their ends become the nodes): they are this
     // evaluation's own copies, never the spec's
-    if (forceLinkDatasets(ctx.chart).has(name)) rows = rows.map((r) => ({ ...r }))
+    if (forceLinkDatasets(ctx.chart).has(name)) rows = rows.map(copyTuple)
     markTuples(rows)
     ctx.datasets.set(name, rows)
     ctx.datasetPulses.set(name, outPulse)
@@ -4612,7 +4612,7 @@ function buildDatasetsOf(ctx: EvalContext, inputData: Record<string, unknown[]>)
 
 const copyRows = (rows: readonly Row[]): Row[] => {
   stepCounts.copied += rows.length
-  const out = rows.map((r) => ({ ...r }))
+  const out = rows.map(copyTuple)
   markTuples(out)
   return out
 }
@@ -5696,7 +5696,7 @@ function reencodeChannels(mark: CompiledMark, ctx: EvalContext, prevGroup: Scene
       // (every channel evaluated again came out as it was: the item is the one before, as a kept item is)
       if (!whole && copy === undefined) { out[i] = before as unknown as SceneItem; continue }
       if (whole) {
-        const row = { ...(rows[i] as Row) }
+        const row = copyTuple(rows[i] as Row)
         markTuple(row)
         const res = resolveEncodeSet(encode, row, ctx, mark.type)
         res.datum = row
@@ -5849,7 +5849,7 @@ function evaluateMarkItems(
       const hittable = mark.interactive !== false
       const encodeAt = (i: number): SceneItem => {
         if (meter) meter.tick('mark encoding')
-        const row = { ...(rows[i] as Row) }
+        const row = copyTuple(rows[i] as Row)
         markTuple(row)
         const res = resolveEncodeSet(update, row, ctx, mark.type)
         res.datum = row
@@ -5918,7 +5918,7 @@ function evaluateMarkItems(
         // Same loop with the clock sampled every 1024 items (limits ON only).
         items = new Array<SceneItem>(encodeRows.length)
         for (let i = 0; i < encodeRows.length; i++) {
-          const copy = { ...encodeRows[i]! }
+          const copy = copyTuple(encodeRows[i]!)
           markTuple(copy)
           const datum = PRIMITIVE_TUPLE in copy ? tupleDatum(copy) as Row : copy
           const res = resolveEncodeSet(update, datum, ctx, mark.type)
@@ -5929,7 +5929,7 @@ function evaluateMarkItems(
         }
       } else {
         items = encodeRows.map((row) => {
-          const copy = { ...row }
+          const copy = copyTuple(row)
           markTuple(copy)
           // (a primitive tuple is the primitive itself to its item, as in vega)
           const datum = PRIMITIVE_TUPLE in copy ? tupleDatum(copy) as Row : copy
@@ -6787,7 +6787,7 @@ function buildGroupItem(mark: CompiledMark, ctx: EvalContext, entered: EnteredGr
       checkRowCount(rows?.length ?? sources.reduce((n, s) => n + (ctx.datasets.get(s)?.length ?? 0), 0), `dataset "${d.name}"`)
       const tctx = { runtime: ctx.runtime, signals: scopeParams, hierarchies: ctx.hierarchies, projections: ctx.projections }
       if (d.transform?.length) rows = runScopedData(ctx, `${markIdOf(mark)}/${path.join('.')}/${d.name}`, d.name, d.transform, sources, rows ?? gather, shared, tctx, scopeParams)
-      else if (shared) rows = gather().map((r) => ({ ...r }))
+      else if (shared) rows = gather().map(copyTuple)
       else rows = rows ?? []
       savedData.push([d.name, ctx.datasets.get(d.name)])
       ctx.datasets.set(d.name, rows)

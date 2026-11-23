@@ -9,7 +9,7 @@
  * values keep the meaning the grammar gives them (`null`, `''` and `NaN`, numeric strings, Dates), and field parameters accept
  * the access paths `a.b`, `a[0]` and `a\.b`.
  */
-import { accessorName, array, error, one, toNumber } from './util.js'
+import { accessorName, array, error, one, toNumber, copyTuple } from './util.js'
 import { compareOf, fieldOf, fieldsOf, flattenLength, lcg, numberRange, required, SEED, sortBySpec, stableSortBy, type Row } from './row-keys.js'
 import { quantile } from './arr.js'
 import { checkRowCount, meterTick } from './limits.js'
@@ -22,10 +22,10 @@ type Params = Record<string, unknown>
 type Read = (d: unknown) => unknown
 
 /** A row to write onto: the row itself when the pipeline owns it, otherwise a copy of it. */
-const writable = (row: Row, owned: boolean): Row => (owned ? row : { ...row })
+const writable = (row: Row, owned: boolean): Row => (owned ? row : copyTuple(row))
 
 /** Rows to write onto: `rows` themselves (in a new array) when owned, copies otherwise. */
-const writableRows = (rows: readonly Row[], owned: boolean): Row[] => (owned ? rows.slice() : rows.map((r) => ({ ...r })))
+const writableRows = (rows: readonly Row[], owned: boolean): Row[] => (owned ? rows.slice() : rows.map(copyTuple))
 
 // ---------------------------------------------------------------------------
 // collect, sample

@@ -2,7 +2,7 @@
  * The `timeunit` transform: each value floored to its time bin (units and step given, detected from the data, or chosen for a
  * number of bins over the extent). Part of the engine's time family (engine-parts.ts: `time`), with the calendar it floors by.
  */
-import { error, extent as columnExtent, peek } from './util.js'
+import { error, extent as columnExtent, peek, copyTuple } from './util.js'
 import { fieldOf, required, type Row } from './row-keys.js'
 import { tickStep } from './arr.js'
 import {
@@ -15,7 +15,7 @@ type Params = Record<string, unknown>
 type Read = (d: unknown) => unknown
 
 /** A row to write onto: the row itself when the pipeline owns it, otherwise a copy of it. */
-const writable = (row: Row, owned: boolean): Row => (owned ? row : { ...row })
+const writable = (row: Row, owned: boolean): Row => (owned ? row : copyTuple(row))
 
 // ---------------------------------------------------------------------------
 // timeunit

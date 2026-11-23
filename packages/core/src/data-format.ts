@@ -7,7 +7,7 @@
  */
 import { dataFormatRegistry } from './registry.js'
 import { currentLocale } from './locale.js'
-import { field, toBoolean, toDate, toNumber, toString, PRIMITIVE_TUPLE } from './util.js'
+import { field, toBoolean, toDate, toNumber, toString, PRIMITIVE_TUPLE, copyTuple } from './util.js'
 
 /** The converter for each column type a `parse` entry can name. */
 export const typeParsers: Record<string, (v: unknown) => unknown> = {
@@ -53,7 +53,7 @@ export function coerceRows(rows: Record<string, unknown>[], parse: Record<string
   const types = parse === 'auto' ? inferTypes(rows, Object.keys(rows[0]!)) : parse
   const columns = Object.entries(types).map(([field, type]) => [field, converterFor(field, type)] as const)
   return rows.map((row) => {
-    const out = { ...row }
+    const out = copyTuple(row)
     for (const [field, convert] of columns) out[field] = convert(out[field])
     return out
   })

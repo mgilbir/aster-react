@@ -10,7 +10,7 @@ import type { CompiledTransform, SortSpec } from './types.js'
 import type { IdCounter } from './identifier-ids.js'
 import { exprRows, type ExpressionRuntime } from './expression.js'
 import { type ContourFeature, SHAPE_BOUNDS, geoRegistry, requireGeo, requireTransform } from './registry.js'
-import { isArray, sortData } from './util.js'
+import { isArray, sortData, copyTuple, copyTupleWith } from './util.js'
 import { densityGrid, placeContours } from './raster-grid.js'
 import { accessorOf, densitySettings } from './raster-params.js'
 import { PARAM_RULES, checkParams } from './param-rules.js'
@@ -133,7 +133,7 @@ export function applyTransformsToSharedRows(rows: Row[], transforms: CompiledTra
     reading++
   }
   let out = reading > 0 ? applyTransforms(rows, transforms.slice(0, reading), ctx, sourceName) : rows
-  if (shared) out = out.map((r) => ({ ...r }))
+  if (shared) out = out.map(copyTuple)
   // (the rows are now the pipeline's own: copies of the shared ones, or made by an aggregate)
   return reading < transforms.length ? applyTransforms(out, transforms.slice(reading), ctx, sourceName, true) : out
 }
@@ -227,7 +227,7 @@ function applyTransform(rows: Row[], t0: CompiledTransform, ctx: TransformContex
         for (const r of out) r[as] = expr(r)
         return out
       }
-      return rows.map((r) => ({ ...r, [as]: expr(r) }))
+      return rows.map((r) => copyTupleWith(r, { [as]: expr(r) }))
     }
     case 'filter': {
       required('filter', t, 'expr')
@@ -283,7 +283,7 @@ function applyTransform(rows: Row[], t0: CompiledTransform, ctx: TransformContex
             ? geoRegistry.projectedPath!(projection, geo, pointRadius)
             : geoJSONPath(geo)
         if (p === undefined) return r
-        const out = owned ? r : { ...r }
+        const out = owned ? r : copyTuple(r)
         out[as as string] = p
         if (shape) SHAPE_BOUNDS.set(out, () => shape.bounds)
         return out

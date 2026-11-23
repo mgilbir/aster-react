@@ -20,7 +20,7 @@
  *
  * Registered by `@aster-charts/core/transforms`. The rest of the engine reaches it through the transform registry.
  */
-import { sortData } from './util.js'
+import { sortData, copyTuple } from './util.js'
 import { AlphaCanvas } from './raster.js'
 import { drawMark } from './label-draw.js'
 import { itemMarkOf, transformRegistry } from './registry.js'
@@ -611,7 +611,7 @@ function labelRows(rows: Row[], t: Rec, ctx: TransformContext): Row[] {
   })
 
   // a mark's items are written in place (they are the tuples); a dataset's rows are copied
-  const out = ctx.inPlace ? rows : rows.map((r) => ({ ...r }))
+  const out = ctx.inPlace ? rows : rows.map(copyTuple)
   const copyOf = ctx.inPlace ? null : new Map<Rec, Row>(rows.map((r, i) => [r, out[i]!]))
   for (const label of labels) {
     const target = copyOf === null ? label.item : copyOf.get(label.item)!

@@ -230,6 +230,11 @@ export interface CompiledChart {
    * given for that signal is not a known tuple.
    */
   callsIsTuple?: true | 'facet'
+  /**
+   * An expression of the spec compares two values that may be objects with an equality operator (`datum === src`): its evaluations
+   * record which tuple each copy of a row stands for (util `withTupleOrigins`), so the comparison is vega's tuple identity.
+   */
+  comparesTuples?: true
   contentSized?: ReadonlyArray<'width' | 'height'>
 }
 

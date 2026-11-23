@@ -5,7 +5,7 @@
  * rank/offset functions, whatever order the ops were listed in. A frame is `[from, to]` row offsets relative to the current row
  * (`null` for unbounded); under a sort, and unless `ignorePeers`, each end grows to take in the rows tied with the row it lands on.
  */
-import { accessorName, array, error } from './util.js'
+import { accessorName, array, error, copyTuple } from './util.js'
 import { orderOf } from './tuple-order.js'
 import { meterTick } from './limits.js'
 import {
@@ -189,7 +189,7 @@ function upperBound(rows: Row[], target: Row, compare: Compare): number {
  * stretch reads a row that is not there and the transform fails with a TypeError; here the frame is simply left as the offsets put it.
  */
 export function windowRows(rows: readonly Row[], p: WindowParams, random: () => number = lcg(SEED), owned = false): Row[] {
-  const out = owned ? rows.slice() : rows.map((r) => ({ ...r }))
+  const out = owned ? rows.slice() : rows.map(copyTuple)
   const sort = compareOf(p.sort) as Compare | null
   const plan = planWindow(p)
   const [from, to] = (Array.isArray(p.frame) ? p.frame : [null, 0]) as [number | null, number | null]

@@ -13,7 +13,7 @@ import {
 } from './identifier-ids.js'
 import { applyTransforms, exprRowPass, sortOrder, aggregateGroup, type Row } from './transform.js'
 import { checkRowCount } from './limits.js'
-import { markTuples } from './util.js'
+import { markTuples, copyTuple } from './util.js'
 import { datasetsReadIn } from './step-reuse.js'
 import { lexedText } from './expr-text.js'
 import type { CompiledTransform, SortSpec } from './types.js'
@@ -732,7 +732,7 @@ function identifierAppendPulse(
   const ids = tctx.ids
   if (!ids) return null
   for (let i = base; i < rows.length; i++) {
-    const row = { ...rows[i]! }
+    const row = copyTuple(rows[i]!)
     row[as] = row[as] || ++ids.value
     prev.push(row)
   }
