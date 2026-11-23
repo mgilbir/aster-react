@@ -51,7 +51,7 @@ import { compileExpr, type CompiledExpr, type ExpressionRuntime } from './expres
 import type { Changeset } from './modify.js'
 import { normalizeEvents, filterCode } from './stream-defs.js'
 import { parseEventSelectorString, type StreamDef } from './event-selector.js'
-import { array, dict, heldSignalName, ownGet, setOwn, markTupleAlways, MARK_NODE, scopedSignalName } from './util.js'
+import { array, dict, heldSignalName, ownGet, setOwn, markTupleAlways, MARK_NODE, ROOT_MARK_NODE, scopedSignalName } from './util.js'
 import { dataKey, expressionReads } from './expr-reads.js'
 import { follow, node, Propagation, type SignalNode } from './signal-propagation.js'
 import { consoleLogger, type Logger } from './logger.js'
@@ -1873,10 +1873,12 @@ function buildSceneIndex(scene: SceneRoot): SceneIndex {
     marktype: 'group',
     name: specName(g),
     role: g.role,
+    // (its mark, which `intersect(..., group().mark)` walks: vega-lite's `unit.mark`)
+    get node(): object { return groupMarkOf(g, ensure().get(g)) },
     get group(): PickedItem | null { return enclosing(g) },
   } as PickedItem)
   /** vega's root group item (`mark-group role-frame root`): the group of every top-level mark. */
-  const rootGroup: PickedItem = { item: { x: 0, y: 0 }, marktype: 'group', name: 'root', role: 'frame', group: null }
+  const rootGroup: PickedItem = { item: { x: 0, y: 0 }, marktype: 'group', name: 'root', role: 'frame', group: null, node: ROOT_MARK_NODE }
   const enclosing = (node: object): PickedItem | null => {
     const map = ensure()
     let p = map.get(node)

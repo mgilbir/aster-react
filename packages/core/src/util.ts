@@ -740,6 +740,9 @@ export function markTupleAlways(t: object): void {
  */
 export const MARK_NODE: unique symbol = Symbol.for('aster.markNode') as never
 
+/** The scene node the `mark` of vega's root group item stands for (its root mark): `intersect()` walks the whole scene for it. */
+export const ROOT_MARK_NODE: object = Object.freeze({ root: true })
+
 /**
  * Tuple identity across the engine's copies. vega hands every mark item, every transform that writes onto rows (a formula, a
  * stack, a window) and every dataset derived by `source` the very tuple object, so an expression may compare rows by identity --
