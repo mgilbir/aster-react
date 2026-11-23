@@ -1014,7 +1014,7 @@ function layerSize(node: VLSpec, which: 'width' | 'height', given: unknown): unk
   const own = node[which] !== undefined ? node[which] : given
   if (!Array.isArray(node.layer)) return own
   const ch = which === 'width' ? 'x' : 'y'
-  const independent = peek(() => isObject(node.resolve) && isObject(node.resolve.scale) && (node.resolve.scale as Record<string, unknown>)[ch] === 'independent')
+  const independent = peek(() => resolveModeOf(node, 'scale', ch) === 'independent')
   let merged: unknown
   for (const c of node.layer as VLSpec[]) {
     const size = layerSize(c, which, own)
@@ -1564,10 +1564,6 @@ function compileLayered(spec: VLSpec, ctx: CompileCtx): VLSpec {
   return out
 }
 
-/**
- * A point-positioned mark (line, point, text, trail, area) layered over a bar shares the bar's
- * BAND scale: it must sit at the band's centre (`band: 0.5`) rather than its start.
- */
 /** The channels a field reaches through a scale of its own: the positions, the offsets and every mark property. */
 const SCALED_CHANNELS: ReadonlySet<string> = new Set(['x', 'y', 'xOffset', 'yOffset', 'color', 'fill', 'stroke', 'size', 'opacity', 'fillOpacity', 'strokeOpacity', 'strokeWidth', 'strokeDash', 'angle', 'shape'])
 /** The scale types whose domain is a list of values: a field is read at one of them, not between two ends. */
@@ -1576,6 +1572,10 @@ const LISTED_DOMAIN_SCALES: ReadonlySet<string> = new Set(['ordinal', 'point', '
 const POINT_DRAWN_MARKS = new Set(['point', 'circle', 'square', 'text', 'line', 'area', 'trail', 'rule', 'tick'])
 const OFFSET_POINT_MARKS = new Set(['point', 'circle', 'square', 'text', 'line', 'area', 'trail', 'rule'])
 
+/**
+ * A point-positioned mark (line, point, text, trail, area) layered over a bar shares the bar's
+ * BAND scale: it must sit at the band's centre (`band: 0.5`) rather than its start.
+ */
 function centerPointMarksOnBands(marks: Record<string, unknown>[], scales: ScaleSpec[]): void {
   const bandScales = new Set(scales.filter((s) => s.type === 'band').map((s) => s.name))
   if (!bandScales.size) return
@@ -3411,9 +3411,13 @@ function prefixMarkNames(m: Record<string, unknown>, prefix: string, except: rea
   return out
 }
 
-
+/**
+ * Whether a name in a composition's cell is the cell's own (renamed with the cell's prefix, `concat_0_`). A prefix always ends in `_`
+ * and the names a cell shares with its siblings are bare channel names (`x`, `color`), which have none, so a shared name never starts
+ * with a prefix - a view named `x` (prefix `x_`) included.
+ */
 function cellPrefixed(name: string, prefix: string): boolean {
-  return name.startsWith(prefix)
+  return prefix.endsWith('_') && name.startsWith(prefix)
 }
 
 const LEGEND_SCALE_KEYS = ['fill', 'stroke', 'shape', 'size', 'opacity', 'strokeWidth', 'strokeDash', 'fillOpacity', 'strokeOpacity', 'angle']
