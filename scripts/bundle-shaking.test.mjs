@@ -64,9 +64,27 @@ describe('the gates bite', () => {
   }, 300_000)
 
   it('the budget FAILS when the manifests do not shake (no sideEffects field): the useChart row regains Chart, streams and workers', async () => {
-    const r = await run('packages/benchmarks/scripts/budget.mjs', [], { ASTER_BUDGET_IGNORE_SIDE_EFFECTS: '1' })
+    const r = await run('packages/benchmarks/scripts/budget.mjs', [], { ASTER_BUDGET_SIDE_EFFECTS: 'all' })
     expect(r.status).toBe(1)
     expect(r.stdout).toMatch(/@aster-charts\/react useChart .*FAIL/)
     expect(r.stdout).toMatch(/@aster-charts\/react Chart .*FAIL/)
+    // a failing run leaves nothing in the tree (it used to exit inside the try, past the clean-up)
+    expect(existsSync(join(root, 'packages', 'benchmarks', '.tmp'))).toBe(false)
   }, 300_000)
+
+  it('the budget FAILS when an import that a row is built on is shaken out: it must not print PASS at 0.00 kB (C522)', async () => {
+    const r = await run('packages/benchmarks/scripts/budget.mjs', [], { ASTER_BUDGET_SIDE_EFFECTS: 'none' })
+    expect(r.status).toBe(1)
+    for (const row of ['@aster-charts/core/geo', '@aster-charts/core/transforms']) expect(r.stdout, row).toMatch(new RegExp(`\\+ ${row.replace(/[/]/g, '\\/')} .*FAIL \\((measured nothing|more than 0\\.7 kB under its ceiling)`))
+    // the React rows that are built on a bare import
+    for (const row of ['Chart + all', 'Chart + VL']) expect(r.stdout, row).toMatch(new RegExp(`@aster-charts/react ${row.replace('+', '\\+')} .*FAIL`))
+    expect(r.stdout).not.toMatch(/gzip= *0\.00 kB.*PASS/)
+    expect(existsSync(join(root, 'packages', 'benchmarks', '.tmp'))).toBe(false)
+  }, 300_000)
+
+  it('the budget refuses an unknown ASTER_BUDGET_SIDE_EFFECTS', async () => {
+    const r = await run('packages/benchmarks/scripts/budget.mjs', [], { ASTER_BUDGET_SIDE_EFFECTS: 'maybe' })
+    expect(r.status).toBe(2)
+    expect(r.stderr).toMatch(/ASTER_BUDGET_SIDE_EFFECTS is "all" or "none"/)
+  }, 60_000)
 })
