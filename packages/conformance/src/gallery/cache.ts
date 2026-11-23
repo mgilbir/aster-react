@@ -42,11 +42,11 @@ export function readManifest(): Manifest {
   return JSON.parse(readFileSync(MANIFEST_PATH, 'utf8')) as Manifest
 }
 
-/** Hashes of what is in the cache against the manifest; returns the problems (empty = verified). Reads no network. */
-export function verifyCache(manifest: Manifest): string[] {
+/** Hashes of what is in the cache (`cacheDir`, default the gallery cache) against the manifest; returns the problems (empty = verified). Reads no network. */
+export function verifyCache(manifest: Manifest, cacheDir: string = CACHE_DIR): string[] {
   const problems: string[] = []
   for (const s of Object.values(manifest.sources)) {
-    const dir = join(CACHE_DIR, s.cacheDir)
+    const dir = join(cacheDir, s.cacheDir)
     const want = new Map<string, string>([['LICENSE', s.licenseSha256], ...Object.entries(s.files)])
     for (const [name, hash] of want) {
       const p = join(dir, name)
