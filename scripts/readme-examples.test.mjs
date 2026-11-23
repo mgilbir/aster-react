@@ -35,15 +35,63 @@ const blocks = codeBlocks(readFileSync(join(root, 'README.md'), 'utf8'))
 const work = mkdtempSync(join(tmpdir(), 'aster-readme-'))
 afterAll(() => rmSync(work, { recursive: true, force: true }))
 
+/** The `types` target of an `exports` entry (`{ types, default }`, possibly under a condition such as `browser`). */
+function typesTarget(entry) {
+  if (typeof entry === 'string') return entry.endsWith('.d.ts') ? entry : null
+  if (entry === null || typeof entry !== 'object') return null
+  if (typeof entry.types === 'string') return entry.types
+  for (const v of Object.values(entry)) { const t = typesTarget(v); if (t) return t }
+  return null
+}
+
+/**
+ * `paths` for every public entry of the three packages, from each manifest's own `exports` map: what a reader's `import` resolves to, so
+ * the test cannot keep a second, drifting copy of the map (it mapped `@aster-charts/core/dom` to `dom.d.ts`, which is not what `exports`
+ * says, and had no `@aster-charts/react/lite`).
+ */
+export function pathsFromExports() {
+  const paths = {}
+  for (const name of ['core', 'react', 'vl']) {
+    const manifest = JSON.parse(readFileSync(join(pkg(name), 'package.json'), 'utf8'))
+    for (const [sub, entry] of Object.entries(manifest.exports ?? {})) {
+      if (sub.includes('*') || sub === './package.json') continue
+      const target = typesTarget(entry)
+      if (target) paths[sub === '.' ? manifest.name : `${manifest.name}/${sub.slice(2)}`] = [join(pkg(name), target)]
+    }
+  }
+  return paths
+}
+
 const REACT_TYPES = join(pkg('react'), 'node_modules', '@types', 'react')
 const PATHS = {
-  '@aster-charts/core': [dist('core', 'index.d.ts')],
-  '@aster-charts/core/dom': [dist('core', 'dom.d.ts')],
-  '@aster-charts/react': [dist('react', 'index.d.ts')],
-  '@aster-charts/vl': [dist('vl', 'index.d.ts')],
+  ...pathsFromExports(),
   react: [join(REACT_TYPES, 'index.d.ts')],
   'react/jsx-runtime': [join(REACT_TYPES, 'jsx-runtime.d.ts')],
 }
+
+describe('the paths the README blocks are checked against', () => {
+  it('are the manifests\' `exports`: every public entry, with the file it declares', () => {
+    const p = PATHS
+    expect(p['@aster-charts/core/dom'][0]).toBe(dist('core', 'addon-dom.d.ts'))
+    expect(p['@aster-charts/react/lite'], 'a sub-path the old copy did not map').toBeDefined()
+    expect(p['@aster-charts/react/vl']).toBeDefined()
+    expect(Object.keys(p).filter((k) => k.startsWith('@aster-charts/')).length).toBeGreaterThanOrEqual(20)
+    for (const [spec, [file]] of Object.entries(p)) if (spec.startsWith('@aster-charts/')) expect(existsSync(file), `${spec} -> ${file}: run pnpm build`).toBe(true)
+  })
+
+  it('a README block that imports createChartSession from @aster-charts/core/dom type-checks (the entry the old map got wrong)', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'aster-readme-dom-'))
+    try {
+      const file = join(dir, 'dom.ts')
+      writeFileSync(file, `import { createChartSession, chartSkeleton } from '@aster-charts/core/dom'\nexport const x = [createChartSession, chartSkeleton]\n`)
+      const program = ts.createProgram({
+        rootNames: [file],
+        options: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext, moduleResolution: ts.ModuleResolutionKind.Bundler, strict: true, noEmit: true, skipLibCheck: true, baseUrl: root, paths: PATHS },
+      })
+      expect(ts.getPreEmitDiagnostics(program).map((d) => ts.flattenDiagnosticMessageText(d.messageText, '\n'))).toEqual([])
+    } finally { rmSync(dir, { recursive: true, force: true }) }
+  })
+})
 
 describe('the code blocks of README.md', () => {
   it('has the blocks the README is about', () => {

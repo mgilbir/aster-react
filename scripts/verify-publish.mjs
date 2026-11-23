@@ -63,6 +63,22 @@ function entriesOf(manifest) {
   return Object.entries(manifest.exports ?? {}).filter(([k]) => k !== './package.json')
 }
 
+/** Every string leaf of an `exports` target, whatever the conditions around it (`types`, `default`, `browser`, `import`, ...). */
+function leavesOf(target) {
+  if (typeof target === 'string') return [target]
+  if (Array.isArray(target)) return target.flatMap(leavesOf)
+  if (target && typeof target === 'object') return Object.values(target).flatMap(leavesOf)
+  return []
+}
+
+/** The string leaves a `browser` condition (at any depth) points at. */
+function browserLeavesOf(target) {
+  if (target && typeof target === 'object' && !Array.isArray(target)) {
+    return Object.entries(target).flatMap(([cond, v]) => (cond === 'browser' ? leavesOf(v) : browserLeavesOf(v)))
+  }
+  return Array.isArray(target) ? target.flatMap(browserLeavesOf) : []
+}
+
 const tmp = mkdtempSync(join(tmpdir(), 'aster-publish-'))
 try {
   // 1) Pack the way the release packs: `pnpm pack` rewrites `workspace:` ranges to real versions.
@@ -101,9 +117,12 @@ try {
     for (const [sub, target] of entriesOf(m)) {
       for (const cond of ['types', 'default']) {
         if (typeof target?.[cond] !== 'string') fail(`@aster-charts/${pkg} exports["${sub}"] has no "${cond}" condition`)
-        wanted.push(target[cond].replace(/^\.\//, ''))
       }
+      // every file ANY condition names ships (the `browser` targets are not what Node resolves, so nothing else would read them)
+      for (const leaf of leavesOf(target)) wanted.push(leaf.replace(/^\.\//, ''))
     }
+    for (const top of ['main', 'module', 'types', 'typings', 'browser']) if (typeof m[top] === 'string') wanted.push(m[top].replace(/^\.\//, ''))
+    for (const bin of typeof m.bin === 'string' ? [m.bin] : Object.values(m.bin ?? {})) wanted.push(bin.replace(/^\.\//, ''))
     for (const want of wanted) {
       if (!names.has(want)) fail(`@aster-charts/${pkg} tarball is missing ${want}`)
     }
@@ -444,6 +463,31 @@ console.log('reeval ok')
     }
   }
   console.log('[verify-publish] the incremental engine from the installed tarballs: not in a renderSpec bundle, handed to an evaluateChart one')
+  // 8d) The `browser` condition of every export, from the INSTALLED tarballs: a bundle of one app that imports each such entry, resolved
+  //     with `conditions: ['browser']` the way a browser build does. Node resolves `default`, so no import above ever reads a `browser`
+  //     target; the file list of step 3 only proves the file exists, this proves the manifest resolves to it.
+  const browserEntries = []
+  for (const pkg of PUBLIC) {
+    for (const [sub, target] of entriesOf(manifests.get(pkg))) {
+      const leaves = browserLeavesOf(target)
+      if (leaves.length) browserEntries.push({ spec: sub === '.' ? manifests.get(pkg).name : `${manifests.get(pkg).name}/${sub.slice(2)}`, pkg, leaves })
+    }
+  }
+  if (browserEntries.length) {
+    const browserApp = browserEntries.map((e) => `import ${JSON.stringify(e.spec)}`).join('\n') + '\n'
+    const result = await build({
+      stdin: { contents: browserApp, resolveDir: project, loader: 'js' }, bundle: true, write: false, metafile: true, conditions: ['browser'],
+      format: 'esm', platform: 'browser', external: ['react', 'react-dom', 'react-dom/*', 'react/jsx-runtime'], define: { 'process.env.NODE_ENV': '"production"' }, logLevel: 'silent',
+    }).catch((e) => fail(`bundling every \`browser\` entry from the installed tarballs failed: ${e.message.split('\n')[0]}`))
+    const inputs = Object.keys(result.metafile.inputs).map((f) => f.replace(/\\/g, '/'))
+    for (const e of browserEntries) {
+      for (const leaf of e.leaves) {
+        const want = `${manifests.get(e.pkg).name}/${leaf.replace(/^\.\//, '')}`
+        if (!inputs.some((f) => f.endsWith(want))) fail(`${e.spec}: a bundle built with the browser condition does not read ${leaf} (it resolved the entry to something else)`)
+      }
+    }
+    console.log(`[verify-publish] ${browserEntries.length} entries with a browser condition resolve to their browser targets in a bundle built from the installed tarballs`)
+  }
   console.log('[verify-publish] PASS — packed with pnpm, installed with npm, every export imports and typechecks, Vega and Vega-Lite render, a tree-shaken bundle keeps its side effects')
 } finally {
   rmSync(tmp, { recursive: true, force: true })
