@@ -3,7 +3,7 @@
  * against `vega.parse` (differential-parse-errors.test.mts, and jsdom-parse-errors-handlers.test.mts for the handlers of signals).
  * It is NOT every place: a hand list is only what someone thought of (the audit found 63 more, 15 of them read differently by
  * Aster, C81; they are below). The complete set is the one derived from the pinned Vega JSON schema, which fails on a position
- * it cannot generate (schema-expression-sites.mts / differential-schema-expression-sites.test.mts, C126). This table keeps the
+ * it cannot generate (the schema-site generator and its differential, audit finding C126). This table keeps the
  * sites that need a hand: orders of evaluation, scopes, handlers, positions the schema does not declare.
  *
  * A site is a function from the text of an expression to a whole spec. A pool is a list of texts: broken ones (vega refuses
