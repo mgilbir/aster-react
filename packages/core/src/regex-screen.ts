@@ -21,8 +21,9 @@
  *      (`a*a*a*b`, `\s*.*x` searched, `.*foo.*bar`, `^\s*(.*?)\s*$`), the search's loop included. Degree 2 is allowed (`a*b`
  *      searched, `\s+$`: about 10^8 steps on the 10 000-character default input cap, a fraction of a second). A loop from which the
  *      match can always end at once is no hazard (`\s*.*`, `\d+\.?\d*`): the first path to reach it succeeds.
- *   3. a finite ambiguity too large to run: more than 4096 ways to match one input with every loop taken once (`(a|a)(a|a)...`),
- *      or more than 8 next to a degree-2 chain.
+ *   3. too many live paths: more than 4096 ways to have matched one input so far (`(a|a)(a|a)...`), a loop absorbing any length of
+ *      it; or, next to a degree-2 chain, more than 16 transitions tried per character from those paths (a bounded run after a loop
+ *      over the same characters, `a*[ab]{0,20}x`, multiplies the quadratic search by its length).
  *   4. a backreference inside a group that repeats.
  * Bounded repeats of a single character set are expanded exactly up to 64; any other repeat that may run twice is read as
  * unbounded (`(a+){1,60}` is `(a+)+`, the exponential shape it has in practice). Lookaround bodies are screened as patterns of
@@ -708,9 +709,13 @@ const MAX_POSITIONS = 2048
 const EXPAND_SET = 64
 /** Steps of the analysis before it gives up (and the pattern is refused). */
 const MAX_STEPS = 4_000_000
-/** Ways to match one input (every loop taken once) above which a pattern is refused, and the bound next to a degree-2 chain. */
+/** Live paths on one input above which a pattern is refused. */
 const MAX_AMBIGUITY = 4096
-const MAX_AMBIGUITY_POLY = 8
+/**
+ * Transitions tried per input character, summed over the live paths of one start, above which a degree-2 pattern is refused:
+ * the searched `a*x` tries 5, `a*a{1,3}x` 15, `[ab]*?[ab]{1,3}\s*?x$` 21; the quadratic run on the 10 000-character cap scales with it.
+ */
+const MAX_WORK_POLY = 16
 
 class Automaton {
   readonly sets: Ranges[] = []
@@ -991,9 +996,12 @@ function analyse(tree: RNode, unanchored: boolean, budget: { steps: number }): s
     if (degree >= 3) return `a chain of ${degree} unbounded quantifiers can match the same input (polynomial backtracking of degree ${degree})`
   }
 
-  // 3. finite ambiguity: how many ways one input can be matched with every loop taken once (paths counted per input)
+  // 3. finite ambiguity and the work of one character. The live paths of a match attempt are counted per input, on the whole
+  // automaton: a loop absorbs any length of input, so a bounded run after it (`a*a{0,20}x`, `a+a{30}x`) is entered from as many
+  // places as it is long. A loop's growth against another loop is the degree's (2. above): where both the loop itself and the
+  // paths entering it reach a position of a loop, it holds the larger of the two counts, not their sum, so the counts stay finite.
+  // The work of a character is the transitions the matcher tries from the live paths (each path tries every way on).
   {
-    const forward = follow.map((f, p) => f.filter(([q]) => comp[q] !== comp[p]))
     const cuts = new Set<number>([0])
     for (const r of A.sets) for (const [lo, hi] of r) { cuts.add(lo); if (hi < MAX) cuts.add(hi + 1) }
     const atoms = [...cuts].sort((a, b) => a - b)
@@ -1005,30 +1013,46 @@ function analyse(tree: RNode, unanchored: boolean, budget: { steps: number }): s
     }
     const keyOf = (v: Map<number, number>): string => [...v].sort((a, b) => a[0] - b[0]).map((e) => e.join(':')).join(',')
     const START = -1
-    const out = (p: number): ReadonlyArray<readonly [number, number]> => (p === START ? [...body.first] : forward[p]!)
+    const out = (p: number): ReadonlyArray<readonly [number, number]> => (p === START ? [...body.first] : follow[p]!)
+    const tries = (p: number): number => {
+      let n = 0
+      for (const [, ways] of out(p)) n += ways
+      return n
+    }
     const startVec = new Map([[START, 1]])
     const seen = new Set<string>([keyOf(startVec)])
     const queue = [startVec]
     let most = 1
+    let work = 0
     while (queue.length) {
       const vec = queue.pop()!
       for (const c of atoms) {
-        const nv = new Map<number, number>()
+        const within = new Map<number, number>(), entering = new Map<number, number>()
         for (const [p, k] of vec) {
           const o = out(p)
           step(o.length + 1)
-          for (const [q, ways] of o) if (has(q, c)) nv.set(q, Math.min(1e9, (nv.get(q) ?? 0) + k * ways))
+          for (const [q, ways] of o) {
+            if (!has(q, c)) continue
+            const into = p !== START && comp[p] === comp[q] ? within : entering
+            into.set(q, Math.min(1e9, (into.get(q) ?? 0) + k * ways))
+          }
         }
+        const nv = new Map<number, number>()
+        for (const [q, k] of entering) nv.set(q, k)
+        for (const [q, k] of within) nv.set(q, Math.max(k, nv.get(q) ?? 0))
         if (!nv.size) continue
-        let total = 0
-        for (const k of nv.values()) total += k
+        let total = 0, w = 0
+        for (const [q, k] of nv) { total += k; w += k * tries(q) }
         if (total > most) most = total
+        if (w > work) work = w
         if (most > MAX_AMBIGUITY) return `more than ${MAX_AMBIGUITY} ways to match one input (exponential backtracking)`
+        if (degree >= 2 && work > MAX_WORK_POLY) {
+          return `${work} transitions tried per character next to a chain of unbounded quantifiers (polynomial backtracking)`
+        }
         const key = keyOf(nv)
         if (!seen.has(key)) { seen.add(key); queue.push(nv) }
       }
     }
-    if (degree >= 2 && most > MAX_AMBIGUITY_POLY) return `${most} ways to match one input next to a chain of unbounded quantifiers (polynomial backtracking)`
   }
   return null
 }

@@ -23,6 +23,10 @@ const REDOS: Array<[string, string?]> = [
   // degree 3 once V8's search is counted: each start position runs the two loops again (measured: `\s*.*x` on 4 000 spaces 14 s,
   // `.*foo.*bar` on 6 000 characters 16 s, the trim idiom on 4 000 spaces before `x\n\nx` 19.7 s)
   ['\\s*.*x'], ['.*foo.*bar'], ['^\\s*(.*?)\\s*$'], ['\\d+\\.?\\d*x'], ['.*a.*a.*a.*b'], ['.{0,100}.{0,100}x'],
+  // a bounded run after a loop over the same characters, searched: the run is entered from every place the loop can stop, which
+  // multiplies the quadratic search by its length (measured on 10 000 characters: `a*[ab]{0,20}x` 11 s, `a+a{30}x` 14.6 s,
+  // `[ab]*?[ab]{1,3}\s*?x$` 0.67 s, 1.65 s under load, where the searched `a*x` takes 0.08 s)
+  ['a*[ab]{0,20}x'], ['a+a{30}x'], ['[ab]*?[ab]{1,3}\\s*?x$'],
   // finite ambiguity without a loop: 2^13 ways to match 13 characters
   ['(a|a)'.repeat(13) + '$'],
 ]
@@ -40,6 +44,8 @@ const BENIGN: Array<[string, string?]> = [
   ['a\\u{'], ['[\\u{]a'], ['a\\u{3}'], ['(\\d+\\.)*\\d+'], ['\\s+$'], ['a*b'],
   // adjacent quantifiers that are at worst quadratic, that do not overlap, or after which the match can always end
   ['\\s*.*'], ['\\d+\\.?\\d*'], ["[\\w']{3,}"], ['\\s*\\w+\\s*=\\s*\\d+'], ['a*b*c*'], ['^\\d+\\s*\\w*\\s*$'], ['^(?:[a-z]+\\s){2}[a-z]+$'], ['^\\p{L}+$', 'u'], ['^x*$'], ['[\\w-]+'], ['^(?<y>\\d{4})-(?<m>\\d{2})$'], ['(?:^|,)("[^"]*"|[^,]*)'.replace('*)', '{0,50})')], ['a{2,}b'],
+  // a short bounded run after a loop stays within the budget (`a*a{1,3}x`: 0.19 s on 10 000 characters)
+  ['a*a{1,3}x'], ['[a-z]+[0-9]{1,4}x'],
 ]
 
 describe('static regex screen (heuristic)', () => {
