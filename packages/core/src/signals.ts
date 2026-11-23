@@ -613,6 +613,23 @@ function bindSignalEventsDefs(
     return null
   }
   const keyOf = (owner: Scope | null, name: string): string => (owner ? scopedSignalName(owner.id, name) : name)
+  // vega evaluates a signal's `init` once, when the view is built (initonly), and never again whatever it read changes. A host
+  // evaluates the scene afresh after every event, from the store: the value the first evaluation gave is written there, so every
+  // later evaluation takes it as a value already set (runtime.ts never runs an `init` over one) and the host gets it back with the
+  // store in `onSignal` (C143).
+  for (const d of defs) {
+    if (typeof d.init === 'string' && d.update === undefined && d.push !== 'outer' && !Object.hasOwn(signals, d.name) && Object.hasOwn(signalParams, d.name)) {
+      setOwn(signals, d.name, signalParams[d.name])
+    }
+  }
+  for (const sc of scopes) {
+    for (const d of sc.defs) {
+      const key = scopedSignalName(sc.id, d.name)
+      if (typeof d.init === 'string' && d.update === undefined && d.push !== 'outer' && !Object.hasOwn(signals, key) && Object.hasOwn(sc.values, d.name)) {
+        setOwn(signals, key, sc.values[d.name])
+      }
+    }
+  }
   const originX = opts.originX ?? 0
   const originY = opts.originY ?? 0
   const detachFns: Array<() => void> = []
