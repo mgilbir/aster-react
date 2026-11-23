@@ -195,11 +195,17 @@ export function viewKind(spec: Obj, path: string): Kind {
 }
 
 /** Spec-level keys only the root view may carry. */
-const TOP_ONLY = 'datasets usermeta $schema config autosize background padding'
-/** Keys every view (root or nested) may carry. */
-const VIEW_COMMON = 'name description title data transform'
-/** Layout keys the composition operators share. vega-lite accepts (and ignores) width/height on them; the corpus pins that. */
-const COMPOSE = 'bounds center spacing resolve width height'
+const TOP_ONLY = 'datasets usermeta $schema config'
+/**
+ * Keys every view (root or nested) may carry. A nested view's `background`, `padding` and `autosize` are ones vega-lite accepts and reads
+ * nowhere (compile.ts consumes them as ignored; vl-ignored-properties.test.ts pins it).
+ */
+const VIEW_COMMON = 'name description title data transform autosize background padding'
+/**
+ * Layout keys the composition operators share. vega-lite accepts (and ignores) width/height on them, and a `view` background (the
+ * views' own are theirs); the corpus pins that.
+ */
+const COMPOSE = 'bounds center spacing resolve width height view'
 /** Each view kind's own keys (after the common ones). */
 const OWN_KEYS: Record<Kind, string> = {
   unit: 'mark encoding width height projection view resolve align bounds center spacing',
@@ -913,11 +919,11 @@ function validateInvalidMode(v: unknown, at: string): void {
   if (v !== undefined && v !== null && !(typeof v === 'string' && INVALID_MODES.has(v))) fail(at, `unknown invalid-value mode ${JSON.stringify(v)}: expected ${[...INVALID_MODES].join(', ')} or null`)
 }
 
-/** vega-lite `ViewBackground`: the group's own fill / stroke / opacity ..., on a unit or a layer. */
-const VIEW_BACKGROUND_KEYS = set('cornerRadius fillOpacity opacity strokeCap strokeDash strokeDashOffset strokeJoin strokeMiterLimit strokeOpacity strokeWidth fill stroke cursor style')
-function validateViewBackground(view: unknown, kind: string, at: string): void {
-  if (kind !== 'unit' && kind !== 'layer') fail(at, `\`view\` is a property of a unit or a layer spec, not of a ${kind}`)
+/** vega-lite `ViewBackground`: the group's own fill / stroke / opacity ..., and whether it clips what it holds. */
+const VIEW_BACKGROUND_KEYS = set('cornerRadius fillOpacity opacity strokeCap strokeDash strokeDashOffset strokeJoin strokeMiterLimit strokeOpacity strokeWidth fill stroke cursor style clip')
+function validateViewBackground(view: unknown, _kind: string, at: string): void {
   if (!isObj(view)) mustBe(at, OBJECT)
+  if (view.clip !== undefined && typeof view.clip !== 'boolean') mustBe(`${at}.clip`, 'a boolean')
   keysOf(view, VIEW_BACKGROUND_KEYS, at, 'view')
   for (const [k, v] of Object.entries(view)) {
     if (k === 'style') {

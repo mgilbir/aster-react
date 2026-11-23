@@ -26,6 +26,19 @@ const pair = (name: string, make: (withIt: boolean) => Record<string, unknown>):
 for (const [k, op] of [['hconcat', (v: unknown) => ({ hconcat: [v, v] })], ['vconcat', (v: unknown) => ({ vconcat: [v, v] })], ['concat', (v: unknown) => ({ concat: [v, v] })], ['repeat', (v: unknown) => ({ repeat: ['b', 'u'], spec: v })], ['facet', (v: unknown) => ({ facet: { column: { field: 'g', type: 'nominal' } }, spec: v })], ['wrapped facet', (v: unknown) => ({ facet: { field: 'g', type: 'nominal' }, spec: v })]] as const) {
   for (const size of ['width', 'height'] as const) pair(`${k}: the operator's ${size}`, (w) => ({ data, ...(w ? { [size]: 333 } : {}), ...op(pt) }))
 }
+// a nested view's background, padding and autosize (vega-lite reads them on the root view only), and a composition operator's `view`
+const NESTINGS: Array<[string, (v: Record<string, unknown>) => Record<string, unknown>]> = [
+  ['hconcat', (v) => ({ data, hconcat: [v, pt] })],
+  ['layer', (v) => ({ data, layer: [v, { mark: 'rule', encoding: { y: { field: 'u', aggregate: 'mean', type: 'quantitative' } } }] })],
+  ['facet', (v) => ({ data, facet: { column: { field: 'g', type: 'nominal' } }, spec: v })],
+  ['repeat', (v) => ({ data, repeat: ['b', 'u'], spec: v })],
+]
+for (const [k, nest] of NESTINGS) {
+  for (const [prop, v] of [['background', 'red'], ['padding', 40], ['autosize', 'none']] as const) pair(`${k}: a nested view's ${prop}`, (w) => nest({ ...pt, ...(w ? { [prop]: v } : {}) }))
+}
+for (const [k, op] of [['hconcat', { hconcat: [pt, pt] }], ['vconcat', { vconcat: [pt, pt] }], ['concat', { concat: [pt, pt] }], ['repeat', { repeat: ['b', 'u'], spec: pt }], ['facet', { facet: { column: { field: 'g', type: 'nominal' } }, spec: pt }], ['wrapped facet', { facet: { field: 'g', type: 'nominal' }, spec: pt }]] as const) {
+  pair(`${k}: the operator's view background`, (w) => ({ data, ...op, ...(w ? { view: { fill: 'yellow', stroke: 'red', clip: true } } : {}) }))
+}
 // a header on a channel that is not a facet channel
 for (const ch of HEADER_IGNORED_ON) {
   const mark = ['theta', 'theta2', 'radius', 'radius2'].includes(ch) ? 'arc' : ch === 'url' ? 'image' : ch.startsWith('lon') || ch.startsWith('lat') ? 'point' : 'point'
