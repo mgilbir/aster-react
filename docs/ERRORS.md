@@ -56,7 +56,8 @@ Catch the typed errors by `code` (see "`instanceof` or `code`?" below); everythi
 | `VLCompileError` | `@aster-charts/vl` | `VLCompileError` | none | none |
 
 Everything else the packages throw is a plain `Error` (or a `TypeError` for a malformed stream batch or worker
-message) with an `[aster]` prefix and **no `code`**. Do not claim a `code` for an error that is not in this table.
+message, a stream bound that is no number, or a `limits` object a budget cannot be read from: a key that is no
+limit, a budget that is not a number `>= 0`) with an `[aster]` prefix and **no `code`**. Do not claim a `code` for an error that is not in this table.
 
 ### `instanceof` or `code`?
 
@@ -86,6 +87,7 @@ anywhere in a render is never swallowed by a defensive `catch`: the call fails w
 | `maxRows`, `maxMarks`, `maxDepth`, `maxStringLength` | pre-flight spec budget; `maxRows` also caps any dataset a transform produces, `maxDepth` also covers expression nesting (`(expression nesting)`) and, with a cyclic spec, the separate message `spec contains a cycle` |
 | `maxGeneratedRows`, `maxGeneratedBytes` | cumulative rows / characters generated during one evaluation |
 | `maxItems`, `maxPathLength` | generated scene budget (also tick counts and generated paths) |
+| `... > N (built-in ceiling that applies even without limits ...)` | a ceiling of `HARD_CAPS` (`rows`, `cells`, `items`, `bytes`, `coords`, `work`, `pixels`, `vertices`, `latticeTests`) or the spec size; the message names the limit that raises it, when one does (`docs/LIMITS.md`, "Built-in ceilings") |
 | `regexSafety: ...` | a regular expression pattern with a catastrophic-backtracking shape was refused (only under `limits`) |
 | `timeoutMs`, `maxBytes`, `maxTotalBytes`, `maxRequests`, `maxRedirects` | `loadSpecData` request caps |
 | `csv cells filled in for missing fields N > 1000000 (built-in ceiling ...)` | a delimited text whose lines are shorter than its header would fill in more cells than the ceiling (`maxGeneratedRows` replaces it); `maxRows N > M (csv rows)` is the row budget, checked as the rows are read |
