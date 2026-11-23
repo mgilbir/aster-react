@@ -10,6 +10,7 @@ import { readFileSync } from 'node:fs'
 import { dirname, join, relative } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import ts from 'typescript'
+import { SVG_CHART_INTERACTION_PROPS, SVG_CHART_SHARED_HANDLE, SVG_CHART_SHARED_PROPS } from './svg-chart-types.js'
 import { describe, it, expect } from 'vitest'
 
 const PKG = join(dirname(fileURLToPath(import.meta.url)), '..')
@@ -36,6 +37,25 @@ describe('<SvgChart> prop typing', () => {
     const diags = compile(['svg-chart-accepts.fixture.tsx'])
     expect(diags.map(where)).toEqual([])
   }, 120_000)
+
+  it('names every shared prop, every interaction prop, `png`, and calls every handle method (the fixture cannot fall behind the lists)', () => {
+    const file = join(PKG, 'type-fixtures', 'svg-chart-accepts.fixture.tsx')
+    const source = ts.createSourceFile(file, readFileSync(file, 'utf8'), ts.ScriptTarget.ES2022, true, ts.ScriptKind.TSX)
+    const passed = new Set<string>()
+    const used = new Set<string>()
+    const visit = (n: ts.Node): void => {
+      if ((ts.isJsxSelfClosingElement(n) || ts.isJsxOpeningElement(n)) && n.tagName.getText(source) === 'SvgChart') {
+        for (const a of n.attributes.properties) if (ts.isJsxAttribute(a)) passed.add(a.name.getText(source))
+      }
+      if (ts.isPropertyAccessExpression(n)) used.add(n.name.text)
+      ts.forEachChild(n, visit)
+    }
+    visit(source)
+    const wantProps = [...SVG_CHART_SHARED_PROPS, ...SVG_CHART_INTERACTION_PROPS, 'interaction', 'png', 'ref']
+    expect(wantProps.filter((p) => !passed.has(p)), 'props <SvgChart> has that the fixture never passes').toEqual([])
+    expect([...passed].filter((p) => !wantProps.includes(p as never)), 'props the fixture passes that <SvgChart> does not list').toEqual([])
+    expect(SVG_CHART_SHARED_HANDLE.filter((m) => !used.has(m)), 'handle members the fixture never touches').toEqual([])
+  })
 
   it('rejects interaction props without `interaction`, the canvas renderer and malformed capabilities, on exactly the marked lines', () => {
     const file = 'svg-chart-rejects.fixture.tsx'
