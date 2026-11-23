@@ -91,6 +91,9 @@ describe('voronoi vs vega-voronoi (generated)', () => {
       { size: [0, 0] }, { size: [0, 150] }, { size: [100, 0] }, { extent: [[5, 5], [5, 5]] }, { extent: [[5, 0], [5, 100]] },
       { extent: [[10, 0], [0, 10]] }, { extent: [[0, 10], [10, 0]] }, { extent: [[0, 0], [NaN, 10]] }, { extent: [[0, 0], [Infinity, 150]] },
       { extent: [[-Infinity, -Infinity], [Infinity, Infinity]] }, { extent: [[0, 0], [1e-9, 1e-9]] }, { extent: [[-1e12, -1e12], [1e12, 1e12]] },
+      // a size that is no pair of finite numbers is the extent as it is (it comes before `extent`): refused, or read as numbers
+      { size: [NaN, 100] }, { size: [100, NaN] }, { size: [Infinity, 150] }, { size: ['a', 100] }, { size: ['200', '150'] }, { size: [200] },
+      { size: [200, 150, 9] }, { size: [NaN, 100], extent: [[0, 0], [10, 10]] }, { size: [50, 40], extent: [[0, 0], [10, 10]] },
     ]
     let refused = 0
     for (const extent of extents) {
