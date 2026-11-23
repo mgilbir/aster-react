@@ -42,7 +42,7 @@ const hexByte = (v: number): string => {
 // --- the base ---------------------------------------------------------------------
 
 export abstract class Color {
-  opacity!: number
+  declare opacity: number
 
   abstract rgb(): Rgb
 
