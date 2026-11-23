@@ -7,28 +7,20 @@
  *
  * The engine's names are every name that starts with `_` (every private slot is so named), and the fields of the scene node
  * types (`SceneItem`, `SceneGroup`, `SceneRoot` in types.ts) that are not item fields of vega's own: what the engine writes on a
- * node for its renderers, its hit index, its accessible tree and its reuse machinery. `item-slots.test.ts` derives both lists
- * from their sources -- the type declarations, and every name the engine's source reads, tried as a channel against every
- * renderer -- and fails on a name that changes any output and is neither vega's nor refused here.
+ * node for its renderers, its hit index, its accessible tree and its reuse machinery. vega's own are the channels of its JSON
+ * schema and the fields its scenegraph and view read besides: `href`, `fontVariant`, `image` (the image mark's bitmap, which a
+ * spec may give), `noBound` (a group item left out of its bounds), and a guide group item's `offset`, `position`, `translate`,
+ * `padding` (vega-view-transforms' layout) and `format`, `formatType` (the captions); those stay channels.
+ *
+ * The conformance test `engine-slots-vs-vega.test.ts` derives both lists from their sources -- the type declarations, vega's
+ * builds, and every name the engine's source mentions, tried as a channel against every renderer -- and fails on a name that
+ * changes any output and is neither vega's nor refused here.
  */
-
-/**
- * The item fields vega's scenegraph and view read that its JSON schema's `encodeEntry` does not list. They are channels a vega
- * spec may encode, so they are not the engine's:
- * - `href` (vega-scenegraph: an item with one is drawn in a link), `fontVariant` (the text font), `image` (the image mark's bitmap,
- *   which vega's image loader sets from `url`; a spec may give one);
- * - `noBound` (vega-scenegraph `boundItem`: a group item that says so is left out of its bounds);
- * - a guide group item's `offset`, `position`, `translate`, `padding` (vega-view-transforms' axis and legend layout) and
- *   `format`, `formatType` (vega-scenegraph's guide captions).
- */
-export const VEGA_ITEM_FIELDS: ReadonlySet<string> = new Set([
-  'href', 'fontVariant', 'image', 'noBound', 'offset', 'position', 'translate', 'padding', 'format', 'formatType',
-])
 
 /**
  * The fields of the engine's scene nodes that are its own (types.ts, and the two flags written beside them): never a channel.
- * The vega item fields (`x`, `fill`, `href`, ... and {@link VEGA_ITEM_FIELDS}) are not in it, nor the names starting with `_`,
- * which {@link isEngineSlot} refuses by their prefix.
+ * vega's item fields (see the module comment) are not in it, nor the names starting with `_`, which {@link isEngineSlot}
+ * refuses by their prefix.
  */
 export const ENGINE_ITEM_SLOTS: ReadonlySet<string> = new Set([
   // SceneItem
