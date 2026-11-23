@@ -20,6 +20,7 @@ import { arcInto, arcPath, itemArcPath } from '../../core/src/render.ts'
 import { Bounds, boundArcItem } from '../../core/src/bounds.ts'
 import { BoundsPen } from '../../core/src/bounds-pen.ts'
 import { enc, exact } from './differential-util.mts'
+import { scaled } from './differential-gen.mts'
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -92,7 +93,7 @@ const asterCalls = (s: ArcSpec): Call[] => {
 
 // --- the corpus ----------------------------------------------------------------------------------
 
-const CASES = 12000
+const CASES = scaled(12000)
 const seedOf = (i: number): number => 0xa7c5 + i * 15485863
 const cases = Array.from({ length: CASES }, (_, i) => arcSpec(seedOf(i)))
 
@@ -150,7 +151,7 @@ describe('the bounds pen\'s arc is vega\'s boundContext arc', () => {
     const angle = (): number => (r() < 0.25 ? angles[Math.floor(r() * angles.length)]! : (r() - 0.4) * (r() < 0.8 ? 14 : 400))
     const box = (b: any): unknown => [b.x1, b.y1, b.x2, b.y2]
     let walked = 0
-    for (let i = 0; i < 20000; i++) {
+    for (let i = 0, n = scaled(20000); i < n; i++) {
       const cx = r() < 0.3 ? 0 : (r() - 0.5) * 300
       const cy = r() < 0.3 ? 0 : (r() - 0.5) * 300
       const rad = r() < 0.05 ? [0, -3, NaN][Math.floor(r() * 3)]! : r() * 120

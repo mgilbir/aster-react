@@ -12,7 +12,7 @@
  *     nothing else may differ.
  *
  * The parser's counterpart is `differential-vega-expression-gen.test.mts`.
- * Seeds are fixed; set `ASTER_EXPR_FUZZ_SEED` / `ASTER_EXPR_FUZZ_N` to hunt with fresh ones.
+ * Seeds are fixed; set `ASTER_EXPR_FUZZ_SEED` / `ASTER_EXPR_FUZZ_N` to hunt with fresh ones (`ASTER_DIFF_SCALE` scales the default count like every generated suite; `ASTER_EXPR_FUZZ_N` names it outright).
  */
 import { afterEach, describe, expect, it, vi as vitest } from 'vitest'
 import * as ve from 'vega-expression'
@@ -20,6 +20,7 @@ import * as vi from 'vega-interpreter'
 import { parseExpression } from '../../core/src/expr-parser.ts'
 import { expressionInterpreter } from '../../core/src/expr-interpreter.ts'
 import { exact, withTz } from './differential-util.mts'
+import { scaled } from './differential-gen.mts'
 import { gen, mkCleanSource, mkSource, OPS, rng } from './expression-gen.mts'
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -77,7 +78,7 @@ function evaluate(side: Side, code: string, ast: unknown, mode: Mode): { r: unkn
 const isHardening = (r: any): boolean => r && r.$ === 'throw' && typeof r.message === 'string' && r.message.startsWith('Function argument refused')
 
 const SEED = process.env.ASTER_EXPR_FUZZ_SEED ? Number(process.env.ASTER_EXPR_FUZZ_SEED) : 0xA57E12
-const N = process.env.ASTER_EXPR_FUZZ_N ? Number(process.env.ASTER_EXPR_FUZZ_N) : 30000
+const N = process.env.ASTER_EXPR_FUZZ_N ? Number(process.env.ASTER_EXPR_FUZZ_N) : scaled(30000)
 
 afterEach(() => vitest.restoreAllMocks())
 
