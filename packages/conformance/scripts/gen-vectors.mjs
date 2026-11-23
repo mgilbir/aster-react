@@ -683,7 +683,10 @@ const formatSuites = {
     // does not collide. More specs than the plain `s` family: grouping, sign, symbol, trim.
     cases: ['.2s', 's', '.0s', '.3s', '~s', ',.3s', '+.2s', '$.2s', '.2~s', '(.1s', '08.2s', '.2f', 'd'].flatMap((spec) =>
       [0, 1e-24, 1e-21, 1e-18, 1e-15, 1e-12, 1e-9, 1e-6, 0.001, 0.5, 1, 999, 1000, 1500, 1e6, 2.5e9, -3.7e12, 7e15, 1e18, 1e21, 1e24, 1e27, NaN, Infinity, -Infinity].flatMap((ref) =>
-        [...new Set([ref, ref * 0.5, 1, ref * 3, 123456])].map((v) => ({
+        // (the prefix scales the value by Math.pow(10, -e), which differs in the last bit between V8 builds for |e| >= 18: a
+        // value that lands on a rounding boundary after it, ref / 2 under `.0s`, would record the engine, not d3. Those refs
+        // are applied to themselves and to 3 * ref, which no precision of these specs rounds at a boundary)
+        [...new Set([ref, ...(Math.abs(ref) >= 1e18 ? [] : [ref * 0.5, 1]), ref * 3, ...(Math.abs(ref) >= 1e18 ? [] : [123456])])].map((v) => ({
           args: [spec, ref, v].map(enc),
           want: enc(call((s, r, v) => d3Format.formatPrefix(s, r)(v), [spec, ref, v])),
         })),
