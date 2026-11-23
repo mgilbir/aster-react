@@ -10,7 +10,7 @@
 import { EXPRESSION_KEYS, relabelUnits, renameDataRefs, renameExpr, renameFragment } from './embed.js'
 import { optimizeData } from './optimize.js'
 import { tokenize } from './expr-tokens.js'
-import { VLCompileError, pushAll, flatField, datumRef as dref, genName, safeKey, splitAccessPath } from './names.js'
+import { VLCompileError, pushAll, flatField, datumRef as dref, genName, safeKey, splitAccessPath, dict, own, setOwn } from './names.js'
 import { validateGeoUnit, validateSpec } from './validate.js'
 import { cloneSpecStructure, detachRows, isRows, jsonWithRows, sameJson, stringifyWithoutRows, withRows, type RowPayloads } from './rows.js'
 import { markChannelCompatible } from './channels.js'
@@ -450,10 +450,19 @@ function paramSignals(root: VLSpec): Record<string, unknown>[] {
   return out
 }
 
+/** A deep copy of a compiled value in ordinary objects (the spec's own are `dict`s); the user's rows are kept as they are. */
+function plainCopy(node: unknown): unknown {
+  if (Array.isArray(node)) return isRows(node) ? node : node.map(plainCopy)
+  if (!isObject(node) || isRows(node)) return node
+  const out: Record<string, unknown> = {}
+  for (const k of Object.keys(node)) setOwn(out, k, plainCopy(node[k]))
+  return out
+}
+
 /**
- * Vega-Lite `{expr: "..."}` references become Vega `{signal: "..."}`; a
- * `{value: {expr}}` encode entry becomes `{signal}`. Data rows are user data and
- * are never rewritten.
+ * The compile's one exit: the output is rebuilt in ordinary objects (every name a spec gave stays an own key, `__proto__`
+ * included), and Vega-Lite `{expr: "..."}` references become Vega `{signal: "..."}`; a `{value: {expr}}` encode entry becomes
+ * `{signal}`. Data rows are user data and are never rewritten.
  */
 function exprRefsToSignals(node: unknown): unknown {
   if (Array.isArray(node)) return node.map(exprRefsToSignals)
@@ -466,10 +475,10 @@ function exprRefsToSignals(node: unknown): unknown {
   for (const k of keys) {
     const v = node[k]
     // (a voronoi transform's x / y are Vega's own `{expr}` parameters)
-    if (k === 'transform' && Array.isArray(v)) out[k] = v.map((t) => (isObject(t) && t.type === 'voronoi' ? t : exprRefsToSignals(t)))
-    else if (k === 'values' || (keepFields && k === 'fields')) out[k] = v
+    if (k === 'transform' && Array.isArray(v)) out[k] = v.map((t) => (isObject(t) && t.type === 'voronoi' ? plainCopy(t) : exprRefsToSignals(t)))
+    else if (k === 'values' || (keepFields && k === 'fields')) out[k] = plainCopy(v)
     else if (k === 'value' && isObject(v) && Object.keys(v).length === 1 && typeof v.expr === 'string') out.signal = v.expr
-    else out[k] = exprRefsToSignals(v)
+    else setOwn(out, k, exprRefsToSignals(v))
   }
   return out
 }
@@ -1189,7 +1198,7 @@ function compileLayered(spec: VLSpec, ctx: CompileCtx): VLSpec {
         const a1 = built.find((a) => a.grid === a2.grid && a.orient === a2.orient)
         // (the label align and baseline follow the label angle: an axis that settled its angle settled them too - a null align is a value
         // there, not a missing one - so another layer's, computed from its own angle, does not fill them in)
-        if (a1) for (const [k, v] of Object.entries(a2)) if ((a1 as Record<string, unknown>)[k] === undefined && v !== undefined && !((k === 'labelAlign' || k === 'labelBaseline') && (a1 as Record<string, unknown>).labelAngle !== undefined)) (a1 as Record<string, unknown>)[k] = v
+        if (a1) for (const [k, v] of Object.entries(a2)) if (own(a1, k) === undefined && v !== undefined && !((k === 'labelAlign' || k === 'labelBaseline') && (a1 as Record<string, unknown>).labelAngle !== undefined)) setOwn(a1, k, v)
       }
     }
     for (const a of built) axes.push(a)
@@ -3053,7 +3062,7 @@ function mergeLegend(into: Record<string, unknown>, other: Record<string, unknow
   // every other property: the first definition stays, one that is missing is taken from the other legend (defaultTieBreaker);
   // legend/parse.ts mergeSymbolType: a circle beats a stroke symbol
   if (other.symbolType === 'circle' && into.symbolType !== undefined) into.symbolType = 'circle'
-  for (const [k, v] of Object.entries(other)) if (k !== 'title' && into[k] === undefined && v !== undefined) into[k] = v
+  for (const [k, v] of Object.entries(other)) if (k !== 'title' && own(into, k) === undefined && v !== undefined) setOwn(into, k, v)
   // (assemble.ts getFieldKeyForChannel: the views that share a legend's channel name one field, or the legend is the channel's alone)
   const a = LEGEND_GROUP.get(into)
   const b = LEGEND_GROUP.get(other)
@@ -3174,7 +3183,7 @@ function substituteRepeat(node: unknown, repMap: Record<string, unknown>, later 
   // a repeat inside binds its own variables (its list's `repeat`, or the `row` / `column` / `layer` it gives) in its spec
   const own = node.repeat !== undefined && typeof node.repeat !== 'string' && keys.length > 1 ? (Array.isArray(node.repeat) ? ['repeat'] : isObject(node.repeat) ? Object.keys(node.repeat) : []) : []
   const inner = own.length ? Object.fromEntries(Object.entries(repMap).filter(([name]) => !own.includes(name))) : repMap
-  const out: Record<string, unknown> = {}
+  const out = dict()
   for (const [k, v] of Object.entries(node)) out[k] = substituteRepeat(v, k === 'spec' ? inner : repMap, later)
   return out
 }
@@ -3712,7 +3721,7 @@ export function assembleConfig(spec: VLSpec): Record<string, unknown> | undefine
   const user = isObject(spec.config) ? (spec.config as Record<string, unknown>) : undefined
   if (!user) return undefined
   const out: Record<string, unknown> = {}
-  const style: Record<string, Record<string, unknown>> = {}
+  const style = dict<Record<string, unknown>>()
   const strip = (block: Record<string, unknown>): Record<string, unknown> =>
     Object.fromEntries(Object.entries(block).filter(([k]) => !VL_ONLY_MARK_KEYS.has(k)))
   for (const k of ['axis', 'axisX', 'axisY', 'axisBand', 'axisLeft', 'axisRight', 'axisTop', 'axisBottom', 'legend', 'header', 'headerRow', 'headerColumn', 'headerFacet', 'range']) {
@@ -3727,8 +3736,8 @@ export function assembleConfig(spec: VLSpec): Record<string, unknown> | undefine
     style.cell = Object.fromEntries(Object.entries(user.view).filter(([k]) => !VIEW_DROPPED_KEYS.has(k)))
   }
   if (isObject(user.title)) {
-    const gt: Record<string, unknown> = {}
-    const gs: Record<string, unknown> = {}
+    const gt = dict()
+    const gs = dict()
     for (const [k, v] of Object.entries(user.title)) {
       if (k === 'anchor' || k === 'offset' || k === 'orient') continue
       if (k === 'color') gt.fill = v
@@ -5906,7 +5915,7 @@ function buildAxes(fields: FieldDef[], mark: string, scales: ScaleSpec[], scaleN
     if (userAxis) {
       for (const [k, v] of Object.entries(userAxis)) {
         if (k === 'grid' || k === 'title' || k === 'orient' || k === 'scale') continue
-        labelAxis[k] = v
+        setOwn(labelAxis, k, v)
       }
       if (userAxis.orient) labelAxis.orient = userAxis.orient
     }
@@ -6038,7 +6047,7 @@ function buildLegends(fields: FieldDef[], mark: string, markOpacity: number | un
     for (const [k, v] of Object.entries(userLegend)) {
       if (k === 'title') continue
       if (k === 'type' && v === 'gradient') continue
-      lg[k] = v
+      setOwn(lg, k, v)
     }
     // strip the VL-only keys and the other type's keys (upstream parity): a
     // gradient legend drops symbol*, a symbol legend drops gradient*
@@ -6229,7 +6238,7 @@ function forwardLegendProps(userLegend: Record<string, unknown>, lg: Record<stri
   for (const [k, v] of Object.entries(userLegend)) {
     if (k === 'title' || k === 'encode' || k === 'disable' || k === 'type' || k === 'symbolWidth') continue
     if (isGradient ? (k.startsWith('symbol') || k === 'gradientStroke') : k.startsWith('gradient')) continue
-    lg[k] = v
+    setOwn(lg, k, v)
   }
 }
 

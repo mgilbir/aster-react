@@ -6,7 +6,7 @@
  * The three share their anatomy: one continuous axis the statistics are of, the other channels every part draws, the parts the mark
  * def and the config switch on and off, and the tooltip that lists the statistics. They differ in the statistics and in the parts.
  */
-import { VLCompileError, genName, splitAccessPath } from './names.js'
+import { VLCompileError, dict, genName, splitAccessPath } from './names.js'
 import { getTimeUnitParts } from './timeunit.js'
 import { normalizeTimeUnit } from './validate.js'
 
@@ -34,7 +34,7 @@ const BOXPLOT_DEFAULTS: Obj = { size: 14, extent: 1.5, box: {}, median: { color:
 
 /** Objects merge key by key, anything else is replaced. */
 function mergeDeep(base: Obj, over: Obj | undefined): Obj {
-  const out: Obj = { ...base }
+  const out: Obj = Object.assign(dict(), base)
   for (const [k, v] of Object.entries(over ?? {})) out[k] = isObj(v) && isObj(out[k]) ? mergeDeep(out[k], v) : v
   return out
 }

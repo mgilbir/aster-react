@@ -162,3 +162,36 @@ describe('generated dataset names never collide with the user\'s', () => {
     }
   })
 })
+
+describe('a name is never a key of Object.prototype (C5)', () => {
+  const own = (): string[] => Reflect.ownKeys(Object.prototype).map(String).sort()
+  const legendSelection = (field: string, condition: boolean): Record<string, unknown> => ({
+    data: { values: [{ b: 1, c: 'x' }] },
+    params: [{ name: 'pt', select: { type: 'point', fields: ['c'] }, bind: 'legend' }],
+    mark: 'point',
+    encoding: {
+      x: { field: 'b', type: 'quantitative' },
+      color: condition ? { condition: { param: 'pt', field, type: 'nominal' }, value: 'grey' } : { field, type: 'nominal' },
+    },
+  })
+  for (const condition of [true, false]) {
+    it(`a field named __proto__ ${condition ? 'in a condition' : 'on the channel'} of a legend-bound selection writes nothing to Object.prototype`, () => {
+      const before = own()
+      compile(legendSelection('__proto__', condition))
+      expect(own()).toEqual(before)
+      expect(({} as Record<string, unknown>).legendBound).toBeUndefined()
+    })
+  }
+  it('a selection projected over a field named constructor stores that field', () => {
+    const out = compile({
+      data: { values: [{ constructor: 'x', b: 1 }] },
+      params: [{ name: 'pt', select: { type: 'point', fields: ['constructor'] } }],
+      mark: 'point',
+      encoding: { x: { field: 'b', type: 'quantitative' } },
+    }) as Record<string, any>
+    const fields = (out.signals as Array<Record<string, any>>).find((s) => s.name === 'pt_tuple_fields')
+    expect(fields?.value).toEqual([{ type: 'E', field: 'constructor' }])
+    const tuple = (out.signals as Array<Record<string, any>>).find((s) => s.name === 'pt_tuple')
+    expect(JSON.stringify(tuple)).toContain('datum)[\\"constructor\\"]')
+  })
+})

@@ -7,11 +7,14 @@
  * signals and its mark name are asked of the unit as they are needed.
  */
 import type { StreamDef } from './event-selector.js'
+import { dict } from './names.js'
 
 export type Obj = Record<string, unknown>
 export const isObj = (v: unknown): v is Obj => v !== null && typeof v === 'object' && !Array.isArray(v)
 export const asList = <T>(v: T | readonly T[] | undefined): T[] => (v === undefined ? [] : Array.isArray(v) ? [...(v as T[])] : [v as T])
-export const deepCopy = <T>(v: T): T => (v === undefined ? v : (JSON.parse(JSON.stringify(v)) as T))
+/** A JSON copy whose objects are `dict`s: a name the spec gave is an own key, whatever it is. */
+export const deepCopy = <T>(v: T): T =>
+  v === undefined ? v : (JSON.parse(JSON.stringify(v), (_k, x: unknown) => (isObj(x) ? Object.assign(dict(), x) : x)) as T)
 
 // --- the names the compiled Vega carries ---------------------------------------------------------------------------------------
 // (a user reads these through the view API and in their own expressions: `<param>_store`, `<param>_tuple`, ...)
