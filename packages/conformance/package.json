@@ -23,7 +23,7 @@
     "a11y-parity": "tsx scripts/a11y-parity.mts",
     "conformance:canvas": "tsx scripts/browser-canvas-parity.mts",
     "conformance:batch": "tsx scripts/browser-svg-batch-parity.mts",
-    "conformance:signals": "tsx scripts/browser-signals.mts --min-cases=73 --max-canvas-as-svg=2",
+    "conformance:signals": "tsx scripts/browser-signals.mts --min-cases=75 --max-canvas-as-svg=2",
     "gallery:fetch": "tsx scripts/gallery-fetch.mts",
     "conformance:gallery": "tsx src/gallery/run.ts",
     "conformance:intersect": "tsx scripts/browser-intersect.mts",

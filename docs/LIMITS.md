@@ -172,7 +172,8 @@ handlers can do is bounded as follows; each point is enforced in one place and t
 - **What an expression sees of an event.** `event` is a frozen object with no prototype holding the values Vega expressions
   observe, copied when the event is delivered (`type`, the client / page / offset / screen coordinates, `button(s)`, `key`,
   `code`, the modifier keys, `deltaX/Y/Z/Mode`, `timeStamp`, the pointer fields, the touches as frozen copies, a timer tick's
-  `timestamp` / `elapsed`: `EVENT_FACADE_FIELDS` in `signals.ts`) plus vega's extension (`item`, the scenegraph item;
+  `timestamp` / `elapsed`: `EVENT_FACADE_FIELDS` in `signals.ts`; `vegaType` alone is read when the expression runs, as vega
+  reads it, so a type queued behind another sees the type the event was handed over as last) plus vega's extension (`item`, the scenegraph item;
   `vega`, the event functions `x()`, `y()`, `xy()`, `item()`, `group()`; `dataflow`). There is no target or current target
   node, no `view` (the window), no `composedPath`, no method. Expressions cannot call what they read, cannot read an inherited
   `Object.prototype` member or a function's `prototype`, and hand no function to a built-in (`expr-interpreter.ts`), so what
@@ -185,7 +186,12 @@ handlers can do is bounded as follows; each point is enforced in one place and t
   listen to) and no selector source. A spec cannot read the page's keystrokes or its form fields, and cannot listen to an
   element outside the chart; its own `config.events` can only narrow the host's policy, never widen it. A blocked listener
   is reported once (`Blocked window keydown event listener ...`, then vega's `Can not resolve event source: window`).
-  A host that renders trusted specs only can pass `eventSources: { window: true, selector: true }`.
+  A host that renders trusted specs only can pass `eventSources: { window: true, selector: true }`. Where a host permits a
+  source, the chart behaves exactly as vega does there: the browser parity gate (`conformance:signals`) runs its window
+  cases (`window:keydown` / `keyup`, a press that bubbles to `window:mousedown`, a merged stream with a window source) with a
+  policy that permits them and requires vega's signals, and runs the same sources under the default policy requiring that
+  vega's signals move and Aster's do not. The default denies the page's keys deliberately (DECISIONS Q1): a spec from
+  elsewhere must not read what is typed anywhere on the page.
 - **What a spec can make the browser do.** The handlers' signals reach the scene, whose image and link URLs go through the
   URL policy (above); the event loop adds no other way out.
 - **What outlives a binding** (timers, `between` windows, throttle and debounce clocks, `{signal}` handlers' memory, the
