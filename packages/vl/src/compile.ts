@@ -13,7 +13,7 @@ import { tokenize } from './expr-tokens.js'
 import { VLCompileError, pushAll, flatField, datumRef as dref, genName, safeKey, splitAccessPath, dict, own, setOwn } from './names.js'
 import { validateGeoUnit, validateSpec } from './validate.js'
 import { cloneSpecStructure, detachRows, isRows, jsonWithRows, sameJson, stringifyWithoutRows, withRows, type RowPayloads } from './rows.js'
-import { arm, consumeAll, consuming, derive, deriveDeep, deriveWithout, ignore, peek, pick, refuseUnconsumed, transfer, withConsumption } from './consume.js'
+import { arm, consumeAll, consuming, derive, deriveDeep, deriveWithout, ignore, ignoreUnread, peek, pick, refuseUnconsumed, transfer, withConsumption } from './consume.js'
 import { markChannelCompatible } from './channels.js'
 import { predicateExpr, domainValueExpr, dateTimeToExpr, isDateTime as isDateTimeValue } from './predicate.js'
 import {
@@ -169,8 +169,25 @@ function compileOnce(input: VLSpec, payloads: RowPayloads, forward?: ReadonlyMap
   })
 }
 
+/**
+ * What vega-lite reads of a view at the root only: a nested view's `background`, `padding` and `autosize`; and the `view` background of
+ * a composition operator (its views draw their own). Consumed as ignored (consume.ts).
+ */
+function ignoreNestedChrome(spec: VLSpec): void {
+  const visit = (n: unknown, root: boolean): void => {
+    if (!isObject(n)) return
+    if (!root) for (const k of ['background', 'padding', 'autosize']) ignore(n, k, 'vega-lite reads it on the root view only')
+    const operator = ['hconcat', 'vconcat', 'concat', 'repeat'].some((k) => n[k] !== undefined) || (n.facet !== undefined && isObject(n.spec))
+    if (operator) ignore(n, 'view', 'a composition operator draws no view background; its views draw theirs')
+    for (const k of ['layer', 'hconcat', 'vconcat', 'concat']) if (Array.isArray(n[k])) for (const c of n[k] as unknown[]) visit(c, false)
+    if (isObject(n.spec)) visit(n.spec, false)
+  }
+  peek(() => visit(spec, true))
+}
+
 function compileValidated(spec: VLSpec, forward?: ReadonlyMap<string, SelCmpt>, forwardLookups?: ReadonlyMap<string, { name: string }>): { out: VLSpec; misses: ReadonlySet<string>; selections: ReadonlyMap<string, SelCmpt>; lookups: ReadonlyMap<string, { name: string }> } {
   const userConfig = isObject(spec.config) ? (spec.config as Record<string, unknown>) : undefined
+  ignoreNestedChrome(spec)
   peek(() => normalizeNestedFacetedUnits(spec, false))
   applyCompositionConfig(spec, spec)
   const normalized = normalizeUnits(spec, userConfig, unitStackProps) as VLSpec
@@ -854,6 +871,110 @@ function mergeLayerTitles(entries: ReadonlyArray<{ path: number[]; title: GuideT
  */
 const LAYER_DATA_GROUPS = new WeakMap<VLSpec, ReadonlyArray<{ sourceName: string; castsName: string }>>()
 
+/** The layer tree of a layered view: its layer nodes and their leaves (by their index among the leaves), with each view's name prefix. */
+interface LayerTreeNode {
+  readonly spec: VLSpec
+  /** `layer_0_layer_1_`: the prefix of the names this view's own scales and parts take ('' for the root) */
+  readonly prefix: string
+  readonly path: readonly number[]
+  readonly children: readonly LayerTreeNode[]
+  readonly leaf: number | undefined
+}
+interface LayerTree extends LayerTreeNode {
+  /** every view's prefix, depth first (the order vega-lite assembles their scales and legends in) */
+  readonly prefixes: readonly string[]
+}
+
+function layerTreeOf(root: VLSpec, leaves: readonly VLSpec[]): LayerTree {
+  const byPath = new Map(leaves.map((l, i) => [(LEAF_PATHS.get(l) ?? []).join('.'), i]))
+  const prefixes: string[] = []
+  const build = (node: VLSpec, path: number[]): LayerTreeNode => {
+    const prefix = path.map((n) => `layer_${n}_`).join('')
+    prefixes.push(prefix)
+    const kids = peek(() => node.layer)
+    if (!Array.isArray(kids)) return { spec: node, prefix, path, children: [], leaf: byPath.get(path.join('.')) }
+    return { spec: node, prefix, path, children: (kids as VLSpec[]).map((c, i) => build(c, [...path, i])), leaf: undefined }
+  }
+  const tree = build(root, [])
+  return { ...tree, prefixes }
+}
+
+/** A view's own resolution of a channel's scale, axis or legend, as it writes it (undefined when it does not). */
+function resolveModeOf(node: VLSpec, what: 'scale' | 'axis' | 'legend', ch: string): unknown {
+  const resolve = node.resolve
+  if (!isObject(resolve)) return undefined
+  const m = resolve[what]
+  return isObject(m) ? m[ch] : undefined
+}
+
+/**
+ * One axis of a layer: the layers it is merged from, its orient (when one of them gives it), whether it draws its grid, and whether it is
+ * disabled (`axis: null`: vega-lite keeps a disabled axis component, which holds its place among independent axes but draws nothing).
+ */
+interface LayerAxisGroup { leaves: number[]; orient: string | undefined; explicitOrient: boolean; explicitGrid: boolean; grid: boolean; disabled: boolean }
+/** A layer's axes of a channel, in vega-lite's order. */
+type LayerAxis = LayerAxisGroup[]
+
+const OPPOSITE_ORIENT: Readonly<Record<string, string>> = { top: 'bottom', bottom: 'top', left: 'right', right: 'left' }
+
+/**
+ * axis/parse.ts parseLayerAxes over the layer tree: the axes of a channel a view draws. `independent(node)` says whether the view
+ * resolved the channel's scale independent (its axes are then independent too: resolve.ts parseGuideResolve).
+ */
+function layerAxisOf(n: LayerTreeNode, ch: 'x' | 'y', leafAxis: (leaf: number) => LayerAxis | undefined, independentScale: (n: LayerTreeNode) => boolean): LayerAxis | undefined {
+  if (n.leaf !== undefined) return leafAxis(n.leaf)
+  const kids = n.children.map((c) => layerAxisOf(c, ch, leafAxis, independentScale))
+  // (resolve.ts parseGuideResolve: an independent scale has independent axes, whatever resolve.axis says)
+  const asked = resolveModeOf(n.spec, 'axis', ch)
+  let independent = independentScale(n) || asked === 'independent'
+  if (!independent) {
+    let merged: LayerAxis | undefined
+    for (const k of kids) {
+      if (k === undefined) continue
+      if (merged === undefined) {
+        merged = k.map((g) => ({ ...g, leaves: [...g.leaves] }))
+        continue
+      }
+      // (axis/parse.ts mergeAxisComponents: a different number of axes, or two explicit orients that differ, cannot merge)
+      const into = merged
+      if (k.length !== into.length || k.some((g, i) => g.explicitOrient && into[i]!.explicitOrient && g.orient !== into[i]!.orient)) {
+        independent = true
+        break
+      }
+      k.forEach((g, i) => {
+        const m = into[i]!
+        // (an explicit `disable` wins the merge: a disabled first axis takes the shared axis away, whatever the later layers say)
+        if (m.disabled) return
+        if (g.disabled) {
+          throw new VLCompileError(`encoding.${ch}.axis: \`axis: null\` on a layer after one that draws the ${ch} axis is not supported: vega-lite 6.4.3 crashes on it (merging the layers' axis titles); put it on the first layer`)
+        }
+        m.leaves.push(...g.leaves)
+        if (!m.explicitOrient && g.explicitOrient) { m.orient = g.orient; m.explicitOrient = true }
+        if (!m.explicitGrid && g.explicitGrid) { m.grid = g.grid; m.explicitGrid = true }
+      })
+    }
+    if (!independent) return merged
+  }
+  // independent: one after the other; a later axis moves to the free side unless its orient is its own (axisCount counts the side each
+  // was given before it moved, as vega-lite does), and only the first keeps its grid. A disabled axis has no orient (it counts no side)
+  // but holds its place: the axis after it is not the first.
+  const count: Record<string, number> = { top: 0, bottom: 0, left: 0, right: 0 }
+  const out: LayerAxisGroup[] = []
+  for (const k of kids) {
+    if (k === undefined) continue
+    for (const g of k) {
+      if (g.disabled) { out.push({ ...g, leaves: [...g.leaves] }); continue }
+      const orient = g.orient ?? (ch === 'x' ? 'bottom' : 'left')
+      let placed = g.orient
+      if (count[orient]! > 0 && !g.explicitOrient && count[orient]! > count[OPPOSITE_ORIENT[orient]!]!) placed = OPPOSITE_ORIENT[orient]
+      count[orient]!++
+      out.push({ ...g, leaves: [...g.leaves], orient: placed })
+    }
+  }
+  out.forEach((g, i) => { if (i > 0 && !g.explicitGrid) g.grid = false })
+  return out.length ? out : undefined
+}
+
 /**
  * layoutsize/parse.ts for a layer: its size along a channel merges its layers' sizes, each layer's own or else the one the layer around it
  * gives it (layer.ts: a layer hands its size down), the first given one winning (mergeValuesWithExplicit). Under an independent scale,
@@ -919,15 +1040,15 @@ function compileLayered(spec: VLSpec, ctx: CompileCtx): VLSpec {
     }
   }
   // selections: every unit's are parsed up front (a condition in one layer may test a selection of another)
-  const resolveScaleEarly = isObject(spec.resolve) && isObject((spec.resolve as Record<string, unknown>).scale)
-    ? ((spec.resolve as Record<string, Record<string, unknown>>).scale as Record<string, unknown>)
-    : {}
+  // (the name of the scale a layer reads for a channel: known once the scales are resolved, below; a selection asks for it later)
+  const scaleOwner: Array<Map<string, string>> = parsed.map(() => new Map())
+  let leafScaleName = (_leaf: number, ch: string): string => ch
   const layerSel: Array<UnitSel | undefined> = parsed.map((p, i) => {
     SPEC_CTX.set(p.l, ctx)
     const path = LEAF_PATHS.get(p.l)
     const sel = prepareUnitSelections(p.l, p.fields, p.mark, ctx, {
       unitName: childModelName(ctx.modelName, path?.length ? path.map((n) => `layer_${n}`).join('_') : `layer_${i}`),
-      scaleName: (c) => (c === 'y' && resolveScaleEarly.y === 'independent' ? `layer_${i}_y` : c),
+      scaleName: (c) => leafScaleName(i, c),
     })
     collectDomainParams(p.l, p.fields, ctx)
     if (sel?.pointer && !(isObject(p.markRaw) && p.markRaw.cursor !== undefined)) {
@@ -1057,8 +1178,6 @@ function compileLayered(spec: VLSpec, ctx: CompileCtx): VLSpec {
       const where = `layer ${at?.length ? at.join('.') : i} (${p.mark})`
       for (const sc of layerScales) SCALE_SOURCE.set(sc, where)
     }
-    // (shared scales are judged merged, below; an independent y scale is the layer's own)
-    if (isObject(spec.resolve) && isObject((spec.resolve as Record<string, unknown>).scale) && ((spec.resolve as Record<string, Record<string, unknown>>).scale as Record<string, unknown>).y === 'independent') showInvalidValues(p.l, p.fields, p.mark, layerScales, builtMarks, (ch) => ch === 'y')
     perLayerScales.push(layerScales)
     // bin.ts getBinSignalName: the signals of a unit's bins are named after the unit's model (`model.getName`), here the layer
     const path = LEAF_PATHS.get(p.l)
@@ -1119,79 +1238,67 @@ function compileLayered(spec: VLSpec, ctx: CompileCtx): VLSpec {
     }
   })
 
-  // independent y resolution (dual-axis layers): each layer's y scale gets a
-  // unique name; the first layer keeps the left axis with grid, subsequent
-  // layers move to a right axis without grid
-  const resolveScale = isObject(spec.resolve) && isObject((spec.resolve as Record<string, unknown>).scale)
-    ? ((spec.resolve as Record<string, Record<string, unknown>>).scale as Record<string, unknown>)
-    : {}
-  // resolve.ts / scale/assemble.ts: a scale of a non-position channel is the layer's own when the spec asks for it (resolve.scale) or
-  // when the layers' scales are of different families; it is then named after its layer (`layer_0_color`), and so are its references
-  const indepChannels = new Set<string>()
-  for (const ch of INDEPENDENT_CAPABLE_CHANNELS) {
-    const own = perLayerScales.map((ls) => ls.find((sc) => sc.name === ch)).filter((sc): sc is ScaleSpec => sc !== undefined)
-    if (own.length < 2 && resolveScale[ch] !== 'independent') continue
-    if (resolveScale[ch] === 'independent' || own.some((sc) => !compatibleScaleTypes(String(own[0]!.type), String(sc.type)))) indepChannels.add(ch)
-  }
-  const indepScaleNames = new Set<string>()
-  for (const ch of indepChannels) {
-    parsed.forEach((_p, i) => {
-      const sc = perLayerScales[i]?.find((x) => x.name === ch)
-      if (!sc) return
-      const named = `layer_${i}_${ch}`
-      sc.name = named
-      indepScaleNames.add(named)
-      const rewrite = (m: Record<string, unknown>): void => {
-        const upd = (m.encode as { update?: Record<string, unknown> } | undefined)?.update
-        if (upd) for (const v of Object.values(upd)) for (const r of ([] as unknown[]).concat(v ?? [])) if (isObject(r) && r.scale === ch) r.scale = named
-        for (const sub of (m.marks as Record<string, unknown>[] | undefined) ?? []) rewrite(sub)
+  // What the layers share, resolved over the layer tree (resolve.ts, scale/parse.ts parseNonUnitScaleCore): a scale of a channel is
+  // the layer's own unless the layer resolves the channel independent, or its layers' scales of the channel cannot merge (types of
+  // different families); then each of its layers keeps its own, named after it (`layer_0_y`, `layer_0_layer_1_color`). A nested layer
+  // resolves its own layers first, and one that keeps them independent gives its parent nothing of that channel to merge.
+  const tree = layerTreeOf(spec, parsed.map((p) => p.l))
+  const scaleChannels = [...new Set(perLayerScales.flatMap((ls) => ls.map((sc) => sc.name)))]
+  /** channel -> the views that resolved its scale independent (explicitly, or because their layers' scales could not merge) */
+  const independentAt = new Map<string, Set<string>>()
+  for (const ch of scaleChannels) {
+    const assign = (n: LayerTreeNode): { open: number[]; type: string | undefined } => {
+      if (n.leaf !== undefined) {
+        const sc = perLayerScales[n.leaf]!.find((x) => x.name === ch)
+        return sc ? { open: [n.leaf], type: String(sc.type) } : { open: [], type: undefined }
       }
-      for (const m of perLayerMarks[i] ?? []) rewrite(m)
-    })
-  }
-  const indepY = resolveScale.y === 'independent'
-  if (indepY) {
-    const firstY = parsed.findIndex((p) => p.fields.some((f) => f.channel === 'y'))
-    parsed.forEach((p, i) => {
-      const yScale = perLayerScales[i]?.find((s) => s.name === 'y')
-      if (!yScale || !p.fields.some((f) => f.channel === 'y')) return
-      yScale.name = `layer_${i}_y`
-      const rewrite = (m: Record<string, unknown>): void => {
-        const enc = (m.encode as { update?: Record<string, unknown> } | undefined)?.update
-        if (enc) {
-          for (const k of ['y', 'y2', 'yc']) {
-            // (a position with an invalid-value test is a list of refs)
-            for (const v of ([] as unknown[]).concat(enc[k] ?? []) as Array<Record<string, unknown> | undefined>) {
-              if (v && v.scale === 'y') v.scale = `layer_${i}_y`
-            }
-          }
+      const kids = n.children.map(assign)
+      let shared = resolveModeOf(n.spec, 'scale', ch) !== 'independent'
+      let type: string | undefined
+      if (shared) {
+        for (const k of kids) {
+          if (k.type === undefined) continue
+          if (type === undefined) type = k.type
+          else if (!compatibleScaleTypes(type, k.type)) shared = false
         }
-        for (const sub of (m.marks as Record<string, unknown>[] | undefined) ?? []) rewrite(sub)
       }
-      for (const m of perLayerMarks[i] ?? []) rewrite(m)
-    })
-    void firstY
+      if (shared) return { open: kids.flatMap((k) => k.open), type }
+      if (!independentAt.has(ch)) independentAt.set(ch, new Set())
+      independentAt.get(ch)!.add(n.prefix)
+      n.children.forEach((c, i) => { for (const leaf of kids[i]!.open) scaleOwner[leaf]!.set(ch, c.prefix) })
+      return { open: [], type: undefined }
+    }
+    for (const leaf of assign(tree).open) scaleOwner[leaf]!.set(ch, '')
   }
+  // the scales, merged per owner (a layer, or one of its layers that keeps its own), in the order vega-lite assembles them: the owner's
+  // own, then its layers', depth first
+  const owners = tree.prefixes.filter((pre) => scaleOwner.some((m) => [...m.values()].includes(pre)))
+  const mergedByOwner = new Map<string, ScaleSpec[]>()
+  for (const pre of owners) {
+    mergedByOwner.set(pre, mergeLayerScales(perLayerScales.map((ls, i) => ls.filter((sc) => scaleOwner[i]!.get(sc.name) === pre))))
+  }
+  const ownScales = (leaf: number): ScaleSpec[] => [...scaleOwner[leaf]!].map(([ch, pre]) => mergedByOwner.get(pre)!.find((sc) => sc.name === ch)).filter((sc): sc is ScaleSpec => sc !== undefined)
+  applyScaleConfig(owners.flatMap((pre) => mergedByOwner.get(pre)!), isObject(spec.config) ? (spec.config as Record<string, unknown>) : undefined)
+  // invalid = "show": a layer positions its invalid values against the scale it reads, merged (a point's zero-including scale does not
+  // decide for the line it is merged with); a point on a band is centred on it
+  parsed.forEach((p, i) => {
+    const own = ownScales(i)
+    resolveZeroOrMin(perLayerMarks[i]!, own)
+    showInvalidValues(p.l, p.fields, p.mark, own, perLayerMarks[i]!)
+    centerPointMarksOnBands(perLayerMarks[i]!, own)
+  })
+  // (independent scales take their owner's name, and so do the references of the layers that read them)
+  parsed.forEach((_p, i) => {
+    const renames = new Map([...scaleOwner[i]!].filter(([, pre]) => pre !== '').map(([ch, pre]) => [ch, `${pre}${ch}`]))
+    if (renames.size) renameFragment(perLayerMarks[i]!, { signals: new Map(), scales: renames })
+  })
+  for (const pre of owners) if (pre !== '') for (const sc of mergedByOwner.get(pre)!) sc.name = `${pre}${sc.name}`
+  const scales = owners.flatMap((pre) => mergedByOwner.get(pre)!)
+  out.scales = scales
+  leafScaleName = (leaf, ch) => `${scaleOwner[leaf]?.get(ch) ?? ''}${ch}`
 
   let marks: Record<string, unknown>[] = perLayerMarks.flat()
   out.marks = marks
-
-  // with independent y, the y scales stay per-layer (renamed); the remaining
-  // scales still merge across layers
-  const isIndepYScale = (s: ScaleSpec): boolean => s.name.startsWith('layer_') && s.name.endsWith('_y')
-  const isOwnScale = (s: ScaleSpec): boolean => indepScaleNames.has(s.name)
-  const scales = indepY
-    ? [...mergeLayerScales(perLayerScales.map((ls) => ls.filter((s) => s.name !== 'y' && !isIndepYScale(s) && !isOwnScale(s)))), ...perLayerScales.flat().filter(isIndepYScale), ...perLayerScales.flat().filter(isOwnScale)]
-    : indepScaleNames.size
-      ? [...mergeLayerScales(perLayerScales.map((ls) => ls.filter((s) => !isOwnScale(s)))), ...perLayerScales.flat().filter(isOwnScale)]
-      : mergeLayerScales(perLayerScales)
-  out.scales = scales
-  applyScaleConfig(scales, isObject(spec.config) ? (spec.config as Record<string, unknown>) : undefined)
-  // invalid = "show": a layer positions its invalid values against the scale it shares, not its own (a point's zero-including
-  // scale does not decide for the line it is merged with)
-  perLayerMarks.forEach((ms) => resolveZeroOrMin(ms, scales as ScaleSpec[]))
-  parsed.forEach((p, i) => showInvalidValues(p.l, p.fields, p.mark, scales, perLayerMarks[i]!, indepY ? (ch) => ch !== 'y' : undefined))
-  centerPointMarksOnBands(marks, scales)
   // selections: scales that follow a param, the marks' interactive flags and clip, the units' brush / voronoi marks
   let layerClip = false
   parsed.forEach((p, i) => {
@@ -1207,61 +1314,62 @@ function compileLayered(spec: VLSpec, ctx: CompileCtx): VLSpec {
   for (const sel of layerSel) if (sel?.unit) marks = assembleSelectionMarks(sel.unit, sel.cmpts, marks)
   out.marks = marks
 
-  // axes: one per positional channel, from the first layer that encodes it,
-  // with the axis title unioned across layers (vega-lite joins ', ')
-  const axes: Record<string, unknown>[] = []
-  const firstYLayer = parsed.findIndex((p) => p.fields.some((f) => f.channel === 'y'))
+  // axes (axis/parse.ts parseLayerAxes): a layer's axis of a channel is its layers' merged, unless it resolves the channel's axis (or
+  // scale) independent, or its layers' axes cannot merge (a different count, explicit orients that differ): then they are listed one
+  // after the other, each later one moved to the free side unless its orient is its own, and only the first keeps its grid
   const userConfig = isObject(spec.config) ? (spec.config as Record<string, unknown>) : undefined
+  const axes: Record<string, unknown>[] = []
   for (const ch of ['x', 'y'] as const) {
-    if (ch === 'y' && indepY) {
-      parsed.forEach((p, i) => {
-        const yDef = p.fields.find((f) => f.channel === 'y' && f.axis !== null)
-        if (!yDef || !perLayerScales[i]?.some((s) => s.name === `layer_${i}_y`)) return
-        const isFirst = i === firstYLayer
-        const axisDefs = buildAxes([yDef], axisMark(p.markRaw, p.mark), perLayerScales[i]!, `layer_${i}_y`, undefined, userConfig)
-        for (const a of axisDefs) {
-          ;(a as Record<string, unknown>).scale = `layer_${i}_y`
-          const gridAxis = (a as Record<string, unknown>).gridScale != null
-          if (!isFirst) {
-            // subsequent independent y axes: right-orient, no grid
-            ;(a as Record<string, unknown>).orient = (a as Record<string, unknown>).orient === 'left' ? 'right' : (a as Record<string, unknown>).orient
-            if (gridAxis) continue
-          }
-          axes.push(a)
-        }
-      })
-      continue
+    const titleOf = (i: number): GuideTitle => {
+      const f = parsed[i]!.fields.find((q) => q.channel === ch)!
+      return axisTitleParts(f, isObject(f.axis) ? f.axis : undefined, secondOf(f, parsed[i]!.fields))
     }
-    const layersWith = parsed.filter((p) => p.fields.some((f) => f.channel === ch && f.axis !== null))
-    if (!layersWith.length) continue
-    const base = layersWith[0]!
-    // the layers that share the axis merge their titles, a nested layer's among themselves first
-    const titleOf = (p: (typeof parsed)[number]): GuideTitle => {
-      const f = p.fields.find((q) => q.channel === ch)!
-      return axisTitleParts(f, isObject(f.axis) ? f.axis : undefined, secondOf(f, p.fields))
+    const leafAxis = (i: number): LayerAxis | undefined => {
+      const p = parsed[i]!
+      const def = p.fields.find((f) => f.channel === ch && !f.noScale)
+      if (def === undefined || !scales.some((sc) => sc.name === leafScaleName(i, ch))) return undefined
+      if (def.axis === null) return [{ leaves: [i], orient: undefined, explicitOrient: false, explicitGrid: false, grid: false, disabled: true }]
+      const ownOrient = isObject(def.axis) && typeof (def.axis as Record<string, unknown>).orient === 'string' ? (def.axis as Record<string, unknown>).orient as string : undefined
+      const explicitGrid = isObject(def.axis) && (def.axis as Record<string, unknown>).grid !== undefined
+      return [{ leaves: [i], orient: ownOrient, explicitOrient: ownOrient !== undefined, explicitGrid, grid: true, disabled: false }]
     }
-    const merged = mergeLayerTitles(layersWith.map((p) => ({ path: LEAF_PATHS.get(p.l) ?? [parsed.indexOf(p)], title: titleOf(p) })))
-    const text = titleText(merged)
-    // (the axis of a layer is built from its channel alone: the merged title replaces whatever that channel would make of itself)
-    const retitled = (f: FieldDef): FieldDef => {
-      const own = axisTitleParts(f, isObject(f.axis) ? f.axis : undefined, undefined)
-      return JSON.stringify(titleText(own)) === JSON.stringify(text) ? f : withAxisTitle(f, text ?? null)
-    }
-    const axisFields = base.fields.filter((f) => f.channel === ch).map(retitled)
-    const gridScaleName = ch === 'x' && indepY ? `layer_${firstYLayer}_y` : undefined
-    const built = buildAxes(axisFields, axisMark(base.markRaw, base.mark), scales as ScaleSpec[], undefined, gridScaleName, userConfig)
-    // axis/parse.ts mergeAxisComponent: what the first layer's axis lacks (a time unit's format and tick step, say) comes from the
-    // other layers that share it
-    for (const other of layersWith.slice(1)) {
-      const otherFields = other.fields.filter((f) => f.channel === ch).map(retitled)
-      for (const a2 of buildAxes(otherFields, axisMark(other.markRaw, other.mark), scales as ScaleSpec[], undefined, gridScaleName, userConfig)) {
-        const a1 = built.find((a) => a.grid === a2.grid && a.orient === a2.orient)
-        // (the label align and baseline follow the label angle: an axis that settled its angle settled them too - a null align is a value
-        // there, not a missing one - so another layer's, computed from its own angle, does not fill them in)
-        if (a1) for (const [k, v] of Object.entries(a2)) if (own(a1, k) === undefined && v !== undefined && !((k === 'labelAlign' || k === 'labelBaseline') && (a1 as Record<string, unknown>).labelAngle !== undefined)) setOwn(a1, k, v)
+    const comp = layerAxisOf(tree, ch, leafAxis, (n) => independentAt.get(ch)?.has(n.prefix) === true)
+    if (comp === undefined) continue
+    comp.forEach((group) => {
+      if (group.disabled) return
+      const scaleName = leafScaleName(group.leaves[0]!, ch)
+      const other = ch === 'x' ? 'y' : 'x'
+      const otherScale = leafScaleName(group.leaves[0]!, other)
+      const gridScaleName = scales.some((sc) => sc.name === otherScale) ? otherScale : undefined
+      // the layers that share the axis merge their titles, a nested layer's among themselves first
+      const merged = mergeLayerTitles(group.leaves.map((i) => ({ path: LEAF_PATHS.get(parsed[i]!.l) ?? [i], title: titleOf(i) })))
+      const text = titleText(merged)
+      // (the axis of a layer is built from its channel alone: the merged title replaces whatever that channel would make of itself)
+      const retitled = (f: FieldDef): FieldDef => {
+        const own = axisTitleParts(f, isObject(f.axis) ? f.axis : undefined, undefined)
+        return JSON.stringify(titleText(own)) === JSON.stringify(text) ? f : withAxisTitle(f, text ?? null)
       }
-    }
-    for (const a of built) axes.push(a)
+      const fieldsOf = (i: number): FieldDef[] => parsed[i]!.fields.filter((f) => f.channel === ch).map(retitled)
+      const base = parsed[group.leaves[0]!]!
+      const built = buildAxes(fieldsOf(group.leaves[0]!), axisMark(base.markRaw, base.mark), scales as ScaleSpec[], scaleName, gridScaleName, userConfig)
+      // axis/parse.ts mergeAxisComponent: what the first layer's axis lacks (a time unit's format and tick step, say) comes from the
+      // other layers that share it
+      for (const i of group.leaves.slice(1)) {
+        const o = parsed[i]!
+        for (const a2 of buildAxes(fieldsOf(i), axisMark(o.markRaw, o.mark), scales as ScaleSpec[], scaleName, gridScaleName, userConfig)) {
+          const a1 = built.find((a) => a.grid === a2.grid && a.orient === a2.orient)
+          // (the label align and baseline follow the label angle: an axis that settled its angle settled them too - a null align is a value
+          // there, not a missing one - so another layer's, computed from its own angle, does not fill them in)
+          if (a1) for (const [k, v] of Object.entries(a2)) if (own(a1, k) === undefined && v !== undefined && !((k === 'labelAlign' || k === 'labelBaseline') && (a1 as Record<string, unknown>).labelAngle !== undefined)) setOwn(a1, k, v)
+        }
+      }
+      for (const a of built) {
+        if (a.grid === true && !group.grid) continue
+        a.scale = scaleName
+        if (group.orient !== undefined) a.orient = group.orient
+        axes.push(a)
+      }
+    })
   }
   // every grid axis is emitted before any main axis (grids paint under the domains and labels)
   if (axes.length) out.axes = [...axes.filter((a) => a.grid === true), ...axes.filter((a) => a.grid !== true)]
@@ -1270,16 +1378,63 @@ function compileLayered(spec: VLSpec, ctx: CompileCtx): VLSpec {
   // steps and the view size is a signal over the domain cardinality
   const sizeSignals: Record<string, unknown>[] = []
   const layerContinuous = parsed.some((p) => p.mark === 'arc' || hasProjection(p.mark, isObject(p.l.encoding) ? (p.l.encoding as Record<string, unknown>) : {}))
+  /**
+   * The first view (its prefix) whose size along a channel vega-lite abandons (layoutsize/parse.ts parseNonUnitLayoutSizeForChannel: under
+   * an independent scale, layers sized by steps or sized differently), each leaf sized as defaultUnitSize sizes it; undefined when none.
+   */
+  const layerSizeAbandonedAt = (root: LayerTreeNode, channel: 'x' | 'y'): string | undefined => {
+    const which = channel === 'x' ? 'width' : 'height'
+    let at: string | undefined
+    const sizeOf = (n: LayerTreeNode, given: unknown): unknown => {
+      const req = peek(() => n.spec[which]) ?? given
+      if (n.leaf !== undefined) {
+        const r = sizeSpec(req)
+        if (r.step !== undefined) return 'step'
+        if (r.container) return 'container'
+        const p = parsed[n.leaf]!
+        const sc = scaleOwner[n.leaf]!.has(channel) ? scales.find((x) => x.name === leafScaleName(n.leaf!, channel)) : undefined
+        const plan = sizePlan(spec, which, r, sc ? String(sc.type) : undefined, p.mark === 'arc' || hasProjection(p.mark, isObject(p.l.encoding) ? (p.l.encoding as Record<string, unknown>) : {}))
+        return 'step' in plan ? 'step' : 'fixed' in plan ? plan.fixed : 'container'
+      }
+      const independent = independentAt.get(channel)?.has(n.prefix) === true
+      let merged: unknown
+      for (const c of n.children) {
+        const size = sizeOf(c, req)
+        if (at !== undefined) return undefined
+        if (independent && (size === 'step' || (merged !== undefined && merged !== size))) {
+          at = n.prefix
+          return undefined
+        }
+        if (merged === undefined) merged = size
+      }
+      return merged
+    }
+    sizeOf(root, undefined)
+    return at
+  }
   const layerPlans = (['x', 'y'] as const).map((channel) => {
-    // (an independent y scale is named after its layer)
-    const sc = scales.find((s) => s.name === channel) ?? (indepY && channel === 'y' ? scales.find(isIndepYScale) : undefined)
+    // (the layer's own scale of the channel; with independent ones, the first layer's)
+    const owned = parsed.findIndex((_p, i) => scaleOwner[i]!.has(channel))
+    const sc = scales.find((s) => s.name === channel) ?? (owned >= 0 ? scales.find((s) => s.name === leafScaleName(owned, channel)) : undefined)
+    // (layoutsize/parse.ts parseNonUnitLayoutSizeForChannel: under an independent scale a layer's size merges its layers' only when none
+    // is sized by steps and all are the same - their own, the one handed down, or the default for their scale; otherwise vega-lite leaves
+    // the view without that size, and its output draws nothing)
+    const abandonedAt = independentAt.get(channel)?.size ? layerSizeAbandonedAt(tree, channel) : undefined
+    if (abandonedAt === '') {
+      throw new VLCompileError(`resolve.scale.${channel}: independent ${channel} scales over layers sized differently (by steps, or by different ${channel === 'x' ? 'widths' : 'heights'}) are not supported: vega-lite 6.4.3 gives the view no ${channel === 'x' ? 'width' : 'height'} for them, and draws nothing; give the layer a ${channel === 'x' ? 'width' : 'height'}, or share the scale`)
+    }
+    if (abandonedAt !== undefined) {
+      throw new VLCompileError(`resolve.scale.${channel}: independent ${channel} scales in a nested layer over layers sized differently (by steps, or by different ${channel === 'x' ? 'widths' : 'heights'}) are not supported: vega-lite 6.4.3 sizes the view by another layer and draws the nested layer's marks past it; give the nested layer a ${channel === 'x' ? 'width' : 'height'}, or share the scale`)
+    }
     const req = channel === 'x' ? wSpec : hSpec
     const plan = sizePlan(spec, channel === 'x' ? 'width' : 'height', req, sc ? String(sc.type) : undefined, layerContinuous)
     // (split.ts: the first layer whose position has steps decides the range of the merged scale, and with it whether the step is the
     // offset's: a later layer that offsets the position does not change what the first one made of it)
-    const stepLayer = parsed.find((p) => p.fields.some((f) => f.channel === channel && f.field && ['band', 'point'].includes(positionalScaleType(p.mark, f))))
+    const stepIndex = parsed.findIndex((p) => p.fields.some((f) => f.channel === channel && f.field && ['band', 'point'].includes(positionalScaleType(p.mark, f))))
+    const stepLayer = stepIndex >= 0 ? parsed[stepIndex] : undefined
     const stepOffset = stepLayer?.fields.some((f) => f.channel === `${channel}Offset` && f.field && isDiscreteType(f.type)) ?? true
-    if ('step' in plan) pushAll(sizeSignals, stepSignals(channel, scales as ScaleSpec[], plan.step, req.stepFor, stepOffset))
+    const offsetNames = [...new Set([...(stepIndex >= 0 ? [stepIndex] : []), ...parsed.keys()].map((i) => leafScaleName(i, `${channel}Offset`)))]
+    if ('step' in plan) pushAll(sizeSignals, stepSignals(channel, scales as ScaleSpec[], plan.step, req.stepFor, stepOffset, offsetNames))
     return plan
   })
   const xStepped = 'step' in layerPlans[0]!
@@ -1293,39 +1448,45 @@ function compileLayered(spec: VLSpec, ctx: CompileCtx): VLSpec {
   if (!yStepped && !hSpec.container) out.height = 'fixed' in layerPlans[1]! ? layerPlans[1].fixed : height
   if (sizeSignals.length) out.signals = sizeSignals
 
+  // legends (legend/parse.ts parseNonUnitLegend): a layer's legend of a channel merges its layers' unless the layer resolves the legend
+  // (or the scale) independent; a legend kept by one of its layers reads that layer's scale and is listed after the layer's own
+  // (layer.ts assembleLegends)
   const legends: Record<string, unknown>[] = []
-  // (layer.ts assembleLegends: the layer's shared legends come first, then each layer's own)
-  const layerOwnLegends: Record<string, unknown>[] = []
-  const sharedLegends: Array<{ path: number[]; lg: Record<string, unknown> }> = []
+  // (a legend is its layer's own where the layer resolves the legend independent, or the scale: whichever view is deeper)
+  const legendOwnerOf = (leaf: number, ch: string): string => {
+    const path = LEAF_PATHS.get(parsed[leaf]!.l) ?? []
+    let owner = ''
+    let n: LayerTreeNode = tree
+    for (let d = 0; d < path.length && n.leaf === undefined; d++) {
+      const next = n.children[path[d]!]!
+      if (resolveModeOf(n.spec, 'legend', ch) === 'independent') owner = next.prefix
+      n = next
+    }
+    const scaleOwned = scaleOwner[leaf]!.get(ch) ?? ''
+    return scaleOwned.length > owner.length ? scaleOwned : owner
+  }
+  const legendGroups = new Map<string, Array<{ path: number[]; lg: Record<string, unknown> }>>()
   for (const [pi, p] of parsed.entries()) {
     const unitLegends = buildUnitLegends(p.l, p.fields, p.mark, p.markRaw)
     if (layerSel[pi]) applyLegendSelectionsOf(unitLegends, p.fields, layerSel[pi]!.cmpts)
     for (const lg of unitLegends) {
-      // one legend per scale channel (vega resolves shared legends across layers)
       const ch = legendChannel(lg)
-      // a layer's own scale has its own legend, which reads that scale
-      // (a layer's own legends are assembled among themselves: layer.ts assembleLegends)
-      const own = (): void => { const g = LEGEND_GROUP.get(lg); if (g) LEGEND_GROUP.set(lg, { ...g, scope: `layer_${pi}` }) }
-      if (indepChannels.has(ch)) {
-        for (const k of LEGEND_SCALE_KEYS) if (lg[k] === ch) lg[k] = `layer_${pi}_${ch}`
-        own()
-        layerOwnLegends.push(lg)
-        continue
+      const pre = legendOwnerOf(pi, ch)
+      // (the legend reads the scale the layer reads)
+      const scaleName = leafScaleName(pi, ch)
+      if (scaleName !== ch) for (const k of LEGEND_SCALE_KEYS) if (lg[k] === ch) lg[k] = scaleName
+      if (pre !== '') {
+        // (a layer's own legends are assembled among themselves)
+        const g = LEGEND_GROUP.get(lg)
+        if (g) LEGEND_GROUP.set(lg, { ...g, scope: pre.replace(/_$/, '') })
       }
-      // resolve.legend: independent - every layer keeps its own legend of this channel (they read the same scale)
-      if (isObject(spec.resolve) && isObject((spec.resolve as Record<string, unknown>).legend) && ((spec.resolve as Record<string, Record<string, unknown>>).legend)?.[ch] === 'independent') {
-        own()
-        layerOwnLegends.push(lg)
-        GROUP_LEGENDS.add(lg)
-        continue
-      }
-      // shared legend: the layers that feed it merge (below)
-      sharedLegends.push({ path: LEAF_PATHS.get(p.l) ?? [pi], lg })
-      if (!legends.some((x) => legendChannel(x) === ch)) legends.push(lg)
+      const key = `${pre}\u0000${scaleName}`
+      if (!legendGroups.has(key)) legendGroups.set(key, [])
+      legendGroups.get(key)!.push({ path: LEAF_PATHS.get(p.l) ?? [pi], lg })
     }
   }
   // (a nested layer's legends merge among themselves first, and the result merges with its siblings': the titles join in that order)
-  const mergeShared = (entries: typeof sharedLegends, depth: number): Record<string, unknown>[] => {
+  const mergeShared = (entries: Array<{ path: number[]; lg: Record<string, unknown> }>, depth: number): Record<string, unknown>[] => {
     const merged: Record<string, unknown>[] = []
     for (let i = 0; i < entries.length;) {
       let j = i + 1
@@ -1342,9 +1503,24 @@ function compileLayered(spec: VLSpec, ctx: CompileCtx): VLSpec {
     }
     return merged
   }
-  mergeShared(sharedLegends, 0)
-  for (const lg of layerOwnLegends) legends.push(lg)
+  // the layer's own legends first, then its layers' (depth first, in the order of the tree)
+  const legendOrder = (key: string): number => tree.prefixes.indexOf(key.slice(0, key.indexOf('\u0000')))
+  for (const key of [...legendGroups.keys()].sort((a, b) => legendOrder(a) - legendOrder(b))) {
+    const entries = legendGroups.get(key)!
+    const pre = key.slice(0, key.indexOf('\u0000'))
+    for (const lg of mergeShared(entries, 0)) {
+      if (pre !== '') GROUP_LEGENDS.add(lg)
+      legends.push(lg)
+    }
+  }
   if (legends.length) out.legends = legends
+  // (a resolution of a channel none of the layers below draws resolves nothing: vega-lite reads it nowhere)
+  const visitResolves = (n: LayerTreeNode): void => {
+    const resolve = peek(() => n.spec.resolve)
+    if (isObject(resolve)) for (const what of ['scale', 'axis', 'legend']) { const m = peek(() => resolve[what]); if (isObject(m)) ignoreUnread(m, 'no layer below draws the channel') }
+    n.children.forEach(visitResolves)
+  }
+  visitResolves(tree)
   // the signals every unit's selections add (collected in compile())
   const selUnits = layerSel.filter((sel): sel is UnitSel => sel?.unit !== undefined)
   if (selUnits.length) {
@@ -1427,7 +1603,7 @@ function uniquifyLayerMarks(marks: Record<string, unknown>[], layerIndex: number
 }
 
 /** The step-form size signals of a discrete scale: `<ch>_step` plus the size signal over the domain cardinality. */
-function stepSignals(channel: 'x' | 'y', scales: ScaleSpec[], step: number, stepForReq?: 'position' | 'offset', ownsOffset = true): Record<string, unknown>[] {
+function stepSignals(channel: 'x' | 'y', scales: ScaleSpec[], step: number, stepForReq?: 'position' | 'offset', ownsOffset = true, offsetNames: readonly string[] = [`${channel}Offset`]): Record<string, unknown>[] {
   const sc = scales.find((s) => s.name === channel)
   if (!sc) return []
   const stepName = `${channel}_step`
@@ -1438,12 +1614,18 @@ function stepSignals(channel: 'x' | 'y', scales: ScaleSpec[], step: number, step
   const pi = sc.type === 'point' ? 1 : ((sc.paddingInner as number) ?? (sc.padding as number) ?? 0)
   // scale/range.ts getPositionStep / getOffsetStep: with a discrete offset channel the step is the offset's
   // (`for: "offset"`, the default), so the position scale takes step x (offset cardinality) / (1 - paddingInner)
-  const offsetName = `${channel}Offset`
+  // (with layers that keep their own offset scales, the first one's - the layer that decides the position's steps - counts; each offset's
+  // own range is its step)
+  const offsetName = offsetNames[0]!
   const offset = scales.find((s) => s.name === offsetName)
   const offsetDiscrete = offset !== undefined && (offset.type === 'band' || offset.type === 'point')
   const offsetStepFor = offsetDiscrete ? (stepForReq ?? 'offset') : 'position'
-  // (the offset's own range is its step, whichever layer made the position scale's)
-  if (offset !== undefined && offsetStepFor === 'offset' && sc.type === 'band') offset.range = { step }
+  if (offsetStepFor === 'offset' && sc.type === 'band') {
+    for (const name of offsetNames) {
+      const o = scales.find((s) => s.name === name)
+      if (o !== undefined && (o.type === 'band' || o.type === 'point')) o.range = { step }
+    }
+  }
   const stepFor = ownsOffset ? offsetStepFor : 'position'
   let stepSignal: Record<string, unknown> = { name: stepName, value: step }
   if (stepFor === 'offset' && offset) {
@@ -1569,7 +1751,6 @@ function domainEntries(domain: unknown): DomainEntry[] | null {
  * give `{fields: [[0, 10], [0, 20]]}`, as vega-lite does); sorts must agree.
  */
 /** The non-position channels whose scales layers can keep apart. */
-const INDEPENDENT_CAPABLE_CHANNELS = ['color', 'fill', 'stroke', 'size', 'opacity', 'shape', 'strokeWidth', 'strokeDash', 'fillOpacity', 'strokeOpacity', 'angle']
 
 /** The family a scale type belongs to; scales of one family merge across layers, the others cannot (scale/assemble.ts). */
 function scaleTypeCategory(t: string): string {
@@ -2028,6 +2209,16 @@ function compileFacetedView(spec: VLSpec, ctx: CompileCtx, nested = ''): VLSpec 
   const inner = inChildView(ctx, 'child', cellFacetFields, true, () => (innerIsFacet ? compileFaceted(innerSpec, ctx, CH) : Array.isArray(innerSpec.layer) ? compileLayered(innerSpec, ctx) : compileUnitView(innerSpec, ctx)))
   ctx.inNestedFacet = savedNestedFacet
   ctx.facetTransformCount = savedFacetTransforms
+  // (a layer in the cells that keeps independent x / y scales under a facet that shares them: vega-lite 6.4.3's output reads a scale it
+  // never defines - `child_layer_0_y` - and Vega refuses it, DECISIONS Q9)
+  if (!innerIsFacet && Array.isArray(innerSpec.layer)) {
+    for (const sc of (inner.scales as ScaleSpec[] | undefined) ?? []) {
+      const m = /^(?:layer_\d+_)+(x|y)$/.exec(sc.name)
+      if (m && resolveModeOf(spec, 'scale', m[1]!) !== 'independent') {
+        throw new VLCompileError(`spec.resolve.scale.${m[1]}: a layer in a facet that keeps its own ${m[1]} scales is not supported unless the facet resolves ${m[1]} independent too: vega-lite 6.4.3's output reads a scale it never defines`)
+      }
+    }
+  }
   const innerSel = SEL_PARTS.get(inner)
   if (innerIsFacet && (innerSel !== undefined || (Array.isArray(inner.projections) && inner.projections.length > 0))) {
     throw new VLCompileError('a selection or a map inside a facet inside a facet is not supported yet')
