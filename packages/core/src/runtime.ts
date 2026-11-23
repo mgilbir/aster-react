@@ -1575,7 +1575,7 @@ function resolveSignalUpdates(ctx: EvalContext, staticOnly = false): boolean {
       ctx.setData.caller = def.name
       const value = ctx.runtime.random === undefined || !mayDrawRandom(expr)
         ? ctx.runtime.expr(expr)(undefined, params)
-        : atRandomSite(ctx.runtime.random, `signal:${def.name}`, () => randomFingerprint(expr, [], params), () => ctx.runtime.expr(expr)(undefined, params))
+        : atRandomSite(ctx.runtime.random, ctx.chart, `signal:${def.name}`, () => randomFingerprint(expr, [], params), () => ctx.runtime.expr(expr)(undefined, params))
       // An `init` that reads a scale or a dataset is only settled once they exist: until the scales are built,
       // `domain('x')` of a scale that is not there yet is `[]`, which is not the value vega's dataflow computes.
       const readsScales = DATA_DEPENDENT_EXPR.test(lexedText(expr)) && ctx.scales.size === 0 && ctx.chart.scales.length > 0
@@ -4510,7 +4510,7 @@ function runPipeline(
         : { rows: applyFresh(from, t, tctx, name, before) }
     const res = ctx.runtime.random === undefined || !mayDrawRandom(t)
       ? run()
-      : atRandomSite(ctx.runtime.random, `dataset:${name}#${k}`, () => randomFingerprint(t, from, ctx.signalParams), run)
+      : atRandomSite(ctx.runtime.random, ctx.chart, `dataset:${name}#${k}`, () => randomFingerprint(t, from, ctx.signalParams), run)
     cur = copyAfter ? withOrderOf(res.rows, copyRows(res.rows)) : res.rows
     markTuples(cur)
     state.steps.push(cur)
@@ -6246,7 +6246,7 @@ function transformMarkItems(mark: CompiledMark, items: readonly SceneItem[], ctx
       const run = (): Row[] => applyTransforms(input, [t], tctx, source, true)
       const out = t.type === 'identifier'
         ? withCarry(tctx, carriedNumbers(input, before, idField(t)), run)
-        : atRandomSite(mayDrawRandom(t) ? ctx.runtime.random : undefined, `mark:${ctx.scopeId ?? ''}/${markIdOf(mark)}#${k}`, () => randomFingerprint(t, input.map(publicProps), ctx.signalParams), run)
+        : atRandomSite(mayDrawRandom(t) ? ctx.runtime.random : undefined, ctx.chart, `mark:${ctx.scopeId ?? ''}/${markIdOf(mark)}#${k}`, () => randomFingerprint(t, input.map(publicProps), ctx.signalParams), run)
       rows = out.map((r) => {
         const it = (r as { [ITEM_OF]?: Row })[ITEM_OF]
         if (it === undefined || it === r) return r
