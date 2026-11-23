@@ -10,6 +10,7 @@
  * environments (jsdom without the `canvas` package) keep the exact behaviour
  * the conformance harness pins.
  */
+import type { HostCanvas } from './host-types.js'
 const widthCache = new Map<string, number>()
 const WIDTH_CACHE_MAX = 8000
 
@@ -72,7 +73,7 @@ function canvasContext(): CanvasRenderingContext2D | null {
  * A new canvas element of the host (what vega-canvas's `canvas()` is in a browser), or null where the host has none to draw on
  * (Node, jsdom without a canvas package).
  */
-export function createHostCanvas(): HTMLCanvasElement | null {
+export function createHostCanvas(): HostCanvas | null {
   if (canvasContext() === null) return null
   try { return document.createElement('canvas') } catch { return null }
 }

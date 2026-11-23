@@ -11,6 +11,7 @@
  * (vega-loader-identical semantics ship in the core); csv/tsv/dsv/topojson
  * strings and URL datasets need it.
  */
+import type { HostAbortSignal, HostFetch, HostUrl } from './host-types.js'
 import { dsvFormat } from './dsv.js'
 import { feature as topoFeature, mesh as topoMesh } from './topojson.js'
 import { dataFormatRegistry } from './registry.js'
@@ -70,7 +71,7 @@ export { AsterUrlError } from './url-policy.js'
 /** Options for {@link loadSpecData}. Every default is the safe one; see docs/LIMITS.md. */
 export interface LoadOptions {
   /** Fetch implementation. Defaults to `globalThis.fetch`. */
-  fetch?: typeof globalThis['fetch']
+  fetch?: HostFetch
   /**
    * Base for relative `url`s (the origin of your data service, or
    * `location.href` in a browser). Without it a relative url is an error. A url
@@ -83,7 +84,7 @@ export interface LoadOptions {
    * Veto hook, consulted for the initial URL and again for every redirect hop.
    * Return true to permit. For an allowlist of origins this is the place.
    */
-  allow?: (url: URL) => boolean | Promise<boolean>
+  allow?: (url: HostUrl) => boolean | Promise<boolean>
   /**
    * Permit loopback, private, link-local and other non-public hosts (by the
    * host literal in the URL). Default false. Does not apply to the baseURL's
@@ -92,7 +93,7 @@ export interface LoadOptions {
    */
   allowPrivateNetwork?: boolean
   /** Abort the whole load. */
-  signal?: AbortSignal
+  signal?: HostAbortSignal
   /** Per-request timeout in milliseconds, covering headers AND body. Default 10 000. */
   timeoutMs?: number
   /** Largest response body, in bytes, enforced while the stream is read. Default 10 485 760. */
