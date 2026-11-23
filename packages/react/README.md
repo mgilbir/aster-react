@@ -24,8 +24,8 @@ export const Demo = () => <Chart spec={spec} panZoom tooltip a11y limits={{ maxT
 
 Vega specs need only the first import. The opt-in core add-ons (`@aster-charts/core/transforms`, `/geo`, `/load`) are loaded on demand when
 a spec needs them: the chart suspends meanwhile (wrap it in `<Suspense>` for a fallback), then renders as it would have with the add-on
-imported ([how add-ons load themselves](https://github.com/mgilbir/aster-react/blob/main/docs/ARCHITECTURE.md#geo-projections--the-add-on-boundary)). Without `@aster-charts/react/vl`, a Vega-Lite spec throws an error naming the missing
-import; if you compile Vega-Lite specs in a worker, import the add-on in the worker entry too.
+imported ([how add-ons load themselves](https://github.com/mgilbir/aster-react/blob/main/docs/ARCHITECTURE.md#geo-projections--the-add-on-boundary)). Without `@aster-charts/react/vl`, a Vega-Lite spec shows the chart's error state and calls `onError` with an error
+naming the missing import; if you compile Vega-Lite specs in a worker, import the add-on in the worker entry too.
 
 The engine loads the same way. In a browser build the families most charts never run (the aggregating, window and reshaping
 transforms, time scales and date formats, the curves besides `linear`, colour ramps and blending, the rarer scale types, legends,

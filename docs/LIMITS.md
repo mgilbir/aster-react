@@ -556,7 +556,8 @@ takes colours only. The canvas renderer ignores a `url()` paint.
 `containerSize: { width, height }` in the runtime input; Vega-Lite's own fallback size then
 applies. A host that has a DOM element to fill passes its `clientWidth` / `clientHeight`.
 
-`measuredSize: { width, height }` is the element a host lets the chart fill. It is the view size of a
+`measuredSize: { width?, height? }` is the element a host lets the chart fill, each dimension on its own (`<Chart>` passes it
+only for a `width` / `height` given as `'container'`; without size props a chart is the size its spec makes it, as in Vega). It is the view size of a
 spec with no `width` / `height` signal; a spec that drives those signals keeps doing so (the container
 reaches it through `containerSize()`, which falls back to `measuredSize`); nor does it size a dimension the spec gives no value at all (no number, no signal): in Vega that is 0 and the autosize pass grows it to the content; nor a spec whose autosize is `none`, whose whole size in Vega is its `width`, `height` and `padding`. The view size has one value
 for every consumer (scales, layout, marks and expressions); from the strongest: a fixed `width` /
@@ -587,6 +588,15 @@ its name, so a dropped one is simply rebuilt.
   Suspense loading too.
 - `urlData="refuse"` refuses a spec with a url dataset in every shell, hook and worker, before any add-on is imported
   (see [Refusing url datasets](#refusing-url-datasets-urldata)).
+- Bound inputs (`signal.bind`) are confined to the chart: a generated input takes only the input types and field attributes an
+  input can safely have (Vega copies every key of `bind` onto it as an attribute, so a spec could add an inline `on*` event
+  handler), a radio group is named with the chart's own React id (no spec-chosen field names in a host `<form>`), and
+  `bind.element`, which in Vega places an input in, or binds the signal to, an element of the page found by CSS selector, is
+  not honoured (it is reported through the logger, and an input with a type is drawn under the chart). An untrusted spec thus
+  cannot place controls in, or read values from, the page around the chart (DECISIONS Q1).
+- `data`, size props and controlled `view` / `brush` / interval values are checked at the boundary: a dataset that is not an
+  array of rows and a size that is not a finite number of pixels or `'container'` put the chart in its error state; a bad
+  view or interval axis is reported and left out. None reaches the engine.
 - A worker is not a kill switch by itself. To get the hard guarantee described above,
   terminate the Worker you created (`worker.terminate()`) when your own deadline passes.
 - The worker handler serializes the SVG inside the same limits scope as the evaluation (one meter and clock),

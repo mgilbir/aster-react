@@ -435,8 +435,43 @@ its caller gives it. So `@aster-charts/react/lite` (`SvgChart`) never reaches th
 (the `interaction` value) is the only way hit and signals enter a bundle that uses `<SvgChart>`. The shell split costs `<Chart>` 0.7 kB gzip
 (the property reads through the capability objects, and the missing-capability report that only `<SvgChart>` can trigger).
 
-`<SvgChart>` was chosen over lazy-loading the heavy modules: nothing loads asynchronously, the first paint is synchronous and
-SSR-safe, and the cost is explicit in the importing code.
+`<SvgChart>` was chosen over lazy-loading the capabilities: the cost of each is explicit in the importing code. (The engine parts
+a chart may need, the canvas renderer and the signal loop among them, do load on demand in a browser build, through the Suspense
+wait described above; `@aster-charts/react/all` bundles them for a synchronous first paint. See ADR 0007's amendment.)
+
+### The React boundary: one identity rule, one error channel
+
+Every component and hook (`<Chart>`, `<SvgChart>`, the stream components, `useChart` and the stream and worker hooks) follows the
+same two rules at its props. The shared pieces are `packages/react/src/inputs.ts` and `normalizeSpecResult` in `spec.ts`.
+
+**How an input is compared from one render to the next.**
+
+- JSON-shaped values are compared by CONTENT (`useStableContent`, `contentEqual`): `spec` (a dataset's inline rows by identity,
+  diffed by the session), `limits`, `signals`, `view`, `brush`, `selection` / `select`, `a11y` options. An inline literal rebuilt by
+  every render is no change.
+- `data` is compared dataset by dataset (`useDataInput`): the same names with the same row arrays is the same input, whatever
+  object holds them; a new rows array is a new input that the session diffs.
+- Callbacks are read through a latest-ref (`useLatest`): `onError`, `onSignal`, `signalListeners`, `onSelect`, `onPointSelect`,
+  `onSelectionChange`, `onViewChange`, `renderTooltip`, `logger`, and the functions of `urlPolicy` (`useStablePolicy`: its
+  values by content, its functions called through the latest). A new function identity is never a change.
+- Stateful objects the chart cannot compare are compared by identity, and must be memoized by the host: `random` (a stream of
+  numbers), `textMetrics`, `tooltipContainer`, the capabilities.
+- What an EVENT writes (a bound input, a `signal.on` handler, `setSignal`, a brush, a zoom, edited datasets) lives in a store of
+  the component; a prop is never copied into it by an effect. The two are merged when the chart reads them. For `signals`
+  (DECISIONS Q19) the merge is "the latest writer wins": the store records the tick of each event write, the component the
+  tick at which each prop key last changed by content, and a key removed from the prop is released (an event's later value
+  stays, else the spec's own value returns). `Chart.signals-controlled.test.tsx` checks it against an independent model.
+
+**How a failure leaves.** Every failure goes to ONE place: the error state and `onError` (the hooks' `error`, the streams'
+`onStreamError`), once per error the chart enters. The spec is normalized INSIDE the guarded evaluation (`normalizeSpecResult`
+returns the failure instead of throwing), so a value that is not a spec object, a Vega-Lite spec without the compiler, a
+`VLCompileError` and a rejected spec promise (settled once per promise, so `use` replays see one result) take the same path as an
+evaluation error, a limit, invalid `data` or an invalid size prop. Nothing is thrown out of render to the host's error boundary.
+The error state is drawn INSIDE the chart's element, which therefore is the same element before, during and after an error:
+nothing bound to it (the measurement, the wheel, the pointer listeners) has to know about an element swap. A controlled value
+with a bad axis (`view`, `brush`, an interval) and a rejected `dataChanges` changeset are reported the same way but do not fail
+the chart: the bad part is left out. A missing capability on `<SvgChart>` is reported through `onError` (else the logger) and
+the chart draws what it can. `Chart.error-channel.test.tsx` runs every way in on every shell.
 
 ### Render lifecycle
 
@@ -610,6 +645,12 @@ Aster matches Vega's output wherever the oracle can be run; where it deliberatel
 | Voronoi cells of points with missing or non-numeric coordinates, or with coordinates beyond 1e150 | the call ends and answers once per row; the orientation test is exact | the reference loops forever on some such inputs, and its orientation predicate overflows past 1e150 | no spec may hang the host; the cells of finite coordinates are character-for-character the reference's (`differential-voronoi`, `differential-delaunay`) |
 | Decoded topojson positions of a topology without `transform` | fresh arrays | the topology's own position arrays | the output may be modified without changing the topology |
 | `dsv` quoting on write with a delimiter that is a regular expression class character (`-`, `]`, `\`, `^`) | quotes correctly | builds a character class from the raw delimiter, which throws or misquotes | do not reproduce an upstream crash |
+| Pan and zoom of a `sqrt` scale (`<Chart panZoom>`) | in the scale's own space (the power 0.5), as `pow` | Vega-Lite's `bind: "scales"` pans and zooms `sqrt` linearly (`panLinear`) | the data under the pointer stays under it; Vega-Lite maps only `pow` to `panPow` |
+| Wheel zoom with Ctrl held (a trackpad pinch) | ten times Vega-Lite's stretch, as d3-zoom | Vega-Lite's stretch `1.001 ^ (deltaY * 16 ^ deltaMode)` | a pinch sends small deltas; otherwise the stretch is Vega-Lite's |
+| Generated bound inputs (`signal.bind`): attributes | only the input types and field attributes an input can safely have (`placeholder`, `autocomplete`, `maxlength`, `min`, `max`, `step`...) | every other key of `bind` becomes an attribute (an `onfocus` key is an inline event handler) | a chart may draw a spec the page did not write (DECISIONS Q1) |
+| Generated bound inputs: `name` | a radio group is named with the chart's React id; other inputs have no name | every input is named after its signal | two charts on a page do not share a radio group, and a spec does not choose the field names a host `<form>` submits |
+| `bind.element` (an input placed in, or bound to, an element of the page by CSS selector) | not honoured; reported through the logger; an input with a type is drawn under the chart | honoured | event sources and controls are confined to the chart (DECISIONS Q1); see LIMITS.md |
+| A bound input whose signal value is `undefined` | a text field shows empty | a text field shows `undefined` | a value the signal does not have is no text |
 
 ## Known Limitations / Roadmap
 

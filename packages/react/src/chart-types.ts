@@ -238,7 +238,10 @@ export interface ChartProps {
    * not covered by semver and may change or go away in any release.
    */
   onStreamInput?: (input: ChartStreamInput) => void
-  /** Disable the spec-driven event loop (defaults to on when the spec has signal.on streams). */
+  /**
+   * The spec-driven event loop (default `true`): bound when the spec has signals or the host listens to them. `false` binds
+   * none; `setSignal` and bound inputs then apply their values as signal overrides.
+   */
   interactive?: boolean
   /**
    * Show a tooltip on hover over a mark: the hovered item's `tooltip` value,

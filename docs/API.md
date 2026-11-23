@@ -805,8 +805,8 @@ name that is not a part rejects with a `TypeError`). Outside a browser build
 
 The base `@aster-charts/react` entry does not include the Vega-Lite compiler; importing `@aster-charts/react/vl` adds about 107 kB
 gzip to the bundle (`<Chart>` 180.5 kB, `<Chart>` + `@aster-charts/react/vl` 287.0 kB eager, measured 2026-11-16 by
-`pnpm --filter @aster-charts/benchmarks run budget`; the budgets and current figures are in [PERFORMANCE.md](PERFORMANCE.md#bundle-sizes)). Passing a VL spec without the add-on throws an error naming the missing
-import. Vega specs need no extra import. Worker hosts must import `@aster-charts/react/vl` in the worker entry as well,
+`pnpm --filter @aster-charts/benchmarks run budget`; the budgets and current figures are in [PERFORMANCE.md](PERFORMANCE.md#bundle-sizes)). Passing a VL spec without the add-on reports an error naming the missing
+import (in `<Chart>`'s error state and `onError`, `useChart`'s `error`; not thrown). Vega specs need no extra import. Worker hosts must import `@aster-charts/react/vl` in the worker entry as well,
 since compilation happens there.
 
 **Props.** `spec` (compared by content: an equal inline literal does no work; the one exception is a dataset's inline `values` array, which is compared by identity, so a re-created but equal rows array is a new input, which the session's row diff finds unchanged and applies as a no-op; the streaming components keep the full content comparison, so a spec rebuilt every render does not restart a stream), `data` and `dataChanges` (the rows are treated as immutable: pass a new array, or the same one with `dataChanges` naming what changed; see [Rows are treated as immutable](#rows-are-treated-as-immutable)), `width`,
@@ -965,8 +965,8 @@ branch on it, or render `<SvgChart>` with and without the prop.
 
 **At runtime, never a silently dead chart.** Types cannot see a spec's `signal.on` streams, and JS callers have no types, so
 the component itself reports every feature it cannot provide. It still renders what it can (an error state would throw
-away a correct picture; this is the same stance as a rejected `dataChanges` changeset, not the render-error stance of a
-missing Vega-Lite compiler, where nothing meaningful can be drawn). The report goes to `onError` as an `Error` (else to
+away a correct picture; this is the same stance as a rejected `dataChanges` changeset, not the error state of a spec that
+cannot be drawn at all, such as a Vega-Lite spec without its compiler, which shows the alert and calls `onError` once). The report goes to `onError` as an `Error` (else to
 `logger.warn`, else `console.warn`), once per distinct problem, from an effect (so not during SSR):
 
 | Situation | Message |
@@ -976,8 +976,9 @@ missing Vega-Lite compiler, where nothing meaningful can be drawn). The report g
 | `renderer="canvas"` (renders SVG) | `[aster] renderer="canvas" needs <Chart>: <SvgChart> has no canvas renderer, so it renders SVG` |
 | `getPng()` without `png` (the promise rejects) | `[aster] getPng needs the png capability: <SvgChart> leaves out the canvas renderer it paints with; import { png } from "@aster-charts/react/png" and pass png={png}` |
 
-Without `interaction`, `setSignal` and bound inputs (`signal.bind`) still work as signal overrides, exactly as on
-`<Chart renderer="canvas">`; the spec's `signal.on` updates do not run. Server markup is identical with or without
+Without `interaction`, `setSignal` and bound inputs (`signal.bind`) still work, as signal overrides (as with
+`interactive={false}`); the spec's `signal.on` updates do not run. (`<Chart renderer="canvas">` binds the event loop like the
+SVG renderer.) Server markup is identical with or without
 `interaction`, and equals vega's: no per-item datum attribute is written (the mark under the pointer is found through the scene
 hit index).
 
@@ -1016,7 +1017,8 @@ export const loaders = { useSpecData, useChartData, specWithUrls }
 ```
 
 `useChart` takes every `RuntimeInput` field plus `serialize` and returns `{ scene, svg, error, session }`; `error`
-is set (and `scene`/`svg` are `null`) when the evaluation throws, and `maxSvgLength` is checked when it serializes.
+is set (and `scene`/`svg` are `null`) when the evaluation throws or the spec cannot be normalized (not a spec object, a
+Vega-Lite spec without `@aster-charts/react/vl`, a `VLCompileError`), never thrown from render, and `maxSvgLength` is checked when it serializes.
 `useSpecData` and `useChartData` take the options of `loadSpecData` (`UseSpecDataOptions`), `loadSpecData` from
 `@aster-charts/react` is the non-Suspense equivalent.
 `loadSpecDataResource(spec, options?)` is the promise `useSpecData` reads with `React.use`: it is created once per spec object and set
@@ -1058,6 +1060,15 @@ export function Live(): React.ReactElement {
   )
 }
 ```
+
+**How props are compared, and where errors go.** One rule for every component and hook: JSON-shaped props (`spec`, `limits`,
+`signals`, `view`, `brush`, `selection` / `select`, `a11y` options) by content, so inline literals are safe; `data` by its datasets'
+row arrays; callbacks (`on*`, `signalListeners`, `renderTooltip`, `logger`, `urlPolicy`'s functions) through a latest-ref, so a new
+function never re-evaluates; `random`, `textMetrics` and `tooltipContainer` by identity (memoize them). `signals` is controlled:
+when a key's value changes the prop wins, an interaction afterwards wins (and is reported through `onSignal`), and removing a
+key releases it. Every failure (including a spec that is not a spec object, a missing `/vl` import, a Vega-Lite compile error,
+a rejected spec promise, invalid `data` or size props) shows the error state inside the chart's element and calls `onError`
+once; nothing is thrown from render. Details: [ARCHITECTURE.md](ARCHITECTURE.md#the-react-boundary-one-identity-rule-one-error-channel).
 
 `<ChartStream>` and `<ChartWorkerStream>` take `<Chart>`'s props except `data`/`dataChanges` (replaced by
 `push({ data | append })`) and add `streamOptions` (`capacity`, `maxQueuedRows`, `policy`, `autoFlush`,

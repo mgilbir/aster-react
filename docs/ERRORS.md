@@ -41,7 +41,7 @@ Catch the typed errors by `code` (see "`instanceof` or `code`?" below); everythi
 | `VLCompileError` (`[aster/vl] <path>: <message>`) | the Vega-Lite spec has an unknown key or a feature `@aster-charts/vl` does not implement | fix the spec at `<path>` ([Deliberate differences from Vega](#deliberate-differences-from-vega)) |
 | `[aster] ... load the addon first` | the spec needs an add-on that is not loaded, and the entry point cannot wait | `await loadAddonsFor(spec)`, or import the add-on ([Unsupported and unknown features](#unsupported-and-unknown-features)) |
 | a report on `logger` | an expression threw at run time and the render carried on, as vega's does | route `logger` to your own log; the chart is partial ([Recovered expression errors](#recovered-expression-errors-logger)) |
-| `<div role="alert">` in `<Chart>` | the render failed, or a limit was exceeded | read the message; `onError` receives the error ([Other runtime errors](#other-runtime-errors)) |
+| `<div role="alert">` in `<Chart>` | the render failed: the spec is not a spec object (`null`, a JSON string), a Vega-Lite spec without `@aster-charts/react/vl` or one its compiler refuses, a rejected spec promise, `data` that is not datasets of row arrays, a size prop that is not a size, an evaluation error, or a limit was exceeded | read the message; `onError` receives the error once ([Other runtime errors](#other-runtime-errors)) |
 
 ## Typed errors at a glance
 
@@ -404,8 +404,16 @@ reported through `onError` (the hook's `error`), and it is remembered for the pa
 - **`bin`** — `[aster] bin: cannot derive a step size from base, maxbins and the data span` where vega would loop
   forever.
 - **Render failure** — `<Chart>` renders `<div role="alert">` with `Chart render failed` (the message is in the
-  `title`) or, for an `AsterLimitError`, the limit message itself, and calls `onError`; `useChart` returns `{ error }`
-  (and `scene: null`).
+  `title`) or, for an `AsterLimitError`, the limit message itself, INSIDE its own element (which keeps its `className`,
+  `style` and `ariaLabel`), and calls `onError` once for the error (a re-evaluation that fails the same way is not reported
+  again; a success ends it). Every failure takes this one way: an evaluation error, a limit, a spec that is not a spec object
+  (`[aster] spec must be a Vega or Vega-Lite spec object; got null`), a Vega-Lite spec without the compiler, a
+  `VLCompileError`, a rejected spec promise, `[aster] data["t"] must be an array of rows; got …` (a dataset of `undefined`
+  rows is not given, not an error) and `[aster] width must be a finite number of pixels (0 or more) or 'container'; got …`.
+  Nothing is thrown to the host's error boundary. `useChart` returns `{ error }` (and `scene: null`); the stream hooks and
+  components return it as `error` / `onStreamError`.
+- **Controlled values** — `[aster] view.x must be two finite, different numbers; got [5,5]` (also `brush.*`,
+  `selection.*`, `select.*`): reported through `onError` once per value; that axis is drawn unzoomed / not drawn.
 - **Rejected `dataChanges`** — an unknown dataset, a non-integer or out-of-range index, or a changed row count makes
   `<Chart>` ignore the whole changeset (the update is diffed in full, the chart stays correct) and call `onError` with
   `[aster] dataChanges["<name>"]: ...`.
