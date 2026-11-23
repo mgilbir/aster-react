@@ -8,7 +8,7 @@
  * shortest decimal and never an accumulated sum; a quantile of an unsorted column interpolates its two nearest order
  * statistics; the compensated sum is exact to the last bit.
  */
-import { boundedCount } from './limits.js'
+import { boundedCount, meterRows } from './limits.js'
 
 // ---- ordering ---------------------------------------------------------------------------------------------
 
@@ -47,8 +47,11 @@ export function range(first: number, last?: number, by?: number): number[] {
     start = 0
   }
   const wanted = Math.max(0, Math.ceil((stop - start) / step))
-  boundedCount(wanted, 'range', 'rows')
-  const out = new Array<number>(wanted | 0)
+  // the length allocated (a count from 2^32 up wraps, as in d3) is refused past the built-in ceiling (or the limits that replace
+  // it), with or without limits; a negative one is the native RangeError
+  const length = wanted | 0
+  meterRows(Math.max(0, length), 'range')
+  const out = new Array<number>(length)
   for (let i = 0; i < out.length; i++) out[i] = start + i * step
   return out
 }

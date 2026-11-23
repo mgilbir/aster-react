@@ -18,11 +18,13 @@
  * - a range that lands in years 0..99 is built with the proper year in local time, but vega-time's UTC floor yields an
  *   Invalid Date there (see `utcDate` below), and its UTC day-of-year / week for such years count from 19xx;
  * - an inherited name (`constructor`, `__proto__`) is not a time unit.
- * One deliberate difference from vega-time: `timeUnitSpecifier` with a specifier table that blanks out a unit
- * (`{ year: null }`) skips that unit instead of looping forever.
+ * Deliberate differences, each where d3-time / vega-time never return: `timeUnitSpecifier` with a specifier table that blanks out
+ * a unit (`{ year: null }`) skips that unit; a filtered or stepped interval whose search leaves the Date range ends with the
+ * Invalid Date, and one floor or move of more steps than the built-in item ceiling is refused (`filterUnit`); a range's dates are
+ * counted against that ceiling as they are made. See docs/LIMITS.md.
  */
 import { array, error, extend, hasOwnProperty, ownGet, peek, toSet } from './util.js'
-import { activeMeter } from './limits.js'
+import { activeMeter, ceiling, meterTick } from './limits.js'
 
 // --- durations ----------------------------------------------------------------------------
 
@@ -60,6 +62,12 @@ interface Unit {
   phase?(date: Date): number
   /** A dedicated `every`, where filtering would be slow or would offset differently. */
   every?(k: number): TimeInterval | null
+  /**
+   * Whether a move of n units is n times a fixed number of milliseconds (UTC weeks): then moving n at once lands where n moves of
+   * one unit do. A unit of the local calendar is not: a move that lands on a time the clock skips (a daylight-saving gap) moves the
+   * time of day for every later move, and n moves of one unit can land elsewhere than one move of n.
+   */
+  fixed?: boolean
 }
 
 const lowEnd = new Date(0)
@@ -101,37 +109,23 @@ function makeInterval(unit: Unit): TimeInterval {
     const cursor = ceil(start)
     const stride = step == null ? 1 : Math.floor(step)
     if (!(cursor < (stop as Date)) || !(stride > 0)) return out
-    // under limits the tick count is bounded while the range is generated; a 1 ms interval over decades would
-    // otherwise allocate without end
+    // the dates are counted while the range is generated, with or without limits: a 1 ms interval over decades would otherwise
+    // allocate until the process dies (the built-in ceiling on items a spec's count sizes, time ticks among them, or the limit that
+    // replaces it; under limits the clock too)
     const meter = activeMeter()
     let previous: Date
     do {
       out.push(previous = new Date(+cursor))
       unit.shift(cursor, stride)
       unit.floor(cursor)
-      if (meter && (out.length & 1023) === 0) meter.items(out.length, 'time ticks')
+      if ((out.length & 1023) === 0) {
+        ceiling('items', out.length, 'time range')
+        if (meter) meter.items(out.length, 'time ticks')
+      }
     } while (previous < cursor && cursor < (stop as Date))
     return out
   }
-  interval.filter = (test) => makeInterval({
-    floor(date) {
-      if (date >= date) while (unit.floor(date), !test(date)) date.setTime(+date - 1)
-    },
-    shift(date, n) {
-      if (!(date >= date)) return
-      if (n < 0) {
-        while (++n <= 0) {
-          do unit.shift(date, -1)
-          while (!test(date))
-        }
-      } else {
-        while (--n >= 0) {
-          do unit.shift(date, +1)
-          while (!test(date))
-        }
-      }
-    },
-  })
+  interval.filter = (test) => makeInterval(filterUnit(unit, test))
 
   const { between, phase } = unit
   if (between) {
@@ -146,10 +140,94 @@ function makeInterval(unit: Unit): TimeInterval {
       k = Math.floor(k)
       if (!isFinite(k) || !(k > 0)) return null
       if (!(k > 1)) return interval
-      return interval.filter(phase ? (d) => phase(d) % k === 0 : (d) => interval.count!(0, d) % k === 0)
+      if (phase) return interval.filter((d) => phase(d) % k === 0)
+      const test = (d: Date): boolean => interval.count!(0, d) % k === 0
+      return makeInterval(unit.fixed ? everyKth(unit, k, (d) => interval.count!(0, d)) : filterUnit(unit, test))
     })
   }
   return interval
+}
+
+/**
+ * The unit of `filter(test)`: it searches unit by unit for a date that passes the test. A date that leaves the Date range never
+ * passes (d3-time searches on for ever there): the search ends with that Invalid Date. Each step is a tick of the limits' clock, and
+ * one floor or one move (of however many matches) may take up to the built-in item ceiling of steps: past it the work is refused
+ * rather than done for seconds (a week interval stepped by millions, a quarter offset by millions).
+ */
+function filterUnit(unit: Unit, test: (date: Date) => boolean): Unit {
+  const step = (steps: number): void => {
+    meterTick('time interval')
+    if ((steps & 1023) === 0) ceiling('items', steps, 'time interval search')
+  }
+  return {
+    floor(date) {
+      if (date >= date) {
+        let steps = 0
+        while (unit.floor(date), date >= date && !test(date)) {
+          date.setTime(+date - 1)
+          step(++steps)
+        }
+      }
+    },
+    shift(date, n) {
+      if (!(date >= date)) return
+      const by = n < 0 ? -1 : +1
+      let steps = 0
+      for (let left = Math.abs(n); left > 0 && date >= date; left--) {
+        do {
+          unit.shift(date, by)
+          step(++steps)
+        } while (date >= date && !test(date))
+      }
+    },
+  }
+}
+
+/**
+ * Every `k`th unit counted from the epoch's (`count(d) % k === 0`), for a unit of fixed length with no place in a larger one (UTC
+ * weeks). It is the
+ * filtered interval `filter(d => count(d) % k === 0)`, whose search walks one unit at a time, up to k of them per date (k may be in
+ * the millions, and a date that leaves the Date range is never found): here the search jumps straight to the nearest multiple of k
+ * and checks that it got there (if not, it walks from where it started, as the filter does). A date that leaves the Date range is
+ * the Invalid Date.
+ */
+function everyKth(unit: Unit, k: number, count: (d: Date) => number): Unit {
+  const test = (d: Date): boolean => count(d) % k === 0
+  // the filter's walk, for the dates a jump does not settle
+  const walk = filterUnit(unit, test)
+  const valid = (d: Date): boolean => +d === +d
+  /** Move `d` by `n` units at once; false when that did not move the count by n. */
+  const leap = (d: Date, n: number): boolean => {
+    if (n === 0) return true
+    const c = count(d)
+    unit.shift(d, n)
+    return !valid(d) || count(d) === c + n
+  }
+  /** Move to the nearest multiple of k at or before (`by` -1) or after (+1) where `d` is; false if that did not land. */
+  const jump = (d: Date, by: 1 | -1): boolean => {
+    const c = count(d)
+    return leap(d, by * (by < 0 ? ((c % k) + k) % k : ((-c % k) + k) % k))
+  }
+  return {
+    floor(date) {
+      if (!valid(date)) return
+      const start = +date
+      unit.floor(date)
+      if (!valid(date) || test(date)) return
+      if (jump(date, -1) && (!valid(date) || (unit.floor(date), !valid(date) || test(date)))) return
+      date.setTime(start)
+      walk.floor(date)
+    },
+    shift(date, n) {
+      if (!valid(date) || !(n !== 0) || !(Math.abs(n) >= 1)) return walk.shift(date, n)
+      const start = +date
+      const by = n < 0 ? -1 : 1
+      // the first match past one unit on, then k units per further match
+      if (leap(date, by) && valid(date) && jump(date, by) && (!valid(date) || (leap(date, by * k * (Math.abs(n) - 1)) && (!valid(date) || test(date))))) return
+      date.setTime(start)
+      walk.shift(date, n)
+    },
+  }
 }
 
 // --- zones: local and UTC field access ---------------------------------------------------------
@@ -247,6 +325,7 @@ function calendarUnits(zone: Zone) {
     },
     shift: (d, n) => zone.addDays(d, n * 7),
     between: spanBetween(zone, durationWeek),
+    fixed: zone === utcZone,
   })
   const month: Unit = {
     floor(d) {

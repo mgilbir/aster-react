@@ -6,6 +6,7 @@
  * What the callers observe is said in scale-continuous.ts.
  */
 import { ticks } from './arr.js'
+import { boundedCount, ceiling } from './limits.js'
 import { interpolateRound, interpolateValue, piecewise, type Ramp } from './interp.js'
 import { format, formatSpecifier } from './format.js'
 import { powT, symexpT, symlogT } from './util.js'
@@ -50,6 +51,26 @@ function powerOf(base: number): Unary {
   return base === 10 ? pow10 : base === Math.E ? Math.exp : (x) => Math.pow(base, x)
 }
 
+/**
+ * Walking whole numbers k from `from` to `to` (by `dir`), along which `holds(k)` turns true once and stays true, the first k for which
+ * it holds, or one step past `to` when it never does. A binary search, so a base in the millions costs a few dozen steps; on numbers
+ * too large to step by one it still ends.
+ */
+function firstWhere(holds: (k: number) => boolean, from: number, to: number, dir: 1 | -1): number {
+  if (holds(from)) return from
+  if (!holds(to)) return to + dir
+  // holds(b) and not holds(a), a and b whole, |b - a| shrinking
+  let a = from
+  let b = to
+  while (Math.abs(b - a) > 1) {
+    const mid = dir > 0 ? Math.floor((a + b) / 2) : Math.ceil((a + b) / 2)
+    if (mid === a || mid === b) break
+    if (holds(mid)) b = mid
+    else a = mid
+  }
+  return b
+}
+
 /** Logarithmic ticks, nice and tickFormat; the base and, for a negative domain, a mirrored logarithm. */
 function withLogAxis(host: Host): ScaleObject {
   const { scale } = host
@@ -69,7 +90,16 @@ function withLogAxis(host: Host): ScaleObject {
   scale.base = (...v: [number?]) => (v.length ? ((base = +v[0]!), retune(), scale) : base)
   scale.domain = (...v: unknown[]) => (v.length ? (plainDomain(...v), retune(), scale) : plainDomain())
 
-  scale.ticks = (count?: number) => {
+  /**
+   * The ticks for about `count` of them, or with `collect` false only how many there are (what a label format needs, without making
+   * them). For a whole base, every integer multiple k of every power inside the domain: the tick is monotone in k, so the multiples
+   * inside the domain are one run of k, found by a search at each end (the same expression decides it) rather than one k at a time,
+   * as a base in the millions would otherwise take as many steps per power. The ticks a whole base keeps are counted against the
+   * ceiling on items as they are made.
+   */
+  function logTicks(count: number | undefined, collect: true): number[]
+  function logTicks(count: number | undefined, collect: false): number
+  function logTicks(count: number | undefined, collect: boolean): number[] | number {
     const d = scale.domain()
     const reversed = d[d.length - 1] < d[0]
     const lo = reversed ? d[d.length - 1] : d[0]
@@ -79,34 +109,44 @@ function withLogAxis(host: Host): ScaleObject {
     let j = logs(hi)
     let found: number[] = []
     if (!(base % 1) && j - i < want) {
-      // a whole base: every integer multiple of every power inside the domain
       i = Math.floor(i)
       j = Math.ceil(j)
-      if (lo > 0) {
-        for (; i <= j; ++i) {
-          for (let k = 1; k < base; ++k) {
-            const t = i < 0 ? k / pows(-i) : k * pows(i)
-            if (t < lo) continue
-            if (t > hi) break
-            found.push(t)
-          }
-        }
-      } else {
-        for (; i <= j; ++i) {
-          for (let k = base - 1; k >= 1; --k) {
-            const t = i > 0 ? k / pows(-i) : k * pows(i)
-            if (t < lo) continue
-            if (t > hi) break
-            found.push(t)
-          }
+      let size = 0
+      const keep = (t: number): void => {
+        found.push(t)
+        if ((found.length & 1023) === 0) {
+          ceiling('items', found.length, 'log ticks')
+          boundedCount(found.length, 'log ticks')
         }
       }
+      // (the walk over k goes up for a positive domain and down for a negative one: either way the tick grows along it)
+      const up = lo > 0
+      const first = up ? 1 : base - 1
+      const last = up ? base - 1 : 1
+      const dir = up ? 1 : -1
+      // (a base below 2, or NaN, has no multiples to walk)
+      for (; i <= j && base - 1 >= 1; ++i) {
+        const tick = up ? (k: number): number => (i < 0 ? k / pows(-i) : k * pows(i)) : (k: number): number => (i > 0 ? k / pows(-i) : k * pows(i))
+        const from = firstWhere((k) => !(tick(k) < lo), first, last, dir)
+        const past = firstWhere((k) => tick(k) > hi, from, last, dir)
+        if (!collect) {
+          size += Math.max(0, (past - from) * dir)
+          continue
+        }
+        for (let k = from; k !== past; k += dir) {
+          keep(tick(k))
+          if (k + dir === k) break
+        }
+      }
+      if (!collect) return size * 2 < want ? ticks(lo, hi, want).length : size
       if (found.length * 2 < want) found = ticks(lo, hi, want)
     } else {
       found = ticks(i, j, Math.min(j - i, want)).map((v) => pows(v))
     }
-    return reversed ? found.reverse() : found
+    return collect ? (reversed ? found.reverse() : found) : found.length
   }
+
+  scale.ticks = (count?: number) => logTicks(count, true)
 
   scale.tickFormat = (count?: number, specifier?: unknown) => {
     if (count == null) count = 10
@@ -123,7 +163,7 @@ function withLogAxis(host: Host): ScaleObject {
     }
     if (count === Infinity) return write
     // only the ticks that sit on a leading digit small enough for the room get a label
-    const room = Math.max(1, (base * count) / scale.ticks().length)
+    const room = Math.max(1, (base * count) / logTicks(undefined, false))
     return (value: number) => {
       let lead = value / pows(Math.round(logs(value)))
       if (lead * base < base - 0.5) lead *= base

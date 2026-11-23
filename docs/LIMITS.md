@@ -69,9 +69,9 @@ unrelated limits (`limits: {}`, `{ maxStringLength }`) leaves it in force. They 
 
 | Ceiling | Value | Where it applies | Replaced by | Largest seen in the gallery / corpus / test suites |
 |---|---|---|---|---|
-| `rows` | 1 000 000 | rows one parameter-sized generator makes: the `sequence` transform and `range`, expression `sequence(...)`, `quantile` and `kde`/`density` step counts | `maxRows`, `maxGeneratedRows` | 5 000 (`sequence` in the gallery: 1 000; `range`: 5 000; `density` steps 200) |
+| `rows` | 1 000 000 | rows one parameter-sized generator makes: the `sequence` transform and `range` (and so a scale's `bins: {step}`), expression `sequence(...)`, `quantile` and `kde`/`density` step counts | `maxRows`, `maxGeneratedRows` | 5 000 (`sequence` in the gallery: 1 000; `range`: 5 000; `density` steps 200) |
 | `cells` | 10 000 000 | typed-array grids sized by spec parameters: `heatmap` pixels, `kde2d`/contour density grids, the label bitmap | `maxRows`, `maxGeneratedRows` | 58 200 (a `kde2d` grid), 2 448 heatmap pixels |
-| `items` | 100 000 | counts a spec sets: `tickCount` of axes and legends (and so the ticks made), axis ticks drawn, trellis `layout.columns`, `contour` / `isocontour` `levels`, a quantized colour scheme `count` | `maxItems` | 165 axis ticks, 30 facet columns, 40 thresholds |
+| `items` | 100 000 | counts a spec sets: `tickCount` of axes and legends (and so the ticks made), axis ticks drawn, the ticks of a log scale with a whole `base` (every multiple of every power in the domain: a base in the millions makes millions), the dates of a calendar range (time and UTC ticks, `timeSequence` / `utcSequence`), the steps of one search of a stepped calendar interval (`{interval: 'week', step: 2e7}`, `timeOffset('quarter', d, 4e6)`), trellis `layout.columns`, `contour` / `isocontour` `levels`, a quantized colour scheme `count` | `maxItems` | 165 axis ticks, 30 facet columns, 40 thresholds |
 | `bytes` | 1 000 000 | one string an expression builtin builds: `pad`, number-format width | `maxStringLength`, `maxGeneratedBytes` | 5 000 (`pad`), 982 (format width) |
 | `coords` | 2 000 000 | positions one topojson decode produces (an arc referenced by many geometries counts every time) | `maxRows`, `maxGeneratedRows` | 101 000 (the gallery's largest map: 55 713) |
 | `latticeTests` | 50 000 000 | the point-in-outline work of one `intersect()` of an arc, path, shape or geoshape item (vega-lite interval selections over geo marks, or the expression in any signal handler): the rows the item's outline spans inside the box, times its edges, plus each candidate point times its edges. A region beyond 2^52 is refused outright | none (`maxTimeMs` also bounds the walk, cooperatively) | 1 098 884 (the largest in the core test suites: a 3 000-row strip; not measured over the corpus, gallery or the intersect-browser gate) |
@@ -95,8 +95,18 @@ Not covered by a ceiling, deliberately: input that is large in itself (inline `v
 loaded files: they are data, not amplification; budget them with `maxRows`, `maxBytes`), and the
 cumulative cost of many sites each just under its ceiling (that is what `maxGeneratedRows`,
 `maxGeneratedBytes` and `maxTimeMs` are for, and for an untrusted spec the worker kill).
-The ceilings guard spec-driven sites only; the lower-level functions (`ticks`, `range`, ...) are
-unchanged, so they still match d3 for any input.
+The ceilings guard spec-driven sites; where the site is a library function a spec reaches (`range`, a calendar interval's
+`range`, `filter` and `every`, a log scale's `ticks`), the function applies the ceiling itself and matches d3 for every input
+below it.
+
+Calendar intervals end where d3-time does not (Q13 of the 2026-11-22 audit: matching an upstream hang is never intended). A
+stepped or filtered interval searches one unit at a time for a date that passes its test; d3-time searches for ever once a step
+leaves the Date range (an Invalid Date passes no test), and also where a local calendar makes a one-day step go round in circles
+(Pacific/Apia skipped 2011-12-30). Aster's search ends with the Invalid Date at the end of the range, and one floor or one move
+of more steps than the `items` ceiling is refused (with `maxTimeMs`, the clock is sampled at every step too). A UTC week interval
+stepped by k (`every(k)`) jumps straight to the next multiple of k, so it answers any k at once; a local one walks, as a jump
+across a daylight-saving gap can land elsewhere than the walk. Each of these is pinned by `scale-time-bounds.test.ts` and by the
+d3-time differential, which runs up to the ends of the Date range.
 Passing a `limits` object at all, even `{}`, turns the limits scope on: that enables
 the pre-flight walk with its hard depth ceiling, the regular-expression screen (including the
 10 000-character input cap, `maxStringLength`) and the default image/link URL policy described below.
