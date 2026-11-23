@@ -12,10 +12,14 @@ import type { EnginePart } from './engine-parts.js'
 async function loadedBy(entry: string): Promise<EnginePart[]> {
   vi.resetModules()
   const engine = await import('./engine-parts.js')
-  await import(entry)
+  await IMPORT[entry]!()
   return engine.ENGINE_PARTS.filter((p) => engine.partLoaded(p))
 }
-const FILE: Record<string, string> = { '@aster-charts/core': './index.js', '@aster-charts/core/signals': './entry-signals.js' }
+// (static specifiers: the dependency check reads every import)
+const IMPORT: Record<string, () => Promise<unknown>> = {
+  '@aster-charts/core': () => import('./index.js'),
+  '@aster-charts/core/signals': () => import('./entry-signals.js'),
+}
 
 describe('the empty-slot message names an entry that carries the part', () => {
   beforeEach(() => vi.resetModules())
@@ -31,14 +35,14 @@ describe('the empty-slot message names an entry that carries the part', () => {
   }
 
   it.each([...byEntry])('importing %s fills every part that names it', async (entry, names) => {
-    const loaded = await loadedBy(FILE[entry]!)
+    const loaded = await loadedBy(entry)
     expect(names.filter((n) => !loaded.includes(n))).toEqual([])
   })
 
   it('a part that names no entry is filled by neither public entry', async () => {
     const none = (Object.entries(CARRIED_BY) as Array<[EnginePart, string | null]>).filter(([, e]) => e === null).map(([n]) => n)
     expect(none.length).toBeGreaterThan(0)
-    for (const file of Object.values(FILE)) expect((await loadedBy(file)).filter((p) => none.includes(p))).toEqual([])
+    for (const entry of Object.keys(IMPORT)) expect((await loadedBy(entry)).filter((p) => none.includes(p))).toEqual([])
   })
 
   it('the message of an empty slot is the one for its part', async () => {
