@@ -365,25 +365,14 @@ export const HANDLER_SITES: Record<string, (e: string) => Spec> = {
   onViewSignal: (e) => base({ signals: [{ name: 'width', on: [{ events: 'mousedown', update: e }] }] }),
 }
 
-/**
- * Where the text is the name of a mark's encode set: a handler that re-encodes the event's item. Aster does not run these, and
- * refuses the spec with a typed error when it is compiled (C629: once, not at every binding; docs/ERRORS.md), where vega accepts
- * it; where vega refuses the handler, the refusal is vega's.
- */
+/** Where the text is the name of a mark's encode set: the handler re-encodes the event's item with it (encode-handlers.ts). */
 export const UNBOUND_HANDLER_SITES: Record<string, (e: string) => Spec> = {
   onEncode: (e) => raw({ events: 'mousedown', encode: e }),
-}
-/** Aster's refusal of a handler that re-encodes the event's item (see UNBOUND_HANDLER_SITES). */
-export const UNSUPPORTED_ENCODE_HANDLER = /^\[aster\] a signal handler that re-encodes the event's item \(`encode: .*`\) is not supported$/
-/** What Aster answers for a spec: vega's outcome, except for a handler that re-encodes the event's item, which vega accepts and Aster refuses. */
-export function expectAster(spec: Spec, unsupportedEncode: boolean): (got: string) => boolean {
-  const want = vegaOutcome(spec)
-  return (got) => (unsupportedEncode && want === 'ok' ? UNSUPPORTED_ENCODE_HANDLER.test(got) : got === want)
 }
 
 /**
  * What a handler vega accepts may still report when it is bound, by site: a selector's source that is no CSS selector (the pool's
- * texts are valid expressions, not always valid selectors), and the encode set of a handler, which the engine does not run.
+ * texts are valid expressions, not always valid selectors).
  */
 export const BIND_TIME_REPORTS: Record<string, RegExp> = {
   onEventSelector: /Invalid selector/,

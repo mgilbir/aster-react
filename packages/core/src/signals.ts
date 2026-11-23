@@ -59,6 +59,7 @@ import { activeMeter, AsterLimitError, checkRowCount, withLimits, type SpecLimit
 import type { Timer } from './timer.js'
 import { part } from './engine-parts.js'
 import { clientToSvg } from './pointer.js'
+import { ENCODE_LOG, encodeIdentOf, encodeLogOf, withRequest } from './encode-handlers.js'
 
 /** What `pick` / the DOM fallback resolve an event position to: a scene item and where it sits. */
 export interface PickedItem {
@@ -376,7 +377,7 @@ interface BindingShell {
 /** Every member an expression runtime may have (the type checks the list is complete). */
 const RUNTIME_KEYS = Object.keys({
   scale: true, data: true, expr: true, projection: true, tree: true, modify: true, transformed: true, inScope: true, containerSize: true,
-  random: true, setdata: true, intersect: true, locale: true, unitIndexed: true,
+  random: true, setdata: true, intersect: true, locale: true, unitIndexed: true, encode: true,
 } satisfies Record<keyof ExpressionRuntime, true>) as Array<keyof ExpressionRuntime>
 
 /** The key of a scope's runtime in a shell (`''` is the view's, which no scope id can collide with). */
@@ -755,6 +756,13 @@ function bindSignalEventsDefs(
     ...(opts.containerSize ? { containerSize: opts.containerSize } : {}),
     intersect: (box, opt, group) => part('intersect').sceneIntersect(opts.scene, box, opt, group),
     expr: (code) => compileIn('', code),
+    // vega-functions encode: the item is encoded again with its mark's set, by the evaluation the host makes next, which reads the
+    // request in the store (a mark without that set, or an item no mark names, asks nothing)
+    encode: (item, set) => {
+      const ident = encodeIdentOf(item)
+      if (ident === undefined) return
+      ;(signals as Record<symbol, unknown>)[ENCODE_LOG] = withRequest(encodeLogOf(signals), state, ident, set)
+    },
   }
   myShell.current.set('', bindRuntime)
   /** An expression of the scope `key` (`''`: the view's), compiled once per shell against the shell's runtime of that scope. */
@@ -1249,7 +1257,6 @@ function bindSignalEventsDefs(
       (signal.on ?? []).forEach((on, oi) => {
         const where = ` (signal "${signal.name}"${scope ? ` of scope "${scope.id}"` : ''}, on[${oi}])`
         try {
-          if (on.encode != null) throw new Error('`encode` updates (mark re-encode on event) are not supported; use `update`')
           // the signal this handler writes: its own, or the enclosing scope's for `push: "outer"`
           let target: Scope | null = scope
           if (signal.push === 'outer') {
@@ -1257,7 +1264,8 @@ function bindSignalEventsDefs(
             target = ownerOf(scope.parent, signal.name)
             if (!target && !rootNames.has(signal.name)) throw new Error(`No prior signal definition for "outer" push: "${signal.name}"`)
           }
-          const upd = updateOf(on)
+          // vega-parser update.js: a handler's `encode: <set>` is the update `encode(item(), <set>)` (encode-handlers.ts)
+          const upd: Update = on.encode != null ? { kind: 'expr', code: `encode(item(),${JSON.stringify(on.encode)})` } : updateOf(on)
           const { streams, sources } = eventsOf(on, scope ? 'scope' : 'view')
           const force = on.force === true
           const keyBase = `${scope ? scope.id : ''}|${si}:${signal.name}:${oi}:${JSON.stringify(on.events)}`

@@ -570,9 +570,8 @@ class Check {
     let update = h.update
     if (h.encode != null) {
       if (update) throw new SpecParseError('Signal encode and update are mutually exclusive.')
-      // (re-encoding the event's item with one of its mark's encode sets is not implemented: refused once, here, rather than
-      // reported by every binding of the chart, C629; docs/ERRORS.md, docs/ROADMAP.md)
-      throw new SpecParseError(`[aster] a signal handler that re-encodes the event's item (\`encode: ${stringValue(h.encode)}\`) is not supported`)
+      // vega-parser update.js: the handler's update is `encode(item(), <set>)` (encode-handlers.ts)
+      update = 'encode(item(),' + stringValue(h.encode) + ')'
     }
     if (typeof update === 'string') this.expression(update)
     else if (update == null) throw new TypeError(`Cannot read properties of ${update} (reading 'expr')`)

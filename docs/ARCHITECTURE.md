@@ -303,7 +303,7 @@ calendar (`time.ts`) and format layer (`format.ts`, `time-format.ts`, `locale.ts
 | Math | `abs`, `acos`, `asin`, `atan`, `atan2`, `ceil`, `clamp`, `cos`, `exp`, `floor`, `hypot`, `log`, `max`, `min`, `pow`, `random`, `round`, `sin`, `sqrt`, `tan` |
 | Scale / projection / data | `scale`, `invert`, `domain`, `range`, `bandwidth`, `bandspace`, `copy`, `gradient`, `data`, `indata`, `pluck`, `setdata`, `modify` |
 | Selections (vega-lite) | `vlSelectionTest`, `vlSelectionIdTest`, `vlSelectionResolve`, `vlSelectionTuples` |
-| Scene and view | `intersect`, `inScope`, `containerSize`, `windowSize`, `pinchDistance`, `pinchAngle`; the event functions `view`, `item`, `group`, `xy`, `x`, `y` |
+| Scene and view | `intersect`, `inScope`, `containerSize`, `windowSize`, `pinchDistance`, `pinchAngle`, `encode` (re-encode the event's item with a set of its mark: a signal handler's `encode: <set>`, while an event is handled); the event functions `view`, `item`, `group`, `xy`, `x`, `y` |
 | Pan and zoom | `panLinear`, `panLog`, `panPow`, `panSymlog`, `zoomLinear`, `zoomLog`, `zoomPow`, `zoomSymlog` |
 | Date-time | `year`, `quarter`, `month`, `week`, `day`, `date`, `dayofyear`, `hours`, `minutes`, `seconds`, `milliseconds`, `utcyear`, `utcquarter`, `utcmonth`, `utcweek`, `utcday`, `utcdate`, `utcdayofyear`, `utchours`, `utcminutes`, `utcseconds`, `utcmilliseconds`, `datetime`, `utc`, `time`, `timezoneoffset`, `now`, `timeOffset`, `utcOffset`, `timeSequence`, `utcSequence` |
 | Array | `extent`, `clampRange`, `inrange`, `lerp`, `sequence`, `slice`, `reverse`, `sort`, `join`, `peek`, `span`, `indexof`, `lastindexof`, `length`, `merge` |

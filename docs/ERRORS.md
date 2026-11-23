@@ -268,11 +268,9 @@ Selectors and streams of a signal's `on` are refused the same way: `Signal updat
 selector the parser refuses (`Between selector must have two elements: ...`), `Invalid stream specification: ...`,
 `Stream "between" parameter must have 2 entries: ...`, `Unrecognized scale name: "<name>"` for a scale that triggers a
 handler, `Signal encode and update are mutually exclusive.`, `Invalid signal update specification.`, and for the signal itself
-`Signals can not include both init and update expressions.`. Two refusals are Aster's own, made once when the spec is compiled
-rather than reported by every binding of the chart: a stream that merges nothing (`{merge: []}`, `Invalid stream specification:
-...`; vega fails on it as it builds the view), and a handler that re-encodes the event's item with one of its mark's encode sets
-(`{events, encode: "<set>"}`): `[aster] a signal handler that re-encodes the event's item (\`encode: "<set>"\`) is not supported`
-(vega accepts and runs it; not implemented: see ROADMAP.md).
+`Signals can not include both init and update expressions.`. A stream that merges nothing (`{merge: []}`) is refused once when
+the spec is compiled, with vega's `Invalid stream specification: ...` (vega fails on it as it builds the view), rather than
+reported by every binding of the chart.
 
 A facet's keys are read as vega-parser reads them: `field` and each of `groupby` a name or a `{signal}` (a signal of the scope, or
 an expression of its own), and its `aggregate`'s `fields`, `ops`, `as` and `cross` as the parameters of an aggregate transform,
