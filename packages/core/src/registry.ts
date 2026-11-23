@@ -86,6 +86,9 @@ export type DataFormatReader = (data: unknown, format: Record<string, unknown>) 
  */
 export const dataFormatRegistry = new Map<string, DataFormatReader>()
 
+/** The data formats the `@aster-charts/core/load` add-on registers readers for (json is built in). */
+export const LOAD_ADDON_FORMATS: readonly string[] = Object.freeze(['csv', 'tsv', 'dsv', 'topojson'])
+
 /**
  * What the `label` transform needs of the item a label is placed at, which vega reads off the scenegraph item
  * (`item.mark.marktype`, `item.bounds`, `item.items`): the type of the mark the item is in, that mark's container (its own

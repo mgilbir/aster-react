@@ -16,7 +16,7 @@
  * The same walk names the parts of the engine a spec may read (`specNeeds`, `partsNeeded`; see engine-parts.ts), which the public
  * entries carry and the React shells, on `@aster-charts/core/lean`, load on demand (`loadParts`).
  */
-import { dataFormatRegistry, geoRegistry, transformRegistry } from './registry.js'
+import { dataFormatRegistry, geoRegistry, LOAD_ADDON_FORMATS, transformRegistry } from './registry.js'
 import { HARD_MAX_SPEC_DEPTH } from './limits.js'
 import { ADDON_FUNCTIONS } from './addon-functions.js'
 import { parseExpression } from './expr-parser.js'
@@ -55,7 +55,7 @@ export const registeredFunctionNames = registeredExpressionFunctionNames
 /** Take expression functions out of the registry and get a function that restores them (a test seam). */
 export const withdrawFunctions = withdrawExpressionFunctions
 /** The data formats the `@aster-charts/core/load` add-on registers readers for. */
-export const LOAD_ADDON_FORMATS: readonly string[] = ['csv', 'tsv', 'dsv', 'topojson']
+export { LOAD_ADDON_FORMATS }
 
 const TRANSFORM_TYPES = new Set(TRANSFORMS_ADDON_TYPES)
 const FORMAT_TYPES = new Set(LOAD_ADDON_FORMATS)
