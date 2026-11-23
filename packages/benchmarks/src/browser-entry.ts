@@ -21,7 +21,7 @@ export interface BenchApi {
   fps(embed: EmbedName, kind: ChartKind, points: number, seconds: number): Promise<{ frameTimes: number[]; updates: number }>
   resize(embed: EmbedName, kind: ChartKind, points: number, reps: number): Promise<number[]>
   autoResize(embed: EmbedName, kind: ChartKind, points: number, widths: number[]): Promise<number[]>
-  stages(kind: ChartKind, points: number, reps: number): Promise<{ evaluate: number[]; desc: number[]; patch: number[]; swap: number[]; stringPath: number[]; noopPatch: number[] }>
+  stages(kind: ChartKind, points: number, reps: number): Promise<{ evaluate: number[]; desc: number[]; patch: number[]; stringPath: number[]; noopPatch: number[] }>
   stableRerenders(embed: EmbedName, kind: ChartKind, points: number, reps: number): Promise<{ ms: number[]; mutations: number[] }>
   differentialUpdates(embed: EmbedName, points: number, reps: number): Promise<number[]>
   differentialStages(points: number, reps: number): Promise<{ diffEval: number[]; diffPatch: number[]; fullEval: number[]; fullPatch: number[] }>
@@ -213,7 +213,6 @@ async function stages(kind: ChartKind, points: number, reps: number) {
   const t: number[] = []
   const d: number[] = []
   const p: number[] = []
-  const sw: number[] = []
   let scene: SceneRoot | undefined
   // warmup
   {
@@ -246,12 +245,10 @@ async function stages(kind: ChartKind, points: number, reps: number) {
     t.push(t1 - t0)
     d.push(t2 - t1)
     p.push(t3 - t2)
-    sw.push(t4 - t3)
     stringPath.push(t4 - t3)
   }
-  void sw
   host.remove()
-  return { evaluate: t, desc: d, patch: p, swap: sw, stringPath, noopPatch }
+  return { evaluate: t, desc: d, patch: p, stringPath, noopPatch }
 }
 
 /** Re-render with an identical spec (stable data): work should collapse to ~0. */

@@ -15,7 +15,7 @@ import embed from 'vega-embed'
  * this pane implements the documented vega recipe: a ResizeObserver feeds the
  * container size into view.width()/height().
  */
-export function VegaPane({ spec, width, height, responsiveHeight, ariaLabel }: {
+function VegaPane({ spec, width, height, responsiveHeight, ariaLabel }: {
   spec: Record<string, unknown>
   width?: number
   height?: number

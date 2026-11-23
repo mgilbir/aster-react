@@ -49,7 +49,7 @@ describe('checkBrowserBench', () => {
     const ok = good(); ok.results['update:line'] = { aster: S(11.5), asterDom: S(8.6), reactVega: S(19), embedHook: S(8.8) } // measured: bar, string mode 1.31x
     expect(checkBrowserBench(ok.results, ['line'], [], ok.diff, MEM)).toEqual([])
     const bad = good(); bad.results['update:line'] = { aster: S(30), asterDom: S(8.6), reactVega: S(19), embedHook: S(8.8) }
-    expect(checkBrowserBench(bad.results, ['line'], [], bad.diff, MEM).join('\n')).toMatch(/aster update is 3\.41x the faster Vega embed/)
+    expect(checkBrowserBench(bad.results, ['line'], [], bad.diff, MEM).join('\n')).toMatch(/aster update is 3\.41x the faster Vega embed \(30\.0 ms against 8\.8 ms\); floor 3x/)
   })
 
   it('FAILS when the incremental patcher is much slower than string mode (the 10x asterDom that used to pass)', () => {

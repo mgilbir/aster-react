@@ -18,7 +18,7 @@ jobs:
   # tests) happens here, with no token and no write permission.
   verify:
     runs-on: ubuntu-24.04
-    timeout-minutes: 120
+    timeout-minutes: 90
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7

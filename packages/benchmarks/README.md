@@ -5,10 +5,13 @@ to embed Vega in React.
 
 | Approach | What it measures |
 |---|---|
-| `aster` | `<Chart>` from `@aster-charts/react` with `incremental={false}`: the full SVG is re-serialized and re-parsed per update |
-| `asterDom` | same `<Chart incremental>` — keeps the `<svg>` and patches only changed attributes (`patchSceneDom` in `@aster-charts/core/dom`) |
+| `aster` | `<Chart incremental={false}>` from `@aster-charts/react` (string mode): the full SVG is re-serialized and re-parsed per update |
+| `asterDom` | `<Chart>`, whose default is `incremental`: keeps the `<svg>` and patches only changed attributes (`patchSceneDom` in `@aster-charts/core/dom`) |
 | `reactVega` | `react-vega` v8 `<VegaEmbed>` — the React wrapper from the vega org. Data updates deep-compare the spec and **re-embed** the view |
 | `embedHook` | `vega-embed` in a `useEffect` following the official tutorials — incl. the documented incremental paths (`view.change()` for data, `view.width()/height()` for resize). This is Vega's best case |
+
+The two aster rows are two configurations: `src/embeds.tsx` passes `incremental` explicitly for both (`<Chart>` defaults to `true`, which once made
+the `aster` row identical to `asterDom`), and `src/embeds.test.tsx` fails if they become the same.
 
 All four are driven through the same React harness with the same specs (see
 `src/fixtures.ts`, same shapes as the conformance corpus) and the same DOM-quiescence
@@ -21,7 +24,8 @@ Requires a built workspace: run `pnpm build` at the repo root first
 (all runners check and fail with a hint otherwise).
 
 ```bash
-pnpm bench            # everything
+pnpm bench            # runtime, incremental, browser-stream, differential, memory, bundle and browser, in that order;
+                      # not pipeline, transforms, scales, transition, transition-retarget or budget (below)
 pnpm bench:runtime    # jsdom: mount / update / resize latency, DOM node counts
 pnpm bench:memory     # node --expose-gc: heap retained per mount/unmount & update cycle
 pnpm bench:bundle     # esbuild: min/gzip/brotli payload per approach (react external)
@@ -32,6 +36,8 @@ pnpm bench:pipeline   # per-stage compute breakdown: aster compile/evaluate/seri
 pnpm bench:incremental # streaming append / whole-array replace / DOM patch vs their baselines;
                       # fails below measured floors (see the header of src/incremental.bench.tsx)
 pnpm bench:differential # changed-set update vs full re-encode (scene eval and DOM patch)
+pnpm --filter @aster-charts/benchmarks run bench:transforms # every transform over 100k rows, a fresh row set per timed run
+pnpm --filter @aster-charts/benchmarks run bench:scales     # scale construction
 pnpm --filter @aster-charts/benchmarks run budget  # per-import-pattern gzip budgets (addons as marginal cost); refuses a stale dist
 pnpm bench:browser-stream # per-frame append: aster <ChartStream> vs vega view.change
                       # SVG/canvas, microtask/raf and run/runAsync
@@ -106,6 +112,10 @@ Two results are worth knowing how to read:
   is in the way: the gap is the pulse. Vega inserts one tuple but still walks the affected operators, while Aster
   splices the mark items and patches the domain census in O(appended).
 
-String mode (`incremental={false}`) is still the better default when every mark changes on each update (scatter-style
-churn): patching then writes nearly all attributes anyway and the browser's HTML parser is very good. Incremental
-patching wins when the tree is large and mostly stable (axes, legends, static styles), the common dashboard case.
+String mode (`incremental={false}`) re-serializes the whole svg and lets the browser parse it; incremental patching keeps the `<svg>` and
+writes only what changed. `bench:browser` measures both in the `aster` and `asterDom` rows (first render, update, frame pacing under a
+one-update-per-frame stream). In the three runs recorded in
+[docs/PERFORMANCE.md](../../docs/PERFORMANCE.md#embedding-chart-vs-react-vega-and-the-vega-embed-tutorial) the incremental mode is clearly
+ahead on scatter (about 2x), ahead on line, and level within the machine's noise on bar; `src/browser-floors.ts` fails the nightly run when
+the default mode is more than 2x slower than string mode (`maxDomVsString`). A claim that string mode is the better default for
+churn-heavy charts needs that table to say so.

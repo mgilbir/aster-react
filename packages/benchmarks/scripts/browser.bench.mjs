@@ -276,9 +276,6 @@ for (const kind of KINDS) {
   )
   console.log('')
 }
-await browser.close()
-rmSync(OUT_DIR, { recursive: true, force: true })
-
 // The floors (src/browser-floors.ts): a regression fails the run (and the nightly step), it does not just print a table.
 const failures = checkBrowserBench(results, KINDS, pageErrors, differential, { memory: MEMORY })
 if (failures.length) {

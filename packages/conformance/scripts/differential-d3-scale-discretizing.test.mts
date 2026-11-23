@@ -1,6 +1,6 @@
 /**
  * LIVE, generated differential for the domains of the quantile-style scales: `quantile`, `quantize`, `threshold` and
- * `sequentialQuantile` of `scale-d3.ts` against the d3-scale 4.0.2 that the pinned vega-scale is built on, in the same
+ * `sequentialQuantile` of `scale-d3.testlib.ts` against the d3-scale 4.0.2 that the pinned vega-scale is built on, in the same
  * process. The domains are the ones a data column gives: numbers mixed with null, undefined, NaN, numeric and
  * non-numeric strings, '', booleans and Dates, in any order, with repeats, or empty. Every observable of the built
  * scale is compared: the domain, the thresholds / quantiles, the output for probe values (missing ones included),
@@ -9,7 +9,7 @@
 import { createRequire } from 'node:module'
 import { pathToFileURL } from 'node:url'
 import { describe, expect, it } from 'vitest'
-import { quantileScale, quantize, sequentialQuantile, threshold } from '../../core/src/scale-d3.ts'
+import { quantileScale, quantize, sequentialQuantile, threshold } from '../../core/src/scale-d3.testlib.ts'
 import { exact } from './differential-util.mts'
 
 const d3Path = createRequire(createRequire(import.meta.url).resolve('vega-scale')).resolve('d3-scale')

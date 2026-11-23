@@ -1,10 +1,6 @@
 {
   "$schema": "https://unpkg.com/knip@6/schema.json",
   "ignoreExportsUsedInFile": true,
-  "ignoreWorkspaces": [
-    "packages/benchmarks",
-    "apps/*"
-  ],
   "workspaces": {
     ".": {
       "entry": [
@@ -17,7 +13,6 @@
     },
     "packages/core": {
       "entry": [
-        "src/scale-d3.ts",
         "src/**/*.test.ts",
         "src/**/*.testlib.ts",
         "src/**/*.testkit.ts"
@@ -56,6 +51,26 @@
         "scripts/**/*.{ts,mts,mjs}",
         "test/**/*.{ts,mts}"
       ]
+    },
+    "packages/benchmarks": {
+      "entry": [
+        "src/**/*.bench.{ts,tsx}",
+        "src/*-entry.{ts,tsx}",
+        "src/**/*.test.{ts,tsx}",
+        "scripts/**/*.{mjs,mts}"
+      ],
+      "project": [
+        "src/**/*.{ts,tsx}",
+        "scripts/**/*.{mjs,mts}"
+      ]
+    },
+    "apps/demo": {
+      "project": [
+        "src/**/*.{ts,tsx}"
+      ],
+      "ignoreDependencies": [
+        "wrangler"
+      ]
     }
   },
   "rules": {
@@ -63,7 +78,6 @@
   },
   "ignoreDependencies": [
     "react-dom",
-    "a",
     "vega-datasets",
     "vega-embed",
     "vega-functions",
