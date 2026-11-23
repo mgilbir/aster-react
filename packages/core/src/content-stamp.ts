@@ -25,29 +25,68 @@ export function idOf(v: object): number {
   return id
 }
 
-/**
- * Say that `arr` (an array, or another engine structure) is written in place: every stamp taken of it before no longer matches.
- * Called before the write, where the write can be undone or seen (a claim): the histories kept of the array's current content
- * (`keepHistory`) take a copy of it first.
- */
+/** Say that `arr` (an array, or another engine structure) was written in place: every stamp taken of it before no longer matches. */
 export function wrote(arr: object): void {
+  // (a history of the content before, if a reader keeps one, gets a copy: this gate does not journal the write)
   const kept = HISTORIES.get(arr)
-  if (kept !== undefined) {
+  if (kept !== undefined && kept.version === versionOf(arr) && kept.after === undefined && kept.copy === undefined && Array.isArray(arr)) {
     HISTORIES.delete(arr)
-    if (kept.version === versionOf(arr) && kept.copy === undefined && Array.isArray(arr)) kept.copy = arr.slice()
+    kept.copy = arr.slice()
   }
   VERSIONS.set(arr, (VERSIONS.get(arr) ?? 0) + 1)
 }
 
 /**
- * An array's content as it is now, kept for readers that outlive later writes (a scene's datasets, DECISIONS Q14: a scene's rows are
- * that scene's): the array itself while it is not written, and the copy `wrote` takes of it before the first write. One history per
- * version of an array, shared by every reader of that version: the array holds one entry whatever the number of scenes made over it,
- * and nothing keeps a reader alive. (A write replaces rows or adds and removes them; the engine never edits a published row object in
- * place, which the incremental differential checks.)
+ * Open a journalled write of `arr` (a claim, before a pulse advances the array in place): the stamps taken before no longer match,
+ * and the history readers keep of the content before (`keepHistory`) is answered from the content after and the journal -- the length
+ * it had and the old value of each slot overwritten (`beforeWrite`) -- so a write costs O(changed), not a copy of the array. Closed by
+ * `endWrite`. A journalled write may only overwrite slots (after `beforeWrite`) and add slots past the end.
  */
-export interface History { readonly of: readonly unknown[]; readonly version: number; copy?: readonly unknown[] }
+export function beginWrite(arr: object): void {
+  const v = versionOf(arr)
+  VERSIONS.set(arr, v + 1)
+  const kept = HISTORIES.get(arr)
+  if (kept === undefined || kept.version !== v || !Array.isArray(arr) || kept.copy !== undefined) return
+  const after: History = { of: arr as readonly unknown[], version: v + 1 }
+  kept.len = arr.length
+  kept.slots = new Map()
+  kept.after = after
+  HISTORIES.set(arr, after)
+  JOURNALS.set(arr, kept)
+}
+
+/** Before a journalled write overwrites `arr[i]` (see `beginWrite`). */
+export function beforeWrite(arr: readonly unknown[], i: number): void {
+  const j = JOURNALS.get(arr)
+  if (j !== undefined && i < j.len! && !j.slots!.has(i)) j.slots!.set(i, arr[i])
+}
+
+/** Close a journalled write: the stamps taken while it ran no longer match either; the history of the content after is the array's. */
+export function endWrite(arr: object): void {
+  JOURNALS.delete(arr)
+  const v = versionOf(arr) + 1
+  VERSIONS.set(arr, v)
+  const h = HISTORIES.get(arr)
+  if (h !== undefined && h.of === arr) h.version = v
+}
+
+/**
+ * An array's content as it is now, kept for readers that outlive later writes (a scene's datasets, DECISIONS Q14: a scene's rows are
+ * that scene's): the array itself while it is not written; after a journalled write, the content after (`after`, itself a history)
+ * cut to the length it had and with the overwritten slots put back; after any other write, the copy `wrote` took. One history per
+ * version of an array, shared by every reader of that version: the array holds one entry and nothing keeps a reader alive. (The
+ * engine never edits a published row object in place, which the incremental differential checks.)
+ */
+export interface History {
+  readonly of: readonly unknown[]
+  version: number
+  copy?: readonly unknown[]
+  len?: number
+  slots?: Map<number, unknown>
+  after?: History
+}
 const HISTORIES = new WeakMap<object, History>()
+const JOURNALS = new WeakMap<object, History>()
 
 export function keepHistory(arr: readonly unknown[]): History {
   const version = versionOf(arr)
@@ -58,9 +97,24 @@ export function keepHistory(arr: readonly unknown[]): History {
   return h
 }
 
-/** The content a history kept. */
+/** The content a history kept (rebuilt once from the writes after it, then kept). */
 export function historical(h: History): readonly unknown[] {
-  return h.copy ?? h.of
+  if (h.copy !== undefined) return h.copy
+  if (h.after === undefined) return h.of
+  // (down the chain of later writes, then back up: a long-lived scene may be many writes behind)
+  const chain: History[] = []
+  let at: History = h
+  while (at.copy === undefined && at.after !== undefined) { chain.push(at); at = at.after }
+  let content: readonly unknown[] = at.copy ?? at.of
+  for (let k = chain.length - 1; k >= 0; k--) {
+    const c = chain[k]!
+    const out = content.slice(0, c.len)
+    for (const [i, v] of c.slots!) out[i] = v
+    c.copy = content = out
+    c.after = undefined
+    c.slots = undefined
+  }
+  return content
 }
 
 /** How many times `v` was written in place (a primitive never is). */
