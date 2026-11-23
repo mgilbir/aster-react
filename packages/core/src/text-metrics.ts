@@ -11,8 +11,21 @@
  * the conformance harness pins.
  */
 import type { HostCanvas } from './host-types.js'
-const widthCache = new Map<string, number>()
+/**
+ * Measured widths, one cache per measurer (a provider, or the canvas when there is none): a scoped provider
+ * (`withTextMetricsProvider`, a per-call `textMetrics`) neither reads another's widths nor clears them. Each is bounded, and
+ * cleared whole when full. A key is the font's length, the font, then the text: no font and text can make another pair's key.
+ */
+const CANVAS_WIDTHS = new Map<string, number>()
+const PROVIDER_WIDTHS = new WeakMap<TextMetricsProvider, Map<string, number>>()
 const WIDTH_CACHE_MAX = 8000
+
+function widthsOf(provider: TextMetricsProvider | null): Map<string, number> {
+  if (provider === null) return CANVAS_WIDTHS
+  let widths = PROVIDER_WIDTHS.get(provider)
+  if (widths === undefined) PROVIDER_WIDTHS.set(provider, (widths = new Map()))
+  return widths
+}
 
 /**
  * Host-provided text measurement. A provider replaces the offscreen-canvas
@@ -25,30 +38,34 @@ export interface TextMetricsProvider {
 }
 
 let activeProvider: TextMetricsProvider | null = null
-let activeProviderId = 0
-let providerSeq = 0
 
+/**
+ * Set the measurer every chart uses from now on (null: the canvas, or the estimate where there is none). Setting one forgets
+ * the widths it measured before (a host sets it again once its fonts have loaded).
+ */
 export function setTextMetricsProvider(provider: TextMetricsProvider | null): void {
   activeProvider = provider
-  activeProviderId = provider ? ++providerSeq : 0
-  widthCache.clear()
+  widthsOf(provider).clear()
 }
 
 export function getTextMetricsProvider(): TextMetricsProvider | null {
   return activeProvider
 }
 
-/** Run `fn` with a scoped provider (used by <Chart>/renderSpec). */
+/** Run `fn` with a scoped provider (used by <Chart>/renderSpec); none given keeps the one in force. */
 export function withTextMetricsProvider<T>(provider: TextMetricsProvider | null | undefined, fn: () => T): T {
-  if (!provider || provider === activeProvider) return fn()
+  return provider ? withExactTextMetricsProvider(provider, fn) : fn()
+}
+
+/** Run `fn` with exactly this measurer in force, null (the canvas, or the estimate) included: how a scene is drawn under its own. */
+export function withExactTextMetricsProvider<T>(provider: TextMetricsProvider | null, fn: () => T): T {
+  if (provider === activeProvider) return fn()
   const prev = activeProvider
-  const prevId = activeProviderId
-  setTextMetricsProvider(provider)
+  activeProvider = provider
   try {
     return fn()
   } finally {
     activeProvider = prev
-    activeProviderId = prevId
   }
 }
 
@@ -85,8 +102,7 @@ export function usingCanvasTextMetrics(): boolean {
 
 export interface FontProps {
   fontSize?: unknown
-  fontFamily?: unknown
-  /** Scene items use `font`; host providers should see the same family. */
+  /** The font family (vega's `font` channel). */
   font?: unknown
   fontWeight?: unknown
   fontStyle?: unknown
@@ -98,21 +114,25 @@ export function fontFontSize(item: FontProps): number {
   return item.fontSize != null ? +item.fontSize || 0 : 11
 }
 
-/** vega-scenegraph `font(item)`: `[style ][variant ][weight ]{size}px {family}`. */
+/**
+ * vega-scenegraph `font(item)`: `[style ][variant ][weight ]{size}px {family}`, the size as `fontFontSize` reads it and the
+ * family the item's `font`, else `sans-serif`. The one font text is measured with and drawn with (canvas.ts, label-draw.ts).
+ */
 export function fontString(item: FontProps): string {
   return (
     (item.fontStyle ? item.fontStyle + ' ' : '') +
     (item.fontVariant ? item.fontVariant + ' ' : '') +
     (item.fontWeight ? item.fontWeight + ' ' : '') +
     fontFontSize(item) + 'px ' +
-    ((item.fontFamily as string | undefined) || (item.font as string | undefined) || 'sans-serif')
+    ((item.font as string | undefined) || 'sans-serif')
   )
 }
 
 /** vega-scenegraph `_measureWidth`: provider/canvas measurement, cached by font+text. */
 export function measureText(text: string, font: string, item?: FontProps): number {
-  const key = `${activeProviderId}|(${font}) ${text}`
-  let w = widthCache.get(key)
+  const widths = widthsOf(activeProvider)
+  const key = `${font.length}:${font}${text}`
+  let w = widths.get(key)
   if (w === undefined) {
     if (activeProvider) {
       try {
@@ -127,8 +147,8 @@ export function measureText(text: string, font: string, item?: FontProps): numbe
       ctx.font = font
       w = ctx.measureText(text).width
     }
-    if (widthCache.size >= WIDTH_CACHE_MAX) widthCache.clear()
-    widthCache.set(key, w)
+    if (widths.size >= WIDTH_CACHE_MAX) widths.clear()
+    widths.set(key, w)
   }
   return w
 }
