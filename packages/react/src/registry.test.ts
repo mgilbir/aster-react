@@ -24,6 +24,8 @@ describe('Vega-Lite registry is shared across package copies', () => {
 })
 
 describe('useSpecData does not cache a failure forever', () => {
+  /** The URL policy every network load needs (one function, so the resource key is stable). */
+  const allow = (u: URL): boolean => u.origin === 'https://example.com'
   const spec = { data: [{ name: 't', url: 'https://example.com/d.csv', format: { type: 'csv' } }], marks: [] } as never
 
   it('a rejected load is retried on the next request', async () => {
@@ -33,16 +35,16 @@ describe('useSpecData does not cache a failure forever', () => {
       if (calls === 1) throw new Error('network down')
       return { ok: true, status: 200, text: async () => 'x,y\n1,2\n' }
     }) as unknown as typeof fetch
-    const first = loadSpecDataResource(spec, { fetch: fetchImpl })
+    const first = loadSpecDataResource(spec, { fetch: fetchImpl, allow })
     await expect(first).rejects.toThrow(/network down/)
     // While the failure is the current result, the same promise is returned (Suspense needs a stable thenable)...
     await Promise.resolve()
     // ...but once it settled as rejected a new request retries.
-    const second = loadSpecDataResource(spec, { fetch: fetchImpl })
+    const second = loadSpecDataResource(spec, { fetch: fetchImpl, allow })
     expect(second).not.toBe(first)
     await expect(second).resolves.toBeDefined()
     // A successful load stays cached.
-    expect(loadSpecDataResource(spec, { fetch: fetchImpl })).toBe(second)
+    expect(loadSpecDataResource(spec, { fetch: fetchImpl, allow })).toBe(second)
     expect(calls).toBe(2)
   })
 })

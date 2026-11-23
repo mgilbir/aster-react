@@ -21,7 +21,7 @@ import {
   CompiledRadarSpec,
 } from './compiled'
 import { compile } from '@aster-charts/vl'
-import { loadSpecData } from '@aster-charts/core/load'
+import { allowOrigins, loadSpecData } from '@aster-charts/core/load'
 // The playground takes any spec, so it loads the opt-in addons an app would (rare transforms such as pie, and maps).
 import '@aster-charts/core/transforms'
 import '@aster-charts/core/geo'
@@ -288,6 +288,9 @@ function resolveDataUrls<T extends Record<string, unknown>>(spec: T): T {
   return out
 }
 
+/** The demo loads data from the official data hosts only (loadSpecData needs an explicit URL policy). */
+const DATA_POLICY = allowOrigins(VEGA_DATA_BASES)
+
 /** Try the second official data host when the first returns a 404. */
 const dataFetch: typeof fetch = async (input, init) => {
   const first = await fetch(input, init)
@@ -319,7 +322,7 @@ function SpecPlayground() {
         // are fetched + inlined for the aster column (the oracle fetches its own).
         const resolved = resolveDataUrls(parsed)
         let inlined = resolved
-        try { inlined = await loadSpecData(structuredClone(resolved), { fetch: dataFetch }) } catch { /* bad URL: surface via the oracle/render error paths */ }
+        try { inlined = await loadSpecData(structuredClone(resolved), { fetch: dataFetch, allow: DATA_POLICY }) } catch { /* bad URL: surface via the oracle/render error paths */ }
         if (cancelled) return
         setVl(resolved)
         setVg(isVl ? (compile(inlined as never) as Record<string, unknown>) : inlined)

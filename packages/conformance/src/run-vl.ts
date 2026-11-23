@@ -105,7 +105,7 @@ async function runCase(spec: Record<string, unknown>, aster: boolean): Promise<O
       return { kind: 'fail', lines: [`real vega on our Vega differs from vega-lite's: ${String(vegaDiffs[0]).slice(0, 200)}`] }
     }
     if (!aster) return { kind: 'pass' }
-    const ourSvg = renderSpec((await loadSpecData(ourPlain() as never)) as never)
+    const ourSvg = renderSpec((await loadSpecData(ourPlain() as never, TRUSTED_LOAD_OPTIONS)) as never)
     const u = canonicalizeSvg(ourSvg as string)
     const diffs = diffCanonical(o, u)
     if (diffs.length === 0) return { kind: 'pass' }

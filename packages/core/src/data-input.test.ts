@@ -10,6 +10,8 @@ import { createChartSession } from './session.js'
 import { dataInputOf } from './spec-structure.js'
 import { loadSpecData } from './addon-load.js'
 
+const ANY = (): boolean => true
+
 const spec = (b: Record<string, unknown>): VgSpec => ({
   width: 100, height: 40,
   data: [{ name: 'a', values: [{ k: 1 }] }, { name: 'b', ...b }],
@@ -71,10 +73,10 @@ describe('a dataset with values and a source is its values', () => {
   it('loadSpecData fetches what vega loads: not a url beside values, not an empty url', async () => {
     const fetched: string[] = []
     const fetchStub = (async (u: string | URL) => { fetched.push(String(u)); return new Response('[{"k":3}]') }) as typeof fetch
-    await loadSpecData(spec({ source: 'a', values: [{ k: 1 }], url: 'https://d.example.com/x.json' }), { fetch: fetchStub })
-    await loadSpecData(spec({ source: 'a', url: '' }), { fetch: fetchStub })
+    await loadSpecData(spec({ source: 'a', values: [{ k: 1 }], url: 'https://d.example.com/x.json' }), { allow: ANY, fetch: fetchStub })
+    await loadSpecData(spec({ source: 'a', url: '' }), { allow: ANY, fetch: fetchStub })
     expect(fetched).toEqual([])
-    const loaded = await loadSpecData(spec({ source: 'a', url: 'https://d.example.com/y.json' }), { fetch: fetchStub })
+    const loaded = await loadSpecData(spec({ source: 'a', url: 'https://d.example.com/y.json' }), { allow: ANY, fetch: fetchStub })
     expect(fetched).toEqual(['https://d.example.com/y.json'])
     expect(countSymbols(renderSpec(loaded))).toBe(1)
   })

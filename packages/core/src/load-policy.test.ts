@@ -27,6 +27,9 @@ async function listen(handler: (req: IncomingMessage, res: ServerResponse, s: Te
 }
 const close = (s: TestServer): Promise<void> => new Promise((r) => { for (const res of s.open) res.destroy(); s.server.closeAllConnections?.(); s.server.close(() => r()) })
 
+/** A policy that permits every url (for the tests whose fetch is a stub). */
+const ANY = (): boolean => true
+
 const spec = (...defs: Array<Record<string, unknown>>): VgSpec => ({ data: defs } as unknown as VgSpec)
 const valuesOf = (s: VgSpec, i = 0): unknown => (s.data as unknown as Array<{ values: unknown }>)[i]!.values
 
@@ -113,6 +116,21 @@ describe('default policy', () => {
     const before = secret.hits.length
     await expect(loadSpecData(spec({ name: 't', url: `${secret.origin}/x` }), { baseURL: main.origin })).rejects.toBeInstanceOf(AsterUrlError)
     expect(secret.hits.length).toBe(before)
+    // a PUBLIC url off the base's origin is refused too without allow, before any request; with allow it is the hook's call
+    const requested: string[] = []
+    const stub = (async (u: string) => { requested.push(String(u)); return new Response('[]') }) as unknown as typeof fetch
+    const err = await loadSpecData(spec({ name: 't', url: 'https://elsewhere.example.com/a.json' }), { baseURL: main.origin, fetch: stub }).catch((e) => e)
+    expect(err).toBeInstanceOf(AsterUrlError)
+    expect(String(err.message)).toMatch(/explicit URL policy/)
+    expect(requested).toEqual([])
+    await loadSpecData(spec({ name: 't', url: 'https://elsewhere.example.com/a.json' }), { baseURL: main.origin, fetch: stub, allow: (u) => u.hostname === 'elsewhere.example.com' })
+    expect(requested).toEqual(['https://elsewhere.example.com/a.json'])
+  })
+
+  it('with allow, the hook decides every url, the base\'s own origin included', async () => {
+    const seen: string[] = []
+    await expect(loadSpecData(spec({ name: 't', url: '/rows.json' }), { baseURL: main.origin, allow: (u) => { seen.push(u.pathname); return false } })).rejects.toThrow(/allow hook/)
+    expect(seen).toEqual(['/rows.json'])
   })
 
   it.each(['file:///etc/passwd', 'ftp://example.com/x', 'javascript:alert(1)', 'blob:http://example.com/x', 'https://user:pw@example.com/x'])(
@@ -168,9 +186,13 @@ describe('redirects are re-checked hop by hop', () => {
     expect(String(err.message)).toMatch(/maxRedirects/)
   })
 
-  it('a fetch that follows redirects itself is checked after the fact', async () => {
-    const lying = (async () => ({ ok: true, status: 200, redirected: true, url: 'http://127.0.0.1:9/secret', headers: new Headers(), text: async () => '[]' })) as unknown as typeof fetch
-    await expect(loadSpecData(spec({ name: 't', url: 'https://public.example.com/a.json' }), { fetch: lying })).rejects.toThrow(/non-public/)
+  it('a fetch that follows redirects itself is refused: the hop was not vetted before it was requested', async () => {
+    for (const url of ['http://127.0.0.1:9/secret', 'https://other.example.com/a.json']) {
+      const lying = (async () => ({ ok: true, status: 200, redirected: true, url, headers: new Headers(), text: async () => '[]' })) as unknown as typeof fetch
+      const err = await loadSpecData(spec({ name: 't', url: 'https://public.example.com/a.json' }), { allow: ANY, fetch: lying }).catch((e) => e)
+      expect(err).toBeInstanceOf(AsterUrlError)
+      expect(String(err.message)).toMatch(/followed a redirect on its own/)
+    }
   })
 })
 
@@ -240,7 +262,7 @@ describe('what is loaded', () => {
         marks: [{ type: 'group', data: [{ name: 'g2', url: 'https://example.com/c.json' }], marks: [] }] }],
     } as unknown as VgSpec
     const before = JSON.stringify(input)
-    const out = await loadSpecData(input, { fetch: okFetch('[{"v":1}]') }) as unknown as {
+    const out = await loadSpecData(input, { allow: ANY, fetch: okFetch('[{"v":1}]') }) as unknown as {
       data: Array<{ values: unknown }>; marks: Array<{ data: Array<{ values: unknown }>; marks: Array<{ data: Array<{ values: unknown }> }> }> }
     expect(out.data[0]!.values).toEqual([{ v: 1 }])
     expect(out.marks[0]!.data[0]!.values).toEqual([{ v: 1 }])
@@ -255,17 +277,24 @@ describe('what is loaded', () => {
     // host-supplied rows are fine
     expect(() => renderSpec(s, { data: { t: [{ a: 1 }] } })).not.toThrow()
     // a loaded spec is fine
-    const loaded = await loadSpecData(s, { fetch: okFetch('[{"a":1}]') })
+    const loaded = await loadSpecData(s, { allow: ANY, fetch: okFetch('[{"a":1}]') })
     expect(() => renderSpec(loaded)).not.toThrow()
   })
 
-  it('a signal-valued url is a clear error rather than a silent empty dataset', async () => {
-    await expect(loadSpecData(spec({ name: 't', url: { signal: 'u' } }))).rejects.toThrow(/url must be a string/)
+  it('a {signal} url whose value is not a string is a clear error rather than a silent empty dataset', async () => {
+    const withSignal = (value: unknown): VgSpec => ({ signals: [{ name: 'u', value }], data: [{ name: 't', url: { signal: 'u' } }] } as unknown as VgSpec)
+    // an undeclared signal, and declared ones whose value is not text
+    await expect(loadSpecData(spec({ name: 't', url: { signal: 'u' } }), { allow: ANY, fetch: okFetch('[]') })).rejects.toThrow(/url must be a string/)
+    for (const value of [5, null, ['https://example.com/a.json'], { href: 'https://example.com/a.json' }]) {
+      await expect(loadSpecData(withSignal(value), { allow: ANY, fetch: okFetch('[]') })).rejects.toThrow(/url must be a string/)
+    }
+    // a declared one whose value is a url loads
+    expect(valuesOf(await loadSpecData(withSignal('https://example.com/a.json'), { allow: ANY, fetch: okFetch('[{"a":1}]') }))).toEqual([{ a: 1 }])
   })
 
   it('format.parse date patterns work like vega-loader (date:/utc: with quotes)', async () => {
     const rows = 'd,u,n\n15/01/2024,2024-01-15,5\n'
-    const loaded = await loadSpecData(spec({ name: 't', url: 'https://example.com/a.csv', format: { type: 'csv', parse: { d: "date:'%d/%m/%Y'", u: 'utc:"%Y-%m-%d"', n: 'number' } } }), { fetch: okFetch(rows) })
+    const loaded = await loadSpecData(spec({ name: 't', url: 'https://example.com/a.csv', format: { type: 'csv', parse: { d: "date:'%d/%m/%Y'", u: 'utc:"%Y-%m-%d"', n: 'number' } } }), { allow: ANY, fetch: okFetch(rows) })
     const row = (valuesOf(loaded) as Array<Record<string, unknown>>)[0]!
     expect(row.d).toBeInstanceOf(Date)
     expect((row.d as Date).getFullYear()).toBe(2024)
@@ -278,10 +307,10 @@ describe('what is loaded', () => {
   it('topojson: object names are looked up as OWN properties', async () => {
     const topo = JSON.stringify({ type: 'Topology', arcs: [], objects: { g: { type: 'GeometryCollection', geometries: [] } } })
     for (const feature of ['constructor', '__proto__', 'toString', 'hasOwnProperty']) {
-      await expect(loadSpecData(spec({ name: 't', url: 'https://example.com/t.json', format: { type: 'topojson', feature } }), { fetch: okFetch(topo) }))
+      await expect(loadSpecData(spec({ name: 't', url: 'https://example.com/t.json', format: { type: 'topojson', feature } }), { allow: ANY, fetch: okFetch(topo) }))
         .rejects.toThrow(/topojson object ".*" not found/)
     }
-    const ok = await loadSpecData(spec({ name: 't', url: 'https://example.com/t.json', format: { type: 'topojson', feature: 'g' } }), { fetch: okFetch(topo) })
+    const ok = await loadSpecData(spec({ name: 't', url: 'https://example.com/t.json', format: { type: 'topojson', feature: 'g' } }), { allow: ANY, fetch: okFetch(topo) })
     expect(valuesOf(ok)).toEqual([])
   })
 
@@ -290,7 +319,7 @@ describe('what is loaded', () => {
     const topo = JSON.stringify({ type: 'Topology', arcs: [arc], objects: { g: { type: 'GeometryCollection', geometries: [{ type: 'Polygon', arcs: [new Array(4000).fill(0)] }] } } })
     expect(topo.length).toBeLessThan(40_000)
     const err = await loadSpecData(spec({ name: 't', url: 'https://example.com/t.json', format: { type: 'topojson', feature: 'g' } }),
-      { fetch: okFetch(topo), limits: { maxRows: 50_000 } }).catch((e) => e)
+      { allow: ANY, fetch: okFetch(topo), limits: { maxRows: 50_000 } }).catch((e) => e)
     expect(err).toBeInstanceOf(AsterLimitError)
     expect(String(err.message)).toMatch(/maxRows/)
   })
