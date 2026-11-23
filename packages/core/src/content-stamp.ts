@@ -34,39 +34,27 @@ export function wrote(arr: object): void {
   const kept = HISTORIES.get(arr)
   if (kept !== undefined) {
     HISTORIES.delete(arr)
-    const version = versionOf(arr)
-    let copy: readonly unknown[] | undefined
-    for (const ref of kept) {
-      const h = ref.deref()
-      if (h !== undefined && h.version === version && h.copy === undefined && Array.isArray(arr)) h.copy = copy ??= arr.slice()
-    }
+    if (kept.version === versionOf(arr) && kept.copy === undefined && Array.isArray(arr)) kept.copy = arr.slice()
   }
   VERSIONS.set(arr, (VERSIONS.get(arr) ?? 0) + 1)
 }
 
 /**
- * An array's content as it is now, kept for a reader that outlives later writes (a scene's datasets, DECISIONS Q14: a scene's rows are
- * that scene's): the array itself while it is not written, and the copy `wrote` takes of it before the first write. Held weakly by
- * the array, so a reader that is gone costs no copy. (A write replaces rows or adds and removes them; the engine never edits a
- * published row object in place, which the incremental differential checks.)
+ * An array's content as it is now, kept for readers that outlive later writes (a scene's datasets, DECISIONS Q14: a scene's rows are
+ * that scene's): the array itself while it is not written, and the copy `wrote` takes of it before the first write. One history per
+ * version of an array, shared by every reader of that version: the array holds one entry whatever the number of scenes made over it,
+ * and nothing keeps a reader alive. (A write replaces rows or adds and removes them; the engine never edits a published row object in
+ * place, which the incremental differential checks.)
  */
 export interface History { readonly of: readonly unknown[]; readonly version: number; copy?: readonly unknown[] }
-const HISTORIES = new WeakMap<object, Array<WeakRef<History>>>()
+const HISTORIES = new WeakMap<object, History>()
 
 export function keepHistory(arr: readonly unknown[]): History {
-  const h: History = { of: arr, version: versionOf(arr) }
-  const list = HISTORIES.get(arr)
-  if (list === undefined) HISTORIES.set(arr, [new WeakRef(h)])
-  else {
-    // (an array no evaluation writes is kept by every scene made over it: the readers that are gone are dropped as the list grows,
-    // so it holds about as many entries as there are live scenes)
-    if (list.length >= 16 && (list.length & (list.length - 1)) === 0) {
-      let n = 0
-      for (const ref of list) if (ref.deref() !== undefined) list[n++] = ref
-      list.length = n
-    }
-    list.push(new WeakRef(h))
-  }
+  const version = versionOf(arr)
+  const kept = HISTORIES.get(arr)
+  if (kept !== undefined && kept.version === version) return kept
+  const h: History = { of: arr, version }
+  HISTORIES.set(arr, h)
   return h
 }
 

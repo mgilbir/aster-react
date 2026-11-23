@@ -364,6 +364,8 @@ interface EvalTxn {
    * {@link DataStability}): the steps made from them need not run again.
    */
   unchanged?: DataStability
+  /** The arrays the caller's pulses are relative to (see `hostPulse`). */
+  pulseBases?: ReadonlyMap<string, unknown>
   /** What the pass of this evaluation before the one being made left (a view that fits its viewport makes two passes). */
   lastPass?: IncrementalState
   /** The incremental engine, when the evaluation keeps state for a later one (see {@link IncrementalEngine}). */
@@ -719,6 +721,8 @@ interface EvalContext {
   committed?: IncrementalState
   /** The host datasets whose rows equal those `prev` was made from (see {@link DataStability}). */
   unchanged?: DataStability
+  /** The arrays the caller's pulses are relative to (see `hostPulse`). */
+  pulseBases?: ReadonlyMap<string, unknown>
   /** The state the pass before this one left (see `EvalTxn.lastPass`). */
   earlier?: IncrementalState
   /** The state this evaluation builds; committed by the caller on success. */
@@ -908,7 +912,7 @@ function prepareChartCtx(
   if (explicitSize.width && input.width != null) signalParams.width = width
   if (explicitSize.height && input.height != null) signalParams.height = height
 
-  const datasets: Map<string, Row[]> = new PublishedDatasets()
+  const datasets = new Map<string, Row[]>()
   const setData: SetDataState = { rows: new Map(), changed: false, caller: undefined }
   const scales = new Map<string, Scale>()
   const scaleTypes = new Map<string, string>()
@@ -961,7 +965,7 @@ function prepareChartCtx(
     ]),
     hierarchies: transformHierarchies, affected: new Set(), incremental: false, ...(txn.engine ? { engine: txn.engine } : {}), deadline, checkDeadline, markItems: new Map(), markContainers: new Map(),
     datasetPulses: new Map(),
-    prev, committed: txn.prev, ...(txn.unchanged ? { unchanged: txn.unchanged } : {}), ...(txn.lastPass ? { earlier: txn.lastPass } : {}), draft: newState(txn.gen), ids: { value: txn.prev?.idCounter ?? 0 }, idStart: txn.prev?.idCounter ?? 0, gen: txn.gen, claimed: txn.claimed, extraFp, ...encodeLogEntry(input.signals), dsEpoch: 0, scaleReuse: new Map(), distinctCache: new WeakMap(), defsAsked: { n: 0 },
+    prev, committed: txn.prev, ...(txn.unchanged ? { unchanged: txn.unchanged } : {}), ...(txn.pulseBases ? { pulseBases: txn.pulseBases } : {}), ...(txn.lastPass ? { earlier: txn.lastPass } : {}), draft: newState(txn.gen), ids: { value: txn.prev?.idCounter ?? 0 }, idStart: txn.prev?.idCounter ?? 0, gen: txn.gen, claimed: txn.claimed, extraFp, ...encodeLogEntry(input.signals), dsEpoch: 0, scaleReuse: new Map(), distinctCache: new WeakMap(), defsAsked: { n: 0 },
     domainRaw: input.domainRaw ? new Map(Object.entries(input.domainRaw).map(([k, v]) => [k, v])) : undefined,
     // Image urls are vetted when the host passes a policy, and with the default
     // policy whenever it passes `limits` (limits mean "this spec is untrusted").
@@ -1096,18 +1100,6 @@ function prepareChartCtx(
   txn.lastPass = ctx.draft
 
   return { ctx, width, height }
-}
-
-/**
- * The datasets of an evaluation, by name. Every array set here is a dataset's rows as the engine publishes them (what `data()`, the
- * scales and the marks read): fingerprint.ts keys such an array past its text budget by its content stamp, which the engine moves
- * whenever it writes the array in place (see content-stamp.ts).
- */
-class PublishedDatasets extends Map<string, Row[]> {
-  override set(name: string, rows: Row[]): this {
-    publishRows(rows)
-    return super.set(name, rows)
-  }
 }
 
 /**
@@ -3713,12 +3705,17 @@ export interface PendingEvaluation {
  * written; call `commit()` once the scene has been accepted. `engine` is the incremental
  * engine the state is made for (see {@link IncrementalEngine}).
  */
-export function evaluateChartPending(engine: IncrementalEngine, chart: CompiledChart, input: RuntimeInput = {}, unchanged?: DataStability): PendingEvaluation {
+export function evaluateChartPending(
+  engine: IncrementalEngine, chart: CompiledChart, input: RuntimeInput = {}, unchanged?: DataStability,
+  /** The arrays the caller's pulses are relative to, by dataset (a session: the rows it handed over last; see `hostPulse`). */
+  pulseBases?: ReadonlyMap<string, unknown>,
+): PendingEvaluation {
   // a refused url dataset fails the evaluation before anything of it starts (no transaction, no state)
   checkChartUrlData(chart, input.urlData)
   // a spec that makes regular expressions, under `limits.regex: 'refuse'`: refused for its spec, before anything runs
   checkChartRegex(chart, input.limits)
   const txn = beginTxn(engine, chart, unchanged)
+  if (pulseBases !== undefined) txn.pulseBases = pulseBases
   const done: { draft?: IncrementalState; failed?: boolean } = {}
   const scene = measured(input, done, () => withLimits(input.limits, () => withTextMetricsProvider(input.textMetrics, () => evaluateChartImpl(chart, input, txn, done))))
   return {
@@ -4478,7 +4475,8 @@ function hostPulse(ctx: EvalContext, name: string, given: unknown): StepPulse | 
   if (p === undefined) return null
   const before = ctx.prev?.hostRows.get(name)
   if (before === undefined || !Array.isArray(given)) return null
-  if (before === given) return p
+  // (the very array, or the array the caller says its pulse is relative to: a session diffs against the rows it handed over last)
+  if (before === given || ctx.pulseBases?.get(name) === before) return p
   const changed = new Set(p.changed)
   if (p.from !== undefined) {
     if (p.from.length !== given.length) return null
@@ -4540,6 +4538,8 @@ function buildDatasetsOf(ctx: EvalContext, inputData: Record<string, unknown[]>)
     const d = sources.get(name)
     if (!d) {
       const rows = (ownGet(inputData, name) as Row[] | undefined) ?? []
+      // (a dataset's rows as the engine publishes them: keyed past the fingerprint's budget by their stamp, see fingerprint.ts)
+      publishRows(rows)
       ctx.datasets.set(name, rows)
       const given = hostPulse(ctx, name, ownGet(inputData, name))
       ctx.datasetPulses.set(name, given ? normalizePulse(given, rows.length) : null)
@@ -4736,6 +4736,8 @@ function buildDatasetsOf(ctx: EvalContext, inputData: Record<string, unknown[]>)
     // evaluation's own copies, never the spec's
     if (forceLinkDatasets(ctx.chart).has(name)) rows = copiedRows(rows, 'dataset rows', true)
     markTuples(rows)
+    // (a dataset's rows as the engine publishes them: keyed past the fingerprint's budget by their stamp, see fingerprint.ts)
+    publishRows(rows)
     ctx.datasets.set(name, rows)
     ctx.datasetPulses.set(name, outPulse)
     return rows
@@ -7103,7 +7105,7 @@ function buildGroupItem(mark: CompiledMark, ctx: EvalContext, entered: EnteredGr
   // a cell of the full cross-product with no rows of its own (`cross` on a facet aggregate): vega's facet subflow never starts for
   // it, so the item is the empty group - none of its marks, axes, legends or title exist
   const hollow = src.facetName !== undefined && (src.rows?.length ?? 0) === 0
-  if (src.facetName !== undefined) ctx.datasets.set(src.facetName, src.rows!)
+  if (src.facetName !== undefined) { publishRows(src.rows!); ctx.datasets.set(src.facetName, src.rows!) }
   // the group's own datasets (vega: a group's `data`), derived in this item's scope
   const savedData: Array<[string, Row[] | undefined]> = []
   // the scales this item declares are visible to the expressions of its content (`bandwidth('child_x')`), over the enclosing ones
@@ -7153,6 +7155,8 @@ function buildGroupItem(mark: CompiledMark, ctx: EvalContext, entered: EnteredGr
       else if (shared) rows = copiedRows(gather(), 'dataset rows', true)
       else rows = rows ?? []
       savedData.push([d.name, ctx.datasets.get(d.name)])
+      // (a dataset's rows as the engine publishes them: keyed past the fingerprint's budget by their stamp, see fingerprint.ts)
+      publishRows(rows)
       ctx.datasets.set(d.name, rows)
     }
     const gx = num(geo.x) ?? 0
