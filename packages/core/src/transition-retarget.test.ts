@@ -121,3 +121,61 @@ describe('createScenePlayer: a scene that draws like the end of the running tran
     expect(painted.at(-1)).toBe(end)
   })
 })
+
+describe('createScenePlayer: what the audit found (C146, C487)', () => {
+  beforeEach(() => { vi.useFakeTimers({ toFake: ['requestAnimationFrame', 'cancelAnimationFrame', 'performance'] }) })
+  afterEach(() => { vi.useRealTimers() })
+  const xOf = (s: SceneRoot): number => (firstMark(s).items[1] as unknown as { x: number }).x
+
+  it('C146: a new end that draws like the start moves back from the frame on screen, in the time left, without a jump', () => {
+    const painted: SceneRoot[] = []
+    const player = createScenePlayer<string>((_t, s) => { painted.push(s) }, (e) => { throw e }, scene(A))
+    player.draw('svg', scene(B), { duration: 300, easing: 'linear' })
+    vi.advanceTimersByTime(150)
+    const mid = xOf(painted.at(-1)!)
+    expect(mid).toBeGreaterThan(20)
+    expect(mid).toBeLessThan(60)
+    player.draw('svg', scene(A), null)
+    // (the first frame after the retarget is where the marks were, then they move back towards x = 20)
+    vi.advanceTimersByTime(20)
+    const next = xOf(painted.at(-1)!)
+    expect(next).toBeLessThanOrEqual(mid)
+    expect(next).toBeGreaterThan(20)
+    vi.advanceTimersByTime(200)
+    expect(xOf(painted.at(-1)!)).toBe(20)
+  })
+
+  it.each([Infinity, 1e300, NaN, -5])('C487: a duration of %s requests no frames for ever', (duration) => {
+    const painted: SceneRoot[] = []
+    const player = createScenePlayer<string>((_t, s) => { painted.push(s) }, (e) => { throw e }, scene(A))
+    const end = scene(B)
+    player.draw('svg', end, { duration, easing: 'linear' })
+    vi.advanceTimersByTime(61_000)
+    expect(painted.at(-1)).toBe(end)
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('C487: a first frame that fails is reported, nothing escapes draw, and the new scene is drawn', () => {
+    const errors: Error[] = []
+    const painted: SceneRoot[] = []
+    let calls = 0
+    const player = createScenePlayer<string>((_t, s) => { if (++calls === 1) throw new Error('paint failed'); painted.push(s) }, (e) => { errors.push(e) }, scene(A))
+    const end = scene(B)
+    expect(() => player.draw('svg', end, { duration: 300 })).not.toThrow()
+    expect(errors.map((e) => e.message)).toEqual(['paint failed'])
+    expect(painted.at(-1)).toBe(end)
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('C487: an easing that answers NaN is reported and the change is drawn at once, never NaN coordinates', () => {
+    const errors: Error[] = []
+    const painted: SceneRoot[] = []
+    const player = createScenePlayer<string>((_t, s) => { painted.push(s) }, (e) => { errors.push(e) }, scene(A))
+    const end = scene(B)
+    player.draw('svg', end, { duration: 300, easing: () => NaN })
+    vi.advanceTimersByTime(400)
+    expect(errors[0]?.message).toMatch(/easing answered NaN/)
+    expect(painted.every((s) => Number.isFinite(xOf(s)))).toBe(true)
+    expect(painted.at(-1)).toBe(end)
+  })
+})
