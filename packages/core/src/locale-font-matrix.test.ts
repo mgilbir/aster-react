@@ -59,7 +59,7 @@ describe('locale matrix', () => {
     const cases: Array<{
       name: string
       number: FormatLocaleDefinition
-      time?: TimeLocaleDefinition
+      time: TimeLocaleDefinition
       formats: Array<[string, number, string]>
       date: string
       month: string
