@@ -151,7 +151,7 @@
         }
       ]
     },
-    "dsvParseSemi": {
+    "dsvParseRowsSemi": {
       "oracle": "d3-dsv@3.0.1",
       "kind": "fn",
       "tz": "UTC",
@@ -173,7 +173,7 @@
         }
       ]
     },
-    "dsvParseTab": {
+    "dsvParseRowsTab": {
       "oracle": "d3-dsv@3.0.1",
       "kind": "fn",
       "tz": "UTC",
@@ -191,6 +191,93 @@
               "1",
               "2"
             ]
+          ]
+        }
+      ]
+    },
+    "dsvParseSemi": {
+      "oracle": "d3-dsv@3.0.1",
+      "kind": "fn",
+      "tz": "UTC",
+      "cases": [
+        {
+          "args": [
+            "a;b\n1;2"
+          ],
+          "want": [
+            {
+              "a": "1",
+              "b": "2"
+            }
+          ]
+        },
+        {
+          "args": [
+            "a;b;a\n1;2;3"
+          ],
+          "want": [
+            {
+              "a": "3",
+              "b": "2"
+            }
+          ]
+        },
+        {
+          "args": [
+            "a;b\n\"x;y\";2\n3;4"
+          ],
+          "want": [
+            {
+              "a": "x;y",
+              "b": "2"
+            },
+            {
+              "a": "3",
+              "b": "4"
+            }
+          ]
+        }
+      ]
+    },
+    "dsvParseTab": {
+      "oracle": "d3-dsv@3.0.1",
+      "kind": "fn",
+      "tz": "UTC",
+      "cases": [
+        {
+          "args": [
+            "a\ta\n1\t2"
+          ],
+          "want": [
+            {
+              "a": "2"
+            }
+          ]
+        },
+        {
+          "args": [
+            "a\tb\n1\t2\n3\t4"
+          ],
+          "want": [
+            {
+              "a": "1",
+              "b": "2"
+            },
+            {
+              "a": "3",
+              "b": "4"
+            }
+          ]
+        },
+        {
+          "args": [
+            "a\tb\n\"x\ty\"\t2"
+          ],
+          "want": [
+            {
+              "a": "x\ty",
+              "b": "2"
+            }
           ]
         }
       ]
@@ -473,6 +560,42 @@
             {
               "a": "1",
               "b": "2"
+            }
+          ]
+        },
+        {
+          "args": [
+            "a,b\n1,2\n3,4\n5,6"
+          ],
+          "variant": "dropOdd",
+          "want": [
+            {
+              "a": "1",
+              "b": "2"
+            },
+            {
+              "a": "5",
+              "b": "6"
+            }
+          ]
+        },
+        {
+          "args": [
+            "a,b\n1,2\n3,4\n5,6\n7,8\n9,10"
+          ],
+          "variant": "dropOdd",
+          "want": [
+            {
+              "a": "1",
+              "b": "2"
+            },
+            {
+              "a": "5",
+              "b": "6"
+            },
+            {
+              "a": "9",
+              "b": "10"
             }
           ]
         }
