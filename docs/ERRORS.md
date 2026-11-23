@@ -97,7 +97,9 @@ anywhere in a render is never swallowed by a defensive `catch`: the call fails w
 allowed, embedded credentials, non-public host, relative URL without `baseURL`, refused by the `allow` hook. It is
 thrown by `loadSpecData` before the request is made, and by image and `href` marks under `urlPolicy` or `limits`
 (unless `onDeny` is set, which drops the image or link instead). It is never recovered by the `logger` mechanism
-below.
+below. The URL it carries (`url`, and the copy in the message) has any user name and password replaced by `***`, so a host
+that logs the error never writes a credential out. (The renderers vet every URL they write too, and never throw: a URL
+refused there is not written; see `docs/LIMITS.md`, "Every URL in the output".)
 
 Under `urlData: 'refuse'` a spec with a url dataset is refused with an `AsterUrlError` before any add-on loads and before
 evaluation: `[aster] url denied: dataset "source_0" loads its rows from a url, and url data is not allowed here (urlData:
@@ -355,6 +357,15 @@ reported through `onError` (the hook's `error`), and it is remembered for the pa
   vega-lite itself compiles the first three (it ignores the key or property) and crashes on the unknown mark.
 - **Safety refusals.** Limits, the regular-expression screen, the URL policy, the hard spec-depth ceiling and the
   `bin`/`stratify` refusals are Aster additions; see `docs/LIMITS.md`.
+- **An encode channel may not name the engine's own item state.** An encode writes each channel onto the scene item under its
+  name, so a channel named like a property the engine keeps on an item for itself would be taken for it. A channel that starts
+  with `_`, or that is a field of the engine's scene types and not one of vega's (`items`, `marktype`, `role`, `datum`, `mark`,
+  `dataDatum`, `urlDenied`, `hasLinks`, `box`, `clipPathD`, ...: `ENGINE_ITEM_SLOTS` in core's `item-slots.ts`), in any encode
+  block (a mark's, a guide part's, a title's) or a config style or mark default, is `SpecParseError: Encode channel "<name>"
+  (<where>) names a property the engine keeps on its scene items for itself; it cannot be encoded.` when the spec is
+  compiled. vega accepts such a channel (and breaks on `items` or `marktype`). Every other channel name is accepted, as in
+  vega: the channels of vega's schema, those vega's scenegraph reads besides (`href`, `fontVariant`, `image`, `noBound`, a
+  guide group's `offset`, `position`, `translate`, `padding`, `format`, `formatType`), and any other name, which nothing reads.
 
 ### Known differences not yet matched
 
