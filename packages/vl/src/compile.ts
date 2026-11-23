@@ -210,6 +210,9 @@ function compileValidated(spec: VLSpec, forward?: ReadonlyMap<string, SelCmpt>, 
   assembleGuides(out)
   // (vega-lite passes the spec's metadata through as it is: TopLevel.usermeta)
   if (normalized.usermeta !== undefined) out.usermeta = normalized.usermeta
+  // (a dataset no view names: vega-lite emits nothing for it)
+  const datasets = peek(() => normalized.datasets)
+  if (isObject(datasets)) for (const k of Object.keys(datasets)) if (!ctx.userDataNames.has(k) || !referencedDataset(normalized, k)) ignore(datasets, k, 'no view reads it')
   return { out: exprRefsToSignals(out) as VLSpec, misses: ctx.selectionMisses, selections: ctx.selections, lookups: ctx.selectionLookups }
 }
 
@@ -622,6 +625,7 @@ function collectLeaves(root: VLSpec): VLSpec[] {
     }
     const encoding = mergeEncoding(inh.encoding, node.encoding)
     if (Array.isArray(node.layer)) {
+      if (path.length > 0) for (const k of ['view', 'description']) ignore(node, k, 'vega-lite reads no view background or description inside a layer')
       const projection = node.projection !== undefined ? node.projection : inh.projection
       const before = leaves.length
       ;(node.layer as VLSpec[]).forEach((c, i) => visit(c, { encoding, data, transform, depths, projection }, [...path, i]))
@@ -657,6 +661,8 @@ function collectLeaves(root: VLSpec): VLSpec[] {
       if (!partial) transfer(encoding, ch, unitEncoding)
       else ignore(encoding, ch, 'a partial definition encodes nothing in the unit')
     }
+    // (a layer's own view background and description are the layer's: vega-lite reads neither on a view inside a layer)
+    if (path.length > 0) for (const k of ['view', 'description']) ignore(node, k, 'vega-lite reads no view background or description inside a layer')
     const leaf: VLSpec = derive(node, { encoding: unitEncoding, ...(projection !== undefined && node.projection === undefined ? { projection } : {}) })
     LEAF_PATHS.set(leaf, path)
     TRANSFORM_DEPTHS.set(leaf, depths)
@@ -1454,7 +1460,8 @@ function stepSignals(channel: 'x' | 'y', scales: ScaleSpec[], step: number, step
 /** Root-level properties every compile path shares: background, padding, config, title, description. */
 function rootChrome(out: Record<string, unknown>, spec: VLSpec, kind: 'unit' | 'composite' = 'composite'): void {
   const userConfig = isObject(spec.config) ? (spec.config as Record<string, unknown>) : undefined
-  out.background = spec.background ?? (userConfig?.background as string | undefined) ?? 'white'
+  // (a null background is the spec's: no background at all, as vega-lite writes it)
+  out.background = spec.background === null ? null : spec.background ?? (userConfig?.background as string | undefined) ?? 'white'
   out.padding = spec.padding ?? (userConfig?.padding as unknown) ?? 5
   const assembledConfig = assembleConfig(spec)
   if (assembledConfig) out.config = assembledConfig
@@ -1469,8 +1476,30 @@ function rootChrome(out: Record<string, unknown>, spec: VLSpec, kind: 'unit' | '
     }
     hide(out)
   }
-  if (spec.title) out.title = unitTitle(spec.title, userConfig, kind)
+  const title = kind === 'unit' && Array.isArray(spec.layer) ? layerTitle(spec) : spec.title
+  if (hasTitleText(title)) out.title = unitTitle(title, userConfig, kind)
+  // (a title with no text - a subtitle alone - is not drawn, and vega-lite reads nothing of it)
+  else consumeAll(title)
   if (spec.description) out.description = spec.description
+}
+
+/** model.ts assembleTitle: a title is drawn when it has text (a subtitle alone, or empty text, is none). */
+function hasTitleText(title: unknown): boolean {
+  const text = isObject(title) ? title.text : title
+  return Array.isArray(text) ? text.length > 0 : typeof text === 'string' ? text !== '' : text !== undefined && text !== null && isObject(title) && isObject(text)
+}
+
+/**
+ * layer.ts assembleTitle: a layer's title is its own, else the first of its layers' (depth first) that has one. Every title in the layer
+ * tree is read here; the ones after the first are those vega-lite does not draw.
+ */
+function layerTitle(node: VLSpec): unknown {
+  const own = node.title
+  const below = Array.isArray(node.layer) ? (node.layer as VLSpec[]).map(layerTitle) : []
+  const chosen = hasTitleText(own) ? own : below.find(hasTitleText)
+  // (the titles that are not drawn: vega-lite reads nothing of them)
+  for (const t of [own, ...below]) if (t !== chosen) consumeAll(t)
+  return chosen
 }
 
 /**
@@ -2700,6 +2729,8 @@ function compileFacetedView(spec: VLSpec, ctx: CompileCtx, nested = ''): VLSpec 
     // an orthogonal label orient shows the labels as the cell's own title
     if (faceted && !cellTitle && (c.ch === 'row' ? labelOrient === 'top' || labelOrient === 'bottom' : labelOrient === 'left' || labelOrient === 'right')) cellTitle = labelTitle(c.ch, c.def!, c.fd, c.field!)
   }
+  // (the facet's spec's own title is the cell's - model.ts assembleTitle of the child - unless the headers' labels are)
+  if (!cellTitle && isObject(spec.spec) && inner.title !== undefined) cellTitle = inner.title as Record<string, unknown>
   marks.push({
     name: CELL,
     type: 'group',
@@ -3283,8 +3314,15 @@ function ignoreOperatorSize(spec: VLSpec): void {
   for (const k of ['width', 'height']) ignore(spec, k, 'vega-lite ignores the size of a composition operator')
 }
 
+/** A concat's or a repeat's views keep their own axes: vega-lite reads no `resolve.axis` there. */
+function ignoreConcatAxisResolve(spec: VLSpec): void {
+  const resolve = peek(() => spec.resolve)
+  if (isObject(resolve)) ignore(resolve, 'axis', 'a concat\'s views keep their own axes')
+}
+
 function compileConcat(spec: VLSpec, ctx: CompileCtx): VLSpec {
   ignoreOperatorSize(spec)
+  ignoreConcatAxisResolve(spec)
   const kind = spec.hconcat != null ? 'hconcat' : spec.vconcat != null ? 'vconcat' : 'concat'
   const children = (spec[kind] as VLSpec[]) ?? []
   const cells: CompositeCell[] = children.map((c, i) => {
@@ -3354,6 +3392,7 @@ function substituteRepeat(node: unknown, repMap: Record<string, unknown>, later 
  */
 function compileRepeat(spec: VLSpec, ctx: CompileCtx): VLSpec {
   ignoreOperatorSize(spec)
+  ignoreConcatAxisResolve(spec)
   const rep = spec.repeat as unknown
   const child = (spec.spec ?? {}) as VLSpec
   // (the composite marks, overlays and stack orders of a repeated view are rewritten with the repeated fields in: a rewrite reads them)
@@ -4155,6 +4194,22 @@ function userDatasetNames(top: VLSpec): Set<string> {
   return names
 }
 
+/** Does a view or a lookup of the spec name the dataset `name`? */
+function referencedDataset(top: VLSpec, name: string): boolean {
+  let found = false
+  peek(() => {
+    const visit = (n: unknown): void => {
+      if (found || n === null || typeof n !== 'object' || isRows(n)) return
+      if (Array.isArray(n)) { n.forEach(visit); return }
+      const o = n as Record<string, unknown>
+      if (isObject(o.data) && o.data.name === name) { found = true; return }
+      for (const [k, v] of Object.entries(o)) if (k !== 'datasets' && k !== 'config') visit(v)
+    }
+    visit(top)
+  })
+  return found
+}
+
 function hashString(s: string): string {
   let h = 0x811c9dc5
   for (let i = 0; i < s.length; i++) {
@@ -4249,17 +4304,24 @@ function dataSource(data: Record<string, unknown>, datasets: Record<string, unkn
     return { ...(typeof data.name === 'string' ? { name: data.name } : {}), transform: [{ type: 'graticule', ...(isObject(data.graticule) ? data.graticule : {}) }] }
   }
   for (const [k, v] of Object.entries(data)) out[k] = v
+  // (data/formatparse.ts: a null parse, or a null for a field, is "do not parse": Vega is given no parse for it)
+  if (isObject(data.format) && data.format.parse !== undefined) {
+    const { parse, ...format } = data.format as Record<string, unknown>
+    const kept = isObject(parse) ? Object.fromEntries(Object.entries(parse).filter(([, v]) => v !== null)) : undefined
+    out.format = kept !== undefined && Object.keys(kept).length ? { ...format, parse: kept } : format
+  }
   // compile/data/source.ts: a URL's format type is the file's extension (json, csv, tsv, dsv, topojson; json for any other); Vega reads
   // json when it is not told, so a csv file would not load
   if (typeof data.url === 'string') {
-    const format: Record<string, unknown> = isObject(data.format) ? { ...(data.format as Record<string, unknown>) } : {}
+    const format: Record<string, unknown> = isObject(out.format) ? { ...(out.format as Record<string, unknown>) } : {}
     if (!format.type) {
       const ext = /(?:\.([^.]+))?$/.exec(data.url)![1]
       format.type = ext !== undefined && ['json', 'csv', 'tsv', 'dsv', 'topojson'].includes(ext) ? ext : 'json'
     }
     out.format = format
   }
-  if (typeof data.name === 'string' && data.values === undefined && data.url === undefined && Array.isArray(datasets[data.name])) {
+  // (a named dataset: its entry, rows, a CSV text or a JSON object, is the data's values, as vega-lite's datasets are)
+  if (typeof data.name === 'string' && data.values === undefined && data.url === undefined && datasets[data.name] !== undefined) {
     out.values = datasets[data.name]
   }
   return out
@@ -4405,7 +4467,11 @@ function buildData(spec: VLSpec, allFields: FieldDef[], mark: string, orient: st
     !fields.some((f) => f.type === 'temporal') &&
     !continuousDimension)
   const castTypes = new Map<string, 'number' | 'date'>()
-  if (!skipCasts) {
+  // (data/formatparse.ts: an explicit `format.parse` decides for the fields it names - `null` for "do not parse" - and `parse: null`
+  // turns the implicit parsing of the source off altogether)
+  const explicitParse = isObject(spec.data) && isObject(spec.data.format) ? (spec.data.format as Record<string, unknown>).parse : undefined
+  if (isObject(explicitParse)) for (const k of Object.keys(explicitParse)) castDone.add(flatField(k).key)
+  if (!skipCasts && explicitParse !== null) {
     // a field carrying a timeUnit anywhere in the encoding casts as a date,
     // even if another channel declares it quantitative
     const timeUnitFields = new Set(fields.filter((f) => f.timeUnit).map((f) => f.field))
