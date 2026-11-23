@@ -271,29 +271,16 @@ export class AlphaCanvas implements CanvasLike {
     const m = this.m
     const scale = Math.sqrt(Math.abs(m[0] * m[3] - m[1] * m[2]))
     if (!(scale > 0)) return
-    let dash = this.dash.map((d) => d * scale)
-    let alpha = a
-    // A pattern whose period is under a pixel puts some of every pixel along the line under ink: what the pixels hold is the
-    // average, a solid stroke at the share of the period that is drawn (as cairo approximates such a dash, and what a coverage
-    // canvas's pixels add up to), and cutting it into dashes would cost a piece per fraction of a pixel.
-    const period = dash.reduce((p, q) => p + q, 0)
-    if (dash.length && period > 0 && period < 1) {
-      let drawn = 0
-      for (let i = 0; i < dash.length; i += 2) drawn += dash[i]!
-      alpha *= drawn / period
-      dash = []
-      if (!(alpha > 0)) return
-    }
     const polys = strokePolygons(this.subs, {
       half: (this.lineWidth * scale) / 2,
       cap: this.lineCap,
       join: this.lineJoin,
       miterLimit: this.miterLimit,
-      dash,
+      dash: this.dash.map((d) => d * scale),
       dashOffset: this.lineDashOffset * scale,
       canvas: [0, 0, this.width, this.height],
     })
-    this.scan(polygonEdges(polys), 'nonzero', alpha)
+    this.scan(polygonEdges(polys), 'nonzero', a)
   }
 
   /** Text is a box from its advance width and font size (glyph coverage is not modelled); `fillText` and `strokeText` draw it. */
