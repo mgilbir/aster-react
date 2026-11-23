@@ -319,7 +319,12 @@ describe(`generated geo differential vs vega@${vega.version} / d3-geo@3.1.1 (liv
         const params = projectionParams(r, type)
         const built = await viaVega(params)
         const made = viaAster(params)
-        if ('error' in built || 'error' in made) continue
+        if ('error' in built || 'error' in made) {
+          // both refuse to build it, with the same words, or the fit is not comparable (a one-sided failure used to be skipped)
+          const e = (b: Built): string => ('error' in b ? b.error : 'built')
+          expect(e(made), `${type}#${i} ${JSON.stringify(params)}`).toBe(e(built))
+          continue
+        }
         const theirs = built.projection
         const ours = made.projection
         const data = geoObject(r)
