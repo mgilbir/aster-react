@@ -26,6 +26,7 @@ import { sphereArea, sphereBounds, sphereCentroid } from '../../core/src/geo-sph
 import { canonicalizeSvg, diffCanonical } from '../src/normalize.ts'
 import { enc, exact, quietLogger } from './differential-util.mts'
 import { PLANAR_SHAPES, PROJECTION_TYPES, Rand, geoObject, oddParams, probePoints, projectionParams, randomSpec, regional, seedOf, type Json } from './geo-gen.mts'
+import { scaled } from './differential-gen.mts'
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 type Any = any
@@ -299,15 +300,15 @@ describe(`generated geo differential vs vega@${vega.version} / d3-geo@3.1.1 (liv
     const configs: Array<[Record<string, Json>, () => Json[]]> = [
       [{ type: 'identity', scale: 1, translate: [0, 0], clipExtent: [[0, 0], [100, 100]] }, () => PLANAR_SHAPES],
       [{ type: 'identity', scale: 2, translate: [-10, 5], clipExtent: [[0, 0], [100, 100]], reflectY: true }, () => PLANAR_SHAPES],
-      [{ type: 'albersUsa', scale: 1000, translate: [480, 300] }, () => Array.from({ length: 12 }, () => regional(r))],
-      [{ type: 'albersUsa' }, () => Array.from({ length: 12 }, () => regional(r))],
-      [{ type: 'mercator', scale: 140, translate: [450, 250] }, () => Array.from({ length: 12 }, () => regional(r))],
-      [{ type: 'mercator', scale: 140, translate: [450, 250], clipExtent: [[20, 20], [880, 480]] }, () => Array.from({ length: 12 }, () => regional(r))],
-      [{ type: 'transverseMercator', scale: 140, translate: [450, 250] }, () => Array.from({ length: 12 }, () => regional(r))],
-      [{ type: 'albers', scale: 1000, translate: [480, 300], clipExtent: [[0, 0], [960, 600]] }, () => Array.from({ length: 12 }, () => regional(r))],
+      [{ type: 'albersUsa', scale: 1000, translate: [480, 300] }, () => Array.from({ length: scaled(12) }, () => regional(r))],
+      [{ type: 'albersUsa' }, () => Array.from({ length: scaled(12) }, () => regional(r))],
+      [{ type: 'mercator', scale: 140, translate: [450, 250] }, () => Array.from({ length: scaled(12) }, () => regional(r))],
+      [{ type: 'mercator', scale: 140, translate: [450, 250], clipExtent: [[20, 20], [880, 480]] }, () => Array.from({ length: scaled(12) }, () => regional(r))],
+      [{ type: 'transverseMercator', scale: 140, translate: [450, 250] }, () => Array.from({ length: scaled(12) }, () => regional(r))],
+      [{ type: 'albers', scale: 1000, translate: [480, 300], clipExtent: [[0, 0], [960, 600]] }, () => Array.from({ length: scaled(12) }, () => regional(r))],
     ]
     for (const [params, shapes] of configs) {
-      for (let i = 0; i < 6; i++) await compareProjection(params, r, `${params.type}#${i}`, 0, shapes()).catch((e: Error) => failures.push(e.message))
+      for (let i = 0, n = scaled(6); i < n; i++) await compareProjection(params, r, `${params.type}#${i}`, 0, shapes()).catch((e: Error) => failures.push(e.message))
     }
     expect(failures.length, `${failures.length} differ; first:\n${failures.slice(0, 3).join('\n')}`).toBe(0)
   })
@@ -315,7 +316,7 @@ describe(`generated geo differential vs vega@${vega.version} / d3-geo@3.1.1 (liv
   it('fitWidth / fitHeight on the built projections', async () => {
     for (const type of PROJECTION_TYPES) {
       const r = new Rand(seedOf(type, 3))
-      for (let i = 0; i < 6; i++) {
+      for (let i = 0, n = scaled(6); i < n; i++) {
         const params = projectionParams(r, type)
         const built = await viaVega(params)
         const made = viaAster(params)
@@ -352,7 +353,7 @@ describe(`generated geo differential vs vega@${vega.version} / d3-geo@3.1.1 (liv
   it('the default path (no projection) draws and measures coordinates as they are', () => {
     const r = new Rand(seedOf('default-path', 6))
     const failures: string[] = []
-    for (let i = 0; i < 300; i++) {
+    for (let i = 0, n = scaled(300); i < n; i++) {
       const g = geoObject(r)
       const dg = d3Geo.geoPath()
       const ag = new GeoPath()

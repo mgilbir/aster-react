@@ -11,6 +11,7 @@ import * as vega from 'vega'
 import { compileChart } from '../../core/src/compiler.ts'
 import { evaluateChart } from '../../core/src/evaluate.ts'
 import { enc, quietLogger } from './differential-util.mts'
+import { scaled } from './differential-gen.mts'
 import { seeded } from './upstream.mts'
 
 // generated differentials are heavy; a loaded machine must not turn them into timeouts
@@ -133,7 +134,7 @@ describe('vlSelectionTest / vlSelectionResolve vs vega-selections (generated)', 
     let trues = 0
     let falses = 0
     let compared = 0
-    for (let seed = 1; seed <= 400; seed++) {
+    for (let seed = 1, n = scaled(400); seed <= n; seed++) {
       const r = seeded(seed * 7919)
       const test = `vlSelectionTest("${STORE}", d${r.pick(OPS)})`
       const resolve = `vlSelectionResolve("${STORE}"${r.pick(RESOLVE)})`
@@ -156,7 +157,7 @@ describe('vlSelectionTest / vlSelectionResolve vs vega-selections (generated)', 
   })
 
   it('agree on random id stores', async () => {
-    for (let seed = 1; seed <= 150; seed++) {
+    for (let seed = 1, n = scaled(150); seed <= n; seed++) {
       const r = seeded(seed * 104729)
       const rows: Row[] = Array.from({ length: r.int(9) }, () => ({ unit: r.pick(['u1', 'u2', 'u3', '3', '1', '20']), _vgsid_: r.int(6) }))
       const ps = [0, 1, 2, 3, 4, 5, 6, -1, NaN, null].map((_vgsid_) => ({ _vgsid_ }))

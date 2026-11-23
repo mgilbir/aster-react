@@ -19,7 +19,8 @@ real one-ulp divergences.
    -0, `undefined`, Dates, thrown errors). Nothing is recorded. Same engine on both sides removes
    the engine from the comparison and keeps the equality exact, with no tolerance.
 2. Inputs live in importable case modules beside the tests, or are generated from a seed, so a
-   failure names its seed and case. Generated suites scale with `ASTER_DIFF_SCALE`.
+   failure names its seed and case. Generated suites scale with `ASTER_DIFF_SCALE`
+   (every `*-gen.test.mts` / `*-generated.test.mts` calls `scaled()`; `scripts/differential-scale.test.mts` fails one that does not).
 3. Recordings stay for the suites that do not depend on V8's numerics: vega-util, d3-color (with
    a 1e-6 tolerance), d3-format, vega-format, vega-time, d3-dsv and topojson-client.
 4. The scale, geo, shape, expression and transform suites are live, and generated differentials

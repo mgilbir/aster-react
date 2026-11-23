@@ -84,3 +84,8 @@ behaviour end to end, and it is the only route to rendering Vega-Lite directly.
   chunks) 264.0 kB gzip against react-vega 288.7 kB, whose bundle also contains Vega-Lite. With the Vega-Lite compiler
   `<Chart>` is 308.3 kB gzip eager plus 59.1 kB on demand (`pnpm --filter @aster-charts/benchmarks run budget`), above react-vega.
   The per-entry sizes are in [PERFORMANCE.md](../PERFORMANCE.md#bundle-sizes).
+
+*2026-11-23, to match the code.* The first gate of decision 1 is no longer "oracle vectors for every surface". [ADR 0009](0009-live-differentials-over-recorded-vectors.md)
+moved the scale, geo, shape, expression and transform suites to live differentials (the pinned oracle and Aster run in one process on
+the same inputs), and kept recordings for seven packages whose results do not depend on V8's numerics (`packages/core/testdata/vectors/`).
+Read "oracle vectors" in decision 1 as "oracle comparison": recorded where ADR 0009 says recorded, live everywhere else.
