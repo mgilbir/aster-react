@@ -97,6 +97,11 @@ Each item is something the code or the gates show today; none is a plan that has
   offset of a canvas `arc()` by up to about 0.4 px past the true stroke (measured: 0.16 px out of a 52.7 px radius at width 1):
   one point of the signals gate's pointer phase (2 of 87,778 answers) falls there, counted under a ceiling that can only be
   lowered (`--max-canvas-as-svg`).
+- **A `{signal}` url that changes inside the chart.** vega reloads such a dataset whenever its signal changes. `loadSpecData`
+  loads it for the value the signal has when the view starts (its own scope's signals, the host's `signals`), and
+  `useChartData` loads again when the host's `signals` change; a change made inside `<Chart>` (a bound input, an event
+  handler) does not reload, and the chart keeps the rows of the first url. Matching it needs `<Chart>` to load url data
+  itself, asynchronously, under the host's URL policy ([LIMITS.md](LIMITS.md#loading-url-data-loadspecdataspec-options)).
 - **Probes.** `packages/conformance/probes` holds two probes; both pass today and can be promoted into `corpus/`.
 - **Streaming transport.** The host owns the network and decides when to flush.
 - **Transitions on canvas.** `transition` animates the SVG renderer only; the canvas renderer and batched dense marks

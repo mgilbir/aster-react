@@ -87,7 +87,8 @@ anywhere in a render is never swallowed by a defensive `catch`: the call fails w
 | `maxGeneratedRows`, `maxGeneratedBytes` | cumulative rows / characters generated during one evaluation |
 | `maxItems`, `maxPathLength` | generated scene budget (also tick counts and generated paths) |
 | `regexSafety: ...` | a regular expression pattern with a catastrophic-backtracking shape was refused (only under `limits`) |
-| `timeoutMs`, `maxBytes`, `maxRedirects` | `loadSpecData` request caps |
+| `timeoutMs`, `maxBytes`, `maxTotalBytes`, `maxRequests`, `maxRedirects` | `loadSpecData` request caps |
+| `csv cells filled in for missing fields N > 1000000 (built-in ceiling ...)` | a delimited text whose lines are shorter than its header would fill in more cells than the ceiling (`maxGeneratedRows` replaces it); `maxRows N > M (csv rows)` is the row budget, checked as the rows are read |
 | `maxSvgLength` | serialized output budget |
 | `maxTimeMs exceeded during <phase>` | wall-clock deadline; the phase is `pre-flight`, `compile`, `evaluate`, `render`, `change`, `mark encoding`, `loadSpecData`, `regular expression` or the name of the transform that was running |
 
@@ -98,6 +99,18 @@ allowed, embedded credentials, non-public host, relative URL without `baseURL`, 
 thrown by `loadSpecData` before the request is made, and by image and `href` marks under `urlPolicy` or `limits`
 (unless `onDeny` is set, which drops the image or link instead). It is never recovered by the `logger` mechanism
 below.
+
+`loadSpecData` adds these reasons (see "Loading URL data" in `docs/LIMITS.md`):
+
+| Reason | It means |
+|---|---|
+| `loadSpecData needs an explicit URL policy for network urls: pass \`allow\` ...` | a network url with no `allow` and not on the `baseURL` origin: give an allowlist (`allowOrigins([...])`) |
+| `the response is a redirect whose target this environment hides (a browser), ...` | a browser answered `redirect: 'manual'` with an opaque redirect: the next hop cannot be vetted before it is requested, so it is not followed |
+| `the fetch followed a redirect on its own, ...` | a custom `fetch` ignored `redirect: 'manual'`; the data is refused |
+| `the redirect from <url> has a Location that is not a valid URL` / `HTTP 302 redirect without a Location` | an unusable redirect |
+
+An option of the wrong type or out of range is a `TypeError` before anything is requested: `[aster] loadSpecData: maxConcurrent must
+be an integer from 1 to Number.MAX_SAFE_INTEGER, got NaN`. `allowOrigins([...])` throws a `TypeError` for an entry with no origin.
 
 Under `urlData: 'refuse'` a spec with a url dataset is refused with an `AsterUrlError` before any add-on loads and before
 evaluation: `[aster] url denied: dataset "source_0" loads its rows from a url, and url data is not allowed here (urlData:
@@ -319,6 +332,8 @@ rows below are plain `Error`s with an `[aster]` prefix and no `code`, thrown on 
 | a geo projection used without the add-on | `[aster] this spec uses a geo projection; load the addon first: await import("@aster-charts/core/geo")` |
 | a rare transform (`kde`, `linkpath`, `treemap`, ...) without the add-on | `[aster] this spec uses the "kde" transform; load the addon first: await import("@aster-charts/core/transforms")` |
 | `csv`/`tsv`/`dsv`/`topojson` data format without the add-on | `[aster] this spec reads "csv" data; load the addon first: await import("@aster-charts/core/load")` |
+| a `format.type` no reader knows (`jsno`, `CSV`: the name is case-sensitive), with or without the add-on | `[aster] Unknown data format type: jsno` (vega's message) |
+| a malformed topology: an arc index out of range or not an integer, a `GeometryCollection` without `geometries`, an arc of fewer than two positions, a `transform` without `scale` / `translate`, a list that is not one | `[aster] topojson: <what is wrong>`, e.g. `[aster] topojson: arc index 300000000 refers to arc 300000000, but the topology has 1 arcs` (vega throws a raw `TypeError`, or walks a sparse array up to the index first) |
 | an unknown symbol `shape` (not a built-in name, not a valid SVG path) | `Invalid SVG path, incorrect parameter count` (the same message vega gives) |
 | a Vega-Lite spec without the VL add-on (`<Chart>`, `useChart`, the worker handlers) | `A Vega-Lite spec was passed but the compiler is not loaded. Add ...` followed by the import to add, `import '@aster-charts/react/vl'` (no `[aster]` prefix) |
 
@@ -355,6 +370,10 @@ reported through `onError` (the hook's `error`), and it is remembered for the pa
   vega-lite itself compiles the first three (it ignores the key or property) and crashes on the unknown mark.
 - **Safety refusals.** Limits, the regular-expression screen, the URL policy, the hard spec-depth ceiling and the
   `bin`/`stratify` refusals are Aster additions; see `docs/LIMITS.md`.
+- **A url body that is not JSON, for a dataset with no `format.type`, is an error.** The format of a url dataset is its
+  `format.type`, `json` by default (the url's extension is not read, as in vega). When the body does not parse, vega logs
+  `Data ingestion failed` and goes on with the text itself as one datum; `loadSpecData` rejects with `[aster] invalid JSON
+  data: ...`. Name the format (`format: { type: 'csv' }`).
 
 ### Known differences not yet matched
 
