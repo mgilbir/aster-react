@@ -245,10 +245,10 @@ describe('hand-made scenes: every channel of every mark holds a hostile text, an
         expect(namesAnotherDocument(shown)).toBe(false)
       }
     }
-    // the tracker shows what resolveCursor shows
+    // the tracker shows what resolveCursor shows: over an item whose cursor is a url, none (a browser fetching nothing)
     const seen: Array<string | null> = []
     createCursorTracker({ pick: () => ({ item: { cursor: 'url(https://evil.test/c.png), auto' } }), user: () => undefined, onCursor: (c) => seen.push(c) }).move(1, 1)
-    expect(seen).toEqual([])
+    expect(seen).toEqual([null])
     // control: a keyword is shown
     expect(resolveCursor('default', 'pointer')).toBe('pointer')
     expect(resolveCursor('Pointer', null)).toBe('pointer')
