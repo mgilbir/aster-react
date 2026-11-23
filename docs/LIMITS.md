@@ -203,11 +203,12 @@ recurses until the stack runs out); a dataset an event edits stays within `maxRo
 An interactive chart (`<Chart>`, or any host of `bindSceneSignals`) is meant to be safe for an untrusted spec. What a spec's
 handlers can do is bounded as follows; each point is enforced in one place and tested.
 
-- **What an expression sees of an event.** `event` is a frozen object with no prototype holding the values Vega expressions
-  observe, copied when the event is delivered (`type`, the client / page / offset / screen coordinates, `button(s)`, `key`,
-  `code`, the modifier keys, `deltaX/Y/Z/Mode`, `timeStamp`, the pointer fields, the touches as frozen copies, a timer tick's
-  `timestamp` / `elapsed`: `EVENT_FACADE_FIELDS` in `signals.ts`; `vegaType` alone is read when the expression runs, as vega
-  reads it, so a type queued behind another sees the type the event was handed over as last) plus vega's extension (`item`, the scenegraph item;
+- **What an expression sees of an event.** `event` is a frozen object whose only prototype is a frozen object of the engine's
+  (no built-in one) answering the values Vega expressions observe, read off the event when an expression reads them, as vega's
+  expressions read them, and only when they are a number, a string or a boolean (`type`, `vegaType`, the client / page / offset /
+  screen coordinates, `button(s)`, `key`, `code`, the modifier keys, `deltaX/Y/Z/Mode`, `timeStamp`, the pointer fields, the
+  touches as frozen copies, a timer tick's `timestamp` / `elapsed`: `EVENT_FACADE_FIELDS` in `signals.ts`; a type queued behind
+  another sees `vegaType` as the event was handed over last) plus vega's extension (`item`, the scenegraph item;
   `vega`, the event functions `x()`, `y()`, `xy()`, `item()`, `group()`; `dataflow`). There is no target or current target
   node, no `view` (the window), no `composedPath`, no method. Expressions cannot call what they read, cannot read an inherited
   `Object.prototype` member or a function's `prototype`, and hand no function to a built-in (`expr-interpreter.ts`), so what
