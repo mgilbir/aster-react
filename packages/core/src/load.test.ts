@@ -113,48 +113,48 @@ describe('malformed url and data', () => {
   const specWith = (data: Record<string, unknown>): VgSpec => ({ data: [data] } as unknown as VgSpec)
 
   it('surfaces HTTP failures with the dataset url and status', async () => {
-    const spec = specWith({ name: 't', url: 'https://example.test/missing.json' })
+    const spec = specWith({ name: 't', url: 'https://example.com/missing.json' })
     await expect(loadSpecData(spec, { fetch: fakeFetch('{}', 500) })).rejects.toThrow(/HTTP 500/)
   })
 
   it('rejects invalid JSON payloads', async () => {
-    const spec = specWith({ name: 't', url: 'https://example.test/data.json', format: { type: 'json' } })
+    const spec = specWith({ name: 't', url: 'https://example.com/data.json', format: { type: 'json' } })
     await expect(loadSpecData(spec, { fetch: fakeFetch('{not json') })).rejects.toThrow(/invalid JSON data/)
   })
 
   it('infers json/csv/tsv from the url extension and honors explicit types', async () => {
-    const json = specWith({ name: 't', url: 'https://example.test/data.json', format: { type: 'json', property: 'rows' } })
+    const json = specWith({ name: 't', url: 'https://example.com/data.json', format: { type: 'json', property: 'rows' } })
     const loadedJson = await loadSpecData(json, { fetch: fakeFetch('{"rows":[{"a":1},{"a":2}]}', 200) })
     expect((loadedJson.data as any)[0].values).toEqual([{ a: 1 }, { a: 2 }])
 
-    const csv = await loadSpecData(specWith({ name: 't', url: 'https://example.test/data.csv' }), { fetch: fakeFetch('a,b\n1,x\n2,y\n') })
+    const csv = await loadSpecData(specWith({ name: 't', url: 'https://example.com/data.csv' }), { fetch: fakeFetch('a,b\n1,x\n2,y\n') })
     expect((csv.data as any)[0].values).toEqual([{ a: '1', b: 'x' }, { a: '2', b: 'y' }])
 
-    const tsv = await loadSpecData(specWith({ name: 't', url: 'https://example.test/data.tsv' }), { fetch: fakeFetch('a\tb\n1\tx\n') })
+    const tsv = await loadSpecData(specWith({ name: 't', url: 'https://example.com/data.tsv' }), { fetch: fakeFetch('a\tb\n1\tx\n') })
     expect((tsv.data as any)[0].values).toEqual([{ a: '1', b: 'x' }])
 
     const explicit = await loadSpecData(
-      specWith({ name: 't', url: 'https://example.test/data.txt', format: { type: 'csv', parse: { a: 'number' } } }),
+      specWith({ name: 't', url: 'https://example.com/data.txt', format: { type: 'csv', parse: { a: 'number' } } }),
       { fetch: fakeFetch('a\n1\n2\n') },
     )
     expect((explicit.data as any)[0].values).toEqual([{ a: 1 }, { a: 2 }])
   })
 
   it('rejects unavailable readers and malformed topojson', async () => {
-    const parquet = specWith({ name: 't', url: 'https://example.test/data.json', format: { type: 'parquet' } })
+    const parquet = specWith({ name: 't', url: 'https://example.com/data.json', format: { type: 'parquet' } })
     await expect(loadSpecData(parquet, { fetch: fakeFetch('{}') })).rejects.toThrow(/load the addon first/)
 
-    const wrongTopo = specWith({ name: 't', url: 'https://example.test/topo.json', format: { type: 'topojson', feature: 'x' } })
+    const wrongTopo = specWith({ name: 't', url: 'https://example.com/topo.json', format: { type: 'topojson', feature: 'x' } })
     await expect(loadSpecData(wrongTopo, { fetch: fakeFetch('{"type":"FeatureCollection","features":[]}') }))
       .rejects.toThrow(/must be a Topology/)
 
-    const missingTarget = specWith({ name: 't', url: 'https://example.test/topo.json', format: { type: 'topojson' } })
+    const missingTarget = specWith({ name: 't', url: 'https://example.com/topo.json', format: { type: 'topojson' } })
     await expect(loadSpecData(missingTarget, { fetch: fakeFetch('{"type":"Topology","arcs":[],"objects":{}}') }))
       .rejects.toThrow(/requires "feature" or "mesh"/)
   })
 
   it('treats a missing json property as an empty dataset', async () => {
-    const spec = specWith({ name: 't', url: 'https://example.test/data.json', format: { type: 'json', property: 'nope.missing' } })
+    const spec = specWith({ name: 't', url: 'https://example.com/data.json', format: { type: 'json', property: 'nope.missing' } })
     const loaded = await loadSpecData(spec, { fetch: fakeFetch('{"rows":[{"a":1}]}') })
     expect((loaded.data as any)[0].values).toEqual([])
     const scene = evaluateChart(compileChart(loaded))
@@ -162,7 +162,7 @@ describe('malformed url and data', () => {
   })
 
   it('does not mutate the input spec and tolerates ragged csv rows', async () => {
-    const spec = specWith({ name: 't', url: 'https://example.test/data.csv', format: { type: 'csv' } })
+    const spec = specWith({ name: 't', url: 'https://example.com/data.csv', format: { type: 'csv' } })
     const before = JSON.stringify(spec)
     const loaded = await loadSpecData(spec, { fetch: fakeFetch('a,b,c\n1,2\n3,4,5,6\n') })
     expect(JSON.stringify(spec)).toBe(before)
@@ -184,11 +184,11 @@ describe('loadSpecData reads data, marks and signals as lists, as the compiler d
     fetched.length = 0
     const spec = {
       width: 40, height: 40,
-      data: { name: 'top', url: 'https://data.example/top.json' },
-      marks: { type: 'group', data: { name: 'inner', url: 'https://data.example/inner.json' }, marks: { type: 'symbol', from: { data: 'inner' } } },
+      data: { name: 'top', url: 'https://data.example.com/top.json' },
+      marks: { type: 'group', data: { name: 'inner', url: 'https://data.example.com/inner.json' }, marks: { type: 'symbol', from: { data: 'inner' } } },
     } as unknown as VgSpec
     const loaded = await loadSpecData(spec, { fetch: fetchStub })
-    expect(fetched.sort()).toEqual(['https://data.example/inner.json', 'https://data.example/top.json'])
+    expect(fetched.sort()).toEqual(['https://data.example.com/inner.json', 'https://data.example.com/top.json'])
     expect((loaded.data as Array<{ values: unknown[] }>)[0]!.values).toHaveLength(3)
     // and the loaded spec evaluates: no "has a url but no data was loaded"
     expect(() => evaluateChart(compileChart(loaded), {})).not.toThrow()
@@ -199,11 +199,11 @@ describe('loadSpecData reads data, marks and signals as lists, as the compiler d
   it('evaluates a {signal} url against signals given as a single object', async () => {
     fetched.length = 0
     const spec = {
-      signals: { name: 'file', value: 'https://data.example/s.json' },
+      signals: { name: 'file', value: 'https://data.example.com/s.json' },
       data: [{ name: 't', url: { signal: 'file' } }],
     } as unknown as VgSpec
     await loadSpecData(spec, { fetch: fetchStub })
-    expect(fetched).toEqual(['https://data.example/s.json'])
+    expect(fetched).toEqual(['https://data.example.com/s.json'])
   })
 
   it('leaves a spec without url datasets as it is', async () => {
@@ -219,7 +219,7 @@ describe('a url dataset in a group mark that nobody loaded fails as a top-level 
     marks: [{ type: 'group', ...inner }],
   } as unknown as VgSpec)
   const symbolOf = (name: string) => ({ type: 'symbol', from: { data: name }, encode: { update: { x: { field: 'x' }, y: { value: 5 } } } })
-  const nested = group({ data: [{ name: 'inner', url: 'https://data.example/inner.json' }], marks: [symbolOf('inner')] })
+  const nested = group({ data: [{ name: 'inner', url: 'https://data.example.com/inner.json' }], marks: [symbolOf('inner')] })
 
   it('throws, naming the dataset and loadSpecData, instead of drawing an empty mark', () => {
     expect(() => evaluateChart(compileChart(nested), {})).toThrow(/dataset "inner" has a url but no data was loaded for it.*loadSpecData.*in a group mark/)
@@ -228,9 +228,9 @@ describe('a url dataset in a group mark that nobody loaded fails as a top-level 
   })
 
   it('in a group of a group, and in every instance of a faceted group', () => {
-    const deep = group({ marks: [{ type: 'group', data: [{ name: 'deep', url: 'https://data.example/d.json' }], marks: [symbolOf('deep')] }] })
+    const deep = group({ marks: [{ type: 'group', data: [{ name: 'deep', url: 'https://data.example.com/d.json' }], marks: [symbolOf('deep')] }] })
     expect(() => evaluateChart(compileChart(deep), {})).toThrow(/dataset "deep"/)
-    const faceted = group({ from: { facet: { data: 'facets', name: 'f', groupby: 'g' } }, data: [{ name: 'perFacet', url: 'https://data.example/p.json' }], marks: [symbolOf('perFacet')] })
+    const faceted = group({ from: { facet: { data: 'facets', name: 'f', groupby: 'g' } }, data: [{ name: 'perFacet', url: 'https://data.example.com/p.json' }], marks: [symbolOf('perFacet')] })
     expect(() => evaluateChart(compileChart(faceted), {})).toThrow(/dataset "perFacet"/)
   })
 
@@ -242,7 +242,7 @@ describe('a url dataset in a group mark that nobody loaded fails as a top-level 
   })
 
   it('a group dataset with values or made from another is not a url dataset', () => {
-    expect(() => evaluateChart(compileChart(group({ data: [{ name: 'v', url: 'https://data.example/v.json', values: [{ x: 1 }] }], marks: [symbolOf('v')] })), {})).not.toThrow()
+    expect(() => evaluateChart(compileChart(group({ data: [{ name: 'v', url: 'https://data.example.com/v.json', values: [{ x: 1 }] }], marks: [symbolOf('v')] })), {})).not.toThrow()
     expect(() => evaluateChart(compileChart(group({ data: [{ name: 's', source: 'facets' }], marks: [symbolOf('s')] })), {})).not.toThrow()
   })
 })
