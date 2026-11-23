@@ -1,5 +1,6 @@
 import type { ChartInfo, VgSpec } from '@aster-charts/core'
 import { panIn, scaleSpace, zoomIn, type ScaleSpace } from '@aster-charts/core/lean'
+import { describeValue } from './spec.js'
 
 export interface SelectionInterval {
   x?: [number, number]
@@ -539,26 +540,19 @@ export function checkAxes<T extends { x?: [number, number]; y?: [number, number]
   value: T | null | undefined,
 ): { value: T | null | undefined; problems: string[] } {
   if (value == null) return { value, problems: [] }
-  if (typeof value !== 'object') return { value: null, problems: [`${prop} must be an object with x and/or y; got ${String(value)}`] }
+  if (typeof value !== 'object') return { value: null, problems: [`${prop} must be an object with x and/or y; got ${describeValue(value)}`] }
   const problems: string[] = []
   const out = {} as T
   for (const axis of ['x', 'y'] as const) {
     const d = (value as Record<string, unknown>)[axis]
     if (d === undefined || d === null) continue
     if (isDomainPair(d)) out[axis] = d
-    else problems.push(`${prop}.${axis} must be two finite, different numbers; got ${describeAxis(d)}`)
+    else problems.push(`${prop}.${axis} must be two finite, different numbers; got ${describeValue(d)}`)
   }
   if (problems.length === 0) return { value, problems }
   return { value: out.x != null || out.y != null ? out : null, problems }
 }
 
-const describeAxis = (d: unknown): string => {
-  try {
-    return JSON.stringify(d, (_k, v: unknown) => (typeof v === 'number' && !Number.isFinite(v) ? String(v) : v)) ?? String(d)
-  } catch {
-    return String(d)
-  }
-}
 
 /** `checkAxes` for a controlled `selection` / `select` value: its interval's axes are checked; a point value passes as it is. @internal */
 export function checkSelectValue(prop: string, value: SelectValue | null | undefined): { value: SelectValue | null | undefined; problems: string[] } {
