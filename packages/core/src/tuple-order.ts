@@ -138,15 +138,18 @@ export function carryOrder(type: unknown, input: readonly Row[], output: readonl
 
 const placing = new WeakSet<object>()
 
+/** Transforms whose `sort` breaks its ties by the order rows were made in (vega's `stableCompare`, by tuple id). */
+const SORTS = new Set(['collect', 'window', 'stack', 'pack', 'partition', 'treemap', 'tree'])
+
 /**
  * Mark the `collect`s of a dataset's transforms that leave the order behind: those that sort and have a sort (of a `collect`,
- * a `window` or a `stack`) after them. Nothing else needs it.
+ * a `window`, a `stack`, or a hierarchy layout's sort of the siblings) after them. Nothing else needs it.
  */
 export function markPlacing(transforms: ReadonlyArray<{ type?: unknown; sort?: unknown }>): void {
   let sortsAfter = false
   for (let i = transforms.length - 1; i >= 0; i--) {
     const t = transforms[i]!
-    const sorts = (t.type === 'collect' || t.type === 'window' || t.type === 'stack') && t.sort !== undefined
+    const sorts = SORTS.has(t.type as string) && t.sort !== undefined
     if (t.type === 'collect' && sorts && sortsAfter) placing.add(t)
     if (sorts) sortsAfter = true
   }
@@ -162,7 +165,7 @@ export function placesAt(transforms: ReadonlyArray<{ type?: unknown; sort?: unkn
   if (t.type !== 'collect' || t.sort === undefined) return false
   for (let i = at + 1; i < transforms.length; i++) {
     const u = transforms[i]!
-    if ((u.type === 'collect' || u.type === 'window' || u.type === 'stack') && u.sort !== undefined) return true
+    if (SORTS.has(u.type as string) && u.sort !== undefined) return true
   }
   return false
 }
