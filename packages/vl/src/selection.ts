@@ -14,6 +14,7 @@
  * repeat view puts them in its own group mark (a Vega group scope: one copy per group item), see {@link SelUnit.nested}.
  */
 import { parseEventSelectorString, type StreamDef } from './event-selector.js'
+import { dict } from './names.js'
 import {
   BRUSH, SELECTION_ID, STORE, VORONOI, asList, bindsInputs, bindsLegend, bindsScales, deepCopy, escapeFieldPath, hasContinuousDomain, isLegendStream,
   isObj, isPositionChannel, isTimerSelection, stringValue, varName,
@@ -74,7 +75,7 @@ function withConfigDefaults(select: Obj, cfg: Obj): Obj {
  * clock.
  */
 export function parseUnitSelections(unit: SelUnit, params: Obj[], config: unknown): Record<string, Selection> {
-  const byName: Record<string, Selection> = {}
+  const byName = dict<Selection>()
   const configs = selectionConfigOf(config)
   let timers = 0
   for (const param of params) {
@@ -211,8 +212,8 @@ function selectFields(unit: SelUnit, sel: Selection, written: Obj, cfg: Obj): Se
   const request = projectionRequest(sel, isObj(written.select) ? written.select : {}, init, cfg)
 
   const list: SelectedField[] = []
-  const byChannel: Record<string, SelectedField> = {}
-  const byField: Record<string, SelectedField> = {}
+  const byChannel = dict<SelectedField>()
+  const byField = dict<SelectedField>()
   const timeUnits = new Map<string, TimeUnitProjection>()
   let byRowId = false
 

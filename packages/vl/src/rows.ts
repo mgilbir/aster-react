@@ -14,7 +14,7 @@
  * spec can't reach the input. test/data-independence.test.ts counts every read of a row and deep-freezes the input.
  */
 
-import { VLCompileError } from './names.js'
+import { VLCompileError, dict } from './names.js'
 
 /** The build's environment, as bundlers write it in (`process.env.NODE_ENV`); `process` may not exist at all (an unbundled import). */
 declare const process: { env: { NODE_ENV?: string } }
@@ -35,7 +35,8 @@ const isPlain = (v: object): boolean => {
 
 /**
  * Copy `input` the way structuredClone does (shared and cyclic objects stay shared and cyclic, holes stay holes, a
- * `__proto__` key stays an own key, a value structuredClone refuses throws the same message), except for row payloads.
+ * `__proto__` key stays an own key, a value structuredClone refuses throws the same message), except for row payloads, and
+ * into `dict`s (objects that inherit no named property).
  */
 export function cloneSpecStructure(input: unknown, payloads: RowPayloads): Obj {
   if (input === null || typeof input !== 'object' || Array.isArray(input)) throw new VLCompileError('a Vega-Lite spec must be a JSON object')
@@ -63,13 +64,11 @@ export function cloneSpecStructure(input: unknown, payloads: RowPayloads): Obj {
       for (let i = 0; i < v.length; i++) if (i in v) out[i] = copy(v[i], key, '')
       return out
     }
-    const out: Obj = {}
+    // (the copy is a `dict`: a key the spec names is an own key whatever it is - `__proto__`, `constructor` - and a read of a
+    // key the spec does not have is `undefined`, never something Object.prototype holds; compile.ts makes the output ordinary again)
+    const out: Obj = dict()
     memo.set(v, out)
-    for (const k of Object.keys(v)) {
-      const value = copy((v as Obj)[k], key, k)
-      if (k === '__proto__') Object.defineProperty(out, k, { value, writable: true, enumerable: true, configurable: true })
-      else out[k] = value
-    }
+    for (const k of Object.keys(v)) out[k] = copy((v as Obj)[k], key, k)
     return out
   }
   return copy(input, '', '') as Obj
