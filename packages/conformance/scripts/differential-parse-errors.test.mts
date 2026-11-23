@@ -22,6 +22,8 @@ import { WRAPPED } from '../../core/src/guide-model.ts'
 import { asterOutcome, BAD, GOOD, GUIDE_CASES, HANDLER_SHAPES, HANDLER_SITES, randomGuide, SEMANTIC, SITES, UNBOUND_HANDLER_SITES, vegaOutcome } from './expression-sites.mts'
 
 const POOL = [...BAD, ...GOOD, ...SEMANTIC]
+/** vega's parser crashing on a site (a TypeError of its own), not refusing the spec. */
+const ORACLE_CRASH = /^Cannot read properties|is not a function$|is not iterable$/
 
 describe('an expression a spec holds is refused as vega refuses it (Aster vs real Vega)', { timeout: 120_000 }, () => {
   for (const [group, sites] of [['', SITES], ['handler: ', HANDLER_SITES], ['handler: ', UNBOUND_HANDLER_SITES]] as const) {
@@ -29,7 +31,12 @@ describe('an expression a spec holds is refused as vega refuses it (Aster vs rea
       it(`${group}${site}`, () => {
         for (const e of POOL) {
           const spec = make(e)
-          expect(asterOutcome(spec), `${site}: ${JSON.stringify(e)}`).toBe(vegaOutcome(spec))
+          const want = vegaOutcome(spec)
+          // (where vega's parser itself crashes, a TypeError of its own, Aster gives vega's outcome or, not reproducing the crash,
+          // must not crash itself: docs/ARCHITECTURE.md, "Oracle crashes")
+          const got = asterOutcome(spec)
+          if (got !== want && ORACLE_CRASH.test(want)) expect(got, `${site}: ${JSON.stringify(e)} (vega crashed: ${want})`).not.toMatch(ORACLE_CRASH)
+          else expect(got, `${site}: ${JSON.stringify(e)}`).toBe(want)
         }
       })
     }
