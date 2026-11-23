@@ -22,7 +22,7 @@
  * (`{ year: null }`) skips that unit instead of looping forever.
  */
 import { array, error, extend, hasOwnProperty, ownGet, peek, toSet } from './util.js'
-import { allotGrowing } from './limits.js'
+import { allotGrowing, allotUpTo } from './limits.js'
 
 // --- durations ----------------------------------------------------------------------------
 
@@ -43,10 +43,10 @@ export interface TimeInterval {
   round(date: Date): Date
   offset(date: Date, step?: number): Date
   /**
-   * The instants from `start` (rounded up) to before `stop`. The output is bounded as it grows ({@link allotGrowing}), as `items`:
-   * the ticks a guide draws, or an expression's `timeSequence` / `utcSequence` (`what` names which in the error).
+   * The instants from `start` (rounded up) to before `stop`, bounded before and as they are made: as `items` (the default, the
+   * ticks a guide draws) or as `rows` (an expression's `timeSequence` / `utcSequence`, an array like `sequence`).
    */
-  range(start: unknown, stop: unknown, step?: number, what?: string): Date[]
+  range(start: unknown, stop: unknown, step?: number, budget?: 'items' | 'rows'): Date[]
   filter(test: (date: Date) => boolean): TimeInterval
   count?(start: unknown, end: unknown): number
   every?(step: number): TimeInterval | null
@@ -100,14 +100,17 @@ function makeInterval(unit: Unit): TimeInterval {
     unit.shift(copy, step == null ? 1 : Math.floor(step))
     return copy
   }
-  interval.range = (start, stop, step, what = 'time ticks') => {
+  interval.range = (start, stop, step, budget = 'items') => {
     const out: Date[] = []
     const cursor = ceil(start)
     const stride = step == null ? 1 : Math.floor(step)
     if (!(cursor < (stop as Date)) || !(stride > 0)) return out
-    // the count is known only as the range is made: it is bounded while it grows (the built-in ceiling, with or without limits,
-    // and the active budget), since a 1 ms interval over decades would otherwise allocate without end
-    const grown = allotGrowing('items', what)
+    // bounded before it is made where the interval can count its units (at most that many instants, every `stride`th one: a
+    // range of more is refused at once), and while it grows in any case (an interval of every k-th unit cannot count), since a
+    // 1 ms interval over decades would otherwise allocate without end
+    const what = budget === 'items' ? 'time ticks' : 'time sequence'
+    if (interval.count) allotUpTo(budget, Math.floor(interval.count(cursor, stop as Date) / stride), what)
+    const grown = allotGrowing(budget, what)
     let previous: Date
     do {
       out.push(previous = new Date(+cursor))
@@ -530,9 +533,9 @@ export const utcOffset = (unit: string, date: unknown, step: number): Date | und
   utcIntervalFor(unit)?.offset(date as Date, step)
 
 export const timeSequence = (unit: string, start: unknown, stop: unknown, step?: number): Date[] | undefined =>
-  timeIntervalFor(unit)?.range(start, stop, step, 'timeSequence')
+  timeIntervalFor(unit)?.range(start, stop, step, 'rows')
 export const utcSequence = (unit: string, start: unknown, stop: unknown, step?: number): Date[] | undefined =>
-  utcIntervalFor(unit)?.range(start, stop, step, 'utcSequence')
+  utcIntervalFor(unit)?.range(start, stop, step, 'rows')
 
 // --- floors to a unit list ------------------------------------------------------------------------------------
 
