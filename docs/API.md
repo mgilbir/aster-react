@@ -406,8 +406,9 @@ spec's url datasets (top level and nested groups, in document order), and `check
 vega's `setRandom`: expression `random()`, `sampleNormal` / `sampleLogNormal` / `sampleUniform`, the `sample` transform and the
 bootstrap `ci0` / `ci1` aggregate ops draw from it, one number per draw, in vega's order and count, so a host that gives Aster and
 vega the same seeded generator gets the same numbers. The engine touches no global: without `random`, expressions use
-`Math.random` and `sample` / `ci` the engine's own seeded stream. The evaluator reaches a fixed point (it builds datasets and
-resolves signals more than once), so a source is consumed once per transform or signal *run*: a site whose inputs (its rows, its
+`Math.random` and `sample` / `ci` the engine's own seeded stream. The evaluator settles datasets, scales and signals round by round (it may build
+datasets more than once; a signal's update runs again only when what it reads changed), so a source is consumed once per transform
+or signal *run*: a site whose inputs (its rows, its
 parameters, the signals it mentions) are unchanged replays the numbers it drew, as vega's dataflow does not rerun an operator whose
 inputs did not change; one whose inputs changed draws the next ones. The `<Chart random>` prop forwards it (pass one generator for
 the life of the chart); a function cannot cross a worker boundary, so the worker protocol does not carry it.
