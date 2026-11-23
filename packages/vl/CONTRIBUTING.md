@@ -10,7 +10,7 @@ to debug a failing conformance case end to end is in [docs/RUNBOOK.md](../../doc
 |---|---|
 | `compile` never mutates its input | `compile.ts` clones the spec once, up front; every later edit lands on the private copy |
 | Unsupported or invalid input throws a `VLCompileError` naming the feature and its path | `validate.ts`: allow-lists derived from one table each, shared message templates; it runs before anything is compiled |
-| Composition nesting | `SUPPORTED_NESTING` in `validate.ts` (parent kind to the child kinds that are implemented; today it equals the schema's `SCHEMA_CHILDREN`; the nestings the compiler still refuses are individual checks listed under "Throws") |
+| Composition nesting | `NESTING` in `validate.ts` (parent kind to the child kinds it takes: the schema's, and what vega-lite compiles beyond it; the compiler implements all of them, and the nestings it still refuses are individual checks listed under "Throws") |
 | Field names never reach an expression or a generated name unescaped | `names.ts`: every place that lets a user-supplied field name into an expression string, a generated field name or a signal name goes through it |
 | Marks and channels | `compile.ts` (the unit compiler), `channels.ts` (which marks draw which channels), `orient.ts`, `scaletype.ts`, `scaleprops.ts`, `scaleconfig.ts`, `titles.ts` |
 | Composite marks (boxplot, errorbar, errorband), overlays | `composite-marks.ts`, `composite.ts` |

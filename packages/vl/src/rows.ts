@@ -24,6 +24,12 @@ type Obj = Record<string, unknown>
 /** The user's row payloads a copy carries by reference. */
 export type RowPayloads = Set<object>
 
+/**
+ * How deep a spec may nest (objects and arrays, the rows aside): what compile walks is bounded, so a spec nested past it is a
+ * VLCompileError, never a stack overflow (docs/LIMITS.md; core's pre-flight ceiling, HARD_MAX_SPEC_DEPTH, is the same).
+ */
+export const MAX_SPEC_DEPTH = 1000
+
 /** Rows: the `values` of a `data` object (a view's `data`, a lookup's `from.data`) and every entry of `datasets`. */
 const isPayload = (parentKey: string, key: string): boolean => (parentKey === 'data' && key === 'values') || parentKey === 'datasets'
 
@@ -41,11 +47,29 @@ const isPlain = (v: object): boolean => {
 export function cloneSpecStructure(input: unknown, payloads: RowPayloads): Obj {
   if (input === null || typeof input !== 'object' || Array.isArray(input)) throw new VLCompileError('a Vega-Lite spec must be a JSON object')
   const memo = new Map<object, unknown>()
+  // (the objects being copied, from the root down to here: one met again among them is a cycle)
+  const open = new Set<object>()
+  let depth = 0
   const copy = (v: unknown, parentKey: string, key: string): unknown => {
     if (v !== null && typeof v === 'object' && isPayload(parentKey, key)) {
       payloads.add(v)
       return v
     }
+    if (v !== null && typeof v === 'object') {
+      if (open.has(v)) throw new VLCompileError('a Vega-Lite spec cannot contain itself (it holds a cycle)')
+      if (depth >= MAX_SPEC_DEPTH) throw new VLCompileError(`a Vega-Lite spec nested deeper than ${MAX_SPEC_DEPTH} is not supported`)
+    }
+    if (v === null || typeof v !== 'object' || memo.has(v)) return copyValue(v, parentKey, key)
+    open.add(v)
+    depth++
+    try {
+      return copyValue(v, parentKey, key)
+    } finally {
+      depth--
+      open.delete(v)
+    }
+  }
+  const copyValue = (v: unknown, parentKey: string, key: string): unknown => {
     if (v === null || typeof v !== 'object') {
       // (structuredClone refuses functions and symbols wherever they are)
       if (typeof v === 'function' || typeof v === 'symbol') return structured(v)
