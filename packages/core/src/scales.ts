@@ -6,7 +6,9 @@
  * What callers observe, and so what is fixed here:
  * - a continuous scale over colours is the sequential scale for two domain values and the diverging scale for three
  *   (a middle value counts as the third), whichever name the spec gave it; `sequential` is the linear one;
- * - an option whose name is a method of the scale is called with its value, in spec order; one that is not is ignored;
+ * - an option whose name is a method of the scale is called with its value, in spec order; one that is not is warned about
+ *   (`Unsupported scale property: <name>`) and ignored, and a name every object or function inherits is ignored silently;
+ * - the type is a registered name as written: `BAND` is an unrecognized type, not a band scale;
  * - linear, pow and sqrt scales include zero unless told not to or binned; a domain padded in pixels is widened so the
  *   extremes sit that far inside the range, in the scale's own space (log, power, symlog);
  * - a scheme names a list of colours or a ramp: ramps become a colour list for discretizing scales (quantized to the scale's
@@ -21,7 +23,8 @@ import { implicit as scaleImplicit } from './scale-discrete.js'
 import { plain, plainList, plainRecord, resolveDomain, signalValue, type ScaleContext } from './scale-domain.js'
 import type { CompiledScale } from './types.js'
 import { vegaDefaultConfig } from './config-defaults.js'
-import { error as raise, expT, hasOwnProperty, isArray, isFunction, isObject, isString, logT, peek, powT, symexpT, symlogT } from './util.js'
+import { stringValue } from './spec-structure.js'
+import { error as raise, hasOwnProperty, isArray, isFunction, isObject, isString, peek, zoomLinear, zoomLog, zoomPow, zoomSymlog } from './util.js'
 import { allot, allotArray } from './limits.js'
 
 export type { ScaleContext } from './scale-domain.js'
@@ -103,15 +106,30 @@ export function scaleOfSettings(st: Settings, ctx: ScaleContext): Scale {
   for (const key of Object.keys(st)) {
     if (HANDLED.has(key)) continue
     if (key === 'padding' && padsDomain(scale.type)) continue
-    if (typeof scale[key] === 'function') (scale[key] as (v: unknown) => unknown)(st[key])
+    applyOption(scale, key, st[key], ctx)
   }
 
   // an operator whose settings did not change does not run again: the scale of the pass before is the scale
   const signature = ctx.pass !== undefined ? settingsKey(st) : ''
   if (ctx.pass?.prev?.bins === true && ctx.pass.prev.key !== signature) scale.bins = []
-  fitRange(scale, st, fitBins(scale, st, fitDomain(scale, st)))
+  fitRange(scale, st, fitBins(scale, st, fitDomain(scale, st, ctx)))
   ctx.pass?.record(signature, !!scale.bins)
   return scale
+}
+
+/**
+ * Apply one spec option to `scale`: an option is a method of the scale itself (its own member), called with the value. A name the
+ * scale has no method of its own for is not applied and is warned about, as vega does, except a name every object has (`toString`,
+ * `constructor`, ...: vega's parser never passes those on) or a member every function inherits (`apply`, `bind`, ...): neither is
+ * an option, and neither is ever called, so no spec text can reach the `Function` constructor.
+ */
+function applyOption(scale: Scale, key: string, value: unknown, ctx: ScaleContext): void {
+  if (key in Object.prototype) return
+  const own = Object.hasOwn(scale, key)
+  // (reading an inherited `caller` or `arguments` is the TypeError vega's own read of it raises)
+  const member: unknown = scale[key]
+  if (own && typeof member === 'function') (member as (v: unknown) => unknown).call(scale, value)
+  else if (own || member === undefined) ctx.warn?.(`Unsupported scale property: ${key}`)
 }
 
 let unsigned = 0
@@ -166,10 +184,20 @@ function includesZero(scale: Scale): boolean {
   return !scale.bins && (type === vs.Linear || type === vs.Pow || type === vs.Sqrt)
 }
 
+/** A log scale's domain must not reach zero or change sign: vega warns, and uses it as it is. */
+function checkedDomain<T extends unknown[]>(type: string, domain: T, ctx: ScaleContext): T {
+  if (vs.isLogarithmic(type)) {
+    let signs = 0
+    for (const v of domain) signs += (v as number) < 0 ? -1 : (v as number) > 0 ? 1 : 0
+    if (Math.abs(signs) !== domain.length) ctx.warn?.(`Log scale domain includes zero: ${stringValue(domain)}`)
+  }
+  return domain
+}
+
 /** Sets the domain on the scale; returns how many values it has. */
-function fitDomain(scale: Scale, st: Settings): number {
+function fitDomain(scale: Scale, st: Settings, ctx: ScaleContext): number {
   if (st.domainRaw) {
-    scale.domain(st.domainRaw)
+    scale.domain(checkedDomain(scale.type, st.domainRaw as unknown[], ctx))
     return (st.domainRaw as unknown[]).length
   }
 
@@ -190,7 +218,9 @@ function fitDomain(scale: Scale, st: Settings): number {
     if (st.domainMax != null) domain[last] = st.domainMax
     if (st.domainMid != null) {
       const mid = st.domainMid as number
-      domain.splice(mid > (domain[last] as number) ? last + 1 : mid < (domain[0] as number) ? 0 : last, 0, mid)
+      const at = mid > (domain[last] as number) ? last + 1 : mid < (domain[0] as number) ? 0 : last
+      if (at !== last) ctx.warn?.('Scale domainMid exceeds domain min or max.', mid)
+      domain.splice(at, 0, mid)
     }
   }
 
@@ -198,42 +228,32 @@ function fitDomain(scale: Scale, st: Settings): number {
     domain = insetDomain(type, domain, st.range as number[], st.padding as number, st.exponent as number | undefined, st.constant as number | undefined)
   }
 
-  scale.domain(domain)
+  scale.domain(checkedDomain(type, domain, ctx))
   // a discrete domain that was given outright must not grow by looking values up
   if (type === vs.Ordinal) scale.unknown(st.domainImplicit ? scaleImplicit : undefined)
   if (st.nice && scale.nice) scale.nice((st.nice !== true && vs.tickCount(scale, st.nice)) || null)
   return domain.length
 }
 
-/** A domain whose ends sit `pad` pixels inside the range once drawn: zoomed out about its middle, in the scale's own space. */
+/**
+ * A domain whose ends sit `pad` pixels inside the range once drawn: zoomed out about its middle, in the scale's own space (an empty
+ * domain is an error, and a missing end reads as zero, as vega's zoom has it).
+ */
 function insetDomain(type: string, domain: unknown[], range: number[], pad: number, exponent?: number, constant?: number): unknown[] {
   const span = Math.abs((peek(range) as number) - range[0]!)
   const factor = span / (span - 2 * pad)
+  const ends = domain as number[]
   const [lo, hi] =
-    type === vs.Log ? zoomed(domain as number[], factor, ...logSpace(Math.sign(domain[0] as number)))
-    : type === vs.Sqrt ? zoomed(domain as number[], factor, ...powerSpace(0.5))
-    : type === vs.Pow ? zoomed(domain as number[], factor, ...powerSpace(exponent || 1))
-    : type === vs.Symlog ? zoomed(domain as number[], factor, ...symlogSpace(constant || 1))
-    : zoomed(domain as number[], factor, Number, (x) => x)
+    type === vs.Log ? zoomLog(ends, null, factor)
+    : type === vs.Sqrt ? zoomPow(ends, null, factor, 0.5)
+    : type === vs.Pow ? zoomPow(ends, null, factor, exponent || 1)
+    : type === vs.Symlog ? zoomSymlog(ends, null, factor, constant || 1)
+    : zoomLinear(ends, null, factor)
   const out = domain.slice()
   out[0] = lo
   out[out.length - 1] = hi
   return out
 }
-
-type Unary = (x: number) => number
-
-/** The two ends of `domain`, moved from their middle by `factor` as seen through `lift` (undone by `ground`). */
-function zoomed(domain: number[], factor: number, lift: Unary, ground: Unary): [number, number] {
-  const a = lift(domain[0]!)
-  const b = lift(peek(domain) as number)
-  const middle = (a + b) / 2
-  return [ground(middle + (a - middle) * factor), ground(middle + (b - middle) * factor)]
-}
-
-const logSpace = (sign: number): [Unary, Unary] => [logT(sign), expT(sign)]
-const powerSpace = (e: number): [Unary, Unary] => [powT(e), powT(1 / e)]
-const symlogSpace = (c: number): [Unary, Unary] => [symlogT(c), symexpT(c)]
 
 // ---- the bins ---------------------------------------------------------------------------------------------
 
@@ -438,6 +458,9 @@ function resolveRange(spec: CompiledScale, ctx: ScaleContext, into: Settings, us
 /** What a spec says, resolved against the signals and data of `ctx`. */
 export function readSettings(spec: CompiledScale, ctx: ScaleContext): Settings {
   const type = spec.type || 'linear'
+  // the type is a registered name exactly as written, checked before anything else is read (the registry name the builder looks
+  // up is lower-cased, but `BAND` is no type)
+  if (!vs.isValidScaleType(type)) raise(`Unrecognized scale type: ${JSON.stringify(type)}`)
   // the spec itself, read as `type`-defaulted: copying it per build costs more than building a literal scale
   const s = (spec.type ? spec : { ...spec, type }) as CompiledScale & Record<string, unknown>
   // a plain object: keys come from the spec and are copied below with `__proto__` refused, and nothing reads a name the
