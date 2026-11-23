@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { compileChart, evaluateChart, renderSceneToSvg, type VgSpec } from './index.js'
 import { createChartSession } from './session.js'
-import { buildPulseGraph, diffRows, propagatePulse } from './pulse.js'
+import { diffRows } from './pulse.js'
 
 const spec = {
   width: 200, height: 100, padding: 0, autosize: 'none',
@@ -22,23 +22,9 @@ describe('pulse graph', () => {
     expect(diffRows([{ a: 1 }], [{ a: 2 }, { a: 3 }])?.sameLength).toBe(false)
   })
 
-  it('builds source/target edges and propagates to marks', () => {
-    const chart = compileChart({
-      ...spec,
-      // the scale must not name the data set this spec no longer declares (vega.parse refuses that)
-      scales: [{ name: 'x', type: 'band', domain: ['a', 'b', 'c'], range: [0, 200] }, { name: 'y', type: 'linear', domain: [0, 4], range: [100, 0] }],
-      data: [
-        { name: 'src', values: [{ g: 'a', v: 1 }] },
-        { name: 'filtered', source: 'src', transform: [{ type: 'filter', expr: 'datum.v > 0' }] },
-      ],
-      marks: [{ type: 'symbol', from: { data: 'filtered' }, encode: { update: { x: { value: 1 }, y: { value: 1 } } } }],
-    } as unknown as VgSpec)
-    const graph = buildPulseGraph(chart)
-    expect(graph.nodes.get('src')?.downstream).toEqual(['filtered'])
-    expect(graph.nodes.get('filtered')?.marks).toEqual(['marks'])
-    const p = propagatePulse(graph, ['src'])
-    expect([...p.datasets].sort()).toEqual(['filtered', 'src'])
-    expect([...p.marks]).toEqual(['marks'])
+  it('the structural pulse graph is not public: it never was the engine\'s dataflow (C283)', async () => {
+    const core = await import('./index.js') as Record<string, unknown>
+    for (const name of ['buildPulseGraph', 'propagatePulse', 'transformNeedsFullRederive']) expect(name in core, name).toBe(false)
   })
 })
 

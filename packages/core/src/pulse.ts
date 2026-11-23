@@ -3,22 +3,19 @@
  *
  * Vega's runtime is a pulse graph: a source dataset emits a change tuple, each
  * transform propagates it to its targets, and only the dirty marks re-encode.
- * Aster evaluates eagerly, but the same graph is useful for two things:
- *
- * - inferring a source pulse automatically when a host hands over new immutable
- *   row arrays (no explicit `dataChanges` needed), and
- * - naming the downstream datasets/marks and whether a transform can consume a
- *   row-wise pulse or needs a full re-derive.
+ * Aster evaluates eagerly; what it takes from pulses is inferring a source pulse
+ * automatically when a host hands over new immutable row arrays (no explicit
+ * `dataChanges` needed), which the evaluation then follows through the steps
+ * (incremental-engine.ts).
  *
  * A pulse carries more than the changed indices: length-changing updates
  * (append/insert/delete) also carry an index mapping (`from`/`to`) and the
  * added/removed ranges. Downstream transforms and marks use that mapping to
  * splice their cached rows/items instead of rebuilding the world.
  *
- * The graph is structural and cached on the compiled chart; pulses are plain
- * data so hosts can inspect them in tests/devtools.
+ * Pulses are plain data so hosts can inspect them in tests/devtools.
  */
-import type { CompiledChart, CompiledData, CompiledMark, CompiledTransform } from './types.js'
+import type { CompiledData } from './types.js'
 
 /** A contiguous range `[start, end)` in an array. */
 export type PulseRange = [number, number]
@@ -55,35 +52,7 @@ export interface RowDiff {
   baseLength?: number
 }
 
-const ROWWISE = new Set<string>([
-  'formula', 'identifier', 'timeunit',
-  // 1:1 geo transforms: each output row depends only on its own input row.
-  'geoshape', 'geopath', 'geopoint', 'linkpath', 'project', 'geojson',
-])
 const GROUPED = new Set<string>(['aggregate', 'joinaggregate', 'window', 'stack'])
-/** Transforms whose output row count/order is independent of the input order. */
-const EXPANDING = new Set<string>([
-  'fold', 'flatten', 'pivot', 'geojson', 'geopoint', 'geoshape', 'geopath', 'contour', 'linkpath',
-  'kde', 'quantile', 'regression', 'loess', 'nest', 'pack', 'partition', 'treemap', 'tree', 'treelinks', 'force', 'kde2d', 'isocontour', 'wordcloud',
-  'voronoi', 'cross', 'countpattern', 'dotbin', 'project', 'label', 'stratify', 'sequence',
-  'graticule',
-])
-
-/**
- * Transforms that emit exactly one output row per input row, in input order,
- * even when the output values depend on the whole dataset (pie angles, dotbin
- * bins, hierarchical layout). Their output can be spliced by index.
- */
-const INDEX_PRESERVING = new Set<string>([
-  'formula', 'identifier', 'timeunit', 'geoshape', 'geopath', 'geopoint', 'linkpath', 'project',
-  'geojson', 'label', 'heatmap', 'pie', 'dotbin', 'pack', 'partition', 'treemap', 'tree', 'voronoi',
-])
-
-/** Transforms that re-derive every output but never change the input mapping. */
-const STABLE_ROW_COUNT = new Set<string>([
-  ...INDEX_PRESERVING,
-  'extent', 'stratify',
-])
 
 /**
  * The rows of a dataset value, when every one is an object: rows are compared field by field, and a value that is not an object
@@ -332,114 +301,10 @@ export interface DataPulse {
   structural: Set<string>
 }
 
-export interface PulseNode {
-  name: string
-  /** The dataset this one derives from (the first, when it derives from several: see `sources`). */
-  source?: string
-  sources?: string[]
-  transforms: string[]
-  downstream: string[]
-  marks: string[]
-  /** False when a transform changes row count/order and needs a full re-derive. */
-  rowWise: boolean
-  /** True when every transform preserves the input row index (mapping-spliceable). */
-  indexPreserving: boolean
-}
-
-export interface PulseGraph {
-  nodes: Map<string, PulseNode>
-  /** Source dataset -> mark names drawing from it (directly or via groups). */
-  markSources: Map<string, string[]>
-}
-
 /** The names a dataset derives from: its `source`, one name or a list (vega-parser: `array(data.source)`). */
 export function sourceNames(d: CompiledData): string[] {
   const s = d.source
   return s === undefined || s === '' ? [] : Array.isArray(s) ? s : [s]
-}
-
-function transformsOf(d: CompiledData): CompiledTransform[] {
-  return d.transform ?? []
-}
-
-function isRowWise(d: CompiledData): boolean {
-  return transformsOf(d).every((t) => ROWWISE.has(String(t.type)))
-}
-
-function isIndexPreserving(d: CompiledData): boolean {
-  return transformsOf(d).every((t) => STABLE_ROW_COUNT.has(String(t.type)) || t.type === 'filter'
-    || t.type === 'fold' || t.type === 'flatten' || t.type === 'aggregate'
-    || t.type === 'joinaggregate' || t.type === 'window' || t.type === 'stack')
-}
-
-/** Build the structural dataflow graph for a compiled chart. */
-export function buildPulseGraph(chart: CompiledChart): PulseGraph {
-  const nodes = new Map<string, PulseNode>()
-  for (const d of chart.data) {
-    nodes.set(d.name, {
-      name: d.name,
-      source: sourceNames(d)[0],
-      ...(sourceNames(d).length > 1 ? { sources: sourceNames(d) } : {}),
-      transforms: transformsOf(d).map((t) => String(t.type)),
-      downstream: [],
-      marks: [],
-      rowWise: isRowWise(d),
-      indexPreserving: isIndexPreserving(d),
-    })
-  }
-  for (const node of nodes.values()) {
-    for (const src of node.sources ?? (node.source ? [node.source] : [])) if (nodes.has(src)) nodes.get(src)!.downstream.push(node.name)
-  }
-  const markSources = new Map<string, string[]>()
-  const walkMarks = (marks: CompiledMark[] | undefined): void => {
-    for (const m of marks ?? []) {
-      const src = (m.from as { data?: string } | undefined)?.data
-      if (src) {
-        const list = markSources.get(src) ?? []
-        if (!list.includes(m.name ?? m.type)) list.push(m.name ?? m.type)
-        markSources.set(src, list)
-        const node = nodes.get(src)
-        if (node && m.name && !node.marks.includes(m.name)) node.marks.push(m.name)
-      }
-      const nested = (m as { marks?: CompiledMark[] }).marks
-      if (nested) walkMarks(nested)
-    }
-  }
-  walkMarks(chart.marks)
-  return { nodes, markSources }
-}
-
-export interface PulsePropagation {
-  datasets: Set<string>
-  marks: Set<string>
-  /** Datasets whose transform chain cannot consume row-wise changes. */
-  fullRederive: Set<string>
-}
-
-/** Propagate a source pulse through the graph (including derived sources). */
-export function propagatePulse(graph: PulseGraph, changed: Iterable<string>): PulsePropagation {
-  const datasets = new Set<string>()
-  const marks = new Set<string>()
-  const fullRederive = new Set<string>()
-  const queue = [...changed]
-  while (queue.length) {
-    const name = queue.shift()!
-    if (datasets.has(name)) continue
-    datasets.add(name)
-    const node = graph.nodes.get(name)
-    if (!node) continue
-    for (const m of node.marks) marks.add(m)
-    if (!node.rowWise) fullRederive.add(name)
-    for (const next of node.downstream) {
-      if (!datasets.has(next)) queue.push(next)
-    }
-  }
-  return { datasets, marks, fullRederive }
-}
-
-/** True when a transform chain contains a row-expanding/reordering operator. */
-export function transformNeedsFullRederive(types: string[]): boolean {
-  return types.some((t) => EXPANDING.has(t) && !STABLE_ROW_COUNT.has(t))
 }
 
 /** Grouped transforms (aggregate/window/stack) consume dirty groups in place. */
