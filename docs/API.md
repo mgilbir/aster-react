@@ -616,7 +616,9 @@ batching (default 512 items). `options` (`DomRenderOptions`) are `denseMarks` an
 `chartSkeleton(spec)` serializes a spec without its top-level datasets' inline values: two specs with the same skeleton compile to the
 same chart, so a host can tell "same chart, new rows" from "a different chart" (`<Chart>` keeps live state for the first and
 starts afresh for the second); `translatePathData(d, dx, dy)` shifts every absolute coordinate of an SVG path string by `(dx, dy)`,
-copying arguments that do not move (relative deltas, arc radii and flags) verbatim.
+reading the text with the engine's path grammar (vega's: `.5.5` is two numbers, arc flags need no separator, a first `m` is
+absolute) and copying arguments that do not move (relative deltas, arc radii and flags) as read; a malformed path is written as far as
+it reads, which is as far as a browser draws it.
 
 #### `@aster-charts/core/transition`
 

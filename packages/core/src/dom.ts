@@ -18,6 +18,7 @@ import { ClipCollector } from './svg-defs.js'
 import { isEngineNode, keptInto } from './scene-registry.js'
 import { getTextMetricsProvider } from './text-metrics.js'
 import { formatEnvironmentKey } from './locale.js'
+import { drawnPathCommands } from './path-data.js'
 import { symbolGeometry, type PathData, type SymbolGeometry } from './geometry.js'
 import {
   PairAttrSink,
@@ -91,93 +92,53 @@ export interface DomDesc {
   dense?: boolean
 }
 
-/**
- * Translate every absolute coordinate in an SVG path by (dx, dy). Relative
- * commands are deltas and need no change. Used by the dense-mark batcher to
- * bake a symbol's position into its `d` instead of emitting a per-item
- * `transform` (Chrome makes transformed SVG nodes ~3x more expensive to
- * mutate: 145ms vs 45ms per append in a 100k-node scene).
- */
 function round3(v: number): string {
   const r = Math.round(v * 1000) / 1000
   return Object.is(r, -0) ? '0' : String(r)
 }
 
-/** True for a letter (SVG path command); numbers never start with one. */
-function isLetter(c: number): boolean {
-  return (c >= 65 && c <= 90) || (c >= 97 && c <= 122)
-}
-
-function isDigit(c: number): boolean {
-  return c >= 48 && c <= 57
-}
-
 /**
- * Translate every absolute coordinate in an SVG path by (dx, dy). Relative
- * commands are deltas and need no change, and arguments that do not move
- * (arc radii/flags, relative deltas) are copied verbatim instead of being
- * parsed and reformatted — a 100k-symbol dense mount spends ~170ms here, so
- * this is a hand-written scanner rather than a regex tokenizer.
+ * Translate every absolute coordinate in an SVG path by (dx, dy), and write the path as the commands the text holds. Relative
+ * commands are deltas and need no change; the one exception is a path's first moveto, which SVG defines as absolute even when
+ * written `m` (its extra pairs are relative linetos). The text is read by the engine's own reader of path text (`drawnPathCommands`:
+ * vega's grammar, so `.5.5` is two numbers, an arc's flags need no separator, `1e1` is ten), and as far as it reads: what a
+ * malformed path holds after its first error is not drawn by a browser and is not written. Arguments that do not move (arc radii,
+ * rotation and flags, relative deltas) are written as read. The reader caches per text, so a symbol shape shared by 100k items is
+ * read once. Used by the dense-mark batcher to bake a symbol's position into its `d` instead of emitting a per-item `transform`
+ * (Chrome makes transformed SVG nodes ~3x more expensive to mutate: 145ms vs 45ms per append in a 100k-node scene).
  */
 export function translatePathData(d: string, dx: number, dy: number): string {
   if (!d || (dx === 0 && dy === 0)) return d
   let out = ''
-  let cmd = '' // current command letter ('' before the first one)
-  let argi = 0
-  let afterCommand = true
-  const n = d.length
-  let i = 0
-  while (i < n) {
-    const c = d.charCodeAt(i)
-    if (isLetter(c)) {
-      cmd = d[i]!
-      argi = 0
-      afterCommand = true
-      out += cmd
-      i++
-      continue
-    }
-    if (c === 44 || c === 32 || c === 9 || c === 10 || c === 13) { i++; continue } // , space 	 
- 
-    // A number token: [+-]? digits ('.' digits)? ([eE][+-]?digits)?
-    const start = i
-    if (c === 45 || c === 43) i++
-    while (i < n && (isDigit(d.charCodeAt(i)) || d.charCodeAt(i) === 46)) i++
-    if (i < n && (d.charCodeAt(i) === 101 || d.charCodeAt(i) === 69)) {
-      i++
-      if (i < n && (d.charCodeAt(i) === 43 || d.charCodeAt(i) === 45)) i++
-      while (i < n && isDigit(d.charCodeAt(i))) i++
-    }
-    const relative = cmd !== '' && cmd === cmd.toLowerCase()
-    // Which argument of which command moves?
-    let moves = false
-    let axisX = true
-    if (!relative) {
-      switch (cmd) {
-        case 'A':
-          // rx ry rotation large-arc sweep x y — only the endpoint moves.
-          if (argi === 5) moves = true
-          else if (argi === 6) { moves = true; axisX = false }
-          break
-        case 'H':
-          if (argi === 0) moves = true
-          break
-        case 'V':
-          if (argi === 0) { moves = true; axisX = false }
-          break
-        default:
-          moves = true
-          if (argi % 2 === 1) axisX = false
-      }
-    }
-    if (moves) {
-      const v = Number(d.slice(start, i))
-      out += (afterCommand ? '' : ',') + round3(axisX ? v + dx : v + dy)
+  let prev = '' // the letter the last command was written with, so a repeat of it can share it
+  let first = true
+  for (const c of drawnPathCommands(d)) {
+    const letter = c[0]
+    const type = letter.toLowerCase()
+    // (a first `m` is absolute: it is read from the origin, where a relative moveto and an absolute one agree)
+    const absolute = letter === letter.toUpperCase() || (first && type === 'm')
+    first = false
+    if (letter === prev && type !== 'm' && type !== 'z') {
+      out += ','
     } else {
-      out += (afterCommand ? '' : ',') + d.slice(start, i)
+      out += letter
+      prev = letter
     }
-    afterCommand = false
-    argi++
+    for (let k = 1; k < c.length; k++) {
+      const v = c[k] as number
+      if (k > 1) out += ','
+      let moves = false
+      let axisX = true
+      if (absolute) {
+        switch (type) {
+          case 'a': moves = k >= 6; axisX = k === 6; break // rx ry rotation large-arc sweep x y: only the endpoint moves
+          case 'h': moves = true; break
+          case 'v': moves = true; axisX = false; break
+          default: moves = true; axisX = k % 2 === 1
+        }
+      }
+      out += moves ? round3(v + (axisX ? dx : dy)) : String(v)
+    }
   }
   return out
 }
