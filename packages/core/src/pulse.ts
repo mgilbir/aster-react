@@ -85,8 +85,18 @@ const STABLE_ROW_COUNT = new Set<string>([
   'extent', 'stratify',
 ])
 
+/**
+ * The rows of a dataset value, when every one is an object: rows are compared field by field, and a value that is not an object
+ * (a primitive row, which the engine wraps as `{data: value}`) has no fields to compare, so a dataset holding one is not diffed
+ * (it is replaced as a whole).
+ */
 function asRows(v: unknown): Record<string, unknown>[] | null {
-  return Array.isArray(v) && (v.length === 0 || (v[0] != null && typeof v[0] === 'object')) ? v as Record<string, unknown>[] : null
+  if (!Array.isArray(v)) return null
+  for (let i = 0; i < v.length; i++) {
+    const row: unknown = v[i]
+    if (row === null || typeof row !== 'object') return null
+  }
+  return v as Record<string, unknown>[]
 }
 
 /**
@@ -132,9 +142,13 @@ function sameValueAt(a: unknown, b: unknown, depth: number): boolean {
   return sameNested(a, b, depth)
 }
 
-/** Row equality: the same own fields, each `equalCell`. */
+/**
+ * Row equality: the same own fields, each `equalCell` (a field one row lacks is not the other's `undefined` field). A row that is
+ * not an object is a value, compared as a cell is.
+ */
 export function rowsEqual(a: Record<string, unknown>, b: Record<string, unknown>): boolean {
   if (a === b) return true
+  if (a === null || b === null || typeof a !== 'object' || typeof b !== 'object') return equalCell(a, b)
   const proto = Object.getPrototypeOf(a)
   if (proto === Object.prototype || proto === null) {
     // `for...in` avoids the two Object.keys() allocations per row that made
@@ -144,7 +158,8 @@ export function rowsEqual(a: Record<string, unknown>, b: Record<string, unknown>
     let n = 0
     for (const k in a) {
       n++
-      if (!equalCell(a[k], b[k])) return false
+      const v = b[k]
+      if (!equalCell(a[k], v) || (v === undefined && !Object.hasOwn(b, k))) return false
     }
     let m = 0
     for (const _k in b) m++
@@ -152,7 +167,7 @@ export function rowsEqual(a: Record<string, unknown>, b: Record<string, unknown>
   }
   const ak = Object.keys(a)
   if (ak.length !== Object.keys(b).length) return false
-  for (const k of ak) if (!equalCell(a[k], b[k])) return false
+  for (const k of ak) if (!equalCell(a[k], b[k]) || (b[k] === undefined && !Object.hasOwn(b, k))) return false
   return true
 }
 

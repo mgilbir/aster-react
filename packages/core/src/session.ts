@@ -25,7 +25,8 @@ import { applyOneWithState } from './incremental-state.js'
 import { optionalPart } from './engine-parts.js'
 import { refId, valueKey } from './fingerprint.js'
 import { formatEnvironmentKey } from './locale.js'
-import { checkSpecLimits, checkSceneLimits, createLimitClock, withLimits, activeMeter } from './limits.js'
+import { expressionRegistryEpoch } from './expression.js'
+import { assertSpecDepth, checkSpecLimits, checkSceneLimits, createLimitClock, withLimits, activeMeter } from './limits.js'
 import { diffRows, type DataPulse } from './pulse.js'
 import { checkChartRows } from './row-watch.js'
 import type { CompiledChart, RuntimeInput, SceneRoot, VgSpec } from './types.js'
@@ -58,12 +59,28 @@ function dataRefKey(v: unknown): string {
 const ROWS_MARKER = '\u0000rows'
 
 /**
+ * The values JSON writes alike that a spec built in code tells apart (a signal of `Infinity` draws otherwise than one of `-Infinity`,
+ * of `NaN` or of `null`; `-0` formats as `-0`; an `undefined` entry of a list is not a `null` one): each is written as a tag, a
+ * string that starts with a NUL, and a string of the spec that starts with one is written with a second one before it, so no
+ * string can stand for a tag. A missing key and one holding `undefined` stay alike, as they are to the engine.
+ */
+function keepDistinct(this: unknown, _key: string, value: unknown): unknown {
+  if (typeof value === 'number') return Number.isFinite(value) && !Object.is(value, -0) ? value : `\u0000n${Object.is(value, -0) ? '-0' : String(value)}`
+  if (typeof value === 'string') return value.charCodeAt(0) === 0 ? `\u0000s${value}` : value
+  if (value === undefined && Array.isArray(this)) return '\u0000u'
+  return value
+}
+
+/**
  * Serialize the spec structure, leaving the top-level datasets' inline values out (they're tracked by identity).
  * Two specs with the same skeleton compile to the same chart (a session re-evaluates it with the new rows); a different
  * skeleton is a different chart. Exported for the hosts that must tell the two apart (`@aster-charts/react` keeps a chart's
  * live state for the first and starts it afresh for the second).
  */
 export function skeletonOf(spec: VgSpec): string {
+  // (the walk the compiler makes first, before a text of the spec is: a spec that shares sub-objects, built in code, would make
+  // the text exponential in the depth of the sharing; the walk refuses it past the spec-size ceiling, as compiling it would)
+  assertSpecDepth(spec)
   const data = (spec as { data?: unknown }).data
   let stripped: unknown = data
   // A dataset's rows are not part of the chart's shape, but whether it HAS rows is: without them it is the dataset's `url`
@@ -82,7 +99,7 @@ export function skeletonOf(spec: VgSpec): string {
   }
   const copy = { ...(spec as Record<string, unknown>), data: stripped }
   try {
-    return JSON.stringify(copy) ?? ''
+    return JSON.stringify(copy, keepDistinct) ?? ''
   } catch {
     // Non-serializable spec (cycles/functions): no caching, always re-evaluate.
     return `\u0000uncacheable:${refId(spec as object)}:${Date.now()}`
@@ -174,6 +191,12 @@ export interface ChartSession {
    * pass `{ data, dataChanges, signals, width, height }`; the session re-evaluates
    * the chart compiled by the most recent `evaluate`, reusing unchanged scene
    * items. Requires a prior `evaluate` (returns null otherwise).
+   *
+   * What `input` does not say is what the last accepted `evaluate` or `change` was given: its data (a dataset `data` names
+   * replaces that one), and every other input, each replaced as a whole by the one `input` gives: `width`, `height`, `signals`,
+   * `limits`, `urlPolicy`, `urlData`, `random`, `textMetrics`, `logger`, `domainRaw`, `containerSize`, `measuredSize`. A key
+   * given as `undefined` removes the setting. The change descriptions (`dataChanges`, `dataPulse`, `changedDatasets`,
+   * `autoChanges`) are this call's only.
    */
   change(input?: RuntimeInput): SceneRoot | null
   /**
@@ -196,6 +219,8 @@ function metaKeyOf(skeleton: string, input: RuntimeInput): string {
   parts.push(`w=${valueKey(input.width)}`, `h=${valueKey(input.height)}`)
   // a scene made under another default locale or in another time zone formats its text and dates otherwise
   parts.push(`fmt=${formatEnvironmentKey()}`)
+  // a function registered (or replaced) since is called in its new form: the scene made with the old one is not this one
+  parts.push(`fx=${expressionRegistryEpoch()}`)
   // `containerSize()` is read by the spec's width / height signals: a resized container is a different view
   if (input.containerSize) parts.push(`cs=${valueKey(input.containerSize)}`)
   if (input.measuredSize) parts.push(`ms=${valueKey(input.measuredSize)}`)
@@ -223,6 +248,21 @@ function fingerprint(spec: VgSpec, input: RuntimeInput, skeleton: string = skele
   return `${metaKeyOf(skeleton, input)}\u0000${parts.join('\u0001')}`
 }
 
+/** The inputs that describe one call's changes, or its data: a `change` does not carry them over from the last evaluation. */
+const PER_CALL: ReadonlySet<string> = new Set<keyof RuntimeInput>(['data', 'dataChanges', 'dataPulse', 'changedDatasets', 'autoChanges'])
+
+/** What an evaluation was given besides its data and its change descriptions. */
+function settingsOf(input: RuntimeInput): RuntimeInput {
+  const out: Record<string, unknown> = {}
+  for (const key of Object.keys(input)) if (!PER_CALL.has(key)) out[key] = (input as Record<string, unknown>)[key]
+  return out as RuntimeInput
+}
+
+/** `given` over the settings of the last evaluation, key by key (an `undefined` it gives removes one). */
+function withSettings(last: RuntimeInput, given: RuntimeInput): RuntimeInput {
+  return { ...last, ...given }
+}
+
 /** Union of the pulse's structural datasets and the host's own `changedDatasets` hint. */
 function mergeNames(a: Iterable<string>, b: readonly string[] | undefined): string[] {
   return [...new Set<string>([...a, ...(b ?? [])])]
@@ -239,6 +279,8 @@ export function createChartSession(): ChartSession {
   // the datasets the engine's committed state was made from (`lastRaw` also follows evaluations that found nothing to do)
   let engineRaw: Map<string, unknown> | null = null
   let lastPulse: DataPulse | null = null
+  // what the last accepted evaluation was given besides its data and its change descriptions: a `change` goes on from there
+  let lastSettings: RuntimeInput = {}
 
   /**
    * The datasets whose rows are equal to the ones the engine's state was made from, so the steps made from them need not run: every
@@ -342,7 +384,6 @@ export function createChartSession(): ChartSession {
 
   const evaluateOnce = (spec: VgSpec, input: RuntimeInput = {}): SceneRoot => {
     const clock = activeMeter()?.clock ?? createLimitClock(input.limits)
-    if (input.limits) checkSpecLimits(spec as unknown as Record<string, unknown>, input.limits, input)
     // (development builds: rows changed in place since the last evaluation are warned about, see row-watch.ts)
     try {
       if (process.env.NODE_ENV !== 'production') checkChartRows(session, spec, input as never)
@@ -363,6 +404,7 @@ export function createChartSession(): ChartSession {
     if (!hinted && key === lastKey && lastScene) {
       lastRaw = currentRaw
       lastPulse = pulse
+      lastSettings = settingsOf(input)
       return lastScene
     }
     // New row arrays with identical values are a no-op for the scene: the
@@ -370,9 +412,14 @@ export function createChartSession(): ChartSession {
     if (input.autoChanges !== false && !hinted && !pulse.datasets.size && !pulse.structural.size && metaKey === lastMetaKey && lastScene) {
       lastRaw = currentRaw
       lastPulse = pulse
+      lastSettings = settingsOf(input)
       lastKey = key
       return lastScene
     }
+
+    // The pre-flight walks the whole spec: it is for what is about to be evaluated, so a call answered from the cache above (the
+    // same spec content, data arrays and limits as the scene it returns was accepted under) is not walked again.
+    if (input.limits) checkSpecLimits(spec as unknown as Record<string, unknown>, input.limits, input)
 
     // Compute everything into locals and commit only after every check has
     // passed: a limit that throws must leave the session — and the
@@ -387,6 +434,7 @@ export function createChartSession(): ChartSession {
     if (input.limits) checkSceneLimits(pending.scene, input.limits)
     pending.commit()
     engineRaw = currentRaw
+    lastSettings = settingsOf(input)
     lastChart = chart
     lastSkeleton = skeleton
     lastSpec = spec
@@ -398,7 +446,7 @@ export function createChartSession(): ChartSession {
     return lastScene
   }
 
-  const changeOnce = (input: RuntimeInput = {}): SceneRoot | null => {
+  const changeOnce = (input: RuntimeInput): SceneRoot | null => {
     // Imperative per-datum update of the last compiled chart. No spec re-pass:
     // the host drives changes via data/dataChanges/signals. Requires a prior
     // evaluate (we need a compiled chart + spec to fingerprint against).
@@ -420,6 +468,7 @@ export function createChartSession(): ChartSession {
     if (input.limits) checkSceneLimits(pending.scene, input.limits)
     pending.commit()
     engineRaw = currentRaw
+    lastSettings = settingsOf(input)
     lastScene = pending.scene
     // Every key follows the state that was just committed, or the no-op cache
     // would serve a scene built for different inputs.
@@ -432,7 +481,11 @@ export function createChartSession(): ChartSession {
 
   const session: ChartSession = {
     evaluate: (spec, input = {}) => withLimits(input.limits, () => evaluateOnce(spec, input)),
-    change: (input = {}) => withLimits(input.limits, () => changeOnce(input)),
+    change: (given = {}) => {
+      // (the limits too: a change after an evaluation under limits runs under them, unless it gives its own)
+      const input = withSettings(lastSettings, given)
+      return withLimits(input.limits, () => changeOnce(input))
+    },
     last: () => (lastChart && lastScene ? { chart: lastChart, scene: lastScene } : null),
     pulse: () => lastPulse,
   }
