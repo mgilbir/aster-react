@@ -42,6 +42,9 @@ async function onVega(spec: Spec, dataset?: string): Promise<{ svg: string; rows
   }
 }
 
+/** The message of a logged or thrown error (vega's logger writes `Error: <message>`). */
+const messageOf = (e: unknown): string => (e instanceof Error ? e.message : String(e)).replace(/^(?:\w*Error): /, '')
+
 function onAster(spec: Spec, dataset?: string): { svg: string; rows?: unknown[]; errors: unknown[] } {
   const errors: unknown[] = []
   const logger = { error: (...a: unknown[]) => { errors.push(a[0]) }, warn: () => {} }
@@ -204,13 +207,15 @@ describe('transforms read field paths as vega does', () => {
       try {
         got = onAster(spec, 'out')
       } catch (e) {
-        if (want.errors.length) { refused++; continue }
-        bad.push(`${label}: aster threw ${(e as Error).message}`)
+        // a refusal agrees only with vega's refusal of the same message (any throw used to count as agreement)
+        if (want.errors.length && messageOf(e) === messageOf(want.errors[0])) { refused++; continue }
+        bad.push(`${label}: aster threw "${messageOf(e)}"${want.errors.length ? `, vega logged "${messageOf(want.errors[0])}"` : ''}`)
         continue
       }
       if (want.errors.length) {
         refused++
         if (!got.errors.length) bad.push(`${label}: vega logged "${want.errors[0]}" and aster logged nothing`)
+        else if (messageOf(got.errors[0]) !== messageOf(want.errors[0])) bad.push(`${label}: vega logged "${messageOf(want.errors[0])}", aster "${messageOf(got.errors[0])}"`)
         continue
       }
       compared++
