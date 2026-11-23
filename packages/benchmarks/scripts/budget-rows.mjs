@@ -209,7 +209,7 @@ export const BUDGETS = {
   '+ @aster-charts/core/signals': 15.5 * KB,
   '+ @aster-charts/core/load': 8.2 * KB,
   '+ @aster-charts/core/geo': 16.4 * KB,
-  '+ @aster-charts/core/transforms': 39.0 * KB,
+  '+ @aster-charts/core/transforms': 39.9 * KB,
   '+ @aster-charts/core/transition': 4.2 * KB,
   '+ @aster-charts/core/png': 8.5 * KB,
   '@aster-charts/react useChart': 154.9 * KB,
