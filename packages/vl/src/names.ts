@@ -142,7 +142,8 @@ export function signalSafe(key: string): string {
  * A user field path (as written in a Vega-Lite spec) resolved to the flat,
  * access-path-safe key the compiler uses everywhere internally.
  *
- *  - an ordinary column name ("IMDB Rating", "a'b") keeps its name;
+ *  - an ordinary column name ("IMDB Rating", "größe €") keeps its name (a quote is a path's quoting: "a'b" is malformed, and
+ *    splitAccessPath refuses it, as vega-lite does; "a\\'b" is the column a'b);
  *  - a nested path ("o.v", "a[0]") or an escaped key ("a\\.b") gets a sanitized
  *    key, and `expr` (a Vega expression that reads the ORIGINAL location)
  *    tells the pipeline to copy the value into that key once, up front.
