@@ -39,9 +39,9 @@ Other scripts of the package:
 | Command | What it does |
 |---|---|
 | `pnpm --filter @aster-charts/demo typecheck` | `tsc -p tsconfig.json --noEmit` |
-| `pnpm --filter @aster-charts/demo build` | rebuilds `@aster-charts/react` (`tsc`), then `vite build` into `apps/demo/dist` (ignored by git) |
+| `pnpm --filter @aster-charts/demo build` | `vite build` into `apps/demo/dist` (ignored by git) |
 
-`build` rebuilds only `@aster-charts/react`; `@aster-charts/core` and `@aster-charts/vl` must already be built (`pnpm build` at the root does all three).
+`build` builds none of the packages it imports (a second `tsc` of `@aster-charts/react` would race the other workspaces that read its `dist`); `@aster-charts/core`, `@aster-charts/vl` and `@aster-charts/react` must already be built, which `pnpm build` at the root does in dependency order.
 
 ## Build and deployment
 
