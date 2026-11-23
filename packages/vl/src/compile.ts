@@ -149,8 +149,37 @@ function compileTwice(input: VLSpec, payloads: RowPayloads): VLSpec {
   // learns that a later view looks it up only from the first pass.
   const forwardSelections = first.misses.size > 0 && [...first.misses].some((n) => first.selections.has(n)) ? first.selections : undefined
   const forwardLookups = first.lookups.size > 0 ? first.lookups : undefined
-  if (!forwardSelections && !forwardLookups) return first.out
-  return compileOnce(input, payloads, forwardSelections, forwardLookups).out
+  const out = !forwardSelections && !forwardLookups ? first.out : compileOnce(input, payloads, forwardSelections, forwardLookups).out
+  refuseDuplicateNames(out)
+  return out
+}
+
+/**
+ * Vega refuses a spec that declares a signal, a dataset, a scale or a projection twice in one scope ("Duplicate signal name"); so does
+ * vega-lite's output for the same specs. They are spec names the gate cannot see collide - a parameter named as a name the compiler
+ * makes (`unit` beside a selection, `x_step`), one selection name in two layers, two views of one name - and are refused here, by name.
+ */
+function refuseDuplicateNames(out: VLSpec): void {
+  // (a named mark is a dataset of its scope too: Vega's "Duplicate data set name"; the root's own size, padding, autosize and background
+  // signals are Vega's, which a spec's signal of that name updates rather than declares again)
+  const KINDS: Array<[string[], string]> = [[['signals'], 'signal'], [['data', 'marks'], 'dataset'], [['scales'], 'scale'], [['projections'], 'projection']]
+  const VEGA_ROOT_SIGNALS = new Set(['width', 'height', 'padding', 'autosize', 'background'])
+  const scope = (node: Record<string, unknown>, where: string): void => {
+    for (const [keys, what] of KINDS) {
+      const seen = new Set<string>()
+      for (const d of keys.flatMap((key) => (node[key] as unknown[] | undefined) ?? [])) {
+        const name = isObject(d) ? d.name : undefined
+        if (typeof name !== 'string') continue
+        if (what === 'signal' && node === out && VEGA_ROOT_SIGNALS.has(name)) continue
+        if (seen.has(name)) {
+          throw new VLCompileError(`the compiled ${where} declares the Vega ${what} "${name}" twice, which Vega (and vega-lite 6.4.3's output) refuses: two names of the spec collide - a parameter named as a name the compiler makes (\`unit\` beside a selection, \`x_step\`), one selection name in two views, or two views of one \`name\`; rename one`)
+        }
+        seen.add(name)
+      }
+    }
+    for (const m of (node.marks as unknown[] | undefined) ?? []) if (isObject(m) && m.type === 'group') scope(m, typeof m.name === 'string' ? `group "${m.name}"` : 'group')
+  }
+  scope(out, 'spec')
 }
 
 function compileOnce(input: VLSpec, payloads: RowPayloads, forward?: ReadonlyMap<string, SelCmpt>, forwardLookups?: ReadonlyMap<string, { name: string }>): { out: VLSpec; misses: ReadonlySet<string>; selections: ReadonlyMap<string, SelCmpt>; lookups: ReadonlyMap<string, { name: string }> } {
