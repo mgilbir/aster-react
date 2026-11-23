@@ -2657,65 +2657,133 @@ function compileFacetedView(spec: VLSpec, ctx: CompileCtx, nested = ''): VLSpec 
   const facetGroupby = [...colsOf(rowFd, rowField), ...colsOf(colFd, colField), ...colsOf(wrapFd, wrapField)]
   const facetSortFields = [rowField, colField, wrapField].filter(Boolean) as string[]
   const datumRef = (f: string): string => `datum[${JSON.stringify(f)}]`
-  // header label signal: a header format formats the parent value (number
-  // format for ordinal/nominal, timeFormat for temporal — probed). The
-  // header def's label* props map onto the title def (labelColor→color,
-  // labelFontSize→fontSize, labelPadding→offset, labelAngle→angle with
-  // derived baseline/align).
-  const parentTitle = (f: string, def?: FieldDef): unknown => {
-    // config.header seeds the defaults; the channel's own header def wins
-    const cfgHeader = (isObject(spec.config) ? (spec.config as Record<string, unknown>).header : undefined) as Record<string, unknown> | undefined
-    const hdr = { ...(cfgHeader ?? {}), ...(def?.raw?.header as Record<string, unknown> | undefined ?? {}) }
-    const text = { signal: fieldTextExpr(def ?? ({ field: f, type: 'nominal', raw: {} } as unknown as FieldDef), { lineBreaks: false, spec, expr: 'parent', format: hdr?.format as string | undefined, formatType: hdr?.formatType as string | undefined }) }
-    const t: Record<string, unknown> = {
-      text,
-      orient: 'left',
-      style: 'guide-label',
-      frame: 'group',
-      offset: (hdr?.labelPadding as number | undefined) ?? 10,
-    }
-    if (hdr?.labelColor != null) t.color = hdr.labelColor
-    if (hdr?.labelFontSize != null) t.fontSize = hdr.labelFontSize
-    if (hdr?.labelFont != null) t.font = hdr.labelFont
-    if (hdr?.labelFontWeight != null) t.fontWeight = hdr.labelFontWeight
-    if (hdr?.labelLimit != null) t.limit = hdr.labelLimit
-    if (hdr?.labelAlign != null) t.align = hdr.labelAlign
-    if (hdr?.labelBaseline != null) t.baseline = hdr.labelBaseline
-    if (hdr?.labelAnchor != null) t.labelAnchor = hdr.labelAnchor
-    if (hdr?.titleAnchor != null) t.anchor = hdr.titleAnchor
-    if (hdr?.labelAngle != null) {
-      const ang = Number(hdr.labelAngle)
-      t.angle = ang
-      // vega derives baseline/align from the angle: positive rotates toward
-      // the start (right anchor), negative toward the end (left anchor), and
-      // 0 stays centered.
-      if (hdr?.labelBaseline == null) t.baseline = 'bottom'
-      if (hdr?.labelAlign == null) t.align = ang === 0 ? 'center' : ang < 0 ? 'left' : 'right'
-    }
-    return t
-  }
-
-  // header text for the default (columns-less) facet header
-  const headerOf = (d: Record<string, unknown> | undefined): Record<string, unknown> => {
-    const cfgHeader = (isObject(spec.config) ? (spec.config as Record<string, unknown>).header : undefined) as Record<string, unknown> | undefined
-    return { ...(cfgHeader ?? {}), ...((d?.header as Record<string, unknown> | undefined) ?? {}) }
-  }
   const sizeSignalsOut = facetChildSignals
   // (model.getName: a named root view carries its name in front of every name it makes: `trellis_barley_facet_domain`)
   const facetModelName = ctx.modelName || (typeof spec.name === 'string' && spec.name !== '' ? varName(spec.name) : '')
   const rowDomainName = ctx.fresh(childModelName(facetModelName, 'row_domain'))
   const columnDomainName = ctx.fresh(childModelName(facetModelName, 'column_domain'))
 
+  // --- row / column headers (vega-lite compile/header/*) ---------------------
+  const cfgAll = isObject(spec.config) ? (spec.config as Record<string, unknown>) : {}
+  const cfgHeaderBase: Record<string, unknown> = { titlePadding: 10, labelPadding: 10, ...(isObject(cfgAll.header) ? (cfgAll.header as Record<string, unknown>) : {}) }
+  // getHeaderProperty: the channel's own header, then config.headerRow / headerColumn / headerFacet, then config.header
+  const hdrProp = (prop: string, def: Record<string, unknown> | undefined, ch: FacetHeaderChannel): unknown => {
+    const hd = isObject(def?.header) ? (def!.header as Record<string, unknown>) : undefined
+    let own = hd?.[prop]
+    // header.orient is a shortcut for labelOrient + titleOrient (channeldef normalize)
+    if (!own && (prop === 'labelOrient' || prop === 'titleOrient') && hd?.orient) own = hd.orient
+    if (own !== undefined) return own
+    const specific = cfgAll[ch === 'row' ? 'headerRow' : ch === 'column' ? 'headerColumn' : 'headerFacet']
+    if (isObject(specific) && specific[prop] !== undefined) return specific[prop]
+    return cfgHeaderBase[prop]
+  }
+  // (getHeaderChannel: a wrapped facet's headers are a column's)
+  const headerChannelOf = (ch: FacetHeaderChannel, orient: unknown): 'row' | 'column' =>
+    orient === 'top' || orient === 'bottom' ? 'column' : orient === 'left' || orient === 'right' ? 'row' : ch === 'facet' ? 'column' : ch
+  const TITLE_MAP: Record<string, string> = {
+    titleAlign: 'align', titleAnchor: 'anchor', titleAngle: 'angle', titleBaseline: 'baseline', titleColor: 'color', titleFont: 'font',
+    titleFontSize: 'fontSize', titleFontStyle: 'fontStyle', titleFontWeight: 'fontWeight', titleLimit: 'limit', titleLineHeight: 'lineHeight',
+    titleOrient: 'orient', titlePadding: 'offset',
+  }
+  const LABEL_MAP: Record<string, string> = {
+    labelAlign: 'align', labelAnchor: 'anchor', labelAngle: 'angle', labelBaseline: 'baseline', labelColor: 'color', labelFont: 'font',
+    labelFontSize: 'fontSize', labelFontStyle: 'fontStyle', labelFontWeight: 'fontWeight', labelLimit: 'limit', labelLineHeight: 'lineHeight',
+    labelOrient: 'orient', labelPadding: 'offset',
+  }
+  const mapProps = (def: Record<string, unknown> | undefined, ch: FacetHeaderChannel, map: Record<string, string>): Record<string, unknown> => {
+    const out: Record<string, unknown> = {}
+    for (const [prop, target] of Object.entries(map)) {
+      const v = hdrProp(prop, def, ch)
+      if (v !== undefined) out[target] = v
+    }
+    return out
+  }
+  // (header/assemble.ts passes the angle as written: -90 is not 270 to defaultHeaderGuideBaseline)
+  const headerAngle = (v: unknown): number | undefined => (typeof v === 'number' ? v : undefined)
+  // defaultHeaderGuideBaseline / defaultHeaderGuideAlign
+  const guideBaseline = (angle: number | undefined, hc: 'row' | 'column'): Record<string, unknown> => {
+    if (angle === undefined) return {}
+    const b = defaultLabelBaseline(angle, hc === 'row' ? 'left' : 'top', hc === 'row' ? 'y' : 'x', true)
+    return b ? { baseline: b } : {}
+  }
+  const guideAlign = (hc: 'row' | 'column', angle: number | undefined, anchor: unknown): Record<string, unknown> => {
+    if (anchor === 'start') return { align: 'left' }
+    if (anchor === 'end') return { align: 'right' }
+    if (angle === undefined) return {}
+    const a = defaultLabelAlign(angle, hc === 'row' ? 'left' : 'top', hc === 'row' ? 'y' : 'x')
+    return a ? { align: a } : {}
+  }
+  /**
+   * header/parse.ts parseFacetHeader: the header's title - its own, the field def's, or the default, which a config title that is null or
+   * empty turns off (`includeDefault`); none under `header: null`. A group is drawn for a title with text only (assembleHeaderMarks).
+   */
+  const headerTitleText = (ch: FacetHeaderChannel, def: Record<string, unknown>, fd: FieldDef | null | undefined, field: string): unknown => {
+    if (def.header === null) return undefined
+    const own = isObject(def.header) ? (def.header as Record<string, unknown>).title : undefined
+    if (own !== undefined) return own
+    const configTitle = hdrProp('title', undefined, ch)
+    if (configTitle !== undefined && !configTitle) return def.title
+    return fd ? channelTitle(fd) : field
+  }
+  const hasTitle = (ch: FacetHeaderChannel, def: Record<string, unknown> | undefined, fd: FieldDef | null | undefined, field: string | undefined): boolean =>
+    def !== undefined && field !== undefined && !!headerTitleText(ch, def, fd, field)
+  const titleGroup = (ch: FacetHeaderChannel, def: Record<string, unknown>, fd: FieldDef | null | undefined, field: string): Record<string, unknown> => {
+    const hc = headerChannelOf(ch, hdrProp('titleOrient', def, ch))
+    // (assembleTitleGroup normalizes the title angle; assembleLabelTitle does not)
+    const titleAngleRaw = hdrProp('titleAngle', def, ch)
+    const angle = typeof titleAngleRaw === 'number' ? normalizeAngle(titleAngleRaw) : undefined
+    return {
+      name: `${ch}-title`,
+      type: 'group',
+      role: `${hc}-title`,
+      title: {
+        text: headerTitleText(ch, def, fd, field),
+        ...(ch === 'row' ? { orient: 'left' } : {}),
+        style: 'guide-title',
+        ...guideBaseline(angle, hc),
+        ...guideAlign(hc, angle, hdrProp('titleAnchor', def, ch)),
+        ...mapProps(def, ch, TITLE_MAP),
+      },
+    }
+  }
+  // assembleLabelTitle: the facet value text, with its label* properties
+  const labelTitle = (ch: FacetHeaderChannel, def: Record<string, unknown>, fd: FieldDef | null | undefined, field: string): Record<string, unknown> => {
+    // (a header format formats the parent value: a number format for ordinal / nominal, a time format for temporal)
+    const format = hdrProp('format', def, ch)
+    const formatType = hdrProp('formatType', def, ch)
+    let text = { signal: fieldTextExpr(fd ?? normalizeHeaderDef(def) ?? ({ field, type: 'nominal', raw: {} } as unknown as FieldDef), { lineBreaks: false, spec, expr: 'parent', format: format as string | undefined, formatType: formatType as string | undefined }) }
+    const labelExpr = hdrProp('labelExpr', def, ch)
+    if (typeof labelExpr === 'string') {
+      text = { signal: labelExpr.split('datum.label').join(text.signal).split('datum.value').join(`parent[${JSON.stringify(field)}]`) }
+    }
+    const hc = headerChannelOf(ch, hdrProp('labelOrient', def, ch))
+    const angle = headerAngle(hdrProp('labelAngle', def, ch))
+    return {
+      text,
+      ...(ch === 'row' ? { orient: 'left' } : {}),
+      style: 'guide-label',
+      frame: 'group',
+      ...guideBaseline(angle, hc),
+      ...guideAlign(hc, angle, hdrProp('labelAnchor', def, ch)),
+      ...mapProps(def, ch, LABEL_MAP),
+    }
+  }
+  const labelsOn = (def: Record<string, unknown> | undefined): boolean => {
+    if (def?.header === null) return false // (header: null - no title and no labels)
+    const own = isObject(def?.header) ? (def!.header as Record<string, unknown>).labels : undefined
+    return (own ?? cfgHeaderBase.labels ?? true) as boolean
+  }
+
   if (wrapFd && wrapField) {
     // wrapped facet: one field laid out left-to-right over `columns` columns
     const facetDomain = ctx.fresh(childModelName(facetModelName, 'facet_domain'))
     const rowSeq = ctx.fresh(childModelName(facetModelName, 'facet_domain_row'))
     const colSeq = ctx.fresh(childModelName(facetModelName, 'facet_domain_column'))
-    const hdrW = headerOf(wrapDef)
     const nCols = wrapColumns
     const wrapOrder = facetOrder(wrapDef)
-    const cellTitle = parentTitle(wrapField, wrapFd) as Record<string, unknown>
-    delete cellTitle.orient
+    // (facet.ts assembleLabelTitle: a wrapped facet always shows its labels as the cells' titles, `header: null` or `labels: false` or not)
+    if (isObject(wrapDef?.header)) ignore(wrapDef.header, 'labels', 'a wrapped facet always shows its labels (vega-lite reads `labels` on a row or a column only)')
+    const cellTitle = labelTitle('facet', wrapDef ?? {}, wrapFd, wrapField)
     // (the row headers / column footers exist only to carry the axes: none, no group and no sequence behind it)
     const wrapData = [...innerData, { name: facetDomain, source: baseName, transform: [{ type: 'aggregate', groupby: colsOf(wrapFd, wrapField) }] },
       ...(yLabelAxes.length ? [{ name: rowSeq, transform: [{ type: 'sequence', start: 0, stop: nCols === undefined ? 1 : { signal: `ceil(length(data(${JSON.stringify(facetDomain)})) / ${nCols})` } }] }] : []),
@@ -2723,7 +2791,7 @@ function compileFacetedView(spec: VLSpec, ctx: CompileCtx, nested = ''): VLSpec 
     ]
     const wrapMarks: Record<string, unknown>[] = [
       // (header/assemble.ts assembleTitleGroup: an empty title - `header: {title: null}` - is no title group)
-      ...(hdrW.title === null || hdrW.title === '' ? [] : [{ name: 'facet-title', type: 'group', role: 'column-title', title: { text: hdrW.title ?? channelTitle(wrapFd), style: 'guide-title', offset: (hdrW.titlePadding as number | undefined) ?? 10 } }]),
+      ...(hasTitle('facet', wrapDef ?? {}, wrapFd, wrapField) ? [titleGroup('facet', wrapDef ?? {}, wrapFd, wrapField)] : []),
       ...(yLabelAxes.length ? [{ name: own('row_header'), type: 'group', role: 'row-header', from: { data: rowSeq }, encode: { update: { height: { signal: `${CH}_height` } } }, axes: yLabelAxes }] : []),
       ...(xLabelAxes.length ? [{ name: own('column_footer'), type: 'group', role: 'column-footer', from: { data: colSeq }, encode: { update: { width: { signal: `${CH}_width` } } }, axes: xLabelAxes }] : []),
       {
@@ -2747,108 +2815,20 @@ function compileFacetedView(spec: VLSpec, ctx: CompileCtx, nested = ''): VLSpec 
     wrapOut.data = wrapData
     wrapOut.signals = sizeSignalsOut
     if (innerSel) SEL_PARTS.set(wrapOut, { data: innerSel.data, top: innerSel.top, unit: [] })
-    wrapOut.layout = compositeLayout({ ...spec, spacing: spec.spacing ?? wrapDef?.spacing, align: spec.align ?? wrapDef?.align, bounds: spec.bounds ?? wrapDef?.bounds, center: spec.center ?? wrapDef?.center }, { align: 'all', columns: nCols })
+    // (facet.ts getHeaderLayoutMixins / assembleLayoutTitleBand: the title's orient and anchor place it along the columns)
+    const wrapTitleOrient = hdrProp('titleOrient', wrapDef, 'facet')
+    const wrapTitleBand = layoutTitleBandOf(hdrProp('titleAnchor', wrapDef, 'facet'), headerChannelOf('facet', wrapTitleOrient))
+    wrapOut.layout = {
+      ...(wrapTitleOrient === 'right' || wrapTitleOrient === 'bottom' ? { titleAnchor: { [headerChannelOf('facet', wrapTitleOrient)]: 'end' } } : {}),
+      ...compositeLayout({ ...spec, spacing: spec.spacing ?? wrapDef?.spacing, align: spec.align ?? wrapDef?.align, bounds: spec.bounds ?? wrapDef?.bounds, center: spec.center ?? wrapDef?.center }, { align: 'all', columns: nCols }),
+      ...(wrapTitleBand !== undefined ? { titleBand: { [headerChannelOf('facet', wrapTitleOrient)]: wrapTitleBand } } : {}),
+    }
     wrapOut.marks = wrapMarks
     wrapOut.scales = inner.scales
     if (Array.isArray(inner.projections) && inner.projections.length) wrapOut.projections = inner.projections
     if (inner.legends && (inner.legends as unknown[]).length) wrapOut.legends = inner.legends
     rootChrome(wrapOut, spec)
     return wrapOut
-  }
-
-  // --- row / column headers (vega-lite compile/header/*) ---------------------
-  const cfgAll = isObject(spec.config) ? (spec.config as Record<string, unknown>) : {}
-  const cfgHeaderBase: Record<string, unknown> = { titlePadding: 10, labelPadding: 10, ...(isObject(cfgAll.header) ? (cfgAll.header as Record<string, unknown>) : {}) }
-  // getHeaderProperty: the channel's own header, then config.headerRow/headerColumn, then config.header
-  const hdrProp = (prop: string, def: Record<string, unknown> | undefined, ch: 'row' | 'column'): unknown => {
-    const hd = isObject(def?.header) ? (def!.header as Record<string, unknown>) : undefined
-    let own = hd?.[prop]
-    // header.orient is a shortcut for labelOrient + titleOrient (channeldef normalize)
-    if (!own && (prop === 'labelOrient' || prop === 'titleOrient') && hd?.orient) own = hd.orient
-    if (own !== undefined) return own
-    const specific = cfgAll[ch === 'row' ? 'headerRow' : 'headerColumn']
-    if (isObject(specific) && specific[prop] !== undefined) return specific[prop]
-    return cfgHeaderBase[prop]
-  }
-  const headerChannelOf = (ch: 'row' | 'column', orient: unknown): 'row' | 'column' =>
-    orient === 'top' || orient === 'bottom' ? 'column' : orient === 'left' || orient === 'right' ? 'row' : ch
-  const TITLE_MAP: Record<string, string> = {
-    titleAlign: 'align', titleAnchor: 'anchor', titleAngle: 'angle', titleBaseline: 'baseline', titleColor: 'color', titleFont: 'font',
-    titleFontSize: 'fontSize', titleFontStyle: 'fontStyle', titleFontWeight: 'fontWeight', titleLimit: 'limit', titleLineHeight: 'lineHeight',
-    titleOrient: 'orient', titlePadding: 'offset',
-  }
-  const LABEL_MAP: Record<string, string> = {
-    labelAlign: 'align', labelAnchor: 'anchor', labelAngle: 'angle', labelBaseline: 'baseline', labelColor: 'color', labelFont: 'font',
-    labelFontSize: 'fontSize', labelFontStyle: 'fontStyle', labelFontWeight: 'fontWeight', labelLimit: 'limit', labelLineHeight: 'lineHeight',
-    labelOrient: 'orient', labelPadding: 'offset',
-  }
-  const mapProps = (def: Record<string, unknown> | undefined, ch: 'row' | 'column', map: Record<string, string>): Record<string, unknown> => {
-    const out: Record<string, unknown> = {}
-    for (const [prop, target] of Object.entries(map)) {
-      const v = hdrProp(prop, def, ch)
-      if (v !== undefined) out[target] = v
-    }
-    return out
-  }
-  // (header/assemble.ts passes the angle as written: -90 is not 270 to defaultHeaderGuideBaseline)
-  const headerAngle = (v: unknown): number | undefined => (typeof v === 'number' ? v : undefined)
-  // defaultHeaderGuideBaseline / defaultHeaderGuideAlign
-  const guideBaseline = (angle: number | undefined, hc: 'row' | 'column'): Record<string, unknown> => {
-    if (angle === undefined) return {}
-    const b = defaultLabelBaseline(angle, hc === 'row' ? 'left' : 'top', hc === 'row' ? 'y' : 'x', true)
-    return b ? { baseline: b } : {}
-  }
-  const guideAlign = (hc: 'row' | 'column', angle: number | undefined, anchor: unknown): Record<string, unknown> => {
-    if (anchor === 'start') return { align: 'left' }
-    if (anchor === 'end') return { align: 'right' }
-    if (angle === undefined) return {}
-    const a = defaultLabelAlign(angle, hc === 'row' ? 'left' : 'top', hc === 'row' ? 'y' : 'x')
-    return a ? { align: a } : {}
-  }
-  const titleGroup = (ch: 'row' | 'column', def: Record<string, unknown>, fd: FieldDef | null | undefined, field: string): Record<string, unknown> => {
-    const hc = headerChannelOf(ch, hdrProp('titleOrient', def, ch))
-    // (assembleTitleGroup normalizes the title angle; assembleLabelTitle does not)
-    const titleAngleRaw = hdrProp('titleAngle', def, ch)
-    const angle = typeof titleAngleRaw === 'number' ? normalizeAngle(titleAngleRaw) : undefined
-    const header = isObject(def.header) ? (def.header as Record<string, unknown>) : {}
-    return {
-      name: `${ch}-title`,
-      type: 'group',
-      role: `${hc}-title`,
-      title: {
-        text: header.title ?? (fd ? channelTitle(fd) : field),
-        ...(ch === 'row' ? { orient: 'left' } : {}),
-        style: 'guide-title',
-        ...guideBaseline(angle, hc),
-        ...guideAlign(hc, angle, hdrProp('titleAnchor', def, ch)),
-        ...mapProps(def, ch, TITLE_MAP),
-      },
-    }
-  }
-  // assembleLabelTitle: the facet value text, with its label* properties
-  const labelTitle = (ch: 'row' | 'column', def: Record<string, unknown>, fd: FieldDef | null | undefined, field: string): Record<string, unknown> => {
-    const base = parentTitle(field, fd ?? normalizeHeaderDef(def)) as Record<string, unknown>
-    let text = base.text as { signal: string }
-    const labelExpr = hdrProp('labelExpr', def, ch)
-    if (typeof labelExpr === 'string') {
-      text = { signal: labelExpr.split('datum.label').join(text.signal).split('datum.value').join(`parent[${JSON.stringify(field)}]`) }
-    }
-    const hc = headerChannelOf(ch, hdrProp('labelOrient', def, ch))
-    const angle = headerAngle(hdrProp('labelAngle', def, ch))
-    return {
-      text,
-      ...(ch === 'row' ? { orient: 'left' } : {}),
-      style: 'guide-label',
-      frame: 'group',
-      ...guideBaseline(angle, hc),
-      ...guideAlign(hc, angle, hdrProp('labelAnchor', def, ch)),
-      ...mapProps(def, ch, LABEL_MAP),
-    }
-  }
-  const labelsOn = (def: Record<string, unknown> | undefined): boolean => {
-    if (def?.header === null) return false // (header: null - no title and no labels)
-    const own = isObject(def?.header) ? (def!.header as Record<string, unknown>).labels : undefined
-    return (own ?? cfgHeaderBase.labels ?? true) as boolean
   }
 
   const channels: Array<{ ch: 'row' | 'column'; def?: Record<string, unknown>; fd?: FieldDef | null; field?: string; domain: string; order: string; axes: Record<string, unknown>[]; size: string }> = [
@@ -2858,10 +2838,9 @@ function compileFacetedView(spec: VLSpec, ctx: CompileCtx, nested = ''): VLSpec 
   const marks: Record<string, unknown>[] = []
   // title groups first (row, then column), then the header/footer groups per channel
   // (a header title that is empty - or a header that is null - is no title group)
-  const hasTitle = (c: { def?: Record<string, unknown> }): boolean => c.def?.header !== null && !(isObject(c.def?.header) && 'title' in (c.def!.header as Record<string, unknown>) && !(c.def!.header as Record<string, unknown>).title)
   for (const c of channels) {
     if (!c.field || !c.def) continue
-    const outerTitle = hasTitle(c) ? titleGroup(c.ch, c.def, c.fd, c.field) : undefined
+    const outerTitle = hasTitle(c.ch, c.def, c.fd, c.field) ? titleGroup(c.ch, c.def, c.fd, c.field) : undefined
     // header/parse.ts parseFacetHeader: the title of the inner facet's header on the same channel joins this one's ("Origin / Cylinders") and
     // leaves the inner facet (its layout no longer offsets for it)
     const at = innerIsFacet ? childMarks.findIndex((m) => m.name === `${c.ch}-title`) : -1
@@ -2987,8 +2966,7 @@ function compileFacetedView(spec: VLSpec, ctx: CompileCtx, nested = ''): VLSpec 
     const to = hdrProp('titleOrient', c.def, c.ch)
     const hc = headerChannelOf(c.ch, to)
     if (to === 'right' || to === 'bottom') layoutTitleAnchor[hc] = 'end'
-    const anchor = hdrProp('titleAnchor', c.def, c.ch)
-    const band = hc === 'column' ? { start: 0, end: 1 }[anchor as 'start' | 'end'] : { start: 1, end: 0 }[anchor as 'start' | 'end']
+    const band = layoutTitleBandOf(hdrProp('titleAnchor', c.def, c.ch), hc)
     if (band !== undefined) layoutTitleBand[hc] = band
   }
   // spacing/align/center may be given per facet channel (row/column) or for the whole facet
@@ -3003,8 +2981,8 @@ function compileFacetedView(spec: VLSpec, ctx: CompileCtx, nested = ''): VLSpec 
   const layoutAlign = spec.align ?? (perChannel('align') ? { row: rowDef?.align ?? 'all', column: colDef?.align ?? 'all' } : defaultAlign)
   const layoutCenter = spec.center ?? (perChannel('center') ? { row: rowDef?.center ?? false, column: colDef?.center ?? false } : undefined)
   const titleOffsets: Record<string, number> = {
-    ...(rowField && hasTitle({ def: rowDef }) ? { rowTitle: 10 } : {}),
-    ...(colField && hasTitle({ def: colDef }) ? { columnTitle: 10 } : {}),
+    ...(hasTitle('row', rowDef, rowFd, rowField) ? { rowTitle: 10 } : {}),
+    ...(hasTitle('column', colDef, colFd, colField) ? { columnTitle: 10 } : {}),
   }
   out.layout = {
     padding: layoutSpacing,
@@ -3026,6 +3004,15 @@ function compileFacetedView(spec: VLSpec, ctx: CompileCtx, nested = ''): VLSpec 
   if (inner.legends && (inner.legends as unknown[]).length) out.legends = inner.legends
   rootChrome(out, spec)
   return out
+}
+
+/** The channels a facet's headers belong to: a row, a column, or a wrapped facet's. */
+type FacetHeaderChannel = 'row' | 'column' | 'facet'
+
+/** header/common.ts getLayoutTitleBand: where along its band a header title anchored at the start or end sits. */
+function layoutTitleBandOf(anchor: unknown, hc: 'row' | 'column'): number | undefined {
+  if (anchor !== 'start' && anchor !== 'end') return undefined
+  return hc === 'column' ? { start: 0, end: 1 }[anchor] : { start: 1, end: 0 }[anchor]
 }
 
 // --- concat / repeat composition ---------------------------------------------

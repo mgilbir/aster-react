@@ -1586,7 +1586,8 @@ function validateFacetOperator(spec: Obj, at: (k: string) => string, selOk: bool
       if (isObj(s) || Array.isArray(s)) validateSort(s, `${a}.sort`, 'row')
       if (isObj(s) && typeof s.field !== 'string' && s.op !== 'count') fail(`${a}.sort.field`, 'a facet sort by an aggregate needs the `field` to aggregate')
     }
-    if (d.header !== undefined && !isObj(d.header)) mustBe(`${a}.header`, OBJECT)
+    // (`header: null`: no title and no labels - a wrapped facet's labels stay, as vega-lite's do)
+    if (d.header !== undefined && d.header !== null && !isObj(d.header)) mustBe(`${a}.header`, `${OBJECT} or null`)
   }
   if (mapping) {
     keysOf(facet, set('row column'), at('facet'), 'facet mapping')
