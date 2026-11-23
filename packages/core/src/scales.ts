@@ -198,7 +198,9 @@ function checkedDomain<T extends unknown[]>(type: string, domain: T, ctx: ScaleC
 function fitDomain(scale: Scale, st: Settings, ctx: ScaleContext): number {
   if (st.domainRaw) {
     scale.domain(checkedDomain(scale.type, st.domainRaw as unknown[], ctx))
-    return (st.domainRaw as unknown[]).length
+    // a raw domain with no length (a number, `true`, an object) is set and then overridden by the domain the spec gives, as in vega
+    const size = (st.domainRaw as { length?: unknown }).length as number
+    if (size > -1) return size
   }
 
   let domain = st.domain as unknown[] | undefined
@@ -396,7 +398,10 @@ export function scaleTicks(s: Scale, count?: number): unknown[] {
  *   `height`; a user entry replaces the built-in one outright, and a name that leads back to itself is an error;
  * - `height` runs from the bottom up (`[height, 0]`) except for discrete scales, which read `[0, height]`;
  * - a range that is not a list, for a discrete scale, is a domain description (the range of a band can be a field);
- * - a `{signal}` anywhere an interpolation is named is resolved like any other literal (vega's own parser crashes there).
+ * - a `{signal}` anywhere an interpolation is named, in the `interval`/`step` of an object `nice` and inside a nested list of a range
+ *   is resolved like any other literal (vega's own parser crashes on the first two, and leaves the third unresolved: the deviations
+ *   table of docs/ARCHITECTURE.md);
+ * - a `{signal}` reference that parses to a literal (`true`, `null`) or a constant (`PI`) is that value; a bare name is a signal.
  */
 
 /** The settings of a scale: the resolved parts the builder reads by name, and any other key of the spec as an option. */

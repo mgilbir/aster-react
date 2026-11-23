@@ -13,6 +13,8 @@
  * - a field list entry may be a literal list or a signal; its values count as one dataset of their own.
  */
 import { SpecParseError } from './parse-error.js'
+import { parseExpressionCached } from './expr-parser.js'
+import { ExpressionConstants } from './expr-interpreter.js'
 import { isDiscrete, isQuantile } from './scale.js'
 import { aggregateGroup } from './transform.js'
 import { part } from './engine-parts.js'
@@ -51,16 +53,24 @@ export interface ScaleContext {
   warn?: (message: string, ...detail: unknown[]) => void
 }
 
-/** A name a signal reference may be: a bare identifier. */
+/** Text that may be a bare name (cheap to test before the text is parsed). */
 const IDENTIFIER = /^[A-Za-z_$][\w$]*$/
-/** Names an expression knows without a signal. */
-const EXPRESSION_CONSTANTS = new Set(['NaN', 'E', 'LN2', 'LN10', 'LOG2E', 'LOG10E', 'PI', 'SQRT1_2', 'SQRT2', 'MIN_VALUE', 'MAX_VALUE'])
+
+/**
+ * Whether a reference is a bare name the expression language does not know by itself: as the parser reads it, an identifier that is
+ * none of the language's constants. `true`, `false` and `null` read as literals, `PI` as a constant.
+ */
+function isFreeName(reference: string): boolean {
+  if (!IDENTIFIER.test(reference)) return false
+  const tree = parseExpressionCached(reference)
+  return tree.type === 'Identifier' && !Object.hasOwn(ExpressionConstants, tree.name)
+}
 
 /** The value a `signal` reference stands for: a named signal's value, or the value of an expression. */
 export function signalValue(reference: string, ctx: ScaleContext): unknown {
   if (Object.hasOwn(ctx.signals, reference)) return ctx.signals[reference]
-  // a bare name that is no signal is a slip in the spec; anything else is an expression
-  if (IDENTIFIER.test(reference) && !EXPRESSION_CONSTANTS.has(reference)) raise(`Unrecognized signal name: ${reference}`)
+  // a bare name that is no signal is a slip in the spec; anything else (a literal, a constant, an expression) is evaluated
+  if (isFreeName(reference)) raise(`Unrecognized signal name: ${reference}`)
   if (!ctx.evaluate) raise(`Unrecognized signal expression: ${reference}`)
   return ctx.evaluate!(reference)
 }
