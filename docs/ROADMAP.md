@@ -104,6 +104,9 @@ Each item is something the code or the gates show today; none is a plan that has
   itself, asynchronously, under the host's URL policy ([LIMITS.md](LIMITS.md#loading-url-data-loadspecdataspec-options)).
 - **Probes.** `packages/conformance/probes` holds two probes; both pass today and can be promoted into `corpus/`.
 - **Streaming transport.** The host owns the network and decides when to flush.
+- **Signal handlers that re-encode an item.** A signal's `on` entry `{events, encode: "<set>"}` (vega re-runs the named encode
+  set of the event's mark on the event's item) is refused when the spec is compiled ([ERRORS.md](ERRORS.md)). It needs the
+  evaluation to keep, per item, which encode set an event last applied to it: the state `encode.hover` keeps.
 - **Transitions on canvas.** `transition` animates the SVG renderer only; the canvas renderer and batched dense marks
   draw the new scene at once ([ANIMATION.md](ANIMATION.md#what-does-not-animate)).
 - **Release.** Move publishing from the `NPM_TOKEN` secret to npm trusted publishing now that the packages exist, and
