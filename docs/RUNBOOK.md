@@ -249,7 +249,7 @@ development-only code. Set it yourself to see the checks run (`NODE_ENV=developm
 
 | Variable | Read by | Default | Effect |
 |---|---|---|---|
-| `ASTER_BUDGET_IGNORE_SIDE_EFFECTS` | `packages/benchmarks/scripts/budget.mjs` | unset | `1` bundles as if the packages declared no `sideEffects` field. The bundle rows must then FAIL; `scripts/bundle-shaking.test.mjs` uses it to prove the budget watches tree-shaking. |
+| `ASTER_BUDGET_SIDE_EFFECTS` | `packages/benchmarks/scripts/budget.mjs` | unset | `all` bundles as if the packages declared no `sideEffects` field (nothing shakes), `none` as if no module had an effect (a row built on a bare `import '...'` loses it). The rows must then FAIL; `scripts/bundle-shaking.test.mjs` uses both to prove the budget watches tree-shaking. `ASTER_BUDGET_IGNORE_SIDE_EFFECTS=1` is the old name of `all`. |
 | `ASTER_SHAKE_ENV` | `scripts/check-bundle-shaking.mjs` | `{}` | Set by the script itself: the JSON argument its generated runner passes to the bundled pattern module. Do not set it. |
 | `ASTER_VERIFY_PUBLISH_ROOT`, `ASTER_VERIFY_PUBLISH_PACKER` | `scripts/verify-publish.mjs` | the repository root, `pnpm` | Test hooks of `scripts/verify-publish.test.mjs`: a copy of the repository to verify, and the packer (`npm` proves the `workspace:` check bites). |
 | `ASTER_RELEASE_WORKFLOW` | `scripts/release-workflow.test.mjs` | `.github/workflows/release.yml` | The workflow file the guard reads, so a fault-injected copy can be checked. |

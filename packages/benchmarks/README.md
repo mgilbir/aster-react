@@ -90,7 +90,7 @@ The browser runner needs a Chromium for Playwright (`pnpm --filter @aster-charts
 - `src/browser-entry.ts` — `window.__bench` API bundled into the browser page
 - `scripts/browser.bench.mjs` — esbuild + Playwright + CDP driver
 - `scripts/bundle-size.mjs` — per-approach payload table
-- `scripts/budget.mjs` — per-import-pattern gzip gates (core `renderSpec`, `useChart`, `<Chart>`, `<SvgChart>`, `<SvgChart>` + `interaction`, `<Chart>` + VL, and dom/canvas/hit/signals/load/geo/transforms as marginal cost on top of core); part of `pnpm check`. `ASTER_BUDGET_IGNORE_SIDE_EFFECTS=1` bundles as if the manifests had no `sideEffects` field, and the `useChart`/`<Chart>` rows must then fail. It compares each `dist` file with its source and exits if one is missing or older, so it never measures a stale build
+- `scripts/budget.mjs` — per-import-pattern gzip gates (core `renderSpec`, `useChart`, `useChartWorker`, `hydrateChart`, `/ssr`, `<Chart>`, `<SvgChart>`, `<SvgChart>` + `interaction`, `<Chart>` + VL / all, and dom/canvas/hit/signals/load/geo/transforms/transition/png as marginal cost on top of core); part of `pnpm check`. Each file of an app is gzipped on its own, the React rows also gate up front + on demand, and a measure must sit 0.3 to 0.7 kB under its ceiling. The rows and ceilings are `scripts/budget-rows.mjs`, the arithmetic `scripts/budget-lib.mjs` (tested by `scripts/budget.test.mjs`). `ASTER_BUDGET_SIDE_EFFECTS=all` bundles as if the manifests had no `sideEffects` field and `none` as if no module had an effect; the rows must then fail. It compares each `dist` file with its source and exits if one is missing or older, so it never measures a stale build
 
 ## Results
 
