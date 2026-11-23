@@ -162,6 +162,29 @@ describe('bound inputs show and write what vega-view\'s do', () => {
   }
 })
 
+describe('`debounce` delays the write as vega-view\'s does', () => {
+  it('a typed value reaches the signal only after the delay', async () => {
+    const s = spec({ name: 's', value: 'a', bind: { input: 'text', debounce: 60 } })
+    for (const [shellName, shell] of SHELLS) {
+      const v = await vegaOf(s)
+      const a = asterOf(shell, s)
+      const type = (root: Element): void => {
+        const el = root.querySelector('input')!
+        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(el, 'typed')
+        el.dispatchEvent(new Event('input', { bubbles: true }))
+      }
+      type(v.root)
+      act(() => type(a.root))
+      await tick()
+      await v.view.runAsync()
+      expect([shellName, a.signal(), v.view.signal('s')]).toEqual([shellName, 'a', 'a'])
+      await act(async () => { await new Promise((r) => setTimeout(r, 120)) })
+      await v.view.runAsync()
+      expect([shellName, a.signal(), v.view.signal('s')]).toEqual([shellName, 'typed', 'typed'])
+    }
+  })
+})
+
 describe('the radio groups of two charts on a page are their own (C156)', () => {
   it('choosing in one chart leaves the other as it was', () => {
     const s = spec({ name: 's', value: 'a', bind: { input: 'radio', options: ['a', 'b'] } })
