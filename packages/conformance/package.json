@@ -33,8 +33,8 @@
     "@aster-charts/core": "workspace:*",
     "@aster-charts/react": "workspace:*",
     "@aster-charts/vl": "workspace:*",
-    "vega": "^6.3.1",
-    "vega-lite": "^6.4.3"
+    "vega": "6.3.1",
+    "vega-lite": "6.4.3"
   },
   "devDependencies": {
     "@types/node": "^22.20.1",
@@ -56,7 +56,7 @@
     "tsx": "^4.19.0",
     "typescript": "^5.8.0",
     "vega-datasets": "3.2.1",
-    "vega-embed": "^7.1.0",
+    "vega-embed": "7.1.0",
     "vega-expression": "6.2.1",
     "vega-format": "2.1.2",
     "vega-functions": "6.1.3",
