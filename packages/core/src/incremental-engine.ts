@@ -16,6 +16,7 @@ import { fieldsArePlainNames } from './param-resolve.js'
 import { signalValueOf } from './transform-params.js'
 import { checkRowCount } from './limits.js'
 import { markTuples, copyTuple } from './util.js'
+import { beforeWrite } from './content-stamp.js'
 import { datasetsReadIn } from './step-reuse.js'
 import { lexedText } from './expr-text.js'
 import type { CompiledTransform, SortSpec } from './types.js'
@@ -138,6 +139,7 @@ function rowLocalAppendPulse(
     if (i < 0 || i >= base) continue
     const derived = applyOne([rows[i]!], t, tctx, sourceName)
     if (derived.length !== 1) return null
+    beforeWrite(prev, i)
     prev[i] = derived[0]!
     changed.push(i)
   }
@@ -181,6 +183,7 @@ function foldAppendPulse(
     const derived = applyOne([rows[i]!], t, tctx, sourceName)
     if (derived.length !== n) return null
     for (let j = 0; j < n; j++) {
+      beforeWrite(prev, i * n + j)
       prev[i * n + j] = derived[j]!
       changed.push(i * n + j)
     }
@@ -584,6 +587,7 @@ function joinAggregateAppendPulse(
         if (old !== undefined && rowsEqual(derived[j]!, old)) continue
         changed.push(i)
       }
+      beforeWrite(prev, i)
       prev[i] = derived[j]!
     }
   }
