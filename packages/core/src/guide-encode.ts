@@ -15,6 +15,7 @@
  * name: it becomes whatever channel the entry says, with the value it has, so a null (from a signal), a missing value or a
  * number where a word goes reach the item as they would any mark's, and the renderers and bounds treat it as they treat a mark's.
  */
+import { entryReadsItem } from './expr-reads.js'
 import type { EncodeValue, SceneGroup, SceneItem } from './types.js'
 import { lerp } from './util.js'
 import { scaleCallFailure, scaleRangeFailure } from './missing-scale.js'
@@ -207,7 +208,8 @@ export class ExpressionFailure extends Error {
 
 export interface EntryHost {
   /** the generic encode-entry evaluator (value / field / signal / scale / band / mult / offset / round ...) */
-  entry(spec: EncodeValue | EncodeValue[], datum: Row): unknown
+  /** `item`: the item being encoded, when the entry names it (vega binds the scenegraph item in an encode) */
+  entry(spec: EncodeValue | EncodeValue[], datum: Row, item?: object): unknown
   /** a signal expression's value */
   expr(code: string): unknown
   /** the view's `width` / `height` signal (what a nested group's grid spans) */
@@ -402,12 +404,27 @@ const step = (key: string, kind: Step['kind'], fn?: EntryFn, entry?: EncodeValue
 /** The channels a guide's group gives for its caption only; the labels are formatted before, where a format that throws is the ticks' failure. */
 const SOFT_CHANNELS: ReadonlySet<string> = new Set(['format', 'formatType'])
 
-function stepsOf(block: Block, done?: Block, soft = false): Step[] {
+/** What `item.mark` says of a guide's mark (vega's mark of the part: its type, role and name). */
+interface MarkOf { marktype: string; role: string; name?: string }
+/** An entry that reads `item`, as an entry function: the entry evaluated with the item so far, its datum and its mark. */
+function itemEntry(e: EncodeValue | EncodeValue[], mark: MarkOf | undefined): EntryFn {
+  return (s: EntryScope) => {
+    const item = Object.create(s.item, {
+      datum: { value: s.datum, enumerable: true },
+      mark: { value: { marktype: mark?.marktype, role: mark?.role, name: mark?.name, group: s.group }, enumerable: true },
+    }) as object
+    return s.host.entry(e, s.datum, item)
+  }
+}
+
+function stepsOf(block: Block, done?: Block, soft = false, mark?: MarkOf): Step[] {
   const steps: Step[] = []
   for (const key in block) {
     const e = block[key]
     if (e == null) continue
     if (typeof e === 'function') steps.push(step(key, e.perRun === true ? 4 : 1, e))
+    // an entry that reads `item` reads the item so far: run per item, with it, as a transcribed function is (C31)
+    else if (entryReadsItem(e)) steps.push(step(key, 1, itemEntry(e as EncodeValue | EncodeValue[], mark)))
     // (an encode entry the block before ran on the same item reads the datum and the scales, never the item: it gives the
     // same value again, and is not evaluated twice -- unless the block before moved a channel (resolveExtents): the entry
     // then puts its own value back, so the caller passes no `done` block)
@@ -429,8 +446,8 @@ interface BlockPlan {
   dyn?: Step[]
 }
 
-function planOf(block: Block, done?: Block, seed?: Rec, soft = false): BlockPlan {
-  const steps = stepsOf(block, done, soft)
+function planOf(block: Block, done?: Block, seed?: Rec, soft = false, mark?: MarkOf): BlockPlan {
+  const steps = stepsOf(block, done, soft, mark)
   if (steps.some((st) => st.kind === 1)) return { steps }
   const tmpl: Rec = seed ? { ...seed } : {}
   const dyn: Step[] = []
@@ -534,7 +551,8 @@ function planOfDef(def: GuideMarkDef, cfg: GuideStyles): Plan {
   if (plan === undefined || plan.cfg !== cfg || plan.src !== def.encode) {
     const encode = withStyleDefaults(def.encode, def.type, def.style, cfg)
     const soft = def.role === 'axis' || def.role === 'legend'
-    plan = memo._plan = { cfg, src: def.encode, encode, enter: planOf(encode.enter, undefined, def.seed, soft), update: planOf(encode.update, hasSpatial(encode.enter, def.type) ? undefined : encode.enter, undefined, soft), spatialEnter: hasSpatial(encode.enter, def.type), spatialUpdate: hasSpatial(encode.update, def.type) }
+    const mark: MarkOf = { marktype: def.type, role: def.role, ...(def.name !== undefined ? { name: def.name } : {}) }
+    plan = memo._plan = { cfg, src: def.encode, encode, enter: planOf(encode.enter, undefined, def.seed, soft, mark), update: planOf(encode.update, hasSpatial(encode.enter, def.type) ? undefined : encode.enter, undefined, soft, mark), spatialEnter: hasSpatial(encode.enter, def.type), spatialUpdate: hasSpatial(encode.update, def.type) }
   }
   return plan
 }

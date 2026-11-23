@@ -15,6 +15,30 @@ export const dataKey = (name: string): string => `data:${name}`
 
 const READS = new TextTable<ReadonlySet<string>>('expression reads', 2048, 2_000_000)
 
+/**
+ * Whether an encode entry (or a list of rules) holds an expression that names `item` (vega binds the scenegraph item there): its
+ * `signal` and `test` texts, at any depth. One that does is evaluated per item with the item it is building.
+ */
+const ENTRY_READS_ITEM = new WeakMap<object, boolean>()
+export function entryReadsItem(entry: unknown): boolean {
+  if (entry === null || typeof entry !== 'object') return false
+  let known = ENTRY_READS_ITEM.get(entry)
+  if (known === undefined) {
+    known = false
+    const visit = (v: unknown, depth: number): void => {
+      if (known || v === null || typeof v !== 'object' || depth > 12) return
+      for (const [k, x] of Object.entries(v as Record<string, unknown>)) {
+        if ((k === 'signal' || k === 'test') && typeof x === 'string') {
+          try { if (expressionReads(x).has('item')) known = true } catch { /* refused when the spec was compiled */ }
+        } else visit(x, depth + 1)
+      }
+    }
+    visit(entry, 0)
+    ENTRY_READS_ITEM.set(entry, known)
+  }
+  return known
+}
+
 /** The identifiers an expression reads (signal references among them), and `data:NAME` for every dataset it reads by name. */
 export function expressionReads(code: string): ReadonlySet<string> {
   let have = READS.get(code)
