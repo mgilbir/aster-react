@@ -855,6 +855,7 @@ point selection and the a11y tree resolve through the scene.
 - Client-only mounts batch directly. SSR/hydrated pages emit the per-item markup on
   the server (so hydration matches) and switch to batched in place after hydration.
 - A mark with `href` links is never batched.
+- `incremental={false}` (string mode) never batches: it serializes per-item markup for every update.
 
 Pan, zoom and brushing are driven through scale `domainRaw`; the gestures, the keyboard contract and the rule that
 picks the scales are in `docs/INTERACTION.md`.
