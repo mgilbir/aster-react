@@ -3342,7 +3342,8 @@ function embedCells(cells: CompositeCell[], parent: VLSpec, ctx: CompileCtx, lay
           name: `${prefix}group`,
           type: 'group',
           style: (vg.style as string | string[] | undefined) ?? 'cell',
-          encode: { update: { width: { signal: wName }, height: { signal: hName }, ...(vg.encode as { update?: Record<string, unknown> } | undefined)?.update } },
+          // (model.ts assembleGroupEncodeEntry: a view's description is its group's)
+          encode: { update: { width: { signal: wName }, height: { signal: hName }, ...(vg.encode as { update?: Record<string, unknown> } | undefined)?.update, ...(typeof vg.description === 'string' ? { description: { value: vg.description } } : {}) } },
         }
     if (composite) group.layout = vg.layout
     // (the child's title is assembled already: framed on its group for a unit / layer, anchored at the start for a composition)
