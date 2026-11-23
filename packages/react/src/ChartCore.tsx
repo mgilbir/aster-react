@@ -41,7 +41,9 @@ import {
   pixelSpanOf,
   positionalScales,
   selectValueToInterval,
-  selectionToPixels,
+  checkAxes,
+  checkSelectValue,
+  clippedSelectionRect,
   viewToDomainRaw,
   zoomAxisBy,
   type HiddenLegendEntry,
@@ -469,10 +471,21 @@ function ChartView({
   const dataInput = useDataInput(dataProp)
   const data = dataInput.data
   const urlPolicy = useStablePolicy(urlPolicyProp)
-  const controlledView = useStableContent(viewProp)
-  const brush = useStableContent(brushProp)
-  const selection = useStableContent(selectionProp)
-  const select = useStableContent(selectProp)
+  // Controlled pan/zoom and selection values are checked at the boundary: an axis that is not a pair of finite, different
+  // numbers is reported through `onError` (once per value) and left out, never handed to the scales (C243, C490).
+  const stableView = useStableContent(viewProp)
+  const stableBrush = useStableContent(brushProp)
+  const stableSelection = useStableContent(selectionProp)
+  const stableSelect = useStableContent(selectProp)
+  const checkedView = React.useMemo(() => checkAxes('view', stableView), [stableView])
+  const checkedBrush = React.useMemo(() => checkAxes('brush', stableBrush), [stableBrush])
+  const checkedSelection = React.useMemo(() => checkSelectValue('selection', stableSelection), [stableSelection])
+  const checkedSelect = React.useMemo(() => checkSelectValue('select', stableSelect), [stableSelect])
+  const controlledView = checkedView.value
+  const brush = checkedBrush.value
+  const selection = checkedSelection.value
+  const select = checkedSelect.value
+  const propProblems = [...checkedView.problems, ...checkedBrush.problems, ...checkedSelection.problems, ...checkedSelect.problems]
   const a11y = useStableContent(a11yProp)
   // Which scales `view`/`brush`/`selection`'s `x`/`y` refer to.
   const positional = React.useMemo(() => positionalScales(spec), [spec])
@@ -496,6 +509,14 @@ function ChartView({
   const [internalSelection, setInternalSelection] = React.useState<SelectValue | null>(null)
   const [hiddenLegend, setHiddenLegend] = React.useState<Map<string, HiddenLegendEntry>>(() => new Map())
   const [activeA11yId, setActiveA11yId] = React.useState<string | null>(null)
+
+  // Whether the chart is mounted: a handle the host keeps past unmount is inert (C489): it notifies no listener and returns
+  // no scene. (A layout effect, so it is set before the handle is attached and before a parent's layout effect can use it.)
+  const mountedRef = React.useRef(false)
+  React.useLayoutEffect(() => {
+    mountedRef.current = true
+    return () => { mountedRef.current = false }
+  }, [])
 
   // Props that only fire from callbacks are read through refs, so the handlers
   // that use them keep a stable identity.
@@ -693,6 +714,17 @@ function ChartView({
     reported.error = key
     for (const problem of evaluation.problems) onErrorRef.current?.(new Error(`[aster] ${problem}`))
   }, [evaluation])
+
+  // A controlled view or interval that was refused (see `checkAxes`): reported once for each value that has the problem.
+  const propProblemKey = propProblems.join('\n')
+  React.useEffect(() => {
+    if (!propProblemKey) return
+    for (const problem of propProblemKey.split('\n')) {
+      const e = new Error(`[aster] ${problem}`)
+      if (onErrorRef.current) onErrorRef.current(e)
+      else (loggerRef.current ?? console).warn(e.message)
+    }
+  }, [propProblemKey])
 
   // A capability the caller needs but did not inject (plain `<SvgChart>`): the chart still renders what it can,
   // and every unavailable feature is REPORTED, like a rejected `dataChanges` changeset, never silently dead.
@@ -1133,7 +1165,7 @@ function ChartView({
   }, [renderer, displayScene, canvasCap, canvasImagesEpoch])
 
   const hasSelection = onSelect != null || brush != null || onPointSelect != null
-    || selection !== undefined || onSelectionChange != null
+    || selection !== undefined || select !== undefined || onSelectionChange != null
   const hasInteraction = hasSelection || panZoomEnabled
 
   const selectionValue: SelectValue | null = select !== undefined
@@ -1372,7 +1404,8 @@ function ChartView({
           g.onPointSelect?.(datum)
         }
         g.onSelect?.(null)
-        if (pointSelect) emitSelectionRef.current({ type: 'point', datum })
+        // the click replaces the interval: by the point it selected, else by nothing (the host was told `onSelect(null)`)
+        emitSelectionRef.current(pointSelect ? { type: 'point', datum } : null)
       } else {
         const ci = chartInfoRef.current
         if (ci) {
@@ -1450,7 +1483,7 @@ function ChartView({
     const next = nodes[nextIdx]
     if (!next) return
     setActiveA11yId(next.id)
-    const el = host.querySelector<HTMLElement>(`[data-a11y-id="${next.id}"]`)
+    const el = host.querySelector<HTMLElement>(`[data-a11y-id="${CSS.escape(next.id)}"]`)
     el?.focus()
   }, [])
 
@@ -1522,6 +1555,8 @@ function ChartView({
 
   const handleChartKeyDown = React.useCallback((e: React.KeyboardEvent) => {
     if (e.defaultPrevented) return
+    // a key typed in a bound input (or another control inside the chart) is the control's: no pan, zoom, reset or clear
+    if (isOwnControl(e.target)) return
     const g = gestureInputsRef.current
     // The container is the chart's tab stop; PageDown / PageUp take focus into the nodes (the arrows pan here).
     if (e.target === e.currentTarget && (e.key === 'PageDown' || e.key === 'PageUp')) {
@@ -1654,19 +1689,23 @@ function ChartView({
 
   // Persisted selection rectangle: the legacy `brush` prop, else the interval
   // of the (controlled or internal) selection value.
-  const persistedInterval = brush ?? selectValueToInterval(selectionValue)
+  // (a controlled `brush`, `null` included, wins over the selection value)
+  const persistedInterval = brush !== undefined ? brush : selectValueToInterval(selectionValue)
   const brushPixelRect = React.useMemo(() => {
     if (!persistedInterval || chartInfo == null) return null
-    return selectionToPixels(persistedInterval, chartInfo, positional)
+    return clippedSelectionRect(persistedInterval, chartInfo, positional)
   }, [persistedInterval, chartInfo, positional])
 
   // --- imperative handle ------------------------------------------
-  React.useImperativeHandle(chartRef, () => ({
-    getScene: () => sceneRef.current,
-    getSvg: () => (sceneRef.current ? renderSceneToSvg(sceneRef.current) : null),
+  React.useImperativeHandle(chartRef, () => {
+    /** The scene a handle call sees: none once the chart is unmounted. */
+    const liveScene = (): SceneRoot | null => (mountedRef.current ? sceneRef.current : null)
+    return {
+    getScene: liveScene,
+    getSvg: () => { const sc = liveScene(); return sc ? renderSceneToSvg(sc) : null },
     getPng: async (options) => {
       // the scene of the call, not of whenever the painter has loaded
-      const scene = sceneRef.current
+      const scene = liveScene()
       const cap = pngCapRef.current
       if (cap == null) throw new Error(PNG_NEEDS_CAPABILITY)
       if (scene == null) return null
@@ -1675,15 +1714,16 @@ function ChartView({
         ?? ((url: string, error: Error) => (loggerRef.current ?? consoleLogger).warn(`[aster] getPng: ${error.message}`, url))
       return renderSceneToPng(scene, { ...options, onImageError })
     },
-    getChartInfo: () => chartInfoRef.current,
-    getView: () => viewRef.current ?? null,
-    setView: (next) => applyViewRef.current(next),
-    resetView: () => applyViewRef.current(null),
+    getChartInfo: () => (mountedRef.current ? chartInfoRef.current : null),
+    getView: () => (mountedRef.current ? viewRef.current ?? null : null),
+    setView: (next) => { if (mountedRef.current) applyViewRef.current(next) },
+    resetView: () => { if (mountedRef.current) applyViewRef.current(null) },
     // Portable: with the event loop bound (SVG or canvas) it runs the spec's
     // dependent signal updates; otherwise (`interactive={false}`, `<SvgChart>`
     // without `interaction`) the value is applied as a signal override.
     // Listeners are notified either way.
     setSignal: (name, value) => {
+      if (!mountedRef.current) return
       const binding = signalBindingRef.current
       if (binding) {
         binding.setSignal(name, value)
@@ -1693,8 +1733,9 @@ function ChartView({
       signalListenersRef.current?.[name]?.(name, value)
       onSignalRef.current?.(name, value)
     },
-    getSignals: () => ({ ...mergedSignalsRef.current }),
-  }), [])
+    getSignals: () => (mountedRef.current ? { ...mergedSignalsRef.current } : {}),
+    }
+  }, [])
 
   const setBoundSignal = React.useCallback((name: string, value: unknown): void => {
     const binding = signalBindingRef.current
@@ -1715,9 +1756,15 @@ function ChartView({
   // ancestor even on a non-interactive chart. (The tooltip is a fixed box placed in
   // the viewport, see ChartTooltip; a chart with tooltips keeps the style it had.)
   const needsPositioning = hasInteraction || tooltipEnabled || a11yTree != null
-  const baseStyle: React.CSSProperties = needsPositioning
-    ? { ...style, position: 'relative', width: '100%', height: '100%', ...(panZoomEnabled ? { touchAction: 'none' } : {}) }
-    : { width: '100%', height: '100%', ...style }
+  // The host's `style` comes last and wins, whatever is on (C294): a `position` of its own other than `static` keeps the
+  // overlays positioned. A chart that takes drags (a brush, a pan) takes them from touch too: the browser does not scroll the
+  // page under them (C491).
+  const baseStyle: React.CSSProperties = {
+    ...(needsPositioning ? { position: 'relative' } : {}),
+    width: '100%', height: '100%',
+    ...(hasInteraction ? { touchAction: 'none' } : {}),
+    ...style,
+  }
   // vega shows 'default' where no item and no spec signal says otherwise; a host's own `style.cursor` takes that place, but
   // not the cursor of an item or of the spec's `cursor` signal, which is the chart saying what is under the pointer
   const outerStyle: React.CSSProperties = cursor === null ? baseStyle
@@ -1735,7 +1782,7 @@ function ChartView({
       onFocus={(e) => { if (e.target === e.currentTarget) focusSpotRef.current = CONTAINER_FOCUS }}
       onBlur={(e) => { if (e.target === e.currentTarget) releaseFocusSpot(e.currentTarget, e.relatedTarget) }}
       onKeyDown={handleChartKeyDown}
-      onDoubleClick={panZoomEnabled ? () => applyViewRef.current(null) : undefined}
+      onDoubleClick={panZoomEnabled ? (e) => { if (!isOwnControl(e.target)) applyViewRef.current(null) } : undefined}
       className={className}
       style={outerStyle}
       onMouseMove={handleTooltipMove}

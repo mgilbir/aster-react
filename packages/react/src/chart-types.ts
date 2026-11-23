@@ -146,7 +146,13 @@ export interface ChartProps {
    * when a transition starts: a new options object does not restart one.
    */
   transition?: boolean | TransitionOptions
+  /** The class of the chart's element (kept in the error state too). */
   className?: string
+  /**
+   * The style of the chart's element, applied last: it wins over the chart's own `width: 100%`, `height: 100%`, `position:
+   * relative` and `touch-action`, whatever is enabled. Keep the element positioned (any `position` but `static`) when the chart
+   * draws overlays (the accessible tree, a brush). Kept in the error state too.
+   */
   style?: React.CSSProperties
   /**
    * Signal values for the spec's signals. Event- and input-driven values take
@@ -161,7 +167,10 @@ export interface ChartProps {
    * identically on the SVG and canvas backends.
    */
   onPointSelect?: (datum: Record<string, unknown> | null) => void
-  /** Persisted interval rectangle to draw (the legacy controlled form of `selection`). */
+  /**
+   * Persisted interval rectangle to draw (the legacy controlled form of `selection`); `null` draws none, whatever was
+   * dragged. Clipped to the plot. An axis that is not two finite, different numbers is reported through `onError` and not drawn.
+   */
   brush?: SelectionInterval | null
   /**
    * Unified declarative selection: either an interval or a point value.
@@ -191,7 +200,11 @@ export interface ChartProps {
   pan?: boolean
   /** Enable zooming only: wheel, pinch and the `+`/`-` keys. See `pan`. */
   zoom?: boolean
-  /** Controlled visible domain (`x`/`y` = the horizontal/vertical positional scale). Omit for uncontrolled pan/zoom. */
+  /**
+   * Controlled visible domain (`x`/`y` = the horizontal/vertical positional scale). Omit for uncontrolled pan/zoom. Compared by
+   * content. An axis that is not two finite, different numbers is reported through `onError` (once per value) and that axis is
+   * drawn unzoomed.
+   */
   view?: ViewDomain | null
   onViewChange?: (view: ViewDomain | null) => void
   /**

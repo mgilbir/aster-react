@@ -160,14 +160,16 @@ forEachVariant(['canvas', 'signals'], (Chart) => {
     })
 
     it('stops listening to the canvas when the chart unmounts', () => {
-      const { canvas, ref } = mount(bars([{ name: 'moves', value: 0, on: [{ events: 'mousemove', update: 'moves + 1' }] }]))
+      // (observed through `onSignal`: a handle kept past unmount is inert and reads nothing, see Chart.gesture-props)
+      const moves: unknown[] = []
+      const { canvas, ref } = mount(bars([{ name: 'moves', value: 0, on: [{ events: 'mousemove', update: 'moves + 1' }] }]), { onSignal: (name: string, value: unknown) => { if (name === 'moves') moves.push(value) } })
       send(canvas, 'pointermove', 20, 20)
-      const handle = ref.current!
-      expect(handle.getSignals().moves).toBe(1)
+      expect(ref.current!.getSignals().moves).toBe(1)
+      expect(moves).toEqual([1])
       act(() => root!.unmount())
       root = null
       send(canvas, 'pointermove', 22, 20)
-      expect(handle.getSignals().moves).toBe(1)
+      expect(moves).toEqual([1])
     })
   })
 })
