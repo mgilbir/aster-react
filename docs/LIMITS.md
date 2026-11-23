@@ -371,8 +371,11 @@ supply (`test`, `regexp`, `replace`/`split` with a RegExp or a `/literal/`,
      spaces runs 14 s, `.*foo.*bar` on 6 000 characters 16 s, the trim idiom on 4 000 spaces before `x\n\nx` 19.7 s; the
      default input cap is 10 000. Degree 2 is allowed (`a*b` and `\s+$` take about 0.1 s on 10 000 characters), and a loop
      after which the match can always end is no hazard (`\s*.*`, `\d+\.?\d*`: the first path that reaches it succeeds);
-   - **too many ways** to match one input with every loop taken once: over 4 096 (`(a|a)(a|a)...`), or over 8 next to a
-     degree-2 chain;
+   - **too many live paths**: over 4 096 ways to have matched one input so far (`(a|a)(a|a)...`), a loop counted as
+     absorbing any length of it; or, next to a degree-2 chain, more than 16 transitions tried per character from those paths
+     (the searched `a*x` tries 5). A bounded run after a loop over the same characters is entered from every place the loop
+     can stop, which multiplies the quadratic search by the run's length: `a*[ab]{0,20}x` ran 11 s and `a+a{30}x` 14.6 s on
+     10 000 characters, and are refused; `a*a{1,3}x` (0.19 s) is not;
    - a **backreference** inside a group that repeats (`(?:(a)\1)*`).
    A lookaround body is screened as a pattern of its own. A Unicode property is read as "any character", a
    case-insensitive set is closed under every case mapping V8 applies (derived from V8's own `iu` matching, about 0.15 s
