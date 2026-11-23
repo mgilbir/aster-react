@@ -321,7 +321,11 @@ function compareItems(real: SceneItem[], ours: SceneItem[], path: string, diffs:
 }
 
 /** Compare one spec (already Vega) through real Vega and the engine. */
-export async function sceneDiff(spec: Record<string, unknown>): Promise<SceneDiffResult> {
+/**
+ * `adjustOurs` sees Aster's scene before it is compared: the gate's `--plant-difference` (scripts/scene-diff.mts) moves an
+ * item there to prove the comparison and the exit path can fail.
+ */
+export async function sceneDiff(spec: Record<string, unknown>, adjustOurs?: (scene: SceneRoot) => void): Promise<SceneDiffResult> {
   // URL datasets are part of the resolved scene; resolve them exactly as the
   // renderer would before comparing.
   spec = await loadSpecData(spec as never, TRUSTED_LOAD_OPTIONS) as unknown as Record<string, unknown>
@@ -339,6 +343,7 @@ export async function sceneDiff(spec: Record<string, unknown>): Promise<SceneDif
     const realNodes = realRootItems(realRoot)
     const realScopes = collectRealScopes(realNodes)
     const scene = evaluateChart(compileChart(ourSpec as never))
+    adjustOurs?.(scene)
     const ourScopes = collectOurScopes(scene.items)
     // Root scope scales come from the view's own runtime context (the scene's
     // context scales are operator wrappers; `_runtime.scales` is the root map).

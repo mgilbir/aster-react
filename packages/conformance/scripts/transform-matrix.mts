@@ -7,15 +7,26 @@
  * joinaggregate keys, impute methods/keyvals, fold/flatten/pivot/lookup and the
  * generating transforms). Each case is rendered through real Vega and the
  * engine, canonicalized and diffed.
+ *
+ * A case whose oracle needs a real canvas (`browser`: the wordcloud, which vega lays out from the ink of drawn glyphs) is run
+ * in Chromium through the gallery's inline runner (vega and <Chart> on one seeded random stream, src/gallery/react.ts),
+ * never skipped. The verdict is runGate's (scripts/lib/run-gate.mjs): `compared` counts the cases compared in Node, `browser`
+ * those compared in Chromium; both have floors on a full run, and a `--filter` that matches nothing fails.
+ * `--plant-difference` adds a stray mark to Aster's SVG of every Node case.
+ *
+ * Run after `pnpm build`: npx tsx scripts/transform-matrix.mts [--filter substr]
  */
 import '@aster-charts/core/geo'
 import '@aster-charts/core/transforms'
 import { renderSpec } from '@aster-charts/core'
 import { renderWithVega } from '../src/render-vega.js'
 import { canonicalizeSvg, diffCanonical } from '../src/normalize.js'
+import { plantSvg } from '../src/gate-plant.js'
+import { runInline } from '../src/gallery/react.js'
 import { cli } from '../../../scripts/lib/cli.mjs'
+import { GATE_FLAGS, runGate, type Gate } from '../../../scripts/lib/run-gate.mjs'
 
-cli({ url: import.meta.url, flags: { filter: 'value' } })
+cli({ url: import.meta.url, flags: { filter: 'value', ...GATE_FLAGS } })
 
 type Spec = Record<string, unknown>
 const rows = [
@@ -52,8 +63,8 @@ function tx(transform: Spec[]): Spec[] {
 function xv(field: string): unknown { return { scale: 'x', field } }
 function yv(field: string): unknown { return { scale: 'y', field } }
 
-const cases: Array<{ name: string; spec: Spec; browserOnly?: boolean }> = []
-const add = (name: string, spec: Spec, browserOnly = false): void => { cases.push({ name, spec, ...(browserOnly ? { browserOnly } : {}) }) }
+const cases: Array<{ name: string; spec: Spec; browser?: boolean }> = []
+const add = (name: string, spec: Spec, browser = false): void => { cases.push({ name, spec, ...(browser ? { browser } : {}) }) }
 
 // bin option matrix
 for (const [name, opt] of Object.entries({
@@ -158,7 +169,7 @@ add('wordcloud', {
     x: { field: 'x' }, y: { field: 'y' }, text: { field: 'c' }, fontSize: { field: 'fontSize' },
     font: { field: 'font' }, angle: { field: 'angle' }, fill: { value: 'steelblue' },
   } } }],
-}, true) // wordcloud needs a real canvas for the oracle's text metrics (browser gate)
+}, true) // wordcloud needs a real canvas for the oracle's text metrics: compared in Chromium
 add('voronoi', {
   $schema: 'https://vega.github.io/schema/vega/v6.json',
   width: 240, height: 160, padding: 5, autosize: 'none', background: 'white',
@@ -173,10 +184,10 @@ add('voronoi', {
   ],
 })
 
-async function run(spec: Spec): Promise<{ pass: boolean; diffs: string[]; error?: string }> {
+async function run(spec: Spec, plant: boolean): Promise<{ pass: boolean; diffs: string[]; error?: string }> {
   try {
     const [oracleSvg, ours] = await Promise.all([renderWithVega(spec), Promise.resolve(renderSpec(spec as never))])
-    const diffs = diffCanonical(canonicalizeSvg(oracleSvg), canonicalizeSvg(ours))
+    const diffs = diffCanonical(canonicalizeSvg(oracleSvg), canonicalizeSvg(plant ? plantSvg(ours) : ours))
     return { pass: diffs.length === 0, diffs }
   } catch (e) {
     return { pass: false, diffs: [], error: e instanceof Error ? e.message : String(e) }
@@ -186,21 +197,44 @@ async function run(spec: Spec): Promise<{ pass: boolean; diffs: string[]; error?
 const argv = process.argv.slice(2)
 const filterIdx = argv.indexOf('--filter')
 const filter = filterIdx >= 0 ? argv[filterIdx + 1]! : ''
-let pass = 0
-let skipped = 0
-const fail: string[] = []
-for (const c of cases) {
-  if (filter && !c.name.includes(filter)) continue
-  if (c.browserOnly) { skipped++; continue }
-  const r = await run(c.spec)
-  if (r.pass) pass++
-  else {
-    fail.push(c.name)
-    console.log(`FAIL  ${c.name}${r.error ? `  (${r.error})` : ''}`)
-    for (const d of r.diffs.slice(0, 4)) console.log(`      ${d}`)
+
+async function main(gate: Gate): Promise<void> {
+  const selected = cases.filter((c) => !filter || c.name.includes(filter))
+  let pass = 0
+  for (const c of selected) {
+    if (c.browser) continue
+    const r = await run(c.spec, gate.plant)
+    if (r.error !== undefined) gate.error(c.name, r.error)
+    else if (!r.pass) gate.differ(c.name, r.diffs[0]!)
+    else {
+      pass++
+      gate.agree(c.name)
+    }
+    if (!r.pass) {
+      console.log(`FAIL  ${c.name}${r.error ? `  (${r.error})` : ''}`)
+      for (const d of r.diffs.slice(0, 4)) console.log(`      ${d}`)
+    }
   }
+  const inBrowser = selected.filter((c) => c.browser)
+  if (inBrowser.length) {
+    const out = await runInline(inBrowser.map((c) => ({ id: c.name, spec: c.spec, liveMs: 0 })), () => undefined, 1)
+    for (const o of out) {
+      if (o.status === 'pass') {
+        pass++
+        gate.agree(o.id, 'browser')
+      } else if (o.status === 'fail') gate.differ(o.id, `${o.first ?? 'differs'} (Chromium)`, 'browser')
+      else gate.error(o.id, `${o.status}: ${o.reason ?? ''} ${o.first ?? ''} (Chromium)`)
+    }
+  }
+  console.log(`\n[transforms] ${pass}/${selected.length} transform cases match`)
 }
-const total = cases.filter((c) => !filter || c.name.includes(filter)).length
-console.log(`\n[transforms] ${pass}/${total} transform cases match${skipped ? ` (${skipped} browser-only skipped)` : ''}`)
-if (fail.length) console.log(`[transforms] failing: ${fail.join(', ')}`)
-process.exit(fail.length ? 1 : 0)
+
+await runGate({
+  name: 'transform-matrix',
+  counters: {
+    compared: { floor: 75, what: 'transform cases compared with real vega in Node' },
+    browser: { floor: 1, what: 'transform cases compared with real vega in Chromium (a real canvas)' },
+  },
+  partial: Boolean(filter),
+  run: main,
+})
