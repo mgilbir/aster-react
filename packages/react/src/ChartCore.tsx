@@ -18,6 +18,7 @@ import { isPromiseLike, normalizeSpecResult, useChartEpoch, useStableContent, us
 import { useAddons } from './addons.js'
 import { validateDataChanges } from './dataChanges.js'
 import { SCALE_INFO_KEY, scalesFromSerialized, type SerializedScale } from './serialScales.js'
+import { SignalBinds, type SignalBindDef } from './binds.js'
 import {
   checkSizeProp, createEventSignalStore, useControlledSignals, useDataInput, useStablePolicy, type EventSignalStore,
 } from './inputs.js'
@@ -192,131 +193,6 @@ const isA11yNodeKey = (key: string): boolean =>
   || key === 'PageUp' || key === 'PageDown'
   || key === 'ArrowLeft' || key === 'ArrowRight' || key === 'ArrowUp' || key === 'ArrowDown'
   || key === '+' || key === '=' || key === '-'
-
-interface SignalBindDef {
-  name?: unknown
-  value?: unknown
-  bind?: unknown
-}
-
-function SignalBinds({ signals, values, onChange }: {
-  signals: SignalBindDef[]
-  values: Record<string, unknown>
-  onChange: (name: string, value: unknown) => void
-}): React.ReactElement | null {
-  const defs = signals.filter((s) => typeof s.name === 'string' && s.bind != null)
-  if (!defs.length) return null
-  const control = (def: SignalBindDef): React.ReactNode => {
-    const name = String(def.name)
-    const bind = typeof def.bind === 'object' && def.bind != null
-      ? def.bind as Record<string, unknown>
-      : { input: String(def.bind) }
-    const input = typeof bind.input === 'string' ? bind.input : 'range'
-    const value = values[name] ?? def.value ?? bind.value
-    const label = typeof bind.name === 'string' ? bind.name : name
-    const options: Array<{ value: unknown; label: string }> = Array.isArray(bind.options)
-      ? (bind.options as unknown[]).map((o) => {
-          if (o != null && typeof o === 'object') {
-            const rec = o as Record<string, unknown>
-            return { value: rec.value, label: String(rec.label ?? rec.value) }
-          }
-          return { value: o, label: String(o) }
-        })
-      : []
-    const set = (v: unknown): void => onChange(name, v)
-    if (input === 'range') {
-      const min = typeof bind.min === 'number' ? bind.min : undefined
-      const max = typeof bind.max === 'number' ? bind.max : undefined
-      const step = typeof bind.step === 'number' ? bind.step : undefined
-      return (
-        <label key={name} data-signal={name} style={{ display: 'inline-flex', gap: 8, alignItems: 'center' }}>
-          <span>{label}</span>
-          <input
-            type="range"
-            aria-label={label}
-            min={min} max={max} step={step}
-            value={Number(value ?? min ?? 0)}
-            onChange={(e) => set(Number(e.currentTarget.value))}
-          />
-          <span>{String(value ?? '')}</span>
-        </label>
-      )
-    }
-    if (input === 'select') {
-      // Options are addressed by index so a number/boolean/null option value
-      // round-trips with its type instead of being stringified by the DOM.
-      const selected = options.findIndex((o) => Object.is(o.value, value) || String(o.value) === String(value))
-      return (
-        <label key={name} data-signal={name} style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
-          <span>{label}</span>
-          <select
-            aria-label={label}
-            value={selected >= 0 ? String(selected) : ''}
-            onChange={(e) => {
-              const option = options[Number(e.currentTarget.value)]
-              if (option) set(option.value)
-            }}
-          >
-            {selected < 0 && <option value="" disabled hidden />}
-            {options.map((o, i) => <option key={i} value={String(i)}>{o.label}</option>)}
-          </select>
-        </label>
-      )
-    }
-    if (input === 'checkbox') {
-      return (
-        <label key={name} data-signal={name} style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
-          <input type="checkbox" aria-label={label} checked={Boolean(value)} onChange={(e) => set(e.currentTarget.checked)} />
-          <span>{label}</span>
-        </label>
-      )
-    }
-    if (input === 'radio') {
-      return (
-        <span key={name} data-signal={name} style={{ display: 'inline-flex', gap: 8, alignItems: 'center' }}>
-          <span>{label}</span>
-          {options.map((o) => (
-            <label key={String(o.value)} style={{ display: 'inline-flex', gap: 3, alignItems: 'center' }}>
-              <input type="radio" name={name} aria-label={`${label} ${o.label}`} checked={value === o.value} onChange={() => set(o.value)} />
-              <span>{o.label}</span>
-            </label>
-          ))}
-        </span>
-      )
-    }
-    if (input === 'color') {
-      return (
-        <label key={name} data-signal={name} style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
-          <span>{label}</span>
-          <input type="color" aria-label={label} value={String(value ?? '#000000')} onChange={(e) => set(e.currentTarget.value)} />
-        </label>
-      )
-    }
-    return (
-      <label key={name} data-signal={name} style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
-        <span>{label}</span>
-        <input
-          type={input === 'number' ? 'number' : 'text'}
-          aria-label={label}
-          value={String(value ?? '')}
-          onChange={(e) => set(input === 'number' ? Number(e.currentTarget.value) : e.currentTarget.value)}
-        />
-      </label>
-    )
-  }
-  return (
-    <div
-      data-testid="chart-binds"
-      data-aster-binds=""
-      style={{
-        position: 'relative', zIndex: 2, display: 'flex', flexWrap: 'wrap', gap: 12,
-        alignItems: 'center', padding: '6px 8px', fontSize: 12,
-      }}
-    >
-      {defs.map(control)}
-    </div>
-  )
-}
 
 function a11yTreeOptions(a11y: ChartProps['a11y'], label: string | undefined, selection: SelectValue | null | undefined): A11yOptions | null {
   if (a11y === false) return null
@@ -1777,6 +1653,10 @@ function ChartView({
     }
   }, [])
 
+  // What the bound inputs show: the signal values the scene was drawn with (a spec's own value, `null` included, and what an
+  // update expression computed), else the merged inputs of a scene that does not carry them.
+  const boundValues = (scene as { signalParams?: Record<string, unknown> } | null)?.signalParams ?? mergedSignals
+  const reportBindUnsupported = React.useCallback((message: string): void => { (loggerRef.current ?? console).warn(message) }, [])
   const setBoundSignal = React.useCallback((name: string, value: unknown): void => {
     const binding = signalBindingRef.current
     if (binding) {
@@ -1905,8 +1785,9 @@ function ChartView({
       {!failed && bindDefs.length > 0 && (
         <SignalBinds
           signals={bindDefs}
-          values={mergedSignals}
+          values={boundValues}
           onChange={setBoundSignal}
+          onUnsupported={reportBindUnsupported}
         />
       )}
       {!failed && a11yTree != null && (

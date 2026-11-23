@@ -52,7 +52,9 @@ function clientMount(v: VariantName, spec: VgSpec): { html: string; scene: Chart
   const root = createRoot(container)
   const ref = React.createRef<ChartHandle>()
   act(() => { root.render(element(v, spec, ref)) })
-  const html = container.innerHTML
+  // A radio group's name is React's `useId` of the chart (unique per chart on a page, C156): the root it was mounted in is part
+  // of it, so two separate mounts differ there and nowhere else. The id's root part is set aside; everything else is compared.
+  const html = container.innerHTML.replace(/ name="_r_[0-9a-z]+_/g, ' name="<useId>')
   const scene = ref.current?.getScene() ?? null
   act(() => root.unmount())
   container.remove()
