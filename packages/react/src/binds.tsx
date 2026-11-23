@@ -31,7 +31,7 @@ const INPUT_ATTRIBUTES: Readonly<Record<string, string>> = {
 /** vega-view's equality of an option and a signal value: the same value, or the same text. */
 const valuesEqual = (a: unknown, b: unknown): boolean => a === b || String(a) === String(b)
 
-/** An option's text: its label, else the option (vega: `(labels[i] || option) + ''`). */
+/** An option's text: its label when it has a non-empty one, else the option itself, as text. */
 const optionLabel = (options: readonly unknown[], labels: readonly unknown[], i: number): string => String(labels[i] || options[i])
 
 /** Calls `fn` `ms` after the last call (as vega's `debounce` binding option), or at once without a delay; pending calls end with the control. */
