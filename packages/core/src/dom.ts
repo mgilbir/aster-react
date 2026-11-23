@@ -14,7 +14,7 @@
  */
 import { SYMBOL_DEFAULT_SIZE, pushAll } from './util.js'
 import type { SceneGroup, SceneItem, SceneRoot } from './types.js'
-import { ClipCollector } from './svg-defs.js'
+import { ClipCollector, sceneDefIds } from './svg-defs.js'
 import { isEngineNode, keptInto } from './scene-registry.js'
 import { getTextMetricsProvider } from './text-metrics.js'
 import { formatEnvironmentKey } from './locale.js'
@@ -24,13 +24,26 @@ import {
   areaMarkAttrs,
   arcItemAttrs,
   backgroundRectAttrs,
+  backgroundPathAttrs,
+  batchablePaint,
   circleAttrs,
+  foregroundAttrs,
+  radialPatternAttrs,
+  radialPatternRectAttrs,
+  rectMarkContainerAttrs,
+  rootFrameGroupAttrs,
+  roundedScopeBox,
+  scopeGroupAttrs,
+  translateAttrs,
+  tspanAttrs,
+  type GeneratedPath,
   clipIdAttrs,
   clipRefAttrs,
   clipShapeAttrs,
   computeAreaPath,
   computeLinePath,
   frameAttrs,
+  frameClipDef,
   gradientAttrs,
   groupClipId,
   imageAttrs,
@@ -70,8 +83,8 @@ import {
   itemHref,
   linkAttrs,
   type AttrSink,
-  num,
 } from './render.js'
+import { withSceneOutput } from './scene-output.js'
 
 import './guide-caption.js' // (installs the guide captions the structure tree quotes in aria-label)
 
@@ -260,23 +273,13 @@ const DENSE = new WeakMap<SceneItem[], DenseCache>()
 function batchableSymbol(it: SceneItem): boolean {
   const x = it.x
   const y = it.y
-  // Translucent marks cannot batch: one path composites once where per-item
-  // elements composite each overlap, so alpha would visibly change.
-  const rec = it as Record<string, unknown>
-  const opaque = (it.opacity == null || it.opacity === 1)
-    && (it.fillOpacity == null || it.fillOpacity === 1)
-    && (it.strokeOpacity == null || it.strokeOpacity === 1)
-    && rec.blend == null
-  return opaque
+  // Translucent, blended, or filled-and-stroked marks cannot batch: one path composites once where per-item elements
+  // composite each overlap, and draws every fill under every stroke (render.ts `batchablePaint`, shared with canvas).
+  return batchablePaint(it)
     && x != null && y != null && Number.isFinite(x) && Number.isFinite(y)
     && Number.isFinite(Math.sqrt((it.size as number) ?? SYMBOL_DEFAULT_SIZE) / 2)
 }
 
-function symbolAttrs(it: SceneItem): Array<[string, string]> {
-  const w = new PairAttrSink()
-  paintAttrs(it, w)
-  return w.out
-}
 
 /**
  * Chunk consecutive same-paint symbols into one `<path>` each. Chunks are
@@ -359,7 +362,7 @@ function denseSymbolItems(group: SceneGroup, items: SceneItem[], chunkSize: numb
     }
     // A fresh desc object (never mutate a cached one): the patcher compares
     // against the previous descriptor, so reusing the object would hide the write.
-    const desc: DomDesc = { tag: 'path', attrs: [['d', d], ...symbolAttrs(first)] }
+    const desc: DomDesc = { tag: 'path', attrs: pairs((w) => { w.t('d', d); paintAttrs(first, w) }) }
     const chunk: DenseChunk = { from, to, first, last: items[to - 1]!, desc, gen: CURRENT_GEN, stamped, d, open: to === items.length && to - from < chunkSize }
     chunks.set(from, chunk)
     out.push(desc)
@@ -484,19 +487,26 @@ function isClean(it: SceneItem): boolean {
   return CURRENT_GEN != null && it.__gen != null && it.__gen !== CURRENT_GEN
 }
 
+/**
+ * The descriptor last built for each scene item. Beside the item, never on it: an item holds what its encode wrote, and an
+ * encode channel can be given any name, so nothing the renderer trusts may live in an item's own properties (a channel named
+ * like a slot there would be taken for the renderer's own state).
+ */
+const ITEM_DESCS = new WeakMap<SceneItem, DomDesc>()
+
 /** Build (or reuse, for a clean item) the DOM descriptor for a scene item. */
 function cachedDesc(it: SceneItem, build: () => DomDesc): DomDesc {
-  const cached = it.__domDesc as DomDesc | undefined
-  if (isClean(it) && cached) {
+  const cached = ITEM_DESCS.get(it)
+  if (cached !== undefined && isClean(it)) {
     // Reuse the cached descriptor in place: the patcher compares it against
     // itself (all attributes equal, nothing written) and the clean flag lets
     // it skip the subtree. Mutating the flag is safe — a dirty item always
-    // rebuilds and overwrites __domDesc below.
+    // rebuilds and replaces its entry below.
     cached.clean = true
     return cached
   }
   const desc = build()
-  it.__domDesc = desc
+  ITEM_DESCS.set(it, desc)
   return desc
 }
 
@@ -526,7 +536,6 @@ function pairs(fill: (w: AttrSink) => void): Pairs {
   return w.out
 }
 
-const FOREGROUND: Pairs = [['class', 'foreground'], ['aria-hidden', 'true'], ['d', ''], ['display', 'none']]
 
 function leafDesc(it: SceneItem): DomDesc {
   failOnUnmeasured(it)
@@ -539,10 +548,7 @@ function leafDesc(it: SceneItem): DomDesc {
     symbolElementAttrs(it, leafSymbolPath(it), w)
     return { tag: 'path', attrs: w.out, clean: isClean(it) }
   }
-  if (it._kind === 'text' || (it._kind === undefined && it.text != null)) {
-    const d = textDesc(it)
-    if (d) return d
-  }
+  if (it._kind === 'text' || (it._kind === undefined && it.text != null)) return textDesc(it)
   const [x1, y1, x2, y2] = leafLineEnds(it)
   itemDatumAttr(it, w)
   lineElementAttrs(x1, y1, x2, y2, it, w)
@@ -550,20 +556,15 @@ function leafDesc(it: SceneItem): DomDesc {
 }
 
 /** A text element's descriptor (the renderer's `textElement`): attributes, then the text or one tspan per line. */
-function textDesc(it: SceneItem): DomDesc | null {
+function textDesc(it: SceneItem): DomDesc {
   const w = new PairAttrSink()
   const d = textAttrs(it, w)
-  if (d == null) return null
   if (d.lines.length === 1) return { tag: 'text', attrs: w.out, text: d.text, clean: isClean(it) }
   return {
     tag: 'text',
     attrs: w.out,
     clean: isClean(it),
-    children: d.lines.map((line, i) => ({
-      tag: 'tspan',
-      attrs: i === 0 ? [] : ([['x', '0'], ['dy', num(d.lineHeight)]] as Pairs),
-      text: line,
-    })),
+    children: d.lines.map((line, i) => ({ tag: 'tspan', attrs: pairs((w) => tspanAttrs(i, d.lineHeight, w)), text: line })),
   }
 }
 
@@ -576,16 +577,16 @@ function clippedRoundedRectDescs(group: SceneGroup, clips: ClipCollector): DomDe
       continue
     }
     const clipId = clips.id({ d: e.round })
-    const background = (d: string): DomDesc => ({ tag: 'path', attrs: [['class', 'background'], ['aria-hidden', 'true'], ['d', d]] })
-    const foreground = (): DomDesc => ({ tag: 'path', attrs: FOREGROUND.map((p) => [p[0], p[1]] as [string, string]) })
-    out.push(g('g', [['transform', `translate(${num(e.g.x)},${num(e.g.y)})`]], [
+    const background = (d: GeneratedPath): DomDesc => ({ tag: 'path', attrs: pairs((w) => backgroundPathAttrs(d, w)) })
+    const foreground = (): DomDesc => ({ tag: 'path', attrs: pairs(foregroundAttrs) })
+    out.push(g('g', pairs((w) => translateAttrs(e.g.x, e.g.y, w)), [
       background(e.round),
       g('g', pairs((w) => clipRefAttrs(clipId, w)), [
-        g('g', [['class', 'mark-group role-scope'], ['role', 'graphics-object'], ['aria-roledescription', 'group mark container']], [
-          g('g', [['transform', `translate(0,${num(-e.g.y)})`]], [
-            background(`M0,0h${num(e.g.w)}v0h-${num(e.g.w)}Z`),
+        g('g', pairs(scopeGroupAttrs), [
+          g('g', pairs((w) => translateAttrs(0, -e.g.y, w)), [
+            background(roundedScopeBox(e.g.w)),
             g('g', [], [
-              g('g', [['class', 'mark-rect role-mark marks'], ['role', 'graphics-object'], ['aria-roledescription', 'rect mark container']], [
+              g('g', pairs(rectMarkContainerAttrs), [
                 linked(e.item, { tag: 'path', attrs: pairs((w) => rectPathAttrs(e.item, e.plain, w)) }),
               ]),
             ]),
@@ -663,7 +664,7 @@ function markItems(group: SceneGroup, type: string, options?: DomRenderOptions):
       const out: DomDesc[] = []
       for (const it of items) {
         const d = cachedDesc(it, () => {
-          const t = textDesc(it)!
+          const t = textDesc(it)
           return linked(it, t)
         })
         out.push(d)
@@ -805,27 +806,28 @@ function nodeDescs(nodes: readonly SvgNode[], clips: ClipCollector, options: Dom
 }
 
 export function sceneToDomDesc(scene: SceneRoot, options: DomRenderOptions = {}): DomDesc {
+  // (under what the scene was evaluated under: the URL policy at the attribute sink, render.ts `writtenText`, and the text measurer)
+  return withSceneOutput(scene, () => describeScene(scene, options))
+}
+
+function describeScene(scene: SceneRoot, options: DomRenderOptions): DomDesc {
   CURRENT_GEN = (scene as unknown as { __itemGen?: number }).__itemGen
   describing = scene
   const { plotW, plotH } = scenePlotSize(scene)
   // Clip regions are registered while building; ids are content-addressed (svg-defs.ts).
-  const clips = new ClipCollector()
-  const frameClipId = scene.frameClip ? clips.id({ x: 0, y: 0, w: plotW, h: plotH }) : null
+  const clips = new ClipCollector(sceneDefIds(scene.defs))
+  const frameClipId = scene.frameClip ? clips.id(frameClipDef(scene, plotW, plotH)) : null
 
   const children: DomDesc[] = []
   if (scene.background) children.push({ tag: 'rect', attrs: pairs((w) => backgroundRectAttrs(scene, w)) })
   const marks: DomDesc[] = []
   pushAll(marks, nodeDescs(childNodes(scene.items, plotW, plotH, { snaps: scene.__scales }, clips), clips, options))
   children.push(g('g', pairs((w) => viewGroupAttrs(scene, w)), [
-    g('g', [
-      ['class', 'mark-group role-frame root'],
-      ['role', 'graphics-object'],
-      ['aria-roledescription', 'group mark container'],
-    ], [
+    g('g', pairs(rootFrameGroupAttrs), [
       g('g', pairs((w) => groupItemAttrs(scene.frameX ?? 0, scene.frameY ?? 0, w, scene.frameAria)), [
         { tag: 'path', attrs: pairs((w) => frameAttrs(scene, w)) },
         g('g', frameClipId ? pairs((w) => clipRefAttrs(frameClipId, w)) : [], marks),
-        { tag: 'path', attrs: FOREGROUND.map((p) => [p[0], p[1]] as [string, string]) },
+        { tag: 'path', attrs: pairs(foregroundAttrs) },
       ]),
     ]),
   ]))
@@ -834,11 +836,7 @@ export function sceneToDomDesc(scene: SceneRoot, options: DomRenderOptions = {})
     const defsChildren: DomDesc[] = []
     for (const def of scene.defs ?? []) {
       if (def.kind === 'radial') {
-        defsChildren.push({
-          tag: 'pattern',
-          attrs: [['id', 'p_' + def.id], ['viewBox', '0,0,1,1'], ['width', '100%'], ['height', '100%'], ['preserveAspectRatio', 'xMidYMid slice']],
-          children: [{ tag: 'rect', attrs: [['width', '1'], ['height', '1'], ['fill', `url(#${def.id})`]] }],
-        })
+        defsChildren.push({ tag: 'pattern', attrs: pairs((w) => radialPatternAttrs(def, w)), children: [{ tag: 'rect', attrs: pairs((w) => radialPatternRectAttrs(def, w)) }] })
       }
       defsChildren.push({
         tag: def.kind === 'radial' ? 'radialGradient' : 'linearGradient',
@@ -863,10 +861,7 @@ export function sceneToDomDesc(scene: SceneRoot, options: DomRenderOptions = {})
 
 function createEl(desc: DomDesc, doc: Document): Element {
   const el = doc.createElementNS(SVG_NS, desc.tag)
-  for (const [k, v] of desc.attrs) {
-    if (k === 'xlink:href') el.setAttributeNS(XLINK_NS, 'xlink:href', v)
-    else el.setAttribute(k, v)
-  }
+  for (const [k, v] of desc.attrs) writeAttr(el, k, v)
   if (desc.text !== undefined) el.textContent = desc.text
   else for (const c of desc.children ?? []) el.appendChild(createEl(c, doc))
   LAST.set(el, desc)
@@ -880,8 +875,13 @@ function createEl(desc: DomDesc, doc: Document): Element {
  */
 const LAST = new WeakMap<Element, DomDesc>()
 
+/**
+ * The one place the patcher sets an attribute. Every name and value comes from render.ts's attribute lists through the sink that
+ * vets them (`writtenText`); as a last line, no event-handler attribute (`on...`) is ever set, whatever a descriptor says.
+ */
 function writeAttr(el: Element, k: string, v: string): void {
   if (k === 'xlink:href') el.setAttributeNS(XLINK_NS, 'xlink:href', v)
+  else if (k.charCodeAt(0) === 111 /* o */ && k.charCodeAt(1) === 110 /* n */) return
   else el.setAttribute(k, v)
 }
 
@@ -942,7 +942,8 @@ function patchEl(el: Element, desc: DomDesc): void {
   if (desc.text !== undefined) {
     if (last) {
       if (last.text !== desc.text) el.textContent = desc.text
-    } else if (el.textContent !== desc.text) {
+    } else if (el.childElementCount > 0 || el.textContent !== desc.text) {
+      // (an element from markup: a text it holds as elements -- tspans whose text happens to be the same -- is not this text)
       el.textContent = desc.text
     }
     return
@@ -953,6 +954,16 @@ function patchEl(el: Element, desc: DomDesc): void {
     el.textContent = ''
     for (const c of want) el.appendChild(createEl(c, el.ownerDocument))
     return
+  }
+  // An element this patcher never wrote (it came from markup: a string mount, SSR) holds what the markup held. Its children are
+  // all the descriptor describes, so anything else in it -- the text of a `<text>` that was one line and is now several -- goes
+  // (a patched element never holds any: `createEl` and the paths above write a text or elements, not both).
+  if (last === undefined) {
+    for (let node = el.firstChild; node !== null;) {
+      const next: ChildNode | null = node.nextSibling
+      if (node.nodeType !== 1) el.removeChild(node)
+      node = next
+    }
   }
   // Traverse children via sibling links, not index access: HTMLCollection
   // .item(i) is a linear scan in several DOM implementations (jsdom: ~19us per

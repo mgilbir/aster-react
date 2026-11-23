@@ -745,6 +745,18 @@ export function boundTypedMark(bounds: Bounds, mark: SceneGroup, miterPaths = fa
   }
 }
 
+/**
+ * The bounds vega's bounds pass gives one item of a mark of type `kind` (as `boundTypedMark` measures each item of the mark; `leaf`:
+ * a guide's part, measured as its own kind). What the hit index and the accessible tree measure an item by.
+ */
+export function boundItemOfKind(b: Bounds, it: SceneItem, kind: string): void {
+  if (kind === 'leaf') { boundLeaf(b, it); return }
+  if (kind === 'text') { b.union(boundText(new Bounds(), { ...it, _kind: 'text' } as SceneItem)); return }
+  if (kind === 'path' && it.path == null) { b.add(0, 0); return }
+  const miter = kind === 'arc' || kind === 'path' || kind === 'symbol' || kind === 'shape' || kind === 'geoshape'
+  boundLeaf(b, it, miter, kind === 'rect' || kind === 'rule' || kind === 'symbol' || kind === 'image' ? kind : undefined)
+}
+
 /** Bound one leaf item (or nested group/mark item) into `bounds`. */
 export function boundLeaf(bounds: Bounds, it: SceneItem, miterPaths = false, kind?: string): Bounds {
   const mt = (it as SceneGroup).marktype

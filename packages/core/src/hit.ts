@@ -38,12 +38,13 @@
  */
 import type { SceneGroup, SceneItem, SceneRoot } from './types.js'
 import { derivedCounts, isEngineNode, keptInto } from './scene-registry.js'
-import { Bounds, boundLeaf, boundText, boundTypedMark, layoutBounds } from './bounds.js'
+import { Bounds, boundItemOfKind, boundText, boundTypedMark, layoutBounds } from './bounds.js'
 import { getTextMetricsProvider, textAnchor } from './text-metrics.js'
+import { withSceneOutput } from './scene-output.js'
 import { imageBox } from './image-box.js'
 import { FLATTEN_TOLERANCE, insidePolys, type Poly } from './path-flatten.js'
 import { SYMBOL_DEFAULT_SIZE } from './util.js'
-import { isInert, itemArcGeometry, lineStrokeWidth } from './render.js'
+import { frameClipDef, isInert, itemArcGeometry, lineStrokeWidth } from './render.js'
 import { areaGeometry, lineGeometry, rectData, symbolGeometry, trailGeometry } from './geometry.js'
 import { arcExactSegs, arcPolys, curvePolys, flattenSegs, pathMarkPolys, pathPolys, segsOf, symbolOutline, transformPolys } from './geometry-read.js'
 
@@ -496,6 +497,11 @@ interface KeptGuide { frame: string; measurer: unknown; entries: Entry[]; runs: 
 const TOP_GUIDE_ROLES: ReadonlySet<string> = new Set(['axis', 'legend', 'title'])
 
 export function buildHitIndex(scene: SceneRoot, cell = DEFAULT_CELL, options: HitIndexOptions = {}): HitIndex {
+  // (under what the scene was evaluated under: a text's box is measured with the scene's own measurer, scene-output.ts)
+  return withSceneOutput(scene, () => hitIndexOf(scene, cell, options))
+}
+
+function hitIndexOf(scene: SceneRoot, cell: number, options: HitIndexOptions): HitIndex {
   const canvas = options.renderer === 'canvas'
   const keptEntries = canvas ? MARK_ENTRIES.canvas : MARK_ENTRIES.svg
   const entries: Entry[] = []
@@ -644,7 +650,9 @@ export function buildHitIndex(scene: SceneRoot, cell = DEFAULT_CELL, options: Hi
   const keptGuides = canvas ? GUIDE_ENTRIES.canvas : GUIDE_ENTRIES.svg
   const frame = `${padX},${padY},${plotW},${plotH},${scene.frameClip ? 1 : 0}`
   const measurer = getTextMetricsProvider()
-  withClip(scene.frameClip ? rectClip(padX, padY, plotW, plotH) : null, () => {
+  // (the view's clip as the renderers draw it, rounded when the view has a corner radius: render.ts `frameClipDef`)
+  const frameClip = scene.frameClip ? frameClipDef(scene, plotW, plotH) : null
+  withClip(frameClip === null ? null : 'd' in frameClip ? pathClip(frameClip.d, padX, padY) : rectClip(padX + frameClip.x, padY + frameClip.y, frameClip.w, frameClip.h), () => {
     for (const node of scene.items) {
       if (!TOP_GUIDE_ROLES.has(node.role as string) || rec(node)._scope === true || !isEngineNode(node)) { walk(node, padX, padY, plotW, plotH); continue }
       const kept = keptGuides.get(node)
@@ -1088,7 +1096,7 @@ export function buildHitIndex(scene: SceneRoot, cell = DEFAULT_CELL, options: Hi
     if (vb === undefined) {
       const m = new Bounds()
       if (e.bmark !== undefined) boundTypedMark(m, e.bmark)
-      else measureItem(m, e.item, e.bk!)
+      else boundItemOfKind(m, e.item, e.bk!)
       vb = e.vb = m.empty() ? new Float64Array([Infinity, Infinity, -Infinity, -Infinity]) : new Float64Array([e.ox! + m.x1, e.oy! + m.y1, e.ox! + m.x2, e.oy! + m.y2])
     }
     return x >= vb[0]! && x <= vb[2]! && y >= vb[1]! && y <= vb[3]!
@@ -1225,17 +1233,6 @@ export function buildHitIndex(scene: SceneRoot, cell = DEFAULT_CELL, options: Hi
   }
 }
 
-/**
- * The bounds vega's bounds pass gives one item of a mark of type `kind` (as `boundTypedMark` measures each item of the mark; `leaf`:
- * a guide's part, measured as its own kind).
- */
-function measureItem(b: Bounds, it: SceneItem, kind: string): void {
-  if (kind === 'leaf') { boundLeaf(b, it); return }
-  if (kind === 'text') { b.union(boundText(new Bounds(), { ...it, _kind: 'text' } as SceneItem)); return }
-  if (kind === 'path' && it.path == null) { b.add(0, 0); return }
-  const miter = kind === 'arc' || kind === 'path' || kind === 'symbol' || kind === 'shape' || kind === 'geoshape'
-  boundLeaf(b, it, miter, kind === 'rect' || kind === 'rule' || kind === 'symbol' || kind === 'image' ? kind : undefined)
-}
 
 /** A symbol shape's outline at radius r (its full-precision path's polygons), shared by every symbol of that shape and size. */
 function shapeOutline(shape: string, r: number): { polys: Poly[]; reach: number } {

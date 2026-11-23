@@ -50,6 +50,15 @@ export function canNameNoUrl(text: string): boolean {
 }
 
 /**
+ * True when a text names another document in a CSS `url()` (escapes decoded first): what no attribute but a paint may hold,
+ * and a paint only as {@link paintText} rewrites it.
+ */
+export function namesOtherDocument(text: string): boolean {
+  if (canNameNoUrl(text)) return false
+  return OTHER_DOCUMENT.test(text.indexOf('\\') < 0 ? text : unescapeCss(text))
+}
+
+/**
  * The text to write for a paint text: the text itself when it names no other document; otherwise the fallback colour
  * after a leading `url()`, `'none'` when there is none (or it cannot be told safely), or null for no attribute.
  */

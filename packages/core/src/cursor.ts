@@ -17,19 +17,42 @@ import { isEngineNode, keptInto } from './scene-registry.js'
 export const DEFAULT_CURSOR = 'default'
 
 /**
+ * The cursor keywords of CSS (CSS Basic User Interface 4, `cursor`). A cursor is shown only as one of these: a CSS cursor may
+ * also be a `url()` list, an image the viewer's browser fetches, which no URL policy would ever see, so a value that is not a
+ * keyword is not a cursor (as if it were not given).
+ */
+const CURSOR_KEYWORDS: ReadonlySet<string> = new Set([
+  'auto', 'default', 'none', 'context-menu', 'help', 'pointer', 'progress', 'wait', 'cell', 'crosshair', 'text', 'vertical-text',
+  'alias', 'copy', 'move', 'no-drop', 'not-allowed', 'grab', 'grabbing', 'all-scroll', 'col-resize', 'row-resize', 'n-resize',
+  'e-resize', 's-resize', 'w-resize', 'ne-resize', 'nw-resize', 'se-resize', 'sw-resize', 'ew-resize', 'ns-resize', 'nesw-resize',
+  'nwse-resize', 'zoom-in', 'zoom-out',
+])
+
+/** A cursor value as a host may show it: a CSS cursor keyword (ASCII case-insensitive, as CSS reads it), else null. */
+export function cursorKeyword(value: unknown): string | null {
+  if (typeof value !== 'string') return null
+  const k = value.trim().toLowerCase()
+  return CURSOR_KEYWORDS.has(k) ? k : null
+}
+
+/**
  * The cursor to show for the value of the `cursor` signal and the item's cursor, or null for none (vega then removes the
  * container's `cursor` style). A signal value that is the view's own `{user, item}` object (what vega writes into a spec
  * signal named `cursor` at its first pointermove) carries its item.
+ *
+ * This is the one place a cursor reaches a host, so it is where a cursor is vetted: only a CSS keyword is shown
+ * ({@link cursorKeyword}); anything else -- a `url(...)` image, which would make the viewer's browser request it, or any other
+ * text -- counts as no cursor. (vega hands the text on as it is.)
  */
 export function resolveCursor(signal: unknown, item: string | null): string | null {
   let user: unknown = DEFAULT_CURSOR
-  let held = item
+  let held: string | null = cursorKeyword(item)
   if (typeof signal === 'string') {
-    user = signal
+    user = signal === '' ? signal : (cursorKeyword(signal) ?? DEFAULT_CURSOR)
   } else if (signal != null && typeof signal === 'object') {
-    user = (signal as { user?: unknown }).user
-    const inner = (signal as { item?: unknown }).item
-    held = typeof inner === 'string' && inner !== '' ? inner : null
+    const own = (signal as { user?: unknown }).user
+    user = own == null || own === '' ? own : (cursorKeyword(own) ?? DEFAULT_CURSOR)
+    held = cursorKeyword((signal as { item?: unknown }).item)
   }
   const shown = user && user !== DEFAULT_CURSOR ? user : (held || user)
   return typeof shown === 'string' && shown !== '' ? shown : null

@@ -217,7 +217,9 @@ function batchableSymbol(it: SceneItem): boolean {
     && (it.fillOpacity == null || it.fillOpacity === 1)
     && (it.strokeOpacity == null || it.strokeOpacity === 1)
     && rec.blend == null
-  return opaque
+  // (and, as the renderer since C413: not filled AND stroked -- one path draws every fill under every stroke)
+  const paints = (v: unknown): boolean => v != null && v !== false && v !== '' && v !== 'transparent'
+  return opaque && !(paints(it.fill) && paints(it.stroke))
     && x != null && y != null && Number.isFinite(x) && Number.isFinite(y)
     && Number.isFinite(Math.sqrt((it.size as number) ?? SYMBOL_DEFAULT_SIZE) / 2)
 }
@@ -394,7 +396,9 @@ function isClean(it: SceneItem): boolean {
 }
 
 /** Build (or reuse, for a clean item) the DOM descriptor for a scene item. */
-function cachedDesc(it: SceneItem, build: () => DomDesc): DomDesc {
+function cachedDesc(item: SceneItem, build: () => DomDesc): DomDesc {
+  // (the legacy renderer kept its cache on the item; the current one keeps it beside it, dom.ts `ITEM_DESCS`)
+  const it = item as SceneItem & { __domDesc?: unknown }
   const cached = it.__domDesc as DomDesc | undefined
   if (isClean(it) && cached) {
     // Reuse the cached descriptor in place: the patcher compares it against

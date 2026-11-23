@@ -192,7 +192,6 @@ const finite = (v: unknown): v is number => typeof v === 'number' && Number.isFi
 function copyOf(node: SceneItem): Rec {
   const out: Rec = { ...node }
   out.__gen = undefined
-  out.__domDesc = undefined
   return out
 }
 

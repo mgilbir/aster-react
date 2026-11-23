@@ -40,6 +40,12 @@ export class ClipCollector {
   /** How many ids were asked for, registered or not (what is drawn between two readings asked for a clip when it moved). */
   asked = 0
 
+  /**
+   * `taken`: the ids the document's other definitions hold (`sceneDefIds`): a gradient paint may name its own id, any id, so a
+   * clip id that is one of them is passed over like a hash collision, and one id never names two elements.
+   */
+  constructor(private readonly taken: ReadonlySet<string> = NO_IDS) {}
+
   /** The id of `def`, registering it on first use. */
   id(def: ClipDef): string {
     this.asked++
@@ -47,19 +53,33 @@ export class ClipCollector {
     let id = `clip${hash53(key)}`
     for (let n = 1; ; n++) {
       const owner = this.keys.get(id)
-      if (owner === undefined) {
+      if (owner === undefined && !this.taken.has(id)) {
         this.keys.set(id, key)
         this.defs.set(id, def)
         return id
       }
       if (owner === key) return id
       id = `clip${hash53(key)}_${n}`
+      // (the next candidate is checked the same way)
     }
   }
 
   get size(): number {
     return this.defs.size
   }
+}
+
+const NO_IDS: ReadonlySet<string> = new Set()
+
+/** The ids a scene's gradient definitions write (a radial one's pattern wrapper too): what a clip id may not be. */
+export function sceneDefIds(defs: readonly SceneDef[] | undefined): ReadonlySet<string> {
+  if (!defs?.length) return NO_IDS
+  const ids = new Set<string>()
+  for (const def of defs) {
+    ids.add(def.id)
+    if (def.kind === 'radial') ids.add('p_' + def.id)
+  }
+  return ids
 }
 
 
