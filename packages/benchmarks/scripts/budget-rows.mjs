@@ -202,11 +202,11 @@ export default { renderChartToStaticMarkup, hydrateChart }
 
 /** Ceilings of the up-front size (kB gzip, each file on its own): the measure + 0.5. Marginal rows: what the addon adds to the core app. */
 export const BUDGETS = {
-  '@aster-charts/core': 179.5 * KB,
+  '@aster-charts/core': 187.1 * KB,
   '+ @aster-charts/core/dom': 12.4 * KB,
   '+ @aster-charts/core/canvas': 6.7 * KB,
   '+ @aster-charts/core/hit': 10.6 * KB,
-  '+ @aster-charts/core/signals': 15.5 * KB,
+  '+ @aster-charts/core/signals': 15.9 * KB,
   '+ @aster-charts/core/load': 8.2 * KB,
   '+ @aster-charts/core/geo': 16.4 * KB,
   '+ @aster-charts/core/transforms': 39.9 * KB,

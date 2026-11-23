@@ -377,7 +377,7 @@ source is gone) all fail. Measured 2026-11-23 with `pnpm --filter @aster-charts/
 
 | Row (`budget-rows.mjs` name) | Import pattern | gzip kB (up front) | Up front + on demand (gzip kB) |
 |---|---|---|---|
-| `@aster-charts/core` | `import { renderSpec } from '@aster-charts/core'` | 179.0 |  |
+| `@aster-charts/core` | `import { renderSpec } from '@aster-charts/core'` | 186.6 |  |
 | `@aster-charts/react useChart` | `import { useChart } from '@aster-charts/react'` | 154.4 | 296.6 |
 | `@aster-charts/react Chart` | `import { Chart } from '@aster-charts/react'` | 190.6 | 327.9 |
 | `@aster-charts/react SvgChart` | `import { SvgChart } from '@aster-charts/react/lite'` | 179.0 | 297.2 |
@@ -390,7 +390,7 @@ source is gone) all fail. Measured 2026-11-23 with `pnpm --filter @aster-charts/
 | `+ @aster-charts/core/dom` | core + `@aster-charts/core/dom` (marginal) | 11.9 |  |
 | `+ @aster-charts/core/canvas` | core + `@aster-charts/core/canvas` (marginal) | 6.2 |  |
 | `+ @aster-charts/core/hit` | core + `@aster-charts/core/hit` (marginal) | 10.1 |  |
-| `+ @aster-charts/core/signals` | core + `@aster-charts/core/signals` (marginal) | 15.0 |  |
+| `+ @aster-charts/core/signals` | core + `@aster-charts/core/signals` (marginal) | 15.4 |  |
 | `+ @aster-charts/core/load` | core + `@aster-charts/core/load` (marginal) | 7.7 |  |
 | `+ @aster-charts/core/geo` | core + `@aster-charts/core/geo` (marginal) | 15.9 |  |
 | `+ @aster-charts/core/transforms` | core + `@aster-charts/core/transforms` (marginal) | 39.4 |  |
