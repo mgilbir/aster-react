@@ -16,9 +16,10 @@
  * only the local cache and fails, naming that command, when it is missing or does not match gallery/manifest.json.
  * The gate is a ratchet (gallery/floors.json, gallery/passing-<path>.txt):
  *   - the spec counts must equal the manifest (specs cannot be dropped to improve the numbers);
- *   - passing count >= floor, per path and grammar; unverifiable <= ceiling;
+ *   - passing count == floor, per path and grammar (more is a failure too: raise the floor, so the ratchet sits at reality); unverifiable <= ceiling;
  *   - every spec listed in passing-<path>.txt must still pass (a count floor alone lets one fix hide one regression).
- * When the numbers improve it says so: raise the floors and add the names (`--print-passing`), never lower them.
+ * When the numbers improve it fails and says so: raise the floors and add the names (`--print-passing`), never lower them. The files
+ * themselves are held against their history by ratchet.test.ts (the part of the ratchet that runs on every PR).
  *
  * Usage: tsx src/gallery/run.ts [--path=static|react|swap|all] [--filter=substr] [--json=file] [--print-passing] [--regenerate-swap-pairs]
  */
@@ -28,6 +29,7 @@ import { join } from 'node:path'
 import { FETCH_COMMAND, readManifest, verifyCache } from './cache.js'
 import type { SwapOutcome } from './react.js'
 import { planSwap, swapGateProblems, type SwapPlan } from './swap-plan.js'
+import { duplicateSpecs } from './ratchet.js'
 import { GALLERY_DIR, listGallery, type GallerySpec, type Kind, type Outcome } from './lib.js'
 import { cli } from '../../../../scripts/lib/cli.mjs'
 
@@ -70,6 +72,9 @@ if (!FILTER) {
     const m = Object.keys(manifest.sources[src]!.files).length
     if (n !== m) problem(`${k}: ${n} specs read, the manifest lists ${m}`)
   }
+  // (byte-identical files are two specs to the gate and one to the oracle: say how many the counts below are)
+  const dup = duplicateSpecs(manifest)
+  console.log(`[gallery] ${all.length} specs, ${all.length - dup.reduce((n, g) => n + g.length - 1, 0)} distinct (byte-identical: ${dup.map((g) => g.join(' = ')).join('; ') || 'none'})`)
 }
 if (!specs.length) { console.log('GATE FAIL: no specs selected'); process.exit(1) }
 
@@ -132,7 +137,7 @@ for (const p of PATHS) {
     console.log(`${k === 'vega' ? 'Vega     ' : 'Vega-Lite'} ${pass} pass, ${n('fail')} fail, ${n('error')} error, ${n('unverifiable')} unverifiable / ${mine.length}`)
     if (!FILTER) {
       if (pass < floors.pass[p][k]) problem(`${p}/${k}: ${pass} passing < floor ${floors.pass[p][k]}`)
-      else if (pass > floors.pass[p][k]) console.log(`  (improved: ${pass} > floor ${floors.pass[p][k]}; raise floors.json and add the names to passing-${p}.txt)`)
+      else if (pass > floors.pass[p][k]) problem(`${p}/${k}: ${pass} passing > floor ${floors.pass[p][k]}: the floor is below reality, so a regression back to it would pass; raise floors.json and add the names to passing-${p}.txt (--print-passing)`)
       if (n('unverifiable') > floors.maxUnverifiable[p][k]) problem(`${p}/${k}: ${n('unverifiable')} unverifiable > ceiling ${floors.maxUnverifiable[p][k]}`)
     }
   }

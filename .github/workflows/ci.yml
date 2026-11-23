@@ -19,6 +19,9 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
+          # two commits: the merge commit and its first parent (the base), which scripts of the test run compare the gallery
+          # ratchet files with (packages/conformance/src/gallery/ratchet.test.ts)
+          fetch-depth: 2
 
       - name: Setup pnpm
         uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6
@@ -71,6 +74,9 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
+          # two commits: the merge commit and its first parent (the base), which scripts of the test run compare the gallery
+          # ratchet files with (packages/conformance/src/gallery/ratchet.test.ts)
+          fetch-depth: 2
 
       - name: Setup pnpm
         uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6

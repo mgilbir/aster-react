@@ -9,7 +9,7 @@ Nothing is open. On 2026-11-06 the gallery gate (`pnpm conformance:gallery`, 720
 
 The spec-swap path ran 223 of 223 committed pairs and all passed. The numbers the gate holds are in
 [floors.json](floors.json) (`pass`, `maxUnverifiable`, `swap`) and the names of the passing specs in
-[passing-static.txt](passing-static.txt) and [passing-react.txt](passing-react.txt); a change that lowers any of them fails the gate.
+[passing-static.txt](passing-static.txt) and [passing-react.txt](passing-react.txt); a change that lowers any of them fails the gate (the nightly run, and `src/gallery/ratchet.test.ts` on every PR).
 
 The 4 unverifiable specs are not failures: the oracle itself cannot render them in Node (it needs a canvas, which Node lacks), so
 there is nothing to compare against. They are `vega/contour-plot`, `vega/density-heatmaps`, `vega/labeled-scatter-plot` and
