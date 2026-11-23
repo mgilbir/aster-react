@@ -14,8 +14,6 @@ const TOL = 0.05 // flattening tolerance of a curve being stroked, in pixels
  * otherwise cut it into more pieces than memory holds, or, past the float spacing of the length, into pieces that never end.
  */
 const MAX_DASHES = 1_000_000
-/** Dashes in one contour past which only the stretches near the canvas are cut into dashes (nothing farther reaches a pixel). */
-const CLIP_DASHES = 4096
 /** Points of a full round join or cap past which only the arc facing the canvas is made (r beyond about 170 000 pixels). */
 const MAX_DISK_POINTS = 4096
 
@@ -65,8 +63,8 @@ interface Piece {
   closed: boolean
 }
 
-/** Cut a polyline into dashes (device units). With `near`, a contour of many dashes is cut only where it can reach the canvas. */
-function dashed(s: Piece, pattern: number[], offset: number, near?: Box): Piece[] {
+/** Cut a polyline into dashes (device units). */
+function dashed(s: Piece, pattern: number[], offset: number): Piece[] {
   const out: Piece[] = []
   const total = pattern.reduce((p, q) => p + q, 0)
   // a canvas ignores a dash list with a negative or non-finite entry (setLineDash), and the stroke stays solid; walking one
@@ -79,7 +77,6 @@ function dashed(s: Piece, pattern: number[], offset: number, near?: Box): Piece[
   // (an infinite length is past any count, and dashing it would never end)
   const dashes = (length * (pattern.length / 2)) / total
   if (dashes > MAX_DASHES) return [s]
-  const clip = dashes > CLIP_DASHES ? near : undefined
   let idx = 0
   let into = ((offset % total) + total) % total
   // bounded: `into` is under one period: at most one step per pattern entry
@@ -105,74 +102,15 @@ function dashed(s: Piece, pattern: number[], offset: number, near?: Box): Piece[
     remaining -= len
     if (on) cur.push(end)
   }
-  // Move the pattern on by `len` without making dashes (a stretch no pixel can see): the dash in progress ends where it starts.
-  const skip = (len: number): void => {
-    if (on && cur.length > 1) out.push({ pts: cur, closed: false })
-    cur = []
-    len %= total
-    // (fewer steps than the pattern has entries: `len` is now under one period)
-    // bounded: `len` is under one period here: at most one step per pattern entry
-    while (len > remaining) {
-      len -= remaining
-      on = !on
-      idx = (idx + 1) % pattern.length
-      remaining = pattern[idx]!
-    }
-    remaining -= len
-  }
   for (let i = 1; i < pts.length; i++) {
     const [x0, y0] = pts[i - 1]!
     const [x1, y1] = pts[i]!
     const len = Math.hypot(x1 - x0, y1 - y0)
     if (len === 0) continue
-    const ux = (x1 - x0) / len
-    const uy = (y1 - y0) / len
-    if (clip === undefined) {
-      walk(x0, y0, ux, uy, len, [x1, y1])
-      continue
-    }
-    const [t0, t1] = clipSegment(x0, y0, x1 - x0, y1 - y0, clip)
-    if (!(t0 < t1)) {
-      skip(len)
-      if (on) cur = [[x1, y1]]
-      continue
-    }
-    const entry: Pt = t0 > 0 ? [x0 + (x1 - x0) * t0, y0 + (y1 - y0) * t0] : [x0, y0]
-    if (t0 > 0) {
-      skip(len * t0)
-      if (on) cur = [entry]
-    }
-    const exit: Pt = t1 < 1 ? [x0 + (x1 - x0) * t1, y0 + (y1 - y0) * t1] : [x1, y1]
-    walk(entry[0], entry[1], ux, uy, len * (t1 - t0), exit)
-    if (t1 < 1) {
-      skip(len * (1 - t1))
-      if (on) cur = [[x1, y1]]
-    }
+    walk(x0, y0, (x1 - x0) / len, (y1 - y0) / len, len, [x1, y1])
   }
   if (on && cur.length > 1) out.push({ pts: cur, closed: false })
   return out
-}
-
-/** The part `[t0, t1]` of the segment from (x0, y0) along (dx, dy) inside `box` (Liang-Barsky); `t0 >= t1` when none is. */
-function clipSegment(x0: number, y0: number, dx: number, dy: number, box: Box): [number, number] {
-  let t0 = 0
-  let t1 = 1
-  const edges: Array<[number, number]> = [[-dx, x0 - box[0]], [dx, box[2] - x0], [-dy, y0 - box[1]], [dy, box[3] - y0]]
-  for (const [p, q] of edges) {
-    if (p === 0) {
-      if (q < 0) return [1, 0]
-      continue
-    }
-    const r = q / p
-    if (p < 0) {
-      if (r > t1) return [1, 0]
-      if (r > t0) t0 = r
-    } else {
-      if (r < t0) return [1, 0]
-      if (r < t1) t1 = r
-    }
-  }
-  return [t0, t1]
 }
 
 const orient = (poly: Pt[]): Pt[] => {
@@ -185,11 +123,9 @@ const orient = (poly: Pt[]): Pt[] => {
   return area < 0 ? poly.reverse() : poly
 }
 
-function disk(cx: number, cy: number, r: number, near?: Box): Pt[] {
-  const exact = Math.max(8, Math.ceil(Math.PI / Math.acos(1 - Math.min(0.5, TOL / Math.max(r, TOL)))))
-  if (exact > MAX_DISK_POINTS && near !== undefined) return diskNear(cx, cy, r, near)
-  // (with no canvas to make it for, an immense disk is made coarser than the tolerance rather than without end)
-  const n = Math.min(exact, MAX_DISK_POINTS)
+function disk(cx: number, cy: number, r: number, near: Box): Pt[] {
+  const n = Math.max(8, Math.ceil(Math.PI / Math.acos(1 - Math.min(0.5, TOL / Math.max(r, TOL)))))
+  if (n > MAX_DISK_POINTS) return diskNear(cx, cy, r, near)
   meterTick('stroke join', n)
   const p: Pt[] = []
   // bounded: n is at most MAX_DISK_POINTS, ticked for above
@@ -234,7 +170,7 @@ function diskNear(cx: number, cy: number, r: number, box: Box): Pt[] {
 }
 
 /** The polygons (all positively oriented, so the non-zero rule unions them) of a stroked polyline. */
-function outline(s: Piece, half: number, cap: string, join: string, miterLimit: number, out: Pt[][], near?: Box): void {
+function outline(s: Piece, half: number, cap: string, join: string, miterLimit: number, out: Pt[][], near: Box): void {
   // drop repeated points
   const pts: Pt[] = []
   for (const p of s.pts) {
@@ -320,27 +256,24 @@ function outline(s: Piece, half: number, cap: string, join: string, miterLimit: 
 }
 
 /**
- * Pen parameters in device units. `canvas`, the box of the pixels drawn into: a stroke is made in full near it, and as far as it
- * can be seen from it where making it in full would cost more than any canvas (a dash pattern of very many dashes, a round join of
- * an immense pen).
+ * Pen parameters in device units. `canvas`, the box of the pixels drawn into: a round join or cap of an immense pen is made as
+ * far as it can be seen from it.
  */
-export interface Pen { half: number; cap: string; join: string; miterLimit: number; dash: number[]; dashOffset: number; canvas?: Box }
+export interface Pen { half: number; cap: string; join: string; miterLimit: number; dash: number[]; dashOffset: number; canvas: Box }
 
 /** The polygons a pen covers along the subpaths (all positively oriented, so the non-zero rule unions them). */
 export function strokePolygons(subs: Sub[], pen: Pen): Pt[][] {
   const polys: Pt[][] = []
   const dashing = pen.dash.length > 0 && pen.dash.some((d) => d > 0)
+  // (a disk matters where it meets the canvas)
   const box = pen.canvas
-  // a disk matters where it meets the canvas; a dash, as far as its caps and joins reach from it (a miter up to the limit)
-  const disks: Box | undefined = box && [box[0] - 2, box[1] - 2, box[2] + 2, box[3] + 2]
-  const reach = pen.half * Math.max(pen.miterLimit, Math.SQRT2) + 2
-  const dashes: Box | undefined = box && [box[0] - reach, box[1] - reach, box[2] + reach, box[3] + reach]
+  const disks: Box = [box[0] - 2, box[1] - 2, box[2] + 2, box[3] + 2]
   for (const s of subs) {
     meterTick('stroke', s.ops.length + 1)
     const pts = flatten(s)
     if (pts.length < 2 && !s.closed) continue // (a lone moveTo draws nothing)
     const piece: Piece = { pts, closed: s.closed }
-    const pieces = dashing ? dashed(piece, pen.dash, pen.dashOffset, dashes) : [piece]
+    const pieces = dashing ? dashed(piece, pen.dash, pen.dashOffset) : [piece]
     // bounded: the dash walk ticks for every piece it makes; outline() is one pass over a piece's points
     for (const p of pieces) outline(p, pen.half, pen.cap, pen.join, pen.miterLimit, polys, disks)
   }
