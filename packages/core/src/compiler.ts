@@ -386,7 +386,7 @@ function compileScale(s: Record<string, unknown>): CompiledScale {
   const out = dict<unknown>({ name: s.name, type: s.type, domain: s.domain, range: s.range })
   // vega-parser copies every other scale key through to the Scale transform
   // (interpolateGamma, schemeExtent, domainImplicit, ...): a whitelist silently
-  // dropped whatever it forgot. buildScale ignores keys the scale has no setter for.
+  // dropped whatever it forgot. buildScale warns about a key the scale has no method of its own for, as vega does.
   for (const key of Object.keys(s)) {
     if (key === 'name' || key === 'type' || key === 'domain' || key === 'range') continue
     if (s[key] !== undefined) out[key] = s[key]

@@ -47,6 +47,8 @@ export interface ScaleContext {
    * bins leaves the zero out of its default domain: the first pass includes it, the second does not.
    */
   pass?: { prev: { key: string; bins: boolean } | undefined; record: (key: string, bins: boolean) => void }
+  /** Where a scale's warnings go (an option the scale has no method for, a log domain through zero, ...); none when absent. */
+  warn?: (message: string, ...detail: unknown[]) => void
 }
 
 /** A name a signal reference may be: a bare identifier. */

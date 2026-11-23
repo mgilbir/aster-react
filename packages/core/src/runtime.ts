@@ -666,8 +666,11 @@ interface EvalContext {
   runtime: ExpressionRuntime
   _defs: SceneDef[]
   /** Shared by every scope of one evaluation: a layout threw (vega logs it and renders the scene unlaid-out). */
-  /** whether a layout threw, and the warnings the layouts of the pass gave (logged when the pass is the one kept) */
-  layoutState: { failed: boolean; warnings: string[] }
+  /**
+   * whether a layout threw, and the warnings the layouts and scales of the pass gave (logged when the pass is the one kept); `warned`
+   * holds the scales' already given, by scale, as a pass can make a scale more than once
+   */
+  layoutState: { failed: boolean; warnings: Array<string | readonly unknown[]>; warned?: Set<string> }
   /** Signals whose `init` expression has run (it runs once). */
   initDone: Set<string>
   /** Signals the host supplied for this evaluation (an `init` never overrides them). */
@@ -3059,7 +3062,10 @@ function drawsInDatasets(chart: CompiledChart, input: RuntimeInput): boolean {
 
 /** Log the warnings the layouts of the pass that is kept gave, in the order they gave them. */
 function warnOf(ctx: EvalContext): void {
-  for (const message of ctx.layoutState.warnings) ctx.logger.warn(message)
+  for (const message of ctx.layoutState.warnings) {
+    if (typeof message === 'string') ctx.logger.warn(message)
+    else ctx.logger.warn(...message)
+  }
 }
 
 function buildContentPass(
@@ -5086,6 +5092,14 @@ function scaleContext(ctx: EvalContext, name: string): ScaleContext {
     dataRows: (dataName) => (ctx.datasets.get(dataName) ?? []) as Record<string, unknown>[],
     hasData: (dataName) => ctx.datasets.has(dataName),
     distinctCache: ctx.distinctCache,
+    // (kept with the pass, as a layout's are, and once per scale however many times the pass makes it again)
+    warn: (message, ...detail) => {
+      const warned = (ctx.layoutState.warned ??= new Set())
+      const key = `${ctx.scope.path.join('/')}:${name}:${message}`
+      if (warned.has(key)) return
+      warned.add(key)
+      ctx.layoutState.warnings.push(detail.length ? [message, ...detail] : message)
+    },
     ...(ctx.passMemory !== undefined ? { pass: passOfScale(ctx.passMemory, `${ctx.scope.path.join('/')}:${name}`) } : {}),
   }
 }
