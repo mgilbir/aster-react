@@ -46,9 +46,16 @@ export function validateDataChanges(
       problems.push(`dataChanges["${name}"]: row count changed (${prev} -> ${rows.length}); per-datum changes need an unchanged length/order`)
       continue
     }
-    const bad = indices.find((i) => !Number.isInteger(i) || i < 0 || i >= rows.length)
-    if (bad !== undefined) {
-      problems.push(`dataChanges["${name}"]: index ${String(bad)} is not an integer in [0, ${rows.length})`)
+    // (by position, not by value: `find` returns the element, so an `undefined` element -- or a hole, which every array method
+    // but a plain loop skips -- read as "nothing bad", C101)
+    let bad = -1
+    for (let k = 0; k < indices.length; k++) {
+      const i: unknown = indices[k]
+      if (!Number.isInteger(i) || (i as number) < 0 || (i as number) >= rows.length) { bad = k; break }
+    }
+    if (bad !== -1) {
+      const what = bad in indices ? String(indices[bad]) : 'a hole'
+      problems.push(`dataChanges["${name}"]: index ${what} (at position ${bad}) is not an integer in [0, ${rows.length})`)
       continue
     }
     out[name] = indices
