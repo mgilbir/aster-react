@@ -6,7 +6,7 @@
  */
 import { orderOf, setOrder } from './tuple-order.js'
 import { accessor, accessorFields, array, ascending, error, field, sortData, type Accessor } from './util.js'
-import { AsterLimitError, activeMeter, meterRows } from './limits.js'
+import { AsterLimitError, allotUpTo, meterTick } from './limits.js'
 import { ascending as numericAscending, quantileSorted } from './arr.js'
 
 export type Row = Record<string, unknown>
@@ -97,6 +97,7 @@ export function sortBySpec<T>(items: readonly T[], spec: unknown, leaveOrder = f
   const m = keys.get.length
   const columns = keys.get.map((get) => {
     const column = new Array<unknown>(n)
+    // bounded: the spec's sort keys, a column each
     for (let i = 0; i < n; i++) column[i] = get(items[i])
     return column
   })
@@ -109,6 +110,7 @@ export function sortBySpec<T>(items: readonly T[], spec: unknown, leaveOrder = f
     sortData(order, (i, j) => compareValues(column[i], column[j]) * sign || (places ? places[i]! - places[j]! : 0) || i - j)
   } else {
     sortData(order, (i, j) => {
+      // bounded: the spec's sort keys
       for (let k = 0; k < m; k++) {
         const c = compareValues(columns[k]![i], columns[k]![j])
         if (c !== 0) return c * keys.sign[k]! || (places ? places[i]! - places[j]! : 0) || i - j
@@ -132,6 +134,7 @@ export function compareOf(spec: unknown): Accessor<number> | null {
   if (keys === null) return null
   const { get, sign } = keys
   const read = new Set<string>()
+  // bounded: the spec's sort keys and the fields each reads
   for (const g of get) for (const name of accessorFields(g) ?? []) read.add(name)
   let compare: Compare
   if (get.length === 1) {
@@ -141,6 +144,7 @@ export function compareOf(spec: unknown): Accessor<number> | null {
   } else {
     const n = get.length
     compare = (a, b) => {
+      // bounded: the spec's sort keys
       for (let k = 0; k < n; k++) {
         const c = compareValues(get[k]!(a), get[k]!(b))
         if (c !== 0) return c * sign[k]!
@@ -219,19 +223,20 @@ export function required(type: string, p: Record<string, unknown>, ...names: str
   }
 }
 
-/** `start, start + step, ...` below `stop` (above it for a negative step). The length is checked against the limits before it is allocated. */
+/**
+ * `start, start + step, ...` below `stop` (above it for a negative step), for a transform (`sequence`, `quantile` probabilities,
+ * graticule lines). The length is bounded before it is allocated ({@link allotUpTo}: the transform runner charges the rows).
+ */
 export function numberRange(start: number, stop: number, step: number): number[] {
   start = +start
   stop = +stop
   step = +step
   const length = Math.max(0, Math.ceil((stop - start) / step))
   if (length > 0x7fffffff) throw new AsterLimitError(`range length ${length} > 2147483647`)
-  const meter = activeMeter()
-  meterRows(Number.isFinite(length) ? length : Infinity, 'range')
-  const out: number[] = new Array(length | 0)
+  const out: number[] = new Array(allotUpTo('rows', length, 'range') | 0)
   for (let i = 0; i < out.length; i++) {
     out[i] = start + i * step
-    if (meter && (i & 0xffff) === 0xffff) meter.clock.check('range')
+    if ((i & 0xffff) === 0xffff) meterTick('range', 0x10000)
   }
   return out
 }

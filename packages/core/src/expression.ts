@@ -11,7 +11,7 @@
  * and the format layer (`./locale.js`).
  */
 import { currentLocale } from './locale.js'
-import { boundedCount, ceiling, meterBytes, meterTick, checkRegexInput, checkRegexObject, regExpOf } from './limits.js'
+import { allot, allotArray, meterTick, checkRegexInput, checkRegexObject, regExpOf } from './limits.js'
 import { bandSpace, scaleGradient, type Scale } from './scale.js'
 import { part } from './engine-parts.js'
 import { parseExpressionCached } from './expr-parser.js'
@@ -31,12 +31,9 @@ function numericSequence(args: readonly unknown[]): number[] {
   let step = 1
   if (n < 2) { stop = start; start = 0 } else if (n > 2) step = +(args[2] as number)
   const count = Math.max(0, Math.ceil((stop - start) / step))
-  // Deviation from d3/vega (safety): under limits the length is bounded BEFORE
-  // the allocation (sequence(0, 5e7) would otherwise build a 400 MB array in
-  // one uninterruptible call), and the clock is sampled while filling.
-  ceiling('rows', count, 'sequence')
-  boundedCount(count, 'sequence', 'rows')
-  const len = count | 0
+  // Deviation from d3/vega (safety): the length is bounded BEFORE the allocation (sequence(0, 5e7) would otherwise build a
+  // 400 MB array in one uninterruptible call), and the clock is sampled while filling.
+  const len = allotArray('rows', count | 0, 'sequence')
   const out = new Array(len)
   for (let i = 0; i < len; i++) {
     out[i] = start + i * step
@@ -209,7 +206,7 @@ function pad(value: unknown, count: unknown, padchar?: unknown, align?: unknown)
   const n = (count as number) - str.length
   if (!(n > 0)) return str
   // Deviation (safety): the padded string is bounded by the limits BEFORE it is built.
-  meterBytes(Math.floor(n) * fill.length + str.length, 'pad')
+  allot('bytes', Math.floor(n) * fill.length + str.length, 'pad')
   if (align === 'left') return copies(fill, n) + str
   if (align === 'center') return copies(fill, ~~(n / 2)) + str + copies(fill, Math.ceil(n / 2))
   return str + copies(fill, n)

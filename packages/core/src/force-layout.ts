@@ -12,7 +12,7 @@
 import { fieldOf } from './transform-agg.js'
 import type { Row, TransformContext } from './transform.js'
 import { compileExprTransform } from './transform.js'
-import { meterTick } from './limits.js'
+import { allot, meterTick } from './limits.js'
 import { layoutRandom } from './layout-random.js'
 import { buildQuadTree, NO_CELL } from './quadtree.js'
 
@@ -27,9 +27,13 @@ interface Link { source: Node | unknown; target: Node | unknown; index?: number;
 interface Force {
   bind(nodes: Node[], random: Random): void
   apply(alpha: number): void
+  /** The steps one `apply` takes, about (its passes times the nodes or links of a pass); known once bound. */
+  cost(): number
 }
 
 const constant = (value: number): (() => number) => () => value
+/** How many times a `for (k = 0; k < iterations; ++k)` (or `while (--iterations >= 0)`) loop runs. */
+const passes = (iterations: number): number => (iterations > 0 ? Math.ceil(iterations) : 0)
 const measure = <T>(v: unknown): Measure<T> => (typeof v === 'function' ? (v as Measure<T>) : constant(+(v as number)))
 /** A nudge off an exactly coincident coordinate, so that a direction exists. */
 const jiggle = (random: Random): number => (random() - 0.5) * 1e-6
@@ -42,6 +46,8 @@ class CenterForce implements Force {
   constructor(private readonly x: number, private readonly y: number) {}
 
   bind(nodes: Node[]): void { this.nodes = nodes }
+
+  cost(): number { return Math.max(1, this.nodes.length) }
 
   apply(): void {
     const nodes = this.nodes
@@ -76,10 +82,13 @@ class CollideForce implements Force {
     for (let i = 0; i < nodes.length; ++i) this.radii[nodes[i]!.index!] = +this.radius(nodes[i]!, i, nodes)
   }
 
+  cost(): number { return passes(this.iterations) * Math.max(1, this.nodes.length) }
+
   apply(): void {
     const { nodes, radii, random, strength } = this
     const n = nodes.length
     for (let k = 0; k < this.iterations; ++k) {
+      meterTick('force', Math.max(1, n))
       const tree = buildQuadTree(nodes, (d) => d.x + d.vx, (d) => d.y + d.vy)
       const { body, quad } = tree
       if (this.cellRadius.length < tree.size) this.cellRadius = new Float64Array(tree.size)
@@ -124,6 +133,7 @@ class CollideForce implements Force {
         }
         return x0 > xi + r || x1 < xi - r || y0 > yi + r || y1 < yi - r
       }
+      // bounded: the pass loop around it ticks with the node count as its cost
       for (let i = 0; i < n; ++i) {
         node = nodes[i]!
         ri = radii[node.index!]!
@@ -132,7 +142,6 @@ class CollideForce implements Force {
         yi = node.y + node.vy
         tree.walk(visit)
       }
-      meterTick('force', n)
     }
   }
 }
@@ -153,6 +162,8 @@ class ManyBodyForce implements Force {
     private readonly distanceMax2: number,
     private readonly theta2: number,
   ) {}
+
+  cost(): number { return Math.max(1, this.nodes.length) }
 
   bind(nodes: Node[], random: Random): void {
     this.nodes = nodes
@@ -191,6 +202,7 @@ class ManyBodyForce implements Force {
         cx[cell] = head.x
         cy[cell] = head.y
         let leaf = cell
+        // bounded: the bodies chained at one quadtree leaf (coincident points), each body visited once per pass; the tick charges the node count
         do sum += strengths[nodes[body[leaf]!]!.index!]!
         while ((leaf = chain[leaf]!) !== NO_CELL)
       }
@@ -223,6 +235,7 @@ class ManyBodyForce implements Force {
         if (l < distanceMin2) l = Math.sqrt(distanceMin2 * l)
       }
       let leaf = cell
+      // bounded: the bodies chained at one quadtree leaf (coincident points), each body visited once per pass; the tick charges the node count
       do if (nodes[body[leaf]!] !== node) {
         w = strengths[nodes[body[leaf]!]!.index!]! * alpha / l
         node.vx += x * w
@@ -282,10 +295,14 @@ class LinkForce implements Force {
     for (let i = 0; i < m; ++i) this.distances[i] = +this.distance(links[i]!, i, links)
   }
 
+  cost(): number { return passes(this.iterations) * Math.max(1, this.links.length) }
+
   apply(alpha: number): void {
     const { links, random, distances, strengths, bias } = this
     const n = links.length
     for (let k = 0; k < this.iterations; ++k) {
+      meterTick('force', Math.max(1, n))
+      // bounded: the pass loop around it ticks with the link count as its cost
       for (let i = 0; i < n; ++i) {
         const link = links[i]!
         const source = link.source as Node
@@ -303,7 +320,6 @@ class LinkForce implements Force {
         source.vy += y * b
       }
     }
-    meterTick('force', n)
   }
 }
 
@@ -336,6 +352,8 @@ class AxisForce implements Force {
       this.strengths[i] = isNaN(this.targets[i]!) ? 0 : this.strength
     }
   }
+
+  cost(): number { return Math.max(1, this.nodes.length) }
 
   apply(alpha: number): void {
     const { nodes, targets, strengths, axis } = this
@@ -385,9 +403,17 @@ class Simulation {
     this.forces.push(force)
   }
 
+  /** The steps one tick takes, about: every force's, and a step per node to move it. */
+  tickCost(): number {
+    let cost = Math.max(1, this.nodes.length)
+    for (const force of this.forces) cost += force.cost()
+    return cost
+  }
+
   tick(): void {
     const { nodes, forces, retain } = this
     const n = nodes.length
+    meterTick('force', Math.max(1, n))
     this.alpha += (this.alphaTarget - this.alpha) * this.alphaDecay
     for (const force of forces) force.apply(this.alpha)
     for (let i = 0; i < n; ++i) {
@@ -487,9 +513,12 @@ export function forceRows(rows: Row[], t: Record<string, unknown>, ctx: Transfor
   if (dyn?.has('alpha')) sim.alpha = +(t.alpha as number)
   // (each force is built and bound in turn: a failure in a later spec comes after the earlier forces have met the nodes)
   for (const spec of specs) sim.add(buildForce(spec, ctx))
+  // `iterations` (and each force's own) come from the spec: the steps of the ticks the simulation runs here are bounded up front
+  allot('work', (t.static ? passes(iters) : 1) * sim.tickCost(), 'force iterations')
   if (!t.static) sim.tick() // ensure we run on init
   sim.alpha = Math.max(sim.alpha, (t.alpha as number) || 1)
   sim.alphaDecay = 1 - Math.pow(sim.alphaMin, 1 / iters)
+  // bounded: sim.tick() ticks itself, and the ticks times their steps were allotted as work above
   if (t.static) while (--iters >= 0) sim.tick()
   return nodes as Row[]
 }

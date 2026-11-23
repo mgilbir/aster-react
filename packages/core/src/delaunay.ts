@@ -14,6 +14,7 @@
  * runs from corner `k` to corner `k + 1` of triangle `t`.
  */
 import { orientation } from './orient.js'
+import { allotGrowing, meterTick } from './limits.js'
 
 export interface Triangulation {
   triangles: Uint32Array
@@ -65,6 +66,7 @@ function insideCircle(ax: number, ay: number, bx: number, by: number, cx: number
 
 /** Sort `order` (point indices) by `keys[index]` in place, ascending; ties end in the order this procedure leaves them. */
 function sortByKey(order: Uint32Array, keys: Float64Array, lo: number, hi: number): void {
+  // bounded: quicksort of the points' order: each pass shrinks [lo, hi]
   while (hi - lo > 20) {
     const mid = (lo + hi) >> 1
     let i = lo + 1
@@ -75,9 +77,12 @@ function sortByKey(order: Uint32Array, keys: Float64Array, lo: number, hi: numbe
     if (keys[order[lo]!]! > keys[order[i]!]!) swap(order, lo, i)
     const pivot = order[i]!
     const pivotKey = keys[pivot]!
+    // bounded: a quicksort partition: i and j meet within [lo, hi]
     for (;;) {
+      // bounded: a quicksort partition: the pivot (median of three) stops the scan within [lo, hi]
       do i++
       while (keys[order[i]!]! < pivotKey)
+      // bounded: a quicksort partition: the pivot (median of three) stops the scan within [lo, hi]
       do j--
       while (keys[order[j]!]! > pivotKey)
       if (j < i) break
@@ -94,10 +99,12 @@ function sortByKey(order: Uint32Array, keys: Float64Array, lo: number, hi: numbe
       lo = i
     }
   }
+  // bounded: insertion sort of at most 20 entries (the quicksort hands over below that)
   for (let i = lo + 1; i <= hi; i++) {
     const item = order[i]!
     const key = keys[item]!
     let j = i - 1
+    // bounded: insertion sort of at most 20 entries (the quicksort hands over below that)
     while (j >= lo && keys[order[j]!]! > key) {
       order[j + 1] = order[j]!
       j--
@@ -139,6 +146,7 @@ export function triangulate(coords: Float64Array): Triangulation {
   let minY = Infinity
   let maxX = -Infinity
   let maxY = -Infinity
+  // bounded: one pass over the points
   for (let i = 0; i < n; i++) {
     const x = coords[2 * i]!
     const y = coords[2 * i + 1]!
@@ -155,6 +163,7 @@ export function triangulate(coords: Float64Array): Triangulation {
   let s0 = 0
   let s1 = 0
   let s2 = 0
+  // bounded: one pass over the points
   for (let i = 0, best = Infinity; i < n; i++) {
     const d = distance2(midX, midY, coords[2 * i]!, coords[2 * i + 1]!)
     if (d < best) {
@@ -164,6 +173,7 @@ export function triangulate(coords: Float64Array): Triangulation {
   }
   const s0x = coords[2 * s0]!
   const s0y = coords[2 * s0 + 1]!
+  // bounded: one pass over the points
   for (let i = 0, best = Infinity; i < n; i++) {
     if (i === s0) continue
     const d = distance2(s0x, s0y, coords[2 * i]!, coords[2 * i + 1]!)
@@ -175,6 +185,7 @@ export function triangulate(coords: Float64Array): Triangulation {
   let s1x = coords[2 * s1]!
   let s1y = coords[2 * s1 + 1]!
   let smallest = Infinity
+  // bounded: one pass over the points
   for (let i = 0; i < n; i++) {
     if (i === s0 || i === s1) continue
     const r = circumradius2(s0x, s0y, s1x, s1y, coords[2 * i]!, coords[2 * i + 1]!)
@@ -203,6 +214,7 @@ export function triangulate(coords: Float64Array): Triangulation {
   const inv = 0.5 / (dx * ey - dy * ex)
   const centerX = s0x + (ey * bl - dy * cl) * inv
   const centerY = s0y + (dx * cl - ex * bl) * inv
+  // bounded: one pass over the points
   for (let i = 0; i < n; i++) keys[i] = distance2(coords[2 * i]!, coords[2 * i + 1]!, centerX, centerY)
   sortByKey(order, keys, 0, n - 1)
 
@@ -251,11 +263,16 @@ export function triangulate(coords: Float64Array): Triangulation {
   addTriangle(s0, s1, s2, -1, -1, -1)
 
   /** Flip edges around half-edge `start` until all satisfy the Delaunay condition; returns the half-edge to carry on from. */
+  // (Lawson's flips end in exact arithmetic; in floating point the flips are counted, bounded as work, as they go)
+  const flipped = allotGrowing('work', 'delaunay flips')
+  let flips = 0
   const legalize = (start: number): number => {
     let a = start
     let depth = 0
     let ar = 0
     for (;;) {
+      meterTick('voronoi')
+      if ((++flips & 0xffff) === 0) flipped(flips)
       const b = halfedges[a]!
       const a0 = a - (a % 3)
       ar = a0 + ((a + 2) % 3)
@@ -280,6 +297,7 @@ export function triangulate(coords: Float64Array): Triangulation {
         if (outside === -1) {
           // the flipped edge lay on the hull: the hull must now point at `a`
           let e = hullStart
+          // bounded: once round the hull ring, at most the points; each flip is counted as work in the loop around it
           do {
             if (hullEdge[e] === bl) {
               hullEdge[e] = a
@@ -301,6 +319,7 @@ export function triangulate(coords: Float64Array): Triangulation {
   }
 
   for (let k = 0, lastX = 0, lastY = 0; k < n; k++) {
+    meterTick('voronoi')
     const i = order[k]!
     const x = coords[2 * i]!
     const y = coords[2 * i + 1]!
@@ -311,6 +330,7 @@ export function triangulate(coords: Float64Array): Triangulation {
 
     // a hull point near this one's angle, then walk the hull to the first edge the point can see
     let start = 0
+    // bounded: at most the hash's slots (about the square root of the points); the point loop ticks
     for (let j = 0, slot = slotOf(x, y); j < slots; j++) {
       start = byAngle[(slot + j) % slots]!
       if (start !== -1 && start !== next[start]) break
@@ -320,6 +340,7 @@ export function triangulate(coords: Float64Array): Triangulation {
     let q: number
     // the hull is a ring of at most n points; coordinates that are not numbers can corrupt it, and a walk that has gone
     // round more than that is not going to end
+    // bounded: at most n steps: the walk gives up past that (`steps > n`); the point loop ticks
     for (let steps = 0; ((q = next[e]!), orientation(x, y, coords[2 * e]!, coords[2 * e + 1]!, coords[2 * q]!, coords[2 * q + 1]!) >= 0); steps++) {
       e = q
       if (e === start || steps > n) {
@@ -336,6 +357,7 @@ export function triangulate(coords: Float64Array): Triangulation {
 
     // extend over the hull edges further along that the point also sees
     let far = next[e]!
+    // bounded: at most n steps (`steps <= n`); legalize() ticks for every flip
     for (let steps = 0; steps <= n && ((q = next[far]!), orientation(x, y, coords[2 * far]!, coords[2 * far + 1]!, coords[2 * q]!, coords[2 * q + 1]!) < 0); steps++) {
       t = addTriangle(far, i, q, hullEdge[i]!, -1, hullEdge[far]!)
       hullEdge[i] = legalize(t + 2)
@@ -345,6 +367,7 @@ export function triangulate(coords: Float64Array): Triangulation {
     }
     // and backwards, when the first edge found was where the walk began
     if (e === start) {
+      // bounded: at most n steps (`steps <= n`); legalize() ticks for every flip
       for (let steps = 0; steps <= n && ((q = prev[e]!), orientation(x, y, coords[2 * q]!, coords[2 * q + 1]!, coords[2 * e]!, coords[2 * e + 1]!) < 0); steps++) {
         t = addTriangle(q, i, e, -1, hullEdge[e]!, hullEdge[q]!)
         legalize(t + 2)
@@ -363,6 +386,7 @@ export function triangulate(coords: Float64Array): Triangulation {
   }
 
   const hull = new Uint32Array(hullSize)
+  // bounded: the hull's points
   for (let i = 0, e = hullStart; i < hullSize; i++) {
     hull[i] = e
     e = next[e]!

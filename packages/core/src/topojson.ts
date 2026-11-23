@@ -151,6 +151,7 @@ function decodePositions(positions: readonly Position[], transform: Transform | 
   for (let i = 0; i < n; i++) {
     const p = position(positions[i])
     const q = [(x += p[0]!) * kx + dx, (y += p[1]!) * ky + dy]
+    // bounded: a position's extra dimensions (z, m, ...)
     for (let j = 2; j < p.length; j++) q.push(p[j]!)
     out[i] = q
   }
@@ -169,6 +170,7 @@ function appendTransformed(out: Position[], raw: readonly Position[], transform:
     const p = raw[i]!
     if (p == null) position(p)
     const q = [(x += p[0]!) * kx + dx, (y += p[1]!) * ky + dy]
+    // bounded: a position's extra dimensions (z, m, ...)
     for (let j = 2; j < p.length; j++) q.push(p[j]!)
     out.push(q)
   }
@@ -176,6 +178,7 @@ function appendTransformed(out: Position[], raw: readonly Position[], transform:
 
 /** Reverse `points` from index `from` to the end. */
 function reverseTail(points: Position[], from: number): void {
+  // bounded: two ends meeting in the middle of the list
   for (let i = from, j = points.length - 1; i < j; i++, j--) {
     const t = points[i]!
     points[i] = points[j]!
@@ -211,6 +214,7 @@ function decoder(topology: Topology) {
 
   function ring(indices: unknown): Position[] {
     const points = line(indices)
+    // bounded: at most 3 points are added
     while (points.length < 4) points.push(points[0] as Position)
     return points
   }
@@ -295,6 +299,7 @@ function arcsOf(root: TopoObject, filter: MeshFilter | undefined, arcCount: numb
       case 'LineString': listOf<number>(o.arcs, 'a LineString\'s "arcs"').forEach(note); break
       case 'MultiLineString': case 'Polygon':
         listOf<unknown>(o.arcs, `a ${o.type}'s "arcs"`).forEach((a) => listOf<number>(a, `a ${o.type}'s "arcs"`).forEach(note)); break
+      // bounded: the arcs of one geometry (the decode meters the positions they make)
       case 'MultiPolygon':
         listOf<unknown>(o.arcs, 'a MultiPolygon\'s "arcs"').forEach((p) => listOf<unknown>(p, 'a MultiPolygon\'s "arcs"').forEach((a) => listOf<number>(a, 'a MultiPolygon\'s "arcs"').forEach(note))); break
     }

@@ -16,7 +16,7 @@ import { accessorOf, densitySettings } from './raster-params.js'
 import { PARAM_RULES, checkParams } from './param-rules.js'
 import { tickStep } from './arr.js'
 import { carryOrder, orderOf, placesAt } from './tuple-order.js'
-import { activeMeter, boundedCount, ceiling } from './limits.js'
+import { activeMeter, allot, meterTick } from './limits.js'
 import { walkPostOrder, walkPreOrder } from './tree-walk.js'
 import { compareOf, fieldOf, numberRange, required, sortBySpec } from './row-keys.js'
 import type { AggregateParams } from './transform-agg.js'
@@ -126,6 +126,7 @@ const KEEPS_ROW_OBJECTS = new Set(['filter', 'collect', 'sample', 'extent', 'imp
 export function applyTransformsToSharedRows(rows: Row[], transforms: CompiledTransform[], ctx: TransformContext, sourceName?: string): Row[] {
   let reading = 0
   let shared = true
+  // bounded: the spec's transforms, once each
   while (reading < transforms.length) {
     const use = rowUseOf(transforms[reading]!)
     if (use === 'writes') break
@@ -538,6 +539,7 @@ export function geoJSONPath(geo: unknown): string | undefined {
   if (g.type === 'MultiPolygon' && Array.isArray(coords)) {
     let out = ''
     for (const poly of coords as unknown[][][]) {
+      // bounded: the rings of one polygon of a geometry the data holds
       for (const ring of poly) out += ringPath(ring)
     }
     return out
@@ -569,16 +571,19 @@ export function geoJSONPath(geo: unknown): string | undefined {
 
 const GEO_EPSILON = 1e-6
 
+/** A graticule line family: the line through one position, and how many points each line has. */
+type LineFamily = ((at: number) => number[][]) & { points: number }
+
 /** d3-geo graticuleX: latitude samples along a meridian (step 90, clipped). */
-function graticuleX(y0: number, y1: number, dy: number): (x: number) => number[][] {
+function graticuleX(y0: number, y1: number, dy: number): LineFamily {
   const y = numberRange(y0, y1 - GEO_EPSILON, dy).concat(y1)
-  return (x) => y.map((yy) => [x, yy])
+  return Object.assign((x: number) => { meterTick('graticule', y.length); return y.map((yy) => [x, yy]) }, { points: y.length })
 }
 
 /** d3-geo graticuleY: longitude samples along a parallel (precision spacing). */
-function graticuleY(x0: number, x1: number, dx: number): (y: number) => number[][] {
+function graticuleY(x0: number, x1: number, dx: number): LineFamily {
   const x = numberRange(x0, x1 - GEO_EPSILON, dx).concat(x1)
-  return (yy) => x.map((xx) => [xx, yy])
+  return Object.assign((yy: number) => { meterTick('graticule', x.length); return x.map((xx) => [xx, yy]) }, { points: x.length })
 }
 
 /**
@@ -600,10 +605,11 @@ function graticuleRows(t: Record<string, unknown>): Row[] {
     x = graticuleX(y0, y1, 90)
     y = graticuleY(x0, x1, precision)
   }
-  let X: (v: number) => number[][] = () => []
-  let Y: (v: number) => number[][] = () => []
-  let x: (v: number) => number[][] = () => []
-  let y: (v: number) => number[][] = () => []
+  const none: LineFamily = Object.assign(() => [], { points: 0 })
+  let X = none
+  let Y = none
+  let x = none
+  let y = none
 
   const extentMajor = (e: number[][]) => {
     X0 = e[0]![0]!, X1 = e[1]![0]!, Y0 = e[0]![1]!, Y1 = e[1]![1]!
@@ -632,13 +638,16 @@ function graticuleRows(t: Record<string, unknown>): Row[] {
     else if (key === 'precision' && typeof v === 'number') { precision = v; recompute() }
   }
 
-  const lines = (): number[][][] =>
-    numberRange(Math.ceil(X0 / DX) * DX, X1, DX).map(X)
-      .concat(numberRange(Math.ceil(Y0 / DY) * DY, Y1, DY).map(Y))
-      .concat(numberRange(Math.ceil(x0 / dx) * dx, x1, dx).filter((xx) => Math.abs(xx % DX) > GEO_EPSILON).map(x))
-      .concat(numberRange(Math.ceil(y0 / dy) * dy, y1, dy).filter((yy) => Math.abs(yy % DY) > GEO_EPSILON).map(y))
+  // The lines of each family, then their points: lines times points per line is what the steps and the precision multiply, so
+  // the positions are bounded (as coordinates, like a topojson decode's) before a line is made.
+  const majorX = numberRange(Math.ceil(X0 / DX) * DX, X1, DX)
+  const majorY = numberRange(Math.ceil(Y0 / DY) * DY, Y1, DY)
+  const minorX = numberRange(Math.ceil(x0 / dx) * dx, x1, dx).filter((xx) => Math.abs(xx % DX) > GEO_EPSILON)
+  const minorY = numberRange(Math.ceil(y0 / dy) * dy, y1, dy).filter((yy) => Math.abs(yy % DY) > GEO_EPSILON)
+  allot('coords', majorX.length * X.points + majorY.length * Y.points + minorX.length * x.points + minorY.length * y.points, 'graticule')
+  const lines = majorX.map(X).concat(majorY.map(Y), minorX.map(x), minorY.map(y))
 
-  return [{ type: 'MultiLineString', coordinates: lines() }]
+  return [{ type: 'MultiLineString', coordinates: lines }]
 }
 
 // ---------------------------------------------------------------------------
@@ -676,7 +685,7 @@ export function contourQuantize(levels: number, nice: boolean, zero: boolean): (
 function contourRows(rows: Row[], t: Record<string, unknown>, ctx: TransformContext): Row[] {
   const values = t.values as ArrayLike<unknown> | undefined
   // The thresholds: given, or `count` levels spanning the values (from zero when the values are given, not estimated).
-  ceiling('items', (t.count as number) || 10, 'contour levels')
+  allot('items', (t.count as number) || 10, 'contour levels')
   const quantize = contourQuantize((t.count as number) || 10, !!t.nice, !!values)
   const given = t.thresholds as number[] | undefined
 
@@ -703,7 +712,7 @@ function contourRows(rows: Row[], t: Record<string, unknown>, ctx: TransformCont
   }
 
   const thresholds = given || quantize(cells as Float32Array)
-  boundedCount(thresholds.length, 'contour thresholds')
+  allot('items', thresholds.length, 'contour thresholds')
   const contourRun = geoRegistry.contourRun
   if (!contourRun) requireGeo() // throws: geo addon not loaded
   const features = contourRun!(cells as Float32Array, thresholds, size, t.smooth !== false)

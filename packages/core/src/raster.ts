@@ -27,6 +27,7 @@ import { color as parseColor } from './color.js'
 import type { CanvasLike, GradientLike } from './canvas.js'
 import { arcConics, conicQuads, pathEdges, polygonEdges, type Edge, type Pt, type Sub } from './raster-edges.js'
 import { strokePolygons } from './raster-stroke.js'
+import { allot, meterTick } from './limits.js'
 
 interface State {
   m: [number, number, number, number, number, number]
@@ -88,7 +89,8 @@ export class AlphaCanvas implements CanvasLike {
   constructor(width: number, height: number) {
     this.width = Math.max(0, Math.floor(width))
     this.height = Math.max(0, Math.floor(height))
-    this.alpha = new Uint8Array(this.width * this.height)
+    // the size is a transform's (`label` / `wordcloud` `size`, from the spec): bounded before a byte of it is allocated
+    this.alpha = new Uint8Array(allot('pixels', this.width * this.height, 'raster canvas'))
     this.row = new Float32Array(this.width + 1)
     this.sum = new Int32Array(this.width + 1)
   }
@@ -238,6 +240,7 @@ export class AlphaCanvas implements CanvasLike {
     const m = this.m
     const tol = 0.25 / Math.max(1e-6, radius * Math.sqrt(Math.abs(m[0] * m[3] - m[1] * m[2])))
     for (const c of conics) {
+      // bounded: at most 4 quarter arcs of at most 32 quads each (conicQuads stops at 5 halvings)
       for (const q of conicQuads(c, tol)) {
         const [c1x, c1y] = this.pt(x + radius * q[0], y + radius * q[1])
         const [ex, ey] = this.pt(x + radius * q[2], y + radius * q[3])
@@ -268,15 +271,29 @@ export class AlphaCanvas implements CanvasLike {
     const m = this.m
     const scale = Math.sqrt(Math.abs(m[0] * m[3] - m[1] * m[2]))
     if (!(scale > 0)) return
+    let dash = this.dash.map((d) => d * scale)
+    let alpha = a
+    // A pattern whose period is under a pixel puts some of every pixel along the line under ink: what the pixels hold is the
+    // average, a solid stroke at the share of the period that is drawn (as cairo approximates such a dash, and what a coverage
+    // canvas's pixels add up to), and cutting it into dashes would cost a piece per fraction of a pixel.
+    const period = dash.reduce((p, q) => p + q, 0)
+    if (dash.length && period > 0 && period < 1) {
+      let drawn = 0
+      for (let i = 0; i < dash.length; i += 2) drawn += dash[i]!
+      alpha *= drawn / period
+      dash = []
+      if (!(alpha > 0)) return
+    }
     const polys = strokePolygons(this.subs, {
       half: (this.lineWidth * scale) / 2,
       cap: this.lineCap,
       join: this.lineJoin,
       miterLimit: this.miterLimit,
-      dash: this.dash.map((d) => d * scale),
+      dash,
       dashOffset: this.lineDashOffset * scale,
+      canvas: [0, 0, this.width, this.height],
     })
-    this.scan(polygonEdges(polys), 'nonzero', a)
+    this.scan(polygonEdges(polys), 'nonzero', alpha)
   }
 
   /** Text is a box from its advance width and font size (glyph coverage is not modelled); `fillText` and `strokeText` draw it. */
@@ -323,14 +340,18 @@ export class AlphaCanvas implements CanvasLike {
     let active: Edge[] = []
     const xs: Array<{ x: number; w: number }> = []
     for (let row = rowStart; row <= rowEnd; row++) {
+      meterTick('raster', w)
       let lo = w
       let hi = -1
       for (let k = 0; k < SUBY; k++) {
         const y = row + (k + 0.5) / SUBY
+        meterTick('raster', active.length + 1)
+        // bounded: each edge enters the active list once over the whole scan
         while (next < edges.length && edges[next]!.y0 <= y) active.push(edges[next++]!)
         if (active.length) {
           let kept = 0
           xs.length = 0
+          // bounded: the active edges, which the sub-row's tick above has as its cost
           for (let i = 0; i < active.length; i++) {
             const e = active[i]!
             if (e.y1 <= y) continue
@@ -341,6 +362,7 @@ export class AlphaCanvas implements CanvasLike {
           if (xs.length >= 2) {
             xs.sort((p, q) => p.x - q.x)
             let wind = 0
+            // bounded: the crossings of this sub-row, one per active edge ticked for above
             for (let i = 0; i < xs.length - 1; i++) {
               wind = rule === 'evenodd' ? wind ^ 1 : wind + xs[i]!.w
               if (wind === 0) continue
@@ -354,6 +376,7 @@ export class AlphaCanvas implements CanvasLike {
               if (ia === ib) cov[ia] = cov[ia]! + (xb - xa) * PER_SUB
               else {
                 cov[ia] = cov[ia]! + (ia + 1 - xa) * PER_SUB
+                // bounded: a run of pixels of this row: at most the canvas width the row ticked for
                 for (let px = ia + 1; px < ib; px++) cov[px] = cov[px]! + PER_SUB
                 if (xb > ib) cov[ib] = cov[ib]! + (xb - ib) * PER_SUB
               }
@@ -362,6 +385,7 @@ export class AlphaCanvas implements CanvasLike {
         }
         // the end of a quarter of the row: analytic coverage is made a quarter row at a time and each is cut to whole 1/256ths
         if ((k + 1) % QUARTER === 0) {
+          // bounded: the pixels of this row the edges reached: at most the canvas width the row ticked for
           for (let px = lo; px <= hi; px++) {
             const c = cov[px]!
             if (c === 0) continue
@@ -371,6 +395,7 @@ export class AlphaCanvas implements CanvasLike {
         }
       }
       const base = row * w
+      // bounded: the pixels of this row the edges reached: at most the canvas width the row ticked for
       for (let px = lo; px <= hi; px++) {
         const aa = Math.min(255, sum[px]!)
         sum[px] = 0

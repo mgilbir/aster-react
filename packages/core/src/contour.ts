@@ -19,6 +19,8 @@
  *    same raw values, so an unusable neighbour makes a coordinate NaN rather than falling back to the grid line.
  */
 
+import { allot, meterTick } from './limits.js'
+
 export type ContourMultiPolygon = {
   type: 'MultiPolygon'
   value: number
@@ -41,6 +43,7 @@ const MIDPOINT: Record<string, readonly [number, number]> = { T: [2, 1], R: [3, 
 
 /** Per pattern, the segments as flat [x0, y0, x1, y1, ...] in half-cell units. */
 const SEGMENTS: number[][] = CELL_SEGMENTS.map((pattern) =>
+  // bounded: the 16 fixed cell patterns, made once when the module loads
   pattern === '' ? [] : pattern.split(' ').flatMap(([from, to]) => [...MIDPOINT[from!]!, ...MIDPOINT[to!]!]),
 )
 
@@ -148,6 +151,7 @@ function sideOf(ring: Ring, p: Point): number {
 
 /** Whether a hole belongs to a ring: the first of its points that is not on the boundary decides. */
 function holeInside(outer: Ring, hole: Ring): boolean {
+  // bounded: the hole's own points, and it stops at the first that is off the outer's boundary (most often the first point)
   for (const p of hole) {
     const side = sideOf(outer, p)
     if (side !== 0) return side !== -1
@@ -157,6 +161,7 @@ function holeInside(outer: Ring, hole: Ring): boolean {
 
 /** Moves each point that sits on a grid line to where the level crosses between the two cells it separates. */
 function smoothRing(ring: Ring, values: ArrayLike<unknown>, stride: number, height: number, level: number): void {
+  meterTick('contour', ring.length)
   for (const point of ring) {
     const x = point[0]!
     const y = point[1]!
@@ -190,20 +195,56 @@ function polygonsAt(values: ArrayLike<unknown>, level: number, stride: number, h
   let upper = new Uint8Array(columns + 2)
   let lower = new Uint8Array(columns + 2)
   for (let y = -1; y < rows; y++) {
+    meterTick('contour', columns)
     if (y + 1 < rows) {
+      // bounded: a row of corners; the row loop around it ticks with `columns` as its cost
       for (let c = 0, at = (y + 1) * stride; c < columns; c++) {
         lower[c + 1] = (values[at + c] as number) >= level ? 1 : 0
       }
     } else lower.fill(0)
+    // bounded: a row of cells; the row loop around it ticks with `columns` as its cost
     for (let x = -1; x < columns; x++) stitch(x, y, (upper[x + 1]! << 3) | (upper[x + 2]! << 2) | (lower[x + 2]! << 1) | lower[x + 1]!)
     ;[upper, lower] = [lower, upper]
   }
 
-  for (const hole of holes) {
-    const owner = outers.find((polygon) => holeInside(polygon[0]!, hole))
-    if (owner) owner.push(hole)
+  // Each hole goes to the first outer ring (in the order they closed) that holds it. A hole whose first point lies outside an
+  // outer's bounding box is outside that ring (the point is off its boundary, and the ray test says outside), so the box
+  // rejects most pairs before a point-in-ring test; the pairs are still holes x outers, which the scan bounded (`work`).
+  if (holes.length && outers.length) {
+    allot('work', holes.length * outers.length, 'contour holes')
+    const boxes = outers.map((polygon) => ringBox(polygon[0]!))
+    for (const hole of holes) {
+      meterTick('contour holes', outers.length)
+      const first = hole[0]!
+      const fx = first[0]!
+      const fy = first[1]!
+      let owner: Ring[] | undefined
+      // bounded: the outers, for one hole; the hole loop ticks with `outers.length` as its cost, and holes x outers was allotted as work
+      for (let i = 0; i < outers.length; i++) {
+        const box = boxes[i]!
+        if (fx < box[0] || fx > box[2] || fy < box[1] || fy > box[3]) continue
+        if (holeInside(outers[i]![0]!, hole)) { owner = outers[i]; break }
+      }
+      if (owner) owner.push(hole)
+    }
   }
   return outers
+}
+
+/** The bounding box of a ring: `[minX, minY, maxX, maxY]`. */
+function ringBox(ring: Ring): [number, number, number, number] {
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity
+  // bounded: the ring's own points (every ring was stitched by the metered scan)
+  for (const p of ring) {
+    const x = p[0]!, y = p[1]!
+    // (a NaN coordinate, which smoothing can make, takes part in the ray test as it does: no box can stand for the ring)
+    if (x !== x || y !== y) return [-Infinity, -Infinity, Infinity, Infinity]
+    if (x < x0) x0 = x
+    if (x > x1) x1 = x
+    if (y < y0) y0 = y
+    if (y > y1) y1 = y
+  }
+  return [x0, y0, x1, y1]
 }
 
 /**
@@ -219,6 +260,11 @@ export function contourPolygons(
   const width = Math.floor(size[0]!)
   const height = Math.floor(size[1]!)
   if (!(width >= 0 && height >= 0)) throw new Error('invalid size')
+  // The size is the caller's (a data row's `width` / `height`, a `contour` transform's `size`), not the length of `values`: the
+  // scan visits every corner of the declared grid once per threshold, and keeps two rows of corners of its width.
+  const columns = Math.max(width, 1)
+  allot('cells', 2 * (columns + 2), 'contour row buffers')
+  allot('work', thresholds.length * (columns + 1) * (Math.max(height, 1) + 1), 'contour scan')
   return Array.from(thresholds, (value) => ({
     type: 'MultiPolygon' as const,
     value: value as number,

@@ -8,7 +8,7 @@
  * shortest decimal and never an accumulated sum; a quantile of an unsorted column interpolates its two nearest order
  * statistics; the compensated sum is exact to the last bit.
  */
-import { boundedCount } from './limits.js'
+import { allotArray } from './limits.js'
 
 // ---- ordering ---------------------------------------------------------------------------------------------
 
@@ -47,8 +47,9 @@ export function range(first: number, last?: number, by?: number): number[] {
     start = 0
   }
   const wanted = Math.max(0, Math.ceil((stop - start) / step))
-  boundedCount(wanted, 'range', 'rows')
-  const out = new Array<number>(wanted | 0)
+  // (the count is the spec's whenever a spec reaches here: a scale's `bins` step, an ordinal range; the ceiling holds for all. What
+  // is bounded is what is allocated, the count made a 32-bit integer as d3 makes it: an infinite count is an empty range)
+  const out = new Array<number>(allotArray('rows', wanted | 0, 'range'))
   for (let i = 0; i < out.length; i++) out[i] = start + i * step
   return out
 }
@@ -161,8 +162,7 @@ export function ticks(start: number, stop: number, count: number): number[] {
   if (!(last >= first)) return []
   const n = last - first + 1
   // the count comes from a spec: bound the array before allocating it
-  boundedCount(n, 'ticks')
-  const out = new Array<number>(n)
+  const out = new Array<number>(allotArray('items', n, 'ticks'))
   const origin = reversed ? last : first
   const heading = reversed ? -1 : 1
   if (unit < 0) for (let i = 0; i < n; ++i) out[i] = (origin + heading * i) / -unit

@@ -22,7 +22,7 @@
  * (`{ year: null }`) skips that unit instead of looping forever.
  */
 import { array, error, extend, hasOwnProperty, ownGet, peek, toSet } from './util.js'
-import { activeMeter } from './limits.js'
+import { allotGrowing } from './limits.js'
 
 // --- durations ----------------------------------------------------------------------------
 
@@ -42,7 +42,11 @@ export interface TimeInterval {
   ceil(date: Date): Date
   round(date: Date): Date
   offset(date: Date, step?: number): Date
-  range(start: unknown, stop: unknown, step?: number): Date[]
+  /**
+   * The instants from `start` (rounded up) to before `stop`. The output is bounded as it grows ({@link allotGrowing}), as `items`:
+   * the ticks a guide draws, or an expression's `timeSequence` / `utcSequence` (`what` names which in the error).
+   */
+  range(start: unknown, stop: unknown, step?: number, what?: string): Date[]
   filter(test: (date: Date) => boolean): TimeInterval
   count?(start: unknown, end: unknown): number
   every?(step: number): TimeInterval | null
@@ -96,20 +100,20 @@ function makeInterval(unit: Unit): TimeInterval {
     unit.shift(copy, step == null ? 1 : Math.floor(step))
     return copy
   }
-  interval.range = (start, stop, step) => {
+  interval.range = (start, stop, step, what = 'time ticks') => {
     const out: Date[] = []
     const cursor = ceil(start)
     const stride = step == null ? 1 : Math.floor(step)
     if (!(cursor < (stop as Date)) || !(stride > 0)) return out
-    // under limits the tick count is bounded while the range is generated; a 1 ms interval over decades would
-    // otherwise allocate without end
-    const meter = activeMeter()
+    // the count is known only as the range is made: it is bounded while it grows (the built-in ceiling, with or without limits,
+    // and the active budget), since a 1 ms interval over decades would otherwise allocate without end
+    const grown = allotGrowing('items', what)
     let previous: Date
     do {
       out.push(previous = new Date(+cursor))
       unit.shift(cursor, stride)
       unit.floor(cursor)
-      if (meter && (out.length & 1023) === 0) meter.items(out.length, 'time ticks')
+      if ((out.length & 1023) === 0) grown(out.length)
     } while (previous < cursor && cursor < (stop as Date))
     return out
   }
@@ -526,9 +530,9 @@ export const utcOffset = (unit: string, date: unknown, step: number): Date | und
   utcIntervalFor(unit)?.offset(date as Date, step)
 
 export const timeSequence = (unit: string, start: unknown, stop: unknown, step?: number): Date[] | undefined =>
-  timeIntervalFor(unit)?.range(start, stop, step)
+  timeIntervalFor(unit)?.range(start, stop, step, 'timeSequence')
 export const utcSequence = (unit: string, start: unknown, stop: unknown, step?: number): Date[] | undefined =>
-  utcIntervalFor(unit)?.range(start, stop, step)
+  utcIntervalFor(unit)?.range(start, stop, step, 'utcSequence')
 
 // --- floors to a unit list ------------------------------------------------------------------------------------
 

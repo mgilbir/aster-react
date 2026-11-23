@@ -25,20 +25,38 @@ import { walkPostOrder } from './tree-walk.js'
 /** The rows grouped by `keys[depth]` and the keys after it: the leaves (rows) once the keys are used up. */
 interface Group { key: string; values: Group[] | Row[] }
 
-function groupBy(rows: readonly Row[], keys: ReadonlyArray<(d: unknown) => unknown>, depth: number): Group[] | Row[] {
-  if (depth >= keys.length) return rows as Row[]
-  const read = keys[depth]!
-  // (no inherited names: a group called `constructor` is a group; the order of the names is that of any object's own keys)
-  const byKey: Record<string, Row[]> = Object.create(null)
-  for (let i = 0; i < rows.length; i++) {
-    const row = rows[i]!
-    const name = '' + (read(row) as string)
-    const group = byKey[name]
-    if (group) group.push(row)
-    else byKey[name] = [row]
-    if ((i & 255) === 255) meterTick('nest', 256)
+/**
+ * The rows grouped by each key in turn. Iterative, as deep as there are keys (a spec can give thousands): a level's groups are
+ * split by the next key depth first, the first group before the next, so the keys are read in the order a recursion would read them.
+ */
+function groupBy(rows: readonly Row[], keys: ReadonlyArray<(d: unknown) => unknown>): Group[] | Row[] {
+  const top: { values: Group[] | Row[] } = { values: rows as Row[] }
+  const work: Array<{ rows: readonly Row[]; depth: number; into: { values: Group[] | Row[] } }> = [{ rows, depth: 0, into: top }]
+  let task
+  while ((task = work.pop())) {
+    meterTick('nest')
+    const { depth, into } = task
+    if (depth >= keys.length) {
+      into.values = task.rows as Row[]
+      continue
+    }
+    const read = keys[depth]!
+    // (no inherited names: a group called `constructor` is a group; the order of the names is that of any object's own keys)
+    const byKey: Record<string, Row[]> = Object.create(null)
+    for (let i = 0; i < task.rows.length; i++) {
+      const row = task.rows[i]!
+      const name = '' + (read(row) as string)
+      const group = byKey[name]
+      if (group) group.push(row)
+      else byKey[name] = [row]
+      if ((i & 255) === 255) meterTick('nest', 256)
+    }
+    // bounded: one entry per group of this level, made by the metered row loop above
+    const groups: Group[] = Object.keys(byKey).map((name) => ({ key: name, values: byKey[name]! }))
+    into.values = groups
+    for (let g = groups.length - 1; g >= 0; g--) work.push({ rows: groups[g]!.values as Row[], depth: depth + 1, into: groups[g]! })
   }
-  return Object.keys(byKey).map((name) => ({ key: name, values: groupBy(byKey[name]!, keys, depth + 1) }))
+  return top.values
 }
 
 /** The children a node's data holds: the array it keeps as `values`, when it has any. */
@@ -55,17 +73,30 @@ function buildTree(rootData: Row, rows: readonly Row[]): HierNode {
     data, idx: position.get(data) ?? -1, children: [], parent, depth: parent ? parent.depth + 1 : 0, height: 0, x: 0, y: 0, r: 0, value: 0,
   })
   const root = make(rootData, null)
+  // (depth first, with the data of the nodes from the root down to the one being expanded: a child whose data is among them would
+  // make the tree endless)
   const stack: HierNode[] = [root]
+  const leaving: boolean[] = [false]
+  const onPath = new Set<unknown>()
   let made = 1
   let node: HierNode | undefined
   while ((node = stack.pop())) {
+    if (leaving.pop()) {
+      onPath.delete(node.data)
+      continue
+    }
     const kids = childrenOf(node.data)
     if (!kids) continue
+    onPath.add(node.data)
+    stack.push(node)
+    leaving.push(true)
+    // bounded: the node's children; the loop around it ticks with their count
     for (const data of kids) {
-      for (let up: HierNode | null = node; up; up = up.parent) if (up.data === data) error('[aster] nest: a row holds itself among its "values"')
+      if (onPath.has(data)) error('[aster] nest: a row holds itself among its "values"')
       const child = make(data as Row, node)
       node.children.push(child)
       stack.push(child)
+      leaving.push(false)
     }
     made += kids.length
     checkRowCount(made, 'nest')
@@ -82,7 +113,7 @@ function buildTree(rootData: Row, rows: readonly Row[]): HierNode {
 /** vega `nest`: the rows, with (`generate`) the interior nodes of the tree after them; the tree is left for the layouts. */
 export function nestRows(rows: Row[], t: Record<string, unknown>, ctx: TransformContext, sourceName?: string): Row[] {
   const keys = array(t.keys).map(fieldOf)
-  const rootData = { values: groupBy(rows, keys, 0) } as unknown as Row
+  const rootData = { values: groupBy(rows, keys) } as unknown as Row
   const root = buildTree(rootData, rows)
   let out = rows
   if (t.generate) {
@@ -90,11 +121,13 @@ export function nestRows(rows: Row[], t: Record<string, unknown>, ctx: Transform
     const added: Row[] = []
     const queue: HierNode[] = [root]
     for (let i = 0; i < queue.length; i++) {
+      meterTick('nest')
       const node = queue[i]!
       if (node.children.length) {
         if (node.idx === undefined || node.idx < 0) node.idx = rows.length + added.length
         added.push(node.data)
       }
+      // bounded: the node's children; every node of the tree is queued once
       for (const c of node.children) queue.push(c)
     }
     out = rows.concat(added)
