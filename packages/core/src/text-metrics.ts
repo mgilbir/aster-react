@@ -48,6 +48,24 @@ export function setTextMetricsProvider(provider: TextMetricsProvider | null): vo
   widthsOf(provider).clear()
 }
 
+/**
+ * The errors a provider's `measure` threw while `fn` ran (an evaluation): the width falls back to the estimate for that call, which
+ * is not cached (the provider is asked again next time), and the evaluation reports the first error and is not kept as a base for
+ * the next one -- what it measured is not what the provider measures.
+ */
+let failures: unknown[] | null = null
+export function collectMeasureFailures<T>(fn: () => T): { value: T; failures: readonly unknown[] } {
+  const outer = failures
+  const mine: unknown[] = []
+  failures = mine
+  try {
+    return { value: fn(), failures: mine }
+  } finally {
+    failures = outer
+    if (outer !== null) for (const e of mine) outer.push(e)
+  }
+}
+
 export function getTextMetricsProvider(): TextMetricsProvider | null {
   return activeProvider
 }
@@ -138,8 +156,10 @@ export function measureText(text: string, font: string, item?: FontProps): numbe
       try {
         const measured = activeProvider.measure(text, font, fontFontSize(item ?? {}), item)
         w = Number.isFinite(measured) && measured >= 0 ? measured : estimateTextWidth(text, fontFontSize(item ?? {}))
-      } catch {
-        w = estimateTextWidth(text, fontFontSize(item ?? {}))
+      } catch (e) {
+        // (a transient failure is not the provider's answer: estimated for this call, not cached, and reported -- see above)
+        failures?.push(e)
+        return estimateTextWidth(text, fontFontSize(item ?? {}))
       }
     } else {
       const ctx = canvasContext()
