@@ -76,9 +76,11 @@ export function useChart(spec: VgSpec, options: UseChartOptions = {}): UseChartR
 /**
  * Everything `loadSpecData` takes (`@aster-charts/core/load` `LoadOptions`): `fetch`,
  * `baseURL` (needed for relative urls), `protocols`, `allow`, `allowPrivateNetwork`,
- * `signal`, `timeoutMs`, `maxBytes`, `maxConcurrent`, `maxRedirects` and `limits`.
- * The defaults are the safe ones (public http/https hosts only), so a spec you did
- * not write cannot reach a private network; widen them deliberately.
+ * `signal`, `timeoutMs`, `maxBytes`, `maxTotalBytes`, `maxRequests`, `maxConcurrent`,
+ * `maxRedirects`, `signals` and `limits`. A network url needs an explicit policy: `allow`
+ * (an allowlist), or a `baseURL` it is on; non-public hosts are refused unless
+ * `allowPrivateNetwork` is set. Functions are compared by identity (see `loadSpecDataResource`):
+ * define `allow` once, outside the component.
  */
 export type UseSpecDataOptions = LoadOptions
 
@@ -139,8 +141,9 @@ export function loadSpecDataResource(
  * Suspense-friendly URL-data loader:
  *
  * ```tsx
+ * const allow = (url: URL) => url.origin === 'https://data.example.com' // once, not per render
  * function ChartFromUrl({ spec }) {
- *   const loaded = useSpecData(spec)
+ *   const loaded = useSpecData(spec, { allow })
  *   return <Chart spec={loaded} />
  * }
  * // wrap in <Suspense fallback=…>
@@ -161,11 +164,12 @@ export async function loadSpecData(spec: VgSpec, options: UseSpecDataOptions = {
 }
 
 /** Options only the loader understands; everything else (and `limits`, which both use) goes to the chart. */
-const LOAD_ONLY_OPTIONS = ['fetch', 'baseURL', 'protocols', 'allow', 'allowPrivateNetwork', 'signal', 'timeoutMs', 'maxBytes', 'maxConcurrent', 'maxRedirects'] as const
+const LOAD_ONLY_OPTIONS = ['fetch', 'baseURL', 'protocols', 'allow', 'allowPrivateNetwork', 'signal', 'timeoutMs', 'maxBytes', 'maxTotalBytes', 'maxRequests', 'maxConcurrent', 'maxRedirects'] as const
 
 /**
  * A chart loaded with `useSpecData`, rendered headlessly. Takes the loader options
- * (`baseURL`, `allow`, ...) and the chart options together; `limits` applies to both.
+ * (`baseURL`, `allow`, ...) and the chart options together; `limits` and `signals` apply to
+ * both (a `{signal}` url is loaded for the host's value, and loaded again when it changes).
  */
 export function useChartData(
   spec: VgSpec,
@@ -180,6 +184,7 @@ export function useChartData(
     }
   }
   if (options.limits) loadOptions.limits = options.limits
+  if (options.signals) loadOptions.signals = options.signals
   const loaded = useSpecData(spec, loadOptions)
   return useChart(loaded, chartOptions)
 }
