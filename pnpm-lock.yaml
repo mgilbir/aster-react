@@ -149,6 +149,9 @@ importers:
         specifier: 6.4.3
         version: 6.4.3(vega@6.3.1)
     devDependencies:
+      '@eslint-community/regexpp':
+        specifier: 4.12.3
+        version: 4.12.3
       '@types/node':
         specifier: ^22.20.1
         version: 22.20.1
@@ -791,6 +794,10 @@ packages:
     engines: {node: '>=18'}
     cpu: [x64]
     os: [win32]
+
+  '@eslint-community/regexpp@4.12.3':
+    resolution: {integrity: sha512-R76UKbvsqI68DJJVTVyqFKqU98CN4+B+acxNfEA2IFarSzP0SjtKf/3+fFiXzTyv5Fj3PxLkGHe2wnVWWMxobQ==}
+    engines: {node: ^12.0.0 || ^14.0.0 || >=16.0.0}
 
   '@exodus/bytes@1.15.1':
     resolution: {integrity: sha512-S6mL0yNB/Abt9Ei4tq8gDhcczc4S3+vQ4ra7vxnAf+YHC02srtqxKKZghx2Dq6p0e66THKwR6r8N6P95wEty7Q==}
@@ -2828,6 +2835,8 @@ snapshots:
 
   '@esbuild/win32-x64@0.28.1':
     optional: true
+
+  '@eslint-community/regexpp@4.12.3': {}
 
   '@exodus/bytes@1.15.1': {}
 
