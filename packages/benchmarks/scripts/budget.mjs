@@ -8,11 +8,12 @@
  * Exit codes: 0 every pattern is within its budget, 1 a budget is exceeded or a pattern fails to bundle, 2 bad usage (an unknown option).
  */
 import { build } from 'esbuild'
-import { writeFileSync, readFileSync, statSync, rmSync, mkdirSync, readdirSync } from 'node:fs'
+import { writeFileSync, readFileSync, rmSync, mkdirSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { gzipSync } from 'node:zlib'
 import { fileURLToPath } from 'node:url'
 import { cli } from '../../../scripts/lib/cli.mjs'
+import { distProblems } from '../../../scripts/lib/dist-problems.mjs'
 
 cli({ url: import.meta.url })
 
@@ -579,42 +580,6 @@ function setupTmp() {
   mkdirSync(TMP, { recursive: true })
 }
 
-const PUBLIC_PACKAGES = ['core', 'react', 'vl']
-// (mirrors tsconfig.build.json: test files, `src/testing/` helpers and type-only `*.assert.ts` modules emit nothing)
-const isBuildInput = (name) => /\.tsx?$/.test(name) && !/\.d\.ts$/.test(name) && !/\.(test|testlib|testkit|assert)\.tsx?$/.test(name)
-
-function listSources(dir) {
-  return readdirSync(dir, { withFileTypes: true }).flatMap((e) => {
-    const p = join(dir, e.name)
-    return e.isDirectory() ? (e.name === 'testing' ? [] : listSources(p)) : isBuildInput(e.name) ? [p] : []
-  })
-}
-
-/**
- * The budget must measure what `pnpm build` produces from the CURRENT sources: a dist that is
- * missing, or older than the source file it was built from, makes the numbers describe code that no
- * longer exists. Returns a list of problems (empty when every dist file is at least as new as its source).
- */
-function distProblems() {
-  const problems = []
-  for (const pkg of PUBLIC_PACKAGES) {
-    const srcDir = join(MONOREPO_ROOT, 'packages', pkg, 'src')
-    const distDir = join(MONOREPO_ROOT, 'packages', pkg, 'dist')
-    for (const file of listSources(srcDir)) {
-      const rel = file.slice(srcDir.length + 1).replace(/\.tsx?$/, '.js')
-      let dist
-      try {
-        dist = statSync(join(distDir, rel))
-      } catch {
-        problems.push(`packages/${pkg}/dist/${rel} is missing`)
-        continue
-      }
-      if (dist.mtimeMs < statSync(file).mtimeMs) problems.push(`packages/${pkg}/dist/${rel} is older than its source`)
-    }
-  }
-  return problems
-}
-
 // Test hook (scripts/bundle-shaking.test.mjs): bundle as if the packages declared no `sideEffects` field at all, i.e.
 // every dist module may have effects. The rows must then FAIL: that is what proves the budget watches tree-shaking.
 const IGNORE_SIDE_EFFECTS = process.env.ASTER_BUDGET_IGNORE_SIDE_EFFECTS === '1'
@@ -634,7 +599,7 @@ const KB = (n) => (n / 1024).toFixed(1)
 
 try {
   setupTmp()
-  const stale = distProblems()
+  const stale = distProblems(MONOREPO_ROOT)
   if (stale.length) {
     console.error(`Refusing to measure a stale or missing dist (${stale.length} problem${stale.length === 1 ? '' : 's'}); run \`pnpm build\` first:`)
     for (const p of stale.slice(0, 5)) console.error(`  ${p}`)

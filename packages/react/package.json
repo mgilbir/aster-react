@@ -49,7 +49,7 @@
     "./dist/all.js"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.build.json",
+    "build": "node ../../scripts/clean-dist.mjs && tsc -p tsconfig.build.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "prepack": "node ../../scripts/copy-legal.mjs",
     "test:browser": "tsx scripts/browser-interaction.mts"

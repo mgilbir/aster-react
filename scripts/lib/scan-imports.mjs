@@ -9,9 +9,9 @@
  *   import x = require('a')      export * from 'a'         export { x } from 'a'
  *   import('a')                  import(`a`)               import('a' + '/b')
  *   require('a')                 require.resolve('a')      import.meta.resolve('a')
- *   importScripts('a')           type X = import('a').Y    /// <reference types="a" />
- *   new URL('a', import.meta.url)                          /// <reference path="a" />
- *   declare module 'a' { }       /// <amd-dependency path="a" />
+ *   importScripts('a')           type X = import('a').Y    a triple-slash `types` directive
+ *   new URL('a', import.meta.url)                          a triple-slash `path` directive
+ *   declare module 'a' { }       a triple-slash `amd-dependency` directive
  *   m['require']('a')            globalThis['require']('a')
  *
  * Specifiers that cannot be resolved statically (a computed `import(name)`, a
@@ -196,7 +196,7 @@ export function scanSource(text, fileName) {
   }
   visit(sf)
 
-  // /// <reference types="a" />, /// <reference path="a" />, /// <amd-dependency path="a" />
+  // the triple-slash directives: `types`, `path` and `amd-dependency`
   const pre = ts.preProcessFile(text, true, true)
   for (const ref of pre.typeReferenceDirectives) specs.push(ref.fileName)
   for (const ref of pre.referencedFiles) specs.push(/^(\.|\/|[a-z][a-z0-9+.-]*:)/i.test(ref.fileName) ? ref.fileName : `./${ref.fileName}`)

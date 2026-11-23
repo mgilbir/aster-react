@@ -432,3 +432,34 @@ describe('`pnpm build` builds each package once, in dependency order (C495)', ()
     }
   })
 })
+
+describe('knip covers everything it can and explains nothing away silently (C568)', () => {
+  const knip = JSON.parse(read('knip.json'))
+  const tracked = () => execFileSync('git', ['ls-files', '-z'], { cwd: root, encoding: 'utf8' }).split('\0').filter(Boolean)
+
+  it('analyses every workspace: none is ignored (the benchmarks and the demo hold dead code like any other)', () => {
+    expect(knip.ignoreWorkspaces ?? []).toEqual([])
+    for (const ws of ['packages/core', 'packages/vl', 'packages/react', 'packages/conformance', 'packages/benchmarks', 'apps/demo']) expect(knip.workspaces, ws).toHaveProperty([ws])
+  })
+
+  it('lists no entry for a file that is not a source of its workspace (a barrel only tests import ships in dist: it is a *.testlib.ts)', () => {
+    for (const entry of knip.workspaces['packages/core'].entry) {
+      const rel = `packages/core/${entry}`
+      if (!/[*{]/.test(entry)) expect(tracked(), `${entry} is listed as an entry but no longer exists`).toContain(rel)
+    }
+    const built = tracked().filter((f) => /^packages\/core\/src\/[^/]+\.ts$/.test(f) && !/\.(test|testlib|testkit)\.ts$/.test(f))
+    expect(built.some((f) => f.endsWith('/scale-d3.ts')), 'scale-d3 is test-only: it must not be built into dist').toBe(false)
+  })
+
+  it('every ignored dependency is really named in a tracked source file (the ignore is for a use knip cannot see, e.g. an esbuild entry written in a template string)', () => {
+    const sources = tracked().filter((f) => /\.(ts|tsx|mts|mjs)$/.test(f) && !f.startsWith('docs/audits/')).map((f) => read(f))
+    for (const dep of knip.ignoreDependencies ?? []) {
+      expect(sources.some((t) => t.includes(`'${dep}`) || t.includes(`"${dep}`) || t.includes(`\`${dep}`)), `${dep} is ignored by knip and named by no source file`).toBe(true)
+    }
+    expect(knip.ignoreDependencies ?? []).not.toContain('a') // the placeholder of a comment that knip read as an import
+  })
+
+  it('no unusable root tsconfig (it referenced projects that are not composite, so `tsc -b` could not work and nothing used it)', () => {
+    expect(existsSync(join(root, 'tsconfig.json'))).toBe(false)
+  })
+})

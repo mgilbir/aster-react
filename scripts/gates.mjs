@@ -32,9 +32,10 @@ import { cli } from './lib/cli.mjs'
 /**
  * Every gate has a deadline (a Playwright page that never settles must not hold a run, or CI's six-hour default, hostage): the
  * gate's own `timeoutMs`, else this one. A gate that runs out of time is killed with its whole process tree and reported as
- * `FAIL <gate> (timeout)`; the other gates still run. The numbers are about 3x the slowest run seen on the 4-vCPU CI runner.
+ * `FAIL <gate> (timeout)`; the other gates still run. Generous on purpose: a deadline is for a gate that hangs, not one that is slow on a loaded
+ * machine (the whole list has to fit the 90 minutes of the `ci` job; the nightly allows 90 for it plus the sweeps).
  */
-export const DEFAULT_TIMEOUT_MS = 20 * 60_000
+export const DEFAULT_TIMEOUT_MS = 30 * 60_000
 
 /** @type {{ name: string, args: string[], tags?: string[], blocking?: boolean, timeoutMs?: number, command?: string, why: string }[]} */
 export const GATES = [
@@ -42,7 +43,7 @@ export const GATES = [
   { name: 'deps', args: ['check:deps'], why: 'runtime and built dist import none of vega/d3/topojson' },
   { name: 'knip', args: ['knip'], why: 'no unused files, exports or dependencies in the published packages, their tests and the conformance suite (knip.json)' },
   { name: 'typecheck', args: ['typecheck'], why: 'all workspaces typecheck' },
-  { name: 'test', args: ['test'], why: 'unit, React interaction/SSR/a11y, script tests; the React component tests run on <Chart>, <SvgChart> and <SvgChart interaction> (variant matrix), with the thin-shell, matrix-coverage, type-parity and corpus-wide output-parity guards' },
+  { name: 'test', args: ['test'], timeoutMs: 60 * 60_000, why: 'unit, React interaction/SSR/a11y, script tests; the React component tests run on <Chart>, <SvgChart> and <SvgChart interaction> (variant matrix), with the thin-shell, matrix-coverage, type-parity and corpus-wide output-parity guards' },
   { name: 'tz-matrix', args: ['test:tz'], why: 'zone-sensitive tests and the time-zone corpus under non-UTC zones (UTC labels, local time scales)' },
   { name: 'verify-publish', args: ['verify:publish'], why: 'packed tarballs: licences, exports, consumer smoke test' },
   {

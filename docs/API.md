@@ -803,9 +803,9 @@ the app's charts use them; the add-ons stay opt-in (`import '@aster-charts/core/
 name that is not a part rejects with a `TypeError`). Outside a browser build
 (a server render, a test runner) every part is always there and none of this changes anything.
 
-The base `@aster-charts/react` entry does not include the Vega-Lite compiler; importing `@aster-charts/react/vl` adds about 107 kB
-gzip to the bundle (`<Chart>` 180.5 kB, `<Chart>` + `@aster-charts/react/vl` 287.0 kB eager, measured 2026-11-16 by
-`pnpm --filter @aster-charts/benchmarks run budget`; the budgets and current figures are in [PERFORMANCE.md](PERFORMANCE.md#bundle-sizes)). Passing a VL spec without the add-on throws an error naming the missing
+The base `@aster-charts/react` entry does not include the Vega-Lite compiler; importing `@aster-charts/react/vl` adds about 106 kB
+gzip to the bundle (`<Chart>` 183.5 kB, `<Chart>` + `@aster-charts/react/vl` 289.9 kB eager, from the budgets of
+`pnpm --filter @aster-charts/benchmarks run budget`, which `scripts/perf-docs.test.mjs` ties to these figures; all rows are in [PERFORMANCE.md](PERFORMANCE.md#bundle-sizes)). Passing a VL spec without the add-on throws an error naming the missing
 import. Vega specs need no extra import. Worker hosts must import `@aster-charts/react/vl` in the worker entry as well,
 since compilation happens there.
 
@@ -982,9 +982,9 @@ Without `interaction`, `setSignal` and bound inputs (`signal.bind`) still work a
 `interaction`, and equals vega's: no per-item datum attribute is written (the mark under the pointer is found through the scene
 hit index).
 
-Sizes (gzip, eager, measured 2026-11-16 with `pnpm --filter @aster-charts/benchmarks run budget`): `<Chart>` 180.5 kB,
-`<SvgChart>` 166.9 kB, `<SvgChart>` + `interaction` 180.2 kB ([PERFORMANCE.md](PERFORMANCE.md#bundle-sizes) holds the
-current figures). Use `<Chart>` unless that 23 kB
+Sizes (gzip, eager, from the budgets of `pnpm --filter @aster-charts/benchmarks run budget`, which `scripts/perf-docs.test.mjs` ties to
+these figures): `<Chart>` 183.5 kB,
+`<SvgChart>` 169.9 kB, `<SvgChart>` + `interaction` 183.2 kB ([PERFORMANCE.md](PERFORMANCE.md#bundle-sizes) holds every row). Use `<Chart>` unless that 13.6 kB
 matters; it is the zero-setup default and its behaviour does not depend on this component.
 
 #### Hooks

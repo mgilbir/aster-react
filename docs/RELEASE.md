@@ -25,7 +25,7 @@ pre-flight commands; the publish itself is done by the `Release` workflow
 Trigger: a pushed tag that matches `vX.Y.Z` or `vX.Y.Z-prerelease` (semver 2.0.0 forms: `v0.5.0-rc.1`, `v1.0.0-alpha`, `v1.0.0-0.3.7`; no
 build metadata). There is no manual dispatch. Two jobs:
 
-1. `verify` (read-only, no token, no `id-token`, 120 minute limit):
+1. `verify` (read-only, no token, no `id-token`, 90 minute limit):
    - `node scripts/check-release-tag.mjs "$GITHUB_REF_NAME"`: the tag must equal the
      version of every public package, and the three must agree;
    - the tagged commit must be an ancestor of `origin/main`;

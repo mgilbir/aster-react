@@ -40,9 +40,9 @@ import '@aster-charts/react/all'
 
 or fetch the families you know you need ahead of time, without bundling them: `preloadParts(['time', 'color'])` (`preloadParts()` for all).
 
-For a smaller bundle there is an SVG-only chart: `<SvgChart>` from `@aster-charts/react/lite` (166.9 kB gzip against 180.5 kB for
-`<Chart>`, measured 2026-11-16 with `pnpm --filter @aster-charts/benchmarks run budget`; it never imports the canvas renderer). Tooltips, point selection and `signal.on` event streams come with the
-`interaction` capability, passed as a prop (180.2 kB gzip with it; current figures in [docs/PERFORMANCE.md](https://github.com/mgilbir/aster-react/blob/main/docs/PERFORMANCE.md#bundle-sizes)):
+For a smaller bundle there is an SVG-only chart: `<SvgChart>` from `@aster-charts/react/lite` (169.9 kB gzip against 183.5 kB for
+`<Chart>`, from the budgets of `pnpm --filter @aster-charts/benchmarks run budget`; it never imports the canvas renderer). Tooltips, point selection and `signal.on` event streams come with the
+`interaction` capability, passed as a prop (183.2 kB gzip with it; current figures in [docs/PERFORMANCE.md](https://github.com/mgilbir/aster-react/blob/main/docs/PERFORMANCE.md#bundle-sizes)):
 
 ```tsx
 import { SvgChart } from '@aster-charts/react/lite'

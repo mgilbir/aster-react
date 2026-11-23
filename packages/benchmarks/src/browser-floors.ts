@@ -25,9 +25,6 @@
  * and each has its own floors.
  */
 
-export interface Summary { median: number; p95: number }
-export interface FrameStats { median: number; p95: number; longShare: number; frames: number }
-
 /** What `browser.bench.mjs` collects: `results[`${metric}:${kind}`][embed]`. */
 export type BrowserResults = Record<string, Record<string, unknown> | undefined>
 
@@ -42,13 +39,13 @@ export const BROWSER_FLOORS = {
   /**
    * Time to first render and update of the default mode (`asterDom`) against the FASTER of the two Vega embeds (reactVega re-embeds on
    * every update, so the slower one is a soft baseline: an update 3x slower than vega-embed's `view.change` used to pass). Measured
-   * 0.35 to 0.98 on line, scatter and bar at 1000 points (2026-11-23); the floor is a 50% margin over parity.
+   * 0.35 to 0.98 on line, scatter and bar at 1000 points, three runs on 2026-11-23 at load averages from 2 to 21; the floor is a 50% margin over parity.
    */
   maxDomVsVegaEmbeds: 1.5,
-  /** The same for string mode (`aster`): measured 0.58 to 1.31 (bar update 11.5 ms against vega-embed's 8.8). */
-  maxStringVsVegaEmbeds: 2,
-  /** The incremental patcher against string mode, same chart, update and first render (measured 0.57 to 0.88: patching is the faster mode). */
-  maxDomVsString: 1.5,
+  /** The same for string mode (`aster`): measured 0.54 to 2.11 (line first render, 5.9 ms against 2.8, at load 21; bar update 11.5 ms against vega-embed's 8.8). */
+  maxStringVsVegaEmbeds: 3,
+  /** The incremental patcher against string mode, same chart, update and first render (measured 0.46 to 1.24, the high end on bar at load 21). It catches the default mode becoming the slow one, not a few percent. */
+  maxDomVsString: 2,
   /**
    * Share of an aster mode's frames over 21 ms under a one-update-per-frame stream. Measured on an idle machine: default mode 0 to 2.8%,
    * string mode (which re-serializes the whole svg every frame) 0.6% on line, 2.2% on scatter, 64% on bar. On a loaded machine every
