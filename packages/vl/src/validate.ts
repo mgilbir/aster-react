@@ -346,7 +346,13 @@ function validateView(spec: Obj, path: string, top: boolean, parent: Kind | unde
     validateConfig(spec.config, at('config'))
   }
   if (spec.autosize !== undefined) validateAutosize(spec.autosize, at('autosize'))
-  if (spec.datasets !== undefined && !isObj(spec.datasets)) mustBe(at('datasets'), 'an object mapping names to arrays')
+  if (spec.datasets !== undefined) {
+    if (!isObj(spec.datasets)) mustBe(at('datasets'), 'an object mapping names to inline data')
+    // (vega-lite InlineDataset: rows, a text in the format the data says (CSV, TSV ...), or a JSON object)
+    for (const [k, v] of Object.entries(spec.datasets)) {
+      if (!(Array.isArray(v) || typeof v === 'string' || isObj(v))) mustBe(`${at('datasets')}.${k}`, 'an array of rows, a string or an object')
+    }
+  }
   for (const k of ['align', 'bounds', 'center', 'spacing', 'columns'] as const) {
     // (a unit faceted through its encoding is a facet: normalize/facet.ts moves its layout properties onto it)
     const faceted = kind === 'unit' && isObj(spec.encoding) && (spec.encoding.row != null || spec.encoding.column != null || spec.encoding.facet != null)
