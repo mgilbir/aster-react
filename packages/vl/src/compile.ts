@@ -238,6 +238,7 @@ function compileValidated(spec: VLSpec, forward?: ReadonlyMap<string, SelCmpt>, 
   if (selParts) compiled.data = [...selParts.data, ...((compiled.data as Record<string, unknown>[] | undefined) ?? [])]
   const out = finalizeData(compiled, ctx)
   dropSelfSizeSignals(out)
+  narrowFitToSteps(out, peek(() => normalized.autosize) === undefined)
   optimizeData(out, (name) => name.startsWith(ctx.dn(0).slice(0, -1)), (name) => ctx.userDataNames.has(name))
   // a named view names its marks after itself (vega-lite `model.getName`): `chart_marks` (the views of a repeat name themselves)
   if (typeof normalized.name === 'string' && normalized.name !== '' && normalized.repeat === undefined && Array.isArray(out.marks)) {
@@ -8929,6 +8930,29 @@ function axisSizeSignals(axes: ReadonlyArray<Record<string, unknown>> | undefine
     out.push({ name, update })
   }
   return out
+}
+
+/**
+ * compile.ts getTopLevelProperties: a view sized by steps along a dimension cannot be fitted along it. `autosize: "fit"` (or fit-x /
+ * fit-y) of a view whose width is a step size fits its height only (`fit-y`), and the reverse; sized by steps both ways, it pads (unless
+ * the fit is the config's: see below).
+ */
+function narrowFitToSteps(out: Record<string, unknown>, fromConfig: boolean): void {
+  const a = out.autosize
+  const type = typeof a === 'string' ? a : isObject(a) ? a.type : undefined
+  if (type !== 'fit' && type !== 'fit-x' && type !== 'fit-y') return
+  const stepped = (name: 'width' | 'height'): boolean => ((out.signals as Record<string, unknown>[] | undefined) ?? []).some((sg) => sg.name === name && typeof sg.update === 'string' && /\b\w*_step\b/.test(sg.update))
+  const w = stepped('width')
+  const h = stepped('height')
+  if (!w && !h) return
+  const narrowed = w && h ? 'pad' : w ? 'fit-y' : 'fit-x'
+  // (vega-lite writes no autosize for a bare `pad`, so a config.autosize, which its output keeps in the Vega config, still fits the view)
+  if (narrowed === 'pad' && fromConfig && (!isObject(a) || Object.keys(a).length === 1)) return
+  // (written out, `pad` too: a config.autosize the Vega config still carries does not fit it again)
+  if (isObject(a)) {
+    const { type: _type, ...rest } = a
+    out.autosize = Object.keys(rest).length === 0 ? narrowed : { type: narrowed, ...rest }
+  } else out.autosize = narrowed
 }
 
 /** The size signals of axisSizeSignals that still read themselves at the root: the view reads its composition's size as it is. */

@@ -62,6 +62,15 @@ for (const [name, parse] of [['null', null], ['null for the date', { t: null }],
   cases.push([caseName('parse', name, 'a csv url'), { data: { values: 'a,b,t\nA,28,2020-01-05\nB,55,2020-02-07', format: { type: 'csv', parse } }, mark: 'point', encoding: { x: { field: 't', type: 'temporal' }, y: { field: 'b', type: 'quantitative' } } }])
 }
 
+// (C426) autosize fit over a view sized by steps: vega-lite fits the other dimension only, or pads
+for (const autosize of ['fit', 'fit-x', 'fit-y', { type: 'fit', contains: 'padding' }, { type: 'fit-x', resize: true }]) {
+  for (const [sName, enc] of [['steps along x', { x: { field: 'a', type: 'nominal' }, y: { field: 'b', type: 'quantitative' } }], ['steps along y', { y: { field: 'a', type: 'nominal' }, x: { field: 'b', type: 'quantitative' } }], ['steps both ways', { x: { field: 'a', type: 'nominal' }, y: { field: 'a', type: 'nominal' } }], ['no steps', { x: { field: 'b', type: 'quantitative' }, y: { field: 'b', type: 'quantitative' } }]] as const) {
+    cases.push([caseName('autosize', JSON.stringify(autosize), sName, 'unit'), { data, autosize, mark: 'bar', encoding: enc }])
+    cases.push([caseName('autosize', JSON.stringify(autosize), sName, 'layer'), { data, autosize, layer: [{ mark: 'bar', encoding: enc }, { mark: 'point', encoding: enc }] }])
+    cases.push([caseName('config.autosize', JSON.stringify(autosize), sName), { data, config: { autosize }, mark: 'bar', encoding: enc }])
+  }
+}
+
 describe('top-level chrome and data forms draw what vega-lite draws', () => {
   for (const [name, spec] of cases) it(name, () => drawsLikeVegaLite(spec), 30_000)
 })
