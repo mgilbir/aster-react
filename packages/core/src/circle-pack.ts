@@ -203,7 +203,8 @@ function extendBasis(basis: Circle[], p: Circle): Circle[] {
       ) return [basis[i]!, basis[j]!, p]
     }
   }
-  throw new Error('[aster] pack: unable to find enclosing circle')
+  // (a failure of the data, as vega's is: logged, and the view goes on. d3's error has no message; the one vega logs reads `Error`)
+  throw new Error('Error')
 }
 
 /** `a` does not contain `b`. */
