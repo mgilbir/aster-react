@@ -1,6 +1,9 @@
 /**
  * The `timeunit` transform: each value floored to its time bin (units and step given, detected from the data, or chosen for a
  * number of bins over the extent). Part of the engine's time family (engine-parts.ts: `time`), with the calendar it floors by.
+ *
+ * The detection of the units from the data (`detectTimeUnits`) follows `vega-time`'s, which is adapted from the `time-grain-detector`
+ * package (Paul Rosenzweig, ISC); see THIRD_PARTY_NOTICES.md.
  */
 import { error, extent as columnExtent, peek } from './util.js'
 import { fieldOf, required, type Row } from './row-keys.js'
