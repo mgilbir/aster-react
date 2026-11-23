@@ -198,7 +198,8 @@ function rowsEqualBut(a: Row, b: Row, ignore: ReadonlySet<string>): boolean {
   for (const k in a) {
     if (ignore.has(k)) continue
     n++
-    if (!equalCell(a[k], b[k])) return false
+    const v = b[k]
+    if (!equalCell(a[k], v) || (v === undefined && !Object.hasOwn(b, k))) return false
   }
   let m = 0
   for (const k in b) if (!ignore.has(k)) m++
