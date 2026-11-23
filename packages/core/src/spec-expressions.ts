@@ -188,6 +188,10 @@ class Check {
     const signals = viewSignals(spec, config)
     for (const name of VIEW_SIGNALS) this.scope.addSignal(name)
     this.declare(signals)
+    // vega-parser parseView: the legends' layout of the config, the view's own encode, its layout; then the rest of the spec (C284)
+    this.objectProperty(isRecord(config.legend) ? config.legend.layout : undefined, lambdas)
+    this.encode(spec.encode)
+    this.objectProperty(spec.layout, lambdas)
     this.contents(spec, signals, lambdas)
     this.flush(lambdas)
     // the view registers its own root item last
@@ -216,7 +220,12 @@ class Check {
     for (const d of specList(spec.data)) if (isRecord(d)) this.dataset(d, lambdas)
     for (const s of specList(spec.scales)) {
       checkScale(s, this.names)
-      this.lambdas(s, lambdas)
+      // (vega-parser parseScaleBins: an object of bins is one expression, written out with its signals in it)
+      const bins = isRecord(s) ? s.bins : undefined
+      if (isRecord(bins) && !bins.signal) {
+        this.lambdas(s, lambdas, BINS)
+        this.objectProperty(bins, lambdas)
+      } else this.lambdas(s, lambdas)
     }
     for (const s of signals) this.signal(s, lambdas)
     for (const a of specList(spec.axes)) {
@@ -251,8 +260,13 @@ class Check {
   private dataset(d: Rec, lambdas: string[]): void {
     for (const t of specList(d.transform)) if (isRecord(t)) this.transform(t, lambdas)
     for (const on of specList(d.on)) if (isRecord(on)) this.trigger(on, String(d.name))
-    this.lambdas({ url: d.url, async: d.async, values: dataWithoutRows(d).values }, lambdas)
-    this.objectProperty(d.format, lambdas)
+    // vega-parser analyze: a data set's url, async, values and format are read only when it has a dynamic loader (its values or
+    // its url is a signal, or its format holds one); a source data set, or a static one, reads none of them
+    const values = dataWithoutRows(d).values
+    if (d.values ? isSignalObject(d.values) || holdsSignal(d.format) : d.url ? holdsSignal(d.url) || holdsSignal(d.format) : false) {
+      for (const v of [d.url, d.async, values]) if (isRecord(v) && v.signal) this.signalRef(v.signal, lambdas)
+      this.objectProperty(d.format, lambdas)
+    }
     if (dataInputOf(d) === 'source') for (const source of specList(d.source)) need(this.names, source)
     this.names.declare(d.name)
   }
@@ -384,7 +398,9 @@ class Check {
     let update = h.update
     if (h.encode != null) {
       if (update) throw new SpecParseError('Signal encode and update are mutually exclusive.')
-      update = 'encode(item(),' + stringValue(h.encode) + ')'
+      // (re-encoding the event's item with one of its mark's encode sets is not implemented: refused once, here, rather than
+      // reported by every binding of the chart, C629; docs/ERRORS.md, docs/ROADMAP.md)
+      throw new SpecParseError(`[aster] a signal handler that re-encodes the event's item (\`encode: ${stringValue(h.encode)}\`) is not supported`)
     }
     if (typeof update === 'string') this.expression(update)
     else if (update == null) throw new TypeError(`Cannot read properties of ${update} (reading 'expr')`)
@@ -412,6 +428,8 @@ class Check {
   private stream(stream: unknown): void {
     const s = isRecord(stream) ? stream : null
     if (s?.merge) {
+      // (an empty merge makes no stream: vega fails on it as it builds the view, `reading 'merge'` of nothing; refused here, C629)
+      if (!Array.isArray(s.merge) || s.merge.length === 0) throw new SpecParseError('Invalid stream specification: ' + stringValue(stream))
       for (const m of s.merge as unknown[]) this.stream(m)
       this.streamParameters(s)
     } else if (s?.stream) {
@@ -505,7 +523,14 @@ class Check {
     const group = m.type === 'group'
     const facet = isRecord(m.from) && isRecord(m.from.facet) ? m.from.facet : undefined
     checkFrom(m.from, group, this.names)
-    for (const key of ['interactive', 'clip']) this.lambdas(m[key], lambdas)
+    // vega-parser parseData: a facet with no data of its own aggregates its data set by its groupby, the facet's `aggregate` being
+    // that transform's parameters (`fields`, `ops`, `as`, `cross`: any of them a signal); then its keys (C126)
+    if (facet !== undefined && facet.field == null && !(isRecord(m.from) && m.from.data)) {
+      this.transform({ type: 'aggregate', groupby: specList(facet.groupby), ...(isRecord(facet.aggregate) ? facet.aggregate : {}) }, lambdas)
+    }
+    if (facet !== undefined) this.facetKeys(facet, lambdas)
+    this.lambdas(m.interactive, lambdas)
+    this.clip(m.clip, lambdas)
     this.encode(m.encode)
     for (const t of specList(m.transform)) {
       if (!isRecord(t)) continue
@@ -542,8 +567,37 @@ class Check {
     }
     this.lambdas(m.overlap, lambdas)
     if (m.name != null) this.names.declare(m.name)
-    // a named mark's triggers are read last, in the scope the mark is in
-    if (m.name != null) for (const on of specList(m.on)) if (isRecord(on) && !(on.insert || on.remove || on.toggle)) this.trigger(on, String(m.name))
+    // a named mark's triggers are read last, in the scope the mark is in; a mark only takes `modify` triggers
+    if (m.name != null) {
+      for (const on of specList(m.on)) {
+        if (!isRecord(on)) continue
+        if (on.insert || on.remove || on.toggle) throw new SpecParseError('Marks only support modify triggers.')
+        this.trigger(on, String(m.name))
+      }
+    }
+  }
+
+  /**
+   * The keys of a facet: `field` (vega-parser `fieldRef`: a name or a `{signal}`) and `groupby` (`keyRef`: names and `{signal}`s).
+   * A field written `{expr}` is refused with vega's message; vega's `keyRef` takes an `{expr}` in `groupby` too and fails on it
+   * as it writes its code, which the same refusal stands for. A `{signal}` whose text names no signal is an expression of its own
+   * (vega fails on it as well: it is read, and evaluated, here).
+   */
+  private facetKeys(facet: Rec, lambdas: string[]): void {
+    const key = (ref: unknown): void => {
+      if (isRecord(ref) && ref.signal) { this.signalRef(ref.signal, lambdas); return }
+      if (isObject(ref)) throw new SpecParseError('Unsupported field reference: ' + stringValue(ref))
+    }
+    if (facet.field != null) key(facet.field)
+    else for (const ref of specList(facet.groupby)) key(ref)
+  }
+
+  /** vega-parser `clip`: a `{signal}`, or a clip path or sphere written into the call that draws it (`pathShape(...)`, `geoShape(...)`). */
+  private clip(clip: unknown, lambdas: string[]): void {
+    if (!isRecord(clip)) return
+    const param = (v: unknown): string => (isRecord(v) && v.signal ? `${v.signal as string}` : stringValue(v))
+    const expr = clip.signal ? `${clip.signal as string}` : clip.path ? 'pathShape(' + param(clip.path) + ')' : clip.sphere ? 'geoShape(' + param(clip.sphere) + ', {type: "Sphere"})' : undefined
+    if (expr !== undefined) this.signalRef(expr, lambdas)
   }
 
   // -- encode entries ----------------------------------------------------------------------------------------------
@@ -582,6 +636,7 @@ const ENTRY_PARTS = /^(symbol|label|entries$)/
 /** What a signal that pushes to an outer scope may not say (its value is the outer signal's). */
 const OUTER_INVALID = ['value', 'update', 'init', 'react', 'bind'] as const
 const NONE: ReadonlySet<string> = new Set()
+const BINS: ReadonlySet<string> = new Set(['bins'])
 const BLOCKS: ReadonlySet<string> = new Set(['enter', 'update', 'exit', 'hover', 'leave', 'select', 'release', 'name', 'interactive', 'style'])
 
 // -- the text vega makes of an encode entry ----------------------------------------------------------------------------

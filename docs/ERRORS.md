@@ -268,7 +268,16 @@ Selectors and streams of a signal's `on` are refused the same way: `Signal updat
 selector the parser refuses (`Between selector must have two elements: ...`), `Invalid stream specification: ...`,
 `Stream "between" parameter must have 2 entries: ...`, `Unrecognized scale name: "<name>"` for a scale that triggers a
 handler, `Signal encode and update are mutually exclusive.`, `Invalid signal update specification.`, and for the signal itself
-`Signals can not include both init and update expressions.`.
+`Signals can not include both init and update expressions.`. Two refusals are Aster's own, made once when the spec is compiled
+rather than reported by every binding of the chart: a stream that merges nothing (`{merge: []}`, `Invalid stream specification:
+...`; vega fails on it as it builds the view), and a handler that re-encodes the event's item with one of its mark's encode sets
+(`{events, encode: "<set>"}`): `[aster] a signal handler that re-encodes the event's item (\`encode: "<set>"\`) is not supported`
+(vega accepts and runs it; not implemented: see ROADMAP.md).
+
+A facet's keys are read as vega-parser reads them: `field` and each of `groupby` a name or a `{signal}` (a signal of the scope, or
+an expression of its own), and its `aggregate`'s `fields`, `ops`, `as` and `cross` as the parameters of an aggregate transform,
+any of them a `{signal}`. A key written `{expr: ...}` is `Unsupported field reference: <the key>` (vega's message for a `field`;
+for a `groupby` vega's parser lets it through and its view fails to build).
 
 **Add-on functions.** A function of an add-on (`geoCentroid`, `sampleNormal`, `treePath`, ...) is known to the compile whether
 or not the add-on has been loaded: vega knows it, so the spec is not refused. When the add-on is not loaded the call fails

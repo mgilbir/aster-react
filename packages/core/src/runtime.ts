@@ -6122,8 +6122,32 @@ interface FacetDef {
  * partition's key fields plus any facet aggregate), one per datum of `from.data`,
  * or a single item with no source.
  */
+/** Whether a facet parameter (or a list of them) holds a `{signal}`. */
+const holdsSignalRef = (v: unknown): boolean => isSignal(v) || (Array.isArray(v) && v.some(isSignal))
+
+/**
+ * A facet with the `{signal}`s of its parameters read (vega-parser reads `groupby`, `field` and the facet aggregate's `fields`,
+ * `ops`, `as` and `cross` as signal references: a field name, a list of them, a flag), for this evaluation (C126).
+ */
+function resolvedFacet(facet: FacetDef | undefined, ctx: EvalContext): FacetDef | undefined {
+  if (facet === undefined) return undefined
+  const ag = facet.aggregate as Record<string, unknown> | undefined
+  if (!holdsSignalRef(facet.groupby) && !holdsSignalRef(facet.field) && !(ag && Object.values(ag).some(holdsSignalRef))) return facet
+  const list = (v: unknown): unknown[] => { const r = paramValue(ctx, v); return (Array.isArray(r) ? r : [r]).map((x) => paramValue(ctx, x)) }
+  const out: FacetDef = { ...facet }
+  if (facet.field !== undefined) out.field = paramValue(ctx, facet.field) as string
+  if (facet.groupby !== undefined) out.groupby = list(facet.groupby) as string[]
+  if (ag) {
+    const a: Record<string, unknown> = { ...ag }
+    for (const k of ['fields', 'ops', 'as'] as const) if (ag[k] !== undefined) a[k] = list(ag[k])
+    if (ag.cross !== undefined) a.cross = paramValue(ctx, ag.cross)
+    out.aggregate = a as FacetDef['aggregate']
+  }
+  return out
+}
+
 function groupSources(mark: CompiledMark, ctx: EvalContext): GroupSource[] | null {
-  const facet = (mark.from as { facet?: FacetDef } | undefined)?.facet
+  const facet = resolvedFacet((mark.from as { facet?: FacetDef } | undefined)?.facet, ctx)
   if (facet?.field !== undefined) {
     // vega-transforms PreFacet: one group item per datum (the datum is the item's datum), its rows the array the
     // datum holds in `field`
@@ -6242,10 +6266,16 @@ function markIdOf(mark: CompiledMark): number {
  * `key`, else the `groupby` of a facet that partitions by it (vega keeps one item per partition key). One array per mark.
  */
 const ITEM_KEY_FIELDS = new WeakMap<CompiledMark, readonly string[] | null>()
-function itemKeyFields(mark: CompiledMark): readonly string[] | undefined {
+function itemKeyFields(mark: CompiledMark, ctx: EvalContext): readonly string[] | undefined {
+  const given = (mark.from as { facet?: FacetDef } | undefined)?.facet
+  // (a `groupby` given by a signal is this evaluation's: read each time, not kept)
+  if (given !== undefined && holdsSignalRef(given.groupby) && mark.key === undefined) {
+    const groupby = given.field === undefined && mark.from?.data === undefined ? ([] as string[]).concat(resolvedFacet(given, ctx)!.groupby ?? []) : []
+    return groupby.length ? groupby : undefined
+  }
   let fields = ITEM_KEY_FIELDS.get(mark)
   if (fields === undefined) {
-    const facet = (mark.from as { facet?: FacetDef } | undefined)?.facet
+    const facet = given
     const groupby = facet !== undefined && facet.field === undefined && mark.from?.data === undefined ? ([] as string[]).concat(facet.groupby ?? []) : []
     fields = mark.key !== undefined ? [mark.key] : groupby.length ? groupby : null
     ITEM_KEY_FIELDS.set(mark, fields)
@@ -6771,7 +6801,7 @@ function buildGroupItem(mark: CompiledMark, ctx: EvalContext, entered: EnteredGr
       datum: src.datum,
       _scope: true,
       markIndex: markIdOf(mark),
-      ...(itemKeyFields(mark) !== undefined ? { __keyFields: itemKeyFields(mark) } : {}),
+      ...(itemKeyFields(mark, ctx) !== undefined ? { __keyFields: itemKeyFields(mark, ctx) } : {}),
       ...markContainerInfo(mark),
       ...(itemAria !== undefined ? { itemAria } : {}),
       ...(cursorOf(geo) !== undefined ? { cursor: cursorOf(geo) } : {}),
