@@ -108,7 +108,7 @@ await runGate({
   name: 'a11y-parity',
   counters: {
     specs: { floor: 1063, what: 'corpus specs whose guide captions were compared' },
-    captions: { floor: 1, what: 'guide captions of vega compared' },
+    captions: { floor: 2076, what: 'guide captions of vega compared' },
   },
   partial: Boolean(filter),
   run: main,

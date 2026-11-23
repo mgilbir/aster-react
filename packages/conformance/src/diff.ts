@@ -24,7 +24,7 @@
  * `row-specs`, `signal-steps` and `guide-steps`; each has a floor on a full run (today's numbers, they only ratchet up).
  * `--plant-difference` adds a stray mark to the incremental render of every changeset.
  *
- * Run after `pnpm build`: pnpm conformance:diff
+ * Run after `pnpm build`: pnpm conformance:diff [--filter=substr]
  */
 import { readdirSync, readFileSync } from 'node:fs'
 import { join, dirname } from 'node:path'
@@ -40,7 +40,9 @@ import { plantSvg } from './gate-plant.js'
 import { cli } from '../../../scripts/lib/cli.mjs'
 import { GATE_FLAGS, runGate, type Gate } from '../../../scripts/lib/run-gate.mjs'
 
-cli({ url: import.meta.url, flags: GATE_FLAGS })
+cli({ url: import.meta.url, flags: { filter: 'eq', ...GATE_FLAGS } })
+/** `--filter=substr`: only the corpus files whose name contains it (a narrowed run: no floors, but zero specs fail). */
+const FILTER = process.argv.slice(2).find((a) => a.startsWith('--filter='))?.slice('--filter='.length) ?? ''
 
 const THIS_DIR = dirname(fileURLToPath(import.meta.url))
 const CORPUS_DIR = join(THIS_DIR, '..', 'corpus')
@@ -182,7 +184,7 @@ async function main(gate: Gate): Promise<void> {
   let guideSkipped = 0
   const signalFailures: string[] = []
   for (const f of readdirSync(CORPUS_DIR).sort()) {
-    if (!f.endsWith('.json')) continue
+    if (!f.endsWith('.json') || (FILTER && !f.includes(FILTER))) continue
     const raw = JSON.parse(readFileSync(join(CORPUS_DIR, f), 'utf8'))
     const spec = f.endsWith('.vl.json') ? (vl.compile(raw as never).spec as Record<string, unknown>) : raw
     const data = (spec.data ?? []) as Array<{ name?: string; values?: unknown[] }>
@@ -272,12 +274,13 @@ async function main(gate: Gate): Promise<void> {
 await runGate({
   name: 'incremental-diff',
   counters: {
-    changesets: { floor: 1, what: 'specs whose changeset render was compared with a full re-derive' },
-    'row-specs': { floor: 1, what: 'specs whose session row changes were compared with fresh evaluations' },
-    'signal-specs': { floor: 1, what: 'specs taken through signal and store writes' },
-    'signal-steps': { floor: 1, what: 'signal/store steps compared with a fresh evaluation' },
-    'guide-specs': { floor: 1, what: 'specs taken through guide-probe signal writes' },
-    'guide-steps': { floor: 1, what: 'guide-probe steps compared with a fresh evaluation' },
+    changesets: { floor: 941, what: 'specs whose changeset render was compared with a full re-derive' },
+    'row-specs': { floor: 972, what: 'specs whose session row changes were compared with fresh evaluations' },
+    'signal-specs': { floor: 181, what: 'specs taken through signal and store writes' },
+    'signal-steps': { floor: 1255, what: 'signal/store steps compared with a fresh evaluation' },
+    'guide-specs': { floor: 871, what: 'specs taken through guide-probe signal writes' },
+    'guide-steps': { floor: 6083, what: 'guide-probe steps compared with a fresh evaluation' },
   },
+  partial: Boolean(FILTER),
   run: main,
 })
