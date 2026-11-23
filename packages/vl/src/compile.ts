@@ -7,7 +7,7 @@
  * oracle's; the rendered output must not.
  */
 
-import { EXPRESSION_KEYS, relabelUnits, renameDataRefs, renameExpr, renameFragment } from './embed.js'
+import { EXPRESSION_KEYS, relabelUnits, renameDataRefs, renameExpr, renameFragment, userExpression } from './embed.js'
 import { mergeBins, optimizeData } from './optimize.js'
 import { tokenize } from './expr-tokens.js'
 import { VLCompileError, pushAll, flatField, datumRef as dref, genName, safeKey, splitAccessPath, dict, own, setOwn } from './names.js'
@@ -2788,7 +2788,7 @@ function compileFacetedView(spec: VLSpec, ctx: CompileCtx, nested = ''): VLSpec 
     let text = { signal: fieldTextExpr(fd ?? normalizeHeaderDef(def) ?? ({ field, type: 'nominal', raw: {} } as unknown as FieldDef), { lineBreaks: false, spec, expr: 'parent', format: format as string | undefined, formatType: formatType as string | undefined }) }
     const labelExpr = hdrProp('labelExpr', def, ch)
     if (typeof labelExpr === 'string') {
-      text = { signal: labelExpr.split('datum.label').join(text.signal).split('datum.value').join(`parent[${JSON.stringify(field)}]`) }
+      text = userExpression({ signal: labelExpr.split('datum.label').join(text.signal).split('datum.value').join(`parent[${JSON.stringify(field)}]`) })
     }
     const hc = headerChannelOf(ch, hdrProp('labelOrient', def, ch))
     const angle = headerAngle(hdrProp('labelAngle', def, ch))
@@ -6454,8 +6454,9 @@ function buildAxes(fields: FieldDef[], mark: string, scales: ScaleSpec[], scaleN
       const enc = (labelAxis.encode ?? (labelAxis.encode = {})) as { labels?: { update?: Record<string, unknown> } }
       const labels = (enc.labels ??= {})
       const update = (labels.update ??= {})
-      update.text = { signal: labelExprSignal(labelAxis.labelExpr, update.text) }
-      // `labelExpr` itself stays as an unknown key that real Vega and Aster both ignore; the encode above labels the ticks
+      update.text = userExpression({ signal: labelExprSignal(labelAxis.labelExpr, update.text) })
+      // (vega-lite writes no `labelExpr` on the Vega axis: the encode above labels the ticks)
+      delete labelAxis.labelExpr
     }
     labelAxes.push(labelAxis)
   }
@@ -6687,8 +6688,9 @@ function buildLegends(fields: FieldDef[], mark: string, markOpacity: number | un
       const enc = (lg.encode ?? (lg.encode = {})) as { labels?: { update?: Record<string, unknown> } }
       const labels = (enc.labels ??= {})
       const update = (labels.update ??= {})
-      update.text = { signal: labelExprSignal(lg.labelExpr, update.text) }
-      // `labelExpr` itself stays as an unknown key that real Vega and Aster both ignore; the encode above labels the ticks
+      update.text = userExpression({ signal: labelExprSignal(lg.labelExpr, update.text) })
+      // (vega-lite writes no `labelExpr` on the Vega legend: the encode above labels the entries)
+      delete lg.labelExpr
     }
     legends.push(lg)
   }
