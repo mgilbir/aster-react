@@ -2192,6 +2192,8 @@ function compileFacetedView(spec: VLSpec, ctx: CompileCtx, nested = ''): VLSpec 
   const rowDef = wrapDef ? undefined : (facetDef?.row ?? encFacet?.row ?? enc.row) as Record<string, unknown> | undefined
   const colDef = wrapDef ? undefined : (facetDef?.column ?? encFacet?.column ?? enc.column) as Record<string, unknown> | undefined
   const wrapColumns = wrapDef ? ((spec.columns ?? wrapDef.columns) as number | undefined) : undefined
+  // (a facet field def's `bounds` is one vega-lite reads nowhere: the layout's bounds are the facet's own, `full` by default)
+  for (const d of [wrapDef, rowDef, colDef]) if (isObject(d)) ignore(d, 'bounds', 'vega-lite reads the bounds of the facet, not of its field definitions')
   // header label formatting reads the channel def (type + format)
   const normalizeHeaderDef = (def: Record<string, unknown> | undefined): FieldDef | undefined =>
     def ? parseChannel('column', def) ?? undefined : undefined
@@ -2856,7 +2858,7 @@ function compileFacetedView(spec: VLSpec, ctx: CompileCtx, nested = ''): VLSpec 
     const wrapTitleBand = layoutTitleBandOf(hdrProp('titleAnchor', wrapDef, 'facet'), headerChannelOf('facet', wrapTitleOrient))
     wrapOut.layout = {
       ...(wrapTitleOrient === 'right' || wrapTitleOrient === 'bottom' ? { titleAnchor: { [headerChannelOf('facet', wrapTitleOrient)]: 'end' } } : {}),
-      ...compositeLayout({ ...spec, spacing: spec.spacing ?? wrapDef?.spacing, align: spec.align ?? wrapDef?.align, bounds: spec.bounds ?? wrapDef?.bounds, center: spec.center ?? wrapDef?.center }, { align: 'all', columns: nCols }),
+      ...compositeLayout({ ...spec, spacing: spec.spacing ?? wrapDef?.spacing, align: spec.align ?? wrapDef?.align, bounds: spec.bounds, center: spec.center ?? wrapDef?.center }, { align: 'all', columns: nCols }),
       ...(wrapTitleBand !== undefined ? { titleBand: { [headerChannelOf('facet', wrapTitleOrient)]: wrapTitleBand } } : {}),
     }
     wrapOut.marks = wrapMarks
@@ -6277,6 +6279,8 @@ function buildAxes(fields: FieldDef[], mark: string, scales: ScaleSpec[], scaleN
       ...(def.axis ?? {}),
     }
     if (userAxis.disable === true) continue
+    // (axis/properties.ts values: a DateTime among the values is the date it names)
+    if (Array.isArray(userAxis.values) && userAxis.values.some(isDateTimeValue)) userAxis.values = userAxis.values.map((v) => (isDateTimeValue(v) ? { signal: dateTimeToExpr(v as Record<string, unknown>) } : v))
     // the computed zindex is explicit in vega-lite's axis, so a config zindex (Vega config only) never replaces it
     // (only the axis' own zindex and config.axisBand's, which vega-lite merges for band scales, count)
     if ((!isObject(def.axis) || (def.axis as Record<string, unknown>).zindex === undefined) && axisBand?.zindex === undefined) delete userAxis.zindex
@@ -6367,8 +6371,9 @@ function buildAxes(fields: FieldDef[], mark: string, scales: ScaleSpec[], scaleN
         labelAxis.format = (config?.normalizedNumberFormat as string | undefined) ?? '.0%'
       }
     }
-    // overlapping labels are thinned unless the field is categorical (axis/properties.ts defaultLabelOverlap)
-    if ((def.timeUnit && !isObject(def.sort)) || (def.type !== 'nominal' && def.type !== 'ordinal')) {
+    // overlapping labels are thinned unless the field is categorical (axis/properties.ts defaultLabelOverlap; its isObject, vega-util's, is
+    // true of an array: a time unit sorted by a list of values is not thinned)
+    if ((def.timeUnit && !isObject(def.sort) && !Array.isArray(def.sort)) || (def.type !== 'nominal' && def.type !== 'ordinal')) {
       labelAxis.labelOverlap = sc.type === 'log' || sc.type === 'symlog' ? 'greedy' : true
     }
     if (userAxis?.format === 'd' && labelAxis.tickMinStep === undefined) labelAxis.tickMinStep = userAxis.tickMinStep ?? 1
@@ -7305,6 +7310,9 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
       if (v !== undefined) update[p] = { value: v }
     }
     if (markPaint?.outerRadius != null) update.radius = { value: markPaint.outerRadius }
+    // (a text's polar offset from its position: the mark's radius and theta, as vega-lite passes them)
+    if (markPaint?.radius != null) update.radius = { value: markPaint.radius }
+    if (markPaint?.theta != null) update.theta = { value: markPaint.theta }
   } else if (mark === 'arc') {
     if (markOpacity != null) update.opacity = { value: markOpacity }
     const cfgArcX = (cfgType?.x as number | undefined) ?? (cfgMark?.x as number | undefined)
@@ -7387,15 +7395,28 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
         const v = md0[ch]
         if (v !== undefined && update[ch] === undefined && update[`${ch}c`] === undefined) update[ch] = v === edge ? { field: { group: edge } } : { value: v }
       }
+      // (a point's polar offset from its position: the mark's radius and theta pass through, as vega-lite passes them)
+      if (mark !== 'text') for (const p of ['radius', 'theta'] as const) if (md0[p] != null) update[p] = { value: md0[p] }
     }
     fillMissingPositions(update, mark, fields, orient, scaleConfigOf(spec), ruleOrientOut, typeof md0.size === 'number' && md0.size !== 0 ? md0.size : isObject(md0.size) && (typeof md0.size.signal === 'string' || typeof md0.size.expr === 'string') ? { signal: (md0.size.signal ?? md0.size.expr) as string } : undefined, markOrient(spec, mark, spec.mark, fields) === undefined)
   }
 
+  // (valueref.ts: a position's value "width" / "height" is the edge of the view, the group's size)
+  for (const [chs, edge] of [[['x', 'x2', 'xc'], 'width'], [['y', 'y2', 'yc'], 'height']] as const) {
+    for (const ch of chs) {
+      const ref = update[ch]
+      if (isObject(ref) && ref.value === edge && Object.keys(ref).length === 1) update[ch] = { field: { group: edge } }
+    }
+  }
   {
     // markDef.ariaRoleDescription (vega-lite getMarkPropOrConfig): what a composite mark's parts call themselves
     const md = isObject(spec.mark) ? (spec.mark as Record<string, unknown>) : {}
     const cfg = isObject(spec.config) ? (spec.config as Record<string, unknown>) : {}
-    const ard = md.ariaRoleDescription ?? (isObject(cfg[mark]) ? (cfg[mark] as Record<string, unknown>).ariaRoleDescription : undefined) ?? (isObject(cfg.mark) ? (cfg.mark as Record<string, unknown>).ariaRoleDescription : undefined)
+    const fromMarkOrConfig = (prop: string): unknown => md[prop] ?? (isObject(cfg[mark]) ? (cfg[mark] as Record<string, unknown>)[prop] : undefined) ?? (isObject(cfg.mark) ? (cfg.mark as Record<string, unknown>)[prop] : undefined)
+    // (mark/encode/aria.ts: the role, then its description)
+    const role = fromMarkOrConfig('ariaRole')
+    if (typeof role === 'string' && cfg.aria !== false && md.aria !== false) update.ariaRole = { value: role }
+    const ard = fromMarkOrConfig('ariaRoleDescription')
     if (typeof ard === 'string' && cfg.aria !== false && md.aria !== false) update.ariaRoleDescription = { value: ard }
   }
   const polarStacked = polarStackOf(fields, mark)
