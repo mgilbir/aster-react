@@ -27,7 +27,7 @@
     "gallery:fetch": "tsx scripts/gallery-fetch.mts",
     "conformance:gallery": "tsx src/gallery/run.ts",
     "conformance:intersect": "tsx scripts/browser-intersect.mts",
-    "conformance:selections": "tsx scripts/browser-vl-selections.mts --min-cases=54 --max-retained=13 --max-retained-canvas=10"
+    "conformance:selections": "tsx scripts/browser-vl-selections.mts --min-cases=55 --max-retained=13 --max-retained-canvas=10"
   },
   "dependencies": {
     "@aster-charts/core": "workspace:*",

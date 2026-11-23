@@ -29,30 +29,39 @@
  * canvas, whose loop is given the canvas's events), over generated scenes of overlapping marks of every type and fixed scenes
  * of the items that have no data row of their own.
  *
- * Run: pnpm conformance:signals [--filter=substr] [--min-cases=N] [--pick-only] [--pick-scenes=N] [--renderer=svg|canvas]
+ * The verdict is runGate's (scripts/lib/run-gate.mjs): `compared` counts the (case, renderer) runs compared, floored at
+ * `--min-cases` x renderers; the pointer phase counts the points that agree, met an item, had a tooltip; its ratchets
+ * (`--max-canvas-as-svg`, the edge ceiling, the vacuity floor) and every pointer difference fail the gate. A narrowed run
+ * (`--filter`, `--pick-only`, `--renderer`) applies no floors but still fails on zero runs. `--plant-difference` changes the
+ * signals Aster reports in every event and animation case; `--print-vega` prints vega's final signals (writing a case).
+ *
+ * Run after `pnpm build`: pnpm conformance:signals [--filter=substr] [--min-cases=N] [--pick-only] [--pick-scenes=N] [--renderer=svg|canvas]
  */
-import { writeFileSync, rmSync, mkdirSync } from 'node:fs'
+import { writeFileSync, rmSync, mkdirSync, mkdtempSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { build } from 'esbuild'
 import { compile as compileVL } from '../../vl/src/index.ts'
 import { canonicalizeSvg, diffCanonical } from '../src/normalize.ts'
 import { cli } from '../../../scripts/lib/cli.mjs'
+import { GATE_FLAGS, intOption, runGate, type Gate } from '../../../scripts/lib/run-gate.mjs'
 import { PICK_ENTRY, pickScenes, runPickPhase } from './browser-signals-pick.mts'
 import { READ_PIXELS, hasInk, pixelDiff, type Pixels } from './canvas-pixels.mts'
 
-cli({ url: import.meta.url, flags: { filter: 'eq', 'min-cases': 'eq', 'pick-only': 'bool', 'pick-scenes': 'eq', renderer: 'eq', 'max-canvas-as-svg': 'eq' } })
+cli({ url: import.meta.url, flags: { filter: 'eq', 'min-cases': 'eq', 'pick-only': 'bool', 'pick-scenes': 'eq', renderer: 'eq', 'max-canvas-as-svg': 'eq', 'print-vega': 'bool', ...GATE_FLAGS } })
 
 const THIS_DIR = dirname(fileURLToPath(import.meta.url))
 const CONF_DIR = dirname(THIS_DIR)
-const OUT_DIR = join(CONF_DIR, '.tmp-browser-signals')
+const OUT_DIR = mkdtempSync(join(CONF_DIR, '.tmp-browser-signals-')) // (one directory per run: concurrent runs do not clobber each other)
 const argv = process.argv.slice(2)
 const arg = (n: string, d: string): string => argv.find((a) => a.startsWith(`--${n}=`))?.split('=')[1] ?? d
 const FILTER = arg('filter', '')
-const MIN_CASES = Number(arg('min-cases', '0'))
+const MIN_CASES = intOption(argv.find((a) => a.startsWith('--min-cases='))?.split('=')[1], '--min-cases', 0)
+/** `--print-vega`: print vega's final signals of every case (writing a case). */
+const PRINT_VEGA = argv.includes('--print-vega')
 const PICK_ONLY = argv.includes('--pick-only')
 /** Generated scenes of the pointer phase (each 150 points, through three mounts). */
-const PICK_SCENES = Number(arg('pick-scenes', '120'))
+const PICK_SCENES = intOption(argv.find((a) => a.startsWith('--pick-scenes='))?.split('=')[1], '--pick-scenes', 120)
 /**
  * Ceiling on the pointer answers of Aster's canvas that are vega's SVG renderer's where vega's canvas renderer answers
  * otherwise (Aster's renderers share one hit index): a ratchet, like sweep-signals' `--max-retained`.
@@ -977,108 +986,134 @@ async function driveAnim(engine: 'vega' | 'aster', renderer: Renderer, vg: Recor
   }
 }
 
-let pass = 0
-let runs = 0
-const failures: string[] = []
-const t0 = Date.now()
-for (const c of PICK_ONLY ? [] : cases) for (const renderer of RENDERERS) {
-  runs++
-  const [v, a] = [await drive('vega', renderer, c), await drive('aster', renderer, c)]
-  const problems: string[] = []
-  if ('error' in v) problems.push(`vega side failed: ${v.error}`)
-  else if ('error' in a) problems.push(`aster side failed: ${a.error}`)
-  else {
-    for (const name of Object.keys(v.final.signals)) {
-      if (v.final.signals[name] !== a.final.signals[name]) problems.push(`signal ${name}: vega=${v.final.signals[name]} aster=${a.final.signals[name]}`)
-    }
-    if (v.final.scoped !== a.final.scoped) problems.push(`scoped signals: vega=${v.final.scoped} aster=${a.final.scoped}`)
-    if (c.expectScopedMoved && v.final.scoped === v.initial.scoped) problems.push(`VACUOUS: vega did not move any scoped signal (${v.final.scoped})`)
-    for (const name of c.expectMoved) {
-      if (v.final.signals[name] === v.initial.signals[name]) problems.push(`VACUOUS: vega did not move ${name} (${v.final.signals[name]})`)
-    }
-    for (const name of c.expectStill ?? []) {
-      if (v.final.signals[name] !== v.initial.signals[name]) problems.push(`vega moved ${name} but the case says it must stay`)
-    }
-    if ((c.expectError ?? false) && !(v.final.errors.length > 0 && a.final.errors.length > 0)) {
-      problems.push(`expected an error log on both sides: vega=${v.final.errors.length} aster=${a.final.errors.length}`)
-    }
-    if (!(c.expectError ?? false) && (v.final.errors.length > 0 || a.final.errors.length > 0)) {
-      problems.push(`unexpected error log: vega=${JSON.stringify(v.final.errors)} aster=${JSON.stringify(a.final.errors)}`)
-    }
-  }
-  if (process.env.SIG_PRINT && !('error' in v)) console.log('  vega', renderer, c.name, JSON.stringify(v.final.signals), v.final.scoped)
-  if (problems.length === 0) pass++
-  else failures.push(`${c.name} [${renderer}]: ${problems.join('; ')}`)
+/** --plant-difference: the signals Aster reports are not the ones it computed (every event and animation case differs). */
+function plantSignals(signals: Record<string, unknown>): void {
+  const first = Object.keys(signals)[0]
+  if (first !== undefined) signals[first] = `${String(signals[first])} (planted)`
+  else signals.planted = 'planted'
 }
-for (const c of PICK_ONLY ? [] : animCases) for (const renderer of RENDERERS) {
-  runs++
-  const vg = compileVL(c.vl as never) as Record<string, unknown>
-  const [v, a] = [await driveAnim('vega', renderer, vg, c.at), await driveAnim('aster', renderer, vg, c.at)]
-  const problems: string[] = []
-  if ('error' in v) problems.push(`vega side failed: ${v.error}`)
-  else if ('error' in a) problems.push(`aster side failed: ${a.error}`)
-  else {
-    const seen = new Set<string>()
-    v.forEach((vf, i) => {
-      const af = a[i]!
-      if (typeof vf.svg === 'string' || typeof af.svg === 'string') {
-        const diffs = diffCanonical(canonicalizeSvg(vf.svg as string), canonicalizeSvg(af.svg as string))
-        if (diffs.length) problems.push(`frame at ${vf.t} ms differs: ${String(diffs[0]).slice(0, 160)}`)
-        seen.add(JSON.stringify(canonicalizeSvg(vf.svg as string).records))
-      } else {
-        const d = pixelDiff(vf.svg, af.svg)
-        if (d) problems.push(`frame at ${vf.t} ms differs: ${d}`)
-        if (hasInk(vf.svg)) seen.add(vf.svg.b64)
-      }
-      for (const name of Object.keys(vf.signals)) {
-        if (vf.signals[name] !== af.signals[name]) problems.push(`signal ${name} at ${vf.t} ms: vega=${vf.signals[name]} aster=${af.signals[name]}`)
-      }
-      if (vf.errors.length || af.errors.length) problems.push(`error log at ${vf.t} ms: vega=${JSON.stringify(vf.errors)} aster=${JSON.stringify(af.errors)}`)
-    })
-    // a vacuous comparison proves nothing: the clock must have run and the picture must have changed on the vega side
-    const last = v[v.length - 1]!
-    if (v[0]!.signals.anim_clock === last.signals.anim_clock) problems.push('VACUOUS: the animation clock never moved on the vega side')
-    if (seen.size < 2 && !c.name.includes('first-frame-blank')) problems.push('VACUOUS: every vega frame is the same picture')
-  }
-  if (problems.length === 0) pass++
-  else failures.push(`${c.name} [${renderer}]: ${problems.slice(0, 6).join('; ')}`)
-}
-// ---- the pointer phase ----
-const scenes = pickScenes(PICK_SCENES).filter((sc) => !FILTER || sc.name.includes(FILTER))
-const tp = Date.now()
-const pick = await runPickPhase(browser, `file://${join(OUT_DIR, 'pick.html')}`, scenes)
-await browser.close()
-rmSync(OUT_DIR, { recursive: true, force: true })
 
-if (!PICK_ONLY) console.log(`\n[browser-signals] ${pass}/${runs} runs agree with real vega (${cases.length + animCases.length} cases on ${RENDERERS.join(' and ')}) (${((Date.now() - t0) / 1000).toFixed(0)}s)`)
-for (const f of failures) console.log(`  FAIL ${f}`)
-console.log(`[browser-signals] pointer: ${pick.agreed}/${pick.points} points of ${pick.scenes} scenes agree with real vega on event.item and the tooltip (${pick.picked} with an item, ${pick.tips} with a tooltip; ${pick.ambiguous} answers where vega's svg and canvas renderers differ; ${pick.edge} answers on an edge, vega's a quarter pixel away) (${((Date.now() - tp) / 1000).toFixed(0)}s)`)
-for (const f of pick.failures) console.log(`  FAIL pointer ${f}`)
-console.log(`[browser-signals] pointer: ${pick.canvasAsSvg} answers of Aster's canvas are vega's svg renderer's where its canvas renderer differs (one hit index serves both), ceiling ${MAX_CANVAS_AS_SVG}`)
-for (const smp of pick.canvasAsSvgSamples) console.log(`  canvas-as-svg ${smp}`)
-if (pick.canvasAsSvg > MAX_CANVAS_AS_SVG) {
-  console.log(`[browser-signals] RATCHET: ${pick.canvasAsSvg} > --max-canvas-as-svg ${MAX_CANVAS_AS_SVG}`)
-  process.exit(1)
+async function main(gate: Gate): Promise<void> {
+  let pass = 0
+  let runs = 0
+  const t0 = Date.now()
+  for (const c of PICK_ONLY ? [] : cases) for (const renderer of RENDERERS) {
+    runs++
+    const [v, a] = [await drive('vega', renderer, c), await drive('aster', renderer, c)]
+    if (gate.plant && !('error' in a)) plantSignals(a.final.signals)
+    const problems: string[] = []
+    let compared = false
+    if ('error' in v) problems.push(`vega side failed: ${v.error}`)
+    else if ('error' in a) problems.push(`aster side failed: ${a.error}`)
+    else {
+      compared = true
+      for (const name of new Set([...Object.keys(v.final.signals), ...Object.keys(a.final.signals)])) {
+        if (v.final.signals[name] !== a.final.signals[name]) problems.push(`signal ${name}: vega=${v.final.signals[name]} aster=${a.final.signals[name]}`)
+      }
+      if (v.final.scoped !== a.final.scoped) problems.push(`scoped signals: vega=${v.final.scoped} aster=${a.final.scoped}`)
+      if (c.expectScopedMoved && v.final.scoped === v.initial.scoped) problems.push(`VACUOUS: vega did not move any scoped signal (${v.final.scoped})`)
+      for (const name of c.expectMoved) {
+        if (v.final.signals[name] === v.initial.signals[name]) problems.push(`VACUOUS: vega did not move ${name} (${v.final.signals[name]})`)
+      }
+      for (const name of c.expectStill ?? []) {
+        if (v.final.signals[name] !== v.initial.signals[name]) problems.push(`vega moved ${name} but the case says it must stay`)
+      }
+      if ((c.expectError ?? false) && !(v.final.errors.length > 0 && a.final.errors.length > 0)) {
+        problems.push(`expected an error log on both sides: vega=${v.final.errors.length} aster=${a.final.errors.length}`)
+      }
+      if (!(c.expectError ?? false) && (v.final.errors.length > 0 || a.final.errors.length > 0)) {
+        problems.push(`unexpected error log: vega=${JSON.stringify(v.final.errors)} aster=${JSON.stringify(a.final.errors)}`)
+      }
+    }
+    if (PRINT_VEGA && !('error' in v)) console.log('  vega', renderer, c.name, JSON.stringify(v.final.signals), v.final.scoped)
+    const name = `${c.name} [${renderer}]`
+    if (!compared) gate.error(name, problems.join('; '))
+    else if (problems.length) gate.differ(name, problems.join('; '))
+    else {
+      pass++
+      gate.agree(name)
+    }
+  }
+  for (const c of PICK_ONLY ? [] : animCases) for (const renderer of RENDERERS) {
+    runs++
+    const vg = compileVL(c.vl as never) as Record<string, unknown>
+    const [v, a] = [await driveAnim('vega', renderer, vg, c.at), await driveAnim('aster', renderer, vg, c.at)]
+    if (gate.plant && !('error' in a)) for (const f of a) plantSignals(f.signals)
+    const problems: string[] = []
+    let compared = false
+    if ('error' in v) problems.push(`vega side failed: ${v.error}`)
+    else if ('error' in a) problems.push(`aster side failed: ${a.error}`)
+    else {
+      compared = true
+      const seen = new Set<string>()
+      v.forEach((vf, i) => {
+        const af = a[i]!
+        if (typeof vf.svg === 'string' || typeof af.svg === 'string') {
+          const diffs = diffCanonical(canonicalizeSvg(vf.svg as string), canonicalizeSvg(af.svg as string))
+          if (diffs.length) problems.push(`frame at ${vf.t} ms differs: ${String(diffs[0]).slice(0, 160)}`)
+          seen.add(JSON.stringify(canonicalizeSvg(vf.svg as string).records))
+        } else {
+          const d = pixelDiff(vf.svg, af.svg)
+          if (d) problems.push(`frame at ${vf.t} ms differs: ${d}`)
+          if (hasInk(vf.svg)) seen.add(vf.svg.b64)
+        }
+        for (const name of new Set([...Object.keys(vf.signals), ...Object.keys(af.signals)])) {
+          if (vf.signals[name] !== af.signals[name]) problems.push(`signal ${name} at ${vf.t} ms: vega=${vf.signals[name]} aster=${af.signals[name]}`)
+        }
+        if (vf.errors.length || af.errors.length) problems.push(`error log at ${vf.t} ms: vega=${JSON.stringify(vf.errors)} aster=${JSON.stringify(af.errors)}`)
+      })
+      // a vacuous comparison proves nothing: the clock must have run and the picture must have changed on the vega side
+      const last = v[v.length - 1]!
+      if (v[0]!.signals.anim_clock === last.signals.anim_clock) problems.push('VACUOUS: the animation clock never moved on the vega side')
+      if (seen.size < 2 && !c.name.includes('first-frame-blank')) problems.push('VACUOUS: every vega frame is the same picture')
+    }
+    const name = `${c.name} [${renderer}] (animation)`
+    if (!compared) gate.error(name, problems.join('; '))
+    else if (problems.length) gate.differ(name, problems.slice(0, 6).join('; '))
+    else {
+      pass++
+      gate.agree(name)
+    }
+  }
+  // ---- the pointer phase ----
+  const scenes = pickScenes(PICK_SCENES).filter((sc) => !FILTER || sc.name.includes(FILTER))
+  const tp = Date.now()
+  const pick = await runPickPhase(browser, `file://${join(OUT_DIR, 'pick.html')}`, scenes)
+  if (!PICK_ONLY) console.log(`\n[browser-signals] ${pass}/${runs} runs agree with real vega (${cases.length + animCases.length} cases on ${RENDERERS.join(' and ')}) (${((Date.now() - t0) / 1000).toFixed(0)}s)`)
+  console.log(`[browser-signals] pointer: ${pick.agreed}/${pick.points} points of ${pick.scenes} scenes agree with real vega on event.item and the tooltip (${pick.picked} with an item, ${pick.tips} with a tooltip; ${pick.ambiguous} answers where vega's svg and canvas renderers differ; ${pick.edge} answers on an edge, vega's a quarter pixel away) (${((Date.now() - tp) / 1000).toFixed(0)}s)`)
+  gate.count('points', pick.agreed)
+  gate.count('picked', pick.picked)
+  gate.count('tooltips', pick.tips)
+  for (const f of pick.failures) gate.problem(`pointer ${f}`)
+  console.log(`[browser-signals] pointer: ${pick.canvasAsSvg} answers of Aster's canvas are vega's svg renderer's where its canvas renderer differs (one hit index serves both), ceiling ${MAX_CANVAS_AS_SVG}`)
+  for (const smp of pick.canvasAsSvgSamples) console.log(`  canvas-as-svg ${smp}`)
+  if (pick.canvasAsSvg > MAX_CANVAS_AS_SVG) gate.problem(`RATCHET: ${pick.canvasAsSvg} canvas-as-svg answers > --max-canvas-as-svg ${MAX_CANVAS_AS_SVG}`)
+  // an edge answer is vega's a quarter of a pixel away: a systematic offset would make many of them
+  const MAX_EDGE = Math.ceil(pick.points / 2000)
+  if (pick.edge > MAX_EDGE) gate.problem(`CEILING: ${pick.edge} answers on an edge > ${MAX_EDGE} (one in 2000 points)`)
+  // a comparison of empty answers proves nothing: a fifth of the points must meet an item, a tenth a tooltip
+  if (scenes.length > 0 && (pick.picked < pick.points / 5 || pick.tips < pick.points / 10)) {
+    gate.problem(`FLOOR: the pointer phase is vacuous (${pick.picked} items, ${pick.tips} tooltips over ${pick.points} points)`)
+  }
 }
-// an edge answer is vega's a quarter of a pixel away: a systematic offset would make many of them
-const MAX_EDGE = Math.ceil(pick.points / 2000)
-if (pick.edge > MAX_EDGE) {
-  console.log(`[browser-signals] CEILING: ${pick.edge} answers on an edge > ${MAX_EDGE} (one in 2000 points)`)
-  process.exit(1)
-}
-// a comparison of empty answers proves nothing: a fifth of the points must meet an item, a tenth a tooltip
-if (scenes.length > 0 && (pick.picked < pick.points / 5 || pick.tips < pick.points / 10)) {
-  console.log(`[browser-signals] FLOOR: the pointer phase is vacuous (${pick.picked} items, ${pick.tips} tooltips over ${pick.points} points)`)
-  process.exit(1)
-}
-if (pick.failures.length) process.exit(1)
-if (PICK_ONLY) process.exit(scenes.length === 0 ? 1 : 0)
-if (MIN_CASES && cases.length + animCases.length < MIN_CASES) {
-  console.log(`[browser-signals] FLOOR: ${cases.length + animCases.length} cases < --min-cases ${MIN_CASES}`)
-  process.exit(1)
-}
-if (cases.length + animCases.length === 0) {
-  console.log('[browser-signals] no cases ran')
-  process.exit(1)
-}
-process.exit(failures.length ? 1 : 0)
+
+await runGate({
+  name: 'signals-browser',
+  counters: Object.fromEntries([
+    // (every case runs on each renderer: the floor is in runs; a --pick-only run's primary counter is the pointer's)
+    ...(PICK_ONLY ? [] : [['compared', { floor: MIN_CASES * RENDERERS.length, what: '(case, renderer) runs compared with real vega' }]]),
+    ['points', { floor: 43889, what: 'pointer positions whose item and tooltip agree with real vega' }],
+    ['picked', { floor: 14215, what: 'pointer positions that met an item' }],
+    ['tooltips', { floor: 11068, what: 'pointer positions with a tooltip' }],
+  ]),
+  // (the pointer floors are today's numbers for the default 120 scenes, 2026-11-23)
+  partial: Boolean(FILTER) || PICK_ONLY || RENDERERS.length < 2 || MIN_CASES === 0 || argv.some((a) => a.startsWith('--pick-scenes=')),
+  run: async (gate) => {
+    try {
+      await main(gate)
+    } finally {
+      await browser.close()
+      rmSync(OUT_DIR, { recursive: true, force: true })
+    }
+  },
+})
