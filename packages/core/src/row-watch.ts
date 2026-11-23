@@ -99,9 +99,17 @@ function samePrint(a: Print, b: Print): boolean {
 function rowsChangedInPlace(before: Print, rows: readonly unknown[]): boolean {
   for (const p of before.picks) {
     if (rows[p.at] !== p.row || p.row === null || typeof p.row !== 'object') continue
-    const now = printRow(p.row)
-    if (now.fields.length !== p.fields.length) return true
-    for (let j = 0; j < p.fields.length; j++) if (now.fields[j] !== p.fields[j] || !Object.is(now.values[j], p.values[j])) return true
+    // (field by field, as `printRow` reads them, without making a print: this runs on every evaluation given a new array)
+    let j = 0
+    for (const f in p.row) {
+      if (!Object.hasOwn(p.row, f)) continue
+      if (j === SAMPLE_FIELDS) break
+      if (f !== p.fields[j]) return true
+      const d = Object.getOwnPropertyDescriptor(p.row, f)
+      if (!Object.is(d === undefined ? undefined : 'value' in d ? d.value : ACCESSOR, p.values[j])) return true
+      j++
+    }
+    if (j !== p.fields.length) return true
   }
   return false
 }
