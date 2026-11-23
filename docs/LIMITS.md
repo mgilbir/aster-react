@@ -39,7 +39,11 @@ optional: a dimension you do not set is unbounded. There are no default numbers 
 `SpecLimits` (the values below are examples, see "Recommended starting points"), with one
 exception: once a `limits` object is present, even `{}`, a regular expression's input is capped at
 10 000 characters (raise it with `maxStringLength`). What else switches on with a `limits` object is
-under "Passing a `limits` object at all" below.
+under "Passing a `limits` object at all" below. A `limits` object is read as given, wherever a scope
+opens (`renderSpec`, a session, a stream flush, `evaluateChart`, the worker handler, `checkSpecLimits`,
+`checkSceneLimits`, `checkSvgLength`, `createLimitClock`): a key that is no limit (`maxrows`), or a budget
+that is not a number `>= 0` (`NaN`, `'5'`, `null` from a JSON `NaN`, `-1`), is a `TypeError`, never read as
+no budget. `Infinity` is a budget: it removes the cap of its own and replaces the ceiling it stands for.
 
 **What this protects, and what it does not.** There are two layers.
 
@@ -63,29 +67,47 @@ Each ceiling bounds an amount that the SPEC controls and that is expensive in me
 the usual `AsterLimitError` (`code: 'ASTER_LIMIT'`), naming the amount, the ceiling and the limit
 that raises it, for example
 `[aster] limit exceeded: range 50000000 > 1000000 (built-in ceiling that applies even without limits; raise it with limits.maxRows)`.
-Giving the matching limit replaces the ceiling by your number (your budget governs); giving
-unrelated limits (`limits: {}`, `{ maxStringLength }`) leaves it in force. They are exported as
+Giving the matching limit replaces the ceiling by your number (your budget governs), and that limit is
+then compared at the same site, before anything is allocated: a `limits` object is never less safe than
+none (`{ maxGeneratedRows: 1000 }` alone refuses 5e7 `density` steps where it is the budget). Giving
+unrelated limits (`limits: {}`, `{ maxStringLength }`) leaves the ceiling in force. They are exported as
 `HARD_CAPS` and `HARD_MAX_SPEC_DEPTH` from `@aster-charts/core`.
+
+The ceilings are taken where the thing is made, not at the call site that happened to be found: the
+allocating primitives size themselves (`range`, numeric `ticks`, every calendar interval's range, the label
+and word-cloud rasters, the contour scan, the geo event buffers), so a function is bounded whoever calls
+it. A count the Array constructor refuses by itself (2^32 and up) is left to it, so it fails as vega's
+does (`RangeError: Invalid array length`); every other count past a ceiling is an `AsterLimitError`, at
+any size. For the transforms that multiply rows, what is bounded is what they add beyond the rows they are
+given: a pipeline that does not amplify is never refused for the size of the data it is given.
 
 | Ceiling | Value | Where it applies | Replaced by | Largest seen in the gallery / corpus / test suites |
 |---|---|---|---|---|
-| `rows` | 1 000 000 | rows one parameter-sized generator makes: the `sequence` transform and `range`, expression `sequence(...)`, `quantile` and `kde`/`density` step counts | `maxRows`, `maxGeneratedRows` | 5 000 (`sequence` in the gallery: 1 000; `range`: 5 000; `density` steps 200) |
-| `cells` | 10 000 000 | typed-array grids sized by spec parameters: `heatmap` pixels, `kde2d`/contour density grids, the label bitmap | `maxRows`, `maxGeneratedRows` | 58 200 (a `kde2d` grid), 2 448 heatmap pixels |
-| `items` | 100 000 | counts a spec sets: `tickCount` of axes and legends (and so the ticks made), axis ticks drawn, trellis `layout.columns`, `contour` / `isocontour` `levels`, a quantized colour scheme `count` | `maxItems` | 165 axis ticks, 30 facet columns, 40 thresholds |
+| `rows` | 1 000 000 | array entries one generator or expression builtin makes: the `sequence` transform and `range`, expression `sequence(...)`, `quantile` (groups x probabilities), `kde` (groups x steps) and `density` steps; and what the multiplying transforms add beyond their input: `cross`, `fold`, `flatten`, `impute`, `pivot` cells (groups x columns), an `aggregate` with `cross` | `maxRows`, `maxGeneratedRows` | 5 852 (a `cross`; `sequence` in the gallery: 1 000; `range`: 5 000; `density` steps 200) |
+| `cells` | 10 000 000 | typed-array grids sized by spec parameters: `heatmap` pixels (ceil(width) x ceil(height) of its window), `kde2d`/contour density grids, the label bitmap, a contour scan's row buffers | `maxRows`, `maxGeneratedRows` | 58 200 (a `kde2d` grid), 2 448 heatmap pixels |
+| `items` | 100 000 | counts a spec sets, and what they make: numeric `ticks` (axes, legends, a gradient legend's default count), axis ticks drawn, legend entries listed, calendar ranges (time ticks, `timeSequence`, `utcSequence`), trellis `layout.columns`, `contour` / `isocontour` `levels` and thresholds, a colour scheme `count`, quantized colour samples | `maxItems` | 551 axis ticks, 30 facet columns, 40 thresholds |
 | `bytes` | 1 000 000 | one string an expression builtin builds: `pad`, number-format width | `maxStringLength`, `maxGeneratedBytes` | 5 000 (`pad`), 982 (format width) |
-| `coords` | 2 000 000 | positions one topojson decode produces (an arc referenced by many geometries counts every time) | `maxRows`, `maxGeneratedRows` | 101 000 (the gallery's largest map: 55 713) |
+| `coords` | 2 000 000 | positions one topojson decode produces (an arc referenced by many geometries counts every time), and the positions of a `graticule` (lines x points per line) | `maxRows`, `maxGeneratedRows` | 101 000 (the gallery's largest map: 55 713) |
 | `filledCells` | 1 000 000 | cells one delimited-text read (csv, tsv, dsv) fills in for fields a line does not have (`''` for each column a row lacks), the one part of a parse not bounded by the size of the text: a wide header over empty lines | `maxGeneratedRows` (they count against it) | 0 (no csv or tsv file of vega-datasets and no inline text of the corpus or gallery has a short line) |
+| `work` | 100 000 000 | steps of a loop that is the product of spec or data sizes and allocates little: a contour scan (thresholds x declared grid cells) and its hole matching (holes x rings), a static `force` simulation (iterations x the steps of a tick), a `label` placement (labels x anchors and offsets), the candidates of a `cross` with a `filter` (n x n), a `regression` of a polynomial `order` (size² x points), a word cloud's spirals, the edge flips of a Delaunay triangulation. About a second of CPU | `maxTimeMs` (each such loop reads the clock) | 305 045 (a contour scan) |
+| `pixels` | 16 000 000 | one raster a layout draws marks into: the `label` canvases (its `size`), the word cloud's board and sprite sheets | none | 250 000 (a word cloud's board; the label canvases run only on the gallery's browser path, not measured) |
+| `vertices` | 4 000 000 | events one geo buffer holds: a shape's positions after projection, clipping and resampling (a projection's `scale` and `precision` multiply them) | none | 52 344 |
 | `latticeTests` | 50 000 000 | the point-in-outline work of one `intersect()` of an arc, path, shape or geoshape item (vega-lite interval selections over geo marks, or the expression in any signal handler): the rows the item's outline spans inside the box, times its edges, plus each candidate point times its edges. A region beyond 2^52 is refused outright | none (`maxTimeMs` also bounds the walk, cooperatively) | 1 098 884 (the largest in the core test suites: a 3 000-row strip; not measured over the corpus, gallery or the intersect-browser gate) |
 | spec depth | 1 000 (`HARD_MAX_SPEC_DEPTH`) | nesting of the spec object, checked iteratively when it is compiled (`values` data arrays are not walked); a deeper or cyclic spec is an `AsterLimitError` instead of a raw `RangeError` | `maxDepth` can only lower it | 12 |
-| spec size | 5 000 000 objects | objects and arrays visited by that walk (a spec that shares sub-objects can otherwise make it exponential) | none | a few thousand |
+| spec size | 5 000 000 objects | objects and arrays visited by that walk, by a session before it writes the spec's text, and by the pre-flight (`checkSpecLimits`) over the spec's own objects (a spec that shares sub-objects can otherwise make each exponential); inside `values`, a shared object is walked once | none | a few thousand |
 
-How the values were chosen: the largest value each site reaches in the gallery (720 specs), the
+How the values were chosen (the `rows` to `vertices` rows re-measured on 2026-11-23 over the corpus, the Vega-Lite corpus and the
+gallery's Node path): the largest value each site reaches in the gallery (720 specs), the
 corpus and the test suites is in the last column; every ceiling is 1 to 3 orders of magnitude above
 it. The upper end is set by memory, not by taste: on Node a million generated rows costs about
 150 MB, a 2-million-position topojson decode about 250 MB, and 5 million rows already fails with
 `--max-old-space-size=512`. A real chart does not draw a million marks; a host that does can raise the matching limit.
 
-`latticeTests` is the one ceiling on work rather than memory. vega answers `intersect()` for an arc or path item by testing
+`latticeTests` and `work` are the ceilings on work rather than memory. `work` holds without `limits`
+and is replaced by `maxTimeMs`: every loop it bounds reads the clock, so a time budget stops it instead.
+`pixels` and `vertices` are replaced by no limit: rows and items are other units.
+
+`latticeTests` in particular: vega answers `intersect()` for an arc or path item by testing
 every lattice point of the item's bounds within the box with `isPointInPath`; Aster gives the same answer row by row (the
 winding test only changes where an edge crosses the row), so the work follows the rows the outline spans and its edges, not the
 region's area. Past the ceiling, or for a region beyond 2^52 (where `x + 1` stops moving), `intersect()` throws an
@@ -96,8 +118,10 @@ Not covered by a ceiling, deliberately: input that is large in itself (inline `v
 loaded files: they are data, not amplification; budget them with `maxRows`, `maxBytes`), and the
 cumulative cost of many sites each just under its ceiling (that is what `maxGeneratedRows`,
 `maxGeneratedBytes` and `maxTimeMs` are for, and for an untrusted spec the worker kill).
-The ceilings guard spec-driven sites only; the lower-level functions (`ticks`, `range`, ...) are
-unchanged, so they still match d3 for any input.
+The lower-level functions (`ticks`, `range`, a calendar interval's `range`, ...) are bounded too, since
+the ceiling is in them: they match d3 for every input under the ceilings, and the differentials that
+compare them with d3 past them run with the ceilings off, by name (`unboundedForParity`, used by tests
+only).
 Passing a `limits` object at all, even `{}`, turns the limits scope on: that enables
 the pre-flight walk with its hard depth ceiling, the regular-expression screen (including the
 10 000-character input cap, `maxStringLength`) and the default image/link URL policy described below.
@@ -116,7 +140,7 @@ const limits: SpecLimits = {
   maxRows: 100_000,        // see "What maxRows counts"
   maxMarks: 200,           // mark definitions, recursive
   maxDepth: 32,            // spec object nesting (a hard ceiling of 1000 applies even when unset)
-  maxStringLength: 10_000, // any string in the spec, a generated string, a regex input, scene text
+  maxStringLength: 10_000, // any string in the spec, a string a builtin builds, a regex input, any string an item draws
   maxItems: 50_000,        // generated scene items (and axis/legend/time ticks)
   maxPathLength: 1_000_000,// any generated or supplied path `d`
   maxSvgLength: 8_000_000, // length of the serialized SVG string
@@ -140,7 +164,7 @@ checks are separate calls.
 | `renderSpec` | yes | yes | yes | yes |
 | `handleChartWorkerRequest` (`useChartWorker`) | yes | yes | yes | yes |
 | `createChartSession().evaluate` | yes | yes | yes | no (you serialize) |
-| `createChartSession().change` | no | yes | yes | no |
+| `createChartSession().change` | no | yes, under the last evaluation's `limits` unless the change gives its own | yes | no |
 | `createChartStream` flushes | yes (session) | yes | yes | no; `maxRows` also counts the rows the stream holds |
 | `useChart` | yes (session) | yes | yes | yes when `serialize` is on (the default) |
 | `<Chart limits>` | yes (session) | yes | yes | SVG renderer only: the scene is serialized once per evaluation to measure it, and only when `maxSvgLength` is set |
@@ -200,10 +224,11 @@ site (see below). It does **not** cover:
   flush, starts a new clock.
 
 A session keeps the limits in its cache key. Re-evaluating the same inputs with the same
-limits returns the cached scene (it was accepted under exactly those limits); a different
-`limits` value re-evaluates and can reject. The only time check on a cache hit is the one
-at the start of `evaluate` (`maxTimeMs: 0` fails there). A failed evaluation leaves the
-session as it was.
+limits returns the cached scene (it was accepted under exactly those limits, and the pre-flight is not
+run again for it); a different `limits` value re-evaluates and can reject. The only time check on a
+cache hit is the one at the start of `evaluate` (`maxTimeMs: 0` fails there). A failed evaluation leaves
+the session as it was, and the scenes it returned before: `datasetsOfScene(scene)` and the scene's
+runtime keep the rows that scene was made with, whatever is evaluated or rejected after it.
 
 ## How the budgets are enforced: meters, not checkpoints
 
@@ -214,16 +239,16 @@ that shares the one wall clock:
 
 | Where | What is metered |
 |---|---|
-| Pre-flight (`checkSpecLimits`) | every string in the spec (`maxStringLength`), object depth (`maxDepth`, ceiling 1000), mark definitions (`maxMarks`), summed rows the chart is given, each once (see "What `maxRows` counts"). Iterative: a 200 000-deep or cyclic spec is an `AsterLimitError`, never a `RangeError` |
+| Pre-flight (`checkSpecLimits`) | every string in the spec (`maxStringLength`), object depth (`maxDepth`, ceiling 1000), the spec's own objects (the spec-size ceiling), mark definitions (`maxMarks`), summed rows the chart is given, each once (see "What `maxRows` counts"). Iterative: a 200 000-deep or cyclic spec is an `AsterLimitError`, never a `RangeError`; a spec that shares sub-objects is not walked once per path to them |
 | Every dataset | rows after load/`source`/transforms must be `<= maxRows` |
-| Transforms and row emitters | `sequence`, `fold` (rows x fields), `flatten`, `cross` (n x n), `impute`, `kde`/`quantile`/`regression`/`loess`/`countpattern` row counts, contour grid cells and thresholds, label bitmap, `range`: checked **before** the output is allocated; `aggregate`, `joinaggregate`, `pivot`, `bootstrap`, `stack`, `window`, `loess`, `kde`, `wordcloud`, `pack`, `voronoi`, `cross` with a filter and `indata()` sample the clock **inside** their loops |
+| Transforms and row emitters | `sequence`, `fold` (rows x fields), `flatten`, `cross` (n x n), `impute`, `pivot` (groups x columns), an `aggregate` with `cross`, `kde` (groups x steps), `density`/`quantile` steps, the `regression` order, `graticule` positions, contour grids (declared size, scan and thresholds), heatmap pixels, the label canvases and bitmap, the word cloud board, `force` iterations, `range`: checked **before** the output is allocated or the loop runs (`maxRows` on the rows made, `maxGeneratedRows` on what is added, or the built-in ceiling). Every loop of the transform, layout, raster and geo code that the spec or its data sizes samples the clock **inside** it (`metered-loops.test.ts` refuses a loop that does not, or does not state its bound): among them `aggregate`, `joinaggregate`, `pivot`, `bootstrap`, `stack`, `window`, `loess`, `kde`, `wordcloud`, `pack`, `force` (every tick and every pass of a force), `label` (each label, each row of its canvases, each searched cell), the label rasterizer (each row it fills, each dash and join it makes), `contour` / `isocontour` (each row of the scan, each hole matched), `heatmap` (each row), `voronoi` (each point, each edge flip), `nest`, `cross` with a filter, the geo pipeline (each batch of projected, clipped and resampled events) and `indata()` |
 | Encode loop | one item per row: `maxItems` is checked before the mark is encoded; the clock is sampled every 1024 items. Group items are metered the same way |
-| Guides and scales | numeric tick counts, calendar-month tick counts, time-interval ranges, quantize colour samples (all against `maxItems`), facet `columns` |
+| Guides and scales | the ticks a numeric count makes, calendar ranges as they grow (time ticks, `timeSequence`, `utcSequence`), legend entries listed, axis ticks drawn, quantize colour samples (all against `maxItems`), facet `columns` |
 | Expression builtins | `sequence` (rows), `pad` and number-format width (`maxStringLength`, cumulative `maxGeneratedBytes`), regex pattern/input length. The built-in ceilings apply to these even where the matching limit is unset |
 | Expression parser | nesting depth (1000): an `AsterLimitError`, not a stack overflow. Always thrown by the parser; see "A limit error cannot be swallowed" for what happens without a scope |
 | Topojson | decoded coordinates against `maxGeneratedRows` (else `maxRows`) |
 | Serialisation | every generated path `d` is checked as it is written (`maxPathLength`); `maxSvgLength` on the result where the entry point checks it (see the table above) |
-| Scene (`checkSceneLimits`) | leaf items (`maxItems`), item `path` strings (`maxPathLength`), the total length of string and array `text` (`maxStringLength`), and a lower bound for line/area paths (4 characters per point) |
+| Scene (`checkSceneLimits`) | leaf items (`maxItems`), item `path` strings (`maxPathLength`), the total length of string and array `text` and every other string an item draws (`href`, `description`, a paint, `font`, `cursor`, an image `url`: `maxStringLength`; the item's `datum` is data, not drawn), and a lower bound for line/area paths (4 characters per point) |
 
 Properties worth knowing:
 
@@ -235,11 +260,10 @@ Properties worth knowing:
 - **A limit error cannot be swallowed, inside a scope.** The runtime has defensive
   `catch` blocks (a signal expression that fails falls back to a default). The first
   violation in a scope is recorded on the meter, every later meter call re-throws it,
-  and the scope re-throws it on exit even if a `catch` ate it. Without `limits` there
-  is no scope: the expression parser still throws its nesting error, but a defensive
-  `catch` can turn it into the default value (a 5000-term `1+1+...` signal renders
-  without error when no `limits` is given and fails with `maxDepth 1001 > 1000
-  (expression nesting)` when it is).
+  and the scope re-throws it on exit even if a `catch` ate it. Without `limits` the entry
+  points open a scope of their own for the built-in ceilings and the parser's nesting error,
+  with the same rule: a 5000-term `1+1+...` signal fails with `maxDepth 1001 > 1000
+  (expression nesting)` with or without `limits`.
 - **Cost with limits off:** every site is one module-level null test. Limits ON
   adds an amortised clock read per 1024 rows/items.
 
@@ -253,7 +277,9 @@ deliberate difference; each applies only where noted.
 | Any budget in `SpecLimits`; rows, items, strings, paths, generated rows/bytes, SVG length and time are refused with `AsterLimitError` | vega renders whatever it is given |
 | Built-in ceilings (previous section): a few spec-controlled amounts are refused above fixed values **even without `limits`**, and a spec nested deeper than 1000 or cyclic is an `AsterLimitError` even without `limits` | a few hundred bytes of spec can otherwise exhaust the process (a fatal out-of-memory, not an error) |
 | Pre-flight depth ceiling: with a `limits` object, spec nesting deeper than `HARD_MAX_SPEC_DEPTH` (1000, exported from `@aster-charts/core`) fails even when `maxDepth` is unset, and a cyclic spec fails (`spec contains a cycle`) | an unbounded walk overflows the stack |
-| `sequence`, `range`, numeric `ticks`, calendar and time-interval ranges, `pad` and number-format width are bounded by the active limits before they allocate | one call can otherwise allocate gigabytes |
+| `sequence`, `range`, numeric `ticks`, calendar and time-interval ranges, `pad` and number-format width are bounded by the active limits (and the built-in ceilings) before they allocate | one call can otherwise allocate gigabytes |
+| A loop that is the product of spec or data sizes (a contour scan, a static `force`, a `label` placement, a filtered `cross`, a polynomial `regression`, a word cloud's spirals) past the `work` ceiling is refused, without `limits` too; a `maxTimeMs` budget replaces it | vega runs it to the end, which for some inputs is hours or never |
+| A stroke the label rasterizer draws: a contour of more than a million dashes is stroked undashed; a round join or cap of an immense pen is made only as far as the canvas sees it (which is the disk, inside the canvas) | Skia, the canvas of Chromium, gives up dashing past a million dashes in the same way; cutting such a stroke exactly would take more memory than any canvas |
 | Expression nesting deeper than 1000 (parser and AST) throws `AsterLimitError` (the parser does so with or without `limits`; see "A limit error cannot be swallowed") | vega throws a raw `RangeError` at a stack-dependent depth |
 | `bin`: a step that can never grow (underflowed to 0, `base` <= 1 that never reaches `maxbins`) throws `[aster] bin: cannot derive a step size ...` | vega loops forever. `maxbins: 0` (treated as 20) and `maxbins: -1` (NaN bins) give vega's output |
 | `stratify` throws vega's errors (`cycle`, `multiple roots`, `missing: id`, `ambiguous: id`, `no root`) with an `[aster] stratify:` prefix | the messages are vega's; the prefix marks them as never recovered by the logger |
