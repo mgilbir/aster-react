@@ -1,5 +1,5 @@
 /**
- * The bundle-size figures in the docs are tied to the budgets in code (C368, D2): `packages/benchmarks/scripts/budget.mjs` holds a ceiling per
+ * The bundle-size figures in the docs are tied to the budgets in code (C368, D2): `packages/benchmarks/scripts/budget-rows.mjs` holds a ceiling per
  * import pattern, always the measured gzip size plus 0.5 kB, so the size a doc may state for a row is its ceiling minus 0.5 kB. Every figure
  * a doc states for a row (the table of docs/PERFORMANCE.md, the sentences derived from it, docs/API.md, the react README, the shipped
  * `.d.ts` comments) is checked here, so a change that edits a budget and not the docs fails, and so does a doc that states a size the
@@ -13,12 +13,12 @@ import { describe, expect, it } from 'vitest'
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 const read = (rel) => readFileSync(join(root, rel), 'utf8')
 
-/** `'<row name>': <kB> * 1024,` inside `const BUDGETS = {` ... `}` of budget.mjs. */
+/** `'<row name>': <kB> * KB,` inside `export const BUDGETS = {` ... `}` of budget-rows.mjs. */
 function budgets() {
-  const text = read('packages/benchmarks/scripts/budget.mjs')
-  const block = /const BUDGETS = \{([\s\S]*?)\n\}/.exec(text)?.[1] ?? ''
+  const text = read('packages/benchmarks/scripts/budget-rows.mjs')
+  const block = /export const BUDGETS = \{([\s\S]*?)\n\}/.exec(text)?.[1] ?? ''
   const out = new Map()
-  for (const m of block.matchAll(/^\s*'([^']+)':\s*([\d.]+)\s*\*\s*1024,/gm)) out.set(m[1], Number(m[2]))
+  for (const m of block.matchAll(/^\s*'([^']+)':\s*([\d.]+)\s*\*\s*KB,/gm)) out.set(m[1], Number(m[2]))
   return out
 }
 const B = budgets()
@@ -32,7 +32,7 @@ const ceiling = (name) => {
 const withinBudget = (stated, name) => stated <= ceiling(name) && stated >= ceiling(name) - 1
 const fmt = (n) => n.toFixed(1)
 
-describe('budget.mjs', () => {
+describe('budget-rows.mjs', () => {
   it('has the rows the docs state, each a ceiling in kB', () => {
     expect(B.size).toBeGreaterThanOrEqual(15)
     for (const name of ['@aster-charts/core', '@aster-charts/react useChart', '@aster-charts/react Chart', '@aster-charts/react SvgChart', '@aster-charts/react SvgChart + interaction', '@aster-charts/react Chart + VL']) {
@@ -43,15 +43,15 @@ describe('budget.mjs', () => {
 
 describe('docs/PERFORMANCE.md bundle table', () => {
   const doc = read('docs/PERFORMANCE.md')
-  const table = doc.slice(doc.indexOf('| Row (`budget.mjs` name)'))
-  const rows = [...table.matchAll(/^\| `([^`]+)` \| ([^|]+) \| ([\d.]+) \|$/gm)].map((m) => ({ name: m[1], pattern: m[2].trim(), kb: Number(m[3]) }))
+  const table = doc.slice(doc.indexOf('| Row (`budget-rows.mjs` name)'))
+  const rows = [...table.matchAll(/^\| `([^`]+)` \| ([^|]+) \| ([\d.]+) \|(?:\s*[\d.]*\s*\|)?$/gm)].map((m) => ({ name: m[1], pattern: m[2].trim(), kb: Number(m[3]) }))
 
   it('lists every budget row, once, and nothing else', () => {
     expect(rows.map((r) => r.name).sort()).toEqual([...B.keys()].sort())
   })
 
   it('states, for every row, a size inside its budget: at most the ceiling, at most 1 kB below it', () => {
-    for (const r of rows) expect(withinBudget(r.kb, r.name), `${r.name}: the table says ${r.kb} kB, the ceiling in budget.mjs is ${fmt(ceiling(r.name))}`).toBe(true)
+    for (const r of rows) expect(withinBudget(r.kb, r.name), `${r.name}: the table says ${r.kb} kB, the ceiling in budget-rows.mjs is ${fmt(ceiling(r.name))}`).toBe(true)
   })
 })
 
@@ -60,7 +60,7 @@ describe('docs that derive a size from two rows', () => {
   const api = read('docs/API.md')
   const readme = read('packages/react/README.md')
   // the figures as PERFORMANCE.md's own table states them: every sentence derived from two rows must be arithmetic on that table
-  const table = new Map([...performance.matchAll(/^\| `([^`]+)` \| [^|]+ \| ([\d.]+) \|$/gm)].map((m) => [m[1], Number(m[2])]))
+  const table = new Map([...performance.matchAll(/^\| `([^`]+)` \| [^|]+ \| ([\d.]+) \|(?:\s*[\d.]*\s*\|)?$/gm)].map((m) => [m[1], Number(m[2])]))
   const t = (name) => { const v = table.get(name); if (v === undefined) throw new Error(`no table row ${name}`); return v }
   const chart = t('@aster-charts/react Chart')
   const lite = t('@aster-charts/react SvgChart')
