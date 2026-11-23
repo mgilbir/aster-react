@@ -40,22 +40,23 @@ export function cursorKeyword(value: unknown): string | null {
  * container's `cursor` style). A signal value that is the view's own `{user, item}` object (what vega writes into a spec
  * signal named `cursor` at its first pointermove) carries its item.
  *
- * This is the one place a cursor reaches a host, so it is where a cursor is vetted: only a CSS keyword is shown
- * ({@link cursorKeyword}); anything else -- a `url(...)` image, which would make the viewer's browser request it, or any other
- * text -- counts as no cursor. (vega hands the text on as it is.)
+ * This is the one place a cursor reaches a host, so it is where a cursor is vetted: the cursor vega's rule picks is shown only
+ * when it is a CSS keyword ({@link cursorKeyword}); anything else is no cursor. A browser drops a value that is not a cursor at
+ * all (vega's container then has none, as here); a `url(...)` cursor it would fetch, past the URL policy, so it is not shown
+ * either. (vega hands the text on as it is.)
  */
 export function resolveCursor(signal: unknown, item: string | null): string | null {
   let user: unknown = DEFAULT_CURSOR
-  let held: string | null = cursorKeyword(item)
+  let held = item
   if (typeof signal === 'string') {
-    user = signal === '' ? signal : (cursorKeyword(signal) ?? DEFAULT_CURSOR)
+    user = signal
   } else if (signal != null && typeof signal === 'object') {
-    const own = (signal as { user?: unknown }).user
-    user = own == null || own === '' ? own : (cursorKeyword(own) ?? DEFAULT_CURSOR)
-    held = cursorKeyword((signal as { item?: unknown }).item)
+    user = (signal as { user?: unknown }).user
+    const inner = (signal as { item?: unknown }).item
+    held = typeof inner === 'string' && inner !== '' ? inner : null
   }
   const shown = user && user !== DEFAULT_CURSOR ? user : (held || user)
-  return typeof shown === 'string' && shown !== '' ? shown : null
+  return typeof shown === 'string' && shown !== '' ? cursorKeyword(shown) : null
 }
 
 // --- the tracker -----------------------------------------------------------------------------------------------------------
