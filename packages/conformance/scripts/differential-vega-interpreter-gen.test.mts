@@ -177,12 +177,17 @@ const PROBES = [
  * outcome, Aster's outcome] (result or thrown error, plus console.error output, as JSON). These are Aster's
  * own hardening, taken on purpose and pinned both ways: Aster never resolves an inherited Object.prototype
  * member (`constructor`, `__proto__`, ...) through an identifier, a call name or a function value, reads a
- * data column of that name as data, and refuses a function-valued argument to a built-in. The one-sided
+ * data column of that name as data, and refuses a function-valued argument to any function but the built-in type
+ * inspectors. The one-sided
  * ones (`datum["constructor"]`) come from vega's parser rewriting a string literal that names an
  * Object.prototype member into an identifier, which Aster's parser keeps a string. Every other probe must
  * match vega exactly; an entry that starts agreeing, or a new disagreement, fails the test.
  */
 const PINNED_DIVERGENCES: ReadonlyArray<readonly [string, string, string, string]> = [
+  // (C530: the built-in type inspectors are exempt from the function-argument refusal by identity, not by an `is` name prefix:
+  // a host function named `isFoo` is a host function, and a function a spec reached is not handed to it)
+  ...(['param', 'handler'] as const).flatMap((mode) => ['isFoo(datum.list.map)', 'isFoo(hostFn())'].map((code) =>
+    [mode, code, '{"r":true,"logs":[]}', '{"r":{"$":"throw","name":"Error","message":"Function argument refused: isFoo"},"logs":[]}'] as const)),
   ["param", "datum.list.constructor.constructor", "{\"r\":{\"$\":\"undef\"},\"logs\":[\"Prevented interpretation of member \\\"constructor\\\" which could lead to insecure code execution\"]}",
    "{\"r\":{\"$\":\"undef\"},\"logs\":[]}"],
   ["handler", "datum.list.constructor.constructor", "{\"r\":{\"$\":\"undef\"},\"logs\":[\"Prevented interpretation of member \\\"constructor\\\" which could lead to insecure code execution\"]}",
