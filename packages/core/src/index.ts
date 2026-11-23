@@ -17,6 +17,7 @@ export type {
   SceneRoot,
   ScaleDomain,
   ScaleSnapshot,
+  ScaleType,
   ScaleRange,
   SizeSpec,
   SortSpec,
