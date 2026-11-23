@@ -296,6 +296,19 @@ export function Signals(): React.ReactElement {
   moves, ends and `resize`, no selector: see [LIMITS.md](LIMITS.md#interactive-charts-and-untrusted-specs-the-threat-model-of-the-event-loop));
   `logger` receives bind-time and run-time errors of the handlers.
 
+### Handlers that re-encode an item (`encode: "<set>"`)
+
+A handler `{events: "*:pointerover", encode: "hover"}` encodes the event's item again with the mark's own `hover` set, as vega
+does (it is the update `encode(item(), "hover")`, so the signal's value becomes the item). What the set writes stays on the item
+until the mark's `update` set runs on it again, which vega does when a signal or scale any of the mark's encode sets reads, or the
+item's datum, changes: `update` then takes back the channels it writes (a `select` that enlarged `size` ends with a pan of the
+scale) and leaves the others (a `hover` fill stays). A mark without the named set, or an event with no item, changes nothing.
+The event loop records each request in the signal store it hands the host, under a symbol key, and the next evaluation applies
+it: a host that copies the store keeps it (`{...signals}`), one that serialises it (JSON, a worker) drops it. Items are named by
+their mark, group instance and row, so the binding needs the scene's picker (`pick`, which `<Chart>` passes; without one an item
+read from the DOM is no scene item and asks nothing). The items of leaf marks are re-encoded; a group mark's own items are not.
+Pinned against vega by `encode-handlers-vs-vega.test.ts`.
+
 ### Timers and animation
 
 `timer` event streams (`{"type": "timer", "throttle": 16.7}`, `"timer{100}"`) run on a scheduler with d3-timer's schedule (the one
