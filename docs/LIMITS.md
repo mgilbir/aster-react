@@ -259,7 +259,7 @@ deliberate difference; each applies only where noted.
 | Decoded topojson coordinates are budgeted against `maxGeneratedRows` (else `maxRows`) | arcs are shared, so a few KB of input can decode to millions of points |
 | `topojson` object names are looked up as own properties (`constructor`, `__proto__` are "not found") | the name is spec-controlled |
 | `loadSpecData` and its URL policy: only public `http(s)` by default, no credentials, redirects re-vetted, timeout and size caps | a spec's `url` is a request made on the host's behalf |
-| Image and `href` URLs go through the same policy **when `limits` or `urlPolicy` is given** (without either: vega parity) | a spec can name any URL |
+| Image and `href` URLs go through the same policy, and every URL a renderer writes is vetted where it is written, **always** (the defaults with neither `limits` nor `urlPolicy`; see "Every URL in the output") | a spec can name any URL |
 | With `limits.regex: 'refuse'`, a spec that makes a regular expression is refused before it runs | no limit can stop a regular expression once it runs, and the screen is a heuristic |
 | A paint (`fill`, `stroke`, the background) never references another document in SVG output (string and DOM), always: a leading `url(...)` naming one draws its fallback colour, else `none`; a `url(...)` anywhere else drops the attribute. `url(#id)` (within the page) is kept (see "Paint references" below) | vega's SVG renderers write paint as given, and Chromium fetches a paint server from another document, a request no URL policy sees |
 | A mark's `blend` reaches SVG output (string and DOM) only as a `mix-blend-mode` keyword, always; any other value draws as if no blend were set (see "Blend modes" below) | vega's string renderer writes the value into the `style` attribute as given, where a value from the data can add CSS declarations of its own |
@@ -442,12 +442,32 @@ try {
   with both closed: `urlData: 'refuse'` and a `urlPolicy` whose `allow` returns `false`.
 - `'allow'` (the default) keeps today's behaviour: resolve url datasets with `loadSpecData`, or give their rows in `data`.
 
+## Every URL in the output
+
+A URL is vetted at the one place each renderer writes it, whatever channel, guide or code path put it on the scene: the
+attribute sink both SVG renderers write every attribute through (a link's or an image's `xlink:href`, and any attribute that is
+CSS -- a `url()` there never names another document), the urls a canvas host loads (`sceneImageUrls`, what `<Chart>` and
+`renderSceneToPng` load), and the cursor a host shows (`resolveCursor`). This is on by default and fails closed:
+
+- the policy is the one the scene was evaluated under (`urlPolicy`, or the defaults under `limits`); with neither, the
+  defaults: a link is one of `http:`, `https:`, `mailto:`, `tel:` or relative, an image one of `http:`, `https:`, `data:` or
+  relative, and neither carries credentials. A URL that cannot be read, or is refused, is not written: the item is drawn
+  without its link, an image with an empty `href`, and nothing is requested. vega's own rewrites are applied first
+  (`file://` stripped to the path, `//host` given `http:`), and the text that is written is the one judged (a
+  `file://javascript:` link is refused; vega writes it as `javascript:`).
+- a scene posted from a worker (a structured clone) carries no policy: it is vetted against the defaults where it is drawn, so
+  a host that widens `protocols` in the worker sees those links dropped on the page (fail closed).
+- the evaluation applies the policy too, to every URL channel it knows (`href` on any item of any mark, guide or title, an
+  image's `url` and the `src` of an `image` object): that is where a refusal throws `AsterUrlError`, or calls `onDeny`.
+- No encode channel can name the engine's own state on an item (`__domDesc`, `_hit`, `items`, `dataDatum`, ...): a spec that
+  tries is refused with a `SpecParseError` ([ERRORS](ERRORS.md)).
+
 ## Image URLs
 
 Image marks take their `url` from data, so a hostile spec can make the viewer's
 browser request a tracking pixel or a `javascript:` URL. Image `url`s pass the
 same checks, applied while the scene is built so the string renderer, the DOM
-path and canvas all see vetted items:
+path and canvas all see vetted items (and vetted again where they are written, above):
 
 ```ts
 import { renderSpec, type VgSpec } from '@aster-charts/core'
@@ -476,17 +496,19 @@ console.log(svg.includes('cdn.example.com'), svg.includes('tracker.example.net')
   `data:`). With `limits` and no `urlPolicy` the defaults apply (the spec is
   untrusted): `http:`, `https:`, `data:` and relative URLs only, no credentials;
   anything else throws `AsterUrlError` (or is dropped when `onDeny` is set).
-- With neither, images are not vetted. That is parity with Vega, which draws any
-  `url`, and an SVG `<image>` cannot execute script, so `javascript:` is not an
-  injection vector there. **Residual risk:** a spec can still make the viewer's
-  browser request an arbitrary URL (a tracking pixel, an IP leak, a request to an
-  internal address the viewer can reach). If you render specs you did not write,
-  pass `limits` (which turns the defaults on) or a `urlPolicy` with `allow`.
+- With neither, the output still vets every image url against the defaults (above): a
+  `javascript:`, `file:`, `blob:` or credential-carrying url is drawn as no url (vega draws any
+  `url`). **Residual risk:** a spec can still make the viewer's browser request an arbitrary
+  `http(s)` URL (a tracking pixel, an IP leak, a request to an internal address the viewer can
+  reach). If you render specs you did not write, pass a `urlPolicy` with `allow`.
 - `allow` for images is synchronous. A relative URL needs `baseURL` once `allow`
   is set (fail closed).
 - With a `baseURL` a relative image URL is drawn resolved against it, the way vega's loader
-  does (`base` + `/` + `url`, `//host` getting `http:`); the resolved URL goes through the
-  policy again, so `allow` sees what is drawn. Without one it is drawn as written.
+  does: a text prefix (`base` + `/` + `url`, `//host` getting `http:`), not a WHATWG resolution,
+  so give a directory URL, not a page URL such as `location.href`, whose file name or query would
+  become part of every path. `allow` is asked once, about exactly the url that is drawn; the text
+  as written also passes the protocol and credential checks (a `file:` url is refused even though
+  its drawn form would be a path). Without a base it is drawn as written.
 - Where to pass it: `renderSpec`/`evaluateChart`/sessions take `urlPolicy` in the runtime
   input; `<Chart urlPolicy>`, `useChart(spec, { urlPolicy })` and `<ChartStream urlPolicy>`
   forward it (a denial without `onDeny` is a render error reported through `onError`; the
@@ -501,13 +523,27 @@ A mark's `href` channel is drawn the way Vega's SVG renderer draws it: the item'
 sits inside `<a xlink:href="...">` (string renderer and DOM path alike; line, area and trail
 link through their first item). Two checks apply to the value:
 
-- Always, in every renderer: Vega's own link sanitizer. Only `http(s):`, `ftp:`, `mailto:`,
-  `tel:`, `callto:`, `cid:`, `xmpp:`, `file:`, `data:` and scheme-less (relative) URIs are
-  linked; `javascript:`, `vbscript:` and the like produce no link, whatever the spec says.
-  (`//host/p` gets `http:`, `file://` is stripped to the path, as in Vega.)
+- Always, in every renderer, with or without a policy: the link is vetted where it is written (see "Every URL in the
+  output"). Only `http:`, `https:`, `mailto:`, `tel:` and scheme-less (relative) URIs are linked, without credentials
+  (Vega's sanitizer also links `ftp:`, `callto:`, `cid:`, `xmpp:`, `file:` and `data:`, and lets `file://javascript:` through);
+  `javascript:`, `vbscript:` and the like produce no link, whatever the spec says. (`//host/p` gets `http:`, `file://` is
+  stripped to the path, as in Vega; a host-naming text with no scheme, `\\host\p`, is written as the URL it was judged as.)
 - Under `limits` or an explicit `urlPolicy`, the URL policy above applies with the link
   protocols `http:`, `https:`, `mailto:`, `tel:` (and relative URLs): anything else throws
   `AsterUrlError`, or is dropped (the item is drawn without its link) when `onDeny` is set.
+
+## The cursor
+
+A mark's `cursor` channel and a spec's `cursor` signal reach the host as `resolveCursor` resolves them (vega-view's rule).
+Only a CSS cursor keyword (`pointer`, `grab`, `zoom-in`, ...: the list of CSS Basic User Interface 4, ASCII case ignored) is
+shown; any other value counts as no cursor. A CSS cursor may be a `url()` list, an image the viewer's browser fetches that no
+URL policy would see, so a value that is not a keyword is never handed on (vega hands the text on as it is).
+
+## The accessible tree
+
+`buildA11yTree` is bounded whatever the data (`summaryThreshold`, default 150): over that many mark items in the whole scene
+every mark is one summary node, no more than that many mark nodes are made in all (the rest fold into one), and a legend gives
+no more than that many entry nodes.
 
 ## Blend modes (`blend`)
 
