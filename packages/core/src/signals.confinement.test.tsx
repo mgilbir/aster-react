@@ -391,3 +391,21 @@ describe('C99: a modify that feeds itself ends promptly', () => {
     if (limits && 'maxRows' in limits) expect(rows).toBeLessThanOrEqual(100)
   }, 30_000)
 })
+
+describe('C145: a cycle of a group scope is told once per chart, naming the signal (the view\'s own are refused at compile)', () => {
+  it('three bindings of one chart, one report', () => {
+    const chart = compileChart({ width: 10, height: 10, marks: [{ type: 'group', signals: [{ name: 'g', update: 'h + 1' }, { name: 'h', update: 'g + 1' }] }] } as never)
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    const logs: string[] = []
+    for (let i = 0; i < 3; i++) {
+      const scene = evaluateChart(chart)
+      host.innerHTML = renderSceneToSvg(scene)
+      const b = bindSceneSignals(host.querySelector('svg')!, scene, {}, { logger: { error: (m) => logs.push(String(m)), warn() {} } }, { owner: host })
+      if (i < 2) b.detach()
+      else opened.push(b)
+    }
+    expect(logs).toEqual([expect.stringMatching(/^signal event handler \(signal "[gh]"\): Cycle detected in dataflow graph\.$/)])
+    expect(() => compileChart({ signals: [{ name: 'a', value: 0, on: [{ events: { signal: 'b' }, update: 'b * 10' }] }, { name: 'b', value: 0, on: [{ events: { signal: 'a' }, update: 'a + 2' }] }] } as never)).toThrow('Cycle detected in dataflow graph.')
+  })
+})

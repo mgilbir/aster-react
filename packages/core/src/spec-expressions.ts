@@ -35,6 +35,8 @@ import { transformParams, type ParamKind, type TransformParam } from './transfor
 import { TUPLE_MAKING_TRANSFORMS, transformTypeOf } from './transform-names.js'
 import { guideReading, legendLayout, legendSizeExpression, type GuideEnv, type GuideKind } from './guide-model.js'
 import { splitAccessPath, TextTable } from './util.js'
+import { dataKey, expressionReads } from './expr-reads.js'
+import { follow, node, Propagation, type SignalNode } from './signal-propagation.js'
 import { isSignalRef as isSignalObject, VIEW_SIGNALS, viewSignals } from './view-props.js'
 
 type Rec = Record<string, unknown>
@@ -108,6 +110,103 @@ class Check {
 
   constructor(private readonly config: Rec) {}
 
+  // -- the view's dataflow graph: what reads what, for the cycle vega refuses (C145) ----------------------------------------
+  //
+  // vega builds the operators of the view's own scope, ranks them, and throws `Cycle detected in dataflow graph.` when connecting
+  // one to what it reads would place it after itself (vega-dataflow `rerank`). Which cycles it finds depends on that order, not
+  // on the shape of the graph alone (a handler takes its source's rank and is never re-ranked: `a` on `{signal: "a"}` is
+  // accepted), so the walk records what vega-runtime builds and replays its ranking (`assertNoCycle`, with the event loop's own
+  // ranking, signal-propagation.ts): the operators in the order vega-runtime makes them (the view's signals, its data sets,
+  // scales, the expressions handlers follow, named marks), each then connected to what it reads (a signal with `react: false`
+  // reads its sources without being among their targets), then the handlers of `{signal}` / `{scale}` sources, each following its
+  // source and feeding its signal (what its update reads is a parameter that reacts to nothing). A group's scope is a subflow, whose cycle vega logs rather than
+  // throws (the event loop does the same: signals.ts); handlers of event streams and data triggers are ranked after nothing.
+
+  /** the operator whose definition is being read (null: none of the view's, or one whose reads are not ranked) */
+  private owner: string | null = null
+  /** the view's operators in the order vega-runtime makes them, by kind, and what each reads */
+  private readonly made = { signal: [] as string[], data: [] as string[], scale: [] as string[], lambda: [] as string[], mark: [] as string[] }
+  private readonly graph = new Map<string, Set<string>>()
+  private readonly unreactive = new Set<string>()
+  private readonly handlers: Array<{ source: string; target: string }> = []
+  /** the owner of each lambda waiting to be read, per list (a `{signal}` property is read last, for the operator it belongs to) */
+  private readonly lambdaOwners = new WeakMap<string[], Array<string | null>>()
+
+  private edge(source: string, target: string): void {
+    if (this.scope.isGroup) return
+    let s = this.graph.get(target)
+    if (!s) this.graph.set(target, (s = new Set()))
+    s.add(source)
+  }
+  private make(kind: keyof Check['made'], id: string): void {
+    if (this.scope.isGroup) return
+    const list = this.made[kind]
+    if (!list.includes(id)) list.push(id)
+  }
+  /** Read `fn` as part of the definition of `owner`. */
+  private as<T>(owner: string | null, fn: () => T): T {
+    const outer = this.owner
+    this.owner = this.scope.isGroup ? null : owner
+    try { return fn() } finally { this.owner = outer }
+  }
+  /** The view's signals and the data sets an expression reads (expr-reads.ts); none when it does not parse (it is refused anyway). */
+  private readsOf(text: string): Set<string> {
+    const out = new Set<string>()
+    let reads: ReadonlySet<string>
+    try { reads = expressionReads(text) } catch { return out }
+    for (const id of reads) {
+      if (id.startsWith('data:')) out.add(id)
+      else if (this.scope.hasSignal(id)) out.add('signal:' + id)
+    }
+    return out
+  }
+  /** What the current owner reads in an expression. */
+  private reads(text: string): void {
+    if (this.owner === null) return
+    for (const id of this.readsOf(text)) this.edge(id, this.owner)
+  }
+  private pushLambda(lambdas: string[], text: string): void {
+    lambdas.push(text)
+    let owners = this.lambdaOwners.get(lambdas)
+    if (!owners) this.lambdaOwners.set(lambdas, (owners = []))
+    owners[lambdas.length - 1] = this.owner
+  }
+  /** Replay vega's ranking of the view's operators; throw its error on the cycle it finds. */
+  assertNoCycle(): void {
+    if (!this.handlers.length && !this.graph.size) return
+    const flow = new Propagation(() => {})
+    const nodes = new Map<string, SignalNode>()
+    const get = (id: string): SignalNode => {
+      let n = nodes.get(id)
+      if (!n) nodes.set(id, (n = flow.add(node(id))))
+      return n
+    }
+    const { signal, data, scale, lambda, mark } = this.made
+    const order = [...signal, ...data, ...scale, ...lambda, ...mark]
+    for (const id of order) get(id)
+    try {
+      for (const id of order) {
+        const n = get(id)
+        const sources = [...(this.graph.get(id) ?? [])].map(get).filter((x) => x !== n)
+        if (!this.unreactive.has(id)) for (const src of sources) follow(src, n)
+        flow.connect(n, sources)
+      }
+      for (const h of this.handlers) {
+        const source = get(h.source)
+        // (vega-dataflow onOperator: the handler is ranked with its source, follows it, and feeds its signal; what its update reads
+        // is a parameter made with `react: false`, which counts it among nobody's targets)
+        const hn = node('handler')
+        hn.order = source.order
+        follow(source, hn)
+        const target = get(h.target)
+        follow(hn, target)
+        flow.connect(target, [hn])
+      }
+    } catch (e) {
+      throw new SpecParseError(e instanceof Error ? e.message : String(e), { cause: e })
+    }
+  }
+
   private get env(): GuideEnv {
     return { config: this.config, scaleType: (name) => this.scope.scaleType(name) }
   }
@@ -127,6 +226,7 @@ class Check {
     else {
       const text = textOf(value)
       if (checkExpression(text, this.isSignal)) this.regexSites.push(text)
+      this.reads(text)
     }
   }
 
@@ -164,19 +264,24 @@ class Check {
       return
     }
     const signal = node.signal
-    if (typeof signal === 'string' && signal && !this.scope.hasSignal(signal) && !skip.has('signal')) out.push(signal)
+    if (typeof signal === 'string' && signal && !skip.has('signal')) {
+      if (this.scope.hasSignal(signal)) { if (this.owner !== null) this.edge('signal:' + signal, this.owner) } else this.pushLambda(out, signal)
+    }
     for (const key of Object.keys(node)) if (!skip.has(key)) this.lambdas(node[key], out, NONE, depth + 1)
   }
 
   /** `scope.signalRef(name)`: a signal of the scope is itself, anything else an expression of its own, read last. */
   private signalRef(name: unknown, lambdas: string[]): void {
     const text = String(name)
-    if (!this.scope.hasSignal(text)) lambdas.push(text)
+    if (!this.scope.hasSignal(text)) this.pushLambda(lambdas, text)
+    else if (this.owner !== null) this.edge('signal:' + text, this.owner)
   }
 
   flush(lambdas: string[]): void {
-    for (const text of lambdas) this.expression(text)
+    const owners = this.lambdaOwners.get(lambdas) ?? []
+    lambdas.forEach((text, i) => this.as(owners[i] ?? null, () => this.expression(text)))
     lambdas.length = 0
+    this.lambdaOwners.delete(lambdas)
   }
 
   // -- a scope, in the order vega reads it -------------------------------------------------------------------------
@@ -187,6 +292,7 @@ class Check {
     const signals = viewSignals(spec, config)
     for (const name of VIEW_SIGNALS) this.scope.addSignal(name)
     this.declare(signals)
+    for (const sig of signals) if (sig.push !== 'outer') this.make('signal', 'signal:' + String(sig.name))
     // vega-parser parseView: the legends' layout of the config, the view's own encode, its layout; then the rest of the spec (C284)
     this.objectProperty(isRecord(config.legend) ? config.legend.layout : undefined, lambdas)
     this.encode(spec.encode)
@@ -195,6 +301,8 @@ class Check {
     this.flush(lambdas)
     // the view registers its own root item last
     this.names.declare('root')
+    // (vega ranks the view's operators when it builds the view, after its parser has read every expression)
+    this.assertNoCycle()
   }
 
   /**
@@ -219,6 +327,17 @@ class Check {
     for (const d of specList(spec.data)) if (isRecord(d)) this.dataset(d, lambdas)
     for (const s of specList(spec.scales)) {
       checkScale(s, this.names)
+      if (isRecord(s)) {
+        this.make('scale', 'scale:' + String(s.name))
+        this.as('scale:' + String(s.name), () => this.scaleDefinition(s, lambdas))
+      }
+    }
+    for (const s of signals) this.signal(s, lambdas)
+    this.guidesAndMarks(spec, lambdas)
+  }
+
+  private scaleDefinition(s: Rec, lambdas: string[]): void {
+    {
       // (vega-parser parseScaleBins: an object of bins is one expression, written out with its signals in it)
       const bins = isRecord(s) ? s.bins : undefined
       if (isRecord(bins) && !bins.signal) {
@@ -226,7 +345,9 @@ class Check {
         this.objectProperty(bins, lambdas)
       } else this.lambdas(s, lambdas)
     }
-    for (const s of signals) this.signal(s, lambdas)
+  }
+
+  private guidesAndMarks(spec: Rec, lambdas: string[]): void {
     for (const a of specList(spec.axes)) {
       if (!isRecord(a)) continue
       // (the axis's configuration is looked up by the type of its scale, first)
@@ -257,8 +378,14 @@ class Check {
 
   /** `parseData`: its transforms, its triggers, the data sets it is derived from (when it has no values of its own), then its name. */
   private dataset(d: Rec, lambdas: string[]): void {
+    this.make('data', 'data:' + String(d.name))
+    this.as('data:' + String(d.name), () => this.datasetDefinition(d, lambdas))
+  }
+
+  private datasetDefinition(d: Rec, lambdas: string[]): void {
     for (const t of specList(d.transform)) if (isRecord(t)) this.transform(t, lambdas)
-    for (const on of specList(d.on)) if (isRecord(on)) this.trigger(on, String(d.name))
+    // (a trigger is an operator of its own that pulses the data set when it runs: nothing reads it)
+    for (const on of specList(d.on)) if (isRecord(on)) this.as(null, () => this.trigger(on, String(d.name)))
     // vega-parser analyze: a data set's url, async, values and format are read only when it has a dynamic loader (its values or
     // its url is a signal, or its format holds one); a source data set, or a static one, reads none of them
     const values = dataWithoutRows(d).values
@@ -266,7 +393,12 @@ class Check {
       for (const v of [d.url, d.async, values]) if (isRecord(v) && v.signal) this.signalRef(v.signal, lambdas)
       this.objectProperty(d.format, lambdas)
     }
-    if (dataInputOf(d) === 'source') for (const source of specList(d.source)) need(this.names, source)
+    if (dataInputOf(d) === 'source') {
+      for (const source of specList(d.source)) {
+        need(this.names, source)
+        if (this.owner !== null) this.edge(dataKey(String(source)), this.owner)
+      }
+    }
     this.names.declare(d.name)
   }
 
@@ -296,6 +428,7 @@ class Check {
       if (p.ref === 'index') {
         if (typeof owner.from !== 'string') throw new SpecParseError('Lookup "from" parameter must be a string literal.')
         need(this.names, owner.from)
+        if (this.owner !== null) this.edge(dataKey(owner.from), this.owner)
         continue
       }
       const value = owner[p.name]
@@ -316,7 +449,11 @@ class Check {
         throw new TypeError(value === null ? "Cannot read properties of null (reading 'map')" : 'value.map is not a function')
       }
       if (p.ref === 'data' && !isSignalObject(value)) {
-        for (const name of p.list ? (value as unknown[]) : [value]) if (!isSignalObject(name)) need(this.names, name)
+        for (const name of p.list ? (value as unknown[]) : [value]) {
+          if (isSignalObject(name)) continue
+          need(this.names, name)
+          if (this.owner !== null) this.edge(dataKey(String(name)), this.owner)
+        }
       }
       if (p.kind === 'expression' || (p.kind !== 'value' && isObject(value))) this.parameter(value, p.kind)
       if (isObject(value)) this.lambdas(value, lambdas)
@@ -364,14 +501,46 @@ class Check {
         if (expr) throw new SpecParseError('Signals can not include both init and update expressions.')
         expr = s.init
       }
-      if (expr) this.expression(expr)
+      // (`react: false`: the signal reads its sources, but they do not count it among their targets)
+      if (s.react === false && !this.scope.isGroup) this.unreactive.add('signal:' + String(s.name))
+      if (expr) this.as('signal:' + String(s.name), () => this.expression(expr))
     }
-    if (Array.isArray(s.on)) for (const h of s.on) this.handler(h, lambdas)
+    if (Array.isArray(s.on)) s.on.forEach((h, i) => this.handler(h, lambdas, String(s.name), i))
   }
 
   /** One entry of a signal's `on`: vega-parser's `parseUpdate`. */
-  private handler(h: unknown, lambdas: string[]): void {
+  private handler(h: unknown, lambdas: string[], target = '', index = 0): void {
     if (!isRecord(h)) return
+    // a handler of an operator (a signal, a scale) is an operator itself: it follows its source and writes its signal (vega-dataflow
+    // `on`); one of event streams is not ranked
+    void index
+    this.as(null, () => this.handlerBody(h, lambdas))
+    if (this.scope.isGroup || typeof h.events === 'string') return
+    // vega-parser parseUpdate: several operators are one expression (`[a, scale("x")]`), one is the signal it names, the scale,
+    // or the expression it is (an operator of its own, made after the data sets and scales)
+    const operators = specList(h.events).filter((e): e is Rec => isRecord(e) && !!(e.signal || e.scale))
+    if (!operators.length) return
+    let source: string
+    if (operators.length > 1) {
+      const text = '[' + operators.map((o) => (o.scale ? 'scale("' + (o.scale as string) + '")' : (o.signal as string))).join(',') + ']'
+      source = 'lambda:' + text
+      this.make('lambda', source)
+      for (const id of this.readsOf(text)) this.edge(id, source)
+      for (const o of operators) if (o.scale) this.edge('scale:' + String(o.scale), source)
+    } else if (operators[0]!.scale) source = 'scale:' + String(operators[0]!.scale)
+    else {
+      const text = String(operators[0]!.signal)
+      if (this.scope.hasSignal(text)) source = 'signal:' + text
+      else {
+        source = 'lambda:' + text
+        this.make('lambda', source)
+        for (const id of this.readsOf(text)) this.edge(id, source)
+      }
+    }
+    this.handlers.push({ source, target: 'signal:' + target })
+  }
+
+  private handlerBody(h: Rec, lambdas: string[]): void {
     if (!h.events) throw new SpecParseError('Signal update missing events specification.')
     let events: unknown = h.events
     // (a selector gives streams alone: what they hold is worked out once, and read after the update)
@@ -508,11 +677,18 @@ class Check {
   private objectProperty(value: unknown, lambdas: string[]): void {
     if (!isObject(value)) return
     if (!Array.isArray(value) && value.signal) { this.lambdas(value, lambdas); return }
-    if (holdsSignal(value)) lambdas.push(propertyLambda(value))
+    if (holdsSignal(value)) this.pushLambda(lambdas, propertyLambda(value))
   }
 
   /** `parseMark`, in the order its parts are read: interactivity and clip, the encode sets, the transforms, the sort, the layout, the content of a group, the triggers. */
   private mark(m: Rec, lambdas: string[]): void {
+    // a named mark of the view is a data set (its items) that expressions can read: it reads what its definition reads
+    if (m.name != null) this.make('mark', dataKey(String(m.name)))
+    this.as(m.name != null ? dataKey(String(m.name)) : null, () => this.markDefinition(m, lambdas))
+  }
+
+  private markDefinition(m: Rec, lambdas: string[]): void {
+    if (this.owner !== null && isRecord(m.from) && typeof m.from.data === 'string') this.edge(dataKey(m.from.data), this.owner)
     const group = m.type === 'group'
     const facet = isRecord(m.from) && isRecord(m.from.facet) ? m.from.facet : undefined
     checkFrom(m.from, group, this.names)

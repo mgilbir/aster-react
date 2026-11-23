@@ -48,10 +48,10 @@ import type { CompiledChart, CompiledData, CompiledSignalDef, SceneGroup, SceneI
 import { isEngineNode, keptInto } from './scene-registry.js'
 import { compileExpr, type CompiledExpr, type ExpressionRuntime } from './expression.js'
 import type { Changeset } from './modify.js'
-import { parseExpression, type AstNode } from './expr-parser.js'
 import { normalizeEvents, filterCode } from './stream-defs.js'
 import { parseEventSelectorString, type StreamDef } from './event-selector.js'
-import { array, dict, heldSignalName, ownGet, setOwn, markTupleAlways, MARK_NODE, scopedSignalName, TextTable } from './util.js'
+import { array, dict, heldSignalName, ownGet, setOwn, markTupleAlways, MARK_NODE, scopedSignalName } from './util.js'
+import { dataKey, expressionReads } from './expr-reads.js'
 import { follow, node, Propagation, type SignalNode } from './signal-propagation.js'
 import { consoleLogger, type Logger } from './logger.js'
 import { activeMeter, AsterLimitError, checkRowCount, withLimits, type SpecLimits } from './limits.js'
@@ -487,49 +487,8 @@ function mergeStreams(first: Stream, rest: Stream[]): Stream {
 
 // --- expression helpers ------------------------------------------------------
 
-/** The functions that read a dataset by the name in their first argument (vega-functions' dataVisitor / selectionVisitor). */
-const DATA_READERS = new Set(['data', 'indata', 'vlSelectionTest', 'vlSelectionIdTest', 'vlSelectionResolve'])
-
-/** The key under which an expression's dependence on the dataset `name` is tracked next to its signal names. */
-const dataKey = (name: string): string => `data:${name}`
-
-/** The identifiers an expression reads (signal references, among them), and `data:NAME` for every dataset it reads. */
-const identifiers = new TextTable<Set<string>>('handler identifiers', 2048, 2_000_000)
-function identifiersOf(code: string): Set<string> {
-  // (a host binds again after every render, to the same expressions)
-  let have = identifiers.get(code)
-  if (have === undefined) identifiers.set(code, (have = parseIdentifiers(code)))
-  return have
-}
-function parseIdentifiers(code: string): Set<string> {
-  const out = new Set<string>()
-  const visit = (n: unknown): void => {
-    if (n == null || typeof n !== 'object') return
-    if (Array.isArray(n)) { n.forEach(visit); return }
-    const node = n as AstNode
-    switch (node.type) {
-      case 'Identifier': out.add(node.name as string); return
-      case 'MemberExpression':
-        visit(node.object)
-        if (node.computed) visit(node.property)
-        return
-      case 'CallExpression': {
-        const callee = node.callee as AstNode | undefined
-        const first = (node.arguments as AstNode[])[0]
-        if (callee?.type === 'Identifier' && DATA_READERS.has(callee.name as string) && first?.type === 'Literal' && typeof first.value === 'string') {
-          out.add(dataKey(first.value))
-        }
-        visit(node.arguments)
-        return
-      }
-      case 'Property': visit(node.value); return
-      default:
-        for (const k of Object.keys(node)) if (k !== 'type') visit(node[k])
-    }
-  }
-  visit(parseExpression(code))
-  return out
-}
+/** The identifiers an expression reads, and `data:NAME` for every dataset it reads (expr-reads.ts, shared with the compile walk). */
+const identifiersOf = expressionReads
 
 // --- the binding -------------------------------------------------------------
 
@@ -1454,7 +1413,8 @@ function bindSignalEventsDefs(
         sources.push(s)
         if (react) follow(s, op)
       }
-      guarded(() => flow.connect(op, sources), '')
+      // (a cycle of a group's scope: vega logs it once, when the subflow is built; the view's own are refused when it is compiled)
+      try { flow.connect(op, sources) } catch (e) { once('error', `signal event handler (signal "${op.name}"): ${e instanceof Error ? e.message : String(e)}`) }
     }
 
     // vega-dataflow `on(operator, target, update, params, options)`
@@ -1485,7 +1445,7 @@ function bindSignalEventsDefs(
       follow(source, h)
       h.skip = hs.skip
       follow(h, targetOp)
-      guarded(() => flow.connect(targetOp, [h]), '')
+      try { flow.connect(targetOp, [h]) } catch (e) { once('error', `signal event handler${spec.where}: ${e instanceof Error ? e.message : String(e)}`) }
       handlerOps.push({ op: h, state: hs })
     }
   }
