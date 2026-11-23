@@ -1723,8 +1723,8 @@ function buildSceneIndex(scene: SceneRoot): SceneIndex {
         marktype: markGroup?.marktype ?? p.marktype,
         name: markGroup ? specName(markGroup) : part ? part.name : m?.name ?? (own ? specName(own) : undefined),
         role: markGroup?.role ?? part?.role ?? m?.role ?? own?.role,
-        // (a group item's mark: vega's group mark holds it and its siblings of the same name)
-        ...((p.item as SceneGroup).marktype === 'group' ? { node: groupMarkOf(p.item as SceneGroup, container) } : {}),
+        // (a group item's mark: vega's group mark holds it and its siblings of the same name; a data item's: its mark container)
+        ...((p.item as SceneGroup).marktype === 'group' ? { node: groupMarkOf(p.item as SceneGroup, container) } : markGroup ? { node: markGroup } : {}),
         get group(): PickedItem | null { return enclosing(markGroup ?? p.item) },
       } as PickedItem
     },

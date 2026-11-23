@@ -290,13 +290,23 @@ function intersectGroup(group: SceneGroup, mark: { marktype?: string; name?: str
   box.translate(x, y)
 }
 
-/** The scene node `group` stands for: the mark a picked group item's facade says it belongs to, a group item of the scene itself, or the whole scene. */
+/**
+ * The scene node `group` stands for, as vega reads its third argument (`group || root`, then a mark node only):
+ *  - nothing (any falsy value): the whole scene;
+ *  - a mark node: the `mark` of a picked item's facade (what vega-lite passes as `unit.mark`; signals.ts links it to the scene
+ *    node of the item's mark), or a mark container of the scene itself (it has a `marktype` and items);
+ *  - anything else -- a picked item itself, a datum, a number, the `mark` of a guide part (whose mark has no node of its own
+ *    in Aster's scene) -- is vega's error, 'Intersect scene must be mark node or group item.' (never the whole scene).
+ */
 function sceneOf(scene: SceneRoot | undefined, group: unknown): { mark: SceneGroup } | { group: SceneGroup } | null {
-  if (group != null && typeof group === 'object') {
-    const g = group as Rec
-    const linked = (g.mark as Rec | undefined)?.[MARK_NODE as never] as Rec | undefined
+  if (group) {
+    const g = (typeof group === 'object' ? group : {}) as Rec
+    const linked = g[MARK_NODE as never] as Rec | undefined
     if (linked && Array.isArray(linked.items)) return { mark: linked as unknown as SceneGroup }
-    if (Array.isArray(g.items)) return isLeafMark(g) ? { mark: g as unknown as SceneGroup } : { group: g as unknown as SceneGroup }
+    // (an item's facade carries its `mark`: an item is no mark node, even a group item, which has a marktype and items)
+    const isItem = g.mark !== null && typeof g.mark === 'object'
+    if (!isItem && g.marktype && Array.isArray(g.items)) return { mark: g as unknown as SceneGroup }
+    throw new Error('Intersect scene must be mark node or group item.')
   }
   // vega's root: a group mark holding the root group item, whose marks are the view's
   if (!scene) return null
