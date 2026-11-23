@@ -12,9 +12,14 @@
  * Semantics worth knowing (all verified against the pinned vega in the
  * real-browser parity test, packages/conformance/scripts/browser-signals.mts):
  *
- * - `event` in an update/filter expression is the NATIVE event, extended with
- *   `item`, `vega` and `dataflow` exactly as vega-view does -- `event.deltaY`,
- *   `event.shiftKey`, ... are the browser's own values.
+ * - `event` in an update/filter expression is a read-only FACADE of the event (DECISIONS Q1; see `eventFacade`): the values
+ *   vega expressions observe (`event.deltaY`, `event.shiftKey`, the coordinates, the keys, the touches ...) copied from the
+ *   native event, with `item`, `vega` and `dataflow` as vega-view extends it, and nothing that reaches the page (no target,
+ *   no view, no window, no method). The native event stays inside the loop.
+ * - Event sources are the chart's: `view` events and timers, as `config.events` allows them (vega's `permit`); `window` and
+ *   CSS-selector sources only as far as the host allows (`SignalBindOptions.eventSources`; by default the window's pointer
+ *   moves, ends and resize, which Vega-Lite's drags and container sizing listen to, and no selector) and `config.events`
+ *   permits.
  * - `datum` in an update is `event.item.datum`.
  * - A handler runs only when ITS stream matched. A signal's static `update`
  *   re-runs only when a signal it references changed (not on every event).
@@ -50,7 +55,7 @@ import { parseEventSelectorString, type StreamDef } from './event-selector.js'
 import { array, dict, heldSignalName, ownGet, setOwn, markTupleAlways, MARK_NODE, scopedSignalName, TextTable } from './util.js'
 import { follow, node, Propagation, type SignalNode } from './signal-propagation.js'
 import { consoleLogger, type Logger } from './logger.js'
-import { AsterLimitError, withLimits, type SpecLimits } from './limits.js'
+import { activeMeter, AsterLimitError, checkRowCount, withLimits, type SpecLimits } from './limits.js'
 import type { Timer } from './timer.js'
 import { part } from './engine-parts.js'
 import { clientToSvg } from './pointer.js'
@@ -173,12 +178,36 @@ export interface SignalBindOptions {
    */
   owner?: HostEventTarget
   /**
+   * Which `window` and CSS-selector event sources a spec may listen to (DECISIONS Q1: a spec is confined to its chart). `true` allows
+   * every type, `false` none, a list those types. Default: `window` for the pointer moves, ends and cancels and `resize` (what
+   * Vega-Lite's drags and `width: "container"` listen to: {@link DEFAULT_EVENT_SOURCES}), and no selector source, so a spec cannot
+   * read the page's keystrokes or listen to elements outside the chart. A spec's own `config.events` can only narrow this (vega's
+   * `permit`); a host that renders trusted specs only may widen it.
+   */
+  eventSources?: EventSourcePolicy
+  /**
    * `containerSize()` for the handlers' expressions, read when an event fires (vega: the view container's live
    * `clientWidth` / `clientHeight`). Without it they read the size the scene was evaluated with, which a
    * `window:resize` handler would see a render behind.
    */
   containerSize?: () => [number | undefined, number | undefined]
 }
+
+/** Which `window` and CSS-selector event sources the host lets a spec listen to (see `SignalBindOptions.eventSources`). */
+export interface EventSourcePolicy {
+  window?: boolean | readonly string[]
+  selector?: boolean | readonly string[]
+}
+
+/**
+ * The event sources a binding allows unless its host says otherwise: the window's pointer moves, ends and cancels and its resize
+ * (Vega-Lite drags an interval with `[pointerdown, window:pointerup] > window:pointermove` and follows a `container` size on
+ * `window:resize`); no key, input, clipboard or focus event of the page, and no CSS-selector source.
+ */
+export const DEFAULT_EVENT_SOURCES: Readonly<{ window: readonly string[]; selector: false }> = Object.freeze({
+  window: Object.freeze(['mousemove', 'mouseup', 'pointermove', 'pointerup', 'pointercancel', 'touchmove', 'touchend', 'touchcancel', 'resize']),
+  selector: false,
+})
 
 export interface SignalBinding {
   /**
@@ -193,8 +222,11 @@ export interface SignalBinding {
    * at its next tick even if the host never gets here.
    */
   release: () => void
-  /** Manually set a signal (the imperative path, e.g. brush props). */
-  setSignal: (name: string, value: unknown) => void
+  /**
+   * Set a signal, as vega's `view.signal(name, value)`: the value is stored and its dependents run when it differs from the current
+   * one (`!==`), or always with `{force: true}`. A name the chart does not declare throws `Unrecognized signal name`.
+   */
+  setSignal: (name: string, value: unknown, options?: { force?: boolean }) => void
 }
 
 /**
@@ -236,15 +268,16 @@ interface StreamState {
   deliver: ((e: ExtEvent) => void) | null
 }
 
-const persisted = new WeakMap<EventTarget, Map<string, StreamState>>()
-
 /** A timer stream of one owner: it outlives the bindings (a host re-binds after every render) until `release`. */
 interface TimerState {
   timer: Timer
   /** Delivers a tick into the CURRENT binding (null while unbound). */
   deliver: ((e: ExtEvent) => void) | null
+  /** The element of the binding that last took the timer: whether the chart is still shown, when the owner is not a node. */
+  el: Element
+  /** Whether that element (or the owner) has been in the document. */
+  wasConnected: boolean
 }
-const persistedTimers = new WeakMap<EventTarget, Map<string, TimerState>>()
 
 /**
  * What a `{signal}`-source handler remembers between runs (vega: the handler operator `onOperator` makes): the last value its update
@@ -252,29 +285,64 @@ const persistedTimers = new WeakMap<EventTarget, Map<string, TimerState>>()
  * invocation. It outlives a binding as the operator outlives a render.
  */
 interface HandlerState { value: unknown; skip: boolean }
-const persistedHandlers = new WeakMap<EventTarget, Map<string, HandlerState>>()
 
-/** Stop every timer stream and pending debounce the owner keeps running between bindings. */
+/**
+ * What outlives a binding, for one owner (see `SignalBindOptions.owner`) and ONE chart: the state of its streams (between,
+ * throttle, debounce), its timers, its `{signal}` handlers' memory, what its `{scale}` sources last saw, the warnings already given
+ * and the compiled shell. vega keeps these in the view: a different chart bound to the same owner is a different view, which
+ * starts afresh, and the previous chart's record is released (C40). The chart is the compiled chart object, never its text: two
+ * charts of the same spec are two views.
+ */
+interface OwnerState {
+  chart: object
+  streams: Map<string, StreamState>
+  timers: Map<string, TimerState>
+  handlers: Map<string, HandlerState>
+  scales: Map<string, string>
+  warned: Set<string>
+  shell: BindingShell | undefined
+}
+const owners = new WeakMap<EventTarget, OwnerState>()
+
+/** The record of `chart` on `owner`: kept across its bindings; a different chart's is released first. */
+function ownerStateFor(owner: EventTarget, chart: object): OwnerState {
+  let st = owners.get(owner)
+  if (st !== undefined && st.chart !== chart) {
+    releaseState(st)
+    st = undefined
+  }
+  if (st === undefined) {
+    st = { chart, streams: new Map(), timers: new Map(), handlers: new Map(), scales: new Map(), warned: new Set(), shell: undefined }
+    owners.set(owner, st)
+  }
+  return st
+}
+
+/** Stop everything a record keeps running: timers, pending debounces, and forget the rest. */
+function releaseState(st: OwnerState): void {
+  for (const t of st.timers.values()) {
+    t.deliver = null
+    t.timer.stop()
+  }
+  st.timers.clear()
+  for (const s of st.streams.values()) {
+    if (s.tid) clearTimeout(s.tid)
+    s.tid = null
+    s.evt = null
+    s.deliver = null
+  }
+  st.streams.clear()
+  st.handlers.clear()
+  st.scales.clear()
+  st.shell = undefined
+}
+
+/** Stop every timer stream and pending debounce the owner keeps running between bindings, and forget all it kept. */
 function releaseOwner(owner: EventTarget): void {
-  const timersOf = persistedTimers.get(owner)
-  if (timersOf) {
-    for (const st of timersOf.values()) {
-      st.deliver = null
-      st.timer.stop()
-    }
-    persistedTimers.delete(owner)
-  }
-  persistedHandlers.delete(owner)
-  shells.delete(owner)
-  const streams = persisted.get(owner)
-  if (streams) {
-    for (const st of streams.values()) {
-      if (st.tid) clearTimeout(st.tid)
-      st.tid = null
-      st.evt = null
-      st.deliver = null
-    }
-  }
+  const st = owners.get(owner)
+  if (st === undefined) return
+  releaseState(st)
+  owners.delete(owner)
 }
 type EventDefaults = { prevent?: unknown; allow?: unknown }
 
@@ -302,7 +370,6 @@ interface BindingShell {
   forwarders: Map<string, ExpressionRuntime>
   compiled: Map<string, Map<string, CompiledExpr>>
 }
-const shells = new WeakMap<EventTarget, BindingShell>()
 
 /** Every member an expression runtime may have (the type checks the list is complete). */
 const RUNTIME_KEYS = Object.keys({
@@ -352,8 +419,6 @@ function preventsEvent(d: EventDefaults, viewPreventDefault: boolean, type: stri
     : viewPreventDefault
 }
 
-/** What a binding last saw of each scale named by a `{scale}` event source, per surface (it survives a re-bind). */
-const scaleSnapshots = new WeakMap<EventTarget, Map<string, string>>()
 
 /** A scale's domain and range as one comparable string (Dates by time); `''` for no scale. */
 function scaleImage(scale: unknown): string {
@@ -366,11 +431,9 @@ function scaleImage(scale: unknown): string {
   }
 }
 
-function stateFor(owner: EventTarget, key: string): StreamState {
-  let m = persisted.get(owner)
-  if (!m) persisted.set(owner, (m = new Map()))
-  let st = m.get(key)
-  if (!st) m.set(key, (st = { active: false, last: -1, tid: null, evt: null, deliver: null }))
+function stateFor(state: OwnerState, key: string): StreamState {
+  let st = state.streams.get(key)
+  if (!st) state.streams.set(key, (st = { active: false, last: -1, tid: null, evt: null, deliver: null }))
   return st
 }
 
@@ -530,8 +593,10 @@ export function bindSignalEvents(
   hooks: SignalEventHooks = {},
   opts: SignalBindOptions = {},
 ): SignalBinding {
-  return bindSignalEventsDefs(el, chart.signalDefs ?? [], chart.data ?? [], runtime, signalParams, signals, hooks, opts, chart.eventConfig)
+  return bindSignalEventsDefs(el, chart, chart.signalDefs ?? NO_DEFS, chart.data ?? NO_DATA, runtime, signalParams, signals, hooks, opts, chart.eventConfig)
 }
+const NO_DEFS: CompiledSignalDef[] = []
+const NO_DATA: CompiledData[] = []
 
 /** One `{signal}` event source of a `signal.on` entry, as parsed. */
 interface HandlerSpec {
@@ -552,6 +617,7 @@ interface HandlerSpec {
 
 function bindSignalEventsDefs(
   el: Element,
+  chart: object,
   defs: CompiledSignalDef[],
   dataDefs: CompiledData[],
   sceneRuntime: ExpressionRuntime,
@@ -576,12 +642,13 @@ function bindSignalEventsDefs(
   const originX = opts.originX ?? 0
   const originY = opts.originY ?? 0
   const detachFns: Array<() => void> = []
-  /** what outlives a binding is kept per owner (see SignalBindOptions.owner) */
+  /** what outlives a binding is kept per owner (see SignalBindOptions.owner) and chart */
   const owner: EventTarget = opts.owner ?? el
-  let shell = shells.get(owner)
+  const state = ownerStateFor(owner, chart)
+  let shell = state.shell
   if (shell === undefined || shell.live !== null || shell.el !== el || shell.defs !== defs || shell.dataDefs !== dataDefs) {
     shell = { el, defs, dataDefs, live: null, current: new Map(), forwarders: new Map(), compiled: new Map() }
-    shells.set(owner, shell)
+    state.shell = shell
   }
   const liveToken = {}
   const myShell = shell
@@ -599,6 +666,13 @@ function bindSignalEventsDefs(
       logged.add(e)
     }
     logger.error(`signal event handler${what}: ${e instanceof Error ? e.message : String(e)}`)
+  }
+  /** A problem of the chart itself (a blocked or unresolvable source, a bad handler): told once per chart and owner, as vega tells it once per view. */
+  const once = (kind: 'warn' | 'error', message: string): void => {
+    if (state.warned.has(message)) return
+    state.warned.add(message)
+    if (kind === 'warn') logger.warn(message)
+    else logger.error(message)
   }
 
   // ---- datasets the handlers edit (`modify`) -------------------------------------------------
@@ -633,7 +707,11 @@ function bindSignalEventsDefs(
   // ---- the dataflow: one native event (or setSignal) is one run of it ---------------------------
   // The graph the handlers run in (see signal-propagation.ts): a delivery runs the event handlers (they set their signals
   // and touch them), then the touched nodes, and what they reach, are evaluated in order, once each.
-  const flow = new Propagation((e) => { if (!(e instanceof Logged)) fail('', e) })
+  const flow = new Propagation((e) => { if (!(e instanceof Logged)) fail('', e) }, () => {
+    // every propagation of a delivery after its first (a `modify` pulses its dataset in a run of its own) meets the delivery's
+    // clock: a chain that feeds itself ends at `maxTimeMs`, or at the built-in bound on propagations (signal-propagation.ts)
+    activeMeter()?.clock.check('signal event loop')
+  })
   /** an error already reported by the operator that raised it: the run is abandoned, the report is not repeated */
   class Logged extends Error {}
   /** the signal operators by store key, the dataset operators by name */
@@ -869,11 +947,11 @@ function bindSignalEventsDefs(
   }
 
   // ---- event extension (vega-view events-extend.js) ----------------------------
-  const viewFacade = {
+  const viewFacade = Object.freeze({
     signal: (name: string) => read(name),
     width: () => el.clientWidth,
     height: () => el.clientHeight,
-  }
+  })
   /** A client point in view coordinates (the view's origin, inside its padding). */
   const viewPoint = (src: { clientX: number; clientY: number }): [number, number] => {
     const [x, y] = clientToSvg(el, src.clientX, src.clientY)
@@ -959,12 +1037,16 @@ function bindSignalEventsDefs(
       }
       return p
     }
-    const vega = { view: () => viewFacade, item: () => item || {}, group, xy, x: (it?: unknown) => xy(it)[0], y: (it?: unknown) => xy(it)[1] }
+    const vega = Object.freeze({ view: () => viewFacade, item: () => item || {}, group, xy, x: (it?: unknown) => xy(it)[0], y: (it?: unknown) => xy(it)[1] })
     defineExt(e, 'dataflow', viewFacade)
     defineExt(e, 'item', item)
     defineExt(e, 'vega', vega)
+    facades.set(e, eventFacade(e, item, vega, viewFacade))
     return e
   }
+  /** What an expression sees of a delivered event (`eventFacade`); one made with the extension above. */
+  const facades = new WeakMap<object, object>()
+  const facadeOf = (e: ExtEvent): object => facades.get(e) ?? eventFacade(e, undefined, undefined, viewFacade)
 
   // The view's events, as the renderer hands them over (the SVG's by default: each about the item under its point).
   const viewEvents = (opts.events ?? domViewEvents(el, opts.pick != null)).connect({
@@ -976,7 +1058,7 @@ function bindSignalEventsDefs(
   // ---- stream construction (vega-parser parseStream + vega-runtime stream.js) ---
   const filterFn = (code: string, scope: Scope | null): ((e: ExtEvent) => boolean) => {
     const f = runtimeFor(scope).expr(code)
-    return (e) => Boolean(f(undefined, params(scope), e))
+    return (e) => Boolean(f(undefined, params(scope), facadeOf(e)))
   }
 
   const addListener = (target: EventTarget, type: string, send: (e: Event) => void): void => {
@@ -991,6 +1073,27 @@ function bindSignalEventsDefs(
    * stream a scope makes is its own and its inner scopes', and a sibling scope makes another. Each stream has one DOM
    * listener (a delivery is one dataflow run), and they fire in the order they were made.
    */
+  /**
+   * vega-view `permit(view, key, type)` over `config.events[key]` (`false`: none; a list or an object: the types it names), and for
+   * `window` and selector sources the host's policy (`SignalBindOptions.eventSources`) first. A blocked listener is told once.
+   */
+  const permitted = (key: 'view' | 'window' | 'selector' | 'timer', type: string | number | undefined): boolean => {
+    if (key === 'window' || key === 'selector') {
+      const policy = opts.eventSources?.[key] ?? DEFAULT_EVENT_SOURCES[key]
+      if (policy === false || (Array.isArray(policy) && !policy.includes(String(type)))) {
+        once('warn', `Blocked ${key} ${String(type)} event listener (the host allows ${key === 'window' ? 'window sources for pointer moves, ends and resize only' : 'no CSS-selector source'}: see SignalBindOptions.eventSources).`)
+        return false
+      }
+    }
+    const rule = (eventConfig as Record<string, unknown> | undefined)?.[key]
+    const allowed = rule === false ? false
+      : rule === null || typeof rule !== 'object' ? true
+      : Array.isArray(rule) && key !== 'timer' ? rule.includes(type as never)
+      : !!(rule as Record<string, unknown>)[String(type)]
+    if (!allowed) once('warn', `Blocked ${key} ${String(type)} event listener.`)
+    return allowed
+  }
+
   const rootFor = (scope: Scope | null, source: string, type: string | number | undefined): Stream => {
     const suffix = '\u0000' + source + ':' + type
     for (let sc: Scope | null = scope; ; sc = sc.parent) {
@@ -1009,19 +1112,19 @@ function bindSignalEventsDefs(
       })
     }
     if (source === 'timer') {
+      if (!permitted('timer', type)) return s
       // vega-view `view.timer(send, delay)`: d3-timer's `interval(tick, delay)` (no delay: every frame), whose tick hands
-      // the stream `{timestamp, elapsed}`. One timer per owner, scope and delay, alive across re-bindings.
-      let byDelay = persistedTimers.get(owner)
-      if (!byDelay) persistedTimers.set(owner, (byDelay = new Map()))
+      // the stream `{timestamp, elapsed}`. One timer per owner, chart, scope and delay, alive across re-bindings.
+      const byDelay = state.timers
       let st = byDelay.get(key)
       if (!st) {
-        const fresh: TimerState = { timer: undefined as unknown as Timer, deliver: null }
-        let wasConnected = false
+        const fresh: TimerState = { timer: undefined as unknown as Timer, deliver: null, el, wasConnected: false }
         fresh.timer = part('timer').timers.interval((elapsed) => {
-          // an owner that has left the document no longer ticks (a host that forgot `release`)
-          const connected = (owner as Partial<Node>).isConnected ?? el.isConnected
-          if (connected) wasConnected = true
-          else if (wasConnected) {
+          // A chart that is no longer shown no longer ticks (a host that forgot `release`): the owner when it is a node, else the
+          // element of the binding that last took the timer, has left the document; or it was never in it and nothing is bound.
+          const shown = typeof (owner as Partial<Node>).isConnected === 'boolean' ? (owner as Node).isConnected : fresh.el.isConnected
+          if (shown) fresh.wasConnected = true
+          else if (fresh.wasConnected || fresh.deliver === null) {
             releaseOwner(owner)
             return
           }
@@ -1037,6 +1140,7 @@ function bindSignalEventsDefs(
         try { deliverTo(s, e, false, {} as Event) } finally { timerTick = false }
       }
       st.deliver = mine
+      st.el = el
       const owned = st
       detachFns.push(() => { if (owned.deliver === mine) owned.deliver = null })
       return s
@@ -1054,14 +1158,22 @@ function bindSignalEventsDefs(
       }
       if (source === 'view') {
         // (vega's handlers say which of the types they listen to an event was handed over as: `event.vegaType`)
-        viewEvents.on(String(type), (e, item, vegaType) => { defineExt(e, 'vegaType', vegaType ?? String(type)); deliver(e as ExtEvent, true, e, item) })
-      } else if (source === 'window') {
-        if (typeof window !== 'undefined') addListener(window, String(type), (e) => deliver(e as ExtEvent, false, e))
-        else logger.warn('Can not resolve event source: window')
-      } else if (typeof document !== 'undefined') {
-        for (const el of Array.from(document.querySelectorAll(source))) addListener(el, String(type), (e) => deliver(e as ExtEvent, false, e))
+        if (permitted('view', type)) viewEvents.on(String(type), (e, item, vegaType) => { defineExt(e, 'vegaType', vegaType ?? String(type)); deliver(e as ExtEvent, true, e, item) })
       } else {
-        logger.warn('Can not resolve event source: ' + source)
+        // vega-view events.js: a window or selector source the config does not permit is not resolved
+        let targets: EventTarget[] | null = null
+        if (source === 'window') {
+          if (permitted('window', type) && typeof window !== 'undefined') targets = [window]
+        } else if (typeof document !== 'undefined' && permitted('selector', type)) {
+          try {
+            targets = Array.from(document.querySelectorAll(source))
+          } catch (e) {
+            // (an invalid selector: vega's view fails to build; here the chart is told once and the source is not bound)
+            once('error', `signal event handler: ${e instanceof Error ? e.message : String(e)}`)
+          }
+        }
+        if (targets === null) once('warn', 'Can not resolve event source: ' + source)
+        else for (const t of targets) addListener(t, String(type), (e) => deliver(e as ExtEvent, false, e))
       }
     }
     streams.push(s)
@@ -1098,7 +1210,7 @@ function bindSignalEventsDefs(
       if (def.between.length !== 2) throw new Error('Stream "between" parameter must have 2 entries: ' + JSON.stringify(def))
       const a = buildStream(def.between[0]!, keyBase, scope)
       const b = buildStream(def.between[1]!, keyBase, scope)
-      const st = stateFor(owner, `${keyBase}|between${id}`)
+      const st = stateFor(state, `${keyBase}|between${id}`)
       const on = new Stream(); on.recv = () => { st.active = true }
       const off = new Stream(); off.recv = () => { st.active = false }
       a.targets.push(on)
@@ -1113,7 +1225,7 @@ function bindSignalEventsDefs(
     }
     if (def.throttle != null) {
       const pause = +def.throttle
-      const st = stateFor(owner, `${keyBase}|throttle${id}`)
+      const st = stateFor(state, `${keyBase}|throttle${id}`)
       s = filtered(s, () => {
         const now = Date.now()
         if (now - st.last > pause) { st.last = now; return true }
@@ -1123,7 +1235,7 @@ function bindSignalEventsDefs(
     if (def.debounce != null) {
       const delay = +def.debounce
       const out = new Stream()
-      const st = stateFor(owner, `${keyBase}|debounce${id}`)
+      const st = stateFor(state, `${keyBase}|debounce${id}`)
       const mine = (e: ExtEvent): void => run(() => out.receive(e))
       st.deliver = mine
       detachFns.push(() => { if (st.deliver === mine) st.deliver = null })
@@ -1177,7 +1289,7 @@ function bindSignalEventsDefs(
           else if (upd.kind === 'signal' && !ownerOf(scope, upd.name) && !Object.hasOwn(signals, upd.name) && !Object.hasOwn(signalParams, upd.name)) compiled = rt.expr(upd.name)
           const evaluate = (e: unknown): unknown =>
             compiled ? compiled(undefined, params(scope), e) : upd.kind === 'value' ? upd.value : read((upd as { name: string }).name, scope)
-          const terminal = (e: ExtEvent): void => update(target, signal.name, evaluate(e), force)
+          const terminal = (e: ExtEvent): void => update(target, signal.name, evaluate(facadeOf(e)), force)
           for (const def of streams) {
             const stream = buildStream(def as StreamDef, keyBase, scope)
             const sink = new Stream()
@@ -1257,7 +1369,10 @@ function bindSignalEventsDefs(
         const cs = pulsed.get(name)
         if (!cs) return
         pulsed.delete(name)
-        inputRows.set(name, part('modify').applyChangeset(rawOf(name), cs, writable))
+        const rows = part('modify').applyChangeset(rawOf(name), cs, writable)
+        // (under limits a dataset an event edits stays within `maxRows`, as any dataset does)
+        checkRowCount(rows.length, `dataset "${name}" edited by an event`)
+        inputRows.set(name, rows)
         liveRows.delete(name)
         notified.edited.add(name)
       })
@@ -1328,8 +1443,7 @@ function bindSignalEventsDefs(
     }
 
     // vega-dataflow `on(operator, target, update, params, options)`
-    let states = persistedHandlers.get(owner)
-    if (!states) persistedHandlers.set(owner, (states = new Map()))
+    const states = state.handlers
     for (const { spec, source, consumedAtInit } of built) {
       const targetKey = keyOf(spec.target, spec.targetName)
       const targetOp = signalOps.get(targetKey)
@@ -1364,8 +1478,8 @@ function bindSignalEventsDefs(
   // A scale event is a scale that was recomputed. The host binds again after every render, so the scales of this
   // scene are compared with those the loop saw last: a scale that differs fires its handlers, as one run.
   if (scaleHandlers.length) {
-    const seen = scaleSnapshots.get(el) ?? new Map<string, string>()
-    scaleSnapshots.set(el, seen)
+    // (per owner and chart, as everything that outlives a binding: a host that replaces its element still has its scales)
+    const seen = state.scales
     const changed = new Set<string>()
     for (const name of new Set(scaleHandlers.flatMap((h) => [...h.scales]))) {
       const now = scaleImage(sceneRuntime.scale(name))
@@ -1381,10 +1495,13 @@ function bindSignalEventsDefs(
   }
 
   // Debounced deliveries re-enter the current binding; a re-bind reclaims them.
-  const setSignal = (name: string, value: unknown): void => {
+  const setSignal = (name: string, value: unknown, options?: { force?: boolean }): void => {
     if (name == null) return
     const hit = scopeByKey.get(name)
-    run(() => (hit ? update(hit.scope, hit.name, value, true) : update(null, name, value, true)))
+    // vega-view `signal(name, value)`: an undeclared name throws; a value equal to the current one changes nothing unless forced
+    if (!hit && !rootNames.has(name) && !Object.hasOwn(signalParams, name)) throw new Error(`Unrecognized signal name: "${name}"`)
+    const force = options?.force === true
+    run(() => (hit ? update(hit.scope, hit.name, value, force) : update(null, name, value, force)))
   }
 
   return {
@@ -1397,6 +1514,57 @@ function bindSignalEventsDefs(
     },
     setSignal,
   }
+}
+
+/**
+ * The values of an event an expression may observe (DECISIONS Q1): what a pointer, a wheel, a key, a touch or a timer tick says,
+ * read off the native event when it is delivered. Nothing else of it is handed over: no target or current target node, no view
+ * (window), no path, no method (`preventDefault` is the spec's `consume` and the event config's, not an expression's).
+ */
+export const EVENT_FACADE_FIELDS: readonly string[] = Object.freeze([
+  'type', 'vegaType', 'timeStamp', 'detail', 'defaultPrevented', 'isTrusted',
+  'button', 'buttons', 'clientX', 'clientY', 'pageX', 'pageY', 'screenX', 'screenY', 'offsetX', 'offsetY', 'x', 'y', 'movementX', 'movementY',
+  'altKey', 'ctrlKey', 'metaKey', 'shiftKey', 'key', 'code', 'keyCode', 'which', 'charCode', 'location', 'repeat', 'isComposing',
+  'deltaX', 'deltaY', 'deltaZ', 'deltaMode',
+  'pointerId', 'pointerType', 'pressure', 'tangentialPressure', 'tiltX', 'tiltY', 'twist', 'width', 'height', 'isPrimary',
+  'scale', 'rotation',
+  // a timer tick (vega-view's `{timestamp, elapsed}`)
+  'timestamp', 'elapsed',
+])
+/** What a touch of `touches` / `changedTouches` / `targetTouches` says (`pinchDistance` reads `clientX` / `clientY`). */
+const TOUCH_FIELDS = ['identifier', 'clientX', 'clientY', 'pageX', 'pageY', 'screenX', 'screenY', 'radiusX', 'radiusY', 'rotationAngle', 'force']
+const TOUCH_LISTS = ['touches', 'changedTouches', 'targetTouches']
+
+/** The primitive values of `fields` on `src`, on an object with no prototype. */
+function copyFields(src: object, fields: readonly string[]): Record<string, unknown> {
+  const out = Object.create(null) as Record<string, unknown>
+  for (const f of fields) {
+    let v: unknown
+    try { v = (src as Record<string, unknown>)[f] } catch { continue }
+    if (typeof v === 'number' || typeof v === 'string' || typeof v === 'boolean') out[f] = v
+  }
+  return out
+}
+
+/**
+ * The event an expression sees: a frozen object with no prototype holding the fields above as they were when the event was
+ * delivered, its touches as frozen copies, and the extension vega-view gives it (`item`: the scenegraph item facade, `vega`: the
+ * event functions, `dataflow`: the view facade). Expressions run in the sandbox of expr-interpreter.ts and cannot call anything they
+ * read, so what they can reach is exactly this graph: the test that enumerates it checks that nothing in it belongs to the page.
+ */
+function eventFacade(e: object, item: unknown, vega: object | undefined, dataflow: object): object {
+  const out = copyFields(e, EVENT_FACADE_FIELDS)
+  for (const list of TOUCH_LISTS) {
+    const touches = (e as Record<string, unknown>)[list] as ArrayLike<object> | undefined
+    if (touches == null || typeof touches.length !== 'number') continue
+    const copies: object[] = []
+    for (let i = 0; i < touches.length; i++) copies.push(Object.freeze(copyFields(touches[i]!, TOUCH_FIELDS)))
+    out[list] = Object.freeze(copies)
+  }
+  if (item !== undefined) out.item = item
+  if (vega !== undefined) out.vega = vega
+  out.dataflow = dataflow
+  return Object.freeze(out)
 }
 
 function defineExt(e: object, key: string, value: unknown): void {
@@ -1775,7 +1943,7 @@ export function bindSceneSignals(
   scene: SceneRoot,
   signals: Record<string, unknown>,
   hooks: SignalEventHooks = {},
-  opts: Pick<SignalBindOptions, 'pick' | 'data' | 'owner' | 'containerSize' | 'events'> = {},
+  opts: Pick<SignalBindOptions, 'pick' | 'data' | 'owner' | 'containerSize' | 'events' | 'eventSources'> = {},
 ): SignalBinding {
   const chart = scene.compiled
   const runtime = scene.runtime

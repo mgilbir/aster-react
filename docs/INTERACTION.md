@@ -291,15 +291,20 @@ export function Signals(): React.ReactElement {
   `config.events.defaults` leaves alone (default `{allow: ['wheel']}`; `prevent` / `allow` lists or booleans as in vega, a `consume`d
   stream always prevents), so dragging a brush selects no text and a wheel still scrolls the page. The `preventDefault` prop is
   vega's `view.preventDefault()`: the verdict when the config names neither `prevent` nor `allow`;
+  `config.events.view`, `.window`, `.selector` and `.timer` block listeners as vega's `permit` does (`false`, or the types
+  listed), and `window` / selector sources are further confined by the host (`eventSources`; by default the window's pointer
+  moves, ends and `resize`, no selector: see [LIMITS.md](LIMITS.md#interactive-charts-and-untrusted-specs-the-threat-model-of-the-event-loop));
   `logger` receives bind-time and run-time errors of the handlers.
 
 ### Timers and animation
 
 `timer` event streams (`{"type": "timer", "throttle": 16.7}`, `"timer{100}"`) run on a scheduler with d3-timer's schedule (the one
 vega-view uses), so ticks fall on the same instants with the same `{timestamp, elapsed}` (`pnpm conformance:signals` drives
-real vega and Aster on one fake browser clock and compares frames). The timers belong to the chart's host element, not
-to one rendered SVG: a re-bind after each render keeps the schedule, and they stop when the chart unmounts, when the host
-element is removed from the document, or on `binding.release()` (vega's `view.finalize()`); nothing is left scheduled.
+real vega and Aster on one fake browser clock and compares frames). The timers belong to the chart's host element (and to
+the compiled chart: a different chart bound to the same host stops the previous one's), not to one rendered SVG: a re-bind
+after each render keeps the schedule, and they stop when the chart unmounts, when the host element (or, for an `owner` that
+is not an element, the element last bound) is removed from the document, when an element that was never shown has nothing
+bound to it, or on `binding.release()` (vega's `view.finalize()`); nothing is left scheduled.
 `bindSceneSignals` takes `owner` (the element the timers belong to; `<Chart>` passes its host) and `setTimerClock(clock | null)` from
 `@aster-charts/core/signals` swaps the scheduler's clock (`{ now, setTimeout, clearTimeout, setInterval, clearInterval, requestFrame }`)
 for a controlled one (tests, hosts that step frames themselves); `null` restores the host's globals, and it should only be
