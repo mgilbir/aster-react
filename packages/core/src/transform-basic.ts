@@ -12,7 +12,7 @@
 import { accessorName, array, error, one, toNumber } from './util.js'
 import { compareOf, fieldOf, fieldsOf, flattenLength, lcg, numberRange, required, SEED, sortBySpec, stableSortBy, type Row } from './row-keys.js'
 import { quantile } from './arr.js'
-import { checkRowCount, meterTick } from './limits.js'
+import { allotUpTo, meterTick } from './limits.js'
 export { numberRange, required } from './row-keys.js'
 import type { IdCounter } from './identifier-ids.js'
 import { orderOf } from './tuple-order.js'
@@ -78,9 +78,10 @@ export function foldRows(rows: Row[], p: Params): Row[] {
   const as = (p.as ?? ['key', 'value']) as string[]
   const keyName = as[0] as string
   const valueName = as[1] as string
-  checkRowCount(rows.length * fields.length, 'fold')
+  allotUpTo('rows', rows.length * fields.length, 'fold', rows.length)
   const out: Row[] = []
   for (const row of rows) {
+    // bounded: the spec's fields; the row loop ticks with their count, and rows x fields was allotted above
     for (let i = 0; i < fields.length; ++i) {
       const folded = { ...row }
       folded[keyName] = names[i]
@@ -104,13 +105,17 @@ export function flattenRows(rows: Row[], p: Params): Row[] {
   const sizes = record !== undefined ? new Array<number>(rows.length) : undefined
   for (let r = 0; r < rows.length; r++) {
     const row = rows[r]!
+    // bounded: the spec's fields
     const arrays = fields.map((f) => f(row)) as ArrayLike<unknown>[]
     const length = flattenLength(arrays)
     if (sizes !== undefined) sizes[r] = length > 0 ? length : 0
-    // the length comes from the data: bound it before the loop
-    checkRowCount(out.length + (length > 0 ? length : 0), 'flatten')
+    // the length comes from the data: bound the rows made so far and this row's before the loop (the rows given are not
+    // amplification: only what the arrays add beyond them is under the ceiling)
+    allotUpTo('rows', out.length + (length > 0 ? length : 0), 'flatten', rows.length)
+    // bounded: allotted just above; the row loop ticks with this row's length
     for (let i = 0; i < length; ++i) {
       const flat = { ...row }
+      // bounded: the spec's fields
       for (let j = 0; j < names.length; ++j) {
         const element = arrays[j]![i]
         flat[names[j]!] = element == null ? null : element
@@ -118,7 +123,7 @@ export function flattenRows(rows: Row[], p: Params): Row[] {
       if (indexName) flat[indexName] = i
       out.push(flat)
     }
-    meterTick('flatten', 1)
+    meterTick('flatten', 1 + (length > 0 ? length : 0))
   }
   if (record !== undefined) recorded(record, { kind: 'flatten', fields: p.fields, sizes: sizes! })
   return out
@@ -135,6 +140,7 @@ export function projectRows(rows: Row[], p: Params): Row[] {
   const names = fields.map((f, i) => (given[i] || accessorName(f)) as string)
   return rows.map((row) => {
     const projected: Row = {}
+    // bounded: the spec's fields
     for (let i = 0; i < fields.length; ++i) projected[names[i]!] = fields[i]!(row)
     return projected
   })
@@ -205,6 +211,7 @@ export function lookupRows(rows: Row[], p: Params, source: readonly Row[], owned
       let at = 0
       for (let i = 0; i < probes.length; i++) {
         const found = matches.get(String(probes[i]!(row)))
+        // bounded: the spec's lookup keys and values
         for (let j = 0; j < values.length; j++) row[names[at++]!] = found == null ? fallback : values[j]!(found)
       }
     }
@@ -298,6 +305,7 @@ export function imputeRows(rows: Row[], p: Params): Row[] {
     const key = keyRead(row)
     let slot = slotOf.get(String(key))
     if (slot === undefined) { slot = domain.push(key) - 1; slotOf.set(String(key), slot) }
+    // bounded: the spec's groupby fields
     const groupValues = by ? by.map((g) => g(row)) : []
     // (groups are told apart by the joined string of their values: null, undefined and '' are one, and so on)
     const groupKey = groupValues + ''
@@ -307,12 +315,14 @@ export function imputeRows(rows: Row[], p: Params): Row[] {
   }
 
   const added: Row[] = []
-  checkRowCount(rows.length + groups.size * domain.length, 'impute')
+  allotUpTo('rows', rows.length + groups.size * domain.length, 'impute', rows.length)
   for (const group of groups.values()) {
     let value: unknown = NaN
+    // bounded: groups x domain was allotted above; the group loop ticks with the domain's length
     for (let slot = 0; slot < domain.length; ++slot) {
       if (group.slots[slot] != null) continue
       const row: Row = { _impute: true }
+      // bounded: the spec's groupby values
       for (let i = 0; i < group.by.length; i++) row[byNames[i]!] = group.by[i]
       row[keyName] = domain[slot]
       row[fieldName] = Number.isNaN(value) ? (value = imputed(group.slots, read)) : value
@@ -358,6 +368,7 @@ export function stackRows(rows: Row[], p: Params, owned = false): Row[] {
     groups = []
     for (let i = 0; i < out.length; i++) {
       const row = out[i]!
+      // bounded: the spec's groupby fields
       const key = JSON.stringify(by.map((g) => g(row)))
       let group = byKey.get(key)
       if (!group) { byKey.set(key, (group = { rows: [], total: 0, made: order ? [] : undefined })); groups.push(group) }
@@ -368,6 +379,7 @@ export function stackRows(rows: Row[], p: Params, owned = false): Row[] {
   let widest = 0
   for (const group of groups) {
     let total = 0
+    // bounded: a group's rows: the groups partition the rows, so this is one pass over them in all
     for (let i = 0; i < group.rows.length; i++) total += Math.abs(valueOf(group.rows[i]) as number)
     group.total = total
     if (total > widest) widest = total
@@ -382,6 +394,7 @@ export function stackRows(rows: Row[], p: Params, owned = false): Row[] {
     const n = members.length
     if (offset === 'center') {
       let end = (widest - total) / 2
+      // bounded: a group's rows: the groups partition the rows, so this is one pass over them in all
       for (let i = 0; i < n; i++) {
         const row = members[i]!
         row[lowName] = end
@@ -391,6 +404,7 @@ export function stackRows(rows: Row[], p: Params, owned = false): Row[] {
       const scale = 1 / total
       let end = 0
       let running = 0
+      // bounded: a group's rows: the groups partition the rows, so this is one pass over them in all
       for (let i = 0; i < n; i++) {
         const row = members[i]!
         row[lowName] = end
@@ -399,6 +413,7 @@ export function stackRows(rows: Row[], p: Params, owned = false): Row[] {
     } else {
       let above = 0
       let below = 0
+      // bounded: a group's rows: the groups partition the rows, so this is one pass over them in all
       for (let i = 0; i < n; i++) {
         const row = members[i]!
         const v = +(valueOf(row) as number)
@@ -460,6 +475,7 @@ function binStep(p: Params, span: number, maxBins: number, base: number): number
     const steps = p.steps as number[]
     const wanted = span / maxBins
     let below = 0
+    // bounded: the spec's list of steps
     while (below < steps.length && steps[below]! < wanted) ++below
     return steps[Math.max(0, below - 1)]!
   }
@@ -468,6 +484,7 @@ function binStep(p: Params, span: number, maxBins: number, base: number): number
   const level = Math.ceil(Math.log(maxBins) / logBase)
   let step = Math.max(minStep, Math.pow(base, Math.round(Math.log(span) / logBase) - level))
   // coarser while too many bins; a base that cannot make it coarser would loop for ever, so it is refused
+  // bounded: at most 1 000 000 coarsenings (the guard), refused past that
   for (let guard = 0; Math.ceil(span / step) > maxBins; guard++) {
     const coarser = step * base
     if (!(coarser > step) || guard > 1_000_000) {

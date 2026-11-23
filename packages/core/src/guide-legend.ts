@@ -5,6 +5,7 @@
  * property becomes a channel of an item.
  */
 import { markTuple, markTuples } from './util.js'
+import { allot } from './limits.js'
 import type { EncodeValue, SceneGroup, SceneItem } from './types.js'
 import { Bounds, boundLeaf, boundLegendGroup, boundStroke, multiLineOffset } from './bounds.js'
 import { placeGrid } from './trellis.js'
@@ -90,6 +91,9 @@ function listEntries(p: EntriesParams): LegendEntry[] {
   const count = tickCount(scale as never, p.count == null ? 5 : p.count, p.minstep)
   const format = labelFormat(p.locale, scale as never, count, type, p.formatSpecifier, p.formatType, !!p.values || type === SymbolLegend)
   const values: LabelValues = (p.values as LabelValues | undefined) || labelValues(scale as never, count)
+  // (every entry is a few scene items, like an axis tick: the entries listed are bounded as the ticks an axis draws are, before
+  // they are made; a symbol legend lists no more than its limit)
+  const listed = (n: number): void => { allot('items', n, 'legend entries') }
 
   if (type === SymbolLegend) {
     const roomOf = p.size!
@@ -99,6 +103,7 @@ function listEntries(p: EntriesParams): LegendEntry[] {
     if (cut) p.warn('Symbol legend count exceeds limit, filtering items.')
     // (a slice is a plain list: it has lost the `max` of the intervals' last upper end)
     let shown: unknown[] = cut ? values.slice(0, limit - 1) : values
+    listed(shown.length + (cut ? 1 : 0))
     // a first value that maps to nothing (size 0) is not listed unless the values were given
     if (!p.values && (scale as (v: unknown) => unknown)(shown[0]) === 0) shown = shown.slice(1)
     const offset = shown.reduce((widest: number, v) => Math.max(widest, roomOf(v)), 0)
@@ -117,10 +122,12 @@ function listEntries(p: EntriesParams): LegendEntry[] {
     const fraction = scaleFraction(scale as never, first, last)
     // generated labels that come to two or fewer are replaced by the two ends of the domain
     const labelled = values.length < 3 && !p.values && first !== last ? [first, last] : values
+    listed(labelled.length)
     return labelled.map((v, index) => ({ index, label: format(v, index, labelled as LabelValues), value: v, perc: fraction(v as number) as number }))
   }
   // bands: each value starts one and the next value ends it (the last ends at 1)
   const fraction = labelFraction(scale as never)
+  listed(values.length)
   return values.map((v, index) => ({
     index, label: format(v, index, values), value: v,
     perc: index ? fraction(v) : 0,

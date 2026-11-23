@@ -23,7 +23,7 @@ import { itemArcGeometry } from './render.js'
 import { insidePolys, type Poly } from './path-flatten.js'
 import { arcLocalPolys, pathMarkPolys, pathPolys, transformPolys } from './geometry-read.js'
 import { MARK_NODE } from './util.js'
-import { ceiling, HARD_CAPS, meterTick } from './limits.js'
+import { allot, HARD_CAPS, meterTick } from './limits.js'
 import type { SceneGroup, SceneItem, SceneRoot } from './types.js'
 
 type Rec = Record<string, unknown>
@@ -152,20 +152,20 @@ function latticeInside(polys: Poly[], x1: number, y1: number, x2: number, y2: nu
   // (the work: each row's crossings, then each candidate point tested against every edge; counted as it is done, after a
   // check that the rows' crossings alone fit)
   let work = (r1 - r0 + 1) * edges
-  if (!(Math.abs(x1) <= SAFE && Math.abs(x2) <= SAFE && Math.abs(r0) <= SAFE && Math.abs(r1) <= SAFE)) ceiling('latticeTests', Infinity, 'intersect() lattice tests (a region beyond 2^52)')
-  ceiling('latticeTests', work, 'intersect() lattice tests')
+  if (!(Math.abs(x1) <= SAFE && Math.abs(x2) <= SAFE && Math.abs(r0) <= SAFE && Math.abs(r1) <= SAFE)) allot('latticeTests', Infinity, 'intersect() lattice tests (a region beyond 2^52)')
+  allot('latticeTests', work, 'intersect() lattice tests')
   work = 0
   const xs: number[] = []
   const ws: number[] = []
   const order: number[] = []
   const test = (x: number, y: number): boolean => {
     if (!(x >= x1 && x <= x2)) return false
-    if ((work += edges) > HARD_CAPS.latticeTests) ceiling('latticeTests', work, 'intersect() lattice tests')
+    if ((work += edges) > HARD_CAPS.latticeTests) allot('latticeTests', work, 'intersect() lattice tests')
     return insidePolys(polys, x, y)
   }
   for (let y = r0; y <= r1; y++) {
     meterTick('intersect() lattice rows')
-    if ((work += edges) > HARD_CAPS.latticeTests) ceiling('latticeTests', work, 'intersect() lattice tests')
+    if ((work += edges) > HARD_CAPS.latticeTests) allot('latticeTests', work, 'intersect() lattice tests')
     xs.length = 0
     ws.length = 0
     for (const { pts } of polys) {

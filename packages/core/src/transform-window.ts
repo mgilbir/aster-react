@@ -42,6 +42,7 @@ function cumulativeShare(): (at: Position) => number {
   return ({ rows, index, compare }) => {
     let i = index
     if (last < i) {
+      // bounded: `last` only moves forward: one pass over the partition in all
       while (i + 1 < rows.length && !compare(rows[i], rows[i + 1])) ++i
       last = i
     }
@@ -162,6 +163,7 @@ const clamp = (x: number, lo: number, hi: number): number => (x < lo ? lo : x > 
 function lowerBound(rows: Row[], target: Row, compare: Compare): number {
   let lo = 0
   let hi = rows.length
+  // bounded: binary search: log2 of the rows
   while (lo < hi) {
     const mid = (lo + hi) >>> 1
     if (compare(rows[mid], target) < 0) lo = mid + 1
@@ -174,6 +176,7 @@ function lowerBound(rows: Row[], target: Row, compare: Compare): number {
 function upperBound(rows: Row[], target: Row, compare: Compare): number {
   let lo = 0
   let hi = rows.length
+  // bounded: binary search: log2 of the rows
   while (lo < hi) {
     const mid = (lo + hi) >>> 1
     if (compare(rows[mid], target) <= 0) lo = mid + 1
@@ -204,6 +207,7 @@ export function windowRows(rows: readonly Row[], p: WindowParams, random: () => 
     const sorted = sort ? stableSortBy(partition, sort, made[part]) : partition
     const n = sorted.length
     const at: Position = { rows: sorted, index: 0, lo: 0, hi: 0, compare: sort || noOrder }
+    // bounded: the spec's window functions
     const functions = plan.functions.map((f) => f.make())
     measures?.reset()
     for (let i = 0; i < n; ++i) {
@@ -222,10 +226,13 @@ export function windowRows(rows: readonly Row[], p: WindowParams, random: () => 
       at.hi = hi
       const row = sorted[i]!
       if (measures) {
+        // bounded: the frame's ends only move forward: each row leaves the frame once per partition; the row loop ticks
         for (let j = prevLo; j < lo; ++j) measures.remove(sorted[j]!)
+        // bounded: the frame's ends only move forward: each row enters the frame once per partition; the row loop ticks
         for (let j = prevHi; j < hi; ++j) measures.add(sorted[j]!)
         measures.writeTo(row)
       }
+      // bounded: the spec's window functions
       for (let j = 0; j < functions.length; ++j) row[plan.functions[j]!.out] = functions[j]!(at)
       meterTick('window', 1)
     }

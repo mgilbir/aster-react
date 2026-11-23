@@ -46,6 +46,7 @@ export function tidyTree(root: HierNode, o: TreeOptions): void {
     const children = nodes[v]!.children
     kidStart[v] = cursor
     kidCount[v] = children.length
+    // bounded: the children of one node: each node is the child of one other
     for (let i = 0; i < children.length; ++i) {
       const c = numberOf.get(children[i]!)!
       kids[cursor++] = c
@@ -107,6 +108,7 @@ export function tidyTree(root: HierNode, o: TreeOptions): void {
     let sop = mod[vop]!
     let sim = mod[vim]!
     let som = mod[vom]!
+    // bounded: down the two facing contours of the subtrees: at most the shallower one's depth
     for (;;) {
       vim = nextRight(vim)
       vip = nextLeft(vip)
@@ -211,8 +213,10 @@ export function clusterTree(root: HierNode, o: TreeOptions): void {
   })
 
   let left = root
+  // bounded: down the leftmost path: at most the tree's depth
   while (left.children.length) left = left.children[0]!
   let right = root
+  // bounded: down the rightmost path: at most the tree's depth
   while (right.children.length) right = right.children[right.children.length - 1]!
   const x0 = left.x - separation(left, right) / 2
   const x1 = right.x + separation(right, left) / 2

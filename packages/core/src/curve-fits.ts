@@ -14,7 +14,7 @@
  * Derived work: the loess smoother follows the local-regression algorithm of Jason Davies' science.js, the polynomial fit the
  * normal-equation method of d3-regression / regression-js (BSD-3-Clause; the notices are in THIRD_PARTY_NOTICES.md).
  */
-import { checkGeneratedRows, meterTick } from './limits.js'
+import { allot, allotUpTo, meterTick } from './limits.js'
 import { sortData } from './util.js'
 import type { Row } from './transform-agg.js'
 
@@ -213,17 +213,23 @@ function polynomialFit(rows: Row[], x: Get, y: Get, order: number): Fit {
   const { xs: cx, ys: cy, meanX, meanY } = centred(p)
   const n = cx.length
   const size = order + 1
+  // `order` is the spec's: the moments take size^2 passes over the points and the solve size^3 steps, bounded before either
+  allot('work', size * size * (n + size), 'regression order')
   // the augmented system, stored by column: columns[j][i] is the entry of row i in column j (the matrix is symmetric); the last
   // column is the right-hand side
   const columns: Array<Float64Array | number[]> = []
   const rhs: number[] = []
   for (let i = 0; i < size; ++i) {
+    meterTick('regression', size * n)
     let moment = 0
+    // bounded: the points; the loop around it ticks with size x n
     for (let l = 0; l < n; ++l) moment += Math.pow(cx[l]!, i) * cy[l]!
     rhs.push(moment)
     const column = new Float64Array(size)
+    // bounded: size is the regression's order + 1, allotted as work above; the loop around it ticks with size x n
     for (let j = 0; j < size; ++j) {
       moment = 0
+      // bounded: the points; the loop around it ticks with size x n
       for (let l = 0; l < n; ++l) moment += Math.pow(cx[l]!, i + j)
       column[j] = moment
     }
@@ -235,6 +241,7 @@ function polynomialFit(rows: Row[], x: Get, y: Get, order: number): Fit {
   const predict = (v: number): number => {
     v -= meanX
     let out = meanY + centredCoef[0]! + centredCoef[1]! * v + centredCoef[2]! * v * v
+    // bounded: size is the regression's order + 1, allotted as work when the fit was made
     for (let i = 3; i < size; ++i) out += centredCoef[i]! * Math.pow(v, i)
     return out
   }
@@ -244,11 +251,13 @@ function polynomialFit(rows: Row[], x: Get, y: Get, order: number): Fit {
 /** The coefficients of `sum(a[i] * t^i)` as a polynomial in `t + shift`, plus `lift` (binomial expansion, highest term first). */
 function shiftPolynomial(size: number, a: number[], shift: number, lift: number): number[] {
   const z = new Array<number>(size)
+  // bounded: size is the regression's order + 1, allotted as work when the fit was made
   for (let i = 0; i < size; ++i) z[i] = 0
   for (let i = size - 1; i >= 0; --i) {
     const v = a[i]!
     let binomial = 1
     z[i] = z[i]! + v
+    // bounded: size is the regression's order + 1, allotted as work when the fit was made
     for (let j = 1; j <= i; ++j) {
       binomial *= (i + 1 - j) / j
       z[i - j] = z[i - j]! + v * Math.pow(shift, j) * binomial
@@ -265,17 +274,22 @@ function shiftPolynomial(size: number, a: number[], shift: number, lift: number)
  */
 function solve(columns: Array<Float64Array | number[]>): number[] {
   const n = columns.length - 1
+  // bounded: the solve of a size x size system: size is the regression's order + 1, allotted as work (size^3 included)
   for (let i = 0; i < n; ++i) {
     let pivotRow = i
+    // bounded: the solve of a size x size system: size is the regression's order + 1, allotted as work (size^3 included)
     for (let j = i + 1; j < n; ++j) {
       if (Math.abs(columns[i]![j]!) > Math.abs(columns[i]![pivotRow]!)) pivotRow = j
     }
+    // bounded: the solve of a size x size system: size is the regression's order + 1, allotted as work (size^3 included)
     for (let c = i; c < n + 1; ++c) {
       const held = columns[c]![i]!
       columns[c]![i] = columns[c]![pivotRow]!
       columns[c]![pivotRow] = held
     }
+    // bounded: the solve of a size x size system: size is the regression's order + 1, allotted as work (size^3 included)
     for (let j = i + 1; j < n; ++j) {
+      // bounded: the solve of a size x size system: size is the regression's order + 1, allotted as work (size^3 included)
       for (let c = n; c >= i; c--) {
         columns[c]![j] = columns[c]![j]! - (columns[c]![i]! * columns[i]![j]!) / columns[i]![i]!
       }
@@ -284,6 +298,7 @@ function solve(columns: Array<Float64Array | number[]>): number[] {
   const solution: number[] = []
   for (let j = n - 1; j >= 0; --j) {
     let known = 0
+    // bounded: the solve of a size x size system: size is the regression's order + 1, allotted as work (size^3 included)
     for (let c = j + 1; c < n; ++c) known += columns[c]![j]! * solution[c]!
     solution[j] = (columns[n]![j]! - known) / columns[j]![j]!
   }
@@ -353,6 +368,7 @@ export function loessSmooth(rows: Row[], x: Get, y: Get, bandwidth: number): Pt[
       let sxx = 0
       const reach = 1 / Math.abs(xs[far]! - at || 1) // a zero reach (all the window at one x) counts as 1
       meterTick('loess', last - first + 1)
+      // bounded: the window; ticked with its length just above
       for (let k = first; k <= last; ++k) {
         const xk = xs[k]!
         const yk = ys[k]!
@@ -372,6 +388,7 @@ export function loessSmooth(rows: Row[], x: Get, y: Get, bandwidth: number): Pt[
       const next = xs[i + 1]!
       let right = last + 1
       if (right < n) {
+        // bounded: the window's ends only move forward: one pass over the points in all
         while (i + 1 > first && (xs[right]! - next) <= (next - xs[first]!)) {
           first++
           last = right
@@ -382,6 +399,7 @@ export function loessSmooth(rows: Row[], x: Get, y: Get, bandwidth: number): Pt[
     if (pass === LOESS_PASSES) break
     const typical = medianOf(residuals) as number
     if (Math.abs(typical) < TINY_WEIGHT) break
+    // bounded: one pass over the points, for each of the fixed number of robustness passes
     for (let i = 0; i < n; ++i) {
       const ratio = residuals[i]! / (6 * typical)
       if (ratio >= 1) robust[i] = TINY_WEIGHT
@@ -429,7 +447,7 @@ export function sampleCurve(f: (x: number) => number, ext: ArrayLike<unknown>, m
   const minSteps = minStepsIn || 25
   const maxSteps = Math.max(minSteps, maxStepsIn || 200)
   // `steps` and `maxsteps` are spec parameters: bound the sample count before evaluating the function that many times
-  checkGeneratedRows(maxSteps, 'density steps')
+  allotUpTo('rows', maxSteps, 'density steps')
 
   const at = (x: number): Pt => [x, f(x)]
   const minX = ext[0] as number
@@ -439,13 +457,13 @@ export function sampleCurve(f: (x: number) => number, ext: ArrayLike<unknown>, m
   const settled: Pt[] = [at(minX)]
 
   if (minSteps === maxSteps) {
-    for (let i = 1; i < maxSteps; ++i) settled.push(at(minX + (i / minSteps) * span))
+    for (let i = 1; i < maxSteps; ++i) { meterTick('density'); settled.push(at(minX + (i / minSteps) * span)) }
     settled.push(at(maxX))
     return settled
   }
   // the points still to be placed, nearest-to-the-end first so that the one on top is the next in x order
   const pending: Pt[] = [at(maxX)]
-  for (let i = minSteps; --i > 0;) pending.push(at(minX + (i / minSteps) * span))
+  for (let i = minSteps; --i > 0;) { meterTick('density'); pending.push(at(minX + (i / minSteps) * span)) }
 
   let from = settled[0]!
   let to = pending[pending.length - 1]
@@ -457,7 +475,9 @@ export function sampleCurve(f: (x: number) => number, ext: ArrayLike<unknown>, m
     if (p[1] > yMax) yMax = p[1]
   }
   const sy = 1 / (yMax - yMin)
+  // (a stretch is split while it bends and is wider than extent / maxSteps: at most about 2 x maxSteps points are made)
   while (to) {
+    meterTick('density')
     const mid = at((from[0] + to[0]) / 2)
     if (mid[0] - from[0] >= smallestStep && bend(from, mid, to, sx, sy) > BEND_LIMIT) {
       pending.push(mid)

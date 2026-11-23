@@ -6,6 +6,7 @@
  */
 import { Adder } from './arr.js'
 import { BATCH, POINT, type Events, type Run } from './geo-events.js'
+import { meterTick } from './limits.js'
 
 export const EPSILON = 1e-6
 export const EPSILON2 = 1e-12
@@ -85,13 +86,14 @@ export class Rotation {
 
   /** Convert the point events from degrees to radians and rotate them, in place. */
   rotateEvents(ev: Events): void {
-    for (let i = 0, n = ev.length; i < n; i += BATCH) this.rotateRange(ev, i, Math.min(n, i + BATCH))
+    for (let i = 0, n = ev.length; i < n; i += BATCH) { meterTick('geo', BATCH); this.rotateRange(ev, i, Math.min(n, i + BATCH)) }
   }
 
   private rotateRange(ev: Events, from: number, to: number): void {
     const { op, x, y } = ev
     if (this.tilts) {
       const { at } = this
+      // bounded: a batch of at most BATCH events; the batch loop ticks with BATCH
       for (let i = from; i < to; i++) {
         if (op[i] === POINT) {
           this.forward(x[i]! * RADIANS, y[i]! * RADIANS, at)
@@ -103,6 +105,7 @@ export class Rotation {
     }
     // without a tilt a rotation only turns the longitude, and keeps it within a half turn of the meridian
     const turn = this.lambda
+    // bounded: a batch of at most BATCH events; the batch loop ticks with BATCH
     for (let i = from; i < to; i++) {
       if (op[i] === POINT) {
         let lambda = x[i]! * RADIANS
@@ -189,6 +192,7 @@ export function polygonContains(rings: readonly Ring[], lambdaIn: number, phiIn:
     const halfPhi0 = phi0Raw / 2 + QUARTER_PI
     let sinPhi0 = Math.sin(halfPhi0)
     let cosPhi0 = Math.cos(halfPhi0)
+    // bounded: the points of one ring of the buffer
     for (let j = 0; j < m; j++) {
       const lambda1Raw = ring.x[base + j]!
       const phi1Raw = ring.y[base + j]!

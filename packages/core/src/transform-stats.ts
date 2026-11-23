@@ -13,7 +13,7 @@
 import { accessorName, error, extent as vegaExtent, hasOwnProperty } from './util.js'
 import { fieldOf, fieldsOf, quantiles, type Row } from './transform-agg.js'
 import { numberRange, required } from './transform-basic.js'
-import { checkGeneratedRows, checkRegexInput, checkRowCount, guardedRegExp, meterTick } from './limits.js'
+import { allotUpTo, checkRegexInput, checkRowCount, guardedRegExp, meterTick } from './limits.js'
 import { SQRT2PI, cumulativeNormal, densityNormal } from './stats-functions.js'
 import { FITS, fitParameters, loessSmooth, sampleCurve } from './curve-fits.js'
 
@@ -39,6 +39,7 @@ function partitionValues(data: Row[], groupby: Get[] | null, field: Get): Array<
     // String([v]) is '' for null/undefined and String(v) otherwise: one field needs no array to key a group
     let ks: string
     let k: unknown[] | undefined
+    // bounded: the spec's groupby fields
     if (one) { const v = one(t); ks = v == null ? '' : String(v); if (!map.has(ks)) k = [v] } else { k = groupby.map((f) => f(t)); ks = String(k) }
     let g = map.get(ks)
     if (!g) {
@@ -61,6 +62,7 @@ function partitionRows(data: Row[], groupby: Get[] | null): Array<Row[] & Dims> 
   for (const t of data) {
     let ks: string
     let k: unknown[] | undefined
+    // bounded: the spec's groupby fields
     if (one) { const v = one(t); ks = v == null ? '' : String(v); if (!map.has(ks)) k = [v] } else { k = groupby.map((f) => f(t)); ks = String(k) }
     let g = map.get(ks)
     if (!g) {
@@ -177,7 +179,9 @@ function mixtureDist(): Dist {
     const out: number[] = []
     let sum = 0
     let i: number
+    // bounded: the spec's mixture components
     for (i = 0; i < m; ++i) { sum += (out[i] = (x[i] == null ? 1 : +(x[i] as number))) }
+    // bounded: the spec's mixture components
     for (i = 0; i < m; ++i) { out[i] = out[i]! / sum }
     return out
   }
@@ -193,7 +197,9 @@ function mixtureDist(): Dist {
       }
       return dists
     },
+    // bounded: the spec's mixture components
     pdf(x) { let p = 0; for (let i = 0; i < m; ++i) p += w[i]! * dists[i]!.pdf(x); return p },
+    // bounded: the spec's mixture components
     cdf(x) { let p = 0; for (let i = 0; i < m; ++i) p += w[i]! * dists[i]!.cdf(x); return p },
   }
   ;(dist.distributions as (...x: unknown[]) => unknown)(dists)
@@ -227,6 +233,7 @@ function kdeDist(support?: unknown[], bandwidth?: number): Dist {
       const bw = bandwidth as number
       const m = n
       let y = 0
+      // bounded: the support (the group's values); ticked with its size right after
       for (let i = 0; i < m; ++i) {
         const z = (x - sup[i]!) / bw
         y += Math.exp(-0.5 * z * z) / SQRT2PI // kernelPdf, inlined
@@ -239,6 +246,7 @@ function kdeDist(support?: unknown[], bandwidth?: number): Dist {
       const bw = bandwidth as number
       const m = n
       let y = 0
+      // bounded: the support (the group's values); ticked with its size right after
       for (let i = 0; i < m; ++i) y += kernelCdf((x - sup[i]!) / bw)
       meterTick('kde', m)
       return y / m
@@ -267,6 +275,7 @@ function parseDist(def: Params, data: () => Row[], datasets?: (name: string) => 
       const f = fieldOf(def[name])
       ;(d.data as (x: unknown) => unknown)(src.map(f))
     } else if (name === 'distributions') {
+      // bounded: the source rows, once
       ;(d.distributions as (x: unknown) => unknown)((def[name] as Params[]).map((x) => parseDist(x, data, datasets)))
     } else if (typeof d[name] === 'function') {
       ;(d[name] as (x: unknown) => unknown)(def[name])
@@ -299,12 +308,16 @@ export function kdeRows(rows: Row[], p: Params): Row[] {
     minsteps = maxsteps = (p.steps as number) || maxsteps
   }
 
+  // every group samples up to `maxsteps + 1` points: the groups times the steps are bounded before the first is sampled
+  allotUpTo('rows', groups.length * (Math.max(minsteps, maxsteps) + 1), 'kde')
   for (const g of groups) {
     const density = (kdeDist(g, bandwidth) as unknown as Record<string, (x: number) => number>)[method]!
     const scale = p.counts ? g.length : 1
     const local = domain || (vegaExtent(g) as unknown[])
+    // bounded: the points sampleCurve made for the group (groups x steps was allotted above; it ticks per point)
     for (const v of sampleCurve(density, local, minsteps, maxsteps)) {
       const t: Row = {}
+      // bounded: the spec's groupby names
       for (let i = 0; i < names.length; ++i) t[names[i]!] = g.dims![i]
       t[as[0]!] = v[0]
       t[as[1]!] = v[1]! * scale
@@ -345,12 +358,14 @@ export function quantileRows(rows: Row[], p: Params): Row[] {
   const step = (p.step as number) || 0.01
   const probs = (p.probs as number[]) || numberRange(step / 2, 1 - QUANTILE_EPSILON, step)
   const n = probs.length
-  checkGeneratedRows(groups.length * n, 'quantile')
+  allotUpTo('rows', groups.length * n, 'quantile')
   const values: Row[] = []
   for (const g of groups) {
     const q = quantiles(g, probs)
+    // bounded: the probabilities, groups x probabilities allotted above; the group loop runs quantiles() over them
     for (let i = 0; i < n; ++i) {
       const t: Row = {}
+      // bounded: the spec's groupby names
       for (let j = 0; j < names.length; ++j) t[names[j]!] = g.dims![j]
       t[as[0]!] = probs[i]
       t[as[1]!] = q[i]
@@ -403,8 +418,10 @@ export function regressionRows(rows: Row[], p: Params): Row[] {
     const ends = (domain || vegaExtent(g, xf)) as unknown[]
     // a straight line is its two ends; any other curve is sampled where it bends
     const curve: Array<[unknown, unknown]> = method === 'linear' || method === 'constant'
+      // bounded: a line's two ends
       ? ends.map((end) => [end, model.predict(end as number)])
       : sampleCurve(model.predict, ends, 25, 200)
+    // bounded: at most the 2 x 200 points sampleCurve makes (it ticks per point)
     for (const [px, py] of curve) values.push(curveRow(names, g.dims, as, px, py))
     checkRowCount(values.length, 'regression')
   }
@@ -421,6 +438,7 @@ export function loessRows(rows: Row[], p: Params): Row[] {
   const as = (p.as ?? [accessorName(xf), accessorName(yf)]) as string[]
   const values: Row[] = []
   for (const g of groups) {
+    // bounded: the points loessSmooth made for the group (it ticks over its windows)
     for (const [px, py] of loessSmooth(g, xf, yf, (p.bandwidth as number) || 0.3)) values.push(curveRow(names, g.dims, as, px, py))
     checkRowCount(values.length, 'loess')
   }
@@ -452,6 +470,7 @@ export function countpatternRows(rows: Row[], p: Params): Row[] {
     if (tcase === 'upper') text = text.toUpperCase()
     else if (tcase === 'lower') text = text.toLowerCase()
     const tokens = text.match(match) || []
+    // bounded: the tokens of one row's text (data the host gave, or under limits a screened input of at most maxStringLength)
     for (let i = 0, n = tokens.length; i < n; ++i) {
       const tk = tokens[i]!
       if (!stop.test(tk)) counts.set(tk, 1 + (counts.get(tk) || 0))

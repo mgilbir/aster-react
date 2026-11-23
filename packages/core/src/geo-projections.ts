@@ -494,6 +494,7 @@ class AlbersUsa extends Projection {
       if (v == null) continue
       if (key === 'scale') this.setScale(v)
       else if (key === 'translate') this.setTranslate(v as number[])
+      // bounded: the parts of a composite projection (at most 3)
       else if (key === 'precision') for (const p of this.pointProjections) p.setPrecision(v as number)
     }
   }

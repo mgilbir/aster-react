@@ -16,7 +16,7 @@
  * The estimate follows vega-geo's density2D (BSD-3-Clause), itself adapted from d3-contour; both stay in
  * THIRD_PARTY_NOTICES.md.
  */
-import { meterRows } from './limits.js'
+import { allot, meterTick } from './limits.js'
 import { quartiles } from './row-keys.js'
 
 /** A raster of `width` x `height` cells, row-major; `[x1, x2) x [y1, y2)` is the part inside the blur padding. */
@@ -77,7 +77,9 @@ export function blurRadius(bandwidth: number, sample: ArrayLike<unknown>): numbe
 function boxBlur(from: Float32Array, to: Float32Array, lines: number, length: number, step: number, lineStep: number, r: number): void {
   const w = 2 * r + 1
   for (let j = 0; j < lines; ++j) {
+    meterTick('density blur', length + r)
     const base = j * lineStep
+    // bounded: `length + r` per line, which the line loop ticks with as its cost (r is under the padded grid's size)
     for (let i = 0, run = 0; i < length + r; ++i) {
       if (i < length) run += from[base + i * step]!
       if (i >= r) {
@@ -119,7 +121,7 @@ export function densityGrid(req: DensityRequest): RasterGrid {
   const n = 2 * ox + (width >> k)
   const m = 2 * oy + (height >> k)
   // The grid is sized by spec parameters (size, bandwidth radius): bound the cell count before allocating it.
-  meterRows(n * m, req.label, 'cells')
+  allot('cells', n * m, req.label)
 
   let values = new Float32Array(n * m)
   for (let i = 0; i < xs.length; i++) {
@@ -165,9 +167,12 @@ export function placeContours(
 ): void {
   const flip = scale[0] * scale[1] < 0
   for (const shape of shapes) {
+    // bounded: the polygons contourPolygons made (its scan was allotted as work)
     for (const polygon of shape.coordinates as number[][][][]) {
+      // bounded: the rings contourPolygons made (its scan was allotted as work)
       for (const ring of polygon) {
         if (flip) ring.reverse()
+        // bounded: the points contourPolygons made (its scan was allotted as work)
         for (const p of ring) {
           p[0] = translate ? (p[0]! - origin[0]) * scale[0] + translate[0] : (p[0]! - origin[0]) * scale[0]
           p[1] = translate ? (p[1]! - origin[1]) * scale[1] + translate[1] : (p[1]! - origin[1]) * scale[1]

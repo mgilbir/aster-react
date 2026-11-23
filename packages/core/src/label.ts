@@ -25,7 +25,7 @@ import { AlphaCanvas } from './raster.js'
 import { drawMark } from './label-draw.js'
 import { itemMarkOf, transformRegistry } from './registry.js'
 import { compareRows, resolveSizeParam, type Row, type TransformContext } from './transform.js'
-import { meterRows } from './limits.js'
+import { allot, meterTick } from './limits.js'
 import { itemTextWidth } from './text-metrics.js'
 import type { SceneGroup, SortSpec } from './types.js'
 
@@ -43,7 +43,7 @@ class Grid {
 
   constructor(readonly w: number, readonly h: number) {
     // w x h come from the spec's size and padding: bound the array before making it
-    meterRows((w * h) / 32, 'label bitmap', 'cells')
+    allot('cells', (w * h) / 32, 'label bitmap')
     this.bits = new Uint32Array(~~((w * h + 32) / 32))
   }
 
@@ -65,6 +65,7 @@ class Grid {
   /** Whether any cell of the box is occupied. */
   anyIn(x1: number, y1: number, x2: number, y2: number): boolean {
     const { bits, w } = this
+    // bounded: the box is inside the grid (`outside` is tested first): at most its rows, which the bitmap allot bounded; the label loop ticks
     for (let y = y1; y <= y2; ++y) {
       const first = y * w + x1
       const last = y * w + x2
@@ -74,6 +75,7 @@ class Grid {
         if (bits[i]! & fromBit(first) & toBit(last)) return true
       } else {
         if (bits[i]! & fromBit(first) || bits[j]! & toBit(last)) return true
+        // bounded: the words of one row of the box, inside the grid the bitmap allot bounded
         for (let k = i + 1; k < j; ++k) if (bits[k]) return true
       }
     }
@@ -83,6 +85,7 @@ class Grid {
   /** Occupy every cell of the box. */
   fill(x1: number, y1: number, x2: number, y2: number): void {
     const { bits, w } = this
+    // bounded: every caller fills a box it found inside the grid (`outside`, or a label that does not overflow the view): at most the grid's rows
     for (let y = y1; y <= y2; ++y) {
       const first = y * w + x1
       const last = y * w + x2
@@ -93,6 +96,7 @@ class Grid {
       } else {
         bits[i]! |= fromBit(first)
         bits[j]! |= toBit(last)
+        // bounded: the words of one row of the box, inside the grid the bitmap allot bounded
         for (let k = i + 1; k < j; ++k) bits[k] = -1
       }
     }
@@ -140,6 +144,7 @@ const marksIn = (group: Rec): Mark[] =>
 function paintMark(pen: AlphaCanvas, mark: Mark, outlineOnly: boolean): void {
   if (!mark.items.length) return
   if (mark.marktype === 'group') {
+    // bounded: the items of the scene's marks, each drawn once
     for (const group of mark.items) for (const inner of marksIn(group)) paintMark(pen, inner, outlineOnly)
     return
   }
@@ -183,8 +188,10 @@ function drawField(cells: Cells, base: Rec[], avoid: Mark[], wantOutlines: boole
   const o = drawnOutline?.alpha
   const column = Int32Array.from({ length: Math.max(0, Math.ceil(width)) }, (_, x) => cells.at(x))
   for (let y = 0; y < height; ++y) {
+    meterTick('label field', width)
     const row = cells.at(y)
     const start = y * width
+    // bounded: the pixels of a row, which the row loop ticks with as its cost
     for (let x = 0; x < width; ++x) {
       const i = start + x
       const hit = a[i] || (b && b[i])
@@ -233,6 +240,7 @@ function spotsOf(offsets: unknown[], anchors: string[]): Spot[] {
   const count = Math.max(offsets.length, anchors.length)
   const offset = new Float64Array(count)
   const direction: Array<readonly [number, number]> = []
+  // bounded: one pass over the spec's anchor and offset lists
   for (let i = 0; i < count; ++i) {
     if (i < offsets.length) offset[i] = (offsets[i] as number) || 0
     else offset[i] = offset[offsets.length - 1]!
@@ -344,6 +352,7 @@ class Fit {
     // bisect between the floor and the height of the view
     let lo = floor
     let hi = this.height
+    // bounded: bisection from the floor to the view's height: at most about 1100 halvings for any finite height, and NaN stops it
     while (hi - lo >= 1) {
       const mid = (lo + hi) / 2
       if (this.blocked(x, y, mid, true)) hi = mid
@@ -365,6 +374,7 @@ function scanSlice(fit: Fit, cells: Cells, find: Find, s: Slice): void {
   const r2 = cells.at(s.y2)
   const midRow = ~~((r1 + r2) / 2)
   const look = (col: number, row: number): void => {
+    meterTick('label search')
     const x = cells.pixel(col)
     const y = cells.pixel(row)
     const size = fit.grow(x, y, find.size)
@@ -375,7 +385,9 @@ function scanSlice(fit: Fit, cells: Cells, find: Find, s: Slice): void {
       find.searched = true
     }
   }
+  // bounded: look() ticks for every cell; the slice is a box of grid cells
   for (let col = midCol; col >= c1; --col) for (let row = midRow; row >= r1; --row) look(col, row)
+  // bounded: look() ticks for every cell; the slice is a box of grid cells
   for (let col = midCol; col <= c2; ++col) for (let row = midRow; row <= r2; ++row) look(col, row)
 }
 
@@ -391,6 +403,7 @@ function floodSlice(fit: Fit, field: Field, visited: Grid, find: Find, s: Slice)
     const row = todo.pop()!
     const col = todo.pop()!
     if (occupied.has(col, row) || (outlines && outlines.has(col, row)) || visited.has(col, row)) continue
+    meterTick('label flood')
     visited.add(col, row)
     for (let j = 0; j < 4; ++j) {
       const x = col + (j < 2 ? -1 : 1)
@@ -566,7 +579,12 @@ function layOut(items: Rec[], p: Params): Label[] {
   }
 
   const place = inArea ? areaPlacer(method, field, avoidBaseMark, markIndex, size) : placeBeside(field!, spots, size[0], size[1])
-  for (const label of labels) label.opacity = +place(label)
+  // every label may try every spot (the anchors and offsets come from the spec, the labels from the data)
+  if (!inArea) allot('work', labels.length * spots.length, 'label placement')
+  for (const label of labels) {
+    meterTick('label', inArea ? 1 : spots.length)
+    label.opacity = +place(label)
+  }
   return labels
 }
 

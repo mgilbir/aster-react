@@ -5,7 +5,8 @@ import {
   defaultLocale, resetDefaultLocale, locale, compileExpr,
 } from './index.js'
 import { createChartSession } from './addon-dom.js'
-import { withLimits, activeMeter, boundedCount, ceiling } from './limits.js'
+import { withLimits, activeMeter, allot, checkRowCount, meterTick, unboundedForParity } from './limits.js'
+import { range, ticks } from './arr.js'
 import { FORMATTER_CACHE_MAX as CACHE_MAX } from './locale.js'
 import type { VgSpec } from './types.js'
 
@@ -57,9 +58,10 @@ describe('checkSceneLimits', () => {
 })
 
 describe('the meter is ambient, nests, and a swallowed violation still fails the call', () => {
-  it('no scope: every helper is a no-op', () => {
+  it('no scope: the budget-only helpers (data the host gave, the clock) are no-ops', () => {
     expect(activeMeter()).toBeNull()
-    expect(boundedCount(1e12, 'x')).toBe(1e12)
+    expect(() => checkRowCount(1e12, 'x')).not.toThrow()
+    expect(() => meterTick('x', 1e12)).not.toThrow()
   })
 
   it('scopes with the same limits object share one meter; others get their own and restore', () => {
@@ -236,7 +238,7 @@ describe('built-in ceilings (no limits given)', () => {
 
   it('a ceiling swallowed inside a no-limits scope still fails the call when the scope exits', () => {
     const swallowed = (): string => {
-      try { ceiling('rows', 5e6, 'swallowed') } catch { /* a defensive catch */ }
+      try { allot('rows', 5e6, 'swallowed') } catch { /* a defensive catch */ }
       return 'carried on'
     }
     expect(lim(() => withLimits(undefined, swallowed)).message).toMatch(/swallowed 5000000 > 1000000/)
@@ -250,7 +252,12 @@ describe('built-in ceilings (no limits given)', () => {
     expect(() => renderSpec(seqSpec(10))).not.toThrow()
   })
 
-  it('leave the library layer alone: boundedCount without a scope is still a no-op', () => {
-    expect(boundedCount(1e12, 'x')).toBe(1e12)
+  it('hold in the allocating primitives themselves, so a library function is bounded whoever calls it', () => {
+    expect(lim(() => range(0, 5e6)).message).toMatch(/range 5000000 > 1000000 \(built-in ceiling/)
+    expect(lim(() => ticks(0, 1e9, 5e6)).message).toMatch(/ticks \d+ > 100000 \(built-in ceiling/)
+    expect(lim(() => allot('rows', 5e9, 'past 2^32')).message).toMatch(/past 2\^32 5000000000 > 1000000/)
+    // only a parity test turns them off, by name
+    expect(unboundedForParity(() => range(0, 1_500_000)).length).toBe(1_500_000)
+    expect(() => range(0, 1_500_000)).toThrow(/built-in ceiling/)
   })
 })
