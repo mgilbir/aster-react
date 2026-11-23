@@ -74,10 +74,11 @@ export interface ChartWorkerStreamProps extends Omit<CommonStreamProps, 'textMet
   onStreamError?: StreamErrorHandler
 }
 
-function useSizeBatch(width: number | undefined, height: number | undefined): { width?: number; height?: number } {
+/** The dimensions the size props fix (a number); `'container'` is filled from the measured element by the inner chart. */
+function useSizeBatch(width: number | 'container' | undefined, height: number | 'container' | undefined): { width?: number; height?: number } {
   return React.useMemo(() => ({
-    ...(width != null ? { width } : {}),
-    ...(height != null ? { height } : {}),
+    ...(typeof width === 'number' ? { width } : {}),
+    ...(typeof height === 'number' ? { height } : {}),
   }), [width, height])
 }
 
@@ -123,8 +124,8 @@ function useStreamInput(
   initialContainerSize?: { width: number; height: number },
 ): (input: ChartStreamInput) => void {
   const latest = React.useRef<ChartStreamInput | null>(null)
-  type Size = { width: number; height: number } | undefined
-  const sent = React.useRef<{ stream: unknown; domainRaw: Record<string, unknown[]>; signals: Record<string, unknown>; containerSize?: Size; measuredSize?: Size }>(
+  type Size = { width?: number; height?: number } | undefined
+  const sent = React.useRef<{ stream: unknown; domainRaw: Record<string, unknown[]>; signals: Record<string, unknown>; containerSize?: { width: number; height: number }; measuredSize?: Size }>(
     { stream, domainRaw: {}, signals: {}, containerSize: initialContainerSize },
   )
   const sameSize = (a: Size, b: Size): boolean => a === b || (a != null && b != null && a.width === b.width && a.height === b.height)

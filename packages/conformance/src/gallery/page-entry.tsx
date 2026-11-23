@@ -139,12 +139,6 @@ async function settleMarkup(host: HTMLElement, failure: () => Error | null, onSt
   throw failure() ?? new Error('no stable <svg> within 8 s')
 }
 
-const sizeProps = (vg: Record<string, unknown>): Record<string, unknown> => {
-  const props: Record<string, unknown> = {}
-  if (typeof vg.width === 'number') props.width = vg.width
-  if (typeof vg.height === 'number') props.height = vg.height
-  return props
-}
 
 async function chartSvg(vg: Record<string, unknown>, liveMs = 0, clicks: readonly number[] = []): Promise<string> {
   // (one seeded stream for the life of the chart, as vega's `setRandom` is for the life of the page)
@@ -157,7 +151,7 @@ async function chartSvg(vg: Record<string, unknown>, liveMs = 0, clicks: readonl
     // what <Chart> imports on its own: the add-ons loaded now (an earlier spec's, or the data step's) are not its doing
     const before = new Set(ADDONS.filter(isAddonLoaded))
     if (liveMs > 0) await clock.begin()
-    root.render(React.createElement(Chart, { spec: loaded as never, onError: (e: Error) => { error = e }, urlPolicy: URL_POLICY, random: stream, ...sizeProps(vg) }))
+    root.render(React.createElement(Chart, { spec: loaded as never, onError: (e: Error) => { error = e }, urlPolicy: URL_POLICY, random: stream }))
     const first = await settleMarkup(host, () => error, () => {
       // <Chart> imported exactly the add-ons `addonsNeeded` names for this spec that the page did not have yet: a plain spec
       // imported nothing, and nothing was imported for nothing. (That `addonsNeeded` is exact is addons-needed.test.ts's
@@ -194,7 +188,7 @@ async function chartSwapSvg(a: Record<string, unknown>, b: Record<string, unknow
     // a time-driven B is compared at the virtual instant its oracle is taken at; A and the swap happen at virtual time 0, so A's timers
     // (queued, not yet fired) are B's to release, and nothing of A's can tick into the frame
     if (liveMs > 0) await clock.begin()
-    root.render(React.createElement(Chart, { spec: loadedA as never, onError, urlPolicy: URL_POLICY, random: seededRandom(), ...sizeProps(a) }))
+    root.render(React.createElement(Chart, { spec: loadedA as never, onError, urlPolicy: URL_POLICY, random: seededRandom() }))
     // A is drawn and has been live for a moment (its timers tick, its signals are bound); an A that errors is simply an A that left nothing behind
     for (let i = 0; i < 40 && !host.querySelector('svg') && !error; i++) await sleep(25)
     await sleep(120)
@@ -211,7 +205,7 @@ async function chartSwapSvg(a: Record<string, unknown>, b: Record<string, unknow
     }
     error = null
     // the same element type at the same position: React updates the mounted <Chart>
-    root.render(React.createElement(Chart, { spec: loadedB as never, onError, urlPolicy: URL_POLICY, random: seededRandom(), ...sizeProps(b) }))
+    root.render(React.createElement(Chart, { spec: loadedB as never, onError, urlPolicy: URL_POLICY, random: seededRandom() }))
     const first = await settleMarkup(host, () => error)
     if (liveMs === 0) return first
     await clock.advance(liveMs)

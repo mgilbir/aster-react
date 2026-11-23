@@ -80,9 +80,10 @@ export interface RuntimeInput {
    * vega-lite's `"container"`) keeps doing so and only sees the container through `containerSize()`, and a spec whose
    * autosize is `none` keeps its own size (in Vega its whole size is its `width`, `height` and `padding`). As in Vega, where
    * `view.width(w)` is a signal write, the later write wins: a `width` / `height` in `signals` beats it, and an
-   * explicit `width` / `height` beats both. Without `containerSize` it is also what `containerSize()` returns.
+   * explicit `width` / `height` beats both. Without `containerSize` it is also what `containerSize()` returns. Each dimension
+   * is its own: a host that lets the chart fill only the width of its element gives only `width`.
    */
-  measuredSize?: { width: number; height: number }
+  measuredSize?: { width?: number; height?: number }
   /**
    * Partial re-evaluation: the names of datasets whose VALUES changed since
    * the previous evaluate (the datasets' transform pipeline re-runs, and only

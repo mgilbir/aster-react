@@ -34,12 +34,12 @@ the browser).
   byte-identically.
 - **Kept dataset steps**: a resize, a signal write or a re-render with equal rows no longer runs every dataset pipeline from its
   first step. A step records the signals it reads, the rows it was made from and (for a drawing step) the random source; the next
-  evaluation keeps the rows of every step whose reads are as they were, republishing the signals it wrote. The React mount, which
-  evaluates the spec at its own size and then at the measured container's, pays for the datasets once. Consecutive steps that
+  evaluation keeps the rows of every step whose reads are as they were, republishing the signals it wrote. The React mount of a chart that fills its
+  element (`width="container"`), which evaluates the spec at its own size and then at the measured element's, pays for the datasets once. Consecutive steps that
   only add fields (`bin`, `formula`, `timeunit`) write onto one set of rows instead of copying every row per step
   ([ARCHITECTURE.md](ARCHITECTURE.md#incremental-evaluation)).
 - **Fit views update incrementally**: a view that fits its viewport (`autosize` fit / fit-x / fit-y, Vega-Lite
-  `"container"` sizes, and every `<Chart>` sized by its measured container) builds its content twice, at the viewport
+  `"container"` sizes, and every `<Chart>` that fills its element with `width` / `height="container"`) builds its content twice, at the viewport
   and at the fitted size. Each pass of an update is made from the same pass of the evaluation before, so a one-row
   update re-encodes one item per pass instead of every item of the first pass. The view keeps both passes' state, so a fit view
   also retains the first pass's items between updates (not measured here; [ARCHITECTURE.md](ARCHITECTURE.md#incremental-evaluation)).

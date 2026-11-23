@@ -108,6 +108,10 @@ export function Headless() {
 }
 ```
 
+The chart is the size its spec makes it, as in Vega: `width: 400, height: 300` draws at 400 x 300 plus padding in any
+element. `width` / `height` props fix the size, and `width="container"` / `height="container"` fill the chart's element
+(Vega-Lite's `width: "container"` does so on its own).
+
 `limits` (and `renderSpec(spec, { limits })`) gives typed `AsterLimitError` budgets for untrusted specs, including
 a wall-clock deadline (`maxTimeMs`); see [docs/LIMITS.md](docs/LIMITS.md). A headless session is exported as
 `createChartSession` from `@aster-charts/core/dom`.

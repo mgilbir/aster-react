@@ -83,18 +83,18 @@ export interface ChartProps {
    */
   dataChanges?: Record<string, number[]>
   /**
-   * Chart width in px. Without it the chart uses its container's measured
-   * width (and the spec's own width until the first measurement, e.g. on the
-   * server). Independent of `height`: giving one of them fixes only that one.
-   * A fixed size is the view's size for a container-sized spec too (Vega-Lite's
-   * `width: 'container'`): its `width` / `height` signals, including a
-   * `window:resize` handler's, do not move it. The measured container (no prop)
-   * only sizes a spec that has no such signal; one that drives them keeps
-   * doing so, and reads the container through `containerSize()`.
+   * The view's width: a number of pixels fixes it; `'container'` fills the width of the chart's element (measured, and
+   * followed as it resizes); without it the chart is as wide as its spec makes it, as in Vega (a literal `width` draws at that
+   * width in any element; Vega-Lite's `width: "container"` fills the element through `containerSize()`). A fixed size is the
+   * view's size for a container-sized spec too: its `width` / `height` signals, including a `window:resize` handler's, do not
+   * move it. `'container'` sizes a spec that does not drive its own `width` / `height` signals, with the whole chart (padding
+   * and guides included) inside the element; one that drives them keeps doing so, and reads the element through
+   * `containerSize()`. Independent of `height`. On the server and before the first measurement a `'container'` dimension is
+   * the spec's own.
    */
-  width?: number
-  /** Chart height in px; see `width`. */
-  height?: number
+  width?: number | 'container'
+  /** The view's height; see `width`. */
+  height?: number | 'container'
   ariaLabel?: string
   /**
    * Incremental DOM updates: instead of re-serializing and re-parsing the whole
@@ -352,8 +352,8 @@ export interface ChartStreamInput {
   signals: Record<string, unknown>
   /** The container the spec is sized to (`containerSize()`): the size props where given, the measured element for the rest. */
   containerSize?: { width: number; height: number }
-  /** The element the chart measured, when a size prop is missing (`RuntimeInput.measuredSize`). */
-  measuredSize?: { width: number; height: number }
+  /** The measured element, in the dimensions the chart fills (`'container'` size props; `RuntimeInput.measuredSize`). */
+  measuredSize?: { width?: number; height?: number }
 }
 
 /** Imperative handle exposed by `<Chart ref={…}>`. */
