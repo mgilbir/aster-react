@@ -102,10 +102,10 @@ describe('docs/TESTING.md reference results', () => {
 
 describe('the browser results README.md quotes are the ones docs/TESTING.md reports', () => {
   it('the canvas comparisons and the signal event streams', () => {
-    const canvas = /chromium (\d+)\/(\d+) passed/.exec(result('pnpm conformance:canvas'))
+    // (the canvas gate's verdict is runGate's: it reports what it compared with ink on both sides, not "N/N passed")
+    const canvas = /chromium: (\d+) entries compared with ink on both sides/.exec(result('pnpm conformance:canvas'))
     expect(canvas, 'TESTING.md canvas row').not.toBeNull()
-    expect(canvas[1]).toBe(canvas[2])
-    expect(README).toContain(`(${canvas[1]}/${canvas[2]} pixel comparisons)`)
+    expect(README).toContain(`(${canvas[1]} pixel comparisons with ink on both sides)`)
     const events = /(\d+)\/(\d+) cases agree/.exec(result('pnpm conformance:signals'))
     expect(events, 'TESTING.md signal event streams row').not.toBeNull()
     expect(README).toContain(`(${events[1]}/${events[2]} cases)`)

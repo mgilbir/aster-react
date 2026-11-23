@@ -155,6 +155,12 @@ other results are the last measurement. Every
 row is the command in the second column run from the repository root after `pnpm build`; the
 result is the summary line it prints. They change with the code: re-run before quoting them.
 
+Every conformance gate prints its verdict last, as `[<gate>] PASS: <counter> <n>/<floor>, ...` or `FAIL`: the verdict is
+`scripts/lib/run-gate.mjs`'s (`runGate`), which owns the exit code, fails a run that compared nothing (a `--filter` typo
+included) and holds each counter of what was COMPARED to its floor; the known differences a gate tolerates live in one table,
+`scripts/lib/expected-differences.mjs`, whose entries must still differ. `scripts/gate-self-test.test.mjs` runs every
+such gate narrowed, with `--plant-difference` and narrowed to nothing ([scripts/gates.mjs](../scripts/gates.mjs), `verdict`).
+
 | What | Command | Result |
 |---|---|---|
 | Corpus size | `ls packages/conformance/corpus \| wc -l`; `... \| grep -c '\.vg\.json$'`; `... \| grep -c '\.vl\.json$'` | 1068 specs: 391 raw Vega, 677 Vega-Lite |
@@ -165,21 +171,19 @@ result is the summary line it prints. They change with the code: re-run before q
 | Scene differential | `pnpm scene-diff` | 1068/1068 scenes match |
 | Incremental vs fresh evaluation (no oracle) | `pnpm conformance:diff` | 0 differential mismatches, 0 skipped |
 | Guide captions vs Vega `aria-label` | `pnpm a11y-parity` | 1068/1068 caption sets match |
-| Transform option combinations | `pnpm transform-matrix` | 75/76 match (1 browser-only case skipped here, run by `conformance:browser`) |
+| Transform option combinations | `pnpm transform-matrix` | 76/76 match (75 in Node; the wordcloud, whose oracle needs a real canvas, in Chromium) |
 | Vega schema sweep | `pnpm sweep-vega -- --floor 7549 --min-ok 7538 --max-node-error 3` | 7538 ok, 9 both-refused, 2 node-error (the oracle crashes), 0 engine-error, 0 differ / 7549 |
 | Vega-Lite schema sweep | `pnpm sweep-vl -- --floor 27513 --min-ok 27452 --max-node-error 17 --vega-check` | 27452 ok, 47 both-refused, 14 node-error, 0 engine-error, 0 differ, 0 vega-differ / 27513 |
 | Value sweep | `pnpm sweep-values -- --floor 500 --min-ok 500 --max-node-error 0` | 500 ok, 0 both-refused, 0 node-error, 0 engine-error, 0 differ / 500 |
 | Signals sweep | `pnpm sweep-signals -- --floor 166 --min-ok 103 --max-node-error 2 --max-retained 60` | 103 ok, 60 retained, 1 both-refused, 2 node-error, 0 differ / 166 |
-| Gap probes (a probe that passes keeps passing; a failing one documents a gap) | `pnpm probe -- --min-pass 2` | 2/2 pass (floor 2) |
+| Gap probes (a failing probe documents a gap only when listed in `scripts/lib/expected-differences.mjs`, which requires it to still fail) | `pnpm probe -- --min-pass 2` | 2/2 pass (floor 2) |
 | Fuzz reproducers | `pnpm fuzz:replay` | 2/2 pass |
 | Corpus in Chromium, live text metrics | `pnpm conformance:browser` | 1068/1068 passed |
-| Canvas pixels vs Vega's canvas | `pnpm conformance:canvas` | chromium 1224/1224 passed; append painting vs full repaint: 120 scenarios, 309 append frames, 0 failing |
-| Batched (dense) SVG vs per-item SVG pixels | `pnpm conformance:batch` | 61/61 passed |
+| Canvas pixels vs Vega's canvas | `pnpm conformance:canvas` | chromium: 1068 entries compared with ink on both sides (17 blank on both, named), 150 gradients call by call, 46 gradient refusals; `area-gradient` an expected difference that still differs; append painting: 120 scenarios, 309 append frames; signal moves: 160 scenarios, 414 frames painted nothing for; symbol runs: 548 cases, 432 through Path2D |
+| Batched (dense) SVG vs per-item SVG pixels | `pnpm conformance:batch` | 13/13 generated entries (511 to 100k symbols), 10 of them batched; sub-path counts equal |
 | Signal event streams vs real Vega, on its svg and its canvas renderer | `pnpm conformance:signals` | 75/75 cases agree on each renderer (group scopes among them); the pointer phase's answers of Aster's canvas that are vega's svg renderer's where its canvas renderer differs: 2 (Chromium's stroker bulging a canvas arc's stroke), ceiling 2 |
-| Vega-Lite selections vs real Vega (same native input, signals/stores/SVG -- or canvas pixels -- compared per step, on vega's svg and canvas renderers against `<Chart renderer>`) | `pnpm conformance:selections` | 54/54 cases agree on each renderer (concat, facet and repeat views, geographic interval selections and the chart-bench survival tooltip among them; steps counted as `retained` ([INTERACTION.md](INTERACTION.md#signals)): 13 on svg, ceiling 13; 10 on canvas, ceiling 10) |
-| `intersect()` (vega-lite's geo interval selections) over every mark type, seeded boxes, by mark name / type, vs real vega in Chromium | `pnpm conformance:intersect` | every (box, scope) pair agrees (2771), on each renderer, directly and through the event loop |
-| Mark geometry on generated specs (every mark type, nested group marks, the value classes no scale writes: NaN, infinities, null, missing, numeric and non-numeric strings, huge and negative numbers): every item's, mark's and group item's bounds, the view's size and origin, `intersect()`, vs vega's own code in the same process; hand-built items of every mark type bit for bit; path outlines vs vega's path renderer | `geometry-vs-vega.test.ts`, `path-outline-vs-vega.test.ts` (in `pnpm test`) | no difference over 400 generated specs (~15k items, ~2.3k marks, ~900 group items, ~28k intersect boxes) and 4000 items per type; items named by place, so a wrong item is a difference |
-| The pick on each renderer and `intersect()` with a real canvas, on the same generated specs (160 seeds), vs real vega in Chromium, under a deadline; where vega's SVG and canvas renderers disagree Aster's SVG answer may be either | `pnpm conformance:geometry` | SVG: 155 of 160 seeds run (the others make vega throw, a negative arc radius), 28374 decisive points, 4602 on an item, 1606 where vega's renderers disagree, 42 differ (all named: an attribute SVG rejects 25, SVG text hit-tested by glyphs 17); canvas: 28033 decisive points, 298 differ (named: a view of infinite size 262, a group at a position that is a number on one axis only 25, coordinates beyond 32-bit float precision 11); 17,896 intersect boxes, 5151 meet something, 0 differ, 54 refused by the work ceiling. Each class is read off the oracle's own scenegraph and DOM (`src/geometry-differences.ts`) and must still differ; a difference no class names fails |
+| Vega-Lite selections vs real Vega (same native input, signals/stores/SVG -- or canvas pixels -- compared per step, on vega's svg and canvas renderers against `<Chart renderer>`) | `pnpm conformance:selections` | 55/55 cases agree on each renderer (concat, facet and repeat views, geographic interval selections and the chart-bench survival tooltip among them; steps counted as `retained` ([INTERACTION.md](INTERACTION.md#signals)): 13 on svg, ceiling 13; 10 on canvas, ceiling 10) |
+| `intersect()` (vega-lite's geo interval selections) over every mark type, seeded boxes, by mark name / type, and within a group item's, a data item's and `group()`'s mark, vs real vega in Chromium | `pnpm conformance:intersect` | 27710/27710 cases agree (2771 per search and renderer), directly and through the event loop |
 | `<Chart>` interaction in Chromium | `pnpm --filter @aster-charts/react run test:browser` | all checks passed |
 | Incremental gate | `pnpm bench:incremental -- --points=10000 --reps=30` | append 15.8x–18.3x (floor 8x), whole-array replace 12.7x–17.1x (floor 8x), DOM patch 3.3x–5.4x (floor 1.6x), dense 100k-symbol append patch vs mount 249x–254x (floor 200x) over three runs (2026-11-05, docs/PERFORMANCE.md) |
 | Bundle shaking | `pnpm check:bundle` | every documented import pattern still works after tree-shaking (`--blanket-false` must fail) |
