@@ -112,7 +112,7 @@ export function checkBrowserBench(results: BrowserResults, kinds: string[], page
         else if (embed === 'aster' || embed === 'asterDom') {
           const vegaLong = VEGA_EMBEDS.map((e) => rowOf(results, `fps:${kind}`, e)?.longShare).filter(isNum)
           // a Vega embed without a usable share is reported on its own row above; here it only fails to loosen the ceiling
-          const reference = vegaLong.length === 0 ? 0 : embed === 'aster' ? Math.max(...vegaLong) : Math.min(...vegaLong)
+          const reference = vegaLong.length === 0 ? 0 : embed === 'aster' ? vegaLong.reduce((a, b) => Math.max(a, b)) : vegaLong.reduce((a, b) => Math.min(a, b))
           const ceiling = Math.min(1, Math.max(BROWSER_FLOORS.maxLongShare, reference + BROWSER_FLOORS.longShareSlack))
           if (long > ceiling) bad(`${embed} drops ${(long * 100).toFixed(1)}% of its frames under the update stream; ceiling ${(ceiling * 100).toFixed(0)}% (${(BROWSER_FLOORS.maxLongShare * 100).toFixed(0)}%, or the Vega embeds' share plus ${BROWSER_FLOORS.longShareSlack * 100}%)`)
         }
@@ -144,7 +144,7 @@ export function checkBrowserBench(results: BrowserResults, kinds: string[], page
     for (const metric of ['mount', 'update'] as const) {
       const vegas = VEGA_EMBEDS.map((e) => t[metric]![e]!.median)
       if (!vegas.every((v) => v > 0)) { bad(`the Vega embeds produced no ${metric} timings to compare with`); continue }
-      const fastest = Math.min(...vegas)
+      const fastest = vegas.reduce((a, b) => Math.min(a, b))
       for (const embed of ASTER_EMBEDS) {
         const a = t[metric]![embed]!.median
         if (!(a > 0)) continue
