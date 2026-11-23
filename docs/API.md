@@ -809,7 +809,7 @@ name that is not a part rejects with a `TypeError`). Outside a browser build
 (a server render, a test runner) every part is always there and none of this changes anything.
 
 The base `@aster-charts/react` entry does not include the Vega-Lite compiler; importing `@aster-charts/react/vl` adds about 106 kB
-gzip to the bundle (`<Chart>` 183.5 kB, `<Chart>` + `@aster-charts/react/vl` 289.9 kB eager, from the budgets of
+gzip to the bundle (`<Chart>` 190.6 kB, `<Chart>` + `@aster-charts/react/vl` 296.9 kB eager, from the budgets of
 `pnpm --filter @aster-charts/benchmarks run budget`, which `scripts/perf-docs.test.mjs` ties to these figures; all rows are in [PERFORMANCE.md](PERFORMANCE.md#bundle-sizes)). Passing a VL spec without the add-on throws an error naming the missing
 import. Vega specs need no extra import. Worker hosts must import `@aster-charts/react/vl` in the worker entry as well,
 since compilation happens there.
@@ -988,8 +988,8 @@ Without `interaction`, `setSignal` and bound inputs (`signal.bind`) still work a
 hit index).
 
 Sizes (gzip, eager, from the budgets of `pnpm --filter @aster-charts/benchmarks run budget`, which `scripts/perf-docs.test.mjs` ties to
-these figures): `<Chart>` 183.5 kB,
-`<SvgChart>` 169.9 kB, `<SvgChart>` + `interaction` 183.2 kB ([PERFORMANCE.md](PERFORMANCE.md#bundle-sizes) holds every row). Use `<Chart>` unless that 13.6 kB
+these figures): `<Chart>` 190.6 kB,
+`<SvgChart>` 179.0 kB, `<SvgChart>` + `interaction` 190.3 kB ([PERFORMANCE.md](PERFORMANCE.md#bundle-sizes) holds every row). Use `<Chart>` unless that 11.6 kB
 matters; it is the zero-setup default and its behaviour does not depend on this component.
 
 #### Hooks

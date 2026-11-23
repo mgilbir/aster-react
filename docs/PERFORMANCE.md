@@ -354,65 +354,70 @@ about 4.8x; neither SVG variant holds a 16.7 ms frame at 100,000 points, canvas 
 2026-11-23: `@aster-charts/react` `<Chart>` 312.7 kB gzip (845.6 kB minified, 261.8 kB brotli), `<SvgChart>` from `@aster-charts/react/lite`
 284.3 kB gzip (770.3 kB minified, 239.0 kB brotli), `<SvgChart>` + `interaction` 302.7 kB gzip (817.1 kB minified, 254.4 kB brotli), vs react-vega
 288.7 kB gzip (832.2 kB minified, 239.9 kB brotli) and the official vega-embed tutorial 288.0 kB (830.5 kB minified, 239.6 kB brotli). The
-Aster rows are Vega only and count every chunk, the ones a browser build fetches on demand included (`<Chart>` is 183.5 kB of that up front,
+Aster rows are Vega only and count every chunk, the ones a browser build fetches on demand included (`<Chart>` is 190.6 kB of that up front,
 the table below). The react-vega and vega-embed bundles include Vega-Lite (about 731 kB of their source inputs), so the like-for-like
-comparison for a Vega-Lite app is `<Chart>` plus the Vega-Lite compiler: 289.9 kB gzip up front plus 137.2 kB loaded on demand (the `budget`
-rows below), 427.1 kB in all, which is above react-vega's 288.7 kB. The smaller figure holds for Vega specs only.
+comparison for a Vega-Lite app is `<Chart>` plus the Vega-Lite compiler: 296.9 kB gzip up front plus 137.3 kB loaded on demand (the `budget`
+rows below), 434.2 kB in all, which is above react-vega's 288.7 kB. The smaller figure holds for Vega specs only.
 
 `pnpm --filter @aster-charts/benchmarks run budget` bundles one tiny app per documented import pattern (esbuild, minify,
-`NODE_ENV=production`, tree-shaking on, react external) and gates its gzip size (default level). The add-on rows are
-MARGINAL: the add-on's gzip added to the `@aster-charts/core` app. Each budget is the measured size plus 0.5 kB
-(`packages/benchmarks/scripts/budget.mjs` holds the rationale and the budgets); a change that needs more room edits the number in the same
-PR. These rows count the code a page loads eagerly: a chunk loaded on demand is printed next to the row by the command and is not in the
-gzip figure. Measured 2026-11-23 with that command (all rows PASS). **`scripts/perf-docs.test.mjs` ties every figure below, and the
-sentences derived from them here, in `docs/API.md` and in the react README, to the budgets in `budget.mjs`: change a budget and the test
-names the doc that is stale.**
+`NODE_ENV=production`, tree-shaking on, react external) and gates its gzip size (default level). Every file of the app is gzipped
+on its own and the figures are the sums, because a browser fetches separately compressed files (one gzip of their concatenation read
+3 to 5% under what is transferred; the React rows went up 6.5 to 11.5 kB when the method changed, with no code change). The add-on rows
+are MARGINAL: the add-on's gzip added to the `@aster-charts/core` app (the old rows measured each add-on standalone, which double counted
+the code it shares with core). A row counts the code a page loads up front: the entry and every chunk it imports statically. The React rows
+also carry a TOTAL, the up-front size plus every chunk the app can fetch later, so code moved behind an `import()` that every chart triggers
+cannot lower a row unseen. Each ceiling is the measured size plus 0.5 kB, and the measure must stay 0.3 to 0.7 kB under it: a change that grows
+a row past that, or shrinks it past the other side (a ceiling gone stale, or an import that was shaken out and now measures nothing), fails
+and re-sets the ceiling in its own change. The rows and ceilings are in `packages/benchmarks/scripts/budget-rows.mjs` (the history of why a
+row grew is the git log of that file); the run prints the measure, the ceiling and the headroom of each. A row that names no ceiling, a
+ceiling that names no row, an esbuild warning and a `dist` that is not the build of the sources (a missing or older output, an output whose
+source is gone) all fail. Measured 2026-11-23 with `pnpm --filter @aster-charts/benchmarks run budget` (all rows PASS). **`scripts/perf-docs.test.mjs` ties every figure below, and the sentences derived from them here, in `docs/API.md` and in the react README, to the ceilings in `budget-rows.mjs`: change a ceiling and the test names the doc that is stale.**
 
-| Row (`budget.mjs` name) | Import pattern | gzip kB (eager) |
-|---|---|---|
-| `@aster-charts/core` | `import { renderSpec } from '@aster-charts/core'` | 177.1 |
-| `@aster-charts/react useChart` | `import { useChart } from '@aster-charts/react'` | 147.4 |
-| `@aster-charts/react Chart` | `import { Chart } from '@aster-charts/react'` | 183.5 |
-| `@aster-charts/react SvgChart` | `import { SvgChart } from '@aster-charts/react/lite'` | 169.9 |
-| `@aster-charts/react SvgChart + interaction` | `<SvgChart>` + `import { interaction } from '@aster-charts/react/interaction'` | 183.2 |
-| `@aster-charts/react Chart + VL` | `import '@aster-charts/react/vl'` + `<Chart>` | 289.9 |
-| `@aster-charts/react Chart + all` | `import '@aster-charts/react/all'` + `<Chart>` (every part of the engine up front) | 249.6 |
-| `+ @aster-charts/core/dom` | core + `@aster-charts/core/dom` (marginal) | 12.1 |
-| `+ @aster-charts/core/canvas` | core + `@aster-charts/core/canvas` (marginal) | 6.2 |
-| `+ @aster-charts/core/hit` | core + `@aster-charts/core/hit` (marginal) | 10.1 |
-| `+ @aster-charts/core/signals` | core + `@aster-charts/core/signals` (marginal) | 14.7 |
-| `+ @aster-charts/core/load` | core + `@aster-charts/core/load` (marginal) | 5.3 |
-| `+ @aster-charts/core/geo` | core + `@aster-charts/core/geo` (marginal) | 15.9 |
-| `+ @aster-charts/core/transforms` | core + `@aster-charts/core/transforms` (marginal) | 38.4 |
-| `+ @aster-charts/core/transition` | core + `@aster-charts/core/transition` (marginal) | 3.7 |
-| `+ @aster-charts/core/png` | core + `@aster-charts/core/png` (marginal) | 8.0 |
+| Row (`budget-rows.mjs` name) | Import pattern | gzip kB (up front) | Up front + on demand (gzip kB) |
+|---|---|---|---|
+| `@aster-charts/core` | `import { renderSpec } from '@aster-charts/core'` | 177.4 |  |
+| `@aster-charts/react useChart` | `import { useChart } from '@aster-charts/react'` | 154.4 | 296.6 |
+| `@aster-charts/react Chart` | `import { Chart } from '@aster-charts/react'` | 190.6 | 327.9 |
+| `@aster-charts/react SvgChart` | `import { SvgChart } from '@aster-charts/react/lite'` | 179.0 | 297.2 |
+| `@aster-charts/react SvgChart + interaction` | `<SvgChart>` + `import { interaction } from '@aster-charts/react/interaction'` | 190.3 | 316.7 |
+| `@aster-charts/react Chart + VL` | `import '@aster-charts/react/vl'` + `<Chart>` | 296.9 | 434.2 |
+| `@aster-charts/react Chart + all` | `import '@aster-charts/react/all'` + `<Chart>` | 261.6 | 329.1 |
+| `@aster-charts/react useChartWorker` | `import { useChartWorker } from '@aster-charts/react'` | 204.0 | 296.2 |
+| `@aster-charts/react hydrateChart` | `import { hydrateChart } from '@aster-charts/react'` | 219.0 | 295.9 |
+| `@aster-charts/react/ssr` | `import { renderChartToStaticMarkup, hydrateChart } from '@aster-charts/react/ssr'` | 210.6 | 272.2 |
+| `+ @aster-charts/core/dom` | core + `@aster-charts/core/dom` (marginal) | 11.9 |  |
+| `+ @aster-charts/core/canvas` | core + `@aster-charts/core/canvas` (marginal) | 6.2 |  |
+| `+ @aster-charts/core/hit` | core + `@aster-charts/core/hit` (marginal) | 10.1 |  |
+| `+ @aster-charts/core/signals` | core + `@aster-charts/core/signals` (marginal) | 15.0 |  |
+| `+ @aster-charts/core/load` | core + `@aster-charts/core/load` (marginal) | 5.3 |  |
+| `+ @aster-charts/core/geo` | core + `@aster-charts/core/geo` (marginal) | 15.9 |  |
+| `+ @aster-charts/core/transforms` | core + `@aster-charts/core/transforms` (marginal) | 38.5 |  |
+| `+ @aster-charts/core/transition` | core + `@aster-charts/core/transition` (marginal) | 3.7 |  |
+| `+ @aster-charts/core/png` | core + `@aster-charts/core/png` (marginal) | 8.0 |  |
 
-Each figure is within 0.5 kB of its budget minus the 0.5 kB margin. The families of the engine a browser build loads on demand (the
-aggregating, window and reshaping transforms, time scales and formats, the curves besides `linear`, colour ramps and blending, the rarer
-scale types: [ARCHITECTURE.md](ARCHITECTURE.md#the-parts-of-the-engine-most-charts-never-run)) are what the command prints as "loaded on demand"
-next to the React rows (`<Chart>` 137.2 kB, `<Chart>` + VL 137.2 kB, `<SvgChart>` 121.3 kB, with `interaction` 126.3 kB), and the `all` row
-is what an app that wants no first-render wait pays: 249.6 kB gzip, with 67.5 kB still on demand (the add-ons and the transition module).
-The history of what moved each row is in [Bundle size history](#bundle-size-history).
+(The older figures in this chapter, dated 2026-11-06 and before, were measured by the concatenated method and are kept as the history
+of what each change cost; compare them with the table above only after adding the per-file difference.)
 
 The manifests list only the files that really have an import effect (see
 [ARCHITECTURE.md](ARCHITECTURE.md#side-effects-and-tree-shaking)). Without a `sideEffects` field a bundler must assume
 every module has effects, so `import { useChart }` pulled in `Chart`, `ChartStream`, `useChartStream`,
-`useChartWorkerStream`, the worker host and `batches`; `ASTER_BUDGET_IGNORE_SIDE_EFFECTS=1
-node packages/benchmarks/scripts/budget.mjs`, run from `packages/benchmarks`, bundles the apps that way and the rows then fail.
+`useChartWorkerStream`, the worker host and `batches` (37.7 kB gzip it never calls); `ASTER_BUDGET_SIDE_EFFECTS=all
+node packages/benchmarks/scripts/budget.mjs` bundles the apps that way, and `ASTER_BUDGET_SIDE_EFFECTS=none` as if no module had an effect (a
+row built on a bare `import '...'` then measures nothing and fails).
 `<Chart>` is a shell over `ChartCore` with injected capabilities; that costs a little code in both shells: the property
 reads through the capability objects (a minifier cannot rename them) and the report of a missing capability, which only
-`<SvgChart>` can trigger but both share. `<SvgChart>` is 13.6 kB smaller than `<Chart>` (183.5 minus 169.9): it leaves out the canvas
-renderer, the hit index and the signal loop. Their marginal rows (6.2, 10.1 and 14.7 kB) are each measured on their own,
-so they do not add up to the 13.6 kB gap. The rows that contain no such
+`<SvgChart>` can trigger but both share. `<SvgChart>` is 11.6 kB smaller than `<Chart>` (190.6 minus 179.0): it leaves out the canvas
+renderer, the hit index and the signal loop. Their marginal rows (6.2, 10.1 and 15.0 kB) are each measured on their own,
+so they do not add up to the 11.6 kB gap. The rows that contain no such
 code are checked on the module list, not only the byte count: `pnpm check:bundle` asserts on the esbuild metafile that the
 `<SvgChart>` bundle reads no `core/canvas`, `core/hit` or `core/signals` module, and that with `interaction` it reads hit and
 signals but still no canvas (`hit.ts` and `canvas.ts` share the path parser through `path-data.ts` for exactly this reason).
 
 The `useChart` and `<Chart>` rows fail if the field is removed or widened; `scripts/bundle-shaking.test.mjs` plants
-that fault and requires the budget to fail. The other direction (a list that is too narrow drops a registration) is
+that fault, and the opposite one (an import shaken out), and requires the budget to fail. The other direction (a list that is too narrow drops a registration) is
 caught by `pnpm check:bundle`, which bundles and executes each import pattern.
 
-The Vega-Lite compiler is 106.4 kB gzip on top of the base `<Chart>` (289.9 minus 183.5, measured 2026-11-23; 54.1 at the end of October,
+The Vega-Lite compiler is 106.3 kB gzip on top of the base `<Chart>` (296.9 minus 190.6, measured 2026-11-23; 54.1 at the end of October,
 before the selections, maps and animation work).
 
 ## Dated measurement notes
