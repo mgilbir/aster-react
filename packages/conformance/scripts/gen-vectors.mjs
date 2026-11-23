@@ -32,6 +32,7 @@
  */
 import { createRequire } from 'node:module'
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { enc } from './vector-codec.mjs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { cli } from '../../../scripts/lib/cli.mjs'
@@ -46,32 +47,9 @@ const here = dirname(fileURLToPath(import.meta.url))
 const req = createRequire(join(here, '..', 'package.json'))
 
 // --- value codec -------------------------------------------------------------
-// JSON cannot express NaN/Infinity/-0/undefined/Dates/RegExp/Symbols, so
-// values are tagged. The replay test (`oracle-vectors.test.ts` (packages/core/src)) mirrors this
-// codec; the two must agree.
-
-function enc(v) {
-  if (v === undefined) return { $: 'undef' }
-  if (typeof v === 'number') {
-    if (Number.isNaN(v)) return { $: 'nan' }
-    if (v === Infinity) return { $: 'inf' }
-    if (v === -Infinity) return { $: '-inf' }
-    if (v === 0 && 1 / v < 0) return { $: '-0' }
-    return v
-  }
-  if (v instanceof Date) return { $: 'date', ms: enc(v.getTime()) } // an invalid Date's NaN is tagged: JSON would write null, which decodes to the epoch
-  if (v instanceof RegExp) return { $: 're', src: v.source, flags: v.flags }
-  if (typeof v === 'symbol') return { $: 'symbol', desc: v.description ?? null }
-  if (v instanceof Int8Array) return { $: 'int8array' }
-  if (typeof v === 'function') return { $: 'fn' }
-  if (Array.isArray(v)) return v.map(enc)
-  if (v !== null && typeof v === 'object') {
-    const o = {}
-    for (const k of Object.keys(v).sort()) o[k] = enc(v[k])
-    return o
-  }
-  return v
-}
+// JSON cannot express NaN/Infinity/-0/undefined/Dates/RegExp/Symbols, so values are tagged (vector-codec.mjs; an invalid
+// Date keeps its NaN time). The replay test (`oracle-vectors.test.ts` (packages/core/src)) mirrors this codec; the two must
+// agree, and vector-codec.test.mts checks the recorded files.
 
 /** Call fn, capturing a throw as a tagged value (type and message both pinned). */
 function call(fn, args) {
