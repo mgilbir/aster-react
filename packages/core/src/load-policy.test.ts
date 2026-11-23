@@ -94,10 +94,10 @@ describe('default policy', () => {
   it('the allow hook can veto a public url (called with the parsed URL)', async () => {
     const seen: string[] = []
     const fetchSpy = (async () => { throw new Error('must not be fetched') }) as unknown as typeof fetch
-    await expect(loadSpecData(spec({ name: 't', url: 'https://data.example.test/a.json' }), {
-      fetch: fetchSpy, allow: (u) => { seen.push(u.hostname); return u.hostname === 'ok.example.test' },
+    await expect(loadSpecData(spec({ name: 't', url: 'https://data.example.com/a.json' }), {
+      fetch: fetchSpy, allow: (u) => { seen.push(u.hostname); return u.hostname === 'ok.example.com' },
     })).rejects.toThrow(/allow hook/)
-    expect(seen).toEqual(['data.example.test'])
+    expect(seen).toEqual(['data.example.com'])
   })
 
   it('relative urls resolve against baseURL and are trusted there, even on loopback', async () => {
@@ -115,7 +115,7 @@ describe('default policy', () => {
     expect(secret.hits.length).toBe(before)
   })
 
-  it.each(['file:///etc/passwd', 'ftp://example.test/x', 'javascript:alert(1)', 'blob:http://example.test/x', 'https://user:pw@example.test/x'])(
+  it.each(['file:///etc/passwd', 'ftp://example.com/x', 'javascript:alert(1)', 'blob:http://example.com/x', 'https://user:pw@example.com/x'])(
     'protocol/credential denial: %s', async (url) => {
       await expect(loadSpecData(spec({ name: 't', url }), { fetch: (async () => { throw new Error('fetched') }) as unknown as typeof fetch }))
         .rejects.toBeInstanceOf(AsterUrlError)
@@ -127,15 +127,15 @@ describe('default policy', () => {
     expect(valuesOf(await loadSpecData(d, { protocols: ['data:'] }))).toEqual([{ a: 1 }])
     await expect(loadSpecData(d, { protocols: ['data:'], allow: () => false })).rejects.toThrow(/allow hook/)
     // http is no longer allowed once the host narrowed the protocols
-    await expect(loadSpecData(spec({ name: 't', url: 'https://example.test/a.json' }), { protocols: ['data:'] })).rejects.toThrow(/protocol https: is not allowed/)
+    await expect(loadSpecData(spec({ name: 't', url: 'https://example.com/a.json' }), { protocols: ['data:'] })).rejects.toThrow(/protocol https: is not allowed/)
   })
 
   it('the host classification table', () => {
     for (const h of ['localhost', 'foo.localhost', 'a.local', 'svc.internal', '127.0.0.1', '127.1.2.3', '10.1.2.3', '172.16.0.1', '172.31.255.255', '192.168.0.1',
-      '169.254.169.254', '100.64.0.1', '0.0.0.0', '224.0.0.1', '[::1]', '[::]', '[fc00::1]', '[fd12:3456::1]', '[fe80::1]', '[::ffff:7f00:1]', '[::ffff:10.0.0.1]', '[64:ff9b::a00:1]', '[2002:7f00:1::]']) {
+      '169.254.169.254', '100.64.0.1', '0.0.0.0', '224.0.0.1', '[::1]', '[::]', '[fc00::1]', '[fd12:3456::1]', '[fe80::1]', '[::ffff:7f00:1]', '[::ffff:10.0.0.1]', '[64:ff9b::a00:1]', '[2002:7f00:1::]', '192.0.2.1']) {
       expect(isNonPublicHost(h), h).toBe(true)
     }
-    for (const h of ['example.com', '93.184.216.34', '8.8.8.8', '172.15.0.1', '172.32.0.1', '[2606:4700::1111]', '[::ffff:808:808]', '100.63.0.1', '192.0.2.1']) {
+    for (const h of ['example.com', '93.184.216.34', '8.8.8.8', '172.15.0.1', '172.32.0.1', '[2606:4700::1111]', '[::ffff:808:808]', '100.63.0.1']) {
       expect(isNonPublicHost(h), h).toBe(false)
     }
   })
@@ -170,7 +170,7 @@ describe('redirects are re-checked hop by hop', () => {
 
   it('a fetch that follows redirects itself is checked after the fact', async () => {
     const lying = (async () => ({ ok: true, status: 200, redirected: true, url: 'http://127.0.0.1:9/secret', headers: new Headers(), text: async () => '[]' })) as unknown as typeof fetch
-    await expect(loadSpecData(spec({ name: 't', url: 'https://public.example.test/a.json' }), { fetch: lying })).rejects.toThrow(/non-public/)
+    await expect(loadSpecData(spec({ name: 't', url: 'https://public.example.com/a.json' }), { fetch: lying })).rejects.toThrow(/non-public/)
   })
 })
 
@@ -235,9 +235,9 @@ describe('what is loaded', () => {
 
   it('group-level url datasets (nested at any depth) are resolved, the input spec is not mutated', async () => {
     const input = {
-      data: [{ name: 'top', url: 'https://example.test/a.json' }],
-      marks: [{ type: 'group', data: [{ name: 'g1', url: 'https://example.test/b.json' }],
-        marks: [{ type: 'group', data: [{ name: 'g2', url: 'https://example.test/c.json' }], marks: [] }] }],
+      data: [{ name: 'top', url: 'https://example.com/a.json' }],
+      marks: [{ type: 'group', data: [{ name: 'g1', url: 'https://example.com/b.json' }],
+        marks: [{ type: 'group', data: [{ name: 'g2', url: 'https://example.com/c.json' }], marks: [] }] }],
     } as unknown as VgSpec
     const before = JSON.stringify(input)
     const out = await loadSpecData(input, { fetch: okFetch('[{"v":1}]') }) as unknown as {
@@ -250,7 +250,7 @@ describe('what is loaded', () => {
 
   it('a url dataset nobody loaded is an error at evaluation, never an empty chart', async () => {
     const { renderSpec } = await import('./index.js')
-    const s = spec({ name: 't', url: 'https://example.test/a.json' })
+    const s = spec({ name: 't', url: 'https://example.com/a.json' })
     expect(() => renderSpec(s)).toThrow(/dataset "t" has a url but no data was loaded for it.*loadSpecData/)
     // host-supplied rows are fine
     expect(() => renderSpec(s, { data: { t: [{ a: 1 }] } })).not.toThrow()
@@ -265,7 +265,7 @@ describe('what is loaded', () => {
 
   it('format.parse date patterns work like vega-loader (date:/utc: with quotes)', async () => {
     const rows = 'd,u,n\n15/01/2024,2024-01-15,5\n'
-    const loaded = await loadSpecData(spec({ name: 't', url: 'https://example.test/a.csv', format: { type: 'csv', parse: { d: "date:'%d/%m/%Y'", u: 'utc:"%Y-%m-%d"', n: 'number' } } }), { fetch: okFetch(rows) })
+    const loaded = await loadSpecData(spec({ name: 't', url: 'https://example.com/a.csv', format: { type: 'csv', parse: { d: "date:'%d/%m/%Y'", u: 'utc:"%Y-%m-%d"', n: 'number' } } }), { fetch: okFetch(rows) })
     const row = (valuesOf(loaded) as Array<Record<string, unknown>>)[0]!
     expect(row.d).toBeInstanceOf(Date)
     expect((row.d as Date).getFullYear()).toBe(2024)
@@ -278,10 +278,10 @@ describe('what is loaded', () => {
   it('topojson: object names are looked up as OWN properties', async () => {
     const topo = JSON.stringify({ type: 'Topology', arcs: [], objects: { g: { type: 'GeometryCollection', geometries: [] } } })
     for (const feature of ['constructor', '__proto__', 'toString', 'hasOwnProperty']) {
-      await expect(loadSpecData(spec({ name: 't', url: 'https://example.test/t.json', format: { type: 'topojson', feature } }), { fetch: okFetch(topo) }))
+      await expect(loadSpecData(spec({ name: 't', url: 'https://example.com/t.json', format: { type: 'topojson', feature } }), { fetch: okFetch(topo) }))
         .rejects.toThrow(/topojson object ".*" not found/)
     }
-    const ok = await loadSpecData(spec({ name: 't', url: 'https://example.test/t.json', format: { type: 'topojson', feature: 'g' } }), { fetch: okFetch(topo) })
+    const ok = await loadSpecData(spec({ name: 't', url: 'https://example.com/t.json', format: { type: 'topojson', feature: 'g' } }), { fetch: okFetch(topo) })
     expect(valuesOf(ok)).toEqual([])
   })
 
@@ -289,7 +289,7 @@ describe('what is loaded', () => {
     const arc = Array.from({ length: 500 }, (_, i) => [i, i % 5])
     const topo = JSON.stringify({ type: 'Topology', arcs: [arc], objects: { g: { type: 'GeometryCollection', geometries: [{ type: 'Polygon', arcs: [new Array(4000).fill(0)] }] } } })
     expect(topo.length).toBeLessThan(40_000)
-    const err = await loadSpecData(spec({ name: 't', url: 'https://example.test/t.json', format: { type: 'topojson', feature: 'g' } }),
+    const err = await loadSpecData(spec({ name: 't', url: 'https://example.com/t.json', format: { type: 'topojson', feature: 'g' } }),
       { fetch: okFetch(topo), limits: { maxRows: 50_000 } }).catch((e) => e)
     expect(err).toBeInstanceOf(AsterLimitError)
     expect(String(err.message)).toMatch(/maxRows/)

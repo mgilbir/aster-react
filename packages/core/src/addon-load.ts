@@ -21,6 +21,7 @@ import { dataInputOf, specList } from './spec-structure.js'
 import { compileExpr, type ExpressionRuntime } from './expression.js'
 import { AsterLimitError, checkRowCount, withLimits, type SpecLimits } from './limits.js'
 import { AsterUrlError, DEFAULT_LOAD_PROTOCOLS, checkBasicUrl, type UrlPolicyBase } from './url-policy.js'
+import { isNonPublicHost } from './load-host.js'
 
 function delimited(delimiter: string) {
   return (data: unknown, format: Record<string, unknown>) => {
@@ -131,75 +132,7 @@ export const TRUSTED_LOAD_OPTIONS: Readonly<Pick<LoadOptions, 'protocols' | 'all
 
 // --- host classification -----------------------------------------------------
 
-function ipv4Octets(host: string): number[] | null {
-  const m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(host)
-  if (!m) return null
-  const o = m.slice(1).map(Number)
-  return o.every((x) => x <= 255) ? o : null
-}
-
-function privateIPv4(o: number[]): boolean {
-  const [a, b, c] = o as [number, number, number, number]
-  return (
-    a === 0 || a === 10 || a === 127 ||                 // this-network, private, loopback
-    (a === 100 && b >= 64 && b <= 127) ||               // carrier-grade NAT
-    (a === 169 && b === 254) ||                         // link-local, cloud metadata
-    (a === 172 && b >= 16 && b <= 31) ||                // private
-    (a === 192 && b === 0 && c === 0) ||                // IETF protocol assignments
-    (a === 192 && b === 168) ||                         // private
-    (a === 198 && (b === 18 || b === 19)) ||            // benchmarking
-    a >= 224                                            // multicast and reserved
-  )
-}
-
-/** Expand an IPv6 literal (no brackets, no zone) to eight 16-bit groups, or null. */
-function ipv6Groups(host: string): number[] | null {
-  let h = host
-  const dotted = /(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/.exec(h)
-  if (dotted) {
-    const o = ipv4Octets(dotted[1]!)
-    if (!o) return null
-    h = h.slice(0, -dotted[1]!.length) + ((o[0]! << 8) | o[1]!).toString(16) + ':' + ((o[2]! << 8) | o[3]!).toString(16)
-  }
-  const halves = h.split('::')
-  if (halves.length > 2) return null
-  const left = halves[0] ? halves[0].split(':') : []
-  const right = halves.length === 2 && halves[1] ? halves[1].split(':') : []
-  const missing = 8 - left.length - right.length
-  if ((halves.length === 1 && missing !== 0) || missing < 0) return null
-  const parts = [...left, ...new Array<string>(halves.length === 2 ? missing : 0).fill('0'), ...right]
-  if (parts.length !== 8) return null
-  const out = parts.map((p) => (/^[0-9a-f]{1,4}$/i.test(p) ? parseInt(p, 16) : NaN))
-  return out.some(Number.isNaN) ? null : out
-}
-
-/**
- * True when the host literal in a URL names a non-public destination:
- * `localhost` and local-only suffixes, loopback/private/link-local/reserved
- * IPv4, and the IPv6 equivalents including IPv4-mapped, NAT64 and 6to4 forms.
- * The WHATWG URL parser has already normalised octal/hex/decimal IPv4 spellings.
- */
-export function isNonPublicHost(hostname: string): boolean {
-  const host = hostname.replace(/^\[|\]$/g, '').toLowerCase().replace(/\.$/, '')
-  if (host === '' || host === 'localhost' || host.endsWith('.localhost') || host.endsWith('.local') || host.endsWith('.internal') || host.endsWith('.localdomain')) return true
-  const v4 = ipv4Octets(host)
-  if (v4) return privateIPv4(v4)
-  if (host.includes(':')) {
-    const g = ipv6Groups(host.split('%')[0]!)
-    if (!g) return true // unparseable literal: fail closed
-    const embedded = (hi: number, lo: number): number[] => [hi >> 8, hi & 255, lo >> 8, lo & 255]
-    if (g.every((x) => x === 0)) return true                                                   // ::
-    if (g.slice(0, 7).every((x) => x === 0) && g[7] === 1) return true                         // ::1
-    if (g.slice(0, 5).every((x) => x === 0) && (g[5] === 0xffff || g[5] === 0)) return privateIPv4(embedded(g[6]!, g[7]!)) // ::ffff:a.b.c.d, ::a.b.c.d
-    if (g[0] === 0x64 && g[1] === 0xff9b && g.slice(2, 6).every((x) => x === 0)) return privateIPv4(embedded(g[6]!, g[7]!)) // 64:ff9b::/96
-    if (g[0] === 0x2002) return privateIPv4(embedded(g[1]!, g[2]!))                            // 6to4
-    if ((g[0]! & 0xfe00) === 0xfc00) return true                                               // fc00::/7 unique local
-    if ((g[0]! & 0xffc0) === 0xfe80) return true                                               // fe80::/10 link-local
-    if ((g[0]! & 0xff00) === 0xff00) return true                                               // multicast
-    return false
-  }
-  return false
-}
+export { isNonPublicHost } from './load-host.js'
 
 // --- the fetch pipeline -----------------------------------------------------
 
