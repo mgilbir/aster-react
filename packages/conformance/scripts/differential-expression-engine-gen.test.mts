@@ -21,7 +21,8 @@
  */
 import { afterEach, describe, expect, it } from 'vitest'
 import * as vega from 'vega'
-import { compileChart, compileExpr, datasetsOfScene, defaultLocale, evaluateChart, resetDefaultLocale } from '@aster-charts/core'
+import { compileChart, compileExpr, datasetsOfScene, defaultLocale, evaluateChart, renderSpec, resetDefaultLocale } from '@aster-charts/core'
+import { canonicalizeSvg, diffCanonical } from '../src/normalize.js'
 import { enc, withTz } from './differential-util.mts'
 import { makeRng, scaled, type Rng } from './differential-gen.mts'
 
@@ -103,6 +104,11 @@ const ANY_FUNCTION = [
   'panLinear', 'panLog', 'panPow', 'panSymlog', 'zoomLinear', 'zoomLog', 'zoomPow', 'zoomSymlog', 'bandspace',
 ]
 
+/** The binary and logical operators of vega's expression language (vega-expression's parser and code generator). */
+const BINARY = ['+', '-', '*', '/', '%', '<', '<=', '>', '>=', '==', '!=', '===', '!==', '&&', '||', '|', '&', '^', '<<', '>>', '>>>', 'in', 'instanceof']
+const STATEFUL = ['/a/g', '/l/gi', '/b/y', '/[a-z]/gy', '/./g']
+const REGEXES = ['/a/', '/^\\d+$/', '/l+/i', ...STATEFUL]
+
 /** An argument of any type. */
 const anyLeaf = (r: Rng): string => r.pick([
   'datum.a', 'datum.b', 'datum.n', 'datum.u', 'datum.z', 'datum.s', 'datum.t', 'datum.arr', 'datum.o', 'datum.spec', 'datum.tspec',
@@ -139,7 +145,13 @@ function gen(r: Rng, depth: number): string {
     () => `{${Array.from({ length: r.between(1, 7) }, (_, k) => `${r.chance(0.5) ? `"k ${k}"` : `k${k}`}: ${r.chance(0.7) ? `format(${numLeaf()}, ${q(numSpec(r))})` : sub()}`).join(', ')}}`,
     () => `[${args(r.between(0, 4), sub)}]`,
     // operators and control flow
-    () => `${num()} ${r.pick(['+', '-', '*', '/', '%', '<', '>=', '===', '==', '&&', '||'])} ${num()}`,
+    // every binary and logical operator vega's code generator evaluates (C302: `in`, `instanceof`, bitwise, shifts, `!=`,
+    // `!==`, `>`, `<=` were missing, and `in` threw in Aster where vega evaluates it)
+    () => `${num()} ${r.pick(BINARY)} ${num()}`,
+    () => `${sub()} ${r.pick(BINARY)} ${sub()}`,
+    () => `${r.pick(['"a"', '"s"', '"zz"', '"0"', '1', 'datum.s', 'sx'])} in ${r.pick(['datum', 'datum.o', 'datum.arr', '{a: 1, s: 2}', '[1, 2]', 'datum.n', 'datum.s', 'ss'])}`,
+    () => `${r.pick(['datum.arr', 'datum.o', '[1]', '{}', 'datum.t', 'datum.s', 'datetime(2020, 1)', 'datum.n'])} instanceof ${r.pick(['datum.o', 'datum.arr', 'sx', 'null', '{}'])}`,
+    () => `${r.pick(['~', '+', '-', '!'])}${sub()}`,
     () => `${sub()} ? ${sub()} : ${sub()}`,
     () => `if(${sub()}, ${sub()}, ${sub()})`,
     () => `!${sub()}`,
@@ -168,7 +180,11 @@ function gen(r: Rng, depth: number): string {
     () => `merge(${args(r.between(0, 3), () => r.pick(['datum.o', 'datum.arr', '{a: 1, b: datum.s}', 'ss', 'null', '[1, 2]', 'datum.o.w']))})`,
     () => `extent(datum.arr)`,
     () => `length(sequence(${r.int(5)}, ${r.int(9)}))`,
-    () => `test(${r.pick(['/a/', '/^\\d+$/', '/l+/i'])}, ${str()})`,
+    // regex literals with the stateful flags too: each expression runs over 12 rows, so a literal shared between rows (a `g`
+    // or `y` RegExp keeps its lastIndex) shows (C302, C32)
+    () => `test(${r.pick(REGEXES)}, ${str()})`,
+    () => `replace(${str()}, ${r.pick(REGEXES)}, ${q(r.pick(['', 'Z', '$&$&']))})`,
+    () => `[test(${r.pick(STATEFUL)}, datum.s), test(${r.pick(STATEFUL)}, ss)]`,
     () => `split(${str()}, ${q(r.pick([',', ' ', '']))})`,
     () => `${r.pick(['year', 'utcmonth', 'date', 'hours', 'quarter', 'utcweek', 'dayofyear'])}(${r.pick(['datum.t', 'datum.a', 'datum.n'])})`,
     () => `inrange(${num()}, [${num()}, ${num()}])`,
@@ -268,6 +284,8 @@ describe('generated: the expression engine vs real Vega (formula per row)', () =
       const bad: string[] = []
       let errored = 0
       let formats = 0
+      const ops = new Set<string>()
+      const stateful = new Set<string>()
       for (let i = 0; i < N && bad.length < Number(process.env.ASTER_ENGINE_MAXBAD ?? 8); i++) {
         const expr = gen(r, r.int(3))
         const rows = mkRows(r, 12)
@@ -279,6 +297,8 @@ describe('generated: the expression engine vs real Vega (formula per row)', () =
           const [want, got] = await withTz(zone, () => [onVega(expr, rows), onAster(expr, rows)])
           if ('error' in want) errored++
           if (/format\(/i.test(expr)) formats++
+          for (const op of BINARY) if (expr.includes(` ${op} `)) ops.add(op)
+          for (const re of STATEFUL) if (expr.includes(re)) stateful.add(re)
           if (JSON.stringify(got) !== JSON.stringify(want)) {
             bad.push(`#${i} ${zone}${local ? ' (locale)' : ''} ${expr}\n   vega:  ${JSON.stringify(want).slice(0, 600)}\n   aster: ${JSON.stringify(got).slice(0, 600)}`)
           }
@@ -291,6 +311,9 @@ describe('generated: the expression engine vs real Vega (formula per row)', () =
       expect(errored).toBeGreaterThan(N * 0.01)
       expect(errored).toBeLessThan(N * 0.5)
       expect(formats).toBeGreaterThan(N * 0.3)
+      // every operator and every stateful regex literal was generated (a generator that stops drawing one is caught here)
+      expect([...BINARY].filter((op) => !ops.has(op))).toEqual([])
+      expect(STATEFUL.filter((re) => !stateful.has(re))).toEqual([])
     }), 300_000)
 
   it('a compiled expression follows the default locale when it changes between two evaluations', () =>
@@ -324,4 +347,74 @@ describe('generated: the expression engine vs real Vega (formula per row)', () =
       }
       expect(bad).toEqual([])
     }), 120_000)
+})
+
+// --- encode sites: expressions that read `item` --------------------------------------------------------
+
+/**
+ * An expression of an encode channel: what vega hands it as `item` is the scenegraph item being encoded (the channels set so far,
+ * its datum, its mark and the group around the mark). The formula and filter sites above have no item: this is the only site
+ * where the generator reaches it (C302).
+ */
+function itemExpr(r: Rng, depth: number): string {
+  const leaf = (): string => r.pick([
+    'item.x', 'item.y', 'item.fill', 'item.datum.n', 'item.datum.c', 'item.mark.marktype', 'item.mark.name', 'item.mark.role',
+    'item.mark.group.width', 'item.mark.group.height', 'isDefined(item)', 'isObject(item.mark)', 'item.nosuch', 'datum.n', '3', '"k"',
+  ])
+  if (depth === 0) return leaf()
+  const sub = (): string => itemExpr(r, depth - 1)
+  return r.pick<() => string>([
+    () => leaf(),
+    () => `${sub()} ${r.pick(['+', '-', '*', '<', '==', '!=', '&&', '||', 'in'])} ${sub()}`,
+    () => `${sub()} ? ${sub()} : ${sub()}`,
+    () => `upper('' + ${sub()})`,
+    () => `format(+${sub()}, '.1f')`,
+  ])()
+}
+
+function encodeSpec(r: Rng): Record<string, unknown> {
+  const text = (): Record<string, unknown> => ({ signal: `'' + (${itemExpr(r, r.int(3))})` })
+  return {
+    width: 120, height: 100, padding: 5, autosize: 'none',
+    data: [{ name: 't', values: [{ n: 1, c: 'a' }, { n: 2, c: 'b' }, { n: 3, c: 'c' }] }],
+    marks: [{
+      type: 'group', name: 'cell', encode: { enter: { width: { value: 110 }, height: { value: 90 } } },
+      marks: [{
+        type: 'text', name: r.pick(['labels', 'other']), from: { data: 't' },
+        encode: {
+          enter: { x: { field: 'n', mult: r.pick([10, 20]) }, fill: { value: r.pick(['red', 'blue']) } },
+          update: { y: { field: 'n', mult: 25 }, text: text(), ...(r.chance(0.4) ? { opacity: { signal: `item.x > 15 ? 1 : 0.5` } } : {}) },
+        },
+      }],
+    }],
+  }
+}
+
+async function vegaSvg(spec: Record<string, unknown>): Promise<string> {
+  const view = new (vega as any).View(vega.parse(structuredClone(spec) as never), { renderer: 'none' })
+  try {
+    await view.runAsync()
+    return await view.toSVG()
+  } finally {
+    view.finalize()
+  }
+}
+
+describe('generated: encode expressions that read `item` vs real Vega (rendered)', () => {
+  it('render the same SVG', async () => {
+    const r = makeRng(SEED ^ 0x17e)
+    const bad: string[] = []
+    let compared = 0
+    for (let i = 0; i < scaled(200) && bad.length < 8; i++) {
+      const spec = encodeSpec(r)
+      let want: string
+      try { want = await vegaSvg(spec) } catch { continue }
+      compared++
+      let diffs: string[]
+      try { diffs = diffCanonical(canonicalizeSvg(want), canonicalizeSvg(renderSpec(structuredClone(spec) as never))) } catch (e) { diffs = [`aster threw: ${(e as Error).message}`] }
+      if (diffs.length) bad.push(`#${i} ${JSON.stringify((spec as any).marks[0].marks[0].encode.update.text)}\n   ${diffs.slice(0, 2).join('\n   ')}`)
+    }
+    expect(bad).toEqual([])
+    expect(compared).toBeGreaterThan(scaled(200) * 0.8)
+  }, 300_000)
 })
