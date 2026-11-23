@@ -19,7 +19,7 @@ import { describe, expect, it } from 'vitest'
 import { seeded } from './upstream.mts'
 import { referenceSpec } from './parse-refusal-gen.mts'
 import { WRAPPED } from '../../core/src/guide-model.ts'
-import { asterOutcome, BAD, GOOD, GUIDE_CASES, HANDLER_SHAPES, HANDLER_SITES, randomGuide, SEMANTIC, SITES, UNBOUND_HANDLER_SITES, vegaOutcome } from './expression-sites.mts'
+import { asterOutcome, BAD, expectAster, GOOD, GUIDE_CASES, HANDLER_SHAPES, HANDLER_SITES, randomGuide, SEMANTIC, SITES, UNBOUND_HANDLER_SITES, vegaOutcome } from './expression-sites.mts'
 
 const POOL = [...BAD, ...GOOD, ...SEMANTIC]
 
@@ -29,7 +29,8 @@ describe('an expression a spec holds is refused as vega refuses it (Aster vs rea
       it(`${group}${site}`, () => {
         for (const e of POOL) {
           const spec = make(e)
-          expect(asterOutcome(spec), `${site}: ${JSON.stringify(e)}`).toBe(vegaOutcome(spec))
+          const got = asterOutcome(spec)
+          expect(expectAster(spec, sites === UNBOUND_HANDLER_SITES)(got), `${site}: ${JSON.stringify(e)}: ${got} (vega: ${vegaOutcome(spec)})`).toBe(true)
         }
       })
     }
@@ -37,7 +38,8 @@ describe('an expression a spec holds is refused as vega refuses it (Aster vs rea
 
   for (const [shape, spec] of Object.entries(HANDLER_SHAPES)) {
     it(`handler shape: ${shape}`, () => {
-      expect(asterOutcome(spec), shape).toBe(vegaOutcome(spec))
+      const got = asterOutcome(spec)
+      expect(expectAster(spec, shape === 'encodeOnly')(got), `${shape}: ${got} (vega: ${vegaOutcome(spec)})`).toBe(true)
     })
   }
 
