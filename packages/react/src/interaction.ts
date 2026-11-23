@@ -75,6 +75,8 @@ function scaleNameOf(ref: unknown, out: string[]): void {
  * scene exposes).
  */
 export function positionalScales(spec: VgSpec): PositionalScales {
+  // (a value that is not a spec object -- a chart in its error state -- has no positional scales)
+  if (spec == null || typeof spec !== 'object') return {}
   const defs = new Map<string, string>()
   const rootScales = (spec as { scales?: unknown }).scales
   if (Array.isArray(rootScales)) {

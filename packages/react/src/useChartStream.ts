@@ -21,7 +21,7 @@ import type {
 } from '@aster-charts/core'
 import { renderSceneToSvg } from '@aster-charts/core/lean'
 import { createChartStream, getStreamFlushFailure } from '@aster-charts/core/lean/stream'
-import { normalizeChartSpec, useStableSpec } from './spec.js'
+import { normalizeSpecResult, useStableSpec } from './spec.js'
 import { useAddons } from './addons.js'
 
 export interface UseChartStreamOptions extends StreamOptions {
@@ -101,12 +101,17 @@ interface TaggedState extends StreamState {
 export function useChartStream(spec: VgSpec, options: UseChartStreamOptions = {}): UseChartStreamResult {
   const { serialize = true, autoFlush = true, flushPolicy = 'microtask', capacity, policy, initial, maxQueuedRows, limits, textMetrics } = options
   const stableSpec = useStableSpec(spec)
-  const normalized = React.useMemo(() => normalizeChartSpec(stableSpec), [stableSpec])
+  // Normalized inside the guard: a value that is not a spec, a Vega-Lite spec without the compiler or one it refuses is the
+  // result's `error` (and `<ChartStream>`'s `onStreamError`), never a throw from render. Such a stream is made over an empty
+  // spec (a new one per failure, so another failure makes another stream) and stays in that error.
+  const normalizedResult = React.useMemo(() => normalizeSpecResult(stableSpec), [stableSpec])
+  const specError = normalizedResult.error
+  const normalized = React.useMemo(() => normalizedResult.spec ?? ({} as VgSpec), [normalizedResult])
   // `initial.urlData` decides whether the spec is refused, so unlike the rest of `initial` it is part of the stream's key
   const urlData = initial?.urlData
   // The add-ons the spec needs load before the stream is created (and primed): suspends meanwhile; a failed import is `error`.
   // With `urlData: 'refuse'` a spec with a url dataset is refused first, before any import.
-  const addonError = useAddons(normalized, urlData, { limits: limits != null })
+  const addonError = useAddons(normalizedResult.spec, urlData, { limits: limits != null })
   const streamRef = React.useRef<ChartStream | null>(null)
   const streamKey = React.useRef<{ spec: VgSpec; capacity?: number; policy?: StreamOptions['policy']; maxQueuedRows?: number; urlData?: UrlDataMode } | null>(null)
   const primedRef = React.useRef<TaggedState | null>(null)
@@ -128,6 +133,7 @@ export function useChartStream(spec: VgSpec, options: UseChartStreamOptions = {}
     streamKey.current = { spec: normalized, capacity, policy, maxQueuedRows, urlData }
     let primed: StreamState
     try {
+      if (specError) throw specError
       if (addonError) throw addonError
       const first = created.flush()
       primed = first
@@ -172,6 +178,8 @@ export function useChartStream(spec: VgSpec, options: UseChartStreamOptions = {}
   }, [serialize, stream])
 
   const flush = React.useCallback((): StreamFlush | null => {
+    // (a stream over a spec that could not be normalized has nothing to draw: it keeps its error)
+    if (specError) return null
     try {
       const result = stream.flush()
       if (result) return commit(result)
@@ -193,7 +201,7 @@ export function useChartStream(spec: VgSpec, options: UseChartStreamOptions = {}
       if (mounted.current) setState((s) => ({ ...(s != null && s.stream === stream ? s : primedRef.current!), ...failed }))
       return null
     }
-  }, [commit, stream])
+  }, [commit, stream, specError])
 
   const flushRef = React.useRef(flush)
   flushRef.current = flush
