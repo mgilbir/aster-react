@@ -95,21 +95,22 @@ function arcSlot(index: unknown, count: number): number {
 }
 
 /**
- * A reader of the arcs by signed index: each arc's positions (a list of at least two positions, each a list), checked the
- * first time the arc is read (an arc is shared by many geometries: it is checked once).
+ * A reader of the arcs by signed index: each arc a list of at least two positions. (Each position is checked where it is
+ * read, by {@link position}: a second pass over the arc would cost as much as decoding it.)
  */
 function arcReader(arcs: readonly unknown[]): (index: unknown) => Position[] {
-  const checked = new Uint8Array(arcs.length)
   return (index) => {
     const slot = arcSlot(index, arcs.length)
     const arc = arcs[slot]
-    if (checked[slot] === 0) {
-      if (!Array.isArray(arc) || arc.length < 2) throw malformed(`arc ${slot} must be a list of at least two positions`)
-      for (const p of arc) if (!Array.isArray(p)) throw malformed(`arc ${slot} has a position that is not a list`)
-      checked[slot] = 1
-    }
+    if (!Array.isArray(arc) || arc.length < 2) throw malformed(`arc ${slot} must be a list of at least two positions`)
     return arc as Position[]
   }
+}
+
+/** A position as read from an arc: an object (a list); anything else is a malformed-topology error. */
+function position(p: unknown): Position {
+  if (typeof p !== 'object' || p === null) throw malformed(`a position must be a list, got ${JSON.stringify(p) ?? String(p)}`)
+  return p as Position
 }
 
 /** A topology's transform, when it has one: a `scale` and a `translate`, each two numbers. */
@@ -130,7 +131,7 @@ function decodePositions(positions: readonly Position[], transform: Transform | 
   const n = positions.length
   const out = new Array<Position>(n)
   if (!transform) {
-    for (let i = 0; i < n; i++) out[i] = positions[i]!.slice()
+    for (let i = 0; i < n; i++) out[i] = position(positions[i]).slice()
     return out
   }
   const kx = transform.scale[0]
@@ -140,7 +141,7 @@ function decodePositions(positions: readonly Position[], transform: Transform | 
   let x = 0
   let y = 0
   for (let i = 0; i < n; i++) {
-    const p = positions[i]!
+    const p = position(positions[i])
     const q = [(x += p[0]!) * kx + dx, (y += p[1]!) * ky + dy]
     for (let j = 2; j < p.length; j++) q.push(p[j]!)
     out[i] = q
@@ -157,7 +158,7 @@ function appendTransformed(out: Position[], raw: readonly Position[], transform:
   let x = 0
   let y = 0
   for (let i = 0; i < raw.length; i++) {
-    const p = raw[i]!
+    const p = position(raw[i])
     const q = [(x += p[0]!) * kx + dx, (y += p[1]!) * ky + dy]
     for (let j = 2; j < p.length; j++) q.push(p[j]!)
     out.push(q)
@@ -188,7 +189,7 @@ function decoder(topology: Topology) {
     meterCoords(raw.length, 'topojson arcs', (decoded += raw.length))
     const first = points.length
     if (transform) appendTransformed(points, raw, transform)
-    else for (let i = 0; i < raw.length; i++) points.push(raw[i]!.slice())
+    else for (let i = 0; i < raw.length; i++) points.push(position(raw[i]).slice())
     if (index < 0) reverseTail(points, first)
   }
 
@@ -325,7 +326,7 @@ function stitch(topology: Topology, indices: number[]): number[][] {
   for (let j = 0, placed = -1; j < indices.length; j++) {
     const index = indices[j]!
     const arc = dataOf(index)
-    if (arc.length < 3 && !arc[1]![0] && !arc[1]![1]) {
+    if (arc.length < 3 && !position(arc[1])[0] && !arc[1]![1]) {
       const displaced = indices[++placed]!
       indices[placed] = index
       indices[j] = displaced
@@ -335,17 +336,18 @@ function stitch(topology: Topology, indices: number[]): number[][] {
   /** The keys of an arc's first and last position, as walked (a negative index walks it backwards). */
   const ends = (index: number): [string, string] => {
     const arc = dataOf(index)
-    const first = arc[0] as Position
+    const first = position(arc[0])
     let last: Position
     if (transform) {
       // deltas: the last position is the sum of all of them
       last = [0, 0]
-      for (const delta of arc) {
+      for (const d of arc) {
+        const delta = position(d)
         last[0]! += delta[0]!
         last[1]! += delta[1]!
       }
     } else {
-      last = arc[arc.length - 1] as Position
+      last = position(arc[arc.length - 1])
     }
     return index < 0 ? [keyOf(last), keyOf(first)] : [keyOf(first), keyOf(last)]
   }
