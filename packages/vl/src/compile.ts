@@ -788,6 +788,12 @@ function mergeLayerTitles(entries: ReadonlyArray<{ path: number[]; title: GuideT
 
 /** Compile a multi-layer spec: per-source casts, per-layer pipelines,
  * unioned scales, one mark group per layer. */
+/**
+ * The data of a compiled layer, per source the layers read: the source dataset, and the dataset every layer's pipeline derives
+ * from (the casts the layers share, or the source itself when no layer needs a cast). A facet of layers facets that dataset.
+ */
+const LAYER_DATA_GROUPS = new WeakMap<VLSpec, ReadonlyArray<{ sourceName: string; castsName: string }>>()
+
 function compileLayered(spec: VLSpec, ctx: CompileCtx): VLSpec {
   const leaves = collectLeaves(spec)
   const wSpec = sizeSpec(spec.width)
@@ -1036,6 +1042,7 @@ function compileLayered(spec: VLSpec, ctx: CompileCtx): VLSpec {
     for (let k = stores.length - 1; k >= 0; k--) selData.unshift(stores[k]!)
   }
   out.data = data
+  LAYER_DATA_GROUPS.set(out, groups.map((g) => ({ sourceName: g.sourceName, castsName: g.castsName })))
   if (geoPlan) {
     const projections = geoPlan.assemble((leaf) => parsed.find((p) => p.l === leaf)!.dataName)
     if (projections.length) out.projections = projections
@@ -1807,6 +1814,55 @@ function renameGeneratedPrefix(out: unknown, prefix: RegExp, to: (index: string)
 
 /** Compile a faceted chart (encoding.facet / top-level facet + spec). */
 function compileFaceted(spec: VLSpec, ctx: CompileCtx, nested = ''): VLSpec {
+  const out = compileFacetedView(spec, ctx, nested)
+  assertCellsReadTheirFacet(out)
+  return out
+}
+
+/**
+ * The invariant of a facet: a mark inside a cell reads the rows of its own cell. It reads the cell's facet, or a dataset the cell
+ * derives from it, and never one of the root datasets that hold the faceted data (the source, or anything derived from it), which
+ * would draw every cell's rows in every cell. A breach is a compiler defect: it is refused rather than drawn.
+ */
+function assertCellsReadTheirFacet(out: VLSpec): void {
+  const data = (out.data as Record<string, unknown>[] | undefined) ?? []
+  const byName = new Map(data.map((d) => [d.name as string, d]))
+  const rootOf = (name: string): string => {
+    let cur = name
+    for (let guard = 0; guard <= data.length; guard++) {
+      const src = byName.get(cur)?.source
+      if (typeof src !== 'string' || !byName.has(src)) return cur
+      cur = src
+    }
+    return cur
+  }
+  const visitCells = (marks: unknown): void => {
+    if (!Array.isArray(marks)) return
+    for (const m of marks as Record<string, unknown>[]) {
+      const facet = isObject(m.from) && isObject(m.from.facet) ? (m.from.facet as Record<string, unknown>) : undefined
+      if (facet && typeof facet.data === 'string' && byName.has(facet.data)) {
+        const faceted = rootOf(facet.data)
+        // (a group's own `data` hides a root dataset of the same name from the marks inside it, as Vega scopes names)
+        const declared = (group: Record<string, unknown>): string[] => (Array.isArray(group.data) ? (group.data as Record<string, unknown>[]).map((d) => String(d.name)) : [])
+        const check = (inner: unknown, local: ReadonlySet<string>): void => {
+          if (!Array.isArray(inner)) return
+          for (const c of inner as Record<string, unknown>[]) {
+            const read = isObject(c.from) && typeof c.from.data === 'string' ? c.from.data : undefined
+            if (read !== undefined && !local.has(read) && byName.has(read) && rootOf(read) === faceted) {
+              throw new VLCompileError(`a mark in the cells of a facet reads the dataset "${read}" of the whole faceted data instead of its cell's rows (an @aster-charts/vl defect: please report the spec)`)
+            }
+            check(c.marks, new Set([...local, ...declared(c)]))
+          }
+        }
+        check(m.marks, new Set([String(facet.name), ...declared(m)]))
+      }
+      visitCells(m.marks)
+    }
+  }
+  visitCells(out.marks)
+}
+
+function compileFacetedView(spec: VLSpec, ctx: CompileCtx, nested = ''): VLSpec {
   if (isObject(spec.facet) && isLayerRepeat(spec.spec)) {
     // (a repeat of layers is a layered view to a facet around it)
     const rep = spec.spec as VLSpec
@@ -2004,10 +2060,13 @@ function compileFaceted(spec: VLSpec, ctx: CompileCtx, nested = ''): VLSpec {
     for (const d of innerData) {
       for (const t of (d.transform as Record<string, unknown>[]) ?? []) {
         if (FACET_LEVEL_TRANSFORMS.has(t)) continue
-        if (t.type === 'stack' || t.type === 'aggregate' || t.type === 'joinaggregate' || t.type === 'pivot' || t.type === 'impute') {
+        // (data/subtree.ts: vega-lite adds the facet fields to the groupby of every window and joinaggregate below the facet, and a
+        // `transform` that gives none crashes it - `this.transform.groupby.concat` of undefined - so there is no output to match)
+        if (USER_TRANSFORMS.has(t) && (t.type === 'window' || t.type === 'joinaggregate') && t.groupby === undefined) {
+          throw new VLCompileError(`a ${t.type} transform without \`groupby\` inside a facet's \`spec\` is not supported: vega-lite 6.4.3 crashes on it (it adds the facet fields to an absent groupby); give a groupby, or put the transform on the facet`)
+        }
+        if (t.type === 'stack' || t.type === 'aggregate' || t.type === 'joinaggregate' || t.type === 'window' || t.type === 'pivot' || t.type === 'impute') {
           if (Array.isArray(t.groupby)) t.groupby = [...t.groupby, ...facetKeys]
-        } else if (t.type === 'window') {
-          if (Array.isArray(t.partitionby)) t.partitionby = [...t.partitionby, ...facetKeys]
         }
       }
     }
@@ -2033,19 +2092,35 @@ function compileFaceted(spec: VLSpec, ctx: CompileCtx, nested = ''): VLSpec {
   // each cell over the cell's rows)
   const rawBase = rawFacet ? (unitPipelineDs!.source as string) : undefined
   const rawTail = rawFacet ? (unitPipelineDs!.transform as Record<string, unknown>[]) : undefined
+  // (a layered child says which dataset its layers derive from: the casts they share, or the source when none needs a cast; the
+  // datasets after it, the layers' own pipelines, are made again in each cell from the cell's rows)
+  const layerGroups = layeredInner ? LAYER_DATA_GROUPS.get(inner) : undefined
+  if (layeredInner && (layerGroups === undefined || layerGroups.length !== 1)) throw new VLCompileError('a facet of layers that read different data sources is not supported')
   const baseName = layeredInner
-    ? ((innerData[1]?.source === srcName ? (innerData[1]!.name as string) : srcName))
+    ? layerGroups![0]!.castsName
     : rawBase !== undefined ? rawBase : unitMarksData
-  // The facet's own `transform` runs once, before the facet (data/parse.ts: the facet model's pipeline is the parent of its cells).
-  // A layered inner view derives each layer's dataset from the facet's base dataset with these transforms in front, which would run
-  // them again inside every cell (a joinaggregate over one cell's rows, ...): they are hoisted into the base dataset instead.
-  if (layeredInner && isObject(spec.spec) && Array.isArray(spec.transform) && spec.transform.length && (spec.spec as VLSpec).data === undefined) {
-    const hoisted = translateTransforms(spec.transform as Record<string, unknown>[], ctx, { parsed: new Map() })
+  // The transforms above the layers' fork run once, before the cells: the facet's own (data/parse.ts: the facet model's pipeline is
+  // the parent of its cells) and the layer spec's (data/subtree.ts moveFacetDown: the facet node moves down to the fork, past them,
+  // adding the facet fields to their groupbys, done above). Each layer's pipeline starts with them, which would run them again in
+  // every cell (a joinaggregate over one cell's rows; a cell whose rows the layer spec's filter removes would still be drawn), so they
+  // move into the facet's base dataset.
+  if (layeredInner) {
     const baseDs0 = innerData.find((d) => d.name === baseName)
-    const derived = innerData.filter((d) => d.source === baseName && Array.isArray(d.transform))
-    const key = JSON.stringify(hoisted)
-    if (baseDs0 && hoisted.length && derived.length && derived.every((d) => JSON.stringify((d.transform as unknown[]).slice(0, hoisted.length)) === key)) {
-      for (const d of derived) d.transform = (d.transform as unknown[]).slice(hoisted.length)
+    const derived = innerData.filter((d) => d.source === baseName)
+    const above = (d: Record<string, unknown>): number => {
+      const ts = (d.transform as Record<string, unknown>[] | undefined) ?? []
+      let n = 0
+      while (n < ts.length && ABOVE_LAYERS_TRANSFORMS.has(ts[n]!)) n++
+      return n
+    }
+    const n = derived.length ? above(derived[0]!) : 0
+    if (n > 0) {
+      const key = JSON.stringify((derived[0]!.transform as unknown[]).slice(0, n))
+      if (baseDs0 === undefined || derived.some((d) => above(d) !== n || JSON.stringify((d.transform as unknown[]).slice(0, n)) !== key)) {
+        throw new VLCompileError('a facet of layers whose layers do not all start from the transforms of the layer spec is not supported')
+      }
+      const hoisted = (derived[0]!.transform as Record<string, unknown>[]).slice(0, n)
+      for (const d of derived) d.transform = (d.transform as unknown[]).slice(n)
       baseDs0.transform = [...((baseDs0.transform as Record<string, unknown>[] | undefined) ?? []), ...hoisted]
     }
   }
@@ -4129,6 +4204,8 @@ function referencedPaths(encoding: unknown): string[] {
 const USER_TRANSFORMS = new WeakSet<object>()
 /** The user transforms written on a facet itself (they run once, before the cells), as opposed to the ones inside its `spec`. */
 const FACET_LEVEL_TRANSFORMS = new WeakSet<object>()
+/** The transforms of a layer's leaf declared on the root of the layer tree (or on a facet around it): above the fork into the layers. */
+const ABOVE_LAYERS_TRANSFORMS = new WeakSet<object>()
 
 function buildData(spec: VLSpec, allFields: FieldDef[], mark: string, orient: string, castDoneIn: Set<string> | undefined, ctx: CompileCtx): DataPipeline {
   // datum-only defs read no data
@@ -4300,6 +4377,7 @@ function buildData(spec: VLSpec, allFields: FieldDef[], mark: string, orient: st
     const out = translateTransforms([t], ctx, st)
     // (FacetModel.addDimensions reaches the aggregates inside the facet's `spec`; the transforms on the facet itself ran before the cells)
     if (i < ctx.facetTransformCount && !depths?.[i]) for (const o of out) FACET_LEVEL_TRANSFORMS.add(o)
+    if (depths !== undefined && depths[i] === 0) for (const o of out) ABOVE_LAYERS_TRANSFORMS.add(o)
     const depth = depths?.[i]
     if (leafPath && depth) {
       const own = new Map<string, string>()
