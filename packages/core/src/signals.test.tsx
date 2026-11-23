@@ -126,7 +126,7 @@ describe('event-driven signals', () => {
 // packages/conformance/scripts/browser-signals.mts; these are the jsdom-level checks)
 // ---------------------------------------------------------------------------
 
-function bindSpec(signals: unknown[], store: Record<string, unknown> = {}, hooks: Parameters<typeof bindSceneSignals>[3] = {}) {
+function bindSpec(signals: unknown[], store: Record<string, unknown> = {}, hooks: Parameters<typeof bindSceneSignals>[3] = {}, opts: Parameters<typeof bindSceneSignals>[4] = {}) {
   const spec = { width: 200, height: 100, signals, marks: [] } as unknown as VgSpec
   const host = document.createElement('div')
   document.body.appendChild(host)
@@ -140,7 +140,7 @@ function bindSpec(signals: unknown[], store: Record<string, unknown> = {}, hooks
     onSignal: (n, v) => calls.push([n, v]),
     logger: { error: (...a) => logs.push('error:' + a.join(' ')), warn: (...a) => logs.push('warn:' + a.join(' ')) },
     ...hooks,
-  })
+  }, opts)
   return { svg, scene, binding, calls, logs, store, host }
 }
 const fire = (el: EventTarget, type: string, init: MouseEventInit = {}): void => {
@@ -200,13 +200,26 @@ describe('signal event streams', () => {
     again.detach()
   })
 
-  it('filters, consume and window / object-form sources', () => {
+  it('a window key source is not bound unless the host allows it (Q1: a spec cannot read the page\'s keystrokes)', () => {
+    const t = bindSpec([
+      { name: 'key', value: '', on: [{ events: { source: 'window', type: 'keydown' }, update: 'event.key' }] },
+      { name: 'moved', value: 0, on: [{ events: 'window:pointermove', update: 'moved + 1' }] },
+    ])
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'q' }))
+    expect(t.store.key).toBeUndefined()
+    expect(t.logs).toEqual([expect.stringMatching(/^warn:Blocked window keydown event listener \(the host allows/), 'warn:Can not resolve event source: window'])
+    window.dispatchEvent(new Event('pointermove'))
+    expect(t.store.moved).toBe(1)
+    t.binding.detach()
+  })
+
+  it('filters, consume and window / object-form sources (a host that allows window sources)', () => {
     const t = bindSpec([
       { name: 'shifted', value: 0, on: [{ events: 'click[event.shiftKey]', update: 'shifted + 1' }] },
       { name: 'consumed', value: 0, on: [{ events: 'mousedown!', update: 'consumed + 1' }] },
       { name: 'leaked', value: 0, on: [{ events: 'window:mousedown', update: 'leaked + 1' }] },
       { name: 'key', value: '', on: [{ events: { source: 'window', type: 'keydown' }, update: 'event.key' }] },
-    ])
+    ], {}, {}, { eventSources: { window: true } })
     fire(t.svg, 'click')
     expect(t.store.shifted).toBeUndefined()
     fire(t.svg, 'click', { shiftKey: true })
@@ -402,8 +415,10 @@ describe('signal event streams', () => {
     it('fires when the scale differs from the one the surface was last bound to, not when it is the same', () => {
       const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg')
       const store: Record<string, unknown> = {}
+      // (one chart, evaluated again with another signal value, as a host does: a different chart is a different view, C40)
+      const chart = compileChart(specFor(10))
       const bindFor = (lim: number): ReturnType<typeof bindSceneSignals> =>
-        bindSceneSignals(svg, evaluateChart(compileChart(specFor(lim))), store)
+        bindSceneSignals(svg, evaluateChart(chart, { signals: { lim } }), store)
       bindFor(10).detach()
       expect(store.rescaled).toBeUndefined() // the first binding only records the scale
       bindFor(10).detach()

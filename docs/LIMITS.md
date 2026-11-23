@@ -159,7 +159,39 @@ meters and the same regex screen (and `regex: 'refuse'`) as the evaluation. A
 violation ends that event's run and is logged, as vega logs any handler error. The
 loop keeps working, and the scene the handlers' signals lead to is evaluated under the
 limits again. (Before 0.4.2 the loop ran without limits: a backtracking pattern in a
-handler ran unscreened.)
+handler ran unscreened.) Every propagation of one event meets that clock, including the runs a
+`modify` starts after the one that made it, and one event runs at most 1000 propagations (a
+`modify` whose dataset feeds the signal that modifies it pulses again after every run; vega
+recurses until the stack runs out); a dataset an event edits stays within `maxRows`.
+
+### Interactive charts and untrusted specs: the threat model of the event loop
+
+An interactive chart (`<Chart>`, or any host of `bindSceneSignals`) is meant to be safe for an untrusted spec. What a spec's
+handlers can do is bounded as follows; each point is enforced in one place and tested.
+
+- **What an expression sees of an event.** `event` is a frozen object with no prototype holding the values Vega expressions
+  observe, copied when the event is delivered (`type`, the client / page / offset / screen coordinates, `button(s)`, `key`,
+  `code`, the modifier keys, `deltaX/Y/Z/Mode`, `timeStamp`, the pointer fields, the touches as frozen copies, a timer tick's
+  `timestamp` / `elapsed`: `EVENT_FACADE_FIELDS` in `signals.ts`) plus vega's extension (`item`, the scenegraph item;
+  `vega`, the event functions `x()`, `y()`, `xy()`, `item()`, `group()`; `dataflow`). There is no target or current target
+  node, no `view` (the window), no `composedPath`, no method. Expressions cannot call what they read, cannot read an inherited
+  `Object.prototype` member or a function's `prototype`, and hand no function to a built-in (`expr-interpreter.ts`), so what
+  a handler can reach is that graph; `signals.confinement.test.tsx` walks every path of it, for every kind of source, and
+  checks that nothing belongs to the page.
+- **Which events a spec can listen to.** The chart's own surface (`view` and `scope` sources) and timers, as
+  `config.events` permits (vega's `permit`: `view: false`, `timer: false`, lists of types). `window` and CSS-selector
+  sources reach beyond the chart, so the HOST decides them, through `SignalBindOptions.eventSources`: by default the
+  window's pointer moves, ends and cancels and its `resize` (what Vega-Lite's interval drags and `width: "container"`
+  listen to) and no selector source. A spec cannot read the page's keystrokes or its form fields, and cannot listen to an
+  element outside the chart; its own `config.events` can only narrow the host's policy, never widen it. A blocked listener
+  is reported once (`Blocked window keydown event listener ...`, then vega's `Can not resolve event source: window`).
+  A host that renders trusted specs only can pass `eventSources: { window: true, selector: true }`.
+- **What a spec can make the browser do.** The handlers' signals reach the scene, whose image and link URLs go through the
+  URL policy (above); the event loop adds no other way out.
+- **What outlives a binding** (timers, `between` windows, throttle and debounce clocks, `{signal}` handlers' memory, the
+  `{scale}` sources' last view) is kept per host owner AND compiled chart: a different chart bound to the same owner starts
+  afresh, as a new vega view does, and two charts of the same spec never share it.
+- **What a delivery costs.** One event runs under the limits its scene was evaluated with (above).
 
 ## What `maxRows` counts
 

@@ -521,13 +521,18 @@ entry, the axis or legend datum for a guide's own group, domain and title.
 
 #### `@aster-charts/core/signals`
 
-`bindSceneSignals(svg, scene, values, hooks?, { pick?, data?, owner?, containerSize? })`, `stampDatumAttrs`, `setTimerClock`.
+`bindSceneSignals(svg, scene, values, hooks?, { pick?, data?, owner?, containerSize?, events?, eventSources? })`, `stampDatumAttrs`, `setTimerClock`,
+`DEFAULT_EVENT_SOURCES`, `EVENT_FACADE_FIELDS`.
 Binds every `signal.on` entry with vega's event-stream semantics: selector strings (`[mousedown, mouseup] > mousemove`,
 `@name:click`, `symbol:click`, `window:keydown`, `click[event.shiftKey]{100}`, `mousedown!`), object-form `events`, arrays,
-`{signal}` sources, `between`, filters, throttle, debounce, `consume` and `force`. `event` is the native event extended with
-`item`, `vega` and `dataflow`, so `event.deltaY`, `event.shiftKey`, `x()`, `y()`, `item()` and `group()` behave as in vega;
+`{signal}` sources, `between`, filters, throttle, debounce, `consume` and `force`. `event` is a read-only facade of the event
+(the fields in `EVENT_FACADE_FIELDS`, copied when it is delivered, with `item`, `vega` and `dataflow` as vega extends it), so
+`event.deltaY`, `event.shiftKey`, `x()`, `y()`, `item()` and `group()` behave as in vega, and nothing of the page (no target
+node, no `view`) is reachable: see [LIMITS.md](LIMITS.md#interactive-charts-and-untrusted-specs-the-threat-model-of-the-event-loop).
 `datum` is `event.item.datum`. A handler runs only when its stream matched; a signal's `update` re-runs only when a signal
-it reads changed. It returns `{ detach(), release(), setSignal(name, value) }`: `detach()` stops delivering events to this
+it reads changed. It returns `{ detach(), release(), setSignal(name, value, { force }?) }` (`setSignal` is vega's
+`view.signal`: a value equal to the current one changes nothing unless `force`, an undeclared name throws
+`Unrecognized signal name`): `detach()` stops delivering events to this
 binding but leaves timer streams and pending debounces running (a host re-binds after every render and the timers belong
 to the view); call `release()` when the host is done with the svg, which detaches and stops its timer streams and
 pending debounces (vega's `view.finalize()`). `setTimerClock(clock | null)` ([Maps and animation](#maps-and-animation)) swaps the clock the timer streams run on.
@@ -549,8 +554,13 @@ pending debounces (vega's `view.finalize()`). `setTimerClock(clock | null)` ([Ma
   prevented when `config.events.defaults` names neither `prevent` nor `allow`. The config decides first (vega's default is
   `{allow: ['wheel']}`, so every listened view event but `wheel` is prevented); a `consume`d stream always prevents.
 - `{ pick }` — `(x, y) => HitTarget | null`, e.g. `buildHitIndex(scene).pick`: resolves `event.item` (mark type, name, role,
-  datum, enclosing group). Without it, or when it finds nothing, the item is read from the DOM (the `mark-*`/`role-*`
-  classes, and a `data-datum` stamp if `stampDatumAttrs` was called), where mark names are not available. `<Chart>` passes its own hit index.
+  datum, enclosing group) from the scene; where it finds nothing the item is the root group when the view paints a frame there,
+  else none (the DOM is not consulted: an element the browser finds where the scene has nothing is not an item). Without it
+  the item is read from the DOM under the event: the mark's type, role and name from the `mark-*` / `role-*` / name classes of
+  its container, and the datum from a `data-datum` stamp if `stampDatumAttrs` was called. `<Chart>` passes its own hit index.
+- `{ eventSources }` — which `window` and CSS-selector sources the spec may listen to (`true`, `false` or a list of types for
+  each). Default `DEFAULT_EVENT_SOURCES`: the window's pointer moves, ends and cancels and `resize`, no selector source. A
+  spec's `config.events` (`view`, `window`, `selector`, `timer`: vega's rules) can only narrow it.
 - Lower-level pieces of the same module. `bindSignalEvents(svg, chart, runtime, signalParams, signals, hooks?, options?)` is
   what `bindSceneSignals` calls once it has read the compiled chart, expression runtime and signal parameters off the scene; use
   it when you hold those yourself (`options` also takes `originX` / `originY`, the padding the view-space position is offset by,
