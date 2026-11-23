@@ -43,6 +43,7 @@ export {
   useChartData,
   loadSpecData,
   loadSpecDataResource,
+  resetSpecDataErrors,
   type UseChartOptions,
   type UseChartResult,
   type UseSpecDataOptions,

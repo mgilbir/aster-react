@@ -1,9 +1,10 @@
 import * as React from 'react'
 import type { RuntimeInput, SceneRoot, VgSpec } from '@aster-charts/core'
 import { checkChartRows, checkSvgLength, createChartSession, renderSceneToSvg } from '@aster-charts/core/lean'
-import type { LoadOptions } from '@aster-charts/core/load'
 import { normalizeSpecResult, useStableContent, useStableSpec } from './spec.js'
 import { useAddons } from './addons.js'
+import { acquireSpecData, retainSpecData, type SpecDataOptions } from './specData.js'
+export { resetSpecDataErrors } from './specData.js'
 
 /** The build's environment, as bundlers write it in (`process.env.NODE_ENV`); `process` may not exist at all (an unbundled import). */
 declare const process: { env: { NODE_ENV?: string } }
@@ -82,60 +83,28 @@ export function useChart(spec: VgSpec, options: UseChartOptions = {}): UseChartR
  * `signal`, `timeoutMs`, `maxBytes`, `maxConcurrent`, `maxRedirects` and `limits`.
  * The defaults are the safe ones (public http/https hosts only), so a spec you did
  * not write cannot reach a private network; widen them deliberately.
+ *
+ * Plus `cacheKey`: the host's own name for the load, part of the cache key. The
+ * cache is shared by every component (and, on a server, by every request); the
+ * spec and the data options are compared by content, but `fetch` / `allow` are
+ * called through a latest-ref and only their code tells loads apart. Give a
+ * `cacheKey` (a user id, a request id) when the same spec is loaded with
+ * functions that close over different values, such as a per-user `fetch`.
  */
-export type UseSpecDataOptions = LoadOptions
-
-const OBJECT_IDS = new WeakMap<object, number>()
-let OBJECT_SEQ = 0
-const RESOURCES = new WeakMap<object, { key: string; promise: Promise<VgSpec> }>()
-
-function objectId(o: object): number {
-  let id = OBJECT_IDS.get(o)
-  if (id === undefined) {
-    id = ++OBJECT_SEQ
-    OBJECT_IDS.set(o, id)
-  }
-  return id
-}
+export type UseSpecDataOptions = SpecDataOptions
 
 /**
- * Cache key of a set of load options: data by content, functions and other
- * objects (`fetch`, `allow`, `signal`) by identity. Same options, same promise.
- */
-function optionsKey(options: UseSpecDataOptions): string {
-  const parts: string[] = []
-  for (const name of Object.keys(options).sort()) {
-    const v = (options as Record<string, unknown>)[name]
-    if (v === undefined) continue
-    if (typeof v === 'function' || (typeof AbortSignal !== 'undefined' && v instanceof AbortSignal)) parts.push(`${name}=#${objectId(v as object)}`)
-    else parts.push(`${name}=${JSON.stringify(v)}`)
-  }
-  return parts.join('&')
-}
-
-/**
- * Stable promise for `loadSpecData(spec)`, keyed by the spec object and
- * fetch implementation. The loader addon is imported lazily, so a host that
- * never uses URL datasets never bundles the csv/topojson readers.
+ * The promise `useSpecData` reads: one per load, the same for every ask with the same inputs (see specData.ts for the key and
+ * the lifetime). The spec and the data options are compared by content, `signal` by identity, and a function option by its code
+ * and called through a latest-ref, so inline literals are safe. A rejected load stays the answer until an input changes or
+ * `resetSpecDataErrors()` is called. The loader add-on is imported lazily: a host that never uses URL datasets never bundles the
+ * csv/topojson readers.
  */
 export function loadSpecDataResource(
   spec: VgSpec,
   options: UseSpecDataOptions = {},
 ): Promise<VgSpec> {
-  const key = optionsKey(options)
-  const cached = RESOURCES.get(spec)
-  if (cached && cached.key === key) return cached.promise
-  const promise = import('@aster-charts/core/load').then((mod) =>
-    mod.loadSpecData(spec, options),
-  )
-  RESOURCES.set(spec, { key, promise })
-  // A failed load must not be cached forever: drop the entry so the next render
-  // (e.g. after the error boundary resets) retries instead of re-throwing the
-  // same rejection. The rejected promise is still what this render sees.
-  promise.catch(() => {
-    if (RESOURCES.get(spec)?.promise === promise) RESOURCES.delete(spec)
-  })
-  return promise
+  return acquireSpecData(spec, options).promise
 }
 
 /**
@@ -146,11 +115,22 @@ export function loadSpecDataResource(
  *   const loaded = useSpecData(spec)
  *   return <Chart spec={loaded} />
  * }
- * // wrap in <Suspense fallback=…>
+ * // wrap in <Suspense fallback=…> and an error boundary
+ * ```
+ *
+ * Inputs are compared as everywhere at the React boundary: an inline spec or options literal (an inline `allow` arrow included)
+ * is the same load. A load that fails is thrown to the nearest error boundary, once: it is never retried by itself. It is tried
+ * again when an input changes, and after `resetSpecDataErrors()`, which the boundary calls when it is reset:
+ *
+ * ```tsx
+ * <ErrorBoundary onReset={resetSpecDataErrors} fallbackRender={...}>
  * ```
  */
 export function useSpecData(spec: VgSpec, options: UseSpecDataOptions = {}): VgSpec {
-  return React.use(loadSpecDataResource(spec, options))
+  const load = acquireSpecData(spec, options)
+  // (a mounted reader keeps its load in the cache; see specData.ts)
+  React.useEffect(() => retainSpecData(load), [load])
+  return React.use(load.promise as Promise<VgSpec>)
 }
 
 /**
@@ -160,11 +140,13 @@ export function useSpecData(spec: VgSpec, options: UseSpecDataOptions = {}): VgS
  */
 export async function loadSpecData(spec: VgSpec, options: UseSpecDataOptions = {}): Promise<VgSpec> {
   const mod = await import('@aster-charts/core/load')
-  return mod.loadSpecData(spec, options)
+  // (`cacheKey` names a cached load; this call caches nothing)
+  const { cacheKey: _unused, ...loaderOptions } = options
+  return mod.loadSpecData(spec, loaderOptions)
 }
 
 /** Options only the loader understands; everything else (and `limits`, which both use) goes to the chart. */
-const LOAD_ONLY_OPTIONS = ['fetch', 'baseURL', 'protocols', 'allow', 'allowPrivateNetwork', 'signal', 'timeoutMs', 'maxBytes', 'maxConcurrent', 'maxRedirects'] as const
+const LOAD_ONLY_OPTIONS = ['cacheKey', 'fetch', 'baseURL', 'protocols', 'allow', 'allowPrivateNetwork', 'signal', 'timeoutMs', 'maxBytes', 'maxConcurrent', 'maxRedirects'] as const
 
 /**
  * A chart loaded with `useSpecData`, rendered headlessly. Takes the loader options
