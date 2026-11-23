@@ -213,9 +213,39 @@ function ignoreNestedChrome(spec: VLSpec): void {
   peek(() => visit(spec, true))
 }
 
+/**
+ * A view nested in the spec with the root view's own `name`: vega-lite 6.4.3 renames that view's size signals (`r_width`) as the root's
+ * (`width`), so its scales span the root's size, not its own, and its group is drawn at the root's (C428). Refused (DECISIONS Q9).
+ */
+function refuseRootNameReuse(spec: VLSpec): void {
+  const root = peek(() => spec.name)
+  if (typeof root !== 'string' || root === '') return
+  const visit = (n: unknown, path: string): void => {
+    if (!isObject(n)) return
+    for (const k of ['layer', 'hconcat', 'vconcat', 'concat'] as const) {
+      const list = peek(() => n[k])
+      if (!Array.isArray(list)) continue
+      list.forEach((c, i) => {
+        const at = `${path}${k}[${i}]`
+        if (isObject(c) && peek(() => c.name) === root) {
+          throw new VLCompileError(`${at}.name: a view named as the root view ("${root}") is not supported: vega-lite 6.4.3 sizes it by the root's width and height, not its own; rename one of them`)
+        }
+        visit(c, `${at}.`)
+      })
+    }
+    const inner = peek(() => n.spec)
+    if (isObject(inner)) {
+      if (peek(() => inner.name) === root) throw new VLCompileError(`${path}spec.name: a view named as the root view ("${root}") is not supported: vega-lite 6.4.3 sizes it by the root's width and height, not its own; rename one of them`)
+      visit(inner, `${path}spec.`)
+    }
+  }
+  visit(spec, '')
+}
+
 function compileValidated(spec: VLSpec, forward?: ReadonlyMap<string, SelCmpt>, forwardLookups?: ReadonlyMap<string, { name: string }>): { out: VLSpec; misses: ReadonlySet<string>; selections: ReadonlyMap<string, SelCmpt>; lookups: ReadonlyMap<string, { name: string }> } {
   const userConfig = isObject(spec.config) ? (spec.config as Record<string, unknown>) : undefined
   ignoreNestedChrome(spec)
+  refuseRootNameReuse(spec)
   peek(() => normalizeNestedFacetedUnits(spec, false))
   applyCompositionConfig(spec, spec)
   const normalized = normalizeUnits(spec, userConfig, unitStackProps) as VLSpec
@@ -2173,7 +2203,10 @@ function compileFacetedView(spec: VLSpec, ctx: CompileCtx, nested = ''): VLSpec 
   // (the names of a facet and of everything it makes are its model's: those of a facet inside a facet start with `child`, and its own child
   // is `child_child`; a composite around the facet puts its own name in front afterwards)
   const own = (name: string): string => childModelName(nested, name)
-  const CH = own('child')
+  // (a facet's spec with a name of its own is named by it, with no parent's name in front: `other_marks`, `other_width`)
+  const innerName = isObject(spec.spec) ? peek(() => (spec.spec as VLSpec).name) : undefined
+  const CH = typeof innerName === 'string' && innerName !== '' ? varName(innerName) : own('child')
+  if (CH !== own('child')) ctx.namedPrefixes.push(`${CH}_`)
   const FACET = own('facet')
   const CELL = own('cell')
   const facetDef = isObject(spec.facet) ? (spec.facet as Record<string, unknown>) : undefined
