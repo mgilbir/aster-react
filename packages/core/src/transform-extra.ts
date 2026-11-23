@@ -10,7 +10,7 @@ import { error, ownGet, sortData } from './util.js'
 import { fieldOf } from './transform-agg.js'
 import { allot, allotUpTo, meterTick } from './limits.js'
 import type { HierNode, Row, TransformContext } from './transform.js'
-import { compileExprTransform, geoPointRadius, getField, resolveSizeParam } from './transform.js'
+import { compileExprTransform, geoPointRadius, getField } from './transform.js'
 import type { GeoProjection } from './geo-projections.js'
 import type { GeoPath, PointRadius } from './geo-path.js'
 import { geoRegistry, requireGeo, transformRegistry } from './registry.js'
@@ -124,10 +124,17 @@ function voronoiRows(rows: Row[], t: Record<string, unknown>, ctx: TransformCont
   const as = (t.as as string | undefined) ?? 'path'
   const xOf = fieldParam(t.x, ctx, 'x')
   const yOf = fieldParam(t.y, ctx, 'y')
-  const size = resolveSizeParam(t.size, ctx)
+  // a `size` that is given is the extent, whatever it holds (vega's: a size that is no pair of numbers makes bounds that are no
+  // numbers, which the diagram refuses, `invalid bounds`, as vega's does), and it comes before `extent`
+  const size = t.size
   let bounds: Rect
   if (size) {
-    bounds = { xmin: 0, ymin: 0, xmax: size[0], ymax: size[1] }
+    const at = (i: number): number => {
+      const v: unknown = (size as unknown[])[i]
+      const value: unknown = v !== null && typeof v === 'object' && 'signal' in v ? ctx.signals[(v as { signal: string }).signal] : v
+      return +(value as number)
+    }
+    bounds = { xmin: 0, ymin: 0, xmax: at(0), ymax: at(1) }
   } else if (Array.isArray(t.extent) && t.extent.length === 2) {
     const e = t.extent as [[number, number], [number, number]]
     bounds = { xmin: e[0][0], ymin: e[0][1], xmax: e[1][0], ymax: e[1][1] }
