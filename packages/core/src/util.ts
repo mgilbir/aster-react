@@ -686,11 +686,6 @@ export function withTupleOrigins<T>(on: boolean, fn: () => T): T {
   try { return fn() } finally { linking = outer }
 }
 
-/** Record that `copy` stands for the tuple `of` stands for (a copy the engine made where vega keeps the tuple). */
-export function sameTupleAs(copy: object, of: object): void {
-  if (linking) ORIGINS.set(copy, ORIGINS.get(of) ?? of)
-}
-
 /** A copy of row `r` that stands for the same tuple (see above). */
 export function copyTuple<T extends object>(r: T): T {
   const c = { ...r }
