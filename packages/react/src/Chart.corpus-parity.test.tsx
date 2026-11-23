@@ -37,6 +37,15 @@ const element = (v: VariantName, spec: VgSpec, ref?: React.Ref<ChartHandle>): Re
     : v === 'plain' ? <SvgChart spec={spec} ref={ref} />
       : <SvgChart spec={spec} interaction={interaction} ref={ref} />
 
+/**
+ * A radio group's name is the chart's React `useId` followed by the signal (C156): `name="_r_<n>_<signal>"`, where `<n>`
+ * depends on the root the chart was mounted in, so two separate client mounts differ there and nowhere else. Only that
+ * `_r_<n>_` part of a `name` attribute is set aside; the signal after it, and every other attribute, is compared as it is.
+ */
+export function withoutRootIds(html: string): string {
+  return html.replace(/ name="_r_[0-9a-z]+_/g, ' name="<useId>')
+}
+
 /** A short description of the first difference between two strings, or null when equal. */
 export function firstDifference(a: string, b: string): string | null {
   if (a === b) return null
@@ -52,9 +61,7 @@ function clientMount(v: VariantName, spec: VgSpec): { html: string; scene: Chart
   const root = createRoot(container)
   const ref = React.createRef<ChartHandle>()
   act(() => { root.render(element(v, spec, ref)) })
-  // A radio group's name is React's `useId` of the chart (unique per chart on a page, C156): the root it was mounted in is part
-  // of it, so two separate mounts differ there and nowhere else. The id's root part is set aside; everything else is compared.
-  const html = container.innerHTML.replace(/ name="_r_[0-9a-z]+_/g, ' name="<useId>')
+  const html = withoutRootIds(container.innerHTML)
   const scene = ref.current?.getScene() ?? null
   act(() => root.unmount())
   container.remove()
@@ -155,6 +162,19 @@ describe('<SvgChart> renders what <Chart renderer="svg"> renders, over the whole
     }
     expect(failures.slice(0, 20).join('\n'), `${failures.length} difference(s)`).toBe('')
   }, 600_000)
+
+  it('setting the root part of a radio group name aside hides nothing else', () => {
+    const radio = (id: string, signal: string, extra = ''): string => `<input type="radio" value="x" name="${id}${signal}"${extra}>`
+    // the root part alone: equal
+    expect(firstDifference(withoutRootIds(radio('_r_1j_', 'pick_c')), withoutRootIds(radio('_r_1l_', 'pick_c')))).toBeNull()
+    // the signal part of the name differs: reported
+    expect(firstDifference(withoutRootIds(radio('_r_1j_', 'pick_c')), withoutRootIds(radio('_r_1j_', 'pick_d')))).not.toBeNull()
+    // an id-like value in another attribute (an id, a clip-path reference) is not touched
+    expect(firstDifference(withoutRootIds(radio('_r_1j_', 'a', ' id="_r_1j_"')), withoutRootIds(radio('_r_1j_', 'a', ' id="_r_2k_"')))).not.toBeNull()
+    expect(firstDifference(withoutRootIds('<g clip-path="url(#_r_1_clip)"/>'), withoutRootIds('<g clip-path="url(#_r_2_clip)"/>'))).not.toBeNull()
+    // a name that is not a useId is compared as it is
+    expect(firstDifference(withoutRootIds('<input name="mode">'), withoutRootIds('<input name="mode2">'))).not.toBeNull()
+  })
 
   it('the comparison bites: a one-attribute difference is reported', () => {
     expect(firstDifference('<svg a="1"/>', '<svg a="2"/>')).toMatch(/^at 8 /)
