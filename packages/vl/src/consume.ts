@@ -193,27 +193,28 @@ export function arm<T extends Obj>(root: T, skip: (v: unknown) => boolean): T {
     const out = Object.create(Object.getPrototypeOf(src) as object | null) as Obj
     made.set(node, out)
     let slots: Map<string, Slot> | undefined
+    let held = 0
     for (let i = 0; i < n; i++) {
       const key = keys[i]!
       const value = rebuild(src[key], path ? `${path}.${key}` : key)
       values[i] = value
+      if (descriptors === undefined) descriptors = Object.create(null) as PropertyDescriptorMap
       // (a property that holds properties is consumed through them: it is data, and a read of it stays a plain read)
       if (holdsObjects(value, skip)) {
-        out[key] = value
+        descriptors![key] = { value, writable: true, enumerable: true, configurable: true }
+        held++
         continue
       }
-      if (slots === undefined) {
-        slots = new Map()
-        descriptors = Object.create(null) as PropertyDescriptorMap
-      }
+      if (slots === undefined) slots = new Map()
       slots.set(key, { t, obj: out, key, value, origin: undefined, done: false, consumed: false, stale: false })
       t.unread++
       descriptors![key] = accessorFor(key)
     }
-    if (slots !== undefined) {
-      Object.defineProperty(out, SLOTS, { value: slots, writable: false, enumerable: false, configurable: false })
-      Object.defineProperties(out, descriptors!)
-    }
+    // (one definition of every property, in the spec's order: what a compile names after the order of a spec's keys - a bin's
+    // `bin_maxbins_6_extent_param_brush_v` - is named as vega-lite names it)
+    if (slots !== undefined) Object.defineProperty(out, SLOTS, { value: slots, writable: false, enumerable: false, configurable: false })
+    if (slots !== undefined) Object.defineProperties(out, descriptors!)
+    else if (held > 0) for (let i = 0; i < n; i++) out[keys[i]!] = values[i]
     t.armed.set(out, { path, keys, values })
 
     return out

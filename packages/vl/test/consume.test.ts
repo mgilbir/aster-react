@@ -32,6 +32,14 @@ describe('the primitives', () => {
   it('a property that holds objects is consumed through what is below it; a scalar array or an empty object must be read itself', () => {
     expect(run({ o: { x: 1, y: 2 }, list: [{ k: 1 }], s: ['a'], e: {} }, (s) => { void peek(() => s.o).x; void peek(() => s.list)[0].k })).toEqual(['o.y', 's', 'e'])
   })
+  it('arming keeps the order of the keys, whatever they hold (names made from a spec\'s keys follow it)', () => {
+    run({ a: 1, o: { x: 1 }, b: 2, list: [{ k: 1 }], c: 'c' }, (s) => {
+      expect(Object.keys(s)).toEqual(['a', 'o', 'b', 'list', 'c'])
+      expect(Object.keys(peek(() => s.o))).toEqual(['x'])
+    })
+    expect(compile({ data: { values: [{ v: 1 }] }, mark: 'bar', encoding: { x: { field: 'v', type: 'quantitative', bin: { maxbins: 6, extent: [0, 4] } }, y: { aggregate: 'count', type: 'quantitative' } } }) as unknown as { data: Array<{ transform?: Array<{ as?: unknown }> }> })
+      .toMatchObject({ data: expect.arrayContaining([expect.objectContaining({ transform: expect.arrayContaining([expect.objectContaining({ as: ['bin_maxbins_6_extent_0_4_v', 'bin_maxbins_6_extent_0_4_v_end'] })]) })]) })
+  })
   it('derive / deriveWithout / pick / transfer copy a property unconsumed; reading the copy consumes the original', () => {
     expect(run({ a: 1, b: 2, c: 3, d: 4 }, (s) => {
       const d1 = derive(s, { z: 9 })
