@@ -130,6 +130,10 @@ export function scalesFromSerialized(list: readonly SerializedScale[]): Map<stri
       domain: () => info.domain.slice(),
       range: () => info.range.slice(),
       invert: (p: number): number => inv(piecewise(info.range, tx, Number(p), clamp)),
+      // (what pan and zoom read to work in the scale's own space, as on a live scale)
+      ...(info.type === 'pow' || info.type === 'sqrt' ? { exponent: () => (info.type === 'sqrt' ? 0.5 : info.exponent ?? 1) } : {}),
+      ...(info.type === 'symlog' ? { constant: () => info.constant ?? 1 } : {}),
+      ...(info.type === 'log' ? { base: () => info.base ?? 10 } : {}),
     })
     out.set(info.name, scale)
   }

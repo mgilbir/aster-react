@@ -1226,22 +1226,28 @@ The pure functions behind `<Chart>`'s selection, pan and zoom are exported from 
 controls or keeps the state outside the component. A `ViewDomain` is `{ x?: [number, number], y?: [number, number] }`, the visible
 domain of the horizontal and vertical continuous scales; a `SelectionInterval` has the same shape; `PixelPoint` is `{ x, y }`.
 `names` is the `PositionalScales` (`{ x?: scaleName, y?: scaleName }`) that says which scales are the horizontal and vertical ones
-(default: scales named `x` and `y`). The `info` argument is the `ChartInfo` of the evaluated scene (`getChartInfo`, or
-`ChartHandle.getChartInfo()`).
+(default: scales named `x` and `y`); `positionalScales(spec)` derives it from a Vega spec as `<Chart>` does
+([INTERACTION.md](INTERACTION.md#which-scales-x-and-y-mean)). The `info` argument is the `ChartInfo` of the evaluated scene
+(`getChartInfo`, or `ChartHandle.getChartInfo()`). `scale` is the live scale of the axis (`info.scales.get(names.x)`): its type
+decides the space the domain moves in (a `log` scale's logarithm, a `pow` / `sqrt` scale's power, `symlog`'s transform,
+linear otherwise, as Vega-Lite's `bind: "scales"`); without it the helpers are linear.
 
 - `domainOf(scale)` reads a continuous scale's `[min, max]` domain, or `null` when the scale has no invertible numeric domain.
 - `continuousAxes(info, names?)` lists which of `'x'` and `'y'` have such a domain, that is, which axes can pan and zoom.
-- `zoomDomain(domain, anchor, factor, minSpan?)` scales a domain around an anchor value (`factor > 1` zooms in) and keeps its
-  orientation; `panDomain(domain, fraction)` shifts it by a fraction of its span (positive: toward higher values).
-- `cursorZoom(current, base, axis, anchorValue, factor)` zooms one axis of a view around a cursor value: zooming in stops at 1/1000 of the base
-  span, and zooming out past the base domain returns the base domain.
-- `keyboardView(key, current, base, { fast?, axis?, anchor?, pan?, zoom? })` is the keyboard contract (arrows pan, `+` / `-` zoom by 1.5x,
-  `0` / `Home` reset). It returns `{ handled, view? }`, where `view: null` means reset; `pan: false` / `zoom: false` disable those keys.
+- `zoomDomain(domain, anchor, factor, minSpan?, scale?)` scales a domain around an anchor value (`factor > 1` zooms in) in the
+  scale's space and keeps its orientation (`minSpan` is measured in that space); `panDomain(domain, fraction, scale?)` shifts it
+  by a fraction of its span (positive: toward higher values).
+- `cursorZoom(current, base, axis, anchorValue, factor, scale?, maxZoom = 1000)` zooms one axis of a view around a cursor value, as
+  `<Chart>`'s wheel and pinch do: zooming in stops at `1 / maxZoom` of the base span, and zooming out past the base domain returns the
+  base domain.
+- `keyboardView(key, current, base, { fast?, axis?, anchor?, pan?, zoom?, scales? })` is the keyboard contract (arrows pan, `+` / `-` zoom
+  by 1.5x, `0` / `Home` reset); `scales` (`{ x?, y? }`, the live positional scales) makes each axis move in its scale's space. It returns
+  `{ handled, view? }`, where `view: null` means reset; `pan: false` / `zoom: false` disable those keys.
 - `normalizeView(view, base)` validates a controlled view against the chart's base domains and returns `null` for "not zoomed" (empty,
   non-finite, or equal to the base).
 - `viewToDomainRaw(view, names?)` turns a view into the `RuntimeInput.domainRaw` override, keyed by the positional scale names.
 - `dragToDataInterval(start, end, info, names?)` converts a container-local pixel drag into a `SelectionInterval` (an axis whose scale cannot
-  be inverted, like a band scale, is left out); `selectionToPixels(selection, info, names?)` is the reverse, `{ x, y, width, height }` in pixels
+  be inverted, like a band scale, is left out; a `time` / `utc` axis gives milliseconds); `selectionToPixels(selection, info, names?)` is the reverse, `{ x, y, width, height }` in pixels
   of the SVG.
 - `selectValueToInterval(value)` and `selectValueToDatum(value)` read the interval or the point datum out of a `SelectValue`
   (`{ type: 'interval', interval }` or `{ type: 'point', datum }`), `null` for the other kind.
