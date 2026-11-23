@@ -125,7 +125,7 @@ describe('createScenePlayer: a scene that draws like the end of the running tran
 describe('createScenePlayer: what the audit found (C146, C487)', () => {
   beforeEach(() => { vi.useFakeTimers({ toFake: ['requestAnimationFrame', 'cancelAnimationFrame', 'performance'] }) })
   afterEach(() => { vi.useRealTimers() })
-  const xOf = (s: SceneRoot): number => (firstMark(s).items[1] as unknown as { x: number }).x
+  const xOf = (s: SceneRoot): number => (firstMark(s).items![1] as unknown as { x: number }).x
 
   it('C146: a new end that draws like the start moves back from the frame on screen, in the time left, without a jump', () => {
     const painted: SceneRoot[] = []
