@@ -60,7 +60,7 @@ export interface ChartWorkerRequest {
     height?: number
     /** `containerSize()` in the spec's expressions, and the measured container (see `RuntimeInput`). */
     containerSize?: { width: number; height: number }
-    measuredSize?: { width: number; height: number }
+    measuredSize?: { width?: number; height?: number }
     signals?: Record<string, unknown>
     domainRaw?: Record<string, unknown[]>
     /** Budgets enforced inside the worker (same semantics as `renderSpec`). */
@@ -332,7 +332,7 @@ export function useChartWorker(spec: VgSpec, options: ChartWorkerOptions & {
   height?: number
   /** The container the spec is sized to (`containerSize()`); `measuredSize` is the one it fills (see `RuntimeInput`). */
   containerSize?: { width: number; height: number }
-  measuredSize?: { width: number; height: number }
+  measuredSize?: { width?: number; height?: number }
   data?: Record<string, unknown[]>
   signals?: Record<string, unknown>
   domainRaw?: Record<string, unknown[]>

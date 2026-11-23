@@ -432,7 +432,15 @@ function ChartView({
   const onStreamInputRef = React.useRef(onStreamInput)
   onStreamInputRef.current = onStreamInput
 
-  const needsMeasure = width == null || height == null
+  // A number fixes that dimension of the view; `'container'` fills the element's measured size there; nothing leaves it to
+  // the spec (its own `width` / `height`, autosize and signals), as Vega does: a literal size draws at that size in any
+  // element (DECISIONS Q11). The element is measured whenever a dimension is not fixed: `containerSize()` reads it (vega-lite's
+  // `width: "container"` does), whether or not the view fills it.
+  const fixedWidth = typeof width === 'number' ? width : undefined
+  const fixedHeight = typeof height === 'number' ? height : undefined
+  const fillWidth = width === 'container'
+  const fillHeight = height === 'container'
+  const needsMeasure = fixedWidth == null || fixedHeight == null
   const hasBinds = ((spec.signals as SignalBindDef[] | undefined) ?? []).some((s) => s && s.bind != null)
   React.useEffect(() => {
     if (!needsMeasure) return
@@ -445,8 +453,9 @@ function ChartView({
       const observer = new ResizeObserver((entries) => {
         for (const e of entries) if (e.target === el) box = e.contentRect
         const w = box.width
-        const h = box.height - bindsHeight(el)
-        if (w && h > 0) setMeasured((prev) => (prev && prev.width === w && prev.height === h ? prev : { width: w, height: h }))
+        const h = Math.max(0, box.height - bindsHeight(el))
+        // (a dimension measured 0 -- a block parent with no height -- is not one the chart can fill; the other one still is)
+        if (w > 0 || h > 0) setMeasured((prev) => (prev && prev.width === w && prev.height === h ? prev : { width: w, height: h }))
       })
       observer.observe(el)
       // (bound inputs that wrap to another line change the chart's share without resizing a container of fixed size)
@@ -456,29 +465,34 @@ function ChartView({
     }
   }, [needsMeasure, hasBinds])
 
-  // The size props FIX the view; the measured container only sizes a spec that does not drive its own `width` /
-  // `height` signals (a bound slider, a handler, vega-lite's `"container"` keep doing so, as in Vega where
-  // `view.width(w)` is a signal write and the later write wins). The container the spec is sized to
-  // (`containerSize()`) is the props where given and the measured element for the rest.
-  const sizedWidth = width ?? measured?.width
-  const sizedHeight = height ?? measured?.height
+  // The size props FIX the view. The container the spec is sized to (`containerSize()`) is the props where given and the
+  // measured element for the rest; the view FILLS it only in a dimension given as `'container'` (a spec that drives its own
+  // `width` / `height` signals keeps doing so, as in Vega where `view.width(w)` is a signal write and the later write wins).
+  const sizedWidth = fixedWidth ?? measured?.width
+  const sizedHeight = fixedHeight ?? measured?.height
   const containerSize = React.useMemo(
     () => (sizedWidth != null && sizedHeight != null ? { width: sizedWidth, height: sizedHeight } : undefined),
     [sizedWidth, sizedHeight],
   )
+  const fillW = fillWidth && measured != null && measured.width > 0 ? measured.width : undefined
+  const fillH = fillHeight && measured != null && measured.height > 0 ? measured.height : undefined
+  const filled = React.useMemo(
+    () => (fillW != null || fillH != null ? { ...(fillW != null ? { width: fillW } : {}), ...(fillH != null ? { height: fillH } : {}) } : undefined),
+    [fillW, fillH],
+  )
   const sizeInput = React.useMemo(
     () => ({
-      ...(width != null ? { width } : {}), ...(height != null ? { height } : {}),
-      ...(containerSize ? { containerSize } : {}), ...(measured ? { measuredSize: measured } : {}),
+      ...(fixedWidth != null ? { width: fixedWidth } : {}), ...(fixedHeight != null ? { height: fixedHeight } : {}),
+      ...(containerSize ? { containerSize } : {}), ...(filled ? { measuredSize: filled } : {}),
     }),
-    [width, height, containerSize, measured],
+    [fixedWidth, fixedHeight, containerSize, filled],
   )
   // `containerSize()` in a handler (a `window:resize` one) reads the element as it is when the event fires, like
   // vega's `view.container().clientWidth`, not the size of the last render.
   const liveSizeRef = React.useRef<() => [number | undefined, number | undefined]>(() => [undefined, undefined])
   liveSizeRef.current = () => {
     const el = containerRef.current
-    return [width ?? (el?.clientWidth || measured?.width), height ?? ((el ? el.clientHeight - bindsHeight(el) : 0) || measured?.height)]
+    return [fixedWidth ?? (el?.clientWidth || measured?.width), fixedHeight ?? ((el ? el.clientHeight - bindsHeight(el) : 0) || measured?.height)]
   }
   const liveContainerSize = React.useCallback(() => liveSizeRef.current(), [])
 
@@ -724,15 +738,19 @@ function ChartView({
 
   // A stream-fed chart hands its view/signals to the stream, which re-evaluates.
   const streamInput = sceneOverride !== undefined
+  const sentFillRef = React.useRef(false)
   React.useEffect(() => {
     if (streamInput) {
       onStreamInputRef.current?.({
         ...(domainRaw ? { domainRaw } : {}), signals: mergedSignals,
         // the stream sizes its evaluations as this chart sizes its own: the props it fixes, and the container it measured
-        ...(containerSize ? { containerSize } : {}), ...(measured ? { measuredSize: measured } : {}),
+        // (`{}` once no dimension fills the element any more: the stream keeps the later value, so it is told the fill stopped)
+        ...(containerSize ? { containerSize } : {}),
+        ...(filled ? { measuredSize: filled } : sentFillRef.current ? { measuredSize: {} } : {}),
       })
+      sentFillRef.current = filled != null
     }
-  }, [streamInput, domainRaw, mergedSignals, containerSize, measured])
+  }, [streamInput, domainRaw, mergedSignals, containerSize, filled])
 
   // Incremental is the default: we still serialize the full SVG for the first
   // render (so server output and client hydration carry the markup), then the
