@@ -33,8 +33,8 @@ import { part, type EngineParts } from './engine-parts.js'
 export const FORMATTER_CACHE_MAX = 512
 
 /** `make`, remembered per `String(key)`, keeping the most recently used `FORMATTER_CACHE_MAX` results (see `recentlyUsed`). */
-export function remember<A, T>(make: (key: A) => T): (key: A) => T {
-  return recentlyUsed(FORMATTER_CACHE_MAX, make)
+export function remember<A, T>(make: (key: A) => T, name = 'formatters'): (key: A) => T {
+  return recentlyUsed(FORMATTER_CACHE_MAX, make, name)
 }
 
 // --- the number half --------------------------------------------------------------------------

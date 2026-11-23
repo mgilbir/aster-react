@@ -62,6 +62,7 @@
  */
 
 import { limitViolation } from './limits.js'
+import { TextTable } from './util.js'
 
 // --- the tree -----------------------------------------------------------------------------------
 
@@ -843,7 +844,8 @@ export function parseExpression(code: string): Expr {
   return expr
 }
 
-const parsed = new Map<string, Expr>()
+/** The trees of the texts seen lately (bounded by count and by the length of the texts: a tree grows with its text). */
+const parsed = new TextTable<Expr>('expression trees', 4096, 4_000_000)
 
 /**
  * `parseExpression` for text that is parsed again and again (a spec's expressions are parsed when it is checked and again when
@@ -853,7 +855,6 @@ export function parseExpressionCached(code: string): Expr {
   let tree = parsed.get(code)
   if (tree === undefined) {
     tree = parseExpression(code)
-    if (parsed.size >= 4096) parsed.clear()
     parsed.set(code, tree)
   }
   return tree

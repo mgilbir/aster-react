@@ -35,7 +35,7 @@ import {
 import { transformParams, type ParamKind, type TransformParam } from './transform-params.js'
 import { TUPLE_MAKING_TRANSFORMS, transformTypeOf } from './transform-names.js'
 import { guideReading, legendLayout, legendSizeExpression, type GuideEnv, type GuideKind } from './guide-model.js'
-import { splitAccessPath } from './util.js'
+import { splitAccessPath, TextTable } from './util.js'
 import { isSignalRef as isSignalObject, VIEW_SIGNALS, viewSignals } from './view-props.js'
 
 type Rec = Record<string, unknown>
@@ -89,7 +89,9 @@ class Scope {
  * few turn up in chart after chart. A selector that does not parse is not kept. `null` is the refusal's message.
  */
 interface SelectorTexts { readonly texts: readonly string[] }
-const selectors: Record<'view' | 'scope', Map<string, SelectorTexts>> = { view: new Map(), scope: new Map() }
+const selectors: Record<'view' | 'scope', TextTable<SelectorTexts>> = {
+  view: new TextTable('view selectors', 1024, 1_000_000), scope: new TextTable('scope selectors', 1024, 1_000_000),
+}
 
 /** The text of an expression given as a value of any type: a string as it is, anything else as its JSON. */
 const textOf = (v: unknown): string => (typeof v === 'string' ? v : stringValue(v) + '')
@@ -147,7 +149,6 @@ class Check {
       this.collecting = texts
       try { this.stream(defs.length > 1 ? { merge: defs } : defs[0]) } finally { this.collecting = null }
       found = { texts }
-      if (cache.size >= 1024) cache.clear()
       cache.set(selector, found)
     }
     return found.texts
