@@ -8,7 +8,8 @@
  * server rendering React, a test runner, a worker without the condition) the subpath resolves to `lean-full.ts`, which is the same
  * module with every part already in its slot: a synchronous server render (`renderToString`) draws every chart it drew before.
  *
- * Every function here is one of the public entries' functions; the public entries themselves (`@aster-charts/core`, `/dom`,
+ * Every function here is one of the public entries' functions, except the plumbing `@aster-charts/react` needs and that is not public
+ * API (`scaleSpace`, `panIn`, `zoomIn`, `tickStep`: the interactive scale moves and the slider step, so React has no second copy); the public entries themselves (`@aster-charts/core`, `/dom`,
  * `/signals`, `/hit`, `/canvas`, `/png`) carry their parts, so their synchronous API works for every spec with nothing to load. The hit
  * index and the loader of the signal loop are `@aster-charts/core/lean/hit` and `/lean/signals`, so that a chart without interaction (`<SvgChart>`)
  * can be seen, from its imports alone, not to reach them; the chart stream is `/lean/stream`, so that the pulse path it carries is not
@@ -32,5 +33,6 @@ export {
 } from './addons.js'
 export { ENGINE_PARTS, part, partLoaded, withdrawParts, type EngineParts, type EnginePart } from './engine-parts.js'
 export { setUpShell } from './shell-setup.js'
+// (internal plumbing for @aster-charts/react, not on any public entry: see the header)
 export { scaleSpace, panIn, zoomIn, type ScaleSpace } from './util.js'
 export { tickStep } from './arr.js'
