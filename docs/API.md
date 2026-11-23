@@ -120,8 +120,23 @@ never writes to them (it copies a row before it changes anything), and it compar
 Vega-Lite spec holds your row objects, in arrays of its own, and a chart that is given the same array again assumes the
 same rows.
 
-So to change the data, pass a **new array**, or say what changed: `dataChanges` (same-length edits, by index), `dataPulse`
-or `changedDatasets` for sessions, `append` / a `data` snapshot for a stream. If you change an array in place (edit a row,
+So to change the data, pass a **new array of new rows** for the rows that changed (a row object you edited and hand back in a
+new array is, to the diff, the row it was), or say what changed: `dataChanges` (same-length edits, by index), `dataPulse`
+or `changedDatasets` for sessions, `append` / a `data` snapshot for a stream.
+
+A change description is checked before anything is evaluated, and one that cannot be what it says throws a `TypeError`
+naming the dataset: a name that is no dataset of the chart and none in `data` (a typo would otherwise keep the old rows), a
+`dataChanges` / `dataPulse` for a dataset derived by `source` (describe its source's change), an index that is not a whole
+number, a `dataPulse` that says nothing (no `changed`, `from` or `appendOnly`). An index past the rows is ignored. An empty
+hint (`changedDatasets: []`) says that nothing changed. A description is relative to the rows the same caller gave the chart
+last time; one compiled chart may be evaluated by several callers with data of their own, so a pulse is taken only where the
+rows it says are unchanged are the rows the chart's last evaluation was given (the same objects, or rows equal field by
+field), else the dataset is derived in full. Within that, the rows before an `appendOnly` pulse's `baseLength` are taken as
+unchanged but for the ones it lists: a pulse whose `baseLength` is not the previous length is detected and ignored, one that
+leaves out a row it changed is not (that is what reading no unchanged row costs).
+
+Signal values you give (`signals`) are compared by content, whatever their size: a value changed in place is a change. Treat
+them as immutable all the same: a value is read when the evaluation runs, not copied. If you change an array in place (edit a row,
 replace one, `push`, `splice`) and hand the same array back, only what happens to evaluate again sees the change, so the
 chart can be inconsistent -- one mark updated and the next not, a scale's domain from the old rows -- as in vega.
 

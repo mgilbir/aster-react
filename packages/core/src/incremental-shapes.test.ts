@@ -56,6 +56,8 @@ interface Scenario {
   spec: VgSpec
   data: Data
   signals?: Record<string, unknown>
+  /** more of the input, the same at every step (`limits`) */
+  extra?: Partial<RuntimeInput>
   /** the datasets an update may change */
   mutable: readonly string[]
   /** makes a row of dataset `name` */
@@ -192,11 +194,67 @@ function largeSignal(r: Rnd): Scenario {
   }
 }
 
+export const labelRow = (r: Rnd, _name: string, i: number): Row => ({ i, x: int(r, -40, 240), y: int(r, -30, 150), o: r() < 0.25 ? null : { label: pick(r, ['', 'a', 'long label', `L${i}`]) }, t: r() < 0.2 ? (r() < 0.5 ? null : undefined) : `t${i}` })
+
+/** C110 (a failing step): an encode that throws for some rows (`datum.o.label` of a null `o`), with a mark after it. */
+function recoveredErrors(r: Rnd): Scenario {
+  return {
+    spec: {
+      ...FRAME,
+      data: [hostData(r, 't', { transform: [...pipeline(r).filter((t) => t.type !== 'filter')] })],
+      marks: [
+        { type: 'text', name: 'labels', from: { data: 't' }, encode: { update: { x: { field: 'x' }, y: { field: 'y' }, text: { signal: 'datum.o.label' } } } },
+        { type: 'symbol', from: { data: 't' }, encode: { update: { x: { field: 'x' }, y: { field: 'y' } } } },
+      ],
+    } as unknown as VgSpec,
+    data: { t: rowsOf(r, int(r, 1, 6), 't', labelRow) },
+    mutable: ['t'],
+    row: labelRow,
+  }
+}
+
+/** C116: marks whose bounds lay the view out (`autosize: pad`) -- text with missing labels or no `text` channel, a rect with a text channel, a stroked rule. */
+function measuredMarks(r: Rnd): Scenario {
+  const mark = pick(r, [
+    { type: 'text', from: { data: 't' }, encode: { update: { x: { field: 'x' }, y: { field: 'y' }, text: { field: 't' } } } },
+    { type: 'text', from: { data: 't' }, encode: { update: { x: { field: 'x' }, y: { field: 'y' } } } },
+    { type: 'rect', from: { data: 't' }, encode: { update: { x: { field: 'x' }, y: { field: 'y' }, width: { value: 5 }, height: { value: 5 }, text: { field: 't' } } } },
+    { type: 'rule', from: { data: 't' }, encode: { update: { x: { field: 'x' }, y: { field: 'y' }, strokeWidth: { value: 6 }, stroke: { value: 'red' } } } },
+    { type: 'symbol', from: { data: 't' }, encode: { update: { x: { field: 'x' }, y: { field: 'y' }, size: { value: 400 }, stroke: { value: 'red' }, strokeWidth: { value: 5 } } } },
+  ])
+  return {
+    spec: { width: 200, height: 100, padding: 5, ...(r() < 0.3 ? { title: 'T', autosize: 'none' } : {}), data: [hostData(r, 't')], marks: [mark] } as unknown as VgSpec,
+    data: { t: rowsOf(r, int(r, 0, 5), 't', labelRow) },
+    mutable: ['t'],
+    row: labelRow,
+  }
+}
+
+/** C625: pulses under `limits` (a pipeline that generates rows, metered). */
+function underLimits(r: Rnd): Scenario {
+  const pipe = pick(r, [
+    [{ type: 'fold', fields: ['x', 'v'] }],
+    [{ type: 'flatten', fields: ['arr'] }, { type: 'formula', as: 'w', expr: 'datum.arr * 2' }],
+    [{ type: 'formula', as: 'f', expr: 'datum.x + 1' }, { type: 'filter', expr: 'datum.v > 3' }],
+  ])
+  const row = (rr: Rnd, name: string, i: number): Row => ({ ...plainRow(rr, name, i), arr: [int(rr, 0, 5), int(rr, 0, 5)] })
+  return {
+    spec: { ...FRAME, data: [hostData(r, 't', { transform: pipe })], marks: [{ type: 'symbol', from: { data: 't' }, encode: { update: { x: { field: 'x' }, y: { field: 'v' } } } }] } as unknown as VgSpec,
+    data: { t: rowsOf(r, int(r, 1, 6), 't', row) },
+    extra: { limits: { maxRows: 10_000, maxGeneratedRows: 1_000_000, maxItems: 10_000 } },
+    mutable: ['t'],
+    row,
+  }
+}
+
 export const SHAPES: ReadonlyArray<readonly [string, (r: Rnd) => Scenario]> = [
   ['mark-from-mark', markFromMark],
   ['group-scoped reads', groupScopedReads],
   ['fitted projection', fittedProjection],
   ['large signal arrays', largeSignal],
+  ['recovered encode errors', recoveredErrors],
+  ['marks that lay the view out', measuredMarks],
+  ['pulses under limits', underLimits],
 ]
 
 // ---------------------------------------------------------------------------
@@ -347,12 +405,12 @@ export function runScenario(shape: string, gen: (r: Rnd) => Scenario, seed: numb
       ops.push(op)
       data = update(r, sc, data, op)
     }
-    const input = (): RuntimeInput => ({ logger: quiet, data: clone(data), ...(sc.signals ? { signals: clone(sc.signals) } : {}) })
+    const input = (): RuntimeInput => ({ logger: quiet, data: clone(data), ...(sc.signals ? { signals: clone(sc.signals) } : {}), ...(sc.extra ? clone(sc.extra) : {}) })
     let inc: SceneRoot
     try {
       // (the session is handed new arrays for the datasets that changed and the very arrays it was given for the others, as a host's
       // immutable state does; the chart is handed what its hints describe)
-      if (session) inc = session.evaluate(clone(sc.spec), { logger: quiet, data: { ...data }, ...(sc.signals ? { signals: sc.signals } : {}) })
+      if (session) inc = session.evaluate(clone(sc.spec), { logger: quiet, data: { ...data }, ...(sc.signals ? { signals: sc.signals } : {}), ...(sc.extra ? clone(sc.extra) : {}) })
       else inc = evaluateChart(chart!, { ...input(), ...(step > 0 ? hints(delivery, prev, data) : {}) })
     } catch (e) {
       return { shape, seed, delivery, step, ops, detail: `incremental threw ${(e as Error).message}` }
@@ -385,5 +443,80 @@ describe('incremental === fresh over the shapes whose reuse rests on what a node
         expect(fails.map((f) => `seed ${f.seed} step ${f.step} [${f.ops.join(' ')}]: ${f.detail}`)).toEqual([])
       })
     }
+  }
+})
+
+/**
+ * One compiled chart shared by two callers (DECISIONS Q16: supported, and per-chart state must not leak between them): each caller
+ * evaluates its own sequence of states with hints relative to ITS previous state, the two interleaved. Every scene equals a fresh
+ * evaluation of that caller's input.
+ */
+export function runShared(shape: string, gen: (r: Rnd) => Scenario, seed: number, steps: number, delivery: Exclude<Delivery, 'session'>): Fail | null {
+  const r = mulberry32(seed * 6151 + shape.length)
+  const sc = gen(r)
+  const chart = compileChart(clone(sc.spec))
+  const callers = [sc.data, update(r, sc, sc.data, 'replace')]
+  const ops: string[] = []
+  for (let step = 0; step <= steps; step++) {
+    const who = step % 2
+    const prev = callers[who]!
+    let data = prev
+    if (step > 1) { const op = pick(r, OPS); ops.push(`${who}:${op}`); data = update(r, sc, prev, op) }
+    callers[who] = data
+    const input = (): RuntimeInput => ({ logger: quiet, data: clone(data), ...(sc.signals ? { signals: clone(sc.signals) } : {}), ...(sc.extra ? clone(sc.extra) : {}) })
+    let inc: SceneRoot
+    try {
+      inc = evaluateChart(chart, { ...input(), ...(step > 1 ? hints(delivery, prev, data) : {}) })
+    } catch (e) {
+      return { shape, seed, delivery, step, ops, detail: `incremental threw ${(e as Error).message}` }
+    }
+    const d = compare(evaluateChart(compileChart(clone(sc.spec)), input()), inc)
+    if (d !== null) return { shape, seed, delivery, step, ops, detail: d }
+  }
+  return null
+}
+
+describe('one compiled chart shared by two callers equals fresh for each (Q16)', () => {
+  for (const [shape, gen] of SHAPES) {
+    for (const delivery of DELIVERIES.filter((d): d is Exclude<Delivery, 'session'> => d !== 'session')) {
+      it(`${shape}, delivered by ${delivery}`, () => {
+        const fails: string[] = []
+        for (let seed = 1; seed <= SEEDS; seed++) {
+          const f = runShared(shape, gen, seed, STEPS, delivery)
+          if (f) fails.push(`seed ${f.seed} step ${f.step} [${f.ops.join(' ')}]: ${f.detail}`)
+        }
+        expect(fails).toEqual([])
+      })
+    }
+  }
+})
+
+/**
+ * DECISIONS Q29, decided by this test: an `appendOnly` pulse whose `baseLength` is not the length of the rows before is not taken
+ * (the evaluation derives the dataset in full); the hint is trusted only where it can be checked without reading a row.
+ */
+describe('a false appendOnly pulse (a wrong baseLength) is detected (Q29)', () => {
+  for (const [shape, gen] of SHAPES) {
+    it(shape, () => {
+      const fails: string[] = []
+      for (let seed = 1; seed <= SEEDS; seed++) {
+        const r = mulberry32(seed * 911 + shape.length)
+        const sc = gen(r)
+        const chart = compileChart(clone(sc.spec))
+        let data = sc.data
+        const input = (): RuntimeInput => ({ logger: quiet, data: clone(data), ...(sc.signals ? { signals: clone(sc.signals) } : {}), ...(sc.extra ? clone(sc.extra) : {}) })
+        evaluateChart(chart, input())
+        for (let step = 1; step <= STEPS; step++) {
+          const prev = data
+          data = update(r, sc, data, pick(r, ['edit', 'append', 'remove', 'insert'] as const))
+          const lie: NonNullable<RuntimeInput['dataPulse']> = {}
+          for (const n of sc.mutable) lie[n] = { changed: [], appendOnly: true, baseLength: prev[n]!.length + pick(r, [-1, 1, 2]) }
+          const inc = evaluateChart(chart, { ...input(), dataPulse: lie })
+          const d = compare(evaluateChart(compileChart(clone(sc.spec)), input()), inc)
+          if (d !== null) { fails.push(`seed ${seed} step ${step}: ${d}`); break }
+        }
+      }
+      expect(fails).toEqual([])
+    })
   }
 })

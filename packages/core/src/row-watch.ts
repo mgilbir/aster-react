@@ -60,19 +60,24 @@ function printOf(rows: readonly unknown[]): Print {
     if (at === last) continue
     last = at
     const row = rows[at]
-    const fields: string[] = []
-    const values: unknown[] = []
-    if (row !== null && typeof row === 'object') {
-      for (const f of Object.keys(row)) {
-        if (fields.length === SAMPLE_FIELDS) break
-        const d = Object.getOwnPropertyDescriptor(row, f)
-        fields.push(f)
-        values.push(d === undefined ? undefined : 'value' in d ? d.value : ACCESSOR)
-      }
-    }
-    picks.push({ at, row, fields, values })
+    picks.push({ at, row, ...printRow(row) })
   }
   return { rows, length: n, picks }
+}
+
+/** A row's first fields and their values (a getter is present, never called). */
+function printRow(row: unknown): { fields: string[]; values: unknown[] } {
+  const fields: string[] = []
+  const values: unknown[] = []
+  if (row !== null && typeof row === 'object') {
+    for (const f of Object.keys(row)) {
+      if (fields.length === SAMPLE_FIELDS) break
+      const d = Object.getOwnPropertyDescriptor(row, f)
+      fields.push(f)
+      values.push(d === undefined ? undefined : 'value' in d ? d.value : ACCESSOR)
+    }
+  }
+  return { fields, values }
 }
 
 function samePrint(a: Print, b: Print): boolean {
@@ -84,6 +89,21 @@ function samePrint(a: Print, b: Print): boolean {
     for (let j = 0; j < p.fields.length; j++) if (p.fields[j] !== q.fields[j] || !Object.is(p.values[j], q.values[j])) return false
   }
   return true
+}
+
+/**
+ * Whether a sampled row of `before` that `rows` (a new array) holds at the same index -- the very row object -- holds other values
+ * now: rows changed in place and handed back in a new array (`rows[3].v = 3; setData([...rows])`), which the diff takes for unchanged
+ * rows (the same objects) as it takes the same array.
+ */
+function rowsChangedInPlace(before: Print, rows: readonly unknown[]): boolean {
+  for (const p of before.picks) {
+    if (rows[p.at] !== p.row || p.row === null || typeof p.row !== 'object') continue
+    const now = printRow(p.row)
+    if (now.fields.length !== p.fields.length) return true
+    for (let j = 0; j < p.fields.length; j++) if (now.fields[j] !== p.fields[j] || !Object.is(now.values[j], p.values[j])) return true
+  }
+  return false
 }
 
 interface Watch {
@@ -142,12 +162,14 @@ export function checkChartRows(owner: object, spec: unknown, input: RowWatchInpu
     const prev = w.prints.get(name)
     const next = printOf(arr)
     w.prints.set(name, next)
-    if (prev === undefined || prev.rows !== arr || hinted.has(name) || w.warned.has(name) || samePrint(prev, next)) return
+    if (prev === undefined || hinted.has(name) || w.warned.has(name)) return
+    if (prev.rows === arr ? samePrint(prev, next) : !rowsChangedInPlace(prev, arr)) return
     w.warned.add(name)
     const what = vl ? 'the inline `data.values` (or `datasets` entry) of the Vega-Lite spec' : `dataset "${name}"`
     ;(input.logger ?? consoleLogger).warn(
       `[aster] the rows of ${what} were changed in place since the last render (the same array, with rows edited, replaced, added or removed). ` +
       'A chart treats the rows it is given as immutable: only what evaluates again sees such a change, so the chart can be inconsistent. ' +
+      'A row object edited and handed back in a new array is changed in place too. ' +
       `Pass a new array instead, or describe the change with \`dataChanges\` (a stream: \`push\` an \`append\` or a \`data\` snapshot). Dataset: "${name}".`,
     )
   }
