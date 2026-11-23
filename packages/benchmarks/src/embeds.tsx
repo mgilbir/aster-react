@@ -66,7 +66,8 @@ function useContainerWidth(
 export const ASTER_INCREMENTAL: Readonly<Record<'aster' | 'asterDom', boolean>> = { aster: false, asterDom: true }
 
 function AsterEmbed({ spec, width, height, responsive, incremental, data, dataChanges }: EmbedProps & { incremental: boolean }) {
-  if (responsive) return <AsterChart spec={spec} data={data} dataChanges={dataChanges} incremental={incremental} />
+  // (responsive: the width of the element, as the other embeds take it from their container; the height is the spec's)
+  if (responsive) return <AsterChart spec={spec} data={data} dataChanges={dataChanges} width="container" incremental={incremental} />
   return <AsterChart spec={spec} data={data} dataChanges={dataChanges} width={width} height={height} incremental={incremental} />
 }
 
