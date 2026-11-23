@@ -2,9 +2,9 @@
 /**
  * Removes the `dist` of the package it is run in (the current directory). `tsc` never deletes what an earlier build emitted, so a module
  * whose source was removed or renamed stayed in `dist` (and in the tarball a local `pnpm pack` makes) until someone noticed. The build
- * scripts of the published packages run this first: `node ../../scripts/clean-dist.mjs && tsc -p tsconfig.build.json`.
+ * scripts of the published packages run this first: `node <repo>/scripts/clean-dist.mjs && tsc -p tsconfig.build.json`.
  *
- * Usage: node ../../scripts/clean-dist.mjs      (from packages/<name>)
+ * Usage: node scripts/clean-dist.mjs, run from a package directory (packages/<name>)
  * Exit codes: 0 done (also when there was no dist), 2 bad usage (an unknown option, or the current directory has no package.json).
  */
 import { existsSync, rmSync } from 'node:fs'

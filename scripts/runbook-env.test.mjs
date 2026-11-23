@@ -1,6 +1,6 @@
 /**
  * docs/RUNBOOK.md section 3 says it lists "everything the repository's own code reads (`process.env`, found by searching every tracked
- * source file)". This makes the claim a check (C726): every `process.env.NAME` / `process.env['NAME']` of a tracked source file is named
+ * source file)". This makes the claim a check (C726): every environment read (dot or bracket form) of a tracked source file is named
  * in the section, and `NODE_ENV`, which the shipped code reads, is described as read, not as an esbuild define nothing reads.
  */
 import { execFileSync } from 'node:child_process'
