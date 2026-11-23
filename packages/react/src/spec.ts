@@ -3,24 +3,65 @@ import type { VgSpec } from '@aster-charts/core'
 import { chartSkeleton } from '@aster-charts/core/lean'
 import { compileVegaLite } from './vl-registry.js'
 
-/** True when the value looks like a Vega-Lite grammar rather than a Vega spec. */
-export function isVegaLiteSpec(spec: VgSpec): boolean {
-  const schema = typeof spec.$schema === 'string' ? spec.$schema : ''
-  if (schema.includes('vega-lite')) return true
-  if (Array.isArray(spec.marks) || Array.isArray(spec.scales)) return false
-  return spec.mark != null || spec.encoding != null || spec.layer != null || spec.facet != null
-    || spec.repeat != null || spec.concat != null || spec.hconcat != null || spec.vconcat != null
+/** A plain object (not an array, a string, a class instance): the only value that can be a spec. */
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return false
+  const proto = Object.getPrototypeOf(value) as unknown
+  return proto === Object.prototype || proto === null
+}
+
+/** An own property of a spec (an inherited `concat` of a string or an array is not one). */
+const own = (spec: Record<string, unknown>, key: string): unknown => (Object.hasOwn(spec, key) ? spec[key] : undefined)
+
+/**
+ * True when the value is a Vega-Lite spec rather than a Vega spec: a plain object whose `$schema` names vega-lite, or that has
+ * no Vega `marks` / `scales` list and has one of Vega-Lite's top-level properties of its own. Anything that is not a plain object
+ * (a string, an array, `null`) is neither grammar.
+ */
+export function isVegaLiteSpec(spec: unknown): boolean {
+  if (!isPlainObject(spec)) return false
+  const schema = own(spec, '$schema')
+  if (typeof schema === 'string' && schema.includes('vega-lite')) return true
+  if (Array.isArray(own(spec, 'marks')) || Array.isArray(own(spec, 'scales'))) return false
+  return ['mark', 'encoding', 'layer', 'facet', 'repeat', 'concat', 'hconcat', 'vconcat'].some((k) => own(spec, k) != null)
+}
+
+/** What a value that is not a spec object is, for the error that refuses it. */
+function describe(value: unknown): string {
+  if (value === null) return 'null'
+  if (Array.isArray(value)) return 'an array'
+  if (typeof value === 'string') return 'a string (parse JSON text with JSON.parse first)'
+  if (typeof value === 'object') return `an instance of ${(value as object).constructor?.name ?? 'a class'}`
+  return typeof value
 }
 
 /**
  * Normalize either grammar to the Vega spec the engine consumes.
  *
- * Vega-Lite needs the opt-in compiler addon (`import '@aster-charts/react/vl'`); when
- * it is missing this throws an actionable error instead of returning a spec the
- * runtime cannot render.
+ * Throws a `TypeError` for a value that is not a spec object (`null`, `undefined`, a JSON string, an array), the actionable error
+ * of a Vega-Lite spec when the opt-in compiler (`import '@aster-charts/react/vl'`) is missing, and the compiler's own errors.
+ * The components and hooks call it inside their guarded evaluation (see `normalizeSpecResult`), so each of these reaches their
+ * error state and `onError` / `error` like any other failure.
  */
 export function normalizeChartSpec(spec: VgSpec): VgSpec {
+  if (!isPlainObject(spec)) throw new TypeError(`[aster] spec must be a Vega or Vega-Lite spec object; got ${describe(spec)}`)
   return isVegaLiteSpec(spec) ? compileVegaLite(spec) : spec
+}
+
+/** The outcome of normalizing a spec: the Vega spec, or the error that stopped it (never thrown). */
+export type NormalizedSpec = { spec: VgSpec; error: null } | { spec: null; error: Error }
+
+/**
+ * `normalizeChartSpec` without the throw: the one place a chart's spec becomes the Vega spec it evaluates, for every component
+ * and hook. A failure (not a spec, no Vega-Lite compiler, a `VLCompileError`) is returned, so the caller hands it to the same
+ * error channel as an evaluation error, once.
+ */
+export function normalizeSpecResult(spec: unknown): NormalizedSpec {
+  try {
+    return { spec: normalizeChartSpec(spec as VgSpec), error: null }
+  } catch (e) {
+    return { spec: null, error: e instanceof Error ? e : new Error(String(e)) }
+  }
 }
 
 export function isPromiseLike<T>(value: unknown): value is PromiseLike<T> {
@@ -81,7 +122,7 @@ export function contentEqual(a: unknown, b: unknown, depth = 0, dataset = false,
  * identity and discarding streamed state. Values that cannot be compared by
  * content keep identity semantics.
  */
-export function useStableContent<T extends object | undefined>(value: T): T {
+export function useStableContent<T>(value: T): T {
   const ref = React.useRef<T>(value)
   if (ref.current !== value && !contentEqual(ref.current, value)) ref.current = value
   return ref.current

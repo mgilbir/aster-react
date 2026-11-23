@@ -36,15 +36,19 @@ describe('Vega-Lite is opt-in', () => {
   })
 
   forEachVariant(['svg'], (Chart) => {
-    it('fails fast (with the fix) when <Chart> receives a VL spec', () => {
+    it('reports a VL spec without the compiler through the error state and onError (with the fix), never a throw', () => {
+      ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
       const container = document.createElement('div')
       document.body.appendChild(container)
       const root = createRoot(container)
-      // A missing addon is a configuration error, not a data error: throw with
-      // the exact import to add rather than rendering a generic failure alert.
-      expect(() => {
-        act(() => { root.render(<Chart spec={vlSpec} width={200} height={100} a11y={false} />) })
-      }).toThrow(/@aster-charts\/react\/vl/)
+      const errors: Error[] = []
+      // A missing addon is reported like every other chart failure (one error channel): the alert, and `onError` with the
+      // exact import to add. It does not unmount the host's tree.
+      act(() => { root.render(<Chart spec={vlSpec} width={200} height={100} a11y={false} onError={(e) => errors.push(e)} />) })
+      expect(container.querySelector('[role="alert"]')).not.toBeNull()
+      expect(errors).toHaveLength(1)
+      expect(errors[0]!.message).toMatch(/@aster-charts\/react\/vl/)
+      act(() => root.unmount())
       container.remove()
     })
   })

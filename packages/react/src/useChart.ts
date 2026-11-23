@@ -2,7 +2,7 @@ import * as React from 'react'
 import type { RuntimeInput, SceneRoot, VgSpec } from '@aster-charts/core'
 import { checkChartRows, checkSvgLength, createChartSession, renderSceneToSvg } from '@aster-charts/core/lean'
 import type { LoadOptions } from '@aster-charts/core/load'
-import { normalizeChartSpec, useStableContent, useStableSpec } from './spec.js'
+import { normalizeSpecResult, useStableContent, useStableSpec } from './spec.js'
 import { useAddons } from './addons.js'
 
 /** The build's environment, as bundlers write it in (`process.env.NODE_ENV`); `process` may not exist at all (an unbundled import). */
@@ -33,7 +33,9 @@ export function useChart(spec: VgSpec, options: UseChartOptions = {}): UseChartR
   // not look like a change (nor re-run the Vega-Lite compiler).
   const stableSpec = useStableSpec(spec)
   const limits = useStableContent(input.limits)
-  const normalized = React.useMemo(() => normalizeChartSpec(stableSpec), [stableSpec])
+  // (normalized inside the guard: a value that is not a spec, a Vega-Lite spec without the compiler and a compile error are
+  // the result's `error`, as an evaluation error is; see `normalizeSpecResult`)
+  const { spec: normalized, error: specError } = React.useMemo(() => normalizeSpecResult(stableSpec), [stableSpec])
   // The opt-in add-ons the spec needs load before the first evaluation: the hook suspends meanwhile (a <Suspense> boundary
   // above shows its fallback), and an import that fails is the result's `error`.
   const addonError = useAddons(normalized, input.urlData, { limits: limits != null, random: input.random != null, signals: input.signals })
@@ -42,7 +44,7 @@ export function useChart(spec: VgSpec, options: UseChartOptions = {}): UseChartR
   const session = sessionRef.current
   // (development builds: the rows of a render that re-evaluates nothing are checked for in-place changes too, see row-watch.ts)
   try {
-    if (process.env.NODE_ENV !== 'production') checkChartRows(session, normalized, input)
+    if (process.env.NODE_ENV !== 'production' && normalized !== null) checkChartRows(session, normalized, input)
   } catch (e) {
     if (typeof process !== 'undefined') throw e
   }
@@ -56,9 +58,10 @@ export function useChart(spec: VgSpec, options: UseChartOptions = {}): UseChartR
     autoChanges: input.autoChanges, domainRaw: input.domainRaw, logger: input.logger, random: input.random, containerSize: input.containerSize, measuredSize: input.measuredSize,
   }
   return React.useMemo(() => {
+    if (specError) return { scene: null, svg: null, error: specError, session }
     if (addonError) return { scene: null, svg: null, error: addonError, session }
     try {
-      const scene = session.evaluate(normalized, { ...input, limits })
+      const scene = session.evaluate(normalized!, { ...input, limits })
       const svg = serialize ? renderSceneToSvg(scene) : null
       // Same budget as `renderSpec`: the serialized output length.
       if (svg != null && limits) checkSvgLength(svg, limits)
@@ -66,7 +69,7 @@ export function useChart(spec: VgSpec, options: UseChartOptions = {}): UseChartR
     } catch (e) {
       return { scene: null, svg: null, error: e instanceof Error ? e : new Error(String(e)), session }
     }
-  }, [normalized, addonError, ...Object.values(deps), serialize, session])
+  }, [normalized, specError, addonError, ...Object.values(deps), serialize, session])
 }
 
 // ---------------------------------------------------------------------------

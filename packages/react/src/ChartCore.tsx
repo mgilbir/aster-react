@@ -14,10 +14,13 @@ import {
   consoleLogger,
   checkChartRows, shareRowWatch,
 } from '@aster-charts/core/lean'
-import { isPromiseLike, normalizeChartSpec, useChartEpoch, useStableContent, useStableSpecRows } from './spec.js'
+import { isPromiseLike, normalizeSpecResult, useChartEpoch, useStableContent, useStableSpecRows } from './spec.js'
 import { useAddons } from './addons.js'
 import { validateDataChanges } from './dataChanges.js'
 import { SCALE_INFO_KEY, scalesFromSerialized, type SerializedScale } from './serialScales.js'
+import {
+  checkSizeProp, createEventSignalStore, useControlledSignals, useDataInput, useStablePolicy, type EventSignalStore,
+} from './inputs.js'
 // The incremental DOM patcher ships as the `@aster-charts/core/dom` addon, which every chart needs. The canvas
 // renderer and the hit/signal event loop are NOT imported here: they arrive as the `canvas` and
 // `interaction` props (see capabilities.ts), so `<SvgChart>` bundles neither.
@@ -64,20 +67,19 @@ const serverPixelRatio = (): number => 1
 
 
 // ---------------------------------------------------------------------------
-// Concurrent-safe signal store
+// Event-written datasets
 // ---------------------------------------------------------------------------
 
-interface SignalStore {
+/** The datasets the spec's event handlers edited (`modify(...)`): only events write here. */
+interface DataStore {
   get: () => Record<string, unknown>
   subscribe: (listener: () => void) => () => void
   set: (next: Record<string, unknown>) => void
   /** `tag` sees the new snapshot before the listeners are told of it. */
   merge: (next: Record<string, unknown>, tag?: (snapshot: Record<string, unknown>) => void) => void
-  /** Empty the store without notifying (for a state derived from a render input). */
-  reset: () => void
 }
 
-function createSignalStore(): SignalStore {
+function createDataStore(): DataStore {
   let snapshot: Record<string, unknown> = {}
   const listeners = new Set<() => void>()
   const emit = (): void => { for (const l of listeners) l() }
@@ -95,9 +97,6 @@ function createSignalStore(): SignalStore {
       snapshot = { ...snapshot, ...next }
       tag?.(snapshot)
       emit()
-    },
-    reset() {
-      if (Object.keys(snapshot).length) snapshot = {}
     },
   }
 }
@@ -343,10 +342,35 @@ export const ChartCore = React.forwardRef<ChartHandle, ChartCoreProps>(function 
   return <SpecChart {...props} spec={props.spec} chartRef={ref} />
 })
 
-function AsyncChart({ spec, chartRef, ...props }: Omit<ChartCoreProps, 'spec'> & { spec: PromiseLike<VgSpec>; chartRef: React.ForwardedRef<ChartHandle> }) {
-  const resolved = React.use(spec as Promise<VgSpec>)
-  return <SpecChart {...props} spec={resolved} chartRef={chartRef} />
+/** A spec promise, settled: its value, or the reason it was rejected. */
+type SettledSpec = { value: unknown; error?: undefined } | { error: Error }
+/** One settled promise per spec promise: `React.use` asks for the same one again when it replays a suspended render. */
+const settledSpecs = new WeakMap<object, Promise<SettledSpec>>()
+function settledSpec(promise: PromiseLike<unknown>): Promise<SettledSpec> {
+  let settled = settledSpecs.get(promise)
+  if (settled === undefined) {
+    settled = Promise.resolve(promise).then(
+      (value): SettledSpec => ({ value }),
+      (e: unknown): SettledSpec => ({ error: e instanceof Error ? e : new Error(String(e)) }),
+    )
+    settledSpecs.set(promise, settled)
+  }
+  return settled
 }
+
+/**
+ * A `spec` promise: the host's <Suspense> shows its fallback while it is pending. A rejected promise is a chart error like any
+ * other (the error state and one `onError` call), not a throw to the nearest error boundary.
+ */
+function AsyncChart({ spec, chartRef, ...props }: Omit<ChartCoreProps, 'spec'> & { spec: PromiseLike<VgSpec>; chartRef: React.ForwardedRef<ChartHandle> }) {
+  const settled = React.use(settledSpec(spec))
+  return settled.error !== undefined
+    ? <SpecChart {...props} spec={null} loadError={settled.error} chartRef={chartRef} />
+    : <SpecChart {...props} spec={settled.value} chartRef={chartRef} />
+}
+
+/** What a chart shows while its spec cannot be evaluated (see `SpecChart`): no data, no marks, no signals. */
+const NO_SPEC: VgSpec = Object.freeze({}) as VgSpec
 
 /**
  * The chart of ONE spec. A chart owns state that belongs to the spec it was made under (the DOM its patcher keeps, the
@@ -354,21 +378,29 @@ function AsyncChart({ spec, chartRef, ...props }: Omit<ChartCoreProps, 'spec'> &
  * drag in flight), so a `spec` that changes to another chart is a new chart: it is keyed by the spec's identity and starts as
  * a fresh mount does, whatever the old one was doing. A change of only the rows of its inline datasets, and every change of
  * `data`, signals or size, keeps the chart and its incremental path (see `useChartEpoch`).
+ *
+ * The spec is normalized (a Vega-Lite spec compiled) here, inside the guard: a value that is not a spec, a missing Vega-Lite
+ * compiler, a compile error and a rejected spec promise (`loadError`) all reach the chart's error state and `onError` once,
+ * as an evaluation error does.
  */
-function SpecChart({ spec: rawSpec, chartRef, ...props }: Omit<ChartCoreProps, 'spec'> & { spec: VgSpec; chartRef: React.ForwardedRef<ChartHandle> }) {
+function SpecChart({ spec: rawSpec, loadError, chartRef, ...props }: Omit<ChartCoreProps, 'spec'> & { spec: unknown; loadError?: Error; chartRef: React.ForwardedRef<ChartHandle> }) {
   // Content-stable: a parent that rebuilds an inline spec literal every render
   // neither recompiles (Vega-Lite) nor re-evaluates.
-  const stableSpec = useStableSpecRows(rawSpec)
-  const spec = React.useMemo(() => normalizeChartSpec(stableSpec), [stableSpec])
+  const stableSpec = useStableSpecRows(rawSpec as VgSpec)
+  const normalized = React.useMemo(
+    () => (loadError !== undefined ? { spec: null, error: loadError } : normalizeSpecResult(stableSpec)),
+    [stableSpec, loadError],
+  )
+  const spec = normalized.spec ?? NO_SPEC
   // Focus inside the chart when its spec changes to another chart: the old chart's DOM goes, the new one takes the focus.
   const focusHandoff = React.useRef<FocusSpot | null>(null)
-  return <ChartView key={useChartEpoch(spec)} {...props} spec={spec} chartRef={chartRef} focusHandoff={focusHandoff} />
+  return <ChartView key={useChartEpoch(spec)} {...props} spec={spec} specError={normalized.error} chartRef={chartRef} focusHandoff={focusHandoff} />
 }
 
 function ChartView({
   spec,
   sceneOverride,
-  data,
+  data: dataProp,
   dataChanges,
   width,
   height,
@@ -378,14 +410,14 @@ function ChartView({
   signals,
   onSelect,
   onPointSelect,
-  brush,
-  selection,
-  select,
+  brush: brushProp,
+  selection: selectionProp,
+  select: selectProp,
   onSelectionChange,
   panZoom = false,
   pan = false,
   zoom = false,
-  view: controlledView,
+  view: viewProp,
   onViewChange,
   maxZoom = 1000,
   incremental = true,
@@ -400,31 +432,48 @@ function ChartView({
   renderTooltip,
   tooltipContainer,
   limits,
-  urlPolicy,
+  urlPolicy: urlPolicyProp,
   urlData,
   random,
   logger,
   preventDefault,
   textMetrics,
-  a11y = true,
+  a11y: a11yProp = true,
   onError,
   canvas: canvasCap,
   interaction,
   png: pngCap,
   chartRef,
   focusHandoff,
-}: Omit<ChartCoreProps, 'spec'> & { spec: VgSpec; chartRef: React.ForwardedRef<ChartHandle>; focusHandoff: React.MutableRefObject<FocusSpot | null> }) {
+  specError,
+}: Omit<ChartCoreProps, 'spec'> & {
+  spec: VgSpec
+  /** Why the spec could not be normalized (see `SpecChart`): the chart shows its error state. */
+  specError: Error | null
+  chartRef: React.ForwardedRef<ChartHandle>
+  focusHandoff: React.MutableRefObject<FocusSpot | null>
+}) {
   // The opt-in add-ons the spec needs (transforms, geo, load) arrive before the first evaluation: this suspends while
   // they load, so there is no render of the half-ready chart and no error to flash. A failed import is a chart error.
   // With `urlData="refuse"` a spec with a url dataset is refused here, before any add-on is imported.
   // (and the parts of the engine it needs: the legend builder, the canvas renderer for renderer="canvas"... see `useAddons`)
   // (and the signal event loop of an interactive chart that binds it: see the binding below, and `useAddons`)
   const loadLoop = interactive && interaction?.loadSignals !== undefined ? interaction.loadSignals : undefined
-  const addonError = useAddons(sceneOverride !== undefined ? null : spec, urlData, {
+  const addonError = useAddons(sceneOverride !== undefined || specError !== null ? null : spec, urlData, {
     limits: limits != null, random: random != null, signals, canvas: requestedRenderer === 'canvas' ? canvasCap : undefined,
     eventLoop: loadLoop !== undefined ? { load: loadLoop, listeners: signalListeners != null || onSignal != null, always: sceneOverride !== undefined } : undefined,
   })
   const stableLimits = useStableContent(limits)
+  // The identity rule (see inputs.ts): JSON-shaped props by content, `data` by its datasets' row arrays, the functions of
+  // `urlPolicy` through a latest-ref. A parent that rebuilds them as literals on every render changes nothing.
+  const dataInput = useDataInput(dataProp)
+  const data = dataInput.data
+  const urlPolicy = useStablePolicy(urlPolicyProp)
+  const controlledView = useStableContent(viewProp)
+  const brush = useStableContent(brushProp)
+  const selection = useStableContent(selectionProp)
+  const select = useStableContent(selectProp)
+  const a11y = useStableContent(a11yProp)
   // Which scales `view`/`brush`/`selection`'s `x`/`y` refer to.
   const positional = React.useMemo(() => positionalScales(spec), [spec])
   // Without the interaction capability there is no hit index, so a tooltip
@@ -526,20 +575,20 @@ function ChartView({
   viewRef.current = currentView
   const domainRaw = React.useMemo(() => viewToDomainRaw(currentView, positional), [currentView, positional])
 
-  const signalStoreRef = React.useRef<SignalStore | null>(null)
-  if (signalStoreRef.current == null) signalStoreRef.current = createSignalStore()
+  // The signal values events wrote, merged with the controlled `signals` prop when read (see `useControlledSignals`).
+  const signalStoreRef = React.useRef<EventSignalStore | null>(null)
+  if (signalStoreRef.current == null) signalStoreRef.current = createEventSignalStore()
   const signalStore = signalStoreRef.current
   const eventSignals = React.useSyncExternalStore(signalStore.subscribe, signalStore.get, signalStore.get)
-  const mergedSignals = React.useMemo(
-    () => ({ ...(signals ?? {}), ...eventSignals }),
-    [signals, eventSignals],
-  )
+  const mergedSignals = useControlledSignals(signals, eventSignals)
+  const mergedSignalsRef = React.useRef(mergedSignals)
+  mergedSignalsRef.current = mergedSignals
   // Datasets the spec's event handlers edit with `modify(...)` (a Vega-Lite selection's `<param>_store`): the
   // event loop reports their rows, which are kept here and handed back as inputs, so a store is a dataset like any
   // other and the evaluation after an edit is the one a fresh chart with those rows computes. They belong to the
   // spec they were edited under.
-  const dataStoreRef = React.useRef<SignalStore | null>(null)
-  if (dataStoreRef.current == null) dataStoreRef.current = createSignalStore()
+  const dataStoreRef = React.useRef<DataStore | null>(null)
+  if (dataStoreRef.current == null) dataStoreRef.current = createDataStore()
   const dataStore = dataStoreRef.current
   const editedData = React.useSyncExternalStore(dataStore.subscribe, dataStore.get, dataStore.get) as Record<string, unknown[]>
   // The snapshots of the edited datasets that a `timer` stream made (a Vega-Lite `time` animation's next frame): a scene
@@ -582,8 +631,12 @@ function ChartView({
     if (sceneOverride !== undefined) {
       return { scene: sceneOverride, error: null, problems: [] }
     }
+    if (specError) return { scene: null, error: specError, problems: [] }
+    if (dataInput.error) return { scene: null, error: dataInput.error, problems: [] }
     if (addonError) return { scene: null, error: addonError, problems: [] }
     try {
+      checkSizeProp('width', width)
+      checkSizeProp('height', height)
       const { changes, problems } = validateDataChanges(dataChanges, inputData, prevLengthsRef.current)
       prevLengthsRef.current = new Map(Object.entries(inputData ?? {}).map(([name, rows]) => [name, rows.length]))
       const sc = sessionRef.current!.evaluate(spec, {
@@ -599,7 +652,7 @@ function ChartView({
     } catch (err) {
       return { scene: null, error: err instanceof Error ? err : new Error(String(err)), problems: [] }
     }
-  }, [sceneOverride, addonError, spec, inputData, dataChanges, sizeInput, mergedSignals, stableLimits, urlPolicy, urlData, random, domainRaw, textMetrics, stableLogger])
+  }, [sceneOverride, specError, dataInput.error, addonError, spec, width, height, inputData, dataChanges, sizeInput, mergedSignals, stableLimits, urlPolicy, urlData, random, domainRaw, textMetrics, stableLogger])
   const scene = evaluation.scene
   sceneRef.current = scene
   const renderError = evaluation.error
@@ -623,10 +676,19 @@ function ChartView({
   const hydrating = React.useSyncExternalStore(subscribeNothing, clientOnly, serverOrHydrating)
   const pixelRatio = React.useSyncExternalStore(subscribeNothing, devicePixelRatio, serverPixelRatio)
 
-  // One report per evaluation, however often the component re-renders while
-  // the same error persists (an inline `onError` must not refire).
+  // One report per error, however often the chart re-renders or re-evaluates while it persists: an inline `onError`, a
+  // measurement, a signal or StrictMode's second effect run must not refire it. An error the chart is already showing (the
+  // same name and message) is not reported again; a success ends it, so the next failure is reported. A rejected
+  // `dataChanges` changeset is reported once per evaluation that rejected it.
+  const reportedRef = React.useRef<{ evaluation: unknown; error: string | null }>({ evaluation: null, error: null })
   React.useEffect(() => {
-    if (evaluation.error) onErrorRef.current?.(evaluation.error)
+    const reported = reportedRef.current
+    if (reported.evaluation === evaluation) return
+    reported.evaluation = evaluation
+    const error = evaluation.error
+    const key = error ? `${error.name}\u0000${error.message}` : null
+    if (error && key !== reported.error) onErrorRef.current?.(error)
+    reported.error = key
     for (const problem of evaluation.problems) onErrorRef.current?.(new Error(`[aster] ${problem}`))
   }, [evaluation])
 
@@ -801,12 +863,6 @@ function ChartView({
     }
     return hitIndexRef.current.index
   }, [interaction, renderer])
-  // Signal state lives in an external store consumed with useSyncExternalStore:
-  // an event is a normal, synchronous state transition with a stable snapshot,
-  // so concurrent renders never observe a half-applied signal set.
-  React.useEffect(() => {
-    if (signals) signalStore.merge(signals)
-  }, [signals, signalStore])
   // `transition`: a change of data is drawn as frames from the picture on screen to the new scene (see transition.ts). The
   // options are read when a transition starts, so a new options object restarts nothing.
   const transitionOptions = resolveTransition(transition)
@@ -959,7 +1015,7 @@ function ChartView({
     // same one that serves tooltips and clicks, so `@name:click` and `symbol:click` work without tooltips.
     const binding = interaction.bindSceneSignals(svg, scene, { ...mergedSignals }, {
       onSignal: (name, value, all) => {
-        signalStore.set(all)
+        signalStore.write({ [name]: value }, all)
         signalListenersRef.current?.[name]?.(name, value)
         onSignalRef.current?.(name, value)
       },
@@ -1617,11 +1673,11 @@ function ChartView({
         binding.setSignal(name, value)
         return
       }
-      signalStoreRef.current?.merge({ [name]: value })
+      signalStoreRef.current?.write({ [name]: value })
       signalListenersRef.current?.[name]?.(name, value)
       onSignalRef.current?.(name, value)
     },
-    getSignals: () => signalStoreRef.current?.get() ?? {},
+    getSignals: () => ({ ...mergedSignalsRef.current }),
   }), [])
 
   const setBoundSignal = React.useCallback((name: string, value: unknown): void => {
@@ -1630,18 +1686,15 @@ function ChartView({
       binding.setSignal(name, value)
       return
     }
-    signalStore.merge({ [name]: value })
+    signalStore.write({ [name]: value })
     signalListenersRef.current?.[name]?.(name, value)
     onSignalRef.current?.(name, value)
   }, [signalStore])
 
-  if (scene === null) {
-    const message = renderError instanceof AsterLimitError
-      ? renderError.message
-      : 'Chart render failed'
-    return <div role="alert" style={style} title={renderError?.message}>{message}</div>
-  }
-
+  // The error state is drawn INSIDE the chart's own element: the element (and every effect bound to it -- the measurement,
+  // the wheel, the pointer listeners) is the same before, during and after an error, so a chart that recovers needs nothing
+  // re-attached, and the host's `className`, `style` and `ariaLabel` apply in both states.
+  const failed = scene === null
   // Absolute-positioned children (brush overlays, a11y nodes) need a positioned
   // ancestor even on a non-interactive chart. (The tooltip is a fixed box placed in
   // the viewport, see ChartTooltip; a chart with tooltips keeps the style it had.)
@@ -1655,14 +1708,14 @@ function ChartView({
     : cursor === 'default' ? { cursor, ...baseStyle }
     : { ...baseStyle, cursor }
 
-  const role = a11yTree ? (ariaLabel ? 'group' : undefined) : ariaLabel ? 'img' : undefined
+  const role = a11yTree || failed ? (ariaLabel ? 'group' : undefined) : ariaLabel ? 'img' : undefined
 
   return (
     <div
       ref={containerRef}
       role={role}
       aria-label={ariaLabel}
-      tabIndex={panZoomEnabled ? 0 : undefined}
+      tabIndex={panZoomEnabled && !failed ? 0 : undefined}
       onFocus={(e) => { if (e.target === e.currentTarget) focusSpotRef.current = CONTAINER_FOCUS }}
       onBlur={(e) => { if (e.target === e.currentTarget) releaseFocusSpot(e.currentTarget, e.relatedTarget) }}
       onKeyDown={handleChartKeyDown}
@@ -1677,7 +1730,12 @@ function ChartView({
       onPointerCancel={hasInteraction ? endGesture : undefined}
       data-aster-view={currentView ? 'zoomed' : 'base'}
     >
-      {hasInteraction && (
+      {failed && (
+        <div role="alert" title={renderError?.message}>
+          {renderError instanceof AsterLimitError ? renderError.message : 'Chart render failed'}
+        </div>
+      )}
+      {!failed && hasInteraction && (
         // Draw-only layer: it never takes pointer events (the gestures are
         // handled on the container), so marks, tooltips, `signal.on` events
         // and bound inputs underneath stay reachable.
@@ -1718,7 +1776,7 @@ function ChartView({
           )}
         </div>
       )}
-      {renderer === 'canvas' ? (
+      {failed ? null : renderer === 'canvas' ? (
         <canvas
           ref={canvasRef}
           data-testid="chart-canvas"
@@ -1738,14 +1796,14 @@ function ChartView({
           {...(htmlProp != null ? { dangerouslySetInnerHTML: htmlProp } : {})}
         />
       )}
-      {bindDefs.length > 0 && (
+      {!failed && bindDefs.length > 0 && (
         <SignalBinds
           signals={bindDefs}
           values={mergedSignals}
           onChange={setBoundSignal}
         />
       )}
-      {a11yTree != null && (
+      {!failed && a11yTree != null && (
         <A11yOverlay tree={a11yTree} tabStopId={tabStopId} onNodeKeyDown={handleA11yKeyDown} onNodeFocus={handleA11yFocus} onNodeBlur={handleA11yBlur} />
       )}
       {tooltipEnabled && <ChartTooltip store={tooltipStore} renderTooltip={renderTooltip} interaction={interaction} container={tooltipContainer} />}

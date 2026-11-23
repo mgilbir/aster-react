@@ -14,7 +14,7 @@ import * as React from 'react'
 import type { SceneRoot, SpecLimits, StreamBatch, VgSpec } from '@aster-charts/core'
 import { Chart, type ChartProps, type ChartStreamInput } from './Chart.js'
 import { positionalScales, viewToDomainRaw } from './interaction.js'
-import { normalizeChartSpec, useStableContent, useStableSpec } from './spec.js'
+import { normalizeSpecResult, useStableContent, useStableSpec } from './spec.js'
 import {
   useChartStream,
   type StreamFlushFailureInfo,
@@ -220,7 +220,9 @@ function useReportOnce(
  */
 function useNormalizedSpec(spec: VgSpec): VgSpec {
   const stable = useStableSpec(spec)
-  return React.useMemo(() => normalizeChartSpec(stable), [stable])
+  // (a spec that does not normalize is handed on as it is: the stream hook normalizes it inside its guard and reports the error
+  // through `error` / `onStreamError`)
+  return React.useMemo(() => normalizeSpecResult(stable).spec ?? stable, [stable])
 }
 
 export const ChartStream = React.forwardRef<ChartStreamHandle, ChartStreamProps>(
