@@ -20,7 +20,7 @@ import { isEngineNode, noteEngineScene } from './scene-registry.js'
 import { parseExpressionCached, type Expr } from './expr-parser.js'
 import { datasetsReadIn, identifiersIn, scalesReadIn, dependencyKey, fieldsWritten, namesIn, pipelineReadsOf, reuse, runsOf, stepCounts, stepReadsOf, type StepReads, type StepRecord } from './step-reuse.js'
 import { activeMeter, withLimits, allot, copiedRows, checkItemCount, checkRowCount, checkChartRegex, meterTick, AsterLimitError } from './limits.js'
-import { getTextMetricsProvider, withTextMetricsProvider } from './text-metrics.js'
+import { collectMeasureFailures, getTextMetricsProvider, withTextMetricsProvider } from './text-metrics.js'
 import { bindSceneTextMetrics } from './scene-output.js'
 import { AsterUrlError } from './url-policy.js'
 import { SpecParseError } from './parse-error.js'
@@ -1285,7 +1285,8 @@ function ctxFpOf(ctx: EvalContext): string {
   // Memoised: the params only change at the few known write sites, each of
   // which clears the memo (resolveSignalUpdates, the width re-resolution, and
   // the end of every dataset pass, since transforms may write signals).
-  return ctx.fpMemo ??= `${paramFpOf(ctx.signalParams)}\u0002${ctx.extraFp}`
+  // (and the expression functions registered: a function re-registered with another body is another context, as in `readsKey`)
+  return ctx.fpMemo ??= `${paramFpOf(ctx.signalParams)}\u0002${ctx.extraFp}\u0002${expressionRegistryEpoch()}`
 }
 
 /**
@@ -3719,7 +3720,7 @@ export function evaluateChartPending(engine: IncrementalEngine, chart: CompiledC
   checkChartRegex(chart, input.limits)
   const txn = beginTxn(engine, chart, unchanged)
   const done: { draft?: IncrementalState; failed?: boolean } = {}
-  const scene = withLimits(input.limits, () => withTextMetricsProvider(input.textMetrics, () => evaluateChartImpl(chart, input, txn, done)))
+  const scene = measured(input, done, () => withLimits(input.limits, () => withTextMetricsProvider(input.textMetrics, () => evaluateChartImpl(chart, input, txn, done))))
   return {
     scene,
     commit() {
@@ -3751,7 +3752,17 @@ export function evaluateOnce(chart: CompiledChart, input: RuntimeInput = {}): Sc
   // a spec that makes regular expressions, under `limits.regex: 'refuse'`: refused for its spec, before anything runs
   checkChartRegex(chart, input.limits)
   const txn: EvalTxn = { prev: undefined, gen: 1, claimed: new WeakSet() }
-  return withLimits(input.limits, () => withTextMetricsProvider(input.textMetrics, () => evaluateChartImpl(chart, input, txn, {})))
+  return measured(input, {}, () => withLimits(input.limits, () => withTextMetricsProvider(input.textMetrics, () => evaluateChartImpl(chart, input, txn, {}))))
+}
+
+/** Run an evaluation, reporting the first error the text measurer threw in it; such an evaluation is no base for the next one. */
+function measured(input: RuntimeInput, done: { failed?: boolean }, fn: () => SceneRoot): SceneRoot {
+  const { value, failures } = collectMeasureFailures(fn)
+  if (failures.length) {
+    done.failed = true
+    ;(input.logger ?? consoleLogger).error(failures[0])
+  }
+  return value
 }
 
 function evaluateChartImpl(chart: CompiledChart, hostInput: RuntimeInput, txn: EvalTxn, done: { draft?: IncrementalState; failed?: boolean }): SceneRoot {
