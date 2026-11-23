@@ -127,3 +127,12 @@ describe('wordcloud in a chart', () => {
     expect(positions(second)).toEqual(positions(first))
   })
 })
+
+describe('the spiral is one of the two (C386)', () => {
+  it('a name that is a member of every object (`constructor`, `toString`) is no spiral, as an unknown name is not', () => {
+    for (const spiral of ['constructor', 'toString', '__proto__', 'hasOwnProperty', 'nope']) {
+      expect(() => wordcloudRows([{ text: 'a' }], { spiral, text: { field: 'text' } } as never, ctxOf(Math.random)), spiral)
+        .toThrow(`Wordcloud spiral "${spiral}" is not archimedean or rectangular.`)
+    }
+  })
+})
