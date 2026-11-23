@@ -6,7 +6,7 @@
  * in a declaration makes every consumer without them fail on the `.d.ts`, and with `skipLibCheck` quietly turns the parameter into
  * `any`.) With the types present the alias IS the platform's type: nothing is lost for a browser host.
  *
- * The test is `packages/conformance/src/declarations-lib.test.ts`: every entry is compiled against `lib: ["es2022"]`.
+ * The test is `packages/conformance/src/declarations-consumer.test.ts`: every entry is compiled against `lib: ["es2022"]`.
  */
 
 /** The instance type of the global constructor `K` where there is one, else `Fallback`. */
