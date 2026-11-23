@@ -8,11 +8,12 @@
  */
 
 import { EXPRESSION_KEYS, relabelUnits, renameDataRefs, renameExpr, renameFragment } from './embed.js'
-import { optimizeData } from './optimize.js'
+import { mergeBins, optimizeData } from './optimize.js'
 import { tokenize } from './expr-tokens.js'
 import { VLCompileError, pushAll, flatField, datumRef as dref, genName, safeKey, splitAccessPath, dict, own, setOwn } from './names.js'
 import { validateGeoUnit, validateSpec } from './validate.js'
 import { cloneSpecStructure, detachRows, isRows, jsonWithRows, sameJson, stringifyWithoutRows, withRows, type RowPayloads } from './rows.js'
+import { arm, consumeAll, consuming, derive, deriveDeep, deriveWithout, ignore, peek, pick, refuseUnconsumed, transfer, withConsumption } from './consume.js'
 import { markChannelCompatible } from './channels.js'
 import { predicateExpr, domainValueExpr, dateTimeToExpr, isDateTime as isDateTimeValue } from './predicate.js'
 import {
@@ -21,7 +22,7 @@ import {
   stringValue, varName, type ParamPredicate, type SelCmpt, type SelUnit,
 } from './selection.js'
 import { compositeMarkOf, isGiven, markGiven } from './composite-marks.js'
-import { mergeEncoding, normalizeUnits } from './composite.js'
+import { derivesFrom, mergeEncoding, normalizeUnits } from './composite.js'
 import { timeScaleRange } from './animation.js'
 import { fieldsTitle, mergeGuideTitles, titleText, writtenTitle, type GuideTitle, type TitledField } from './titles.js'
 import { orientationOf, type Position } from './orient.js'
@@ -31,7 +32,7 @@ import { isTimerSelection, selectionExtent } from './selection.js'
 import { ASSEMBLED_FROM, GEO_POSITION_CHANNELS, assembleProjection, finalProjectionName, geoDataTransforms, geoshapeTransform, hasProjection, mergeLayerProjections, parseUnitProjection, renameComponentSignals, type GeoUnit, type ProjectionComponent, type UnitGeo } from './geo.js'
 import { scaleConfigOf, discreteStep, viewDiscreteStep, viewContinuousSize, viewDiscreteSize, sizeRange, countRange, discreteCount, usesUnaggregatedDomain, type ScaleCfg } from './scaleconfig.js'
 import { getTimeUnitParts, normalizeTimeUnit, timeUnitFieldName, timeUnitTransform, type NormalTimeUnit } from './timeunit.js'
-import { binNames, binTransforms, isParameterExtent, imputeTransforms, normalizeBin, translateTransforms, type BinParams, type TransformContext, type TranslateState } from './transforms.js'
+import { PARAM_EXTENTS, binNames, binTransforms, isParameterExtent, imputeTransforms, normalizeBin, translateTransforms, type BinParams, type TransformContext, type TranslateState } from './transforms.js'
 
 const VEGA_SCHEMA = 'https://vega.github.io/schema/vega/v6.json'
 
@@ -153,22 +154,35 @@ function compileTwice(input: VLSpec, payloads: RowPayloads): VLSpec {
 }
 
 function compileOnce(input: VLSpec, payloads: RowPayloads, forward?: ReadonlyMap<string, SelCmpt>, forwardLookups?: ReadonlyMap<string, { name: string }>): { out: VLSpec; misses: ReadonlySet<string>; selections: ReadonlyMap<string, SelCmpt>; lookups: ReadonlyMap<string, { name: string }> } {
-  const spec = cloneSpecStructure(input, payloads)
-  validateSpec(spec)
+  return withConsumption(() => {
+    const spec = cloneSpecStructure(input, payloads)
+    validateSpec(spec)
+    // (from here on, every property of the spec has to be read by the compile, or it is refused at the end: consume.ts)
+    arm(spec, isRows)
+    // (the config is defaults: a block applies where the spec has something it configures, and validate.ts checks its keys; what
+    // the check holds the compiler to is the spec)
+    if (isObject(peek(() => spec.config))) consumeAll(peek(() => spec.config))
+    const result = compileValidated(spec, forward, forwardLookups)
+    refuseUnconsumed()
+    return result
+  })
+}
+
+function compileValidated(spec: VLSpec, forward?: ReadonlyMap<string, SelCmpt>, forwardLookups?: ReadonlyMap<string, { name: string }>): { out: VLSpec; misses: ReadonlySet<string>; selections: ReadonlyMap<string, SelCmpt>; lookups: ReadonlyMap<string, { name: string }> } {
   const userConfig = isObject(spec.config) ? (spec.config as Record<string, unknown>) : undefined
-  normalizeNestedFacetedUnits(spec, false)
+  peek(() => normalizeNestedFacetedUnits(spec, false))
   applyCompositionConfig(spec, spec)
   const normalized = normalizeUnits(spec, userConfig, unitStackProps) as VLSpec
   // (the overlays are layers now: `config.<mark>.point / line` have done their job)
   if (userConfig) {
-    const cfg = { ...userConfig }
+    const cfg = derive(userConfig)
     for (const m of ['line', 'area', 'rule', 'trail']) {
       if (isObject(cfg[m])) cfg[m] = Object.fromEntries(Object.entries(cfg[m] as Record<string, unknown>).filter(([k]) => k !== 'point' && k !== 'line'))
     }
     normalized.config = cfg
   }
-  imageAsRect(normalized)
-  pushSelectionParams(normalized, [])
+  peek(() => imageAsRect(normalized))
+  peek(() => pushSelectionParams(normalized, []))
   const ctx = makeCtx(normalized)
   ctx.userConfig = userConfig
   if (forward) ctx.forwardSelections = forward
@@ -193,6 +207,8 @@ function compileOnce(input: VLSpec, payloads: RowPayloads, forward?: ReadonlyMap
   if (typeof normalized.name === 'string' && normalized.name !== '') nameViewParts(out, `${varName(normalized.name)}_`, ctx.namedPrefixes, normalized.name)
   assertNoGeoSignalClash(out)
   assembleGuides(out)
+  // (vega-lite passes the spec's metadata through as it is: TopLevel.usermeta)
+  if (normalized.usermeta !== undefined) out.usermeta = normalized.usermeta
   return { out: exprRefsToSignals(out) as VLSpec, misses: ctx.selectionMisses, selections: ctx.selections, lookups: ctx.selectionLookups }
 }
 
@@ -414,7 +430,7 @@ function pushSelectionParams(node: unknown, inherited: Record<string, unknown>[]
   if (Array.isArray(unit.layer)) {
     throw new VLCompileError('params: a selection parameter given to every unit below a composition cannot be given to a layer of several units (an errorbar with ticks, an errorband with borders, a boxplot): it would declare the selection\'s signals twice in one Vega scope, which Vega rejects; declare it on a unit instead')
   }
-  if (unit.layer === undefined && unit.mark !== undefined) unit.params = inherited.map((p) => markGiven(structuredClone(p)))
+  if (unit.layer === undefined && unit.mark !== undefined) unit.params = inherited.map((p) => markGiven(deriveDeep(p)))
 }
 
 /**
@@ -501,7 +517,11 @@ function imageAsRect(node: unknown): void {
   if (Array.isArray(node)) { node.forEach(imageAsRect); return }
   if (!isObject(node)) return
   const m = node.mark
-  if (m === 'image' || (isObject(m) && m.type === 'image')) node.mark = { ...(isObject(m) ? m : {}), type: 'rect', $image: true }
+  // (the mark's type has done its job once the image is a rect that knows it is one)
+  if (m === 'image' || (isObject(m) && m.type === 'image')) {
+    consuming(() => (isObject(m) ? m.type : node.mark))
+    node.mark = isObject(m) ? derive(m, { type: 'rect', $image: true }) : { type: 'rect', $image: true }
+  }
   for (const k of ['layer', 'hconcat', 'vconcat', 'concat', 'spec']) imageAsRect(node[k])
 }
 
@@ -598,18 +618,41 @@ function collectLeaves(root: VLSpec): VLSpec[] {
     const encoding = mergeEncoding(inh.encoding, node.encoding)
     if (Array.isArray(node.layer)) {
       const projection = node.projection !== undefined ? node.projection : inh.projection
+      const before = leaves.length
       ;(node.layer as VLSpec[]).forEach((c, i) => visit(c, { encoding, data, transform, depths, projection }, [...path, i]))
+      // (a layer's data, and the transforms over it, reach only the layers without data of their own: when every one has its own,
+      // vega-lite drops them, and so are they here)
+      const below = leaves.slice(before)
+      // (a channel of the layer's encoding that every layer below replaces - by a value, by null - is one vega-lite drops)
+      const shared = peek(() => node.encoding)
+      if (isObject(shared)) {
+        for (const ch of Object.keys(shared)) {
+          const def = peek(() => shared[ch])
+          if (isObject(def) && !below.some((l) => isObject(l.encoding) && derivesFrom(peek(() => (l.encoding as Record<string, unknown>)[ch]), def))) {
+            ignore(shared, ch, 'every layer below replaces it')
+          }
+        }
+      }
+      // (a projection every layer below replaces with its own: normalize mergeProjection, the child's own wins)
+      const ownProjection = peek(() => node.projection)
+      if (ownProjection !== undefined && !below.some((l) => peek(() => l.projection) === ownProjection)) ignore(node, 'projection', 'every layer below gives its own projection')
+      if (peek(() => node.data) !== undefined && !below.some((l) => peek(() => l.data) === node.data)) {
+        ignore(node, 'data', 'every layer below gives its own data')
+        ignore(node, 'transform', 'every layer below gives its own data')
+      }
       return
     }
     // a layer's projection reaches its units (vega-lite normalize mergeProjection: the child's own wins)
     const projection = node.projection !== undefined ? node.projection : inh.projection
     // (a channel only the layer gave, and only partially - a type, a scale, an axis, no field - encodes nothing in the unit)
     const unitEncoding: Record<string, unknown> = {}
-    for (const [ch, def] of Object.entries(encoding)) {
-      const partial = isObject(def) && def.field === undefined && def.datum === undefined && def.value === undefined && def.condition === undefined && def.aggregate !== 'count' && def.expr === undefined
-      if (!partial) unitEncoding[ch] = def
+    for (const ch of Object.keys(encoding)) {
+      const def = peek(() => encoding[ch])
+      const partial = peek(() => isObject(def) && def.field === undefined && def.datum === undefined && def.value === undefined && def.condition === undefined && def.aggregate !== 'count' && def.expr === undefined)
+      if (!partial) transfer(encoding, ch, unitEncoding)
+      else ignore(encoding, ch, 'a partial definition encodes nothing in the unit')
     }
-    const leaf: VLSpec = { ...node, encoding: unitEncoding, ...(projection !== undefined ? { projection } : {}) }
+    const leaf: VLSpec = derive(node, { encoding: unitEncoding, ...(projection !== undefined && node.projection === undefined ? { projection } : {}) })
     LEAF_PATHS.set(leaf, path)
     TRANSFORM_DEPTHS.set(leaf, depths)
     if (isGraticuleData(node.data)) GRATICULE_UNITS.add(leaf)
@@ -727,13 +770,18 @@ function normalizeNestedFacetedUnits(node: unknown, nested: boolean): void {
 
 function normalizeNestedFacetedUnit(c: unknown): unknown {
   if (!isObject(c) || c.mark === undefined || !isObject(c.encoding)) return c
-  const { row, column, facet, ...encoding } = c.encoding as Record<string, unknown>
+  const enc = c.encoding as Record<string, unknown>
+  const { row, column, facet } = enc
   if (row == null && column == null && facet == null) return c
-  const { mark, width, height, view, projection, params, encoding: _e, ...outer } = c
-  void _e
-  const inner: Record<string, unknown> = { ...(width !== undefined ? { width } : {}), ...(height !== undefined ? { height } : {}), ...(view !== undefined ? { view } : {}), ...(projection !== undefined ? { projection } : {}), ...(params !== undefined ? { params } : {}), mark, encoding }
-  const mapping = facet != null ? facet : { ...(row != null ? { row } : {}), ...(column != null ? { column } : {}) }
-  return { ...outer, facet: mapping, spec: inner }
+  const encoding = deriveWithout(enc, ['row', 'column', 'facet'])
+  const outer = deriveWithout(c, ['mark', 'width', 'height', 'view', 'projection', 'params', 'encoding'])
+  const inner = pick(c, ['width', 'height', 'view', 'projection', 'params', 'mark'])
+  inner.encoding = encoding
+  // (a null facet channel is no facet: it is consumed as the nothing it says)
+  for (const k of ['row', 'column', 'facet']) if (enc[k] === null) ignore(enc, k, 'a null channel encodes nothing')
+  outer.facet = facet != null ? facet : pick(enc, [row != null ? 'row' : '', column != null ? 'column' : ''].filter(Boolean))
+  outer.spec = inner
+  return outer
 }
 
 /**
@@ -753,7 +801,8 @@ function applyCompositionConfig(node: VLSpec, root: VLSpec): void {
     // (a partial `{row}` / `{column}` spacing fills the other direction from the config, whose default spacing is 20: config.ts defaultConfig)
     if (type && isObject(n.spacing)) {
       const dflt = typeof c?.spacing === 'number' ? c.spacing : 20
-      n.spacing = { row: n.spacing.row ?? dflt, column: n.spacing.column ?? dflt }
+      const sp = n.spacing
+      n.spacing = derive(sp, { ...(sp.row == null ? { row: dflt } : {}), ...(sp.column == null ? { column: dflt } : {}) })
     }
     if (c) {
       if (typeof c.spacing === 'number') {
@@ -765,7 +814,8 @@ function applyCompositionConfig(node: VLSpec, root: VLSpec): void {
     for (const k of ['hconcat', 'vconcat', 'concat', 'layer']) if (Array.isArray(n[k])) visit(n[k])
     if (isObject(n.spec)) visit(n.spec)
   }
-  visit(node)
+  // (it moves the config's defaults onto the spec: what it reads of the spec is read where it is compiled)
+  peek(() => visit(node))
 }
 
 /** The merged title of a layered axis on a field def: it replaces the def's own title, and its axis title when it has one. */
@@ -793,10 +843,32 @@ function mergeLayerTitles(entries: ReadonlyArray<{ path: number[]; title: GuideT
  */
 const LAYER_DATA_GROUPS = new WeakMap<VLSpec, ReadonlyArray<{ sourceName: string; castsName: string }>>()
 
+/**
+ * layoutsize/parse.ts for a layer: its size along a channel merges its layers' sizes, each layer's own or else the one the layer around it
+ * gives it (layer.ts: a layer hands its size down), the first given one winning (mergeValuesWithExplicit). Under an independent scale,
+ * layers sized by steps, or of different sizes, are not merged (`undefined`: the default size). A size no layer gives is `undefined`.
+ */
+function layerSize(node: VLSpec, which: 'width' | 'height', given: unknown): unknown {
+  const own = node[which] !== undefined ? node[which] : given
+  if (!Array.isArray(node.layer)) return own
+  const ch = which === 'width' ? 'x' : 'y'
+  const independent = peek(() => isObject(node.resolve) && isObject(node.resolve.scale) && (node.resolve.scale as Record<string, unknown>)[ch] === 'independent')
+  let merged: unknown
+  for (const c of node.layer as VLSpec[]) {
+    const size = layerSize(c, which, own)
+    if (size === undefined) continue
+    if (independent && isObject(size)) return undefined
+    if (merged === undefined) merged = size
+    else if (independent && JSON.stringify(merged) !== JSON.stringify(size)) return undefined
+  }
+  return merged
+}
+
 function compileLayered(spec: VLSpec, ctx: CompileCtx): VLSpec {
   const leaves = collectLeaves(spec)
-  const wSpec = sizeSpec(spec.width)
-  const hSpec = sizeSpec(spec.height)
+  // (the layer's own size, or its layers': a layer child's width / height sizes the view, as in vega-lite)
+  const wSpec = sizeSpec(layerSize(spec, 'width', undefined))
+  const hSpec = sizeSpec(layerSize(spec, 'height', undefined))
 
   interface ParsedLayer {
     l: VLSpec
@@ -889,6 +961,11 @@ function compileLayered(spec: VLSpec, ctx: CompileCtx): VLSpec {
   const geoPlan = parsed.some((p) => hasProjection(p.mark, isObject(p.l.encoding) ? (p.l.encoding as Record<string, unknown>) : {}))
     ? planLayerProjections(spec, parsed)
     : undefined
+  // (no layer projects: vega-lite reads none of their projections)
+  if (geoPlan === undefined) {
+    ignore(spec, 'projection', 'a layer that projects nothing reads no projection')
+    for (const p of parsed) ignore(p.l, 'projection', 'a layer that projects nothing reads no projection')
+  }
   for (const p of parsed) {
     const g = groups[p.group]!
     const d = buildData(p.l, p.fields, p.mark, p.orient, g.castDone, ctx)
@@ -976,7 +1053,7 @@ function compileLayered(spec: VLSpec, ctx: CompileCtx): VLSpec {
     const path = LEAF_PATHS.get(p.l)
     const unitName = path?.length ? path.map((n) => `layer_${n}`).join('_') : `layer_${i}`
     const own = new Map<string, string>()
-    for (const t of p.pipeline) if ((t.type === 'bin' || t.type === 'extent') && typeof t.signal === 'string' && !USER_TRANSFORMS.has(t)) own.set(t.signal, `${unitName}_${t.signal}`)
+    for (const t of p.pipeline) if ((t.type === 'bin' || t.type === 'extent') && typeof t.signal === 'string' && !USER_TRANSFORMS.has(t) && !PARAM_EXTENTS.has(t)) own.set(t.signal, `${unitName}_${t.signal}`)
     if (own.size) {
       const r = { signals: own, scales: new Map<string, string>() }
       renameFragment(p.pipeline, r)
@@ -984,45 +1061,10 @@ function compileLayered(spec: VLSpec, ctx: CompileCtx): VLSpec {
       renameFragment(layerScales, r)
     }
   })
-  // vega-lite compile/data/optimizers.ts MergeBins: the layers that bin the same field with the same parameters share ONE bin node. Its extent is taken once,
-  // over the rows of the first layer's pipeline; a later layer (a filtered one, say) bins with that extent instead of writing the
-  // signal again over its own rows. The shared signals keep the name of the last layer that has them (MergeBins pops the last promotable
-  // bin and merges the others into it, `renameSignal(other, this)`)
-  {
-    const layerPrefix = /^(?:layer_\d+_)+/
-    const lastOf = new Map<string, string>()
-    for (const d of data) for (const t of (d.transform as Record<string, unknown>[] | undefined) ?? []) {
-      if ((t.type === 'extent' || t.type === 'bin') && typeof t.signal === 'string') lastOf.set(t.signal.replace(layerPrefix, ''), t.signal)
-    }
-    const merged = new Map<string, string>()
-    for (const d of data) for (const t of (d.transform as Record<string, unknown>[] | undefined) ?? []) {
-      if ((t.type === 'extent' || t.type === 'bin') && typeof t.signal === 'string') {
-        const winner = lastOf.get(t.signal.replace(layerPrefix, ''))!
-        if (winner !== t.signal) merged.set(t.signal, winner)
-      }
-    }
-    if (merged.size) {
-      const r = { signals: merged, scales: new Map<string, string>() }
-      renameFragment(data, r)
-      renameFragment(perLayerMarks, r)
-      renameFragment(perLayerScales, r)
-    }
-    const signals = new Set<string>()
-    for (const d of data) {
-      const tf = d.transform as Record<string, unknown>[] | undefined
-      if (!tf?.some((t) => (t.type === 'extent' || t.type === 'bin') && typeof t.signal === 'string')) continue
-      d.transform = tf.flatMap((t) => {
-        if ((t.type !== 'extent' && t.type !== 'bin') || typeof t.signal !== 'string') return [t]
-        const first = !signals.has(t.signal)
-        signals.add(t.signal)
-        if (first) return [t]
-        // (a signal is declared once: the later bin only writes its fields, reading the shared extent)
-        if (t.type === 'extent') return []
-        const { signal: _dropped, ...rest } = t
-        return [rest]
-      })
-    }
-  }
+  // vega-lite compile/data/optimizers.ts MergeBins: the bins of the layers that read the same rows (the same parent: a layer's bin comes
+  // before its own transforms, data/parse.ts) with the same field and parameters are ONE bin node, named after the last layer's;
+  // bins over different data, or over rows a layer's transform changed first, stay apart (optimize.ts mergeBins)
+  mergeBins(data, [data, perLayerMarks, perLayerScales])
   // a lookup reads its source dataset by name, which must be declared before it (vega resolves names in order)
   {
     const at = new Map(data.map((d, i) => [d.name as string, i]))
@@ -1857,7 +1899,11 @@ function assertCellsReadTheirFacet(out: VLSpec): void {
   visitCells(out.marks)
 }
 
+/** Is the spec of this facet operator another facet? */
+const innerIsFacetSpec = (spec: VLSpec): boolean => isObject(spec.spec) && peek(() => (spec.spec as VLSpec).facet !== undefined)
+
 function compileFacetedView(spec: VLSpec, ctx: CompileCtx, nested = ''): VLSpec {
+  if (isObject(spec.facet) && isObject(spec.spec)) ignoreOperatorSize(spec)
   if (isObject(spec.facet) && isLayerRepeat(spec.spec)) {
     // (a repeat of layers is a layered view to a facet around it)
     const rep = spec.spec as VLSpec
@@ -1904,9 +1950,12 @@ function compileFacetedView(spec: VLSpec, ctx: CompileCtx, nested = ''): VLSpec 
   // inherits the facet's data/transform/config; the encoding form strips the
   // facet channels from the unit's own encoding
   let innerSpec: VLSpec
+  // (a facet's spec with data of its own: vega-lite facets the facet's data into the cells, and the spec draws its own data, all of it,
+  // in every cell; compile/data/parse.ts: the spec's data is a source of its own, not below the facet)
+  const innerOwnData = isObject(spec.spec) && peek(() => (spec.spec as VLSpec).data !== undefined) && !innerIsFacetSpec(spec)
   if (isObject(spec.spec)) {
-    innerSpec = { ...(spec.spec as VLSpec) }
-    if (innerSpec.data === undefined) {
+    innerSpec = derive(spec.spec as VLSpec)
+    if (!innerOwnData && peek(() => innerSpec.data === undefined)) {
       if (isObject(spec.data)) innerSpec.data = spec.data
       if (Array.isArray(spec.transform) && spec.transform.length) {
         innerSpec.transform = [...(spec.transform as unknown[]), ...(Array.isArray(innerSpec.transform) ? innerSpec.transform : [])]
@@ -1914,12 +1963,11 @@ function compileFacetedView(spec: VLSpec, ctx: CompileCtx, nested = ''): VLSpec 
     }
     if (spec.config !== undefined) innerSpec.config = spec.config
   } else {
-    const enc = { ...(isObject(spec.encoding) ? (spec.encoding as Record<string, unknown>) : {}) }
-    delete enc.facet
-    delete enc.row
-    delete enc.column
-    innerSpec = { ...spec, encoding: enc }
-    delete innerSpec.columns
+    innerSpec = deriveWithout(spec, ['encoding', 'columns'])
+    innerSpec.encoding = deriveWithout(isObject(spec.encoding) ? (spec.encoding as Record<string, unknown>) : {}, ['facet', 'row', 'column'])
+  }
+  if (innerOwnData && !isObject(spec.data)) {
+    throw new VLCompileError('spec.data: a facet whose data is only in its `spec` is not supported: vega-lite 6.4.3 facets the facet\'s own data, and its output reads a dataset it never defines; give the facet `data`')
   }
   // a unit in a cell carries its facet cell in its selections' unit name (`"child" + '__facet_column_' + (facet["c"])`)
   const nameFacetField = (channel: string, def: Record<string, unknown> | undefined): { channel: string; field: string }[] => {
@@ -1958,7 +2006,7 @@ function compileFacetedView(spec: VLSpec, ctx: CompileCtx, nested = ''): VLSpec 
   // the child view's binned fields name their signals after the child model (bin.ts getBinSignalName: `child_bin_..._bins`)
   {
     const sigMap = new Map<string, string>()
-    const ts = ((inner.data as Record<string, unknown>[]) ?? []).flatMap((d) => ((d.transform as Record<string, unknown>[] | undefined) ?? []).filter((t) => (t.type === 'bin' || t.type === 'extent' || t.type === 'geojson') && typeof t.signal === 'string'))
+    const ts = ((inner.data as Record<string, unknown>[]) ?? []).flatMap((d) => ((d.transform as Record<string, unknown>[] | undefined) ?? []).filter((t) => (t.type === 'bin' || t.type === 'extent' || t.type === 'geojson') && typeof t.signal === 'string' && !PARAM_EXTENTS.has(t)))
     for (const t of ts) sigMap.set(t.signal as string, `${CH}_${t.signal as string}`)
     if (sigMap.size) {
       const r = { signals: sigMap, scales: new Map<string, string>() }
@@ -2039,7 +2087,24 @@ function compileFacetedView(spec: VLSpec, ctx: CompileCtx, nested = ''): VLSpec 
     pre.push(timeUnitTransform(fd.tu!, fd.field, as))
   }
   if (pre.length && innerIsFacet) throw new VLCompileError('a binned, time-unit or nested field as the facet of a facet that holds another facet is not supported yet')
-  if (pre.length) {
+  // (a spec with data of its own: the cells facet the facet's data, with the facet's transforms and the facet fields computed; the spec's
+  // datasets stay where they are, at the root, read whole by every cell, and nothing below the facet gets the facet fields)
+  let outerBaseName: string | undefined
+  if (innerOwnData) {
+    const src = dataSource(spec.data as Record<string, unknown>, ctx.datasets)
+    const named = typeof src.name === 'string' ? src.name : undefined
+    const tf = Array.isArray(spec.transform) ? translateTransforms(spec.transform as Record<string, unknown>[], ctx, { parsed: new Map() }) : []
+    const transform = [...tf, ...pre]
+    if (named !== undefined && innerData.some((d) => d.name === named)) {
+      // (the spec reads the same named dataset: the facet derives its rows from it)
+      outerBaseName = transform.length ? ctx.fresh(`${named}_facet`) : named
+      if (transform.length) innerData.push({ name: outerBaseName, source: named, transform })
+    } else {
+      outerBaseName = named ?? ctx.takeSource()
+      innerData.push({ ...src, name: outerBaseName, ...(transform.length ? { transform } : {}) })
+    }
+  }
+  if (pre.length && !innerOwnData) {
     const derived = innerData.filter((d) => d.source === srcName)
     if (derived.length === 0) {
       // the marks read the source directly: derive a dataset that computes the facet fields
@@ -2051,7 +2116,7 @@ function compileFacetedView(spec: VLSpec, ctx: CompileCtx, nested = ''): VLSpec 
       for (const d of derived) d.transform = [...pre, ...((d.transform as Record<string, unknown>[] | undefined) ?? [])]
     }
   }
-  if (facetKeys.length) {
+  if (facetKeys.length && !innerOwnData) {
     for (const d of innerData) {
       for (const t of (d.transform as Record<string, unknown>[]) ?? []) {
         if (FACET_LEVEL_TRANSFORMS.has(t)) continue
@@ -2079,7 +2144,7 @@ function compileFacetedView(spec: VLSpec, ctx: CompileCtx, nested = ''): VLSpec 
   // The raw table is separate only when the view asks for it (a scale domain sorted by an aggregate reads it: the pipeline is then two
   // datasets, the raw one and the aggregated one). Otherwise vega-lite merges the whole pipeline into the facet's data, and a sort field the
   // aggregate drops is missing from the rows the sort aggregates (trellis_area_seattle: every key is undefined, the cells keep their order).
-  const rawFacet = !innerIsFacet && !layeredInner && typeof unitPipelineDs?.source === 'string' && (nested !== '' || PRE_FILTER_UNITS.has(inner) || (
+  const rawFacet = !innerOwnData && !innerIsFacet && !layeredInner && typeof unitPipelineDs?.source === 'string' && (nested !== '' || PRE_FILTER_UNITS.has(inner) || (
     sortsByAggregate && !(rowDef && colDef)
     && typeof innerData.find((d) => d.name === unitPipelineDs.source)?.source === 'string'
     && ((unitPipelineDs.transform as Record<string, unknown>[] | undefined) ?? []).some((t) => t.type === 'aggregate')))
@@ -2091,7 +2156,9 @@ function compileFacetedView(spec: VLSpec, ctx: CompileCtx, nested = ''): VLSpec 
   // datasets after it, the layers' own pipelines, are made again in each cell from the cell's rows)
   const layerGroups = layeredInner ? LAYER_DATA_GROUPS.get(inner) : undefined
   if (layeredInner && (layerGroups === undefined || layerGroups.length !== 1)) throw new VLCompileError('a facet of layers that read different data sources is not supported')
-  const baseName = layeredInner
+  const baseName = outerBaseName !== undefined
+    ? outerBaseName
+    : layeredInner
     ? layerGroups![0]!.castsName
     : rawBase !== undefined ? rawBase : unitMarksData
   // The transforms above the layers' fork run once, before the cells: the facet's own (data/parse.ts: the facet model's pipeline is
@@ -2099,7 +2166,7 @@ function compileFacetedView(spec: VLSpec, ctx: CompileCtx, nested = ''): VLSpec 
   // adding the facet fields to their groupbys, done above). Each layer's pipeline starts with them, which would run them again in
   // every cell (a joinaggregate over one cell's rows; a cell whose rows the layer spec's filter removes would still be drawn), so they
   // move into the facet's base dataset.
-  if (layeredInner) {
+  if (layeredInner && !innerOwnData) {
     const baseDs0 = innerData.find((d) => d.name === baseName)
     const derived = innerData.filter((d) => d.source === baseName)
     const above = (d: Record<string, unknown>): number => {
@@ -2309,7 +2376,7 @@ function compileFacetedView(spec: VLSpec, ctx: CompileCtx, nested = ''): VLSpec 
       const oldName = from.facet.name
       const newName = typeof oldName === 'string' ? oldName.replace(/^faceted_path_/, `faceted_path_${CH}_`) : oldName
       if (typeof oldName === 'string' && typeof newName === 'string') cellMap.set(oldName, newName)
-      c.from = { ...from, facet: { ...from.facet, ...(typeof newName === 'string' ? { name: newName } : {}), data: from.facet.data !== undefined && cellMap.has(from.facet.data) ? cellMap.get(from.facet.data) : FACET } }
+      c.from = { ...from, facet: { ...from.facet, ...(typeof newName === 'string' ? { name: newName } : {}), data: from.facet.data !== undefined && cellMap.has(from.facet.data) ? cellMap.get(from.facet.data) : innerOwnData && from.facet.data !== undefined ? from.facet.data : FACET } }
     } else if (from === undefined || from.data == null) c.from = { ...(from ?? {}), data: FACET }
     else if (cellMap.has(from.data)) c.from = { ...from, data: cellMap.get(from.data) }
     if (Array.isArray(c.marks)) c.marks = (c.marks as Record<string, unknown>[]).map(remapFrom)
@@ -2329,8 +2396,10 @@ function compileFacetedView(spec: VLSpec, ctx: CompileCtx, nested = ''): VLSpec 
     const mapDomain = (dom: unknown): unknown => {
       if (!isObject(dom)) return dom
       const out: Record<string, unknown> = { ...dom }
-      if (typeof out.data === 'string') out.data = cellMap.get(out.data) ?? FACET
-      if (Array.isArray(out.fields)) out.fields = out.fields.map((f) => (isObject(f) && typeof f.data === 'string' ? { ...f, data: cellMap.get(f.data) ?? FACET } : f))
+      // (a dataset of a spec with data of its own is not the cell's: it stays at the root)
+      const cellOf = (name: string): string => cellMap.get(name) ?? (innerOwnData ? name : FACET)
+      if (typeof out.data === 'string') out.data = cellOf(out.data)
+      if (Array.isArray(out.fields)) out.fields = out.fields.map((f) => (isObject(f) && typeof f.data === 'string' ? { ...f, data: cellOf(f.data) } : f))
       return out
     }
     const innerScalesAll = (inner.scales as ScaleSpec[]) ?? []
@@ -2346,7 +2415,7 @@ function compileFacetedView(spec: VLSpec, ctx: CompileCtx, nested = ''): VLSpec 
     const at = innerIsFacet ? -1 : innerScales.findIndex((sc) => sc.name === 'theta')
     if (at >= 0) {
       const theta = innerScales.splice(at, 1)[0]!
-      const dom = isObject(theta.domain) && typeof theta.domain.data === 'string' ? { ...theta.domain, data: cellMap.get(theta.domain.data) ?? FACET } : theta.domain
+      const dom = isObject(theta.domain) && typeof theta.domain.data === 'string' ? { ...theta.domain, data: cellMap.get(theta.domain.data) ?? (innerOwnData ? theta.domain.data : FACET) } : theta.domain
       cellScales.push({ ...theta, name: `${CH}_theta`, domain: dom })
       renameFragment(childMarks, { signals: new Map<string, string>(), scales: new Map([['theta', `${CH}_theta`]]) })
     }
@@ -2892,7 +2961,7 @@ function embedCells(cells: CompositeCell[], parent: VLSpec, ctx: CompileCtx, lay
     const geojsonTransforms = unitData.flatMap((d) => ((d.transform as Record<string, unknown>[] | undefined) ?? []).filter((t) => t.type === 'geojson' && typeof t.signal === 'string'))
     for (const t of geojsonTransforms) sigMap.set(t.signal as string, prefixed(t.signal as string))
     // a binned field's extent / bins signals are the cell's own as well (bin.ts getBinSignalName names them after the model)
-    const binTransforms = unitData.flatMap((d) => ((d.transform as Record<string, unknown>[] | undefined) ?? []).filter((t) => (t.type === 'bin' || t.type === 'extent') && typeof t.signal === 'string'))
+    const binTransforms = unitData.flatMap((d) => ((d.transform as Record<string, unknown>[] | undefined) ?? []).filter((t) => (t.type === 'bin' || t.type === 'extent') && typeof t.signal === 'string' && !PARAM_EXTENTS.has(t)))
     for (const t of binTransforms) sigMap.set(t.signal as string, prefixed(t.signal as string))
     const projList = (vg.projections as Record<string, unknown>[] | undefined) ?? []
     const renames = { signals: sigMap, scales: scaleMap, datasets: dnames }
@@ -3200,7 +3269,13 @@ function compositeLayout(spec: VLSpec, base: { align: unknown; columns?: unknown
 }
 
 /** Concat/hconcat/vconcat: one group per child. */
+/** A composition operator (concat, repeat, facet) has no size of its own: vega-lite ignores its `width` / `height` (its views size themselves). */
+function ignoreOperatorSize(spec: VLSpec): void {
+  for (const k of ['width', 'height']) ignore(spec, k, 'vega-lite ignores the size of a composition operator')
+}
+
 function compileConcat(spec: VLSpec, ctx: CompileCtx): VLSpec {
+  ignoreOperatorSize(spec)
   const kind = spec.hconcat != null ? 'hconcat' : spec.vconcat != null ? 'vconcat' : 'concat'
   const children = (spec[kind] as VLSpec[]) ?? []
   const cells: CompositeCell[] = children.map((c, i) => {
@@ -3269,11 +3344,12 @@ function substituteRepeat(node: unknown, repMap: Record<string, unknown>, later 
  * the repeated spec as layers of ONE view.
  */
 function compileRepeat(spec: VLSpec, ctx: CompileCtx): VLSpec {
+  ignoreOperatorSize(spec)
   const rep = spec.repeat as unknown
   const child = (spec.spec ?? {}) as VLSpec
   // (the composite marks, overlays and stack orders of a repeated view are rewritten with the repeated fields in: a rewrite reads them)
   // (a view a repeat makes is named after the repeated spec's own name, the repeat it is in, and its values)
-  const repeatedName = (suffix: string): string => `${typeof child.name === 'string' && child.name !== '' ? `${child.name}_` : ''}${ctx.repeatPrefix}${suffix}`
+  const repeatedName = (suffix: string): string => `${typeof child.name === 'string' && child.name !== '' ? `${varName(child.name)}_` : ''}${ctx.repeatPrefix}${suffix}`
   const repeatedCell = (suffix: string, cellSpec: VLSpec): CompositeCell => ({ prefix: `${repeatedName(suffix)}_`, repeated: repeatedName(suffix), spec: cellSpec })
   const repeated = (repMap: Record<string, unknown>): VLSpec => normalizeUnits(substituteRepeat(child, repMap), ctx.userConfig, unitStackProps) as VLSpec
 
@@ -4090,7 +4166,7 @@ function hasSelectionParams(node: unknown): boolean {
 function makeCtx(top: VLSpec): CompileCtx {
   const lookups = new Map<string, Record<string, unknown>>()
   const datasets = isObject(top.datasets) ? (top.datasets as Record<string, unknown>) : {}
-  const userNames = userDatasetNames(top)
+  const userNames = peek(() => userDatasetNames(top))
   const prefixFree = (base: string): string => {
     // grow a leading-underscore prefix until no user dataset name starts with `<prefix>_`
     let p = base
@@ -4107,7 +4183,7 @@ function makeCtx(top: VLSpec): CompileCtx {
     selectionMisses: new Set(),
     facetTransformCount: 0,
     selectionIds: false,
-    anySelection: hasSelectionParams(top),
+    anySelection: peek(() => hasSelectionParams(top)),
     modelName: '',
     repeatPrefix: '',
     namedPrefixes: [],
@@ -4366,22 +4442,40 @@ function buildData(spec: VLSpec, allFields: FieldDef[], mark: string, orient: st
   // (bin.ts getBinSignalName: a bin transform's signals are named after the model that declares it, a layer's name for a transform on a layer)
   const leafPath = LEAF_PATHS.get(spec)
   const depths = TRANSFORM_DEPTHS.get(spec)
+  // (data/parse.ts: a unit whose parent is a layer takes the bins of its encoding BEFORE its own transforms, after its layers')
+  const leafDepth = leafPath !== undefined && leafPath.length > 0 ? leafPath.length : undefined
+  let ownStart = 0
   const userOut = userTransforms.flatMap((t, i) => {
     const out = translateTransforms([t], ctx, st)
+    if (leafDepth !== undefined && (depths?.[i] ?? 0) < leafDepth) ownStart += out.length
     // (FacetModel.addDimensions reaches the aggregates inside the facet's `spec`; the transforms on the facet itself ran before the cells)
     if (i < ctx.facetTransformCount && !depths?.[i]) for (const o of out) FACET_LEVEL_TRANSFORMS.add(o)
     if (depths !== undefined && depths[i] === 0) for (const o of out) ABOVE_LAYERS_TRANSFORMS.add(o)
     const depth = depths?.[i]
     if (leafPath && depth) {
       const own = new Map<string, string>()
-      for (const o of out) if ((o.type === 'bin' || o.type === 'extent') && typeof o.signal === 'string') own.set(o.signal, `${leafPath.slice(0, depth).map((n) => `layer_${n}`).join('_')}_${o.signal}`)
+      for (const o of out) if ((o.type === 'bin' || o.type === 'extent') && typeof o.signal === 'string' && !PARAM_EXTENTS.has(o)) own.set(o.signal, `${leafPath.slice(0, depth).map((n) => `layer_${n}`).join('_')}_${o.signal}`)
       if (own.size) renameFragment(out, { signals: own, scales: new Map<string, string>() })
     }
     return out
   })
   ctx.currentUnit = undefined
   for (const t of userOut) USER_TRANSFORMS.add(t)
-  pushAll(pipeline, userOut)
+  if (leafDepth !== undefined) {
+    // (vega-lite bins a field its own transforms make before they make it, and draws empty bins: refused, DECISIONS Q9)
+    const ownTransforms = userTransforms.filter((_t, i) => (depths?.[i] ?? 0) >= leafDepth)
+    if (ownTransforms.length && binFields.some((f) => !isPrebinned(f))) {
+      const probe: TranslateState = { parsed: new Map() }
+      peek(() => translateTransforms(ownTransforms, ctx, probe))
+      const made = binFields.find((f) => !isPrebinned(f) && probe.parsed.get(f.field) === 'derived')
+      if (made !== undefined) {
+        throw new VLCompileError(`encoding.${made.channel}.bin: a layer that bins the field "${made.field}" its own \`transform\` makes is not supported: vega-lite 6.4.3 bins a layer's encoding before the layer's transforms run, so it bins a field that does not exist yet; make the field in the transform of the layer around it`)
+      }
+    }
+    pushAll(pipeline, userOut.slice(0, ownStart))
+    pushAll(pipeline, binPipeline)
+    pushAll(pipeline, userOut.slice(ownStart))
+  } else pushAll(pipeline, userOut)
   pushAll(pipeline, lateFlat)
   // (the facet node of a facet inside a facet sits here: what the encoding adds is made inside the innermost cell)
   const userLen = pipeline.length
@@ -4394,7 +4488,7 @@ function buildData(spec: VLSpec, allFields: FieldDef[], mark: string, orient: st
   }
 
   // binning (data/parse.ts: user transforms, geo, THEN bin, then timeUnit): the extent is taken over the filtered rows
-  pushAll(pipeline, binPipeline)
+  if (leafDepth === undefined) pushAll(pipeline, binPipeline)
   // a binned discrete field is named by its bin's text (data/bin.ts: `<bin>_range`)
   for (const f of binFields) {
     if (!binDiscrete(f)) continue
@@ -4648,6 +4742,14 @@ function polarRectPositions(update: Record<string, unknown>, spec: VLSpec, field
     const offsetValue = md[`${channel}Offset`]
     const offset = offsetValue ? offsetValue : undefined
     const withOffset = (ref: Record<string, unknown>): Record<string, unknown> => (offset === undefined ? ref : { ...ref, offset })
+    // (position-range.ts pointPosition2OrSize: the far end is offset by the second channel's offset when the arc has a second channel,
+    // in its encoding or its mark def, and by the channel's own otherwise; offset.ts gives no offset for an absent or zero one)
+    const channel2 = `${channel}2`
+    const hasSecond = peek(() => enc[channel2] !== undefined || md[channel2] !== undefined)
+    const ignoreOffset2 = (why: string): void => ignore(md, `${channel2}Offset`, why)
+    const farOffsetValue = hasSecond ? md[`${channel2}Offset`] : offsetValue
+    if (!hasSecond) ignoreOffset2('with no second channel, vega-lite offsets the far end by the channel\'s own offset')
+    const withFarOffset = (ref: Record<string, unknown>): Record<string, unknown> => (farOffsetValue ? { ...ref, offset: farOffsetValue } : ref)
     // the second channel (theta2, radius2), a field, a datum or a constant: where the arc ends, in the first channel's scale
     const second = secondaryPolarRef(spec, fields, channel, bandScale, scaled)
     if (def !== undefined && !def.datumOnly && (def.bin || (def.tu && second === undefined)) && !discrete) {
@@ -4664,8 +4766,10 @@ function polarRectPositions(update: Record<string, unknown>, spec: VLSpec, field
         start = rect ? `${base}_offsetted_rect_start` : base
         end = rect ? `${base}_offsetted_rect_end` : `${base}_end`
       }
+      // (position-rect.ts getBinSpacing: a polar channel's bin takes no offset)
       update[near] = { scale: channel, field: end }
       update[far] = { scale: channel, field: start }
+      ignoreOffset2('vega-lite offsets no polar bin')
       continue
     }
     if (def !== undefined && discrete && second === undefined) {
@@ -4674,6 +4778,7 @@ function polarRectPositions(update: Record<string, unknown>, spec: VLSpec, field
       const sizeRef = offset === undefined ? size : { ...size, offset }
       update[near] = withOffset({ scale: channel, field: aggFieldName(def) })
       update[far] = { scale: channel, field: aggFieldName(def), offset: sizeRef }
+      ignoreOffset2('a discrete polar channel spans its band from its own offset (position-rect.ts positionAndSize)')
       continue
     }
     // rangePosition: the channel (a field, a datum or a constant) is the near end, the second channel the far one; with neither, the
@@ -4686,8 +4791,8 @@ function polarRectPositions(update: Record<string, unknown>, spec: VLSpec, field
     } else if (channel === 'theta') {
       update[near] = md.theta !== undefined ? markRef(md.theta) : { signal: '2*PI' }
     }
-    if (def !== undefined && stack?.fieldChannel === channel) update[far] = withOffset({ scale: channel, field: `${stack.field}_start` })
-    else if (second !== undefined) update[far] = withOffset(second)
+    if (def !== undefined && stack?.fieldChannel === channel) update[far] = withFarOffset({ scale: channel, field: `${stack.field}_start` })
+    else if (second !== undefined) update[far] = withFarOffset(second)
     else if (channel === 'theta') {
       const given = def !== undefined ? (md.endAngle ?? md.theta2) : md.theta2
       update[far] = given !== undefined && given !== null ? markRef(given) : scaled ? zeroOrMinRef(channel) : { value: 0 }
@@ -4733,6 +4838,8 @@ function polarPointPositions(update: Record<string, unknown>, spec: VLSpec, fiel
     const written = enc[channel]
     const offsetValue = md[`${channel}Offset`]
     const offset = offsetValue ? { offset: offsetValue } : {}
+    // (a label or a point has no far end: position-point.ts reads no second offset)
+    ignore(md, `${channel}2Offset`, 'a point-like mark has no second polar position')
     if (def === undefined) {
       if (isObject(written) && written.value !== undefined) update[channel] = { ...constRef(written.value), ...offset }
       continue
@@ -5020,7 +5127,12 @@ function domainLimit(v: unknown, def: FieldDef): unknown {
  */
 function forwardScaleProps(sc: ScaleSpec, def: FieldDef, channel: string, skip: ReadonlySet<string>): void {
   for (const [k, v] of Object.entries(def.scale ?? {})) {
-    if (skip.has(k) || !scalePropApplies(channel, String(sc.type), k)) continue
+    if (skip.has(k)) continue
+    // (scale/properties.ts: a property the scale's type does not take is dropped, as vega-lite drops it)
+    if (!scalePropApplies(channel, String(sc.type), k)) {
+      ignore(def.scale!, k, 'the scale type does not take it')
+      continue
+    }
     sc[k] = k === 'domainMin' || k === 'domainMax' ? domainLimit(v, def) : v
   }
 }
@@ -5089,6 +5201,25 @@ function colorScaleTypeOf(def: FieldDef): string {
 }
 
 function buildScales(spec: VLSpec, fieldsIn: FieldDef[], mark: string, orient: string, dataName: string, wReq: SizeReq, hReq: SizeReq, series: FieldDef[] = [], rawName: string = dataName): ScaleSpec[] {
+  const scales = buildScalesOf(spec, fieldsIn, mark, orient, dataName, wReq, hReq, series, rawName)
+  // (scale/domain.ts: only a discrete domain is sorted. On a continuous scale vega-lite reads a channel's sort only to order a path
+  // mark's points, which markSort reads; the domain ignores it)
+  for (const f of fieldsIn) {
+    if (!isObject(f.raw)) continue
+    // (domain.ts: an explicit domain is the domain; vega-lite does not sort it)
+    if (explicitDomainOf(f) !== undefined) ignore(f.raw as Record<string, unknown>, 'sort', 'an explicit domain is not sorted')
+    const sc = scales.find((x) => x.name === f.channel)
+    if (sc !== undefined && (isContinuousScaleType(String(sc.type)) || ['quantize', 'quantile', 'threshold', 'sequential', 'identity', 'bin-ordinal'].includes(String(sc.type)))) {
+      // (a bin-ordinal domain is the bins, in their order)
+      ignore(f.raw as Record<string, unknown>, 'sort', 'a continuous domain is not sorted')
+      // (valueref.ts: a band position places a mark within a band, a bin, a time unit or a stack; a plain continuous field has none)
+      if (!f.bin && !f.tu && !isStacked(f, mark, orient, fieldsIn)) ignore(f.raw as Record<string, unknown>, 'bandPosition', 'a continuous field has no band')
+    }
+  }
+  return scales
+}
+
+function buildScalesOf(spec: VLSpec, fieldsIn: FieldDef[], mark: string, orient: string, dataName: string, wReq: SizeReq, hReq: SizeReq, series: FieldDef[] = [], rawName: string = dataName): ScaleSpec[] {
   // (a `scale: null` field has no scale)
   const fields = fieldsIn.filter((f) => !f.noScale)
   const scales: ScaleSpec[] = []
@@ -5211,7 +5342,10 @@ function buildScales(spec: VLSpec, fieldsIn: FieldDef[], mark: string, orient: s
       for (const [k, v] of Object.entries(def.scale)) {
         if (k === 'type' || k === 'zero' || k === 'nice' || k === 'padding' || k === 'paddingInner' || k === 'rangeMin' || k === 'rangeMax') continue
         // a property the scale TYPE (or channel) cannot honour is dropped, as vega-lite does
-        if (!scalePropApplies(channel, sc.type, k)) continue
+        if (!scalePropApplies(channel, sc.type, k)) {
+          ignore(def.scale, k, 'the scale type does not take it')
+          continue
+        }
         // a discrete scale's explicit domain is resolved by sortedDomain (a list of values)
         if (k === 'domain') continue
         sc[k] = (k === 'domainMin' || k === 'domainMax') ? domainLimit(v, def) : v
@@ -5269,7 +5403,11 @@ function buildScales(spec: VLSpec, fieldsIn: FieldDef[], mark: string, orient: s
     if (def.sort === 'descending' && !discrete) sc.reverse = true
     if (!discrete && scalePropApplies(name, type, 'zero')) sc.zero = (def.scale?.zero as boolean | undefined) ?? (explicitDom !== undefined && isContinuousScaleType(type) ? zeroForCustomDomain(explicitDom) : isParamDomain(def) && isContinuousScaleType(type) ? false : type === 'log' ? false : zero)
     for (const [k, v] of Object.entries(def.scale ?? {})) {
-      if (k === 'type' || k === 'domain' || k === 'range' || k === 'zero' || k === 'rangeMin' || k === 'rangeMax' || !scalePropApplies(name, type, k)) continue
+      if (k === 'type' || k === 'domain' || k === 'range' || k === 'zero' || k === 'rangeMin' || k === 'rangeMax') continue
+      if (!scalePropApplies(name, type, k)) {
+        ignore(def.scale!, k, 'the scale type does not take it')
+        continue
+      }
       sc[k] = k === 'domainMin' || k === 'domainMax' ? domainLimit(v, def) : v
     }
     withRangeLimits(sc, def.scale)
@@ -5702,7 +5840,11 @@ function zeroForCustomDomain(explicit: unknown): boolean {
 function sortedDomain(def: FieldDef, dataName: string, dc: DomainCtx): unknown {
   if (def.datumOnly) return datumDomain(def)
   const explicit = explicitDomainOf(def)
-  if (explicit !== undefined) return explicitDomainValue(explicit, def)
+  if (explicit !== undefined) {
+    // (domain.ts: an explicit domain is the domain; vega-lite does not sort it)
+    if (isObject(def.raw)) ignore(def.raw as Record<string, unknown>, 'sort', 'an explicit domain is not sorted')
+    return explicitDomainValue(explicit, def)
+  }
   const field = aggFieldName(def)
   const main = { data: dataName, field }
   const sort = def.sort
@@ -5740,8 +5882,16 @@ function sortedDomain(def: FieldDef, dataName: string, dc: DomainCtx): unknown {
     if (sort.field !== undefined || sort.op !== undefined) {
       const sortField = sort.field !== undefined ? flatField(String(sort.field)).key : undefined
       // a count counts the records of each value, whatever field it names; a sort by the domain's own field is the domain's own order
-      if (sort.op === 'count') return { ...raw, sort: { op: 'count', ...(order ? { order } : {}) } }
-      if (sortField === field) return order === 'descending' ? { ...raw, sort: { order: 'descending' } } : { ...raw, sort: true }
+      if (sort.op === 'count') {
+        // (a count counts the records of each value: the field it names is not read)
+        ignore(sort, 'field', 'a count reads no field')
+        return { ...raw, sort: { op: 'count', ...(order ? { order } : {}) } }
+      }
+      if (sortField === field) {
+        // (an operation over the domain's own field orders the domain as the field does: vega-lite reads no op there)
+        ignore(sort, 'op', 'a sort by the domain\'s own field is its own order')
+        return order === 'descending' ? { ...raw, sort: { order: 'descending' } } : { ...raw, sort: true }
+      }
       const isStackedMeasure = stacked && !(sortField !== undefined && dims.has(sortField))
       const op = (sort.op as string | undefined) ?? (isStackedMeasure ? 'sum' : 'min')
       return { ...raw, sort: { op, ...(sortField !== undefined ? { field: sortField } : {}), ...(order ? { order } : {}) } }
@@ -8167,15 +8317,94 @@ function markPaint(spec: VLSpec, mark: string, fields: FieldDef[], filled: boole
  * but an image), and a `color` channel gives way to the `fill` (filled mark) or `stroke` (unfilled mark) the encoding has. The
  * encoding of the unit is what is left: nothing after this reads a dropped channel.
  */
+/**
+ * Mark-def properties the validator accepts (the schema has them) that vega-lite 6.4.3 reads nowhere for a unit: they change nothing,
+ * so the compile consumes them as ignored (consume.ts). Each is pinned by a corpus case against vega-lite.
+ */
+const MARK_KEYS_VEGA_LITE_IGNORES: Readonly<Record<string, string>> = {
+  bandSize: 'vega-lite reads no mark-def bandSize (vlx-mark-bandsize-ignored)',
+  gradient: 'vega-lite reads no mark-def gradient; a gradient is a colour value (area-gradient)',
+}
+
+/**
+ * What vega-lite does not read of a longitude / latitude (README "Maps"): a constant places nothing (position-point.ts reads a geographic
+ * position from a projected field or datum only), and a field is projected raw whatever its scale, axis, legend, stack, impute, band,
+ * condition, band position, sort (other than an array) or pre-binned bin say.
+ */
+const GEO_DEF_KEYS_IGNORED = ['scale', 'axis', 'legend', 'stack', 'impute', 'band', 'condition', 'bandPosition'] as const
+function ignoreUnreadGeoParts(enc: Record<string, unknown>): void {
+  for (const ch of GEO_POSITION_CHANNELS) {
+    const def = peek(() => enc[ch])
+    if (!isObject(def)) continue
+    const placed = peek(() => def.field !== undefined || def.datum !== undefined || def.aggregate === 'count')
+    if (!placed) {
+      ignore(enc, ch, 'vega-lite reads no geographic position from a constant')
+      continue
+    }
+    for (const k of GEO_DEF_KEYS_IGNORED) ignore(def, k, 'a longitude / latitude is projected raw')
+    // (a sort array makes the field ordinal, read as on any channel; any other sort orders nothing that is projected)
+    if (!Array.isArray(peek(() => def.sort))) ignore(def, 'sort', 'a longitude / latitude is projected raw')
+    const bin = peek(() => def.bin)
+    if (bin === 'binned' || (isObject(bin) && peek(() => bin.binned) === true)) ignore(def, 'bin', 'pre-binned data changes nothing on a longitude / latitude')
+  }
+}
+
+/**
+ * What vega-lite does not read of the other channels: a position takes no condition (its schema has none; a definition that places the
+ * mark by a field, a datum or a value is read as that, and a condition beside it does nothing), and `key` is a field (a value or a
+ * condition on it keys nothing).
+ */
+const PLACING_CHANNELS = ['x', 'y', 'x2', 'y2', 'xOffset', 'yOffset', 'theta', 'theta2', 'radius', 'radius2'] as const
+/**
+ * `header` is a facet channel's: on these channels vega-lite's output does not depend on it (conformance vl-ignored-channel-keys.test.ts
+ * pins that against vega-lite 6.4.3). On the other channels (a colour, a size, a shape ...) it changes vega-lite's output, and is held
+ * to the consumption check.
+ */
+export const HEADER_IGNORED_ON: ReadonlySet<string> = new Set([
+  'x', 'y', 'x2', 'y2', 'xOffset', 'yOffset', 'xError', 'xError2', 'yError', 'yError2', 'theta', 'theta2', 'radius', 'radius2',
+  'longitude', 'latitude', 'longitude2', 'latitude2', 'text', 'tooltip', 'href', 'url', 'description', 'detail', 'key', 'order', 'angle',
+  'fillOpacity', 'strokeOpacity', 'time',
+])
+function ignoreUnreadChannelParts(enc: Record<string, unknown>): void {
+  for (const ch of Object.keys(enc)) {
+    if (!HEADER_IGNORED_ON.has(ch)) continue
+    const def = peek(() => enc[ch])
+    for (const d of Array.isArray(def) ? def : [def]) if (isObject(d)) ignore(d, 'header', 'a header belongs to a facet channel')
+  }
+  for (const ch of PLACING_CHANNELS) {
+    const def = peek(() => enc[ch])
+    if (!isObject(def)) continue
+    const placed = peek(() => def.field !== undefined || def.datum !== undefined || def.value !== undefined || def.aggregate === 'count')
+    if (placed) ignore(def, 'condition', 'a position takes no condition')
+  }
+  const key = peek(() => enc.key)
+  if (isObject(key)) for (const k of ['value', 'condition']) ignore(key, k, 'a key is a field')
+  // (mark.ts getSort: an order is a field, a list of fields, or a null / false value; a condition orders nothing)
+  const order = peek(() => enc.order)
+  for (const d of Array.isArray(order) ? order : [order]) if (isObject(d)) ignore(d, 'condition', 'an order takes no condition')
+}
+
 function initUnitEncoding(spec: VLSpec, mark: string): void {
+  if (isObject(spec.mark)) for (const [k, why] of Object.entries(MARK_KEYS_VEGA_LITE_IGNORES)) ignore(spec.mark, k, why)
   const enc = isObject(spec.encoding) ? (spec.encoding as Record<string, unknown>) : undefined
   if (!enc) return
+  ignoreUnreadGeoParts(enc)
+  ignoreUnreadChannelParts(enc)
   const image = isObject(spec.mark) && spec.mark.$image === true
   const shadowed = 'color' in enc && (markIsFilled(spec, mark) ? 'fill' : 'stroke') in enc
-  const kept = Object.entries(enc).filter(([ch]) => markChannelCompatible(enc, ch, mark, image) && !(ch === 'color' && shadowed))
+  const kept = Object.entries(enc).filter(([ch, def]) => {
+    if (markChannelCompatible(enc, ch, mark, image) && !(ch === 'color' && shadowed)) return true
+    // (encoding.ts: vega-lite drops a channel the mark does not draw, and the colour a fill or a stroke shadows)
+    consumeAll(def)
+    return false
+  })
   // detail, and an order that is not a value (nor a sort alone), are lists of field definitions: anything else in them (a datum, a
   // condition with no value) is dropped, so an order of nothing but that is an empty list
-  const fieldDefs = (def: unknown): unknown[] => ([] as unknown[]).concat(def).filter((d) => isObject(d) && ('field' in d || d.aggregate === 'count'))
+  const fieldDefs = (def: unknown): unknown[] => ([] as unknown[]).concat(def).filter((d) => {
+    if (isObject(d) && ('field' in d || d.aggregate === 'count')) return true
+    consumeAll(d)
+    return false
+  })
   const listed = kept.map(([ch, def]): [string, unknown] => {
     if (ch === 'detail' && def != null) return [ch, fieldDefs(def)]
     if (ch === 'order' && isObject(def) && !('value' in def) && !('field' in def) && !(def.sort !== undefined && def.aggregate === undefined && def.condition === undefined && def.datum === undefined)) return [ch, fieldDefs(def)]
@@ -8422,6 +8651,8 @@ function unitProjection(spec: VLSpec, prefix: string, handle: object): Projectio
     handle,
   }
   const component = parseUnitProjection(unit)
+  // (unit.ts: vega-lite parses a projection only for a unit that projects: a geoshape, or a geographic position)
+  if (!component) ignore(spec, 'projection', 'a unit that projects nothing reads no projection')
   if (component) GEO_UNITS.set(spec, { component, isFit: component.isFit, prefix })
   GEO_NAME_PREFIX.set(spec, prefix)
   return component
