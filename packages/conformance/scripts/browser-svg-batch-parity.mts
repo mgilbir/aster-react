@@ -1,74 +1,56 @@
 /**
  * Batched-SVG pixel parity gate.
  *
- * `denseMarks` rewrites dense symbol marks as chunked `<path>` elements instead
+ * `denseMarks` rewrites dense symbol marks (512 items or more) as chunked `<path>` elements instead
  * of one element per datum (100k symbols -> ~400 paths). Positions are baked
- * into `d` (rounded to 0.001px), so the pixels must be identical to the
- * per-item rendering; this gate rasterizes both DOMs in headless Chromium and
- * compares them. The corpus supplies real-world symbol specs; the synthetic
- * entries force the batcher across paint, shape, stroke, opacity, rotation and
- * clipping edges.
+ * into `d` (rounded to 0.001px), so the picture must be the per-item one;
+ * this gate rasterizes both DOMs in headless Chromium and compares them.
  *
- * Run: pnpm conformance:batch [--limit=N] [--filter=substr] [--browser=chromium]
+ * Every entry is generated: no corpus spec has a symbol mark of 512 items (the largest has 30), so a corpus spec renders
+ * through the same code twice and proves nothing. The entries span 511 to 100k items and force the batcher across paint,
+ * shape, stroke, opacity, rotation and clipping edges. For each one:
+ *   - BATCHING is what the entry says it is: `batched` entries have fewer path elements batched than per item, the others
+ *     (under 512 items, rotated, translucent) exactly as many;
+ *   - GEOMETRY: the batched DOM draws as many sub-paths (`M` commands) as the per-item one, so no item is dropped or
+ *     duplicated whatever the pixels say;
+ *   - PIXELS agree under the gates' one comparison (canvas-pixels.mts: global noise limits, LOCALITY, ink on both sides),
+ *     with the batch limits below: a batched path antialiases overlapping same-paint sub-paths once instead of per item.
+ *
+ * The verdict is runGate's (scripts/lib/run-gate.mjs): `compared` counts the entries compared, `batched` those whose batched
+ * DOM really was batched; both have floors on a full run. `--plant-difference` drops the last sub-path of Aster's batched DOM.
+ *
+ * Run after `pnpm build`: pnpm conformance:batch [--limit=N] [--filter=substr] [--browser=chromium]
  */
-import { readdirSync, readFileSync, writeFileSync, rmSync, mkdirSync } from 'node:fs'
+import { writeFileSync, rmSync, mkdirSync, mkdtempSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { build } from 'esbuild'
 import { cli } from '../../../scripts/lib/cli.mjs'
+import { GATE_FLAGS, intOption, runGate, type Gate } from '../../../scripts/lib/run-gate.mjs'
+import { COMPARE_PIXELS_SOURCE } from './canvas-pixels.mts'
 
-cli({ url: import.meta.url, flags: { limit: 'eq', filter: 'eq', browser: 'eq', ratio: 'eq', delta: 'eq', mean: 'eq' } })
+cli({ url: import.meta.url, flags: { limit: 'eq', filter: 'eq', browser: 'eq', ratio: 'eq', delta: 'eq', mean: 'eq', local: 'eq', ...GATE_FLAGS } })
 
 const THIS_DIR = dirname(fileURLToPath(import.meta.url))
 const CONF_DIR = dirname(THIS_DIR)
-const OUT_DIR = join(CONF_DIR, '.tmp-browser-batch')
+const OUT_DIR = mkdtempSync(join(CONF_DIR, '.tmp-browser-batch-')) // (one directory per run: concurrent runs do not clobber each other)
 const argv = process.argv.slice(2)
 const arg = (n: string, d: string): string => argv.find((a) => a.startsWith(`--${n}=`))?.split('=')[1] ?? d
-const LIMIT = Number(arg('limit', '0'))
+const LIMIT = intOption(argv.find((a) => a.startsWith('--limit='))?.split('=')[1], '--limit', 0)
 const FILTER = arg('filter', '')
 const BROWSER = arg('browser', 'chromium') as 'chromium' | 'firefox' | 'webkit'
-// Positions are baked into `d` at 0.001px, so geometry is identical. A batched
-// path still antialiases overlapping same-paint subpaths once instead of per
-// item, which shifts edge pixels; the tolerance accepts those AA differences
-// but a moved/missing/recoloured mark still fails (it shifts whole marks).
-const RATIO = Number(arg('ratio', '0.04'))
+// The batch limits: a pixel differs when the sum of its channel differences exceeds DELTA; at most RATIO of the pixels may
+// differ, a mean per-channel difference of MEAN, and LOCAL differing pixels in any 8x8 square (a missing, moved or recoloured
+// symbol is concentrated there: a missing 30 px^2 symbol is ~25). Measured over the entries below (Chromium, 2026-11-23):
+// worst ratio 8.2e-3 (batch-stroke), worst mean 0.47 (batch-stroke), worst square 7 (batch-shapes); the previous limits
+// (ratio 0.04, mean 1.5, no locality) let 60 of 8000 symbols go missing.
 const DELTA = Number(arg('delta', '24'))
-const MEAN = Number(arg('mean', '1.5'))
+const RATIO = Number(arg('ratio', '0.01'))
+const MEAN = Number(arg('mean', '0.6'))
+const LOCAL = Number(arg('local', '7'))
+const NARROWED = Boolean(FILTER) || LIMIT > 0 || ['delta', 'ratio', 'mean', 'local'].some((n) => argv.some((a) => a.startsWith(`--${n}=`)))
 
-interface Entry { name: string; spec: Record<string, unknown> }
-
-function hasUrlData(spec: Record<string, unknown>): boolean {
-  const data = spec.data
-  const defs = Array.isArray(data) ? data : data && typeof data === 'object' ? [data] : []
-  return defs.some((d) => d && typeof d === 'object' && typeof (d as { url?: unknown }).url === 'string')
-}
-
-function hasSymbolMark(spec: Record<string, unknown>): boolean {
-  const seen = new Set<unknown>()
-  const walk = (node: unknown): boolean => {
-    if (!node || typeof node !== 'object' || seen.has(node)) return false
-    seen.add(node)
-    const o = node as Record<string, unknown>
-    if (o.type === 'symbol') return true
-    if (Array.isArray(o.marks) && o.marks.some(walk)) return true
-    if (Array.isArray(o.layer) && o.layer.some(walk)) return true
-    if (Array.isArray(o.items) && o.items.some(walk)) return true
-    return false
-  }
-  return walk(spec)
-}
-
-function loadCorpus(): Entry[] {
-  const corpus = join(CONF_DIR, 'corpus')
-  const files = readdirSync(corpus, { recursive: true }).filter((f) => String(f).endsWith('.json')).map(String).sort()
-  const entries: Entry[] = []
-  for (const f of files) {
-    const spec = JSON.parse(readFileSync(join(corpus, f), 'utf8')) as Record<string, unknown>
-    if (hasUrlData(spec) || !hasSymbolMark(spec)) continue
-    entries.push({ name: f.replace(/\.vl\.json$|\.json$/, ''), spec })
-  }
-  return entries
-}
+interface Entry { name: string; spec: Record<string, unknown>; batched: boolean }
 
 // `paintIndex` returns a *run*-shaped value (series blocks) unless the entry is
 // explicitly testing per-item paint cycling, which cannot batch by design.
@@ -120,21 +102,17 @@ function symbolMark(extra: Record<string, unknown>): Record<string, unknown> {
   }
 }
 
-const synthetic: Entry[] = [
-  {
-    name: 'batch-single-paint',
-    spec: denseSpec(symbolValues(8000, () => ({ fill: '#4c78a8', size: 30 }))),
-  },
-  {
-    name: 'batch-multi-paint',
-    spec: denseSpec(symbolValues(8000, (i) => ({ fill: ['#4c78a8', '#f58518', '#54a24b', '#e45756', '#b279a2'][Math.floor(i / 1600)], size: 30 }))),
-  },
-  {
-    name: 'batch-shapes',
-    spec: denseSpec(symbolValues(8000, (i) => ({ fill: '#4c78a8', size: 20 + (i % 7) * 10, shape: shapes[i % shapes.length] }))),
-  },
+const palette = ['#4c78a8', '#f58518', '#54a24b', '#e45756', '#b279a2']
+const entries0: Entry[] = [
+  // the threshold: one item short of it never batches, at it always does
+  { name: 'batch-511-under-threshold', batched: false, spec: denseSpec(symbolValues(511, () => ({ fill: '#4c78a8', size: 30 }))) },
+  { name: 'batch-512-single-paint', batched: true, spec: denseSpec(symbolValues(512, () => ({ fill: '#4c78a8', size: 30 }))) },
+  { name: 'batch-single-paint', batched: true, spec: denseSpec(symbolValues(8000, () => ({ fill: '#4c78a8', size: 30 }))) },
+  { name: 'batch-multi-paint', batched: true, spec: denseSpec(symbolValues(8000, (i) => ({ fill: palette[Math.floor(i / 1600)], size: 30 }))) },
+  { name: 'batch-shapes', batched: true, spec: denseSpec(symbolValues(8000, (i) => ({ fill: '#4c78a8', size: 20 + (i % 7) * 10, shape: shapes[i % shapes.length] }))) },
   {
     name: 'batch-stroke',
+    batched: true,
     // Stroke style changes every 1000 items: 8 same-paint runs batch, while the
     // per-item stroke-width variation within a run forces chunks.
     spec: denseSpec(symbolValues(8000, (i) => ({
@@ -144,32 +122,26 @@ const synthetic: Entry[] = [
       size: 40,
     }))),
   },
-  {
-    name: 'batch-opacity-fallback',
-    spec: denseSpec(symbolValues(8000, (i) => ({ fill: '#4c78a8', size: 30, op: 0.5 + (Math.floor(i / 1000) % 2) * 0.2 }))),
-  },
-  {
-    name: 'batch-rotated',
-    spec: denseSpec(symbolValues(4000, (i) => ({ fill: '#4c78a8', size: 30, shape: shapes[i % shapes.length] })), { angle: { value: 35 } }),
-  },
-  {
-    name: 'batch-clipped',
-    spec: denseSpec(symbolValues(8000, (i) => ({ fill: ['#4c78a8', '#f58518'][Math.floor(i / 1000) % 2], size: 30 })), {}, true),
-  },
+  // translucent items keep their own element (one path would composite overlaps once)
+  { name: 'batch-opacity-fallback', batched: false, spec: denseSpec(symbolValues(8000, (i) => ({ fill: '#4c78a8', size: 30, op: 0.5 + (Math.floor(i / 1000) % 2) * 0.2 }))) },
+  // one translucent run among opaque ones: the opaque runs batch, the translucent one does not
+  { name: 'batch-opacity-mixed', batched: true, spec: denseSpec(symbolValues(4000, (i) => ({ fill: palette[Math.floor(i / 1000)], size: 30, op: Math.floor(i / 1000) === 2 ? 0.5 : 1 }))) },
+  // rotated items keep their own element
+  { name: 'batch-rotated', batched: false, spec: denseSpec(symbolValues(4000, (i) => ({ fill: '#4c78a8', size: 30, shape: shapes[i % shapes.length] })), { angle: { value: 35 } }) },
+  { name: 'batch-clipped', batched: true, spec: denseSpec(symbolValues(8000, (i) => ({ fill: palette[Math.floor(i / 1000) % 2], size: 30 })), {}, true) },
+  // sparse: symbols that do not overlap, so a missing one cannot hide under another
+  { name: 'batch-sparse-600', batched: true, spec: denseSpec(Array.from({ length: 600 }, (_, i) => ({ x: 8 + (i % 30) * 13, y: 8 + Math.floor(i / 30) * 14, fill: palette[Math.floor(i / 300)], size: 20 }))) },
+  { name: 'batch-20k-paint-runs', batched: true, spec: denseSpec(symbolValues(20000, (i) => ({ fill: palette[Math.floor(i / 4000)], size: 12, shape: shapes[Math.floor(i / 500) % shapes.length] }))) },
+  { name: 'batch-100k', batched: true, spec: denseSpec(symbolValues(100000, () => ({ fill: '#4c78a8', size: 6 }))) },
 ]
 
-const all = [...loadCorpus(), ...synthetic].filter((e) => !FILTER || e.name.includes(FILTER))
-const entries = all.slice(0, LIMIT || undefined)
-console.log(`[browser-batch] ${BROWSER}: ${entries.length} entries (${synthetic.length} synthetic, ${entries.length - synthetic.length} corpus symbol specs)`)
+const entries = entries0.filter((e) => !FILTER || e.name.includes(FILTER)).slice(0, LIMIT || undefined)
+console.log(`[browser-batch] ${BROWSER}: ${entries.length} generated entries`)
 
 const entrySrc = `
-import embed from 'vega-embed'
 import { compileChart, evaluateChart } from '@aster-charts/core'
 import { renderSceneToDomElement } from '@aster-charts/core/dom'
 import { loadSpecData, TRUSTED_LOAD_OPTIONS } from '@aster-charts/core/load'
-import { compile } from '@aster-charts/vl'
-import '@aster-charts/core/geo'
-import '@aster-charts/core/transforms'
 
 const NS = 'http://www.w3.org/2000/svg'
 
@@ -192,21 +164,8 @@ function rasterize(el, w, h) {
   })
 }
 
-// Strict pixel diff (no neighbourhood search): the batched geometry is the same
-// geometry, only the element grouping changed.
-function diff(a, b) {
-  if (a.w !== b.w || a.h !== b.h) return { error: 'size ' + a.w + 'x' + a.h + ' != ' + b.w + 'x' + b.h }
-  const DELTA = ${DELTA}
-  let bad = 0, sum = 0
-  for (let i = 0; i < a.data.length; i += 4) {
-    const d = Math.abs(a.data[i] - b.data[i]) + Math.abs(a.data[i+1] - b.data[i+1])
-      + Math.abs(a.data[i+2] - b.data[i+2]) + Math.abs(a.data[i+3] - b.data[i+3])
-    if (d > DELTA) bad++
-    sum += d
-  }
-  const count = a.w * a.h
-  return { ratio: bad / count, mean: sum / (count * 4) }
-}
+const comparePixels = ${COMPARE_PIXELS_SOURCE}
+const LIMITS = { pixel: ${DELTA}, ratio: ${RATIO}, mean: ${MEAN}, window: 8, local: ${LOCAL} }
 
 function pathStats(el) {
   const paths = el.querySelectorAll('path')
@@ -218,77 +177,87 @@ function pathStats(el) {
   return { paths: paths.length, subpaths }
 }
 
-const RATIO = ${RATIO}
-const MEAN = ${MEAN}
+/** --plant-difference: the batched DOM loses the last sub-path of its last multi-item path (an item the batcher dropped). */
+function plantDrop(el) {
+  const paths = [...el.querySelectorAll('path')].reverse()
+  for (const p of paths) {
+    const d = p.getAttribute('d') || ''
+    const at = Math.max(d.lastIndexOf('M'), d.lastIndexOf('m'))
+    if (at > 0) { p.setAttribute('d', d.slice(0, at)); return }
+  }
+}
 
-window.__runBatch = async (entry) => {
+window.__runBatch = async (entry, plant) => {
   try {
     const spec = entry.spec
-    const isVl = String(spec.$schema ?? '').includes('vega-lite')
-    const compiled = isVl ? compile(spec) : spec
-    const loaded = await loadSpecData(compiled as never, TRUSTED_LOAD_OPTIONS)
+    const loaded = await loadSpecData(spec as never, TRUSTED_LOAD_OPTIONS)
     const scene = evaluateChart(compileChart(loaded as never))
     const normal = renderSceneToDomElement(scene)
     const batched = renderSceneToDomElement(scene, document, { denseMarks: true })
+    if (plant) plantDrop(batched)
     const stats = { normal: pathStats(normal), batched: pathStats(batched) }
+    const problems = []
+    const didBatch = stats.batched.paths < stats.normal.paths
+    if (didBatch !== entry.batched) problems.push((entry.batched ? 'the batcher did not reduce paths' : 'items that must keep their own element were batched') + ': ' + JSON.stringify(stats))
+    if (stats.batched.subpaths !== stats.normal.subpaths) problems.push('the batched DOM draws ' + stats.batched.subpaths + ' sub-paths, per item ' + stats.normal.subpaths + ' (an item dropped or duplicated)')
     const a = await rasterize(normal, scene.width, scene.height)
     const b = await rasterize(batched, scene.width, scene.height)
-    const d = diff(a, b)
-    // A synthetic entry is only meaningful if batching actually kicked in.
-    const expectBatch = entry.name.startsWith('batch-') && !entry.name.includes('rotated') && !entry.name.includes('fallback')
-    if (expectBatch && !(stats.batched.paths < stats.normal.paths)) {
-      return { pass: false, error: 'batcher did not reduce paths: ' + JSON.stringify(stats), stats }
-    }
-    return { ...d, stats, pass: !d.error && d.ratio <= RATIO && d.mean <= MEAN }
+    const d = a.w !== b.w || a.h !== b.h ? { error: 'size ' + a.w + 'x' + a.h + ' != ' + b.w + 'x' + b.h } : comparePixels(a.data, b.data, a.w, a.h, LIMITS)
+    if (d.error) problems.push(d.error)
+    return { compared: true, batched: didBatch, error: problems.length ? problems.join('; ') : null, ratio: d.ratio, mean: d.mean, local: d.local }
   } catch (err) {
-    return { pass: false, error: err instanceof Error ? err.message : String(err) }
+    return { compared: false, error: err instanceof Error ? err.message : String(err) }
   }
 }
 `
 
-rmSync(OUT_DIR, { recursive: true, force: true })
-mkdirSync(OUT_DIR, { recursive: true })
-writeFileSync(join(OUT_DIR, 'page-entry.ts'), entrySrc)
-await build({
-  entryPoints: [join(OUT_DIR, 'page-entry.ts')],
-  bundle: true,
-  format: 'iife',
-  platform: 'browser',
-  outfile: join(OUT_DIR, 'page.js'),
-  define: { 'process.env.NODE_ENV': '"production"' },
-  banner: { js: 'var process = { env: { NODE_ENV: "production" } };' },
-  logLevel: 'silent',
-})
-writeFileSync(join(OUT_DIR, 'index.html'), '<!doctype html><html><body><script src="./page.js"></script></body></html>')
+interface BatchResult { compared: boolean; batched?: boolean; error: string | null; ratio?: number; mean?: number; local?: number }
 
-const playwright = await import('playwright')
-const browser = await playwright[BROWSER].launch({ headless: true, args: BROWSER === 'chromium' ? ['--disable-dev-shm-usage'] : [] })
-const page = await browser.newPage({ deviceScaleFactor: 1 })
-page.on('pageerror', (e) => console.error('[page]', e.message.slice(0, 200)))
-await page.goto(`file://${join(OUT_DIR, 'index.html')}`)
-await page.waitForFunction(() => '__runBatch' in window, null, { timeout: 30_000 })
-await page.evaluate((data) => { (window as unknown as { __entries: unknown }).__entries = data }, entries)
-
-let pass = 0
-const failures: Array<{ name: string; error?: string; ratio?: number; mean?: number; stats?: unknown }> = []
-const t0 = Date.now()
-for (let i = 0; i < entries.length; i++) {
-  const r = await page.evaluate((idx: number) => {
-    const es = (window as unknown as { __entries: Entry[] }).__entries
-    return (window as unknown as { __runBatch: (e: Entry) => Promise<{ pass: boolean; error?: string; ratio?: number; mean?: number; stats?: unknown }> }).__runBatch(es[idx]!)
-  }, i)
-  if (r.pass) pass++
-  else failures.push({ name: entries[i]!.name, error: r.error, ratio: r.ratio, mean: r.mean, stats: r.stats })
-  if ((i + 1) % 25 === 0) console.log(`  ${i + 1}/${entries.length} (${((Date.now() - t0) / 1000).toFixed(0)}s)`)
-}
-await browser.close()
-rmSync(OUT_DIR, { recursive: true, force: true })
-
-console.log(`\n[browser-batch] ${BROWSER}: ${pass}/${entries.length} passed (${((Date.now() - t0) / 1000).toFixed(0)}s)`)
-if (failures.length) {
-  console.log(`[browser-batch] failing: ${failures.map((f) => f.name).join(', ')}`)
-  for (const f of failures.slice(0, 20)) {
-    console.log(`  ${f.name}: ${f.error ?? `ratio=${f.ratio?.toFixed(4)} mean=${f.mean?.toFixed(2)}`} ${f.stats ? JSON.stringify(f.stats) : ''}`)
+async function main(gate: Gate): Promise<void> {
+  rmSync(OUT_DIR, { recursive: true, force: true })
+  mkdirSync(OUT_DIR, { recursive: true })
+  writeFileSync(join(OUT_DIR, 'page-entry.ts'), entrySrc)
+  await build({
+    entryPoints: [join(OUT_DIR, 'page-entry.ts')],
+    bundle: true,
+    format: 'iife',
+    platform: 'browser',
+    outfile: join(OUT_DIR, 'page.js'),
+    define: { 'process.env.NODE_ENV': '"production"' },
+    banner: { js: 'var process = { env: { NODE_ENV: "production" } };' },
+    logLevel: 'silent',
+  })
+  writeFileSync(join(OUT_DIR, 'index.html'), '<!doctype html><html><body><script src="./page.js"></script></body></html>')
+  const playwright = await import('playwright')
+  const browser = await playwright[BROWSER].launch({ headless: true, args: BROWSER === 'chromium' ? ['--disable-dev-shm-usage'] : [] })
+  try {
+    const page = await browser.newPage({ deviceScaleFactor: 1 })
+    page.on('pageerror', (e) => gate.problem(`page error: ${e.message.slice(0, 200)}`))
+    await page.goto(`file://${join(OUT_DIR, 'index.html')}`)
+    await page.waitForFunction(() => '__runBatch' in window, null, { timeout: 30_000 })
+    const t0 = Date.now()
+    for (const entry of entries) {
+      const r = await page.evaluate(([e, plant]) => (window as unknown as { __runBatch: (e: Entry, p: boolean) => Promise<BatchResult> }).__runBatch(e as Entry, plant as boolean), [entry, gate.plant] as const)
+      const measured = r.ratio === undefined ? '' : ` (ratio=${r.ratio.toExponential(2)} mean=${r.mean?.toFixed(3)} local=${r.local})`
+      if (!r.compared) gate.error(entry.name, r.error ?? 'error')
+      else if (r.error !== null) gate.differ(entry.name, r.error + measured)
+      else gate.agree(entry.name)
+      if (r.compared && r.batched) gate.count('batched')
+      console.log(`  ${r.error === null ? 'PASS' : 'FAIL'}  ${entry.name}${measured}`)
+    }
+    console.log(`[browser-batch] ${BROWSER}: ${entries.length} entries (${((Date.now() - t0) / 1000).toFixed(0)}s)`)
+  } finally {
+    await browser.close()
+    rmSync(OUT_DIR, { recursive: true, force: true })
   }
 }
-process.exit(failures.length ? 1 : 0)
+
+await runGate({
+  name: 'batch',
+  counters: {
+    compared: { floor: entries0.length, what: 'generated entries compared (batching, geometry and pixels)' },
+    batched: { floor: entries0.filter((e) => e.batched).length, what: 'entries whose batched DOM was really batched' },
+  },
+  partial: NARROWED,
+  run: main,
+})
