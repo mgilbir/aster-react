@@ -667,6 +667,9 @@ export function markTupleAlways(t: object): void {
  */
 export const MARK_NODE: unique symbol = Symbol.for('aster.markNode') as never
 
+/** The scene node the `mark` of vega's root group item stands for (its root mark): `intersect()` walks the whole scene for it. */
+export const ROOT_MARK_NODE: object = Object.freeze({ root: true })
+
 /** vega-dataflow `isTuple`: whether the value is a registered tuple. */
 export function isTuple(t: unknown): boolean {
   return t !== null && typeof t === 'object' && TUPLES.has(t)

@@ -22,7 +22,7 @@ import { textAnchor } from './text-metrics.js'
 import { itemArcGeometry } from './render.js'
 import { insidePolys, type Poly } from './path-flatten.js'
 import { arcLocalPolys, pathMarkPolys, pathPolys, transformPolys } from './geometry-read.js'
-import { MARK_NODE } from './util.js'
+import { MARK_NODE, ROOT_MARK_NODE } from './util.js'
 import { ceiling, HARD_CAPS, meterTick } from './limits.js'
 import type { SceneGroup, SceneItem, SceneRoot } from './types.js'
 
@@ -302,13 +302,19 @@ function sceneOf(scene: SceneRoot | undefined, group: unknown): { mark: SceneGro
   if (group) {
     const g = (typeof group === 'object' ? group : {}) as Rec
     const linked = g[MARK_NODE as never] as Rec | undefined
+    // (the root group item's mark: vega-lite's `unit.mark` of a single view is the root mark, the whole scene)
+    if (linked !== undefined && linked === (ROOT_MARK_NODE as Rec)) return rootOf(scene)
     if (linked && Array.isArray(linked.items)) return { mark: linked as unknown as SceneGroup }
     // (an item's facade carries its `mark`: an item is no mark node, even a group item, which has a marktype and items)
     const isItem = g.mark !== null && typeof g.mark === 'object'
     if (!isItem && g.marktype && Array.isArray(g.items)) return { mark: g as unknown as SceneGroup }
     throw new Error('Intersect scene must be mark node or group item.')
   }
-  // vega's root: a group mark holding the root group item, whose marks are the view's
+  return rootOf(scene)
+}
+
+/** vega's root: a group mark holding the root group item, whose marks are the view's. */
+function rootOf(scene: SceneRoot | undefined): { group: SceneGroup } | null {
   if (!scene) return null
   const root: Rec = { items: scene.items, x: 0, y: 0, width: scene.plotWidth ?? scene.width, height: scene.plotHeight ?? scene.height, name: 'root' }
   return { group: root as unknown as SceneGroup }
