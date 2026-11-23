@@ -28,6 +28,9 @@
  * silently dead. The light bundles are asserted (esbuild metafile) not to contain the canvas renderer, and the one
  * without `interaction` not to contain the hit index or the signal loop either.
  *
+ * The verdict is runGate's (scripts/lib/run-gate.mjs): every check is a case (numbered in the order it runs), a page error is a
+ * failure, and `checks` (the checks run) has a floor. `--plant-difference` reports every check as failing (the exit path).
+ *
  * Run: pnpm --filter @aster-charts/react test:browser   (after `pnpm build`)
  */
 import { fileURLToPath } from 'node:url'
@@ -38,8 +41,9 @@ import type { AddressInfo } from 'node:net'
 import { chromium, type Page } from 'playwright'
 import { compile as compileVl } from '@aster-charts/vl'
 import { cli } from '../../../scripts/lib/cli.mjs'
+import { GATE_FLAGS, runGate, type Gate } from '../../../scripts/lib/run-gate.mjs'
 
-cli({ url: import.meta.url })
+cli({ url: import.meta.url, flags: GATE_FLAGS })
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const PKG = dirname(HERE)
@@ -187,11 +191,21 @@ const spec = (extra: Record<string, unknown> = {}): Record<string, unknown> => {
   return missing.length ? { ...out, signals: [...(out.signals as unknown[]), ...missing] } : out
 }
 
-let failures = 0
+let gate: Gate
+let checks = 0
 const check = (ok: boolean, message: string): void => {
-  if (ok) console.log(`  ok   ${message}`)
-  else { failures++; console.log(`  FAIL ${message}`) }
+  const name = `#${++checks}`
+  if (ok && !gate.plant) {
+    console.log(`  ok   ${message}`)
+    gate.agree(name)
+  } else {
+    console.log(`  FAIL ${message}`)
+    gate.differ(name, `${gate.plant ? '(planted) ' : ''}${message}`)
+  }
 }
+/** The rows of the tooltip on show (`key: value` each), or null when none shows. */
+const tooltipRows = (page: Page): Promise<string[] | null> =>
+  page.locator('[data-testid="chart-tooltip"]').evaluate((el) => [...el.children].map((c) => c.textContent ?? ''), null, { timeout: 500 }).catch(() => null)
 
 interface Pt { x: number; y: number }
 type Renderer = 'svg' | 'canvas'
@@ -308,6 +322,80 @@ async function tabStopSuite(page: Page, renderer: Renderer): Promise<void> {
 }
 
 /** Every interaction check, against whichever component the page was bundled with, on one renderer. */
+/**
+ * Pan, zoom and brush over time and utc scales (and a log scale, which pans in its own space): the same gestures as the
+ * linear suite, judged by the domain values they produce. A drag of 40 px over a 400 px plot moves a time domain by a tenth of
+ * its span, as Vega-Lite's `bind: "scales"` moves it; a brush from plot x 50 to 170 selects that tenth-to-forty-percent of it;
+ * a wheel zoom narrows it.
+ */
+async function scaleTypeSuite(page: Page, renderer: Renderer): Promise<void> {
+  const R: Record<string, unknown> = renderer === 'canvas' ? { renderer } : {}
+  const tag = renderer === 'canvas' ? ' (canvas)' : ''
+  const DAY = 86_400_000
+  const d0 = Date.UTC(2024, 0, 1)
+  const d1 = Date.UTC(2024, 0, 11)
+  const ms = (v: unknown): number => (v instanceof Date ? v.getTime() : typeof v === 'string' ? Date.parse(v) : Number(v))
+  for (const type of ['time', 'utc'] as const) {
+    const s = spec({
+      signals: [],
+      data: [{ name: 't', values: [{ px: d0 + 2 * DAY, py: 2, cat: 'a' }, { px: d0 + 5 * DAY, py: 5, cat: 'b' }, { px: d0 + 8 * DAY, py: 8, cat: 'c' }] }],
+      scales: [
+        { name: 'xscale', type, domain: [d0, d1], range: 'width', nice: false },
+        { name: 'yscale', type: 'linear', domain: [0, 10], range: 'height', nice: false },
+      ],
+    })
+    console.log(`[scale types] pan, zoom and brush over a ${type} x scale${tag}`)
+    await mountChart(page, s, { width: 400, height: 240, pan: true, ...R }, ['onViewChange'])
+    const pb = await page.locator('#chart-host').boundingBox()
+    await page.mouse.move(pb!.x + 100, pb!.y + 100)
+    await page.mouse.down()
+    await page.mouse.move(pb!.x + 140, pb!.y + 100, { steps: 4 })
+    await page.mouse.up()
+    const view = (await log(page)).filter((e) => e.name === 'onViewChange').at(-1)?.args[0] as { x?: unknown[] } | undefined
+    const shift = view?.x != null ? d0 - ms(view.x[0]) : NaN
+    const want = (40 / 400) * (d1 - d0)
+    check(Math.abs(shift - want) < 1e-3 * (d1 - d0), `${type}: dragging 40 px pans the domain by ${want / DAY} days (got ${(shift / DAY).toFixed(4)})`)
+
+    await mountChart(page, s, { width: 400, height: 240, zoom: true, ...R }, ['onViewChange'])
+    await page.mouse.move(pb!.x + 230, pb!.y + 100)
+    await page.mouse.wheel(0, -300)
+    await page.waitForTimeout(30)
+    const zoomed = (await log(page)).filter((e) => e.name === 'onViewChange').at(-1)?.args[0] as { x?: unknown[] } | undefined
+    const span = zoomed?.x != null ? ms(zoomed.x[1]) - ms(zoomed.x[0]) : NaN
+    check(span > 0 && span < d1 - d0, `${type}: a wheel zoom narrows the domain (${(span / DAY).toFixed(3)} of ${(d1 - d0) / DAY} days)`)
+
+    await mountChart(page, s, { width: 400, height: 240, ...R }, ['onSelect'])
+    await page.mouse.move(pb!.x + 80, pb!.y + 60)
+    await page.mouse.down()
+    await page.mouse.move(pb!.x + 200, pb!.y + 140, { steps: 6 })
+    await page.mouse.up()
+    const interval = (await log(page)).filter((e) => e.name === 'onSelect').at(-1)?.args[0] as { x?: unknown[] } | null | undefined
+    const got = interval?.x != null ? [ms(interval.x[0]), ms(interval.x[1])] : null
+    // (plot x 50 and 170 of 400: padding 30)
+    const wantX = [d0 + (50 / 400) * (d1 - d0), d0 + (170 / 400) * (d1 - d0)]
+    check(got != null && got.every((v, i) => Math.abs(v - wantX[i]!) < 1e-3 * (d1 - d0)), `${type}: a brush selects the dates under it (${JSON.stringify(got?.map((v) => new Date(v).toISOString()))}, want ${JSON.stringify(wantX.map((v) => new Date(v).toISOString()))})`)
+  }
+  // a log scale pans in log space: 40 px of 400 moves [1, 1000] by a tenth of its three decades
+  console.log(`[scale types] pan over a log x scale${tag}`)
+  const logSpec = spec({
+    signals: [],
+    data: [{ name: 't', values: [{ px: 2, py: 2, cat: 'a' }, { px: 30, py: 5, cat: 'b' }, { px: 500, py: 8, cat: 'c' }] }],
+    scales: [
+      { name: 'xscale', type: 'log', domain: [1, 1000], range: 'width', nice: false },
+      { name: 'yscale', type: 'linear', domain: [0, 10], range: 'height', nice: false },
+    ],
+  })
+  await mountChart(page, logSpec, { width: 400, height: 240, pan: true, ...R }, ['onViewChange'])
+  const lb = await page.locator('#chart-host').boundingBox()
+  await page.mouse.move(lb!.x + 100, lb!.y + 100)
+  await page.mouse.down()
+  await page.mouse.move(lb!.x + 140, lb!.y + 100, { steps: 4 })
+  await page.mouse.up()
+  const lview = (await log(page)).filter((e) => e.name === 'onViewChange').at(-1)?.args[0] as { x?: number[] } | undefined
+  const lo = lview?.x != null ? Math.log10(lview.x[0]!) : NaN
+  check(Math.abs(lo - -0.3) < 1e-3, `log: dragging 40 px pans [1, 1000] by 0.3 decades (log10 of the new start ${Number.isNaN(lo) ? lo : lo.toFixed(4)}, want -0.3)`)
+}
+
 async function suite(page: Page, renderer: Renderer): Promise<void> {
   // (`renderer` is passed only for the canvas: `<SvgChart>` has no such prop)
   const R: Record<string, unknown> = renderer === 'canvas' ? { renderer } : {}
@@ -337,8 +425,8 @@ async function suite(page: Page, renderer: Renderer): Promise<void> {
     check(hit.inChart && !hit.overlay, `element under the pointer is the mark${renderer === 'canvas' ? "'s canvas" : ''} (got <${hit.tag}>, overlay=${hit.overlay})`)
     await page.mouse.move(c.x, c.y)
     await page.waitForTimeout(30)
-    const tip = await page.locator('[data-testid="chart-tooltip"]').textContent({ timeout: 500 }).catch(() => null)
-    check(tip != null && tip.includes('cat') && tip.includes('b'), `tooltip shows the hovered datum (${JSON.stringify(tip)})`)
+    const tip = await tooltipRows(page)
+    check(JSON.stringify(tip) === JSON.stringify(['px: 5', 'py: 5', 'cat: b']), `tooltip shows the hovered datum, exactly (${JSON.stringify(tip)})`)
   }
 
   // ---- 2. signal.on mark events + hit-index click ----------------------------------------
@@ -454,8 +542,8 @@ async function suite(page: Page, renderer: Renderer): Promise<void> {
     const at = await toClient(page, 30 + 0.8 * 400, 30 + 0.2 * 240)
     await page.mouse.move(at.x, at.y)
     await page.waitForTimeout(40)
-    const tip2 = await page.locator('[data-testid="chart-tooltip"]').textContent({ timeout: 500 }).catch(() => null)
-    check(tip2 != null && tip2.includes('cat') && tip2.includes('c'), `${label}: the tooltip over a mark shows that mark (${JSON.stringify(tip2)})`)
+    const tip2 = await tooltipRows(page)
+    check(JSON.stringify(tip2) === JSON.stringify(['px: 8', 'py: 8', 'cat: c']), `${label}: the tooltip over a mark shows that mark's datum, exactly (${JSON.stringify(tip2)})`)
     await mount(page, spec({ signals: [] }), { width: 400, height: 240, pan: true }, ['onViewChange'])
     await setCss(css)
     const sc = await page.evaluate(() => {
@@ -521,16 +609,24 @@ async function suite(page: Page, renderer: Renderer): Promise<void> {
   await page.keyboard.press('0')
   await page.mouse.move(pbox!.x + 100, pbox!.y + 100)
   await page.mouse.wheel(0, -300)
+  await page.waitForTimeout(30)
+  // (the two wheel zooms change the view too: the drag is judged by what it adds)
+  const countBeforeDrag = (await log(page)).filter((e) => e.name === 'onViewChange').length
   await page.mouse.down()
   await page.mouse.move(pbox!.x + 160, pbox!.y + 100, { steps: 4 })
-  // leave the element entirely while dragging: capture must keep the gesture alive
-  await page.mouse.move(pbox!.x + 700 > 690 ? 690 : pbox!.x + 700, pbox!.y + 100, { steps: 4 })
+  const countInside = (await log(page)).filter((e) => e.name === 'onViewChange').length
+  // leave the element entirely while dragging: capture must keep the gesture alive (the view keeps changing out there)
+  const outX = pbox!.x + pbox!.width + 40
+  check(outX < 700, `the out-of-element leg ends outside the chart and inside the page (${outX.toFixed(0)} px)`)
+  await page.mouse.move(outX, pbox!.y + 100, { steps: 4 })
+  const countOutside = (await log(page)).filter((e) => e.name === 'onViewChange').length
+  check(countOutside > countInside, `pointer capture: the drag keeps panning after the pointer leaves the chart (${countInside} -> ${countOutside} view changes)`)
   await page.mouse.up()
   entries = await log(page)
   const countAfterDrag = entries.filter((e) => e.name === 'onViewChange').length
   await page.mouse.move(pbox!.x + 200, pbox!.y + 120, { steps: 4 })
   const stuck = (await log(page)).filter((e) => e.name === 'onViewChange').length - countAfterDrag
-  check(countAfterDrag >= 3, `drag pans the view (${countAfterDrag} view changes)`)
+  check(countInside > countBeforeDrag, `drag pans the view (${countBeforeDrag} -> ${countInside} view changes inside the chart)`)
   check(stuck === 0, 'releasing the button outside the chart does not leave a gesture stuck on')
 
   // ---- 6. a11y nodes sit on their marks (padding included) ------------------------
@@ -1081,7 +1177,7 @@ async function sizingSuite(page: Page): Promise<void> {
 async function pngSuite(browser: Awaited<ReturnType<typeof chromium.launch>>, variant: VariantName, code: string): Promise<void> {
   console.log(`[getPng] ${variant}: the PNG is the canvas renderer's pixels, under a strict img-src, with CORS image marks`)
   const page = await browser.newPage({ viewport: { width: 700, height: 500 } })
-  page.on('pageerror', (e) => { failures++; console.log(`  FAIL page error: ${e.message}`) })
+  page.on('pageerror', (e) => { console.log(`  FAIL page error: ${e.message}`); gate.problem(`page error: ${e.message.slice(0, 200)}`) })
   // a red and a blue 8x8 PNG, made by this browser on a page of its own
   const maker = await browser.newPage()
   const pngOf = async (color: string): Promise<Buffer> => Buffer.from(await maker.evaluate(async (c) => {
@@ -1215,49 +1311,54 @@ async function pngSuite(browser: Awaited<ReturnType<typeof chromium.launch>>, va
   }
 }
 
-const browser = await chromium.launch()
-try {
-  {
-    // <SvgChart png={png}>: the export, asked for; the rest of the light chart is unchanged (its own suites run above for SvgChart)
-    const variant = 'SvgChart+png' as const
-    console.log(`\n=== ${variant} ===`)
-    const { code, inputs } = await bundleVariant(variant)
-    for (const [re, wanted, what] of MODULES[variant]) {
-      check(inputs.some((f) => re.test(f)) === wanted, `the ${variant} bundle ${wanted ? 'contains' : 'does not contain'} ${what}`)
-    }
-    await pngSuite(browser, variant, code)
-  }
-  for (const variant of ['Chart', 'SvgChart+interaction', 'SvgChart'] as const) {
-    console.log(`\n=== ${variant} ===`)
-    const { code, inputs } = await bundleVariant(variant)
-    for (const [re, wanted, what] of MODULES[variant]) {
-      check(inputs.some((f) => re.test(f)) === wanted, `the ${variant} bundle ${wanted ? 'contains' : 'does not contain'} ${what}`)
-    }
-    const page = await browser.newPage({ viewport: { width: 700, height: 500 } })
-    page.on('pageerror', (e) => { failures++; console.log(`  FAIL page error: ${e.message}`) })
-    await page.setContent('<!doctype html><html><body style="margin:0;font:12px sans-serif"><div id="root"></div></body></html>')
-    await page.addScriptTag({ content: code })
-    await sizingSuite(page)
-    if (variant === 'SvgChart') await plainSuite(page)
-    else {
-      // (the canvas renderer is <Chart>'s: every interaction check runs on it too)
-      for (const renderer of variant === 'Chart' ? ['svg', 'canvas'] as const : ['svg'] as const) {
-        await suite(page, renderer)
-        await tooltipPlacementSuite(page, renderer)
-        await tabStopSuite(page, renderer)
+await runGate({
+  name: 'react-browser',
+  counters: { checks: { floor: 1, what: 'checks run in Chromium' } },
+  reads: ['core', 'vl', 'react'],
+  run: async (g) => {
+    gate = g
+    const browser = await chromium.launch()
+    try {
+      {
+        // <SvgChart png={png}>: the export, asked for; the rest of the light chart is unchanged (its own suites run below, for SvgChart)
+        const variant = 'SvgChart+png' as const
+        console.log(`\n=== ${variant} ===`)
+        const { code, inputs } = await bundleVariant(variant)
+        for (const [re, wanted, what] of MODULES[variant]) {
+          check(inputs.some((f) => re.test(f)) === wanted, `the ${variant} bundle ${wanted ? 'contains' : 'does not contain'} ${what}`)
+        }
+        await pngSuite(browser, variant, code)
       }
-      await cursorSuite(page, variant === 'Chart' ? ['svg', 'canvas'] : ['svg'])
+      for (const variant of ['Chart', 'SvgChart+interaction', 'SvgChart'] as const) {
+        console.log(`\n=== ${variant} ===`)
+        const { code, inputs } = await bundleVariant(variant)
+        for (const [re, wanted, what] of MODULES[variant]) {
+          check(inputs.some((f) => re.test(f)) === wanted, `the ${variant} bundle ${wanted ? 'contains' : 'does not contain'} ${what}`)
+        }
+        const page = await browser.newPage({ viewport: { width: 700, height: 500 } })
+        page.on('pageerror', (e) => { console.log(`  FAIL page error: ${e.message}`); gate.problem(`page error: ${e.message.slice(0, 200)}`) })
+        await page.setContent('<!doctype html><html><body style="margin:0;font:12px sans-serif"><div id="root"></div></body></html>')
+        await page.addScriptTag({ content: code })
+        await sizingSuite(page)
+        if (variant === 'SvgChart') await plainSuite(page)
+        else {
+          // (the canvas renderer is <Chart>'s: every interaction check runs on it too)
+          for (const renderer of variant === 'Chart' ? ['svg', 'canvas'] as const : ['svg'] as const) {
+            await suite(page, renderer)
+            await scaleTypeSuite(page, renderer)
+            await tooltipPlacementSuite(page, renderer)
+            await tabStopSuite(page, renderer)
+          }
+          await cursorSuite(page, variant === 'Chart' ? ['svg', 'canvas'] : ['svg'])
+        }
+        await transitionSuite(page)
+        if (variant === 'Chart') await pngSuite(browser, variant, code)
+        await page.close()
+      }
+    } finally {
+      await browser.close()
     }
-    await transitionSuite(page)
-    if (variant === 'Chart') await pngSuite(browser, variant, code)
-    await page.close()
-  }
-} finally {
-  await browser.close()
-}
+  },
+})
 
-if (failures > 0) {
-  console.error(`\n[browser-interaction] ${failures} check(s) failed`)
-  process.exit(1)
-}
-console.log('\n[browser-interaction] all checks passed')
+
