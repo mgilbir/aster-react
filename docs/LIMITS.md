@@ -74,6 +74,7 @@ unrelated limits (`limits: {}`, `{ maxStringLength }`) leaves it in force. They 
 | `items` | 100 000 | counts a spec sets: `tickCount` of axes and legends (and so the ticks made), axis ticks drawn, trellis `layout.columns`, `contour` / `isocontour` `levels`, a quantized colour scheme `count` | `maxItems` | 165 axis ticks, 30 facet columns, 40 thresholds |
 | `bytes` | 1 000 000 | one string an expression builtin builds: `pad`, number-format width | `maxStringLength`, `maxGeneratedBytes` | 5 000 (`pad`), 982 (format width) |
 | `coords` | 2 000 000 | positions one topojson decode produces (an arc referenced by many geometries counts every time) | `maxRows`, `maxGeneratedRows` | 101 000 (the gallery's largest map: 55 713) |
+| `filledCells` | 1 000 000 | cells one delimited-text read (csv, tsv, dsv) fills in for fields a line does not have (`''` for each column a row lacks), the one part of a parse not bounded by the size of the text: a wide header over empty lines | `maxGeneratedRows` (they count against it) | 0 (no csv or tsv file of vega-datasets and no inline text of the corpus or gallery has a short line) |
 | `latticeTests` | 50 000 000 | the point-in-outline work of one `intersect()` of an arc, path, shape or geoshape item (vega-lite interval selections over geo marks, or the expression in any signal handler): the rows the item's outline spans inside the box, times its edges, plus each candidate point times its edges. A region beyond 2^52 is refused outright | none (`maxTimeMs` also bounds the walk, cooperatively) | 1 098 884 (the largest in the core test suites: a 3 000-row strip; not measured over the corpus, gallery or the intersect-browser gate) |
 | spec depth | 1 000 (`HARD_MAX_SPEC_DEPTH`) | nesting of the spec object, checked iteratively when it is compiled (`values` data arrays are not walked); a deeper or cyclic spec is an `AsterLimitError` instead of a raw `RangeError` | `maxDepth` can only lower it | 12 |
 | spec size | 5 000 000 objects | objects and arrays visited by that walk (a spec that shares sub-objects can otherwise make it exponential) | none | a few thousand |
@@ -179,8 +180,9 @@ The pre-flight reads the spec's lists the way the compiler does (vega-util `arra
 - **`createChartStream`**: the rows the stream holds (base snapshot plus what the flush will
   add), checked before the flush is materialised; they reach the session as its host rows, so
   its pre-flight counts them once, in place of the spec's inline rows they started from.
-- **`loadSpecData`**: rows of each loaded dataset (`limits.maxRows`), and decoded topojson
-  coordinates (against `maxGeneratedRows`, else `maxRows`).
+- **`loadSpecData`**: rows of each loaded dataset (`limits.maxRows`; a csv's rows as they are
+  read, before the next one is made), and decoded topojson coordinates (against
+  `maxGeneratedRows`, else `maxRows`). The same holds for inline csv text read by `renderSpec`.
 
 ## What `maxTimeMs` covers
 
@@ -258,7 +260,9 @@ deliberate difference; each applies only where noted.
 | Regex patterns with catastrophic-backtracking shapes, patterns > 1024 characters, and regex inputs longer than `maxStringLength` (default 10 000) are refused **under limits** | see the regex section |
 | Decoded topojson coordinates are budgeted against `maxGeneratedRows` (else `maxRows`) | arcs are shared, so a few KB of input can decode to millions of points |
 | `topojson` object names are looked up as own properties (`constructor`, `__proto__` are "not found") | the name is spec-controlled |
-| `loadSpecData` and its URL policy: only public `http(s)` by default, no credentials, redirects re-vetted, timeout and size caps | a spec's `url` is a request made on the host's behalf |
+| `loadSpecData` and its URL policy: a network url needs an explicit allowlist (`allow`, or the `baseURL` origin), non-public hosts are refused, no credentials, every redirect hop vetted before it is requested (a redirect a browser hides is refused), timeout, size, request and byte caps | a spec's `url` is a request made on the host's behalf |
+| A delimited text (csv, tsv, dsv) whose lines are shorter than its header fills in at most 1 000 000 missing cells per read (the `filledCells` ceiling; `maxGeneratedRows` replaces it), and under `limits` its rows are counted against `maxRows` as they are read | a wide header over empty lines is a few KB that vega pads to gigabytes |
+| A malformed topology (an arc index out of range or not an integer, a `GeometryCollection` without `geometries`, an arc of fewer than two positions, a `transform` without `scale`/`translate`, a list that is not one) is an `[aster] topojson: ...` error | vega throws a raw `TypeError`, or walks a sparse array up to a huge arc index for minutes |
 | Image and `href` URLs go through the same policy, and every URL a renderer writes is vetted where it is written, **always** (the defaults with neither `limits` nor `urlPolicy`; see "Every URL in the output") | a spec can name any URL |
 | With `limits.regex: 'refuse'`, a spec that makes a regular expression is refused before it runs | no limit can stop a regular expression once it runs, and the screen is a heuristic |
 | A paint (`fill`, `stroke`, the background) never references another document in SVG output (string and DOM), always: a leading `url(...)` naming one draws its fallback colour, else `none`; a `url(...)` anywhere else drops the attribute. `url(#id)` (within the page) is kept (see "Paint references" below) | vega's SVG renderers write paint as given, and Chromium fetches a paint server from another document, a request no URL policy sees |
@@ -333,27 +337,86 @@ makes: two filter on a search box with `test(regexp(...))`, and the word cloud c
 `url` datasets are fetched by `loadSpecData` from `@aster-charts/core/load`, never by
 `renderSpec` (a `url` dataset that was not loaded is an error that tells you to
 call it, not an empty chart). It resolves `url` datasets at the top level **and**
-inside group marks at any depth, and returns a new spec.
+inside group marks at any depth, and returns a copy of the spec with those paths
+replaced (the input itself when it has none; the input is never mutated).
+
+**A network url needs an explicit URL policy.** Give `allow` (an allowlist; `allowOrigins([...])`
+makes one from origins), or a `baseURL` the url is on. Without either, every `http(s)` url is
+refused with an `AsterUrlError` before any request is made (`loadSpecData needs an explicit URL policy
+for network urls ...`). This holds in every environment, a browser included: the request is made
+with the viewer's network position and cookies.
 
 Every URL a spec names passes the policy before any request is made:
 
 | Option | Default | Meaning |
 |---|---|---|
-| `fetch` | `globalThis.fetch` | your fetch; Aster still applies the policy and the caps around it |
-| `baseURL` | none | base for relative `url`s. Without it a relative url is an `AsterUrlError`. A url on the base's own origin is host-chosen: it is exempt from the private-network check (not from `allow`, which is still consulted) |
-| `protocols` | `['http:', 'https:']` | allowed protocols. Anything not listed is refused (`data:`, `file:`, `javascript:`, `ftp:`, `blob:`, ...); add `'data:'` to permit data URLs. URLs with embedded credentials are refused whatever `protocols` says |
-| `allow(url)` | none | veto hook, awaited for the first URL **and every redirect hop**; it must return exactly `true` to permit. This is the place for an origin allowlist |
-| `allowPrivateNetwork` | `false` | permit loopback, private, link-local (cloud metadata), CGNAT, multicast hosts, `localhost`, `*.local`, `*.internal`, and their IPv6/mapped/NAT64/6to4 forms. Not applied to the `baseURL` origin or to `data:` URLs. `allow` alone cannot override it |
+| `allow(url)` | none | **the URL policy**: awaited for the first URL **and every redirect hop**, before it is requested; it must return exactly `true` to permit. Required for any network url that is not on the `baseURL`'s origin. When given, it decides every url, the base's origin included. `allowOrigins(['https://data.example.com'])` is an origin allowlist |
+| `baseURL` | none | base for relative `url`s (without it a relative url is an `AsterUrlError`). When no `allow` is given, a url on the base's own origin is permitted (the base is the host's choice) and every other network url is refused. The base's own origin is exempt from the private-network check |
+| `fetch` | `globalThis.fetch` | your fetch; Aster still applies the policy and the caps around it. It must honour `redirect: 'manual'`: a response that says it followed a redirect on its own is refused (the hop was requested before it could be vetted) |
+| `protocols` | `['http:', 'https:']` | allowed protocols. Anything not listed is refused (`data:`, `file:`, `javascript:`, `ftp:`, `blob:`, ...); add `'data:'` to permit data URLs, which need no `allow` (they reach nothing). URLs with embedded credentials are refused whatever `protocols` says |
+| `allowPrivateNetwork` | `false` | permit non-public hosts (see "Which hosts are non-public" below). Not applied to the `baseURL` origin or to `data:` URLs. `allow` alone cannot override it |
 | `timeoutMs` | 10 000 | per request, covering headers **and** body (an `AsterLimitError`) |
-| `maxBytes` | 10 MiB (10 485 760 bytes) | enforced **while the body streams** (a declared `content-length` over it is refused up front); the reader is cancelled, not buffered first. A fetch shim whose response has no stream is measured after the text exists |
+| `maxBytes` | 10 MiB (10 485 760 bytes) | per response, enforced **while the body streams** (a declared `content-length` over it is refused up front); the reader is cancelled, not buffered first. A fetch shim whose response has no stream is measured after the text exists |
+| `maxTotalBytes` | 50 MiB (52 428 800 bytes) | bytes read into datasets in one call, summed over them (a dataset naming a url another one loaded counts again: each is parsed) |
+| `maxRequests` | 100 | HTTP requests one call makes, redirect hops included. Several datasets naming one url make one request |
 | `maxConcurrent` | 4 | requests in flight at once |
-| `maxRedirects` | 5 | redirects are followed manually; each hop goes through the whole policy **before** it is requested |
+| `maxRedirects` | 5 | redirect hops followed per request; each hop goes through the whole policy **before** it is requested |
 | `signal` | none | abort the whole load |
-| `limits` | none | `maxRows` per loaded dataset, topojson coordinates, and `maxTimeMs` over the whole call (`maxTimeMs exceeded during loadSpecData`) |
+| `signals` | none | the values the host sets on the spec's top-level signals, read by a `{signal}` url instead of the spec's own initial values |
+| `limits` | none | `maxRows` per loaded dataset (checked row by row while a csv is read), topojson coordinates, every budget over the `{signal}` url expressions it evaluates, and `maxTimeMs` over the whole call (`maxTimeMs exceeded during loadSpecData`) |
 
-The defaults are exported as `LOAD_DEFAULTS` (`timeoutMs`, `maxBytes`, `maxConcurrent`, `maxRedirects`) from `@aster-charts/core/load`.
-Policy refusals are `AsterUrlError`; timeout, size, redirect and budget failures are `AsterLimitError`; an HTTP error
-status is a plain `Error` (`[aster] failed to load dataset url ...: HTTP 404`).
+Every option is checked once, before anything is planned or requested: a value of the wrong type, or a
+number that is not a whole number in its range (`NaN`, `Infinity`, `-1`, `1.5`, `'100'`), is a `TypeError`
+(`[aster] loadSpecData: maxBytes must be an integer from 0 to ...`), never a cap silently turned off.
+
+The defaults are exported as `LOAD_DEFAULTS` (`timeoutMs`, `maxBytes`, `maxTotalBytes`, `maxRequests`, `maxConcurrent`,
+`maxRedirects`) from `@aster-charts/core/load`. Policy refusals are `AsterUrlError`; timeout, size, request, redirect and
+budget failures are `AsterLimitError`; an HTTP error status is a plain `Error` (`[aster] failed to load dataset url ...: HTTP 404`).
+
+**The clock does not depend on the fetch.** `timeoutMs`, `limits.maxTimeMs` and `signal` end the call at
+their time whatever the `fetch`, the `allow` hook or the response body do: every step (the hook, the
+request, the body, each chunk) is raced against the abort, and a value that arrives after it is never
+taken. The abort is also passed to `fetch` as `init.signal`, so a fetch that honours it releases the
+connection; one that ignores it may keep the socket open after the call has failed.
+
+**Redirects.** Every hop is vetted by the whole policy before it is requested, in every environment.
+`fetch` is called with `redirect: 'manual'`; a browser answers that with an opaque response that hides
+the next location, so a redirect there cannot be vetted and is refused (`the response is a redirect whose
+target this environment hides ...`): serve browser-loaded data without a redirect. A `Location` that is not
+a URL is an `AsterUrlError`.
+
+**`{signal}` urls.** A dataset whose `url` is a `{signal}` is loaded for the value the signal has when the
+view starts: the expression is evaluated under `limits` (the regular-expression screen and the clock apply),
+over the signals it reads and only those, each taken from its own scope (a group mark's signals shadow the
+view's) and from `signals` for the host's values. vega reloads such a dataset whenever the signal changes;
+`loadSpecData` loads once. `useChartData` in `@aster-charts/react` passes its `signals` to the loader, so a
+host-set signal that changes loads again; a change made inside the chart (a bound input, an event handler)
+does not reload (see docs/ROADMAP.md).
+
+**The format.** A url dataset is read in the format its `format.type` names, `json` by default, as vega does: the url's
+extension is not read. A `.csv` url with no `format` is json, and a body that is not JSON is an error
+(`[aster] invalid JSON data: ...`), where vega logs the failed ingestion and goes on.
+
+### Which hosts are non-public
+
+The host is read as the URL parser reads it (so decimal, octal, hex, short and full-width IPv4 spellings are the
+addresses they spell), and it is non-public when it is:
+
+- a name with no dot, after every trailing dot is dropped (`http://metadata/`, `http://intranet/`, Docker Compose and
+  Kubernetes service names, `localhost..`): such a name only resolves through a local search domain or hosts file;
+- a name under a special-use or private-use suffix: `test`, `localhost`, `invalid`, `example`, `local`, `onion`, `alt`,
+  `arpa` (`home.arpa`, the reverse zones), `internal`, and the de-facto internal `localdomain`, `lan`, `home`, `corp`,
+  `intranet`, `private`, `svc`;
+- an IPv4 address in a block the IANA special-purpose registry lists as not globally reachable (this-network, private,
+  shared/CGNAT, loopback, link-local and cloud metadata, the IETF protocol block, the three documentation blocks,
+  benchmarking, the deprecated 6to4 relay), or multicast, reserved or broadcast;
+- an IPv6 address outside global unicast `2000::/3` (unspecified, loopback, IPv4-compatible, SIIT, local-use NAT64,
+  discard, unique local, link-local, site-local, multicast, unassigned), or inside it in `2001::/23` (Teredo and the
+  other protocol assignments), `2001:db8::/32` or `3fff::/20` (documentation). The IPv4-mapped (`::ffff:a.b.c.d`),
+  well-known NAT64 (`64:ff9b::a.b.c.d`) and 6to4 (`2002:aabb:ccdd::`) forms are judged by the IPv4 address they carry;
+- anything the parser does not read as a host.
+
+`isNonPublicHost(hostname)` from `@aster-charts/core/load` is this check.
 
 ### Why these defaults
 
@@ -362,25 +425,36 @@ behalf. The attack is not "fetch a public CSV" (that is the feature); it is
 reaching what only the host can reach: loopback and internal services, cloud
 metadata, and slow or endless responses that pin the process. So:
 
-- public `http(s)` works out of the box (`useSpecData` and plain hosts keep
-  working), while **non-public destinations are denied by default** and need an
-  explicit `allowPrivateNetwork: true`;
-- anything beyond that is the host's call through `allow(url)` (origin
-  allowlist) and `baseURL` (relative-only deployments);
-- time, size and concurrency are bounded by default because the alternative is
+- no network url is requested unless the host said which ones may be (`allow`, or the
+  `baseURL` origin): the host knows where its data lives, the spec does not get to choose;
+- non-public destinations are denied on top of that, and need an explicit
+  `allowPrivateNetwork: true`;
+- time, size, requests and concurrency are bounded by default because the alternative is
   an unbounded wait, buffer and fan-out.
 
-What the defaults cannot see: DNS. A public name that resolves to a private
-address passes the host-literal check. If that matters, give `allow` an origin
-allowlist or enforce egress at the network. For maximum strictness set
-`allow: (u) => u.origin === 'https://data.example.com'` and `baseURL`.
+### What the policy cannot see: DNS
+
+The non-public check reads the host as written. A public name that resolves to a private
+address (`127.0.0.1.nip.io`, a name whose owner points it at your network) passes it. Aster
+does not resolve names itself, deliberately: a check that resolves the name and then lets
+`fetch` connect is not a check of the address `fetch` connects to, because `fetch` resolves
+the name again. A resolver that answers a public address to the first lookup and a loopback
+one to the second (DNS rebinding, a zero TTL) gets the request through; measured on Node 26,
+a pre-check saw `93.184.216.34` and the following `fetch` read a server on `127.0.0.1` (two
+lookups). Closing that needs the address checked at the moment the connection is made, which
+only the connection layer can do, and a browser has no DNS API at all.
+
+So the control for names is the required `allow` policy: list the origins your data lives on.
+If you must accept names you do not control, give `loadSpecData` a `fetch` whose connections
+check the address they connect to (on Node, an undici `Agent` whose `connect.lookup` refuses
+addresses `isNonPublicHost` flags), or enforce egress at the network.
 
 Trusted specs (a demo, a test harness) can opt out explicitly with
 `loadSpecData(spec, TRUSTED_LOAD_OPTIONS)`. Never use that for specs you did
 not write.
 
 ```ts
-import { loadSpecData } from '@aster-charts/core/load'
+import { allowOrigins, loadSpecData } from '@aster-charts/core/load'
 import type { VgSpec } from '@aster-charts/core'
 
 const spec: VgSpec = {
@@ -392,7 +466,7 @@ const spec: VgSpec = {
 
 const loaded = await loadSpecData(spec, {
   baseURL: 'https://data.example.com/',
-  allow: (url) => url.origin === 'https://data.example.com',
+  allow: allowOrigins(['https://data.example.com']),
   maxBytes: 2_000_000,
   limits: { maxRows: 100_000, maxTimeMs: 5_000 },
 })
@@ -620,7 +694,8 @@ its name, so a dropped one is simply rebuilt.
   hooks turn it into an `AsterLimitError` (see `docs/ERRORS.md`).
 - `useSpecData`, `useChartData` and `loadSpecData` from `@aster-charts/react` take the same
   options as `loadSpecData` in `@aster-charts/core/load`, so the URL policy and `limits` apply to
-  Suspense loading too.
+  Suspense loading too. The resource is keyed on the options, functions by identity: define `allow`
+  once (at module scope), not inline in the component, or every render starts a new load.
 - `urlData="refuse"` refuses a spec with a url dataset in every shell, hook and worker, before any add-on is imported
   (see [Refusing url datasets](#refusing-url-datasets-urldata)).
 - A worker is not a kill switch by itself. To get the hard guarantee described above,

@@ -476,11 +476,8 @@ The pieces `renderSpec` and the session are made of are exported for hosts that 
   `transformNeedsFullRederive(types)` says whether a chain of transform types holds a row-expanding or reordering one (`fold`,
   `flatten`, `pivot`, the layouts...), so a row-wise pulse cannot be applied through it; `isGroupedTransform(type)` is `true` for
   `aggregate`, `joinaggregate`, `window` and `stack`.
-- Registries, filled by the add-ons: `transformRegistry` (`Map<type, TransformFn>`, the rare transforms of
-  `@aster-charts/core/transforms`), `dataFormatRegistry` (`Map<format, reader>`, `json` built in; csv / tsv / dsv / topojson from
-  `@aster-charts/core/load`), `geoRegistry` (the projection and contour hooks of `@aster-charts/core/geo`, `null` fields until loaded).
-  `requireTransform(type)` returns a registered transform or throws the error that names the import to make
-  (`await import("@aster-charts/core/transforms")`, see `docs/ERRORS.md`).
+- The registries the add-ons fill (the transforms, the geo hooks, the data-format readers) are internal and process-wide, not
+  exported: whether an add-on is there is `isAddonLoaded(name)` from `@aster-charts/core/addons`.
 
 #### Limit checks
 
@@ -580,14 +577,14 @@ pending debounces (vega's `view.finalize()`). `setTimerClock(clock | null)` ([Ma
 which add-ons a spec needs, and loading them (the `Chart` shells and hooks do this themselves; use it
 where you cannot wait inside React). `addonsNeeded(spec)` reads the spec's structure (and parses its expressions) and returns the
 needed `AddonName`s (`'transforms' | 'geo' | 'load'`); `missingAddons(spec)` is the subset not loaded yet; `loadAddons(names)`
-imports them (concurrently, each at most once, rejecting with an error that names the add-on); `loadAddonsFor(spec)` (also in
+imports them (concurrently, each at most once, rejecting with an error that names the add-on, and with a `TypeError`, before importing
+anything, for a name that is not an add-on); `loadAddonsFor(spec)` (also in
 `@aster-charts/react`) is the last two in one call. `isAddonLoaded(name)` says whether an add-on's registrations are present however they
 got there, and `notLoaded(names)` filters a list by it. `addonsNeeded`, `missingAddons` and `loadAddonsFor` take an optional second
 argument, `{ urlData }` (`AddonOptions`): with `urlData: 'refuse'` the readers a url dataset's `format` names are not counted (the dataset
 is refused, never read), and `loadAddonsFor` rejects a spec that has a url dataset with the refusal before importing anything. Constants: `TRANSFORMS_ADDON_TYPES` (every transform type the
 transforms add-on registers), `LOAD_ADDON_FORMATS` (`csv`, `tsv`, `dsv`, `topojson`) and `ADDON_FUNCTIONS` (expression function name to the
-add-on that registers it). Test seams: `registeredFunctionNames` lists the expression functions registered beyond the built-ins, and
-`withdrawFunctions(names)` removes some and returns a function that restores them.
+add-on that registers it). `registeredFunctionNames()` lists the expression functions registered beyond the built-ins.
 
 The same module reads which *parts of the engine* a spec may need (see "The parts of the engine most charts never run" in
 docs/ARCHITECTURE.md): `specNeeds(spec, options?)` returns `{ addons, parts, eventLoop }` from one walk (`eventLoop`: a scope declares signals, so an interactive shell binds the signal loop), `partsNeeded(spec, options?)` the parts
@@ -694,15 +691,17 @@ when the browser will not encode it (a device may refuse canvases far below the 
 
 #### `@aster-charts/core/load`
 
-`loadSpecData(spec, { baseURL, allow, protocols, timeoutMs, maxBytes, ... })` for URL datasets, with a URL policy (safe defaults, see `docs/LIMITS.md`).
-`LOAD_DEFAULTS` holds the numeric defaults (`timeoutMs`, `maxBytes`, `maxConcurrent`, `maxRedirects`) and `TRUSTED_LOAD_OPTIONS`
-is the policy for a host that loads its own specs only (any http, https or data URL, private hosts included): never use it for specs
-you did not write. `isNonPublicHost(hostname)` is the check behind `allowPrivateNetwork`: `true` for `localhost` and local-only
-suffixes, loopback, private, link-local and reserved IPv4 addresses and their IPv6 equivalents. `readData(data, format?)` reads
+`loadSpecData(spec, { allow, baseURL, protocols, timeoutMs, maxBytes, signals, ... })` for URL datasets, with a URL policy (see
+`docs/LIMITS.md`): a network url needs an explicit policy, `allow` (an allowlist) or a `baseURL` it is on. `allowOrigins(origins)`
+makes an `allow` that permits exactly those origins (a `TypeError` for an entry with no origin).
+`LOAD_DEFAULTS` holds the numeric defaults (`timeoutMs`, `maxBytes`, `maxTotalBytes`, `maxRequests`, `maxConcurrent`, `maxRedirects`)
+and `TRUSTED_LOAD_OPTIONS` is the policy for a host that loads its own specs only (any http, https or data URL, private hosts
+included): never use it for specs you did not write. `isNonPublicHost(hostname)` is the check behind `allowPrivateNetwork`: `true`
+for a dotless name, a special-use or private-use suffix, a non-public IPv4 address and any IPv6 address outside public unicast (its
+mapped, NAT64 and 6to4 forms judged by the IPv4 address they carry), and anything that is not a host. `readData(data, format?)` reads
 data by a Vega `format` spec (`type`, `parse`, ...) the way vega-loader's `read` does, through the registered reader of the type and then
 `coerceRows`; `coerceRows(rows, parse)` converts the columns that `parse` names (a column type, a `date:<pattern>` /
-`utc:<pattern>`, or `'auto'` to infer from the first row) and returns copies. `dataFormatRegistry` and `AsterUrlError` are
-re-exported here.
+`utc:<pattern>`, or `'auto'` to infer from the first row) and returns copies. `AsterUrlError` is re-exported here.
 
 #### `@aster-charts/core/geo` and `@aster-charts/core/transforms`
 
@@ -1007,7 +1006,9 @@ import { useChart, useChartData, useChartWorker, useSpecData } from '@aster-char
 import type { VgSpec } from '@aster-charts/core'
 
 const spec: VgSpec = { width: 100, height: 60, marks: [{ type: 'rect', encode: { enter: { width: { value: 20 }, height: { value: 20 } } } }] }
-const specWithUrls: VgSpec = { width: 100, height: 60, data: [{ name: 'table', url: 'https://data.example.com/a.csv' }], marks: [] }
+const specWithUrls: VgSpec = { width: 100, height: 60, data: [{ name: 'table', url: 'https://data.example.com/a.csv', format: { type: 'csv' } }], marks: [] }
+// The URL policy every network load needs; defined once, so the Suspense resource is keyed on the same function each render.
+const allow = (url: URL): boolean => url.origin === 'https://data.example.com'
 
 export function Hooks(): React.ReactElement {
   const width = 200
@@ -1017,21 +1018,22 @@ export function Hooks(): React.ReactElement {
   const { scene, svg, error, session } = useChart(spec, { width, height })
 
   // URL data, Suspense/use() path: wrap the component that calls these in <Suspense>.
-  // const loaded = useSpecData(specWithUrls, { fetch })   // returns the spec with the rows inlined
-  // const chart = useChartData(specWithUrls)              // load + useChart (loader and chart options together)
+  // const loaded = useSpecData(specWithUrls, { allow })   // returns the spec with the rows inlined
+  // const chart = useChartData(specWithUrls, { allow })   // load + useChart (loader and chart options together)
 
   // Optional worker offload; without a Worker it evaluates synchronously after mount.
   const worker = useChartWorker(spec, { width, height })
   return <div data-scene={scene != null} data-svg={svg != null} data-error={error?.message} data-sessions={session != null} data-pending={worker.pending} />
 }
 
-export const loaders = { useSpecData, useChartData, specWithUrls }
+export const loaders = { useSpecData, useChartData, specWithUrls, allow }
 ```
 
 `useChart` takes every `RuntimeInput` field plus `serialize` and returns `{ scene, svg, error, session }`; `error`
 is set (and `scene`/`svg` are `null`) when the evaluation throws, and `maxSvgLength` is checked when it serializes.
 `useSpecData` and `useChartData` take the options of `loadSpecData` (`UseSpecDataOptions`), `loadSpecData` from
-`@aster-charts/react` is the non-Suspense equivalent.
+`@aster-charts/react` is the non-Suspense equivalent. `useChartData` gives its `limits` and `signals` to both the loader and the
+chart, so a `{signal}` url follows the host's signal value.
 `loadSpecDataResource(spec, options?)` is the promise `useSpecData` reads with `React.use`: it is created once per spec object and set
 of options (a repeat call returns the same promise, as Suspense needs) and imports the load add-on lazily, so an app without URL
 datasets never bundles it. A failed load is dropped from the cache so the next render retries. `isPromiseLike(value)` is the
