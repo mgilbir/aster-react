@@ -2610,9 +2610,9 @@ function sameData(rows: readonly Row[], items: readonly SceneItem[]): boolean {
  * Whole-group reuse (a top-level leaf mark whose output provably equals last
  * evaluation's). Every input the mark reads must be unchanged: the evaluation
  * context (signals, size, overrides), each dataset it reads (closed over
- * dependencies), and each scale it reads (by object identity). Group marks
- * (facets, trellises, scoped scopes) are always rebuilt: their layout is
- * written by later passes, so reusing their objects is not sound.
+ * dependencies), and each scale it reads (by object identity). A group mark is
+ * not reused here: its items are laid out by later passes, and a top-level one
+ * is kept whole, with everything it wrote into the evaluation, by `keptGroupMark`.
  *
  * With the whole context unchanged and the changes told, a dataset the caller did not name is unchanged. Otherwise the signals the
  * mark reads (`markKeyOf`) must be as they were, and the datasets it reads must be shown to be: the same arrays (`sameRows`), or
