@@ -9,3 +9,8 @@ packages:
 allowBuilds:
   esbuild: true
   workerd: false
+
+# `@vitest/coverage-v8@3.2` pulls `test-exclude@7.0.2`, which asks for `glob@^10`; the registry deprecates every 10.x for security
+# fixes. Dev-only (coverage), not in any published closure. Take the current major: test-exclude 8 asks for the same.
+overrides:
+  'test-exclude>glob': ^13.0.6
