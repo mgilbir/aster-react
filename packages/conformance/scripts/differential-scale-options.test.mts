@@ -130,34 +130,60 @@ function asterOutcome(spec: unknown, probes: unknown[]): Outcome {
   }
 }
 
+/** Run `count` generated specs through both engines; the first mismatches, and how often each outcome and message came up. */
+async function sweep(count: number, gen: () => { spec: Record<string, unknown>; probes: unknown[] }) {
+  const bad: string[] = []
+  let warned = 0
+  const byKind = new Map<string, number>()
+  let refused = 0
+  let built = 0
+  for (let i = 0; i < count; i++) {
+    const { spec, probes } = gen()
+    const want = await vegaOutcome(spec, probes)
+    const got = asterOutcome(spec, probes)
+    if (want.warnings.length) warned++
+    for (const m of [...want.warnings, ...want.errors]) {
+      const kind = m.replace(/:.*$/, '').replace(/ -?\d+(\.\d+)?$/, '')
+      byKind.set(kind, (byKind.get(kind) ?? 0) + 1)
+    }
+    if (want.scale) built++
+    else refused++
+    // the same scale (or none), the same warnings in the same order, and an error exactly where vega has one
+    const same = JSON.stringify(want.scale) === JSON.stringify(got.scale)
+      && JSON.stringify(want.warnings) === JSON.stringify(got.warnings)
+      && (want.errors.length > 0) === (got.errors.length > 0)
+      && (want.errors[0] ?? '') === (got.errors[0] ?? '')
+    if (!same && bad.length < 5) bad.push(`#${i} ${JSON.stringify((spec as { scales: unknown[] }).scales)} signals=${JSON.stringify(spec.signals)}\n   vega  ${JSON.stringify(want).slice(0, 400)}\n   aster ${JSON.stringify(got).slice(0, 400)}`)
+  }
+  return { bad: bad.join('\n'), warned, byKind, refused, built }
+}
+
+/** Scale properties a `{signal}` may give, each with the kind of scale that reads it. */
+const SIGNAL_PROPS: Array<[string, string]> = [
+  ['nice', 'linear'], ['zero', 'linear'], ['reverse', 'linear'], ['clamp', 'linear'], ['round', 'linear'], ['padding', 'linear'],
+  ['domainMin', 'linear'], ['domainMax', 'linear'], ['domainMid', 'linear'], ['domainRaw', 'linear'], ['unknown', 'linear'],
+  ['base', 'log'], ['exponent', 'pow'], ['constant', 'symlog'], ['paddingInner', 'band'], ['paddingOuter', 'band'], ['align', 'band'],
+  ['round', 'band'], ['reverse', 'band'], ['domainImplicit', 'ordinal'],
+]
+// (`interpolate: {signal}` is not drawn: vega's parser crashes on it and Aster resolves it, a deviation docs/ARCHITECTURE.md lists)
+/**
+ * What a `{signal}` may say: the language's literals and constants, signals of the spec and of the view, names that are neither, and
+ * expressions. Not drawn, each a difference of its own outside how a scale reads the reference: `autosize` and `background` (view
+ * signals the runtime's signal map lacks, C133's neighbour in the audit) and `datum` / `event` / `item` (what the expression
+ * evaluator gives for them in a signal's context, where vega's generated code raises `datum is not defined`).
+ */
+const SIGNAL_TEXTS = [
+  'true', 'false', 'null', 'NaN', 'PI', 'E', 'MAX_VALUE', 'LN2', 'mySig', 'flag', 'nothing', 'width', 'height', 'nosuch', 'undefined',
+  'Infinity', 'x', '!true', 'true && false', 'null || 3', '1 > 0', 'mySig * 2', '[1, 5]', '"center"', '0.25',
+  'flag ? 2 : null', '[2, 30]', 'nothing || [0, 4]',
+]
+
 describe(`scale options from specs vs vega@${vega.version} (generated, live)`, () => {
   it('applies own methods, warns about the rest as vega does, and refuses a type not written as registered', async () => {
     const r = makeRng(0x0c18)
     const count = scaled(3000)
-    const bad: string[] = []
-    let warned = 0
-    const byKind = new Map<string, number>()
-    let refused = 0
-    let built = 0
-    for (let i = 0; i < count; i++) {
-      const { spec, probes } = genSpec(r)
-      const want = await vegaOutcome(spec, probes)
-      const got = asterOutcome(spec, probes)
-      if (want.warnings.length) warned++
-      for (const m of [...want.warnings, ...want.errors]) {
-        const kind = m.replace(/:.*$/, '').replace(/ -?\d+(\.\d+)?$/, '')
-        byKind.set(kind, (byKind.get(kind) ?? 0) + 1)
-      }
-      if (want.scale) built++
-      else refused++
-      // the same scale (or none), the same warnings in the same order, and an error exactly where vega has one
-      const same = JSON.stringify(want.scale) === JSON.stringify(got.scale)
-        && JSON.stringify(want.warnings) === JSON.stringify(got.warnings)
-        && (want.errors.length > 0) === (got.errors.length > 0)
-        && (want.errors[0] ?? '') === (got.errors[0] ?? '')
-      if (!same && bad.length < 5) bad.push(`#${i} ${JSON.stringify((spec as { scales: unknown[] }).scales)}\n   vega  ${JSON.stringify(want).slice(0, 400)}\n   aster ${JSON.stringify(got).slice(0, 400)}`)
-    }
-    expect(bad.join('\n')).toBe('')
+    const { bad, warned, byKind, refused, built } = await sweep(count, () => genSpec(r))
+    expect(bad).toBe('')
     // every outcome must be common, or the sweep says little
     expect(built).toBeGreaterThan(count * 0.4)
     expect(refused).toBeGreaterThan(count * 0.05)
@@ -165,6 +191,55 @@ describe(`scale options from specs vs vega@${vega.version} (generated, live)`, (
     expect(byKind.get('Log scale domain includes zero') ?? 0).toBeGreaterThan(count * 0.002)
     expect(byKind.get('Scale domainMid exceeds domain min or max.') ?? 0).toBeGreaterThan(count * 0.002)
     expect(byKind.get('Domain array must not be empty') ?? 0).toBeGreaterThan(count * 0.001)
+  })
+
+  it('reads a {signal} in a scale property as vega does: a literal, a constant, a signal or an expression (C133)', async () => {
+    const r = makeRng(0x0c133)
+    const count = scaled(2000)
+    const { bad, refused, built } = await sweep(count, () => {
+      const n = r.between(1, 2)
+      const s: Record<string, unknown> = { name: 's' }
+      let type = 'linear'
+      for (let i = 0; i < n; i++) {
+        const [prop, kind] = r.pick(SIGNAL_PROPS)
+        if (i === 0) type = kind
+        else if (kind !== type) continue
+        s[prop] = { signal: r.pick(SIGNAL_TEXTS) }
+      }
+      Object.assign(s, { type, domain: domainFor(type, r), range: rangeFor(type) })
+      const signals = [{ name: 'mySig', value: r.pick([7, 0.5, -2]) }, { name: 'flag', value: r.chance(0.5) }, { name: 'nothing', value: null }]
+      return { spec: { width: 200, height: 100, signals, scales: [s] }, probes: [-1, 0, 0.5, 1, 3, 7, 50, 'a', 'b', 'x', 'q'] }
+    })
+    expect(bad).toBe('')
+    expect(built).toBeGreaterThan(count * 0.4)
+    expect(refused).toBeGreaterThan(count * 0.05)
+  })
+
+  it('the resolved {signal} positions docs/ARCHITECTURE.md lists as deviations still differ from vega, and only as listed', async () => {
+    const probes = [0, 2, 10, 50]
+    const cases: Array<[string, Record<string, unknown>]> = [
+      ['interpolate', { interpolate: { signal: '"hcl"' }, range: ['red', 'blue'] }],
+      ['interpolate type', { interpolate: { type: { signal: '"hcl"' } }, range: ['red', 'blue'] }],
+      ['gamma', { interpolate: { type: 'rgb', gamma: { signal: '2' } }, range: ['red', 'blue'] }],
+      ['nice interval', { type: 'utc', nice: { interval: { signal: '"day"' }, step: 2 } }],
+      ['nice step', { type: 'utc', nice: { interval: 'day', step: { signal: '2' } } }],
+    ]
+    for (const [name, extra] of cases) {
+      const spec = { width: 200, height: 100, scales: [{ name: 's', type: 'linear', domain: [2, 50], range: 'width', ...extra }] }
+      const want = await vegaOutcome(spec, probes)
+      const got = asterOutcome(spec, probes)
+      expect(want.errors, name).toEqual(["Cannot read properties of undefined (reading 'signalRef')"])
+      expect(got.errors, name).toEqual([])
+      // resolved to what the literal gives
+      const literal = JSON.parse(JSON.stringify(spec).replace(/\{"signal":"\\"(\w+)\\""\}/g, '"$1"').replace(/\{"signal":"(\d+)"\}/g, '$1'))
+      expect(got.scale, name).toEqual(asterOutcome(literal, probes).scale)
+      expect(JSON.stringify(literal), name).not.toContain('signal')
+    }
+    // a nested range list: vega leaves the reference unresolved, Aster resolves it; a top-level entry is resolved by both
+    const nested = { width: 200, height: 100, scales: [{ name: 's', type: 'ordinal', domain: ['a', 'b'], range: [[0, { signal: 'width' }], [1, 2]] }] }
+    const want = await vegaOutcome(nested, ['a'])
+    expect(JSON.stringify(want.scale)).toContain('$ref')
+    expect(asterOutcome(nested, ['a']).scale).toMatchObject({ samples: [[0, 200]] })
   })
 
   it('never compiles spec text, under a code-generation ban (what a CSP without unsafe-eval does)', () => {
