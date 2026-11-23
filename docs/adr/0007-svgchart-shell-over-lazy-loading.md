@@ -49,3 +49,15 @@ code.
   [TESTING.md](../TESTING.md)): the DOM of `<Chart>`, `<SvgChart>` and `<SvgChart interaction>`
   equal over the corpus.
 - The shells and their cost: [ARCHITECTURE.md](../ARCHITECTURE.md#chartcore-and-the-two-shells).
+
+## Amendments
+
+*2026-11-23, to match the code (audit C363).*
+
+- "Nothing loads asynchronously" no longer holds for a browser build. The capabilities are still injected, never imported
+  by `ChartCore`, but the engine parts a chart may need (the canvas renderer behind `CanvasCapability.load`, the signal
+  loop behind `InteractionCapability.loadSignals`, the legend builder, time and colour parts...) load on demand through
+  the same Suspense wait as the opt-in add-ons (`useAddons`, [ARCHITECTURE.md](../ARCHITECTURE.md)). A host that needs a
+  synchronous first paint imports `@aster-charts/react/all` (every part bundled) or preloads (`preloadParts`). The
+  decision this ADR records -- the cost of a capability is visible in the importing code -- stands; the rejected
+  alternative was lazy-loading the capabilities themselves.

@@ -32,7 +32,11 @@ provide Workers but not uniformly (SSR, older hosts, jsdom).
 ## Consequences
 
 - SSR HTML is larger (full geometry), but hydration has no layout flash and no
-  measurement pass.
+  measurement pass. (Amended 2026-11-23, C45: where the server's picture differs from the client's -- another time
+  zone, the server's headless text estimate against the browser's measurement -- hydration patches the adopted
+  `<svg>` to the client's scene once, a walk of the DOM; a chart that fills its element with
+  `width` / `height="container"` is drawn at the spec's size on the server and fills the element after its first
+  measurement.)
 - Data loading is explicit and cacheable; there is no hidden fetch in the renderer.
 - Worker mode returns a scene without event-loop handles, so interaction that depends
   on signals stays on the main thread unless the host forwards events.
