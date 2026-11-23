@@ -503,8 +503,13 @@ request is made, and when `urlData: 'refuse'` refuses a url dataset; it is expor
 #### Accessibility tree
 
 `buildA11yTree(scene, scales, options)` returns positioned, captioned nodes (`A11yNode`) for marks,
-axes, legends, legend entries and titles. A mark with more than `summaryThreshold` items (default 150) collapses to a
-single summary node, and the tree carries a `summary` caption when the scene's mark items in total exceed it. `A11yOptions` are `label`,
+axes, legends, legend entries and titles. The tree is bounded whatever the data: when the scene's mark items in total exceed
+`summaryThreshold` (default 150), every mark collapses to a single summary node, at most `summaryThreshold` mark (and described
+group) nodes are made in all, the marks past them folding into one last summary node (`mark-rest`), and the tree carries a
+`summary` caption; a legend gives at most `summaryThreshold` entry nodes. A mark item's box is its bounds as the hit index
+measures them (a line, area or trail item: its point), at least 2 x 2; its id is its mark's and its datum's, so inserting a row
+does not rename the others; ids are unique in a tree. The tree's `label` is `options.label`, else the spec's `description`,
+else `config.description` (vega-view's container `aria-label`; "Vega visualization" by default). `A11yOptions` are `label`,
 `description`, `summaryThreshold`, `isSelected` and `isLegendEntryHidden`. `<Chart>` projects the nodes into
 focusable elements; non-React hosts can do the same. The keyboard contract is in `docs/INTERACTION.md`.
 

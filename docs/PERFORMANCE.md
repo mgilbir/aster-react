@@ -67,8 +67,9 @@ the browser).
 - **Streams**: `createChartStream` adds a bounded queue with coalesce/drop-oldest/drop-newest/error policies
   and explicit `flush()` pulses. `<ChartStream>`/`<ChartWorkerStream>` reuse the SVG patcher and the canvas
   backend; canvas path parsing and symbol generation are cached, solid paints skip bbox computation, dense
-  same-paint symbol runs batch into one fill/stroke, and append-only streamed scenes paint just the new mark
-  items.
+  same-paint symbol runs batch into one fill or one stroke when that paints what one path per item paints (opaque,
+  unblended, filled or stroked but not both: overlapping translucent or filled-and-stroked symbols are painted one by
+  one), and append-only streamed scenes paint just the new mark items.
 - **Incremental scales**: continuous and discrete domains are reused when a changeset provably cannot move
   them; append-only continuous updates patch the min/max census in O(appended) instead of rescanning. A discrete
   scale over data (ordinal colour, shape, size, strokeDash; band; point) keeps its object when its rows change and its
@@ -86,8 +87,9 @@ the browser).
   per mark group.
 - **Dense marks (`denseMarks`, default `'auto'`)**: symbol marks with at least 512 items render as chunked
   `<path>` elements (256 items per chunk, positions baked into `d`) instead of one transformed element per
-  datum. Chunks are cached per group, so an append re-serializes one chunk. Only opaque marks batch
-  (translucency must composite per item); rotated marks keep their own element; `'auto'` stays per-item when
+  datum. Chunks are cached per group, so an append re-serializes one chunk. Only opaque, unblended marks that
+  are filled or stroked but not both batch (translucency must composite per item, and one path paints all its fill
+  under all its stroke); rotated marks keep their own element; `'auto'` stays per-item when
   the spec has `signal.on` streams. SSR emits per-item markup for hydration and the client switches to batched
   in place. Tooltips and hit testing use the scene index; `pnpm conformance:batch` gates pixel parity against
   the per-item rendering. The node count matters because appending one node to a very large SVG, and above
