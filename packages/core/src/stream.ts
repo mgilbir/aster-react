@@ -691,8 +691,9 @@ export function createChartStream(spec: VgSpec, options: StreamOptions = {}): Ch
     }
     // Materialise queued rows now, at flush time (never per push), with an
     // undo log so a throwing evaluation leaves the committed rows untouched.
-    // The rows of the last flush are the last scene's (see the commit below), so an append copies them before it adds to them:
-    // the copy, which this flush owns, is what a throwing evaluation drops.
+    // A base array that came from the spec/host is copied once, then mutated
+    // in place so repeated appends are O(appended). (A scene never holds these
+    // arrays: the evaluation copies a host's rows into the datasets it publishes.)
     const undo: Array<() => void> = []
     const rollback = (): void => { for (let i = undo.length - 1; i >= 0; i--) undo[i]!() }
     let scene: SceneRoot
@@ -748,9 +749,7 @@ export function createChartStream(spec: VgSpec, options: StreamOptions = {}): Ch
       rollback()
       throw err
     }
-    // Commit. The rows handed to the session are the scene's now (a dataset with no transform publishes the very array): the next
-    // flush that appends copies them first, so the scene returned here never changes.
-    owned.clear()
+    // Commit.
     signals = nextSignals
     width = nextWidth
     height = nextHeight
