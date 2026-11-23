@@ -125,6 +125,15 @@ forEachVariant(['svg'], (Chart, variant) => {
       expect(rects(c)).toEqual([])
     })
 
+    it("the host's style wins over the chart's own, whatever is on (C294)", () => {
+      for (const extra of [{}, { a11y: false }, { panZoom: true }, { onSelect: () => {} }]) {
+        const m = mount()
+        m.render(<Chart spec={scatter() as never} style={{ width: 400, height: 300, position: 'absolute', touchAction: 'pan-y' }} {...extra} />)
+        const c = m.chart()
+        expect([c.style.width, c.style.height, c.style.position, c.style.touchAction], JSON.stringify(Object.keys(extra))).toEqual(['400px', '300px', 'absolute', 'pan-y'])
+      }
+    })
+
     it('a brush-only chart takes touch drags (C491)', () => {
       const m = mount()
       m.render(<Chart spec={scatter() as never} onSelect={() => {}} />)

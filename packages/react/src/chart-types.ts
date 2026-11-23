@@ -127,7 +127,8 @@ export interface ChartProps {
    * which keeps large SVG scenes inside the frame budget. Tooltips, point
    * selection and a11y resolve through the scene, so they keep working;
    * spec `signal.on` mark events, which resolve their item the same way, do too.
-   * Ignored for canvas (already batched). Server rendering always emits the
+   * Ignored for canvas (already batched) and with `incremental={false}` (each scene is
+   * one string of per-item markup). Server rendering always emits the
    * per-item markup so hydration matches; a client-only mount batches directly.
    */
   denseMarks?: boolean | 'auto'

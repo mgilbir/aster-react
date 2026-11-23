@@ -66,7 +66,34 @@ const serverOrHydrating = (): boolean => true
 /** The device pixel ratio (1 on the server and while hydrating, so the markup matches). */
 const devicePixelRatio = (): number => (typeof window !== 'undefined' && window.devicePixelRatio > 0 ? window.devicePixelRatio : 1)
 const serverPixelRatio = (): number => 1
-
+/**
+ * Told when `devicePixelRatio` changes (a browser zoom, the window moved to another screen): the media query of the current
+ * ratio stops matching, and the listener moves to the new ratio's query (vega-view's watchPixelRatio, C505).
+ */
+const subscribePixelRatio = (onChange: () => void): (() => void) => {
+  if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return () => {}
+  let stop = (): void => {}
+  const changed = (): void => {
+    watch()
+    onChange()
+  }
+  const watch = (): void => {
+    stop()
+    const media = window.matchMedia(`(resolution: ${devicePixelRatio()}dppx)`)
+    // (`addListener` is the older form of the same subscription; a MediaQueryList with neither is not watched)
+    if (typeof media?.addEventListener === 'function') {
+      media.addEventListener('change', changed)
+      stop = () => media.removeEventListener('change', changed)
+    } else if (typeof media?.addListener === 'function') {
+      media.addListener(changed)
+      stop = () => media.removeListener(changed)
+    } else {
+      stop = () => {}
+    }
+  }
+  watch()
+  return () => stop()
+}
 
 // ---------------------------------------------------------------------------
 // Event-written datasets
@@ -693,9 +720,11 @@ function ChartView({
     const signalDefs = (scene as { compiled?: { signalDefs?: Array<{ on?: unknown[] }> } } | null)?.compiled?.signalDefs
     return !signalDefs?.some((d) => (d.on?.length ?? 0) > 0)
   }, [denseRequested, denseMarks, scene])
-  const denseSvg = denseAllowed && renderer === 'svg' && (scene != null ? hasDenseSymbolMarks(scene) : false)
+  // (only the incremental path batches: the batched DOM is built by the layout effect, while `incremental={false}` draws each
+  // scene as one string of per-item markup, which the layout effect leaves alone)
+  const denseSvg = incremental && denseAllowed && renderer === 'svg' && (scene != null ? hasDenseSymbolMarks(scene) : false)
   const hydrating = React.useSyncExternalStore(subscribeNothing, clientOnly, serverOrHydrating)
-  const pixelRatio = React.useSyncExternalStore(subscribeNothing, devicePixelRatio, serverPixelRatio)
+  const pixelRatio = React.useSyncExternalStore(subscribePixelRatio, devicePixelRatio, serverPixelRatio)
 
   // One report per error, however often the chart re-renders or re-evaluates while it persists: an inline `onError`, a
   // measurement, a signal or StrictMode's second effect run must not refire it. An error the chart is already showing (the
@@ -944,6 +973,19 @@ function ChartView({
     // patcher would be pure cost — and it is O(all items), the worst place to
     // pay it (mount is where a large scene hurts most).
     if (domMarkup != null) {
+      // ...except a HYDRATION commit: the DOM is the server's markup, which React keeps where the client's differs (the
+      // server's time zone, its headless text estimate against the browser's measurement). It is patched to this scene once,
+      // so the pixels are the scene the chart hit-tests and overlays with (C45). The patcher compares with the DOM it is given,
+      // so markup that already matches costs a walk and no write.
+      if (hydrating) {
+        const adopted = host.firstElementChild
+        try {
+          if (adopted && adopted.tagName.toLowerCase() === 'svg') patchSceneDom(adopted, displayScene, { denseMarks: false })
+          else host.replaceChildren(renderSceneToDomElement(displayScene, document, { denseMarks: false }))
+        } catch (e) {
+          reportRenderError(loggerRef.current, e)
+        }
+      }
       hasPatchedRef.current = true
       domSceneRef.current = displayScene
       domDenseRef.current = false // string markup is always per-item
@@ -983,7 +1025,7 @@ function ChartView({
     }
     domSceneRef.current = displayScene
     hasPatchedRef.current = true
-  }, [incremental, renderer, displayScene, sceneOverride, domMarkup, denseSvg, animator, data, spec, editedData, timerEdits])
+  }, [incremental, renderer, displayScene, sceneOverride, domMarkup, denseSvg, hydrating, animator, data, spec, editedData, timerEdits])
   React.useLayoutEffect(() => {
     committedInputsRef.current = { data, sceneOverride, spec, edited: editedData }
   })
@@ -1085,7 +1127,7 @@ function ChartView({
       canvasSnapshotRef.current = null
       canvasSceneRef.current = null
     }
-    const dpr = typeof window !== 'undefined' && window.devicePixelRatio > 0 ? window.devicePixelRatio : 1
+    const dpr = pixelRatio
     const w = Math.max(1, Math.round(displayScene.width))
     const h = Math.max(1, Math.round(displayScene.height))
     let resized = false
@@ -1160,7 +1202,7 @@ function ChartView({
       return () => cancelAnimationFrame(id)
     }
     draw()
-  }, [renderer, displayScene, canvasCap, canvasImagesEpoch])
+  }, [renderer, displayScene, canvasCap, canvasImagesEpoch, pixelRatio])
 
   const hasSelection = onSelect != null || brush != null || onPointSelect != null
     || selection !== undefined || select !== undefined || onSelectionChange != null
@@ -1854,6 +1896,9 @@ function ChartView({
           // (`lineHeight: 0`: the inline <svg> sits on a text baseline, and the descender space under it would make the
           // element a few pixels taller than the chart, so a container sized by the chart grew on every measurement)
           style={{ position: 'relative', zIndex: 1, lineHeight: 0 }}
+          // (server markup may differ from the client's -- another time zone, another text measurer -- and the chart patches
+          // it to the client scene after hydrating, so React's warning about the difference is not the host's to act on)
+          suppressHydrationWarning
           {...(htmlProp != null ? { dangerouslySetInnerHTML: htmlProp } : {})}
         />
       )}
