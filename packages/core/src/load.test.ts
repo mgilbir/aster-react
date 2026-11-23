@@ -142,7 +142,8 @@ describe('malformed url and data', () => {
 
   it('rejects unavailable readers and malformed topojson', async () => {
     const parquet = specWith({ name: 't', url: 'https://example.com/data.json', format: { type: 'parquet' } })
-    await expect(loadSpecData(parquet, { fetch: fakeFetch('{}') })).rejects.toThrow(/load the addon first/)
+    // a type no reader knows is vega's "Unknown data format type", not a missing add-on (the load add-on is loaded here)
+    await expect(loadSpecData(parquet, { fetch: fakeFetch('{}') })).rejects.toThrow(/\[aster\] Unknown data format type: parquet/)
 
     const wrongTopo = specWith({ name: 't', url: 'https://example.com/topo.json', format: { type: 'topojson', feature: 'x' } })
     await expect(loadSpecData(wrongTopo, { fetch: fakeFetch('{"type":"FeatureCollection","features":[]}') }))

@@ -5,7 +5,7 @@
  * Text formats that need a real parser (csv/tsv/dsv, topojson) and fetching URLs live in the `@aster-charts/core/load` addon,
  * which registers its readers in `dataFormatRegistry`; json is built in.
  */
-import { dataFormatRegistry } from './registry.js'
+import { dataFormatRegistry, LOAD_ADDON_FORMATS } from './registry.js'
 import { currentLocale } from './locale.js'
 import { field, toBoolean, toDate, toNumber, toString, PRIMITIVE_TUPLE } from './util.js'
 
@@ -115,7 +115,11 @@ export function readData(data: unknown, format?: DataFormatSpec, dynamic = false
   // through and wraps a single non-array value like vega's array()).
   const reader = dataFormatRegistry.get(type)
   if (!reader) {
-    throw new Error(`[aster] this spec reads "${type}" data; load the addon first: await import("@aster-charts/core/load")`)
+    // a format the load add-on reads, not registered yet; anything else is a type vega does not know either (case matters)
+    if (LOAD_ADDON_FORMATS.includes(type)) {
+      throw new Error(`[aster] this spec reads "${type}" data; load the addon first: await import("@aster-charts/core/load")`)
+    }
+    throw new Error(`[aster] Unknown data format type: ${type}`)
   }
   // Pre-parsed row arrays (inline values, or values inlined by loadSpecData
   // after a URL fetch) pass through; only raw strings/objects hit the reader.
