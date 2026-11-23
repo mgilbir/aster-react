@@ -8,8 +8,9 @@
  * `Math.random` that is invisible; with a host-injected stream it would consume the stream once per pass and hand the later passes
  * other numbers than vega's single run gave.
  *
- * So the injected source is wrapped (once per source, for as long as the host keeps passing it): each SITE (a dataset's
- * transform, a signal's update) owns tapes of the numbers it drew, one per fingerprint of what the site reads (its input rows, its
+ * So the injected source is wrapped (once per source, for as long as the host keeps passing it): each SITE of a chart (a
+ * dataset's transform, a signal's update; the same name in another chart is another site, as another view is another dataflow
+ * that draws on from where the shared source stands) owns tapes of the numbers it drew, one per fingerprint of what the site reads (its input rows, its
  * parameters, the signals it mentions). Running the site again on the same inputs replays its tape; different inputs are a new
  * run and read the source on from where it stands. That is vega's rule, and it makes the source's consumption the same count, in the
  * same order, as the dataflow's.
@@ -32,7 +33,8 @@ export const normalPairs = new WeakMap<Random, number>()
 /** Tapes kept per site: a chart driven by a signal visits a new fingerprint every tick, and only the latest runs can come back. */
 const TAPES_PER_SITE = 4
 
-interface Tapes { source: Random; sites: Map<string, Site>; current: Site | null }
+/** The sites of each chart that drew from one source, held as long as the chart is (its compiled chart, or what stands for it). */
+interface Tapes { source: Random; sites: WeakMap<object, Map<string, Site>>; current: Site | null }
 const BY_SOURCE = new WeakMap<Random, Random>()
 const TAPES = new WeakMap<Random, Tapes>()
 
@@ -41,7 +43,7 @@ export function replayable(source: Random): Random {
   if (TAPES.has(source)) return source
   const have = BY_SOURCE.get(source)
   if (have !== undefined) return have
-  const tapes: Tapes = { source, sites: new Map(), current: null }
+  const tapes: Tapes = { source, sites: new WeakMap(), current: null }
   const draw: Random = () => {
     const site = tapes.current
     if (site === null || site.tape === null) return source()
@@ -58,15 +60,17 @@ export function replayable(source: Random): Random {
 }
 
 /**
- * Run `fn` as site `key`, whose inputs are `fingerprint()`: a run of the same site on the same inputs replays what the earlier one
- * drew. A `random` that is not a {@link replayable} one (none, or one a caller passed straight in) is drawn from as it is, and the
- * fingerprint is never computed.
+ * Run `fn` as site `key` of `chart`, whose inputs are `fingerprint()`: a run of the same site of the same chart on the same inputs
+ * replays what the earlier one drew. A `random` that is not a {@link replayable} one (none, or one a caller passed straight in) is
+ * drawn from as it is, and the fingerprint is never computed.
  */
-export function atRandomSite<T>(random: Random | undefined, key: string, fingerprint: () => string, fn: () => T): T {
+export function atRandomSite<T>(random: Random | undefined, chart: object, key: string, fingerprint: () => string, fn: () => T): T {
   const tapes = random === undefined ? undefined : TAPES.get(random)
   if (tapes === undefined) return fn()
-  let site = tapes.sites.get(key)
-  if (site === undefined) tapes.sites.set(key, (site = { tapes: new Map(), pos: 0, tape: null }))
+  let sites = tapes.sites.get(chart)
+  if (sites === undefined) tapes.sites.set(chart, (sites = new Map()))
+  let site = sites.get(key)
+  if (site === undefined) sites.set(key, (site = { tapes: new Map(), pos: 0, tape: null }))
   const fp = fingerprint()
   let tape = site.tapes.get(fp)
   if (tape === undefined) {
