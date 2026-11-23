@@ -79,7 +79,8 @@ function dec(v: unknown): unknown {
     case 'inf': return Infinity
     case '-inf': return -Infinity
     case '-0': return -0
-    case 'date': return new Date((v as { ms: number }).ms)
+    // (the time is encoded too: an invalid Date's is NaN, the `nan` tag)
+    case 'date': return new Date(dec((v as { ms: unknown }).ms) as number)
     case 're': return new RegExp((v as { src: string }).src, (v as { flags: string }).flags)
     case 'symbol': return Symbol((v as { desc: string }).desc)
     case 'int8array': return new Int8Array(1)
@@ -102,7 +103,7 @@ function enc(v: unknown): unknown {
     if (v === 0 && 1 / v < 0) return { $: '-0' }
     return v
   }
-  if (v instanceof Date) return { $: 'date', ms: v.getTime() }
+  if (v instanceof Date) return { $: 'date', ms: enc(v.getTime()) }
   if (v instanceof RegExp) return { $: 're', src: v.source, flags: v.flags }
   if (typeof v === 'function') return { $: 'fn' }
   if (Array.isArray(v)) return v.map(enc)
@@ -369,7 +370,8 @@ for (const file of files) {
       }
       if (suite.kind === 'topomesh') {
         const filters: Record<string, undefined | ((a: TopoObjectLike, b: TopoObjectLike) => boolean)> = {
-          interior: (a, b) => a === b,
+          interior: (a, b) => a !== b,
+          exterior: (a, b) => a === b,
           any: undefined,
           byName: (a, b) => (a as { properties?: { name?: string } }).properties?.name === (b as { properties?: { name?: string } }).properties?.name,
         }

@@ -23,6 +23,7 @@
  */
 import { createRequire } from 'node:module'
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { enc } from './vector-codec.mjs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { cli } from '../../../scripts/lib/cli.mjs'
@@ -37,32 +38,9 @@ const here = dirname(fileURLToPath(import.meta.url))
 const req = createRequire(join(here, '..', 'package.json'))
 
 // --- value codec -------------------------------------------------------------
-// JSON cannot express NaN/Infinity/-0/undefined/Dates/RegExp/Symbols, so
-// values are tagged. The replay test (`oracle-vectors.test.ts` (packages/core/src)) mirrors this
-// codec; the two must agree.
-
-function enc(v) {
-  if (v === undefined) return { $: 'undef' }
-  if (typeof v === 'number') {
-    if (Number.isNaN(v)) return { $: 'nan' }
-    if (v === Infinity) return { $: 'inf' }
-    if (v === -Infinity) return { $: '-inf' }
-    if (v === 0 && 1 / v < 0) return { $: '-0' }
-    return v
-  }
-  if (v instanceof Date) return { $: 'date', ms: v.getTime() }
-  if (v instanceof RegExp) return { $: 're', src: v.source, flags: v.flags }
-  if (typeof v === 'symbol') return { $: 'symbol', desc: v.description ?? null }
-  if (v instanceof Int8Array) return { $: 'int8array' }
-  if (typeof v === 'function') return { $: 'fn' }
-  if (Array.isArray(v)) return v.map(enc)
-  if (v !== null && typeof v === 'object') {
-    const o = {}
-    for (const k of Object.keys(v).sort()) o[k] = enc(v[k])
-    return o
-  }
-  return v
-}
+// JSON cannot express NaN/Infinity/-0/undefined/Dates/RegExp/Symbols, so values are tagged (vector-codec.mjs; an invalid
+// Date keeps its NaN time). The replay test (`oracle-vectors.test.ts` (packages/core/src)) mirrors this codec; the two must
+// agree, and vector-codec.test.mts checks the recorded files.
 
 /** Call fn, capturing a throw as a tagged value (type and message both pinned). */
 function call(fn, args) {
@@ -630,6 +608,8 @@ const localeSuites = {
 
 // named converter/filter variants the replay reconstructs
 
+// A small topology: a 2x1 grid of two squares sharing an edge (arc 1),
+// with quantized coordinates, plus the same geometry unquantized.
 const deltaArcs = [
   [[0, 0], [1, 0], [0, 1]],   // arc 0: bottom of left square
   [[1, 0], [0, 1]],           // arc 1: shared edge, bottom->top
@@ -685,8 +665,10 @@ const dsvConverters = {
 
 const topologies = { quantized, absolute }
 
+// topojson's mesh filter is called with the two geometries an arc borders (the same one twice for an arc on the outside)
 const topoFilters = {
-  interior: (a, b) => a === b,
+  interior: (a, b) => a !== b,
+  exterior: (a, b) => a === b,
   any: undefined,
   byName: (a, b) => a.properties?.name === b.properties?.name,
 }
@@ -738,7 +720,7 @@ const topoSuites = {
     oracle: oracleOf('topojson-client'),
     kind: 'topomesh',
     tz: TZ_UTC,
-    cases: [['quantized', 'squares', 'interior']].map(([t, name, variant]) => ({
+    cases: [['quantized', 'squares', 'exterior'], ['absolute', 'squares', 'exterior']].map(([t, name, variant]) => ({
       args: [topologies[t], name].map(enc),
       variant,
       want: enc(call((t, n, v) => topojsonClient.mesh(t, t.objects[n], topoFilters[v]), [topologies[t], name, variant])),
@@ -846,10 +828,6 @@ const dsvSuites = {
     })),
   },
 }
-
-// A small topology: a 2x1 grid of two squares sharing an edge (arc 1),
-// with quantized coordinates, plus the same geometry unquantized.
-
 
 const files = {
   'vega-util.json': { suites: utilSuites },
