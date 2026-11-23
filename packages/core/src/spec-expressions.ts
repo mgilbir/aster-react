@@ -35,7 +35,7 @@ import { transformParams, type ParamKind, type TransformParam } from './transfor
 import { TUPLE_MAKING_TRANSFORMS, transformTypeOf } from './transform-names.js'
 import { guideReading, legendLayout, legendSizeExpression, type GuideEnv, type GuideKind } from './guide-model.js'
 import { splitAccessPath, TextTable } from './util.js'
-import { dataKey, expressionReads } from './expr-reads.js'
+import { dataKey, expressionReads, unitIndexedIn } from './expr-reads.js'
 import { follow, node, Propagation, type SignalNode } from './signal-propagation.js'
 import { isSignalRef as isSignalObject, VIEW_SIGNALS, viewSignals } from './view-props.js'
 
@@ -107,6 +107,8 @@ class Check {
    * pattern): what `limits.regex: 'refuse'` refuses it for (limits.ts `checkChartRegex`).
    */
   readonly regexSites: string[] = []
+  /** The data sets an expression has vega index by `unit` (expr-reads.ts `unitIndexedIn`). */
+  readonly unitIndexed = new Set<string>()
 
   constructor(private readonly config: Rec) {}
 
@@ -227,6 +229,7 @@ class Check {
       const text = textOf(value)
       if (checkExpression(text, this.isSignal)) this.regexSites.push(text)
       this.reads(text)
+      if (text.includes('intersect')) for (const name of unitIndexedIn(text)) this.unitIndexed.add(name)
     }
   }
 
@@ -909,9 +912,14 @@ function ruleText(rules: unknown[]): string | null {
  */
 /** Check every expression of `spec` (see the file header); returns where it makes regular expressions (`Check.regexSites`). */
 export function checkExpressions(spec: Rec, config: Rec = {}): readonly string[] {
+  return checkSpecExpressions(spec, config).regexSites
+}
+
+/** Check every expression of `spec`; what the walk found: the regular expressions it makes, the data sets it indexes by unit. */
+export function checkSpecExpressions(spec: Rec, config: Rec = {}): { regexSites: readonly string[]; unitIndexed: readonly string[] } {
   const check = new Check(config)
   check.view(spec, config)
-  return check.regexSites
+  return { regexSites: check.regexSites, unitIndexed: [...check.unitIndexed] }
 }
 
 /** vega-parser's `propertyLambda`: an object or array written out as an expression, a `{signal}` in it standing for its text. */

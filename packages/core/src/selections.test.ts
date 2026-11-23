@@ -42,3 +42,14 @@ describe('selection functions (properties the live differentials cannot reach)',
     expect(values).toEqual(['x', 'y'])
   })
 })
+
+describe('C419: the units of a store are read as the store is, not as a cache remembers it', () => {
+  it('a store whose middle tuple is rewritten in place answers as a fresh array of the same tuples', () => {
+    const t = (unit: string, x: number) => ({ unit, fields: [{ field: 'x', type: 'E' }], values: [x] })
+    const rows = [t('u1', 1), t('u2', 1), t('u2', 9)]
+    expect(selectionTest(rows, { x: 1 }, 'intersect')).toBe(true)
+    rows[1] = t('u3', 2)
+    expect(selectionTest(rows, { x: 1 }, 'intersect')).toBe(selectionTest([...rows], { x: 1 }, 'intersect'))
+    expect(selectionTest(rows, { x: 1 }, 'intersect')).toBe(false)
+  })
+})

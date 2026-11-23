@@ -909,6 +909,7 @@ function prepareChartCtx(
       return root === undefined ? undefined : { root, rows: datasets.get(name) ?? [] }
     },
     ...(input.random ? { random: input.random } : {}),
+    unitIndexed: (name) => chart.unitIndexed?.includes(name) === true,
     setdata: makeSetdata(chart, setData),
     containerSize: () => {
       const c = input.containerSize ?? input.measuredSize

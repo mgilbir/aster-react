@@ -391,7 +391,7 @@ interface BindingShell {
 /** Every member an expression runtime may have (the type checks the list is complete). */
 const RUNTIME_KEYS = Object.keys({
   scale: true, data: true, expr: true, projection: true, tree: true, modify: true, transformed: true, inScope: true, containerSize: true,
-  random: true, setdata: true, intersect: true,
+  random: true, setdata: true, intersect: true, unitIndexed: true,
 } satisfies Record<keyof ExpressionRuntime, true>) as Array<keyof ExpressionRuntime>
 
 /** The key of a scope's runtime in a shell (`''` is the view's, which no scope id can collide with). */

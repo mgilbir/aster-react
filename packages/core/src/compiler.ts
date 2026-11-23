@@ -8,7 +8,7 @@ import { dict, ownGet } from './util.js'
 import { assertSpecDepth } from './limits.js'
 import { dataInputOf, normalizeSpecLists } from './spec-structure.js'
 import { noteWrittenType, transformTypeOf } from './transform-names.js'
-import { checkExpressions } from './spec-expressions.js'
+import { checkSpecExpressions } from './spec-expressions.js'
 import { markPlacing } from './tuple-order.js'
 import { markShareable } from './guide-encode.js'
 import { defaultMergedConfig, mergeVegaConfig, vegaDefaultConfig } from './config-defaults.js'
@@ -48,7 +48,7 @@ export function compileChart(givenSpec: VgSpec): CompiledChart {
     ? defaultMergedConfig()
     : mergeVegaConfig(vegaDefaultConfig(), userConfig)) as Record<string, unknown>
   // (one walk, in vega-parser's order: the data sets and scales a spec names, the parameters of its transforms, its expressions)
-  const regexSites = checkExpressions(rawSpec, mergedConfig)
+  const { regexSites, unitIndexed } = checkSpecExpressions(rawSpec, mergedConfig)
   markSeq = 0
   const spec: VgSpec = { ...rawSpec, config: mergedConfig as VgSpec['config'] }
 
@@ -129,6 +129,7 @@ export function compileChart(givenSpec: VgSpec): CompiledChart {
   return {
     ...((q) => (q === undefined ? {} : { callsIsTuple: q }))(tupleQuestions(spec)),
     ...(regexSites.length ? { regexSites } : {}),
+    ...(unitIndexed.length ? { unitIndexed } : {}),
     autosize,
     width,
     height,
