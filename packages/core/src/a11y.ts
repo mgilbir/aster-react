@@ -109,7 +109,8 @@ function itemBounds(it: SceneItem, tx: number, ty: number, kind: string): Bounds
   let x1 = px, y1 = py, x2 = px, y2 = py
   if (!PATH_MARKS.has(kind)) {
     const b = new Box()
-    boundItemOfKind(b, it, kind)
+    // (a value the bounds reader refuses -- a pass vega stops at -- leaves the item at its position: the tree never throws)
+    try { boundItemOfKind(b, it, kind) } catch { b.clear() }
     if (!b.empty() && Number.isFinite(b.x1) && Number.isFinite(b.y1) && Number.isFinite(b.x2) && Number.isFinite(b.y2)) {
       x1 = b.x1; y1 = b.y1; x2 = b.x2; y2 = b.y2
     }
@@ -449,7 +450,9 @@ function treeOf(scene: SceneRoot, scales: Map<string, unknown>, options: A11yOpt
       })
     }
     if (role === 'mark' && marktype && marktype !== 'group') {
-      const items = kids as SceneItem[]
+      // (the items a pass stopped at were never measured, nor drawn: none takes the pointer, none is a node -- as the hit index)
+      const from = group.unmeasuredFrom
+      const items = from === undefined ? kids as SceneItem[] : (kids as SceneItem[]).slice(0, from)
       const markId = `mark-${seq++}`
       if (summarise || items.length > threshold || markNodes + items.length > threshold) {
         const b = summaryBox(group, items, gx, gy)
