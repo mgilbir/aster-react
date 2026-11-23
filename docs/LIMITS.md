@@ -6,7 +6,7 @@ These are suggestions (a judgement, not measured defaults).
 
 - **Public dashboard:** 100k rows, 50k items, 8 MB SVG, 2 s wall clock, and `maxGeneratedRows: 500_000`.
 - **Unknown spec on a server:** use smaller numbers (10k rows, 250 ms), a `loadSpecData` allowlist, and a **killable worker** for the render.
-- **Specs that need no regular expressions:** add `regex: 'refuse'` (any of the above). The screen below is a heuristic; refusing is
+- **Specs that need no regular expressions:** add `regex: 'refuse'` (any of the above). The screen below is a static model, conservative but not a proof; refusing is
   the only way to rule out a pattern that blocks the thread (see "Refusing every regular expression").
 
 For an untrusted spec you need all three of these; `limits` alone is best-effort (see the two layers below):
@@ -277,28 +277,36 @@ before a pattern is compiled or run, for every pattern a spec or its data can
 supply (`test`, `regexp`, `replace`/`split` with a RegExp or a `/literal/`,
 `countpattern`):
 
-1. **Static screen** (`regex-screen.ts`): the pattern is parsed into a small AST
-   (not matched with another regex) and refused, with an `AsterLimitError`
-   (`regexSafety: ...`), when it has one of the known catastrophic shapes:
-   - a group under an unbounded quantifier whose body contains another unbounded
-     quantifier (`(a+)+`, `(\w+\s?)*`, `(.*a){2,}`);
-   - an unbounded-quantified alternation whose branches can start with the same
-     character (`(a|a)*`, `(a|aa)+`, `(\w|\d)+`);
-   - a backreference inside a group that repeats more than once (`(?:(a)\1)*`, `(?:(a)\1){2,}`).
-   - three or more **adjacent** unbounded quantifiers over overlapping characters
-     (`a*a*a*b`, `.*.*.*x`, `\d+\d+\d+$`): polynomial backtracking of degree 3 or more, which
-     on the 9 000 characters of a long input ran for over 20 seconds. Two adjacent ones (`\s*.*`,
-     `\d+\.?\d*`) and the trim idiom `^\s*(.*?)\s*$` are not touched; no regular expression in
-     the gallery, the corpus or the test suites has the refused shape.
+1. **Static screen** (`regex-screen.ts`). The pattern is read by a parser of the whole ECMAScript 2025 pattern grammar, in
+   the mode its flags select (the legacy Annex B mode without `u`/`v`, where `\u{`, `\x`, `\k`, `\c` and a lone `{` are
+   literals; the `u` mode; the `v` mode with set operations and strings), checked against a reference parser
+   (`@eslint-community/regexpp`) on every generated pattern of its differential. A pattern the RegExp constructor rejects is
+   left to it (its SyntaxError surfaces); **a valid pattern the screen cannot read, or cannot analyse within its budget, is
+   refused** (fail closed). The pattern then becomes its position automaton, with the number of distinct ways each step can
+   be taken (a backtracking matcher enumerates parse trees), and with the search's own loop in front unless every branch
+   starts with `^` (outside `m` mode): V8 tries each start position in turn. It is refused, with an `AsterLimitError`
+   (`regexSafety: ...`), when:
+   - **exponential**: a part of it can match the same input in two ways and repeat (`(a+)+`, `(a|aa)+`, `(\w+\s?){1,50}`,
+     `((a|a))*`, `(.*a){12}`). A repeat that may run twice or more is read as unbounded (`(a+){1,60}` is `(a+)+`),
+     except a repeat of one character set, which is expanded exactly up to 64;
+   - **polynomial of degree 3 or more**: three loops each able to hand the same input on to the next, the search's loop
+     counted (`a*a*a*b`, `\s*.*x`, `.*foo.*bar`, the trim idiom `^\s*(.*?)\s*$`). Measured on V8: `\s*.*x` on 4 000
+     spaces runs 14 s, `.*foo.*bar` on 6 000 characters 16 s, the trim idiom on 4 000 spaces before `x\n\nx` 19.7 s; the
+     default input cap is 10 000. Degree 2 is allowed (`a*b` and `\s+$` take about 0.1 s on 10 000 characters), and a loop
+     after which the match can always end is no hazard (`\s*.*`, `\d+\.?\d*`: the first path that reaches it succeeds);
+   - **too many ways** to match one input with every loop taken once: over 4 096 (`(a|a)(a|a)...`), or over 8 next to a
+     degree-2 chain;
+   - a **backreference** inside a group that repeats (`(?:(a)\1)*`).
+   A lookaround body is screened as a pattern of its own. A Unicode property is read as "any character", a
+   case-insensitive set is closed under every case mapping V8 applies (derived from V8's own `iu` matching, about 0.15 s
+   once per process on the first case-insensitive pattern), and a `v`-mode set operation keeps an upper and a lower bound,
+   so nothing a pattern can match is left out of the analysis.
 2. **Length caps**: a pattern over 1024 characters, or an input longer than
    `maxStringLength` (default 10 000), is refused. This bounds linear patterns.
 
-**This is a heuristic, not a guarantee.** It blocks the known catastrophic
-shapes. It does not prove a pattern safe: polynomial blow-ups whose quantifiers are not
-adjacent, such as `.*a.*a.*a.*b`, pass, and safe patterns with a repeated group around an unbounded quantifier,
-such as `(\d+\.)*\d+`, are refused (rewrite them without the nesting). Syntax
-the screen cannot parse is passed to the RegExp constructor unscreened (its own
-syntax error then surfaces). Without limits nothing is screened (vega parity).
+**This is a static model of a backtracking matcher, not a proof.** It is conservative by construction, so a few safe
+patterns are refused (`(a|a){2}`, `.{1,100}.{1,100}x`; rewrite them without the ambiguity). Its soundness is tested by
+running every pattern it accepts out of a generated set on 10 000-character attack inputs in V8. Without limits nothing is screened (vega parity).
 
 **If specs are untrusted, run the render in a killable worker** (a
 `worker_threads` Worker you can `terminate()`, or a child process with a
