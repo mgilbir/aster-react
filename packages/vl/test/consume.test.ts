@@ -12,8 +12,7 @@ import { dict } from '../src/names.js'
 function run(spec: Record<string, unknown>, f: (s: Record<string, any>) => void): string[] {
   return withConsumption(() => {
     const copy = JSON.parse(JSON.stringify(spec), (_k, v: unknown) => (v !== null && typeof v === 'object' && !Array.isArray(v) ? Object.assign(dict(), v) : v))
-    arm(copy, () => false)
-    f(copy)
+    f(arm(copy, () => false))
     return unconsumedPaths()
   })
 }
@@ -74,7 +73,7 @@ describe('the primitives', () => {
   it('refuseUnconsumed throws a VLCompileError naming every unread path', () => {
     expect(() => withConsumption(() => {
       const s = Object.assign(dict(), { a: 1, b: Object.assign(dict(), { c: 2 }) })
-      arm(s, () => false)
+      void arm(s, () => false)
       refuseUnconsumed()
     })).toThrow(/a: is valid Vega-Lite but @aster-charts\/vl does not implement it here, so it would be ignored \(and b\.c\)/)
   })
