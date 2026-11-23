@@ -28,9 +28,11 @@ describe('stream inputs (C399, C484, C502, C529, C705)', () => {
     const g = rng(399)
     for (let k = 0; k < 200; k++) {
       const old = Array.from({ length: 4 }, (_, i) => r(i))
-      const n = 1 + Math.floor(g() * 4)
-      const from = Array.from({ length: n }, () => (g() < 0.2 ? -1 : Math.floor(g() * 4)))
-      const data = from.map((q, i) => (q >= 0 ? old[q]! : r(10 + i)))
+      const n = 2 + Math.floor(g() * 3)
+      // a mapping that names one old row twice (so it cannot be what the rows are), and rows that are whatever they are
+      const from = Array.from({ length: n }, () => Math.floor(g() * 4))
+      from[n - 1] = from[0]!
+      const data = from.map((_, i) => (g() < 0.5 ? old[Math.floor(g() * 4)]! : r(10 + i)))
       const stream = createChartStream(spec, { initial: { data: { table: old } } })
       stream.flush()
       stream.push({ data: { table: data }, pulse: { table: { from, changed: [] } } })
@@ -43,13 +45,13 @@ describe('stream inputs (C399, C484, C502, C529, C705)', () => {
     for (const policy of ['coalesce', 'drop-newest', 'drop-oldest', 'error'] as const) {
       let stream: ReturnType<typeof createChartStream> | null = null
       let pushed = false
-      const logger = { error() {}, warn() { if (!pushed && stream) { pushed = true; stream.push({ append: { table: [r(99)] } }) } }, info() {}, debug() {} }
-      // (a mark that warns: its text is asked of a field the rows do not have, which vega warns about)
-      const warning = { ...spec, marks: [...(spec as { marks: unknown[] }).marks, { type: 'rect', encode: { update: { x: { scale: 'nope', value: 1 } } } }] } as unknown as VgSpec
-      stream = createChartStream(warning, { policy, initial: { data: { table: [r(1)] }, logger } })
+      // (the flush logs an error the dataflow recovers from, and the host pushes from its logger)
+      const logger = { error() { if (!pushed && stream) { pushed = true; stream.push({ append: { table: [r(99)] } }) } }, warn() {}, info() {}, debug() {} }
+      const failing = { ...spec, data: [...(spec as { data: unknown[] }).data, { name: 'boom', values: [{}], transform: [{ type: 'formula', as: 'z', expr: 'datum.a.b' }] }] } as unknown as VgSpec
+      stream = createChartStream(failing, { policy, initial: { data: { table: [r(1)] }, logger } })
       stream.push({ append: { table: [r(2)] } })
       stream.flush()
-      if (!pushed) continue // (nothing warned under this policy: the case does not arise)
+      expect(pushed, `${policy}: the flush logged nothing to push from`).toBe(true)
       expect(stream.stats().depth, policy).toBe(1)
       stream.flush()
       expect((datasetsOfScene(stream.scene()!).get('table') as Row[]).map((d) => d.x), policy).toEqual([1, 2, 99])
