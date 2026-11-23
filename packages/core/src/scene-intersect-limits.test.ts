@@ -27,32 +27,47 @@ const { dirname, join } = await import('node:path')
 const { fileURLToPath } = await import('node:url')
 const here = dirname(fileURLToPath(import.meta.url))
 type SceneRoot = import('./types.js').SceneRoot
+type Node = { marktype?: string; items?: unknown[]; [key: string]: unknown }
+
+const loadStallScene = (): { box: number[][]; scene: SceneRoot & { items: Node[] } } =>
+  JSON.parse(readFileSync(join(here, '../testdata/intersect-stall-scene.json'), 'utf8'), (_k, v) =>
+    (v === '#Infinity' ? Infinity : v === '#-Infinity' ? -Infinity : v === '#NaN' ? NaN : v === '#-0' ? -0 : v))
 
 const sceneOf = (marks: unknown[]): SceneRoot => evaluateChart(compileChart({ width: 400, height: 300, padding: 0, autosize: 'none', marks } as never), {})
 const arc = (encode: Record<string, unknown>): unknown => ({ type: 'arc', encode: { enter: { x: { value: 0 }, y: { value: 0 }, fill: { value: 'red' }, ...encode } } })
 
 describe('intersect() terminates on any region, and agrees with the lattice test where that ends', () => {
-  it('the scene that stalled the old walk ends: an arc whose bounds reach Number.MAX_VALUE, under a group item at x Infinity', () => {
-    // (a group item at x Infinity, and an arc with a negative inner radius and a 5px stroke, whose bounds run from MAX_VALUE to
-    // Infinity in x: `x++` never moves past MAX_VALUE, so the old walk -- and vega's -- never ended)
-    // (a hand-built scene once drawn by the random generator, frozen in testdata with its non-finite numbers as "#Infinity"...)
-    const { box, scene } = JSON.parse(readFileSync(join(here, '../testdata/intersect-stall-scene.json'), 'utf8'), (_k, v) =>
-      (v === '#Infinity' ? Infinity : v === '#-Infinity' ? -Infinity : v === '#NaN' ? NaN : v === '#-0' ? -0 : v)) as { box: number[][]; scene: SceneRoot }
-    const boxes = [box]
-    let refused = 0
-    for (const box of boxes) {
-      try {
-        expect(Array.isArray(sceneIntersect(scene, box, null, null))).toBe(true)
-      } catch (e) {
-        expect(e).toBeInstanceOf(AsterLimitError)
-        expect(String((e as Error).message)).toContain('intersect() lattice tests (a region beyond 2^52)')
-        refused++
-      }
+  it('an arc whose bounds reach Number.MAX_VALUE ends: its region is refused, not walked', () => {
+    // (an arc item at x Infinity with a negative inner radius and a 5px stroke has bounds that run from MAX_VALUE to Infinity in
+    // x, and `x++` never moves past MAX_VALUE: the old walk -- and vega's -- never ended on a box that meets them without
+    // enclosing them. The item is one of a hand-built scene once drawn by the random generator, frozen in testdata with its
+    // non-finite numbers as "#Infinity"; it is tested ALONE here, and under every box: a finite one has a finite region.)
+    const { box, scene } = loadStallScene()
+    const arcs = scene.items.filter((m) => m.marktype === 'arc')
+    const infinite = (arcs[0]!.items as Array<{ datum?: { i?: number } }>).find((it) => it.datum?.i === 22)!
+    const alone = { ...scene, items: [{ ...arcs[0]!, items: [infinite] }] } as unknown as SceneRoot
+    expect(sceneIntersect(alone, box, null, null)).toHaveLength(0)
+    expect(sceneIntersect(alone, [[1e300, 30], [1e308, 40]], null, null)).toHaveLength(0)
+    for (const region of [[[1e308, 30], [Infinity, 40]], [[0, 30], [Infinity, 40]], [[-Infinity, 30], [Infinity, 40]]]) {
+      expect(() => sceneIntersect(alone, region, null, null), JSON.stringify(region)).toThrow(AsterLimitError)
+      expect(() => sceneIntersect(alone, region, null, null)).toThrow('intersect() lattice tests (a region beyond 2^52)')
     }
-    expect(refused).toBeGreaterThan(0)
+    // (a box that encloses the bounds needs no lattice at all)
+    expect(sceneIntersect(alone, [[-Infinity, -Infinity], [Infinity, Infinity]], null, null)).toHaveLength(1)
     // an infinite box and infinite radii end too
     const inf = sceneOf([arc({ outerRadius: { signal: '1e309' }, startAngle: { value: 0 }, endAngle: { value: 1 } })])
     expect(sceneIntersect(inf, [[-Infinity, -Infinity], [Infinity, Infinity]], null, null)).toEqual(legacyIntersect(inf, [[-Infinity, -Infinity], [Infinity, Infinity]], null, null))
+  })
+
+  it('a group at x Infinity that the box cannot meet changes nothing: the arcs drawn after it are tested against the box as it was', () => {
+    // (the scene's first mark is a group at x Infinity, then arcs and a shape. The old walk moved the box into the group without
+    // asking whether the box met it -- `translate(-Infinity)` and back leave NaN -- and the NaN box met an infinite arc and was
+    // refused. vega visits a group mark only if its bounds meet the box: the answer is the answer without the group.)
+    const { box, scene } = loadStallScene()
+    const without = { ...scene, items: scene.items.filter((m) => m.marktype !== 'group') } as unknown as SceneRoot
+    const got = sceneIntersect(scene, box, null, null)
+    expect(got).toHaveLength(2)
+    expect(got).toEqual(sceneIntersect(without, box, null, null))
   })
 
   it('a region of millions of pixels squared is tested by its rows: a thin diagonal strip with no lattice point inside', () => {
