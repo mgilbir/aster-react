@@ -401,12 +401,11 @@ export function randomSpec(r: Rand): Spec {
       ...(r.chance(0.3) ? { stepMajor: [r.pick([90, 45]), r.pick([90, 45])] } : {}),
     }] })
   }
-  // (the path mark is fill-only: a stroked path mark whose every path is null widens the root by a pixel in Aster, which is the
-  // bounds pass and not geo; see the report)
+  // (the path mark is stroked too: a stroked path mark whose every path is null is the case that once widened the root in Aster)
   const marks: Json[] = [
     { type: 'shape', from: { data: 'src' }, encode: { update: { fill: { value: '#ddd' }, stroke: { value: '#333' } } },
       transform: [{ type: 'geoshape', projection: 'p', ...(useRadius ? { pointRadius: radiusT } : {}) }] },
-    { type: 'path', from: { data: 'src' }, encode: { update: { path: { field: 'gp' }, fill: { value: 'rgba(255,0,0,0.3)' } } } },
+    { type: 'path', from: { data: 'src' }, encode: { update: { path: { field: 'gp' }, fill: { value: 'rgba(255,0,0,0.3)' }, stroke: { value: '#900' }, strokeWidth: { value: 1.5 } } } },
     { type: 'symbol', from: { data: 'src' }, encode: { update: { x: { field: 'px' }, y: { field: 'py' }, size: { value: 30 } } } },
   ]
   if (graticule) {
