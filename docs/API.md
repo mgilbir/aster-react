@@ -1056,9 +1056,19 @@ Vega-Lite spec without `@aster-charts/react/vl`, a `VLCompileError`), never thro
 `useSpecData` and `useChartData` take the options of `loadSpecData` (`UseSpecDataOptions`), `loadSpecData` from
 `@aster-charts/react` is the non-Suspense equivalent. `useChartData` gives its `limits` and `signals` to both the loader and the
 chart, so a `{signal}` url follows the host's signal value.
-`loadSpecDataResource(spec, options?)` is the promise `useSpecData` reads with `React.use`: it is created once per spec object and set
-of options (a repeat call returns the same promise, as Suspense needs) and imports the load add-on lazily, so an app without URL
-datasets never bundles it. A failed load is dropped from the cache so the next render retries. `isPromiseLike(value)` is the
+`loadSpecDataResource(spec, options?)` is the promise `useSpecData` reads with `React.use`: one per load, so every render that asks
+for the same load gets the same promise, as Suspense needs (including the retries of a component that suspended before it ever
+committed, for which React keeps no state). It imports the load add-on lazily, so an app without URL datasets never bundles it.
+The cache follows the [identity rule](#streaming-components): the spec and the data options (`baseURL`, `protocols`, `timeoutMs`,
+`limits`, ...) are compared by content, `signal` by identity, and `fetch` / `allow` are called through a latest-ref, so an inline
+spec, an inline options object and an inline `allow` arrow are one load. The cache is shared by every component (and, on a
+server, by every request): functions with different code are never one load, but closures of the same code are, so a host that
+loads the same spec with, say, a per-user or per-request `fetch` gives each its own `cacheKey` (a string that is part of the key).
+A mounted reader keeps its load; the last 32 loads nothing mounted reads are kept for remounts and retries.
+**A failed load is thrown to the error boundary once and never retried by itself** (DECISIONS Q19): it is retried when an input
+changes, and after `resetSpecDataErrors()` (call it from the boundary's reset, e.g. react-error-boundary's
+`onReset={resetSpecDataErrors}`). The cache cannot detect a reset on its own: React can retry the failed render in a later task,
+so a rejection dropped "after one read" would be fetched again inside React's retry, forever. `isPromiseLike(value)` is the
 type guard for a `then`-able (the check `<Chart>` uses to tell an async `spec` from a spec).
 
 #### Streaming components
