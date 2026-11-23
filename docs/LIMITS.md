@@ -248,7 +248,12 @@ The pre-flight reads the spec's lists the way the compiler does (vega-util `arra
 - **During evaluation**: each dataset on its own, after load, `source` and every
   transform step (not a sum). Datasets produced by `sequence`, `cross`, `fold` and the
   like count, so generated rows are covered. The cumulative total of generated rows is
-  `maxGeneratedRows`.
+  `maxGeneratedRows`: it meters the rows the evaluation's transforms *produce in that
+  evaluation*. A re-evaluation that takes a pulse (an append, an edit) is charged the rows
+  the pulse produced, and a step kept from the evaluation before produced none; a fresh
+  evaluation of the same inputs produces every row and is charged for all of them, so a
+  session may accept appends that a fresh evaluation of the accumulated rows refuses. The
+  size of what is kept is bounded by `maxRows`, which every path checks per dataset.
 - **`createChartStream`**: the rows the stream holds (base snapshot plus what the flush will
   add), checked before the flush is materialised; they reach the session as its host rows, so
   its pre-flight counts them once, in place of the spec's inline rows they started from.

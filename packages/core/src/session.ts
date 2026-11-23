@@ -20,7 +20,7 @@
 import { compileChart } from './compiler.js'
 import { dict, ownGet } from './util.js'
 import { dataInputOf, valuesSignal } from './spec-structure.js'
-import { evaluateChartPending, type DataStability, type IncrementalEngine } from './runtime.js'
+import { checkHintShapes, evaluateChartPending, type DataStability, type IncrementalEngine } from './runtime.js'
 import { applyOneWithState } from './incremental-state.js'
 import { optionalPart } from './engine-parts.js'
 import { refId, valueKey } from './fingerprint.js'
@@ -305,6 +305,8 @@ export function createChartSession(): ChartSession {
   }
 
   const withAutoPulse = (spec: VgSpec, input: RuntimeInput, currentRaw: Map<string, unknown>): { input: RuntimeInput; pulse: DataPulse } => {
+    // (a hint that cannot be what it says is refused before it is read, as the evaluation refuses it)
+    checkHintShapes(input)
     if (input.dataPulse) {
       const datasets = new Map<string, never>()
       const structural = new Set<string>()
