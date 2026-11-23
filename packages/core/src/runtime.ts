@@ -3275,7 +3275,7 @@ function keptOverMarkItems(mark: CompiledMark, ctx: EvalContext, prevGroup: Scen
  * item it was (a published item holds what it held). Every other property is what it was: made from what it read, which is
  * unchanged. The group is the one before with these items.
  */
-function withNewDatums(mark: CompiledMark, ctx: EvalContext, prevGroup: SceneGroup, from: readonly SceneItem[], was: readonly SceneItem[]): SceneGroup {
+function withNewDatums(ctx: EvalContext, prevGroup: SceneGroup, from: readonly SceneItem[], was: readonly SceneItem[]): SceneGroup {
   const before = prevGroup.items as SceneItem[]
   const items = new Array<SceneItem>(before.length)
   for (let i = 0; i < before.length; i++) {
@@ -3289,7 +3289,6 @@ function withNewDatums(mark: CompiledMark, ctx: EvalContext, prevGroup: SceneGro
   const group = { ...prevGroup, items } as SceneGroup
   const gradients = GROUP_GRADIENTS.get(prevGroup)
   if (gradients !== undefined) GROUP_GRADIENTS.set(group, gradients)
-  void mark
   return group
 }
 
@@ -3328,8 +3327,9 @@ function paintOrderOf(items: SceneGroup[]): SceneGroup[] {
 
 /**
  * Build the scene content (marks, axes/legends, title, trellis) and the
- * autosize padding at a given content size. Extracted from evaluateChart so
- * `fit`/`fit-x`/`fit-y` can re-run at a shrinking content size and converge.
+ * autosize padding at a given content size. A view that fits its viewport
+ * (`fit`/`fit-x`/`fit-y`) builds it twice: once at the viewport, once at the
+ * size that leaves room for what the first build laid out (see `evaluateChartPass`).
  */
 type BuiltContent = { record: PassRecord | undefined; items: SceneGroup[]; padding: ReturnType<typeof computeGuidePadding>; ctx: EvalContext; width: number; height: number; hasLayout: boolean; frame: FrameEncode | undefined }
 
@@ -3461,7 +3461,7 @@ function buildContentPass(
     const keptOver = prevGroup !== null && !reused && overItems !== undefined ? keptOverMarkItems(mark, ctx, prevGroup) : null
     if (prevGroup !== null && (reused || keptOver !== null)) {
       if (overItems !== undefined) recordOverMarkItems(mark, ctx, overItems)
-      const group = keptOver === 'datums' ? withNewDatums(mark, ctx, prevGroup, overItems!, ctx.prev!.markSources.get(mark)!.items) : prevGroup
+      const group = keptOver === 'datums' ? withNewDatums(ctx, prevGroup, overItems!, ctx.prev!.markSources.get(mark)!.items) : prevGroup
       items.push(group)
       ctx.draft.groups.set(mark, group)
       // (its channels read what they read: the mark's key, which holds every name they hold, is as it was)
@@ -4929,7 +4929,6 @@ export function notePublished(state: DatasetState, k: number, t: CompiledTransfo
 
 const MAY_DRAW = new WeakMap<CompiledChart, boolean>()
 
-/** Whether a dataset of the view may draw from the random source, its expressions read as the lexer reads them (an escaped name too). */
 /**
  * Whether the pulse path is there to take a pulse every other condition allows. When it is not (the React shells load it on demand,
  * engine-parts.ts) the dataset is derived in full -- the same rows, the same state left for the next pulse -- and the part is asked
@@ -4941,6 +4940,7 @@ function pulsePath(ctx: EvalContext): boolean {
   return false
 }
 
+/** Whether a dataset of the view may draw from the random source, its expressions read as the lexer reads them (an escaped name too). */
 function datasetsMayDraw(chart: CompiledChart): boolean {
   let may = MAY_DRAW.get(chart)
   // (rows draw nothing: only the datasets' transforms and a `{signal}` values are code)
@@ -5181,7 +5181,6 @@ function onDemandBuilder(ctx: EvalContext, sources: ReadonlyMap<string, unknown>
   }
 }
 
-/** Snapshot resolved scales into plain data for the scene differential. */
 /**
  * The snapshots of the view's scales (what a guide's caption and a worker's clone read of them), the array the scene before carried
  * when every scale is the object it was then: a snapshot is read off the scale objects alone (their domain, range, bandwidth,
@@ -5199,6 +5198,7 @@ function sceneSnapshots(ctx: EvalContext): ReturnType<typeof snapshotScales> {
   return snaps
 }
 
+/** Snapshot resolved scales into plain data (what the scene carries as `__scales`: see `sceneSnapshots`). */
 function snapshotScales(scales: Map<string, Scale>): Array<{ name: string; type: string; domain: unknown[]; range: unknown[]; bandwidth?: number; samples?: [unknown, unknown] }> {
   const out: Array<{ name: string; type: string; domain: unknown[]; range: unknown[]; bandwidth?: number; samples?: [unknown, unknown] }> = []
   for (const [name, scale] of scales) {

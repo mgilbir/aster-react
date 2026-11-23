@@ -192,14 +192,17 @@ export interface StepRecord {
 }
 
 /**
- * How many steps ran and how many were kept, and how many rows of another dataset a pipeline copied to make rows of its own, since
- * the counters were last read. For the tests; nothing reads them in a build.
+ * Instrumentation, not behaviour (C702): how many steps ran and how many were kept, and how many rows of another dataset a pipeline
+ * copied to make rows of its own, since the counters were last read. The tests that pin what is kept read them; nothing in a build
+ * does, and no public entry exports them (the increments are the only cost). They live here, beside what they count, so that the
+ * counts are of the steps the engine runs and not of a copy of its loop.
  */
 export const stepCounts = { ran: 0, reused: 0, copied: 0 }
 
 /**
- * Whether a step may be kept at all. On unless a test turns it off: the differential that pins the kept steps to the ones the
- * engine makes without keeping any evaluates its reference with this off.
+ * Instrumentation, not behaviour (C702): whether a step may be kept at all. On unless a test turns it off: the differential that pins
+ * the kept steps to the ones the engine makes without keeping any evaluates its reference with this off. No public entry exports it,
+ * so no host can switch reuse off; a build reads it where a step could be kept (runtime.ts).
  */
 export const reuse = { on: true }
 

@@ -128,9 +128,9 @@ export interface RuntimeInput {
     baseLength?: number
   }>
   /**
-   * Infer a per-datum changeset by diffing replaced source arrays against the
-   * previous session evaluation. Defaults to true when `dataChanges` is absent;
-   * set false to force a full re-encode.
+   * Sessions only (`createChartSession`, and the React shells): infer a per-datum changeset by diffing replaced source arrays
+   * against the previous session evaluation. Defaults to true when `dataChanges` is absent; set false to force a full re-encode.
+   * `evaluateChart` keeps no previous rows to diff against and does not read it.
    */
   autoChanges?: boolean
   /**
@@ -216,14 +216,8 @@ export interface CompiledChart {
   title?: CompiledTitle
   /** Cartographic projections referenced by geo marks / the geoshape transform. */
   projections?: CompiledProjection[]
-  /** Signal values supplied by the host (not serialized). */
   /** Root-level trellis layout options (vega spec `layout`), when present. */
   layout?: Record<string, unknown>
-  /**
-   * The view dimensions the spec leaves to its content: no size and no `width` / `height` signal. In Vega that dimension is
-   * 0 and the autosize pass grows it to what is drawn (a composition's laid-out groups, text hanging below an axis), so a
-   * host's container does not size it.
-   */
   /**
    * An expression of the spec asks `isTuple` of what may be an engine tuple: its evaluations register the tuples they make (util
    * `withTuples`). `'facet'`: it only asks of Vega-Lite's `facet` signal, so an evaluation registers them only when the value it is
@@ -235,6 +229,11 @@ export interface CompiledChart {
    * record which tuple each copy of a row stands for (util `withTupleOrigins`), so the comparison is vega's tuple identity.
    */
   comparesTuples?: true
+  /**
+   * The view dimensions the spec leaves to its content: no size and no `width` / `height` signal. In Vega that dimension is
+   * 0 and the autosize pass grows it to what is drawn (a composition's laid-out groups, text hanging below an axis), so a
+   * host's container does not size it.
+   */
   contentSized?: ReadonlyArray<'width' | 'height'>
 }
 
@@ -381,9 +380,17 @@ export type ScaleRange =
   | { signal: string }
   | unknown[]
 
+/** A scale type vega registers (vega-scale `isValidScaleType`); `compileChart` refuses any other, as vega-parser does. */
+export type ScaleType =
+  | 'identity' | 'linear' | 'log' | 'pow' | 'sqrt' | 'symlog' | 'time' | 'utc'
+  | 'sequential' | 'sequential-linear' | 'sequential-log' | 'sequential-pow' | 'sequential-sqrt' | 'sequential-symlog'
+  | 'diverging-linear' | 'diverging-log' | 'diverging-pow' | 'diverging-sqrt' | 'diverging-symlog'
+  | 'quantile' | 'quantize' | 'threshold' | 'ordinal' | 'band' | 'point' | 'bin-ordinal'
+
 export interface CompiledScale {
   name: string
-  type: 'linear' | 'log' | 'pow' | 'sqrt' | 'symlog' | 'time' | 'utc' | 'band' | 'point' | 'ordinal' | 'quantize' | 'quantile' | 'threshold' | 'sequential' | 'bin-ordinal' | 'identity'
+  /** Absent: vega's default, linear. */
+  type: ScaleType
   domain: ScaleDomain
   range: ScaleRange
   zero?: boolean
@@ -743,7 +750,7 @@ export interface SceneGroup extends SceneItem {
   unbounded?: boolean
   /** Pre-computed rounded-rect path `d` for clip-path defs (when cornerRadius > 0). */
   clipPathD?: string
-  /** @internal The mark's source dataset. Written when the group is built; nothing reads it (groups are matched by compiled-mark identity). */
+  /** @internal The mark's source dataset, written when the group is built: the hit index reads it to tell a data mark's runs of items from a guide's. */
   __source?: string
   /**
    * @internal The fields whose values identify items across evaluations (no renderer reads them; `@aster-charts/core/transition`
