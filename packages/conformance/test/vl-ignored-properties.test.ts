@@ -43,6 +43,8 @@ for (const [k, op] of [['hconcat', { hconcat: [pt, pt] }], ['vconcat', { vconcat
 for (const [k, wrap] of [['facet operator', (h: unknown) => ({ data, facet: { field: 'g', type: 'nominal', header: h }, spec: pt })], ['encoding facet', (h: unknown) => ({ data, ...pt, encoding: { ...pt.encoding, facet: { field: 'g', type: 'nominal', header: h } } })]] as const) {
   pair(`wrapped ${k}: header labels false`, (w) => wrap({ labelColor: 'red', ...(w ? { labels: false } : {}) }))
 }
+// a facet field def's bounds
+for (const ch of ['row', 'column', 'facet'] as const) pair(`encoding ${ch}: bounds on the field def`, (w) => ({ data, ...pt, encoding: { ...pt.encoding, [ch]: { field: 'g', type: 'nominal', ...(w ? { bounds: 'flush' } : {}) } } }))
 // a header on a channel that is not a facet channel
 for (const ch of HEADER_IGNORED_ON) {
   const mark = ['theta', 'theta2', 'radius', 'radius2'].includes(ch) ? 'arc' : ch === 'url' ? 'image' : ch.startsWith('lon') || ch.startsWith('lat') ? 'point' : 'point'
