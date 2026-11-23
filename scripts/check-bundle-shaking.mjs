@@ -476,9 +476,9 @@ const PATTERNS = [
     why: "<Chart> with nothing imported: a plain spec imports no add-on; pie, a projection and csv text load theirs on demand, from chunks the entry does not contain, and render what the static path renders",
     split: true,
     dom: true,
-    imports: `import * as React from 'react'\nimport { flushSync } from 'react-dom'\nimport { createRoot } from 'react-dom/client'\nimport { Chart } from '@aster-charts/react'\nimport { renderSpec, geoRegistry, transformRegistry, dataFormatRegistry } from '@aster-charts/core'`,
+    imports: `import * as React from 'react'\nimport { flushSync } from 'react-dom'\nimport { createRoot } from 'react-dom/client'\nimport { Chart } from '@aster-charts/react'\nimport { renderSpec } from '@aster-charts/core'\nimport { isAddonLoaded } from '@aster-charts/core/addons'`,
     body: `
-      const registered = () => ({ geo: geoRegistry.buildProjection !== null, transforms: transformRegistry.size > 0, load: dataFormatRegistry.has('csv') })
+      const registered = () => ({ geo: isAddonLoaded('geo'), transforms: isAddonLoaded('transforms'), load: isAddonLoaded('load') })
       const mount = (spec) => {
         const host = document.createElement('div'); document.body.appendChild(host)
         flushSync(() => createRoot(host).render(React.createElement(React.Suspense, { fallback: React.createElement('i', { id: 'fb' }) }, React.createElement(Chart, { spec, width: 300, height: 200, a11y: false }))))

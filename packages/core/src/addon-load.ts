@@ -699,4 +699,3 @@ export async function loadSpecData<T extends VgSpec>(spec: T, opts: LoadOptions 
 }
 
 export { readData, type DataFormatSpec, coerceRows } from './data-format.js'
-export { dataFormatRegistry } from './registry.js'

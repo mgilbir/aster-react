@@ -237,7 +237,8 @@ void [exported, fromLite, pngLiteEl, direct, PNG_MAX_PIXELS]
 import assert from 'node:assert'
 import { createElement } from 'react'
 import { renderToString, renderToReadableStream } from 'react-dom/server'
-import { renderSpec, compileChart, evaluateChart, transformRegistry } from '@aster-charts/core'
+import { renderSpec, compileChart, evaluateChart } from '@aster-charts/core'
+import { isAddonLoaded } from '@aster-charts/core/addons'
 import { createChartSession, patchSceneDom } from '@aster-charts/core/dom'
 import { renderSceneToCanvas } from '@aster-charts/core/canvas'
 import { buildHitIndex } from '@aster-charts/core/hit'
@@ -306,14 +307,14 @@ assert.ok(Object.isFrozen(interaction) && typeof interaction.buildHitIndex === '
 
 // The packed packages load the add-ons a spec needs by themselves (nothing above registered the transforms add-on): a streaming
 // server render waits for the dynamic import, in Node's own ESM loader, from the installed tarball, and sends the chart.
-assert.equal(transformRegistry.size, 0, 'no add-on is registered before the auto-load')
+assert.equal(isAddonLoaded('transforms'), false, 'no add-on is registered before the auto-load')
 const pie = { width: 120, height: 120, padding: 0, data: [{ name: 't', values: [{ v: 1 }, { v: 2 }, { v: 3 }], transform: [{ type: 'pie', field: 'v' }] }],
   marks: [{ type: 'arc', from: { data: 't' }, encode: { update: { x: { value: 60 }, y: { value: 60 }, outerRadius: { value: 50 }, startAngle: { field: 'startAngle' }, endAngle: { field: 'endAngle' }, fill: { value: 'tomato' } } } }] }
 const streamed = await renderToReadableStream(createElement(Chart, { spec: pie, width: 120, height: 120, a11y: false }))
 await streamed.allReady
 const pieHtml = await new Response(streamed).text()
 assert.ok(pieHtml.includes('<svg') && pieHtml.includes('mark-arc'), '<Chart> loaded the transforms add-on by itself and rendered the pie')
-assert.ok(transformRegistry.size > 0, 'and the add-on is registered now')
+assert.ok(isAddonLoaded('transforms'), 'and the add-on is registered now')
 
 const worker = handleChartWorkerRequest({ id: 1, spec: vega })
 assert.ok(worker.svg && worker.svg.includes('<svg'), 'worker request handler')
