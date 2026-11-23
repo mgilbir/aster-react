@@ -22,7 +22,7 @@ type Params = Record<string, unknown>
 type Read = (d: unknown) => unknown
 
 /** Rows to write onto: `rows` themselves (in a new array) when owned, copies otherwise. */
-const writableRows = (rows: readonly Row[], owned: boolean, what: string): Row[] => (owned ? rows.slice() : copiedRows(rows, what))
+const writableRows = (rows: readonly Row[], owned: boolean, what: string): Row[] => (owned ? rows.slice() : copiedRows(rows, what, true))
 
 // ---------------------------------------------------------------------------
 // collect, sample

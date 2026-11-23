@@ -6,7 +6,7 @@
  * ones (geopoint, geopath, geojson, linkpath). Loaded by the `@aster-charts/core/transforms` addon; the core bundle keeps only
  * the transforms a plain chart uses. Shared internals come from transform.ts.
  */
-import { error, extent as vegaExtent, ownGet } from './util.js'
+import { error, extent as vegaExtent, ownGet, copyTupleWith } from './util.js'
 import { orderOf } from './tuple-order.js'
 import { fieldOf } from './transform-agg.js'
 import { allot, allotUpTo, copiedRows, meterTick, sortMetered } from './limits.js'
@@ -147,7 +147,7 @@ function voronoiRows(rows: Row[], t: Record<string, unknown>, ctx: TransformCont
   const diagram = voronoi(points, bounds)
   return rows.map((row, i) => {
     meterTick('voronoi')
-    return { ...row, [as]: diagram.path(i) }
+    return copyTupleWith(row, { [as]: diagram.path(i) })
   })
 }
 
@@ -303,7 +303,7 @@ function pieRows(rows: Row[], t: Record<string, unknown>): Row[] {
   if (t.sort) {
     sortMetered(index, (x, y) => values[x]! - values[y]!, 'pie')
   }
-  const out = copiedRows(rows, 'pie')
+  const out = copiedRows(rows, 'pie', true)
   for (let i = 0; i < n; ++i) {
     const v = values[index[i]!]!
     out[index[i]!]![startAngleField] = a
@@ -436,7 +436,7 @@ function dotbinRows(rows: Row[], t: Record<string, unknown>, ctx: TransformConte
       g.push(i)
     }
   }
-  const out = copiedRows(rows, 'dotbin')
+  const out = copiedRows(rows, 'dotbin', true)
   let min = Infinity
   let max = -Infinity
   for (const g of groups) {
@@ -477,7 +477,7 @@ function geopointRows(rows: Row[], t: Record<string, unknown>, ctx: TransformCon
   return rows.map((r, i) => {
     if ((i & 1023) === 1023) meterTick('geopoint', 1024)
     const xy = projection.project(lon(r) as number, lat(r) as number)
-    return xy ? { ...r, [as[0]!]: xy[0], [as[1]!]: xy[1] } : { ...r, [as[0]!]: undefined, [as[1]!]: undefined }
+    return copyTupleWith(r, xy ? { [as[0]!]: xy[0], [as[1]!]: xy[1] } : { [as[0]!]: undefined, [as[1]!]: undefined })
   })
 }
 
@@ -502,7 +502,7 @@ function geopathRows(rows: Row[], t: Record<string, unknown>, ctx: TransformCont
   const radius = t.pointRadius != null ? (geoPointRadius(t.pointRadius) as PointRadius) : undefined
   return rows.map((r, i) => {
     if ((i & 1023) === 1023) meterTick('geopath', 1024)
-    return { ...r, [as]: path.draw(field(r), radius) }
+    return copyTupleWith(r, { [as]: path.draw(field(r), radius) })
   })
 }
 
@@ -613,7 +613,7 @@ function linkpathRows(rows: Row[], t: Record<string, unknown>, ctx: TransformCon
   if (!path) throw new Error(`[aster] linkpath unsupported type: ${shape}${t.orient ? '-' + orient : ''}`)
   return rows.map((r, i) => {
     if ((i & 1023) === 1023) meterTick('linkpath', 1024)
-    return { ...r, [as]: path(sx(r) as number, sy(r) as number, tx(r) as number, ty(r) as number) }
+    return copyTupleWith(r, { [as]: path(sx(r) as number, sy(r) as number, tx(r) as number, ty(r) as number) })
   })
 }
 

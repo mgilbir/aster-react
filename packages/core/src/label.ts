@@ -628,7 +628,7 @@ function labelRows(rows: Row[], t: Rec, ctx: TransformContext): Row[] {
   })
 
   // a mark's items are written in place (they are the tuples); a dataset's rows are copied
-  const out = ctx.inPlace ? rows : copiedRows(rows, 'label')
+  const out = ctx.inPlace ? rows : copiedRows(rows, 'label', true)
   const copyOf = ctx.inPlace ? null : new Map<Rec, Row>(rows.map((r, i) => [r, out[i]!]))
   for (const label of labels) {
     const target = copyOf === null ? label.item : copyOf.get(label.item)!

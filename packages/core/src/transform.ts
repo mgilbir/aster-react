@@ -10,7 +10,7 @@ import type { CompiledTransform, SortSpec } from './types.js'
 import type { IdCounter } from './identifier-ids.js'
 import { exprRows, type ExpressionRuntime } from './expression.js'
 import { type ContourFeature, SHAPE_BOUNDS, geoRegistry, requireGeo, requireTransform } from './registry.js'
-import { isArray } from './util.js'
+import { isArray, copyTuple } from './util.js'
 import { densityGrid, placeContours } from './raster-grid.js'
 import { densitySettings } from './raster-params.js'
 import { PARAM_RULES, checkParams } from './param-rules.js'
@@ -136,7 +136,7 @@ export function applyTransformsToSharedRows(rows: Row[], transforms: CompiledTra
     reading++
   }
   let out = reading > 0 ? applyTransforms(rows, transforms.slice(0, reading), ctx, sourceName) : rows
-  if (shared) out = copiedRows(out, 'dataset rows')
+  if (shared) out = copiedRows(out, 'dataset rows', true)
   // (the rows are now the pipeline's own: copies of the shared ones, or made by an aggregate)
   return reading < transforms.length ? applyTransforms(out, transforms.slice(reading), ctx, sourceName, true) : out
 }
@@ -222,7 +222,7 @@ function applyTransform(rows: Row[], t0: CompiledTransform, ctx: TransformContex
       // a value that is no object is no prototype and is dropped -- as it is in every other transform that names its output, never
       // Object.prototype)
       return rows.map((r) => {
-        const o = { ...r }
+        const o = copyTuple(r)
         o[as] = expr(r)
         return o
       })
@@ -279,7 +279,7 @@ function applyTransform(rows: Row[], t0: CompiledTransform, ctx: TransformContex
         if ((i & 1023) === 1023) meterTick('geoshape', 1024)
         const geo = read(r)
         const shape = geoRegistry.projectedShape!(projection ?? null, geo, pointRadius)
-        const out = owned ? r : { ...r }
+        const out = owned ? r : copyTuple(r)
         // (a shape that draws nothing is the empty path: the item is still drawn, with no `d`, and bounds to nothing)
         out[as as string] = shape.path ?? ''
         if (as === 'shape') SHAPE_BOUNDS.set(out, shape.bounds)
