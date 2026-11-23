@@ -236,11 +236,13 @@ produced it, are in [docs/TESTING.md](docs/TESTING.md#reference-results) and
 
 ## Build from source
 
-For working on this repository (contributors need Node 22.13 or newer, which pnpm 11 requires; pnpm is pinned by
-`packageManager`). [CONTRIBUTING.md](CONTRIBUTING.md) has the rest.
+For working on this repository (contributors need Node `^22.22.2`, `^24.15` or `>=26`, the range the jsdom dev dependency supports; pnpm is pinned by
+`packageManager` and installed with `npm i -g pnpm@<that version>` where corepack is missing; Playwright Chromium is needed for the browser gates).
+[CONTRIBUTING.md](CONTRIBUTING.md) has the rest, including what `pnpm check` runs and how long it takes.
 
 ```bash
 pnpm install
+pnpm --filter @aster-charts/conformance exec playwright install --with-deps chromium
 pnpm build
 pnpm check          # every gate; `pnpm check -- --list` shows them, `-- --skip browser` skips the Chromium ones
 ```

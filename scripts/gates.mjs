@@ -11,22 +11,32 @@
  * Usage:
  *   pnpm check                          run every gate, report all failures
  *   pnpm check -- --list                print the gates and exit
- *   pnpm check -- --only conformance,a11y-parity
+ *   pnpm check -- --only conformance,a11y-parity   (names or tags, e.g. --only browser)
  *   pnpm check -- --skip browser        skip gates tagged `browser` (needs no Chromium)
  *   pnpm check -- --fail-fast           stop at the first failure
  *   pnpm check -- --help                print this text
  *
- * Exit codes: 0 every selected gate passed (or --list/--help), 1 a blocking gate failed, 2 bad usage (an unknown option or gate name).
+ * Each gate has a deadline (`timeoutMs`, else DEFAULT_TIMEOUT_MS): a gate that exceeds it is killed with its process tree, reported as
+ * `FAIL <gate> (timeout)`, and the run goes on. `--only` and `--skip` both take gate names and tags.
+ *
+ * Exit codes: 0 every selected gate passed (or --list/--help), 1 a blocking gate failed or timed out, 2 bad usage (an unknown option or gate name), 130 interrupted.
  *
  * Browser gates need Playwright Chromium:
  *   pnpm --filter @aster-charts/conformance exec playwright install --with-deps chromium
  * Skipping them locally is allowed; CI never skips anything.
  */
-import { spawnSync } from 'node:child_process'
+import { spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { cli } from './lib/cli.mjs'
 
-/** @type {{ name: string, args: string[], tags?: string[], blocking?: boolean, why: string }[]} */
+/**
+ * Every gate has a deadline (a Playwright page that never settles must not hold a run, or CI's six-hour default, hostage): the
+ * gate's own `timeoutMs`, else this one. A gate that runs out of time is killed with its whole process tree and reported as
+ * `FAIL <gate> (timeout)`; the other gates still run. The numbers are about 3x the slowest run seen on the 4-vCPU CI runner.
+ */
+export const DEFAULT_TIMEOUT_MS = 20 * 60_000
+
+/** @type {{ name: string, args: string[], tags?: string[], blocking?: boolean, timeoutMs?: number, command?: string, why: string }[]} */
 export const GATES = [
   { name: 'build', args: ['build'], why: 'every package compiles to dist' },
   { name: 'deps', args: ['check:deps'], why: 'runtime and built dist import none of vega/d3/topojson' },
@@ -105,7 +115,91 @@ function csv(argv, flag) {
   return v.split(',').map((s) => s.trim()).filter(Boolean)
 }
 
-function main() {
+/** The deadline of a gate in milliseconds. */
+export const timeoutOf = (g) => g.timeoutMs ?? DEFAULT_TIMEOUT_MS
+
+/** How long a gate gets to exit after SIGTERM before its whole process group is killed outright. */
+const KILL_GRACE_MS = 5_000
+
+/**
+ * Run one gate to completion or to its deadline. The gate runs in its own process group so the deadline (and an interrupt of this
+ * runner) reaches pnpm's children too: Chromium, vitest workers.
+ * @returns {Promise<{ ok: boolean, status: number | null, timedOut: boolean, interrupted?: boolean }>}
+ */
+export function runGate(g, { stdio = 'inherit', env = process.env } = {}) {
+  return new Promise((resolve) => {
+    const child = spawn(g.command ?? 'pnpm', g.args, { stdio, env, detached: true })
+    let timedOut = false
+    let interrupted = false
+    const killGroup = (signal) => {
+      try { process.kill(-child.pid, signal) } catch { /* the group is already gone */ }
+    }
+    const onSignal = (signal) => { interrupted = true; killGroup(signal) }
+    const forward = ['SIGINT', 'SIGTERM']
+    for (const sig of forward) process.on(sig, onSignal)
+    let hardKill
+    const timer = setTimeout(() => {
+      timedOut = true
+      killGroup('SIGTERM')
+      hardKill = setTimeout(() => killGroup('SIGKILL'), KILL_GRACE_MS)
+    }, timeoutOf(g))
+    const done = (status) => {
+      clearTimeout(timer)
+      clearTimeout(hardKill)
+      for (const sig of forward) process.off(sig, onSignal)
+      // Whatever the gate left behind in its group (a browser the gate did not close) goes with it.
+      killGroup('SIGKILL')
+      resolve({ ok: status === 0 && !timedOut && !interrupted, status, timedOut, interrupted })
+    }
+    child.on('error', () => done(null))
+    child.on('close', (status) => done(status))
+  })
+}
+
+/**
+ * Run `selected` in order and print the summary. Returns the exit code: 0 all passed, 1 a blocking gate failed or timed out.
+ * @param {typeof GATES} selected
+ */
+export async function runGates(selected, { failFast = false, total = selected.length, inCI = false, run = runGate } = {}) {
+  const results = []
+  for (const g of selected) {
+    const t0 = Date.now()
+    if (inCI) console.log(`::group::${g.name}`)
+    console.log(`\n[gates] ${g.name}: pnpm ${g.args.join(' ')}  (deadline ${Math.round(timeoutOf(g) / 60_000)} min)`)
+    const r = await run(g)
+    const secs = ((Date.now() - t0) / 1000).toFixed(0)
+    if (inCI) console.log('::endgroup::')
+    results.push({ name: g.name, ok: r.ok, timedOut: r.timedOut, blocking: g.blocking !== false, secs })
+    if (r.timedOut) console.error(`[gates] ${g.name} exceeded its deadline of ${timeoutOf(g) / 1000} s and was killed`)
+    if (!r.ok && inCI) console.log(`::${g.blocking === false ? 'warning' : 'error'}::gate ${g.name} failed${r.timedOut ? ' (timeout)' : ''}`)
+    if (r.interrupted) { console.error('[gates] interrupted'); return 130 }
+    if (!r.ok && g.blocking !== false && failFast) break
+  }
+
+  console.log('\n[gates] summary')
+  for (const r of results) {
+    const tag = r.ok ? 'PASS' : r.blocking ? 'FAIL' : 'WARN'
+    console.log(`  ${tag}  ${r.name.padEnd(18)} ${r.secs}s${r.timedOut ? ' (timeout)' : ''}`)
+  }
+  const failed = results.filter((r) => !r.ok && r.blocking)
+  if (selected.length < total) {
+    console.log(`[gates] NOTE: ${total - selected.length} gate(s) not run; this is not the full CI list`)
+  }
+  if (failed.length) {
+    console.error(`[gates] ${failed.length} blocking gate(s) failed: ${failed.map((r) => r.name + (r.timedOut ? ' (timeout)' : '')).join(', ')}`)
+    return 1
+  }
+  console.log('[gates] all selected gates passed')
+  return 0
+}
+
+/** `--only` and `--skip` both take gate names and tags (`--only browser` is every gate tagged `browser`). */
+export function selectGates(gates, only, skip = []) {
+  const matches = (g, list) => list.includes(g.name) || (g.tags ?? []).some((t) => list.includes(t))
+  return gates.filter((g) => (!only || matches(g, only)) && !matches(g, skip))
+}
+
+async function main() {
   cli({ url: import.meta.url, flags: { list: 'bool', only: 'value', skip: 'value', 'fail-fast': 'bool' } })
   const argv = process.argv.slice(2)
   if (argv.includes('--list')) {
@@ -118,52 +212,22 @@ function main() {
   const only = csv(argv, '--only')
   const skip = csv(argv, '--skip') ?? []
   const failFast = argv.includes('--fail-fast')
-  const known = new Set(GATES.flatMap((g) => [g.name, ...(g.tags ?? [])]))
+  const names = new Set(GATES.map((g) => g.name))
+  const tags = new Set(GATES.flatMap((g) => g.tags ?? []))
   for (const n of [...(only ?? []), ...skip]) {
-    if (!known.has(n)) {
+    if (!names.has(n) && !tags.has(n)) {
       console.error(`[gates] unknown gate or tag "${n}"; try --list`)
       process.exit(2)
     }
   }
 
-  const selected = GATES.filter((g) => {
-    if (only && !only.includes(g.name)) return false
-    return !(skip.includes(g.name) || (g.tags ?? []).some((t) => skip.includes(t)))
-  })
+  const selected = selectGates(GATES, only, skip)
   if (selected.length === 0) {
     console.error('[gates] no gates selected')
     process.exit(2)
   }
 
-  const inCI = process.env.GITHUB_ACTIONS === 'true'
-  const results = []
-  for (const g of selected) {
-    const t0 = Date.now()
-    if (inCI) console.log(`::group::${g.name}`)
-    console.log(`\n[gates] ${g.name}: pnpm ${g.args.join(' ')}`)
-    const r = spawnSync('pnpm', g.args, { stdio: 'inherit' })
-    const secs = ((Date.now() - t0) / 1000).toFixed(0)
-    const ok = r.status === 0
-    if (inCI) console.log('::endgroup::')
-    results.push({ name: g.name, ok, blocking: g.blocking !== false, secs })
-    if (!ok && inCI) console.log(`::${g.blocking === false ? 'warning' : 'error'}::gate ${g.name} failed`)
-    if (!ok && g.blocking !== false && failFast) break
-  }
-
-  console.log('\n[gates] summary')
-  for (const r of results) {
-    const tag = r.ok ? 'PASS' : r.blocking ? 'FAIL' : 'WARN'
-    console.log(`  ${tag}  ${r.name.padEnd(18)} ${r.secs}s`)
-  }
-  const failed = results.filter((r) => !r.ok && r.blocking)
-  if (selected.length < GATES.length) {
-    console.log(`[gates] NOTE: ${GATES.length - selected.length} gate(s) not run; this is not the full CI list`)
-  }
-  if (failed.length) {
-    console.error(`[gates] ${failed.length} blocking gate(s) failed: ${failed.map((r) => r.name).join(', ')}`)
-    process.exit(1)
-  }
-  console.log('[gates] all selected gates passed')
+  process.exitCode = await runGates(selected, { failFast, total: GATES.length, inCI: process.env.GITHUB_ACTIONS === 'true' })
 }
 
-if (process.argv[1] === fileURLToPath(import.meta.url)) main()
+if (process.argv[1] === fileURLToPath(import.meta.url)) await main()

@@ -1,9 +1,9 @@
 name: CI
 
+# CI runs on `main` only: every push to main is gated, and a branch or pull request starts nothing (the gates are run locally
+# with `pnpm check` before merging; scripts/gates.test.mjs pins this trigger). Do not add `pull_request` here.
 on:
   push:
-    branches: [main]
-  pull_request:
     branches: [main]
 
 # Read-only: the jobs build and test, they never push, comment or publish.
@@ -13,6 +13,7 @@ permissions:
 jobs:
   ci:
     runs-on: ubuntu-24.04
+    timeout-minutes: 120
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -53,11 +54,14 @@ jobs:
   #    the test run switches to the matrix Node (vitest is `pnpm test`, minus pnpm);
   #  - the jsdom devDependency (30.x) needs Node ^22.22.2 || ^24.15 || >=26 (it fails
   #    to load on 20), so on Node 20 the jsdom-based suites cannot run and only the
-  #    engine-sensitive, jsdom-free suites do: the oracle differentials and the
-  #    ADR-0001 oracle vectors. 22 and the newest major run everything.
+  #    engine-sensitive, jsdom-free suites do: the oracle differentials, the
+  #    ADR-0001 oracle vectors, and scripts/dist-node-smoke.test.mjs, which executes the built dist of
+  #    core, vl and react (server-rendering <Chart> and <SvgChart>) on that Node: it is what backs
+  #    `engines.node >= 20`. 22 and the newest major run everything.
   unit:
     name: unit (node ${{ matrix.node }})
     runs-on: ubuntu-24.04
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
@@ -100,4 +104,4 @@ jobs:
 
       - name: Engine-sensitive unit tests (Node 20, no jsdom)
         if: matrix.node == 20
-        run: node node_modules/vitest/vitest.mjs run scripts/differential- oracle-vectors.test
+        run: node node_modules/vitest/vitest.mjs run scripts/differential- oracle-vectors.test dist-node-smoke.test

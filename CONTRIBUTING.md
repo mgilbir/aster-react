@@ -1,8 +1,23 @@
 # Contributing
 
-Prerequisites: Node 22.13 or newer (pnpm 11 does not run on older Node; the published packages support Node 20, which CI
-covers with the engine-sensitive tests only), pnpm as pinned by `packageManager` in `package.json` (corepack or the
-pnpm action installs it), `pnpm install`, and Playwright Chromium for the browser gates (command below).
+Prerequisites:
+
+- **Node `^22.22.2 || ^24.15.0 || >=26`** (the root `engines`; `.nvmrc` names the version the maintainers use). This is the range the
+  `jsdom` dev dependency supports, and pnpm 11 needs at least 22.13, so an older 22.x, 23.x, 24.0 to 24.14 or 25.x can install but not run
+  `pnpm test`. The published packages support Node 20 (their `engines`); CI executes their built `dist` and React on it
+  (`scripts/dist-node-smoke.test.mjs`), but you do not develop on it.
+- **pnpm as pinned by `packageManager` in `package.json`**. Node 25 and later no longer bundle corepack: install it with
+  `npm install --global pnpm@<the pinned version>` (or `corepack enable` where corepack exists, or the `pnpm/action-setup` action in CI).
+- `pnpm install`, then **`pnpm build`**: the tests and several gates read the built `dist` of the packages, so `pnpm test` on a tree that
+  was not built fails.
+- **Playwright Chromium** for the browser gates (command below). `pnpm install` and `playwright install --with-deps` need the network; the
+  gates themselves run offline (`verify-publish` installs the packed tarballs into a scratch project from the local files).
+
+`pnpm check` runs 26 gates in sequence, and a complete run takes on the order of an hour on a laptop: a full build (including the demo's
+Vite build), the whole vitest suite, the time-zone matrix, packaging, the Vega and Vega-Lite oracle gates, a 10,000-point benchmark with
+floors, the bundle and size checks, and seven Chromium gates. Each gate has its own deadline (`timeoutMs` in `scripts/gates.mjs`); one that
+hangs is killed and reported as `FAIL <gate> (timeout)`. While iterating, run one gate (`pnpm check -- --only conformance`) or a tag
+(`--only browser`, `--skip browser`) and the whole list before opening the PR.
 
 Aster Charts is verified against the real Vega renderer. Before opening a PR,
 run the full gate list from the repository root:
@@ -12,7 +27,9 @@ pnpm check
 ```
 
 The gate list lives in one place, [`scripts/gates.mjs`](scripts/gates.mjs), and
-CI runs exactly `pnpm check`, so a green local run is a green CI run. Do not copy
+CI runs `pnpm check` on every push to `main` (and nothing on a branch or pull request: `scripts/gates.test.mjs` pins the trigger), so run it
+before you merge. A green local run is a green `ci` job, but `ci.yml` has a second job a local run does not reproduce: `unit`, the
+unit tests on Node 20 (the engine-sensitive suites and the dist smoke test), 22 and the newest major. Do not copy
 the list anywhere else: `scripts/gates.test.mjs` fails if `ci.yml` runs anything beyond `pnpm check`, the toolchain setup and the Node-matrix unit tests, or if a
 code block of this file or docs/TESTING.md has a line that is a gate's command; `scripts/docs-single-source.test.mjs` fails if a
 paragraph of any other doc (outside docs/TESTING.md and docs/RUNBOOK.md, which tabulate results) names four or more gates. `pnpm check -- --list`
