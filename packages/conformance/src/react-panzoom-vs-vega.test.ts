@@ -6,13 +6,11 @@
  * plain interval brush, compiled by vega-lite 6.4.3 and run by vega 6.3.1 in this process, fed the same native events. Aster
  * draws the same chart WITHOUT the param, with its own pan / zoom / brush props, fed the same events. After every gesture the
  * visible domain (vega's scale domain, Aster's `onViewChange` view) and the brushed interval must agree, for every continuous
- * scale type: each pans and zooms in its OWN space (log, pow, symlog in their transformed space, time and utc in
- * milliseconds), and one line-mode wheel notch zooms as far as sixteen pixel-mode units.
+ * scale type, in the space Vega-Lite moves it in (log, pow, symlog in their transformed space; linear, sqrt, time and utc
+ * linearly, time and utc in milliseconds), and one line-mode wheel notch zooms as far as sixteen pixel-mode units, with
+ * or without a modifier key.
  *
- * Deviations measured here on purpose: vega-lite pans and zooms `sqrt` linearly (it maps only `pow` to `panPow`), which moves
- * the data under the pointer; Aster treats `sqrt` as the power scale it is, so its oracle is the same chart with
- * `type: 'pow', exponent: 0.5`. Aster bounds the zoom (never past the unzoomed extent, at most `maxZoom`); the gestures here
- * stay inside both bounds.
+ * Aster bounds the zoom (never past the unzoomed extent, at most `maxZoom`); the gestures here stay inside both bounds.
  */
 import { afterEach, describe, expect, it } from 'vitest'
 import * as vega from 'vega'
@@ -45,8 +43,8 @@ const H = 200
 const DAY = 86_400_000
 const T0 = Date.UTC(2024, 0, 1)
 
-/** One positional field per scale kind: its rows, and its Vega-Lite scale for Aster and for the oracle. */
-interface Kind { name: string; type: 'quantitative' | 'temporal'; values: number[]; scale: Spec; oracle?: Spec }
+/** One positional field per scale kind: its rows and its Vega-Lite scale. */
+interface Kind { name: string; type: 'quantitative' | 'temporal'; values: number[]; scale: Spec }
 const KINDS: Kind[] = [
   { name: 'linear', type: 'quantitative', values: [1, 4, 9, 20], scale: { type: 'linear', nice: false } },
   { name: 'log', type: 'quantitative', values: [1, 30, 400, 1000], scale: { type: 'log', nice: false } },
@@ -54,7 +52,7 @@ const KINDS: Kind[] = [
   { name: 'log base 2', type: 'quantitative', values: [2, 16, 64, 512], scale: { type: 'log', base: 2, nice: false } },
   { name: 'pow 2', type: 'quantitative', values: [0, 3, 6, 10], scale: { type: 'pow', exponent: 2, nice: false } },
   { name: 'pow 3, signed', type: 'quantitative', values: [-8, -1, 2, 9], scale: { type: 'pow', exponent: 3, nice: false } },
-  { name: 'sqrt', type: 'quantitative', values: [0, 9, 49, 100], scale: { type: 'sqrt', nice: false }, oracle: { type: 'pow', exponent: 0.5, nice: false } },
+  { name: 'sqrt', type: 'quantitative', values: [0, 9, 49, 100], scale: { type: 'sqrt', nice: false } },
   { name: 'symlog', type: 'quantitative', values: [-100, -2, 5, 300], scale: { type: 'symlog', nice: false } },
   { name: 'symlog, constant 5', type: 'quantitative', values: [-50, 0, 20, 900], scale: { type: 'symlog', constant: 5, nice: false } },
   { name: 'time', type: 'temporal', values: [T0, T0 + 2 * DAY, T0 + 5 * DAY, T0 + 10 * DAY], scale: { type: 'time', nice: false } },
@@ -62,7 +60,7 @@ const KINDS: Kind[] = [
 ]
 
 /** The chart: `kind` on x, a log y (so both axes are non-linear in some runs) or a linear y. */
-function vlChart(kind: Kind, yKind: Kind, params: unknown[] | undefined, oracle: boolean): Spec {
+function vlChart(kind: Kind, yKind: Kind, params: unknown[] | undefined): Spec {
   const rows = kind.values.map((v, i) => ({ a: v, b: yKind.values[i] }))
   return vl.compile({
     width: W, height: H, padding: 0, autosize: { type: 'none' },
@@ -70,19 +68,20 @@ function vlChart(kind: Kind, yKind: Kind, params: unknown[] | undefined, oracle:
     ...(params ? { params } : {}),
     mark: 'point',
     encoding: {
-      x: { field: 'a', type: kind.type, scale: (oracle ? kind.oracle : undefined) ?? kind.scale },
-      y: { field: 'b', type: yKind.type, scale: (oracle ? yKind.oracle : undefined) ?? yKind.scale },
+      x: { field: 'a', type: kind.type, scale: kind.scale },
+      y: { field: 'b', type: yKind.type, scale: yKind.scale },
     },
   } as never).spec as unknown as Spec
 }
 
 /** One gesture, as native events. Coordinates are in the plot's pixels (the view has no padding and no offset). */
 type Gesture =
-  | { kind: 'wheel'; x: number; y: number; deltaY: number; deltaMode: 0 | 1 }
+  | { kind: 'wheel'; x: number; y: number; deltaY: number; deltaMode: 0 | 1; ctrlKey?: boolean }
   | { kind: 'drag'; from: [number, number]; to: [number, number] }
 
 const GESTURES: Gesture[][] = [
   [{ kind: 'wheel', x: 60, y: 50, deltaY: -120, deltaMode: 0 }],
+  [{ kind: 'wheel', x: 90, y: 40, deltaY: -60, deltaMode: 0, ctrlKey: true }, { kind: 'wheel', x: 120, y: 60, deltaY: 20, deltaMode: 0, ctrlKey: true }],
   [{ kind: 'wheel', x: 250, y: 150, deltaY: -3, deltaMode: 1 }, { kind: 'wheel', x: 40, y: 20, deltaY: 40, deltaMode: 0 }],
   [{ kind: 'wheel', x: 150, y: 100, deltaY: -200, deltaMode: 0 }, { kind: 'drag', from: [150, 100], to: [190, 70] }],
   [{ kind: 'wheel', x: 10, y: 190, deltaY: -2, deltaMode: 1 }, { kind: 'drag', from: [100, 50], to: [60, 120] }, { kind: 'wheel', x: 200, y: 30, deltaY: 30, deltaMode: 0 }],
@@ -102,7 +101,7 @@ async function vegaView(spec: Spec): Promise<{ view: VegaView; svg: Element }> {
 
 async function send(target: EventTarget, g: Gesture, drag: { down: EventTarget; move: EventTarget; up: EventTarget }): Promise<void> {
   if (g.kind === 'wheel') {
-    await act(async () => { target.dispatchEvent(new WheelEvent('wheel', { bubbles: true, cancelable: true, clientX: g.x, clientY: g.y, deltaY: g.deltaY, deltaMode: g.deltaMode })) })
+    await act(async () => { target.dispatchEvent(new WheelEvent('wheel', { bubbles: true, cancelable: true, clientX: g.x, clientY: g.y, deltaY: g.deltaY, deltaMode: g.deltaMode, ctrlKey: g.ctrlKey ?? false })) })
     await tick()
     return
   }
@@ -145,9 +144,9 @@ describe('pan and wheel zoom in every continuous scale type, as Vega-Lite bind: 
       it(`x ${kind.name}, y ${yKind.name}`, async () => {
         for (const [shellName, shell] of SHELLS) {
           for (const gestures of GESTURES) {
-            const { view, svg } = await vegaView(vlChart(kind, yKind, [{ name: 'grid', select: 'interval', bind: 'scales' }], true))
+            const { view, svg } = await vegaView(vlChart(kind, yKind, [{ name: 'grid', select: 'interval', bind: 'scales' }]))
             const views: Array<{ x?: Domain; y?: Domain } | null> = []
-            const el = mountAster(shell, { spec: vlChart(kind, yKind, undefined, false), panZoom: true, onViewChange: (v: never) => views.push(v) })
+            const el = mountAster(shell, { spec: vlChart(kind, yKind, undefined), panZoom: true, onViewChange: (v: never) => views.push(v) })
             for (const [i, g] of gestures.entries()) {
               await send(svg, g, { down: svg, move: window, up: window })
               await send(el, g, { down: el, move: el, up: el })
@@ -171,9 +170,9 @@ describe('an interval brush reports the data interval Vega-Lite selects, for eve
     it(`x ${kind.name}`, async () => {
       for (const [shellName, shell] of SHELLS) {
         for (const [from, to] of DRAGS) {
-          const { view, svg } = await vegaView(vlChart(kind, KINDS[1]!, [{ name: 'brush', select: 'interval' }], true))
+          const { view, svg } = await vegaView(vlChart(kind, KINDS[1]!, [{ name: 'brush', select: 'interval' }]))
           const selected: unknown[] = []
-          const el = mountAster(shell, { spec: vlChart(kind, KINDS[1]!, undefined, false), onSelect: (v: unknown) => selected.push(v) })
+          const el = mountAster(shell, { spec: vlChart(kind, KINDS[1]!, undefined), onSelect: (v: unknown) => selected.push(v) })
           await send(svg, { kind: 'drag', from, to }, { down: svg, move: window, up: window })
           await send(el, { kind: 'drag', from, to }, { down: el, move: el, up: el })
           const brush = view.signal('brush') as Record<string, unknown[]>
@@ -202,7 +201,8 @@ describe("the exported helpers pan and zoom as vega-util's pan* / zoom* function
   for (const e of [0.3, 2, 3]) {
     SCALES.push([`pow ${e}`, { type: 'pow', exponent: () => e }, (d, x) => u.panPow!(d, x, e), (d, a, k) => u.zoomPow!(d, a, k, e), () => { const a = between(-50, 50); return [a, a + between(1, 100)] }])
   }
-  SCALES.push(['sqrt', { type: 'sqrt', exponent: () => 0.5 }, (d, x) => u.panPow!(d, x, 0.5), (d, a, k) => u.zoomPow!(d, a, k, 0.5), () => { const a = between(0, 50); return [a, a + between(1, 100)] }])
+  // (Vega-Lite moves a sqrt scale with panLinear / zoomLinear)
+  SCALES.push(['sqrt', { type: 'sqrt', exponent: () => 0.5 }, (d, x) => u.panLinear!(d, x), (d, a, k) => u.zoomLinear!(d, a, k), () => { const a = between(0, 50); return [a, a + between(1, 100)] }])
   for (const c of [1, 0.5, 20]) {
     SCALES.push([`symlog ${c}`, { type: 'symlog', constant: () => c }, (d, x) => u.panSymlog!(d, x, c), (d, a, k) => u.zoomSymlog!(d, a, k, c), () => { const a = between(-500, 500); return [a, a + between(1, 1000)] }])
   }

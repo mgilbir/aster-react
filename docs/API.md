@@ -482,6 +482,12 @@ The pieces `renderSpec` and the session are made of are exported for hosts that 
   same instant for two Dates; plain arrays and objects entry by entry; any other object only itself); a row that is not an object
   is compared as a value, and `diffRows` does not diff a dataset holding one (it is replaced as a whole). `isGroupedTransform(type)`
   is `true` for `aggregate`, `joinaggregate`, `window` and `stack`.
+- Interactive scale moves, as Vega-Lite's `bind: "scales"` makes them: `scaleSpace(type, d0, exponent?, constant?)` is the space a
+  scale of `type` pans and zooms in, for a domain starting at `d0` (`{ lift, ground }`: the natural logarithm for `log`, mirrored
+  for a negative domain, the power for `pow`, `sign(x) * log1p(|x| / constant)` for `symlog`, linear for every other type, `sqrt`
+  included); `panIn(space, domain, delta)` and `zoomIn(space, domain, anchor, k)` are vega's `pan*` / `zoom*` in that space
+  (`delta` a fraction of the span, `k` a stretch around `anchor`, the middle when `null`). `tickStep(start, stop, count)` is
+  d3-array's: the step between ticks of `count` ticks over `[start, stop]`.
 - The registries the add-ons fill (the transforms, the geo hooks, the data-format readers) are internal and process-wide, not
   exported: whether an add-on is there is `isAddonLoaded(name)` from `@aster-charts/core/addons`.
 
@@ -1239,8 +1245,8 @@ domain of the horizontal and vertical continuous scales; a `SelectionInterval` h
 (default: scales named `x` and `y`); `positionalScales(spec)` derives it from a Vega spec as `<Chart>` does
 ([INTERACTION.md](INTERACTION.md#which-scales-x-and-y-mean)). The `info` argument is the `ChartInfo` of the evaluated scene
 (`getChartInfo`, or `ChartHandle.getChartInfo()`). `scale` is the live scale of the axis (`info.scales.get(names.x)`): its type
-decides the space the domain moves in (a `log` scale's logarithm, a `pow` / `sqrt` scale's power, `symlog`'s transform,
-linear otherwise, as Vega-Lite's `bind: "scales"`); without it the helpers are linear.
+decides the space the domain moves in, as Vega-Lite's `bind: "scales"` moves it (a `log` scale's logarithm, a `pow` scale's
+power, `symlog`'s transform, linear otherwise, `sqrt` included); without it the helpers are linear.
 
 - `domainOf(scale)` reads a continuous scale's `[min, max]` domain, or `null` when the scale has no invertible numeric domain.
 - `continuousAxes(info, names?)` lists which of `'x'` and `'y'` have such a domain, that is, which axes can pan and zoom.

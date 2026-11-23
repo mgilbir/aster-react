@@ -2074,11 +2074,10 @@ function isOwnControl(target: EventTarget | null): boolean {
 
 /**
  * How far a wheel event zooms, as vega's stretch `k` (< 1 zooms in): Vega-Lite's `pow(1.001, event.deltaY * pow(16,
- * event.deltaMode))`, so a line-mode notch counts as sixteen pixels and a page as 256 (C488). A wheel with the control key
- * held (a trackpad's pinch) counts ten times, as d3-zoom counts it.
+ * event.deltaMode))`, so a line-mode notch counts as sixteen pixels and a page as 256 (C488), with or without a modifier key.
  */
 function wheelStretch(evt: WheelEvent): number {
-  return Math.pow(1.001, evt.deltaY * Math.pow(16, evt.deltaMode) * (evt.ctrlKey ? 10 : 1))
+  return Math.pow(1.001, evt.deltaY * Math.pow(16, evt.deltaMode))
 }
 
 /** The bound inputs `<Chart>` renders under the chart, inside its element. */

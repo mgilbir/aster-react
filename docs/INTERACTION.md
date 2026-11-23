@@ -182,7 +182,7 @@ scope that never pulsed before; Aster fires it ([Deviations from Vega](ARCHITECT
 
 | Gesture | Needs | Behaviour |
 |---|---|---|
-| wheel / trackpad | `zoom` | zoom x and y around the cursor by Vega-Lite's stretch `1.001 ^ (deltaY * 16 ^ deltaMode)` (a line-mode notch is sixteen pixels, a page 256; with Ctrl held, a trackpad pinch, ten times as far, as d3-zoom); a wheel with no `deltaY` (a horizontal scroll) is left to the page |
+| wheel / trackpad | `zoom` | zoom x and y around the cursor by Vega-Lite's stretch `1.001 ^ (deltaY * 16 ^ deltaMode)` (a line-mode notch is sixteen pixels, a page 256; a modifier key changes nothing); a wheel with no `deltaY` (a horizontal scroll) is left to the page |
 | two pointers | `zoom` | pinch zoom around the midpoint, both axes |
 | drag | `pan` | pans (the data under the pointer when the drag started stays under it), unless a selection prop or callback is present: then a plain drag brushes, and shift-drag (or the middle button) pans |
 | `←` `→` `↑` `↓` | `pan` | pan by 8% of the visible span (25% with Shift) |
@@ -197,14 +197,13 @@ pointer, and a pan-only chart does not zoom with the wheel or `+`/`-`. Pointer g
 marks, tooltips, `signal.on` events and bound inputs underneath keep receiving their own events; a gesture on a form
 control or link is ignored.
 
-Every gesture works in the scale's **own space**, as Vega-Lite's `bind: "scales"` does (vega's `panLog`, `zoomPow`,
-`panSymlog`...): a `log` scale pans and zooms in its logarithm (a negative domain mirrored), `pow` and `sqrt` in their
-power, `symlog` in `sign(x) * log1p(|x| / constant)`, and `linear`, `time` and `utc` linearly (a time domain in
-milliseconds). So the data under the pointer stays under it on every scale type, and a `log` axis never pans to a
-negative value. The view of a `time` / `utc` scale, and a brushed interval on one, are numbers of milliseconds.
-(Vega-Lite pans and zooms a `sqrt` scale linearly, which moves the data under the pointer; Aster treats it as the power
-0.5 it is.) `packages/conformance/src/react-panzoom-vs-vega.test.ts` feeds the same events to a Vega-Lite chart in Vega
-and to `<Chart>` and compares the domains after each gesture, for every continuous scale type.
+Every gesture moves the domain in the space Vega-Lite's `bind: "scales"` moves it in (vega's `panLog`, `zoomPow`,
+`panSymlog`...): a `log` scale pans and zooms in its logarithm (a negative domain mirrored), `pow` in its power, `symlog` in
+`sign(x) * log1p(|x| / constant)`, and `linear`, `sqrt`, `time` and `utc` linearly (a time domain in milliseconds; Vega-Lite
+moves `sqrt` with `panLinear` / `zoomLinear` too). A `log` axis never pans to a negative value. The view of a `time` / `utc`
+scale, and a brushed interval on one, are numbers of milliseconds. `packages/conformance/src/react-panzoom-vs-vega.test.ts`
+feeds the same events to a Vega-Lite chart in Vega and to `<Chart>` and compares the domains after each gesture, for every
+continuous scale type.
 
 ```tsx
 import * as React from 'react'
