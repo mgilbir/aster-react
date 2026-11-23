@@ -5,13 +5,15 @@
  * `ci0` / `ci1`, `sampleNormal`, a signal that draws) with ones that do not (`bin`, `filter`, `aggregate`, `collect`), first as
  * vega runs them, and again after the chart is resized -- which vega's dataflow does not rerun, so the numbers must not move.
  *
+ * The same holds for a stream given the source in `initial` (`createChartStream`).
+ *
  * Aster fingerprints a site's inputs only when the site can draw (random-tape.ts `mayDrawRandom`); a site it wrongly left out would
  * consume the stream differently from vega, and show here as a different number in a later dataset.
  */
 import { describe, it, expect } from 'vitest'
 import * as vega from 'vega'
 import '@aster-charts/core/transforms'
-import { datasetsOfScene } from '@aster-charts/core'
+import { createChartStream, datasetsOfScene } from '@aster-charts/core'
 import { createChartSession } from '@aster-charts/core/dom'
 import { seededRandom, withOracleRandom } from '../src/gallery/seeded.js'
 
@@ -87,6 +89,17 @@ describe('an injected random source against vega drawing from the same stream', 
       const first = read({ width: 120, height: 80 })
       expect(first).toEqual(oracle.first)
       expect(read({ width: 240, height: 140 })).toEqual(oracle.first)
+
+      // a stream given the source in `initial` draws the same numbers, on its first flush and after a resize batch (C272: the
+      // stream dropped `initial.random`, so a stream component's `random` prop reached nothing)
+      const chartStream = createChartStream(structuredClone(spec), { initial: { random: seededRandom(SEED), width: 120, height: 80 } })
+      const fromStream = (): Record<string, unknown> =>
+        Object.fromEntries(names.map((n) => [n, clean(datasetsOfScene(chartStream.scene()!).get(n))]))
+      chartStream.flush()
+      expect(fromStream()).toEqual(oracle.first)
+      chartStream.push({ width: 240, height: 140 })
+      chartStream.flush()
+      expect(fromStream()).toEqual(oracle.first)
     }, 30_000)
   }
 })
