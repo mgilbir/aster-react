@@ -555,9 +555,11 @@ pending debounces (vega's `view.finalize()`). `setTimerClock(clock | null)` ([Ma
   datum, enclosing group). Without it, or when it finds nothing, the item is read from the DOM (the `mark-*`/`role-*`
   classes, and a `data-datum` stamp if `stampDatumAttrs` was called), where mark names are not available. `<Chart>` passes its own hit index.
 - Lower-level pieces of the same module. `bindSignalEvents(svg, chart, runtime, signalParams, signals, hooks?, options?)` is
-  what `bindSceneSignals` calls once it has read the compiled chart, expression runtime and signal parameters off the scene; use
-  it when you hold those yourself (`options` also takes `originX` / `originY`, the padding the view-space position is offset by,
-  and `scene`). `parseEventSelector(selector)` returns the event types a selector string, event-stream object or array listens to
+  what `bindSceneSignals` calls once it has read the compiled chart, expression runtime and signal parameters off the scene (they are
+  `scene.compiled`, `scene.runtime` and `scene.signalParams`, own properties of a scene evaluated in this thread: a scene that crossed a worker
+  or a JSON round trip has no runtime, and `bindSceneSignals` says so once through `hooks.logger`); use it when you hold those yourself, and
+  pass `{ limits: scene.__limits }` so the handlers run under the limits the scene was evaluated with (`options` also takes `originX` /
+  `originY`, the padding the view-space position is offset by, and `scene`). `parseEventSelector(selector)` returns the event types a selector string, event-stream object or array listens to
   (`parseEventSelector('mousemove, click')` is `['mousemove', 'click']`) and throws on a malformed one.
   `sceneIntersect(scene, box, options, group)` is vega-scenegraph's `intersect` over a scene (the body of the `intersect()`
   expression function: `box` is `[[x0, y0], [x1, y1]]`, `options` may hold `marktype` and `markname`); it is exported for the
