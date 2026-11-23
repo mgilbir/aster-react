@@ -24,7 +24,7 @@ describe('Vega-Lite registry is shared across package copies', () => {
 })
 
 describe('useSpecData does not cache a failure forever', () => {
-  const spec = { data: [{ name: 't', url: 'https://example.test/d.csv', format: { type: 'csv' } }], marks: [] } as never
+  const spec = { data: [{ name: 't', url: 'https://example.com/d.csv', format: { type: 'csv' } }], marks: [] } as never
 
   it('a rejected load is retried on the next request', async () => {
     let calls = 0

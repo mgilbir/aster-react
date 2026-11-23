@@ -12,7 +12,7 @@ forEachVariant(['svg'], (Chart, variant) => {
   const urlSpec = {
     $schema: 'https://vega.github.io/schema/vega/v6.json',
     width: 200, height: 100, padding: 0, autosize: 'none',
-    data: [{ name: 't', url: 'https://example.test/data.csv', format: { type: 'csv' } }],
+    data: [{ name: 't', url: 'https://example.com/data.csv', format: { type: 'csv' } }],
     scales: [
       { name: 'x', type: 'linear', domain: { data: 't', field: 'x' }, range: 'width' },
       { name: 'y', type: 'linear', domain: { data: 't', field: 'y' }, range: 'height' },
