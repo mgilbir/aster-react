@@ -1,4 +1,5 @@
 import type { ChartInfo, VgSpec } from '@aster-charts/core'
+import { panIn, scaleSpace, zoomIn, type ScaleSpace } from '@aster-charts/core/lean'
 
 export interface SelectionInterval {
   x?: [number, number]
@@ -227,64 +228,17 @@ export function domainOf(scale: unknown): [number, number] | null {
 // ---------------------------------------------------------------------------
 
 /**
- * The space a continuous scale draws its domain in, where pixels are linear: `lift` takes a domain value there, `ground` brings
- * it back. Pan and zoom move and stretch the domain in this space, so the data under the pointer stays under it on every scale
- * type, as Vega-Lite's `bind: "scales"` does with vega's `panLog` / `zoomPow` / `panSymlog`... A log scale is its natural
- * logarithm (whatever its base: the ratio of two logarithms does not depend on it), mirrored for a negative domain; a power
- * scale (`pow`, and `sqrt`, the power 0.5) its signed power; a symlog scale its signed `log1p(|x| / constant)`; linear, time and
- * utc scales are linear in their numbers (milliseconds).
+ * The space a scale pans and zooms in, as Vega-Lite's `bind: "scales"` does it (core's `scaleSpace`: vega's `panLog` /
+ * `zoomPow` / `panSymlog`, else linear): a log scale in its logarithm (a negative domain mirrored), a pow scale in its power,
+ * a symlog scale in `sign(x) * log1p(|x| / constant)`, and every other one (`linear`, `sqrt`, `time`, `utc`) linearly in its
+ * numbers. An absent scale is linear.
  */
-interface ScaleSpace {
-  lift(v: number): number
-  ground(v: number): number
-}
-
-const LINEAR_SPACE: ScaleSpace = { lift: (v) => v, ground: (v) => v }
-
-const signedPow = (e: number) => (x: number): number => (x < 0 ? -Math.pow(-x, e) : Math.pow(x, e))
-
-/** The space `scale` draws `domain` in (see `ScaleSpace`). An unknown or absent scale is linear. */
 function spaceOf(scale: unknown, domain: readonly number[]): ScaleSpace {
   const s = scale as { type?: unknown; exponent?: () => unknown; constant?: () => unknown } | undefined
-  switch (s?.type) {
-    case 'log': {
-      const sign = Math.sign(domain[0]!)
-      return { lift: (x) => Math.log(sign * x), ground: (x) => sign * Math.exp(x) }
-    }
-    case 'pow':
-    case 'sqrt': {
-      const e = s.type === 'sqrt' ? 0.5 : numberOr(s.exponent?.(), 1)
-      return { lift: signedPow(e), ground: signedPow(1 / e) }
-    }
-    case 'symlog': {
-      const c = numberOr(s.constant?.(), 1)
-      return {
-        lift: (x) => Math.sign(x) * Math.log1p(Math.abs(x / c)),
-        ground: (x) => Math.sign(x) * Math.expm1(Math.abs(x)) * c,
-      }
-    }
-    default:
-      return LINEAR_SPACE
-  }
+  return scaleSpace(s?.type, domain[0]!, numberOr(s?.exponent?.(), 1), numberOr(s?.constant?.(), 1))
 }
 
 const numberOr = (v: unknown, fallback: number): number => (typeof v === 'number' && Number.isFinite(v) && v !== 0 ? v : fallback)
-
-/** The domain moved by `delta` of its own span, against it (vega's `pan`): `delta > 0` shows lower values. */
-function panIn(space: ScaleSpace, domain: readonly [number, number], delta: number): [number, number] {
-  const d0 = space.lift(domain[0])
-  const d1 = space.lift(domain[1])
-  const dd = (d1 - d0) * delta
-  return [space.ground(d0 - dd), space.ground(d1 - dd)]
-}
-
-/** The domain stretched by `k` around `anchor` (the middle of the space when null) (vega's `zoom`): `k < 1` zooms in. */
-function zoomIn(space: ScaleSpace, domain: readonly [number, number], anchor: number | null, k: number): [number, number] {
-  const d0 = space.lift(domain[0])
-  const d1 = space.lift(domain[1])
-  const da = anchor != null ? space.lift(anchor) : (d0 + d1) / 2
-  return [space.ground(da + (d0 - da) * k), space.ground(da + (d1 - da) * k)]
-}
 
 /** The domain's length in its scale's space (see `ScaleSpace`). */
 function spanIn(space: ScaleSpace, domain: readonly [number, number]): number {

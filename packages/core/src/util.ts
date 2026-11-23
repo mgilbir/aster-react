@@ -620,6 +620,28 @@ export const zoomLog = (domain: readonly number[], anchor: Anchor, scale: number
 export const zoomPow = (domain: readonly number[], anchor: Anchor, scale: number, exponent: number): [number, number] => zoom(domain, anchor, scale, powT(exponent), powT(1 / exponent))
 export const zoomSymlog = (domain: readonly number[], anchor: Anchor, scale: number, constant: number): [number, number] => zoom(domain, anchor, scale, symlogT(constant), symexpT(constant))
 
+/** The space a scale's interactive pan and zoom work in: `lift` takes a domain value there, `ground` brings it back. */
+export interface ScaleSpace { lift: TransformFn; ground: TransformFn }
+
+/**
+ * The space Vega-Lite's `bind: "scales"` pans and zooms a scale of `type` in (`panLog` / `panPow` / `panSymlog`, else
+ * `panLinear`), for a domain that starts at `d0`: the same lift and ground as those functions, so a move made in it is theirs.
+ * `sqrt`, `time` and `utc`, like `linear`, are linear (Vega-Lite maps only `log`, `pow` and `symlog` to their own functions).
+ */
+export function scaleSpace(type: unknown, d0: number, exponent = 1, constant = 1): ScaleSpace {
+  if (type === 'log') {
+    const sign = Math.sign(d0)
+    return { lift: logT(sign), ground: expT(sign) }
+  }
+  if (type === 'pow') return { lift: powT(exponent), ground: powT(1 / exponent) }
+  if (type === 'symlog') return { lift: symlogT(constant), ground: symexpT(constant) }
+  return { lift: coerceNumber, ground: identityT }
+}
+
+/** A move of a domain in a scale's space (see `scaleSpace`): vega-util's `pan` and `zoom`, given the space. */
+export const panIn = (space: ScaleSpace, domain: readonly number[], delta: number): [number, number] => pan(domain, delta, space.lift, space.ground)
+export const zoomIn = (space: ScaleSpace, domain: readonly number[], anchor: Anchor, scale: number): [number, number] => zoom(domain, anchor, scale, space.lift, space.ground)
+
 // --- tuples ------------------------------------------------------------------
 
 /**
