@@ -634,16 +634,17 @@ function ChartView({
     for (const problem of evaluation.problems) onErrorRef.current?.(new Error(`[aster] ${problem}`))
   }, [evaluation])
 
+  /** A problem the chart carries on through: to `onError`, else the logger, else the console. */
+  const reportProblem = React.useCallback((problem: string): void => {
+    const message = `[aster] ${problem}`
+    if (onErrorRef.current) onErrorRef.current(new Error(message))
+    else (loggerRef.current ?? console).warn(message)
+  }, [])
   // A controlled view or interval that was refused (see `checkAxes`): reported once for each value that has the problem.
   const propProblemKey = propProblems.join('\n')
   React.useEffect(() => {
-    if (!propProblemKey) return
-    for (const problem of propProblemKey.split('\n')) {
-      const e = new Error(`[aster] ${problem}`)
-      if (onErrorRef.current) onErrorRef.current(e)
-      else (loggerRef.current ?? console).warn(e.message)
-    }
-  }, [propProblemKey])
+    if (propProblemKey) for (const problem of propProblemKey.split('\n')) reportProblem(problem)
+  }, [propProblemKey, reportProblem])
 
   // A capability the caller needs but did not inject (plain `<SvgChart>`): the chart still renders what it can,
   // and every unavailable feature is REPORTED, like a rejected `dataChanges` changeset, never silently dead.
@@ -663,12 +664,7 @@ function ChartView({
       interactionPropsUsed && `${interactionPropsUsed} need hit testing and the signal event loop and are ignored: ${fix}`,
       eventStreamsUnbound && `this spec has event streams (signal.on) but no event loop is bound: ${fix}`,
     ]
-    for (const problem of problems) {
-      if (!problem) continue
-      const message = `[aster] ${problem}`
-      if (onErrorRef.current) onErrorRef.current(new Error(message))
-      else (loggerRef.current ?? console).warn(message)
-    }
+    for (const problem of problems) if (problem) reportProblem(problem)
     // Keyed on exactly what is reported: a new callback or an equal re-render does not re-report.
   }, [capabilityKey])
 
@@ -827,10 +823,8 @@ function ChartView({
   transitionRef.current = transitionOptions
   const transitionOn = transitionOptions !== null
   const reportTransitionError = React.useCallback((error: Error): void => {
-    const e = new Error(`[aster] transition: ${error.message}; the chart draws its new scene at once`)
-    if (onErrorRef.current) onErrorRef.current(e)
-    else (loggerRef.current ?? console).warn(e.message)
-  }, [])
+    reportProblem(`transition: ${error.message}; the chart draws its new scene at once`)
+  }, [reportProblem])
   // The animator draws into the <svg> and knows what it shows. Every draw goes through it (or tells it), so a
   // `transition` set later starts from the true picture.
   const animatorRef = React.useRef<SceneAnimator | null>(null)

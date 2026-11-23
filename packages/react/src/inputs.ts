@@ -17,7 +17,7 @@
  */
 import * as React from 'react'
 import type { ImageUrlPolicy } from '@aster-charts/core'
-import { contentEqual, useStableContent } from './spec.js'
+import { contentEqual, describeValue as describe, useStableContent } from './spec.js'
 
 /** The value of the last render, read by callbacks and effects that must not re-run when it changes identity. */
 export function useLatest<T>(value: T): React.MutableRefObject<T> {
@@ -28,9 +28,6 @@ export function useLatest<T>(value: T): React.MutableRefObject<T> {
 
 /** What `useDataInput` gives back: the datasets a chart evaluates with, or why they were refused. */
 export type DataInput = { data: Record<string, unknown[]> | undefined; error: null } | { data: undefined; error: TypeError }
-
-const describe = (value: unknown): string =>
-  value === null ? 'null' : Array.isArray(value) ? 'an array' : typeof value === 'object' ? 'an object' : `${typeof value} ${JSON.stringify(value) ?? String(value)}`
 
 /**
  * Check the `data` prop: an object of datasets, each an array of rows. A dataset whose rows are `undefined` is not given (as if
@@ -88,7 +85,7 @@ export function useDataInput(data: unknown): DataInput {
 export function checkSizeProp(name: 'width' | 'height', value: unknown): void {
   if (value === undefined || value === 'container') return
   if (typeof value === 'number' && Number.isFinite(value) && value >= 0) return
-  throw new TypeError(`[aster] ${name} must be a finite number of pixels (0 or more) or 'container'; got ${typeof value === 'string' ? JSON.stringify(value) : String(value)}`)
+  throw new TypeError(`[aster] ${name} must be a finite number of pixels (0 or more) or 'container'; got ${describe(value)}`)
 }
 
 /**
