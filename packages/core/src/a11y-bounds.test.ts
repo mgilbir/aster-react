@@ -129,6 +129,15 @@ describe('a mark item\'s box is the one the hit index measures, its id its datum
     for (const v of [nan.x, nan.y, nan.width, nan.height]) expect(Number.isFinite(v)).toBe(true)
   })
 
+  it('a value the bounds reader refuses (a pass vega stops at) never makes the tree throw; the items past it are no nodes', () => {
+    for (const shape of [7, 'M0,0Lx', 'triangle-sideways', 't1,2']) {
+      const spec = { width: 100, height: 50, data: [{ name: 't', values: [{ x: 1 }, { x: 2 }] }], marks: [{ type: 'symbol', from: { data: 't' }, encode: { update: { x: { field: 'x' }, y: { value: 10 }, shape: { value: shape } } } }] }
+      const scene = evaluateChart(compileChart(structuredClone(spec) as VgSpec), {})
+      expect(() => buildA11yTree(scene), String(shape)).not.toThrow()
+      for (const n of buildA11yTree(scene).nodes) for (const v of [n.x, n.y, n.width, n.height]) expect(Number.isFinite(v)).toBe(true)
+    }
+  })
+
   it('inserting a row does not rename the nodes of the others', () => {
     const spec = { width: 100, height: 50, data: [{ name: 't' }], marks: [{ type: 'symbol', from: { data: 't' }, encode: { update: { x: { field: 'x' }, y: { value: 10 }, description: { field: 'n' } } } }] }
     const session = createChartSession()
