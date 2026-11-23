@@ -69,8 +69,6 @@ const NONE: readonly AddonName[] = Object.freeze([])
 const EXPRESSION_KEYS = new Set([
   'signal', 'expr', 'update', 'init', 'test', 'trigger', 'insert', 'remove', 'toggle', 'modify', 'filter',
 ])
-/** Keys whose value is data, never expressions: a dataset's rows, a signal's or a literal's value. */
-const DATA_KEYS = new Set(['values', 'value'])
 
 /**
  * The expression functions that need a part of the engine (engine-parts.ts) the React shells load on demand, whatever their
@@ -215,16 +213,39 @@ function customShape(v: unknown): boolean {
   return true
 }
 
+/** Ceiling on the nodes {@link mentions} looks at (an event stream is a few objects; a larger one is taken to mention anything). */
+const MENTION_NODES = 10_000
+
+/** Whether `text` occurs in a key or a string value anywhere in `node` (iterative, bounded, safe on a cyclic object). */
+function mentions(node: unknown, text: string): boolean {
+  const seen = new WeakSet<object>()
+  const stack: unknown[] = [node]
+  for (let visited = 0; stack.length; ) {
+    const n = stack.pop()
+    if (typeof n === 'string') { if (n.includes(text)) return true; continue }
+    if (!isObj(n) || seen.has(n)) continue
+    if (++visited > MENTION_NODES) return true
+    seen.add(n)
+    for (const k of Object.keys(n)) {
+      if (k.includes(text)) return true
+      stack.push((n as Json)[k])
+    }
+  }
+  return false
+}
+
 /**
  * One walk of `spec`, with a stack (specs nest to any depth), bounded like the rest of the engine's spec walks, and safe on a cyclic
- * object: what `addonsNeeded` and `partsNeeded` report.
+ * object: what `addonsNeeded` and `partsNeeded` report. A node is read once for each key it is reached under (an object a spec shares
+ * between a transform list and `usermeta` is a transform under the one, whichever is met first), so the answer does not depend on the
+ * order of the keys; on a cyclic spec each (node, key) pair is read once.
  */
 function walkSpec(spec: Json, refuseUrls: boolean, hostSignals?: Readonly<Record<string, unknown>>): Found {
   const found: Found = { addons: new Set(), parts: new Set(), eventLoop: false, scales: [], signals: new Map() }
   // (a scope's lists are read as the compiler reads them, vega-util `array()`: a single object is a one-element list)
   if (spec.projections != null && (!Array.isArray(spec.projections) || spec.projections.length > 0)) found.addons.add('geo')
   if (spec.layout != null) found.parts.add('layout')
-  const seen = new WeakSet<object>()
+  const seen = new WeakMap<object, Set<string>>()
   const stack: Array<[unknown, number, string]> = [[spec, 0, '']]
   while (stack.length) {
     const [node, depth, key] = stack.pop()!
@@ -236,15 +257,18 @@ function walkSpec(spec: Json, refuseUrls: boolean, hostSignals?: Readonly<Record
       }
       continue
     }
-    if (!isObj(node) || depth > HARD_MAX_SPEC_DEPTH || seen.has(node)) continue
-    seen.add(node)
+    if (!isObj(node) || depth > HARD_MAX_SPEC_DEPTH) continue
+    const keys = seen.get(node)
+    if (keys === undefined) seen.set(node, new Set([key]))
+    else if (keys.has(key)) continue
+    else keys.add(key)
     // the projections of a group mark are built in its scope (the view's are checked above)
     if (key === 'projections' && (!Array.isArray(node) || node.length > 0)) found.addons.add('geo')
     if (key === 'legends' && (!Array.isArray(node) || node.length > 0)) found.parts.add('legend')
     // (a scope that declares signals: the view's, a group mark's)
     if (key === 'signals' && (!Array.isArray(node) || node.length > 0)) found.eventLoop = true
     // (an object-form event stream: `{type: 'timer', ...}`, or one that merges or windows another)
-    if (key === 'events' && JSON.stringify(node).includes('timer')) found.parts.add('timer')
+    if (key === 'events' && mentions(node, 'timer')) found.parts.add('timer')
     if (Array.isArray(node)) {
       for (const x of node) stack.push([x, depth + 1, key])
       continue
@@ -287,13 +311,14 @@ function walkSpec(spec: Json, refuseUrls: boolean, hostSignals?: Readonly<Record
     // (a dataset definition is an element of a `data` array; a refused url dataset is never read)
     const refusedUrl = refuseUrls && key === 'data' && !!node.url && !node.values
     for (const k of Object.keys(node)) {
-      // (`values` is read only when it is a `{signal}`: rows and GeoJSON are data, whatever their fields are named)
+      // (`values` is read only when it is an expression: a `{signal}`, or the text of a data trigger's `values`, which the compiler
+      // builds into the trigger's `modify(...)` call; rows and GeoJSON are data, whatever their fields are named)
       if (k === 'values') {
-        const signal = valuesSignal(node[k])
+        const signal = key === 'on' && typeof node[k] === 'string' ? (node[k] as string) : valuesSignal(node[k])
         if (signal !== undefined) stack.push([signal, depth + 1, 'signal'])
         continue
       }
-      if (DATA_KEYS.has(k)) continue
+      // (a `value` is read too: the engine evaluates a `{signal}` an encode entry's value holds)
       if (refusedUrl && k === 'format') continue
       stack.push([node[k], depth + 1, k])
     }
@@ -559,8 +584,18 @@ function loadAddon(name: AddonName): Promise<void> {
   return p
 }
 
-/** Import the named add-ons (concurrently, each at most once). Rejects, naming the add-on, when an import fails. */
+const ADDON_NAMES: readonly AddonName[] = Object.freeze(Object.keys(importers) as AddonName[])
+
+/**
+ * Import the named add-ons (concurrently, each at most once). Rejects, naming the add-on, when an import fails, and with a
+ * TypeError, before anything is imported, when a name is not an add-on.
+ */
 export function loadAddons(names: readonly AddonName[]): Promise<void> {
+  if (!Array.isArray(names)) return Promise.reject(new TypeError(`[aster] loadAddons takes an array of add-on names (${ADDON_NAMES.join(', ')})`))
+  const refused = names.filter((n) => typeof n !== 'string' || !Object.hasOwn(importers, n))
+  if (refused.length) {
+    return Promise.reject(new TypeError(`[aster] not an add-on: ${refused.map((n) => JSON.stringify(n) ?? String(n)).join(', ')} (they are ${ADDON_NAMES.join(', ')})`))
+  }
   return names.length === 1 ? loadAddon(names[0]!) : Promise.all(names.map(loadAddon)).then(() => undefined)
 }
 
