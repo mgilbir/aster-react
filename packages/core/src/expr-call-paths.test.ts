@@ -144,16 +144,16 @@ describe.each(PATHS)('on %s', (_path, run) => {
     it('a literal key naming an Object.prototype member keeps the guarded read; any other literal key reads as the named form does', () => {
       const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
       const datum = { list: [1, 2], f: Function, o: { a: 1 } }
-      // `datum.f` holds Function: neither form produces it
-      expect(run('datum["f"]', datum)).toBeUndefined()
-      expect(run('datum.f', datum)).toBeUndefined()
-      expect(errors).toHaveBeenCalledTimes(2)
-      // a function's risky key is never resolved; an array's is the plain read (vega-interpreter's), one hop short of Function
-      expect(run('datum.list["constructor"]["constructor"]', datum)).toBeUndefined()
-      expect(run('datum.list.constructor.constructor', datum)).toBeUndefined()
+      // `datum.f` holds Function: neither form produces it, and the refusal is an error of the evaluation (reported through the
+      // engine's logger as any expression error), never a console write that bypasses it (C707)
+      expect(thrown(() => run('datum["f"]', datum))).toMatch(/Prevented interpretation of member "f"/)
+      expect(thrown(() => run('datum.f', datum))).toMatch(/Prevented interpretation of member "f"/)
+      // a risky key resolves only as an own property (C384): an array's inherited `constructor` is not read, nor anything past it
+      expect(run('datum.list["constructor"]', datum)).toBeUndefined()
+      expect(run('datum.list.constructor', datum)).toBeUndefined()
+      expect(thrown(() => run('datum.list.constructor.constructor', datum))).toBe("TypeError: Cannot read properties of undefined (reading 'constructor')")
       expect(run('datum["o"]["a"] + datum.list[1] + datum.list["1"]', datum)).toBe(5)
-      // (the guarded read of a risky key resolves nothing, so it has nothing to report: only the two reads of Function above logged)
-      expect(errors).toHaveBeenCalledTimes(2)
+      expect(errors).not.toHaveBeenCalled()
       expect(thrown(() => run('datum.n["x"]', {}))).toBe("TypeError: Cannot read properties of undefined (reading 'x')")
       expect(thrown(() => run('datum.n[0]', {}))).toBe("TypeError: Cannot read properties of undefined (reading '0')")
     })

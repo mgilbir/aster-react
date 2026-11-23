@@ -285,20 +285,31 @@ pixel, at device pixel ratios 1 and 2.
 Expressions (formulas, filters, signal updates, mark encodings) are parsed by `packages/core/src/expr-parser.ts`
 (an on-demand lexer and a precedence-climbing parser that accept and refuse exactly what `vega-expression` does,
 with its diagnostics, producing a plain ESTree-shaped tree) and compiled once into closures by
-`packages/core/src/expr-interpreter.ts` (the semantics of `vega-interpreter`, with Aster's stricter sandbox).
-Nothing is compiled with `new Function` or `eval`. The function table the interpreter calls lives in
-`packages/core/src/expression.ts`; it mirrors the documented `vega-functions` surface and is bound to the
-runtime's scales and data, to the owned type/array/string/math utilities (`util.ts`), colour spaces
-(`color.ts`), calendar (`time.ts`) and format layer (`format.ts`, `time-format.ts`, `locale.ts`):
+`packages/core/src/expr-interpreter.ts`. The engine evaluates what an expression in a spec means, which is what vega's
+code generator makes of it (`in` and `instanceof` included, a regular expression literal fresh on every evaluation, `item`
+bound to the scenegraph item inside an encode), with Aster's stricter sandbox (the file header lists it: no inherited
+`Object.prototype` member or function `prototype` is ever read, no spec-reached function is invoked by a built-in). The
+entry points shaped like `vega-interpreter`'s (`interpret`, `expressionInterpreter`), which only the tests and the
+differentials use, keep that interpreter's reading. Nothing is compiled with `new Function` or `eval`. The function table
+the interpreter calls lives in `packages/core/src/expression.ts`; it mirrors the `vega-functions` surface and is bound to
+the runtime's scales and data, to the owned type/array/string/math utilities (`util.ts`), colour spaces (`color.ts`),
+calendar (`time.ts`) and format layer (`format.ts`, `time-format.ts`, `locale.ts`). Every function an expression can call
+(`expressionFunctionNames()`; a test keeps this table complete):
 
 | Group | Functions |
 |-------|-----------|
-| Scale / projection / data | `scale`, `invert`, `domain`, `range`, `bandwidth`, `bandspace`, `copy`, `data`, `indata`, `pluck` |
-| Date-time | `year/quarter/month/week/day/date/hours/…` (+ all `utc*` variants), `datetime`, `utc`, `time`, `timeOffset`/`utcOffset`, `timeSequence`/`utcSequence`, `dayofyear`, `timezoneoffset`, `now` |
-| Array | `extent`, `clamp`, `lerp`, `sequence`, `slice`, `reverse`, `sort`, `join`, `peek`, `span`, `inrange`, `clampRange`, `indexof`, `lastindexof` |
-| String | `truncate`, `pad`, `upper`, `lower`, `split`, `trim`, `replace`, `substring`, `test`/`regexp`, `parseFloat`/`parseInt` |
+| Type checks and coercion | `isArray`, `isBoolean`, `isDate`, `isDefined`, `isFinite`, `isNaN`, `isNumber`, `isObject`, `isRegExp`, `isString`, `isTuple`, `isValid`, `toBoolean`, `toDate`, `toNumber`, `toString` |
+| Control flow | `if` |
+| Math | `abs`, `acos`, `asin`, `atan`, `atan2`, `ceil`, `clamp`, `cos`, `exp`, `floor`, `hypot`, `log`, `max`, `min`, `pow`, `random`, `round`, `sin`, `sqrt`, `tan` |
+| Scale / projection / data | `scale`, `invert`, `domain`, `range`, `bandwidth`, `bandspace`, `copy`, `gradient`, `data`, `indata`, `pluck`, `setdata`, `modify` |
+| Selections (vega-lite) | `vlSelectionTest`, `vlSelectionIdTest`, `vlSelectionResolve`, `vlSelectionTuples` |
+| Scene and view | `intersect`, `inScope`, `containerSize`, `windowSize`, `pinchDistance`, `pinchAngle`; the event functions `view`, `item`, `group`, `xy`, `x`, `y` |
+| Pan and zoom | `panLinear`, `panLog`, `panPow`, `panSymlog`, `zoomLinear`, `zoomLog`, `zoomPow`, `zoomSymlog` |
+| Date-time | `year`, `quarter`, `month`, `week`, `day`, `date`, `dayofyear`, `hours`, `minutes`, `seconds`, `milliseconds`, `utcyear`, `utcquarter`, `utcmonth`, `utcweek`, `utcday`, `utcdate`, `utcdayofyear`, `utchours`, `utcminutes`, `utcseconds`, `utcmilliseconds`, `datetime`, `utc`, `time`, `timezoneoffset`, `now`, `timeOffset`, `utcOffset`, `timeSequence`, `utcSequence` |
+| Array | `extent`, `clampRange`, `inrange`, `lerp`, `sequence`, `slice`, `reverse`, `sort`, `join`, `peek`, `span`, `indexof`, `lastindexof`, `length`, `merge` |
+| String | `truncate`, `pad`, `upper`, `lower`, `split`, `trim`, `replace`, `substring`, `test`, `regexp`, `parseFloat`, `parseInt`, `encodeURIComponent`, `btoa`, `atob` |
 | Color | `rgb`, `hsl`, `lab`, `hcl`, `luminance`, `contrast` |
-| Formatting | `format`, `timeFormat`/`utcFormat`, `timeParse`/`utcParse`, `timeUnitSpecifier`, `month*`/`day*` |
+| Formatting | `format`, `timeFormat`, `utcFormat`, `timeParse`, `utcParse`, `timeUnitSpecifier`, `monthFormat`, `monthAbbrevFormat`, `dayFormat`, `dayAbbrevFormat` |
 
 Hosts add functions with `registerExpressionFunction` (vega's `expressionFunction`); see [API.md](API.md).
 
@@ -622,6 +633,10 @@ Aster matches Vega's output wherever the oracle can be run; where it deliberatel
 | `nest` | the rows are the leaves and come out untouched; with `generate` the interior nodes follow them as rows of their own. The group tables have no inherited names, so a group called `constructor` is a group. The `values` of a generated node list the rows as they were before a layout (the layout's fields are on the rows of the dataset); with no keys and `generate`, the root row's `values` is the leaves, not the dataset's own array (a cycle in Vega). A `values` field that is a string is not read as children. `treePath` / `treeAncestors` find nothing in the tree | the tree is built on the live tuples, a layout writes onto them, and the root row holds the dataset's array itself | rows are never written, the dataset array is not aliased into a row, and strings are not made into nodes of characters |
 | An axis whose ticks fail over a late-ranked scale, with a domain or a title to draw | refused (`[aster] the ticks of the axis ... failed`) | the scenegraph has holes and Vega's own `toSVG` throws (`reading 'marktype'`) | there is no document to match; the cases Vega can draw are matched exactly |
 | Names that are members of `Object.prototype` (`toString`) for data sets or scales | handled as any name | `vega.parse` crashes | do not reproduce an upstream crash |
+| A member read in an expression of an inherited `Object.prototype` member or of a function's `prototype` (`datum.__proto__`, `datum.constructor`, `[].constructor`, `scale('x').prototype`) | undefined (an own field of that name is read as data) | the built-in object (`Object`, `Object.prototype`) | the sandbox: no expression holds a built-in prototype that a later write (a dataset edit, a transform) could land on |
+| `Function`, `eval` or a timer met by a member read | the evaluation fails with `Prevented interpretation of member ...`, reported through the logger | the function | the sandbox: the value cannot be called by an expression, but is never handed out either |
+| A host-registered function whose name starts with `is` | a function-valued argument is refused, as for any function but the built-in type inspectors | handed the function | the sandbox: a function a spec reached is never handed to host code |
+| `x instanceof f` with an `f` that has its own `Symbol.hasInstance` | refused | runs that host function | the same |
 | `vlSelectionResolve` over several tuples of one array-valued field (an interval over a discrete field, several units) | merges into fresh arrays; the store is left alone | the first tuple's own value array is the accumulator and grows in place, so the result and the store depend on it | a read must not rewrite the data it reads; the generated differential keeps such stores out of the resolve comparison |
 | Voronoi cells of points with missing or non-numeric coordinates, or with coordinates beyond 1e150 | the call ends and answers once per row; the orientation test is exact | the reference loops forever on some such inputs, and its orientation predicate overflows past 1e150 | no spec may hang the host; the cells of finite coordinates are character-for-character the reference's (`differential-voronoi`, `differential-delaunay`) |
 | Decoded topojson positions of a topology without `transform` | fresh arrays | the topology's own position arrays | the output may be modified without changing the topology |
