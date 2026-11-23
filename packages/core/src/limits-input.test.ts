@@ -32,12 +32,14 @@ describe('limits are validated where a scope opens (C233)', () => {
 })
 
 describe('maxStringLength covers every string an item draws (C704)', () => {
-  const big = "pad('', 5000, 'x')"
-  for (const channel of ['href', 'description', 'fill', 'cursor', 'font', 'text']) {
-    it(`a ${channel} built by an expression`, () => {
-      const spec = { width: 10, height: 10, marks: [{ type: 'text', encode: { update: { [channel]: { signal: big } } } }] } as unknown as VgSpec
-      expect(() => renderSpec(spec, { limits: { maxStringLength: 1000 } })).toThrow(/maxStringLength 5000 > 1000/)
-      expect(() => renderSpec(spec, { limits: { maxStringLength: 10_000 } })).not.toThrow()
+  // (a string concatenated from the host's rows: no builtin builds it, so no meter sees it before the scene does)
+  const half = 'x'.repeat(2500)
+  for (const channel of ['href', 'description', 'fill', 'cursor', 'font', 'text', 'url', 'ariaRoleDescription']) {
+    it(`a ${channel} concatenated by an expression`, () => {
+      const spec = { width: 10, height: 10, data: [{ name: 't' }], marks: [{ type: 'text', from: { data: 't' }, encode: { update: { [channel]: { signal: 'datum.s + datum.s' } } } }] } as unknown as VgSpec
+      const input = { data: { t: [{ s: half }] } }
+      expect(() => renderSpec(spec, { ...input, limits: { maxStringLength: 1000 } })).toThrow(/maxStringLength 5000 > 1000/)
+      expect(() => renderSpec(spec, { ...input, limits: { maxStringLength: 10_000 } })).not.toThrow()
     })
   }
 })
