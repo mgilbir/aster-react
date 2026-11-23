@@ -17,9 +17,12 @@ import '@aster-charts/core/geo'
 import '@aster-charts/core/transforms'
 import { loadSpecData, TRUSTED_LOAD_OPTIONS } from '@aster-charts/core/load'
 import {
-  addonsNeeded, isAddonLoaded, missingAddons, ADDON_FUNCTIONS, registeredFunctionNames, withdrawFunctions, LOAD_ADDON_FORMATS, TRANSFORMS_ADDON_TYPES, type AddonName,
+  addonsNeeded, isAddonLoaded, missingAddons, ADDON_FUNCTIONS, registeredFunctionNames, LOAD_ADDON_FORMATS, TRANSFORMS_ADDON_TYPES, type AddonName,
 } from '@aster-charts/core/addons'
-import { compileChart, dataFormatRegistry, geoRegistry, renderSpec, transformRegistry, type TransformFn, type VgSpec } from '@aster-charts/core'
+import { compileChart, renderSpec, type VgSpec } from '@aster-charts/core'
+// (the registries and the withdrawal seam are internal to the core: reached through its modules, not through a public entry)
+import { dataFormatRegistry, geoRegistry, transformRegistry, type TransformFn } from '../../core/dist/registry.js'
+import { withdrawExpressionFunctions as withdrawFunctions } from '../../core/dist/expression.js'
 
 const ADDONS: readonly AddonName[] = ['transforms', 'geo', 'load']
 const CORPUS = join(dirname(fileURLToPath(import.meta.url)), '..', 'corpus')

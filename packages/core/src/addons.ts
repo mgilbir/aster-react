@@ -21,7 +21,7 @@ import { HARD_MAX_SPEC_DEPTH } from './limits.js'
 import { ADDON_FUNCTIONS } from './addon-functions.js'
 import { parseExpression } from './expr-parser.js'
 import { parseEventSelectorString } from './event-selector.js'
-import { registeredExpressionFunctionNames, withdrawExpressionFunctions } from './expression.js'
+import { registeredExpressionFunctionNames } from './expression.js'
 import { checkUrlData, validateUrlDataMode, type UrlDataMode } from './url-data.js'
 import { dataWithoutRows, valuesSignal } from './spec-structure.js'
 import { mayDrawRandom } from './random-tape.js'
@@ -52,8 +52,6 @@ export const TRANSFORMS_ADDON_TYPES: readonly string[] = [
 export { ADDON_FUNCTIONS }
 /** Every expression function currently registered beyond the built-ins (the add-ons', and the host's own): for tests of the tables. */
 export const registeredFunctionNames = registeredExpressionFunctionNames
-/** Take expression functions out of the registry and get a function that restores them (a test seam). */
-export const withdrawFunctions = withdrawExpressionFunctions
 /** The data formats the `@aster-charts/core/load` add-on registers readers for. */
 export { LOAD_ADDON_FORMATS }
 
