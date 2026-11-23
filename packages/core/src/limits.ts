@@ -168,6 +168,11 @@ export const HARD_CAPS = Object.freeze({
   coords: 2_000_000,
   /** Point-in-outline tests one `intersect()` of an arc or path item needs: the rows the outline spans in the region times its edges (vega tests every lattice point of the region instead). */
   latticeTests: 50_000_000,
+  /**
+   * Cells one delimited-text read fills in for fields a line does not have (a csv row shorter than the header gets `''` for each
+   * missing column): the only part of a parse that is not bounded by the size of the text (a wide header over empty lines).
+   */
+  filledCells: 1_000_000,
 })
 
 /** Which limits replace each ceiling: when one of them is set the caller's own budget governs. */
@@ -179,6 +184,8 @@ const CEILING_KEYS: Record<keyof typeof HARD_CAPS, ReadonlyArray<keyof SpecLimit
   coords: ['maxRows', 'maxGeneratedRows'],
   // (no limit stands for it: `maxTimeMs` bounds the walk too, but cooperatively)
   latticeTests: [],
+  // (cells made, not rows: `maxRows` bounds the rows of a parse, not how wide each one is made)
+  filledCells: ['maxGeneratedRows'],
 }
 
 /** Whether the active scope carries a limit that replaces the built-in ceiling of `kind`. */
@@ -432,6 +439,14 @@ export function meterRows(n: number, what: string, kind: 'rows' | 'cells' = 'row
 export function meterCoords(n: number, what: string, decoded = n): void {
   if (active) active.coords(n, what)
   else ceiling('coords', decoded, what)
+}
+/**
+ * Account `added` cells a reader is about to fill in, `total` of them so far in this read: against `maxGeneratedRows`
+ * (cumulative) when it is set, else the built-in `filledCells` ceiling.
+ */
+export function meterFilledCells(added: number, total: number, what: string): void {
+  if (active && active.limits.maxGeneratedRows != null) active.generated(added, what)
+  else ceiling('filledCells', total, what)
 }
 /** Account a string about to be built (maxStringLength, maxGeneratedBytes; the built-in ceiling when neither is set). */
 export function meterBytes(n: number, what: string): void {

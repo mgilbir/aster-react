@@ -15,6 +15,8 @@
  * Only the first character of the delimiter separates fields when reading.
  */
 
+import { checkRowCount, meterFilledCells, meterTick, metering } from './limits.js'
+
 const QUOTE = 34
 const NEWLINE = 10
 const RETURN = 13
@@ -157,12 +159,20 @@ export function dsvFormat(delimiter: string): Dsv {
     },
     parse(text, f) {
       let names: string[] = []
+      let filled = 0
       const out = [] as Record<string, string>[] & { columns?: string[] }
       splitRows(text, separator, (row, i) => {
         if (i === 0) {
           names = row
           return
         }
+        // Budgeted before the row is made: the row count (maxRows) and the clock under limits, and the cells made for fields
+        // the line does not have, which are all a wide header over empty lines is (see meterFilledCells).
+        if (metering) {
+          checkRowCount(i, 'csv rows')
+          meterTick('csv', names.length)
+        }
+        if (row.length < names.length) meterFilledCells(names.length - row.length, (filled += names.length - row.length), 'csv cells filled in for missing fields')
         const object: Record<string, string> = {}
         for (let k = 0; k < names.length; k++) object[names[k]!] = row[k] || ''
         const mapped = f ? (f(object, i - 1, names) as Record<string, string> | null | undefined) : object
