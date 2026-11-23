@@ -21,6 +21,7 @@ import { parseExpressionCached, type Expr } from './expr-parser.js'
 import { datasetsReadIn, identifiersIn, scalesReadIn, dependencyKey, fieldsWritten, namesIn, pipelineReadsOf, reuse, runsOf, stepCounts, stepReadsOf, type StepReads, type StepRecord } from './step-reuse.js'
 import { activeMeter, withLimits, ceiling, checkRowCount, checkChartRegex, meterItems, meterTick, AsterLimitError } from './limits.js'
 import { getTextMetricsProvider, withTextMetricsProvider } from './text-metrics.js'
+import { bindSceneTextMetrics } from './scene-output.js'
 import { AsterUrlError } from './url-policy.js'
 import { SpecParseError } from './parse-error.js'
 import { consoleLogger, type Logger } from './logger.js'
@@ -57,7 +58,7 @@ import { gradientDefOf, hash53, isGradientPaint } from './svg-defs.js'
 import { tickFormat, scaleGradient, scaleGradientStops, tickCount, validTicks } from './scale.js'
 import { compileChart } from './compiler.js'
 import { dict, ownGet, pushAll, sortData, lerp, scopedSignalName, heldSignalName, isTuple, markTuple, markTuples, markTupleAlways, withTuples, tuplesRegistering, PRIMITIVE_TUPLE, tupleDatum } from './util.js'
-import { applyImageUrlPolicy, applyLinkUrlPolicy, resolveImageUrl, type ImageUrlPolicy } from './url-policy.js'
+import { applyImageUrlPolicy, applyLinkUrlPolicy, bindSceneUrlPolicy, resolveImageUrl, type ImageUrlPolicy } from './url-policy.js'
 import { checkChartUrlData } from './url-data.js'
 import { valueKey, valuesEqual } from './fingerprint.js'
 import { dataWithoutRows, valuesSignal } from './spec-structure.js'
@@ -3665,6 +3666,7 @@ function evaluateViewPass(chart: CompiledChart, hostInput: RuntimeInput, txn: Ev
     // padding plus the origin)
     padding: auto === 'none' || auto === 'skip' ? base : auto === 'shift' ? { top: padding.top, right: base.right, bottom: base.bottom, left: padding.left } : padding,
     items,
+    ...(chart.description !== undefined ? { description: chart.description } : {}),
     ...(built.frame ? { ...built.frame.paint, ...(built.frame.x !== 0 ? { frameX: built.frame.x } : {}), ...(built.frame.y !== 0 ? { frameY: built.frame.y } : {}), ...(built.frame.aria !== undefined ? { frameAria: built.frame.aria } : {}) } : {}),
   }
   // Event-loop wiring (non-serialized internals)
@@ -3684,6 +3686,11 @@ function evaluateViewPass(chart: CompiledChart, hostInput: RuntimeInput, txn: Ev
   ctx.draft.idCounter = ctx.ids.value
   done.draft = ctx.draft
   done.failed = ctx.failed === true
+  // what the scene was evaluated under that its renderers draw it under too (scene-output.ts): the URL policy every URL they
+  // write is vetted with, and the text measurer given for this evaluation (`RuntimeInput.textMetrics`; the one set for every
+  // chart, `setTextMetricsProvider`, is the one every render uses)
+  bindSceneUrlPolicy(scene, ctx.urlPolicy)
+  if (input.textMetrics) bindSceneTextMetrics(scene, input.textMetrics)
   // (what is derived from its nodes may be kept with them from now on: see scene-registry.ts)
   noteEngineScene(scene)
   return scene
@@ -5337,16 +5344,22 @@ const scaleIdOf = (sc: unknown): string => {
 /**
  * What one channel of a leaf mark is evaluated under besides its row: the signals it names (with the view size, `extraFp` and the
  * registry, see `readsKey`), the content of the datasets its expressions read by name, and the scale objects it reads; null when it
- * reads more than it names (the clock, the random source, a dataset or a scale by a computed name).
+ * reads more than it names (the clock, the random source, a dataset or a scale by a computed name). A channel that holds a URL
+ * (`URL_CHANNELS`) is vetted after its encode (`vetItemUrls`), which writes what the policy made of it onto the item: its value
+ * is a function of the URL policy too, as the mark key's is (`markKeyOf`).
  */
-function channelKeyOf(spec: object, ctx: EvalContext): string | null {
+function channelKeyOf(channel: string, spec: object, ctx: EvalContext): string | null {
   const reads = channelReadsOf(spec, ctx.chart)
   if (reads.names === null || reads.data === null || reads.scales === null) return null
   let key = readsKey(ctx, reads.names)
   for (const n of reads.data) key += `\u0004${n}=${datasetKey(ctx, n)}`
   for (const n of reads.scales) key += `\u0005${n}=${scaleIdOf(ctx.scales.get(n))}`
+  if (URL_CHANNELS.has(channel)) key += `\u0003${ctx.urlPolicy === undefined ? '' : dependencyKey(ctx.urlPolicy)}`
   return key
 }
+
+/** The channels whose value is a URL the evaluation vets (`vetItemUrls`). */
+const URL_CHANNELS: ReadonlySet<string> = new Set(['href', 'url', 'image'])
 
 /**
  * Channels whose value takes part in what the encode derives from several of them (`adjustSpatial` makes x/y/width/height from the
@@ -5380,7 +5393,7 @@ function reencodeChannels(mark: CompiledMark, ctx: EvalContext, prevGroup: Scene
   if (channels.length !== record.keys.length) return null
   const changed: string[] = []
   for (let c = 0; c < channels.length; c++) {
-    const key = channelKeyOf(encode[channels[c]!] as object, ctx)
+    const key = channelKeyOf(channels[c]!, encode[channels[c]!] as object, ctx)
     if (key === null || record.keys[c] === null) return null
     if (key !== record.keys[c]) {
       if (COUPLED_CHANNELS.has(channels[c]!)) return null
@@ -5402,14 +5415,11 @@ function reencodeChannels(mark: CompiledMark, ctx: EvalContext, prevGroup: Scene
       let copy: Record<string, unknown> | undefined
       for (let c = 0; c < order.length; c++) {
         const k = order[c]!
-        const v = resolveEncodeProperty(encode[k], datum, ctx, binding)
+        // (a link as the policy makes it, as a whole encode makes it: `vetItemUrls`)
+        const v = k === 'href' ? vetLink(resolveEncodeProperty(encode[k], datum, ctx, binding), ctx) : resolveEncodeProperty(encode[k], datum, ctx, binding)
         if ((v === undefined) !== (before[k] === undefined) || (v === undefined) !== !(k in before)) { whole = true; break }
         if (Object.is(v, before[k])) continue
-        if (copy === undefined) {
-          copy = { ...before }
-          // (what the DOM patcher kept on the item before for itself: a fresh item has none)
-          if ('__domDesc' in copy) delete copy.__domDesc
-        }
+        if (copy === undefined) copy = { ...before }
         copy[k] = v
       }
       // (every channel evaluated again came out as it was: the item is the one before, as a kept item is)
@@ -5436,7 +5446,7 @@ function reencodeChannels(mark: CompiledMark, ctx: EvalContext, prevGroup: Scene
 /** Record what each channel of a top-level leaf mark was encoded under (see `reencodeChannels`), when the pass made it whole and clean. */
 function recordChannels(mark: CompiledMark, ctx: EvalContext, encode: Record<string, EncodeValue | EncodeValue[]>, rows: readonly Row[], items: readonly SceneItem[]): void {
   if (!cleanPass(ctx) || activeMeter() !== null || mark.transform?.length || mark.sort) return
-  ctx.draft.channels.set(mark, { encode, rows, items, keys: Object.keys(encode).map((k) => channelKeyOf(encode[k] as object, ctx)) })
+  ctx.draft.channels.set(mark, { encode, rows, items, keys: Object.keys(encode).map((k) => channelKeyOf(k, encode[k] as object, ctx)) })
 }
 
 function evaluateMark(
@@ -5484,11 +5494,43 @@ function evaluateMark(
   return built
 }
 
+/**
+ * An in-place write to the items array of the group before (the append path of `markItemsOf`): the array, and what undoes it
+ * until the group before is turned into a lazy snapshot (`supersedeItems`), after which it is the new group's.
+ */
+interface InPlaceWrite { items: SceneItem[] | undefined; undo: ItemsUndo | undefined }
+
+/**
+ * A data mark's group (see `markItemsOf`). The append path writes into the items array of the scene before, which is still the
+ * caller's: from the first write until that scene's group is superseded the write is undone if anything throws -- the encode,
+ * the URL policy, a transform, a sort, a bound -- so a failed evaluation never leaves the scene before (or the state committed
+ * with it, which the write claimed) holding items it never had.
+ */
 function evaluateMarkItems(
   mark: CompiledMark,
   ctx: EvalContext,
   prevGroup?: SceneGroup | null,
   given?: GivenPulse,
+): SceneGroup | SceneGroup[] | null {
+  const inPlace: InPlaceWrite = { items: undefined, undo: undefined }
+  try {
+    return markItemsOf(mark, ctx, prevGroup, given, inPlace)
+  } catch (e) {
+    const { items, undo } = inPlace
+    if (items !== undefined && undo !== undefined) {
+      items.length = undo.oldLen
+      for (let k = undo.idx.length - 1; k >= 0; k--) items[undo.idx[k]!] = undo.items[k]!
+    }
+    throw e
+  }
+}
+
+function markItemsOf(
+  mark: CompiledMark,
+  ctx: EvalContext,
+  prevGroup: SceneGroup | null | undefined,
+  given: GivenPulse | undefined,
+  inPlace: InPlaceWrite,
 ): SceneGroup | SceneGroup[] | null {
   // a scale or an encode that threw stopped vega's run: the marks after it were never joined, so they are not in the scenegraph
   if (ctx.encodeAborted) return null
@@ -5576,31 +5618,27 @@ function evaluateMarkItems(
         if (hittable && (res as { fill?: unknown }).fill === 'transparent') (res as unknown as Record<string, unknown>)._hit = true
         return res
       }
-      if (pulse.appendOnly) {
+      if (pulse.appendOnly && claim(ctx, [prevItems])) {
         const base = pulse.baseLength ?? prevItems.length
-        // O(changes): advance the engine-owned array in place; the previous
-        // group is turned into a lazy snapshot below (supersedeItems).
+        // O(changes): advance the engine-owned array in place, claimed (so the state committed with it is stale until this
+        // evaluation commits); the previous group is turned into a lazy snapshot below (supersedeItems). Until then a throw
+        // anywhere in this mark undoes the write (`evaluateMarkItems`).
         const undo: ItemsUndo = { oldLen: prevItems.length, idx: [], items: [] }
+        inPlace.items = prevItems
+        inPlace.undo = undo
         // The cached union bounds carry over to the new group only for a pure
         // append (re-encoded items could shrink them).
         if (!pulse.changed.length) carriedBounds = GROUP_BOUNDS.get(prevGroup!)?.clone()
-        try {
-          for (const i of pulse.changed) {
-            if (i < 0 || i >= base) continue
-            undo.idx.push(i)
-            undo.items.push(prevItems[i]!)
-            prevItems[i] = encodeAt(i)
-          }
-          for (let i = base; i < encodeRows.length; i++) {
-            const item = encodeAt(i)
-            prevItems.push(item)
-            addedItems.push(item)
-          }
-        } catch (e) {
-          // Never leave the (still current) previous scene half-updated.
-          prevItems.length = undo.oldLen
-          for (let k = undo.idx.length - 1; k >= 0; k--) prevItems[undo.idx[k]!] = undo.items[k]!
-          throw e
+        for (const i of pulse.changed) {
+          if (i < 0 || i >= base) continue
+          undo.idx.push(i)
+          undo.items.push(prevItems[i]!)
+          prevItems[i] = encodeAt(i)
+        }
+        for (let i = base; i < encodeRows.length; i++) {
+          const item = encodeAt(i)
+          prevItems.push(item)
+          addedItems.push(item)
         }
         // Stamp the array when an EXISTING item was re-encoded in place, so a
         // consumer holding a snapshot (canvas append) can tell "pure append"
@@ -5608,6 +5646,13 @@ function evaluateMarkItems(
         if (undo.idx.length) (prevItems as SceneItem[] & { __editGen?: number }).__editGen = ctx.gen
         items = prevItems
         pendingUndo = undo
+      } else if (pulse.appendOnly) {
+        // (the array was already written in place by this evaluation: the items are encoded into a copy of it)
+        const base = pulse.baseLength ?? prevItems.length
+        const next = prevItems.slice(0, base)
+        for (const i of pulse.changed) if (i >= 0 && i < base) next[i] = encodeAt(i)
+        for (let i = base; i < encodeRows.length; i++) next.push(encodeAt(i))
+        items = next
       } else if (pulse.from) {
         const modified = new Set(pulse.changed)
         const next = new Array<SceneItem>(encodeRows.length)
@@ -5783,26 +5828,8 @@ function evaluateMarkItems(
     }
   }
 
-  // Image URLs are spec-controlled: vet each through the URL policy so a
-  // hostile spec cannot make the viewer's browser request arbitrary URLs.
-  // Applied here, on the scene, so the string renderer, the DOM path and canvas
-  // all see the same vetted items.
-  if (mark.type === 'image') {
-    for (const it of items) {
-      if (it.url == null) continue
-      const vetted = applyImageUrlPolicy(it.url, ctx.urlPolicy)
-      if (vetted == null) { it.url = undefined; (it as { urlDenied?: boolean }).urlDenied = true }
-      else {
-        const resolved = resolveImageUrl(vetted, ctx.urlPolicy?.baseURL)
-        // (what is drawn is what the policy vetted: the url the base turns it into goes through it too)
-        const final = resolved !== vetted ? applyImageUrlPolicy(resolved, ctx.urlPolicy) : resolved
-        it.url = (final == null ? undefined : final) as string | undefined
-        if (final == null) (it as { urlDenied?: boolean }).urlDenied = true
-      }
-    }
-  }
-
-  vetLinks(mark, items, ctx)
+  // (the URLs of the items went through the URL policy as each was encoded: `resolveEncodeSet`; the renderers vet again what
+  // they write)
 
   // An interactive mark's transparent items are still hit by the pointer: vega's live SVG draws them with
   // `fill="transparent"`, which the string renderer (like ours) omits. `_hit` marks them for `pointer-events`.
@@ -5833,7 +5860,11 @@ function evaluateMarkItems(
     for (const it of addedItems) carriedBounds.union(boundLeaf(new Bounds(), it))
     GROUP_BOUNDS.set(group, carriedBounds)
   }
-  if (pendingUndo && prevGroup) supersedeItems(prevGroup, group, pendingUndo)
+  if (pendingUndo && prevGroup) {
+    supersedeItems(prevGroup, group, pendingUndo)
+    // (the write is the new group's now; the group before reads its own items through the snapshot)
+    inPlace.undo = undefined
+  }
   if (rowOrder !== items) ROW_ITEMS.set(group, rowOrder)
   return group
 }
@@ -5944,12 +5975,6 @@ function keepInstanceMark(mark: CompiledMark, ctx: EvalContext, group: SceneGrou
   }
 }
 
-/**
- * Hyperlinks (the `href` channel) pass the same URL policy as images and loaded
- * data, here on the scene so every renderer sees vetted items. The
- * renderers additionally sanitize whatever they are handed (`sanitizeHref`,
- * vega-loader's rule), so with no policy a script URL is still never linked.
- */
 function encodesDescription(mark: CompiledMark): boolean {
   const enc = mark.encode as Record<string, Record<string, unknown> | undefined> | undefined
   return !!enc && Object.values(enc).some((set) => set && 'description' in set)
@@ -5960,12 +5985,54 @@ function encodesHref(mark: CompiledMark): boolean {
   return !!enc && Object.values(enc).some((set) => set && 'href' in set)
 }
 
-function vetLinks(mark: CompiledMark, items: SceneItem[], ctx: EvalContext): void {
-  if (ctx.urlPolicy === undefined || !encodesHref(mark)) return
-  for (const it of items) {
-    if (it.href == null) continue
-    if (applyLinkUrlPolicy(it.href, ctx.urlPolicy) == null) it.href = undefined
+/**
+ * The URL channels of one item through the evaluation's URL policy: the one place the evaluation vets an item's URLs, for data
+ * marks, group items and every node of a guide. The `href` of any item (a link); on an image item, its `url` and the `src` of an
+ * `image` bitmap object (what the renderers draw an image from). A refused URL throws {@link AsterUrlError}, or, with `onDeny`,
+ * is dropped: a link leaves the item unlinked, an image leaves it undrawn (`urlDenied`). An image `url` is vetted as it will be
+ * drawn: resolved against the base as vega's loader resolves it (`resolveImageUrl`), so `allow` sees exactly the drawn url; the
+ * text as written passes the protocol and credential checks too, so a `file:` url is refused even though the drawn form would
+ * be its path. With no policy, only the drawn form is made. (The renderers vet every URL they write once more, with this policy
+ * or the defaults: see url-policy.ts `outputUrl`; this is where a refusal is reported.)
+ */
+function vetItemUrls(it: SceneItem, image: boolean, ctx: EvalContext): void {
+  const policy = ctx.urlPolicy
+  const rec = it as unknown as Record<string, unknown>
+  if (policy === undefined) {
+    if (image && it.url != null) it.url = resolveImageUrl(it.url, undefined) as string
+    return
   }
+  if (it.href != null && applyLinkUrlPolicy(it.href, policy) == null) it.href = undefined
+  if (!image) return
+  if (it.url != null) {
+    const drawn = resolveImageUrl(it.url, policy.baseURL)
+    // (the text as written: protocols and credentials only; the hook is asked once, about the url that is drawn)
+    const final = drawn !== it.url && applyImageUrlPolicy(it.url, basicPolicyOf(policy)) == null ? null : applyImageUrlPolicy(drawn, policy)
+    if (final == null) { it.url = undefined; rec.urlDenied = true }
+    else it.url = final as string
+  }
+  const bitmap = rec.image
+  if (bitmap !== null && typeof bitmap === 'object' && typeof (bitmap as { src?: unknown }).src === 'string') {
+    if (applyImageUrlPolicy((bitmap as { src: string }).src, policy) == null) { rec.image = undefined; rec.urlDenied = true }
+  }
+}
+
+/** A link channel's value as the policy makes it (`vetItemUrls`): the value, or undefined when it is refused with `onDeny`. */
+function vetLink(href: unknown, ctx: EvalContext): unknown {
+  if (href == null || ctx.urlPolicy === undefined) return href
+  return applyLinkUrlPolicy(href, ctx.urlPolicy) == null ? undefined : href
+}
+
+/** A policy's protocol and credential checks without its hook (the same `onDeny`). */
+const BASIC_POLICIES = new WeakMap<ImageUrlPolicy, ImageUrlPolicy>()
+function basicPolicyOf(policy: ImageUrlPolicy): ImageUrlPolicy {
+  let basic = BASIC_POLICIES.get(policy)
+  if (basic === undefined) {
+    basic = { ...policy }
+    delete basic.allow
+    BASIC_POLICIES.set(policy, basic)
+  }
+  return basic
 }
 
 /** vega SortItems: the items ordered by their own properties (a stable sort). */
@@ -6625,9 +6692,8 @@ function buildGroupItem(mark: CompiledMark, ctx: EvalContext, entered: EnteredGr
 
     // the item's `clip` (encode) clips its content to its own box; the mark's `clip` clips the whole mark to the enclosing group
     const { items: groupContent, paint } = groupItems(geo, gw, gh, ordered)
-    // a hyperlinked group (`href` in its encode) is vetted like any mark's link
-    let href = (geo as Record<string, unknown>).href
-    if (href != null && ctx.urlPolicy !== undefined && applyLinkUrlPolicy(href, ctx.urlPolicy) == null) href = undefined
+    // (a hyperlinked group's `href` went through the policy as the item was encoded: `resolveEncodeSet`)
+    const href = (geo as Record<string, unknown>).href
     const role = (mark.role as string | undefined) ?? 'scope'
     // the item's own aria channels (vega-scenegraph ariaItemAttributes, on the item's `<g>`)
     const itemAria = itemAriaOf(geo as Record<string, unknown>)
@@ -6731,6 +6797,8 @@ interface EncodePlan {
   /** Each plain key's spec and its shape (EK_*), so the per-row loop does no shape tests. */
   plainSpecs: Array<EncodeValue | EncodeValue[]>
   plainKinds: Uint8Array
+  /** Whether a channel holds a URL the policy vets as the item is encoded (`URL_CHANNELS`, `vetItemUrls`). */
+  urls: boolean
 }
 
 // Encode entry shapes with a dedicated per-row path; everything else takes the general evaluator.
@@ -6806,7 +6874,7 @@ function encodePlan(encode: Record<string, EncodeValue | EncodeValue[]>): Encode
   }
   const plainSpecs = plainKeys.map((k) => encode[k]!)
   const plainKinds = Uint8Array.from(plainSpecs, encodeKind)
-  plan = { plainKeys, signalKeys, definedSpec, plainSpecs, plainKinds }
+  plan = { plainKeys, signalKeys, definedSpec, plainSpecs, plainKinds, urls: Object.keys(encode).some((k) => URL_CHANNELS.has(k)) }
   encodePlanCache.set(encode, plan)
   return plan
 }
@@ -7012,6 +7080,11 @@ function resolveEncodeSet(encode: Record<string, EncodeValue | EncodeValue[]>, d
     if (has('yc')) rec['y'] = n('yc') - (n('height') || 0) / 2
   }
 
+  // The URL channels go through the policy as the item is made (outside the encode's own error handling: a refusal is the
+  // policy's error, not an encode failure). An item then only ever holds what the policy made of them, so an item kept from an
+  // evaluation before is never written to vet it again (it is that evaluation's: C2), and a channel evaluated again under
+  // another policy differs from the one before by what the policy made of it (`reencodeChannels`, C478).
+  if (plan.urls) vetItemUrls(item, marktype === 'image', ctx)
   return item
 }
 
@@ -7571,7 +7644,7 @@ function makeGuideHost(ctx: EvalContext): GuideHost {
       // mark kept whole brings it back from its log.
       const stops = scaleGradientStops(ctx.scales.get(name) as never)
       const id = gradientDefId(vertical ? 'vertical' : 'horizontal', stops)
-      if (stops.length) addDefs(ctx, [vertical ? { id, colorStops: stops } : { id, colorStops: stops, direction: 'horizontal' }])
+      if (stops.length) addDefs(ctx, [{ id, colorStops: stops, direction: vertical ? 'vertical' : 'horizontal' }])
       else ctx.defsAsked.n++
       return `url(#${id})`
     },
@@ -8118,14 +8191,19 @@ function retainGuideOrder(rows: Row[], memory: PassMemory, id: string): Row[] {
   return out
 }
 
-/** A hyperlink on a guide's group or marks goes through the URL policy like any mark's. */
+/**
+ * A guide's URLs go through the URL policy like any mark's (`vetItemUrls`): every node of it, however deep -- the guide's group,
+ * the mark groups of its parts and their items (a title's text items are two levels down), and the box leaves of a group item.
+ */
 function vetGuideLinks(g: SceneGroup, ctx: EvalContext): void {
   if (ctx.urlPolicy === undefined) return
-  const vet = (it: SceneItem): void => {
-    if (it.href != null && applyLinkUrlPolicy(it.href, ctx.urlPolicy!) == null) it.href = undefined
+  const visit = (node: SceneItem, depth: number): void => {
+    vetItemUrls(node, false, ctx)
+    const rec = node as unknown as { items?: unknown; box?: unknown; boxFg?: unknown }
+    for (const leaf of [rec.box, rec.boxFg]) if (leaf !== null && typeof leaf === 'object') vetItemUrls(leaf as SceneItem, false, ctx)
+    if (Array.isArray(rec.items) && depth < 64) for (const it of rec.items as SceneItem[]) visit(it, depth + 1)
   }
-  vet(g)
-  for (const it of g.items ?? []) vet(it as SceneItem)
+  visit(g as unknown as SceneItem, 0)
 }
 
 /** An axis's `values`: what a signal holds when the ticks are made; null, undefined, 0 or '' is no values at all. */

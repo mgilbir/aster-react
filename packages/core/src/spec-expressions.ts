@@ -25,6 +25,7 @@
  * a few of them (`WRAPPED` there) when it is the author's text that is wrong in them is not reproduced.
  */
 import { SpecParseError } from './parse-error.js'
+import { engineSlotMessage, isEngineSlot } from './item-slots.js'
 import { checkExpression } from './expr-check.js'
 import { parseEventSelectorString } from './event-selector.js'
 import { filterCode } from './stream-defs.js'
@@ -552,6 +553,8 @@ class Check {
         continue
       }
       for (const channel of Object.keys(block)) {
+        // (a channel is written onto the item under its own name: none may name the engine's own slots, item-slots.ts)
+        if (isEngineSlot(channel)) throw new SpecParseError(engineSlotMessage(channel, `encode block "${key}"`))
         const entry = block[channel]
         if (entry == null) continue
         this.entry(entry)

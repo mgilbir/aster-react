@@ -9,6 +9,8 @@ import { assertSpecDepth } from './limits.js'
 import { dataInputOf, normalizeSpecLists } from './spec-structure.js'
 import { noteWrittenType, transformTypeOf } from './transform-names.js'
 import { checkExpressions } from './spec-expressions.js'
+import { engineSlotMessage, isEngineSlot } from './item-slots.js'
+import { SpecParseError } from './parse-error.js'
 import { markPlacing } from './tuple-order.js'
 import { markShareable } from './guide-encode.js'
 import { defaultMergedConfig, mergeVegaConfig, vegaDefaultConfig } from './config-defaults.js'
@@ -134,6 +136,8 @@ export function compileChart(givenSpec: VgSpec): CompiledChart {
     height,
     padding,
     background,
+    // (vega-parser: `spec.description || config.description`, which vega-view writes as the container's aria-label)
+    ...((rawSpec.description || (mergedConfig as { description?: unknown }).description) ? { description: String(rawSpec.description || (mergedConfig as { description?: unknown }).description) } : {}),
     frameStroke,
     frameFill,
     ...(frameFillTransparent ? { frameFillTransparent: true as const } : {}),
@@ -708,6 +712,8 @@ function applyStyleDefaults(m: Record<string, unknown>, cfgStyle: Record<string,
   for (const { props, pairGuard } of sources) {
     for (const [k, v] of Object.entries(props)) {
       if (k === 'name' || k === 'interactive' || k === 'zindex' || k === 'style') continue
+      // (a default is a channel of the mark's items like any other: it may not name the engine's own slots, item-slots.ts)
+      if (isEngineSlot(k)) throw new SpecParseError(engineSlotMessage(k, 'a config style or mark default'))
       if (updateOnly && spatialKeys.has(k)) continue
       if (isRule && (k === 'xc' || k === 'yc')) continue
       if (isSymbol && symbolInert.has(k)) continue
