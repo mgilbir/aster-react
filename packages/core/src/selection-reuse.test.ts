@@ -823,7 +823,8 @@ describe('what a kept build or a keyed pulse must not take over', () => {
   })
 
   it('under limits a kept build would count its rows once: none is kept, and the limit is where it was', () => {
-    // (each round of the evaluation runs the fold: 10 rows generated twice)
+    // (the fold runs once per evaluation, as vega's does: `picked` reads `store`, which is built before it, and no dataset reads
+    // `picked`, so no round builds the datasets again -- 10 rows generated, by the first evaluation and by the second alike)
     const spec = {
       width: 100, height: 50, autosize: 'none',
       signals: [{ name: 'u', value: 0 }, { name: 'picked', update: "length(data('store'))" }],
@@ -831,7 +832,7 @@ describe('what a kept build or a keyed pulse must not take over', () => {
       marks: [{ type: 'symbol', from: { data: 'f' }, encode: { update: { x: { field: 'value' } } } }],
     } as unknown as VgSpec
     const t = Array.from({ length: 10 }, (_, i) => ({ a: i, b: i * 2 }))
-    for (const [limit, throws] of [[19, true], [20, false]] as const) {
+    for (const [limit, throws] of [[9, true], [10, false]] as const) {
       const input = (u: number): RuntimeInput => ({ data: { t, store: [] }, signals: { u }, limits: { maxGeneratedRows: limit } })
       const s = createChartSession()
       const first = (): SceneRoot => s.evaluate(spec, input(0))
