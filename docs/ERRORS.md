@@ -260,7 +260,9 @@ one of the add-ons' (loaded or not: see below), `if`, or an event function; name
 that vega's own encode entries are written with (`_scale`, `_bandwidth`, `_range`). A name is a signal of a scope when the spec,
 its config or a transform with a `signal` declared it before the expression (or after it, for a `{signal: text}` property), in
 that scope or one around it; a group also has `parent`, and a view has `width`, `height`, `padding`, `autosize` and
-`background`. The names every object has (`toString`, `constructor`) are signals everywhere, as upstream.
+`background`. The names every object has (`toString`, `constructor`, `hasOwnProperty`, ...) are names like any other: one the
+spec does not declare is `Unrecognized signal name`. (`vega.parse` resolves them to the `Object.prototype` members and accepts
+the spec, handing the expression a built-in function: the sandbox does not.)
 
 Selectors and streams of a signal's `on` are refused the same way: `Signal update missing events specification.`, a
 selector the parser refuses (`Between selector must have two elements: ...`), `Invalid stream specification: ...`,
