@@ -10,7 +10,7 @@ import { compileExprTransform, contourQuantize } from './transform.js'
 import { densityGrid, placeContours, type RasterGrid } from './raster-grid.js'
 import { accessorOf as fieldAccessor, densitySettings, type DensitySettings, type Get } from './raster-params.js'
 import type { Row, TransformContext } from './transform.js'
-import { boundedCount, ceiling } from './limits.js'
+import { allot, meterTick } from './limits.js'
 import { geoRegistry, requireGeo } from './registry.js'
 import { parseExpression, type AstNode } from './expr-parser.js'
 import { rgbConvert, type Rgb } from './color.js'
@@ -51,6 +51,7 @@ export function kde2dRows(rows: Row[], t: Params, ctx: TransformContext): Row[] 
   else {
     const map = new Map<string, Row[] & { dims?: unknown[] }>()
     for (const row of rows) {
+      // bounded: the spec's groupby fields
       const key = groupby.map((get) => get(row))
       const ks = String(key)
       let g = map.get(ks)
@@ -60,6 +61,7 @@ export function kde2dRows(rows: Row[], t: Params, ctx: TransformContext): Row[] 
   }
   return groups.map((g) => {
     const out: Row = { [as]: densityOf(g, x, y, weight, settings, !!t.counts) }
+    // bounded: the spec's groupby names
     for (let i = 0; i < names.length; ++i) out[names[i]!] = g.dims![i]
     return out
   })
@@ -81,7 +83,7 @@ export function isocontourRows(rows: Row[], t: Params, ctx: TransformContext): R
   if (!contourRun) requireGeo() // throws: the geo addon is not loaded
 
   // thresholds: given (a list, empty included), or `levels` quantized per grid (independent) or over the grids' maxima (shared)
-  ceiling('items', (t.levels as number) || 10, 'isocontour levels')
+  allot('items', (t.levels as number) || 10, 'isocontour levels')
   const quantize = contourQuantize((t.levels as number) || 10, !!t.nice, t.zero !== false)
   let tz = t.thresholds as number[] | ((values: Float32Array) => number[]) | undefined
   if (!tz) tz = t.resolve !== 'shared' ? quantize : quantize(rows.map((r) => max((field(r) as RasterGrid).values) as number))
@@ -94,10 +96,12 @@ export function isocontourRows(rows: Row[], t: Params, ctx: TransformContext): R
 
   const out: Row[] = []
   for (const r of rows) {
+    meterTick('isocontour')
     const grid = field(r) as RasterGrid
     const thresholds = isArray(tz) ? (tz as number[]) : (tz as (v: Float32Array) => number[])(grid.values)
-    boundedCount(thresholds.length, 'isocontour thresholds')
+    allot('items', thresholds.length, 'isocontour thresholds')
     const paths = contourRun!(grid.values, thresholds, [Math.floor(grid.width), Math.floor(grid.height)], smooth)
+      // bounded: the features contourRun made (its scan was allotted as work)
       .map((f) => ({ type: f.type, value: f.value, coordinates: f.coordinates }))
 
     // `scale` and `translate` (a number or pair, or an expression of the row) place the polygons in view pixels
@@ -107,6 +111,7 @@ export function isocontourRows(rows: Row[], t: Params, ctx: TransformContext): R
       const pair = (typeof s === 'number' ? [s, s] : s) as number[]
       placeContours(paths, [grid.x1 || 0, grid.y1 || 0], [pair[0] || 1, pair[1] || 1], [(tr && tr[0]) || 0, (tr && tr[1]) || 0])
     }
+    // bounded: the features contourRun made (its scan was allotted as work)
     for (const p of paths) out.push({ ...(as != null ? { [as]: p } : p), ...r })
   }
   return out
@@ -187,13 +192,18 @@ function paintGrid(grid: RasterGrid, pixel: Pixel, color: PixelParam<Rgb>, opaci
   const y2 = grid.y2 || grid.height
   const w = x2 - x1
   const h = y2 - y1
-  ceiling('cells', w * h, 'heatmap pixels')
-  boundedCount(w * h, 'heatmap pixels')
+  // The window comes from the row's grid (data): the loops below visit ceil(w) x ceil(h) pixels, so that is what is bounded, before
+  // the pixels are allocated; a window with no width (or no height, or a size that is no number) has no pixels to visit, however
+  // tall (wide) it is.
+  if (!(w > 0 && h > 0)) return new RasterImage(w, h, new Uint8ClampedArray(4 * w * h))
+  allot('cells', Math.ceil(w) * Math.ceil(h), 'heatmap pixels')
   const bytes = new Uint8ClampedArray(4 * w * h)
   const cells = grid.values
   let at = 0
   for (let j = y1; j < y2; ++j) {
+    meterTick('heatmap', w)
     pixel.$y = j - y1
+    // bounded: the pixels of a row, which the row loop ticks with as its cost
     for (let i = x1; i < x2; ++i, at += 4) {
       pixel.$x = i - x1
       pixel.$value = cells ? cells[i + j * stride]! : 0

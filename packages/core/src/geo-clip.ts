@@ -13,6 +13,7 @@ import {
   EPSILON, HALF_PI, PI, RADIANS, TAU, type Ring, type Vec3, acosClamped, addTo, cross, dot, lonLat, normalize, polygonContains,
   sameSpot, scaled, unitVector,
 } from './geo-sphere.js'
+import { meterTick } from './limits.js'
 
 /** A position on the boundary of a clip region. */
 export interface Spot {
@@ -135,6 +136,7 @@ function rejoin(
       if (!piece.entryMark && !piece.exitMark) {
         // a piece that closes on itself needs no joining
         out.mark(LINE_START, src)
+        // bounded: the points of one piece the clip made (its events are bounded as they grow)
         for (let i = 0; i < n; i++) out.point(xy[2 * i]!, xy[2 * i + 1]!, src)
         out.mark(LINE_END, src)
         continue
@@ -155,16 +157,22 @@ function rejoin(
   thread(boundary)
   for (const crossing of boundary) crossing.entering = startInside = !startInside
   const first = subject[0]!
+  // bounded: every pass marks at least one crossing visited, and stops when all are: at most the crossings
   for (;;) {
     // the next crossing no ring has passed through yet
     let current = first
     let onSubject = true
-    while (current.visited) if ((current = current.next) === first) return
+    while (current.visited) {
+      meterTick('geo rejoin')
+      if ((current = current.next) === first) return
+    }
     let points = current.piece
     out.mark(LINE_START, src)
+    // bounded: every step marks a crossing visited and stops at one already visited: at most the crossings
     do {
       current.visited = current.twin.visited = true
       if (current.entering) {
+        // bounded: the points of one piece the clip made (its events are bounded as they grow)
         if (onSubject) for (let i = 0; i < points!.xy.length; i += 2) out.point(points!.xy[i]!, points!.xy[i + 1]!, src)
         else region.interpolate(current, current.next, 1, out, src)
         current = current.next
@@ -249,6 +257,7 @@ export const antimeridian: SphereClipper = {
     const n = line.length
     const { from } = line
     sink.begin(startSrc)
+    // bounded: the points of one line of the buffer; the batch loop that feeds the clipper ticks
     for (let i = 0, total = closed ? n + 1 : n; i < total; i++) {
       const at = from + (i < n ? i : 0)
       let lambda1 = line.x[at]!
@@ -356,6 +365,7 @@ export class CircleClipper implements SphereClipper {
       if (direction > 0 ? t0 < t1 : t0 > t1) t0 += direction * TAU
     }
     for (let t = t0; direction > 0 ? t > t1 : t < t1; t -= step) {
+      meterTick('geo clip')
       const at = lonLat([cosRadius, -sinRadius * Math.cos(t), -sinRadius * Math.sin(t)])
       out.point(at[0], at[1], src)
     }
@@ -440,6 +450,7 @@ export class CircleClipper implements SphereClipper {
     let clean = 1
     const n = line.length
     const { from } = line
+    // bounded: the points of one line of the buffer; the batch loop that feeds the clipper ticks
     for (let i = 0, total = closed ? n + 1 : n; i < total; i++) {
       const at = from + (i < n ? i : 0)
       const lambda = line.x[at]!
@@ -532,6 +543,7 @@ class SphereClip {
       this.rings.push(ring)
       this.startPolygon(src)
       out.mark(LINE_START, src)
+      // bounded: the points of one ring of the buffer, written to a buffer that is bounded as it grows
       for (let i = 0, n = ring.length; i < n; i++) out.point(ring.x[ring.from + i]!, ring.y[ring.from + i]!, src)
       out.mark(LINE_END, src)
       return
@@ -550,6 +562,7 @@ class SphereClip {
       if (m > 0) {
         this.startPolygon(src)
         out.mark(LINE_START, src)
+        // bounded: the points of the one piece, written to a buffer that is bounded as it grows
         for (let i = 0; i < m; i++) out.point(only.xy[2 * i]!, only.xy[2 * i + 1]!, src)
         out.mark(LINE_END, src)
       }
@@ -580,12 +593,13 @@ class SphereClip {
 
   run(): Events {
     // in batches: a loop that runs long inside one call makes V8 compile it a second time for the loop alone
-    for (let i = 0, n = this.ev.length; i < n; i += BATCH) this.clipRange(i, Math.min(n, i + BATCH))
+    for (let i = 0, n = this.ev.length; i < n; i += BATCH) { meterTick('geo', BATCH); this.clipRange(i, Math.min(n, i + BATCH)) }
     return this.out
   }
 
   private clipRange(from: number, to: number): void {
     const { ev, out, clipper } = this
+    // bounded: a batch of at most BATCH events; the batch loop ticks with BATCH
     for (let i = from; i < to; i++) {
       const src = ev.src[i]!
       switch (ev.op[i]!) {
@@ -727,6 +741,7 @@ export class Rectangle {
     let a = 0
     let a1 = 0
     if (from == null || (a = this.corner(from, direction)) !== (a1 = this.corner(to!, direction)) || this.compare(from, to!) < 0 !== direction > 0) {
+      // bounded: at most once round the 4 corners of the box
       do out.point(a === 0 || a === 3 ? this.x0 : this.x1, a > 1 ? this.y1 : this.y0, src)
       while ((a = (a + direction + 4) % 4) !== a1)
     } else out.point(to!.x, to!.y, src)
@@ -742,6 +757,7 @@ export class Rectangle {
       const n = ring.length / 2
       let b0 = ring[0]!
       let b1 = ring[1]!
+      // bounded: the points of one ring of the polygon being clipped: one pass over its points in all
       for (let j = 1; j < n; j++) {
         const a0 = b0
         const a1 = b1
@@ -916,12 +932,13 @@ class RectClip {
   }
 
   run(): Events {
-    for (let i = 0, n = this.ev.length; i < n; i += BATCH) this.rectRange(i, Math.min(n, i + BATCH))
+    for (let i = 0, n = this.ev.length; i < n; i += BATCH) { meterTick('geo', BATCH); this.rectRange(i, Math.min(n, i + BATCH)) }
     return this.out
   }
 
   private rectRange(from: number, to: number): void {
     const { ev, rect, out } = this
+    // bounded: a batch of at most BATCH events; the batch loop ticks with BATCH
     for (let i = from; i < to; i++) {
       this.src = ev.src[i]!
       switch (ev.op[i]!) {

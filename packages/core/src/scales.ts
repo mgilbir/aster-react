@@ -22,7 +22,7 @@ import { plain, plainList, plainRecord, resolveDomain, signalValue, type ScaleCo
 import type { CompiledScale } from './types.js'
 import { vegaDefaultConfig } from './config-defaults.js'
 import { error as raise, expT, hasOwnProperty, isArray, isFunction, isObject, isString, logT, peek, powT, symexpT, symlogT } from './util.js'
-import { ceiling } from './limits.js'
+import { allot, allotArray } from './limits.js'
 
 export type { ScaleContext } from './scale-domain.js'
 
@@ -344,9 +344,7 @@ function schemeRange(type: string, st: Settings, size: number): unknown {
 
 /** The `count` of a quantile / quantize colour scheme: it comes from the spec and sizes the sampled array. */
 function schemeClasses(count: unknown): number {
-  const n = +(count as number) || DEFAULT_CLASSES
-  ceiling('items', n, 'colour scheme count')
-  return n
+  return allot('items', +(count as number) || DEFAULT_CLASSES, 'colour scheme count')
 }
 
 /** A ramp restricted to the sub-range of [0, 1] the spec gives (and reversed when asked); a colour list is untouched. */
@@ -358,8 +356,9 @@ function trimmed(scheme: unknown, extent: number[] | undefined, reverse?: unknow
 
 /** The tick values the axis runtime draws for a scale: for `count` ticks, else the scale's default (none for a range of under two). */
 export function scaleTicks(s: Scale, count?: number): unknown[] {
-  // the count comes from the spec: a tick count past the ceiling is refused before ticks are made (it sizes the array)
-  if (typeof count === 'number') ceiling('items', count, 'tickCount')
+  // the count comes from the spec: a tick count past the ceiling is refused before ticks are made (it sizes the array; one the
+  // Array constructor refuses itself, 2^32 and up, is left to it, as vega's is)
+  if (typeof count === 'number') allotArray('items', count, 'tickCount')
   if (count != null) return vs.tickValues(s, count)
   return (s.range() as unknown[]).length >= 2 ? vs.tickValues(s, undefined) : []
 }

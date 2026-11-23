@@ -17,7 +17,7 @@
  * onto copies, or onto rows the pipeline owns), and group tables hold no inherited names, so a group called `constructor` is a group.
  */
 import { accessor, accessorFields, accessorName, array, ascending, error, sortData, type Accessor } from './util.js'
-import { meterTick } from './limits.js'
+import { allotUpTo, meterTick } from './limits.js'
 import { recorded, recordingFor, type GroupsByproduct } from './step-byproduct.js'
 import { quantileSorted } from './arr.js'
 
@@ -45,6 +45,7 @@ export function bootstrapCI(
   const means = new Float64Array(samples)
   for (let s = 0; s < samples; ++s) {
     let total = 0
+    // bounded: the pool, for each of the 1000 resamples (fixed); the resample loop ticks with the pool's size
     for (let i = 0; i < n; ++i) total += pool[~~(random() * n)]!
     means[s] = total / n
     meterTick('bootstrap', n)
@@ -62,6 +63,7 @@ export function bootstrapCI(
 function extremeIndexes(items: ArrayLike<Row>, get: Get): [number, number] {
   const n = items.length
   let lowAt = 0
+  // bounded: one pass over the items, from the start
   while (lowAt < n) {
     const x = get(items[lowAt]) as number | null | undefined
     if (x != null && x >= x) break
@@ -496,6 +498,7 @@ export class MeasureGroup {
     for (const name of this.set.counts) target[name] = this.size
     for (const acc of this.accs) {
       const get = acc.plan.get
+      // bounded: the measures the spec asks for
       for (const reader of acc.plan.readers) target[reader.out] = reader.read(acc, this.rows, get)
     }
   }
@@ -588,6 +591,7 @@ function crossFill(g: Grouping): void {
   const domains = dims.map(() => Object.create(null) as Record<string, unknown>)
   for (const key in g.cells) {
     const tuple = g.cells[key]!.tuple
+    // bounded: the spec's groupby dimensions
     dims.forEach((name, i) => { domains[i]![tuple[name] as string] = tuple[name] })
   }
   const visit = (prefix: string, tuple: Row, depth: number): void => {
@@ -600,6 +604,15 @@ function crossFill(g: Grouping): void {
       else if (!g.cells[key]) cellAt(g, key, tuple)
     }
   }
+  // (every dimension's distinct values multiply: the full product is bounded before a cell of it is made)
+  let product = 1
+  for (const domain of domains) {
+    let size = 0
+    // bounded: a dimension's distinct values: one pass over the cells' values in all
+    for (const _ in domain) size++
+    product *= size
+  }
+  allotUpTo('rows', product, 'aggregate cross', g.order.length)
   visit('', {}, 0)
 }
 
@@ -684,6 +697,7 @@ export function joinAggregateRows(rows: readonly Row[], p: AggregateParams, rand
   for (const row of out) {
     const cell = g.cells[g.keyOf(row)]!
     const tuple = cell.tuple
+    // bounded: the groupby fields and measures of one cell (the spec's)
     for (const name in tuple) row[name] = tuple[name]
   }
   return out
@@ -737,10 +751,14 @@ export function pivotRows(rows: readonly Row[], p: PivotParams, random: () => nu
   })
 
   const g = newGrouping(p.groupby, p.key, set, random)
+  let groups = 0
   for (const row of rows) {
     const at = columnOf.get(pivotOf(row))
     cellAt(g, g.keyOf(row), row).group.addAt(row, at ?? -1, at === undefined ? undefined : valueOf(row))
     meterTick('pivot', columns.length)
+    // every group holds one measure per column: groups x columns is what pivot amplifies, bounded as the groups appear
+    // (the rows given are not amplification: only the cells beyond them are under the ceiling)
+    if (g.order.length !== groups) allotUpTo('rows', (groups = g.order.length) * columns.length, 'pivot cells', rows.length)
   }
   return g.order.map(finishCell)
 }

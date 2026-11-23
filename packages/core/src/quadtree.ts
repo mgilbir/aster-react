@@ -83,6 +83,7 @@ export class QuadTree {
     let x1 = x0 + 1
     let y1 = y0 + 1
     let size = x1 - x0 || 1
+    // bounded: doubling the square: at most about 2100 steps before it holds any finite point (or overflows to Infinity)
     while (maxX >= x1 || maxY >= y1) {
       size *= 2
       x1 = x0 + size
@@ -140,6 +141,7 @@ export class QuadTree {
     let cell = this.root
     let depth = 1
     // down to the first empty slot, or to the leaf in the way
+    // bounded: down the tree: at most its depth, which MAX_SPLITS (per insert) and the float range bound
     while (this.body[cell]! < 0) {
       const xm = (x0 + x1) / 2
       const ym = (y0 + y1) / 2
@@ -165,6 +167,7 @@ export class QuadTree {
     const oldY = this.py[cell]!
     let oldSlot: number
     let newSlot: number
+    // bounded: at most MAX_SPLITS splits, then the point is chained
     for (let splits = 0; ; ++splits) {
       const branch = this.newCell(-1, NaN, NaN)
       this.replace(parent, slot, branch)
@@ -214,6 +217,7 @@ export class QuadTree {
     boxes[2] = this.x1
     boxes[3] = this.y1
     let top = 1
+    // bounded: each cell of the tree at most once per walk; the force passes that walk it tick with the node count
     while (top > 0) {
       --top
       const cell = cells[top]!
@@ -246,6 +250,7 @@ export class QuadTree {
     let count = 0
     let top = 0
     stack[top++] = this.root
+    // bounded: each cell of the tree once
     while (top > 0) {
       const cell = stack[--top]!
       order[count++] = cell
@@ -255,6 +260,7 @@ export class QuadTree {
         if (c !== NO_CELL) stack[top++] = c
       }
     }
+    // bounded: each cell of the tree once
     while (count > 0) visit(order[--count]!)
   }
 }

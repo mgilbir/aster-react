@@ -52,6 +52,7 @@ export function timeBin(extent: readonly number[], maxbins?: number): { units: s
   const bins = maxbins || 40
   const target = Math.abs((extent[extent.length - 1]! - extent[0]!) || 0) / bins
   let longer = 0
+  // bounded: the fixed list of grains
   while (longer < BIN_GRAINS.length && BIN_GRAINS[longer]!.ms - target <= 0) longer++
   if (longer === BIN_GRAINS.length) {
     return { units: YEAR_ONLY, step: tickStep(extent[0]! / durationYear, extent[1]! / durationYear, bins) }

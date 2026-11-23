@@ -19,7 +19,7 @@ import { lexedText } from './expr-text.js'
 import { isEngineNode, noteEngineScene } from './scene-registry.js'
 import { parseExpressionCached, type Expr } from './expr-parser.js'
 import { datasetsReadIn, identifiersIn, scalesReadIn, dependencyKey, fieldsWritten, namesIn, pipelineReadsOf, reuse, runsOf, stepCounts, stepReadsOf, type StepReads, type StepRecord } from './step-reuse.js'
-import { activeMeter, withLimits, ceiling, checkRowCount, checkChartRegex, meterItems, meterTick, AsterLimitError } from './limits.js'
+import { activeMeter, withLimits, allot, checkItemCount, checkRowCount, checkChartRegex, meterTick, AsterLimitError } from './limits.js'
 import { getTextMetricsProvider, withTextMetricsProvider } from './text-metrics.js'
 import { AsterUrlError } from './url-policy.js'
 import { SpecParseError } from './parse-error.js'
@@ -6149,7 +6149,7 @@ function buildGroupMark(mark: CompiledMark, ctx: EvalContext): SceneGroup[] | nu
   const sources = groupSources(mark, ctx)
   if (sources === null) return null
   // one group item (and one scope) per datum / facet partition: bounded like any generated item (maxItems, the clock)
-  meterItems(sources.length, 'group items')
+  checkItemCount(sources.length, 'group items')
   // A group mark's own operators are its enclosing scope's: every item is encoded, then the mark's transforms and its sort run on
   // the items, and only then is what each item holds made (an instance of its own, ranked after them).
   const entered = sources.map((src) => { meterTick('group item'); return enterGroupItem(mark, ctx, src) })
@@ -8018,8 +8018,7 @@ function makeAxis(axis: CompiledAxis, ctx: EvalContext, index: number): SceneGro
   let rows: Row[] = ticks.map((value, i) => ({ index: i / ((ticks.length - 1) || 1), tickIndex: i, value, label: labelCache[i] }))
   if (extra && ticks.length) rows.push({ index: -1, tickIndex: -1, extra: { value: ticks[0] }, label: '' })
   if (ctx.passMemory !== undefined) rows = retainGuideOrder(rows, ctx.passMemory, `a${ctx.scope.path.join('/')}:${index}`)
-  ceiling('items', rows.length, 'axis ticks')
-  meterItems(rows.length, 'axis ticks')
+  allot('items', rows.length, 'axis ticks')
 
   const guides = chartGuides(ctx.chart)
   const host = guideHost(ctx)

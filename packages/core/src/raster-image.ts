@@ -69,6 +69,7 @@ function crc32(bytes: Uint8Array, start: number, end: number): number {
     }
   }
   let c = -1
+  // bounded: the bytes of an image whose pixels the heatmap allot bounded
   for (let i = start; i < end; i++) c = crcTable[(c ^ bytes[i]!) & 0xff]! ^ (c >>> 8)
   return ~c
 }
@@ -76,12 +77,14 @@ function crc32(bytes: Uint8Array, start: number, end: number): number {
 function pngDataUrl(width: number, height: number, pixels: Uint8ClampedArray): string {
   const row = 1 + width * 4 // a filter byte (0: none) and the row
   const raw = new Uint8Array(row * height)
+  // bounded: the rows of an image whose pixels the heatmap allot bounded
   for (let y = 0; y < height; y++) raw.set(pixels.subarray(y * width * 4, (y + 1) * width * 4), y * row + 1)
   // zlib: header, stored blocks of at most 65535 bytes, the Adler-32 of the data
   const blocks = Math.max(1, Math.ceil(raw.length / 65535))
   const z = new Uint8Array(2 + raw.length + blocks * 5 + 4)
   z[0] = 0x78; z[1] = 0x01
   let o = 2
+  // bounded: the 64 KB blocks of an image whose pixels the heatmap allot bounded
   for (let b = 0; b < blocks; b++) {
     const from = b * 65535
     const len = Math.min(65535, raw.length - from)

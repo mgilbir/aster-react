@@ -8,7 +8,7 @@
  */
 import { error, ownGet, sortData } from './util.js'
 import { fieldOf } from './transform-agg.js'
-import { checkRowCount, meterTick } from './limits.js'
+import { allot, allotUpTo, meterTick } from './limits.js'
 import type { HierNode, Row, TransformContext } from './transform.js'
 import { compileExprTransform, geoPointRadius, getField, resolveSizeParam } from './transform.js'
 import type { GeoProjection } from './geo-projections.js'
@@ -47,8 +47,10 @@ function treelinksRows(rows: Row[], _t: Record<string, unknown>, ctx: TransformC
 function breadthFirst(root: HierNode, callback: (node: HierNode) => void): void {
   const queue: HierNode[] = [root]
   for (let i = 0; i < queue.length; ++i) {
+    meterTick('tree')
     const node = queue[i]!
     callback(node)
+    // bounded: the node's children; every node of the tree is queued once
     for (const c of node.children) queue.push(c)
   }
 }
@@ -72,6 +74,7 @@ const treeOfDataset = (runtime: ExpressionRuntime, name: unknown): { lookup: Map
 }
 const pathBetween = (s: HierNode, e: HierNode): HierNode[] => {
   // d3 `node.path(end)`: up from s to the least common ancestor, then down to e
+  // bounded: up the tree to its root: at most its depth
   const up = (n: HierNode): HierNode[] => { const a: HierNode[] = [n]; for (let p = n.parent; p; p = p.parent) a.push(p); return a }
   const sa = up(s)
   const ea = up(e)
@@ -92,6 +95,7 @@ registerRuntimeExpressionFunction('treeAncestors', (runtime) => (name?: unknown,
   const n = tree?.lookup.get(String(node))
   if (!tree || !n) return undefined
   const out: Row[] = []
+  // bounded: up the tree to its root: at most its depth
   for (let p: HierNode | null = n; p; p = p.parent) out.push(tree.rowOf(p) ?? p.data)
   return out
 })
@@ -158,6 +162,7 @@ function bisectLeftValues(a: readonly unknown[], x: unknown): number {
   let hi = a.length
   if (lo < hi) {
     if (ascendingValues(x, x) !== 0) return hi
+    // bounded: binary search: log2 of the list
     do {
       const mid = (lo + hi) >>> 1
       if (ascendingValues(a[mid], x) < 0) lo = mid + 1
@@ -180,6 +185,7 @@ function markOutsideSorted(data: Row[], f: (r: Row) => unknown, from: unknown, t
   const sorted = Array.from(index, (k) => values[k])
   const lo = bisectLeftValues(sorted, from)
   const hi = bisectLeftValues(sorted, to)
+  // bounded: one pass over the sorted index
   for (let i = 0; i < lo; i++) curr[index[i]!]! |= bit
   for (let i = hi; i < n; i++) curr[index[i]!]! |= bit
 }
@@ -312,13 +318,16 @@ function crossRows(rows: Row[], t: Record<string, unknown>, ctx: TransformContex
   const test = filter && ctx.runtime.expr(filter)
   const out: Row[] = []
   const n = rows.length
-  // Without a filter the output is exactly n*n rows: refuse it up front. With a
-  // filter the n*n candidates are still evaluated, so the wall clock is sampled
-  // inside the inner loop.
-  if (!test) checkRowCount(n * n, 'cross')
+  // Without a filter the output is exactly n*n rows: bounded up front (the n rows it is given are not amplification, the rest
+  // are). With a filter the n*n candidates are still made and tested (bounded as work, the clock sampled per row), and the rows
+  // kept are bounded as they grow.
+  if (!test) allotUpTo('rows', n * n, 'cross', n)
+  else allot('work', n * n, 'cross candidates')
   for (let i = 0; i < n; ++i) {
     const left = rows[i]!
     meterTick('cross', n)
+    if (test) allotUpTo('rows', out.length, 'cross', n)
+    // bounded: the row loop ticks with n as its cost; n x n was allotted above (as rows, or as work with a filter)
     for (let j = 0; j < n; ++j) {
       const cand: Row = { [a]: left, [b]: rows[j]! }
       if (!test || test(cand, ctx.signals)) {
@@ -346,6 +355,7 @@ function dotbinValues(array: number[], step: number, smooth: boolean): Float64Ar
     const x = array[j]!
     if (x >= w) {
       b = (a + b) / 2
+      // bounded: `i` only moves forward to `j`: one pass over the values in all
       for (; i < j; ++i) v[i] = b
       w = x + step
       a = x
@@ -353,21 +363,27 @@ function dotbinValues(array: number[], step: number, smooth: boolean): Float64Ar
     b = x
   }
   b = (a + b) / 2
+  // bounded: `i` only moves forward to `n`: one pass over the values in all
   for (; i < j; ++i) v[i] = b
   if (smooth) {
     // smoothing: swap points between adjacent stacks (within step*1.25)
     const thresh = step + step / 4
     let sa = 0
     let sb = 1
+    // bounded: `sb` only moves forward: one pass over the stacks in all
     while (sb < n && v[sb] === v[sa]) ++sb
+    // bounded: `sb` moves on to the next stack every pass: one pass over the stacks in all
     while (sb < n) {
       let sc = sb + 1
+      // bounded: `sc` only moves forward over one stack
       while (sc < n && v[sb] === v[sc]) ++sc
       if (v[sb]! - v[sb - 1]! < thresh) {
         const d = sb + ((sa + sc - sb - sb) >> 1)
         let dd = d
+        // bounded: within one pair of adjacent stacks: each value is moved at most once per pair, the pairs follow each other
         while (dd < sb) v[dd++] = v[sb]!
         dd = d
+        // bounded: within one pair of adjacent stacks: each value is moved at most once per pair, the pairs follow each other
         while (dd > sb) v[dd--] = v[sa]!
       }
       sa = sb
@@ -389,6 +405,7 @@ function dotbinRows(rows: Row[], t: Record<string, unknown>, ctx: TransformConte
   const groups = new Map<string, number[]>()
   if (groupby.length) {
     for (let i = 0; i < rows.length; ++i) {
+      // bounded: the spec's groupby fields
       const key = groupby.map((f) => String(getField(rows[i]!, f))).join('|')
       let g = groups.get(key)
       if (!g) { g = []; groups.set(key, g) }
@@ -403,14 +420,17 @@ function dotbinRows(rows: Row[], t: Record<string, unknown>, ctx: TransformConte
   const out = rows.map((r) => ({ ...r }))
   const groupIndices = new Map<string, number[]>()
   for (const { i } of sorted) {
+    // bounded: the spec's groupby fields
     const key = groupby.map((f) => String(getField(rows[i]!, f))).join('|')
     let g = groupIndices.get(key)
     if (!g) { g = []; groupIndices.set(key, g) }
     g.push(i)
   }
   for (const g of groupIndices.values()) {
+    // bounded: a group's rows: the groups partition the rows, so one pass over them in all
     const gvals = g.map((i) => values[i] as number)
     const bins = dotbinValues(gvals, step, smooth)
+    // bounded: a group's rows: the groups partition the rows, so one pass over them in all
     for (let k = 0; k < g.length; ++k) {
       out[g[k]!]![as] = bins[k]
     }

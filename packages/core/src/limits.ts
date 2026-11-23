@@ -91,6 +91,41 @@ export function limitViolation(message: string): AsterLimitError {
  */
 let loose: AsterLimitError | null = null
 
+/** The numeric budgets of {@link SpecLimits}. */
+const NUMERIC_LIMITS: ReadonlySet<string> = new Set<keyof SpecLimits>([
+  'maxRows', 'maxMarks', 'maxStringLength', 'maxItems', 'maxPathLength', 'maxSvgLength', 'maxDepth', 'maxGeneratedRows',
+  'maxGeneratedBytes', 'maxTimeMs',
+])
+
+/** `limits` objects already validated (they are usually one object a host passes to every call). */
+const validated = new WeakSet<object>()
+
+/**
+ * Refuse a `limits` object a budget could not be read from, with a `TypeError`, where a scope opens: a key that is no limit
+ * (`maxrows`), a budget that is not a number or is `NaN` or negative (`'5'`, `null` from a JSON `NaN`), a `regex` that is
+ * neither mode. Read as given, any of them would silently be no budget at all (`n > NaN` is false). `Infinity` is a budget: it
+ * removes the cap of its own and replaces the built-in ceiling it stands for.
+ */
+export function validateLimits(limits: SpecLimits): void {
+  if (validated.has(limits)) return
+  if (limits === null || typeof limits !== 'object' || Array.isArray(limits)) {
+    throw new TypeError(`[aster] limits must be an object, got ${limits === null ? 'null' : Array.isArray(limits) ? 'an array' : typeof limits}`)
+  }
+  for (const key of Object.keys(limits)) {
+    const value = (limits as Record<string, unknown>)[key]
+    if (key === 'regex') {
+      regexMode(limits)
+      continue
+    }
+    if (!NUMERIC_LIMITS.has(key)) throw new TypeError(`[aster] limits.${key} is not a limit (known: ${[...NUMERIC_LIMITS, 'regex'].join(', ')})`)
+    if (value === undefined) continue
+    if (typeof value !== 'number' || !(value >= 0)) {
+      throw new TypeError(`[aster] limits.${key} must be a number >= 0 (or Infinity), got ${typeof value === 'number' ? String(value) : JSON.stringify(value) ?? typeof value}`)
+    }
+  }
+  validated.add(limits)
+}
+
 /** A monotonic clock for one bounded operation. */
 export interface LimitClock {
   readonly started: number
@@ -106,6 +141,7 @@ export interface LimitClock {
  * no-op so the hot paths keep their previous cost.
  */
 export function createLimitClock(limits?: SpecLimits, now: () => number = defaultNow): LimitClock {
+  if (limits !== undefined) validateLimits(limits)
   const started = now()
   const max = limits?.maxTimeMs
   const deadline = max != null && Number.isFinite(max) ? started + Math.max(0, max) : null
@@ -160,6 +196,17 @@ export const HARD_CAPS = Object.freeze({
   rows: 1_000_000,
   /** Cells of a typed-array grid built from spec parameters: `heatmap` pixels, density and contour grids, the label bitmap. */
   cells: 10_000_000,
+  /**
+   * Pixels of one raster a layout draws marks into to see where they are: the label canvases, the word cloud's board. Sized by
+   * the transform's `size` (a spec parameter); no limit replaces it (rows and items are other units).
+   */
+  pixels: 16_000_000,
+  /**
+   * Events (points and the marks between lines and polygons) one geo buffer holds: a shape's positions after projection,
+   * clipping and resampling, which a projection's `precision` and `scale` can multiply far past the positions given. No limit
+   * replaces it (they count rows, not the vertices of one shape).
+   */
+  vertices: 4_000_000,
   /** Items a spec-controlled count sizes: axis ticks, time ticks, facet `columns`, contour thresholds, quantized colour samples. */
   items: 100_000,
   /** Characters of one string an expression builtin builds: `pad`, number-format width. */
@@ -168,38 +215,121 @@ export const HARD_CAPS = Object.freeze({
   coords: 2_000_000,
   /** Point-in-outline tests one `intersect()` of an arc or path item needs: the rows the outline spans in the region times its edges (vega tests every lattice point of the region instead). */
   latticeTests: 50_000_000,
+  /**
+   * Steps of one loop whose length is the product of spec or data sizes and that allocates little or nothing per step: a contour
+   * scan (thresholds x grid cells), a static force simulation (iterations x nodes), a label's placement (labels x anchors), the
+   * candidate pairs of a filtered `cross`, the spiral of a word cloud. About a second of CPU, 40 times the largest the gallery
+   * reaches; with `maxTimeMs` the clock bounds the loop instead (each one ticks).
+   */
+  work: 100_000_000,
 })
 
-/** Which limits replace each ceiling: when one of them is set the caller's own budget governs. */
+/** Which limits replace each ceiling: when one of them is set the caller's own budget governs (and {@link allot} compares it). */
 const CEILING_KEYS: Record<keyof typeof HARD_CAPS, ReadonlyArray<keyof SpecLimits>> = {
   rows: ['maxRows', 'maxGeneratedRows'],
   cells: ['maxRows', 'maxGeneratedRows'],
   items: ['maxItems'],
+  pixels: [],
+  vertices: [],
   bytes: ['maxStringLength', 'maxGeneratedBytes'],
   coords: ['maxRows', 'maxGeneratedRows'],
   // (no limit stands for it: `maxTimeMs` bounds the walk too, but cooperatively)
   latticeTests: [],
+  // (every loop under this ceiling samples the clock, so a wall-clock budget bounds it)
+  work: ['maxTimeMs'],
 }
 
-/** Whether the active scope carries a limit that replaces the built-in ceiling of `kind`. */
-function ceilingReplaced(kind: keyof typeof HARD_CAPS, limits: SpecLimits | undefined): boolean {
-  if (!limits) return false
-  for (const key of CEILING_KEYS[kind]) if (limits[key] != null) return true
-  return false
+/** An amount a site spends: one of the {@link HARD_CAPS} kinds. */
+export type Allotment = keyof typeof HARD_CAPS
+
+/**
+ * Set by {@link unboundedForParity} only: the built-in ceilings are off (the budgets of an active scope still apply). The
+ * library functions bound their counts themselves, so a differential that pins one against its upstream past a ceiling has to
+ * say so by name.
+ */
+let ceilingsOff = false
+
+/**
+ * Run `fn` with the built-in ceilings off. FOR PARITY TESTS ONLY: a differential that compares a bounded primitive (`ticks`,
+ * `range`, an interval's `range`) with its upstream for counts past a ceiling. Never called by the engine.
+ */
+export function unboundedForParity<T>(fn: () => T): T {
+  const prev = ceilingsOff
+  ceilingsOff = true
+  try {
+    return fn()
+  } finally {
+    ceilingsOff = prev
+  }
 }
 
 /**
- * Refuse `n` of `what` when it passes the built-in ceiling of `kind`, unless a limit the caller gave replaces it.
- * Works with or without a limits scope (the point of the ceiling); the error is the usual typed one.
+ * Refuse `n` of `kind` past its built-in ceiling, unless the active scope carries a limit that replaces it (that limit is then
+ * compared by the meter in the same {@link allot} call). Works with or without a scope (the point of a ceiling).
  */
-export function ceiling(kind: keyof typeof HARD_CAPS, n: number, what: string): void {
+function overCeiling(kind: Allotment, n: number, what: string): void {
   const cap = HARD_CAPS[kind]
-  // (a count from 2^32 up already fails natively and at once, `Invalid array length`, before anything is allocated; the
-  // ceiling keeps to the counts that would otherwise be allocated)
-  // (a work count is not allocated: it is refused at any size)
-  if (!(n > cap) || (kind !== 'latticeTests' && n >= 4294967296) || ceilingReplaced(kind, active?.limits)) return
+  if (!(n > cap) || ceilingsOff) return
+  const limits = active?.limits
+  if (limits) for (const key of CEILING_KEYS[kind]) if (limits[key] != null) return
   const raise = CEILING_KEYS[kind][0]
   throw limitViolation(`${what} ${n} > ${cap} (built-in ceiling that applies even without limits${raise ? `; raise it with limits.${raise}` : ''})`)
+}
+
+/**
+ * The one way a site sizes an allocation or a loop by an amount the spec or its data controls: call it with the amount
+ * BEFORE spending it. In one call, with or without `limits`:
+ *
+ * - the built-in ceiling of `kind` ({@link HARD_CAPS}) applies, unless the active scope sets a limit that replaces it, and
+ *   that limit is then compared here: a `limits` object is never less safe than none;
+ * - the active budgets are charged: `rows` / `cells` against `maxRows` (this one amount) and `maxGeneratedRows` (the total of
+ *   the evaluation), `items` against `maxItems`, `bytes` against `maxStringLength` and `maxGeneratedBytes`;
+ * - the wall clock is read (`maxTimeMs`).
+ *
+ * `input` is what the amount grows from (a transform's input rows): the ceiling and `maxGeneratedRows` see only `n - input`,
+ * the rows a 1:many transform adds, so a pipeline that does not amplify is never refused for the size of the data it is given.
+ * Returns `n`, so an allocation reads `new Array(allot('rows', n, 'what'))`.
+ */
+export function allot(kind: Allotment, n: number, what: string, input = 0): number {
+  const added = n - input
+  overCeiling(kind, added, what)
+  if (active) active.spend(kind, n, added, what, true)
+  return n
+}
+
+/**
+ * {@link allot} for `new Array(n)`: a length the Array constructor refuses by itself, at once and before it allocates anything
+ * (2^32 and up, negative, fractional, NaN: `RangeError: Invalid array length`) is left to it, so a library function fails on it
+ * as its upstream does; any other length is allotted.
+ */
+export function allotArray(kind: Allotment, n: number, what: string): number {
+  return Number.isInteger(n) && n >= 0 && n < 4294967296 ? allot(kind, n, what) : n
+}
+
+/**
+ * {@link allot} for the output of a transform step, or an upper bound of it: compared like `allot` (the ceiling, the single
+ * budget, what is left of the cumulative one, the clock) but not charged, because the transform runner charges every step's
+ * output to `maxGeneratedRows` once it is made (`applyTransforms`). Inside a transform, use this; elsewhere, `allot`.
+ */
+export function allotUpTo(kind: Allotment, n: number, what: string, input = 0): number {
+  const added = n - input
+  overCeiling(kind, added, what)
+  if (active) active.spend(kind, n, added, what, false)
+  return n
+}
+
+/**
+ * {@link allot} for an output that grows while it is made, when its size is not known up front (a calendar range). Call the
+ * returned function with the size so far (every so often): the ceiling and single budgets compare the total, the cumulative
+ * budgets are charged only what was added since the last call.
+ */
+export function allotGrowing(kind: Allotment, what: string): (total: number) => void {
+  let charged = 0
+  return (total) => {
+    overCeiling(kind, total, what)
+    if (active) active.spend(kind, total, total - charged, what, true)
+    charged = total
+  }
 }
 
 /** Ceiling on the objects and arrays one spec walk visits, so a spec that shares sub-objects (a DAG, built in code) cannot make the walk exponential. */
@@ -262,11 +392,13 @@ export interface LimitMeter {
   checkRows(n: number, what: string): void
   /** Add `n` generated rows to the cumulative budget (maxGeneratedRows). */
   generated(n: number, what: string): void
+  /** The rows charged to `maxGeneratedRows` so far in this scope (0 while it is unset). */
+  readonly generatedRows: number
   /** Account `n` rows about to be generated: {@link checkRows} plus {@link generated}. */
   rows(n: number, what: string, kind?: 'rows' | 'cells'): void
   /** Account a string of `n` characters about to be built (single: maxStringLength; cumulative: maxGeneratedBytes). */
   bytes(n: number, what: string): void
-  /** Account `n` scene items about to be generated (maxItems). */
+  /** Account `n` scene items about to be generated, one per row of data (maxItems; no built-in ceiling: data is not amplification). */
   items(n: number, what: string): void
   /**
    * Account `n` coordinates about to be decoded (topojson arcs are shared, so a
@@ -274,12 +406,19 @@ export interface LimitMeter {
    * or by `maxRows` when that is not set.
    */
   coords(n: number, what: string): void
+  /**
+   * What {@link allot} charges the scope with: `n` of `kind` exists or is about to (compared with the single budget of the
+   * kind), `added` of them new (charged to the cumulative one, or with `charge` false only compared with what is left of it),
+   * then the clock. The built-in ceiling is not compared here.
+   */
+  spend(kind: Allotment, n: number, added: number, what: string, charge: boolean): void
 }
 
 class Meter implements LimitMeter {
   private ticks = 0
   private genRows = 0
   private genBytes = 0
+  private genCoords = 0
   violation: AsterLimitError | null = null
   readonly clock: LimitClock
   constructor(readonly limits: SpecLimits, base: LimitClock) {
@@ -299,6 +438,9 @@ class Meter implements LimitMeter {
       },
     }
   }
+  get generatedRows(): number {
+    return this.genRows
+  }
   tick(phase = 'evaluation', cost = 1): void {
     if (this.violation) throw this.violation
     this.ticks += cost
@@ -313,46 +455,72 @@ class Meter implements LimitMeter {
     if (maxRows != null && n > maxRows) over('maxRows', n, maxRows, what)
     this.tick(what)
   }
-  generated(n: number, what: string): void {
+  generated(n: number, what: string, charge = true): void {
     const { maxGeneratedRows } = this.limits
     if (maxGeneratedRows != null && n > 0) {
-      this.genRows += n
-      if (this.genRows > maxGeneratedRows) over('maxGeneratedRows', this.genRows, maxGeneratedRows, what)
+      const total = this.genRows + n
+      if (charge) this.genRows = total
+      if (total > maxGeneratedRows) over('maxGeneratedRows', total, maxGeneratedRows, what)
     }
+  }
+  spend(kind: Allotment, n: number, added: number, what: string, charge: boolean): void {
+    if (this.violation) throw this.violation
+    const limits = this.limits
+    switch (kind) {
+      case 'rows':
+      case 'cells': {
+        const { maxRows } = limits
+        if (maxRows != null && n > maxRows) over('maxRows', n, maxRows, what)
+        this.generated(added, what, charge)
+        break
+      }
+      case 'items': {
+        const { maxItems } = limits
+        if (maxItems != null && n > maxItems) over('maxItems', n, maxItems, what)
+        break
+      }
+      case 'bytes': {
+        const { maxStringLength, maxGeneratedBytes } = limits
+        if (maxStringLength != null && n > maxStringLength) over('maxStringLength', n, maxStringLength, what)
+        if (maxGeneratedBytes != null && added > 0) {
+          const total = this.genBytes + added
+          if (charge) this.genBytes = total
+          if (total > maxGeneratedBytes) over('maxGeneratedBytes', total, maxGeneratedBytes, what)
+        }
+        break
+      }
+      case 'coords': {
+        const total = this.genCoords + added
+        if (charge) this.genCoords = total
+        const cap = limits.maxGeneratedRows ?? limits.maxRows
+        if (cap != null && total > cap) over(limits.maxGeneratedRows != null ? 'maxGeneratedRows' : 'maxRows', total, cap, what)
+        this.tick(what, added)
+        return
+      }
+      case 'latticeTests':
+      case 'work':
+      case 'pixels':
+      case 'vertices':
+        break
+    }
+    this.clock.check(what)
   }
   rows(n: number, what: string, kind: 'rows' | 'cells' = 'rows'): void {
-    if (this.violation) throw this.violation
-    const { maxRows } = this.limits
-    if (maxRows != null && n > maxRows) over('maxRows', n, maxRows, what)
-    if (n !== Infinity) ceiling(kind, n, what)
-    this.generated(n, what)
-    this.clock.check(what)
+    overCeiling(kind, n, what)
+    this.spend(kind, n, n, what, true)
   }
   bytes(n: number, what: string): void {
-    if (this.violation) throw this.violation
-    const { maxStringLength, maxGeneratedBytes } = this.limits
-    if (maxStringLength != null && n > maxStringLength) over('maxStringLength', n, maxStringLength, what)
-    ceiling('bytes', n, what)
-    if (maxGeneratedBytes != null) {
-      this.genBytes += n
-      if (this.genBytes > maxGeneratedBytes) over('maxGeneratedBytes', this.genBytes, maxGeneratedBytes, what)
-    }
-    this.clock.check(what)
-  }
-  private genCoords = 0
-  coords(n: number, what: string): void {
-    if (this.violation) throw this.violation
-    this.genCoords += n
-    ceiling('coords', this.genCoords, what)
-    const cap = this.limits.maxGeneratedRows ?? this.limits.maxRows
-    if (cap != null && this.genCoords > cap) over(this.limits.maxGeneratedRows != null ? 'maxGeneratedRows' : 'maxRows', this.genCoords, cap, what)
-    this.tick(what, n)
+    overCeiling('bytes', n, what)
+    this.spend('bytes', n, n, what, true)
   }
   items(n: number, what: string): void {
+    // (scene items the data sizes, one per row: a budget, not a ceiling)
+    this.spend('items', n, n, what, true)
+  }
+  coords(n: number, what: string): void {
     if (this.violation) throw this.violation
-    const { maxItems } = this.limits
-    if (maxItems != null && n > maxItems) over('maxItems', n, maxItems, what)
-    this.clock.check(what)
+    overCeiling('coords', this.genCoords + n, what)
+    this.spend('coords', n, n, what, true)
   }
 }
 
@@ -393,6 +561,7 @@ export function withLimits<T>(limits: SpecLimits | undefined, fn: (meter: LimitM
     return result
   }
   if (active && active.limits === limits) return fn(active)
+  validateLimits(limits)
   const prev = active
   const meter = new Meter(limits, createLimitClock(limits))
   active = meter
@@ -409,21 +578,21 @@ export function withLimits<T>(limits: SpecLimits | undefined, fn: (meter: LimitM
   return result
 }
 
-/** A dataset of `n` rows exists or is about to; a no-op without an active meter. */
+/** A dataset of `n` rows exists or is about to (data the host gave, or a transform's output already metered by {@link allot}); a no-op without an active meter. */
 export function checkRowCount(n: number, what: string): void {
   if (active) active.checkRows(n, what)
 }
-/** Amortised clock check for loops (see {@link LimitMeter.tick}); a no-op without an active meter. */
-export function meterTick(what: string, cost = 1): void {
-  if (active) active.tick(what, cost)
+/** `n` scene items the data sizes (one per row) are about to be made; a no-op without an active meter (data is no amplification). */
+export function checkItemCount(n: number, what: string): void {
+  if (active) active.items(n, what)
 }
 /**
- * Account rows about to be generated (maxRows, maxGeneratedRows; the built-in ceiling when neither is set). `kind` 'cells' is a
- * typed-array grid, which holds many more entries than a row array can.
+ * Amortised clock check for loops (see {@link LimitMeter.tick}); a no-op without an active meter. Every loop the spec or its data
+ * sizes calls it (or {@link allot}) in its body: `metered-loops.test.ts` refuses a loop in the transform, layout, raster and geo
+ * files that does neither and carries no `// bounded:` reason.
  */
-export function meterRows(n: number, what: string, kind: 'rows' | 'cells' = 'rows'): void {
-  if (active) active.rows(n, what, kind)
-  else ceiling(kind, n, what)
+export function meterTick(what: string, cost = 1): void {
+  if (active) active.tick(what, cost)
 }
 /**
  * Account coordinates about to be decoded. `decoded` is the running total of the caller's own decode, which is what the
@@ -431,35 +600,7 @@ export function meterRows(n: number, what: string, kind: 'rows' | 'cells' = 'row
  */
 export function meterCoords(n: number, what: string, decoded = n): void {
   if (active) active.coords(n, what)
-  else ceiling('coords', decoded, what)
-}
-/** Account a string about to be built (maxStringLength, maxGeneratedBytes; the built-in ceiling when neither is set). */
-export function meterBytes(n: number, what: string): void {
-  if (active) active.bytes(n, what)
-  else ceiling('bytes', n, what)
-}
-/** Account scene items about to be generated; a no-op without an active meter. */
-export function meterItems(n: number, what: string): void {
-  if (active) active.items(n, what)
-}
-
-/**
- * Bound a count that sizes an allocation or loop (tick counts, columns, sequence length) by the active limits. Without a
- * limits scope the count is returned unchanged: this is also the library layer the differentials pin against d3, so the
- * built-in ceilings apply where a SPEC supplies the count (see {@link ceiling}), not here.
- */
-export function boundedCount(n: number, what: string, kind: 'rows' | 'items' | 'bytes' = 'items'): number {
-  if (active) active[kind](n, what)
-  return n
-}
-
-/**
- * Rows a transform or row emitter is about to generate, before it allocates them (fold, flatten, impute, kde, ...):
- * {@link checkRowCount}, plus the built-in ceiling.
- */
-export function checkGeneratedRows(n: number, what: string): void {
-  ceiling('rows', n, what)
-  if (active) active.checkRows(n, what)
+  else overCeiling('coords', decoded, what)
 }
 
 /**
@@ -543,44 +684,82 @@ import { part } from './engine-parts.js'
 import { dataInputOf, specList } from './spec-structure.js'
 import { ownGet } from './util.js'
 
+/** What a node of the pre-flight walk is: the spec's own structure, a `values` array, one of its rows, or inside a row. */
+const SPEC = 0
+const VALUES = 1
+const ROW = 2
+const BELOW_ROW = 3
+
 /** Pre-flight checks, run before compilation/evaluation allocates the scene. */
 export function checkSpecLimits(
   spec: Record<string, unknown>,
   limits: SpecLimits,
   input?: { data?: Record<string, unknown> | null },
 ): void {
+  validateLimits(limits)
   const maxString = limits.maxStringLength
   const maxDepth = Math.min(limits.maxDepth ?? HARD_MAX_SPEC_DEPTH, HARD_MAX_SPEC_DEPTH)
   const clock = limits.maxTimeMs != null ? createLimitClock(limits) : null
   // Iterative walk: a deep spec must not overflow this function's own stack,
   // and a cyclic one is reported (enter/exit markers track the current path).
+  //
+  // A spec built in code can share sub-objects, and a walk that follows every path visits a shared object once per path: a
+  // chain of N objects each referencing the next twice is 2^N visits. So the spec's own objects are counted against the same
+  // ceiling as the compile-time walk (HARD_MAX_SPEC_NODES, `values` arrays left out as there), and below the rows of a `values`
+  // array, where the data is not counted, an object holding objects is walked once per depth it is reached at (deeper only).
   const nodes: unknown[] = [spec]
   const depths: number[] = [0]
+  const modes: number[] = [SPEC]
   const onPath = new Set<object>()
+  const walked = new Map<object, number>()
   let visited = 0
+  let seen = 0
   while (nodes.length) {
     const v = nodes.pop()
     const d = depths.pop()!
+    const mode = modes.pop()!
     if (d === -1) {
       onPath.delete(v as object)
       continue
     }
     if (d > maxDepth) over('maxDepth', d, maxDepth)
-    if (clock && (++visited & 4095) === 0) clock.check('pre-flight')
     if (typeof v === 'string') {
       if (maxString != null && v.length > maxString) over('maxStringLength', v.length, maxString)
       continue
     }
     if (v && typeof v === 'object') {
       if (onPath.has(v)) throw new AsterLimitError('spec contains a cycle')
+      if (mode === SPEC && ++visited > HARD_MAX_SPEC_NODES) {
+        throw new AsterLimitError(`spec size > ${HARD_MAX_SPEC_NODES} objects (a built-in ceiling that applies even without limits; the spec may share sub-objects)`)
+      }
+      if (mode === BELOW_ROW) {
+        const deepest = walked.get(v)
+        if (deepest !== undefined && deepest >= d) continue
+      }
+      if (clock && (++seen & 4095) === 0) clock.check('pre-flight')
       onPath.add(v)
       nodes.push(v)
       depths.push(-1)
+      modes.push(mode)
+      const inner = mode === VALUES ? ROW : mode === SPEC ? SPEC : BELOW_ROW
+      let holdsObjects = false
       if (Array.isArray(v)) {
-        for (let i = 0; i < v.length; i++) { nodes.push(v[i]); depths.push(d + 1) }
+        for (let i = 0; i < v.length; i++) {
+          const x: unknown = v[i]
+          if (x !== null && typeof x === 'object') holdsObjects = true
+          nodes.push(x); depths.push(d + 1); modes.push(inner)
+        }
       } else {
-        for (const x of Object.values(v as Record<string, unknown>)) { nodes.push(x); depths.push(d + 1) }
+        for (const key in v as Record<string, unknown>) {
+          if (!Object.hasOwn(v, key)) continue
+          const x = (v as Record<string, unknown>)[key]
+          if (x !== null && typeof x === 'object') holdsObjects = true
+          nodes.push(x); depths.push(d + 1)
+          modes.push(mode === SPEC && key === 'values' && Array.isArray(x) ? VALUES : inner)
+        }
       }
+      // (a leaf object, the usual row, is never shared at any cost: only objects holding objects are remembered)
+      if (mode === BELOW_ROW && holdsObjects) walked.set(v, d)
     }
   }
 
@@ -638,8 +817,12 @@ export function checkSpecLimits(
  */
 const MIN_PATH_CHARS_PER_POINT = 4
 
+/** Properties of a scene item that are not drawn: its data row and the engine's own bookkeeping. */
+const NOT_DRAWN: ReadonlySet<string> = new Set(['datum', 'mark', '_part', '_kind', '__tick', '__gen', '__domDesc'])
+
 /** Post-evaluation checks for generated geometry, before SVG serialization. */
 export function checkSceneLimits(scene: { items?: unknown[] }, limits: SpecLimits): void {
+  validateLimits(limits)
   let items = 0
   const maxPath = limits.maxPathLength
   const maxString = limits.maxStringLength
@@ -672,9 +855,18 @@ export function checkSceneLimits(scene: { items?: unknown[] }, limits: SpecLimit
     items++
     if (limits.maxItems != null && items > limits.maxItems) over('maxItems', items, limits.maxItems)
     if (typeof n.path === 'string' && maxPath != null && n.path.length > maxPath) over('maxPathLength', n.path.length, maxPath)
-    if (maxString != null && n.text != null) {
-      const len = textLen(n.text)
-      if (len > maxString) over('maxStringLength', len, maxString, 'text')
+    if (maxString != null) {
+      if (n.text != null) {
+        const len = textLen(n.text)
+        if (len > maxString) over('maxStringLength', len, maxString, 'text')
+      }
+      // every other string the item carries to the output (a link, a description, a paint, a font, a cursor, an image url):
+      // a string an expression concatenated reaches the scene through these as well as through `text`
+      for (const key in n) {
+        const value = n[key]
+        if (typeof value !== 'string' || value.length <= maxString || !Object.hasOwn(n, key) || NOT_DRAWN.has(key) || key === 'path') continue
+        over('maxStringLength', value.length, maxString, key)
+      }
     }
   }
   for (const it of scene.items ?? []) walk(it)
@@ -692,5 +884,6 @@ export function checkPathLength(d: string): void {
 
 /** Final serialized-size check. */
 export function checkSvgLength(svg: string, limits: SpecLimits): void {
+  validateLimits(limits)
   if (limits.maxSvgLength != null && svg.length > limits.maxSvgLength) over('maxSvgLength', svg.length, limits.maxSvgLength)
 }

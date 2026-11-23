@@ -8,6 +8,7 @@
  */
 import { BATCH, Events, LINE_END, LINE_START, POINT, POLYGON_END, POLYGON_START } from './geo-events.js'
 import { EPSILON, RADIANS, asinClamped } from './geo-sphere.js'
+import { meterTick } from './limits.js'
 
 /** Something that maps radians (lambda, phi) to planar coordinates, writing them into `out`. */
 export interface PlanarMap {
@@ -100,12 +101,13 @@ class Resampler {
 
   run(ev: Events): Events {
     // in batches (see BATCH)
-    for (let i = 0, n = ev.length; i < n; i += BATCH) this.resampleRange(ev, i, Math.min(n, i + BATCH))
+    for (let i = 0, n = ev.length; i < n; i += BATCH) { meterTick('geo', BATCH); this.resampleRange(ev, i, Math.min(n, i + BATCH)) }
     return this.out
   }
 
   private resampleRange(ev: Events, from: number, to: number): void {
     const { out, at } = this
+    // bounded: a batch of at most BATCH events; the batch loop ticks with BATCH
     for (let i = from; i < to; i++) {
       const op = ev.op[i]!
       const src = (this.src = ev.src[i]!)

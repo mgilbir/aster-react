@@ -13,6 +13,7 @@ export interface TreeLike<T> {
 export function walkPreOrder<T extends TreeLike<T>>(root: T, visit: (node: T) => void): void {
   const stack: T[] = [root]
   let node: T | undefined
+  // bounded: each node of the tree once (each is pushed by its parent only)
   while ((node = stack.pop())) {
     visit(node)
     const kids = node.children
@@ -26,10 +27,13 @@ export function walkPostOrder<T extends TreeLike<T>>(root: T, visit: (node: T) =
   const done: T[] = []
   let node: T | undefined
   // a pre-order that takes the last child first, replayed backwards, is the post-order that takes the first child first
+  // bounded: each node of the tree once (each is pushed by its parent only)
   while ((node = stack.pop())) {
     done.push(node)
     const kids = node.children
+    // bounded: the node's children
     if (kids) for (let i = 0; i < kids.length; ++i) stack.push(kids[i]!)
   }
+  // bounded: each node of the tree once
   while ((node = done.pop())) visit(node)
 }

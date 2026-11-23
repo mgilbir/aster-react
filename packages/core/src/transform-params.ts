@@ -108,6 +108,7 @@ function readParams(words: string, path: string): readonly TransformParam[] {
     const kind = KINDS[mark]
     const ref = REFS[mark]
     const name = kind || ref || mark === '*' ? w.slice(1) : w
+    // bounded: the fixed table of transform parameters
     const sub = mark === '*' ? (SUB_PARAMS[`${path}.${name}`] ?? []).map((s) => ({ key: s.key, params: readParams(s.params, `${path}.${name}`) })) : undefined
     return { name, kind: kind ?? 'value', required, list, ...(ref ? { ref } : {}), ...(sub ? { sub } : {}) }
   })

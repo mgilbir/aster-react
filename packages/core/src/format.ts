@@ -18,7 +18,7 @@
  * - the pad is built with `new Array(n + 1).join(fill)` so an absurd width fails with the same RangeError;
  * - locale fields are read as array-likes (`Array.prototype.map.call`), so `grouping: '3'` works.
  */
-import { meterBytes } from './limits.js'
+import { allot } from './limits.js'
 
 export { tickStep } from './arr.js'
 
@@ -390,7 +390,7 @@ function compile(spec: FormatSpecifier, symbols: Symbols, affixes?: Affixes): Fo
     const used = lead.length + body.length + tail.length
     let padding = ''
     if (used < (width as number)) {
-      meterBytes((width as number) - used, 'number format width')
+      allot('bytes', (width as number) - used, 'number format width')
       padding = new Array((width as number) - used + 1).join(fill)
     }
     if (grouped && zero) {
