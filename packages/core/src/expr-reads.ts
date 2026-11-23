@@ -39,6 +39,33 @@ export function entryReadsItem(entry: unknown): boolean {
   return known
 }
 
+/** The selection functions vega-selections' `selectionVisitor` reads (it indexes a data set by unit when the last argument is `'intersect'`). */
+const SELECTION_FUNCTIONS: ReadonlySet<string> = new Set(['vlSelectionTest', 'vlSelectionIdTest', 'vlSelectionResolve'])
+
+/**
+ * The data sets an expression has vega index by `unit`: a selection function called on a data set named literally whose last
+ * argument is the literal `'intersect'` (vega-selections `selectionVisitor`). An index, once made, serves every call on that data
+ * set; a data set never so named has none, and its `intersect` tests then require every tuple to match.
+ */
+export function unitIndexedIn(code: string): string[] {
+  const out: string[] = []
+  const visit = (n: unknown): void => {
+    if (n == null || typeof n !== 'object') return
+    if (Array.isArray(n)) { n.forEach(visit); return }
+    const node = n as AstNode
+    if (node.type === 'CallExpression') {
+      const callee = node.callee as AstNode | undefined
+      const args = node.arguments as AstNode[]
+      const last = args[args.length - 1]
+      if (callee?.type === 'Identifier' && SELECTION_FUNCTIONS.has(callee.name as string) && args[0]?.type === 'Literal' && typeof args[0].value === 'string'
+        && args.length >= 2 && last?.type === 'Literal' && last.value === 'intersect') out.push(args[0].value)
+    }
+    for (const k of Object.keys(node)) if (k !== 'type') visit(node[k])
+  }
+  visit(parseExpressionCached(code))
+  return out
+}
+
 /** The identifiers an expression reads (signal references among them), and `data:NAME` for every dataset it reads by name. */
 export function expressionReads(code: string): ReadonlySet<string> {
   let have = READS.get(code)

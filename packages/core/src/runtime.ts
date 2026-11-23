@@ -916,6 +916,7 @@ function prepareChartCtx(
     ...(input.random ? { random: input.random } : {}),
     // (the chart's own locale, `config.locale`, for `format`, `timeFormat`, `timeParse` ...)
     ...(chart.locale ? { locale: () => chartLocale(chart.locale) } : {}),
+    unitIndexed: (name) => chart.unitIndexed?.includes(name) === true,
     setdata: makeSetdata(chart, setData),
     containerSize: () => {
       const c = input.containerSize ?? input.measuredSize
