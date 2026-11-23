@@ -16,13 +16,14 @@ import { describe, expect, it } from 'vitest'
 import * as vega from 'vega'
 // (the SOURCE modules, not the built dist: the guard must watch the code being edited)
 import { applyTransforms } from '../../core/src/transform.ts'
-import type { Row } from '../../core/src/types.ts'
 import '../../core/src/addon-transforms.ts'
 import { compileExpr } from '../../core/src/expression.ts'
 import * as asterFns from '../../core/src/stats-functions.ts'
 import { bootstrapCI as asterBootstrapCI } from '../../core/src/transform-agg.ts'
 import { enc } from './differential-util.mts'
 import { seededRandom } from '../src/gallery/seeded.js'
+
+type Row = Record<string, unknown>
 
 const V = vega as unknown as Record<string, (...a: unknown[]) => unknown> & { setRandom(r: () => number): void }
 

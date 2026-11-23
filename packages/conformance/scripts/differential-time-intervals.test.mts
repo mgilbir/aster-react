@@ -242,7 +242,7 @@ describe('vega-time vs the pinned vega-time (generated, live)', () => {
       return {
         label: `${JSON.stringify(units)} ${JSON.stringify(specs)}`,
         oracle: () => [vt.timeUnits(units), vt.timeUnitSpecifier(units as never, specs as never)],
-        aster: () => [aster.timeUnits(units), aster.timeUnitSpecifier(units, specs)],
+        aster: () => [aster.timeUnits(units), aster.timeUnitSpecifier(units, specs as Record<string, string> | undefined)],
       }
     })
     expect(aster.TIME_UNITS).toEqual(vt.TIME_UNITS)

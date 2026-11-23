@@ -14,6 +14,7 @@ import * as vega from 'vega'
 import { compileChart } from '../../core/src/compiler.ts'
 import { evaluateChart } from '../../core/src/evaluate.ts'
 import { enc, quietLogger } from './differential-util.mts'
+import { scenegraphRoot } from '../src/scenegraph-root.ts'
 
 type Row = Record<string, unknown>
 type Spec = Record<string, unknown>
@@ -131,7 +132,7 @@ async function vegaRun(spec: Spec): Promise<Map<string, unknown[]>> {
   const view = new vega.View(vega.parse(structuredClone(spec)), { renderer: 'none', logger: quietLogger(errors) })
   await view.runAsync()
   expect(errors).toEqual([])
-  const out = vegaItems(view.scenegraph().root)
+  const out = vegaItems(scenegraphRoot(view))
   view.finalize()
   return out
 }

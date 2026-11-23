@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { describe, it, expect } from 'vitest'
-import { DATA, cn, yq, compileFrozen } from './helpers.js'
+import { DATA, cn, compileFrozen } from './helpers.js'
 
 const v = { field: 'v', type: 'quantitative' }
 const eb = (mark: unknown, encoding: unknown = { x: cn, y: v }) => compileFrozen({ data: DATA, mark, encoding })
@@ -8,7 +8,10 @@ const transform = (vg: any): any[] => vg.data.find((d: any) => d.name === 'data_
 const aggregate = (vg: any): any => vg.data.flatMap((d: any) => d.transform ?? []).find((t: any) => t.type === 'aggregate')
 const styles = (vg: any): string[] => {
   const out: string[] = []
-  const walk = (m: any): void => (m.type === 'group' ? m.marks.forEach(walk) : out.push(m.style.join(',')))
+  const walk = (m: any): void => {
+    if (m.type === 'group') m.marks.forEach(walk)
+    else out.push(m.style.join(','))
+  }
   vg.marks.forEach(walk)
   return out
 }

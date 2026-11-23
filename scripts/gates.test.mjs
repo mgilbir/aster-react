@@ -3,9 +3,11 @@
  * The list is only a source of truth if nothing else keeps its own copy.
  */
 import { readdirSync, readFileSync } from 'node:fs'
-import { dirname, join } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, rmSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
+import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { describe, expect, it } from 'vitest'
 import { parseDocument } from 'yaml'
@@ -366,5 +368,67 @@ describe('the contributor Node range is the one the toolchain supports (C369)', 
     expect(doc).toMatch(/pnpm build/)
     expect(doc).toMatch(/--with-deps chromium/)
     expect(read('README.md')).toMatch(/playwright install --with-deps chromium[\s\S]{0,40}pnpm build/)
+  })
+})
+
+describe('the typecheck gate covers every TypeScript file (C303)', () => {
+  // Every workspace that has a tsconfig.json is typechecked by `pnpm typecheck` (`pnpm -r typecheck`); the tests and runner scripts must be
+  // inside one of their `include`s, or vitest/tsx (which strip types) are the only things that ever read them.
+  const ts = createRequire(import.meta.url)('typescript')
+  const tracked = () => execFileSync('git', ['ls-files', '-z', 'packages', 'apps'], { cwd: root, encoding: 'utf8' }).split('\0').filter((f) => /\.(ts|mts|cts|tsx)$/.test(f))
+  const projects = () => ['packages', 'apps'].flatMap((d) => readdirSync(join(root, d)).map((n) => `${d}/${n}`)).filter((p) => existsSync(join(root, p, 'tsconfig.json')))
+  /** Files each project's typecheck reads, from its real tsconfig. */
+  const covered = (dirs = projects()) => {
+    const set = new Set()
+    for (const dir of dirs) {
+      const cfg = ts.readConfigFile(join(root, dir, 'tsconfig.json'), ts.sys.readFile)
+      for (const f of ts.parseJsonConfigFileContent(cfg.config, ts.sys, join(root, dir)).fileNames) set.add(resolve(f))
+    }
+    return set
+  }
+  // Type fixtures include files that must NOT compile (`*rejects*`): packages/react/src/Chart.types.test.ts compiles them with the TS API and
+  // asserts each expected error, so they are checked by a test that can fail, not by the project typecheck.
+  const exempt = (f) => f.startsWith('packages/react/type-fixtures/')
+
+  it('every tracked .ts/.mts/.cts/.tsx under packages/ and apps/ is in a project\'s typecheck, except the type fixtures', () => {
+    const set = covered()
+    const missing = tracked().filter((f) => !exempt(f) && !set.has(resolve(root, f)))
+    expect(missing, `${missing.length} TypeScript files no \`pnpm typecheck\` reads`).toEqual([])
+  })
+
+  it('the type fixtures are exempt only because Chart.types.test.ts compiles every one of them', () => {
+    const test = read('packages/react/src/Chart.types.test.ts')
+    const fixtures = tracked().filter((f) => f.startsWith('packages/react/type-fixtures/')).map((f) => f.replace('packages/react/type-fixtures/', ''))
+    expect(fixtures.length).toBeGreaterThan(3)
+    // each fixture is named in the test, or is a module another fixture imports (`shared.ts`)
+    for (const f of fixtures) {
+      const imported = fixtures.some((g) => g !== f && read(`packages/react/type-fixtures/${g}`).includes(`./${f.replace(/\.tsx?$/, '')}`))
+      expect(test.includes(f) || imported, `${f} must be compiled by Chart.types.test.ts`).toBe(true)
+    }
+  })
+
+  it('has bite: a project whose include drops a directory leaves its files uncovered', () => {
+    const real = covered()
+    const missingFor = (set) => tracked().filter((f) => !exempt(f) && !set.has(resolve(root, f)))
+    expect(missingFor(real)).toEqual([])
+    const narrow = new Set([...real].filter((f) => !f.includes('/packages/conformance/scripts/')))
+    expect(missingFor(narrow).length).toBeGreaterThan(50)
+  })
+
+  it('every package.json typecheck script runs the project tsconfig.json that the coverage above reads', () => {
+    for (const dir of projects()) {
+      const pkg = JSON.parse(read(`${dir}/package.json`))
+      expect(pkg.scripts?.typecheck, dir).toMatch(/tsc (--noEmit )?-p tsconfig\.json( --noEmit)?$/)
+    }
+  })
+})
+
+describe('`pnpm build` builds each package once, in dependency order (C495)', () => {
+  it('no workspace build script rebuilds another workspace (pnpm -r orders them; a second build races the first on dist)', () => {
+    for (const dir of ['packages', 'apps'].flatMap((d) => readdirSync(join(root, d)).map((n) => `${d}/${n}`))) {
+      if (!existsSync(join(root, dir, 'package.json'))) continue
+      const build = JSON.parse(read(`${dir}/package.json`)).scripts?.build
+      if (build) expect(build, dir).not.toMatch(/\bpnpm\b|\bnpm run\b|\byarn\b/)
+    }
   })
 })

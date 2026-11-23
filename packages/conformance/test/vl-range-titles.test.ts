@@ -13,6 +13,7 @@ import * as vega from 'vega'
 import * as vl from 'vega-lite'
 import { compile } from '@aster-charts/vl'
 import { TIME_DATA, silent } from './vl-time-helpers.js'
+import { scenegraphRoot } from '../src/scenegraph-root.js'
 
 type Obj = Record<string, unknown>
 
@@ -67,7 +68,7 @@ async function drawn(vg: unknown): Promise<string[]> {
     }
     for (const sub of node.marks ?? []) walk(sub, sub.role ?? role)
   }
-  walk(view.scenegraph().root, 'root')
+  walk(scenegraphRoot(view), 'root')
   return out
 }
 

@@ -5,6 +5,7 @@
 import { createRequire } from 'node:module'
 import * as vega from 'vega'
 import { TIME_DATA, bothCompile } from './vl-time-helpers.js'
+import { scenegraphRoot } from '../src/scenegraph-root.js'
 
 const require = createRequire(import.meta.url)
 const schema = require('vega-lite/vega-lite-schema.json').definitions
@@ -116,7 +117,7 @@ export async function drawn(vg: any): Promise<string[]> {
     }
     for (const sub of node.marks ?? []) walk(sub, sub.role ?? sub.marktype ?? role)
   }
-  walk(view.scenegraph().root, 'root')
+  walk(scenegraphRoot(view), 'root')
   const svg = await view.toSVG()
   for (const m of svg.matchAll(/<text[^>]*>([^<]*)<\/text>/g)) out.push(`svg=${m[1]}`)
   return out

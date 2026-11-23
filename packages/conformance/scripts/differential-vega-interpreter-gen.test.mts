@@ -314,7 +314,7 @@ describe('generated: adversarial sandbox probes (vega-interpreter vs Aster)', ()
       const used = new Set<string>()
       const bad: string[] = []
       for (const { code, v, a } of rows) {
-        if (!('ast' in v) || !('ast' in a)) continue
+        if (v.ast === undefined || a.ast === undefined) continue
         for (const mode of PROBE_MODES) {
           const want = JSON.stringify(evaluate('vega', code, v.ast, mode))
           const got = JSON.stringify(evaluate('aster', code, a.ast, mode))
@@ -342,7 +342,7 @@ describe('generated: adversarial sandbox probes (vega-interpreter vs Aster)', ()
       }
       ;(globalThis as any).__asterEscaped = 0
       for (const { code, a } of rows) {
-        if (!('ast' in a)) continue
+        if (a.ast === undefined) continue
         for (const mode of PROBE_MODES) {
           const logs: string[] = []
           const spy = vitest.spyOn(console, 'error').mockImplementation((...x: unknown[]) => { logs.push(x.map(String).join(' ')) })

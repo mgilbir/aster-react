@@ -46,7 +46,7 @@ describe('names in text, against vega-lite', () => {
       walk(root)
       return out
     }
-    const view = new vega.View(vega.parse(vl.compile(structuredClone(spec)).spec as never), { renderer: 'none' })
+    const view = new vega.View(vega.parse(vl.compile(structuredClone(spec) as never).spec as never), { renderer: 'none' })
     await view.runAsync()
     const want = cells((view.scenegraph() as Obj).root)
     view.finalize()
@@ -57,7 +57,7 @@ describe('names in text, against vega-lite', () => {
   it('a named view keeps a title that reads like a unit or a group call', () => {
     const t = 'unit: "layer_0" and group("cell")'
     const spec: Obj = { name: 'outer', title: t, data: { values: [{ a: 1, b: 2 }] }, mark: 'point', encoding: { x: { field: 'a', type: 'quantitative' }, y: { field: 'b', type: 'quantitative', title: t } } }
-    const want = stringsWith(vl.compile(structuredClone(spec)).spec, 'and group(').filter((x) => x === t)
+    const want = stringsWith(vl.compile(structuredClone(spec) as never).spec, 'and group(').filter((x) => x === t)
     expect(want.length).toBeGreaterThan(0)
     expect(stringsWith(compile(structuredClone(spec)), 'and group(').filter((x) => x.includes('outer_layer_0') || x.includes('outer_cell'))).toEqual([])
     expect(stringsWith(compile(structuredClone(spec)), 'and group(').filter((x) => x === t).length).toBe(want.length)
@@ -70,14 +70,14 @@ describe('names in text, against vega-lite', () => {
       facet: { column: { field: 'g', type: 'nominal' } },
       spec: { repeat: { layer: ['a', 'b'] }, spec: { mark: 'line', encoding: { x: { field: 'c', type: 'quantitative', title: t }, y: { field: { repeat: 'layer' }, type: 'quantitative' } } } },
     }
-    const want = stringsWith(vl.compile(structuredClone(spec)).spec, 'see ')
+    const want = stringsWith(vl.compile(structuredClone(spec) as never).spec, 'see ')
     expect(want.length).toBeGreaterThan(0)
     expect(stringsWith(compile(structuredClone(spec)), 'see ')).toEqual(want)
     // (a field the user named as the layers were named is the user's: vega-lite reads it as it is)
     const named: Obj = { ...spec, data: { values: Array.from({ length: 4 }, (_, i) => ({ child_layer_0_v: i, b: i * 2, c: i, g: i % 2 })) },
       spec: { repeat: { layer: ['child_layer_0_v', 'b'] }, spec: { mark: 'line', encoding: { x: { field: 'c', type: 'quantitative' }, y: { field: { repeat: 'layer' }, type: 'quantitative' } } } } }
     const fields = (o: unknown): string[] => [...new Set(stringsWith(o, '_v').filter((x) => /^[\w]+$/.test(x) && x.includes('layer')))].sort()
-    expect(fields(compile(structuredClone(named)))).toEqual(fields(vl.compile(structuredClone(named)).spec))
+    expect(fields(compile(structuredClone(named)))).toEqual(fields(vl.compile(structuredClone(named) as never).spec))
     // (the layers' own names are still the repeat values', as vega-lite names them)
     expect(stringsWith(compile(structuredClone(spec)), '__layer_a_').length).toBeGreaterThan(0)
   })

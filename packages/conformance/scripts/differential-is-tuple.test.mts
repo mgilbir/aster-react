@@ -13,6 +13,7 @@ import * as vega from 'vega'
 import { compileChart } from '../../core/src/compiler.ts'
 import { evaluateChart } from '../../core/src/evaluate.ts'
 import { quietLogger } from './differential-util.mts'
+import { scenegraphRoot } from '../src/scenegraph-root.ts'
 
 type Spec = Record<string, unknown>
 const T = (e: string): Spec => ({ signal: `'' + (${e})` })
@@ -123,7 +124,7 @@ describe('isTuple, against vega, for every kind of item', () => {
       const view = new vega.View(vega.parse(structuredClone(spec)), { renderer: 'none', logger: quietLogger(errors) })
       await view.runAsync()
       expect(errors, `case ${i}: vega errors`).toEqual([])
-      const want = normalize(vegaSays(view.scenegraph().root))
+      const want = normalize(vegaSays(scenegraphRoot(view)))
       const wantSignal = view.signal('s')
       view.finalize()
       // the rows in the spec, and the same rows given by the host (`input.data`): vega's ingested rows either way
@@ -178,7 +179,7 @@ describe('isTuple, against vega, for every kind of item', () => {
       const value = which === 'row' ? view.data('t')[0] : { k: 'z' }
       view.signal('facet', value)
       await view.runAsync()
-      const want = vegaSays(view.scenegraph().root)
+      const want = vegaSays(scenegraphRoot(view))
       view.finalize()
       const scene = evaluateChart(compileChart(hosted as never), { data: { t: rows as unknown[] }, signals: { facet: which === 'row' ? rows[0] : { k: 'z' } } }) as unknown as { items: unknown[] }
       expect(normalize(asterSays(scene)), which).toEqual(normalize(want))

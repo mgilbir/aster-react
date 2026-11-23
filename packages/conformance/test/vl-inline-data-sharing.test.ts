@@ -13,7 +13,7 @@ import { describe, it, expect } from 'vitest'
 import * as vl from 'vega-lite'
 import { compile } from '@aster-charts/vl'
 import { renderWithVega } from '../src/render-vega.js'
-import { canonicalizeSvg, diffCanonical } from '../src/normalize.js'
+import { canonicalizeSvg, diffCanonical, type CanonicalResult } from '../src/normalize.js'
 
 type Obj = Record<string, any>
 const rows = (seed: number, n = 6): Obj[] => Array.from({ length: n }, (_, i) => ({ k: `k${i % 3}`, x: (i * 5 + seed) % 13, y: (i * 3 + seed * 7) % 11 }))
@@ -118,7 +118,7 @@ describe('views with equal inline rows share a dataset where vega-lite shares on
         expect(got.global).toEqual(want.global)
         expect(got.sources).toBe(want.sources)
         // and the chart is vega-lite's
-        const svg = async (s: Obj): Promise<string> => canonicalizeSvg(await renderWithVega(structuredClone(s)))
+        const svg = async (s: Obj): Promise<CanonicalResult> => canonicalizeSvg(await renderWithVega(structuredClone(s)))
         expect(diffCanonical(await svg(oracle), await svg(ours)).slice(0, 2)).toEqual([])
       })
     }
