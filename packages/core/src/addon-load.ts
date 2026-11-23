@@ -179,7 +179,11 @@ const MAX_TIMER_MS = 2_147_483_647
 
 function invalidOption(name: string, expected: string, value: unknown): TypeError {
   let shown: string
-  try { shown = typeof value === 'function' ? 'a function' : typeof value === 'bigint' ? `${value}n` : JSON.stringify(value) ?? String(value) } catch { shown = String(value) }
+  try {
+    shown = typeof value === 'function' ? 'a function' : typeof value === 'bigint' ? `${value}n` : typeof value === 'number' ? String(value) : JSON.stringify(value) ?? String(value)
+  } catch {
+    shown = String(value)
+  }
   return new TypeError(`[aster] loadSpecData: ${name} must be ${expected}, got ${shown}`)
 }
 

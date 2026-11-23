@@ -201,6 +201,8 @@ describe('every option is validated once, before anything is requested (C237)', 
         const err = await loadSpecData(one('https://a.example.com/x'), { allow: ANY, fetch: fetchImpl, [name]: v } as LoadOptions).catch((e) => e)
         expect(err, `${name}: ${String(v)}`).toBeInstanceOf(TypeError)
         expect(String(err.message)).toMatch(new RegExp(`loadSpecData: ${name} must be`))
+        // (the value is shown as written: NaN is NaN, not JSON's null)
+        if (typeof v === 'number') expect(String(err.message)).toMatch(new RegExp(`got ${String(v).replace('-', '\\-')}$`))
       }
       expect(calls).toBe(0)
       // (a valid value is taken: whatever the call then does, it is not refused for the option)
