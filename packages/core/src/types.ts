@@ -332,6 +332,11 @@ export interface CompiledData {
   source?: string | string[]
   format?: Record<string, unknown>
   transform: CompiledTransform[]
+  /**
+   * The data set's triggers (`on`: `{trigger, insert, remove, toggle, modify, values}`): each is vega's operator
+   * `if(<trigger>, modify("<name>", <insert>, <remove>, <toggle>, <modify>, <values>), 0)`, run by the signal event loop.
+   */
+  on?: Array<Record<string, unknown>>
 }
 
 export type CompiledTransform =
