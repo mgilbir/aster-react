@@ -147,9 +147,22 @@ export function numberFormatLocale(definition: FormatLocaleDefinition): NumberLo
   return numberLocale(formatLocale(definition))
 }
 
-/** With no argument, the default number locale; with one, replace it. */
+/**
+ * A locale definition a setter was given: an object, or an error that names the call (a missing one, `undefined` from a
+ * variable that was never set, would otherwise surface as a `TypeError` from the middle of the locale's construction).
+ */
+function requireDefinition<T>(call: string, definition: T | undefined): T {
+  if (definition === null || typeof definition !== 'object') {
+    error(`${call} expects a locale definition object (call it with no arguments to read the default); got ${definition === null ? 'null' : typeof definition}.`)
+  }
+  return definition
+}
+
+/** With no argument, the default number locale; with one definition, replace it. `undefined` is not "no argument": it is refused. */
+export function numberFormatDefaultLocale(): NumberLocale
+export function numberFormatDefaultLocale(definition: FormatLocaleDefinition): NumberLocale
 export function numberFormatDefaultLocale(...definition: [FormatLocaleDefinition?]): NumberLocale {
-  return definition.length ? (currentNumber = numberFormatLocale(definition[0] as FormatLocaleDefinition)) : currentNumber
+  return definition.length ? (currentNumber = numberFormatLocale(requireDefinition('numberFormatDefaultLocale', definition[0]))) : currentNumber
 }
 
 // --- the time half --------------------------------------------------------------------------------
@@ -196,9 +209,11 @@ export function timeFormatLocale(definition: TimeLocaleDefinition): TimeLocale {
   return part('time').timeFormatLocale(definition)
 }
 
-/** With no argument, the default time locale; with one, replace it. */
+/** With no argument, the default time locale; with one definition, replace it. `undefined` is not "no argument": it is refused. */
+export function timeFormatDefaultLocale(): TimeLocale
+export function timeFormatDefaultLocale(definition: TimeLocaleDefinition): TimeLocale
 export function timeFormatDefaultLocale(...definition: [TimeLocaleDefinition?]): TimeLocale {
-  return definition.length ? (currentTime = timeFormatLocale(definition[0] as TimeLocaleDefinition)) : currentTime
+  return definition.length ? (currentTime = timeFormatLocale(requireDefinition('timeFormatDefaultLocale', definition[0]))) : currentTime
 }
 
 // --- both halves ------------------------------------------------------------------------------------
@@ -260,12 +275,21 @@ export function formatEnvironmentKey(): string {
   return `${localeStamp()}\u0001${hostTimeZone()}`
 }
 
-/** With no arguments, the default locale; with both definitions, replace the defaults. One argument is an error. */
+/**
+ * With no arguments, the default locale; with both definitions, replace the defaults. One argument, or a definition that is not one
+ * (`undefined`), is an error, and the call replaces nothing: both halves are made before either default is assigned, so a call that
+ * throws leaves every chart in the process formatting as it did.
+ */
+export function defaultLocale(): Locale
+export function defaultLocale(numberDefinition: FormatLocaleDefinition, timeDefinition: TimeLocaleDefinition): Locale
 export function defaultLocale(...definitions: [FormatLocaleDefinition?, TimeLocaleDefinition?]): Locale {
   if (definitions.length && definitions.length !== 2) error('defaultLocale expects either zero or two arguments.')
-  return definitions.length
-    ? join(numberFormatDefaultLocale(definitions[0] as FormatLocaleDefinition), timeFormatDefaultLocale(definitions[1] as TimeLocaleDefinition))
-    : join(currentNumber, currentTime)
+  if (!definitions.length) return join(currentNumber, currentTime)
+  const number = numberFormatLocale(requireDefinition('defaultLocale', definitions[0]))
+  const time = timeFormatLocale(requireDefinition('defaultLocale', definitions[1]))
+  currentNumber = number
+  currentTime = time
+  return join(number, time)
 }
 
 export function resetDefaultLocale(): Locale {
