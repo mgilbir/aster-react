@@ -14,8 +14,8 @@ The page (`src/App.tsx`) has these sections:
 - **Streaming** -- the same append stream into an SVG and a canvas `ChartStream`.
 - **Spec playground** -- paste any Vega or Vega-Lite spec and see both engines render it.
 - **New in this build**, **Selections, maps and animation**, **Gallery** -- the same spec in both engines. The first two take their
-  specs from `src/showcase/` (nine of its fourteen files are byte-identical to files of `packages/conformance/corpus`), the
-  gallery from `src/specs.ts`.
+  specs from `packages/conformance/corpus` (imported from there, all fourteen: each is a corpus spec, compared with real vega / vega-lite by
+  the gates), the gallery from `src/specs.ts`.
 
 The numbers in the page header (conformance counts, bundle size, frame time) are literal text in `src/App.tsx`. They are not
 computed from a run and are not checked by any gate, so treat the repository docs ([README](../../README.md),
