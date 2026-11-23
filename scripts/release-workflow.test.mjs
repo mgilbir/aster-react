@@ -9,6 +9,7 @@ import { dirname, join } from 'node:path'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { afterAll, describe, expect, it } from 'vitest'
+import { PUBLISH_ORDER } from './lib/release.mjs'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 const WF = process.env.ASTER_RELEASE_WORKFLOW ?? join(root, '.github', 'workflows', 'release.yml')
@@ -39,6 +40,14 @@ describe('release.yml trigger', () => {
     const tags = [...on.matchAll(/^\s+- '([^']+)'\s*$/gm)].map((m) => m[1])
     expect(tags.length).toBeGreaterThan(0)
     for (const t of tags) expect(t, 'tag patterns must demand a numeric version').toMatch(/^v\[0-9\]\+\.\[0-9\]\+\.\[0-9\]\+/)
+    // a prerelease tag starts the workflow only because the publish script gives it the `next` dist-tag (release-publish.test.mjs)
+    expect(tags.some((t) => t.endsWith('-*'))).toBe(true)
+  })
+})
+
+describe('release.yml time bounds', () => {
+  it('every job has a timeout-minutes (a hung gate must not hold a release for six hours)', () => {
+    for (const [name, body] of Object.entries(J)) expect(stripComments(body), name).toMatch(/^\s+timeout-minutes:\s*\d+\s*$/m)
   })
 })
 
@@ -73,8 +82,8 @@ describe('release.yml job split', () => {
   it('publish installs, builds and tests nothing (no lifecycle scripts run with the token)', () => {
     const steps = stripComments(J.publish)
     expect(steps).not.toMatch(/\bpnpm\b|npm (ci|install|i|run|test)\b|pnpm\/action-setup|actions\/checkout/)
-    expect(steps).toMatch(/npm publish/)
-    expect(steps).toMatch(/--ignore-scripts/)
+    expect(steps).toMatch(/release-publish\.mjs/)
+    expect(readFileSync(join(root, 'scripts/release-publish.mjs'), 'utf8')).toMatch(/'--ignore-scripts'/)
   })
 
   it('verify installs with a frozen lockfile and runs the full gate list before packing', () => {
@@ -85,22 +94,29 @@ describe('release.yml job split', () => {
     expect(at(/pnpm pack/)).toBeGreaterThan(at(/run:\s*pnpm check\s*$/m))
   })
 
-  it('publish hands npm local tarball paths that match what `pnpm pack` writes for every public package', () => {
-    const lines = [...stripComments(J.publish).matchAll(/npm publish\s+(\S+)/g)].map((m) => m[1])
-    expect(lines.length).toBeGreaterThan(0)
-    const loop = /for pkg in ([\w ]+); do/.exec(stripComments(J.publish))?.[1].trim().split(/\s+/) ?? []
-    expect(loop.sort()).toEqual(['core', 'react', 'vl'])
-    for (const arg of lines) {
-      // npm parses `dir/file.tgz` as GitHub `owner/repo` shorthand (it runs `git ls-remote`); only `./`, `../` or `/` make it a file.
-      expect(arg, `npm publish ${arg}`).toMatch(/^(\.\.?\/|\/)/)
-      for (const pkg of loop) {
-        const name = JSON.parse(readFileSync(join(root, 'packages', pkg, 'package.json'), 'utf8')).name
-        const version = JSON.parse(readFileSync(join(root, 'packages', pkg, 'package.json'), 'utf8')).version
-        const packed = `${name.replace(/^@/, '').replace('/', '-')}-${version}.tgz`
-        const glob = arg.replace(/"\$pkg"|\$pkg/g, pkg).replace(/^.*\//, '')
-        const re = new RegExp('^' + glob.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*') + '$')
-        expect(packed, `${glob} must match the tarball pnpm pack writes for ${name}`).toMatch(re)
-      }
+  it('publish runs the tested publish script on the verified tarballs: no inline npm, the script travels in the artifact', () => {
+    const p = stripComments(J.publish)
+    expect(p).toMatch(/run:\s*node release-tarballs\/scripts\/release-publish\.mjs "\$GITHUB_REF_NAME" release-tarballs\s*$/m)
+    expect(p, 'publish logic lives in scripts/release-publish.mjs (tested), not in YAML').not.toMatch(/npm publish/)
+    // the verify job puts the script and the modules it imports next to the tarballs, and uploads the whole directory
+    const v = stripComments(J.verify)
+    expect(v).toMatch(/cp scripts\/release-publish\.mjs release-tarballs\/scripts\//)
+    const imported = [...readFileSync(join(root, 'scripts/release-publish.mjs'), 'utf8').matchAll(/from '\.\/lib\/([\w-]+\.mjs)'/g)].map((m) => m[1])
+    expect(imported.length).toBeGreaterThan(0)
+    for (const f of imported) expect(v, `${f} is imported by the publish script and must ship with it`).toMatch(new RegExp(`scripts/lib/[^\\n]*${f.replace('.', '\\.')}`))
+    expect(v).toMatch(/path:\s*release-tarballs\s*$/m)
+  })
+
+  it('the publish script packs and publishes the same three packages, with the explicit dist-tag', () => {
+    const script = readFileSync(join(root, 'scripts/release-publish.mjs'), 'utf8')
+    expect(script).toMatch(/'--tag', distTag/)
+    expect([...PUBLISH_ORDER].sort()).toEqual(['core', 'react', 'vl'])
+    const packed = /for pkg in ([\w ]+); do/.exec(stripComments(J.verify))?.[1].trim().split(/\s+/) ?? []
+    expect(packed.sort()).toEqual([...PUBLISH_ORDER].sort())
+    for (const pkg of PUBLISH_ORDER) {
+      const { name, version } = JSON.parse(readFileSync(join(root, 'packages', pkg, 'package.json'), 'utf8'))
+      // what `pnpm pack` writes is what the script looks for
+      expect(`${name.replace(/^@/, '').replace('/', '-')}-${version}.tgz`).toBe(`aster-charts-${pkg}-${version}.tgz`)
     }
   })
 
@@ -156,5 +172,47 @@ describe('scripts/check-release-tag.mjs', () => {
   it('checks the real repository', () => {
     const pkg = JSON.parse(readFileSync(join(root, 'packages', 'core', 'package.json'), 'utf8'))
     expect(run(`v${pkg.version}`, root)).toBe(0)
+  })
+})
+
+describe('docs/RELEASE.md: the documented tag steps start the workflow (C367)', () => {
+  const doc = readFileSync(join(root, 'docs', 'RELEASE.md'), 'utf8')
+  const block = /## Cutting a release[\s\S]*?```bash\n([\s\S]*?)```/.exec(doc)?.[1] ?? ''
+  const git = (cwd, ...args) => execFileSync('git', args, { cwd, stdio: 'pipe', encoding: 'utf8' })
+
+  it('the tag and the push commands of the block, run literally, deliver the tag to the remote', () => {
+    const cmds = block.split('\n').map((l) => l.replace(/\s+#.*$/, '').trim()).filter((l) => /^git (tag|push) /.test(l))
+    expect(cmds.some((c) => c.startsWith('git tag ')), 'the block tags').toBe(true)
+    const dir = mkdtempSync(join(tmpdir(), 'aster-reldoc-'))
+    try {
+      const remote = join(dir, 'remote.git')
+      const clone = join(dir, 'clone')
+      git(dir, 'init', '--bare', '-b', 'main', remote)
+      git(dir, 'clone', remote, clone)
+      git(clone, 'config', 'user.email', 'a@example.com')
+      git(clone, 'config', 'user.name', 'a')
+      git(clone, 'config', 'commit.gpgsign', 'false')
+      git(clone, 'config', 'tag.gpgsign', 'false')
+      writeFileSync(join(clone, 'f'), '1')
+      git(clone, 'add', 'f')
+      git(clone, 'commit', '-m', 'x')
+      git(clone, 'push', 'origin', 'HEAD:main')
+      git(clone, 'branch', '-M', 'main')
+      git(clone, 'branch', '-u', 'origin/main')
+      git(clone, 'branch', 'release/v0.1.0')
+      // the block's own order: the release branch is pushed first, the tag is made and pushed from main
+      for (const c of cmds) git(clone, ...c.split(/\s+/).slice(1))
+      const tags = git(remote, 'tag', '--list').split('\n').filter(Boolean)
+      expect(tags, `after: ${cmds.join(' ; ')}`).toContain('v0.1.0')
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('describes the release-branch and PR flow the history shows, and names the recovery and the pin rationale', () => {
+    expect(doc).toMatch(/release\/vX\.Y\.Z/)
+    expect(doc).not.toMatch(/--follow-tags\s*$/m)
+    expect(doc).toMatch(/Recovering from a partial publish/)
+    expect(doc).toMatch(/lockstep/i)
   })
 })
