@@ -7,7 +7,7 @@
  * Chromium page real vega and Aster's scene evaluate `intersect()` over a seeded set of boxes -- over the whole scene, by mark
  * name, by mark type, and within a group item's `mark` (the third argument, as Vega-Lite's geo interval selection passes
  * `unit.mark`: the group item is the one a real pointer press on the group gave `item()`, in each engine) -- and must return
- * the same items in the same order. It runs on each renderer: vega's view on its svg and its canvas renderer, and Aster's
+ * the same items in the same order (also within the mark of the group an event is in, `group().mark`). It runs on each renderer: vega's view on its svg and its canvas renderer, and Aster's
  * through the signal event loop bound to the svg and to the canvas (`createCanvasEvents`), as `<Chart>` binds it, the box
  * written with `setSignal` and the hits computed by the loop. Each engine's errors are collected apart (an error of vega's is
  * never read as Aster's).
@@ -46,6 +46,9 @@ const spec = {
     { name: 'unitHits', update: "box && unit ? intersect(box, markname ? {markname: markname} : (marktype ? {marktype: marktype} : null), unit.mark) : []" },
     // the same within the mark of a data item (a path pressed): its mark node
     { name: 'leaf', value: null, on: [{ events: '@m_path:pointerdown', update: 'item()' }] },
+    // and within the mark of the group an event's item sits in (\`group()\`, as vega-lite's \`unit\` signal takes it)
+    { name: 'cell', value: null, on: [{ events: '@m_inner:pointerdown', update: 'group()' }] },
+    { name: 'cellHits', update: "box && cell ? intersect(box, markname ? {markname: markname} : (marktype ? {marktype: marktype} : null), cell.mark) : []" },
     { name: 'leafHits', update: "box && leaf ? intersect(box, markname ? {markname: markname} : (marktype ? {marktype: marktype} : null), leaf.mark) : []" },
   ],
   data: [
@@ -150,7 +153,7 @@ window.__prepare = async (spec, renderer) => {
   state = { view, scene, store, binding, events, vegaErrors, asterErrors }
   const at = (node) => { const r = node.getBoundingClientRect(); return [r.left, r.top] }
   // (cell g1: x 200..290, y 150..220 in the view; the point is inside it and on none of its own marks)
-  return { vega: at(holder.firstElementChild || holder), aster: at(el), cell: [270, 160], path: [305, 85] }
+  return { vega: at(holder.firstElementChild || holder), aster: at(el), cell: [270, 160], path: [305, 85], inner: [215, 165] }
 }
 
 const vegaIntersect = vega.expressionFunction('intersect')
@@ -164,10 +167,11 @@ window.__run = (boxes, scopes, plant) => {
   const unitExpr = compileExpr("box && unit ? intersect(box, " + filterText + ", unit.mark) : []", runtime)
   const itemExpr = compileExpr("box && unit ? intersect(box, " + filterText + ", unit) : []", runtime)
   const leafExpr = compileExpr("box && leaf ? intersect(box, " + filterText + ", leaf.mark) : []", runtime)
+  const cellExpr = compileExpr("box && cell ? intersect(box, " + filterText + ", cell.mark) : []", runtime)
   // (a group item has no datum of its own at the root: it is named by its mark)
   const idOf = (it, vegaSide) => (it.datum ? it.datum.id : 'G:' + (vegaSide ? it.mark.name : it.name))
   const planted = (list) => (plant && Array.isArray(list) ? [...list, 'PLANTED'] : list)
-  const unitPressed = { vega: view.signal('unit') != null && view.signal('leaf') != null, aster: store.unit != null && store.leaf != null }
+  const unitPressed = { vega: view.signal('unit') != null && view.signal('leaf') != null && view.signal('cell') != null, aster: store.unit != null && store.leaf != null && store.cell != null }
   const out = []
   return (async () => {
     for (const sc of scopes) {
@@ -182,18 +186,21 @@ window.__run = (boxes, scopes, plant) => {
         const want = vegaFailed ?? view.signal('hits').map((i) => idOf(i, true))
         const wantUnit = vegaFailed ?? view.signal('unitHits').map((i) => idOf(i, true))
         const wantLeaf = vegaFailed ?? view.signal('leafHits').map((i) => idOf(i, true))
+        const wantCell = vegaFailed ?? view.signal('cellHits').map((i) => idOf(i, true))
         // the group item itself as the third argument: vega's function, called as its expression calls it (vega takes a mark
         // node there; an item is an error), and Aster's
         const filterArg = sc.markname ? { markname: sc.markname } : sc.marktype ? { marktype: sc.marktype } : null
         let wantItem
         try { wantItem = vegaIntersect.call({ context: { dataflow: view } }, b, filterArg, view.signal('unit')).map((i) => idOf(i, true)) } catch (e) { wantItem = 'ERR ' + e.message }
-        const signals = { box: b, markname: sc.markname || '', marktype: sc.marktype || '', unit: store.unit, leaf: store.leaf }
+        const signals = { box: b, markname: sc.markname || '', marktype: sc.marktype || '', unit: store.unit, leaf: store.leaf, cell: store.cell }
         let got
         let gotUnit
         try { got = planted(expr({}, signals).map((i) => idOf(i, false))) } catch (e) { got = 'ERR ' + e.message }
         try { gotUnit = planted(unitExpr({}, signals).map((i) => idOf(i, false))) } catch (e) { gotUnit = 'ERR ' + e.message }
         let gotLeaf
         try { gotLeaf = planted(leafExpr({}, signals).map((i) => idOf(i, false))) } catch (e) { gotLeaf = 'ERR ' + e.message }
+        let gotCell
+        try { gotCell = planted(cellExpr({}, signals).map((i) => idOf(i, false))) } catch (e) { gotCell = 'ERR ' + e.message }
         let gotItem
         try { gotItem = planted(itemExpr({}, signals).map((i) => idOf(i, false))) } catch (e) { gotItem = 'ERR ' + e.message }
         asterErrors.length = 0
@@ -202,6 +209,7 @@ window.__run = (boxes, scopes, plant) => {
         const viaLoop = asterFailed ?? planted((store.hits || []).map((i) => idOf(i, false)))
         const unitViaLoop = asterFailed ?? planted((store.unitHits || []).map((i) => idOf(i, false)))
         const leafViaLoop = asterFailed ?? planted((store.leafHits || []).map((i) => idOf(i, false)))
+        const cellViaLoop = asterFailed ?? planted((store.cellHits || []).map((i) => idOf(i, false)))
         const key = 'scope=' + JSON.stringify(sc) + ' box#' + bi
         const cmp = (scope, w, g, l) => {
           const fail = JSON.stringify(w) !== JSON.stringify(g) ? { got: g } : JSON.stringify(w) !== JSON.stringify(l) ? { got: { 'through the event loop': l } } : null
@@ -210,6 +218,7 @@ window.__run = (boxes, scopes, plant) => {
         cmp('root', want, got, viaLoop)
         cmp('unit.mark', wantUnit, gotUnit, unitViaLoop)
         cmp('leaf.mark', wantLeaf, gotLeaf, leafViaLoop)
+        cmp('group().mark', wantCell, gotCell, cellViaLoop)
         cmp('unit', wantItem, gotItem, gotItem)
       }
     }
@@ -233,11 +242,12 @@ async function main(gate: Gate): Promise<void> {
     await page.waitForFunction(() => '__run' in window, null, { timeout: 30_000 })
     const t0 = Date.now()
     for (const renderer of ['svg', 'canvas'] as const) {
-      const where = await page.evaluate(([s, rd]) => (window as unknown as { __prepare: (...a: unknown[]) => Promise<{ vega: number[]; aster: number[]; cell: number[]; path: number[] }> }).__prepare(s, rd), [spec, renderer] as const)
+      const where = await page.evaluate(([s, rd]) => (window as unknown as { __prepare: (...a: unknown[]) => Promise<{ vega: number[]; aster: number[]; cell: number[]; path: number[]; inner: number[] }> }).__prepare(s, rd), [spec, renderer] as const)
       // real pointer presses, in each engine: on cell g1 of m_group (`unit` is the group item) and on path q2 (`leaf`)
       for (const origin of [where.vega, where.aster]) {
         await page.mouse.click(origin[0]! + where.cell[0]!, origin[1]! + where.cell[1]!)
         await page.mouse.click(origin[0]! + where.path[0]!, origin[1]! + where.path[1]!)
+        await page.mouse.click(origin[0]! + where.inner[0]!, origin[1]! + where.inner[1]!)
       }
       const scopes = SCOPES.filter((sc) => !FILTER || JSON.stringify(sc).includes(FILTER))
       const r = await page.evaluate(([b, sc, pl]) => (window as unknown as { __run: (...a: unknown[]) => Promise<{ cases: Case[]; unitPressed: { vega: boolean; aster: boolean } }> }).__run(b, sc, pl), [boxes, scopes, gate.plant] as const)
@@ -254,6 +264,7 @@ async function main(gate: Gate): Promise<void> {
         if (c.nonEmpty) gate.count(`non-empty-${renderer}`)
         if (c.nonEmpty && c.key.startsWith('unit.mark')) gate.count('group-scoped')
         if (c.nonEmpty && c.key.startsWith('leaf.mark')) gate.count('mark-scoped')
+        if (c.nonEmpty && c.key.startsWith('group().mark')) gate.count('enclosing-scoped')
       }
       console.log(`[browser-intersect] ${renderer}: ${r.cases.length - fails}/${r.cases.length} (scope, box) pairs agree with real vega (${((Date.now() - t0) / 1000).toFixed(0)}s)`)
     }
@@ -267,12 +278,13 @@ await runGate({
   name: 'intersect-browser',
   partial: Boolean(FILTER),
   counters: {
-    compared: { floor: 2 * 4 * boxes.length * SCOPES.length, what: '(renderer, search, scope, box) cases compared with real vega' },
+    compared: { floor: 2 * 5 * boxes.length * SCOPES.length, what: '(renderer, search, scope, box) cases compared with real vega' },
     // a comparison of empty lists proves nothing: most scopes must have hits somewhere
-    'non-empty-svg': { floor: 1096, what: 'cases on the svg renderer where vega found items' },
-    'non-empty-canvas': { floor: 1096, what: 'cases on the canvas renderer where vega found items' },
+    'non-empty-svg': { floor: 1236, what: 'cases on the svg renderer where vega found items' },
+    'non-empty-canvas': { floor: 1236, what: 'cases on the canvas renderer where vega found items' },
     'group-scoped': { floor: 280, what: 'non-empty cases searched within a group item\'s mark (the third argument)' },
     'mark-scoped': { floor: 252, what: 'non-empty cases searched within a data item\'s mark' },
+    'enclosing-scoped': { floor: 280, what: 'non-empty cases searched within the mark of the group an event is in (group().mark)' },
   },
   run: async (gate) => {
     rmSync(OUT_DIR, { recursive: true, force: true })
