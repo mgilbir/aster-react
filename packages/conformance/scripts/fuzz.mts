@@ -34,7 +34,7 @@ function mulberry32(seed: number): () => number {
   }
 }
 
-const pick = <T>(rng: () => number, xs: readonly T[]): T => xs[Math.floor(rng() * xs.length)]!
+const pick = <T,>(rng: () => number, xs: readonly T[]): T => xs[Math.floor(rng() * xs.length)]!
 const int = (rng: () => number, lo: number, hi: number): number => lo + Math.floor(rng() * (hi - lo + 1))
 const num = (rng: () => number, lo: number, hi: number): number => Math.round((lo + rng() * (hi - lo)) * 100) / 100
 

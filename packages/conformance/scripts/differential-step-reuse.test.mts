@@ -113,7 +113,7 @@ function image(p: Program, rows: (name: string) => readonly unknown[] | null | u
     return `${d.name}: ${(ordered ? list : [...list].sort()).join('|')}`
   })
   // (vega publishes a bin's grid as a function carrying `start`, `stop` and `step`; Aster as an object with them)
-  const grid = (v: unknown): unknown => (typeof v === 'function' ? { start: (v as Record<string, unknown>).start, stop: (v as Record<string, unknown>).stop, step: (v as Record<string, unknown>).step } : v)
+  const grid = (v: unknown): unknown => (typeof v === 'function' ? { start: (v as unknown as Record<string, unknown>).start, stop: (v as unknown as Record<string, unknown>).stop, step: (v as unknown as Record<string, unknown>).step } : v)
   return [...sets, ...p.published.map((s) => `${s}: ${JSON.stringify(enc(grid(signal(s))))}`)].join('\n')
 }
 

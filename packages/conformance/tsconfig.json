@@ -1,7 +1,9 @@
 {
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
-    "outDir": "./dist"
+    "outDir": "./dist",
+    "allowImportingTsExtensions": true,
+    "allowJs": true
   },
-  "include": ["src", "corpus"]
+  "include": ["src", "corpus", "scripts", "test"]
 }

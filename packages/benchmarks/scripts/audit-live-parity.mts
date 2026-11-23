@@ -1,6 +1,8 @@
 /**
  * Live-page parity audit: extract both engines' SVGs from the deployed demo,
  * canonicalize with the conformance tooling, and report per-card diffs.
+ * The canonicalizer compares the canvas background (a first-painted full-canvas rect or an svg background-color style) as the root
+ * `bg` field; it has no option to ignore it (72af02d removed `ignoreBackground`), so a card whose background differs is reported.
  */
 import { chromium } from 'playwright'
 import { canonicalizeSvg, diffCanonical } from '../../conformance/src/normalize.js'
@@ -33,8 +35,8 @@ await browser.close()
 console.log(`extracted ${cards.length} cards\n`)
 let same = 0
 for (const card of cards) {
-  const a = canonicalizeSvg(card.oracle, { ignoreBackground: true })
-  const b = canonicalizeSvg(card.aster, { ignoreBackground: true })
+  const a = canonicalizeSvg(card.oracle)
+  const b = canonicalizeSvg(card.aster)
   const diffs = diffCanonical(a, b)
   if (diffs.length === 0) { same++; console.log(`MATCH  ${card.title}`); continue }
   // classify: text vs geometry

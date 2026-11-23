@@ -52,7 +52,7 @@ async function runVega(c: Case): Promise<Outcome> {
   } catch (err) {
     return { throw: err as Error }
   }
-  if (errors.length) return { throw: new Error(errors[0].replace(/^Error: /, '')) }
+  if (errors.length) return { throw: new Error(errors[0]!.replace(/^Error: /, '')) }
   const sig: Record<string, unknown> = {}
   for (const s of (c.opt.signals ?? []) as string[]) sig[s] = view.signal(s)
   return { out: view.data('src'), sig }

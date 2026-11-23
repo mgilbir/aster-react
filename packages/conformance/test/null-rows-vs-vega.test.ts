@@ -15,7 +15,7 @@ import { describe, it, expect } from 'vitest'
 import * as vega from 'vega'
 import { renderSpec, renderSceneToSvg, createChartStream } from '@aster-charts/core'
 import { createChartSession } from '@aster-charts/core/dom'
-import { canonicalizeSvg, diffCanonical } from '../src/normalize.js'
+import { canonicalizeSvg, diffCanonical, type CanonicalResult } from '../src/normalize.js'
 
 type Spec = Record<string, unknown>
 const text = (from: string, x = 5): Spec => ({ type: 'text', from: { data: from }, encode: { update: { x: { value: x }, y: { value: 20 }, text: { signal: '"<" + datum.a + "|" + datum.data + ">"' } } } })
@@ -23,7 +23,7 @@ const lone: Spec = { type: 'rule', encode: { update: { x: { value: 50 }, y: { va
 const frame = (data: unknown[], marks: unknown[], extra: Spec = {}): Spec => ({ width: 100, height: 50, padding: 0, autosize: 'none', data, marks, ...extra })
 
 /** What was thrown and logged, by class (vega's message and Aster's differ by design), and Aster's messages. */
-interface Outcome { thrown?: string; svg?: string; errors: string[]; messages?: string[] }
+interface Outcome { thrown?: string; svg?: CanonicalResult; errors: string[]; messages?: string[] }
 const classOf = (e: unknown): string => (e instanceof Error ? e.constructor.name : String(e).split(':')[0]!)
 
 async function withVega(spec: Spec, after?: (view: any) => Promise<void> | void): Promise<Outcome> {
@@ -210,7 +210,7 @@ describe("Aster's message: which row of which dataset, given how", () => {
 
   it('inline values, through renderSpec, a session and a stream (thrown)', () => {
     for (const [values, row, value] of [[[{ a: 1 }, null], 1, 'null'], [[undefined, { a: 2 }], 0, 'undefined']] as const) {
-      const spec = frame([{ name: 't', values: values as unknown[] }], [text('t')])
+      const spec = frame([{ name: 't', values: [...values] as unknown[] }], [text('t')])
       for (const run of Object.values(PATHS)) {
         const e = caught(() => run(spec)(undefined))
         expect(e).toBeInstanceOf(TypeError)

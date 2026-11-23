@@ -16,6 +16,7 @@ import * as vega from 'vega'
 import * as vl from 'vega-lite'
 import { compile } from '@aster-charts/vl'
 import { silent } from './vl-time-helpers.js'
+import { scenegraphRoot } from '../src/scenegraph-root.js'
 
 type Obj = Record<string, unknown>
 
@@ -94,7 +95,7 @@ async function run(vg: Obj): Promise<Run> {
     }
     for (const sub of node.marks ?? []) walk(sub, sub.role ?? role)
   }
-  walk(view.scenegraph().root, 'root')
+  walk(scenegraphRoot(view), 'root')
   // (layers may share one data set and add to it what each needs: the rows of one view are compared, those of a layered one are not)
   const reading = [...marksOf(vg.marks as any[] | undefined)].filter((m) => typeof m.from?.data === 'string')
   const first = reading.length === 1 ? reading[0] : undefined

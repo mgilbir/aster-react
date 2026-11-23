@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "pnpm --filter @aster-charts/react run build && vite build",
+    "build": "vite build",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {

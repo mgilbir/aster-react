@@ -137,9 +137,9 @@ describe('arr.ts vs d3-array 3.2.4 (generated)', () => {
         label: lab({ v, p }),
         oracle: () => [
           d3.quantile(v as number[], p as number),
-          d3.quantile(keyed, p as number, (e) => e.d as number),
+          d3.quantile(keyed, p as number, (e: { d: unknown }) => e.d as number),
           d3.quantileSorted(sorted, p as number),
-          d3.quantileSorted(keyed, p as number, (e) => +(e.d as number)),
+          d3.quantileSorted(keyed, p as number, (e: { d: unknown }) => +(e.d as number)),
         ],
         aster: () => [
           arr.quantile(v, p as number),

@@ -104,7 +104,7 @@ describe('field names reach expressions only through JSON-escaped datum[...] rea
         encoding: { x: { field: n.raw, type: 'ordinal', timeUnit: 'month' }, y: { aggregate: 'count', type: 'quantitative' } },
       })
       const tu = (out.data as Array<{ transform?: Array<Record<string, any>> }>).flatMap((d) => d.transform ?? []).find((t) => t.type === 'timeunit')!
-      const [startName] = tu.as as string[]
+      const startName = (tu.as as string[])[0]!
       expect(splitAccessPath(startName)).toEqual([startName])
       expect(JSON.stringify(out.scales)).toContain(JSON.stringify(startName).slice(1, -1))
     }
