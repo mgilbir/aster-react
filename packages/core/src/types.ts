@@ -732,7 +732,7 @@ export interface SceneRoot {
    * @internal The rows each spec dataset ended with in this evaluation, and the names of the ones that never ran (see
    * `datasetsOfScene`). Non-enumerable, so it is not part of the scene's structure; not serializable.
    */
-  __datasets?: { rows: ReadonlyMap<string, readonly unknown[]>; failed: ReadonlySet<string> | undefined }
+  __datasets?: { rows: ReadonlyMap<string, import('./content-stamp.js').History>; failed: ReadonlySet<string> | undefined }
 }
 
 export interface SceneGroup extends SceneItem {

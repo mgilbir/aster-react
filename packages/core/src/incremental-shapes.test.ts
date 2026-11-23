@@ -398,6 +398,8 @@ export function runScenario(shape: string, gen: (r: Rnd) => Scenario, seed: numb
   const ops: string[] = []
   let stamps: Published[] = []
   let stampFail: Fail | undefined
+  // (DECISIONS Q14: `datasetsOfScene(scene)` is that scene's rows, whatever evaluations came after it)
+  const history: Array<{ scene: SceneRoot; rows: string }> = []
   for (let step = 0; step <= steps; step++) {
     const prev = data
     if (step > 0) {
@@ -423,6 +425,10 @@ export function runScenario(shape: string, gen: (r: Rnd) => Scenario, seed: numb
     const broken = brokenStamp(stamps)
     if (broken !== null) stampFail ??= { shape, seed, delivery, step, ops: ops.slice(), detail: broken }
     stamps = publishedArrays(inc)
+    for (const h of history) {
+      if (JSON.stringify(datasetsOf(h.scene)) !== h.rows) return { shape, seed, delivery, step, ops, detail: `the datasets of the scene of step ${history.indexOf(h)} changed after it was returned (Q14)` }
+    }
+    history.push({ scene: inc, rows: JSON.stringify(datasetsOf(inc)) })
   }
   return stampFail ?? null
 }
