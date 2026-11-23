@@ -189,7 +189,7 @@ function inkText(pen: AlphaCanvas, it: Drawn): void {
   const { fill, stroke } = inkOf(it)
   if (it.opacity === 0 || (it.fontSize as number) <= 0) return
   const desc = textItemDesc(it)
-  if (desc == null || it.text == null || it.text === '') return
+  if (it.text == null || it.text === '') return
   pen.save()
   pen.font = fontString(it as never)
   pen.textAlign = it.align || 'left'
