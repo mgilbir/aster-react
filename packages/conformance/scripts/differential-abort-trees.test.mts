@@ -14,7 +14,7 @@
  * scale written out).
  *
  * `ASTER_DIFF_SCALE` multiplies the number of trees. To narrow a failure down: `ABORT_KINDS=axis,legend` draws only those failures, and
- * `ABORT_ONE=1` puts exactly one failure in every tree (differential-abort-gen.mts).
+ * `ABORT_ONE=1` puts exactly one failure in every tree (differential-abort-gen.mts); such a run is diagnostics only and fails.
  */
 import { describe, expect, it } from 'vitest'
 import * as vega from 'vega'
@@ -23,7 +23,7 @@ import '@aster-charts/core/transforms'
 import { compileChart, evaluateChart, renderSceneToSvg, renderSpec } from '@aster-charts/core'
 import { canonicalizeSvg, diffCanonical } from '../src/normalize.js'
 import { makeRng, scaled } from './differential-gen.mts'
-import { FAILS, treeSpec, type Fail } from './differential-abort-gen.mts'
+import { FAILS, NARROWED_BY, treeSpec, type Fail } from './differential-abort-gen.mts'
 
 type Spec = Record<string, unknown>
 
@@ -52,6 +52,14 @@ function onAster(spec: Spec): { svg: string; errors: string[] } {
 
 const SEEDS = [11, 23, 37]
 const PER_SEED = scaled(200)
+
+describe('the generated space is whole', () => {
+  // (ABORT_KINDS / ABORT_ONE / ABORT_AUTOSIZE narrow it to chase one failure; the per-kind floors below would then read the
+  // narrowed list, so a narrowed run must never be green)
+  it('no ABORT_* variable narrows it', () => {
+    expect(NARROWED_BY).toEqual([])
+  })
+})
 
 describe('a pass that fails builds what vega builds', () => {
   it.each(SEEDS)(`${PER_SEED} generated trees of nested scopes, seed %i`, { timeout: 600_000 }, async (seed) => {

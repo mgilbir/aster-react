@@ -148,12 +148,29 @@ function vegaFlags(vg: Json): string[] {
   return flags
 }
 
-const results = JSON.parse(readFileSync(process.argv[2]!, 'utf8')) as { static: Outcome[]; react?: Outcome[] }
+const USAGE = 'usage: tsx scripts/gallery-triage.mts <gate-results.json> [out.json] (the --json file of `pnpm conformance:gallery`)'
+const resultsFile = process.argv.slice(2).find((a) => !a.startsWith('--'))
+if (resultsFile === undefined) {
+  console.error(USAGE)
+  process.exit(2)
+}
+let results: { static: Outcome[]; react?: Outcome[] }
+try {
+  results = JSON.parse(readFileSync(resultsFile, 'utf8')) as { static: Outcome[]; react?: Outcome[] }
+  if (!Array.isArray(results.static)) throw new Error('it has no `static` list of outcomes')
+} catch (e) {
+  console.error(`gallery-triage: cannot read ${resultsFile}: ${e instanceof Error ? e.message : String(e)}\n${USAGE}`)
+  process.exit(2)
+}
 const byId = new Map(listGallery().map((g) => [g.id, g]))
 const out: Array<Record<string, unknown>> = []
 for (const o of results.static) {
   if (o.status !== 'fail' && o.status !== 'error') continue
-  const g = byId.get(o.id)!
+  const g = byId.get(o.id)
+  if (g === undefined) {
+    console.error(`gallery-triage: ${o.id} is in ${resultsFile} but not in the gallery manifest (results of other pins?)`)
+    process.exit(2)
+  }
   const rec: Record<string, unknown> = { id: o.id, kind: g.kind, status: o.status, first: o.first, firstContent: o.firstContent }
   const src = readSpec(g)
   if (o.status === 'error') {
