@@ -49,10 +49,15 @@ export const BROWSER_FLOORS = {
   maxStringVsVegaEmbeds: 2,
   /** The incremental patcher against string mode, same chart, update and first render (measured 0.57 to 0.88: patching is the faster mode). */
   maxDomVsString: 1.5,
-  /** Share of the default mode's frames over 21 ms under a one-update-per-frame stream (measured 0 to 2.8%). */
+  /**
+   * Share of an aster mode's frames over 21 ms under a one-update-per-frame stream. Measured on an idle machine: default mode 0 to 2.8%,
+   * string mode (which re-serializes the whole svg every frame) 0.6% on line, 2.2% on scatter, 64% on bar. On a loaded machine every
+   * engine's frames lengthen together (a run at load 9 read 72% for the default mode and 56% for vega-embed's on bar), so the ceiling is
+   * the larger of this share and the Vega embeds' own in the same run plus `longShareSlack`: the default mode is held to the FASTER
+   * embed, string mode to the slower (it is the heavier mode; reactVega on bar drops 97% of its frames).
+   */
   maxLongShare: 0.25,
-  /** The same for string mode, which re-serializes the whole svg every frame (measured 0.6% on line, 2.2% scatter, 64% on bar; the Vega embeds on bar: 5% and 99%). It guards "stopped painting". */
-  maxLongShareString: 0.9,
+  longShareSlack: 0.25,
   /** Differential update (about 1% of the points change) against a full re-encode, evaluate + patch (measured 3.7x to 5.5x at 1000 points). */
   minDifferentialSpeedup: 2,
   /** Retained heap after churn (mount, 30 updates, unmount, five times), MB. Measured -0.3 to 0.7 with a forced collection before each reading. */
@@ -107,9 +112,12 @@ export function checkBrowserBench(results: BrowserResults, kinds: string[], page
       if (sub.length === 0) {
         if (!(frames > 0)) bad(`${embed} painted no frames under the update stream`)
         else if (long < 0 || long > 1) bad(`${embed} frame pacing: longShare ${long} is not a share`)
-        else {
-          const ceiling = embed === 'aster' ? BROWSER_FLOORS.maxLongShareString : embed === 'asterDom' ? BROWSER_FLOORS.maxLongShare : 1
-          if (long > ceiling) bad(`${embed} drops ${(long * 100).toFixed(1)}% of its frames under the update stream; ceiling ${ceiling * 100}%`)
+        else if (embed === 'aster' || embed === 'asterDom') {
+          const vegaLong = VEGA_EMBEDS.map((e) => rowOf(results, `fps:${kind}`, e)?.longShare).filter(isNum)
+          // a Vega embed without a usable share is reported on its own row above; here it only fails to loosen the ceiling
+          const reference = vegaLong.length === 0 ? 0 : embed === 'aster' ? Math.max(...vegaLong) : Math.min(...vegaLong)
+          const ceiling = Math.min(1, Math.max(BROWSER_FLOORS.maxLongShare, reference + BROWSER_FLOORS.longShareSlack))
+          if (long > ceiling) bad(`${embed} drops ${(long * 100).toFixed(1)}% of its frames under the update stream; ceiling ${(ceiling * 100).toFixed(0)}% (${(BROWSER_FLOORS.maxLongShare * 100).toFixed(0)}%, or the Vega embeds' share plus ${BROWSER_FLOORS.longShareSlack * 100}%)`)
         }
       }
       const follow = rowOf(results, `autoResize:${kind}`, embed)

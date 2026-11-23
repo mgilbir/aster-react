@@ -66,6 +66,12 @@ describe('verify-publish', () => {
     }, {}, /@aster-charts\/core tarball ships source maps/],
     ['a JS file that references a source map that is not shipped', (d) => writeFileSync(join(d, 'packages', 'vl', 'dist', 'dangling.js'), 'export {}\n//# sourceMappingURL=dangling.js.map\n'), {}, /@aster-charts\/vl\/dist\/dangling\.js references a source map/],
     ['an exports entry whose target does not exist', (d) => editManifest(d, 'core', (m) => { m.exports['.'].default = './dist/does-not-exist.js' }), {}, /@aster-charts\/core tarball is missing dist\/does-not-exist\.js/],
+    ['a `browser` target that is not in the tarball (Node never resolves it, so no import reads it)', (d) => editManifest(d, 'core', (m) => { m.exports['./probe-browser'] = { types: './dist/index.d.ts', browser: './dist/missing-browser.js', default: './dist/index.js' } }), {}, /@aster-charts\/core tarball is missing dist\/missing-browser\.js/],
+    ['a `browser` condition that resolves somewhere else than it names (a condition order that lets `default` win)', (d) => {
+      writeFileSync(join(d, 'packages', 'core', 'dist', 'browser-only.js'), 'export const browserOnly = 1\n')
+      editManifest(d, 'core', (m) => { m.exports['./probe-browser'] = { types: './dist/index.d.ts', default: './dist/index.js', browser: './dist/browser-only.js' } })
+    }, {}, /@aster-charts\/core\/probe-browser: a bundle built with the browser condition does not read \.\/dist\/browser-only\.js/],
+    ['a nested condition whose file is missing', (d) => editManifest(d, 'vl', (m) => { m.exports['./probe'] = { types: './dist/index.d.ts', default: './dist/index.js', node: { import: './dist/index.js', require: './dist/missing.cjs' } } }), {}, /@aster-charts\/vl tarball is missing dist\/missing\.cjs/],
     ['an exports entry with no types condition', (d) => editManifest(d, 'vl', (m) => { delete m.exports['.'].types }), {}, /@aster-charts\/vl exports\["\."\] has no "types" condition/],
     ['a manifest with no sideEffects field', (d) => editManifest(d, 'vl', (m) => { delete m.sideEffects }), {}, /@aster-charts\/vl packed manifest declares no "sideEffects"/],
     ['a wrong licence', (d) => editManifest(d, 'react', (m) => { m.license = 'MIT' }), {}, /@aster-charts\/react has license MIT/],

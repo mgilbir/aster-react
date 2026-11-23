@@ -77,11 +77,22 @@ describe('checkBrowserBench', () => {
     expect(text).toMatch(/the benchmark page threw: boom/)
   })
 
-  it('string mode may drop frames on a heavy chart (measured 64% on bar) but not stop painting', () => {
-    const g = good(); g.results['fps:line'] = { ...g.results['fps:line'], aster: { median: 22.2, p95: 33.6, longShare: 0.642, frames: 123 } }
+  const fpsRow = (longShare: number, frames = 120): Record<string, unknown> => ({ median: 20, p95: 30, longShare, frames })
+
+  it('holds string mode to the heavier Vega embed and the default mode to the lighter one (bar: 64% for string mode against vega 5% / 99%)', () => {
+    const g = good()
+    g.results['fps:line'] = { aster: fpsRow(0.642), asterDom: fpsRow(0.028), reactVega: fpsRow(0.99), embedHook: fpsRow(0.051) } // measured, idle machine
     expect(checkBrowserBench(g.results, ['line'], [], g.diff, MEM)).toEqual([])
-    g.results['fps:line'] = { ...g.results['fps:line'], aster: { median: 90, p95: 120, longShare: 0.98, frames: 30 } }
-    expect(checkBrowserBench(g.results, ['line'], [], g.diff, MEM).join('\n')).toMatch(/aster drops 98\.0% of its frames/)
+    g.results['fps:line'] = { aster: fpsRow(0.642), asterDom: fpsRow(0.4), reactVega: fpsRow(0.99), embedHook: fpsRow(0.051) }
+    expect(checkBrowserBench(g.results, ['line'], [], g.diff, MEM).join('\n')).toMatch(/asterDom drops 40\.0% of its frames under the update stream; ceiling 30%/)
+    g.results['fps:line'] = { aster: fpsRow(0.4), asterDom: fpsRow(0.02), reactVega: fpsRow(0.01), embedHook: fpsRow(0.0) } // light chart: string mode must not drop 40%
+    expect(checkBrowserBench(g.results, ['line'], [], g.diff, MEM).join('\n')).toMatch(/aster drops 40\.0% of its frames under the update stream; ceiling 26%/)
+  })
+
+  it('a loaded machine, where every engine drops frames, does not fail the run (the measured bar run at load 9)', () => {
+    const g = good()
+    g.results['fps:line'] = { aster: fpsRow(1), asterDom: fpsRow(0.725), reactVega: fpsRow(0.976), embedHook: fpsRow(0.558) }
+    expect(checkBrowserBench(g.results, ['line'], [], g.diff, MEM)).toEqual([])
   })
 
   it('FAILS when the differential update is not cheaper than a full re-encode', () => {
