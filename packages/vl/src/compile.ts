@@ -2340,6 +2340,12 @@ function compileFacetedView(spec: VLSpec, ctx: CompileCtx, nested = ''): VLSpec 
     pre.push({ type: 'formula', expr: `toDate(${dref(fd.field)})`, as: fd.field })
     pre.push(timeUnitTransform(fd.tu!, fd.field, as))
   }
+  // (a field binned to its unit already is read as the dates it holds: data/formatparse.ts parses a temporal facet field, binned or not)
+  for (const fd of facetFds.filter((f) => f.tu?.binned)) {
+    if (preSeen.has(`date:${fd.field}`)) continue
+    preSeen.add(`date:${fd.field}`)
+    pre.push({ type: 'formula', expr: `toDate(${dref(fd.field)})`, as: fd.field })
+  }
   if (pre.length && innerIsFacet) throw new VLCompileError('a binned, time-unit or nested field as the facet of a facet that holds another facet is not supported yet')
   // (a spec with data of its own: the cells facet the facet's data, with the facet's transforms and the facet fields computed; the spec's
   // datasets stay where they are, at the root, read whole by every cell, and nothing below the facet gets the facet fields)
