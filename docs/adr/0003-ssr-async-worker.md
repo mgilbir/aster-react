@@ -21,7 +21,8 @@ provide Workers but not uniformly (SSR, older hosts, jsdom).
    `renderChartToStaticMarkup` + `hydrateChart`, which patches the existing node
    directly.
 3. **Async data uses Suspense/`use()`.** `useSpecData` returns a stable promise keyed
-   by the spec object and fetch implementation; the loader add-on is dynamically
+   by the spec's content, the data options' content and an optional host `cacheKey`
+   (`fetch`/`allow` are read through a latest-ref; see docs/API.md); the loader add-on is dynamically
    imported so it stays out of the base bundle. A promise `spec` on `<Chart>` suspends
    to the host's boundary (no internal boundary, so the host fallback is used).
 4. **Workers are optional and symmetric.** `handleChartWorkerRequest` is a pure

@@ -57,17 +57,26 @@ describe('loader options are forwarded', () => {
     expect(loadSpecDataResource(spec, { fetch: f, allow: ANY, timeoutMs: 5000 })).toBe(a)
     const b = loadSpecDataResource(spec, { fetch: f, allow: ANY, timeoutMs: 6000 })
     expect(b).not.toBe(a)
+    // (C50: a function option is read through a latest-ref, so an inline arrow re-created by each render is the same option;
+    // what used to be asserted here -- a new identity is a new load -- is what made a suspended component reload forever.
+    // Functions with different code are still different loads, and `cacheKey` separates closures of the same code.)
     const allow = (): boolean => true
-    expect(loadSpecDataResource(spec, { fetch: f, allow })).not.toBe(loadSpecDataResource(spec, { fetch: f, allow: () => true }))
-    await Promise.all([a, b])
+    const withAllow = loadSpecDataResource(spec, { fetch: f, allow })
+    expect(loadSpecDataResource(spec, { fetch: f, allow: (): boolean => true })).toBe(withAllow)
+    expect(loadSpecDataResource(spec, { fetch: f, allow: (): boolean => false })).not.toBe(withAllow)
+    expect(loadSpecDataResource(spec, { fetch: f, allow, cacheKey: 'other' })).not.toBe(withAllow)
+    await Promise.allSettled([a, b, withAllow])
   })
 
+  let variantRun = 0
   forEachVariant(['svg'], (Chart) => {
     it('useChartData splits loader options from chart options', async () => {
+      // (each variant loads its own url: the Suspense cache is module-wide, so equal inputs would share one load)
+      const file = `data-${++variantRun}.csv`
       const fetchImpl = csv()
       let result: UseChartResult | null = null
       function Chart(): React.ReactElement {
-        result = useChartData(specOf('data.csv'), { fetch: fetchImpl, baseURL: 'https://data.example.com/', limits: { maxRows: 100 }, width: 50, height: 50 })
+        result = useChartData(specOf(file), { fetch: fetchImpl, baseURL: 'https://data.example.com/', limits: { maxRows: 100 }, width: 50, height: 50 })
         return <div />
       }
       const host = document.createElement('div')
@@ -77,16 +86,18 @@ describe('loader options are forwarded', () => {
       await act(async () => { for (let i = 0; i < 100 && !result; i++) await new Promise((r) => setTimeout(r, 10)) })
       expect(result!.error).toBeNull()
       expect(result!.svg).toContain('<svg')
-      expect((fetchImpl as unknown as ReturnType<typeof vi.fn>).mock.calls[0]![0].toString()).toBe('https://data.example.com/data.csv')
+      expect((fetchImpl as unknown as ReturnType<typeof vi.fn>).mock.calls[0]![0].toString()).toBe(`https://data.example.com/${file}`)
       act(() => { root.unmount() })
     })
 
     it('useChartData loads a {signal} url for the host\'s signal value, and again when it changes (C531)', async () => {
       const fetchImpl = csv()
+      // (each variant its own urls: the Suspense cache is module-wide, so equal inputs would share one load)
+      const dir = `https://data.example.com/v${++variantRun}/`
       const spec = {
         width: 50, height: 50, padding: 0, autosize: 'none',
         signals: [{ name: 'file', value: 'spec.csv' }],
-        data: [{ name: 't', url: { signal: "'https://data.example.com/' + file" }, format: { type: 'csv' } }],
+        data: [{ name: 't', url: { signal: `'${dir}' + file` }, format: { type: 'csv' } }],
         marks: [],
       } as never
       let result: UseChartResult | null = null
@@ -104,7 +115,7 @@ describe('loader options are forwarded', () => {
         await act(async () => { for (let i = 0; i < 100 && !result; i++) await new Promise((r) => setTimeout(r, 10)) })
         expect(result!.error).toBeNull()
       }
-      expect(urls()).toEqual(['https://data.example.com/a.csv', 'https://data.example.com/b.csv'])
+      expect(urls()).toEqual([`${dir}a.csv`, `${dir}b.csv`])
       act(() => { root.unmount() })
     })
   })

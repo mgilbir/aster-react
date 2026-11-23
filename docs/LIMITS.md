@@ -814,8 +814,9 @@ its name, so a dropped one is simply rebuilt.
   hooks turn it into an `AsterLimitError` (see `docs/ERRORS.md`).
 - `useSpecData`, `useChartData` and `loadSpecData` from `@aster-charts/react` take the same
   options as `loadSpecData` in `@aster-charts/core/load`, so the URL policy and `limits` apply to
-  Suspense loading too. The resource is keyed on the options, functions by identity: define `allow`
-  once (at module scope), not inline in the component, or every render starts a new load.
+  Suspense loading too. The resource is keyed on the options by content (a function option by its code, called through a
+  latest-ref), so an inline `allow` is one load, not one per render; closures of one function that differ by what they close over
+  are told apart with `cacheKey` (see `loadSpecDataResource` in docs/API.md).
 - `urlData="refuse"` refuses a spec with a url dataset in every shell, hook and worker, before any add-on is imported
   (see [Refusing url datasets](#refusing-url-datasets-urldata)).
 - Bound inputs (`signal.bind`) are confined to the chart: a generated input takes only the input types and field attributes an

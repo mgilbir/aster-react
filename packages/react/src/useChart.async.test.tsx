@@ -12,10 +12,11 @@ import { forEachVariant } from './testing/variants'
 const allow = (u: URL): boolean => u.origin === 'https://example.com'
 
 forEachVariant(['svg'], (Chart, variant) => {
+  // (each variant loads its own url: useSpecData's cache is module-wide, and equal inputs share one load)
   const urlSpec = {
     $schema: 'https://vega.github.io/schema/vega/v6.json',
     width: 200, height: 100, padding: 0, autosize: 'none',
-    data: [{ name: 't', url: 'https://example.com/data.csv', format: { type: 'csv' } }],
+    data: [{ name: 't', url: `https://example.com/data-${variant.name}.csv`, format: { type: 'csv' } }],
     scales: [
       { name: 'x', type: 'linear', domain: { data: 't', field: 'x' }, range: 'width' },
       { name: 'y', type: 'linear', domain: { data: 't', field: 'y' }, range: 'height' },
