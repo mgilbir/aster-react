@@ -51,3 +51,25 @@ describe('resquarified', () => {
     expect(boxes(r)).toEqual(fresh(portrait))
   })
 })
+
+describe('resquarify across evaluations (a deviation from vega, docs/ARCHITECTURE.md, ADR 0005)', () => {
+  it('a session that resizes lays the tree out afresh, as a fresh evaluation at the new size does (C269)', async () => {
+    const { createChartSession } = await import('./session.js')
+    const { compileChart, evaluateChart } = await import('./index.js')
+    const { datasetsOfScene } = await import('./runtime.js')
+    await import('./addon-transforms.js')
+    const spec = (method: string) => ({
+      signals: [{ name: 'w', value: 600 }, { name: 'h', value: 400 }],
+      data: [{
+        name: 'tree', values: [{ id: 0 }, ...VALUES.map((v, i) => ({ id: i + 1, parent: 0, v }))],
+        transform: [{ type: 'stratify', key: 'id', parentKey: 'parent' }, { type: 'treemap', field: 'v', method, size: [{ signal: 'w' }, { signal: 'h' }] }],
+      }],
+    })
+    const rows = (s: unknown): unknown => JSON.parse(JSON.stringify(datasetsOfScene(s as never).get('tree')))
+    const session = createChartSession()
+    session.evaluate(spec('resquarify') as never)
+    const resized = session.evaluate(spec('resquarify') as never, { signals: { w: 200, h: 900 } })
+    expect(rows(resized)).toEqual(rows(evaluateChart(compileChart(spec('resquarify') as never), { signals: { w: 200, h: 900 } })))
+    expect(rows(resized)).toEqual(rows(evaluateChart(compileChart(spec('squarify') as never), { signals: { w: 200, h: 900 } })))
+  })
+})
