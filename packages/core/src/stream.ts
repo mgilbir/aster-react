@@ -26,7 +26,7 @@ import { installPart, partLoaded } from './engine-parts.js'
 import { applyPipelineWithPulse } from './incremental-engine.js'
 import { dict } from './util.js'
 import { dataInputOf } from './spec-structure.js'
-import { diffRows, type DataPulse, type DatasetPulse, type PulseRange } from './pulse.js'
+import { diffRows, pulseChangeOf, type DataPulse, type DatasetPulse, type PulseChangeInput, type PulseRange, type RowDiff } from './pulse.js'
 import { AsterLimitError, type SpecLimits } from './limits.js'
 import { notATuple } from './data-format.js'
 import type { TextMetricsProvider } from './text-metrics.js'
@@ -71,19 +71,10 @@ export interface StreamOptions {
   textMetrics?: TextMetricsProvider
 }
 
-export interface StreamPulse {
-  changed?: number[]
-  from?: number[]
-  to?: number[]
-  added?: PulseRange[]
-  removed?: PulseRange[]
-  /** Retained rows keep their index; `baseLength` is the previous row count. */
-  appendOnly?: boolean
-  baseLength?: number
-}
+export type StreamPulse = PulseChangeInput
 
-/** Per-dataset explicit pulse offered with a batch. */
-export type StreamPulseInput = Record<string, StreamPulse>
+/** Per-dataset explicit pulse offered with a batch: the long form, or the `RowDiff` that `diffRows` returned. */
+export type StreamPulseInput = Record<string, StreamPulse | RowDiff>
 
 export interface StreamBatch {
   /** Full row snapshot per dataset. Diffed against the last flushed snapshot. */
@@ -388,7 +379,8 @@ function foldBatch(fold: Fold, batch: StreamBatch, baseLenOf: (name: string) => 
     const preLen = t.len
     const snapshot = batch.data && has(batch.data, name) ? batch.data[name]! : undefined
     const appended = batch.append && has(batch.append, name) ? batch.append[name]! : undefined
-    const pulse = batch.pulse && has(batch.pulse, name) ? batch.pulse[name] : undefined
+    const given = batch.pulse && has(batch.pulse, name) ? batch.pulse[name] : undefined
+    const pulse = given === undefined ? undefined : pulseChangeOf(given)
     if (snapshot) {
       fold.rows += snapshot.length - t.rows
       t.replace = snapshot

@@ -126,8 +126,9 @@ function isObject(v: unknown): v is Record<string, unknown> {
 /**
  * Compile a Vega-Lite spec to Vega.
  *
- * The input is never mutated: it is cloned once up front (so every downstream
- * in-place edit lands on the private copy) and validated against the explicit
+ * The input is never mutated: its structure is copied before anything is edited (so every downstream in-place edit lands on the
+ * private copy; once for each pass, see `compileTwice`). The rows of its inline data are NOT copied: the compiled spec holds the
+ * caller's row objects, as `docs/API.md` says. It is validated against the explicit
  * support tables in validate.ts. Unsupported or invalid input throws a
  * VLCompileError naming the feature; it is never silently degraded.
  */

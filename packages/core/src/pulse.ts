@@ -254,6 +254,48 @@ export function diffRows(previous: unknown, next: unknown): RowDiff | null {
   return { changed, sameLength: false, added, removed, from, to, addedRanges, removedRanges, ...(appendOnly ? { appendOnly, baseLength } : {}) }
 }
 
+/**
+ * A dataset's pulse as a host states it (`RuntimeInput.dataPulse`, `StreamBatch.pulse`): the index mapping and the ranges, `added` and
+ * `removed` being ALL the ranges. Hosts that diffed the rows themselves (`diffRows`) pass its {@link RowDiff} instead; it is read by
+ * {@link pulseChangeOf}.
+ */
+export interface PulseChangeInput {
+  /** Indices (new coordinates) whose rows changed in place. */
+  changed?: number[]
+  /** new index -> previous index (-1 for inserted rows). */
+  from?: number[]
+  /** previous index -> new index (-1 for removed rows). */
+  to?: number[]
+  /** Appended ranges in new coordinates. */
+  added?: PulseRange[]
+  /** Removed ranges in previous coordinates. */
+  removed?: PulseRange[]
+  /**
+   * Compact append-only pulse: the retained prefix is unchanged in index, so `from` can be synthesised on demand. `baseLength` is the
+   * previous length.
+   */
+  appendOnly?: boolean
+  baseLength?: number
+}
+
+/**
+ * The pulse a host handed in, as the one shape the engine reads. A `RowDiff` (what `diffRows` returns) names its first range in
+ * `added` / `removed` and all of them in `addedRanges` / `removedRanges`; the long form names all of them in `added` / `removed`.
+ */
+export function pulseChangeOf(p: PulseChangeInput | RowDiff): PulseChangeInput {
+  if (!('sameLength' in p)) return p
+  const added = p.addedRanges ?? (p.added ? [p.added] : undefined)
+  const removed = p.removedRanges ?? (p.removed ? [p.removed] : undefined)
+  return {
+    changed: p.changed,
+    ...(p.from ? { from: p.from } : {}),
+    ...(p.to ? { to: p.to } : {}),
+    ...(added ? { added } : {}),
+    ...(removed ? { removed } : {}),
+    ...(p.appendOnly ? { appendOnly: true, baseLength: p.baseLength } : {}),
+  }
+}
+
 export interface DatasetPulse extends RowDiff {
   name: string
 }

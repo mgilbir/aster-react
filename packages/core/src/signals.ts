@@ -39,6 +39,7 @@
  * no element per item, and its renderer (`createCanvasEvents` from `@aster-charts/core/canvas`)
  * resolves events as vega's canvas handler does (`ViewEvents`).
  */
+import type { HostElement, HostEvent, HostEventTarget } from './host-types.js'
 import type { CompiledChart, CompiledData, CompiledSignalDef, SceneGroup, SceneItem, SceneNode, SceneRoot, SignalOnDef } from './types.js'
 import { isEngineNode, keptInto } from './scene-registry.js'
 import { compileExpr, type CompiledExpr, type ExpressionRuntime } from './expression.js'
@@ -53,23 +54,6 @@ import { AsterLimitError, withLimits, type SpecLimits } from './limits.js'
 import type { Timer } from './timer.js'
 import { part } from './engine-parts.js'
 import { clientToSvg } from './pointer.js'
-
-export interface BoundEvent {
-  event: string
-  handler: (evt: Event) => void
-  el: EventTarget
-}
-
-/** The vega-style event context: view coords + the targeted mark's datum. */
-export interface EventContext {
-  /** x/y in view coordinates (page coords minus the chart origin). */
-  x: number
-  y: number
-  /** The raw DOM event. */
-  native: Event
-  /** The mark datum under the pointer, if any. */
-  datum?: Record<string, unknown>
-}
 
 /** What `pick` / the DOM fallback resolve an event position to: a scene item and where it sits. */
 export interface PickedItem {
@@ -119,7 +103,7 @@ export interface ViewEventConnection {
    * resolved it, or undefined to leave it to the loop (the item under the event's point); and the `event.vegaType` the handlers
    * see (default: `type`).
    */
-  on(type: string, send: (event: Event, item: PickedItem | null | undefined, vegaType?: string) => void): void
+  on(type: string, send: (event: HostEvent, item: PickedItem | null | undefined, vegaType?: string) => void): void
   /** The binding is over: deliver nothing more to it. */
   disconnect(): void
 }
@@ -160,9 +144,10 @@ export interface SignalBindOptions {
    */
   limits?: SpecLimits
   /**
-   * Resolve a view-space position (page coords minus the svg origin, padding
-   * included) to the scene item under it -- `buildHitIndex(scene).query` from
-   * `@aster-charts/core/hit` fits. Without it `event.item` is recovered from the DOM
+   * Resolve a view-space position (page coords minus the element's origin, the svg's or the canvas's, padding included) to the
+   * scene item the event is about, as vega's `event.item` -- `buildHitIndex(scene).pick` from `@aster-charts/core/hit` is that
+   * (`<Chart>` passes it). Not `.query`: that answers what a pointer is over for a tooltip or a selection, and reports a mark the
+   * spec made `interactive: false` and the parts of an axis, where `event.item` is `null`. Without it `event.item` is recovered from the DOM
    * (the `mark-*`/`role-*` classes, and the `data-datum` stamp when `stampDatumAttrs` was called).
    */
   pick?: (x: number, y: number) => { item: object; marktype?: string } | null
@@ -186,7 +171,7 @@ export interface SignalBindOptions {
    * a host that patches its DOM keeps; a host that REPLACES the element on every render passes its container (or any
    * stable object), or each render would restart its timers.
    */
-  owner?: EventTarget
+  owner?: HostEventTarget
   /**
    * `containerSize()` for the handlers' expressions, read when an event fires (vega: the view container's live
    * `clientWidth` / `clientHeight`). Without it they read the size the scene was evaluated with, which a
@@ -540,7 +525,7 @@ function updateOf(on: SignalOnDef): Update {
  * semantics. Returns a binding with `detach` + an imperative `setSignal`.
  */
 export function bindSignalEvents(
-  el: Element,
+  el: HostElement,
   chart: CompiledChart,
   runtime: ExpressionRuntime,
   signalParams: Record<string, unknown>,
@@ -1789,17 +1774,22 @@ export function stampDatumAttrs(items: SceneNode[]): void {
  * from `createCanvasEvents`), the scene, the signal store, and hooks.
  */
 export function bindSceneSignals(
-  el: Element,
+  el: HostElement,
   scene: SceneRoot,
   signals: Record<string, unknown>,
   hooks: SignalEventHooks = {},
   opts: Pick<SignalBindOptions, 'pick' | 'data' | 'owner' | 'containerSize' | 'events'> = {},
 ): SignalBinding {
-  const chart = (scene as unknown as { compiled?: CompiledChart }).compiled
-  const runtime = scene.runtime as ExpressionRuntime | undefined
-  const signalParams = (scene as unknown as { signalParams?: Record<string, unknown> }).signalParams ?? {}
-  if (!chart || !runtime) {
-    // Non-interactive scene (no runtime handle): a no-op binding.
+  const chart = scene.compiled
+  const runtime = scene.runtime
+  const signalParams = scene.signalParams ?? {}
+  // (a JSON copy keeps the runtime as an object without its functions: it is not a runtime)
+  if (!chart || typeof runtime?.expr !== 'function') {
+    // A scene without the evaluation's handles (it crossed a worker or a JSON round trip): nothing can be bound, and a host that
+    // asked for events and `onSignal` is told so, once, instead of waiting for calls that never come.
+    ;(hooks.logger ?? consoleLogger).warn(
+      'bindSceneSignals: the scene has no runtime or compiled chart (a scene that crossed a worker or a JSON round trip loses them): no events are bound and no signal will be reported. Evaluate the spec in this thread, or bind the scene it came from.',
+    )
     return { detach: () => {}, release: () => {}, setSignal: () => {} }
   }
   return bindSignalEvents(
@@ -1812,7 +1802,7 @@ export function bindSceneSignals(
     {
       originX: scene.padding?.left ?? 0, originY: scene.padding?.top ?? 0, scene,
       // the limits the scene was evaluated under (runtime.ts `__limits`)
-      limits: (scene as unknown as { __limits?: SpecLimits }).__limits,
+      limits: scene.__limits,
       ...opts,
     },
   )

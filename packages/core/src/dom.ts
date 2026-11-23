@@ -12,6 +12,7 @@
  * checks it over the whole conformance corpus. The one deliberate exception is
  * `denseMarks`, which batches symbols into chunked paths.
  */
+import type { HostDocument, HostElement } from './host-types.js'
 import { SYMBOL_DEFAULT_SIZE, pushAll } from './util.js'
 import type { SceneGroup, SceneItem, SceneRoot } from './types.js'
 import { ClipCollector } from './svg-defs.js'
@@ -971,7 +972,7 @@ function patchEl(el: Element, desc: DomDesc): void {
  * touching only changed attributes. First call vs. string-rendered DOM is
  * fine: the comparison is against live attribute values.
  */
-export function patchSceneDom(svg: Element, scene: SceneRoot, options: DomRenderOptions = {}): void {
+export function patchSceneDom(svg: HostElement, scene: SceneRoot, options: DomRenderOptions = {}): void {
   const root = sceneToDomDesc(scene, options)
   // The root <svg> may legitimately be a different element (e.g. re-created);
   // patch assumes matching tag. Guard for callers wiring the wrong node.
@@ -982,8 +983,8 @@ export function patchSceneDom(svg: Element, scene: SceneRoot, options: DomRender
 /** Build the full SVG element from a scene (mount path if you don't want the string). */
 export function renderSceneToDomElement(
   scene: SceneRoot,
-  doc: Document = globalThis.document,
+  doc: HostDocument = globalThis.document,
   options: DomRenderOptions = {},
-): Element {
+): HostElement {
   return createEl(sceneToDomDesc(scene, options), doc)
 }

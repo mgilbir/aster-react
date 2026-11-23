@@ -54,7 +54,11 @@ export function requireGeo(): NonNullable<GeoRegistry['buildProjection']> {
   return geoRegistry.buildProjection
 }
 
-/** eslint-disable-next-line @typescript-eslint/no-explicit-any -- registry avoids an import cycle with transform.ts */
+/**
+ * A transform's function: its rows, its parameters, the context the engine hands it and the name of its source dataset; the rows it
+ * makes. (Untyped here: the registry avoids an import cycle with transform.ts.)
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 export type TransformFn = (rows: any[], params: Record<string, unknown>, ctx: any, sourceName?: string) => any[]
 
 /**

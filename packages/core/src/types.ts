@@ -110,23 +110,7 @@ export interface RuntimeInput {
    * of falling back to a full re-derive. `dataChanges` remains the compact
    * same-length form; when both are present `dataPulse` wins for that dataset.
    */
-  dataPulse?: Record<string, {
-    changed?: number[]
-    /** new index -> previous index (-1 for inserted rows). */
-    from?: number[]
-    /** previous index -> new index (-1 for removed rows). */
-    to?: number[]
-    /** Appended ranges in new coordinates. */
-    added?: Array<[number, number]>
-    /** Removed ranges in previous coordinates. */
-    removed?: Array<[number, number]>
-    /**
-     * Compact append-only pulse: the retained prefix is unchanged in index, so
-     * `from` can be synthesised on demand. `baseLength` is the previous length.
-     */
-    appendOnly?: boolean
-    baseLength?: number
-  }>
+  dataPulse?: Record<string, import('./pulse.js').PulseChangeInput | import('./pulse.js').RowDiff>
   /**
    * Infer a per-datum changeset by diffing replaced source arrays against the
    * previous session evaluation. Defaults to true when `dataChanges` is absent;
@@ -216,20 +200,19 @@ export interface CompiledChart {
   title?: CompiledTitle
   /** Cartographic projections referenced by geo marks / the geoshape transform. */
   projections?: CompiledProjection[]
-  /** Signal values supplied by the host (not serialized). */
   /** Root-level trellis layout options (vega spec `layout`), when present. */
   layout?: Record<string, unknown>
-  /**
-   * The view dimensions the spec leaves to its content: no size and no `width` / `height` signal. In Vega that dimension is
-   * 0 and the autosize pass grows it to what is drawn (a composition's laid-out groups, text hanging below an axis), so a
-   * host's container does not size it.
-   */
   /**
    * An expression of the spec asks `isTuple` of what may be an engine tuple: its evaluations register the tuples they make (util
    * `withTuples`). `'facet'`: it only asks of Vega-Lite's `facet` signal, so an evaluation registers them only when the value it is
    * given for that signal is not a known tuple.
    */
   callsIsTuple?: true | 'facet'
+  /**
+   * The view dimensions the spec leaves to its content: no size and no `width` / `height` signal. In Vega that dimension is
+   * 0 and the autosize pass grows it to what is drawn (a composition's laid-out groups, text hanging below an axis), so a
+   * host's container does not size it.
+   */
   contentSized?: ReadonlyArray<'width' | 'height'>
 }
 
@@ -679,10 +662,19 @@ export interface SceneRoot {
   frameY?: number
   /** The root group item's own aria channels (the view `encode`'s, or `config.group`'s): `description`, `aria`, `ariaRole`, `ariaRoleDescription`. */
   frameAria?: Pick<SceneItem, 'description' | 'aria' | 'ariaRole' | 'ariaRoleDescription'>
-  /** @internal The expression runtime for this evaluation (event-loop wiring). */
-  runtime?: unknown
-  /** @internal The compiled chart for this evaluation. */
-  compiled?: unknown
+  /**
+   * The event loop's handles on this evaluation: the expression runtime, the compiled chart, the values the chart's signals held
+   * (`signalParams`) and the `limits` it was evaluated under. `bindSceneSignals` reads them (a host that calls `bindSignalEvents` itself
+   * takes its arguments from here). They are own properties of a scene evaluated in this process, not part of its structure:
+   * a scene that crossed a worker or a JSON round trip has none of them (`bindSceneSignals` then reports that and binds nothing).
+   */
+  runtime?: import('./expression.js').ExpressionRuntime
+  /** See {@link SceneRoot.runtime}. */
+  compiled?: CompiledChart
+  /** See {@link SceneRoot.runtime}. */
+  signalParams?: Record<string, unknown>
+  /** See {@link SceneRoot.runtime}: the `limits` the scene was evaluated under, so the event loop runs a handler under the same ones. */
+  __limits?: import('./limits.js').SpecLimits
   background?: string | null
   frameStroke?: string
   frameFill?: string
@@ -738,7 +730,10 @@ export interface SceneGroup extends SceneItem {
   unbounded?: boolean
   /** Pre-computed rounded-rect path `d` for clip-path defs (when cornerRadius > 0). */
   clipPathD?: string
-  /** @internal The mark's source dataset. Written when the group is built; nothing reads it (groups are matched by compiled-mark identity). */
+  /**
+   * @internal The mark's source dataset. Written when the group is built. The hit index reads it (`HitTarget.fromData`: a mark with a
+   * source dataset is data-driven); groups are matched across evaluations by compiled-mark identity, not by it.
+   */
   __source?: string
   /**
    * @internal The fields whose values identify items across evaluations (no renderer reads them; `@aster-charts/core/transition`
@@ -862,6 +857,11 @@ export interface SceneItem {
   // image
   url?: string
   aspect?: boolean
+  /**
+   * An image mark's bitmap (a loaded `Image`, or a canvas: a `heatmap` transform's, or the host's), what the renderers draw
+   * (`@aster-charts/core/canvas` loads them: `withSceneImages`). With none, an image with a `url` is drawn from it.
+   */
+  image?: import('./image-box.js').ItemImage | null
   // presentation
   fill?: string | { gradient: string }
   fillOpacity?: number
@@ -884,6 +884,8 @@ export interface SceneItem {
   cursor?: string
   /** Hyperlink: the item's element is drawn inside `<a xlink:href>` (after `sanitizeHref`). */
   href?: string
+  /** The tooltip channel's value (a string, or an object of fields for vega-tooltip's table): what `HitIndex.tooltip()` hands a host. Never painted. */
+  tooltip?: unknown
   /** Internal: marks a legend title item so the builder can paint it last. */
   _legendTitle?: boolean
   /**
