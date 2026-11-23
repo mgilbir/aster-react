@@ -528,7 +528,14 @@ function mergedDefs(to: SceneRoot, from: SceneRoot): SceneDef[] | undefined {
  * next scene). See the module comment for what is paired and how it moves.
  */
 export function createSceneTransition(from: SceneRoot, to: SceneRoot, options: SceneTransitionOptions = {}): SceneTransition {
-  const ease = easingFunction(options.easing)
+  const given = easingFunction(options.easing)
+  // (a custom easing that answers anything but a finite number would paint NaN coordinates and colours: it fails the frame instead,
+  // which the player reports and ends on the new scene, C487)
+  const ease = (t: number): number => {
+    const v = given(t)
+    if (typeof v !== 'number' || !Number.isFinite(v)) throw new RangeError(`[aster] the transition easing answered ${String(v)} for ${t}: an easing must give a finite number`)
+    return v
+  }
   if (from === to) return { from, to, moves: false, items: 0, at: () => to }
   const maxItems = options.maxItems ?? Infinity
   const planner = new Planner(maxItems >= 0 ? maxItems : 0)
@@ -559,7 +566,15 @@ export function createSceneTransition(from: SceneRoot, to: SceneRoot, options: S
   }
 }
 
-/** How a player animates one change: its duration (ms) and easing. */
+/**
+ * The longest transition a player runs (ms). A longer `duration` (or one that is not a finite number) would request frames for
+ * ever at progress 0 (C487): it is held to this.
+ */
+const MAX_TRANSITION_MS = 60_000
+/** A duration a player can run: a finite number of milliseconds from 0 to MAX_TRANSITION_MS (anything else: 0, drawn at once). */
+const runnableDuration = (ms: number): number => (Number.isFinite(ms) && ms > 0 ? Math.min(ms, MAX_TRANSITION_MS) : 0)
+
+/** How a player animates one change: its duration (ms, at most MAX_TRANSITION_MS) and easing. */
 export interface PlayOptions {
   duration: number
   easing?: Easing
@@ -751,12 +766,20 @@ export function createScenePlayer<T>(
       }
       if (animate !== null) {
         const from = shown
-        if (animate.duration > 0 && from !== null) {
+        const duration = runnableDuration(animate.duration)
+        if (duration > 0 && from !== null) {
           const tr = make(from, scene, animate.easing, animate.maxItems)
           if (tr !== null) {
             stopFrames()
-            run = { target, from, to: scene, tr, t0: now(), duration: animate.duration, easing: animate.easing, maxItems: animate.maxItems }
-            show(run, 0)
+            run = { target, from, to: scene, tr, t0: now(), duration, easing: animate.easing, maxItems: animate.maxItems }
+            // (the first frame fails as any frame does: reported, and the new scene is drawn; nothing escapes `draw`, C487)
+            try {
+              show(run, 0)
+            } catch (e) {
+              report(e instanceof Error ? e : new Error(String(e)))
+              settle(target, scene)
+              return
+            }
             frame = requestAnimationFrame(tick)
             return
           }
@@ -776,6 +799,19 @@ export function createScenePlayer<T>(
           r.to = scene
           show(r, t)
           return
+        }
+        // the new end draws like the start (nothing moves between them), but the marks are mid-way: they move back from the frame on
+        // screen to it in the time the transition had left, rather than jumping (C146)
+        if (tr === null && t < 1 && shown !== null) {
+          const back = make(shown, scene, r.easing, r.maxItems)
+          if (back !== null) {
+            r.from = shown
+            r.to = scene
+            r.tr = back
+            r.duration = r.duration * (1 - t)
+            r.t0 = now()
+            return
+          }
         }
       }
       settle(target, scene)

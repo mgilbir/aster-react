@@ -37,7 +37,12 @@ A transition starts when the chart gets a new scene because its **data** changed
 Everything else is drawn at once: a signal (a bound input, `setSignal`, a hover or brush handler), pan and zoom, a resize or new
 `width` / `height`, hiding a legend entry, and a new spec (a new spec is a new chart). If such a change arrives while a
 transition runs, it becomes the transition's new end: the marks keep moving on the same clock and land on the scene with both
-changes, instead of jumping.
+changes, instead of jumping. That holds when the new end draws like the transition's start, too: the marks move back from the
+frame on screen to it in the time the transition had left.
+
+A `duration` is a finite number of milliseconds and at most `MAX_TRANSITION_MS` (60 000); a longer one is held to it, and one that
+is not a finite positive number draws the change at once. A custom easing must answer a finite number: one that answers `NaN` (or
+throws), on any frame including the first, is reported and the change is drawn at once.
 
 New data during a transition starts the next transition from the frame on screen, not from where the last one started or
 would have ended. A stream that delivers scenes faster than `duration` therefore never jumps, but it is always catching up:
@@ -67,7 +72,7 @@ value they stand for.
 | legends, chart titles | drawn as the new scene has them | | |
 
 What moves: `x`, `y`, `x2`, `y2`, `width`, `height`, `size`, `angle`, `radius`, `innerRadius`, `outerRadius`, `startAngle`,
-`endAngle`, `padAngle`, `cornerRadius`, `strokeWidth`, `fontSize`, `dx`, `dy`, `opacity`, `fillOpacity`, `strokeOpacity`,
+`endAngle`, `padAngle`, `theta`, `cornerRadius`, `strokeWidth`, `fontSize`, `dx`, `dy`, `opacity`, `fillOpacity`, `strokeOpacity`,
 and `fill` / `stroke` colours (mixed in RGB). Anything else, such as text content, a symbol's shape, a path, a gradient or a
 colour that does not parse, is the new scene's from the first frame. "A shared baseline" means every rect of the mark sits on
 the same bottom (or top, left, right) edge, as the bars of a bar chart sit on zero; the segments of a stack and the cells of a
