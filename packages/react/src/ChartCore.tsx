@@ -37,13 +37,13 @@ import {
   dragToDataInterval,
   keyboardView,
   normalizeView,
-  panDomain,
+  dragPan,
   pixelSpanOf,
   positionalScales,
   selectValueToInterval,
   selectionToPixels,
   viewToDomainRaw,
-  zoomDomain,
+  zoomAxisBy,
   type HiddenLegendEntry,
   type SelectValue,
   type ViewDomain,
@@ -1160,7 +1160,8 @@ function ChartView({
   const dragRef = React.useRef<{ start: { x: number; y: number }; end: { x: number; y: number } } | null>(null)
   const capturedRef = React.useRef<number | null>(null)
   const cssStartRef = React.useRef<{ x: number; y: number }>({ x: 0, y: 0 })
-  const panLastRef = React.useRef<{ x: number; y: number } | null>(null)
+  /** Where a pan drag started: the pointer, and each pannable axis's domain, its signed pixel length and its scale then. */
+  const panStartRef = React.useRef<{ x: number; y: number; axes: Partial<Record<'x' | 'y', { domain: [number, number]; pixelSpan: number; scale: unknown }>> } | null>(null)
   const pointersRef = React.useRef<Map<number, { x: number; y: number }>>(new Map())
   const pinchRef = React.useRef<{ dist: number; cx: number; cy: number } | null>(null)
 
@@ -1172,30 +1173,40 @@ function ChartView({
     [],
   )
 
-  const zoomAxes = React.useCallback((axes: Array<'x' | 'y'>, px: number, py: number, factor: number) => {
+  /** The live scale of a positional axis (its type decides the space it pans and zooms in: see `zoomAxisBy`). */
+  const axisScale = (info: ChartInfo, axis: 'x' | 'y'): unknown => {
+    const name = gestureInputsRef.current.positional[axis]
+    return name != null ? info.scales.get(name) : undefined
+  }
+  /** The live positional scales, for the keyboard's pan and zoom (each in its scale's own space). */
+  const liveAxisScales = (): { x?: unknown; y?: unknown } => {
+    const info = chartInfoRef.current
+    return info ? { x: axisScale(info, 'x'), y: axisScale(info, 'y') } : {}
+  }
+  /** The axes a gesture can zoom: those with a base domain (a continuous positional scale). */
+  const zoomableAxes = (axes: Array<'x' | 'y'>): Array<'x' | 'y'> => axes.filter((a) => baseDomainsRef.current[a] != null)
+
+  // Zoom around the pointer by vega's stretch `k` (< 1 zooms in), each axis in its scale's own space, within the base extent
+  // and `maxZoom` (see `zoomAxisBy`).
+  const zoomAxes = React.useCallback((axes: Array<'x' | 'y'>, px: number, py: number, k: number) => {
     const info = chartInfoRef.current
     if (!info) return
     const base = baseDomainsRef.current
-    const names = gestureInputsRef.current.positional
     const max = gestureInputsRef.current.maxZoom
-    const next: ViewDomain = { ...(viewRef.current ?? {}) }
+    let next: ViewDomain = { ...(viewRef.current ?? {}) }
     let changed = false
     for (const axis of axes) {
-      const name = names[axis]
-      const scale = (name != null ? info.scales.get(name) : undefined) as { invert?: (v: number) => number } | undefined
+      const scale = axisScale(info, axis) as { invert?: (v: number) => unknown } | undefined
       if (typeof scale?.invert !== 'function') continue
       const local = axis === 'x' ? px - info.padding.left : py - info.padding.top
-      const anchor = scale.invert(local)
+      // (a time or utc scale inverts to a Date: its milliseconds)
+      const anchor = Number(scale.invert(local))
       if (!Number.isFinite(anchor)) continue
       // Compose both axes into one update: a controlled host receives one view
       // value per gesture, not x from one call and y from a stale snapshot.
-      const current = next[axis] ?? base[axis]
-      if (!current) continue
-      const zoomed = zoomDomain(current, anchor, factor, base[axis] ? Math.abs(base[axis]![1] - base[axis]![0]) / Math.max(1, max) : undefined)
-      const b = base[axis]
-      if (b && Math.abs(zoomed[1] - zoomed[0]) > Math.abs(b[1] - b[0])) continue
-      next[axis] = zoomed
-      changed = true
+      const zoomed = zoomAxisBy(next, base, axis, anchor, k, scale, max)
+      if (zoomed[axis] !== next[axis]) changed = true
+      next = zoomed
     }
     if (changed) applyViewRef.current(next)
   }, [])
@@ -1205,12 +1216,15 @@ function ChartView({
     const el = containerRef.current
     if (!el) return
     const onWheel = (evt: WheelEvent): void => {
-      if (Math.abs(evt.deltaX) < 0.01 && Math.abs(evt.deltaY) < 0.01) return
+      // a wheel over a bound input or another control inside the chart is the control's
+      if (isOwnControl(evt.target)) return
+      // (a horizontal scroll zooms nothing, and is left to the page)
+      if (Math.abs(evt.deltaY) < 0.01) return
+      const axes = zoomableAxes(['x', 'y'])
+      if (axes.length === 0) return
       evt.preventDefault()
       const [px, py] = pointerMapper.map(evt.clientX, evt.clientY)
-      const factor = Math.exp(-evt.deltaY * (evt.ctrlKey ? 0.01 : 0.0015))
-      const axes: Array<'x' | 'y'> = Math.abs(evt.deltaX) > Math.abs(evt.deltaY) ? ['x'] : ['x', 'y']
-      zoomAxes(axes, px, py, factor)
+      zoomAxes(axes, px, py, wheelStretch(evt))
     }
     el.addEventListener('wheel', onWheel, { passive: false })
     return () => el.removeEventListener('wheel', onWheel)
@@ -1225,7 +1239,7 @@ function ChartView({
     if (pointersRef.current.size < 2) pinchRef.current = null
     gestureRef.current = null
     gestureStartRef.current = null
-    panLastRef.current = null
+    panStartRef.current = null
     dragRef.current = null
     setDragRect(null)
     if (capturedRef.current != null) {
@@ -1238,7 +1252,7 @@ function ChartView({
     const g = gestureInputsRef.current
     if (!g.hasInteraction) return
     // Bound inputs and other form controls own their pointer input.
-    if ((e.target as Element | null)?.closest?.('[data-aster-binds], input, select, textarea, button, a')) return
+    if (isOwnControl(e.target)) return
     if (e.pointerType === 'mouse' && e.button !== 0 && e.button !== 1) return
     const rect = containerRef.current?.getBoundingClientRect()
     if (!rect) return
@@ -1259,7 +1273,17 @@ function ChartView({
     gestureRef.current = wantsPan ? 'pan' : g.hasSelection ? 'select' : g.panEnabled ? 'pan' : null
     gestureStartRef.current = { x, y }
     if (gestureRef.current === 'pan') {
-      panLastRef.current = { x, y }
+      const info = chartInfoRef.current
+      const axes: NonNullable<typeof panStartRef.current>['axes'] = {}
+      if (info) {
+        for (const axis of ['x', 'y'] as const) {
+          const domain = (viewRef.current?.[axis] ?? baseDomainsRef.current[axis]) as [number, number] | undefined
+          const scale = axisScale(info, axis)
+          const pixelSpan = domain ? pixelSpanOf(scale, domain) : null
+          if (domain && pixelSpan != null) axes[axis] = { domain, pixelSpan, scale }
+        }
+      }
+      panStartRef.current = { x, y, axes }
     } else if (gestureRef.current === 'select') {
       dragRef.current = { start: { x, y }, end: { x, y } }
       // (the live rectangle is drawn in the container's own pixels)
@@ -1280,7 +1304,7 @@ function ChartView({
       const cx = (a!.x + b!.x) / 2
       const cy = (a!.y + b!.y) / 2
       const prev = pinchRef.current
-      if (prev.dist > 0 && dist > 0) zoomAxes(['x', 'y'], cx, cy, dist / prev.dist)
+      if (prev.dist > 0 && dist > 0) zoomAxes(zoomableAxes(['x', 'y']), cx, cy, prev.dist / dist)
       pinchRef.current = { dist, cx, cy }
       return
     }
@@ -1300,25 +1324,15 @@ function ChartView({
       } catch { /* synthetic pointer */ }
     }
     if (gesture === 'pan') {
-      const last = panLastRef.current
-      const info = chartInfoRef.current
-      if (!last || !info) return
-      const base = baseDomainsRef.current
-      const current = viewRef.current
-      const next: ViewDomain = { ...(current ?? {}) }
-      // Move the data with the pointer: the domain shifts against the drag along
-      // the scale's own orientation (a y scale running bottom-to-top inverts it).
-      const shift = (axis: 'x' | 'y', delta: number, plot: number): void => {
-        const baseDomain = base[axis]
-        if (!baseDomain || delta === 0) return
-        const d = (current?.[axis] ?? baseDomain) as [number, number]
-        const name = g.positional[axis]
-        const span = pixelSpanOf(name != null ? info.scales.get(name) : undefined, d) ?? plot
-        next[axis] = panDomain(d, -delta / span)
+      // Move the data with the pointer, from where the drag started: the data that was under the pointer then is under it
+      // now, on every scale type (each axis pans in its scale's own space: see `dragPan`).
+      const pan = panStartRef.current
+      if (!pan) return
+      const next: ViewDomain = { ...(viewRef.current ?? {}) }
+      for (const axis of ['x', 'y'] as const) {
+        const a = pan.axes[axis]
+        if (a) next[axis] = dragPan(a.domain, axis === 'x' ? pan.x : pan.y, axis === 'x' ? x : y, a.pixelSpan, a.scale)
       }
-      shift('x', x - last.x, Math.max(1, info.width))
-      shift('y', y - last.y, Math.max(1, info.height))
-      panLastRef.current = { x, y }
       applyViewRef.current(next)
       return
     }
@@ -1481,7 +1495,7 @@ function ChartView({
       // The slider drives the horizontal or vertical positional scale it shows.
       const axis: 'x' | 'y' | null = node.scale === g.positional.y ? 'y' : node.scale === g.positional.x ? 'x' : null
       if (axis == null || !g.panEnabled && !g.zoomEnabled) return
-      const result = keyboardView(e.key, viewRef.current, base, { axis, fast: e.shiftKey, pan: g.panEnabled, zoom: g.zoomEnabled })
+      const result = keyboardView(e.key, viewRef.current, base, { axis, fast: e.shiftKey, pan: g.panEnabled, zoom: g.zoomEnabled, scales: liveAxisScales() })
       if (result.handled) {
         swallow()
         applyViewRef.current(result.view ?? null)
@@ -1525,7 +1539,7 @@ function ChartView({
       return
     }
     if (!g.panEnabled && !g.zoomEnabled) return
-    const result = keyboardView(e.key, viewRef.current, baseDomainsRef.current, { fast: e.shiftKey, pan: g.panEnabled, zoom: g.zoomEnabled })
+    const result = keyboardView(e.key, viewRef.current, baseDomainsRef.current, { fast: e.shiftKey, pan: g.panEnabled, zoom: g.zoomEnabled, scales: liveAxisScales() })
     if (result.handled) {
       e.preventDefault()
       applyViewRef.current(result.view ?? null)
@@ -2051,6 +2065,23 @@ function ChartTooltip({ store, renderTooltip, interaction, container }: {
     </div>
   )
   return target == null ? box : createPortal(box, target)
+}
+
+/**
+ * Whether an event comes from a control inside the chart (a bound input, a form control, a link, an editable element): such
+ * an event is the control's, never a chart gesture (`docs/INTERACTION.md`: "a gesture on a form control or link is ignored").
+ */
+function isOwnControl(target: EventTarget | null): boolean {
+  return (target as Element | null)?.closest?.('[data-aster-binds], input, select, textarea, button, a, [contenteditable]:not([contenteditable="false"])') != null
+}
+
+/**
+ * How far a wheel event zooms, as vega's stretch `k` (< 1 zooms in): Vega-Lite's `pow(1.001, event.deltaY * pow(16,
+ * event.deltaMode))`, so a line-mode notch counts as sixteen pixels and a page as 256 (C488). A wheel with the control key
+ * held (a trackpad's pinch) counts ten times, as d3-zoom counts it.
+ */
+function wheelStretch(evt: WheelEvent): number {
+  return Math.pow(1.001, evt.deltaY * Math.pow(16, evt.deltaMode) * (evt.ctrlKey ? 10 : 1))
 }
 
 /** The bound inputs `<Chart>` renders under the chart, inside its element. */

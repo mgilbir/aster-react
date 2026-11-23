@@ -193,7 +193,11 @@ export interface ChartProps {
   /** Controlled visible domain (`x`/`y` = the horizontal/vertical positional scale). Omit for uncontrolled pan/zoom. */
   view?: ViewDomain | null
   onViewChange?: (view: ViewDomain | null) => void
-  /** Maximum zoom-in factor relative to the initial domain. Default 1000. */
+  /**
+   * Maximum zoom-in factor of the wheel and pinch, relative to the unzoomed domain (the visible span, measured in the scale's own
+   * space, never drops below the base span divided by it). Default 1000. The `+` / `-` keys step by a fixed factor and are not
+   * bounded by it.
+   */
   maxZoom?: number
   /**
    * Event-driven signals (vega-react's `signalListeners` convention): handlers

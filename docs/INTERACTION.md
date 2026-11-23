@@ -31,7 +31,8 @@ Every interaction check in `packages/react/scripts/browser-interaction.mts` runs
 
 `ViewDomain`, `SelectionInterval` (the `onSelect`/`brush` interval) and the interval of a `SelectValue` have two keys,
 `x` and `y`. They mean **the horizontal and the vertical positional scale**, not scales literally named `x` and `y`.
-The scales are derived from the spec by position (`positionalScales(spec)` in `@aster-charts/react`'s source, not exported):
+The scales are derived from the spec by position (`positionalScales(spec)`, exported from `@aster-charts/react` with its
+`PositionalScales` type, for the helpers that take `names`):
 
 1. Candidates for the horizontal orientation, in order: the scales of axes with `orient` `bottom` or `top`, then the
    scales referenced by the mark channels `x`, `x2`, `xc` in any encode set. For the vertical orientation: axes with
@@ -181,9 +182,9 @@ scope that never pulsed before; Aster fires it ([Deviations from Vega](ARCHITECT
 
 | Gesture | Needs | Behaviour |
 |---|---|---|
-| wheel / trackpad | `zoom` | zoom around the cursor by an amount that follows `deltaY`; x and y are zoomed, or only x when `|deltaX| > |deltaY|` |
+| wheel / trackpad | `zoom` | zoom x and y around the cursor by Vega-Lite's stretch `1.001 ^ (deltaY * 16 ^ deltaMode)` (a line-mode notch is sixteen pixels, a page 256; with Ctrl held, a trackpad pinch, ten times as far, as d3-zoom); a wheel with no `deltaY` (a horizontal scroll) is left to the page |
 | two pointers | `zoom` | pinch zoom around the midpoint, both axes |
-| drag | `pan` | pans, unless a selection prop or callback is present: then a plain drag brushes, and shift-drag (or the middle button) pans |
+| drag | `pan` | pans (the data under the pointer when the drag started stays under it), unless a selection prop or callback is present: then a plain drag brushes, and shift-drag (or the middle button) pans |
 | `←` `→` `↑` `↓` | `pan` | pan by 8% of the visible span (25% with Shift) |
 | `+` `=` / `-` `_` | `zoom` | zoom in or out by a factor of 1.5 around the middle of the visible domain |
 | `0` / `Home` | `pan` or `zoom` | reset the view |
@@ -195,6 +196,15 @@ when a continuous axis node is focused. A zoom-only chart does not pan with the 
 pointer, and a pan-only chart does not zoom with the wheel or `+`/`-`. Pointer gestures are handled on the container, so
 marks, tooltips, `signal.on` events and bound inputs underneath keep receiving their own events; a gesture on a form
 control or link is ignored.
+
+Every gesture works in the scale's **own space**, as Vega-Lite's `bind: "scales"` does (vega's `panLog`, `zoomPow`,
+`panSymlog`...): a `log` scale pans and zooms in its logarithm (a negative domain mirrored), `pow` and `sqrt` in their
+power, `symlog` in `sign(x) * log1p(|x| / constant)`, and `linear`, `time` and `utc` linearly (a time domain in
+milliseconds). So the data under the pointer stays under it on every scale type, and a `log` axis never pans to a
+negative value. The view of a `time` / `utc` scale, and a brushed interval on one, are numbers of milliseconds.
+(Vega-Lite pans and zooms a `sqrt` scale linearly, which moves the data under the pointer; Aster treats it as the power
+0.5 it is.) `packages/conformance/src/react-panzoom-vs-vega.test.ts` feeds the same events to a Vega-Lite chart in Vega
+and to `<Chart>` and compares the domains after each gesture, for every continuous scale type.
 
 ```tsx
 import * as React from 'react'
@@ -223,8 +233,9 @@ export function Zoomable(): React.ReactElement {
 uncontrolled view. `onViewChange` receives the normalized view: a view equal to the base domain on an axis drops that
 axis, and `null` means fully reset. The engine passes the view to the scales as `domainRaw`, so axes, grids, legends
 and marks recompute in one pass, on SVG and canvas. Wheel and pinch zooming is clamped: zooming out never goes beyond the base domain (the
-data extent when not zoomed), and `maxZoom` (default 1000) bounds zooming in (the visible span cannot drop below the
-base span divided by `maxZoom`). The `+`/`-` keys step by a fixed factor and are not clamped. `ChartHandle.getView()`, `setView(view)` and `resetView()` do the same imperatively.
+data extent when not zoomed), and `maxZoom` (default 1000) bounds zooming in (the visible span, measured in the scale's
+own space, cannot drop below the base span divided by `maxZoom`). The `+`/`-` keys step by a fixed factor and are not
+clamped (so `maxZoom` does not stop them). `ChartHandle.getView()`, `setView(view)` and `resetView()` do the same imperatively.
 
 While zoomed, the base domain is the one of an unzoomed evaluation of the same inputs (cached, so a pan frame costs no
 extra evaluation).

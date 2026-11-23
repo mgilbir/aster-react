@@ -72,6 +72,8 @@ export {
   keyboardView,
   cursorZoom,
   continuousAxes,
+  positionalScales,
+  type PositionalScales,
   type SelectionInterval,
   type SelectValue,
   type ViewDomain,
