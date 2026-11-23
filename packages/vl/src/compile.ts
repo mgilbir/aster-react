@@ -157,12 +157,12 @@ function compileOnce(input: VLSpec, payloads: RowPayloads, forward?: ReadonlyMap
   return withConsumption(() => {
     const spec = cloneSpecStructure(input, payloads)
     validateSpec(spec)
-    // (from here on, every property of the spec has to be read by the compile, or it is refused at the end: consume.ts)
-    arm(spec, isRows)
-    // (the config is defaults: a block applies where the spec has something it configures, and validate.ts checks its keys; what
-    // the check holds the compiler to is the spec)
-    if (isObject(peek(() => spec.config))) consumeAll(peek(() => spec.config))
-    const result = compileValidated(spec, forward, forwardLookups)
+    // (from here on, every property of the spec has to be read by the compile, or it is refused at the end: consume.ts. The config is
+    // defaults: a block applies where the spec has something it configures, and validate.ts checks its keys; what the check holds the
+    // compiler to is the spec, so the config is not armed)
+    const config = spec.config
+    const armed = arm(spec, (v) => isRows(v) || v === config)
+    const result = compileValidated(armed, forward, forwardLookups)
     refuseUnconsumed()
     return result
   })
@@ -471,7 +471,10 @@ function plainCopy(node: unknown): unknown {
   if (Array.isArray(node)) return isRows(node) ? node : node.map(plainCopy)
   if (!isObject(node) || isRows(node)) return node
   const out: Record<string, unknown> = {}
-  for (const k of Object.keys(node)) setOwn(out, k, plainCopy(node[k]))
+  for (const k of Object.keys(node)) {
+    if (k === '__proto__') setOwn(out, k, plainCopy(node[k]))
+    else out[k] = plainCopy(node[k])
+  }
   return out
 }
 
@@ -494,7 +497,8 @@ function exprRefsToSignals(node: unknown): unknown {
     if (k === 'transform' && Array.isArray(v)) out[k] = v.map((t) => (isObject(t) && t.type === 'voronoi' ? plainCopy(t) : exprRefsToSignals(t)))
     else if (k === 'values' || (keepFields && k === 'fields')) out[k] = plainCopy(v)
     else if (k === 'value' && isObject(v) && Object.keys(v).length === 1 && typeof v.expr === 'string') out.signal = v.expr
-    else setOwn(out, k, exprRefsToSignals(v))
+    else if (k === '__proto__') setOwn(out, k, exprRefsToSignals(v))
+    else out[k] = exprRefsToSignals(v)
   }
   return out
 }

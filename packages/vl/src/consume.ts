@@ -40,22 +40,62 @@ interface Origin {
   readonly key: string
 }
 
+/** A tracked accessor's state: the tracking it belongs to, what it stands for, and the value it holds. */
+interface Slot extends Origin {
+  readonly t: Tracking
+  readonly value: unknown
+  /** the armed property this one stands for (itself, on the armed object) */
+  readonly origin: Slot | undefined
+  /** read here (an origin's is set by a read of any copy of it, too) */
+  done: boolean
+  /** (an origin's) consumed */
+  consumed: boolean
+  /** written over: the property is data and holds something else now */
+  stale: boolean
+}
+
+/** An armed object of the spec: where it is (for the refusal), its keys and their values when armed. */
+interface Armed {
+  readonly path: string
+  readonly keys: readonly string[]
+  readonly values: readonly unknown[]
+}
+
 interface Tracking {
-  /** origin object -> its unread keys */
-  readonly unread: Map<object, Set<string>>
-  /** origin object -> key -> the path of the property in the spec, its value, and its place in the spec (depth first) */
-  readonly origins: Map<object, Map<string, { path: string; value: unknown; order: number }>>
-  /** tracked object -> key -> the origin of its accessor and the value it holds */
-  readonly meta: WeakMap<object, Map<string, { origin: Origin; value: unknown }>>
+  readonly root: object
+  /** how many armed properties are not consumed yet */
+  unread: number
+  /** armed object -> where it is in the spec */
+  readonly armed: Map<object, Armed>
   peeking: number
 }
 
 let active: Tracking | undefined
 
+/** tracked object -> key -> its accessor's state (one map for every compile: an object is armed by one compile only) */
+/** Where an object keeps the states of its tracked properties: one hidden (non-enumerable, symbol-keyed) property, key -> state. */
+const SLOTS = Symbol('aster.vl.consume')
+type Slotted = { [SLOTS]?: Map<string, Slot> }
+const slotsMap = (obj: object): Map<string, Slot> | undefined => (obj as Slotted)[SLOTS]
+const slotAt = (obj: object, key: string): Slot | undefined => slotsMap(obj)?.get(key)
+function slotsOf(obj: object): Array<[string, Slot]> {
+  const m = slotsMap(obj)
+  return m === undefined ? [] : [...m]
+}
+function slotsFor(obj: object): Map<string, Slot> {
+  let m = slotsMap(obj)
+  if (m === undefined) {
+    m = new Map()
+    Object.defineProperty(obj, SLOTS, { value: m, writable: false, enumerable: false, configurable: false })
+  }
+  return m
+}
+
+
 /** Run `f` (one compile pass) with consumption tracking: `arm` and the primitives act on this pass's spec. */
 export function withConsumption<T>(f: () => T): T {
   const saved = active
-  active = { unread: new Map(), origins: new Map(), meta: new WeakMap(), peeking: 0 }
+  active = { root: {}, unread: 0, armed: new Map(), peeking: 0 }
   try {
     return f()
   } finally {
@@ -63,73 +103,135 @@ export function withConsumption<T>(f: () => T): T {
   }
 }
 
-function consume(t: Tracking, origin: Origin): void {
-  const keys = t.unread.get(origin.obj)
-  if (keys === undefined) return
+function consume(t: Tracking, slot: Slot): void {
+  slot.done = true
+  const origin = slot.origin ?? slot
+  if (origin.consumed) return
+  origin.consumed = true
+  origin.done = true
+  t.unread--
   // (a debugging hook for compiler work: who consumed a property; CONTRIBUTING.md "The consumption check")
   const trace = (globalThis as { __consumeTrace?: (path: string | undefined, stack: string | undefined) => void }).__consumeTrace
-  if (trace !== undefined && keys.has(origin.key)) trace(t.origins.get(origin.obj)?.get(origin.key)?.path, new Error().stack)
-  keys.delete(origin.key)
-  if (keys.size === 0) t.unread.delete(origin.obj)
+  if (trace !== undefined) trace(pathOf(t, origin), new Error().stack)
+}
+
+const pathOf = (t: Tracking, origin: Origin): string => {
+  const at = t.armed.get(origin.obj)?.path ?? ''
+  return at ? `${at}.${origin.key}` : origin.key
+}
+
+/** The property becomes ordinary data again: later reads cost nothing. A write leaves its state stale (copies copy the data). */
+function settle(target: object, key: string, value: unknown, written: boolean): void {
+  if (written) {
+    const slot = slotAt(target, key)
+    if (slot !== undefined) slot.stale = true
+  }
+  Object.defineProperty(target, key, { value, writable: true, enumerable: true, configurable: true })
+}
+
+/** One accessor per key name, shared by every tracked object: it finds its state by the object it is read on. */
+const ACCESSORS = new Map<string, PropertyDescriptor>()
+function accessorFor(key: string): PropertyDescriptor {
+  let d = ACCESSORS.get(key)
+  if (d === undefined) {
+    d = {
+      enumerable: true,
+      configurable: true,
+      get(this: Slotted): unknown {
+        const slot = this[SLOTS]!.get(key)!
+        if (!slot.done && (active !== slot.t || slot.t.peeking === 0)) consume(slot.t, slot)
+        return slot.value
+      },
+      set(this: object, v: unknown): void {
+        settle(this, key, v, true)
+      },
+    }
+    ACCESSORS.set(key, d)
+  }
+  return d
 }
 
 /** Make `target[key]` a one-shot accessor for `value`, standing for `origin`. */
-function track(t: Tracking, target: object, key: string, value: unknown, origin: Origin): void {
-  let keys = t.meta.get(target)
-  if (keys === undefined) t.meta.set(target, (keys = new Map()))
-  keys.set(key, { origin, value })
-  const settle = (v: unknown): void => {
-    keys!.delete(key)
-    Object.defineProperty(target, key, { value: v, writable: true, enumerable: true, configurable: true })
-  }
-  Object.defineProperty(target, key, {
-    enumerable: true,
-    configurable: true,
-    get(): unknown {
-      if (active !== t || t.peeking === 0) {
-        consume(t, origin)
-        settle(value)
-      }
-      return value
-    },
-    set(v: unknown): void {
-      settle(v)
-    },
-  })
+function track(t: Tracking, target: object, key: string, value: unknown, origin: Slot): void {
+  const o = origin.origin ?? origin
+  slotsFor(target).set(key, { t, obj: o.obj, key: o.key, value, origin: o, done: false, consumed: false, stale: false })
+  Object.defineProperty(target, key, accessorFor(key))
+}
+
+const slotOf = (t: Tracking | undefined, obj: object, key: string): Slot | undefined => {
+  const slot = slotAt(obj, key)
+  return slot !== undefined && slot.t === t && slot.stale !== true ? slot : undefined
 }
 
 /**
- * Track every property of every object of `root` (the validated copy of the spec), with its path for the refusal. `skip` says which
- * values are not spec structure (the user's rows): they are not entered (the property that holds them is tracked).
+ * The validated copy of the spec, armed: every object rebuilt in one allocation with a one-shot accessor for each property that does not
+ * hold properties of its own (rebuilding is cheaper than redefining the copy's properties in place). `skip` says which values are not
+ * spec structure (the user's rows, the config): they are kept as they are and not entered (the property that holds them is tracked).
+ * Returns the armed root; the copy passed in is not used again.
  */
-export function arm(root: Obj, skip: (v: unknown) => boolean): void {
+export function arm<T extends Obj>(root: T, skip: (v: unknown) => boolean): T {
   const t = active
-  if (t === undefined) return
-  const seen = new Set<object>()
-  let order = 0
-  const visit = (node: unknown, path: string): void => {
-    if (node === null || typeof node !== 'object' || skip(node) || seen.has(node)) return
-    seen.add(node)
+  if (t === undefined) return root
+  const made = new Map<object, unknown>()
+  const rebuild = (node: unknown, path: string): unknown => {
+    if (node === null || typeof node !== 'object' || skip(node)) return node
+    const have = made.get(node)
+    if (have !== undefined) return have
     if (Array.isArray(node)) {
-      node.forEach((v, i) => visit(v, `${path}[${i}]`))
-      return
+      const out: unknown[] = new Array(node.length)
+      made.set(node, out)
+      for (let i = 0; i < node.length; i++) out[i] = rebuild(node[i], `${path}[${i}]`)
+      t.armed.set(out, { path, keys: [], values: out.slice() })
+      return out
     }
-    const obj = node as Obj
-    const keys = Object.keys(obj)
-    if (keys.length === 0) return
-    const paths = new Map<string, { path: string; value: unknown; order: number }>()
-    t.origins.set(obj, paths)
-    t.unread.set(obj, new Set(keys))
-    for (const key of keys) {
-      const value = obj[key]
-      const at = path ? `${path}.${key}` : key
-      // (numbered in the order of the spec, depth first: the refusal lists paths in that order)
-      paths.set(key, { path: at, value, order: order++ })
-      track(t, obj, key, value, { obj, key })
-      visit(value, at)
+    const src = node as Obj
+    const keys = Object.keys(src)
+    const n = keys.length
+    const values = new Array<unknown>(n)
+    let descriptors: PropertyDescriptorMap | undefined
+    // (the copy is a `dict`: an own `__proto__` key is assigned as data, never as the prototype)
+    const out = Object.create(Object.getPrototypeOf(src) as object | null) as Obj
+    made.set(node, out)
+    let slots: Map<string, Slot> | undefined
+    for (let i = 0; i < n; i++) {
+      const key = keys[i]!
+      const value = rebuild(src[key], path ? `${path}.${key}` : key)
+      values[i] = value
+      // (a property that holds properties is consumed through them: it is data, and a read of it stays a plain read)
+      if (holdsObjects(value, skip)) {
+        out[key] = value
+        continue
+      }
+      if (slots === undefined) {
+        slots = new Map()
+        descriptors = Object.create(null) as PropertyDescriptorMap
+      }
+      slots.set(key, { t, obj: out, key, value, origin: undefined, done: false, consumed: false, stale: false })
+      t.unread++
+      descriptors![key] = accessorFor(key)
     }
+    if (slots !== undefined) {
+      Object.defineProperty(out, SLOTS, { value: slots, writable: false, enumerable: false, configurable: false })
+      Object.defineProperties(out, descriptors!)
+    }
+    t.armed.set(out, { path, keys, values })
+
+    return out
   }
-  visit(root, '')
+  const armed = rebuild(root, '') as T
+  ;(t as { root: object }).root = armed
+  return armed
+}
+
+/** A value with properties of its own to track: an object with keys, or an array holding one (rows aside). */
+function holdsObjects(v: unknown, skip: (v: unknown) => boolean): boolean {
+  if (v === null || typeof v !== 'object' || skip(v)) return false
+  if (Array.isArray(v)) {
+    for (let i = 0; i < v.length; i++) if (holdsObjects(v[i], skip)) return true
+    return false
+  }
+  for (const _k in v) return true
+  return false
 }
 
 /** Run `f` without consuming what it reads. */
@@ -159,8 +261,8 @@ export function consuming<T>(f: () => T): T {
 
 /** Copy `src[key]` onto `dst[as]`, still standing for what `src[key]` stands for. */
 function copyProp(t: Tracking | undefined, src: Obj, key: string, dst: Obj, as = key): void {
-  const m = t?.meta.get(src)?.get(key)
-  if (t !== undefined && m !== undefined) track(t, dst, as, m.value, m.origin)
+  const m = slotOf(t, src, key)
+  if (t !== undefined && m !== undefined) track(t, dst, as, m.value, m)
   else {
     const v = peek(() => src[key])
     if (as === '__proto__') Object.defineProperty(dst, as, { value: v, writable: true, enumerable: true, configurable: true })
@@ -191,12 +293,12 @@ export function deriveDeep<T>(v: T): T {
   const out = blank(src)
   for (const key of Object.keys(src)) {
     copyProp(t, src, key, out)
-    const m = t?.meta.get(out)?.get(key)
+    const m = slotOf(t, out, key)
     // (an object below is copied too; its property here still stands for the original's)
     const inner = peek(() => src[key])
     if (inner !== null && typeof inner === 'object') {
       const copy = deriveDeep(inner)
-      if (t !== undefined && m !== undefined) track(t, out, key, copy, m.origin)
+      if (t !== undefined && m !== undefined) track(t, out, key, copy, m)
       else out[key] = copy
     }
   }
@@ -243,8 +345,8 @@ export function merge(base: Obj, top: Obj): Obj {
 export function ignore(obj: Obj, key: string, _why: string): void {
   const t = active
   if (t === undefined) return
-  const m = t.meta.get(obj)?.get(key)
-  if (m !== undefined) consume(t, m.origin)
+  const m = slotOf(t, obj, key)
+  if (m !== undefined) consume(t, m)
   consumeAll(m !== undefined ? m.value : peek(() => obj[key]))
 }
 
@@ -255,8 +357,8 @@ export function ignore(obj: Obj, key: string, _why: string): void {
 export function ignoreUnread(obj: Obj, why: string): void {
   const t = active
   if (t === undefined) return
-  for (const [key, { origin }] of [...(t.meta.get(obj)?.entries() ?? [])]) {
-    if (t.unread.get(origin.obj)?.has(origin.key)) ignore(obj, key, why)
+  for (const [key, slot] of [...slotsOf(obj)]) {
+    if (slot.t === t && !(slot.origin ?? slot).consumed) ignore(obj, key, why)
   }
 }
 
@@ -272,8 +374,8 @@ export function consumeAll(node: unknown): void {
       n.forEach(visit)
       return
     }
-    const keys = t.meta.get(n)
-    if (keys) for (const { origin } of keys.values()) consume(t, origin)
+    // (the properties of an armed object, and those a copy stands for)
+    for (const [, slot] of slotsOf(n)) if (slot.t === t) consume(t, slot)
     for (const k of Object.keys(n)) visit(peek(() => (n as Obj)[k]))
   }
   visit(node)
@@ -282,25 +384,36 @@ export function consumeAll(node: unknown): void {
 /** Does `v` hold properties the check follows (an object with keys, or an array that holds one)? */
 function holdsProperties(t: Tracking, v: unknown): boolean {
   if (Array.isArray(v)) return v.some((x) => holdsProperties(t, x))
-  return v !== null && typeof v === 'object' && t.origins.has(v)
+  return v !== null && typeof v === 'object' && (t.armed.get(v)?.keys.length ?? 0) > 0
 }
 
 /**
- * The paths of the properties of the spec nothing consumed, in the order of the spec. A property that holds properties is not one of
- * them: it is in use when one below it is, and otherwise the ones below it are reported.
+ * The paths of the properties of the spec nothing consumed, in the order of the spec (depth first). A property that holds properties
+ * is not one of them: it is in use when one below it is, and otherwise the ones below it are reported.
  */
 export function unconsumedPaths(): string[] {
   const t = active
-  if (t === undefined) return []
-  const out: Array<{ path: string; order: number }> = []
-  for (const [obj, keys] of t.unread) {
-    const all = t.origins.get(obj)!
-    for (const key of keys) {
-      const { path, value, order } = all.get(key)!
-      if (!holdsProperties(t, value)) out.push({ path, order })
+  if (t === undefined || t.unread === 0) return []
+  const out: string[] = []
+  const seen = new Set<object>()
+  const visit = (node: unknown): void => {
+    if (node === null || typeof node !== 'object' || seen.has(node)) return
+    seen.add(node)
+    const a = t.armed.get(node)
+    if (a === undefined) return
+    if (Array.isArray(node)) {
+      for (const x of a.values) visit(x)
+      return
     }
+
+    a.keys.forEach((key, i) => {
+      const slot = slotAt(node, key)
+      if (slot !== undefined && slot.origin === undefined && !slot.consumed && !holdsProperties(t, a.values[i])) out.push(a.path ? `${a.path}.${key}` : key)
+      visit(a.values[i])
+    })
   }
-  return out.sort((a, b) => a.order - b.order).map((p) => p.path)
+  visit(t.root)
+  return out
 }
 
 /** Refuse what the compile did not consume: the properties of the spec it accepted and never read. The message names every path. */
