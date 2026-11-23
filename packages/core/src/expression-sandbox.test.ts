@@ -176,3 +176,19 @@ describe('substitution() is String.prototype.replace\'s GetSubstitution', () => 
     }
   })
 })
+
+describe('docs/ARCHITECTURE.md lists every expression function (C707)', () => {
+  it('the function table of "Expression Engine" names each function an expression can call, and nothing else', async () => {
+    const { readFileSync } = await import('node:fs')
+    const { expressionFunctionNames, registeredExpressionFunctionNames } = await import('./expression.js')
+    const { EventFunctions } = await import('./expr-interpreter.js')
+    const doc = readFileSync(new URL('../../../docs/ARCHITECTURE.md', import.meta.url), 'utf8')
+    const section = doc.slice(doc.indexOf('## Expression Engine'), doc.indexOf('Hosts add functions with `registerExpressionFunction`'))
+    const table = section.split('\n').filter((l) => l.startsWith('| ') && !l.startsWith('| Group') && !l.startsWith('|---'))
+    const listed = new Set(table.flatMap((l) => [...l.split('|')[2]!.matchAll(/`([A-Za-z0-9_]+)`/g)].map((m) => m[1]!)))
+    const addons = new Set(registeredExpressionFunctionNames())
+    const want = new Set([...expressionFunctionNames().filter((n) => !addons.has(n)), ...EventFunctions, 'if'])
+    expect([...want].filter((n) => !listed.has(n)).sort(), 'functions missing from the table').toEqual([])
+    expect([...listed].filter((n) => !want.has(n)).sort(), 'names in the table that are no function').toEqual([])
+  })
+})
