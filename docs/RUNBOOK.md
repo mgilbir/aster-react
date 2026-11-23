@@ -195,8 +195,12 @@ TZ=Asia/Kolkata pnpm exec vitest run packages/core/src/calendar.tz.test.ts
 | `ASTER_V8_SORT_FLAG` | `scripts/vitest-engine.setup.mjs`, `packages/conformance/src/sort-engine.test.ts` | set by `vitest.config.mjs`: `--maglev-disable-builtin-reducers` if this V8 has it, else empty | Pins V8's inlined `Array.prototype.sort` off so the in-process oracle sorts deterministically; the sort-engine test turns it back on to prove Aster does not depend on the pin. Not for setting by hand. |
 | `TZ` | Node itself; many tests set and restore `process.env.TZ` | the machine's zone | The time zone. `pnpm test:tz [zone ...]` runs the zone-sensitive tests and the `corpus-tz` corpus under `America/New_York`, `Asia/Kolkata` and `Australia/Lord_Howe` (and `UTC` for the corpus). Set it yourself to run any one test file in a zone. |
 
-`NODE_ENV` appears in the repository only as an esbuild `define` (`"process.env.NODE_ENV": '"production"'`) that the bundling scripts
-substitute; nothing reads it.
+`NODE_ENV` is read by the shipped packages, not only substituted by the bundling scripts: `packages/core/src/session.ts`, `row-watch.ts`
+and `packages/vl/src/rows.ts` run the development-time row checks (`checkChartRows`) when `process.env.NODE_ENV !== 'production'`, and
+`packages/react/src/{ChartCore.tsx,useChart.ts,worker.ts}` gate their development warnings on it the same way. A bundler's `define`
+(`"process.env.NODE_ENV": '"production"'`, which every script that bundles the packages sets) removes those branches from a production
+bundle; `scripts/dev-warning-bundlers.test.mjs` runs it both ways and `pnpm check:bundle` asserts the production bundles carry no
+development-only code. Set it yourself to see the checks run (`NODE_ENV=development`) or not (`production`) under vitest.
 
 ### Generated differential and property tests
 
@@ -208,6 +212,7 @@ substitute; nothing reads it.
 | `ASTER_REUSE_SEEDS`, `ASTER_REUSE_SEED` | `packages/core/src/dataset-reuse.test.ts` | 300, unset | Number of generated charts; replay one seed. |
 | `ASTER_ONCE_SEEDS`, `ASTER_ONCE_SCOPED` | `packages/core/src/evaluate-once.test.ts` | 300, 200 | Generated charts for the plain and the group-scope tests. |
 | `ASTER_STREAM_SEEDS`, `ASTER_STREAM_SEED`, `ASTER_STREAM_TRACE` | `packages/core/src/stream.property.test.ts` | 25, unset, unset | Seeds per policy; replay one seed; any non-empty value adds the flush/push trace to a failure message. |
+| `ASTER_ENGINE_MAXBAD` | `differential-expression-engine-gen.test.mts` | 8 | How many failing generated expressions the test collects before it stops and reports them. |
 | `ASTER_EXPR_FUZZ_SEED`, `ASTER_EXPR_FUZZ_N` | `differential-vega-expression-gen.test.mts`, `differential-vega-interpreter-gen.test.mts` | `0xA57E12`, 30000 | Seed and number of generated expression sources, against real vega's parser and interpreter. |
 | `ASTER_DIFF_SCALE` | `scaled()` in `packages/conformance/scripts/differential-gen.mts`, used by the generated differentials | 1 | Multiplies every generated case count (a value that is not a positive number counts as 1). |
 | `ASTER_DIFF_TRACE` | `differential-gen.mts`, `differential-scale-gen.test.mts` | unset | A file path: each case's name and label is appended before it runs, so the last line names the case that crashed a worker. |
@@ -230,6 +235,7 @@ substitute; nothing reads it.
 
 | Variable | Script | Default | Effect |
 |---|---|---|---|
+| `PICK_DEBUG` | `scripts/browser-signals-pick.mts` (the pointer phase of `pnpm conformance:signals`) | unset | Any non-empty value logs each pick that sits on an edge both engines may resolve either way, and appends the svg target to a failure. |
 | `SIG_PRINT` | `scripts/browser-signals.mts` (`pnpm conformance:signals`) | unset | Any non-empty value prints vega's final signal values for every case where vega did not error. |
 | `SEL_DEBUG` | `scripts/browser-vl-selections.mts` (`pnpm conformance:selections`) | unset | Any non-empty value logs each case's frame rectangle, pointer targets, the mounted markup and the signals at each step. Verbose: use it with `--filter=`. |
 | `SEL_TRACE` | same | unset | Logs the `grid_translate_anchor`, `grid_translate_delta` and `unit` signals around each drag step. |
