@@ -112,13 +112,22 @@ identical outcomes for all 720 specs on both paths).
 
 ## The ratchet
 
-* `floors.json` - passing count per path and grammar (may only go up) and the unverifiable ceiling (may only go down). The one
+* `floors.json` - passing count per path and grammar (may only go up, and equals the count of the run: a run above the floor fails, so the floor never sits below reality) and the unverifiable ceiling (may only go down). The one
   exception so far: the React ceiling went from 7 / 10 to 11 / 12 when time-dependent oracles started to be measured
   (`vega/clock`, `pacman`, `watch`, `donut-chart-labelled`, `vl/animated_gapminder`, `animated_hop`: each was a fail or an error
   on that path, or hung; none was a pass). They are still checked on the static path, where the first frame is what is compared.
 * `passing-static.txt`, `passing-react.txt` - the specs that pass today; each must still pass (a count floor alone lets a fix hide
   a regression).
 * the number of specs read must equal the manifest.
+* the files against their own history: `src/gallery/ratchet.test.ts` runs in the default test run (every PR) and compares `floors.json`,
+  the passing lists, `swap-pairs.txt` and `manifest.json` with the base revision (where the branch left `origin/main`, else `HEAD^1`):
+  a floor lowered, a ceiling raised, a passing id or a pair gone, fewer spec files or another `repo` / `commit` fails it, unless
+  `ratchet-overrides.json` records that exact change with a reason. It also ties the manifest's tags to the pinned `vega` / `vega-lite`
+  versions. CI checks out two commits (`fetch-depth: 2`) so the base exists.
+* the specs are counted by file: three pairs are byte-identical upstream (`selection_filter` / `selection_filter_true`,
+  `selection_translate_brush_drag` / `selection_zoom_brush_wheel`, `selection_translate_scatterplot_drag` /
+  `selection_zoom_scatterplot_wheel`), so the 627 Vega-Lite specs are 624 distinct ones. The gate prints the distinct count; a new duplicate fails
+  `ratchet.test.ts`.
 
 When the numbers improve the gate says so: raise `floors.json` and regenerate the lists with
 `pnpm conformance:gallery --print-passing` (run it, review the diff, commit). Never lower a floor.
@@ -136,8 +145,8 @@ selection / facet / map specs both as the spec left behind and as the one that f
 always a spec the react path passed when the list was made, so equal to a fresh mount means equal to vega). The gate reads only
 that file, so other changes to the passing lists do not change the sample. A pair whose B no longer passes a fresh mount (or whose spec left the
 gallery) is SKIPPED with a reason and listed in the output -- never a swap regression, the static and react ratchets own that. The ratchet
-(`floors.json` `swap`): every runnable pair must pass and equal vega's B, at least `minRunnable` pairs must be runnable (the sample cannot
-erode silently), unverifiable ceiling. `pnpm conformance:gallery --regenerate-swap-pairs` rewrites the list deliberately (review the diff). It is reported apart
+(`floors.json` `swap`): every runnable pair must pass and equal vega's B, every committed pair must be runnable (`minRunnable` equals the pair count, and the ratchet test holds it there: a skipped pair
+fails the gate), unverifiable ceiling. `pnpm conformance:gallery --regenerate-swap-pairs` rewrites the list deliberately (review the diff). It is reported apart
 from the fresh-mount counts, and runs after the other paths (a load-dependent timeout of a data load would otherwise decide it).
 All 223 pairs run and pass (checked 2026-11-06). When the path was added, 187 of the 223 passed; the rest left the old chart's elements, timers or state behind.
 

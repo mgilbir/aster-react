@@ -20,7 +20,7 @@
     }
   },
   "swap": {
-    "minRunnable": 200,
+    "minRunnable": 223,
     "maxUnverifiable": 0
   }
 }
