@@ -61,11 +61,22 @@ describe('Function constructor is unreachable from expressions', () => {
   })
 
   it('computed member access cannot reach Function either', () => {
-    // vega-interpreter yields the inert `Object` here (oracle-pinned); one more hop must not give Function
-    for (const e of ["datum['constructor']['constructor']", 'datum[k][k]', 'datum.__proto__.constructor.constructor', 'datum.a.constructor.constructor']) {
-      expect(run(e, { a: {} }, { k: 'constructor' }), e).toBeUndefined()
+    // The first hop is no longer the inert `Object` vega-interpreter answers: an inherited `constructor` / `__proto__` reads as
+    // undefined (expression-sandbox.test, C384), so the second hop is a read past undefined and throws the TypeError any such read
+    // throws, in vega too. Whatever the spelling, no hop yields a function and nothing runs.
+    for (const k of ['constructor', ['constructor']]) {
+      for (const first of ["datum['constructor']", 'datum[k]', 'datum.__proto__', 'datum.a.constructor', 'datum.a[k]']) {
+        expect(run(first, { a: {} }, { k }), first).toBeUndefined()
+      }
+      for (const e of ["datum['constructor']['constructor']", 'datum[k][k]', 'datum.__proto__.constructor.constructor', 'datum.a.constructor.constructor']) {
+        let out: unknown
+        let err: unknown
+        try { out = run(e, { a: {} }, { k }) } catch (x) { err = x }
+        expect(out, e).toBeUndefined()
+        expect(err, e).toBeInstanceOf(TypeError)
+        expect((err as Error).message, e).toMatch(/^Cannot read properties of undefined/)
+      }
     }
-    expect(run('datum[k][k]', {}, { k: ['constructor'] })).toBeUndefined()
   })
 
   it('own data keys with risky names still read as data', () => {
