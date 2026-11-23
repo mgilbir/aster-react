@@ -148,6 +148,11 @@ export interface CompiledChart {
    * when it is compiled; absent when nowhere. `limits.regex: 'refuse'` refuses the chart for them before anything runs.
    */
   regexSites?: readonly string[]
+  /**
+   * The data sets vega indexes by `unit` (a selection function names one with a literal last argument `'intersect'`): an
+   * `intersect` test on any other requires every tuple to match. Absent when none.
+   */
+  unitIndexed?: readonly string[]
   /** `config.range` — named range lookup for scales. */
   configRange?: Record<string, unknown>
   /** vega autosize `contains` (viewSizeLayout's contains: 'padding' makes the

@@ -89,39 +89,26 @@ function matches(datum: unknown, tuple: Row): boolean {
 
 // -- units ----------------------------------------------------------------------------------------------------------
 
-interface UnitCounts {
-  length: number
-  first: unknown
-  last: unknown
-  counts: Map<unknown, number>
-}
-const unitCountCache = new WeakMap<readonly Row[], UnitCounts>()
-
 /**
- * How many tuples each unit has. Kept per store array, and trusted only while the array has the length and end tuples
- * it was counted for: the incremental engine patches a store array in place.
+ * `vlSelectionTest`: is `datum` in the selection `rows` holds? `op` is `'intersect'` or anything else for a union (any tuple of
+ * any unit). An intersect over a store vega indexes by unit (`indexed`: a selection function names it with a literal
+ * `'intersect'`) means the datum matches in every unit, one tuple of a unit being enough; over one it does not index, every
+ * tuple must match (vega-selections `selectionTest`). The units are read from the store on every call (C419: a store a host
+ * rewrites in place is read as it is, not as a cache remembers it).
  */
-function countUnits(rows: readonly Row[]): Map<unknown, number> {
-  const cached = unitCountCache.get(rows)
-  if (cached && cached.length === rows.length && cached.first === rows[0] && cached.last === rows[rows.length - 1]) return cached.counts
-  const counts = new Map<unknown, number>()
-  for (const row of rows) counts.set(row.unit, (counts.get(row.unit) ?? 0) + 1)
-  unitCountCache.set(rows, { length: rows.length, first: rows[0], last: rows[rows.length - 1], counts })
-  return counts
-}
-
-/**
- * `vlSelectionTest`: is `datum` in the selection `rows` holds? `op` is `'intersect'` (the datum must match in every
- * unit; within a unit one tuple is enough) or anything else for a union (any tuple of any unit).
- */
-export function selectionTest(rows: Rows, datum: unknown, op?: unknown): boolean | number {
+export function selectionTest(rows: Rows, datum: unknown, op?: unknown, indexed = true): boolean | number {
   const tuples = rows ?? []
   if (op !== 'intersect') {
     for (const tuple of tuples) if (matches(datum, tuple)) return true
     return tuples.length ? false : 0
   }
   if (!rows) return 0
-
+  if (!indexed) {
+    for (const tuple of tuples) if (!matches(datum, tuple)) return false
+    return tuples.length ? true : 0
+  }
+  // vega's loop with its early exits, tuple by tuple: which tuples it tests is observable (testing a tuple makes its Date values
+  // numbers, as vega-selections' testPoint does)
   const unitCounts = countUnits(rows)
   const matched = new Set<unknown>()
   const missed = new Map<unknown, number>()
@@ -139,6 +126,14 @@ export function selectionTest(rows: Rows, datum: unknown, op?: unknown): boolean
   }
   return tuples.length ? true : 0
 }
+
+/** How many tuples each unit has, read from the store as it is (vega's unit index, counted for this call). */
+function countUnits(rows: readonly Row[]): Map<unknown, number> {
+  const counts = new Map<unknown, number>()
+  for (const row of rows) counts.set(row.unit, (counts.get(row.unit) ?? 0) + 1)
+  return counts
+}
+const unitCount = (rows: readonly Row[]): number => countUnits(rows).size
 
 // -- testing by identifier --------------------------------------------------------------------------------------------
 
@@ -165,13 +160,14 @@ function searchIds(rows: readonly Row[], id: unknown, past: boolean): number {
  * `vlSelectionIdTest`: is the datum's `_vgsid_` one of the identifiers in `rows` (sorted by `_vgsid_`)? For
  * `'intersect'` the identifier must be there once for every unit.
  */
-export function selectionIdTest(rows: Rows, datum: unknown, op?: unknown): boolean {
+export function selectionIdTest(rows: Rows, datum: unknown, op?: unknown, indexed = true): boolean {
   const tuples = rows ?? []
   const id = selectionIdOf(datum)
   const first = searchIds(tuples, id, false)
   if (first === tuples.length || selectionIdOf(tuples[first]) !== id) return false
-  if (op === 'intersect' && rows) {
-    const units = countUnits(rows).size
+  // (vega-selections selectionIdTest: the unit count only matters over a store indexed by unit)
+  if (op === 'intersect' && rows && indexed) {
+    const units = unitCount(rows)
     if (units === 1) return true
     if (searchIds(tuples, id, true) - first < units) return false
   }

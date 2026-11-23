@@ -110,6 +110,11 @@ export interface ExpressionRuntime {
    * Absent, the default locale.
    */
   locale?: () => Locale
+  /**
+   * Whether vega would have indexed the data set by `unit` (see `CompiledChart.unitIndexed`): only then does an `intersect`
+   * selection test combine per unit; absent, every data set is (the Vega-Lite case: its specs always name the op literally).
+   */
+  unitIndexed?: (name: string) => boolean
 }
 
 /** An expression bound to a runtime. `item` is the scenegraph item an encode is evaluated for (vega binds it there). */
@@ -610,8 +615,8 @@ function builtinTable(runtime: ExpressionRuntime): Record<string, unknown> {
       runtime.modify ? runtime.modify(String(name), insert, remove, toggle, modifyTuple, values) : 0,
     // vega-selections
     // (vega-selections' functions are a part the React shells load on demand: engine-parts.ts)
-    vlSelectionTest: (name: unknown, datum: unknown, op?: unknown) => part('selections').selectionTest(runtime.data(String(name)) as never, datum, op),
-    vlSelectionIdTest: (name: unknown, datum: unknown, op?: unknown) => part('selections').selectionIdTest(runtime.data(String(name)) as never, datum, op),
+    vlSelectionTest: (name: unknown, datum: unknown, op?: unknown) => part('selections').selectionTest(runtime.data(String(name)) as never, datum, op, runtime.unitIndexed?.(String(name)) ?? true),
+    vlSelectionIdTest: (name: unknown, datum: unknown, op?: unknown) => part('selections').selectionIdTest(runtime.data(String(name)) as never, datum, op, runtime.unitIndexed?.(String(name)) ?? true),
     vlSelectionResolve: (name: unknown, op?: unknown, isMulti?: unknown, vl5?: unknown) => part('selections').selectionResolve(runtime.data(String(name)) as never, op, isMulti, vl5),
     vlSelectionTuples: (items: unknown, base: unknown) => part('selections').selectionTuples(items, base),
     isTuple: (t: unknown) => isTuple(t),
