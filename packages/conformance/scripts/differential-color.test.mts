@@ -38,6 +38,9 @@ function project(c: AnyColor | null, k: unknown): unknown {
   return {
     type: c.constructor.name,
     channels: channels(c),
+    // the order of its own keys is observable too: Object.keys, JSON.stringify, a spread (C409)
+    keys: Object.keys(c),
+    json: JSON.stringify(c),
     str: [c.formatRgb(), c.formatHex(), c.formatHex8(), c.formatHsl(), c.displayable(), String(c), `${c}`, c.hex?.()],
     brighter: [channels(c.brighter()), channels(c.brighter(k))],
     darker: [channels(c.darker()), channels(c.darker(k))],
