@@ -473,12 +473,6 @@ The pieces `renderSpec` and the session are made of are exported for hosts that 
   `transformNeedsFullRederive(types)` says whether a chain of transform types holds a row-expanding or reordering one (`fold`,
   `flatten`, `pivot`, the layouts...), so a row-wise pulse cannot be applied through it; `isGroupedTransform(type)` is `true` for
   `aggregate`, `joinaggregate`, `window` and `stack`.
-- Interactive scale moves, as Vega-Lite's `bind: "scales"` makes them: `scaleSpace(type, d0, exponent?, constant?)` is the space a
-  scale of `type` pans and zooms in, for a domain starting at `d0` (`{ lift, ground }`: the natural logarithm for `log`, mirrored
-  for a negative domain, the power for `pow`, `sign(x) * log1p(|x| / constant)` for `symlog`, linear for every other type, `sqrt`
-  included); `panIn(space, domain, delta)` and `zoomIn(space, domain, anchor, k)` are vega's `pan*` / `zoom*` in that space
-  (`delta` a fraction of the span, `k` a stretch around `anchor`, the middle when `null`). `tickStep(start, stop, count)` is
-  d3-array's: the step between ticks of `count` ticks over `[start, stop]`.
 - Registries, filled by the add-ons: `transformRegistry` (`Map<type, TransformFn>`, the rare transforms of
   `@aster-charts/core/transforms`), `dataFormatRegistry` (`Map<format, reader>`, `json` built in; csv / tsv / dsv / topojson from
   `@aster-charts/core/load`), `geoRegistry` (the projection and contour hooks of `@aster-charts/core/geo`, `null` fields until loaded).
@@ -605,7 +599,9 @@ engine are left out and loaded on demand, anywhere else every part is there. `/l
 `renderSceneToDomElement`, the add-on and part functions above (`addonsNeeded`, `loadAddons`, `loadAddonsFor`, `missingAddons`,
 `notLoaded`, `specNeeds`, `partsNeeded`, `partsNotLoaded`, `loadParts`, `loadPartsFor`, `preloadParts`), and `ENGINE_PARTS`, `part(name)` (a loaded
 part; throws for an empty slot), `partLoaded(name)`, `withdrawParts(names)` (a test seam that empties slots and returns a function
-that fills them again) and `setUpShell()` (what the shells call once: the guide captions and the loader of the pulse path).
+that fills them again) and `setUpShell()` (what the shells call once: the guide captions and the loader of the pulse path). It also
+carries plumbing that is on no public entry: `scaleSpace`, `panIn`, `zoomIn` (the space Vega-Lite's `bind: "scales"` moves a scale
+in, and vega's pan / zoom in it, for the shells' pan and zoom) and `tickStep` (the step of a bound slider without one).
 `/lean/hit` is `@aster-charts/core/hit`; `/lean/canvas` exports `loadCanvasPart()`, which loads the canvas renderer for
 `<Chart renderer="canvas">` (and, outside a browser build, `part`, the renderer itself); `/lean/signals` exports `loadSignalsPart()`,
 which loads the signal event loop (the `signals` part: `bindSceneSignals`) for a chart the shells bind it for, a spec that declares

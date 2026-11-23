@@ -45,8 +45,6 @@ export {
 export type { ChartInfo } from './runtime.js'
 import './guide-caption.js' // (installs the guide captions renderSceneToSvg quotes in aria-label)
 export { renderSceneToSvg } from './render.js'
-export { scaleSpace, panIn, zoomIn, type ScaleSpace } from './util.js'
-export { tickStep } from './arr.js'
 export { consoleLogger, type Logger } from './logger.js'
 export { ExpressionParseError, registerExpressionFunction } from './expression.js'
 export { SpecParseError } from './parse-error.js'
