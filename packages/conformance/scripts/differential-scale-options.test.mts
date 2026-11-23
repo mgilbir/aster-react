@@ -13,6 +13,7 @@ import { spawnSync } from 'node:child_process'
 import { describe, expect, it, vi } from 'vitest'
 import * as vega from 'vega'
 import { getChartInfo } from '../../core/src/runtime.ts'
+import { renderSpec } from '../../core/src/index.ts'
 import { attempt } from './differential-util.mts'
 import { makeRng, scaled, type Rng } from './differential-gen.mts'
 
@@ -240,6 +241,51 @@ describe(`scale options from specs vs vega@${vega.version} (generated, live)`, (
     const want = await vegaOutcome(nested, ['a'])
     expect(JSON.stringify(want.scale)).toContain('$ref')
     expect(asterOutcome(nested, ['a']).scale).toMatchObject({ samples: [[0, 200]] })
+  })
+
+  it('a colour scale whose range it cannot give is no error until something reads it (C408)', async () => {
+    const r = makeRng(0x0408)
+    let rendered = 0
+    let failed = 0
+    const bad: string[] = []
+    for (let i = 0; i < scaled(300); i++) {
+      const type = r.pick(['sequential', 'linear', 'log', 'sqrt', 'symlog', 'quantize'])
+      const range = r.pick<unknown[]>([[], [], ['red'], ['red', 'blue'], ['red', 'white', 'blue']])
+      const use = r.pick(['none', 'none', 'fill', 'legend'])
+      const spec = {
+        width: 100, height: 50, data: [{ name: 't', values: [{ v: 1 }, { v: 2 }, { v: 4 }] }],
+        scales: [{ name: 'c', type, domain: type === 'log' ? [1, 5] : [0, 5], range }, { name: 'x', type: 'linear', domain: [0, 5], range: 'width' }],
+        marks: [{ type: 'rect', from: { data: 't' }, encode: { enter: { x: { scale: 'x', field: 'v' }, width: { value: 4 }, height: { value: 4 }, fill: use === 'fill' ? { scale: 'c', field: 'v' } : { value: 'red' } } } }],
+        ...(use === 'legend' ? { legends: [{ fill: 'c' }] } : {}),
+      }
+      const errors: string[] = []
+      let want: string
+      try {
+        const { logger } = collect()
+        const view = new vega.View(vega.parse(structuredClone(spec) as vega.Spec), { renderer: 'none', logger: { ...logger, error: (e: unknown) => { errors.push(String((e as Error)?.message ?? e)); return logger } } as never })
+        await view.runAsync()
+        const svg = await view.toSVG()
+        want = errors.length ? `logged ${errors[0]}` : `paths ${(svg.match(/<path/g) ?? []).length}`
+      } catch (e) {
+        want = `threw ${(e as Error).message}`
+      }
+      const aerrors: string[] = []
+      let got: string
+      try {
+        const svg = renderSpec(structuredClone(spec) as never, { logger: { error: (e: unknown) => aerrors.push(String((e as Error)?.message ?? e)), warn() {}, info() {}, debug() {} } })
+        got = aerrors.length ? `logged ${aerrors[0]}` : `paths ${(svg.match(/<path/g) ?? []).length}`
+      } catch (e) {
+        got = `threw ${(e as Error).message}`
+      }
+      if (want.startsWith('paths')) rendered++
+      else failed++
+      // a failure on both sides is the same kind of failure (the engines word the TypeError of the missing interpolator differently)
+      const same = want.startsWith('paths') ? want === got : !got.startsWith('paths')
+      if (!same && bad.length < 5) bad.push(`#${i} ${type} ${JSON.stringify(range)} ${use}: vega ${want} | aster ${got}`)
+    }
+    expect(bad.join('\n')).toBe('')
+    expect(rendered).toBeGreaterThan(scaled(300) * 0.4)
+    expect(failed).toBeGreaterThan(scaled(300) * 0.02)
   })
 
   it('never compiles spec text, under a code-generation ban (what a CSP without unsafe-eval does)', () => {
