@@ -271,6 +271,18 @@ function intersectMark(mark: SceneGroup, box: Bounds, filter: Filter, hits: Scen
   }
 }
 
+/**
+ * Whether the walk enters a group nested in a group: vega's `visitMark` asks the group MARK's bounds to meet the box before it
+ * moves the box into any of its items, and a group of this scene is that mark and its one item both. Without the question, a
+ * group nobody can hit still moves the box (`translate(-x, -y)` then `translate(x, y)`, which are not exact inverses for a
+ * large x), and the marks drawn after it are tested against a box that has drifted.
+ */
+function visitsGroup(node: SceneGroup, box: Bounds): boolean {
+  // (the mark's bounds are the union of its items' into an empty box, as `markBounds` takes them: an item whose far edge is
+  // -Infinity leaves the mark's edge where the empty box had it, and that is what vega's `visitMark` asks)
+  return intersects(box, new Bounds().union(boundGroupItem(new Bounds(), node)))
+}
+
 function intersectGroup(group: SceneGroup, mark: { marktype?: string; name?: string }, box: Bounds, filter: Filter, hits: SceneItem[]): void {
   // a group item is a hit only if the filter says so (never by default)
   if (filter && filter(mark)) {
@@ -285,7 +297,7 @@ function intersectGroup(group: SceneGroup, mark: { marktype?: string; name?: str
   for (const m of marks) {
     const node = m as unknown as SceneGroup
     if (isLeafMark(node as unknown as Rec)) intersectMark(node, box, filter, hits)
-    else if (Array.isArray(node.items)) intersectGroup(node, { marktype: 'group', name: (node as Rec).name as string | undefined }, box, filter, hits)
+    else if (Array.isArray(node.items) && visitsGroup(node, box)) intersectGroup(node, { marktype: 'group', name: (node as Rec).name as string | undefined }, box, filter, hits)
   }
   box.translate(x, y)
 }
