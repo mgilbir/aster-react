@@ -4,12 +4,26 @@
  * Generates deterministic Vega specs from a seeded PRNG, renders each through
  * the real Vega oracle and through @aster-charts/core, canonicalizes both SVGs and
  * compares geometry. Any mismatch is written to `fuzz-repro/` as a standalone
- * spec, so the nightly job leaves a committed, replayable artifact instead of
- * an ephemeral log.
+ * spec. The nightly job uploads those files as a workflow artifact (it commits
+ * nothing); a reproducer becomes part of `fuzz:replay` only when someone commits
+ * it. Seeds are fixed (start..start+seeds-1) and printed on failure, so a failing
+ * seed is replayed by number; there is no shrinking.
+ *
+ * The space it samples (and nothing else): one mark of 4 kinds (rect over a band
+ * scale, line, symbol, area) with an `update` block only, an x scale (band, linear
+ * or pow) and a y scale (linear, sqrt or log), 2-10 inline rows, 0-2 axes. No
+ * signals, expressions, transforms, legends, groups, `enter`, `zindex` or keys.
+ *
+ * The verdict is runGate's (scripts/lib/run-gate.mjs): every seed (every committed
+ * reproducer in replay) must be compared, and a run that compares none fails;
+ * `--seeds`/`--start` must be integers (`--seeds` at least 1).
+ * `--plant-difference` adds a stray mark to Aster's SVG of every case.
  *
  *   pnpm fuzz                 # 200 seeds from 0
  *   pnpm fuzz -- --seeds 500 --start 200
- *   pnpm fuzz:replay          # every committed reproducer
+ *   pnpm fuzz:replay          # every committed reproducer (gate `fuzz-replay`)
+ *
+ * Run after `pnpm build` (it renders through @aster-charts/core's dist).
  */
 import { mkdirSync, readdirSync, readFileSync, writeFileSync, existsSync, rmSync } from 'node:fs'
 import { join, dirname } from 'node:path'
@@ -17,9 +31,11 @@ import { fileURLToPath } from 'node:url'
 import { renderSpec } from '@aster-charts/core'
 import { renderWithVega } from '../src/render-vega.js'
 import { canonicalizeSvg, diffCanonical } from '../src/normalize.js'
+import { plantSvg } from '../src/gate-plant.js'
 import { cli } from '../../../scripts/lib/cli.mjs'
+import { GATE_FLAGS, intOption, runGate, type Gate } from '../../../scripts/lib/run-gate.mjs'
 
-cli({ url: import.meta.url, flags: { replay: 'bool', clean: 'bool', seeds: 'value', start: 'value' } })
+cli({ url: import.meta.url, flags: { replay: 'bool', clean: 'bool', seeds: 'value', start: 'value', ...GATE_FLAGS } })
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const REPRO = join(HERE, '..', 'fuzz-repro')
@@ -105,50 +121,50 @@ function makeSpec(seed: number): Record<string, unknown> {
   }
 }
 
-async function runOne(spec: Record<string, unknown>): Promise<{ pass: boolean; diffs: string[]; error?: string }> {
+async function runOne(spec: Record<string, unknown>, plant: boolean): Promise<{ pass: boolean; diffs: string[]; error?: string }> {
   try {
     const [oracleSvg, ourSvg] = await Promise.all([renderWithVega(spec), Promise.resolve(renderSpec(spec as never))])
-    const diffs = diffCanonical(canonicalizeSvg(oracleSvg), canonicalizeSvg(ourSvg))
+    const diffs = diffCanonical(canonicalizeSvg(oracleSvg), canonicalizeSvg(plant ? plantSvg(ourSvg) : ourSvg))
     return { pass: diffs.length === 0, diffs }
   } catch (err) {
     return { pass: false, diffs: [], error: err instanceof Error ? err.message : String(err) }
   }
 }
 
-async function replay(): Promise<boolean> {
-  if (!existsSync(REPRO)) return true
-  const files = readdirSync(REPRO).filter((f) => f.endsWith('.vg.json')).sort()
-  let ok = true
-  for (const f of files) {
-    const spec = JSON.parse(readFileSync(join(REPRO, f), 'utf8')) as Record<string, unknown>
-    const result = await runOne(spec)
-    console.log(`${result.pass ? 'PASS' : 'FAIL'}  repro/${f}${result.error ? `  (${result.error})` : ''}`)
-    for (const d of result.diffs.slice(0, 6)) console.log(`      ${d}`)
-    if (!result.pass) ok = false
-  }
-  console.log(`\n[fuzz] replay ${files.length - (ok ? 0 : 1)}/${files.length}${ok ? '' : ' (failures above)'}`)
-  return ok
+function report(gate: Gate, name: string, result: { pass: boolean; diffs: string[]; error?: string }): void {
+  if (result.error !== undefined) gate.error(name, result.error)
+  else if (!result.pass) gate.differ(name, result.diffs[0]!)
+  else gate.agree(name)
 }
 
-async function fuzz(): Promise<boolean> {
-  const argv = process.argv.slice(2)
-  const arg = (name: string, fallback: number): number => {
-    const i = argv.indexOf(`--${name}`)
-    return i >= 0 && argv[i + 1] != null ? Number(argv[i + 1]) : fallback
+/** The committed reproducers (the gate `fuzz-replay`): a missing or empty directory compares nothing and fails. */
+async function replay(gate: Gate): Promise<void> {
+  const files = existsSync(REPRO) ? readdirSync(REPRO).filter((f) => f.endsWith('.vg.json')).sort() : []
+  let passed = 0
+  for (const f of files) {
+    const spec = JSON.parse(readFileSync(join(REPRO, f), 'utf8')) as Record<string, unknown>
+    const result = await runOne(spec, gate.plant)
+    report(gate, `repro/${f}`, result)
+    if (result.pass) passed++
+    console.log(`${result.pass ? 'PASS' : 'FAIL'}  repro/${f}${result.error ? `  (${result.error})` : ''}`)
+    for (const d of result.diffs.slice(0, 6)) console.log(`      ${d}`)
   }
-  if (argv.includes('--replay')) return replay()
-  const seeds = arg('seeds', 200)
-  const start = arg('start', 0)
+  console.log(`\n[fuzz] replay ${passed}/${files.length}`)
+}
+
+async function fuzz(gate: Gate, seeds: number, start: number): Promise<void> {
   mkdirSync(REPRO, { recursive: true })
   let failures = 0
   for (let s = start; s < start + seeds; s++) {
     const spec = makeSpec(s)
-    const result = await runOne(spec)
+    const result = await runOne(spec, gate.plant)
+    report(gate, `seed=${s}`, result)
     if (!result.pass) {
       failures++
+      // (a planted difference is no reproducer: nothing is written)
       const file = join(REPRO, `fuzz-${s}.vg.json`)
-      writeFileSync(file, JSON.stringify(spec, null, 2) + '\n')
-      console.log(`FAIL  seed=${s} -> ${file}`)
+      if (!gate.plant) writeFileSync(file, JSON.stringify(spec, null, 2) + '\n')
+      console.log(`FAIL  seed=${s}${gate.plant ? '' : ` -> ${file}`}`)
       if (result.error) console.log(`      error: ${result.error}`)
       for (const d of result.diffs.slice(0, 8)) console.log(`      ${d}`)
     } else if (s % 25 === 0) {
@@ -156,14 +172,32 @@ async function fuzz(): Promise<boolean> {
     }
   }
   console.log(`\n[fuzz] ${seeds - failures}/${seeds} passed (start=${start})`)
-  return failures === 0
 }
 
-if (process.argv.includes('--clean')) {
+const argv = process.argv.slice(2)
+const value = (name: string): string | undefined => {
+  const i = argv.indexOf(`--${name}`)
+  return i >= 0 ? (argv[i + 1] ?? '') : undefined
+}
+if (argv.includes('--clean') && existsSync(REPRO)) {
   // Remove only generated reproducers; keep the committed seed corpus/README.
   for (const f of readdirSync(REPRO)) {
     if (f.startsWith('fuzz-') && f.endsWith('.vg.json')) rmSync(join(REPRO, f), { force: true })
   }
 }
-const ok = await fuzz()
-process.exit(ok ? 0 : 1)
+if (argv.includes('--replay')) {
+  await runGate({
+    name: 'fuzz-replay',
+    counters: { compared: { floor: 2, what: 'committed reproducers in fuzz-repro/ compared with the oracle' } },
+    run: replay,
+  })
+} else {
+  const seeds = intOption(value('seeds'), '--seeds', 200, { min: 1 })
+  const start = intOption(value('start'), '--start', 0)
+  // every seed asked for must be compared: the floor is the number of seeds
+  await runGate({
+    name: 'fuzz',
+    counters: { compared: { floor: seeds, what: 'generated seeds compared with the oracle' } },
+    run: (gate) => fuzz(gate, seeds, start),
+  })
+}

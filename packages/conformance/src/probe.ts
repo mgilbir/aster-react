@@ -1,11 +1,14 @@
 /**
  * Feature-gap probe runner. Same oracle diff as the conformance run, but pointed
  * at `probes/` — specs that exercise feature areas the corpus doesn't cover yet.
- * A probe that fails documents a gap and is allowed; a probe that PASSED and stops passing is not: `--min-pass N` is the
- * floor on the number that pass (probe-verdict.ts), and the gate (scripts/gates.mjs) runs with the number passing today.
- * When a gap is implemented, the probe is promoted to `corpus/`.
  *
- * Usage: pnpm probe [name-filter] [--min-pass N]
+ * The verdict is runGate's (scripts/lib/run-gate.mjs). A probe that fails documents a gap only when it is listed in the
+ * expected-differences table (scripts/lib/expected-differences.mjs, gate `probe`), which requires it to STILL fail: a listed
+ * probe that passes fails the gate until it is promoted to `corpus/` and its entry removed. Any other failing probe is a
+ * failure. `--min-pass N` is the floor on the number of probes compared (the gate runs with today's number); a run that
+ * compares none fails.
+ *
+ * Usage: pnpm probe [name-filter] [--min-pass N]   (run after `pnpm build`)
  */
 import { readdirSync, readFileSync, existsSync } from 'node:fs'
 import { join, dirname } from 'node:path'
@@ -17,10 +20,12 @@ import { renderSpec } from '@aster-charts/core'
 import { loadSpecData, TRUSTED_LOAD_OPTIONS } from '@aster-charts/core/load'
 import { renderWithVega } from './render-vega.js'
 import { canonicalizeSvg, diffCanonical } from './normalize.js'
-import { parseProbeArgs, probeVerdict } from './probe-verdict.js'
+import { parseProbeArgs } from './probe-verdict.js'
+import { plantSvg } from './gate-plant.js'
 import { cli } from '../../../scripts/lib/cli.mjs'
+import { GATE_FLAGS, runGate, type Gate } from '../../../scripts/lib/run-gate.mjs'
 
-cli({ url: import.meta.url, flags: { 'min-pass': 'both' }, args: '[name-filter]' })
+cli({ url: import.meta.url, flags: { 'min-pass': 'both', ...GATE_FLAGS }, args: '[name-filter]' })
 
 interface ProbeEntry {
   name: string
@@ -40,7 +45,7 @@ function loadProbes(dir: string): ProbeEntry[] {
   return out
 }
 
-async function runOne(entry: ProbeEntry) {
+async function runOne(entry: ProbeEntry, plant: boolean) {
   try {
     const spec = entry.kind === 'vg' ? entry.spec : (vl.compile(entry.spec as any).spec as unknown as Record<string, unknown>)
     const [oracleSvg, ourSvg] = await Promise.all([
@@ -48,7 +53,7 @@ async function runOne(entry: ProbeEntry) {
       // url datasets resolve through the load addon, exactly what a real host does
       loadSpecData(spec as never, TRUSTED_LOAD_OPTIONS).then((loaded) => renderSpec(loaded as never)),
     ])
-    const diffs = diffCanonical(canonicalizeSvg(oracleSvg), canonicalizeSvg(ourSvg))
+    const diffs = diffCanonical(canonicalizeSvg(oracleSvg), canonicalizeSvg(plant ? plantSvg(ourSvg) : ourSvg))
     return { pass: diffs.length === 0, diffs }
   } catch (err) {
     return { pass: false, diffs: [], error: err instanceof Error ? err.message : String(err) }
@@ -56,29 +61,41 @@ async function runOne(entry: ProbeEntry) {
 }
 
 const dir = join(dirname(fileURLToPath(import.meta.url)), '..', 'probes')
-if (!existsSync(dir)) {
-  console.error(`[probe] probes directory not found: ${dir}`)
-  process.exit(1)
+let parsed: ReturnType<typeof parseProbeArgs>
+try {
+  parsed = parseProbeArgs(process.argv.slice(2).filter((a) => a !== '--plant-difference'))
+} catch (e) {
+  console.error(`[probe] ${e instanceof Error ? e.message : String(e)}`)
+  process.exit(2)
 }
-const { filter, minPass } = parseProbeArgs(process.argv.slice(2))
-const entries = loadProbes(dir).filter((e) => !filter || e.name.includes(filter))
+const { filter, minPass } = parsed
 
-const results: Array<{ name: string; pass: boolean; note: string }> = []
-for (const entry of entries) {
-  const r = await runOne(entry)
-  let note = ''
-  if (!r.pass) {
-    if (r.error) note = r.error.split('\n')[0]!.slice(0, 120)
-    else note = r.diffs[0]?.slice(0, 120) ?? ''
+async function main(gate: Gate): Promise<void> {
+  if (!existsSync(dir)) throw new Error(`probes directory not found: ${dir}`)
+  const entries = loadProbes(dir).filter((e) => !filter || e.name.includes(filter))
+  let passed = 0
+  for (const entry of entries) {
+    const r = await runOne(entry, gate.plant)
+    let note = ''
+    if (!r.pass) {
+      if (r.error) note = r.error.split('\n')[0]!.slice(0, 120)
+      else note = r.diffs[0]?.slice(0, 120) ?? ''
+    }
+    if (r.error !== undefined) gate.error(entry.name, note)
+    else if (!r.pass) gate.differ(entry.name, note)
+    else {
+      passed++
+      gate.agree(entry.name)
+    }
+    console.log(`${r.pass ? 'PASS' : 'FAIL'}  ${entry.name}${note ? `  — ${note}` : ''}`)
+    if (!r.pass && !r.error) for (const d of r.diffs.slice(1, 4)) console.log(`      ${d}`)
   }
-  results.push({ name: entry.name, pass: r.pass, note })
-  console.log(`${r.pass ? 'PASS' : 'FAIL'}  ${entry.name}${note ? `  — ${note}` : ''}`)
-  if (!r.pass && !r.error) for (const d of r.diffs.slice(1, 4)) console.log(`      ${d}`)
+  console.log(`\n[probe] ${passed}/${entries.length} passed`)
 }
 
-const failed = results.filter((r) => !r.pass)
-console.log(`\n[probe] ${results.length - failed.length}/${results.length} passed`)
-if (failed.length) console.log(`[probe] gaps: ${failed.map((f) => f.name).join(', ')}`)
-const verdict = probeVerdict(results.length - failed.length, results.length, minPass)
-console.log(`[probe] ${verdict.ok ? 'ok' : 'FAIL'}: ${verdict.reason}`)
-if (!verdict.ok) process.exitCode = 1
+await runGate({
+  name: 'probe',
+  counters: { compared: { floor: minPass ?? 0, what: 'probes compared with the oracle' } },
+  partial: Boolean(filter) || minPass === null,
+  run: main,
+})

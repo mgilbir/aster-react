@@ -1,18 +1,7 @@
 /**
- * The verdict of a probe run. Probes document gaps, so a probe that fails is allowed; what is not allowed is to LOSE ground:
- * the number of probes that pass has a floor (`--min-pass`), and a run that finds fewer probes than the floor (a deleted or
- * renamed directory, an empty filter) fails too. The floor is the number passing today; it only moves up, when a gap closes and
- * its probe is promoted to `corpus/` (it then leaves `probes/`, and the floor drops with it).
+ * The command line of the probe runner (probe.ts): a name filter and `--min-pass N`, the floor on the number of probes
+ * compared (the verdict itself is runGate's, scripts/lib/run-gate.mjs).
  */
-export interface ProbeVerdict { ok: boolean; reason: string }
-
-export function probeVerdict(passed: number, total: number, minPass: number | null): ProbeVerdict {
-  if (minPass === null) return { ok: true, reason: 'no floor given: diagnostic only' }
-  if (total < minPass) return { ok: false, reason: `only ${total} probe(s) found, the floor is ${minPass} passing` }
-  if (passed < minPass) return { ok: false, reason: `${passed} probe(s) pass, the floor is ${minPass}` }
-  return { ok: true, reason: `${passed} pass (floor ${minPass})` }
-}
-
 /** `pnpm probe [name-filter] [--min-pass N]` */
 export function parseProbeArgs(argv: string[]): { filter: string | undefined; minPass: number | null } {
   let filter: string | undefined

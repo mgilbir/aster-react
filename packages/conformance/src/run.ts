@@ -8,8 +8,13 @@
  *   corpus/*.vg.json — raw Vega specs
  *
  * Environment: ASTER_CORPUS_DIR picks another corpus directory, relative to the package (default `corpus`; the time-zone matrix uses
- * `corpus-tz`); ASTER_CORPUS_FILTER keeps the entries whose name matches the regular expression.
- * Exit codes: 0 every entry matches the oracle, 1 a difference (or a missing corpus directory), 2 bad usage (an unknown option).
+ * `corpus-tz`); ASTER_CORPUS_FILTER keeps the entries whose name matches the regular expression (a narrowed run: the floor is
+ * not applied, but a filter that matches nothing fails).
+ * The verdict is runGate's (scripts/lib/run-gate.mjs): every entry is compared, and the number compared has a floor per corpus
+ * directory (FLOORS: today's counts, which only ratchet up).
+ * Exit codes: 0 every entry matches the oracle, 1 a difference, an error or a broken floor, 2 bad usage (an unknown option or
+ * an ASTER_CORPUS_DIR with no floor).
+ * Run after `pnpm build` (it renders through @aster-charts/core's dist).
  *
  * Convention: most entries set explicit numeric width/height and `autosize: 'none'` so
  * layout is deterministic and comparable. Nothing enforces it, and not every entry
@@ -25,9 +30,14 @@ import { renderSpec } from '@aster-charts/core'
 import { loadSpecData, TRUSTED_LOAD_OPTIONS } from '@aster-charts/core/load'
 import { renderWithVega } from './render-vega.js'
 import { canonicalizeSvg, diffCanonical } from './normalize.js'
+import { plantSvg } from './gate-plant.js'
 import { cli } from '../../../scripts/lib/cli.mjs'
+import { GATE_FLAGS, runGate, type Gate } from '../../../scripts/lib/run-gate.mjs'
 
-cli({ url: import.meta.url })
+cli({ url: import.meta.url, flags: GATE_FLAGS })
+
+/** The number of entries each corpus directory compares on a full run (today's counts; they only ratchet up). */
+const FLOORS: Record<string, number> = { corpus: 1063, 'corpus-tz': 28 }
 
 interface CorpusEntry {
   name: string
@@ -55,7 +65,7 @@ function vegaSpecFor(entry: CorpusEntry): { spec: Record<string, unknown>; viaLi
   return { spec: compiled, viaLite: true }
 }
 
-async function runOne(entry: CorpusEntry): Promise<{ pass: boolean; diffs: string[]; error?: string }> {
+async function runOne(entry: CorpusEntry, plant: boolean): Promise<{ pass: boolean; diffs: string[]; error?: string }> {
   try {
     const { spec } = vegaSpecFor(entry)
     const [oracleSvg, ourSvg] = await Promise.all([
@@ -64,8 +74,8 @@ async function runOne(entry: CorpusEntry): Promise<{ pass: boolean; diffs: strin
       // url datasets resolve through the load addon, exactly what a real host does
       loadSpecData(spec as never, TRUSTED_LOAD_OPTIONS).then((loaded) => renderSpec(loaded as never)),
     ])
+    const ours = canonicalizeSvg(plant ? plantSvg(ourSvg) : ourSvg)
     const oracle = canonicalizeSvg(oracleSvg)
-    const ours = canonicalizeSvg(ourSvg)
     const diffs = diffCanonical(oracle, ours)
     return { pass: diffs.length === 0, diffs }
   } catch (err) {
@@ -73,42 +83,40 @@ async function runOne(entry: CorpusEntry): Promise<{ pass: boolean; diffs: strin
   }
 }
 
-export async function runCorpus(): Promise<boolean> {
-  // ASTER_CORPUS_DIR picks another corpus directory (relative to the package),
-  // e.g. `corpus-tz` for the time-zone matrix; the default is the main corpus.
-  const dir = join(dirname(fileURLToPath(import.meta.url)), '..', process.env.ASTER_CORPUS_DIR ?? 'corpus')
-  if (!existsSync(dir)) {
-    console.error(`[conformance] corpus directory not found: ${dir}`)
-    return false
-  }
-  const entries = loadCorpus(dir)
-  // ASTER_CORPUS_FILTER narrows to names matching a regular expression (local debugging)
-  const filter = process.env.ASTER_CORPUS_FILTER ? new RegExp(process.env.ASTER_CORPUS_FILTER) : null
-  if (filter) entries.splice(0, entries.length, ...entries.filter((e) => filter.test(e.name)))
-  if (!entries.length) {
-    console.error('[conformance] corpus is empty')
-    return false
-  }
-
+async function runCorpus(gate: Gate, dir: string, filter: RegExp | null): Promise<void> {
+  if (!existsSync(dir)) throw new Error(`corpus directory not found: ${dir}`)
+  const entries = loadCorpus(dir).filter((e) => !filter || filter.test(e.name))
   let passed = 0
-  const failures: Array<{ name: string; diffs: string[]; error?: string }> = []
   for (const entry of entries) {
-    const result = await runOne(entry)
-    if (result.pass) {
-      passed++
-      console.log(`PASS  ${entry.name}`)
-    } else {
-      failures.push({ name: entry.name, diffs: result.diffs, error: result.error })
+    const result = await runOne(entry, gate.plant)
+    if (result.error !== undefined) {
+      gate.error(entry.name, result.error)
+      console.log(`FAIL  ${entry.name}\n      error: ${result.error}`)
+    } else if (!result.pass) {
+      gate.differ(entry.name, result.diffs[0] ?? 'differs')
       console.log(`FAIL  ${entry.name}`)
-      if (result.error) console.log(`      error: ${result.error}`)
       for (const d of result.diffs.slice(0, 12)) console.log(`      ${d}`)
+    } else {
+      passed++
+      gate.agree(entry.name)
+      console.log(`PASS  ${entry.name}`)
     }
   }
-
   console.log(`\n[conformance] ${passed}/${entries.length} passed`)
-  if (failures.length) console.log(`[conformance] failing: ${failures.map((f) => f.name).join(', ')}`)
-  return failures.length === 0
 }
 
-const ok = await runCorpus()
-process.exit(ok ? 0 : 1)
+// ASTER_CORPUS_DIR picks another corpus directory (relative to the package), e.g. `corpus-tz` for the time-zone matrix.
+const corpusName = process.env.ASTER_CORPUS_DIR ?? 'corpus'
+const floor = FLOORS[corpusName]
+if (floor === undefined) {
+  console.error(`[conformance] ASTER_CORPUS_DIR=${corpusName} has no floor in FLOORS (${Object.keys(FLOORS).join(', ')})`)
+  process.exit(2)
+}
+// ASTER_CORPUS_FILTER narrows to names matching a regular expression (local debugging)
+const filter = process.env.ASTER_CORPUS_FILTER ? new RegExp(process.env.ASTER_CORPUS_FILTER) : null
+await runGate({
+  name: 'conformance',
+  counters: { compared: { floor, what: `${corpusName} entries compared with the oracle's SVG` } },
+  partial: filter !== null,
+  run: (gate) => runCorpus(gate, join(dirname(fileURLToPath(import.meta.url)), '..', corpusName), filter),
+})
