@@ -193,7 +193,9 @@ function intersectGroup(group: SceneGroup, mark: { marktype?: string; name?: str
   for (const m of marks) {
     const node = m as unknown as SceneGroup
     if (isLeafMark(node as unknown as Rec)) intersectMark(node, box, filter, hits)
-    else if (Array.isArray(node.items)) intersectGroup(node, { marktype: 'group', name: (node as Rec).name as string | undefined }, box, filter, hits)
+    // (vega's visitMark: the group mark's bounds, the union of its item's into an empty box, must meet the box before the box moves into it;
+    // the one change to this frozen copy, made when scene-intersect.ts gained the same question: C480)
+    else if (Array.isArray(node.items) && intersects(box, new Bounds().union(boundGroupItem(new Bounds(), node)))) intersectGroup(node, { marktype: 'group', name: (node as Rec).name as string | undefined }, box, filter, hits)
   }
   box.translate(x, y)
 }
