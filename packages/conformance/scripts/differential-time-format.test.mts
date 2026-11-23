@@ -275,22 +275,26 @@ describe('time locales vs d3-time-format and vega-format (generated, live)', () 
     })
   })
 
-  it('timeFormatDefaultLocale swaps the module-level formatters', () => {
+  it('the module-level formatters are d3-time-format\'s en-US default, and a public defaultLocale(...) leaves them be (C548)', async () => {
+    // (they are what a time scale's tickFormat captures, as d3-scale's captures d3-time-format's default; vega's defaultLocale never sets
+    // that one, and Aster's module-level default has no setter: the public defaultLocale of locale.ts is the one a host sets)
+    const locale = await import('../../core/src/locale.ts')
     const def = { dateTime: '%A %x', date: '%d/%m/%Y', time: '%H:%M', periods: ['fm', 'em'], days: ['d0', 'd1', 'd2', 'd3', 'd4', 'd5', 'd6'], shortDays: ['a', 'b', 'c', 'd', 'e', 'f', 'g'], months: ['M1', 'M2', 'M3', 'M4', 'M5', 'M6', 'M7', 'M8', 'M9', 'M10', 'M11', 'M12'], shortMonths: ['m1', 'm2', 'm3', 'm4', 'm5', 'm6', 'm7', 'm8', 'm9', 'm10', 'm11', 'm12'] }
-    const en = { dateTime: '%x, %X', date: '%-m/%-d/%Y', time: '%-I:%M:%S %p', periods: ['AM', 'PM'], days: ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'], shortDays: ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'], months: ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'], shortMonths: ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'] }
-    try {
-      d3.timeFormatDefaultLocale(def)
-      aster.timeFormatDefaultLocale(def)
-      for (const spec of ['%c', '%a %b %d', '%x %X %p']) {
+    const check = (): void => {
+      for (const spec of ['%c', '%a %b %d', '%x %X %p', '%A %B']) {
         expect(aster.utcFormat(spec)(new Date(0))).toBe(d3.utcFormat(spec)(new Date(0)))
+        expect(aster.timeFormat(spec)(new Date(0))).toBe(d3.timeFormat(spec)(new Date(0)))
         expect(aster.utcParse(spec)('x')).toEqual(d3.utcParse(spec)('x'))
       }
-      expect(aster.utcParse('%A %d/%m/%Y')('d2 05/03/2024')).toEqual(d3.utcParse('%A %d/%m/%Y')('d2 05/03/2024'))
-    } finally {
-      d3.timeFormatDefaultLocale(en)
-      aster.timeFormatDefaultLocale(en)
+      expect(aster.utcParse('%A %d/%m/%Y')('Tuesday 05/03/2024')).toEqual(d3.utcParse('%A %d/%m/%Y')('Tuesday 05/03/2024'))
     }
-    expect(aster.utcFormat('%A %B')(new Date(0))).toBe(d3.utcFormat('%A %B')(new Date(0)))
+    check()
+    try {
+      locale.defaultLocale({ thousands: ',', grouping: [3], currency: ['$', ''] }, def)
+      check()
+    } finally {
+      locale.resetDefaultLocale()
+    }
   })
 })
 
