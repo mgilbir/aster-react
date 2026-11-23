@@ -152,3 +152,16 @@ describe('the session does not walk a spec it answers from its cache (C503)', ()
   })
 })
 
+
+describe('a spec that shares sub-objects (C107)', () => {
+  it('is refused by the size ceiling before the session writes its text, at any depth of sharing', () => {
+    for (const levels of [30]) {
+      let o: Record<string, unknown> = { a: 1 }
+      for (let i = 0; i < levels; i++) o = { p: o, q: o }
+      const t0 = performance.now()
+      expect(() => createChartSession().evaluate({ width: 10, height: 10, marks: [], usermeta: o } as unknown as VgSpec), String(levels)).toThrow(/spec size/)
+      // (an exponential text of 2^30 leaves is never written: the walk stops at the ceiling's 5 million objects)
+      expect(performance.now() - t0, String(levels)).toBeLessThan(10_000)
+    }
+  }, 30_000)
+})
