@@ -38,8 +38,18 @@ describe('image url policy', () => {
     }
   })
 
-  it('with neither limits nor a policy images are drawn as given (Vega parity; documented residual risk)', () => {
-    expect(renderSpec(imageSpec('javascript:alert(1)'))).toContain('javascript:alert(1)')
+  it('with neither limits nor a policy an image url is still vetted where it is written (DECISIONS Q3: on by default, fail closed)', () => {
+    // (vega writes it as given; a url outside the image protocols, or with credentials, is written as no url at all -- but for
+    // vega's own rewrite of a leading `file://` to the path it names, a path of the page's own origin)
+    for (const url of HOSTILE) {
+      const written = url.startsWith('file://') ? url.slice('file://'.length) : ''
+      const svg = renderSpec(imageSpec(url))
+      expect(svg, url).toContain('<image')
+      expect(hrefs(domOf(imageSpec(url), {})), url).toEqual([written])
+      expect(svg, url).toContain(`xlink:href="${written}"`)
+    }
+    // control: an ordinary url is written as given
+    expect(renderSpec(imageSpec('https://example.test/a.png'))).toContain('xlink:href="https://example.test/a.png"')
   })
 
   it('an explicit policy applies without limits; allow() restricts hosts; the hook sees a parsed URL', () => {

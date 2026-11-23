@@ -157,6 +157,8 @@ export interface CompiledChart {
   height: SizeSpec
   padding: { top: number; right: number; bottom: number; left: number }
   background: string | null
+  /** The view's description (vega-parser: the spec's `description`, else `config.description`), for the scene (`SceneRoot.description`). */
+  description?: string
   /** Stroke of the plot frame border (e.g. '#ddd' from style 'cell'). */
   frameStroke?: string
   frameFill?: string
@@ -698,8 +700,11 @@ export interface SceneRoot {
   /** Gradient definitions for use by fill="url(#...)" references. */
   defs?: SceneDef[]
   name?: string
-  ariaRole?: string
-  ariaLabel?: string
+  /**
+   * The view's description -- the spec's top-level `description`, else `config.description` ("Vega visualization" by default) --:
+   * what vega's view writes as its container's `aria-label` (`view.description`), and the accessible tree's label (`buildA11yTree`).
+   */
+  description?: string
   /** @internal Resolved scales in this scope (scene-differential metadata). */
   __scales?: ScaleSnapshot[]
   /**
@@ -817,9 +822,6 @@ export interface SceneItem {
   /** @internal Differential-update generation: set when an item is (re)encoded; a DOM
    * patch skips subtrees whose item was not touched this eval. */
   __gen?: number
-  /** @internal Cached DOM descriptor for a reused (unchanged) item, so the DOM
-   * desc is not rebuilt from scratch every patch. */
-  __domDesc?: unknown
   // geometry
   x?: number
   y?: number
@@ -901,7 +903,6 @@ export interface SceneItem {
   __tick?: unknown
   // accessibility
   ariaRole?: string
-  ariaLabel?: string
   ariaRoleDescription?: string
   aria?: boolean
   description?: string
