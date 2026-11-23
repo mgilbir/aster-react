@@ -109,32 +109,21 @@ const orient = (poly: Pt[]): Pt[] => {
   return area < 0 ? poly.reverse() : poly
 }
 
+const MAX_CACHED_CIRCLE = 128
+const unitCircles = new Map<number, Float64Array>()
+
 function disk(cx: number, cy: number, r: number): Pt[] {
   const n = Math.max(8, Math.ceil(Math.PI / Math.acos(1 - Math.min(0.5, TOL / Math.max(r, TOL)))))
-  const p: Pt[] = []
-  for (let i = 0; i < n; i++) p.push([cx + r * Math.cos((i * 2 * Math.PI) / n), cy + r * Math.sin((i * 2 * Math.PI) / n)])
-  return p
-}
-
-/** cos of the largest turn between two chords of a curve whose join is the wedge of the outer side alone (about 29 degrees). */
-const SLIGHT_TURN = 0.875
-
-/** The pie slice of radius `half` around (x, y) between the outer normals of two chords turning by `cross`'s sign: a round join. */
-function wedge(x: number, y: number, half: number, d0: Pt, d1: Pt, cross: number): Pt[] {
-  const sg = cross > 0 ? -1 : 1
-  const a0 = Math.atan2(sg * d0[0], sg * -d0[1])
-  let sweep = Math.atan2(sg * d1[0], sg * -d1[1]) - a0
-  // the shorter way round
-  if (sweep > Math.PI) sweep -= 2 * Math.PI
-  else if (sweep < -Math.PI) sweep += 2 * Math.PI
-  const step = 2 * Math.acos(1 - Math.min(0.5, TOL / Math.max(half, TOL)))
-  const k = Math.max(1, Math.ceil(Math.abs(sweep) / step))
-  const poly: Pt[] = [[x, y]]
-  for (let i = 0; i <= k; i++) {
-    const t = a0 + (sweep * i) / k
-    poly.push([x + half * Math.cos(t), y + half * Math.sin(t)])
+  // (a curve's stroke makes one disk per flattened vertex: the circle's points are the same for every one of them)
+  let unit = n <= MAX_CACHED_CIRCLE ? unitCircles.get(n) : undefined
+  if (unit === undefined) {
+    unit = new Float64Array(2 * n)
+    for (let i = 0; i < n; i++) { unit[2 * i] = Math.cos((i * 2 * Math.PI) / n); unit[2 * i + 1] = Math.sin((i * 2 * Math.PI) / n) }
+    if (n <= MAX_CACHED_CIRCLE) unitCircles.set(n, unit) // (at most MAX_CACHED_CIRCLE small tables, whatever the widths drawn)
   }
-  return orient(poly)
+  const p: Pt[] = new Array<Pt>(n)
+  for (let i = 0; i < n; i++) p[i] = [cx + r * unit[2 * i]!, cy + r * unit[2 * i + 1]!]
+  return p
 }
 
 /** The polygons (all positively oriented, so the non-zero rule unions them) of a stroked polyline. */
@@ -196,14 +185,8 @@ function outline(s: Piece, half: number, cap: string, join: string, miterLimit: 
     const cross = d0[0] * d1[1] - d0[1] * d1[0]
     const dot = d0[0] * d1[0] + d0[1] * d1[1]
     if (Math.abs(cross) < 1e-12 && dot > 0) continue // straight on
-    if (s.smooth.has(pts[vi]!)) {
-      // a vertex the flattening made inside a curve is not the path's: the offset of a smooth curve is round there, whatever the pen's
-      // join. Only the wedge between the two chords' outer normals is not covered by the chords' own strips while the turn is slight;
-      // a tight turn needs the whole disk, whose inner side the short chords leave open
-      out.push(dot > SLIGHT_TURN ? wedge(vx, vy, half, d0, d1, cross) : disk(vx, vy, half))
-      continue
-    }
-    if (join === 'round') { out.push(disk(vx, vy, half)); continue }
+    // a vertex the flattening made inside a curve is not the path's: the offset of a smooth curve is round there, whatever the pen's join
+    if (join === 'round' || s.smooth.has(pts[vi]!)) { out.push(disk(vx, vy, half)); continue }
     // the outer side of the turn: left of d0 when the path turns right (y down), and the reverse
     const sgn = cross > 0 ? -1 : 1
     const ax = vx + sgn * -d0[1] * half
