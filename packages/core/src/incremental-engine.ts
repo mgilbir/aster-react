@@ -759,33 +759,36 @@ function identifierPulse(
  */
 function applyStepWithPulse(
   rows: Row[], t: CompiledTransform, tctx: StepTransformContext, sourceName: string,
-  input: StepPulse, prev: Row[] | undefined, prevStepState: unknown, aliased?: ReadonlySet<string>, carry?: readonly unknown[],
+  input: StepPulse, prev: Row[] | undefined, prevStepState: unknown, published: boolean, aliased?: ReadonlySet<string>, carry?: readonly unknown[],
 ): { rows: Row[]; pulse: StepPulse | null; state?: unknown } {
   const type = String(t.type)
   if ((type === 'aggregate' || type === 'joinaggregate') && !groupwiseIncremental(t)) {
     return { rows: applyOne(rows, t, tctx, sourceName), pulse: null }
   }
   if (input.appendOnly) {
-    // Fast paths that never need the full mapping.
+    // Fast paths that never need the full mapping. Those below write the rows the step made last time in place (an O(appended)
+    // update); the rows of a step that are a dataset's are the rows the last scene publishes (`datasetsOfScene`, its runtime's
+    // `data()`), and a scene is never changed once returned, nor by an evaluation that is then rejected: such a step updates a copy.
+    const writable = published && prev !== undefined ? prev.slice() : prev
     const appendLocal = rowLocal(t, tctx)
     if (appendLocal) {
-      const fast = rowLocalAppendPulse(rows, t, tctx, sourceName, input, prev)
+      const fast = rowLocalAppendPulse(rows, t, tctx, sourceName, input, writable)
       if (fast) return fast
     } else if (type === 'identifier') {
       // (rows numbered as their source rows: the appended rows are new source rows, unless a number says otherwise)
-      const fast = carry === undefined || carriesNone(carry, pulseBaseLength(input)) ? identifierAppendPulse(rows, t, tctx, input, prev) : null
+      const fast = carry === undefined || carriesNone(carry, pulseBaseLength(input)) ? identifierAppendPulse(rows, t, tctx, input, writable) : null
       if (fast) return fast
     } else if (type === 'filter') {
-      const fast = filterIsRowLocal(t, tctx) ? filterAppendPulse(rows, t, tctx, sourceName, input, prev, prevStepState as boolean[] | undefined) : null
+      const fast = filterIsRowLocal(t, tctx) ? filterAppendPulse(rows, t, tctx, sourceName, input, writable, prevStepState as boolean[] | undefined) : null
       if (fast) return fast
     } else if (type === 'fold') {
-      const fast = foldAppendPulse(rows, t, tctx, sourceName, input, prev)
+      const fast = foldAppendPulse(rows, t, tctx, sourceName, input, writable)
       if (fast) return fast
     } else if (type === 'aggregate') {
       const fast = aggregateAppendPulse(rows, t, tctx, sourceName, input, prev, prevStepState as AggState | undefined)
       if (fast) return fast
     } else if (type === 'joinaggregate') {
-      const fast = joinAggregateAppendPulse(rows, t, tctx, sourceName, input, prev, prevStepState as AggState | undefined)
+      const fast = joinAggregateAppendPulse(rows, t, tctx, sourceName, input, writable, prevStepState as AggState | undefined)
       if (fast) return fast
     } else if (type === 'collect' && !isPlacing(t)) {
       const fast = orderedAppendPulse(rows, t, input, prev, prevStepState as { order: number[] } | undefined)
@@ -926,7 +929,7 @@ export function applyPipelineWithPulse(
       state.steps.push(cur)
       if (res.state !== undefined) state.stepState.set(key, res.state)
     } else {
-      const res = applyStepWithPulse(cur, t, tctx, sourceName, pulse, prevDS.steps[k], prevDS.stepState.get(key), prevDS.aliased?.[k], bySource?.carry)
+      const res = applyStepWithPulse(cur, t, tctx, sourceName, pulse, prevDS.steps[k], prevDS.stepState.get(key), k === transforms.length - 1, prevDS.aliased?.[k], bySource?.carry)
       if (prevDS.aliased?.[k] !== undefined) (state.aliased ??= [])[k] = prevDS.aliased[k]
       cur = res.rows
       // (each step's rows are tuples to the next step, as in runPipeline)
