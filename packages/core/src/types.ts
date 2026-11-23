@@ -113,9 +113,9 @@ export interface RuntimeInput {
    */
   dataPulse?: Record<string, import('./pulse.js').PulseChangeInput | import('./pulse.js').RowDiff>
   /**
-   * Infer a per-datum changeset by diffing replaced source arrays against the
-   * previous session evaluation. Defaults to true when `dataChanges` is absent;
-   * set false to force a full re-encode.
+   * Sessions only (`createChartSession`, and the React shells): infer a per-datum changeset by diffing replaced source arrays
+   * against the previous session evaluation. Defaults to true when `dataChanges` is absent; set false to force a full re-encode.
+   * `evaluateChart` keeps no previous rows to diff against and does not read it.
    */
   autoChanges?: boolean
   /**
@@ -384,9 +384,17 @@ export type ScaleRange =
   | { signal: string }
   | unknown[]
 
+/** A scale type vega registers (vega-scale `isValidScaleType`); `compileChart` refuses any other, as vega-parser does. */
+export type ScaleType =
+  | 'identity' | 'linear' | 'log' | 'pow' | 'sqrt' | 'symlog' | 'time' | 'utc'
+  | 'sequential' | 'sequential-linear' | 'sequential-log' | 'sequential-pow' | 'sequential-sqrt' | 'sequential-symlog'
+  | 'diverging-linear' | 'diverging-log' | 'diverging-pow' | 'diverging-sqrt' | 'diverging-symlog'
+  | 'quantile' | 'quantize' | 'threshold' | 'ordinal' | 'band' | 'point' | 'bin-ordinal'
+
 export interface CompiledScale {
   name: string
-  type: 'linear' | 'log' | 'pow' | 'sqrt' | 'symlog' | 'time' | 'utc' | 'band' | 'point' | 'ordinal' | 'quantize' | 'quantile' | 'threshold' | 'sequential' | 'bin-ordinal' | 'identity'
+  /** Absent: vega's default, linear. */
+  type: ScaleType
   domain: ScaleDomain
   range: ScaleRange
   zero?: boolean

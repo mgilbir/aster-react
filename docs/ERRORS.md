@@ -326,6 +326,8 @@ pinned vega's definitions):
 | a facet without a name, or without `groupby` or `field` | `Facet must have a name: <facet>`, `Facet must specify groupby or field: <facet>` |
 | a signal pushed to an outer scope that no scope around declared before, or that says its own `value`, `update`, `init`, `react` or `bind` | `No prior signal definition for "outer" push: "<name>"`, `Invalid property  for "outer" push: "<property>"` |
 | a discrete scale's domain sorted by an aggregate `op` (other than `count`) without a `field`; a `domainMin`/`domainMax` with no domain | `No field provided for sort aggregate op: <op>`, `No scale domain defined for domainMin/domainMax to override.` |
+| a scale `type` vega does not register (`diverging` without its interpolation, a typo) | `Unrecognized scale type: "<type>"` |
+| signals whose `update` / `init` read each other in a circle (a `react: false` reader is no edge; a signal reading itself is none), thrown when the chart is first evaluated | `Cycle detected in dataflow graph.` |
 
 What the compile does not check: other refusals of `vega.parse` that are not about names or required parameters -- a name declared twice
 in one scope as a signal, scale or projection (`Duplicate signal name`, `Duplicate scale or projection name`), an object where a scale

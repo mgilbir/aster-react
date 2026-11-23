@@ -6,10 +6,10 @@
  */
 import { namedSetsOf } from './encode-handlers.js'
 import { dict, ownGet } from './util.js'
+import { SpecParseError } from './parse-error.js'
 import { parseExpressionCached } from './expr-parser.js'
 import { assertSpecDepth } from './limits.js'
 import { dataInputOf, normalizeSpecLists, VEGA_MARK_TYPES } from './spec-structure.js'
-import { SpecParseError } from './parse-error.js'
 import { noteWrittenType, transformTypeOf } from './transform-names.js'
 import { checkSpecExpressions } from './spec-expressions.js'
 import { engineSlotMessage, isEngineSlot } from './item-slots.js'
@@ -28,6 +28,7 @@ import type {
   CompiledProjection,
   CompiledScale,
   CompiledSignalDef,
+  ScaleType,
   SignalOnDef,
   CompiledTitle,
   CompiledTransform,
@@ -465,7 +466,17 @@ function compileTransform(t: Record<string, unknown>): CompiledTransform {
   return out as CompiledTransform
 }
 
+/** vega-scale's registered scale types (`isValidScaleType`): vega-parser refuses any other. */
+const SCALE_TYPES: ReadonlySet<string> = new Set<ScaleType>([
+  'identity', 'linear', 'log', 'pow', 'sqrt', 'symlog', 'time', 'utc',
+  'sequential', 'sequential-linear', 'sequential-log', 'sequential-pow', 'sequential-sqrt', 'sequential-symlog',
+  'diverging-linear', 'diverging-log', 'diverging-pow', 'diverging-sqrt', 'diverging-symlog',
+  'quantile', 'quantize', 'threshold', 'ordinal', 'band', 'point', 'bin-ordinal',
+])
+
 function compileScale(s: Record<string, unknown>): CompiledScale {
+  // (vega-parser: `Unrecognized scale type`, thrown before any view exists; no type -- or a falsy one -- is vega's default, linear)
+  if (s.type && !SCALE_TYPES.has(s.type as string)) throw new SpecParseError(`Unrecognized scale type: ${JSON.stringify(s.type)}`)
   // prototype-less: scale keys are spec data (`__proto__` stays a plain key)
   const out = dict<unknown>({ name: s.name, type: s.type, domain: s.domain, range: s.range })
   // vega-parser copies every other scale key through to the Scale transform
