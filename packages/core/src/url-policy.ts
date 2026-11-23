@@ -274,7 +274,7 @@ const HAS_PROTOCOL = /^(data:|([A-Za-z]+:)?\/\/)/
 /**
  * The url an image is drawn with: vega-loader's `sanitize` as the renderer applies it to an image. A relative url is
  * prefixed with the policy's `baseURL` (a text prefix, as vega's loader does, not a WHATWG resolution: a base that names a
- * page, `.../page.html?id=3`, is a directory to it), a slash between them when neither has one; `//host` gets vega's default
+ * page and a query is a directory to it), a slash between them when neither has one; `//host` gets vega's default
  * protocol `http:`; `file://` is stripped to the path. A url that is not a string is left as it is. This is the url the
  * policy is applied to (`allow` sees exactly what is drawn).
  */
