@@ -82,8 +82,8 @@ export {
 } from './text-metrics.js'
 export { buildA11yTree, type A11yKind, type A11yNode, type A11yOptions, type A11yTree } from './a11y.js'
 export {
-  buildPulseGraph, diffRows, propagatePulse, rowsEqual, transformNeedsFullRederive, isGroupedTransform,
-  type DataPulse, type DatasetPulse, type PulseChangeInput, type PulseGraph, type PulseNode, type PulsePropagation, type PulseRange, type RowDiff,
+  diffRows, rowsEqual, isGroupedTransform,
+  type DataPulse, type DatasetPulse, type RowDiff,
 } from './pulse.js'
 // The event-driven signal loop (`@aster-charts/core/signals`: bindSceneSignals etc.)
 // ships as an opt-in addon like the DOM patcher; hosts using signal.on streams
