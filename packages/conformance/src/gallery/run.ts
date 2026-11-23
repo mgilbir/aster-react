@@ -3,7 +3,7 @@
  * oracle is pinned to) against real vega, through the paths a user takes:
  *
  *   static  real vega vs `renderSpec` (+ @aster-charts/vl for Vega-Lite), canonical SVG compared exactly, in Node
- *   react   real vega vs <Chart> mounted as an app would (loadSpecData, add-ons, no size props unless the spec has numeric ones),
+ *   react   real vega vs <Chart> mounted as an app would (loadSpecData, add-ons, no size props: the spec's own size, as vega's),
  *           in headless Chromium
  *   swap    one mounted <Chart> that goes from spec A to spec B (the pairs in gallery/swap-pairs.txt), in headless Chromium
  *

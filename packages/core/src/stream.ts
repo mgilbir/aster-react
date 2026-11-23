@@ -93,8 +93,8 @@ export interface StreamBatch {
   height?: number
   /** The container the spec is sized to (`containerSize()`), as `RuntimeInput.containerSize`; the later value wins. */
   containerSize?: { width: number; height: number }
-  /** The element the chart fills, as `RuntimeInput.measuredSize`; the later value wins. */
-  measuredSize?: { width: number; height: number }
+  /** The element the chart fills, as `RuntimeInput.measuredSize` (each dimension its own); the later value wins. */
+  measuredSize?: { width?: number; height?: number }
   /**
    * Scale-domain overrides, merged into the stream's current overrides. A
    * `null` value clears that scale's override (back to the data-derived
@@ -300,7 +300,7 @@ interface Fold {
   width?: number
   height?: number
   containerSize?: { width: number; height: number }
-  measuredSize?: { width: number; height: number }
+  measuredSize?: { width?: number; height?: number }
   /** `null` clears that scale's override. */
   domainRaw?: Record<string, unknown[] | null>
   limits?: SpecLimits
