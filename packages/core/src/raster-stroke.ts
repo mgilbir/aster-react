@@ -9,7 +9,13 @@ const TOL = 0.05 // flattening tolerance of a curve being stroked, in pixels
 
 // --- the pen's view of a path: curves flattened finely ---------------------------------------------
 
-function flatten(s: Sub): Pt[] {
+/**
+ * The points a curve was cut at (not the curve's ends): the path itself has no vertex there, so the pen's join does not apply to
+ * them -- a canvas strokes a curve as the smooth offset of it, whatever `lineJoin` says -- and `outline` joins them round.
+ */
+type Smooth = WeakSet<Pt>
+
+function flatten(s: Sub, smooth: Smooth): Pt[] {
   const pts: Pt[] = [s.start]
   let [px, py] = s.start
   for (const o of s.ops) {
@@ -19,7 +25,9 @@ function flatten(s: Sub): Pt[] {
       for (let i = 1; i <= n; i++) {
         const t = i / n
         const u = 1 - t
-        pts.push([u * u * px + 2 * u * t * o.cx + t * t * o.x, u * u * py + 2 * u * t * o.cy + t * t * o.y])
+        const p: Pt = [u * u * px + 2 * u * t * o.cx + t * t * o.x, u * u * py + 2 * u * t * o.cy + t * t * o.y]
+        if (i < n) smooth.add(p)
+        pts.push(p)
       }
     } else {
       const n = curveSteps(Math.hypot(o.c1x - px, o.c1y - py) + Math.hypot(o.c2x - o.c1x, o.c2y - o.c1y) + Math.hypot(o.x - o.c2x, o.y - o.c2y))
@@ -30,7 +38,9 @@ function flatten(s: Sub): Pt[] {
         const b = 3 * u * u * t
         const c = 3 * u * t * t
         const d = t * t * t
-        pts.push([a * px + b * o.c1x + c * o.c2x + d * o.x, a * py + b * o.c1y + c * o.c2y + d * o.y])
+        const p: Pt = [a * px + b * o.c1x + c * o.c2x + d * o.x, a * py + b * o.c1y + c * o.c2y + d * o.y]
+        if (i < n) smooth.add(p)
+        pts.push(p)
       }
     }
     px = o.x
@@ -46,6 +56,7 @@ function curveSteps(length: number): number {
 interface Piece {
   pts: Pt[]
   closed: boolean
+  smooth: Smooth
 }
 
 /** Cut a polyline into dashes (device units). */
@@ -76,15 +87,15 @@ function dashed(s: Piece, pattern: number[], offset: number): Piece[] {
       x0 += ux * remaining
       y0 += uy * remaining
       len -= remaining
-      if (on) { cur.push([x0, y0]); out.push({ pts: cur, closed: false }); cur = [] } else cur = [[x0, y0]]
+      if (on) { cur.push([x0, y0]); out.push({ pts: cur, closed: false, smooth: s.smooth }); cur = [] } else cur = [[x0, y0]]
       on = !on
       idx = (idx + 1) % pattern.length
       remaining = pattern[idx]!
     }
     remaining -= len
-    if (on) cur.push([x1, y1])
+    if (on) cur.push(pts[i]!) // (the flattened point itself: whether it is a corner of the path rides on its identity)
   }
-  if (on && cur.length > 1) out.push({ pts: cur, closed: false })
+  if (on && cur.length > 1) out.push({ pts: cur, closed: false, smooth: s.smooth })
   return out
 }
 
@@ -103,6 +114,27 @@ function disk(cx: number, cy: number, r: number): Pt[] {
   const p: Pt[] = []
   for (let i = 0; i < n; i++) p.push([cx + r * Math.cos((i * 2 * Math.PI) / n), cy + r * Math.sin((i * 2 * Math.PI) / n)])
   return p
+}
+
+/** cos of the largest turn between two chords of a curve whose join is the wedge of the outer side alone (about 29 degrees). */
+const SLIGHT_TURN = 0.875
+
+/** The pie slice of radius `half` around (x, y) between the outer normals of two chords turning by `cross`'s sign: a round join. */
+function wedge(x: number, y: number, half: number, d0: Pt, d1: Pt, cross: number): Pt[] {
+  const sg = cross > 0 ? -1 : 1
+  const a0 = Math.atan2(sg * d0[0], sg * -d0[1])
+  let sweep = Math.atan2(sg * d1[0], sg * -d1[1]) - a0
+  // the shorter way round
+  if (sweep > Math.PI) sweep -= 2 * Math.PI
+  else if (sweep < -Math.PI) sweep += 2 * Math.PI
+  const step = 2 * Math.acos(1 - Math.min(0.5, TOL / Math.max(half, TOL)))
+  const k = Math.max(1, Math.ceil(Math.abs(sweep) / step))
+  const poly: Pt[] = [[x, y]]
+  for (let i = 0; i <= k; i++) {
+    const t = a0 + (sweep * i) / k
+    poly.push([x + half * Math.cos(t), y + half * Math.sin(t)])
+  }
+  return orient(poly)
 }
 
 /** The polygons (all positively oriented, so the non-zero rule unions them) of a stroked polyline. */
@@ -164,6 +196,13 @@ function outline(s: Piece, half: number, cap: string, join: string, miterLimit: 
     const cross = d0[0] * d1[1] - d0[1] * d1[0]
     const dot = d0[0] * d1[0] + d0[1] * d1[1]
     if (Math.abs(cross) < 1e-12 && dot > 0) continue // straight on
+    if (s.smooth.has(pts[vi]!)) {
+      // a vertex the flattening made inside a curve is not the path's: the offset of a smooth curve is round there, whatever the pen's
+      // join. Only the wedge between the two chords' outer normals is not covered by the chords' own strips while the turn is slight;
+      // a tight turn needs the whole disk, whose inner side the short chords leave open
+      out.push(dot > SLIGHT_TURN ? wedge(vx, vy, half, d0, d1, cross) : disk(vx, vy, half))
+      continue
+    }
     if (join === 'round') { out.push(disk(vx, vy, half)); continue }
     // the outer side of the turn: left of d0 when the path turns right (y down), and the reverse
     const sgn = cross > 0 ? -1 : 1
@@ -196,9 +235,10 @@ export function strokePolygons(subs: Sub[], pen: Pen): Pt[][] {
   const polys: Pt[][] = []
   const dashing = pen.dash.length > 0 && pen.dash.some((d) => d > 0)
   for (const s of subs) {
-    const pts = flatten(s)
+    const smooth: Smooth = new WeakSet()
+    const pts = flatten(s, smooth)
     if (pts.length < 2 && !s.closed) continue // (a lone moveTo draws nothing)
-    const piece: Piece = { pts, closed: s.closed }
+    const piece: Piece = { pts, closed: s.closed, smooth }
     const pieces = dashing ? dashed(piece, pen.dash, pen.dashOffset) : [piece]
     for (const p of pieces) outline(p, pen.half, pen.cap, pen.join, pen.miterLimit, polys)
   }
