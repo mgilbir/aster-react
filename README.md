@@ -21,7 +21,7 @@ npm i @aster-charts/vl                      # only to compile Vega-Lite yourself
 ```
 
 `@aster-charts/react` depends on `@aster-charts/core` and `@aster-charts/vl` itself, so a React app needs only the first line. Install `@aster-charts/core`
-as well when the app imports it directly (for example `@aster-charts/core/dom` or `renderSpec`). Vega-Lite in a React app is opt-in with
+as well when the app imports it directly (for example `@aster-charts/core/dom` or `renderSpec`), at the exact version `@aster-charts/react` pins (the three packages release in lockstep; a second copy of core would register add-ons where `<Chart>` does not read them, see [docs/RELEASE.md](docs/RELEASE.md#why-the-three-versions-are-pinned-to-each-other-exactly-lockstep)). Vega-Lite in a React app is opt-in with
 `import '@aster-charts/react/vl'`. `react-dom` is not a declared peer of `@aster-charts/react`; a browser app mounts with it, and server
 rendering uses `react-dom/server`.
 
