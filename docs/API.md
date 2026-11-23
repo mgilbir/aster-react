@@ -526,8 +526,8 @@ entry, the axis or legend datum for a guide's own group, domain and title.
 Binds every `signal.on` entry with vega's event-stream semantics: selector strings (`[mousedown, mouseup] > mousemove`,
 `@name:click`, `symbol:click`, `window:keydown`, `click[event.shiftKey]{100}`, `mousedown!`), object-form `events`, arrays,
 `{signal}` sources, `between`, filters, throttle, debounce, `consume` and `force`. `event` is a read-only facade of the event
-(the fields in `EVENT_FACADE_FIELDS`, copied when it is delivered, with `item`, `vega` and `dataflow` as vega extends it), so
-`event.deltaY`, `event.shiftKey`, `x()`, `y()`, `item()` and `group()` behave as in vega, and nothing of the page (no target
+(the fields in `EVENT_FACADE_FIELDS`, read off the event when an expression reads them, with `item`, `vega` and `dataflow` as vega
+extends it), so `event.deltaY`, `event.shiftKey`, `x()`, `y()`, `item()` and `group()` behave as in vega, and nothing of the page (no target
 node, no `view`) is reachable: see [LIMITS.md](LIMITS.md#interactive-charts-and-untrusted-specs-the-threat-model-of-the-event-loop).
 `datum` is `event.item.datum`. A handler runs only when its stream matched; a signal's `update` re-runs only when a signal
 it reads changed. It returns `{ detach(), release(), setSignal(name, value, { force }?) }` (`setSignal` is vega's

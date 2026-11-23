@@ -1007,10 +1007,12 @@ function bindSignalEventsDefs(
    * pointerout of the item it leaves and the pointerover of the one it enters), each time about its own item: vega extends
    * it again each time.
    */
-  const extendedEvents = new WeakMap<object, PickedItem | null | undefined>()
+  const extendedEvents = new WeakMap<object, { given: PickedItem | null | undefined; facade?: object }>()
   const extend = (e: ExtEvent, withItem: boolean, given?: PickedItem | null): ExtEvent => {
-    if (extendedEvents.has(e) && extendedEvents.get(e) === given) return e
-    extendedEvents.set(e, given)
+    const was = extendedEvents.get(e)
+    if (was !== undefined && was.given === given) return e
+    // (extended again, about another item: the facade is made anew when an expression first asks for it)
+    extendedEvents.set(e, { given })
     const point = pointOf(e)
     const picked = withItem ? (given !== undefined ? given : resolveItem(e)) : undefined
     // (vega hands its handlers the renderer's answer as it is: a canvas that picked nothing says `null`, an svg element without
@@ -1040,16 +1042,24 @@ function bindSignalEventsDefs(
       }
       return p
     }
-    const vega = Object.freeze({ view: () => viewFacade, item: () => item || {}, group, xy, x: (it?: unknown) => xy(it)[0], y: (it?: unknown) => xy(it)[1] })
+    const vega = { view: () => viewFacade, item: () => item || {}, group, xy, x: (it?: unknown) => xy(it)[0], y: (it?: unknown) => xy(it)[1] }
     defineExt(e, 'dataflow', viewFacade)
     defineExt(e, 'item', item)
     defineExt(e, 'vega', vega)
-    facades.set(e, eventFacade(e, item, vega, viewFacade))
     return e
   }
-  /** What an expression sees of a delivered event (`eventFacade`); one made with the extension above. */
+  /**
+   * What an expression sees of a delivered event (`eventFacade`), with the extension above when the event has it; made when an
+   * expression first asks for it, so a delivery no handler reads the event of pays nothing for it.
+   */
   const facades = new WeakMap<object, object>()
-  const facadeOf = (e: ExtEvent): object => facades.get(e) ?? eventFacade(e, undefined, undefined, viewFacade)
+  const facadeOf = (e: ExtEvent): object => {
+    const ext = extendedEvents.get(e)
+    if (ext !== undefined) return (ext.facade ??= eventFacade(e, (e as { item?: unknown }).item, (e as { vega?: object }).vega, viewFacade))
+    let f = facades.get(e)
+    if (f === undefined) facades.set(e, (f = eventFacade(e, undefined, undefined, viewFacade)))
+    return f
+  }
 
   // The view's events, as the renderer hands them over (the SVG's by default: each about the item under its point).
   const viewEvents = (opts.events ?? domViewEvents(el, opts.pick != null)).connect({
@@ -1564,39 +1574,73 @@ export const EVENT_FACADE_FIELDS: readonly string[] = Object.freeze([
 const TOUCH_FIELDS = ['identifier', 'clientX', 'clientY', 'pageX', 'pageY', 'screenX', 'screenY', 'radiusX', 'radiusY', 'rotationAngle', 'force']
 const TOUCH_LISTS = ['touches', 'changedTouches', 'targetTouches']
 
-/** The primitive values of `fields` on `src`, on an object with no prototype. */
-function copyFields(src: object, fields: readonly string[]): Record<string, unknown> {
-  const out = Object.create(null) as Record<string, unknown>
-  for (const f of fields) {
-    let v: unknown
-    try { v = (src as Record<string, unknown>)[f] } catch { continue }
-    if (typeof v === 'number' || typeof v === 'string' || typeof v === 'boolean') out[f] = v
-  }
-  return out
-}
+/** The native event behind a facade (a symbol key: an expression's member read coerces its key to a string, it cannot name it). */
+const NATIVE: unique symbol = Symbol('native event')
+/** The touch lists of a facade, copied when first read. */
+const TOUCH_COPIES = new WeakMap<object, Map<string, readonly object[] | undefined>>()
+const primitive = (v: unknown): unknown => (typeof v === 'number' || typeof v === 'string' || typeof v === 'boolean' ? v : undefined)
 
 /**
- * The event an expression sees: a frozen object with no prototype holding the fields above as they were when the event was
- * delivered, its touches as frozen copies, and the extension vega-view gives it (`item`: the scenegraph item facade, `vega`: the
- * event functions, `dataflow`: the view facade). Expressions run in the sandbox of expr-interpreter.ts and cannot call anything they
- * read, so what they can reach is exactly this graph: the test that enumerates it checks that nothing in it belongs to the page.
+ * What every facade shares: a frozen object with no prototype whose getters read the fields above off the native event when an
+ * expression reads them (vega's expressions read the event itself, so a type queued behind another sees `vegaType` as the event
+ * was handed over last, canvas-events.ts), answering only a number, a string or a boolean; the touches as frozen copies.
+ * Reading them when asked, rather than copying them all when the event is delivered, keeps a delivery from paying for the fields
+ * no handler reads.
+ */
+const FACADE_PROTO: object = (() => {
+  const proto = Object.create(null) as object
+  const nativeOf = (self: unknown): Record<string, unknown> | undefined => (self as { [NATIVE]?: Record<string, unknown> } | null)?.[NATIVE]
+  for (const f of EVENT_FACADE_FIELDS) {
+    Object.defineProperty(proto, f, {
+      enumerable: true,
+      get(this: unknown) {
+        const e = nativeOf(this)
+        if (e === undefined) return undefined
+        try { return primitive(e[f]) } catch { return undefined }
+      },
+    })
+  }
+  for (const list of TOUCH_LISTS) {
+    Object.defineProperty(proto, list, {
+      enumerable: true,
+      get(this: object) {
+        const e = nativeOf(this)
+        if (e === undefined) return undefined
+        let memo = TOUCH_COPIES.get(this)
+        if (memo === undefined) TOUCH_COPIES.set(this, (memo = new Map()))
+        if (memo.has(list)) return memo.get(list)
+        let copies: readonly object[] | undefined
+        const touches = e[list] as ArrayLike<object> | undefined
+        if (touches != null && typeof touches.length === 'number') {
+          const out: object[] = []
+          for (let i = 0; i < touches.length; i++) {
+            const t = Object.create(null) as Record<string, unknown>
+            for (const k of TOUCH_FIELDS) {
+              let v: unknown
+              try { v = (touches[i] as Record<string, unknown>)[k] } catch { continue }
+              if (primitive(v) !== undefined) t[k] = v
+            }
+            out.push(Object.freeze(t))
+          }
+          copies = Object.freeze(out)
+        }
+        memo.set(list, copies)
+        return copies
+      },
+    })
+  }
+  return Object.freeze(proto)
+})()
+
+/**
+ * The event an expression sees: a frozen object over FACADE_PROTO holding the native event under a symbol, and the extension
+ * vega-view gives it (`item`: the scenegraph item facade, `vega`: the event functions, `dataflow`: the view facade). Expressions
+ * run in the sandbox of expr-interpreter.ts and cannot call anything they read, so what they can reach is exactly this graph: the
+ * test that enumerates it checks that nothing in it belongs to the page.
  */
 function eventFacade(e: object, item: unknown, vega: object | undefined, dataflow: object): object {
-  const out = copyFields(e, EVENT_FACADE_FIELDS)
-  // `vegaType` is read when the expression runs, as vega's expressions read it off the event: one native event handed over as
-  // several types (a canvas's pointermove is also a mousemove) is extended once, and a queued type's run reads the type the
-  // event was handed over as last (canvas-events.ts)
-  Object.defineProperty(out, 'vegaType', { enumerable: true, get: () => {
-    const v = (e as { vegaType?: unknown }).vegaType
-    return typeof v === 'string' ? v : undefined
-  } })
-  for (const list of TOUCH_LISTS) {
-    const touches = (e as Record<string, unknown>)[list] as ArrayLike<object> | undefined
-    if (touches == null || typeof touches.length !== 'number') continue
-    const copies: object[] = []
-    for (let i = 0; i < touches.length; i++) copies.push(Object.freeze(copyFields(touches[i]!, TOUCH_FIELDS)))
-    out[list] = Object.freeze(copies)
-  }
+  const out = Object.create(FACADE_PROTO) as Record<PropertyKey, unknown>
+  out[NATIVE] = e
   if (item !== undefined) out.item = item
   if (vega !== undefined) out.vega = vega
   out.dataflow = dataflow
