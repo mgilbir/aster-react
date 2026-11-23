@@ -19,7 +19,12 @@
  * guide reading signals of its own (its labels' or its text's opacity, an axis's tick count, which moves what legends and titles are
  * placed against; see `withGuideProbes`), so a guide kept from the evaluation before is checked too.
  *
- * Run: pnpm conformance:diff
+ * The verdict is runGate's (scripts/lib/run-gate.mjs): the counters are what was COMPARED (a spec skipped because the mutated
+ * rows made it throw is counted nowhere): `changesets` (specs whose changeset render was compared with a full re-derive),
+ * `row-specs`, `signal-steps` and `guide-steps`; each has a floor on a full run (today's numbers, they only ratchet up).
+ * `--plant-difference` adds a stray mark to the incremental render of every changeset.
+ *
+ * Run after `pnpm build`: pnpm conformance:diff
  */
 import { readdirSync, readFileSync } from 'node:fs'
 import { join, dirname } from 'node:path'
@@ -31,9 +36,11 @@ import { compileChart, evaluateChart, renderSceneToSvg } from '@aster-charts/cor
 import { createChartSession } from '@aster-charts/core/dom'
 import { canonicalizeSvg } from './normalize.js'
 import { signalChangesMatch, withGuideProbes } from './diff-signals.js'
+import { plantSvg } from './gate-plant.js'
 import { cli } from '../../../scripts/lib/cli.mjs'
+import { GATE_FLAGS, runGate, type Gate } from '../../../scripts/lib/run-gate.mjs'
 
-cli({ url: import.meta.url })
+cli({ url: import.meta.url, flags: GATE_FLAGS })
 
 const THIS_DIR = dirname(fileURLToPath(import.meta.url))
 const CORPUS_DIR = join(THIS_DIR, '..', 'corpus')
@@ -155,7 +162,7 @@ function rowChangesMatch(spec: Record<string, unknown>, name: string, values: Ro
   return true
 }
 
-async function main(): Promise<void> {
+async function main(gate: Gate): Promise<void> {
   const rand = mulberry32(0xBEAD)
   let ran = 0
   let failed = 0
@@ -186,7 +193,11 @@ async function main(): Promise<void> {
       signalSpecs++
       signalSteps += signalsMatch.compared
       signalSkipped += signalsMatch.skipped
-      if (signalsMatch.mismatch !== undefined) signalFailures.push(`${f} (${signalsMatch.mismatch})`)
+      gate.count('signal-steps', signalsMatch.compared)
+      if (signalsMatch.mismatch !== undefined) {
+        signalFailures.push(`${f} (${signalsMatch.mismatch})`)
+        gate.differ(`${f} signals`, signalsMatch.mismatch, 'signal-specs')
+      } else gate.agree(`${f} signals`, 'signal-specs')
     }
     // the same with every guide reading signals of its own, which the steps write too (see withGuideProbes)
     const probed = withGuideProbes(spec)
@@ -195,7 +206,11 @@ async function main(): Promise<void> {
       guideSpecs++
       guideSteps += guidesMatch.compared
       guideSkipped += guidesMatch.skipped
-      if (guidesMatch.mismatch !== undefined) signalFailures.push(`${f} with guide probes (${guidesMatch.mismatch})`)
+      gate.count('guide-steps', guidesMatch.compared)
+      if (guidesMatch.mismatch !== undefined) {
+        signalFailures.push(`${f} with guide probes (${guidesMatch.mismatch})`)
+        gate.differ(`${f} guides`, guidesMatch.mismatch, 'guide-specs')
+      } else gate.agree(`${f} guides`, 'guide-specs')
     }
     if (!dataset?.name || !dataset.values) continue
     const name = dataset.name
@@ -206,7 +221,10 @@ async function main(): Promise<void> {
     if (rowsMatch === null) rowSkipped++
     else {
       rowRan++
-      if (rowsMatch !== true) rowFailures.push(`${f} (${rowsMatch})`)
+      if (rowsMatch !== true) {
+        rowFailures.push(`${f} (${rowsMatch})`)
+        gate.differ(`${f} rows`, rowsMatch, 'row-specs')
+      } else gate.agree(`${f} rows`, 'row-specs')
     }
     const field = firstNumericField(values[0]!, keys)
     if (field == null) continue
@@ -228,7 +246,8 @@ async function main(): Promise<void> {
     try {
       const chart = compileChart(spec as never)
       evaluateChart(chart, { data: { [name]: values } })
-      inc = canonicalizeSvg(renderSceneToSvg(evaluateChart(chart, { data: { [name]: next }, dataChanges: { [name]: changed } })))
+      const incSvg = renderSceneToSvg(evaluateChart(chart, { data: { [name]: next }, dataChanges: { [name]: changed } }))
+      inc = canonicalizeSvg(gate.plant ? plantSvg(incSvg) : incSvg)
       full = canonicalizeSvg(renderSceneToSvg(evaluateChart(chart, { data: { [name]: next } })))
     } catch {
       // A mutated value can break a layout transform (e.g. pack) independent of
@@ -239,7 +258,8 @@ async function main(): Promise<void> {
     if (inc.root !== full.root || inc.records.join('\u0000') !== full.records.join('\u0000')) {
       failed++
       failures.push(f)
-    }
+      gate.differ(`${f} changeset`, 'the changeset render differs from a full re-derive', 'changesets')
+    } else gate.agree(`${f} changeset`, 'changesets')
   }
   console.log(`[conformance:diff] ${ran} corpus specs with inline values; ${failed} differential mismatches; ${skipped} skipped (the mutated data made the spec throw)`)
   for (const f of failures) console.log(`  ✗ ${f}`)
@@ -247,7 +267,17 @@ async function main(): Promise<void> {
   for (const f of rowFailures) console.log(`  ✗ ${f}`)
   console.log(`[conformance:diff] signal changes: ${signalSpecs} corpus specs, ${signalSteps} steps compared; ${guideSpecs} specs with guide probes, ${guideSteps} steps compared; ${signalFailures.length} mismatches; ${signalSkipped + guideSkipped} steps skipped (both threw)`)
   for (const f of signalFailures) console.log(`  ✗ ${f}`)
-  if (failed > 0 || rowFailures.length > 0 || signalFailures.length > 0) process.exit(1)
 }
 
-main().catch((e) => { console.error(e); process.exit(1) })
+await runGate({
+  name: 'incremental-diff',
+  counters: {
+    changesets: { floor: 1, what: 'specs whose changeset render was compared with a full re-derive' },
+    'row-specs': { floor: 1, what: 'specs whose session row changes were compared with fresh evaluations' },
+    'signal-specs': { floor: 1, what: 'specs taken through signal and store writes' },
+    'signal-steps': { floor: 1, what: 'signal/store steps compared with a fresh evaluation' },
+    'guide-specs': { floor: 1, what: 'specs taken through guide-probe signal writes' },
+    'guide-steps': { floor: 1, what: 'guide-probe steps compared with a fresh evaluation' },
+  },
+  run: main,
+})
