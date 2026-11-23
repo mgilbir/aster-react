@@ -18,6 +18,7 @@ import * as vega from 'vega'
 import * as aster from '../../core/src/shape.ts'
 import { trailPath } from '../../core/src/render.ts'
 import { enc, exact } from './differential-util.mts'
+import { scaled } from './differential-gen.mts'
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -229,7 +230,7 @@ const asterAreaCalls = (s: Spec, cfg: AreaConfig): Call[] => {
 
 // --- the corpus ----------------------------------------------------------------------------------
 
-const SETS = 140
+const SETS = scaled(140)
 const SETS_PER_AREA_CONFIG = 28
 const sets = Array.from({ length: SETS }, (_, i) => pointSet(0x5eed + i * 7919))
 
@@ -314,7 +315,7 @@ describe('generated trail differential (the path writer\'s arcs)', () => {
     const oracleOf = () => (vega as unknown as { pathTrail: () => any }).pathTrail()
       .x((d: TrailItem) => d.x || 0).y((d: TrailItem) => d.y || 0).size((d: TrailItem) => d.size || 1).defined((d: TrailItem) => d.defined !== false)
     let drawn = 0
-    for (let i = 0; i < 1500; i++) {
+    for (let i = 0, n = scaled(1500); i < n; i++) {
       const seed = 0x7a11 + i * 104729
       const items = trailItems(seed)
       const want = exact(() => oracleOf()(items) ?? '')
