@@ -935,7 +935,13 @@ function renderSymbolRuns(items: SceneItem[], ctx: CanvasLike, defs: SceneDefs[]
   let key = ''
   const flush = (): void => {
     if (!run.length) return
-    if (run[0]!.angle || run.some((it) => isGradientPaint(it.fill) || isGradientPaint(it.stroke))) {
+    // (as the renderer since C37: a run is one path only when that paints what one path per item paints -- opaque, unblended,
+    // filled or stroked but not both)
+    const r0 = run[0]!
+    const paints = (v: unknown): boolean => v != null && v !== false && v !== '' && v !== 'transparent'
+    const oneLike = (r0.opacity == null || r0.opacity === 1) && (r0.fillOpacity == null || r0.fillOpacity === 1)
+      && (r0.strokeOpacity == null || r0.strokeOpacity === 1) && r0.blend == null && !(paints(r0.fill) && paints(r0.stroke))
+    if (r0.angle || !oneLike || run.some((it) => isGradientPaint(it.fill) || isGradientPaint(it.stroke))) {
       for (const it of run) {
         const x = it.x || 0
         const y = it.y || 0

@@ -136,8 +136,10 @@ export function createCanvasEvents(canvas: HostCanvas): CanvasEvents {
   const LAST: Record<string, string> = { pointermove: 'mousemove', dragover: 'dragover', pointerout: 'mouseout', DOMMouseScroll: 'mousewheel' }
   const listen = (type: string): void => {
     if (released || listening.has(type)) return
-    const f = native[type] ?? ((e: Event): void => fire(type, e))
-    const last = LAST[type] ?? type
+    // (own properties only: an event type named like a member of `Object.prototype` -- `toString`, `constructor` -- is a type
+    // like any other, handed over as it comes, never that member taken for its handler)
+    const f = Object.hasOwn(native, type) ? native[type]! : (e: Event): void => fire(type, e)
+    const last = Object.hasOwn(LAST, type) ? LAST[type]! : type
     const listener = (e: Event): void => {
       const outer = handing
       handing = { reached: false, last }
