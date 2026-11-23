@@ -23,6 +23,7 @@ import { activeMeter, withLimits, ceiling, checkRowCount, checkChartRegex, meter
 import { getTextMetricsProvider, withTextMetricsProvider } from './text-metrics.js'
 import { AsterUrlError } from './url-policy.js'
 import { SpecParseError } from './parse-error.js'
+import { follow, node as signalNode, Propagation, type SignalNode } from './signal-propagation.js'
 import { consoleLogger, type Logger } from './logger.js'
 import { buildScale, sameSettings, scaleOfSettings, scaleSettings, scaleTicks, type Scale, type Settings, CONTINUOUS_TYPES, type ScaleContext } from './scales.js'
 import { sortReadsCategoriesOnly } from './scale-domain.js'
@@ -1530,75 +1531,39 @@ function signalsInDataflowOrder(chart: CompiledChart): CompiledSignalDef[] {
   let out = SIGNAL_ORDERS.get(chart)
   if (out instanceof SpecParseError) throw out
   if (out) return out
-  const cycle = signalCycleOf(defs)
-  if (cycle) {
-    SIGNAL_ORDERS.set(chart, cycle)
-    throw cycle
-  }
-  const index = new Map(defs.map((d, i) => [d.name, i] as const))
-  const reads = defs.map((d, i) => {
-    const text = `${d.update ?? ''} ${d.init ?? ''}`
-    const deps = new Set<number>()
-    const names = new Set<string>()
-    namesIn(text, names)
-    for (const m of names) {
-      const j = index.get(m)
-      if (j !== undefined && j !== i) deps.add(j)
-    }
-    return deps
-  })
-  const placed = new Set<number>()
-  out = []
-  while (out.length < defs.length) {
-    // the first declared signal whose reads are all placed; in a cycle, the first declared one left
-    let pick = -1
-    for (let i = 0; i < defs.length && pick < 0; i++) {
-      if (!placed.has(i) && [...reads[i]!].every((j) => placed.has(j))) pick = i
-    }
-    if (pick < 0) pick = defs.findIndex((_, i) => !placed.has(i))
-    placed.add(pick)
-    out.push(defs[pick]!)
-  }
-  SIGNAL_ORDERS.set(chart, out)
-  return out
-}
-
-/**
- * vega-dataflow refuses a graph whose operators read each other in a circle ("Cycle detected in dataflow graph.", thrown when the
- * view is made, before anything runs). Among a view's signals, a reactive read is an edge: an `update` or `init` that names another
- * signal, unless the reader is `react: false` (its parameters do not connect it). A signal that reads itself is no cycle (vega
- * evaluates such an update once, with the value it had).
- */
-function signalCycleOf(defs: readonly CompiledSignalDef[]): SpecParseError | undefined {
+  // vega-dataflow's ranks: each signal's operator is added in declaration order, then connected to what its update / init reads
+  // (`connect`): one that reads an operator ranked after it is ranked anew past everything, and so is, depth first, every operator
+  // that reacts to it. A `react: false` reader is ranked after what it reads but does not react to it (no edge to walk), and a
+  // signal reading itself is no edge. A walk that comes back to the operator being ranked is a cycle, which vega refuses.
   const index = new Map<string, number>()
   defs.forEach((d, i) => { if (!index.has(d.name)) index.set(d.name, i) })
+  const graph = new Propagation(() => {})
+  const nodes = defs.map((d) => graph.add(signalNode(d.name)))
   const reads = defs.map((d, i) => {
-    const out: number[] = []
-    if (d.react === false || index.get(d.name) !== i) return out
+    const out: SignalNode[] = []
+    if (index.get(d.name) !== i) return out
     for (const text of [d.update, d.init]) {
       if (typeof text !== 'string') continue
       for (const id of identifiersIn(text)) {
         const j = index.get(id)
-        if (j !== undefined && j !== i && !out.includes(j)) out.push(j)
+        if (j !== undefined && j !== i && !out.includes(nodes[j]!)) out.push(nodes[j]!)
       }
     }
     return out
   })
-  // (an iterative depth-first walk: 0 unvisited, 1 on the path, 2 done)
-  const state = new Uint8Array(defs.length)
-  for (let start = 0; start < defs.length; start++) {
-    if (state[start] !== 0) continue
-    const stack: Array<[number, number]> = [[start, 0]]
-    state[start] = 1
-    while (stack.length) {
-      const top = stack[stack.length - 1]!
-      const next = reads[top[0]]![top[1]++]
-      if (next === undefined) { state[top[0]] = 2; stack.pop(); continue }
-      if (state[next] === 1) return new SpecParseError('Cycle detected in dataflow graph.')
-      if (state[next] === 0) { state[next] = 1; stack.push([next, 0]) }
-    }
+  try {
+    defs.forEach((d, i) => {
+      if (d.react !== false) for (const src of reads[i]!) follow(src, nodes[i]!)
+      graph.connect(nodes[i]!, reads[i]!)
+    })
+  } catch (e) {
+    const refused = new SpecParseError((e as Error).message)
+    SIGNAL_ORDERS.set(chart, refused)
+    throw refused
   }
-  return undefined
+  out = defs.map((d, i) => [d, nodes[i]!.order] as const).sort((a, b) => a[1] - b[1]).map(([d]) => d)
+  SIGNAL_ORDERS.set(chart, out)
+  return out
 }
 
 /**
@@ -1726,7 +1691,7 @@ const SIGNAL_READS = new WeakMap<CompiledSignalDef, Map<string, SignalReads | nu
 function signalReadKey(ctx: EvalContext, def: CompiledSignalDef, expr: string, params: Record<string, unknown>): string | null {
   let byExpr = SIGNAL_READS.get(def)
   if (byExpr === undefined) SIGNAL_READS.set(def, (byExpr = new Map()))
-  let reads = byExpr.get(expr)
+  let reads: SignalReads | null | undefined = byExpr.get(expr)
   if (reads === undefined) {
     const text = lexedText(expr)
     reads = UNKEYED_SIGNAL_CALL.test(text) ? null : {
@@ -1738,6 +1703,9 @@ function signalReadKey(ctx: EvalContext, def: CompiledSignalDef, expr: string, p
     byExpr.set(expr, reads)
   }
   if (reads === null) return null
+  // (a `react: false` signal does not react to the signals it reads: once it ran, only the dataflow its reads stand on -- the
+  // datasets and scales the signals it reads read, which settle over the rounds of the evaluation -- runs it again)
+  if (def.react === false) reads = { names: [], ...unreactiveReads(ctx.chart, def) }
   let key = `${expressionRegistryEpoch()}`
   for (const n of reads.names) key += `\u0001${n}=${Object.hasOwn(params, n) ? dependencyKey(params[n]) : '-'}`
   for (const n of reads.data ?? ctx.chart.data.map((d) => d.name)) {
@@ -1747,6 +1715,39 @@ function signalReadKey(ctx: EvalContext, def: CompiledSignalDef, expr: string, p
   if (reads.scales) for (const sc of ctx.chart.scales) key += `\u0003${sc.name}=${scaleIdOf(ctx.scales.get(sc.name))}`
   if (reads.trees) for (const [n, root] of ctx.hierarchies) key += `\u0004${n}=${idOf(root as object)}`
   return key
+}
+
+/** The datasets and scales a `react: false` signal stands on: what its text reads, and what the signals it reads read, transitively. */
+const UNREACTIVE_READS = new WeakMap<CompiledSignalDef, Omit<SignalReads, 'names'>>()
+function unreactiveReads(chart: CompiledChart, def: CompiledSignalDef): Omit<SignalReads, 'names'> {
+  let out = UNREACTIVE_READS.get(def)
+  if (out !== undefined) return out
+  const defs = new Map<string, CompiledSignalDef>()
+  for (const d of chart.signalDefs ?? []) if (!defs.has(d.name)) defs.set(d.name, d)
+  const data = new Set<string>()
+  let allData = false
+  let scales = false
+  let trees = false
+  const seen = new Set<string>()
+  const queue: CompiledSignalDef[] = [def]
+  for (let i = 0; i < queue.length; i++) {
+    const d = queue[i]!
+    if (seen.has(d.name)) continue
+    seen.add(d.name)
+    for (const text of [d.update, d.init]) {
+      if (typeof text !== 'string') continue
+      const lexed = lexedText(text)
+      const ds = datasetsReadIn(text)
+      if (ds === null) allData = true
+      else for (const n of ds) data.add(n)
+      if (SCALE_FN_EXPR.test(lexed)) scales = true
+      if (TREE_FN_EXPR.test(lexed)) trees = true
+      for (const id of identifiersIn(text)) { const next = defs.get(id); if (next !== undefined) queue.push(next) }
+    }
+  }
+  out = { data: allData ? null : [...data].sort(), scales, trees }
+  UNREACTIVE_READS.set(def, out)
+  return out
 }
 
 /**
