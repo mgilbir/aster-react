@@ -970,7 +970,8 @@ async function main(gate: Gate): Promise<void> {
   for (const c of cases) for (const renderer of RENDERERS) {
     runs++
     const [v, a] = [await drive('vega', renderer, c), await drive('aster', renderer, c)]
-    if (gate.plant && !('error' in a)) for (const snap of a.snaps) snap.signals.planted = 'planted'
+    // (--plant-difference: the first signal Aster reports at every step is not the one it computed)
+  if (gate.plant && !('error' in a)) for (const snap of a.snaps) { const k = Object.keys(snap.signals)[0]; if (k !== undefined) snap.signals[k] = `${snap.signals[k]} (planted)` }
     const problems: string[] = []
     const compared = !('error' in v) && !('error' in a)
     if ('error' in v) problems.push(`vega side failed: ${v.error}`)
@@ -985,7 +986,7 @@ async function main(gate: Gate): Promise<void> {
         const vs = v.snaps[i]!
         const as = a.snaps[i]!
         for (const n of new Set([...Object.keys(vs.signals), ...Object.keys(as.signals)])) {
-          if (vs.signals[n] !== as.signals[n]) problems.push(`${label}: signal ${n}: vega=${vs.signals[n]!.slice(0, 160)} aster=${as.signals[n]!.slice(0, 160)}`)
+          if (vs.signals[n] !== as.signals[n]) problems.push(`${label}: signal ${n}: vega=${String(vs.signals[n]).slice(0, 160)} aster=${String(as.signals[n]).slice(0, 160)}`)
         }
         if (vs.scoped !== as.scoped) {
           // name the first scope that has no counterpart
