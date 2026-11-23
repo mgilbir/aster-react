@@ -85,7 +85,6 @@ export {
   buildPulseGraph, diffRows, propagatePulse, rowsEqual, transformNeedsFullRederive, isGroupedTransform,
   type DataPulse, type DatasetPulse, type PulseChangeInput, type PulseGraph, type PulseNode, type PulsePropagation, type PulseRange, type RowDiff,
 } from './pulse.js'
-export { geoRegistry, transformRegistry, dataFormatRegistry, requireTransform, type GeoRegistry, type ContourFeature, type TransformFn, type DataFormatReader } from './registry.js'
 // The event-driven signal loop (`@aster-charts/core/signals`: bindSceneSignals etc.)
 // ships as an opt-in addon like the DOM patcher; hosts using signal.on streams
 // import it explicitly.

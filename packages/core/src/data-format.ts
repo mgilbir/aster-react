@@ -10,14 +10,14 @@ import { currentLocale } from './locale.js'
 import { field, toBoolean, toDate, toNumber, toString, PRIMITIVE_TUPLE } from './util.js'
 
 /** The converter for each column type a `parse` entry can name. */
-export const typeParsers: Record<string, (v: unknown) => unknown> = {
+export const typeParsers: Readonly<Record<string, (v: unknown) => unknown>> = Object.freeze({
   boolean: toBoolean,
   integer: toNumber,
   number: toNumber,
   date: toDate,
   string: toString,
-  unknown: (v) => v,
-}
+  unknown: (v: unknown) => v,
+})
 
 export interface DataFormatSpec {
   type?: string
