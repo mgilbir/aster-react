@@ -98,7 +98,8 @@ export function planModify(
     if (rows.some(predicate)) {
       cs.remp.push(predicate)
     } else {
-      cs.add.push(toggle)
+      // (inserted as `insert` is: a list is its elements, as vega's changeset.insert takes it)
+      for (const t of array(toggle)) cs.add.push(t)
     }
   }
 

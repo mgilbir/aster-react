@@ -85,6 +85,12 @@ const SCENARIOS: Scenario[] = [
     steps: [{ set: { a: true, b: T('', [F('k'), F('n')], ['x', [1, 2]]) } }, { set: { b: T('', [F('k'), F('n')], ['x', [1, 2]]) } }, { set: { b: T('', [F('k'), F('n')], ['x', [1, 3]]) } }],
   },
   {
+    // (vega's toggle inserts as `insert` does: a list is its elements; an equal list already there is removed as one)
+    name: 'toggle with a list of tuples (C401)',
+    call: 'modify("s_store", null, null, b, null)',
+    steps: [{ set: { b: [P1(), P2()] } }, { set: { b: [P3()] } }, { set: { b: [P1(), P2()] } }],
+  },
+  {
     name: 'initial values, then toggle one of them off',
     init: () => [P1(), P2()],
     call: POINT_GLOBAL,
