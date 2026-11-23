@@ -51,12 +51,26 @@ describe(`raster.ts against ${FIXTURES.browser}'s canvas`, () => {
   it('a circle moves in steps of a quarter pixel as it is moved down, as in the browser', () => {
     const circles = SHAPES.filter((s) => s.name.startsWith('circle r=2.5 cy='))
     expect(circles.length).toBe(8)
-    const pattern = (grids: ArrayLike<number>[]): string => grids.map((g, i) => grids.findIndex((h) => h.length === g.length && Array.prototype.every.call(g, (v: number, k: number) => v === h[k])) === i ? 'n' : 'r').join('')
-    const chrome = pattern(circles.map((s) => FIXTURES.alpha[s.name]!))
-    const engine = pattern(circles.map((s) => draw(s)))
+    const same = (g: ArrayLike<number>, h: ArrayLike<number>): boolean => g.length === h.length && Array.prototype.every.call(g, (v: number, k: number) => v === h[k])
+    // for each position, the index of the FIRST grid equal to it: 'a grid repeats an earlier one' is not enough, an engine that
+    // snaps cy = 5.250 to 5.000 instead of up to 5.250's neighbour repeats the same positions with another grid
+    const firstEqual = (grids: ArrayLike<number>[]): number[] => grids.map((g) => grids.findIndex((h) => same(g, h)))
+    const chromeGrids = circles.map((s) => FIXTURES.alpha[s.name]!)
+    const engineGrids = circles.map((s) => draw(s))
+    const chrome = firstEqual(chromeGrids)
+    const engine = firstEqual(engineGrids)
     // the browser draws some of the eight identically (those within a quarter-pixel step): so must the engine, the same ones
-    expect(chrome).toContain('r')
-    expect(engine).toBe(chrome)
+    expect(chrome).toEqual([0, 1, 1, 3, 3, 5, 5, 7])
+    expect(engine).toEqual(chrome)
+    // and the last is the first moved down one whole row (cy = 5.875 snaps to 6.000, cy = 5.000 is 5.000)
+    const [w, h] = [circles[0]!.w, circles[0]!.h]
+    for (const grids of [chromeGrids, engineGrids]) {
+      const first = grids[0]!
+      const last = grids[7]!
+      for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+        expect(last[y * w + x], `row ${y} column ${x}`).toBe(y === 0 ? 0 : first[(y - 1) * w + x])
+      }
+    }
   })
 
   // The generated drawings (curves of every size, arcs of every sweep, transformed circles, every cap and join, dashes) hold the
