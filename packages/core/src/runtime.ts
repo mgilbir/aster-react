@@ -75,6 +75,7 @@ import { part, requestPart } from './engine-parts.js'
 import { guideReading, type GuideKind } from './guide-model.js'
 import { ExpressionFailure, isSignal, isUnencoded, itemAriaOf, propsOf, type GuideStyles, type UserEncode } from './guide-encode.js'
 import { entryReadsItem } from './expr-reads.js'
+import { encodeLogOf, hasNamedSetsIn, keptItems, namedSetsOf, stampEncodeIdent, type EncodeLog } from './encode-handlers.js'
 import { defaultMergedConfig } from './config-defaults.js'
 
 // The legend builder and the grid layout are parts the React shells load on demand (engine-parts.ts): read from their slots when a
@@ -716,6 +717,8 @@ interface EvalContext {
   claimed: WeakSet<object>
   /** Non-signal inputs that invalidate reuse (domainRaw, text metrics). */
   extraFp: string
+  /** The re-encode requests of the signal handlers (`encode: <set>`) the host's signal store holds (encode-handlers.ts). */
+  encodeLog?: EncodeLog
   /** Memo for ctxFpOf; cleared whenever signalParams may have changed. */
   fpMemo?: string
   /** Memo for readsKey, per list of names, over these signal params; cleared with `fpMemo`. */
@@ -940,7 +943,7 @@ function prepareChartCtx(
     ]),
     hierarchies: transformHierarchies, affected: new Set(), incremental: false, ...(txn.engine ? { engine: txn.engine } : {}), deadline, checkDeadline, markItems: new Map(), markContainers: new Map(),
     datasetPulses: new Map(),
-    prev, committed: txn.prev, ...(txn.unchanged ? { unchanged: txn.unchanged } : {}), ...(txn.lastPass ? { earlier: txn.lastPass } : {}), draft: newState(txn.gen), ids: { value: txn.prev?.idCounter ?? 0 }, idStart: txn.prev?.idCounter ?? 0, gen: txn.gen, claimed: txn.claimed, extraFp, dsEpoch: 0, scaleReuse: new Map(), distinctCache: new WeakMap(), defsAsked: { n: 0 },
+    prev, committed: txn.prev, ...(txn.unchanged ? { unchanged: txn.unchanged } : {}), ...(txn.lastPass ? { earlier: txn.lastPass } : {}), draft: newState(txn.gen), ids: { value: txn.prev?.idCounter ?? 0 }, idStart: txn.prev?.idCounter ?? 0, gen: txn.gen, claimed: txn.claimed, extraFp, ...encodeLogEntry(input.signals), dsEpoch: 0, scaleReuse: new Map(), distinctCache: new WeakMap(), defsAsked: { n: 0 },
     domainRaw: input.domainRaw ? new Map(Object.entries(input.domainRaw).map(([k, v]) => [k, v])) : undefined,
     // Image urls are vetted when the host passes a policy, and with the default
     // policy whenever it passes `limits` (limits mean "this spec is untrusted").
@@ -2549,7 +2552,7 @@ function markKeyOf(mark: CompiledMark, ctx: EvalContext, reads: readonly string[
   if (vets) key = `${key}\u0003${ctx.urlPolicy === undefined ? '' : dependencyKey(ctx.urlPolicy)}`
   const deps = markDepsOf(mark, ctx.chart)
   if (!deps.allData) for (const n of deps.exprData) key += `\u0004${n}=${datasetKey(ctx, n)}`
-  return key
+  return key + encodeLogKey(mark, ctx)
 }
 const scaleKeyOf = (s: CompiledScale, ctx: EvalContext): string => readsKey(ctx, scaleReadsOf(s, ctx.chart))
 
@@ -2656,7 +2659,7 @@ function groupMarkKeyOf(mark: CompiledMark, ctx: EvalContext): string {
   if (subtreeOf(mark).vets) key = `${key}\u0003${ctx.urlPolicy === undefined ? '' : dependencyKey(ctx.urlPolicy)}`
   // (the datasets its expressions read by name, by content: a selection's store; see `markKeyOf`)
   if (!deps.allData) for (const n of deps.exprData) key += `\u0004${n}=${datasetKey(ctx, n)}`
-  return key
+  return key + encodeLogKey(mark, ctx)
 }
 
 /**
@@ -5560,7 +5563,9 @@ function evaluateMarkItems(
     const meter = activeMeter()
     if (meter) meter.items(encodeRows.length, `mark ${mark.type} encoding`)
     // (joined primitive tuples are fewer items than rows: the per-row pulse does not apply to them)
-    const pulse = encodeRows !== rows ? undefined : given !== undefined ? given.pulse : reusablePulse(mark, ctx, source, encodeRows.length, prevGroup)
+    // (a mark a signal handler re-encodes, while the host holds requests, is encoded whole: its items before carry what was asked)
+    const reencodes = ctx.encodeLog !== undefined && namedSetsOf(mark).length > 0
+    const pulse = encodeRows !== rows || reencodes ? undefined : given !== undefined ? given.pulse : reusablePulse(mark, ctx, source, encodeRows.length, prevGroup)
     if (pulse) {
       const prevItems = given !== undefined ? given.items : prevGroup!.items as SceneItem[]
       const gen = ctx.gen
@@ -5630,7 +5635,7 @@ function evaluateMarkItems(
     } else {
       const gen = ctx.gen
       // (a top-level mark over the rows its items were made from, only some of whose channels read what changed: see `reencodeChannels`)
-      const reencoded = topLevel && encodeRows === rows && !meter ? reencodeChannels(mark, ctx, prevGroup, source, rows, update) : null
+      const reencoded = topLevel && encodeRows === rows && !meter && !reencodes ? reencodeChannels(mark, ctx, prevGroup, source, rows, update) : null
       if (reencoded !== null) {
         items = reencoded
       } else if (meter) {
@@ -5671,6 +5676,9 @@ function evaluateMarkItems(
     res.__gen = ctx.gen
     items = [res]
   }
+
+  // a signal handler's `encode: <set>`: the items it asked for, re-encoded as vega's Encode left them (encode-handlers.ts)
+  if (namedSetsOf(mark).length > 0 && !ctx.encodeAborted) items = applyEncodeRequests(mark, items, ctx)
 
   // vega-parser mark.js: a mark's `transform`s run right after the encode, on the encoded items: the items are the transforms'
   // tuples (`datum.x` is what the encode gave the item, `datum.datum` its data), and what they compute is written onto the items,
@@ -5838,6 +5846,84 @@ function evaluateMarkItems(
   if (pendingUndo && prevGroup) supersedeItems(prevGroup, group, pendingUndo)
   if (rowOrder !== items) ROW_ITEMS.set(group, rowOrder)
   return group
+}
+
+/** `ctx.encodeLog` from the host's signal store (a symbol key: see encode-handlers.ts). */
+function encodeLogEntry(signals: unknown): { encodeLog?: EncodeLog } {
+  const log = encodeLogOf(signals)
+  return log !== undefined ? { encodeLog: log } : {}
+}
+
+/** A mark (or group subtree) with encode sets a handler can name is made again whenever the requests change. */
+function encodeLogKey(mark: CompiledMark, ctx: EvalContext): string {
+  return ctx.encodeLog !== undefined && hasNamedSetsIn(mark) ? `\u0006${ctx.encodeLog.rev}` : ''
+}
+
+const MARK_UIDS = new WeakMap<CompiledMark, number>()
+let markUid = 0
+
+/**
+ * The items of a mark with named encode sets, named for the event loop (`<mark>|<group instance>|<row>`), with the requests of the
+ * host's log applied as vega's Encode applies them (vega-functions `encode`): a request is evaluated once, at the first evaluation
+ * that sees it, with the set it names; what it writes is kept on the item. A channel the mark's own `update` writes is taken back
+ * by the next run of `update` on the item, which vega makes when a parameter of the mark's encode sets (a signal, a scale) or the
+ * item's datum changed (`print` below); a channel only named sets write stays. The items the requests touch are new objects.
+ */
+function applyEncodeRequests(mark: CompiledMark, items: SceneItem[], ctx: EvalContext): SceneItem[] {
+  let uid = MARK_UIDS.get(mark)
+  if (uid === undefined) MARK_UIDS.set(mark, (uid = ++markUid))
+  const prefix = `${uid}|${ctx.scope.path.join('.')}|`
+  for (let i = 0; i < items.length; i++) stampEncodeIdent(items[i]!, prefix + i)
+  const log = ctx.encodeLog
+  if (log === undefined) return items
+  const kept = keptItems(log.session)
+  const mine = log.requests.filter((r) => r.ident.startsWith(prefix))
+  let touched = false
+  for (const id of kept.keys()) if (id.startsWith(prefix)) { touched = true; break }
+  if (!mine.length && !touched) return items
+  // what a run of `update` follows: the values of the signals and scales the mark's encode sets read, and the item's datum
+  const scales = markScaleNames(mark, ctx.chart).map((n) => {
+    const sc = ctx.scales.get(n) as { domain?: () => unknown; range?: () => unknown } | undefined
+    try { return sc ? JSON.stringify([n, sc.domain?.(), sc.range?.()]) : n } catch { return n }
+  })
+  const params = `${readsKey(ctx, namesMentioned(mark, ctx.chart))}\u0007${scales.join('\u0007')}`
+  const print = (item: SceneItem): string => {
+    try { return `${params}\u0007${JSON.stringify((item as { datum?: unknown }).datum)}` } catch { return `${params}\u0007?` }
+  }
+  const owned = new Set(mark.updateChannels ?? [])
+  const out = items.slice()
+  for (const r of mine.slice().sort((a, b) => a.seq - b.seq)) {
+    const at = Number(r.ident.slice(prefix.length))
+    const item = items[at]
+    let k = kept.get(r.ident)
+    if (k !== undefined && k.done >= r.seq) continue
+    if (k === undefined) kept.set(r.ident, (k = { done: r.seq, channels: new Map() }))
+    k.done = r.seq
+    const set = mark.encode?.[r.set]
+    if (item === undefined || set == null || typeof set !== 'object') continue
+    const res = resolveEncodeSet(set, (item as { datum?: Row }).datum ?? {}, ctx, mark.type, mark) as unknown as Record<string, unknown>
+    const p = print(item)
+    for (const c of Object.keys(set)) if (Object.hasOwn(res, c)) k.channels.set(c, { value: res[c], print: p })
+  }
+  for (const [id, k] of kept) {
+    if (!id.startsWith(prefix)) continue
+    const at = Number(id.slice(prefix.length))
+    const item = items[at]
+    if (item === undefined) continue
+    const p = print(item)
+    const over: Record<string, unknown> = {}
+    let any = false
+    for (const [c, v] of k.channels) {
+      if (v.print !== p && owned.has(c)) { k.channels.delete(c); continue }
+      over[c] = v.value
+      any = true
+    }
+    if (!any) continue
+    const next = { ...item, ...over } as SceneItem
+    stampEncodeIdent(next, id)
+    out[at] = next
+  }
+  return out
 }
 
 /** The items of a sorted leaf mark in the order of its rows (the group's `items` are in the sort's order). */

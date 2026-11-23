@@ -611,6 +611,8 @@ export interface CompiledMark {
   key?: string
   sort?: SortSpec
   encode?: Record<string, Record<string, EncodeValue | EncodeValue[]>>
+  /** The channels the spec's own `update` set writes, for a mark with encode sets a signal handler can name (`hover`, ...). */
+  updateChannels?: readonly string[]
   transform?: CompiledTransform[]
   /** Group mark title (for axis/row titles). */
   title?: unknown

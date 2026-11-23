@@ -71,6 +71,11 @@ export interface ExpressionRuntime {
    */
   modify?: (name: string, insert: unknown, remove: unknown, toggle: unknown, modify: unknown, values: unknown) => number
   /**
+   * The `encode(item, set, retval)` expression function (vega-functions): re-encode the scenegraph item with the named encode set
+   * of its mark, and answer `retval`, else the item. Only the signal event loop supplies it (encode-handlers.ts).
+   */
+  encode?: (item: unknown, set: string) => void
+  /**
    * The rows dataset `name` publishes for the input rows `raw`: its transform pipeline run over them. The
    * event loop shows a dataset it modified through this, before the next evaluation computes it for real.
    */
@@ -438,12 +443,11 @@ export function expressionFunctionNames(): string[] {
 }
 
 /**
- * The functions vega's parser recognises that Aster does not implement (logging, the lasso tools, `screen`, mark re-encoding,
- * `flush`). A spec that calls one is not refused when it is compiled -- vega accepts it -- but when the call is
- * evaluated, as before. `expression-register.test.ts` pins this list against the vega the conformance suite runs.
+ * The functions vega's parser recognises that Aster does not implement (logging, the lasso tools, `screen`, `flush`). A spec
+ * that calls one is not refused when it is compiled -- vega accepts it -- but when the call is evaluated, as before. `expression-register.test.ts` pins this list against the vega the conformance suite runs.
  */
 export const UNWRITTEN_FUNCTIONS: readonly string[] = Object.freeze([
-  'debug', 'info', 'warn', 'encode', 'flush', 'intersectLasso', 'lassoAppend', 'lassoPath', 'screen',
+  'debug', 'info', 'warn', 'flush', 'intersectLasso', 'lassoAppend', 'lassoPath', 'screen',
 ])
 /** The internal scale calls vega's own encode entries are written with (`_scale("x", v)`); the only names with an underscore it knows. */
 const SCALE_CALLS: ReadonlySet<string> = new Set(['_scale', '_bandwidth', '_range'])
@@ -602,6 +606,12 @@ function builtinTable(runtime: ExpressionRuntime): Record<string, unknown> {
     // dataset edits happen inside the signal event loop, which supplies runtime.modify; elsewhere there is nothing to edit
     modify: (name: unknown, insert?: unknown, remove?: unknown, toggle?: unknown, modifyTuple?: unknown, values?: unknown) =>
       runtime.modify ? runtime.modify(String(name), insert, remove, toggle, modifyTuple, values) : 0,
+    // a mark's item re-encoded with one of its sets: only while the event loop handles an event (a handler's `encode: <set>`)
+    encode: (item: unknown, set: unknown, retval?: unknown) => {
+      if (!runtime.encode) throw new Error('encode() re-encodes an item only while an event is being handled')
+      if (item) runtime.encode(item, String(set))
+      return retval !== undefined ? retval : item
+    },
     // vega-selections
     // (vega-selections' functions are a part the React shells load on demand: engine-parts.ts)
     vlSelectionTest: (name: unknown, datum: unknown, op?: unknown) => part('selections').selectionTest(runtime.data(String(name)) as never, datum, op, runtime.unitIndexed?.(String(name)) ?? true),
