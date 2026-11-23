@@ -1560,6 +1560,13 @@ function copyFields(src: object, fields: readonly string[]): Record<string, unkn
  */
 function eventFacade(e: object, item: unknown, vega: object | undefined, dataflow: object): object {
   const out = copyFields(e, EVENT_FACADE_FIELDS)
+  // `vegaType` is read when the expression runs, as vega's expressions read it off the event: one native event handed over as
+  // several types (a canvas's pointermove is also a mousemove) is extended once, and a queued type's run reads the type the
+  // event was handed over as last (canvas-events.ts)
+  Object.defineProperty(out, 'vegaType', { enumerable: true, get: () => {
+    const v = (e as { vegaType?: unknown }).vegaType
+    return typeof v === 'string' ? v : undefined
+  } })
   for (const list of TOUCH_LISTS) {
     const touches = (e as Record<string, unknown>)[list] as ArrayLike<object> | undefined
     if (touches == null || typeof touches.length !== 'number') continue

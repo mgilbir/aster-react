@@ -88,6 +88,16 @@ interface Case {
   expectError?: boolean
   /** The scoped signals (group items' own, in document order) must differ from their initial values on the vega side. */
   expectScopedMoved?: boolean
+  /**
+   * The window and CSS-selector sources the host lets Aster's binding listen to (`bindSceneSignals`' `eventSources`; default
+   * `DEFAULT_EVENT_SOURCES`). vega has no such policy: a host that permits a source must get exactly vega's behaviour.
+   */
+  eventSources?: { window?: boolean | string[]; selector?: boolean | string[] }
+  /**
+   * Signals vega moves that Aster, bound with the default policy, must keep at their initial value (a source the default denies:
+   * docs/LIMITS.md, "Interactive charts and untrusted specs"); every other signal must still agree with vega.
+   */
+  deniedByDefault?: string[]
 }
 
 const DATA = [
@@ -279,6 +289,19 @@ const CASES: Case[] = [
     spec: chart([sig('key', [{ events: 'window:keydown', update: 'event.key' }], 'none'), sig('code', [{ events: { source: 'window', type: 'keyup' }, update: 'event.code' }], 'none')]),
     steps: [{ t: 'key', key: 'q' }],
     expectMoved: ['key', 'code'],
+    // a host that permits the page's keys to the spec gets vega's behaviour exactly
+    eventSources: { window: ['keydown', 'keyup'] },
+  },
+  {
+    // by default a spec does not read keys typed anywhere on the page (docs/LIMITS.md): vega's signals move, Aster's do not
+    name: 'window-source-keydown-denied-by-default',
+    spec: chart([
+      sig('key', [{ events: 'window:keydown', update: 'event.key' }], 'none'), sig('code', [{ events: { source: 'window', type: 'keyup' }, update: 'event.code' }], 'none'),
+      sig('n', [{ events: 'click', update: 'n + 1' }]),
+    ]),
+    steps: [{ t: 'key', key: 'q' }, { t: 'click', x: 100, y: 100 }],
+    expectMoved: ['n'],
+    deniedByDefault: ['key', 'code'],
   },
   {
     name: 'window-mouseup-ends-drag-outside-chart',
@@ -330,6 +353,18 @@ const CASES: Case[] = [
     ]),
     steps: [...moves([60, 60]), { t: 'down' }, { t: 'up' }],
     expectMoved: ['seen', 'leaked'],
+    // (a press anywhere on the page is not among the default window sources)
+    eventSources: { window: ['mousedown'] },
+  },
+  {
+    name: 'window-mousedown-denied-by-default',
+    spec: chart([
+      sig('seen', [{ events: 'mousedown', update: 'seen + 1' }]),
+      sig('leaked', [{ events: 'window:mousedown', update: 'leaked + 1' }]),
+    ]),
+    steps: [...moves([60, 60]), { t: 'down' }, { t: 'up' }],
+    expectMoved: ['seen'],
+    deniedByDefault: ['leaked'],
   },
   // --- timing ---
   {
@@ -386,6 +421,7 @@ const CASES: Case[] = [
     spec: chart([sig('n', [{ events: [{ type: 'click' }, { type: 'dblclick' }, { source: 'window', type: 'keydown' }], update: 'n + 1' }])]),
     steps: [{ t: 'click', x: 100, y: 100 }, { t: 'key', key: 'x' }],
     expectMoved: ['n'],
+    eventSources: { window: ['keydown'] },
   },
   {
     name: 'marktype-object-form-with-filter',
@@ -731,7 +767,7 @@ window.__mountVega = async (spec, renderer) => {
   window.__settle = async () => { await view.runAsync() }
 }
 
-window.__mountAster = async (spec, renderer) => {
+window.__mountAster = async (spec, renderer, eventSources) => {
   const scene = evaluateChart(compileChart(spec))
   const store = {}
   const hit = buildHitIndex(scene)
@@ -740,11 +776,11 @@ window.__mountAster = async (spec, renderer) => {
     paintCanvas(canvas, scene)
     holder.appendChild(canvas)
     const hitc = buildHitIndex(scene, undefined, { renderer: 'canvas' })
-    bindSceneSignals(canvas, scene, store, { logger }, { pick: (x, y) => hitc.pick(x, y), events: createCanvasEvents(canvas) })
+    bindSceneSignals(canvas, scene, store, { logger }, { pick: (x, y) => hitc.pick(x, y), events: createCanvasEvents(canvas), eventSources })
   } else {
     const svg = renderSceneToDomElement(scene)
     holder.appendChild(svg)
-    bindSceneSignals(svg, scene, store, { logger }, { pick: (x, y) => hit.pick(x, y) })
+    bindSceneSignals(svg, scene, store, { logger }, { pick: (x, y) => hit.pick(x, y), eventSources })
   }
   names = (spec.signals || []).map((s) => s.name)
   read = () => Object.fromEntries(names.map((n) => [n, Object.hasOwn(store, n) ? store[n] : scene.signalParams[n]]))
@@ -859,10 +895,10 @@ async function drive(engine: 'vega' | 'aster', renderer: Renderer, c: Case): Pro
   try {
     await page.goto(`file://${join(OUT_DIR, 'index.html')}`)
     await page.waitForFunction(() => '__mountVega' in window, null, { timeout: 30_000 })
-    await page.evaluate(async ([which, spec, r]) => {
-      const w = window as unknown as Record<string, (s: unknown, r: string) => Promise<void>>
-      await (which === 'vega' ? w.__mountVega! : w.__mountAster!)(spec, r)
-    }, [engine, c.spec, renderer] as const)
+    await page.evaluate(async ([which, spec, r, sources]) => {
+      const w = window as unknown as Record<string, (s: unknown, r: string, sources: unknown) => Promise<void>>
+      await (which === 'vega' ? w.__mountVega! : w.__mountAster!)(spec, r, sources ?? undefined)
+    }, [engine, c.spec, renderer, c.eventSources ?? null] as const)
     const read = (): Promise<Observed> => page.evaluate(() => (window as unknown as { __read: () => Observed }).__read())
     const settle = (): Promise<unknown> => page.evaluate(() => (window as unknown as { __settle: () => Promise<unknown> }).__settle())
     const initial = await read()
@@ -988,8 +1024,15 @@ for (const c of PICK_ONLY ? [] : cases) for (const renderer of RENDERERS) {
   if ('error' in v) problems.push(`vega side failed: ${v.error}`)
   else if ('error' in a) problems.push(`aster side failed: ${a.error}`)
   else {
+    const denied = new Set(c.deniedByDefault ?? [])
     for (const name of Object.keys(v.final.signals)) {
+      if (denied.has(name)) continue
       if (v.final.signals[name] !== a.final.signals[name]) problems.push(`signal ${name}: vega=${v.final.signals[name]} aster=${a.final.signals[name]}`)
+    }
+    for (const name of denied) {
+      if (c.eventSources) problems.push(`deniedByDefault needs the default policy (no eventSources)`)
+      if (v.final.signals[name] === v.initial.signals[name]) problems.push(`VACUOUS: vega did not move ${name}, so the denial proves nothing`)
+      if (a.final.signals[name] !== a.initial.signals[name]) problems.push(`the default policy let ${name} move: ${a.initial.signals[name]} -> ${a.final.signals[name]}`)
     }
     if (v.final.scoped !== a.final.scoped) problems.push(`scoped signals: vega=${v.final.scoped} aster=${a.final.scoped}`)
     if (c.expectScopedMoved && v.final.scoped === v.initial.scoped) problems.push(`VACUOUS: vega did not move any scoped signal (${v.final.scoped})`)
