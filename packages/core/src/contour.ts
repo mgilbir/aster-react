@@ -207,44 +207,18 @@ function polygonsAt(values: ArrayLike<unknown>, level: number, stride: number, h
     ;[upper, lower] = [lower, upper]
   }
 
-  // Each hole goes to the first outer ring (in the order they closed) that holds it. A hole whose first point lies outside an
-  // outer's bounding box is outside that ring (the point is off its boundary, and the ray test says outside), so the box
-  // rejects most pairs before a point-in-ring test; the pairs are still holes x outers, which the scan bounded (`work`).
-  if (holes.length && outers.length) {
-    allot('work', holes.length * outers.length, 'contour holes')
-    const boxes = outers.map((polygon) => ringBox(polygon[0]!))
-    for (const hole of holes) {
-      meterTick('contour holes', outers.length)
-      const first = hole[0]!
-      const fx = first[0]!
-      const fy = first[1]!
-      let owner: Ring[] | undefined
-      // bounded: the outers, for one hole; the hole loop ticks with `outers.length` as its cost, and holes x outers was allotted as work
-      for (let i = 0; i < outers.length; i++) {
-        const box = boxes[i]!
-        if (fx < box[0] || fx > box[2] || fy < box[1] || fy > box[3]) continue
-        if (holeInside(outers[i]![0]!, hole)) { owner = outers[i]; break }
-      }
-      if (owner) owner.push(hole)
-    }
+  // Each hole goes to the first outer ring (in the order they closed) that holds it: holes x outers point-in-ring tests at most,
+  // as vega's (a bounding box cannot reject a pair: a ring closes on a copy of its first point, and that zero-length side counts
+  // every point at its height as on the boundary, so the next point of the hole decides). The pairs are bounded as work, and the
+  // clock is read per hole.
+  if (holes.length && outers.length) allot('work', holes.length * outers.length, 'contour holes')
+  for (const hole of holes) {
+    meterTick('contour holes', outers.length)
+    // bounded: the outers, for one hole; the hole loop ticks with `outers.length` as its cost, and holes x outers was allotted as work
+    const owner = outers.find((polygon) => holeInside(polygon[0]!, hole))
+    if (owner) owner.push(hole)
   }
   return outers
-}
-
-/** The bounding box of a ring: `[minX, minY, maxX, maxY]`. */
-function ringBox(ring: Ring): [number, number, number, number] {
-  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity
-  // bounded: the ring's own points (every ring was stitched by the metered scan)
-  for (const p of ring) {
-    const x = p[0]!, y = p[1]!
-    // (a NaN coordinate, which smoothing can make, takes part in the ray test as it does: no box can stand for the ring)
-    if (x !== x || y !== y) return [-Infinity, -Infinity, Infinity, Infinity]
-    if (x < x0) x0 = x
-    if (x > x1) x1 = x
-    if (y < y0) y0 = y
-    if (y > y1) y1 = y
-  }
-  return [x0, y0, x1, y1]
 }
 
 /**
