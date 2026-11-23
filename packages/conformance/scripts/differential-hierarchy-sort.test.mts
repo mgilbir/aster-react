@@ -79,3 +79,35 @@ describe('hierarchy layouts: sort ties follow the order rows were made in, as ve
   }, 120_000)
 })
 
+describe('a pack the data cannot enclose is the data\'s failure, as vega\'s (C406)', () => {
+  it('vega logs it and the view runs; Aster logs it and the evaluation goes on (generated leaf sizes)', async () => {
+    const r = makeRng(0x406)
+    let failed = 0
+    for (let k = 0; k < scaled(40); k++) {
+      // sizes past what a circle's radius squared can hold make the enclosing search fail
+      const sizes = Array.from({ length: 2 + Math.floor(r.next() * 4) }, () => r.pick([1e308, 1e308, 1, 2, 3]))
+      const spec: Spec = {
+        data: [{
+          name: 'tree',
+          values: [{ id: 0 }, ...sizes.map((s, i) => ({ id: i + 1, parent: 0, s }))],
+          transform: [{ type: 'stratify', key: 'id', parentKey: 'parent' }, { type: 'pack', field: 's', size: [100, 50] }],
+        }],
+      }
+      const vegaErrors: unknown[] = []
+      const logger = { level() { return 2 }, error: (...a: unknown[]) => { vegaErrors.push(a[0]); return logger }, warn: () => logger, info: () => logger, debug: () => logger }
+      const View = (vega as unknown as { View: new (rt: unknown, o: unknown) => { runAsync(): Promise<void>; finalize(): void } }).View
+      const view = new View(vega.parse(structuredClone(spec) as never), { renderer: 'none', logger })
+      await view.runAsync()
+      view.finalize()
+      const asterErrors: unknown[] = []
+      // (a failure the engine treats as its own refusal is thrown out of evaluateChart; a data failure is logged)
+      evaluateChart(compileChart(structuredClone(spec) as never), { logger: { error: (e: unknown) => asterErrors.push(e), warn: () => {} } } as never)
+      expect(asterErrors.length, JSON.stringify(sizes)).toBe(vegaErrors.length)
+      if (vegaErrors.length) {
+        failed++
+        expect(String(asterErrors[0]), JSON.stringify(sizes)).toBe(String(vegaErrors[0]))
+      }
+    }
+    expect(failed).toBeGreaterThan(0)
+  })
+})
