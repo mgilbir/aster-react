@@ -7,7 +7,7 @@ import { currentLocale } from './locale.js'
 import { isDiscretizing, isTemporal, labelFormat, labelValues, tickFormat } from './scale.js'
 import { installGuideCaptions } from './render.js'
 
-export type ScaleSnapshots = Array<{ name: string; type: string; domain: unknown[]; range: unknown[]; bandwidth?: number; labelValues?: unknown[] }>
+export type ScaleSnapshots = Array<{ name: string; type: string; domain: unknown[]; range: unknown[]; rangeError?: string; bandwidth?: number; labelValues?: unknown[] }>
 
 const DISCRETE = new Set(['band', 'point', 'ordinal', 'bin-ordinal'])
 // read per call, not snapshotted at import
@@ -65,16 +65,21 @@ export function scaleCaption(
  * Pseudo scales for the captions, from the snapshots the scene carries: just what vega-scale's caption reads of a scale
  * (its type, domain and range, the breakpoints of a discretizing scale, a tick formatter where d3's scale has one).
  */
-export function scalesFromSnapshots(snaps: Array<{ name: string; type: string; domain: unknown[]; range: unknown[]; bandwidth?: number; labelValues?: unknown[] }>): Map<string, unknown> {
+export function scalesFromSnapshots(snaps: Array<{ name: string; type: string; domain: unknown[]; range: unknown[]; rangeError?: string; bandwidth?: number; labelValues?: unknown[] }>): Map<string, unknown> {
   const out = new Map<string, unknown>()
   for (const s of snaps) {
     const domain = s.domain.slice()
     const range = s.range.slice()
     const values = s.labelValues?.slice()
+    const { rangeError } = s
     const obj: Record<string, unknown> = {
       type: s.type,
       domain: () => domain,
-      range: () => range,
+      // (a range the scale could not give throws when it is read, as the scale's own getter did)
+      range: () => {
+        if (rangeError !== undefined) throw new TypeError(rangeError)
+        return range
+      },
       ...(values != null ? { labelValues: values } : {}),
       ...(s.bandwidth != null ? { bandwidth: () => s.bandwidth } : {}),
     }

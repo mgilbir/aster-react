@@ -4814,8 +4814,8 @@ function sceneSnapshots(ctx: EvalContext): ReturnType<typeof snapshotScales> {
   return snaps
 }
 
-function snapshotScales(scales: Map<string, Scale>): Array<{ name: string; type: string; domain: unknown[]; range: unknown[]; bandwidth?: number; samples?: [unknown, unknown] }> {
-  const out: Array<{ name: string; type: string; domain: unknown[]; range: unknown[]; bandwidth?: number; samples?: [unknown, unknown] }> = []
+function snapshotScales(scales: Map<string, Scale>): Array<{ name: string; type: string; domain: unknown[]; range: unknown[]; rangeError?: string; bandwidth?: number; samples?: [unknown, unknown] }> {
+  const out: Array<{ name: string; type: string; domain: unknown[]; range: unknown[]; rangeError?: string; bandwidth?: number; samples?: [unknown, unknown] }> = []
   for (const [name, scale] of scales) {
     const s = scale as unknown as {
       type?: string
@@ -4825,7 +4825,15 @@ function snapshotScales(scales: Map<string, Scale>): Array<{ name: string; type:
     }
     if (typeof s.domain !== 'function' || typeof s.range !== 'function') continue
     const domain = s.domain()
-    const range = s.range()
+    // (a range the scale cannot give, a colour scale's over an empty list, is what a reader of the snapshot gets when it asks: vega
+    // asks only when a guide or an encode reads the scale, and so does the snapshot's reader; a scale nothing reads is no error)
+    let range: unknown[] = []
+    let rangeError: string | undefined
+    try {
+      range = s.range()
+    } catch (e) {
+      rangeError = e instanceof Error ? e.message : String(e)
+    }
     const bandwidth = typeof s.bandwidth === 'function' ? s.bandwidth() : undefined
     let samples: [unknown, unknown] | undefined
     const type = s.type ?? 'unknown'
@@ -4849,7 +4857,7 @@ function snapshotScales(scales: Map<string, Scale>): Array<{ name: string; type:
       } catch { /* non-interpolating */ }
     }
     out.push({
-      name, type, domain: Array.from(domain), range: Array.from(range),
+      name, type, domain: Array.from(domain), range: Array.from(range), ...(rangeError !== undefined ? { rangeError } : {}),
       ...(bandwidth != null ? { bandwidth } : {}), ...(samples ? { samples } : {}),
       ...(labelValues ? { labelValues } : {}),
     })
