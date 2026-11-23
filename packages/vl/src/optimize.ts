@@ -15,6 +15,7 @@ import { renameDataRefs, renameExpr, renameFragment } from './embed.js'
 import { EXPRESSION_KEYS } from './embed.js'
 import { tokenize } from './expr-tokens.js'
 import { isRows, sameData, stringifyWithoutRows } from './rows.js'
+import { VLCompileError } from './names.js'
 
 type Obj = Record<string, unknown>
 const isObj = (v: unknown): v is Obj => v !== null && typeof v === 'object' && !Array.isArray(v)
@@ -76,7 +77,23 @@ function renameDatasetRefs(out: Obj, map: ReadonlyMap<string, string>): void {
   renameFragment(rest, { signals: new Map(), scales: new Map(), datasets: map })
 }
 
-/** The transforms from the root dataset down to (not including) transform `k` of dataset `d`. */
+/**
+ * A bin or an extent as the rows it makes: the names of the signals it declares or reads are no part of that (two views' copies of one
+ * bin are named after their views), the field its extent is taken over is.
+ */
+function asRows(ts: Obj[]): Obj[] {
+  const extentField = new Map(ts.filter((t) => t.type === 'extent' && typeof t.signal === 'string').map((t) => [t.signal as string, t.field]))
+  return ts.map((t) => {
+    if (t.type === 'extent' && typeof t.signal === 'string') return { type: 'extent', field: t.field }
+    if (t.type !== 'bin') return t
+    const { signal: _s, ...rest } = t
+    void _s
+    if (isObj(rest.extent) && typeof rest.extent.signal === 'string' && extentField.has(rest.extent.signal)) rest.extent = { over: extentField.get(rest.extent.signal) }
+    return rest
+  })
+}
+
+/** The transforms from the root dataset down to (not including) transform `k` of dataset `d`, as the rows they make. */
 function pipelineBefore(byName: Map<string, Obj>, d: Obj, k: number, skip: Obj | undefined): string {
   const chain: string[] = []
   let cur: Obj | undefined = d
@@ -85,7 +102,7 @@ function pipelineBefore(byName: Map<string, Obj>, d: Obj, k: number, skip: Obj |
   while (cur && !seen.has(cur)) {
     seen.add(cur)
     const ts = (cur.transform as Obj[] | undefined) ?? []
-    const part = pipelineKey(ts.slice(0, upTo).filter((t) => t !== skip))
+    const part = pipelineKey(asRows(ts.slice(0, upTo).filter((t) => t !== skip)))
     chain.unshift(`${typeof cur.source === 'string' ? '' : String(cur.name)}[${part.join(',')}]`)
     cur = typeof cur.source === 'string' ? byName.get(cur.source) : undefined
     upTo = Infinity
@@ -93,23 +110,31 @@ function pipelineBefore(byName: Map<string, Obj>, d: Obj, k: number, skip: Obj |
   return chain.join('>')
 }
 
-function mergeBins(out: Obj): void {
-  const data = (out.data as Obj[] | undefined) ?? []
+/**
+ * optimizers.ts MergeBins: sibling bin nodes (the same parent: the same rows) with the same field and parameters are one node, named
+ * after the LAST of them (`promotableBins.pop()`, `renameSignal(other, this)`). A bin with a computed extent shares its extent too. The
+ * signals of each merged bin are renamed everywhere they are read (`within`: the part of the spec that reads them). A bin that declares a
+ * signal no merge shared is a dataset's own, never merged away (mergeIdenticalDatasets).
+ */
+/** The bins that kept the declarations of a merge (the others read them): through every later pass, until the compile is done. */
+const SHARED_BINS = new WeakSet<object>()
+
+export function mergeBins(data: Obj[], within: unknown): void {
   const byName = new Map(data.map((d) => [d.name as string, d]))
   interface Site { d: Obj; bin: Obj; extent?: Obj }
   const groups = new Map<string, Site[]>()
   for (const d of data) {
     const ts = (d.transform as Obj[] | undefined) ?? []
     ts.forEach((t, k) => {
-      if (t.type !== 'bin' || typeof t.signal !== 'string' || !isObj(t.extent) || typeof (t.extent as Obj).signal !== 'string') return
-      const extent = ts.find((e) => e.type === 'extent' && e.signal === (t.extent as Obj).signal)
-      if (!extent || ts.indexOf(extent) >= k) return
-      const { signal: _s, extent: _e, ...params } = t
-      void _s
-      void _e
-      const key = JSON.stringify([extent.field, params, pipelineBefore(byName, d, k, extent)])
+      if (t.type !== 'bin' || typeof t.signal !== 'string') return
+      const extentSignal = isObj(t.extent) && typeof (t.extent as Obj).signal === 'string' ? (t.extent as Obj).signal : undefined
+      const extent = extentSignal === undefined ? undefined : ts.find((e) => e.type === 'extent' && e.signal === extentSignal)
+      // (a bin that reads an extent it does not declare before it - a parameter's - is left as it is)
+      if (extentSignal !== undefined && (extent === undefined || ts.indexOf(extent) >= k)) return
+      const params = Object.fromEntries(Object.entries(t).filter(([key]) => key !== 'signal' && !(extent !== undefined && key === 'extent')))
+      const key = JSON.stringify([extent?.field, params, pipelineBefore(byName, d, k, extent)])
       const group = groups.get(key)
-      const site = { d, bin: t, extent }
+      const site = { d, bin: t, ...(extent !== undefined ? { extent } : {}) }
       if (group) group.push(site)
       else groups.set(key, [site])
     })
@@ -118,30 +143,32 @@ function mergeBins(out: Obj): void {
   for (const sites of groups.values()) {
     if (sites.length < 2) continue
     const last = sites[sites.length - 1]!
+    SHARED_BINS.add(sites[0]!.bin)
     sites.forEach((s, i) => {
       renames.set(s.bin.signal as string, last.bin.signal as string)
-      renames.set(s.extent!.signal as string, last.extent!.signal as string)
+      if (s.extent !== undefined) renames.set(s.extent.signal as string, last.extent!.signal as string)
       if (i === 0) return
       // (a signal is declared once: the later bin only writes its fields, reading the shared extent)
-      s.d.transform = (s.d.transform as Obj[]).filter((t) => t !== s.extent)
+      if (s.extent !== undefined) s.d.transform = (s.d.transform as Obj[]).filter((t) => t !== s.extent)
       delete s.bin.signal
     })
   }
   const effective = new Map([...renames].filter(([from, to]) => from !== to))
-  if (effective.size) renameFragment(out, { signals: effective, scales: new Map() })
+  if (effective.size) renameFragment(within, { signals: effective, scales: new Map() })
 }
 
 /**
- * A bin's extent and bins signals are declared once, where MergeBins left them (the first of the merged bins keeps its `extent` and
- * its `signal`; the others read the shared extent): the rows are the same with or without the declarations, so they are not part of
- * what makes two pipelines the same.
+ * The declarations MergeBins shared (SHARED_BINS: one bin keeps its `extent` and its `signal`, the others read them) are
+ * not part of what makes two pipelines the same: the rows are the same with or without them. A bin that declares a signal of its own
+ * (one no merge renamed: its readers read it under that name) stays part of its dataset's identity.
  */
 function withoutBinDeclarations(ts: Obj[]): Obj[] {
   const read = new Set(ts.filter((t) => t.type === 'bin' && isObj(t.extent) && typeof (t.extent as Obj).signal === 'string').map((t) => (t.extent as Obj).signal))
+  const shared = (t: Obj): boolean => typeof t.signal !== 'string' || SHARED_BINS.has(t)
   return ts
-    .filter((t) => !(t.type === 'extent' && typeof t.signal === 'string' && read.has(t.signal)))
+    .filter((t) => !(t.type === 'extent' && typeof t.signal === 'string' && read.has(t.signal) && ts.some((b) => b.type === 'bin' && isObj(b.extent) && (b.extent as Obj).signal === t.signal && shared(b))))
     .map((t) => {
-      if (t.type !== 'bin' || t.signal === undefined) return t
+      if (t.type !== 'bin' || t.signal === undefined || !shared(t)) return t
       const { signal: _s, ...rest } = t
       void _s
       return rest
@@ -218,7 +245,14 @@ function mergeAggregates(out: Obj, generated: (name: string) => boolean): void {
     for (const d of [lead, ...members.slice(0, -1)]) {
       const t = (d.transform as Obj[])[0]!
       ;(t.as as unknown[]).forEach((as, i) => {
-        if (!measures.has(String(as))) measures.set(String(as), [(t.fields as unknown[])[i], (t.ops as unknown[])[i]])
+        const measure: [unknown, unknown] = [(t.fields as unknown[])[i], (t.ops as unknown[])[i]]
+        const have = measures.get(String(as))
+        // (vega-lite merges the two into one aggregate that writes the name twice, and both views draw whichever is written last: a
+        // wrong chart, refused instead, DECISIONS Q9)
+        if (have !== undefined && JSON.stringify(have) !== JSON.stringify(measure)) {
+          throw new VLCompileError(`two views aggregate different measures (${String(have[1])} of ${String(have[0])}, ${String(measure[1])} of ${String(measure[0])}) into the same field "${String(as)}" over the same data: vega-lite 6.4.3 merges the aggregates and both views draw one of them; give the measures different \`as\` names`)
+        }
+        if (have === undefined) measures.set(String(as), measure)
       })
     }
     const lt = (lead.transform as Obj[])[0]!
@@ -267,9 +301,6 @@ function mergeAggregates(out: Obj, generated: (name: string) => boolean): void {
   dedupeDomainRefs(out, new Set(renames.values()))
 }
 
-/** A transform whose effect is not just its output rows (it declares a signal): it stays with the dataset that declared it. */
-const writesSignal = (t: Obj): boolean => typeof t.signal === 'string'
-
 /**
  * optimizers.ts MergeIdenticalNodes below the root: datasets derived from one source whose pipelines start with the same transforms
  * share them. The shared prefix becomes a dataset of its own, and each of them reads it and keeps only what comes after (a dataset
@@ -281,30 +312,50 @@ function mergeCommonPrefixes(out: Obj, generated: (name: string) => boolean): vo
   if (fresh === undefined) return
   const renames = new Map<string, string>()
   const added: Array<{ before: Obj; made: Obj }> = []
-  const keyOf = (d: Obj): string[] => ((d.transform as Obj[] | undefined) ?? []).map(transformKey)
   const work = [...data]
   for (let w = 0; w < work.length; w++) {
     const parent = work[w]!
     const children = data.concat(added.map((a) => a.made)).filter((d) => isDerived(d, generated) && d.source === parent.name && !renames.has(d.name as string))
+    // (optimizers.ts MoveParseUp / MergeParse: the casts that start the children's pipelines move up into what they share, joined,
+    // unless two children cast one field differently; what follows them is compared as it is)
+    const castsOf = (c: Obj): Obj[] => {
+      const ts = (c.transform as Obj[] | undefined) ?? []
+      let n = 0
+      while (n < ts.length && isSelfCast(ts[n]!)) n++
+      return ts.slice(0, n)
+    }
+    const restOf = (c: Obj): Obj[] => ((c.transform as Obj[] | undefined) ?? []).slice(castsOf(c).length)
     const groups = new Map<string, Obj[]>()
     for (const c of children) {
-      const ts = (c.transform as Obj[] | undefined) ?? []
-      if (ts.length === 0 || writesSignal(ts[0]!)) continue
-      const first = transformKey(ts[0]!)
+      const rest = restOf(c)
+      // (a transform that declares a signal is shared like any other when the declarations are the same, name included: Vega takes
+      // one declaration of a name, and the readers read it under that name; two that declare different names never compare equal)
+      if (rest.length === 0) continue
+      const first = transformKey(rest[0]!)
       groups.set(first, [...(groups.get(first) ?? []), c])
     }
     for (const group of groups.values()) {
       if (group.length < 2) continue
-      const keys = group.map(keyOf)
-      const ts0 = group[0]!.transform as Obj[]
+      const casts = new Map<string, Obj>()
+      let conflict = false
+      for (const c of group) {
+        for (const t of castsOf(c)) {
+          const have = casts.get(t.as as string)
+          if (have !== undefined && have.expr !== t.expr) conflict = true
+          else casts.set(t.as as string, t)
+        }
+      }
+      if (conflict) continue
+      const keys = group.map((c) => restOf(c).map(transformKey))
+      const rest0 = restOf(group[0]!)
       let len = 0
-      while (len < ts0.length && !writesSignal(ts0[len]!) && keys.every((k) => k[len] === keys[0]![len])) len++
+      while (len < rest0.length && keys.every((k) => k[len] === keys[0]![len])) len++
       if (len === 0) continue
-      const made: Obj = { name: fresh(), source: parent.name, transform: ts0.slice(0, len) }
+      const made: Obj = { name: fresh(), source: parent.name, transform: [...casts.values(), ...rest0.slice(0, len)] }
       added.push({ before: group[0]!, made })
       work.push(made)
       for (const c of group) {
-        const rest = (c.transform as Obj[]).slice(len)
+        const rest = restOf(c).slice(len)
         if (rest.length === 0) renames.set(c.name as string, made.name as string)
         else { c.source = made.name; c.transform = rest }
       }
@@ -413,6 +464,13 @@ function mergeIdenticalSources(out: Obj, named: (name: string) => boolean): void
     const feature = fmt(d).feature
     const otherMesh = fmt(other).mesh
     const otherFeature = fmt(other).feature
+    // (a view's explicit parse is a parse node of the view's own (data/parse.ts ParseNode.makeExplicit); MoveParseUp / MergeParse move
+    // it up to the shared source unless another view parses the same field differently, in which case each keeps its own. Here the
+    // parse is on the source's format: sources whose parses conflict on a field stay two sources; others merge, parses joined)
+    const p1 = fmt(d).parse
+    const p2 = fmt(other).parse
+    if (isObj(p1) && isObj(p2) && Object.keys(p1).some((k) => Object.hasOwn(p2, k) && JSON.stringify(p1[k]) !== JSON.stringify(p2[k]))) return false
+    if ((p1 === null) !== (p2 === null) && (isObj(p1) || isObj(p2))) return false
     if (mesh && otherFeature) return false
     if ((feature || otherFeature) && feature !== otherFeature) return false
     if ((mesh || otherMesh) && mesh !== otherMesh) return false
@@ -458,7 +516,7 @@ function mergeFormats(later: Obj, earlier: Obj): Obj {
 export function optimizeData(out: Obj, generated: (name: string) => boolean, named: (name: string) => boolean = () => true): void {
   if (!Array.isArray(out.data) || out.data.length < 2) return
   mergeIdenticalSources(out, named)
-  mergeBins(out)
+  mergeBins((out.data as Obj[] | undefined) ?? [], out)
   mergeIdenticalDatasets(out, generated)
   mergeAggregates(out, generated)
   mergeCommonPrefixes(out, generated)

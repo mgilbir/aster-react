@@ -5,9 +5,14 @@
  *
  * The rewrites walk the spec tree with the encoding that the layers above a unit share. A layer's encoding is merged into each unit
  * under it (the layer keeps none) so that a unit is complete by itself when it is rewritten.
+ *
+ * The rewrites compile nothing: they run under consume.ts `peek` (what they read to decide is not consumed) and move the spec's
+ * properties with `derive` / `pick` / `merge`, so each one is consumed where the compiler reads its new place. A composite mark's own
+ * properties are read for what they mean (`consuming`).
  */
-import { compositeLayers, compositeMarkOf } from './composite-marks.js'
+import { compositeLayers, compositeMarkOf, isGiven } from './composite-marks.js'
 import { spansAChannel } from './channels.js'
+import { consumeAll, consuming, derive, deriveWithout, ignoreUnread, merge, peek, pick as pickTracked, transfer } from './consume.js'
 
 type Obj = Record<string, any>
 const isObj = (v: unknown): v is Obj => v !== null && typeof v === 'object' && !Array.isArray(v)
@@ -23,17 +28,34 @@ const namesData = (d: unknown): d is Obj => isObj(d) && (!!d.field || d.aggregat
  * channel only the layer defines is the layer's.
  */
 export function mergeEncoding(parent: Obj, child: unknown): Obj {
-  const own: Obj = isObj(child) ? child : {}
-  const out: Obj = {}
-  for (const channel of new Set([...Object.keys(parent), ...Object.keys(own)])) {
-    const c = own[channel]
-    const p = parent[channel]
-    if (namesData(c)) out[channel] = { ...(isObj(p) ? p : {}), ...c }
-    else if (isObj(c) && namesData(c.condition)) out[channel] = { ...c, condition: { ...(isObj(p) ? p : {}), ...c.condition } }
-    else if (c || c === null) out[channel] = c
-    else out[channel] = p
-  }
-  return out
+  return peek(() => {
+    const own: Obj = isObj(child) ? child : {}
+    const out: Obj = {}
+    for (const channel of new Set([...Object.keys(parent), ...Object.keys(own)])) {
+      const c = own[channel]
+      const p = parent[channel]
+      // (consume.ts merge: a property of the layer's definition that the unit's overrides is consumed, as it has no effect)
+      if (namesData(c)) out[channel] = isObj(p) ? basedOn(merge(p, c), p) : c
+      else if (isObj(c) && namesData(c.condition)) out[channel] = isObj(p) ? basedOn(derive(c, { condition: basedOn(merge(p, c.condition), p) }), p) : c
+      // (a value or a null replaces the layer's definition: the property moves as it is, a null still to be read where it lands)
+      else if (c || c === null) transfer(own, channel, out)
+      else transfer(parent, channel, out)
+    }
+    return out
+  })
+}
+
+/** A unit's channel definition -> the layer's definition it was merged with (mergeEncoding). */
+const MERGE_BASE = new WeakMap<object, object>()
+const basedOn = <T extends object>(merged: T, base: object): T => {
+  MERGE_BASE.set(merged, base)
+  return merged
+}
+
+/** Is `def` the layer's definition `base`, or merged from it (through any number of layers)? */
+export function derivesFrom(def: unknown, base: object): boolean {
+  for (let d: unknown = def; d !== null && typeof d === 'object'; d = MERGE_BASE.get(d as object)) if (d === base) return true
+  return false
 }
 
 const NO_TYPE_CHANNELS = new Set(['x2', 'y2', 'xError', 'yError', 'xError2', 'yError2', 'theta2', 'radius2'])
@@ -55,12 +77,14 @@ function typeOf(channel: string, def: Obj): string {
 
 /** The encoding with a type on every definition that needs one: a composite mark reads the types to orient itself. */
 function typed(encoding: Obj): Obj {
-  const out: Obj = {}
-  for (const [channel, def] of Object.entries(encoding)) {
-    const untyped = isObj(def) && def.type === undefined && (def.field !== undefined || def.aggregate === 'count') && def.datum === undefined && def.value === undefined
-    out[channel] = untyped && !NO_TYPE_CHANNELS.has(channel) ? { ...def, type: typeOf(channel, def) } : def
-  }
-  return out
+  return peek(() => {
+    const out: Obj = {}
+    for (const [channel, def] of Object.entries(encoding)) {
+      const untyped = isObj(def) && def.type === undefined && (def.field !== undefined || def.aggregate === 'count') && def.datum === undefined && def.value === undefined
+      out[channel] = untyped && !NO_TYPE_CHANNELS.has(channel) ? derive(def, { type: typeOf(channel, def) }) : def
+    }
+    return out
+  })
 }
 
 const FACET_CHANNELS = ['row', 'column', 'facet'] as const
@@ -69,10 +93,15 @@ const COMPOSITIONS = ['hconcat', 'vconcat', 'concat'] as const
 
 /** A unit that is faceted by its encoding is a facet over a unit without the facet channels. */
 function facetOver(node: Obj, inner: (unit: Obj) => unknown): Obj {
-  const { row, column, facet, ...rest } = node.encoding
-  const { width, height, params, projection, mark, name, encoding: _e, ...outer } = node
-  const unit = { ...(width !== undefined ? { width } : {}), ...(height !== undefined ? { height } : {}), ...(params ? { params } : {}), ...(projection !== undefined ? { projection } : {}), ...(name !== undefined ? { name } : {}), mark, encoding: rest }
-  return { ...outer, facet: facet !== undefined ? facet : { ...(row !== undefined ? { row } : {}), ...(column !== undefined ? { column } : {}) }, spec: inner(unit) }
+  return peek(() => {
+    const enc: Obj = node.encoding
+    const unit = pickTracked(node, ['width', 'height', 'params', 'projection', 'name', 'mark'])
+    unit.encoding = deriveWithout(enc, ['row', 'column', 'facet'])
+    const outer = deriveWithout(node, ['width', 'height', 'params', 'projection', 'mark', 'name', 'encoding'])
+    outer.facet = enc.facet !== undefined ? enc.facet : pickTracked(enc, ['row', 'column'])
+    outer.spec = inner(unit)
+    return outer
+  })
 }
 
 // --- composite marks -----------------------------------------------------------------------------------------------------------
@@ -92,9 +121,30 @@ export function normalizeComposites(node: unknown, userConfig: Obj | undefined, 
   if (!isObj(node)) return node
   const kind = compositeMarkOf(node)
   if (kind && hasFacetChannel(node.encoding)) return facetOver(node, (unit) => normalizeComposites(unit, userConfig, inherited))
-  if (kind) return compositeLayers(kind, { ...node, encoding: typed(mergeEncoding(inherited, node.encoding)) }, userConfig)
+  // (a composite mark's rewrite reads its mark def, its config and its encoding for what they mean)
+  if (kind) {
+    return consuming(() => {
+      // (the mark's type said which composite mark this is)
+      void (isObj(node.mark) ? node.mark.type : node.mark)
+      const layers = compositeLayers(kind, derive(node, { encoding: typed(mergeEncoding(inherited, node.encoding)) }), userConfig)
+      // (compositemark/*.ts: a composite mark reads its extent, orientation, parts, size, thickness, clip, colour and opacity from
+      // its mark def, and its error channels as fields; anything else there vega-lite does not read)
+      if (isObj(node.mark)) ignoreUnread(node.mark, 'vega-lite reads no other property of a composite mark')
+      // (the channels a composite mark hands to its parts are read there; what is left of them - an error channel's value, a raw
+      // tooltip of a boxplot without outliers, a size the parts do not draw - vega-lite drops with the parts that would have drawn it.
+      // The composite matrices against vega-lite, not this check, hold the composite marks to what they read)
+      const enc = node.encoding
+      if (isObj(enc)) {
+        for (const def of Object.values(enc)) for (const d of Array.isArray(def) ? def : [def]) if (isObj(d)) ignoreUnread(d, 'a composite mark drops what its parts do not draw')
+      }
+      // (a selection declared on a composite mark itself: vega-lite drops it when the mark is normalized; one given by a composition
+      // around it is kept by compositeLayers)
+      if (Array.isArray(node.params)) for (const p of node.params) if (isObj(p) && !isGiven(p)) consumeAll(p)
+      return layers
+    })
+  }
 
-  const out: Obj = { ...node }
+  const out: Obj = derive(node)
   if (node.layer !== undefined) {
     // A layer with a composite in it hands its encoding down: a unit beside the composite gets the merged encoding as its own and does
     // not inherit it a second time (the composite's parts already took its time units and aggregates out of their channels).
@@ -116,8 +166,6 @@ export function normalizeComposites(node: unknown, userConfig: Obj | undefined, 
 const AREA_OPACITY_WITH_OVERLAY = 0.7
 const OVERLAYED_MARKS = new Set(['line', 'rule', 'trail', 'area'])
 
-const pick = (o: Obj, keys: string[]): Obj => Object.fromEntries(keys.filter((k) => o[k] !== undefined).map((k) => [k, o[k]]))
-const omit = (o: Obj, keys: string[]): Obj => Object.fromEntries(Object.entries(o).filter(([k]) => !keys.includes(k)))
 
 /** The points drawn over a path mark: asked by the mark def, else by the mark's config or by a `shape` channel; `null` for none. */
 function pointOverlayOf(markDef: Obj, markConfig: Obj, encoding: Obj): Obj | null | undefined {
@@ -145,8 +193,9 @@ export interface StackProps {
 
 /** The mark def of the mark under its overlays: no `point`, no `line`; the bare type when nothing else is left. */
 function bareMark(markDef: Obj): Obj | string {
-  const rest = omit(markDef, ['point', 'line'])
-  return Object.keys(rest).length > 1 ? rest : (rest.type as string)
+  const rest = deriveWithout(markDef, ['point', 'line'])
+  // (a mark def left with its type alone is that type, read here)
+  return Object.keys(rest).length > 1 ? rest : consuming(() => rest.type as string)
 }
 
 const sameJson = (a: unknown, b: unknown): boolean => JSON.stringify(a) === JSON.stringify(b)
@@ -161,12 +210,12 @@ export function normalizePathOverlays(node: unknown, config: Obj, stackOf: (unit
   if (!isObj(node)) return node
   if (node.layer !== undefined) {
     const encoding = mergeEncoding(inherited, node.encoding)
-    return { ...node, layer: (node.layer as unknown[]).map((c) => normalizePathOverlays(c, config, stackOf, encoding)) }
+    return derive(node, { layer: (node.layer as unknown[]).map((c) => normalizePathOverlays(c, config, stackOf, encoding)) })
   }
   for (const k of COMPOSITIONS) {
-    if (node[k] !== undefined) return { ...node, [k]: normalizePathOverlays(node[k], config, stackOf, {}) }
+    if (node[k] !== undefined) return derive(node, { [k]: normalizePathOverlays(node[k], config, stackOf, {}) })
   }
-  if (node.spec !== undefined) return node.repeat === undefined ? { ...node, spec: normalizePathOverlays(node.spec, config, stackOf, {}) } : node
+  if (node.spec !== undefined) return node.repeat === undefined ? derive(node, { spec: normalizePathOverlays(node.spec, config, stackOf, {}) }) : node
   if (node.mark === undefined) return node
 
   if (hasFacetChannel(node.encoding)) {
@@ -176,50 +225,54 @@ export function normalizePathOverlays(node: unknown, config: Obj, stackOf: (unit
     return inner === undefined || (isObj(inner) && inner.layer === undefined) ? node : faceted
   }
 
-  const { params, projection, mark, name, encoding: own, ...outer } = node
+  const { mark, encoding: own } = node
+  const outer = deriveWithout(node, ['params', 'projection', 'mark', 'name', 'encoding'])
   const markDef: Obj = isObj(mark) ? mark : { type: mark }
-  if (!OVERLAYED_MARKS.has(markDef.type)) return node
+  // (what a mark def says of overlays is read here, overlay or not: `point: false` says none, and a mark that takes none - a bar, an
+  // arc; `line` on anything but an area - ignores them, as vega-lite does)
+  const said = (): void => consuming(() => void [markDef.point, markDef.line])
+  if (!OVERLAYED_MARKS.has(markDef.type)) {
+    said()
+    return node
+  }
   const encoding: Obj = mergeEncoding(inherited, own)
   const markConfig: Obj = isObj(config[markDef.type]) ? config[markDef.type] : {}
   const points = pointOverlayOf(markDef, markConfig, encoding)
   const line = markDef.type === 'area' ? lineOverlayOf(markDef, markConfig) : undefined
-  if (!points && !line) return node
+  if (!points && !line) {
+    said()
+    return node
+  }
 
   const opacityGiven = (k: string): boolean => (markDef[k] ?? markConfig[k] ?? (isObj(config.mark) ? config.mark[k] : undefined)) !== undefined
-  const layer: Obj[] = [
-    {
-      ...(name !== undefined ? { name } : {}),
-      ...(params ? { params } : {}),
-      mark: bareMark({
-        ...(markDef.type === 'area' && !opacityGiven('opacity') && !opacityGiven('fillOpacity') ? { opacity: AREA_OPACITY_WITH_OVERLAY } : {}),
-        ...markDef,
-      }),
-      encoding: omit(own === undefined ? {} : (own as Obj), ['shape']),
-    },
-  ]
+  // (what asked for the overlays has done its job: the mark name, or the mark def's `point` / `line`)
+  consuming(() => [node.mark, markDef.point, markDef.line])
+  const first = pickTracked(node, ['name', 'params'])
+  first.mark = bareMark(merge(markDef.type === 'area' && !opacityGiven('opacity') && !opacityGiven('fillOpacity') ? { opacity: AREA_OPACITY_WITH_OVERLAY } : {}, markDef))
+  first.encoding = own === undefined ? {} : deriveWithout(own as Obj, ['shape'])
+  const layer: Obj[] = [first]
   // a stacked measure stacks the overlays alike
-  const stack = stackOf({ ...node, encoding })
+  const stack = stackOf(derive(node, { encoding }))
   const shared: Obj = stack
-    ? { ...encoding, [stack.fieldChannel]: { ...(encoding[stack.fieldChannel] as Obj), ...(stack.offset ? { stack: stack.offset } : {}) } }
+    ? derive(encoding, { [stack.fieldChannel]: stack.offset ? derive(encoding[stack.fieldChannel] as Obj, { stack: stack.offset }) : encoding[stack.fieldChannel] })
     : encoding
   // what the parent layer would give the overlay anyway is not repeated in it
   // (an overlay is drawn on the edge of the area, and a point cannot span: neither takes the second channels)
-  const ownOfOverlay = omit(shared, [...Object.keys(inherited).filter((k) => sameJson(inherited[k], shared[k])), 'x2', 'y2'])
+  const ownOfOverlay = deriveWithout(shared, [...Object.keys(inherited).filter((k) => sameJson(inherited[k], shared[k])), 'x2', 'y2'])
   if (line) {
-    layer.push({
-      ...(projection !== undefined ? { projection } : {}),
-      mark: { type: 'line', ...pick(markDef, ['clip', 'interpolate', 'tension', 'tooltip']), ...line },
-      encoding: ownOfOverlay,
-    })
+    const over = pickTracked(node, ['projection'])
+    over.mark = merge(pickTracked(markDef, ['clip', 'interpolate', 'tension', 'tooltip'], { type: 'line' }), line)
+    over.encoding = ownOfOverlay
+    layer.push(over)
   }
   if (points) {
-    layer.push({
-      ...(projection !== undefined ? { projection } : {}),
-      mark: { type: 'point', opacity: 1, filled: true, ...pick(markDef, ['clip', 'tooltip']), ...points },
-      encoding: ownOfOverlay,
-    })
+    const over = pickTracked(node, ['projection'])
+    over.mark = merge(pickTracked(markDef, ['clip', 'tooltip'], { type: 'point', opacity: 1, filled: true }), points)
+    over.encoding = ownOfOverlay
+    layer.push(over)
   }
-  return { ...outer, layer }
+  outer.layer = layer
+  return outer
 }
 
 // --- stack order ---------------------------------------------------------------------------------------------------------------
@@ -232,9 +285,9 @@ export function normalizePathOverlays(node: unknown, config: Obj, stackOf: (unit
 export function alignStackOrders(node: unknown, stackOf: (unit: Obj) => StackProps | undefined, inherited: Obj = {}): unknown {
   if (Array.isArray(node)) return node.map((n) => alignStackOrders(n, stackOf, inherited))
   if (!isObj(node)) return node
-  if (node.layer !== undefined) return { ...node, layer: alignStackOrders(node.layer, stackOf, mergeEncoding(inherited, node.encoding)) }
-  for (const k of COMPOSITIONS) if (node[k] !== undefined) return { ...node, [k]: alignStackOrders(node[k], stackOf, {}) }
-  if (node.spec !== undefined) return node.repeat === undefined ? { ...node, spec: alignStackOrders(node.spec, stackOf, {}) } : node
+  if (node.layer !== undefined) return derive(node, { layer: alignStackOrders(node.layer, stackOf, mergeEncoding(inherited, node.encoding)) })
+  for (const k of COMPOSITIONS) if (node[k] !== undefined) return derive(node, { [k]: alignStackOrders(node[k], stackOf, {}) })
+  if (node.spec !== undefined) return node.repeat === undefined ? derive(node, { spec: alignStackOrders(node.spec, stackOf, {}) }) : node
   if (node.mark === undefined) return node
 
   const own: Obj = isObj(node.encoding) ? node.encoding : {}
@@ -249,18 +302,17 @@ export function alignStackOrders(node: unknown, stackOf: (unit: Obj) => StackPro
   const offsetChannel = encoding.xOffset ? 'xOffset' : encoding.yOffset ? 'yOffset' : undefined
   const offset = offsetChannel ? encoding[offsetChannel] : undefined
   if (offsetChannel && isObj(offset) && offset.field !== undefined && !offset.sort) {
-    return { ...node, encoding: { ...own, [offsetChannel]: { ...offset, sort: domain } } }
+    return derive(node, { encoding: derive(own, { [offsetChannel]: derive(offset, { sort: domain }) }) })
   }
   // stacked: the layers follow the list, from the baseline up
-  const stack = stackOf({ ...node, encoding })
+  const stack = stackOf(derive(node, { encoding }))
   if (!stack) return node
   const as = `_${color.field}_sort_index`
   const horizontal = (isObj(node.mark) ? node.mark.orient : undefined) === 'horizontal' || (!(isObj(node.mark) && node.mark.orient) && stack.orient === 'horizontal')
-  return {
-    ...node,
+  return derive(node, {
     transform: [...(Array.isArray(node.transform) ? node.transform : []), { calculate: `indexof(${JSON.stringify(domain)}, datum['${color.field}'])`, as }],
-    encoding: { ...own, order: { field: as, type: 'quantitative', sort: horizontal ? 'ascending' : 'descending' } },
-  }
+    encoding: derive(own, { order: { field: as, type: 'quantitative', sort: horizontal ? 'ascending' : 'descending' } }),
+  })
 }
 
 // --- a line that spans a second channel -----------------------------------------------------------------------------------------
@@ -272,12 +324,18 @@ export function alignStackOrders(node: unknown, stackOf: (unit: Obj) => StackPro
 export function normalizeRangedLines(node: unknown, inherited: Obj = {}): unknown {
   if (Array.isArray(node)) return node.map((n) => normalizeRangedLines(n, inherited))
   if (!isObj(node)) return node
-  if (node.layer !== undefined) return { ...node, layer: normalizeRangedLines(node.layer, mergeEncoding(inherited, node.encoding)) }
-  for (const k of COMPOSITIONS) if (node[k] !== undefined) return { ...node, [k]: normalizeRangedLines(node[k], {}) }
-  if (node.spec !== undefined) return node.repeat === undefined ? { ...node, spec: normalizeRangedLines(node.spec, {}) } : node
+  if (node.layer !== undefined) return derive(node, { layer: normalizeRangedLines(node.layer, mergeEncoding(inherited, node.encoding)) })
+  for (const k of COMPOSITIONS) if (node[k] !== undefined) return derive(node, { [k]: normalizeRangedLines(node[k], {}) })
+  if (node.spec !== undefined) return node.repeat === undefined ? derive(node, { spec: normalizeRangedLines(node.spec, {}) }) : node
   const type = isObj(node.mark) ? node.mark.type : node.mark
   if (type !== 'line' || !spansAChannel(mergeEncoding(inherited, node.encoding))) return node
-  return { ...node, mark: isObj(node.mark) ? { ...node.mark, type: 'rule' } : 'rule' }
+  // (the mark's type has done its job: it made the rule)
+  if (isObj(node.mark)) {
+    consuming(() => node.mark.type)
+    return derive(node, { mark: derive(node.mark, { type: 'rule' }) })
+  }
+  consuming(() => node.mark)
+  return derive(node, { mark: 'rule' })
 }
 
 // --- all of them ---------------------------------------------------------------------------------------------------------------
@@ -288,5 +346,5 @@ export function normalizeRangedLines(node: unknown, inherited: Obj = {}): unknow
  * values in).
  */
 export function normalizeUnits(node: unknown, userConfig: Obj | undefined, stackOf: (unit: Obj) => StackProps | undefined): unknown {
-  return alignStackOrders(normalizeRangedLines(normalizePathOverlays(normalizeComposites(node, userConfig), userConfig ?? {}, stackOf)), stackOf)
+  return peek(() => alignStackOrders(normalizeRangedLines(normalizePathOverlays(normalizeComposites(node, userConfig), userConfig ?? {}, stackOf)), stackOf))
 }

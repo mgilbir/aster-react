@@ -9,6 +9,7 @@
 import { VLCompileError, dict, genName, splitAccessPath } from './names.js'
 import { getTimeUnitParts } from './timeunit.js'
 import { normalizeTimeUnit } from './validate.js'
+import { derive, deriveWithout } from './consume.js'
 
 type Obj = Record<string, any>
 const isObj = (v: unknown): v is Obj => v !== null && typeof v === 'object' && !Array.isArray(v)
@@ -544,13 +545,13 @@ function boxplotLayers(unit: Obj, userConfig: Obj | undefined): Obj {
  */
 const GIVEN = '$given'
 export function markGiven<T extends object>(param: T): T {
-  return { ...param, [GIVEN]: true }
+  return derive(param as Obj, { [GIVEN]: true }) as T
 }
 export const isGiven = (param: unknown): boolean => isObj(param) && param[GIVEN] === true
 
 export function compositeLayers(kind: CompositeMark, unit: Obj, userConfig: Obj | undefined): Obj {
   const made = layersOf(kind, unit, userConfig)
-  const given = Array.isArray(unit.params) ? unit.params.filter(isGiven).map(({ [GIVEN]: _g, ...param }: Obj) => param) : []
+  const given = Array.isArray(unit.params) ? unit.params.filter(isGiven).map((param: Obj) => deriveWithout(param, [GIVEN])) : []
   if (given.length === 0) return made
   // a selection is declared by every unit the composition gave it to: a composite mark of one unit takes it, one of several declares its
   // signals twice in a Vega scope, which Vega rejects
