@@ -224,8 +224,9 @@ its own), and so does `@aster-charts/vl`.
 `diffRows(previous, next)` classifies a replacement snapshot: same-length changes return
 the changed indices; length-changing updates also return `from` (new → old row index,
 `-1` for an insert), `to` (old → new, `-1` for a delete) and the added/removed ranges.
-Pass the long form as `dataPulse` (per source dataset) to `evaluateChart`/`session` when
-you already know the delta; `dataChanges` remains the compact same-length form (when both name
+Pass what it returned, or the long form, as `dataPulse` (per source dataset) to `evaluateChart`/`session` (and as `pulse` of a stream
+batch) when you already know the delta (the long form's `added` / `removed` are all the ranges; a `RowDiff` names the first in
+`added` / `removed` and all of them in `addedRanges` / `removedRanges`, and is read accordingly); `dataChanges` remains the compact same-length form (when both name
 a dataset, `dataPulse` wins for it).
 
 `createChartStream(spec, options)` wraps a session with a push-based, bounded queue (the rows you `push` are treated as
@@ -405,7 +406,9 @@ vega-format's; compiled formatters are kept per specifier in a bounded least-rec
 - `numberFormatLocale(definition)` and `timeFormatLocale(definition)` build one half alone (the number half has the
   number methods, the time half the date methods).
 - `defaultLocale()` reads the default locale; `defaultLocale(numberDefinition, timeDefinition)` replaces both halves. One
-  argument is an error. `numberFormatDefaultLocale(definition?)` and `timeFormatDefaultLocale(definition?)` read or replace one half.
+  argument is an error, and so is a definition that is not one (`undefined`, `null`): the call replaces neither half. Both halves are built
+  before either default is assigned, so a call that throws changes nothing. `numberFormatDefaultLocale(definition?)` and
+  `timeFormatDefaultLocale(definition?)` read (no argument) or replace one half.
   The expression functions `format`, `timeFormat`, `utcFormat`, `timeParse`, `utcParse`, the guide captions and the `date:` / `utc:` patterns of a data `parse` read the default on every call, so a replacement takes effect at once. It is
   process-wide state: set it once at start-up.
 - `resetDefaultLocale()` puts both halves back to the built-in locale (a test seam).

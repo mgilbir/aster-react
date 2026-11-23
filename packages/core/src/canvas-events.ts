@@ -20,6 +20,7 @@
  * persist across renders). A new binding relocates the items held so far into its scene (`ViewEventScene.relocate`); one
  * that is gone is kept as it was, so it is no longer the hovered one and its `pointerout` is not sent.
  */
+import type { HostCanvas } from './host-types.js'
 import type { PickedItem, ViewEventConnection, ViewEventScene, ViewEvents } from './signals.js'
 
 /** A canvas's event handler for the signal event loop (`SignalBindOptions.events`). */
@@ -39,7 +40,7 @@ const TOUCH = new Set(['touchstart', 'touchmove', 'touchend'])
  * as long as it is shown, pass it to every binding (`bindSceneSignals(canvas, scene, signals, hooks, { events })`), and
  * `release` it when the canvas goes.
  */
-export function createCanvasEvents(canvas: HTMLCanvasElement): CanvasEvents {
+export function createCanvasEvents(canvas: HostCanvas): CanvasEvents {
   /** The handlers of the bound streams, by type, in the order they were added (one binding at a time, but a re-bind overlaps). */
   const handlers = new Map<string, Array<{ owner: object; send: Send }>>()
   /** The scene of the newest binding: what a pointer position is resolved in. */

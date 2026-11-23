@@ -13,6 +13,7 @@
  *    `url` is also drawn resolved against it, as vega's loader does: `resolveImageUrl`);
  *  - `allow(url)` is a veto hook consulted for every URL (and every redirect hop).
  */
+import type { HostUrl } from './host-types.js'
 
 /** Typed policy violation: the URL was refused before any request was made. */
 export class AsterUrlError extends Error {
@@ -38,7 +39,7 @@ export interface UrlPolicyBase {
 /** The synchronous policy applied to image `url`s while the scene is built. */
 export interface ImageUrlPolicy extends UrlPolicyBase {
   /** Return true to permit the URL. Must be synchronous. */
-  allow?: (url: URL) => boolean
+  allow?: (url: HostUrl) => boolean
   /**
    * Called instead of throwing when a URL is denied; the image is then dropped
    * (its item has no `url`, so nothing is drawn and nothing is requested).
@@ -61,7 +62,7 @@ const NO_BASE = 'https://relative.invalid/'
  * resolve it against. Classification uses the WHATWG parser, never a regex, so
  * leading whitespace, control characters and `//host` forms cannot slip past.
  */
-export function checkBasicUrl(raw: string, policy: UrlPolicyBase, defaults: readonly string[]): URL | null {
+export function checkBasicUrl(raw: string, policy: UrlPolicyBase, defaults: readonly string[]): HostUrl | null {
   const protocols = policy.protocols ?? defaults
   let url: URL
   try {

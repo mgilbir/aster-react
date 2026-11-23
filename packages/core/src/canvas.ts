@@ -53,7 +53,7 @@ export interface CanvasLike {
   rotate(angle: number): void
   clip(fillRule?: 'nonzero' | 'evenodd'): void
   fill(fillRule?: 'nonzero' | 'evenodd'): void
-  /** (a real context only: a run of symbols is painted from a `Path2D`, see {@link runPath}) */
+  /** (a real context only: a run of symbols is painted from a `Path2D`) */
   fill(path: unknown, fillRule?: 'nonzero' | 'evenodd'): void
   stroke(path?: unknown): void
   fillRect(x: number, y: number, w: number, h: number): void

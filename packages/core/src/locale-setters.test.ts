@@ -69,6 +69,6 @@ describe('the locale setters refuse what is not a definition, and change nothing
     defaultLocale(de, deTime)
     expect(observed()).toEqual(['1.234,50', 'März', '1.234,50'])
     expect(locale(undefined, undefined).format(',.2f')(1234.5)).toBe('1.234,50') // a missing half of `locale()` is the default one
-    expect(() => defaultLocale(de as never)).toThrow(/either zero or two arguments/)
+    expect(() => (defaultLocale as (...a: unknown[]) => unknown)(de)).toThrow(/either zero or two arguments/)
   })
 })

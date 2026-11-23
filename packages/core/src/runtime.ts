@@ -61,7 +61,7 @@ import { applyImageUrlPolicy, applyLinkUrlPolicy, resolveImageUrl, type ImageUrl
 import { checkChartUrlData } from './url-data.js'
 import { valueKey, valuesEqual } from './fingerprint.js'
 import { dataWithoutRows, valuesSignal } from './spec-structure.js'
-import { diffRows, equalCell, rowsEqual, sourceNames, type PulseChange } from './pulse.js'
+import { diffRows, equalCell, pulseChangeOf, rowsEqual, sourceNames, type PulseChange } from './pulse.js'
 import type { aggregateGroups } from './transform-agg.js'
 import type { GridPlace } from './trellis.js'
 import { boundAxisGroup, boundGroupItem, boundLeaf, boundTypedMark, Bounds, layoutBounds, eachMarkBounds, hasClippedMark } from './bounds.js'
@@ -956,7 +956,8 @@ function prepareChartCtx(
   // `dataPulse` carries the full mapping and wins when both name a dataset.
   const inputPulses = new Map<string, StepPulse>()
   for (const [name, idxs] of Object.entries(input.dataChanges ?? {})) inputPulses.set(name, { changed: [...idxs] })
-  for (const [name, p] of Object.entries(input.dataPulse ?? {})) {
+  for (const [name, given] of Object.entries(input.dataPulse ?? {})) {
+    const p = pulseChangeOf(given)
     inputPulses.set(name, {
       changed: p.changed ?? [],
       ...(p.from ? { from: p.from } : {}),
