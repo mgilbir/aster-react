@@ -13,7 +13,7 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { compileChart, evaluateChart, registerExpressionFunction, renderSceneToSvg } from '@aster-charts/core'
 import { bindSceneSignals } from '@aster-charts/core/signals'
-import { asterOutcome, BAD, BIND_TIME_REPORTS, GOOD, HANDLER_SHAPES, HANDLER_SITES, type Spec, UNBOUND_HANDLER_SITES, vegaOutcome } from './expression-sites.mts'
+import { asterOutcome, BAD, BIND_TIME_REPORTS, expectAster, GOOD, HANDLER_SHAPES, HANDLER_SITES, type Spec, UNBOUND_HANDLER_SITES, UNSUPPORTED_ENCODE_HANDLER, vegaOutcome } from './expression-sites.mts'
 
 /** Compile a spec, draw it, bind its handlers: what the engine reports, and the signals the handlers set when `fire` has run. */
 function bound(spec: Spec, between: () => void = () => {}, fire: (svg: SVGSVGElement) => void = () => {}): { logs: string[]; store: Record<string, unknown> } {
@@ -44,7 +44,10 @@ describe('a broken handler of a signal refuses the spec at compile time, as vega
       for (const e of [...BAD, ...GOOD]) {
         const spec = make(e)
         const want = vegaOutcome(spec)
-        if (want === 'ok') {
+        if (want === 'ok' && site in UNBOUND_HANDLER_SITES) {
+          // vega accepts a handler that re-encodes the event's item: Aster refuses it once, when the spec is compiled (C629)
+          expect(asterOutcome(spec), `${site}: ${JSON.stringify(e)}`).toMatch(UNSUPPORTED_ENCODE_HANDLER)
+        } else if (want === 'ok') {
           // vega accepts: the spec compiles and the handlers bind, reporting nothing -- but what a site is known to report
           // (see BIND_TIME_REPORTS), which is all that is allowed there
           expect(asterOutcome(spec), `${site}: ${JSON.stringify(e)}`).toBe('ok')
@@ -62,7 +65,8 @@ describe('a broken handler of a signal refuses the spec at compile time, as vega
 
   for (const [shape, spec] of Object.entries(HANDLER_SHAPES)) {
     it(`shape: ${shape}`, () => {
-      expect(asterOutcome(spec), shape).toBe(vegaOutcome(spec))
+      const got = asterOutcome(spec)
+      expect(expectAster(spec, shape === 'encodeOnly')(got), `${shape}: ${got} (vega: ${vegaOutcome(spec)})`).toBe(true)
     })
   }
 
