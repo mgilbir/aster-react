@@ -86,6 +86,29 @@ OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 ```
 
+## vega-tooltip (BSD-3-Clause)
+
+Projects: vega-tooltip@1.0.0
+
+```text
+Copyright 2016 Interactive Data Lab and contributors
+
+Redistribution and use in source and binary forms, with or without modification, are permitted provided that the following conditions are met:
+
+1. Redistributions of source code must retain the above copyright notice, this list of conditions and the following disclaimer.
+
+2. Redistributions in binary form must reproduce the above copyright notice, this list of conditions and the following disclaimer in the documentation and/or other materials provided with the distribution.
+
+3. Neither the name of the copyright holder nor the names of its contributors may be used to endorse or promote products derived from this software without specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+```
+
+`packages/react/src/tooltip-content.ts` is a TypeScript transcription of vega-tooltip's `formatValue` (an array, `{title, image, ...rest}`,
+`undefined` skipped, nested objects as JSON, `{}` for an empty one) and of its JSON replacer (`maxDepth`, `[Object]`, `[Circular]`); the box
+placement in `packages/react/src/ChartCore.tsx` (offsets from the pointer, flipped at the viewport edge) follows its `calculatePositionRelativeToCursor`. The
+licence carries a copyright line of its own, which is not the Vega text printed above.
+
 ## d3-array
 
 Projects: d3-array@3.2.4
@@ -560,7 +583,8 @@ Commons Math is reproduced below, followed by the licence.
 
 `NOTICE` of Apache Commons Math 3.6.1 (the last 3.x release, the line `Erf.erfInv`
 belongs to), copied verbatim from
-https://github.com/apache/commons-math/blob/MATH_3_6_1/NOTICE.txt :
+https://github.com/apache/commons-math/blob/MATH_3_6_1/NOTICE.txt (tag MATH_3_6_1, commit 16abfe5; fetched from
+https://raw.githubusercontent.com/apache/commons-math/16abfe5de688cc52fb0396e0609cb33044b15653/NOTICE.txt) :
 
 ```text
 Apache Commons Math
@@ -832,7 +856,7 @@ by Harry Stevens ... which was adapted from regression-js by Tom Alexander". Nei
 is installed in this repository. The texts below are their `LICENSE` files, fetched from
 https://raw.githubusercontent.com/HarryStevens/d3-regression/29c3b591778118579520b72f09326ad3e9f2c5fd/LICENSE
 (the first commit, 2019-03-24; the current file only extends the year) and
-https://raw.githubusercontent.com/Tom-Alexander/regression-js/master/LICENSE .
+https://raw.githubusercontent.com/Tom-Alexander/regression-js/7995fd9955ca23a8a99834a9f28aa9c8adc7ad19/LICENSE (master when fetched, 2026-11-23) .
 
 d3-regression (BSD-3-Clause):
 
@@ -903,7 +927,7 @@ reproduces one of its comments; `packages/core/src/raster.ts` follows its analyt
 (`SkAlphaMul(alpha, coverage + 1)`). Skia's source files are headed "Copyright 2006 The
 Android Open Source Project ... Use of this source code is governed by a BSD-style
 license that can be found in the LICENSE file"; that `LICENSE` is reproduced below,
-copied verbatim from https://raw.githubusercontent.com/google/skia/main/LICENSE .
+copied verbatim from https://raw.githubusercontent.com/google/skia/6fec0b16e6faaedcfbaa267ac239b860305c1293/LICENSE (main when fetched, 2026-11-23) .
 
 ```text
 Copyright (c) 2011 Google Inc. All rights reserved.
@@ -939,7 +963,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 ## time-grain-detector (Paul Rosenzweig)
 
-The time-unit detection of the `timeunit` transform (`packages/core/src/transform-basic.ts`) follows `vega-time`, whose
+The time-unit detection of the `timeunit` transform (`detectTimeUnits` in `packages/core/src/transform-timeunit.ts`) follows `vega-time`, whose
 `detectTimeUnits` is adapted from `time-grain-detector` 1.1.0 (ISC). Not installed in this repository. The published
 package carries no LICENSE file; its `package.json` declares `"license": "ISC"` and `"author": "Paul Rosenzweig"`, and
 states no year. The ISC licence text follows, with that author as the copyright holder.
@@ -972,7 +996,7 @@ with their `LICENSE` text, under "Vega packages" above.
 ## Modules rewritten as Aster's own designs
 
 `event-selector.ts`, `selections.ts`, `timer.ts`, `topojson.ts`, `dsv.ts`, `data-format.ts`, `delaunay.ts`,
-`voronoi.ts`, `orient.ts`, `transform-agg.ts`, `transform-window.ts`, `transform-basic.ts`, `trellis.ts`, `guide-encode.ts`, `guide-axis.ts`, `guide-legend.ts`, `guide-title.ts` and `bounds.ts` were rewritten with their own structure, naming and comments; none of the upstream source
+`voronoi.ts`, `orient.ts`, `transform-agg.ts`, `transform-window.ts`, `transform-basic.ts`, `transform-timeunit.ts`, `trellis.ts`, `guide-encode.ts`, `guide-axis.ts`, `guide-legend.ts`, `guide-title.ts` and `bounds.ts` were rewritten with their own structure, naming and comments; none of the upstream source
 text is carried over. They are still derivative in what an output must equal and are listed here, with the licences
 of the projects they follow printed above, for that reason:
 
@@ -992,7 +1016,7 @@ of the projects they follow printed above, for that reason:
 - `event-selector.ts` follows the grammar and error messages of `vega-event-selector` (BSD-3-Clause).
 - `selections.ts` follows the semantics of `vega-selections` (BSD-3-Clause), `data-format.ts` those of `vega-loader`
   (BSD-3-Clause).
-- `transform-agg.ts`, `transform-window.ts` and `transform-basic.ts` follow the semantics of `vega-transforms` (Aggregate, JoinAggregate,
+- `transform-agg.ts`, `transform-window.ts`, `transform-basic.ts` and `transform-timeunit.ts` follow the semantics of `vega-transforms` (Aggregate, JoinAggregate,
   Pivot, Window, Bin, Fold, Flatten, Impute, Lookup, TimeUnit, the aggregate-op table) and of `vega-statistics` (the bin step search,
   quartiles, the bootstrap interval, the linear congruential generator), `vega-util` and `vega-time` (time bins; the time-unit
   detection there is adapted from the `time-grain-detector` package, ISC, printed above), all

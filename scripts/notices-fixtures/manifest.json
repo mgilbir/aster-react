@@ -1,0 +1,51 @@
+[
+  {
+    "file": "apache-commons-math-NOTICE.txt",
+    "section": "Apache Commons Math (Apache-2.0)",
+    "url": "https://raw.githubusercontent.com/apache/commons-math/16abfe5de688cc52fb0396e0609cb33044b15653/NOTICE.txt",
+    "what": "NOTICE.txt at tag MATH_3_6_1",
+    "sha256": "5495442a32bfc2b93b4a8f2c34c5c218d16cca434aa5684fb953d9419120e3fa"
+  },
+  {
+    "file": "apache-2.0-LICENSE.txt",
+    "section": "Apache Commons Math (Apache-2.0)",
+    "url": "https://www.apache.org/licenses/LICENSE-2.0.txt",
+    "what": "the canonical text (not a commit; pinned by its sha256)",
+    "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+  },
+  {
+    "file": "science.js-LICENSE.txt",
+    "section": "science.js (Jason Davies)",
+    "url": "https://raw.githubusercontent.com/jasondavies/science.js/96af5328a672fa670a3852cb68a23de3758551d4/LICENSE",
+    "what": "LICENSE at 96af532 (2011-07-09)",
+    "sha256": "3bd1fdf686ffcad175daddcb36ee28599ac8f090b6cec2c7654118c8a6f3d4c9"
+  },
+  {
+    "file": "d3-regression-LICENSE.txt",
+    "section": "d3-regression (Harry Stevens) and regression-js (Tom Alexander)",
+    "url": "https://raw.githubusercontent.com/HarryStevens/d3-regression/29c3b591778118579520b72f09326ad3e9f2c5fd/LICENSE",
+    "what": "LICENSE at 29c3b59 (2019-03-24)",
+    "sha256": "d210203f922101502894baf700b9a392e323a26e4b603ab166c57e09a6e773b5"
+  },
+  {
+    "file": "regression-js-LICENSE.txt",
+    "section": "d3-regression (Harry Stevens) and regression-js (Tom Alexander)",
+    "url": "https://raw.githubusercontent.com/Tom-Alexander/regression-js/7995fd9955ca23a8a99834a9f28aa9c8adc7ad19/LICENSE",
+    "what": "LICENSE at 7995fd9 (master when fetched, 2026-11-23)",
+    "sha256": "2f932f5cfb9b042cc6c0089ee8004b33e3746ffeab879341dbd453c150524307"
+  },
+  {
+    "file": "skia-LICENSE.txt",
+    "section": "Skia (BSD-3-Clause)",
+    "url": "https://raw.githubusercontent.com/google/skia/6fec0b16e6faaedcfbaa267ac239b860305c1293/LICENSE",
+    "what": "LICENSE at 6fec0b1 (main when fetched, 2026-11-23)",
+    "sha256": "5f787c1dee3c56547f09ccc2906ab5f5293c4d8dd6c8654e573216c38e908dbd"
+  },
+  {
+    "file": "time-grain-detector-package.json",
+    "section": "time-grain-detector (Paul Rosenzweig)",
+    "url": "https://registry.npmjs.org/time-grain-detector/1.1.0",
+    "what": "license and author fields of time-grain-detector@1.1.0 (the package has no LICENSE file)",
+    "sha256": "5c52a845d53859c800a861a0aa69b2d6a792441b05dab84ace98bfc4b52975b1"
+  }
+]
