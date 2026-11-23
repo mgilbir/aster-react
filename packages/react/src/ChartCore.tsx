@@ -619,7 +619,9 @@ function ChartView({
     const signalDefs = (scene as { compiled?: { signalDefs?: Array<{ on?: unknown[] }> } } | null)?.compiled?.signalDefs
     return !signalDefs?.some((d) => (d.on?.length ?? 0) > 0)
   }, [denseRequested, denseMarks, scene])
-  const denseSvg = denseAllowed && renderer === 'svg' && (scene != null ? hasDenseSymbolMarks(scene) : false)
+  // Batching is the incremental DOM patcher's: string mode (`incremental={false}`) serializes per-item markup, and a batched scene there
+  // had no markup and no patcher to build it (the chart stayed empty).
+  const denseSvg = incremental && denseAllowed && renderer === 'svg' && (scene != null ? hasDenseSymbolMarks(scene) : false)
   const hydrating = React.useSyncExternalStore(subscribeNothing, clientOnly, serverOrHydrating)
   const pixelRatio = React.useSyncExternalStore(subscribeNothing, devicePixelRatio, serverPixelRatio)
 
