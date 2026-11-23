@@ -93,11 +93,13 @@ const norm = (v: unknown): string => JSON.stringify(v, (_k, x) => (typeof x === 
 const rowsOf = (rows: readonly unknown[] | undefined | null): unknown[] => (rows ?? []).map((row) => ({ ...(row as object) }))
 
 async function vegaResult(c: Case): Promise<string> {
-  let view: { runAsync(): Promise<unknown>; signal(n: string): unknown; data(n: string): unknown[]; finalize(): void } | undefined
+  type View = { runAsync(): Promise<unknown>; signal(n: string): unknown; data(n: string): unknown[]; finalize(): void }
+  let view: View | undefined
   try {
-    view = new vega.View(vega.parse(structuredClone(c.spec) as never), { renderer: 'none', logLevel: vega.None }) as never
-    await view!.runAsync()
-    return norm({ signals: c.signals.map((n) => view!.signal(n)), data: c.data.map((n) => rowsOf(view!.data(n))) })
+    const made = new vega.View(vega.parse(structuredClone(c.spec) as never), { renderer: 'none', logLevel: vega.None }) as unknown as View
+    view = made
+    await made.runAsync()
+    return norm({ signals: c.signals.map((n) => made.signal(n)), data: c.data.map((n) => rowsOf(made.data(n))) })
   } catch (e) {
     return `threw ${(e as Error).message}`
   } finally {
