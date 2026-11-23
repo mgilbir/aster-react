@@ -209,6 +209,14 @@ depend on the V8 version (see "Why live" below), so only those suites stay recor
 d3-color (compared with a 1e-6 tolerance, because of its cbrt/pow round-trips), d3-format and
 vega-format, vega-time, d3-dsv and topojson-client.
 
+A recording has to be able to fail, and to be repeatable. `pnpm vectors` writes the same bytes every time (no clock, no
+randomness; `--out <dir>` records elsewhere), `packages/conformance/src/vectors-reproducible.test.ts` regenerates twice and
+compares with the committed files (the colour file within the replay's tolerance, the one recording that is not byte-stable
+across V8 builds), and `vectors-coverage.test.ts` states the dimensions each suite must vary (no case recorded twice, floors on
+instants with seconds and milliseconds, fractional steps, every interval with `count` / `range` / `every`, every multi-format
+level, ...). A vector is changed only by editing `scripts/gen-vectors.mjs` and regenerating. Two recorded strings (type `d` on
+|x| >= 1e21 and on infinities) are ICU output of `toLocaleString('en')`, as in d3-format; every supported Node ships full ICU.
+
 The four suites that went through `Math.pow/exp/log`, the trig functions or `sqrt` are LIVE
 differentials, with their inputs in importable case modules beside the tests (the old recordings
 broke CI once, Node 22 against Node 26):
