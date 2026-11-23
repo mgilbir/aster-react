@@ -76,6 +76,7 @@ import { LEGEND_SCALES } from './legend-scales.js'
 import { part, requestPart } from './engine-parts.js'
 import { guideReading, type GuideKind } from './guide-model.js'
 import { ExpressionFailure, isSignal, isUnencoded, itemAriaOf, propsOf, type GuideStyles, type UserEncode } from './guide-encode.js'
+import { entryReadsItem } from './expr-reads.js'
 import { defaultMergedConfig } from './config-defaults.js'
 
 // The legend builder and the grid layout are parts the React shells load on demand (engine-parts.ts): read from their slots when a
@@ -624,6 +625,8 @@ interface PassMemory {
 
 interface EvalContext {
   chart: CompiledChart
+  /** The scenegraph item an encode's expressions see as `item` while it is encoded (see resolveEncodeSet), else undefined. */
+  encodeItem?: object
   /** Present while an evaluation makes more than one dataflow pass (autosize fit): see `PassMemory`. */
   passMemory?: PassMemory
   scope: GuideScope
@@ -5487,7 +5490,7 @@ function reencodeChannels(mark: CompiledMark, ctx: EvalContext, prevGroup: Scene
       if (whole) {
         const row = { ...(rows[i] as Row) }
         markTuple(row)
-        const res = resolveEncodeSet(encode, row, ctx, mark.type)
+        const res = resolveEncodeSet(encode, row, ctx, mark.type, mark)
         res.datum = row
         res.__gen = gen
         out[i] = res
@@ -5672,7 +5675,7 @@ function markItemsOf(
         if (meter) meter.tick('mark encoding')
         const row = { ...(rows[i] as Row) }
         markTuple(row)
-        const res = resolveEncodeSet(update, row, ctx, mark.type)
+        const res = resolveEncodeSet(update, row, ctx, mark.type, mark)
         res.datum = row
         res.__gen = gen
         if (hittable && (res as { fill?: unknown }).fill === 'transparent') (res as unknown as Record<string, unknown>)._hit = true
@@ -5743,7 +5746,7 @@ function markItemsOf(
           const copy = { ...encodeRows[i]! }
           markTuple(copy)
           const datum = PRIMITIVE_TUPLE in copy ? tupleDatum(copy) as Row : copy
-          const res = resolveEncodeSet(update, datum, ctx, mark.type)
+          const res = resolveEncodeSet(update, datum, ctx, mark.type, mark)
           res.datum = datum
           res.__gen = gen
           items[i] = res
@@ -5755,7 +5758,7 @@ function markItemsOf(
           markTuple(copy)
           // (a primitive tuple is the primitive itself to its item, as in vega)
           const datum = PRIMITIVE_TUPLE in copy ? tupleDatum(copy) as Row : copy
-          const res = resolveEncodeSet(update, datum, ctx, mark.type)
+          const res = resolveEncodeSet(update, datum, ctx, mark.type, mark)
           res.datum = datum
           res.__gen = gen
           return res
@@ -5769,7 +5772,7 @@ function markItemsOf(
     const update = mark.encode?.update ?? mark.encode?.enter ?? {}
     const datum: Row = {}
     markTuple(datum)
-    const res = resolveEncodeSet(update, datum, ctx, mark.type)
+    const res = resolveEncodeSet(update, datum, ctx, mark.type, mark)
     res.datum = datum
     res.__gen = ctx.gen
     items = [res]
@@ -6355,7 +6358,7 @@ interface EnteredGroup {
 function enterGroupItem(mark: CompiledMark, ctx: EvalContext, src: GroupSource): EnteredGroup {
   const path = [...ctx.scope.path, ctx.scope.nextChild.n++]
   // (`parent` is the enclosing group's datum here, as for any mark of the scope; a failing encode stops the run: see failEncode)
-  const item = resolveEncodeSet((mark.encode?.update ?? {}) as Record<string, EncodeValue | EncodeValue[]>, src.datum, ctx, 'group')
+  const item = resolveEncodeSet((mark.encode?.update ?? {}) as Record<string, EncodeValue | EncodeValue[]>, src.datum, ctx, 'group', mark)
   return { src, path, item: Object.assign(item, { datum: src.datum }) }
 }
 
@@ -6897,6 +6900,8 @@ interface EncodePlan {
   urls: boolean
   /** The per-set spatial adjustment of the encode, when its sets split a dimension's edges (spatial.ts); looked up once. */
   spatial: SpatialProgram | undefined
+  /** Whether an expression of the encode names `item` (see resolveEncodeSet). */
+  readsItem: boolean
 }
 
 // Encode entry shapes with a dedicated per-row path; everything else takes the general evaluator.
@@ -6972,7 +6977,7 @@ function encodePlan(encode: Record<string, EncodeValue | EncodeValue[]>): Encode
   }
   const plainSpecs = plainKeys.map((k) => encode[k]!)
   const plainKinds = Uint8Array.from(plainSpecs, encodeKind)
-  plan = { plainKeys, signalKeys, definedSpec, plainSpecs, plainKinds, urls: Object.keys(encode).some((k) => URL_CHANNELS.has(k)), spatial: spatialProgramFor(encode) }
+  plan = { plainKeys, signalKeys, definedSpec, plainSpecs, plainKinds, urls: Object.keys(encode).some((k) => URL_CHANNELS.has(k)), spatial: spatialProgramFor(encode), readsItem: Object.values(encode).some((e) => entryReadsItem(e)) }
   encodePlanCache.set(encode, plan)
   return plan
 }
@@ -7064,10 +7069,39 @@ function encodeReadsLateScale(encode: Record<string, EncodeValue | EncodeValue[]
   return false
 }
 
-function resolveEncodeSet(encode: Record<string, EncodeValue | EncodeValue[]>, datum: Row, ctx: EvalContext, marktype: string): SceneItem {
+/** Run `fn` with `item` as the scenegraph item the encode's expressions see (`ctx.encodeItem`, C31). */
+function withEncodeItem<T>(ctx: EvalContext, item: object | undefined, fn: () => T): T {
+  if (item === undefined) return fn()
+  const outer = ctx.encodeItem
+  ctx.encodeItem = item
+  try { return fn() } finally { ctx.encodeItem = outer }
+}
+
+/**
+ * An encode whose expressions name `item` sees the item it is building, as vega's encoder hands its expressions the scenegraph
+ * item: the channels set so far (read live: `item.x` after `enter.x`), its `datum`, and its `mark` (type, name, role and the group
+ * it is in: `item.mark.group.width`). Built only for an encode that names it.
+ */
+function resolveEncodeSet(encode: Record<string, EncodeValue | EncodeValue[]>, datum: Row, ctx: EvalContext, marktype: string, mark?: { name?: string; role?: string }): SceneItem {
+  const plan = encodePlan(encode)
+  if (!plan.readsItem) return resolveEncodeSetOf(encode, plan, datum, ctx, marktype)
+  let item: SceneItem | undefined
+  const facade = new Proxy({}, {
+    get: (_t, k) => {
+      if (k === 'datum') return datum
+      if (k === 'mark') {
+        const group = { x: ctx.groupX ?? 0, y: ctx.groupY ?? 0, width: ctx.width, height: ctx.height, datum: ctx.signalParams.parent, mark: { marktype: 'group' } }
+        return { marktype, name: mark?.name, role: mark?.role ?? (marktype === 'group' ? 'scope' : 'mark'), group }
+      }
+      return item === undefined ? undefined : (item as Record<string | symbol, unknown>)[k]
+    },
+  })
+  return withEncodeItem(ctx, facade, () => resolveEncodeSetOf(encode, plan, datum, ctx, marktype, (it) => { item = it }))
+}
+
+function resolveEncodeSetOf(encode: Record<string, EncodeValue | EncodeValue[]>, plan: EncodePlan, datum: Row, ctx: EvalContext, marktype: string, building?: (item: SceneItem) => void): SceneItem {
   // (an item an aborted run never reached stays in its mark, bare: vega's scenegraph holds it without geometry or paint)
   if (ctx.encodeAborted || ctx.bareEncode === true) return {}
-  const plan = encodePlan(encode)
   const binding = ctx.encodeBinding
 
   // The encoded channel values (pixels, colours, ...) live on the scene ITEM and
@@ -7089,6 +7123,7 @@ function resolveEncodeSet(encode: Record<string, EncodeValue | EncodeValue[]>, d
   // intermediate per-row object — this is the hottest loop in the engine).
   const item: SceneItem = {}
   const rec = item as unknown as Record<string, unknown>
+  building?.(item)
   // vega's Encode throws at the first failing channel; the dataflow logs it and stops the run:
   // this item keeps the channels evaluated before the failure and no later item is encoded.
   try {
@@ -7177,7 +7212,7 @@ function resolveEncodeProperty(
     // throws and the dataflow logs it (see resolveEncodeSet, which reports it).
     for (const cond of spec) {
       if (cond && typeof cond === 'object' && 'test' in cond && typeof cond.test === 'string') {
-        if (ctx.runtime.expr(cond.test)(datum, ctx.signalParams)) {
+        if (ctx.runtime.expr(cond.test)(datum, ctx.signalParams, undefined, ctx.encodeItem)) {
           return resolveEncodeValueInternal(cond, datum, ctx, binding)
         }
       } else if (cond && typeof cond === 'object') {
@@ -7220,7 +7255,7 @@ function gradientOfEntry(enc: EncodeEntry, datum: Row, ctx: EvalContext): unknow
   const ref = enc.gradient
   const signal = ref !== null && typeof ref === 'object' ? (ref as { signal?: unknown }).signal : undefined
   const name = typeof ref === 'string' ? ref
-    : signal ? ctx.runtime.expr(String(signal))(datum, ctx.signalParams)
+    : signal ? ctx.runtime.expr(String(signal))(datum, ctx.signalParams, undefined, ctx.encodeItem)
       : encodeFieldValue(ref !== null && typeof ref === 'object' ? ref : { datum: ref }, datum, ctx)
   const scale = ctx.runtime.scale(name as string)
   // The gradient of a scale named in the spec is the same for every item of the evaluation: made once. (An item that is given
@@ -7276,7 +7311,7 @@ function groupFieldValue(ref: { group?: unknown; parent?: unknown }, datum: Row,
 function encodeFieldValue(ref: unknown, datum: Row, ctx: EvalContext): unknown {
   if (ref !== null && typeof ref === 'object' && !Array.isArray(ref)) {
     const r = ref as { signal?: unknown; group?: unknown; parent?: unknown; datum?: unknown }
-    if (r.signal) return (datum as Record<string, unknown>)[ctx.runtime.expr(String(r.signal))(datum, ctx.signalParams) as string]
+    if (r.signal) return (datum as Record<string, unknown>)[ctx.runtime.expr(String(r.signal))(datum, ctx.signalParams, undefined, ctx.encodeItem) as string]
     if (r.group !== undefined || r.parent !== undefined) return groupFieldValue(r, datum, ctx)
     if (r.datum !== undefined) {
       const f = fieldName(r.datum, datum, ctx)
@@ -7296,7 +7331,7 @@ function encodeScaleOf(enc: EncodeEntry, datum: Row, ctx: EvalContext, binding?:
     return { scale: ctx.scales.get(ref), type: ctx.scaleTypes.get(ref) }
   }
   const name = ref !== null && typeof ref === 'object' && (ref as { signal?: unknown }).signal
-    ? ctx.runtime.expr(String((ref as { signal: string }).signal))(datum, ctx.signalParams)
+    ? ctx.runtime.expr(String((ref as { signal: string }).signal))(datum, ctx.signalParams, undefined, ctx.encodeItem)
     : encodeFieldValue(ref, datum, ctx)
   return { scale: ctx.scales.get(name as string), type: ctx.scaleTypes.get(name as string) }
 }
@@ -7326,7 +7361,7 @@ function resolveEncodeValueInternal(value: EncodeValue | undefined, datum: Row, 
   if (enc.gradient != null) return gradientOfEntry(enc, datum, ctx)
   let head: unknown
   let hasHead = true
-  if (enc.signal) head = ctx.runtime.expr(enc.signal)(datum, ctx.signalParams)
+  if (enc.signal) head = ctx.runtime.expr(enc.signal)(datum, ctx.signalParams, undefined, ctx.encodeItem)
   else if (enc.field != null) head = encodeFieldValue(enc.field, datum, ctx)
   else if (enc.value !== undefined) {
     const v = enc.value
@@ -7689,7 +7724,7 @@ function guideHost(ctx: EvalContext): GuideHost {
 }
 function makeGuideHost(ctx: EvalContext): GuideHost {
   const host: GuideHost = {
-    entry: (spec, datum) => resolveEncodeProperty(spec as EncodeValue | EncodeValue[], datum, ctx),
+    entry: (spec, datum, item) => withEncodeItem(ctx, item, () => resolveEncodeProperty(spec as EncodeValue | EncodeValue[], datum, ctx)),
     fastCache: new Map(), runCache: new Map(),
     entryScale: (name) => {
       const s = ctx.scales.get(name)
