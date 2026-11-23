@@ -235,6 +235,7 @@ development-only code. Set it yourself to see the checks run (`NODE_ENV=developm
 
 | Variable | Script | Default | Effect |
 |---|---|---|---|
+| `ONLY` | `packages/benchmarks/scripts/probes/discrete-scale-appends.mjs` | unset | `stream` skips the session cases and runs only the `createChartStream` append cases (a node probe, no Chromium). |
 | `PICK_DEBUG` | `scripts/browser-signals-pick.mts` (the pointer phase of `pnpm conformance:signals`) | unset | Any non-empty value logs each pick that sits on an edge both engines may resolve either way, and appends the svg target to a failure. |
 | `SIG_PRINT` | `scripts/browser-signals.mts` (`pnpm conformance:signals`) | unset | Any non-empty value prints vega's final signal values for every case where vega did not error. |
 | `SEL_DEBUG` | `scripts/browser-vl-selections.mts` (`pnpm conformance:selections`) | unset | Any non-empty value logs each case's frame rectangle, pointer targets, the mounted markup and the signals at each step. Verbose: use it with `--filter=`. |
