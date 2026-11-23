@@ -72,11 +72,10 @@ function timeLocale(engine: TimeEngine): TimeLocale {
 
 
 function defaultTimeEngine(): TimeEngine {
-  // read at the call: the engine's defaults are live bindings that `timeFormatDefaultLocale` of time-format.ts replaces
   return { format: defaultTimeFormat, parse: defaultTimeParse, utcFormat: defaultUtcFormat, utcParse: defaultUtcParse }
 }
 
-/** The default time locale: the time formats' default engine, read at the call (they are live bindings). */
+/** The default time locale: the time formats' default engine (en-US, as d3-time-format's). */
 export function defaultTimeLocale(): TimeLocale {
   return timeLocale(defaultTimeEngine())
 }

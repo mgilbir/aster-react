@@ -429,7 +429,11 @@ export function formatLocale(definition: FormatLocaleDefinition): FormatLocale {
 
 // --- the default locale -------------------------------------------------------------------
 
-let defaultLocale: FormatLocale = /* @__PURE__ */ formatLocale({ thousands: ',', grouping: [3], currency: ['$', ''] })
+/**
+ * The module-level locale (d3-format's default: en-US): what a scale's `tickFormat` reads. It has no setter, as vega never sets
+ * d3-format's: the default locale a host sets is `defaultLocale` of locale.ts, which the expression `format` and the guides read.
+ */
+const defaultLocale: FormatLocale = /* @__PURE__ */ formatLocale({ thousands: ',', grouping: [3], currency: ['$', ''] })
 
 /** The default locale's `format`. */
 export function format(specifier: unknown): FormatFunction {
@@ -439,9 +443,4 @@ export function format(specifier: unknown): FormatFunction {
 /** The default locale's `formatPrefix`. */
 export function formatPrefix(specifier: unknown, value: number): FormatFunction {
   return defaultLocale.formatPrefix(specifier, value)
-}
-
-/** Replace the default locale. */
-export function formatDefaultLocale(definition: FormatLocaleDefinition): FormatLocale {
-  return (defaultLocale = formatLocale(definition))
 }
