@@ -140,8 +140,10 @@ const fns: Record<string, (...args: any[]) => any> = {
     // positionally on both sides); the row objects are the contract
     return rows.map((r) => ({ ...r }))
   },
-  dsvParseSemi: (text: string) => dsvFormat(';').parseRows(text),
-  dsvParseTab: (text: string) => dsvFormat('\t').parseRows(text),
+  dsvParseRowsSemi: (text: string) => dsvFormat(';').parseRows(text),
+  dsvParseRowsTab: (text: string) => dsvFormat('\t').parseRows(text),
+  dsvParseSemi: (text: string) => dsvFormat(';').parse(text).map((r) => ({ ...r })),
+  dsvParseTab: (text: string) => dsvFormat('\t').parse(text).map((r) => ({ ...r })),
   dsvParseRows: (text: string) => dsvFormat(',').parseRows(text),
   dsvFormat: (rows: ArrayLike<Record<string, unknown>>) => dsvFormat(',').format(rows),
   dsvFormatRow: (row: readonly unknown[]) => dsvFormat(',').formatRow(row),
@@ -255,6 +257,10 @@ function proj(c: unknown): unknown {
     darker: colorFields(o.darker()),
     clamp: o.clamp ? colorFields(o.clamp()) : null,
     rgb: colorFields(o.rgb()),
+    string: String(o),
+    brighterHalf: colorFields(o.brighter(0.5)),
+    darker2: colorFields(o.darker(2)),
+    copy: colorFields(o.copy({ opacity: 0.25 })),
   }
 }
 
