@@ -130,7 +130,6 @@ describe('a malformed topology is an [aster] topojson error, at once (C90, C402)
     'GeometryCollection without geometries (mesh)': [base({ o: { type: 'GeometryCollection' } }), { mesh: 'o' }],
     'GeometryCollection with a null member': [base({ o: { type: 'GeometryCollection', geometries: [null] } }), { feature: 'o' }],
     'one-position arc (mesh)': [{ type: 'Topology', arcs: [[[0, 0]]], objects: { o: { type: 'LineString', arcs: [0] } } }, { mesh: 'o' }],
-    'one-position arc (feature)': [{ type: 'Topology', arcs: [[[0, 0]]], objects: { o: { type: 'LineString', arcs: [0] } } }, { feature: 'o' }],
     'arc that is not a list': [{ type: 'Topology', arcs: [5], objects: { o: { type: 'LineString', arcs: [0] } } }, { feature: 'o' }],
     'position that is not a list': [{ type: 'Topology', arcs: [[[0, 0], 7]], objects: { o: { type: 'LineString', arcs: [0] } } }, { mesh: 'o' }],
     'transform without scale': [base({ o: { type: 'LineString', arcs: [0] } }, { transform: { translate: [0, 0] } }), { feature: 'o' }],
@@ -150,6 +149,20 @@ describe('a malformed topology is an [aster] topojson error, at once (C90, C402)
       expect(a.type).toBe('Error')
     })
   }
+
+  it('arcs of fewer than two positions decode in a feature as vega decodes them (only the mesh, which stitches, needs two)', () => {
+    for (const arcs of [[[[0, 0]]], [[]], [[[1, 2]], []]]) {
+      for (const transform of [undefined, { scale: [2, 3], translate: [1, 1] }]) {
+        const topo = { type: 'Topology', arcs, ...(transform ? { transform } : {}), objects: { o: { type: 'LineString', arcs: [0] }, p: { type: 'Polygon', arcs: [[-1]] } } }
+        for (const name of ['o', 'p']) {
+          const format = { type: 'topojson', feature: name }
+          const v = vegaRead(topo, format)
+          expect(v.error, json(topo)).toBeUndefined()
+          expect(json(asterRead(topo, format).rows), json(topo)).toBe(json(v.rows))
+        }
+      }
+    }
+  })
 
   it('an object name the topology does not have, also one on Object.prototype, is "not found" (vega: Invalid TopoJSON object)', () => {
     const topo = base({ o: { type: 'LineString', arcs: [0] } })
