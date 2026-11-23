@@ -97,8 +97,9 @@ updates. An evaluation with the same spec content, data array identities, size, 
 `SceneRoot`. Replaced immutable source arrays are diffed automatically (`autoChanges`, default on; set it to `false`
 to force a full re-encode), explicit per-datum `dataChanges` are supported, and the source/transform pulse of the last
 evaluation is `session.pulse()`. `session.change(input)` re-evaluates the chart compiled by the last `evaluate`
-without passing the spec again. `buildPulseGraph(chart)` / `propagatePulse(graph, sources)` expose the dataflow
-structure directly.
+without passing the spec again: it goes on from the last accepted evaluation's data (a dataset `input.data` names replaces that
+one) and its other inputs (size, signals, `limits`, `urlPolicy`, ...; each replaced by the one `input` gives, and removed by
+an explicit `undefined`), while `dataChanges` / `dataPulse` / `changedDatasets` / `autoChanges` are the call's own.
 
 A signal change re-does only what reads it: a group mark (a facet) whose subtree reads nothing that changed keeps its group
 items, a mark re-evaluates only the channels that read what changed, and what the renderers and the hit index derive from a
@@ -345,7 +346,7 @@ every flush exactly as `createChartSession` enforces them (spec pre-flight, the
 stream holds, which the session cannot see because they arrive via `input.data`.
 
 **close().** Releases the queue, the base rows, the last scene and the session.
-Afterwards `push` returns `false` (not counted as a drop), `flush` returns `null`,
+Afterwards `push` returns `false` whatever the batch holds (not counted as a drop), `flush` returns `null`,
 `scene()`/`pulse()` are `null`, `canAccept()` is `false`, and `session()` throws
 `AsterStreamClosedError` (`code: 'ASTER_STREAM_CLOSED'`). `close()` is idempotent.
 
@@ -469,10 +470,11 @@ The pieces `renderSpec` and the session are made of are exported for hosts that 
 - `datasetsOfScene(scene)` returns the rows each spec dataset ended with in the evaluation that made `scene`
   (`ReadonlyMap<name, rows | null>`, vega's `view.data(name)`); `null` marks a dataset that never ran, and the map is empty for a scene
   that did not come from this runtime (a clone, a worker result).
-- Pulses: `rowsEqual(a, b)` is the row equality `diffRows` uses (plain rows by own keys, nested values by their JSON);
-  `transformNeedsFullRederive(types)` says whether a chain of transform types holds a row-expanding or reordering one (`fold`,
-  `flatten`, `pivot`, the layouts...), so a row-wise pulse cannot be applied through it; `isGroupedTransform(type)` is `true` for
-  `aggregate`, `joinaggregate`, `window` and `stack`.
+- Pulses: `rowsEqual(a, b)` is the row equality `diffRows` uses: the same own fields (a field one row lacks is not the other's
+  `undefined` field), each compared structurally (`Object.is` for a value, so `NaN` equals `NaN` and `0` differs from `-0`; the
+  same instant for two Dates; plain arrays and objects entry by entry; any other object only itself); a row that is not an object
+  is compared as a value, and `diffRows` does not diff a dataset holding one (it is replaced as a whole). `isGroupedTransform(type)`
+  is `true` for `aggregate`, `joinaggregate`, `window` and `stack`.
 - Registries, filled by the add-ons: `transformRegistry` (`Map<type, TransformFn>`, the rare transforms of
   `@aster-charts/core/transforms`), `dataFormatRegistry` (`Map<format, reader>`, `json` built in; csv / tsv / dsv / topojson from
   `@aster-charts/core/load`), `geoRegistry` (the projection and contour hooks of `@aster-charts/core/geo`, `null` fields until loaded).
@@ -481,11 +483,13 @@ The pieces `renderSpec` and the session are made of are exported for hosts that 
 
 #### Limit checks
 
-`renderSpec` runs these in a fixed order; call them yourself when you assemble the steps. All throw `AsterLimitError`.
+`renderSpec` runs these in a fixed order; call them yourself when you assemble the steps. All throw `AsterLimitError`, and a
+`TypeError` for a `limits` object a budget cannot be read from (a key that is no limit, a budget that is not a number `>= 0`).
 
-- `checkSpecLimits(spec, limits, input?)` is the pre-flight, before anything is allocated: string lengths, depth, marks, inline rows
-  (including `input.data`).
-- `checkSceneLimits(scene, limits)` checks the generated geometry (items, path and text lengths) before serialization.
+- `checkSpecLimits(spec, limits, input?)` is the pre-flight, before anything is allocated: string lengths, depth, the spec's own
+  objects (the spec-size ceiling), marks, inline rows (including `input.data`).
+- `checkSceneLimits(scene, limits)` checks the generated geometry (items, path lengths, and the length of every string an item
+  draws: `text`, `href`, `description`, paints, `font`, ...) before serialization.
 - `checkSvgLength(svg, limits)` checks `maxSvgLength` on the serialized string.
 - `createLimitClock(limits?, now?)` starts the wall-clock budget (`maxTimeMs`, opt-in) and returns `{ started, deadline, check(phase?),
   remaining() }`; `check` throws once the budget is spent and is a no-op without `maxTimeMs`. `now` defaults to `performance.now`.
