@@ -20,7 +20,7 @@
 import { Bounds, DEG_TO_RAD, boundGroupItem, boundText, itemBounds, multiMarkBounds, textAnchorAsIs } from './bounds.js'
 import { itemArcGeometry } from './render.js'
 import { insidePolys, type Poly } from './path-flatten.js'
-import { arcLocalPolys, pathMarkPolys, pathPolys, transformPolys } from './geometry-read.js'
+import { arcCanvasLocalPolys, pathMarkPolys, pathMarkPolysAt, pathPolys, transformPolys } from './geometry-read.js'
 import { MARK_NODE } from './util.js'
 import { ceiling, HARD_CAPS, meterTick } from './limits.js'
 import type { SceneGroup, SceneItem, SceneRoot } from './types.js'
@@ -101,19 +101,26 @@ function intersectText(item: SceneItem, box: Bounds): boolean {
 /** The outline of an arc, shape or path item, in the frame of its group. */
 export function outlineOf(marktype: string, item: SceneItem): Poly[] {
   const it = item as Rec
-  const x = (it.x as number) || 0
-  const y = (it.y as number) || 0
+  const rawX = (it.x as number) || 0
+  const rawY = (it.y as number) || 0
+  // (a position that is a numeric string is its number in a transform)
+  const x = +rawX
+  const y = +rawY
   const rot = ((it.angle as number) || 0) * DEG_TO_RAD
   const cos = Math.cos(rot)
   const sin = Math.sin(rot)
   const place = (px: number, py: number): [number, number] => [x + px * cos - py * sin, y + px * sin + py * cos]
   if (marktype === 'arc') {
-    return transformPolys(arcLocalPolys(itemArcGeometry(it as SceneItem)), place)
+    return transformPolys(arcCanvasLocalPolys(itemArcGeometry(it as SceneItem)), place)
   }
   const sx = (it.scaleX as number) || 1
   const sy = (it.scaleY as number) || 1
   // (a path mark's text as vega draws it, the scale in its numbers; a shape's, the engine's own, scaled as it is drawn)
-  if (marktype === 'path') return transformPolys(pathMarkPolys(String(it.path ?? ''), sx, sy), place)
+  if (marktype === 'path') {
+    // (vega's canvas draws an unturned path at `x + l`, in JavaScript's arithmetic: a string position is joined to the number before it)
+    if (rot === 0 && (typeof rawX !== 'number' || typeof rawY !== 'number')) return pathMarkPolysAt(String(it.path ?? ''), sx, sy, rawX, rawY)
+    return transformPolys(pathMarkPolys(String(it.path ?? ''), sx, sy), place)
+  }
   return transformPolys(pathPolys(String(it.path ?? '')), (px, py) => place(px * sx, py * sy))
 }
 

@@ -38,14 +38,14 @@
  */
 import type { SceneGroup, SceneItem, SceneRoot } from './types.js'
 import { derivedCounts, isEngineNode, keptInto } from './scene-registry.js'
-import { Bounds, boundLeaf, boundText, groupLayoutBounds, itemBounds, multiMarkBounds } from './bounds.js'
+import { Bounds, boundLeaf, boundTypedMark, boundText, groupLayoutBounds, itemBounds, multiMarkBounds, sameGroupMark } from './bounds.js'
 import { getTextMetricsProvider, textAnchor } from './text-metrics.js'
 import { imageBox } from './image-box.js'
 import { FLATTEN_TOLERANCE, insidePolys, type Poly } from './path-flatten.js'
 import { SYMBOL_DEFAULT_SIZE, drawnOffset, frameSize } from './util.js'
 import { isInert, itemArcGeometry, lineStrokeWidth } from './render.js'
 import { areaGeometry, lineGeometry, rectData, symbolGeometry, trailGeometry } from './geometry.js'
-import { arcExactSegs, arcPolys, curvePolys, flattenSegs, pathMarkPolys, pathPolys, segsOf, symbolOutline, transformPolys } from './geometry-read.js'
+import { arcExactSegs, arcPolys, canvasHolds, curvePolys, flattenSegs, pathMarkPolys, pathMarkPolysAt, pathPolys, segsOf, symbolOutline, transformPolys } from './geometry-read.js'
 
 export interface HitTarget {
   item: SceneItem
@@ -75,6 +75,9 @@ interface Stroke {
   cap: string
   join: string
   limit: number
+  /** The dash pattern (an even number of lengths, some above 0) and where along it the outline starts: gaps take no pointer. */
+  dash?: readonly number[]
+  dashOffset?: number
 }
 
 type Multi = 'line' | 'area' | 'trail'
@@ -182,17 +185,42 @@ const rec = (it: SceneItem): Record<string, unknown> => it as Record<string, unk
 const isFilled = (it: { fill?: unknown }): boolean => !!it.fill
 
 /** The item's stroke, or null when it has none the pointer can meet (no colour, or no width). */
-function strokeOf(it: { stroke?: unknown; strokeWidth?: unknown; strokeCap?: unknown; strokeJoin?: unknown; strokeMiterLimit?: unknown }, defaultWidth = 1): Stroke | null {
+function strokeOf(it: { stroke?: unknown; strokeWidth?: unknown; strokeCap?: unknown; strokeJoin?: unknown; strokeMiterLimit?: unknown; strokeDash?: unknown; strokeDashOffset?: unknown }, defaultWidth = 1): Stroke | null {
   if (!it.stroke) return null
   const w = it.strokeWidth != null ? +(it.strokeWidth as number) : defaultWidth
   if (!(w > 0)) return null
   const limit = it.strokeMiterLimit != null ? +(it.strokeMiterLimit as number) : 4
-  return {
+  const st: Stroke = {
     hw: w / 2,
     cap: typeof it.strokeCap === 'string' ? it.strokeCap : 'butt',
     join: typeof it.strokeJoin === 'string' ? it.strokeJoin : 'miter',
     limit: limit >= 1 ? limit : 4,
   }
+  const dash = dashPattern(it.strokeDash)
+  if (dash !== null) {
+    st.dash = dash
+    const o = +(it.strokeDashOffset as number)
+    st.dashOffset = Number.isFinite(o) ? o : 0
+  }
+  return st
+}
+
+/**
+ * A stroke's dash pattern as a canvas (`setLineDash`) and an SVG (`stroke-dasharray`) read it: an array of lengths none of which is
+ * negative or not a number, an odd one repeated to make an even one; one of no length at all is no dash. Null when there is none.
+ */
+function dashPattern(v: unknown): readonly number[] | null {
+  if (!Array.isArray(v) || v.length === 0) return null
+  const out: number[] = []
+  let sum = 0
+  for (const e of v) {
+    const n = +(e as number)
+    if (!(n >= 0) || !Number.isFinite(n)) return null
+    out.push(n)
+    sum += n
+  }
+  if (!(sum > 0) || !Number.isFinite(sum)) return null
+  return out.length % 2 === 1 ? out.concat(out) : out
 }
 
 /** How far a stroke reaches out of its outline (a miter up to `limit` half-widths, a square cap sqrt(2)). */
@@ -311,8 +339,79 @@ function strokePath(poly: Poly, stroker: boolean): StrokePath {
   return sp
 }
 
+/** The most pieces one outline is cut into: a pattern finer than that (over a 3 px long dash in a 100 000 px outline) strokes it whole. */
+const MAX_DASH_PIECES = 100_000
+const DASHED = new WeakMap<Poly, { key: string; pieces: Poly[] | null }>()
+
+/**
+ * The dashes of an outline, each an open outline of its own (butt or other caps at its ends, joins inside), the pattern starting at
+ * the start of the outline, pushed `offset` into it, and again with each subpath; null when the pattern is too fine for the outline.
+ */
+function dashed(poly: Poly, dash: readonly number[], offset: number): Poly[] | null {
+  const key = dash.join(',') + '/' + offset
+  const kept = DASHED.get(poly)
+  if (kept !== undefined && kept.key === key) return kept.pieces
+  const pieces = cutIntoDashes(poly, dash, offset)
+  DASHED.set(poly, { key, pieces })
+  return pieces
+}
+
+function cutIntoDashes(poly: Poly, dash: readonly number[], offset: number): Poly[] | null {
+  const { pts, closed } = poly
+  const n = pts.length / 2
+  if (n < 2) return null
+  const period = dash.reduce((a, b) => a + b, 0)
+  const segs = closed ? n : n - 1
+  let total = 0
+  for (let i = 0; i < segs; i++) { const j = (i + 1) % n; total += Math.hypot(pts[2 * j]! - pts[2 * i]!, pts[2 * j + 1]! - pts[2 * i + 1]!) }
+  if (!(Number.isFinite(total) && (total / period + 1) * dash.length < MAX_DASH_PIECES)) return null
+  // where in the pattern the outline starts: `offset` into it
+  let idx = 0
+  let at = ((offset % period) + period) % period
+  while (at >= dash[idx]!) { at -= dash[idx]!; idx = (idx + 1) % dash.length }
+  let left = dash[idx]! - at
+  const out: Poly[] = []
+  let cur: number[] | null = null
+  const flush = (): void => { if (cur !== null) { out.push({ pts: cur, closed: false }); cur = null } }
+  for (let i = 0; i < segs; i++) {
+    const j = (i + 1) % n
+    const ax = pts[2 * i]!, ay = pts[2 * i + 1]!, bx = pts[2 * j]!, by = pts[2 * j + 1]!
+    const len = Math.hypot(bx - ax, by - ay)
+    if (!(len > 0)) continue
+    let pos = 0
+    while (pos < len) {
+      const take = Math.min(left, len - pos)
+      if (idx % 2 === 0) {
+        if (cur === null) cur = [ax + ((bx - ax) * pos) / len, ay + ((by - ay) * pos) / len]
+        cur.push(ax + ((bx - ax) * (pos + take)) / len, ay + ((by - ay) * (pos + take)) / len)
+      }
+      pos += take
+      left -= take
+      if (left > 0) break
+      // the dash or the gap ended: on to the next, and past any of no length (a dash of none is a dot where it falls)
+      if (idx % 2 === 0) flush()
+      do {
+        idx = (idx + 1) % dash.length
+        left = dash[idx]!
+        if (left === 0 && idx % 2 === 0) { const px = ax + ((bx - ax) * pos) / len, py = ay + ((by - ay) * pos) / len; out.push({ pts: [px, py], closed: false }) }
+      } while (left === 0)
+    }
+  }
+  flush()
+  return out
+}
+
 /** Whether (x, y) is within the stroke of an outline: the band along each segment, the joins between them, the caps of open ends. */
 function inStroke(polys: Poly[], x: number, y: number, st: Stroke, stroker = false): boolean {
+  if (st.dash !== undefined) {
+    // (the dashes, each tested as an outline of its own; an outline the pattern is too fine for is stroked whole)
+    const solid: Stroke = { hw: st.hw, cap: st.cap, join: st.join, limit: st.limit }
+    for (const poly of polys) {
+      const pieces = dashed(poly, st.dash, st.dashOffset ?? 0)
+      if (inStroke(pieces ?? [poly], x, y, solid, stroker)) return true
+    }
+    return false
+  }
   for (const poly of polys) {
     const { v, m, segs, len, dir, closed, smooth } = strokePath(poly, stroker)
     if (m === 0) continue
@@ -362,6 +461,8 @@ function inFill(polys: Poly[], x: number, y: number): boolean {
   if (insidePolys(polys, x, y)) return true
   for (const { pts, curved } of polys) {
     const n = pts.length / 2
+    // (an outline that holds no area, a rectangle of no height, has no edge a fill test finds: the browser's and vega's find no point on it)
+    if (hasNoArea(pts)) continue
     for (let i = 0; i < n; i++) {
       const j = (i + 1) % n
       const ax = pts[2 * i]!, ay = pts[2 * i + 1]!, bx = pts[2 * j]!, by = pts[2 * j + 1]!
@@ -374,6 +475,19 @@ function inFill(polys: Poly[], x: number, y: number): boolean {
     }
   }
   return false
+}
+
+/** Whether a closed outline (its points, implicitly closed) encloses no area at all: the shoelace sum is exactly 0. */
+const NO_AREA = new WeakMap<number[], boolean>()
+function hasNoArea(pts: number[]): boolean {
+  let z = NO_AREA.get(pts)
+  if (z === undefined) {
+    const n = pts.length / 2
+    let a = 0
+    for (let i = 0, j = n - 1; i < n; j = i++) a += pts[2 * j]! * pts[2 * i + 1]! - pts[2 * i]! * pts[2 * j + 1]!
+    NO_AREA.set(pts, (z = a === 0))
+  }
+  return z
 }
 
 /** The box of a path's own outline (`pathPolys`, `pathMarkPolys`), kept with the outline (which the bounded parse cache keeps). */
@@ -532,6 +646,37 @@ export function buildHitIndex(scene: SceneRoot, cell = DEFAULT_CELL, options: Hi
     const hi = (v: number): number => { const n = +v; return Number.isNaN(n) ? Infinity : n }
     return { x1: tx + lo(b.x1), y1: ty + lo(b.y1), x2: tx + hi(b.x2), y2: ty + hi(b.y2) }
   }
+  /**
+   * (canvas index) The bounds vega's pick asks of each group MARK among `nodes` (a group's marks, the root's), before its items: the
+   * union of its group items' bounds (an edge that is not a number leaves that edge out of the union), cut to the frame when the mark
+   * clips, in scene coordinates, for the node at each index that is a group item of one; `undefined` for the rest.
+   */
+  const groupMarkClips = (nodes: readonly SceneGroup[], fw: number, fh: number, gx: number, gy: number): (Clip | undefined)[] | undefined => {
+    let out: (Clip | undefined)[] | undefined
+    const lo = (v: number): number => { const n = +v; return Number.isNaN(n) ? -Infinity : n }
+    const hi = (v: number): number => { const n = +v; return Number.isNaN(n) ? Infinity : n }
+    for (let k = 0; k < nodes.length;) {
+      const first = nodes[k]!
+      if (rec(first)._scope !== true) { k++; continue }
+      const mb = new Bounds()
+      let end = k
+      while (end < nodes.length && sameGroupMark(first as unknown as Record<string, unknown>, nodes[end] as unknown as Record<string, unknown>)) mb.union(groupLayoutBounds(nodes[end]!, true)), end++
+      const m = rec(first).markClip === true ? mb.intersect(new Bounds().set(0, 0, fw, fh)) : mb
+      const clip: Clip = { x1: gx + lo(m.x1), y1: gy + lo(m.y1), x2: gx + hi(m.x2), y2: gy + hi(m.y2) }
+      out ??= []
+      for (let i = k; i < end; i++) out[i] = clip
+      k = end
+    }
+    return out
+  }
+  /** (canvas index) The bounds vega's pick asks of a typed mark before its items (`pickMark`): the union of the items' bounds, cut to the frame when it clips. */
+  const typedMarkClip = (mark: SceneGroup, fw: number, fh: number, tx: number, ty: number): Clip => {
+    const b = boundTypedMark(new Bounds(), mark)
+    const m = mark.clip === true ? b.intersect(new Bounds().set(0, 0, fw, fh)) : b
+    const lo = (v: number): number => { const n = +v; return Number.isNaN(n) ? -Infinity : n }
+    const hi = (v: number): number => { const n = +v; return Number.isNaN(n) ? Infinity : n }
+    return { x1: tx + lo(m.x1), y1: ty + lo(m.y1), x2: tx + hi(m.x2), y2: ty + hi(m.y2) }
+  }
   const pathClip = (d: string, ox: number, oy: number): Clip => {
     const polys = transformPolys(pathPolys(d), (x, y) => [ox + x, oy + y])
     const box = polysBox(polys)
@@ -559,14 +704,15 @@ export function buildHitIndex(scene: SceneRoot, cell = DEFAULT_CELL, options: Hi
       if (Number.isNaN(rx) || Number.isNaN(ry)) {
         const was = unbounded
         unbounded = true
-        try { walkGroup(group, tx, ty, gx, gy, fw, fh, outer) } finally { unbounded = was }
+        // (the group item's own bounds are asked in the frame around it, where its position does not matter)
+        try { walkGroup(group, tx, ty, gx, gy, fw, fh, outer, !was) } finally { unbounded = was }
         return
       }
     }
     if (!type || type === 'group') walkGroup(group, tx, ty, gx, gy, fw, fh, outer)
     else walkMark(group, type, tx, ty, gx, gy, fw, fh)
   }
-  const walkGroup = (group: SceneGroup, tx: number, ty: number, gx: number, gy: number, fw: number, fh: number, outer?: SceneGroup): void => {
+  const walkGroup = (group: SceneGroup, tx: number, ty: number, gx: number, gy: number, fw: number, fh: number, outer?: SceneGroup, selfBounded: boolean = !unbounded): void => {
     {
       // a group item's own box (vega-scenegraph marks/group.js): its background is painted under the content, its
       // foreground over it. What the pointer meets is the painted rectangle -- the fill inside it, the stroke along it --
@@ -583,7 +729,7 @@ export function buildHitIndex(scene: SceneRoot, cell = DEFAULT_CELL, options: Hi
       // vega looks for a group item, its box and what it holds, only within its bounds: they hold all of it, unless its box is
       // left out of them (`noBound`), where its box takes the pointer only as far as what it holds reaches
       // (vega's canvas pick tests every group item's bounds first, an axis' and a legend's too: they bound what it finds there)
-      const bounds = ((scope && group.noBound === true) || canvas) && !unbounded ? boundsClip(group, tx, ty) : null
+      const bounds = ((scope && group.noBound === true) || canvas) && selfBounded ? boundsClip(group, tx, ty) : null
       // a group mark's own `clip` clips its items to the frame of the group around them
       // (vega's canvas pick looks for a clipped group item, its box included, only inside the box -- and inside its rounded
       // outline when it has corners: marks/group.js `hitCorner` -- where the browser also finds the stroke past it)
@@ -599,8 +745,11 @@ export function buildHitIndex(scene: SceneRoot, cell = DEFAULT_CELL, options: Hi
         withClip(content, () => {
           // (a legend entry's front stroke belongs to the entry box before it)
           let entryBox: SceneItem | undefined
-          for (const item of group.items ?? []) {
-            if (isGroup(item)) { walk(item, gx, gy, w, h, guide ?? outer); continue }
+          const nodes = group.items ?? []
+          const markClips = canvas && !unbounded ? groupMarkClips(nodes, w, h, gx, gy) : undefined
+          for (let k = 0; k < nodes.length; k++) {
+            const item = nodes[k]!
+            if (isGroup(item)) { withClip(markClips?.[k] ?? null, () => walk(item, gx, gy, w, h, guide ?? outer)); continue }
             const part = (item as SceneItem)._part
             if (part === 'entry') entryBox = item
             const before = entries.length
@@ -627,7 +776,9 @@ export function buildHitIndex(scene: SceneRoot, cell = DEFAULT_CELL, options: Hi
     const guidePart = group.role === 'title-text' || group.role === 'title-subtitle'
     // a mark's `clip`: its items are clipped to the frame of the group they are in (or to its rounded outline)
     const clip = group.clip === true ? (group.clipPathD ? pathClip(group.clipPathD, tx, ty) : frameClip(tx, ty, fw, fh)) : null
-    withClip(clip, () => {
+    // (vega's canvas pick asks every mark's bounds, the union of its items', before the mark: `pickMark`)
+    const markBounds = canvas && !unbounded ? typedMarkClip(group, fw, fh, tx, ty) : null
+    withClip(markBounds, () => withClip(clip, () => {
       // (a mark of a scene the engine returned holds what it held: at the same place, its entries are the ones made before, see
       // `MARK_ENTRIES`; each index takes copies, which the clips and flags below are written onto)
       const kept = type !== 'text' && isEngineNode(group) ? keptEntries.get(group) : undefined
@@ -639,7 +790,7 @@ export function buildHitIndex(scene: SceneRoot, cell = DEFAULT_CELL, options: Hi
         if (type !== 'text' && isEngineNode(group)) keptEntries.set(group, { gx, gy, unbounded, entries: entries.slice(e0).map((e) => ({ ...e })), root: scene })
       }
       clipFrom(e0)
-    })
+    }))
     // (an item of a mark that reads a dataset has a row for its datum; a title's text is a guide's part)
     if (group.__source !== undefined && !guidePart && entries.length > e0) dataRuns.push(e0, entries.length)
     // a mark that is not interactive takes no pointer (its container says `pointer-events: none`)
@@ -679,8 +830,10 @@ export function buildHitIndex(scene: SceneRoot, cell = DEFAULT_CELL, options: Hi
   const frame = `${padX},${padY},${plotW},${plotH},${scene.frameClip ? 1 : 0}`
   const measurer = getTextMetricsProvider()
   withClip(scene.frameClip ? rectClip(padX, padY, plotW, plotH) : null, () => {
-    for (const node of scene.items) {
-      if (!TOP_GUIDE_ROLES.has(node.role as string) || rec(node)._scope === true || !isEngineNode(node)) { walk(node, padX, padY, plotW, plotH); continue }
+    const rootClips = canvas ? groupMarkClips(scene.items, plotW, plotH, padX, padY) : undefined
+    for (let k = 0; k < scene.items.length; k++) {
+      const node = scene.items[k]!
+      if (!TOP_GUIDE_ROLES.has(node.role as string) || rec(node)._scope === true || !isEngineNode(node)) { withClip(rootClips?.[k] ?? null, () => walk(node, padX, padY, plotW, plotH)); continue }
       const kept = keptGuides.get(node)
       if (kept !== undefined && keptInto(kept.root, scene) && kept.frame === frame && kept.measurer === measurer) {
         const base = entries.length
@@ -857,7 +1010,11 @@ export function buildHitIndex(scene: SceneRoot, cell = DEFAULT_CELL, options: Hi
    * pick strokes it as it is drawn (marks/rule.js `hit`).
    */
   function pickStroke(st: Stroke | null, marktype: string): Stroke | null {
-    return canvas && st !== null && marktype !== 'rule' ? { ...st, join: 'miter', limit: 10 } : st
+    if (!canvas || st === null) return st
+    // (vega's canvas pick draws no dashes -- its `hitPath` sets the width and the cap -- but a rule's: marks/rule.js `path`)
+    if (marktype === 'rule') return st
+    const { dash: _dash, dashOffset: _offset, ...plain } = st
+    return { ...plain, join: 'miter', limit: 10 }
   }
 
   /** A line, an area or a trail: one painted path, styled by the mark's first item. */
@@ -872,7 +1029,7 @@ export function buildHitIndex(scene: SceneRoot, cell = DEFAULT_CELL, options: Hi
       // (the mark's cached geometry: its full-precision outline, flattened once and placed at (tx, ty))
       const geometry = type === 'line' ? lineGeometry(items) : areaGeometry(items)
       if (geometry === null || geometry.empty) return
-      build = () => curvePolys(geometry, tx, ty)
+      build = () => curvePolys(geometry, tx, ty, canvas)
       // (vega draws a line 2 wide unless its first item says otherwise: see lineStrokeWidth)
       paint = type === 'line' ? { fill: first.fill } : first as Record<string, unknown>
       stroke = type === 'line' ? strokeOf(first, lineStrokeWidth(first) ?? 1) : strokeOf(first)
@@ -882,7 +1039,7 @@ export function buildHitIndex(scene: SceneRoot, cell = DEFAULT_CELL, options: Hi
       if (!geometry.outline.drawn) return
       // (its text is written here, as it always was: a negative width throws now, not when the index is queried)
       arcExactSegs(geometry)
-      build = () => arcPolys(geometry, tx, ty)
+      build = () => arcPolys(geometry, tx, ty, canvas)
       // (vega paints a trail's outline with its first item's fill and stroke, like any path)
       paint = first as Record<string, unknown>
       stroke = strokeOf(first)
@@ -906,18 +1063,18 @@ export function buildHitIndex(scene: SceneRoot, cell = DEFAULT_CELL, options: Hi
     const size = (item.size as number) ?? SYMBOL_DEFAULT_SIZE
     const r = radius != null ? radius : Math.sqrt(size) / 2
     // (a symbol of no size covers nothing a fill test finds: neither vega's canvas pick nor a browser's hit test of a degenerate path)
-    if (!(r > 0) && !stroke) return
+    if (!(r > 0) && (!stroke || stroke.cap === 'butt')) return
     const cx = tx + ix
     const cy = ty + iy
     const shape = marktype === 'symbol' ? (rec(item).shape as string | undefined) : undefined
-    if (shape == null || shape === 'circle') {
+    if ((shape == null || shape === 'circle') && stroke?.dash === undefined) {
       // (the circle is one arc closed on itself: no caps, no joins; a filled one with no stroke, the common symbol, is a disc)
       if (!stroke) { entries.push({ item, marktype, kind: 'disc', cx, cy, r, x1: cx - r, y1: cy - r, x2: cx + r, y2: cy + r }); return }
       const out = r + stroke.hw
       entries.push({ item, marktype, kind: 'circle', cx, cy, r, fill, stroke, x1: cx - out, y1: cy - out, x2: cx + out, y2: cy + out })
       return
     }
-    const outline = shapeOutline(shape, r)
+    const outline = shapeOutline(shape ?? 'circle', r)
     const span = outline.reach + reachOf(stroke)
     const rot = ((rec(item).angle as number | undefined) ?? 0) * (Math.PI / 180)
     entries.push({ item, marktype, kind: 'geom', cx, cy, rot, fill, stroke, polys: outline.polys, x1: cx - span, y1: cy - span, x2: cx + span, y2: cy + span })
@@ -962,6 +1119,8 @@ export function buildHitIndex(scene: SceneRoot, cell = DEFAULT_CELL, options: Hi
         // (vega: a rule is its stroke, a segment from (x, y) to (x2, y2), each end defaulting to the other)
         const stroke = strokeOf(item)
         if (!stroke) return
+        // (its canvas pick strokes the rule as it draws it, and a rule of no stroke opacity is not drawn: marks/rule.js `path`)
+        if (canvas && !(+((item.strokeOpacity ?? 1) as number) > 0)) return
         const x = tx + (+(item.x as number) || 0)
         const y = ty + (+(item.y as number) || 0)
         const x2 = item.x2 != null ? tx + +item.x2 : x
@@ -977,11 +1136,17 @@ export function buildHitIndex(scene: SceneRoot, cell = DEFAULT_CELL, options: Hi
       }
       case 'arc': {
         const geometry = itemArcGeometry(item)
-        // (its text is written here, as it always was: a negative radius throws now, not when the index is queried)
-        arcExactSegs(geometry)
-        const ox = tx + (item.x ?? 0)
-        const oy = ty + (item.y ?? 0)
-        const e = geomEntry(item, marktype, () => arcPolys(geometry, ox, oy), item)
+        // (its text is written here, as it always was: a negative radius throws now, not when the index is queried -- but not on a canvas
+        // that is given a number it cannot hold, which it ignores before it looks at the radius)
+        if (!canvas || canvasHolds(geometry)) arcExactSegs(geometry)
+        // (vega draws an arc at `translate(x || 0, y || 0) rotate(angle)`, as it draws a symbol or a path)
+        const [ix, iy] = drawnOffset(item)
+        const ox = tx + ix
+        const oy = ty + iy
+        const angle = +((rec(item).angle as number | undefined) || 0)
+        const e = angle
+          ? geomEntry(item, marktype, () => arcPolys(geometry, 0, 0, canvas), item, { cx: ox, cy: oy, rot: angle * (Math.PI / 180) })
+          : geomEntry(item, marktype, () => arcPolys(geometry, ox, oy, canvas), item)
         if (e) entries.push(e)
         return
       }
@@ -990,12 +1155,32 @@ export function buildHitIndex(scene: SceneRoot, cell = DEFAULT_CELL, options: Hi
         const sx = (rec(item).scaleX as number | undefined) || 1
         const sy = (rec(item).scaleY as number | undefined) || 1
         const path = String(item.path)
-        const angle = (rec(item).angle as number | undefined) ?? 0
-        // a path mark's text as vega draws it, the scale in the replay's numbers (`pathMarkPolys`), then moved (and turned)
+        const angle = +((rec(item).angle as number | undefined) ?? 0)
+        const rx = item.x || 0
+        const ry = item.y || 0
+        // (its position as a number: a numeric string is its number in a transform; and the canvas, which draws an unturned path at
+        // `x + l` in JavaScript's arithmetic, joins a string to the number before it)
+        const px = +rx, py = +ry
+        let e: Entry | null
+        if (!canvas) {
+          // (vega's SVG writes the text as it is and scales it with the element's transform, as a shape: an arc is scaled as the browser
+          // scales it, which is not what the canvas's replay does with it)
+          const localSvg = localPathBox(path)
+          e = angle
+            ? geomEntry(item, marktype, () => transformPolys(pathPolys(path), (x, y) => [sx * x, sy * y]), item, { cx: tx + px, cy: ty + py, rot: angle * (Math.PI / 180) }, strokeOf(item), localSvg && placedBox(localSvg, 0, 0, sx, sy))
+            : geomEntry(item, marktype, () => transformPolys(pathPolys(path), (x, y) => [tx + px + sx * x, ty + py + sy * y]), item, undefined, strokeOf(item), localSvg && placedBox(localSvg, tx + px, ty + py, sx, sy))
+          if (e) entries.push(e)
+          return
+        }
+        // a path mark's text as vega's canvas draws it, the scale in the replay's numbers (`pathMarkPolys`), then moved (and turned)
         const local = localPathMarkBox(path, sx, sy)
-        const e = angle
-          ? geomEntry(item, marktype, () => pathMarkPolys(path, sx, sy), item, { cx: tx + (item.x || 0), cy: ty + (item.y || 0), rot: angle * (Math.PI / 180) }, strokeOf(item), local && placedBox(local, 0, 0, 1, 1))
-          : geomEntry(item, marktype, () => transformPolys(pathMarkPolys(path, sx, sy), (x, y) => [tx + (item.x || 0) + x, ty + (item.y || 0) + y]), item, undefined, strokeOf(item), local && placedBox(local, tx + (item.x || 0), ty + (item.y || 0), 1, 1))
+        if (angle) {
+          e = geomEntry(item, marktype, () => pathMarkPolys(path, sx, sy), item, { cx: tx + px, cy: ty + py, rot: angle * (Math.PI / 180) }, strokeOf(item), local && placedBox(local, 0, 0, 1, 1))
+        } else if (typeof rx !== 'number' || typeof ry !== 'number') {
+          e = geomEntry(item, marktype, () => transformPolys(pathMarkPolysAt(path, sx, sy, rx, ry), (x, y) => [tx + x, ty + y]), item, undefined, strokeOf(item))
+        } else {
+          e = geomEntry(item, marktype, () => transformPolys(pathMarkPolys(path, sx, sy), (x, y) => [tx + px + x, ty + py + y]), item, undefined, strokeOf(item), local && placedBox(local, tx + px, ty + py, 1, 1))
+        }
         if (e) entries.push(e)
         return
       }
@@ -1018,6 +1203,12 @@ export function buildHitIndex(scene: SceneRoot, cell = DEFAULT_CELL, options: Hi
       case 'image': {
         // (vega draws an image at `(x || 0) - offset`, `(y || 0) - offset` by its width and height: numbers that are not finite draw
         // nothing; a box of no area covers nothing)
+        // (vega's canvas picks an image by its bounds alone: `pick()` with no test after the bounds. The entry is the whole plane, and
+        // the bounds the index measures for it -- "not outside" -- decide, whatever numbers the box is made of)
+        if (canvas) {
+          entries.push({ item, marktype, kind: 'box', fill: true, stroke: null, x1: -Infinity, y1: -Infinity, x2: Infinity, y2: Infinity })
+          return
+        }
         const b = imageBox(item)
         const x = +b.x, y = +b.y, w = +b.w, h = +b.h
         if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(w) || !Number.isFinite(h) || w === 0 || h === 0) return

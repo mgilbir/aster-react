@@ -62,7 +62,7 @@ type OnError = 'throw' | 'stop'
  * parameter count"). A moveto's extra groups are linetos, any other command's are the command again. With `onError: 'stop'` the
  * reading ends at the first error, with every command read before it. `jsNumbers` reads `NaN` and `±Infinity` as NaN.
  */
-function readCommands(d: string, onError: OnError, jsNumbers: boolean): PathCommand[] {
+function readCommands(d: string, onError: OnError, jsNumbers: boolean, singles = false): PathCommand[] {
   const out: PathCommand[] = []
   const n = d.length
   let i = 0
@@ -73,7 +73,7 @@ function readCommands(d: string, onError: OnError, jsNumbers: boolean): PathComm
     while (end < n && !isCommandLetter(d[end]!)) end = skipWord(d, end, jsNumbers)
     const type = cmd.toLowerCase()
     const arity = ARITY[type]!
-    const read = readNumbers(type, arity, d.slice(i + 1, end).trim(), jsNumbers)
+    const read = readNumbers(type, arity, d.slice(i + 1, end).trim(), jsNumbers, singles)
     i = end
     const count = read.numbers.length
     if (read.failed || count < arity) {
@@ -106,7 +106,7 @@ function pushGroups(out: PathCommand[], cmd: string, type: string, arity: number
 }
 
 /** The numbers of one command's text, group by group; `failed` when something in it is not what goes there. */
-function readNumbers(type: string, arity: number, text: string, jsNumbers: boolean): { numbers: number[]; failed: boolean } {
+function readNumbers(type: string, arity: number, text: string, jsNumbers: boolean, singles = false): { numbers: number[]; failed: boolean } {
   const numbers: number[] = []
   for (let at = 0; arity && at < text.length;) {
     for (let k = 0; k < arity; ++k) {
@@ -116,6 +116,8 @@ function readNumbers(type: string, arity: number, text: string, jsNumbers: boole
       at += m[0].length
       // (in the engine's text a number that is not finite is NaN: see the module's note)
       const v = +m[0]
+      // (a browser reads a number into a float: one beyond single precision is no number there, as the word `NaN` is none)
+      if (singles && !(Math.abs(v) < SINGLE_OVERFLOW)) return { numbers, failed: true }
       numbers.push(jsNumbers && !Number.isFinite(v) ? NaN : v)
       const sep = SEPARATOR.exec(text.slice(at))
       if (sep !== null) at += sep[0].length
@@ -166,6 +168,16 @@ export const drawnPathCommands: (d: string) => PathCommand[] = cached(4096, (d) 
 
 /** Parse an SVG path `d` string (the engine's own text) into absolute segments. Shared: never write them. */
 export const parsePathData: (d: string) => PathSeg[] = cached(4096, (d) => segmentsOf(readCommands(d, 'stop', true)))
+
+/** The least magnitude a double that a browser keeps in a float is not finite at (2^128 - 2^103). */
+const SINGLE_OVERFLOW = 3.4028235677973366e38
+
+/**
+ * Path text as a browser reads an SVG `d` (blink's path parser): the commands up to the first thing that is no number -- `NaN`, `Infinity`
+ * or a number beyond single precision included -- are drawn, and the rest is not. (`parsePathData` reads what the engine writes: its
+ * words for a number that is not finite are numbers there.)
+ */
+export const parseSvgPathData: (d: string) => PathSeg[] = cached(4096, (d) => segmentsOf(readCommands(d, 'stop', false, true)))
 
 /** Commands as absolute segments: a relative command is offset by the current point (a close returns it to its subpath's start). */
 function segmentsOf(commands: readonly PathCommand[]): PathSeg[] {
