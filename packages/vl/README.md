@@ -192,8 +192,8 @@ The list below is the features refused by name, each checked by `test/readme-ref
   vega-lite 6.4.3 makes a scale, an axis and a stack group of the condition's field while it places the mark by the
   value, so there is no coherent output to match. (A condition with a value is read as its value, as vega-lite
   reads it; on a channel the mark does not draw the condition is dropped with the channel.)
-- Scales and encodings: channel-level `band` (except on longitude / latitude, where vega-lite ignores it); the positional mark-def constants `x` / `x2` / `y` / `y2`, except
-  `x` / `y` on point, circle, square and text.
+- Scales and encodings: channel-level `band` (except on longitude / latitude, where vega-lite ignores it); `order` given as a
+  list (vega-lite 6.4.3 reads none of its entries and draws the chart unordered).
 - Layout: `width` / `height: "container"` on a composition (only a top-level unit or layer, or a facet's spec), a
   `{"repeat": ...}` reference in a transform (vega-lite 6.4.3 leaves it in its output as a field that reads nothing), a
   repeat's `row` / `column` given as a string (vega-lite reads it as the list of its characters), `data: null`, config keys
