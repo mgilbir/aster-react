@@ -11,12 +11,16 @@ import { generate } from '../src/sweeps/values.mjs'
 
 const pkg = join(dirname(fileURLToPath(import.meta.url)), '..')
 const FIXTURE_SWEEP = '../../test-fixtures/sweep-spec-contract'
+/** Shorter than the tests' own timeout (60 s), so a hung sweep fails through its output, not as a vitest timeout. */
+const SPAWN_TIMEOUT = 45_000
 const OK = ['--floor', '1', '--min-ok', '1', '--max-node-error', '0']
 
 async function sweep(sweepName, fixture, ...args) {
   const r = await spawnAsync('npx', ['tsx', 'src/run-sweep.ts', sweepName, ...args], {
-    cwd: pkg, encoding: 'utf8', env: { ...process.env, FIXTURE: fixture }, timeout: 120_000,
+    cwd: pkg, encoding: 'utf8', env: { ...process.env, FIXTURE: fixture }, timeout: SPAWN_TIMEOUT,
   })
+  // a child that hung is reported here, as what it is, and not as the test's own timeout
+  expect(r.error, `the sweep did not finish in ${SPAWN_TIMEOUT} ms: ${r.stdout + r.stderr}`).toBeUndefined()
   return { code: r.status, out: r.stdout + r.stderr }
 }
 
@@ -41,7 +45,8 @@ describe('sweep cases carry a chart', { timeout: 60_000 }, () => {
     expect(cases.length).toBeGreaterThan(400)
     for (const c of cases) {
       const spec = c.spec ?? JSON.parse(c.specText)
-      expect(typeof spec, c.name).toBe('object')
+      // (a chart is a plain object: null and a list are `typeof` 'object' too, and the runner refuses them as 'no usable spec')
+      expect(spec !== null && typeof spec === 'object' && !Array.isArray(spec), c.name).toBe(true)
     }
     const zero = cases.filter((c) => c.property === 'with-a-negative-zero')
     expect(zero.length).toBeGreaterThan(5)

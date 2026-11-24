@@ -133,8 +133,10 @@ describe('voronoi vs vega-voronoi (generated)', () => {
     const r = seeded(99)
     for (let i = 0; i < 600; i++) {
       const rows = hostilePoints(r, r.pick([1, 2, 3, 5, 8, 20, 60]))
-      const out = asterPaths(rows, transformOf(r)) as unknown[]
-      expect(out, JSON.stringify(rows)).toHaveLength(rows.length)
+      const out = asterPaths(rows, transformOf(r))
+      // (a throw comes back as 'ERR ...' text, which has a length too: it is an array of one entry per row, or it is nothing)
+      expect(Array.isArray(out), `${JSON.stringify(rows)}: ${String(out)}`).toBe(true)
+      expect(out as unknown[], JSON.stringify(rows)).toHaveLength(rows.length)
     }
   })
 
