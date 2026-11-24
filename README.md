@@ -232,7 +232,7 @@ produced it, are in [docs/TESTING.md](docs/TESTING.md#reference-results) and
   signals 103 ok of 166 (60 `retained`, see [Known gaps](#known-gaps-and-differences-from-vega); 0 differ),
   values 500 ok of 500 (the same specification with awkward cells: `null`, `""`, words, lists, `Infinity` written out; 0 differ);
 - in real Chromium, the corpus matches Vega's string renderer (1063/1063), the canvas renderer matches Vega's canvas (1224/1224 pixel comparisons),
-  and signal event streams match Vega on its svg and on its canvas renderer (73/73 cases), each case run on both.
+  and signal event streams match Vega on its svg and on its canvas renderer (75/75 cases), each case run on both.
 
 ## Build from source
 
