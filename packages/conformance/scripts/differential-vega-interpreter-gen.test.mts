@@ -19,6 +19,7 @@ import * as ve from 'vega-expression'
 import * as vi from 'vega-interpreter'
 import { parseExpression } from '../../core/src/expr-parser.ts'
 import { expressionInterpreter } from '../../core/src/expr-interpreter.ts'
+import { compileExpr } from '../../core/src/expression.ts'
 import { exact, withTz } from './differential-util.mts'
 import { scaled } from './differential-gen.mts'
 import { gen, mkCleanSource, mkSource, OPS, rng } from './expression-gen.mts'
@@ -138,6 +139,19 @@ describe('generated: vega-interpreter vs Aster expr-interpreter', () => {
 
 // --- adversarial sandbox probes ------------------------------------------------------------------
 
+const MARKER_PROBES = [
+  '[].constructor.constructor("globalThis.__asterEscaped=1")()',
+  '[]["constructor"]["constructor"]("globalThis.__asterEscaped=1")()',
+  '({}).constructor.constructor("globalThis.__asterEscaped=1")()',
+  '"".constructor.constructor("globalThis.__asterEscaped=1")()',
+  '(1).constructor.constructor("globalThis.__asterEscaped=1")()',
+  'datum.list.constructor.constructor("globalThis.__asterEscaped=1")()',
+  'datum.list.map.constructor("globalThis.__asterEscaped=1")()',
+  'datum["__proto__"]["constructor"]["constructor"]("globalThis.__asterEscaped=1")()',
+  'datum.constructor.constructor.constructor("globalThis.__asterEscaped=1")()',
+  '({a: [].constructor.constructor("globalThis.__asterEscaped=1")()})',
+] as const
+
 const PROBES = [
   // reaching Function / eval / timers through the object graph
   'datum.constructor', 'datum.constructor.constructor', 'datum.constructor.constructor("return 1")', 'datum.constructor.constructor("return 1")()',
@@ -147,6 +161,9 @@ const PROBES = [
   'datum.__proto__', 'datum.__proto__.constructor', 'datum["__proto__"]["constructor"]', '({}).__proto__', '({}).constructor', '({}).constructor.constructor',
   '({__proto__: 1})', '({"__proto__": 1})', '({constructor: 1})', '({a: 1, constructor: datum})', '({toString: 1})', '({valueOf: 1})', '({hasOwnProperty: 1})',
   '({a: datum.constructor})', '({a: datum.constructor.constructor})', '({a: datum.list.map.constructor})',
+  // code that sets `globalThis.__asterEscaped` if it is EVER run: the walk through the object graph to Function and a call of it
+  // (the self-test below runs these very texts unguarded, so a marker that cannot fire cannot pass here)
+  ...MARKER_PROBES,
   'datum.hasOwnProperty', 'datum.hasOwnProperty("a")', 'datum.toString', 'datum.valueOf', 'datum.toLocaleString', 'datum.isPrototypeOf',
   'datum.__defineGetter__', 'datum.__lookupGetter__', 'datum.propertyIsEnumerable',
   // identifiers and function names
@@ -174,101 +191,22 @@ const PROBES = [
 ] as const
 
 /**
- * Where Aster differs from vega-interpreter on the sandbox surface, probe by probe: [mode, source, vega's
- * outcome, Aster's outcome] (result or thrown error, plus console.error output, as JSON). These are Aster's
- * own hardening, taken on purpose and pinned both ways: Aster never resolves an inherited Object.prototype
- * member (`constructor`, `__proto__`, ...) through an identifier, a call name or a function value, reads a
- * data column of that name as data, and refuses a function-valued argument to any function but the built-in type
- * inspectors. The one-sided
- * ones (`datum["constructor"]`) come from vega's parser rewriting a string literal that names an
- * Object.prototype member into an identifier, which Aster's parser keeps a string. Every other probe must
- * match vega exactly; an entry that starts agreeing, or a new disagreement, fails the test.
+ * Where Aster's interpreter differs from vega-interpreter on the sandbox surface, probe by probe: [mode, source, vega's outcome,
+ * Aster's outcome] (result or thrown error, plus console.error output, as JSON), in four tables by what the difference is:
+ * STRICTER (Aster refuses or reads nothing where vega answers), QUIETER (the same result, one log line less), OWN_DATA_COLUMNS
+ * (a data column named like a prototype member is data) and MORE_PERMISSIVE (Aster answers where vega does not). Each is pinned on
+ * both sides; every other probe must match vega exactly; an entry that starts agreeing, or a new disagreement, fails the test.
+ * The one-sided ones (`datum["constructor"]`) come from vega's parser rewriting a string literal that names an Object.prototype
+ * member into an identifier, which Aster's parser keeps a string.
  */
-const PINNED_DIVERGENCES: ReadonlyArray<readonly [string, string, string, string]> = [
+const MORE_PERMISSIVE: readonly string[] = ['handler []["constructor"]', 'handler datum["__proto__"]["constructor"]', 'handler datum["constructor"]["constructor"]', 'param []["constructor"]', 'param datum["__proto__"]["constructor"]', 'param datum["constructor"]["constructor"]']
+
+/** Aster is STRICTER: it refuses a function-valued argument vega's interpreter hands to the function (a host function named `isFoo` is a host function, C530), and never resolves an inherited Object.prototype member through an identifier or a call name, where vega's interpreter answers the function. */
+const STRICTER_THAN_VEGA: ReadonlyArray<readonly [string, string, string, string]> = [
   // (C530: the built-in type inspectors are exempt from the function-argument refusal by identity, not by an `is` name prefix:
   // a host function named `isFoo` is a host function, and a function a spec reached is not handed to it)
   ...(['param', 'handler'] as const).flatMap((mode) => ['isFoo(datum.list.map)', 'isFoo(hostFn())'].map((code) =>
     [mode, code, '{"r":true,"logs":[]}', '{"r":{"$":"throw","name":"Error","message":"Function argument refused: isFoo"},"logs":[]}'] as const)),
-  ["param", "datum.list.constructor.constructor", "{\"r\":{\"$\":\"undef\"},\"logs\":[\"Prevented interpretation of member \\\"constructor\\\" which could lead to insecure code execution\"]}",
-   "{\"r\":{\"$\":\"undef\"},\"logs\":[]}"],
-  ["handler", "datum.list.constructor.constructor", "{\"r\":{\"$\":\"undef\"},\"logs\":[\"Prevented interpretation of member \\\"constructor\\\" which could lead to insecure code execution\"]}",
-   "{\"r\":{\"$\":\"undef\"},\"logs\":[]}"],
-  ["param", "\"\".constructor.constructor", "{\"r\":{\"$\":\"undef\"},\"logs\":[\"Prevented interpretation of member \\\"constructor\\\" which could lead to insecure code execution\"]}",
-   "{\"r\":{\"$\":\"undef\"},\"logs\":[]}"],
-  ["handler", "\"\".constructor.constructor", "{\"r\":{\"$\":\"undef\"},\"logs\":[\"Prevented interpretation of member \\\"constructor\\\" which could lead to insecure code execution\"]}",
-   "{\"r\":{\"$\":\"undef\"},\"logs\":[]}"],
-  ["param", "(1).constructor.constructor", "{\"r\":{\"$\":\"undef\"},\"logs\":[\"Prevented interpretation of member \\\"constructor\\\" which could lead to insecure code execution\"]}",
-   "{\"r\":{\"$\":\"undef\"},\"logs\":[]}"],
-  ["handler", "(1).constructor.constructor", "{\"r\":{\"$\":\"undef\"},\"logs\":[\"Prevented interpretation of member \\\"constructor\\\" which could lead to insecure code execution\"]}",
-   "{\"r\":{\"$\":\"undef\"},\"logs\":[]}"],
-  ["param", "datum.list.map.constructor", "{\"r\":{\"$\":\"undef\"},\"logs\":[\"Prevented interpretation of member \\\"constructor\\\" which could lead to insecure code execution\"]}",
-   "{\"r\":{\"$\":\"undef\"},\"logs\":[]}"],
-  ["handler", "datum.list.map.constructor", "{\"r\":{\"$\":\"undef\"},\"logs\":[\"Prevented interpretation of member \\\"constructor\\\" which could lead to insecure code execution\"]}",
-   "{\"r\":{\"$\":\"undef\"},\"logs\":[]}"],
-  ["param", "datum[\"constructor\"]", "{\"r\":{\"$\":\"undef\"},\"logs\":[]}",
-   "{\"r\":\"ownCtor\",\"logs\":[]}"],
-  ["handler", "datum[\"constructor\"]", "{\"r\":{\"$\":\"undef\"},\"logs\":[]}",
-   "{\"r\":\"ownCtor\",\"logs\":[]}"],
-  ["param", "datum[\"constructor\"][\"constructor\"]", "{\"r\":{\"$\":\"throw\",\"name\":\"TypeError\",\"message\":\"Cannot read properties of undefined (reading 'function Object() { [native code] }')\"},\"logs\":[]}",
-   "{\"r\":{\"$\":\"fn\"},\"logs\":[]}"],
-  ["handler", "datum[\"constructor\"][\"constructor\"]", "{\"r\":{\"$\":\"throw\",\"name\":\"TypeError\",\"message\":\"Cannot read properties of undefined (reading 'function Object() { [native code] }')\"},\"logs\":[]}",
-   "{\"r\":{\"$\":\"fn\"},\"logs\":[]}"],
-  ["param", "datum[[\"constructor\"]]", "{\"r\":{\"$\":\"undef\"},\"logs\":[]}",
-   "{\"r\":\"ownCtor\",\"logs\":[]}"],
-  ["handler", "datum[[\"constructor\"]]", "{\"r\":{\"$\":\"undef\"},\"logs\":[]}",
-   "{\"r\":\"ownCtor\",\"logs\":[]}"],
-  ["param", "datum[\"__proto__\"][\"constructor\"]", "{\"r\":{\"$\":\"throw\",\"name\":\"TypeError\",\"message\":\"Cannot read properties of undefined (reading 'function Object() { [native code] }')\"},\"logs\":[]}",
-   "{\"r\":{\"$\":\"fn\"},\"logs\":[]}"],
-  ["handler", "datum[\"__proto__\"][\"constructor\"]", "{\"r\":{\"$\":\"throw\",\"name\":\"TypeError\",\"message\":\"Cannot read properties of undefined (reading 'function Object() { [native code] }')\"},\"logs\":[]}",
-   "{\"r\":{\"$\":\"fn\"},\"logs\":[]}"],
-  ["param", "({}).constructor.constructor", "{\"r\":{\"$\":\"undef\"},\"logs\":[\"Prevented interpretation of member \\\"constructor\\\" which could lead to insecure code execution\"]}",
-   "{\"r\":{\"$\":\"undef\"},\"logs\":[]}"],
-  ["handler", "({}).constructor.constructor", "{\"r\":{\"$\":\"undef\"},\"logs\":[\"Prevented interpretation of member \\\"constructor\\\" which could lead to insecure code execution\"]}",
-   "{\"r\":{\"$\":\"undef\"},\"logs\":[]}"],
-  ["param", "({a: datum.list.map.constructor})", "{\"r\":{\"a\":{\"$\":\"undef\"}},\"logs\":[\"Prevented interpretation of member \\\"constructor\\\" which could lead to insecure code execution\"]}",
-   "{\"r\":{\"a\":{\"$\":\"undef\"}},\"logs\":[]}"],
-  ["handler", "({a: datum.list.map.constructor})", "{\"r\":{\"a\":{\"$\":\"undef\"}},\"logs\":[\"Prevented interpretation of member \\\"constructor\\\" which could lead to insecure code execution\"]}",
-   "{\"r\":{\"a\":{\"$\":\"undef\"}},\"logs\":[]}"],
-  ["param", "constructor", "{\"r\":{\"$\":\"fn\"},\"logs\":[]}",
-   "{\"r\":{\"$\":\"undef\"},\"logs\":[]}"],
-  ["handler", "constructor", "{\"r\":{\"$\":\"fn\"},\"logs\":[]}",
-   "{\"r\":{\"$\":\"undef\"},\"logs\":[]}"],
-  ["param", "constructor(\"return 1\")", "{\"r\":{\"0\":\"r\",\"1\":\"e\",\"2\":\"t\",\"3\":\"u\",\"4\":\"r\",\"5\":\"n\",\"6\":\" \",\"7\":\"1\"},\"logs\":[]}",
-   "{\"r\":{\"$\":\"throw\",\"name\":\"TypeError\",\"message\":\"Cannot read properties of undefined (reading 'apply')\"},\"logs\":[]}"],
-  ["handler", "constructor(\"return 1\")", "{\"r\":{\"0\":\"r\",\"1\":\"e\",\"2\":\"t\",\"3\":\"u\",\"4\":\"r\",\"5\":\"n\",\"6\":\" \",\"7\":\"1\"},\"logs\":[]}",
-   "{\"r\":{\"$\":\"throw\",\"name\":\"TypeError\",\"message\":\"Cannot read properties of undefined (reading 'apply')\"},\"logs\":[]}"],
-  ["param", "toString", "{\"r\":{\"$\":\"fn\"},\"logs\":[]}",
-   "{\"r\":{\"$\":\"undef\"},\"logs\":[]}"],
-  ["handler", "toString", "{\"r\":{\"$\":\"fn\"},\"logs\":[]}",
-   "{\"r\":{\"$\":\"undef\"},\"logs\":[]}"],
-  ["param", "valueOf()", "{\"r\":{\"group\":{\"$\":\"fn\"},\"item\":{\"$\":\"fn\"},\"view\":{\"$\":\"fn\"},\"x\":{\"$\":\"fn\"},\"xy\":{\"$\":\"fn\"},\"y\":{\"$\":\"fn\"}},\"logs\":[]}",
-   "{\"r\":{\"$\":\"throw\",\"name\":\"TypeError\",\"message\":\"Cannot read properties of undefined (reading 'apply')\"},\"logs\":[]}"],
-  ["handler", "valueOf()", "{\"r\":{\"group\":{\"$\":\"fn\"},\"item\":{\"$\":\"fn\"},\"view\":{\"$\":\"fn\"},\"x\":{\"$\":\"fn\"},\"xy\":{\"$\":\"fn\"},\"y\":{\"$\":\"fn\"}},\"logs\":[]}",
-   "{\"r\":{\"$\":\"throw\",\"name\":\"TypeError\",\"message\":\"Cannot read properties of undefined (reading 'apply')\"},\"logs\":[]}"],
-  ["param", "hasOwnProperty(\"x\")", "{\"r\":true,\"logs\":[]}",
-   "{\"r\":{\"$\":\"throw\",\"name\":\"TypeError\",\"message\":\"Cannot read properties of undefined (reading 'apply')\"},\"logs\":[]}"],
-  ["handler", "hasOwnProperty(\"x\")", "{\"r\":true,\"logs\":[]}",
-   "{\"r\":{\"$\":\"throw\",\"name\":\"TypeError\",\"message\":\"Cannot read properties of undefined (reading 'apply')\"},\"logs\":[]}"],
-  ["param", "__proto__", "{\"r\":{},\"logs\":[]}",
-   "{\"r\":{\"$\":\"undef\"},\"logs\":[]}"],
-  ["handler", "__proto__", "{\"r\":{},\"logs\":[]}",
-   "{\"r\":{\"$\":\"undef\"},\"logs\":[]}"],
-  ["param", "__defineGetter__", "{\"r\":{\"$\":\"fn\"},\"logs\":[]}",
-   "{\"r\":{\"$\":\"undef\"},\"logs\":[]}"],
-  ["handler", "__defineGetter__", "{\"r\":{\"$\":\"fn\"},\"logs\":[]}",
-   "{\"r\":{\"$\":\"undef\"},\"logs\":[]}"],
-  ["param", "\\u0063onstructor", "{\"r\":{\"$\":\"fn\"},\"logs\":[]}",
-   "{\"r\":{\"$\":\"undef\"},\"logs\":[]}"],
-  ["handler", "\\u0063onstructor", "{\"r\":{\"$\":\"fn\"},\"logs\":[]}",
-   "{\"r\":{\"$\":\"undef\"},\"logs\":[]}"],
-  ["param", "datum[\"\\u0063onstructor\"]", "{\"r\":{\"$\":\"undef\"},\"logs\":[]}",
-   "{\"r\":\"ownCtor\",\"logs\":[]}"],
-  ["handler", "datum[\"\\u0063onstructor\"]", "{\"r\":{\"$\":\"undef\"},\"logs\":[]}",
-   "{\"r\":\"ownCtor\",\"logs\":[]}"],
-  ["param", "datum[\"\\x63onstructor\"]", "{\"r\":{\"$\":\"undef\"},\"logs\":[]}",
-   "{\"r\":\"ownCtor\",\"logs\":[]}"],
-  ["handler", "datum[\"\\x63onstructor\"]", "{\"r\":{\"$\":\"undef\"},\"logs\":[]}",
-   "{\"r\":\"ownCtor\",\"logs\":[]}"],
   ["param", "length(datum.list.map)", "{\"r\":1,\"logs\":[]}",
    "{\"r\":{\"$\":\"throw\",\"name\":\"Error\",\"message\":\"Function argument refused: length\"},\"logs\":[]}"],
   ["handler", "length(datum.list.map)", "{\"r\":1,\"logs\":[]}",
@@ -293,16 +231,114 @@ const PINNED_DIVERGENCES: ReadonlyArray<readonly [string, string, string, string
    "{\"r\":{\"$\":\"throw\",\"name\":\"Error\",\"message\":\"Function argument refused: replace\"},\"logs\":[]}"],
   ["handler", "replace(\"a\", \"a\", datum.list.map)", "{\"r\":{\"$\":\"throw\",\"name\":\"TypeError\",\"message\":\"Array.prototype.map called on null or undefined\"},\"logs\":[]}",
    "{\"r\":{\"$\":\"throw\",\"name\":\"Error\",\"message\":\"Function argument refused: replace\"},\"logs\":[]}"],
-  ["param", "[][\"constructor\"]", "{\"r\":{\"$\":\"undef\"},\"logs\":[]}",
-   "{\"r\":{\"$\":\"fn\"},\"logs\":[]}"],
-  ["handler", "[][\"constructor\"]", "{\"r\":{\"$\":\"undef\"},\"logs\":[]}",
-   "{\"r\":{\"$\":\"fn\"},\"logs\":[]}"],
+  ["param", "constructor", "{\"r\":{\"$\":\"fn\"},\"logs\":[]}",
+   "{\"r\":{\"$\":\"undef\"},\"logs\":[]}"],
+  ["handler", "constructor", "{\"r\":{\"$\":\"fn\"},\"logs\":[]}",
+   "{\"r\":{\"$\":\"undef\"},\"logs\":[]}"],
+  ["param", "toString", "{\"r\":{\"$\":\"fn\"},\"logs\":[]}",
+   "{\"r\":{\"$\":\"undef\"},\"logs\":[]}"],
+  ["handler", "toString", "{\"r\":{\"$\":\"fn\"},\"logs\":[]}",
+   "{\"r\":{\"$\":\"undef\"},\"logs\":[]}"],
+  ["param", "__defineGetter__", "{\"r\":{\"$\":\"fn\"},\"logs\":[]}",
+   "{\"r\":{\"$\":\"undef\"},\"logs\":[]}"],
+  ["handler", "__defineGetter__", "{\"r\":{\"$\":\"fn\"},\"logs\":[]}",
+   "{\"r\":{\"$\":\"undef\"},\"logs\":[]}"],
+  ["param", "\\u0063onstructor", "{\"r\":{\"$\":\"fn\"},\"logs\":[]}",
+   "{\"r\":{\"$\":\"undef\"},\"logs\":[]}"],
+  ["handler", "\\u0063onstructor", "{\"r\":{\"$\":\"fn\"},\"logs\":[]}",
+   "{\"r\":{\"$\":\"undef\"},\"logs\":[]}"],
+  ["param", "valueOf()", "{\"r\":{\"group\":{\"$\":\"fn\"},\"item\":{\"$\":\"fn\"},\"view\":{\"$\":\"fn\"},\"x\":{\"$\":\"fn\"},\"xy\":{\"$\":\"fn\"},\"y\":{\"$\":\"fn\"}},\"logs\":[]}",
+   "{\"r\":{\"$\":\"throw\",\"name\":\"TypeError\",\"message\":\"Cannot read properties of undefined (reading 'apply')\"},\"logs\":[]}"],
+  ["handler", "valueOf()", "{\"r\":{\"group\":{\"$\":\"fn\"},\"item\":{\"$\":\"fn\"},\"view\":{\"$\":\"fn\"},\"x\":{\"$\":\"fn\"},\"xy\":{\"$\":\"fn\"},\"y\":{\"$\":\"fn\"}},\"logs\":[]}",
+   "{\"r\":{\"$\":\"throw\",\"name\":\"TypeError\",\"message\":\"Cannot read properties of undefined (reading 'apply')\"},\"logs\":[]}"],
+]
+
+/** The same result, without the `Prevented interpretation of member` line vega logs. */
+const QUIETER_THAN_VEGA: ReadonlyArray<readonly [string, string, string, string]> = [
+  ["param", "datum.list.constructor.constructor", "{\"r\":{\"$\":\"undef\"},\"logs\":[\"Prevented interpretation of member \\\"constructor\\\" which could lead to insecure code execution\"]}",
+   "{\"r\":{\"$\":\"undef\"},\"logs\":[]}"],
+  ["handler", "datum.list.constructor.constructor", "{\"r\":{\"$\":\"undef\"},\"logs\":[\"Prevented interpretation of member \\\"constructor\\\" which could lead to insecure code execution\"]}",
+   "{\"r\":{\"$\":\"undef\"},\"logs\":[]}"],
+  ["param", "\"\".constructor.constructor", "{\"r\":{\"$\":\"undef\"},\"logs\":[\"Prevented interpretation of member \\\"constructor\\\" which could lead to insecure code execution\"]}",
+   "{\"r\":{\"$\":\"undef\"},\"logs\":[]}"],
+  ["handler", "\"\".constructor.constructor", "{\"r\":{\"$\":\"undef\"},\"logs\":[\"Prevented interpretation of member \\\"constructor\\\" which could lead to insecure code execution\"]}",
+   "{\"r\":{\"$\":\"undef\"},\"logs\":[]}"],
+  ["param", "(1).constructor.constructor", "{\"r\":{\"$\":\"undef\"},\"logs\":[\"Prevented interpretation of member \\\"constructor\\\" which could lead to insecure code execution\"]}",
+   "{\"r\":{\"$\":\"undef\"},\"logs\":[]}"],
+  ["handler", "(1).constructor.constructor", "{\"r\":{\"$\":\"undef\"},\"logs\":[\"Prevented interpretation of member \\\"constructor\\\" which could lead to insecure code execution\"]}",
+   "{\"r\":{\"$\":\"undef\"},\"logs\":[]}"],
+  ["param", "datum.list.map.constructor", "{\"r\":{\"$\":\"undef\"},\"logs\":[\"Prevented interpretation of member \\\"constructor\\\" which could lead to insecure code execution\"]}",
+   "{\"r\":{\"$\":\"undef\"},\"logs\":[]}"],
+  ["handler", "datum.list.map.constructor", "{\"r\":{\"$\":\"undef\"},\"logs\":[\"Prevented interpretation of member \\\"constructor\\\" which could lead to insecure code execution\"]}",
+   "{\"r\":{\"$\":\"undef\"},\"logs\":[]}"],
+  ["param", "({}).constructor.constructor", "{\"r\":{\"$\":\"undef\"},\"logs\":[\"Prevented interpretation of member \\\"constructor\\\" which could lead to insecure code execution\"]}",
+   "{\"r\":{\"$\":\"undef\"},\"logs\":[]}"],
+  ["handler", "({}).constructor.constructor", "{\"r\":{\"$\":\"undef\"},\"logs\":[\"Prevented interpretation of member \\\"constructor\\\" which could lead to insecure code execution\"]}",
+   "{\"r\":{\"$\":\"undef\"},\"logs\":[]}"],
+  ["param", "({a: datum.list.map.constructor})", "{\"r\":{\"a\":{\"$\":\"undef\"}},\"logs\":[\"Prevented interpretation of member \\\"constructor\\\" which could lead to insecure code execution\"]}",
+   "{\"r\":{\"a\":{\"$\":\"undef\"}},\"logs\":[]}"],
+  ["handler", "({a: datum.list.map.constructor})", "{\"r\":{\"a\":{\"$\":\"undef\"}},\"logs\":[\"Prevented interpretation of member \\\"constructor\\\" which could lead to insecure code execution\"]}",
+   "{\"r\":{\"a\":{\"$\":\"undef\"}},\"logs\":[]}"],
+  ["param", "constructor(\"return 1\")", "{\"r\":{\"0\":\"r\",\"1\":\"e\",\"2\":\"t\",\"3\":\"u\",\"4\":\"r\",\"5\":\"n\",\"6\":\" \",\"7\":\"1\"},\"logs\":[]}",
+   "{\"r\":{\"$\":\"throw\",\"name\":\"TypeError\",\"message\":\"Cannot read properties of undefined (reading 'apply')\"},\"logs\":[]}"],
+  ["handler", "constructor(\"return 1\")", "{\"r\":{\"0\":\"r\",\"1\":\"e\",\"2\":\"t\",\"3\":\"u\",\"4\":\"r\",\"5\":\"n\",\"6\":\" \",\"7\":\"1\"},\"logs\":[]}",
+   "{\"r\":{\"$\":\"throw\",\"name\":\"TypeError\",\"message\":\"Cannot read properties of undefined (reading 'apply')\"},\"logs\":[]}"],
+  ["param", "hasOwnProperty(\"x\")", "{\"r\":true,\"logs\":[]}",
+   "{\"r\":{\"$\":\"throw\",\"name\":\"TypeError\",\"message\":\"Cannot read properties of undefined (reading 'apply')\"},\"logs\":[]}"],
+  ["handler", "hasOwnProperty(\"x\")", "{\"r\":true,\"logs\":[]}",
+   "{\"r\":{\"$\":\"throw\",\"name\":\"TypeError\",\"message\":\"Cannot read properties of undefined (reading 'apply')\"},\"logs\":[]}"],
+  ["param", "__proto__", "{\"r\":{},\"logs\":[]}",
+   "{\"r\":{\"$\":\"undef\"},\"logs\":[]}"],
+  ["handler", "__proto__", "{\"r\":{},\"logs\":[]}",
+   "{\"r\":{\"$\":\"undef\"},\"logs\":[]}"],
   ["handler", "event.vega.view.constructor", "{\"r\":{\"$\":\"undef\"},\"logs\":[\"Prevented interpretation of member \\\"constructor\\\" which could lead to insecure code execution\"]}",
    "{\"r\":{\"$\":\"undef\"},\"logs\":[]}"],
   ["handler", "event.vega.constructor.constructor", "{\"r\":{\"$\":\"undef\"},\"logs\":[\"Prevented interpretation of member \\\"constructor\\\" which could lead to insecure code execution\"]}",
    "{\"r\":{\"$\":\"undef\"},\"logs\":[]}"],
 ]
 
+/** A string-literal member named like an Object.prototype member reads a data column of that name as data (vega's parser rewrites it to an identifier, which reads nothing). */
+const OWN_DATA_COLUMNS: ReadonlyArray<readonly [string, string, string, string]> = [
+  ["param", "datum[\"constructor\"]", "{\"r\":{\"$\":\"undef\"},\"logs\":[]}",
+   "{\"r\":\"ownCtor\",\"logs\":[]}"],
+  ["handler", "datum[\"constructor\"]", "{\"r\":{\"$\":\"undef\"},\"logs\":[]}",
+   "{\"r\":\"ownCtor\",\"logs\":[]}"],
+  ["param", "datum[[\"constructor\"]]", "{\"r\":{\"$\":\"undef\"},\"logs\":[]}",
+   "{\"r\":\"ownCtor\",\"logs\":[]}"],
+  ["handler", "datum[[\"constructor\"]]", "{\"r\":{\"$\":\"undef\"},\"logs\":[]}",
+   "{\"r\":\"ownCtor\",\"logs\":[]}"],
+  ["param", "datum[\"\\u0063onstructor\"]", "{\"r\":{\"$\":\"undef\"},\"logs\":[]}",
+   "{\"r\":\"ownCtor\",\"logs\":[]}"],
+  ["handler", "datum[\"\\u0063onstructor\"]", "{\"r\":{\"$\":\"undef\"},\"logs\":[]}",
+   "{\"r\":\"ownCtor\",\"logs\":[]}"],
+  ["param", "datum[\"\\x63onstructor\"]", "{\"r\":{\"$\":\"undef\"},\"logs\":[]}",
+   "{\"r\":\"ownCtor\",\"logs\":[]}"],
+  ["handler", "datum[\"\\x63onstructor\"]", "{\"r\":{\"$\":\"undef\"},\"logs\":[]}",
+   "{\"r\":\"ownCtor\",\"logs\":[]}"],
+]
+
+/**
+ * Aster's INTERPRETER reading (the vega-interpreter-shaped entry, which no chart runs: a chart's expressions run under the product reading,
+ * proven above to hand out no built-in) answers where vega's gives undefined or throws: a string-literal member naming a built-in's member
+ * reaches the built-in constructor, which is inert (no `Function`: a second hop through a function is never resolved). Each row is pinned
+ * on both sides, and `MORE_PERMISSIVE` lists their probes: a row that stops differing, or a new one, fails.
+ */
+const MORE_PERMISSIVE_THAN_VEGA: ReadonlyArray<readonly [string, string, string, string]> = [
+  ["param", "datum[\"constructor\"][\"constructor\"]", "{\"r\":{\"$\":\"throw\",\"name\":\"TypeError\",\"message\":\"Cannot read properties of undefined (reading 'function Object() { [native code] }')\"},\"logs\":[]}",
+   "{\"r\":{\"$\":\"fn\"},\"logs\":[]}"],
+  ["handler", "datum[\"constructor\"][\"constructor\"]", "{\"r\":{\"$\":\"throw\",\"name\":\"TypeError\",\"message\":\"Cannot read properties of undefined (reading 'function Object() { [native code] }')\"},\"logs\":[]}",
+   "{\"r\":{\"$\":\"fn\"},\"logs\":[]}"],
+  ["param", "datum[\"__proto__\"][\"constructor\"]", "{\"r\":{\"$\":\"throw\",\"name\":\"TypeError\",\"message\":\"Cannot read properties of undefined (reading 'function Object() { [native code] }')\"},\"logs\":[]}",
+   "{\"r\":{\"$\":\"fn\"},\"logs\":[]}"],
+  ["handler", "datum[\"__proto__\"][\"constructor\"]", "{\"r\":{\"$\":\"throw\",\"name\":\"TypeError\",\"message\":\"Cannot read properties of undefined (reading 'function Object() { [native code] }')\"},\"logs\":[]}",
+   "{\"r\":{\"$\":\"fn\"},\"logs\":[]}"],
+  ["param", "[][\"constructor\"]", "{\"r\":{\"$\":\"undef\"},\"logs\":[]}",
+   "{\"r\":{\"$\":\"fn\"},\"logs\":[]}"],
+  ["handler", "[][\"constructor\"]", "{\"r\":{\"$\":\"undef\"},\"logs\":[]}",
+   "{\"r\":{\"$\":\"fn\"},\"logs\":[]}"],
+]
+
+const PINNED_DIVERGENCES: ReadonlyArray<readonly [string, string, string, string]> = [...STRICTER_THAN_VEGA, ...QUIETER_THAN_VEGA, ...OWN_DATA_COLUMNS, ...MORE_PERMISSIVE_THAN_VEGA]
 describe('generated: adversarial sandbox probes (vega-interpreter vs Aster)', () => {
   const rows = PROBES.map((code) => {
     const v = (() => { try { return { ast: ve.parseExpression(code) } } catch (e: any) { return { parseError: String(e?.message) } } })()
@@ -338,37 +374,63 @@ describe('generated: adversarial sandbox probes (vega-interpreter vs Aster)', ()
       expect(bad).toEqual([])
     }))
 
-  it('never lets a probe return or smuggle Function, eval or a timer, and never executes injected code', () =>
-    withTz('UTC', () => {
-      const sensitive = new Set<unknown>([Function, eval, setTimeout, setInterval, globalThis, process])
-      const seen = (v: unknown, depth = 0): boolean => {
-        if (sensitive.has(v)) return true
-        if (depth > 3 || v === null || typeof v !== 'object') return false
-        return Object.values(v as object).some((x) => seen(x, depth + 1))
-      }
+  it('the marker probes fire when nothing guards them (so that "never executes injected code" can fail)', () => {
+    for (const code of MARKER_PROBES) {
       ;(globalThis as any).__asterEscaped = 0
-      for (const { code, a } of rows) {
+      // an unguarded evaluator: JavaScript itself, over the same datum
+      new Function('datum', `return (${code})`)(mkDatum())
+      expect((globalThis as any).__asterEscaped, code).toBe(1)
+    }
+    ;(globalThis as any).__asterEscaped = 0
+  })
+
+  it('never returns Function, eval, a timer or a global, and never executes injected code, in the product reading and in the interpreter reading', () =>
+    withTz('UTC', () => {
+      const BUILTINS: unknown[] = [Object, Array, String, Number, Boolean, Date, RegExp, Function, Symbol, Error, TypeError, Map, Set, WeakMap, Promise, BigInt, ArrayBuffer, Uint8Array]
+      const never = new Set<unknown>([Function, eval, setTimeout, setInterval, globalThis, process])
+      // what a built-in constructor or prototype gives an expression that holds it: statics and methods that reach the host
+      const builtins = new Set<unknown>([...BUILTINS, ...BUILTINS.map((c) => (c as { prototype: unknown }).prototype), Object.getPrototypeOf(function* () {}), Object.getPrototypeOf(async () => 0)])
+      const holds = (set: Set<unknown>, v: unknown, depth = 0): boolean => {
+        if (set.has(v)) return true
+        if (depth > 3 || v === null || typeof v !== 'object') return false
+        return Object.values(v as object).some((x) => holds(set, x, depth + 1))
+      }
+      const runtime: any = { scale: () => undefined, data: () => [], expr: (e: string) => compileExpr(e, runtime) }
+      ;(globalThis as any).__asterEscaped = 0
+      let evaluated = 0
+      const compatLeaks: string[] = []
+      for (const { code, v, a } of rows) {
         if (a.ast === undefined) continue
+        // the product reading (what a chart's expression runs under): not a built-in, not Function, nothing that reaches the host
+        let product: unknown
+        try { product = compileExpr(code, runtime)(mkDatum(), mkParams()) } catch { product = undefined }
+        expect({ code, reading: 'product', holdsNever: holds(never, product), holdsBuiltin: holds(builtins, product) }).toEqual({ code, reading: 'product', holdsNever: false, holdsBuiltin: false })
+        evaluated++
         for (const mode of PROBE_MODES) {
-          const logs: string[] = []
-          const spy = vitest.spyOn(console, 'error').mockImplementation((...x: unknown[]) => { logs.push(x.map(String).join(' ')) })
+          const spy = vitest.spyOn(console, 'error').mockImplementation(() => {})
           try {
             const ctx = { functions: mkHost() }
-            const datum = mkDatum()
-            let result: unknown
-            try {
-              result = mode === 'param' ? expressionInterpreter.parameter(ctx, { ast: a.ast })(datum, mkParams())
-                : mode === 'operator' ? expressionInterpreter.operator(ctx, { ast: a.ast })(mkParams())
-                : mode === 'event' ? expressionInterpreter.event(ctx, { ast: a.ast })(mkEvent(datum))
-                : expressionInterpreter.handler(ctx, { ast: a.ast })(mkParams(), mkEvent(datum))
-            } catch { result = undefined }
-            expect({ code, smuggled: seen(result) }).toEqual({ code, smuggled: false })
+            const run = (mod: any, ast: unknown): unknown => {
+              try {
+                return mode === 'param' ? mod.parameter(ctx, { ast })(mkDatum(), mkParams()) : mod.handler(ctx, { ast })(mkParams(), mkEvent(mkDatum()))
+              } catch { return undefined }
+            }
+            const result = run(expressionInterpreter, a.ast)
+            expect({ code, mode, holdsNever: holds(never, result) }).toEqual({ code, mode, holdsNever: false })
+            // the interpreter reading keeps vega-interpreter's plain member read, which hands out an inert built-in (`"".constructor` is
+            // String): that is vega's own, and it is a leak only where Aster hands out a built-in vega does not (the pinned table, split below)
+            if (v.ast !== undefined && holds(builtins, result) && !holds(builtins, run((vi as any).expressionInterpreter, v.ast))) compatLeaks.push(`${mode} ${code}`)
           } finally {
             spy.mockRestore()
           }
         }
       }
-      expect((globalThis as any).__asterEscaped).toBe(0)
+      expect((globalThis as any).__asterEscaped, 'injected code ran').toBe(0)
+      expect(evaluated).toBeGreaterThan(150)
+      // where the interpreter reading is MORE permissive than vega-interpreter: pinned both ways (PINNED_DIVERGENCES), and exactly these
+      expect(compatLeaks.sort()).toEqual([...MORE_PERMISSIVE].sort())
+      // ... and those are the rows of the MORE_PERMISSIVE table (a leak with no pinned row, or a row with no leak, is a change to look at)
+      expect([...new Set(MORE_PERMISSIVE_THAN_VEGA.map(([mode, code]) => `${mode} ${code}`))].sort()).toEqual([...MORE_PERMISSIVE].sort())
     }))
 
   it('covers the sandbox surface: the probe list reaches parse errors, results and prevented-access logs', () =>
