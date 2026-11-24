@@ -44,7 +44,7 @@ async function vegaScale(spec: unknown): Promise<AnyScale | { refusal: string; i
   // (an error of the JavaScript engine itself -- a TypeError, a stack overflow -- is worded by the engine, not by vega: only that
   // vega refuses is compared, as `outcome` in differential-gen.mts does)
   const refusalOf = (e: unknown): { refusal: string; incidental?: true } => ({ refusal: text(e), ...(e instanceof TypeError || e instanceof RangeError ? { incidental: true as const } : {}) })
-  let runtime: vega.Spec
+  let runtime: ReturnType<typeof vega.parse>
   try { runtime = vega.parse(structuredClone(spec) as vega.Spec) } catch (e) { return refusalOf(e) }
   const errors: unknown[][] = []
   const quiet = quietLogger(errors)

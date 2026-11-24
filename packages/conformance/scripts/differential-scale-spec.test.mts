@@ -76,7 +76,7 @@ const text = (e: unknown): string => (e instanceof Error ? e.message : String(e)
 
 /** The oracle: real Vega's scale `s`, or how Vega refuses the spec (an operator error is a refusal, not a half-configured scale). */
 async function vegaScale(spec: unknown): Promise<{ scale: AnyScale } | { refusal: Refusal }> {
-  let runtime: vega.Spec
+  let runtime: ReturnType<typeof vega.parse>
   try {
     runtime = vega.parse(structuredClone(spec) as vega.Spec)
   } catch (e) {

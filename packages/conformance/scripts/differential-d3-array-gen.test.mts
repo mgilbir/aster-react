@@ -51,9 +51,11 @@ describe('arr.ts vs d3-array 3.2.4 (generated)', () => {
         oracle: () => [d3.ticks(a as number, b as number, c as number), d3.tickStep(a as number, b as number, c as number), d3.tickIncrement(a as number, b as number, c as number)],
         // (past the built-in ceiling `ticks` refuses a count d3 makes or fails on natively: the parity is with the ceiling off)
         aster: () => unboundedForParity(() => [arr.ticks(a as number, b as number, c as number), arr.tickStep(a as number, b as number, c as number), arr.tickIncrement(a as number, b as number, c as number)]),
+        // (ticks that were listed: a non-empty list, not the empty one a NaN or a refused count gives)
+        informative: (v) => Array.isArray(v) && Array.isArray(v[0]) && v[0].length > 0,
       }
     })
-    expect(out.informative).toBeGreaterThan(10000)
+    expect(out.informative, 'cases that listed ticks').toBeGreaterThan(out.cases * 0.3)
   })
 
   it('ticks with a large count (the arrays a dense axis makes)', () => {
