@@ -3,7 +3,7 @@ import { describe, it, expect } from 'vitest'
 import { regexHazard } from './regex-screen.js'
 import { compileExpr } from './expression.js'
 import { withLimits, AsterLimitError } from './limits.js'
-import { attack, expectLimit } from './attack.testkit.js'
+import { attack, expectLimit, expectReturned } from './attack.testkit.js'
 
 /** Known catastrophic patterns from published ReDoS lists (OWASP, Davis et al. "The Impact of Regular Expression Denial of Service", regexlib). */
 const REDOS: Array<[string, string?]> = [
@@ -128,7 +128,6 @@ describe('polynomial backtracking (child process, hard kill)', () => {
         { type: 'formula', as: 'b', expr: "test(/\\\\s*a*b?/, datum.s)" }] }],
         marks: [{ type: 'rect', from: { data: 't' } }] }, { limits: {} })
       return svg.length > 0`)
-    expect(r.threw, JSON.stringify(r)).toBeNull()
-    expect(r.value).toBe(true)
+    expectReturned(r, true)
   }, 30_000)
 })
