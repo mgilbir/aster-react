@@ -20,7 +20,7 @@ function compile(rootFiles: string[], paths?: Record<string, string[]>): ts.Diag
   const cfg = ts.readConfigFile(cfgPath, ts.sys.readFile)
   const parsed = ts.parseJsonConfigFileContent(cfg.config, ts.sys, PKG)
   const program = ts.createProgram({
-    rootNames: rootFiles.map((f) => join(PKG, 'type-fixtures', f)),
+    rootNames: rootFiles.map((f) => (f.startsWith('src/') ? join(PKG, f) : join(PKG, 'type-fixtures', f))),
     options: { ...parsed.options, noEmit: true, ...(paths ? { baseUrl: PKG, paths } : {}) },
   })
   return ts.getPreEmitDiagnostics(program).filter((d) => d.category === ts.DiagnosticCategory.Error)
@@ -73,19 +73,22 @@ describe('<SvgChart> prop typing', () => {
 
 describe('<Chart> / <SvgChart> parity is enforced by the compiler', () => {
   it('parity.assert.ts compiles as it stands', () => {
-    expect(compile(['svg-chart-accepts.fixture.tsx']).filter((d) => d.file?.fileName.endsWith('parity.assert.ts')).map(where)).toEqual([])
+    // (the module itself is the root: the accepts fixture does not import it, so a program of the fixture alone never contains it)
+    expect(compile(['src/parity.assert.ts']).map(where)).toEqual([])
   }, 120_000)
 
+  // Each fixture augments the interface with one member nobody decided about: the program (the fixture and the assertion module it
+  // imports) must then fail on EXACTLY the assertion of that list, and nowhere else. Were parity.assert.ts already broken somewhere
+  // on its own, the plain program above would fail; were the fixture not to import it, nothing here would.
   it.each([
     ['bite-props.fixture.ts', 'PropsDecided', 'a prop added to ChartProps'],
     ['bite-handle.fixture.ts', 'HandleDecided', 'a method added to ChartHandle'],
   ])('%s: %s fails when %s has no decision for <SvgChart>', (fixture, assertion) => {
     const diags = compile([fixture])
     const src = readFileSync(join(PKG, 'src', 'parity.assert.ts'), 'utf8').split('\n')
-    const failing = diags
-      .filter((d) => d.file?.fileName.endsWith('parity.assert.ts'))
-      .map((d) => src[d.file!.getLineAndCharacterOfPosition(d.start!).line]!)
-    expect(failing.some((l) => l.includes(`type ${assertion} `)), diags.map(where).join('\n')).toBe(true)
+    const lines = diags.map((d) => (d.file?.fileName.endsWith('parity.assert.ts') ? src[d.file.getLineAndCharacterOfPosition(d.start!).line]! : `elsewhere: ${where(d)}`))
+    expect(lines, diags.map(where).join('\n')).toHaveLength(1)
+    expect(lines[0]).toContain(`type ${assertion} `)
   }, 120_000)
 })
 
