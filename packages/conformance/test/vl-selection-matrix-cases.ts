@@ -86,7 +86,7 @@ const INTERVAL: Variant[] = [
   ['interval bound scales, clear', sel({ type: 'interval', clear: 'dblclick' }, { bind: 'scales' })],
   ['interval bound scales, initial', sel({ type: 'interval', encodings: ['x'] }, { value: { x: [2, 4] }, bind: 'scales' })],
 ]
-const SCALES: Array<[string, Record<string, unknown>]> = [
+export const SCALES: Array<[string, Record<string, unknown>]> = [
   ['log', { type: 'log' }],
   ['pow', { type: 'pow', exponent: 2 }],
   ['sqrt', { type: 'sqrt' }],
