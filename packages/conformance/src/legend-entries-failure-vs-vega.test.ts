@@ -10,8 +10,10 @@
  * axes before the failing one, in raw (unlaid-out) positions, and nothing that follows it in its scope -- not the marks,
  * the legends, the title, and nothing of the groups that vega builds after it (nested scopes are built level by level).
  *
- * Every case is a raw Vega spec through vega.View and through Aster. A document must match the strict canonicalizer; a
- * case vega cannot serialize must be refused by Aster too.
+ * Every case is a raw Vega spec through vega.View and through Aster, and vega (6.3.1) draws a document for every one of them (the
+ * generated 120 and the named seven: none is a spec it cannot serialize), so the documents must match the strict canonicalizer and
+ * Aster must not refuse. A case vega cannot serialize would be a new outcome nobody has compared yet: it fails here, by name, until a
+ * comparison of the two refusals (the message included) is written for it.
  */
 import { describe, expect, it } from 'vitest'
 import * as vega from 'vega'
@@ -117,7 +119,7 @@ describe('a legend whose entries cannot be made', () => {
       const got = aster(c.spec)
       if ('threw' in want) {
         counts.threw++
-        if (!('threw' in got)) wrong.push(`${c.name}: vega cannot serialize it, aster drew a document`)
+        wrong.push(`${c.name}: vega cannot serialize it (${want.threw.slice(0, 80)}): a refusal to compare, none is written`)
         continue
       }
       counts.svg++
@@ -126,7 +128,7 @@ describe('a legend whose entries cannot be made', () => {
       try { diff = diffCanonical(canonicalizeSvg(want.svg), canonicalizeSvg(got.svg)) } catch (e) { wrong.push(`${c.name}: canonicalizer: ${(e as Error).message.slice(0, 80)}`); continue }
       if (diff.length) wrong.push(`${c.name}: ${diff[0]}`)
     }
-    expect(counts.svg).toBeGreaterThan(CASES.length / 4)
+    expect(counts, 'every generated spec is drawn by vega, and so compared').toEqual({ svg: CASES.length, threw: 0 })
     expect(wrong).toEqual([])
   }, 600_000)
 })
@@ -148,7 +150,7 @@ describe('named legend failures', () => {
     it(name, async () => {
       const want = await oracle(spec)
       const got = aster(spec)
-      if ('threw' in want) { expect(got).toHaveProperty('threw'); return }
+      expect('threw' in want ? `vega cannot serialize it: ${want.threw.slice(0, 80)}` : 'a document').toBe('a document')
       if ('threw' in got) throw new Error(`vega drew a document, aster refused: ${got.threw}`)
       expect(diffCanonical(canonicalizeSvg(want.svg), canonicalizeSvg(got.svg)).slice(0, 8)).toEqual([])
     })
