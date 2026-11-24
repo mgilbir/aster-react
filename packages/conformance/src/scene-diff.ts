@@ -271,7 +271,7 @@ function asterMarks(nodes: readonly SceneNode[]): CMark[] {
   for (let i = 0; i < nodes.length; i++) {
     const n = nodes[i] as SceneGroup
     if (flag(n, '_bg')) continue
-    if (flag(n, 'contentClip')) { out.push(...asterMarks((n.items ?? []) as SceneNode[])); continue }
+    if (flag(n, 'contentClip')) { for (const m of asterMarks((n.items ?? []) as SceneNode[])) out.push(m); continue }
     if (n.marktype === 'group' && !flag(n, '_scope') && !flag(n, 'emptyMark') && GUIDE_ROLES.has(String(n.role))) continue
     if (n.marktype === 'group') {
       const id = (n as { markIndex?: unknown }).markIndex
@@ -296,7 +296,7 @@ function asterMarks(nodes: readonly SceneNode[]): CMark[] {
       out.push({ key: keyOf(n as unknown as Record<string, unknown>), items: ((n.items ?? []) as SceneItem[]).map((it) => ({ item: it, ...itemRecord(it, String(n.marktype)) })) })
       continue
     }
-    if (Array.isArray(n.items)) out.push(...asterMarks(n.items as SceneNode[]))
+    if (Array.isArray(n.items)) for (const m of asterMarks(n.items as SceneNode[])) out.push(m)
   }
   return out
 }

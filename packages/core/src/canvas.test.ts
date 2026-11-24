@@ -773,6 +773,12 @@ const MULTI_LINE = ['text-linebreak.vg.json', 'axis-label-list-value.vg.json']
  * conformance gate follows the SVG oracle; the browser canvas gate follows the canvas one.
  */
 const NON_COLOUR_PAINT = ['expr-fns.vg.json']
+/**
+ * A path whose data holds an elliptical-arc command (`linkpath` with `shape: 'arc'`): the SVG writes the `A` command, the canvas traces
+ * the arc as cubic curves, and this test's recorder compares commands, not the curves they draw. (The circle of a geo point has its own
+ * reading above.) The pixels are compared in Chromium by `pnpm conformance:canvas`, where this spec passes.
+ */
+const ARC_PATH = ['tree-links-shapes.vg.json']
 
 describe('canvas/svg corpus parity (the vega corpus; the Vega-Lite corpus is compiled by @aster-charts/vl, which core does not import: the Chromium gates compare its scenes)', () => {
   it('matches across the vega corpus, every scene of it compared but the named ones', () => {
@@ -781,7 +787,7 @@ describe('canvas/svg corpus parity (the vega corpus; the Vega-Lite corpus is com
     const compared: string[] = []
     const failures: Array<[string, string[]]> = []
     const unloadable: string[] = []
-    const excluded = new Set([...MULTI_LINE, ...NON_COLOUR_PAINT])
+    const excluded = new Set([...MULTI_LINE, ...NON_COLOUR_PAINT, ...ARC_PATH])
     for (const name of names) {
       const doc = JSON.parse(readFileSync(join(CORPUS_DIR, name), 'utf8'))
       const spec = doc.spec ?? doc
@@ -797,6 +803,7 @@ describe('canvas/svg corpus parity (the vega corpus; the Vega-Lite corpus is com
       const svg = renderSceneToSvg(scene)
       if (MULTI_LINE.includes(name) && !svg.includes('<tspan')) failures.push([name, ['excluded for multi-line text, and has none']])
       if (NON_COLOUR_PAINT.includes(name) && !svg.includes('fill="false"')) failures.push([name, ['excluded for a non-colour paint, and has none']])
+      if (ARC_PATH.includes(name) && !/ d="[^"]*A[\d.]/.test(svg)) failures.push([name, ['excluded for an arc command, and has none']])
       if (excluded.has(name)) continue
       let diffs: string[]
       try {

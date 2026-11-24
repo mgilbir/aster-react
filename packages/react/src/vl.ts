@@ -3,7 +3,7 @@
  *
  * Importing this module (for its side effect) registers the from-scratch
  * Vega-Lite compiler with `<Chart>`, `useChart`, `<ChartStream>` and the worker
- * request handlers. Without it the base `@aster-charts/react` entry stays about 105 kB gzip
+ * request handlers. Without it the base `@aster-charts/react` entry stays about 125 kB gzip
  * smaller (the `Chart + VL` row of the bundle budget, `pnpm --filter @aster-charts/benchmarks run budget`)
  * and Vega-Lite specs fail with an actionable error.
  *

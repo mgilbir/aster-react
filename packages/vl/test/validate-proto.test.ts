@@ -41,8 +41,9 @@ describe('Object.prototype members are unknown properties wherever the validator
     const bad: string[] = []
     for (const k of MEMBERS) {
       const got = refusal(() => make(k))
-      // the same refusal as the control's, with the name it was given
-      if (got === null || got.split(k).join('<k>') !== control!.split(CONTROL).join('<k>')) bad.push(`${k}: ${got === null ? 'compiled' : got.slice(0, 90)}`)
+      // the same refusal as the control's, with the name it was given (a name close to a real one, `valueOf` to `value`, also says which: that is a suggestion, not another refusal)
+      const bare = got === null ? null : got.replace(/ \(did you mean "[^"]*"\?\)$/, '')
+      if (bare === null || bare.split(k).join('<k>') !== control!.split(CONTROL).join('<k>')) bad.push(`${k}: ${got === null ? 'compiled' : got.slice(0, 90)}`)
     }
     expect(bad).toEqual([])
   })
