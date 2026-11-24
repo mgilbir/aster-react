@@ -2,14 +2,13 @@
 /**
  * An explicit `scale.domain` compiles like vega-lite's (scale/domain.ts parseSingleChannelDomain, properties.ts
  * zero() / nice()): the emitted scale's domain, zero and nice equal vega-lite's, and real vega renders the two Vega
- * specs to the same document. A domain that is neither an array nor "unaggregated" is emitted as written and fails
- * in vega (`Undefined data set name`) -- and in Aster's runtime.
+ * specs to the same document. A domain that is neither an array nor "unaggregated" (which the schema does not allow) is
+ * emitted by vega-lite as written and fails in vega (`Undefined data set name`); Aster refuses it at compile time.
  */
 import { describe, it, expect } from 'vitest'
 import * as vega from 'vega'
 import { compile as vlCompile } from 'vega-lite'
 import { compile } from '@aster-charts/vl'
-import { renderSpec } from '@aster-charts/core'
 import '@aster-charts/core/transforms'
 import { canonicalizeSvg, diffCanonical } from './normalize.js'
 
@@ -67,17 +66,17 @@ describe('explicit scale domains', () => {
 })
 
 describe('a domain that is neither an array nor "unaggregated"', () => {
+  // (the schema has no such domain: vega-lite emits it as written and vega refuses the scale (`Undefined data set name`); Aster
+  // refuses it at compile time, by its path, with a VLCompileError (C245, DECISIONS Q9))
   for (const [label, domain] of [['a string', 'Aa'], ['a number', 42], ['true', true]] as const) {
     for (const channel of ['x', 'y', 'color'] as const) {
-      it(`${label} on ${channel}: emitted as written, refused by vega and by the runtime`, async () => {
+      it(`${label} on ${channel}: vega-lite's output fails in vega; Aster refuses it by its path`, async () => {
         const enc: Obj = { x: { field: 'c', type: 'nominal' }, y: { field: 'v', type: 'quantitative' }, color: { field: 'c', type: 'nominal' } }
         enc[channel] = { ...(enc[channel] as Obj), scale: { domain } }
         const spec = unit('bar', enc)
         const oracle = vlCompile(spec as never).spec as unknown
-        const ours = compile(spec as never) as unknown
-        expect(scaleOf(ours, channel)?.domain).toEqual(scaleOf(oracle, channel)?.domain)
         await expect(svgOf(oracle)).rejects.toThrow(/Undefined data set name/)
-        expect(() => renderSpec(ours as never)).toThrow()
+        expect(() => compile(spec as never)).toThrow(new RegExp(`^\\[aster/vl\\] encoding\\.${channel}\\.scale\\.domain: must be`))
       })
     }
   }

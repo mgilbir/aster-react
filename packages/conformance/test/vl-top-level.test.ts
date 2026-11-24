@@ -22,7 +22,7 @@ const VIEWS: Array<[string, (extra: Record<string, unknown>, leafTitles?: unknow
 ]
 const TITLES: Array<[string, unknown]> = [
   ['a string', 'T'], ['empty text', ''], ['an array', ['one', 'two']], ['an empty array', []], ['an object', { text: 'T', subtitle: 'S', color: 'red' }],
-  ['a subtitle alone', { subtitle: 'S' }], ['empty text and a subtitle', { text: '', subtitle: 'S' }], ['a number', 42],
+  ['a subtitle alone', { subtitle: 'S' }], ['empty text and a subtitle', { text: '', subtitle: 'S' }],
 ]
 
 const cases: Array<[string, Record<string, unknown>]> = []
@@ -73,6 +73,17 @@ for (const autosize of ['fit', 'fit-x', 'fit-y', { type: 'fit', contains: 'paddi
 
 describe('top-level chrome and data forms draw what vega-lite draws', () => {
   for (const [name, spec] of cases) it(name, () => drawsLikeVegaLite(spec), 30_000)
+})
+
+// (a title the schema does not allow - a number - is refused by its path (C245): vega-lite draws no title for it, Aster drew "42")
+describe('a title of a type the schema does not allow is refused', () => {
+  for (const [vName, view] of VIEWS) {
+    for (const title of [42, true, null]) {
+      it(`${vName}: title ${JSON.stringify(title)}`, () => {
+        expect(() => compile(view({ title }) as never)).toThrow(/^\[aster\/vl\] title: must be a string, an array or an object/)
+      })
+    }
+  }
 })
 
 describe('usermeta passes through as vega-lite passes it', () => {
