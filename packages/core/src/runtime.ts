@@ -32,7 +32,7 @@ import { implicit as implicitCategory } from './scale-discrete.js'
 const DISCRETE_TYPES = new Set(['band', 'point', 'ordinal'])
 import { ITEM_MARK, geoRegistry, requireGeo } from './registry.js'
 import { chartLocale, formatEnvironmentKey, type Locale } from './locale.js'
-import { adjustSpatial, ENTER_COPY } from './spatial.js'
+import { adjustSpatial, ENTER_COPY, spatialProgramFor, type SpatialProgram } from './spatial.js'
 import { objectProperty } from './object-property.js'
 import type {
   CompiledAxis,
@@ -6756,6 +6756,8 @@ interface EncodePlan {
   /** Each plain key's spec and its shape (EK_*), so the per-row loop does no shape tests. */
   plainSpecs: Array<EncodeValue | EncodeValue[]>
   plainKinds: Uint8Array
+  /** The per-set spatial adjustment of the encode, when its sets split a dimension's edges (spatial.ts); looked up once. */
+  spatial: SpatialProgram | undefined
 }
 
 // Encode entry shapes with a dedicated per-row path; everything else takes the general evaluator.
@@ -6831,7 +6833,7 @@ function encodePlan(encode: Record<string, EncodeValue | EncodeValue[]>): Encode
   }
   const plainSpecs = plainKeys.map((k) => encode[k]!)
   const plainKinds = Uint8Array.from(plainSpecs, encodeKind)
-  plan = { plainKeys, signalKeys, definedSpec, plainSpecs, plainKinds }
+  plan = { plainKeys, signalKeys, definedSpec, plainSpecs, plainKinds, spatial: spatialProgramFor(encode) }
   encodePlanCache.set(encode, plan)
   return plan
 }
@@ -7011,7 +7013,7 @@ function resolveEncodeSet(encode: Record<string, EncodeValue | EncodeValue[]>, d
   const strokePaint = rec['stroke']
   if (strokePaint !== null && typeof strokePaint === 'object') registerGradient(strokePaint, ctx)
   // vega-runtime's `adjustSpatial`, per encode set (spatial.ts): x2/xc/y2/yc become x/y/width/height
-  adjustSpatial(rec, encode, marktype)
+  adjustSpatial(rec, encode, marktype, plan.spatial)
 
   return item
 }
