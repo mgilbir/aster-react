@@ -29,9 +29,9 @@ const full = (scene: SceneRoot): PaintRecord[] => {
   return records
 }
 
-export interface CanvasFailure { seed: number; driver: string; step: number; ops: string[]; detail: string }
+interface CanvasFailure { seed: number; driver: string; step: number; ops: string[]; detail: string }
 
-export function runCanvasScenario(seed: number, nSteps: number, driver: 'session' | 'stream'): { failure: CanvasFailure | null; appended: number } {
+function runCanvasScenario(seed: number, nSteps: number, driver: 'session' | 'stream'): { failure: CanvasFailure | null; appended: number } {
   let snap: ReturnType<typeof snapshotCanvasScene> | null = null
   let painted: PaintRecord[] = []
   let appended = 0
@@ -71,7 +71,8 @@ describe('canvas append paint === full repaint', () => {
       }
       expect(failures.join('\n'), `${failures.length} failing seed(s)`).toBe('')
       // not vacuous: the append path must actually engage in the generated sequences
-      if (ONE == null) expect(appended).toBeGreaterThan(seeds.length)
+      // (measured with 60 seeds x 12 steps: 137 appended steps of 720 for the session driver, 127 for the stream driver)
+      if (ONE == null) expect(appended).toBeGreaterThan(1.5 * seeds.length)
     }, 300_000)
   }
 })

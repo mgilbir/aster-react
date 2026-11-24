@@ -21,14 +21,24 @@ import { compileChart, evaluateChart, renderSceneToSvg } from './index.js'
 import { patchSceneDom, renderSceneToDomElement } from './addon-dom.js'
 import { createChartSession } from './session.js'
 import { canon, firstDomDiff } from './dom-canon.testlib.js'
+import { marksOf } from './geometry-differential.testlib.js'
 import type { DomRenderOptions } from './dom.js'
 import type { SceneRoot } from './types.js'
 import { applyOp, clone, genSpec, inputOf, int, mulberry32, OPS, pick, rowOf, type World } from './scene-fuzz.testlib.js'
 
-export interface DomFailure { seed: number; label: string; step: number; ops: string[]; detail: string }
+interface DomFailure { seed: number; label: string; step: number; ops: string[]; detail: string }
+
+interface DomRun {
+  failure: DomFailure | null
+  /** steps whose patch changed the live DOM (a step that changes nothing proves nothing about patching) */
+  changed: number
+  /** the symbols in the final scene, and the chunk paths they were batched into (fewer paths than symbols when `denseMarks` batched them) */
+  symbols: number
+  chunkPaths: number
+}
 
 /** Run one scenario. `fromString` mounts the first scene the way <Chart> does (string, then patch). */
-export function runDomScenario(seed: number, nSteps: number, dense: boolean, fromString: boolean): DomFailure | null {
+function runDomScenario(seed: number, nSteps: number, dense: boolean, fromString: boolean): DomRun {
   const r = mulberry32(seed * 7919 + (dense ? 1 : 0))
   const g = genSpec(r, dense)
   const options: DomRenderOptions = dense ? { denseMarks: true, denseChunkSize: 32 } : {}
@@ -55,16 +65,24 @@ export function runDomScenario(seed: number, nSteps: number, dense: boolean, fro
     patchSceneDom(svg, scene, options)
   }
   const fail = (step: number, detail: string): DomFailure => ({ seed, label: g.label, step, ops: ops.slice(), detail })
+  let changed = 0
+  const tally = (failure: DomFailure | null): DomRun => {
+    let symbols = 0
+    for (const { mark } of marksOf(scene)) if (mark.marktype === 'symbol') symbols += (mark.items ?? []).length
+    return { failure, changed, symbols, chunkPaths: svg.querySelectorAll('.mark-symbol > path').length }
+  }
   for (let step = 0; step < nSteps; step++) {
     const op = pick(r, OPS)
     ops.push(op)
     world = applyOp(r, world, op, dense)
     scene = session.evaluate(clone(g.spec) as never, inputOf(world))
+    const before = svg.outerHTML
     patchSceneDom(svg, scene, options)
+    if (svg.outerHTML !== before) changed++
     const d = firstDomDiff(canon(fresh(world)), canon(svg))
-    if (d) return fail(step, d)
+    if (d) return tally(fail(step, d))
   }
-  return null
+  return tally(null)
 }
 
 const env = (k: string): string | undefined => (typeof process !== 'undefined' ? process.env[k] : undefined)
@@ -72,6 +90,9 @@ const SEEDS = Number(env('ASTER_DOM_ORACLE_SEEDS') ?? 40)
 const STEPS = Number(env('ASTER_DOM_ORACLE_STEPS') ?? 10)
 const START = Number(env('ASTER_DOM_ORACLE_START') ?? 1)
 const ONE = env('ASTER_DOM_ORACLE_SEED')
+// measured (40 seeds x 10 steps; dense: 10 seeds): 322 of 400 and 92 of 100 steps change the DOM; 3 of the 10 dense scenarios batch symbols
+const MIN_CHANGED = 0.6
+const MIN_BATCHED_SCENARIOS = 2
 
 describe('patched DOM === DOM built fresh from the final scene', () => {
   const seeds = ONE != null ? [Number(ONE)] : Array.from({ length: SEEDS }, (_, i) => START + i)
@@ -80,13 +101,26 @@ describe('patched DOM === DOM built fresh from the final scene', () => {
       const name = `${dense ? 'dense' : 'per-item'} marks, mounted from ${fromString ? 'the SVG string' : 'an empty svg'}`
       it(`${name}: ${seeds.length} seeds x ${STEPS} steps`, () => {
         const failures: string[] = []
+        let steps = 0
+        let changed = 0
+        let batched = 0
         // dense scenarios build 500+ element scenes: fewer seeds keep the suite fast
-        for (const seed of dense ? seeds.slice(0, Math.max(4, Math.ceil(seeds.length / 4))) : seeds) {
-          const f = runDomScenario(seed, STEPS, dense, fromString)
+        const run = dense ? seeds.slice(0, Math.max(4, Math.ceil(seeds.length / 4))) : seeds
+        for (const seed of run) {
+          const res = runDomScenario(seed, STEPS, dense, fromString)
+          const f = res.failure
+          steps += STEPS
+          changed += res.changed
+          if (res.symbols >= 64 && res.chunkPaths < res.symbols) batched++
           if (f) failures.push(`seed=${f.seed} [${f.label}] step ${f.step} after ops ${f.ops.join(',')}\n    ${f.detail}`)
           if (failures.length >= 5) break
         }
         expect(failures.join('\n'), `${failures.length} failing seed(s)`).toBe('')
+        if (ONE == null) {
+          // not vacuous: the patches changed the DOM (most steps edit the rows), and the dense runs really batched symbols into chunks
+          expect(changed, 'steps that changed the DOM').toBeGreaterThan(steps * MIN_CHANGED)
+          if (dense) expect(batched, 'dense scenarios whose symbols were batched').toBeGreaterThanOrEqual(MIN_BATCHED_SCENARIOS)
+        }
       }, 300_000)
     }
   }
