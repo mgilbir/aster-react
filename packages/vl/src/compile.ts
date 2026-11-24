@@ -6896,16 +6896,50 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
     const cornerRadius = markDef?.cornerRadius ?? cfgType?.cornerRadius ?? cfgMark?.cornerRadius
     const cornerRadiusEnd = markDef?.cornerRadiusEnd ?? cfgType?.cornerRadiusEnd ?? cfgMark?.cornerRadiusEnd
     if (cornerRadius != null && update.cornerRadius === undefined) update.cornerRadius = { value: cornerRadius }
-    if (cornerRadiusEnd != null && mark === 'bar') {
-      const [a, b] = orient === 'horizontal' ? ['TopRight', 'BottomRight'] : ['TopLeft', 'TopRight']
-      update[`cornerRadius${a}`] = { value: cornerRadiusEnd }
-      update[`cornerRadius${b}`] = { value: cornerRadiusEnd }
+    // (init.ts initMarkdef: only a bar with an orientation has an end to round - a bar over no measure has none, and drops it - and a
+    // bar ranged along its orientation (x2 of a horizontal one, y2 of a vertical one) rounds every corner by it)
+    const barOrient = cornerRadiusEnd != null && mark === 'bar' ? markOrient(spec, mark, spec.mark, fields) : undefined
+    if (barOrient !== undefined) {
+      const enc = isObject(spec.encoding) ? (spec.encoding as Record<string, unknown>) : {}
+      if ((barOrient === 'horizontal' && enc.x2 != null) || (barOrient === 'vertical' && enc.y2 != null)) {
+        update.cornerRadius = { value: cornerRadiusEnd }
+      } else {
+        const [a, b] = barOrient === 'horizontal' ? ['TopRight', 'BottomRight'] : ['TopLeft', 'TopRight']
+        update[`cornerRadius${a}`] = { value: cornerRadiusEnd }
+        update[`cornerRadius${b}`] = { value: cornerRadiusEnd }
+      }
     }
     if (mark === 'bar') update.ariaRoleDescription = { value: 'bar' }
     const stacked = yDef && isStacked(yDef, mark, orient, fields)
     // channeldef.ts getBandSize: the `size` of the mark def (or of the bar config) is the band's size on a continuous scale too
     const barSizeProp = mark === 'bar' ? ((markDef?.size ?? cfgType?.size) as number | undefined) : undefined
-    const continuousBand = barSizeProp !== undefined && barSizeProp !== 0 ? barSizeProp : ((cfgType?.continuousBandSize as number | undefined) ?? C.continuousBandSize)
+    // (position-rect.ts positionAndSize / getBandSize through getMarkPropOrConfig: a bar's band channel - x of a vertical bar, y of a
+    // horizontal one - is sized by the mark's `size`, then its own `width` / `height`, then the bar config's; the other dimension spans
+    // its range, and vega-lite reads no `height` / `width` there)
+    const num = (v: unknown): number | undefined => (typeof v === 'number' ? v : undefined)
+    const barBandSize = (vg: 'width' | 'height'): number | undefined => mark !== 'bar' ? undefined
+      : num(markDef?.size) ?? num(markDef?.[vg]) ?? num(cfgType?.[vg]) ?? num(cfgType?.size)
+    const continuousBandOf = (vg: 'width' | 'height'): number => {
+      const b = barBandSize(vg)
+      return b !== undefined && b !== 0 ? b : ((cfgType?.continuousBandSize as number | undefined) ?? C.continuousBandSize)
+    }
+    // (position-range.ts pointPosition2OrSize / position2orSize: a bar's range channel with no second position and no stack takes the
+    // mark's own `width` / `height` - then the bar config's, the mark config's - placed by its `align` / `baseline`; with them it is not read)
+    const rangeSize = (vg: 'width' | 'height'): number | undefined => mark !== 'bar' ? undefined
+      : num(markDef?.[vg]) ?? num(cfgType?.[vg]) ?? num(cfgMark?.[vg])
+    // (position-align.ts vgAlignedPositionChannel: a sized position is placed by `align` (x) / `baseline` (y), centred by default)
+    const alignedAt = (ch: 'x' | 'y'): string => {
+      const align = ch === 'x' ? ((markDef?.align ?? cfgType?.align ?? cfgMark?.align) as string | undefined) : ((markDef?.baseline ?? cfgType?.baseline ?? cfgMark?.baseline) as string | undefined)
+      return ch === 'x' ? ({ left: 'x', right: 'x2' } as Record<string, string>)[align ?? ''] ?? 'xc' : ({ top: 'y', bottom: 'y2' } as Record<string, string>)[align ?? ''] ?? 'yc'
+    }
+    const sizedRange = (ch: 'x' | 'y', def: FieldDef): boolean => {
+      const vg = ch === 'x' ? 'width' : 'height'
+      const size = rangeSize(vg)
+      if (size === undefined) return false
+      update[alignedAt(ch)] = { scale: ch, field: aggFieldName(def) }
+      update[vg] = { value: size }
+      return true
+    }
     if (orient === 'vertical') {
       if (xDef) {
         const sc = positionalScaleType(mark, xDef)
@@ -6920,8 +6954,8 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
         } else if (xDef.timeUnit == null && !xDef.bin && xDef.type === 'temporal' && !xDef.datumOnly) {
           // a plain temporal dimension centers the bar with the continuous
           // band size (vega-lite's continuousBandSize)
-          update.xc = { scale: 'x', field: aggFieldName(xDef) }
-          update.width = sizeDef ? { scale: 'size', field: aggFieldName(sizeDef) } : { value: continuousBand }
+          update[mark === 'bar' ? alignedAt('x') : 'xc'] = { scale: 'x', field: aggFieldName(xDef) }
+          update.width = sizeDef ? { scale: 'size', field: aggFieldName(sizeDef) } : { value: continuousBandOf('width') }
         } else if (xDef.timeUnit && sc !== 'band' && rectSpansUnit('x')) {
           setBinnedRect(update, 'x', xDef, spec, mark)
         } else if (xDef.bin && !binDiscrete(xDef) && rectSpansUnit('x')) {
@@ -6946,15 +6980,12 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
             // a size channel centers a bar of data-driven width in its band
             update.xc = { scale: 'x', field: aggFieldName(xDef), band: 0.5 }
             update.width = { scale: 'size', field: aggFieldName(sizeDef) }
-          } else if (barAlign === 'right' && !xOffsetPresent) {
-            update.x2 = { scale: 'x', field: aggFieldName(xDef) }
-            update.width = { signal: `max(0.25, bandwidth('x'))` }
-          } else if (barAlign === 'center' && !xOffsetPresent) {
-            update.xc = { scale: 'x', field: aggFieldName(xDef), band: 0.5 }
-            update.width = { signal: `max(0.25, bandwidth('x'))` }
-          } else if (barSize != null && !xOffsetPresent) {
-            update.xc = { scale: 'x', field: aggFieldName(xDef), band: 0.5 }
-            update.width = { value: barSize }
+          } else if ((barAlign === 'left' || barAlign === 'right' || barAlign === 'center' || barSize != null) && !xOffsetPresent) {
+            // (position-rect.ts positionAndSize: placed by `align`, centred in the band when the bar has a size of its own, at the
+            // band's start otherwise; as wide as that size, or the band)
+            const at = barAlign === 'left' ? 'x' : barAlign === 'right' ? 'x2' : barAlign === 'center' || barSize != null ? 'xc' : 'x'
+            update[at] = { scale: 'x', field: aggFieldName(xDef), ...(at === 'xc' ? { band: 0.5 } : {}) }
+            update.width = barSize != null ? { value: barSize } : { signal: `max(0.25, bandwidth('x'))` }
           } else {
             update.x = { scale: 'x', field: aggFieldName(xDef) }
             if (xOffsetPresent) {
@@ -6967,10 +6998,10 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
             update.x = { scale: 'x', field: aggFieldName(xDef) }
             update.x2 = zeroOrMinRef('x', xDef, mark)
           } else {
-            update.xc = { scale: 'x', field: aggFieldName(xDef) }
+            update[mark === 'bar' ? alignedAt('x') : 'xc'] = { scale: 'x', field: aggFieldName(xDef) }
             // a discrete point scale centers a default-step bar (18px); a
             // continuous measure uses the continuous band size
-            update.width = sizeDef ? { scale: 'size', field: aggFieldName(sizeDef) } : { value: sc === 'point' ? C.defaultStep : continuousBand }
+            update.width = sizeDef ? { scale: 'size', field: aggFieldName(sizeDef) } : { value: sc === 'point' ? barBandSize('width') ?? C.defaultStep : continuousBandOf('width') }
           }
         }
       }
@@ -7011,7 +7042,7 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
         } else if (positionalScaleType(mark, yDef) === 'point') {
           update.yc = { scale: 'y', field: aggFieldName(yDef) }
           update.height = { value: C.defaultStep }
-        } else {
+        } else if (!sizedRange('y', yDef)) {
           update.y = { scale: 'y', field: aggFieldName(yDef) }
           if (mark === 'bar') update.y2 = zeroOrMinRef('y')
           else if (mark === 'rect') update.y2 = zeroOrMinRef('y', yDef, mark)
@@ -7027,8 +7058,8 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
           update.y = { scale: 'y', field: aggFieldName(yDef) }
           update.y2 = zeroOrMinRef('y', yDef, mark)
         } else if (yDef.timeUnit == null && !yDef.bin && yDef.type === 'temporal' && !yDef.datumOnly) {
-          update.yc = { scale: 'y', field: aggFieldName(yDef) }
-          update.height = sizeDef ? { scale: 'size', field: aggFieldName(sizeDef) } : { value: continuousBand }
+          update[mark === 'bar' ? alignedAt('y') : 'yc'] = { scale: 'y', field: aggFieldName(yDef) }
+          update.height = sizeDef ? { scale: 'size', field: aggFieldName(sizeDef) } : { value: continuousBandOf('height') }
         } else if (yDef.timeUnit && sc !== 'band' && rectSpansUnit('y')) {
           setBinnedRect(update, 'y', yDef, spec, mark)
         } else if (yDef.bin && !binDiscrete(yDef) && rectSpansUnit('y')) {
@@ -7047,7 +7078,9 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
             update.yc = { scale: 'y', field: aggFieldName(yDef), band: 0.5 }
             update.height = { scale: 'size', field: aggFieldName(sizeDef) }
           } else if (hSize != null && !yOffsetPresent) {
-            update.yc = { scale: 'y', field: aggFieldName(yDef), band: 0.5 }
+            // (placed by `baseline`, centred in the band by default)
+            const at = yAlignH === 'top' ? 'y' : yAlignH === 'bottom' ? 'y2' : 'yc'
+            update[at] = { scale: 'y', field: aggFieldName(yDef), ...(at === 'yc' ? { band: 0.5 } : {}) }
             update.height = { value: hSize }
           } else {
             if (yAlignH === 'bottom') update.y2 = { scale: 'y', field: aggFieldName(yDef) }
@@ -7064,8 +7097,8 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
             update.y = { scale: 'y', field: aggFieldName(yDef) }
             update.y2 = zeroOrMinRef('y', yDef, mark)
           } else {
-            update.yc = { scale: 'y', field: aggFieldName(yDef) }
-            update.height = sizeDef ? { scale: 'size', field: aggFieldName(sizeDef) } : { value: sc === 'point' ? C.defaultStep : continuousBand }
+            update[mark === 'bar' ? alignedAt('y') : 'yc'] = { scale: 'y', field: aggFieldName(yDef) }
+            update.height = sizeDef ? { scale: 'size', field: aggFieldName(sizeDef) } : { value: sc === 'point' ? barBandSize('height') ?? C.defaultStep : continuousBandOf('height') }
           }
         }
       }
@@ -7091,12 +7124,18 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
           // (a point scale has no band to fill: the mark is a default step wide, centred on its point)
           update.xc = { scale: 'x', field: aggFieldName(xDef) }
           update.width = { value: C.defaultStep }
-        } else {
+        } else if (!sizedRange('x', xDef)) {
           update.x = { scale: 'x', field: aggFieldName(xDef) }
           if (mark === 'bar') update.x2 = zeroOrMinRef('x')
           else if (mark === 'rect') update.x2 = zeroOrMinRef('x', xDef, mark)
         }
       }
+    }
+    // (what is left of a bar's `width` / `height` vega-lite does not read: the size of a range that is stacked or has its second
+    // position, a relative band size on a continuous scale is read by positionAndSizeRefs below)
+    if (mark === 'bar' && markDef !== undefined) {
+      for (const vg of ['width', 'height'] as const) if (!isObject(peek(() => markDef[vg]))) ignore(markDef, vg, 'vega-lite reads no size of a bar\'s range that is stacked or has its second position')
+      for (const k of ['align', 'baseline']) ignore(markDef, k, 'vega-lite places by `align` / `baseline` only a bar\'s sized position')
     }
     // position-rect.ts positionAndSize: the band channel of a bar with a relative band size or an offset channel
     // (a rect lays out each of its axes this way, a bar its band one)
@@ -7789,7 +7828,8 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
       const e = update[k] as Record<string, unknown> | undefined
       return isObject(e) && ('signal' in e || Boolean(e.value))
     })
-    if (hasRadius && !fields.some((f) => f.channel === 'size') && measureDef && dimDef && isStacked(measureDef, mark, orient, fields)) {
+    // (mark.ts getStackGroup: a stacked bar with no dimension channel - a single stack - is one group, grouped by nothing)
+    if (hasRadius && !fields.some((f) => f.channel === 'size') && measureDef && isStacked(measureDef, mark, orient, fields)) {
       const v = orient === 'vertical'
       const mc = v ? 'y' : 'x'
       const dc = v ? 'x' : 'y'
@@ -7832,7 +7872,7 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
             data: dataName,
             name: 'stack_group_main',
             // (a binned / time-unit dimension also groups by the end of its band)
-            groupby: dimDef.bin ? [aggFieldName(dimDef), binNames(dimDef.binParams!, dimDef.field).end] : dimDef.tu ? [aggFieldName(dimDef), `${aggFieldName(dimDef)}_end`] : [aggFieldName(dimDef)],
+            groupby: !dimDef ? [] : dimDef.bin ? [aggFieldName(dimDef), binNames(dimDef.binParams!, dimDef.field).end] : dimDef.tu ? [aggFieldName(dimDef), `${aggFieldName(dimDef)}_end`] : [aggFieldName(dimDef)],
             aggregate: { fields: [start, start, end, end], ops: ['min', 'max', 'min', 'max'] },
           },
         },
