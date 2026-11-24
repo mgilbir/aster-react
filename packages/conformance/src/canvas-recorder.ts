@@ -41,6 +41,8 @@ export function recorder(): Recorder {
   }
   const lineInto = (x: number, y: number): void => {
     if (cur === null) { startSub(x, y); return }
+    // (after a close, the next segment begins a new subpath at the closed one's start, as a canvas's `closePath` leaves it)
+    if (polys[polys.length - 1]!.closed) startSub(cur.x, cur.y)
     const [a, b] = tx(x, y)
     polys[polys.length - 1]!.pts.push(a, b)
     cur = { x, y }
