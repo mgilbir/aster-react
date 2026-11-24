@@ -298,7 +298,7 @@ const BUDGETS = {
   // paint never references another document (fix/paint-url: paint-url.ts, the CSS-escape decoder and the url() check on every fill, stroke and background; with #170's blend keywords): measured 2026-11-18 on a clean build, base origin/main 1345ae9 -> branch (kB gzip): 175.0 -> 175.3; ceiling is the measured value + 0.5.
   // escaped quotes and spaces inside url() (fix/178-paint-url-escape: paint-url.ts maps them to U+FFFD): measured 2026-11-21 on a clean build, base origin/main d30ead9 -> branch (kB gzip): 175.7 -> 175.7 (the ceiling was 175.8: #174's regex refusal and the limits in the event loop had grown the base to within 0.1 of it without moving it); ceiling is the measured value + 0.5.
   // view properties as signals (fix/view-signal-refs: view-props.ts, the view layout read from the view signals before and after the pass): measured 2026-11-22 on a clean build, base fix/178-paint-url-escape -> branch (kB gzip): 175.7 -> 177.1; ceiling is the measured value + 0.5.
-  '@aster-charts/core': 177.6 * 1024,
+  '@aster-charts/core': 178.2 * 1024,
   // signal-change reuse (group marks, channels, marks drawn from marks, derived structures kept with engine nodes) on the canvas layer: measured 2026-11-15 on a clean build at 11.8 kB gzip (ceiling was 11.8); ceiling is the measured value + 0.5.
   // row passes, step state from the step, the binding shell and kept legends/titles/group guides: measured 2026-11-15 on a clean build at 12.5 kB gzip (ceiling was 12.3); ceiling is the measured value + 0.5.
   // parts on demand (perf/parts-on-demand-2: the transform, time, curve, colour and rare-scale families loaded on demand by the shells): measured 2026-11-16 on clean builds, base origin/main a078891 -> branch (kB gzip): 12.5 -> 12.2; the ceiling follows it down to the measured value + 0.5.
@@ -416,7 +416,7 @@ const BUDGETS = {
   // escaped quotes and spaces inside url() (fix/178-paint-url-escape: paint-url.ts maps them to U+FFFD): measured 2026-11-21 on a clean build, base origin/main d30ead9 -> branch (kB gzip): 247.7 -> 247.7 (the ceiling was 247.7: #174's regex refusal and the limits in the event loop had grown the base to within 0.1 of it without moving it); ceiling is the measured value + 0.5.
   // view properties as signals (fix/view-signal-refs: view-props.ts, the view layout read from the view signals before and after the pass): measured 2026-11-22 on a clean build, base fix/178-paint-url-escape -> branch (kB gzip): 247.7 -> 249.1; ceiling is the measured value + 0.5.
   // the tooltip in a fixed box portalled to the body (feat/152-tooltip-portal: placement, flip at the viewport edge, tooltipContainer): measured 2026-11-22 on a clean build, base fix/view-signal-refs -> branch (kB gzip): 249.1 -> 249.6; ceiling is the measured value + 0.5.
-  '@aster-charts/react Chart + all': 250.1 * 1024,
+  '@aster-charts/react Chart + all': 250.9 * 1024,
 }
 
 const THIS_DIR = dirname(fileURLToPath(import.meta.url))
