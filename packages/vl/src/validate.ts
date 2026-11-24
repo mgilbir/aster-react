@@ -177,8 +177,8 @@ const COMPOSE = 'bounds center spacing resolve width height view'
 const OWN_KEYS: Record<Kind, string> = {
   unit: 'mark encoding width height projection view resolve align bounds center spacing',
   layer: 'layer encoding width height projection view resolve',
-  hconcat: `hconcat ${COMPOSE}`,
-  vconcat: `vconcat ${COMPOSE}`,
+  hconcat: `hconcat align ${COMPOSE}`,
+  vconcat: `vconcat align ${COMPOSE}`,
   concat: `concat columns align ${COMPOSE}`,
   facet: `facet spec columns align ${COMPOSE}`,
   repeat: `repeat spec columns align ${COMPOSE}`,
@@ -1003,14 +1003,9 @@ const MARK_DEF_KEYS = set(
     'x2Offset xOffset y y2 y2Offset yOffset extent median box outliers rule ticks gradient center band borders',
 )
 /** mark-def properties that Vega-Lite honours but compile.ts does not implement. */
-const POSITIONAL_MARK_DEF = 'positional mark-def constants (x/x2/y/y2) are not supported; use encoding'
 const UNSUPPORTED_MARK_KEYS: Record<string, string> = {
   timeUnitBandPosition: 'timeUnitBandPosition is not supported',
   timeUnitBandSize: 'timeUnitBandSize is not supported',
-  x: POSITIONAL_MARK_DEF,
-  x2: POSITIONAL_MARK_DEF,
-  y: POSITIONAL_MARK_DEF,
-  y2: POSITIONAL_MARK_DEF,
 }
 
 const INVALID_MODES = set('filter show break-paths-filter-domains break-paths-show-domains break-paths-show-path-domains')
@@ -1031,9 +1026,6 @@ function validateViewBackground(view: unknown, _kind: string, at: string): void 
   }
 }
 
-/** The marks pointPosition places (position-point.ts): the mark def's x / y stand for a missing channel. */
-const POINT_POSITIONED_MARKS = set('point circle square text')
-
 function validateMark(mark: unknown, at: string): string {
   let def: Obj
   if (typeof mark === 'string') def = { type: mark }
@@ -1046,12 +1038,6 @@ function validateMark(mark: unknown, at: string): string {
     for (const k of Object.keys(def)) {
       if (!MARK_DEF_KEYS.has(k)) fail(`${at}.${k}`, `unknown mark property "${k}"${suggest(k, MARK_DEF_KEYS)}`)
       const why = UNSUPPORTED_MARK_KEYS[k]
-      // a point-positioned mark takes its x / y from the mark def: a number, or the view's `width` / `height` (valueref.ts widthHeightValueOrSignalRef)
-      if (why && (k === 'x' || k === 'y') && POINT_POSITIONED_MARKS.has(type)) {
-        const edge = k === 'x' ? 'width' : 'height'
-        if (typeof def[k] !== 'number' && def[k] !== edge) mustBe(`${at}.${k}`, `a number or "${edge}" (an expression or signal is not supported)`)
-        continue
-      }
       // (what vega-lite ignores on this mark type is consumed as it does, not refused: ignored-table.ts)
       if (why && !ignoredMarkProps(type).has(k)) fail(`${at}.${k}`, why)
       if (k === 'order' && def.order !== false && def.order !== null && def.order !== true) fail(`${at}.order`, 'only order: false/null/true is supported')
@@ -1168,7 +1154,10 @@ function validateEncoding(enc: unknown, path: string, where: 'unit' | 'layer', m
     if ((ch === 'row' || ch === 'column' || ch === 'facet') && where === 'layer') fail(at, 'facet channels are not allowed in a layer encoding (use the facet operator)')
     if (ch === 'detail' || ch === 'order' || ch === 'tooltip' || ch === 'href' || ch === 'description') {
       if (Array.isArray(def)) {
-        if (ch === 'order' || ch === 'href') fail(at, `${ch} cannot be an array`)
+        if (ch === 'href') fail(at, `${ch} cannot be an array`)
+        // (vega-lite 6.4.3 reads none of an `order` written as a list - the schema takes one - and draws the chart in the order of its rows or its
+        // dimension: a chart that orders by nothing it was asked to, so it is refused, as DECISIONS Q9 has it)
+        if (ch === 'order') fail(at, 'order given as a list is refused: vega-lite 6.4.3 reads none of its entries and draws the chart unordered; give one order definition, or `detail` and a `sort` on the channel it orders')
         def.forEach((d, i) => validateChannelDef(ch, d, `${at}[${i}]`))
         continue
       }
