@@ -7764,7 +7764,8 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
       const e = update[k] as Record<string, unknown> | undefined
       return isObject(e) && ('signal' in e || Boolean(e.value))
     })
-    if (hasRadius && !fields.some((f) => f.channel === 'size') && measureDef && dimDef && isStacked(measureDef, mark, orient, fields)) {
+    // (a bar with no dimension channel is one stack of every row: vega-lite groups it by nothing (C442))
+    if (hasRadius && !fields.some((f) => f.channel === 'size') && measureDef && isStacked(measureDef, mark, orient, fields)) {
       const v = orient === 'vertical'
       const mc = v ? 'y' : 'x'
       const dc = v ? 'x' : 'y'
@@ -7807,7 +7808,7 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
             data: dataName,
             name: 'stack_group_main',
             // (a binned / time-unit dimension also groups by the end of its band)
-            groupby: dimDef.bin ? [aggFieldName(dimDef), binNames(dimDef.binParams!, dimDef.field).end] : dimDef.tu ? [aggFieldName(dimDef), `${aggFieldName(dimDef)}_end`] : [aggFieldName(dimDef)],
+            groupby: !dimDef ? [] : dimDef.bin ? [aggFieldName(dimDef), binNames(dimDef.binParams!, dimDef.field).end] : dimDef.tu ? [aggFieldName(dimDef), `${aggFieldName(dimDef)}_end`] : [aggFieldName(dimDef)],
             aggregate: { fields: [start, start, end, end], ops: ['min', 'max', 'min', 'max'] },
           },
         },
