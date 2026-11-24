@@ -70,7 +70,7 @@ function inits(r: Rnd): Case {
   const t: Spec = { name: 't', values: [{ v: 1 }, { v: 2 }, { v: 3 }], ...(base.extra.extent ? { transform: [{ type: 'extent', field: 'v', signal: 'ext' }] } : {}) }
   // (and, half the time, a dataset that reads the init's value: it runs after the init, which runs after what it reads --
   // vega/serpentine-timeline's `sDomain`)
-  const readsInit = r() < 0.5 ? [{ name: 'u', source: 't', transform: [{ type: 'formula', as: 'w', expr: "isValid(i) ? datum.v + '/' + i : 'none'" }] }] : []
+  const readsInit = r() < 0.5 ? [{ name: 'u', source: 't', transform: [{ type: 'formula', as: 'w', expr: "datum.v + '/' + i + '/' + i.length" }] }] : []
   return {
     spec: { width: 100, height: 40, autosize: 'none', signals, data: [t, ...readsInit], scales: [{ name: 'x', type: 'linear', zero: false, nice: false, domain: { data: 't', field: 'v' }, range: [0, 10] }], marks: [] },
     signals: signals.map((s) => s.name as string),
