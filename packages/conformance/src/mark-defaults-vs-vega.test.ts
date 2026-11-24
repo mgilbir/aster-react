@@ -37,8 +37,6 @@ const OTHER: Record<string, () => unknown> = {
   path: () => 'M0,0L10,10', url: () => 'data:image/png;base64,iVBORw0KGgo=', align: () => 'right', angle: () => 30,
 }
 
-const OWN_TYPE: Record<string, string[]> = { text: ['text'], align: ['text'], fontSize: ['text'], path: ['path'], url: ['image'] }
-
 function caseOf(seed: number): { label: string; spec: Obj } {
   const r = stream(seed)
   const int = (n: number): number => Math.floor(r() * n)
@@ -50,14 +48,7 @@ function caseOf(seed: number): { label: string; spec: Obj } {
   const block = (): Obj => {
     const out: Obj = {}
     for (let i = 0, n = 1 + int(4); i < n; i++) out[pick(SPATIAL)] = chance(0.15) ? { signal: String(num()) } : num()
-    for (let i = 0, n = int(3); i < n; i++) {
-      const k = pick(Object.keys(OTHER))
-      // (a channel of another mark type goes to its own: an arc that carries a right-aligned `text` with a `fontSize`, or a `path`,
-      // is bounded otherwise in Aster than in vega, defaults or not -- a bounds defect reported with C129, not a matter of where the
-      // channels come from)
-      if (OWN_TYPE[k] !== undefined && !OWN_TYPE[k]!.includes(type)) continue
-      out[k] = OTHER[k]!()
-    }
+    for (let i = 0, n = int(3); i < n; i++) { const k = pick(Object.keys(OTHER)); out[k] = OTHER[k]!() }
     return out
   }
   const config: Obj = {}
@@ -77,9 +68,6 @@ function caseOf(seed: number): { label: string; spec: Obj } {
     return out
   }
   const encode: Obj = sets === 'both' ? { enter: own(), update: own() } : { [sets]: own() }
-  // (an arc is drawn with radii of its own: an arc of no radius is a point, whose extent Aster bounds otherwise than vega when it is
-  // turned -- a bounds defect reported with C129)
-  if (type === 'arc') Object.assign((encode.enter ??= {}) as Obj, { outerRadius: { value: 12 }, endAngle: { value: 2 } })
   const mark: Obj = { type, encode, ...(named ? { style: chance(0.5) ? named : [named] } : {}) }
   if (type === 'area' || type === 'line' || type === 'trail') Object.assign(mark, { from: { data: 'pts' } })
   const spec: Obj = { width: 120, height: 80, data: [{ name: 'pts', values: [{}, {}] }], config, marks: [mark] }
@@ -135,4 +123,27 @@ describe('a mark takes the defaults of its config and of the styles it names, ad
     // (not vacuous: vega draws nearly all of them)
     expect(refused).toBeLessThan(40)
   })
+})
+
+describe('a channel of another mark type is inert in a mark\'s extent, as in vega', () => {
+  const EXTRA: Obj[] = [
+    { shape: { value: 'circle' }, radius: { value: 8 }, size: { value: 30 } },
+    { text: { value: 'T' }, align: { value: 'right' }, fontSize: { value: 16 } },
+    { path: { value: 'M0,0L10,10' } },
+    { angle: { value: 30 } },
+    { url: { value: 'data:image/png;base64,iVBORw0KGgo=' }, width: { value: 40 } },
+  ]
+  for (const type of ['symbol', 'arc', 'rect', 'rule']) {
+    for (const radii of [false, true]) {
+      it(`${type}${radii ? ' with radii' : ''}`, async () => {
+        for (const extra of EXTRA) {
+          // (an arc drawn from a `radius` channel alone: Aster reads it as the outer radius where vega reads `outerRadius` only -- a
+          // defect of the arc geometry the legacy geometry differential pins, reported apart; the extent of every other pairing is here)
+          if (type === 'arc' && !radii && extra.radius !== undefined) continue
+          const spec = { width: 120, height: 80, marks: [{ type, encode: { enter: { x: { value: -3 }, y: { value: 51 }, ...(radii ? { outerRadius: { value: 12 }, endAngle: { value: 2 } } : {}), ...extra } } }] }
+          expect(diffCanonical(canonicalizeSvg(await oracleSvg(spec)), canonicalizeSvg(renderSpec(structuredClone(spec) as never))), JSON.stringify(extra)).toEqual([])
+        }
+      })
+    }
+  }
 })
