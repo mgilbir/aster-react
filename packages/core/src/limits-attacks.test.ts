@@ -366,7 +366,16 @@ describe('regular expressions: the caps that can be enforced', () => {
     const r = await attack(`
       core.renderSpec({ data: [{ name: 't', values: [{ a: 1 }], transform: [{ type: 'formula', as: 'n', expr: "test(regexp(pad('a', 5000, 'a')), 'a')" }] }] },
         { limits: { maxStringLength: 100000, maxTimeMs: ${BACKSTOP_MS} } })`)
-    expectLimit(r, /maxStringLength/, 200)
+    // The pattern cap is fixed (1024): a maxStringLength of 100 000 neither raises it nor is the limit named (C655).
+    expectLimit(r, /regexSafety: pattern length 5000 > 1024 \(the fixed cap/, 200)
+    expect(r.threw?.message).not.toMatch(/maxStringLength/)
+  }, T)
+
+  it('regexp() with a pattern over a maxStringLength below the fixed cap names maxStringLength', async () => {
+    const r = await attack(`
+      core.renderSpec({ data: [{ name: 't', transform: [{ type: 'formula', as: 'n', expr: "test(regexp(datum.p), 'a')" }] }] },
+        { data: { t: [{ p: 'a'.repeat(500) }] }, limits: { maxStringLength: 100, maxTimeMs: ${BACKSTOP_MS} } })`)
+    expectLimit(r, /maxStringLength 500 > 100 \(regular expression pattern\)/, 200)
   }, T)
 })
 
