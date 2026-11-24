@@ -223,7 +223,7 @@ describe('buildHitIndex', () => {
     expect(checked, 'scenes compared').toBeGreaterThan(340)
     expect(probes, 'probes').toBeGreaterThan(13000)
     expect(hitCount, 'probes that hit an item').toBeGreaterThan(4300)
-  })
+  }, 120_000) // (348 scenes x four indexes, built and asked 13 500 times: seconds on an idle machine, more under the parallel runs)
 })
 
 /** The positions of the items a scene holds (and of those inside its groups), offset by one pixel: where the answer may change. */
