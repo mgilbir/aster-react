@@ -82,7 +82,7 @@ export function labelCase(seed: number, exact = false, force: { kind?: string; m
   const drawable = exact ? avoidKinds.filter((_, i) => i !== 4) : avoidKinds
   const avoidMarks = (count: number): Spec[] => Array.from({ length: count }, (_, i) => pick(drawable)(`av${i}`))
 
-  const kinds = ['symbol', 'symbol', 'rect', 'rule', 'arc', 'text', 'path', 'line', 'area', 'group-line', 'group-line', 'group-area', 'tuples'] as const
+  const kinds = ['symbol', 'symbol', 'rect', 'rule', 'arc', 'text', 'path', 'line', 'area', 'trail', 'group-line', 'group-line', 'group-area', 'tuples'] as const
   const kind = force.kind ?? pick(exact ? kinds.filter((k) => k !== 'text') : kinds)
   const fontSize = pick([7, 9, 11, 14, 20])
   const textEnc = {
@@ -189,10 +189,6 @@ export function labelCase(seed: number, exact = false, force: { kind?: string; m
     dataRows = edges
     base.encode = { enter: { x: { field: 'ex' }, width: { field: 'ew' }, y: { field: 'ey' }, height: { field: 'eh' }, fill: { value: pick(COLOURS) } } }
   }
-  // (known gaps outside the label transform, found by this generator and left out of the base mark: the item bounds of an arc with a
-  // corner radius, pad angle or angle, of a trail, and the order of the items of a sorted line / area, which a mark of `from: base` reads)
-  if (kind === 'arc') { const e = (base.encode as { enter: Spec }).enter; delete e.cornerRadius; delete e.padAngle; delete e.angle }
-  delete base.sort
   if (chance(0.25)) (label.avoidMarks as string[] | undefined) ? (label.avoidMarks as string[]).push('base') : (label.avoidMarks = ['base'])
   const spec: Spec = {
     ...frame, data: [{ name: 'd', values: dataRows }], scales,
