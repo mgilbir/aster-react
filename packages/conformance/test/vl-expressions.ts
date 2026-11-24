@@ -21,6 +21,7 @@ export type Side = 'vega-lite' | 'aster'
 /** The keys of a compiled Vega spec whose string value is an expression (or an event selector, for `events`). */
 const EXPR_KEYS = new Set(['expr', 'signal', 'init', 'update', 'test', 'events', 'labelExpr'])
 /** `toNumber(datum["f"])` written onto `f` itself: vega-lite's `format.parse` of the source, which Aster writes as a formula. */
+const CAST_FNS = ['toNumber', 'toDate', 'toString']
 const CAST = /^(toNumber|toDate|toString)\(datum\[("(?:[^"\\]|\\.)*")\]\)$/
 
 /** `datum["k"]`: a formula that only copies one field into another name (Aster's flat key of an unusual field name). */
@@ -90,11 +91,9 @@ function aliasesOf(vg: unknown, side: Side): Map<string, string> {
 /** One expression string, canonicalised. A string that is not an expression (an event selector) is returned with its whitespace collapsed. */
 export function canonicalExpression(src: string, side: Side): string {
   try {
-    let ast: any = parseExpression(src)
-    // `toNumber(datum["o"] && datum["o"]["v"])`: the cast of a nested field is its parse (vega-lite's `format.parse`, Aster's formula
-    // casts), the guarded read is what is compared
-    if (ast.type === 'CallExpression' && ast.callee.type === 'Identifier' && ['toNumber', 'toDate', 'toString'].includes(ast.callee.name) && ast.arguments.length === 1 && ast.arguments[0].type === 'LogicalExpression') ast = ast.arguments[0]
-    return print(ast, side)
+    // (`toNumber(datum["o"] && datum["o"]["v"])`, the cast of a nested field, is compared whole: Aster's folded copy is wrapped in its cast
+    // below, so that a cast one compiler lacks, or two different casts, are differences)
+    return print(parseExpression(src), side)
   } catch {
     return src.replace(/\s+/g, ' ').trim()
   }
@@ -114,15 +113,23 @@ function foldCasts(transforms: unknown[]): { fold: Map<object, string>; skip: Se
     if (!isFormula(t) || CAST.test(t.expr)) return
     const copied = COPY.exec(t.expr)
     if (copied && canonicalName(JSON.parse(copied[1]!), 'aster') === canonicalName(t.as, 'aster')) {
-      // (a copy under the sanitised name of the same field is a rename; a cast of the copy is vega-lite's cast of the field itself)
+      // (a copy under the sanitised name of the same field is a rename; a cast of the copy is vega-lite's cast of the field itself,
+      // compared as the cast it is)
       skip.add(t)
+      return
+    }
+    // (a flat copy of a nested field that the same pipeline also casts, `toNumber(E)` as `o.v`, is read as that cast: vega-lite writes
+    // the flattening and the cast as the one formula)
+    if (transforms.some((c) => isFormula(c) && c !== t && CAST_FNS.some((fn) => c.expr === `${fn}(${t.expr})`))) {
+      skip.add(t)
+      return
     }
     for (let j = i + 1; j < transforms.length; j++) {
       const c = transforms[j]
       if (!isFormula(c)) continue
       const m = CAST.exec(c.expr)
       if (m && JSON.parse(m[2]!) === t.as && c.as === t.as) {
-        fold.set(t, t.expr)
+        fold.set(t, `${m[1]}(${t.expr})`)
         skip.add(c)
         break
       }
@@ -150,8 +157,16 @@ export function expressionsOf(vg: unknown, side: Side): string[] {
       if (EXPR_KEYS.has(k) && typeof x === 'string') {
         if (folded.skip.has(obj)) continue
         const cast = k === 'expr' && typeof obj.as === 'string' ? CAST.exec(x) : null
-        if (cast && JSON.parse(cast[2]!) === obj.as) continue
+        // (an in-place cast is `format.parse` of the data: it is compared as the cast of that field, in either spelling, below)
+        if (cast && JSON.parse(cast[2]!) === obj.as) { out.add(`cast ${cast[1]} ${canonicalName(String(obj.as), side)}`); continue }
         out.add(canonicalExpression(k === 'expr' ? (folded.fold.get(obj) ?? x) : x, side))
+      } else if (k === 'format' && x !== null && typeof x === 'object' && (x as { parse?: unknown }).parse !== null && typeof (x as { parse?: unknown }).parse === 'object') {
+        // (`format.parse` of a data source, vega-lite's way to cast what it reads: the cast of each field it names)
+        for (const [field, kind] of Object.entries((x as { parse: Record<string, unknown> }).parse)) {
+          const fn = kind === 'number' ? 'toNumber' : kind === 'date' || (typeof kind === 'string' && kind.startsWith('date:')) ? 'toDate' : kind === 'string' ? 'toString' : kind === 'boolean' ? 'toBoolean' : undefined
+          if (fn !== undefined) out.add(`cast ${fn} ${canonicalName(field, side)}`)
+        }
+        walk(x)
       } else walk(x)
     }
   }
