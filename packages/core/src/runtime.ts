@@ -2912,7 +2912,7 @@ function keptOverMarkItems(mark: CompiledMark, ctx: EvalContext, prevGroup: Scen
   const source = mark.from?.data
   const record = prev?.markSources.get(mark)
   if (prev === undefined || record === undefined || typeof source !== 'string' || ctx.datasets.has(source)) return null
-  const items = ctx.markItems.get(source)
+  const items = markRowItems(ctx, source)
   if (items === undefined || items.length !== record.items.length || (prevGroup.items?.length ?? -1) !== items.length || record.tuples !== tuplesRegistering()) return null
   if (!cleanPass(ctx) || !(followsChanges(ctx) || (ctx.incremental && prev.fp === ctx.draft.fp)) || ctx.passMemory !== undefined || forceBound(mark, ctx.chart) || mark.sort !== undefined) return null
   if (record.key !== overMarkItemsKey(mark, ctx) || prev.markKeys.get(mark) === undefined) return null
@@ -3123,7 +3123,7 @@ function buildContentPass(
     const markKey = markKeyOf(mark, ctx)
     ctx.draft.markKeys.set(mark, markKey)
     // (a mark drawn from another mark's items: the items it is drawn from now, before it is made or kept)
-    const overItems = typeof mark.from?.data === 'string' && !ctx.datasets.has(mark.from.data) ? ctx.markItems.get(mark.from.data) : undefined
+    const overItems = typeof mark.from?.data === 'string' && !ctx.datasets.has(mark.from.data) ? markRowItems(ctx, mark.from.data) : undefined
     const reused = prevGroup !== null && canReuseMarkGroup(mark, ctx, prevGroup, markKey)
     const keptOver = prevGroup !== null && !reused && overItems !== undefined ? keptOverMarkItems(mark, ctx, prevGroup) : null
     if (prevGroup !== null && (reused || keptOver !== null)) {
@@ -5294,10 +5294,23 @@ function reusablePulse(
 }
 
 /** The bounds of one item of a mark, in the frame of the mark's group (vega's `item.bounds`). */
-function itemBoundsOf(container: { marktype: string }, item: SceneItem): { x1: number; y1: number; x2: number; y2: number } {
+function itemBoundsOf(container: { marktype: string; items?: readonly SceneItem[] }, item: SceneItem): { x1: number; y1: number; x2: number; y2: number } {
+  // (a mark drawn as one path -- line, area, trail -- has one bounds, which vega's Bound gives each of its items)
+  if (NESTED_MARKS.has(container.marktype)) {
+    let whole = NESTED_BOUNDS.get(container)
+    if (whole === undefined) {
+      const b = boundTypedMark(new Bounds(), container as unknown as SceneGroup)
+      whole = { x1: b.x1, y1: b.y1, x2: b.x2, y2: b.y2 }
+      NESTED_BOUNDS.set(container, whole)
+    }
+    return whole
+  }
   const b = container.marktype === 'group' ? boundGroupItem(new Bounds(), item as unknown as SceneGroup) : boundTypedMark(new Bounds(), { marktype: container.marktype, items: [item] } as unknown as SceneGroup)
   return { x1: b.x1, y1: b.y1, x2: b.x2, y2: b.y2 }
 }
+const NESTED_MARKS: ReadonlySet<string> = new Set(['line', 'area', 'trail'])
+/** The bounds of a mark drawn as one path, measured once per container (every item reads the same). */
+const NESTED_BOUNDS = new WeakMap<object, { x1: number; y1: number; x2: number; y2: number }>()
 
 /** What one channel's definition reads besides the row: the signals it names, the datasets its expressions read by name, its scales. */
 interface ChannelReads { names: readonly string[] | null; data: readonly string[] | null; scales: readonly string[] | null }
@@ -5509,11 +5522,11 @@ function evaluateMarkItems(
   let hitMarked = false
   if (source) {
     // (a source that is no dataset but the name of a mark built before: that mark's items, shallow-copied as vega's tuples)
-    const rawRows = ctx.datasets.get(source) ?? ctx.markItems.get(source)?.map((it) => { const r = { ...(it as unknown as Row) }; markTuple(r); return r }) ?? []
+    const rawRows = ctx.datasets.get(source) ?? markRowItems(ctx, source)?.map((it) => { const r = { ...(it as unknown as Row) }; markTuple(r); return r }) ?? []
     // (a `label` transform reads the mark an item is in, and its bounds, off the item it labels: see `ITEM_MARK`)
     if (!ctx.datasets.has(source) && mark.transform?.some((t) => t.type === 'label')) {
       const container = ctx.markContainers.get(source)
-      const from = ctx.markItems.get(source)
+      const from = markRowItems(ctx, source)
       if (container !== undefined && from !== undefined) {
         rawRows.forEach((row, i) => {
           const it = from[i]!
@@ -5838,6 +5851,22 @@ function evaluateMarkItems(
 
 /** The items of a sorted leaf mark in the order of its rows (the group's `items` are in the sort's order). */
 const ROW_ITEMS = new WeakMap<SceneGroup, SceneItem[]>()
+
+/** The items of a sorted group mark in the order of its rows, keyed by the sorted array the group mark's evaluation returns. */
+const GROUP_ROW_ITEMS = new WeakMap<readonly SceneItem[], readonly SceneItem[]>()
+
+/**
+ * The items a later mark of `from: {data: <name>}` is drawn from: those of the named mark in the order of its ROWS, not of its
+ * `sort`. vega-parser hands such a mark the pulse of the named mark's items, whose tuples come in the order they were added;
+ * SortItems sorts only the array that is drawn (`mark.items`), which is what `data('<name>')` and a `lookup` from the mark read
+ * (`ctx.markItems`).
+ */
+function markRowItems(ctx: EvalContext, name: string): SceneItem[] | undefined {
+  const drawn = ctx.markItems.get(name)
+  if (drawn === undefined) return undefined
+  const container = ctx.markContainers.get(name) as SceneGroup | undefined
+  return (container !== undefined ? ROW_ITEMS.get(container) : undefined) ?? (GROUP_ROW_ITEMS.get(drawn) as SceneItem[] | undefined) ?? drawn
+}
 
 /** A pulse a caller worked out for a mark's rows, and the items (in row order) it is relative to: see `evaluateInstanceMark`. */
 interface GivenPulse { pulse: StepPulse; items: SceneItem[] }
@@ -6180,7 +6209,11 @@ function buildGroupMark(mark: CompiledMark, ctx: EvalContext): SceneGroup[] | nu
   if (!groups.length) return [{ marktype: 'group', role: (mark.role as string | undefined) ?? 'scope', name: mark.name, items: [], emptyMark: true, markIndex: markIdOf(mark), ...markContainerInfo(mark), ...(markClip(mark, ctx) ? { markClip: true } : {}) } as unknown as SceneGroup]
   // SortItems: the group items are ordered by their own properties (`datum["g"]`, `x`, ...)
   if (sorts && groups.length > 1) {
-    try { return sortMarkItems(groups as SceneItem[], mark.sort!) as SceneGroup[] } catch (e) {
+    try {
+      const sorted = sortMarkItems(groups as SceneItem[], mark.sort!) as SceneGroup[]
+      GROUP_ROW_ITEMS.set(sorted, groups)
+      return sorted
+    } catch (e) {
       // the SortItems operator threw: the items stay in data order, and the pass stops there
       failPass(ctx, { axis: Infinity, mark: ctx.scope.mark ?? 0, afterEncode: true }, e)
       ctx.encodeAborted = true

@@ -99,7 +99,7 @@ describe('label: generated specs vs vega-label', () => {
     expect(labels).toBeGreaterThan(2000)
     expect(placed).toBeGreaterThan(labels * 0.15)
     expect(placed).toBeLessThan(labels * 0.95)
-    expect(kinds.size).toBe(11)
+    expect(kinds.size).toBe(12)
   })
 
   it(`${BROWSER_SEEDS} generated specs: about the same pictures as vega's, in Chromium (real canvas)`, { timeout: 900_000 }, async () => {
