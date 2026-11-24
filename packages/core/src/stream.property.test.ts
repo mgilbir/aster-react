@@ -1,12 +1,17 @@
 /**
  * Stream batch-order property test.
  *
- * A random sequence of push / flush / pause / resume calls runs against a real
- * `createChartStream` under every backpressure policy. The reference applies the
+ * A random sequence of push / flush / scene / stats calls runs against a real
+ * `createChartStream` under every backpressure policy (the stream has no pause or
+ * resume: a host that holds its flushes back simply does not call `flush`, which the
+ * runs of pushes between flushes already are). The reference applies the
  * SAME surviving batches one at a time (snapshot, then append, then the
  * explicit pulse, then signals/size/domainRaw) to plain row arrays and
  * evaluates a freshly compiled chart from scratch. The stream's flushed scene
- * must deep-equal that reference, whatever the policy folded or dropped.
+ * must deep-equal that reference, whatever the policy folded or dropped. A flush
+ * that returns nothing while batches are queued is a failure, `scene()` read
+ * between flushes must still be the last flushed scene, `stats().depth` must be the
+ * mirrored queue's depth, and every seed must make at least one comparison.
  *
  * Policy semantics the reference encodes:
  *  - coalesce: nothing is lost, the whole queue folds into one flush;
@@ -274,14 +279,16 @@ function runSeed(seed: number, specName: string, policy: StreamPolicy, pulses: b
   let queue: StreamBatch[] = []          // mirror of the surviving queue
   let view = emptyWorld()                // the host's own view (every accepted push)
   let dropped = 0
-  let paused = false
+  let compared = 0
+  let lastKey: { n: unknown; svg: string } | null = null
   const log: string[] = []
   const trace: string[] = []
   const fail = (msg: string): string => `seed=${seed} spec=${specName} policy=${policy} pulses=${pulses} cap=${capacity}\n${msg}\nops: ${log.join(' ')}${TRACE ? `\n${trace.join('\n')}` : ''}`
 
   const doFlush = (): string | null => {
     const out = stream.flush()
-    if (!out) return queue.length || !committed ? null : null
+    // (`flush` returns nothing only when the queue is empty and a scene was made: a queued batch must be applied)
+    if (!out) return queue.length ? fail(`flush() returned null with ${queue.length} batch(es) queued`) : null
     const w = cloneWorld(committed)
     for (const b of queue) applyOne(w, b)
     let expected: SceneRoot
@@ -290,20 +297,41 @@ function runSeed(seed: number, specName: string, policy: StreamPolicy, pulses: b
     const d = firstDiff(a.n, b.n)
     if (d) return fail(`scene differs after flush of ${queue.length} batch(es): ${d}`)
     if (a.svg !== b.svg) return fail('svg differs')
+    compared++
+    lastKey = b
     committed = w
     queue = []
     return null
   }
 
-  stream.flush(); // prime (empty world)
+  // prime (empty world): the first flush makes the scene of the initial state
+  const primed = stream.flush()
+  if (!primed) return fail('the priming flush returned null')
+  {
+    const a = key(reference(spec, committed)), b = key(primed.scene)
+    const d = firstDiff(a.n, b.n)
+    if (d) return fail(`primed scene differs: ${d}`)
+    lastKey = b
+  }
   for (let step = 0; step < OPS; step++) {
-    const op = pick(r, ['push', 'push', 'push', 'push', 'flush', 'flush', 'pause', 'resume'])
+    const op = pick(r, ['push', 'push', 'push', 'push', 'flush', 'flush', 'scene', 'stats'])
     log.push(op)
-    if (op === 'pause') { paused = true; continue }
-    if (op === 'resume') { paused = false; continue }
+    if (op === 'scene') {
+      // pushes are not applied until a flush: the scene a host reads in between is the last flushed one
+      const now = stream.scene()
+      if (!now || !lastKey) return fail('scene() is null after a flush')
+      const d = firstDiff(lastKey.n, norm(now))
+      if (d) return fail(`scene() between flushes is not the last flushed scene: ${d}`)
+      continue
+    }
+    if (op === 'stats') {
+      const depth = stream.stats().depth
+      const want = policy === 'coalesce' ? Math.min(1, queue.length) : queue.length
+      if (depth !== want) return fail(`stats().depth ${depth}, the mirrored queue holds ${want}`)
+      continue
+    }
     if (op === 'flush') {
       if (TRACE) trace.push('flush')
-      if (paused) continue
       const e = doFlush(); if (e) return e
       continue
     }
@@ -329,7 +357,9 @@ function runSeed(seed: number, specName: string, policy: StreamPolicy, pulses: b
     }
     if (stream.stats().dropped !== dropped) return fail(`stats.dropped ${stream.stats().dropped} != ${dropped}`)
   }
-  return doFlush()
+  const e = doFlush()
+  if (e) return e
+  return compared > 0 ? null : fail('no flush after the priming one was compared with the reference')
 }
 
 describe('stream batch order (property)', () => {
