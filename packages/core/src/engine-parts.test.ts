@@ -265,6 +265,8 @@ describe('the pulse path: a re-evaluation without it derives in full, the same s
       return [[{ k: 1 }], [{ k: 1 }, { k: 2 }], [{ k: 1 }, { k: 2 }, { k: 3 }]].map((rows) => renderSceneToSvg(session.evaluate(drawing, { data: { t: rows }, random })))
     }
     const withPulse = draws()
+    expect(withPulse).toHaveLength(3)
+    expect(new Set(withPulse).size, 'the three scenes differ (the rows differ)').toBe(3)
     // the part withdrawn, the engine does not carry on with the other build (it would draw other numbers for the same source):
     // the evaluation that would have taken the pulse is refused, naming the part, as for any part (C572)
     restore = withdrawParts(['pulse'])
