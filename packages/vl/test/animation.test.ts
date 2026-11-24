@@ -81,11 +81,11 @@ type Refusal = [string, Record<string, unknown>, RegExp]
 
 describe('animation: refusals of what vega-lite compiles to a chart that vega cannot run (a dataset it never defines, an unknown or duplicate signal) or that it throws on', () => {
   const cases: Refusal[] = [
-    ['a time channel without a timer selection', anim({ params: undefined, transform: undefined }), /exactly one timer selection/],
+    ['a time channel without a timer selection', anim({ params: undefined, transform: undefined }), /needs a timer selection param/],
     ['a timer selection without the filter', anim({ transform: [] }), /needs the transform/],
-    ['a selection by row id (no fields, no encodings)', anim({ params: [{ name: 'anim', select: { type: 'point', on: 'timer' } }] }), /exactly one of `fields` or `encodings`/],
+    ['a selection by row id (no fields, no encodings)', anim({ params: [{ name: 'anim', select: { type: 'point', on: 'timer' } }] }), /needs `fields` or `encodings`/],
     ['a reserved signal name', anim({ params: [timer({}, 'anim_clock')], transform: [{ filter: { param: 'anim_clock' } }] }), /signal an animation defines/],
-    ['a non-timer point selection', anim({ params: [{ name: 'anim', select: { type: 'point', on: 'click', fields: ['year'] } }] }), /exactly one timer selection/],
+    ['a non-timer point selection', anim({ params: [{ name: 'anim', select: { type: 'point', on: 'click', fields: ['year'] } }] }), /needs a timer selection param/],
     ['a param predicate on a non-timer parameter', anim({ transform: [{ filter: { param: 'nope' } }, { filter: { param: 'anim' } }] }), /is not declared in `params`/],
     ['a time channel with a sort', anim({ encoding: { x: { field: 'x', type: 'quantitative' }, time: { field: 'year', type: 'ordinal', sort: 'descending' } } }), /time\.sort/],
     ['an animated concat child', { hconcat: [anim()] }, /(single top-level unit|selection\/param predicates)/],
@@ -101,24 +101,35 @@ describe('animation: refusals of what vega-lite compiles to a chart that vega ca
   }
 })
 
-describe('animation: refusals of what vega-lite compiles and vega runs (Aster refuses them: an animation it does not implement, or an ambiguous one)', () => {
-  const cases: Refusal[] = [
-    ['a timer selection without a time channel', anim({ encoding: { x: { field: 'x', type: 'quantitative' } } }), /animates the `time` channel/],
-    ['fields and encodings together', anim({ params: [timer({ encodings: ['time'] })] }), /exactly one of/],
-    ['encodings other than time', anim({ params: [{ name: 'anim', select: { type: 'point', on: 'timer', encodings: ['x'] } }] }), /\["time"\]/],
-    ['a time unit projected through encodings', anim({ params: [{ name: 'anim', select: { type: 'point', on: 'timer', encodings: ['time'] } }], encoding: { x: { field: 'x', type: 'quantitative' }, time: { field: 'year', type: 'temporal', timeUnit: 'year' } } }), /time unit/],
-    ['a second timer selection', anim({ params: [timer(), timer({}, 'other')] }), /only one timer selection/],
-    ['an unknown selection option', anim({ params: [timer({ toggle: true })] }), /select\.toggle/],
-    ['a bound timer', anim({ params: [{ ...timer(), bind: { input: 'checkbox' } }] }), /bind/],
-    ['a time channel with an aggregate', anim({ encoding: { x: { field: 'x', type: 'quantitative' }, time: { field: 'year', type: 'ordinal', aggregate: 'max' } } }), /time\.aggregate/],
-    ['an animated layer', { data: { values: ROWS }, layer: [anim()] }, /(not supported|only supported|single top-level unit)/],
+describe('animation: what vega-lite compiles and vega runs compiles here (conformance/test/vl-anim-forms.test.ts runs each against vega-lite)', () => {
+  const cases: Array<[string, Record<string, unknown>]> = [
+    ['a timer selection without a time channel', anim({ encoding: { x: { field: 'x', type: 'quantitative' } } })],
+    ['fields and encodings together', anim({ params: [timer({ encodings: ['time'] })] })],
+    ['encodings other than time', anim({ params: [{ name: 'anim', select: { type: 'point', on: 'timer', encodings: ['x'] } }] })],
+    ['a time unit projected through encodings', anim({ params: [{ name: 'anim', select: { type: 'point', on: 'timer', encodings: ['time'] } }], encoding: { x: { field: 'x', type: 'quantitative' }, time: { field: 'year', type: 'temporal', timeUnit: 'year' } } })],
+    ['a second timer selection', anim({ params: [timer(), timer({}, 'other')] })],
+    ['an extra selection option', anim({ params: [timer({ toggle: true })] })],
+    ['a bound timer', anim({ params: [{ ...timer(), bind: { input: 'checkbox' } }] })],
+    ['a time channel with an aggregate', anim({ encoding: { x: { field: 'x', type: 'quantitative' }, time: { field: 'year', type: 'ordinal', aggregate: 'max' } } })],
+    ['an animated layer', { data: { values: ROWS }, layer: [anim()] }],
   ]
-  for (const [name, spec, message] of cases) {
-    it(`refuses ${name}`, () => {
-      expect(() => compile(spec as never)).toThrowError(VLCompileError)
-      expect(() => compile(spec as never)).toThrowError(message)
+  for (const [name, spec] of cases) {
+    it(`compiles ${name}`, () => {
+      expect(() => compile(spec as never)).not.toThrow()
     })
   }
+  it('a timer selection without a time channel reads a scale that is not there, as vega-lite writes it, and draws every row', () => {
+    const vg = compileFrozen(anim({ encoding: { x: { field: 'x', type: 'quantitative' } } }))
+    expect(vg.signals.find((s: any) => s.name === 'anim_domain').init).toBe("domain('undefined')")
+    expect(vg.marks[0].from).toEqual({ data: 'data_0' })
+    expect(vg.data.find((d: any) => d.name === 'data_0_curr').source).toBe('data_0')
+    expect(JSON.stringify(vg.data.find((d: any) => d.name === 'data_0').transform)).not.toContain('vlSelectionTest')
+  })
+  it('an animated layer reads the frame dataset, and names its unit', () => {
+    const vg = compileFrozen({ data: { values: ROWS }, layer: [anim()] })
+    expect(vg.marks[0].from.data).toMatch(/^data_\d+_curr$/)
+    expect(vg.signals.find((s: any) => s.name === 'anim_tuple').on[0].update).toContain('unit: "layer_0"')
+  })
 })
 
 describe('animation: refusals', () => {

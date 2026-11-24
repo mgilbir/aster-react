@@ -278,6 +278,14 @@ export function normalizePathOverlays(node: unknown, config: Obj, stackOf: (unit
 // --- stack order ---------------------------------------------------------------------------------------------------------------
 
 /**
+ * The `order` definitions this module made from a colour domain. vega-lite makes them after the unit's stack is worked out
+ * (UnitModel.alignStackOrderWithColorDomain), so they sort the stack and are not one of the fields it is stacked by or imputed over.
+ */
+const SYNTHESIZED_ORDERS = new WeakSet<object>()
+const synthesizedOrder = <T extends object>(def: T): T => (SYNTHESIZED_ORDERS.add(def), def)
+export const isSynthesizedOrder = (def: unknown): boolean => typeof def === 'object' && def !== null && SYNTHESIZED_ORDERS.has(def)
+
+/**
  * A unit with no `order` channel and a nominal colour with an explicit domain list orders its stack (or its offset groups) like that
  * list: a sort index calculated from the domain becomes the `order` channel. `inherited` is the encoding a parent layer shares;
  * `stackOf` answers the stack properties of a unit.
@@ -308,10 +316,12 @@ export function alignStackOrders(node: unknown, stackOf: (unit: Obj) => StackPro
   const stack = stackOf(derive(node, { encoding }))
   if (!stack) return node
   const as = `_${color.field}_sort_index`
-  const horizontal = (isObj(node.mark) ? node.mark.orient : undefined) === 'horizontal' || (!(isObj(node.mark) && node.mark.orient) && stack.orient === 'horizontal')
+  // (an arc has no orientation: vega-lite's `orient` gives it 'vertical' whatever the mark def says)
+  const horizontal = (isObj(node.mark) ? node.mark.type : node.mark) !== 'arc'
+    && ((isObj(node.mark) ? node.mark.orient : undefined) === 'horizontal' || (!(isObj(node.mark) && node.mark.orient) && stack.orient === 'horizontal'))
   return derive(node, {
     transform: [...(Array.isArray(node.transform) ? node.transform : []), { calculate: `indexof(${JSON.stringify(domain)}, datum['${color.field}'])`, as }],
-    encoding: derive(own, { order: { field: as, type: 'quantitative', sort: horizontal ? 'ascending' : 'descending' } }),
+    encoding: derive(own, { order: synthesizedOrder({ field: as, type: 'quantitative', sort: horizontal ? 'ascending' : 'descending' }) }),
   })
 }
 

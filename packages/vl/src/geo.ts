@@ -138,7 +138,7 @@ function gatherFitData(u: GeoUnit): FitSource[] {
 export function parseUnitProjection(u: GeoUnit): ProjectionComponent | undefined {
   if (!hasProjection(u.mark, u.encoding)) return undefined
   const proj = replaceExprRef(u.projection)
-  const fit = !(proj.scale != null || proj.translate != null)
+  const fit = !(proj.scale !== undefined || proj.translate !== undefined)
   const specified: Obj = { ...replaceExprRef(u.configProjection), ...proj }
   return new ProjectionComponent(
     `${u.prefix}projection`,

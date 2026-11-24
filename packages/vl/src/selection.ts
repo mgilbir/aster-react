@@ -14,7 +14,7 @@
  * repeat view puts them in its own group mark (a Vega group scope: one copy per group item), see {@link SelUnit.nested}.
  */
 import { parseEventSelectorString, type StreamDef } from './event-selector.js'
-import { dict } from './names.js'
+import { VLCompileError, dict } from './names.js'
 import {
   BRUSH, SELECTION_ID, STORE, VORONOI, asList, bindsInputs, bindsLegend, bindsScales, deepCopy, escapeFieldPath, hasContinuousDomain, isLegendStream,
   isObj, isPositionChannel, isTimerSelection, stringValue, varName,
@@ -23,7 +23,7 @@ import {
 
 export {
   SELECTION_ID, STORE, isTimerSelection, stringValue, varName,
-  type SelCmpt, type Selection, type SelUnit,
+  type Selection, type SelUnit,
 } from './selection-model.js'
 export { assembleFacetSignals, assembleTopLevelSelectionSignals, assembleUnitSelectionSignals } from './selection-signals.js'
 export { assembleUnitSelectionData, assembleUnitSelectionMarks } from './selection-marks.js'
@@ -97,7 +97,7 @@ function draftSelection(unit: SelUnit, param: Obj, configs: Record<SelectionKind
     type,
     init: param.value,
     bind: param.bind,
-    events: typeof settings.on === 'string' ? parseEventSelectorString(settings.on, 'scope') : asList(deepCopy(settings.on) as StreamDef | StreamDef[]),
+    events: typeof settings.on === 'string' ? parseEventSelectorString(settings.on, 'scope') : [deepCopy(settings.on) as StreamDef],
     nested: unit.nested,
   } as unknown as Selection
 }
@@ -107,6 +107,7 @@ function completeSelection(unit: SelUnit, sel: Selection, param: Obj, cfg: Obj):
   // (the steps read the parameter as the user wrote it, which the map adaptation below rewrites)
   const written = deepCopy(param)
   if (sel.type === 'interval') {
+    refuseUndraggable(sel, unit)
     if (unit.hasProjection) adaptToMap(sel, written)
     if (sel.translate && !bindsScales(sel)) keepDragsOffTheBrush(sel)
   }
@@ -117,6 +118,19 @@ function completeSelection(unit: SelUnit, sel: Selection, param: Obj, cfg: Obj):
   if (typeof sel.clear === 'string') sel.clear = parseEventSelectorString(sel.clear, 'view')
   if (sel.type === 'point' && sel.nearest) for (const e of sel.events ?? []) e.markname = unit.getName(VORONOI)
   return sel
+}
+
+/**
+ * What an interval selection needs of its interactions, which vega-lite fails on with a TypeError when they are not so: its `on` and
+ * `translate` are drags (an ordered pair of events and the moves between them), and the scales of a map are not bound.
+ */
+function refuseUndraggable(sel: Selection, unit: SelUnit): void {
+  const isDrag = (events: StreamDef[]): boolean => events.length > 0 && events.every((e) => e.between !== undefined)
+  if (!isDrag(sel.events ?? [])) throw new VLCompileError(`params: the interval selection "${sel.name}" is made by a drag: \`on\` is an ordered pair of events and the moves between them (\`[pointerdown, window:pointerup] > window:pointermove\`)`)
+  if (typeof sel.translate === 'string' && !isDrag(parseEventSelectorString(sel.translate, 'scope'))) {
+    throw new VLCompileError(`params: the interval selection "${sel.name}" is moved by a drag: \`translate\` is an ordered pair of events and the moves between them`)
+  }
+  if (unit.hasProjection && bindsScales(sel)) throw new VLCompileError(`params: the interval selection "${sel.name}" cannot be bound to the scales of a map (it has none to pan: a projection places its marks)`)
 }
 
 /** On a map an interval is over longitude and latitude (or the channels the initial value names), stored by `_vgsid_`. */

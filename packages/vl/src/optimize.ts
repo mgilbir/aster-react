@@ -158,6 +158,64 @@ export function mergeBins(data: Obj[], within: unknown): void {
 }
 
 /**
+ * optimizers.ts MergeBins, within one dataset's transforms: a bin of the same field and parameters as an EARLIER bin, with nothing between
+ * them that changes the rows it reads (a filter, an aggregate, anything that makes its field), is not made again: the earlier bin makes
+ * the fields, and the later one's names are copies of them (`datum["b"]` -> `b2`), written where the earlier one is. The bin of a
+ * transform and the bin of a channel are the same node to vega-lite whichever way each was written.
+ *
+ * Edits `ts` in place; returns where the transform that was at index `k` is now (for a caller that holds an index into `ts`).
+ */
+export function mergeChainedBins(ts: Obj[]): (k: number) => number {
+  // the transforms a bin can be carried up past: they neither drop or add rows nor write the bin's field
+  const passable = (t: Obj): boolean => t.type === 'formula' || t.type === 'extent' || t.type === 'bin' || t.type === 'timeunit'
+  interface First { at: number; start: string; end: string; signal: unknown; extent: unknown }
+  const firsts = new Map<string, First>()
+  const drop = new Set<number>()
+  const after = new Map<number, Obj[]>()
+  const binKeyOf = (t: Obj, k: number): string | undefined => {
+    if (t.type !== 'bin' || !Array.isArray(t.as) || t.as.length !== 2 || typeof t.signal !== 'string') return undefined
+    const e = isObj(t.extent) && typeof t.extent.signal === 'string' ? ts.findLast((x, i) => i < k && x.type === 'extent' && x.signal === (t.extent as Obj).signal) : undefined
+    if (isObj(t.extent) && e === undefined) return undefined
+    const params = Object.fromEntries(Object.entries(t).filter(([key]) => key !== 'signal' && key !== 'as' && key !== 'extent'))
+    return JSON.stringify([params, e === undefined ? t.extent : { of: e.field }])
+  }
+  ts.forEach((t, k) => {
+    const key = binKeyOf(t, k)
+    if (key === undefined) {
+      // anything that is not passable ends the run of rows a bin can be shared over
+      if (!passable(t)) firsts.clear()
+      else if (t.type === 'formula' && typeof t.as === 'string') for (const [fk, f] of firsts) if (JSON.parse(fk)[0].field === t.as) { void f; firsts.delete(fk) }
+      return
+    }
+    const first = firsts.get(key)
+    if (first === undefined) {
+      firsts.set(key, { at: k, start: (t.as as string[])[0]!, end: (t.as as string[])[1]!, signal: t.signal, extent: isObj(t.extent) ? (t.extent as Obj).signal : undefined })
+      return
+    }
+    // (the copies; the extent the later bin declared goes with it)
+    const names = t.as as string[]
+    const copies: Obj[] = []
+    if (names[0] !== first.start) copies.push({ type: 'formula', expr: `datum[${JSON.stringify(first.start)}]`, as: names[0] })
+    if (names[1] !== first.end) copies.push({ type: 'formula', expr: `datum[${JSON.stringify(first.end)}]`, as: names[1] })
+    after.set(first.at, [...(after.get(first.at) ?? []), ...copies])
+    drop.add(k)
+    const own = isObj(t.extent) ? ts.findLastIndex((x, i) => i < k && x.type === 'extent' && x.signal === (t.extent as Obj).signal) : -1
+    // (an extent signal another bin reads stays: only the one this bin declared by itself, with the same signal as the first's, goes)
+    if (own >= 0 && (t.extent as Obj).signal === first.extent && own > first.at) drop.add(own)
+  })
+  if (drop.size === 0) return (k) => k
+  const out: Obj[] = []
+  const place: number[] = []
+  ts.forEach((t, k) => {
+    place[k] = out.length
+    if (!drop.has(k)) out.push(t)
+    for (const c of after.get(k) ?? []) out.push(c)
+  })
+  ts.splice(0, ts.length, ...out)
+  return (k) => (k >= place.length ? ts.length : place[k]!)
+}
+
+/**
  * The declarations MergeBins shared (SHARED_BINS: one bin keeps its `extent` and its `signal`, the others read them) are
  * not part of what makes two pipelines the same: the rows are the same with or without them. A bin that declares a signal of its own
  * (one no merge renamed: its readers read it under that name) stays part of its dataset's identity.
