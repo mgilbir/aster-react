@@ -83,7 +83,7 @@ const REJECTED: Array<[string, unknown, RegExp]> = [
   ['a timer selection without fields or encodings (it would select by row id)', unit({ params: [{ name: 'b', select: { type: 'point', on: 'timer{500}' } }] }), /exactly one of `fields` or `encodings`/],
   ['a timer event stream that is not a selection\'s own `on` (clear)', unit({ params: [{ name: 'b', select: { type: 'point', on: 'click', clear: 'timer' } }] }), /timer event streams/],
   ['a timer event stream in the selection config', unit({ config: { selection: { point: { on: 'timer' } } } }), /timer event streams/],
-  ['a parameter with an invalid name', unit({ params: [{ name: 'my param', value: 1 }] }), /identifiers/],
+  ['a parameter with an empty name', unit({ params: [{ name: '', value: 1 }] }), /params\[0\]\.name: must be a non-empty string/],
   ['duplicate parameter names', unit({ params: [{ name: 'p', value: 1 }, { name: 'p', value: 2 }] }), /duplicate parameter/],
   ['a parameter with neither value nor expr', unit({ params: [{ name: 'p' }] }), /needs `value`, `expr` or `bind`/],
   ['an unknown bind input', unit({ params: [{ name: 'p', value: 1, bind: { input: 'dial' } }] }), /input type/],

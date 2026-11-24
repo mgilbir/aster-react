@@ -4,7 +4,11 @@ import { compile, VLCompileError } from '../src/index.js'
 import { flatField, datumRef, genName, genSignal, safeKey, signalSafe, splitAccessPath } from '../src/names.js'
 import { DATA, xq, yq, cn, compileFrozen, strings, objects } from './helpers.js'
 
-/** Hostile / awkward column names. `raw` is how the user writes the field; `key` the actual data key. */
+/**
+ * Hostile / awkward column names. `raw` is how the user writes the field; `key` the actual data key. A name with a backslash of its own
+ * (`\\` in the path) is refused on a scaled, binned, aggregated or time-unit channel, where vega-lite 6.4.3's chart reads another column
+ * (conformance vl-escaped-names), and is read on a tooltip or a text, where it reads the right one: those are the places it is tested.
+ */
 const NAMES: Array<{ label: string; raw: string; key: string; row: Record<string, unknown> }> = [
   { label: 'plain', raw: 'v', key: 'v', row: { v: 1 } },
   { label: 'space', raw: 'IMDB Rating', key: 'IMDB Rating', row: { 'IMDB Rating': 6.1 } },
@@ -25,14 +29,18 @@ function reads(expr: string): string[] {
   return out
 }
 
+const ownBackslash = (raw: string): boolean => raw.includes('\\\\')
+
 describe('field names reach expressions only through JSON-escaped datum[...] reads', () => {
   for (const n of NAMES) {
     it(`${n.label}: raw ${JSON.stringify(n.raw)} compiles with the key ${JSON.stringify(n.key)} read as ONE literal`, () => {
-      const out = compileFrozen({
-        data: { name: 't', values: [n.row] },
-        mark: 'bar',
-        encoding: { x: { field: n.raw, type: 'quantitative', bin: true }, y: { aggregate: 'count', type: 'quantitative' }, color: { field: n.raw, type: 'ordinal' } },
-      })
+      const out = compileFrozen(ownBackslash(n.raw)
+        ? { data: { name: 't', values: [n.row] }, mark: 'text', encoding: { text: { field: n.raw, type: 'nominal' }, tooltip: { field: n.raw, type: 'nominal' } } }
+        : {
+            data: { name: 't', values: [n.row] },
+            mark: 'bar',
+            encoding: { x: { field: n.raw, type: 'quantitative', bin: true }, y: { aggregate: 'count', type: 'quantitative' }, color: { field: n.raw, type: 'ordinal' } },
+          })
       const exprs: string[] = []
       for (const o of objects(out)) {
         for (const k of ['expr', 'signal'] as const) if (typeof o[k] === 'string') exprs.push(o[k] as string)
@@ -53,12 +61,17 @@ describe('field names reach expressions only through JSON-escaped datum[...] rea
       }
     })
 
-    it(`${n.label}: generated field/signal names are valid`, () => {
-      const out = compileFrozen({
+    it(`${n.label}: generated field/signal names are valid${ownBackslash(n.raw) ? ' (refused where vega-lite reads another column)' : ''}`, () => {
+      const spec = {
         data: { name: 't', values: [n.row] },
         mark: 'bar',
         encoding: { x: { field: n.raw, type: 'quantitative', bin: { maxbins: 5 } }, y: { aggregate: 'sum', field: n.raw, type: 'quantitative' } },
-      })
+      }
+      if (ownBackslash(n.raw)) {
+        expect(() => compile(spec as never)).toThrowError(/holds a backslash/)
+        return
+      }
+      const out = compileFrozen(spec)
       // Vega signal names must be identifiers
       for (const o of objects(out)) {
         if (typeof o.signal === 'string' && o.type === 'bin') expect(o.signal).toMatch(/^[A-Za-z_][\w]*$/)
@@ -98,11 +111,16 @@ describe('field names reach expressions only through JSON-escaped datum[...] rea
 
   it('timeUnit / bin names of an awkward field are flat and consistent between pipeline and marks', () => {
     for (const n of NAMES) {
-      const out = compileFrozen({
+      const spec = {
         data: { name: 't', values: [n.row] },
         mark: 'bar',
         encoding: { x: { field: n.raw, type: 'ordinal', timeUnit: 'month' }, y: { aggregate: 'count', type: 'quantitative' } },
-      })
+      }
+      if (ownBackslash(n.raw)) {
+        expect(() => compile(spec as never)).toThrowError(/holds a backslash/)
+        continue
+      }
+      const out = compileFrozen(spec)
       const tu = (out.data as Array<{ transform?: Array<Record<string, any>> }>).flatMap((d) => d.transform ?? []).find((t) => t.type === 'timeunit')!
       const [startName] = tu.as as string[]
       expect(splitAccessPath(startName)).toEqual([startName])

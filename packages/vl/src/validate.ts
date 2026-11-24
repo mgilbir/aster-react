@@ -350,23 +350,51 @@ const PROTOTYPE_SAFE = {
   x2: new Set(['__proto__']),
 } as const satisfies Record<string, ReadonlySet<string>>
 
-/** Refuse every field, dataset, output (`as`) and parameter name of the spec that Vega mistakes for an Object.prototype member. */
+/**
+ * A name with a backslash of its own: a field path with an escaped backslash (`x\\y` reads the column `x\y`), or an output name
+ * holding one. vega-lite 6.4.3 writes a field into Vega's `field` properties as replacePathInField does, which escapes dots,
+ * brackets and quotes but not a backslash, so Vega reads `x\y` as the escape `\y`, the column `xy`: the scale domain, the aggregate,
+ * the bin, the facet, the sort read a column that is not there (a NaN domain, an empty chart). Vega reads it right only where vega-lite
+ * writes an expression (`datum["x\\y"]`: a tooltip, a text, a predicate) or passes the path on as written (a fold, a joinaggregate, a
+ * lookup key); those places are the ones marked safe below, each held to vega-lite through real Vega by
+ * conformance/test/vl-escaped-names.test.ts. Every other place is refused (DECISIONS Q9; C184, C442).
+ */
+const hasEscapedBackslash = (path: string): boolean => path.includes('\\\\')
+/** Channels whose plain field (no aggregate, bin or time unit) vega-lite reads by an expression, or (`x2`) through its primary's scale. */
+const BACKSLASH_SAFE_CHANNELS: ReadonlySet<string> = new Set(['tooltip', 'text', 'href', 'url', 'description', 'key', 'order', 'x2'])
+
+/**
+ * Refuse every field, dataset, output (`as`) and parameter name of the spec that Vega mistakes: a member of Object.prototype, or a name
+ * with a backslash of its own, outside the places where vega-lite's chart is the chart of an ordinary name.
+ */
 function refusePrototypeNames(spec: Obj): void {
   const refuse = (at: string, what: string, name: string): never =>
     fail(at, `a ${what} named ${JSON.stringify(name)} is not supported: Vega keeps names in plain objects and mistakes it for Object.prototype's member, so vega-lite 6.4.3's chart fails or draws without it; rename it`)
-  const check = (v: unknown, at: string, what: string, safe?: ReadonlySet<string>): void => {
-    if (typeof v === 'string' && PROTOTYPE_MEMBERS.has(v) && !safe?.has(v)) refuse(at, what, v)
+  const refuseBackslash = (at: string, what: string, name: string): never =>
+    fail(at, `a ${what} named ${JSON.stringify(name)} is not supported here: it holds a backslash, which vega-lite 6.4.3 does not escape where it writes the name into Vega, so its chart reads another column; rename it`)
+  // (`safe`: the members allowed here; `backslashSafe`: a backslash is read right here; `literal`: a name vega-lite also writes as it is -
+  // an output - so that its every backslash is its own. A dataset's or a parameter's name is never written as a field.)
+  const check = (v: unknown, at: string, what: string, safe?: ReadonlySet<string>, backslashSafe = false, literal = false): void => {
+    if (typeof v !== 'string') return
+    if (PROTOTYPE_MEMBERS.has(v) && !safe?.has(v)) refuse(at, what, v)
+    if (!backslashSafe && what === 'field' && (literal ? v.includes('\\') : hasEscapedBackslash(v))) refuseBackslash(at, what, v)
   }
-  const checkAll = (v: unknown, at: string, what: string, safe?: ReadonlySet<string>): void => {
-    if (Array.isArray(v)) v.forEach((x, i) => check(x, `${at}[${i}]`, what, safe))
-    else check(v, at, what, safe)
+  const checkAll = (v: unknown, at: string, what: string, safe?: ReadonlySet<string>, backslashSafe = false): void => {
+    if (Array.isArray(v)) v.forEach((x, i) => check(x, `${at}[${i}]`, what, safe, backslashSafe))
+    else check(v, at, what, safe, backslashSafe)
   }
-  // (every `field` below a predicate, a sort or a condition)
+  // (an output, or a path vega-lite also writes as a literal name - a regression's or a flatten's output, a repeated field's title and
+  // column - where any escape is lost: `a\.b` there names the column `a\.b`, and the encoding reads `a.b`)
+  const literal = (v: unknown, at: string): void => {
+    if (Array.isArray(v)) v.forEach((x, i) => literal(x, `${at}[${i}]`))
+    else check(v, at, 'field', undefined, false, true)
+  }
+  // (every `field` below a predicate, a sort or a condition: vega-lite reads them by expression, or passes them on as written)
   const fieldsBelow = (n: unknown, at: string): void => {
     if (Array.isArray(n)) { n.forEach((x, i) => fieldsBelow(x, `${at}[${i}]`)); return }
     if (!isObj(n)) return
     for (const [k, v] of Object.entries(n)) {
-      if (k === 'field') check(v, `${at}.field`, 'field')
+      if (k === 'field') check(v, `${at}.field`, 'field', undefined, true)
       else fieldsBelow(v, `${at}.${k}`)
     }
   }
@@ -374,38 +402,43 @@ function refusePrototypeNames(spec: Obj): void {
     if (!isObj(d)) return
     check(d.name, `${at}.name`, 'dataset')
     if (isObj(d.format) && isObj(d.format.parse)) for (const k of Object.keys(d.format.parse)) check(k, `${at}.format.parse`, 'field')
-    for (const g of ['sequence']) if (isObj(d[g])) check((d[g] as Obj).as, `${at}.${g}.as`, 'field')
+    for (const g of ['sequence']) if (isObj(d[g])) literal((d[g] as Obj).as, `${at}.${g}.as`)
   }
   const channelDef = (def: unknown, at: string, channel?: string): void => {
-    if (Array.isArray(def)) { def.forEach((d, i) => channelDef(d, `${at}[${i}]`)); return }
+    if (Array.isArray(def)) { def.forEach((d, i) => channelDef(d, `${at}[${i}]`, channel)); return }
     if (!isObj(def)) return
     const binned = def.bin !== undefined && def.bin !== false && def.bin !== null && def.bin !== 'binned'
     const safe = binned && (channel === 'x' || channel === 'y') ? PROTOTYPE_SAFE.binnedPosition : binned && channel === 'color' ? PROTOTYPE_SAFE.binnedColor : !binned && channel === 'x2' ? PROTOTYPE_SAFE.x2 : undefined
-    check(def.field, `${at}.field`, 'field', safe)
-    if (def.condition !== undefined) channelDef(def.condition, `${at}.condition`)
+    const plain = def.aggregate === undefined && def.timeUnit === undefined && (def.bin === undefined || def.bin === false || def.bin === null)
+    check(def.field, `${at}.field`, 'field', safe, plain && channel !== undefined && BACKSLASH_SAFE_CHANNELS.has(channel))
+    if (def.condition !== undefined) channelDef(def.condition, `${at}.condition`, channel)
     if (isObj(def.sort)) check(def.sort.field, `${at}.sort.field`, 'field')
   }
   const transform = (t: unknown, at: string): void => {
     if (!isObj(t)) return
     const a = (k: string): string => `${at}.${k}`
-    checkAll(t.as, a('as'), 'field')
-    checkAll(t.groupby, a('groupby'), 'field')
+    // (a joinaggregate's and a window's groupby are passed on as written; an aggregate's are written as replacePathInField does)
+    const groupsAsWritten = t.joinaggregate !== undefined || t.window !== undefined
+    literal(t.as, a('as'))
+    checkAll(t.groupby, a('groupby'), 'field', undefined, groupsAsWritten)
     if (t.filter !== undefined) fieldsBelow(t.filter, a('filter'))
     if (t.bin !== undefined) check(t.field, a('field'), 'field', PROTOTYPE_SAFE.binTransform)
     else if (t.timeUnit !== undefined) check(t.field, a('field'), 'field')
-    if (t.fold !== undefined) checkAll(t.fold, a('fold'), 'field', PROTOTYPE_SAFE.fold)
+    if (t.fold !== undefined) checkAll(t.fold, a('fold'), 'field', PROTOTYPE_SAFE.fold, true)
     for (const k of ['aggregate', 'joinaggregate', 'window']) {
-      if (Array.isArray(t[k])) (t[k] as unknown[]).forEach((op, i) => { if (isObj(op)) { check(op.field, `${a(k)}[${i}].field`, 'field'); check(op.as, `${a(k)}[${i}].as`, 'field') } })
+      if (Array.isArray(t[k])) (t[k] as unknown[]).forEach((op, i) => { if (isObj(op)) { check(op.field, `${a(k)}[${i}].field`, 'field', undefined, k !== 'aggregate'); literal(op.as, `${a(k)}[${i}].as`) } })
     }
     if (t.sort !== undefined) fieldsBelow(t.sort, a('sort'))
-    for (const k of ['stack', 'pivot', 'density', 'quantile'] as const) checkAll(t[k], a(k), 'field', PROTOTYPE_SAFE[k])
-    for (const k of ['flatten', 'impute', 'key', 'lookup', 'loess', 'regression', 'on', 'extent']) checkAll(t[k], a(k), 'field')
-    if (t.pivot !== undefined) check(t.value, a('value'), 'field')
+    for (const k of ['stack', 'pivot', 'density', 'quantile'] as const) checkAll(t[k], a(k), 'field', PROTOTYPE_SAFE[k], true)
+    for (const k of ['lookup', 'loess', 'key', 'on', 'extent']) checkAll(t[k], a(k), 'field', undefined, true)
+    checkAll(t.impute, a('impute'), 'field')
+    for (const k of ['flatten', 'regression']) literal(t[k], a(k))
+    if (t.pivot !== undefined) check(t.value, a('value'), 'field', undefined, true)
     if (t.extent !== undefined) check(t.param, a('param'), 'parameter', PROTOTYPE_SAFE.parameter)
     if (isObj(t.from)) {
       check(t.from.param, a('from.param'), 'parameter', PROTOTYPE_SAFE.parameter)
-      check(t.from.key, a('from.key'), 'field')
-      checkAll(t.from.fields, a('from.fields'), 'field')
+      check(t.from.key, a('from.key'), 'field', undefined, true)
+      checkAll(t.from.fields, a('from.fields'), 'field', undefined, true)
       data(t.from.data, a('from.data'))
     }
   }
@@ -420,8 +453,8 @@ function refusePrototypeNames(spec: Obj): void {
       if (v.facet.field !== undefined) channelDef(v.facet, a('facet'))
       else for (const [k, def] of Object.entries(v.facet)) channelDef(def, `${a('facet')}.${k}`)
     }
-    if (Array.isArray(v.repeat)) checkAll(v.repeat, a('repeat'), 'field')
-    else if (isObj(v.repeat)) for (const [k, list] of Object.entries(v.repeat)) checkAll(list, `${a('repeat')}.${k}`, 'field')
+    if (Array.isArray(v.repeat)) literal(v.repeat, a('repeat'))
+    else if (isObj(v.repeat)) for (const [k, list] of Object.entries(v.repeat)) literal(list, `${a('repeat')}.${k}`)
     if (Array.isArray(v.params)) {
       v.params.forEach((p, i) => {
         if (!isObj(p)) return
@@ -796,7 +829,7 @@ function validateParams(params: unknown, path: string, selectionOk: boolean, kin
   params.forEach((p, i) => {
     const at = `${path}[${i}]`
     if (!isObj(p)) mustBe(at, OBJECT)
-    if (typeof p.name !== 'string' || !/^[A-Za-z_$][\w$]*$/.test(p.name)) fail(`${at}.name`, `parameter names must be identifiers, got ${JSON.stringify(p.name)}`)
+    if (typeof p.name !== 'string' || p.name === '') mustBe(`${at}.name`, 'a non-empty string')
     // (two views may each declare a selection of the same name: every view keeps its own tuples in the one store - concat_hover; a
     // selection and a variable parameter, or two variable parameters, cannot share a name)
     if (st().paramNamesSeen.has(p.name) && !(p.select !== undefined && st().selectionNamesSeen.has(p.name))) fail(`${at}.name`, `duplicate parameter name "${p.name}"`)
@@ -936,8 +969,9 @@ function validateSelection(p: Obj, at: string): void {
   if (sel.fields !== undefined) {
     if (!Array.isArray(sel.fields) || !sel.fields.every((f) => typeof f === 'string' && f !== '')) mustBe(`${at}.select.fields`, 'an array of field names')
     for (const f of sel.fields as string[]) {
-      if (f !== '_vgsid_' && (accessPath(f, `${at}.select.fields`).length !== 1 || accessPath(f, `${at}.select.fields`)[0] !== f)) {
-        fail(`${at}.select.fields`, `a selection cannot be projected over the nested or escaped field ${JSON.stringify(f)}`)
+      // (an escaped field, `a\.b`, is one column of the row the selection tests; a nested one is flattened into a column of another name)
+      if (f !== '_vgsid_' && accessPath(f, `${at}.select.fields`).length !== 1) {
+        fail(`${at}.select.fields`, `a selection cannot be projected over the nested field ${JSON.stringify(f)}`)
       }
     }
   }
@@ -1691,7 +1725,7 @@ function validateTransform(kind: string, t: Obj, a: string): void {
     case 'extent':
       needStr('extent')
       needStr('param')
-      if (!/^[A-Za-z_$][\w$]*$/.test(t.param as string)) mustBe(`${a}.param`, `an identifier, got ${JSON.stringify(t.param)}`)
+      if (typeof t.param !== 'string' || t.param === '') mustBe(`${a}.param`, 'a non-empty string')
       break
   }
 }

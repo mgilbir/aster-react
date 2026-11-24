@@ -223,3 +223,24 @@ group('@aster-charts/vl == vega-lite: a selection used by a filter, an opacity a
   ]
   for (const [name, spec] of CASES) add(name, spec)
 })
+
+group('@aster-charts/vl == vega-lite: a selection projected over an escaped field (a column whose name holds a dot, a bracket, an escape)', (add) => {
+  // (`c\.d` is the column `c.d`, `x\[0\]` the column `x[0]`, `g\h` the column `gh`: one column of the row each, as vega-lite reads them; C83)
+  const rows = DATA.values.map((r) => ({ 'c.d': r.c, 'x[0]': r.x, gh: r.g, y: r.y }))
+  const data = { values: rows }
+  const C = 'c\\.d', X = 'x\\[0\\]', G = 'g\\h'
+  const CASES: Array<[string, Record<string, any>]> = [
+    ['point fields', { data, params: [sel({ type: 'point', fields: [C] })], mark: 'point', encoding: { x: q(X), y: q('y'), color: { condition: { param: 'sel', field: C, type: 'nominal' }, value: 'grey' } } }],
+    ['point two fields', { data, params: [sel({ type: 'point', fields: [C, G] })], mark: 'point', encoding: { x: q(X), y: q('y'), color: { condition: { param: 'sel', value: 'red' }, value: 'grey' } } }],
+    ['point encodings x', { data, params: [sel({ type: 'point', encodings: ['x'] })], mark: 'point', encoding: { x: q(X), y: q('y'), color: { condition: { param: 'sel', value: 'red' }, value: 'grey' } } }],
+    ['point encodings color, bound legend', { data, params: [sel({ type: 'point', encodings: ['color'] }, { bind: 'legend' })], mark: 'point', encoding: { x: q(X), y: q('y'), color: n(C), opacity: { condition: { param: 'sel', value: 1 }, value: 0.2 } } }],
+    ['point fields, bound legend', { data, params: [sel({ type: 'point', fields: [C] }, { bind: 'legend' })], mark: 'point', encoding: { x: q(X), y: q('y'), color: n(C), opacity: { condition: { param: 'sel', value: 1 }, value: 0.2 } } }],
+    ['point bound select', { data, params: [sel({ type: 'point', fields: [C] }, { bind: { input: 'select', options: ['A', 'B', 'C'] } })], mark: 'point', encoding: { x: q(X), y: q('y'), color: { condition: { param: 'sel', value: 'red' }, value: 'grey' } } }],
+    ['point initial values', { data, params: [sel({ type: 'point', fields: [C] }, { value: [{ [C]: 'A' }] })], mark: 'point', encoding: { x: q(X), y: q('y'), color: { condition: { param: 'sel', value: 'red' }, value: 'grey' } } }],
+    ['interval', { data, params: [sel('interval')], mark: 'point', encoding: { x: q(X), y: q('y'), color: { condition: { param: 'sel', value: 'red' }, value: 'grey' } } }],
+    ['interval bound to the scales', { data, params: [sel('interval', { bind: 'scales' })], mark: 'point', encoding: { x: q(X), y: q('y') } }],
+    ['interval, initial value', { data, params: [sel({ type: 'interval', encodings: ['x'] }, { value: { x: [2, 4] } })], mark: 'point', encoding: { x: q(X), y: q('y'), color: { condition: { param: 'sel', value: 'red' }, value: 'grey' } } }],
+    ['a filter and a scale domain in another view', { data, vconcat: [{ params: [sel({ type: 'interval', encodings: ['x'] })], mark: 'point', encoding: { x: q(X), y: q('y') } }, { transform: [{ filter: { param: 'sel' } }], mark: 'point', encoding: { x: q(X, { scale: { domain: { param: 'sel' } } }), y: q('y') } }] }],
+  ]
+  for (const [name, spec] of CASES) add(name, spec)
+})
