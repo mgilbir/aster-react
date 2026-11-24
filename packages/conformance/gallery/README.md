@@ -130,7 +130,13 @@ identical outcomes for all 720 specs on both paths).
   `ratchet.test.ts`.
 
 When the numbers improve the gate says so: raise `floors.json` and regenerate the lists with
-`pnpm conformance:gallery --print-passing` (run it, review the diff, commit). Never lower a floor.
+`pnpm conformance:gallery --print-passing` (run it, review the diff, commit). Never lower a floor. A run in which any listed spec
+regressed does not rewrite its list (it would record the loss as the new baseline).
+
+A spec whose data URL names a vega-datasets version other than the pinned one (`manifest.json` `vegaDatasets`) is served the
+pinned file in both engines; the run prints a `DATA` line for each. Only `data/<file>` against the gallery's base URL and
+`cdn.jsdelivr.net/npm/vega-datasets[@<version>]/data/<file>` resolve; any other package, path or malformed escape is answered 404
+(the browser path aborts the request).
 
 It is **not** in `scripts/gates.mjs` (so `pnpm check` stays hermetic and needs no fetch): it takes about 90 s and needs the cache,
 so it runs in `.github/workflows/nightly.yml` after a cached fetch.

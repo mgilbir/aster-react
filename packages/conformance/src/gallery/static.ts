@@ -16,7 +16,7 @@ import { loadSpecData, TRUSTED_LOAD_OPTIONS } from '@aster-charts/core/load'
 import { compile as compileOurs } from '@aster-charts/vl'
 import { canonicalizeSvg, diffCanonical } from '../normalize.js'
 import { summarizeDiffs } from './diffs.js'
-import { logged, settle, stray, vegaSvg } from './oracle.js'
+import { logged, settle, stray, vegaSvg, warned } from './oracle.js'
 import { seededRandom, withFrozenClock, withOracleRandom } from './seeded.js'
 import { BASE_URL, fileFetch, needsCanvas, readSpec, trunc, type GallerySpec, type Outcome } from './lib.js'
 import { forEngines } from '../engines.js'
@@ -40,6 +40,7 @@ export async function runStatic(g: GallerySpec): Promise<Outcome> {
   let oracleSvg: string
   stray.length = 0
   logged.length = 0
+  warned.length = 0
   try {
     oracleSpec = g.kind === 'vl' ? (vl.compile(oracleSrc as never).spec as unknown as Record<string, unknown>) : oracleSrc
     oracleSvg = await withFrozenClock(() => withOracleRandom(() => vegaSvg(structuredClone(oracleSpec))))
@@ -49,6 +50,11 @@ export async function runStatic(g: GallerySpec): Promise<Outcome> {
     // on without its output, so the document it renders is not the one the spec describes (the react path, in Chromium, compares them)
     const noCanvas = logged.find(needsCanvas)
     if (noCanvas !== undefined) return done({ status: 'unverifiable', reason: 'oracle-needs-canvas (Node has none)', first: trunc(noCanvas.split('\n')[0]!) })
+    // any other error vega logged, or a data file its loader could not load: the oracle's document is not what the spec describes,
+    // so nothing can pass against it
+    if (logged.length) return done({ status: 'unverifiable', reason: 'oracle-logged-error', first: trunc(logged[0]!.split('\n')[0]!) })
+    const notLoaded = warned.find((w) => w.startsWith('Loading failed'))
+    if (notLoaded !== undefined) return done({ status: 'unverifiable', reason: 'oracle-load-failed', first: trunc(notLoaded) })
   } catch (e) {
     // a view that failed mid-run still has a redraw queued that throws a moment later; let it fire here, not inside the next spec
     await new Promise((r) => setTimeout(r, 60))
