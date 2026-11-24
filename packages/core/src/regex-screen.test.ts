@@ -3,7 +3,7 @@ import { describe, it, expect } from 'vitest'
 import { regexHazard, regexModel } from './regex-screen.js'
 import { compileExpr } from './expression.js'
 import { withLimits, AsterLimitError, REGEX_MAX_INPUT, REGEX_RUN_BUDGET_MS } from './limits.js'
-import { attack, expectLimit } from './attack.testkit.js'
+import { attack, expectLimit, SLACK_MS } from './attack.testkit.js'
 
 /** Known catastrophic patterns from published ReDoS lists (OWASP, Davis et al. "The Impact of Regular Expression Denial of Service", regexlib). */
 const REDOS: Array<[string, string?]> = [
@@ -152,6 +152,30 @@ describe('the real attack (child process, hard kill)', () => {
         { limits: { maxTimeMs: 200 } })`)
     expectLimit(r, /regexSafety/)
     expect(r.cpuMs).toBeLessThan(50)
+  }, 30_000)
+})
+
+describe('the screen\'s own analysis is bounded by the evaluation (child process, hard kill)', () => {
+  // a pattern whose analysis takes the screen 120 to 220 ms, made distinct by a suffix: a spec can hold many of them
+  const heavy = (i: number): string => '\\\\w{1,3}((\\\\d|[ab]+[^b]{0,70}.)([ab]\\\\d*?[^b]?)?b)a{1,3}x' + 'c'.repeat(i) + '$'
+  const spec = (n: number, rows = 1): string => `{ width: 10, height: 10, data: [{ name: 't', values: Array.from({ length: ${rows} }, () => ({ s: 'ab' })),
+    transform: [${Array.from({ length: n }, (_, i) => `{ type: 'formula', as: 'f${i}', expr: ${JSON.stringify(`test(regexp('${heavy(i)}'), datum.s)`)} }`).join(', ')}] }],
+    marks: [{ type: 'rect', from: { data: 't' } }] }`
+  it('forty distinct heavy patterns under maxTimeMs 200 stop at the clock, not after 40 analyses', async () => {
+    const r = await attack(`core.renderSpec(${spec(40)}, { limits: { maxTimeMs: 200 } })`)
+    expectLimit(r, /maxTimeMs exceeded during regular expression screening/)
+    expect(r.cpuMs).toBeLessThan(200 + SLACK_MS)
+  }, 30_000)
+  it('without maxTimeMs, the analysis of all the patterns of an evaluation is bounded by SCREEN_STEPS', async () => {
+    const r = await attack(`core.renderSpec(${spec(40)}, { limits: {} })`)
+    expectLimit(r, /regexSafety: the screen's analysis of this evaluation's patterns passed \d+ steps/)
+    // (forty analyses take 5 to 9 s; the bound, 1 M steps, about 0.35 s)
+    expect(r.cpuMs).toBeLessThan(800)
+  }, 30_000)
+  it('one heavy pattern over many rows is analysed once (cached by its text)', async () => {
+    const r = await attack(`const t0 = performance.now(); core.renderSpec(${spec(1, 2000)}, { limits: { maxTimeMs: 2000 } }); return performance.now() - t0`)
+    expect(r.threw, JSON.stringify(r.threw)).toBeNull()
+    expect(r.value as number).toBeLessThan(1000)
   }, 30_000)
 })
 

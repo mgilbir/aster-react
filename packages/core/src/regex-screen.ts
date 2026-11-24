@@ -40,7 +40,7 @@
  */
 
 import { TextTable } from './util.js'
-import { REGEX_MAX_INPUT, REGEX_NS_PER_UNIT, REGEX_RUN_BUDGET_MS } from './limits.js'
+import { activeMeter, limitViolation, REGEX_MAX_INPUT, REGEX_NS_PER_UNIT, REGEX_RUN_BUDGET_MS, type LimitMeter } from './limits.js'
 
 // --- character sets ---------------------------------------------------------------------------------
 
@@ -877,7 +877,35 @@ function backrefInRepeat(n: RNode, repeated: boolean): boolean {
 export interface RegexCost { readonly degree: number; readonly work: number }
 
 /** Screen one pattern tree (the pattern, or a lookaround body): the reason it is refused whatever its input, or its cost. */
-function analyse(tree: RNode, unanchored: boolean, budget: { steps: number }, searched = true): string | RegexCost {
+/**
+ * The analysis' steps: at most MAX_STEPS for one pattern (past them it is refused as too complex: a verdict, cached), and, under
+ * limits, ticked against the evaluation's clock every CLOCK_EVERY steps and counted against SCREEN_STEPS of the evaluation, all
+ * patterns together: a spec's patterns cannot add up to more analysis than its `maxTimeMs` or that bound allows. Either throws
+ * the limit error, and the pattern is refused (fail closed); an analysis cut short leaves no verdict.
+ */
+interface Budget { steps: number; since: number; tick: () => void }
+const CLOCK_EVERY = 4096
+/** Steps of analysis one evaluation may spend on all its patterns without `maxTimeMs` (about 0.35 s; the slowest generated pattern took 0.27 s to analyse). */
+export const SCREEN_STEPS = 1_000_000
+const SPENT = new WeakMap<object, { steps: number }>()
+function budgetUnder(meter: LimitMeter | null): Budget {
+  if (meter === null) return { steps: MAX_STEPS, since: 0, tick: () => {} }
+  let spent = SPENT.get(meter)
+  if (spent === undefined) SPENT.set(meter, (spent = { steps: 0 }))
+  const budget: Budget = {
+    steps: MAX_STEPS,
+    since: 0,
+    tick: () => {
+      spent.steps += budget.since
+      budget.since = 0
+      meter.clock.check('regular expression screening')
+      if (spent.steps > SCREEN_STEPS) throw limitViolation(`regexSafety: the screen's analysis of this evaluation's patterns passed ${SCREEN_STEPS} steps`)
+    },
+  }
+  return budget
+}
+
+function analyse(tree: RNode, unanchored: boolean, budget: Budget, searched = true): string | RegexCost {
   if (backrefInRepeat(tree, false)) return 'a backreference inside a repeated group'
   const A = new Automaton()
   let body = A.build(tree)
@@ -903,6 +931,7 @@ function analyse(tree: RNode, unanchored: boolean, budget: { steps: number }, se
   const step = (k = 1): void => {
     budget.steps -= k
     if (budget.steps < 0) throw new TooComplex('analysis budget')
+    if ((budget.since += k) >= CLOCK_EVERY) budget.tick()
   }
   const follow = A.follow.map((f) => [...f])
   const next = follow.map((f) => f.map(([q]) => q))
@@ -1093,7 +1122,7 @@ export function regexModel(source: string, flags = ''): string | RegexCost | nul
   }
   let verdict: string | RegexCost
   try {
-    verdict = analyse(readPattern(source, flags), flags.includes('m'), { steps: MAX_STEPS })
+    verdict = analyse(readPattern(source, flags), flags.includes('m'), budgetUnder(activeMeter()))
   } catch (e) {
     if (e instanceof Unreadable) verdict = 'the screen cannot read this pattern'
     else if (e instanceof TooComplex) verdict = 'the pattern is too complex to screen'
