@@ -2,7 +2,7 @@
 /** The comparison of the composite-mark tests: one spec through vega-lite and through Aster, on the marks, axes, scales, legends and signals, the expressions and the SVG. */
 import { expect } from 'vitest'
 import * as vl from 'vega-lite'
-import { compile } from '@aster-charts/vl'
+import { compile, VLCompileError } from '@aster-charts/vl'
 import { renderWithVega, renderWithVegaChecked } from '../src/render-vega.js'
 import { canonicalizeSvg, diffCanonical } from '../src/normalize.js'
 import { expressionDiff } from './vl-expressions.js'
@@ -16,7 +16,7 @@ export async function compare(spec: Record<string, any>): Promise<void> {
   try { oracle = (vl as any).compile(plain(spec)).spec } catch (e) { refusal = e }
   if (oracle === undefined) {
     expect(refusal).toBeInstanceOf(Error)
-    expect(() => compile(plain(spec) as never), 'vega-lite refuses this spec').toThrow()
+    expect(() => compile(plain(spec) as never), 'vega-lite refuses this spec').toThrow(VLCompileError)
     return
   }
   const ours = compile(plain(spec) as never) as Record<string, any>
