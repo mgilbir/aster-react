@@ -689,6 +689,8 @@ interface EvalContext {
   initDone: Set<string>
   /** The datasets and scales reached their fixed point: every `init` may run (see `initReady`). */
   initsSettled?: boolean
+  /** A dataset's transform threw on a signal not settled yet (see `readsUnsettledSignal`): the rounds build the datasets again. */
+  dataPending?: boolean
   /** What each signal's update read when it last ran in this pass (see `signalReadKey`): it runs again only when that changed. */
   signalRuns?: Map<string, string>
   /** Signals the host supplied for this evaluation (an `init` never overrides them). */
@@ -1057,13 +1059,22 @@ function prepareChartCtx(
       ctx.initsSettled = true
       resolveSignalUpdates(ctx, false, moved)
     }
-    changed ||= anyRead(moved, dataReads) || ctx.setData.changed
+    changed ||= anyRead(moved, dataReads) || ctx.setData.changed || ctx.dataPending === true
     if (!changed) break
+    ctx.dataPending = false
     ctx.datasets.clear()
     ctx.hierarchies.clear()
     buildDatasets(ctx, input.data ?? {})
   }
   ctx.initsSettled = true
+  if (ctx.dataPending) {
+    // (a dataset still waits on a signal: built once more with every init open, and what throws now is reported)
+    ctx.dataPending = false
+    resolveSignalUpdates(ctx)
+    ctx.datasets.clear()
+    ctx.hierarchies.clear()
+    buildDatasets(ctx, input.data ?? {})
+  }
   resolveSignalUpdates(ctx)
   buildScales(ctx)
   // A view size that is its signal's, now that everything the signal reads exists: vega-lite's step-sized band dimensions
@@ -1144,6 +1155,21 @@ export function checkHintShapes(input: RuntimeInput): void {
     if (p.changed !== undefined) indices('dataPulse', name, p.changed, '`changed`')
     if (p.from !== undefined && !Array.isArray(p.from)) refuseHint('dataPulse', name, 'but its `from` is not an array')
   }
+}
+
+/**
+ * Whether dataset `d` reads a signal that has no settled value yet in this evaluation: an `init` that has not run, or an `update` that
+ * has not run successfully (it waits for, or threw on, a scale or a dataset not made yet). Never once the rounds settled.
+ */
+function readsUnsettledSignal(ctx: EvalContext, d: CompiledChart['data'][number]): boolean {
+  if (ctx.initsSettled) return false
+  const names = new Set<string>()
+  walkStrings(dataWithoutRows(d), (str) => namesIn(str, names))
+  for (const def of ctx.chart.signalDefs ?? []) {
+    if (!names.has(def.name) || ctx.hostSignals.has(def.name)) continue
+    if (def.update === undefined ? def.init !== undefined && !ctx.initDone.has(def.name) : ctx.signalErrors?.has(def.name) === true || ctx.signalRuns?.has(def.name) !== true) return true
+  }
+  return false
 }
 
 /** Whether one of `names` is in `reads`. */
@@ -4750,13 +4776,23 @@ function buildDatasetsOf(ctx: EvalContext, inputData: Record<string, unknown[]>)
         ctx.draft.datasets.set(name, state)
       }
     } catch (e) {
-      // vega: a transform that throws is logged and the dataset publishes nothing (the rest of
-      // its pipeline never runs, so everything downstream of it is empty / never built).
-      reportEvalError(ctx, e)
-      ;(ctx.failedDatasets ??= new Set()).add(name)
-      ctx.failedFrom = Math.min(ctx.failedFrom ?? Infinity, dsRank.get(name)!)
-      rows = []
-      outPulse = null
+      if (readsUnsettledSignal(ctx, d)) {
+        // (it read a signal whose value does not exist yet in this evaluation -- an init or an update still waiting for the scales or
+        // the datasets it reads: vega runs this dataset after that signal, so the throw is one of this round, not vega's. The
+        // dataset is empty for now and the rounds build it again once the signal settled; a throw then is reported.)
+        refuseUnrecoverable(e)
+        ctx.dataPending = true
+        rows = []
+        outPulse = null
+      } else {
+        // vega: a transform that throws is logged and the dataset publishes nothing (the rest of
+        // its pipeline never runs, so everything downstream of it is empty / never built).
+        reportEvalError(ctx, e)
+        ;(ctx.failedDatasets ??= new Set()).add(name)
+        ctx.failedFrom = Math.min(ctx.failedFrom ?? Infinity, dsRank.get(name)!)
+        rows = []
+        outPulse = null
+      }
     }
     // a dataset a `force` link force reads gets its link rows rewritten (their ends become the nodes): they are this
     // evaluation's own copies, never the spec's
