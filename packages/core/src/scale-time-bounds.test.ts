@@ -26,17 +26,23 @@ async function run(spec: unknown, limits: unknown): Promise<AttackResult> {
     return { errors, length: svg.length }`)
 }
 
-function expectEnded(r: AttackResult): void {
+function expectEnded(r: AttackResult, cpuMs = CPU_MS): void {
   expect(r.killed, `child had to be killed (hang). stderr: ${r.stderr}`).toBe(false)
   expect(r.stderr, 'the child died').not.toMatch(/heap out of memory|FATAL/)
-  expect(r.cpuMs, `cpu ${r.cpuMs} ms`).toBeLessThan(CPU_MS)
+  expect(r.cpuMs, `cpu ${r.cpuMs} ms`).toBeLessThan(cpuMs)
 }
 
+/**
+ * CPU a calendar sequence may burn before it is refused: its dates are counted against the `rows` ceiling (a million, as `sequence`'s
+ * entries: a spec may legitimately ask for hundreds of thousands), and making a million Dates takes about a second.
+ */
+const SEQUENCE_CPU_MS = 8000
+
 /** Specs that must be refused, by the ceiling named (or, under a time budget, by the clock). */
-const REFUSED: Array<[string, unknown, RegExp]> = [
+const REFUSED: Array<[string, unknown, RegExp, number?]> = [
   ['scale bins with a tiny step', axis({ type: 'linear', domain: [0, 1000], bins: { step: 1e-7 } }), /range/],
-  ['utcSequence of seconds over 30 years', { signals: [{ name: 'n', update: "length(utcSequence('seconds', datetime(2000,0,1), datetime(2030,0,1)))" }] }, /time range|time ticks/],
-  ['timeSequence of milliseconds over a year', { signals: [{ name: 'n', update: "length(timeSequence('milliseconds', datetime(2000,0,1), datetime(2001,0,1)))" }] }, /time range|time ticks/],
+  ['utcSequence of seconds over 30 years', { signals: [{ name: 'n', update: "length(utcSequence('seconds', datetime(2000,0,1), datetime(2030,0,1)))" }] }, /time range|time ticks/, SEQUENCE_CPU_MS],
+  ['timeSequence of milliseconds over a year', { signals: [{ name: 'n', update: "length(timeSequence('milliseconds', datetime(2000,0,1), datetime(2001,0,1)))" }] }, /time range|time ticks/, SEQUENCE_CPU_MS],
   ['log ticks of base 1e15 near a power', axis({ type: 'log', base: 1e15, domain: [9e14, 1e15] }), /log ticks/],
   ['log ticks of base 1e7 over 300 decades', axis({ type: 'log', base: 1e7, domain: [1, 1e300] }, { tickCount: 50 }), /log ticks/],
   ['log ticks of a negative domain, base 1e12', axis({ type: 'log', base: 1e12, domain: [-1e12, -1] }), /log ticks/],
@@ -59,11 +65,11 @@ const FINISH: Array<[string, unknown]> = [
 ]
 
 describe('scale and calendar work a spec controls is bounded, with or without limits', () => {
-  for (const [name, spec, ceiling] of REFUSED) {
+  for (const [name, spec, ceiling, cpuMs] of REFUSED) {
     for (const [setting, limits] of SETTINGS) {
       it(`${name} is refused (${setting})`, async () => {
         const r = await run(spec, limits)
-        expectEnded(r)
+        expectEnded(r, cpuMs)
         expectLimit(r, limits && (limits as { maxTimeMs?: number }).maxTimeMs ? new RegExp(`${ceiling.source}|maxTimeMs`) : ceiling)
       }, T)
     }
