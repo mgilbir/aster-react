@@ -261,11 +261,13 @@ export interface Curve {
 
 /**
  * The names of the curves besides `linear` (the `curves` part of the engine, curves.ts, draws them; `monotone` is one of the two
- * monotone curves, by the mark's orientation). What the detector of the parts a spec needs (addons.ts) reads.
+ * monotone curves, by the mark's orientation: the curves have no names of their own, as in vega's table). What the detector of the
+ * parts a spec needs (addons.ts) reads. A name outside it (`monotone-x` included) names no curve: the mark is drawn in the linear
+ * one, and the bounds report the error vega's shape generator throws (bound-failure.ts).
  */
 export const CURVE_NAMES: ReadonlySet<string> = new Set([
   'linear-closed', 'basis', 'basis-closed', 'basis-open', 'bundle', 'cardinal', 'cardinal-closed', 'cardinal-open',
-  'catmull-rom', 'catmull-rom-closed', 'catmull-rom-open', 'monotone', 'monotone-x', 'monotone-y', 'natural', 'step', 'step-after', 'step-before',
+  'catmull-rom', 'catmull-rom-closed', 'catmull-rom-open', 'monotone', 'natural', 'step', 'step-after', 'step-before',
 ])
 
 const LINEAR: Curve = { run: linear, param: 0 }

@@ -622,7 +622,8 @@ const LINEAR: Curve = { run: linear, param: 0 }
  */
 export function resolveCurve(interpolate: string | undefined, orient: string | undefined, tension: number | null | undefined): Curve {
   const name = interpolate || 'linear'
-  const family = FAMILIES.get(name === 'monotone' ? (orient === 'horizontal' ? 'monotone-y' : 'monotone-x') : name)
+  // (the two monotone curves have no names of their own, as in vega's table: `monotone-x` names no curve and is drawn linear)
+  const family = FAMILIES.get(name === 'monotone' ? (orient === 'horizontal' ? 'monotone-y' : 'monotone-x') : name === 'monotone-x' || name === 'monotone-y' ? '' : name)
   if (family === undefined) return LINEAR
   const [run, dflt, takesTension] = family
   return { run, param: tension != null && takesTension ? +tension : dflt }
