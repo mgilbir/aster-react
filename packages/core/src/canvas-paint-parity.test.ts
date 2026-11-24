@@ -265,7 +265,8 @@ describe('text is drawn in the font it is measured with (C551)', () => {
       renderSceneToCanvas(scene, ctx)
       const text = recs.find((x) => x.op === 'text')
       if (text === undefined) continue // (a size of 0 draws nothing)
-      expect(text.style.split('|')[2], JSON.stringify(f)).toBe(fontString(item))
+      // (a text's style key is paint|alpha|blend|font|align|baseline|matrix|clip)
+      expect(text.style.split('|')[3], JSON.stringify(f)).toBe(fontString(item))
     }
   })
 })
