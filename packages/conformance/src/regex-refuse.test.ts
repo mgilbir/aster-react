@@ -24,7 +24,7 @@ const REFUSE = { regex: 'refuse' } as const
  * The corpus files whose spec makes a regular expression: expr-fns calls `test(datum.b > 50, ...)` (a pattern made of the text
  * `true`). t-countpattern is not one: its countpattern takes the engine's default pattern.
  */
-const REFUSED = ['expr-fns.vg.json']
+const REFUSED = new Map([['expr-fns.vg.json', ["(test(datum.b > 50, rgb('#4c78a8'), hsl(120, 1, 0.5)))"]]])
 
 const errorOf = (fn: () => unknown): Error | null => {
   try { fn() } catch (e) { return e as Error }
@@ -33,7 +33,6 @@ const errorOf = (fn: () => unknown): Error | null => {
 
 describe("limits.regex: 'refuse' over the corpus", () => {
   const files = readdirSync(CORPUS).filter((n) => n.endsWith('.json')).sort()
-  const refused: string[] = []
   // one test per file: a single loop over the corpus exceeds the 5 s default under a parallel suite
   for (const f of files) {
     it(f, async () => {
@@ -44,22 +43,22 @@ describe("limits.regex: 'refuse' over the corpus", () => {
       const plainErr = errorOf(() => evaluateChart(chart))
       const err = errorOf(() => evaluateChart(compileChart(loaded as never), { limits: REFUSE }))
       const sites = (chart as { regexSites?: readonly string[] }).regexSites ?? []
+      // (exactly the pinned files make a regex: judged per file, so it holds however the tests are run or ordered)
+      expect(sites.length > 0, `${f} ${REFUSED.has(f) ? 'is pinned as making a regex and makes none' : 'makes a regex and is not pinned'}`).toBe(REFUSED.has(f))
       if (sites.length === 0) {
         // makes none: the same document, or the same failure as without the option
         if (plainErr) expect(err?.message).toBe(plainErr.message)
         else expect(renderSceneToSvg(evaluateChart(compileChart(loaded as never), { limits: REFUSE }))).toBe(renderSceneToSvg(evaluateChart(compileChart(loaded as never))))
         return
       }
-      refused.push(f)
       expect((err as { code?: string } | null)?.code, f).toBe('ASTER_LIMIT')
       expect(err!.message, f).toContain("limits.regex: 'refuse'")
-      // each site is a regex: a call of test / regexp, a literal, or countpattern's own pattern
-      for (const s of sites) expect(s, f).toMatch(/\b_?(test|regexp)\s*\(|\/[^/]+\/[a-z]*|^countpattern (pattern|stopwords)$/)
+      // the sites are the pinned ones, word for word (a loose pattern would pass any text that holds two slashes)
+      expect([...sites], f).toEqual(REFUSED.get(f))
     })
   }
-  it('the refused files are exactly the pinned ones', () => {
-    // (runs after the per-file tests above, in file order)
-    expect(refused.sort()).toEqual(REFUSED)
+  it('the pinned files exist in the corpus', () => {
+    for (const f of REFUSED.keys()) expect(files, f).toContain(f)
   })
 })
 
