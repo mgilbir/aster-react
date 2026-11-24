@@ -228,15 +228,21 @@ forEachVariant(['svg'], (Chart, variant) => describe(`${variant.name} on the lea
     document.body.appendChild(c)
     const before = c.innerHTML
     const errors: unknown[] = []
-    let root!: ReturnType<typeof hydrateRoot>
-    act(() => { root = hydrateRoot(c, <Chart spec={LEGEND} width={300} height={200} />, { onRecoverableError: (e) => errors.push(e) }) })
-    roots.push(root)
-    // while the legend builder loads, the server's markup stays
-    expect(c.innerHTML).toBe(before)
-    await settle()
-    expect(partLoaded('legend')).toBe(true)
-    expect(errors).toEqual([])
-    expect(c.querySelector('svg')).not.toBeNull()
+    // (React reports markup that differs inside `dangerouslySetInnerHTML` with console.error only, never as a recoverable error)
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      let root!: ReturnType<typeof hydrateRoot>
+      act(() => { root = hydrateRoot(c, <Chart spec={LEGEND} width={300} height={200} />, { onRecoverableError: (e) => errors.push(e) }) })
+      roots.push(root)
+      // while the legend builder loads, the server's markup stays
+      expect(c.innerHTML).toBe(before)
+      await settle()
+      expect(partLoaded('legend')).toBe(true)
+      expect(errors).toEqual([])
+      expect(logged.mock.calls.map((a) => String(a[0]))).toEqual([])
+    } finally { logged.mockRestore() }
+    // the server's picture was this client's picture: what hydration leaves is it, drawn with the legend the lean engine loaded
+    expect(c.querySelector('svg')!.outerHTML).toBe(new DOMParser().parseFromString(before, 'text/html').querySelector('svg')!.outerHTML)
   })
 
   it('a chart that needs the parts most charts never run suspends until exactly those are there, then draws what it draws with every part', async () => {
@@ -290,14 +296,18 @@ forEachVariant(['svg'], (Chart, variant) => describe(`${variant.name} on the lea
     document.body.appendChild(c)
     const before = c.innerHTML
     const errors: unknown[] = []
-    let root!: ReturnType<typeof hydrateRoot>
-    act(() => { root = hydrateRoot(c, <Chart spec={RARE()} width={300} height={160} />, { onRecoverableError: (e) => errors.push(e) }) })
-    roots.push(root)
-    // while the parts load, the server's markup stays; once they are there it is still what the server drew
-    expect(c.innerHTML).toBe(before)
-    await settle()
-    expect(ENGINE_PARTS.filter(partLoaded)).toEqual(expect.arrayContaining(RARE_PARTS))
-    expect(errors).toEqual([])
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      let root!: ReturnType<typeof hydrateRoot>
+      act(() => { root = hydrateRoot(c, <Chart spec={RARE()} width={300} height={160} />, { onRecoverableError: (e) => errors.push(e) }) })
+      roots.push(root)
+      // while the parts load, the server's markup stays; once they are there it is still what the server drew
+      expect(c.innerHTML).toBe(before)
+      await settle()
+      expect(ENGINE_PARTS.filter(partLoaded)).toEqual(expect.arrayContaining(RARE_PARTS))
+      expect(errors).toEqual([])
+      expect(logged.mock.calls.map((a) => String(a[0]))).toEqual([])
+    } finally { logged.mockRestore() }
     expect(c.querySelector('svg')!.outerHTML).toBe(new DOMParser().parseFromString(before, 'text/html').querySelector('svg')!.outerHTML)
   })
 
