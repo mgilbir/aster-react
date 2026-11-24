@@ -167,6 +167,20 @@ export const HAND: Case[] = [
     times: [250, 450, 650, 850, 1250], clicks: [],
   },
   {
+    // a handler that assigns its signal the value the signal already has changes nothing, and still keeps the signal's own
+    // update from running in that pulse (vega: `update(op, value, {skip: true})`): `v` and `w` keep the handlers' values while
+    // what their updates read has changed (fresh, `v` would be 1 and `w` 0), whether the handler's source is a signal or an
+    // expression over one
+    id: 'hand-unchanged-assignment-skips-the-update',
+    spec: frame([
+      { name: 'k', value: 3, on: [{ events: { type: 'timer', throttle: 300 }, update: 'k % 3', force: true }] },
+      { name: 'd', update: 'k * 2' },
+      { name: 'v', update: 'd === 6 ? 0 : 1', on: [{ events: { signal: 'k' }, update: 'v' }] },
+      { name: 'w', update: '(k + k) % 5', on: [{ events: { signal: 'k || k' }, update: 'max(0, w)' }] },
+    ], ['k', 'd', 'v', 'w']),
+    times: [350, 700, 1250], clicks: [],
+  },
+  {
     // two streams that tick together are two runs, the second reading what the first left
     id: 'hand-two-timers-two-runs',
     spec: frame([

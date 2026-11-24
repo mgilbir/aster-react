@@ -460,7 +460,11 @@ same two rules at its props. The shared pieces are `packages/react/src/inputs.ts
   the component; a prop is never copied into it by an effect. The two are merged when the chart reads them. For `signals`
   (DECISIONS Q19) the merge is "the latest writer wins": the store records the tick of each event write, the component the
   tick at which each prop key last changed by content, and a key removed from the prop is released (an event's later value
-  stays, else the spec's own value returns). `Chart.signals-controlled.test.tsx` checks it against an independent model.
+  stays, else the spec's own value returns). The event loop's whole signal set is the dataflow's state and counts for every
+  signal the prop never set, not only the ones it reported changed: a handler that assigns the value a signal already has
+  reports nothing but keeps that signal's `update` from running (vega's `skip`), so the evaluation must read the loop's value
+  rather than recompute it. `Chart.signals-controlled.test.tsx` checks the merge against an independent model, and
+  `signal-dataflow-vs-vega.test.ts` the loop's values against vega.
 
 **How a failure leaves.** Every failure goes to ONE place: the error state and `onError` (the hooks' `error`, the streams'
 `onStreamError`), once per error the chart enters. The spec is normalized INSIDE the guarded evaluation (`normalizeSpecResult`

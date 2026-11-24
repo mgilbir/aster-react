@@ -122,7 +122,11 @@ function policyShape(policy: ImageUrlPolicy): Record<string, unknown> {
  * reads them).
  */
 export interface EventSignals {
-  /** The event loop's signal set as it last reported it (its internal keys included: a held derived signal's marker). */
+  /**
+   * The event loop's signal set as it last reported it: what it reported changed, and also what it holds without having changed
+   * it (a handler's assignment of the value the signal had, a derived signal it left as it was, with its internal marker), which
+   * pin those signals as vega's dataflow does. It was seeded with the chart's merged values, the prop's among them.
+   */
   readonly values: Readonly<Record<string, unknown>>
   /** When each signal an event changed was written: a tick of `clock`. */
   readonly written: Readonly<Record<string, number>>
@@ -188,8 +192,12 @@ export function useControlledSignals(signals: Readonly<Record<string, unknown>> 
     const out: Record<string, unknown> = {}
     // (an event's value counts when it was written after the prop last set the signal, or the prop never did)
     const eventWins = (name: string): boolean => Object.hasOwn(events.written, name) && (!Object.hasOwn(since, name) || events.written[name]! > since[name]!)
+    // The loop's whole set is the dataflow's state, and is the chart's for every signal the prop has never set: a value the loop
+    // holds without having reported it changed pins that signal (vega does not re-evaluate it until something pulses it), so
+    // leaving it out would have the evaluation recompute it from its `update`. For a signal the prop set, the loop's value is the
+    // prop's (the loop was seeded with it) unless an event wrote it after: then it is the event's.
     for (const [name, value] of Object.entries(events.values)) {
-      if (isLoopKey(name) || eventWins(name)) out[name] = value
+      if (isLoopKey(name) || !Object.hasOwn(since, name) || eventWins(name)) out[name] = value
     }
     if (controlled) {
       for (const [name, value] of Object.entries(controlled)) {
