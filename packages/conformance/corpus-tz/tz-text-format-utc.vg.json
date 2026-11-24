@@ -47,9 +47,7 @@
       "value": 20
      },
      "text": {
-      "signal": "datum.t",
-      "format": "%Y-%m-%d %H:%M",
-      "formatType": "utc"
+      "signal": "utcFormat(datum.t, '%Y-%m-%d %H:%M')"
      }
     }
    },
