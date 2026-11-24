@@ -69,6 +69,6 @@ const SPAN_ENDS: ReadonlyArray<readonly [end: string, start: string]> = [['x2', 
 export function spansAChannel(encoding: Record<string, unknown>): boolean {
   return SPAN_ENDS.some(([end, start]) => {
     const def = encoding[start]
-    return !!encoding[end] && isObject(def) && ((def.field !== undefined && def.bin !== 'binned' && !(isObject(def.bin) && def.bin.binned === true)) || def.datum !== undefined)
+    return !!encoding[end] && isObject(def) && ((isFieldDef(def) && def.bin !== 'binned' && !(isObject(def.bin) && def.bin.binned === true)) || def.datum !== undefined)
   })
 }

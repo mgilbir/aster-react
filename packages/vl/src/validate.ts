@@ -1154,10 +1154,10 @@ function validateEncoding(enc: unknown, path: string, where: 'unit' | 'layer', m
     if ((ch === 'row' || ch === 'column' || ch === 'facet') && where === 'layer') fail(at, 'facet channels are not allowed in a layer encoding (use the facet operator)')
     if (ch === 'detail' || ch === 'order' || ch === 'tooltip' || ch === 'href' || ch === 'description') {
       if (Array.isArray(def)) {
-        if (ch === 'href') fail(at, `${ch} cannot be an array`)
         // (vega-lite 6.4.3 reads none of an `order` written as a list - the schema takes one - and draws the chart in the order of its rows or its
         // dimension: a chart that orders by nothing it was asked to, so it is refused, as DECISIONS Q9 has it)
         if (ch === 'order') fail(at, 'order given as a list is refused: vega-lite 6.4.3 reads none of its entries and draws the chart unordered; give one order definition, or `detail` and a `sort` on the channel it orders')
+        if (ch === 'href') fail(at, `${ch} cannot be an array`)
         def.forEach((d, i) => validateChannelDef(ch, d, `${at}[${i}]`))
         continue
       }

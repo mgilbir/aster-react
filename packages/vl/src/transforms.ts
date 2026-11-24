@@ -142,6 +142,8 @@ function implicitFromFilter(filter: unknown, out: Map<string, Parse>): void {
     }
   }
   if (typeof filter.field !== 'string') return
+  // (predicate.ts isFieldPredicate: a `valid` predicate is not one - vega-lite parses nothing for it, a time unit or not)
+  if (!['equal', 'lt', 'lte', 'gt', 'gte', 'range', 'oneOf', 'in'].some((k) => filter[k] !== undefined)) return
   let val: unknown
   if (filter.equal !== undefined) val = filter.equal
   else if (filter.lte !== undefined) val = filter.lte
