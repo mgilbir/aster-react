@@ -64,6 +64,7 @@ const SPREAD_ALLOWED: AllowedSpread[] = [
   { file: 'packages/core/src/raster-image.ts', call: /fromCharCode\(\.\.\.png\.subarray\(i, i \+ 0x8000\)\)/, why: 'a 32 KiB slice' },
   { file: 'packages/core/src/expr-interpreter.ts', call: /direct\(\.\.\.values\(f\)\)|vega\[f\]!\(\.\.\.args\)|m\.apply\(obj, args\.slice\(1\)\)/, why: 'the arguments of one expression call: as many as the expression text writes' },
   { file: 'packages/core/src/runtime.ts', call: /texts\.push\(\.\.\.\[u\.expr, u\.signal\]/, why: 'two elements' },
+  { file: 'packages/core/src/runtime.ts', call: /ctx\.logger\.warn\(\.\.\.message\)/, why: 'the arguments of one warning message (vega logs a warning as several values)' },
   { file: 'packages/core/src/scale.ts', call: /register\(.*\.\.\.NUMERIC/, why: 'a module constant of scale type names' },
   { file: 'packages/core/src/scales.ts', call: /zoomed\(domain as number\[\], factor, \.\.\.(logSpace|powerSpace|symlogSpace)\(/, why: 'a pair' },
   { file: 'packages/core/src/scale-warped.ts', call: /plainDomain\(\.\.\.v\)/, why: 'a scale domain: two numbers (or a short piecewise list the spec writes)' },
