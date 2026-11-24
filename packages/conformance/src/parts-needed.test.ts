@@ -18,17 +18,43 @@ import * as vl from 'vega-lite'
 import '@aster-charts/core/geo'
 import '@aster-charts/core/transforms'
 import { loadSpecData, TRUSTED_LOAD_OPTIONS } from '@aster-charts/core/load'
-import { specNeeds } from '@aster-charts/core/lean'
+import { partLoaded, specNeeds, withdrawParts } from '@aster-charts/core/lean'
 import { compileChart, type SpecLimits, type VgSpec } from '@aster-charts/core'
-import { checkParts } from './parts-needed.testlib.js'
+import { checkLoad, checkParts } from './parts-needed.testlib.js'
 
 const CORPUS = join(dirname(fileURLToPath(import.meta.url)), '..', 'corpus')
 const CORPUS_VEGA_ONLY = join(dirname(fileURLToPath(import.meta.url)), '..', 'corpus-vega-only')
 /** Generous limits: the screen runs, nothing a corpus spec does is refused for its size. */
 const LIMITS: SpecLimits = { maxRows: 10_000_000, maxTimeMs: 600_000 }
 
+describe('the loader loads the calendar its date patterns read', () => {
+  const fetchOf = (body: string) => (async () => new Response(body, { status: 200, headers: { 'content-type': 'text/plain' } })) as unknown as typeof fetch
+  const specOf = (parse: unknown): VgSpec => ({ data: [{ name: 'd', url: 'https://example.com/d.csv', format: { type: 'csv', parse } }] }) as never
+
+  it.each([
+    ['a date: pattern', { when: 'date:%Y-%m-%d' }],
+    ['a utc: pattern', { when: 'utc:%Y-%m-%d' }],
+  ])('loads the time part for %s, from empty slots', async (_n, parse) => {
+    const restore = withdrawParts(['time'])
+    try {
+      const out = await loadSpecData(specOf(parse) as never, { fetch: fetchOf('when\n2020-03-04\n'), ...TRUSTED_LOAD_OPTIONS }) as unknown as { data: Array<{ values: Array<{ when: unknown }> }> }
+      expect(partLoaded('time')).toBe(true)
+      expect(new Date(out.data[0]!.values[0]!.when as number).toISOString().slice(0, 10)).toBe('2020-03-04')
+    } finally { restore() }
+  })
+
+  it('loads nothing for a parse that reads no date pattern', async () => {
+    const restore = withdrawParts(['time'])
+    try {
+      await loadSpecData(specOf({ n: 'number' }) as never, { fetch: fetchOf('n\n1\n'), ...TRUSTED_LOAD_OPTIONS })
+      expect(partLoaded('time')).toBe(false)
+    } finally { restore() }
+  })
+})
+
 describe('specNeeds names every part the engine reads, over the whole corpus', async () => {
   const specs: Array<{ name: string; spec: VgSpec }> = []
+  const raw: Array<{ name: string; spec: VgSpec }> = []
   for (const dir of [CORPUS, CORPUS_VEGA_ONLY]) {
     for (const f of readdirSync(dir).sort()) {
       const kind = f.endsWith('.vl.json') ? 'vl' : f.endsWith('.vg.json') ? 'vg' : null
@@ -38,11 +64,18 @@ describe('specNeeds names every part the engine reads, over the whole corpus', a
       if (kind === 'vl') {
         try { spec = vl.compile(spec as never).spec as unknown as VgSpec } catch { continue }
       }
+      raw.push({ name: f, spec })
       try { specs.push({ name: f, spec: await loadSpecData(spec as never, TRUSTED_LOAD_OPTIONS) as VgSpec }) } catch { /* a spec whose data cannot load is not a rendering case */ }
     }
   }
 
   it('covers the corpus', () => { expect(specs.length).toBeGreaterThan(900) })
+
+  it('loads a spec\'s data with the parts the loader reads, whatever is already in the page', async () => {
+    const { wrong, loaded } = await checkLoad(raw, TRUSTED_LOAD_OPTIONS)
+    expect(wrong.slice(0, 20).join('\n'), `${wrong.length} wrong`).toBe('')
+    expect(loaded).toBeGreaterThan(900)
+  }, 600_000)
 
   it('names the signal loop for every chart an interactive shell binds it for, and for few others', () => {
     // (ChartCore binds the loop when the compiled view has a signal -- any `on` stream is a signal's -- or the host listens to signals,

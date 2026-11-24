@@ -61,6 +61,13 @@ export function coerceRows(rows: Record<string, unknown>[], parse: Record<string
   })
 }
 
+/** Whether a dataset's `parse` may read a column with a date pattern (anything but `'auto'` or a table of plain types). */
+export function parsesDates(parse: unknown): boolean {
+  if (parse == null || parse === 'auto') return false
+  if (typeof parse !== 'object' || Array.isArray(parse)) return true
+  return Object.values(parse).some((t) => typeof t !== 'string' || /^\s*(date|utc)\s*:/i.test(t))
+}
+
 // -- inferring column types -------------------------------------------------------------------------------------------
 
 const isPresent = (v: unknown): boolean => v != null && v === v

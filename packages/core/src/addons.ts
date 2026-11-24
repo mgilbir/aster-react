@@ -23,6 +23,7 @@ import { parseExpression } from './expr-parser.js'
 import { parseEventSelectorString } from './event-selector.js'
 import { registeredExpressionFunctionNames } from './expression.js'
 import { checkUrlData, validateUrlDataMode, type UrlDataMode } from './url-data.js'
+import { parsesDates } from './data-format.js'
 import { dataWithoutRows, valuesSignal } from './spec-structure.js'
 import { mayDrawRandom } from './random-tape.js'
 import { ENGINE_PARTS, installPart, partLoaded, type EnginePart } from './engine-parts.js'
@@ -194,13 +195,6 @@ function namesCurve(v: unknown): boolean {
     if (keys.length === 1 && keys[0] === 'value') return typeof v.value === 'string' && CURVE_NAMES.has(v.value)
   }
   return v != null
-}
-
-/** Whether a dataset's `parse` may read a column with a date pattern (anything but `'auto'` or a table of plain types). */
-function parsesDates(parse: unknown): boolean {
-  if (parse == null || parse === 'auto') return false
-  if (!isObj(parse) || Array.isArray(parse)) return true
-  return Object.values(parse).some((t) => typeof t !== 'string' || /^\s*(date|utc)\s*:/i.test(t))
 }
 
 /** Whether a `shape` / `symbolType` value can name anything but a built-in symbol: a field, a signal, a scale, a rule, a custom path. */

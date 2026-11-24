@@ -17,6 +17,7 @@ import {
 } from '@aster-charts/core/lean'
 import { buildHitIndex } from '@aster-charts/core/lean/hit'
 import { bindSceneSignals } from '@aster-charts/core/signals'
+import { loadSpecData, type LoadOptions } from '@aster-charts/core/load'
 import type { RuntimeInput, SceneRoot, VgSpec } from '@aster-charts/core'
 import { makeRecorder } from '../../core/src/canvas-record.testlib.js'
 
@@ -182,4 +183,31 @@ export async function checkParts(specs: ReadonlyArray<{ name: string; spec: VgSp
     }
   }
   return { wrong, compared, read, named }
+}
+
+/**
+ * The loader's own reads: `loadSpecData` runs before a shell's `specNeeds` is asked (its result is what `<Chart>` is given), so the
+ * parts it reads while parsing a dataset (a `date:` pattern reads the calendar) are its to load, whichever spec came before it in the
+ * page. For each raw spec, with every part out of its slot, the load must succeed and give the rows it gives with every part in.
+ */
+export async function checkLoad(specs: ReadonlyArray<{ name: string; spec: VgSpec }>, options: LoadOptions): Promise<{ wrong: string[]; loaded: number }> {
+  const wrong: string[] = []
+  let loaded = 0
+  const copy = (spec: VgSpec): never => JSON.parse(JSON.stringify(spec)) as never
+  for (const { name, spec } of specs) {
+    await new Promise((resolve) => setImmediate(resolve))
+    let all: string
+    try { all = text(await loadSpecData(copy(spec), options)) } catch { continue } // a spec whose data cannot load says nothing about parts
+    withdrawParts(SPEC_PARTS)
+    try {
+      const lean = text(await loadSpecData(copy(spec), options))
+      loaded++
+      if (lean !== all) wrong.push(`${name}: loadSpecData from empty slots gives other data than with every part`)
+    } catch (e) {
+      wrong.push(`${name}: loadSpecData from empty slots: ${String(e).slice(0, 160)}`)
+    } finally {
+      await restoreAll()
+    }
+  }
+  return { wrong, loaded }
 }
