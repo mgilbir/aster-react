@@ -88,7 +88,7 @@ async function main(gate: Gate): Promise<void> {
 await runGate({
   name: 'scene-diff',
   counters: {
-    specs: { floor: 1063, what: "corpus specs whose resolved scene was compared with vega's scenegraph" },
+    specs: { floor: 1071, what: "corpus specs whose resolved scene was compared with vega's scenegraph" },
     // (5524 before the comparison followed marks inside group marks, C62: 141 specs compared no item at all)
     items: { floor: 8211, what: 'scene items compared (group items included)' },
     attributes: { floor: 61584, what: 'item channel values compared' },

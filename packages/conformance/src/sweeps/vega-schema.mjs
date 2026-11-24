@@ -1509,6 +1509,87 @@ function init(ctx) {
   FAMILIES = buildFamilies();
 }
 
+/**
+ * The FORMS an encode channel is written in, and the structural channels the schema sweep reaches only as one literal value
+ * (audit C74). The schema loop above writes every channel as `{value}` in `enter`, so a per-item `zindex` was the same on every
+ * item, a colour was always a string, a mark's `key` and `sort` were skipped, and a mark `zindex` was only set on the top-level
+ * mark. Each case here gives the items DIFFERING rows (overlapping marks, so the order they are painted in shows) and writes one
+ * channel in one form: `{field}`, `{signal}`, `{color: {r,g,b}}` (and h/s/l, h/c/l, l/a/b), `{gradient}`, a `key` with duplicate
+ * keys, a `zindex` on marks nested in a group (both orders, and a tie), a text drawn from a mark that has a `sort`.
+ */
+const FORM_ROWS = [
+  { k: 'a', x: 40, y: 40, z: 2, v: 1 },
+  { k: 'b', x: 62, y: 50, z: -1, v: 2 },
+  { k: 'a', x: 84, y: 60, z: 0, v: 3 },
+  { k: 'c', x: 52, y: 72, z: 1, v: 4 },
+];
+
+function formChart(marks, scales = []) {
+  return {
+    width: 160,
+    height: 110,
+    padding: 5,
+    autosize: 'none',
+    background: 'white',
+    data: [{ name: 'f', values: FORM_ROWS.map((r) => ({ ...r })) }],
+    scales: [
+      { name: 'col', type: 'ordinal', domain: ['a', 'b', 'c'], range: ['#d62728', '#1f77b4', '#2ca02c'] },
+      { name: 'seq', type: 'linear', domain: [1, 4], range: ['#ffffcc', '#800026'] },
+      ...scales,
+    ],
+    marks,
+  };
+}
+
+/** Large overlapping symbols, one per row, painted in the order the channels under test decide. */
+function formSymbols(update, mark = {}) {
+  return {
+    type: 'symbol',
+    from: { data: 'f' },
+    ...mark,
+    encode: { update: { x: { field: 'x' }, y: { field: 'y' }, size: { value: 1800 }, fill: { scale: 'col', field: 'k' }, stroke: { value: '#000000' }, ...update } },
+  };
+}
+
+function formRect(zindex, fill) {
+  return {
+    type: 'rect',
+    ...(zindex === undefined ? {} : { zindex }),
+    encode: { update: { x: { value: 10 }, y: { value: 10 }, width: { value: 60 }, height: { value: 60 }, fill: { value: fill } } },
+  };
+}
+
+export function formCases() {
+  const out = [];
+  const add = (property, name, spec) => out.push({ name: `channel-form-${property}-${name}`, family: 'channel-form', property, spec });
+  add('zindex', 'field', formChart([formSymbols({ zindex: { field: 'z' } })]));
+  add('zindex', 'signal', formChart([formSymbols({ zindex: { signal: 'datum.z' } })]));
+  add('zindex', 'signal-negated', formChart([formSymbols({ zindex: { signal: '-datum.z' } })]));
+  add('zindex', 'literal', formChart([formSymbols({ zindex: { value: 1 } })]));
+  for (const [name, color] of Object.entries({
+    rgb: { r: { field: 'x' }, g: { value: 100 }, b: { value: 40 } },
+    hsl: { h: { field: 'x' }, s: { value: 0.6 }, l: { value: 0.5 } },
+    hcl: { h: { field: 'x' }, c: { value: 40 }, l: { value: 60 } },
+    lab: { l: { field: 'x' }, a: { value: 20 }, b: { value: -30 } },
+  })) {
+    add('fill', `color-${name}`, formChart([formSymbols({ fill: { color } })]));
+  }
+  add('fill', 'gradient', formChart([formSymbols({ fill: { gradient: 'seq', start: [0, 0], stop: [1, 1] } })]));
+  add('fill', 'signal', formChart([formSymbols({ fill: { signal: "datum.k === 'a' ? '#d62728' : '#1f77b4'" } })]));
+  add('key', 'duplicate', formChart([formSymbols({}, { key: 'k' })]));
+  add('key', 'unique', formChart([formSymbols({}, { key: 'x' })]));
+  for (const [name, [first, second]] of Object.entries({ 'raised-first': [1, 0], 'raised-second': [0, 1], tie: [0, 0], negative: [-1, undefined] })) {
+    add('zindex', `mark-in-group-${name}`, formChart([{ type: 'group', marks: [formRect(first, '#d62728'), { ...formRect(second, '#1f77b4'), encode: { update: { x: { value: 40 }, y: { value: 30 }, width: { value: 60 }, height: { value: 60 }, fill: { value: '#1f77b4' } } } }] }]));
+  }
+  for (const [name, sort] of Object.entries({ ascending: { field: 'datum.x' }, descending: { field: 'datum.x', order: 'descending' }, 'by-y': { field: 'datum.y', order: 'descending' } })) {
+    add('sort', name, formChart([
+      formSymbols({}, { name: 'base', sort }),
+      { type: 'text', from: { data: 'base' }, encode: { update: { x: { field: 'x' }, y: { field: 'y' }, text: { field: 'datum.k' }, align: { value: 'center' }, baseline: { value: 'middle' } } } },
+    ]));
+  }
+  return out;
+}
+
 export function generate(ctx) {
   init(ctx);
   const cases = [];
@@ -1552,6 +1633,11 @@ export function generate(ctx) {
         cases.push({ name, family, property, spec });
       }
     }
+  }
+  // the forms and structural channels the loop above cannot write (C74)
+  for (const c of formCases()) {
+    c.name = uniqueName(used, c.name);
+    cases.push(c);
   }
   return { cases, skips };
 }
