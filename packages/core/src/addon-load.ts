@@ -18,7 +18,7 @@ import { dataFormatRegistry } from './registry.js'
 import { parsesDates, readData, type DataFormatSpec } from './data-format.js'
 import type { VgSpec } from './types.js'
 import { chartLocale, type LocaleDefinition } from './locale.js'
-import { partLoaded } from './engine-parts.js'
+import { installPart, partLoaded } from './engine-parts.js'
 import { dataInputOf, specList } from './spec-structure.js'
 import { compileExpr, type ExpressionRuntime } from './expression.js'
 import { parseExpression } from './expr-parser.js'
@@ -682,10 +682,10 @@ export async function loadSpecData<T extends VgSpec>(spec: T, opts: LoadOptions 
   try {
     // A date pattern is read with the calendar (the `time` part of the engine, engine-parts.ts). `<Chart>` asks `specNeeds` for parts only
     // for the spec this returns, so the loader loads what its own parsing reads, whatever the page has loaded before it
-    // (the part module fills its slot when it runs, once however many loads ask for it; the load is raced against the abort like every
-    // other step).
+    // (the part module fills its slot when it runs; filled from its export as well, as loadParts does, for a slot emptied since; the
+    // load is raced against the abort like every other step).
     if (!partLoaded('time') && tasks.some((t) => parsesDates(t.format?.parse))) {
-      await untilAborted(import('./part-time.js'), overall.signal)
+      installPart('time', (await untilAborted(import('./part-time.js'), overall.signal)).part)
     }
     await untilAborted(Promise.all(
       tasks.map(async (task) => {
