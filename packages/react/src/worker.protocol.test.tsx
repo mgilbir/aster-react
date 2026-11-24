@@ -318,7 +318,9 @@ describe('worker stream payloads and queue', () => {
       const { results, batches, hook } = await run('drop-newest', 2)
       expect(results).toEqual([true, true, false])
       expect(batches.map((b) => b.append.t[0]!.x)).toEqual([1, 2])
-      expect(hook().rejected()).toBe(0) // nothing was left for the worker to reject
+      // (C718: accepted()/rejected() count what push answered since mount; they were the worker's last-response values)
+      expect(hook().accepted()).toBe(2)
+      expect(hook().rejected()).toBe(1)
     })
     it('drop-oldest keeps the newest batches', async () => {
       const { results, batches } = await run('drop-oldest', 2)

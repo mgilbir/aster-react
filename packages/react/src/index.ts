@@ -50,6 +50,8 @@ export {
 } from './useChart.js'
 export {
   useChartWorker,
+  AsterWorkerTimeoutError,
+  DEFAULT_WORKER_TIMEOUT_MS,
   handleChartWorkerRequest,
   cloneableScene,
   type ChartWorkerOptions,

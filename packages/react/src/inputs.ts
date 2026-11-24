@@ -16,7 +16,7 @@
  *   copied into it. The two are merged when the chart reads them, so removing a prop's key is expressible.
  */
 import * as React from 'react'
-import type { ImageUrlPolicy } from '@aster-charts/core'
+import type { ImageUrlPolicy, Logger } from '@aster-charts/core'
 import { contentEqual, describeValue as describe, useStableContent } from './spec.js'
 
 /** The value of the last render, read by callbacks and effects that must not re-run when it changes identity. */
@@ -106,6 +106,23 @@ export function useStablePolicy(policy: ImageUrlPolicy | undefined): ImageUrlPol
     }
     return out as ImageUrlPolicy
   }, [stableShape, latest])
+}
+
+/**
+ * `logger`, stable: one proxy per "a logger is given or not", which always calls the latest logger's methods. A logger rebuilt by
+ * every render (an inline `{ error, warn }` literal) is the same input, so it never re-evaluates a chart nor re-posts a request.
+ */
+export function useStableLogger(logger: Logger | undefined): Logger | undefined {
+  const latest = useLatest(logger)
+  const given = logger != null
+  return React.useMemo<Logger | undefined>(() => (given
+    ? {
+      error: (...a) => latest.current?.error(...a),
+      warn: (...a) => latest.current?.warn(...a),
+      info: (...a) => latest.current?.info?.(...a),
+      debug: (...a) => latest.current?.debug?.(...a),
+    }
+    : undefined), [given, latest])
 }
 
 /** Marks a function member of a policy in its shape (see `useStablePolicy`). */

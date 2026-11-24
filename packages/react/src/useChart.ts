@@ -2,6 +2,7 @@ import * as React from 'react'
 import type { RuntimeInput, SceneRoot, VgSpec } from '@aster-charts/core'
 import { checkChartRows, checkSvgLength, createChartSession, renderSceneToSvg } from '@aster-charts/core/lean'
 import { normalizeSpecResult, useStableContent, useStableSpec } from './spec.js'
+import { useDataInput, useStableLogger, useStablePolicy } from './inputs.js'
 import { useAddons } from './addons.js'
 import { acquireSpecData, retainSpecData, type SpecDataOptions } from './specData.js'
 export { resetSpecDataErrors } from './specData.js'
@@ -29,11 +30,36 @@ export interface UseChartResult {
  * `serialize: false`). Identical inputs return the cached scene.
  */
 export function useChart(spec: VgSpec, options: UseChartOptions = {}): UseChartResult {
-  const { serialize = true, ...input } = options
-  // Content-stable spec and limits: an inline literal rebuilt every render must
-  // not look like a change (nor re-run the Vega-Lite compiler).
+  const { serialize = true, ...given } = options
+  // The React boundary's identity rule (inputs.ts), applied to every `RuntimeInput` field: JSON-shaped values by content, `data`
+  // by its datasets' row arrays, the logger and `urlPolicy`'s functions through a latest-ref, and the stateful objects
+  // (`random`, `textMetrics`, `dataPulse`) by identity. An inline literal rebuilt by every render evaluates nothing.
   const stableSpec = useStableSpec(spec)
-  const limits = useStableContent(input.limits)
+  const dataInput = useDataInput(given.data)
+  const input: RuntimeInput = {
+    limits: useStableContent(given.limits),
+    textMetrics: given.textMetrics,
+    urlPolicy: useStablePolicy(given.urlPolicy),
+    urlData: given.urlData,
+    data: dataInput.data,
+    width: given.width,
+    height: given.height,
+    signals: useStableContent(given.signals),
+    changedDatasets: useStableContent(given.changedDatasets),
+    dataChanges: useStableContent(given.dataChanges),
+    dataPulse: given.dataPulse,
+    autoChanges: given.autoChanges,
+    domainRaw: useStableContent(given.domainRaw),
+    logger: useStableLogger(given.logger),
+    random: given.random,
+    containerSize: useStableContent(given.containerSize),
+    measuredSize: useStableContent(given.measuredSize),
+  }
+  // Every `RuntimeInput` field is a dependency. The record below must name each key of `RuntimeInput` (the type makes a
+  // missing one a compile error), so a new engine input cannot silently leave a stale result -- nor be compared by identity
+  // when the rule says content.
+  const deps: Required<{ [K in keyof RuntimeInput]: unknown }> = input as Required<{ [K in keyof RuntimeInput]: unknown }>
+  const limits = input.limits
   // (normalized inside the guard: a value that is not a spec, a Vega-Lite spec without the compiler and a compile error are
   // the result's `error`, as an evaluation error is; see `normalizeSpecResult`)
   const { spec: normalized, error: specError } = React.useMemo(() => normalizeSpecResult(stableSpec), [stableSpec])
@@ -49,20 +75,13 @@ export function useChart(spec: VgSpec, options: UseChartOptions = {}): UseChartR
   } catch (e) {
     if (typeof process !== 'undefined') throw e
   }
-  // Every `RuntimeInput` field is a dependency. The record below must name each
-  // key of `RuntimeInput` (the type makes a missing one a compile error), so a new
-  // engine input cannot silently leave a stale result the way textMetrics,
-  // dataPulse, changedDatasets and autoChanges once did.
-  const deps: Required<{ [K in keyof RuntimeInput]: unknown }> = {
-    limits, textMetrics: input.textMetrics, urlPolicy: input.urlPolicy, urlData: input.urlData, data: input.data, width: input.width, height: input.height, signals: input.signals,
-    changedDatasets: input.changedDatasets, dataChanges: input.dataChanges, dataPulse: input.dataPulse,
-    autoChanges: input.autoChanges, domainRaw: input.domainRaw, logger: input.logger, random: input.random, containerSize: input.containerSize, measuredSize: input.measuredSize,
-  }
+  const dataError = dataInput.error
   return React.useMemo(() => {
     if (specError) return { scene: null, svg: null, error: specError, session }
+    if (dataError) return { scene: null, svg: null, error: dataError, session }
     if (addonError) return { scene: null, svg: null, error: addonError, session }
     try {
-      const scene = session.evaluate(normalized!, { ...input, limits })
+      const scene = session.evaluate(normalized!, given_(input))
       const svg = serialize ? renderSceneToSvg(scene) : null
       // Same budget as `renderSpec`: the serialized output length.
       if (svg != null && limits) checkSvgLength(svg, limits)
@@ -70,7 +89,15 @@ export function useChart(spec: VgSpec, options: UseChartOptions = {}): UseChartR
     } catch (e) {
       return { scene: null, svg: null, error: e instanceof Error ? e : new Error(String(e)), session }
     }
-  }, [normalized, specError, addonError, ...Object.values(deps), serialize, session])
+    // (`deps` names every RuntimeInput field: its values are the dependencies)
+  }, [normalized, specError, dataError, addonError, ...Object.values(deps), serialize, session])
+}
+
+/** The fields of `input` that are given (an absent field stays absent for the engine, as the caller wrote it). */
+function given_(input: RuntimeInput): RuntimeInput {
+  const out: Record<string, unknown> = {}
+  for (const [k, v] of Object.entries(input)) if (v !== undefined) out[k] = v
+  return out as RuntimeInput
 }
 
 // ---------------------------------------------------------------------------

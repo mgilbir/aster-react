@@ -17,7 +17,9 @@
  *   `postMessage`, so the wire form is the NAME of a provider registered in the
  *   worker with `registerWorkerTextMetrics`; the synchronous fallback accepts
  *   either a name or a provider object.
- * - Worker `error` / `messageerror` events end the pending request with an error.
+ * - Worker `error` / `messageerror` events name no request: they end the request in flight of each hook using the worker.
+ * - Every request has a hard deadline (`ChartWorkerOptions.timeoutMs`): a worker that misses it is terminated and, when the
+ *   hook made it, replaced (DECISIONS Q4).
  */
 import * as React from 'react'
 import {
@@ -27,11 +29,12 @@ import {
   getStreamFlushFailure,
   checkSceneLimits, checkSpecLimits, checkSvgLength, compileChart, createChartStream,
   createLimitClock, evaluateChart, renderSceneToSvg, withLimits,
-  type ChartStream, type DataPulse, type ImageUrlPolicy, type SceneRoot, type SpecLimits, type StreamBatch,
+  type ChartStream, type DataPulse, type ImageUrlPolicy, type Logger, type SceneRoot, type SpecLimits, type StreamBatch,
   type StreamOptions, type StreamPolicy, type StreamStats, type TextMetricsProvider, type UrlDataMode, type VgSpec,
 } from '@aster-charts/core'
 import { loadAddons, missingAddons, type AddonName } from '@aster-charts/core/addons'
 import { normalizeChartSpec, useStableContent, useStableSpec } from './spec.js'
+import { useDataInput } from './inputs.js'
 import { SCALE_INFO_KEY, serializeScales } from './serialScales.js'
 
 /** The build's environment, as bundlers write it in (`process.env.NODE_ENV`); `process` may not exist at all (an unbundled import). */
@@ -246,15 +249,51 @@ export function handleChartWorkerRequest(request: ChartWorkerRequest): ChartWork
 }
 
 export interface ChartWorkerOptions {
-  /** Supply a worker (e.g. from a bundler URL) or let the hook create one. */
+  /**
+   * Supply a worker (e.g. from a bundler URL). The hook does not own it: after a deadline (`timeoutMs`) it terminates it (it is
+   * running away) and cannot make another, so the hook stays in the timeout error until you pass a new `worker`. Prefer
+   * `workerFactory`, with which the hook makes a new worker itself.
+   */
   worker?: Worker | null
   /**
-   * Factory used when `worker` is omitted. Return null to force the sync path.
-   * It is called once per hook instance (and again only when `worker`
-   * changes), so an inline arrow is safe: a new factory identity does NOT
-   * recreate the worker.
+   * Factory used when `worker` is omitted: the hook owns what it returns. Return null to force the sync path.
+   * It is called once per hook instance, again when `worker` changes, and again after a deadline terminated the worker it
+   * made; an inline arrow is safe: a new factory identity does NOT recreate the worker.
    */
   workerFactory?: () => Worker | null
+  /**
+   * The hard deadline of one request to the worker (a one-shot render, a stream's start or flush), in milliseconds. Default
+   * 30 000. When it passes without an answer the worker is terminated (whatever it is doing, it is not answering: a runaway
+   * evaluation, a hung import, a crashed script), the hook's `error` is an `AsterWorkerTimeoutError`
+   * (`code: 'ASTER_WORKER_TIMEOUT'`) and `pending` is false, and a worker from `workerFactory` is replaced by a new one.
+   * Every other hook using the terminated worker ends its own request in flight with the same error. Any finite number
+   * above 0; `limits.maxTimeMs` is the friendly bound inside the worker, this is the one that holds when that one cannot.
+   */
+  timeoutMs?: number
+}
+
+/** The default of `ChartWorkerOptions.timeoutMs`. */
+export const DEFAULT_WORKER_TIMEOUT_MS = 30_000
+
+/**
+ * A worker did not answer a request within the hook's deadline (`ChartWorkerOptions.timeoutMs`) and was terminated.
+ * `code: 'ASTER_WORKER_TIMEOUT'`; `timeoutMs` is the deadline that passed.
+ */
+export class AsterWorkerTimeoutError extends Error {
+  readonly code = 'ASTER_WORKER_TIMEOUT'
+  readonly timeoutMs: number
+  constructor(timeoutMs: number, message?: string) {
+    super(message ?? `[aster] the worker did not answer within ${timeoutMs} ms and was terminated`)
+    this.name = 'AsterWorkerTimeoutError'
+    this.timeoutMs = timeoutMs
+  }
+}
+
+/** Check `timeoutMs` (a finite number above 0, or undefined for the default). @internal */
+export function workerTimeout(timeoutMs: unknown): number {
+  if (timeoutMs === undefined) return DEFAULT_WORKER_TIMEOUT_MS
+  if (typeof timeoutMs === 'number' && Number.isFinite(timeoutMs) && timeoutMs > 0) return timeoutMs
+  throw new TypeError(`[aster] timeoutMs must be a finite number of milliseconds above 0; got ${String(timeoutMs)}`)
 }
 
 export interface WorkerChartResult {
@@ -265,33 +304,84 @@ export interface WorkerChartResult {
 }
 
 /**
+ * Every hook listening to a worker, by worker: what a terminated worker owes them (their request in flight ends with the
+ * error). A worker terminated by a deadline is remembered, so a later request to it fails at once instead of waiting.
+ */
+const failures = new WeakMap<Worker, Set<(error: Error) => void>>()
+const terminated = new WeakMap<Worker, Error>()
+
+/** The error of a worker a deadline terminated, or null. @internal */
+export function terminatedError(w: Worker): Error | null {
+  return terminated.get(w) ?? null
+}
+
+/**
+ * Terminate a worker that missed a deadline, and end every request in flight on it (all hooks listening to it). @internal
+ */
+export function terminateWorker(w: Worker, error: Error): void {
+  if (terminated.has(w)) return
+  terminated.set(w, error)
+  try { w.terminate() } catch { /* already gone: the effect is the same */ }
+  for (const fail of [...(failures.get(w) ?? [])]) fail(error)
+}
+
+/** The worker a hook uses, and the means to replace it after a deadline. @internal */
+export interface WorkerInstance {
+  /** The current worker (null: none, the sync path). */
+  readonly ref: React.MutableRefObject<Worker | null>
+  /** Increments each time the hook's own worker is replaced (an effect that talks to the worker depends on it). */
+  readonly epoch: number
+  /**
+   * The current worker missed a deadline: terminate it and end every request in flight on it with `error`; a worker the hook
+   * made (`workerFactory`) is replaced, a supplied one cannot be.
+   */
+  expire: (error: Error) => void
+}
+
+/**
  * Owns the Worker for a hook: the supplied `worker`, else one made by the
- * latest `workerFactory` on mount. Returns a ref the effects below read.
- * @internal
+ * latest `workerFactory` on mount (and after a deadline). @internal
  */
 export function useWorkerInstance(
   worker: Worker | null | undefined,
   workerFactory: (() => Worker | null) | undefined,
-): React.MutableRefObject<Worker | null> {
+): WorkerInstance {
   const workerRef = React.useRef<Worker | null>(null)
   const factoryRef = React.useRef(workerFactory)
   factoryRef.current = workerFactory
+  const ownedRef = React.useRef(false)
+  const [epoch, setEpoch] = React.useState(0)
   React.useEffect(() => {
     if (worker !== undefined) {
+      ownedRef.current = false
       workerRef.current = worker
       return () => { workerRef.current = null }
     }
     const created = factoryRef.current ? factoryRef.current() : null
+    ownedRef.current = true
     workerRef.current = created
     return () => {
-      created?.terminate?.()
+      // (the worker in use now: the one made here, or its replacement after a deadline)
+      workerRef.current?.terminate?.()
       workerRef.current = null
     }
   }, [worker])
-  return workerRef
+  const expire = React.useCallback((error: Error): void => {
+    const w = workerRef.current
+    if (w == null) return
+    terminateWorker(w, error)
+    if (!ownedRef.current) return
+    workerRef.current = factoryRef.current ? factoryRef.current() : null
+    setEpoch((n) => n + 1)
+  }, [])
+  return React.useMemo(() => ({ ref: workerRef, epoch, expire }), [epoch, expire])
 }
 
-/** Message/error listeners every worker hook needs; returns the cleanup. @internal */
+/**
+ * Message/error listeners every worker hook needs; returns the cleanup. `onFailure` hears the worker's `error` and
+ * `messageerror` events (which carry no request id: the hook ends its own request in flight, if any) and its termination by
+ * another hook's deadline. @internal
+ */
 export function listenToWorker(
   w: Worker,
   onMessage: (event: MessageEvent) => void,
@@ -307,10 +397,14 @@ export function listenToWorker(
   w.addEventListener('message', onMessage as EventListener)
   w.addEventListener('error', onError)
   w.addEventListener('messageerror', onMessageError)
+  let set = failures.get(w)
+  if (!set) failures.set(w, (set = new Set()))
+  set.add(onFailure)
   return () => {
     w.removeEventListener('message', onMessage as EventListener)
     w.removeEventListener('error', onError)
     w.removeEventListener('messageerror', onMessageError)
+    set.delete(onFailure)
   }
 }
 
@@ -350,12 +444,17 @@ export function useChartWorker(spec: VgSpec, options: ChartWorkerOptions & {
   /** `'refuse'`: a spec with a url dataset is refused before any add-on loads (`RuntimeInput.urlData`); `error` is the `AsterUrlError`. */
   urlData?: UrlDataMode
 } = {}): WorkerChartResult {
-  const { worker, workerFactory, width, height, data, signals, domainRaw, limits, textMetrics, urlPolicy, urlData } = options
-  // (compared by value: an inline `{ width, height }` literal must not re-post the request on every render)
-  const csKey = options.containerSize ? `${options.containerSize.width}x${options.containerSize.height}` : ''
-  const msKey = options.measuredSize ? `${options.measuredSize.width}x${options.measuredSize.height}` : ''
-  const sizesRef = React.useRef({ containerSize: options.containerSize, measuredSize: options.measuredSize })
-  sizesRef.current = { containerSize: options.containerSize, measuredSize: options.measuredSize }
+  const { worker, workerFactory, width, height, limits, textMetrics, urlPolicy, urlData } = options
+  // The React boundary's identity rule (inputs.ts): every request input that is data is compared by content (`data` by its
+  // datasets' row arrays), so an inline `data={{ table: rows }}`, `signals={{ a: 1 }}`, `domainRaw`, `limits` or size literal
+  // rebuilt by every render posts nothing new (C72: by identity, each render posted a full clone of spec and data, and without
+  // a Worker the synchronous answer re-rendered into a loop).
+  const dataInput = useDataInput(options.data)
+  const data = dataInput.data
+  const signals = useStableContent(options.signals)
+  const domainRaw = useStableContent(options.domainRaw)
+  const containerSize = useStableContent(options.containerSize)
+  const measuredSize = useStableContent(options.measuredSize)
   const stableSpec = useStableSpec(spec)
   // The Vega spec a request handled here (no Worker) compiles to: once per spec, not once per request (a new size or data is a new
   // request for the same spec). A spec that does not compile is left to the request handler, which reports the error.
@@ -366,7 +465,11 @@ export function useChartWorker(spec: VgSpec, options: ChartWorkerOptions & {
   // re-post the request on every render.
   const stableLimits = useStableContent(limits)
   const [state, setState] = React.useState<WorkerChartResult>({ svg: null, scene: null, error: null, pending: true })
-  const workerRef = useWorkerInstance(worker, workerFactory)
+  const instance = useWorkerInstance(worker, workerFactory)
+  const workerRef = instance.ref
+  const expireRef = React.useRef(instance.expire)
+  expireRef.current = instance.expire
+  const timeoutMs = options.timeoutMs
   const idRef = React.useRef(0)
   // (development builds: the rows this hook holds across renders are checked for in-place changes, see core's row-watch.ts; the
   // worker itself cannot see one -- each request hands it a structured clone and it keeps nothing -- and a render with the same
@@ -403,12 +506,14 @@ export function useChartWorker(spec: VgSpec, options: ChartWorkerOptions & {
     }
     let request: ChartWorkerRequest
     try {
+      // (invalid `data` is the result's error, through the same channel as an evaluation error)
+      if (dataInput.error) throw dataInput.error
       request = {
         id, spec: stableSpec,
         input: {
           width, height, data, signals, domainRaw,
-          ...(sizesRef.current.containerSize ? { containerSize: sizesRef.current.containerSize } : {}),
-          ...(sizesRef.current.measuredSize ? { measuredSize: sizesRef.current.measuredSize } : {}),
+          ...(containerSize ? { containerSize } : {}),
+          ...(measuredSize ? { measuredSize } : {}),
           ...(stableLimits ? { limits: stableLimits } : {}),
           ...(textMetrics != null ? { textMetrics: wireTextMetrics(textMetrics, w != null) } : {}),
           ...(urlPolicy != null ? { urlPolicy: wireUrlPolicy(urlPolicy, w != null) } : {}),
@@ -442,20 +547,54 @@ export function useChartWorker(spec: VgSpec, options: ChartWorkerOptions & {
       )
       return () => { cancelled = true }
     }
+    let deadline: number
+    try {
+      deadline = workerTimeout(timeoutMs)
+    } catch (e) {
+      fail(e as Error)
+      return
+    }
+    const gone = terminatedError(w)
+    if (gone) {
+      // (a supplied worker a deadline terminated: nothing will answer; a new `worker` prop is the way back)
+      fail(gone)
+      return
+    }
     // A new request is in flight: surface it (keep the previous result meanwhile).
     setState((s) => (s.pending ? s : { ...s, pending: true }))
+    // `answered`: this request has its outcome (a response, a failure, the deadline). A worker `error` / `messageerror` event
+    // names no request, so it ends only a request still in flight: a hook whose answer already came is not failed by another
+    // hook's crash (C555).
+    let answered = false
+    const settle = (): boolean => {
+      if (answered) return false
+      answered = true
+      clearTimeout(timer)
+      return true
+    }
     const stop = listenToWorker(w, (event: MessageEvent<ChartWorkerResponse & { kind?: string }>) => {
       const response = event.data
       if (response == null || response.kind === 'stream' || response.id !== id) return
-      apply(response)
-    }, fail)
+      if (settle()) apply(response)
+    }, (error) => { if (settle()) fail(error) })
+    // The hard deadline (DECISIONS Q4): a worker that has not answered is terminated, replaced when the hook made it, and the
+    // request fails with a typed error. The request is not sent again by itself: it is what ran away.
+    const timer = setTimeout(() => {
+      if (!settle()) return
+      const error = new AsterWorkerTimeoutError(deadline)
+      expireRef.current(error)
+      fail(error)
+    }, deadline)
     try {
       w.postMessage(request)
     } catch (e) {
-      fail(e instanceof Error ? e : new Error(String(e)))
+      if (settle()) fail(e instanceof Error ? e : new Error(String(e)))
     }
-    return stop
-  }, [stableSpec, localSpec, width, height, csKey, msKey, data, signals, domainRaw, stableLimits, textMetricsKey, urlPolicyKey, urlData, worker, workerRef])
+    return () => {
+      clearTimeout(timer)
+      stop()
+    }
+  }, [stableSpec, localSpec, width, height, containerSize, measuredSize, data, dataInput.error, signals, domainRaw, stableLimits, textMetricsKey, urlPolicyKey, urlData, worker, workerRef, timeoutMs])
 
   return state
 }
@@ -482,9 +621,16 @@ export interface ChartWorkerStreamRequest {
     limits?: SpecLimits
     /** Registered provider name (`StreamOptions.textMetrics`). */
     textMetrics?: WorkerTextMetrics
-    initial?: Omit<NonNullable<StreamOptions['initial']>, 'textMetrics' | 'urlPolicy'> & { textMetrics?: WorkerTextMetrics; urlPolicy?: WorkerUrlPolicyInput }
+    initial?: Omit<NonNullable<StreamOptions['initial']>, 'textMetrics' | 'urlPolicy' | 'logger' | 'random'> & { textMetrics?: WorkerTextMetrics; urlPolicy?: WorkerUrlPolicyInput }
+    /**
+     * Relay what the stream's evaluations log (a logger is a function and cannot cross `postMessage`): each response carries
+     * the entries logged since the previous one, and the hook hands them to its `logger`.
+     */
+    log?: boolean
   }
   batches?: ChartWorkerBatch[]
+  /** `limits` / `textMetrics` that apply from this flush on, outside the queue (they never take a batch's place). */
+  config?: { limits?: SpecLimits; textMetrics?: WorkerTextMetrics }
   /**
    * Attach an SVG string to the response (default true). Hosts that render the
    * scene themselves send `false` and skip the per-flush serialization.
@@ -513,6 +659,44 @@ export interface ChartWorkerStreamResponse {
    * without the discard every later flush would fail with the same batch).
    */
   failure?: { batches: number; queuedRows: number; discarded: number }
+  /** What the stream's evaluations logged since the previous response (when the stream was started with `log`). */
+  logs?: WorkerLogEntry[]
+}
+
+/** One logger call made in the worker, as it crosses `postMessage`: its arguments cloned, an `Error` as `{ name, message }`. */
+export interface WorkerLogEntry {
+  level: 'error' | 'warn' | 'info' | 'debug'
+  args: unknown[]
+}
+
+/** The log entries each worker stream's logger has collected and no response has carried yet. */
+const streamLogs = new WeakMap<ChartStream, WorkerLogEntry[]>()
+
+function wireLogArg(arg: unknown): unknown {
+  if (arg instanceof Error) return { name: arg.name, message: arg.message }
+  if (arg == null || typeof arg === 'string' || typeof arg === 'number' || typeof arg === 'boolean') return arg
+  try {
+    return structuredClone(arg)
+  } catch {
+    return String(arg)
+  }
+}
+
+function collectingLogger(entries: WorkerLogEntry[]): Logger {
+  const at = (level: WorkerLogEntry['level']) => (...args: unknown[]): void => { entries.push({ level, args: args.map(wireLogArg) }) }
+  return { error: at('error'), warn: at('warn'), info: at('info'), debug: at('debug') }
+}
+
+/** Hand log entries relayed from a worker to a logger (an `Error` is rebuilt). @internal */
+export function replayWorkerLogs(entries: readonly WorkerLogEntry[] | undefined, logger: Logger | undefined): void {
+  if (!entries || !logger) return
+  for (const { level, args } of entries) {
+    const out = args.map((a) => (a != null && typeof a === 'object' && typeof (a as { message?: unknown }).message === 'string' && typeof (a as { name?: unknown }).name === 'string'
+      ? Object.assign(new Error((a as { message: string }).message), { name: (a as { name: string }).name })
+      : a))
+    const fn = logger[level]
+    if (typeof fn === 'function') fn.apply(logger, out)
+  }
 }
 
 const streamResponse = (
@@ -521,10 +705,13 @@ const streamResponse = (
   extra: Partial<ChartWorkerStreamResponse> = {},
 ): ChartWorkerStreamResponse => {
   const scene = stream?.scene() ?? null
+  const logs = stream ? streamLogs.get(stream) : undefined
+  const drained = logs && logs.length ? logs.splice(0) : undefined
   return {
     kind: 'stream',
     id: request.id,
     streamId: request.streamId,
+    ...(drained ? { logs: drained } : {}),
     ...(scene ? { scene: cloneableScene(scene) } : {}),
     ...(scene && request.serialize !== false ? { svg: renderSceneToSvg(scene) } : {}),
     ...(stream ? { pulse: stream.pulse() ?? { datasets: new Map(), structural: new Set() }, stats: stream.stats() } : {}),
@@ -554,7 +741,8 @@ export function handleChartWorkerStreamRequest(
     }
     if (request.op === 'init') {
       streams.get(request.streamId)?.close()
-      const initial = request.options?.initial
+      const logs: WorkerLogEntry[] = []
+      const initial = request.options?.log ? { ...request.options.initial, logger: collectingLogger(logs) } : request.options?.initial
       const options: StreamOptions = {
         ...(request.options?.capacity != null ? { capacity: request.options.capacity } : {}),
         ...(request.options?.maxQueuedRows != null ? { maxQueuedRows: request.options.maxQueuedRows } : {}),
@@ -564,6 +752,7 @@ export function handleChartWorkerStreamRequest(
         ...(initial ? { initial: resolveBatchInitial(initial) } : {}),
       }
       const stream = createChartStream(normalizeChartSpec(request.spec ?? {}), options)
+      streamLogs.set(stream, logs)
       streams.set(request.streamId, stream)
       try {
         stream.flush()
@@ -577,7 +766,24 @@ export function handleChartWorkerStreamRequest(
     let accepted = 0
     let rejected = 0
     try {
-      for (const batch of request.batches ?? []) {
+      // (config applies before the batches of this flush; it rides on the first one, whose own fields win, or alone when there is
+      // none, so it never costs a batch its place in the stream's queue, which is empty when a flush arrives)
+      const config = request.config
+      const batches = (request.batches ?? []).slice()
+      if (config && (config.limits || config.textMetrics != null)) {
+        const fields: ChartWorkerBatch = {
+          ...(config.limits ? { limits: config.limits } : {}),
+          ...(config.textMetrics != null ? { textMetrics: config.textMetrics } : {}),
+        }
+        if (batches.length) {
+          const first: Record<string, unknown> = { ...fields }
+          for (const [k, v] of Object.entries(batches[0]!)) if (v !== undefined) first[k] = v
+          batches[0] = first as ChartWorkerBatch
+        } else {
+          batches.push(fields)
+        }
+      }
+      for (const batch of batches) {
         if (stream.push(resolveBatch(batch))) accepted++
         else rejected++
       }
@@ -598,7 +804,9 @@ export function handleChartWorkerStreamRequest(
 function streamFailure(request: ChartWorkerStreamRequest, stream: ChartStream, error: unknown): ChartWorkerStreamResponse {
   const info = getStreamFlushFailure(error) ?? { batches: stream.stats().depth, queuedRows: stream.stats().queuedRows }
   const discarded = stream.discard()
-  return { kind: 'stream', id: request.id, streamId: request.streamId, error: wireError(error), failure: { ...info, discarded } }
+  const logs = streamLogs.get(stream)
+  const drained = logs && logs.length ? logs.splice(0) : undefined
+  return { kind: 'stream', id: request.id, streamId: request.streamId, error: wireError(error), failure: { ...info, discarded }, ...(drained ? { logs: drained } : {}) }
 }
 
 function resolveBatchInitial(
@@ -647,7 +855,8 @@ export function handleWorkerMessage(
 }
 
 /**
- * A worker message with its spec normalized to Vega (compiled once, here, not again by the handler) and the opt-in add-ons that
+ * A worker message with its spec normalized to Vega (a Vega-Lite spec is compiled here, once: the handler's own normalization of
+ * the Vega spec it then gets returns it as it is) and the opt-in add-ons that
  * spec needs and this realm has not loaded. A message without a spec, or with an invalid one (the handler reports it), needs none;
  * nor does one whose `urlData: 'refuse'` (a request's `input`, a stream's `options.initial`) refuses its url datasets: nothing is
  * imported for it, and the handler answers with the refusal.
@@ -706,18 +915,42 @@ export function createWorkerDispatcher(
 ): (message: unknown) => void {
   let waiting = 0
   let tail: Promise<void> = Promise.resolve()
+  // Every response goes out through here. A `post` that throws (a response that cannot be structured-cloned: a host-registered
+  // expression function or provider returned a function, say) answers that request with the error instead, so its hook is not
+  // left waiting, and never escapes: on the queued path an escaping throw rejected the chain and every later message waited
+  // behind it for good (C160). A post that fails twice (even the plain error cannot be sent) is reported as the worker's
+  // `error` event, from a fresh task, and the next message is handled all the same.
+  const deliver = (response: ChartWorkerResponse | ChartWorkerStreamResponse): void => {
+    try {
+      post(response)
+    } catch (error) {
+      const failed = { ...('kind' in response ? { kind: 'stream' as const, streamId: response.streamId } : {}), id: response.id, error: wireError(error) }
+      try {
+        post(failed as ChartWorkerResponse | ChartWorkerStreamResponse)
+      } catch (again) {
+        setTimeout(() => { throw again }, 0)
+      }
+    }
+  }
   return (message) => {
     const { data, missing } = prepareWorkerMessage(message)
     if (waiting === 0 && missing.length === 0) {
       const response = handleWorkerMessage(data, streams)
-      if (response != null) post(response)
+      if (response != null) deliver(response)
       return
     }
     waiting++
     tail = tail.then(async () => {
       try {
         const response = await handleWorkerMessageWithAddons(data, missing, streams)
-        if (response != null) post(response)
+        if (response != null) deliver(response)
+      } catch (error) {
+        // (the handlers answer every failure themselves; a throw here would be a bug in them, and it must not stop the queue)
+        if (isRecord(data) && isId(data.id)) {
+          deliver(data.kind === 'stream' && isId(data.streamId)
+            ? { kind: 'stream', id: data.id, streamId: data.streamId, error: wireError(error) }
+            : { id: data.id, error: wireError(error) })
+        }
       } finally {
         waiting--
       }
