@@ -8,8 +8,9 @@
  *  - the engine keeps exactly those steps (and runs the ones that read what moved), so the saving is real;
  *  - keeping them changes nothing anyone can see: datasets, signals, ids and the scene are the ones a chart that never kept a step
  *    makes, over generated charts that mix steps reading the size, steps reading signals, steps that publish signals, ids and
- *    steps that draw random numbers (the reference is a chart evaluated one-shot, which has nothing to keep, fed the same inputs
- *    from a source in the same state).
+ *    steps that draw random numbers. The hand-written cases compare with a chart evaluated one-shot (which has nothing to keep); the
+ *    generated walk compares with a second SESSION that keeps nothing (`reuse.on = false`), fed the same inputs from a source in the
+ *    same state, and its first visit also with a one-shot evaluation, the one reference that shares no engine with the session.
  */
 import { describe, it, expect } from 'vitest'
 import './addon-transforms.js'
@@ -525,9 +526,10 @@ describe('generated charts, walked through sizes, signal values and data', () =>
     }
   }
 
-  const walk = (seed: number): { checked: number; kept: number } => {
+  const walk = (seed: number): { checked: number; kept: number; unusable: number } => {
     const g = genSpec(seed)
-    if (!usable(g, rows)) return { checked: 0, kept: 0 }
+    // (a generated spec that cannot be evaluated is not dropped quietly: the generator makes only specs that can, and says so below)
+    if (!usable(g, rows)) return { checked: 0, kept: 0, unusable: 1 }
     const r = mulberry32(seed ^ 0x9e3779b9)
     const visits: Visit[] = []
     const pool = { width: [200, 260, 320], sigA: [3, 4, 5], sigB: [1, 2, 3], thr: [2, 5] }
@@ -568,20 +570,30 @@ describe('generated charts, walked through sizes, signal values and data', () =>
       reuse.on = false
       try { want = made(reference.evaluate(g.spec, input(sourcesB[v.source]!))) } catch (e) { want = `error: ${(e as Error).message}` } finally { reuse.on = true }
       if (got.out !== want) throw new Error(`seed ${seed}, visit ${i} ${JSON.stringify(v)}: the kept steps changed the output\n${g.text}\n${got.out.slice(0, 400)}\n${want.slice(0, 400)}`)
+      if (i === 0) {
+        // the first visit of a session is a one-shot evaluation: it must be what evaluateChart makes from the same source state
+        let oneShot: string
+        try { oneShot = made(evaluateChart(compileChart(g.spec), input(mulberry32(seed + 1 + v.source)))) } catch (e) { oneShot = `error: ${(e as Error).message}` }
+        if (got.out !== oneShot) throw new Error(`seed ${seed}: the first visit differs from a one-shot evaluation\n${g.text}\n${got.out.slice(0, 400)}\n${oneShot.slice(0, 400)}`)
+      }
       kept += got.reused
       checked++
     }
-    return { checked, kept }
+    return { checked, kept, unusable: 0 }
   }
 
   it(`${only ?? seeds} seeds: what is made with kept steps is what is made without`, { timeout: 300_000 }, () => {
     let checked = 0
     let kept = 0
+    let unusable = 0
     for (const seed of only !== undefined ? [only] : Array.from({ length: seeds }, (_, i) => i + 1)) {
       const w = walk(seed)
       checked += w.checked
       kept += w.kept
+      unusable += w.unusable
     }
+    // (measured over 300 seeds: all usable, 1897 visits checked, 10550 steps kept)
+    expect(unusable, 'generated specs that could not be evaluated and were left out').toBe(0)
     expect(checked).toBeGreaterThan(seeds)
     // (the generator makes charts that keep steps: a sweep that kept none would prove nothing)
     expect(kept).toBeGreaterThan(seeds)
