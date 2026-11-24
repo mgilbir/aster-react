@@ -11,10 +11,11 @@
  * until it mounts.
  */
 import * as React from 'react'
-import type { SceneRoot, SpecLimits, StreamBatch, VgSpec } from '@aster-charts/core'
+import type { SceneRoot, StreamBatch, VgSpec } from '@aster-charts/core'
 import { Chart, type ChartProps, type ChartStreamInput } from './Chart.js'
 import { positionalScales, viewToDomainRaw } from './interaction.js'
 import { normalizeSpecResult, useStableContent, useStableSpec } from './spec.js'
+import { useStableLogger } from './inputs.js'
 import {
   useChartStream,
   type StreamFlushFailureInfo,
@@ -177,41 +178,26 @@ function useInitialInput(
   }), [signals, domainRaw])
 }
 
-/** Push `limits`/`textMetrics` changes into a live stream (the first values go in `initial`). */
-function useStreamConfig<T>(
-  push: (batch: { limits?: SpecLimits; textMetrics?: T }) => boolean,
-  limits: SpecLimits | undefined,
-  textMetrics: T | undefined,
-  stream: unknown,
-): void {
-  const sent = React.useRef<{ stream: unknown; limits: unknown; textMetrics: unknown }>({ stream, limits, textMetrics })
-  React.useEffect(() => {
-    const last = sent.current
-    if (last.stream !== stream) {
-      // Rebuilt streams start from `initial`, which already carries these.
-      sent.current = { stream, limits, textMetrics }
-      return
-    }
-    const batch: { limits?: SpecLimits; textMetrics?: T } = {}
-    if (last.limits !== limits && limits) batch.limits = limits
-    if (last.textMetrics !== textMetrics && textMetrics != null) batch.textMetrics = textMetrics
-    sent.current = { stream, limits, textMetrics }
-    if (batch.limits || batch.textMetrics) push(batch)
-  }, [push, stream, limits, textMetrics])
-}
-
-/** Report an error to `onError` once per error object, even if the callback is an inline arrow. */
+/**
+ * Report a stream error once per error object, to `onStreamError` (with the failure info) and to `onError` (the prop every
+ * `<Chart>` takes; on a stream component a failure is the stream's), even if the callbacks are inline arrows.
+ */
 function useReportOnce(
   error: Error | null,
   failure: StreamFlushFailureInfo | null,
-  onError: StreamErrorHandler | undefined,
+  onStreamError: StreamErrorHandler | undefined,
+  onError: ((error: Error) => void) | undefined,
 ): void {
+  const onStreamErrorRef = React.useRef(onStreamError)
+  onStreamErrorRef.current = onStreamError
   const onErrorRef = React.useRef(onError)
   onErrorRef.current = onError
   const failureRef = React.useRef(failure)
   failureRef.current = failure
   React.useEffect(() => {
-    if (error) onErrorRef.current?.(error, failureRef.current ?? undefined)
+    if (!error) return
+    onStreamErrorRef.current?.(error, failureRef.current ?? undefined)
+    onErrorRef.current?.(error)
   }, [error])
 }
 
@@ -229,30 +215,33 @@ function useNormalizedSpec(spec: VgSpec): VgSpec {
 export const ChartStream = React.forwardRef<ChartStreamHandle, ChartStreamProps>(
   function ChartStream({
     spec, streamOptions, onStreamError, width, height, className, style,
-    limits, textMetrics, urlPolicy, urlData, signals, view, ...chartProps
+    limits, textMetrics, urlPolicy, urlData, signals, view, random, onError, ...chartProps
   }, ref) {
     const size = useSizeBatch(width, height)
     const stableLimits = useStableContent(limits)
     const initialInput = useInitialInput(spec, signals, view)
     const vgSpec = useNormalizedSpec(spec)
+    // (the stream's evaluations report to the chart's logger, as <Chart>'s do, through a latest-ref)
+    const logger = useStableLogger(chartProps.logger)
     const stream = useChartStream(vgSpec, {
       ...streamOptions,
       serialize: false,
+      // (`limits` and `textMetrics` follow their props: the hook takes a change to the live stream)
+      ...(stableLimits ? { limits: stableLimits } : {}),
+      ...(textMetrics ? { textMetrics } : {}),
       initial: {
         ...(streamOptions?.initial ?? {}),
         ...size,
         ...(initialContainer(size) ? { containerSize: initialContainer(size) } : {}),
-        ...(stableLimits ? { limits: stableLimits } : {}),
-        ...(textMetrics ? { textMetrics } : {}),
         ...(urlPolicy ? { urlPolicy } : {}),
         ...(urlData !== undefined ? { urlData } : {}),
-        // (the stream's evaluations report to the chart's logger, as <Chart>'s do)
-        ...(chartProps.logger ? { logger: chartProps.logger } : {}),
+        ...(logger ? { logger } : {}),
+        // (the stream evaluates, not the inner <Chart>: `random` is the stream's source of random numbers, C272)
+        ...(random ? { random } : {}),
         ...initialInput,
       },
     })
     useSyncSize(stream.push, size)
-    useStreamConfig(stream.push, stableLimits, textMetrics, stream.stream)
     const onStreamInput = useStreamInput(stream.stream, stream.push, initialContainer(size))
     const { push, flush, pending, pulse, stats, stream: coreStream } = stream
     React.useImperativeHandle(ref, () => ({
@@ -265,7 +254,7 @@ export const ChartStream = React.forwardRef<ChartStreamHandle, ChartStreamProps>
       close: () => coreStream.close(),
     }), [push, flush, pending, pulse, stats, coreStream])
 
-    useReportOnce(stream.error, stream.flushFailure, onStreamError)
+    useReportOnce(stream.error, stream.flushFailure, onStreamError, onError)
 
     if (stream.error) {
       return <div role="alert" className={className} style={style} title={stream.error.message}>{stream.error.message}</div>
@@ -277,7 +266,7 @@ export const ChartStream = React.forwardRef<ChartStreamHandle, ChartStreamProps>
       <Chart
         {...chartProps}
         spec={vgSpec} width={width} height={height} className={className} style={style}
-        signals={signals} view={view}
+        signals={signals} view={view} onError={onError}
         sceneOverride={stream.scene} onStreamInput={onStreamInput}
       />
     )
@@ -287,7 +276,7 @@ export const ChartStream = React.forwardRef<ChartStreamHandle, ChartStreamProps>
 export const ChartWorkerStream = React.forwardRef<ChartStreamHandle, ChartWorkerStreamProps>(
   function ChartWorkerStream({
     spec, streamOptions, onStreamError, width, height, className, style,
-    limits, textMetrics, urlPolicy, urlData, signals, view, ...chartProps
+    limits, textMetrics, urlPolicy, urlData, signals, view, random, onError, ...chartProps
   }, ref) {
     const size = useSizeBatch(width, height)
     const stableLimits = useStableContent(limits)
@@ -296,19 +285,23 @@ export const ChartWorkerStream = React.forwardRef<ChartStreamHandle, ChartWorker
     const stream = useChartWorkerStream(vgSpec, {
       ...streamOptions,
       serialize: false,
+      // (`limits` and `textMetrics` follow their props: the hook takes a change to the live stream)
+      ...(stableLimits ? { limits: stableLimits } : {}),
+      ...(textMetrics ? { textMetrics } : {}),
       initial: {
         ...(streamOptions?.initial ?? {}),
         ...size,
         ...(initialContainer(size) ? { containerSize: initialContainer(size) } : {}),
-        ...(stableLimits ? { limits: stableLimits } : {}),
-        ...(textMetrics ? { textMetrics } : {}),
         ...(urlPolicy ? { urlPolicy } : {}),
         ...(urlData !== undefined ? { urlData } : {}),
+        // (the stream's evaluations log to the chart's logger, relayed from the worker; `random` is the stream's, and cannot
+        // cross to a worker: with one it is refused with an error, without one it is used, C272)
+        ...(chartProps.logger ? { logger: chartProps.logger } : {}),
+        ...(random ? { random } : {}),
         ...initialInput,
       },
     })
     useSyncSize(stream.push, size)
-    useStreamConfig<WorkerTextMetrics>(stream.push, stableLimits, textMetrics, stream.generation)
     const onStreamInput = useStreamInput(stream.generation, stream.push, initialContainer(size))
     // The handle's `scene()` must read the latest scene without being rebuilt per frame.
     const sceneRef = React.useRef(stream.scene)
@@ -324,7 +317,7 @@ export const ChartWorkerStream = React.forwardRef<ChartStreamHandle, ChartWorker
       close,
     }), [push, flush, pulse, stats, close])
 
-    useReportOnce(stream.error, stream.flushFailure, onStreamError)
+    useReportOnce(stream.error, stream.flushFailure, onStreamError, onError)
 
     if (stream.error) {
       return <div role="alert" className={className} style={style} title={stream.error.message}>{stream.error.message}</div>
@@ -336,7 +329,7 @@ export const ChartWorkerStream = React.forwardRef<ChartStreamHandle, ChartWorker
       <Chart
         {...chartProps}
         spec={vgSpec} width={width} height={height} className={className} style={style}
-        signals={signals} view={view}
+        signals={signals} view={view} onError={onError}
         sceneOverride={stream.scene} onStreamInput={onStreamInput}
       />
     )

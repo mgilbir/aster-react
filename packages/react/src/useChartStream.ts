@@ -21,7 +21,7 @@ import type {
 } from '@aster-charts/core'
 import { renderSceneToSvg } from '@aster-charts/core/lean'
 import { createChartStream, getStreamFlushFailure } from '@aster-charts/core/lean/stream'
-import { normalizeSpecResult, useStableSpec } from './spec.js'
+import { normalizeSpecResult, useStableContent, useStableSpec } from './spec.js'
 import { useAddons } from './addons.js'
 
 export interface UseChartStreamOptions extends StreamOptions {
@@ -61,11 +61,11 @@ export interface UseChartStreamResult {
   pending: () => DataPulse
   pulse: () => DataPulse | null
   stats: () => StreamStats
-  /** Pause/resume the automatic microtask flush (the queue keeps filling). */
+  /** Pause/resume the automatic microtask flush (the queue keeps filling). Kept across a rebuilt stream. */
   paused: boolean
   pause: () => void
   resume: () => void
-  /** Stop accepting batches and drop the queue. */
+  /** Stop accepting batches and drop the queue (this stream: one rebuilt later, after a spec change, is open). */
   close: () => void
   /** The underlying stream (stable until the spec CONTENT, `capacity`, `policy` or `maxQueuedRows` changes). */
   stream: ChartStream
@@ -93,14 +93,19 @@ interface TaggedState extends StreamState {
 /**
  * The stream is keyed on the spec CONTENT, `capacity`, `policy`, `maxQueuedRows` and `initial.urlData`: a parent
  * re-render that hands in an equal (but new) inline `spec` keeps the stream and
- * the rows streamed into it. The rest of `initial` is read when the stream is created.
+ * the rows streamed into it. The rest of `initial` is read when the stream is created. `limits` (by content) and
+ * `textMetrics` changes reach the live stream from the next flush (a stream cannot go back to no text metrics: removing
+ * them keeps the last; removing `limits` applies `{}`). A replaced stream, and the stream of an unmounted hook, is closed:
+ * a push through it answers `false`.
  *
  * The first scene is primed synchronously while the stream is created, so a
  * server render (where no effect runs) already contains the chart.
  */
 export function useChartStream(spec: VgSpec, options: UseChartStreamOptions = {}): UseChartStreamResult {
-  const { serialize = true, autoFlush = true, flushPolicy = 'microtask', capacity, policy, initial, maxQueuedRows, limits, textMetrics } = options
+  const { serialize = true, autoFlush = true, flushPolicy = 'microtask', capacity, policy, initial, maxQueuedRows, textMetrics } = options
   const stableSpec = useStableSpec(spec)
+  // (`limits` by content: an inline literal is no change; a change reaches the live stream, see below)
+  const limits = useStableContent(options.limits)
   // Normalized inside the guard: a value that is not a spec, a Vega-Lite spec without the compiler or one it refuses is the
   // result's `error` (and `<ChartStream>`'s `onStreamError`), never a throw from render. Such a stream is made over an empty
   // spec (a new one per failure, so another failure makes another stream) and stays in that error.
@@ -111,8 +116,9 @@ export function useChartStream(spec: VgSpec, options: UseChartStreamOptions = {}
   const urlData = initial?.urlData
   // The add-ons the spec needs load before the stream is created (and primed): suspends meanwhile; a failed import is `error`.
   // With `urlData: 'refuse'` a spec with a url dataset is refused first, before any import.
-  const addonError = useAddons(normalizedResult.spec, urlData, { limits: limits != null })
+  const addonError = useAddons(normalizedResult.spec, urlData, { limits: limits != null, random: initial?.random != null })
   const streamRef = React.useRef<ChartStream | null>(null)
+  const configRef = React.useRef<{ sent: { limits: StreamOptions['limits']; textMetrics: StreamOptions['textMetrics'] }; pending: StreamBatch | null }>({ sent: { limits, textMetrics }, pending: null })
   const streamKey = React.useRef<{ spec: VgSpec; capacity?: number; policy?: StreamOptions['policy']; maxQueuedRows?: number; urlData?: UrlDataMode } | null>(null)
   const primedRef = React.useRef<TaggedState | null>(null)
   if (
@@ -131,6 +137,8 @@ export function useChartStream(spec: VgSpec, options: UseChartStreamOptions = {}
     })
     streamRef.current = created
     streamKey.current = { spec: normalized, capacity, policy, maxQueuedRows, urlData }
+    // (what the new stream was made with: a later change of `limits` / `textMetrics` is measured from here)
+    configRef.current = { sent: { limits, textMetrics }, pending: null }
     let primed: StreamState
     try {
       if (specError) throw specError
@@ -150,22 +158,44 @@ export function useChartStream(spec: VgSpec, options: UseChartStreamOptions = {}
   const mounted = React.useRef(true)
   const scheduled = React.useRef(false)
   const lastFlush = React.useRef<StreamFlush | null>(null)
+  // `paused` is the hook's (a host's choice about automatic flushing): kept across a rebuilt stream. Closing is the stream's.
   const [paused, setPaused] = React.useState(false)
   const pausedRef = React.useRef(false)
   const frameRef = React.useRef<number | null>(null)
+  const stateRef = React.useRef(state)
+  stateRef.current = state
+
+  /** Cancel a pending animation frame; nothing is scheduled afterwards (C159: a cancelled frame left `scheduled` set for good). */
+  const cancelFrame = (): void => {
+    if (frameRef.current != null && typeof cancelAnimationFrame === 'function') cancelAnimationFrame(frameRef.current)
+    frameRef.current = null
+    scheduled.current = false
+  }
 
   React.useEffect(() => {
     mounted.current = true
     return () => {
       mounted.current = false
-      if (frameRef.current != null && typeof cancelAnimationFrame === 'function') cancelAnimationFrame(frameRef.current)
-      frameRef.current = null
+      cancelFrame()
     }
+    // (cancelFrame only reads refs)
   }, [])
+
+  // A stream that is replaced (a new spec content, capacity, ...) or whose hook unmounts is closed: a push through a stale
+  // handle answers `false` and its queue is released (C506). Decided one microtask after the cleanup, so StrictMode's re-run of
+  // the effects, which keeps the same stream, does not close it.
+  React.useEffect(() => () => {
+    queueMicrotask(() => {
+      if (!mounted.current || streamRef.current !== stream) stream.close()
+    })
+  }, [stream])
 
   const commit = React.useCallback((result: StreamFlush | null): StreamFlush | null => {
     lastFlush.current = result
     if (result) {
+      // (a no-op flush returns the scene already shown: no state update, so a flush() called from an effect cannot loop, C632)
+      const shown = stateRef.current
+      if (result.noop && shown.scene === result.scene && shown.error === null) return result
       setState({
         stream,
         scene: result.scene,
@@ -177,11 +207,26 @@ export function useChartStream(spec: VgSpec, options: UseChartStreamOptions = {}
     return result
   }, [serialize, stream])
 
+  /** Put a changed `limits` / `textMetrics` on the queue, where it applies to the next flush; returns whether it is queued. */
+  const queueConfig = React.useCallback((): boolean => {
+    const config = configRef.current.pending
+    if (config == null) return true
+    const st = stream.stats()
+    // (it never takes a data batch's place: under drop-oldest that would discard rows, under drop-newest refuse the config)
+    if (st.policy !== 'coalesce' && st.depth >= st.capacity) return false
+    if (!stream.push(config)) return false
+    configRef.current.pending = null
+    return true
+  }, [stream])
+
   const flush = React.useCallback((): StreamFlush | null => {
     // (a stream over a spec that could not be normalized has nothing to draw: it keeps its error)
     if (specError) return null
     try {
-      const result = stream.flush()
+      // a queue full of data batches is applied first, and the config is queued for the flush after it
+      const queued = queueConfig()
+      let result = stream.flush()
+      if (!queued && queueConfig()) result = stream.flush() ?? result
       if (result) return commit(result)
       // Already primed (or a no-op tick): expose the last scene so callers can
       // use flush() as a "latest frame" accessor.
@@ -201,7 +246,7 @@ export function useChartStream(spec: VgSpec, options: UseChartStreamOptions = {}
       if (mounted.current) setState((s) => ({ ...(s != null && s.stream === stream ? s : primedRef.current!), ...failed }))
       return null
     }
-  }, [commit, stream, specError])
+  }, [commit, stream, specError, queueConfig])
 
   const flushRef = React.useRef(flush)
   flushRef.current = flush
@@ -226,6 +271,23 @@ export function useChartStream(spec: VgSpec, options: UseChartStreamOptions = {}
     }
   }, [autoFlush, flushPolicy])
 
+  // `limits` (by content) and `textMetrics` changes reach the live stream (C296): queued for the next flush, which a `limits`
+  // change schedules. A textMetrics provider is compared by identity, so it only rides on a flush that happens anyway: an inline
+  // provider object rebuilt by every render must not flush on every render.
+  React.useEffect(() => {
+    const config = configRef.current
+    const sent = config.sent
+    if (sent.limits === limits && sent.textMetrics === textMetrics) return
+    const next: StreamBatch = { ...config.pending }
+    if (sent.limits !== limits) next.limits = limits ?? {}
+    if (sent.textMetrics !== textMetrics && textMetrics != null) next.textMetrics = textMetrics
+    config.sent = { limits, textMetrics }
+    if (next.limits === undefined && next.textMetrics === undefined) return
+    config.pending = next
+    queueConfig()
+    if (sent.limits !== limits) schedule()
+  }, [limits, textMetrics, queueConfig, schedule])
+
   const push = React.useCallback((batch: StreamBatch): boolean => {
     const accepted = stream.push(batch)
     if (accepted) schedule()
@@ -243,12 +305,11 @@ export function useChartStream(spec: VgSpec, options: UseChartStreamOptions = {}
     schedule()
   }, [schedule])
 
+  /** Close this stream (it refuses pushes and drops its queue); a stream rebuilt later is open. It does not pause the hook. */
   const close = React.useCallback((): void => {
-    pausedRef.current = true
-    setPaused(true)
-    if (frameRef.current != null && typeof cancelAnimationFrame === 'function') cancelAnimationFrame(frameRef.current)
-    frameRef.current = null
+    cancelFrame()
     stream.close()
+    // (cancelFrame only reads refs)
   }, [stream])
 
   // Stable identities (per stream), so a consumer can list them as dependencies.

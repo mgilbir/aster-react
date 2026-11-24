@@ -201,4 +201,3 @@ export function retainSpecData(load: Load): () => void {
   }
 }
 
-export type { Load as SpecDataLoad }
