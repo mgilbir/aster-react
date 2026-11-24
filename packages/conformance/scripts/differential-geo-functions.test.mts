@@ -89,6 +89,27 @@ describe('geo expression functions vs real vega (live)', () => {
       }
     }
   })
+  // vega's `copy(projection)` is a copy of the projection that every function taking a projection takes in place of its name (C291;
+  // the zoomable world map drags with `invert(copy('projection'), xy())`)
+  it('a copy of a projection stands for it in scale, invert, range, bandwidth, copy and the geo functions', async () => {
+    const uses = [
+      "scale(copy(a), [-100, 40])", "invert(copy(a), [120, 80])", "range(copy(a))", "bandwidth(copy(a))", "geoScale(copy(a))",
+      "geoArea(copy(a), b)", "geoBounds(copy(a), b)", "geoCentroid(copy(a), b)", "invert(copy(copy(a)), [10, 20])",
+      "copy(a) ? 1 : 0", "copy(a) === copy(a)", "isObject(copy(a))", "isValid(copy(a))", "isArray(copy(a))",
+    ]
+    let compared = 0
+    for (const code of uses) {
+      for (const proj of [...PROJECTIONS.map((p) => p.name), 'nope']) {
+        for (const g of GEO.slice(0, 5)) {
+          const want = await viaVega(code, [proj, g])
+          expect(viaAster(code, [proj, g]), `${code} ${proj} ${JSON.stringify(g)}`).toEqual(want)
+          if (want !== null && (want as { $?: string }).$ !== 'throw') compared++
+        }
+      }
+    }
+    expect(compared).toBeGreaterThan(200)
+  })
+
   it('geoScale(projection)', async () => {
     for (const proj of [...PROJECTIONS.map((p) => p.name), 'nope', null, undefined]) {
       expect(viaAster('geoScale(a)', [proj]), `geoScale ${String(proj)}`).toEqual(await viaVega('geoScale(a)', [proj]))

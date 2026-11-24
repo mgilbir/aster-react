@@ -272,7 +272,8 @@ function walkSpec(spec: Json, refuseUrls: boolean, hostSignals?: Readonly<Record
     }
     if ((Object.hasOwn(node, 'shape') && customShape(node.shape)) || (Object.hasOwn(node, 'symbolType') && customShape(node.symbolType))) found.parts.add('svgpath')
     if (key === 'transform' && typeof node.type === 'string') {
-      if (node.type === 'contour') found.addons.add('geo')
+      // (a geoshape draws through the geo add-on with or without a projection: with none, through its default path)
+      if (node.type === 'contour' || node.type === 'geoshape') found.addons.add('geo')
       else if (TRANSFORM_TYPES.has(node.type)) {
         found.addons.add('transforms')
         // isocontour runs the geo add-on's contour engine; a geopath with no projection draws with its default path

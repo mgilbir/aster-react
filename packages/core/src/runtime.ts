@@ -11,7 +11,7 @@ import { scaleCallFailure, scaleRangeFailure } from './missing-scale.js'
 import { ingestRows, isNotATupleError, notATuple, readData, type DataFormatSpec } from './data-format.js'
 import { followsSources, numbersSourceRows, orderOf, setOrder, setSources, sourcesAfter, sourcesOf } from './tuple-order.js'
 import { alignIndices, carryByAlignment, carryBySources, sourceNumbersOf, type IdCounter, type SourceNumbers } from './identifier-ids.js'
-import { applyTransforms, applyTransformsToSharedRows, copiesRows, rowUseOf, sortOrder, getField, geoJSONPath, type Row, type TransformContext } from './transform.js'
+import { applyTransforms, applyTransformsToSharedRows, copiesRows, rowUseOf, sortOrder, getField, type Row, type TransformContext } from './transform.js'
 import { fieldOf, flatKeyFn, groupKeyFn } from './row-keys.js'
 import { atRandomSite, contentKey, mayDrawRandom, normalPairs, replayable } from './random-tape.js'
 import { autosizeOf as autosizeValueOf, paddingOf, type Autosize, type AutosizeType, type Padding } from './view-props.js'
@@ -1044,7 +1044,8 @@ function prepareChartCtx(
     ctx.readsMemo = undefined
     buildScales(ctx)
   }
-  buildProjections(ctx)
+  // (the last build: every dataset and scale a parameter can read exists, so what one throws is an error, not "not yet")
+  buildProjections(ctx, true)
   // (a view size that is the signal that threw is the signal's value, none: 0)
   const threw = abortAtThrowingSignal(ctx)
   if (threw === 'width') { width = 0; ctx.width = 0 }
@@ -1180,13 +1181,21 @@ function ctxFpOf(ctx: EvalContext): string {
  * (also inside arrays, e.g. a `clipExtent`) replaced by its value. `fit` may be a
  * GeoJSON object itself (left as is) or a signal such as `data("source_0")`.
  */
-function resolveProjectionParam(ctx: EvalContext, v: unknown): unknown {
-  if (Array.isArray(v)) return v.map((x) => resolveProjectionParam(ctx, x))
+function resolveProjectionParam(ctx: EvalContext, v: unknown, strict: boolean, depth = 0): unknown {
+  if (Array.isArray(v)) return v.map((x) => resolveProjectionParam(ctx, x, strict, depth + 1))
   if (v && typeof v === 'object' && typeof (v as { signal?: unknown }).signal === 'string') {
+    const expr = (v as { signal: string }).signal
     try {
-      return ctx.runtime.expr((v as { signal: string }).signal)({}, ctx.signalParams)
-    } catch {
-      // The signal reads a dataset or scale that does not exist yet; the next pass resolves it.
+      return ctx.runtime.expr(expr)({}, ctx.signalParams)
+    } catch (e) {
+      // In an early pass the signal may read a dataset or scale that does not exist yet: the next pass resolves it. In the last,
+      // everything it can read exists, and what it throws is an error (C153): it stops the pass at the projection, as vega's operator
+      // does. Except a signal two lists deep (a `clipExtent` corner) that reads a dataset or a scale: vega's operator does not depend
+      // on one so deep (it never resolves it, a deviation docs/ARCHITECTURE.md lists), and the signal, ranked after the dataflow it
+      // reads, fails after the marks are made: what it throws is logged and the projection made without it.
+      if (!strict) return undefined
+      if (depth < 2 || !DATA_DEPENDENT_EXPR.test(lexedText(expr))) throw e
+      reportEvalError(ctx, e)
       return undefined
     }
   }
@@ -1194,24 +1203,25 @@ function resolveProjectionParam(ctx: EvalContext, v: unknown): unknown {
 }
 
 /** Build the projection one compiled definition describes, in the current context. */
-function buildProjectionOf(ctx: EvalContext, p: CompiledProjection): unknown {
+function buildProjectionOf(ctx: EvalContext, p: CompiledProjection, strict = false): unknown {
   const build = requireGeo() // throws an actionable error if the geo addon is absent
   // (the type is a parameter like any other: `type: {signal: "projectionName"}`)
-  const resolved: Record<string, unknown> = dict<unknown>({ name: p.name, type: resolveProjectionParam(ctx, p.type) })
+  const resolved: Record<string, unknown> = dict<unknown>({ name: p.name, type: resolveProjectionParam(ctx, p.type, strict) })
   for (const k of Object.keys(p)) {
     if (k === 'name' || k === 'type') continue
-    resolved[k] = resolveProjectionParam(ctx, p[k])
+    resolved[k] = resolveProjectionParam(ctx, p[k], strict)
   }
   // A fit over several sources (`[data('a'), geojson_0]`) is not resolvable until every source exists
-  // (vega's dataflow runs the geojson transform first): the next pass resolves it.
+  // (vega's dataflow runs the geojson transform first): the next pass resolves it. In the last pass a missing member is the spec's
+  // own (`fit: [null, feature]`), and the fit reads it as vega's does (`Cannot read properties of null (reading 'type')`).
   let incomplete = p.fit != null && resolved.fit == null
-  if (Array.isArray(resolved.fit) && resolved.fit.some((f) => f == null)) {
+  if (!strict && Array.isArray(resolved.fit) && resolved.fit.some((f) => f == null)) {
     resolved.fit = undefined
     incomplete = true
   }
   if (incomplete) ctx.projectionIncomplete.add(p.name)
   else ctx.projectionIncomplete.delete(p.name)
-  return build(resolved as never, ctx.width, ctx.height)
+  return build(resolved as never)
 }
 
 /**
@@ -1220,12 +1230,12 @@ function buildProjectionOf(ctx: EvalContext, p: CompiledProjection): unknown {
  * passes: such a projection is rebuilt whenever the set of built datasets has
  * changed since (see `refreshProjection`), and once more at the end of preparation.
  */
-function buildProjections(ctx: EvalContext): void {
+function buildProjections(ctx: EvalContext, last = false): void {
   ctx.projectionError = undefined
   if (!ctx.chart.projections?.length) return
   for (const p of ctx.chart.projections) {
     try {
-      ctx.projections.set(p.name, buildProjectionOf(ctx, p))
+      ctx.projections.set(p.name, buildProjectionOf(ctx, p, last))
     } catch (e) {
       // (vega's Projection transform throws; see abortAtThrowingProjection)
       if (e instanceof Error && e.message.startsWith('[aster]')) throw e
@@ -1268,7 +1278,7 @@ function scopedProjections(mark: CompiledMark, ctx: EvalContext, params: Record<
   const inScope = { ...ctx, signalParams: params }
   for (const p of mark.projections) {
     try {
-      registry.set(p.name, buildProjectionOf(inScope, p))
+      registry.set(p.name, buildProjectionOf(inScope, p, true))
     } catch (e) {
       // (vega logs the one error that stopped the pass; what the pass would have found after it never ran)
       refuseUnrecoverable(e)
@@ -5854,28 +5864,19 @@ function markItemsOf(
     for (const it of items) { if ((it as Record<string, unknown>).size == null) (it as Record<string, unknown>).size = 2 }
   }
 
-  // Shape/geoshape marks: turn the GeoJSON-derived path (from a geoshape
-  // transform or from the datum itself) into a rendered path item.
-  if (mark.type === 'shape' || mark.type === 'geoshape') {
+  // A shape mark draws the shape its items hold (`shape`: a mark geoshape transform's, or the encode's), as vega's does; an item
+  // with none is vega's renderer failing on it, reported once. (Neither the datum's `shape` / `path` nor a `geoshape` mark type is a
+  // shape: vega draws neither.)
+  if (mark.type === 'shape') {
+    let missing = false
     for (const it of items) {
-      const datum = (it as { datum?: Row }).datum
-      if (!datum) continue
-      let path: string | undefined
       const own = (it as { shape?: unknown }).shape
-      if (typeof own === 'string') {
-        // the path a geoshape transform wrote on the item
-        path = own
-      } else if (mark.type === 'geoshape' && typeof datum.shape !== 'string') {
-        // Raw geoshape mark: the datum itself is the GeoJSON geometry.
-        path = geoJSONPath(datum)
-      } else {
-        // The path may come from a geoshape transform of the data (datum.shape)
-        // or from a `path` data field on a shape mark.
-        const shape = datum.shape
-        path = typeof shape === 'string' ? shape : (typeof datum.path === 'string' ? datum.path : undefined)
-      }
-      if (path !== undefined) it.path = path
+      if (typeof own === 'string') it.path = own
+      else missing = true
     }
+    // (a mark whose geoshape transform failed has its own error, reported where the transform failed)
+    const shapes = mark.transform?.some((t) => (t as { type?: unknown }).type === 'geoshape') === true
+    if (missing && !shapes) reportEvalError(ctx, new TypeError("Cannot read properties of undefined (reading 'context')"))
   }
 
   // (the URLs of the items went through the URL policy as each was encoded: `resolveEncodeSet`; the renderers vet again what
@@ -6489,12 +6490,15 @@ function markClipOf(mark: CompiledMark, ctx: EvalContext): { clip: boolean; clip
     if (typeof v === 'function') shape = String((v as (context: null) => unknown)(null) ?? '')
     else truthy = !!v
   } else if (o.path) {
-    shape = String(param(o.path))
+    // (an empty path is no shape: the clip is the frame)
+    shape = String(param(o.path)) || undefined
+    if (shape === undefined) return { clip: true }
   } else if (o.sphere) {
+    // (a sphere through a projection that is not there, or that draws nothing, is a shape that draws nothing: it clips everything away)
     const projection = ctx.runtime.projection?.(String(param(o.sphere)))
-    shape = projection && geoRegistry.projectedPath ? geoRegistry.projectedPath(projection, { type: 'Sphere' }) : ''
+    shape = projection && geoRegistry.projectedShape ? geoRegistry.projectedShape(projection, { type: 'Sphere' }).path ?? '' : ''
   } else return { clip: !!c }
-  return shape !== undefined ? { clip: true, ...(shape !== '' ? { clipPathD: shape } : {}) } : { clip: truthy }
+  return shape !== undefined ? { clip: true, clipPathD: shape } : { clip: truthy }
 }
 
 /** A mark's clip when it is an SVG path (`{path}`, or a `{signal}` that holds a path shape): what vega's bounds draw it with. */
@@ -6513,6 +6517,15 @@ function shapeIsLiteral(mark: CompiledMark): boolean {
   if (mark.transform?.some((t) => (t as { type?: unknown }).type === 'geoshape')) return false
   const channel = (mark.encode?.update?.shape ?? mark.encode?.enter?.shape) as { value?: unknown } | undefined
   return channel !== undefined && channel !== null && typeof channel === 'object' && 'value' in channel
+}
+
+/**
+ * What a group mark's items carry of the MARK's `clip` (see {@link markClipOf}): the flag, and the clip's shape when it is one (a
+ * `{sphere}`, a `{path}`, a `{signal}` shape) rather than the enclosing group's frame.
+ */
+function markClipFlags(mark: CompiledMark, ctx: EvalContext): { markClip?: true; markClipPathD?: string } {
+  const c = markClipOf(mark, ctx)
+  return c.clip ? { markClip: true, ...(c.clipPathD !== undefined ? { markClipPathD: c.clipPathD } : {}) } : {}
 }
 
 /** Whether a mark is clipped to the frame of its group (see {@link markClipOf}). */
@@ -6620,7 +6633,8 @@ function buildGroupItem(mark: CompiledMark, ctx: EvalContext, entered: EnteredGr
       }
       if (rows !== undefined) notePrimitiveTuples(ctx, rows)
       checkRowCount(rows?.length ?? sources.reduce((n, s) => n + (ctx.datasets.get(s)?.length ?? 0), 0), `dataset "${d.name}"`)
-      const tctx = { runtime: ctx.runtime, signals: scopeParams, hierarchies: ctx.hierarchies, projections: ctx.projections }
+      // (the group's datasets see its own projections, made before them, over the enclosing ones: vega's parse order)
+      const tctx = { runtime: ctx.runtime, signals: scopeParams, hierarchies: ctx.hierarchies, projections: own?.registry ?? ctx.projections }
       if (d.transform?.length) rows = runScopedData(ctx, `${markIdOf(mark)}/${path.join('.')}/${d.name}`, d.name, d.transform, sources, rows ?? gather, shared, tctx, scopeParams)
       else if (shared) rows = copiedRows(gather(), 'dataset rows')
       else rows = rows ?? []
@@ -6767,7 +6781,7 @@ function buildGroupItem(mark: CompiledMark, ctx: EvalContext, entered: EnteredGr
       // what it holds)
       ...((geo as Record<string, unknown>).noBound ? { noBound: true } : {}),
       ...(href != null ? { href: href as string } : {}),
-      ...(markClip(mark, ctx) ? { markClip: true } : {}),
+      ...markClipFlags(mark, ctx),
     } as unknown as SceneGroup
     // (an instance the aborted pass never reached has no operators, so no scales)
     if (mark.scales?.length && (order < 0 || (order === 0 && !ctx.abort.cut!.signals))) group.__scales = snapshotScales(childScales)
