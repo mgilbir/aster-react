@@ -14,6 +14,7 @@ import { describe, expect, it } from 'vitest'
 import * as vega from 'vega'
 import { renderSpec } from '@aster-charts/core'
 import { canonicalizeSvg, diffCanonical } from './normalize.js'
+import { expectKnownDifference } from '../scripts/known-differences.mts'
 import schema from '../node_modules/vega/build/vega-schema.json' with { type: 'json' }
 
 type Spec = Record<string, unknown>
@@ -32,28 +33,37 @@ async function oracleSvg(spec: Spec): Promise<string> {
 }
 
 /**
- * The cases the oracle itself cannot answer: `vega.parse` refuses the spec (a config that nulls a layout parameter makes the
- * parser write `undefined` into an expression), or its document is one the canonicalizer cannot read (a NaN transform).
- * They are agreements on nothing, so they are counted, not compared -- like the sweeps' node errors, and held to a ceiling.
+ * The one class of spec `vega.parse` refuses here: a config that nulls a layout parameter of the legend (`config.legend.gridAlign`,
+ * `rowPadding`, `columnPadding` or `gradientLength` = null) makes the parser write `undefined` into an expression of the entry layout,
+ * and it throws `Unrecognized signal name: "undefined"` (docs/ERRORS.md says the layout is written out and parsed as vega writes it:
+ * with these nulls vega's own parser breaks, and Aster renders -- a case of the expected-differences table, held on its own probe
+ * below). Every refusal is judged where it happens: it must be of this class and Aster must render the spec, so nothing is counted
+ * for later, and a refusal of any other spec, or of this one with another message, fails the walk that met it.
  */
-const unanswered: string[] = []
+const REFUSED_LEGEND_LAYOUT = new Set(['gridAlign', 'rowPadding', 'columnPadding', 'gradientLength'])
+const REFUSAL = 'Unrecognized signal name: "undefined"'
+const refusedClass = (spec: Spec): boolean => {
+  const legend = (spec.config as { legend?: Record<string, unknown> } | undefined)?.legend
+  return legend !== undefined && Object.entries(legend).some(([k, v]) => REFUSED_LEGEND_LAYOUT.has(k) && v === null)
+}
+/** How many specs of the walks vega refused (a counter the legend walks read before and after). */
+const metRefusals = { n: 0 }
 
 async function compare(spec: Spec, what: string): Promise<string[]> {
   let want: string
   try {
     want = await oracleSvg(spec)
   } catch (e) {
-    unanswered.push(`${what}: vega: ${(e as Error).message.split('\n')[0]}`)
+    const message = (e as Error).message.split('\n')[0]!
+    // (vega refuses: Aster is run on the same spec, and what it does is asserted, not skipped)
+    if (!refusedClass(spec) || message !== REFUSAL) return [`${what}: vega refused an unexpected spec: ${message}`]
+    let rendered: string
+    try { rendered = renderSpec(structuredClone(spec) as never) } catch (err) { return [`${what}: vega refuses, Aster threw: ${(err as Error).message}`] }
+    try { canonicalizeSvg(rendered) } catch (err) { return [`${what}: vega refuses, Aster's document is unreadable: ${(err as Error).message}`] }
+    metRefusals.n++
     return []
   }
-  let canon
-  try {
-    canon = canonicalizeSvg(want)
-  } catch (e) {
-    unanswered.push(`${what}: canonicalizer: ${(e as Error).message.split('\n')[0]}`)
-    return []
-  }
-  return diffCanonical(canon, canonicalizeSvg(renderSpec(spec as never)))
+  return diffCanonical(canonicalizeSvg(want), canonicalizeSvg(renderSpec(spec as never)))
 }
 
 type Def = { properties?: Record<string, unknown>; allOf?: Def[]; oneOf?: Def[]; anyOf?: Def[] }
@@ -117,6 +127,12 @@ describe('null in every property of an axis', () => {
 })
 
 describe('null in every property of a legend', () => {
+  // How many of the nulled config properties vega.parse refuses on each kind (the layout parameters the kind reads): exact, so a walk
+  // that did not run, or a refusal that moved, is seen. 11 of the 1983 cases of this file.
+  const REFUSED_ON: Record<string, number> = {
+    'a symbol legend': 3, 'a symbol legend on the left, in columns': 3, 'a gradient legend': 1, 'a horizontal gradient legend': 1,
+    'a discrete legend (quantize)': 0, 'a size legend': 3,
+  }
   // the keys that name the scales a legend maps, and its encode blocks
   // (a legend's `type` is a plain enum in the schema: no signal)
   const structural = new Set(['fill', 'stroke', 'size', 'shape', 'opacity', 'strokeDash', 'strokeWidth', 'type', 'encode'])
@@ -142,6 +158,7 @@ describe('null in every property of a legend', () => {
   for (const [kind, make] of kinds) {
     it(`${props.length} properties x three nulls, on ${kind}`, async () => {
       const bad: string[] = []
+      const refusedBefore = metRefusals.n
       for (const p of props) {
         const put = (spec: Spec, v: unknown): Spec => ({ ...spec, legends: [{ ...(spec.legends as Spec[])[0]!, [p]: v }] })
         const cfg = (spec: Spec, v: unknown): Spec => ({ ...spec, config: { legend: { [p]: v } } })
@@ -150,6 +167,7 @@ describe('null in every property of a legend', () => {
           if (d.length) bad.push(`${what}: ${d[0]}`)
         }
       }
+      expect(metRefusals.n - refusedBefore, `the config nulls vega.parse refuses on ${kind}`).toBe(REFUSED_ON[kind])
       expect(bad).toEqual([])
     }, 300_000)
   }
@@ -178,11 +196,19 @@ describe('null in every property of a title', () => {
   }
 })
 
-describe('what the oracle could not answer', () => {
-  it('is a handful of config nulls that make vega.parse write `undefined` into an expression, or a NaN transform', () => {
-    // (runs after the walks above, in file order)
-    expect(unanswered.filter((u) => !/Unrecognized signal name: "undefined"|non-finite transform/.test(u))).toEqual([])
-    expect(unanswered.length).toBeLessThanOrEqual(14)
+describe('what vega.parse refuses is held on its own probe (expected-differences table)', () => {
+  it('a legend layout parameter nulled in the config: vega.parse throws, Aster renders', async () => {
+    for (const p of REFUSED_LEGEND_LAYOUT) {
+      // (the gradient's length is read by a gradient legend only; the layout parameters by a symbol legend)
+      const scale = p === 'gradientLength' ? { name: 'c', type: 'linear', domain: [0, 100], range: ['white', 'black'] } : { name: 'c', type: 'ordinal', domain: { data: 't', field: 'k' }, range: 'category' }
+      const spec = frame({ scales: [scale], legends: [{ fill: 'c', title: 'Title' }], marks: [], config: { legend: { [p]: null } } })
+      let vegaOutcome: unknown
+      try { vegaOutcome = { svg: await oracleSvg(spec) } } catch (e) { vegaOutcome = { refused: (e as Error).message.split('\n')[0] } }
+      expect(vegaOutcome, `config.legend.${p} = null`).toEqual({ refused: REFUSAL })
+      const aster = { svg: renderSpec(structuredClone(spec) as never) }
+      expect(() => canonicalizeSvg(aster.svg)).not.toThrow()
+      expectKnownDifference('guide-null-vs-vega', 'a legend layout parameter nulled in the config', vegaOutcome, aster)
+    }
   })
 })
 

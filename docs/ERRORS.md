@@ -308,7 +308,11 @@ positions of a band, the offsets of ticks and labels, the flush of labels, the t
 `symbolOffset` and the number of columns into longer expressions that depend on the config, the orient and the scale; Aster reads
 them (an unknown function or signal in one is refused with vega's message) but quotes a syntax error in them as the author's text
 alone (`(1 +)`, where vega gives `round(_scale("x", datum["value"])+_bandwidth("x")*((1 +))+0)`). The order of two broken properties
-of one guide is that of the spec's keys, where vega's is that of the marks it makes.
+of one guide is that of the spec's keys, where vega's is that of the marks it makes. **Not reproduced, where vega's parser breaks:** a
+config that sets `legend.gridAlign`, `rowPadding`, `columnPadding` or `gradientLength` to `null` makes vega-parser write `undefined` into an
+expression and `vega.parse` throws `Unrecognized signal name: "undefined"`; a list of styles on a title's `encode.group.style` or
+`encode.subtitle.style` makes it throw `Unrecognized signal name: "nullnull"`. Aster renders these (a null config value is no value; a list of
+styles applies in order). Both are held, still differing, by `guide-null-vs-vega.test.ts` and `guide-encode-vs-vega.test.ts`.
 
 **Names and parameters.** In the same walk, at the place vega meets them, the compile refuses what `vega.parse` refuses of the names a
 spec uses and of the parameters of its transforms (`differential-transform-params` and `differential-parse-errors` generate these from the
