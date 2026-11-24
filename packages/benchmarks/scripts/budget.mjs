@@ -318,7 +318,11 @@ const BUDGETS = {
   // followups (stack/10-followups-correctness: one SVG path reader, eager through the hit index; the signal loop on demand; guide gradients): measured 2026-11-15 on a clean build, base stack/9-followups-speed -> branch (kB gzip): 15.5 -> 14.7; ceiling is the measured value + 0.5.
   '+ @aster-charts/core/signals': 15.2 * 1024,
   // stack layer 8 (perf/lazy-features: the shells load the engine's parts and the canvas renderer on demand; module boundaries): measured 2026-11-15 on a clean build, base stack/7-hover-finish -> branch (kB gzip): 5.4 -> 5.3; ceiling is the measured value + 0.5.
-  '+ @aster-charts/core/load': 5.8 * 1024,
+  // fix/audit-a02-loading (the loader's URL policy and bounds: the non-public host rule over every IPv4/IPv6 form and name, option
+  // validation, the abort race around every await, request/byte budgets and de-duplication, {signal} urls evaluated in their own
+  // scope under limits, the topojson structure checks, their error texts): measured 2026-11-24 on a clean build, base origin/main
+  // 7d438d0 -> branch (kB gzip): 5.3 -> 7.7; ceiling is the measured value + 0.5.
+  '+ @aster-charts/core/load': 8.2 * 1024,
   // stack layer 8 (perf/lazy-features: the shells load the engine's parts and the canvas renderer on demand; module boundaries): measured 2026-11-15 on a clean build, base stack/7-hover-finish -> branch (kB gzip): 16.1 -> 15.9; ceiling is the measured value + 0.5.
   '+ @aster-charts/core/geo': 16.4 * 1024,
   // stack layer 8 (perf/lazy-features: the shells load the engine's parts and the canvas renderer on demand; module boundaries): measured 2026-11-15 on a clean build, base stack/7-hover-finish -> branch (kB gzip): 39.8 -> 39.6; ceiling is the measured value + 0.5.
