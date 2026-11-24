@@ -23,8 +23,9 @@ async function sweep(make: (seed: number) => GuideCase, count: number): Promise<
   for (const seed of seeds) {
     const c = make(seed)
     const out = await compareToVega(c.spec)
-    if (out.refused !== undefined) { refused++; continue }
-    compared++
+    // (a spec vega refuses must be refused by Aster too: `compareToVega` reports a refusal Aster renders as a difference)
+    if (out.refused !== undefined) refused++
+    else compared++
     if (out.diffs.length) bad.push(`${c.id} (${c.kind}): ${out.diffs.slice(0, 3).join(' | ')}`)
     if (compared % 25 === 0) await new Promise((resolve) => setImmediate(resolve))
   }
@@ -55,32 +56,41 @@ describe('generated guides vs vega', () => {
   // a fit view (its title's width, rounded up from a box carried to its place).
   it('fit legends whose title width falls on a whole pixel on the second pass render the vega document', { timeout: 60_000 }, async () => {
     const bad: string[] = []
+    let compared = 0
     for (const seed of [594, 1715, 3711]) {
       const c = legendCase(seed)
       const out = await compareToVega(c.spec)
-      if (out.refused === undefined && out.diffs.length) bad.push(`${c.id}: ${out.diffs.slice(0, 2).join(' | ')}`)
+      if (out.refused === undefined) compared++
+      if (out.diffs.length) bad.push(`${c.id}: ${out.diffs.slice(0, 2).join(' | ')}`)
     }
     expect(bad).toEqual([])
+    // (not vacuous: each seed is a document vega draws)
+    expect(compared).toBe(3)
   })
 
   // Every chart as a fit view: its guides enter, update and exit between the two passes (a scale or tick set that the first pass's size
   // changes), and the paint order of what is left must be vega's.
   it('legend and axis charts forced to fit, 300 each, render the vega document', { timeout: 300_000 }, async () => {
     const bad: string[] = []
+    let compared = 0
     const modes = ['fit', 'fit-x', 'fit-y']
     for (const [make, tag] of [[legendCase, 'legend'], [axisCase, 'axis']] as const) {
       for (let seed = 1; seed <= 300; seed++) {
         const c = make(seed)
         const spec = { ...c.spec, autosize: modes[seed % 3] }
         const out = await compareToVega(spec)
-        if (out.refused === undefined && out.diffs.length) bad.push(`${tag}-${seed}: ${out.diffs.slice(0, 2).join(' | ')}`)
+        if (out.refused === undefined) compared++
+        if (out.diffs.length) bad.push(`${tag}-${seed}: ${out.diffs.slice(0, 2).join(' | ')}`)
       }
     }
     expect(bad.slice(0, 6)).toEqual([])
+    // (not vacuous: nearly all of the 600 are documents vega draws)
+    expect(compared).toBeGreaterThan(600 * 0.9)
   })
   it('the axis chart whose labels the second pass paints in vega order renders the vega document', { timeout: 60_000 }, async () => {
     const c = axisCase(1225)
     const out = await compareToVega(c.spec)
+    expect(out.refused).toBeUndefined()
     expect(out.diffs).toEqual([])
   })
 })
