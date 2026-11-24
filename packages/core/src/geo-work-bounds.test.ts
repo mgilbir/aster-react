@@ -29,7 +29,7 @@ describe('geo work a spec multiplies is bounded', () => {
     it(`resampling into millions of positions is refused (${setting})`, async () => {
       const r = await attack(`return core.renderSpec(${JSON.stringify(amplified(2000))}${limits ? `, { limits: ${JSON.stringify(limits)} }` : ''}).length`)
       expect(r.stderr).not.toMatch(/heap out of memory|FATAL/)
-      expectLimit(r, /geo positions|maxTimeMs/)
+      expectLimit(r, /geo events|maxTimeMs/)
       expect(r.cpuMs, `cpu ${r.cpuMs} ms`).toBeLessThan(2000)
     }, T)
     it(`an ordinary map still draws (${setting})`, async () => {
@@ -39,8 +39,14 @@ describe('geo work a spec multiplies is bounded', () => {
     }, T)
   }
 
-  it('maxRows replaces the ceiling and counts the positions made', async () => {
-    const r = await attack(`return core.renderSpec(${JSON.stringify(amplified(60))}, { limits: { maxRows: 100000 } }).length`)
-    expectLimit(r, /maxRows .*geo positions/)
+  it('no maxRows replaces the ceiling on events: a huge maxRows still refuses the amplification', async () => {
+    const r = await attack(`return core.renderSpec(${JSON.stringify(amplified(2000))}, { limits: { maxRows: 1000000000, maxGeneratedRows: 1000000000 } }).length`)
+    expectLimit(r, /geo events/)
+    expect(r.cpuMs, `cpu ${r.cpuMs} ms`).toBeLessThan(2000)
+  }, T)
+  it('the events of a projection are not counted as rows: a small maxRows still draws a map (its graticule counts its 2 573 positions as a03 bounds them)', async () => {
+    const r = await attack(`return core.renderSpec(${JSON.stringify(ordinary)}, { limits: { maxRows: 5000 } }).length`)
+    expect(r.threw, JSON.stringify(r.threw)).toBeNull()
+    expect(r.value as number).toBeGreaterThan(10_000)
   }, T)
 })
