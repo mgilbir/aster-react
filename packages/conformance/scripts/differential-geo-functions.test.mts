@@ -9,7 +9,8 @@ import * as vega from 'vega'
 import '../../core/src/addon-geo.ts'
 import { compileExpr, type ExpressionRuntime } from '../../core/src/expression.ts'
 import { geoRegistry } from '../../core/src/registry.ts'
-import { exact, expectSameOutcome, loggedThrow, quietLogger } from './differential-util.mts'
+import { exact, loggedThrow, quietLogger } from './differential-util.mts'
+import { expectSameOutcome } from './differential-outcome.mts'
 import { Rand, seedOf, withoutEmptyRings } from './geo-gen.mts'
 
 const PROJECTIONS = [

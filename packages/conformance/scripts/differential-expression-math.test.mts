@@ -11,7 +11,8 @@
 import { describe, expect, it, vi } from 'vitest'
 import * as vega from 'vega'
 import { compileExpr, type ExpressionRuntime } from '../../core/src/expression.ts'
-import { exact, expectSameOutcome, loggedThrow, quietLogger } from './differential-util.mts'
+import { exact, loggedThrow, quietLogger } from './differential-util.mts'
+import { expectSameOutcome } from './differential-outcome.mts'
 
 vi.setConfig({ testTimeout: 60_000 })
 
