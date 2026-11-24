@@ -146,7 +146,7 @@
    "fit": {
     "signal": "data('data_0')"
    },
-   "type": "Mercator"
+   "type": "EqualEarth"
   }
  ],
  "marks": [

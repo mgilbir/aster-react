@@ -176,8 +176,8 @@
    "fit": {
     "signal": "data('data_0')"
    },
-   "type": "azimuthalEqualArea",
-   "clipAngle": 90,
+   "type": "gnomonic",
+   "clipAngle": 45,
    "rotate": [
     -100,
     -30
