@@ -190,6 +190,80 @@
               ]
             ]
           }
+        },
+        {
+          "type": "Feature",
+          "properties": {
+            "name": "alaska",
+            "value": 5,
+            "cat": "b"
+          },
+          "geometry": {
+            "type": "Polygon",
+            "coordinates": [
+              [
+                [
+                  -168,
+                  66
+                ],
+                [
+                  -141,
+                  69.5
+                ],
+                [
+                  -141,
+                  60
+                ],
+                [
+                  -150,
+                  59
+                ],
+                [
+                  -165,
+                  55
+                ],
+                [
+                  -168,
+                  66
+                ]
+              ]
+            ]
+          }
+        },
+        {
+          "type": "Feature",
+          "properties": {
+            "name": "hawaii",
+            "value": 2,
+            "cat": "a"
+          },
+          "geometry": {
+            "type": "Polygon",
+            "coordinates": [
+              [
+                [
+                  -160,
+                  22
+                ],
+                [
+                  -155,
+                  20
+                ],
+                [
+                  -154.8,
+                  19.2
+                ],
+                [
+                  -156,
+                  18.9
+                ],
+                [
+                  -160,
+                  22
+                ]
+              ]
+            ]
+          }
         }
       ]
     },

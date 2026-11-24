@@ -47,6 +47,20 @@
         "lat": 25.76,
         "pop": 0.47,
         "kind": "port"
+      },
+      {
+        "city": "Anchorage",
+        "lon": -149.9,
+        "lat": 61.22,
+        "pop": 0.29,
+        "kind": "hub"
+      },
+      {
+        "city": "Honolulu",
+        "lon": -157.86,
+        "lat": 21.31,
+        "pop": 0.35,
+        "kind": "port"
       }
     ]
   },
