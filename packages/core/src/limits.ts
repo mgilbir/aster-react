@@ -246,6 +246,11 @@ export function assertSpecDepth(spec: unknown): void {
 export const REGEX_MAX_PATTERN = 1024
 /** Default cap on the input of one regex call under limits (when `maxStringLength` is unset). */
 export const REGEX_MAX_INPUT = 10_000
+/**
+ * The time one regular-expression run may take under limits without `maxTimeMs` (with it, `maxTimeMs` is the bound): the screen
+ * accepts a pattern only if its run on the longest subject the limits allow fits (regex-screen.ts `regexHazard`).
+ */
+export const REGEX_RUN_BUDGET_MS = 100
 
 export interface LimitMeter {
   readonly limits: SpecLimits
@@ -474,15 +479,18 @@ export function checkRegexPattern(pattern: string, flags = ''): void {
   if (active.limits.regex === 'refuse') throw limitViolation(REGEX_REFUSED)
   const cap = Math.min(REGEX_MAX_PATTERN, active.limits.maxStringLength ?? REGEX_MAX_PATTERN)
   if (pattern.length > cap) over('maxStringLength', pattern.length, cap, 'regular expression pattern')
-  // Static screen for catastrophic-backtracking shapes (heuristic; docs/LIMITS.md).
-  // Applied to every pattern, including RegExp objects a spec built or wrote as literals. The screen is a part the React shells load
-  // on demand (engine-parts.ts): reading its slot throws when it is not loaded, so a pattern is refused, never run unscreened.
-  const hazard = part('regex').regexHazard(pattern, flags)
+  // (a spent deadline is reported as such before the pattern is judged against it)
+  active.clock.check('regular expression')
+  // Static screen (docs/LIMITS.md), applied to every pattern, including RegExp objects a spec built or wrote as literals: a pattern
+  // is accepted only if a run of it on the longest subject these limits let reach it finishes within the time a run may take,
+  // since nothing can interrupt a running RegExp. The screen is a part the React shells load on demand (engine-parts.ts): reading
+  // its slot throws when it is not loaded, so a pattern is refused, never run unscreened.
+  const subject = active.limits.maxStringLength ?? REGEX_MAX_INPUT
+  const hazard = part('regex').regexHazard(pattern, flags, subject, active.limits.maxTimeMs ?? REGEX_RUN_BUDGET_MS)
   if (hazard) {
     const shown = pattern.length > 80 ? pattern.slice(0, 80) + '...' : pattern
     throw limitViolation(`regexSafety: ${hazard}: /${shown}/`)
   }
-  active.clock.check('regular expression')
 }
 
 /** The refusal of `limits.regex: 'refuse'`. */

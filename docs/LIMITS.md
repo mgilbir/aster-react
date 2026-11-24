@@ -324,34 +324,49 @@ supply (`test`, `regexp`, `replace`/`split` with a RegExp or a `/literal/`,
    refused** (fail closed). The pattern then becomes its position automaton, with the number of distinct ways each step can
    be taken (a backtracking matcher enumerates parse trees), and with the search's own loop in front unless every branch
    starts with `^` (outside `m` mode): V8 tries each start position in turn. It is refused, with an `AsterLimitError`
-   (`regexSafety: ...`), when:
+   (`regexSafety: ...`), whatever its input, when:
    - **exponential**: a part of it can match the same input in two ways and repeat (`(a+)+`, `(a|aa)+`, `(\w+\s?){1,50}`,
      `((a|a))*`, `(.*a){12}`). A repeat that may run twice or more is read as unbounded (`(a+){1,60}` is `(a+)+`),
      except a repeat of one character set, which is expanded exactly up to 64;
-   - **polynomial of degree 3 or more**: three loops each able to hand the same input on to the next, the search's loop
-     counted (`a*a*a*b`, `\s*.*x`, `.*foo.*bar`, the trim idiom `^\s*(.*?)\s*$`). Measured on V8: `\s*.*x` on 4 000
-     spaces runs 14 s, `.*foo.*bar` on 6 000 characters 16 s, the trim idiom on 4 000 spaces before `x\n\nx` 19.7 s; the
-     default input cap is 10 000. Degree 2 is allowed (`a*b` and `\s+$` take about 0.1 s on 10 000 characters; V8's cost per
-     step depends on the shape, which the screen does not model: a repeated group such as `(\w?)+!` measured up to 15 times
-     that, and the soundness test holds every accepted generated pattern to 20 times the plain quadratic search of its input),
-     and a loop
-     after which the match can always end is no hazard (`\s*.*`, `\d+\.?\d*`: the first path that reaches it succeeds);
    - **too many live paths**: over 4 096 ways to have matched one input so far (`(a|a)(a|a)...`), a loop counted as
-     absorbing any length of it; or, next to a degree-2 chain, more than 16 transitions tried per character from those paths
-     (the searched `a*x` tries 5). A bounded run after a loop over the same characters is entered from every place the loop
-     can stop, which multiplies the quadratic search by the run's length: `a*[ab]{0,20}x` ran 11 s and `a+a{30}x` 14.6 s on
-     10 000 characters, and are refused; `a*a{1,3}x` (0.19 s) is not;
+     absorbing any length of it;
    - a **backreference** inside a group that repeats (`(?:(a)\1)*`).
-   A lookaround body is screened as a pattern of its own. A Unicode property is read as "any character", a
+
+   Otherwise the pattern has a **cost**, and it is accepted only if a run of it on the longest subject the limits let reach it
+   finishes within a fixed time, **since nothing can interrupt a running RegExp**:
+   - the cost is `work * n ** degree` steps on `n` characters. `degree` is the longest chain of loops each able to hand the
+     same input on to the next, the search's own loop counted: `a*b` searched and `\s+$` are 2, `\s*.*x` searched and the
+     trim idiom `^\s*(.*?)\s*$` 3, `a*a*a*b` 4; a loop after which the match can always end is no link of a chain
+     (`\s*.*`, `\d+\.?\d*`) but still reads the input (1). `work` is the transitions tried per character from the live
+     paths of one start, counted on the whole automaton, so a bounded run after a loop over the same characters, entered from
+     every place the loop can stop, weighs its length (`a*a{1,3}x` 15, `a*x` 5);
+   - a step is taken to cost `REGEX_NS_PER_UNIT` = 8 ns: the slowest of 130 measured shapes took 1.93 ns (`a+a{30}x`;
+     `(\w?)+!` 1.80, the median 0.16) on a machine at load 5 to 10, with a margin of 4 for a loaded machine;
+   - the subject is at most `maxStringLength` (default 10 000, `REGEX_MAX_INPUT`): every regex input is refused past it; the
+     time is `maxTimeMs`, else `REGEX_RUN_BUDGET_MS` = 100 ms. The refusal says what was computed:
+     `regexSafety: polynomial backtracking of degree 2: about 2400 ms on 10000 characters, over the 100 ms a run may take`.
+
+   What this accepts at the defaults (10 000 characters, 100 ms): linear patterns (`^\d{4}-\d{2}-\d{2}$`, `\.csv$`, a
+   lookahead `^(?!foo)\w+$`, any anchored single loop); **no searched quadratic pattern** (`\s+$` costs about 2.4 s there,
+   `a*b` 4 s), and nothing of degree 3 or more. With `maxStringLength: 1000` the quadratic ones fit (`\s+$` 24 ms,
+   `\s*\w+\s*=\s*\d+` 88 ms; `a*a{1,3}x` 120 ms does not, it fits 500), and the trim idiom fits 100 characters. Measured
+   (the soundness test, `regex-screen.test.ts`): every accepted generated pattern ran within the budget on attack inputs of the
+   subject length, the slowest 0.7 ms at 10 000 characters and 7.1 ms at 1 000 (`(\d)(\w?)+[^b]{2}!`, 0.09 of its predicted
+   time). What the screen refused before, by shape, is refused here by cost: `\s*.*x` ran 14 s on 4 000 spaces, `.*foo.*bar`
+   16 s on 6 000 characters, the trim idiom 19.7 s on 4 000 spaces before `x\n\nx`, `a*[ab]{0,20}x` 11 s and `a+a{30}x`
+   14.6 s on 10 000 characters.
+   A lookaround body is screened as a pattern of its own for its hazards, and adds its cost to every step of the match that
+   reaches it. A Unicode property is read as "any character", a
    case-insensitive set is closed under every case mapping V8 applies (derived from V8's own `iu` matching, about 0.15 s
    once per process on the first case-insensitive pattern), and a `v`-mode set operation keeps an upper and a lower bound,
    so nothing a pattern can match is left out of the analysis.
 2. **Length caps**: a pattern over 1024 characters, or an input longer than
-   `maxStringLength` (default 10 000), is refused. This bounds linear patterns.
+   `maxStringLength` (default 10 000), is refused. This is the subject length the cost above is judged at.
 
 **This is a static model of a backtracking matcher, not a proof.** It is conservative by construction, so a few safe
 patterns are refused (`(a|a){2}`, `.{1,100}.{1,100}x`; rewrite them without the ambiguity). Its soundness is tested by
-running every pattern it accepts out of a generated set on 10 000-character attack inputs in V8. Without limits nothing is screened (vega parity).
+running every pattern it accepts out of a generated set, for the subject length and budget of two limits, on attack inputs of
+that length in V8, against that budget. Without limits nothing is screened (vega parity).
 
 **If specs are untrusted, run the render in a killable worker** (a
 `worker_threads` Worker you can `terminate()`, or a child process with a

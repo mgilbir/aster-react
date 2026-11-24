@@ -86,7 +86,7 @@ anywhere in a render is never swallowed by a defensive `catch`: the call fails w
 | `maxRows`, `maxMarks`, `maxDepth`, `maxStringLength` | pre-flight spec budget; `maxRows` also caps any dataset a transform produces, `maxDepth` also covers expression nesting (`(expression nesting)`) and, with a cyclic spec, the separate message `spec contains a cycle` |
 | `maxGeneratedRows`, `maxGeneratedBytes` | cumulative rows / characters generated during one evaluation |
 | `maxItems`, `maxPathLength` | generated scene budget (also tick counts and generated paths) |
-| `regexSafety: ...` | a regular expression pattern with a catastrophic-backtracking shape was refused (only under `limits`) |
+| `regexSafety: ...` | a regular expression was refused (only under `limits`): an exponential shape, or a run on the longest subject the limits allow (`maxStringLength`, default 10 000) that would take longer than `maxTimeMs` (default 100 ms per run); see LIMITS.md |
 | `timeoutMs`, `maxBytes`, `maxRedirects` | `loadSpecData` request caps |
 | `maxSvgLength` | serialized output budget |
 | `maxTimeMs exceeded during <phase>` | wall-clock deadline; the phase is `pre-flight`, `compile`, `evaluate`, `render`, `change`, `mark encoding`, `loadSpecData`, `regular expression` or the name of the transform that was running |
