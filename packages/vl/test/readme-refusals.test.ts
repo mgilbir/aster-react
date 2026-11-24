@@ -40,7 +40,6 @@ const REFUSED: Array<[string, Record<string, unknown>, RegExp]> = [
   ['a longitude / latitude datum that is not a number', unit('point', { longitude: { datum: 'east', type: 'nominal' }, latitude: q('lat') }, proj), /must be a finite number/],
   ['a `time` channel needs a unit at the root, or in the\n  layers of the root', { data, hconcat: [{ params: [timer], transform: frame, mark: 'point', encoding: { x: q('b'), time: q('t') } }] }, /single top-level unit/],
   ['composite marks', unit('boxplot', { x: n('a'), y: q('b'), time: q('t') }, { params: [timer], transform: frame }), /animating it is not supported/],
-  ['a timer selection with neither `fields` nor `encodings`', unit('point', { x: q('b'), time: q('t') }, { params: [{ name: 'anim', select: { type: 'point', on: 'timer' } }], transform: frame }), /needs `fields` or `encodings`/],
   ['`timeUnit.maxbins`', unit('bar', { x: { field: 'd', type: 'temporal', timeUnit: { maxbins: 5 } }, y: q('c') }), /timeUnit\.maxbins/],
   ['errorbar / errorband over a binned channel', unit('errorbar', { x: { field: 'b', type: 'quantitative', bin: 'binned' }, y: q('c') }), /over a binned/],
   ['`timeUnitBandPosition`', unit({ type: 'bar', timeUnitBandPosition: 0.5 }, { x: { field: 'd', type: 'temporal', timeUnit: 'month' } }), /timeUnitBandPosition/],

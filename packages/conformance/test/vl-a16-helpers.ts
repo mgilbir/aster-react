@@ -19,8 +19,31 @@ export function oracleOf(spec: Record<string, any>): { vega: Record<string, any>
   try { return { vega: (vl as any).compile(plain(spec), { logger: quiet }).spec } } catch (e) { return { refused: e } }
 }
 
-/** Whether vega runs the Vega without logging an error (the oracle's own output may not run). */
+/** The names of the datasets a spec defines, and the ones its marks and scales read: vega parses a spec that reads a dataset nothing defines. */
+function datasetRefs(vg: Record<string, any>): { defined: Set<string>; read: Set<string> } {
+  const defined = new Set<string>()
+  const read = new Set<string>()
+  const walk = (o: unknown): void => {
+    if (Array.isArray(o)) { o.forEach(walk); return }
+    if (o === null || typeof o !== 'object') return
+    const r = o as Record<string, any>
+    if (Array.isArray(r.data)) for (const d of r.data) if (d?.name) defined.add(d.name)
+    if (r.from?.facet?.name) defined.add(r.from.facet.name)
+    // (a named mark is a dataset of its scope too)
+    if (typeof r.name === 'string' && typeof r.type === 'string' && r.encode !== undefined) defined.add(r.name)
+    if (typeof r.from?.data === 'string') read.add(r.from.data)
+    if (typeof r.from?.facet?.data === 'string') read.add(r.from.facet.data)
+    if (typeof r.data === 'string') read.add(r.data)
+    for (const [k, x] of Object.entries(r)) if (k !== 'values') walk(x)
+  }
+  walk(vg)
+  return { defined, read }
+}
+
+/** Whether vega runs the Vega without logging an error and without reading a dataset nothing defines (the oracle's own output may not run). */
 export async function runs(vg: Record<string, any>): Promise<boolean> {
+  const { defined, read } = datasetRefs(vg)
+  if ([...read].some((name) => !defined.has(name))) return false
   const r = await withOracleRandom(() => renderWithVegaChecked(plain(vg)))
   return r.errors.length === 0
 }
@@ -52,15 +75,4 @@ export async function sameDrawing(spec: Record<string, any>): Promise<void> {
   expect(mine.tooltips).toEqual(ref.tooltips)
 }
 
-/** mulberry32: a fixed stream, so a failing case names a seed that can be run again. */
-export function stream(seed: number): () => number {
-  let a = seed >>> 0
-  return () => {
-    a = (a + 0x6d2b79f5) >>> 0
-    let t = a
-    t = Math.imul(t ^ (t >>> 15), t | 1)
-    t ^= t + Math.imul(t ^ (t >>> 7), t | 61)
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296
-  }
-}
-export const pick = <T,>(r: () => number, xs: readonly T[]): T => xs[Math.floor(r() * xs.length)]!
+export { pick, stream } from './vl-a16-rng.js'
