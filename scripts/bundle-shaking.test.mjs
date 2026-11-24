@@ -13,6 +13,8 @@ import { describe, expect, it } from 'vitest'
 import { spawnAsync } from './lib/spawn-async.mjs'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
+/** The per-process scratch directories of budget.mjs (`.tmp-budget-<pid>`) that exist now. */
+const tmpDirs = () => readdirSync(join(root, 'packages', 'benchmarks')).filter((n) => /^\.tmp/.test(n))
 const manifest = (pkg) => JSON.parse(readFileSync(join(root, 'packages', pkg, 'package.json'), 'utf8'))
 const sourcesOf = (pkg) => readdirSync(join(root, 'packages', pkg, 'src')).filter((f) => /\.tsx?$/.test(f) && !/\.(test|testlib|testkit)\.tsx?$/.test(f) && !f.endsWith('.d.ts'))
 
@@ -64,22 +66,24 @@ describe('the gates bite', () => {
   }, 300_000)
 
   it('the budget FAILS when the manifests do not shake (no sideEffects field): the useChart row regains Chart, streams and workers', async () => {
+    const before = tmpDirs()
     const r = await run('packages/benchmarks/scripts/budget.mjs', [], { ASTER_BUDGET_SIDE_EFFECTS: 'all' })
     expect(r.status).toBe(1)
     expect(r.stdout).toMatch(/@aster-charts\/react useChart .*FAIL/)
     expect(r.stdout).toMatch(/@aster-charts\/react Chart .*FAIL/)
     // a failing run leaves nothing in the tree (it used to exit inside the try, past the clean-up)
-    expect(readdirSync(join(root, 'packages', 'benchmarks')).filter((n) => /^\.tmp/.test(n))).toEqual([])
+    expect(tmpDirs().filter((n) => !before.includes(n)), 'the run removes its own directory').toEqual([])
   }, 300_000)
 
   it('the budget FAILS when an import that a row is built on is shaken out: it must not print PASS at 0.00 kB (C522)', async () => {
+    const before = tmpDirs()
     const r = await run('packages/benchmarks/scripts/budget.mjs', [], { ASTER_BUDGET_SIDE_EFFECTS: 'none' })
     expect(r.status).toBe(1)
     for (const row of ['@aster-charts/core/geo', '@aster-charts/core/transforms']) expect(r.stdout, row).toMatch(new RegExp(`\\+ ${row.replace(/[/]/g, '\\/')} .*FAIL \\((measured nothing|more than 0\\.7 kB under its ceiling)`))
     // the React rows that are built on a bare import
     for (const row of ['Chart + all', 'Chart + VL']) expect(r.stdout, row).toMatch(new RegExp(`@aster-charts/react ${row.replace('+', '\\+')} .*FAIL`))
     expect(r.stdout).not.toMatch(/gzip= *0\.00 kB.*PASS/)
-    expect(readdirSync(join(root, 'packages', 'benchmarks')).filter((n) => /^\.tmp/.test(n))).toEqual([])
+    expect(tmpDirs().filter((n) => !before.includes(n)), 'the run removes its own directory').toEqual([])
   }, 300_000)
 
   it('the budget refuses an unknown ASTER_BUDGET_SIDE_EFFECTS', async () => {
