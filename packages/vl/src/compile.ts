@@ -12,6 +12,7 @@ import { mergeBins, optimizeData } from './optimize.js'
 import { tokenize } from './expr-tokens.js'
 import { VLCompileError, pushAll, flatField, datumRef as dref, genName, safeKey, splitAccessPath, dict, own, setOwn } from './names.js'
 import { validateGeoUnit, validateSpec } from './validate.js'
+import { isLiteralValue } from './schema.js'
 import { cloneSpecStructure, detachRows, isRows, jsonWithRows, sameJson, stringifyWithoutRows, withRows, type RowPayloads } from './rows.js'
 import { ARMING, consumeAll, consuming, derive, deriveDeep, deriveWithout, ignore, ignoreUnread, peek, pick, refuseUnconsumed, transfer, withConsumption } from './consume.js'
 import { markChannelCompatible } from './channels.js'
@@ -569,6 +570,8 @@ function plainCopy(node: unknown): unknown {
  * `{signal}`. Data rows are user data and are never rewritten.
  */
 function exprRefsToSignals(node: unknown): unknown {
+  // (a value given where the schema takes any value is a literal, whatever it holds: schema.ts isLiteralValue (C442))
+  if (node !== null && typeof node === 'object' && isLiteralValue(node)) return plainCopy(node)
   if (Array.isArray(node)) return node.map(exprRefsToSignals)
   if (!isObject(node)) return node
   const keys = Object.keys(node)
@@ -583,7 +586,7 @@ function exprRefsToSignals(node: unknown): unknown {
     // (a signal's `value` is a literal, whatever it holds: a parameter's `value: {expr: "x"}` is that object, as in vega-lite (C442))
     else if (k === 'signals' && Array.isArray(v)) out[k] = v.map((sg) => (isObject(sg) ? signalDefinition(sg) : exprRefsToSignals(sg)))
     else if (k === 'values' || (keepFields && k === 'fields')) out[k] = plainCopy(v)
-    else if (k === 'value' && isObject(v) && Object.keys(v).length === 1 && typeof v.expr === 'string') out.signal = v.expr
+    else if (k === 'value' && isObject(v) && !isLiteralValue(v) && Object.keys(v).length === 1 && typeof v.expr === 'string') out.signal = v.expr
     else if (k === '__proto__') setOwn(out, k, exprRefsToSignals(v))
     else out[k] = exprRefsToSignals(v)
   }
