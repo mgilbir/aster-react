@@ -46,6 +46,12 @@ export function cursorKeyword(value: unknown): string | null {
  * either. (vega hands the text on as it is.)
  */
 export function resolveCursor(signal: unknown, item: string | null): string | null {
+  const shown = pickCursor(signal, item)
+  return shown === null ? null : cursorKeyword(shown)
+}
+
+/** vega-view's rule as it is: the cursor text it writes to its container, keyword or not (null: it removes the style). */
+function pickCursor(signal: unknown, item: string | null): string | null {
   let user: unknown = DEFAULT_CURSOR
   let held = item
   if (typeof signal === 'string') {
@@ -56,7 +62,7 @@ export function resolveCursor(signal: unknown, item: string | null): string | nu
     held = typeof inner === 'string' && inner !== '' ? inner : null
   }
   const shown = user && user !== DEFAULT_CURSOR ? user : (held || user)
-  return typeof shown === 'string' && shown !== '' ? cursorKeyword(shown) : null
+  return typeof shown === 'string' && shown !== '' ? shown : null
 }
 
 // --- the tracker -----------------------------------------------------------------------------------------------------------
@@ -109,7 +115,10 @@ export function createCursorTracker(opts: CursorTrackerOptions): CursorTracker {
   }
   let shown: string | null = resolveCursor(opts.user(), null)
   const report = (): void => {
-    const next = resolveCursor(signal(), item)
+    const picked = pickCursor(signal(), item)
+    // (a text that is no cursor keyword: vega writes it, and the browser ignores the assignment -- the cursor stays as it was)
+    if (picked !== null && cursorKeyword(picked) === null) return
+    const next = picked === null ? null : cursorKeyword(picked)
     if (next === shown) return
     shown = next
     opts.onCursor(next)
