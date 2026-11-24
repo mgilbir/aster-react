@@ -92,3 +92,20 @@ describe('the value sweep stacks (C619)', () => {
     expect(cases.some((c) => c.name.startsWith('stacked-by-the-values--'))).toBe(true)
   })
 })
+
+describe('the channel forms and structural channels the vega sweep writes (C74)', () => {
+  const forms = generateVega(ctx()).cases.filter((c) => c.family === 'channel-form')
+  it('writes zindex per item as a field and as a signal, colours as {r,g,b} / {h,s,l} / {h,c,l} / {l,a,b}, a gradient, duplicate keys, nested mark zindex and a sorted base', () => {
+    const names = new Set(forms.map((c) => c.name))
+    for (const n of ['zindex-field', 'zindex-signal', 'fill-color-rgb', 'fill-color-hsl', 'fill-color-hcl', 'fill-color-lab', 'fill-gradient', 'key-duplicate', 'zindex-mark-in-group-raised-first', 'sort-descending']) {
+      expect(names.has(`channel-form-${n}`), n).toBe(true)
+    }
+  })
+  it('gives the items differing rows, so a per-item channel differs from item to item', () => {
+    const z = forms.find((c) => c.name === 'channel-form-zindex-field').spec
+    expect(new Set(z.data[0].values.map((r) => r.z)).size).toBeGreaterThan(2)
+    const dup = forms.find((c) => c.name === 'channel-form-key-duplicate').spec
+    const keys = dup.data[0].values.map((r) => r.k)
+    expect(new Set(keys).size).toBeLessThan(keys.length)
+  })
+})
