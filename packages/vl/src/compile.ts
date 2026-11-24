@@ -1024,7 +1024,7 @@ function layerAxisOf(n: LayerTreeNode, ch: 'x' | 'y', leafAxis: (leaf: number) =
         if (g.disabled) {
           throw new VLCompileError(`encoding.${ch}.axis: \`axis: null\` on a layer after one that draws the ${ch} axis is not supported: vega-lite 6.4.3 crashes on it (merging the layers' axis titles); put it on the first layer`)
         }
-        m.leaves.push(...g.leaves)
+        for (const leaf of g.leaves) m.leaves.push(leaf)
         if (!m.explicitOrient && g.explicitOrient) { m.orient = g.orient; m.explicitOrient = true }
         if (!m.explicitGrid && g.explicitGrid) { m.grid = g.grid; m.explicitGrid = true }
       })

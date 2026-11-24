@@ -270,8 +270,8 @@ describe('the format of a url dataset is its format.type, json by default, as in
       const url = `https://a.example.com/data${ext ? '.' + ext : ''}`
       for (const [kind, body] of Object.entries(bodies)) {
         for (const format of [undefined, { type: 'csv' }, { type: 'tsv' }, { type: 'json' }]) {
-          const v = await vegaLoads(url, format, body)
-          const a = await loadSpecData({ data: [{ name: 'd', url, ...(format ? { format } : {}) }] } as unknown as VgSpec, {
+          const v = await vegaLoads(url, structuredClone(format), body)
+          const a = await loadSpecData({ data: [{ name: 'd', url, ...(format ? { format: structuredClone(format) } : {}) }] } as unknown as VgSpec, {
             allow: () => true, fetch: (async () => new Response(body)) as unknown as typeof fetch,
           }).then((s) => ({ rows: (s.data as unknown as Array<{ values: unknown }>)[0]!.values }), (e: Error) => ({ error: e.message }))
           const label = `${url} ${kind} body, format ${json(format)}`

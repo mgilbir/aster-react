@@ -296,7 +296,6 @@ export function validateSpec(spec: unknown): void {
  */
 const PROTOTYPE_MEMBERS: ReadonlySet<string> = new Set(Object.getOwnPropertyNames(Object.prototype))
 const allBut = (...names: string[]): ReadonlySet<string> => new Set([...PROTOTYPE_MEMBERS].filter((n) => !names.includes(n)))
-const GETTER_SETTER_HELPERS = ['__defineGetter__', '__defineSetter__', '__lookupGetter__', '__lookupSetter__']
 /**
  * Where, and for which members, vega-lite's chart with such a name is the chart of any other name: what a transform reads only through
  * a field accessor, a parameter's name, a binned channel's field (whose description drops some names), `x2`. Each entry is held to
@@ -310,8 +309,8 @@ const PROTOTYPE_SAFE = {
   pivot: PROTOTYPE_MEMBERS,
   density: PROTOTYPE_MEMBERS,
   quantile: PROTOTYPE_MEMBERS,
-  binnedPosition: allBut('__proto__', ...GETTER_SETTER_HELPERS),
-  binnedColor: allBut('__proto__', 'propertyIsEnumerable', ...GETTER_SETTER_HELPERS),
+  binnedPosition: allBut('__proto__', '__defineGetter__', '__defineSetter__', '__lookupGetter__', '__lookupSetter__'),
+  binnedColor: allBut('__proto__', 'propertyIsEnumerable', '__defineGetter__', '__defineSetter__', '__lookupGetter__', '__lookupSetter__'),
   x2: new Set(['__proto__']),
 } as const satisfies Record<string, ReadonlySet<string>>
 
