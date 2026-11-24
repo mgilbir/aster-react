@@ -155,7 +155,8 @@ export function guideTitleText(group: { title?: string; items?: unknown[]; parts
   const walk = (items: unknown[] | undefined): string | undefined => {
     for (const it of items ?? []) {
       const n = it as { _part?: string; text?: unknown; items?: unknown[] }
-      if (n._part === 'title' && n.text != null) return Array.isArray(n.text) ? n.text.join(' ') : String(n.text)
+      // (vega-scenegraph extractTitle: `array(text).join(' ')`, so a title leaf whose text is null quotes nothing)
+      if (n._part === 'title') return n.text == null ? '' : Array.isArray(n.text) ? n.text.join(' ') : String(n.text)
       if (Array.isArray(n.items)) {
         const inner = walk(n.items)
         if (inner !== undefined) return inner

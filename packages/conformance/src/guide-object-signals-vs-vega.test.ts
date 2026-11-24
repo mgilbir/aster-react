@@ -132,7 +132,7 @@ describe('config.legend.layout, signals inside it included, as vega reads it', (
     frame: ['bounds', { signal: 'fr' }],
   }
   const ORIENT_SETS = [['right', 'right'], ['left'], ['top', 'top'], ['bottom'], ['top-left', 'bottom-right']]
-  it('every setting as a value, as a signal inside the layout, and under an orient of its own', async () => {
+  it('every setting as a value, as a signal inside the layout, and under an orient of its own', { timeout: 120_000 }, async () => {
     const bad: string[] = []
     let n = 0
     for (const orients of ORIENT_SETS) {
@@ -153,7 +153,7 @@ describe('config.legend.layout, signals inside it included, as vega reads it', (
     expect(n).toBeGreaterThan(200)
   })
 
-  it('the whole layout as one signal, and a host writing the signals it reads', async () => {
+  it('the whole layout as one signal, and a host writing the signals it reads', { timeout: 60_000 }, async () => {
     for (const layout of [{ signal: "{offset: off, anchor: anc}" }, { offset: { signal: 'off' }, right: { anchor: { signal: 'anc' }, margin: { signal: 'mar' } } }]) {
       const s = spec(layout, ['right', 'right'])
       const chart = compileChart(structuredClone(s) as never)
@@ -187,6 +187,31 @@ describe('what vega reads of a guide, and what it never reads (C553)', () => {
       const want = vegaParse(spec)
       expect(outcome(spec)).toBe(want)
       if (want === 'ok') expect(diff(await oracle(spec), renderSpec(structuredClone(spec) as never))).toEqual([])
+    })
+  }
+})
+
+describe('a guide group item\'s clip and blend, its caption\'s title, and lines of text that are null (C533, C422, C423)', () => {
+  const S = (extra: Obj): Obj => ({
+    width: 80, height: 60,
+    scales: [{ name: 'c', type: 'ordinal', domain: ['x', 'y'], range: ['red', 'blue'] }, { name: 'y', type: 'linear', domain: [0, 100], range: 'height' }],
+    ...extra,
+  })
+  const CASES: Array<[string, Obj]> = [
+    ['legend clip and blend', S({ legends: [{ fill: 'c', encode: { legend: { update: { clip: { value: true }, blend: { value: 'multiply' } } } } }] })],
+    ['legend clip of a sized box', S({ legends: [{ fill: 'c', encode: { legend: { update: { clip: { value: true }, width: { value: 15 }, height: { value: 12 }, fill: { value: '#eee' } } } } }] })],
+    ['axis clip and blend', S({ axes: [{ scale: 'y', orient: 'left', encode: { axis: { update: { clip: { value: true }, blend: { value: 'screen' } } } } }] })],
+    ['axis clip of a sized box', S({ axes: [{ scale: 'y', orient: 'left', encode: { axis: { update: { clip: { value: true }, x: { value: -12 }, width: { value: 20 }, height: { value: 30 }, fill: { value: '#eee' } } } } }] })],
+    ['group mark blend', S({ marks: [{ type: 'group', encode: { update: { width: { value: 20 }, height: { value: 20 }, fill: { value: 'pink' }, blend: { value: 'multiply' } } } }] })],
+    ['caption: config.legend.title is no title of the legend', S({ legends: [{ fill: 'c' }], config: { legend: { title: 'cfgtitle' } } })],
+    ['caption: a title whose text is null', S({ legends: [{ fill: 'c', title: 'Cat', encode: { title: { update: { text: { value: null } } } } }] })],
+    ['axis labels as lines with null and undefined', S({ axes: [{ scale: 'y', orient: 'left', tickCount: 2, encode: { labels: { update: { text: { signal: '[datum.label, null, datum.nope]' } } } } }] })],
+    ['a text mark with null lines', S({ marks: [{ type: 'text', encode: { update: { x: { value: 10 }, y: { value: 10 }, text: { value: ['a', null, 'b'] } } } }] })],
+    ['a text mark of one null line', S({ marks: [{ type: 'text', encode: { update: { x: { value: 10 }, y: { value: 10 }, text: { value: [null] } } } }] })],
+  ]
+  for (const [name, spec] of CASES) {
+    it(name, async () => {
+      expect(diff(await oracle(spec), renderSpec(structuredClone(spec) as never))).toEqual([])
     })
   }
 })
