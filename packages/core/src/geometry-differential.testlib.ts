@@ -146,14 +146,23 @@ export function probePoints(scene: SceneRoot, r: Rnd, random = 40, max = 160): A
   return out
 }
 
+/**
+ * What the differential compared: scenes, and the consumer calls in which BOTH implementations threw (the same message counts as no
+ * difference, and compares nothing else): a generator that makes most scenes throw would leave the differential comparing messages.
+ */
+export const diffStats = { scenes: 0, calls: 0, bothThrew: 0 }
+
 /** Compares every consumer, old vs new, on `scene`; returns the differences (empty: identical). */
 export function diffScene(scene: SceneRoot, r: Rnd, opts: { label?: string; dom?: boolean; canvas?: boolean; hit?: boolean; bounds?: boolean; intersect?: boolean; label2?: boolean } = {}): Diff[] {
   const diffs: Diff[] = []
+  diffStats.scenes++
   const tryBoth = <T,>(consumer: string, oldFn: () => T, newFn: () => T, eq: (a: T, b: T) => string | null): void => {
     let a: T | Error
     let b: T | Error
     try { a = oldFn() } catch (e) { a = e as Error }
     try { b = newFn() } catch (e) { b = e as Error }
+    diffStats.calls++
+    if (a instanceof Error && b instanceof Error) diffStats.bothThrew++
     if (a instanceof Error || b instanceof Error) {
       const am = a instanceof Error ? `throws ${a.message}` : 'returns'
       const bm = b instanceof Error ? `throws ${b.message}` : 'returns'
