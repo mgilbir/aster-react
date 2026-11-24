@@ -177,9 +177,9 @@ such gate narrowed, with `--plant-difference` and narrowed to nothing ([scripts/
 | Incremental vs fresh evaluation (no oracle) | `pnpm conformance:diff` | 0 differential mismatches, 0 skipped |
 | Guide captions vs Vega `aria-label` | `pnpm a11y-parity` | 1076/1076 caption sets match |
 | Transform option combinations | `pnpm transform-matrix` | 76/76 match (75 in Node; the wordcloud, whose oracle needs a real canvas, in Chromium) |
-| Vega schema sweep | `pnpm sweep-vega -- --floor 7549 --min-ok 7538 --max-node-error 3` | 7538 ok, 9 both-refused, 2 node-error (the oracle crashes), 0 engine-error, 0 differ / 7549 |
-| Vega-Lite schema sweep | `pnpm sweep-vl -- --floor 27513 --min-ok 27452 --max-node-error 17 --vega-check` | 27452 ok, 47 both-refused, 14 node-error, 0 engine-error, 0 differ, 0 vega-differ / 27513 |
-| Value sweep | `pnpm sweep-values -- --floor 500 --min-ok 500 --max-node-error 0` | 500 ok, 0 both-refused, 0 node-error, 0 engine-error, 0 differ / 500 |
+| Vega schema sweep | `pnpm sweep-vega -- --floor 7760 --min-ok 7738 --max-node-error 3` | 7738 ok, 9 both-refused, 2 node-error (the oracle crashes), 0 engine-error, 11 differ / 7760 (the 11: REVEALED, see the lane notes) |
+| Vega-Lite schema sweep | `pnpm sweep-vl -- --floor 31334 --min-ok 30626 --max-node-error 17 --vega-check` | 30626 ok, 123 both-refused, 279 node-error, 240 engine-error, 66 differ, 0 vega-differ / 31334 (the non-ok: REVEALED) |
+| Value sweep | `pnpm sweep-values -- --floor 525 --min-ok 525 --max-node-error 0` | 525 ok, 0 both-refused, 0 node-error, 0 engine-error, 0 differ / 525 |
 | Signals sweep | `pnpm sweep-signals -- --floor 166 --min-ok 103 --max-node-error 2 --max-retained 60` | 103 ok, 60 retained, 1 both-refused, 2 node-error, 0 differ / 166 |
 | Gap probes (a failing probe documents a gap only when listed in `scripts/lib/expected-differences.mjs`, which requires it to still fail) | `pnpm probe -- --min-pass 2` | 2/2 pass (floor 2) |
 | Fuzz reproducers | `pnpm fuzz:replay` | 2/2 pass |
