@@ -227,7 +227,8 @@ export interface CompiledChart {
 export interface CompiledTitle {
   /** The text, or a signal expression (a group title reads its facet datum as `parent`). */
   text: string | string[] | { signal: string }
-  subtitle?: string
+  /** The subtitle as the title's text is: lines, or a signal expression (the renderer reads the title's own spec). */
+  subtitle?: string | string[] | { signal: string }
   orient: 'top' | 'bottom' | 'left' | 'right' | 'none'
   anchor: 'start' | 'middle' | 'end'
   offset: number
