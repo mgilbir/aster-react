@@ -1,7 +1,7 @@
 {
   "$schema": "https://vega.github.io/schema/vega-lite/v6.json",
   "padding": 5,
-  "autosize": "none",
+  "autosize": "pad",
   "columns": 2,
   "concat": [
     {
