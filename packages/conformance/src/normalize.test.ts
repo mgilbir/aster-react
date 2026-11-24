@@ -194,3 +194,26 @@ describe('canonicalizeSvg misc contracts', () => {
     expect(() => canonicalizeSvg(wrap('<rect width="1" height="1" transform="wobble(3)"/>'))).toThrow(/transform/)
   })
 })
+
+// What "canonical SVG equal" does NOT mean (audit C721): each of these is invisible to the canonicalizer, by design or as an open
+// limit named in normalize.ts's header ("NOT SEEN"). The tests pin that the header is true: if the canonicalizer starts to see
+// one of them, a test here fails and the header (and TESTING.md) must change with it.
+describe('canonicalizeSvg: what it does not see (the header says so)', () => {
+  const same = (a: string, b: string): void => expect(diff(a, b)).toEqual([])
+  const svg = (attrs: string, body = RECT): string => `<svg xmlns="http://www.w3.org/2000/svg" width="100" height="80" ${attrs}>${body}</svg>`
+  it('the ARIA and class of the root <svg>', () => {
+    same(svg('role="graphics-document" aria-roledescription="visualization" aria-label="a" class="marks"'), svg(''))
+  })
+  it('<title>, <desc> and <metadata> content', () => {
+    same(svg('', `<title>one</title><desc>x</desc>${RECT}`), svg('', `<title>two</title><metadata>m</metadata>${RECT}`))
+  })
+  it('pointer-events (the interaction tests gate it)', () => {
+    same(svg('', '<rect width="10" height="10" fill="red" pointer-events="none"/>'), svg('', '<rect width="10" height="10" fill="red"/>'))
+  })
+  it('the class of a shape that carries no role or aria attribute', () => {
+    same(svg('', '<rect class="a" width="10" height="10" fill="red"/>'), svg('', '<rect class="b" width="10" height="10" fill="red"/>'))
+  })
+  it('an offset below the 0.0005 precision', () => {
+    same(svg('', '<rect x="10.0001" width="10" height="10" fill="red"/>'), svg('', '<rect x="10" width="10" height="10" fill="red"/>'))
+  })
+})
