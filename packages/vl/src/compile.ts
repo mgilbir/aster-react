@@ -6575,14 +6575,15 @@ function buildAxes(fields: FieldDef[], mark: string, scales: ScaleSpec[], scaleN
  */
 function axisTitleParts(def: FieldDef, userAxis: Record<string, unknown> | null | undefined, def2: FieldDef | undefined): GuideTitle {
   if (userAxis && userAxis.title !== undefined) return { kind: 'text', text: userAxis.title as string }
-  // (a datum names no field and has no title of its own to give the axis)
-  if (def.datumOnly) return fieldsTitle()
   const written = writtenTitle(def.title, def2?.title)
   if (written) return { kind: 'text', text: written.text }
   const titled = (d: FieldDef): TitledField => ({
     key: JSON.stringify([d.field, d.aggregate ?? null, d.bin ? d.binParams ?? d.bin : null, d.tu ? [d.tu.unit, d.tu.utc, d.tu.step ?? null, d.tu.binned ?? null] : null]),
     title: String(channelTitle({ ...d, title: undefined })),
   })
+  // (a datum names no field and has no default title to give the axis: the title is its second channel's field, as vega-lite's
+  // mergeTitleFieldDefs takes it, or none)
+  if (def.datumOnly) return fieldsTitle(...(def2 ? [titled(def2)] : []))
   return fieldsTitle(titled(def), ...(def2 ? [titled(def2)] : []))
 }
 

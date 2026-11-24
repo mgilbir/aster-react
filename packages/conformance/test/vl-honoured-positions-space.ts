@@ -123,7 +123,7 @@ export function* datumCases(): Generator<Case> {
     ['number, type', { datum: 3, type: 'quantitative' }],
     ['string', { datum: 'a', type: 'nominal' }],
     ['date', { datum: { year: 2020, month: 5 }, type: 'temporal' }],
-    ['time-unit', { datum: 'b', type: 'ordinal' }],
+    ['ordinal', { datum: 'b', type: 'ordinal' }],
     ['bandPosition', { datum: 3, type: 'quantitative', bandPosition: 1 }],
   ]
   for (const mark of MARKS) {
@@ -133,7 +133,10 @@ export function* datumCases(): Generator<Case> {
         for (const [on, otherDef] of [['quantitative', V], ['nominal', K], ['temporal', { field: 't', type: 'temporal' }]] as Array<[string, Obj]>) {
           const enc: Obj = { [channel]: datum, [other]: otherDef, ...(mark === 'text' ? { text: K } : {}) }
           yield [`${mark} ${channel}=datum ${dn}, ${other} ${on}`, { data: { values: TIME_DATA }, mark, encoding: enc }]
-          yield [`${mark} ${channel}=datum ${dn}, ${other} ${on}, ${other}2`, { data: { values: TIME_DATA }, mark, encoding: { ...enc, [`${channel}2`]: { datum: 5 } } }]
+          // (the second channel of the datum's own position: another datum, and a field, which titles the axis the datum has no field for)
+          yield [`${mark} ${channel}=datum ${dn}, ${other} ${on}, ${channel}2=datum`, { data: { values: TIME_DATA }, mark, encoding: { ...enc, [`${channel}2`]: { datum: 5 } } }]
+          yield [`${mark} ${channel}=datum ${dn}, ${other} ${on}, ${channel}2=field`, { data: { values: TIME_DATA }, mark, encoding: { ...enc, [`${channel}2`]: V } }]
+          yield [`${mark} ${channel}=datum ${dn}, ${other} ${on}, ${channel}2=field with a title`, { data: { values: TIME_DATA }, mark, encoding: { ...enc, [`${channel}2`]: { ...V, title: 'End' } } }]
         }
       }
     }
