@@ -50,11 +50,26 @@
     "fields": [
      "c"
     ]
-   }
+   },
+   "value": [
+    {
+     "c": "y"
+    }
+   ]
   },
   {
    "name": "b1",
-   "select": "interval"
+   "select": "interval",
+   "value": {
+    "x": [
+     2,
+     4
+    ],
+    "y": [
+     2,
+     5
+    ]
+   }
   }
  ],
  "mark": "point",

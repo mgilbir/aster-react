@@ -49,6 +49,16 @@
     "type": "interval",
     "translate": false,
     "zoom": false
+   },
+   "value": {
+    "x": [
+     1,
+     3
+    ],
+    "y": [
+     2,
+     5
+    ]
    }
   }
  ],
