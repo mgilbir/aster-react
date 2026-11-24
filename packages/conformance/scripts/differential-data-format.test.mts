@@ -76,6 +76,8 @@ describe('readData vs vega-loader read (generated)', () => {
   it('csv, tsv and dsv inputs read to the same rows', () => {
     const r = seeded(7)
     let compared = 0
+    let parsed = 0
+    let refused = 0
     for (let i = 0; i < 1500; i++) {
       const type = r.pick(['csv', 'tsv', 'dsv'])
       const delimiter = type === 'csv' ? ',' : type === 'tsv' ? '\t' : ';'
@@ -85,10 +87,17 @@ describe('readData vs vega-loader read (generated)', () => {
       const text = lines.join(r.pick(['\n', '\r\n'])) + r.pick(['', '\n'])
       const format = { type, ...(type === 'dsv' ? { delimiter } : {}), ...(r.int(3) ? { parse: r.pick(PARSES) } : {}) } as Record<string, unknown>
       const tag = JSON.stringify([text, format])
-      expect(image(() => readData(text, format as never)), tag).toEqual(image(() => loader.read(text, structuredClone(format))))
+      const want = image(() => loader.read(text, structuredClone(format)))
+      expect(image(() => readData(text, format as never)), tag).toEqual(want)
       compared++
+      // what the oracle made of it: rows (some holding values), or a refusal -- both are held to a floor below
+      const w = want as { threw?: string; rows?: unknown[] }
+      if (w.threw !== undefined) refused++
+      else if ((w.rows?.length ?? 0) > 0) parsed++
     }
     expect(compared).toBe(1500)
+    expect(parsed, 'inputs that read to rows').toBeGreaterThan(1000)
+    expect(refused, 'inputs the oracle refused').toBeLessThan(150)
   })
 
   it('json inputs read to the same rows, with and without a property path', () => {
