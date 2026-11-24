@@ -59,7 +59,7 @@ function enc(v) {
     if (v === 0 && 1 / v < 0) return { $: '-0' }
     return v
   }
-  if (v instanceof Date) return { $: 'date', ms: v.getTime() }
+  if (v instanceof Date) return { $: 'date', ms: enc(v.getTime()) } // an invalid Date's NaN is tagged: JSON would write null, which decodes to the epoch
   if (v instanceof RegExp) return { $: 're', src: v.source, flags: v.flags }
   if (typeof v === 'symbol') return { $: 'symbol', desc: v.description ?? null }
   if (v instanceof Int8Array) return { $: 'int8array' }
@@ -629,11 +629,12 @@ const colorSuites = {
 const formatSpecs = [
   'd', 'f', '.2f', '.0f', 'g', '.3g', 's', '.2s', 'e', '.2e', '%', '.1%',
   'r', '.3r', 'p', '.2p', '~g', '~s', ',.2f', ',d', '08.3f', '>10.2f',
-  '<10.2f', '^10.2f', '=10.2f', '+$, .2f', '#x', '#o', '#X', 'b', 'n', '',
+  '<10.2f', '^10.2f', '=10.2f', '$x', '#x', '#o', '#X', 'b', 'n', '',
   '.12g', '.1f', 'c', '5', '.5', ',', '~', 'x', 'X', 'o',
 ]
 // Specifiers that fail to parse (the formatSpecifier suite records the throw).
-const invalidFormatSpecs = ['zzz', '.zzf', '10.2.3f']
+// ('+$, .2f' is the typo this list once carried among the valid ones: a space after the comma is not a specifier)
+const invalidFormatSpecs = ['zzz', '.zzf', '10.2.3f', '+$, .2f', '$#x']
 // Specifiers that parse, with the options each one switches: a bare '#', '+' and 'q' (an unknown type
 // falls back to ~.12g) and every sign / symbol / zero-pad / grouping option reaching a value. They go
 // through the format suite as well as the formatSpecifier suite: the first recording only parsed them.
@@ -787,51 +788,85 @@ const localeSuites = {
 
 // named converter/filter variants the replay reconstructs
 
-const deltaArcs = [
-  [[0, 0], [1, 0], [0, 1]],   // arc 0: bottom of left square
-  [[1, 0], [0, 1]],           // arc 1: shared edge, bottom->top
-  [[1, 0], [0, 1], [-1, 0]],  // arc 2: bottom of right square
-  [[-1, 0], [0, -1], [1, 0]], // arc 3: top of right square (reversed use)
-  [[0, -1], [-1, 0], [1, 0]], // arc 4: top of left square
-]
-
-const quantized = {
-  type: 'Topology',
-  transform: { scale: [10, 10], translate: [0, 0] },
-  arcs: deltaArcs,
-  objects: {
-    squares: {
-      type: 'GeometryCollection',
-      geometries: [
-        { type: 'Polygon', arcs: [[0, 1, ~4]], properties: { name: 'left' }, id: 'L' },
-        { type: 'Polygon', arcs: [[~1, 2, 3]], properties: { name: 'right' } },
-      ],
-    },
-    border: { type: 'LineString', arcs: [1] },
-    point: { type: 'Point', coordinates: [2, 3] },
-  },
-}
-
+// A valid topology: a 2x1 grid of two squares sharing an edge (arc 1), a polygon with a hole, and a
+// MultiPolygon, in absolute coordinates; `quantized` is DERIVED from it (delta-encoded on a grid), and the
+// two are checked below to decode to the same features, and every ring to close, so a malformed fixture
+// fails the recording instead of being recorded.
+//   left square  (0,0)-(10,10)   ring: arc 0 (bottom-right -> bottom-left -> top-left -> top-right) + arc 1 (down the shared edge)
+//   right square (10,0)-(20,10)  ring: ~arc 1 (up the shared edge) + arc 2 (top-left -> top-right -> bottom-right -> bottom-left)
 const absolute = {
   type: 'Topology',
   arcs: [
-    [[0, 0], [10, 0], [10, 10]],
-    [[10, 0], [10, 10]],
-    [[10, 0], [20, 0], [20, 10]],
-    [[20, 10], [10, 10], [0, 10]],
-    [[0, 10], [0, 0], [10, 0]],
+    [[10, 0], [0, 0], [0, 10], [10, 10]],
+    [[10, 10], [10, 0]],
+    [[10, 10], [20, 10], [20, 0], [10, 0]],
+    [[0, 20], [30, 20], [30, 50], [0, 50], [0, 20]], // donut: outer ring
+    [[10, 30], [10, 40], [20, 40], [20, 30], [10, 30]], // donut: hole
   ],
   objects: {
     squares: {
       type: 'GeometryCollection',
       geometries: [
-        { type: 'Polygon', arcs: [[0, 1, ~4]], properties: { name: 'left' }, id: 'L' },
-        { type: 'Polygon', arcs: [[~1, 2, 3]], properties: { name: 'right' } },
+        { type: 'Polygon', arcs: [[0, 1]], properties: { name: 'left' }, id: 'L' },
+        { type: 'Polygon', arcs: [[~1, 2]], properties: { name: 'right' } },
       ],
     },
+    multi: { type: 'MultiPolygon', arcs: [[[0, 1]], [[~1, 2]]] },
+    donut: { type: 'Polygon', arcs: [[3], [4]] },
     border: { type: 'LineString', arcs: [1] },
     point: { type: 'Point', coordinates: [20, 30] },
+    points: { type: 'MultiPoint', coordinates: [[0, 0], [10, 10]] },
   },
+}
+
+const QUANT = { scale: [2.5, 5], translate: [-5, 10] }
+const quantize = (topology, { scale, translate }) => {
+  const q = ([x, y]) => [Math.round((x - translate[0]) / scale[0]), Math.round((y - translate[1]) / scale[1])]
+  const quantizeObject = (o) => {
+    const out = { ...o }
+    if (o.type === 'Point') out.coordinates = q(o.coordinates)
+    else if (o.type === 'MultiPoint') out.coordinates = o.coordinates.map(q)
+    else if (o.geometries) out.geometries = o.geometries.map(quantizeObject)
+    return out
+  }
+  return {
+    ...topology,
+    transform: { scale, translate },
+    arcs: topology.arcs.map((arc) => {
+      let px = 0
+      let py = 0
+      return arc.map((pt, i) => {
+        const [x, y] = q(pt)
+        const d = i === 0 ? [x, y] : [x - px, y - py]
+        px = x
+        py = y
+        return d
+      })
+    }),
+    objects: Object.fromEntries(Object.entries(topology.objects).map(([k, o]) => [k, quantizeObject(o)])),
+  }
+}
+const quantized = quantize(absolute, QUANT)
+
+{
+  // the fixtures describe what they say: every ring closes, and both topologies decode alike
+  for (const [name, t] of Object.entries({ quantized, absolute })) {
+    for (const obj of ['squares', 'multi', 'donut']) {
+      const feats = topojsonClient.feature(t, t.objects[obj])
+      for (const f of feats.type === 'FeatureCollection' ? feats.features : [feats]) {
+        const polys = f.geometry.type === 'Polygon' ? [f.geometry.coordinates] : f.geometry.coordinates
+        for (const rings of polys) for (const ring of rings) {
+          const [a, b] = [ring[0], ring[ring.length - 1]]
+          if (ring.length < 4 || a[0] !== b[0] || a[1] !== b[1]) throw new Error(`topology fixture ${name}.${obj}: ring does not close`)
+        }
+      }
+    }
+  }
+  for (const obj of Object.keys(absolute.objects)) {
+    const a = JSON.stringify(topojsonClient.feature(absolute, absolute.objects[obj]))
+    const b = JSON.stringify(topojsonClient.feature(quantized, quantized.objects[obj]))
+    if (a !== b) throw new Error(`topology fixtures disagree on ${obj}: ${a} vs ${b}`)
+  }
 }
 
 const dsvConverters = {
@@ -842,8 +877,11 @@ const dsvConverters = {
 
 const topologies = { quantized, absolute }
 
+// topojson-client calls filter(a, b) with the two geometries that share an arc; an arc on one geometry only has
+// a === b (the exterior of the shape), a shared arc has a !== b (the interior, the border between two shapes)
 const topoFilters = {
-  interior: (a, b) => a === b,
+  exterior: (a, b) => a === b,
+  interior: (a, b) => a !== b,
   any: undefined,
   byName: (a, b) => a.properties?.name === b.properties?.name,
 }
@@ -853,16 +891,16 @@ const topoSuites = {
     oracle: oracleOf('topojson-client'),
     kind: 'fn',
     tz: TZ_UTC,
-    cases: [quantized, absolute].map((t) => ({
-      args: [enc(t)].map(enc),
-      want: enc(call((t) => topojsonClient.feature(t, t.objects.squares), [t])),
-    })),
+    cases: [quantized, absolute].flatMap((t) => ['squares', 'multi', 'donut'].map((name) => ({
+      args: [t, name].map(enc),
+      want: enc(call((t, n) => topojsonClient.feature(t, t.objects[n]), [t, name])),
+    }))),
   },
   topoFeatureNamed: {
     oracle: oracleOf('topojson-client'),
     kind: 'fn',
     tz: TZ_UTC,
-    cases: [['squares', quantized], ['border', quantized], ['point', quantized]].map(([name, t]) => ({
+    cases: [quantized, absolute].flatMap((t) => ['squares', 'border', 'point', 'points', 'multi', 'donut'].map((name) => [name, t])).map(([name, t]) => ({
       args: [t, name].map(enc),
       want: enc(call((t, n) => topojsonClient.feature(t, n), [t, name])),
     })),
@@ -872,7 +910,7 @@ const topoSuites = {
     kind: 'fn',
     tz: TZ_UTC,
     cases: [quantized, absolute].map((t) => ({
-      args: [enc(t)].map(enc),
+      args: [t].map(enc),
       want: enc(call((t) => topojsonClient.mesh(t), [t])),
     })),
   },
@@ -882,20 +920,18 @@ const topoSuites = {
     kind: 'topomesh',
     tz: TZ_UTC,
     cases: [
+      ['quantized', 'squares', 'exterior'],
+      ['absolute', 'squares', 'exterior'],
       ['quantized', 'squares', 'interior'],
+      ['absolute', 'squares', 'interior'],
+      ['quantized', 'multi', 'interior'],
+      ['absolute', 'multi', 'exterior'],
+      ['quantized', 'multi', 'any'],
       ['quantized', 'border', 'any'],
       ['absolute', 'squares', 'byName'],
+      ['absolute', 'donut', 'exterior'],
+      ['quantized', 'donut', 'interior'],
     ].map(([t, name, variant]) => ({
-      args: [topologies[t], name].map(enc),
-      variant,
-      want: enc(call((t, n, v) => topojsonClient.mesh(t, t.objects[n], topoFilters[v]), [topologies[t], name, variant])),
-    })),
-  },
-  topoMeshOuter: {
-    oracle: oracleOf('topojson-client'),
-    kind: 'topomesh',
-    tz: TZ_UTC,
-    cases: [['quantized', 'squares', 'interior']].map(([t, name, variant]) => ({
       args: [topologies[t], name].map(enc),
       variant,
       want: enc(call((t, n, v) => topojsonClient.mesh(t, t.objects[n], topoFilters[v]), [topologies[t], name, variant])),
@@ -1015,21 +1051,23 @@ const dsvSuites = {
       want: enc(call((r) => d3Dsv.dsvFormat(',').format(r), [rows])),
     })),
   },
+  // formatRow takes ONE row (an array of cells): each case is a row, not a row wrapped in another array
+  // (the first recording wrapped them, so every row was a single array-valued cell). Dates are formatted as
+  // ISO text by d3-dsv, never by Date#toString (which follows the host locale).
   dsvFormatRow: {
     oracle: oracleOf('d3-dsv'),
     kind: 'fn',
     tz: TZ_UTC,
     cases: [
-      [[1, 'x,y']], [['say ""hi""', null]], [[new Date(Date.UTC(2024, 0, 1)), 'z']],
+      [1, 'x,y'], ['say "hi"', 'plain'], ['say ""hi""', null], [null, undefined, 0, false, NaN], ['multi\nline', '\r', ' lead'],
+      [new Date(Date.UTC(2024, 0, 1)), 'z'], [new Date(Date.UTC(2024, 5, 15, 12, 30, 45, 500)), new Date(Date.UTC(2024, 0, 1, 0, 0, 1))],
+      [new Date(NaN), 'x'], [], [''], ['a'], [1, 2, 3], [{ a: 1 }, [1, 2]],
     ].map((row) => ({
       args: [enc(row)],
       want: enc(call((r) => d3Dsv.dsvFormat(',').formatRow(r), [row])),
     })),
   },
 }
-
-// A small topology: a 2x1 grid of two squares sharing an edge (arc 1),
-// with quantized coordinates, plus the same geometry unquantized.
 
 
 const files = {

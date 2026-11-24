@@ -7307,455 +7307,295 @@
         },
         {
           "args": [
-            "+$, .2f",
+            "$x",
             0
           ],
-          "want": {
-            "$": "throw",
-            "message": "invalid format: +$, .2f",
-            "name": "Error"
-          }
+          "want": "$0"
         },
         {
           "args": [
-            "+$, .2f",
+            "$x",
             {
               "$": "-0"
             }
           ],
-          "want": {
-            "$": "throw",
-            "message": "invalid format: +$, .2f",
-            "name": "Error"
-          }
+          "want": "$0"
         },
         {
           "args": [
-            "+$, .2f",
+            "$x",
             1
           ],
-          "want": {
-            "$": "throw",
-            "message": "invalid format: +$, .2f",
-            "name": "Error"
-          }
+          "want": "$1"
         },
         {
           "args": [
-            "+$, .2f",
+            "$x",
             -1
           ],
-          "want": {
-            "$": "throw",
-            "message": "invalid format: +$, .2f",
-            "name": "Error"
-          }
+          "want": "−$1"
         },
         {
           "args": [
-            "+$, .2f",
+            "$x",
             1.5
           ],
-          "want": {
-            "$": "throw",
-            "message": "invalid format: +$, .2f",
-            "name": "Error"
-          }
+          "want": "$2"
         },
         {
           "args": [
-            "+$, .2f",
+            "$x",
             -1.5
           ],
-          "want": {
-            "$": "throw",
-            "message": "invalid format: +$, .2f",
-            "name": "Error"
-          }
+          "want": "−$2"
         },
         {
           "args": [
-            "+$, .2f",
+            "$x",
             12345.678
           ],
-          "want": {
-            "$": "throw",
-            "message": "invalid format: +$, .2f",
-            "name": "Error"
-          }
+          "want": "$303a"
         },
         {
           "args": [
-            "+$, .2f",
+            "$x",
             0.5
           ],
-          "want": {
-            "$": "throw",
-            "message": "invalid format: +$, .2f",
-            "name": "Error"
-          }
+          "want": "$1"
         },
         {
           "args": [
-            "+$, .2f",
+            "$x",
             0.6666666666666666
           ],
-          "want": {
-            "$": "throw",
-            "message": "invalid format: +$, .2f",
-            "name": "Error"
-          }
+          "want": "$1"
         },
         {
           "args": [
-            "+$, .2f",
+            "$x",
             100
           ],
-          "want": {
-            "$": "throw",
-            "message": "invalid format: +$, .2f",
-            "name": "Error"
-          }
+          "want": "$64"
         },
         {
           "args": [
-            "+$, .2f",
+            "$x",
             255
           ],
-          "want": {
-            "$": "throw",
-            "message": "invalid format: +$, .2f",
-            "name": "Error"
-          }
+          "want": "$ff"
         },
         {
           "args": [
-            "+$, .2f",
+            "$x",
             0.000001
           ],
-          "want": {
-            "$": "throw",
-            "message": "invalid format: +$, .2f",
-            "name": "Error"
-          }
+          "want": "$0"
         },
         {
           "args": [
-            "+$, .2f",
+            "$x",
             1e-7
           ],
-          "want": {
-            "$": "throw",
-            "message": "invalid format: +$, .2f",
-            "name": "Error"
-          }
+          "want": "$0"
         },
         {
           "args": [
-            "+$, .2f",
+            "$x",
             1000000000000000
           ],
-          "want": {
-            "$": "throw",
-            "message": "invalid format: +$, .2f",
-            "name": "Error"
-          }
+          "want": "$38d7ea4c68000"
         },
         {
           "args": [
-            "+$, .2f",
+            "$x",
             1e+21
           ],
-          "want": {
-            "$": "throw",
-            "message": "invalid format: +$, .2f",
-            "name": "Error"
-          }
+          "want": "$3635c9adc5dea00000"
         },
         {
           "args": [
-            "+$, .2f",
+            "$x",
             1e+22
           ],
-          "want": {
-            "$": "throw",
-            "message": "invalid format: +$, .2f",
-            "name": "Error"
-          }
+          "want": "$21e19e0c9bab2400000"
         },
         {
           "args": [
-            "+$, .2f",
+            "$x",
             {
               "$": "nan"
             }
           ],
-          "want": {
-            "$": "throw",
-            "message": "invalid format: +$, .2f",
-            "name": "Error"
-          }
+          "want": "$NaN"
         },
         {
           "args": [
-            "+$, .2f",
+            "$x",
             {
               "$": "inf"
             }
           ],
-          "want": {
-            "$": "throw",
-            "message": "invalid format: +$, .2f",
-            "name": "Error"
-          }
+          "want": "$Infinity"
         },
         {
           "args": [
-            "+$, .2f",
+            "$x",
             {
               "$": "-inf"
             }
           ],
-          "want": {
-            "$": "throw",
-            "message": "invalid format: +$, .2f",
-            "name": "Error"
-          }
+          "want": "−$Infinity"
         },
         {
           "args": [
-            "+$, .2f",
+            "$x",
             -1234.5678
           ],
-          "want": {
-            "$": "throw",
-            "message": "invalid format: +$, .2f",
-            "name": "Error"
-          }
+          "want": "−$4d3"
         },
         {
           "args": [
-            "+$, .2f",
+            "$x",
             987654321.123
           ],
-          "want": {
-            "$": "throw",
-            "message": "invalid format: +$, .2f",
-            "name": "Error"
-          }
+          "want": "$3ade68b1"
         },
         {
           "args": [
-            "+$, .2f",
+            "$x",
             0.1
           ],
-          "want": {
-            "$": "throw",
-            "message": "invalid format: +$, .2f",
-            "name": "Error"
-          }
+          "want": "$0"
         },
         {
           "args": [
-            "+$, .2f",
+            "$x",
             1e-21
           ],
-          "want": {
-            "$": "throw",
-            "message": "invalid format: +$, .2f",
-            "name": "Error"
-          }
+          "want": "$0"
         },
         {
           "args": [
-            "+$, .2f",
+            "$x",
             42
           ],
-          "want": {
-            "$": "throw",
-            "message": "invalid format: +$, .2f",
-            "name": "Error"
-          }
+          "want": "$2a"
         },
         {
           "args": [
-            "+$, .2f",
+            "$x",
             1e-24
           ],
-          "want": {
-            "$": "throw",
-            "message": "invalid format: +$, .2f",
-            "name": "Error"
-          }
+          "want": "$0"
         },
         {
           "args": [
-            "+$, .2f",
+            "$x",
             1e-27
           ],
-          "want": {
-            "$": "throw",
-            "message": "invalid format: +$, .2f",
-            "name": "Error"
-          }
+          "want": "$0"
         },
         {
           "args": [
-            "+$, .2f",
+            "$x",
             1e+24
           ],
-          "want": {
-            "$": "throw",
-            "message": "invalid format: +$, .2f",
-            "name": "Error"
-          }
+          "want": "$d3c21bcecceda0000000"
         },
         {
           "args": [
-            "+$, .2f",
+            "$x",
             1e+27
           ],
-          "want": {
-            "$": "throw",
-            "message": "invalid format: +$, .2f",
-            "name": "Error"
-          }
+          "want": "$33b2e3c9fd0804000000000"
         },
         {
           "args": [
-            "+$, .2f",
+            "$x",
             7.5e-26
           ],
-          "want": {
-            "$": "throw",
-            "message": "invalid format: +$, .2f",
-            "name": "Error"
-          }
+          "want": "$0"
         },
         {
           "args": [
-            "+$, .2f",
+            "$x",
             "42"
           ],
-          "want": {
-            "$": "throw",
-            "message": "invalid format: +$, .2f",
-            "name": "Error"
-          }
+          "want": "$2a"
         },
         {
           "args": [
-            "+$, .2f",
+            "$x",
             " 12.5 "
           ],
-          "want": {
-            "$": "throw",
-            "message": "invalid format: +$, .2f",
-            "name": "Error"
-          }
+          "want": "$d"
         },
         {
           "args": [
-            "+$, .2f",
+            "$x",
             "1e3"
           ],
-          "want": {
-            "$": "throw",
-            "message": "invalid format: +$, .2f",
-            "name": "Error"
-          }
+          "want": "$3e8"
         },
         {
           "args": [
-            "+$, .2f",
+            "$x",
             ""
           ],
-          "want": {
-            "$": "throw",
-            "message": "invalid format: +$, .2f",
-            "name": "Error"
-          }
+          "want": "$0"
         },
         {
           "args": [
-            "+$, .2f",
+            "$x",
             "abc"
           ],
-          "want": {
-            "$": "throw",
-            "message": "invalid format: +$, .2f",
-            "name": "Error"
-          }
+          "want": "$NaN"
         },
         {
           "args": [
-            "+$, .2f",
+            "$x",
             null
           ],
-          "want": {
-            "$": "throw",
-            "message": "invalid format: +$, .2f",
-            "name": "Error"
-          }
+          "want": "$0"
         },
         {
           "args": [
-            "+$, .2f",
+            "$x",
             {
               "$": "undef"
             }
           ],
-          "want": {
-            "$": "throw",
-            "message": "invalid format: +$, .2f",
-            "name": "Error"
-          }
+          "want": "$NaN"
         },
         {
           "args": [
-            "+$, .2f",
+            "$x",
             true
           ],
-          "want": {
-            "$": "throw",
-            "message": "invalid format: +$, .2f",
-            "name": "Error"
-          }
+          "want": "$1"
         },
         {
           "args": [
-            "+$, .2f",
+            "$x",
             false
           ],
-          "want": {
-            "$": "throw",
-            "message": "invalid format: +$, .2f",
-            "name": "Error"
-          }
+          "want": "$0"
         },
         {
           "args": [
-            "+$, .2f",
+            "$x",
             []
           ],
-          "want": {
-            "$": "throw",
-            "message": "invalid format: +$, .2f",
-            "name": "Error"
-          }
+          "want": "$0"
         },
         {
           "args": [
-            "+$, .2f",
+            "$x",
             [
               5
             ]
           ],
-          "want": {
-            "$": "throw",
-            "message": "invalid format: +$, .2f",
-            "name": "Error"
-          }
+          "want": "$5"
         },
         {
           "args": [
@@ -32325,12 +32165,24 @@
         },
         {
           "args": [
-            "+$, .2f"
+            "$x"
           ],
           "want": {
-            "$": "throw",
-            "message": "invalid format: +$, .2f",
-            "name": "Error"
+            "align": ">",
+            "comma": false,
+            "fill": " ",
+            "precision": {
+              "$": "undef"
+            },
+            "sign": "-",
+            "str": " >-$x",
+            "symbol": "$",
+            "trim": false,
+            "type": "x",
+            "width": {
+              "$": "undef"
+            },
+            "zero": false
           }
         },
         {
@@ -33316,6 +33168,26 @@
           "want": {
             "$": "throw",
             "message": "invalid format: 10.2.3f",
+            "name": "Error"
+          }
+        },
+        {
+          "args": [
+            "+$, .2f"
+          ],
+          "want": {
+            "$": "throw",
+            "message": "invalid format: +$, .2f",
+            "name": "Error"
+          }
+        },
+        {
+          "args": [
+            "$#x"
+          ],
+          "want": {
+            "$": "throw",
+            "message": "invalid format: $#x",
             "name": "Error"
           }
         }
