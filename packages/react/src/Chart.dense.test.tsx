@@ -2,7 +2,7 @@
 import { createRoot, hydrateRoot } from 'react-dom/client'
 import { renderToString } from 'react-dom/server'
 import { act } from 'react'
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { ChartStream } from './ChartStream'
 import { forEachVariant } from './testing/variants'
 
@@ -92,12 +92,22 @@ describe('Chart denseMarks', () => {
       const container = document.createElement('div')
       container.innerHTML = markup
       document.body.appendChild(container)
+      const adopted = container.querySelector('svg')
+      expect(adopted).not.toBeNull()
+      const recoverable: unknown[] = []
+      // (React reports a difference inside dangerouslySetInnerHTML with console.error only)
+      const logged = vi.spyOn(console, 'error').mockImplementation(() => {})
       let root: ReturnType<typeof hydrateRoot> | null = null
-      await act(async () => {
-        root = hydrateRoot(container, <Chart spec={spec} width={400} height={300} a11y={false} />)
-      })
-      await act(async () => { await new Promise((r) => setTimeout(r, 0)) })
-      // After hydration the mode flips and the existing tree is batched in place.
+      try {
+        await act(async () => {
+          root = hydrateRoot(container, <Chart spec={spec} width={400} height={300} a11y={false} />, { onRecoverableError: (e) => recoverable.push(e) })
+        })
+        await act(async () => { await new Promise((r) => setTimeout(r, 0)) })
+        expect(recoverable).toEqual([])
+        expect(logged.mock.calls.map((a) => String(a[0]))).toEqual([])
+      } finally { logged.mockRestore() }
+      // After hydration the mode flips and the existing tree is batched in place: the server's svg element, not a new one.
+      expect(container.querySelector('svg')).toBe(adopted)
       expect(markPaths(container)).toBeGreaterThan(0)
       expect(markPaths(container)).toBeLessThanOrEqual(8)
       expect(subpaths(container)).toBe(1000)
