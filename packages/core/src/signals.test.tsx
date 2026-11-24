@@ -522,7 +522,7 @@ describe('group scopes in the signal loop', () => {
     const where: { scene?: SceneRoot } = {}
     const rectOf = (i: number): object => {
       const find = (g: SceneGroup): object | undefined => {
-        if (g.marktype === 'rect' && g.role === 'mark') return g.items[0] as object
+        if (g.marktype === 'rect' && g.role === 'mark') return g.items?.[0] as object | undefined
         for (const c of g.items ?? []) if (Array.isArray((c as SceneGroup).items)) { const r = find(c as SceneGroup); if (r) return r }
         return undefined
       }

@@ -224,7 +224,7 @@ describe('a point selection over numbered rows: its dataset, scales and marks ac
     const { scene, encoded } = encodedBy(() => evaluateChart(chart, pointInput(w, { dataPulse: { t: { appendOnly: true, baseLength: N, changed: [] } } })))
     expectFresh(POINT, scene, pointInput(w), 'evaluateChart, a pulse and a signal nothing reads')
     expect(BOTH.map((m) => keptItems(prev, scene, m))).toEqual([N, N])
-    expect(BOTH.map((m) => groupNamed(scene, m)?.items.length)).toEqual([N + 1, N + 1])
+    expect(BOTH.map((m) => groupNamed(scene, m)?.items?.length)).toEqual([N + 1, N + 1])
     expect(encoded).toEqual({ plain: 1, tested: 1 })
   })
 
