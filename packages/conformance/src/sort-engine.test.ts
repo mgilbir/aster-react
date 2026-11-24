@@ -28,6 +28,18 @@ afterAll(() => {
   if (FLAG) v8.setFlagsFromString(FLAG)
 })
 
+describe('the engine flag this file turns back on exists where the engine has it', () => {
+  // The inlined sort is V8 15.x's (Node 27). On V8 14.x (Node 20, 22, 26) the flag does not exist, ASTER_V8_SORT_FLAG is '' and the
+  // tests below run with nothing to turn on: they then only prove that sortData is repeatable, and the proof that inlining is
+  // survived is the CI leg on the newer node. That emptiness is only acceptable where the engine really lacks the flag: a detector
+  // (vitest.config.mjs) that failed to see it on V8 15 would turn the whole file into the weaker check without a word.
+  it('is set whenever this V8 is 15 or newer', () => {
+    const major = Number(process.versions.v8.split('.')[0])
+    if (major >= 15) expect(FLAG, `V8 ${process.versions.v8} has the flag`).toBe('--maglev-disable-builtin-reducers')
+    else expect(FLAG, `V8 ${process.versions.v8} has no such flag`).toBe('')
+  })
+})
+
 /** A tiny deterministic generator, so the warm-up is the same on every run. */
 function rng(seed: number): () => number {
   let s = seed
