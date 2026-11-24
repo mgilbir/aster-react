@@ -474,8 +474,10 @@ function textContent(el: XmlEl, fs: number | null): string {
     for (const c of e.children) {
       if (typeof c === 'string') {
         // (N-entities: the text a node spells with character references is the same text however it is spelt)
-        const t = decodeEntities(c).replace(/\s+/g, ' ')
-        if (t.trim() !== '' || out.length) out.push(t)
+        // (only the four characters XML calls whitespace collapse: U+00A0 and the other Unicode spaces are text, and a run of them is
+        // not one space, as a browser draws it)
+        const t = decodeEntities(c).replace(/[ \t\r\n]+/g, ' ')
+        if (xmlTrim(t) !== '' || out.length) out.push(t)
       } else if (c.tag === 'tspan') {
         const a = attrsOf(c)
         const extra = Object.keys(a).filter((k) => !isNonVisualAttr(k) && !['x', 'y', 'dx', 'dy'].includes(k)).sort()
@@ -489,7 +491,12 @@ function textContent(el: XmlEl, fs: number | null): string {
     }
   }
   collect(el)
-  return out.join('').trim()
+  return xmlTrim(out.join(''))
+}
+
+/** `trim` for XML whitespace only (space, tab, CR, LF): a no-break or other Unicode space at either end is text. */
+function xmlTrim(t: string): string {
+  return t.replace(/^[ \t\r\n]+|[ \t\r\n]+$/g, '')
 }
 
 /** Absolute path with explicit commands under m (N-path). */

@@ -98,6 +98,15 @@ const PLANTED: Array<[string, string, string]> = [
   ['a T curve bulging over a rect, swapped', wrap('<path d="M0,100Q50,0,100,100T200,100Z" fill="red"/><rect x="140" y="140" width="10" height="10" fill="blue"/>', 200, 200), wrap('<rect x="140" y="140" width="10" height="10" fill="blue"/><path d="M0,100Q50,0,100,100T200,100Z" fill="red"/>', 200, 200)],
   ['a second line (tspan dy=60) over a rect, swapped', wrap('<text x="20" y="20" fill="#000" font-size="10px" font-family="sans-serif">a<tspan x="20" dy="60">MMMMMMMMMM</tspan></text><rect x="20" y="70" width="60" height="12" fill="blue"/>', 200, 200), wrap('<rect x="20" y="70" width="60" height="12" fill="blue"/><text x="20" y="20" fill="#000" font-size="10px" font-family="sans-serif">a<tspan x="20" dy="60">MMMMMMMMMM</tspan></text>', 200, 200)],
   ['a tspan placed by its own y over a rect, swapped', wrap('<text x="20" y="20" fill="#000" font-size="10px" font-family="sans-serif">a<tspan x="20" y="150">b</tspan></text><rect x="10" y="140" width="30" height="12" fill="blue"/>', 200, 200), wrap('<rect x="10" y="140" width="30" height="12" fill="blue"/><text x="20" y="20" fill="#000" font-size="10px" font-family="sans-serif">a<tspan x="20" y="150">b</tspan></text>', 200, 200)],
+  // (C206: only space, tab, CR and LF are XML whitespace; a browser does not collapse or trim a no-break or other Unicode space)
+  ...(['\u00a0', '\u202f', '\u2003', '\u3000', '\ufeff'] as const).flatMap((sp): Array<[string, string, string]> => [
+    [`a ${JSON.stringify(sp)} between words is not a space`, wrap(TEXT.replace('>hi<', '>1 000<')), wrap(TEXT.replace('>hi<', `>1${sp}000<`))],
+    [`a run of ${JSON.stringify(sp)} is not one`, wrap(TEXT.replace('>hi<', `>1${sp}000<`)), wrap(TEXT.replace('>hi<', `>1${sp}${sp}${sp}000<`))],
+    [`a leading ${JSON.stringify(sp)} is not trimmed`, wrap(TEXT.replace('>hi<', '>x<')), wrap(TEXT.replace('>hi<', `>${sp}x<`))],
+  ]),
+  ['a no-break space spelt as a character reference is still one', wrap(TEXT.replace('>hi<', '>x<')), wrap(TEXT.replace('>hi<', '>&#160;&#160;x<'))],
+  ['a space and a no-break space', wrap(TEXT.replace('>hi<', '>a b<')), wrap(TEXT.replace('>hi<', '>a\u00a0b<'))],
+  ['a linear part moved by 2e-4 (the 4 decimals of a matrix)', wrap('<rect width="1" height="1" fill="red" transform="scale(1.0002)"/>'), wrap('<rect width="1" height="1" fill="red" transform="scale(1.0004)"/>')],
 ]
 
 describe('canonicalizeSvg bites: every planted difference is reported', () => {
@@ -147,6 +156,10 @@ const EQUIVALENT: Array<[string, string, string]> = [
   ['text em dy vs px', wrap(TEXT.replace('<text', '<text dy="0.5em"')), wrap(TEXT.replace('<text', '<text dy="5"'))],
   ['swapped disjoint rects (paint order cannot matter)', wrap('<rect x="0" y="0" width="10" height="10" fill="red"/><rect x="50" y="0" width="10" height="10" fill="blue"/>'), wrap('<rect x="50" y="0" width="10" height="10" fill="blue"/><rect x="0" y="0" width="10" height="10" fill="red"/>')],
   ['text and a far-away line swap', wrap(`${TEXT}<line x1="0" y1="70" x2="90" y2="70" stroke="#888"/>`), wrap(`<line x1="0" y1="70" x2="90" y2="70" stroke="#888"/>${TEXT}`)],
+  // (C206, the other half: XML whitespace does collapse, however it is spelt)
+  ['a tab, a newline and a run of spaces are one space', wrap(TEXT.replace('>hi<', '>a b<')), wrap(TEXT.replace('>hi<', '>a \t\r\n  b<'))],
+  ['spaces spelt as character references collapse like spaces', wrap(TEXT.replace('>hi<', '>a b<')), wrap(TEXT.replace('>hi<', '>a&#32;&#32;&#x9;b<'))],
+  ['a linear part moved by 2e-5 is rounding', wrap('<rect width="1" height="1" fill="red" transform="scale(1.00002)"/>'), wrap('<rect width="1" height="1" fill="red" transform="scale(1.00004)"/>')],
   ['zero-size butt path', wrap(`<path d="M0,0h0v0h0Z" fill="red"/>${RECT}`), wrap(RECT)],
   // (the boxes stay tight enough that what cannot overlap still swaps: a small arc and a multi-line text far from a rect)
   ['a small wedge and a far rect swap', wrap('<path d="M20,20A5,5,0,1,1,15,15L15,20Z" fill="red"/><rect x="80" y="60" width="10" height="10" fill="blue"/>'), wrap('<rect x="80" y="60" width="10" height="10" fill="blue"/><path d="M20,20A5,5,0,1,1,15,15L15,20Z" fill="red"/>')],
