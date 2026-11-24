@@ -1342,7 +1342,8 @@ async function pngSuite(browser: Awaited<ReturnType<typeof chromium.launch>>, va
 
 await runGate({
   name: 'react-browser',
-  counters: { checks: { floor: 1, what: 'checks run in Chromium' } },
+  // (today's number of checks, 2026-11-24; it only ratchets up)
+  counters: { checks: { floor: 486, what: 'checks run in Chromium' } },
   reads: ['core', 'vl', 'react'],
   run: async (g) => {
     gate = g
